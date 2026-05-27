@@ -323,4 +323,41 @@ mod tests {
         assert_eq!(format!("{c}"), hex);
         assert!(format!("{c:?}").contains(&hex));
     }
+
+    /// PR-7.3 acceptance: the kaspa-pq RPC byte-typed types are
+    /// drop-in usable through the `workflow_serializer` `store!` /
+    /// `load!` macros that higher-level wRPC messages use for their
+    /// field-by-field encoding. The macros delegate to `BorshSerialize`
+    /// / `BorshDeserialize`, which the kaspa-pq types derive, so no
+    /// additional `Serializer` / `Deserializer` impl is required (matching
+    /// how `kaspa_hashes::Hash` is used in `RpcHeader::Serializer`).
+    #[test]
+    fn wrpc_store_load_roundtrip() {
+        use workflow_serializer::prelude::{load, store};
+
+        let pk = RpcMlDsa65PublicKey::new([0x88; RPC_MLDSA65_PK_LEN]);
+        let sig = RpcMlDsa65Signature::new([0x99; RPC_MLDSA65_SIG_LEN]);
+        let commitment = RpcUtxoCommitment::new([0xaa; RPC_UTXO_COMMITMENT_LEN]);
+
+        // Emulate the per-message wRPC encoder layout: write a version
+        // tag, then each field through store!.
+        let mut buf = Vec::new();
+        store!(u16, &1, &mut buf).unwrap();
+        store!(RpcMlDsa65PublicKey, &pk, &mut buf).unwrap();
+        store!(RpcMlDsa65Signature, &sig, &mut buf).unwrap();
+        store!(RpcUtxoCommitment, &commitment, &mut buf).unwrap();
+
+        // Expected length: 2 (u16 version tag) + 1952 (pk) + 3309 (sig)
+        //                + 32 (commitment) = 5295.
+        assert_eq!(buf.len(), 2 + RPC_MLDSA65_PK_LEN + RPC_MLDSA65_SIG_LEN + RPC_UTXO_COMMITMENT_LEN);
+
+        let mut r = std::io::Cursor::new(&buf[..]);
+        let _ver = load!(u16, &mut r).unwrap();
+        let pk_in = load!(RpcMlDsa65PublicKey, &mut r).unwrap();
+        let sig_in = load!(RpcMlDsa65Signature, &mut r).unwrap();
+        let c_in = load!(RpcUtxoCommitment, &mut r).unwrap();
+        assert_eq!(pk_in, pk);
+        assert_eq!(sig_in, sig);
+        assert_eq!(c_in, commitment);
+    }
 }
