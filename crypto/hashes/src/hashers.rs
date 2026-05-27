@@ -32,6 +32,23 @@ blake2b_hasher! {
     struct PersonalMessageSigningHash => b"PersonalMessageSigningHash",
 }
 
+// kaspa-pq Phase 9 (PR-9.2): 64-byte keyed BLAKE2b-512 hashers.
+// Each one corresponds to a consensus-visible identity that moves
+// to Hash64 under ADR-0008. The domain-separator keys are distinct
+// from their 32-byte counterparts above so a digest of one width
+// can never be substituted for a digest of the other.
+blake2b_512_hasher! {
+    struct BlockHash64 => b"BlockHash64",
+    struct BlockPrePowHash64 => b"BlockPrePowHash64",
+    struct TransactionId64 => b"TransactionID64",
+    struct TransactionHash64 => b"TransactionHash64",
+    struct TransactionSigningHash64 => b"TransactionSigningHash64",
+    struct MerkleBranchHash64 => b"MerkleBranchHash64",
+    struct AcceptedIdMerkleBranchHash64 => b"AcceptedIdMerkleBranchHash64",
+    struct UtxoCommitmentHash64 => b"UtxoCommitment64",
+    struct PowFinalHash64 => b"PowFinalHash64",
+}
+
 sha256_hasher! {
     struct TransactionSigningHashECDSA => "TransactionSigningHashECDSA",
 }
@@ -104,6 +121,67 @@ macro_rules! blake2b_hasher {
     impl_hasher!{ struct $name }
     )*};
 }
+/// kaspa-pq Phase 9 (PR-9.2): 64-byte keyed BLAKE2b-512 hasher
+/// generator. Mirrors `blake2b_hasher!` above but with
+/// `hash_length(64)` and a [`crate::Hash64`] return type. Intentionally
+/// does **not** implement the `Hasher` trait (whose `finalize`
+/// signature returns the 32-byte `crate::Hash`) — call sites for
+/// the 64-byte hashers use the inherent methods directly, mirroring
+/// the kaspa-pq-spec layout. See ADR-0008.
+macro_rules! blake2b_512_hasher {
+    ($(struct $name:ident => $domain_sep:literal),+ $(,)? ) => {$(
+        #[derive(Clone)]
+        pub struct $name(blake2b_simd::State);
+
+        impl $name {
+            #[inline(always)]
+            pub fn new() -> Self {
+                Self(
+                    blake2b_simd::Params::new()
+                        .hash_length(64)
+                        .key($domain_sep)
+                        .to_state(),
+                )
+            }
+
+            pub fn write<A: AsRef<[u8]>>(&mut self, data: A) {
+                self.0.update(data.as_ref());
+            }
+
+            /// Chained-update helper — mirrors `HasherBase::update`'s
+            /// `&mut Self` return so call sites can write
+            /// `.update(a).update(b).finalize()` in one expression.
+            pub fn update<A: AsRef<[u8]>>(&mut self, data: A) -> &mut Self {
+                self.write(data);
+                self
+            }
+
+            #[inline(always)]
+            pub fn finalize(self) -> crate::Hash64 {
+                let mut out = [0u8; 64];
+                out.copy_from_slice(self.0.finalize().as_bytes());
+                crate::Hash64::from_bytes(out)
+            }
+
+            /// One-shot convenience: build a fresh hasher, feed
+            /// `data`, finalize.
+            #[inline]
+            pub fn hash<A: AsRef<[u8]>>(data: A) -> crate::Hash64 {
+                let mut h = Self::new();
+                h.write(data);
+                h.finalize()
+            }
+        }
+
+        impl Default for $name {
+            #[inline(always)]
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    )*};
+}
+
 macro_rules! impl_hasher {
     (struct $name:ident) => {
         impl HasherBase for $name {
@@ -133,7 +211,7 @@ macro_rules! impl_hasher {
     };
 }
 
-use {blake2b_hasher, impl_hasher, sha256_hasher};
+use {blake2b_512_hasher, blake2b_hasher, impl_hasher, sha256_hasher};
 
 #[cfg(test)]
 mod tests {
@@ -231,5 +309,47 @@ mod tests {
                 "2d53a43a42020a5091c125230bcd8a4cf0eeb188333e68325d4bce58a1c75ca3",
             ],
         );
+    }
+
+    /// kaspa-pq Phase 9 (PR-9.2). The 64-byte hashers produce a
+    /// deterministic 128-character hex digest of the right width,
+    /// and the 8 domain-separated keys must yield distinct digests
+    /// for the same input (i.e. the keys actually separate).
+    #[test]
+    fn kaspapq_blake2b_512_hashers() {
+        use super::*;
+        let msg = b"kaspa-pq hash64 hashers PR-9.2";
+
+        let block         = BlockHash64::hash(msg);
+        let pre_pow       = BlockPrePowHash64::hash(msg);
+        let txid          = TransactionId64::hash(msg);
+        let tx_hash       = TransactionHash64::hash(msg);
+        let tx_sig        = TransactionSigningHash64::hash(msg);
+        let merkle        = MerkleBranchHash64::hash(msg);
+        let accepted      = AcceptedIdMerkleBranchHash64::hash(msg);
+        let utxo          = UtxoCommitmentHash64::hash(msg);
+        let pow_final     = PowFinalHash64::hash(msg);
+
+        // Width check — every digest is exactly 64 bytes.
+        for d in [&block, &pre_pow, &txid, &tx_hash, &tx_sig, &merkle, &accepted, &utxo, &pow_final] {
+            assert_eq!(d.as_bytes().len(), 64);
+            assert_eq!(d.to_string().len(), 128);
+        }
+
+        // The 9 hashers' domain-separator keys are distinct, so the
+        // 9 digests of the same input must all differ from each other.
+        let all = [block, pre_pow, txid, tx_hash, tx_sig, merkle, accepted, utxo, pow_final];
+        for i in 0..all.len() {
+            for j in (i + 1)..all.len() {
+                assert_ne!(all[i], all[j], "domain separation failed for hasher pair ({i}, {j})");
+            }
+        }
+
+        // Determinism — hashing the same input twice gives the same
+        // digest.
+        assert_eq!(block, BlockHash64::hash(msg));
+        let mut chained = BlockHash64::new();
+        chained.update(b"kaspa-pq hash64").update(b" hashers PR-9.2");
+        assert_eq!(chained.finalize(), block, "chained update must match one-shot hash");
     }
 }

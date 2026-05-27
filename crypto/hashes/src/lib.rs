@@ -1,3 +1,4 @@
+mod hash64;
 mod hashers;
 mod pow_hashers;
 
@@ -18,7 +19,14 @@ use workflow_wasm::prelude::*;
 
 pub const HASH_SIZE: usize = 32;
 
+pub use hash64::*;
 pub use hashers::*;
+
+/// kaspa-pq Phase 9 documentation alias for the upstream 32-byte
+/// [`Hash`]. Use `Hash32` in source that wants to be explicit about
+/// "this is the legacy 32-byte width, not the kaspa-pq 64-byte
+/// consensus identity" (ADR-0008). The 64-byte type is [`Hash64`].
+pub type Hash32 = Hash;
 
 // TODO: Check if we use hash more as an array of u64 or of bytes and change the default accordingly
 /// @category General
