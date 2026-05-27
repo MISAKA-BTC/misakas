@@ -10,6 +10,7 @@ members = [
     "wallet/wasm",
     "wallet/bip32",
     "wallet/keys",
+    "wallet/pq-cli",
     "wallet/pskt",
     "consensus",
     "consensus/core",

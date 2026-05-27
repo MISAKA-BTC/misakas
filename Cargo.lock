@@ -3233,6 +3233,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaspa-pq-cli"
+version = "1.1.0"
+dependencies = [
+ "clap 4.5.51",
+ "faster-hex 0.9.0",
+ "kaspa-addresses",
+ "kaspa-bip32",
+ "kaspa-txscript",
+ "kaspa-wallet-keys",
+ "libcrux-ml-dsa",
+ "rand 0.8.6",
+ "thiserror 1.0.64",
+]
+
+[[package]]
 name = "kaspa-rpc-core"
 version = "1.1.0"
 dependencies = [
