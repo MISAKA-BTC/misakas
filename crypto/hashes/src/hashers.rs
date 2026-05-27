@@ -148,14 +148,6 @@ macro_rules! blake2b_512_hasher {
                 self.0.update(data.as_ref());
             }
 
-            /// Chained-update helper — mirrors `HasherBase::update`'s
-            /// `&mut Self` return so call sites can write
-            /// `.update(a).update(b).finalize()` in one expression.
-            pub fn update<A: AsRef<[u8]>>(&mut self, data: A) -> &mut Self {
-                self.write(data);
-                self
-            }
-
             #[inline(always)]
             pub fn finalize(self) -> crate::Hash64 {
                 let mut out = [0u8; 64];
@@ -170,6 +162,19 @@ macro_rules! blake2b_512_hasher {
                 let mut h = Self::new();
                 h.write(data);
                 h.finalize()
+            }
+        }
+
+        // kaspa-pq PR-8.6: opt the 64-byte hashers into the
+        // `HasherBase` trait so the existing `HasherExtensions`
+        // blanket impl (write_len / write_var_array / write_blue_work /
+        // …) works on them. Lets `hashing::header::hash_override_nonce_time_64`
+        // be a near-clone of the 32-byte version.
+        impl crate::HasherBase for $name {
+            #[inline(always)]
+            fn update<A: AsRef<[u8]>>(&mut self, data: A) -> &mut Self {
+                self.write(data);
+                self
             }
         }
 
