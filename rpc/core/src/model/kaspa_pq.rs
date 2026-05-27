@@ -45,8 +45,11 @@ pub const RPC_MLDSA65_PK_LEN: usize = 1952;
 pub const RPC_MLDSA65_SIG_LEN: usize = 3309;
 
 /// kaspa-pq PoC UTXO-commitment width in bytes (32). The production
-/// 64-byte switch lands in PR-7.6 as a separate type.
+/// 64-byte switch is `RpcUtxoCommitment64` (added in PR-7.6).
 pub const RPC_UTXO_COMMITMENT_LEN: usize = 32;
+
+/// kaspa-pq production-width UTXO commitment in bytes (64). PR-7.6.
+pub const RPC_UTXO_COMMITMENT_64_LEN: usize = 64;
 
 /// 1952-byte ML-DSA-65 public key, RPC-serialized as a 3904-character
 /// lowercase hex string.
@@ -64,6 +67,17 @@ pub struct RpcMlDsa65Signature(pub [u8; RPC_MLDSA65_SIG_LEN]);
 /// (not the derive list) for symmetry with the two ML-DSA types.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
 pub struct RpcUtxoCommitment(pub [u8; RPC_UTXO_COMMITMENT_LEN]);
+
+/// 64-byte kaspa-pq UTXO commitment, production width. PR-7.6.
+///
+/// Built from `kaspa_muhash::MuHash::finalize_64()` (BLAKE2b-512 of the
+/// 2048-byte LtHash state). RPC tooling that needs to display or
+/// verify the production-width commitment must use this newtype, not
+/// [`RpcUtxoCommitment`]; the two are intentionally not
+/// interchangeable (no `From` either direction — see ADR-0004
+/// §"Type discipline").
+#[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
+pub struct RpcUtxoCommitment64(pub [u8; RPC_UTXO_COMMITMENT_64_LEN]);
 
 /// Error returned when a hex-encoded kaspa-pq RPC field fails to parse.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -181,6 +195,22 @@ macro_rules! impl_rpc_pq_bytes {
 impl_rpc_pq_bytes!(RpcMlDsa65PublicKey, RPC_MLDSA65_PK_LEN, "RpcMlDsa65PublicKey");
 impl_rpc_pq_bytes!(RpcMlDsa65Signature, RPC_MLDSA65_SIG_LEN, "RpcMlDsa65Signature");
 impl_rpc_pq_bytes!(RpcUtxoCommitment, RPC_UTXO_COMMITMENT_LEN, "RpcUtxoCommitment");
+impl_rpc_pq_bytes!(RpcUtxoCommitment64, RPC_UTXO_COMMITMENT_64_LEN, "RpcUtxoCommitment64");
+
+// Bidirectional conversion between the consensus-core type and its
+// RPC wire form. The two newtypes intentionally exist in separate
+// crates so the RPC layer can evolve its on-wire encoding (Borsh /
+// serde JSON hex) without touching `consensus_core`.
+impl From<kaspa_consensus_core::utxo_commitment::UtxoCommitment64> for RpcUtxoCommitment64 {
+    fn from(c: kaspa_consensus_core::utxo_commitment::UtxoCommitment64) -> Self {
+        RpcUtxoCommitment64(*c.as_bytes())
+    }
+}
+impl From<RpcUtxoCommitment64> for kaspa_consensus_core::utxo_commitment::UtxoCommitment64 {
+    fn from(c: RpcUtxoCommitment64) -> Self {
+        kaspa_consensus_core::utxo_commitment::UtxoCommitment64::new(c.0)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -190,6 +220,44 @@ mod tests {
     fn pq_constants_match_txscript() {
         assert_eq!(RPC_MLDSA65_PK_LEN, kaspa_txscript::MLDSA65_PK_LEN);
         assert_eq!(RPC_MLDSA65_SIG_LEN, kaspa_txscript::MLDSA65_SIG_LEN);
+    }
+
+    #[test]
+    fn utxo_commitment_64_constant_matches_consensus_core() {
+        assert_eq!(
+            RPC_UTXO_COMMITMENT_64_LEN,
+            kaspa_consensus_core::utxo_commitment::UTXO_COMMITMENT_64_BYTES,
+        );
+    }
+
+    #[test]
+    fn utxo_commitment_64_consensus_core_roundtrip() {
+        use kaspa_consensus_core::utxo_commitment::UtxoCommitment64;
+        let bytes = [0xcdu8; RPC_UTXO_COMMITMENT_64_LEN];
+        let core_form = UtxoCommitment64::new(bytes);
+        let rpc_form: RpcUtxoCommitment64 = core_form.into();
+        assert_eq!(rpc_form.as_bytes(), &bytes);
+        let back: UtxoCommitment64 = rpc_form.into();
+        assert_eq!(back, core_form);
+    }
+
+    #[test]
+    fn utxo_commitment_64_serde_json_roundtrip() {
+        let c = RpcUtxoCommitment64::new([0xefu8; RPC_UTXO_COMMITMENT_64_LEN]);
+        let s = serde_json::to_string(&c).unwrap();
+        // 64 bytes -> 128-char hex + 2 quotes = 130 chars.
+        assert_eq!(s.len(), 130);
+        let parsed: RpcUtxoCommitment64 = serde_json::from_str(&s).unwrap();
+        assert_eq!(parsed, c);
+    }
+
+    #[test]
+    fn utxo_commitment_64_borsh_roundtrip() {
+        let c = RpcUtxoCommitment64::new([0x21u8; RPC_UTXO_COMMITMENT_64_LEN]);
+        let bytes = borsh::to_vec(&c).unwrap();
+        assert_eq!(bytes.len(), RPC_UTXO_COMMITMENT_64_LEN);
+        let parsed: RpcUtxoCommitment64 = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(parsed, c);
     }
 
     #[test]

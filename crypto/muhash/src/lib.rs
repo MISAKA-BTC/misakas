@@ -65,6 +65,22 @@ pub const EMPTY_MUHASH: Hash = Hash::from_bytes([
     0x10, 0x7d, 0xbb, 0xa0, 0xab, 0x64, 0xb5, 0xd8, 0x77, 0xe0, 0xea,
 ]);
 
+/// `MuHash::new().finalize_64()` — the 64-byte (production-width)
+/// commitment of an empty UTXO set, returned as raw bytes.
+///
+/// Concretely this is `BLAKE2b-512(LtHash state of [0u8; 2048])`.
+/// kaspa-pq Phase 7 (PR-7.6) — see
+/// `consensus/core/src/utxo_commitment.rs` for the `UtxoCommitment64`
+/// newtype. The value below is asserted at runtime by
+/// `test_empty_hash_64`; re-derive from the test panic if the
+/// underlying finalize function ever changes.
+pub const EMPTY_MUHASH_64: [u8; 64] = [
+    0x29, 0x38, 0xee, 0xb1, 0x25, 0x21, 0xe0, 0x1d, 0x1f, 0x8c, 0x65, 0xf5, 0x87, 0x80, 0x21, 0x48, 0xa8, 0x1b, 0x6e, 0x50, 0x28,
+    0xed, 0x27, 0xb5, 0x0a, 0x69, 0x20, 0x03, 0x3b, 0x2e, 0x97, 0x23, 0xd4, 0x60, 0xf6, 0x89, 0x59, 0x86, 0x0e, 0x61, 0xd5, 0x49,
+    0x53, 0x8a, 0xf1, 0xdc, 0x38, 0xd9, 0x62, 0xcd, 0x5b, 0x10, 0x16, 0xfd, 0xf8, 0xe0, 0xaf, 0xda, 0x2a, 0xb8, 0xeb, 0x82, 0x0d,
+    0x6b,
+];
+
 /// LtHash16_1024 UTXO accumulator.
 ///
 /// The state is `LTHASH_LANES` ( = 1024 ) lanes of 16 bits each. Add and
@@ -163,6 +179,26 @@ impl MuHash {
     pub fn finalize(&mut self) -> Hash {
         let bytes = self.serialize();
         MuHashFinalizeHash::hash(bytes)
+    }
+
+    /// 64-byte finalize: unkeyed `BLAKE2b-512` over the 2048-byte
+    /// serialized state. This is the production-width kaspa-pq UTXO
+    /// commitment (kaspa-pq Phase 7 PR-7.6; see
+    /// `consensus/core/src/utxo_commitment.rs` for the dedicated
+    /// `UtxoCommitment64` newtype that wraps the returned bytes).
+    ///
+    /// The 32-byte [`finalize`] stays as the active header field for
+    /// the PoC; the header switch to `UtxoCommitment64` is a separate
+    /// follow-up. Both finalize variants run off the same serialized
+    /// LtHash state — they differ only in the truncation width chosen
+    /// at the final BLAKE2b call.
+    #[inline]
+    pub fn finalize_64(&mut self) -> [u8; 64] {
+        let bytes = self.serialize();
+        let digest = blake2b_simd::Params::new().hash_length(64).to_state().update(&bytes).finalize();
+        let mut out = [0u8; 64];
+        out.copy_from_slice(digest.as_bytes());
+        out
     }
 
     /// Serialize the LtHash state as little-endian 16-bit lanes. The byte
@@ -377,6 +413,46 @@ mod tests {
         let mut empty = MuHash::new();
         let got = empty.finalize();
         assert_eq!(got, EMPTY_MUHASH, "if this fails, replace EMPTY_MUHASH with {:#04x?}", got.as_bytes());
+    }
+
+    #[test]
+    fn test_empty_hash_64() {
+        // kaspa-pq Phase 7 (PR-7.6) production-width empty-state digest.
+        // Same re-derivation rule as `test_empty_hash` if the test ever
+        // fails after a finalize change.
+        let mut empty = MuHash::new();
+        let got = empty.finalize_64();
+        assert_eq!(got, crate::EMPTY_MUHASH_64, "if this fails, replace EMPTY_MUHASH_64 with {got:#04x?}");
+    }
+
+    #[test]
+    fn test_finalize_64_length_and_distinct_from_finalize_32() {
+        let mut acc = MuHash::new();
+        acc.add_element(b"some non-empty element");
+        let d32 = acc.finalize();
+        let d64 = acc.finalize_64();
+        assert_eq!(d32.as_bytes().len(), 32);
+        assert_eq!(d64.len(), 64);
+        // 32-byte and 64-byte finalize use different keyed BLAKE2 widths;
+        // the 32-byte digest must not be a prefix or suffix of the 64-byte
+        // digest (they're different hash personalisations).
+        assert_ne!(&d64[..32], d32.as_bytes());
+        assert_ne!(&d64[32..], d32.as_bytes());
+    }
+
+    #[test]
+    fn test_finalize_64_changes_with_state() {
+        let mut a = MuHash::new();
+        a.add_element(b"a");
+        let mut b = MuHash::new();
+        b.add_element(b"b");
+        assert_ne!(a.finalize_64(), b.finalize_64());
+        // Add-then-remove still returns the empty digest under finalize_64
+        // (i.e. `EMPTY_MUHASH_64`).
+        let mut c = MuHash::new();
+        c.add_element(b"x");
+        c.remove_element(b"x");
+        assert_eq!(c.finalize_64(), crate::EMPTY_MUHASH_64);
     }
 
     #[test]

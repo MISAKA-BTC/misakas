@@ -36,6 +36,11 @@ pub mod subnets;
 pub mod trusted;
 pub mod tx;
 pub mod utxo;
+/// kaspa-pq Phase 7 (PR-7.6): 64-byte production UTXO commitment type
+/// (see docs/adr/0004-utxo-commitment64.md). The header field is still
+/// 32-byte `Hash` for the PoC; this module exists so the header switch
+/// PR is a small mechanical type swap.
+pub mod utxo_commitment;
 
 /// Integer type for accumulated PoW of blue blocks. We expect no more than
 /// 2^128 work in a single block (btc has ~2^80), and no more than 2^64

@@ -15,6 +15,9 @@ kaspa-hashes.workspace = true
 # UTXO-multiset store (and other RocksDB caches) require for any value
 # type. Implemented at the bottom of `src/lib.rs`.
 kaspa-utils.workspace = true
+# kaspa-pq Phase 7 (PR-7.6): `blake2b_simd` powers the 64-byte
+# `finalize_64` production-width commitment.
+blake2b_simd.workspace = true
 borsh.workspace = true
 rand_chacha.workspace = true
 serde.workspace = true

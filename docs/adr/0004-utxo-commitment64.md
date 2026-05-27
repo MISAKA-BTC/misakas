@@ -1,8 +1,34 @@
 # ADR-0004: 64-byte UTXO commitment via a dedicated `UtxoCommitment64` type
 
-Status: Accepted (Phase 1)
+Status: Accepted (Phase 1 freeze; PR-7.6 introduced the type + finalize path)
 Date: 2026-05-28
 Supersedes: —
+
+## Phase 7 PR-7.6 delivery
+
+PR-7.6 (commit on the kaspa-pq branch) introduced the type, the finalize
+path, and the RPC wire form, but **kept the header field at 32 bytes**.
+The header switch is the last mechanical step and is split out so it can
+land on its own once any consumer that reads the header field is ready
+for the type change.
+
+What landed in PR-7.6:
+
+| Location | Item |
+|---|---|
+| [consensus/core/src/utxo_commitment.rs](../../consensus/core/src/utxo_commitment.rs) | `UtxoCommitment64` newtype, `UTXO_COMMITMENT_64_BYTES = 64`. No `From`/`Into<Hash>` conversion (type discipline). |
+| [crypto/muhash/src/lib.rs](../../crypto/muhash/src/lib.rs) | `MuHash::finalize_64() -> [u8; 64]` (BLAKE2b-512 of the 2048-byte LtHash state); `EMPTY_MUHASH_64` constant. |
+| [rpc/core/src/model/kaspa_pq.rs](../../rpc/core/src/model/kaspa_pq.rs) | `RpcUtxoCommitment64` newtype, Borsh + serde JSON hex encoding, `From`/`Into<UtxoCommitment64>` conversions. |
+| `EMPTY_MUHASH_64` | `2938eeb12521e01d…b8eb820d6b` (LtHash empty-state BLAKE2b-512 digest, asserted by `test_empty_hash_64`). |
+
+What is deferred to a follow-up "header-switch PR":
+
+- `Header::utxo_commitment` field switch from `Hash` to
+  `UtxoCommitment64`. This touches ~30 files (genesis, header hashing,
+  RPC header conversion, p2p convert, bridge, testing/integration,
+  WASM optional_header). The type, finalize path, and RPC wire form
+  already exist in the branch, so the switch is mechanical.
+- Genesis hash recompute (4 networks) once the header field changes.
 
 ## Context
 
