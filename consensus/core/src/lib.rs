@@ -45,6 +45,12 @@ pub mod utxo_commitment;
 /// helpers (see docs/adr/0007-layered-pow.md). Self-contained; the
 /// PoW-validation wiring step is PR-8.6.
 pub mod pow_layer0;
+/// kaspa-pq Phase 10 (PR-10.3): DNS Probabilistic Finality Overlay
+/// type stubs (see docs/adr/0009-dns-probabilistic-finality.md).
+/// Carries the type surface only; consensus rule implementations
+/// (StakeScore aggregation, reorg gate, sortition) land in PR-10.4
+/// onward once Phases 1–9 stabilise.
+pub mod dns_finality;
 
 /// Integer type for accumulated PoW of blue blocks.
 ///
