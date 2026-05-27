@@ -5,10 +5,16 @@ use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
 use kaspa_hashes::Hash;
-use kaspa_math::Uint3072;
 use kaspa_muhash::MuHash;
 use rocksdb::WriteBatch;
 use std::sync::Arc;
+
+// kaspa-pq: upstream Kaspa stored a `Uint3072` as the on-disk representation
+// of the multiplicative-MuHash field and reconstructed `MuHash` from it on
+// read. LtHash16_1024 has no compressed-field representation, so we just
+// store the `MuHash` directly. The wire format is its serde encoding,
+// which is the 2048-byte little-endian LtHash state (see
+// `crypto/muhash/src/lib.rs`).
 
 pub trait UtxoMultisetsStoreReader {
     fn get(&self, hash: Hash) -> Result<MuHash, StoreError>;
@@ -23,7 +29,7 @@ pub trait UtxoMultisetsStore: UtxoMultisetsStoreReader {
 #[derive(Clone)]
 pub struct DbUtxoMultisetsStore {
     db: Arc<DB>,
-    access: CachedDbAccess<Hash, Uint3072, BlockHasher>,
+    access: CachedDbAccess<Hash, MuHash, BlockHasher>,
 }
 
 impl DbUtxoMultisetsStore {
@@ -43,7 +49,7 @@ impl DbUtxoMultisetsStore {
     }
 
     pub fn set_batch(&self, batch: &mut WriteBatch, hash: Hash, multiset: MuHash) -> Result<(), StoreError> {
-        self.access.write(BatchDbWriter::new(batch), hash, multiset.try_into().expect("multiset is expected to be finalized"))?;
+        self.access.write(BatchDbWriter::new(batch), hash, multiset)?;
         Ok(())
     }
 
@@ -54,7 +60,7 @@ impl DbUtxoMultisetsStore {
 
 impl UtxoMultisetsStoreReader for DbUtxoMultisetsStore {
     fn get(&self, hash: Hash) -> Result<MuHash, StoreError> {
-        Ok(self.access.read(hash)?.into())
+        self.access.read(hash)
     }
 }
 
@@ -63,7 +69,7 @@ impl UtxoMultisetsStore for DbUtxoMultisetsStore {
         if self.access.has(hash)? {
             return Err(StoreError::HashAlreadyExists(hash));
         }
-        self.access.write(DirectDbWriter::new(&self.db), hash, multiset.try_into().expect("multiset is expected to be finalized"))?;
+        self.access.write(DirectDbWriter::new(&self.db), hash, multiset)?;
         Ok(())
     }
 

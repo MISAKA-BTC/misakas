@@ -11,7 +11,11 @@ repository.workspace = true
 
 [dependencies]
 kaspa-hashes.workspace = true
-kaspa-math.workspace = true
+# `kaspa-utils` provides the `MemSizeEstimator` trait that the consensus
+# UTXO-multiset store (and other RocksDB caches) require for any value
+# type. Implemented at the bottom of `src/lib.rs`.
+kaspa-utils.workspace = true
+borsh.workspace = true
 rand_chacha.workspace = true
 serde.workspace = true
 

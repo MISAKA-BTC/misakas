@@ -1,39 +1,98 @@
-// Make u3072 public if we're fuzzing
-#[cfg(fuzzing)]
-pub mod u3072;
-#[cfg(not(fuzzing))]
-mod u3072;
+//! kaspa-pq UTXO accumulator: LtHash16_1024.
+//!
+//! This module replaces the upstream Kaspa 3072-bit multiplicative MuHash
+//! with a 16-bit-lane, 1024-lane additive LtHash (Meta LtHash16_1024). The
+//! struct name `MuHash` is **kept** during the kaspa-pq PoC so that
+//! downstream call sites do not have to be retyped; the internal data and
+//! the on-the-wire serialization, however, are completely different.
+//!
+//! Public surface that downstream crates rely on (preserved):
+//!   - [`MuHash::new`]
+//!   - [`MuHash::add_element`] / [`MuHash::remove_element`]
+//!   - [`MuHash::add_element_builder`] / [`MuHash::remove_element_builder`]
+//!     plus the [`MuHashElementBuilder`] hasher-style API.
+//!   - [`MuHash::combine`] (component-wise addition mod 2^16).
+//!   - [`MuHash::serialize`] / [`MuHash::deserialize`] (2048 bytes, was 384).
+//!   - [`MuHash::finalize`] — returns a 32-byte [`Hash`] (BLAKE2b-256 keyed
+//!     with `b"MuHashFinalize"`). The 64-byte production commitment lives
+//!     in a separate `UtxoCommitment64` type per ADR-0004 and is not
+//!     produced by this PoC.
+//!   - [`EMPTY_MUHASH`] — finalize of a fresh accumulator (2048 zero bytes).
+//!   - [`SERIALIZED_MUHASH_SIZE`] — now `LTHASH_STATE_BYTES` = 2048.
+//!   - [`OverflowError`] / [`MuHashError`] — kept for API compat but never
+//!     actually returned, because every byte string of the correct length
+//!     decodes to a valid LtHash state.
+//!
+//! See docs/adr/0003-lthash-utxo-accumulator.md for the design rationale,
+//! docs/adr/0004-utxo-commitment64.md for why the PoC finalize is still
+//! 32 bytes.
 
-use crate::u3072::U3072;
+use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hasher, HasherBase, MuHashElementHash, MuHashFinalizeHash};
-use kaspa_math::Uint3072;
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, Visitor},
+};
 use std::error::Error;
 use std::fmt::Display;
 
+/// Number of 16-bit lanes in the LtHash state.
+pub const LTHASH_LANES: usize = 1024;
+/// Bytes per LtHash lane (16-bit lanes => 2 bytes).
+pub const LTHASH_LANE_BYTES: usize = 2;
+/// Serialized LtHash state size in bytes (`LTHASH_LANES * LTHASH_LANE_BYTES`).
+pub const LTHASH_STATE_BYTES: usize = LTHASH_LANES * LTHASH_LANE_BYTES;
+
+/// Output size of `finalize()` in bytes (kaspa-pq PoC keeps the upstream
+/// 32-byte width — see ADR-0004).
 pub const HASH_SIZE: usize = 32;
-pub const SERIALIZED_MUHASH_SIZE: usize = ELEMENT_BYTE_SIZE;
-// The hash of `NewMuHash().Finalize()`
+
+/// Serialized accumulator state size. Renamed conceptually to "LtHash state
+/// size" — but the constant name is kept for source compatibility with the
+/// many call sites that already reference `SERIALIZED_MUHASH_SIZE`.
+pub const SERIALIZED_MUHASH_SIZE: usize = LTHASH_STATE_BYTES;
+
+/// `MuHash::new().finalize()` — the 32-byte commitment of an empty UTXO set.
+///
+/// Concretely this is `MuHashFinalizeHash::hash([0u8; 2048])`.
+/// The value below is asserted at runtime by `test_empty_hash`; if the
+/// underlying hasher or state size ever changes, that test will fail and
+/// this constant must be re-derived from the test panic.
 pub const EMPTY_MUHASH: Hash = Hash::from_bytes([
-    0x54, 0x4e, 0xb3, 0x14, 0x2c, 0x0, 0xf, 0xa, 0xd2, 0xc7, 0x6a, 0xc4, 0x1f, 0x42, 0x22, 0xab, 0xba, 0xba, 0xbe, 0xd8, 0x30, 0xee,
-    0xaf, 0xee, 0x4b, 0x6d, 0xc5, 0x6b, 0x52, 0xd5, 0xca, 0xc0,
+    0x25, 0x0b, 0x9d, 0x19, 0x78, 0x3f, 0x24, 0xcd, 0xf5, 0x4a, 0x3b, 0xc7, 0xab, 0x2f, 0xaa, 0x52, 0x5f, 0xeb, 0x09, 0x0d, 0xe4,
+    0x10, 0x7d, 0xbb, 0xa0, 0xab, 0x64, 0xb5, 0xd8, 0x77, 0xe0, 0xea,
 ]);
 
-pub(crate) const ELEMENT_BIT_SIZE: usize = 3072;
-pub(crate) const ELEMENT_BYTE_SIZE: usize = ELEMENT_BIT_SIZE / 8;
-
-/// MuHash is a type used to create a Multiplicative Hash
-/// which is a rolling(homomorphic) hash that you can add and remove elements from
-/// and receive the same resulting hash as-if you never hashed them.
-/// Because of that the order of adding and removing elements doesn't matter.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// LtHash16_1024 UTXO accumulator.
+///
+/// The state is `LTHASH_LANES` ( = 1024 ) lanes of 16 bits each. Add and
+/// remove are component-wise addition and subtraction modulo `2^16`.
+/// `combine` is component-wise addition.
+///
+/// Note: 16-bit lanes wrap after 2^16 identical additions. The kaspa-pq
+/// design defends against this by **always** including the spending
+/// outpoint `(txid, index)` in the element bytes (see
+/// `consensus/core/src/muhash.rs::write_utxo`), which makes every UTXO
+/// element uniquely tagged.
+// `MuHash` derives `Borsh{Serialize,Deserialize}` natively because Borsh
+// supports primitive arrays of any length. The serde `Serialize` /
+// `Deserialize` impls are written by hand (further down this file) because
+// serde does not provide derives for `[T; N]` with `N > 32`. The serde
+// encoding is the same 2048-byte little-endian state that
+// `MuHash::serialize` produces.
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub struct MuHash {
-    numerator: U3072,
-    denominator: U3072,
+    /// `[u16; LTHASH_LANES]` stored as a fixed-size array so that
+    /// `BorshSerialize` / `BorshDeserialize` are trivially correct
+    /// (Borsh handles primitive arrays natively).
+    lanes: [u16; LTHASH_LANES],
 }
 
+/// Kept for API compatibility with the upstream multiplicative MuHash.
+/// LtHash16_1024 cannot overflow: every 2048-byte sequence is a valid
+/// state, so this error is no longer constructed.
 #[derive(Debug, PartialEq, Eq)]
 pub struct OverflowError;
 
@@ -46,95 +105,143 @@ impl Display for OverflowError {
 impl Error for OverflowError {}
 
 impl MuHash {
+    /// Return an empty initialized accumulator. `finalize()` on a fresh
+    /// `MuHash` equals [`EMPTY_MUHASH`].
     #[inline]
-    /// return an empty initialized set.
-    /// when finalized it should be equal to a finalized set with all elements removed.
     pub fn new() -> Self {
-        Self { numerator: U3072::one(), denominator: U3072::one() }
+        Self { lanes: [0u16; LTHASH_LANES] }
     }
 
+    /// Hash `data` and add it to the accumulator. Supports arbitrary-length
+    /// input via the keyed BLAKE2b-256 [`MuHashElementHash`] (domain
+    /// separator `"MuHashElement"`).
     #[inline]
-    // hashes the data and adds it to the muhash.
-    // Supports arbitrary length data (subject to the underlying hash function(Blake2b) limits)
     pub fn add_element(&mut self, data: &[u8]) {
-        let element = data_to_element(data);
-        self.numerator *= element;
+        let lanes = element_lanes(MuHashElementHash::hash(data));
+        for (s, e) in self.lanes.iter_mut().zip(lanes.iter()) {
+            *s = s.wrapping_add(*e);
+        }
     }
 
+    /// Hash `data` and remove it from the accumulator.
     #[inline]
-    // hashes the data and removes it from the muhash.
-    // Supports arbitrary length data (subject to the underlying hash function(Blake2b) limits)
     pub fn remove_element(&mut self, data: &[u8]) {
-        let element = data_to_element(data);
-        self.denominator *= element;
+        let lanes = element_lanes(MuHashElementHash::hash(data));
+        for (s, e) in self.lanes.iter_mut().zip(lanes.iter()) {
+            *s = s.wrapping_sub(*e);
+        }
     }
 
+    /// Return a hasher-style builder that, on `finalize`, adds the hashed
+    /// element to the accumulator.
     #[inline]
-    // returns a hasher for hashing data which on `finalize` adds the finalized hash to the muhash.
     pub fn add_element_builder(&mut self) -> MuHashElementBuilder<'_> {
-        MuHashElementBuilder::new(&mut self.numerator)
+        MuHashElementBuilder::new(&mut self.lanes, BuilderSign::Add)
     }
 
+    /// Return a hasher-style builder that, on `finalize`, removes the
+    /// hashed element from the accumulator.
     #[inline]
-    // returns a hasher for hashing data which on `finalize` removes the finalized hash from the muhash.
     pub fn remove_element_builder(&mut self) -> MuHashElementBuilder<'_> {
-        MuHashElementBuilder::new(&mut self.denominator)
+        MuHashElementBuilder::new(&mut self.lanes, BuilderSign::Remove)
     }
 
+    /// Merge `other`'s lanes into `self`. Equivalent to manually applying
+    /// every add/remove operation that produced `other`.
     #[inline]
-    // will add the MuHash together. Equivalent to manually adding all the data elements
-    // from one set to the other.
     pub fn combine(&mut self, other: &Self) {
-        self.numerator *= other.numerator;
-        self.denominator *= other.denominator;
+        for (s, o) in self.lanes.iter_mut().zip(other.lanes.iter()) {
+            *s = s.wrapping_add(*o);
+        }
     }
 
+    /// 32-byte finalize: `BLAKE2b-256` (keyed `"MuHashFinalize"`) over the
+    /// 2048-byte serialized state. The `&mut self` receiver is retained
+    /// for source compatibility with upstream Kaspa's `MuHash::finalize`;
+    /// no normalization is performed.
     #[inline]
     pub fn finalize(&mut self) -> Hash {
-        let serialized = self.serialize();
-        MuHashFinalizeHash::hash(serialized)
+        let bytes = self.serialize();
+        MuHashFinalizeHash::hash(bytes)
     }
 
-    #[inline]
-    fn normalize(&mut self) {
-        self.numerator /= self.denominator;
-        self.denominator = U3072::one();
-    }
-
+    /// Serialize the LtHash state as little-endian 16-bit lanes. The byte
+    /// length is `SERIALIZED_MUHASH_SIZE` = 2048.
     #[inline]
     pub fn serialize(&mut self) -> [u8; SERIALIZED_MUHASH_SIZE] {
-        self.normalize();
-        self.numerator.to_le_bytes()
+        let mut out = [0u8; SERIALIZED_MUHASH_SIZE];
+        for (i, lane) in self.lanes.iter().enumerate() {
+            let off = i * LTHASH_LANE_BYTES;
+            out[off..off + LTHASH_LANE_BYTES].copy_from_slice(&lane.to_le_bytes());
+        }
+        out
     }
 
+    /// Deserialize a 2048-byte LtHash state. Always succeeds — every byte
+    /// sequence of the correct length is a valid state. The `Result`
+    /// signature is preserved for source compatibility with upstream
+    /// Kaspa's `MuHash::deserialize`.
     #[inline]
     pub fn deserialize(data: [u8; SERIALIZED_MUHASH_SIZE]) -> Result<Self, OverflowError> {
-        let numerator = U3072::from_le_bytes(data);
-        if numerator.is_overflow() { Err(OverflowError) } else { Ok(Self { numerator, denominator: U3072::one() }) }
+        let mut lanes = [0u16; LTHASH_LANES];
+        for (i, lane) in lanes.iter_mut().enumerate() {
+            let off = i * LTHASH_LANE_BYTES;
+            *lane = u16::from_le_bytes([data[off], data[off + 1]]);
+        }
+        Ok(Self { lanes })
     }
+
 }
 
 #[derive(Debug)]
 pub enum MuHashError {
+    /// Retained for API compatibility with upstream Kaspa, where a `MuHash`
+    /// could not be unwrapped to a `Uint3072` (the multiplicative-MuHash
+    /// field element) while the denominator was still non-trivial.
+    /// LtHash16_1024 has no denominator, so this variant is never
+    /// produced by kaspa-pq code, but downstream `match` arms that
+    /// handle it remain valid.
     NonNormalizedValue,
 }
 
-impl TryFrom<MuHash> for Uint3072 {
-    type Error = MuHashError;
-
-    fn try_from(value: MuHash) -> Result<Self, Self::Error> {
-        if value.denominator == U3072::one() { Ok(value.numerator.into()) } else { Err(MuHashError::NonNormalizedValue) }
+/// LtHash element-to-lane-vector expansion.
+///
+/// The 32-byte BLAKE2b-256 element fingerprint seeds a ChaCha20 stream,
+/// which produces `LTHASH_STATE_BYTES` of pseudo-random bytes; these are
+/// reinterpreted as `LTHASH_LANES` little-endian `u16`s.
+///
+/// This is a domain-separation choice the kaspa-pq PoC inherits from
+/// upstream Kaspa's element-to-U3072 expansion (which used the same
+/// MuHashElementHash + ChaCha20 chain, sized to 384 bytes). The ADR
+/// allows a BLAKE3 XOF as an alternative; we keep the ChaCha20 chain for
+/// the PoC because it (a) needs no new dependency and (b) reuses the
+/// already-domain-separated `MuHashElementHash` so add/remove are bound
+/// to the kaspa-pq UTXO context.
+#[inline]
+fn element_lanes(hash: Hash) -> [u16; LTHASH_LANES] {
+    let mut bytes = [0u8; LTHASH_STATE_BYTES];
+    let mut stream = ChaCha20Rng::from_seed(hash.as_bytes());
+    stream.fill_bytes(&mut bytes);
+    let mut lanes = [0u16; LTHASH_LANES];
+    for (i, lane) in lanes.iter_mut().enumerate() {
+        let off = i * LTHASH_LANE_BYTES;
+        *lane = u16::from_le_bytes([bytes[off], bytes[off + 1]]);
     }
+    lanes
 }
 
-impl From<Uint3072> for MuHash {
-    fn from(u: Uint3072) -> Self {
-        MuHash { numerator: u.into(), denominator: U3072::one() }
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BuilderSign {
+    Add,
+    Remove,
 }
 
+/// Hasher-style builder for incrementally feeding data into the
+/// accumulator. The `finalize(self)` step applies the resulting element
+/// to the borrowed `lanes` array using the configured sign.
 pub struct MuHashElementBuilder<'a> {
-    muhash_field: &'a mut U3072,
+    lanes_field: &'a mut [u16; LTHASH_LANES],
+    sign: BuilderSign,
     element_hasher: MuHashElementHash,
 }
 
@@ -146,26 +253,25 @@ impl HasherBase for MuHashElementBuilder<'_> {
 }
 
 impl<'a> MuHashElementBuilder<'a> {
-    pub fn new(muhash_field: &'a mut U3072) -> Self {
-        Self { muhash_field, element_hasher: MuHashElementHash::new() }
+    fn new(lanes_field: &'a mut [u16; LTHASH_LANES], sign: BuilderSign) -> Self {
+        Self { lanes_field, sign, element_hasher: MuHashElementHash::new() }
     }
 
     pub fn finalize(self) {
-        let hash = self.element_hasher.finalize();
-        let mut stream = ChaCha20Rng::from_seed(hash.as_bytes());
-        let mut bytes = [0u8; ELEMENT_BYTE_SIZE];
-        stream.fill_bytes(&mut bytes);
-        *self.muhash_field *= U3072::from_le_bytes(bytes);
+        let lanes = element_lanes(self.element_hasher.finalize());
+        match self.sign {
+            BuilderSign::Add => {
+                for (s, e) in self.lanes_field.iter_mut().zip(lanes.iter()) {
+                    *s = s.wrapping_add(*e);
+                }
+            }
+            BuilderSign::Remove => {
+                for (s, e) in self.lanes_field.iter_mut().zip(lanes.iter()) {
+                    *s = s.wrapping_sub(*e);
+                }
+            }
+        }
     }
-}
-
-#[inline]
-fn data_to_element(data: &[u8]) -> U3072 {
-    let hash = MuHashElementHash::hash(data);
-    let mut stream = ChaCha20Rng::from_seed(hash.as_bytes());
-    let mut bytes = [0u8; ELEMENT_BYTE_SIZE];
-    stream.fill_bytes(&mut bytes);
-    U3072::from_le_bytes(bytes)
 }
 
 impl Default for MuHash {
@@ -175,73 +281,78 @@ impl Default for MuHash {
     }
 }
 
+impl kaspa_utils::mem_size::MemSizeEstimator for MuHash {
+    fn estimate_mem_units(&self) -> usize {
+        1
+    }
+}
+
+// Manual serde impls: see the comment above the `MuHash` struct. The wire
+// format is the same 2048-byte little-endian state that
+// `MuHash::serialize` produces, so swapping the on-disk store between
+// borsh and serde-based encoders yields the same bytes.
+impl Serialize for MuHash {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut bytes = [0u8; SERIALIZED_MUHASH_SIZE];
+        for (i, lane) in self.lanes.iter().enumerate() {
+            let off = i * LTHASH_LANE_BYTES;
+            bytes[off..off + LTHASH_LANE_BYTES].copy_from_slice(&lane.to_le_bytes());
+        }
+        serializer.serialize_bytes(&bytes)
+    }
+}
+
+impl<'de> Deserialize<'de> for MuHash {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct MuHashVisitor;
+        impl<'de> Visitor<'de> for MuHashVisitor {
+            type Value = MuHash;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a {} -byte LtHash16_1024 state", SERIALIZED_MUHASH_SIZE)
+            }
+
+            fn visit_bytes<E: de::Error>(self, bytes: &[u8]) -> Result<MuHash, E> {
+                if bytes.len() != SERIALIZED_MUHASH_SIZE {
+                    return Err(E::invalid_length(bytes.len(), &self));
+                }
+                let mut data = [0u8; SERIALIZED_MUHASH_SIZE];
+                data.copy_from_slice(bytes);
+                MuHash::deserialize(data).map_err(|_| E::custom("LtHash deserialize failed"))
+            }
+
+            fn visit_byte_buf<E: de::Error>(self, bytes: Vec<u8>) -> Result<MuHash, E> {
+                self.visit_bytes(&bytes)
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<MuHash, A::Error> {
+                // For sequence-style encoders (bincode in some configurations
+                // serializes byte slices as sequences). Fill a buffer one
+                // u8 at a time, then delegate to the byte path.
+                let mut data = [0u8; SERIALIZED_MUHASH_SIZE];
+                for (i, slot) in data.iter_mut().enumerate() {
+                    *slot = seq
+                        .next_element::<u8>()?
+                        .ok_or_else(|| de::Error::invalid_length(i, &self))?;
+                }
+                if seq.next_element::<u8>()?.is_some() {
+                    // Trailing bytes — but we already consumed `SERIALIZED_MUHASH_SIZE`,
+                    // so any further element is an error.
+                    return Err(de::Error::invalid_length(SERIALIZED_MUHASH_SIZE + 1, &self));
+                }
+                MuHash::deserialize(data).map_err(|_| de::Error::custom("LtHash deserialize failed"))
+            }
+        }
+        deserializer.deserialize_bytes(MuHashVisitor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::OverflowError;
-    use crate::{EMPTY_MUHASH, MuHash, U3072};
+    use crate::{EMPTY_MUHASH, LTHASH_LANES, LTHASH_STATE_BYTES, MuHash, OverflowError, SERIALIZED_MUHASH_SIZE};
     use kaspa_hashes::Hash;
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha8Rng;
-
-    struct TestVector {
-        data: &'static [u8],
-        multiset_hash: Hash,
-        cumulative_hash: Hash,
-    }
-
-    const TEST_VECTORS: [TestVector; 3] = [
-        TestVector {
-            data: &[
-                152, 32, 81, 253, 30, 75, 167, 68, 187, 190, 104, 14, 31, 238, 20, 103, 123, 161, 163, 195, 84, 11, 247, 177, 205,
-                182, 6, 232, 87, 35, 62, 14, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 242, 5, 42, 1, 0, 0, 0, 67, 65, 4, 150, 181, 56, 232, 83,
-                81, 156, 114, 106, 44, 145, 230, 30, 193, 22, 0, 174, 19, 144, 129, 58, 98, 124, 102, 251, 139, 231, 148, 123, 230,
-                60, 82, 218, 117, 137, 55, 149, 21, 212, 224, 166, 4, 248, 20, 23, 129, 230, 34, 148, 114, 17, 102, 191, 98, 30, 115,
-                168, 44, 191, 35, 66, 200, 88, 238, 172,
-            ],
-            multiset_hash: Hash::from_bytes([
-                44, 55, 150, 32, 253, 244, 236, 10, 194, 83, 203, 228, 186, 130, 194, 187, 220, 15, 237, 172, 127, 224, 228, 82, 149,
-                125, 147, 117, 123, 191, 245, 193,
-            ]),
-            cumulative_hash: Hash::from_bytes([
-                44, 55, 150, 32, 253, 244, 236, 10, 194, 83, 203, 228, 186, 130, 194, 187, 220, 15, 237, 172, 127, 224, 228, 82, 149,
-                125, 147, 117, 123, 191, 245, 193,
-            ]),
-        },
-        TestVector {
-            data: &[
-                213, 253, 204, 84, 30, 37, 222, 28, 122, 90, 221, 237, 242, 72, 88, 184, 187, 102, 92, 159, 54, 239, 116, 78, 228, 44,
-                49, 96, 34, 201, 15, 155, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 242, 5, 42, 1, 0, 0, 0, 67, 65, 4, 114, 17, 168, 36, 245, 91,
-                80, 82, 40, 228, 195, 213, 25, 76, 31, 207, 170, 21, 164, 86, 171, 223, 55, 249, 185, 217, 122, 64, 64, 175, 192, 115,
-                222, 230, 200, 144, 100, 152, 79, 3, 56, 82, 55, 217, 33, 103, 193, 62, 35, 100, 70, 180, 23, 171, 121, 160, 252, 174,
-                65, 42, 227, 49, 107, 119, 172,
-            ],
-            multiset_hash: Hash::from_bytes([
-                102, 139, 178, 146, 239, 21, 44, 84, 219, 15, 87, 20, 191, 69, 255, 141, 167, 177, 212, 28, 12, 80, 38, 173, 101, 91,
-                47, 158, 27, 230, 126, 33,
-            ]),
-            cumulative_hash: Hash::from_bytes([
-                177, 91, 209, 18, 74, 107, 82, 230, 78, 218, 60, 48, 35, 197, 135, 228, 85, 167, 158, 116, 140, 140, 149, 77, 215, 65,
-                29, 13, 189, 151, 56, 99,
-            ]),
-        },
-        TestVector {
-            data: &[
-                68, 246, 114, 34, 96, 144, 216, 93, 185, 169, 242, 251, 254, 95, 15, 150, 9, 179, 135, 175, 123, 229, 183, 251, 183,
-                161, 118, 124, 131, 28, 158, 153, 0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 242, 5, 42, 1, 0, 0, 0, 67, 65, 4, 148, 185, 211, 231,
-                108, 91, 22, 41, 236, 249, 127, 255, 149, 215, 164, 187, 218, 200, 124, 194, 96, 153, 173, 162, 128, 102, 198, 255,
-                30, 185, 25, 18, 35, 205, 137, 113, 148, 160, 141, 12, 39, 38, 197, 116, 127, 29, 180, 158, 140, 249, 14, 117, 220,
-                62, 53, 80, 174, 155, 48, 8, 111, 60, 213, 170, 172,
-            ],
-            multiset_hash: Hash::from_bytes([
-                244, 11, 32, 189, 196, 62, 242, 240, 26, 23, 59, 118, 124, 185, 198, 184, 219, 86, 2, 235, 83, 95, 203, 152, 39, 56,
-                95, 155, 14, 58, 250, 244,
-            ]),
-            cumulative_hash: Hash::from_bytes([
-                230, 156, 110, 5, 4, 16, 118, 22, 72, 206, 98, 118, 168, 28, 128, 68, 185, 239, 177, 113, 94, 166, 246, 251, 159, 140,
-                247, 168, 193, 232, 3, 150,
-            ]),
-        },
-    ];
 
     fn element_from_byte(b: u8) -> [u8; 32] {
         let mut out = [0u8; 32];
@@ -250,13 +361,153 @@ mod tests {
     }
 
     #[test]
-    fn test_random_muhash_arithmetic() {
+    fn test_constants_match_spec() {
+        // Locked by docs/kaspa-pq-spec.md §2.
+        assert_eq!(LTHASH_LANES, 1024);
+        assert_eq!(LTHASH_STATE_BYTES, 2048);
+        assert_eq!(SERIALIZED_MUHASH_SIZE, LTHASH_STATE_BYTES);
+    }
+
+    #[test]
+    fn test_empty_hash() {
+        // The `EMPTY_MUHASH` constant must equal `MuHash::new().finalize()`.
+        // If this test fails after a change to the underlying hasher, the
+        // constant must be re-derived from `MuHash::new().finalize()` and
+        // pasted back into `lib.rs`.
+        let mut empty = MuHash::new();
+        let got = empty.finalize();
+        assert_eq!(got, EMPTY_MUHASH, "if this fails, replace EMPTY_MUHASH with {:#04x?}", got.as_bytes());
+    }
+
+    #[test]
+    fn test_add_then_remove_is_empty() {
+        let mut acc = MuHash::new();
+        acc.add_element(b"hello kaspa-pq");
+        acc.remove_element(b"hello kaspa-pq");
+        assert_eq!(acc.finalize(), EMPTY_MUHASH);
+    }
+
+    #[test]
+    fn test_order_independence() {
+        // For any two permutations of the same set, the finalized commitment
+        // must be equal.
+        let mut a = MuHash::new();
+        let mut b = MuHash::new();
+        let mut c = MuHash::new();
+        let elements: [&[u8]; 4] = [b"alpha", b"beta", b"gamma", b"delta"];
+        for e in elements {
+            a.add_element(e);
+        }
+        for e in elements.iter().rev() {
+            b.add_element(e);
+        }
+        for &i in [2usize, 0, 3, 1].iter() {
+            c.add_element(elements[i]);
+        }
+        assert_eq!(a.finalize(), b.finalize());
+        assert_eq!(a.finalize(), c.finalize());
+    }
+
+    #[test]
+    fn test_combine_equivalent_to_add() {
+        // combine(a, b) must equal "add every element of b to a".
+        let elements_a: [&[u8]; 3] = [b"a1", b"a2", b"a3"];
+        let elements_b: [&[u8]; 3] = [b"b1", b"b2", b"b3"];
+
+        let mut combined = MuHash::new();
+        for e in elements_a {
+            combined.add_element(e);
+        }
+        let mut other = MuHash::new();
+        for e in elements_b {
+            other.add_element(e);
+        }
+        combined.combine(&other);
+
+        let mut by_hand = MuHash::new();
+        for e in elements_a.iter().chain(elements_b.iter()) {
+            by_hand.add_element(e);
+        }
+
+        assert_eq!(combined.finalize(), by_hand.finalize());
+    }
+
+    #[test]
+    fn test_combine_inverts_remove() {
+        // m1 = add(set), m2 = remove(set). combine(m1, m2) is empty.
+        let mut m1 = MuHash::new();
+        let mut m2 = MuHash::new();
+        for e in [b"x".as_slice(), b"y", b"z"] {
+            m1.add_element(e);
+            m2.remove_element(e);
+        }
+        m1.combine(&m2);
+        assert_eq!(m1.finalize(), EMPTY_MUHASH);
+    }
+
+    #[test]
+    fn test_serialize_size_is_2048() {
+        let mut acc = MuHash::new();
+        acc.add_element(b"some data");
+        let ser = acc.serialize();
+        assert_eq!(ser.len(), LTHASH_STATE_BYTES);
+    }
+
+    #[test]
+    fn test_serialize_roundtrip() {
+        let mut acc = MuHash::new();
+        for s in ["one", "two", "three"] {
+            acc.add_element(s.as_bytes());
+        }
+        let ser = acc.serialize();
+        let mut roundtripped = MuHash::deserialize(ser).unwrap();
+        assert_eq!(acc.finalize(), roundtripped.finalize());
+    }
+
+    #[test]
+    fn test_deserialize_never_overflows() {
+        // Every 2048-byte sequence is a valid LtHash state — this is the
+        // explicit replacement for the old upstream `OverflowError`
+        // behaviour. The function returns `Result` only for source
+        // compatibility.
+        let all_max = [0xffu8; SERIALIZED_MUHASH_SIZE];
+        let _: Result<MuHash, OverflowError> = MuHash::deserialize(all_max);
+        // Use the unwrap to assert it really did succeed:
+        MuHash::deserialize(all_max).expect("LtHash deserialize is total");
+    }
+
+    #[test]
+    fn test_random_add_remove_cancels() {
+        // 1024 random adds matched 1:1 with the same 1024 removes -> empty.
+        const LOOPS: usize = 1024;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut set = MuHash::new();
+        let list: Vec<_> = (0..LOOPS)
+            .map(|_| {
+                let mut data = [0u8; 100];
+                rng.fill(&mut data[..]);
+                set.add_element(&data);
+                data
+            })
+            .collect();
+        assert_ne!(set.finalize(), EMPTY_MUHASH);
+        for elem in list.iter() {
+            set.remove_element(elem);
+        }
+        assert_eq!(set.finalize(), EMPTY_MUHASH);
+    }
+
+    #[test]
+    fn test_random_permutation_arithmetic() {
+        // Adapted from upstream `test_random_muhash_arithmetic`: pick four
+        // small elements with random add/remove signs, and permute the
+        // order of operations. All permutations must yield the same
+        // finalized commitment.
         let mut rng = ChaCha8Rng::seed_from_u64(1);
         for _ in 0..10 {
             let mut res = Hash::default();
             let mut table = [0u8; 4];
             rng.fill(&mut table[..]);
-
             for order in 0..4 {
                 let mut acc = MuHash::new();
                 for i in 0..4 {
@@ -274,172 +525,33 @@ mod tests {
                     assert_eq!(res, out);
                 }
             }
-            let x = element_from_byte(rng.r#gen()); // x=X
-            let y = element_from_byte(rng.r#gen()); // x=X, y=Y
-            let mut z = MuHash::new(); // x=X, y=X, z=1
-            let mut yx = MuHash::new(); // x=X, y=Y, z=1 yx=1
-            yx.add_element(&y); // x=X, y=X, z=1, yx=Y
-            yx.add_element(&x); // x=X, y=X, z=1, yx=Y*X
-            yx.normalize();
-            z.add_element(&x); // x=X, y=Y, z=X, yx=Y*X
-            z.add_element(&y); // x=X, y=Y, z=X*Y, yx = Y*X
-            z.denominator *= yx.numerator; // x=X, y=Y, z=1, yx=Y*X
-            assert_eq!(z.finalize(), EMPTY_MUHASH);
         }
     }
 
     #[test]
-    fn test_empty_hash() {
-        let mut empty = MuHash::new();
-        assert_eq!(empty.finalize(), EMPTY_MUHASH);
-    }
+    fn test_builder_matches_direct() {
+        // The hasher-style builder must produce the same accumulator as
+        // calling `add_element` / `remove_element` directly with the
+        // concatenated input bytes.
+        let chunks: [&[u8]; 3] = [b"chunk-one", b"chunk-two", b"chunk-three"];
 
-    #[test]
-    fn test_new_pre_computed() {
-        let expected = "b557f7cfc13cf9abc31374832715e7bff2cf5859897523337a0ead9dde012974";
-        let mut acc = MuHash::new();
-        acc.add_element(&element_from_byte(0));
-        acc.add_element(&element_from_byte(1));
-        acc.remove_element(&element_from_byte(2));
-        assert_eq!(acc.finalize().to_string(), expected);
-    }
-
-    #[test]
-    fn test_serialize() {
-        let expected = [
-            50, 5, 73, 166, 198, 210, 31, 202, 37, 64, 219, 222, 57, 158, 121, 89, 67, 188, 211, 73, 217, 251, 250, 178, 135, 196, 39,
-            250, 122, 202, 56, 228, 146, 233, 249, 16, 68, 9, 255, 158, 152, 84, 168, 146, 121, 81, 181, 60, 96, 141, 114, 26, 127,
-            140, 164, 90, 87, 187, 24, 4, 187, 151, 135, 91, 9, 249, 103, 124, 91, 55, 72, 202, 43, 241, 196, 243, 201, 237, 141, 158,
-            166, 125, 185, 26, 201, 232, 80, 72, 3, 7, 248, 152, 116, 148, 44, 250, 108, 167, 175, 61, 128, 159, 48, 148, 28, 247, 22,
-            158, 40, 130, 41, 154, 93, 184, 199, 177, 0, 170, 212, 159, 61, 233, 131, 243, 16, 17, 246, 132, 114, 31, 155, 37, 25, 97,
-            107, 11, 100, 17, 23, 61, 12, 218, 176, 129, 173, 148, 221, 6, 152, 157, 112, 106, 90, 5, 215, 0, 133, 133, 41, 241, 217,
-            237, 6, 202, 106, 252, 196, 244, 209, 141, 220, 236, 40, 221, 219, 122, 222, 96, 27, 189, 60, 69, 150, 124, 29, 78, 206,
-            249, 146, 179, 191, 11, 187, 178, 48, 114, 127, 155, 74, 137, 140, 109, 182, 88, 192, 120, 71, 141, 197, 93, 178, 179,
-            254, 252, 167, 251, 245, 77, 112, 186, 216, 30, 239, 147, 168, 67, 89, 96, 14, 102, 165, 187, 163, 232, 51, 77, 117, 134,
-            160, 254, 89, 201, 57, 113, 76, 137, 99, 101, 233, 35, 46, 213, 124, 38, 247, 12, 125, 203, 220, 54, 114, 68, 242, 192,
-            107, 216, 226, 140, 66, 78, 65, 166, 255, 4, 2, 89, 247, 184, 204, 145, 54, 105, 210, 209, 195, 248, 63, 207, 199, 218,
-            253, 92, 150, 190, 212, 216, 23, 121, 18, 14, 27, 35, 191, 203, 50, 238, 10, 190, 192, 47, 210, 100, 58, 38, 201, 103,
-            199, 59, 32, 72, 37, 221, 104, 87, 120, 222, 61, 144, 107, 107, 114, 27, 152, 88, 232, 113, 97, 184, 69, 116, 17, 59, 245,
-            151, 99, 140, 167, 85, 47, 28, 51, 198, 140, 233, 21, 92, 211, 79, 1, 68, 217, 131, 37, 19, 5, 107, 51, 219, 141, 109,
-            155, 196, 183, 148, 16, 113, 227, 141, 202, 215, 191, 50, 241, 244,
-        ];
-
-        let mut check = MuHash::new();
-        check.add_element(&element_from_byte(1));
-        check.add_element(&element_from_byte(2));
-        let ser = check.serialize();
-        assert_eq!(ser, expected);
-
-        let mut deserialized = MuHash::deserialize(ser).unwrap();
-        assert_eq!(deserialized.finalize(), check.finalize());
-        let overflow = [255; 384];
-        assert_eq!(MuHash::deserialize(overflow).unwrap_err(), OverflowError);
-
-        let mut zeroed = MuHash::new();
-        zeroed.numerator *= U3072::zero();
-        assert_eq!(zeroed.serialize(), [0u8; 384]);
-
-        let mut deserialized = MuHash::deserialize(zeroed.serialize()).unwrap();
-        zeroed.normalize();
-        deserialized.normalize();
-        assert_eq!(zeroed.numerator, deserialized.numerator);
-    }
-
-    #[test]
-    fn test_vectors_hash() {
-        for test in TEST_VECTORS {
-            let mut m = MuHash::new();
-            m.add_element(test.data);
-            assert_eq!(m.finalize(), test.multiset_hash);
-        }
-    }
-    #[test]
-    fn test_vectors_add_remove() {
-        let mut m = MuHash::new();
-
-        for test in TEST_VECTORS {
-            m.add_element(test.data);
-            assert_eq!(m.finalize(), test.cumulative_hash);
+        let mut concat = Vec::new();
+        for c in chunks {
+            concat.extend_from_slice(c);
         }
 
-        for (i, test) in TEST_VECTORS.iter().enumerate().rev() {
-            m.remove_element(test.data);
-            if i != 0 {
-                assert_eq!(m.finalize(), TEST_VECTORS[i - 1].cumulative_hash);
+        let mut direct = MuHash::new();
+        direct.add_element(&concat);
+
+        let mut via_builder = MuHash::new();
+        {
+            let mut b = via_builder.add_element_builder();
+            for c in chunks {
+                let _ = kaspa_hashes::HasherBase::update(&mut b, c);
             }
-        }
-        assert_eq!(m.finalize(), EMPTY_MUHASH);
-    }
-
-    #[test]
-    fn test_vectors_combine_subtract() {
-        let mut m1 = MuHash::new();
-        let mut m2 = MuHash::new();
-        for test in TEST_VECTORS {
-            m1.add_element(test.data);
-            m2.remove_element(test.data);
-        }
-        let m1_orig = m1.clone();
-        m1.combine(&m2);
-        m2.combine(&m1_orig);
-        assert_eq!(m1.finalize(), m2.finalize());
-        assert_eq!(m1.finalize(), EMPTY_MUHASH);
-    }
-
-    #[test]
-    fn test_vectors_commutativity() {
-        // Here we first remove an element from an empty multiset, and then add some other
-        // elements, and then we create a new empty multiset, then we add the same elements
-        // we added to the previous multiset, and then we remove the same element we remove
-        // the same element we removed from the previous multiset. According to commutativity
-        // laws, the result should be the same.
-        for (remove_index, _) in TEST_VECTORS.iter().enumerate() {
-            let remove_data = TEST_VECTORS[remove_index].data;
-            let mut m1 = MuHash::new();
-            let mut m2 = MuHash::new();
-            m1.remove_element(remove_data);
-            for (i, test) in TEST_VECTORS.iter().enumerate() {
-                if i != remove_index {
-                    m1.add_element(test.data);
-                    m2.add_element(test.data);
-                }
-            }
-            m2.remove_element(remove_data);
-            assert_eq!(m1.finalize(), m2.finalize());
-        }
-    }
-
-    #[test]
-    fn test_parse_muhash_fail() {
-        let mut serialized = [255; 384];
-        serialized[0..3].copy_from_slice(&[155, 40, 239]);
-
-        assert_eq!(MuHash::deserialize(serialized).unwrap_err(), OverflowError);
-
-        serialized[0] = 0;
-        let _ = MuHash::deserialize(serialized).unwrap();
-    }
-
-    #[test]
-    fn test_muhash_add_remove() {
-        const LOOPS: usize = 1024;
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let mut set = MuHash::new();
-        let list: Vec<_> = (0..LOOPS)
-            .map(|_| {
-                let mut data = [0u8; 100];
-                rng.fill(&mut data[..]);
-                set.add_element(&data);
-                data
-            })
-            .collect();
-
-        assert_ne!(set.finalize(), EMPTY_MUHASH);
-
-        for elem in list.iter() {
-            set.remove_element(elem);
+            b.finalize();
         }
 
-        assert_eq!(set.finalize(), EMPTY_MUHASH);
+        assert_eq!(direct.finalize(), via_builder.finalize());
     }
 }
