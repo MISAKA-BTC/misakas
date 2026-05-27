@@ -3248,6 +3248,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaspa-pq-send-example"
+version = "1.1.0"
+dependencies = [
+ "kaspa-addresses",
+ "kaspa-bip32",
+ "kaspa-rpc-core",
+ "kaspa-txscript",
+ "kaspa-wallet-keys",
+ "kaspa-wrpc-client",
+ "libcrux-ml-dsa",
+ "tokio",
+ "workflow-core",
+]
+
+[[package]]
 name = "kaspa-rpc-core"
 version = "1.1.0"
 dependencies = [
