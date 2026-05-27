@@ -553,7 +553,13 @@ pub const MAINNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    mass_per_sig_op: 1000,
+    // kaspa-pq Phase 6: ML-DSA-65 verify is ~3.18× more expensive than
+    // secp256k1 Schnorr verify on the reference hardware
+    // (39.45 µs / 12.40 µs, see `crypto/txscript/benches/bench.rs`).
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula":
+    //   1000 (upstream) × 3.18 (ratio) × 1.57 (safety) ≈ 5000.
+    // Re-measure on the slowest reference platform before mainnet launch.
+    mass_per_sig_op: 5000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -604,7 +610,13 @@ pub const TESTNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    mass_per_sig_op: 1000,
+    // kaspa-pq Phase 6: ML-DSA-65 verify is ~3.18× more expensive than
+    // secp256k1 Schnorr verify on the reference hardware
+    // (39.45 µs / 12.40 µs, see `crypto/txscript/benches/bench.rs`).
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula":
+    //   1000 (upstream) × 3.18 (ratio) × 1.57 (safety) ≈ 5000.
+    // Re-measure on the slowest reference platform before mainnet launch.
+    mass_per_sig_op: 5000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -651,7 +663,13 @@ pub const SIMNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    mass_per_sig_op: 1000,
+    // kaspa-pq Phase 6: ML-DSA-65 verify is ~3.18× more expensive than
+    // secp256k1 Schnorr verify on the reference hardware
+    // (39.45 µs / 12.40 µs, see `crypto/txscript/benches/bench.rs`).
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula":
+    //   1000 (upstream) × 3.18 (ratio) × 1.57 (safety) ≈ 5000.
+    // Re-measure on the slowest reference platform before mainnet launch.
+    mass_per_sig_op: 5000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -688,7 +706,13 @@ pub const DEVNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    mass_per_sig_op: 1000,
+    // kaspa-pq Phase 6: ML-DSA-65 verify is ~3.18× more expensive than
+    // secp256k1 Schnorr verify on the reference hardware
+    // (39.45 µs / 12.40 µs, see `crypto/txscript/benches/bench.rs`).
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula":
+    //   1000 (upstream) × 3.18 (ratio) × 1.57 (safety) ≈ 5000.
+    // Re-measure on the slowest reference platform before mainnet launch.
+    mass_per_sig_op: 5000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,

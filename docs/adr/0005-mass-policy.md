@@ -1,8 +1,30 @@
 # ADR-0005: Mass / DoS policy for ML-DSA-65 P2PKH transactions
 
-Status: Accepted (Phase 1, values TBD at Phase 6)
+Status: Accepted (Phase 1 freeze of shape; Phase 6 set `mass_per_sig_op = 5000`)
 Date: 2026-05-28
 Supersedes: —
+
+## Phase 6 calibration result
+
+Measured on the reference hardware (Apple Silicon arm64, libcrux portable
++ NEON multiplexing) via `crypto/txscript/benches/bench.rs`:
+
+| Primitive | Median |
+|---|---|
+| `secp256k1::schnorr::Signature::verify` | **12.40 µs** |
+| `libcrux_ml_dsa::ml_dsa_65::verify`     | **39.45 µs** |
+
+Ratio: 39.45 / 12.40 = **3.18×**. With safety factor 1.57:
+
+```
+1000 (upstream mass_per_sig_op)  ×  3.18 (ratio)  ×  1.57 (safety)  =  4992  ≈  5000
+```
+
+→ kaspa-pq `mass_per_sig_op = 5000`, locked in
+[consensus/core/src/config/params.rs](../../consensus/core/src/config/params.rs)
+across all four `*_PARAMS` constants. Re-measure on the slowest reference
+platform before mainnet launch; tighten if the slow-platform ratio
+exceeds 3.18.
 
 ## Context
 
