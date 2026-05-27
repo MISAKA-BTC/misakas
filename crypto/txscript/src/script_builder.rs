@@ -466,13 +466,20 @@ mod tests {
                 expected: Ok(once(OpPushData2).chain([8, 2]).chain(repeat_n(0x49, 520)).collect()),
                 unchecked: false,
             },
-            // BIP0062: OP_PUSHDATA4 can never be used, as pushes over 520
-            // bytes are not allowed, and those below can be done using
-            // other operators.
+            // kaspa-pq: MAX_SCRIPT_ELEMENT_SIZE was widened from upstream's
+            // 520 to 4096 to admit the 3310-byte ML-DSA-65 signature push
+            // and 1952-byte ML-DSA-65 public-key push. The two tests below
+            // verify pushes around the new boundary.
             Test {
-                name: "push data len 521",
-                data: vec![0x49; 521],
-                expected: Err(ScriptBuilderError::ElementExceedsMaxSize(521)),
+                name: "push data len 4096 (just at MAX_SCRIPT_ELEMENT_SIZE)",
+                data: vec![0x49; 4096],
+                expected: Ok(once(OpPushData2).chain([0, 16]).chain(repeat_n(0x49, 4096)).collect()),
+                unchecked: false,
+            },
+            Test {
+                name: "push data len 4097 (just over MAX_SCRIPT_ELEMENT_SIZE)",
+                data: vec![0x49; 4097],
+                expected: Err(ScriptBuilderError::ElementExceedsMaxSize(4097)),
                 unchecked: false,
             },
             Test {

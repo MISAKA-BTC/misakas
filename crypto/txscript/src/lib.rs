@@ -41,8 +41,28 @@ pub use standard::*;
 pub const MAX_SCRIPT_PUBLIC_KEY_VERSION: u16 = 0;
 pub const MAX_STACK_SIZE: usize = 244;
 pub const MAX_SCRIPTS_SIZE: usize = 10_000;
-pub const MAX_SCRIPT_ELEMENT_SIZE: usize = 520;
+// kaspa-pq: widened from upstream `520` to admit the 3310-byte ML-DSA-65
+// signature push (3309 + 1 sighash type byte) and the 1952-byte ML-DSA-65
+// public-key push. See docs/adr/0002-mldsa65-p2pkh.md and
+// docs/adr/0005-mass-policy.md.
+pub const MAX_SCRIPT_ELEMENT_SIZE: usize = 4096;
 pub const MAX_OPS_PER_SCRIPT: i32 = 201;
+
+/// ML-DSA-65 (FIPS 204) public key length in bytes. Pre-verify
+/// length-check constant: the script engine must reject a public-key
+/// push of any other length **before** entering libcrux. See
+/// docs/adr/0002-mldsa65-p2pkh.md §"Acceptance criteria".
+pub const MLDSA65_PK_LEN: usize = 1952;
+
+/// ML-DSA-65 signature length in bytes (without the trailing 1-byte
+/// sighash type). The signature push on the stack is `MLDSA65_SIG_LEN + 1`
+/// bytes; the last byte is the sighash type.
+pub const MLDSA65_SIG_LEN: usize = 3309;
+
+/// ML-DSA `ctx` parameter for kaspa-pq transaction signatures. The 255-byte
+/// upper bound on `ctx` is enforced by libcrux. See
+/// docs/kaspa-pq-spec.md §2.
+pub const MLDSA65_TX_CONTEXT: &[u8] = b"kaspa-pq-v1/tx/mldsa65";
 pub const MAX_TX_IN_SEQUENCE_NUM: u64 = u64::MAX;
 pub const SEQUENCE_LOCK_TIME_DISABLED: u64 = 1 << 63;
 pub const SEQUENCE_LOCK_TIME_MASK: u64 = 0x00000000ffffffff;
@@ -59,12 +79,21 @@ pub type DynOpcodeImplementation<Tx, Reused> = Box<dyn OpCodeImplementation<Tx, 
 enum Signature {
     Secp256k1(secp256k1::schnorr::Signature),
     Ecdsa(secp256k1::ecdsa::Signature),
+    /// kaspa-pq ML-DSA-65 signature, identified in the cache by the
+    /// BLAKE2b-256 of the 3309-byte signature bytes. The raw signature is
+    /// **never** stored in the cache key (DoS budget — see ADR-0002 §7).
+    MlDsa65 { sig_digest: [u8; 32] },
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 enum PublicKey {
     Schnorr(secp256k1::XOnlyPublicKey),
     Ecdsa(secp256k1::PublicKey),
+    /// kaspa-pq ML-DSA-65 public key, identified in the cache by the
+    /// BLAKE2b-256 of the 1952-byte public-key bytes (i.e. the same value
+    /// that appears as the address payload). The raw public key is **never**
+    /// stored in the cache key (DoS budget — see ADR-0002 §7).
+    MlDsa65 { pk_digest: [u8; 32] },
 }
 
 // TODO: Make it pub(crate)
@@ -635,6 +664,77 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                                 Ok(false)
                             }
                         }
+                    }
+                }
+            }
+            _ => Err(TxScriptError::NotATransactionInput),
+        }
+    }
+
+    /// kaspa-pq ML-DSA-65 signature check. Layout mirrors the existing
+    /// [`check_schnorr_signature`] / [`check_ecdsa_signature`] but with:
+    ///
+    /// - Length pre-checks that reject before any libcrux call (so a
+    ///   malformed-tx flood cannot exercise the PQ verify routine —
+    ///   see docs/adr/0002-mldsa65-p2pkh.md "Acceptance criteria").
+    /// - A hash-based [`SigCacheKey`]: we only put 32-byte digests of the
+    ///   1952-byte public key and 3309-byte signature into the cache, never
+    ///   the raw bytes (see docs/adr/0002-mldsa65-p2pkh.md §7 + ADR-0005).
+    /// - A fixed ML-DSA `ctx` parameter of [`MLDSA65_TX_CONTEXT`]
+    ///   (`"kaspa-pq-v1/tx/mldsa65"`).
+    /// - The signed message is currently the existing 32-byte
+    ///   `calc_schnorr_signature_hash` output; ML-DSA's own `ctx` provides
+    ///   the algorithm-level domain separation, so we don't need an
+    ///   additional kaspa-pq-specific sighash function. A dedicated
+    ///   `calc_mldsa65_signature_hash` may be introduced in a later phase
+    ///   if mass / replay analysis demands it.
+    fn check_mldsa65_signature(&mut self, hash_type: SigHashType, key: &[u8], sig: &[u8]) -> Result<bool, TxScriptError> {
+        self.runtime_sig_op_counter.consume_sig_op()?;
+        match self.script_source {
+            ScriptSource::TxInput { tx, idx, .. } => {
+                // Cheap-path length rejection — must come before any
+                // allocation that scales with input size.
+                if key.len() != MLDSA65_PK_LEN {
+                    return Err(TxScriptError::PubKeyFormat);
+                }
+                if sig.len() != MLDSA65_SIG_LEN {
+                    return Err(TxScriptError::SigLength(sig.len()));
+                }
+
+                let sig_hash = calc_schnorr_signature_hash(tx, idx, hash_type, self.reused_values);
+                let msg_bytes = sig_hash.as_bytes();
+                let msg = secp256k1::Message::from_digest_slice(msg_bytes.as_slice()).unwrap();
+
+                // Hash-based cache key. BLAKE2b-256 chosen for consistency
+                // with the consensus opcode `OP_BLAKE2B_256` already used
+                // for the address payload hash.
+                let mut pk_digest = [0u8; 32];
+                pk_digest.copy_from_slice(
+                    blake2b_simd::Params::new().hash_length(32).to_state().update(key).finalize().as_bytes(),
+                );
+                let mut sig_digest = [0u8; 32];
+                sig_digest.copy_from_slice(
+                    blake2b_simd::Params::new().hash_length(32).to_state().update(sig).finalize().as_bytes(),
+                );
+                let sig_cache_key = SigCacheKey {
+                    signature: Signature::MlDsa65 { sig_digest },
+                    pub_key: PublicKey::MlDsa65 { pk_digest },
+                    message: msg,
+                };
+
+                match self.sig_cache.get(&sig_cache_key) {
+                    Some(valid) => Ok(valid),
+                    None => {
+                        // Length already verified above, so the try_into's
+                        // here cannot fail.
+                        let key_arr: [u8; MLDSA65_PK_LEN] = key.try_into().expect("checked above");
+                        let sig_arr: [u8; MLDSA65_SIG_LEN] = sig.try_into().expect("checked above");
+                        let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(key_arr);
+                        let sig_obj = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_arr);
+                        // TODO: Find a way to parallelize this part.
+                        let valid = libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg_bytes.as_slice(), MLDSA65_TX_CONTEXT, &sig_obj).is_ok();
+                        self.sig_cache.insert(sig_cache_key, valid);
+                        Ok(valid)
                     }
                 }
             }
@@ -1364,6 +1464,90 @@ mod bitcoind_tests {
         Comment((String,)),
     }
 
+    /// kaspa-pq Phase 4 acceptance test: a well-formed ML-DSA-65 P2PKH
+    /// spend on a populated transaction must pass `vm.execute()`. This
+    /// test threads the full Phase 4 surface end-to-end:
+    ///
+    ///   1. ML-DSA-65 keypair via `libcrux_ml_dsa::ml_dsa_65::generate_key_pair`
+    ///   2. Address = BLAKE2b-256(public_key)
+    ///   3. `scriptPubKey` via `pay_to_address_script`
+    ///   4. Sighash via `calc_schnorr_signature_hash` (same digest the
+    ///      script engine recomputes during verify)
+    ///   5. ML-DSA-65 sign with `MLDSA65_TX_CONTEXT`
+    ///   6. `signatureScript = PUSH<sig||sighash_type> PUSH<public_key>`
+    ///   7. `TxScriptEngine::from_transaction_input(...).execute()` -> Ok
+    ///
+    /// Negative-path coverage (length mismatch on pubkey, length mismatch
+    /// on signature, wrong sighash type, wrong context) is intentionally
+    /// kept lightweight here — those acceptance criteria are listed in
+    /// `docs/adr/0002-mldsa65-p2pkh.md` and will be exercised by a richer
+    /// fuzz / property-test corpus in a follow-up.
+    #[test]
+    fn test_mldsa65_p2pkh_spend_roundtrip() {
+        use crate::standard::pay_to_address_script;
+        use blake2b_simd::Params;
+        use kaspa_addresses::{Address, Prefix, Version};
+        use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+        use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+
+        // 1. Deterministic ML-DSA-65 keypair from a 32-byte seed.
+        let keygen_seed = [0xa1u8; 32];
+        let keypair = mldsa::generate_key_pair(keygen_seed);
+        let pk_bytes = keypair.verification_key.as_ref();
+        let sk = &keypair.signing_key;
+        assert_eq!(pk_bytes.len(), MLDSA65_PK_LEN);
+
+        // 2. Address payload = BLAKE2b-256(public_key).
+        let mut pk_hash = [0u8; 32];
+        pk_hash.copy_from_slice(Params::new().hash_length(32).to_state().update(pk_bytes).finalize().as_bytes());
+        let address = Address::new(Prefix::Simnet, Version::PubKeyHashMlDsa65, &pk_hash);
+
+        // 3. scriptPubKey = pay_to_address_script.
+        let script_pub_key = pay_to_address_script(&address);
+        assert_eq!(ScriptClass::from_script(&script_pub_key), ScriptClass::PubKeyHashMlDsa65);
+
+        // 4. Build a populated spending transaction (sig_script left empty
+        //    for now — we sign over the resulting sighash and then
+        //    re-create the tx with the signed sig_script in step 6).
+        let unsigned_tx = create_spending_transaction(Vec::new(), script_pub_key.clone());
+        let utxo_entry = UtxoEntry::new(0, script_pub_key.clone(), 0, true);
+        let populated_unsigned = PopulatedTransaction::new(&unsigned_tx, vec![utxo_entry.clone()]);
+        let reused = SigHashReusedValuesUnsync::new();
+        let sig_hash = kaspa_consensus_core::hashing::sighash::calc_schnorr_signature_hash(&populated_unsigned, 0, SIG_HASH_ALL, &reused);
+
+        // 5. Sign the sighash with the kaspa-pq context.
+        let signing_randomness = [0xb2u8; 32];
+        let signature = mldsa::sign(sk, sig_hash.as_bytes().as_slice(), MLDSA65_TX_CONTEXT, signing_randomness)
+            .expect("ML-DSA-65 sign should succeed on a 32-byte message");
+        let sig_bytes = signature.as_ref();
+        assert_eq!(sig_bytes.len(), MLDSA65_SIG_LEN);
+
+        // 6. signatureScript = PUSH <sig||sighash_type> PUSH <public_key>.
+        let mut sig_script = Vec::with_capacity(MLDSA65_SIG_LEN + MLDSA65_PK_LEN + 16);
+        let mut builder = script_builder::ScriptBuilder::new();
+        let mut sig_item = Vec::with_capacity(MLDSA65_SIG_LEN + 1);
+        sig_item.extend_from_slice(sig_bytes);
+        sig_item.push(SIG_HASH_ALL.to_u8());
+        builder.add_data(&sig_item).expect("signature push fits MAX_SCRIPT_ELEMENT_SIZE");
+        builder.add_data(pk_bytes.as_slice()).expect("public-key push fits MAX_SCRIPT_ELEMENT_SIZE");
+        sig_script.extend_from_slice(builder.script());
+
+        // 7. Re-create the spending tx with the populated sig_script and run.
+        let signed_tx = create_spending_transaction(sig_script, script_pub_key.clone());
+        let populated_signed = PopulatedTransaction::new(&signed_tx, vec![utxo_entry]);
+        let sig_cache = Cache::new(10_000);
+        let reused = SigHashReusedValuesUnsync::new();
+        let mut vm = TxScriptEngine::from_transaction_input(
+            &populated_signed,
+            &populated_signed.tx().inputs[0],
+            0,
+            &populated_signed.entries[0],
+            &reused,
+            &sig_cache,
+        );
+        vm.execute().expect("ML-DSA-65 P2PKH spend should verify");
+    }
+
     fn create_spending_transaction(sig_script: Vec<u8>, script_public_key: ScriptPublicKey) -> Transaction {
         let coinbase = Transaction::new(
             1,
@@ -1399,10 +1583,10 @@ mod bitcoind_tests {
     impl JsonTestRow {
         fn test_row(&self) -> Result<(), TestError> {
             // Parse test to objects
-            let (sig_script, script_pub_key, expected_result) = match self.clone() {
-                JsonTestRow::Test(sig_script, sig_pub_key, _, expected_result) => (sig_script, sig_pub_key, expected_result),
-                JsonTestRow::TestWithComment(sig_script, sig_pub_key, _, expected_result, _) => {
-                    (sig_script, sig_pub_key, expected_result)
+            let (sig_script, script_pub_key, expected_result, comment) = match self.clone() {
+                JsonTestRow::Test(sig_script, sig_pub_key, _, expected_result) => (sig_script, sig_pub_key, expected_result, None),
+                JsonTestRow::TestWithComment(sig_script, sig_pub_key, _, expected_result, comment) => {
+                    (sig_script, sig_pub_key, expected_result, Some(comment))
                 }
                 JsonTestRow::Comment(_) => {
                     return Ok(());
@@ -1410,6 +1594,24 @@ mod bitcoind_tests {
             };
 
             let result = Self::run_test(sig_script, script_pub_key);
+
+            // kaspa-pq: upstream-imported bitcoind tests carry a "PUSH_SIZE"
+            // expectation for >520-byte pushes (their 520-byte
+            // MAX_SCRIPT_ELEMENT_SIZE). kaspa-pq raised this limit to 4096
+            // to admit the 3310-byte ML-DSA-65 signature push and the
+            // 1952-byte ML-DSA-65 public-key push (see
+            // docs/adr/0002-mldsa65-p2pkh.md). For these specific cases —
+            // identified by the trailing ">520 byte push" comment — a
+            // success result is the kaspa-pq-correct outcome and is
+            // accepted here. A separate kaspa-pq-specific test exercises
+            // the new 4096-byte boundary in
+            // `script_builder::tests::test_add_data`.
+            if expected_result == "PUSH_SIZE"
+                && comment.as_deref().is_some_and(|c| c.starts_with(">520 byte push"))
+                && result.is_ok()
+            {
+                return Ok(());
+            }
 
             match Self::result_name(result.clone()).contains(&expected_result.as_str()) {
                 true => Ok(()),

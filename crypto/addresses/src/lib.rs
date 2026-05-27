@@ -148,10 +148,20 @@ impl TryFrom<&str> for Prefix {
 #[borsh(use_discriminant = true)]
 #[cfg_attr(feature = "wasm32-sdk", wasm_bindgen(js_name = "AddressVersion"))]
 pub enum Version {
-    /// PubKey addresses always have the version byte set to 0
+    /// PubKey addresses always have the version byte set to 0.
+    /// Carries a 32-byte Schnorr (secp256k1) public key. Non-standard in
+    /// kaspa-pq — kept in the enum for borsh-discriminant stability and
+    /// for backward compatibility with parsing legacy addresses; the
+    /// wallet and mempool do not emit or accept these as standard sends.
     PubKey = 0,
-    /// PubKey ECDSA addresses always have the version byte set to 1
+    /// PubKey ECDSA addresses always have the version byte set to 1.
+    /// Carries a 33-byte compressed ECDSA (secp256k1) public key.
+    /// Non-standard in kaspa-pq for the same reason as PubKey.
     PubKeyECDSA = 1,
+    /// kaspa-pq ML-DSA-65 P2PKH (the only standard send template).
+    /// Carries a 32-byte `BLAKE2b-256(public_key)`. See
+    /// docs/adr/0002-mldsa65-p2pkh.md.
+    PubKeyHashMlDsa65 = 2,
     /// ScriptHash addresses always have the version byte set to 8
     ScriptHash = 8,
 }
@@ -163,6 +173,7 @@ impl TryFrom<&str> for Version {
         match value {
             "PubKey" => Ok(Version::PubKey),
             "PubKeyECDSA" => Ok(Version::PubKeyECDSA),
+            "PubKeyHashMlDsa65" => Ok(Version::PubKeyHashMlDsa65),
             "ScriptHash" => Ok(Version::ScriptHash),
             _ => Err(AddressError::InvalidVersionString(value.to_string())),
         }
@@ -170,10 +181,17 @@ impl TryFrom<&str> for Version {
 }
 
 impl Version {
+    /// Address payload length for each [`Version`].
+    ///
+    /// `PubKeyHashMlDsa65` carries a 32-byte BLAKE2b-256 hash of the
+    /// ML-DSA-65 public key. The raw 1952-byte ML-DSA-65 public key is
+    /// **never** an address payload — it appears only on the spending
+    /// input side. See docs/adr/0002-mldsa65-p2pkh.md.
     pub fn public_key_len(&self) -> usize {
         match self {
             Version::PubKey => 32,
             Version::PubKeyECDSA => 33,
+            Version::PubKeyHashMlDsa65 => 32,
             Version::ScriptHash => 32,
         }
     }
@@ -186,6 +204,7 @@ impl TryFrom<u8> for Version {
         match value {
             0 => Ok(Version::PubKey),
             1 => Ok(Version::PubKeyECDSA),
+            2 => Ok(Version::PubKeyHashMlDsa65),
             8 => Ok(Version::ScriptHash),
             _ => Err(AddressError::InvalidVersion(value)),
         }
@@ -197,6 +216,7 @@ impl Display for Version {
         match self {
             Version::PubKey => write!(f, "PubKey"),
             Version::PubKeyECDSA => write!(f, "PubKeyECDSA"),
+            Version::PubKeyHashMlDsa65 => write!(f, "PubKeyHashMlDsa65"),
             Version::ScriptHash => write!(f, "ScriptHash"),
         }
     }

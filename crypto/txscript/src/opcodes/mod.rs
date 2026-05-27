@@ -718,8 +718,34 @@ opcode_list! {
         Ok(())
     }
 
+    // kaspa-pq: ML-DSA-65 P2PKH check-signature. Allocated at 0xa6
+    // (was upstream `OpUnknown166`); see docs/adr/0002-mldsa65-p2pkh.md.
+    // Layout mirrors OpCheckSig (0xac): pops <sig>, <key>, then pops the
+    // 1-byte sighash type off the signature, length-checks both items
+    // before any libcrux call, and pushes the boolean verify result.
+    opcode OpCheckSigMlDsa65<0xa6, 1>(self, vm) {
+        let [mut sig, key] = vm.dstack.pop_raw()?;
+        match sig.pop() {
+            Some(typ) => {
+                let hash_type = SigHashType::from_u8(typ).map_err(|_e| TxScriptError::InvalidSigHashType(typ))?;
+                match vm.check_mldsa65_signature(hash_type, key.as_slice(), sig.as_slice()) {
+                    Ok(valid) => {
+                        vm.dstack.push_item(valid)?;
+                        Ok(())
+                    },
+                    Err(e) => {
+                        Err(e)
+                    }
+                }
+            }
+            None => {
+                vm.dstack.push_item(false)?;
+                Ok(())
+            }
+        }
+    }
+
     // Undefined opcodes.
-    opcode OpUnknown166<0xa6, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
     opcode OpUnknown167<0xa7, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
 
     // Crypto opcodes.
@@ -1196,7 +1222,8 @@ mod test {
     #[test]
     fn test_opcode_invalid() {
         let tests: Vec<Box<dyn OpCodeImplementation<PopulatedTransaction, SigHashReusedValuesUnsync>>> = vec![
-            opcodes::OpUnknown166::empty().expect("Should accept empty"),
+            // kaspa-pq: 0xa6 is now OpCheckSigMlDsa65, not the upstream
+            // OpUnknown166. 0xa7 remains undefined.
             opcodes::OpUnknown167::empty().expect("Should accept empty"),
             opcodes::OpUnknown196::empty().expect("Should accept empty"),
             opcodes::OpUnknown197::empty().expect("Should accept empty"),

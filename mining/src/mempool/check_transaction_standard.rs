@@ -186,6 +186,16 @@ impl Mempool {
                 }
                 ScriptClass::PubKey => {}
                 ScriptClass::PubKeyECDSA => {}
+                // kaspa-pq: ML-DSA-65 P2PKH is the kaspa-pq standard spend
+                // template (see docs/adr/0002-mldsa65-p2pkh.md). Each input
+                // contributes exactly one ML-DSA verify (= one sig-op);
+                // no per-input sig-op-count check is needed here because
+                // the script template is fixed and the engine itself
+                // length-checks the public key and signature before the
+                // libcrux verify. The mass-budget side of the policy is
+                // calibrated in Phase 6 via `mass_per_sig_op` (see
+                // docs/adr/0005-mass-policy.md), not here.
+                ScriptClass::PubKeyHashMlDsa65 => {}
                 ScriptClass::ScriptHash => {
                     // todo relax due to on fly calculation
                     let num_sig_ops = get_sig_op_count_upper_bound::<PopulatedTransaction, SigHashReusedValuesUnsync>(

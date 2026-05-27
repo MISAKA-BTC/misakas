@@ -33,6 +33,7 @@ log.workspace = true
 parking_lot.workspace = true
 rand.workspace = true
 secp256k1.workspace = true
+libcrux-ml-dsa.workspace = true
 serde_json.workspace = true
 serde-wasm-bindgen.workspace = true
 serde.workspace = true

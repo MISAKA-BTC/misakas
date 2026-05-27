@@ -15,31 +15,44 @@ pub enum Error {
     InvalidScriptClass(String),
 }
 
-/// Standard classes of script payment in the blockDAG
+/// Standard classes of script payment in the blockDAG.
+///
+/// In kaspa-pq, [`ScriptClass::PubKeyHashMlDsa65`] is the **only** standard
+/// send template. The legacy upstream `PubKey` / `PubKeyECDSA` / `ScriptHash`
+/// variants are retained for parser completeness (and for borsh
+/// discriminant stability), but the wallet and mempool will not emit them
+/// as standard sends. See docs/adr/0002-mldsa65-p2pkh.md.
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum ScriptClass {
     /// None of the recognized forms
     NonStandard = 0,
-    /// Pay to pubkey
+    /// Pay to pubkey (32-byte Schnorr — kaspa-pq non-standard)
     PubKey,
-    /// Pay to pubkey ECDSA
+    /// Pay to pubkey ECDSA (33-byte ECDSA — kaspa-pq non-standard)
     PubKeyECDSA,
-    /// Pay to script hash
+    /// Pay to script hash (32-byte BLAKE2b-256 of redeem script)
     ScriptHash,
+    /// kaspa-pq pay to ML-DSA-65 public-key hash (32-byte BLAKE2b-256 of
+    /// the 1952-byte ML-DSA-65 public key). The only kaspa-pq standard
+    /// send template.
+    PubKeyHashMlDsa65,
 }
 
 const NON_STANDARD: &str = "nonstandard";
 const PUB_KEY: &str = "pubkey";
 const PUB_KEY_ECDSA: &str = "pubkeyecdsa";
 const SCRIPT_HASH: &str = "scripthash";
+const PUB_KEY_HASH_MLDSA65: &str = "pubkeyhashmldsa65";
 
 impl ScriptClass {
     pub fn from_script(script_public_key: &ScriptPublicKey) -> Self {
         let script_public_key_ = script_public_key.script();
         if script_public_key.version() == MAX_SCRIPT_PUBLIC_KEY_VERSION {
-            if Self::is_pay_to_pubkey(script_public_key_) {
+            if Self::is_pay_to_pub_key_hash_mldsa65(script_public_key_) {
+                ScriptClass::PubKeyHashMlDsa65
+            } else if Self::is_pay_to_pubkey(script_public_key_) {
                 ScriptClass::PubKey
             } else if Self::is_pay_to_pubkey_ecdsa(script_public_key_) {
                 Self::PubKeyECDSA
@@ -81,12 +94,27 @@ impl ScriptClass {
         (script_public_key[34] == opcodes::codes::OpEqual)
     }
 
+    /// Returns true if the script is in the kaspa-pq standard
+    /// ML-DSA-65 P2PKH format, false otherwise. The byte layout is:
+    /// `[OpDup, OpBlake2b, OpData32, <32-byte pubkey hash>, OpEqualVerify, OpCheckSigMlDsa65]`
+    /// — total 37 bytes (5 opcodes + 32 data).
+    #[inline(always)]
+    pub fn is_pay_to_pub_key_hash_mldsa65(script_public_key: &[u8]) -> bool {
+        (script_public_key.len() == 37)
+            && (script_public_key[0] == opcodes::codes::OpDup)
+            && (script_public_key[1] == opcodes::codes::OpBlake2b)
+            && (script_public_key[2] == opcodes::codes::OpData32)
+            && (script_public_key[35] == opcodes::codes::OpEqualVerify)
+            && (script_public_key[36] == opcodes::codes::OpCheckSigMlDsa65)
+    }
+
     fn as_str(&self) -> &'static str {
         match self {
             ScriptClass::NonStandard => NON_STANDARD,
             ScriptClass::PubKey => PUB_KEY,
             ScriptClass::PubKeyECDSA => PUB_KEY_ECDSA,
             ScriptClass::ScriptHash => SCRIPT_HASH,
+            ScriptClass::PubKeyHashMlDsa65 => PUB_KEY_HASH_MLDSA65,
         }
     }
 
@@ -96,6 +124,7 @@ impl ScriptClass {
             ScriptClass::PubKey => MAX_SCRIPT_PUBLIC_KEY_VERSION,
             ScriptClass::PubKeyECDSA => MAX_SCRIPT_PUBLIC_KEY_VERSION,
             ScriptClass::ScriptHash => MAX_SCRIPT_PUBLIC_KEY_VERSION,
+            ScriptClass::PubKeyHashMlDsa65 => MAX_SCRIPT_PUBLIC_KEY_VERSION,
         }
     }
 }
@@ -115,6 +144,7 @@ impl FromStr for ScriptClass {
             PUB_KEY => Ok(ScriptClass::PubKey),
             PUB_KEY_ECDSA => Ok(ScriptClass::PubKeyECDSA),
             SCRIPT_HASH => Ok(ScriptClass::ScriptHash),
+            PUB_KEY_HASH_MLDSA65 => Ok(ScriptClass::PubKeyHashMlDsa65),
             _ => Err(Error::InvalidScriptClass(script_class.to_string())),
         }
     }
@@ -133,6 +163,7 @@ impl From<Version> for ScriptClass {
         match value {
             Version::PubKey => ScriptClass::PubKey,
             Version::PubKeyECDSA => ScriptClass::PubKeyECDSA,
+            Version::PubKeyHashMlDsa65 => ScriptClass::PubKeyHashMlDsa65,
             Version::ScriptHash => ScriptClass::ScriptHash,
         }
     }
