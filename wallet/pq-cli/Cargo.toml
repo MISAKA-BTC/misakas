@@ -13,15 +13,24 @@ name = "kaspa-pq-cli"
 path = "src/main.rs"
 
 [dependencies]
+argon2.workspace = true
+chacha20poly1305.workspace = true
 clap.workspace = true
 faster-hex.workspace = true
 kaspa-addresses = { workspace = true, features = ["std"] }
 kaspa-bip32.workspace = true
+kaspa-rpc-core.workspace = true
 kaspa-txscript.workspace = true
 kaspa-wallet-keys.workspace = true
+kaspa-wrpc-client.workspace = true
 libcrux-ml-dsa.workspace = true
 rand.workspace = true
+rpassword = "7"
 thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
