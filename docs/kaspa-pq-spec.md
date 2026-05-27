@@ -1,13 +1,15 @@
-# kaspa-pq Specification (v0.2, draft)
+# kaspa-pq Specification (v0.3, draft)
 
 Status: Draft. Frozen values listed here are the contract every phase must
 respect. Any change must go through an ADR update under `docs/adr/`.
 
 ADR-0007 (Layered PoW) and ADR-0008 (Hash64 consensus identity) widen
-the scope from the original "signatures + UTXO accumulator" target to
-"full 64-byte consensus identity + 512-bit PoW domain". Earlier Phase 1
-non-goals that contradicted those ADRs have been removed; see the
-revision history below.
+the original "signatures + UTXO accumulator" target to "full 64-byte
+consensus identity + 512-bit PoW domain". ADR-0009 (DNS Probabilistic
+Finality Overlay) adds a Phase 10 post-launch confirmation layer that
+binds deep-reorg safety to both `WorkScore` and `StakeScore`. Earlier
+Phase 1 non-goals that contradicted these ADRs have been removed; see
+the revision history below.
 
 ## 0. Scope and non-goals
 
@@ -35,6 +37,15 @@ mainline Kaspa network.
    from 32-byte `Hash` to 64-byte `Hash64`. The 32-byte type remains as
    `Hash32` for incidental internal use (cache keys, debug
    fingerprints, the Layer 1 kHeavyHash internals).
+6. **DNS Probabilistic Finality Overlay** (ADR-0009) as a Phase 10
+   post-launch consensus layer. PoW/GHOSTDAG keeps block production and
+   tip selection unchanged; PoS validators issue ML-DSA-65 attestations
+   over selected-chain anchors, those attestations are committed
+   on-chain as partial certificates (8–16 per block), and a
+   deterministic `StakeScore` is aggregated from the on-chain shards.
+   Mainnet reorgs that exit a DNS-confirmed prefix require **both**
+   `WorkScore` dominance and `StakeScore` dominance — no hard finality
+   checkpoint.
 
 ### Out of scope
 
@@ -59,6 +70,28 @@ framing":
 Quantum collision resistance under the BHT bound is approximately
 `2^(512/3) ≈ 2^170`, not `2^256`. External material must use the
 phrasings above and **must not** over-claim collision resistance.
+
+The kaspa-pq Phase 10 DNS finality claim, taken verbatim from
+ADR-0009 §"Public-claim discipline (binding)":
+
+- ✅ "PoW-ledger + PoS probabilistic finality"
+- ✅ "Two-resource confirmed history"
+- ✅ "Deep reorg of a DNS-confirmed prefix requires both `WorkScore` and
+  `StakeScore` dominance"
+- ✅ "Non-substitutability: PoW surplus does not substitute for PoS
+  deficit and vice versa"
+- ✅ "Liveness depends on both PoW miners and PoS validators while the
+  overlay is active"
+- ✅ "Weak subjectivity remains: new nodes need a recent peer-supplied
+  checkpoint to safely rejoin"
+- ❌ "BFT finality" / "hard finality" — **not claimed**. Mainnet DNS is
+  probabilistic. The PoC hard-checkpoint mode is a testing convenience.
+- ❌ "Reorg probability is the product of PoW and PoS reorg probabilities"
+  — **not claimed**. The DNS paper explicitly does not claim joint
+  independence; the overlay's value is non-substitutability.
+- ❌ "DNS gives 2^k post-quantum finality" — **not claimed** without an
+  explicit `cW`, `cS`, `emergency_work_margin`, and
+  `emergency_stake_margin` quote for the network in question.
 
 ## 1. Base version
 
@@ -252,6 +285,7 @@ last commit to this branch:
 | 7 | RPC / WASM / SDK (PR-7.1 – PR-7.6, incl. UtxoCommitment64) | ✅ landed |
 | 8 | Layered PoW foundation (Layer 0; PR-8.1 – PR-8.3) | ✅ landed |
 | 9 | Hash64 consensus identity (PR-9.1 – PR-9.4 landed; PR-9.5 cascade deferred) | 🚧 partial |
+| 10 | DNS Probabilistic Finality Overlay (PR-10.1 ADR landed; PR-10.2 – PR-10.9 deferred) | 🚧 design-freeze only |
 
 Deferred PRs:
 
@@ -268,6 +302,14 @@ Deferred PRs:
   wallet, SDK call sites migrate from `Hash` to the typed `Hash64`
   aliases. Recompute genesis hashes (the new field layout invalidates
   the current values). Multi-PR / multi-session.
+- **PR-10.2 – PR-10.9** DNS Finality Overlay implementation — type
+  stubs (PR-10.3), `subnetwork_id`-based stake transaction kinds
+  (PR-10.4), deterministic `StakeScore` aggregation (PR-10.5), PoC
+  hard-checkpoint gate (PR-10.6), mainnet two-dimensional dominance
+  rule (PR-10.7), validator sortition (PR-10.8), `DnsConfirmation`
+  RPC surface (PR-10.9). All of these are gated on the Phase 1–9
+  baseline being live and stable; the overlay does **not** engage at
+  network launch (see ADR-0009 §"Three-stage rollout").
 
 ## 11. Test plan summary
 
@@ -295,6 +337,14 @@ mandatory acceptance criteria for each phase:
   the others on the same input; the algo_id = 1 kHeavyHash seed
   derivation is deterministic, per-byte sensitive, and key-separated
   from every other BLAKE2b-256 hasher in the crate.
+- **Phase 10** `StakeAttestationShardPayload` mass per block stays
+  within the per-block reservation; a candidate fork that exits the
+  latest DNS-confirmed anchor is rejected unless it beats the
+  canonical chain on both `WorkScore` and `StakeScore` (mainnet); a
+  validator that signs two incompatible attestations at the same
+  `(bond_outpoint, validator_id, epoch)` is slashable for the full
+  evidence window; new nodes can recover a deterministic
+  `StakeScore` for any block from the on-chain shards alone.
 
 ## 11. ADR index
 
@@ -306,6 +356,7 @@ mandatory acceptance criteria for each phase:
 - [ADR-0006 — RPC / WASM / SDK types](adr/0006-rpc-wasm-sdk-types.md) (Phase 7 scope freeze)
 - [ADR-0007 — Layered PoW](adr/0007-layered-pow.md) (Layer 0 BLAKE2b-512 finalizer + Layer 1 algo_id; Phase 1 = quantum-resistant PoW domain, Phase 2+ = ASIC-hard Layer 1)
 - [ADR-0008 — Full Hash64 consensus identity](adr/0008-hash64-consensus-identity.md) (Phase 9 — block hash / txid / merkle root / pruning point / parent references / UTXO commitment / address payload all move to 64 bytes via keyed BLAKE2b-512; 256-bit quantum preimage margin, **not** 256-bit quantum collision)
+- [ADR-0009 — DNS Probabilistic Finality Overlay](adr/0009-dns-probabilistic-finality.md) (Phase 10 — PoW/GHOSTDAG keeps block production; PoS adds two-dimensional `WorkScore × StakeScore` reorg gate over selected-chain anchors; partial certificate / shard scheme to bound block mass; three-stage rollout; long-range bound U ≥ R + E)
 
 ## 12. Revision history
 
@@ -313,3 +364,4 @@ mandatory acceptance criteria for each phase:
 |---|---|---|
 | 0.1 | 2026-05-28 | Initial draft. |
 | 0.2 | 2026-05-28 | ADR-0007 + ADR-0008 incorporated. Removed the "do not widen Hash past 32 bytes" non-goal (it directly contradicts ADR-0008); added the full 64-byte consensus identity goal; added the Phase 8 / Phase 9 entries to the phase plan; codified the public-claim discipline section. Revised non-goal removal: previously `PQ-strengthening the PoW hash, block hash, txid, or merkle root` was listed as out-of-scope; this is now the explicit Phase 8 + Phase 9 in-scope work. |
+| 0.3 | 2026-05-28 | ADR-0009 incorporated. Added in-scope item 6 (DNS Probabilistic Finality Overlay) and Phase 10 row in the phase plan. Codified the DNS-specific public-claim discipline section (binding) — explicitly rejecting "hard finality", "reorg-probability product", and "2^k post-quantum finality" framings. Added Phase 10 acceptance criteria to §11. |
