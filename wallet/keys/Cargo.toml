@@ -17,6 +17,7 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 async-trait.workspace = true
+blake2b_simd.workspace = true
 borsh.workspace = true
 downcast.workspace = true
 faster-hex.workspace = true
@@ -28,6 +29,7 @@ kaspa-consensus-core.workspace = true
 kaspa-txscript-errors.workspace = true
 kaspa-txscript.workspace = true
 kaspa-utils.workspace = true
+libcrux-ml-dsa.workspace = true
 kaspa-wasm-core.workspace = true
 rand.workspace = true
 ripemd.workspace = true

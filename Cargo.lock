@@ -3647,6 +3647,7 @@ name = "kaspa-wallet-keys"
 version = "1.1.0"
 dependencies = [
  "async-trait",
+ "blake2b_simd",
  "borsh",
  "downcast",
  "faster-hex 0.9.0",
@@ -3659,6 +3660,7 @@ dependencies = [
  "kaspa-txscript-errors",
  "kaspa-utils",
  "kaspa-wasm-core",
+ "libcrux-ml-dsa",
  "rand 0.8.6",
  "ripemd",
  "secp256k1",
