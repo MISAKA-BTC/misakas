@@ -30,7 +30,7 @@
 //! specific DAA score.
 
 use blake2b_simd::Params;
-use kaspa_hashes::Hash;
+use kaspa_hashes::{Hash, Hash64};
 use kaspa_math::{Uint256, Uint512, Uint576};
 
 /// BLAKE2b key for the Layer 0 PoW finalizer. Matches the
@@ -59,6 +59,17 @@ pub const POW_ALGO_ID_KHEAVYHASH: u8 = 1;
 /// `algo_id` and validated up-stack.
 pub const POW_L1_TAG_MAX_BYTES: usize = 256;
 
+/// Domain-separator key for the algo_id = 1 (kHeavyHash) seed
+/// derivation. kaspa-pq Phase 9 (PR-9.3) — see ADR-0008
+/// §"algo_id = 1 (kHeavyHash) seed derivation".
+///
+/// The upstream kHeavyHash signature takes a 32-byte seed; the
+/// kaspa-pq Phase 1 path derives that seed from the 64-byte
+/// pre-PoW hash via a dedicated keyed BLAKE2b-256 so the 32-byte
+/// seed cannot be substituted for any other 32-byte digest in the
+/// system.
+pub const POW_L1_KHEAVYHASH_V1_SEED_DOMAIN: &[u8] = b"kaspa-pq-l1-kheavyhash-v1-seed";
+
 /// Errors returned by Layer 0 helpers.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PowLayer0Error {
@@ -81,14 +92,15 @@ pub fn check_algo_id_phase1(algo_id: u8) -> Result<(), PowLayer0Error> {
 
 /// kaspa-pq Layer 0 PoW finalizer.
 ///
-/// Layout (ADR-0007 §"Decision"):
+/// Layout (ADR-0007 §"Decision", ADR-0008-updated to take a
+/// 64-byte `pre_pow_hash`):
 ///
 /// ```text
 /// pow_512 = BLAKE2b-512(
 ///     key   = POW_FINALIZER_DOMAIN,
-///     input = network_id ||
+///     input = network_id_len_le_u16 || network_id ||
 ///             algo_id ||
-///             pre_pow_hash ||
+///             pre_pow_hash64 ||                     // 64 bytes
 ///             timestamp.to_le_bytes() ||
 ///             bits.to_le_bytes() ||
 ///             nonce.to_le_bytes() ||
@@ -108,7 +120,7 @@ pub fn check_algo_id_phase1(algo_id: u8) -> Result<(), PowLayer0Error> {
 pub fn pow_finalizer_blake2b_512(
     network_id: &[u8],
     algo_id: u8,
-    pre_pow_hash: Hash,
+    pre_pow_hash: Hash64,
     timestamp: u64,
     bits: u32,
     nonce: u64,
@@ -128,6 +140,7 @@ pub fn pow_finalizer_blake2b_512(
     state.update(network_id);
 
     state.update(&[algo_id]);
+    // ADR-0008: pre_pow_hash is now 64 bytes (BlockPrePowHash64).
     state.update(&pre_pow_hash.as_bytes());
     state.update(&timestamp.to_le_bytes());
     state.update(&bits.to_le_bytes());
@@ -140,6 +153,30 @@ pub fn pow_finalizer_blake2b_512(
     let mut out = [0u8; POW_FINALIZER_BYTES];
     out.copy_from_slice(digest.as_bytes());
     Ok(out)
+}
+
+/// Derive the 32-byte kHeavyHash v1 seed from the 64-byte
+/// pre-PoW hash. kaspa-pq Phase 9 (PR-9.3); see ADR-0008
+/// §"algo_id = 1 (kHeavyHash) seed derivation".
+///
+/// ```text
+/// l1_seed32 = BLAKE2b-256(
+///     key   = POW_L1_KHEAVYHASH_V1_SEED_DOMAIN,
+///     input = pre_pow_hash64,
+/// )
+/// ```
+///
+/// This bridges the 64-byte Layer 0 pre-PoW hash to the upstream
+/// 32-byte kHeavyHash interface for the Phase 1 `algo_id = 1`
+/// path. The seed is domain-separated on its own keyed BLAKE2b
+/// instance so the 32-byte seed and the 64-byte pre-PoW hash
+/// cannot be substituted for each other anywhere else.
+#[inline]
+pub fn l1_seed32_for_kheavyhash_v1(pre_pow_hash: Hash64) -> Hash {
+    let digest = Params::new().hash_length(32).key(POW_L1_KHEAVYHASH_V1_SEED_DOMAIN).to_state().update(pre_pow_hash.as_byte_slice()).finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(digest.as_bytes());
+    Hash::from_bytes(out)
 }
 
 /// Difficulty-lift helper. Maps a 256-bit upstream-style target to
@@ -178,10 +215,10 @@ pub fn calc_work_512(target: Uint512) -> Uint576 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_hashes::ZERO_HASH;
+    use kaspa_hashes::ZERO_HASH64;
 
-    fn h(byte: u8) -> Hash {
-        Hash::from_bytes([byte; 32])
+    fn h(byte: u8) -> Hash64 {
+        Hash64::from_bytes([byte; 64])
     }
 
     #[test]
@@ -247,9 +284,9 @@ mod tests {
         // Construction: two l1_tag values whose raw bytes differ only
         // by length-prefix boundary placement. Without the length
         // prefix this would collide; with it, the digests differ.
-        let a = pow_finalizer_blake2b_512(b"net", 1, ZERO_HASH, 0, 0, 0, b"AB").unwrap();
-        let b = pow_finalizer_blake2b_512(b"net", 1, ZERO_HASH, 0, 0, 0, b"ABCD").unwrap();
-        let c = pow_finalizer_blake2b_512(b"net", 1, ZERO_HASH, 0, 0, 0, b"").unwrap();
+        let a = pow_finalizer_blake2b_512(b"net", 1, ZERO_HASH64, 0, 0, 0, b"AB").unwrap();
+        let b = pow_finalizer_blake2b_512(b"net", 1, ZERO_HASH64, 0, 0, 0, b"ABCD").unwrap();
+        let c = pow_finalizer_blake2b_512(b"net", 1, ZERO_HASH64, 0, 0, 0, b"").unwrap();
         assert_ne!(a, b);
         assert_ne!(a, c);
         assert_ne!(b, c);
@@ -258,7 +295,7 @@ mod tests {
     #[test]
     fn finalizer_rejects_overlong_l1_tag() {
         let too_long = vec![0u8; POW_L1_TAG_MAX_BYTES + 1];
-        let r = pow_finalizer_blake2b_512(b"net", 1, ZERO_HASH, 0, 0, 0, &too_long);
+        let r = pow_finalizer_blake2b_512(b"net", 1, ZERO_HASH64, 0, 0, 0, &too_long);
         assert_eq!(r, Err(PowLayer0Error::L1TagTooLong(POW_L1_TAG_MAX_BYTES + 1)));
     }
 
@@ -287,7 +324,42 @@ mod tests {
     /// a future accidental hard-coding to zero.)
     #[test]
     fn finalizer_empty_input_nontrivial_digest() {
-        let d = pow_finalizer_blake2b_512(b"", 0, ZERO_HASH, 0, 0, 0, b"").unwrap();
+        let d = pow_finalizer_blake2b_512(b"", 0, ZERO_HASH64, 0, 0, 0, b"").unwrap();
         assert_ne!(d, [0u8; POW_FINALIZER_BYTES]);
+    }
+
+    /// kaspa-pq Phase 9 (PR-9.3): the algo_id = 1 (kHeavyHash) seed
+    /// derivation is deterministic, sensitive to every byte of the
+    /// 64-byte pre-PoW hash, and key-separated from the other
+    /// kaspa-pq BLAKE2b-256 hashers (TransactionHash, BlockHash,
+    /// MuHashElementHash, …). Determinism is the basis for miner
+    /// reproducibility; key-separation is the basis for not being
+    /// substitutable elsewhere.
+    #[test]
+    fn l1_seed32_for_kheavyhash_v1_basic_properties() {
+        let a = l1_seed32_for_kheavyhash_v1(h(0x11));
+        let b = l1_seed32_for_kheavyhash_v1(h(0x11));
+        assert_eq!(a, b, "derivation must be deterministic");
+
+        let c = l1_seed32_for_kheavyhash_v1(h(0x12));
+        assert_ne!(a, c, "different pre-PoW hashes must yield different seeds");
+
+        // Flip the last byte of the 64-byte input; the derived seed
+        // must shift.
+        let mut bytes = [0x11u8; 64];
+        bytes[63] = 0x12;
+        let last_bit_flipped = l1_seed32_for_kheavyhash_v1(Hash64::from_bytes(bytes));
+        assert_ne!(a, last_bit_flipped, "every byte of pre_pow_hash must influence the seed");
+
+        // Key separation against the existing 32-byte BLAKE2b
+        // hashers. The kHeavyHash seed must not equal any of them on
+        // the same input bytes.
+        use kaspa_hashes::{BlockHash, Hasher, MuHashElementHash, TransactionHash};
+        let pre_pow_bytes = h(0x33).as_bytes();
+        let pre_pow_slice: &[u8] = &pre_pow_bytes;
+        let seed = l1_seed32_for_kheavyhash_v1(h(0x33));
+        assert_ne!(seed.as_bytes(), BlockHash::hash(pre_pow_slice).as_bytes());
+        assert_ne!(seed.as_bytes(), TransactionHash::hash(pre_pow_slice).as_bytes());
+        assert_ne!(seed.as_bytes(), MuHashElementHash::hash(pre_pow_slice).as_bytes());
     }
 }
