@@ -2659,6 +2659,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "bitflags 2.9.4",
+ "blake2b_simd",
  "borsh",
  "cfg-if 1.0.0",
  "criterion",

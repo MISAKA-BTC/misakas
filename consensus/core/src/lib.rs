@@ -41,6 +41,10 @@ pub mod utxo;
 /// 32-byte `Hash` for the PoC; this module exists so the header switch
 /// PR is a small mechanical type swap.
 pub mod utxo_commitment;
+/// kaspa-pq Phase 8 (PR-8.3): Layer 0 PoW finalizer + difficulty-lift
+/// helpers (see docs/adr/0007-layered-pow.md). Self-contained; the
+/// PoW-validation wiring step is PR-8.6.
+pub mod pow_layer0;
 
 /// Integer type for accumulated PoW of blue blocks. We expect no more than
 /// 2^128 work in a single block (btc has ~2^80), and no more than 2^64

@@ -17,6 +17,9 @@ default = []
 [dependencies]
 arc-swap.workspace = true
 async-trait.workspace = true
+# kaspa-pq Phase 8 (PR-8.3): the Layer 0 PoW finalizer is keyed
+# BLAKE2b-512, which `blake2b_simd` already implements natively.
+blake2b_simd.workspace = true
 borsh.workspace = true
 bitflags.workspace = true
 cfg-if.workspace = true
