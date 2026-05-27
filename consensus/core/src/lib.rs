@@ -46,10 +46,16 @@ pub mod utxo_commitment;
 /// PoW-validation wiring step is PR-8.6.
 pub mod pow_layer0;
 
-/// Integer type for accumulated PoW of blue blocks. We expect no more than
-/// 2^128 work in a single block (btc has ~2^80), and no more than 2^64
-/// overall blocks, so 2^192 is definitely a justified upper-bound.
-pub type BlueWorkType = kaspa_math::Uint192;
+/// Integer type for accumulated PoW of blue blocks.
+///
+/// kaspa-pq Phase 8 (PR-8.5) widened this from `Uint192` to `Uint576`
+/// per ADR-0007 §"Width chain": the 576-bit width is one machine word
+/// above the 512-bit PoW comparison domain (`Uint512`), so a 2^64
+/// window of maximum-work blocks accumulates without overflow. The
+/// previous upstream comment ("no more than 2^192 work overall") is
+/// retained as historical context but no longer drives the type
+/// choice — the Layer 0 PoW domain does.
+pub type BlueWorkType = kaspa_math::Uint576;
 
 /// The extends directly from the expectation above about having no more than
 /// 2^128 work in a single block

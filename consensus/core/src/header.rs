@@ -265,7 +265,11 @@ mod tests {
             23,
             567,
             0,
-            Uint192([0x1234567890abcfed, 0xc0dec0ffeec0ffee, 0x1234567890abcdef]),
+            // kaspa-pq PR-8.5: BlueWorkType widened to Uint576; widen the
+            // test fixture too. Low 3 limbs carry the original Uint192
+            // pattern so the value (and any borsh-roundtrip hash of it)
+            // is reproducible from the upstream history.
+            Uint192([0x1234567890abcfed, 0xc0dec0ffeec0ffee, 0x1234567890abcdef]).into(),
             u64::MAX,
             Default::default(),
         );
@@ -275,7 +279,14 @@ mod tests {
         let v = serde_json::from_str::<Value>(&json).unwrap();
         let blue_work = v.get("blueWork").expect("missing `blueWork` property");
         let blue_work = blue_work.as_str().expect("`blueWork` is not a string");
-        assert_eq!(blue_work, "1234567890abcdefc0dec0ffeec0ffee1234567890abcfed");
+        // kaspa-pq PR-8.5: BlueWorkType widened to Uint576 (72 bytes).
+        // The hex form is 144 chars; the low 24 bytes are the original
+        // upstream Uint192 pattern, the high 48 bytes are zero (the
+        // `Uint192 -> Uint576` conversion zero-extends).
+        assert_eq!(
+            blue_work,
+            "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001234567890abcdefc0dec0ffeec0ffee1234567890abcfed",
+        );
         let blue_score = v.get("blueScore").expect("missing `blueScore` property");
         let blue_score: u64 = blue_score.as_u64().expect("blueScore is not a u64 compatible value");
         assert_eq!(blue_score, u64::MAX);

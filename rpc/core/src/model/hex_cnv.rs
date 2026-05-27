@@ -140,13 +140,14 @@ mod tests {
         assert_eq!(HEX_STR.to_string(), b.to_rpc_hex());
         assert!(BlueWorkType::from_rpc_hex("not a number").is_err());
 
-        // max str len is 48 for a 192 bits Uint
-        // odd lengths are accepted
-        // leading '0' are ignored
-        // empty str is supported
+        // kaspa-pq PR-8.5: BlueWorkType widened to Uint576, so max hex
+        // length is 144 (was 48 for Uint192). Odd lengths are accepted,
+        // leading '0' are ignored, empty str is supported.
         const TEST_STR: &str = "000fedcba987654321000000a9876543210fedcba9876543210fedcba9876543210";
         for i in 0..TEST_STR.len() {
-            assert!(BlueWorkType::from_rpc_hex(&TEST_STR[0..i]).is_ok() == (i <= 48));
+            // Every prefix of TEST_STR is well within the 144-char
+            // Uint576 limit, so all parses succeed.
+            assert!(BlueWorkType::from_rpc_hex(&TEST_STR[0..i]).is_ok());
             if 0 < i && i < 33 {
                 let b = BlueWorkType::from_rpc_hex(&TEST_STR[0..i]).unwrap();
                 let u = u128::from_str_radix(&TEST_STR[0..i], 16).unwrap();
