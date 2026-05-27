@@ -1,8 +1,13 @@
-# kaspa-pq Specification (v0.1, draft)
+# kaspa-pq Specification (v0.2, draft)
 
-Status: Draft — Phase 1 deliverable. Frozen values listed here are the contract
-that Phase 2 onward must implement. Any change must go through an ADR update
-under `docs/adr/`.
+Status: Draft. Frozen values listed here are the contract every phase must
+respect. Any change must go through an ADR update under `docs/adr/`.
+
+ADR-0007 (Layered PoW) and ADR-0008 (Hash64 consensus identity) widen
+the scope from the original "signatures + UTXO accumulator" target to
+"full 64-byte consensus identity + 512-bit PoW domain". Earlier Phase 1
+non-goals that contradicted those ADRs have been removed; see the
+revision history below.
 
 ## 0. Scope and non-goals
 
@@ -10,22 +15,50 @@ This document specifies a quantum-resistant Kaspa-based network ("kaspa-pq")
 forked from rusty-kaspa. It is **not** a compatibility layer with the
 mainline Kaspa network.
 
-### In scope (PoC + production roadmap)
+### In scope
 
-1. Signature scheme replacement: ML-DSA-65 (FIPS 204) P2PKH only.
-2. UTXO accumulator replacement: LtHash16_1024.
+1. Signature scheme replacement: ML-DSA-65 (FIPS 204) P2PKH only. Address
+   payload is the 64-byte BLAKE2b-512 hash of the public key
+   (ADR-0008 §"Address payload width").
+2. UTXO accumulator replacement: LtHash16_1024. Final commitment is the
+   64-byte BLAKE2b-512 of the 2048-byte LtHash state
+   (`UtxoCommitmentHash64`, ADR-0008).
 3. Network-level isolation (NetworkId, genesis, address prefix, ports).
-4. UTXO commitment field widened to 64 bytes in the production design
-   (PoC may keep 32-byte commitment if explicitly noted).
+4. **Layered PoW** (ADR-0007): Layer 0 is the consensus-critical
+   BLAKE2b-512 finalizer over a 512-bit comparison domain; Layer 1 is the
+   `algo_id`-identified ASIC-resistance tag (`algo_id = 1` =
+   kHeavyHash-compatible at Phase 1; ASIC-hard variants are Phase
+   2+ separate hard-fork ADRs). `BlueWorkType = Uint576` in Phase 1.
+5. **64-byte consensus identity** end-to-end (ADR-0008). Block hash,
+   transaction id, transaction hash, merkle root, accepted-id merkle
+   root, UTXO commitment, pruning point, parent references all move
+   from 32-byte `Hash` to 64-byte `Hash64`. The 32-byte type remains as
+   `Hash32` for incidental internal use (cache keys, debug
+   fingerprints, the Layer 1 kHeavyHash internals).
 
-### Out of scope (Phase 1)
+### Out of scope
 
-- Mainline Kaspa interoperability (wallet, RPC, P2P, address).
-- Widening `kaspa_hashes::Hash` (txid / block hash / merkle root) past 32 bytes.
-- PQ-strengthening the PoW hash, block hash, txid, or merkle root.
-- ML-DSA multisig, script-hash composite scripts, smart contracts.
-- Hardware-wallet support, BIP32-style hierarchical key derivation that requires
-  a discrete-log-friendly curve.
+- Mainline Kaspa interoperability (wallet, RPC, P2P, address). kaspa-pq
+  is a separate network (ADR-0001), not a soft-/hard-fork of mainline.
+- ML-DSA multisig, script-hash composite scripts, smart contracts. The
+  P2PKH ML-DSA-65 template is the only standard send.
+- Hardware-wallet support; BIP32-style hierarchical key derivation that
+  requires a discrete-log-friendly curve.
+
+### Public-claim discipline (binding)
+
+The kaspa-pq Phase 9 security claim, taken verbatim from ADR-0008 §"Security
+framing":
+
+- ✅ "512-bit commitment domain"
+- ✅ "256-bit quantum preimage margin" (Grover bound)
+- ✅ "high-margin quantum collision resistance"
+- ❌ "256-bit quantum collision" — **not claimed**
+- ❌ "256-bit post-quantum security" (across the board) — **not claimed**
+
+Quantum collision resistance under the BHT bound is approximately
+`2^(512/3) ≈ 2^170`, not `2^256`. External material must use the
+phrasings above and **must not** over-claim collision resistance.
 
 ## 1. Base version
 
@@ -201,7 +234,42 @@ This is by design: the address format, accumulator, and signature scheme
 are all different. A separate one-shot migration tool is out of scope
 for the PoC.
 
-## 10. Test plan summary
+## 10. Phase plan (revised: 9-phase ordering)
+
+ADR-0007 (Layered PoW) and ADR-0008 (Hash64 consensus identity) expanded
+the original 7-phase plan. The current ordering, with status as of the
+last commit to this branch:
+
+| # | Title | Status |
+|---|---|---|
+| 1 | Spec freeze (this document, ADRs 0001–0005) | ✅ landed |
+| 2 | Network isolation (`kaspapq*` prefix, ports, genesis, DNS seeds) | ✅ landed |
+| 3 | LtHash16_1024 UTXO accumulator (PoC, 32-byte commitment) | ✅ landed |
+| 4 | ML-DSA-65 P2PKH script | ✅ landed |
+| 5 | Wallet key derivation + minimal CLI | ✅ landed |
+| 5'| `kaspa-pq-cli` standalone binary + encrypted seed + wRPC info | ✅ landed |
+| 6 | Mass policy benchmark + reinforcement (`mass_per_sig_op = 6000`) | ✅ landed |
+| 7 | RPC / WASM / SDK (PR-7.1 – PR-7.6, incl. UtxoCommitment64) | ✅ landed |
+| 8 | Layered PoW foundation (Layer 0; PR-8.1 – PR-8.3) | ✅ landed |
+| 9 | Hash64 consensus identity (PR-9.1 – PR-9.4 landed; PR-9.5 cascade deferred) | 🚧 partial |
+
+Deferred PRs:
+
+- **PR-8.4** Header.pow_algo_id field + genesis recompute — folded into
+  PR-9.5 (the Header struct changes anyway as part of the Hash64
+  cascade).
+- **PR-8.5** `BlueWorkType: Uint192 → Uint576` — independent of Hash64;
+  still applies as its own cascade.
+- **PR-8.6** Layer 0 finalizer wired into consensus PoW validation — uses
+  the Hash64 pre_pow_hash from PR-9.3; runs as part of the Phase 9
+  validator pass.
+- **PR-9.5** Consensus identity cascade — `Header`, `Transaction`,
+  `TransactionOutpoint`, merkle, GHOSTDAG, pruning, RPC, P2P, database,
+  wallet, SDK call sites migrate from `Hash` to the typed `Hash64`
+  aliases. Recompute genesis hashes (the new field layout invalidates
+  the current values). Multi-PR / multi-session.
+
+## 11. Test plan summary
 
 Full test plan lives in §7 of the project plan; this spec carries the
 mandatory acceptance criteria for each phase:
@@ -217,6 +285,16 @@ mandatory acceptance criteria for each phase:
   spend.
 - **Phase 6** `mass_per_sig_op` set from measured median verify cost
   × safety factor ≥ 1.5; mempool survives a malformed-signature flood.
+- **Phase 8** Layer 0 finalizer is deterministic, all input fields
+  influence the digest, the length-prefixed `l1_tag` defeats the
+  canonical-concat collision attack, and the difficulty-lift identity
+  holds at the consensus-core boundary.
+- **Phase 9** every 64-byte hash round-trips through hex (128 chars)
+  and Borsh (64 raw bytes); each of the 9 keyed BLAKE2b-512 hashers
+  produces a digest of the right width and is pairwise-separating from
+  the others on the same input; the algo_id = 1 kHeavyHash seed
+  derivation is deterministic, per-byte sensitive, and key-separated
+  from every other BLAKE2b-256 hasher in the crate.
 
 ## 11. ADR index
 
@@ -227,3 +305,11 @@ mandatory acceptance criteria for each phase:
 - [ADR-0005 — Mass / DoS policy](adr/0005-mass-policy.md)
 - [ADR-0006 — RPC / WASM / SDK types](adr/0006-rpc-wasm-sdk-types.md) (Phase 7 scope freeze)
 - [ADR-0007 — Layered PoW](adr/0007-layered-pow.md) (Layer 0 BLAKE2b-512 finalizer + Layer 1 algo_id; Phase 1 = quantum-resistant PoW domain, Phase 2+ = ASIC-hard Layer 1)
+- [ADR-0008 — Full Hash64 consensus identity](adr/0008-hash64-consensus-identity.md) (Phase 9 — block hash / txid / merkle root / pruning point / parent references / UTXO commitment / address payload all move to 64 bytes via keyed BLAKE2b-512; 256-bit quantum preimage margin, **not** 256-bit quantum collision)
+
+## 12. Revision history
+
+| Version | Date | Change |
+|---|---|---|
+| 0.1 | 2026-05-28 | Initial draft. |
+| 0.2 | 2026-05-28 | ADR-0007 + ADR-0008 incorporated. Removed the "do not widen Hash past 32 bytes" non-goal (it directly contradicts ADR-0008); added the full 64-byte consensus identity goal; added the Phase 8 / Phase 9 entries to the phase plan; codified the public-claim discipline section. Revised non-goal removal: previously `PQ-strengthening the PoW hash, block hash, txid, or merkle root` was listed as out-of-scope; this is now the explicit Phase 8 + Phase 9 in-scope work. |
