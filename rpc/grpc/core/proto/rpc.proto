@@ -5,9 +5,29 @@
 // Having received a RequestMessage, (wrapped in a KaspadMessage) the RPC server will respond with a
 // ResponseMessage (likewise wrapped in a KaspadMessage) respective to the original RequestMessage.
 //
+// kaspa-pq Phase 7 (PR-7.2): package is `protowire.kaspapq` so a mainline Kaspa
+// client cannot accidentally bind to a kaspa-pq node. See
+// docs/adr/0006-rpc-wasm-sdk-types.md §2.
 //
 syntax = "proto3";
-package protowire;
+package protowire.kaspapq;
+
+// kaspa-pq Phase 7: address version enum.
+//
+// Mirrors `kaspa_addresses::Version` (in crypto/addresses/src/lib.rs):
+//   PUB_KEY                  = 0 — legacy Schnorr (parser-only in kaspa-pq).
+//   PUB_KEY_ECDSA            = 1 — legacy ECDSA (parser-only in kaspa-pq).
+//   PUB_KEY_HASH_ML_DSA_65   = 2 — kaspa-pq standard send (P2PKH over ML-DSA-65).
+//   SCRIPT_HASH              = 8 — P2SH (script hash).
+//
+// Discriminants match the on-chain version byte (see
+// docs/adr/0002-mldsa65-p2pkh.md §"Address").
+enum AddressVersion {
+  PUB_KEY                = 0;
+  PUB_KEY_ECDSA          = 1;
+  PUB_KEY_HASH_ML_DSA_65 = 2;
+  SCRIPT_HASH            = 8;
+}
 
 // RPCError represents a generic non-internal error.
 //

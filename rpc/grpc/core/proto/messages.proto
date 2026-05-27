@@ -1,5 +1,10 @@
+// kaspa-pq Phase 7 (PR-7.2): package is `protowire.kaspapq`, the wire-level
+// identifier of the kaspa-pq RPC. A mainline Kaspa client bound to
+// `protowire.RPC.MessageStream` will fail handshake against a kaspa-pq
+// node, which is the intended isolation surface (see
+// docs/adr/0001-network-isolation.md + docs/adr/0006-rpc-wasm-sdk-types.md).
 syntax = "proto3";
-package protowire;
+package protowire.kaspapq;
 
 import "rpc.proto";
 
@@ -137,6 +142,9 @@ message KaspadResponse {
   }
 }
 
-service RPC {
+// kaspa-pq Phase 7 (PR-7.2): renamed from the upstream `RPC` service.
+// Mainline Kaspa clients explicitly bind to `protowire.RPC.MessageStream`;
+// the kaspa-pq service name is unambiguous and cannot match by accident.
+service KaspaPqRpcService {
   rpc MessageStream (stream KaspadRequest) returns (stream KaspadResponse) {}
 }

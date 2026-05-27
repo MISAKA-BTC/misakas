@@ -12,7 +12,14 @@ use kaspa_grpc_core::{
     RPC_MAX_MESSAGE_SIZE,
     channel::NotificationChannel,
     ops::KaspadPayloadOps,
-    protowire::{GetInfoRequestMessage, KaspadRequest, KaspadResponse, kaspad_request, rpc_client::RpcClient},
+    // kaspa-pq Phase 7 (PR-7.2): the generated gRPC client is named
+    // `KaspaPqRpcServiceClient`; alias it to `RpcClient` locally to keep
+    // existing call sites compiling. The `rpc_client` module-path alias
+    // is preserved by a re-export in `rpc/grpc/core/src/lib.rs`.
+    protowire::{
+        GetInfoRequestMessage, KaspadRequest, KaspadResponse, kaspad_request,
+        rpc_client::KaspaPqRpcServiceClient as RpcClient,
+    },
 };
 use kaspa_notify::{
     collector::{Collector, CollectorFrom},

@@ -10,7 +10,10 @@ use kaspa_grpc_core::{
     RPC_MAX_MESSAGE_SIZE,
     protowire::{
         KaspadRequest, KaspadResponse,
-        rpc_server::{Rpc, RpcServer},
+        // kaspa-pq Phase 7 (PR-7.2): service was renamed from `RPC` to
+        // `KaspaPqRpcService`. The `rpc_server` module-path alias is
+        // preserved by a re-export in `rpc/grpc/core/src/lib.rs`.
+        rpc_server::{KaspaPqRpcService as Rpc, KaspaPqRpcServiceServer as RpcServer},
     },
 };
 use kaspa_notify::{
