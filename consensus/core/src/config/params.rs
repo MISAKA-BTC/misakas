@@ -553,13 +553,16 @@ pub const MAINNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6: ML-DSA-65 verify is ~3.18× more expensive than
-    // secp256k1 Schnorr verify on the reference hardware
-    // (39.45 µs / 12.40 µs, see `crypto/txscript/benches/bench.rs`).
-    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula":
-    //   1000 (upstream) × 3.18 (ratio) × 1.57 (safety) ≈ 5000.
-    // Re-measure on the slowest reference platform before mainnet launch.
-    mass_per_sig_op: 5000,
+    // kaspa-pq Phase 6 + Phase 6 reinforcement:
+    //   Schnorr verify (secp256k1):            12.71 µs
+    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
+    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    //
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
+    // value is calibrated against the slowest variant so that no-SIMD
+    // low-end reference platforms remain safely budgeted:
+    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
+    mass_per_sig_op: 6000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -610,13 +613,16 @@ pub const TESTNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6: ML-DSA-65 verify is ~3.18× more expensive than
-    // secp256k1 Schnorr verify on the reference hardware
-    // (39.45 µs / 12.40 µs, see `crypto/txscript/benches/bench.rs`).
-    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula":
-    //   1000 (upstream) × 3.18 (ratio) × 1.57 (safety) ≈ 5000.
-    // Re-measure on the slowest reference platform before mainnet launch.
-    mass_per_sig_op: 5000,
+    // kaspa-pq Phase 6 + Phase 6 reinforcement:
+    //   Schnorr verify (secp256k1):            12.71 µs
+    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
+    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    //
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
+    // value is calibrated against the slowest variant so that no-SIMD
+    // low-end reference platforms remain safely budgeted:
+    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
+    mass_per_sig_op: 6000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -663,13 +669,16 @@ pub const SIMNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6: ML-DSA-65 verify is ~3.18× more expensive than
-    // secp256k1 Schnorr verify on the reference hardware
-    // (39.45 µs / 12.40 µs, see `crypto/txscript/benches/bench.rs`).
-    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula":
-    //   1000 (upstream) × 3.18 (ratio) × 1.57 (safety) ≈ 5000.
-    // Re-measure on the slowest reference platform before mainnet launch.
-    mass_per_sig_op: 5000,
+    // kaspa-pq Phase 6 + Phase 6 reinforcement:
+    //   Schnorr verify (secp256k1):            12.71 µs
+    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
+    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    //
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
+    // value is calibrated against the slowest variant so that no-SIMD
+    // low-end reference platforms remain safely budgeted:
+    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
+    mass_per_sig_op: 6000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -706,13 +715,16 @@ pub const DEVNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6: ML-DSA-65 verify is ~3.18× more expensive than
-    // secp256k1 Schnorr verify on the reference hardware
-    // (39.45 µs / 12.40 µs, see `crypto/txscript/benches/bench.rs`).
-    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula":
-    //   1000 (upstream) × 3.18 (ratio) × 1.57 (safety) ≈ 5000.
-    // Re-measure on the slowest reference platform before mainnet launch.
-    mass_per_sig_op: 5000,
+    // kaspa-pq Phase 6 + Phase 6 reinforcement:
+    //   Schnorr verify (secp256k1):            12.71 µs
+    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
+    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    //
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
+    // value is calibrated against the slowest variant so that no-SIMD
+    // low-end reference platforms remain safely budgeted:
+    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
+    mass_per_sig_op: 6000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,

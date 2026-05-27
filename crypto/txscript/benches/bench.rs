@@ -22,6 +22,14 @@ use secp256k1::{Message, Secp256k1};
 /// Pre-build a deterministic ML-DSA-65 keypair + signature over a fixed
 /// 32-byte message. The benchmark loop then calls `verify` repeatedly on
 /// that same (vk, msg, sig) triple — exactly the verify-only cost.
+///
+/// `verify_default` exercises the runtime-multiplexed verify the script
+/// engine actually calls (NEON / AVX2 / portable picked at runtime).
+/// `verify_portable` explicitly exercises the portable variant, which is
+/// what a no-SIMD low-end cloud reference platform would run. The ratio
+/// between the two gives a conservative upper bound for the verify cost
+/// that the mass-policy calibration must accommodate
+/// (docs/adr/0005-mass-policy.md §"Phase 6 calibration result").
 fn bench_mldsa65_verify(c: &mut Criterion) {
     let keypair = ml_dsa_65::generate_key_pair([0x11u8; 32]);
     let vk_bytes = *keypair.verification_key.as_ref();
@@ -33,9 +41,19 @@ fn bench_mldsa65_verify(c: &mut Criterion) {
     let sig_bytes = *signature.as_ref();
     let sig = ml_dsa_65::MLDSA65Signature::new(sig_bytes);
 
-    c.bench_function("kaspa_pq::mldsa65_verify", |b| {
+    c.bench_function("kaspa_pq::mldsa65_verify_default", |b| {
         b.iter(|| {
             let r = ml_dsa_65::verify(black_box(&vk), black_box(&message), black_box(MLDSA65_TX_CONTEXT), black_box(&sig));
+            black_box(r.is_ok());
+        });
+    });
+
+    c.bench_function("kaspa_pq::mldsa65_verify_portable", |b| {
+        // libcrux explicit `portable` sub-module — no NEON / AVX2 — so the
+        // measurement here is the "slowest reference platform" upper
+        // bound on the platforms where libcrux ships SIMD acceleration.
+        b.iter(|| {
+            let r = ml_dsa_65::portable::verify(black_box(&vk), black_box(&message), black_box(MLDSA65_TX_CONTEXT), black_box(&sig));
             black_box(r.is_ok());
         });
     });

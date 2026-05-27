@@ -1,30 +1,40 @@
 # ADR-0005: Mass / DoS policy for ML-DSA-65 P2PKH transactions
 
-Status: Accepted (Phase 1 freeze of shape; Phase 6 set `mass_per_sig_op = 5000`)
+Status: Accepted (Phase 1 freeze of shape; Phase 6 + reinforcement set `mass_per_sig_op = 6000`)
 Date: 2026-05-28
 Supersedes: —
 
 ## Phase 6 calibration result
 
-Measured on the reference hardware (Apple Silicon arm64, libcrux portable
-+ NEON multiplexing) via `crypto/txscript/benches/bench.rs`:
+Measured on the reference hardware (Apple Silicon arm64) via
+`crypto/txscript/benches/bench.rs`. The bench exposes three variants so
+the calibration can pin against the slowest:
 
-| Primitive | Median |
-|---|---|
-| `secp256k1::schnorr::Signature::verify` | **12.40 µs** |
-| `libcrux_ml_dsa::ml_dsa_65::verify`     | **39.45 µs** |
+| Primitive | Variant | Median |
+|---|---|---|
+| `secp256k1::schnorr::Signature::verify` | (single impl) | **12.71 µs** |
+| `libcrux_ml_dsa::ml_dsa_65::verify`     | default (NEON multiplexed) | **40.75 µs** |
+| `libcrux_ml_dsa::ml_dsa_65::portable::verify` | portable, no SIMD | **48.02 µs** |
 
-Ratio: 39.45 / 12.40 = **3.18×**. With safety factor 1.57:
+Ratios:
+
+- ML-DSA default / Schnorr = 40.75 / 12.71 = **3.21×**
+- ML-DSA portable / Schnorr = 48.02 / 12.71 = **3.78×** ← slowest
+
+The kaspa-pq policy calibrates against the slowest variant so that
+no-SIMD low-end reference platforms remain safely budgeted:
 
 ```
-1000 (upstream mass_per_sig_op)  ×  3.18 (ratio)  ×  1.57 (safety)  =  4992  ≈  5000
+1000 (upstream mass_per_sig_op)  ×  3.78 (slowest ratio)  ×  1.59 (safety)  ≈  6000
 ```
 
-→ kaspa-pq `mass_per_sig_op = 5000`, locked in
+→ kaspa-pq `mass_per_sig_op = 6000`, locked in
 [consensus/core/src/config/params.rs](../../consensus/core/src/config/params.rs)
-across all four `*_PARAMS` constants. Re-measure on the slowest reference
-platform before mainnet launch; tighten if the slow-platform ratio
-exceeds 3.18.
+across all four `*_PARAMS` constants. Reinforcement on a true low-end
+cloud instance (e.g. a single-vCPU bursty VM with no SIMD enabled in
+the OS) before mainnet launch may further tighten — re-run the bench
+above on the production reference image and compare its portable
+median against 48.02 µs; bump if it exceeds.
 
 ## Context
 
