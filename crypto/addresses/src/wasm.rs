@@ -123,34 +123,56 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test;
     use workflow_wasm::{extensions::ObjectExtension, serde::from_value, serde::to_value};
 
-    // TODO(kaspa-pq, Phase 7): regenerate these test address strings for the
-    // `kaspapq` HRP and re-enable. The original Kaspa-mainline-prefixed string
-    // (`kaspa:qpauqs...`) does not parse under the kaspa-pq prefix family, so
-    // these are temporarily ignored. See docs/adr/0001-network-isolation.md.
+    // kaspa-pq Phase 7 (PR-7.4): re-enabled after the Phase 2 prefix
+    // family swap (kaspa* -> kaspapq*). Address strings are computed at
+    // test time from (prefix, version, payload) so the tests don't depend
+    // on a hardcoded bech32 checksum value — the same test pattern Phase
+    // 2 used for `test_kaspapq_prefix_roundtrip` in src/lib.rs.
+    //
+    // A 32-byte synthetic payload is used; the original upstream test
+    // used `qpauqs...`-style bech32-data-encoded bytes. We use a
+    // deterministic byte pattern instead.
+
+    fn pq_test_address() -> Address {
+        let payload: [u8; 32] = [
+            0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x09, 0x87, 0x65, 0x43, 0x21, 0x55, 0xaa, 0x55, 0xaa,
+            0x55, 0xaa, 0x55, 0xaa, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+        ];
+        Address::new(Prefix::Mainnet, Version::PubKey, &payload)
+    }
 
     #[wasm_bindgen_test]
-    #[ignore = "kaspa-pq: regenerate kaspapq-prefixed test vector in Phase 7"]
     fn test_wasm_serde_constructor() {
-        let str = "kaspa:qpauqsvk7yf9unexwmxsnmg547mhyga37csh0kj53q6xxgl24ydxjsgzthw5j";
-        let a = Address::constructor(str);
+        let address = pq_test_address();
+        let address_str: String = address.clone().into();
+        // Confirm the bech32-encoded string really does start with the
+        // kaspa-pq mainnet HRP. A mainline `kaspa:` here would mean Phase 2
+        // regressed.
+        assert!(address_str.starts_with("kaspapq:"), "got {address_str}");
+
+        let a = Address::constructor(&address_str);
         let value = to_value(&a).unwrap();
 
         assert_eq!(JsValue::from_str("string"), value.js_typeof());
-        assert_eq!(value, JsValue::from_str(str));
+        assert_eq!(value, JsValue::from_str(&address_str));
         assert_eq!(a, from_value(value).unwrap());
     }
 
     #[wasm_bindgen_test]
-    #[ignore = "kaspa-pq: regenerate kaspapq-prefixed test vector in Phase 7"]
     fn test_wasm_js_serde_object() {
-        let expected = Address::constructor("kaspa:qpauqsvk7yf9unexwmxsnmg547mhyga37csh0kj53q6xxgl24ydxjsgzthw5j");
+        let expected = pq_test_address();
+        // Reconstruct from the (version, prefix, payload) triple.
+        let payload_hex = expected
+            .payload
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
 
         let obj = Object::new();
         obj.set("version", &JsValue::from_str("PubKey")).unwrap();
-        // NB: when re-enabled this must be "kaspapq" to match the serde rename
-        // on Prefix::Mainnet.
+        // serde rename on Prefix::Mainnet is "kaspapq" after Phase 2.
         obj.set("prefix", &JsValue::from_str("kaspapq")).unwrap();
-        obj.set("payload", &JsValue::from_str("qpauqsvk7yf9unexwmxsnmg547mhyga37csh0kj53q6xxgl24ydxjsgzthw5j")).unwrap();
+        obj.set("payload", &JsValue::from_str(&payload_hex)).unwrap();
 
         assert_eq!(JsValue::from_str("object"), obj.js_typeof());
 
@@ -160,9 +182,8 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    #[ignore = "kaspa-pq: regenerate kaspapq-prefixed test vector in Phase 7"]
     fn test_wasm_serde_object() {
-        let expected = Address::constructor("kaspa:qpauqsvk7yf9unexwmxsnmg547mhyga37csh0kj53q6xxgl24ydxjsgzthw5j");
+        let expected = pq_test_address();
         let wasm_js_value: JsValue = expected.clone().into_abi().into();
 
         let actual = from_value(wasm_js_value).unwrap();
