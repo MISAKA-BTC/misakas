@@ -225,3 +225,4 @@ mandatory acceptance criteria for each phase:
 - [ADR-0003 — LtHash16_1024 UTXO accumulator](adr/0003-lthash-utxo-accumulator.md)
 - [ADR-0004 — 64-byte UTXO commitment](adr/0004-utxo-commitment64.md)
 - [ADR-0005 — Mass / DoS policy](adr/0005-mass-policy.md)
+- [ADR-0006 — RPC / WASM / SDK types](adr/0006-rpc-wasm-sdk-types.md) (Phase 7 scope freeze)
