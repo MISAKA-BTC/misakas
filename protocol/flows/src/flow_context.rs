@@ -59,7 +59,11 @@ use tokio_stream::{StreamExt, wrappers::UnboundedReceiverStream};
 use uuid::Uuid;
 
 /// The P2P protocol version.
-const PROTOCOL_VERSION: u32 = 9;
+//
+// kaspa-pq protocol version: bumped well above upstream Kaspa (which is at 9)
+// so that any handshake with a mainline Kaspa peer fails the version check
+// immediately. See docs/adr/0001-network-isolation.md.
+const PROTOCOL_VERSION: u32 = 100;
 
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;

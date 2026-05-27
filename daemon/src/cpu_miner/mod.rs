@@ -54,13 +54,15 @@ impl TryFrom<CpuMinerConfig> for Vec<String> {
 
         let network = args.network.unwrap();
 
+        // kaspa-pq default RPC ports = upstream Kaspa + 10_000.
+        // See docs/adr/0001-network-isolation.md.
         match network {
             NetworkType::Mainnet => {
-                argv.push("--port=16110");
+                argv.push("--port=26110");
             }
             NetworkType::Testnet => {
                 argv.push("--testnet");
-                argv.push("--port=16210");
+                argv.push("--port=26210");
             }
             _ => {
                 return Err(Error::Custom("network type is not suported by the CPU miner".to_string()));

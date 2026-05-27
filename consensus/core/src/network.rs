@@ -39,30 +39,36 @@ pub enum NetworkType {
 }
 
 impl NetworkType {
+    // kaspa-pq port allocation = upstream Kaspa port + 10_000.
+    // See docs/adr/0001-network-isolation.md.
+    //  - gRPC:       mainnet 26110, testnet 26210, simnet 26510, devnet 26610
+    //  - wRPC Borsh: mainnet 27110, testnet 27210, simnet 27510, devnet 27610
+    //  - wRPC JSON:  mainnet 28110, testnet 28210, simnet 28510, devnet 28610
+    //  - P2P:        see NetworkId::default_p2p_port below.
     pub fn default_rpc_port(&self) -> u16 {
         match self {
-            NetworkType::Mainnet => 16110,
-            NetworkType::Testnet => 16210,
-            NetworkType::Simnet => 16510,
-            NetworkType::Devnet => 16610,
+            NetworkType::Mainnet => 26110,
+            NetworkType::Testnet => 26210,
+            NetworkType::Simnet => 26510,
+            NetworkType::Devnet => 26610,
         }
     }
 
     pub fn default_borsh_rpc_port(&self) -> u16 {
         match self {
-            NetworkType::Mainnet => 17110,
-            NetworkType::Testnet => 17210,
-            NetworkType::Simnet => 17510,
-            NetworkType::Devnet => 17610,
+            NetworkType::Mainnet => 27110,
+            NetworkType::Testnet => 27210,
+            NetworkType::Simnet => 27510,
+            NetworkType::Devnet => 27610,
         }
     }
 
     pub fn default_json_rpc_port(&self) -> u16 {
         match self {
-            NetworkType::Mainnet => 18110,
-            NetworkType::Testnet => 18210,
-            NetworkType::Simnet => 18510,
-            NetworkType::Devnet => 18610,
+            NetworkType::Mainnet => 28110,
+            NetworkType::Testnet => 28210,
+            NetworkType::Simnet => 28510,
+            NetworkType::Devnet => 28610,
         }
     }
 
@@ -156,7 +162,7 @@ impl TryFrom<&NetworkTypeT> for Prefix {
 
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum NetworkIdError {
-    #[error("Invalid network name prefix: {0}. The expected prefix is 'kaspa'.")]
+    #[error("Invalid network name prefix: {0}. The expected prefix is 'kaspapq'.")]
     InvalidPrefix(String),
 
     #[error(transparent)]
@@ -240,15 +246,18 @@ impl NetworkId {
         // hence avoiding repeatedly failing P2P handshakes between nodes on different networks. RPC does not have
         // this reasoning so we keep it on the same port in order to simplify RPC client management (hence [`default_rpc_port`]
         // is defined on the [`NetworkType`] struct
+        //
+        // kaspa-pq P2P port = upstream Kaspa P2P port + 10_000.
+        // See docs/adr/0001-network-isolation.md.
         match self.network_type {
-            NetworkType::Mainnet => 16111,
+            NetworkType::Mainnet => 26111,
             NetworkType::Testnet => match self.suffix {
-                Some(10) => 16211,
-                Some(11) => 16311,
-                None | Some(_) => 16411,
+                Some(10) => 26211,
+                Some(11) => 26311,
+                None | Some(_) => 26411,
             },
-            NetworkType::Simnet => 16511,
-            NetworkType::Devnet => 16611,
+            NetworkType::Simnet => 26511,
+            NetworkType::Devnet => 26611,
         }
     }
 
@@ -262,13 +271,15 @@ impl NetworkId {
         NETWORK_IDS.iter().copied()
     }
 
-    /// Returns a textual description of the network prefixed with `kaspa-`
+    /// Returns a textual description of the network prefixed with `kaspapq-`
+    /// (kaspa-pq is a fork of Kaspa with ML-DSA-65 signatures and an LtHash
+    /// UTXO accumulator; see docs/adr/0001-network-isolation.md).
     pub fn to_prefixed(&self) -> String {
-        format!("kaspa-{}", self)
+        format!("kaspapq-{}", self)
     }
 
     pub fn from_prefixed(prefixed: &str) -> Result<Self, NetworkIdError> {
-        if let Some(stripped) = prefixed.strip_prefix("kaspa-") {
+        if let Some(stripped) = prefixed.strip_prefix("kaspapq-") {
             Self::from_str(stripped)
         } else {
             Err(NetworkIdError::InvalidPrefix(prefixed.to_string()))

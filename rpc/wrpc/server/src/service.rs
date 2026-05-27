@@ -24,7 +24,9 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { listen_address: "127.0.0.1:17110".to_owned(), verbose: false, grpc_proxy_address: None }
+        // kaspa-pq wRPC Borsh default port = upstream Kaspa + 10_000 (17110 -> 27110).
+        // See docs/adr/0001-network-isolation.md.
+        Options { listen_address: "127.0.0.1:27110".to_owned(), verbose: false, grpc_proxy_address: None }
     }
 }
 

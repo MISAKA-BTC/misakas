@@ -25,21 +25,22 @@ pub fn register_link_matchers(cli: &Arc<KaspaCli>) -> Result<()> {
         })),
     )?;
 
-    // addresses (open,copy) https://explorer.kaspa.org/addresses/
+    // addresses (open,copy). kaspa-pq URIs use the `kaspapq*` prefix family
+    // (see docs/adr/0001-network-isolation.md). There is no public kaspa-pq
+    // block explorer yet, so the ctrl/meta-click action only copies the URI
+    // to the clipboard and writes an informational line. The regex still
+    // matches the kaspa-pq prefix family, plus the legacy `kaspa[test]:`
+    // pattern for backwards-compat clipboard handling, but no external
+    // lookup is performed.
     let cli_ = cli.clone();
     cli.term().register_link_matcher(
-        &js_sys::RegExp::new(r"(kaspa|kaspatest):\S+", "i"),
+        &js_sys::RegExp::new(r"(kaspapq|kaspapqtest|kaspapqsim|kaspapqdev|kaspa|kaspatest):\S+", "i"),
         Arc::new(Box::new(move |modifiers, uri| {
             if modifiers.ctrl || modifiers.meta {
-                if uri.starts_with("kaspatest") {
-                    cli_.term().writeln("testnet addresses can not be currently looked up with the block explorer");
+                if uri.starts_with("kaspa:") || uri.starts_with("kaspatest:") {
+                    cli_.term().writeln("mainline Kaspa addresses are not valid on kaspa-pq (see docs/adr/0001-network-isolation.md)");
                 } else {
-                    let url = format!("https://explorer.kaspa.org/addresses/{uri}");
-                    if is_nw() {
-                        nw_sys::shell::open_external(&url);
-                    } else {
-                        link::open(&url);
-                    }
+                    cli_.term().writeln("kaspa-pq addresses cannot currently be looked up via a block explorer");
                 }
             } else {
                 write_to_clipboard(&cli_, uri);
