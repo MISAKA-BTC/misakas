@@ -39,6 +39,14 @@ struct Args {
     /// PubKey placeholder is used.
     #[arg(long)]
     pay_mnemonic: Option<String>,
+    /// Minimum wall-clock interval between submitted blocks, in milliseconds
+    /// (0 = no throttle). At trivial difficulty, set this to pace block
+    /// production so a multi-datacenter mesh does not outrun cross-DC
+    /// propagation — e.g. `2000` on each of two miners yields ~1 block/s
+    /// combined. Prevents the GHOSTDAG split-brain that occurs when the block
+    /// interval is far below the inter-node propagation delay.
+    #[arg(long, default_value_t = 0)]
+    min_block_interval_ms: u64,
 }
 
 #[tokio::main]
@@ -85,8 +93,23 @@ async fn main() {
 
     log::info!("connected to {}; mining network_id={} to {}", args.rpc, args.network_id, pay_address);
 
+    let min_interval = std::time::Duration::from_millis(args.min_block_interval_ms);
+    if !min_interval.is_zero() {
+        log::info!("throttling block production to >= {} ms between blocks", args.min_block_interval_ms);
+    }
+    // Initialize so the first block is mined immediately (no startup wait).
+    let mut last_block = std::time::Instant::now().checked_sub(min_interval).unwrap_or_else(std::time::Instant::now);
+
     let mut mined = 0u64;
     loop {
+        // Pace block production: a block interval far below the cross-DC
+        // propagation delay splits the DAG (GHOSTDAG cannot converge).
+        if !min_interval.is_zero() {
+            let elapsed = last_block.elapsed();
+            if elapsed < min_interval {
+                tokio::time::sleep(min_interval - elapsed).await;
+            }
+        }
         let mut template = match client.get_block_template(pay_address.clone(), vec![]).await {
             Ok(t) => t,
             Err(e) => {
@@ -118,6 +141,7 @@ async fn main() {
         match client.submit_block(template.block, false).await {
             Ok(_) => {
                 mined += 1;
+                last_block = std::time::Instant::now();
                 log::info!("mined block #{mined} (nonce={nonce}, daa_score={})", header.daa_score);
             }
             Err(e) => log::warn!("submit_block failed: {e}"),
