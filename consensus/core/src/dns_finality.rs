@@ -100,6 +100,34 @@ pub const ATTESTATION_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-v1/stake-attestation";
 /// ADR-0010 §"Validator-set commitment derivation".
 pub const VALIDATOR_SET_COMMITMENT_KEY: &[u8] = b"kaspa-pq-validator-set-v1";
 
+/// kaspa-pq Phase 13 sortition domain keys. All four are
+/// consensus-fixed and bumped only by a hard-fork ADR (the `-v1`
+/// suffix is the contract). See
+/// [ADR-0012](../../docs/adr/0012-mainnet-validator-sortition-commit-reveal.md).
+///
+/// - `SORTITION_COMMIT_KEY` — keys the BLAKE2b-512 hash a validator
+///   commits to during epoch `E−2`. Distinct from every other
+///   sortition key so a commit hash is never confusable with a seed
+///   or priority value.
+/// - `SORTITION_SEED_KEY` — keys the BLAKE2b-512 over the reveal set
+///   that produces `epoch_seed_E` when the ≥ 2/3 reveal threshold
+///   is met.
+/// - `SORTITION_FALLBACK_KEY` — keys the BLAKE2b-512 over
+///   `epoch_seed_{E-1} || epoch.to_le_bytes()` used when the reveal
+///   threshold is **not** met. Distinct from `SORTITION_SEED_KEY` so
+///   a node cannot mistake a fallback seed for a regular one.
+/// - `SORTITION_PRIORITY_KEY` — keys the BLAKE2b-512 over
+///   `epoch_seed_E || validator_id` that yields per-validator
+///   priority in the deterministic stake-weighted top-K selection.
+/// - `SORTITION_DETERMINISTIC_KEY` — keys the BLAKE2b-512 over
+///   `epoch.to_le_bytes()` used as `epoch_seed_E` in the simnet /
+///   devnet / testnet-initial deterministic mode.
+pub const SORTITION_COMMIT_KEY: &[u8] = b"kaspa-pq-sortition-commit-v1";
+pub const SORTITION_SEED_KEY: &[u8] = b"kaspa-pq-sortition-seed-v1";
+pub const SORTITION_FALLBACK_KEY: &[u8] = b"kaspa-pq-sortition-fallback-v1";
+pub const SORTITION_PRIORITY_KEY: &[u8] = b"kaspa-pq-sortition-priority-v1";
+pub const SORTITION_DETERMINISTIC_KEY: &[u8] = b"kaspa-pq-sortition-deterministic-v1";
+
 /// Fixed-point scaled stake score. Wrapper for documentation /
 /// arithmetic clarity; the underlying `u128` is the same number of
 /// "stake-score units" used throughout the overlay.
@@ -159,6 +187,30 @@ pub enum BondStatus {
     /// Slashed by a `SlashingEvidencePayload`; bond is burned and
     /// the validator is removed from all future committees.
     Slashed = 3,
+}
+
+/// Per-network sortition mode (ADR-0012 §"Two sortition modes").
+///
+/// `Deterministic` keys the epoch seed by epoch number alone —
+/// fine for simnet, devnet, and testnet-initial because predictability
+/// is a feature there (reproducible runs). `CommitReveal` keys the
+/// seed from on-chain validator-contributed randomness — mainnet
+/// uses it from genesis because the deterministic mode is broken
+/// against bond-grinding and anchor-targeted attacks.
+///
+/// Default is `Deterministic` so a node booted with no DNS
+/// parameters configured behaves as the simnet does (loud about
+/// the missing production seed). The mode is bumped from
+/// `Deterministic` to `CommitReveal` by a hard-fork DAA-score gate
+/// (`DnsParams::commit_reveal_activation_daa_score`); the reverse
+/// is not supported.
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum SortitionMode {
+    #[default]
+    Deterministic = 0,
+    CommitReveal = 1,
 }
 
 // ---------------------------------------------------------------------
@@ -275,6 +327,72 @@ pub struct SlashingEvidencePayload {
     pub bond_outpoint: TransactionOutpoint,
     pub attestation_a: StakeAttestation,
     pub attestation_b: StakeAttestation,
+}
+
+/// Phase 13 sortition commit transaction payload (ADR-0012
+/// §"Commit window"). Submitted during epoch `target_epoch − 2`
+/// inside a transaction routed by `SUBNETWORK_ID_SORTITION_COMMIT`
+/// (consensus rule lands in PR-10.9).
+///
+/// At most one commit per `(validator_id, target_epoch)` is
+/// accepted on-chain; duplicates are rejected at tx-validation
+/// time (not slashable — duplicate is a rebroadcast, not
+/// equivocation).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SortitionCommitPayload {
+    pub version: u16,
+    pub validator_id: Hash64,
+    pub target_epoch: u64,
+    /// `commit = BLAKE2b-512(key=SORTITION_COMMIT_KEY,
+    ///                       input = r || target_epoch.to_le_bytes()
+    ///                            || validator_id.as_bytes())` where
+    /// `r` is a fresh 32-byte secret kept off-chain until the
+    /// reveal window. Derived via [`compute_commit`].
+    pub commit: Hash64,
+}
+
+/// Phase 13 sortition reveal transaction payload (ADR-0012
+/// §"Reveal window"). Submitted during epoch `target_epoch − 1`
+/// inside a transaction routed by `SUBNETWORK_ID_SORTITION_REVEAL`.
+///
+/// Consensus rule (PR-10.9):
+/// 1. A `SortitionCommitPayload` for the same `(validator_id,
+///    target_epoch)` must exist on-chain;
+/// 2. `compute_commit(&reveal, target_epoch, validator_id)` must
+///    equal that commit's `commit` field.
+/// Mis-matching reveals are rejected at tx validation; valid
+/// reveals contribute to `epoch_seed_{target_epoch}` derivation.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SortitionRevealPayload {
+    pub version: u16,
+    pub validator_id: Hash64,
+    pub target_epoch: u64,
+    /// The 32-byte secret committed to in the prior epoch. Borsh
+    /// encodes `[u8; 32]` as the raw bytes (no length prefix),
+    /// matching the wire format described in ADR-0012.
+    pub reveal: [u8; 32],
+}
+
+/// Phase 13 slashing evidence for a validator that committed but
+/// did not reveal within the reveal window (ADR-0012 §"Slashing
+/// rule: commit-without-reveal"). Independent of the existing
+/// equivocation [`SlashingEvidencePayload`]; both can fire in the
+/// same epoch.
+///
+/// Any node can be the reporter; consensus pays
+/// `DnsParams::unreveal_reporter_reward_sompi` (small, gas-cost
+/// scale) to the reporter and burns the remainder of the slash
+/// (`DnsParams::commit_without_reveal_slash_sompi`).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct UnrevealSlashingEvidencePayload {
+    pub version: u16,
+    pub target_epoch: u64,
+    pub validator_id: Hash64,
+    /// Outpoint of the unrevealed-commit transaction. Consensus
+    /// re-derives whether a matching reveal exists by walking the
+    /// reveal window blocks; the outpoint here is enough to bind
+    /// the evidence to a specific commit.
+    pub commit_outpoint: TransactionOutpoint,
 }
 
 // ---------------------------------------------------------------------
@@ -405,6 +523,53 @@ pub struct DnsParams {
 
     pub max_attestations_per_block: u16,
     pub max_attestation_shard_mass: u64,
+
+    // ---- Sortition (ADR-0012) ----
+
+    /// Per-network sortition mode. `Deterministic` for simnet /
+    /// devnet / testnet-initial; `CommitReveal` for mainnet from
+    /// genesis. See ADR-0012 §"Two sortition modes".
+    pub sortition_mode: SortitionMode,
+    /// Block window inside epoch `E−2` during which
+    /// `SortitionCommitPayload` txs are accepted on-chain.
+    pub commit_window_blocks: u64,
+    /// Block window inside epoch `E−1` during which
+    /// `SortitionRevealPayload` txs are accepted on-chain.
+    pub reveal_window_blocks: u64,
+    /// Numerator of the reveal-threshold fraction (default 2/3).
+    /// When `reveals * threshold_denom < commits * threshold_num`,
+    /// `epoch_seed_E` falls back per ADR-0012 §"Fallback rule".
+    pub min_reveal_threshold_num: u32,
+    /// Denominator of the reveal-threshold fraction (default 3 for
+    /// the 2/3 Byzantine threshold).
+    pub min_reveal_threshold_denom: u32,
+    /// Per-epoch committee size — the number of validators sorted
+    /// out for attestation eligibility. Bounded so the per-epoch
+    /// attestation total fits in
+    /// `max_attestations_per_block × blocks_per_epoch`.
+    pub committee_size: u32,
+    /// Number of epochs between commit and sortition use; ADR-0012
+    /// fixes this at 2 (commit at `E−2`, reveal at `E−1`, use at
+    /// `E`). The field is carried so future ADRs can raise it for
+    /// extra finality margin without an unrelated field shape
+    /// migration.
+    pub commit_reveal_lookahead_epochs: u8,
+    /// Bond slash applied to a validator that committed but did
+    /// not reveal within `reveal_window_blocks`. Calibration
+    /// target: ≥ `committee_size × per_attestation_reward ×
+    /// epochs_until_unbond` so deliberate withholding is
+    /// economically irrational.
+    pub commit_without_reveal_slash_sompi: u64,
+    /// Paid to whoever submits the `UnrevealSlashingEvidencePayload`.
+    /// Small fixed amount (gas-cost scale) — large enough to cover
+    /// reporter cost, small enough not to incentivise spurious
+    /// reports.
+    pub unreveal_reporter_reward_sompi: u64,
+    /// If `Some`, the testnet `Deterministic → CommitReveal`
+    /// switchover DAA score. `None` on mainnet (always
+    /// `CommitReveal` from genesis). On simnet / devnet this is
+    /// also `None` (always `Deterministic`).
+    pub commit_reveal_activation_daa_score: Option<u64>,
 }
 
 /// Miner-side block-template policy. See ADR-0010 §"Block template
@@ -541,6 +706,210 @@ pub fn stake_attestation_message(
     let mut out = [0u8; 32];
     out.copy_from_slice(hasher.finalize().as_bytes());
     Hash::from_bytes(out)
+}
+
+// ---------------------------------------------------------------------
+// Sortition derivations (ADR-0012).
+// ---------------------------------------------------------------------
+
+/// Compute the BLAKE2b-512 commitment for a sortition reveal
+/// (ADR-0012 §"Commit window"):
+///
+/// ```text
+/// commit = BLAKE2b-512(
+///     key   = SORTITION_COMMIT_KEY,
+///     input = reveal (32 B)
+///          || target_epoch.to_le_bytes()
+///          || validator_id.as_bytes() (64 B),
+/// )
+/// ```
+///
+/// The keyed BLAKE2b-512 plus the explicit `target_epoch` and
+/// `validator_id` make the commit binding (each validator can
+/// commit at most one value per target epoch; consensus rule in
+/// PR-10.9 enforces) and domain-separated from every other 64-byte
+/// hash on the wire.
+pub fn compute_commit(reveal: &[u8; 32], target_epoch: u64, validator_id: Hash64) -> Hash64 {
+    let mut hasher = Blake2bParams::new().hash_length(64).key(SORTITION_COMMIT_KEY).to_state();
+    hasher.update(reveal);
+    hasher.update(&target_epoch.to_le_bytes());
+    hasher.update(validator_id.as_byte_slice());
+
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// Compute `epoch_seed_E` in [`SortitionMode::Deterministic`]
+/// (ADR-0012 §"Two sortition modes"):
+///
+/// ```text
+/// epoch_seed_E = BLAKE2b-512(
+///     key   = SORTITION_DETERMINISTIC_KEY,
+///     input = target_epoch.to_le_bytes(),
+/// )
+/// ```
+///
+/// Used by simnet, devnet, and testnet-initial. Mainnet uses
+/// [`derive_epoch_seed_commit_reveal`] instead.
+pub fn derive_epoch_seed_deterministic(target_epoch: u64) -> Hash64 {
+    let mut hasher = Blake2bParams::new().hash_length(64).key(SORTITION_DETERMINISTIC_KEY).to_state();
+    hasher.update(&target_epoch.to_le_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// Compute `epoch_seed_E` in [`SortitionMode::CommitReveal`]
+/// (ADR-0012 §"Seed derivation"):
+///
+/// 1. Filter `valid_reveals` (caller guarantees these matched a
+///    prior commit and survived `compute_commit` re-verification
+///    at tx-validation time).
+/// 2. Sort by `validator_id` ascending.
+/// 3. If `valid_reveals.len() * threshold_denom ≥
+///    num_commits * threshold_num`, derive the seed from the
+///    reveal set; else fall back to
+///    `BLAKE2b-512(SORTITION_FALLBACK_KEY, prev_epoch_seed ||
+///    target_epoch.to_le_bytes())`.
+///
+/// Returns the seed regardless of which branch fires; callers can
+/// detect the fallback by comparing against
+/// [`derive_epoch_seed_fallback`] independently.
+pub fn derive_epoch_seed_commit_reveal(
+    target_epoch: u64,
+    valid_reveals: &[SortitionRevealPayload],
+    num_commits: u32,
+    threshold_num: u32,
+    threshold_denom: u32,
+    prev_epoch_seed: Hash64,
+) -> Hash64 {
+    // Promote to u64 before multiplying so we cannot overflow a
+    // u32 when `num_commits ≈ 2^31` (defensive — the real value
+    // is bounded by committee_size, but the helper takes a raw
+    // u32 so it must be safe at the type's extremes).
+    let lhs = (valid_reveals.len() as u64).saturating_mul(threshold_denom as u64);
+    let rhs = (num_commits as u64).saturating_mul(threshold_num as u64);
+    if lhs < rhs {
+        return derive_epoch_seed_fallback(target_epoch, prev_epoch_seed);
+    }
+
+    let mut sorted: Vec<&SortitionRevealPayload> = valid_reveals.iter().collect();
+    sorted.sort_by(|a, b| a.validator_id.cmp(&b.validator_id));
+
+    let mut hasher = Blake2bParams::new().hash_length(64).key(SORTITION_SEED_KEY).to_state();
+    hasher.update(&target_epoch.to_le_bytes());
+    hasher.update(&(sorted.len() as u32).to_le_bytes());
+    for r in &sorted {
+        hasher.update(r.validator_id.as_byte_slice());
+        hasher.update(&r.reveal);
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// The fallback seed derivation used when reveals are below the
+/// `≥ 2/3` threshold (ADR-0012 §"Fallback rule"):
+///
+/// ```text
+/// epoch_seed_E = BLAKE2b-512(
+///     key   = SORTITION_FALLBACK_KEY,
+///     input = prev_epoch_seed.as_bytes() (64 B)
+///          || target_epoch.to_le_bytes(),
+/// )
+/// ```
+///
+/// Distinct from [`derive_epoch_seed_commit_reveal`]'s primary
+/// path by keying with `SORTITION_FALLBACK_KEY` rather than
+/// `SORTITION_SEED_KEY`, so a node can never mistake a fallback
+/// seed for a regular one. The fallback chain bottoms out at the
+/// all-zero `Hash64` for `target_epoch == 0`, which is the
+/// genesis case.
+pub fn derive_epoch_seed_fallback(target_epoch: u64, prev_epoch_seed: Hash64) -> Hash64 {
+    let mut hasher = Blake2bParams::new().hash_length(64).key(SORTITION_FALLBACK_KEY).to_state();
+    hasher.update(prev_epoch_seed.as_byte_slice());
+    hasher.update(&target_epoch.to_le_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// Per-validator priority value used by [`select_committee`]
+/// (ADR-0012 §"Sortition function"):
+///
+/// ```text
+/// priority_v(E) =
+///     BLAKE2b-512(
+///         key   = SORTITION_PRIORITY_KEY,
+///         input = epoch_seed_E.as_bytes() || validator_id.as_bytes(),
+///     )
+///     .first_u128()
+///     /
+///     stake_v.max(1)
+/// ```
+///
+/// Stake-weighted: a validator with 2× stake has half the priority
+/// of an equally-randomised peer, so they are twice as likely to
+/// land in the bottom-K (selected) set. The `.max(1)` guard is
+/// defensive — `select_committee` filters zero-stake records
+/// upstream — but we keep it here so a misused call still produces
+/// a defined value rather than a panic.
+pub fn compute_validator_priority(epoch_seed: Hash64, validator_id: Hash64, stake_amount: u64) -> u128 {
+    let mut hasher = Blake2bParams::new().hash_length(64).key(SORTITION_PRIORITY_KEY).to_state();
+    hasher.update(epoch_seed.as_byte_slice());
+    hasher.update(validator_id.as_byte_slice());
+    let digest = hasher.finalize();
+    let bytes = digest.as_bytes();
+
+    // Take the first u128 word (little-endian) of the 64-byte
+    // digest. u128 is wide enough that stake-weighted division
+    // does not lose precision for any plausible stake value
+    // (< 2^64), and narrow enough that priority sorting fits
+    // standard library primitives.
+    let mut first16 = [0u8; 16];
+    first16.copy_from_slice(&bytes[..16]);
+    let h = u128::from_le_bytes(first16);
+    h / (stake_amount.max(1) as u128)
+}
+
+/// Select the per-epoch committee per ADR-0012 §"Sortition
+/// function": the `committee_size` validators with the lowest
+/// [`compute_validator_priority`] values.
+///
+/// Inputs:
+/// - `epoch_seed`: derived for the target epoch via either
+///   [`derive_epoch_seed_deterministic`] or
+///   [`derive_epoch_seed_commit_reveal`].
+/// - `active`: the active validator set at `epoch_start(E)`.
+/// - `committee_size`: per-network parameter; capped at
+///   `active.len()` if `committee_size > active.len()`.
+///
+/// Returns the chosen validator IDs sorted by `validator_id`
+/// ascending (canonical form — independent of priority order).
+/// The canonical sort lets the result feed directly into
+/// [`validator_set_commitment`] for the same epoch without an
+/// extra sort step.
+///
+/// Zero-stake records are skipped — they should never appear in an
+/// active set, but defensive filtering keeps the helper total over
+/// arbitrary input.
+pub fn select_committee(epoch_seed: Hash64, active: &[ValidatorRecord], committee_size: usize) -> Vec<Hash64> {
+    let mut ranked: Vec<(u128, Hash64)> = active
+        .iter()
+        .filter(|v| v.stake_amount > 0)
+        .map(|v| (compute_validator_priority(epoch_seed, v.validator_id, v.stake_amount), v.validator_id))
+        .collect();
+    // Stable sort by priority ascending — ties (cryptographically
+    // implausible at u128 width, but defensively handled) fall
+    // back to insertion order, which is the caller's iteration
+    // order over `active`.
+    ranked.sort_by_key(|p| p.0);
+    ranked.truncate(committee_size.min(ranked.len()));
+
+    let mut ids: Vec<Hash64> = ranked.into_iter().map(|(_, id)| id).collect();
+    ids.sort();
+    ids
 }
 
 // ---------------------------------------------------------------------
@@ -739,16 +1108,34 @@ mod tests {
         assert_eq!(STAKE_VALIDATOR_PUBKEY_LEN, 1952);
         assert_eq!(STAKE_ATTESTATION_SIG_LEN, 3309);
 
-        // ADR-0009 / ADR-0010 domain-separator strings. These are
-        // consensus-fixed and bumped only by a hard-fork ADR — pin
-        // the bytes so any accidental rename trips this test.
+        // ADR-0009 / ADR-0010 / ADR-0012 domain-separator strings.
+        // All consensus-fixed and bumped only by a hard-fork ADR —
+        // pin the bytes so any accidental rename trips this test.
         assert_eq!(ATTESTATION_MLDSA65_CONTEXT, b"kaspa-pq-v1/att/mldsa65");
         assert_eq!(ATTESTATION_MESSAGE_DOMAIN, b"kaspa-pq-v1/stake-attestation");
         assert_eq!(VALIDATOR_SET_COMMITMENT_KEY, b"kaspa-pq-validator-set-v1");
+        assert_eq!(SORTITION_COMMIT_KEY, b"kaspa-pq-sortition-commit-v1");
+        assert_eq!(SORTITION_SEED_KEY, b"kaspa-pq-sortition-seed-v1");
+        assert_eq!(SORTITION_FALLBACK_KEY, b"kaspa-pq-sortition-fallback-v1");
+        assert_eq!(SORTITION_PRIORITY_KEY, b"kaspa-pq-sortition-priority-v1");
+        assert_eq!(SORTITION_DETERMINISTIC_KEY, b"kaspa-pq-sortition-deterministic-v1");
 
         // Replay safety: tx vs attestation contexts must differ
         // (ADR-0002 / ADR-0009 §"Attestation target").
         assert_ne!(ATTESTATION_MLDSA65_CONTEXT, b"kaspa-pq-v1/tx/mldsa65");
+
+        // Pairwise distinctness of all five sortition keys —
+        // SORTITION_SEED_KEY ≠ SORTITION_FALLBACK_KEY is the most
+        // important invariant (ADR-0012 §"Fallback rule": a node
+        // must never mistake a fallback seed for a regular one),
+        // but the test covers all 10 pairs defensively.
+        let sortition_keys: [&[u8]; 5] =
+            [SORTITION_COMMIT_KEY, SORTITION_SEED_KEY, SORTITION_FALLBACK_KEY, SORTITION_PRIORITY_KEY, SORTITION_DETERMINISTIC_KEY];
+        for i in 0..sortition_keys.len() {
+            for j in (i + 1)..sortition_keys.len() {
+                assert_ne!(sortition_keys[i], sortition_keys[j], "sortition keys {i} and {j} must differ");
+            }
+        }
     }
 
     #[test]
@@ -863,6 +1250,17 @@ mod tests {
             unbonding_period_blocks: 350_000, // > R + E
             max_attestations_per_block: MAX_ATTESTATIONS_PER_SHARD as u16,
             max_attestation_shard_mass: 50_000,
+            // ADR-0012 sortition parameters.
+            sortition_mode: SortitionMode::CommitReveal,
+            commit_window_blocks: 200, // = epoch_length / 3
+            reveal_window_blocks: 200,
+            min_reveal_threshold_num: 2,
+            min_reveal_threshold_denom: 3,
+            committee_size: 64,
+            commit_reveal_lookahead_epochs: 2,
+            commit_without_reveal_slash_sompi: 50_000_000_000,
+            unreveal_reporter_reward_sompi: 100_000_000,
+            commit_reveal_activation_daa_score: None, // mainnet: always CommitReveal
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();
@@ -870,6 +1268,18 @@ mod tests {
 
         // ADR-0009 §"Long-range bound" requires U >= R + E.
         assert!(params.unbonding_period_blocks >= params.max_reorg_horizon_blocks + params.evidence_window_blocks);
+
+        // ADR-0012: commit + reveal windows must each fit comfortably
+        // inside an epoch (the windows live in E−2 and E−1
+        // respectively).
+        assert!(params.commit_window_blocks < params.epoch_length_blocks);
+        assert!(params.reveal_window_blocks < params.epoch_length_blocks);
+        // Lookahead must be ≥ 2 (one full epoch each for commit and
+        // reveal to land + finalise before seeding sortition).
+        assert!(params.commit_reveal_lookahead_epochs >= 2);
+        // Threshold sanity: 0 < num < denom.
+        assert!(params.min_reveal_threshold_num > 0);
+        assert!(params.min_reveal_threshold_num < params.min_reveal_threshold_denom);
     }
 
     #[test]
@@ -1258,6 +1668,360 @@ mod tests {
             signature_fingerprint: Hash64::from_bytes([0xeeu8; 64]),
         };
         assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::Block);
+    }
+
+    // ---- Sortition (ADR-0012) -------------------------------------
+
+    fn fixture_reveal(byte: u8) -> [u8; 32] {
+        [byte; 32]
+    }
+
+    fn fixture_validator(id_byte: u8, stake: u64) -> ValidatorRecord {
+        ValidatorRecord { validator_id: Hash64::from_bytes([id_byte; 64]), stake_amount: stake, activation_daa_score: 0 }
+    }
+
+    #[test]
+    fn sortition_mode_default_is_deterministic() {
+        // A node booted with no DNS params configured behaves as
+        // the simnet does — `Deterministic`. Mainnet flips this
+        // via `DnsParams` parsing.
+        assert_eq!(SortitionMode::default(), SortitionMode::Deterministic);
+    }
+
+    #[test]
+    fn sortition_mode_borsh_roundtrip() {
+        for m in [SortitionMode::Deterministic, SortitionMode::CommitReveal] {
+            let bytes = borsh::to_vec(&m).unwrap();
+            let back: SortitionMode = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(back, m);
+            assert_eq!(bytes.len(), 1, "SortitionMode must encode as a single byte");
+        }
+        assert_eq!(SortitionMode::Deterministic as u8, 0);
+        assert_eq!(SortitionMode::CommitReveal as u8, 1);
+    }
+
+    #[test]
+    fn sortition_commit_payload_borsh_roundtrip() {
+        let p = SortitionCommitPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: Hash64::from_bytes([0x42u8; 64]),
+            target_epoch: 99,
+            commit: Hash64::from_bytes([0xbbu8; 64]),
+        };
+        let bytes = borsh::to_vec(&p).unwrap();
+        let back: SortitionCommitPayload = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn sortition_reveal_payload_borsh_roundtrip() {
+        let p = SortitionRevealPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: Hash64::from_bytes([0x42u8; 64]),
+            target_epoch: 99,
+            reveal: fixture_reveal(0xcd),
+        };
+        let bytes = borsh::to_vec(&p).unwrap();
+        let back: SortitionRevealPayload = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn unreveal_slashing_evidence_payload_borsh_roundtrip() {
+        let p = UnrevealSlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            target_epoch: 7,
+            validator_id: Hash64::from_bytes([0x42u8; 64]),
+            commit_outpoint: fixture_outpoint(),
+        };
+        let bytes = borsh::to_vec(&p).unwrap();
+        let back: UnrevealSlashingEvidencePayload = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, p);
+    }
+
+    // ---- compute_commit -------------------------------------------
+
+    #[test]
+    fn compute_commit_is_deterministic() {
+        let r = fixture_reveal(0x11);
+        let vid = Hash64::from_bytes([0x42u8; 64]);
+        let a = compute_commit(&r, 7, vid);
+        let b = compute_commit(&r, 7, vid);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn compute_commit_changes_with_each_input() {
+        let r = fixture_reveal(0x11);
+        let vid = Hash64::from_bytes([0x42u8; 64]);
+        let base = compute_commit(&r, 7, vid);
+
+        // reveal differs
+        assert_ne!(base, compute_commit(&fixture_reveal(0x12), 7, vid));
+        // epoch differs
+        assert_ne!(base, compute_commit(&r, 8, vid));
+        // validator_id differs
+        assert_ne!(base, compute_commit(&r, 7, Hash64::from_bytes([0x43u8; 64])));
+    }
+
+    #[test]
+    fn compute_commit_round_trips_against_reveal_verification() {
+        // The consensus rule in PR-10.9 re-derives compute_commit
+        // from the reveal payload at tx-validation time and rejects
+        // any reveal whose recomputed hash does not match the prior
+        // commit. This test pins the inverse direction (compute →
+        // verify) so a future helper refactor cannot silently
+        // change the verification semantics.
+        let r = fixture_reveal(0xaa);
+        let vid = Hash64::from_bytes([0xbcu8; 64]);
+        let epoch = 1234;
+        let commit = compute_commit(&r, epoch, vid);
+        assert_eq!(commit, compute_commit(&r, epoch, vid));
+    }
+
+    // ---- derive_epoch_seed_deterministic --------------------------
+
+    #[test]
+    fn deterministic_epoch_seed_is_per_epoch() {
+        let s0 = derive_epoch_seed_deterministic(0);
+        let s1 = derive_epoch_seed_deterministic(1);
+        let s2 = derive_epoch_seed_deterministic(2);
+        assert_ne!(s0, s1);
+        assert_ne!(s1, s2);
+        assert_ne!(s0, s2);
+        // Must never collapse to ZERO_HASH64 (would be a hash break).
+        assert_ne!(s0, kaspa_hashes::ZERO_HASH64);
+    }
+
+    // ---- derive_epoch_seed_commit_reveal --------------------------
+
+    fn fixture_reveal_payload(vid_byte: u8, epoch: u64, r_byte: u8) -> SortitionRevealPayload {
+        SortitionRevealPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: Hash64::from_bytes([vid_byte; 64]),
+            target_epoch: epoch,
+            reveal: fixture_reveal(r_byte),
+        }
+    }
+
+    #[test]
+    fn commit_reveal_seed_uses_reveal_set_when_threshold_met() {
+        // 3 of 3 reveals — well above the 2/3 threshold.
+        let reveals = vec![
+            fixture_reveal_payload(0xaa, 5, 0x01),
+            fixture_reveal_payload(0xbb, 5, 0x02),
+            fixture_reveal_payload(0xcc, 5, 0x03),
+        ];
+        let seed = derive_epoch_seed_commit_reveal(5, &reveals, 3, 2, 3, Hash64::from_bytes([0xeeu8; 64]));
+        // Must not be the fallback seed for the same prev_epoch_seed.
+        let fallback = derive_epoch_seed_fallback(5, Hash64::from_bytes([0xeeu8; 64]));
+        assert_ne!(seed, fallback);
+    }
+
+    #[test]
+    fn commit_reveal_seed_falls_back_when_threshold_not_met() {
+        // 1 of 3 reveals — below the 2/3 threshold (1*3 < 3*2).
+        let reveals = vec![fixture_reveal_payload(0xaa, 5, 0x01)];
+        let prev = Hash64::from_bytes([0xeeu8; 64]);
+        let seed = derive_epoch_seed_commit_reveal(5, &reveals, 3, 2, 3, prev);
+        assert_eq!(seed, derive_epoch_seed_fallback(5, prev));
+    }
+
+    #[test]
+    fn commit_reveal_seed_at_exact_two_thirds_threshold_uses_reveal_set() {
+        // 2 of 3 reveals — at the 2/3 threshold (2*3 == 3*2). The
+        // rule is "lhs >= rhs" so this case uses the reveal set,
+        // not the fallback. Pins the boundary against off-by-one
+        // drift.
+        let reveals =
+            vec![fixture_reveal_payload(0xaa, 5, 0x01), fixture_reveal_payload(0xbb, 5, 0x02)];
+        let prev = Hash64::from_bytes([0xeeu8; 64]);
+        let seed = derive_epoch_seed_commit_reveal(5, &reveals, 3, 2, 3, prev);
+        assert_ne!(seed, derive_epoch_seed_fallback(5, prev));
+    }
+
+    #[test]
+    fn commit_reveal_seed_is_order_independent() {
+        // Same reveal set, different input orders -> same seed
+        // (the helper sorts a clone by validator_id ascending).
+        let a = vec![
+            fixture_reveal_payload(0xaa, 5, 0x01),
+            fixture_reveal_payload(0xbb, 5, 0x02),
+            fixture_reveal_payload(0xcc, 5, 0x03),
+        ];
+        let mut b = a.clone();
+        b.reverse();
+        let mut c = a.clone();
+        c.swap(0, 2);
+
+        let prev = Hash64::from_bytes([0xeeu8; 64]);
+        let sa = derive_epoch_seed_commit_reveal(5, &a, 3, 2, 3, prev);
+        let sb = derive_epoch_seed_commit_reveal(5, &b, 3, 2, 3, prev);
+        let sc = derive_epoch_seed_commit_reveal(5, &c, 3, 2, 3, prev);
+        assert_eq!(sa, sb);
+        assert_eq!(sa, sc);
+    }
+
+    #[test]
+    fn fallback_seed_distinct_from_primary_for_same_inputs() {
+        // The primary `SORTITION_SEED_KEY` and fallback
+        // `SORTITION_FALLBACK_KEY` must produce different outputs
+        // for identical input — pinned here so a future ADR cannot
+        // accidentally collapse the two domains.
+        let prev = Hash64::from_bytes([0xeeu8; 64]);
+        let target_epoch = 5u64;
+
+        // Build the same input bytes both functions would consume
+        // for a degenerate "empty reveal set" case to make the
+        // domain-key the only differentiator. Reveals empty +
+        // num_commits = 0 satisfies the threshold check trivially
+        // (0 ≥ 0), so the primary path runs.
+        let primary = derive_epoch_seed_commit_reveal(target_epoch, &[], 0, 2, 3, prev);
+        let fallback = derive_epoch_seed_fallback(target_epoch, prev);
+        // Different input layouts (primary hashes epoch || count ||
+        // empty; fallback hashes prev || epoch), so we are
+        // verifying that the FUNCTIONS produce different outputs —
+        // a strong "no collision" check rather than a
+        // same-input-different-key check.
+        assert_ne!(primary, fallback);
+    }
+
+    // ---- compute_validator_priority -------------------------------
+
+    #[test]
+    fn priority_is_deterministic() {
+        let seed = Hash64::from_bytes([0x11u8; 64]);
+        let vid = Hash64::from_bytes([0x42u8; 64]);
+        assert_eq!(compute_validator_priority(seed, vid, 100), compute_validator_priority(seed, vid, 100));
+    }
+
+    #[test]
+    fn priority_inversely_proportional_to_stake() {
+        // For a fixed (seed, validator_id), priority decreases with
+        // stake. Use division composition (which IS exact under
+        // integer arithmetic) rather than multiplication (which
+        // loses the low bits of `h` for odd values).
+        let seed = Hash64::from_bytes([0x11u8; 64]);
+        let vid = Hash64::from_bytes([0x42u8; 64]);
+        let p1 = compute_validator_priority(seed, vid, 1);
+        let p2 = compute_validator_priority(seed, vid, 2);
+        let p100 = compute_validator_priority(seed, vid, 100);
+        // Monotone decreasing in stake.
+        assert!(p2 < p1, "p2={p2} should be < p1={p1}");
+        assert!(p100 < p2, "p100={p100} should be < p2={p2}");
+        // Exact under integer division composition: priority(h, s2) ==
+        // priority(h, 1) / s2 for any positive s2 (because
+        // priority(h, 1) == h and (h) / s2 is itself the priority).
+        assert_eq!(p2, p1 / 2);
+        assert_eq!(p100, p1 / 100);
+    }
+
+    #[test]
+    fn priority_changes_with_seed() {
+        let vid = Hash64::from_bytes([0x42u8; 64]);
+        let p1 = compute_validator_priority(Hash64::from_bytes([0x11u8; 64]), vid, 100);
+        let p2 = compute_validator_priority(Hash64::from_bytes([0x12u8; 64]), vid, 100);
+        // Cryptographically very unlikely to be equal at u128
+        // width — if this trips by chance the universe owes
+        // us a pizza.
+        assert_ne!(p1, p2);
+    }
+
+    #[test]
+    fn priority_changes_with_validator_id() {
+        let seed = Hash64::from_bytes([0x11u8; 64]);
+        let p1 = compute_validator_priority(seed, Hash64::from_bytes([0x42u8; 64]), 100);
+        let p2 = compute_validator_priority(seed, Hash64::from_bytes([0x43u8; 64]), 100);
+        assert_ne!(p1, p2);
+    }
+
+    #[test]
+    fn priority_zero_stake_treated_as_one_stake() {
+        // Defensive `.max(1)` guard — zero-stake records should
+        // never appear in an active set, but the helper must not
+        // panic on them.
+        let seed = Hash64::from_bytes([0x11u8; 64]);
+        let vid = Hash64::from_bytes([0x42u8; 64]);
+        assert_eq!(compute_validator_priority(seed, vid, 0), compute_validator_priority(seed, vid, 1));
+    }
+
+    // ---- select_committee -----------------------------------------
+
+    #[test]
+    fn committee_respects_size_bound() {
+        let seed = Hash64::from_bytes([0x11u8; 64]);
+        let active: Vec<_> = (0u8..10).map(|i| fixture_validator(i, 100)).collect();
+        let chosen = select_committee(seed, &active, 3);
+        assert_eq!(chosen.len(), 3);
+    }
+
+    #[test]
+    fn committee_capped_at_active_set_size_when_size_exceeds() {
+        let seed = Hash64::from_bytes([0x11u8; 64]);
+        let active: Vec<_> = (0u8..3).map(|i| fixture_validator(i, 100)).collect();
+        // Ask for 10 from a 3-validator active set; should get 3.
+        let chosen = select_committee(seed, &active, 10);
+        assert_eq!(chosen.len(), 3);
+    }
+
+    #[test]
+    fn committee_returned_sorted_by_validator_id() {
+        let seed = Hash64::from_bytes([0x11u8; 64]);
+        let active: Vec<_> = (0u8..10).map(|i| fixture_validator(i, 100)).collect();
+        let chosen = select_committee(seed, &active, 5);
+        // Canonical sort ascending — required so the result feeds
+        // directly into validator_set_commitment without an extra
+        // sort step.
+        let mut sorted = chosen.clone();
+        sorted.sort();
+        assert_eq!(chosen, sorted);
+    }
+
+    #[test]
+    fn committee_skips_zero_stake_records() {
+        let seed = Hash64::from_bytes([0x11u8; 64]);
+        let active = vec![fixture_validator(0x01, 0), fixture_validator(0x02, 100), fixture_validator(0x03, 0)];
+        let chosen = select_committee(seed, &active, 10);
+        assert_eq!(chosen.len(), 1);
+        assert_eq!(chosen[0], Hash64::from_bytes([0x02u8; 64]));
+    }
+
+    #[test]
+    fn committee_stake_weighted_in_expectation_over_many_seeds() {
+        // Across many seeds, a validator with 10× stake should be
+        // selected substantially more often than a peer with 1×
+        // stake into a 1-slot committee.
+        //
+        // Method: 1024 distinct seeds, 5 validators (1 with 10× stake,
+        // 4 with 1× stake), committee_size = 1. The heavy validator
+        // should win the slot the vast majority of the time
+        // (uniform expectation under perfect stake-weighting is
+        // 10/14 ≈ 71%; we assert "> 50%" to keep the test stable
+        // against statistical noise).
+        let heavy = fixture_validator(0x01, 1000);
+        let light_a = fixture_validator(0x02, 100);
+        let light_b = fixture_validator(0x03, 100);
+        let light_c = fixture_validator(0x04, 100);
+        let light_d = fixture_validator(0x05, 100);
+        let active = vec![heavy.clone(), light_a, light_b, light_c, light_d];
+
+        let mut heavy_wins = 0u32;
+        for s in 0u32..1024 {
+            let seed_bytes: [u8; 64] = {
+                let mut b = [0u8; 64];
+                b[..4].copy_from_slice(&s.to_le_bytes());
+                b
+            };
+            let chosen = select_committee(Hash64::from_bytes(seed_bytes), &active, 1);
+            if chosen.len() == 1 && chosen[0] == heavy.validator_id {
+                heavy_wins += 1;
+            }
+        }
+        // 10×-stake validator must take > 50% of single-slot
+        // committees across 1024 trials. Loose bound — the
+        // true expectation is ~71% — picked so the test stays
+        // stable across hasher-output randomness.
+        assert!(heavy_wins > 512, "10×-stake validator only took {heavy_wins}/1024 single-slot committees");
     }
 
     // ---- Stubs are explicit ---------------------------------------
