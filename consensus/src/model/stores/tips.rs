@@ -11,7 +11,7 @@ use kaspa_database::prelude::StoreResult;
 use kaspa_database::prelude::StoreResultExt;
 use kaspa_database::prelude::{BatchDbWriter, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 
 /// Reader API for `TipsStore`.
@@ -20,25 +20,25 @@ pub trait TipsStoreReader {
 }
 
 pub trait TipsStore: TipsStoreReader {
-    fn add_tip(&mut self, new_tip: Hash, new_tip_parents: &[Hash]) -> StoreResult<ReadLock<BlockHashSet>>;
+    fn add_tip(&mut self, new_tip: BlockHash, new_tip_parents: &[BlockHash]) -> StoreResult<ReadLock<BlockHashSet>>;
     fn add_tip_batch(
         &mut self,
         batch: &mut WriteBatch,
-        new_tip: Hash,
-        new_tip_parents: &[Hash],
+        new_tip: BlockHash,
+        new_tip_parents: &[BlockHash],
     ) -> StoreResult<ReadLock<BlockHashSet>> {
         self.add_tip_with_writer(BatchDbWriter::new(batch), new_tip, new_tip_parents)
     }
     fn add_tip_with_writer(
         &mut self,
         writer: impl DbWriter,
-        new_tip: Hash,
-        new_tip_parents: &[Hash],
+        new_tip: BlockHash,
+        new_tip_parents: &[BlockHash],
     ) -> StoreResult<ReadLock<BlockHashSet>>;
-    fn prune_tips_batch(&mut self, batch: &mut WriteBatch, pruned_tips: &[Hash]) -> StoreResult<()> {
+    fn prune_tips_batch(&mut self, batch: &mut WriteBatch, pruned_tips: &[BlockHash]) -> StoreResult<()> {
         self.prune_tips_with_writer(BatchDbWriter::new(batch), pruned_tips)
     }
-    fn prune_tips_with_writer(&mut self, writer: impl DbWriter, pruned_tips: &[Hash]) -> StoreResult<()>;
+    fn prune_tips_with_writer(&mut self, writer: impl DbWriter, pruned_tips: &[BlockHash]) -> StoreResult<()>;
     fn delete_all_tips(&mut self, writer: &mut WriteBatch) -> StoreResult<()>;
 }
 
@@ -46,7 +46,7 @@ pub trait TipsStore: TipsStoreReader {
 #[derive(Clone)]
 pub struct DbTipsStore {
     db: Arc<DB>,
-    access: CachedDbSetItem<Hash, BlockHasher>,
+    access: CachedDbSetItem<BlockHash, BlockHasher>,
 }
 
 impl DbTipsStore {
@@ -62,7 +62,7 @@ impl DbTipsStore {
         self.access.read().optional().unwrap().is_some()
     }
 
-    pub fn init_batch(&mut self, batch: &mut WriteBatch, initial_tips: &[Hash]) -> StoreResult<()> {
+    pub fn init_batch(&mut self, batch: &mut WriteBatch, initial_tips: &[BlockHash]) -> StoreResult<()> {
         self.access.update(BatchDbWriter::new(batch), initial_tips, &[])?;
         Ok(())
     }
@@ -75,21 +75,21 @@ impl TipsStoreReader for DbTipsStore {
 }
 
 impl TipsStore for DbTipsStore {
-    fn add_tip(&mut self, new_tip: Hash, new_tip_parents: &[Hash]) -> StoreResult<ReadLock<BlockHashSet>> {
+    fn add_tip(&mut self, new_tip: BlockHash, new_tip_parents: &[BlockHash]) -> StoreResult<ReadLock<BlockHashSet>> {
         self.access.update(DirectDbWriter::new(&self.db), &[new_tip], new_tip_parents)
     }
 
     fn add_tip_with_writer(
         &mut self,
         writer: impl DbWriter,
-        new_tip: Hash,
-        new_tip_parents: &[Hash],
+        new_tip: BlockHash,
+        new_tip_parents: &[BlockHash],
     ) -> StoreResult<ReadLock<BlockHashSet>> {
         // New tip parents are no longer tips and hence removed
         self.access.update(writer, &[new_tip], new_tip_parents)
     }
 
-    fn prune_tips_with_writer(&mut self, writer: impl DbWriter, pruned_tips: &[Hash]) -> StoreResult<()> {
+    fn prune_tips_with_writer(&mut self, writer: impl DbWriter, pruned_tips: &[BlockHash]) -> StoreResult<()> {
         if pruned_tips.is_empty() {
             return Ok(());
         }

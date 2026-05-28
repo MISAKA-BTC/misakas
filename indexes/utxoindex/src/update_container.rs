@@ -3,7 +3,7 @@ use kaspa_consensus_core::{
     tx::{TransactionOutpoint, UtxoEntry},
     utxo::utxo_diff::UtxoDiff,
 };
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: tips are block hashes (Hash64)
 use kaspa_utils::hashmap::NestedHashMapExtensions;
 
 use crate::model::{CirculatingSupplyDiff, CompactUtxoEntry, UtxoChanges, UtxoSetByScriptPublicKey};
@@ -65,7 +65,7 @@ impl UtxoIndexChanges {
         }
     }
 
-    pub fn set_tips(&mut self, tips: Vec<Hash>) {
+    pub fn set_tips(&mut self, tips: Vec<BlockHash>) {
         self.tips = BlockHashSet::from_iter(tips);
     }
 }

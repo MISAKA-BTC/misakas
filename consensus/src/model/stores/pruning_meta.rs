@@ -6,7 +6,7 @@ use kaspa_database::prelude::StoreResult;
 use kaspa_database::prelude::StoreResultExt;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbItem};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 
 use super::utxo_set::DbUtxoSetStore;
@@ -14,9 +14,9 @@ use super::utxo_set::DbUtxoSetStore;
 /// Used in order to group stores related to the pruning point utxoset under a single lock
 pub struct PruningMetaStores {
     pub utxo_set: DbUtxoSetStore,
-    utxoset_position_access: CachedDbItem<Hash>,
+    utxoset_position_access: CachedDbItem<BlockHash>,
     utxoset_stable_flag_access: CachedDbItem<bool>,
-    body_missing_anticone_blocks: CachedDbItem<Vec<Hash>>,
+    body_missing_anticone_blocks: CachedDbItem<Vec<BlockHash>>,
 }
 
 impl PruningMetaStores {
@@ -32,11 +32,11 @@ impl PruningMetaStores {
     /// Represents the exact point of the current pruning point utxoset. Used in order to safely
     /// progress the pruning point utxoset in batches and to allow recovery if the process crashes
     /// during the pruning point utxoset movement
-    pub fn utxoset_position(&self) -> StoreResult<Hash> {
+    pub fn utxoset_position(&self) -> StoreResult<BlockHash> {
         self.utxoset_position_access.read()
     }
 
-    pub fn set_utxoset_position(&mut self, batch: &mut WriteBatch, pruning_utxoset_position: Hash) -> StoreResult<()> {
+    pub fn set_utxoset_position(&mut self, batch: &mut WriteBatch, pruning_utxoset_position: BlockHash) -> StoreResult<()> {
         self.utxoset_position_access.write(BatchDbWriter::new(batch), &pruning_utxoset_position)
     }
 
@@ -54,13 +54,13 @@ impl PruningMetaStores {
     /// Represents blocks in the anticone of the current pruning point which may lack a block body
     /// These blocks need to be kept track of as they require trusted validation,
     /// so that downloading of further blocks on top of them could resume
-    pub fn set_body_missing_anticone(&mut self, batch: &mut WriteBatch, body_missing_anticone: Vec<Hash>) -> StoreResult<()> {
+    pub fn set_body_missing_anticone(&mut self, batch: &mut WriteBatch, body_missing_anticone: Vec<BlockHash>) -> StoreResult<()> {
         self.body_missing_anticone_blocks.write(BatchDbWriter::new(batch), &body_missing_anticone)
     }
 
     /// Default to empty if missing - this is important because a node upgrading should have this value empty
     /// since all non staging consensuses had no missing body anticone previously
-    pub fn get_body_missing_anticone(&self) -> Vec<Hash> {
+    pub fn get_body_missing_anticone(&self) -> Vec<BlockHash> {
         self.body_missing_anticone_blocks.read().optional().unwrap().unwrap_or(vec![])
     }
 

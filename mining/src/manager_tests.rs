@@ -29,7 +29,7 @@ mod tests {
             UtxoEntry, scriptvec,
         },
     };
-    use kaspa_hashes::Hash;
+    use kaspa_hashes::Hash64; // PR-9.5e: outpoint transaction ids are Hash64
     use kaspa_mining_errors::mempool::RuleResult;
     use kaspa_txscript::{
         pay_to_address_script, pay_to_script_hash_signature_script,
@@ -1356,7 +1356,7 @@ mod tests {
     }
 
     fn create_transaction_with_utxo_entry(i: u32, block_daa_score: u64) -> MutableTransaction {
-        let previous_outpoint = TransactionOutpoint::new(Hash::default(), i);
+        let previous_outpoint = TransactionOutpoint::new(Hash64::default(), i);
         let (script_public_key, redeem_script) = op_true_script();
         let signature_script = pay_to_script_hash_signature_script(redeem_script, vec![]).expect("the redeem script is canonical");
 

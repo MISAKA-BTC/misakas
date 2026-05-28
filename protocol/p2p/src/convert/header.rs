@@ -1,6 +1,6 @@
 use crate::pb as protowire;
 use kaspa_consensus_core::{BlueWorkType, header::Header};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: p2p block-hash convert sites widened to Hash64
 
 use super::error::ConversionError;
 use super::option::TryIntoOptionEx;
@@ -55,8 +55,8 @@ impl From<(HeaderFormat, &Header)> for protowire::BlockHeader {
     }
 }
 
-impl From<&[Hash]> for protowire::BlockLevelParents {
-    fn from(item: &[Hash]) -> Self {
+impl From<&[BlockHash]> for protowire::BlockLevelParents {
+    fn from(item: &[BlockHash]) -> Self {
         // When converting to legacy p2p header, cumulative_level is set to 0
         Self { parent_hashes: item.iter().map(|h| h.into()).collect(), cumulative_level: 0 }
     }
@@ -80,16 +80,16 @@ impl TryFrom<Versioned<protowire::BlockHeader>> for Header {
                 .into_iter()
                 .map(|p| {
                     let cum = u8::try_from(p.cumulative_level)?;
-                    let parents = p.parent_hashes.into_iter().map(Hash::try_from).collect::<Result<_, _>>()?;
+                    let parents = p.parent_hashes.into_iter().map(BlockHash::try_from).collect::<Result<_, _>>()?;
                     Ok((cum, parents))
                 })
-                .collect::<Result<Vec<(u8, Vec<Hash>)>, ConversionError>>()?
+                .collect::<Result<Vec<(u8, Vec<BlockHash>)>, ConversionError>>()?
                 .try_into()?,
             HeaderFormat::Legacy => item
                 .parents
                 .into_iter()
-                .map(|p| p.parent_hashes.into_iter().map(Hash::try_from).collect::<Result<Vec<Hash>, ConversionError>>())
-                .collect::<Result<Vec<Vec<Hash>>, ConversionError>>()?
+                .map(|p| p.parent_hashes.into_iter().map(BlockHash::try_from).collect::<Result<Vec<BlockHash>, ConversionError>>())
+                .collect::<Result<Vec<Vec<BlockHash>>, ConversionError>>()?
                 .try_into()?,
         };
 
@@ -116,7 +116,7 @@ impl TryFrom<Versioned<protowire::BlockHeader>> for Header {
     }
 }
 
-impl TryFrom<protowire::BlockLevelParents> for Vec<Hash> {
+impl TryFrom<protowire::BlockLevelParents> for Vec<BlockHash> {
     type Error = ConversionError;
     fn try_from(item: protowire::BlockLevelParents) -> Result<Self, Self::Error> {
         item.parent_hashes.into_iter().map(|x| x.try_into()).collect()

@@ -10,7 +10,7 @@ use kaspa_consensus_core::{BlockHashSet, tx::ScriptPublicKeys, utxo::utxo_diff::
 use kaspa_consensusmanager::{ConsensusManager, ConsensusResetHandler};
 use kaspa_core::{info, trace};
 use kaspa_database::prelude::{DB, StoreError, StoreResult};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: DAG tips are block hashes (Hash64)
 use kaspa_index_core::indexed_utxos::BalanceByScriptPublicKey;
 use kaspa_utils::arc::ArcExtensions;
 use parking_lot::RwLock;
@@ -81,7 +81,7 @@ impl UtxoIndexApi for UtxoIndex {
     /// Updates the [UtxoIndex] via the virtual state supplied:
     /// 1) Saves updated utxo differences, virtual parent hashes and circulating supply to the database.
     /// 2) returns an event about utxoindex changes.
-    fn update(&mut self, utxo_diff: Arc<UtxoDiff>, tips: Arc<Vec<Hash>>) -> UtxoIndexResult<UtxoChanges> {
+    fn update(&mut self, utxo_diff: Arc<UtxoDiff>, tips: Arc<Vec<BlockHash>>) -> UtxoIndexResult<UtxoChanges> {
         trace!("[{0}] updating...", IDENT);
         trace!("[{0}] adding {1} utxos", IDENT, utxo_diff.add.len());
         trace!("[{0}] removing {1} utxos", IDENT, utxo_diff.remove.len());

@@ -736,13 +736,14 @@ fn test_mining_state_job_management() {
     // This verifies that jobs can be added to the mining state and retrieved by their job ID.
     // Jobs are stored in a circular buffer with a maximum of 300 jobs.
     use kaspa_consensus_core::block::Block;
-    use kaspa_hashes::Hash;
+    use kaspa_hashes::Hash; // PR-9.5e: pre_pow_hash stays 32-byte Hash
+    use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
     use kaspa_stratum_bridge::mining_state::{Job, MiningState};
 
     let state = MiningState::new();
 
     // Create a dummy job using Block::from_precomputed_hash (test helper)
-    let hash1 = Hash::from_bytes([1; 32]);
+    let hash1 = BlockHash::from_bytes([1; 64]);
     let block1 = Block::from_precomputed_hash(hash1, vec![]);
     let job1 = Job { block: block1, pre_pow_hash: Hash::default() };
 
@@ -756,7 +757,7 @@ fn test_mining_state_job_management() {
     assert!(retrieved.is_some(), "Job should be retrievable by ID");
 
     // Test adding another job
-    let hash2 = Hash::from_bytes([2; 32]);
+    let hash2 = BlockHash::from_bytes([2; 64]);
     let block2 = Block::from_precomputed_hash(hash2, vec![]);
     let job2 = Job { block: block2, pre_pow_hash: Hash::default() };
     let job_id_2 = state.add_job(job2);
@@ -1203,7 +1204,8 @@ mod comprehensive_tests {
     use kaspa_consensus_core::header::Header;
     use kaspa_consensus_core::subnets::SubnetworkId;
     use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput};
-    use kaspa_hashes::Hash;
+    use kaspa_hashes::Hash; // PR-9.5e: pre_pow_hash stays 32-byte Hash
+    use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
     use kaspa_stratum_bridge::{
         client_handler::ClientHandler,
         default_client::{handle_authorize, handle_subscribe},
@@ -1227,7 +1229,7 @@ mod comprehensive_tests {
     /// This helps us test share validation without needing a real Kaspa node
     fn create_test_block(timestamp: u64, bits: u32, nonce: u64) -> Block {
         // Create a minimal header using from_precomputed_hash (test helper)
-        let hash = Hash::from_bytes([1; 32]);
+        let hash = BlockHash::from_bytes([1; 64]);
         let mut header = Header::from_precomputed_hash(hash, vec![]);
         header.timestamp = timestamp;
         header.bits = bits;
@@ -1673,7 +1675,7 @@ mod comprehensive_tests {
 
         assert!(state.get_last_header().is_none(), "Should start with no header");
 
-        let hash = Hash::from_bytes([1; 32]);
+        let hash = BlockHash::from_bytes([1; 64]);
         let mut header = Header::from_precomputed_hash(hash, vec![]);
         header.timestamp = 1000;
         header.bits = 0x1e7fffff;
@@ -2276,11 +2278,12 @@ mod comprehensive_tests {
         // This demonstrates how the CPU miner validates PoW
 
         use kaspa_consensus_core::header::Header;
-        use kaspa_hashes::Hash;
+        use kaspa_hashes::Hash; // PR-9.5e: pre_pow_hash stays 32-byte Hash
+        use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
         use kaspa_pow::State as PowState;
 
         // Create a test block
-        let hash = Hash::from_bytes([1; 32]);
+        let hash = BlockHash::from_bytes([1; 64]);
         let mut header = Header::from_precomputed_hash(hash, vec![]);
         header.bits = 0x1e7fffff; // Low difficulty for testing
         header.timestamp = 1000;
@@ -2819,15 +2822,15 @@ mod comprehensive_tests {
         let state = MiningState::new();
 
         // Create multiple jobs
-        let hash1 = Hash::from_bytes([1; 32]);
+        let hash1 = BlockHash::from_bytes([1; 64]);
         let block1 = Block::from_precomputed_hash(hash1, vec![]);
         let job1 = Job { block: block1, pre_pow_hash: Hash::default() };
 
-        let hash2 = Hash::from_bytes([2; 32]);
+        let hash2 = BlockHash::from_bytes([2; 64]);
         let block2 = Block::from_precomputed_hash(hash2, vec![]);
         let job2 = Job { block: block2, pre_pow_hash: Hash::default() };
 
-        let hash3 = Hash::from_bytes([3; 32]);
+        let hash3 = BlockHash::from_bytes([3; 64]);
         let block3 = Block::from_precomputed_hash(hash3, vec![]);
         let job3 = Job { block: block3, pre_pow_hash: Hash::default() };
 

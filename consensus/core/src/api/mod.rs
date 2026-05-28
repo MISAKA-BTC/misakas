@@ -26,7 +26,9 @@ use crate::{
         TransactionType, UtxoEntry,
     },
 };
-use kaspa_hashes::Hash;
+
+// PR-9.5e: ConsensusApi block-identifier methods use the 64-byte BlockHash.
+use crate::BlockHash;
 
 pub use self::stats::{BlockCount, ConsensusStats};
 
@@ -118,7 +120,7 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn get_virtual_merge_depth_root(&self) -> Option<Hash> {
+    fn get_virtual_merge_depth_root(&self) -> Option<BlockHash> {
         unimplemented!()
     }
 
@@ -129,7 +131,7 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn get_sink(&self) -> Hash {
+    fn get_sink(&self) -> BlockHash {
         unimplemented!()
     }
 
@@ -145,7 +147,7 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn get_current_block_color(&self, hash: Hash) -> Option<bool> {
+    fn get_current_block_color(&self, hash: BlockHash) -> Option<bool> {
         unimplemented!()
     }
 
@@ -154,7 +156,7 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     /// retention period root refers to the earliest block from which the current node has full header & block data
-    fn get_retention_period_root(&self) -> Hash {
+    fn get_retention_period_root(&self) -> BlockHash {
         unimplemented!()
     }
 
@@ -167,7 +169,7 @@ pub trait ConsensusApi: Send + Sync {
     /// Note:
     ///     1) `chain_path_added_limit` will populate removed fully, and then the added chain path, up to `chain_path_added_limit` amount of hashes.
     ///     1.1) use `None to impose no limit with optimized backward chain iteration, for better performance in cases where batching is not required.
-    fn get_virtual_chain_from_block(&self, low: Hash, chain_path_added_limit: Option<usize>) -> ConsensusResult<ChainPath> {
+    fn get_virtual_chain_from_block(&self, low: BlockHash, chain_path_added_limit: Option<usize>) -> ConsensusResult<ChainPath> {
         unimplemented!()
     }
 
@@ -189,7 +191,7 @@ pub trait ConsensusApi: Send + Sync {
 
     fn get_transactions_by_block_acceptance_data(
         &self,
-        accepting_block: Hash,
+        accepting_block: BlockHash,
         block_acceptance_data: MergesetBlockAcceptanceData,
         tx_ids: Option<Vec<TransactionId>>,
         tx_type: TransactionType,
@@ -199,7 +201,7 @@ pub trait ConsensusApi: Send + Sync {
 
     fn get_transactions_by_accepting_block(
         &self,
-        accepting_block: Hash,
+        accepting_block: BlockHash,
         tx_ids: Option<Vec<TransactionId>>,
         tx_type: TransactionType,
     ) -> ConsensusResult<TransactionQueryResult> {
@@ -223,7 +225,7 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn get_tips(&self) -> Vec<Hash> {
+    fn get_tips(&self) -> Vec<BlockHash> {
         unimplemented!()
     }
 
@@ -257,35 +259,35 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn import_pruning_point_utxo_set(&self, new_pruning_point: Hash, imported_utxo_multiset: MuHash) -> PruningImportResult<()> {
+    fn import_pruning_point_utxo_set(&self, new_pruning_point: BlockHash, imported_utxo_multiset: MuHash) -> PruningImportResult<()> {
         unimplemented!()
     }
 
-    fn is_chain_ancestor_of(&self, low: Hash, high: Hash) -> ConsensusResult<bool> {
+    fn is_chain_ancestor_of(&self, low: BlockHash, high: BlockHash) -> ConsensusResult<bool> {
         unimplemented!()
     }
 
-    fn get_hashes_between(&self, low: Hash, high: Hash, max_blocks: usize) -> ConsensusResult<(Vec<Hash>, Hash)> {
+    fn get_hashes_between(&self, low: BlockHash, high: BlockHash, max_blocks: usize) -> ConsensusResult<(Vec<BlockHash>, BlockHash)> {
         unimplemented!()
     }
 
-    fn get_header(&self, hash: Hash) -> ConsensusResult<Arc<Header>> {
+    fn get_header(&self, hash: BlockHash) -> ConsensusResult<Arc<Header>> {
         unimplemented!()
     }
 
-    fn get_headers_selected_tip(&self) -> Hash {
+    fn get_headers_selected_tip(&self) -> BlockHash {
         unimplemented!()
     }
 
     /// Returns the antipast of block `hash` from the POV of `context`, i.e. `antipast(hash) ∩ past(context)`.
     /// Since this might be an expensive operation for deep blocks, we allow the caller to specify a limit
     /// `max_traversal_allowed` on the maximum amount of blocks to traverse for obtaining the answer
-    fn get_antipast_from_pov(&self, hash: Hash, context: Hash, max_traversal_allowed: Option<u64>) -> ConsensusResult<Vec<Hash>> {
+    fn get_antipast_from_pov(&self, hash: BlockHash, context: BlockHash, max_traversal_allowed: Option<u64>) -> ConsensusResult<Vec<BlockHash>> {
         unimplemented!()
     }
 
     /// Returns the anticone of block `hash` from the POV of `virtual`
-    fn get_anticone(&self, hash: Hash) -> ConsensusResult<Vec<Hash>> {
+    fn get_anticone(&self, hash: BlockHash) -> ConsensusResult<Vec<BlockHash>> {
         unimplemented!()
     }
 
@@ -293,11 +295,11 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn create_virtual_selected_chain_block_locator(&self, low: Option<Hash>, high: Option<Hash>) -> ConsensusResult<Vec<Hash>> {
+    fn create_virtual_selected_chain_block_locator(&self, low: Option<BlockHash>, high: Option<BlockHash>) -> ConsensusResult<Vec<BlockHash>> {
         unimplemented!()
     }
 
-    fn create_block_locator_from_pruning_point(&self, high: Hash, limit: usize) -> ConsensusResult<Vec<Hash>> {
+    fn create_block_locator_from_pruning_point(&self, high: BlockHash, limit: usize) -> ConsensusResult<Vec<BlockHash>> {
         unimplemented!()
     }
 
@@ -309,39 +311,39 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn get_block(&self, hash: Hash) -> ConsensusResult<Block> {
+    fn get_block(&self, hash: BlockHash) -> ConsensusResult<Block> {
         unimplemented!()
     }
 
-    fn get_block_transactions(&self, hash: Hash, indices: Option<Vec<TransactionIndexType>>) -> ConsensusResult<Vec<Transaction>> {
+    fn get_block_transactions(&self, hash: BlockHash, indices: Option<Vec<TransactionIndexType>>) -> ConsensusResult<Vec<Transaction>> {
         unimplemented!()
     }
 
-    fn get_block_body(&self, hash: Hash) -> ConsensusResult<Arc<Vec<Transaction>>> {
+    fn get_block_body(&self, hash: BlockHash) -> ConsensusResult<Arc<Vec<Transaction>>> {
         unimplemented!()
     }
 
-    fn get_block_even_if_header_only(&self, hash: Hash) -> ConsensusResult<Block> {
+    fn get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {
         unimplemented!()
     }
 
-    fn get_ghostdag_data(&self, hash: Hash) -> ConsensusResult<ExternalGhostdagData> {
+    fn get_ghostdag_data(&self, hash: BlockHash) -> ConsensusResult<ExternalGhostdagData> {
         unimplemented!()
     }
 
-    fn get_block_children(&self, hash: Hash) -> Option<Vec<Hash>> {
+    fn get_block_children(&self, hash: BlockHash) -> Option<Vec<BlockHash>> {
         unimplemented!()
     }
 
-    fn get_block_parents(&self, hash: Hash) -> Option<Arc<Vec<Hash>>> {
+    fn get_block_parents(&self, hash: BlockHash) -> Option<Arc<Vec<BlockHash>>> {
         unimplemented!()
     }
 
-    fn get_block_status(&self, hash: Hash) -> Option<BlockStatus> {
+    fn get_block_status(&self, hash: BlockHash) -> Option<BlockStatus> {
         unimplemented!()
     }
 
-    fn get_block_acceptance_data(&self, hash: Hash) -> ConsensusResult<Arc<AcceptanceData>> {
+    fn get_block_acceptance_data(&self, hash: BlockHash) -> ConsensusResult<Arc<AcceptanceData>> {
         unimplemented!()
     }
 
@@ -350,19 +352,19 @@ pub trait ConsensusApi: Send + Sync {
     /// See `self::get_virtual_chain`
     fn get_blocks_acceptance_data(
         &self,
-        hashes: &[Hash],
+        hashes: &[BlockHash],
         merged_blocks_limit: Option<usize>,
     ) -> ConsensusResult<Vec<Arc<AcceptanceData>>> {
         unimplemented!()
     }
 
-    fn is_chain_block(&self, hash: Hash) -> ConsensusResult<bool> {
+    fn is_chain_block(&self, hash: BlockHash) -> ConsensusResult<bool> {
         unimplemented!()
     }
 
     fn get_pruning_point_utxos(
         &self,
-        expected_pruning_point: Hash,
+        expected_pruning_point: BlockHash,
         from_outpoint: Option<TransactionOutpoint>,
         chunk_size: usize,
         skip_first: bool,
@@ -370,25 +372,25 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn get_missing_block_body_hashes(&self, high: Hash) -> ConsensusResult<Vec<Hash>> {
+    fn get_missing_block_body_hashes(&self, high: BlockHash) -> ConsensusResult<Vec<BlockHash>> {
         unimplemented!()
     }
-    fn get_body_missing_anticone(&self) -> Vec<Hash> {
+    fn get_body_missing_anticone(&self) -> Vec<BlockHash> {
         unimplemented!()
     }
     fn clear_body_missing_anticone_set(&self) {
         unimplemented!()
     }
 
-    fn pruning_point(&self) -> Hash {
+    fn pruning_point(&self) -> BlockHash {
         unimplemented!()
     }
 
-    fn estimate_network_hashes_per_second(&self, start_hash: Option<Hash>, window_size: usize) -> ConsensusResult<u64> {
+    fn estimate_network_hashes_per_second(&self, start_hash: Option<BlockHash>, window_size: usize) -> ConsensusResult<u64> {
         unimplemented!()
     }
 
-    fn validate_pruning_points(&self, syncer_virtual_selected_parent: Hash) -> ConsensusResult<()> {
+    fn validate_pruning_points(&self, syncer_virtual_selected_parent: BlockHash) -> ConsensusResult<()> {
         unimplemented!()
     }
 
@@ -400,7 +402,7 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn finality_point(&self) -> Hash {
+    fn finality_point(&self) -> BlockHash {
         unimplemented!()
     }
 
@@ -424,12 +426,12 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn intrusive_pruning_point_update(&self, new_pruning_point: Hash, syncer_sink: Hash) -> ConsensusResult<()> {
+    fn intrusive_pruning_point_update(&self, new_pruning_point: BlockHash, syncer_sink: BlockHash) -> ConsensusResult<()> {
         unimplemented!()
     }
 
     /// Returns the n most recent pruning points (including the current pruning point)
-    fn get_n_last_pruning_points(&self, n: usize) -> Vec<Hash> {
+    fn get_n_last_pruning_points(&self, n: usize) -> Vec<BlockHash> {
         unimplemented!()
     }
 }

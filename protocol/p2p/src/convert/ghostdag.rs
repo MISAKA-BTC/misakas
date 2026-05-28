@@ -5,7 +5,7 @@ use kaspa_consensus_core::{
     BlockHashMap, BlueWorkType, HashMapCustomHasher, KType,
     trusted::{ExternalGhostdagData, TrustedGhostdagData, TrustedHeader},
 };
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: p2p block-hash convert sites widened to Hash64
 use std::sync::Arc;
 
 // ----------------------------------------------------------------------------
@@ -33,7 +33,7 @@ impl From<&ExternalGhostdagData> for protowire::GhostdagData {
 // protowire to consensus_core
 // ----------------------------------------------------------------------------
 
-impl TryFrom<protowire::BluesAnticoneSizes> for (Hash, KType) {
+impl TryFrom<protowire::BluesAnticoneSizes> for (BlockHash, KType) {
     type Error = ConversionError;
     fn try_from(item: protowire::BluesAnticoneSizes) -> Result<Self, Self::Error> {
         Ok((item.blue_hash.try_into_ex()?, item.anticone_size.try_into()?))
@@ -44,7 +44,7 @@ impl TryFrom<protowire::GhostdagData> for ExternalGhostdagData {
     type Error = ConversionError;
     fn try_from(item: protowire::GhostdagData) -> Result<Self, Self::Error> {
         let mut blues_anticone_sizes = BlockHashMap::<KType>::with_capacity(item.blues_anticone_sizes.len());
-        for res in item.blues_anticone_sizes.into_iter().map(<(Hash, KType)>::try_from) {
+        for res in item.blues_anticone_sizes.into_iter().map(<(BlockHash, KType)>::try_from) {
             let (k, v) = res?;
             blues_anticone_sizes.insert(k, v);
         }
@@ -52,8 +52,8 @@ impl TryFrom<protowire::GhostdagData> for ExternalGhostdagData {
             blue_score: item.blue_score,
             blue_work: BlueWorkType::from_be_bytes_var(&item.blue_work)?,
             selected_parent: item.selected_parent.try_into_ex()?,
-            mergeset_blues: item.merge_set_blues.into_iter().map(Hash::try_from).collect::<Result<Vec<Hash>, ConversionError>>()?,
-            mergeset_reds: item.merge_set_reds.into_iter().map(Hash::try_from).collect::<Result<Vec<Hash>, ConversionError>>()?,
+            mergeset_blues: item.merge_set_blues.into_iter().map(BlockHash::try_from).collect::<Result<Vec<BlockHash>, ConversionError>>()?,
+            mergeset_reds: item.merge_set_reds.into_iter().map(BlockHash::try_from).collect::<Result<Vec<BlockHash>, ConversionError>>()?,
             blues_anticone_sizes,
         })
     }

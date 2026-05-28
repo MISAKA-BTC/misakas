@@ -28,7 +28,7 @@ use kaspa_core::{
 };
 use kaspa_database::prelude::ConnBuilder;
 use kaspa_database::{create_temp_db, load_existing_db};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: simulator block hashes are Hash64
 use kaspa_perf_monitor::{builder::Builder, counters::CountersSnapshot};
 use kaspa_utils::fd_budget;
 use simulator::network::KaspaNetworkSimulator;
@@ -463,7 +463,7 @@ async fn validate(src_consensus: &Consensus, dst_consensus: &Consensus, params: 
 fn submit_chunk(
     src_consensus: &Consensus,
     dst_consensus: &Consensus,
-    chunk: &mut impl Iterator<Item = Hash>,
+    chunk: &mut impl Iterator<Item = BlockHash>,
     header_only: bool,
 ) -> Vec<impl Future<Output = BlockProcessResult<BlockStatus>> + 'static> {
     let mut futures = Vec::new();
@@ -478,8 +478,8 @@ fn submit_chunk(
     futures
 }
 
-pub(crate) fn topologically_ordered_hashes(src_consensus: &Consensus, genesis_hash: Hash, include_genesis: bool) -> Vec<Hash> {
-    let mut queue: VecDeque<Hash> = std::iter::once(genesis_hash).collect();
+pub(crate) fn topologically_ordered_hashes(src_consensus: &Consensus, genesis_hash: BlockHash, include_genesis: bool) -> Vec<BlockHash> {
+    let mut queue: VecDeque<BlockHash> = std::iter::once(genesis_hash).collect();
     let mut visited = BlockHashSet::new();
     let mut vec = if include_genesis { vec![genesis_hash] } else { Vec::new() };
     let relations = src_consensus.relations_store.read();
@@ -495,7 +495,7 @@ pub(crate) fn topologically_ordered_hashes(src_consensus: &Consensus, genesis_ha
     vec
 }
 
-fn print_stats(src_consensus: &Consensus, hashes: &[Hash], delay: f64, bps: f64, k: KType) -> usize {
+fn print_stats(src_consensus: &Consensus, hashes: &[BlockHash], delay: f64, bps: f64, k: KType) -> usize {
     let blues_mean = hashes.iter().map(|&h| src_consensus.ghostdag_store.get_data(h).unwrap().mergeset_blues.len()).sum::<usize>()
         as f64
         / hashes.len() as f64;

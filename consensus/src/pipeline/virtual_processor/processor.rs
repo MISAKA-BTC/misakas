@@ -49,7 +49,7 @@ use crate::{
     },
 };
 use kaspa_consensus_core::{
-    BlockHashSet, ChainPath,
+    BlockHash, BlockHashSet, ChainPath,
     acceptance_data::AcceptanceData,
     api::args::{TransactionValidationArgs, TransactionValidationBatchArgs},
     block::{BlockTemplate, MutableBlock, TemplateBuildMode, TemplateTransactionSelector},
@@ -76,7 +76,7 @@ use kaspa_consensus_notify::{
 use kaspa_consensusmanager::SessionLock;
 use kaspa_core::{debug, info, time::unix_now, trace, warn};
 use kaspa_database::prelude::{StoreError, StoreResultExt, StoreResultUnitExt};
-use kaspa_hashes::{Hash, ZERO_HASH};
+use kaspa_hashes::ZERO_HASH64;
 use kaspa_muhash::MuHash;
 use kaspa_notify::{events::EventType, notifier::Notify};
 use once_cell::unsync::Lazy;
@@ -361,7 +361,7 @@ impl VirtualStateProcessor {
         }
     }
 
-    pub(crate) fn virtual_finality_point(&self, virtual_ghostdag_data: &GhostdagData, pruning_point: Hash) -> Hash {
+    pub(crate) fn virtual_finality_point(&self, virtual_ghostdag_data: &GhostdagData, pruning_point: BlockHash) -> BlockHash {
         let finality_point = self.depth_manager.calc_finality_point(virtual_ghostdag_data, pruning_point);
         if self.reachability_service.is_chain_ancestor_of(pruning_point, finality_point) {
             finality_point
@@ -377,13 +377,13 @@ impl VirtualStateProcessor {
     /// The function returns the top-most UTXO-valid block on `chain(to)` which is ideally
     /// `to` itself (with the exception of returning `from` if `to` is already known to be UTXO disqualified).
     /// When returning it is guaranteed that `diff` holds the diff of the returned block from virtual
-    fn calculate_utxo_state_relatively(&self, stores: &VirtualStores, diff: &mut UtxoDiff, from: Hash, to: Hash) -> Hash {
+    fn calculate_utxo_state_relatively(&self, stores: &VirtualStores, diff: &mut UtxoDiff, from: BlockHash, to: BlockHash) -> BlockHash {
         // Avoid reorging if disqualified status is already known
         if self.statuses_store.read().get(to).unwrap() == StatusDisqualifiedFromChain {
             return from;
         }
 
-        let mut split_point: Option<Hash> = None;
+        let mut split_point: Option<BlockHash> = None;
 
         // Walk down to the reorg split point
         for current in self.reachability_service.default_backward_chain_iterator(from) {
@@ -478,11 +478,11 @@ impl VirtualStateProcessor {
 
     fn commit_utxo_state(
         &self,
-        current: Hash,
+        current: BlockHash,
         mergeset_diff: UtxoDiff,
         multiset: MuHash,
         acceptance_data: AcceptanceData,
-        pruning_sample_from_pov: Hash,
+        pruning_sample_from_pov: BlockHash,
     ) {
         let mut batch = WriteBatch::default();
         self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
@@ -499,7 +499,7 @@ impl VirtualStateProcessor {
     fn calculate_and_commit_virtual_state(
         &self,
         virtual_read: RwLockUpgradableReadGuard<'_, VirtualStores>,
-        virtual_parents: Vec<Hash>,
+        virtual_parents: Vec<BlockHash>,
         virtual_ghostdag_data: GhostdagData,
         selected_parent_multiset: MuHash,
         accumulated_diff: &mut UtxoDiff,
@@ -519,7 +519,7 @@ impl VirtualStateProcessor {
     pub(super) fn calculate_virtual_state(
         &self,
         virtual_stores: &VirtualStores,
-        virtual_parents: Vec<Hash>,
+        virtual_parents: Vec<BlockHash>,
         virtual_ghostdag_data: GhostdagData,
         selected_parent_multiset: MuHash,
         accumulated_diff: &mut UtxoDiff,
@@ -583,7 +583,7 @@ impl VirtualStateProcessor {
 
     /// Caches the DAA and Median time windows of the sink block (if needed). Following, virtual's window calculations will
     /// naturally hit the cache finding the sink's windows and building upon them.
-    fn cache_sink_windows(&self, new_sink: Hash, prev_sink: Hash, sink_ghostdag_data: &impl Deref<Target = Arc<GhostdagData>>) {
+    fn cache_sink_windows(&self, new_sink: BlockHash, prev_sink: BlockHash, sink_ghostdag_data: &impl Deref<Target = Arc<GhostdagData>>) {
         // We expect that the `new_sink` is cached (or some close-enough ancestor thereof) if it is equal to the `prev_sink`,
         // Hence we short-circuit the check of the keys in such cases, thereby reducing the access of the read-lock
         if new_sink != prev_sink {
@@ -621,11 +621,11 @@ impl VirtualStateProcessor {
         &self,
         stores: &VirtualStores,
         diff: &mut UtxoDiff,
-        prev_sink: Hash,
-        tips: Vec<Hash>,
-        finality_point: Hash,
-        pruning_point: Hash,
-    ) -> (Hash, VecDeque<Hash>) {
+        prev_sink: BlockHash,
+        tips: Vec<BlockHash>,
+        finality_point: BlockHash,
+        pruning_point: BlockHash,
+    ) -> (BlockHash, VecDeque<BlockHash>) {
         // TODO (relaxed): additional tests
 
         let mut heap = tips
@@ -684,10 +684,10 @@ impl VirtualStateProcessor {
     ///     3. `candidates` do not contain `selected_parent` and `selected_parent.blue work > max(candidates.blue_work)`  
     pub(super) fn pick_virtual_parents(
         &self,
-        selected_parent: Hash,
-        mut candidates: VecDeque<Hash>,
-        pruning_point: Hash,
-    ) -> (Vec<Hash>, GhostdagData) {
+        selected_parent: BlockHash,
+        mut candidates: VecDeque<BlockHash>,
+        pruning_point: BlockHash,
+    ) -> (Vec<BlockHash>, GhostdagData) {
         // TODO (relaxed): additional tests
 
         // Mergeset increasing might traverse DAG areas which are below the finality point and which theoretically
@@ -751,7 +751,7 @@ impl VirtualStateProcessor {
         self.remove_bounded_merge_breaking_parents(virtual_parents, pruning_point)
     }
 
-    fn mergeset_increase(&self, selected_parents: &[Hash], candidate: Hash, budget: u64) -> MergesetIncreaseResult {
+    fn mergeset_increase(&self, selected_parents: &[BlockHash], candidate: BlockHash, budget: u64) -> MergesetIncreaseResult {
         /*
         Algo:
             Traverse past(candidate) \setminus past(selected_parents) and make
@@ -784,12 +784,12 @@ impl VirtualStateProcessor {
 
     fn remove_bounded_merge_breaking_parents(
         &self,
-        mut virtual_parents: Vec<Hash>,
-        current_pruning_point: Hash,
-    ) -> (Vec<Hash>, GhostdagData) {
+        mut virtual_parents: Vec<BlockHash>,
+        current_pruning_point: BlockHash,
+    ) -> (Vec<BlockHash>, GhostdagData) {
         let mut ghostdag_data = self.ghostdag_manager.ghostdag(&virtual_parents);
         let merge_depth_root = self.depth_manager.calc_merge_depth_root(&ghostdag_data, current_pruning_point);
-        let mut kosherizing_blues: Option<Vec<Hash>> = None;
+        let mut kosherizing_blues: Option<Vec<BlockHash>> = None;
         let mut bad_reds = Vec::new();
 
         //
@@ -1107,7 +1107,7 @@ impl VirtualStateProcessor {
     /// Note that pruning point-related stores are initialized by `init`
     pub fn process_genesis(self: &Arc<Self>) {
         // Write the UTXO state of genesis
-        self.commit_utxo_state(self.genesis.hash, UtxoDiff::default(), MuHash::new(), AcceptanceData::default(), ZERO_HASH);
+        self.commit_utxo_state(self.genesis.hash, UtxoDiff::default(), MuHash::new(), AcceptanceData::default(), ZERO_HASH64);
 
         // Init the virtual selected chain store
         let mut batch = WriteBatch::default();
@@ -1128,7 +1128,7 @@ impl VirtualStateProcessor {
     /// Finalizes the pruning point utxoset state and imports the pruning point utxoset *to* virtual utxoset
     pub fn import_pruning_point_utxo_set(
         &self,
-        new_pruning_point: Hash,
+        new_pruning_point: BlockHash,
         mut imported_utxo_multiset: MuHash,
     ) -> PruningImportResult<()> {
         info!("Importing the UTXO set of the pruning point {}", new_pruning_point);
@@ -1243,5 +1243,5 @@ impl VirtualStateProcessor {
 
 enum MergesetIncreaseResult {
     Accepted { increase_size: u64 },
-    Rejected { new_candidate: Hash },
+    Rejected { new_candidate: BlockHash },
 }

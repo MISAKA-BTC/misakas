@@ -1,7 +1,7 @@
 use crate::model::stores::statuses::StatusesStoreReader;
 use kaspa_consensus_core::blockstatus::BlockStatus;
 use kaspa_database::prelude::StoreError;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -18,11 +18,11 @@ impl<T: StatusesStoreReader> MTStatusesService<T> {
 }
 
 impl<T: StatusesStoreReader> StatusesStoreReader for MTStatusesService<T> {
-    fn get(&self, hash: Hash) -> Result<BlockStatus, StoreError> {
+    fn get(&self, hash: BlockHash) -> Result<BlockStatus, StoreError> {
         self.store.read().get(hash)
     }
 
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         self.store.read().has(hash)
     }
 }

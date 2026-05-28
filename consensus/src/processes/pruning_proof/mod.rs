@@ -27,7 +27,7 @@ use kaspa_consensus_core::{
 };
 use kaspa_core::info;
 use kaspa_database::prelude::StoreResultExt;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_pow::calc_block_level;
 use thiserror::Error;
 
@@ -74,7 +74,7 @@ enum ProofInternalError {
 type ProofInternalResult<T> = std::result::Result<T, ProofInternalError>;
 
 struct CachedPruningPointData<T: ?Sized> {
-    pruning_point: Hash,
+    pruning_point: BlockHash,
     data: Arc<T>,
 }
 
@@ -112,7 +112,7 @@ pub struct PruningProofManager {
     cached_anticone: Mutex<Option<CachedPruningPointData<PruningPointTrustedData>>>,
 
     max_block_level: BlockLevel,
-    genesis_hash: Hash,
+    genesis_hash: BlockHash,
     pruning_proof_m: u64,
     anticone_finalization_depth: u64,
     ghostdag_k: KType,
@@ -132,7 +132,7 @@ impl PruningProofManager {
         traversal_manager: DbDagTraversalManager,
         window_manager: DbWindowManager,
         max_block_level: BlockLevel,
-        genesis_hash: Hash,
+        genesis_hash: BlockHash,
         pruning_proof_m: u64,
         anticone_finalization_depth: u64,
         ghostdag_k: KType,
@@ -230,7 +230,7 @@ impl PruningProofManager {
     /// the search is halted and a partial chain is returned.
     ///
     /// The returned hashes are guaranteed to have GHOSTDAG data
-    pub(crate) fn get_ghostdag_chain_k_depth(&self, hash: Hash, ghostdag_k: KType) -> Vec<Hash> {
+    pub(crate) fn get_ghostdag_chain_k_depth(&self, hash: BlockHash, ghostdag_k: KType) -> Vec<BlockHash> {
         let mut hashes = Vec::with_capacity(ghostdag_k as usize + 1);
         let mut current = hash;
         for _ in 0..=ghostdag_k {
@@ -248,8 +248,8 @@ impl PruningProofManager {
 
     pub(crate) fn calculate_pruning_point_anticone_and_trusted_data(
         &self,
-        pruning_point: Hash,
-        virtual_parents: impl Iterator<Item = Hash>,
+        pruning_point: BlockHash,
+        virtual_parents: impl Iterator<Item = BlockHash>,
     ) -> PruningPointTrustedData {
         let anticone = self
             .traversal_manager
@@ -381,7 +381,7 @@ where
     Self: GhostdagStoreReader,
 {
     /// Extension method to get the block at blue depth `depth` from `high` via this store reader. Used by build and validate.
-    fn block_at_depth(&self, high: Hash, depth: u64) -> Result<Hash, ProofInternalError> {
+    fn block_at_depth(&self, high: BlockHash, depth: u64) -> Result<BlockHash, ProofInternalError> {
         let high_gd = self
             .get_compact_data(high)
             .map_err(|err| ProofInternalError::BlockAtDepth(format!("high: {high}, depth: {depth}, {err}")))?;

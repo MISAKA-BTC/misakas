@@ -16,15 +16,15 @@ use kaspa_consensus_core::{
     errors::pruning::{PruningImportError, PruningImportResult},
 };
 use kaspa_database::prelude::StoreResultUnitExt;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use parking_lot::RwLock;
 
 pub struct PruningPointReply {
     /// The most recent pruning sample from POV of the queried block (with distance up to ~F)
-    pub pruning_sample: Hash,
+    pub pruning_sample: BlockHash,
 
     /// The pruning point of the queried block. I.e., the most recent pruning sample with depth P
-    pub pruning_point: Hash,
+    pub pruning_point: BlockHash,
 }
 
 #[derive(Clone)]
@@ -44,7 +44,7 @@ pub struct PruningPointManager<
     /// actual concept of finality as used by virtual processor to reject deep reorgs   
     finality_depth: u64,
 
-    genesis_hash: Hash,
+    genesis_hash: BlockHash,
 
     reachability_service: MTReachabilityService<T>,
     ghostdag_store: Arc<S>,
@@ -69,7 +69,7 @@ impl<
     pub fn new(
         pruning_depth: u64,
         finality_depth: u64,
-        genesis_hash: Hash,
+        genesis_hash: BlockHash,
         reachability_service: MTReachabilityService<T>,
         ghostdag_store: Arc<S>,
         headers_store: Arc<U>,
@@ -166,7 +166,7 @@ impl<
         self.finality_score(epoch_chain_ancestor_blue_score, finality_depth) < self.finality_score(self_blue_score, finality_depth)
     }
 
-    pub fn next_pruning_points(&self, sink_ghostdag: CompactGhostdagData, current_pruning_point: Hash) -> Vec<Hash> {
+    pub fn next_pruning_points(&self, sink_ghostdag: CompactGhostdagData, current_pruning_point: BlockHash) -> Vec<BlockHash> {
         if sink_ghostdag.selected_parent.is_origin() {
             // This only happens when sink is genesis
             return vec![];
@@ -206,12 +206,12 @@ impl<
         blue_score / finality_depth
     }
 
-    fn is_pruning_point_in_pruning_depth(&self, pov_blue_score: u64, pruning_point: Hash, pruning_depth: u64) -> bool {
+    fn is_pruning_point_in_pruning_depth(&self, pov_blue_score: u64, pruning_point: BlockHash, pruning_depth: u64) -> bool {
         let pp_bs = self.headers_store.get_blue_score(pruning_point).unwrap();
         pov_blue_score >= pp_bs + pruning_depth
     }
 
-    pub fn is_valid_pruning_point(&self, pp_candidate: Hash, tip: Hash) -> bool {
+    pub fn is_valid_pruning_point(&self, pp_candidate: BlockHash, tip: BlockHash) -> bool {
         if pp_candidate == self.genesis_hash {
             return true;
         }
@@ -227,9 +227,9 @@ impl<
     // ordered from newest to the oldest
     pub fn pruning_points_on_path_to_syncer_sink(
         &self,
-        pruning_point: Hash,
-        syncer_sink: Hash,
-    ) -> PruningImportResult<VecDeque<Hash>> {
+        pruning_point: BlockHash,
+        syncer_sink: BlockHash,
+    ) -> PruningImportResult<VecDeque<BlockHash>> {
         let mut pps_on_path = VecDeque::new();
         for current in self.reachability_service.forward_chain_iterator(pruning_point, syncer_sink, true).skip(1) {
             let current_header = self.headers_store.get_header(current).unwrap();
@@ -259,9 +259,9 @@ impl<
 
     pub fn are_pruning_points_in_valid_chain(
         &self,
-        synced_pruning_point: Hash,
+        synced_pruning_point: BlockHash,
         synced_pp_index: u64,
-        syncer_sink: Hash,
+        syncer_sink: BlockHash,
     ) -> PruningImportResult<()> {
         // We want to validate that the past pruning points form a chain to genesis. Since
         // each pruning point's header doesn't point to the previous pruning point, but to

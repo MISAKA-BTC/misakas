@@ -6,26 +6,26 @@ use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
 
 pub trait DepthStoreReader {
-    fn merge_depth_root(&self, hash: Hash) -> Result<Hash, StoreError>;
-    fn finality_point(&self, hash: Hash) -> Result<Hash, StoreError>;
+    fn merge_depth_root(&self, hash: BlockHash) -> Result<BlockHash, StoreError>;
+    fn finality_point(&self, hash: BlockHash) -> Result<BlockHash, StoreError>;
 }
 
 pub trait DepthStore: DepthStoreReader {
     // This is append only
-    fn insert(&self, hash: Hash, merge_depth_root: Hash, finality_point: Hash) -> Result<(), StoreError>;
-    fn delete(&self, hash: Hash) -> Result<(), StoreError>;
+    fn insert(&self, hash: BlockHash, merge_depth_root: BlockHash, finality_point: BlockHash) -> Result<(), StoreError>;
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError>;
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 struct BlockDepthInfo {
-    merge_depth_root: Hash,
-    finality_point: Hash,
+    merge_depth_root: BlockHash,
+    finality_point: BlockHash,
 }
 
 impl MemSizeEstimator for BlockDepthInfo {}
@@ -34,7 +34,7 @@ impl MemSizeEstimator for BlockDepthInfo {}
 #[derive(Clone)]
 pub struct DbDepthStore {
     db: Arc<DB>,
-    access: CachedDbAccess<Hash, BlockDepthInfo, BlockHasher>,
+    access: CachedDbAccess<BlockHash, BlockDepthInfo, BlockHasher>,
 }
 
 impl DbDepthStore {
@@ -49,42 +49,42 @@ impl DbDepthStore {
     pub fn insert_batch(
         &self,
         batch: &mut WriteBatch,
-        hash: Hash,
-        merge_depth_root: Hash,
-        finality_point: Hash,
+        hash: BlockHash,
+        merge_depth_root: BlockHash,
+        finality_point: BlockHash,
     ) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(BatchDbWriter::new(batch), hash, BlockDepthInfo { merge_depth_root, finality_point })?;
         Ok(())
     }
 
-    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: Hash) -> Result<(), StoreError> {
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(BatchDbWriter::new(batch), hash)
     }
 }
 
 impl DepthStoreReader for DbDepthStore {
-    fn merge_depth_root(&self, hash: Hash) -> Result<Hash, StoreError> {
+    fn merge_depth_root(&self, hash: BlockHash) -> Result<BlockHash, StoreError> {
         Ok(self.access.read(hash)?.merge_depth_root)
     }
 
-    fn finality_point(&self, hash: Hash) -> Result<Hash, StoreError> {
+    fn finality_point(&self, hash: BlockHash) -> Result<BlockHash, StoreError> {
         Ok(self.access.read(hash)?.finality_point)
     }
 }
 
 impl DepthStore for DbDepthStore {
-    fn insert(&self, hash: Hash, merge_depth_root: Hash, finality_point: Hash) -> Result<(), StoreError> {
+    fn insert(&self, hash: BlockHash, merge_depth_root: BlockHash, finality_point: BlockHash) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(DirectDbWriter::new(&self.db), hash, BlockDepthInfo { merge_depth_root, finality_point })?;
         Ok(())
     }
 
-    fn delete(&self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(DirectDbWriter::new(&self.db), hash)
     }
 }

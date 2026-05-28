@@ -1,6 +1,6 @@
 use crate::model::stores::{block_window_cache::BlockWindowHeap, headers::HeaderStoreReader};
 use kaspa_consensus_core::errors::block::RuleError;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use std::sync::Arc;
 
 /// A past median time manager based on sampled block windows, implementing [KIP-0004](https://github.com/kaspanet/kips/blob/master/kip-0004.md)
@@ -15,7 +15,7 @@ impl<T: HeaderStoreReader> SampledPastMedianTimeManager<T> {
         Self { headers_store, _genesis_timestamp: genesis_timestamp }
     }
 
-    pub fn calc_past_median_time(&self, window: &BlockWindowHeap, selected_parent: Hash) -> Result<u64, RuleError> {
+    pub fn calc_past_median_time(&self, window: &BlockWindowHeap, selected_parent: BlockHash) -> Result<u64, RuleError> {
         // The past median time is actually calculated taking the average of the 11 values closest to the center
         // of the sorted timestamps
         const AVERAGE_FRAME_SIZE: usize = 11;

@@ -1,7 +1,7 @@
 use std::{cmp::max, sync::Arc};
 
 use kaspa_consensus_core::api::ConsensusApi;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,
@@ -85,11 +85,11 @@ impl RequestHeadersFlow {
     /// Returns the hash of the highest block obtained, to be used as `low` for the next call
     fn get_headers_between(
         consensus: &dyn ConsensusApi,
-        low: Hash,
-        high: Hash,
+        low: BlockHash,
+        high: BlockHash,
         max_blocks: usize,
         header_format: kaspa_p2p_lib::convert::header::HeaderFormat,
-    ) -> Result<(Vec<pb::BlockHeader>, Hash), ProtocolError> {
+    ) -> Result<(Vec<pb::BlockHeader>, BlockHash), ProtocolError> {
         let hashes = consensus.get_hashes_between(low, high, max_blocks)?.0;
         let last = *hashes.last().expect("caller ensured that high and low are valid and different");
         debug!("obtained {} header hashes above {}", hashes.len(), low);

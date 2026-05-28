@@ -5,7 +5,7 @@ use kaspa_consensus_core::{
     blockhash::ORIGIN,
     header::{CompressedParents, Header},
 };
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use smallvec::{SmallVec, smallvec};
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ use crate::model::{
 #[derive(Clone)]
 pub struct ParentsManager<T: HeaderStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader> {
     max_block_level: BlockLevel,
-    genesis_hash: Hash,
+    genesis_hash: BlockHash,
 
     headers_store: Arc<T>,
     reachability_service: MTReachabilityService<U>,
@@ -27,7 +27,7 @@ pub struct ParentsManager<T: HeaderStoreReader, U: ReachabilityStoreReader, V: R
 impl<T: HeaderStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader> ParentsManager<T, U, V> {
     pub fn new(
         max_block_level: BlockLevel,
-        genesis_hash: Hash,
+        genesis_hash: BlockHash,
         headers_store: Arc<T>,
         reachability_service: MTReachabilityService<U>,
         relations_service: V,
@@ -37,7 +37,7 @@ impl<T: HeaderStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader> 
 
     /// Calculates the parents for each level based on the direct parents. Expects the current
     /// global pruning point s.t. at least one of the direct parents is in its inclusive future
-    pub fn calc_block_parents(&self, current_pruning_point: Hash, direct_parents: &[Hash]) -> CompressedParents {
+    pub fn calc_block_parents(&self, current_pruning_point: BlockHash, direct_parents: &[BlockHash]) -> CompressedParents {
         let mut direct_parent_headers =
             direct_parents.iter().copied().map(|parent| self.headers_store.get_header_with_block_level(parent).unwrap()).collect_vec();
 
@@ -66,7 +66,7 @@ impl<T: HeaderStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader> 
                 .map(|h| (h.header.hash, smallvec![h.header.hash]))
                 // We use smallvec with size 1 in order to optimize for the common case
                 // where the block itself is the only reference block
-                .collect::<BlockHashMap<SmallVec<[Hash; 1]>>>();
+                .collect::<BlockHashMap<SmallVec<[BlockHash; 1]>>>();
 
             let mut first_parent_marker = 0;
             let grandparents = if level_candidates_to_reference_blocks.is_empty() {
@@ -78,7 +78,7 @@ impl<T: HeaderStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader> 
                     .copied()
                     // We use IndexSet in order to preserve iteration order and make sure the 
                     // processing loop visits the parents of the first parent first
-                    .collect::<IndexSet<Hash, BlockHasher>>();
+                    .collect::<IndexSet<BlockHash, BlockHasher>>();
                 // Mark the end index of first parent's parents
                 first_parent_marker = grandparents.len();
                 // Add the remaining level-grandparents
@@ -92,7 +92,7 @@ impl<T: HeaderStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader> 
                     // We need to iterate parent's parents only if parent is not at block_level
                     .filter(|h| block_level > h.block_level)
                     .flat_map(|h| self.parents_at_level(&h.header, block_level).iter().copied())
-                    .collect::<IndexSet<Hash, BlockHasher>>()
+                    .collect::<IndexSet<BlockHash, BlockHasher>>()
             };
 
             let parents_at_level = if level_candidates_to_reference_blocks.is_empty() && first_parent_marker == grandparents.len() {
@@ -183,7 +183,7 @@ impl<T: HeaderStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader> 
         parents
     }
 
-    pub fn parents_at_level<'a>(&'a self, header: &'a Header, level: u8) -> &'a [Hash] {
+    pub fn parents_at_level<'a>(&'a self, header: &'a Header, level: u8) -> &'a [BlockHash] {
         header.parents_by_level.get(level as usize).unwrap_or_else(|| {
             if header.parents_by_level.is_empty() {
                 // If is genesis
@@ -218,7 +218,7 @@ mod tests {
         header::Header,
     };
     use kaspa_database::prelude::{ReadLock, StoreError, StoreResult};
-    use kaspa_hashes::Hash;
+    use kaspa_consensus_core::BlockHash;
     use parking_lot::RwLock;
 
     struct HeaderStoreMock {
@@ -233,34 +233,34 @@ mod tests {
 
     #[allow(unused_variables)]
     impl HeaderStoreReader for HeaderStoreMock {
-        fn get_daa_score(&self, hash: kaspa_hashes::Hash) -> Result<u64, StoreError> {
+        fn get_daa_score(&self, hash: kaspa_consensus_core::BlockHash) -> Result<u64, StoreError> {
             unimplemented!()
         }
 
-        fn get_timestamp(&self, hash: kaspa_hashes::Hash) -> Result<u64, StoreError> {
+        fn get_timestamp(&self, hash: kaspa_consensus_core::BlockHash) -> Result<u64, StoreError> {
             unimplemented!()
         }
 
-        fn get_bits(&self, hash: kaspa_hashes::Hash) -> Result<u32, StoreError> {
+        fn get_bits(&self, hash: kaspa_consensus_core::BlockHash) -> Result<u32, StoreError> {
             unimplemented!()
         }
 
-        fn get_header(&self, hash: kaspa_hashes::Hash) -> Result<Arc<Header>, StoreError> {
+        fn get_header(&self, hash: kaspa_consensus_core::BlockHash) -> Result<Arc<Header>, StoreError> {
             Ok(self.map.read().get(&hash).unwrap().header.clone())
         }
 
         fn get_compact_header_data(
             &self,
-            hash: kaspa_hashes::Hash,
+            hash: kaspa_consensus_core::BlockHash,
         ) -> Result<crate::model::stores::headers::CompactHeaderData, StoreError> {
             unimplemented!()
         }
 
-        fn get_blue_score(&self, hash: kaspa_hashes::Hash) -> Result<u64, StoreError> {
+        fn get_blue_score(&self, hash: kaspa_consensus_core::BlockHash) -> Result<u64, StoreError> {
             unimplemented!()
         }
 
-        fn get_header_with_block_level(&self, hash: kaspa_hashes::Hash) -> Result<HeaderWithBlockLevel, StoreError> {
+        fn get_header_with_block_level(&self, hash: kaspa_consensus_core::BlockHash) -> Result<HeaderWithBlockLevel, StoreError> {
             Ok(self.map.read().get(&hash).unwrap().clone())
         }
     }
@@ -271,15 +271,15 @@ mod tests {
 
     #[allow(unused_variables)]
     impl RelationsStoreReader for RelationsStoreMock {
-        fn get_parents(&self, hash: Hash) -> Result<kaspa_consensus_core::blockhash::BlockHashes, StoreError> {
+        fn get_parents(&self, hash: BlockHash) -> Result<kaspa_consensus_core::blockhash::BlockHashes, StoreError> {
             unimplemented!()
         }
 
-        fn get_children(&self, hash: Hash) -> StoreResult<ReadLock<BlockHashSet>> {
+        fn get_children(&self, hash: BlockHash) -> StoreResult<ReadLock<BlockHashSet>> {
             Ok(BlockHashSet::from_iter(self.children.iter().copied()).into())
         }
 
-        fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+        fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
             unimplemented!()
         }
 
@@ -302,7 +302,7 @@ mod tests {
         let headers_store = Arc::new(HeaderStoreMock::new());
 
         let genesis_hash = 3000.into();
-        let pruning_point: Hash = 1.into();
+        let pruning_point: BlockHash = 1.into();
         headers_store.map.write().insert(
             pruning_point,
             HeaderWithBlockLevel {
@@ -335,7 +335,7 @@ mod tests {
             },
         );
 
-        let pp_anticone_block: Hash = 3001.into();
+        let pp_anticone_block: BlockHash = 3001.into();
         headers_store.map.write().insert(
             pp_anticone_block,
             HeaderWithBlockLevel {
@@ -368,7 +368,7 @@ mod tests {
             },
         );
 
-        let pp_anticone_block_child: Hash = 3002.into();
+        let pp_anticone_block_child: BlockHash = 3002.into();
         headers_store.map.write().insert(
             pp_anticone_block_child,
             HeaderWithBlockLevel {
@@ -473,11 +473,11 @@ mod tests {
 
         for test_block in test_blocks.iter() {
             let hash = test_block.id.into();
-            let direct_parents = test_block.direct_parents.iter().map(|parent| Hash::from_u64_word(*parent)).collect_vec();
-            let expected_parents: Vec<Vec<Hash>> = test_block
+            let direct_parents = test_block.direct_parents.iter().map(|parent| BlockHash::from_u64_word(*parent)).collect_vec();
+            let expected_parents: Vec<Vec<BlockHash>> = test_block
                 .expected_parents
                 .iter()
-                .map(|parents| parents.iter().map(|parent| Hash::from_u64_word(*parent)).collect_vec())
+                .map(|parents| parents.iter().map(|parent| BlockHash::from_u64_word(*parent)).collect_vec())
                 .collect_vec();
             dag_builder.add_block(DagBlock::new(hash, direct_parents));
 
@@ -513,13 +513,13 @@ mod tests {
         let parents_manager = ParentsManager::new(250, genesis_hash, headers_store, reachability_service, relations_service);
 
         for test_block in test_blocks {
-            let direct_parents = test_block.direct_parents.iter().map(|parent| Hash::from_u64_word(*parent)).collect_vec();
+            let direct_parents = test_block.direct_parents.iter().map(|parent| BlockHash::from_u64_word(*parent)).collect_vec();
             let parents = parents_manager.calc_block_parents(pruning_point, &direct_parents);
             let actual_parents = parents.expanded_iter().map(|parents| BlockHashSet::from_iter(parents.iter().copied())).collect_vec();
             let expected_parents = test_block
                 .expected_parents
                 .iter()
-                .map(|v| BlockHashSet::from_iter(v.iter().copied().map(Hash::from_u64_word)))
+                .map(|v| BlockHashSet::from_iter(v.iter().copied().map(BlockHash::from_u64_word)))
                 .collect_vec();
             assert_eq!(expected_parents, actual_parents, "failed for block {}", test_block.id);
         }
@@ -544,7 +544,7 @@ mod tests {
         let headers_store = Arc::new(HeaderStoreMock::new());
 
         let genesis_hash = 3000.into();
-        let pruning_point: Hash = 1.into();
+        let pruning_point: BlockHash = 1.into();
         headers_store.map.write().insert(
             pruning_point,
             HeaderWithBlockLevel {
@@ -580,11 +580,11 @@ mod tests {
 
         for test_block in test_blocks.iter() {
             let hash = test_block.id.into();
-            let direct_parents = test_block.direct_parents.iter().map(|parent| Hash::from_u64_word(*parent)).collect_vec();
-            let expected_parents: Vec<Vec<Hash>> = test_block
+            let direct_parents = test_block.direct_parents.iter().map(|parent| BlockHash::from_u64_word(*parent)).collect_vec();
+            let expected_parents: Vec<Vec<BlockHash>> = test_block
                 .expected_parents
                 .iter()
-                .map(|parents| parents.iter().map(|parent| Hash::from_u64_word(*parent)).collect_vec())
+                .map(|parents| parents.iter().map(|parent| BlockHash::from_u64_word(*parent)).collect_vec())
                 .collect_vec();
             dag_builder.add_block(DagBlock::new(hash, direct_parents));
 
@@ -619,13 +619,13 @@ mod tests {
         let parents_manager = ParentsManager::new(250, genesis_hash, headers_store, reachability_service, relations_service);
 
         for test_block in test_blocks {
-            let direct_parents = test_block.direct_parents.iter().map(|parent| Hash::from_u64_word(*parent)).collect_vec();
+            let direct_parents = test_block.direct_parents.iter().map(|parent| BlockHash::from_u64_word(*parent)).collect_vec();
             let parents = parents_manager.calc_block_parents(pruning_point, &direct_parents);
             let actual_parents = parents.expanded_iter().map(|parents| BlockHashSet::from_iter(parents.iter().copied())).collect_vec();
             let expected_parents = test_block
                 .expected_parents
                 .iter()
-                .map(|v| BlockHashSet::from_iter(v.iter().copied().map(Hash::from_u64_word)))
+                .map(|v| BlockHashSet::from_iter(v.iter().copied().map(BlockHash::from_u64_word)))
                 .collect_vec();
             assert_eq!(expected_parents, actual_parents, "failed for block {}", test_block.id);
         }

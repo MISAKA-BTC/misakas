@@ -14,7 +14,7 @@ use kaspa_consensus_core::{
     trusted::TrustedBlock,
 };
 use kaspa_core::{debug, trace};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_pow::calc_block_level;
 use kaspa_utils::{binary_heap::BinaryHeapExtensions, vec::VecExtensions};
 use rocksdb::WriteBatch;
@@ -101,7 +101,7 @@ impl PruningProofManager {
         // so other parents are filtered out.
         // Since the dag is topologically sorted, we can construct the ancestors
         // on the fly rather than constructing it ahead of time
-        let mut ancestors: HashSet<Hash> = HashSet::new();
+        let mut ancestors: HashSet<BlockHash> = HashSet::new();
         ancestors.insert(ORIGIN);
 
         for header in expanded_proof[0].iter() {

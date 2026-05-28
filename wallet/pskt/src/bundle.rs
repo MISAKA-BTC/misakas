@@ -307,7 +307,11 @@ mod tests {
                 is_coinbase: false,
             })
             .previous_outpoint(TransactionOutpoint {
-                transaction_id: TransactionId::from_str("63020db736215f8b1105a9281f7bcbb6473d965ecc45bb2fb5da59bd35e6ff84").unwrap(),
+                // PR-9.5c: TransactionId is Hash64 (128 hex chars); zero-extended fixture.
+                transaction_id: TransactionId::from_str(
+                    "63020db736215f8b1105a9281f7bcbb6473d965ecc45bb2fb5da59bd35e6ff840000000000000000000000000000000000000000000000000000000000000000",
+                )
+                .unwrap(),
                 index: 0,
             })
             .sig_op_count(2)

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kaspa_consensus_core::{BlockHasher, BlockLevel, header::Header};
+use kaspa_consensus_core::{BlockHash, BlockHasher, BlockLevel, header::Header};
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess};
 use kaspa_database::prelude::{CachePolicy, DB};
 use kaspa_database::prelude::{StoreError, StoreResult};
@@ -11,13 +11,13 @@ use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
 
 pub trait HeaderStoreReader {
-    fn get_daa_score(&self, hash: Hash) -> Result<u64, StoreError>;
-    fn get_blue_score(&self, hash: Hash) -> Result<u64, StoreError>;
-    fn get_timestamp(&self, hash: Hash) -> Result<u64, StoreError>;
-    fn get_bits(&self, hash: Hash) -> Result<u32, StoreError>;
-    fn get_header(&self, hash: Hash) -> Result<Arc<Header>, StoreError>;
-    fn get_header_with_block_level(&self, hash: Hash) -> Result<HeaderWithBlockLevel, StoreError>;
-    fn get_compact_header_data(&self, hash: Hash) -> Result<CompactHeaderData, StoreError>;
+    fn get_daa_score(&self, hash: BlockHash) -> Result<u64, StoreError>;
+    fn get_blue_score(&self, hash: BlockHash) -> Result<u64, StoreError>;
+    fn get_timestamp(&self, hash: BlockHash) -> Result<u64, StoreError>;
+    fn get_bits(&self, hash: BlockHash) -> Result<u32, StoreError>;
+    fn get_header(&self, hash: BlockHash) -> Result<Arc<Header>, StoreError>;
+    fn get_header_with_block_level(&self, hash: BlockHash) -> Result<HeaderWithBlockLevel, StoreError>;
+    fn get_compact_header_data(&self, hash: BlockHash) -> Result<CompactHeaderData, StoreError>;
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -34,12 +34,12 @@ impl MemSizeEstimator for HeaderWithBlockLevel {
 
 pub trait HeaderStore: HeaderStoreReader {
     // This is append only
-    fn insert(&self, hash: Hash, header: Arc<Header>, block_level: BlockLevel) -> Result<(), StoreError>;
-    fn delete(&self, hash: Hash) -> Result<(), StoreError>;
+    fn insert(&self, hash: BlockHash, header: Arc<Header>, block_level: BlockLevel) -> Result<(), StoreError>;
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError>;
 }
 
 /// A temporary struct for backward compatibility. This struct is used to deserialize old header data with
-/// parents_by_level as Vec<Vec<Hash>>.
+/// parents_by_level as Vec<Vec<BlockHash>>.
 ///
 /// PR-9.5c: merkle root fields widened to `Hash64` to match the
 /// post-cascade `Header` shape; this means an upstream-Kaspa DB
@@ -49,9 +49,9 @@ pub trait HeaderStore: HeaderStoreReader {
 /// rejects old-shape DBs at open time.
 #[derive(Clone, Debug, Deserialize)]
 struct Header2 {
-    pub hash: Hash,
+    pub hash: BlockHash,
     pub version: u16,
-    pub parents_by_level: Vec<Vec<Hash>>,
+    pub parents_by_level: Vec<Vec<BlockHash>>,
     pub hash_merkle_root: kaspa_consensus_core::MerkleRoot,
     pub accepted_id_merkle_root: kaspa_consensus_core::AcceptedIdMerkleRoot,
     pub utxo_commitment: Hash,
@@ -61,7 +61,7 @@ struct Header2 {
     pub daa_score: u64,
     pub blue_work: kaspa_consensus_core::BlueWorkType,
     pub blue_score: u64,
-    pub pruning_point: Hash,
+    pub pruning_point: BlockHash,
 }
 
 #[derive(Clone, Deserialize)]
@@ -118,8 +118,8 @@ impl From<&Header> for CompactHeaderData {
 #[derive(Clone)]
 pub struct DbHeadersStore {
     db: Arc<DB>,
-    compact_headers_access: CachedDbAccess<Hash, CompactHeaderData, BlockHasher>,
-    headers_access: CachedDbAccess<Hash, HeaderWithBlockLevel, BlockHasher>,
+    compact_headers_access: CachedDbAccess<BlockHash, CompactHeaderData, BlockHasher>,
+    headers_access: CachedDbAccess<BlockHash, HeaderWithBlockLevel, BlockHasher>,
     fallback_prefix: Vec<u8>,
 }
 
@@ -141,69 +141,69 @@ impl DbHeadersStore {
         Self::new(Arc::clone(&self.db), cache_policy, compact_cache_policy)
     }
 
-    pub fn has(&self, hash: Hash) -> StoreResult<bool> {
+    pub fn has(&self, hash: BlockHash) -> StoreResult<bool> {
         self.headers_access.has_with_fallback(self.fallback_prefix.as_ref(), hash)
     }
 
     pub fn insert_batch(
         &self,
         batch: &mut WriteBatch,
-        hash: Hash,
+        hash: BlockHash,
         header: Arc<Header>,
         block_level: BlockLevel,
     ) -> Result<(), StoreError> {
         if self.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.headers_access.write(BatchDbWriter::new(batch), hash, HeaderWithBlockLevel { header: header.clone(), block_level })?;
         self.compact_headers_access.write(BatchDbWriter::new(batch), hash, header.as_ref().into())?;
         Ok(())
     }
 
-    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: Hash) -> Result<(), StoreError> {
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.compact_headers_access.delete(BatchDbWriter::new(batch), hash)?;
         self.headers_access.delete(BatchDbWriter::new(batch), hash)
     }
 }
 
 impl HeaderStoreReader for DbHeadersStore {
-    fn get_daa_score(&self, hash: Hash) -> Result<u64, StoreError> {
+    fn get_daa_score(&self, hash: BlockHash) -> Result<u64, StoreError> {
         if let Some(header_with_block_level) = self.headers_access.read_from_cache(hash) {
             return Ok(header_with_block_level.header.daa_score);
         }
         Ok(self.compact_headers_access.read(hash)?.daa_score)
     }
 
-    fn get_blue_score(&self, hash: Hash) -> Result<u64, StoreError> {
+    fn get_blue_score(&self, hash: BlockHash) -> Result<u64, StoreError> {
         if let Some(header_with_block_level) = self.headers_access.read_from_cache(hash) {
             return Ok(header_with_block_level.header.blue_score);
         }
         Ok(self.compact_headers_access.read(hash)?.blue_score)
     }
 
-    fn get_timestamp(&self, hash: Hash) -> Result<u64, StoreError> {
+    fn get_timestamp(&self, hash: BlockHash) -> Result<u64, StoreError> {
         if let Some(header_with_block_level) = self.headers_access.read_from_cache(hash) {
             return Ok(header_with_block_level.header.timestamp);
         }
         Ok(self.compact_headers_access.read(hash)?.timestamp)
     }
 
-    fn get_bits(&self, hash: Hash) -> Result<u32, StoreError> {
+    fn get_bits(&self, hash: BlockHash) -> Result<u32, StoreError> {
         if let Some(header_with_block_level) = self.headers_access.read_from_cache(hash) {
             return Ok(header_with_block_level.header.bits);
         }
         Ok(self.compact_headers_access.read(hash)?.bits)
     }
 
-    fn get_header(&self, hash: Hash) -> Result<Arc<Header>, StoreError> {
+    fn get_header(&self, hash: BlockHash) -> Result<Arc<Header>, StoreError> {
         Ok(self.headers_access.read_with_fallback::<HeaderWithBlockLevel2>(self.fallback_prefix.as_ref(), hash)?.header)
     }
 
-    fn get_header_with_block_level(&self, hash: Hash) -> Result<HeaderWithBlockLevel, StoreError> {
+    fn get_header_with_block_level(&self, hash: BlockHash) -> Result<HeaderWithBlockLevel, StoreError> {
         self.headers_access.read_with_fallback::<HeaderWithBlockLevel2>(self.fallback_prefix.as_ref(), hash)
     }
 
-    fn get_compact_header_data(&self, hash: Hash) -> Result<CompactHeaderData, StoreError> {
+    fn get_compact_header_data(&self, hash: BlockHash) -> Result<CompactHeaderData, StoreError> {
         if let Some(header_with_block_level) = self.headers_access.read_from_cache(hash) {
             return Ok(header_with_block_level.header.as_ref().into());
         }
@@ -212,9 +212,9 @@ impl HeaderStoreReader for DbHeadersStore {
 }
 
 impl HeaderStore for DbHeadersStore {
-    fn insert(&self, hash: Hash, header: Arc<Header>, block_level: u8) -> Result<(), StoreError> {
+    fn insert(&self, hash: BlockHash, header: Arc<Header>, block_level: u8) -> Result<(), StoreError> {
         if self.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         if self.compact_headers_access.has(hash)? {
             return Err(StoreError::DataInconsistency(format!("store has compact data for {} but is missing full data", hash)));
@@ -226,7 +226,7 @@ impl HeaderStore for DbHeadersStore {
         Ok(())
     }
 
-    fn delete(&self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError> {
         let mut batch = WriteBatch::default();
         self.compact_headers_access.delete(BatchDbWriter::new(&mut batch), hash)?;
         self.headers_access.delete(BatchDbWriter::new(&mut batch), hash)?;

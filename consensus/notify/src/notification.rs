@@ -1,6 +1,6 @@
 use derive_more::Display;
 use kaspa_consensus_core::{acceptance_data::AcceptanceData, block::Block, utxo::utxo_diff::UtxoDiff};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: notification block-hash fields widened to Hash64
 use kaspa_notify::{
     events::EventType,
     full_featured,
@@ -106,14 +106,14 @@ impl BlockAddedNotification {
 
 #[derive(Debug, Clone)]
 pub struct VirtualChainChangedNotification {
-    pub added_chain_block_hashes: Arc<Vec<Hash>>,
-    pub removed_chain_block_hashes: Arc<Vec<Hash>>,
+    pub added_chain_block_hashes: Arc<Vec<BlockHash>>,
+    pub removed_chain_block_hashes: Arc<Vec<BlockHash>>,
     pub added_chain_blocks_acceptance_data: Arc<Vec<Arc<AcceptanceData>>>,
 }
 impl VirtualChainChangedNotification {
     pub fn new(
-        added_chain_block_hashes: Arc<Vec<Hash>>,
-        removed_chain_block_hashes: Arc<Vec<Hash>>,
+        added_chain_block_hashes: Arc<Vec<BlockHash>>,
+        removed_chain_block_hashes: Arc<Vec<BlockHash>>,
         added_chain_blocks_acceptance_data: Arc<Vec<Arc<AcceptanceData>>>,
     ) -> Self {
         Self { added_chain_block_hashes, removed_chain_block_hashes, added_chain_blocks_acceptance_data }
@@ -122,22 +122,22 @@ impl VirtualChainChangedNotification {
 
 #[derive(Debug, Clone, Default)]
 pub struct FinalityConflictNotification {
-    pub violating_block_hash: Hash,
+    pub violating_block_hash: BlockHash,
 }
 
 impl FinalityConflictNotification {
-    pub fn new(violating_block_hash: Hash) -> Self {
+    pub fn new(violating_block_hash: BlockHash) -> Self {
         Self { violating_block_hash }
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct FinalityConflictResolvedNotification {
-    pub finality_block_hash: Hash,
+    pub finality_block_hash: BlockHash,
 }
 
 impl FinalityConflictResolvedNotification {
-    pub fn new(finality_block_hash: Hash) -> Self {
+    pub fn new(finality_block_hash: BlockHash) -> Self {
         Self { finality_block_hash }
     }
 }
@@ -146,11 +146,11 @@ impl FinalityConflictResolvedNotification {
 pub struct UtxosChangedNotification {
     /// Accumulated UTXO diff between the last virtual state and the current virtual state
     pub accumulated_utxo_diff: Arc<UtxoDiff>,
-    pub virtual_parents: Arc<Vec<Hash>>,
+    pub virtual_parents: Arc<Vec<BlockHash>>,
 }
 
 impl UtxosChangedNotification {
-    pub fn new(accumulated_utxo_diff: Arc<UtxoDiff>, virtual_parents: Arc<Vec<Hash>>) -> Self {
+    pub fn new(accumulated_utxo_diff: Arc<UtxoDiff>, virtual_parents: Arc<Vec<BlockHash>>) -> Self {
         Self { accumulated_utxo_diff, virtual_parents }
     }
 }

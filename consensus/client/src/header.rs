@@ -6,9 +6,10 @@
 
 use crate::error::Error;
 use js_sys::{Array, Object};
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids (pruning point, parents) are Hash64
 use kaspa_consensus_core::hashing;
 use kaspa_consensus_core::header as native;
-use kaspa_hashes::Hash;
+use kaspa_hashes::Hash; // PR-9.5e: retained for utxo_commitment (32-byte accumulator commitment, stays Hash)
 use kaspa_utils::hex::ToHex;
 use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::*;
@@ -225,7 +226,7 @@ impl Header {
 
     #[wasm_bindgen(setter = pruningPoint)]
     pub fn set_pruning_point_from_js_value(&mut self, js_value: JsValue) {
-        self.inner_mut().pruning_point = Hash::from_slice(&js_value.try_as_vec_u8().expect("pruning point"));
+        self.inner_mut().pruning_point = BlockHash::from_slice(&js_value.try_as_vec_u8().expect("pruning point"));
     }
 
     #[wasm_bindgen(getter = parentsByLevel)]
@@ -243,9 +244,9 @@ impl Header {
                     .to_vec()
                     .iter()
                     .map(|hash| Ok(hash.try_into_owned()?))
-                    .collect::<std::result::Result<Vec<Hash>, Error>>()
+                    .collect::<std::result::Result<Vec<BlockHash>, Error>>()
             })
-            .collect::<std::result::Result<Vec<Vec<Hash>>, Error>>()
+            .collect::<std::result::Result<Vec<Vec<BlockHash>>, Error>>()
             .unwrap_or_else(|err| {
                 panic!("{}", err);
             });
@@ -285,9 +286,9 @@ impl TryCastFromJs for Header {
                             .to_vec()
                             .into_iter()
                             .map(|hash| Ok(hash.try_into_owned()?))
-                            .collect::<std::result::Result<Vec<Hash>, Error>>()
+                            .collect::<std::result::Result<Vec<BlockHash>, Error>>()
                     })
-                    .collect::<std::result::Result<Vec<Vec<Hash>>, Error>>()?;
+                    .collect::<std::result::Result<Vec<Vec<BlockHash>>, Error>>()?;
 
                 let parents_by_level = parents_by_level_vec.try_into()?;
 

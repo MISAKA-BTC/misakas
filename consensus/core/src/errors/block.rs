@@ -1,11 +1,13 @@
 use std::{collections::HashMap, fmt::Display};
 
 use crate::{
-    BlueWorkType, constants,
+    BlockHash, BlueWorkType, constants,
     errors::{coinbase::CoinbaseError, tx::TxRuleError},
     tx::{TransactionId, TransactionOutpoint},
 };
 use itertools::Itertools;
+// PR-9.5e: `Hash` (32-byte) retained only for the two utxo-commitment
+// positions of `BadUTXOCommitment`; block-identifier positions use `BlockHash`.
 use kaspa_hashes::Hash;
 use thiserror::Error;
 
@@ -43,16 +45,16 @@ pub enum RuleError {
     OriginParent,
 
     #[error("parent {0} is an ancestor of parent {1}")]
-    InvalidParentsRelation(Hash, Hash),
+    InvalidParentsRelation(BlockHash, BlockHash),
 
     #[error("parent {0} is invalid")]
-    InvalidParent(Hash),
+    InvalidParent(BlockHash),
 
     #[error("block has missing parents: {0:?}")]
-    MissingParents(Vec<Hash>),
+    MissingParents(Vec<BlockHash>),
 
     #[error("pruning point {0} is not in the past of this block")]
-    PruningViolation(Hash),
+    PruningViolation(BlockHash),
 
     #[error("expected header daa score {0} but got {1}")]
     UnexpectedHeaderDaaScore(u64, u64),
@@ -64,7 +66,7 @@ pub enum RuleError {
     UnexpectedHeaderBlueWork(BlueWorkType, BlueWorkType),
 
     #[error("block {0} difficulty of {1} is not the expected value of {2}")]
-    UnexpectedDifficulty(Hash, u32, u32),
+    UnexpectedDifficulty(BlockHash, u32, u32),
 
     #[error("block timestamp of {0} is not after expected {1}")]
     TimeTooOld(u64, u64),
@@ -129,20 +131,20 @@ pub enum RuleError {
     InvalidPoW,
 
     #[error("expected header pruning point is {0} but got {1}")]
-    WrongHeaderPruningPoint(Hash, Hash),
+    WrongHeaderPruningPoint(BlockHash, BlockHash),
 
     #[error("expected indirect parents {0} but got {1}")]
-    UnexpectedIndirectParents(TwoDimVecDisplay<Hash>, TwoDimVecDisplay<Hash>),
+    UnexpectedIndirectParents(TwoDimVecDisplay<BlockHash>, TwoDimVecDisplay<BlockHash>),
 
     #[error("block {0} UTXO commitment is invalid - block header indicates {1}, but calculated value is {2}")]
-    BadUTXOCommitment(Hash, Hash, Hash),
+    BadUTXOCommitment(BlockHash, Hash, Hash),
 
     #[error("block {0} accepted ID merkle root is invalid - block header indicates {1}, but calculated value is {2}")]
     // PR-9.5c: positions 1 and 2 carry `AcceptedIdMerkleRoot`
     // (= `Hash64`). The block-identifier (position 0) is still
-    // 32-byte `Hash` — that flips with the rest of `BlockHash`
+    // 32-byte `BlockHash` — that flips with the rest of `BlockHash`
     // in PR-9.5d.
-    BadAcceptedIDMerkleRoot(Hash, crate::AcceptedIdMerkleRoot, crate::AcceptedIdMerkleRoot),
+    BadAcceptedIDMerkleRoot(BlockHash, crate::AcceptedIdMerkleRoot, crate::AcceptedIdMerkleRoot),
 
     #[error("coinbase transaction is not built as expected")]
     BadCoinbaseTransaction,

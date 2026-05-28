@@ -14,7 +14,7 @@ use kaspa_consensus_core::{
 };
 use kaspa_consensus_notify::notification::{self as consensus_notify, Notification as ConsensusNotification};
 use kaspa_consensusmanager::{ConsensusManager, ConsensusProxy};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids (block_hash, accepting_block) are Hash64
 use kaspa_math::Uint256;
 use kaspa_mining::model::{TransactionIdSet, owner_txs::OwnerTransactions};
 use kaspa_notify::converter::Converter;
@@ -300,7 +300,7 @@ impl ConsensusConverter {
     fn get_transaction_verbose_data_with_verbosity(
         &self,
         transaction: &Transaction,
-        block_hash: Hash,
+        block_hash: BlockHash,
         block_time: u64,
         compute_mass: u64,
         verbosity: &RpcTransactionVerboseDataVerbosity,
@@ -391,7 +391,7 @@ impl ConsensusConverter {
         &self,
         consensus: &ConsensusProxy,
         transaction: &Transaction,
-        block_hash: Option<Hash>,
+        block_hash: Option<BlockHash>,
         block_time: u64,
         verbosity: &RpcTransactionVerbosity,
     ) -> RpcResult<RpcOptionalTransaction> {
@@ -442,7 +442,7 @@ impl ConsensusConverter {
         &self,
         consensus: &ConsensusProxy,
         transaction: &SignableTransaction,
-        block_hash: Option<Hash>,
+        block_hash: Option<BlockHash>,
         block_time: u64,
         verbosity: &RpcTransactionVerbosity,
     ) -> RpcResult<RpcOptionalTransaction> {
@@ -497,7 +497,7 @@ impl ConsensusConverter {
         &self,
         consensus: &ConsensusProxy,
         tx_ids: Option<Vec<TransactionId>>,
-        accepting_block: Hash,
+        accepting_block: BlockHash,
         merged_block_data: &MergesetBlockAcceptanceData,
         verbosity: &RpcTransactionVerbosity,
     ) -> RpcResult<Vec<RpcOptionalTransaction>> {
@@ -573,7 +573,7 @@ impl ConsensusConverter {
     async fn get_mergeset_accepted_transactions_with_verbosity(
         &self,
         consensus: &ConsensusProxy,
-        accepting_block: Hash,
+        accepting_block: BlockHash,
         mergeset_blocks_acceptance_data: &Arc<AcceptanceData>,
         verbosity: &RpcMergesetBlockAcceptanceDataVerbosity,
     ) -> RpcResult<Vec<RpcOptionalTransaction>> {

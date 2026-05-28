@@ -16,7 +16,7 @@ use kaspa_database::{
     prelude::{CachePolicy, ConnBuilder, StoreResultUnitExt},
     utils::DbLifetime,
 };
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_pow::{calc_block_level, calc_block_level_check_pow};
 use kaspa_utils::vec::VecExtensions;
 use parking_lot::RwLock;
@@ -48,7 +48,7 @@ struct ProofContext {
     _reachability_stores: Vec<Arc<RwLock<DbReachabilityStore>>>,
     _ghostdag_managers:
         Vec<GhostdagManager<DbGhostdagStore, DbRelationsStore, MTReachabilityService<DbReachabilityStore>, DbHeadersStore>>,
-    selected_tip_by_level: Vec<Hash>,
+    selected_tip_by_level: Vec<BlockHash>,
 
     pp_header: Arc<Header>,
     _pp_level: BlockLevel,
@@ -58,13 +58,13 @@ struct ProofContext {
 
 struct ProofLevelContext<'a> {
     ghostdag_store: &'a DbGhostdagStore,
-    selected_tip: Hash,
+    selected_tip: BlockHash,
 }
 
 impl ProofLevelContext<'_> {
     /// Returns an option of the hash of the challenger and defender's common ancestor at this level.
     /// If no such ancestor exists, returns None.
-    fn find_common_ancestor(challenger: &Self, defender: &Self) -> Option<Hash> {
+    fn find_common_ancestor(challenger: &Self, defender: &Self) -> Option<BlockHash> {
         let mut current = challenger.selected_tip;
         let mut challenger_gd_of_current = challenger.ghostdag_store.get_compact_data(current).unwrap();
         loop {
@@ -81,7 +81,7 @@ impl ProofLevelContext<'_> {
     }
 
     /// Returns the blue work difference between the level selected tip and `ancestor`
-    fn blue_work_diff(&self, ancestor: Hash) -> BlueWorkType {
+    fn blue_work_diff(&self, ancestor: BlockHash) -> BlueWorkType {
         self.ghostdag_store
             .get_blue_work(self.selected_tip)
             .unwrap()

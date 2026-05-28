@@ -7,7 +7,6 @@ use kaspa_consensus::params::SIMNET_GENESIS;
 use kaspa_consensus_core::{constants::MAX_SOMPI, header::Header, subnets::SubnetworkId, tx::Transaction};
 use kaspa_core::{assert_match, info};
 use kaspa_grpc_core::ops::KaspadPayloadOps;
-use kaspa_hashes::Hash;
 use kaspa_notify::{
     connection::{ChannelConnection, ChannelType},
     scope::{
@@ -396,7 +395,7 @@ async fn sanity_test() {
                     let response_result = rpc_client
                         .resolve_finality_conflict_call(
                             None,
-                            ResolveFinalityConflictRequest { finality_block_hash: Hash::from_bytes([0; 32]) },
+                            ResolveFinalityConflictRequest { finality_block_hash: RpcHash::from_bytes([0; 64]) }, // PR-9.5e: block hash is Hash64
                         )
                         .await;
 
@@ -675,7 +674,7 @@ async fn sanity_test() {
             KaspadPayloadOps::GetUtxoReturnAddress => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    let results = rpc_client.get_utxo_return_address(RpcHash::from_bytes([0; 32]), 1000).await;
+                    let results = rpc_client.get_utxo_return_address(RpcHash::from_bytes([0; 64]), 1000).await; // PR-9.5e: block hash is Hash64
 
                     assert!(results.is_err_and(|err| {
                         match err {

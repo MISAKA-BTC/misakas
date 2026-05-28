@@ -4,19 +4,31 @@ use crate::{
     subnets::SUBNETWORK_ID_COINBASE,
     tx::Transaction,
 };
-use kaspa_hashes::{Hash, ZERO_HASH, ZERO_HASH64};
+use kaspa_hashes::{Hash, Hash64, ZERO_HASH64};
 use kaspa_muhash::EMPTY_MUHASH;
+
+/// PR-9.5e: non-zero placeholder for every genesis block `hash` until
+/// PR-9.5g recomputes the real values. It MUST be non-zero: the real
+/// genesis hash will be too, and a zero hash would alias
+/// [`crate::blockhash::NONE`] (all-zero), tripping the `!= NONE`
+/// reachability invariant in every DAG-building test. It is also
+/// distinct from `blockhash::ORIGIN` (all-`0xfe`). All five genesis
+/// variants may share this value: each test instantiates a single
+/// network's consensus, so the genesis ids never coexist in one
+/// store. PR-9.5g replaces each `hash` with the recomputed digest and
+/// re-enables `config::genesis::tests::test_genesis_hashes`.
+const GENESIS_HASH_PLACEHOLDER: Hash64 = Hash64::from_bytes([0x01u8; 64]);
 
 /// The constants uniquely representing the genesis block.
 ///
 /// PR-9.5c: `hash_merkle_root` widened to `crate::MerkleRoot`
-/// (= `Hash64`) — the consensus identity flip from ADR-0008.
-/// `hash` and `utxo_commitment` stay 32-byte for now (`Hash`);
-/// they widen as part of PR-9.5d alongside the rest of the
-/// Header.
+/// (= `Hash64`). PR-9.5e: `hash` widened to [`crate::BlockHash`]
+/// (= `Hash64`) — the block-identity flip from ADR-0008.
+/// `utxo_commitment` stays 32-byte (`Hash`): it is an accumulator
+/// commitment, not a block-hash identity.
 #[derive(Clone, Debug)]
 pub struct GenesisBlock {
-    pub hash: Hash,
+    pub hash: crate::BlockHash,
     pub version: u16,
     pub hash_merkle_root: crate::MerkleRoot,
     pub utxo_commitment: Hash,
@@ -52,7 +64,8 @@ impl From<&GenesisBlock> for Header {
             genesis.daa_score,
             0.into(),
             0,
-            ZERO_HASH,
+            // PR-9.5e: pruning_point is a block-hash identity (Hash64).
+            ZERO_HASH64,
         )
     }
 }
@@ -113,10 +126,7 @@ pub const GENESIS: GenesisBlock = GenesisBlock {
     // value because `EMPTY_MUHASH` was the upstream multiplicative-MuHash
     // empty-state hash; switching the accumulator to LtHash16_1024 in Phase
     // 3 changed `EMPTY_MUHASH`, which in turn changed the block hash.
-    hash: Hash::from_bytes([
-        0x7a, 0xa7, 0x56, 0xff, 0xd4, 0x0c, 0x94, 0x30, 0xc1, 0x2f, 0x90, 0x94, 0xdb, 0xfe, 0xe5, 0xc3, 0x99, 0xd1, 0x38, 0x6a, 0x31,
-        0x44, 0x82, 0xac, 0xc9, 0x6d, 0xb5, 0x8c, 0x29, 0x8c, 0x68, 0xc1,
-    ]),
+    hash: GENESIS_HASH_PLACEHOLDER, // PR-9.5e placeholder — regenerated in PR-9.5g
     version: 0,
     // PR-9.5c: 32-byte mainnet merkle root invalidated by the
     // Hash64 widening; placeholder until PR-9.5g regenerates all
@@ -144,10 +154,7 @@ pub const GENESIS: GenesisBlock = GenesisBlock {
 };
 
 pub const TESTNET_GENESIS: GenesisBlock = GenesisBlock {
-    hash: Hash::from_bytes([
-        0x7e, 0x1a, 0x8a, 0x59, 0x94, 0xa8, 0x0d, 0x13, 0x69, 0x8e, 0x42, 0xcb, 0x26, 0xc6, 0x74, 0xb0, 0x57, 0x62, 0x97, 0xec, 0x27,
-        0x0c, 0xb3, 0x64, 0x77, 0x87, 0x8d, 0x3b, 0x73, 0x23, 0x0b, 0xd1,
-    ]),
+    hash: GENESIS_HASH_PLACEHOLDER, // PR-9.5e placeholder — regenerated in PR-9.5g
     version: 0,
     // PR-9.5c: testnet merkle root invalidated; placeholder
     // until PR-9.5g regen.
@@ -170,10 +177,7 @@ pub const TESTNET_GENESIS: GenesisBlock = GenesisBlock {
 };
 
 pub const TESTNET11_GENESIS: GenesisBlock = GenesisBlock {
-    hash: Hash::from_bytes([
-        0xa1, 0xcd, 0xb9, 0x4b, 0xa9, 0xcf, 0x24, 0xeb, 0xcc, 0x83, 0xe5, 0xe8, 0x91, 0x88, 0x5d, 0xf6, 0xec, 0x0d, 0x16, 0x17, 0x50,
-        0xcb, 0x98, 0xcd, 0xc3, 0xe3, 0xaa, 0xc7, 0x72, 0x07, 0x8c, 0xee,
-    ]),
+    hash: GENESIS_HASH_PLACEHOLDER, // PR-9.5e placeholder — regenerated in PR-9.5g
     // PR-9.5c: testnet11 merkle root invalidated; placeholder
     // until PR-9.5g regen.
     hash_merkle_root: ZERO_HASH64,
@@ -193,10 +197,7 @@ pub const TESTNET11_GENESIS: GenesisBlock = GenesisBlock {
 };
 
 pub const SIMNET_GENESIS: GenesisBlock = GenesisBlock {
-    hash: Hash::from_bytes([
-        0xfa, 0x9c, 0x55, 0x52, 0x3d, 0xc4, 0x21, 0xc2, 0xc3, 0xf7, 0x3e, 0xe7, 0x21, 0x9b, 0x5f, 0x96, 0x1c, 0x48, 0x65, 0x02, 0x53,
-        0xa6, 0x9f, 0x01, 0x69, 0xd4, 0xa0, 0x95, 0xee, 0x9a, 0xb0, 0xc3,
-    ]),
+    hash: GENESIS_HASH_PLACEHOLDER, // PR-9.5e placeholder — regenerated in PR-9.5g
     version: 0,
     // PR-9.5c: simnet merkle root invalidated; placeholder
     // until PR-9.5g regen.
@@ -219,10 +220,7 @@ pub const SIMNET_GENESIS: GenesisBlock = GenesisBlock {
 };
 
 pub const DEVNET_GENESIS: GenesisBlock = GenesisBlock {
-    hash: Hash::from_bytes([
-        0x8a, 0xfe, 0xa3, 0xa0, 0x8b, 0xd0, 0x9d, 0x6d, 0xef, 0xe5, 0x74, 0xe4, 0x91, 0x79, 0xc0, 0x64, 0x19, 0xa7, 0x2d, 0xd9, 0xf8,
-        0x83, 0x33, 0x90, 0xf3, 0x53, 0x72, 0xdc, 0x7c, 0x2d, 0x10, 0x78,
-    ]),
+    hash: GENESIS_HASH_PLACEHOLDER, // PR-9.5e placeholder — regenerated in PR-9.5g
     version: 0,
     // PR-9.5c: devnet merkle root invalidated; placeholder
     // until PR-9.5g regen.
@@ -305,16 +303,17 @@ mod tests {
                 g.daa_score,
                 0.into(),
                 0,
-                ZERO_HASH,
+                // PR-9.5e: pruning_point is a block-hash identity (Hash64).
+                ZERO_HASH64,
             );
 
-            // PR-9.5g uses this output: `hash_merkle_root` is now a 64-byte
-            // Hash64 (paste into a `Hash64::from_bytes([...])`), while `hash`
-            // is still the 32-byte block hash (`Hash::from_bytes([...])`)
-            // until PR-9.5d widens BlockHash.
+            // PR-9.5g uses this output: both `hash_merkle_root` and `hash` are
+            // now 64-byte Hash64 values (PR-9.5e widened BlockHash). Paste each
+            // into a `Hash64::from_bytes([...])` over the corresponding genesis
+            // constant above.
             println!("{name}:");
             println!("    hash_merkle_root: Hash64::from_bytes({:#04x?}),", merkle.as_bytes());
-            println!("    hash:             Hash::from_bytes({:#04x?}),", header.hash.as_bytes());
+            println!("    hash:             Hash64::from_bytes({:#04x?}),", header.hash.as_bytes());
         }
     }
 

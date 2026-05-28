@@ -1,17 +1,17 @@
 use super::interval::Interval;
 use crate::model::stores::reachability::ReachabilityStoreReader;
 use kaspa_database::prelude::StoreResult;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 
 pub(super) trait ReachabilityStoreIntervalExtensions {
-    fn interval_children_capacity(&self, block: Hash) -> StoreResult<Interval>;
-    fn interval_remaining_before(&self, block: Hash) -> StoreResult<Interval>;
-    fn interval_remaining_after(&self, block: Hash) -> StoreResult<Interval>;
+    fn interval_children_capacity(&self, block: BlockHash) -> StoreResult<Interval>;
+    fn interval_remaining_before(&self, block: BlockHash) -> StoreResult<Interval>;
+    fn interval_remaining_after(&self, block: BlockHash) -> StoreResult<Interval>;
 }
 
 impl<T: ReachabilityStoreReader + ?Sized> ReachabilityStoreIntervalExtensions for T {
     /// Returns the reachability allocation capacity for children of `block`
-    fn interval_children_capacity(&self, block: Hash) -> StoreResult<Interval> {
+    fn interval_children_capacity(&self, block: BlockHash) -> StoreResult<Interval> {
         // The interval of a block should *strictly* contain the intervals of its
         // tree children, hence we subtract 1 from the end of the range.
         Ok(self.get_interval(block)?.decrease_end(1))
@@ -19,7 +19,7 @@ impl<T: ReachabilityStoreReader + ?Sized> ReachabilityStoreIntervalExtensions fo
 
     /// Returns the available interval to allocate for tree children, taken from the
     /// beginning of children allocation capacity
-    fn interval_remaining_before(&self, block: Hash) -> StoreResult<Interval> {
+    fn interval_remaining_before(&self, block: BlockHash) -> StoreResult<Interval> {
         let alloc_capacity = self.interval_children_capacity(block)?;
         match self.get_children(block)?.first() {
             Some(first_child) => {
@@ -32,7 +32,7 @@ impl<T: ReachabilityStoreReader + ?Sized> ReachabilityStoreIntervalExtensions fo
 
     /// Returns the available interval to allocate for tree children, taken from the
     /// end of children allocation capacity
-    fn interval_remaining_after(&self, block: Hash) -> StoreResult<Interval> {
+    fn interval_remaining_after(&self, block: BlockHash) -> StoreResult<Interval> {
         let alloc_capacity = self.interval_children_capacity(block)?;
         match self.get_children(block)?.last() {
             Some(last_child) => {

@@ -1,5 +1,5 @@
 use crate::{BlockHashMap, BlueWorkType, KType, block::Block, header::Header};
-use kaspa_hashes::Hash;
+use crate::BlockHash; // PR-9.5e: block-identifier positions widened to Hash64
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -9,9 +9,9 @@ use std::sync::Arc;
 pub struct ExternalGhostdagData {
     pub blue_score: u64,
     pub blue_work: BlueWorkType,
-    pub selected_parent: Hash,
-    pub mergeset_blues: Vec<Hash>,
-    pub mergeset_reds: Vec<Hash>,
+    pub selected_parent: BlockHash,
+    pub mergeset_blues: Vec<BlockHash>,
+    pub mergeset_reds: Vec<BlockHash>,
     pub blues_anticone_sizes: BlockHashMap<KType>,
 }
 
@@ -44,14 +44,14 @@ impl TrustedHeader {
     }
 }
 
-/// Represents externally provided Ghostdag data associated with a block Hash
+/// Represents externally provided Ghostdag data associated with a block BlockHash
 pub struct TrustedGhostdagData {
-    pub hash: Hash,
+    pub hash: BlockHash,
     pub ghostdag: ExternalGhostdagData,
 }
 
 impl TrustedGhostdagData {
-    pub fn new(hash: Hash, ghostdag: ExternalGhostdagData) -> Self {
+    pub fn new(hash: BlockHash, ghostdag: ExternalGhostdagData) -> Self {
         Self { hash, ghostdag }
     }
 }

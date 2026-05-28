@@ -29,8 +29,15 @@ pub use kaspa_hashes::Hash64;
 //
 //   PR-9.5c    TransactionId, TransactionHash, MerkleHash, MerkleRoot,
 //              AcceptedIdMerkleRoot                       → Hash64
-//   PR-9.5d    BlockHash, UtxoCommitment, PruningPoint    → Hash64
-//   PR-9.5e    BlockHash users (stores, GHOSTDAG, ...)    → BlockHash64
+//   PR-9.5d    Header.pow_algo_id field (PR-8.4)          → (additive)
+//   PR-9.5e    BlockHash + PruningPoint (both are block-hash
+//              identities) and every user — the header, stores,
+//              GHOSTDAG, reachability, pruning, relations  → Hash64
+//
+// UtxoCommitment deliberately stays 32 B: it is an LtHash/muhash
+// accumulator commitment, NOT a block-hash identity, so it is not
+// keyed into any BlockHashMap. Its 64-byte production form is the
+// separate `utxo_commitment::UtxoCommitment64` (PR-7.6).
 //
 // `LegacyHash32` is the **stable** 32-byte name — it is the alias
 // that NEVER widens. Use it in source that wants to be explicit
@@ -54,11 +61,12 @@ pub use kaspa_hashes::Hash64;
 pub type LegacyHash32 = kaspa_hashes::Hash32;
 
 /// Block identity — the header hash returned by `Block::hash()` and
-/// stored in `Header::hash`. Widens to `Hash64` in PR-9.5d
-/// (cascade-blocked behind PR-9.5c so the Header construction-site
-/// audit happens after the transaction-identity work has shaken
-/// out).
-pub type BlockHash = kaspa_hashes::Hash32;
+/// stored in `Header::hash`. **Flipped to `Hash64` in PR-9.5e**
+/// (ADR-0008): the identity digest is now produced by the keyed
+/// BLAKE2b-512 `BlockHash64` hasher (crypto/hashes/src/hashers.rs).
+/// Keys `BlockHashMap` / `BlockHashSet` and flows through every
+/// store, GHOSTDAG, reachability and pruning structure.
+pub type BlockHash = kaspa_hashes::Hash64;
 
 /// Transaction id — the `TransactionId` returned by the upstream
 /// `TransactionHasher` flow (txid). **Flipped to `Hash64` in
@@ -89,19 +97,22 @@ pub type MerkleRoot = kaspa_hashes::Hash64;
 pub type AcceptedIdMerkleRoot = kaspa_hashes::Hash64;
 
 /// UTXO accumulator commitment stored in `Header::utxo_commitment`.
-/// Widens to `Hash64` in PR-9.5d (it is part of the Header
-/// hashing surface, so it flips together with the rest of the
-/// Header per the inventory's review-batching rule).
+/// **Stays 32 B** — it is an LtHash/muhash accumulator commitment,
+/// not a block-hash identity, so it is never keyed into a
+/// `BlockHashMap` and does not widen with `BlockHash` in PR-9.5e.
 ///
 /// Note: the **64-byte production** UTXO commitment type
 /// [`utxo_commitment::UtxoCommitment64`] already exists from PR-7.6
 /// for the RPC surface; this alias is the **header field** width
-/// (still 32 B today), which flips when PR-9.5d lands.
+/// (32 B), distinct from that production accumulator output.
 pub type UtxoCommitment = kaspa_hashes::Hash32;
 
-/// Pruning-point block hash (`Header::pruning_point`). Widens to
-/// `Hash64` in PR-9.5d alongside the rest of `Header`.
-pub type PruningPoint = kaspa_hashes::Hash32;
+/// Pruning-point block hash (`Header::pruning_point`). This is a
+/// **block-hash identity** (it references the pruning-point block),
+/// so it **flipped to `Hash64` in PR-9.5e** together with
+/// [`BlockHash`] — a 32-byte pruning point could not key the
+/// Hash64 block stores.
+pub type PruningPoint = kaspa_hashes::Hash64;
 
 pub mod acceptance_data;
 pub mod api;
@@ -166,10 +177,10 @@ pub type HashKTypeMap = std::sync::Arc<BlockHashMap<KType>>;
 /// This HashMap skips the hashing of the key and uses the key directly as the hash.
 /// Should only be used for block hashes that have correct DAA,
 /// otherwise it is susceptible to DOS attacks via hash collisions.
-pub type BlockHashMap<V> = HashMap<Hash, V, BlockHasher>;
+pub type BlockHashMap<V> = HashMap<BlockHash, V, BlockHasher>;
 
 /// Same as `BlockHashMap` but a `HashSet`.
-pub type BlockHashSet = HashSet<Hash, BlockHasher>;
+pub type BlockHashSet = HashSet<BlockHash, BlockHasher>;
 
 pub trait HashMapCustomHasher {
     fn new() -> Self;
@@ -202,11 +213,13 @@ impl HashMapCustomHasher for BlockHashSet {
 
 #[derive(Default, Debug)]
 pub struct ChainPath {
-    pub added: Vec<Hash>,
-    pub removed: Vec<Hash>,
+    pub added: Vec<BlockHash>,
+    pub removed: Vec<BlockHash>,
 }
 
-/// `hashes::Hash` writes 4 u64s so we just use the last one as the hash here
+/// PR-9.5e: the 64-byte `BlockHash` (`Hash64`) writes 8 u64s via its
+/// `StdHash` impl; we keep only the last word as the in-memory map
+/// hash (same prefix trick the 32-byte `Hash` used with 4 words).
 #[derive(Default, Clone, Copy)]
 pub struct BlockHasher(u64);
 
@@ -246,13 +259,16 @@ pub type BlockLevel = u8;
 #[cfg(test)]
 mod tests {
     use super::BlockHasher;
-    use kaspa_hashes::Hash;
+    use crate::BlockHash;
     use std::hash::{Hash as _, Hasher as _};
     #[test]
     fn test_block_hasher() {
-        let hash = Hash::from_le_u64([1, 2, 3, 4]);
+        // PR-9.5e: `BlockHash` is now the 64-byte `Hash64`, whose
+        // `StdHash` writes 8 little-endian u64 words; the hasher
+        // keeps the last (8th).
+        let hash = BlockHash::from_le_u64([1, 2, 3, 4, 5, 6, 7, 8]);
         let mut hasher = BlockHasher::default();
         hash.hash(&mut hasher);
-        assert_eq!(hasher.finish(), 4);
+        assert_eq!(hasher.finish(), 8);
     }
 }

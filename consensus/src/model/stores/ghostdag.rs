@@ -1,12 +1,11 @@
 use crate::processes::ghostdag::ordering::SortableBlock;
 use kaspa_consensus_core::trusted::ExternalGhostdagData;
-use kaspa_consensus_core::{BlockHashMap, BlockHasher, BlockLevel, HashMapCustomHasher};
+use kaspa_consensus_core::{BlockHash, BlockHashMap, BlockHasher, BlockLevel, HashMapCustomHasher};
 use kaspa_consensus_core::{BlueWorkType, blockhash::BlockHashes};
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DbKey};
 use kaspa_database::prelude::{CachePolicy, StoreError};
 use kaspa_database::registry::{DatabaseStorePrefixes, SEPARATOR};
-use kaspa_hashes::Hash;
 
 use itertools::EitherOrBoth::{Both, Left, Right};
 use itertools::Itertools;
@@ -23,7 +22,7 @@ pub use kaspa_consensus_core::{HashKTypeMap, KType};
 pub struct GhostdagData {
     pub blue_score: u64,
     pub blue_work: BlueWorkType,
-    pub selected_parent: Hash,
+    pub selected_parent: BlockHash,
     pub mergeset_blues: BlockHashes,
     pub mergeset_reds: BlockHashes,
     pub blues_anticone_sizes: HashKTypeMap,
@@ -33,14 +32,14 @@ pub struct GhostdagData {
 pub struct CompactGhostdagData {
     pub blue_score: u64,
     pub blue_work: BlueWorkType,
-    pub selected_parent: Hash,
+    pub selected_parent: BlockHash,
 }
 
 impl MemSizeEstimator for GhostdagData {
     fn estimate_mem_bytes(&self) -> usize {
         let mut bytes = size_of::<Self>();
-        bytes += (self.mergeset_blues.len() + self.mergeset_reds.len()) * size_of::<Hash>();
-        bytes += self.blues_anticone_sizes.len() * size_of::<(Hash, KType)>();
+        bytes += (self.mergeset_blues.len() + self.mergeset_reds.len()) * size_of::<BlockHash>();
+        bytes += self.blues_anticone_sizes.len() * size_of::<(BlockHash, KType)>();
         bytes
     }
 }
@@ -84,7 +83,7 @@ impl GhostdagData {
     pub fn new(
         blue_score: u64,
         blue_work: BlueWorkType,
-        selected_parent: Hash,
+        selected_parent: BlockHash,
         mergeset_blues: BlockHashes,
         mergeset_reds: BlockHashes,
         blues_anticone_sizes: HashKTypeMap,
@@ -92,8 +91,8 @@ impl GhostdagData {
         Self { blue_score, blue_work, selected_parent, mergeset_blues, mergeset_reds, blues_anticone_sizes }
     }
 
-    pub fn new_with_selected_parent(selected_parent: Hash, k: KType) -> Self {
-        let mut mergeset_blues: Vec<Hash> = Vec::with_capacity((k + 1) as usize);
+    pub fn new_with_selected_parent(selected_parent: BlockHash, k: KType) -> Self {
+        let mut mergeset_blues: Vec<BlockHash> = Vec::with_capacity((k + 1) as usize);
         let mut blues_anticone_sizes: BlockHashMap<KType> = BlockHashMap::with_capacity(k as usize);
         mergeset_blues.push(selected_parent);
         blues_anticone_sizes.insert(selected_parent, 0);
@@ -161,7 +160,7 @@ impl GhostdagData {
     }
 
     /// Returns an iterator to the mergeset with no specified order (excluding the selected parent)
-    pub fn unordered_mergeset_without_selected_parent(&self) -> impl Iterator<Item = Hash> + '_ {
+    pub fn unordered_mergeset_without_selected_parent(&self) -> impl Iterator<Item = BlockHash> + '_ {
         self.mergeset_blues
             .iter()
             .skip(1) // Skip the selected parent
@@ -175,7 +174,7 @@ impl GhostdagData {
     pub fn consensus_ordered_mergeset<'a>(
         &'a self,
         store: &'a (impl GhostdagStoreReader + ?Sized),
-    ) -> impl Iterator<Item = Hash> + 'a {
+    ) -> impl Iterator<Item = BlockHash> + 'a {
         once(self.selected_parent).chain(self.ascending_mergeset_without_selected_parent(store).map(|s| s.hash))
     }
 
@@ -183,12 +182,12 @@ impl GhostdagData {
     pub fn consensus_ordered_mergeset_without_selected_parent<'a>(
         &'a self,
         store: &'a (impl GhostdagStoreReader + ?Sized),
-    ) -> impl Iterator<Item = Hash> + 'a {
+    ) -> impl Iterator<Item = BlockHash> + 'a {
         self.ascending_mergeset_without_selected_parent(store).map(|s| s.hash)
     }
 
     /// Returns an iterator to the mergeset with no specified order (including the selected parent)
-    pub fn unordered_mergeset(&self) -> impl Iterator<Item = Hash> + '_ {
+    pub fn unordered_mergeset(&self) -> impl Iterator<Item = BlockHash> + '_ {
         self.mergeset_blues.iter().cloned().chain(self.mergeset_reds.iter().cloned())
     }
 
@@ -196,7 +195,7 @@ impl GhostdagData {
         self.into()
     }
 
-    pub fn add_blue(&mut self, block: Hash, blue_anticone_size: KType, block_blues_anticone_sizes: &BlockHashMap<KType>) {
+    pub fn add_blue(&mut self, block: BlockHash, blue_anticone_size: KType, block_blues_anticone_sizes: &BlockHashMap<KType>) {
         // Add the new blue block to mergeset blues
         BlockHashes::make_mut(&mut self.mergeset_blues).push(block);
 
@@ -212,7 +211,7 @@ impl GhostdagData {
         }
     }
 
-    pub fn add_red(&mut self, block: Hash) {
+    pub fn add_red(&mut self, block: BlockHash) {
         // Add the new red block to mergeset reds
         BlockHashes::make_mut(&mut self.mergeset_reds).push(block);
     }
@@ -223,20 +222,20 @@ impl GhostdagData {
     }
 }
 pub trait GhostdagStoreReader {
-    fn get_blue_score(&self, hash: Hash) -> Result<u64, StoreError>;
-    fn get_blue_work(&self, hash: Hash) -> Result<BlueWorkType, StoreError>;
-    fn get_selected_parent(&self, hash: Hash) -> Result<Hash, StoreError>;
-    fn get_mergeset_blues(&self, hash: Hash) -> Result<BlockHashes, StoreError>;
-    fn get_mergeset_reds(&self, hash: Hash) -> Result<BlockHashes, StoreError>;
-    fn get_blues_anticone_sizes(&self, hash: Hash) -> Result<HashKTypeMap, StoreError>;
+    fn get_blue_score(&self, hash: BlockHash) -> Result<u64, StoreError>;
+    fn get_blue_work(&self, hash: BlockHash) -> Result<BlueWorkType, StoreError>;
+    fn get_selected_parent(&self, hash: BlockHash) -> Result<BlockHash, StoreError>;
+    fn get_mergeset_blues(&self, hash: BlockHash) -> Result<BlockHashes, StoreError>;
+    fn get_mergeset_reds(&self, hash: BlockHash) -> Result<BlockHashes, StoreError>;
+    fn get_blues_anticone_sizes(&self, hash: BlockHash) -> Result<HashKTypeMap, StoreError>;
 
     /// Returns full block data for the requested hash
-    fn get_data(&self, hash: Hash) -> Result<Arc<GhostdagData>, StoreError>;
+    fn get_data(&self, hash: BlockHash) -> Result<Arc<GhostdagData>, StoreError>;
 
-    fn get_compact_data(&self, hash: Hash) -> Result<CompactGhostdagData, StoreError>;
+    fn get_compact_data(&self, hash: BlockHash) -> Result<CompactGhostdagData, StoreError>;
 
     /// Check if the store contains data for the requested hash
-    fn has(&self, hash: Hash) -> Result<bool, StoreError>;
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError>;
 }
 
 pub trait GhostdagStore: GhostdagStoreReader {
@@ -244,8 +243,8 @@ pub trait GhostdagStore: GhostdagStoreReader {
     /// is added once and never modified, so no need for specific setters for each element.
     /// Additionally, this means writes are semantically "append-only", which is why
     /// we can keep the `insert` method non-mutable on self. See "Parallel Processing.md" for an overview.
-    fn insert(&self, hash: Hash, data: Arc<GhostdagData>) -> Result<(), StoreError>;
-    fn delete(&self, hash: Hash) -> Result<(), StoreError>;
+    fn insert(&self, hash: BlockHash, data: Arc<GhostdagData>) -> Result<(), StoreError>;
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError>;
 }
 
 /// A DB + cache implementation of `GhostdagStore` trait, with concurrency support.
@@ -253,8 +252,8 @@ pub trait GhostdagStore: GhostdagStoreReader {
 pub struct DbGhostdagStore {
     db: Arc<DB>,
     level: BlockLevel,
-    access: CachedDbAccess<Hash, Arc<GhostdagData>, BlockHasher>,
-    compact_access: CachedDbAccess<Hash, CompactGhostdagData, BlockHasher>,
+    access: CachedDbAccess<BlockHash, Arc<GhostdagData>, BlockHasher>,
+    compact_access: CachedDbAccess<BlockHash, CompactGhostdagData, BlockHasher>,
 }
 
 impl DbGhostdagStore {
@@ -296,78 +295,78 @@ impl DbGhostdagStore {
         Self::new(Arc::clone(&self.db), self.level, cache_policy, compact_cache_policy)
     }
 
-    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: Hash, data: &Arc<GhostdagData>) -> Result<(), StoreError> {
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, data: &Arc<GhostdagData>) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(BatchDbWriter::new(batch), hash, data.clone())?;
         self.compact_access.write(BatchDbWriter::new(batch), hash, data.to_compact())?;
         Ok(())
     }
 
-    pub fn update_batch(&self, batch: &mut WriteBatch, hash: Hash, data: &Arc<GhostdagData>) -> Result<(), StoreError> {
+    pub fn update_batch(&self, batch: &mut WriteBatch, hash: BlockHash, data: &Arc<GhostdagData>) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), hash, data.clone())?;
         self.compact_access.write(BatchDbWriter::new(batch), hash, data.to_compact())?;
         Ok(())
     }
 
-    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: Hash) -> Result<(), StoreError> {
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.compact_access.delete(BatchDbWriter::new(batch), hash)?;
         self.access.delete(BatchDbWriter::new(batch), hash)
     }
 }
 
 impl GhostdagStoreReader for DbGhostdagStore {
-    fn get_blue_score(&self, hash: Hash) -> Result<u64, StoreError> {
+    fn get_blue_score(&self, hash: BlockHash) -> Result<u64, StoreError> {
         if let Some(ghostdag_data) = self.access.read_from_cache(hash) {
             return Ok(ghostdag_data.blue_score);
         }
         Ok(self.compact_access.read(hash)?.blue_score)
     }
 
-    fn get_blue_work(&self, hash: Hash) -> Result<BlueWorkType, StoreError> {
+    fn get_blue_work(&self, hash: BlockHash) -> Result<BlueWorkType, StoreError> {
         if let Some(ghostdag_data) = self.access.read_from_cache(hash) {
             return Ok(ghostdag_data.blue_work);
         }
         Ok(self.compact_access.read(hash)?.blue_work)
     }
 
-    fn get_selected_parent(&self, hash: Hash) -> Result<Hash, StoreError> {
+    fn get_selected_parent(&self, hash: BlockHash) -> Result<BlockHash, StoreError> {
         if let Some(ghostdag_data) = self.access.read_from_cache(hash) {
             return Ok(ghostdag_data.selected_parent);
         }
         Ok(self.compact_access.read(hash)?.selected_parent)
     }
 
-    fn get_mergeset_blues(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_mergeset_blues(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         Ok(Arc::clone(&self.access.read(hash)?.mergeset_blues))
     }
 
-    fn get_mergeset_reds(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_mergeset_reds(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         Ok(Arc::clone(&self.access.read(hash)?.mergeset_reds))
     }
 
-    fn get_blues_anticone_sizes(&self, hash: Hash) -> Result<HashKTypeMap, StoreError> {
+    fn get_blues_anticone_sizes(&self, hash: BlockHash) -> Result<HashKTypeMap, StoreError> {
         Ok(Arc::clone(&self.access.read(hash)?.blues_anticone_sizes))
     }
 
-    fn get_data(&self, hash: Hash) -> Result<Arc<GhostdagData>, StoreError> {
+    fn get_data(&self, hash: BlockHash) -> Result<Arc<GhostdagData>, StoreError> {
         self.access.read(hash)
     }
 
-    fn get_compact_data(&self, hash: Hash) -> Result<CompactGhostdagData, StoreError> {
+    fn get_compact_data(&self, hash: BlockHash) -> Result<CompactGhostdagData, StoreError> {
         self.compact_access.read(hash)
     }
 
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         self.access.has(hash)
     }
 }
 
 impl GhostdagStore for DbGhostdagStore {
-    fn insert(&self, hash: Hash, data: Arc<GhostdagData>) -> Result<(), StoreError> {
+    fn insert(&self, hash: BlockHash, data: Arc<GhostdagData>) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         if self.compact_access.has(hash)? {
             return Err(StoreError::DataInconsistency(format!("store has compact data for {} but is missing full data", hash)));
@@ -379,7 +378,7 @@ impl GhostdagStore for DbGhostdagStore {
         Ok(())
     }
 
-    fn delete(&self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError> {
         let mut batch = WriteBatch::default();
         self.compact_access.delete(BatchDbWriter::new(&mut batch), hash)?;
         self.access.delete(BatchDbWriter::new(&mut batch), hash)?;
@@ -394,7 +393,7 @@ impl GhostdagStore for DbGhostdagStore {
 pub struct MemoryGhostdagStore {
     blue_score_map: RefCell<BlockHashMap<u64>>,
     blue_work_map: RefCell<BlockHashMap<BlueWorkType>>,
-    selected_parent_map: RefCell<BlockHashMap<Hash>>,
+    selected_parent_map: RefCell<BlockHashMap<BlockHash>>,
     mergeset_blues_map: RefCell<BlockHashMap<BlockHashes>>,
     mergeset_reds_map: RefCell<BlockHashMap<BlockHashes>>,
     blues_anticone_sizes_map: RefCell<BlockHashMap<HashKTypeMap>>,
@@ -412,7 +411,7 @@ impl MemoryGhostdagStore {
         }
     }
 
-    pub fn key_not_found_error(hash: Hash) -> StoreError {
+    pub fn key_not_found_error(hash: BlockHash) -> StoreError {
         StoreError::KeyNotFound(DbKey::new(DatabaseStorePrefixes::Ghostdag.as_ref(), hash))
     }
 }
@@ -424,9 +423,9 @@ impl Default for MemoryGhostdagStore {
 }
 
 impl GhostdagStore for MemoryGhostdagStore {
-    fn insert(&self, hash: Hash, data: Arc<GhostdagData>) -> Result<(), StoreError> {
+    fn insert(&self, hash: BlockHash, data: Arc<GhostdagData>) -> Result<(), StoreError> {
         if self.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.blue_score_map.borrow_mut().insert(hash, data.blue_score);
         self.blue_work_map.borrow_mut().insert(hash, data.blue_work);
@@ -437,7 +436,7 @@ impl GhostdagStore for MemoryGhostdagStore {
         Ok(())
     }
 
-    fn delete(&self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError> {
         self.blue_score_map.borrow_mut().remove(&hash);
         self.blue_work_map.borrow_mut().remove(&hash);
         self.selected_parent_map.borrow_mut().remove(&hash);
@@ -449,49 +448,49 @@ impl GhostdagStore for MemoryGhostdagStore {
 }
 
 impl GhostdagStoreReader for MemoryGhostdagStore {
-    fn get_blue_score(&self, hash: Hash) -> Result<u64, StoreError> {
+    fn get_blue_score(&self, hash: BlockHash) -> Result<u64, StoreError> {
         match self.blue_score_map.borrow().get(&hash) {
             Some(blue_score) => Ok(*blue_score),
             None => Err(Self::key_not_found_error(hash)),
         }
     }
 
-    fn get_blue_work(&self, hash: Hash) -> Result<BlueWorkType, StoreError> {
+    fn get_blue_work(&self, hash: BlockHash) -> Result<BlueWorkType, StoreError> {
         match self.blue_work_map.borrow().get(&hash) {
             Some(blue_work) => Ok(*blue_work),
             None => Err(Self::key_not_found_error(hash)),
         }
     }
 
-    fn get_selected_parent(&self, hash: Hash) -> Result<Hash, StoreError> {
+    fn get_selected_parent(&self, hash: BlockHash) -> Result<BlockHash, StoreError> {
         match self.selected_parent_map.borrow().get(&hash) {
             Some(selected_parent) => Ok(*selected_parent),
             None => Err(Self::key_not_found_error(hash)),
         }
     }
 
-    fn get_mergeset_blues(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_mergeset_blues(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         match self.mergeset_blues_map.borrow().get(&hash) {
             Some(mergeset_blues) => Ok(BlockHashes::clone(mergeset_blues)),
             None => Err(Self::key_not_found_error(hash)),
         }
     }
 
-    fn get_mergeset_reds(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_mergeset_reds(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         match self.mergeset_reds_map.borrow().get(&hash) {
             Some(mergeset_reds) => Ok(BlockHashes::clone(mergeset_reds)),
             None => Err(Self::key_not_found_error(hash)),
         }
     }
 
-    fn get_blues_anticone_sizes(&self, hash: Hash) -> Result<HashKTypeMap, StoreError> {
+    fn get_blues_anticone_sizes(&self, hash: BlockHash) -> Result<HashKTypeMap, StoreError> {
         match self.blues_anticone_sizes_map.borrow().get(&hash) {
             Some(sizes) => Ok(HashKTypeMap::clone(sizes)),
             None => Err(Self::key_not_found_error(hash)),
         }
     }
 
-    fn get_data(&self, hash: Hash) -> Result<Arc<GhostdagData>, StoreError> {
+    fn get_data(&self, hash: BlockHash) -> Result<Arc<GhostdagData>, StoreError> {
         if !self.has(hash)? {
             return Err(Self::key_not_found_error(hash));
         }
@@ -505,11 +504,11 @@ impl GhostdagStoreReader for MemoryGhostdagStore {
         )))
     }
 
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         Ok(self.blue_score_map.borrow().contains_key(&hash))
     }
 
-    fn get_compact_data(&self, hash: Hash) -> Result<CompactGhostdagData, StoreError> {
+    fn get_compact_data(&self, hash: BlockHash) -> Result<CompactGhostdagData, StoreError> {
         Ok(self.get_data(hash)?.to_compact())
     }
 }
@@ -552,13 +551,13 @@ mod tests {
         data.add_red(5.into());
         data.add_red(6.into());
 
-        let mut expected: Vec<Hash> = vec![4.into(), 2.into(), 5.into(), 3.into(), 6.into()];
-        assert_eq!(expected, data.ascending_mergeset_without_selected_parent(&store).map(|b| b.hash).collect::<Vec<Hash>>());
+        let mut expected: Vec<BlockHash> = vec![4.into(), 2.into(), 5.into(), 3.into(), 6.into()];
+        assert_eq!(expected, data.ascending_mergeset_without_selected_parent(&store).map(|b| b.hash).collect::<Vec<BlockHash>>());
 
         itertools::assert_equal(once(1.into()).chain(expected.iter().cloned()), data.consensus_ordered_mergeset(&store));
 
         expected.reverse();
-        assert_eq!(expected, data.descending_mergeset_without_selected_parent(&store).map(|b| b.hash).collect::<Vec<Hash>>());
+        assert_eq!(expected, data.descending_mergeset_without_selected_parent(&store).map(|b| b.hash).collect::<Vec<BlockHash>>());
 
         // Use sets since the below functions have no order guarantee
         let expected = BlockHashSet::from_iter([4.into(), 2.into(), 5.into(), 3.into(), 6.into()]);

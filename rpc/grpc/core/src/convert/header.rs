@@ -59,7 +59,7 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcHeader, {
         item.parents.iter().map(Vec::<RpcHash>::try_from).collect::<RpcResult<Vec<Vec<RpcHash>>>>()?.try_into()?,
         kaspa_consensus_core::Hash64::from_str(&item.hash_merkle_root)?,
         kaspa_consensus_core::Hash64::from_str(&item.accepted_id_merkle_root)?,
-        RpcHash::from_str(&item.utxo_commitment)?,
+        kaspa_consensus_core::Hash::from_str(&item.utxo_commitment)? /* PR-9.5e: utxo_commitment stays 32-byte Hash, not RpcHash(Hash64) */,
         item.timestamp.try_into()?,
         item.bits,
         item.nonce,
@@ -82,7 +82,7 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcRawHeader, {
         // PR-9.5c/f: merkle roots widened to Hash64.
         hash_merkle_root: kaspa_consensus_core::Hash64::from_str(&item.hash_merkle_root)?,
         accepted_id_merkle_root: kaspa_consensus_core::Hash64::from_str(&item.accepted_id_merkle_root)?,
-        utxo_commitment: RpcHash::from_str(&item.utxo_commitment)?,
+        utxo_commitment: kaspa_consensus_core::Hash::from_str(&item.utxo_commitment)? /* PR-9.5e: utxo_commitment stays 32-byte Hash, not RpcHash(Hash64) */,
         timestamp: item.timestamp.try_into()?,
         bits: item.bits,
         nonce: item.nonce,
@@ -101,7 +101,7 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcOptionalHeader, {
         item.parents.iter().map(Vec::<RpcHash>::try_from).collect::<RpcResult<Vec<Vec<RpcHash>>>>()?.try_into()?,
         kaspa_consensus_core::Hash64::from_str(&item.hash_merkle_root)?,
         kaspa_consensus_core::Hash64::from_str(&item.accepted_id_merkle_root)?,
-        RpcHash::from_str(&item.utxo_commitment)?,
+        kaspa_consensus_core::Hash::from_str(&item.utxo_commitment)? /* PR-9.5e: utxo_commitment stays 32-byte Hash, not RpcHash(Hash64) */,
         item.timestamp.try_into()?,
         item.bits,
         item.nonce,
@@ -146,6 +146,16 @@ mod tests {
         let mut bytes = [0u8; 64];
         bytes[..8].copy_from_slice(&c.to_le_bytes());
         kaspa_consensus_core::Hash64::from_bytes(bytes)
+    }
+
+    // PR-9.5e: 32-byte unique generator for the utxo_commitment header
+    // position, which stays a 32-byte accumulator commitment (`Hash`)
+    // while block ids / merkle roots widened to Hash64.
+    fn new_unique_hash32() -> kaspa_consensus_core::Hash {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(1);
+        let c = COUNTER.fetch_add(1, Ordering::Relaxed);
+        kaspa_consensus_core::Hash::from_u64_word(c)
     }
 
     fn test_parents_by_level_rxr(rpc_parents_1: &[Vec<RpcHash>], rpc_parents_2: &[Vec<RpcHash>]) {
@@ -194,11 +204,11 @@ mod tests {
             vec![vec![new_unique(), new_unique(), new_unique()], vec![new_unique()], vec![new_unique(), new_unique()]]
                 .try_into()
                 .unwrap(),
-            // PR-9.5c/f: hash_merkle_root + accepted_id_merkle_root are Hash64;
-            // utxo_commitment (3rd) stays 32-byte RpcHash.
+            // PR-9.5c/f: hash_merkle_root + accepted_id_merkle_root are Hash64.
+            // PR-9.5e: utxo_commitment (3rd) stays a 32-byte accumulator commitment.
             new_unique_hash64(),
             new_unique_hash64(),
-            new_unique(),
+            new_unique_hash32(),
             123,
             12345,
             98765,
@@ -232,11 +242,11 @@ mod tests {
             vec![vec![new_unique(), new_unique(), new_unique()], vec![new_unique()], vec![new_unique(), new_unique()]]
                 .try_into()
                 .unwrap(),
-            // PR-9.5c/f: hash_merkle_root + accepted_id_merkle_root are Hash64;
-            // utxo_commitment (3rd) stays 32-byte RpcHash.
+            // PR-9.5c/f: hash_merkle_root + accepted_id_merkle_root are Hash64.
+            // PR-9.5e: utxo_commitment (3rd) stays a 32-byte accumulator commitment.
             new_unique_hash64(),
             new_unique_hash64(),
-            new_unique(),
+            new_unique_hash32(),
             123,
             12345,
             98765,

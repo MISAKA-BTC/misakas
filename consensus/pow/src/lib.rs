@@ -223,7 +223,7 @@ mod tests_pq {
             0,                      // daa_score
             BlueWorkType::from_u64(0),
             0,
-            ZERO_HASH, // pruning_point
+            ZERO_HASH64, // PR-9.5e: pruning_point is a block hash (Hash64)
         )
     }
 
@@ -258,21 +258,24 @@ mod tests_pq {
         assert_ne!(net_a, net_b);
     }
 
-    /// With the maximum (easiest) compact target the verifier
-    /// accepts the trivial nonce. With a max-difficulty target it
-    /// rejects (the 512-bit comparison space is exponentially
-    /// larger than any single trial can satisfy).
+    /// The easiest representable target accepts a large fraction of
+    /// digests; a max-difficulty target rejects essentially all.
     #[test]
     fn layer0_check_pow_easy_target_passes_hard_target_rejects() {
-        // Max-difficulty target is the easiest target (every digest
-        // is below it). Smaller `bits` -> harder target.
+        // The easiest compact target 0x207fffff decodes to
+        // target_256 ≈ 2^255, which the ADR-0007 difficulty lift
+        // (`target_512 = target_256 << 256`) maps to target_512 ≈
+        // 2^511 — i.e. ≈50% of uniform 512-bit digests pass *per
+        // nonce*, NOT every digest. So scan a small nonce window and
+        // require at least one acceptance; P(all 64 reject) ≈ 2^-64.
         let easy = dummy_header(0x207fffff, 0, 1_700_000_000);
         let s_easy = StateLayer0::new(&easy, b"simnet");
-        let (pass, _) = s_easy.check_pow_layer0(0).unwrap();
-        assert!(pass, "max-easy target must accept any nonce");
+        let any_pass = (0u64..64).any(|n| s_easy.check_pow_layer0(n).unwrap().0);
+        assert!(any_pass, "easiest target must accept at least one nonce in a small scan");
 
-        // bits = 0x01010000 -> target_256 = 0x01 << 0, i.e. target
-        // = 1. Practically impossible to land below.
+        // bits = 0x01010000 -> target_256 = 1, lifted to target_512 =
+        // 1 << 256 = 2^256. A digest lands below only if its top 256
+        // bits are all zero (P ≈ 2^-256), so this rejects in practice.
         let hard = dummy_header(0x01010000, 0, 1_700_000_000);
         let s_hard = StateLayer0::new(&hard, b"simnet");
         let (pass, _) = s_hard.check_pow_layer0(0).unwrap();

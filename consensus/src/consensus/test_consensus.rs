@@ -10,7 +10,7 @@ use kaspa_consensus_notify::{notification::Notification, root::ConsensusNotifica
 use kaspa_consensusmanager::{ConsensusFactory, ConsensusInstance, DynConsensusCtl};
 use kaspa_core::{core::Core, service::Service};
 use kaspa_database::utils::DbLifetime;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_notify::subscription::context::SubscriptionContext;
 use parking_lot::RwLock;
 
@@ -117,7 +117,7 @@ impl TestConsensus {
         &self.params
     }
 
-    pub fn build_header_with_parents(&self, hash: Hash, parents: Vec<Hash>) -> Header {
+    pub fn build_header_with_parents(&self, hash: BlockHash, parents: Vec<BlockHash>) -> Header {
         let mut header = header_from_precomputed_hash(hash, parents.clone());
         let parents_by_level = self.consensus.services.parents_manager.calc_block_parents(self.pruning_point(), &parents);
         header.parents_by_level = parents_by_level;
@@ -134,8 +134,8 @@ impl TestConsensus {
 
     pub fn add_header_only_block_with_parents(
         &self,
-        hash: Hash,
-        parents: Vec<Hash>,
+        hash: BlockHash,
+        parents: Vec<BlockHash>,
     ) -> impl Future<Output = BlockProcessResult<BlockStatus>> {
         self.validate_and_insert_block(self.build_header_only_block_with_parents(hash, parents).to_immutable()).virtual_state_task
     }
@@ -148,8 +148,8 @@ impl TestConsensus {
     /// See `kaspa_consensus_core::errors::block::RuleError` for the complete list of possible validation rules.
     pub fn add_utxo_valid_block_with_parents(
         &self,
-        hash: Hash,
-        parents: Vec<Hash>,
+        hash: BlockHash,
+        parents: Vec<BlockHash>,
         txs: Vec<Transaction>,
     ) -> impl Future<Output = BlockProcessResult<BlockStatus>> {
         let miner_data = MinerData::new(ScriptPublicKey::from_vec(0, vec![]), vec![]);
@@ -159,8 +159,8 @@ impl TestConsensus {
 
     pub fn add_empty_utxo_valid_block_with_parents(
         &self,
-        hash: Hash,
-        parents: Vec<Hash>,
+        hash: BlockHash,
+        parents: Vec<BlockHash>,
     ) -> impl Future<Output = BlockProcessResult<BlockStatus>> {
         self.add_utxo_valid_block_with_parents(hash, parents, vec![])
     }
@@ -173,8 +173,8 @@ impl TestConsensus {
     /// See `kaspa_consensus_core::errors::block::RuleError` for the complete list of possible validation rules.
     pub fn build_utxo_valid_block_with_parents(
         &self,
-        hash: Hash,
-        parents: Vec<Hash>,
+        hash: BlockHash,
+        parents: Vec<BlockHash>,
         miner_data: MinerData,
         txs: Vec<Transaction>,
     ) -> MutableBlock {
@@ -185,8 +185,8 @@ impl TestConsensus {
 
     pub fn build_block_with_parents_and_transactions(
         &self,
-        hash: Hash,
-        parents: Vec<Hash>,
+        hash: BlockHash,
+        parents: Vec<BlockHash>,
         mut txs: Vec<Transaction>,
     ) -> MutableBlock {
         let mut header = self.build_header_with_parents(hash, parents);
@@ -202,7 +202,7 @@ impl TestConsensus {
         MutableBlock::new(header, txs)
     }
 
-    pub fn build_header_only_block_with_parents(&self, hash: Hash, parents: Vec<Hash>) -> MutableBlock {
+    pub fn build_header_only_block_with_parents(&self, hash: BlockHash, parents: Vec<BlockHash>) -> MutableBlock {
         MutableBlock::from_header(self.build_header_with_parents(hash, parents))
     }
 

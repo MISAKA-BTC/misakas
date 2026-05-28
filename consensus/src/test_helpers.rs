@@ -1,4 +1,5 @@
 use kaspa_consensus_core::{
+    BlockHash,
     block::Block,
     header::Header,
     subnets::SubnetworkId,
@@ -8,11 +9,11 @@ use kaspa_consensus_core::{
 use kaspa_hashes::{HASH_SIZE, Hash};
 use rand::{Rng, rngs::SmallRng, seq::SliceRandom};
 
-pub fn header_from_precomputed_hash(hash: Hash, parents: Vec<Hash>) -> Header {
+pub fn header_from_precomputed_hash(hash: BlockHash, parents: Vec<BlockHash>) -> Header {
     Header::from_precomputed_hash(hash, parents)
 }
 
-pub fn block_from_precomputed_hash(hash: Hash, parents: Vec<Hash>) -> Block {
+pub fn block_from_precomputed_hash(hash: BlockHash, parents: Vec<BlockHash>) -> Block {
     Block::from_precomputed_hash(hash, parents)
 }
 
@@ -80,11 +81,12 @@ pub fn generate_random_p2pk_script_public_key(rng: &mut SmallRng) -> ScriptPubli
     ScriptPublicKey::new(0_u16, script)
 }
 
-pub fn generate_random_hashes(rng: &mut SmallRng, amount: usize) -> Vec<Hash> {
+// PR-9.5e: block hashes are now `BlockHash` (Hash64); used for `parents_by_level` below.
+pub fn generate_random_hashes(rng: &mut SmallRng, amount: usize) -> Vec<BlockHash> {
     let mut hashes = Vec::with_capacity(amount);
     let mut i = 0;
     while i < amount {
-        hashes.push(generate_random_hash(rng));
+        hashes.push(generate_random_hash64(rng));
         i += 1;
     }
     hashes
@@ -123,8 +125,8 @@ pub fn generate_random_header(rng: &mut SmallRng, parent_amount: usize) -> Heade
         rng.r#gen(),               // pow_algo_id
         rng.r#gen(),               // daa_score
         rng.r#gen::<u64>().into(), // blue_work
-        rng.r#gen(),               // blue_score
-        generate_random_hash(rng), // pruning_point
+        rng.r#gen(),                 // blue_score
+        generate_random_hash64(rng), // PR-9.5e: pruning_point is a BlockHash (Hash64)
     )
 }
 

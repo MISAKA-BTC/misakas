@@ -1,7 +1,7 @@
 use crate::processes::ghostdag::ordering::SortableBlock;
 use kaspa_consensus_core::BlockHasher;
 use kaspa_database::prelude::{Cache, CachePolicy};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use std::{
     cmp::Reverse,
@@ -44,7 +44,7 @@ impl DerefMut for BlockWindowHeap {
 /// A newtype wrapper over `[Cache]` meant to prevent erroneous reads of windows from different origins
 #[derive(Clone)]
 pub struct BlockWindowCacheStore {
-    inner: Cache<Hash, Arc<BlockWindowHeap>, BlockHasher>,
+    inner: Cache<BlockHash, Arc<BlockWindowHeap>, BlockHasher>,
 }
 
 impl BlockWindowCacheStore {
@@ -52,11 +52,11 @@ impl BlockWindowCacheStore {
         Self { inner: Cache::new(policy) }
     }
 
-    pub fn contains_key(&self, key: &Hash) -> bool {
+    pub fn contains_key(&self, key: &BlockHash) -> bool {
         self.inner.contains_key(key)
     }
 
-    pub fn remove(&self, key: &Hash) -> Option<Arc<BlockWindowHeap>> {
+    pub fn remove(&self, key: &BlockHash) -> Option<Arc<BlockWindowHeap>> {
         self.inner.remove(key)
     }
 }
@@ -65,29 +65,29 @@ impl BlockWindowCacheStore {
 pub trait BlockWindowCacheReader {
     /// Get the cache entry to this hash conditioned that *it matches the provided origin*.
     /// We demand the origin to be provided in order to prevent reader errors.
-    fn get(&self, hash: &Hash) -> Option<Arc<BlockWindowHeap>>;
+    fn get(&self, hash: &BlockHash) -> Option<Arc<BlockWindowHeap>>;
 }
 
 impl BlockWindowCacheReader for BlockWindowCacheStore {
     #[inline(always)]
-    fn get(&self, hash: &Hash) -> Option<Arc<BlockWindowHeap>> {
+    fn get(&self, hash: &BlockHash) -> Option<Arc<BlockWindowHeap>> {
         self.inner.get(hash)
     }
 }
 
 impl<U: BlockWindowCacheReader> BlockWindowCacheReader for Option<&Arc<U>> {
     #[inline(always)]
-    fn get(&self, hash: &Hash) -> Option<Arc<BlockWindowHeap>> {
+    fn get(&self, hash: &BlockHash) -> Option<Arc<BlockWindowHeap>> {
         self.and_then(|inner| inner.get(hash))
     }
 }
 
 pub trait BlockWindowCacheWriter {
-    fn insert(&self, hash: Hash, window: Arc<BlockWindowHeap>);
+    fn insert(&self, hash: BlockHash, window: Arc<BlockWindowHeap>);
 }
 
 impl BlockWindowCacheWriter for BlockWindowCacheStore {
-    fn insert(&self, hash: Hash, window: Arc<BlockWindowHeap>) {
+    fn insert(&self, hash: BlockHash, window: Arc<BlockWindowHeap>) {
         self.inner.insert(hash, window);
     }
 }

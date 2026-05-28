@@ -5,7 +5,7 @@ use kaspa_consensus_core::{
     subnets::SUBNETWORK_ID_NATIVE,
     tx::{ScriptPublicKey, SignableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry},
 };
-use kaspa_hashes::TransactionID;
+use kaspa_hashes::TransactionId64;
 use kaspa_muhash::MuHash;
 use kaspa_utils::iter::parallelism_in_power_steps;
 use rayon::prelude::*;
@@ -14,7 +14,7 @@ fn generate_transaction(ins: usize, outs: usize, randomness: u64) -> SignableTra
     let mut tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
     let mut entries = vec![];
     for i in 0..ins {
-        let mut hasher = TransactionID::new();
+        let mut hasher = TransactionId64::new();
         hasher.write(i.to_le_bytes());
         hasher.write(randomness.to_le_bytes());
         let input = TransactionInput::new(TransactionOutpoint::new(hasher.finalize(), 0), vec![10; 66], 0, 1);

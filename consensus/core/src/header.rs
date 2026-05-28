@@ -1,6 +1,10 @@
-use crate::{BlueWorkType, hashing};
+use crate::{BlockHash, BlueWorkType, PruningPoint, hashing};
 use borsh::{BorshDeserialize, BorshSerialize};
 use itertools::Itertools;
+// PR-9.5e: `Hash` (= `Hash32`) is retained ONLY for `utxo_commitment`
+// (an LtHash/muhash accumulator commitment, not a block-hash
+// identity). Every block-hash field/parent below uses `BlockHash`
+// (= `Hash64`); the pruning point uses `PruningPoint` (also `Hash64`).
 use kaspa_hashes::Hash;
 use kaspa_utils::{
     iter::{IterExtensions, IterExtensionsRle},
@@ -16,7 +20,7 @@ use std::mem::size_of;
 /// Example: `[(3, [A]), (5, [B])]` means levels 0-2 have parents `[A]`,
 /// and levels 3-4 have parents `[B]`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct CompressedParents(Vec<(u8, Vec<Hash>)>);
+pub struct CompressedParents(Vec<(u8, Vec<BlockHash>)>);
 
 impl CompressedParents {
     pub fn expanded_len(&self) -> usize {
@@ -27,7 +31,7 @@ impl CompressedParents {
         self.0.is_empty()
     }
 
-    pub fn get(&self, index: usize) -> Option<&[Hash]> {
+    pub fn get(&self, index: usize) -> Option<&[BlockHash]> {
         if index >= self.expanded_len() {
             return None;
         }
@@ -42,13 +46,13 @@ impl CompressedParents {
         Some(&self.0[i].1)
     }
 
-    pub fn expanded_iter(&self) -> impl Iterator<Item = &'_ [Hash]> {
+    pub fn expanded_iter(&self) -> impl Iterator<Item = &'_ [BlockHash]> {
         self.0.iter().map(|(cum, v)| (*cum as usize, v.as_slice())).expand_rle()
     }
 
     /// Adds a new level of parents. This extends the last run if parents_at_level
     /// is identical to the last level, otherwise it starts a new run
-    pub fn push(&mut self, parents_at_level: Vec<Hash>) {
+    pub fn push(&mut self, parents_at_level: Vec<BlockHash>) {
         match self.0.last_mut() {
             Some((count, last_parents)) if *last_parents == parents_at_level => {
                 *count = count.checked_add(1).expect("exceeded max levels of 255");
@@ -66,28 +70,28 @@ impl CompressedParents {
     /// Sets the direct parents (level 0) to the given value, preserving all other levels.
     ///
     /// NOTE: inefficient implementation, should be used for testing purposes only.
-    pub fn set_direct_parents(&mut self, direct_parents: Vec<Hash>) {
+    pub fn set_direct_parents(&mut self, direct_parents: Vec<BlockHash>) {
         if self.0.is_empty() {
             self.0.push((1, direct_parents));
             return;
         }
-        let mut parents: Vec<Vec<Hash>> = std::mem::take(self).into();
+        let mut parents: Vec<Vec<BlockHash>> = std::mem::take(self).into();
         parents[0] = direct_parents;
         *self = parents.try_into().unwrap();
     }
 
     /// Returns the internal cumulative-sum run-length encoded representation.
-    pub fn raw(&self) -> &[(u8, Vec<Hash>)] {
+    pub fn raw(&self) -> &[(u8, Vec<BlockHash>)] {
         &self.0
     }
 }
 
 use crate::errors::header::CompressedParentsError;
 
-impl TryFrom<Vec<Vec<Hash>>> for CompressedParents {
+impl TryFrom<Vec<Vec<BlockHash>>> for CompressedParents {
     type Error = CompressedParentsError;
 
-    fn try_from(parents: Vec<Vec<Hash>>) -> Result<Self, Self::Error> {
+    fn try_from(parents: Vec<Vec<BlockHash>>) -> Result<Self, Self::Error> {
         if parents.len() > u8::MAX as usize {
             return Err(CompressedParentsError::LevelsExceeded);
         }
@@ -97,9 +101,9 @@ impl TryFrom<Vec<Vec<Hash>>> for CompressedParents {
     }
 }
 
-impl TryFrom<Vec<(u8, Vec<Hash>)>> for CompressedParents {
+impl TryFrom<Vec<(u8, Vec<BlockHash>)>> for CompressedParents {
     type Error = CompressedParentsError;
-    fn try_from(parents: Vec<(u8, Vec<Hash>)>) -> Result<Self, Self::Error> {
+    fn try_from(parents: Vec<(u8, Vec<BlockHash>)>) -> Result<Self, Self::Error> {
         for ((last_cumulative_level, last_parents), (cumulative_level, parents)) in parents.iter().tuple_windows() {
             // Make sure any next cumulative_level is strictly greater than the last
             if cumulative_level <= last_cumulative_level {
@@ -115,13 +119,13 @@ impl TryFrom<Vec<(u8, Vec<Hash>)>> for CompressedParents {
     }
 }
 
-impl From<CompressedParents> for Vec<Vec<Hash>> {
+impl From<CompressedParents> for Vec<Vec<BlockHash>> {
     fn from(value: CompressedParents) -> Self {
         value.0.into_iter().map(|(cum, v)| (cum as usize, v)).expand_rle().collect()
     }
 }
 
-impl From<&CompressedParents> for Vec<Vec<Hash>> {
+impl From<&CompressedParents> for Vec<Vec<BlockHash>> {
     fn from(value: &CompressedParents) -> Self {
         value.expanded_iter().map(|x| x.to_vec()).collect()
     }
@@ -132,7 +136,7 @@ impl From<&CompressedParents> for Vec<Vec<Hash>> {
 #[serde(rename_all = "camelCase")]
 pub struct Header {
     /// Cached hash
-    pub hash: Hash,
+    pub hash: BlockHash,
     pub version: u16,
     pub parents_by_level: CompressedParents,
     /// PR-9.5c: widened to `MerkleRoot` (= [`Hash64`]). Receives
@@ -164,7 +168,7 @@ pub struct Header {
     pub daa_score: u64,
     pub blue_work: BlueWorkType,
     pub blue_score: u64,
-    pub pruning_point: Hash,
+    pub pruning_point: PruningPoint,
 }
 
 impl Header {
@@ -184,7 +188,7 @@ impl Header {
         daa_score: u64,
         blue_work: BlueWorkType,
         blue_score: u64,
-        pruning_point: Hash,
+        pruning_point: PruningPoint,
     ) -> Self {
         let mut header = Self {
             hash: Default::default(), // Temp init before the finalize below
@@ -211,7 +215,7 @@ impl Header {
         self.hash = hashing::header::hash(self);
     }
 
-    pub fn direct_parents(&self) -> &[Hash] {
+    pub fn direct_parents(&self) -> &[BlockHash] {
         match self.parents_by_level.get(0) {
             Some(parents) => parents,
             None => &[],
@@ -219,7 +223,7 @@ impl Header {
     }
 
     /// WARNING: To be used for test purposes only
-    pub fn from_precomputed_hash(hash: Hash, parents: Vec<Hash>) -> Header {
+    pub fn from_precomputed_hash(hash: BlockHash, parents: Vec<BlockHash>) -> Header {
         Header {
             version: crate::constants::BLOCK_VERSION,
             hash,
@@ -249,8 +253,8 @@ impl AsRef<Header> for Header {
 impl MemSizeEstimator for Header {
     fn estimate_mem_bytes(&self) -> usize {
         size_of::<Self>()
-            + self.parents_by_level.0.iter().map(|(_, l)| l.len()).sum::<usize>() * size_of::<Hash>()
-            + self.parents_by_level.0.len() * size_of::<(u8, Vec<Hash>)>()
+            + self.parents_by_level.0.iter().map(|(_, l)| l.len()).sum::<usize>() * size_of::<BlockHash>()
+            + self.parents_by_level.0.len() * size_of::<(u8, Vec<BlockHash>)>()
     }
 }
 
@@ -260,20 +264,20 @@ mod tests {
     use kaspa_math::Uint192;
     use serde_json::Value;
 
-    fn hash(val: u8) -> Hash {
-        Hash::from(val as u64)
+    fn hash(val: u8) -> BlockHash {
+        BlockHash::from(val as u64)
     }
 
-    fn vec_from(slice: &[u8]) -> Vec<Hash> {
+    fn vec_from(slice: &[u8]) -> Vec<BlockHash> {
         slice.iter().map(|&v| hash(v)).collect()
     }
 
-    fn serialize_parents(parents: &[Vec<Hash>]) -> Vec<u8> {
+    fn serialize_parents(parents: &[Vec<BlockHash>]) -> Vec<u8> {
         let compressed: CompressedParents = (parents.to_vec()).try_into().unwrap();
         bincode::serialize(&compressed).unwrap()
     }
 
-    fn deserialize_parents(bytes: &[u8]) -> bincode::Result<Vec<Vec<Hash>>> {
+    fn deserialize_parents(bytes: &[u8]) -> bincode::Result<Vec<Vec<BlockHash>>> {
         let parents: CompressedParents = bincode::deserialize(bytes)?;
         Ok(parents.into())
     }
@@ -376,12 +380,12 @@ mod tests {
         assert_eq!(compressed.get(5), None, "get out of bounds (just over)");
         assert_eq!(compressed.get(10), None, "get out of bounds (far over)");
 
-        let collected: Vec<&[Hash]> = compressed.expanded_iter().collect();
-        let expected: Vec<&[Hash]> = parents.iter().map(|v| v.as_slice()).collect();
+        let collected: Vec<&[BlockHash]> = compressed.expanded_iter().collect();
+        let expected: Vec<&[BlockHash]> = parents.iter().map(|v| v.as_slice()).collect();
         assert_eq!(collected, expected);
 
         // Test with an empty vec
-        let parents_empty: Vec<Vec<Hash>> = vec![];
+        let parents_empty: Vec<Vec<BlockHash>> = vec![];
         let compressed_empty: CompressedParents = parents_empty.try_into().unwrap();
         assert_eq!(compressed_empty.expanded_len(), 0);
         assert!(compressed_empty.is_empty());

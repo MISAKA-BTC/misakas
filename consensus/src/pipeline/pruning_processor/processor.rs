@@ -38,7 +38,7 @@ use kaspa_consensus_core::{
 use kaspa_consensusmanager::SessionLock;
 use kaspa_core::{debug, info, trace, warn};
 use kaspa_database::prelude::{BatchDbWriter, DB, MemoryWriter, StoreResultExt};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_muhash::MuHash;
 use kaspa_utils::iter::IterExtensions;
 use parking_lot::RwLockUpgradableReadGuard;
@@ -242,7 +242,7 @@ impl PruningProcessor {
         }
     }
 
-    fn advance_pruning_utxoset(&self, utxoset_position: Hash, new_pruning_point: Hash) -> bool {
+    fn advance_pruning_utxoset(&self, utxoset_position: BlockHash, new_pruning_point: BlockHash) -> bool {
         // If the latest pruning point is the result of an IBD catchup, it is guaranteed that the headers selected tip
         // is pruning_depth on top of it
         // but crucially it is not guaranteed *virtual* is of sufficient depth above it
@@ -279,7 +279,9 @@ impl PruningProcessor {
         true
     }
 
-    fn assert_utxo_commitment(&self, pruning_point: Hash) {
+    // PR-9.5e: `pruning_point` is a block hash (BlockHash) despite the fn name; the
+    // utxo_commitment read below stays a 32-byte Hash.
+    fn assert_utxo_commitment(&self, pruning_point: BlockHash) {
         info!("Verifying the new pruning point UTXO commitment (sanity test)");
         let commitment = self.headers_store.get_header(pruning_point).unwrap().utxo_commitment;
         let mut multiset = MuHash::new();
@@ -291,7 +293,7 @@ impl PruningProcessor {
         info!("Pruning point UTXO commitment was verified correctly (sanity test)");
     }
 
-    fn prune(&self, new_pruning_point: Hash, retention_period_root: Hash) {
+    fn prune(&self, new_pruning_point: BlockHash, retention_period_root: BlockHash) {
         if self.config.is_archival {
             warn!("The node is configured as an archival node -- avoiding data pruning. Note this might lead to heavy disk usage.");
             return;
@@ -440,7 +442,7 @@ impl PruningProcessor {
 
         // Now we traverse the anti-future of the new pruning point starting from origin and going up.
         // The most efficient way to traverse the entire DAG from the bottom-up is via the reachability tree
-        let mut queue = VecDeque::<Hash>::from_iter(reachability_read.get_children(ORIGIN).unwrap().iter().copied());
+        let mut queue = VecDeque::<BlockHash>::from_iter(reachability_read.get_children(ORIGIN).unwrap().iter().copied());
         let (mut counter, mut traversed) = (0, 0);
         info!("Header and Block pruning: starting traversal from: {} (genesis: {})", queue.iter().reusable_format(", "), genesis);
         while let Some(current) = queue.pop_front() {
@@ -594,7 +596,7 @@ impl PruningProcessor {
     /// doing any pruning. Pruning point must be the new pruning point this node is advancing to.
     ///
     /// The returned retention_period_root is guaranteed to be in past(pruning_point) or the pruning point itself.
-    pub fn advance_retention_period_root(&self, retention_period_root: Hash, pruning_point: Hash) -> Hash {
+    pub fn advance_retention_period_root(&self, retention_period_root: BlockHash, pruning_point: BlockHash) -> BlockHash {
         match self.config.retention_period_days {
             // If the retention period wasn't set, immediately default to the pruning point.
             None => pruning_point,
@@ -641,7 +643,7 @@ impl PruningProcessor {
         self.headers_store.get_timestamp(self.get_sink()).unwrap()
     }
 
-    fn get_sink(&self) -> Hash {
+    fn get_sink(&self) -> BlockHash {
         self.lkg_virtual_state.load().ghostdag_data.selected_parent
     }
 
@@ -651,13 +653,13 @@ impl PruningProcessor {
             .collect()
     }
 
-    fn confirm_pruning_depth_below_virtual(&self, pruning_point: Hash) -> bool {
+    fn confirm_pruning_depth_below_virtual(&self, pruning_point: BlockHash) -> bool {
         let virtual_state = self.virtual_stores.read().state.get().unwrap();
         let pp_bs = self.headers_store.get_blue_score(pruning_point).unwrap();
         virtual_state.ghostdag_data.blue_score >= pp_bs + self.config.params.pruning_depth()
     }
 
-    fn assert_proof_rebuilding(&self, ref_proof: Arc<PruningPointProof>, new_pruning_point: Hash) {
+    fn assert_proof_rebuilding(&self, ref_proof: Arc<PruningPointProof>, new_pruning_point: BlockHash) {
         info!("Rebuilding the pruning proof after pruning data (sanity test)");
         let built_proof = self.pruning_proof_manager.build_pruning_point_proof(new_pruning_point);
         if ref_proof.len() != built_proof.len() {
@@ -671,7 +673,7 @@ impl PruningProcessor {
         info!("Proof was rebuilt successfully following pruning");
     }
 
-    fn assert_data_rebuilding(&self, ref_data: Arc<PruningPointTrustedData>, new_pruning_point: Hash) {
+    fn assert_data_rebuilding(&self, ref_data: Arc<PruningPointTrustedData>, new_pruning_point: BlockHash) {
         info!("Rebuilding pruning point trusted data (sanity test)");
         let virtual_state = self.lkg_virtual_state.load();
         let built_data = self

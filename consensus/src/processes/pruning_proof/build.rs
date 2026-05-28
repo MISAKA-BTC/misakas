@@ -14,7 +14,7 @@ use kaspa_consensus_core::{
 };
 use kaspa_core::{debug, trace};
 use kaspa_database::prelude::*;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_utils::binary_heap::TopK;
 use parking_lot::RwLock;
 
@@ -43,8 +43,8 @@ use crate::model::services::reachability::MTReachabilityService;
 #[derive(Clone)]
 struct LevelProofContext {
     ghostdag_store: Arc<DbGhostdagStore>,
-    tip: Hash,
-    root: Hash,
+    tip: BlockHash,
+    root: BlockHash,
     count: u64,
 }
 
@@ -57,17 +57,17 @@ struct LevelProofContext {
 struct FutureIntersectRelations<T: RelationsStoreReader, U: ReachabilityService> {
     relations_store: T,
     reachability_service: U,
-    root: Hash,
+    root: BlockHash,
 }
 
 impl<T: RelationsStoreReader, U: ReachabilityService> FutureIntersectRelations<T, U> {
-    fn new(relations_store: T, reachability_service: U, root: Hash) -> Self {
+    fn new(relations_store: T, reachability_service: U, root: BlockHash) -> Self {
         Self { relations_store, reachability_service, root }
     }
 }
 
 impl<T: RelationsStoreReader, U: ReachabilityService> RelationsStoreReader for FutureIntersectRelations<T, U> {
-    fn get_parents(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_parents(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         self.relations_store.get_parents(hash).map(|hashes| {
             hashes
                 .iter()
@@ -78,12 +78,12 @@ impl<T: RelationsStoreReader, U: ReachabilityService> RelationsStoreReader for F
         })
     }
 
-    fn get_children(&self, hash: Hash) -> StoreResult<ReadLock<BlockHashSet>> {
+    fn get_children(&self, hash: BlockHash) -> StoreResult<ReadLock<BlockHashSet>> {
         assert!(self.reachability_service.is_dag_ancestor_of(self.root, hash), "future(root) invariant violated");
         self.relations_store.get_children(hash)
     }
 
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         Ok(self.relations_store.has(hash)? && self.reachability_service.is_dag_ancestor_of(self.root, hash))
     }
 
@@ -146,7 +146,7 @@ impl PruningProofManager {
     /// collecting the headers in `future(root) ∩ past(tip)` for each level.
     /// Temporary stores are used during construction, and headers are shared (via arcs)
     /// across levels in the final proof.
-    pub(crate) fn build_pruning_point_proof(&self, pp: Hash) -> PruningPointProof {
+    pub(crate) fn build_pruning_point_proof(&self, pp: BlockHash) -> PruningPointProof {
         let descriptor = self.pruning_point_store.read().pruning_proof_descriptor().optional().unwrap();
         if let Some(descriptor) = descriptor.as_ref() {
             // Use a locally built descriptor (when it matches the current pruning point) for fast reconstruction.
@@ -255,7 +255,7 @@ impl PruningProofManager {
 
     /// Computes level-proof contexts for all levels, processing levels from high to low to satisfy
     /// MLS inter-level constraints, and aggregates the results into a pruning-proof descriptor.
-    fn calc_new_proof(&self, pp: Hash, prev_descriptor: Option<&PruningProofDescriptor>) -> PruningProofDescriptor {
+    fn calc_new_proof(&self, pp: BlockHash, prev_descriptor: Option<&PruningProofDescriptor>) -> PruningProofDescriptor {
         let (_db_lifetime, temp_db) = kaspa_database::create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let pp_header = self.headers_store.get_header_with_block_level(pp).unwrap();
 
@@ -318,9 +318,9 @@ impl PruningProofManager {
         &self,
         pp_header: &HeaderWithBlockLevel,
         level: BlockLevel,
-        required_block: Option<Hash>,
-        prev_tip: Option<Hash>,
-        prev_root: Option<Hash>,
+        required_block: Option<BlockHash>,
+        prev_tip: Option<BlockHash>,
+        prev_root: Option<BlockHash>,
         db: Arc<DB>,
     ) -> ProofInternalResult<LevelProofContext> {
         // Select the tip at this level:
@@ -376,10 +376,10 @@ impl PruningProofManager {
         let mut reachability_factory = ReachabilityStoreFactory::new(db.clone(), cache_policy, level);
 
         // Track a few high-future-size candidates for a final fallback pass
-        let mut best_future_roots = TopK::<(u64, Hash), 8>::new();
+        let mut best_future_roots = TopK::<(u64, BlockHash), 8>::new();
 
         // Try to realize a level-proof from a candidate root
-        let mut try_root = |relations_store: &DbRelationsStore, root: Hash, future_size: u64| -> Option<LevelProofContext> {
+        let mut try_root = |relations_store: &DbRelationsStore, root: BlockHash, future_size: u64| -> Option<LevelProofContext> {
             // Populate ghostdag for `future(root) ∩ past(tip)` and test depth requirements.
             let (ghostdag_store, has_required_block, count) = self.populate_level_proof_ghostdag_data(
                 relations_store,
@@ -437,7 +437,7 @@ impl PruningProofManager {
             trace!("Level: {} | Counting future size of {}", level, current);
             let future_size = self.count_future_size(&relations_store, current, &future_sizes_map);
             future_sizes_map.insert(current, future_size);
-            trace!("Level: {} | Hash: {} | Future Size: {}", level, current, future_size);
+            trace!("Level: {} | BlockHash: {} | Future Size: {}", level, current, future_size);
 
             // Base-level depth from `tip`, measured using *header* blue scores.
             let base_level_depth = tip_header_score.saturating_sub(header.blue_score);
@@ -509,13 +509,13 @@ impl PruningProofManager {
     /// (effectively a traversal over the reversed mergeset).
     ///
     /// Assumes `future_sizes` is populated for all children of `current` (caller is expected to be doing a topological BFS).
-    fn count_future_size(&self, relations: &DbRelationsStore, current: Hash, future_sizes: &BlockHashMap<u64>) -> u64 {
+    fn count_future_size(&self, relations: &DbRelationsStore, current: BlockHash, future_sizes: &BlockHashMap<u64>) -> u64 {
         // Seed the BFS queue with all children of the current hash
         let mut queue: VecDeque<_> = relations.get_children(current).unwrap().read().iter().copied().collect();
         let mut visited = BlockHashSet::new();
 
         struct Entry {
-            child: Hash,
+            child: BlockHash,
             fut_size: u64,
         }
 
@@ -563,9 +563,9 @@ impl PruningProofManager {
         relations_store: &DbRelationsStore,
         ghostdag_factory: &mut GhostdagStoreFactory,
         reachability_factory: &mut ReachabilityStoreFactory,
-        root: Hash,
-        tip: Hash,
-        required_block: Hash,
+        root: BlockHash,
+        tip: BlockHash,
+        required_block: BlockHash,
         level: BlockLevel,
         ghostdag_k: KType,
     ) -> (Arc<DbGhostdagStore>, bool, u64) {
@@ -665,7 +665,7 @@ impl PruningProofManager {
     /// [crate-level documentation](crate): only parents with reachability data are returned.
     /// By convention, the returned hashes are therefore also guaranteed to have a header
     /// entry in the database.
-    fn reachable_parents_at_level<'a>(&'a self, level: u8, header: &'a Header) -> impl Iterator<Item = Hash> + 'a {
+    fn reachable_parents_at_level<'a>(&'a self, level: u8, header: &'a Header) -> impl Iterator<Item = BlockHash> + 'a {
         // `parents_at_level` may include candidates that are not currently in the database.
         // This is fine here: we only need *some* sufficiently-deep reachable root for a proof at this level,
         // not necessarily the "best" / most complete set of candidates.

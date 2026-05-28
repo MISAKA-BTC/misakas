@@ -1,13 +1,12 @@
 use itertools::Itertools;
 use kaspa_consensus_core::BlockHashSet;
-use kaspa_consensus_core::{BlockHashMap, BlockHasher, BlockLevel, blockhash::BlockHashes};
+use kaspa_consensus_core::{BlockHash, BlockHashMap, BlockHasher, BlockLevel, blockhash::BlockHashes};
 use kaspa_database::prelude::{BatchDbWriter, CachePolicy, DbWriter};
 use kaspa_database::prelude::{CachedDbAccess, DbKey, DirectDbWriter};
 use kaspa_database::prelude::{DB, StoreResult};
 use kaspa_database::prelude::{DirectWriter, MemoryWriter};
 use kaspa_database::prelude::{ReadLock, StoreError};
 use kaspa_database::registry::{DatabaseStorePrefixes, SEPARATOR};
-use kaspa_hashes::Hash;
 use rocksdb::WriteBatch;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -18,9 +17,9 @@ use super::children::{ChildrenStore, ChildrenStoreReader, DbChildrenStore};
 
 /// Reader API for `RelationsStore`.
 pub trait RelationsStoreReader {
-    fn get_parents(&self, hash: Hash) -> Result<BlockHashes, StoreError>;
-    fn get_children(&self, hash: Hash) -> StoreResult<ReadLock<BlockHashSet>>;
-    fn has(&self, hash: Hash) -> Result<bool, StoreError>;
+    fn get_parents(&self, hash: BlockHash) -> Result<BlockHashes, StoreError>;
+    fn get_children(&self, hash: BlockHash) -> StoreResult<ReadLock<BlockHashSet>>;
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError>;
 
     /// Returns the counts of entries in parents/children stores. To be used for tests only
     fn counts(&self) -> Result<(usize, usize), StoreError>;
@@ -31,15 +30,15 @@ pub trait RelationsStore: RelationsStoreReader {
     type DefaultWriter: DirectWriter;
     fn default_writer(&self) -> Self::DefaultWriter;
 
-    fn set_parents(&mut self, writer: impl DbWriter, hash: Hash, parents: BlockHashes) -> Result<(), StoreError>;
-    fn delete_entries(&mut self, writer: impl DbWriter, hash: Hash) -> Result<(), StoreError>;
+    fn set_parents(&mut self, writer: impl DbWriter, hash: BlockHash, parents: BlockHashes) -> Result<(), StoreError>;
+    fn delete_entries(&mut self, writer: impl DbWriter, hash: BlockHash) -> Result<(), StoreError>;
 }
 
 /// A DB + cache implementation of `RelationsStore` trait, with concurrent readers support.
 #[derive(Clone)]
 pub struct DbRelationsStore {
     db: Arc<DB>,
-    parents_access: CachedDbAccess<Hash, Arc<Vec<Hash>>, BlockHasher>,
+    parents_access: CachedDbAccess<BlockHash, Arc<Vec<BlockHash>>, BlockHasher>,
     children_store: DbChildrenStore,
 }
 
@@ -89,17 +88,17 @@ impl DbRelationsStore {
         }
     }
 
-    pub(crate) fn delete_children(&self, writer: impl DbWriter, parent: Hash) -> Result<(), StoreError> {
+    pub(crate) fn delete_children(&self, writer: impl DbWriter, parent: BlockHash) -> Result<(), StoreError> {
         self.children_store.delete_children(writer, parent)
     }
 }
 
 impl RelationsStoreReader for DbRelationsStore {
-    fn get_parents(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_parents(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         self.parents_access.read(hash)
     }
 
-    fn get_children(&self, hash: Hash) -> StoreResult<ReadLock<BlockHashSet>> {
+    fn get_children(&self, hash: BlockHash) -> StoreResult<ReadLock<BlockHashSet>> {
         if !self.parents_access.has(hash)? {
             // Children store is iterator based so it might just be empty, hence we check
             // the parents store
@@ -109,7 +108,7 @@ impl RelationsStoreReader for DbRelationsStore {
         }
     }
 
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         if self.parents_access.has(hash)? { Ok(true) } else { Ok(false) }
     }
 
@@ -120,13 +119,13 @@ impl RelationsStoreReader for DbRelationsStore {
 }
 
 impl<T: RelationsStoreReader + ?Sized> RelationsStoreReader for &T {
-    fn get_parents(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_parents(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         (*self).get_parents(hash)
     }
-    fn get_children(&self, hash: Hash) -> StoreResult<ReadLock<BlockHashSet>> {
+    fn get_children(&self, hash: BlockHash) -> StoreResult<ReadLock<BlockHashSet>> {
         (*self).get_children(hash)
     }
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         (*self).has(hash)
     }
     fn counts(&self) -> Result<(usize, usize), StoreError> {
@@ -135,11 +134,11 @@ impl<T: RelationsStoreReader + ?Sized> RelationsStoreReader for &T {
 }
 
 impl ChildrenStore for DbRelationsStore {
-    fn insert_child(&mut self, writer: impl DbWriter, parent: Hash, child: Hash) -> Result<(), StoreError> {
+    fn insert_child(&mut self, writer: impl DbWriter, parent: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         self.children_store.insert_child(writer, parent, child)
     }
 
-    fn delete_child(&mut self, writer: impl DbWriter, parent: Hash, child: Hash) -> Result<(), StoreError> {
+    fn delete_child(&mut self, writer: impl DbWriter, parent: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         self.children_store.delete_child(writer, parent, child)
     }
 }
@@ -151,11 +150,11 @@ impl RelationsStore for DbRelationsStore {
         DirectDbWriter::from_arc(self.db.clone())
     }
 
-    fn set_parents(&mut self, writer: impl DbWriter, hash: Hash, parents: BlockHashes) -> Result<(), StoreError> {
+    fn set_parents(&mut self, writer: impl DbWriter, hash: BlockHash, parents: BlockHashes) -> Result<(), StoreError> {
         self.parents_access.write(writer, hash, parents)
     }
 
-    fn delete_entries(&mut self, mut writer: impl DbWriter, hash: Hash) -> Result<(), StoreError> {
+    fn delete_entries(&mut self, mut writer: impl DbWriter, hash: BlockHash) -> Result<(), StoreError> {
         self.parents_access.delete(&mut writer, hash)?;
         self.children_store.delete_children(&mut writer, hash)
     }
@@ -181,7 +180,7 @@ pub struct StagingRelationsStore<'a> {
 }
 
 impl ChildrenStore for StagingRelationsStore<'_> {
-    fn insert_child(&mut self, _writer: impl DbWriter, parent: Hash, child: Hash) -> Result<(), StoreError> {
+    fn insert_child(&mut self, _writer: impl DbWriter, parent: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         self.check_not_in_entry_deletions(parent)?;
         self.check_not_in_children_deletions(parent, child)?; // We expect deletion to be permanent
         match self.children_insertions.entry(parent) {
@@ -195,7 +194,7 @@ impl ChildrenStore for StagingRelationsStore<'_> {
         Ok(())
     }
 
-    fn delete_child(&mut self, _writer: impl DbWriter, parent: Hash, child: Hash) -> Result<(), StoreError> {
+    fn delete_child(&mut self, _writer: impl DbWriter, parent: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         self.check_not_in_entry_deletions(parent)?;
         if let Entry::Occupied(mut e) = self.children_insertions.entry(parent) {
             e.get_mut().remove(&child);
@@ -257,7 +256,7 @@ impl<'a> StagingRelationsStore<'a> {
         Ok(())
     }
 
-    fn check_not_in_entry_deletions(&self, hash: Hash) -> Result<(), StoreError> {
+    fn check_not_in_entry_deletions(&self, hash: BlockHash) -> Result<(), StoreError> {
         if self.entry_deletions.contains(&hash) {
             Err(StoreError::KeyNotFound(DbKey::new(b"staging-relations", hash)))
         } else {
@@ -265,7 +264,7 @@ impl<'a> StagingRelationsStore<'a> {
         }
     }
 
-    fn check_not_in_children_deletions(&self, parent: Hash, child: Hash) -> Result<(), StoreError> {
+    fn check_not_in_children_deletions(&self, parent: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         if let Some(e) = self.children_deletions.get(&parent) {
             if e.contains(&child) {
                 Err(StoreError::KeyNotFound(DbKey::new_with_bucket(b"staging-relations", parent, child)))
@@ -285,12 +284,12 @@ impl RelationsStore for StagingRelationsStore<'_> {
         MemoryWriter
     }
 
-    fn set_parents(&mut self, _writer: impl DbWriter, hash: Hash, parents: BlockHashes) -> Result<(), StoreError> {
+    fn set_parents(&mut self, _writer: impl DbWriter, hash: BlockHash, parents: BlockHashes) -> Result<(), StoreError> {
         self.parents_overrides.insert(hash, parents);
         Ok(())
     }
 
-    fn delete_entries(&mut self, _writer: impl DbWriter, hash: Hash) -> Result<(), StoreError> {
+    fn delete_entries(&mut self, _writer: impl DbWriter, hash: BlockHash) -> Result<(), StoreError> {
         self.parents_overrides.remove(&hash);
         self.children_deletions.remove(&hash);
         self.children_insertions.remove(&hash);
@@ -300,12 +299,12 @@ impl RelationsStore for StagingRelationsStore<'_> {
 }
 
 impl RelationsStoreReader for StagingRelationsStore<'_> {
-    fn get_parents(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_parents(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         self.check_not_in_entry_deletions(hash)?;
         if let Some(data) = self.parents_overrides.get(&hash) { Ok(BlockHashes::clone(data)) } else { self.store.get_parents(hash) }
     }
 
-    fn get_children(&self, hash: Hash) -> StoreResult<ReadLock<BlockHashSet>> {
+    fn get_children(&self, hash: BlockHash) -> StoreResult<ReadLock<BlockHashSet>> {
         self.check_not_in_entry_deletions(hash)?;
         let store_children = match self.store.get_children(hash) {
             Ok(c) => c.read().iter().copied().collect_vec(),
@@ -325,7 +324,7 @@ impl RelationsStoreReader for StagingRelationsStore<'_> {
         Ok(children.into())
     }
 
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         if self.entry_deletions.contains(&hash) {
             return Ok(false);
         }
@@ -338,8 +337,8 @@ impl RelationsStoreReader for StagingRelationsStore<'_> {
             .parents_access
             .iterator()
             .map(|r| r.unwrap().0)
-            .map(|k| <[u8; kaspa_hashes::HASH_SIZE]>::try_from(&k[..]).unwrap())
-            .map(Hash::from_bytes)
+            .map(|k| <[u8; kaspa_hashes::HASH64_SIZE]>::try_from(&k[..]).unwrap())
+            .map(BlockHash::from_bytes)
             .chain(self.parents_overrides.keys().copied())
             .collect::<BlockHashSet>()
             .difference(&self.entry_deletions)
@@ -361,7 +360,7 @@ impl MemoryRelationsStore {
 }
 
 impl ChildrenStore for MemoryRelationsStore {
-    fn insert_child(&mut self, _writer: impl DbWriter, parent: Hash, child: Hash) -> Result<(), StoreError> {
+    fn insert_child(&mut self, _writer: impl DbWriter, parent: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         let mut children = match self.children_map.get(&parent) {
             Some(children) => children.iter().copied().collect_vec(),
             None => vec![],
@@ -372,7 +371,7 @@ impl ChildrenStore for MemoryRelationsStore {
         Ok(())
     }
 
-    fn delete_child(&mut self, _writer: impl DbWriter, parent: Hash, child: Hash) -> Result<(), StoreError> {
+    fn delete_child(&mut self, _writer: impl DbWriter, parent: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         let mut children = match self.children_map.get(&parent) {
             Some(children) => children.iter().copied().collect_vec(),
             None => vec![],
@@ -389,14 +388,14 @@ impl ChildrenStore for MemoryRelationsStore {
 }
 
 impl RelationsStoreReader for MemoryRelationsStore {
-    fn get_parents(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_parents(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         match self.parents_map.get(&hash) {
             Some(parents) => Ok(BlockHashes::clone(parents)),
             None => Err(StoreError::KeyNotFound(DbKey::new(DatabaseStorePrefixes::RelationsParents.as_ref(), hash))),
         }
     }
 
-    fn get_children(&self, hash: Hash) -> StoreResult<ReadLock<BlockHashSet>> {
+    fn get_children(&self, hash: BlockHash) -> StoreResult<ReadLock<BlockHashSet>> {
         if !self.has(hash)? {
             Err(StoreError::KeyNotFound(DbKey::new(DatabaseStorePrefixes::RelationsChildren.as_ref(), hash)))
         } else {
@@ -407,7 +406,7 @@ impl RelationsStoreReader for MemoryRelationsStore {
         }
     }
 
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         Ok(self.parents_map.contains_key(&hash))
     }
 
@@ -424,12 +423,12 @@ impl RelationsStore for MemoryRelationsStore {
         MemoryWriter
     }
 
-    fn set_parents(&mut self, _writer: impl DbWriter, hash: Hash, parents: BlockHashes) -> Result<(), StoreError> {
+    fn set_parents(&mut self, _writer: impl DbWriter, hash: BlockHash, parents: BlockHashes) -> Result<(), StoreError> {
         self.parents_map.insert(hash, parents);
         Ok(())
     }
 
-    fn delete_entries(&mut self, _writer: impl DbWriter, hash: Hash) -> Result<(), StoreError> {
+    fn delete_entries(&mut self, _writer: impl DbWriter, hash: BlockHash) -> Result<(), StoreError> {
         self.parents_map.remove(&hash);
         self.children_map.remove(&hash);
         Ok(())
@@ -463,18 +462,18 @@ mod tests {
     fn test_relations_store<T: RelationsStore + ChildrenStore>(mut store: T) {
         let parents = [(1, vec![]), (2, vec![1]), (3, vec![1]), (4, vec![2, 3]), (5, vec![1, 4])];
         for (i, vec) in parents.iter().cloned() {
-            store.insert(i.into(), BlockHashes::new(vec.iter().copied().map(Hash::from).collect())).unwrap();
+            store.insert(i.into(), BlockHashes::new(vec.iter().copied().map(BlockHash::from).collect())).unwrap();
         }
 
         let expected_children = [(1, vec![2, 3, 5]), (2, vec![4]), (3, vec![4]), (4, vec![5]), (5, vec![])];
         for (i, vec) in expected_children {
             let store_children: BlockHashSet = store.get_children(i.into()).unwrap().read().iter().copied().collect();
-            let expected: BlockHashSet = vec.iter().copied().map(Hash::from).collect();
+            let expected: BlockHashSet = vec.iter().copied().map(BlockHash::from).collect();
             assert_eq!(store_children, expected);
         }
 
         for (i, vec) in parents {
-            assert!(store.get_parents(i.into()).unwrap().iter().copied().eq(vec.iter().copied().map(Hash::from)));
+            assert!(store.get_parents(i.into()).unwrap().iter().copied().eq(vec.iter().copied().map(BlockHash::from)));
         }
     }
 }

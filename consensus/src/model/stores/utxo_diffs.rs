@@ -6,7 +6,7 @@ use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 
 /// Store for holding the UTXO difference (delta) of a block relative to its selected parent.
@@ -15,19 +15,19 @@ use rocksdb::WriteBatch;
 /// block status, such that if a block has status `StatusUTXOValid` then it is expected to have
 /// utxo diff data as well as utxo multiset data and acceptance data.
 pub trait UtxoDiffsStoreReader {
-    fn get(&self, hash: Hash) -> Result<Arc<UtxoDiff>, StoreError>;
+    fn get(&self, hash: BlockHash) -> Result<Arc<UtxoDiff>, StoreError>;
 }
 
 pub trait UtxoDiffsStore: UtxoDiffsStoreReader {
-    fn insert(&self, hash: Hash, utxo_diff: Arc<UtxoDiff>) -> Result<(), StoreError>;
-    fn delete(&self, hash: Hash) -> Result<(), StoreError>;
+    fn insert(&self, hash: BlockHash, utxo_diff: Arc<UtxoDiff>) -> Result<(), StoreError>;
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError>;
 }
 
 /// A DB + cache implementation of `UtxoDifferencesStore` trait, with concurrency support.
 #[derive(Clone)]
 pub struct DbUtxoDiffsStore {
     db: Arc<DB>,
-    access: CachedDbAccess<Hash, Arc<UtxoDiff>, BlockHasher>,
+    access: CachedDbAccess<BlockHash, Arc<UtxoDiff>, BlockHasher>,
 }
 
 impl DbUtxoDiffsStore {
@@ -39,35 +39,35 @@ impl DbUtxoDiffsStore {
         Self::new(Arc::clone(&self.db), cache_policy)
     }
 
-    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: Hash, utxo_diff: Arc<UtxoDiff>) -> Result<(), StoreError> {
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, utxo_diff: Arc<UtxoDiff>) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(BatchDbWriter::new(batch), hash, utxo_diff)?;
         Ok(())
     }
 
-    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: Hash) -> Result<(), StoreError> {
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(BatchDbWriter::new(batch), hash)
     }
 }
 
 impl UtxoDiffsStoreReader for DbUtxoDiffsStore {
-    fn get(&self, hash: Hash) -> Result<Arc<UtxoDiff>, StoreError> {
+    fn get(&self, hash: BlockHash) -> Result<Arc<UtxoDiff>, StoreError> {
         self.access.read(hash)
     }
 }
 
 impl UtxoDiffsStore for DbUtxoDiffsStore {
-    fn insert(&self, hash: Hash, utxo_diff: Arc<UtxoDiff>) -> Result<(), StoreError> {
+    fn insert(&self, hash: BlockHash, utxo_diff: Arc<UtxoDiff>) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(DirectDbWriter::new(&self.db), hash, utxo_diff)?;
         Ok(())
     }
 
-    fn delete(&self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(DirectDbWriter::new(&self.db), hash)
     }
 }

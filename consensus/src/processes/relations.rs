@@ -9,7 +9,7 @@ use kaspa_consensus_core::{
     blockhash::{BlockHashIteratorExtensions, BlockHashes, ORIGIN},
 };
 use kaspa_database::prelude::{BatchDbWriter, DbWriter, DirectWriter, StoreError};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 
 /// Initializes this relations store with an `origin` root
@@ -27,7 +27,7 @@ pub fn init<S: RelationsStore + ChildrenStore + ?Sized>(relations: &mut S) {
 ///
 /// NOTE: this algorithm does not support a batch writer bcs it might write to the same entry multiple times
 /// (and writes will not accumulate if the entry gets out of the cache in between the calls)
-pub fn delete_level_relations<W, S>(mut writer: W, relations: &mut S, hash: Hash) -> Result<(), StoreError>
+pub fn delete_level_relations<W, S>(mut writer: W, relations: &mut S, hash: BlockHash) -> Result<(), StoreError>
 where
     W: DirectWriter,
     S: RelationsStore + ChildrenStore + ?Sized,
@@ -36,7 +36,7 @@ where
     for child in children.read().iter().copied() {
         let child_parents = relations.get_parents(child).unwrap();
         // If the removed hash is the only parent of child, then replace it with `origin`
-        let replace_with: &[Hash] = if child_parents.as_slice() == [hash] { &[ORIGIN] } else { &[] };
+        let replace_with: &[BlockHash] = if child_parents.as_slice() == [hash] { &[ORIGIN] } else { &[] };
         relations.replace_parent(&mut writer, child, hash, replace_with).unwrap();
     }
     relations.delete(&mut writer, hash).unwrap();
@@ -50,7 +50,7 @@ where
 ///
 /// NOTE: this algorithm does not support a batch writer bcs it might write to the same entry multiple times
 /// (and writes will not accumulate if the entry gets out of the cache in between the calls)
-pub fn delete_reachability_relations<W, S, U>(mut writer: W, relations: &mut S, reachability: &U, hash: Hash) -> BlockHashSet
+pub fn delete_reachability_relations<W, S, U>(mut writer: W, relations: &mut S, reachability: &U, hash: BlockHash) -> BlockHashSet
 where
     W: DirectWriter,
     S: RelationsStore + ChildrenStore + ?Sized,
@@ -79,20 +79,20 @@ where
 
 pub trait RelationsStoreExtensions: RelationsStore + ChildrenStore {
     /// Inserts `parents` into a new store entry for `hash`, and for each `parent ∈ parents` adds `hash` to `parent.children`
-    fn insert(&mut self, hash: Hash, parents: BlockHashes) -> Result<(), StoreError> {
+    fn insert(&mut self, hash: BlockHash, parents: BlockHashes) -> Result<(), StoreError> {
         self.insert_with_writer(self.default_writer(), hash, parents)
     }
 
-    fn insert_batch(&mut self, batch: &mut WriteBatch, hash: Hash, parents: BlockHashes) -> Result<(), StoreError> {
+    fn insert_batch(&mut self, batch: &mut WriteBatch, hash: BlockHash, parents: BlockHashes) -> Result<(), StoreError> {
         self.insert_with_writer(BatchDbWriter::new(batch), hash, parents)
     }
 
-    fn insert_with_writer<W>(&mut self, mut writer: W, hash: Hash, mut parents: BlockHashes) -> Result<(), StoreError>
+    fn insert_with_writer<W>(&mut self, mut writer: W, hash: BlockHash, mut parents: BlockHashes) -> Result<(), StoreError>
     where
         W: DbWriter,
     {
         if self.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
 
         // TODO: remove this filter
@@ -112,7 +112,7 @@ pub trait RelationsStoreExtensions: RelationsStore + ChildrenStore {
         Ok(())
     }
 
-    fn delete<W>(&mut self, mut writer: W, hash: Hash) -> Result<(), StoreError>
+    fn delete<W>(&mut self, mut writer: W, hash: BlockHash) -> Result<(), StoreError>
     where
         W: DbWriter,
     {
@@ -127,7 +127,7 @@ pub trait RelationsStoreExtensions: RelationsStore + ChildrenStore {
         Ok(())
     }
 
-    fn replace_parent<W>(&mut self, mut writer: W, hash: Hash, replaced_parent: Hash, replace_with: &[Hash]) -> Result<(), StoreError>
+    fn replace_parent<W>(&mut self, mut writer: W, hash: BlockHash, replaced_parent: BlockHash, replace_with: &[BlockHash]) -> Result<(), StoreError>
     where
         W: DbWriter,
     {

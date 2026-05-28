@@ -1,4 +1,4 @@
-use kaspa_hashes::Hash;
+use crate::BlockHash; // PR-9.5e: block-identifier positions widened to Hash64
 use thiserror::Error;
 
 use crate::{tx::TransactionIndexType, utxo::utxo_inquirer::UtxoInquirerError};
@@ -8,22 +8,22 @@ use super::{difficulty::DifficultyError, sync::SyncManagerError, traversal::Trav
 #[derive(Error, Debug, Clone)]
 pub enum ConsensusError {
     #[error("cannot find full block {0}")]
-    BlockNotFound(Hash),
+    BlockNotFound(BlockHash),
 
     #[error("cannot find header {0}")]
-    HeaderNotFound(Hash),
+    HeaderNotFound(BlockHash),
 
     #[error("trying to query {0} txs in block {1}, but the block only holds {2} txs")]
-    TransactionQueryTooLarge(usize, Hash, usize),
+    TransactionQueryTooLarge(usize, BlockHash, usize),
 
     #[error("index {0} out of max {1} in block {2} is out of bounds")]
-    TransactionIndexOutOfBounds(TransactionIndexType, usize, Hash),
+    TransactionIndexOutOfBounds(TransactionIndexType, usize, BlockHash),
 
     #[error("block {0} is invalid")]
-    InvalidBlock(Hash),
+    InvalidBlock(BlockHash),
 
     #[error("some data is missing for block {0}")]
-    MissingData(Hash),
+    MissingData(BlockHash),
 
     #[error("got unexpected pruning point")]
     UnexpectedPruningPoint,

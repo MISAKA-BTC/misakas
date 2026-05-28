@@ -10,24 +10,24 @@ use kaspa_database::prelude::ReadLock;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::StoreResult;
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 use std::sync::Arc;
 
 pub trait ChildrenStoreReader {
-    fn get(&self, hash: Hash) -> StoreResult<ReadLock<BlockHashSet>>;
+    fn get(&self, hash: BlockHash) -> StoreResult<ReadLock<BlockHashSet>>;
 }
 
 pub trait ChildrenStore {
-    fn insert_child(&mut self, writer: impl DbWriter, parent: Hash, child: Hash) -> Result<(), StoreError>;
-    fn delete_child(&mut self, writer: impl DbWriter, parent: Hash, child: Hash) -> Result<(), StoreError>;
+    fn insert_child(&mut self, writer: impl DbWriter, parent: BlockHash, child: BlockHash) -> Result<(), StoreError>;
+    fn delete_child(&mut self, writer: impl DbWriter, parent: BlockHash, child: BlockHash) -> Result<(), StoreError>;
 }
 
 /// A DB + cache implementation of `DbChildrenStore` trait, with concurrency support.
 #[derive(Clone)]
 pub struct DbChildrenStore {
     _db: Arc<DB>,
-    access: CachedDbSetAccess<Hash, Hash, BlockHasher, BlockHasher>,
+    access: CachedDbSetAccess<BlockHash, BlockHash, BlockHasher, BlockHasher>,
 }
 
 impl DbChildrenStore {
@@ -48,12 +48,12 @@ impl DbChildrenStore {
         Self { _db: Arc::clone(&db), access: CachedDbSetAccess::new(db, cache_policy, db_prefix) }
     }
 
-    pub fn insert_batch(&self, batch: &mut WriteBatch, parent: Hash, child: Hash) -> Result<(), StoreError> {
+    pub fn insert_batch(&self, batch: &mut WriteBatch, parent: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), parent, child)?;
         Ok(())
     }
 
-    pub(crate) fn delete_children(&self, mut writer: impl DbWriter, parent: Hash) -> Result<(), StoreError> {
+    pub(crate) fn delete_children(&self, mut writer: impl DbWriter, parent: BlockHash) -> Result<(), StoreError> {
         self.access.delete_bucket(&mut writer, parent)
     }
 
@@ -63,18 +63,18 @@ impl DbChildrenStore {
 }
 
 impl ChildrenStoreReader for DbChildrenStore {
-    fn get(&self, parent: Hash) -> StoreResult<ReadLock<BlockHashSet>> {
+    fn get(&self, parent: BlockHash) -> StoreResult<ReadLock<BlockHashSet>> {
         self.access.read(parent)
     }
 }
 
 impl ChildrenStore for DbChildrenStore {
-    fn insert_child(&mut self, writer: impl DbWriter, parent: Hash, child: Hash) -> Result<(), StoreError> {
+    fn insert_child(&mut self, writer: impl DbWriter, parent: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         self.access.write(writer, parent, child)?;
         Ok(())
     }
 
-    fn delete_child(&mut self, writer: impl DbWriter, parent: Hash, child: Hash) -> Result<(), StoreError> {
+    fn delete_child(&mut self, writer: impl DbWriter, parent: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         self.access.delete(writer, parent, child)
     }
 }

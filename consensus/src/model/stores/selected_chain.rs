@@ -9,31 +9,31 @@ use std::sync::Arc;
 use kaspa_database::prelude::{BatchDbWriter, CachePolicy, CachedDbAccess, DbWriter};
 use kaspa_database::prelude::{CachedDbItem, DB};
 use kaspa_database::prelude::{StoreError, StoreResult};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 
 use super::U64Key;
 
 /// Reader API for `SelectedChainStore`.
 pub trait SelectedChainStoreReader {
-    fn get_by_hash(&self, hash: Hash) -> StoreResult<u64>;
-    fn get_by_index(&self, index: u64) -> StoreResult<Hash>;
-    fn get_tip(&self) -> StoreResult<(u64, Hash)>;
+    fn get_by_hash(&self, hash: BlockHash) -> StoreResult<u64>;
+    fn get_by_index(&self, index: u64) -> StoreResult<BlockHash>;
+    fn get_tip(&self) -> StoreResult<(u64, BlockHash)>;
 }
 
 /// Write API for `SelectedChainStore`. The set function is deliberately `mut`
 /// since chain index is not append-only and thus needs to be guarded.
 pub trait SelectedChainStore: SelectedChainStoreReader {
     fn apply_changes(&mut self, batch: &mut WriteBatch, changes: &ChainPath) -> StoreResult<()>;
-    fn prune_below_point(&mut self, writer: impl DbWriter, block: Hash) -> StoreResult<()>;
-    fn init_with_pruning_point(&mut self, batch: &mut WriteBatch, block: Hash) -> StoreResult<()>;
+    fn prune_below_point(&mut self, writer: impl DbWriter, block: BlockHash) -> StoreResult<()>;
+    fn init_with_pruning_point(&mut self, batch: &mut WriteBatch, block: BlockHash) -> StoreResult<()>;
 }
 
 /// A DB + cache implementation of `SelectedChainStore` trait, with concurrent readers support.
 #[derive(Clone)]
 pub struct DbSelectedChainStore {
     db: Arc<DB>,
-    access_hash_by_index: CachedDbAccess<U64Key, Hash>,
-    access_index_by_hash: CachedDbAccess<Hash, u64>,
+    access_hash_by_index: CachedDbAccess<U64Key, BlockHash>,
+    access_index_by_hash: CachedDbAccess<BlockHash, u64>,
     access_highest_index: CachedDbItem<u64>,
 }
 
@@ -56,21 +56,21 @@ pub trait SelectedChainStoreBatchExtensions {
     fn apply_changes(
         &self,
         batch: &mut WriteBatch,
-        hash: Hash,
+        hash: BlockHash,
         status: BlockStatus,
     ) -> Result<RwLockWriteGuard<'_, DbSelectedChainStore>, StoreError>;
 }
 
 impl SelectedChainStoreReader for DbSelectedChainStore {
-    fn get_by_hash(&self, hash: Hash) -> StoreResult<u64> {
+    fn get_by_hash(&self, hash: BlockHash) -> StoreResult<u64> {
         self.access_index_by_hash.read(hash)
     }
 
-    fn get_by_index(&self, index: u64) -> StoreResult<Hash> {
+    fn get_by_index(&self, index: u64) -> StoreResult<BlockHash> {
         self.access_hash_by_index.read(index.into())
     }
 
-    fn get_tip(&self) -> StoreResult<(u64, Hash)> {
+    fn get_tip(&self) -> StoreResult<(u64, BlockHash)> {
         let idx = self.access_highest_index.read()?;
         let hash = self.access_hash_by_index.read(idx.into())?;
         Ok((idx, hash))
@@ -99,7 +99,7 @@ impl SelectedChainStore for DbSelectedChainStore {
         Ok(())
     }
 
-    fn prune_below_point(&mut self, mut writer: impl DbWriter, block: Hash) -> StoreResult<()> {
+    fn prune_below_point(&mut self, mut writer: impl DbWriter, block: BlockHash) -> StoreResult<()> {
         let mut index = self.access_index_by_hash.read(block)?;
         while index > 0 {
             index -= 1;
@@ -115,7 +115,7 @@ impl SelectedChainStore for DbSelectedChainStore {
         Ok(())
     }
 
-    fn init_with_pruning_point(&mut self, batch: &mut WriteBatch, block: Hash) -> StoreResult<()> {
+    fn init_with_pruning_point(&mut self, batch: &mut WriteBatch, block: BlockHash) -> StoreResult<()> {
         // remove potential leftover chain
         let _ = self.access_index_by_hash.delete_all(BatchDbWriter::new(batch));
         let _ = self.access_hash_by_index.delete_all(BatchDbWriter::new(batch));

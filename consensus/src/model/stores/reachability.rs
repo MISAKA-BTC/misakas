@@ -1,6 +1,6 @@
 use crate::processes::reachability::interval::Interval;
 use kaspa_consensus_core::{
-    BlockHashMap, BlockHashSet, BlockHasher, BlockLevel, HashMapCustomHasher,
+    BlockHash, BlockHashMap, BlockHashSet, BlockHasher, BlockLevel, HashMapCustomHasher,
     blockhash::{self, BlockHashes},
 };
 use kaspa_database::{
@@ -9,7 +9,6 @@ use kaspa_database::{
     },
     registry::{DatabaseStorePrefixes, SEPARATOR},
 };
-use kaspa_hashes::Hash;
 
 use itertools::Itertools;
 use kaspa_utils::mem_size::MemSizeEstimator;
@@ -23,7 +22,7 @@ use std::{
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct ReachabilityData {
-    pub parent: Hash,
+    pub parent: BlockHash,
     pub interval: Interval,
     pub height: u64,
 }
@@ -31,20 +30,20 @@ pub(crate) struct ReachabilityData {
 impl MemSizeEstimator for ReachabilityData {}
 
 impl ReachabilityData {
-    pub fn new(parent: Hash, interval: Interval, height: u64) -> Self {
+    pub fn new(parent: BlockHash, interval: Interval, height: u64) -> Self {
         Self { parent, interval, height }
     }
 }
 
 /// Reader API for `ReachabilityStore`.
 pub trait ReachabilityStoreReader {
-    fn has(&self, hash: Hash) -> Result<bool, StoreError>;
-    fn get_interval(&self, hash: Hash) -> Result<Interval, StoreError>;
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError>;
+    fn get_interval(&self, hash: BlockHash) -> Result<Interval, StoreError>;
     /// Returns the reachability *tree* parent of `hash`
-    fn get_parent(&self, hash: Hash) -> Result<Hash, StoreError>;
+    fn get_parent(&self, hash: BlockHash) -> Result<BlockHash, StoreError>;
     /// Returns the reachability *tree* children of `hash`
-    fn get_children(&self, hash: Hash) -> Result<BlockHashes, StoreError>;
-    fn get_future_covering_set(&self, hash: Hash) -> Result<BlockHashes, StoreError>;
+    fn get_children(&self, hash: BlockHash) -> Result<BlockHashes, StoreError>;
+    fn get_future_covering_set(&self, hash: BlockHash) -> Result<BlockHashes, StoreError>;
     /// Returns the counts of entries in the store. To be used for tests only
     fn count(&self) -> Result<usize, StoreError>;
 }
@@ -52,46 +51,46 @@ pub trait ReachabilityStoreReader {
 /// Write API for `ReachabilityStore`. All write functions are deliberately `mut`
 /// since reachability writes are not append-only and thus need to be guarded.
 pub trait ReachabilityStore: ReachabilityStoreReader {
-    fn init(&mut self, origin: Hash, capacity: Interval) -> Result<(), StoreError>;
-    fn insert(&mut self, hash: Hash, parent: Hash, interval: Interval, height: u64) -> Result<(), StoreError>;
-    fn set_interval(&mut self, hash: Hash, interval: Interval) -> Result<(), StoreError>;
-    fn append_child(&mut self, hash: Hash, child: Hash) -> Result<(), StoreError>;
-    fn insert_future_covering_item(&mut self, hash: Hash, fci: Hash, insertion_index: usize) -> Result<(), StoreError>;
-    fn set_parent(&mut self, hash: Hash, new_parent: Hash) -> Result<(), StoreError>;
+    fn init(&mut self, origin: BlockHash, capacity: Interval) -> Result<(), StoreError>;
+    fn insert(&mut self, hash: BlockHash, parent: BlockHash, interval: Interval, height: u64) -> Result<(), StoreError>;
+    fn set_interval(&mut self, hash: BlockHash, interval: Interval) -> Result<(), StoreError>;
+    fn append_child(&mut self, hash: BlockHash, child: BlockHash) -> Result<(), StoreError>;
+    fn insert_future_covering_item(&mut self, hash: BlockHash, fci: BlockHash, insertion_index: usize) -> Result<(), StoreError>;
+    fn set_parent(&mut self, hash: BlockHash, new_parent: BlockHash) -> Result<(), StoreError>;
     fn replace_child(
         &mut self,
-        hash: Hash,
-        replaced_hash: Hash,
+        hash: BlockHash,
+        replaced_hash: BlockHash,
         replaced_index: usize,
-        replace_with: &[Hash],
+        replace_with: &[BlockHash],
     ) -> Result<(), StoreError>;
     fn replace_future_covering_item(
         &mut self,
-        hash: Hash,
-        replaced_hash: Hash,
+        hash: BlockHash,
+        replaced_hash: BlockHash,
         replaced_index: usize,
-        replace_with: &[Hash],
+        replace_with: &[BlockHash],
     ) -> Result<(), StoreError>;
-    fn delete(&mut self, hash: Hash) -> Result<(), StoreError>;
-    fn get_height(&self, hash: Hash) -> Result<u64, StoreError>;
-    fn set_reindex_root(&mut self, root: Hash) -> Result<(), StoreError>;
-    fn get_reindex_root(&self) -> Result<Hash, StoreError>;
+    fn delete(&mut self, hash: BlockHash) -> Result<(), StoreError>;
+    fn get_height(&self, hash: BlockHash) -> Result<u64, StoreError>;
+    fn set_reindex_root(&mut self, root: BlockHash) -> Result<(), StoreError>;
+    fn get_reindex_root(&self) -> Result<BlockHash, StoreError>;
 }
 
 /// DB cached ordered `Set` access (manages a set per entry with cache and ordering).
 /// Used both for the tree children set and for the future covering set (per block)
 #[derive(Clone)]
 struct DbReachabilitySet {
-    access: DbSetAccess<Hash, Hash>,
-    cache: Cache<Hash, BlockHashes>,
+    access: DbSetAccess<BlockHash, BlockHash>,
+    cache: Cache<BlockHash, BlockHashes>,
 }
 
 impl DbReachabilitySet {
-    fn new(set_access: DbSetAccess<Hash, Hash>, set_cache: Cache<Hash, BlockHashes>) -> Self {
+    fn new(set_access: DbSetAccess<BlockHash, BlockHash>, set_cache: Cache<BlockHash, BlockHashes>) -> Self {
         Self { access: set_access, cache: set_cache }
     }
 
-    fn append(&mut self, writer: impl DbWriter, hash: Hash, element: Hash) -> Result<(), StoreError> {
+    fn append(&mut self, writer: impl DbWriter, hash: BlockHash, element: BlockHash) -> Result<(), StoreError> {
         if let Some(mut entry) = self.cache.get(&hash) {
             Arc::make_mut(&mut entry).push(element);
             self.cache.insert(hash, entry);
@@ -100,7 +99,7 @@ impl DbReachabilitySet {
         Ok(())
     }
 
-    fn insert(&mut self, writer: impl DbWriter, hash: Hash, element: Hash, insertion_index: usize) -> Result<(), StoreError> {
+    fn insert(&mut self, writer: impl DbWriter, hash: BlockHash, element: BlockHash, insertion_index: usize) -> Result<(), StoreError> {
         if let Some(mut entry) = self.cache.get(&hash) {
             Arc::make_mut(&mut entry).insert(insertion_index, element);
             self.cache.insert(hash, entry);
@@ -112,10 +111,10 @@ impl DbReachabilitySet {
     fn replace(
         &mut self,
         mut writer: impl DbWriter,
-        hash: Hash,
-        replaced_hash: Hash,
+        hash: BlockHash,
+        replaced_hash: BlockHash,
         replaced_index: usize,
-        replace_with: &[Hash],
+        replace_with: &[BlockHash],
     ) -> Result<(), StoreError> {
         if let Some(mut entry) = self.cache.get(&hash) {
             {
@@ -132,7 +131,7 @@ impl DbReachabilitySet {
         Ok(())
     }
 
-    fn commit_staging_entry(&mut self, mut writer: impl DbWriter, hash: Hash, entry: StagingSetEntry) -> Result<(), StoreError> {
+    fn commit_staging_entry(&mut self, mut writer: impl DbWriter, hash: BlockHash, entry: StagingSetEntry) -> Result<(), StoreError> {
         self.cache.insert(hash, entry.set);
         for removed_element in entry.deletions {
             self.access.delete(&mut writer, hash, removed_element)?;
@@ -143,21 +142,21 @@ impl DbReachabilitySet {
         Ok(())
     }
 
-    fn delete(&mut self, writer: impl DbWriter, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&mut self, writer: impl DbWriter, hash: BlockHash) -> Result<(), StoreError> {
         self.cache.remove(&hash);
         self.access.delete_bucket(writer, hash)
     }
 
-    fn read<K, F>(&self, hash: Hash, f: F) -> Result<BlockHashes, StoreError>
+    fn read<K, F>(&self, hash: BlockHash, f: F) -> Result<BlockHashes, StoreError>
     where
-        F: FnMut(&Hash) -> K,
+        F: FnMut(&BlockHash) -> K,
         K: Ord,
     {
         if let Some(entry) = self.cache.get(&hash) {
             return Ok(entry);
         }
 
-        let mut set: Vec<Hash> = self.access.bucket_iterator(hash).collect::<Result<_, _>>()?;
+        let mut set: Vec<BlockHash> = self.access.bucket_iterator(hash).collect::<Result<_, _>>()?;
         // Apply the ordering rule before caching
         set.sort_by_cached_key(f);
         let set = BlockHashes::new(set);
@@ -171,10 +170,10 @@ impl DbReachabilitySet {
 #[derive(Clone)]
 pub struct DbReachabilityStore {
     db: Arc<DB>,
-    access: CachedDbAccess<Hash, ReachabilityData, BlockHasher>, // Main access
+    access: CachedDbAccess<BlockHash, ReachabilityData, BlockHasher>, // Main access
     children_access: DbReachabilitySet,                          // Tree children
     fcs_access: DbReachabilitySet,                               // Future Covering Set
-    reindex_root: CachedDbItem<Hash>,                            // Reindex root
+    reindex_root: CachedDbItem<BlockHash>,                            // Reindex root
     prefix_tail: Vec<u8>,                                        // A shared tail between all inner prefixes
 }
 
@@ -225,7 +224,7 @@ impl DbReachabilityStore {
 }
 
 impl ReachabilityStore for DbReachabilityStore {
-    fn init(&mut self, origin: Hash, capacity: Interval) -> Result<(), StoreError> {
+    fn init(&mut self, origin: BlockHash, capacity: Interval) -> Result<(), StoreError> {
         assert!(!self.access.has(origin)?);
 
         let data = ReachabilityData::new(blockhash::NONE, capacity, 0);
@@ -237,31 +236,31 @@ impl ReachabilityStore for DbReachabilityStore {
         Ok(())
     }
 
-    fn insert(&mut self, hash: Hash, parent: Hash, interval: Interval, height: u64) -> Result<(), StoreError> {
+    fn insert(&mut self, hash: BlockHash, parent: BlockHash, interval: Interval, height: u64) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         let data = ReachabilityData::new(parent, interval, height);
         self.access.write(DirectDbWriter::new(&self.db), hash, data)?;
         Ok(())
     }
 
-    fn set_interval(&mut self, hash: Hash, interval: Interval) -> Result<(), StoreError> {
+    fn set_interval(&mut self, hash: BlockHash, interval: Interval) -> Result<(), StoreError> {
         let mut data = self.access.read(hash)?;
         data.interval = interval;
         self.access.write(DirectDbWriter::new(&self.db), hash, data)?;
         Ok(())
     }
 
-    fn append_child(&mut self, hash: Hash, child: Hash) -> Result<(), StoreError> {
+    fn append_child(&mut self, hash: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         self.children_access.append(DirectDbWriter::new(&self.db), hash, child)
     }
 
-    fn insert_future_covering_item(&mut self, hash: Hash, fci: Hash, insertion_index: usize) -> Result<(), StoreError> {
+    fn insert_future_covering_item(&mut self, hash: BlockHash, fci: BlockHash, insertion_index: usize) -> Result<(), StoreError> {
         self.fcs_access.insert(DirectDbWriter::new(&self.db), hash, fci, insertion_index)
     }
 
-    fn set_parent(&mut self, hash: Hash, new_parent: Hash) -> Result<(), StoreError> {
+    fn set_parent(&mut self, hash: BlockHash, new_parent: BlockHash) -> Result<(), StoreError> {
         let mut data = self.access.read(hash)?;
         data.parent = new_parent;
         self.access.write(DirectDbWriter::new(&self.db), hash, data)?;
@@ -270,60 +269,60 @@ impl ReachabilityStore for DbReachabilityStore {
 
     fn replace_child(
         &mut self,
-        hash: Hash,
-        replaced_hash: Hash,
+        hash: BlockHash,
+        replaced_hash: BlockHash,
         replaced_index: usize,
-        replace_with: &[Hash],
+        replace_with: &[BlockHash],
     ) -> Result<(), StoreError> {
         self.children_access.replace(DirectDbWriter::new(&self.db), hash, replaced_hash, replaced_index, replace_with)
     }
 
     fn replace_future_covering_item(
         &mut self,
-        hash: Hash,
-        replaced_hash: Hash,
+        hash: BlockHash,
+        replaced_hash: BlockHash,
         replaced_index: usize,
-        replace_with: &[Hash],
+        replace_with: &[BlockHash],
     ) -> Result<(), StoreError> {
         self.fcs_access.replace(DirectDbWriter::new(&self.db), hash, replaced_hash, replaced_index, replace_with)
     }
 
-    fn delete(&mut self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&mut self, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(DirectDbWriter::new(&self.db), hash)
     }
 
-    fn get_height(&self, hash: Hash) -> Result<u64, StoreError> {
+    fn get_height(&self, hash: BlockHash) -> Result<u64, StoreError> {
         Ok(self.access.read(hash)?.height)
     }
 
-    fn set_reindex_root(&mut self, root: Hash) -> Result<(), StoreError> {
+    fn set_reindex_root(&mut self, root: BlockHash) -> Result<(), StoreError> {
         self.reindex_root.write(DirectDbWriter::new(&self.db), &root)
     }
 
-    fn get_reindex_root(&self) -> Result<Hash, StoreError> {
+    fn get_reindex_root(&self) -> Result<BlockHash, StoreError> {
         self.reindex_root.read()
     }
 }
 
 impl ReachabilityStoreReader for DbReachabilityStore {
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         self.access.has(hash)
     }
 
-    fn get_interval(&self, hash: Hash) -> Result<Interval, StoreError> {
+    fn get_interval(&self, hash: BlockHash) -> Result<Interval, StoreError> {
         Ok(self.access.read(hash)?.interval)
     }
 
-    fn get_parent(&self, hash: Hash) -> Result<Hash, StoreError> {
+    fn get_parent(&self, hash: BlockHash) -> Result<BlockHash, StoreError> {
         Ok(self.access.read(hash)?.parent)
     }
 
-    fn get_children(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_children(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         // Cached reachability sets are assumed to be ordered by interval in order to allow binary search over them
         self.children_access.read(hash, |&h| self.access.read(h).unwrap().interval)
     }
 
-    fn get_future_covering_set(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_future_covering_set(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         // Cached reachability sets are assumed to be ordered by interval in order to allow binary search over them
         self.fcs_access.read(hash, |&h| self.access.read(h).unwrap().interval)
     }
@@ -350,17 +349,17 @@ impl StagingSetEntry {
         Self { set: cached_set, additions: Default::default(), deletions: Default::default() }
     }
 
-    fn append(&mut self, element: Hash) {
+    fn append(&mut self, element: BlockHash) {
         Arc::make_mut(&mut self.set).push(element);
         self.mark_addition(element);
     }
 
-    fn insert(&mut self, element: Hash, insertion_index: usize) {
+    fn insert(&mut self, element: BlockHash, insertion_index: usize) {
         Arc::make_mut(&mut self.set).insert(insertion_index, element);
         self.mark_addition(element);
     }
 
-    fn replace(&mut self, replaced_hash: Hash, replaced_index: usize, replace_with: &[Hash]) {
+    fn replace(&mut self, replaced_hash: BlockHash, replaced_index: usize, replace_with: &[BlockHash]) {
         Arc::make_mut(&mut self.set).splice(replaced_index..replaced_index + 1, replace_with.iter().copied());
         self.mark_deletion(replaced_hash);
         for added_element in replace_with.iter().copied() {
@@ -368,13 +367,13 @@ impl StagingSetEntry {
         }
     }
 
-    fn mark_addition(&mut self, addition: Hash) {
+    fn mark_addition(&mut self, addition: BlockHash) {
         if !self.deletions.remove(&addition) {
             self.additions.insert(addition);
         }
     }
 
-    fn mark_deletion(&mut self, deletion: Hash) {
+    fn mark_deletion(&mut self, deletion: BlockHash) {
         if !self.additions.remove(&deletion) {
             self.deletions.insert(deletion);
         }
@@ -387,7 +386,7 @@ pub struct StagingReachabilityStore<'a> {
     staging_children: BlockHashMap<StagingSetEntry>,
     staging_fcs: BlockHashMap<StagingSetEntry>,
     staging_deletions: BlockHashSet,
-    staging_reindex_root: Option<Hash>,
+    staging_reindex_root: Option<BlockHash>,
 }
 
 impl<'a> StagingReachabilityStore<'a> {
@@ -432,7 +431,7 @@ impl<'a> StagingReachabilityStore<'a> {
         Ok(store_write)
     }
 
-    fn check_not_in_deletions(&self, hash: Hash) -> Result<(), StoreError> {
+    fn check_not_in_deletions(&self, hash: BlockHash) -> Result<(), StoreError> {
         if self.staging_deletions.contains(&hash) {
             Err(StoreError::KeyNotFound(DbKey::new(DatabaseStorePrefixes::Reachability.as_ref(), hash)))
         } else {
@@ -442,28 +441,28 @@ impl<'a> StagingReachabilityStore<'a> {
 }
 
 impl ReachabilityStore for StagingReachabilityStore<'_> {
-    fn init(&mut self, origin: Hash, capacity: Interval) -> Result<(), StoreError> {
+    fn init(&mut self, origin: BlockHash, capacity: Interval) -> Result<(), StoreError> {
         self.insert(origin, blockhash::NONE, capacity, 0)?;
         self.set_reindex_root(origin)?;
         Ok(())
     }
 
-    fn insert(&mut self, hash: Hash, parent: Hash, interval: Interval, height: u64) -> Result<(), StoreError> {
+    fn insert(&mut self, hash: BlockHash, parent: BlockHash, interval: Interval, height: u64) -> Result<(), StoreError> {
         // Note: We never delete and re-insert an item (deletion is part of pruning; new items are inserted
         // for new blocks only), hence we can avoid verifying that the new block is not in `staging_deletions`
 
         if self.store_read.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         if let Vacant(e) = self.staging_writes.entry(hash) {
             e.insert(ReachabilityData::new(parent, interval, height));
             Ok(())
         } else {
-            Err(StoreError::HashAlreadyExists(hash))
+            Err(StoreError::KeyAlreadyExists(hash.to_string()))
         }
     }
 
-    fn set_interval(&mut self, hash: Hash, interval: Interval) -> Result<(), StoreError> {
+    fn set_interval(&mut self, hash: BlockHash, interval: Interval) -> Result<(), StoreError> {
         if let Some(data) = self.staging_writes.get_mut(&hash) {
             data.interval = interval;
             return Ok(());
@@ -476,7 +475,7 @@ impl ReachabilityStore for StagingReachabilityStore<'_> {
         Ok(())
     }
 
-    fn append_child(&mut self, hash: Hash, child: Hash) -> Result<(), StoreError> {
+    fn append_child(&mut self, hash: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         match self.staging_children.entry(hash) {
             Occupied(mut e) => {
                 e.get_mut().append(child);
@@ -491,7 +490,7 @@ impl ReachabilityStore for StagingReachabilityStore<'_> {
         Ok(())
     }
 
-    fn insert_future_covering_item(&mut self, hash: Hash, fci: Hash, insertion_index: usize) -> Result<(), StoreError> {
+    fn insert_future_covering_item(&mut self, hash: BlockHash, fci: BlockHash, insertion_index: usize) -> Result<(), StoreError> {
         match self.staging_fcs.entry(hash) {
             Occupied(mut e) => {
                 e.get_mut().insert(fci, insertion_index);
@@ -506,7 +505,7 @@ impl ReachabilityStore for StagingReachabilityStore<'_> {
         Ok(())
     }
 
-    fn set_parent(&mut self, hash: Hash, new_parent: Hash) -> Result<(), StoreError> {
+    fn set_parent(&mut self, hash: BlockHash, new_parent: BlockHash) -> Result<(), StoreError> {
         if let Some(data) = self.staging_writes.get_mut(&hash) {
             data.parent = new_parent;
             return Ok(());
@@ -521,10 +520,10 @@ impl ReachabilityStore for StagingReachabilityStore<'_> {
 
     fn replace_child(
         &mut self,
-        hash: Hash,
-        replaced_hash: Hash,
+        hash: BlockHash,
+        replaced_hash: BlockHash,
         replaced_index: usize,
-        replace_with: &[Hash],
+        replace_with: &[BlockHash],
     ) -> Result<(), StoreError> {
         match self.staging_children.entry(hash) {
             Occupied(mut e) => {
@@ -542,10 +541,10 @@ impl ReachabilityStore for StagingReachabilityStore<'_> {
 
     fn replace_future_covering_item(
         &mut self,
-        hash: Hash,
-        replaced_hash: Hash,
+        hash: BlockHash,
+        replaced_hash: BlockHash,
         replaced_index: usize,
-        replace_with: &[Hash],
+        replace_with: &[BlockHash],
     ) -> Result<(), StoreError> {
         match self.staging_fcs.entry(hash) {
             Occupied(mut e) => {
@@ -561,36 +560,36 @@ impl ReachabilityStore for StagingReachabilityStore<'_> {
         Ok(())
     }
 
-    fn delete(&mut self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&mut self, hash: BlockHash) -> Result<(), StoreError> {
         self.staging_writes.remove(&hash);
         self.staging_deletions.insert(hash);
         Ok(())
     }
 
-    fn get_height(&self, hash: Hash) -> Result<u64, StoreError> {
+    fn get_height(&self, hash: BlockHash) -> Result<u64, StoreError> {
         self.check_not_in_deletions(hash)?;
         if let Some(data) = self.staging_writes.get(&hash) { Ok(data.height) } else { Ok(self.store_read.access.read(hash)?.height) }
     }
 
-    fn set_reindex_root(&mut self, root: Hash) -> Result<(), StoreError> {
+    fn set_reindex_root(&mut self, root: BlockHash) -> Result<(), StoreError> {
         self.staging_reindex_root = Some(root);
         Ok(())
     }
 
-    fn get_reindex_root(&self) -> Result<Hash, StoreError> {
+    fn get_reindex_root(&self) -> Result<BlockHash, StoreError> {
         if let Some(root) = self.staging_reindex_root { Ok(root) } else { Ok(self.store_read.get_reindex_root()?) }
     }
 }
 
 impl ReachabilityStoreReader for StagingReachabilityStore<'_> {
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         if self.staging_deletions.contains(&hash) {
             return Ok(false);
         }
         Ok(self.staging_writes.contains_key(&hash) || self.store_read.access.has(hash)?)
     }
 
-    fn get_interval(&self, hash: Hash) -> Result<Interval, StoreError> {
+    fn get_interval(&self, hash: BlockHash) -> Result<Interval, StoreError> {
         self.check_not_in_deletions(hash)?;
         if let Some(data) = self.staging_writes.get(&hash) {
             Ok(data.interval)
@@ -599,12 +598,12 @@ impl ReachabilityStoreReader for StagingReachabilityStore<'_> {
         }
     }
 
-    fn get_parent(&self, hash: Hash) -> Result<Hash, StoreError> {
+    fn get_parent(&self, hash: BlockHash) -> Result<BlockHash, StoreError> {
         self.check_not_in_deletions(hash)?;
         if let Some(data) = self.staging_writes.get(&hash) { Ok(data.parent) } else { Ok(self.store_read.access.read(hash)?.parent) }
     }
 
-    fn get_children(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_children(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         self.check_not_in_deletions(hash)?;
 
         if let Some(e) = self.staging_children.get(&hash) {
@@ -614,7 +613,7 @@ impl ReachabilityStoreReader for StagingReachabilityStore<'_> {
         }
     }
 
-    fn get_future_covering_set(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_future_covering_set(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         self.check_not_in_deletions(hash)?;
 
         if let Some(e) = self.staging_fcs.get(&hash) {
@@ -630,8 +629,8 @@ impl ReachabilityStoreReader for StagingReachabilityStore<'_> {
             .access
             .iterator()
             .map(|r| r.unwrap().0)
-            .map(|k| <[u8; kaspa_hashes::HASH_SIZE]>::try_from(&k[..]).unwrap())
-            .map(Hash::from_bytes)
+            .map(|k| <[u8; kaspa_hashes::HASH64_SIZE]>::try_from(&k[..]).unwrap())
+            .map(BlockHash::from_bytes)
             .chain(self.staging_writes.keys().copied())
             .collect::<BlockHashSet>()
             .difference(&self.staging_deletions)
@@ -644,21 +643,21 @@ impl ReachabilityStoreReader for StagingReachabilityStore<'_> {
 #[derive(Clone, Serialize, Deserialize)]
 struct MemoryReachabilityData {
     pub children: BlockHashes,
-    pub parent: Hash,
+    pub parent: BlockHash,
     pub interval: Interval,
     pub height: u64,
     pub future_covering_set: BlockHashes,
 }
 
 impl MemoryReachabilityData {
-    pub fn new(parent: Hash, interval: Interval, height: u64) -> Self {
+    pub fn new(parent: BlockHash, interval: Interval, height: u64) -> Self {
         Self { children: Arc::new(vec![]), parent, interval, height, future_covering_set: Arc::new(vec![]) }
     }
 }
 
 pub struct MemoryReachabilityStore {
     map: BlockHashMap<MemoryReachabilityData>,
-    reindex_root: Option<Hash>,
+    reindex_root: Option<BlockHash>,
 }
 
 impl Default for MemoryReachabilityStore {
@@ -672,14 +671,14 @@ impl MemoryReachabilityStore {
         Self { map: BlockHashMap::new(), reindex_root: None }
     }
 
-    fn get_data_mut(&mut self, hash: Hash) -> Result<&mut MemoryReachabilityData, StoreError> {
+    fn get_data_mut(&mut self, hash: BlockHash) -> Result<&mut MemoryReachabilityData, StoreError> {
         match self.map.get_mut(&hash) {
             Some(data) => Ok(data),
             None => Err(StoreError::KeyNotFound(DbKey::new(DatabaseStorePrefixes::Reachability.as_ref(), hash))),
         }
     }
 
-    fn get_data(&self, hash: Hash) -> Result<&MemoryReachabilityData, StoreError> {
+    fn get_data(&self, hash: BlockHash) -> Result<&MemoryReachabilityData, StoreError> {
         match self.map.get(&hash) {
             Some(data) => Ok(data),
             None => Err(StoreError::KeyNotFound(DbKey::new(DatabaseStorePrefixes::Reachability.as_ref(), hash))),
@@ -688,40 +687,40 @@ impl MemoryReachabilityStore {
 }
 
 impl ReachabilityStore for MemoryReachabilityStore {
-    fn init(&mut self, origin: Hash, capacity: Interval) -> Result<(), StoreError> {
+    fn init(&mut self, origin: BlockHash, capacity: Interval) -> Result<(), StoreError> {
         self.insert(origin, blockhash::NONE, capacity, 0)?;
         self.set_reindex_root(origin)?;
         Ok(())
     }
 
-    fn insert(&mut self, hash: Hash, parent: Hash, interval: Interval, height: u64) -> Result<(), StoreError> {
+    fn insert(&mut self, hash: BlockHash, parent: BlockHash, interval: Interval, height: u64) -> Result<(), StoreError> {
         if let Vacant(e) = self.map.entry(hash) {
             e.insert(MemoryReachabilityData::new(parent, interval, height));
             Ok(())
         } else {
-            Err(StoreError::HashAlreadyExists(hash))
+            Err(StoreError::KeyAlreadyExists(hash.to_string()))
         }
     }
 
-    fn set_interval(&mut self, hash: Hash, interval: Interval) -> Result<(), StoreError> {
+    fn set_interval(&mut self, hash: BlockHash, interval: Interval) -> Result<(), StoreError> {
         let data = self.get_data_mut(hash)?;
         data.interval = interval;
         Ok(())
     }
 
-    fn append_child(&mut self, hash: Hash, child: Hash) -> Result<(), StoreError> {
+    fn append_child(&mut self, hash: BlockHash, child: BlockHash) -> Result<(), StoreError> {
         let data = self.get_data_mut(hash)?;
         Arc::make_mut(&mut data.children).push(child);
         Ok(())
     }
 
-    fn insert_future_covering_item(&mut self, hash: Hash, fci: Hash, insertion_index: usize) -> Result<(), StoreError> {
+    fn insert_future_covering_item(&mut self, hash: BlockHash, fci: BlockHash, insertion_index: usize) -> Result<(), StoreError> {
         let data = self.get_data_mut(hash)?;
         Arc::make_mut(&mut data.future_covering_set).insert(insertion_index, fci);
         Ok(())
     }
 
-    fn set_parent(&mut self, hash: Hash, new_parent: Hash) -> Result<(), StoreError> {
+    fn set_parent(&mut self, hash: BlockHash, new_parent: BlockHash) -> Result<(), StoreError> {
         let data = self.get_data_mut(hash)?;
         data.parent = new_parent;
         Ok(())
@@ -729,10 +728,10 @@ impl ReachabilityStore for MemoryReachabilityStore {
 
     fn replace_child(
         &mut self,
-        hash: Hash,
-        replaced_hash: Hash,
+        hash: BlockHash,
+        replaced_hash: BlockHash,
         replaced_index: usize,
-        replace_with: &[Hash],
+        replace_with: &[BlockHash],
     ) -> Result<(), StoreError> {
         let data = self.get_data_mut(hash)?;
         let removed_hash = Arc::make_mut(&mut data.children).splice(replaced_index..replaced_index + 1, replace_with.iter().copied());
@@ -742,10 +741,10 @@ impl ReachabilityStore for MemoryReachabilityStore {
 
     fn replace_future_covering_item(
         &mut self,
-        hash: Hash,
-        replaced_hash: Hash,
+        hash: BlockHash,
+        replaced_hash: BlockHash,
         replaced_index: usize,
-        replace_with: &[Hash],
+        replace_with: &[BlockHash],
     ) -> Result<(), StoreError> {
         let data = self.get_data_mut(hash)?;
         let removed_hash =
@@ -754,21 +753,21 @@ impl ReachabilityStore for MemoryReachabilityStore {
         Ok(())
     }
 
-    fn delete(&mut self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&mut self, hash: BlockHash) -> Result<(), StoreError> {
         self.map.remove(&hash);
         Ok(())
     }
 
-    fn get_height(&self, hash: Hash) -> Result<u64, StoreError> {
+    fn get_height(&self, hash: BlockHash) -> Result<u64, StoreError> {
         Ok(self.get_data(hash)?.height)
     }
 
-    fn set_reindex_root(&mut self, root: Hash) -> Result<(), StoreError> {
+    fn set_reindex_root(&mut self, root: BlockHash) -> Result<(), StoreError> {
         self.reindex_root = Some(root);
         Ok(())
     }
 
-    fn get_reindex_root(&self) -> Result<Hash, StoreError> {
+    fn get_reindex_root(&self) -> Result<BlockHash, StoreError> {
         match self.reindex_root {
             Some(root) => Ok(root),
             None => Err(StoreError::KeyNotFound(DbKey::prefix_only(DatabaseStorePrefixes::ReachabilityReindexRoot.as_ref()))),
@@ -777,23 +776,23 @@ impl ReachabilityStore for MemoryReachabilityStore {
 }
 
 impl ReachabilityStoreReader for MemoryReachabilityStore {
-    fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         Ok(self.map.contains_key(&hash))
     }
 
-    fn get_interval(&self, hash: Hash) -> Result<Interval, StoreError> {
+    fn get_interval(&self, hash: BlockHash) -> Result<Interval, StoreError> {
         Ok(self.get_data(hash)?.interval)
     }
 
-    fn get_parent(&self, hash: Hash) -> Result<Hash, StoreError> {
+    fn get_parent(&self, hash: BlockHash) -> Result<BlockHash, StoreError> {
         Ok(self.get_data(hash)?.parent)
     }
 
-    fn get_children(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_children(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         Ok(Arc::clone(&self.get_data(hash)?.children))
     }
 
-    fn get_future_covering_set(&self, hash: Hash) -> Result<BlockHashes, StoreError> {
+    fn get_future_covering_set(&self, hash: BlockHash) -> Result<BlockHashes, StoreError> {
         Ok(Arc::clone(&self.get_data(hash)?.future_covering_set))
     }
 

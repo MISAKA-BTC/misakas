@@ -36,7 +36,7 @@ use kaspa_consensus_core::{
     },
 };
 use kaspa_core::{info, trace};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_muhash::MuHash;
 use kaspa_utils::refs::Refs;
 
@@ -83,7 +83,7 @@ pub(super) struct UtxoProcessingContext<'a> {
     pub accepted_tx_ids: Vec<TransactionId>,
     pub mergeset_acceptance_data: Vec<MergesetBlockAcceptanceData>,
     pub mergeset_rewards: BlockHashMap<BlockRewardData>,
-    pub pruning_sample_from_pov: Option<Hash>,
+    pub pruning_sample_from_pov: Option<BlockHash>,
 }
 
 impl<'a> UtxoProcessingContext<'a> {
@@ -100,7 +100,7 @@ impl<'a> UtxoProcessingContext<'a> {
         }
     }
 
-    pub fn selected_parent(&self) -> Hash {
+    pub fn selected_parent(&self) -> BlockHash {
         self.ghostdag_data.selected_parent
     }
 }
@@ -409,7 +409,7 @@ impl VirtualStateProcessor {
     pub(super) fn calc_accepted_id_merkle_root(
         &self,
         accepted_tx_ids: impl ExactSizeIterator<Item = kaspa_consensus_core::TransactionId>,
-        selected_parent: kaspa_hashes::Hash,
+        selected_parent: kaspa_consensus_core::BlockHash,
     ) -> kaspa_consensus_core::AcceptedIdMerkleRoot {
         use kaspa_hashes::{AcceptedIdMerkleBranchHash64, HasherBase};
         let parent_root = self.headers_store.get_header(selected_parent).unwrap().accepted_id_merkle_root;

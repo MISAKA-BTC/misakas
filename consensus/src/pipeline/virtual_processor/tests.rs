@@ -9,7 +9,7 @@ use kaspa_consensus_core::{
     config::{ConfigBuilder, params::MAINNET_PARAMS},
     tx::{ScriptPublicKey, ScriptVec, Transaction},
 };
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use std::{collections::VecDeque, thread::JoinHandle};
 
 struct OnetimeTxSelector {
@@ -90,7 +90,7 @@ impl TestContext {
         self
     }
 
-    pub async fn build_and_insert_disqualified_chain(&mut self, mut parents: Vec<Hash>, len: usize) -> Hash {
+    pub async fn build_and_insert_disqualified_chain(&mut self, mut parents: Vec<BlockHash>, len: usize) -> BlockHash {
         // The chain will be disqualified since build_block_with_parents builds utxo-invalid blocks
         for _ in 0..len {
             self.simulated_time += self.consensus.params().target_time_per_block();
@@ -116,7 +116,7 @@ impl TestContext {
         t
     }
 
-    pub fn build_block_with_parents(&self, parents: Vec<Hash>, nonce: u64, timestamp: u64) -> MutableBlock {
+    pub fn build_block_with_parents(&self, parents: Vec<BlockHash>, nonce: u64, timestamp: u64) -> MutableBlock {
         let mut b = self.consensus.build_block_with_parents_and_transactions(blockhash::NONE, parents, Default::default());
         b.header.timestamp = timestamp;
         b.header.nonce = nonce;

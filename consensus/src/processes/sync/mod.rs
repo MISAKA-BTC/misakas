@@ -3,7 +3,7 @@ use std::{cmp::min, ops::Deref, sync::Arc};
 use itertools::Itertools;
 use kaspa_consensus_core::errors::sync::{SyncManagerError, SyncManagerResult};
 use kaspa_database::prelude::StoreResultExt;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_math::uint::malachite_base::num::arithmetic::traits::CeilingLogBase2;
 use parking_lot::RwLock;
 
@@ -73,7 +73,7 @@ impl<
     /// Returns the hashes of the blocks between low's antipast and high's antipast, or up to `max_blocks`, if provided.
     /// The result excludes low and includes high. If low == high, returns nothing. If max_blocks is some then it MUST be >= MergeSetSizeLimit
     /// because it returns blocks with MergeSet granularity, so if MergeSet > max_blocks, the function will return nothing which is undesired behavior.
-    pub fn antipast_hashes_between(&self, low: Hash, high: Hash, max_blocks: Option<usize>) -> (Vec<Hash>, Hash) {
+    pub fn antipast_hashes_between(&self, low: BlockHash, high: BlockHash, max_blocks: Option<usize>) -> (Vec<BlockHash>, BlockHash) {
         let max_blocks = max_blocks.unwrap_or(usize::MAX);
         assert!(max_blocks >= self.mergeset_size_limit as usize);
 
@@ -110,7 +110,7 @@ impl<
         (blocks, highest_reached)
     }
 
-    pub fn find_highest_common_chain_block(&self, low: Hash, high: Hash) -> Hash {
+    pub fn find_highest_common_chain_block(&self, low: BlockHash, high: BlockHash) -> BlockHash {
         self.reachability_service
             .default_backward_chain_iterator(low)
             .find(|candidate| self.reachability_service.is_chain_ancestor_of(*candidate, high))
@@ -119,7 +119,7 @@ impl<
 
     /// Returns a logarithmic amount of blocks sampled from the virtual selected chain between `low` and `high`.
     /// Expects both blocks to be on the virtual selected chain, otherwise an error is returned
-    pub fn create_virtual_selected_chain_block_locator(&self, low: Option<Hash>, high: Option<Hash>) -> SyncManagerResult<Vec<Hash>> {
+    pub fn create_virtual_selected_chain_block_locator(&self, low: Option<BlockHash>, high: Option<BlockHash>) -> SyncManagerResult<Vec<BlockHash>> {
         let low = low.unwrap_or_else(|| self.pruning_point_store.read().pruning_point().unwrap());
         let sc_read = self.selected_chain_store.read();
         let high = high.unwrap_or_else(|| sc_read.get_tip().unwrap().1);
@@ -158,7 +158,7 @@ impl<
         Ok(locator)
     }
 
-    pub fn get_missing_block_body_hashes(&self, high: Hash) -> SyncManagerResult<Vec<Hash>> {
+    pub fn get_missing_block_body_hashes(&self, high: BlockHash) -> SyncManagerResult<Vec<BlockHash>> {
         let pp = self.pruning_point_store.read().pruning_point().unwrap();
         if !self.reachability_service.is_chain_ancestor_of(pp, high) {
             return Err(SyncManagerError::PruningPointNotInChain(pp, high));
@@ -203,10 +203,10 @@ impl<
 
     pub fn create_block_locator_from_pruning_point(
         &self,
-        high: Hash,
-        low: Hash,
+        high: BlockHash,
+        low: BlockHash,
         limit: Option<usize>,
-    ) -> SyncManagerResult<Vec<Hash>> {
+    ) -> SyncManagerResult<Vec<BlockHash>> {
         if !self.reachability_service.is_chain_ancestor_of(low, high) {
             return Err(SyncManagerError::LocatorLowHashNotInHighHashChain(low, high));
         }

@@ -95,11 +95,11 @@ pub(crate) mod tests {
         subnets::SUBNETWORK_ID_NATIVE,
         tx::{Transaction, TransactionInput, TransactionOutpoint},
     };
-    use kaspa_hashes::{HasherBase, TransactionID};
+    use kaspa_hashes::{HasherBase, TransactionId64};
     use std::sync::Arc;
 
     fn generate_unique_tx(i: u64) -> Arc<Transaction> {
-        let mut hasher = TransactionID::new();
+        let mut hasher = TransactionId64::new();
         let prev = hasher.update(i.to_le_bytes()).clone().finalize();
         let input = TransactionInput::new(TransactionOutpoint::new(prev, 0), vec![], 0, 0);
         Arc::new(Transaction::new(0, vec![input], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![]))

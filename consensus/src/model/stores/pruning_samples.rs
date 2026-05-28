@@ -6,24 +6,24 @@ use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 
 pub trait PruningSamplesStoreReader {
-    fn pruning_sample_from_pov(&self, hash: Hash) -> Result<Hash, StoreError>;
+    fn pruning_sample_from_pov(&self, hash: BlockHash) -> Result<BlockHash, StoreError>;
 }
 
 pub trait PruningSamplesStore: PruningSamplesStoreReader {
     // This is append only
-    fn insert(&self, hash: Hash, pruning_sample_from_pov: Hash) -> Result<(), StoreError>;
-    fn delete(&self, hash: Hash) -> Result<(), StoreError>;
+    fn insert(&self, hash: BlockHash, pruning_sample_from_pov: BlockHash) -> Result<(), StoreError>;
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError>;
 }
 
 /// A DB + cache implementation of `PruningSamplesStore` trait, with concurrency support.
 #[derive(Clone)]
 pub struct DbPruningSamplesStore {
     db: Arc<DB>,
-    access: CachedDbAccess<Hash, Hash, BlockHasher>,
+    access: CachedDbAccess<BlockHash, BlockHash, BlockHasher>,
 }
 
 impl DbPruningSamplesStore {
@@ -35,35 +35,35 @@ impl DbPruningSamplesStore {
         Self::new(Arc::clone(&self.db), cache_policy)
     }
 
-    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: Hash, pruning_sample_from_pov: Hash) -> Result<(), StoreError> {
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, pruning_sample_from_pov: BlockHash) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(BatchDbWriter::new(batch), hash, pruning_sample_from_pov)?;
         Ok(())
     }
 
-    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: Hash) -> Result<(), StoreError> {
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(BatchDbWriter::new(batch), hash)
     }
 }
 
 impl PruningSamplesStoreReader for DbPruningSamplesStore {
-    fn pruning_sample_from_pov(&self, hash: Hash) -> Result<Hash, StoreError> {
+    fn pruning_sample_from_pov(&self, hash: BlockHash) -> Result<BlockHash, StoreError> {
         self.access.read(hash)
     }
 }
 
 impl PruningSamplesStore for DbPruningSamplesStore {
-    fn insert(&self, hash: Hash, pruning_sample_from_pov: Hash) -> Result<(), StoreError> {
+    fn insert(&self, hash: BlockHash, pruning_sample_from_pov: BlockHash) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(DirectDbWriter::new(&self.db), hash, pruning_sample_from_pov)?;
         Ok(())
     }
 
-    fn delete(&self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(DirectDbWriter::new(&self.db), hash)
     }
 }

@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use kaspa_consensus_core::{BlueWorkType, header::Header};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::{BlockHash, BlueWorkType, header::Header}; // PR-9.5e: block ids are Hash64
+use kaspa_hashes::Hash; // PR-9.5e: retained for utxo_commitment (32-byte accumulator commitment, stays Hash)
 use serde::{Deserialize, Serialize};
 use workflow_serializer::prelude::*;
 
@@ -10,7 +10,7 @@ use crate::{RpcCompressedParents, RpcError, RpcResult};
 #[serde(rename_all = "camelCase")]
 pub struct RpcOptionalHeader {
     /// Level: None - Cached hash
-    pub hash: Option<Hash>,
+    pub hash: Option<BlockHash>,
     /// Level: Low
     pub version: Option<u16>,
     /// Level: High
@@ -36,7 +36,7 @@ pub struct RpcOptionalHeader {
     /// Level: Low
     pub blue_score: Option<u64>,
     /// Level: Full
-    pub pruning_point: Option<Hash>,
+    pub pruning_point: Option<BlockHash>,
 }
 
 impl RpcOptionalHeader {
@@ -178,7 +178,7 @@ impl Serializer for RpcOptionalHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         store!(u16, &1, writer)?;
 
-        store!(Option<Hash>, &self.hash, writer)?;
+        store!(Option<BlockHash>, &self.hash, writer)?;
         store!(Option<u16>, &self.version, writer)?;
         store!(Option<RpcCompressedParents>, &self.parents_by_level, writer)?;
         // PR-9.5c: merkle roots serialised as Hash64.
@@ -191,7 +191,7 @@ impl Serializer for RpcOptionalHeader {
         store!(Option<u64>, &self.daa_score, writer)?;
         store!(Option<BlueWorkType>, &self.blue_work, writer)?;
         store!(Option<u64>, &self.blue_score, writer)?;
-        store!(Option<Hash>, &self.pruning_point, writer)?;
+        store!(Option<BlockHash>, &self.pruning_point, writer)?;
 
         Ok(())
     }
@@ -201,7 +201,7 @@ impl Deserializer for RpcOptionalHeader {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u16, reader)?;
 
-        let hash = load!(Option<Hash>, reader)?;
+        let hash = load!(Option<BlockHash>, reader)?;
         let version = load!(Option<u16>, reader)?;
         let parents_by_level = load!(Option<RpcCompressedParents>, reader)?;
         // PR-9.5c: merkle roots deserialised as Hash64.
@@ -214,7 +214,7 @@ impl Deserializer for RpcOptionalHeader {
         let daa_score = load!(Option<u64>, reader)?;
         let blue_work = load!(Option<BlueWorkType>, reader)?;
         let blue_score = load!(Option<u64>, reader)?;
-        let pruning_point = load!(Option<Hash>, reader)?;
+        let pruning_point = load!(Option<BlockHash>, reader)?;
 
         Ok(Self {
             hash,

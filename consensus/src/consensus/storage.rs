@@ -29,7 +29,7 @@ use crate::{
 use super::cache_policy_builder::CachePolicyBuilder as PolicyBuilder;
 use kaspa_consensus_core::{BlockHashSet, blockstatus::BlockStatus};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use parking_lot::RwLock;
 use std::{ops::DerefMut, sync::Arc};
 
@@ -103,11 +103,11 @@ impl ConsensusStorage {
         let acceptance_data_budget = scaled(40_000_000);
 
         // Unit sizes in bytes
-        let daa_excluded_bytes = size_of::<Hash>() + size_of::<BlockHashSet>(); // Expected empty sets
-        let status_bytes = size_of::<Hash>() + size_of::<BlockStatus>();
-        let reachability_data_bytes = size_of::<Hash>() + size_of::<ReachabilityData>();
-        let ghostdag_compact_bytes = size_of::<Hash>() + size_of::<CompactGhostdagData>();
-        let headers_compact_bytes = size_of::<Hash>() + size_of::<CompactHeaderData>();
+        let daa_excluded_bytes = size_of::<BlockHash>() + size_of::<BlockHashSet>(); // Expected empty sets
+        let status_bytes = size_of::<BlockHash>() + size_of::<BlockStatus>();
+        let reachability_data_bytes = size_of::<BlockHash>() + size_of::<ReachabilityData>();
+        let ghostdag_compact_bytes = size_of::<BlockHash>() + size_of::<CompactGhostdagData>();
+        let headers_compact_bytes = size_of::<BlockHash>() + size_of::<CompactHeaderData>();
 
         // If the fork is already scheduled, prefer the long-term, permanent values
         let difficulty_window_bytes = params.difficulty_window_size * size_of::<SortableBlock>();
@@ -136,16 +136,16 @@ impl ConsensusStorage {
             .untracked();
         let parents_builder = PolicyBuilder::new()
             .bytes_budget(parents_budget)
-            .unit_bytes(size_of::<Hash>())
+            .unit_bytes(size_of::<BlockHash>())
             .min_items(level_lower_bound)
             .tracked_units();
         let children_builder = PolicyBuilder::new()
             .bytes_budget(children_budget)
-            .unit_bytes(size_of::<Hash>())
+            .unit_bytes(size_of::<BlockHash>())
             .min_items(level_lower_bound)
             .tracked_units();
         let reachability_sets_builder =
-            PolicyBuilder::new().bytes_budget(reachability_sets_budget).unit_bytes(size_of::<Hash>()).tracked_units();
+            PolicyBuilder::new().bytes_budget(reachability_sets_budget).unit_bytes(size_of::<BlockHash>()).tracked_units();
         let difficulty_window_builder = PolicyBuilder::new()
             .max_items(perf_params.block_window_cache_size)
             .bytes_budget(block_window_budget)

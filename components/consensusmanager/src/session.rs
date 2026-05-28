@@ -3,7 +3,7 @@
 //! We use newtypes in order to simplify changing the underlying lock in the future
 
 use kaspa_consensus_core::{
-    BlockHashSet, BlueWorkType, ChainPath, Hash,
+    BlockHashSet, BlueWorkType, ChainPath, BlockHash,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
     api::{BlockCount, BlockValidationFutures, ConsensusApi, ConsensusStats, DynConsensus},
     block::Block,
@@ -230,7 +230,7 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(|c| c.get_stats()).await
     }
 
-    pub async fn async_get_virtual_merge_depth_root(&self) -> Option<Hash> {
+    pub async fn async_get_virtual_merge_depth_root(&self) -> Option<BlockHash> {
         self.clone().spawn_blocking(|c| c.get_virtual_merge_depth_root()).await
     }
 
@@ -241,7 +241,7 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(|c| c.get_virtual_merge_depth_blue_work_threshold()).await
     }
 
-    pub async fn async_get_sink(&self) -> Hash {
+    pub async fn async_get_sink(&self) -> BlockHash {
         self.clone().spawn_blocking(|c| c.get_sink()).await
     }
 
@@ -257,12 +257,12 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(|c| c.get_sink_daa_score_timestamp()).await
     }
 
-    pub async fn async_get_current_block_color(&self, hash: Hash) -> Option<bool> {
+    pub async fn async_get_current_block_color(&self, hash: BlockHash) -> Option<bool> {
         self.clone().spawn_blocking(move |c| c.get_current_block_color(hash)).await
     }
 
     /// retention period root refers to the earliest block from which the current node has full header & block data
-    pub async fn async_get_retention_period_root(&self) -> Hash {
+    pub async fn async_get_retention_period_root(&self) -> BlockHash {
         self.clone().spawn_blocking(|c| c.get_retention_period_root()).await
     }
 
@@ -272,7 +272,7 @@ impl ConsensusSessionOwned {
 
     pub async fn async_get_virtual_chain_from_block(
         &self,
-        low: Hash,
+        low: BlockHash,
         chain_path_added_limit: Option<usize>,
     ) -> ConsensusResult<ChainPath> {
         self.clone().spawn_blocking(move |c| c.get_virtual_chain_from_block(low, chain_path_added_limit)).await
@@ -287,7 +287,7 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.get_virtual_utxos(from_outpoint, chunk_size, skip_first)).await
     }
 
-    pub async fn async_get_tips(&self) -> Vec<Hash> {
+    pub async fn async_get_tips(&self) -> Vec<BlockHash> {
         self.clone().spawn_blocking(|c| c.get_tips()).await
     }
 
@@ -295,19 +295,19 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(|c| c.get_tips_len()).await
     }
 
-    pub async fn async_is_chain_ancestor_of(&self, low: Hash, high: Hash) -> ConsensusResult<bool> {
+    pub async fn async_is_chain_ancestor_of(&self, low: BlockHash, high: BlockHash) -> ConsensusResult<bool> {
         self.clone().spawn_blocking(move |c| c.is_chain_ancestor_of(low, high)).await
     }
 
-    pub async fn async_get_hashes_between(&self, low: Hash, high: Hash, max_blocks: usize) -> ConsensusResult<(Vec<Hash>, Hash)> {
+    pub async fn async_get_hashes_between(&self, low: BlockHash, high: BlockHash, max_blocks: usize) -> ConsensusResult<(Vec<BlockHash>, BlockHash)> {
         self.clone().spawn_blocking(move |c| c.get_hashes_between(low, high, max_blocks)).await
     }
 
-    pub async fn async_get_header(&self, hash: Hash) -> ConsensusResult<Arc<Header>> {
+    pub async fn async_get_header(&self, hash: BlockHash) -> ConsensusResult<Arc<Header>> {
         self.clone().spawn_blocking(move |c| c.get_header(hash)).await
     }
 
-    pub async fn async_get_headers_selected_tip(&self) -> Hash {
+    pub async fn async_get_headers_selected_tip(&self) -> BlockHash {
         self.clone().spawn_blocking(|c| c.get_headers_selected_tip()).await
     }
 
@@ -326,7 +326,7 @@ impl ConsensusSessionOwned {
 
     pub async fn async_get_transactions_by_block_acceptance_data(
         &self,
-        accepting_block: Hash,
+        accepting_block: BlockHash,
         block_acceptance_data: MergesetBlockAcceptanceData,
         tx_ids: Option<Vec<TransactionId>>,
         tx_type: TransactionType,
@@ -343,15 +343,15 @@ impl ConsensusSessionOwned {
     /// `max_traversal_allowed` on the maximum amount of blocks to traverse for obtaining the answer
     pub async fn async_get_antipast_from_pov(
         &self,
-        hash: Hash,
-        context: Hash,
+        hash: BlockHash,
+        context: BlockHash,
         max_traversal_allowed: Option<u64>,
-    ) -> ConsensusResult<Vec<Hash>> {
+    ) -> ConsensusResult<Vec<BlockHash>> {
         self.clone().spawn_blocking(move |c| c.get_antipast_from_pov(hash, context, max_traversal_allowed)).await
     }
 
     /// Returns the anticone of block `hash` from the POV of `virtual`
-    pub async fn async_get_anticone(&self, hash: Hash) -> ConsensusResult<Vec<Hash>> {
+    pub async fn async_get_anticone(&self, hash: BlockHash) -> ConsensusResult<Vec<BlockHash>> {
         self.clone().spawn_blocking(move |c| c.get_anticone(hash)).await
     }
 
@@ -361,13 +361,13 @@ impl ConsensusSessionOwned {
 
     pub async fn async_create_virtual_selected_chain_block_locator(
         &self,
-        low: Option<Hash>,
-        high: Option<Hash>,
-    ) -> ConsensusResult<Vec<Hash>> {
+        low: Option<BlockHash>,
+        high: Option<BlockHash>,
+    ) -> ConsensusResult<Vec<BlockHash>> {
         self.clone().spawn_blocking(move |c| c.create_virtual_selected_chain_block_locator(low, high)).await
     }
 
-    pub async fn async_create_block_locator_from_pruning_point(&self, high: Hash, limit: usize) -> ConsensusResult<Vec<Hash>> {
+    pub async fn async_create_block_locator_from_pruning_point(&self, high: BlockHash, limit: usize) -> ConsensusResult<Vec<BlockHash>> {
         self.clone().spawn_blocking(move |c| c.create_block_locator_from_pruning_point(high, limit)).await
     }
 
@@ -379,35 +379,35 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(|c| c.get_pruning_point_anticone_and_trusted_data()).await
     }
 
-    pub async fn async_get_block(&self, hash: Hash) -> ConsensusResult<Block> {
+    pub async fn async_get_block(&self, hash: BlockHash) -> ConsensusResult<Block> {
         self.clone().spawn_blocking(move |c| c.get_block(hash)).await
     }
 
-    pub async fn async_get_block_body(&self, hash: Hash) -> ConsensusResult<Arc<Vec<Transaction>>> {
+    pub async fn async_get_block_body(&self, hash: BlockHash) -> ConsensusResult<Arc<Vec<Transaction>>> {
         self.clone().spawn_blocking(move |c| c.get_block_body(hash)).await
     }
 
-    pub async fn async_get_block_even_if_header_only(&self, hash: Hash) -> ConsensusResult<Block> {
+    pub async fn async_get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {
         self.clone().spawn_blocking(move |c| c.get_block_even_if_header_only(hash)).await
     }
 
-    pub async fn async_get_ghostdag_data(&self, hash: Hash) -> ConsensusResult<ExternalGhostdagData> {
+    pub async fn async_get_ghostdag_data(&self, hash: BlockHash) -> ConsensusResult<ExternalGhostdagData> {
         self.clone().spawn_blocking(move |c| c.get_ghostdag_data(hash)).await
     }
 
-    pub async fn async_get_block_children(&self, hash: Hash) -> Option<Vec<Hash>> {
+    pub async fn async_get_block_children(&self, hash: BlockHash) -> Option<Vec<BlockHash>> {
         self.clone().spawn_blocking(move |c| c.get_block_children(hash)).await
     }
 
-    pub async fn async_get_block_parents(&self, hash: Hash) -> Option<Arc<Vec<Hash>>> {
+    pub async fn async_get_block_parents(&self, hash: BlockHash) -> Option<Arc<Vec<BlockHash>>> {
         self.clone().spawn_blocking(move |c| c.get_block_parents(hash)).await
     }
 
-    pub async fn async_get_block_status(&self, hash: Hash) -> Option<BlockStatus> {
+    pub async fn async_get_block_status(&self, hash: BlockHash) -> Option<BlockStatus> {
         self.clone().spawn_blocking(move |c| c.get_block_status(hash)).await
     }
 
-    pub async fn async_get_block_acceptance_data(&self, hash: Hash) -> ConsensusResult<Arc<AcceptanceData>> {
+    pub async fn async_get_block_acceptance_data(&self, hash: BlockHash) -> ConsensusResult<Arc<AcceptanceData>> {
         self.clone().spawn_blocking(move |c| c.get_block_acceptance_data(hash)).await
     }
 
@@ -416,19 +416,19 @@ impl ConsensusSessionOwned {
     /// See `self::get_virtual_chain`
     pub async fn async_get_blocks_acceptance_data(
         &self,
-        hashes: Vec<Hash>,
+        hashes: Vec<BlockHash>,
         merged_blocks_limit: Option<usize>,
     ) -> ConsensusResult<Vec<Arc<AcceptanceData>>> {
         self.clone().spawn_blocking(move |c| c.get_blocks_acceptance_data(&hashes, merged_blocks_limit)).await
     }
 
-    pub async fn async_is_chain_block(&self, hash: Hash) -> ConsensusResult<bool> {
+    pub async fn async_is_chain_block(&self, hash: BlockHash) -> ConsensusResult<bool> {
         self.clone().spawn_blocking(move |c| c.is_chain_block(hash)).await
     }
 
     pub async fn async_get_pruning_point_utxos(
         &self,
-        expected_pruning_point: Hash,
+        expected_pruning_point: BlockHash,
         from_outpoint: Option<TransactionOutpoint>,
         chunk_size: usize,
         skip_first: bool,
@@ -438,11 +438,11 @@ impl ConsensusSessionOwned {
             .await
     }
 
-    pub async fn async_get_missing_block_body_hashes(&self, high: Hash) -> ConsensusResult<Vec<Hash>> {
+    pub async fn async_get_missing_block_body_hashes(&self, high: BlockHash) -> ConsensusResult<Vec<BlockHash>> {
         self.clone().spawn_blocking(move |c| c.get_missing_block_body_hashes(high)).await
     }
 
-    pub async fn async_get_body_missing_anticone(&self) -> Vec<Hash> {
+    pub async fn async_get_body_missing_anticone(&self) -> Vec<BlockHash> {
         self.clone().spawn_blocking(move |c| c.get_body_missing_anticone()).await
     }
 
@@ -450,19 +450,19 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.clear_body_missing_anticone_set()).await
     }
 
-    pub async fn async_pruning_point(&self) -> Hash {
+    pub async fn async_pruning_point(&self) -> BlockHash {
         self.clone().spawn_blocking(|c| c.pruning_point()).await
     }
 
     pub async fn async_estimate_network_hashes_per_second(
         &self,
-        start_hash: Option<Hash>,
+        start_hash: Option<BlockHash>,
         window_size: usize,
     ) -> ConsensusResult<u64> {
         self.clone().spawn_blocking(move |c| c.estimate_network_hashes_per_second(start_hash, window_size)).await
     }
 
-    pub async fn async_validate_pruning_points(&self, syncer_virtual_selected_parent: Hash) -> ConsensusResult<()> {
+    pub async fn async_validate_pruning_points(&self, syncer_virtual_selected_parent: BlockHash) -> ConsensusResult<()> {
         self.clone().spawn_blocking(move |c| c.validate_pruning_points(syncer_virtual_selected_parent)).await
     }
 
@@ -474,7 +474,7 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.creation_timestamp()).await
     }
 
-    pub async fn async_finality_point(&self) -> Hash {
+    pub async fn async_finality_point(&self) -> BlockHash {
         self.clone().spawn_blocking(move |c| c.finality_point()).await
     }
     pub async fn async_clear_pruning_utxo_set(&self) {
@@ -495,10 +495,10 @@ impl ConsensusSessionOwned {
     pub async fn async_set_pruning_utxoset_stable(&self) {
         self.clone().spawn_blocking(move |c| c.set_pruning_utxoset_stable_flag(true)).await
     }
-    pub async fn async_intrusive_pruning_point_update(&self, new_pruning_point: Hash, syncer_sink: Hash) -> ConsensusResult<()> {
+    pub async fn async_intrusive_pruning_point_update(&self, new_pruning_point: BlockHash, syncer_sink: BlockHash) -> ConsensusResult<()> {
         self.clone().spawn_blocking(move |c| c.intrusive_pruning_point_update(new_pruning_point, syncer_sink)).await
     }
-    pub async fn async_get_n_last_pruning_points(&self, n: usize) -> Vec<Hash> {
+    pub async fn async_get_n_last_pruning_points(&self, n: usize) -> Vec<BlockHash> {
         self.clone().spawn_blocking(move |c| c.get_n_last_pruning_points(n)).await
     }
 }

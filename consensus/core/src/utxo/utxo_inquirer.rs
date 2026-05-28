@@ -1,4 +1,4 @@
-use kaspa_hashes::Hash;
+use crate::BlockHash; // PR-9.5e: UtxoInquirer keys are block/tx Hash64 identities
 use thiserror::Error;
 
 use crate::tx::{TransactionId, TransactionOutpoint};
@@ -14,25 +14,25 @@ pub enum UtxoInquirerError {
     #[error("No transaction specified")]
     TransactionNotFound,
     #[error("Did not find compact header for block hash {0} ")]
-    MissingCompactHeaderForBlockHash(Hash),
+    MissingCompactHeaderForBlockHash(BlockHash),
     #[error("Did not find containing_acceptance for tx {0} ")]
-    MissingContainingAcceptanceForTx(Hash),
+    MissingContainingAcceptanceForTx(BlockHash),
     #[error("Did not find block {0} at block tx store")]
-    MissingBlockFromBlockTxStore(Hash),
+    MissingBlockFromBlockTxStore(BlockHash),
     #[error("Did not find index {0} in transactions of block {1}")]
-    MissingTransactionIndexOfBlock(usize, Hash),
+    MissingTransactionIndexOfBlock(usize, BlockHash),
     #[error("Did not find a utxo diff for chain block {0} ")]
-    MissingUtxoDiffForChainBlock(Hash),
+    MissingUtxoDiffForChainBlock(BlockHash),
     #[error("Transaction {0} acceptance data must also be in the same block in this case")]
-    MissingOtherTransactionAcceptanceData(Hash),
+    MissingOtherTransactionAcceptanceData(BlockHash),
     #[error("Did not find index for hash {0}")]
-    MissingIndexForHash(Hash),
+    MissingIndexForHash(BlockHash),
     #[error("Did not find tip data")]
     MissingTipData,
     #[error("Did not find a hash at index {0} ")]
     MissingHashAtIndex(u64),
     #[error("Did not find acceptance data for chain block {0}")]
-    MissingAcceptanceDataForChainBlock(Hash),
+    MissingAcceptanceDataForChainBlock(BlockHash),
     #[error("Did not find utxo entry for outpoint {0}")]
     MissingUtxoEntryForOutpoint(TransactionOutpoint),
     #[error("Did not find queried transactions in acceptance data: {0:?}")]

@@ -19,7 +19,7 @@ use kaspa_consensus_core::{
     utxo::utxo_collection::UtxoCollection,
 };
 use kaspa_core::time::unix_now;
-use kaspa_hashes::{Hash, ZERO_HASH};
+use kaspa_hashes::{Hash64, ZERO_HASH, ZERO_HASH64}; // PR-9.5e: block ids + merkle roots are Hash64; ZERO_HASH retained for utxo_commitment
 
 use parking_lot::RwLock;
 use std::{collections::HashMap, sync::Arc};
@@ -91,19 +91,20 @@ impl ConsensusApi for ConsensusMock {
             BLOCK_VERSION,
             CompressedParents::default(),
             hash_merkle_root,
-            ZERO_HASH,
-            ZERO_HASH,
+            ZERO_HASH64, // PR-9.5e: accepted_id_merkle_root (Hash64)
+            ZERO_HASH,   // utxo_commitment stays 32-byte
             now,
-            123456789u32,
-            0,
-            0,
-            0.into(),
-            0,
-            ZERO_HASH,
+            123456789u32, // bits
+            0,            // nonce
+            0,            // pow_algo_id
+            0,            // daa_score
+            0.into(),     // blue_work
+            0,            // blue_score
+            ZERO_HASH64,  // PR-9.5e: pruning_point (Hash64)
         );
         let mutable_block = MutableBlock::new(header, txs);
 
-        Ok(BlockTemplate::new(mutable_block, miner_data, coinbase.has_red_reward, now, 0, ZERO_HASH, vec![]))
+        Ok(BlockTemplate::new(mutable_block, miner_data, coinbase.has_red_reward, now, 0, ZERO_HASH64, vec![])) // PR-9.5e: selected parent is a block hash (Hash64)
     }
 
     fn validate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction, _: &TransactionValidationArgs) -> TxResult<()> {
@@ -168,7 +169,7 @@ impl ConsensusApi for ConsensusMock {
     }
 
     fn get_virtual_state_approx_id(&self) -> VirtualStateApproxId {
-        VirtualStateApproxId::new(self.get_virtual_daa_score(), 0.into(), ZERO_HASH)
+        VirtualStateApproxId::new(self.get_virtual_daa_score(), 0.into(), ZERO_HASH64) // PR-9.5e: sink is a block hash (Hash64)
     }
 
     fn modify_coinbase_payload(&self, payload: Vec<u8>, miner_data: &MinerData) -> CoinbaseResult<Vec<u8>> {
@@ -176,7 +177,7 @@ impl ConsensusApi for ConsensusMock {
         Ok(coinbase_manager.modify_coinbase_payload(payload, miner_data))
     }
 
-    fn calc_transaction_hash_merkle_root(&self, txs: &[Transaction]) -> Hash {
+    fn calc_transaction_hash_merkle_root(&self, txs: &[Transaction]) -> Hash64 {
         calc_hash_merkle_root(txs.iter())
     }
 }

@@ -3,7 +3,7 @@ use kaspa_addresses::Address;
 use kaspa_consensus_core::tx::{
     ScriptPublicKey, TransactionId, TransactionIndexType, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
 };
-use kaspa_utils::{hex::ToHex, serde_bytes_fixed_ref, serde_bytes_fixed_ref_optional, serde_bytes_optional};
+use kaspa_utils::{hex::ToHex, serde_bytes_optional};
 use serde::{Deserialize, Serialize};
 use workflow_serializer::prelude::*;
 
@@ -510,8 +510,10 @@ pub struct RpcOptionalTransactionVerboseData {
     pub hash: Option<kaspa_consensus_core::TransactionHash>,
     /// Level: High
     pub compute_mass: Option<u64>,
-    #[serde(with = "serde_bytes_fixed_ref_optional")]
     /// Level: Low
+    // PR-9.5e: `RpcHash` widened to `Hash64` (block identity). Hash64
+    // carries its own serde impl (routed through the `Option` adapter),
+    // so the `serde_bytes_fixed_ref_optional` annotation is removed.
     pub block_hash: Option<RpcHash>,
     /// Level: Low
     pub block_time: Option<u64>,
@@ -559,7 +561,8 @@ impl Deserializer for RpcOptionalTransactionVerboseData {
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcOptionalAcceptedTransactionIds {
-    #[serde(with = "serde_bytes_fixed_ref")]
+    // PR-9.5e: `RpcHash` widened to `Hash64` (block identity); Hash64's
+    // native serde impl replaces the 32-byte `serde_bytes_fixed_ref` helper.
     pub accepting_block_hash: RpcHash,
     pub accepted_transaction_ids: Vec<RpcTransactionId>,
 }

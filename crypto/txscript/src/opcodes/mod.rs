@@ -2889,7 +2889,7 @@ mod test {
     }
 
     fn make_mock_transaction(lock_time: u64) -> (VerifiableTransactionMock, TransactionInput, UtxoEntry) {
-        let dummy_prev_out = TransactionOutpoint::new(kaspa_hashes::Hash::from_u64_word(1), 1);
+        let dummy_prev_out = TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(1), 1) /* PR-9.5e: TransactionId is Hash64 */;
         let dummy_sig_script = vec![0u8; 65];
         let dummy_tx_input = TransactionInput::new(dummy_prev_out, dummy_sig_script, 10, 1);
         let addr_hash = vec![1u8; 32];
@@ -3098,7 +3098,7 @@ mod test {
         }
 
         fn kip_10_tx_mock(inputs: Vec<Kip10Mock>, outputs: Vec<Kip10Mock>) -> (Transaction, Vec<UtxoEntry>) {
-            let dummy_prev_out = TransactionOutpoint::new(kaspa_hashes::Hash::from_u64_word(1), 1);
+            let dummy_prev_out = TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(1), 1) /* PR-9.5e: TransactionId is Hash64 */;
             let dummy_sig_script = vec![0u8; 65];
             let (utxos, tx_inputs) = inputs
                 .into_iter()
@@ -3344,7 +3344,7 @@ mod test {
             }
         }
         fn create_mock_tx(input_count: usize, output_count: usize) -> (Transaction, Vec<UtxoEntry>) {
-            let dummy_prev_out = TransactionOutpoint::new(kaspa_hashes::Hash::from_u64_word(1), 1);
+            let dummy_prev_out = TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(1), 1) /* PR-9.5e: TransactionId is Hash64 */;
             let dummy_sig_script = vec![0u8; 65];
 
             // Create inputs with different SPKs and amounts

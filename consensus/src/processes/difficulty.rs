@@ -9,7 +9,7 @@ use kaspa_consensus_core::{
     errors::difficulty::{DifficultyError, DifficultyResult},
 };
 use kaspa_core::{info, log::CRESCENDO_KEYWORD};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_math::{Uint256, Uint320};
 use std::{
     cmp::{Ordering, max},
@@ -147,7 +147,7 @@ fn _difficulty_desc(target: Uint320) -> String {
 pub struct SampledDifficultyManager<T: HeaderStoreReader, U: GhostdagStoreReader> {
     headers_store: Arc<T>,
     _ghostdag_store: Arc<U>,
-    genesis_hash: Hash,
+    genesis_hash: BlockHash,
     genesis_bits: u32,
     max_difficulty_target: Uint320,
     difficulty_window_size: usize,
@@ -160,7 +160,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
     pub fn new(
         headers_store: Arc<T>,
         ghostdag_store: Arc<U>,
-        genesis_hash: Hash,
+        genesis_hash: BlockHash,
         genesis_bits: u32,
         max_difficulty_target: Uint256,
         difficulty_window_size: usize,

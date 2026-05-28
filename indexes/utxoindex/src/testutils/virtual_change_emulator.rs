@@ -1,11 +1,11 @@
 use crate::model::{CirculatingSupply, CirculatingSupplyDiff};
 use kaspa_consensus::test_helpers::*;
 use kaspa_consensus_core::{
+    BlockHash, // PR-9.5e: DAG tips are block hashes (Hash64)
     BlockHashSet, HashMapCustomHasher,
     tx::ScriptPublicKey,
     utxo::{utxo_collection::UtxoCollection, utxo_diff::UtxoDiff},
 };
-use kaspa_hashes::Hash;
 #[cfg(test)]
 use rand::Rng;
 use rand::{SeedableRng, rngs::SmallRng};
@@ -16,7 +16,7 @@ pub struct VirtualChangeEmulator {
     pub tips: BlockHashSet,
     pub circulating_supply: u64,
     pub accumulated_utxo_diff: Arc<UtxoDiff>,
-    pub virtual_parents: Arc<Vec<Hash>>,
+    pub virtual_parents: Arc<Vec<BlockHash>>,
     pub selected_parent_blue_score: u64,
     pub daa_score: u64,
     pub script_public_key_pool: Vec<ScriptPublicKey>,

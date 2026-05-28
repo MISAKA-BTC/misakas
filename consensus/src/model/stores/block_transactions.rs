@@ -5,20 +5,20 @@ use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub trait BlockTransactionsStoreReader {
-    fn get(&self, hash: Hash) -> Result<Arc<Vec<Transaction>>, StoreError>;
+    fn get(&self, hash: BlockHash) -> Result<Arc<Vec<Transaction>>, StoreError>;
 }
 
 pub trait BlockTransactionsStore: BlockTransactionsStoreReader {
     // This is append only
-    fn insert(&self, hash: Hash, transactions: Arc<Vec<Transaction>>) -> Result<(), StoreError>;
-    fn delete(&self, hash: Hash) -> Result<(), StoreError>;
+    fn insert(&self, hash: BlockHash, transactions: Arc<Vec<Transaction>>) -> Result<(), StoreError>;
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError>;
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -45,7 +45,7 @@ impl MemSizeEstimator for BlockBody {
 #[derive(Clone)]
 pub struct DbBlockTransactionsStore {
     db: Arc<DB>,
-    access: CachedDbAccess<Hash, BlockBody, BlockHasher>,
+    access: CachedDbAccess<BlockHash, BlockBody, BlockHasher>,
 }
 
 impl DbBlockTransactionsStore {
@@ -57,39 +57,39 @@ impl DbBlockTransactionsStore {
         Self::new(Arc::clone(&self.db), cache_policy)
     }
 
-    pub fn has(&self, hash: Hash) -> Result<bool, StoreError> {
+    pub fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         self.access.has(hash)
     }
 
-    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: Hash, transactions: Arc<Vec<Transaction>>) -> Result<(), StoreError> {
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, transactions: Arc<Vec<Transaction>>) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(BatchDbWriter::new(batch), hash, BlockBody(transactions))?;
         Ok(())
     }
 
-    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: Hash) -> Result<(), StoreError> {
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(BatchDbWriter::new(batch), hash)
     }
 }
 
 impl BlockTransactionsStoreReader for DbBlockTransactionsStore {
-    fn get(&self, hash: Hash) -> Result<Arc<Vec<Transaction>>, StoreError> {
+    fn get(&self, hash: BlockHash) -> Result<Arc<Vec<Transaction>>, StoreError> {
         Ok(self.access.read(hash)?.0)
     }
 }
 
 impl BlockTransactionsStore for DbBlockTransactionsStore {
-    fn insert(&self, hash: Hash, transactions: Arc<Vec<Transaction>>) -> Result<(), StoreError> {
+    fn insert(&self, hash: BlockHash, transactions: Arc<Vec<Transaction>>) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(DirectDbWriter::new(&self.db), hash, BlockBody(transactions))?;
         Ok(())
     }
 
-    fn delete(&self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(DirectDbWriter::new(&self.db), hash)
     }
 }

@@ -7,7 +7,7 @@ use kaspa_consensus_core::{
     block::BlockTemplate, blockhash::ORIGIN, coinbase::MinerData, errors::block::RuleError, tx::Transaction,
     utxo::utxo_view::UtxoViewComposition,
 };
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 
 use super::VirtualStateProcessor;
 
@@ -32,7 +32,7 @@ impl TestBlockBuilder {
     /// Test-only helper method for building a block template with specific parents
     pub(crate) fn build_block_template_with_parents(
         &self,
-        parents: Vec<Hash>,
+        parents: Vec<BlockHash>,
         miner_data: MinerData,
         txs: Vec<Transaction>,
     ) -> Result<BlockTemplate, RuleError> {

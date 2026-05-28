@@ -3,14 +3,14 @@ use crate::model::stores::ghostdag::GhostdagStoreReader;
 use crate::model::stores::relations::RelationsStoreReader;
 use crate::model::{services::reachability::ReachabilityService, stores::headers::HeaderStoreReader};
 use kaspa_consensus_core::{BlockHashSet, HashMapCustomHasher};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use std::collections::VecDeque;
 
 pub fn unordered_mergeset_without_selected_parent<S: RelationsStoreReader + ?Sized, U: ReachabilityService + ?Sized>(
     relations: &S,
     reachability: &U,
-    selected_parent: Hash,
-    parents: &[Hash],
+    selected_parent: BlockHash,
+    parents: &[BlockHash],
 ) -> BlockHashSet {
     let mut queue: VecDeque<_> = parents.iter().copied().filter(|p| p != &selected_parent).collect();
     let mut mergeset: BlockHashSet = queue.iter().copied().collect();
@@ -40,11 +40,11 @@ pub fn unordered_mergeset_without_selected_parent<S: RelationsStoreReader + ?Siz
 }
 
 impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V: HeaderStoreReader> GhostdagManager<T, S, U, V> {
-    pub fn ordered_mergeset_without_selected_parent(&self, selected_parent: Hash, parents: &[Hash]) -> Vec<Hash> {
+    pub fn ordered_mergeset_without_selected_parent(&self, selected_parent: BlockHash, parents: &[BlockHash]) -> Vec<BlockHash> {
         self.sort_blocks(self.unordered_mergeset_without_selected_parent(selected_parent, parents))
     }
 
-    pub fn unordered_mergeset_without_selected_parent(&self, selected_parent: Hash, parents: &[Hash]) -> BlockHashSet {
+    pub fn unordered_mergeset_without_selected_parent(&self, selected_parent: BlockHash, parents: &[BlockHash]) -> BlockHashSet {
         unordered_mergeset_without_selected_parent(&self.relations_store, &self.reachability_service, selected_parent, parents)
     }
 }

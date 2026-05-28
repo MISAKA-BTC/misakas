@@ -4,7 +4,7 @@ use kaspa_consensus_core::{
     BlockHashMap, BlockLevel, BlueWorkType, HashMapCustomHasher,
     blockhash::{self, BlockHashExtensions, BlockHashes},
 };
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_utils::refs::Refs;
 
 use crate::{
@@ -23,7 +23,7 @@ use super::ordering::*;
 
 #[derive(Clone)]
 pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V: HeaderStoreReader> {
-    genesis_hash: Hash,
+    genesis_hash: BlockHash,
     pub(super) k: KType,
     pub(super) ghostdag_store: Arc<T>,
     pub(super) relations_store: S,
@@ -42,7 +42,7 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
 
 impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V: HeaderStoreReader> GhostdagManager<T, S, U, V> {
     pub fn new(
-        genesis_hash: Hash,
+        genesis_hash: BlockHash,
         k: KType,
         ghostdag_store: Arc<T>,
         relations_store: S,
@@ -54,7 +54,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
     }
 
     pub fn with_level(
-        genesis_hash: Hash,
+        genesis_hash: BlockHash,
         k: KType,
         ghostdag_store: Arc<T>,
         relations_store: S,
@@ -96,7 +96,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         ))
     }
 
-    pub fn find_selected_parent(&self, parents: impl IntoIterator<Item = Hash>) -> Hash {
+    pub fn find_selected_parent(&self, parents: impl IntoIterator<Item = BlockHash>) -> BlockHash {
         parents
             .into_iter()
             .map(|parent| SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() })
@@ -123,7 +123,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
     ///    blues_anticone_sizes.
     ///
     /// For further details see the article <https://eprint.iacr.org/2018/104.pdf>
-    pub fn ghostdag(&self, parents: &[Hash]) -> GhostdagData {
+    pub fn ghostdag(&self, parents: &[BlockHash]) -> GhostdagData {
         assert!(!parents.is_empty(), "genesis must be added via a call to init");
 
         // Run the GHOSTDAG parent selection algorithm
@@ -169,7 +169,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         &self,
         new_block_data: &GhostdagData,
         chain_block: &ChainBlock,
-        blue_candidate: Hash,
+        blue_candidate: BlockHash,
         candidate_blues_anticone_sizes: &mut BlockHashMap<KType>,
         candidate_blue_anticone_size: &mut KType,
         k: KType,
@@ -227,7 +227,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
 
     /// Returns the blue anticone size of `block` from the worldview of `context`.
     /// Expects `block` to be in the blue set of `context`
-    fn blue_anticone_size(&self, block: Hash, context: &GhostdagData) -> KType {
+    fn blue_anticone_size(&self, block: BlockHash, context: &GhostdagData) -> KType {
         let mut current_blues_anticone_sizes = HashKTypeMap::clone(&context.blues_anticone_sizes);
         let mut current_selected_parent = context.selected_parent;
         loop {
@@ -244,7 +244,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         }
     }
 
-    fn check_blue_candidate(&self, new_block_data: &GhostdagData, blue_candidate: Hash, k: KType) -> ColoringOutput {
+    fn check_blue_candidate(&self, new_block_data: &GhostdagData, blue_candidate: BlockHash, k: KType) -> ColoringOutput {
         // The maximum length of new_block_data.mergeset_blues can be K+1 because
         // it contains the selected parent.
         if new_block_data.mergeset_blues.len() as KType == k + 1 {
@@ -285,7 +285,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
 
 /// Chain block with attached ghostdag data
 struct ChainBlock<'a> {
-    hash: Option<Hash>, // if set to `None`, signals being the new block
+    hash: Option<BlockHash>, // if set to `None`, signals being the new block
     data: Refs<'a, GhostdagData>,
 }
 

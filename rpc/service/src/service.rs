@@ -965,7 +965,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
 
         // In the previous golang implementation the convention for virtual was the following const.
         // In the current implementation, consensus behaves the same when it gets a None instead.
-        const LEGACY_VIRTUAL: kaspa_hashes::Hash = kaspa_hashes::Hash::from_bytes([0xff; kaspa_hashes::HASH_SIZE]);
+        // PR-9.5e: block hashes widened to Hash64; the legacy-virtual sentinel is a 64-byte all-0xff block id.
+        const LEGACY_VIRTUAL: kaspa_consensus_core::BlockHash =
+            kaspa_consensus_core::BlockHash::from_bytes([0xff; kaspa_hashes::HASH64_SIZE]);
         let mut start_hash = request.start_hash;
         if let Some(start) = start_hash
             && start == LEGACY_VIRTUAL

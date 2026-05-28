@@ -11,7 +11,7 @@ use kaspa_database::prelude::{BatchDbWriter, CachedDbItem, DirectDbWriter, Store
 use kaspa_database::prelude::{CachePolicy, StoreResult};
 use kaspa_database::prelude::{DB, StoreError};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_muhash::MuHash;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use super::utxo_set::DbUtxoSetStore;
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct VirtualState {
-    pub parents: Vec<Hash>,
+    pub parents: Vec<BlockHash>,
     pub ghostdag_data: GhostdagData,
     pub daa_score: u64,
     pub bits: u32,
@@ -35,7 +35,7 @@ pub struct VirtualState {
 
 impl VirtualState {
     pub fn new(
-        parents: Vec<Hash>,
+        parents: Vec<BlockHash>,
         daa_score: u64,
         bits: u32,
         past_median_time: u64,

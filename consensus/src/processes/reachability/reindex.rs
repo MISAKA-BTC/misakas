@@ -1,7 +1,7 @@
 use super::{extensions::ReachabilityStoreIntervalExtensions, inquirer::get_next_chain_ancestor_unchecked, interval::Interval, *};
 use crate::model::stores::reachability::ReachabilityStore;
 use kaspa_consensus_core::{BlockHashMap, HashMapCustomHasher, blockhash::BlockHashExtensions};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use std::collections::VecDeque;
 
 /// A struct used during reindex operations. It represents a temporary context
@@ -24,7 +24,7 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
     /// thereafter. It does this by traversing down the reachability
     /// tree until it finds a block with an interval size that's greater than
     /// its subtree size. See `propagate_interval` for further details.
-    pub(super) fn reindex_intervals(&mut self, new_child: Hash, reindex_root: Hash) -> Result<()> {
+    pub(super) fn reindex_intervals(&mut self, new_child: BlockHash, reindex_root: BlockHash) -> Result<()> {
         let mut current = new_child;
 
         // Search for the first ancestor with sufficient interval space
@@ -88,7 +88,7 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
     /// and populates self.subtree_sizes with the results.
     /// It is equivalent to the following recursive implementation:
     ///
-    /// fn count_subtrees(&mut self, block: Hash) -> Result<u64> {
+    /// fn count_subtrees(&mut self, block: BlockHash) -> Result<u64> {
     ///     let mut subtree_size = 0u64;
     ///     for child in self.store.get_children(block)?.iter().cloned() {
     ///         subtree_size += self.count_subtrees(child)?;
@@ -105,12 +105,12 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
     /// intermediate updates from leaves via parent chains until all
     /// size information is gathered at the root of the operation
     /// (i.e. at block).
-    fn count_subtrees(&mut self, block: Hash) -> Result<()> {
+    fn count_subtrees(&mut self, block: BlockHash) -> Result<()> {
         if self.subtree_sizes.contains_key(&block) {
             return Ok(());
         }
 
-        let mut queue = VecDeque::<Hash>::from([block]);
+        let mut queue = VecDeque::<BlockHash>::from([block]);
         let mut counts = BlockHashMap::<u64>::new();
 
         while let Some(mut current) = queue.pop_front() {
@@ -154,11 +154,11 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
     /// Propagates a new interval using a BFS traversal.
     /// Subtree intervals are recursively allocated according to subtree sizes and
     /// the allocation rule in `Interval::split_exponential`.
-    fn propagate_interval(&mut self, block: Hash) -> Result<()> {
+    fn propagate_interval(&mut self, block: BlockHash) -> Result<()> {
         // Make sure subtrees are counted before propagating
         self.count_subtrees(block)?;
 
-        let mut queue = VecDeque::<Hash>::from([block]);
+        let mut queue = VecDeque::<BlockHash>::from([block]);
         while let Some(current) = queue.pop_front() {
             let children = self.store.get_children(current)?;
             if !children.is_empty() {
@@ -180,9 +180,9 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
     /// expected to be a direct parent of `allocation_block` and an ancestor of current `reindex_root`.
     fn reindex_intervals_earlier_than_root(
         &mut self,
-        allocation_block: Hash,
-        reindex_root: Hash,
-        common_ancestor: Hash,
+        allocation_block: BlockHash,
+        reindex_root: BlockHash,
+        common_ancestor: BlockHash,
         required_allocation: u64,
     ) -> Result<()> {
         // The chosen child is: (i) child of `common_ancestor`; (ii) an
@@ -202,10 +202,10 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
 
     fn reclaim_interval_before(
         &mut self,
-        allocation_block: Hash,
-        common_ancestor: Hash,
-        chosen_child: Hash,
-        reindex_root: Hash,
+        allocation_block: BlockHash,
+        common_ancestor: BlockHash,
+        chosen_child: BlockHash,
+        reindex_root: BlockHash,
         required_allocation: u64,
     ) -> Result<()> {
         let mut slack_sum = 0u64;
@@ -264,10 +264,10 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
 
     fn reclaim_interval_after(
         &mut self,
-        allocation_block: Hash,
-        common_ancestor: Hash,
-        chosen_child: Hash,
-        reindex_root: Hash,
+        allocation_block: BlockHash,
+        common_ancestor: BlockHash,
+        chosen_child: BlockHash,
+        reindex_root: BlockHash,
         required_allocation: u64,
     ) -> Result<()> {
         let mut slack_sum = 0u64;
@@ -324,7 +324,7 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
         Ok(())
     }
 
-    fn offset_siblings_before(&mut self, allocation_block: Hash, current: Hash, offset: u64) -> Result<()> {
+    fn offset_siblings_before(&mut self, allocation_block: BlockHash, current: BlockHash, offset: u64) -> Result<()> {
         let parent = self.store.get_parent(current)?;
         let children = self.store.get_children(parent)?;
 
@@ -342,7 +342,7 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
         Ok(())
     }
 
-    fn offset_siblings_after(&mut self, allocation_block: Hash, current: Hash, offset: u64) -> Result<()> {
+    fn offset_siblings_after(&mut self, allocation_block: BlockHash, current: BlockHash, offset: u64) -> Result<()> {
         let parent = self.store.get_parent(current)?;
         let children = self.store.get_children(parent)?;
 
@@ -360,19 +360,19 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
         Ok(())
     }
 
-    fn apply_interval_op(&mut self, block: Hash, offset: u64, op: fn(&Interval, u64) -> Interval) -> Result<()> {
+    fn apply_interval_op(&mut self, block: BlockHash, offset: u64, op: fn(&Interval, u64) -> Interval) -> Result<()> {
         self.store.set_interval(block, op(&self.store.get_interval(block)?, offset))?;
         Ok(())
     }
 
-    fn apply_interval_op_and_propagate(&mut self, block: Hash, offset: u64, op: fn(&Interval, u64) -> Interval) -> Result<()> {
+    fn apply_interval_op_and_propagate(&mut self, block: BlockHash, offset: u64, op: fn(&Interval, u64) -> Interval) -> Result<()> {
         self.store.set_interval(block, op(&self.store.get_interval(block)?, offset))?;
         self.propagate_interval(block)?;
         Ok(())
     }
 
     /// A method for handling reindex operations triggered by moving the reindex root
-    pub(super) fn concentrate_interval(&mut self, parent: Hash, child: Hash, is_final_reindex_root: bool) -> Result<()> {
+    pub(super) fn concentrate_interval(&mut self, parent: BlockHash, child: BlockHash, is_final_reindex_root: bool) -> Result<()> {
         let children = self.store.get_children(parent)?;
 
         // Split the `children` of `parent` to siblings before `child` and siblings after `child`
@@ -392,7 +392,7 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
         Ok(())
     }
 
-    pub(super) fn tighten_intervals_before(&mut self, parent: Hash, children_before: &[Hash]) -> Result<u64> {
+    pub(super) fn tighten_intervals_before(&mut self, parent: BlockHash, children_before: &[BlockHash]) -> Result<u64> {
         let sizes = children_before
             .iter()
             .cloned()
@@ -414,7 +414,7 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
         Ok(sum)
     }
 
-    pub(super) fn tighten_intervals_after(&mut self, parent: Hash, children_after: &[Hash]) -> Result<u64> {
+    pub(super) fn tighten_intervals_after(&mut self, parent: BlockHash, children_after: &[BlockHash]) -> Result<u64> {
         let sizes = children_after
             .iter()
             .cloned()
@@ -438,8 +438,8 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
 
     pub(super) fn expand_interval_to_chosen(
         &mut self,
-        parent: Hash,
-        child: Hash,
+        parent: BlockHash,
+        child: BlockHash,
         siblings_before_subtrees_sum: u64,
         siblings_after_subtrees_sum: u64,
         is_final_reindex_root: bool,
@@ -472,7 +472,7 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
 }
 
 /// Splits `children` into two slices: the blocks that are before `pivot` and the blocks that are after.
-fn split_children(children: &std::sync::Arc<Vec<Hash>>, pivot: Hash) -> Result<(&[Hash], &[Hash])> {
+fn split_children(children: &std::sync::Arc<Vec<BlockHash>>, pivot: BlockHash) -> Result<(&[BlockHash], &[BlockHash])> {
     if let Some(index) = children.iter().cloned().position(|c| c == pivot) {
         Ok((&children[..index], &children[index + 1..]))
     } else {
@@ -495,7 +495,7 @@ mod tests {
         let mut store = MemoryReachabilityStore::new();
 
         // Arrange
-        let root: Hash = 1.into();
+        let root: BlockHash = 1.into();
         StoreBuilder::new(&mut store)
             .add_block(root, blockhash::NONE)
             .add_block(2.into(), root)
@@ -514,7 +514,7 @@ mod tests {
         let expected = [(1u64, 8u64), (2, 6), (3, 4), (4, 1), (5, 3), (6, 2), (7, 1), (8, 1)]
             .iter()
             .cloned()
-            .map(|(h, c)| (Hash::from(h), c))
+            .map(|(h, c)| (BlockHash::from(h), c))
             .collect::<BlockHashMap<u64>>();
 
         assert_eq!(expected, ctx.subtree_sizes);

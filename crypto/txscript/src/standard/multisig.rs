@@ -122,7 +122,13 @@ mod tests {
 
     fn check_multisig_scenario(inputs: Vec<Input>, required: usize, is_ok: bool, is_ecdsa: bool) {
         // Taken from: d839d29b549469d0f9a23e51febe68d4084967a6a477868b511a5a8d88c5ae06
-        let prev_tx_id = TransactionId::from_str("63020db736215f8b1105a9281f7bcbb6473d965ecc45bb2fb5da59bd35e6ff84").unwrap();
+        // PR-9.5c: TransactionId is now Hash64 (128 hex chars); the original 64-char
+        // fixture is zero-extended. The value is arbitrary — this is a sign/verify
+        // roundtrip, so any valid txid works.
+        let prev_tx_id = TransactionId::from_str(
+            "63020db736215f8b1105a9281f7bcbb6473d965ecc45bb2fb5da59bd35e6ff840000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap();
         let filtered = inputs.iter().filter(|input| input.required);
         let script = if !is_ecdsa {
             let pks = filtered.map(|input| input.kp.x_only_public_key().0.serialize());

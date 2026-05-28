@@ -38,7 +38,7 @@ use kaspa_consensus_core::{
 };
 use kaspa_consensusmanager::SessionLock;
 use kaspa_database::prelude::{StoreResultExt, StoreResultUnitExt};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_utils::vec::VecExtensions;
 use parking_lot::RwLock;
 use rayon::ThreadPool;
@@ -48,9 +48,9 @@ use std::sync::{Arc, atomic::Ordering};
 use super::super::ProcessingCounters;
 
 pub struct HeaderProcessingContext {
-    pub hash: Hash,
+    pub hash: BlockHash,
     pub header: Arc<Header>,
-    pub pruning_point: Hash,
+    pub pruning_point: BlockHash,
     pub block_level: BlockLevel,
     pub known_direct_parents: BlockHashes,
 
@@ -59,16 +59,16 @@ pub struct HeaderProcessingContext {
     pub block_window_for_difficulty: Option<Arc<BlockWindowHeap>>,
     pub block_window_for_past_median_time: Option<Arc<BlockWindowHeap>>,
     pub mergeset_non_daa: Option<BlockHashSet>,
-    pub merge_depth_root: Option<Hash>,
-    pub finality_point: Option<Hash>,
+    pub merge_depth_root: Option<BlockHash>,
+    pub finality_point: Option<BlockHash>,
 }
 
 impl HeaderProcessingContext {
     pub fn new(
-        hash: Hash,
+        hash: BlockHash,
         header: Arc<Header>,
         block_level: BlockLevel,
-        pruning_point: Hash,
+        pruning_point: BlockHash,
         known_direct_parents: BlockHashes,
     ) -> Self {
         Self {

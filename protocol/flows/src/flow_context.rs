@@ -24,7 +24,7 @@ use kaspa_core::{
     task::tick::TickService,
 };
 use kaspa_core::{time::unix_now, warn};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_mining::mempool::tx::{Orphan, Priority};
 use kaspa_mining::{manager::MiningManagerProxy, mempool::tx::RbfPolicy};
 use kaspa_notify::notifier::Notify;
@@ -78,13 +78,13 @@ const REQUEST_SCOPE_WAIT_TIME: Duration = Duration::from_secs(1);
 #[derive(Debug, PartialEq)]
 pub enum BlockLogEvent {
     /// Accepted block via *relay*
-    Relay(Hash),
+    Relay(BlockHash),
     /// Accepted block via *submit block*
-    Submit(Hash),
+    Submit(BlockHash),
     /// Orphaned block with x missing roots
-    Orphaned(Hash, usize),
+    Orphaned(BlockHash, usize),
     /// Unorphaned x blocks with hash being a representative
-    Unorphaned(Hash, usize),
+    Unorphaned(BlockHash, usize),
 }
 
 pub struct BlockEventLogger {
@@ -114,10 +114,10 @@ impl BlockEventLogger {
                 #[derive(Default)]
                 struct LogSummary {
                     // Representatives
-                    relay_rep: Option<Hash>,
-                    submit_rep: Option<Hash>,
-                    orphan_rep: Option<Hash>,
-                    unorphan_rep: Option<Hash>,
+                    relay_rep: Option<BlockHash>,
+                    submit_rep: Option<BlockHash>,
+                    orphan_rep: Option<BlockHash>,
+                    unorphan_rep: Option<BlockHash>,
                     // Counts
                     relay_count: usize,
                     submit_count: usize,
@@ -127,11 +127,11 @@ impl BlockEventLogger {
                 }
 
                 struct LogHash {
-                    op: Option<Hash>,
+                    op: Option<BlockHash>,
                 }
 
-                impl From<Option<Hash>> for LogHash {
-                    fn from(op: Option<Hash>) -> Self {
+                impl From<Option<BlockHash>> for LogHash {
+                    fn from(op: Option<BlockHash>) -> Self {
                         Self { op }
                     }
                 }
@@ -215,7 +215,7 @@ pub struct FlowContextInner {
     pub config: Arc<Config>,
     hub: Hub,
     orphans_pool: AsyncRwLock<OrphanBlocksPool>,
-    shared_block_requests: Arc<Mutex<HashMap<Hash, RequestScopeMetadata>>>,
+    shared_block_requests: Arc<Mutex<HashMap<BlockHash, RequestScopeMetadata>>>,
     transactions_spread: AsyncRwLock<TransactionsSpread>,
     shared_transaction_requests: Arc<Mutex<HashMap<TransactionId, RequestScopeMetadata>>>,
     is_ibd_running: Arc<AtomicBool>,
@@ -409,10 +409,10 @@ impl FlowContext {
         if self.is_ibd_running() { self.ibd_metadata.read().map(|md| md.daa_score) } else { None }
     }
 
-    // PR-9.5c: generic over the hash width because
-    // `shared_block_requests` holds `BlockHash` (still `Hash`)
+    // PR-9.5e: generic over the hash width because
+    // `shared_block_requests` holds `BlockHash` (now `Hash64`)
     // while `shared_transaction_requests` holds `TransactionId`
-    // (now `Hash64`). Both implement `std::hash::Hash + Eq +
+    // (also `Hash64`). Both implement `std::hash::Hash + Eq +
     // Copy`, so the same HashMap-entry logic works for both.
     fn try_adding_request_impl<H>(req: H, map: &Arc<Mutex<HashMap<H, RequestScopeMetadata>>>) -> Option<RequestScope<H>>
     where
@@ -439,7 +439,7 @@ impl FlowContext {
         }
     }
 
-    pub fn try_adding_block_request(&self, req: Hash) -> Option<RequestScope<Hash>> {
+    pub fn try_adding_block_request(&self, req: BlockHash) -> Option<RequestScope<BlockHash>> {
         Self::try_adding_request_impl(req, &self.shared_block_requests)
     }
 
@@ -451,15 +451,15 @@ impl FlowContext {
         self.orphans_pool.write().await.add_orphan(consensus, orphan_block).await
     }
 
-    pub async fn is_known_orphan(&self, hash: Hash) -> bool {
+    pub async fn is_known_orphan(&self, hash: BlockHash) -> bool {
         self.orphans_pool.read().await.is_known_orphan(hash)
     }
 
-    pub async fn get_orphan_roots_if_known(&self, consensus: &ConsensusProxy, orphan: Hash) -> OrphanOutput {
+    pub async fn get_orphan_roots_if_known(&self, consensus: &ConsensusProxy, orphan: BlockHash) -> OrphanOutput {
         self.orphans_pool.read().await.get_orphan_roots_if_known(consensus, orphan).await
     }
 
-    pub async fn unorphan_blocks(&self, consensus: &ConsensusProxy, root: Hash) -> Vec<(Block, BlockValidationFuture)> {
+    pub async fn unorphan_blocks(&self, consensus: &ConsensusProxy, root: BlockHash) -> Vec<(Block, BlockValidationFuture)> {
         let (blocks, block_tasks, virtual_state_tasks) = self.orphans_pool.write().await.unorphan_blocks(consensus, root).await;
         let mut unorphaned_blocks = Vec::with_capacity(blocks.len());
         let results = join_all(block_tasks).await;
@@ -486,7 +486,7 @@ impl FlowContext {
         unorphaned_blocks
     }
 
-    pub async fn revalidate_orphans(&self, consensus: &ConsensusProxy) -> (Vec<Hash>, Vec<BlockValidationFuture>) {
+    pub async fn revalidate_orphans(&self, consensus: &ConsensusProxy) -> (Vec<BlockHash>, Vec<BlockValidationFuture>) {
         self.orphans_pool.write().await.revalidate_orphans(consensus).await
     }
 

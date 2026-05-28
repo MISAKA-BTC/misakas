@@ -1,10 +1,11 @@
 use crate::{
-    BlueWorkType,
+    BlockHash, BlueWorkType,
     coinbase::MinerData,
     header::Header,
     tx::{Transaction, TransactionId},
 };
-use kaspa_hashes::Hash;
+// PR-9.5e: all block-hash surfaces here (`Block::hash`, selected
+// parent, sink, precomputed-hash test ctor) use `BlockHash` (= `Hash64`).
 use kaspa_utils::mem_size::MemSizeEstimator;
 use std::sync::Arc;
 
@@ -59,12 +60,12 @@ impl Block {
         self.transactions.is_empty()
     }
 
-    pub fn hash(&self) -> Hash {
+    pub fn hash(&self) -> BlockHash {
         self.header.hash
     }
 
     /// WARNING: To be used for test purposes only
-    pub fn from_precomputed_hash(hash: Hash, parents: Vec<Hash>) -> Block {
+    pub fn from_precomputed_hash(hash: BlockHash, parents: Vec<BlockHash>) -> Block {
         Block::from_header(Header::from_precomputed_hash(hash, parents))
     }
 
@@ -121,7 +122,7 @@ pub struct BlockTemplate {
     pub coinbase_has_red_reward: bool,
     pub selected_parent_timestamp: u64,
     pub selected_parent_daa_score: u64,
-    pub selected_parent_hash: Hash,
+    pub selected_parent_hash: BlockHash,
     /// Expected length is one less than txs length due to lack of coinbase transaction
     pub calculated_fees: Vec<u64>,
 }
@@ -133,7 +134,7 @@ impl BlockTemplate {
         coinbase_has_red_reward: bool,
         selected_parent_timestamp: u64,
         selected_parent_daa_score: u64,
-        selected_parent_hash: Hash,
+        selected_parent_hash: BlockHash,
         calculated_fees: Vec<u64>,
     ) -> Self {
         Self {
@@ -159,11 +160,11 @@ impl BlockTemplate {
 pub struct VirtualStateApproxId {
     daa_score: u64,
     blue_work: BlueWorkType,
-    sink: Hash,
+    sink: BlockHash,
 }
 
 impl VirtualStateApproxId {
-    pub fn new(daa_score: u64, blue_work: BlueWorkType, sink: Hash) -> Self {
+    pub fn new(daa_score: u64, blue_work: BlueWorkType, sink: BlockHash) -> Self {
         Self { daa_score, blue_work, sink }
     }
 }

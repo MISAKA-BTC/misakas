@@ -2,7 +2,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use rayon::prelude::*;
 
 use kaspa_consensus_core::{
-    Hash,
+    Hash64, // PR-9.5e: transaction ids are Hash64
     constants::TX_VERSION,
     subnets::SUBNETWORK_ID_NATIVE,
     tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput},
@@ -10,7 +10,7 @@ use kaspa_consensus_core::{
 
 fn constuct_tx() -> Transaction {
     let inputs = vec![TransactionInput {
-        previous_outpoint: TransactionOutpoint { transaction_id: Hash::from_bytes([0xFF; 32]), index: 0 },
+        previous_outpoint: TransactionOutpoint { transaction_id: Hash64::from_bytes([0xFF; 64]), index: 0 },
         signature_script: vec![],
         sequence: 0,
         sig_op_count: 1,

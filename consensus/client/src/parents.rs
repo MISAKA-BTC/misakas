@@ -5,7 +5,7 @@
 
 use crate::imports::*;
 use kaspa_consensus_core::header as native;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: parents are block hashes (Hash64)
 
 /// An efficient cumulative-sum run-length encoding for the parents-by-level vector in the block header.
 /// @category Consensus
@@ -40,7 +40,7 @@ impl CompressedParents {
     /// Converts the compressed parents to an expanded `JsValue` of `Array<Array<HexString>>`.
     #[wasm_bindgen(js_name = toExpanded)]
     pub fn to_expanded(&self) -> Result<JsValue, JsError> {
-        let expanded: Vec<Vec<Hash>> = self.inner.clone().into();
+        let expanded: Vec<Vec<BlockHash>> = self.inner.clone().into();
         Ok(serde_wasm_bindgen::to_value(&expanded)?)
     }
 }
@@ -77,11 +77,11 @@ impl TryCastFromJs for CompressedParents {
                     let parents_js = run_array.get(1);
                     let parents_array = js_sys::Array::from(&parents_js);
                     let parents =
-                        parents_array.iter().map(|hash_js| hash_js.try_into_owned()).collect::<std::result::Result<Vec<Hash>, _>>()?;
+                        parents_array.iter().map(|hash_js| hash_js.try_into_owned()).collect::<std::result::Result<Vec<BlockHash>, _>>()?;
 
                     Ok((level, parents))
                 })
-                .collect::<std::result::Result<Vec<(u8, Vec<Hash>)>, Error>>()?;
+                .collect::<std::result::Result<Vec<(u8, Vec<BlockHash>)>, Error>>()?;
 
             Ok(Self { inner: runs.try_into()? }.into())
         })

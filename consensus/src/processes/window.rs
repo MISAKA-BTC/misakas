@@ -13,7 +13,7 @@ use kaspa_consensus_core::{
     config::genesis::GenesisBlock,
     errors::{block::RuleError, difficulty::DifficultyResult},
 };
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_math::Uint256;
 use once_cell::unsync::Lazy;
 use std::{
@@ -50,18 +50,18 @@ pub trait WindowManager {
     fn block_daa_window(&self, ghostdag_data: &GhostdagData) -> Result<DaaWindow, RuleError>;
     fn calculate_difficulty_bits(&self, ghostdag_data: &GhostdagData, daa_window: &DaaWindow) -> u32;
     fn calc_past_median_time(&self, ghostdag_data: &GhostdagData) -> Result<(u64, Arc<BlockWindowHeap>), RuleError>;
-    fn calc_past_median_time_for_known_hash(&self, hash: Hash) -> Result<u64, RuleError>;
+    fn calc_past_median_time_for_known_hash(&self, hash: BlockHash) -> Result<u64, RuleError>;
     fn estimate_network_hashes_per_second(&self, window: Arc<BlockWindowHeap>) -> DifficultyResult<u64>;
     fn window_size(&self, ghostdag_data: &GhostdagData, window_type: WindowType) -> usize;
     fn sample_rate(&self, ghostdag_data: &GhostdagData, window_type: WindowType) -> u64;
 
     /// Returns the full consecutive sub-DAG containing all blocks required to restore the (possibly sampled) window.
-    fn consecutive_cover_for_window(&self, ghostdag_data: Arc<GhostdagData>, window: &BlockWindowHeap) -> Vec<Hash>;
+    fn consecutive_cover_for_window(&self, ghostdag_data: Arc<GhostdagData>, window: &BlockWindowHeap) -> Vec<BlockHash>;
 }
 
 enum SampledBlock {
     Sampled(SortableBlock),
-    NonDaa(Hash),
+    NonDaa(BlockHash),
 }
 
 /// A sampled window manager implementing [KIP-0004](https://github.com/kaspanet/kips/blob/master/kip-0004.md)
@@ -72,7 +72,7 @@ pub struct SampledWindowManager<
     V: HeaderStoreReader,
     W: DaaStoreReader,
 > {
-    genesis_hash: Hash,
+    genesis_hash: BlockHash,
     ghostdag_store: Arc<T>,
     headers_store: Arc<V>,
     _daa_store: Arc<W>,
@@ -139,7 +139,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         &self,
         ghostdag_data: &GhostdagData,
         window_type: WindowType,
-        mut mergeset_non_daa_inserter: impl FnMut(Hash),
+        mut mergeset_non_daa_inserter: impl FnMut(BlockHash),
     ) -> Result<Arc<BlockWindowHeap>, RuleError> {
         let window_size = self.window_size(ghostdag_data, window_type);
         let sample_rate = self.sample_rate(ghostdag_data, window_type);
@@ -215,7 +215,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
             }
 
             // push the current mergeset into the window
-            self.push_mergeset(&mut &mut window_heap, sample_rate, &current_ghostdag, parent_ghostdag.blue_work, None::<fn(Hash)>);
+            self.push_mergeset(&mut &mut window_heap, sample_rate, &current_ghostdag, parent_ghostdag.blue_work, None::<fn(BlockHash)>);
 
             // see if we can inherit and merge with the selected parent cache
             if self.try_merge_with_selected_parent_cache(&mut window_heap, &cache, &current_ghostdag.selected_parent) {
@@ -238,7 +238,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         sample_rate: u64,
         ghostdag_data: &GhostdagData,
         selected_parent_blue_work: BlueWorkType,
-        mergeset_non_daa_inserter: Option<impl FnMut(Hash)>,
+        mergeset_non_daa_inserter: Option<impl FnMut(BlockHash)>,
     ) {
         if let Some(mut mergeset_non_daa_inserter) = mergeset_non_daa_inserter {
             // If we have a non-daa inserter, we must iterate over the whole mergeset and operate on the sampled and non-daa blocks.
@@ -269,7 +269,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         cache: &impl BlockWindowCacheReader,
         ghostdag_data: &GhostdagData,
         selected_parent_blue_work: BlueWorkType,
-        mergeset_non_daa_inserter: Option<impl FnMut(Hash)>,
+        mergeset_non_daa_inserter: Option<impl FnMut(BlockHash)>,
     ) -> Option<Arc<BlockWindowHeap>> {
         cache.get(&ghostdag_data.selected_parent).map(|selected_parent_window| {
             let mut heap = Lazy::new(|| BoundedSizeBlockHeap::from_binary_heap(window_size, (*selected_parent_window).clone()));
@@ -283,7 +283,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         &self,
         heap: &mut BoundedSizeBlockHeap,
         cache: &impl BlockWindowCacheReader,
-        selected_parent: &Hash,
+        selected_parent: &BlockHash,
     ) -> bool {
         cache
             .get(selected_parent)
@@ -354,7 +354,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         Ok((past_median_time, window))
     }
 
-    fn calc_past_median_time_for_known_hash(&self, hash: Hash) -> Result<u64, RuleError> {
+    fn calc_past_median_time_for_known_hash(&self, hash: BlockHash) -> Result<u64, RuleError> {
         if let Some(window) = self.block_window_cache_for_past_median_time.get(&hash) {
             let past_median_time = self
                 .past_median_time_manager
@@ -388,7 +388,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         }
     }
 
-    fn consecutive_cover_for_window(&self, mut ghostdag: Arc<GhostdagData>, window: &BlockWindowHeap) -> Vec<Hash> {
+    fn consecutive_cover_for_window(&self, mut ghostdag: Arc<GhostdagData>, window: &BlockWindowHeap) -> Vec<BlockHash> {
         // In the sampled case, the sampling logic relies on DAA indexes which can only be calculated correctly if the full
         // mergesets covering all sampled blocks are sent.
 
@@ -444,7 +444,7 @@ impl BoundedSizeBlockHeap {
         self.binary_heap.len() == self.size_bound
     }
 
-    fn can_push(&self, hash: Hash, blue_work: BlueWorkType) -> bool {
+    fn can_push(&self, hash: BlockHash, blue_work: BlueWorkType) -> bool {
         let r_sortable_block = Reverse(SortableBlock { hash, blue_work });
         if self.reached_size_bound() {
             let max = self.binary_heap.peek().unwrap();
@@ -455,7 +455,7 @@ impl BoundedSizeBlockHeap {
         true
     }
 
-    fn try_push(&mut self, hash: Hash, blue_work: BlueWorkType) -> bool {
+    fn try_push(&mut self, hash: BlockHash, blue_work: BlueWorkType) -> bool {
         let r_sortable_block = Reverse(SortableBlock { hash, blue_work });
         if self.reached_size_bound() {
             if let Some(max) = self.binary_heap.peek()

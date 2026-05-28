@@ -4,26 +4,26 @@ use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::prelude::{CachePolicy, DB};
 use kaspa_database::prelude::{StoreError, StoreResult};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 
 use super::U64Key;
 
 pub trait PastPruningPointsStoreReader {
-    fn get(&self, index: u64) -> StoreResult<Hash>;
+    fn get(&self, index: u64) -> StoreResult<BlockHash>;
 }
 
 pub trait PastPruningPointsStore: PastPruningPointsStoreReader {
     // This is append only
-    fn insert(&self, index: u64, pruning_point: Hash) -> StoreResult<()>;
-    fn set(&self, index: u64, pruning_point: Hash) -> StoreResult<()>;
+    fn insert(&self, index: u64, pruning_point: BlockHash) -> StoreResult<()>;
+    fn set(&self, index: u64, pruning_point: BlockHash) -> StoreResult<()>;
 }
 
 /// A DB + cache implementation of `PastPruningPointsStore` trait, with concurrency support.
 #[derive(Clone)]
 pub struct DbPastPruningPointsStore {
     db: Arc<DB>,
-    access: CachedDbAccess<U64Key, Hash>,
+    access: CachedDbAccess<U64Key, BlockHash>,
 }
 
 impl DbPastPruningPointsStore {
@@ -35,7 +35,7 @@ impl DbPastPruningPointsStore {
         Self::new(Arc::clone(&self.db), cache_policy)
     }
 
-    pub fn insert_batch(&self, batch: &mut WriteBatch, index: u64, pruning_point: Hash) -> Result<(), StoreError> {
+    pub fn insert_batch(&self, batch: &mut WriteBatch, index: u64, pruning_point: BlockHash) -> Result<(), StoreError> {
         if self.access.has(index.into())? {
             return Err(StoreError::KeyAlreadyExists(index.to_string()));
         }
@@ -45,20 +45,20 @@ impl DbPastPruningPointsStore {
 }
 
 impl PastPruningPointsStoreReader for DbPastPruningPointsStore {
-    fn get(&self, index: u64) -> StoreResult<Hash> {
+    fn get(&self, index: u64) -> StoreResult<BlockHash> {
         self.access.read(index.into())
     }
 }
 
 impl PastPruningPointsStore for DbPastPruningPointsStore {
-    fn insert(&self, index: u64, pruning_point: Hash) -> StoreResult<()> {
+    fn insert(&self, index: u64, pruning_point: BlockHash) -> StoreResult<()> {
         if self.access.has(index.into())? {
             return Err(StoreError::KeyAlreadyExists(index.to_string()));
         }
         self.set(index, pruning_point)
     }
 
-    fn set(&self, index: u64, pruning_point: Hash) -> StoreResult<()> {
+    fn set(&self, index: u64, pruning_point: BlockHash) -> StoreResult<()> {
         self.access.write(DirectDbWriter::new(&self.db), index.into(), pruning_point)?;
         Ok(())
     }

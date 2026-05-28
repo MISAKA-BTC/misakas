@@ -4,7 +4,7 @@ use super::IbdFlow;
 use kaspa_consensus_core::blockstatus::BlockStatus;
 use kaspa_consensusmanager::ConsensusProxy;
 use kaspa_core::{debug, warn};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_p2p_lib::{
     common::{DEFAULT_TIMEOUT, ProtocolError},
     dequeue_with_timeout, make_message,
@@ -15,9 +15,9 @@ pub struct ChainNegotiationOutput {
     // Note: previous version peers (especially golang nodes) might return the headers selected tip here. Nonetheless
     // we name here following the currently implemented logic by which the syncer returns the virtual selected parent
     // chain on block locator queries
-    pub syncer_virtual_selected_parent: Hash,
-    pub highest_known_syncer_chain_hash: Option<Hash>,
-    pub syncer_pruning_point: Hash,
+    pub syncer_virtual_selected_parent: BlockHash,
+    pub highest_known_syncer_chain_hash: Option<BlockHash>,
+    pub syncer_pruning_point: BlockHash,
 }
 
 impl IbdFlow {
@@ -48,13 +48,13 @@ impl IbdFlow {
         );
 
         let mut syncer_virtual_selected_parent = locator_hashes[0]; // Syncer sink (virtual selected parent)
-        let highest_known_syncer_chain_hash: Option<Hash>;
+        let highest_known_syncer_chain_hash: Option<BlockHash>;
         let mut negotiation_restart_counter = 0;
         let mut negotiation_zoom_counts = 0;
         let mut initial_locator_len = locator_hashes.len();
         loop {
-            let mut lowest_unknown_syncer_chain_hash: Option<Hash> = None;
-            let mut current_highest_known_syncer_chain_hash: Option<Hash> = None;
+            let mut lowest_unknown_syncer_chain_hash: Option<BlockHash> = None;
+            let mut current_highest_known_syncer_chain_hash: Option<BlockHash> = None;
             for &syncer_chain_hash in locator_hashes.iter() {
                 match consensus.async_get_block_status(syncer_chain_hash).await {
                     None => {
@@ -169,10 +169,10 @@ impl IbdFlow {
 
     async fn get_syncer_chain_block_locator(
         &mut self,
-        low: Option<Hash>,
-        high: Option<Hash>,
+        low: Option<BlockHash>,
+        high: Option<BlockHash>,
         timeout: Duration,
-    ) -> Result<Vec<Hash>, ProtocolError> {
+    ) -> Result<Vec<BlockHash>, ProtocolError> {
         self.router
             .enqueue(make_message!(
                 Payload::RequestIbdChainBlockLocator,

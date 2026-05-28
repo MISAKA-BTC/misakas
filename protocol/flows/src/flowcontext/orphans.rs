@@ -5,7 +5,7 @@ use kaspa_consensus_core::{
 };
 use kaspa_consensusmanager::{BlockProcessingBatch, ConsensusProxy};
 use kaspa_core::debug;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use rand::Rng;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -18,7 +18,7 @@ use super::process_queue::ProcessQueue;
 #[derive(Debug)]
 pub enum OrphanOutput {
     /// Block is orphan with the provided missing roots
-    Roots(Vec<Hash>),
+    Roots(Vec<BlockHash>),
     /// Block has no missing roots (but it might have known orphan ancestors which are returned
     /// along with their corresponding consensus processing tasks)
     NoRoots(BlockProcessingBatch),
@@ -29,9 +29,9 @@ pub enum OrphanOutput {
 #[derive(Debug)]
 enum FindRootsOutput {
     /// Block is orphan with the provided missing roots and a possible set of known orphan ancestors
-    Roots(Vec<Hash>, HashSet<Hash>),
+    Roots(Vec<BlockHash>, HashSet<BlockHash>),
     /// Block has no missing roots (but it might have known orphan ancestors)
-    NoRoots(HashSet<Hash>),
+    NoRoots(HashSet<BlockHash>),
 }
 
 struct OrphanBlock {
@@ -41,11 +41,11 @@ struct OrphanBlock {
     /// A set of child orphans loosely maintained such that any block in the
     /// orphan pool which has this block as a direct parent will be in the set, however
     /// items are never removed, so this set might contain evicted hashes as well
-    children: HashSet<Hash>,
+    children: HashSet<BlockHash>,
 }
 
 impl OrphanBlock {
-    fn new(block: Block, children: HashSet<Hash>) -> Self {
+    fn new(block: Block, children: HashSet<BlockHash>) -> Self {
         Self { block, children }
     }
 }
@@ -54,7 +54,7 @@ pub struct OrphanBlocksPool {
     /// NOTES:
     /// 1. We use IndexMap for cheap random eviction
     /// 2. We avoid the custom block hasher since this pool is pre-validation storage
-    orphans: IndexMap<Hash, OrphanBlock>,
+    orphans: IndexMap<BlockHash, OrphanBlock>,
     /// Max number of orphans to keep in the pool
     max_orphans: usize,
     /// The log base 2 of `max_orphans`
@@ -130,14 +130,14 @@ impl OrphanBlocksPool {
     }
 
     /// Returns whether this block is in the orphan pool.
-    pub fn is_known_orphan(&self, hash: Hash) -> bool {
+    pub fn is_known_orphan(&self, hash: BlockHash) -> bool {
         self.orphans.contains_key(&hash)
     }
 
     /// Returns the orphan roots of the provided orphan. Orphan roots are ancestors of this orphan which are
     /// not in the orphan pool AND do not exist consensus-wise or are header-only. Given an orphan relayed by
     /// a peer, these blocks should be the next-in-line to be requested from that peer.
-    pub async fn get_orphan_roots_if_known(&self, consensus: &ConsensusProxy, orphan: Hash) -> OrphanOutput {
+    pub async fn get_orphan_roots_if_known(&self, consensus: &ConsensusProxy, orphan: BlockHash) -> OrphanOutput {
         if let Some(orphan_block) = self.orphans.get(&orphan) {
             match self.get_orphan_roots(consensus, orphan_block.block.header.direct_parents().iter().copied().collect()).await {
                 FindRootsOutput::Roots(roots, _) => OrphanOutput::Roots(roots),
@@ -151,7 +151,7 @@ impl OrphanBlocksPool {
     /// Internal get roots method. The arg `queue` is the set of blocks to perform BFS from and
     /// search through the orphan pool and consensus until finding any unknown roots or finding
     /// out that no ancestor is missing.
-    async fn get_orphan_roots(&self, consensus: &ConsensusProxy, mut queue: VecDeque<Hash>) -> FindRootsOutput {
+    async fn get_orphan_roots(&self, consensus: &ConsensusProxy, mut queue: VecDeque<BlockHash>) -> FindRootsOutput {
         let mut roots = Vec::new();
         let mut visited: HashSet<_> = queue.iter().copied().collect();
         let mut orphan_ancestors = HashSet::new();
@@ -178,7 +178,7 @@ impl OrphanBlocksPool {
     pub async fn unorphan_blocks(
         &mut self,
         consensus: &ConsensusProxy,
-        root: Hash,
+        root: BlockHash,
     ) -> (Vec<Block>, Vec<BlockValidationFuture>, Vec<BlockValidationFuture>) {
         let root_entry = self.orphans.swap_remove(&root); // Try removing the root just in case it was previously an orphan
         let mut process_queue =
@@ -206,7 +206,7 @@ impl OrphanBlocksPool {
         itertools::multiunzip(processing.into_values())
     }
 
-    fn iterate_child_orphans(&self, hash: Hash) -> impl Iterator<Item = Hash> + '_ {
+    fn iterate_child_orphans(&self, hash: BlockHash) -> impl Iterator<Item = BlockHash> + '_ {
         self.orphans.iter().filter_map(move |(&orphan_hash, orphan_block)| {
             if orphan_block.block.header.direct_parents().contains(&hash) { Some(orphan_hash) } else { None }
         })
@@ -216,7 +216,7 @@ impl OrphanBlocksPool {
     /// This is important for the overall health of the pool and for ensuring that
     /// orphan blocks don't evict due to pool size limit while already processed
     /// blocks remain in it. Should be called following IBD.  
-    pub async fn revalidate_orphans(&mut self, consensus: &ConsensusProxy) -> (Vec<Hash>, Vec<BlockValidationFuture>) {
+    pub async fn revalidate_orphans(&mut self, consensus: &ConsensusProxy) -> (Vec<BlockHash>, Vec<BlockValidationFuture>) {
         // First, cleanup blocks already processed by consensus
         let mut i = 0;
         while i < self.orphans.len() {
@@ -286,7 +286,7 @@ mod tests {
 
     #[derive(Default)]
     struct MockProcessor {
-        processed: Arc<RwLock<HashSet<Hash>>>,
+        processed: Arc<RwLock<HashSet<BlockHash>>>,
     }
 
     async fn block_process_mock() -> BlockProcessResult<BlockStatus> {
@@ -299,7 +299,7 @@ mod tests {
             BlockValidationFutures { block_task: Box::pin(block_process_mock()), virtual_state_task: Box::pin(block_process_mock()) }
         }
 
-        fn get_block_status(&self, hash: Hash) -> Option<BlockStatus> {
+        fn get_block_status(&self, hash: BlockHash) -> Option<BlockStatus> {
             self.processed.read().get(&hash).map(|_| BlockStatus::StatusUTXOPendingVerification)
         }
     }

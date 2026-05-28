@@ -41,7 +41,7 @@ use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::tick::TickService;
 use kaspa_core::time::unix_now;
 use kaspa_database::utils::get_kaspa_tempdir;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
 use kaspa_rpc_core::RpcHeader;
 use kaspa_utils::arc::ArcExtensions;
 
@@ -112,8 +112,8 @@ fn reachability_stretch_test(use_attack_json: bool) {
     let json_blocks: Vec<JsonBlock> = serde_json::from_reader(decoder).unwrap();
 
     let root = blockhash::ORIGIN;
-    let mut map = HashMap::<Hash, DagBlock>::new();
-    let mut blocks = Vec::<Hash>::new();
+    let mut map = HashMap::<BlockHash, DagBlock>::new();
+    let mut blocks = Vec::<BlockHash>::new();
 
     for json_block in &json_blocks {
         let block: DagBlock = json_block.into();
@@ -149,7 +149,7 @@ fn reachability_stretch_test(use_attack_json: bool) {
     for i in 0..num_chains {
         let rand_idx = rng.gen_range(0..blocks.len());
         let rand_parent = blocks[rand_idx];
-        let new_hash: Hash = ((blocks.len() + 1) as u64).into();
+        let new_hash: BlockHash = ((blocks.len() + 1) as u64).into();
         let new_block = DagBlock::new(new_hash, vec![rand_parent]);
         builder.add_block(new_block.clone());
         blocks.push(new_hash);
@@ -160,7 +160,7 @@ fn reachability_stretch_test(use_attack_json: bool) {
             let chain_len = rng.gen_range(0..max_chain);
             let mut chain_tip = new_hash;
             for _ in 0..chain_len {
-                let new_hash: Hash = ((blocks.len() + 1) as u64).into();
+                let new_hash: BlockHash = ((blocks.len() + 1) as u64).into();
                 let new_block = DagBlock::new(new_hash, vec![chain_tip]);
                 builder.add_block(new_block.clone());
                 blocks.push(new_hash);
@@ -197,7 +197,7 @@ fn test_noattack_json() {
 #[tokio::test]
 async fn consensus_sanity_test() {
     init_allocator_with_default_settings();
-    let genesis_child: Hash = 2.into();
+    let genesis_child: BlockHash = 2.into();
     let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
@@ -317,13 +317,13 @@ async fn ghostdag_test() {
     }
 }
 
-fn string_to_hash(s: &str) -> Hash {
+fn string_to_hash(s: &str) -> BlockHash {
     let mut data = s.as_bytes().to_vec();
-    data.resize(32, 0);
-    Hash::from_slice(&data)
+    data.resize(64, 0); // PR-9.5e: BlockHash is 64 bytes
+    BlockHash::from_slice(&data)
 }
 
-fn strings_to_hashes(strings: &Vec<String>) -> Vec<Hash> {
+fn strings_to_hashes(strings: &Vec<String>) -> Vec<BlockHash> {
     let mut vec = Vec::with_capacity(strings.len());
     for string in strings {
         vec.push(string_to_hash(string));
@@ -890,7 +890,7 @@ fn submit_header_chunk(
 fn submit_body_chunk(
     tc: &TestConsensus,
     external_block_store: &DbBlockTransactionsStore,
-    chunk: impl Iterator<Item = Hash>,
+    chunk: impl Iterator<Item = BlockHash>,
 ) -> Vec<impl Future<Output = BlockProcessResult<BlockStatus>>> {
     let mut futures = Vec::new();
     for hash in chunk {
@@ -919,7 +919,7 @@ async fn bounded_merge_depth_test() {
 
     let mut selected_chain = vec![config.genesis.hash];
     for i in 1..(config.merge_depth + 3) {
-        let hash: Hash = (i + 1).into();
+        let hash: BlockHash = (i + 1).into();
         consensus.add_header_only_block_with_parents(hash, vec![*selected_chain.last().unwrap()]).await.unwrap();
         selected_chain.push(hash);
     }
@@ -927,7 +927,7 @@ async fn bounded_merge_depth_test() {
     // The length of block_chain_2 is shorter by one than selected_chain, so selected_chain will remain the selected chain.
     let mut block_chain_2 = vec![config.genesis.hash];
     for i in 1..(config.merge_depth + 2) {
-        let hash: Hash = (i + config.merge_depth + 3).into();
+        let hash: BlockHash = (i + config.merge_depth + 3).into();
         consensus.add_header_only_block_with_parents(hash, vec![*block_chain_2.last().unwrap()]).await.unwrap();
         block_chain_2.push(hash);
     }
@@ -948,7 +948,7 @@ async fn bounded_merge_depth_test() {
         res => panic!("Unexpected result: {res:?}"),
     }
 
-    let kosherizing_hash: Hash = 102.into();
+    let kosherizing_hash: BlockHash = 102.into();
     // This will pass since now genesis is the mutual merge depth root.
     consensus
         .add_header_only_block_with_parents(
@@ -958,7 +958,7 @@ async fn bounded_merge_depth_test() {
         .await
         .unwrap();
 
-    let point_at_blue_kosherizing: Hash = 103.into();
+    let point_at_blue_kosherizing: BlockHash = 103.into();
     // We expect it to pass because all of the reds are in the past of a blue kosherizing block.
     consensus
         .add_header_only_block_with_parents(point_at_blue_kosherizing, vec![kosherizing_hash, *selected_chain.last().unwrap()])
@@ -967,7 +967,7 @@ async fn bounded_merge_depth_test() {
 
     // We extend the selected chain until kosherizing_hash will be red from the virtual POV.
     for i in 0..config.ghostdag_k() {
-        let hash = Hash::from_u64_word((i + 1) as u64 * 1000);
+        let hash = BlockHash::from_u64_word((i + 1) as u64 * 1000);
         consensus.add_header_only_block_with_parents(hash, vec![*selected_chain.last().unwrap()]).await.unwrap();
         selected_chain.push(hash);
     }
@@ -990,7 +990,7 @@ async fn bounded_merge_depth_test() {
 #[tokio::test]
 async fn difficulty_test() {
     init_allocator_with_default_settings();
-    async fn add_block(consensus: &TestConsensus, block_time: Option<u64>, parents: Vec<Hash>) -> Header {
+    async fn add_block(consensus: &TestConsensus, block_time: Option<u64>, parents: Vec<BlockHash>) -> Header {
         let selected_parent = consensus.ghostdag_manager().find_selected_parent(parents.iter().copied());
         let block_time = block_time.unwrap_or_else(|| {
             consensus.headers_store().get_timestamp(selected_parent).unwrap() + consensus.params().target_time_per_block()
@@ -1001,12 +1001,12 @@ async fn difficulty_test() {
         header
     }
 
-    fn past_median_time(consensus: &TestConsensus, parents: &[Hash]) -> u64 {
+    fn past_median_time(consensus: &TestConsensus, parents: &[BlockHash]) -> u64 {
         let ghostdag_data = consensus.ghostdag_manager().ghostdag(parents);
         consensus.window_manager().calc_past_median_time(&ghostdag_data).unwrap().0
     }
 
-    async fn add_block_with_min_time(consensus: &TestConsensus, parents: Vec<Hash>) -> Header {
+    async fn add_block_with_min_time(consensus: &TestConsensus, parents: Vec<BlockHash>) -> Header {
         let pmt = past_median_time(consensus, &parents[..]);
         add_block(consensus, Some(pmt + 1), parents).await
     }
@@ -1015,7 +1015,7 @@ async fn difficulty_test() {
         Uint256::from_compact_target_bits(a).cmp(&Uint256::from_compact_target_bits(b))
     }
 
-    fn full_window_bits(consensus: &TestConsensus, hash: Hash) -> u32 {
+    fn full_window_bits(consensus: &TestConsensus, hash: BlockHash) -> u32 {
         let window_size = consensus.params().difficulty_window_size * consensus.params().difficulty_sample_rate() as usize;
         let ghostdag_data = &consensus.ghostdag_store().get_data(hash).unwrap();
         let window = consensus.window_manager().block_window(ghostdag_data, WindowType::VaryingWindow(window_size)).unwrap();
@@ -1090,13 +1090,15 @@ async fn difficulty_test() {
         let fake_genesis = Header {
             hash: test.config.genesis.hash,
             version: 0,
-            parents_by_level: Vec::<Vec<Hash>>::new().try_into().unwrap(),
+            parents_by_level: Vec::<Vec<BlockHash>>::new().try_into().unwrap(),
             hash_merkle_root: 0.into(),
             accepted_id_merkle_root: 0.into(),
             utxo_commitment: 0.into(),
             timestamp: 0,
             bits: 0,
             nonce: 0,
+            // PR-9.5d: Phase 1 kHeavyHash algo id (field added after PR-9.5d).
+            pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             daa_score: 0,
             blue_work: 0.into(),
             blue_score: 0,
@@ -1353,7 +1355,7 @@ fn assert_selected_chain_store_matches_virtual_chain(consensus: &TestConsensus) 
     itertools::assert_equal(iter1, iter2);
 }
 
-fn selected_chain_store_iterator(consensus: &TestConsensus, pruning_point: Hash) -> impl Iterator<Item = Hash> + '_ {
+fn selected_chain_store_iterator(consensus: &TestConsensus, pruning_point: BlockHash) -> impl Iterator<Item = BlockHash> + '_ {
     let selected_chain_read = consensus.selected_chain_store.read();
     let (idx, current) = selected_chain_read.get_tip().unwrap();
     std::iter::once(current)
@@ -1970,7 +1972,7 @@ async fn pruning_test() {
     let genesis_child_child_block = consensus.get_block(genesis_child_child).unwrap();
 
     for i in 3..config.pruning_depth() + config.finality_depth() + 100 {
-        let hash: Hash = i.into();
+        let hash: BlockHash = i.into();
         consensus.add_empty_utxo_valid_block_with_parents(hash, vec![*selected_chain.last().unwrap()]).await.unwrap();
         selected_chain.push(hash);
     }
@@ -2010,7 +2012,7 @@ async fn indirect_parents_test() {
     let mut level_3_count = 3;
     let mut selected_chain = vec![config.genesis.hash];
     for i in 1.. {
-        let hash: Hash = i.into();
+        let hash: BlockHash = i.into();
         consensus.add_header_only_block_with_parents(hash, vec![*selected_chain.last().unwrap()]).await.unwrap();
         selected_chain.push(hash);
         if consensus.get_header(*selected_chain.last().unwrap()).unwrap().parents_by_level.expanded_len() >= 3 {

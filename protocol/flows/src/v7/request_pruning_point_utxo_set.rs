@@ -2,7 +2,7 @@ use crate::{flow_context::FlowContext, flow_trait::Flow, ibd::IBD_BATCH_SIZE};
 use itertools::Itertools;
 use kaspa_consensus_core::errors::consensus::ConsensusError;
 use kaspa_core::debug;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,
@@ -42,7 +42,7 @@ impl RequestPruningPointUtxoSetFlow {
         }
     }
 
-    async fn handle_request(&mut self, expected_pp: Hash) -> Result<(), ProtocolError> {
+    async fn handle_request(&mut self, expected_pp: BlockHash) -> Result<(), ProtocolError> {
         const CHUNK_SIZE: usize = 1000;
         let mut from_outpoint = None;
         let mut chunks_sent = 0;
@@ -94,7 +94,7 @@ impl RequestPruningPointUtxoSetFlow {
         Ok(())
     }
 
-    async fn send_done_message(&mut self, expected_pp: Hash) -> Result<(), ProtocolError> {
+    async fn send_done_message(&mut self, expected_pp: BlockHash) -> Result<(), ProtocolError> {
         debug!("Finished sending UTXOs for pruning point {}", expected_pp);
         self.router.enqueue(make_message!(Payload::DonePruningPointUtxoSetChunks, DonePruningPointUtxoSetChunksMessage {})).await?;
         Ok(())

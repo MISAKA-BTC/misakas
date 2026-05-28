@@ -1,5 +1,5 @@
 use kaspa_consensus_core::blockhash::{BlockHashExtensions, ORIGIN};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use std::sync::Arc;
 
 use crate::model::{
@@ -21,7 +21,7 @@ enum BlockDepthType {
 pub struct BlockDepthManager<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T: HeaderStoreReader> {
     merge_depth: u64,
     finality_depth: u64,
-    genesis_hash: Hash,
+    genesis_hash: BlockHash,
     depth_store: Arc<S>,
     reachability_service: MTReachabilityService<U>,
     ghostdag_store: Arc<V>,
@@ -32,7 +32,7 @@ impl<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T:
     pub fn new(
         merge_depth: u64,
         finality_depth: u64,
-        genesis_hash: Hash,
+        genesis_hash: BlockHash,
         depth_store: Arc<S>,
         reachability_service: MTReachabilityService<U>,
         ghostdag_store: Arc<V>,
@@ -48,15 +48,15 @@ impl<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T:
             _headers_store: headers_store,
         }
     }
-    pub fn calc_merge_depth_root(&self, ghostdag_data: &GhostdagData, pruning_point: Hash) -> Hash {
+    pub fn calc_merge_depth_root(&self, ghostdag_data: &GhostdagData, pruning_point: BlockHash) -> BlockHash {
         self.calculate_block_at_depth(ghostdag_data, BlockDepthType::MergeRoot, pruning_point)
     }
 
-    pub fn calc_finality_point(&self, ghostdag_data: &GhostdagData, pruning_point: Hash) -> Hash {
+    pub fn calc_finality_point(&self, ghostdag_data: &GhostdagData, pruning_point: BlockHash) -> BlockHash {
         self.calculate_block_at_depth(ghostdag_data, BlockDepthType::Finality, pruning_point)
     }
 
-    fn calculate_block_at_depth(&self, ghostdag_data: &GhostdagData, depth_type: BlockDepthType, pruning_point: Hash) -> Hash {
+    fn calculate_block_at_depth(&self, ghostdag_data: &GhostdagData, depth_type: BlockDepthType, pruning_point: BlockHash) -> BlockHash {
         if ghostdag_data.selected_parent.is_origin() {
             return ORIGIN;
         }
@@ -109,8 +109,8 @@ impl<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T:
     pub fn kosherizing_blues<'a>(
         &'a self,
         ghostdag_data: &'a GhostdagData,
-        merge_depth_root: Hash,
-    ) -> impl DoubleEndedIterator<Item = Hash> + 'a {
+        merge_depth_root: BlockHash,
+    ) -> impl DoubleEndedIterator<Item = BlockHash> + 'a {
         ghostdag_data
             .mergeset_blues
             .iter()

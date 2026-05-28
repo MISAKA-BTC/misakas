@@ -6,7 +6,7 @@ use kaspa_consensus::{
 };
 use kaspa_consensus_core::{api::ConsensusApi, blockhash};
 use kaspa_database::prelude::CachePolicy;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
 use rand_distr::{Distribution, Poisson};
 use std::cmp::min;
 use tokio::join;
@@ -80,7 +80,7 @@ async fn test_concurrent_pipeline() {
 #[tokio::test]
 async fn test_concurrent_pipeline_random() {
     init_allocator_with_default_settings();
-    let genesis: Hash = blockhash::new_unique();
+    let genesis: BlockHash = blockhash::new_unique();
     let bps = 8;
     let delay = 2;
 

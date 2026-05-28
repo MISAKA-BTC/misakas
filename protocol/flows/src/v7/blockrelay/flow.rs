@@ -6,7 +6,7 @@ use crate::{
 use kaspa_consensus_core::{api::BlockValidationFutures, block::Block, blockstatus::BlockStatus, errors::block::RuleError};
 use kaspa_consensusmanager::{BlockProcessingBatch, ConsensusProxy};
 use kaspa_core::debug;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_p2p_lib::{
     IncomingRoute, Router, SharedIncomingRoute,
     common::ProtocolError,
@@ -18,7 +18,7 @@ use kaspa_utils::channel::{JobSender, JobTrySendError as TrySendError};
 use std::{collections::VecDeque, sync::Arc};
 
 pub struct RelayInvMessage {
-    hash: Hash,
+    hash: BlockHash,
 
     /// Indicates whether this inv is an orphan root of a previously relayed descendent
     /// (i.e. this inv was indirectly queued)
@@ -39,7 +39,7 @@ impl TwoWayIncomingRoute {
         Self { incoming_route, indirect_invs: VecDeque::new() }
     }
 
-    pub fn enqueue_indirect_invs<I: IntoIterator<Item = Hash>>(&mut self, iter: I, known_within_range: bool) {
+    pub fn enqueue_indirect_invs<I: IntoIterator<Item = BlockHash>>(&mut self, iter: I, known_within_range: bool) {
         // All indirect invs are orphan roots; not all are known to be within orphan resolution range
         self.indirect_invs.extend(iter.into_iter().map(|h| RelayInvMessage { hash: h, is_orphan_root: true, known_within_range }))
     }
@@ -230,16 +230,16 @@ impl HandleRelayInvsFlow {
         }
     }
 
-    fn enqueue_orphan_roots(&mut self, _orphan: Hash, roots: Vec<Hash>, known_within_range: bool) {
+    fn enqueue_orphan_roots(&mut self, _orphan: BlockHash, roots: Vec<BlockHash>, known_within_range: bool) {
         self.invs_route.enqueue_indirect_invs(roots, known_within_range)
     }
 
     async fn request_block(
         &mut self,
-        requested_hash: Hash,
+        requested_hash: BlockHash,
         request_id: u32,
         header_format: HeaderFormat,
-    ) -> Result<Option<(Block, RequestScope<Hash>)>, ProtocolError> {
+    ) -> Result<Option<(Block, RequestScope<BlockHash>)>, ProtocolError> {
         // Note: the request scope is returned and should be captured until block processing is completed
         let Some(request_scope) = self.ctx.try_adding_block_request(requested_hash) else {
             return Ok(None);
@@ -340,7 +340,7 @@ impl HandleRelayInvsFlow {
     async fn check_orphan_resolution_range(
         &mut self,
         consensus: &ConsensusProxy,
-        hash: Hash,
+        hash: BlockHash,
         request_id: u32,
     ) -> Result<bool, ProtocolError> {
         self.router
@@ -351,7 +351,7 @@ impl HandleRelayInvsFlow {
             ))
             .await?;
         let msg = dequeue_with_timeout!(self.msg_route, Payload::BlockLocator)?;
-        let locator_hashes: Vec<Hash> = msg.try_into()?;
+        let locator_hashes: Vec<BlockHash> = msg.try_into()?;
         // Locator hashes are sent from later to earlier, so it makes sense to query consensus in reverse. Technically
         // with current syncer-side implementations (in both go-kaspa and this codebase) we could query only the last one,
         // but we prefer not relying on such details for correctness

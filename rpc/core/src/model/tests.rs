@@ -450,7 +450,8 @@ mod mockery {
 
     impl Mock for RpcCompressedParents {
         fn mock() -> Self {
-            let empty: Vec<(u8, Vec<Hash>)> = vec![];
+            // PR-9.5e: parents are block hashes (Hash64); CompressedParents is built from BlockHash.
+            let empty: Vec<(u8, Vec<kaspa_consensus_core::BlockHash>)> = vec![];
             empty.try_into().expect("It should not fail.")
         }
     }

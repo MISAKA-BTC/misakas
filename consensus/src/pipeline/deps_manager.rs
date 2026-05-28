@@ -1,6 +1,6 @@
 use crate::errors::BlockProcessResult;
 use kaspa_consensus_core::{block::Block, blockstatus::BlockStatus};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use parking_lot::{Condvar, Mutex};
 use std::collections::{
     HashMap, VecDeque,
@@ -87,7 +87,7 @@ impl BlockTaskInternal {
     }
 }
 
-pub(crate) type TaskId = Hash;
+pub(crate) type TaskId = BlockHash;
 
 /// We usually only have a single task per hash. This enum optimizes for this.
 enum TaskQueue {
@@ -169,7 +169,7 @@ impl BlockTaskGroup {
 /// A concurrent data structure for managing block processing tasks and their DAG dependencies
 pub(crate) struct BlockTaskDependencyManager {
     /// Holds pending block hashes and their corresponding tasks
-    pending: Mutex<HashMap<Hash, BlockTaskGroup>>,
+    pending: Mutex<HashMap<BlockHash, BlockTaskGroup>>,
 
     // Used to signal that workers are idle
     idle_signal: Condvar,

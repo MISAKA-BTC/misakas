@@ -18,7 +18,7 @@ fn mock_tx_with_payload(inputs_count: usize, non_uniq_signatures: usize, payload
     thread_rng().fill(&mut payload[..]);
 
     let reused_values = SigHashReusedValuesUnsync::new();
-    let dummy_prev_out = TransactionOutpoint::new(kaspa_hashes::Hash::from_u64_word(1), 1);
+    let dummy_prev_out = TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(1), 1) /* PR-9.5e: TransactionId is Hash64 */;
     let mut tx = Transaction::new(
         0,
         vec![],

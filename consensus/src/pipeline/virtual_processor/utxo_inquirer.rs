@@ -9,7 +9,7 @@ use kaspa_consensus_core::{
     },
 };
 use kaspa_core::trace;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 
 use crate::model::{
     services::reachability::ReachabilityService,
@@ -23,7 +23,7 @@ use crate::model::{
 use super::VirtualStateProcessor;
 
 pub struct MergesetAcceptanceMetaData {
-    pub accepting_block_hash: Hash,
+    pub accepting_block_hash: BlockHash,
     pub acceptance_data: Arc<AcceptanceData>,
     pub accepting_daa_score: u64,
     pub mergeset_idx: usize,
@@ -32,9 +32,9 @@ pub struct MergesetAcceptanceMetaData {
 impl VirtualStateProcessor {
     pub fn find_accepting_data(
         &self,
-        block_hash: Hash,
-        retention_period_root_hash: Hash,
-        sink_hash: Hash,
+        block_hash: BlockHash,
+        retention_period_root_hash: BlockHash,
+        sink_hash: BlockHash,
     ) -> UtxoInquirerResult<Option<MergesetAcceptanceMetaData>> {
         // accepting block hash, daa score, acceptance data
         // check if block is an ancestor of the sink block, i.e. we expect it to be accepted
@@ -72,9 +72,9 @@ impl VirtualStateProcessor {
 
     pub fn populate_block_transactions(
         &self,
-        block_hash: Hash,
+        block_hash: BlockHash,
         txs: Vec<Transaction>,
-        retention_period_root_hash: Hash,
+        retention_period_root_hash: BlockHash,
     ) -> UtxoInquirerResult<Vec<SignableTransaction>> {
         let virual_state_read = self.virtual_stores.read();
         let sink_hash = virual_state_read.state.get().expect("expected virtual state").ghostdag_data.selected_parent;
@@ -149,7 +149,7 @@ impl VirtualStateProcessor {
         &self,
         tx_ids: Option<Vec<TransactionId>>,
         block_acceptance_data: MergesetBlockAcceptanceData,
-        accepting_block: Hash,
+        accepting_block: BlockHash,
     ) -> UtxoInquirerResult<Vec<SignableTransaction>> {
         let accepting_daa_score = self
             .headers_store
@@ -206,7 +206,7 @@ impl VirtualStateProcessor {
     pub fn get_populated_transactions_by_accepting_block(
         &self,
         tx_ids: Option<Vec<TransactionId>>,
-        accepting_block: Hash,
+        accepting_block: BlockHash,
     ) -> UtxoInquirerResult<Vec<SignableTransaction>> {
         let acceptance_data = self
             .acceptance_data_store
@@ -262,7 +262,7 @@ impl VirtualStateProcessor {
         &self,
         tx_ids: Option<Vec<TransactionId>>,
         accepting_block_daa_score: u64,
-        retention_period_root_hash: Hash,
+        retention_period_root_hash: BlockHash,
     ) -> UtxoInquirerResult<Vec<SignableTransaction>> {
         let matching_chain_block_hash =
             self.find_accepting_chain_block_hash_at_daa_score(accepting_block_daa_score, retention_period_root_hash)?;
@@ -279,8 +279,8 @@ impl VirtualStateProcessor {
     pub fn find_accepting_chain_block_hash_at_daa_score(
         &self,
         target_daa_score: u64,
-        retention_period_root_hash: Hash,
-    ) -> UtxoInquirerResult<Hash> {
+        retention_period_root_hash: BlockHash,
+    ) -> UtxoInquirerResult<BlockHash> {
         let sc_read = self.selected_chain_store.read();
 
         let retention_period_root_index = sc_read
@@ -341,7 +341,7 @@ impl VirtualStateProcessor {
         &self,
         tx_ids: &[TransactionId],
         acceptance_data: &AcceptanceData,
-    ) -> Vec<(Hash, Vec<TransactionIndexType>)> {
+    ) -> Vec<(BlockHash, Vec<TransactionIndexType>)> {
         let tx_set = tx_ids.iter().collect::<HashSet<_>>();
         let mut collected = 0usize;
 

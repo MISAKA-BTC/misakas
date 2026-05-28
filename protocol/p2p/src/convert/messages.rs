@@ -14,7 +14,7 @@ use kaspa_consensus_core::{
     pruning::{PruningPointProof, PruningPointsList},
     tx::{TransactionId, TransactionOutpoint, UtxoEntry},
 };
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: p2p block-hash convert sites widened to Hash64
 use kaspa_utils::networking::{IpAddress, PeerId};
 
 use std::{collections::HashMap, sync::Arc};
@@ -60,14 +60,14 @@ impl TryFrom<protowire::VersionMessage> for Version {
     }
 }
 
-impl TryFrom<protowire::RequestHeadersMessage> for (Hash, Hash) {
+impl TryFrom<protowire::RequestHeadersMessage> for (BlockHash, BlockHash) {
     type Error = ConversionError;
     fn try_from(msg: protowire::RequestHeadersMessage) -> Result<Self, Self::Error> {
         Ok((msg.high_hash.try_into_ex()?, msg.low_hash.try_into_ex()?))
     }
 }
 
-impl TryFrom<protowire::RequestIbdChainBlockLocatorMessage> for (Option<Hash>, Option<Hash>) {
+impl TryFrom<protowire::RequestIbdChainBlockLocatorMessage> for (Option<BlockHash>, Option<BlockHash>) {
     type Error = ConversionError;
     fn try_from(msg: protowire::RequestIbdChainBlockLocatorMessage) -> Result<Self, Self::Error> {
         let low = match msg.low_hash {
@@ -90,7 +90,7 @@ impl TryFrom<Versioned<protowire::PruningPointProofMessage>> for PruningPointPro
         let Versioned(header_format, msg) = value;
         // The pruning proof can contain many duplicate headers (across levels), so we use a local cache in order
         // to make sure we hold a single Arc per header
-        let mut cache: HashMap<Hash, Arc<Header>> = HashMap::with_capacity(4000);
+        let mut cache: HashMap<BlockHash, Arc<Header>> = HashMap::with_capacity(4000);
         msg.headers
             .into_iter()
             .map(|level| {
@@ -136,7 +136,7 @@ impl TryFrom<Versioned<protowire::BlockWithTrustedDataV4Message>> for TrustedDat
     }
 }
 
-impl TryFrom<protowire::IbdChainBlockLocatorMessage> for Vec<Hash> {
+impl TryFrom<protowire::IbdChainBlockLocatorMessage> for Vec<BlockHash> {
     type Error = ConversionError;
     fn try_from(msg: protowire::IbdChainBlockLocatorMessage) -> Result<Self, Self::Error> {
         msg.block_locator_hashes.into_iter().map(|v| v.try_into()).collect()
@@ -159,7 +159,7 @@ impl TryFrom<protowire::PruningPointUtxoSetChunkMessage> for Vec<(TransactionOut
     }
 }
 
-impl TryFrom<protowire::RequestPruningPointUtxoSetMessage> for Hash {
+impl TryFrom<protowire::RequestPruningPointUtxoSetMessage> for BlockHash {
     type Error = ConversionError;
 
     fn try_from(msg: protowire::RequestPruningPointUtxoSetMessage) -> Result<Self, Self::Error> {
@@ -167,7 +167,7 @@ impl TryFrom<protowire::RequestPruningPointUtxoSetMessage> for Hash {
     }
 }
 
-impl TryFrom<protowire::InvRelayBlockMessage> for Hash {
+impl TryFrom<protowire::InvRelayBlockMessage> for BlockHash {
     type Error = ConversionError;
 
     fn try_from(msg: protowire::InvRelayBlockMessage) -> Result<Self, Self::Error> {
@@ -175,7 +175,7 @@ impl TryFrom<protowire::InvRelayBlockMessage> for Hash {
     }
 }
 
-impl TryFrom<protowire::RequestRelayBlocksMessage> for Vec<Hash> {
+impl TryFrom<protowire::RequestRelayBlocksMessage> for Vec<BlockHash> {
     type Error = ConversionError;
 
     fn try_from(msg: protowire::RequestRelayBlocksMessage) -> Result<Self, Self::Error> {
@@ -183,14 +183,14 @@ impl TryFrom<protowire::RequestRelayBlocksMessage> for Vec<Hash> {
     }
 }
 
-impl TryFrom<protowire::RequestIbdBlocksMessage> for Vec<Hash> {
+impl TryFrom<protowire::RequestIbdBlocksMessage> for Vec<BlockHash> {
     type Error = ConversionError;
 
     fn try_from(msg: protowire::RequestIbdBlocksMessage) -> Result<Self, Self::Error> {
         msg.hashes.into_iter().map(|v| v.try_into()).collect()
     }
 }
-impl TryFrom<protowire::RequestBlockBodiesMessage> for Vec<Hash> {
+impl TryFrom<protowire::RequestBlockBodiesMessage> for Vec<BlockHash> {
     type Error = ConversionError;
 
     fn try_from(msg: protowire::RequestBlockBodiesMessage) -> Result<Self, Self::Error> {
@@ -198,7 +198,7 @@ impl TryFrom<protowire::RequestBlockBodiesMessage> for Vec<Hash> {
     }
 }
 
-impl TryFrom<protowire::BlockLocatorMessage> for Vec<Hash> {
+impl TryFrom<protowire::BlockLocatorMessage> for Vec<BlockHash> {
     type Error = ConversionError;
 
     fn try_from(msg: protowire::BlockLocatorMessage) -> Result<Self, Self::Error> {
@@ -238,14 +238,14 @@ impl TryFrom<protowire::TransactionNotFoundMessage> for TransactionId {
     }
 }
 
-impl TryFrom<protowire::RequestBlockLocatorMessage> for (Hash, u32) {
+impl TryFrom<protowire::RequestBlockLocatorMessage> for (BlockHash, u32) {
     type Error = ConversionError;
     fn try_from(msg: protowire::RequestBlockLocatorMessage) -> Result<Self, Self::Error> {
         Ok((msg.high_hash.try_into_ex()?, msg.limit))
     }
 }
 
-impl TryFrom<protowire::RequestAntipastMessage> for (Hash, Hash) {
+impl TryFrom<protowire::RequestAntipastMessage> for (BlockHash, BlockHash) {
     type Error = ConversionError;
     fn try_from(msg: protowire::RequestAntipastMessage) -> Result<Self, Self::Error> {
         Ok((msg.block_hash.try_into_ex()?, msg.context_hash.try_into_ex()?))

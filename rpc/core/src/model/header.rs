@@ -1,10 +1,11 @@
 use crate::RpcError;
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_consensus_core::{
+    BlockHash, // PR-9.5e: block ids (hash, parents, pruning point) are Hash64
     BlueWorkType,
     header::{CompressedParents, Header},
 };
-use kaspa_hashes::Hash;
+use kaspa_hashes::Hash; // PR-9.5e: retained for utxo_commitment (32-byte accumulator commitment, stays Hash)
 use serde::{Deserialize, Serialize};
 use workflow_serializer::prelude::*;
 
@@ -21,7 +22,7 @@ pub type RpcCompressedParents = CompressedParents;
 #[serde(rename_all = "camelCase")]
 pub struct RpcRawHeader {
     pub version: u16,
-    pub parents_by_level: Vec<Vec<Hash>>,
+    pub parents_by_level: Vec<Vec<BlockHash>>,
     pub hash_merkle_root: kaspa_consensus_core::MerkleRoot,
     pub accepted_id_merkle_root: kaspa_consensus_core::AcceptedIdMerkleRoot,
     pub utxo_commitment: Hash,
@@ -32,16 +33,16 @@ pub struct RpcRawHeader {
     pub daa_score: u64,
     pub blue_work: BlueWorkType,
     pub blue_score: u64,
-    pub pruning_point: Hash,
+    pub pruning_point: BlockHash,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcHeader {
     /// Cached hash
-    pub hash: Hash,
+    pub hash: BlockHash,
     pub version: u16,
-    pub parents_by_level: Vec<Vec<Hash>>,
+    pub parents_by_level: Vec<Vec<BlockHash>>,
     pub hash_merkle_root: kaspa_consensus_core::MerkleRoot,
     pub accepted_id_merkle_root: kaspa_consensus_core::AcceptedIdMerkleRoot,
     pub utxo_commitment: Hash,
@@ -52,11 +53,11 @@ pub struct RpcHeader {
     pub daa_score: u64,
     pub blue_work: BlueWorkType,
     pub blue_score: u64,
-    pub pruning_point: Hash,
+    pub pruning_point: BlockHash,
 }
 
 impl RpcHeader {
-    pub fn direct_parents(&self) -> &[Hash] {
+    pub fn direct_parents(&self) -> &[BlockHash] {
         if self.parents_by_level.is_empty() { &[] } else { &self.parents_by_level[0] }
     }
 }
@@ -160,9 +161,9 @@ impl Serializer for RpcHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         store!(u16, &1, writer)?;
 
-        store!(Hash, &self.hash, writer)?;
+        store!(BlockHash, &self.hash, writer)?;
         store!(u16, &self.version, writer)?;
-        store!(Vec<Vec<Hash>>, &self.parents_by_level, writer)?;
+        store!(Vec<Vec<BlockHash>>, &self.parents_by_level, writer)?;
         // PR-9.5c: serialised as Hash64 (64 raw bytes on the wire).
         store!(kaspa_hashes::Hash64, &self.hash_merkle_root, writer)?;
         store!(kaspa_hashes::Hash64, &self.accepted_id_merkle_root, writer)?;
@@ -173,7 +174,7 @@ impl Serializer for RpcHeader {
         store!(u64, &self.daa_score, writer)?;
         store!(BlueWorkType, &self.blue_work, writer)?;
         store!(u64, &self.blue_score, writer)?;
-        store!(Hash, &self.pruning_point, writer)?;
+        store!(BlockHash, &self.pruning_point, writer)?;
 
         Ok(())
     }
@@ -183,9 +184,9 @@ impl Deserializer for RpcHeader {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u16, reader)?;
 
-        let hash = load!(Hash, reader)?;
+        let hash = load!(BlockHash, reader)?;
         let version = load!(u16, reader)?;
-        let parents_by_level = load!(Vec<Vec<Hash>>, reader)?;
+        let parents_by_level = load!(Vec<Vec<BlockHash>>, reader)?;
         // PR-9.5c: deserialised as Hash64 (64 raw bytes on the wire).
         let hash_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
         let accepted_id_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
@@ -196,7 +197,7 @@ impl Deserializer for RpcHeader {
         let daa_score = load!(u64, reader)?;
         let blue_work = load!(BlueWorkType, reader)?;
         let blue_score = load!(u64, reader)?;
-        let pruning_point = load!(Hash, reader)?;
+        let pruning_point = load!(BlockHash, reader)?;
 
         Ok(Self {
             hash,
@@ -307,7 +308,7 @@ impl Serializer for RpcRawHeader {
         store!(u16, &1, writer)?;
 
         store!(u16, &self.version, writer)?;
-        store!(Vec<Vec<Hash>>, &self.parents_by_level, writer)?;
+        store!(Vec<Vec<BlockHash>>, &self.parents_by_level, writer)?;
         // PR-9.5c: serialised as Hash64.
         store!(kaspa_hashes::Hash64, &self.hash_merkle_root, writer)?;
         store!(kaspa_hashes::Hash64, &self.accepted_id_merkle_root, writer)?;
@@ -318,7 +319,7 @@ impl Serializer for RpcRawHeader {
         store!(u64, &self.daa_score, writer)?;
         store!(BlueWorkType, &self.blue_work, writer)?;
         store!(u64, &self.blue_score, writer)?;
-        store!(Hash, &self.pruning_point, writer)?;
+        store!(BlockHash, &self.pruning_point, writer)?;
 
         Ok(())
     }
@@ -329,7 +330,7 @@ impl Deserializer for RpcRawHeader {
         let _version = load!(u16, reader)?;
 
         let version = load!(u16, reader)?;
-        let parents_by_level = load!(Vec<Vec<Hash>>, reader)?;
+        let parents_by_level = load!(Vec<Vec<BlockHash>>, reader)?;
         // PR-9.5c: deserialised as Hash64.
         let hash_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
         let accepted_id_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
@@ -340,7 +341,7 @@ impl Deserializer for RpcRawHeader {
         let daa_score = load!(u64, reader)?;
         let blue_work = load!(BlueWorkType, reader)?;
         let blue_score = load!(u64, reader)?;
-        let pruning_point = load!(Hash, reader)?;
+        let pruning_point = load!(BlockHash, reader)?;
 
         Ok(Self {
             version,

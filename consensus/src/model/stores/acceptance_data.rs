@@ -7,7 +7,7 @@ use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::Deserialize;
@@ -15,12 +15,12 @@ use serde::Serialize;
 use std::sync::Arc;
 
 pub trait AcceptanceDataStoreReader {
-    fn get(&self, hash: Hash) -> Result<Arc<AcceptanceData>, StoreError>;
+    fn get(&self, hash: BlockHash) -> Result<Arc<AcceptanceData>, StoreError>;
 }
 
 pub trait AcceptanceDataStore: AcceptanceDataStoreReader {
-    fn insert(&self, hash: Hash, acceptance_data: Arc<AcceptanceData>) -> Result<(), StoreError>;
-    fn delete(&self, hash: Hash) -> Result<(), StoreError>;
+    fn insert(&self, hash: BlockHash, acceptance_data: Arc<AcceptanceData>) -> Result<(), StoreError>;
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError>;
 }
 
 /// Simple wrapper for implementing `MemSizeEstimator`
@@ -40,7 +40,7 @@ impl MemSizeEstimator for AcceptanceDataEntry {
 #[derive(Clone)]
 pub struct DbAcceptanceDataStore {
     db: Arc<DB>,
-    access: CachedDbAccess<Hash, AcceptanceDataEntry, BlockHasher>,
+    access: CachedDbAccess<BlockHash, AcceptanceDataEntry, BlockHasher>,
 }
 
 impl DbAcceptanceDataStore {
@@ -52,35 +52,35 @@ impl DbAcceptanceDataStore {
         Self::new(Arc::clone(&self.db), cache_policy)
     }
 
-    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: Hash, acceptance_data: Arc<AcceptanceData>) -> Result<(), StoreError> {
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, acceptance_data: Arc<AcceptanceData>) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(BatchDbWriter::new(batch), hash, AcceptanceDataEntry(acceptance_data))?;
         Ok(())
     }
 
-    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: Hash) -> Result<(), StoreError> {
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(BatchDbWriter::new(batch), hash)
     }
 }
 
 impl AcceptanceDataStoreReader for DbAcceptanceDataStore {
-    fn get(&self, hash: Hash) -> Result<Arc<AcceptanceData>, StoreError> {
+    fn get(&self, hash: BlockHash) -> Result<Arc<AcceptanceData>, StoreError> {
         Ok(self.access.read(hash)?.0)
     }
 }
 
 impl AcceptanceDataStore for DbAcceptanceDataStore {
-    fn insert(&self, hash: Hash, acceptance_data: Arc<AcceptanceData>) -> Result<(), StoreError> {
+    fn insert(&self, hash: BlockHash, acceptance_data: Arc<AcceptanceData>) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(DirectDbWriter::new(&self.db), hash, AcceptanceDataEntry(acceptance_data))?;
         Ok(())
     }
 
-    fn delete(&self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(DirectDbWriter::new(&self.db), hash)
     }
 }

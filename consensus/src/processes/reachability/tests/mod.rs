@@ -20,7 +20,7 @@ use kaspa_consensus_core::{
     blockhash::{BlockHashExtensions, BlockHashes, ORIGIN},
 };
 use kaspa_database::prelude::{DirectWriter, StoreError};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use std::collections::{
     VecDeque,
     hash_map::Entry::{Occupied, Vacant},
@@ -40,7 +40,7 @@ impl<'a, T: ReachabilityStore + ?Sized> StoreBuilder<'a, T> {
         Self { store }
     }
 
-    pub fn add_block(&mut self, hash: Hash, parent: Hash) -> &mut Self {
+    pub fn add_block(&mut self, hash: BlockHash, parent: BlockHash) -> &mut Self {
         let parent_height = if !parent.is_none() {
             self.store.append_child(parent, hash).unwrap();
             self.store.get_height(parent).unwrap()
@@ -77,12 +77,12 @@ impl<'a, T: ReachabilityStore + ?Sized> TreeBuilder<'a, T> {
         self
     }
 
-    pub fn init_with_params(&mut self, origin: Hash, capacity: Interval) -> &mut Self {
+    pub fn init_with_params(&mut self, origin: BlockHash, capacity: Interval) -> &mut Self {
         init_with_params(self.store, origin, capacity).unwrap();
         self
     }
 
-    pub fn add_block(&mut self, hash: Hash, parent: Hash) -> &mut Self {
+    pub fn add_block(&mut self, hash: BlockHash, parent: BlockHash) -> &mut Self {
         add_tree_block(self.store, hash, parent, self.reindex_depth, self.reindex_slack).unwrap();
         try_advancing_reindex_root(self.store, hash, self.reindex_depth, self.reindex_slack).unwrap();
         self
@@ -95,12 +95,12 @@ impl<'a, T: ReachabilityStore + ?Sized> TreeBuilder<'a, T> {
 
 #[derive(Clone)]
 pub struct DagBlock {
-    pub hash: Hash,
-    pub parents: Vec<Hash>,
+    pub hash: BlockHash,
+    pub parents: Vec<BlockHash>,
 }
 
 impl DagBlock {
-    pub fn new(hash: Hash, parents: Vec<Hash>) -> Self {
+    pub fn new(hash: BlockHash, parents: Vec<BlockHash>) -> Self {
         Self { hash, parents }
     }
 }
@@ -128,11 +128,11 @@ impl<'a, T: ReachabilityStore + ?Sized, S: RelationsStore + ChildrenStore + ?Siz
         self
     }
 
-    pub fn delete_block(&mut self, hash: Hash) -> &mut Self {
+    pub fn delete_block(&mut self, hash: BlockHash) -> &mut Self {
         self.delete_block_with_writer(self.relations.default_writer(), hash)
     }
 
-    pub fn delete_block_with_writer(&mut self, writer: impl DirectWriter, hash: Hash) -> &mut Self {
+    pub fn delete_block_with_writer(&mut self, writer: impl DirectWriter, hash: BlockHash) -> &mut Self {
         let mergeset = delete_reachability_relations(writer, self.relations, self.reachability, hash);
         delete_block(self.reachability, hash, &mut mergeset.iter().cloned()).unwrap();
         self
@@ -155,7 +155,7 @@ impl<'a, T: ReachabilityStore + ?Sized, S: RelationsStore + ChildrenStore + ?Siz
 
 /// Validates that relations are consistent and do not contain any dangling hash etc
 pub fn validate_relations<S: RelationsStoreReader + ?Sized>(relations: &S) -> std::result::Result<(), TestError> {
-    let mut queue = VecDeque::<Hash>::from([ORIGIN]);
+    let mut queue = VecDeque::<BlockHash>::from([ORIGIN]);
     let mut visited: BlockHashSet = queue.iter().copied().collect();
     while let Some(current) = queue.pop_front() {
         let parents = relations.get_parents(current)?;
@@ -181,8 +181,8 @@ pub fn validate_relations<S: RelationsStoreReader + ?Sized>(relations: &S) -> st
 }
 
 /// Returns the reachability subtree of `root`, i.e., all blocks B ∈ G s.t. `root` ∈ `chain(B)`
-pub fn subtree<S: ReachabilityStoreReader + ?Sized>(reachability: &S, root: Hash) -> BlockHashSet {
-    let mut queue = VecDeque::<Hash>::from([root]);
+pub fn subtree<S: ReachabilityStoreReader + ?Sized>(reachability: &S, root: BlockHash) -> BlockHashSet {
+    let mut queue = VecDeque::<BlockHash>::from([root]);
     let mut vec = Vec::new();
     while let Some(parent) = queue.pop_front() {
         let children = reachability.get_children(parent).unwrap();
@@ -198,8 +198,8 @@ pub fn subtree<S: ReachabilityStoreReader + ?Sized>(reachability: &S, root: Hash
 /// Returns the inclusive DAG past of `hash`, i.e., all blocks which are reachable from `hash` via some parent path.
 /// Note that the `past` is built using a BFS traversal so it can be used as reference for testing the reachability
 /// oracle   
-pub fn inclusive_past<S: RelationsStoreReader + ?Sized>(relations: &S, hash: Hash) -> BlockHashSet {
-    let mut queue = VecDeque::<Hash>::from([hash]);
+pub fn inclusive_past<S: RelationsStoreReader + ?Sized>(relations: &S, hash: BlockHash) -> BlockHashSet {
+    let mut queue = VecDeque::<BlockHash>::from([hash]);
     let mut visited: BlockHashSet = queue.iter().copied().collect();
     while let Some(current) = queue.pop_front() {
         let parents = relations.get_parents(current).unwrap();
@@ -214,7 +214,7 @@ pub fn inclusive_past<S: RelationsStoreReader + ?Sized>(relations: &S, hash: Has
 
 /// Builds a full DAG reachability matrix of all block pairs (B, C) ∈ G x G. The returned matrix is built
 /// using explicit past traversals so it can be used as reference for testing the reachability oracle
-pub fn build_transitive_closure_ref<S: RelationsStoreReader + ?Sized>(relations: &S, hashes: &[Hash]) -> TransitiveClosure {
+pub fn build_transitive_closure_ref<S: RelationsStoreReader + ?Sized>(relations: &S, hashes: &[BlockHash]) -> TransitiveClosure {
     let mut closure = TransitiveClosure::new();
     for x in hashes.iter().copied() {
         let past = inclusive_past(relations, x);
@@ -230,7 +230,7 @@ pub fn build_transitive_closure_ref<S: RelationsStoreReader + ?Sized>(relations:
 pub fn build_transitive_closure<S: RelationsStoreReader + ?Sized, V: ReachabilityStoreReader + ?Sized>(
     relations: &S,
     reachability: &V,
-    hashes: &[Hash],
+    hashes: &[BlockHash],
 ) -> TransitiveClosure {
     let mut closure = TransitiveClosure::new();
     for x in hashes.iter().copied() {
@@ -245,7 +245,7 @@ pub fn build_transitive_closure<S: RelationsStoreReader + ?Sized, V: Reachabilit
 
 /// Builds a full chain reachability matrix of all block pairs (B, C) ∈ G x G. The returned matrix is built
 /// using explicit subtree traversals so it can be used as reference for testing the reachability oracle
-pub fn build_chain_closure_ref<S: ReachabilityStoreReader + ?Sized>(reachability: &S, hashes: &[Hash]) -> TransitiveClosure {
+pub fn build_chain_closure_ref<S: ReachabilityStoreReader + ?Sized>(reachability: &S, hashes: &[BlockHash]) -> TransitiveClosure {
     let mut closure = TransitiveClosure::new();
     for x in hashes.iter().copied() {
         let subtree = subtree(reachability, x);
@@ -258,7 +258,7 @@ pub fn build_chain_closure_ref<S: ReachabilityStoreReader + ?Sized>(reachability
 
 /// Builds a full chain reachability matrix of all block pairs (B, C) ∈ G x G by querying the reachability oracle.
 /// The function also asserts this matrix against a chain closure reference obtained by explicit subtree traversals
-pub fn build_chain_closure<V: ReachabilityStoreReader + ?Sized>(reachability: &V, hashes: &[Hash]) -> TransitiveClosure {
+pub fn build_chain_closure<V: ReachabilityStoreReader + ?Sized>(reachability: &V, hashes: &[BlockHash]) -> TransitiveClosure {
     let mut closure = TransitiveClosure::new();
     for x in hashes.iter().copied() {
         for y in hashes.iter().copied() {
@@ -302,7 +302,7 @@ impl TransitiveClosure {
         Self { matrix: Default::default() }
     }
 
-    pub fn set(&mut self, x: Hash, y: Hash, b: bool) {
+    pub fn set(&mut self, x: BlockHash, y: BlockHash, b: bool) {
         let row = match self.matrix.entry(x) {
             Occupied(e) => e.into_mut(),
             Vacant(e) => e.insert(Default::default()),
@@ -315,7 +315,7 @@ impl TransitiveClosure {
         }
     }
 
-    pub fn get(&self, x: Hash, y: Hash) -> Option<bool> {
+    pub fn get(&self, x: BlockHash, y: BlockHash) -> Option<bool> {
         Some(*self.matrix.get(&x)?.get(&y)?)
     }
 
@@ -342,7 +342,7 @@ pub enum TestError {
     StoreError(#[from] StoreError),
 
     #[error("empty interval")]
-    EmptyInterval(Hash, Interval),
+    EmptyInterval(BlockHash, Interval),
 
     #[error("sibling intervals are expected to be consecutive")]
     NonConsecutiveSiblingIntervals(Interval, Interval),
@@ -351,7 +351,7 @@ pub enum TestError {
     NonOrderedFutureCoveringItems(Interval, Interval),
 
     #[error("child interval out of parent bounds")]
-    IntervalOutOfParentBounds { parent: Hash, child: Hash, parent_interval: Interval, child_interval: Interval },
+    IntervalOutOfParentBounds { parent: BlockHash, child: BlockHash, parent_interval: Interval, child_interval: Interval },
 
     #[error("expected store counts: {0:?}, but got: {1:?}")]
     WrongCounts((usize, usize), (usize, usize)),
@@ -366,7 +366,7 @@ pub trait StoreValidationExtensions {
     fn are_anticone(&self, block: u64, other: u64) -> bool;
 
     /// Validates that all tree intervals match the expected interval relations
-    fn validate_intervals(&self, root: Hash) -> std::result::Result<(), TestError>;
+    fn validate_intervals(&self, root: BlockHash) -> std::result::Result<(), TestError>;
 }
 
 impl<T: ReachabilityStoreReader + ?Sized> StoreValidationExtensions for T {
@@ -387,8 +387,8 @@ impl<T: ReachabilityStoreReader + ?Sized> StoreValidationExtensions for T {
             && !is_dag_ancestor_of(self, other.into(), block.into()).unwrap()
     }
 
-    fn validate_intervals(&self, root: Hash) -> std::result::Result<(), TestError> {
-        let mut queue = VecDeque::<Hash>::from([root]);
+    fn validate_intervals(&self, root: BlockHash) -> std::result::Result<(), TestError> {
+        let mut queue = VecDeque::<BlockHash>::from([root]);
         while let Some(parent) = queue.pop_front() {
             let children = self.get_children(parent)?;
             queue.extend(children.iter());

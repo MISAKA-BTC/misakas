@@ -11,11 +11,11 @@ use kaspa_consensus_core::{
     errors::traversal::{TraversalError, TraversalResult},
 };
 use kaspa_core::trace;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 
 #[derive(Clone)]
 pub struct DagTraversalManager<T: GhostdagStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader> {
-    genesis_hash: Hash,
+    genesis_hash: BlockHash,
     ghostdag_store: Arc<T>,
     relations_store: V,
     reachability_service: MTReachabilityService<U>,
@@ -23,7 +23,7 @@ pub struct DagTraversalManager<T: GhostdagStoreReader, U: ReachabilityStoreReade
 
 impl<T: GhostdagStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader> DagTraversalManager<T, U, V> {
     pub fn new(
-        genesis_hash: Hash,
+        genesis_hash: BlockHash,
         ghostdag_store: Arc<T>,
         relations_store: V,
         reachability_service: MTReachabilityService<U>,
@@ -31,7 +31,7 @@ impl<T: GhostdagStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader
         Self { genesis_hash, ghostdag_store, relations_store, reachability_service }
     }
 
-    pub fn calculate_chain_path(&self, from: Hash, to: Hash, chain_path_added_limit: Option<usize>) -> ChainPath {
+    pub fn calculate_chain_path(&self, from: BlockHash, to: BlockHash, chain_path_added_limit: Option<usize>) -> ChainPath {
         let mut removed = Vec::new();
         let mut common_ancestor = from;
         for current in self.reachability_service.default_backward_chain_iterator(from) {
@@ -61,29 +61,29 @@ impl<T: GhostdagStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader
 
     pub fn anticone(
         &self,
-        block: Hash,
-        tips: impl Iterator<Item = Hash>,
+        block: BlockHash,
+        tips: impl Iterator<Item = BlockHash>,
         max_traversal_allowed: Option<u64>,
-    ) -> TraversalResult<Vec<Hash>> {
+    ) -> TraversalResult<Vec<BlockHash>> {
         self.antipast_traversal(tips, block, max_traversal_allowed, true)
     }
 
     pub fn antipast(
         &self,
-        block: Hash,
-        tips: impl Iterator<Item = Hash>,
+        block: BlockHash,
+        tips: impl Iterator<Item = BlockHash>,
         max_traversal_allowed: Option<u64>,
-    ) -> TraversalResult<Vec<Hash>> {
+    ) -> TraversalResult<Vec<BlockHash>> {
         self.antipast_traversal(tips, block, max_traversal_allowed, false)
     }
 
     fn antipast_traversal(
         &self,
-        tips: impl Iterator<Item = Hash>,
-        block: Hash,
+        tips: impl Iterator<Item = BlockHash>,
+        block: BlockHash,
         max_traversal_allowed: Option<u64>,
         return_anticone_only: bool,
-    ) -> Result<Vec<Hash>, TraversalError> {
+    ) -> Result<Vec<BlockHash>, TraversalError> {
         /*
            In some cases we search for the anticone of the pruning point starting from virtual parents.
            This means we might traverse ~pruning_depth blocks which are all stored in the visited set.
@@ -135,7 +135,7 @@ impl<T: GhostdagStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader
         Ok(output)
     }
 
-    pub fn lowest_chain_block_above_or_equal_to_blue_score(&self, high: Hash, blue_score: u64) -> Hash {
+    pub fn lowest_chain_block_above_or_equal_to_blue_score(&self, high: BlockHash, blue_score: u64) -> BlockHash {
         let high_gd = self.ghostdag_store.get_compact_data(high).unwrap();
         assert!(high_gd.blue_score >= blue_score);
 

@@ -1,11 +1,22 @@
 use super::HasherExtensions;
 use crate::header::Header;
-use kaspa_hashes::{Hash, HasherBase};
+use kaspa_hashes::{Hash, Hash64, HasherBase};
 
-/// Returns the header hash using the provided nonce+timestamp instead of those in the header.
+/// Writes the canonical header preimage into `hasher`, overriding the
+/// nonce/timestamp. Shared by the three header digests below so they
+/// are guaranteed byte-identical except for the hasher domain:
+///   * 32-byte legacy hash    — `kaspa_hashes::BlockHash`
+///   * 64-byte block identity — `kaspa_hashes::BlockHash64`
+///   * 64-byte pre-PoW hash    — `kaspa_hashes::BlockPrePowHash64`
+///
+/// Frozen byte order (changing it is a hard fork): version, parent
+/// levels, hash_merkle_root, accepted_id_merkle_root, utxo_commitment,
+/// timestamp, bits, nonce, pow_algo_id, daa_score, blue_score,
+/// blue_work, pruning_point. As of PR-9.5e the parent hashes, merkle
+/// roots and pruning point are all 64-byte; `utxo_commitment` stays
+/// 32-byte (it is an accumulator commitment, not a block identity).
 #[inline]
-pub fn hash_override_nonce_time(header: &Header, nonce: u64, timestamp: u64) -> Hash {
-    let mut hasher = kaspa_hashes::BlockHash::new();
+fn write_header_preimage<H: HasherBase>(hasher: &mut H, header: &Header, nonce: u64, timestamp: u64) {
     hasher.update(header.version.to_le_bytes()).write_len(header.parents_by_level.expanded_len()); // Write the number of parent levels
 
     // Write parents at each level
@@ -29,13 +40,27 @@ pub fn hash_override_nonce_time(header: &Header, nonce: u64, timestamp: u64) -> 
         .update(header.blue_score.to_le_bytes())
         .write_blue_work(header.blue_work)
         .update(header.pruning_point);
+}
 
+/// Returns the **legacy 32-byte** header hash using the provided
+/// nonce+timestamp. Retained only for the 32-byte kHeavyHash PoW path
+/// in `consensus/pow`; the canonical block *identity* is the 64-byte
+/// [`hash`] below (ADR-0008).
+#[inline]
+pub fn hash_override_nonce_time(header: &Header, nonce: u64, timestamp: u64) -> Hash {
+    let mut hasher = kaspa_hashes::BlockHash::new();
+    write_header_preimage(&mut hasher, header, nonce, timestamp);
     hasher.finalize()
 }
 
-/// Returns the header hash.
-pub fn hash(header: &Header) -> Hash {
-    hash_override_nonce_time(header, header.nonce, header.timestamp)
+/// Returns the 64-byte block-identity hash (ADR-0008). Uses the keyed
+/// BLAKE2b-512 `BlockHash64` domain over all header fields including
+/// the real nonce/timestamp. This is what `Header::hash` caches and
+/// what keys every block store / GHOSTDAG / reachability structure.
+pub fn hash(header: &Header) -> Hash64 {
+    let mut hasher = kaspa_hashes::BlockHash64::new();
+    write_header_preimage(&mut hasher, header, header.nonce, header.timestamp);
+    hasher.finalize()
 }
 
 // kaspa-pq PR-8.6 / Phase 9 (ADR-0008): 64-byte header hashing path.
@@ -51,40 +76,19 @@ pub fn hash(header: &Header) -> Hash {
 // for that migration (and for the Layer 0 PoW verifier in
 // consensus/pow).
 //
-// Note that the `header` struct itself still carries 32-byte fields
-// for merkle roots / UTXO commitment / pruning point at the time of
-// this PR; those bytes are fed into the 64-byte hasher unchanged.
-// The PR-9.5 cascade will widen them; this function's output
-// changes accordingly at that point.
+// As of PR-9.5e the parent hashes, merkle roots and pruning point fed
+// into this hasher are 64-byte; `utxo_commitment` stays 32-byte. The
+// preimage is identical to the 32-byte and identity-64 digests (see
+// `write_header_preimage`); only the hasher domain differs.
 
 /// 64-byte pre-PoW hash for the kaspa-pq Layer 0 PoW path. Same
-/// preimage layout as `hash_override_nonce_time` but produces a
-/// 64-byte `Hash64`. See ADR-0008.
+/// preimage layout as `hash_override_nonce_time` (via the shared
+/// `write_header_preimage`) but produces a 64-byte `Hash64` under the
+/// `BlockPrePowHash64` domain. See ADR-0008.
 #[inline]
 pub fn hash_override_nonce_time_64(header: &Header, nonce: u64, timestamp: u64) -> kaspa_hashes::Hash64 {
     let mut hasher = kaspa_hashes::BlockPrePowHash64::new();
-    hasher.update(header.version.to_le_bytes()).write_len(header.parents_by_level.expanded_len());
-
-    header.parents_by_level.expanded_iter().for_each(|level| {
-        hasher.write_var_array(level);
-    });
-
-    hasher
-        .update(header.hash_merkle_root)
-        .update(header.accepted_id_merkle_root)
-        .update(header.utxo_commitment)
-        .update(timestamp.to_le_bytes())
-        .update(header.bits.to_le_bytes())
-        .update(nonce.to_le_bytes())
-        // PR-9.5d: pow_algo_id binds the Layer 1 algorithm into the
-        // pre-PoW hash, so a miner cannot reuse PoW across algos.
-        // Same byte position as the 32-byte header hash above.
-        .update([header.pow_algo_id])
-        .update(header.daa_score.to_le_bytes())
-        .update(header.blue_score.to_le_bytes())
-        .write_blue_work(header.blue_work)
-        .update(header.pruning_point);
-
+    write_header_preimage(&mut hasher, header, nonce, timestamp);
     hasher.finalize()
 }
 

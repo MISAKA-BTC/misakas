@@ -1,7 +1,6 @@
-use kaspa_hashes::Hash;
 use serde::{Deserialize, Serialize};
 
-use crate::tx::TransactionId;
+use crate::{BlockHash, tx::TransactionId};
 
 /// Holds a mergeset acceptance data, a list of all its merged block with their accepted transactions
 pub type AcceptanceData = Vec<MergesetBlockAcceptanceData>;
@@ -9,7 +8,7 @@ pub type AcceptanceData = Vec<MergesetBlockAcceptanceData>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Holds a merged block with its accepted transactions
 pub struct MergesetBlockAcceptanceData {
-    pub block_hash: Hash,
+    pub block_hash: BlockHash,
     pub accepted_transactions: Vec<AcceptedTxEntry>,
 }
 

@@ -7,8 +7,8 @@ use crate::error::Error;
 use crate::imports::*;
 use crate::parents::CompressedParents as WasmCompressedParents;
 use js_sys::Object;
-use kaspa_consensus_core::BlueWorkType;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::{BlockHash, BlueWorkType}; // PR-9.5e: hash + pruning_point are block ids (Hash64)
+use kaspa_hashes::Hash; // PR-9.5e: retained for utxo_commitment (32-byte accumulator commitment, stays Hash)
 use kaspa_utils::hex::ToHex;
 use workflow_wasm::extensions::{JsValueExtension, ObjectExtension};
 
@@ -46,7 +46,7 @@ extern "C" {
 #[wasm_bindgen(inspectable)]
 #[derive(Clone, Debug, CastFromJs)]
 pub struct OptionalHeader {
-    hash: Option<Hash>,
+    hash: Option<BlockHash>,
     version: Option<u16>,
     parents_by_level: Option<WasmCompressedParents>,
     // PR-9.5c: merkle roots widened to Hash64.
@@ -59,13 +59,13 @@ pub struct OptionalHeader {
     daa_score: Option<u64>,
     blue_work: Option<BlueWorkType>,
     blue_score: Option<u64>,
-    pruning_point: Option<Hash>,
+    pruning_point: Option<BlockHash>,
 }
 
 impl OptionalHeader {
     #[allow(clippy::too_many_arguments)]
     pub fn new_from_fields(
-        hash: Option<Hash>,
+        hash: Option<BlockHash>,
         version: Option<u16>,
         parents_by_level: Option<WasmCompressedParents>,
         // PR-9.5c: merkle roots widened to Hash64.
@@ -78,7 +78,7 @@ impl OptionalHeader {
         daa_score: Option<u64>,
         blue_work: Option<BlueWorkType>,
         blue_score: Option<u64>,
-        pruning_point: Option<Hash>,
+        pruning_point: Option<BlockHash>,
     ) -> Self {
         Self {
             hash,

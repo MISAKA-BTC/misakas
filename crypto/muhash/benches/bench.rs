@@ -4,7 +4,7 @@ use rand_chacha::{
     rand_core::{RngCore, SeedableRng},
 };
 
-use kaspa_muhash::MuHash;
+use kaspa_muhash::{MuHash, SERIALIZED_MUHASH_SIZE};
 
 fn bench_muhash(c: &mut Criterion) {
     let mut rng = ChaCha8Rng::from_seed([42u8; 32]);
@@ -53,10 +53,11 @@ fn bench_muhash(c: &mut Criterion) {
     });
 
     c.bench_function("MuHash::serialize worst", |b| {
-        let mut muhash_serialized = [255u8; 384];
-        //  make sure it's lower than the prime
-        muhash_serialized[0..3].copy_from_slice(&[154, 40, 239]);
-        muhash_serialized[192..195].copy_from_slice(&[153, 40, 239]);
+        // PR-9.5e: LtHash16_1024 serialized state is SERIALIZED_MUHASH_SIZE (2048)
+        // bytes; every byte sequence of that length is a valid state (no prime
+        // bound to stay under, unlike the previous Uint3072 multiplicative MuHash),
+        // so the prior 384-byte fixture and prime-tuning offsets are dropped.
+        let muhash_serialized = [255u8; SERIALIZED_MUHASH_SIZE];
         let muhash = MuHash::deserialize(muhash_serialized).unwrap();
         b.iter(|| black_box(muhash.clone()).serialize());
     });

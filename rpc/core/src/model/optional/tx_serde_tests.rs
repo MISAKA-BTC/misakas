@@ -8,10 +8,11 @@ use super::tx::{
     RpcOptionalTransactionVerboseData,
 };
 use crate::{RpcHash, RpcTransactionId};
-use kaspa_consensus_core::{subnets::SubnetworkId, tx::TransactionId};
+use kaspa_consensus_core::subnets::SubnetworkId;
 
-fn hash32(b: u8) -> RpcHash {
-    RpcHash::from_bytes([b; 32])
+// PR-9.5e: RpcHash widened to Hash64 (64 bytes) for block identity.
+fn hash64(b: u8) -> RpcHash {
+    RpcHash::from_bytes([b; 64])
 }
 
 // PR-9.5c/f: RpcTransactionId is now Hash64 (64 bytes).
@@ -30,10 +31,10 @@ fn outpoint_none() -> RpcOptionalTransactionOutpoint {
 fn verbose_data_some() -> RpcOptionalTransactionVerboseData {
     RpcOptionalTransactionVerboseData {
         transaction_id: Some(tx_id(0x11)),
-        // PR-9.5c/f: full-content tx hash is now Hash64; block_hash stays 32-byte.
+        // PR-9.5c/f: full-content tx hash is now Hash64. PR-9.5e: block_hash widened to Hash64 too.
         hash: Some(tx_id(0x22)),
         compute_mass: Some(42),
-        block_hash: Some(hash32(0x33)),
+        block_hash: Some(hash64(0x33)),
         block_time: Some(123456),
     }
 }
@@ -116,12 +117,13 @@ fn verbose_data_json_some() {
     assert_eq!(
         json,
         // PR-9.5c/f: transactionId + hash are now 64-byte Hash64 (128 hex
-        // chars); blockHash stays a 32-byte block hash (64 hex chars).
+        // chars). PR-9.5e: blockHash widened to Hash64 too (block identity),
+        // so it is now also 128 hex chars.
         concat!(
             r#"{"transactionId":"11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111","#,
             r#""hash":"22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222","#,
             r#""computeMass":42,"#,
-            r#""blockHash":"3333333333333333333333333333333333333333333333333333333333333333","#,
+            r#""blockHash":"33333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333","#,
             r#""blockTime":123456}"#,
         )
     );

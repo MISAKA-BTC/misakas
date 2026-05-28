@@ -3,7 +3,7 @@ use crate::errors::{BlockProcessResult, RuleError, TwoDimVecDisplay};
 use crate::model::services::reachability::ReachabilityService;
 use crate::processes::window::WindowManager;
 use kaspa_consensus_core::header::Header;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use std::collections::HashSet;
 
 impl HeaderProcessor {
@@ -64,7 +64,7 @@ impl HeaderProcessor {
                     if header_level_parents == expected_level_parents {
                         return true;
                     }
-                    HashSet::<&Hash>::from_iter(header_level_parents) == HashSet::<&Hash>::from_iter(expected_level_parents)
+                    HashSet::<&BlockHash>::from_iter(header_level_parents) == HashSet::<&BlockHash>::from_iter(expected_level_parents)
                 },
             )
         {
@@ -80,7 +80,7 @@ impl HeaderProcessor {
         let ghostdag_data = ctx.ghostdag_data();
         let merge_depth_root = self.depth_manager.calc_merge_depth_root(ghostdag_data, ctx.pruning_point);
         let finality_point = self.depth_manager.calc_finality_point(ghostdag_data, ctx.pruning_point);
-        let mut kosherizing_blues: Option<Vec<Hash>> = None;
+        let mut kosherizing_blues: Option<Vec<BlockHash>> = None;
 
         for red in ghostdag_data.mergeset_reds.iter().copied() {
             if self.reachability_service.is_dag_ancestor_of(merge_depth_root, red) {

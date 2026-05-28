@@ -16,7 +16,7 @@ use kaspa_consensus_core::{
 };
 use kaspa_consensusmanager::{ConsensusProxy, StagingConsensus, spawn_blocking};
 use kaspa_core::{debug, info, time::unix_now, warn};
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_muhash::MuHash;
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
@@ -66,9 +66,9 @@ impl Flow for IbdFlow {
 }
 
 pub enum IbdType {
-    Sync { highest_known_syncer_chain_hash: Hash, is_utxo_stable: bool, is_pp_anticone_synced: bool },
+    Sync { highest_known_syncer_chain_hash: BlockHash, is_utxo_stable: bool, is_pp_anticone_synced: bool },
     DownloadHeadersProof,
-    PruningCatchUp { highest_known_syncer_chain_hash: Hash },
+    PruningCatchUp { highest_known_syncer_chain_hash: BlockHash },
 }
 
 struct QueueChunkOutput {
@@ -230,8 +230,8 @@ impl IbdFlow {
         &self,
         consensus: &ConsensusProxy,
         relay_header: &Header,
-        highest_known_syncer_chain_hash: Option<Hash>,
-        syncer_pruning_point: Hash,
+        highest_known_syncer_chain_hash: Option<BlockHash>,
+        syncer_pruning_point: BlockHash,
     ) -> Result<IbdType, ProtocolError> {
         if let Some(highest_known_syncer_chain_hash) = highest_known_syncer_chain_hash {
             let pruning_point = consensus.async_pruning_point().await;
@@ -327,7 +327,7 @@ impl IbdFlow {
         consensus: &ConsensusProxy,
         negotiation_output: &ChainNegotiationOutput,
         relay_block: &Block,
-        highest_known_syncer_chain_hash: Hash,
+        highest_known_syncer_chain_hash: BlockHash,
     ) -> Result<(), ProtocolError> {
         // Before attempting to update to the syncer's pruning point, sync to the latest headers of the syncer,
         // to ensure that we will locally have sufficient headers on top of the syncer's pruning point
@@ -352,7 +352,7 @@ impl IbdFlow {
     async fn ibd_with_headers_proof(
         &mut self,
         staging: &StagingConsensus,
-        syncer_virtual_selected_parent: Hash,
+        syncer_virtual_selected_parent: BlockHash,
         relay_block: &Block,
     ) -> Result<(), ProtocolError> {
         info!("Starting IBD with headers proof with peer {}", self.router);
@@ -366,7 +366,7 @@ impl IbdFlow {
         Ok(())
     }
 
-    async fn sync_and_validate_pruning_proof(&mut self, staging: &ConsensusProxy, relay_block: &Block) -> Result<Hash, ProtocolError> {
+    async fn sync_and_validate_pruning_proof(&mut self, staging: &ConsensusProxy, relay_block: &Block) -> Result<BlockHash, ProtocolError> {
         self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
 
         // Pruning proof generation and communication might take several minutes, so we allow a long 10 minute timeout
@@ -528,8 +528,8 @@ impl IbdFlow {
     async fn sync_headers(
         &mut self,
         consensus: &ConsensusProxy,
-        syncer_virtual_selected_parent: Hash,
-        highest_known_syncer_chain_hash: Hash,
+        syncer_virtual_selected_parent: BlockHash,
+        highest_known_syncer_chain_hash: BlockHash,
         relay_block: &Block,
     ) -> Result<(), ProtocolError> {
         let highest_shared_header_score = consensus.async_get_header(highest_known_syncer_chain_hash).await?.daa_score;
@@ -591,7 +591,7 @@ impl IbdFlow {
         Ok(())
     }
 
-    async fn sync_new_utxo_set(&mut self, consensus: &ConsensusProxy, pruning_point: Hash) -> Result<(), ProtocolError> {
+    async fn sync_new_utxo_set(&mut self, consensus: &ConsensusProxy, pruning_point: BlockHash) -> Result<(), ProtocolError> {
         // A better solution could be to create a copy of the old utxo state for some sort of fallback rather than delete it.
         consensus.async_clear_pruning_utxo_set().await; // this deletes the old pruning utxoset and also sets the pruning utxo as invalidated
         self.sync_pruning_point_utxoset(consensus, pruning_point).await?;
@@ -607,8 +607,8 @@ impl IbdFlow {
     async fn sync_missing_relay_past_headers(
         &mut self,
         consensus: &ConsensusProxy,
-        syncer_virtual_selected_parent: Hash,
-        relay_block_hash: Hash,
+        syncer_virtual_selected_parent: BlockHash,
+        relay_block_hash: BlockHash,
     ) -> Result<(), ProtocolError> {
         // Finished downloading syncer selected tip blocks,
         // check if we already have the triggering relay block
@@ -668,7 +668,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         }
     }
 
-    async fn sync_pruning_point_utxoset(&mut self, consensus: &ConsensusProxy, pruning_point: Hash) -> Result<(), ProtocolError> {
+    async fn sync_pruning_point_utxoset(&mut self, consensus: &ConsensusProxy, pruning_point: BlockHash) -> Result<(), ProtocolError> {
         info!("downloading the pruning point utxoset, this can take a little while.");
         self.router
             .enqueue(make_message!(
@@ -704,7 +704,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     async fn sync_missing_trusted_bodies_no_headers(
         &mut self,
         consensus: &ConsensusProxy,
-        diesembodied_hashes: Vec<Hash>,
+        diesembodied_hashes: Vec<BlockHash>,
     ) -> Result<(), ProtocolError> {
         let iter = diesembodied_hashes.chunks(IBD_BATCH_SIZE);
         for chunk in iter {
@@ -745,7 +745,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     async fn sync_missing_trusted_bodies_full_blocks(
         &mut self,
         consensus: &ConsensusProxy,
-        diesembodied_hashes: Vec<Hash>,
+        diesembodied_hashes: Vec<BlockHash>,
     ) -> Result<(), ProtocolError> {
         let iter = diesembodied_hashes.chunks(IBD_BATCH_SIZE);
         for chunk in iter {
@@ -780,7 +780,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         }
         Ok(())
     }
-    async fn sync_missing_block_bodies(&mut self, consensus: &ConsensusProxy, high: Hash) -> Result<(), ProtocolError> {
+    async fn sync_missing_block_bodies(&mut self, consensus: &ConsensusProxy, high: BlockHash) -> Result<(), ProtocolError> {
         // TODO (relaxed): query consensus in batches
         let sleep_task = sleep(Duration::from_secs(2));
         let hashes_task = consensus.async_get_missing_block_body_hashes(high);
@@ -834,7 +834,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     async fn queue_block_processing_chunk(
         &mut self,
         consensus: &ConsensusProxy,
-        chunk: &[Hash],
+        chunk: &[BlockHash],
     ) -> Result<QueueChunkOutput, ProtocolError> {
         if self.body_only_ibd_permitted {
             self.queue_block_processing_chunk_body_only(consensus, chunk).await
@@ -846,7 +846,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     async fn queue_block_processing_chunk_full_block(
         &mut self,
         consensus: &ConsensusProxy,
-        chunk: &[Hash],
+        chunk: &[BlockHash],
     ) -> Result<QueueChunkOutput, ProtocolError> {
         let mut jobs = Vec::with_capacity(chunk.len());
         let mut current_daa_score = 0;
@@ -876,7 +876,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     async fn queue_block_processing_chunk_body_only(
         &mut self,
         consensus: &ConsensusProxy,
-        chunk: &[Hash],
+        chunk: &[BlockHash],
     ) -> Result<QueueChunkOutput, ProtocolError> {
         let mut jobs = Vec::with_capacity(chunk.len());
         let mut current_daa_score = 0;

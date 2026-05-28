@@ -4,7 +4,7 @@ use kaspa_consensus_core::{
     subnets::SUBNETWORK_ID_NATIVE,
     tx::{Transaction, TransactionInput, TransactionOutpoint},
 };
-use kaspa_hashes::{HasherBase, TransactionID};
+use kaspa_hashes::{HasherBase, TransactionId64};
 use kaspa_mining::{FeerateTransactionKey, Frontier, Policy, model::topological_index::TopologicalIndex};
 use rand::{Rng, thread_rng};
 use std::{
@@ -79,7 +79,7 @@ pub fn bench_compare_topological_index_fns(c: &mut Criterion) {
 }
 
 fn generate_unique_tx(i: u64) -> Arc<Transaction> {
-    let mut hasher = TransactionID::new();
+    let mut hasher = TransactionId64::new();
     let prev = hasher.update(i.to_le_bytes()).clone().finalize();
     let input = TransactionInput::new(TransactionOutpoint::new(prev, 0), vec![], 0, 0);
     Arc::new(Transaction::new(0, vec![input], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![]))

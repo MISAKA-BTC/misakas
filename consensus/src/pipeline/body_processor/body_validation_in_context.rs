@@ -12,7 +12,7 @@ use crate::{
 };
 use kaspa_consensus_core::block::Block;
 use kaspa_database::prelude::StoreResultExt;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use once_cell::unsync::Lazy;
 use std::sync::Arc;
 
@@ -43,7 +43,7 @@ impl BlockBodyProcessor {
 
     fn check_parent_bodies_exist(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
         let statuses_read_guard = self.statuses_store.read();
-        let missing: Vec<Hash> = block
+        let missing: Vec<BlockHash> = block
             .header
             .direct_parents()
             .iter()
@@ -92,6 +92,7 @@ mod tests {
         processes::{transaction_validator::errors::TxRuleError, window::WindowManager},
     };
     use kaspa_consensus_core::{
+        BlockHash, // PR-9.5e: block ids are Hash64
         api::ConsensusApi,
         config::params::MAINNET_PARAMS,
         merkle::calc_hash_merkle_root,
@@ -99,7 +100,6 @@ mod tests {
         tx::{Transaction, TransactionInput, TransactionOutpoint},
     };
     use kaspa_core::assert_match;
-    use kaspa_hashes::Hash;
 
     #[tokio::test]
     async fn validate_body_in_context_test() {
@@ -207,8 +207,8 @@ mod tests {
 
     async fn check_for_lock_time_and_sequence(
         consensus: &TestConsensus,
-        parent: Hash,
-        block_hash: Hash,
+        parent: BlockHash,
+        block_hash: BlockHash,
         lock_time: u64,
         sequence: u64,
         should_pass: bool,

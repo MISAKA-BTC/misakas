@@ -36,7 +36,7 @@ use kaspa_consensus_notify::{
     root::ConsensusNotificationRoot,
 };
 use kaspa_consensusmanager::SessionLock;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use kaspa_notify::notifier::Notify;
 use parking_lot::RwLock;
 use rayon::ThreadPool;
@@ -225,7 +225,7 @@ impl BlockBodyProcessor {
         Ok(mass)
     }
 
-    fn commit_body(self: &Arc<BlockBodyProcessor>, hash: Hash, parents: &[Hash], transactions: Arc<Vec<Transaction>>) {
+    fn commit_body(self: &Arc<BlockBodyProcessor>, hash: BlockHash, parents: &[BlockHash], transactions: Arc<Vec<Transaction>>) {
         let mut batch = WriteBatch::default();
 
         // This is an append only store so it requires no lock.

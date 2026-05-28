@@ -6,24 +6,24 @@ use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 
 pub trait DaaStoreReader {
-    fn get_mergeset_non_daa(&self, hash: Hash) -> Result<Arc<BlockHashSet>, StoreError>;
+    fn get_mergeset_non_daa(&self, hash: BlockHash) -> Result<Arc<BlockHashSet>, StoreError>;
 }
 
 pub trait DaaStore: DaaStoreReader {
     // This is append only
-    fn insert(&self, hash: Hash, mergeset_non_daa: Arc<BlockHashSet>) -> Result<(), StoreError>;
-    fn delete(&self, hash: Hash) -> Result<(), StoreError>;
+    fn insert(&self, hash: BlockHash, mergeset_non_daa: Arc<BlockHashSet>) -> Result<(), StoreError>;
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError>;
 }
 
 /// A DB + cache implementation of `DaaStore` trait, with concurrency support.
 #[derive(Clone)]
 pub struct DbDaaStore {
     db: Arc<DB>,
-    access: CachedDbAccess<Hash, Arc<BlockHashSet>, BlockHasher>,
+    access: CachedDbAccess<BlockHash, Arc<BlockHashSet>, BlockHasher>,
 }
 
 impl DbDaaStore {
@@ -35,35 +35,35 @@ impl DbDaaStore {
         Self::new(Arc::clone(&self.db), cache_policy)
     }
 
-    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: Hash, mergeset_non_daa: Arc<BlockHashSet>) -> Result<(), StoreError> {
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, mergeset_non_daa: Arc<BlockHashSet>) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(BatchDbWriter::new(batch), hash, mergeset_non_daa)?;
         Ok(())
     }
 
-    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: Hash) -> Result<(), StoreError> {
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(BatchDbWriter::new(batch), hash)
     }
 }
 
 impl DaaStoreReader for DbDaaStore {
-    fn get_mergeset_non_daa(&self, hash: Hash) -> Result<Arc<BlockHashSet>, StoreError> {
+    fn get_mergeset_non_daa(&self, hash: BlockHash) -> Result<Arc<BlockHashSet>, StoreError> {
         self.access.read(hash)
     }
 }
 
 impl DaaStore for DbDaaStore {
-    fn insert(&self, hash: Hash, mergeset_non_daa: Arc<BlockHashSet>) -> Result<(), StoreError> {
+    fn insert(&self, hash: BlockHash, mergeset_non_daa: Arc<BlockHashSet>) -> Result<(), StoreError> {
         if self.access.has(hash)? {
-            return Err(StoreError::HashAlreadyExists(hash));
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }
         self.access.write(DirectDbWriter::new(&self.db), hash, mergeset_non_daa)?;
         Ok(())
     }
 
-    fn delete(&self, hash: Hash) -> Result<(), StoreError> {
+    fn delete(&self, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(DirectDbWriter::new(&self.db), hash)
     }
 }
