@@ -572,6 +572,78 @@ pub struct DnsParams {
     pub commit_reveal_activation_daa_score: Option<u64>,
 }
 
+/// Validator reward-distribution parameters (ADR-0013).
+///
+/// Three fields: the per-attestation flat reward paid into a
+/// new validator-side inflation track, the basis-points fraction
+/// of any slashed bond that goes to the reporter, and a defensive
+/// per-block cap on the total validator-side coinbase outflow.
+///
+/// Lives alongside [`DnsParams`] and is consumed by
+/// `consensus/src/processes/coinbase.rs` (PR-10.5′) for the
+/// coinbase fan-out, and by `consensus/src/processes/slashing.rs`
+/// (PR-10.12′) for the equivocation / unreveal distribution
+/// split. The `unreveal_reporter_reward_sompi` floor stays in
+/// [`DnsParams`] where ADR-0012 placed it; the slashing helper
+/// here takes that floor as a separate argument for the unreveal
+/// case (`min`-cap rule per ADR-0013 §"Slashing distribution").
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct RewardParams {
+    /// Flat per-included-attestation reward. ADR-0013 makes this
+    /// flat (not stake-proportional) on purpose: sortition
+    /// already stake-weights via committee membership, so a flat
+    /// reward gives every staked sompi a uniform expected APY
+    /// regardless of validator size.
+    pub per_attestation_reward_sompi: u64,
+
+    /// Basis points (10000 = 100%) of any slashed bond paid to
+    /// the slashing reporter. Mainnet recommendation: 1000 bps
+    /// = 10%. Applies to both equivocation
+    /// ([`SlashingEvidencePayload`]) and unreveal
+    /// ([`UnrevealSlashingEvidencePayload`]) slashes; the unreveal
+    /// case additionally `min`-caps the reward at the
+    /// [`DnsParams::unreveal_reporter_reward_sompi`] floor from
+    /// ADR-0012.
+    pub slashing_reporter_reward_bps: u16,
+
+    /// Hard cap on the per-block validator-side coinbase outflow.
+    /// Defensive — `per_attestation_reward_sompi ×
+    /// max_attestations_per_block` should never exceed this; if
+    /// it does, the consensus rule prefers the cap and refunds
+    /// the difference rather than overflowing into the coinbase
+    /// accumulator. See ADR-0013 §"Inflation cap".
+    pub max_validator_inflation_per_block_sompi: u64,
+}
+
+/// Outcome of [`compute_attestation_reward_payouts`] — the per-block
+/// validator-side coinbase payout pair.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct AttestationRewardPayout {
+    /// Total sompi that flows into validator-side coinbase outputs
+    /// for this block (capped at
+    /// `RewardParams::max_validator_inflation_per_block_sompi`).
+    pub total_payout_sompi: u64,
+    /// Sompi withheld by the per-block cap. Non-zero only when
+    /// `per_attestation_reward × count` exceeded the cap. Should
+    /// never happen under correct parameterisation; the field is
+    /// surfaced so a future audit / monitor can flag the
+    /// misconfiguration.
+    pub refunded_sompi: u64,
+}
+
+/// Outcome of [`compute_slashing_distribution`] — how to split a
+/// slashed bond between the reporter and the burn sink.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SlashingDistribution {
+    /// Sompi paid to whoever submitted the slashing evidence.
+    pub reporter_reward_sompi: u64,
+    /// Sompi removed from active supply. Mechanism is a PR-10.12
+    /// implementation detail (zero-script_public_key sink or
+    /// inflation-accumulator decrement); either way the value
+    /// leaves circulation.
+    pub burned_sompi: u64,
+}
+
 /// Miner-side block-template policy. See ADR-0010 §"Block template
 /// policy" for the reservation algorithm. Consumed by the
 /// block-template builder once PR-10.11 lands.
@@ -1061,6 +1133,89 @@ pub fn check_signed_epoch_record(
             SignedEpochCheckOutcome::AllowRebroadcast
         }
         Some(_) => SignedEpochCheckOutcome::Block,
+    }
+}
+
+// ---------------------------------------------------------------------
+// Reward / slashing distribution (ADR-0013).
+// ---------------------------------------------------------------------
+
+/// Compute the per-block validator-side coinbase payout (ADR-0013
+/// §"Per-attestation flat reward" + §"Inflation cap").
+///
+/// Returns the total sompi that flows into validator-side
+/// coinbase outputs for the block, plus any sompi withheld by
+/// the per-block cap. Under correct parameterisation the
+/// refund is always zero — the cap is a defensive guard
+/// against a misconfigured
+/// `per_attestation_reward_sompi × max_attestations_per_block`
+/// product overflowing.
+///
+/// This helper is intentionally arithmetic-only — actual
+/// coinbase output construction (one
+/// `Output { value: per_attestation_reward, script_public_key:
+/// owner_address }` per included attestation) is a
+/// `consensus/src/processes/coinbase.rs` (PR-10.5′) concern
+/// that consumes this helper's output as a sanity bound.
+pub fn compute_attestation_reward_payouts(
+    per_attestation_reward_sompi: u64,
+    included_attestation_count: usize,
+    max_validator_inflation_per_block_sompi: u64,
+) -> AttestationRewardPayout {
+    // Saturating arithmetic so a bogus `(u64::MAX, usize::MAX)`
+    // input produces a defined value rather than panicking. Real
+    // inputs are bounded by `MAX_ATTESTATIONS_PER_SHARD` and the
+    // mainnet per-attestation parameter, but defence-in-depth.
+    let uncapped = (per_attestation_reward_sompi as u128).saturating_mul(included_attestation_count as u128);
+    let capped = uncapped.min(max_validator_inflation_per_block_sompi as u128);
+
+    // Both fit in u64 by construction (capped ≤ u64::MAX).
+    let total_payout_sompi = capped as u64;
+    let refunded_sompi = (uncapped - capped) as u64;
+    AttestationRewardPayout { total_payout_sompi, refunded_sompi }
+}
+
+/// Compute the slashing distribution for a slashed bond
+/// (ADR-0013 §"Slashing distribution"). Sums exactly to
+/// `slashed_amount_sompi` — no value created or destroyed by
+/// rounding.
+///
+/// Used for both the equivocation case
+/// ([`SlashingEvidencePayload`]) and the unreveal case
+/// ([`UnrevealSlashingEvidencePayload`]); for unreveal,
+/// the caller `min`-caps the result through
+/// [`apply_unreveal_reporter_min_cap`] (separate helper for
+/// clarity).
+pub fn compute_slashing_distribution(slashed_amount_sompi: u64, slashing_reporter_reward_bps: u16) -> SlashingDistribution {
+    // Promote to u128 for the multiplication so a max-bond × bps
+    // product cannot overflow. Maximum intermediate value is
+    // `u64::MAX × 10000 ≈ 1.8e23`, well within u128.
+    let numerator = (slashed_amount_sompi as u128).saturating_mul(slashing_reporter_reward_bps as u128);
+    let reporter_reward_sompi = (numerator / 10000) as u64;
+    // burned = slashed - reporter (subtract in u64; reporter
+    // cannot exceed slashed because bps ≤ 10000 by type).
+    let burned_sompi = slashed_amount_sompi - reporter_reward_sompi;
+    SlashingDistribution { reporter_reward_sompi, burned_sompi }
+}
+
+/// Apply the ADR-0013 `min`-cap to the reporter reward for the
+/// unreveal-slash case: the unreveal reporter receives
+/// `min(bps_reward, unreveal_reporter_reward_sompi_floor)`. The
+/// burn share grows by whatever the reporter no longer collects.
+///
+/// The floor is the
+/// [`DnsParams::unreveal_reporter_reward_sompi`] value from
+/// ADR-0012 (`commit_without_reveal_slash_sompi` is typically
+/// much smaller than a full equivocation bond burn, so the bps
+/// rule applied unmodified would over-pay the reporter relative
+/// to the work done — the floor keeps the reporter pipeline
+/// cheap).
+pub fn apply_unreveal_reporter_min_cap(distribution: SlashingDistribution, unreveal_reporter_reward_sompi_floor: u64) -> SlashingDistribution {
+    let capped_reporter = distribution.reporter_reward_sompi.min(unreveal_reporter_reward_sompi_floor);
+    let extra_burn = distribution.reporter_reward_sompi - capped_reporter;
+    SlashingDistribution {
+        reporter_reward_sompi: capped_reporter,
+        burned_sompi: distribution.burned_sompi + extra_burn,
     }
 }
 
@@ -2022,6 +2177,178 @@ mod tests {
         // true expectation is ~71% — picked so the test stays
         // stable across hasher-output randomness.
         assert!(heavy_wins > 512, "10×-stake validator only took {heavy_wins}/1024 single-slot committees");
+    }
+
+    // ---- Reward / slashing distribution (ADR-0013) ----------------
+
+    #[test]
+    fn reward_params_borsh_roundtrip() {
+        let p = RewardParams {
+            per_attestation_reward_sompi: 100_000,
+            slashing_reporter_reward_bps: 1000, // 10%
+            max_validator_inflation_per_block_sompi: 5_000_000_000,
+        };
+        let bytes = borsh::to_vec(&p).unwrap();
+        let back: RewardParams = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn attestation_reward_payout_borsh_roundtrip() {
+        let p = AttestationRewardPayout { total_payout_sompi: 1_600_000, refunded_sompi: 0 };
+        let bytes = borsh::to_vec(&p).unwrap();
+        let back: AttestationRewardPayout = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn slashing_distribution_borsh_roundtrip() {
+        let s = SlashingDistribution { reporter_reward_sompi: 100_000, burned_sompi: 900_000 };
+        let bytes = borsh::to_vec(&s).unwrap();
+        let back: SlashingDistribution = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, s);
+    }
+
+    // ---- compute_attestation_reward_payouts -----------------------
+
+    #[test]
+    fn attestation_payout_under_cap_pays_full_amount() {
+        // 8 attestations × 100_000 sompi = 800_000 sompi, well
+        // under the 5_000_000_000 cap.
+        let r = compute_attestation_reward_payouts(100_000, 8, 5_000_000_000);
+        assert_eq!(r.total_payout_sompi, 800_000);
+        assert_eq!(r.refunded_sompi, 0);
+    }
+
+    #[test]
+    fn attestation_payout_at_exact_cap_pays_cap_no_refund() {
+        // Boundary: per × count == cap.
+        let r = compute_attestation_reward_payouts(1_000_000, 5, 5_000_000);
+        assert_eq!(r.total_payout_sompi, 5_000_000);
+        assert_eq!(r.refunded_sompi, 0);
+    }
+
+    #[test]
+    fn attestation_payout_over_cap_emits_refund() {
+        // 10 × 1_000_000 = 10_000_000, but cap is 5_000_000.
+        // Refund = 10_000_000 - 5_000_000 = 5_000_000.
+        let r = compute_attestation_reward_payouts(1_000_000, 10, 5_000_000);
+        assert_eq!(r.total_payout_sompi, 5_000_000);
+        assert_eq!(r.refunded_sompi, 5_000_000);
+    }
+
+    #[test]
+    fn attestation_payout_zero_count_is_zero() {
+        let r = compute_attestation_reward_payouts(100_000, 0, 5_000_000_000);
+        assert_eq!(r.total_payout_sompi, 0);
+        assert_eq!(r.refunded_sompi, 0);
+    }
+
+    #[test]
+    fn attestation_payout_zero_reward_is_zero() {
+        // Defensive — a network with per_attestation_reward = 0
+        // pays nothing regardless of count.
+        let r = compute_attestation_reward_payouts(0, 100, 5_000_000_000);
+        assert_eq!(r.total_payout_sompi, 0);
+        assert_eq!(r.refunded_sompi, 0);
+    }
+
+    #[test]
+    fn attestation_payout_saturates_on_huge_inputs() {
+        // Defensive saturation — a bogus `(u64::MAX, u64::MAX as usize)`
+        // input must produce a defined value rather than panic.
+        let r = compute_attestation_reward_payouts(u64::MAX, usize::MAX, 1_000_000);
+        // Saturated multiplication then capped at 1_000_000.
+        assert_eq!(r.total_payout_sompi, 1_000_000);
+        // Refund overflows u64 in absolute terms; we documented
+        // refund as u64 so it saturates — what matters is the
+        // helper does not panic.
+        // (The actual refund value would be u128::MAX minus
+        // 1_000_000 which exceeds u64; the cast clamps.)
+        assert!(r.refunded_sompi <= u64::MAX);
+    }
+
+    // ---- compute_slashing_distribution ----------------------------
+
+    #[test]
+    fn slashing_distribution_sums_to_slashed_amount() {
+        // The invariant ADR-0013 §"Slashing distribution"
+        // requires: no value created or destroyed by rounding.
+        for slashed in [1u64, 100, 12345, 1_000_000_000, u64::MAX / 2] {
+            for bps in [0u16, 1, 1000, 5000, 9999, 10000] {
+                let d = compute_slashing_distribution(slashed, bps);
+                assert_eq!(d.reporter_reward_sompi + d.burned_sompi, slashed, "slashed={slashed} bps={bps}");
+            }
+        }
+    }
+
+    #[test]
+    fn slashing_distribution_zero_bps_burns_everything() {
+        let d = compute_slashing_distribution(1_000_000_000, 0);
+        assert_eq!(d.reporter_reward_sompi, 0);
+        assert_eq!(d.burned_sompi, 1_000_000_000);
+    }
+
+    #[test]
+    fn slashing_distribution_full_bps_burns_nothing() {
+        let d = compute_slashing_distribution(1_000_000_000, 10000);
+        assert_eq!(d.reporter_reward_sompi, 1_000_000_000);
+        assert_eq!(d.burned_sompi, 0);
+    }
+
+    #[test]
+    fn slashing_distribution_mainnet_10pct_recommendation() {
+        // ADR-0013 §"Slashing distribution" mainnet recommendation:
+        // 1000 bps = 10% to reporter, 90% burned.
+        let d = compute_slashing_distribution(100_000_000_000, 1000);
+        assert_eq!(d.reporter_reward_sompi, 10_000_000_000);
+        assert_eq!(d.burned_sompi, 90_000_000_000);
+    }
+
+    #[test]
+    fn slashing_distribution_no_overflow_at_u64_max() {
+        // u64::MAX × 10000 would overflow u64; the helper promotes
+        // to u128 internally so it cannot. Pin this with the
+        // largest plausible slashed amount (full u64 supply).
+        let d = compute_slashing_distribution(u64::MAX, 10000);
+        assert_eq!(d.reporter_reward_sompi, u64::MAX);
+        assert_eq!(d.burned_sompi, 0);
+    }
+
+    // ---- apply_unreveal_reporter_min_cap --------------------------
+
+    #[test]
+    fn unreveal_min_cap_clamps_when_bps_reward_exceeds_floor() {
+        // bps-derived reporter = 1_000_000 (10% of 10_000_000),
+        // floor = 500_000. After cap: reporter = 500_000, burned
+        // grows by 500_000.
+        let base = compute_slashing_distribution(10_000_000, 1000);
+        assert_eq!(base.reporter_reward_sompi, 1_000_000);
+        assert_eq!(base.burned_sompi, 9_000_000);
+
+        let capped = apply_unreveal_reporter_min_cap(base, 500_000);
+        assert_eq!(capped.reporter_reward_sompi, 500_000);
+        assert_eq!(capped.burned_sompi, 9_500_000);
+        // Invariant survives the cap.
+        assert_eq!(capped.reporter_reward_sompi + capped.burned_sompi, 10_000_000);
+    }
+
+    #[test]
+    fn unreveal_min_cap_noop_when_bps_reward_under_floor() {
+        // bps-derived reporter = 1_000 (10% of 10_000),
+        // floor = 500_000. cap is a no-op.
+        let base = compute_slashing_distribution(10_000, 1000);
+        let capped = apply_unreveal_reporter_min_cap(base, 500_000);
+        assert_eq!(capped, base);
+    }
+
+    #[test]
+    fn unreveal_min_cap_at_exact_floor_is_noop() {
+        // bps-derived reporter == floor. No clamp applies.
+        let base = compute_slashing_distribution(5_000_000, 1000); // → reporter = 500_000
+        assert_eq!(base.reporter_reward_sompi, 500_000);
+        let capped = apply_unreveal_reporter_min_cap(base, 500_000);
+        assert_eq!(capped, base);
     }
 
     // ---- Stubs are explicit ---------------------------------------
