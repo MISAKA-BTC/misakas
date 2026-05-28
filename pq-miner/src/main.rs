@@ -13,7 +13,9 @@
 
 use clap::Parser;
 use kaspa_addresses::{Address, Prefix, Version};
+use kaspa_bip32::{Language, Mnemonic};
 use kaspa_consensus_core::header::Header;
+use kaspa_wallet_keys::kaspa_pq::derive_keypair;
 use kaspa_grpc_client::GrpcClient;
 use kaspa_notify::subscription::context::SubscriptionContext;
 use kaspa_rpc_core::{api::rpc::RpcApi, notify::mode::NotificationMode};
@@ -31,6 +33,12 @@ struct Args {
     /// Stop after mining this many blocks (0 = run forever).
     #[arg(long, default_value_t = 0)]
     blocks: u64,
+    /// Mine the coinbase to the kaspa-pq ML-DSA-65 address derived from this BIP39
+    /// mnemonic (path m/0/0/0 under `--network-id`). Lets a kaspa-pq wallet that
+    /// imports the same mnemonic see the mined funds. If unset, an unspendable
+    /// PubKey placeholder is used.
+    #[arg(long)]
+    pay_mnemonic: Option<String>,
 }
 
 #[tokio::main]
@@ -44,9 +52,21 @@ async fn main() {
         s if s.starts_with("testnet") => Prefix::Testnet,
         _ => Prefix::Devnet,
     };
-    // Coinbase pay address (any valid address for the network; the value is
-    // irrelevant to a PoW smoke). Uses the upstream PubKey version + zero payload.
-    let pay_address = Address::new(prefix, Version::PubKey, &[0u8; 32]);
+    // Coinbase pay address. With `--pay-mnemonic`, derive the kaspa-pq ML-DSA-65
+    // P2PKH address (matching the wallet's `KaspaPqKeyPair.fromMnemonic` path) so a
+    // wallet importing the same mnemonic can spend the mined coins. Otherwise use an
+    // unspendable PubKey placeholder (PoW-smoke only).
+    let pay_address = match &args.pay_mnemonic {
+        Some(phrase) => {
+            let mnemonic = Mnemonic::new(phrase.trim(), Language::English).expect("invalid BIP39 mnemonic");
+            let seed = mnemonic.to_seed("");
+            let kp = derive_keypair(&args.network_id, 0, 0, 0, seed.as_bytes());
+            let addr = kp.address(prefix);
+            log::info!("mining coinbase to ML-DSA-65 address: {addr}");
+            addr
+        }
+        None => Address::new(prefix, Version::PubKey, &[0u8; 32]),
+    };
     let network_id = args.network_id.clone().into_bytes();
 
     let ctx = SubscriptionContext::new();
