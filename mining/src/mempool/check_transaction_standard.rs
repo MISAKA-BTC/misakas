@@ -15,23 +15,16 @@ use kaspa_txscript::{get_sig_op_count_upper_bound, is_unspendable, script_class:
 const MAX_STANDARD_P2SH_SIG_OPS: u8 = 15;
 
 /// MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE is the maximum size allowed for a
-/// transaction input signature script to be considered standard. This
-/// value allows for a 15-of-15 CHECKMULTISIG pay-to-script-hash with
-/// compressed keys.
+/// transaction input signature script to be considered standard.
 ///
-/// The form of the overall script is: OP_0 <15 signatures> OP_PUSHDATA2
-/// <2 bytes len> [OP_15 <15 pubkeys> OP_15 OP_CHECKMULTISIG]
-///
-/// For the p2sh script portion, each of the 15 compressed pubkeys are
-/// 33 bytes (plus one for the OP_DATA_33 opcode), and the thus it totals
-/// to (15*34)+3 = 513 bytes. Next, each of the 15 signatures is a max
-/// of 73 bytes (plus one for the OP_DATA_73 opcode). Also, there is one
-/// extra byte for the initial extra OP_0 push and 3 bytes for the
-/// OP_PUSHDATA2 needed to specify the 513 bytes for the script push.
-/// That brings the total to 1+(15*74)+3+513 = 1627. This value also
-/// adds a few extra bytes to provide a little buffer.
-/// (1 + 15*74 + 3) + (15*34 + 3) + 23 = 1650
-const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 1650;
+/// kaspa-pq: raised from the upstream Kaspa value of 1650 (which sized for a
+/// 15-of-15 Schnorr CHECKMULTISIG: `(1 + 15*74 + 3) + (15*34 + 3) + 23 = 1650`).
+/// A kaspa-pq ML-DSA-65 P2PKH unlock script is
+///   OP_PUSHDATA2 <sig 3309B || sighash-type 1B> + OP_PUSHDATA2 <pubkey 1952B>
+///   = 3 + 3310 + 3 + 1952 = 5268 bytes,
+/// which far exceeds 1650. 8192 fits a single ML-DSA-65 P2PKH spend with headroom
+/// while remaining well under the consensus script-size cap MAX_SCRIPTS_SIZE (10000).
+const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 8192;
 
 /// MAXIMUM_STANDARD_TRANSACTION_MASS is the maximum mass allowed for transactions that
 /// are considered standard and will therefore be relayed and considered for mining.
