@@ -6,7 +6,10 @@ use kaspa_consensus_core::hashing::wasm::SighashType;
 use kaspa_consensus_core::sign::sign_input;
 use kaspa_consensus_core::tx::PopulatedTransaction;
 use kaspa_consensus_core::{hashing::sighash_type::SIG_HASH_ALL, sign::verify};
+use kaspa_consensus_core::hashing::sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash};
 use kaspa_hashes::Hash;
+use kaspa_txscript::script_builder::ScriptBuilder;
+use kaspa_wallet_keys::kaspa_pq_wasm::KaspaPqKeyPair;
 use kaspa_wallet_keys::privatekey::PrivateKey;
 use kaspa_wasm_core::types::HexString;
 use serde_wasm_bindgen::from_value;
@@ -48,6 +51,63 @@ pub fn js_sign_transaction(tx: &Transaction, signer: &PrivateKeyArrayT, verify_s
     } else {
         Err(Error::custom("signTransaction() requires an array of signatures"))
     }
+}
+
+/// `signTransactionMlDsa65()` signs every input of `tx` with a kaspa-pq
+/// ML-DSA-65 keypair, producing the canonical P2PKH unlock script
+/// `<signature || sighash_type> <public_key>` for each input. The signed
+/// message is `calc_schnorr_signature_hash(.., SIG_HASH_ALL, ..)` — the exact
+/// digest the `OpCheckSigMlDsa65` consensus opcode recomputes and verifies
+/// under `MLDSA65_TX_CONTEXT`.
+///
+/// `randomness` must be 32 bytes (e.g. `crypto.getRandomValues`). Per-input
+/// randomness is derived from it so distinct inputs use distinct hedging
+/// randomness.
+///
+/// Assumes the transaction's inputs are fully UTXO-populated and that every
+/// input is locked to this keypair's address (a single-key wallet).
+/// @category Wallet SDK
+#[wasm_bindgen(js_name = "signTransactionMlDsa65")]
+pub fn js_sign_transaction_mldsa65(tx: &Transaction, keypair: &KaspaPqKeyPair, randomness: Vec<u8>) -> Result<Transaction> {
+    if randomness.len() != 32 {
+        return Err(Error::custom("signTransactionMlDsa65() requires 32 bytes of randomness"));
+    }
+    let public_key = keypair.public_key().to_bytes();
+
+    let reused_values = SigHashReusedValuesUnsync::new();
+    let input_len = tx.inner().inputs.len();
+    let (cctx, utxos) = tx.tx_and_utxos()?;
+    let populated_transaction = PopulatedTransaction::new(&cctx, utxos);
+    for i in 0..input_len {
+        let sig_hash = calc_schnorr_signature_hash(&populated_transaction, i, SIG_HASH_ALL, &reused_values);
+
+        // Derive per-input hedging randomness without an extra hashing dep: ML-DSA
+        // is not nonce-sensitive across distinct messages, but varying it is tidy.
+        let mut input_randomness = [0u8; 32];
+        input_randomness.copy_from_slice(&randomness);
+        let ib = (i as u64).to_le_bytes();
+        for k in 0..8 {
+            input_randomness[k] ^= ib[k];
+        }
+
+        let signature = keypair
+            .sign(sig_hash.as_bytes().to_vec(), input_randomness.to_vec())
+            .map_err(|e| Error::Custom(format!("ML-DSA-65 sign failed: {e:?}")))?;
+
+        // OpCheckSigMlDsa65 pops [sig, key] and strips the trailing sighash-type
+        // byte off the signature, mirroring schnorr OP_CHECKSIG.
+        let mut sig_data = signature.to_bytes();
+        sig_data.push(SIG_HASH_ALL.to_u8());
+
+        let script = ScriptBuilder::new()
+            .add_data(&sig_data)
+            .map_err(|e| Error::Custom(format!("signature push: {e:?}")))?
+            .add_data(&public_key)
+            .map_err(|e| Error::Custom(format!("public key push: {e:?}")))?
+            .drain();
+        tx.set_signature_script(i, script)?;
+    }
+    Ok(tx.clone())
 }
 
 fn sign_transaction<'a>(tx: &'a Transaction, private_keys: &[[u8; 32]], verify_sig: bool) -> Result<&'a Transaction> {
