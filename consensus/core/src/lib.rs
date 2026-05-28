@@ -13,6 +13,88 @@ use std::hash::{BuildHasher, Hasher};
 
 pub use kaspa_hashes::Hash;
 
+// ---------------------------------------------------------------------
+// kaspa-pq Phase 9 (PR-9.5b): consensus-identity semantic aliases.
+//
+// The Hash → Hash64 cascade (ADR-0008 / docs/hash64-migration-inventory.md)
+// stages width changes per identity. This module introduces NAMES for
+// each identity, all pointing at the upstream 32-byte `Hash` /
+// `kaspa_hashes::Hash32` today. PR-9.5c onward flips individual
+// aliases to `kaspa_hashes::Hash64` one identity at a time:
+//
+//   PR-9.5c    TransactionId, TransactionHash, MerkleHash, MerkleRoot,
+//              AcceptedIdMerkleRoot                       → Hash64
+//   PR-9.5d    BlockHash, UtxoCommitment, PruningPoint    → Hash64
+//   PR-9.5e    BlockHash users (stores, GHOSTDAG, ...)    → BlockHash64
+//
+// `LegacyHash32` is the **stable** 32-byte name — it is the alias
+// that NEVER widens. Use it in source that wants to be explicit
+// about staying 32 B (RNG seeds, debug fingerprints, cache keys
+// that are not on the consensus surface). The `algo_id = 1`
+// kHeavyHash L1 inner-loop seed (PR-8.5 / PR-9.3 §"l1_seed32") is
+// the canonical example.
+//
+// Adding aliases here is **purely additive**: no existing call
+// site changes, no type-system pressure, no breaking semantics.
+// The actual width flips happen in PR-9.5c onward when individual
+// alias bodies switch from `kaspa_hashes::Hash32` to
+// `kaspa_hashes::Hash64`.
+// ---------------------------------------------------------------------
+
+/// Stable 32-byte hash alias for surface that **does not** widen to
+/// `Hash64` under ADR-0008. Use this for RNG seeds, debug
+/// fingerprints, and cache keys that are not part of the consensus
+/// identity surface. The `algo_id = 1` kHeavyHash L1 seed
+/// (`l1_seed32`, PR-9.3) is the canonical caller.
+pub type LegacyHash32 = kaspa_hashes::Hash32;
+
+/// Block identity — the header hash returned by `Block::hash()` and
+/// stored in `Header::hash`. Widens to `Hash64` in PR-9.5d
+/// (cascade-blocked behind PR-9.5c so the Header construction-site
+/// audit happens after the transaction-identity work has shaken
+/// out).
+pub type BlockHash = kaspa_hashes::Hash32;
+
+/// Transaction id — the `TransactionId` returned by the upstream
+/// `TransactionHasher` flow (txid). Widens to `Hash64` in PR-9.5c
+/// (the first identity to flip — drives mempool, utxo, wallet
+/// storage cascades).
+pub type TransactionId = kaspa_hashes::Hash32;
+
+/// Full-content transaction hash — distinct from [`TransactionId`]
+/// (which omits witness data per upstream Kaspa convention). Widens
+/// to `Hash64` in PR-9.5c.
+pub type TransactionHash = kaspa_hashes::Hash32;
+
+/// Generic merkle-tree node hash (intermediate `BLAKE2b-512` /
+/// `BLAKE2b-256` digest along a merkle path). Widens to `Hash64`
+/// in PR-9.5c.
+pub type MerkleHash = kaspa_hashes::Hash32;
+
+/// Merkle root over a block's transaction id list
+/// (`Header::hash_merkle_root`). Widens to `Hash64` in PR-9.5c.
+pub type MerkleRoot = kaspa_hashes::Hash32;
+
+/// Merkle root over a block's accepted-transaction-id list
+/// (`Header::accepted_id_merkle_root`). Widens to `Hash64` in
+/// PR-9.5c.
+pub type AcceptedIdMerkleRoot = kaspa_hashes::Hash32;
+
+/// UTXO accumulator commitment stored in `Header::utxo_commitment`.
+/// Widens to `Hash64` in PR-9.5d (it is part of the Header
+/// hashing surface, so it flips together with the rest of the
+/// Header per the inventory's review-batching rule).
+///
+/// Note: the **64-byte production** UTXO commitment type
+/// [`utxo_commitment::UtxoCommitment64`] already exists from PR-7.6
+/// for the RPC surface; this alias is the **header field** width
+/// (still 32 B today), which flips when PR-9.5d lands.
+pub type UtxoCommitment = kaspa_hashes::Hash32;
+
+/// Pruning-point block hash (`Header::pruning_point`). Widens to
+/// `Hash64` in PR-9.5d alongside the rest of `Header`.
+pub type PruningPoint = kaspa_hashes::Hash32;
+
 pub mod acceptance_data;
 pub mod api;
 pub mod block;
