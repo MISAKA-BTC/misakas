@@ -1,4 +1,4 @@
-# kaspa-pq Specification (v0.7, draft)
+# kaspa-pq Specification (v0.8, draft)
 
 Status: Draft. Frozen values listed here are the contract every phase must
 respect. Any change must go through an ADR update under `docs/adr/`.
@@ -32,9 +32,25 @@ miners, validator rewards land at the **owner** address per
 ADR-0011 key separation), inflation cap with a defensive refund,
 and the binding `reporter / burned` split for both equivocation
 and unreveal slashing (mainnet recommendation 1000 bps = 10% to
-reporter, remainder burned). Earlier Phase 1 non-goals that
-contradicted any of these ADRs have been removed; see the
-revision history below.
+reporter, remainder burned). ADR-0014 (Coordinated-Failover
+Protocol) resolves the ADR-0011 "one key, one host" future-ADR
+pointer with a node-local, signature-bound `TakeoverToken` that
+explicitly transfers signing authority from a primary host to a
+standby at a specific future epoch; the protocol is
+honest-operator-oriented, with the consensus-side
+`SlashingEvidencePayload` remaining the malicious-operator
+safety net. ADR-0015 (Remote-Signer / HSM Protocol) resolves
+the ADR-0010 "key management on a hot node" Negative by
+specifying a Unix-domain-socket protocol (length-prefixed Borsh)
+between a validator client and a separate `kaspa-pq-signer`
+process; covers every ML-DSA-65 use site uniformly (transaction,
+attestation, takeover-token); supports three policy modes
+(`Permissive` / `AuditOnly` / `Strict`), with `Strict`
+relocating the equivocation guard from the validator client to
+the signer; HSM backends pluggable behind an internal
+`SignerBackend` trait; tamper-evident BLAKE2b-512-chained audit
+log. Earlier Phase 1 non-goals that contradicted any of these
+ADRs have been removed; see the revision history below.
 
 ## 0. Scope and non-goals
 
@@ -292,7 +308,7 @@ This is by design: the address format, accumulator, and signature scheme
 are all different. A separate one-shot migration tool is out of scope
 for the PoC.
 
-## 10. Phase plan (revised: 13-phase ordering, Phase 13 in progress)
+## 10. Phase plan (revised: 13-phase ordering)
 
 ADR-0007 (Layered PoW), ADR-0008 (Hash64 consensus identity),
 ADR-0009 (DNS overlay), ADR-0010 (Validator node architecture),
@@ -316,7 +332,7 @@ last commit to this branch:
 | 10 | DNS Probabilistic Finality Overlay (PR-10.1 ADR + PR-10.2 spec + PR-10.3 type stubs landed; PR-10.4 – PR-10.14 deferred) | 🚧 design-freeze only |
 | 11 | Validator node architecture (PR-11.1 ADR + PR-11.2 types + PR-11.3 spec landed; implementation merged into the Phase 10 PR-10.4 – PR-10.14 slots) | ✅ design-freeze landed |
 | 12 | Validator single-host deployment + equivocation-safety (PR-12.1 ADR + PR-12.2 types + PR-12.3 spec landed; implementation slots PR-10.6′/10.6″/10.6‴/10.13′/10.14′ layer onto the Phase 10 entries) | ✅ design-freeze landed |
-| 13 | Mainnet completeness — sortition / rewards / failover / HSM (PR-13.1–13.3 ADR-0012 sortition + PR-13.4–13.6 ADR-0013 rewards landed; ADR-0014 coordinated failover + ADR-0015 remote-signer/HSM upcoming) | 🚧 2/4 ADRs landed |
+| 13 | Mainnet completeness — sortition / rewards / failover / HSM (PR-13.1–13.3 ADR-0012 sortition + PR-13.4–13.6 ADR-0013 rewards + PR-13.7–13.8 ADR-0014 coordinated failover + PR-13.9–13.10 ADR-0015 remote-signer/HSM + PR-13.11 spec close) | ✅ design-freeze landed |
 
 Phases 11 and 12 are **operational-design** phases: neither
 introduces new consensus surface beyond what ADR-0009 already
@@ -331,21 +347,28 @@ The implementation work for both phases stays inside the Phase 10
 slot range (with the Phase 12 work layering onto the matching
 Phase 10 entries as `'`-suffixed sub-slots).
 
-Phase 13 is the **mainnet-completeness** phase. ADR-0012 (this
-landed slot) is consensus-input — it specifies the per-epoch
-validator-set selection function the DNS overlay consumes. The
-remaining three Phase 13 ADRs in flight:
-- **ADR-0013 (next)** — Validator reward distribution
-  (consensus-input; closes the bond ROI economics);
-- **ADR-0014 (then)** — Coordinated-failover protocol
-  (operational; resolves the ADR-0011 "one key, one host"
-  future-ADR pointer for operators wanting HA);
-- **ADR-0015 (last)** — Remote-signer / HSM protocol
-  (operational; resolves the ADR-0010 hot-key Negative for
-  operators wanting cold-key custody).
-The Phase 13 row will flip to ✅ when all four ADRs (+ their
-type-stub + spec-update PRs) have landed; until then the row
-stays 🚧.
+Phase 13 is the **mainnet-completeness** phase, design-frozen
+across four ADRs:
+- **ADR-0012** — Mainnet validator sortition via on-chain
+  commit-reveal (consensus-input; pins per-epoch validator-set
+  selection);
+- **ADR-0013** — Validator reward distribution (consensus-
+  input; pins the per-attestation reward, the slashing
+  distribution, and the bond ROI economics);
+- **ADR-0014** — Coordinated-failover protocol (operational;
+  resolves the ADR-0011 "one key, one host" future-ADR pointer);
+- **ADR-0015** — Remote-signer / HSM protocol (operational;
+  resolves the ADR-0010 hot-key Negative).
+
+Implementation slots remain deferred — they layer onto the
+existing Phase 10 PR-10.4 – PR-10.14 entries with `'` suffixes
+(plus four `′′…` sub-slots for the Phase 13 operational
+additions). The on-chain consensus rules (sortition + rewards)
+ship in PR-10.9 and PR-10.5′/PR-10.12′; the operational
+binaries (sidecar, signer, failover CLI) ship in PR-10.6′
+through PR-10.6′′′′a; the simnet acceptance run that exercises
+the full Phase 13 surface end-to-end is PR-10.14′ /
+PR-10.14′′.
 
 Refined Phase 10 PR plan (per ADR-0010 §"Phase 10 PR plan" with
 Phase 12 sub-slot refinements from ADR-0011 §"Phase 12 PR plan"):
@@ -366,7 +389,12 @@ Phase 12 sub-slot refinements from ADR-0011 §"Phase 12 PR plan"):
 | 13.3 | Spec update (ADR-0012 + Phase 13 row 1/4 + Phase 13 acceptance criteria 1/4 + v0.6) | ✅ landed |
 | 13.4 | ADR-0013 (validator reward distribution) | ✅ landed |
 | 13.5 | `dns_finality.rs` `RewardParams` + `compute_attestation_reward_payouts` + `compute_slashing_distribution` + `apply_unreveal_reporter_min_cap` helpers + tests | ✅ landed |
-| 13.6 | Spec update (ADR-0013 + Phase 13 row 2/4 + Phase 13 acceptance criteria 2/4 + v0.7) | ✅ landed (this PR) |
+| 13.6 | Spec update (ADR-0013 + Phase 13 row 2/4 + Phase 13 acceptance criteria 2/4 + v0.7) | ✅ landed |
+| 13.7 | ADR-0014 (coordinated-failover protocol) | ✅ landed |
+| 13.8 | `dns_finality.rs` `HostId` alias + `TakeoverToken` + `takeover_token_message` helper + `ValidatorStatus::AwaitingTakeoverToken` extension + tests | ✅ landed |
+| 13.9 | ADR-0015 (remote-signer / HSM protocol) | ✅ landed |
+| 13.10 | `dns_finality.rs` `SIGNER_PROTOCOL_VERSION` + capability bitflags + `SigningPurpose` / `SignerPolicy` / `SignerError` / `SignerMetadata` enums + `SignerHello{,Ack}` / `SignerRequest` / `SignerResponse` / `SignerAuditRecord` / `SignerOutcome` + `compute_signer_audit_chain_entry` helper + tests | ✅ landed |
+| 13.11 | Spec update (ADR-0014 + ADR-0015 + Phase 13 row 4/4 + Phase 13 acceptance criteria 3/4 + 4/4 + v0.8 — closes Phase 13 design-freeze) | ✅ landed (this PR) |
 | 10.4 | Stake transaction kinds (`subnetwork_id` route) + tx validation | ⏳ deferred |
 | 10.5 | `stake_registry` / `stake_score` consensus processes + stores | ⏳ deferred |
 | 10.5′ | Coinbase fan-out for validator attestation rewards in `consensus/src/processes/coinbase.rs`; consumes `RewardParams::per_attestation_reward_sompi` (ADR-0013) | ⏳ deferred |
@@ -385,6 +413,12 @@ Phase 12 sub-slot refinements from ADR-0011 §"Phase 12 PR plan"):
 | 10.13′ | `kaspa-pq-cli validator keygen --out` + `kaspa-pq-cli validator status` (9-variant enum) (ADR-0011) | ⏳ deferred |
 | 10.14 | `DnsConfirmation` RPC type + wRPC/WASM bindings + 8-step runbook smoke test on simnet | ⏳ deferred |
 | 10.14′ | `getValidatorStatus` RPC + sidecar-mode smoke test on simnet (ADR-0011) | ⏳ deferred |
+| 10.6‴′ | `kaspa-pq-cli validator host-id init` + `handoff` + `accept-takeover` + `emergency-takeover --acknowledge-slashing-risk` CLI commands; local `takeover-tokens/` DB layout (ADR-0014) | ⏳ deferred |
+| 10.6′′′′ | `kaspa-pq-signer` binary, default `SoftwareKey` backend, `--policy {permissive,auditonly,strict}` flag (ADR-0015) | ⏳ deferred |
+| 10.6′′′′a | `--signer-socket <path>` flag on `kaspa-pq-validator`; SIGNER_PROTOCOL_VERSION handshake; sign-request fan-out (ADR-0015) | ⏳ deferred |
+| 10.12′′ | Strict-mode signer-side equivocation guard via `check_signed_epoch_record` integration in `kaspa-pq-signer` (ADR-0015) | ⏳ deferred |
+| 10.12′′a | `Pkcs11Adapter` build feature for the signer (per-vendor configuration documented per-deployment) (ADR-0015) | ⏳ deferred |
+| 10.14′′ | TakeoverToken-driven two-host failover smoke test on simnet (planned + emergency paths) (ADR-0014) | ⏳ deferred |
 
 All deferred slots are gated on the Phase 1–9 baseline being live
 and stable; the overlay does **not** engage at network launch (see
@@ -505,9 +539,47 @@ mandatory acceptance criteria for each phase:
   share to the
   `DnsParams::unreveal_reporter_reward_sompi` floor for the
   unreveal-slash case, with the surplus diverted to the burn
-  sink (invariant survives the clamp). (Phase 13 acceptance
-  for ADR-0014 / -0015 will be added with their respective
-  spec updates.)
+  sink (invariant survives the clamp).
+- **Phase 13 (3/4 — coordinated failover, ADR-0014)** a
+  TakeoverToken signed by the validator key successfully
+  transfers signing authority between two same-host validator
+  hosts at the planned `valid_from_epoch` without any chain-
+  level equivocation; an attempted handoff where the yielding
+  host has already signed `valid_from_epoch` is rejected at
+  the local `yielded-at` sentinel before token emission; the
+  receiving host refuses a replayed token (different
+  `taking_over_host_id`) at handshake step 3.b; the
+  takeover-token signing context
+  (`b"kaspa-pq-v1/takeover/mldsa65"`) is pairwise distinct
+  from the transaction and attestation contexts (unit-tested
+  in `consensus/core/src/dns_finality.rs`); the
+  `compute_host_id` helper is anti-spoofing — a rebuilt
+  host with a fresh `host_boot_nonce` gets a new `host_id`;
+  the `--acknowledge-slashing-risk` emergency-takeover path
+  exists and is required for any handoff without a token (the
+  flag is a barrier-of-entry, not a consensus override). The
+  PR-10.14′′ simnet smoke test exercises planned + emergency
+  paths end-to-end.
+- **Phase 13 (4/4 — remote-signer / HSM, ADR-0015)** the
+  `SIGNER_PROTOCOL_VERSION` handshake correctly rejects
+  mismatched versions with a single
+  `SignerError::ProtocolVersionMismatch` frame; the six
+  capability bitflags compose under bitwise OR without
+  overlap (unit-tested); `SignerRequest` /
+  `SignerResponse` round-trip through Borsh in both
+  `Result::Ok` and `Result::Err` branches; under
+  `SignerPolicy::Strict`, the signer refuses a second
+  Attestation request for the same `(validator_id, epoch)`
+  with a differing `target_hash | target_daa_score` (the
+  `check_signed_epoch_record` decision matrix from ADR-0011
+  applies at the signer); the BLAKE2b-512-chained
+  `SignerAuditRecord` log detects post-hoc record insertion
+  (a record inserted between r1 and r2 shifts the chain hash
+  at r2 — cryptographic tamper-detection property unit-
+  tested); multiple validator clients pointing at one signer
+  under `Strict` cannot collectively double-sign (no test
+  vector pinned yet — runtime acceptance via PR-10.6′′′′a
+  fan-out test).
 
 ## 12. ADR index
 
@@ -524,6 +596,8 @@ mandatory acceptance criteria for each phase:
 - [ADR-0011 — Validator Single-Host Deployment + Equivocation-Safety](adr/0011-validator-deployment-and-equivocation-safety.md) (Phase 12 — operational supplement to ADR-0010: sidecar shape `kaspa-pq-node` + `kaspa-pq-validator` connected via 127.0.0.1 wRPC as the production-recommended deployment; 9-variant `ValidatorStatus` enum; `SignedEpochRecord` + `check_signed_epoch_record` honest-operator equivocation guard with Allow / AllowRebroadcast / Block outcomes; key-separation policy — validator key on the host, owner key **not** on the host; slashing-scope binding — equivocation slashed, downtime **not**; `--dry-run` validator mode; auto-wait-for-bond-activation startup; reference systemd units; hardware sizing; "one key, one host" invariant)
 - [ADR-0012 — Mainnet Validator Sortition via On-Chain Commit-Reveal](adr/0012-mainnet-validator-sortition-commit-reveal.md) (Phase 13 — closes the ADR-0009 §"Sortition" mainnet TBD pointer: two sortition modes (`Deterministic` for simnet/devnet/testnet-initial; `CommitReveal` for mainnet from genesis); three-phase pipeline (commit at `E−2`, reveal at `E−1`, sortition at `E`); BLAKE2b-512 keyed commitment binding `r || target_epoch || validator_id`; Byzantine-fault-tolerant ≥ 2/3 fallback rule preserving liveness under reveal sabotage; stake-weighted top-K committee selection via `priority_v = first_u128(BLAKE2b-512(SORTITION_PRIORITY_KEY, seed || vid)) / stake`; on-chain slashing for commit-without-reveal via `UnrevealSlashingEvidencePayload`; five new `-v1` domain keys all pairwise distinct; **NOT** an unbiased random oracle — residual bias is O(K · 2⁻¹²⁸) per epoch from selective reveal withholding)
 - [ADR-0013 — Validator Reward Distribution](adr/0013-validator-reward-distribution.md) (Phase 13 — closes the ADR-0009 "reporter reward + burn" loose end and the ADR-0012 equivocation-side unspecified split: per-attestation FLAT reward from a new inflation track separate from the miner subsidy; tx fees stay 100% with PoW miners; rewards land at the bond OWNER address per ADR-0011 cold-key separation; coinbase fan-out emits `N + 1` outputs for a block with `N` included attestations; defensive `max_validator_inflation_per_block_sompi` cap with refund accounting; slashing distribution `reporter = S × bps / 10000`, `burned = S − reporter` (mainnet 1000 bps = 10% to reporter); `apply_unreveal_reporter_min_cap` clamps the unreveal-slash reporter to the `unreveal_reporter_reward_sompi` floor with surplus burned; uniform expected APY per staked sompi regardless of validator size; **NOT** earning from tx fees, **NOT** fixed-forever reward rate, **NOT** guaranteed rewards)
+- [ADR-0014 — Coordinated-Failover Protocol for Validator Hosts](adr/0014-coordinated-failover-protocol.md) (Phase 13 — resolves the ADR-0011 "one key, one host" future-ADR pointer: two-host hot/standby topology with a node-local, signature-bound `TakeoverToken` (ML-DSA-65 by the validator key) transferring signing authority at a specific future `valid_from_epoch`; honest-operator oriented (ADR-0009 SlashingEvidencePayload remains the malicious-operator safety net); `HostId = BLAKE2b-256(HOST_ID_KEY, hostname || host_boot_nonce)`; signing context `b"kaspa-pq-v1/takeover/mldsa65"` distinct from tx and attestation contexts; slashing-acknowledged emergency-takeover path for crashed-primary cases; new `ValidatorStatus::AwaitingTakeoverToken = 9` appended; **NOT** active/active, **NOT** crashed-primary-safe without acknowledgment, **NOT** malicious-secondary-safe)
+- [ADR-0015 — Remote-Signer / HSM Protocol for Validator Signing](adr/0015-remote-signer-hsm-protocol.md) (Phase 13 — resolves the ADR-0010 hot-key Negative: length-prefixed Borsh wire protocol over a Unix domain socket between a validator client and a separate `kaspa-pq-signer` process; covers ALL ML-DSA-65 use sites uniformly (Transaction / Attestation / TakeoverToken); three policy modes (`Permissive` / `AuditOnly` / `Strict`) with `Strict` relocating the equivocation guard from the validator client to the signer; multiple validator clients → one signer under `Strict` cannot collectively double-sign; HSM backends pluggable via internal `SignerBackend` trait (default `SoftwareKey` with Argon2id + ChaCha20-Poly1305 at-rest, opt-in `Pkcs11Adapter` via build feature); BLAKE2b-512-chained `SignerAuditRecord` log with cryptographic tamper-detection via `AUDIT_LOG_CHAIN_KEY = b"kaspa-pq-signer-audit-v1"`; six capability bitflags compose under bitwise OR without overlap; **NOT** network-distributed (v1 same-host only), **NOT** zero-config HSM, **NOT** malicious-client-proof)
 
 ## 13. Revision history
 
@@ -536,3 +610,4 @@ mandatory acceptance criteria for each phase:
 | 0.5 | 2026-05-28 | ADR-0011 incorporated. Added Phase 12 row (operational design, no new consensus surface) to the phase plan; widened the Phase 10 PR sub-table with the `'`-suffixed implementation sub-slots (PR-10.6′ sidecar binary, PR-10.6″ signed-epoch store, PR-10.6‴ `--dry-run`, PR-10.13′ CLI validator commands, PR-10.14′ `getValidatorStatus` RPC + sidecar smoke). Added Phase 12 acceptance criteria (sidecar-shape end-to-end runbook + `check_signed_epoch_record` decision matrix + 100-epoch `--dry-run` sweep emitting zero on-chain attestations) to §11 (test plan). Added ADR-0011 to the ADR index (§12). |
 | 0.6 | 2026-05-28 | ADR-0012 incorporated (Phase 13, 1/4). Added Phase 13 row (🚧 1/4 ADRs landed — mainnet completeness phase covering sortition + rewards + failover + HSM); refined the PR sub-table with PR-13.1 / PR-13.2 / PR-13.3 entries and rewrote the PR-10.9 entry to reference ADR-0012 explicitly (was: "PoC deterministic; mainnet commit-reveal in a follow-up ADR"). Added Phase 13 (1/4) acceptance criteria to §11 (test plan) — sortition determinism, commit-reveal cycle, ≥ 2/3 threshold boundary pin, stake-weighted committee bias-test, commit-without-reveal slashing, fallback-chain bottom-out at `Hash64::ZERO` for `epoch == 0`. Added ADR-0012 to the ADR index (§12) with the explicit "NOT an unbiased random oracle" framing per ADR-0012 §"Public-claim discipline". |
 | 0.7 | 2026-05-28 | ADR-0013 incorporated (Phase 13, 2/4). Phase 13 row flipped to 🚧 2/4. Refined PR sub-table with PR-13.4 / PR-13.5 / PR-13.6 entries and the two `'`-suffixed implementation sub-slots (PR-10.5′ coinbase fan-out, PR-10.12′ slashing distribution). Added Phase 13 (2/4) acceptance criteria to §11 (test plan) — coinbase fan-out emits `N + 1` outputs landing at the owner address (cold key), `compute_attestation_reward_payouts` cap + refund correctness, `compute_slashing_distribution` 30-case invariant matrix (reporter + burned == slashed across 5 amounts × 6 bps including u64::MAX no-overflow), mainnet 1000-bps recommendation pinned, `apply_unreveal_reporter_min_cap` clamp + surplus-to-burn behaviour. Added ADR-0013 to the ADR index (§12) with the explicit "tx fees stay with miners" / "rewards to owner cold key" / "NOT guaranteed" framing. |
+| 0.8 | 2026-05-28 | ADR-0014 + ADR-0015 incorporated (Phase 13, 4/4 — closes the Phase 13 design freeze). Phase 13 row flipped to ✅ design-freeze landed. Refined PR sub-table with PR-13.7 (ADR-0014), PR-13.8 (failover types), PR-13.9 (ADR-0015), PR-13.10 (signer types), PR-13.11 (this PR — spec close), and six new `'`-suffixed implementation sub-slots (PR-10.6‴′ failover CLI, PR-10.6′′′′ signer binary, PR-10.6′′′′a validator handshake, PR-10.12′′ Strict-mode signer-side equivocation guard, PR-10.12′′a Pkcs11Adapter, PR-10.14′′ failover smoke test). Added Phase 13 (3/4 — coordinated failover) and (4/4 — remote-signer / HSM) acceptance criteria to §11 (test plan) — TakeoverToken handoff determinism, replay-rejection, anti-spoofing host_id, slashing-acknowledged emergency path; SIGNER_PROTOCOL_VERSION handshake mismatch handling, capability bitflag composition, SignerRequest/Response Result-arm round-trip, Strict-mode signer-side equivocation guard rejection, BLAKE2b-512-chained audit log tamper-detection. Added ADR-0014 and ADR-0015 to the ADR index (§12), each with the full NOT-claimed framing required by their respective public-claim discipline sections. |
