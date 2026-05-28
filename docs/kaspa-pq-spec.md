@@ -1,4 +1,4 @@
-# kaspa-pq Specification (v0.6, draft)
+# kaspa-pq Specification (v0.7, draft)
 
 Status: Draft. Frozen values listed here are the contract every phase must
 respect. Any change must go through an ADR update under `docs/adr/`.
@@ -24,9 +24,17 @@ closes the ADR-0009 §"Sortition" mainnet TBD pointer with a
 three-phase commit-reveal pipeline (commit at `E−2`, reveal at
 `E−1`, sortition use at `E`), Byzantine-fault-tolerant
 ≥ 2/3 fallback rule, stake-weighted top-K committee selection, and
-on-chain slashing for commit-without-reveal. Earlier Phase 1
-non-goals that contradicted any of these ADRs have been removed;
-see the revision history below.
+on-chain slashing for commit-without-reveal. ADR-0013 (Validator
+Reward Distribution) closes the two reward / slashing loose ends
+inherited from ADR-0009 and ADR-0012: per-attestation flat reward
+funded by a new inflation track (tx fees stay 100% with PoW
+miners, validator rewards land at the **owner** address per
+ADR-0011 key separation), inflation cap with a defensive refund,
+and the binding `reporter / burned` split for both equivocation
+and unreveal slashing (mainnet recommendation 1000 bps = 10% to
+reporter, remainder burned). Earlier Phase 1 non-goals that
+contradicted any of these ADRs have been removed; see the
+revision history below.
 
 ## 0. Scope and non-goals
 
@@ -308,7 +316,7 @@ last commit to this branch:
 | 10 | DNS Probabilistic Finality Overlay (PR-10.1 ADR + PR-10.2 spec + PR-10.3 type stubs landed; PR-10.4 – PR-10.14 deferred) | 🚧 design-freeze only |
 | 11 | Validator node architecture (PR-11.1 ADR + PR-11.2 types + PR-11.3 spec landed; implementation merged into the Phase 10 PR-10.4 – PR-10.14 slots) | ✅ design-freeze landed |
 | 12 | Validator single-host deployment + equivocation-safety (PR-12.1 ADR + PR-12.2 types + PR-12.3 spec landed; implementation slots PR-10.6′/10.6″/10.6‴/10.13′/10.14′ layer onto the Phase 10 entries) | ✅ design-freeze landed |
-| 13 | Mainnet completeness — sortition / rewards / failover / HSM (PR-13.1 + PR-13.2 + PR-13.3 ADR-0012 sortition landed; ADR-0013 rewards, ADR-0014 coordinated failover, ADR-0015 remote-signer/HSM upcoming) | 🚧 1/4 ADRs landed |
+| 13 | Mainnet completeness — sortition / rewards / failover / HSM (PR-13.1–13.3 ADR-0012 sortition + PR-13.4–13.6 ADR-0013 rewards landed; ADR-0014 coordinated failover + ADR-0015 remote-signer/HSM upcoming) | 🚧 2/4 ADRs landed |
 
 Phases 11 and 12 are **operational-design** phases: neither
 introduces new consensus surface beyond what ADR-0009 already
@@ -355,9 +363,13 @@ Phase 12 sub-slot refinements from ADR-0011 §"Phase 12 PR plan"):
 | 12.3 | Spec update (ADR-0011 + Phase 12 row + Phase 12 acceptance criteria + v0.5) | ✅ landed |
 | 13.1 | ADR-0012 (mainnet validator sortition via on-chain commit-reveal) | ✅ landed |
 | 13.2 | `dns_finality.rs` `SortitionMode` + commit/reveal/unreveal payloads + `DnsParams` sortition fields + helpers (`compute_commit`, `derive_epoch_seed_*`, `compute_validator_priority`, `select_committee`) | ✅ landed |
-| 13.3 | Spec update (ADR-0012 + Phase 13 row 1/4 + Phase 13 acceptance criteria 1/4 + v0.6) | ✅ landed (this PR) |
+| 13.3 | Spec update (ADR-0012 + Phase 13 row 1/4 + Phase 13 acceptance criteria 1/4 + v0.6) | ✅ landed |
+| 13.4 | ADR-0013 (validator reward distribution) | ✅ landed |
+| 13.5 | `dns_finality.rs` `RewardParams` + `compute_attestation_reward_payouts` + `compute_slashing_distribution` + `apply_unreveal_reporter_min_cap` helpers + tests | ✅ landed |
+| 13.6 | Spec update (ADR-0013 + Phase 13 row 2/4 + Phase 13 acceptance criteria 2/4 + v0.7) | ✅ landed (this PR) |
 | 10.4 | Stake transaction kinds (`subnetwork_id` route) + tx validation | ⏳ deferred |
 | 10.5 | `stake_registry` / `stake_score` consensus processes + stores | ⏳ deferred |
+| 10.5′ | Coinbase fan-out for validator attestation rewards in `consensus/src/processes/coinbase.rs`; consumes `RewardParams::per_attestation_reward_sompi` (ADR-0013) | ⏳ deferred |
 | 10.6 | `validator_service` in-process loop + `--enable-validator` flag | ⏳ deferred |
 | 10.6′ | `kaspa-pq-validator` sidecar binary + 127.0.0.1 wRPC client (ADR-0011) | ⏳ deferred |
 | 10.6″ | `signed_epoch` store + `check_signed_epoch_record` integration (ADR-0011) | ⏳ deferred |
@@ -368,6 +380,7 @@ Phase 12 sub-slot refinements from ADR-0011 §"Phase 12 PR plan"):
 | 10.10 | P2P `StakeAttestation` gossip + flow integration | ⏳ deferred |
 | 10.11 | Miner block-template policy reservation for shards | ⏳ deferred |
 | 10.12 | `slashing.rs` evidence pipeline + bond burn + reporter reward | ⏳ deferred |
+| 10.12′ | Slashing distribution in `consensus/src/processes/slashing.rs` using `compute_slashing_distribution` for both equivocation and unreveal cases; `apply_unreveal_reporter_min_cap` on the unreveal path (ADR-0013) | ⏳ deferred |
 | 10.13 | `wallet/staking.rs` + `kaspa-pq-cli` stake/validator commands | ⏳ deferred |
 | 10.13′ | `kaspa-pq-cli validator keygen --out` + `kaspa-pq-cli validator status` (9-variant enum) (ADR-0011) | ⏳ deferred |
 | 10.14 | `DnsConfirmation` RPC type + wRPC/WASM bindings + 8-step runbook smoke test on simnet | ⏳ deferred |
@@ -473,9 +486,28 @@ mandatory acceptance criteria for each phase:
   is slashed by `commit_without_reveal_slash_sompi` upon
   submission of a valid `UnrevealSlashingEvidencePayload`; the
   fallback-rule chain bottoms out at the all-zero `Hash64` for
-  `target_epoch == 0`. (Phase 13 acceptance for ADR-0013 /
-  -0014 / -0015 will be added with their respective spec
-  updates.)
+  `target_epoch == 0`.
+- **Phase 13 (2/4 — rewards, ADR-0013)** a block with `N`
+  included attestations emits `N + 1` coinbase outputs (1 miner,
+  `N` validator), each validator output landing at the
+  bond owner address (ADR-0011 cold key, not the validator
+  signing key); `compute_attestation_reward_payouts` saturates
+  to the cap (not the raw multiplication) when
+  `per_attestation_reward × count` exceeds
+  `max_validator_inflation_per_block_sompi`, with the refund
+  surfaced and accounted; `compute_slashing_distribution`
+  satisfies the strict `reporter + burned == slashed`
+  invariant across a 30-case matrix (5 slashed amounts × 6
+  bps values, including the 0% / 100% boundaries and the
+  `u64::MAX × 10000` no-overflow case); the mainnet 1000-bps
+  recommendation maps to 10% reporter / 90% burned;
+  `apply_unreveal_reporter_min_cap` clamps the reporter-side
+  share to the
+  `DnsParams::unreveal_reporter_reward_sompi` floor for the
+  unreveal-slash case, with the surplus diverted to the burn
+  sink (invariant survives the clamp). (Phase 13 acceptance
+  for ADR-0014 / -0015 will be added with their respective
+  spec updates.)
 
 ## 12. ADR index
 
@@ -491,6 +523,7 @@ mandatory acceptance criteria for each phase:
 - [ADR-0010 — Validator Node Architecture](adr/0010-validator-node-architecture.md) (Phase 11 — operational supplement to ADR-0009: one binary with three roles via `--enable-mining` / `--enable-validator` flags; subsystem file layout for the Phase 10 implementation PRs; in-process async validator service; on-chain vs P2P gossip split; miner block-template policy reserves mass for attestation shards; 8-step operator runbook; `validator_set_commitment` derivation = BLAKE2b-512 keyed `b"kaspa-pq-validator-set-v1"`)
 - [ADR-0011 — Validator Single-Host Deployment + Equivocation-Safety](adr/0011-validator-deployment-and-equivocation-safety.md) (Phase 12 — operational supplement to ADR-0010: sidecar shape `kaspa-pq-node` + `kaspa-pq-validator` connected via 127.0.0.1 wRPC as the production-recommended deployment; 9-variant `ValidatorStatus` enum; `SignedEpochRecord` + `check_signed_epoch_record` honest-operator equivocation guard with Allow / AllowRebroadcast / Block outcomes; key-separation policy — validator key on the host, owner key **not** on the host; slashing-scope binding — equivocation slashed, downtime **not**; `--dry-run` validator mode; auto-wait-for-bond-activation startup; reference systemd units; hardware sizing; "one key, one host" invariant)
 - [ADR-0012 — Mainnet Validator Sortition via On-Chain Commit-Reveal](adr/0012-mainnet-validator-sortition-commit-reveal.md) (Phase 13 — closes the ADR-0009 §"Sortition" mainnet TBD pointer: two sortition modes (`Deterministic` for simnet/devnet/testnet-initial; `CommitReveal` for mainnet from genesis); three-phase pipeline (commit at `E−2`, reveal at `E−1`, sortition at `E`); BLAKE2b-512 keyed commitment binding `r || target_epoch || validator_id`; Byzantine-fault-tolerant ≥ 2/3 fallback rule preserving liveness under reveal sabotage; stake-weighted top-K committee selection via `priority_v = first_u128(BLAKE2b-512(SORTITION_PRIORITY_KEY, seed || vid)) / stake`; on-chain slashing for commit-without-reveal via `UnrevealSlashingEvidencePayload`; five new `-v1` domain keys all pairwise distinct; **NOT** an unbiased random oracle — residual bias is O(K · 2⁻¹²⁸) per epoch from selective reveal withholding)
+- [ADR-0013 — Validator Reward Distribution](adr/0013-validator-reward-distribution.md) (Phase 13 — closes the ADR-0009 "reporter reward + burn" loose end and the ADR-0012 equivocation-side unspecified split: per-attestation FLAT reward from a new inflation track separate from the miner subsidy; tx fees stay 100% with PoW miners; rewards land at the bond OWNER address per ADR-0011 cold-key separation; coinbase fan-out emits `N + 1` outputs for a block with `N` included attestations; defensive `max_validator_inflation_per_block_sompi` cap with refund accounting; slashing distribution `reporter = S × bps / 10000`, `burned = S − reporter` (mainnet 1000 bps = 10% to reporter); `apply_unreveal_reporter_min_cap` clamps the unreveal-slash reporter to the `unreveal_reporter_reward_sompi` floor with surplus burned; uniform expected APY per staked sompi regardless of validator size; **NOT** earning from tx fees, **NOT** fixed-forever reward rate, **NOT** guaranteed rewards)
 
 ## 13. Revision history
 
@@ -502,3 +535,4 @@ mandatory acceptance criteria for each phase:
 | 0.4 | 2026-05-28 | ADR-0010 incorporated. Added Phase 11 row (operational design, no new consensus surface) to the phase plan, with the refined 14-slot Phase 10 implementation roadmap from ADR-0010 §"Phase 10 PR plan" inlined as a sub-table. Added Phase 11 acceptance criteria (8-step operator runbook + byte-identical `validator_set_commitment` across nodes) to §11 (test plan). Added ADR-0010 to the ADR index (§12). Renumbered §12 → §13 to fix the pre-existing duplicate-§11 mis-numbering; ADR-0006's "§11 (ADR index)" reference updated to "§12 (ADR index)" in the same commit. |
 | 0.5 | 2026-05-28 | ADR-0011 incorporated. Added Phase 12 row (operational design, no new consensus surface) to the phase plan; widened the Phase 10 PR sub-table with the `'`-suffixed implementation sub-slots (PR-10.6′ sidecar binary, PR-10.6″ signed-epoch store, PR-10.6‴ `--dry-run`, PR-10.13′ CLI validator commands, PR-10.14′ `getValidatorStatus` RPC + sidecar smoke). Added Phase 12 acceptance criteria (sidecar-shape end-to-end runbook + `check_signed_epoch_record` decision matrix + 100-epoch `--dry-run` sweep emitting zero on-chain attestations) to §11 (test plan). Added ADR-0011 to the ADR index (§12). |
 | 0.6 | 2026-05-28 | ADR-0012 incorporated (Phase 13, 1/4). Added Phase 13 row (🚧 1/4 ADRs landed — mainnet completeness phase covering sortition + rewards + failover + HSM); refined the PR sub-table with PR-13.1 / PR-13.2 / PR-13.3 entries and rewrote the PR-10.9 entry to reference ADR-0012 explicitly (was: "PoC deterministic; mainnet commit-reveal in a follow-up ADR"). Added Phase 13 (1/4) acceptance criteria to §11 (test plan) — sortition determinism, commit-reveal cycle, ≥ 2/3 threshold boundary pin, stake-weighted committee bias-test, commit-without-reveal slashing, fallback-chain bottom-out at `Hash64::ZERO` for `epoch == 0`. Added ADR-0012 to the ADR index (§12) with the explicit "NOT an unbiased random oracle" framing per ADR-0012 §"Public-claim discipline". |
+| 0.7 | 2026-05-28 | ADR-0013 incorporated (Phase 13, 2/4). Phase 13 row flipped to 🚧 2/4. Refined PR sub-table with PR-13.4 / PR-13.5 / PR-13.6 entries and the two `'`-suffixed implementation sub-slots (PR-10.5′ coinbase fan-out, PR-10.12′ slashing distribution). Added Phase 13 (2/4) acceptance criteria to §11 (test plan) — coinbase fan-out emits `N + 1` outputs landing at the owner address (cold key), `compute_attestation_reward_payouts` cap + refund correctness, `compute_slashing_distribution` 30-case invariant matrix (reporter + burned == slashed across 5 amounts × 6 bps including u64::MAX no-overflow), mainnet 1000-bps recommendation pinned, `apply_unreveal_reporter_min_cap` clamp + surplus-to-burn behaviour. Added ADR-0013 to the ADR index (§12) with the explicit "tx fees stay with miners" / "rewards to owner cold key" / "NOT guaranteed" framing. |
