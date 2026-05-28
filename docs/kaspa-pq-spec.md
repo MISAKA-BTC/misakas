@@ -1,4 +1,4 @@
-# kaspa-pq Specification (v0.5, draft)
+# kaspa-pq Specification (v0.6, draft)
 
 Status: Draft. Frozen values listed here are the contract every phase must
 respect. Any change must go through an ADR update under `docs/adr/`.
@@ -18,9 +18,15 @@ shape, the validator-local equivocation guard
 (`SignedEpochRecord` + `check_signed_epoch_record`), the 9-variant
 `ValidatorStatus` enum, binding policy for key separation
 (validator key on the host, owner key **not** on the host), and the
-slashing-scope binding (equivocation slashed, downtime not). Earlier
-Phase 1 non-goals that contradicted any of these ADRs have been
-removed; see the revision history below.
+slashing-scope binding (equivocation slashed, downtime not).
+ADR-0012 (Mainnet Validator Sortition via On-Chain Commit-Reveal)
+closes the ADR-0009 §"Sortition" mainnet TBD pointer with a
+three-phase commit-reveal pipeline (commit at `E−2`, reveal at
+`E−1`, sortition use at `E`), Byzantine-fault-tolerant
+≥ 2/3 fallback rule, stake-weighted top-K committee selection, and
+on-chain slashing for commit-without-reveal. Earlier Phase 1
+non-goals that contradicted any of these ADRs have been removed;
+see the revision history below.
 
 ## 0. Scope and non-goals
 
@@ -278,14 +284,14 @@ This is by design: the address format, accumulator, and signature scheme
 are all different. A separate one-shot migration tool is out of scope
 for the PoC.
 
-## 10. Phase plan (revised: 12-phase ordering)
+## 10. Phase plan (revised: 13-phase ordering, Phase 13 in progress)
 
 ADR-0007 (Layered PoW), ADR-0008 (Hash64 consensus identity),
-ADR-0009 (DNS overlay), ADR-0010 (Validator node architecture)
-and ADR-0011 (Validator single-host deployment +
-equivocation-safety) expanded the original 7-phase plan to 12.
-The current ordering, with status as of the last commit to this
-branch:
+ADR-0009 (DNS overlay), ADR-0010 (Validator node architecture),
+ADR-0011 (Validator single-host deployment + equivocation-safety)
+and ADR-0012 (Mainnet validator sortition) expanded the original
+7-phase plan to 13. The current ordering, with status as of the
+last commit to this branch:
 
 | # | Title | Status |
 |---|---|---|
@@ -302,6 +308,7 @@ branch:
 | 10 | DNS Probabilistic Finality Overlay (PR-10.1 ADR + PR-10.2 spec + PR-10.3 type stubs landed; PR-10.4 – PR-10.14 deferred) | 🚧 design-freeze only |
 | 11 | Validator node architecture (PR-11.1 ADR + PR-11.2 types + PR-11.3 spec landed; implementation merged into the Phase 10 PR-10.4 – PR-10.14 slots) | ✅ design-freeze landed |
 | 12 | Validator single-host deployment + equivocation-safety (PR-12.1 ADR + PR-12.2 types + PR-12.3 spec landed; implementation slots PR-10.6′/10.6″/10.6‴/10.13′/10.14′ layer onto the Phase 10 entries) | ✅ design-freeze landed |
+| 13 | Mainnet completeness — sortition / rewards / failover / HSM (PR-13.1 + PR-13.2 + PR-13.3 ADR-0012 sortition landed; ADR-0013 rewards, ADR-0014 coordinated failover, ADR-0015 remote-signer/HSM upcoming) | 🚧 1/4 ADRs landed |
 
 Phases 11 and 12 are **operational-design** phases: neither
 introduces new consensus surface beyond what ADR-0009 already
@@ -316,6 +323,22 @@ The implementation work for both phases stays inside the Phase 10
 slot range (with the Phase 12 work layering onto the matching
 Phase 10 entries as `'`-suffixed sub-slots).
 
+Phase 13 is the **mainnet-completeness** phase. ADR-0012 (this
+landed slot) is consensus-input — it specifies the per-epoch
+validator-set selection function the DNS overlay consumes. The
+remaining three Phase 13 ADRs in flight:
+- **ADR-0013 (next)** — Validator reward distribution
+  (consensus-input; closes the bond ROI economics);
+- **ADR-0014 (then)** — Coordinated-failover protocol
+  (operational; resolves the ADR-0011 "one key, one host"
+  future-ADR pointer for operators wanting HA);
+- **ADR-0015 (last)** — Remote-signer / HSM protocol
+  (operational; resolves the ADR-0010 hot-key Negative for
+  operators wanting cold-key custody).
+The Phase 13 row will flip to ✅ when all four ADRs (+ their
+type-stub + spec-update PRs) have landed; until then the row
+stays 🚧.
+
 Refined Phase 10 PR plan (per ADR-0010 §"Phase 10 PR plan" with
 Phase 12 sub-slot refinements from ADR-0011 §"Phase 12 PR plan"):
 
@@ -329,7 +352,10 @@ Phase 12 sub-slot refinements from ADR-0011 §"Phase 12 PR plan"):
 | 11.3 | Spec update (ADR-0010 + Phase 11 row + this 14-slot table) | ✅ landed |
 | 12.1 | ADR-0011 (validator single-host deployment + equivocation-safety) | ✅ landed |
 | 12.2 | `dns_finality.rs` `ValidatorStatus` + `SignedEpochRecord` + `check_signed_epoch_record` helper + tests | ✅ landed |
-| 12.3 | Spec update (ADR-0011 + Phase 12 row + Phase 12 acceptance criteria + v0.5) | ✅ landed (this PR) |
+| 12.3 | Spec update (ADR-0011 + Phase 12 row + Phase 12 acceptance criteria + v0.5) | ✅ landed |
+| 13.1 | ADR-0012 (mainnet validator sortition via on-chain commit-reveal) | ✅ landed |
+| 13.2 | `dns_finality.rs` `SortitionMode` + commit/reveal/unreveal payloads + `DnsParams` sortition fields + helpers (`compute_commit`, `derive_epoch_seed_*`, `compute_validator_priority`, `select_committee`) | ✅ landed |
+| 13.3 | Spec update (ADR-0012 + Phase 13 row 1/4 + Phase 13 acceptance criteria 1/4 + v0.6) | ✅ landed (this PR) |
 | 10.4 | Stake transaction kinds (`subnetwork_id` route) + tx validation | ⏳ deferred |
 | 10.5 | `stake_registry` / `stake_score` consensus processes + stores | ⏳ deferred |
 | 10.6 | `validator_service` in-process loop + `--enable-validator` flag | ⏳ deferred |
@@ -338,7 +364,7 @@ Phase 12 sub-slot refinements from ADR-0011 §"Phase 12 PR plan"):
 | 10.6‴ | `--dry-run` flag wiring + per-epoch eligibility log emitter (ADR-0011) | ⏳ deferred |
 | 10.7 | PoC hard-checkpoint reorg gate (`--dns-mode hard-checkpoint`) | ⏳ deferred |
 | 10.8 | Mainnet two-dimensional dominance rule + property tests | ⏳ deferred |
-| 10.9 | Validator sortition (PoC deterministic; mainnet commit-reveal in a follow-up ADR) | ⏳ deferred |
+| 10.9 | Validator sortition consensus rules (deterministic + commit-reveal per ADR-0012; `consensus/src/processes/validator_sortition.rs`; subnetwork-id tx routing for commit / reveal / unreveal-evidence payloads; on-chain commit-reveal slashing pipeline) | ⏳ deferred |
 | 10.10 | P2P `StakeAttestation` gossip + flow integration | ⏳ deferred |
 | 10.11 | Miner block-template policy reservation for shards | ⏳ deferred |
 | 10.12 | `slashing.rs` evidence pipeline + bond burn + reporter reward | ⏳ deferred |
@@ -433,6 +459,23 @@ mandatory acceptance criteria for each phase:
   simnet (gate on PR-10.14′ landing). The `--dry-run` mode signs
   *zero* attestations on a 100-epoch simnet sweep while still
   emitting per-epoch eligibility logs.
+- **Phase 13 (1/4 — sortition, ADR-0012)** sortition is
+  byte-deterministic across two independently-running nodes for
+  the same `(epoch_seed_E, active validator set)` input;
+  `compute_commit` re-derivation at tx-validation time accepts
+  every honest reveal and rejects every malformed one; the
+  exact ≥ 2/3 reveal-threshold boundary fires the primary seed
+  derivation (off-by-one drift trips this); a 1024-seed sweep
+  with a 10×-stake validator wins the single-slot committee
+  > 50% of the time (the unit-tested statistical surface is
+  already in `consensus/core/src/dns_finality.rs`); a validator
+  that committed but did not reveal within the reveal window
+  is slashed by `commit_without_reveal_slash_sompi` upon
+  submission of a valid `UnrevealSlashingEvidencePayload`; the
+  fallback-rule chain bottoms out at the all-zero `Hash64` for
+  `target_epoch == 0`. (Phase 13 acceptance for ADR-0013 /
+  -0014 / -0015 will be added with their respective spec
+  updates.)
 
 ## 12. ADR index
 
@@ -447,6 +490,7 @@ mandatory acceptance criteria for each phase:
 - [ADR-0009 — DNS Probabilistic Finality Overlay](adr/0009-dns-probabilistic-finality.md) (Phase 10 — PoW/GHOSTDAG keeps block production; PoS adds two-dimensional `WorkScore × StakeScore` reorg gate over selected-chain anchors; partial certificate / shard scheme to bound block mass; three-stage rollout; long-range bound U ≥ R + E)
 - [ADR-0010 — Validator Node Architecture](adr/0010-validator-node-architecture.md) (Phase 11 — operational supplement to ADR-0009: one binary with three roles via `--enable-mining` / `--enable-validator` flags; subsystem file layout for the Phase 10 implementation PRs; in-process async validator service; on-chain vs P2P gossip split; miner block-template policy reserves mass for attestation shards; 8-step operator runbook; `validator_set_commitment` derivation = BLAKE2b-512 keyed `b"kaspa-pq-validator-set-v1"`)
 - [ADR-0011 — Validator Single-Host Deployment + Equivocation-Safety](adr/0011-validator-deployment-and-equivocation-safety.md) (Phase 12 — operational supplement to ADR-0010: sidecar shape `kaspa-pq-node` + `kaspa-pq-validator` connected via 127.0.0.1 wRPC as the production-recommended deployment; 9-variant `ValidatorStatus` enum; `SignedEpochRecord` + `check_signed_epoch_record` honest-operator equivocation guard with Allow / AllowRebroadcast / Block outcomes; key-separation policy — validator key on the host, owner key **not** on the host; slashing-scope binding — equivocation slashed, downtime **not**; `--dry-run` validator mode; auto-wait-for-bond-activation startup; reference systemd units; hardware sizing; "one key, one host" invariant)
+- [ADR-0012 — Mainnet Validator Sortition via On-Chain Commit-Reveal](adr/0012-mainnet-validator-sortition-commit-reveal.md) (Phase 13 — closes the ADR-0009 §"Sortition" mainnet TBD pointer: two sortition modes (`Deterministic` for simnet/devnet/testnet-initial; `CommitReveal` for mainnet from genesis); three-phase pipeline (commit at `E−2`, reveal at `E−1`, sortition at `E`); BLAKE2b-512 keyed commitment binding `r || target_epoch || validator_id`; Byzantine-fault-tolerant ≥ 2/3 fallback rule preserving liveness under reveal sabotage; stake-weighted top-K committee selection via `priority_v = first_u128(BLAKE2b-512(SORTITION_PRIORITY_KEY, seed || vid)) / stake`; on-chain slashing for commit-without-reveal via `UnrevealSlashingEvidencePayload`; five new `-v1` domain keys all pairwise distinct; **NOT** an unbiased random oracle — residual bias is O(K · 2⁻¹²⁸) per epoch from selective reveal withholding)
 
 ## 13. Revision history
 
@@ -457,3 +501,4 @@ mandatory acceptance criteria for each phase:
 | 0.3 | 2026-05-28 | ADR-0009 incorporated. Added in-scope item 6 (DNS Probabilistic Finality Overlay) and Phase 10 row in the phase plan. Codified the DNS-specific public-claim discipline section (binding) — explicitly rejecting "hard finality", "reorg-probability product", and "2^k post-quantum finality" framings. Added Phase 10 acceptance criteria to §11 (test plan). |
 | 0.4 | 2026-05-28 | ADR-0010 incorporated. Added Phase 11 row (operational design, no new consensus surface) to the phase plan, with the refined 14-slot Phase 10 implementation roadmap from ADR-0010 §"Phase 10 PR plan" inlined as a sub-table. Added Phase 11 acceptance criteria (8-step operator runbook + byte-identical `validator_set_commitment` across nodes) to §11 (test plan). Added ADR-0010 to the ADR index (§12). Renumbered §12 → §13 to fix the pre-existing duplicate-§11 mis-numbering; ADR-0006's "§11 (ADR index)" reference updated to "§12 (ADR index)" in the same commit. |
 | 0.5 | 2026-05-28 | ADR-0011 incorporated. Added Phase 12 row (operational design, no new consensus surface) to the phase plan; widened the Phase 10 PR sub-table with the `'`-suffixed implementation sub-slots (PR-10.6′ sidecar binary, PR-10.6″ signed-epoch store, PR-10.6‴ `--dry-run`, PR-10.13′ CLI validator commands, PR-10.14′ `getValidatorStatus` RPC + sidecar smoke). Added Phase 12 acceptance criteria (sidecar-shape end-to-end runbook + `check_signed_epoch_record` decision matrix + 100-epoch `--dry-run` sweep emitting zero on-chain attestations) to §11 (test plan). Added ADR-0011 to the ADR index (§12). |
+| 0.6 | 2026-05-28 | ADR-0012 incorporated (Phase 13, 1/4). Added Phase 13 row (🚧 1/4 ADRs landed — mainnet completeness phase covering sortition + rewards + failover + HSM); refined the PR sub-table with PR-13.1 / PR-13.2 / PR-13.3 entries and rewrote the PR-10.9 entry to reference ADR-0012 explicitly (was: "PoC deterministic; mainnet commit-reveal in a follow-up ADR"). Added Phase 13 (1/4) acceptance criteria to §11 (test plan) — sortition determinism, commit-reveal cycle, ≥ 2/3 threshold boundary pin, stake-weighted committee bias-test, commit-without-reveal slashing, fallback-chain bottom-out at `Hash64::ZERO` for `epoch == 0`. Added ADR-0012 to the ADR index (§12) with the explicit "NOT an unbiased random oracle" framing per ADR-0012 §"Public-claim discipline". |
