@@ -178,6 +178,8 @@ impl ConsensusServices {
             window_manager.clone(),
             params.max_block_level,
             params.genesis.hash,
+            // PR-8.6: Layer 0 PoW per-network domain separation tag.
+            params.net.to_string().into_bytes(),
             params.pruning_proof_m,
             params.anticone_finalization_depth(),
             params.ghostdag_k(),

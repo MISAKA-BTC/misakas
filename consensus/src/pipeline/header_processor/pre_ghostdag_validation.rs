@@ -9,7 +9,6 @@ use kaspa_consensus_core::blockstatus::BlockStatus::StatusInvalid;
 use kaspa_consensus_core::header::Header;
 use kaspa_core::time::unix_now;
 use kaspa_database::prelude::StoreResultExt;
-use kaspa_pow::calc_level_from_pow;
 
 impl HeaderProcessor {
     /// Validates the header in isolation including pow check against header declared bits.
@@ -100,8 +99,17 @@ impl HeaderProcessor {
     }
 
     fn check_pow_and_calc_block_level(&self, header: &Header) -> BlockProcessResult<BlockLevel> {
-        let state = kaspa_pow::State::new(header);
-        let (passed, pow) = state.check_pow(header.nonce);
-        if passed || self.skip_proof_of_work { Ok(calc_level_from_pow(pow, self.max_block_level)) } else { Err(RuleError::InvalidPoW) }
+        // PR-8.6: kaspa-pq Layer 0 PoW (BLAKE2b-512, 512-bit target) replaces the
+        // legacy 32-byte kHeavyHash check. `StateLayer0` wraps the Phase-1
+        // (algo_id=1) kHeavyHash inner loop inside the domain-separated Layer 0
+        // finalizer; the block level is derived from the 512-bit pow value
+        // (ADR-0007 / ADR-0008).
+        let state = kaspa_pow::StateLayer0::new(header, &self.network_id);
+        let (passed, pow_512) = state.check_pow_layer0(header.nonce).map_err(|_| RuleError::InvalidPoW)?;
+        if passed || self.skip_proof_of_work {
+            Ok(kaspa_pow::calc_level_from_pow_512(pow_512, self.max_block_level))
+        } else {
+            Err(RuleError::InvalidPoW)
+        }
     }
 }

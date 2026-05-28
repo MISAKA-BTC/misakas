@@ -108,6 +108,10 @@ pub struct HeaderProcessor {
     pub(super) mergeset_size_limit: u64,
     pub(super) skip_proof_of_work: bool,
     pub(super) max_block_level: BlockLevel,
+    /// PR-8.6: per-network domain-separation tag (`NetworkId::to_string`
+    /// bytes) fed to the kaspa-pq Layer 0 PoW finalizer (ADR-0007 §4.2)
+    /// during header PoW validation.
+    pub(super) network_id: Vec<u8>,
 
     // DB
     db: Arc<DB>,
@@ -194,6 +198,8 @@ impl HeaderProcessor {
             mergeset_size_limit: params.mergeset_size_limit(),
             skip_proof_of_work: params.skip_proof_of_work,
             max_block_level: params.max_block_level,
+            // PR-8.6: Layer 0 PoW per-network domain separation tag.
+            network_id: params.net.to_string().into_bytes(),
         }
     }
 

@@ -82,6 +82,48 @@ pub fn calc_level_from_pow(pow: Uint256, max_block_level: BlockLevel) -> BlockLe
 }
 
 // ---------------------------------------------------------------------
+// kaspa-pq PR-8.6: Layer 0 (BLAKE2b-512) block-level / PoW-check entry
+// points used by consensus header & pruning-proof validation. These
+// replace the legacy 32-byte `State`-based functions above on the
+// kaspa-pq consensus path (ADR-0007 / ADR-0008).
+// ---------------------------------------------------------------------
+
+/// Block level from a 512-bit Layer 0 PoW value. The ADR-0007
+/// difficulty lift (`target_512 = target_256 << 256`) means the top
+/// 256 bits of the 512-bit pow carry the same difficulty information
+/// as the legacy 256-bit pow, so the level is computed from that
+/// projection — preserving the upstream level semantics exactly while
+/// the acceptance test uses the full 512-bit comparison.
+#[inline]
+pub fn calc_level_from_pow_512(pow_512: Uint512, max_block_level: BlockLevel) -> BlockLevel {
+    // `pow_512 >> 256` is at most 256 bits wide, so the conversion never truncates.
+    let pow_256 = Uint256::try_from(pow_512 >> 256).unwrap_or(Uint256::ZERO);
+    calc_level_from_pow(pow_256, max_block_level)
+}
+
+/// kaspa-pq Layer 0 replacement for [`calc_block_level_check_pow`].
+/// `network_id` is the per-network domain-separation tag fed to the
+/// Layer 0 finalizer (see [`StateLayer0::new`]).
+pub fn calc_block_level_check_pow_layer0(header: &Header, network_id: &[u8], max_block_level: BlockLevel) -> (BlockLevel, bool) {
+    if header.parents_by_level.is_empty() {
+        return (max_block_level, true); // Genesis has the max block level
+    }
+
+    let state = StateLayer0::new(header, network_id);
+    // `check_pow_layer0` only errors on finalizer-internal misuse, which
+    // cannot happen for a well-formed header; treat any error as a failed PoW.
+    match state.check_pow_layer0(header.nonce) {
+        Ok((passed, pow_512)) => (calc_level_from_pow_512(pow_512, max_block_level), passed),
+        Err(_) => (0, false),
+    }
+}
+
+/// kaspa-pq Layer 0 replacement for [`calc_block_level`].
+pub fn calc_block_level_layer0(header: &Header, network_id: &[u8], max_block_level: BlockLevel) -> BlockLevel {
+    calc_block_level_check_pow_layer0(header, network_id, max_block_level).0
+}
+
+// ---------------------------------------------------------------------
 // kaspa-pq PR-8.6: Layer 0 PoW verifier
 // ---------------------------------------------------------------------
 

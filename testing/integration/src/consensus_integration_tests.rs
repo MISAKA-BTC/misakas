@@ -213,6 +213,49 @@ async fn consensus_sanity_test() {
     consensus.shutdown(wait_handles);
 }
 
+/// kaspa-pq PR-8.6 smoke: with PoW validation ENABLED (skip_proof_of_work
+/// = false), confirm the kaspa-pq Layer 0 PoW (BLAKE2b-512 finalizer over
+/// the 512-bit target, ADR-0007/0008) is actually enforced by consensus —
+/// a block whose nonce is ground against `StateLayer0` is accepted, and a
+/// block with a non-satisfying nonce is rejected with `InvalidPoW`. Uses a
+/// trivially-easy Layer 0 target (0x207fffff lifts to target_512 ≈ 2^511,
+/// ~50% acceptance per nonce) so the CPU grind is near-instant.
+#[tokio::test]
+async fn consensus_layer0_pow_smoke_test() {
+    init_allocator_with_default_settings();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .edit_consensus_params(|p| {
+            p.skip_proof_of_work = false;
+            p.genesis.bits = 0x207fffff;
+        })
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+
+    let network_id = config.params.net.to_string().into_bytes();
+    let genesis = config.params.genesis.hash;
+
+    // Build a genesis child and grind a valid Layer 0 nonce.
+    let mut good = consensus.build_block_with_parents_and_transactions(1.into(), vec![genesis], vec![]);
+    let good_state = kaspa_pow::StateLayer0::new(&good.header, &network_id);
+    let good_nonce =
+        (0u64..1_000_000).find(|&n| good_state.check_pow_layer0(n).unwrap().0).expect("easy Layer 0 target must yield a nonce");
+    good.header.nonce = good_nonce;
+    // Accepted: the ground nonce satisfies the 512-bit Layer 0 target.
+    consensus.validate_and_insert_block(good.to_immutable()).virtual_state_task.await.unwrap();
+
+    // Build another genesis child with a nonce that does NOT satisfy the target.
+    let mut bad = consensus.build_block_with_parents_and_transactions(2.into(), vec![genesis], vec![]);
+    let bad_state = kaspa_pow::StateLayer0::new(&bad.header, &network_id);
+    let bad_nonce = (0u64..1_000_000).find(|&n| !bad_state.check_pow_layer0(n).unwrap().0).expect("must find a failing nonce");
+    bad.header.nonce = bad_nonce;
+    // Rejected: PoW fails.
+    let res = consensus.validate_and_insert_block(bad.to_immutable()).virtual_state_task.await;
+    assert!(matches!(res, Err(RuleError::InvalidPoW)), "expected InvalidPoW for a non-satisfying nonce, got {res:?}");
+
+    consensus.shutdown(wait_handles);
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct GhostdagTestDag {
     #[serde(rename = "K")]

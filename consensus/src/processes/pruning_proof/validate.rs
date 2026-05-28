@@ -17,7 +17,7 @@ use kaspa_database::{
     prelude::{CachePolicy, ConnBuilder, StoreResultUnitExt},
     utils::DbLifetime,
 };
-use kaspa_pow::{calc_block_level, calc_block_level_check_pow};
+use kaspa_pow::{calc_block_level_check_pow_layer0, calc_block_level_layer0};
 use kaspa_utils::vec::VecExtensions;
 use parking_lot::RwLock;
 use rocksdb::WriteBatch;
@@ -165,7 +165,7 @@ impl ProofContext {
         }
 
         let proof_pp_header = proof[0].last().expect("checked if empty").clone();
-        let proof_pp_level = calc_block_level(&proof_pp_header, ppm.max_block_level);
+        let proof_pp_level = calc_block_level_layer0(&proof_pp_header, &ppm.network_id, ppm.max_block_level);
         let proof_pp = proof_pp_header.hash;
 
         //
@@ -186,7 +186,7 @@ impl ProofContext {
             let mut selected_tip =
                 proof[level as usize].first().map(|header| header.hash).ok_or(PruningImportError::PruningProofNotEnoughHeaders)?;
             for (i, header) in proof[level as usize].iter().enumerate() {
-                let (header_level, pow_passes) = calc_block_level_check_pow(header, ppm.max_block_level);
+                let (header_level, pow_passes) = calc_block_level_check_pow_layer0(header, &ppm.network_id, ppm.max_block_level);
                 if header_level < level {
                     return Err(PruningImportError::PruningProofWrongBlockLevel(header.hash, header_level, level));
                 }

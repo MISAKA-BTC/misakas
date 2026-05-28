@@ -28,7 +28,7 @@ use kaspa_consensus_core::{
 };
 use kaspa_core::info;
 use kaspa_database::prelude::StoreResultExt;
-use kaspa_pow::calc_block_level;
+use kaspa_pow::calc_block_level_layer0;
 use thiserror::Error;
 
 use crate::{
@@ -113,6 +113,9 @@ pub struct PruningProofManager {
 
     max_block_level: BlockLevel,
     genesis_hash: BlockHash,
+    /// PR-8.6: Layer 0 PoW per-network domain-separation tag, used when
+    /// re-checking proof-header PoW (ADR-0007 §4.2).
+    network_id: Vec<u8>,
     pruning_proof_m: u64,
     anticone_finalization_depth: u64,
     ghostdag_k: KType,
@@ -133,6 +136,7 @@ impl PruningProofManager {
         window_manager: DbWindowManager,
         max_block_level: BlockLevel,
         genesis_hash: BlockHash,
+        network_id: Vec<u8>,
         pruning_proof_m: u64,
         anticone_finalization_depth: u64,
         ghostdag_k: KType,
@@ -167,6 +171,7 @@ impl PruningProofManager {
 
             max_block_level,
             genesis_hash,
+            network_id,
             pruning_proof_m,
             anticone_finalization_depth,
             ghostdag_k,
@@ -201,7 +206,7 @@ impl PruningProofManager {
                 continue;
             }
 
-            let block_level = calc_block_level(header, self.max_block_level);
+            let block_level = calc_block_level_layer0(header, &self.network_id, self.max_block_level);
             self.headers_store.insert(header.hash, header.clone(), block_level).unwrap();
         }
 
