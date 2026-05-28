@@ -152,6 +152,34 @@ pub const HOST_ID_KEY: &[u8] = b"kaspa-pq-validator-host-id-v1";
 pub const TAKEOVER_TOKEN_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-takeover-token-v1";
 pub const TAKEOVER_TOKEN_CONTEXT: &[u8] = b"kaspa-pq-v1/takeover/mldsa65";
 
+/// kaspa-pq Phase 13 remote-signer protocol (ADR-0015) — node-
+/// local wire format between a validator client and a separate
+/// signer process over a Unix domain socket. Versioning is
+/// protocol-level (not consensus); bumped on incompatible wire
+/// changes, not on type-level additions.
+pub const SIGNER_PROTOCOL_VERSION: u16 = 1;
+
+/// kaspa-pq Phase 13 BLAKE2b-512 domain key for the
+/// remote-signer audit log chain (ADR-0015 §"Audit log"). Used
+/// to chain `SignerAuditRecord` entries by feeding the prior
+/// chain hash + the new record's Borsh bytes through this
+/// keyed hasher. Tamper-detection is the cryptographic
+/// guarantee — any insertion or deletion shifts the chain and
+/// is detectable by a verifier walking from a known-good entry.
+pub const AUDIT_LOG_CHAIN_KEY: &[u8] = b"kaspa-pq-signer-audit-v1";
+
+/// Capability bitflags for the [`SignerHello`] / [`SignerHelloAck`]
+/// handshake (ADR-0015 §"Protocol versioning + handshake").
+/// Additive — new flags can land without bumping
+/// `SIGNER_PROTOCOL_VERSION`. Each constant pins a single bit
+/// position.
+pub const CAP_SIGN_TRANSACTION: u32 = 0x01;
+pub const CAP_SIGN_ATTESTATION: u32 = 0x02;
+pub const CAP_SIGN_TAKEOVER_TOKEN: u32 = 0x04;
+pub const CAP_POLICY_STRICT: u32 = 0x08;
+pub const CAP_AUDIT_LOG: u32 = 0x10;
+pub const CAP_HSM_BACKED: u32 = 0x20;
+
 /// Fixed-point scaled stake score. Wrapper for documentation /
 /// arithmetic clarity; the underlying `u128` is the same number of
 /// "stake-score units" used throughout the overlay.
@@ -1302,6 +1330,215 @@ pub fn takeover_token_message(
 }
 
 // ---------------------------------------------------------------------
+// Remote-signer protocol (ADR-0015).
+//
+// Node-local wire format between a validator client and a
+// `kaspa-pq-signer` process over a Unix domain socket. None of
+// these types enter consensus state; they describe the bytes
+// flowing across the local socket only.
+// ---------------------------------------------------------------------
+
+/// Per-purpose tag carried in a [`SignerRequest`] (ADR-0015
+/// §"Request / response cycle"). Wire-format discriminants are
+/// API-stable; reordering is a hard fork of the protocol.
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum SigningPurpose {
+    /// Standard transaction signing — message digest is whatever
+    /// the tx-script ML-DSA-65 sign path produces; context is
+    /// `b"kaspa-pq-v1/tx/mldsa65"`.
+    #[default]
+    Transaction = 0,
+    /// DNS overlay attestation — message digest is from
+    /// [`stake_attestation_message`]; context is
+    /// `ATTESTATION_MLDSA65_CONTEXT`.
+    Attestation = 1,
+    /// Coordinated-failover takeover token — message digest is
+    /// from [`takeover_token_message`]; context is
+    /// `TAKEOVER_TOKEN_CONTEXT`.
+    TakeoverToken = 2,
+}
+
+/// Per-purpose structured metadata attached to a
+/// [`SignerRequest`] (ADR-0015 §"Request / response cycle").
+/// **Not** part of the signed message — in-band hints for the
+/// signer's policy engine. Operators using
+/// [`SignerPolicy::Permissive`] can pass [`SignerMetadata::None`]
+/// for any purpose.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum SignerMetadata {
+    None,
+    Attestation {
+        epoch: u64,
+        target_hash: Hash64,
+        target_daa_score: u64,
+    },
+    TakeoverToken {
+        yielding_host_id: Hash,
+        taking_over_host_id: Hash,
+        valid_from_epoch: u64,
+        grace_epochs: u8,
+    },
+}
+
+/// Failure modes for a [`SignerRequest`]. Tuple-variant data is
+/// carried explicitly (not `Option<String>`) so the wire format
+/// stays compact.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum SignerError {
+    ProtocolVersionMismatch,
+    KeyNotFound,
+    UnknownPurpose,
+    /// Free-text reason — typically equivocation evidence
+    /// summary for `SignerPolicy::Strict` rejections.
+    PolicyViolation(String),
+    /// Vendor-specific HSM error: `(code, message)`. `code` is
+    /// the raw PKCS#11 / vendor-SDK return value; `message` is
+    /// the corresponding human string.
+    HsmError(u32, String),
+    RateLimit,
+    InternalError(String),
+}
+
+/// Per-validator signer policy mode (ADR-0015 §"Policy model").
+/// Wire-format discriminant is API-stable.
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum SignerPolicy {
+    /// Sign every well-formed request; no equivocation guard.
+    /// Closest to the ADR-0010 local-key-file behaviour.
+    #[default]
+    Permissive = 0,
+    /// Sign every well-formed request but log policy
+    /// violations as warnings. Migration path from `Permissive`
+    /// to `Strict`.
+    AuditOnly = 1,
+    /// Enforce the ADR-0011 equivocation guard at the signer.
+    /// Refuse `Attestation` requests whose
+    /// `(validator_id, epoch)` already has a recorded differing
+    /// target. **Moves the authoritative `SignedEpochRecord`
+    /// store from the validator client to the signer.**
+    Strict = 2,
+}
+
+/// Client → server handshake frame (ADR-0015 §"Protocol
+/// versioning + handshake"). Sent immediately upon connection.
+/// `client_identity` is the [`HostId`] from ADR-0014 so the
+/// signer's audit log can attribute requests to a specific
+/// validator client.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignerHello {
+    pub protocol_version: u16,
+    pub capabilities: u32,
+    pub client_identity: HostId,
+}
+
+/// Server → client handshake response. Mismatched
+/// `protocol_version` closes the connection with one
+/// [`SignerError::ProtocolVersionMismatch`] frame and no
+/// further traffic.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignerHelloAck {
+    pub protocol_version: u16,
+    pub capabilities: u32,
+    pub server_identity: HostId,
+}
+
+/// Length-prefixed Borsh request frame (ADR-0015 §"Request /
+/// response cycle"). One request per signature; the server
+/// dedupes by `request_id` for the lifetime of the connection.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignerRequest {
+    /// Monotonic per-client request id. Wraps at `u64::MAX`
+    /// (practically: never in any reasonable validator lifetime).
+    pub request_id: u64,
+    /// Which key the signer should use. The signer may hold
+    /// more than one validator key (multi-tenant signer); the
+    /// request selects via this field.
+    pub validator_id: Hash64,
+    pub purpose: SigningPurpose,
+    /// libcrux ML-DSA-65 `sign_ctx` ctx parameter. Caller
+    /// provides; the signer does not infer the context from
+    /// the purpose tag because future protocol extensions may
+    /// need a non-standard context for the same purpose.
+    pub context: Vec<u8>,
+    /// 32-byte BLAKE2b-256 the ML-DSA-65 will sign over.
+    pub message_digest: Hash,
+    pub metadata: SignerMetadata,
+}
+
+/// Server → client response. The `result` payload is either the
+/// 3309-byte ML-DSA-65 signature or a structured failure.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignerResponse {
+    pub request_id: u64,
+    pub result: Result<Vec<u8>, SignerError>,
+}
+
+/// One outcome of a request in the audit log (ADR-0015 §"Audit
+/// log"). Tuple variant for the `Refused` case carries the same
+/// [`SignerError`] sent over the wire, so the audit log records
+/// what the client was told.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum SignerOutcome {
+    Signed,
+    Refused(SignerError),
+}
+
+/// One row in the signer's append-only audit log (ADR-0015
+/// §"Audit log"). Records the request content plus the
+/// signature fingerprint (not the full signature blob — pinned
+/// for tamper detection without ballooning log size).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignerAuditRecord {
+    pub timestamp_unix_secs: u64,
+    pub client_identity: HostId,
+    pub request_id: u64,
+    pub validator_id: Hash64,
+    pub purpose: SigningPurpose,
+    pub metadata: SignerMetadata,
+    pub message_digest: Hash,
+    /// `BLAKE2b-512` of the 3309-byte signature bytes (zero
+    /// `Hash64` if the request was refused). Pinned so the audit
+    /// record stays small while still witnessing what was
+    /// signed.
+    pub signature_fingerprint: Hash64,
+    pub outcome: SignerOutcome,
+}
+
+/// Compute the next entry in the signer's audit-log chain
+/// (ADR-0015 §"Audit log"):
+///
+/// ```text
+/// next_chain_hash = BLAKE2b-512(
+///     key   = AUDIT_LOG_CHAIN_KEY,
+///     input = prev_chain_hash.as_bytes()       (64 B)
+///          || borsh::to_vec(&record),
+/// )
+/// ```
+///
+/// Walking the log from a known-good `prev_chain_hash` and
+/// recomputing every successor lets a verifier detect any
+/// post-hoc tampering — an inserted, deleted, or modified
+/// record shifts every subsequent chain hash.
+///
+/// The genesis case (first record after log rotation) uses
+/// `prev_chain_hash = ZERO_HASH64` or the terminal hash of the
+/// previous log file; either is the verifier's known-good
+/// starting point.
+pub fn compute_signer_audit_chain_entry(prev_chain_hash: Hash64, record: &SignerAuditRecord) -> Hash64 {
+    let record_bytes = borsh::to_vec(record).expect("SignerAuditRecord Borsh-serialise is infallible");
+    let mut hasher = Blake2bParams::new().hash_length(64).key(AUDIT_LOG_CHAIN_KEY).to_state();
+    hasher.update(prev_chain_hash.as_byte_slice());
+    hasher.update(&record_bytes);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+// ---------------------------------------------------------------------
 // Reward / slashing distribution (ADR-0013).
 // ---------------------------------------------------------------------
 
@@ -1445,6 +1682,22 @@ mod tests {
         assert_eq!(HOST_ID_KEY, b"kaspa-pq-validator-host-id-v1");
         assert_eq!(TAKEOVER_TOKEN_MESSAGE_DOMAIN, b"kaspa-pq-takeover-token-v1");
         assert_eq!(TAKEOVER_TOKEN_CONTEXT, b"kaspa-pq-v1/takeover/mldsa65");
+        // ADR-0015 — node-local remote-signer audit chain key
+        // and protocol-version pin.
+        assert_eq!(AUDIT_LOG_CHAIN_KEY, b"kaspa-pq-signer-audit-v1");
+        assert_eq!(SIGNER_PROTOCOL_VERSION, 1);
+        // ADR-0015 capability bitflags must be single-bit and
+        // pairwise distinct so they compose correctly under
+        // bitwise OR.
+        let caps = [CAP_SIGN_TRANSACTION, CAP_SIGN_ATTESTATION, CAP_SIGN_TAKEOVER_TOKEN, CAP_POLICY_STRICT, CAP_AUDIT_LOG, CAP_HSM_BACKED];
+        for c in caps {
+            assert!(c.count_ones() == 1, "capability {c:#x} is not a single bit");
+        }
+        for i in 0..caps.len() {
+            for j in (i + 1)..caps.len() {
+                assert_eq!(caps[i] & caps[j], 0, "capabilities {i} and {j} overlap");
+            }
+        }
 
         // Replay safety: tx vs attestation vs takeover contexts
         // must all differ (ADR-0002 / ADR-0009 §"Attestation
@@ -2647,6 +2900,263 @@ mod tests {
 
         let actual = takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1);
         assert_eq!(actual.as_bytes(), with_takeover.as_bytes());
+    }
+
+    // ---- Remote-signer protocol (ADR-0015) ------------------------
+
+    #[test]
+    fn signing_purpose_discriminants_are_api_stable() {
+        // Wire-format discriminant; reordering is a protocol
+        // hard fork. Pin to immediately trip drift.
+        assert_eq!(SigningPurpose::Transaction as u8, 0);
+        assert_eq!(SigningPurpose::Attestation as u8, 1);
+        assert_eq!(SigningPurpose::TakeoverToken as u8, 2);
+    }
+
+    #[test]
+    fn signing_purpose_default_is_transaction() {
+        // Conservative default — `Transaction` is the original
+        // ML-DSA-65 use site (ADR-0002), pre-DNS-overlay.
+        assert_eq!(SigningPurpose::default(), SigningPurpose::Transaction);
+    }
+
+    #[test]
+    fn signing_purpose_borsh_roundtrip() {
+        for p in [SigningPurpose::Transaction, SigningPurpose::Attestation, SigningPurpose::TakeoverToken] {
+            let bytes = borsh::to_vec(&p).unwrap();
+            let back: SigningPurpose = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(back, p);
+            assert_eq!(bytes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn signer_policy_discriminants_are_api_stable() {
+        assert_eq!(SignerPolicy::Permissive as u8, 0);
+        assert_eq!(SignerPolicy::AuditOnly as u8, 1);
+        assert_eq!(SignerPolicy::Strict as u8, 2);
+    }
+
+    #[test]
+    fn signer_policy_default_is_permissive() {
+        // Matches the ADR-0010 local-key-file behaviour, so a
+        // signer with no policy configured behaves like the
+        // pre-ADR-0015 baseline.
+        assert_eq!(SignerPolicy::default(), SignerPolicy::Permissive);
+    }
+
+    #[test]
+    fn signer_policy_borsh_roundtrip() {
+        for p in [SignerPolicy::Permissive, SignerPolicy::AuditOnly, SignerPolicy::Strict] {
+            let bytes = borsh::to_vec(&p).unwrap();
+            let back: SignerPolicy = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(back, p);
+        }
+    }
+
+    #[test]
+    fn signer_error_borsh_roundtrip_all_variants() {
+        for e in [
+            SignerError::ProtocolVersionMismatch,
+            SignerError::KeyNotFound,
+            SignerError::UnknownPurpose,
+            SignerError::PolicyViolation("equivocation: target_hash differs".into()),
+            SignerError::HsmError(0xCAFE_BABE, "CKR_DEVICE_ERROR".into()),
+            SignerError::RateLimit,
+            SignerError::InternalError("disk full".into()),
+        ] {
+            let bytes = borsh::to_vec(&e).unwrap();
+            let back: SignerError = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(back, e);
+        }
+    }
+
+    #[test]
+    fn signer_metadata_borsh_roundtrip_all_variants() {
+        let none = SignerMetadata::None;
+        let att = SignerMetadata::Attestation {
+            epoch: 42,
+            target_hash: Hash64::from_bytes([0x11u8; 64]),
+            target_daa_score: 100,
+        };
+        let tk = SignerMetadata::TakeoverToken {
+            yielding_host_id: fixture_host_id(0xa1),
+            taking_over_host_id: fixture_host_id(0xa2),
+            valid_from_epoch: 12345,
+            grace_epochs: 1,
+        };
+        for m in [none, att, tk] {
+            let bytes = borsh::to_vec(&m).unwrap();
+            let back: SignerMetadata = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(back, m);
+        }
+    }
+
+    #[test]
+    fn signer_hello_borsh_roundtrip() {
+        let h = SignerHello {
+            protocol_version: SIGNER_PROTOCOL_VERSION,
+            capabilities: CAP_SIGN_ATTESTATION | CAP_POLICY_STRICT | CAP_AUDIT_LOG,
+            client_identity: fixture_host_id(0xa1),
+        };
+        let bytes = borsh::to_vec(&h).unwrap();
+        let back: SignerHello = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, h);
+    }
+
+    #[test]
+    fn signer_hello_ack_borsh_roundtrip() {
+        let h = SignerHelloAck {
+            protocol_version: SIGNER_PROTOCOL_VERSION,
+            capabilities: CAP_SIGN_TRANSACTION | CAP_SIGN_ATTESTATION | CAP_SIGN_TAKEOVER_TOKEN | CAP_HSM_BACKED,
+            server_identity: fixture_host_id(0xb1),
+        };
+        let bytes = borsh::to_vec(&h).unwrap();
+        let back: SignerHelloAck = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, h);
+    }
+
+    fn fixture_signer_request() -> SignerRequest {
+        SignerRequest {
+            request_id: 7,
+            validator_id: Hash64::from_bytes([0x42u8; 64]),
+            purpose: SigningPurpose::Attestation,
+            context: ATTESTATION_MLDSA65_CONTEXT.to_vec(),
+            message_digest: Hash::from_bytes([0xcdu8; 32]),
+            metadata: SignerMetadata::Attestation {
+                epoch: 42,
+                target_hash: Hash64::from_bytes([0x11u8; 64]),
+                target_daa_score: 100,
+            },
+        }
+    }
+
+    #[test]
+    fn signer_request_borsh_roundtrip() {
+        let r = fixture_signer_request();
+        let bytes = borsh::to_vec(&r).unwrap();
+        let back: SignerRequest = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn signer_response_borsh_roundtrip_ok() {
+        let r = SignerResponse { request_id: 7, result: Ok(vec![0xccu8; STAKE_ATTESTATION_SIG_LEN]) };
+        let bytes = borsh::to_vec(&r).unwrap();
+        let back: SignerResponse = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn signer_response_borsh_roundtrip_err() {
+        let r = SignerResponse {
+            request_id: 7,
+            result: Err(SignerError::PolicyViolation("equivocation: target differs from epoch 42 record".into())),
+        };
+        let bytes = borsh::to_vec(&r).unwrap();
+        let back: SignerResponse = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, r);
+    }
+
+    fn fixture_audit_record(outcome: SignerOutcome, sig_fingerprint: Hash64) -> SignerAuditRecord {
+        SignerAuditRecord {
+            timestamp_unix_secs: 1_700_000_000,
+            client_identity: fixture_host_id(0xa1),
+            request_id: 7,
+            validator_id: Hash64::from_bytes([0x42u8; 64]),
+            purpose: SigningPurpose::Attestation,
+            metadata: SignerMetadata::Attestation {
+                epoch: 42,
+                target_hash: Hash64::from_bytes([0x11u8; 64]),
+                target_daa_score: 100,
+            },
+            message_digest: Hash::from_bytes([0xcdu8; 32]),
+            signature_fingerprint: sig_fingerprint,
+            outcome,
+        }
+    }
+
+    #[test]
+    fn signer_audit_record_borsh_roundtrip_signed() {
+        let r = fixture_audit_record(SignerOutcome::Signed, Hash64::from_bytes([0xeeu8; 64]));
+        let bytes = borsh::to_vec(&r).unwrap();
+        let back: SignerAuditRecord = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn signer_audit_record_borsh_roundtrip_refused() {
+        let r = fixture_audit_record(SignerOutcome::Refused(SignerError::RateLimit), kaspa_hashes::ZERO_HASH64);
+        let bytes = borsh::to_vec(&r).unwrap();
+        let back: SignerAuditRecord = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn audit_chain_entry_is_deterministic() {
+        let prev = Hash64::from_bytes([0x33u8; 64]);
+        let rec = fixture_audit_record(SignerOutcome::Signed, Hash64::from_bytes([0xeeu8; 64]));
+        let a = compute_signer_audit_chain_entry(prev, &rec);
+        let b = compute_signer_audit_chain_entry(prev, &rec);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn audit_chain_entry_changes_with_prev_hash() {
+        let rec = fixture_audit_record(SignerOutcome::Signed, Hash64::from_bytes([0xeeu8; 64]));
+        let a = compute_signer_audit_chain_entry(Hash64::from_bytes([0x33u8; 64]), &rec);
+        let b = compute_signer_audit_chain_entry(Hash64::from_bytes([0x34u8; 64]), &rec);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn audit_chain_entry_changes_with_record_content() {
+        let prev = Hash64::from_bytes([0x33u8; 64]);
+        let a = compute_signer_audit_chain_entry(prev, &fixture_audit_record(SignerOutcome::Signed, Hash64::from_bytes([0xeeu8; 64])));
+        let b = compute_signer_audit_chain_entry(prev, &fixture_audit_record(SignerOutcome::Signed, Hash64::from_bytes([0xefu8; 64])));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn audit_chain_walks_three_records_consistently() {
+        // ADR-0015 §"Audit log" promises that walking the chain
+        // from a known-good genesis hash deterministically
+        // produces the same terminal hash for the same record
+        // sequence. Pin a 3-record walk to verify the chaining
+        // discipline.
+        let genesis = kaspa_hashes::ZERO_HASH64;
+        let r1 = fixture_audit_record(SignerOutcome::Signed, Hash64::from_bytes([0xe1u8; 64]));
+        let r2 = fixture_audit_record(SignerOutcome::Refused(SignerError::RateLimit), kaspa_hashes::ZERO_HASH64);
+        let r3 = fixture_audit_record(SignerOutcome::Signed, Hash64::from_bytes([0xe3u8; 64]));
+
+        let h1 = compute_signer_audit_chain_entry(genesis, &r1);
+        let h2 = compute_signer_audit_chain_entry(h1, &r2);
+        let h3 = compute_signer_audit_chain_entry(h2, &r3);
+
+        // Re-walking the same sequence must produce the same
+        // terminal hash (chain replay).
+        let h1b = compute_signer_audit_chain_entry(genesis, &r1);
+        let h2b = compute_signer_audit_chain_entry(h1b, &r2);
+        let h3b = compute_signer_audit_chain_entry(h2b, &r3);
+        assert_eq!(h3, h3b);
+    }
+
+    #[test]
+    fn audit_chain_detects_record_insertion() {
+        // Inserting a record between r1 and r2 must shift every
+        // subsequent chain hash — this is the cryptographic
+        // tamper-detection property.
+        let genesis = kaspa_hashes::ZERO_HASH64;
+        let r1 = fixture_audit_record(SignerOutcome::Signed, Hash64::from_bytes([0xe1u8; 64]));
+        let r_evil = fixture_audit_record(SignerOutcome::Signed, Hash64::from_bytes([0xe9u8; 64]));
+        let r2 = fixture_audit_record(SignerOutcome::Signed, Hash64::from_bytes([0xe2u8; 64]));
+
+        let h1 = compute_signer_audit_chain_entry(genesis, &r1);
+        let h_evil = compute_signer_audit_chain_entry(h1, &r_evil);
+        let h2_after_insert = compute_signer_audit_chain_entry(h_evil, &r2);
+
+        let h2_clean = compute_signer_audit_chain_entry(h1, &r2);
+        assert_ne!(h2_after_insert, h2_clean, "post-insertion chain hash must differ from clean chain hash");
     }
 
     // ---- Stubs are explicit ---------------------------------------
