@@ -28,7 +28,13 @@ const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 8192;
 
 /// MAXIMUM_STANDARD_TRANSACTION_MASS is the maximum mass allowed for transactions that
 /// are considered standard and will therefore be relayed and considered for mining.
-const MAXIMUM_STANDARD_TRANSACTION_MASS: u64 = 100_000;
+///
+/// kaspa-pq: raised from the upstream 100_000. A single ML-DSA-65 P2PKH input costs
+/// ~12_000 mass (heavy signature script + sig-op cost), so the old limit capped a
+/// standard transaction at ~8 inputs. 250_000 allows ~20 ML-DSA-65 inputs (e.g.
+/// consolidating coinbase UTXOs) while staying at half of the consensus block-mass
+/// budget (500_000) — a single standard tx still cannot monopolize a block.
+const MAXIMUM_STANDARD_TRANSACTION_MASS: u64 = 250_000;
 
 impl Mempool {
     pub(crate) fn check_transaction_standard_in_isolation(&self, transaction: &MutableTransaction) -> NonStandardResult<()> {
