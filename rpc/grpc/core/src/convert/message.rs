@@ -20,7 +20,7 @@
 
 use crate::protowire::{self, submit_block_response_message::RejectReason};
 use kaspa_addresses::Address;
-use kaspa_consensus_core::{Hash, network::NetworkId};
+use kaspa_consensus_core::network::NetworkId;
 use kaspa_core::debug;
 use kaspa_notify::subscription::Command;
 use kaspa_rpc_core::{
@@ -741,7 +741,8 @@ try_from!(item: &protowire::SubmitTransactionRequestMessage, kaspa_rpc_core::Sub
     }
 });
 try_from!(item: &protowire::SubmitTransactionResponseMessage, RpcResult<kaspa_rpc_core::SubmitTransactionResponse>, {
-    Self { transaction_id: RpcHash::from_str(&item.transaction_id)? }
+    // PR-9.5c/f: TransactionId widened to Hash64.
+    Self { transaction_id: kaspa_consensus_core::Hash64::from_str(&item.transaction_id)? }
 });
 
 try_from!(item: &protowire::SubmitTransactionReplacementRequestMessage, kaspa_rpc_core::SubmitTransactionReplacementRequest, {
@@ -755,7 +756,8 @@ try_from!(item: &protowire::SubmitTransactionReplacementRequestMessage, kaspa_rp
 });
 try_from!(item: &protowire::SubmitTransactionReplacementResponseMessage, RpcResult<kaspa_rpc_core::SubmitTransactionReplacementResponse>, {
     Self {
-        transaction_id: RpcHash::from_str(&item.transaction_id)?,
+        // PR-9.5c/f: TransactionId widened to Hash64.
+        transaction_id: kaspa_consensus_core::Hash64::from_str(&item.transaction_id)?,
         replaced_transaction: item
             .replaced_transaction
             .as_ref()
@@ -959,7 +961,8 @@ try_from!(item: &protowire::GetCurrentBlockColorResponseMessage, RpcResult<kaspa
 });
 try_from!(item: &protowire::GetUtxoReturnAddressRequestMessage, kaspa_rpc_core::GetUtxoReturnAddressRequest , {
     Self {
-        txid: Hash::from_str(&item.txid).unwrap_or_default(),
+        // PR-9.5f: txid widened to Hash64.
+        txid: kaspa_consensus_core::Hash64::from_str(&item.txid).unwrap_or_default(),
         accepting_block_daa_score: item.accepting_block_daa_score
     }
 });

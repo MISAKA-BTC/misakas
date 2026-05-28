@@ -3,7 +3,7 @@
 //!
 
 use kaspa_bip32::{DerivationPath, KeyFingerprint, secp256k1};
-use kaspa_consensus_core::{Hash, hashing::sighash::SigHashReusedValuesUnsync};
+use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::{collections::BTreeMap, fmt::Display, fmt::Formatter, future::Future, marker::PhantomData, ops::Deref};

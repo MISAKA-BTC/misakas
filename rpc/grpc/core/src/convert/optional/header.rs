@@ -55,8 +55,9 @@ try_from!(item: &protowire::RpcOptionalHeader, kaspa_rpc_core::RpcOptionalHeader
         version: item.version.map(|x| x as u16),
         hash: item.hash.as_ref().map(|x| RpcHash::from_str(x)).transpose()?,
         parents_by_level: Some(compressed_parents_from_protowire(&item.parents_by_level)?),
-        hash_merkle_root: item.hash_merkle_root.as_ref().map(|x| RpcHash::from_str(x)).transpose()?,
-        accepted_id_merkle_root: item.accepted_id_merkle_root.as_ref().map(|x| RpcHash::from_str(x)).transpose()?,
+        // PR-9.5c/f: merkle roots widened to Hash64; utxo_commitment stays 32-byte.
+        hash_merkle_root: item.hash_merkle_root.as_ref().map(|x| kaspa_consensus_core::Hash64::from_str(x)).transpose()?,
+        accepted_id_merkle_root: item.accepted_id_merkle_root.as_ref().map(|x| kaspa_consensus_core::Hash64::from_str(x)).transpose()?,
         utxo_commitment: item.utxo_commitment.as_ref().map(|x| RpcHash::from_str(x)).transpose()?,
         timestamp: item.timestamp.map(|x| x as u64),
         bits: item.bits,

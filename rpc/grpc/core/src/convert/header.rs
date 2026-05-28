@@ -51,12 +51,14 @@ from!(item: &[RpcHash], protowire::RpcBlockLevelParents, { Self { parent_hashes:
 // ----------------------------------------------------------------------------
 
 try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcHeader, {
-    // We re-hash the block to remain as most trustless as possible
+    // We re-hash the block to remain as most trustless as possible.
+    // PR-9.5c/f: hash_merkle_root / accepted_id_merkle_root are now
+    // Hash64 (128-char hex on the wire); the rest stay 32-byte RpcHash.
     let header = Header::new_finalized(
         item.version.try_into()?,
         item.parents.iter().map(Vec::<RpcHash>::try_from).collect::<RpcResult<Vec<Vec<RpcHash>>>>()?.try_into()?,
-        RpcHash::from_str(&item.hash_merkle_root)?,
-        RpcHash::from_str(&item.accepted_id_merkle_root)?,
+        kaspa_consensus_core::Hash64::from_str(&item.hash_merkle_root)?,
+        kaspa_consensus_core::Hash64::from_str(&item.accepted_id_merkle_root)?,
         RpcHash::from_str(&item.utxo_commitment)?,
         item.timestamp.try_into()?,
         item.bits,
@@ -74,8 +76,9 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcRawHeader, {
     Self {
         version: item.version.try_into()?,
         parents_by_level: item.parents.iter().map(Vec::<RpcHash>::try_from).collect::<RpcResult<Vec<Vec<RpcHash>>>>()?,
-        hash_merkle_root: RpcHash::from_str(&item.hash_merkle_root)?,
-        accepted_id_merkle_root: RpcHash::from_str(&item.accepted_id_merkle_root)?,
+        // PR-9.5c/f: merkle roots widened to Hash64.
+        hash_merkle_root: kaspa_consensus_core::Hash64::from_str(&item.hash_merkle_root)?,
+        accepted_id_merkle_root: kaspa_consensus_core::Hash64::from_str(&item.accepted_id_merkle_root)?,
         utxo_commitment: RpcHash::from_str(&item.utxo_commitment)?,
         timestamp: item.timestamp.try_into()?,
         bits: item.bits,
@@ -88,12 +91,13 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcRawHeader, {
 });
 
 try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcOptionalHeader, {
-    // We re-hash the block to remain as most trustless as possible
+    // We re-hash the block to remain as most trustless as possible.
+    // PR-9.5c/f: merkle roots widened to Hash64.
     let header = Header::new_finalized(
         item.version.try_into()?,
         item.parents.iter().map(Vec::<RpcHash>::try_from).collect::<RpcResult<Vec<Vec<RpcHash>>>>()?.try_into()?,
-        RpcHash::from_str(&item.hash_merkle_root)?,
-        RpcHash::from_str(&item.accepted_id_merkle_root)?,
+        kaspa_consensus_core::Hash64::from_str(&item.hash_merkle_root)?,
+        kaspa_consensus_core::Hash64::from_str(&item.accepted_id_merkle_root)?,
         RpcHash::from_str(&item.utxo_commitment)?,
         item.timestamp.try_into()?,
         item.bits,
@@ -123,6 +127,19 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         let c = COUNTER.fetch_add(1, Ordering::Relaxed);
         RpcHash::from_u64_word(c)
+    }
+
+    // PR-9.5c/f: Hash64 unique generator for the merkle-root header
+    // positions (hash_merkle_root / accepted_id_merkle_root), which
+    // widened to Hash64. The low 8 bytes carry the counter so values
+    // stay distinct across calls.
+    fn new_unique_hash64() -> kaspa_consensus_core::Hash64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(1);
+        let c = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut bytes = [0u8; 64];
+        bytes[..8].copy_from_slice(&c.to_le_bytes());
+        kaspa_consensus_core::Hash64::from_bytes(bytes)
     }
 
     fn test_parents_by_level_rxr(rpc_parents_1: &[Vec<RpcHash>], rpc_parents_2: &[Vec<RpcHash>]) {
@@ -171,8 +188,10 @@ mod tests {
             vec![vec![new_unique(), new_unique(), new_unique()], vec![new_unique()], vec![new_unique(), new_unique()]]
                 .try_into()
                 .unwrap(),
-            new_unique(),
-            new_unique(),
+            // PR-9.5c/f: hash_merkle_root + accepted_id_merkle_root are Hash64;
+            // utxo_commitment (3rd) stays 32-byte RpcHash.
+            new_unique_hash64(),
+            new_unique_hash64(),
             new_unique(),
             123,
             12345,
@@ -205,8 +224,10 @@ mod tests {
             vec![vec![new_unique(), new_unique(), new_unique()], vec![new_unique()], vec![new_unique(), new_unique()]]
                 .try_into()
                 .unwrap(),
-            new_unique(),
-            new_unique(),
+            // PR-9.5c/f: hash_merkle_root + accepted_id_merkle_root are Hash64;
+            // utxo_commitment (3rd) stays 32-byte RpcHash.
+            new_unique_hash64(),
+            new_unique_hash64(),
             new_unique(),
             123,
             12345,

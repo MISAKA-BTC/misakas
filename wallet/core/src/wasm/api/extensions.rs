@@ -1,6 +1,6 @@
 use crate::imports::*;
 use js_sys::Object;
-use kaspa_consensus_core::Hash;
+use kaspa_consensus_core::Hash64;
 
 pub trait WalletApiObjectExtension {
     fn get_secret(&self, key: &str) -> Result<Secret>;
@@ -10,7 +10,8 @@ pub trait WalletApiObjectExtension {
     fn get_prv_key_data_id(&self, key: &str) -> Result<PrvKeyDataId>;
     fn get_account_id(&self, key: &str) -> Result<AccountId>;
     fn try_get_account_id_list(&self, key: &str) -> Result<Option<Vec<AccountId>>>;
-    fn get_transaction_id(&self, key: &str) -> Result<Hash>;
+    // PR-9.5f: transaction ids are Hash64 (ADR-0008).
+    fn get_transaction_id(&self, key: &str) -> Result<Hash64>;
     fn try_get_addresses(&self, key: &str) -> Result<Option<Vec<Address>>>;
 }
 
@@ -46,8 +47,8 @@ impl WalletApiObjectExtension for Object {
         AccountId::try_from(&self.get_value(key)?)
     }
 
-    fn get_transaction_id(&self, key: &str) -> Result<Hash> {
-        Ok(Hash::try_owned_from(self.get_value(key)?)?)
+    fn get_transaction_id(&self, key: &str) -> Result<Hash64> {
+        Ok(Hash64::try_owned_from(self.get_value(key)?)?)
     }
 
     fn try_get_account_id_list(&self, key: &str) -> Result<Option<Vec<AccountId>>> {

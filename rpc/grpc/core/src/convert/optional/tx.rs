@@ -124,15 +124,17 @@ try_from!(item: &protowire::RpcOptionalTransactionOutput, kaspa_rpc_core::RpcOpt
 
 try_from!(item: &protowire::RpcOptionalTransactionOutpoint, kaspa_rpc_core::RpcOptionalTransactionOutpoint, {
     Self {
-        transaction_id: item.transaction_id.as_ref().map(|x| kaspa_rpc_core::RpcHash::from_str(x)).transpose()?,
+        // PR-9.5c/f: TransactionId widened to Hash64.
+        transaction_id: item.transaction_id.as_ref().map(|x| kaspa_consensus_core::Hash64::from_str(x)).transpose()?,
         index: item.index,
     }
 });
 
 try_from!(item: &protowire::RpcOptionalTransactionVerboseData, kaspa_rpc_core::RpcOptionalTransactionVerboseData, {
     Self {
-        transaction_id: item.transaction_id.as_ref().map(|x| kaspa_rpc_core::RpcHash::from_str(x)).transpose()?,
-        hash: item.hash.as_ref().map(|x| kaspa_rpc_core::RpcHash::from_str(x)).transpose()?,
+        // PR-9.5c/f: transaction_id + hash widened to Hash64.
+        transaction_id: item.transaction_id.as_ref().map(|x| kaspa_consensus_core::Hash64::from_str(x)).transpose()?,
+        hash: item.hash.as_ref().map(|x| kaspa_consensus_core::Hash64::from_str(x)).transpose()?,
         compute_mass: item.compute_mass,
         block_hash: item.block_hash.as_ref().map(|x| kaspa_rpc_core::RpcHash::from_str(x)).transpose()?,
         block_time: item.block_time,

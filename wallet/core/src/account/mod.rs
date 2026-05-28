@@ -7,7 +7,6 @@ pub mod descriptor;
 pub mod kind;
 pub mod pskb;
 pub mod variants;
-use kaspa_hashes::Hash;
 use kaspa_wallet_pskt::bundle::Bundle;
 pub use kind::*;
 use pskb::{
@@ -307,7 +306,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
         fee_rate: Option<f64>,
         abortable: &Abortable,
         notifier: Option<GenerationNotifier>,
-    ) -> Result<(GeneratorSummary, Vec<kaspa_hashes::Hash>)> {
+    ) -> Result<(GeneratorSummary, Vec<kaspa_hashes::Hash64>)> {
         let keydata = self.prv_key_data(wallet_secret).await?;
         let signer = Arc::new(Signer::new(self.clone().as_dyn_arc(), keydata, payment_secret));
         let settings = GeneratorSettings::try_new_with_account(
@@ -346,7 +345,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
         payment_secret: Option<Secret>,
         abortable: &Abortable,
         notifier: Option<GenerationNotifier>,
-    ) -> Result<(GeneratorSummary, Vec<kaspa_hashes::Hash>)> {
+    ) -> Result<(GeneratorSummary, Vec<kaspa_hashes::Hash64>)> {
         let keydata = self.prv_key_data(wallet_secret).await?;
         let signer = Arc::new(Signer::new(self.clone().as_dyn_arc(), keydata, payment_secret));
 
@@ -472,7 +471,8 @@ pub trait Account: AnySync + Send + Sync + 'static {
         }
     }
 
-    async fn pskb_broadcast(self: Arc<Self>, bundle: &Bundle) -> Result<Vec<Hash>, Error> {
+    // PR-9.5f: collects submitted txids, which are now Hash64.
+    async fn pskb_broadcast(self: Arc<Self>, bundle: &Bundle) -> Result<Vec<kaspa_hashes::Hash64>, Error> {
         let mut ids = Vec::new();
         let mut stream = bundle_to_finalizer_stream(bundle);
 
@@ -511,7 +511,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
         abortable: &Abortable,
         notifier: Option<GenerationNotifier>,
         guard: &WalletGuard,
-    ) -> Result<(GeneratorSummary, Vec<kaspa_hashes::Hash>)> {
+    ) -> Result<(GeneratorSummary, Vec<kaspa_hashes::Hash64>)> {
         let keydata = self.prv_key_data(wallet_secret).await?;
         let signer = Arc::new(Signer::new(self.clone().as_dyn_arc(), keydata, payment_secret));
 

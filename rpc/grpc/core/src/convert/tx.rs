@@ -282,13 +282,15 @@ try_from!(item: &protowire::RpcTransactionOutput, kaspa_rpc_core::RpcOptionalTra
 
 try_from!(item: &protowire::RpcOutpoint, kaspa_rpc_core::RpcOptionalTransactionOutpoint, {
     Self {
-        transaction_id: Some(RpcHash::from_str(&item.transaction_id)?),
+        // PR-9.5c/f: TransactionId widened to Hash64.
+        transaction_id: Some(kaspa_consensus_core::Hash64::from_str(&item.transaction_id)?),
         index: Some(item.index),
         }
 });
 
 try_from!(item: &protowire::RpcOutpoint, kaspa_rpc_core::RpcTransactionOutpoint, {
-    Self { transaction_id: RpcHash::from_str(&item.transaction_id)?, index: item.index }
+    // PR-9.5c/f: TransactionId widened to Hash64.
+    Self { transaction_id: kaspa_consensus_core::Hash64::from_str(&item.transaction_id)?, index: item.index }
 });
 
 try_from!(item: &protowire::RpcUtxoEntry, kaspa_rpc_core::RpcUtxoEntry, {
@@ -331,8 +333,10 @@ try_from!(item: &protowire::RpcScriptPublicKey, kaspa_rpc_core::RpcScriptPublicK
 
 try_from!(item: &protowire::RpcTransactionVerboseData, kaspa_rpc_core::RpcTransactionVerboseData, {
     Self {
-        transaction_id: RpcHash::from_str(&item.transaction_id)?,
-        hash: RpcHash::from_str(&item.hash)?,
+        // PR-9.5c/f: transaction_id + full-content hash widened to Hash64;
+        // block_hash stays 32-byte (BlockHash flips in PR-9.5d).
+        transaction_id: kaspa_consensus_core::Hash64::from_str(&item.transaction_id)?,
+        hash: kaspa_consensus_core::Hash64::from_str(&item.hash)?,
         compute_mass: item.compute_mass,
         block_hash: RpcHash::from_str(&item.block_hash)?,
         block_time: item.block_time,
@@ -341,8 +345,9 @@ try_from!(item: &protowire::RpcTransactionVerboseData, kaspa_rpc_core::RpcTransa
 
 try_from!(item: &protowire::RpcTransactionVerboseData, kaspa_rpc_core::RpcOptionalTransactionVerboseData, {
     Self {
-        transaction_id: Some(RpcHash::from_str(item.transaction_id.as_ref())?),
-        hash: Some(RpcHash::from_str(item.hash.as_ref())?),
+        // PR-9.5c/f: transaction_id + hash widened to Hash64.
+        transaction_id: Some(kaspa_consensus_core::Hash64::from_str(item.transaction_id.as_ref())?),
+        hash: Some(kaspa_consensus_core::Hash64::from_str(item.hash.as_ref())?),
         compute_mass: Some(item.compute_mass),
         block_hash: if item.block_hash.is_empty() {
             None
@@ -377,8 +382,14 @@ try_from!(item: &protowire::RpcTransactionOutputVerboseData, kaspa_rpc_core::Rpc
 
 try_from!(item: &protowire::RpcAcceptedTransactionIds, kaspa_rpc_core::RpcAcceptedTransactionIds, {
     Self {
+        // PR-9.5c/f: accepting_block_hash stays 32-byte; the accepted
+        // transaction ids are now Hash64.
         accepting_block_hash: RpcHash::from_str(&item.accepting_block_hash)?,
-        accepted_transaction_ids: item.accepted_transaction_ids.iter().map(|x| RpcHash::from_str(x)).collect::<Result<Vec<_>, _>>()?,
+        accepted_transaction_ids: item
+            .accepted_transaction_ids
+            .iter()
+            .map(|x| kaspa_consensus_core::Hash64::from_str(x))
+            .collect::<Result<Vec<_>, _>>()?,
     }
 });
 

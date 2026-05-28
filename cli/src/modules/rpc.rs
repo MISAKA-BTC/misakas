@@ -281,7 +281,8 @@ impl Rpc {
                 }
 
                 let txid = argv.remove(0);
-                let txid = RpcHash::from_hex(txid.as_str())?;
+                // PR-9.5f: txid is now a 64-byte Hash64 (128 hex chars).
+                let txid = kaspa_consensus_core::Hash64::from_hex(txid.as_str())?;
 
                 let accepting_block_daa_score = argv.remove(0).parse::<u64>()?;
 

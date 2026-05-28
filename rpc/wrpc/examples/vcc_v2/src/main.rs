@@ -1,7 +1,7 @@
 // Example of VCCv2 endpoint
 
 use kaspa_addresses::Address;
-use kaspa_rpc_core::{RpcDataVerbosityLevel, RpcHash, RpcOptionalTransaction, api::rpc::RpcApi};
+use kaspa_rpc_core::{RpcDataVerbosityLevel, RpcOptionalTransaction, api::rpc::RpcApi};
 use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
@@ -70,7 +70,9 @@ async fn get_vcc_v2() -> Result<()> {
     let response = client.get_virtual_chain_from_block_v2(pp_hash, Some(RpcDataVerbosityLevel::High), None).await?;
 
     // keep track of accepted transaction ids
-    let mut global_seen_tx = HashSet::<RpcHash>::with_capacity(30_000);
+    // PR-9.5f: transaction ids are now Hash64 (ADR-0008); the
+    // dedup set widens accordingly.
+    let mut global_seen_tx = HashSet::<kaspa_rpc_core::RpcTransactionId>::with_capacity(30_000);
 
     for acd in response.chain_block_accepted_transactions.iter() {
         let header = acd.chain_block_header.clone();

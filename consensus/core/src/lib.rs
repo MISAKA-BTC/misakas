@@ -12,6 +12,11 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 
 pub use kaspa_hashes::Hash;
+// PR-9.5f: companion re-export so downstream crates (rpc/grpc, wallet,
+// rpc-service) that depend on consensus-core but not directly on
+// kaspa-hashes can name the 64-byte type as `kaspa_consensus_core::Hash64`,
+// mirroring the long-standing `kaspa_consensus_core::Hash` path.
+pub use kaspa_hashes::Hash64;
 
 // ---------------------------------------------------------------------
 // kaspa-pq Phase 9 (PR-9.5b): consensus-identity semantic aliases.

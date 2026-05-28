@@ -439,7 +439,8 @@ pub trait RpcApi: Sync + Send + AnySync {
         request: GetDaaScoreTimestampEstimateRequest,
     ) -> RpcResult<GetDaaScoreTimestampEstimateResponse>;
 
-    async fn get_utxo_return_address(&self, txid: RpcHash, accepting_block_daa_score: u64) -> RpcResult<RpcAddress> {
+    // PR-9.5f: txid widened to RpcTransactionId (= Hash64).
+    async fn get_utxo_return_address(&self, txid: RpcTransactionId, accepting_block_daa_score: u64) -> RpcResult<RpcAddress> {
         Ok(self
             .get_utxo_return_address_call(None, GetUtxoReturnAddressRequest { txid, accepting_block_daa_score })
             .await?

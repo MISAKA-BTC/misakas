@@ -78,11 +78,12 @@ try_from!(item: &protowire::RpcBlockVerboseData, kaspa_rpc_core::RpcBlockVerbose
         hash: RpcHash::from_str(&item.hash)?,
         difficulty: item.difficulty,
         selected_parent_hash: RpcHash::from_str(&item.selected_parent_hash)?,
+        // PR-9.5c/f: transaction ids widened to Hash64.
         transaction_ids: item
             .transaction_ids
             .iter()
-            .map(|x| RpcHash::from_str(x))
-            .collect::<Result<Vec<kaspa_rpc_core::RpcHash>, faster_hex::Error>>()?,
+            .map(|x| kaspa_consensus_core::Hash64::from_str(x))
+            .collect::<Result<Vec<kaspa_consensus_core::Hash64>, faster_hex::Error>>()?,
         is_header_only: item.is_header_only,
         blue_score: item.blue_score,
         children_hashes: item

@@ -140,6 +140,19 @@ mod mockery {
         }
     }
 
+    // PR-9.5c/f: the consensus-identity aliases (TransactionId,
+    // TransactionHash, MerkleRoot, AcceptedIdMerkleRoot) are now
+    // `Hash64`; mock random 64-byte values for them. `rand`'s
+    // `fill` works on `[u8; 64]` (it operates on slices), unlike
+    // the `Standard` distribution which caps at 32.
+    impl Mock for kaspa_consensus_core::Hash64 {
+        fn mock() -> Self {
+            let mut bytes: [u8; 64] = [0; 64];
+            rand::thread_rng().fill(&mut bytes[..]);
+            kaspa_consensus_core::Hash64::from_bytes(bytes)
+        }
+    }
+
     impl Mock for RpcAddress {
         fn mock() -> Self {
             RpcAddress::new(Prefix::Mainnet, Version::PubKey, Hash::mock().as_bytes().as_slice())

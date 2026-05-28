@@ -6,7 +6,6 @@ use kaspa_consensus_core::tx::{
 use kaspa_core::debug;
 use kaspa_database::prelude::{CachePolicy, CachedDbAccess, DB, DirectDbWriter, StoreResult};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
 use kaspa_index_core::indexed_utxos::BalanceByScriptPublicKey;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

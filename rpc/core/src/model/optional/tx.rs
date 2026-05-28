@@ -502,9 +502,12 @@ pub struct RpcOptionalTransactionVerboseData {
     // built-in `Option` adapter.
     /// Level: Low
     pub transaction_id: Option<RpcTransactionId>,
-    #[serde(with = "serde_bytes_fixed_ref_optional")]
     /// Level: Low
-    pub hash: Option<RpcHash>,
+    // PR-9.5f: full-content tx hash widened to Hash64, matching the
+    // non-optional `RpcTransactionVerboseData.hash`. Hash64 carries
+    // its own serde impl (routed through the `Option` adapter), so
+    // the `serde_bytes_fixed_ref_optional` annotation is removed.
+    pub hash: Option<kaspa_consensus_core::TransactionHash>,
     /// Level: High
     pub compute_mass: Option<u64>,
     #[serde(with = "serde_bytes_fixed_ref_optional")]
@@ -527,8 +530,9 @@ impl RpcOptionalTransactionVerboseData {
 impl Serializer for RpcOptionalTransactionVerboseData {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         store!(u8, &1, writer)?;
-        store!(Option<RpcTransactionId>, &self.transaction_id, writer)?;
-        store!(Option<RpcHash>, &self.hash, writer)?;
+        // PR-9.5c/f: transaction_id + hash are Hash64; block_hash stays 32-byte.
+        store!(Option<kaspa_consensus_core::Hash64>, &self.transaction_id, writer)?;
+        store!(Option<kaspa_consensus_core::Hash64>, &self.hash, writer)?;
         store!(Option<u64>, &self.compute_mass, writer)?;
         store!(Option<RpcHash>, &self.block_hash, writer)?;
         store!(Option<u64>, &self.block_time, writer)?;
@@ -540,8 +544,9 @@ impl Serializer for RpcOptionalTransactionVerboseData {
 impl Deserializer for RpcOptionalTransactionVerboseData {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u8, reader)?;
-        let transaction_id = load!(Option<RpcTransactionId>, reader)?;
-        let hash = load!(Option<RpcHash>, reader)?;
+        // PR-9.5c/f: Hash64 wire width for transaction_id + hash.
+        let transaction_id = load!(Option<kaspa_consensus_core::Hash64>, reader)?;
+        let hash = load!(Option<kaspa_consensus_core::Hash64>, reader)?;
         let compute_mass = load!(Option<u64>, reader)?;
         let block_hash = load!(Option<RpcHash>, reader)?;
         let block_time = load!(Option<u64>, reader)?;

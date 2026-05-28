@@ -2673,12 +2673,15 @@ impl Deserializer for GetCurrentBlockColorResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetUtxoReturnAddressRequest {
-    pub txid: RpcHash,
+    // PR-9.5f: txid widened to RpcTransactionId (= Hash64) so it
+    // feeds the consensus `get_transactions_by_accepting_daa_score`
+    // API, which takes `Option<Vec<TransactionId>>`.
+    pub txid: RpcTransactionId,
     pub accepting_block_daa_score: u64,
 }
 
 impl GetUtxoReturnAddressRequest {
-    pub fn new(txid: RpcHash, accepting_block_daa_score: u64) -> Self {
+    pub fn new(txid: RpcTransactionId, accepting_block_daa_score: u64) -> Self {
         Self { txid, accepting_block_daa_score }
     }
 }
@@ -2686,7 +2689,8 @@ impl GetUtxoReturnAddressRequest {
 impl Serializer for GetUtxoReturnAddressRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         store!(u16, &1, writer)?;
-        store!(RpcHash, &self.txid, writer)?;
+        // PR-9.5f: Hash64 wire width.
+        store!(kaspa_consensus_core::Hash64, &self.txid, writer)?;
         store!(u64, &self.accepting_block_daa_score, writer)?;
 
         Ok(())
@@ -2696,7 +2700,7 @@ impl Serializer for GetUtxoReturnAddressRequest {
 impl Deserializer for GetUtxoReturnAddressRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u16, reader)?;
-        let txid = load!(RpcHash, reader)?;
+        let txid = load!(kaspa_consensus_core::Hash64, reader)?;
         let accepting_block_daa_score = load!(u64, reader)?;
 
         Ok(Self { txid, accepting_block_daa_score })

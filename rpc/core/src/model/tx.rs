@@ -4,7 +4,7 @@ use kaspa_consensus_core::tx::{
     ScriptPublicKey, ScriptVec, TransactionId, TransactionIndexType, TransactionInput, TransactionOutpoint, TransactionOutput,
     UtxoEntry,
 };
-use kaspa_utils::{hex::ToHex, serde_bytes_fixed_ref};
+use kaspa_utils::hex::ToHex;
 use serde::{Deserialize, Serialize};
 use workflow_serializer::prelude::*;
 

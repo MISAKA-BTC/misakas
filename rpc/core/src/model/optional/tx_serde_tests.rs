@@ -14,12 +14,13 @@ fn hash32(b: u8) -> RpcHash {
     RpcHash::from_bytes([b; 32])
 }
 
+// PR-9.5c/f: RpcTransactionId is now Hash64 (64 bytes).
 fn tx_id(b: u8) -> RpcTransactionId {
-    RpcTransactionId::from_bytes([b; 32])
+    RpcTransactionId::from_bytes([b; 64])
 }
 
 fn outpoint_some() -> RpcOptionalTransactionOutpoint {
-    RpcOptionalTransactionOutpoint { transaction_id: Some(TransactionId::from_bytes([0xAB; 32])), index: Some(7) }
+    RpcOptionalTransactionOutpoint { transaction_id: Some(tx_id(0xAB)), index: Some(7) }
 }
 
 fn outpoint_none() -> RpcOptionalTransactionOutpoint {
@@ -29,7 +30,8 @@ fn outpoint_none() -> RpcOptionalTransactionOutpoint {
 fn verbose_data_some() -> RpcOptionalTransactionVerboseData {
     RpcOptionalTransactionVerboseData {
         transaction_id: Some(tx_id(0x11)),
-        hash: Some(hash32(0x22)),
+        // PR-9.5c/f: full-content tx hash is now Hash64; block_hash stays 32-byte.
+        hash: Some(tx_id(0x22)),
         compute_mass: Some(42),
         block_hash: Some(hash32(0x33)),
         block_time: Some(123456),
@@ -91,7 +93,11 @@ fn transaction_none_payload() -> RpcOptionalTransaction {
 #[test]
 fn outpoint_json_some() {
     let json = serde_json::to_string(&outpoint_some()).unwrap();
-    assert_eq!(json, r#"{"transactionId":"abababababababababababababababababababababababababababababababab","index":7}"#);
+    // PR-9.5c/f: transactionId is now a 64-byte Hash64 → 128 hex chars.
+    // Build the expectation programmatically to avoid hand-counting the
+    // "ab" repetition.
+    let expected = format!(r#"{{"transactionId":"{}","index":7}}"#, "ab".repeat(64));
+    assert_eq!(json, expected);
     let back: RpcOptionalTransactionOutpoint = serde_json::from_str(&json).unwrap();
     assert_eq!(back, outpoint_some());
 }
@@ -109,9 +115,11 @@ fn verbose_data_json_some() {
     let json = serde_json::to_string(&verbose_data_some()).unwrap();
     assert_eq!(
         json,
+        // PR-9.5c/f: transactionId + hash are now 64-byte Hash64 (128 hex
+        // chars); blockHash stays a 32-byte block hash (64 hex chars).
         concat!(
-            r#"{"transactionId":"1111111111111111111111111111111111111111111111111111111111111111","#,
-            r#""hash":"2222222222222222222222222222222222222222222222222222222222222222","#,
+            r#"{"transactionId":"11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111","#,
+            r#""hash":"22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222","#,
             r#""computeMass":42,"#,
             r#""blockHash":"3333333333333333333333333333333333333333333333333333333333333333","#,
             r#""blockTime":123456}"#,
