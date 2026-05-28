@@ -102,6 +102,11 @@ impl TryFrom<Versioned<protowire::BlockHeader>> for Header {
             item.timestamp.try_into()?,
             item.bits,
             item.nonce,
+            // PR-9.5d: the p2p BlockHeader proto has no pow_algo_id
+            // field yet; Phase 1 admits only kHeavyHash, so default
+            // it. The proto field is a Phase-2 follow-on (algo_id=2,
+            // ADR-0007) requiring a proto regeneration.
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             item.daa_score,
             // We follow the golang specification of variable big-endian here
             BlueWorkType::from_be_bytes_var(&item.blue_work)?,

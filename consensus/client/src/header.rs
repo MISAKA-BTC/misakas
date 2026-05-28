@@ -309,6 +309,12 @@ impl TryCastFromJs for Header {
                         .map_err(|err| Error::convert("utxoCommitment", err))?,
                     nonce: object.get_u64("nonce")?,
                     timestamp: object.get_u64("timestamp")?,
+                    // PR-9.5d: optional `powAlgoId` JS field; defaults to the
+                    // Phase 1 kHeavyHash algo id when absent. The WASM Header
+                    // getter/setter for this field is a Phase-2 follow-on.
+                    pow_algo_id: object
+                        .get_u8("powAlgoId")
+                        .unwrap_or(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH),
                     daa_score: object.get_u64("daaScore")?,
                     bits: object.get_u32("bits")?,
                     blue_work: object.get_value("blueWork")?.try_into().map_err(|err| Error::convert("blueWork", err))?,

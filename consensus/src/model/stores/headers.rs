@@ -82,6 +82,11 @@ impl From<HeaderWithBlockLevel2> for HeaderWithBlockLevel {
                 timestamp: value.header.timestamp,
                 bits: value.header.bits,
                 nonce: value.header.nonce,
+                // PR-9.5d: the Header2 back-compat shim reads pre-kaspa-pq
+                // data with no pow_algo_id; default to Phase 1 kHeavyHash.
+                // (Per ADR-0001 this shim is dead for kaspa-pq — old DBs are
+                // rejected — but it must still type-check.)
+                pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
                 daa_score: value.header.daa_score,
                 blue_work: value.header.blue_work,
                 blue_score: value.header.blue_score,

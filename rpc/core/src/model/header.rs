@@ -120,6 +120,9 @@ impl TryFrom<RpcHeader> for Header {
             timestamp: header.timestamp,
             bits: header.bits,
             nonce: header.nonce,
+            // PR-9.5d: RpcHeader has no pow_algo_id field yet (Phase-2
+            // follow-on); default to the Phase 1 kHeavyHash algo id.
+            pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             daa_score: header.daa_score,
             blue_work: header.blue_work,
             blue_score: header.blue_score,
@@ -142,6 +145,9 @@ impl TryFrom<&RpcHeader> for Header {
             timestamp: header.timestamp,
             bits: header.bits,
             nonce: header.nonce,
+            // PR-9.5d: RpcHeader has no pow_algo_id field yet (Phase-2
+            // follow-on); default to the Phase 1 kHeavyHash algo id.
+            pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             daa_score: header.daa_score,
             blue_work: header.blue_work,
             blue_score: header.blue_score,
@@ -223,6 +229,10 @@ impl TryFrom<RpcRawHeader> for Header {
             header.timestamp,
             header.bits,
             header.nonce,
+            // PR-9.5d: Phase 1 admits only kHeavyHash; the RPC/proto
+            // pow_algo_id round-trip field is a Phase-2 follow-on
+            // (added when algo_id = 2 lands per ADR-0007).
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             header.daa_score,
             header.blue_work,
             header.blue_score,
@@ -244,6 +254,8 @@ impl TryFrom<&RpcRawHeader> for Header {
             header.timestamp,
             header.bits,
             header.nonce,
+            // PR-9.5d: Phase 1 kHeavyHash (see above).
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             header.daa_score,
             header.blue_work,
             header.blue_score,

@@ -115,13 +115,16 @@ pub fn generate_random_header(rng: &mut SmallRng, parent_amount: usize) -> Heade
         generate_random_hash64(rng),
         generate_random_hash64(rng),
         generate_random_hash(rng),
-        rng.r#gen(),
-        rng.r#gen(),
-        rng.r#gen(),
-        rng.r#gen(),
-        rng.r#gen::<u64>().into(),
-        rng.r#gen(),
-        generate_random_hash(rng),
+        rng.r#gen(), // timestamp
+        rng.r#gen(), // bits
+        rng.r#gen(), // nonce
+        // PR-9.5d: pow_algo_id (random byte — test header is not
+        // consensus-valid anyway).
+        rng.r#gen(),               // pow_algo_id
+        rng.r#gen(),               // daa_score
+        rng.r#gen::<u64>().into(), // blue_work
+        rng.r#gen(),               // blue_score
+        generate_random_hash(rng), // pruning_point
     )
 }
 

@@ -21,6 +21,10 @@ pub fn hash_override_nonce_time(header: &Header, nonce: u64, timestamp: u64) -> 
         .update(timestamp.to_le_bytes())
         .update(header.bits.to_le_bytes())
         .update(nonce.to_le_bytes())
+        // PR-9.5d: pow_algo_id participates in the header identity
+        // after the (timestamp, bits, nonce) PoW triple and before
+        // daa_score. Frozen byte order (hard-fork to change).
+        .update([header.pow_algo_id])
         .update(header.daa_score.to_le_bytes())
         .update(header.blue_score.to_le_bytes())
         .write_blue_work(header.blue_work)
@@ -72,6 +76,10 @@ pub fn hash_override_nonce_time_64(header: &Header, nonce: u64, timestamp: u64) 
         .update(timestamp.to_le_bytes())
         .update(header.bits.to_le_bytes())
         .update(nonce.to_le_bytes())
+        // PR-9.5d: pow_algo_id binds the Layer 1 algorithm into the
+        // pre-PoW hash, so a miner cannot reuse PoW across algos.
+        // Same byte position as the 32-byte header hash above.
+        .update([header.pow_algo_id])
         .update(header.daa_score.to_le_bytes())
         .update(header.blue_score.to_le_bytes())
         .write_blue_work(header.blue_work)
@@ -104,6 +112,8 @@ mod tests {
             234,
             23,
             567,
+            // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash = 1).
+            crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             0,
             0.into(),
             0,

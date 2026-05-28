@@ -47,6 +47,8 @@ impl From<&GenesisBlock> for Header {
             genesis.timestamp,
             genesis.bits,
             genesis.nonce,
+            // PR-9.5d: genesis runs the Phase 1 kHeavyHash algo.
+            crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             genesis.daa_score,
             0.into(),
             0,
@@ -298,6 +300,8 @@ mod tests {
                 g.timestamp,
                 g.bits,
                 g.nonce,
+                // PR-9.5d: Phase 1 kHeavyHash algo id.
+                crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
                 g.daa_score,
                 0.into(),
                 0,

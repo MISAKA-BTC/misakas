@@ -63,6 +63,9 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcHeader, {
         item.timestamp.try_into()?,
         item.bits,
         item.nonce,
+        // PR-9.5d: Phase 1 kHeavyHash; proto pow_algo_id field is a
+        // Phase-2 follow-on (ADR-0007 algo_id=2).
+        kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
         item.daa_score,
         kaspa_rpc_core::RpcBlueWorkType::from_rpc_hex(&item.blue_work)?,
         item.blue_score,
@@ -102,6 +105,9 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcOptionalHeader, {
         item.timestamp.try_into()?,
         item.bits,
         item.nonce,
+        // PR-9.5d: Phase 1 kHeavyHash; proto pow_algo_id field is a
+        // Phase-2 follow-on (ADR-0007 algo_id=2).
+        kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
         item.daa_score,
         kaspa_rpc_core::RpcBlueWorkType::from_rpc_hex(&item.blue_work)?,
         item.blue_score,
@@ -196,6 +202,8 @@ mod tests {
             123,
             12345,
             98765,
+            // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash = 1).
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             120055,
             459912.into(),
             1928374,
@@ -232,6 +240,8 @@ mod tests {
             123,
             12345,
             98765,
+            // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash = 1).
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             120055,
             459912.into(),
             1928374,

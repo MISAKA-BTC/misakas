@@ -125,6 +125,9 @@ impl TryFrom<RpcOptionalHeader> for Header {
             timestamp: header.timestamp.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "timestamp".to_owned()))?,
             bits: header.bits.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "bits".to_owned()))?,
             nonce: header.nonce.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "nonce".to_owned()))?,
+            // PR-9.5d: RpcOptionalHeader has no pow_algo_id field yet
+            // (Phase-2 follow-on); default to Phase 1 kHeavyHash.
+            pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             daa_score: header.daa_score.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "daa_score".to_owned()))?,
             blue_work: header.blue_work.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "blue_work".to_owned()))?,
             blue_score: header.blue_score.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "blue_score".to_owned()))?,
@@ -158,6 +161,9 @@ impl TryFrom<&RpcOptionalHeader> for Header {
             timestamp: header.timestamp.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "timestamp".to_owned()))?,
             bits: header.bits.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "bits".to_owned()))?,
             nonce: header.nonce.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "nonce".to_owned()))?,
+            // PR-9.5d: RpcOptionalHeader has no pow_algo_id field yet
+            // (Phase-2 follow-on); default to Phase 1 kHeavyHash.
+            pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             daa_score: header.daa_score.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "daa_score".to_owned()))?,
             blue_work: header.blue_work.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "blue_work".to_owned()))?,
             blue_score: header.blue_score.ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "blue_score".to_owned()))?,

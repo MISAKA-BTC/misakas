@@ -11,10 +11,9 @@ use std::cmp::max;
 use crate::matrix::Matrix;
 use kaspa_consensus_core::{
     BlockLevel, hashing, header::Header,
-    pow_layer0::{
-        POW_ALGO_ID_KHEAVYHASH, POW_FINALIZER_BYTES, PowLayer0Error, l1_seed32_for_kheavyhash_v1,
-        pow_finalizer_blake2b_512,
-    },
+    // PR-9.5d: POW_ALGO_ID_KHEAVYHASH no longer imported here — the
+    // finalizer now reads `header.pow_algo_id` via `State::pow_algo_id`.
+    pow_layer0::{POW_FINALIZER_BYTES, PowLayer0Error, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512},
 };
 use kaspa_hashes::{Hash64, PowHash};
 use kaspa_math::{Uint256, Uint512};
@@ -122,6 +121,13 @@ pub struct StateLayer0 {
     pub(crate) network_id: Vec<u8>,
     pub(crate) timestamp: u64,
     pub(crate) bits: u32,
+    /// PR-9.5d: Layer 1 algorithm discriminator read from
+    /// `header.pow_algo_id`. Fed into the Layer 0 finalizer so the
+    /// PoW digest binds to the declared algorithm. Phase 1 admits
+    /// only `POW_ALGO_ID_KHEAVYHASH`; rejection of any other value
+    /// is the header-validation rule's job (consensus/src), not the
+    /// finalizer's.
+    pub(crate) pow_algo_id: u8,
     /// PRE_POW_HASH || TIME || 32 zero byte padding; without NONCE.
     /// Seeded with the derived `l1_seed32` (not the 64-byte pre-PoW
     /// hash) so the kHeavyHash interface stays 32-byte-input.
@@ -150,6 +156,7 @@ impl StateLayer0 {
             network_id: network_id.to_vec(),
             timestamp: header.timestamp,
             bits: header.bits,
+            pow_algo_id: header.pow_algo_id,
             hasher,
         }
     }
@@ -171,7 +178,9 @@ impl StateLayer0 {
         let l1_tag = self.calculate_l1_tag(nonce);
         pow_finalizer_blake2b_512(
             &self.network_id,
-            POW_ALGO_ID_KHEAVYHASH,
+            // PR-9.5d: bind the digest to the header's declared
+            // algo id rather than a hardcoded constant.
+            self.pow_algo_id,
             self.pre_pow_hash_64,
             self.timestamp,
             self.bits,
@@ -196,23 +205,25 @@ impl StateLayer0 {
 #[cfg(test)]
 mod tests_pq {
     use super::*;
-    use kaspa_consensus_core::{BlueWorkType, header::Header};
-    use kaspa_hashes::ZERO_HASH;
+    use kaspa_consensus_core::{BlueWorkType, header::Header, pow_layer0::POW_ALGO_ID_KHEAVYHASH};
+    use kaspa_hashes::{ZERO_HASH, ZERO_HASH64};
 
     fn dummy_header(bits: u32, nonce: u64, timestamp: u64) -> Header {
         Header::new_finalized(
             1,
             vec![vec![1.into()]].try_into().unwrap(),
-            ZERO_HASH,
-            ZERO_HASH,
-            ZERO_HASH,
+            // PR-9.5c: merkle roots are Hash64; PR-9.5d: pow_algo_id added.
+            ZERO_HASH64, // hash_merkle_root
+            ZERO_HASH64, // accepted_id_merkle_root
+            ZERO_HASH,   // utxo_commitment (still 32-byte)
             timestamp,
             bits,
             nonce,
-            0,
+            POW_ALGO_ID_KHEAVYHASH, // pow_algo_id
+            0,                      // daa_score
             BlueWorkType::from_u64(0),
             0,
-            ZERO_HASH,
+            ZERO_HASH, // pruning_point
         )
     }
 

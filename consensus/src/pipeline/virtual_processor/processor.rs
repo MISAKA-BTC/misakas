@@ -1063,6 +1063,9 @@ impl VirtualStateProcessor {
             u64::max(min_block_time, unix_now()),
             virtual_state.bits,
             0,
+            // PR-9.5d: block templates are mined under the Phase 1
+            // kHeavyHash Layer 1 algorithm.
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             virtual_state.daa_score,
             virtual_state.ghostdag_data.blue_work,
             virtual_state.ghostdag_data.blue_score,

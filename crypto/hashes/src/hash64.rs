@@ -210,6 +210,25 @@ impl Hash64 {
         }
         Self(out)
     }
+
+    /// PR-9.5d: single-word constructor mirroring
+    /// [`crate::Hash::from_u64_word`]. The word occupies the last
+    /// (most-significant, in the 8-lane little-endian view) lane so
+    /// small distinct integers map to distinct, BlockHasher-friendly
+    /// `Hash64` values — used by `<int>.into()` test fixtures and by
+    /// any consumer that needs a compact deterministic hash from a
+    /// counter.
+    #[inline(always)]
+    pub fn from_u64_word(word: u64) -> Self {
+        Self::from_le_u64([0, 0, 0, 0, 0, 0, 0, word])
+    }
+}
+
+impl From<u64> for Hash64 {
+    #[inline(always)]
+    fn from(word: u64) -> Self {
+        Self::from_u64_word(word)
+    }
 }
 
 // Override the default `StdHash` so a `BlockHasher`-style consumer

@@ -150,6 +150,17 @@ pub struct Header {
     pub timestamp: u64,
     pub bits: u32,
     pub nonce: u64,
+    /// kaspa-pq Phase 8/9 (PR-8.4, folded into PR-9.5d): Layer 1
+    /// PoW algorithm discriminator. Part of the header identity and
+    /// the pre-PoW hash so the same header body cannot be
+    /// interpreted under two different Layer 1 algorithms. Phase 1
+    /// admits only [`crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH`]
+    /// (`= 1`); ASIC-hard variants are Phase 2+ hard-fork ADRs
+    /// (ADR-0007). Placed after `nonce` and before `daa_score` to
+    /// keep the `(timestamp, bits, nonce)` PoW triple contiguous
+    /// (docs/hash64-migration-inventory.md §"Header hashing byte
+    /// order").
+    pub pow_algo_id: u8,
     pub daa_score: u64,
     pub blue_work: BlueWorkType,
     pub blue_score: u64,
@@ -167,6 +178,9 @@ impl Header {
         timestamp: u64,
         bits: u32,
         nonce: u64,
+        // PR-9.5d: Layer 1 PoW algorithm discriminator, positioned
+        // after `nonce` to mirror the header-hash byte order.
+        pow_algo_id: u8,
         daa_score: u64,
         blue_work: BlueWorkType,
         blue_score: u64,
@@ -181,6 +195,7 @@ impl Header {
             utxo_commitment,
             nonce,
             timestamp,
+            pow_algo_id,
             daa_score,
             bits,
             blue_work,
@@ -214,6 +229,8 @@ impl Header {
             utxo_commitment: Default::default(),
             nonce: 0,
             timestamp: 0,
+            // PR-9.5d: default to the Phase 1 kHeavyHash algo id.
+            pow_algo_id: crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             daa_score: 0,
             bits: 0,
             blue_work: 0.into(),
@@ -272,6 +289,8 @@ mod tests {
             234,
             23,
             567,
+            // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash).
+            crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
             0,
             // kaspa-pq PR-8.5: BlueWorkType widened to Uint576; widen the
             // test fixture too. Low 3 limbs carry the original Uint192

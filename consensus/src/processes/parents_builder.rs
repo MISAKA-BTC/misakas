@@ -324,6 +324,8 @@ mod tests {
                     timestamp: 0,
                     bits: 0,
                     nonce: 0,
+                    // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash).
+                    pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
                     daa_score: 0,
                     blue_work: 0.into(),
                     blue_score: 0,
@@ -355,6 +357,8 @@ mod tests {
                     timestamp: 0,
                     bits: 0,
                     nonce: 0,
+                    // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash).
+                    pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
                     daa_score: 0,
                     blue_work: 0.into(),
                     blue_score: 0,
@@ -386,6 +390,8 @@ mod tests {
                     timestamp: 0,
                     bits: 0,
                     nonce: 0,
+                    // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash).
+                    pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
                     daa_score: 0,
                     blue_work: 0.into(),
                     blue_score: 0,
@@ -488,6 +494,8 @@ mod tests {
                         timestamp: 0,
                         bits: 0,
                         nonce: 0,
+                        // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash).
+                        pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
                         daa_score: 0,
                         blue_work: 0.into(),
                         blue_score: 0,
@@ -550,6 +558,8 @@ mod tests {
                     timestamp: 0,
                     bits: 0,
                     nonce: 0,
+                    // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash).
+                    pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
                     daa_score: 0,
                     blue_work: 0.into(),
                     blue_score: 0,
@@ -591,6 +601,8 @@ mod tests {
                         timestamp: 0,
                         bits: 0,
                         nonce: 0,
+                        // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash).
+                        pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
                         daa_score: 0,
                         blue_work: 0.into(),
                         blue_score: 0,
