@@ -1,14 +1,16 @@
-//! kaspa-pq Phase 10/11: DNS Probabilistic Finality Overlay type
+//! kaspa-pq Phase 10/11/12: DNS Probabilistic Finality Overlay type
 //! surface.
 //!
 //! See [ADR-0009](../../docs/adr/0009-dns-probabilistic-finality.md)
-//! for the consensus design and
+//! for the consensus design,
 //! [ADR-0010](../../docs/adr/0010-validator-node-architecture.md) for
-//! the operational architecture. This module carries the **type
-//! surface only** that Phase 10 follow-up PRs (10.4 — 10.14) will
-//! reference; consensus rule implementations panic with explicit
-//! `unimplemented!()` so the missing surface is loud rather than
-//! silently-zero.
+//! the in-process validator architecture, and
+//! [ADR-0011](../../docs/adr/0011-validator-deployment-and-equivocation-safety.md)
+//! for the single-host deployment + equivocation-safety operating
+//! model. This module carries the **type surface only** that Phase
+//! 10 follow-up PRs (10.4 — 10.14) will reference; consensus rule
+//! implementations panic with explicit `unimplemented!()` so the
+//! missing surface is loud rather than silently-zero.
 //!
 //! Categories:
 //!
@@ -21,11 +23,16 @@
 //!   ADR-0010 §"Subsystem file layout".
 //! - **Node-side policy** (`BlockTemplatePolicy`, `DnsParams`) —
 //!   per-network knobs read at startup.
+//! - **Validator-local state** (`ValidatorStatus`, `SignedEpochRecord`,
+//!   `SignedEpochCheckOutcome`) — node-local surface every validator
+//!   service needs (in-process or sidecar). Never on the wire; never a
+//!   consensus input. See ADR-0011.
 //! - **RPC view** (`DnsConfirmation`) — surface returned by the
 //!   `getDnsConfirmation` method (lands in PR-10.14).
-//! - **Helpers** (`validator_set_commitment`, `stake_attestation_message`)
-//!   — the two byte-deterministic derivations every node must agree
-//!   on. Both panic-stub-free; consumed by validator + verifier
+//! - **Helpers** (`validator_set_commitment`, `stake_attestation_message`,
+//!   `check_signed_epoch_record`) — byte-deterministic derivations
+//!   and pure-function safety checks every node / validator must
+//!   agree on. Panic-stub-free; consumed by validator + verifier
 //!   alike.
 //!
 //! Hash widths follow [ADR-0008](../../docs/adr/0008-hash64-consensus-identity.md)
@@ -537,6 +544,158 @@ pub fn stake_attestation_message(
 }
 
 // ---------------------------------------------------------------------
+// Validator-local state (ADR-0011 §"Decision").
+//
+// These types are *never* on the wire and are *not* consensus
+// inputs — they describe the local view a validator service
+// (in-process or sidecar) maintains across restarts so honest
+// operators cannot accidentally double-sign across a restart, and
+// so an operator can answer "is my bond healthy?" without reading
+// the source code.
+// ---------------------------------------------------------------------
+
+/// Operator-visible status of a running validator service.
+/// Returned by `kaspa-pq-cli validator status` and by the future
+/// `getValidatorStatus` RPC (lands in PR-10.14′). Nine variants;
+/// default is `NodeNotSynced` (a freshly-started validator is
+/// "not yet sure if the node it just connected to is at tip").
+///
+/// See ADR-0011 §"Validator status enum" for the meaning of each
+/// variant. The variant ordering / discriminant values are
+/// API-stable: persisted to JSON / Borsh by RPC clients, so any
+/// future reorder is a wire-format break.
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum ValidatorStatus {
+    /// Local node has not yet reached `is_synced()`. Validator
+    /// service stays idle.
+    #[default]
+    NodeNotSynced = 0,
+    /// `--stake-bond` outpoint does not exist in the stake
+    /// registry yet (the bond tx may still be propagating).
+    BondNotFound = 1,
+    /// Bond exists, `daa_score < activation_daa_score`.
+    BondPending = 2,
+    /// Bond is active; current epoch validator-set sortition has
+    /// not yet picked this validator.
+    ActiveIdle = 3,
+    /// Bond is active, validator is in the current epoch's set,
+    /// and `signed_epoch_db` shows no prior signature for this
+    /// epoch.
+    ActiveEligible = 4,
+    /// Already signed the current epoch — recorded in
+    /// `signed_epoch_db`.
+    SignedThisEpoch = 5,
+    /// Bond is in the unbonding window. No new attestations.
+    Unbonding = 6,
+    /// Bond has been burned by a `SlashingEvidencePayload`. The
+    /// validator service exits with a non-zero status.
+    Slashed = 7,
+    /// `--dry-run` set; per-epoch computation runs, signing is
+    /// skipped.
+    DryRun = 8,
+}
+
+/// Per-(epoch, validator, bond) signing record persisted in the
+/// validator's local `signed_epoch_db` (ADR-0011 §"Signed-epoch
+/// persistence"). Loaded at startup so a restart cannot trigger
+/// honest equivocation across the same epoch.
+///
+/// Note: the DB key is the triple `(bond_outpoint, validator_id,
+/// epoch)` and is *not* stored inside the record — those three
+/// fields uniquely identify the slot the record occupies, and
+/// storing them again would invite drift. The record carries only
+/// the per-attestation content the equivocation check compares
+/// against.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignedEpochRecord {
+    /// Epoch this attestation is bound to. Matches
+    /// `StakeAttestation::epoch`.
+    pub epoch: u64,
+    /// Selected-chain anchor the attestation approved. Two records
+    /// with the same epoch but a differing `target_hash` are
+    /// slashable evidence under ADR-0009 §"`SlashingEvidencePayload`";
+    /// the local guard exists to stop the second one before it
+    /// leaves the host.
+    pub target_hash: Hash64,
+    /// DAA score of the anchor. Redundant with `target_hash` for
+    /// safety purposes (a hash collision would be required to
+    /// fool both fields), but kept independent so the equivocation
+    /// rule catches the rare case of a node bug producing the same
+    /// `target_hash` at different DAA scores.
+    pub target_daa_score: u64,
+    /// `BLAKE2b-512` of the 3309-byte ML-DSA-65 signature bytes.
+    /// Pinned so the validator can recognise a re-broadcast of an
+    /// in-flight attestation across restarts without re-storing
+    /// the full ~3.3 KB signature. **Not** part of the
+    /// equivocation predicate — ML-DSA-65 is hedged by default and
+    /// two valid signatures over the same message differ on the
+    /// `rnd` parameter, so bit-equality would be too strict.
+    pub signature_fingerprint: Hash64,
+}
+
+/// Outcome of the equivocation-safety check performed before a
+/// validator signs a new attestation (ADR-0011
+/// §"Signed-epoch persistence"). The validator service uses this
+/// to decide whether to call libcrux's `sign_ctx`.
+///
+/// API-stable discriminant; persisted to JSON / Borsh by RPC
+/// clients.
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum SignedEpochCheckOutcome {
+    /// No prior record for this `(bond_outpoint, validator_id,
+    /// epoch)` triple. Safe to sign and gossip.
+    #[default]
+    Allow = 0,
+    /// A prior record exists with the **same** `target_hash` and
+    /// `target_daa_score`. Re-sending the same attestation is not
+    /// equivocation; the validator service may re-gossip but is
+    /// not required to. Critical for restart-during-gossip
+    /// scenarios.
+    AllowRebroadcast = 1,
+    /// A prior record exists with a **different** `(target_hash |
+    /// target_daa_score)`. Signing the candidate would produce
+    /// slashable evidence. The validator service must refuse to
+    /// sign and surface the conflict in logs + the status RPC.
+    Block = 2,
+}
+
+/// Pure-function equivocation guard.
+///
+/// Returns one of [`SignedEpochCheckOutcome::Allow`],
+/// [`SignedEpochCheckOutcome::AllowRebroadcast`], or
+/// [`SignedEpochCheckOutcome::Block`] given the prior signing
+/// record (if any) for the same `(bond_outpoint, validator_id,
+/// epoch)` triple and the candidate the validator service is
+/// about to sign. See ADR-0011 §"Signed-epoch persistence" for
+/// the decision table.
+///
+/// The function deliberately does **not** validate the
+/// `signature_fingerprint`: two valid hedged ML-DSA-65 signatures
+/// over the same message will have different fingerprints, so the
+/// predicate that matters is target-hash + target-daa-score
+/// equality.
+///
+/// Both arguments come from the same trust domain (the validator's
+/// own DB and its own in-flight candidate), so this function does
+/// no cryptographic verification — it is a pure comparison.
+pub fn check_signed_epoch_record(
+    prev: Option<&SignedEpochRecord>,
+    candidate: &SignedEpochRecord,
+) -> SignedEpochCheckOutcome {
+    match prev {
+        None => SignedEpochCheckOutcome::Allow,
+        Some(p) if p.target_hash == candidate.target_hash && p.target_daa_score == candidate.target_daa_score => {
+            SignedEpochCheckOutcome::AllowRebroadcast
+        }
+        Some(_) => SignedEpochCheckOutcome::Block,
+    }
+}
+
+// ---------------------------------------------------------------------
 // Consensus rule stubs — implementations land in subsequent PRs.
 // ---------------------------------------------------------------------
 
@@ -961,6 +1120,144 @@ mod tests {
 
         let actual = stake_attestation_message(7, Hash64::from_bytes([0x11u8; 64]), 100, Hash64::from_bytes([0x22u8; 64]));
         assert_eq!(actual.as_bytes(), with_att_key.as_bytes());
+    }
+
+    // ---- Validator-local state (ADR-0011) -------------------------
+
+    fn fixture_signed() -> SignedEpochRecord {
+        SignedEpochRecord {
+            epoch: 7,
+            target_hash: Hash64::from_bytes([0x11u8; 64]),
+            target_daa_score: 1_234_567,
+            signature_fingerprint: Hash64::from_bytes([0xabu8; 64]),
+        }
+    }
+
+    #[test]
+    fn validator_status_default_is_node_not_synced() {
+        // A freshly-started validator must default to
+        // `NodeNotSynced` so it cannot take any sign-eligible
+        // action before its runtime loop has confirmed the local
+        // node is at tip. ADR-0011 §"Validator status enum".
+        assert_eq!(ValidatorStatus::default(), ValidatorStatus::NodeNotSynced);
+    }
+
+    #[test]
+    fn validator_status_discriminants_are_api_stable() {
+        // The Borsh discriminant of each variant is API-stable —
+        // RPC clients persist these to disk. Any reorder is a
+        // wire-format break. Pin the integer values so the test
+        // trips immediately on accidental drift.
+        assert_eq!(ValidatorStatus::NodeNotSynced as u8, 0);
+        assert_eq!(ValidatorStatus::BondNotFound as u8, 1);
+        assert_eq!(ValidatorStatus::BondPending as u8, 2);
+        assert_eq!(ValidatorStatus::ActiveIdle as u8, 3);
+        assert_eq!(ValidatorStatus::ActiveEligible as u8, 4);
+        assert_eq!(ValidatorStatus::SignedThisEpoch as u8, 5);
+        assert_eq!(ValidatorStatus::Unbonding as u8, 6);
+        assert_eq!(ValidatorStatus::Slashed as u8, 7);
+        assert_eq!(ValidatorStatus::DryRun as u8, 8);
+    }
+
+    #[test]
+    fn validator_status_all_variants_borsh_roundtrip() {
+        for v in [
+            ValidatorStatus::NodeNotSynced,
+            ValidatorStatus::BondNotFound,
+            ValidatorStatus::BondPending,
+            ValidatorStatus::ActiveIdle,
+            ValidatorStatus::ActiveEligible,
+            ValidatorStatus::SignedThisEpoch,
+            ValidatorStatus::Unbonding,
+            ValidatorStatus::Slashed,
+            ValidatorStatus::DryRun,
+        ] {
+            let bytes = borsh::to_vec(&v).unwrap();
+            let back: ValidatorStatus = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(back, v, "variant {v:?} did not round-trip through Borsh");
+            assert_eq!(bytes.len(), 1, "ValidatorStatus must encode as a single byte");
+        }
+    }
+
+    #[test]
+    fn signed_epoch_record_borsh_roundtrip() {
+        let r = fixture_signed();
+        let bytes = borsh::to_vec(&r).unwrap();
+        let back: SignedEpochRecord = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn signed_epoch_check_outcome_borsh_roundtrip() {
+        for o in [SignedEpochCheckOutcome::Allow, SignedEpochCheckOutcome::AllowRebroadcast, SignedEpochCheckOutcome::Block] {
+            let bytes = borsh::to_vec(&o).unwrap();
+            let back: SignedEpochCheckOutcome = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(back, o);
+        }
+        assert_eq!(SignedEpochCheckOutcome::default(), SignedEpochCheckOutcome::Allow);
+    }
+
+    // ---- check_signed_epoch_record — full decision matrix -----------
+
+    #[test]
+    fn equivocation_check_allow_when_no_prior() {
+        let candidate = fixture_signed();
+        assert_eq!(check_signed_epoch_record(None, &candidate), SignedEpochCheckOutcome::Allow);
+    }
+
+    #[test]
+    fn equivocation_check_allow_rebroadcast_when_exact_match() {
+        let prev = fixture_signed();
+        let candidate = prev.clone();
+        assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::AllowRebroadcast);
+    }
+
+    #[test]
+    fn equivocation_check_allow_rebroadcast_when_only_signature_fingerprint_differs() {
+        // ML-DSA-65 is hedged by default (FIPS 204 §3.4); two
+        // valid signatures over the same message differ on the
+        // `rnd` parameter. Bit-equality on the fingerprint would
+        // therefore be too strict, and would falsely block honest
+        // re-signs after a restart. The predicate that matters is
+        // (target_hash, target_daa_score) equality — this test
+        // pins that.
+        let prev = fixture_signed();
+        let mut candidate = prev.clone();
+        candidate.signature_fingerprint = Hash64::from_bytes([0xcdu8; 64]); // different fingerprint
+        assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::AllowRebroadcast);
+    }
+
+    #[test]
+    fn equivocation_check_block_when_target_hash_differs() {
+        let prev = fixture_signed();
+        let mut candidate = prev.clone();
+        candidate.target_hash = Hash64::from_bytes([0x99u8; 64]); // different anchor — would be equivocation
+        assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::Block);
+    }
+
+    #[test]
+    fn equivocation_check_block_when_target_daa_score_differs() {
+        let prev = fixture_signed();
+        let mut candidate = prev.clone();
+        // Same target_hash but different DAA score still counts —
+        // ADR-0009 §"`SlashingEvidencePayload`" lists this as
+        // evidence; the rare case of two attestations sharing
+        // target_hash at different DAA scores is a node bug, and
+        // signing both would still be slashable.
+        candidate.target_daa_score = prev.target_daa_score + 1;
+        assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::Block);
+    }
+
+    #[test]
+    fn equivocation_check_block_when_both_target_fields_differ() {
+        let prev = fixture_signed();
+        let candidate = SignedEpochRecord {
+            epoch: prev.epoch,
+            target_hash: Hash64::from_bytes([0x99u8; 64]),
+            target_daa_score: prev.target_daa_score + 1000,
+            signature_fingerprint: Hash64::from_bytes([0xeeu8; 64]),
+        };
+        assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::Block);
     }
 
     // ---- Stubs are explicit ---------------------------------------
