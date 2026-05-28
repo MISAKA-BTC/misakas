@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use kaspa_addressmanager::AddressManager;
 use kaspa_connectionmanager::ConnectionManager;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::api::{BlockValidationFuture, BlockValidationFutures};
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::Config;
@@ -24,7 +25,6 @@ use kaspa_core::{
     task::tick::TickService,
 };
 use kaspa_core::{time::unix_now, warn};
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_mining::mempool::tx::{Orphan, Priority};
 use kaspa_mining::{manager::MiningManagerProxy, mempool::tx::RbfPolicy};
 use kaspa_notify::notifier::Notify;

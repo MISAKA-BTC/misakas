@@ -48,11 +48,7 @@ use wasm_bindgen::prelude::*;
 use crate::kaspa_pq::{KaspaPqMlDsa65KeyPair, derive_keypair};
 
 fn require_len(bytes: &[u8], expected: usize, label: &str) -> Result<(), String> {
-    if bytes.len() != expected {
-        Err(format!("kaspa-pq {label}: expected {expected} bytes, got {}", bytes.len()))
-    } else {
-        Ok(())
-    }
+    if bytes.len() != expected { Err(format!("kaspa-pq {label}: expected {expected} bytes, got {}", bytes.len())) } else { Ok(()) }
 }
 
 fn jsv<E: std::fmt::Display>(e: E) -> JsValue {
@@ -74,11 +70,7 @@ impl MlDsa65PublicKey {
 
     fn from_hex_inner(hex: &str) -> Result<MlDsa65PublicKey, String> {
         if hex.len() != MLDSA65_PK_LEN * 2 {
-            return Err(format!(
-                "kaspa-pq MlDsa65PublicKey: expected {} hex characters, got {}",
-                MLDSA65_PK_LEN * 2,
-                hex.len()
-            ));
+            return Err(format!("kaspa-pq MlDsa65PublicKey: expected {} hex characters, got {}", MLDSA65_PK_LEN * 2, hex.len()));
         }
         let mut buf = vec![0u8; MLDSA65_PK_LEN];
         faster_hex::hex_decode(hex.as_bytes(), &mut buf).map_err(|e| format!("kaspa-pq MlDsa65PublicKey hex: {e}"))?;
@@ -126,11 +118,7 @@ impl MlDsa65Signature {
 
     fn from_hex_inner(hex: &str) -> Result<MlDsa65Signature, String> {
         if hex.len() != MLDSA65_SIG_LEN * 2 {
-            return Err(format!(
-                "kaspa-pq MlDsa65Signature: expected {} hex characters, got {}",
-                MLDSA65_SIG_LEN * 2,
-                hex.len()
-            ));
+            return Err(format!("kaspa-pq MlDsa65Signature: expected {} hex characters, got {}", MLDSA65_SIG_LEN * 2, hex.len()));
         }
         let mut buf = vec![0u8; MLDSA65_SIG_LEN];
         faster_hex::hex_decode(hex.as_bytes(), &mut buf).map_err(|e| format!("kaspa-pq MlDsa65Signature hex: {e}"))?;
@@ -141,8 +129,12 @@ impl MlDsa65Signature {
         if public_key.inner.len() != MLDSA65_PK_LEN || self.inner.len() != MLDSA65_SIG_LEN {
             return false;
         }
-        let Ok(pk_arr): Result<[u8; MLDSA65_PK_LEN], _> = public_key.inner.as_slice().try_into() else { return false; };
-        let Ok(sig_arr): Result<[u8; MLDSA65_SIG_LEN], _> = self.inner.as_slice().try_into() else { return false; };
+        let Ok(pk_arr): Result<[u8; MLDSA65_PK_LEN], _> = public_key.inner.as_slice().try_into() else {
+            return false;
+        };
+        let Ok(sig_arr): Result<[u8; MLDSA65_SIG_LEN], _> = self.inner.as_slice().try_into() else {
+            return false;
+        };
         let vk = ml_dsa_65::MLDSA65VerificationKey::new(pk_arr);
         let sig = ml_dsa_65::MLDSA65Signature::new(sig_arr);
         ml_dsa_65::verify(&vk, message, MLDSA65_TX_CONTEXT, &sig).is_ok()
@@ -303,8 +295,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_MASTER_PHRASE: &str =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const TEST_MASTER_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     #[test]
     fn keypair_roundtrip_from_mnemonic() {

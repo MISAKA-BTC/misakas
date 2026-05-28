@@ -1,3 +1,4 @@
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::BlockHasher;
 use kaspa_consensus_core::acceptance_data::AcceptanceData;
 use kaspa_consensus_core::acceptance_data::AcceptedTxEntry;
@@ -7,7 +8,6 @@ use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_consensus_core::BlockHash;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::Deserialize;
@@ -52,7 +52,12 @@ impl DbAcceptanceDataStore {
         Self::new(Arc::clone(&self.db), cache_policy)
     }
 
-    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, acceptance_data: Arc<AcceptanceData>) -> Result<(), StoreError> {
+    pub fn insert_batch(
+        &self,
+        batch: &mut WriteBatch,
+        hash: BlockHash,
+        acceptance_data: Arc<AcceptanceData>,
+    ) -> Result<(), StoreError> {
         if self.access.has(hash)? {
             return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }

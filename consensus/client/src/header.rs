@@ -206,7 +206,8 @@ impl Header {
     #[wasm_bindgen(setter = acceptedIdMerkleRoot)]
     // PR-9.5c: `accepted_id_merkle_root` widened to `Hash64`.
     pub fn set_accepted_id_merkle_root_from_js_value(&mut self, js_value: JsValue) {
-        self.inner_mut().accepted_id_merkle_root = kaspa_hashes::Hash64::from_slice(&js_value.try_as_vec_u8().expect("accepted id merkle root"));
+        self.inner_mut().accepted_id_merkle_root =
+            kaspa_hashes::Hash64::from_slice(&js_value.try_as_vec_u8().expect("accepted id merkle root"));
     }
 
     #[wasm_bindgen(getter = utxoCommitment)]
@@ -313,9 +314,7 @@ impl TryCastFromJs for Header {
                     // PR-9.5d: optional `powAlgoId` JS field; defaults to the
                     // Phase 1 kHeavyHash algo id when absent. The WASM Header
                     // getter/setter for this field is a Phase-2 follow-on.
-                    pow_algo_id: object
-                        .get_u8("powAlgoId")
-                        .unwrap_or(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH),
+                    pow_algo_id: object.get_u8("powAlgoId").unwrap_or(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH),
                     daa_score: object.get_u64("daaScore")?,
                     bits: object.get_u32("bits")?,
                     blue_work: object.get_value("blueWork")?.try_into().map_err(|err| Error::convert("blueWork", err))?,

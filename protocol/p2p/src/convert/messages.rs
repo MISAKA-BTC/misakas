@@ -8,13 +8,13 @@ use super::{
     option::TryIntoOptionEx,
 };
 use crate::pb as protowire;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: p2p block-hash convert sites widened to Hash64
 use kaspa_consensus_core::{
     block::Block,
     header::Header,
     pruning::{PruningPointProof, PruningPointsList},
     tx::{TransactionId, TransactionOutpoint, UtxoEntry},
 };
-use kaspa_consensus_core::BlockHash; // PR-9.5e: p2p block-hash convert sites widened to Hash64
 use kaspa_utils::networking::{IpAddress, PeerId};
 
 use std::{collections::HashMap, sync::Arc};

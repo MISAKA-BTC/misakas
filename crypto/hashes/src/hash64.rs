@@ -131,11 +131,7 @@ impl<'de> Deserialize<'de> for Hash64 {
                 Ok(Hash64(out))
             }
         }
-        if deserializer.is_human_readable() {
-            deserializer.deserialize_str(V)
-        } else {
-            deserializer.deserialize_bytes(V)
-        }
+        if deserializer.is_human_readable() { deserializer.deserialize_str(V) } else { deserializer.deserialize_bytes(V) }
     }
 }
 
@@ -340,9 +336,10 @@ impl TryCastFromJs for Hash64 {
     {
         Self::resolve(value, || {
             let bytes = value.as_ref().try_as_vec_u8()?;
-            Ok(Hash64(<[u8; HASH64_SIZE]>::try_from(bytes).map_err(|_| {
-                Hash64TryFromError::WrongSize("Slice must have the length of Hash64 (64 bytes)".into())
-            })?))
+            Ok(Hash64(
+                <[u8; HASH64_SIZE]>::try_from(bytes)
+                    .map_err(|_| Hash64TryFromError::WrongSize("Slice must have the length of Hash64 (64 bytes)".into()))?,
+            ))
         })
     }
 }

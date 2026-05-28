@@ -6,10 +6,10 @@ use rocksdb::WriteBatch;
 
 use std::sync::Arc;
 
+use kaspa_consensus_core::BlockHash;
 use kaspa_database::prelude::{BatchDbWriter, CachePolicy, CachedDbAccess, DbWriter};
 use kaspa_database::prelude::{CachedDbItem, DB};
 use kaspa_database::prelude::{StoreError, StoreResult};
-use kaspa_consensus_core::BlockHash;
 
 use super::U64Key;
 

@@ -11,12 +11,12 @@ use crate::model::{
         reachability::ReachabilityStoreReader,
     },
 };
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     blockhash::BlockHashExtensions,
     errors::pruning::{PruningImportError, PruningImportResult},
 };
 use kaspa_database::prelude::StoreResultUnitExt;
-use kaspa_consensus_core::BlockHash;
 use parking_lot::RwLock;
 
 pub struct PruningPointReply {

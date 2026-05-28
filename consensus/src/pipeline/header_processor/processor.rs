@@ -29,6 +29,7 @@ use crate::{
 };
 use crossbeam_channel::{Receiver, Sender};
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashSet, BlockLevel,
     blockhash::{BlockHashes, ORIGIN},
@@ -38,7 +39,6 @@ use kaspa_consensus_core::{
 };
 use kaspa_consensusmanager::SessionLock;
 use kaspa_database::prelude::{StoreResultExt, StoreResultUnitExt};
-use kaspa_consensus_core::BlockHash;
 use kaspa_utils::vec::VecExtensions;
 use parking_lot::RwLock;
 use rayon::ThreadPool;

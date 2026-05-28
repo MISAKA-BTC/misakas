@@ -1,4 +1,5 @@
 use async_channel::Sender;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::mining_rules::MiningRules;
 use kaspa_consensus_core::tx::ScriptPublicKey;
@@ -10,7 +11,6 @@ use kaspa_consensus_notify::{notification::Notification, root::ConsensusNotifica
 use kaspa_consensusmanager::{ConsensusFactory, ConsensusInstance, DynConsensusCtl};
 use kaspa_core::{core::Core, service::Service};
 use kaspa_database::utils::DbLifetime;
-use kaspa_consensus_core::BlockHash;
 use kaspa_notify::subscription::context::SubscriptionContext;
 use parking_lot::RwLock;
 

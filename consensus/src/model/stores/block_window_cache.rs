@@ -1,7 +1,7 @@
 use crate::processes::ghostdag::ordering::SortableBlock;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::BlockHasher;
 use kaspa_database::prelude::{Cache, CachePolicy};
-use kaspa_consensus_core::BlockHash;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use std::{
     cmp::Reverse,

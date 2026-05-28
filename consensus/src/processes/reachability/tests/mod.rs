@@ -15,12 +15,12 @@ use crate::{
     },
 };
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet,
     blockhash::{BlockHashExtensions, BlockHashes, ORIGIN},
 };
 use kaspa_database::prelude::{DirectWriter, StoreError};
-use kaspa_consensus_core::BlockHash;
 use std::collections::{
     VecDeque,
     hash_map::Entry::{Occupied, Vacant},

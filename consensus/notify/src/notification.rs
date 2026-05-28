@@ -1,6 +1,6 @@
 use derive_more::Display;
-use kaspa_consensus_core::{acceptance_data::AcceptanceData, block::Block, utxo::utxo_diff::UtxoDiff};
 use kaspa_consensus_core::BlockHash; // PR-9.5e: notification block-hash fields widened to Hash64
+use kaspa_consensus_core::{acceptance_data::AcceptanceData, block::Block, utxo::utxo_diff::UtxoDiff};
 use kaspa_notify::{
     events::EventType,
     full_featured,

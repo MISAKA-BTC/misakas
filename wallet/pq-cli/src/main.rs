@@ -280,9 +280,7 @@ fn save_mnemonic(cli: &Cli, mnemonic: &Mnemonic) -> Result<(), CliError> {
     OsRng.fill_bytes(&mut nonce_bytes);
     let key = derive_aead_key(&password, &salt)?;
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
-    let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce_bytes), plaintext.as_bytes())
-        .map_err(|_| CliError::AeadFail)?;
+    let ciphertext = cipher.encrypt(Nonce::from_slice(&nonce_bytes), plaintext.as_bytes()).map_err(|_| CliError::AeadFail)?;
 
     let mut buf = Vec::with_capacity(HEADER_LEN + ciphertext.len());
     buf.extend_from_slice(ENCRYPTED_MAGIC);
@@ -314,9 +312,7 @@ fn read_mnemonic(cli: &Cli) -> Result<Mnemonic, CliError> {
     let password = read_password(cli, "Encrypted seed password: ")?;
     let key = derive_aead_key(&password, &salt)?;
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
-    let plaintext = cipher
-        .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext)
-        .map_err(|_| CliError::AeadFail)?;
+    let plaintext = cipher.decrypt(Nonce::from_slice(&nonce_bytes), ciphertext).map_err(|_| CliError::AeadFail)?;
     let s = String::from_utf8(plaintext).map_err(|_| CliError::DecryptedNotUtf8)?;
     let phrase = s.trim();
     Ok(Mnemonic::new(phrase, Language::English)?)

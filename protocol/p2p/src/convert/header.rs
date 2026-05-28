@@ -1,6 +1,6 @@
 use crate::pb as protowire;
-use kaspa_consensus_core::{BlueWorkType, header::Header};
-use kaspa_consensus_core::BlockHash; // PR-9.5e: p2p block-hash convert sites widened to Hash64
+use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::{BlueWorkType, header::Header}; // PR-9.5e: p2p block-hash convert sites widened to Hash64
 
 use super::error::ConversionError;
 use super::option::TryIntoOptionEx;

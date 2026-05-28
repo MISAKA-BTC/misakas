@@ -1,5 +1,5 @@
-use crate::{BlockHashMap, BlueWorkType, KType, block::Block, header::Header};
 use crate::BlockHash; // PR-9.5e: block-identifier positions widened to Hash64
+use crate::{BlockHashMap, BlueWorkType, KType, block::Block, header::Header};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

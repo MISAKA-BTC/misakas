@@ -1,11 +1,11 @@
 use indexmap::{IndexMap, map::Entry::Occupied};
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::{
     api::{BlockValidationFuture, BlockValidationFutures},
     block::Block,
 };
 use kaspa_consensusmanager::{BlockProcessingBatch, ConsensusProxy};
 use kaspa_core::debug;
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use rand::Rng;
 use std::{
     collections::{HashMap, HashSet, VecDeque},

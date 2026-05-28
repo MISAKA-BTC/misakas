@@ -577,7 +577,6 @@ pub struct DnsParams {
     pub max_attestation_shard_mass: u64,
 
     // ---- Sortition (ADR-0012) ----
-
     /// Per-network sortition mode. `Deterministic` for simnet /
     /// devnet / testnet-initial; `CommitReveal` for mainnet from
     /// genesis. See ADR-0012 §"Two sortition modes".
@@ -815,12 +814,7 @@ pub fn validator_set_commitment(epoch: u64, validators: &[ValidatorRecord]) -> H
 /// is applied at the ML-DSA-65 layer, not inside this hasher — keeping
 /// the two domain separators independent (replay safety analysis in
 /// ADR-0009 §"Attestation target").
-pub fn stake_attestation_message(
-    epoch: u64,
-    target_hash: Hash64,
-    target_daa_score: u64,
-    validator_set_commitment: Hash64,
-) -> Hash {
+pub fn stake_attestation_message(epoch: u64, target_hash: Hash64, target_daa_score: u64, validator_set_commitment: Hash64) -> Hash {
     let mut hasher = Blake2bParams::new().hash_length(32).key(ATTESTATION_MESSAGE_DOMAIN).to_state();
     hasher.update(&epoch.to_le_bytes());
     hasher.update(target_hash.as_byte_slice());
@@ -1181,10 +1175,7 @@ pub enum SignedEpochCheckOutcome {
 /// Both arguments come from the same trust domain (the validator's
 /// own DB and its own in-flight candidate), so this function does
 /// no cryptographic verification — it is a pure comparison.
-pub fn check_signed_epoch_record(
-    prev: Option<&SignedEpochRecord>,
-    candidate: &SignedEpochRecord,
-) -> SignedEpochCheckOutcome {
+pub fn check_signed_epoch_record(prev: Option<&SignedEpochRecord>, candidate: &SignedEpochRecord) -> SignedEpochCheckOutcome {
     match prev {
         None => SignedEpochCheckOutcome::Allow,
         Some(p) if p.target_hash == candidate.target_hash && p.target_daa_score == candidate.target_daa_score => {
@@ -1369,17 +1360,8 @@ pub enum SigningPurpose {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum SignerMetadata {
     None,
-    Attestation {
-        epoch: u64,
-        target_hash: Hash64,
-        target_daa_score: u64,
-    },
-    TakeoverToken {
-        yielding_host_id: Hash,
-        taking_over_host_id: Hash,
-        valid_from_epoch: u64,
-        grace_epochs: u8,
-    },
+    Attestation { epoch: u64, target_hash: Hash64, target_daa_score: u64 },
+    TakeoverToken { yielding_host_id: Hash, taking_over_host_id: Hash, valid_from_epoch: u64, grace_epochs: u8 },
 }
 
 /// Failure modes for a [`SignerRequest`]. Tuple-variant data is
@@ -1612,13 +1594,13 @@ pub fn compute_slashing_distribution(slashed_amount_sompi: u64, slashing_reporte
 /// rule applied unmodified would over-pay the reporter relative
 /// to the work done — the floor keeps the reporter pipeline
 /// cheap).
-pub fn apply_unreveal_reporter_min_cap(distribution: SlashingDistribution, unreveal_reporter_reward_sompi_floor: u64) -> SlashingDistribution {
+pub fn apply_unreveal_reporter_min_cap(
+    distribution: SlashingDistribution,
+    unreveal_reporter_reward_sompi_floor: u64,
+) -> SlashingDistribution {
     let capped_reporter = distribution.reporter_reward_sompi.min(unreveal_reporter_reward_sompi_floor);
     let extra_burn = distribution.reporter_reward_sompi - capped_reporter;
-    SlashingDistribution {
-        reporter_reward_sompi: capped_reporter,
-        burned_sompi: distribution.burned_sompi + extra_burn,
-    }
+    SlashingDistribution { reporter_reward_sompi: capped_reporter, burned_sompi: distribution.burned_sompi + extra_burn }
 }
 
 // ---------------------------------------------------------------------
@@ -1689,7 +1671,8 @@ mod tests {
         // ADR-0015 capability bitflags must be single-bit and
         // pairwise distinct so they compose correctly under
         // bitwise OR.
-        let caps = [CAP_SIGN_TRANSACTION, CAP_SIGN_ATTESTATION, CAP_SIGN_TAKEOVER_TOKEN, CAP_POLICY_STRICT, CAP_AUDIT_LOG, CAP_HSM_BACKED];
+        let caps =
+            [CAP_SIGN_TRANSACTION, CAP_SIGN_ATTESTATION, CAP_SIGN_TAKEOVER_TOKEN, CAP_POLICY_STRICT, CAP_AUDIT_LOG, CAP_HSM_BACKED];
         for c in caps {
             assert!(c.count_ones() == 1, "capability {c:#x} is not a single bit");
         }
@@ -1926,11 +1909,7 @@ mod tests {
 
     #[test]
     fn validator_record_borsh_roundtrip() {
-        let v = ValidatorRecord {
-            validator_id: Hash64::from_bytes([0x42u8; 64]),
-            stake_amount: 1_000_000,
-            activation_daa_score: 99,
-        };
+        let v = ValidatorRecord { validator_id: Hash64::from_bytes([0x42u8; 64]), stake_amount: 1_000_000, activation_daa_score: 99 };
         let bytes = borsh::to_vec(&v).unwrap();
         let back: ValidatorRecord = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, v);
@@ -2395,11 +2374,8 @@ mod tests {
     #[test]
     fn commit_reveal_seed_uses_reveal_set_when_threshold_met() {
         // 3 of 3 reveals — well above the 2/3 threshold.
-        let reveals = vec![
-            fixture_reveal_payload(0xaa, 5, 0x01),
-            fixture_reveal_payload(0xbb, 5, 0x02),
-            fixture_reveal_payload(0xcc, 5, 0x03),
-        ];
+        let reveals =
+            vec![fixture_reveal_payload(0xaa, 5, 0x01), fixture_reveal_payload(0xbb, 5, 0x02), fixture_reveal_payload(0xcc, 5, 0x03)];
         let seed = derive_epoch_seed_commit_reveal(5, &reveals, 3, 2, 3, Hash64::from_bytes([0xeeu8; 64]));
         // Must not be the fallback seed for the same prev_epoch_seed.
         let fallback = derive_epoch_seed_fallback(5, Hash64::from_bytes([0xeeu8; 64]));
@@ -2421,8 +2397,7 @@ mod tests {
         // rule is "lhs >= rhs" so this case uses the reveal set,
         // not the fallback. Pins the boundary against off-by-one
         // drift.
-        let reveals =
-            vec![fixture_reveal_payload(0xaa, 5, 0x01), fixture_reveal_payload(0xbb, 5, 0x02)];
+        let reveals = vec![fixture_reveal_payload(0xaa, 5, 0x01), fixture_reveal_payload(0xbb, 5, 0x02)];
         let prev = Hash64::from_bytes([0xeeu8; 64]);
         let seed = derive_epoch_seed_commit_reveal(5, &reveals, 3, 2, 3, prev);
         assert_ne!(seed, derive_epoch_seed_fallback(5, prev));
@@ -2432,11 +2407,8 @@ mod tests {
     fn commit_reveal_seed_is_order_independent() {
         // Same reveal set, different input orders -> same seed
         // (the helper sorts a clone by validator_id ascending).
-        let a = vec![
-            fixture_reveal_payload(0xaa, 5, 0x01),
-            fixture_reveal_payload(0xbb, 5, 0x02),
-            fixture_reveal_payload(0xcc, 5, 0x03),
-        ];
+        let a =
+            vec![fixture_reveal_payload(0xaa, 5, 0x01), fixture_reveal_payload(0xbb, 5, 0x02), fixture_reveal_payload(0xcc, 5, 0x03)];
         let mut b = a.clone();
         b.reverse();
         let mut c = a.clone();
@@ -2868,15 +2840,30 @@ mod tests {
     fn takeover_token_message_changes_with_each_field() {
         let base = takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1);
         // yielding_host_id differs
-        assert_ne!(base, takeover_token_message(fixture_host_id(0xa3), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1));
+        assert_ne!(
+            base,
+            takeover_token_message(fixture_host_id(0xa3), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1)
+        );
         // taking_over_host_id differs
-        assert_ne!(base, takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa3), Hash64::from_bytes([0x42u8; 64]), 100, 1));
+        assert_ne!(
+            base,
+            takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa3), Hash64::from_bytes([0x42u8; 64]), 100, 1)
+        );
         // validator_id differs
-        assert_ne!(base, takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x43u8; 64]), 100, 1));
+        assert_ne!(
+            base,
+            takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x43u8; 64]), 100, 1)
+        );
         // valid_from_epoch differs
-        assert_ne!(base, takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 101, 1));
+        assert_ne!(
+            base,
+            takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 101, 1)
+        );
         // grace_epochs differs
-        assert_ne!(base, takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 2));
+        assert_ne!(
+            base,
+            takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 2)
+        );
     }
 
     #[test]
@@ -2976,11 +2963,7 @@ mod tests {
     #[test]
     fn signer_metadata_borsh_roundtrip_all_variants() {
         let none = SignerMetadata::None;
-        let att = SignerMetadata::Attestation {
-            epoch: 42,
-            target_hash: Hash64::from_bytes([0x11u8; 64]),
-            target_daa_score: 100,
-        };
+        let att = SignerMetadata::Attestation { epoch: 42, target_hash: Hash64::from_bytes([0x11u8; 64]), target_daa_score: 100 };
         let tk = SignerMetadata::TakeoverToken {
             yielding_host_id: fixture_host_id(0xa1),
             taking_over_host_id: fixture_host_id(0xa2),
@@ -3025,11 +3008,7 @@ mod tests {
             purpose: SigningPurpose::Attestation,
             context: ATTESTATION_MLDSA65_CONTEXT.to_vec(),
             message_digest: Hash::from_bytes([0xcdu8; 32]),
-            metadata: SignerMetadata::Attestation {
-                epoch: 42,
-                target_hash: Hash64::from_bytes([0x11u8; 64]),
-                target_daa_score: 100,
-            },
+            metadata: SignerMetadata::Attestation { epoch: 42, target_hash: Hash64::from_bytes([0x11u8; 64]), target_daa_score: 100 },
         }
     }
 
@@ -3067,11 +3046,7 @@ mod tests {
             request_id: 7,
             validator_id: Hash64::from_bytes([0x42u8; 64]),
             purpose: SigningPurpose::Attestation,
-            metadata: SignerMetadata::Attestation {
-                epoch: 42,
-                target_hash: Hash64::from_bytes([0x11u8; 64]),
-                target_daa_score: 100,
-            },
+            metadata: SignerMetadata::Attestation { epoch: 42, target_hash: Hash64::from_bytes([0x11u8; 64]), target_daa_score: 100 },
             message_digest: Hash::from_bytes([0xcdu8; 32]),
             signature_fingerprint: sig_fingerprint,
             outcome,

@@ -1,3 +1,4 @@
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::tx::{TransactionInput, TransactionOutput};
 use kaspa_consensus_core::{BlockHasher, tx::Transaction};
 use kaspa_database::prelude::CachePolicy;
@@ -5,7 +6,6 @@ use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_consensus_core::BlockHash;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
@@ -61,7 +61,12 @@ impl DbBlockTransactionsStore {
         self.access.has(hash)
     }
 
-    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, transactions: Arc<Vec<Transaction>>) -> Result<(), StoreError> {
+    pub fn insert_batch(
+        &self,
+        batch: &mut WriteBatch,
+        hash: BlockHash,
+        transactions: Arc<Vec<Transaction>>,
+    ) -> Result<(), StoreError> {
         if self.access.has(hash)? {
             return Err(StoreError::KeyAlreadyExists(hash.to_string()));
         }

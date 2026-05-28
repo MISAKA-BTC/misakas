@@ -10,9 +10,9 @@ use crate::{
         window::WindowManager,
     },
 };
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::block::Block;
 use kaspa_database::prelude::StoreResultExt;
-use kaspa_consensus_core::BlockHash;
 use once_cell::unsync::Lazy;
 use std::sync::Arc;
 

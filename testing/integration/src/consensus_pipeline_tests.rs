@@ -4,9 +4,9 @@ use kaspa_consensus::{
     config::ConfigBuilder, consensus::test_consensus::TestConsensus, params::MAINNET_PARAMS,
     processes::reachability::tests::StoreValidationExtensions,
 };
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
 use kaspa_consensus_core::{api::ConsensusApi, blockhash};
 use kaspa_database::prelude::CachePolicy;
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
 use rand_distr::{Distribution, Poisson};
 use std::cmp::min;
 use tokio::join;

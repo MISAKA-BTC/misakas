@@ -1,5 +1,6 @@
 use std::{cmp, collections::HashSet, sync::Arc};
 
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
     tx::{SignableTransaction, Transaction, TransactionId, TransactionIndexType, TransactionOutpoint, UtxoEntry},
@@ -9,7 +10,6 @@ use kaspa_consensus_core::{
     },
 };
 use kaspa_core::trace;
-use kaspa_consensus_core::BlockHash;
 
 use crate::model::{
     services::reachability::ReachabilityService,

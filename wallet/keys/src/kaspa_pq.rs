@@ -190,7 +190,8 @@ mod tests {
 
         let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(*kp.public_key_bytes());
         let sig = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_bytes);
-        libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg, MLDSA65_TX_CONTEXT, &sig).expect("kaspa-pq wallet signature must verify under the kaspa-pq tx context");
+        libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg, MLDSA65_TX_CONTEXT, &sig)
+            .expect("kaspa-pq wallet signature must verify under the kaspa-pq tx context");
     }
 
     #[test]

@@ -21,6 +21,7 @@ use crate::{
         },
     },
 };
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
     acceptance_data::{AcceptedTxEntry, MergesetBlockAcceptanceData},
@@ -36,7 +37,6 @@ use kaspa_consensus_core::{
     },
 };
 use kaspa_core::{info, trace};
-use kaspa_consensus_core::BlockHash;
 use kaspa_muhash::MuHash;
 use kaspa_utils::refs::Refs;
 

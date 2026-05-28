@@ -99,7 +99,13 @@ impl DbReachabilitySet {
         Ok(())
     }
 
-    fn insert(&mut self, writer: impl DbWriter, hash: BlockHash, element: BlockHash, insertion_index: usize) -> Result<(), StoreError> {
+    fn insert(
+        &mut self,
+        writer: impl DbWriter,
+        hash: BlockHash,
+        element: BlockHash,
+        insertion_index: usize,
+    ) -> Result<(), StoreError> {
         if let Some(mut entry) = self.cache.get(&hash) {
             Arc::make_mut(&mut entry).insert(insertion_index, element);
             self.cache.insert(hash, entry);
@@ -171,10 +177,10 @@ impl DbReachabilitySet {
 pub struct DbReachabilityStore {
     db: Arc<DB>,
     access: CachedDbAccess<BlockHash, ReachabilityData, BlockHasher>, // Main access
-    children_access: DbReachabilitySet,                          // Tree children
-    fcs_access: DbReachabilitySet,                               // Future Covering Set
+    children_access: DbReachabilitySet,                               // Tree children
+    fcs_access: DbReachabilitySet,                                    // Future Covering Set
     reindex_root: CachedDbItem<BlockHash>,                            // Reindex root
-    prefix_tail: Vec<u8>,                                        // A shared tail between all inner prefixes
+    prefix_tail: Vec<u8>,                                             // A shared tail between all inner prefixes
 }
 
 impl DbReachabilityStore {

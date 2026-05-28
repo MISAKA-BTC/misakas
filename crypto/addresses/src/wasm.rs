@@ -162,11 +162,7 @@ mod tests {
     fn test_wasm_js_serde_object() {
         let expected = pq_test_address();
         // Reconstruct from the (version, prefix, payload) triple.
-        let payload_hex = expected
-            .payload
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
+        let payload_hex = expected.payload.iter().map(|b| format!("{b:02x}")).collect::<String>();
 
         let obj = Object::new();
         obj.set("version", &JsValue::from_str("PubKey")).unwrap();

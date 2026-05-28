@@ -4,8 +4,8 @@
 //!
 
 use crate::imports::*;
-use kaspa_consensus_core::header as native;
-use kaspa_consensus_core::BlockHash; // PR-9.5e: parents are block hashes (Hash64)
+use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::header as native; // PR-9.5e: parents are block hashes (Hash64)
 
 /// An efficient cumulative-sum run-length encoding for the parents-by-level vector in the block header.
 /// @category Consensus
@@ -76,8 +76,10 @@ impl TryCastFromJs for CompressedParents {
 
                     let parents_js = run_array.get(1);
                     let parents_array = js_sys::Array::from(&parents_js);
-                    let parents =
-                        parents_array.iter().map(|hash_js| hash_js.try_into_owned()).collect::<std::result::Result<Vec<BlockHash>, _>>()?;
+                    let parents = parents_array
+                        .iter()
+                        .map(|hash_js| hash_js.try_into_owned())
+                        .collect::<std::result::Result<Vec<BlockHash>, _>>()?;
 
                     Ok((level, parents))
                 })

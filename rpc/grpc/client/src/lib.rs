@@ -17,8 +17,7 @@ use kaspa_grpc_core::{
     // existing call sites compiling. The `rpc_client` module-path alias
     // is preserved by a re-export in `rpc/grpc/core/src/lib.rs`.
     protowire::{
-        GetInfoRequestMessage, KaspadRequest, KaspadResponse, kaspad_request,
-        rpc_client::KaspaPqRpcServiceClient as RpcClient,
+        GetInfoRequestMessage, KaspadRequest, KaspadResponse, kaspad_request, rpc_client::KaspaPqRpcServiceClient as RpcClient,
     },
 };
 use kaspa_notify::{

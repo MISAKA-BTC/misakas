@@ -5,6 +5,7 @@ use crate::{
 };
 use futures::future::{Either, join_all, select, try_join_all};
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::{
     BlockHashSet,
     api::BlockValidationFuture,
@@ -16,7 +17,6 @@ use kaspa_consensus_core::{
 };
 use kaspa_consensusmanager::{ConsensusProxy, StagingConsensus, spawn_blocking};
 use kaspa_core::{debug, info, time::unix_now, warn};
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_muhash::MuHash;
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
@@ -366,7 +366,11 @@ impl IbdFlow {
         Ok(())
     }
 
-    async fn sync_and_validate_pruning_proof(&mut self, staging: &ConsensusProxy, relay_block: &Block) -> Result<BlockHash, ProtocolError> {
+    async fn sync_and_validate_pruning_proof(
+        &mut self,
+        staging: &ConsensusProxy,
+        relay_block: &Block,
+    ) -> Result<BlockHash, ProtocolError> {
         self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
 
         // Pruning proof generation and communication might take several minutes, so we allow a long 10 minute timeout

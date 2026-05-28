@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use kaspa_addresses::{Address, AddressError};
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids (block_hash, accepting_block) are Hash64
 use kaspa_consensus_core::{
     ChainPath,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
@@ -14,7 +15,6 @@ use kaspa_consensus_core::{
 };
 use kaspa_consensus_notify::notification::{self as consensus_notify, Notification as ConsensusNotification};
 use kaspa_consensusmanager::{ConsensusManager, ConsensusProxy};
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids (block_hash, accepting_block) are Hash64
 use kaspa_math::Uint256;
 use kaspa_mining::model::{TransactionIdSet, owner_txs::OwnerTransactions};
 use kaspa_notify::converter::Converter;

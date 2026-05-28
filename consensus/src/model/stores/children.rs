@@ -1,3 +1,4 @@
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::BlockHashSet;
 use kaspa_consensus_core::BlockHasher;
 use kaspa_consensus_core::BlockLevel;
@@ -10,7 +11,6 @@ use kaspa_database::prelude::ReadLock;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::StoreResult;
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 use std::sync::Arc;
 

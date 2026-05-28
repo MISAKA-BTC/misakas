@@ -14,6 +14,7 @@ use itertools::Itertools;
 use parking_lot::{Mutex, RwLock};
 use rocksdb::WriteBatch;
 
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, BlockLevel, HashMapCustomHasher, KType,
     blockhash::{self, BlockHashExtensions},
@@ -27,7 +28,6 @@ use kaspa_consensus_core::{
 };
 use kaspa_core::info;
 use kaspa_database::prelude::StoreResultExt;
-use kaspa_consensus_core::BlockHash;
 use kaspa_pow::calc_block_level;
 use thiserror::Error;
 

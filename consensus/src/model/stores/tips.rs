@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::BlockHashSet;
 use kaspa_consensus_core::BlockHasher;
 use kaspa_database::prelude::CachedDbSetItem;
@@ -11,7 +12,6 @@ use kaspa_database::prelude::StoreResult;
 use kaspa_database::prelude::StoreResultExt;
 use kaspa_database::prelude::{BatchDbWriter, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 
 /// Reader API for `TipsStore`.

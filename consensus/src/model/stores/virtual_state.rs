@@ -2,6 +2,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::stats::VirtualStateStats;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher, block::VirtualStateApproxId, coinbase::BlockRewardData,
@@ -11,7 +12,6 @@ use kaspa_database::prelude::{BatchDbWriter, CachedDbItem, DirectDbWriter, Store
 use kaspa_database::prelude::{CachePolicy, StoreResult};
 use kaspa_database::prelude::{DB, StoreError};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_consensus_core::BlockHash;
 use kaspa_muhash::MuHash;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};

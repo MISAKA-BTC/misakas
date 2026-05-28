@@ -84,9 +84,9 @@ use crossbeam_channel::{
 use itertools::Itertools;
 use kaspa_consensusmanager::{SessionLock, SessionReadGuard};
 
+use kaspa_consensus_core::BlockHash;
 use kaspa_core::info;
 use kaspa_database::prelude::StoreResultExt;
-use kaspa_consensus_core::BlockHash;
 use kaspa_muhash::MuHash;
 use kaspa_txscript::caches::TxScriptCacheCounters;
 use kaspa_utils::arc::ArcExtensions;
@@ -509,7 +509,11 @@ impl Consensus {
 
     /// Verify that the new pruning point can be safely imported
     /// and return all new pruning point on path to it that needs to be updated in consensus
-    fn get_and_verify_path_to_new_pruning_point(&self, new_pruning_point: BlockHash, syncer_sink: BlockHash) -> ConsensusResult<VecDeque<BlockHash>> {
+    fn get_and_verify_path_to_new_pruning_point(
+        &self,
+        new_pruning_point: BlockHash,
+        syncer_sink: BlockHash,
+    ) -> ConsensusResult<VecDeque<BlockHash>> {
         // Let B.sp denote the selected parent of a block B, let f be the finality depth, and let p be the pruning depth.
         // The new pruning point P can be "finalized" into consensus if:
         // 1) P satisfies P.blue_score>Nf and selected_parent(P).blue_score<=NF
@@ -1127,7 +1131,12 @@ impl ConsensusApi for Consensus {
         self.headers_selected_tip_store.read().get().unwrap().hash
     }
 
-    fn get_antipast_from_pov(&self, hash: BlockHash, context: BlockHash, max_traversal_allowed: Option<u64>) -> ConsensusResult<Vec<BlockHash>> {
+    fn get_antipast_from_pov(
+        &self,
+        hash: BlockHash,
+        context: BlockHash,
+        max_traversal_allowed: Option<u64>,
+    ) -> ConsensusResult<Vec<BlockHash>> {
         let _guard = self.pruning_lock.blocking_read();
         self.validate_block_exists(hash)?;
         self.validate_block_exists(context)?;
@@ -1147,7 +1156,11 @@ impl ConsensusApi for Consensus {
         self.services.pruning_proof_manager.get_pruning_point_proof()
     }
 
-    fn create_virtual_selected_chain_block_locator(&self, low: Option<BlockHash>, high: Option<BlockHash>) -> ConsensusResult<Vec<BlockHash>> {
+    fn create_virtual_selected_chain_block_locator(
+        &self,
+        low: Option<BlockHash>,
+        high: Option<BlockHash>,
+    ) -> ConsensusResult<Vec<BlockHash>> {
         let _guard = self.pruning_lock.blocking_read();
         if let Some(low) = low {
             self.validate_block_exists(low)?;
@@ -1190,7 +1203,11 @@ impl ConsensusApi for Consensus {
         })
     }
 
-    fn get_block_transactions(&self, hash: BlockHash, indices: Option<Vec<TransactionIndexType>>) -> ConsensusResult<Vec<Transaction>> {
+    fn get_block_transactions(
+        &self,
+        hash: BlockHash,
+        indices: Option<Vec<TransactionIndexType>>,
+    ) -> ConsensusResult<Vec<Transaction>> {
         let transactions = self.block_transactions_store.get(hash).optional().unwrap().ok_or(ConsensusError::BlockNotFound(hash))?;
         let tx_len = transactions.len();
 

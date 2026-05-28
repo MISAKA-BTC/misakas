@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use super::IbdFlow;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::blockstatus::BlockStatus;
 use kaspa_consensusmanager::ConsensusProxy;
 use kaspa_core::{debug, warn};
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_p2p_lib::{
     common::{DEFAULT_TIMEOUT, ProtocolError},
     dequeue_with_timeout, make_message,

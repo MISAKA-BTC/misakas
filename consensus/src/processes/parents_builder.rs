@@ -1,11 +1,11 @@
 use indexmap::IndexSet;
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHasher, BlockLevel,
     blockhash::ORIGIN,
     header::{CompressedParents, Header},
 };
-use kaspa_consensus_core::BlockHash;
 use smallvec::{SmallVec, smallvec};
 use std::sync::Arc;
 
@@ -212,13 +212,13 @@ mod tests {
 
     use super::ParentsManager;
     use itertools::Itertools;
+    use kaspa_consensus_core::BlockHash;
     use kaspa_consensus_core::{
         BlockHashSet, HashMapCustomHasher,
         blockhash::{BlockHashes, ORIGIN},
         header::Header,
     };
     use kaspa_database::prelude::{ReadLock, StoreError, StoreResult};
-    use kaspa_consensus_core::BlockHash;
     use parking_lot::RwLock;
 
     struct HeaderStoreMock {

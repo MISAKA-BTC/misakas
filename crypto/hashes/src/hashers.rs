@@ -325,15 +325,15 @@ mod tests {
         use super::*;
         let msg = b"kaspa-pq hash64 hashers PR-9.2";
 
-        let block         = BlockHash64::hash(msg);
-        let pre_pow       = BlockPrePowHash64::hash(msg);
-        let txid          = TransactionId64::hash(msg);
-        let tx_hash       = TransactionHash64::hash(msg);
-        let tx_sig        = TransactionSigningHash64::hash(msg);
-        let merkle        = MerkleBranchHash64::hash(msg);
-        let accepted      = AcceptedIdMerkleBranchHash64::hash(msg);
-        let utxo          = UtxoCommitmentHash64::hash(msg);
-        let pow_final     = PowFinalHash64::hash(msg);
+        let block = BlockHash64::hash(msg);
+        let pre_pow = BlockPrePowHash64::hash(msg);
+        let txid = TransactionId64::hash(msg);
+        let tx_hash = TransactionHash64::hash(msg);
+        let tx_sig = TransactionSigningHash64::hash(msg);
+        let merkle = MerkleBranchHash64::hash(msg);
+        let accepted = AcceptedIdMerkleBranchHash64::hash(msg);
+        let utxo = UtxoCommitmentHash64::hash(msg);
+        let pow_final = PowFinalHash64::hash(msg);
 
         // Width check — every digest is exactly 64 bytes.
         for d in [&block, &pre_pow, &txid, &tx_hash, &tx_sig, &merkle, &accepted, &utxo, &pow_final] {

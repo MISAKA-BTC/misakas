@@ -26,6 +26,7 @@ use crate::{
 };
 use crossbeam_channel::Receiver as CrossbeamReceiver;
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, BlockLevel,
     blockhash::ORIGIN,
@@ -38,7 +39,6 @@ use kaspa_consensus_core::{
 use kaspa_consensusmanager::SessionLock;
 use kaspa_core::{debug, info, trace, warn};
 use kaspa_database::prelude::{BatchDbWriter, DB, MemoryWriter, StoreResultExt};
-use kaspa_consensus_core::BlockHash;
 use kaspa_muhash::MuHash;
 use kaspa_utils::iter::IterExtensions;
 use parking_lot::RwLockUpgradableReadGuard;

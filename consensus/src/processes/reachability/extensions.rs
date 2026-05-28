@@ -1,7 +1,7 @@
 use super::interval::Interval;
 use crate::model::stores::reachability::ReachabilityStoreReader;
-use kaspa_database::prelude::StoreResult;
 use kaspa_consensus_core::BlockHash;
+use kaspa_database::prelude::StoreResult;
 
 pub(super) trait ReachabilityStoreIntervalExtensions {
     fn interval_children_capacity(&self, block: BlockHash) -> StoreResult<Interval>;

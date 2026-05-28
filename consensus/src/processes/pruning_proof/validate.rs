@@ -4,6 +4,7 @@ use std::{
 };
 
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockLevel, BlueWorkType,
     blockhash::{BlockHashExtensions, BlockHashes, ORIGIN},
@@ -16,7 +17,6 @@ use kaspa_database::{
     prelude::{CachePolicy, ConnBuilder, StoreResultUnitExt},
     utils::DbLifetime,
 };
-use kaspa_consensus_core::BlockHash;
 use kaspa_pow::{calc_block_level, calc_block_level_check_pow};
 use kaspa_utils::vec::VecExtensions;
 use parking_lot::RwLock;

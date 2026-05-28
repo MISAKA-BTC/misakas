@@ -7,13 +7,13 @@ use crate::{
     },
     processes::ghostdag::ordering::SortableBlock,
 };
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType, HashMapCustomHasher,
     blockhash::{BlockHashExtensions, ORIGIN},
     config::genesis::GenesisBlock,
     errors::{block::RuleError, difficulty::DifficultyResult},
 };
-use kaspa_consensus_core::BlockHash;
 use kaspa_math::Uint256;
 use once_cell::unsync::Lazy;
 use std::{
@@ -215,7 +215,13 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
             }
 
             // push the current mergeset into the window
-            self.push_mergeset(&mut &mut window_heap, sample_rate, &current_ghostdag, parent_ghostdag.blue_work, None::<fn(BlockHash)>);
+            self.push_mergeset(
+                &mut &mut window_heap,
+                sample_rate,
+                &current_ghostdag,
+                parent_ghostdag.blue_work,
+                None::<fn(BlockHash)>,
+            );
 
             // see if we can inherit and merge with the selected parent cache
             if self.try_merge_with_selected_parent_cache(&mut window_heap, &cache, &current_ghostdag.selected_parent) {

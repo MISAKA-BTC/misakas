@@ -4,12 +4,12 @@ use crate::model::{
     stores::{children::ChildrenStore, relations::RelationsStore},
 };
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashSet,
     blockhash::{BlockHashIteratorExtensions, BlockHashes, ORIGIN},
 };
 use kaspa_database::prelude::{BatchDbWriter, DbWriter, DirectWriter, StoreError};
-use kaspa_consensus_core::BlockHash;
 use rocksdb::WriteBatch;
 
 /// Initializes this relations store with an `origin` root
@@ -127,7 +127,13 @@ pub trait RelationsStoreExtensions: RelationsStore + ChildrenStore {
         Ok(())
     }
 
-    fn replace_parent<W>(&mut self, mut writer: W, hash: BlockHash, replaced_parent: BlockHash, replace_with: &[BlockHash]) -> Result<(), StoreError>
+    fn replace_parent<W>(
+        &mut self,
+        mut writer: W,
+        hash: BlockHash,
+        replaced_parent: BlockHash,
+        replace_with: &[BlockHash],
+    ) -> Result<(), StoreError>
     where
         W: DbWriter,
     {

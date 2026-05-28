@@ -1,7 +1,7 @@
 use std::{cmp::max, sync::Arc};
 
-use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
+use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,

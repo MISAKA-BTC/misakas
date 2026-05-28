@@ -1,11 +1,11 @@
 use super::{error::ConversionError, option::TryIntoOptionEx};
 use crate::convert::header::Versioned;
 use crate::pb as protowire;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: p2p block-hash convert sites widened to Hash64
 use kaspa_consensus_core::{
     BlockHashMap, BlueWorkType, HashMapCustomHasher, KType,
     trusted::{ExternalGhostdagData, TrustedGhostdagData, TrustedHeader},
 };
-use kaspa_consensus_core::BlockHash; // PR-9.5e: p2p block-hash convert sites widened to Hash64
 use std::sync::Arc;
 
 // ----------------------------------------------------------------------------
@@ -52,8 +52,16 @@ impl TryFrom<protowire::GhostdagData> for ExternalGhostdagData {
             blue_score: item.blue_score,
             blue_work: BlueWorkType::from_be_bytes_var(&item.blue_work)?,
             selected_parent: item.selected_parent.try_into_ex()?,
-            mergeset_blues: item.merge_set_blues.into_iter().map(BlockHash::try_from).collect::<Result<Vec<BlockHash>, ConversionError>>()?,
-            mergeset_reds: item.merge_set_reds.into_iter().map(BlockHash::try_from).collect::<Result<Vec<BlockHash>, ConversionError>>()?,
+            mergeset_blues: item
+                .merge_set_blues
+                .into_iter()
+                .map(BlockHash::try_from)
+                .collect::<Result<Vec<BlockHash>, ConversionError>>()?,
+            mergeset_reds: item
+                .merge_set_reds
+                .into_iter()
+                .map(BlockHash::try_from)
+                .collect::<Result<Vec<BlockHash>, ConversionError>>()?,
             blues_anticone_sizes,
         })
     }

@@ -1,5 +1,5 @@
-use kaspa_consensus_core::blockhash::{BlockHashExtensions, ORIGIN};
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::blockhash::{BlockHashExtensions, ORIGIN};
 use std::sync::Arc;
 
 use crate::model::{
@@ -56,7 +56,12 @@ impl<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T:
         self.calculate_block_at_depth(ghostdag_data, BlockDepthType::Finality, pruning_point)
     }
 
-    fn calculate_block_at_depth(&self, ghostdag_data: &GhostdagData, depth_type: BlockDepthType, pruning_point: BlockHash) -> BlockHash {
+    fn calculate_block_at_depth(
+        &self,
+        ghostdag_data: &GhostdagData,
+        depth_type: BlockDepthType,
+        pruning_point: BlockHash,
+    ) -> BlockHash {
         if ghostdag_data.selected_parent.is_origin() {
             return ORIGIN;
         }

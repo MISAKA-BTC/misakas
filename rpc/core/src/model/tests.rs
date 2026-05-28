@@ -118,9 +118,7 @@ mod mockery {
     // kaspa-pq PR-8.5: BlueWorkType widened from Uint192 to Uint576.
     impl Mock for kaspa_math::Uint576 {
         fn mock() -> Self {
-            kaspa_math::Uint576([
-                mock(), mock(), mock(), mock(), mock(), mock(), mock(), mock(), mock(),
-            ])
+            kaspa_math::Uint576([mock(), mock(), mock(), mock(), mock(), mock(), mock(), mock(), mock()])
         }
     }
 

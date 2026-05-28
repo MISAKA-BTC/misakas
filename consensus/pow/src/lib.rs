@@ -10,7 +10,9 @@ use std::cmp::max;
 
 use crate::matrix::Matrix;
 use kaspa_consensus_core::{
-    BlockLevel, hashing, header::Header,
+    BlockLevel,
+    hashing,
+    header::Header,
     // PR-9.5d: POW_ALGO_ID_KHEAVYHASH no longer imported here — the
     // finalizer now reads `header.pow_algo_id` via `State::pow_algo_id`.
     pow_layer0::{POW_FINALIZER_BYTES, PowLayer0Error, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512},

@@ -23,6 +23,7 @@ use crate::{
     processes::{coinbase::CoinbaseManager, transaction_validator::TransactionValidator},
 };
 use crossbeam_channel::{Receiver, Sender};
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     KType,
     block::Block,
@@ -36,7 +37,6 @@ use kaspa_consensus_notify::{
     root::ConsensusNotificationRoot,
 };
 use kaspa_consensusmanager::SessionLock;
-use kaspa_consensus_core::BlockHash;
 use kaspa_notify::notifier::Notify;
 use parking_lot::RwLock;
 use rayon::ThreadPool;

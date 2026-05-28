@@ -735,9 +735,9 @@ fn test_mining_state_job_management() {
     // Test: Job storage and retrieval in MiningState
     // This verifies that jobs can be added to the mining state and retrieved by their job ID.
     // Jobs are stored in a circular buffer with a maximum of 300 jobs.
+    use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
     use kaspa_consensus_core::block::Block;
     use kaspa_hashes::Hash; // PR-9.5e: pre_pow_hash stays 32-byte Hash
-    use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
     use kaspa_stratum_bridge::mining_state::{Job, MiningState};
 
     let state = MiningState::new();
@@ -1200,12 +1200,12 @@ mod integration {
 
 #[cfg(test)]
 mod comprehensive_tests {
+    use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
     use kaspa_consensus_core::block::Block;
     use kaspa_consensus_core::header::Header;
     use kaspa_consensus_core::subnets::SubnetworkId;
     use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput};
     use kaspa_hashes::Hash; // PR-9.5e: pre_pow_hash stays 32-byte Hash
-    use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
     use kaspa_stratum_bridge::{
         client_handler::ClientHandler,
         default_client::{handle_authorize, handle_subscribe},
@@ -2277,9 +2277,9 @@ mod comprehensive_tests {
         // Test: PoW checking concept for CPU miner
         // This demonstrates how the CPU miner validates PoW
 
+        use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
         use kaspa_consensus_core::header::Header;
         use kaspa_hashes::Hash; // PR-9.5e: pre_pow_hash stays 32-byte Hash
-        use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
         use kaspa_pow::State as PowState;
 
         // Create a test block

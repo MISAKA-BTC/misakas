@@ -299,7 +299,7 @@ impl TryFrom<Uint256> for Uint192 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Uint192, Uint256, Uint3072, Uint512, Uint576, Uint640};
+    use crate::{Uint192, Uint256, Uint512, Uint576, Uint640, Uint3072};
 
     #[test]
     fn test_overflow_bug() {

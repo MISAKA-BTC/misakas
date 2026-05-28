@@ -377,7 +377,13 @@ impl VirtualStateProcessor {
     /// The function returns the top-most UTXO-valid block on `chain(to)` which is ideally
     /// `to` itself (with the exception of returning `from` if `to` is already known to be UTXO disqualified).
     /// When returning it is guaranteed that `diff` holds the diff of the returned block from virtual
-    fn calculate_utxo_state_relatively(&self, stores: &VirtualStores, diff: &mut UtxoDiff, from: BlockHash, to: BlockHash) -> BlockHash {
+    fn calculate_utxo_state_relatively(
+        &self,
+        stores: &VirtualStores,
+        diff: &mut UtxoDiff,
+        from: BlockHash,
+        to: BlockHash,
+    ) -> BlockHash {
         // Avoid reorging if disqualified status is already known
         if self.statuses_store.read().get(to).unwrap() == StatusDisqualifiedFromChain {
             return from;
@@ -583,7 +589,12 @@ impl VirtualStateProcessor {
 
     /// Caches the DAA and Median time windows of the sink block (if needed). Following, virtual's window calculations will
     /// naturally hit the cache finding the sink's windows and building upon them.
-    fn cache_sink_windows(&self, new_sink: BlockHash, prev_sink: BlockHash, sink_ghostdag_data: &impl Deref<Target = Arc<GhostdagData>>) {
+    fn cache_sink_windows(
+        &self,
+        new_sink: BlockHash,
+        prev_sink: BlockHash,
+        sink_ghostdag_data: &impl Deref<Target = Arc<GhostdagData>>,
+    ) {
         // We expect that the `new_sink` is cached (or some close-enough ancestor thereof) if it is equal to the `prev_sink`,
         // Hence we short-circuit the check of the keys in such cases, thereby reducing the access of the read-lock
         if new_sink != prev_sink {

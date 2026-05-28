@@ -1,9 +1,9 @@
+use kaspa_consensus_core::BlockHash; // PR-9.5e: tips are block hashes (Hash64)
 use kaspa_consensus_core::{
     BlockHashSet, HashMapCustomHasher,
     tx::{TransactionOutpoint, UtxoEntry},
     utxo::utxo_diff::UtxoDiff,
 };
-use kaspa_consensus_core::BlockHash; // PR-9.5e: tips are block hashes (Hash64)
 use kaspa_utils::hashmap::NestedHashMapExtensions;
 
 use crate::model::{CirculatingSupplyDiff, CompactUtxoEntry, UtxoChanges, UtxoSetByScriptPublicKey};

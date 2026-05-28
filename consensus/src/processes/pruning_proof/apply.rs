@@ -5,6 +5,7 @@ use std::{
 };
 
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
     blockhash::{BlockHashes, ORIGIN},
@@ -14,7 +15,6 @@ use kaspa_consensus_core::{
     trusted::TrustedBlock,
 };
 use kaspa_core::{debug, trace};
-use kaspa_consensus_core::BlockHash;
 use kaspa_pow::calc_block_level;
 use kaspa_utils::{binary_heap::BinaryHeapExtensions, vec::VecExtensions};
 use rocksdb::WriteBatch;

@@ -83,11 +83,7 @@ pub enum PowLayer0Error {
 /// Phase 1. Rejects everything except `POW_ALGO_ID_KHEAVYHASH`.
 #[inline]
 pub fn check_algo_id_phase1(algo_id: u8) -> Result<(), PowLayer0Error> {
-    if algo_id == POW_ALGO_ID_KHEAVYHASH {
-        Ok(())
-    } else {
-        Err(PowLayer0Error::UnknownAlgoId(algo_id))
-    }
+    if algo_id == POW_ALGO_ID_KHEAVYHASH { Ok(()) } else { Err(PowLayer0Error::UnknownAlgoId(algo_id)) }
 }
 
 /// kaspa-pq Layer 0 PoW finalizer.
@@ -173,7 +169,8 @@ pub fn pow_finalizer_blake2b_512(
 /// cannot be substituted for each other anywhere else.
 #[inline]
 pub fn l1_seed32_for_kheavyhash_v1(pre_pow_hash: Hash64) -> Hash {
-    let digest = Params::new().hash_length(32).key(POW_L1_KHEAVYHASH_V1_SEED_DOMAIN).to_state().update(pre_pow_hash.as_byte_slice()).finalize();
+    let digest =
+        Params::new().hash_length(32).key(POW_L1_KHEAVYHASH_V1_SEED_DOMAIN).to_state().update(pre_pow_hash.as_byte_slice()).finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(digest.as_bytes());
     Hash::from_bytes(out)

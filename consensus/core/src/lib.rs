@@ -123,6 +123,12 @@ pub mod coinbase;
 pub mod config;
 pub mod constants;
 pub mod daa_score_timestamp;
+/// kaspa-pq Phase 10 (PR-10.3): DNS Probabilistic Finality Overlay
+/// type stubs (see docs/adr/0009-dns-probabilistic-finality.md).
+/// Carries the type surface only; consensus rule implementations
+/// (StakeScore aggregation, reorg gate, sortition) land in PR-10.4
+/// onward once Phases 1–9 stabilise.
+pub mod dns_finality;
 pub mod errors;
 pub mod hashing;
 pub mod header;
@@ -131,6 +137,10 @@ pub mod merkle;
 pub mod mining_rules;
 pub mod muhash;
 pub mod network;
+/// kaspa-pq Phase 8 (PR-8.3): Layer 0 PoW finalizer + difficulty-lift
+/// helpers (see docs/adr/0007-layered-pow.md). Self-contained; the
+/// PoW-validation wiring step is PR-8.6.
+pub mod pow_layer0;
 pub mod pruning;
 pub mod sign;
 pub mod subnets;
@@ -142,16 +152,6 @@ pub mod utxo;
 /// 32-byte `Hash` for the PoC; this module exists so the header switch
 /// PR is a small mechanical type swap.
 pub mod utxo_commitment;
-/// kaspa-pq Phase 8 (PR-8.3): Layer 0 PoW finalizer + difficulty-lift
-/// helpers (see docs/adr/0007-layered-pow.md). Self-contained; the
-/// PoW-validation wiring step is PR-8.6.
-pub mod pow_layer0;
-/// kaspa-pq Phase 10 (PR-10.3): DNS Probabilistic Finality Overlay
-/// type stubs (see docs/adr/0009-dns-probabilistic-finality.md).
-/// Carries the type surface only; consensus rule implementations
-/// (StakeScore aggregation, reorg gate, sortition) land in PR-10.4
-/// onward once Phases 1–9 stabilise.
-pub mod dns_finality;
 
 /// Integer type for accumulated PoW of blue blocks.
 ///

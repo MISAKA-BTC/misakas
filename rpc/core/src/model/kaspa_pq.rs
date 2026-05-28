@@ -224,10 +224,7 @@ mod tests {
 
     #[test]
     fn utxo_commitment_64_constant_matches_consensus_core() {
-        assert_eq!(
-            RPC_UTXO_COMMITMENT_64_LEN,
-            kaspa_consensus_core::utxo_commitment::UTXO_COMMITMENT_64_BYTES,
-        );
+        assert_eq!(RPC_UTXO_COMMITMENT_64_LEN, kaspa_consensus_core::utxo_commitment::UTXO_COMMITMENT_64_BYTES,);
     }
 
     #[test]

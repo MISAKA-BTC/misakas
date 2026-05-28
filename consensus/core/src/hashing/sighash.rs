@@ -290,11 +290,8 @@ mod tests {
 
     use super::*;
 
-    // PR-9.5c: pins specific sighash digest values that change because the
-    // transaction_id fed into the sighash is now 64 bytes (Hash64). Excluded
-    // from compilation until PR-9.5g regenerates the pinned sighash vectors.
-    // See docs/hash64-migration-inventory.md §"test vectors".
-    #[cfg(any())]
+    // kaspa-pq Phase 9: pins specific sighash digest values regenerated for the
+    // 64-byte (Hash64) transaction identity per ADR-0008.
     #[test]
     fn test_signature_hash() {
         // TODO: Copy all sighash tests from go kaspad.
@@ -424,7 +421,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL,
                 input_index: 0,
                 action: ModifyAction::NoAction,
-                expected_hash: "03b7ac6927b2b67100734c3cc313ff8c2e8b3ce3e746d46dd660b706a916b1f5",
+                expected_hash: "6a86e4ace13e3fc8e2ecf651b30080f82cebfe6fcf9a081903ec80360b0a3e04",
             },
             TestVector {
                 name: "native-all-0-modify-input-1",
@@ -432,7 +429,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL,
                 input_index: 0,
                 action: ModifyAction::Input(1),
-                expected_hash: "a9f563d86c0ef19ec2e4f483901d202e90150580b6123c3d492e26e7965f488c", // should change the hash
+                expected_hash: "20ce8b5bc4f26eec304a51808bad59f42cb7b117fa8bdbc81f8ce547b885ea81", // should change the hash
             },
             TestVector {
                 name: "native-all-0-modify-output-1",
@@ -440,7 +437,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL,
                 input_index: 0,
                 action: ModifyAction::Output(1),
-                expected_hash: "aad2b61bd2405dfcf7294fc2be85f325694f02dda22d0af30381cb50d8295e0a", // should change the hash
+                expected_hash: "0649f9d04c3898923bce2232ff7e256ba9503f31e3fdaf2465c83bc8d01a4db7", // should change the hash
             },
             TestVector {
                 name: "native-all-0-modify-sequence-1",
@@ -448,7 +445,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL,
                 input_index: 0,
                 action: ModifyAction::Sequence(1),
-                expected_hash: "0818bd0a3703638d4f01014c92cf866a8903cab36df2fa2506dc0d06b94295e8", // should change the hash
+                expected_hash: "c307d2cd929a4aa409d514e6a8785779b41596ca4c3a76876b3888a38cab8512", // should change the hash
             },
             TestVector {
                 name: "native-all-anyonecanpay-0",
@@ -456,7 +453,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL_ANYONE_CAN_PAY,
                 input_index: 0,
                 action: ModifyAction::NoAction,
-                expected_hash: "24821e466e53ff8e5fa93257cb17bb06131a48be4ef282e87f59d2bdc9afebc2", // should change the hash
+                expected_hash: "8c98e114b7b8ac45894cf498d9520e2c53268bb0145b503608a25e5f6d196c5c", // should change the hash
             },
             TestVector {
                 name: "native-all-anyonecanpay-0-modify-input-0",
@@ -464,7 +461,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL_ANYONE_CAN_PAY,
                 input_index: 0,
                 action: ModifyAction::Input(0),
-                expected_hash: "d09cb639f335ee69ac71f2ad43fd9e59052d38a7d0638de4cf989346588a7c38", // should change the hash
+                expected_hash: "c7e5208f132f9137f87a66ad22d55d2be7083121a726f8e5ecbabc4585608f74", // should change the hash
             },
             TestVector {
                 name: "native-all-anyonecanpay-0-modify-input-1",
@@ -472,7 +469,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL_ANYONE_CAN_PAY,
                 input_index: 0,
                 action: ModifyAction::Input(1),
-                expected_hash: "24821e466e53ff8e5fa93257cb17bb06131a48be4ef282e87f59d2bdc9afebc2", // shouldn't change the hash
+                expected_hash: "8c98e114b7b8ac45894cf498d9520e2c53268bb0145b503608a25e5f6d196c5c", // shouldn't change the hash
             },
             TestVector {
                 name: "native-all-anyonecanpay-0-modify-sequence",
@@ -480,7 +477,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL_ANYONE_CAN_PAY,
                 input_index: 0,
                 action: ModifyAction::Sequence(1),
-                expected_hash: "24821e466e53ff8e5fa93257cb17bb06131a48be4ef282e87f59d2bdc9afebc2", // shouldn't change the hash
+                expected_hash: "8c98e114b7b8ac45894cf498d9520e2c53268bb0145b503608a25e5f6d196c5c", // shouldn't change the hash
             },
             // SIG_HASH_NONE
             TestVector {
@@ -489,7 +486,7 @@ mod tests {
                 hash_type: SIG_HASH_NONE,
                 input_index: 0,
                 action: ModifyAction::NoAction,
-                expected_hash: "38ce4bc93cf9116d2e377b33ff8449c665b7b5e2f2e65303c543b9afdaa4bbba", // should change the hash
+                expected_hash: "893916b1eb14164761d9c4fb68bf8d285ac4e77008818b354007755b5ea132e4", // should change the hash
             },
             TestVector {
                 name: "native-none-0-modify-output-1",
@@ -497,7 +494,7 @@ mod tests {
                 hash_type: SIG_HASH_NONE,
                 input_index: 0,
                 action: ModifyAction::Output(1),
-                expected_hash: "38ce4bc93cf9116d2e377b33ff8449c665b7b5e2f2e65303c543b9afdaa4bbba", // shouldn't change the hash
+                expected_hash: "893916b1eb14164761d9c4fb68bf8d285ac4e77008818b354007755b5ea132e4", // shouldn't change the hash
             },
             TestVector {
                 name: "native-none-0-modify-output-1",
@@ -505,7 +502,7 @@ mod tests {
                 hash_type: SIG_HASH_NONE,
                 input_index: 0,
                 action: ModifyAction::Output(1),
-                expected_hash: "38ce4bc93cf9116d2e377b33ff8449c665b7b5e2f2e65303c543b9afdaa4bbba", // should change the hash
+                expected_hash: "893916b1eb14164761d9c4fb68bf8d285ac4e77008818b354007755b5ea132e4", // should change the hash
             },
             TestVector {
                 name: "native-none-0-modify-sequence-0",
@@ -513,7 +510,7 @@ mod tests {
                 hash_type: SIG_HASH_NONE,
                 input_index: 0,
                 action: ModifyAction::Sequence(0),
-                expected_hash: "d9efdd5edaa0d3fd0133ee3ab731d8c20e0a1b9f3c0581601ae2075db1109268", // shouldn't change the hash
+                expected_hash: "5a04cf539cefa7dbfd39818721267f0845aafafc759b11f09bb90bcd63c230e7", // shouldn't change the hash
             },
             TestVector {
                 name: "native-none-0-modify-sequence-1",
@@ -521,7 +518,7 @@ mod tests {
                 hash_type: SIG_HASH_NONE,
                 input_index: 0,
                 action: ModifyAction::Sequence(1),
-                expected_hash: "38ce4bc93cf9116d2e377b33ff8449c665b7b5e2f2e65303c543b9afdaa4bbba", // should change the hash
+                expected_hash: "893916b1eb14164761d9c4fb68bf8d285ac4e77008818b354007755b5ea132e4", // should change the hash
             },
             TestVector {
                 name: "native-none-anyonecanpay-0",
@@ -529,7 +526,7 @@ mod tests {
                 hash_type: SIG_HASH_NONE_ANYONE_CAN_PAY,
                 input_index: 0,
                 action: ModifyAction::NoAction,
-                expected_hash: "06aa9f4239491e07bb2b6bda6b0657b921aeae51e193d2c5bf9e81439cfeafa0", // should change the hash
+                expected_hash: "f6ce9dd6eee1b95c25f49e1340cc8f9280f388f71fb173bb6d4a6f20af4db658", // should change the hash
             },
             TestVector {
                 name: "native-none-anyonecanpay-0-modify-amount-spent",
@@ -537,7 +534,7 @@ mod tests {
                 hash_type: SIG_HASH_NONE_ANYONE_CAN_PAY,
                 input_index: 0,
                 action: ModifyAction::AmountSpent(0),
-                expected_hash: "f07f45f3634d3ea8c0f2cb676f56e20993edf9be07a83bf0dfdb3debcf1441bf", // should change the hash
+                expected_hash: "d6524b482c5b04e3c86e45cae9ca31605cc8f676eefd27413fe8213ef635ed76", // should change the hash
             },
             TestVector {
                 name: "native-none-anyonecanpay-0-modify-script-public-key",
@@ -545,7 +542,7 @@ mod tests {
                 hash_type: SIG_HASH_NONE_ANYONE_CAN_PAY,
                 input_index: 0,
                 action: ModifyAction::PrevScriptPublicKey(0),
-                expected_hash: "20a525c54dc33b2a61201f05233c086dbe8e06e9515775181ed96550b4f2d714", // should change the hash
+                expected_hash: "6e1d8980d09507166ab01511f3d11f72912a6d55231affc13d73d7736f690290", // should change the hash
             },
             // SIG_HASH_SINGLE
             TestVector {
@@ -554,7 +551,7 @@ mod tests {
                 hash_type: SIG_HASH_SINGLE,
                 input_index: 0,
                 action: ModifyAction::NoAction,
-                expected_hash: "44a0b407ff7b239d447743dd503f7ad23db5b2ee4d25279bd3dffaf6b474e005", // should change the hash
+                expected_hash: "3aed2646e0e95f59e7cd52a1edb2ad556ccf9389b10fac1497b4c6f90ffedcfb", // should change the hash
             },
             TestVector {
                 name: "native-single-0-modify-output-1",
@@ -562,7 +559,7 @@ mod tests {
                 hash_type: SIG_HASH_SINGLE,
                 input_index: 0,
                 action: ModifyAction::Output(1),
-                expected_hash: "44a0b407ff7b239d447743dd503f7ad23db5b2ee4d25279bd3dffaf6b474e005", // should change the hash
+                expected_hash: "3aed2646e0e95f59e7cd52a1edb2ad556ccf9389b10fac1497b4c6f90ffedcfb", // should change the hash
             },
             TestVector {
                 name: "native-single-0-modify-sequence-0",
@@ -570,7 +567,7 @@ mod tests {
                 hash_type: SIG_HASH_SINGLE,
                 input_index: 0,
                 action: ModifyAction::Sequence(0),
-                expected_hash: "83796d22879718eee1165d4aace667bb6778075dab579c32c57be945f466a451", // should change the hash
+                expected_hash: "01897729b7d8f5575904654ea4e9af1dc19c8fa0960ce145cf3a561722e8588a", // should change the hash
             },
             TestVector {
                 name: "native-single-0-modify-sequence-1",
@@ -578,7 +575,7 @@ mod tests {
                 hash_type: SIG_HASH_SINGLE,
                 input_index: 0,
                 action: ModifyAction::Sequence(1),
-                expected_hash: "44a0b407ff7b239d447743dd503f7ad23db5b2ee4d25279bd3dffaf6b474e005", // shouldn't change the hash
+                expected_hash: "3aed2646e0e95f59e7cd52a1edb2ad556ccf9389b10fac1497b4c6f90ffedcfb", // shouldn't change the hash
             },
             TestVector {
                 name: "native-single-2-no-corresponding-output",
@@ -586,7 +583,7 @@ mod tests {
                 hash_type: SIG_HASH_SINGLE,
                 input_index: 2,
                 action: ModifyAction::NoAction,
-                expected_hash: "022ad967192f39d8d5895d243e025ec14cc7a79708c5e364894d4eff3cecb1b0", // should change the hash
+                expected_hash: "1a359aa4e762aeb6439766895cd0477e7d0460a5be20a46cec39bb6ac5c8f073", // should change the hash
             },
             TestVector {
                 name: "native-single-2-no-corresponding-output-modify-output-1",
@@ -594,7 +591,7 @@ mod tests {
                 hash_type: SIG_HASH_SINGLE,
                 input_index: 2,
                 action: ModifyAction::Output(1),
-                expected_hash: "022ad967192f39d8d5895d243e025ec14cc7a79708c5e364894d4eff3cecb1b0", // shouldn't change the hash
+                expected_hash: "1a359aa4e762aeb6439766895cd0477e7d0460a5be20a46cec39bb6ac5c8f073", // shouldn't change the hash
             },
             TestVector {
                 name: "native-single-anyonecanpay-0",
@@ -602,7 +599,7 @@ mod tests {
                 hash_type: SIG_HASH_SINGLE_ANYONE_CAN_PAY,
                 input_index: 0,
                 action: ModifyAction::NoAction,
-                expected_hash: "43b20aba775050cf9ba8d5e48fc7ed2dc6c071d23f30382aea58b7c59cfb8ed7", // should change the hash
+                expected_hash: "ed4afd6a4137174b8e238a1840f77b852bf58c1a822ce48acf44f75173fbbe7d", // should change the hash
             },
             TestVector {
                 name: "native-single-anyonecanpay-2-no-corresponding-output",
@@ -610,7 +607,7 @@ mod tests {
                 hash_type: SIG_HASH_SINGLE_ANYONE_CAN_PAY,
                 input_index: 2,
                 action: ModifyAction::NoAction,
-                expected_hash: "846689131fb08b77f83af1d3901076732ef09d3f8fdff945be89aa4300562e5f", // should change the hash
+                expected_hash: "4acb5d92b29442799bbc4c22d16ae36dac76dc66fe00d3ca6b01d4167f48c9ea", // should change the hash
             },
             TestVector {
                 name: "native-all-0-modify-payload",
@@ -618,7 +615,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL,
                 input_index: 0,
                 action: ModifyAction::Payload,
-                expected_hash: "72ea6c2871e0f44499f1c2b556f265d9424bfea67cca9cb343b4b040ead65525", // should change the hash
+                expected_hash: "a00b2b81f2d4b2478465ecd0f3ea6c1d669f9763586e5ad1040e1aa7f716d781", // should change the hash
             },
             // subnetwork transaction
             TestVector {
@@ -627,7 +624,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL,
                 input_index: 0,
                 action: ModifyAction::NoAction,
-                expected_hash: "b2f421c933eb7e1a91f1d9e1efa3f120fe419326c0dbac487752189522550e0c", // should change the hash
+                expected_hash: "19912e35d13c510380557640790fd27a6f30ec683ee6d722b5c98d4b0b147209", // should change the hash
             },
             TestVector {
                 name: "subnetwork-all-modify-payload",
@@ -635,7 +632,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL,
                 input_index: 0,
                 action: ModifyAction::Payload,
-                expected_hash: "12ab63b9aea3d58db339245a9b6e9cb6075b2253615ce0fb18104d28de4435a1", // should change the hash
+                expected_hash: "568ef718eb6f3c2c8e91a31e6cd8c837fff20ad56fbc1773603d6f2e85bb336a", // should change the hash
             },
             TestVector {
                 name: "subnetwork-all-modify-gas",
@@ -643,7 +640,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL,
                 input_index: 0,
                 action: ModifyAction::Gas,
-                expected_hash: "2501edfc0068d591160c4bd98646c6e6892cdc051182a8be3ccd6d67f104fd17", // should change the hash
+                expected_hash: "2720f6367ff38805052ea533d33c4a3e748d27cf35c881dc61ce9804b5348cb4", // should change the hash
             },
             TestVector {
                 name: "subnetwork-all-subnetwork-id",
@@ -651,7 +648,7 @@ mod tests {
                 hash_type: SIG_HASH_ALL,
                 input_index: 0,
                 action: ModifyAction::SubnetworkId,
-                expected_hash: "a5d1230ede0dfcfd522e04123a7bcd721462fed1d3a87352031a4f6e3c4389b6", // should change the hash
+                expected_hash: "ac9359e1175461919a364e79702d39ba7145a1378f7c4f6ae0dee004b24514c0", // should change the hash
             },
         ];
 

@@ -226,7 +226,6 @@ impl MuHash {
         }
         Ok(Self { lanes })
     }
-
 }
 
 #[derive(Debug)]
@@ -367,9 +366,7 @@ impl<'de> Deserialize<'de> for MuHash {
                 // u8 at a time, then delegate to the byte path.
                 let mut data = [0u8; SERIALIZED_MUHASH_SIZE];
                 for (i, slot) in data.iter_mut().enumerate() {
-                    *slot = seq
-                        .next_element::<u8>()?
-                        .ok_or_else(|| de::Error::invalid_length(i, &self))?;
+                    *slot = seq.next_element::<u8>()?.ok_or_else(|| de::Error::invalid_length(i, &self))?;
                 }
                 if seq.next_element::<u8>()?.is_some() {
                     // Trailing bytes — but we already consumed `SERIALIZED_MUHASH_SIZE`,

@@ -41,7 +41,11 @@ pub fn add_tree_block(
 /// Note that we assume that almost always the chain between the reindex root and the common
 /// ancestor is longer than the chain between block and the common ancestor, hence we iterate
 /// from `block`.
-pub fn find_common_tree_ancestor(store: &(impl ReachabilityStore + ?Sized), block: BlockHash, reindex_root: BlockHash) -> Result<BlockHash> {
+pub fn find_common_tree_ancestor(
+    store: &(impl ReachabilityStore + ?Sized),
+    block: BlockHash,
+    reindex_root: BlockHash,
+) -> Result<BlockHash> {
     let mut current = block;
     loop {
         if is_chain_ancestor_of(store, current, reindex_root)? {

@@ -2,7 +2,8 @@ use crate::model::{CirculatingSupply, CirculatingSupplyDiff};
 use kaspa_consensus::test_helpers::*;
 use kaspa_consensus_core::{
     BlockHash, // PR-9.5e: DAG tips are block hashes (Hash64)
-    BlockHashSet, HashMapCustomHasher,
+    BlockHashSet,
+    HashMapCustomHasher,
     tx::ScriptPublicKey,
     utxo::{utxo_collection::UtxoCollection, utxo_diff::UtxoDiff},
 };

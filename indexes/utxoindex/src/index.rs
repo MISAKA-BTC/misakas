@@ -6,11 +6,11 @@ use crate::{
     stores::store_manager::Store,
     update_container::UtxoIndexChanges,
 };
+use kaspa_consensus_core::BlockHash; // PR-9.5e: DAG tips are block hashes (Hash64)
 use kaspa_consensus_core::{BlockHashSet, tx::ScriptPublicKeys, utxo::utxo_diff::UtxoDiff};
 use kaspa_consensusmanager::{ConsensusManager, ConsensusResetHandler};
 use kaspa_core::{info, trace};
 use kaspa_database::prelude::{DB, StoreError, StoreResult};
-use kaspa_consensus_core::BlockHash; // PR-9.5e: DAG tips are block hashes (Hash64)
 use kaspa_index_core::indexed_utxos::BalanceByScriptPublicKey;
 use kaspa_utils::arc::ArcExtensions;
 use parking_lot::RwLock;

@@ -1,4 +1,5 @@
 use crate::{consensus::test_consensus::TestConsensus, model::services::reachability::ReachabilityService};
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashSet,
     api::ConsensusApi,
@@ -9,7 +10,6 @@ use kaspa_consensus_core::{
     config::{ConfigBuilder, params::MAINNET_PARAMS},
     tx::{ScriptPublicKey, ScriptVec, Transaction},
 };
-use kaspa_consensus_core::BlockHash;
 use std::{collections::VecDeque, thread::JoinHandle};
 
 struct OnetimeTxSelector {

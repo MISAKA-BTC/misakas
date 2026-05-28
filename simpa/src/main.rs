@@ -15,6 +15,7 @@ use kaspa_consensus::{
     },
     params::{DEVNET_PARAMS, ForkActivation, NETWORK_DELAY_BOUND, OverrideParams, Params, SIMNET_PARAMS, TenBps},
 };
+use kaspa_consensus_core::BlockHash; // PR-9.5e: simulator block hashes are Hash64
 use kaspa_consensus_core::{
     BlockHashSet, BlockLevel, HashMapCustomHasher, api::ConsensusApi, block::Block, blockstatus::BlockStatus,
     config::bps::calculate_ghostdag_k, errors::block::BlockProcessResult, mining_rules::MiningRules, tx::TransactionType,
@@ -28,7 +29,6 @@ use kaspa_core::{
 };
 use kaspa_database::prelude::ConnBuilder;
 use kaspa_database::{create_temp_db, load_existing_db};
-use kaspa_consensus_core::BlockHash; // PR-9.5e: simulator block hashes are Hash64
 use kaspa_perf_monitor::{builder::Builder, counters::CountersSnapshot};
 use kaspa_utils::fd_budget;
 use simulator::network::KaspaNetworkSimulator;
@@ -478,7 +478,11 @@ fn submit_chunk(
     futures
 }
 
-pub(crate) fn topologically_ordered_hashes(src_consensus: &Consensus, genesis_hash: BlockHash, include_genesis: bool) -> Vec<BlockHash> {
+pub(crate) fn topologically_ordered_hashes(
+    src_consensus: &Consensus,
+    genesis_hash: BlockHash,
+    include_genesis: bool,
+) -> Vec<BlockHash> {
     let mut queue: VecDeque<BlockHash> = std::iter::once(genesis_hash).collect();
     let mut visited = BlockHashSet::new();
     let mut vec = if include_genesis { vec![genesis_hash] } else { Vec::new() };

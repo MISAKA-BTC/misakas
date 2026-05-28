@@ -82,7 +82,9 @@ enum Signature {
     /// kaspa-pq ML-DSA-65 signature, identified in the cache by the
     /// BLAKE2b-256 of the 3309-byte signature bytes. The raw signature is
     /// **never** stored in the cache key (DoS budget — see ADR-0002 §7).
-    MlDsa65 { sig_digest: [u8; 32] },
+    MlDsa65 {
+        sig_digest: [u8; 32],
+    },
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -93,7 +95,9 @@ enum PublicKey {
     /// BLAKE2b-256 of the 1952-byte public-key bytes (i.e. the same value
     /// that appears as the address payload). The raw public key is **never**
     /// stored in the cache key (DoS budget — see ADR-0002 §7).
-    MlDsa65 { pk_digest: [u8; 32] },
+    MlDsa65 {
+        pk_digest: [u8; 32],
+    },
 }
 
 // TODO: Make it pub(crate)
@@ -709,13 +713,9 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 // with the consensus opcode `OP_BLAKE2B_256` already used
                 // for the address payload hash.
                 let mut pk_digest = [0u8; 32];
-                pk_digest.copy_from_slice(
-                    blake2b_simd::Params::new().hash_length(32).to_state().update(key).finalize().as_bytes(),
-                );
+                pk_digest.copy_from_slice(blake2b_simd::Params::new().hash_length(32).to_state().update(key).finalize().as_bytes());
                 let mut sig_digest = [0u8; 32];
-                sig_digest.copy_from_slice(
-                    blake2b_simd::Params::new().hash_length(32).to_state().update(sig).finalize().as_bytes(),
-                );
+                sig_digest.copy_from_slice(blake2b_simd::Params::new().hash_length(32).to_state().update(sig).finalize().as_bytes());
                 let sig_cache_key = SigCacheKey {
                     signature: Signature::MlDsa65 { sig_digest },
                     pub_key: PublicKey::MlDsa65 { pk_digest },
@@ -1517,7 +1517,8 @@ mod bitcoind_tests {
         let utxo_entry = UtxoEntry::new(0, script_pub_key.clone(), 0, true);
         let populated_unsigned = PopulatedTransaction::new(&unsigned_tx, vec![utxo_entry.clone()]);
         let reused = SigHashReusedValuesUnsync::new();
-        let sig_hash = kaspa_consensus_core::hashing::sighash::calc_schnorr_signature_hash(&populated_unsigned, 0, SIG_HASH_ALL, &reused);
+        let sig_hash =
+            kaspa_consensus_core::hashing::sighash::calc_schnorr_signature_hash(&populated_unsigned, 0, SIG_HASH_ALL, &reused);
 
         // 5. Sign the sighash with the kaspa-pq context.
         let signing_randomness = [0xb2u8; 32];
@@ -1610,9 +1611,7 @@ mod bitcoind_tests {
             // accepted here. A separate kaspa-pq-specific test exercises
             // the new 4096-byte boundary in
             // `script_builder::tests::test_add_data`.
-            if expected_result == "PUSH_SIZE"
-                && comment.as_deref().is_some_and(|c| c.starts_with(">520 byte push"))
-                && result.is_ok()
+            if expected_result == "PUSH_SIZE" && comment.as_deref().is_some_and(|c| c.starts_with(">520 byte push")) && result.is_ok()
             {
                 return Ok(());
             }

@@ -36,8 +36,7 @@ fn bench_mldsa65_verify(c: &mut Criterion) {
     let vk = ml_dsa_65::MLDSA65VerificationKey::new(vk_bytes);
 
     let message = [0xa5u8; 32];
-    let signature =
-        ml_dsa_65::sign(&keypair.signing_key, &message, MLDSA65_TX_CONTEXT, [0x55u8; 32]).expect("ML-DSA sign");
+    let signature = ml_dsa_65::sign(&keypair.signing_key, &message, MLDSA65_TX_CONTEXT, [0x55u8; 32]).expect("ML-DSA sign");
     let sig_bytes = *signature.as_ref();
     let sig = ml_dsa_65::MLDSA65Signature::new(sig_bytes);
 

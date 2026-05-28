@@ -1,7 +1,7 @@
 use super::{extensions::ReachabilityStoreIntervalExtensions, inquirer::get_next_chain_ancestor_unchecked, interval::Interval, *};
 use crate::model::stores::reachability::ReachabilityStore;
-use kaspa_consensus_core::{BlockHashMap, HashMapCustomHasher, blockhash::BlockHashExtensions};
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::{BlockHashMap, HashMapCustomHasher, blockhash::BlockHashExtensions};
 use std::collections::VecDeque;
 
 /// A struct used during reindex operations. It represents a temporary context

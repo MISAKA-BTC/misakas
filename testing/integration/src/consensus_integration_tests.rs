@@ -20,6 +20,7 @@ use kaspa_consensus::pipeline::ProcessingCounters;
 use kaspa_consensus::pipeline::monitor::ConsensusMonitor;
 use kaspa_consensus::processes::reachability::tests::{DagBlock, DagBuilder, StoreValidationExtensions};
 use kaspa_consensus::processes::window::{WindowManager, WindowType};
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
 use kaspa_consensus_core::api::args::TransactionValidationArgs;
 use kaspa_consensus_core::api::{BlockValidationFutures, ConsensusApi};
 use kaspa_consensus_core::block::Block;
@@ -41,7 +42,6 @@ use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::tick::TickService;
 use kaspa_core::time::unix_now;
 use kaspa_database::utils::get_kaspa_tempdir;
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block ids are Hash64
 use kaspa_rpc_core::RpcHeader;
 use kaspa_utils::arc::ArcExtensions;
 

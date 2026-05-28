@@ -6,6 +6,7 @@ use std::{
 };
 
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, BlockLevel, HashMapCustomHasher, KType,
     blockhash::{BlockHashes, ORIGIN},
@@ -14,7 +15,6 @@ use kaspa_consensus_core::{
 };
 use kaspa_core::{debug, trace};
 use kaspa_database::prelude::*;
-use kaspa_consensus_core::BlockHash;
 use kaspa_utils::binary_heap::TopK;
 use parking_lot::RwLock;
 

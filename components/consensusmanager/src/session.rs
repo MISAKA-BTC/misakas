@@ -3,7 +3,7 @@
 //! We use newtypes in order to simplify changing the underlying lock in the future
 
 use kaspa_consensus_core::{
-    BlockHashSet, BlueWorkType, ChainPath, BlockHash,
+    BlockHash, BlockHashSet, BlueWorkType, ChainPath,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
     api::{BlockCount, BlockValidationFutures, ConsensusApi, ConsensusStats, DynConsensus},
     block::Block,
@@ -299,7 +299,12 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.is_chain_ancestor_of(low, high)).await
     }
 
-    pub async fn async_get_hashes_between(&self, low: BlockHash, high: BlockHash, max_blocks: usize) -> ConsensusResult<(Vec<BlockHash>, BlockHash)> {
+    pub async fn async_get_hashes_between(
+        &self,
+        low: BlockHash,
+        high: BlockHash,
+        max_blocks: usize,
+    ) -> ConsensusResult<(Vec<BlockHash>, BlockHash)> {
         self.clone().spawn_blocking(move |c| c.get_hashes_between(low, high, max_blocks)).await
     }
 
@@ -367,7 +372,11 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.create_virtual_selected_chain_block_locator(low, high)).await
     }
 
-    pub async fn async_create_block_locator_from_pruning_point(&self, high: BlockHash, limit: usize) -> ConsensusResult<Vec<BlockHash>> {
+    pub async fn async_create_block_locator_from_pruning_point(
+        &self,
+        high: BlockHash,
+        limit: usize,
+    ) -> ConsensusResult<Vec<BlockHash>> {
         self.clone().spawn_blocking(move |c| c.create_block_locator_from_pruning_point(high, limit)).await
     }
 
@@ -495,7 +504,11 @@ impl ConsensusSessionOwned {
     pub async fn async_set_pruning_utxoset_stable(&self) {
         self.clone().spawn_blocking(move |c| c.set_pruning_utxoset_stable_flag(true)).await
     }
-    pub async fn async_intrusive_pruning_point_update(&self, new_pruning_point: BlockHash, syncer_sink: BlockHash) -> ConsensusResult<()> {
+    pub async fn async_intrusive_pruning_point_update(
+        &self,
+        new_pruning_point: BlockHash,
+        syncer_sink: BlockHash,
+    ) -> ConsensusResult<()> {
         self.clone().spawn_blocking(move |c| c.intrusive_pruning_point_update(new_pruning_point, syncer_sink)).await
     }
     pub async fn async_get_n_last_pruning_points(&self, n: usize) -> Vec<BlockHash> {

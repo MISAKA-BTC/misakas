@@ -4,10 +4,10 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 use rocksdb::WriteBatch;
 use std::sync::Arc;
 
+use kaspa_consensus_core::BlockHash;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::prelude::{CachePolicy, DB};
 use kaspa_database::prelude::{StoreError, StoreResult};
-use kaspa_consensus_core::BlockHash;
 
 /// Reader API for `StatusesStore`.
 pub trait StatusesStoreReader {

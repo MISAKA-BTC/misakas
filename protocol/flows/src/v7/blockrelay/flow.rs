@@ -3,10 +3,10 @@ use crate::{
     flow_trait::Flow,
     flowcontext::orphans::OrphanOutput,
 };
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::{api::BlockValidationFutures, block::Block, blockstatus::BlockStatus, errors::block::RuleError};
 use kaspa_consensusmanager::{BlockProcessingBatch, ConsensusProxy};
 use kaspa_core::debug;
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_p2p_lib::{
     IncomingRoute, Router, SharedIncomingRoute,
     common::ProtocolError,

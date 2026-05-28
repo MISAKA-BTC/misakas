@@ -1,8 +1,8 @@
 use crate::{flow_context::FlowContext, flow_trait::Flow, ibd::IBD_BATCH_SIZE};
 use itertools::Itertools;
+use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::errors::consensus::ConsensusError;
 use kaspa_core::debug;
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,

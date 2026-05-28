@@ -282,7 +282,12 @@ pub trait ConsensusApi: Send + Sync {
     /// Returns the antipast of block `hash` from the POV of `context`, i.e. `antipast(hash) ∩ past(context)`.
     /// Since this might be an expensive operation for deep blocks, we allow the caller to specify a limit
     /// `max_traversal_allowed` on the maximum amount of blocks to traverse for obtaining the answer
-    fn get_antipast_from_pov(&self, hash: BlockHash, context: BlockHash, max_traversal_allowed: Option<u64>) -> ConsensusResult<Vec<BlockHash>> {
+    fn get_antipast_from_pov(
+        &self,
+        hash: BlockHash,
+        context: BlockHash,
+        max_traversal_allowed: Option<u64>,
+    ) -> ConsensusResult<Vec<BlockHash>> {
         unimplemented!()
     }
 
@@ -295,7 +300,11 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn create_virtual_selected_chain_block_locator(&self, low: Option<BlockHash>, high: Option<BlockHash>) -> ConsensusResult<Vec<BlockHash>> {
+    fn create_virtual_selected_chain_block_locator(
+        &self,
+        low: Option<BlockHash>,
+        high: Option<BlockHash>,
+    ) -> ConsensusResult<Vec<BlockHash>> {
         unimplemented!()
     }
 
@@ -315,7 +324,11 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn get_block_transactions(&self, hash: BlockHash, indices: Option<Vec<TransactionIndexType>>) -> ConsensusResult<Vec<Transaction>> {
+    fn get_block_transactions(
+        &self,
+        hash: BlockHash,
+        indices: Option<Vec<TransactionIndexType>>,
+    ) -> ConsensusResult<Vec<Transaction>> {
         unimplemented!()
     }
 

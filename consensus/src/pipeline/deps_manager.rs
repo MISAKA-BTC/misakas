@@ -1,6 +1,6 @@
 use crate::errors::BlockProcessResult;
-use kaspa_consensus_core::{block::Block, blockstatus::BlockStatus};
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::{block::Block, blockstatus::BlockStatus};
 use parking_lot::{Condvar, Mutex};
 use std::collections::{
     HashMap, VecDeque,

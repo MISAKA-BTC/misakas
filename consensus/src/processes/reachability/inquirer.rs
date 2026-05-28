@@ -1,8 +1,8 @@
 use super::interval::Interval;
 use super::{tree::*, *};
 use crate::model::stores::reachability::{ReachabilityStore, ReachabilityStoreReader};
-use kaspa_consensus_core::blockhash;
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::blockhash;
 
 /// Init the reachability store to match the state required by the algorithmic layer.
 /// The function first checks the store for possibly being initialized already.
@@ -129,7 +129,11 @@ pub fn delete_block(store: &mut (impl ReachabilityStore + ?Sized), block: BlockH
     Ok(())
 }
 
-fn insert_to_future_covering_set(store: &mut (impl ReachabilityStore + ?Sized), merged_block: BlockHash, new_block: BlockHash) -> Result<()> {
+fn insert_to_future_covering_set(
+    store: &mut (impl ReachabilityStore + ?Sized),
+    merged_block: BlockHash,
+    new_block: BlockHash,
+) -> Result<()> {
     match binary_search_descendant(store, store.get_future_covering_set(merged_block)?.as_slice(), new_block)? {
         // We expect the query to not succeed, and to only return the correct insertion index.
         // The existences of a `future covering item` (`FCI`) which is a chain ancestor of `new_block`
@@ -158,7 +162,11 @@ pub fn hint_virtual_selected_parent(store: &mut (impl ReachabilityStore + ?Sized
 
 /// Checks if the `this` block is a strict chain ancestor of the `queried` block (i.e., `this ∈ chain(queried)`).
 /// Note that this results in `false` if `this == queried`
-pub fn is_strict_chain_ancestor_of(store: &(impl ReachabilityStoreReader + ?Sized), this: BlockHash, queried: BlockHash) -> Result<bool> {
+pub fn is_strict_chain_ancestor_of(
+    store: &(impl ReachabilityStoreReader + ?Sized),
+    this: BlockHash,
+    queried: BlockHash,
+) -> Result<bool> {
     Ok(store.get_interval(this)?.strictly_contains(store.get_interval(queried)?))
 }
 
@@ -185,7 +193,11 @@ pub fn is_dag_ancestor_of(store: &(impl ReachabilityStoreReader + ?Sized), this:
 }
 
 /// Finds the tree child of `ancestor` which is also a chain ancestor of `descendant`.
-pub fn get_next_chain_ancestor(store: &(impl ReachabilityStoreReader + ?Sized), descendant: BlockHash, ancestor: BlockHash) -> Result<BlockHash> {
+pub fn get_next_chain_ancestor(
+    store: &(impl ReachabilityStoreReader + ?Sized),
+    descendant: BlockHash,
+    ancestor: BlockHash,
+) -> Result<BlockHash> {
     if descendant == ancestor {
         // The next ancestor does not exist
         return Err(ReachabilityError::BadQuery);

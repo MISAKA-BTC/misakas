@@ -3,13 +3,13 @@ use crate::model::stores::{
     ghostdag::{GhostdagData, GhostdagStoreReader},
     headers::HeaderStoreReader,
 };
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType, MAX_WORK_LEVEL,
     config::params::MAX_DIFFICULTY_TARGET_AS_F64,
     errors::difficulty::{DifficultyError, DifficultyResult},
 };
 use kaspa_core::{info, log::CRESCENDO_KEYWORD};
-use kaspa_consensus_core::BlockHash;
 use kaspa_math::{Uint256, Uint320};
 use std::{
     cmp::{Ordering, max},

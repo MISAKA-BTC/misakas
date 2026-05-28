@@ -88,10 +88,7 @@ impl UtxoCommitment64 {
 
     pub fn from_hex(hex: &str) -> Result<Self, UtxoCommitment64ParseError> {
         if hex.len() != UTXO_COMMITMENT_64_BYTES * 2 {
-            return Err(UtxoCommitment64ParseError::WrongHexLength {
-                expected: UTXO_COMMITMENT_64_BYTES * 2,
-                got: hex.len(),
-            });
+            return Err(UtxoCommitment64ParseError::WrongHexLength { expected: UTXO_COMMITMENT_64_BYTES * 2, got: hex.len() });
         }
         let mut out = [0u8; UTXO_COMMITMENT_64_BYTES];
         faster_hex::hex_decode(hex.as_bytes(), &mut out).map_err(|e| UtxoCommitment64ParseError::Hex(e.to_string()))?;
