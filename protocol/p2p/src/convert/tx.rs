@@ -4,7 +4,7 @@ use kaspa_consensus_core::{
     subnets::SubnetworkId,
     tx::{ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry},
 };
-use kaspa_hashes::Hash;
+use kaspa_hashes::{Hash, Hash64};
 
 // ----------------------------------------------------------------------------
 // consensus_core to protowire
@@ -18,6 +18,23 @@ impl From<Hash> for protowire::TransactionId {
 
 impl From<&Hash> for protowire::TransactionId {
     fn from(hash: &Hash) -> Self {
+        Self { bytes: Vec::from(hash.as_bytes()) }
+    }
+}
+
+// PR-9.5c: TransactionId widened to Hash64; the corresponding
+// `From<Hash64>` conversion lets `outpoint.transaction_id.into()`
+// call sites (where the field type is now Hash64) keep working.
+// On the wire the bytes count is now 64 instead of 32 — proto
+// `bytes` width is dynamic, so no field-shape change is needed.
+impl From<Hash64> for protowire::TransactionId {
+    fn from(hash: Hash64) -> Self {
+        Self { bytes: Vec::from(hash.as_bytes()) }
+    }
+}
+
+impl From<&Hash64> for protowire::TransactionId {
+    fn from(hash: &Hash64) -> Self {
         Self { bytes: Vec::from(hash.as_bytes()) }
     }
 }

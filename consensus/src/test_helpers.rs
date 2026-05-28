@@ -36,8 +36,22 @@ pub fn generate_random_hash(rng: &mut SmallRng) -> Hash {
     Hash::from_bytes(random_bytes)
 }
 
+/// PR-9.5c: `TransactionOutpoint::new` now takes `TransactionId`
+/// (Hash64); generate a random 64-byte hash inline. `rand`'s
+/// `Standard` distribution only impls `Distribution<[u8; N]>`
+/// for `N ≤ 32`, so the 64-byte fill is via two 32-byte gens.
 pub fn generate_random_outpoint(rng: &mut SmallRng) -> TransactionOutpoint {
-    TransactionOutpoint::new(generate_random_hash(rng), rng.r#gen::<u32>())
+    TransactionOutpoint::new(generate_random_hash64(rng), rng.r#gen::<u32>())
+}
+
+/// Internal: random 64-byte `Hash64` for PR-9.5c+ test helpers.
+fn generate_random_hash64(rng: &mut SmallRng) -> kaspa_hashes::Hash64 {
+    let mut bytes64 = [0u8; kaspa_hashes::HASH64_SIZE];
+    let first: [u8; 32] = rng.r#gen();
+    let second: [u8; 32] = rng.r#gen();
+    bytes64[..32].copy_from_slice(&first);
+    bytes64[32..].copy_from_slice(&second);
+    kaspa_hashes::Hash64::from_bytes(bytes64)
 }
 
 pub fn generate_random_utxo_from_script_public_key_pool(rng: &mut SmallRng, script_public_key_pool: &[ScriptPublicKey]) -> UtxoEntry {
@@ -92,11 +106,14 @@ pub fn generate_random_block(
 
 ///Note: generate_random_header is filled with random data, it does not represent a consensus-valid header!
 pub fn generate_random_header(rng: &mut SmallRng, parent_amount: usize) -> Header {
+    // PR-9.5c: positions 3 and 4 (`hash_merkle_root`,
+    // `accepted_id_merkle_root`) are now `Hash64`; position 5
+    // (`utxo_commitment`) stays 32-byte `Hash` until PR-9.5d.
     Header::new_finalized(
         rng.r#gen(),
         vec![generate_random_hashes(rng, parent_amount)].try_into().unwrap(),
-        generate_random_hash(rng),
-        generate_random_hash(rng),
+        generate_random_hash64(rng),
+        generate_random_hash64(rng),
         generate_random_hash(rng),
         rng.r#gen(),
         rng.r#gen(),
@@ -155,8 +172,10 @@ pub fn generate_random_transaction_outputs(rng: &mut SmallRng, amount: usize) ->
 }
 
 ///Note: generate_random_transactions is filled with random data, it does not represent consensus-valid  transaction output!
+///
+/// PR-9.5c: `TransactionId` widened to `Hash64`.
 pub fn generate_random_transaction_outpoint(rng: &mut SmallRng) -> TransactionOutpoint {
-    TransactionOutpoint::new(generate_random_hash(rng), rng.r#gen())
+    TransactionOutpoint::new(generate_random_hash64(rng), rng.r#gen())
 }
 
 //TODO: create `assert_eq_<kaspa-sturct>!()` helper macros in `consensus::test_helpers`

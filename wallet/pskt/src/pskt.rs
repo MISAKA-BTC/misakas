@@ -334,7 +334,10 @@ impl PSKT<Signer> {
     }
 
     // Unorphan batch transaction UTXO.
-    pub fn set_input_prev_transaction_id(self, transaction_id: Hash) -> PSKT<Signer> {
+    //
+    // PR-9.5c: `TransactionOutpoint.transaction_id` widened to
+    // `TransactionId` (Hash64); parameter type follows.
+    pub fn set_input_prev_transaction_id(self, transaction_id: kaspa_consensus_core::TransactionId) -> PSKT<Signer> {
         let mut new_inputs = self.inner_pskt.inputs.clone();
 
         new_inputs.iter_mut().for_each(|input| {

@@ -398,15 +398,25 @@ impl VirtualStateProcessor {
 
     /// Calculates the accepted_id_merkle_root based on the current DAA score and the accepted tx ids
     /// refer KIP-15 for more details
+    ///
+    /// PR-9.5c: `accepted_tx_ids` widened to `TransactionId`
+    /// (= `Hash64`); return type widened to `AcceptedIdMerkleRoot`
+    /// (= `Hash64`). The branch combination uses the keyed
+    /// BLAKE2b-512 `AcceptedIdMerkleBranchHash64` hasher (same
+    /// domain as `merkle::calc_accepted_id_merkle_root_pre_crescendo`)
+    /// so the post-Crescendo path and the pre-Crescendo path
+    /// produce values from the same hash family.
     pub(super) fn calc_accepted_id_merkle_root(
         &self,
-        accepted_tx_ids: impl ExactSizeIterator<Item = Hash>,
-        selected_parent: Hash,
-    ) -> Hash {
-        kaspa_merkle::merkle_hash(
-            self.headers_store.get_header(selected_parent).unwrap().accepted_id_merkle_root,
-            kaspa_merkle::calc_merkle_root(accepted_tx_ids),
-        )
+        accepted_tx_ids: impl ExactSizeIterator<Item = kaspa_consensus_core::TransactionId>,
+        selected_parent: kaspa_hashes::Hash,
+    ) -> kaspa_consensus_core::AcceptedIdMerkleRoot {
+        use kaspa_hashes::{AcceptedIdMerkleBranchHash64, HasherBase};
+        let parent_root = self.headers_store.get_header(selected_parent).unwrap().accepted_id_merkle_root;
+        let leaves_root = kaspa_consensus_core::merkle::calc_accepted_id_merkle_root_pre_crescendo(accepted_tx_ids.collect());
+        let mut hasher = AcceptedIdMerkleBranchHash64::new();
+        hasher.update(parent_root.as_byte_slice()).update(leaves_root.as_byte_slice());
+        hasher.finalize()
     }
 }
 

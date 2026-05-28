@@ -195,7 +195,7 @@ mod tests {
         let (secret_key2, public_key2) = secp.generate_keypair(&mut rand::thread_rng());
         let script_pub_key2 = ScriptVec::from_slice(&public_key2.serialize());
 
-        let prev_tx_id = TransactionId::from_str("880eb9819a31821d9d2399e2f35e2433b72637e393d71ecc9b8d0250f49153c3").unwrap();
+        let prev_tx_id = TransactionId::from_str("880eb9819a31821d9d2399e2f35e2433b72637e393d71ecc9b8d0250f49153c3880eb9819a31821d9d2399e2f35e2433b72637e393d71ecc9b8d0250f49153c3").unwrap();
         let unsigned_tx = Transaction::new(
             0,
             vec![

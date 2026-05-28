@@ -84,7 +84,12 @@ impl Deserializer for RpcUtxoEntry {
 #[derive(Eq, Hash, PartialEq, Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcTransactionOutpoint {
-    #[serde(with = "serde_bytes_fixed_ref")]
+    // PR-9.5c: `TransactionId` widened to `Hash64`. The
+    // `serde_bytes_fixed_ref` helper assumes 32-byte arrays;
+    // Hash64 carries its own manual serde impl, so the
+    // annotation is removed and serde routes through the
+    // Hash64-native path. Mirrors the same change on
+    // `consensus_core::tx::TransactionOutpoint`.
     pub transaction_id: TransactionId,
     pub index: TransactionIndexType,
 }
@@ -362,7 +367,9 @@ impl Deserializer for RpcTransaction {
 #[serde(rename_all = "camelCase")]
 pub struct RpcTransactionVerboseData {
     pub transaction_id: RpcTransactionId,
-    pub hash: RpcHash,
+    // PR-9.5c: full-content tx hash widened to TransactionHash
+    // (Hash64).
+    pub hash: kaspa_consensus_core::TransactionHash,
     pub compute_mass: u64,
     pub block_hash: RpcHash,
     pub block_time: u64,
@@ -371,8 +378,10 @@ pub struct RpcTransactionVerboseData {
 impl Serializer for RpcTransactionVerboseData {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         store!(u8, &1, writer)?;
-        store!(RpcTransactionId, &self.transaction_id, writer)?;
-        store!(RpcHash, &self.hash, writer)?;
+        // PR-9.5c: RpcTransactionId is now Hash64; serialise as such.
+        store!(kaspa_hashes::Hash64, &self.transaction_id, writer)?;
+        // PR-9.5c: tx hash widened to Hash64.
+        store!(kaspa_hashes::Hash64, &self.hash, writer)?;
         store!(u64, &self.compute_mass, writer)?;
         store!(RpcHash, &self.block_hash, writer)?;
         store!(u64, &self.block_time, writer)?;
@@ -384,8 +393,9 @@ impl Serializer for RpcTransactionVerboseData {
 impl Deserializer for RpcTransactionVerboseData {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u8, reader)?;
-        let transaction_id = load!(RpcTransactionId, reader)?;
-        let hash = load!(RpcHash, reader)?;
+        // PR-9.5c: Hash64 wire width.
+        let transaction_id = load!(kaspa_hashes::Hash64, reader)?;
+        let hash = load!(kaspa_hashes::Hash64, reader)?;
         let compute_mass = load!(u64, reader)?;
         let block_hash = load!(RpcHash, reader)?;
         let block_time = load!(u64, reader)?;

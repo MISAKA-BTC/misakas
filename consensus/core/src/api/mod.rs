@@ -235,7 +235,9 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn calc_transaction_hash_merkle_root(&self, txs: &[Transaction]) -> Hash {
+    // PR-9.5c: return type widened to `crate::MerkleRoot`
+    // (= `Hash64`) for the ADR-0008 consensus-identity cascade.
+    fn calc_transaction_hash_merkle_root(&self, txs: &[Transaction]) -> crate::MerkleRoot {
         unimplemented!()
     }
 

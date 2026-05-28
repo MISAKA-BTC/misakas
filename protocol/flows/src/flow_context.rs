@@ -409,7 +409,15 @@ impl FlowContext {
         if self.is_ibd_running() { self.ibd_metadata.read().map(|md| md.daa_score) } else { None }
     }
 
-    fn try_adding_request_impl(req: Hash, map: &Arc<Mutex<HashMap<Hash, RequestScopeMetadata>>>) -> Option<RequestScope<Hash>> {
+    // PR-9.5c: generic over the hash width because
+    // `shared_block_requests` holds `BlockHash` (still `Hash`)
+    // while `shared_transaction_requests` holds `TransactionId`
+    // (now `Hash64`). Both implement `std::hash::Hash + Eq +
+    // Copy`, so the same HashMap-entry logic works for both.
+    fn try_adding_request_impl<H>(req: H, map: &Arc<Mutex<HashMap<H, RequestScopeMetadata>>>) -> Option<RequestScope<H>>
+    where
+        H: std::hash::Hash + Eq + Copy,
+    {
         match map.lock().entry(req) {
             Entry::Occupied(mut e) => {
                 if e.get().obtained {

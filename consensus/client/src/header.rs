@@ -191,8 +191,10 @@ impl Header {
     }
 
     #[wasm_bindgen(setter = hashMerkleRoot)]
+    // PR-9.5c: `hash_merkle_root` widened to `Hash64`; expect a
+    // 64-byte input on the JS side.
     pub fn set_hash_merkle_root_from_js_value(&mut self, js_value: JsValue) {
-        self.inner_mut().hash_merkle_root = Hash::from_slice(&js_value.try_as_vec_u8().expect("hash merkle root"));
+        self.inner_mut().hash_merkle_root = kaspa_hashes::Hash64::from_slice(&js_value.try_as_vec_u8().expect("hash merkle root"));
     }
 
     #[wasm_bindgen(getter = acceptedIdMerkleRoot)]
@@ -201,8 +203,9 @@ impl Header {
     }
 
     #[wasm_bindgen(setter = acceptedIdMerkleRoot)]
+    // PR-9.5c: `accepted_id_merkle_root` widened to `Hash64`.
     pub fn set_accepted_id_merkle_root_from_js_value(&mut self, js_value: JsValue) {
-        self.inner_mut().accepted_id_merkle_root = Hash::from_slice(&js_value.try_as_vec_u8().expect("accepted id merkle root"));
+        self.inner_mut().accepted_id_merkle_root = kaspa_hashes::Hash64::from_slice(&js_value.try_as_vec_u8().expect("accepted id merkle root"));
     }
 
     #[wasm_bindgen(getter = utxoCommitment)]

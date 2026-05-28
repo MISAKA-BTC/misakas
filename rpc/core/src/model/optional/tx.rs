@@ -146,7 +146,12 @@ impl Deserializer for RpcOptionalUtxoEntryVerboseData {
 #[derive(Eq, Hash, PartialEq, Debug, Copy, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcOptionalTransactionOutpoint {
-    #[serde(with = "serde_bytes_fixed_ref_optional")]
+    // PR-9.5c: `TransactionId` widened to `Hash64`; the
+    // `serde_bytes_fixed_ref_optional` helper assumes 32-byte
+    // arrays. Hash64 carries its own serde impl that round-trips
+    // through hex (human-readable) and raw bytes (compact), and
+    // `Option<Hash64>` falls through that impl via serde's
+    // built-in `Option` adapter — annotation removed.
     pub transaction_id: Option<TransactionId>,
     pub index: Option<TransactionIndexType>,
 }
@@ -491,7 +496,10 @@ impl Deserializer for RpcOptionalTransaction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcOptionalTransactionVerboseData {
-    #[serde(with = "serde_bytes_fixed_ref_optional")]
+    // PR-9.5c: `RpcTransactionId = TransactionId` is now Hash64;
+    // the fixed-ref-optional helper assumes 32-byte arrays.
+    // Serde routes through the Hash64-native impl via the
+    // built-in `Option` adapter.
     /// Level: Low
     pub transaction_id: Option<RpcTransactionId>,
     #[serde(with = "serde_bytes_fixed_ref_optional")]

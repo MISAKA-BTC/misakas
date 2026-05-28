@@ -39,12 +39,41 @@ use std::{
     hash::{Hash as StdHash, Hasher as StdHasher},
     str::{self, FromStr},
 };
+use wasm_bindgen::prelude::*;
+use workflow_wasm::prelude::*;
 
 pub const HASH64_SIZE: usize = 64;
 
 /// 64-byte kaspa-pq consensus identity hash. See ADR-0008.
-#[derive(Eq, Clone, Copy, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+///
+/// PR-9.5c adds the `#[wasm_bindgen]` + `CastFromJs` surface
+/// mirroring the 32-byte [`crate::Hash`] type so downstream
+/// `kaspa-consensus-client` WASM bindings compose against
+/// `TransactionId`, `TransactionOutpoint`, and the other
+/// PR-9.5c-widened consensus identities without further
+/// per-call-site WASM glue.
+#[derive(Eq, Clone, Copy, BorshSerialize, BorshDeserialize, CastFromJs)]
+#[wasm_bindgen]
 pub struct Hash64([u8; HASH64_SIZE]);
+
+// PartialOrd / Ord are still derived but written separately so
+// the `#[wasm_bindgen]` macro on the struct does not see them
+// in the derive list (the macro's expanded code reserves a few
+// trait names and the derive set must stay minimal — Hash and
+// PartialEq are set up below alongside the manual impls).
+impl PartialOrd for Hash64 {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Hash64 {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
 
 // Manual serde impls. The upstream
 // `kaspa_utils::serde_impl_*_fixed_bytes_ref!` macros assume
@@ -262,6 +291,42 @@ impl FromHex for Hash64 {
 }
 
 impl MemSizeEstimator for Hash64 {}
+
+// PR-9.5c WASM surface — mirrors the 32-byte `Hash`
+// (`crypto/hashes/src/lib.rs`) so JS callers can construct,
+// pretty-print, and pass `Hash64` values across the wasm-bindgen
+// boundary the same way they do with the 32-byte type today. The
+// only widening is the hex string length: 128 chars instead of
+// 64, matching the `Display` impl above.
+#[wasm_bindgen]
+impl Hash64 {
+    #[wasm_bindgen(constructor)]
+    pub fn constructor(hex_str: &str) -> Self {
+        Hash64::from_str(hex_str).expect("invalid Hash64 value")
+    }
+
+    #[wasm_bindgen(js_name = toString)]
+    pub fn js_to_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+type Hash64TryFromError = workflow_wasm::error::Error;
+
+impl TryCastFromJs for Hash64 {
+    type Error = Hash64TryFromError;
+    fn try_cast_from<'a, R>(value: &'a R) -> Result<Cast<'a, Self>, Self::Error>
+    where
+        R: AsRef<JsValue> + 'a,
+    {
+        Self::resolve(value, || {
+            let bytes = value.as_ref().try_as_vec_u8()?;
+            Ok(Hash64(<[u8; HASH64_SIZE]>::try_from(bytes).map_err(|_| {
+                Hash64TryFromError::WrongSize("Slice must have the length of Hash64 (64 bytes)".into())
+            })?))
+        })
+    }
+}
 
 /// The all-zero `Hash64` — structurally valid but **never** produced
 /// by any consensus-grade BLAKE2b-512 hasher in this crate.

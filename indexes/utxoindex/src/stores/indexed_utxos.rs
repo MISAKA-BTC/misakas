@@ -55,19 +55,23 @@ impl AsRef<[u8]> for ScriptPublicKeyBucket {
 // Keys:
 
 // TransactionOutpoint:
+// PR-9.5c: TransactionId widened from `Hash` (32 B) to `Hash64`
+// (64 B). The DB key layout widens from 36 to 68 bytes; existing
+// upstream-Kaspa utxoindex databases become unreadable, matching
+// ADR-0001's "kaspa-pq is a new network, no DB migration" rule.
 /// Size of the [TransactionOutpointKey] in bytes.
-pub const TRANSACTION_OUTPOINT_KEY_SIZE: usize = kaspa_hashes::HASH_SIZE + size_of::<TransactionIndexType>();
+pub const TRANSACTION_OUTPOINT_KEY_SIZE: usize = kaspa_hashes::HASH64_SIZE + size_of::<TransactionIndexType>();
 
 /// [TransactionOutpoint] key which references the [CompactUtxoEntry] within a [ScriptPublicKeyBucket]
-/// Consists of 32 bytes of [TransactionId], followed by 4 bytes of little endian [TransactionIndexType]
+/// Consists of 64 bytes of [TransactionId] (Hash64), followed by 4 bytes of little endian [TransactionIndexType]
 #[derive(Eq, Hash, PartialEq, Debug, Copy, Clone)]
 struct TransactionOutpointKey([u8; TRANSACTION_OUTPOINT_KEY_SIZE]);
 
 impl From<TransactionOutpointKey> for TransactionOutpoint {
     fn from(key: TransactionOutpointKey) -> Self {
-        let transaction_id = Hash::from_slice(&key.0[..kaspa_hashes::HASH_SIZE]);
+        let transaction_id = kaspa_hashes::Hash64::from_slice(&key.0[..kaspa_hashes::HASH64_SIZE]);
         let index = TransactionIndexType::from_le_bytes(
-            <[u8; size_of::<TransactionIndexType>()]>::try_from(&key.0[kaspa_hashes::HASH_SIZE..]).expect("expected index size"),
+            <[u8; size_of::<TransactionIndexType>()]>::try_from(&key.0[kaspa_hashes::HASH64_SIZE..]).expect("expected index size"),
         );
         Self::new(transaction_id, index)
     }
@@ -76,8 +80,8 @@ impl From<TransactionOutpointKey> for TransactionOutpoint {
 impl From<&TransactionOutpoint> for TransactionOutpointKey {
     fn from(outpoint: &TransactionOutpoint) -> Self {
         let mut bytes = [0; TRANSACTION_OUTPOINT_KEY_SIZE];
-        bytes[..kaspa_hashes::HASH_SIZE].copy_from_slice(&outpoint.transaction_id.as_bytes());
-        bytes[kaspa_hashes::HASH_SIZE..].copy_from_slice(&outpoint.index.to_le_bytes());
+        bytes[..kaspa_hashes::HASH64_SIZE].copy_from_slice(&outpoint.transaction_id.as_bytes());
+        bytes[kaspa_hashes::HASH64_SIZE..].copy_from_slice(&outpoint.index.to_le_bytes());
         Self(bytes)
     }
 }

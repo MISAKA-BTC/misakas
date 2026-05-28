@@ -9,7 +9,7 @@ use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreResultExt;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::prelude::{CachePolicy, StoreError};
-use kaspa_hashes::Hash;
+use kaspa_hashes::{HASH64_SIZE, Hash64};
 use rocksdb::WriteBatch;
 use std::{error::Error, fmt::Display, sync::Arc};
 
@@ -23,12 +23,19 @@ pub trait UtxoSetStoreReader {
 pub trait UtxoSetStore: UtxoSetStoreReader {
     /// Updates the store according to the UTXO diff -- adding and deleting entries correspondingly.
     /// Note we define `self` as `mut` in order to require write access even though the compiler does not require it.
-    /// This is because concurrent readers can interfere with cache consistency.  
+    /// This is because concurrent readers can interfere with cache consistency.
     fn write_diff(&mut self, utxo_diff: &UtxoDiff) -> Result<(), StoreError>;
     fn write_many(&mut self, utxos: &[(TransactionOutpoint, UtxoEntry)]) -> Result<(), StoreError>;
 }
 
-pub const UTXO_KEY_SIZE: usize = kaspa_hashes::HASH_SIZE + size_of::<TransactionIndexType>();
+// PR-9.5c: UTXO_KEY_SIZE widened from `HASH_SIZE + 4` (= 36) to
+// `HASH64_SIZE + 4` (= 68) because `TransactionId` is now `Hash64`.
+// Existing on-disk UTXO databases become incompatible — ADR-0001's
+// "kaspa-pq is a new network, no DB migration" rule applies: a
+// node opened against an old-Kaspa-shape UTXO store will fail to
+// decode keys at startup. The PR-9.5g devnet-boot gate covers the
+// rejection path explicitly.
+pub const UTXO_KEY_SIZE: usize = HASH64_SIZE + size_of::<TransactionIndexType>();
 
 #[derive(Eq, Hash, PartialEq, Debug, Copy, Clone)]
 struct UtxoKey([u8; UTXO_KEY_SIZE]);
@@ -36,10 +43,10 @@ struct UtxoKey([u8; UTXO_KEY_SIZE]);
 impl AsRef<[u8]> for UtxoKey {
     fn as_ref(&self) -> &[u8] {
         // In every practical case a transaction output index needs at most 2 bytes, so the overall
-        // DB key structure will be { prefix byte || TX ID (32 bytes) || TX INDEX (2) } = 35 bytes
-        // which fit on the smallvec without requiring heap allocation (see key.rs)
-        let rposition = self.0[kaspa_hashes::HASH_SIZE..].iter().rposition(|&v| v != 0).unwrap_or(0);
-        &self.0[..=kaspa_hashes::HASH_SIZE + rposition]
+        // DB key structure (post-PR-9.5c) is { prefix byte || TX ID (64 bytes) || TX INDEX (2) }
+        // = 67 bytes; smallvec heap-allocation threshold (see key.rs) still covers it.
+        let rposition = self.0[HASH64_SIZE..].iter().rposition(|&v| v != 0).unwrap_or(0);
+        &self.0[..=HASH64_SIZE + rposition]
     }
 }
 
@@ -50,10 +57,10 @@ impl TryFrom<&[u8]> for UtxoKey {
         if UTXO_KEY_SIZE < slice.len() {
             return Err("src slice is too large");
         }
-        if slice.len() < kaspa_hashes::HASH_SIZE + 1 {
+        if slice.len() < HASH64_SIZE + 1 {
             return Err("src slice is too short");
         }
-        // If the slice is shorter than HASH len + u32 len then we pad with zeros, effectively
+        // If the slice is shorter than HASH64 len + u32 len then we pad with zeros, effectively
         // implementing the inverse logic of `AsRef`.
         let mut bytes = [0; UTXO_KEY_SIZE];
         bytes[..slice.len()].copy_from_slice(slice);
@@ -71,17 +78,17 @@ impl Display for UtxoKey {
 impl From<TransactionOutpoint> for UtxoKey {
     fn from(outpoint: TransactionOutpoint) -> Self {
         let mut bytes = [0; UTXO_KEY_SIZE];
-        bytes[..kaspa_hashes::HASH_SIZE].copy_from_slice(&outpoint.transaction_id.as_bytes());
-        bytes[kaspa_hashes::HASH_SIZE..].copy_from_slice(&outpoint.index.to_le_bytes());
+        bytes[..HASH64_SIZE].copy_from_slice(&outpoint.transaction_id.as_bytes());
+        bytes[HASH64_SIZE..].copy_from_slice(&outpoint.index.to_le_bytes());
         Self(bytes)
     }
 }
 
 impl From<UtxoKey> for TransactionOutpoint {
     fn from(k: UtxoKey) -> Self {
-        let transaction_id = Hash::from_slice(&k.0[..kaspa_hashes::HASH_SIZE]);
+        let transaction_id = Hash64::from_slice(&k.0[..HASH64_SIZE]);
         let index = TransactionIndexType::from_le_bytes(
-            <[u8; size_of::<TransactionIndexType>()]>::try_from(&k.0[kaspa_hashes::HASH_SIZE..]).expect("expecting index size"),
+            <[u8; size_of::<TransactionIndexType>()]>::try_from(&k.0[HASH64_SIZE..]).expect("expecting index size"),
         );
         Self::new(transaction_id, index)
     }

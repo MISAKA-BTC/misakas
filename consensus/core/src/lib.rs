@@ -56,29 +56,32 @@ pub type LegacyHash32 = kaspa_hashes::Hash32;
 pub type BlockHash = kaspa_hashes::Hash32;
 
 /// Transaction id — the `TransactionId` returned by the upstream
-/// `TransactionHasher` flow (txid). Widens to `Hash64` in PR-9.5c
-/// (the first identity to flip — drives mempool, utxo, wallet
-/// storage cascades).
-pub type TransactionId = kaspa_hashes::Hash32;
+/// `TransactionHasher` flow (txid). **Flipped to `Hash64` in
+/// PR-9.5c** per ADR-0008 §"Full Hash64 consensus identity"; the
+/// underlying digest is now produced by the keyed BLAKE2b-512
+/// `TransactionId64` hasher from PR-9.2 / crypto/hashes/src/hashers.rs.
+pub type TransactionId = kaspa_hashes::Hash64;
 
 /// Full-content transaction hash — distinct from [`TransactionId`]
-/// (which omits witness data per upstream Kaspa convention). Widens
-/// to `Hash64` in PR-9.5c.
-pub type TransactionHash = kaspa_hashes::Hash32;
+/// (which omits witness data per upstream Kaspa convention).
+/// **Flipped to `Hash64` in PR-9.5c**; underlying hasher is the
+/// keyed BLAKE2b-512 `TransactionHash64`.
+pub type TransactionHash = kaspa_hashes::Hash64;
 
-/// Generic merkle-tree node hash (intermediate `BLAKE2b-512` /
-/// `BLAKE2b-256` digest along a merkle path). Widens to `Hash64`
-/// in PR-9.5c.
-pub type MerkleHash = kaspa_hashes::Hash32;
+/// Generic merkle-tree node hash (intermediate digest along a
+/// merkle path). **Flipped to `Hash64` in PR-9.5c**; underlying
+/// hasher is the keyed BLAKE2b-512 `MerkleBranchHash64`.
+pub type MerkleHash = kaspa_hashes::Hash64;
 
 /// Merkle root over a block's transaction id list
-/// (`Header::hash_merkle_root`). Widens to `Hash64` in PR-9.5c.
-pub type MerkleRoot = kaspa_hashes::Hash32;
+/// (`Header::hash_merkle_root`). **Flipped to `Hash64` in PR-9.5c**.
+pub type MerkleRoot = kaspa_hashes::Hash64;
 
 /// Merkle root over a block's accepted-transaction-id list
-/// (`Header::accepted_id_merkle_root`). Widens to `Hash64` in
-/// PR-9.5c.
-pub type AcceptedIdMerkleRoot = kaspa_hashes::Hash32;
+/// (`Header::accepted_id_merkle_root`). **Flipped to `Hash64` in
+/// PR-9.5c**; underlying hasher is the keyed BLAKE2b-512
+/// `AcceptedIdMerkleBranchHash64`.
+pub type AcceptedIdMerkleRoot = kaspa_hashes::Hash64;
 
 /// UTXO accumulator commitment stored in `Header::utxo_commitment`.
 /// Widens to `Hash64` in PR-9.5d (it is part of the Header

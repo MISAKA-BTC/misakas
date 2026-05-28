@@ -1047,7 +1047,8 @@ impl ConsensusApi for Consensus {
         self.services.coinbase_manager.modify_coinbase_payload(payload, miner_data)
     }
 
-    fn calc_transaction_hash_merkle_root(&self, txs: &[Transaction]) -> Hash {
+    // PR-9.5c: trait signature widened to `MerkleRoot` (Hash64).
+    fn calc_transaction_hash_merkle_root(&self, txs: &[Transaction]) -> kaspa_consensus_core::MerkleRoot {
         calc_hash_merkle_root(txs.iter())
     }
 

@@ -49,8 +49,9 @@ pub struct OptionalHeader {
     hash: Option<Hash>,
     version: Option<u16>,
     parents_by_level: Option<WasmCompressedParents>,
-    hash_merkle_root: Option<Hash>,
-    accepted_id_merkle_root: Option<Hash>,
+    // PR-9.5c: merkle roots widened to Hash64.
+    hash_merkle_root: Option<kaspa_hashes::Hash64>,
+    accepted_id_merkle_root: Option<kaspa_hashes::Hash64>,
     utxo_commitment: Option<Hash>,
     timestamp: Option<u64>,
     bits: Option<u32>,
@@ -67,8 +68,9 @@ impl OptionalHeader {
         hash: Option<Hash>,
         version: Option<u16>,
         parents_by_level: Option<WasmCompressedParents>,
-        hash_merkle_root: Option<Hash>,
-        accepted_id_merkle_root: Option<Hash>,
+        // PR-9.5c: merkle roots widened to Hash64.
+        hash_merkle_root: Option<kaspa_hashes::Hash64>,
+        accepted_id_merkle_root: Option<kaspa_hashes::Hash64>,
         utxo_commitment: Option<Hash>,
         timestamp: Option<u64>,
         bits: Option<u32>,

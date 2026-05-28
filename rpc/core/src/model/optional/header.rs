@@ -16,9 +16,11 @@ pub struct RpcOptionalHeader {
     /// Level: High
     pub parents_by_level: Option<RpcCompressedParents>,
     /// Level: High
-    pub hash_merkle_root: Option<Hash>,
+    /// PR-9.5c: widened to `MerkleRoot` (Hash64).
+    pub hash_merkle_root: Option<kaspa_consensus_core::MerkleRoot>,
     /// Level: High
-    pub accepted_id_merkle_root: Option<Hash>,
+    /// PR-9.5c: widened to `AcceptedIdMerkleRoot` (Hash64).
+    pub accepted_id_merkle_root: Option<kaspa_consensus_core::AcceptedIdMerkleRoot>,
     /// Level: Full
     pub utxo_commitment: Option<Hash>,
     /// Level: Low - Timestamp is in milliseconds
@@ -173,8 +175,9 @@ impl Serializer for RpcOptionalHeader {
         store!(Option<Hash>, &self.hash, writer)?;
         store!(Option<u16>, &self.version, writer)?;
         store!(Option<RpcCompressedParents>, &self.parents_by_level, writer)?;
-        store!(Option<Hash>, &self.hash_merkle_root, writer)?;
-        store!(Option<Hash>, &self.accepted_id_merkle_root, writer)?;
+        // PR-9.5c: merkle roots serialised as Hash64.
+        store!(Option<kaspa_hashes::Hash64>, &self.hash_merkle_root, writer)?;
+        store!(Option<kaspa_hashes::Hash64>, &self.accepted_id_merkle_root, writer)?;
         store!(Option<Hash>, &self.utxo_commitment, writer)?;
         store!(Option<u64>, &self.timestamp, writer)?;
         store!(Option<u32>, &self.bits, writer)?;
@@ -195,8 +198,9 @@ impl Deserializer for RpcOptionalHeader {
         let hash = load!(Option<Hash>, reader)?;
         let version = load!(Option<u16>, reader)?;
         let parents_by_level = load!(Option<RpcCompressedParents>, reader)?;
-        let hash_merkle_root = load!(Option<Hash>, reader)?;
-        let accepted_id_merkle_root = load!(Option<Hash>, reader)?;
+        // PR-9.5c: merkle roots deserialised as Hash64.
+        let hash_merkle_root = load!(Option<kaspa_hashes::Hash64>, reader)?;
+        let accepted_id_merkle_root = load!(Option<kaspa_hashes::Hash64>, reader)?;
         let utxo_commitment = load!(Option<Hash>, reader)?;
         let timestamp = load!(Option<u64>, reader)?;
         let bits = load!(Option<u32>, reader)?;

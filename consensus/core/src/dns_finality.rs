@@ -1729,7 +1729,9 @@ mod tests {
     }
 
     fn fixture_outpoint() -> TransactionOutpoint {
-        TransactionOutpoint::new(Hash::from_bytes([0x77u8; 32]), 42)
+        // PR-9.5c: `TransactionOutpoint.transaction_id` widened to
+        // `TransactionId` (= Hash64).
+        TransactionOutpoint::new(Hash64::from_bytes([0x77u8; 64]), 42)
     }
 
     fn fixture_attestation() -> StakeAttestation {

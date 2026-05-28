@@ -135,8 +135,16 @@ pub struct Header {
     pub hash: Hash,
     pub version: u16,
     pub parents_by_level: CompressedParents,
-    pub hash_merkle_root: Hash,
-    pub accepted_id_merkle_root: Hash,
+    /// PR-9.5c: widened to `MerkleRoot` (= [`Hash64`]). Receives
+    /// the output of the kaspa-pq
+    /// [`crate::merkle::calc_hash_merkle_root`] flow which now
+    /// runs through the keyed BLAKE2b-512
+    /// [`kaspa_hashes::MerkleBranchHash64`] hasher.
+    pub hash_merkle_root: crate::MerkleRoot,
+    /// PR-9.5c: widened to `AcceptedIdMerkleRoot` (= [`Hash64`]).
+    /// Same rationale; underlying branch hasher is the
+    /// domain-separated [`kaspa_hashes::AcceptedIdMerkleBranchHash64`].
+    pub accepted_id_merkle_root: crate::AcceptedIdMerkleRoot,
     pub utxo_commitment: Hash,
     /// Timestamp is in milliseconds
     pub timestamp: u64,
@@ -153,8 +161,8 @@ impl Header {
     pub fn new_finalized(
         version: u16,
         parents_by_level: CompressedParents,
-        hash_merkle_root: Hash,
-        accepted_id_merkle_root: Hash,
+        hash_merkle_root: crate::MerkleRoot,
+        accepted_id_merkle_root: crate::AcceptedIdMerkleRoot,
         utxo_commitment: Hash,
         timestamp: u64,
         bits: u32,

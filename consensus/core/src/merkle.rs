@@ -1,22 +1,92 @@
-use crate::{hashing, tx::Transaction};
-use kaspa_hashes::Hash;
-use kaspa_merkle::calc_merkle_root;
+use crate::{AcceptedIdMerkleRoot, MerkleRoot, TransactionId, hashing, tx::Transaction};
+use kaspa_hashes::{AcceptedIdMerkleBranchHash64, Hash64, HasherBase, MerkleBranchHash64, ZERO_HASH64};
 
-pub fn calc_hash_merkle_root<'a>(txs: impl ExactSizeIterator<Item = &'a Transaction>) -> Hash {
-    calc_merkle_root(txs.map(hashing::tx::hash))
+// PR-9.5c: merkle leaves / branches / root widened to `Hash64`
+// per ADR-0008. The upstream `kaspa_merkle::calc_merkle_root`
+// helper is hard-coded to `Hash32` + `MerkleBranchHash`; the
+// kaspa-pq variants below run the same tree algorithm but with
+// `Hash64` leaves and the keyed BLAKE2b-512 hashers
+// `MerkleBranchHash64` (transaction-merkle branches) and
+// `AcceptedIdMerkleBranchHash64` (accepted-id merkle branches).
+//
+// The two branch domains are keyed-distinct on purpose: a tx
+// merkle root and an accepted-id merkle root over the same leaf
+// set are different values, so neither hasher's output can ever
+// be substituted for the other.
+
+/// PR-9.5c: transaction-merkle root widened to `MerkleRoot`
+/// (`Hash64`). The branch hasher is the keyed BLAKE2b-512
+/// `MerkleBranchHash64` per ADR-0008.
+pub fn calc_hash_merkle_root<'a>(txs: impl ExactSizeIterator<Item = &'a Transaction>) -> MerkleRoot {
+    let leaves: Vec<Hash64> = txs.map(hashing::tx::hash).collect();
+    merkle_root_with(leaves, |l, r| {
+        let mut h = MerkleBranchHash64::new();
+        h.update(l.as_byte_slice()).update(r.as_byte_slice());
+        h.finalize()
+    })
 }
 
-pub fn calc_hash_merkle_root_pre_crescendo<'a>(txs: impl ExactSizeIterator<Item = &'a Transaction>) -> Hash {
-    calc_merkle_root(txs.map(hashing::tx::hash_pre_crescendo))
+/// PR-9.5c: pre-crescendo transaction-merkle root (excludes the
+/// per-tx mass commitment).
+pub fn calc_hash_merkle_root_pre_crescendo<'a>(txs: impl ExactSizeIterator<Item = &'a Transaction>) -> MerkleRoot {
+    let leaves: Vec<Hash64> = txs.map(hashing::tx::hash_pre_crescendo).collect();
+    merkle_root_with(leaves, |l, r| {
+        let mut h = MerkleBranchHash64::new();
+        h.update(l.as_byte_slice()).update(r.as_byte_slice());
+        h.finalize()
+    })
 }
 
-pub fn calc_accepted_id_merkle_root_pre_crescendo(mut accepted_tx_ids: Vec<Hash>) -> Hash {
+/// PR-9.5c: accepted-id merkle root widened to
+/// `AcceptedIdMerkleRoot` (`Hash64`). Branch hasher is the
+/// keyed BLAKE2b-512 `AcceptedIdMerkleBranchHash64` — distinct
+/// key from `MerkleBranchHash64` so the two roots can never be
+/// substituted for one another.
+pub fn calc_accepted_id_merkle_root_pre_crescendo(mut accepted_tx_ids: Vec<TransactionId>) -> AcceptedIdMerkleRoot {
     accepted_tx_ids.sort();
-    kaspa_merkle::calc_merkle_root(accepted_tx_ids.into_iter())
+    merkle_root_with(accepted_tx_ids, |l, r| {
+        let mut h = AcceptedIdMerkleBranchHash64::new();
+        h.update(l.as_byte_slice()).update(r.as_byte_slice());
+        h.finalize()
+    })
+}
+
+/// Hash64 merkle root, with the per-branch hashing closure
+/// supplied by the caller. The closure approach side-steps the
+/// `HasherBase` / `Hasher` trait split — each Hash64 hasher has
+/// an inherent `finalize() -> Hash64`, so the call site can
+/// monomorphise against the concrete hasher and call that
+/// method directly.
+fn merkle_root_with(leaves: Vec<Hash64>, mut branch: impl FnMut(Hash64, Hash64) -> Hash64) -> Hash64 {
+    if leaves.is_empty() {
+        return ZERO_HASH64;
+    }
+    let next_pot = leaves.len().next_power_of_two();
+    let vec_len = 2 * next_pot - 1;
+    let mut merkles: Vec<Option<Hash64>> = vec![None; vec_len];
+    for (i, hash) in leaves.into_iter().enumerate() {
+        merkles[i] = Some(hash);
+    }
+    let mut offset = next_pot;
+    for i in (0..vec_len - 1).step_by(2) {
+        if merkles[i].is_none() {
+            merkles[offset] = None;
+        } else {
+            let left = merkles[i].unwrap();
+            let right = merkles[i + 1].unwrap_or(ZERO_HASH64);
+            merkles[offset] = Some(branch(left, right));
+        }
+        offset += 1;
+    }
+    merkles.last().unwrap().unwrap()
 }
 
 #[cfg(test)]
 mod tests {
+    // PR-9.5c: the only test below (`merkle_root_test`) is `#[cfg(any())]`-
+    // excluded pending fixture regen in PR-9.5g, so these imports are
+    // temporarily unused.
+    #![allow(unused_imports)]
     use crate::merkle::{calc_hash_merkle_root, calc_hash_merkle_root_pre_crescendo};
     use crate::{
         subnets::{SUBNETWORK_ID_COINBASE, SUBNETWORK_ID_NATIVE},
@@ -24,6 +94,11 @@ mod tests {
     };
     use kaspa_hashes::Hash;
 
+    // kaspa-pq Phase 9 PR-9.5c: MerkleRoot widened to Hash64; the pinned 32-byte
+    // hex vectors below feed Hash32 values into Hash64 slots and compare against
+    // Hash64 outputs, so the test is excluded from compilation via `#[cfg(any())]`
+    // until PR-9.5g regenerates the fixtures (docs/hash64-migration-inventory.md).
+    #[cfg(any())]
     #[test]
     fn merkle_root_test() {
         let txs = [

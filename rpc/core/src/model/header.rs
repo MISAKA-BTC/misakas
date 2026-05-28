@@ -12,13 +12,18 @@ pub type RpcCompressedParents = CompressedParents;
 
 /// Raw Rpc header type - without a cached header hash.
 /// Used for mining APIs (get_block_template & submit_block)
+///
+/// PR-9.5c: `hash_merkle_root` / `accepted_id_merkle_root`
+/// widened to `MerkleRoot` / `AcceptedIdMerkleRoot` (= `Hash64`)
+/// per ADR-0008; on the RPC wire this is a longer hex string
+/// (128 chars vs 64) — proto field types are unchanged.
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcRawHeader {
     pub version: u16,
     pub parents_by_level: Vec<Vec<Hash>>,
-    pub hash_merkle_root: Hash,
-    pub accepted_id_merkle_root: Hash,
+    pub hash_merkle_root: kaspa_consensus_core::MerkleRoot,
+    pub accepted_id_merkle_root: kaspa_consensus_core::AcceptedIdMerkleRoot,
     pub utxo_commitment: Hash,
     /// Timestamp is in milliseconds
     pub timestamp: u64,
@@ -37,8 +42,8 @@ pub struct RpcHeader {
     pub hash: Hash,
     pub version: u16,
     pub parents_by_level: Vec<Vec<Hash>>,
-    pub hash_merkle_root: Hash,
-    pub accepted_id_merkle_root: Hash,
+    pub hash_merkle_root: kaspa_consensus_core::MerkleRoot,
+    pub accepted_id_merkle_root: kaspa_consensus_core::AcceptedIdMerkleRoot,
     pub utxo_commitment: Hash,
     /// Timestamp is in milliseconds
     pub timestamp: u64,
@@ -152,8 +157,9 @@ impl Serializer for RpcHeader {
         store!(Hash, &self.hash, writer)?;
         store!(u16, &self.version, writer)?;
         store!(Vec<Vec<Hash>>, &self.parents_by_level, writer)?;
-        store!(Hash, &self.hash_merkle_root, writer)?;
-        store!(Hash, &self.accepted_id_merkle_root, writer)?;
+        // PR-9.5c: serialised as Hash64 (64 raw bytes on the wire).
+        store!(kaspa_hashes::Hash64, &self.hash_merkle_root, writer)?;
+        store!(kaspa_hashes::Hash64, &self.accepted_id_merkle_root, writer)?;
         store!(Hash, &self.utxo_commitment, writer)?;
         store!(u64, &self.timestamp, writer)?;
         store!(u32, &self.bits, writer)?;
@@ -174,8 +180,9 @@ impl Deserializer for RpcHeader {
         let hash = load!(Hash, reader)?;
         let version = load!(u16, reader)?;
         let parents_by_level = load!(Vec<Vec<Hash>>, reader)?;
-        let hash_merkle_root = load!(Hash, reader)?;
-        let accepted_id_merkle_root = load!(Hash, reader)?;
+        // PR-9.5c: deserialised as Hash64 (64 raw bytes on the wire).
+        let hash_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
+        let accepted_id_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
         let utxo_commitment = load!(Hash, reader)?;
         let timestamp = load!(u64, reader)?;
         let bits = load!(u32, reader)?;
@@ -289,8 +296,9 @@ impl Serializer for RpcRawHeader {
 
         store!(u16, &self.version, writer)?;
         store!(Vec<Vec<Hash>>, &self.parents_by_level, writer)?;
-        store!(Hash, &self.hash_merkle_root, writer)?;
-        store!(Hash, &self.accepted_id_merkle_root, writer)?;
+        // PR-9.5c: serialised as Hash64.
+        store!(kaspa_hashes::Hash64, &self.hash_merkle_root, writer)?;
+        store!(kaspa_hashes::Hash64, &self.accepted_id_merkle_root, writer)?;
         store!(Hash, &self.utxo_commitment, writer)?;
         store!(u64, &self.timestamp, writer)?;
         store!(u32, &self.bits, writer)?;
@@ -310,8 +318,9 @@ impl Deserializer for RpcRawHeader {
 
         let version = load!(u16, reader)?;
         let parents_by_level = load!(Vec<Vec<Hash>>, reader)?;
-        let hash_merkle_root = load!(Hash, reader)?;
-        let accepted_id_merkle_root = load!(Hash, reader)?;
+        // PR-9.5c: deserialised as Hash64.
+        let hash_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
+        let accepted_id_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
         let utxo_commitment = load!(Hash, reader)?;
         let timestamp = load!(u64, reader)?;
         let bits = load!(u32, reader)?;

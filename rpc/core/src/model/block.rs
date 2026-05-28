@@ -68,7 +68,8 @@ pub struct RpcBlockVerboseData {
     pub hash: RpcHash,
     pub difficulty: f64,
     pub selected_parent_hash: RpcHash,
-    pub transaction_ids: Vec<RpcHash>,
+    // PR-9.5c: TransactionId widened to Hash64.
+    pub transaction_ids: Vec<kaspa_consensus_core::TransactionId>,
     pub is_header_only: bool,
     pub blue_score: u64,
     pub children_hashes: Vec<RpcHash>,
@@ -83,7 +84,9 @@ impl Serializer for RpcBlockVerboseData {
         store!(RpcHash, &self.hash, writer)?;
         store!(f64, &self.difficulty, writer)?;
         store!(RpcHash, &self.selected_parent_hash, writer)?;
-        store!(Vec<RpcHash>, &self.transaction_ids, writer)?;
+        // PR-9.5c: TransactionId widened to Hash64; serialise the
+        // Vec accordingly.
+        store!(Vec<kaspa_hashes::Hash64>, &self.transaction_ids, writer)?;
         store!(bool, &self.is_header_only, writer)?;
         store!(u64, &self.blue_score, writer)?;
         store!(Vec<RpcHash>, &self.children_hashes, writer)?;
@@ -101,7 +104,8 @@ impl Deserializer for RpcBlockVerboseData {
         let hash = load!(RpcHash, reader)?;
         let difficulty = load!(f64, reader)?;
         let selected_parent_hash = load!(RpcHash, reader)?;
-        let transaction_ids = load!(Vec<RpcHash>, reader)?;
+        // PR-9.5c: TransactionId widened to Hash64.
+        let transaction_ids = load!(Vec<kaspa_hashes::Hash64>, reader)?;
         let is_header_only = load!(bool, reader)?;
         let blue_score = load!(u64, reader)?;
         let children_hashes = load!(Vec<RpcHash>, reader)?;

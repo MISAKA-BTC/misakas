@@ -40,13 +40,20 @@ pub trait HeaderStore: HeaderStoreReader {
 
 /// A temporary struct for backward compatibility. This struct is used to deserialize old header data with
 /// parents_by_level as Vec<Vec<Hash>>.
+///
+/// PR-9.5c: merkle root fields widened to `Hash64` to match the
+/// post-cascade `Header` shape; this means an upstream-Kaspa DB
+/// with 32-byte merkle roots simply will not deserialise (which
+/// is the kaspa-pq behaviour mandated by ADR-0001 — no DB
+/// migration). PR-9.5f formally bumps the DB namespace and
+/// rejects old-shape DBs at open time.
 #[derive(Clone, Debug, Deserialize)]
 struct Header2 {
     pub hash: Hash,
     pub version: u16,
     pub parents_by_level: Vec<Vec<Hash>>,
-    pub hash_merkle_root: Hash,
-    pub accepted_id_merkle_root: Hash,
+    pub hash_merkle_root: kaspa_consensus_core::MerkleRoot,
+    pub accepted_id_merkle_root: kaspa_consensus_core::AcceptedIdMerkleRoot,
     pub utxo_commitment: Hash,
     pub timestamp: u64,
     pub bits: u32,

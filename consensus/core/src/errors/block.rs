@@ -79,7 +79,9 @@ pub enum RuleError {
     ViolatingBoundedMergeDepth,
 
     #[error("invalid merkle root: header indicates {0} but calculated value is {1}")]
-    BadMerkleRoot(Hash, Hash),
+    // PR-9.5c: `MerkleRoot` widened to `Hash64`; both arguments
+    // carry the wider value.
+    BadMerkleRoot(crate::MerkleRoot, crate::MerkleRoot),
 
     #[error("block has no transactions")]
     NoTransactions,
@@ -136,7 +138,11 @@ pub enum RuleError {
     BadUTXOCommitment(Hash, Hash, Hash),
 
     #[error("block {0} accepted ID merkle root is invalid - block header indicates {1}, but calculated value is {2}")]
-    BadAcceptedIDMerkleRoot(Hash, Hash, Hash),
+    // PR-9.5c: positions 1 and 2 carry `AcceptedIdMerkleRoot`
+    // (= `Hash64`). The block-identifier (position 0) is still
+    // 32-byte `Hash` — that flips with the rest of `BlockHash`
+    // in PR-9.5d.
+    BadAcceptedIDMerkleRoot(Hash, crate::AcceptedIdMerkleRoot, crate::AcceptedIdMerkleRoot),
 
     #[error("coinbase transaction is not built as expected")]
     BadCoinbaseTransaction,
