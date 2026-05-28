@@ -29,12 +29,16 @@ const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 8192;
 /// MAXIMUM_STANDARD_TRANSACTION_MASS is the maximum mass allowed for transactions that
 /// are considered standard and will therefore be relayed and considered for mining.
 ///
-/// kaspa-pq: raised from the upstream 100_000. A single ML-DSA-65 P2PKH input costs
-/// ~12_000 mass (heavy signature script + sig-op cost), so the old limit capped a
-/// standard transaction at ~8 inputs. 250_000 allows ~20 ML-DSA-65 inputs (e.g.
-/// consolidating coinbase UTXOs) while staying at half of the consensus block-mass
-/// budget (500_000) — a single standard tx still cannot monopolize a block.
-const MAXIMUM_STANDARD_TRANSACTION_MASS: u64 = 250_000;
+/// kaspa-pq: raised from the upstream 100_000. This limit is checked against BOTH the
+/// compute mass and the transient (KIP-0009 storage) mass. ML-DSA-65 P2PKH spends are
+/// heavy on both axes: ~12_000 compute mass per input (5268-byte sig script + sig-op),
+/// and multi-input transactions also accrue large transient mass (e.g. a 16-input send
+/// measured 183_160 compute / 341_296 transient). To let any block-mineable ML-DSA tx
+/// also be relay-standard, set this just under the consensus block-mass budget
+/// (`max_block_mass` = 500_000), leaving headroom for the coinbase.
+/// NOTE (mainnet): for a high-traffic network this should be lowered well below the
+/// block budget to preserve an anti-monopolization margin; it is devnet-generous here.
+const MAXIMUM_STANDARD_TRANSACTION_MASS: u64 = 480_000;
 
 impl Mempool {
     pub(crate) fn check_transaction_standard_in_isolation(&self, transaction: &MutableTransaction) -> NonStandardResult<()> {
