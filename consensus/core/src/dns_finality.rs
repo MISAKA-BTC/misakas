@@ -128,6 +128,30 @@ pub const SORTITION_FALLBACK_KEY: &[u8] = b"kaspa-pq-sortition-fallback-v1";
 pub const SORTITION_PRIORITY_KEY: &[u8] = b"kaspa-pq-sortition-priority-v1";
 pub const SORTITION_DETERMINISTIC_KEY: &[u8] = b"kaspa-pq-sortition-deterministic-v1";
 
+/// kaspa-pq Phase 13 coordinated-failover domain keys (ADR-0014).
+///
+/// - `HOST_ID_KEY` — keys the BLAKE2b-256 over `hostname ||
+///   host_boot_nonce` that produces a stable, rebuild-resistant
+///   `HostId` for each validator host.
+/// - `TAKEOVER_TOKEN_MESSAGE_DOMAIN` — keys the BLAKE2b-256 over
+///   the takeover-token signing material (see
+///   [`takeover_token_message`]).
+/// - `TAKEOVER_TOKEN_CONTEXT` — ML-DSA-65 `ctx` parameter for the
+///   `sign_ctx` call that produces the
+///   [`TakeoverToken::signature`]. Distinct from both the
+///   transaction context (`b"kaspa-pq-v1/tx/mldsa65"`) and the
+///   attestation context (`b"kaspa-pq-v1/att/mldsa65"`,
+///   ADR-0009 §"Attestation target") so a takeover-token
+///   signature can never be replayed as a transaction or
+///   attestation signature, and vice versa.
+///
+/// These three are consensus-irrelevant (the entire coordinated-
+/// failover protocol is node-local; no on-chain surface), but
+/// the `-v1` suffix is the contract — renaming auditable.
+pub const HOST_ID_KEY: &[u8] = b"kaspa-pq-validator-host-id-v1";
+pub const TAKEOVER_TOKEN_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-takeover-token-v1";
+pub const TAKEOVER_TOKEN_CONTEXT: &[u8] = b"kaspa-pq-v1/takeover/mldsa65";
+
 /// Fixed-point scaled stake score. Wrapper for documentation /
 /// arithmetic clarity; the underlying `u128` is the same number of
 /// "stake-score units" used throughout the overlay.
@@ -1036,6 +1060,12 @@ pub enum ValidatorStatus {
     /// `--dry-run` set; per-epoch computation runs, signing is
     /// skipped.
     DryRun = 8,
+    /// ADR-0014: standby host has booted with `--enable-validator`
+    /// and `--stake-bond …` but has not yet received a valid
+    /// `TakeoverToken` for any future epoch. Variant **appended**
+    /// per ADR-0014 §"`ValidatorStatus` extension" so existing RPC
+    /// clients parsing variants 0..8 are unaffected.
+    AwaitingTakeoverToken = 9,
 }
 
 /// Per-(epoch, validator, bond) signing record persisted in the
@@ -1134,6 +1164,141 @@ pub fn check_signed_epoch_record(
         }
         Some(_) => SignedEpochCheckOutcome::Block,
     }
+}
+
+// ---------------------------------------------------------------------
+// Coordinated-failover protocol (ADR-0014).
+//
+// Node-local artefacts only — no on-chain surface, no consensus
+// input. The TakeoverToken transfers signing authority between
+// two same-host validator processes at a specific future epoch
+// so an honest operator cannot accidentally double-sign across
+// a planned handoff. ADR-0009 SlashingEvidencePayload remains
+// the consensus-side safety net for malicious operators.
+// ---------------------------------------------------------------------
+
+/// Per-host stable identifier (ADR-0014 §"`host_id` derivation").
+///
+/// The 32-byte `Hash` is the natural fit — `HostId` never enters
+/// consensus state, so the wider `Hash64` is unnecessary. Bound
+/// by the local-only protocol surface; aliasing rather than
+/// newtyping keeps interop simple at the cost of letting `HostId`
+/// values mix with generic 32-byte hashes by accident at the
+/// type level (acceptable trade because the protocol is
+/// node-local and the few call sites are concentrated).
+pub type HostId = Hash;
+
+/// Coordinated-failover takeover token (ADR-0014
+/// §"`TakeoverToken`"). Carries an ML-DSA-65 signature by the
+/// validator key transferring signing authority from
+/// `yielding_host_id` to `taking_over_host_id` at
+/// `valid_from_epoch`. Stored locally on both hosts in
+/// `~/.kaspa-pq/takeover-tokens/`; never on-chain.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct TakeoverToken {
+    pub version: u16,
+
+    /// `host_id` of the validator currently signing (the yielding
+    /// side). Must match the host that generated the token.
+    pub yielding_host_id: HostId,
+
+    /// `host_id` of the validator about to start signing. The
+    /// receiving host MUST refuse to honor a token whose
+    /// `taking_over_host_id ≠ its own host_id` (ADR-0014
+    /// §"Handoff protocol" step 3.b).
+    pub taking_over_host_id: HostId,
+
+    /// Validator identity both hosts share. Must match the
+    /// receiving host's `--stake-bond → validator_id`.
+    pub validator_id: Hash64,
+
+    /// First epoch at which the taking-over host may sign. The
+    /// yielding host MUST NOT sign any epoch
+    /// `≥ valid_from_epoch` after issuing this token.
+    pub valid_from_epoch: u64,
+
+    /// Number of epochs of grace overlap during which neither
+    /// host signs (defensive against in-flight gossip). Typically
+    /// 1; max 8 (one epoch ≈ minutes, anything longer is a
+    /// configuration error). The taking-over host starts signing
+    /// at `valid_from_epoch + grace_epochs`.
+    pub grace_epochs: u8,
+
+    /// Wall-clock issuance timestamp (informational; **not** part
+    /// of the signed material — clocks drift, so the protocol
+    /// does not rely on it).
+    pub issued_at_unix_secs: u64,
+
+    /// 3309-byte ML-DSA-65 signature by the validator key over
+    /// [`takeover_token_message`] with `TAKEOVER_TOKEN_CONTEXT`
+    /// as the libcrux `ctx` parameter.
+    pub signature: Vec<u8>,
+}
+
+/// Compute the per-host `HostId` (ADR-0014 §"`host_id`
+/// derivation"):
+///
+/// ```text
+/// host_id = BLAKE2b-256(
+///     key   = HOST_ID_KEY,
+///     input = hostname || host_boot_nonce (32 B),
+/// )
+/// ```
+///
+/// `host_boot_nonce` is a fresh 32-byte random generated by
+/// `kaspa-pq-cli validator host-id init` and persisted at
+/// `/etc/kaspa-pq/host-nonce`. The nonce makes `HostId`
+/// rebuild-stable but resistant to spoofing — an operator who
+/// rebuilds the secondary host gets a new `HostId` unless they
+/// explicitly re-use the nonce file.
+pub fn compute_host_id(hostname: &[u8], boot_nonce: &[u8; 32]) -> HostId {
+    let mut hasher = Blake2bParams::new().hash_length(32).key(HOST_ID_KEY).to_state();
+    hasher.update(hostname);
+    hasher.update(boot_nonce);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash::from_bytes(out)
+}
+
+/// Compute the BLAKE2b-256 message that the validator key signs
+/// to produce [`TakeoverToken::signature`] (ADR-0014
+/// §"`TakeoverToken`"):
+///
+/// ```text
+/// takeover_token_message = BLAKE2b-256(
+///     key   = TAKEOVER_TOKEN_MESSAGE_DOMAIN,
+///     input = yielding_host_id.as_bytes()       (32 B)
+///          || taking_over_host_id.as_bytes()    (32 B)
+///          || validator_id.as_bytes()           (64 B)
+///          || valid_from_epoch.to_le_bytes()
+///          || [grace_epochs],
+/// )
+/// ```
+///
+/// The 32-byte digest is returned as the upstream [`Hash`] so it
+/// composes directly with the libcrux ML-DSA-65 `sign_ctx` /
+/// `verify_ctx` APIs. The ML-DSA-65 signing context
+/// (`TAKEOVER_TOKEN_CONTEXT`) is applied at the ML-DSA-65 layer,
+/// not inside this hasher — keeping the two domain separators
+/// independent and distinct from every other ML-DSA-65 use site
+/// in the protocol (ADR-0014 §"Public-claim discipline" replay
+/// safety claim).
+pub fn takeover_token_message(
+    yielding_host_id: HostId,
+    taking_over_host_id: HostId,
+    validator_id: Hash64,
+    valid_from_epoch: u64,
+    grace_epochs: u8,
+) -> Hash {
+    let mut hasher = Blake2bParams::new().hash_length(32).key(TAKEOVER_TOKEN_MESSAGE_DOMAIN).to_state();
+    hasher.update(&yielding_host_id.as_bytes());
+    hasher.update(&taking_over_host_id.as_bytes());
+    hasher.update(validator_id.as_byte_slice());
+    hasher.update(&valid_from_epoch.to_le_bytes());
+    hasher.update(&[grace_epochs]);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash::from_bytes(out)
 }
 
 // ---------------------------------------------------------------------
@@ -1263,9 +1428,11 @@ mod tests {
         assert_eq!(STAKE_VALIDATOR_PUBKEY_LEN, 1952);
         assert_eq!(STAKE_ATTESTATION_SIG_LEN, 3309);
 
-        // ADR-0009 / ADR-0010 / ADR-0012 domain-separator strings.
-        // All consensus-fixed and bumped only by a hard-fork ADR —
-        // pin the bytes so any accidental rename trips this test.
+        // ADR-0009 / ADR-0010 / ADR-0012 / ADR-0014 domain-
+        // separator strings. All consensus-fixed (or consensus-
+        // adjacent, for the node-local failover keys) and bumped
+        // only by a hard-fork ADR — pin the bytes so any
+        // accidental rename trips this test.
         assert_eq!(ATTESTATION_MLDSA65_CONTEXT, b"kaspa-pq-v1/att/mldsa65");
         assert_eq!(ATTESTATION_MESSAGE_DOMAIN, b"kaspa-pq-v1/stake-attestation");
         assert_eq!(VALIDATOR_SET_COMMITMENT_KEY, b"kaspa-pq-validator-set-v1");
@@ -1274,10 +1441,17 @@ mod tests {
         assert_eq!(SORTITION_FALLBACK_KEY, b"kaspa-pq-sortition-fallback-v1");
         assert_eq!(SORTITION_PRIORITY_KEY, b"kaspa-pq-sortition-priority-v1");
         assert_eq!(SORTITION_DETERMINISTIC_KEY, b"kaspa-pq-sortition-deterministic-v1");
+        // ADR-0014 — node-local failover protocol keys.
+        assert_eq!(HOST_ID_KEY, b"kaspa-pq-validator-host-id-v1");
+        assert_eq!(TAKEOVER_TOKEN_MESSAGE_DOMAIN, b"kaspa-pq-takeover-token-v1");
+        assert_eq!(TAKEOVER_TOKEN_CONTEXT, b"kaspa-pq-v1/takeover/mldsa65");
 
-        // Replay safety: tx vs attestation contexts must differ
-        // (ADR-0002 / ADR-0009 §"Attestation target").
+        // Replay safety: tx vs attestation vs takeover contexts
+        // must all differ (ADR-0002 / ADR-0009 §"Attestation
+        // target" / ADR-0014 §"Public-claim discipline").
         assert_ne!(ATTESTATION_MLDSA65_CONTEXT, b"kaspa-pq-v1/tx/mldsa65");
+        assert_ne!(TAKEOVER_TOKEN_CONTEXT, b"kaspa-pq-v1/tx/mldsa65");
+        assert_ne!(TAKEOVER_TOKEN_CONTEXT, ATTESTATION_MLDSA65_CONTEXT);
 
         // Pairwise distinctness of all five sortition keys —
         // SORTITION_SEED_KEY ≠ SORTITION_FALLBACK_KEY is the most
@@ -1712,7 +1886,9 @@ mod tests {
         // The Borsh discriminant of each variant is API-stable —
         // RPC clients persist these to disk. Any reorder is a
         // wire-format break. Pin the integer values so the test
-        // trips immediately on accidental drift.
+        // trips immediately on accidental drift. Variants 0..8
+        // are pinned per ADR-0011; variant 9 is appended per
+        // ADR-0014 §"`ValidatorStatus` extension".
         assert_eq!(ValidatorStatus::NodeNotSynced as u8, 0);
         assert_eq!(ValidatorStatus::BondNotFound as u8, 1);
         assert_eq!(ValidatorStatus::BondPending as u8, 2);
@@ -1722,6 +1898,7 @@ mod tests {
         assert_eq!(ValidatorStatus::Unbonding as u8, 6);
         assert_eq!(ValidatorStatus::Slashed as u8, 7);
         assert_eq!(ValidatorStatus::DryRun as u8, 8);
+        assert_eq!(ValidatorStatus::AwaitingTakeoverToken as u8, 9);
     }
 
     #[test]
@@ -1736,6 +1913,7 @@ mod tests {
             ValidatorStatus::Unbonding,
             ValidatorStatus::Slashed,
             ValidatorStatus::DryRun,
+            ValidatorStatus::AwaitingTakeoverToken,
         ] {
             let bytes = borsh::to_vec(&v).unwrap();
             let back: ValidatorStatus = borsh::from_slice(&bytes).unwrap();
@@ -2349,6 +2527,126 @@ mod tests {
         assert_eq!(base.reporter_reward_sompi, 500_000);
         let capped = apply_unreveal_reporter_min_cap(base, 500_000);
         assert_eq!(capped, base);
+    }
+
+    // ---- Coordinated-failover protocol (ADR-0014) -----------------
+
+    fn fixture_host_id(byte: u8) -> HostId {
+        Hash::from_bytes([byte; 32])
+    }
+
+    fn fixture_takeover_token() -> TakeoverToken {
+        TakeoverToken {
+            version: DNS_PAYLOAD_VERSION_V1,
+            yielding_host_id: fixture_host_id(0xa1),
+            taking_over_host_id: fixture_host_id(0xa2),
+            validator_id: Hash64::from_bytes([0x42u8; 64]),
+            valid_from_epoch: 12345,
+            grace_epochs: 1,
+            issued_at_unix_secs: 1_700_000_000,
+            signature: vec![0xccu8; STAKE_ATTESTATION_SIG_LEN],
+        }
+    }
+
+    #[test]
+    fn host_id_is_deterministic() {
+        let nonce = [0x11u8; 32];
+        let a = compute_host_id(b"primary.kaspa-pq.example.com", &nonce);
+        let b = compute_host_id(b"primary.kaspa-pq.example.com", &nonce);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn host_id_changes_with_hostname() {
+        let nonce = [0x11u8; 32];
+        let a = compute_host_id(b"primary.kaspa-pq.example.com", &nonce);
+        let b = compute_host_id(b"standby.kaspa-pq.example.com", &nonce);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn host_id_changes_with_nonce() {
+        // Rebuilding the secondary host with a fresh nonce must
+        // change its host_id — anti-spoofing rationale in ADR-0014
+        // §"`host_id` derivation".
+        let a = compute_host_id(b"primary.kaspa-pq.example.com", &[0x11u8; 32]);
+        let b = compute_host_id(b"primary.kaspa-pq.example.com", &[0x12u8; 32]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn host_id_uses_host_id_key_domain() {
+        // Hashing the same bytes with the generic (no-key)
+        // BLAKE2b-256 yields a different value — pins the domain
+        // separation. Defends against a future refactor accidentally
+        // dropping the key.
+        let nonce = [0x11u8; 32];
+        let with_key = compute_host_id(b"hostname", &nonce);
+
+        let mut without_key = Blake2bParams::new().hash_length(32).to_state();
+        without_key.update(b"hostname");
+        without_key.update(&nonce);
+        let undomained = without_key.finalize();
+
+        assert_ne!(with_key.as_bytes(), undomained.as_bytes());
+    }
+
+    #[test]
+    fn takeover_token_borsh_roundtrip() {
+        let t = fixture_takeover_token();
+        let bytes = borsh::to_vec(&t).unwrap();
+        let back: TakeoverToken = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, t);
+        // Sanity: the dominant size component is the 3309-byte
+        // ML-DSA-65 signature.
+        assert!(bytes.len() >= STAKE_ATTESTATION_SIG_LEN);
+    }
+
+    #[test]
+    fn takeover_token_message_is_deterministic() {
+        let m1 = takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1);
+        let m2 = takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1);
+        assert_eq!(m1, m2);
+    }
+
+    #[test]
+    fn takeover_token_message_changes_with_each_field() {
+        let base = takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1);
+        // yielding_host_id differs
+        assert_ne!(base, takeover_token_message(fixture_host_id(0xa3), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1));
+        // taking_over_host_id differs
+        assert_ne!(base, takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa3), Hash64::from_bytes([0x42u8; 64]), 100, 1));
+        // validator_id differs
+        assert_ne!(base, takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x43u8; 64]), 100, 1));
+        // valid_from_epoch differs
+        assert_ne!(base, takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 101, 1));
+        // grace_epochs differs
+        assert_ne!(base, takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 2));
+    }
+
+    #[test]
+    fn takeover_token_message_uses_distinct_domain_key() {
+        // Hashing the same bytes with the attestation domain key
+        // yields a different value — the takeover-token signing
+        // surface must be cryptographically distinct from the
+        // attestation surface (ADR-0014 §"Public-claim discipline":
+        // takeover signatures can never be replayed as
+        // attestations and vice versa).
+        let inputs = |key: &[u8]| {
+            let mut h = Blake2bParams::new().hash_length(32).key(key).to_state();
+            h.update(&[0xa1u8; 32]);
+            h.update(&[0xa2u8; 32]);
+            h.update(&[0x42u8; 64]);
+            h.update(&100u64.to_le_bytes());
+            h.update(&[1u8]);
+            h.finalize()
+        };
+        let with_takeover = inputs(TAKEOVER_TOKEN_MESSAGE_DOMAIN);
+        let with_attestation = inputs(ATTESTATION_MESSAGE_DOMAIN);
+        assert_ne!(with_takeover.as_bytes(), with_attestation.as_bytes());
+
+        let actual = takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1);
+        assert_eq!(actual.as_bytes(), with_takeover.as_bytes());
     }
 
     // ---- Stubs are explicit ---------------------------------------
