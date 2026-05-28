@@ -1,4 +1,4 @@
-# kaspa-pq Specification (v0.3, draft)
+# kaspa-pq Specification (v0.4, draft)
 
 Status: Draft. Frozen values listed here are the contract every phase must
 respect. Any change must go through an ADR update under `docs/adr/`.
@@ -7,9 +7,14 @@ ADR-0007 (Layered PoW) and ADR-0008 (Hash64 consensus identity) widen
 the original "signatures + UTXO accumulator" target to "full 64-byte
 consensus identity + 512-bit PoW domain". ADR-0009 (DNS Probabilistic
 Finality Overlay) adds a Phase 10 post-launch confirmation layer that
-binds deep-reorg safety to both `WorkScore` and `StakeScore`. Earlier
-Phase 1 non-goals that contradicted these ADRs have been removed; see
-the revision history below.
+binds deep-reorg safety to both `WorkScore` and `StakeScore`.
+ADR-0010 (Validator Node Architecture) supplements ADR-0009 with the
+operational architecture — node-role separation, CLI flags,
+subsystem file layout, validator-service runtime, block-template
+policy, and the 8-step operator runbook — so the Phase 10
+implementation PRs write against a stable contract. Earlier Phase 1
+non-goals that contradicted these ADRs have been removed; see the
+revision history below.
 
 ## 0. Scope and non-goals
 
@@ -267,11 +272,12 @@ This is by design: the address format, accumulator, and signature scheme
 are all different. A separate one-shot migration tool is out of scope
 for the PoC.
 
-## 10. Phase plan (revised: 9-phase ordering)
+## 10. Phase plan (revised: 11-phase ordering)
 
-ADR-0007 (Layered PoW) and ADR-0008 (Hash64 consensus identity) expanded
-the original 7-phase plan. The current ordering, with status as of the
-last commit to this branch:
+ADR-0007 (Layered PoW), ADR-0008 (Hash64 consensus identity), ADR-0009
+(DNS overlay) and ADR-0010 (Validator node architecture) expanded the
+original 7-phase plan to 11. The current ordering, with status as of
+the last commit to this branch:
 
 | # | Title | Status |
 |---|---|---|
@@ -283,33 +289,56 @@ last commit to this branch:
 | 5'| `kaspa-pq-cli` standalone binary + encrypted seed + wRPC info | ✅ landed |
 | 6 | Mass policy benchmark + reinforcement (`mass_per_sig_op = 6000`) | ✅ landed |
 | 7 | RPC / WASM / SDK (PR-7.1 – PR-7.6, incl. UtxoCommitment64) | ✅ landed |
-| 8 | Layered PoW foundation (Layer 0; PR-8.1 – PR-8.3) | ✅ landed |
+| 8 | Layered PoW foundation (Layer 0; PR-8.1 – PR-8.3, PR-8.5, PR-8.6) | ✅ landed |
 | 9 | Hash64 consensus identity (PR-9.1 – PR-9.4 landed; PR-9.5 cascade deferred) | 🚧 partial |
-| 10 | DNS Probabilistic Finality Overlay (PR-10.1 ADR landed; PR-10.2 – PR-10.9 deferred) | 🚧 design-freeze only |
+| 10 | DNS Probabilistic Finality Overlay (PR-10.1 ADR + PR-10.2 spec + PR-10.3 type stubs landed; PR-10.4 – PR-10.14 deferred) | 🚧 design-freeze only |
+| 11 | Validator node architecture (PR-11.1 ADR + PR-11.2 types + PR-11.3 spec landed; implementation merged into the Phase 10 PR-10.4 – PR-10.14 slots) | ✅ design-freeze landed |
 
-Deferred PRs:
+Phase 11 is an **operational-design** phase: it does not introduce
+new consensus surface beyond what ADR-0009 already specified. It
+freezes the operator-facing contract — node-role separation, CLI
+flags, subsystem file layout, validator service runtime, block
+template policy, 8-step operator runbook — so the Phase 10
+implementation PRs (PR-10.4 – PR-10.14) have a stable target. The
+implementation work itself stays inside the Phase 10 slot range.
 
-- **PR-8.4** Header.pow_algo_id field + genesis recompute — folded into
-  PR-9.5 (the Header struct changes anyway as part of the Hash64
-  cascade).
-- **PR-8.5** `BlueWorkType: Uint192 → Uint576` — independent of Hash64;
-  still applies as its own cascade.
-- **PR-8.6** Layer 0 finalizer wired into consensus PoW validation — uses
-  the Hash64 pre_pow_hash from PR-9.3; runs as part of the Phase 9
-  validator pass.
+Refined Phase 10 PR plan (per ADR-0010 §"Phase 10 PR plan"):
+
+| PR | Title | Status |
+|---|---|---|
+| 10.1 | ADR-0009 (DNS overlay) | ✅ landed |
+| 10.2 | Spec update (DNS scope + Phase 10) | ✅ landed |
+| 10.3 | `consensus/core/src/dns_finality.rs` type stubs | ✅ landed |
+| 11.1 | ADR-0010 (validator node architecture) | ✅ landed |
+| 11.2 | `dns_finality.rs` Hash64 IDs + registry / snapshot / state types + helpers | ✅ landed |
+| 11.3 | Spec update (ADR-0010 + Phase 11 row + this 14-slot table) | ✅ landed (this PR) |
+| 10.4 | Stake transaction kinds (`subnetwork_id` route) + tx validation | ⏳ deferred |
+| 10.5 | `stake_registry` / `stake_score` consensus processes + stores | ⏳ deferred |
+| 10.6 | `validator_service` in-process loop + `--enable-validator` flag | ⏳ deferred |
+| 10.7 | PoC hard-checkpoint reorg gate (`--dns-mode hard-checkpoint`) | ⏳ deferred |
+| 10.8 | Mainnet two-dimensional dominance rule + property tests | ⏳ deferred |
+| 10.9 | Validator sortition (PoC deterministic; mainnet commit-reveal in a follow-up ADR) | ⏳ deferred |
+| 10.10 | P2P `StakeAttestation` gossip + flow integration | ⏳ deferred |
+| 10.11 | Miner block-template policy reservation for shards | ⏳ deferred |
+| 10.12 | `slashing.rs` evidence pipeline + bond burn + reporter reward | ⏳ deferred |
+| 10.13 | `wallet/staking.rs` + `kaspa-pq-cli` stake/validator commands | ⏳ deferred |
+| 10.14 | `DnsConfirmation` RPC type + wRPC/WASM bindings + 8-step runbook smoke test on simnet | ⏳ deferred |
+
+All deferred slots are gated on the Phase 1–9 baseline being live
+and stable; the overlay does **not** engage at network launch (see
+ADR-0009 §"Three-stage rollout"). Each slot is small enough to be a
+self-contained PR.
+
+Other deferred work (outside the Phase 10 slot range):
+
+- **PR-8.4** `Header.pow_algo_id` field + genesis recompute — folded
+  into PR-9.5 (the `Header` struct changes anyway as part of the
+  Hash64 cascade).
 - **PR-9.5** Consensus identity cascade — `Header`, `Transaction`,
-  `TransactionOutpoint`, merkle, GHOSTDAG, pruning, RPC, P2P, database,
-  wallet, SDK call sites migrate from `Hash` to the typed `Hash64`
-  aliases. Recompute genesis hashes (the new field layout invalidates
-  the current values). Multi-PR / multi-session.
-- **PR-10.2 – PR-10.9** DNS Finality Overlay implementation — type
-  stubs (PR-10.3), `subnetwork_id`-based stake transaction kinds
-  (PR-10.4), deterministic `StakeScore` aggregation (PR-10.5), PoC
-  hard-checkpoint gate (PR-10.6), mainnet two-dimensional dominance
-  rule (PR-10.7), validator sortition (PR-10.8), `DnsConfirmation`
-  RPC surface (PR-10.9). All of these are gated on the Phase 1–9
-  baseline being live and stable; the overlay does **not** engage at
-  network launch (see ADR-0009 §"Three-stage rollout").
+  `TransactionOutpoint`, merkle, GHOSTDAG, pruning, RPC, P2P,
+  database, wallet, SDK call sites migrate from `Hash` to the typed
+  `Hash64` aliases. Recompute genesis hashes (the new field layout
+  invalidates the current values). Multi-PR / multi-session.
 
 ## 11. Test plan summary
 
@@ -345,8 +374,24 @@ mandatory acceptance criteria for each phase:
   `(bond_outpoint, validator_id, epoch)` is slashable for the full
   evidence window; new nodes can recover a deterministic
   `StakeScore` for any block from the on-chain shards alone.
+- **Phase 11** (operational acceptance) the 8-step operator runbook
+  from ADR-0010 §"Operator runbook" runs end-to-end on simnet:
+  `kaspa-pq-node` boots as a full node, `kaspa-pq-cli validator
+  keygen` produces an ML-DSA-65 key, `kaspa-pq-cli stake bond`
+  commits a bond, the bond transitions from `Pending` to `Active`
+  at `activation_daa_score`, restarting with
+  `--enable-validator --validator-key … --stake-bond …` starts the
+  in-process validator service, and
+  `kaspa-pq-cli get-dns-confirmation <block_hash>` returns a
+  populated `DnsConfirmation` (`pow_confirmed`, `dns_confirmed`,
+  `work_depth`, `stake_depth`, the three risk-bound strings).
+  `validator_set_commitment` is byte-identical across two
+  independently-recomputing nodes on the same block (this property
+  is unit-tested in `consensus/core/src/dns_finality.rs` today; the
+  Phase 11 acceptance is the end-to-end CI run, which is the gate
+  on PR-10.14 landing).
 
-## 11. ADR index
+## 12. ADR index
 
 - [ADR-0001 — Network isolation](adr/0001-network-isolation.md)
 - [ADR-0002 — ML-DSA-65 P2PKH as the only standard script](adr/0002-mldsa65-p2pkh.md)
@@ -357,11 +402,13 @@ mandatory acceptance criteria for each phase:
 - [ADR-0007 — Layered PoW](adr/0007-layered-pow.md) (Layer 0 BLAKE2b-512 finalizer + Layer 1 algo_id; Phase 1 = quantum-resistant PoW domain, Phase 2+ = ASIC-hard Layer 1)
 - [ADR-0008 — Full Hash64 consensus identity](adr/0008-hash64-consensus-identity.md) (Phase 9 — block hash / txid / merkle root / pruning point / parent references / UTXO commitment / address payload all move to 64 bytes via keyed BLAKE2b-512; 256-bit quantum preimage margin, **not** 256-bit quantum collision)
 - [ADR-0009 — DNS Probabilistic Finality Overlay](adr/0009-dns-probabilistic-finality.md) (Phase 10 — PoW/GHOSTDAG keeps block production; PoS adds two-dimensional `WorkScore × StakeScore` reorg gate over selected-chain anchors; partial certificate / shard scheme to bound block mass; three-stage rollout; long-range bound U ≥ R + E)
+- [ADR-0010 — Validator Node Architecture](adr/0010-validator-node-architecture.md) (Phase 11 — operational supplement to ADR-0009: one binary with three roles via `--enable-mining` / `--enable-validator` flags; subsystem file layout for the Phase 10 implementation PRs; in-process async validator service; on-chain vs P2P gossip split; miner block-template policy reserves mass for attestation shards; 8-step operator runbook; `validator_set_commitment` derivation = BLAKE2b-512 keyed `b"kaspa-pq-validator-set-v1"`)
 
-## 12. Revision history
+## 13. Revision history
 
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-05-28 | Initial draft. |
 | 0.2 | 2026-05-28 | ADR-0007 + ADR-0008 incorporated. Removed the "do not widen Hash past 32 bytes" non-goal (it directly contradicts ADR-0008); added the full 64-byte consensus identity goal; added the Phase 8 / Phase 9 entries to the phase plan; codified the public-claim discipline section. Revised non-goal removal: previously `PQ-strengthening the PoW hash, block hash, txid, or merkle root` was listed as out-of-scope; this is now the explicit Phase 8 + Phase 9 in-scope work. |
-| 0.3 | 2026-05-28 | ADR-0009 incorporated. Added in-scope item 6 (DNS Probabilistic Finality Overlay) and Phase 10 row in the phase plan. Codified the DNS-specific public-claim discipline section (binding) — explicitly rejecting "hard finality", "reorg-probability product", and "2^k post-quantum finality" framings. Added Phase 10 acceptance criteria to §11. |
+| 0.3 | 2026-05-28 | ADR-0009 incorporated. Added in-scope item 6 (DNS Probabilistic Finality Overlay) and Phase 10 row in the phase plan. Codified the DNS-specific public-claim discipline section (binding) — explicitly rejecting "hard finality", "reorg-probability product", and "2^k post-quantum finality" framings. Added Phase 10 acceptance criteria to §11 (test plan). |
+| 0.4 | 2026-05-28 | ADR-0010 incorporated. Added Phase 11 row (operational design, no new consensus surface) to the phase plan, with the refined 14-slot Phase 10 implementation roadmap from ADR-0010 §"Phase 10 PR plan" inlined as a sub-table. Added Phase 11 acceptance criteria (8-step operator runbook + byte-identical `validator_set_commitment` across nodes) to §11 (test plan). Added ADR-0010 to the ADR index (§12). Renumbered §12 → §13 to fix the pre-existing duplicate-§11 mis-numbering; ADR-0006's "§11 (ADR index)" reference updated to "§12 (ADR index)" in the same commit. |

@@ -277,4 +277,4 @@ pointing back at this ADR.
 - [ADR-0001 — Network isolation](0001-network-isolation.md)
 - [ADR-0002 — ML-DSA-65 P2PKH](0002-mldsa65-p2pkh.md)
 - [ADR-0004 — UtxoCommitment64](0004-utxo-commitment64.md)
-- [kaspa-pq-spec.md](../kaspa-pq-spec.md) §11 (ADR index, kept in sync with this ADR.)
+- [kaspa-pq-spec.md](../kaspa-pq-spec.md) §12 (ADR index, kept in sync with this ADR.)
