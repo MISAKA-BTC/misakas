@@ -927,13 +927,36 @@ deterministically.
 
 ### Block-validity rule (replaces C.1.3 / C.1.5)
 
-The only block-validity rule a slashing transaction must satisfy is:
-**it declares no outputs** (so `(slashing_tx_id, 0)` is free for the
-side-effect mint and the transaction mints nothing on-chain). A block
-containing a `SUBNETWORK_ID_SLASHING_EVIDENCE` transaction with a
-non-empty `outputs` is invalid (a new `RuleError`). Genuineness is still
-enforced separately (`slashing_evidence_genuine`, run first). An
-**ineffective-but-genuine** slashing transaction (bond unknown,
+The only validity rule a slashing transaction must satisfy is: **it
+declares no outputs** (so `(slashing_tx_id, 0)` is free for the
+side-effect mint and the transaction mints nothing on-chain). A
+`SUBNETWORK_ID_SLASHING_EVIDENCE` transaction with a non-empty `outputs`
+is invalid.
+
+**This rule is enforced in the stateless transaction-isolation validator
+(body processing), not as a stateful rule in `verify_expected_utxo_state`
+— and the distinction is load-bearing.** "No outputs" is purely
+structural (it needs neither the bond view nor the DAA score), and it
+**must hold for every block that can ever be merged**, because the
+side-effect (next section) resolves over a chain block's **mergeset**
+(its selected parent *and* every merged blue block) while
+`verify_expected_utxo_state` runs only for **chain blocks**, over their
+**own** transactions. If "no outputs" lived there, a slashing transaction
+carrying a **zero-value** `output[0]` in a *non-chain merged-blue* block
+would pass body validation, satisfy the (reverted, b2-ii) `Σ out ≤ Σ in`
+rule (`0 ≤ 0`), be accepted when merged — creating a UTXO at
+`(slashing_tx_id, 0)` — and then collide with the side-effect mint at the
+same outpoint (a `DoubleAddCall`), crashing consensus. Enforcing it in
+isolation rejects such a transaction in **every** block (chain or
+merged-blue) before it can enter the DAG, so the mint outpoint is always
+free. This mirrors the ADR-0016 §D.1 StakeBond output rule, which
+likewise validates a DNS-overlay transaction's outputs structurally in
+the isolation validator. Implementation: a new `DnsTxError` variant
+surfaced as `TxRuleError::InvalidDnsOverlayPayload`, checked after the
+payload decode in the `SlashingEvidence` arm.
+
+Genuineness is still enforced separately (`slashing_evidence_genuine`).
+An **ineffective-but-genuine** slashing transaction (bond unknown,
 already-`Slashed`, `Pending`, or a within-mergeset duplicate) is **no
 longer block-invalidating** — it simply resolves to no side-effect (mints
 nothing, removes nothing), so it is inert and harmless to supply. The
@@ -941,6 +964,25 @@ strict-inclusion rejection (C.1.5) is dropped: with the mint gone from
 the transaction, an ineffective slash can no longer inflate, so a merging
 miner is never forced to exclude a redundant slash to keep a block valid
 (no liveness wrinkle).
+
+### Known limitation: genuineness/`Slash` resolve over the mergeset, but their rules run on own-txs (pre-existing, inert)
+
+The side-effect, like the §A.4 `Slash` bond-store mutation it accompanies,
+resolves over the chain block's **mergeset**. But the genuineness rule
+(`slashing_evidence_genuine`) — and the other overlay block-validity rules
+(reward-eligibility, the §D.2 spend-gate) — run in
+`verify_expected_utxo_state` over a chain block's **own** transactions
+only. So a slashing transaction in a *non-chain merged-blue* block is
+**not** genuineness-checked, yet (if its bond resolves `Active`/
+`Unbonding`) drives both the §A.4 `Slash` mutation and this side-effect
+when merged. The side-effect therefore **inherits** §A.4's existing trust
+of mergeset evidence — it does not make anything less sound than the
+already-shipped `Slash` pipeline, and `resolve_slashing_side_effects`
+documents that it *assumes* genuineness. Closing this seam means moving
+the whole overlay block-validity family to resolve over the mergeset
+(out of scope for b2-iv, and inert on every current network at
+`dns_activation_daa_score = u64::MAX`). Recorded here so it is not
+mistaken for a regression introduced by the side-effect.
 
 ### Determinism, reorg, and gating (unchanged)
 
@@ -957,4 +999,4 @@ network).
 
 | Sub-PR | Title | Gated? |
 |---|---|---|
-| 16.4-b2-iv | The atomic side-effect in `calculate_utxo_state`: per slashed bond (mergeset-resolved, deduped, `Active`/`Unbonding`-gated), **remove** output-0 (`S`) **and mint** the reporter UTXO `R` at `(slashing_tx_id, 0)` — construction == validation, reorg-safe. Supersedes the b2-ii exemption and the b2-iii output rule (now "slashing tx has no outputs"). | yes (activation) |
+| 16.4-b2-iv | The atomic side-effect in `calculate_utxo_state`: per slashed bond (mergeset-resolved, deduped, `Active`/`Unbonding`-gated), **remove** output-0 (`S`) **and mint** the reporter UTXO `R` at `(slashing_tx_id, 0)` — construction == validation, reorg-safe. Reverts the b2-ii mint exemption (a slashing tx is value-trivial), and replaces the b2-iii `verify_expected_utxo_state` reporter-output rule with a **stateless "slashing tx declares no outputs" rule in the isolation validator** (every block, so the mint outpoint is always free). | yes (activation) |
