@@ -1990,6 +1990,82 @@ pub fn validate_slashing_evidence_payload(payload: &[u8]) -> Result<(), DnsTxErr
     Ok(())
 }
 
+// =====================================================================
+// PR-10.9 (foundation): pure stake-bond lifecycle helpers.
+//
+// These are deliberately store- and DAG-free pure functions so they can
+// be unit-tested in isolation. They are the shared building blocks for:
+//   - PR-10.9b bond-store population (`stake_bond_record_from_payload`
+//     when an accepted stake-bond tx is recorded), and
+//   - PR-10.9c stateful tx validation (`is_bond_active_at` /
+//     `effective_bond_status` to gate attestation/slashing txs against an
+//     existing, active bond at the point-of-view DAA score).
+//
+// `effective_bond_status` derives the bond's status purely from its
+// DAA-stamped fields (activation / unbond-request / slash height) rather
+// than trusting the cached `status` field, so a single source of truth
+// governs eligibility regardless of when the cached field was last
+// written. ADR-0009 §"Stake bonds" + ADR-0010 §"Validator service
+// runtime".
+// =====================================================================
+
+/// Builds the initial [`StakeBondRecord`] for a freshly-accepted
+/// [`StakeBondPayload`]. `bond_outpoint` is the outpoint of the
+/// stake-bond transaction's bond output (the consensus key for the
+/// `StakeBonds` store). The record starts `Pending`; the
+/// `Pending → Active` transition is purely a function of
+/// `activation_daa_score` (see [`effective_bond_status`]) and needs no
+/// later write. `unbond_request`/`slashed_at` are set later when the
+/// corresponding txs are processed.
+pub fn stake_bond_record_from_payload(payload: &StakeBondPayload, bond_outpoint: TransactionOutpoint) -> StakeBondRecord {
+    StakeBondRecord {
+        version: payload.version,
+        bond_outpoint,
+        owner_pubkey_hash: payload.owner_pubkey_hash,
+        validator_pubkey_hash: payload.validator_pubkey_hash,
+        validator_pubkey: payload.validator_pubkey.clone(),
+        amount: payload.amount,
+        activation_daa_score: payload.activation_daa_score,
+        unbonding_period_blocks: payload.unbonding_period_blocks,
+        unbond_request_daa_score: None,
+        slashed_at_daa_score: None,
+        status: BondStatus::Pending,
+    }
+}
+
+/// The DAA score at which an unbonding bond's stake is released
+/// (`unbond_request_daa_score + unbonding_period_blocks`), or `None` if
+/// no unbond has been requested. `saturating_add` so a pathological
+/// `u64::MAX` request height never wraps to an early release.
+pub fn bond_release_daa_score(record: &StakeBondRecord) -> Option<u64> {
+    record.unbond_request_daa_score.map(|u| u.saturating_add(record.unbonding_period_blocks))
+}
+
+/// Derives a bond's effective [`BondStatus`] as observed from
+/// `pov_daa_score`, purely from its DAA-stamped fields (precedence:
+/// slashed → unbonding → time-based activation):
+///
+/// 1. `slashed_at_daa_score ≤ pov` ⇒ `Slashed` (terminal).
+/// 2. `unbond_request_daa_score ≤ pov` ⇒ `Unbonding` (no new
+///    attestations accepted, per ADR-0010).
+/// 3. `activation_daa_score ≤ pov` ⇒ `Active`, else `Pending`.
+pub fn effective_bond_status(record: &StakeBondRecord, pov_daa_score: u64) -> BondStatus {
+    if record.slashed_at_daa_score.is_some_and(|s| pov_daa_score >= s) {
+        return BondStatus::Slashed;
+    }
+    if record.unbond_request_daa_score.is_some_and(|u| pov_daa_score >= u) {
+        return BondStatus::Unbonding;
+    }
+    if pov_daa_score >= record.activation_daa_score { BondStatus::Active } else { BondStatus::Pending }
+}
+
+/// `true` iff the bond is `Active` at `pov_daa_score` — the eligibility
+/// predicate the PR-10.9c attestation/slashing stateful checks apply to a
+/// referenced bond (`bond ∈ active_bonds`, ADR-0010).
+pub fn is_bond_active_at(record: &StakeBondRecord, pov_daa_score: u64) -> bool {
+    effective_bond_status(record, pov_daa_score) == BondStatus::Active
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2435,6 +2511,66 @@ mod tests {
         ] {
             assert!(!e.to_string().is_empty());
         }
+    }
+
+    // ---- PR-10.9 foundation: stake-bond lifecycle helpers ----
+
+    #[test]
+    fn stake_bond_record_from_payload_initializes_pending() {
+        let payload = fixture_bond(); // amount 100e9, activation 5_000, unbonding 100_000
+        let op = fixture_outpoint();
+        let rec = stake_bond_record_from_payload(&payload, op);
+        assert_eq!(rec.bond_outpoint, op);
+        assert_eq!(rec.version, payload.version);
+        assert_eq!(rec.owner_pubkey_hash, payload.owner_pubkey_hash);
+        assert_eq!(rec.validator_pubkey_hash, payload.validator_pubkey_hash);
+        assert_eq!(rec.validator_pubkey, payload.validator_pubkey);
+        assert_eq!(rec.amount, payload.amount);
+        assert_eq!(rec.activation_daa_score, payload.activation_daa_score);
+        assert_eq!(rec.unbonding_period_blocks, payload.unbonding_period_blocks);
+        assert_eq!(rec.unbond_request_daa_score, None);
+        assert_eq!(rec.slashed_at_daa_score, None);
+        assert_eq!(rec.status, BondStatus::Pending);
+    }
+
+    #[test]
+    fn effective_bond_status_activation_transition() {
+        let rec = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint()); // activation 5_000
+        assert_eq!(effective_bond_status(&rec, 0), BondStatus::Pending);
+        assert_eq!(effective_bond_status(&rec, 4_999), BondStatus::Pending);
+        assert_eq!(effective_bond_status(&rec, 5_000), BondStatus::Active); // inclusive at activation
+        assert_eq!(effective_bond_status(&rec, 1_000_000), BondStatus::Active);
+        assert!(!is_bond_active_at(&rec, 4_999));
+        assert!(is_bond_active_at(&rec, 5_000));
+    }
+
+    #[test]
+    fn effective_bond_status_unbonding_then_slashed_precedence() {
+        let mut rec = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint()); // activation 5_000, unbonding_period 100_000
+        // Active before any unbond/slash.
+        assert_eq!(effective_bond_status(&rec, 10_000), BondStatus::Active);
+
+        // Unbond requested at 20_000 -> Unbonding from that height (not active).
+        rec.unbond_request_daa_score = Some(20_000);
+        assert_eq!(effective_bond_status(&rec, 19_999), BondStatus::Active);
+        assert_eq!(effective_bond_status(&rec, 20_000), BondStatus::Unbonding);
+        assert!(!is_bond_active_at(&rec, 20_000));
+        assert_eq!(bond_release_daa_score(&rec), Some(120_000)); // 20_000 + 100_000
+
+        // A slash at 25_000 takes precedence over the unbond from its height on.
+        rec.slashed_at_daa_score = Some(25_000);
+        assert_eq!(effective_bond_status(&rec, 24_999), BondStatus::Unbonding);
+        assert_eq!(effective_bond_status(&rec, 25_000), BondStatus::Slashed);
+        assert_eq!(effective_bond_status(&rec, u64::MAX), BondStatus::Slashed);
+    }
+
+    #[test]
+    fn bond_release_daa_score_none_without_unbond_and_saturates() {
+        let mut rec = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint());
+        assert_eq!(bond_release_daa_score(&rec), None);
+        // saturating_add: a pathological u64::MAX request height never wraps early.
+        rec.unbond_request_daa_score = Some(u64::MAX);
+        assert_eq!(bond_release_daa_score(&rec), Some(u64::MAX));
     }
 
     #[test]
