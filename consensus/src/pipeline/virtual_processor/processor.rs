@@ -355,6 +355,9 @@ impl VirtualStateProcessor {
                 virtual_ghostdag_data,
                 sink_multiset,
                 &mut accumulated_diff,
+                // After `sink_search_algorithm` the walked view equals the bond
+                // set as-of the new sink (= the virtual block's selected parent).
+                &accumulated_bond_view,
                 &chain_path,
             )
             .expect("all possible rule errors are unexpected here");
@@ -503,9 +506,11 @@ impl VirtualStateProcessor {
 
                     let mut ctx = UtxoProcessingContext::new(mergeset_data.into(), selected_parent_multiset_hash);
 
-                    self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, pov_daa_score);
                     // `bond_view` currently equals the bond set as-of `selected_parent`
-                    // (the verify point's selected-parent view — Addendum B §B.3).
+                    // (the verify point's selected-parent view — Addendum B §B.3),
+                    // so it is the same view both `calculate_utxo_state` (slashing
+                    // side-effect, PR-16.4-b2) and `verify_expected_utxo_state` read.
+                    self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
                     let res = self.verify_expected_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, &header);
 
                     if let Err(rule_error) = res {
@@ -586,6 +591,11 @@ impl VirtualStateProcessor {
         virtual_ghostdag_data: GhostdagData,
         selected_parent_multiset: MuHash,
         accumulated_diff: &mut UtxoDiff,
+        // kaspa-pq Phase 10/11 (ADR-0016 §D.4): the bond set as-of the virtual
+        // selected parent, walked in lockstep with `accumulated_diff`. Forwarded
+        // to `calculate_virtual_state`/`calculate_utxo_state` for the slashing
+        // side-effect; inert until PR-16.4-b2 consumes it.
+        selected_parent_bond_view: &ActiveBondView,
         chain_path: &ChainPath,
     ) -> Result<Arc<VirtualState>, RuleError> {
         let new_virtual_state = self.calculate_virtual_state(
@@ -594,6 +604,7 @@ impl VirtualStateProcessor {
             virtual_ghostdag_data,
             selected_parent_multiset,
             accumulated_diff,
+            selected_parent_bond_view,
         )?;
         self.commit_virtual_state(virtual_read, new_virtual_state.clone(), accumulated_diff, chain_path);
         Ok(new_virtual_state)
@@ -606,6 +617,10 @@ impl VirtualStateProcessor {
         virtual_ghostdag_data: GhostdagData,
         selected_parent_multiset: MuHash,
         accumulated_diff: &mut UtxoDiff,
+        // kaspa-pq Phase 10/11 (ADR-0016 §D.4): the bond set as-of the virtual
+        // selected parent (= the new sink). Forwarded to `calculate_utxo_state`
+        // for the slashing side-effect; inert until PR-16.4-b2 consumes it.
+        selected_parent_bond_view: &ActiveBondView,
     ) -> Result<Arc<VirtualState>, RuleError> {
         let selected_parent_utxo_view = (&virtual_stores.utxo_set).compose(&*accumulated_diff);
         let mut ctx = UtxoProcessingContext::new((&virtual_ghostdag_data).into(), selected_parent_multiset);
@@ -616,7 +631,7 @@ impl VirtualStateProcessor {
         let virtual_past_median_time = self.window_manager.calc_past_median_time(&virtual_ghostdag_data)?.0;
 
         // Calc virtual UTXO state relative to selected parent
-        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, virtual_daa_window.daa_score);
+        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score);
 
         // Update the accumulated diff
         accumulated_diff.with_diff_in_place(&ctx.mergeset_diff).unwrap();
@@ -1605,6 +1620,10 @@ impl VirtualStateProcessor {
             virtual_ghostdag_data,
             imported_utxo_multiset.clone(),
             &mut UtxoDiff::default(),
+            // Pruning-point UTXO import (IBD): the `StakeBonds` store snapshot is
+            // the bond set as-of the imported pruning point. Empty on every
+            // current network (overlay dormant), so this is inert.
+            &self.initial_active_bond_view(),
             &ChainPath::default(),
         )?;
 

@@ -123,10 +123,20 @@ impl<'a> UtxoProcessingContext<'a> {
 
 impl VirtualStateProcessor {
     /// Calculates UTXO state and transaction acceptance data relative to the selected parent state
+    ///
+    /// kaspa-pq Phase 10/11 (ADR-0016 §D.4): `selected_parent_bond_view` is the
+    /// bond set as-of this block's selected parent — the same view the overlay
+    /// block-validity rules in `verify_expected_utxo_state` read. The slashing
+    /// side-effect (PR-16.4-b2) will consume it here to remove a slashed bond's
+    /// locked output-0 from `ctx.mergeset_diff` + `ctx.multiset_hash` (and so the
+    /// `utxo_commitment`) when a genuine `SlashingEvidence` is processed in the
+    /// mergeset. Threaded inert for now — no consumer, no behavior change — so
+    /// construction and validation stay byte-identical on every current network.
     pub(super) fn calculate_utxo_state<V: UtxoView + Sync>(
         &self,
         ctx: &mut UtxoProcessingContext,
         selected_parent_utxo_view: &V,
+        _selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
     ) {
         let selected_parent_transactions = self.block_transactions_store.get(ctx.selected_parent()).unwrap();

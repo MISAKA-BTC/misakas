@@ -65,6 +65,9 @@ impl TestBlockBuilder {
             pov_virtual_ghostdag_data,
             pov_sink_multiset,
             &mut accumulated_diff,
+            // The bond view walked alongside `accumulated_diff` above (= bond set
+            // as-of the pov sink). Inert until PR-16.4-b2 consumes it.
+            &accumulated_bond_view,
         )?;
         let pov_virtual_utxo_view = (&virtual_read.utxo_set).compose(accumulated_diff);
         self.validate_block_template_transactions(&txs, &pov_virtual_state, &pov_virtual_utxo_view)?;
