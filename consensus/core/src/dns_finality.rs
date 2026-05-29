@@ -781,6 +781,24 @@ pub struct ValidatorCommittee {
     pub members: Vec<Hash64>,
 }
 
+/// Everything the in-process validator service needs to issue one stake
+/// attestation for the current epoch, assembled by the consensus pipeline so the
+/// network-, committee-, and target-binding match the verifier (`virtual_processor`)
+/// byte-for-byte. The service's only remaining job is to sign [`Self::message`]
+/// under [`ATTESTATION_MLDSA65_CONTEXT`] with its ML-DSA-65 key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatorAttestationTarget {
+    pub epoch: u64,
+    /// Selected-chain anchor (sink) the attestation approves.
+    pub target_hash: Hash64,
+    pub target_daa_score: u64,
+    /// Commitment over the epoch committee — the snapshot the attestation binds to.
+    pub validator_set_commitment: Hash64,
+    /// Ready-to-sign 32-byte digest: `stake_attestation_message(genesis_hash, epoch,
+    /// target_hash, target_daa_score, validator_set_commitment, bond_outpoint)`.
+    pub message: Hash,
+}
+
 // ---------------------------------------------------------------------
 // Byte-deterministic derivations.
 // ---------------------------------------------------------------------

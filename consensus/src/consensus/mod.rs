@@ -58,8 +58,9 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        DnsConfirmation, StakeBondRecord, ValidatorCommittee, ValidatorRecord, dns_confirmation_from_state, is_bond_active_at,
-        select_committee_for_epoch,
+        DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget, ValidatorCommittee, ValidatorRecord,
+        dns_confirmation_from_state, is_bond_active_at, select_committee_for_epoch, stake_attestation_message,
+        validator_set_commitment,
     },
     errors::{
         coinbase::CoinbaseResult,
@@ -593,6 +594,25 @@ impl Consensus {
         }
         Ok(pruning_points_to_add)
     }
+
+    /// kaspa-pq Phase 11 (ADR-0010): the active validator set at `pov_daa_score`,
+    /// assembled from the stake-bond store (bonds active per `is_bond_active_at`).
+    /// Shared by `get_validator_committee` and `get_validator_attestation_target`
+    /// so both observe an identical active set. `flatten()` drops unreadable entries
+    /// defensively — a single corrupt bond must not blank out the set.
+    fn dns_active_validator_records(&self, pov_daa_score: u64) -> Vec<ValidatorRecord> {
+        let store = self.storage.stake_bonds_store.read();
+        store
+            .iterator()
+            .flatten()
+            .filter(|(_, record)| is_bond_active_at(record, pov_daa_score))
+            .map(|(_, record)| ValidatorRecord {
+                validator_id: record.validator_pubkey_hash,
+                stake_amount: record.amount,
+                activation_daa_score: record.activation_daa_score,
+            })
+            .collect()
+    }
 }
 
 impl ConsensusApi for Consensus {
@@ -715,32 +735,44 @@ impl ConsensusApi for Consensus {
 
     fn get_validator_committee(&self) -> Option<ValidatorCommittee> {
         // kaspa-pq Phase 11 (ADR-0010/0012): select the committee for the current
-        // epoch at the sink. Assembles the active validator set by scanning the
-        // stake-bond store and filtering on `is_bond_active_at(pov_daa)`, then
-        // delegates seed derivation + selection to `select_committee_for_epoch`.
+        // epoch at the sink. The pov is the sink DAA score (so the epoch matches the
+        // attestation target the validator will sign for).
         let dns_params = self.config.params.dns_params.as_ref()?;
-        let pov_daa_score = self.get_virtual_daa_score();
+        let pov_daa_score = self.get_sink_daa_score_timestamp().daa_score;
         let epoch = pov_daa_score / dns_params.epoch_length_blocks.max(1);
 
-        let mut active: Vec<ValidatorRecord> = Vec::new();
-        {
-            let store = self.storage.stake_bonds_store.read();
-            // `flatten()` drops unreadable entries defensively — a single corrupt bond
-            // must not blank out the whole committee on this read-only path.
-            for (_, record) in store.iterator().flatten() {
-                if is_bond_active_at(&record, pov_daa_score) {
-                    active.push(ValidatorRecord {
-                        validator_id: record.validator_pubkey_hash,
-                        stake_amount: record.amount,
-                        activation_daa_score: record.activation_daa_score,
-                    });
-                }
-            }
-        }
-
+        let active = self.dns_active_validator_records(pov_daa_score);
         let committee_size = dns_params.committee_size as usize;
         let members = select_committee_for_epoch(epoch, dns_params.sortition_mode, &active, committee_size)?;
         Some(ValidatorCommittee { epoch, pov_daa_score, committee_size, active_validator_count: active.len(), members })
+    }
+
+    fn get_validator_attestation_target(&self, bond_outpoint: TransactionOutpoint) -> Option<ValidatorAttestationTarget> {
+        // kaspa-pq Phase 11 (ADR-0010): assemble the exact message the validator must
+        // sign for the current sink — bound to network (genesis hash), epoch, target
+        // anchor, and the committee commitment — so it matches the virtual_processor
+        // verifier byte-for-byte. The service only signs `message`.
+        let dns_params = self.config.params.dns_params.as_ref()?;
+        let target_hash = self.get_sink();
+        let target_daa_score = self.get_sink_daa_score_timestamp().daa_score;
+        let epoch = target_daa_score / dns_params.epoch_length_blocks.max(1);
+
+        let active = self.dns_active_validator_records(target_daa_score);
+        let committee = select_committee_for_epoch(epoch, dns_params.sortition_mode, &active, dns_params.committee_size as usize)?;
+        // Commit over the committee snapshot (the set the attestation binds to).
+        let committee_records: Vec<ValidatorRecord> = active.into_iter().filter(|r| committee.contains(&r.validator_id)).collect();
+        let vsc = validator_set_commitment(epoch, &committee_records);
+
+        // ADR-0009 Addendum A.3: network discriminator := the per-network genesis hash.
+        let message = stake_attestation_message(
+            self.config.params.genesis.hash.as_byte_slice(),
+            epoch,
+            target_hash,
+            target_daa_score,
+            vsc,
+            bond_outpoint,
+        );
+        Some(ValidatorAttestationTarget { epoch, target_hash, target_daa_score, validator_set_commitment: vsc, message })
     }
 
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

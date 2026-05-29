@@ -9,7 +9,9 @@
 //! registered only when `--enable-validator` is set, so default node behavior is
 //! unchanged.
 
-use kaspa_consensus_core::dns_finality::{effective_bond_status, is_bond_active_at, validator_id_from_pubkey};
+use kaspa_consensus_core::dns_finality::{
+    ATTESTATION_MLDSA65_CONTEXT, effective_bond_status, is_bond_active_at, validator_id_from_pubkey,
+};
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
@@ -21,7 +23,9 @@ use kaspa_core::{
     trace, warn,
 };
 use kaspa_hashes::Hash64;
+use kaspa_txscript::{MLDSA65_SIG_LEN, verify_mldsa65_with_context};
 use libcrux_ml_dsa::ml_dsa_65;
+use rand::RngCore;
 use std::{fmt, fs, str::FromStr, sync::Arc, time::Duration};
 
 const VALIDATOR: &str = "validator-service";
@@ -100,9 +104,6 @@ fn load_validator_seed(path: &str) -> Result<[u8; VALIDATOR_SEED_LEN], String> {
 /// slice will use via `sign_with_context(ATTESTATION_MLDSA65_CONTEXT, …)`; it is
 /// stored now so the identity is derived from exactly the key that will sign.
 struct ValidatorKey {
-    // Read by the attestation-signing slice (PR-11.x); held now so the advertised
-    // `validator_id` is bound to the key that will actually sign.
-    #[allow(dead_code)]
     keypair: ml_dsa_65::MLDSA65KeyPair,
     /// Overlay identity advertised to the network and matched against the bond.
     validator_id: Hash64,
@@ -113,6 +114,26 @@ impl ValidatorKey {
         let keypair = ml_dsa_65::generate_key_pair(seed);
         let validator_id = validator_id_from_pubkey(keypair.verification_key.as_ref());
         Self { keypair, validator_id }
+    }
+
+    /// Sign a stake-attestation `message` digest under [`ATTESTATION_MLDSA65_CONTEXT`].
+    /// The distinct context guarantees the signature can never be replayed as a
+    /// transaction signature, and verifies via [`verify_mldsa65_with_context`] — the
+    /// same call the `virtual_processor` aggregator uses.
+    fn sign_attestation(&self, message: &[u8]) -> [u8; MLDSA65_SIG_LEN] {
+        let mut randomness = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut randomness);
+        let sig = ml_dsa_65::sign(&self.keypair.signing_key, message, ATTESTATION_MLDSA65_CONTEXT, randomness)
+            .expect("ML-DSA-65 sign is infallible on a well-formed message");
+        *sig.as_ref()
+    }
+
+    /// Verify an attestation signature against this key (local round-trip sanity check).
+    fn verify_attestation(&self, message: &[u8], signature: &[u8]) -> bool {
+        matches!(
+            verify_mldsa65_with_context(self.keypair.verification_key.as_ref(), message, signature, ATTESTATION_MLDSA65_CONTEXT),
+            Ok(true)
+        )
     }
 }
 
@@ -188,21 +209,34 @@ impl ValidatorService {
             }
 
             // Heartbeat: report the node tip, the validator's own bond status, and its
-            // committee membership for the current epoch. NOTE: this evaluates eligibility
-            // (bond active AND in committee) but does not yet sign or submit anything.
+            // committee membership for the current epoch. When eligible (bond active AND
+            // in committee) it also builds + signs the attestation for the sink and
+            // verifies it locally — but does NOT gossip or submit it (the equivocation
+            // guard and submission are later slices).
+            let my_id = self.key.as_ref().map(|k| k.validator_id);
             let session = self.consensus_manager.consensus().session().await;
             let sink = session.async_get_sink_daa_score_timestamp().await;
             let dns = session.async_get_dns_confirmation().await;
             // The overlay reads return None on non-overlay networks too, so skip the
             // lookups there to avoid misleading status lines.
-            let (bond, committee) = if dns.is_some() {
+            let (bond, committee, attestation) = if dns.is_some() {
                 let bond = match self.bond_outpoint {
                     Some(outpoint) => session.async_get_stake_bond(outpoint).await,
                     None => None,
                 };
-                (bond, session.async_get_validator_committee().await)
+                let committee = session.async_get_validator_committee().await;
+                // Eligible iff our bond is active AND our validator_id is in the committee.
+                let eligible = match (&bond, &committee, my_id) {
+                    (Some(b), Some(c), Some(id)) => is_bond_active_at(b, sink.daa_score) && c.members.contains(&id),
+                    _ => false,
+                };
+                let attestation = match (eligible, self.bond_outpoint) {
+                    (true, Some(outpoint)) => session.async_get_validator_attestation_target(outpoint).await,
+                    _ => None,
+                };
+                (bond, committee, attestation)
             } else {
-                (None, None)
+                (None, None, None)
             };
             drop(session);
 
@@ -215,7 +249,6 @@ impl ValidatorService {
                         }
                         (true, None) => "not-found".to_string(),
                     };
-                    let my_id = self.key.as_ref().map(|k| k.validator_id);
                     let committee_status = match (&committee, my_id) {
                         (Some(c), Some(id)) => format!(
                             "epoch={} in_committee={} (committee={}/active={})",
@@ -231,6 +264,22 @@ impl ValidatorService {
                         "[{VALIDATOR}] heartbeat: mode={} sink_daa={} bond={} committee=[{}] dns_overlay=configured (stage={:?}, dns_confirmed={})",
                         self.config.mode, sink.daa_score, bond_status, committee_status, conf.rollout_stage, conf.dns_confirmed
                     );
+
+                    // Eligible: build + sign + locally verify the attestation. DRY-RUN —
+                    // not gossiped/submitted (equivocation guard is the next slice).
+                    if let (Some(target), Some(key)) = (&attestation, &self.key) {
+                        let digest = target.message.as_bytes();
+                        let signature = key.sign_attestation(&digest);
+                        let verified = key.verify_attestation(&digest, &signature);
+                        info!(
+                            "[{VALIDATOR}] eligible — signed attestation (DRY-RUN, not submitted): epoch={} target={} vsc={} sig_len={} self_verify={}",
+                            target.epoch,
+                            target.target_hash,
+                            target.validator_set_commitment,
+                            signature.len(),
+                            verified
+                        );
+                    }
                 }
                 None => {
                     trace!("[{VALIDATOR}] heartbeat: mode={} sink_daa={} dns_overlay=not-configured", self.config.mode, sink.daa_score)
@@ -332,5 +381,18 @@ mod tests {
         let key = ValidatorKey::from_seed([0x33u8; VALIDATOR_SEED_LEN]);
         let expected = validator_id_from_pubkey(key.keypair.verification_key.as_ref());
         assert_eq!(key.validator_id, expected);
+    }
+
+    #[test]
+    fn sign_attestation_roundtrip_and_tamper() {
+        let key = ValidatorKey::from_seed([0x55u8; VALIDATOR_SEED_LEN]);
+        let msg = [0x99u8; 32]; // stand-in for a stake_attestation_message digest
+        let sig = key.sign_attestation(&msg);
+        assert_eq!(sig.len(), MLDSA65_SIG_LEN);
+        assert!(key.verify_attestation(&msg, &sig));
+        // A tampered digest must fail verification.
+        let mut bad = msg;
+        bad[0] ^= 0x01;
+        assert!(!key.verify_attestation(&bad, &sig));
     }
 }

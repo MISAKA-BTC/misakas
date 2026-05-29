@@ -10,7 +10,7 @@ use crate::{
     blockstatus::BlockStatus,
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
-    dns_finality::{DnsConfirmation, StakeBondRecord, ValidatorCommittee},
+    dns_finality::{DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget, ValidatorCommittee},
     errors::{
         block::{BlockProcessResult, RuleError},
         coinbase::CoinbaseResult,
@@ -167,6 +167,15 @@ pub trait ConsensusApi: Send + Sync {
     /// are wired). The in-process validator service checks its own `validator_id`
     /// against `members` to decide attestation eligibility. Default `None`.
     fn get_validator_committee(&self) -> Option<ValidatorCommittee> {
+        None
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0010): the ready-to-sign stake-attestation target for
+    /// `bond_outpoint` at the current sink (epoch, target, committee commitment, and
+    /// the bound message digest), or `None` when the overlay is not configured or no
+    /// committee can be selected yet. The validator service signs `message` under
+    /// `ATTESTATION_MLDSA65_CONTEXT`. Default `None`.
+    fn get_validator_attestation_target(&self, _bond_outpoint: TransactionOutpoint) -> Option<ValidatorAttestationTarget> {
         None
     }
 

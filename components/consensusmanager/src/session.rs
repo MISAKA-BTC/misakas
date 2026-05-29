@@ -9,7 +9,7 @@ use kaspa_consensus_core::{
     block::Block,
     blockstatus::BlockStatus,
     daa_score_timestamp::DaaScoreTimestamp,
-    dns_finality::{DnsConfirmation, StakeBondRecord, ValidatorCommittee},
+    dns_finality::{DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget, ValidatorCommittee},
     errors::consensus::ConsensusResult,
     header::Header,
     mass::{ContextualMasses, NonContextualMasses},
@@ -270,6 +270,16 @@ impl ConsensusSessionOwned {
     /// epoch (`None` if the overlay is not configured / committee not selectable yet).
     pub async fn async_get_validator_committee(&self) -> Option<ValidatorCommittee> {
         self.clone().spawn_blocking(|c| c.get_validator_committee()).await
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0010): the ready-to-sign stake-attestation target for
+    /// `bond_outpoint` at the current sink (`None` if the overlay is not configured /
+    /// no committee selectable yet).
+    pub async fn async_get_validator_attestation_target(
+        &self,
+        bond_outpoint: TransactionOutpoint,
+    ) -> Option<ValidatorAttestationTarget> {
+        self.clone().spawn_blocking(move |c| c.get_validator_attestation_target(bond_outpoint)).await
     }
 
     pub async fn async_get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {
