@@ -2247,6 +2247,26 @@ pub fn advance_dns_confirmation(
     }
 }
 
+/// Per-epoch normalisation denominator for StakeScore: for each epoch in
+/// `epoch_anchor_daa` (epoch → that epoch's selected-chain anchor DAA
+/// score), the total stake of bonds that are `Active` at that anchor's DAA
+/// score (ADR-0009 §"StakeScore mechanics" / Addendum A.5).
+///
+/// Pure: the caller supplies the bonds in the (bounded) window and each
+/// epoch's anchor DAA score; activation / slash / unbond are evaluated via
+/// [`is_bond_active_at`] (DAA-stamped, so this is reorg-safe with no
+/// incremental state). Pairs with [`aggregate_epoch_tallies`] to feed
+/// [`compute_stake_score`].
+pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: &BTreeMap<u64, u64>) -> BTreeMap<u64, u64> {
+    epoch_anchor_daa
+        .iter()
+        .map(|(&epoch, &anchor_daa)| {
+            let total = bonds.iter().filter(|b| is_bond_active_at(b, anchor_daa)).fold(0u64, |acc, b| acc.saturating_add(b.amount));
+            (epoch, total)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2872,6 +2892,29 @@ mod tests {
         assert_eq!(s3.selected_chain_anchor, a3);
         assert_eq!(s3.last_dns_confirmed_anchor, a2);
         assert_eq!(s3.last_dns_confirmed_anchor_daa_score, 600);
+    }
+
+    #[test]
+    fn total_active_stake_by_epoch_sums_only_active_bonds() {
+        // A: activation 100, stake 30. B: activation 500, stake 20.
+        // C: activation 100, slashed at 300, stake 50.
+        let mut a = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint());
+        a.amount = 30;
+        a.activation_daa_score = 100;
+        let mut b = a.clone();
+        b.amount = 20;
+        b.activation_daa_score = 500;
+        let mut c = a.clone();
+        c.amount = 50;
+        c.slashed_at_daa_score = Some(300);
+        let bonds = vec![a, b, c];
+
+        let epochs = BTreeMap::from([(1u64, 50u64), (2, 200), (3, 400), (4, 600)]);
+        let totals = total_active_stake_by_epoch(&bonds, &epochs);
+        assert_eq!(totals.get(&1), Some(&0)); // daa 50: all activate >= 100 -> Pending
+        assert_eq!(totals.get(&2), Some(&80)); // daa 200: A(30) + C(50) active
+        assert_eq!(totals.get(&3), Some(&30)); // daa 400: A(30); C slashed @300; B not yet
+        assert_eq!(totals.get(&4), Some(&50)); // daa 600: A(30) + B(20); C slashed
     }
 
     #[test]
