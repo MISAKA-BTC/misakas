@@ -90,9 +90,14 @@ This is the right choice because:
    bonded sompi in expectation — they just earn it at different
    per-validator absolute amounts.
 
-The reward lands at the address derived from
-`StakeBondPayload::owner_pubkey_hash` (the **owner** key,
-ADR-0011 §"Key separation policy"). The validator (hot) key
+The reward lands at the owner's declared ML-DSA-65 P2PKH spend
+payload (the **owner** key, ADR-0011 §"Key separation policy").
+> **Amended by Addendum B:** the recipient is
+> `StakeBondPayload::owner_reward_spk_payload` (32-byte
+> `BLAKE2b-256(owner_public_key)`), **not** the 64-byte
+> `owner_pubkey_hash` identity hash this paragraph originally
+> named. See Addendum B for the rationale.
+The validator (hot) key
 never receives funds; only the owner (cold) key does. Operators
 who follow the ADR-0011 key-separation policy get the
 "signing-key compromise is recoverable" property for free —
@@ -119,8 +124,11 @@ coinbase_outputs(block) =
             Output {
                 value: per_attestation_reward_sompi,
                 script_public_key:
-                    script_public_key_for_p2pkh_mldsa65(
-                        a.bond.owner_pubkey_hash,
+                    // Amended by Addendum B — pay to the 32-byte
+                    // declared spend payload, not the 64-byte
+                    // identity hash:
+                    p2pkh_mldsa65_spk(
+                        a.bond.owner_reward_spk_payload,
                     ),
             },
     ]
@@ -401,3 +409,159 @@ PR-10.6, layer onto PR-10.5 and PR-10.12):
 - [ADR-0012 — Mainnet Validator Sortition](0012-mainnet-validator-sortition-commit-reveal.md)
   §"Slashing rule: commit-without-reveal" (the unreveal-slash
   case this ADR's distribution rule applies to).
+
+## Addendum B — Reward-recipient address resolution (binding)
+
+Status: Accepted
+Date: 2026-05-29
+Amends: this ADR's §"Per-attestation flat reward" and
+        §"Coinbase fan-out".
+
+### The gap
+
+The §"Coinbase fan-out" pseudo-code originally paid each
+validator reward to
+
+```text
+script_public_key_for_p2pkh_mldsa65(a.bond.owner_pubkey_hash)
+```
+
+This does not type-check against the rest of the kaspa-pq stack
+and cannot be implemented as written:
+
+- `StakeBondPayload::owner_pubkey_hash` is a **64-byte**
+  `Hash64` = `BLAKE2b-512(owner_public_key)`, the ADR-0008
+  consensus *identity* hash.
+- A spendable ML-DSA-65 P2PKH output (ADR-0002) commits to a
+  **32-byte** payload = `BLAKE2b-256(owner_public_key)`; the
+  script is
+  `[OpDup, OpBlake2b, OpData32, <32-byte payload>, OpEqualVerify, OpCheckSigMlDsa65]`
+  and `OpBlake2b` (0xaa) re-derives a **32-byte** digest from the
+  pushed key at spend time, then `OpEqualVerify` compares it to
+  the committed 32 bytes.
+
+A 64-byte BLAKE2b-512 identity hash is **not** the 32-byte
+BLAKE2b-256 the spend script will recompute, and the 64→32
+reduction is not derivable (you cannot truncate one BLAKE2b
+digest into another and keep it spendable). Worse, the bond
+record as it stood stored **neither** the owner public key
+**nor** any 32-byte spend payload — so there was no on-chain data
+from which a payable script could be built at coinbase-assembly
+time.
+
+### Decision: declare the spend payload in the bond
+
+Add one field to the bond wire format and its derived record:
+
+```rust
+// StakeBondPayload  (consensus/core/src/dns_finality.rs)
+// StakeBondRecord   (same module)
+//
+// The owner's *declared* ML-DSA-65 P2PKH spend payload:
+//   owner_reward_spk_payload == BLAKE2b-256(owner_public_key)   (ADR-0002)
+// i.e. the 32-byte `Address { version: PubKeyHashMlDsa65 }`
+// payload of the cold owner key that earned rewards are paid to.
+pub owner_reward_spk_payload: [u8; 32],
+```
+
+- `owner_pubkey_hash` (64-byte `Hash64`) is **unchanged** and
+  keeps its sole job: consensus *identity* (bond uniqueness,
+  owner-key matching, equivocation/dedup). It is **not** a
+  payable target.
+- `owner_reward_spk_payload` (32-byte) is the **only** field
+  rewards are paid to. It is supplied by the bond creator and
+  copied verbatim by
+  [`stake_bond_record_from_payload`](../../consensus/core/src/dns_finality.rs).
+- Both derive from the same owner public key
+  (`BLAKE2b-512` → identity, `BLAKE2b-256` → spend payload), so
+  an honest bond creator computes both from one cold key. The
+  bond does **not** store the raw owner public key — only an
+  attestation/spend would reveal it — keeping the bond compact.
+
+The §"Coinbase fan-out" recipient line is amended to:
+
+```text
+script_public_key:
+    p2pkh_mldsa65_spk(a.bond.owner_reward_spk_payload)   // 32-byte payload
+```
+
+### Canonical reward script (binding byte layout)
+
+`p2pkh_mldsa65_spk(payload32)` produces a `ScriptPublicKey` with
+`version = 0` (`MAX_SCRIPT_PUBLIC_KEY_VERSION`) and the 37-byte
+script
+
+```text
+0x76 (OpDup) ‖ 0xaa (OpBlake2b) ‖ 0x20 (OpData32)
+            ‖ payload32 (32 bytes) ‖ 0x88 (OpEqualVerify)
+            ‖ 0xa6 (OpCheckSigMlDsa65)
+```
+
+This is byte-identical to
+`kaspa_txscript::pay_to_address_script(&Address::new(prefix, Version::PubKeyHashMlDsa65, &payload32))`
+— the `ScriptPublicKey` bytes are **prefix-independent**, so the
+coinbase construction and validation paths need not agree on a
+network prefix, only on the 32-byte payload. `consensus`
+(the crate holding `processes/coinbase.rs`) depends on full
+`kaspa-txscript` and uses `pay_to_address_script`;
+`consensus-core` (which only depends on `kaspa-txscript-errors`)
+builds the same bytes from the opcode literals above for its
+unit tests. The two **must** stay byte-equal — a parity test
+pins it.
+
+### Security analysis
+
+A bond creator who declares a wrong `owner_reward_spk_payload`
+only misdirects **their own** future rewards (to a script they
+may not control, i.e. self-griefing). They cannot:
+
+- redirect any **other** validator's rewards (each attestation's
+  reward is keyed to *its own* bond's payload);
+- create or inflate value (the per-attestation amount and
+  per-block cap from this ADR are unchanged);
+- affect consensus safety, sortition, or slashing (those key on
+  `owner_pubkey_hash` / `validator_id`, not on the spend
+  payload).
+
+Because the only party harmed by a malformed payload is the
+declarer, consensus bond-acceptance imposes **no** check on the
+payload beyond its fixed 32-byte width (guaranteed by the
+`[u8; 32]` type). No proof that the payload matches
+`owner_pubkey_hash` is required or possible at bond time (the raw
+owner key is not on-chain). Wallets SHOULD derive both values
+from the same cold key and MAY warn if a user supplies them
+independently.
+
+### Determinism, dedup, and the cap (unchanged)
+
+- Coinbase outputs remain **one per included attestation**, in
+  the §"Coinbase fan-out" canonical order
+  (`(shard_index, attestation_index)`). Two attestations from the
+  same owner in one block still emit two outputs — dedup is
+  per-attestation, never combined-by-owner, so introducing a
+  spend payload changes nothing here.
+- The per-block inflation cap
+  (`max_validator_inflation_per_block_sompi`) and
+  [`compute_attestation_reward_payouts`](../../consensus/core/src/dns_finality.rs)
+  are arithmetic-only and unaffected; they bound the *total*
+  validator outflow, and the new field only decides *where* each
+  already-bounded output is sent.
+
+### Wire-format compatibility
+
+This widens `StakeBondPayload`. No `StakeBond` transaction exists
+on any live kaspa-pq network (the overlay is dormant/gated behind
+an unset activation height on every net), so this is a
+**pre-activation wire change**, not a migration: there is no
+deployed serialised bond to upgrade. The field is appended after
+`unbonding_period_blocks` as the struct's last member so the
+borsh layout change is localized. Any future post-activation
+change to this field would require a versioned payload bump
+(`StakeBondPayload::version`).
+
+### Implementation slots (supersedes the PR-10.5′ row above)
+
+| Sub-PR | Title | Gated? |
+|---|---|---|
+| 10.5′-a | Add `owner_reward_spk_payload` to `StakeBondPayload` + `StakeBondRecord` + `stake_bond_record_from_payload`; add the pure `p2pkh_mldsa65_spk` + reward-outputs helper in `dns_finality.rs`; parity test vs `pay_to_address_script`. Inert — no caller on any path. | n/a (dormant type + pure helper) |
+| 10.5′-b | Wire the reward outputs into `CoinbaseManager::expected_coinbase_transaction` (construction **and** validation, byte-for-byte). Behind the overlay activation gate; no behaviour change on any current network. | yes (activation height) |
