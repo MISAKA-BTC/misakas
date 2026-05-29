@@ -63,6 +63,39 @@ pub const MLDSA65_SIG_LEN: usize = 3309;
 /// upper bound on `ctx` is enforced by libcrux. See
 /// docs/kaspa-pq-spec.md §2.
 pub const MLDSA65_TX_CONTEXT: &[u8] = b"kaspa-pq-v1/tx/mldsa65";
+
+/// Stateless ML-DSA-65 (FIPS 204) verification with a caller-supplied `ctx`
+/// (kaspa-pq Phase 10, ADR-0009). The transaction opcode path
+/// ([`TxScriptEngine::check_mldsa65_signature`]) hard-codes
+/// [`MLDSA65_TX_CONTEXT`]; this free function lets consensus DNS-overlay
+/// validation verify *attestation* signatures under
+/// `dns_finality::ATTESTATION_MLDSA65_CONTEXT` (and takeover tokens under
+/// their own context) without going through a `TxScriptEngine`.
+///
+/// Performs the same pre-libcrux length rejection as the opcode path
+/// (pubkey [`MLDSA65_PK_LEN`], signature [`MLDSA65_SIG_LEN`]) so a malformed
+/// flood cannot reach the PQ verify routine. Returns `Ok(true)`/`Ok(false)`
+/// for a well-formed key+sig that does / does not verify, and `Err` only for
+/// a length violation. No signature cache is consulted (callers that need one
+/// supply it at a higher layer).
+pub fn verify_mldsa65_with_context(
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+    context: &[u8],
+) -> Result<bool, TxScriptError> {
+    if public_key.len() != MLDSA65_PK_LEN {
+        return Err(TxScriptError::PubKeyFormat);
+    }
+    if signature.len() != MLDSA65_SIG_LEN {
+        return Err(TxScriptError::SigLength(signature.len()));
+    }
+    let key_arr: [u8; MLDSA65_PK_LEN] = public_key.try_into().expect("checked above");
+    let sig_arr: [u8; MLDSA65_SIG_LEN] = signature.try_into().expect("checked above");
+    let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(key_arr);
+    let sig_obj = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_arr);
+    Ok(libcrux_ml_dsa::ml_dsa_65::verify(&vk, message, context, &sig_obj).is_ok())
+}
 pub const MAX_TX_IN_SEQUENCE_NUM: u64 = u64::MAX;
 pub const SEQUENCE_LOCK_TIME_DISABLED: u64 = 1 << 63;
 pub const SEQUENCE_LOCK_TIME_MASK: u64 = 0x00000000ffffffff;
@@ -1551,6 +1584,43 @@ mod bitcoind_tests {
             &sig_cache,
         );
         vm.execute().expect("ML-DSA-65 P2PKH spend should verify");
+    }
+
+    /// kaspa-pq Phase 10: the standalone `verify_mldsa65_with_context` used by
+    /// the DNS overlay (attestation / takeover-token signatures). Exercises a
+    /// real libcrux sign/verify roundtrip and the critical domain-separation
+    /// property — a signature produced under one `ctx` must NOT verify under a
+    /// different `ctx` (so an attestation signature can't be replayed as a tx
+    /// signature, and vice versa).
+    #[test]
+    fn test_verify_mldsa65_with_context() {
+        use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+
+        const ATT_CTX: &[u8] = b"kaspa-pq-v1/att/mldsa65";
+
+        let keypair = mldsa::generate_key_pair([0x5cu8; 32]);
+        let pk = keypair.verification_key.as_ref();
+        let message = [0x9au8; 32];
+        let sig = mldsa::sign(&keypair.signing_key, &message, ATT_CTX, [0x42u8; 32]).expect("sign");
+        let sig_bytes = sig.as_ref();
+
+        // Correct (pk, message, sig, ctx) verifies.
+        assert_eq!(verify_mldsa65_with_context(pk, &message, sig_bytes, ATT_CTX), Ok(true));
+
+        // Wrong context → does not verify (domain separation vs. MLDSA65_TX_CONTEXT).
+        assert_eq!(verify_mldsa65_with_context(pk, &message, sig_bytes, MLDSA65_TX_CONTEXT), Ok(false));
+
+        // Tampered message → does not verify.
+        let mut bad_msg = message;
+        bad_msg[0] ^= 0xff;
+        assert_eq!(verify_mldsa65_with_context(pk, &bad_msg, sig_bytes, ATT_CTX), Ok(false));
+
+        // Length violations are rejected before libcrux is entered.
+        assert_eq!(
+            verify_mldsa65_with_context(&pk[..MLDSA65_PK_LEN - 1], &message, sig_bytes, ATT_CTX),
+            Err(TxScriptError::PubKeyFormat)
+        );
+        assert!(matches!(verify_mldsa65_with_context(pk, &message, &sig_bytes[..10], ATT_CTX), Err(TxScriptError::SigLength(10))));
     }
 
     fn create_spending_transaction(sig_script: Vec<u8>, script_public_key: ScriptPublicKey) -> Transaction {
