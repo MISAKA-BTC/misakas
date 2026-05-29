@@ -1,12 +1,15 @@
 //! kaspa-pq Phase 11 (ADR-0010): in-process validator node service.
 //!
-//! This is the wiring skeleton (PR-11.5). It parses validator CLI configuration,
-//! loads the ML-DSA-65 signing seed, and runs an async heartbeat loop that waits
-//! for the node to be usable and logs validator status. It deliberately does **not**
-//! yet evaluate per-epoch eligibility, sign stake attestations, or submit attestation
-//! shard transactions — those are later Phase 11 slices. The service is registered
-//! only when `--enable-validator` is set, so default node behavior is unchanged.
+//! This is the validator wiring (PR-11.5 skeleton + PR-11.6 key/identity). It
+//! parses validator CLI configuration, loads the ML-DSA-65 signing key and derives
+//! the validator overlay identity (`validator_id = BLAKE2b-512(public_key)`), and
+//! runs an async heartbeat loop that logs validator status. It deliberately does
+//! **not** yet evaluate per-epoch eligibility, sign stake attestations, or submit
+//! attestation shard transactions — those are later Phase 11 slices. The service is
+//! registered only when `--enable-validator` is set, so default node behavior is
+//! unchanged.
 
+use kaspa_consensus_core::dns_finality::validator_id_from_pubkey;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
     info,
@@ -16,6 +19,8 @@ use kaspa_core::{
     },
     trace, warn,
 };
+use kaspa_hashes::Hash64;
+use libcrux_ml_dsa::ml_dsa_65;
 use std::{fmt, fs, str::FromStr, sync::Arc, time::Duration};
 
 const VALIDATOR: &str = "validator-service";
@@ -25,7 +30,7 @@ const VALIDATOR: &str = "validator-service";
 const HEARTBEAT_INTERVAL_SECS: u64 = 30;
 
 /// Length in bytes of the ML-DSA-65 keygen seed consumed by
-/// `KaspaPqMlDsa65KeyPair::from_seed`.
+/// `ml_dsa_65::generate_key_pair` (matches the wallet's `KaspaPqMlDsa65KeyPair`).
 const VALIDATOR_SEED_LEN: usize = 32;
 
 /// Operating mode for the in-process validator service (ADR-0010, operational modes).
@@ -75,8 +80,8 @@ pub struct ValidatorConfig {
 /// Read and parse the validator signing seed from a hex file.
 ///
 /// The file must contain exactly `VALIDATOR_SEED_LEN` bytes encoded as hex
-/// (surrounding whitespace is ignored). The actual ML-DSA-65 keypair is
-/// constructed by a later signing slice; this skeleton only validates and holds the seed.
+/// (surrounding whitespace is ignored). The seed is then expanded into an
+/// ML-DSA-65 keypair by [`ValidatorKey::from_seed`].
 fn load_validator_seed(path: &str) -> Result<[u8; VALIDATOR_SEED_LEN], String> {
     let raw = fs::read_to_string(path).map_err(|e| format!("cannot read validator key file '{path}': {e}"))?;
     let hex = raw.trim();
@@ -84,6 +89,30 @@ fn load_validator_seed(path: &str) -> Result<[u8; VALIDATOR_SEED_LEN], String> {
     faster_hex::hex_decode(hex.as_bytes(), &mut seed)
         .map_err(|e| format!("validator key file '{path}' must contain {VALIDATOR_SEED_LEN} bytes as hex: {e}"))?;
     Ok(seed)
+}
+
+/// Materialised validator signing key: the ML-DSA-65 keypair plus its derived
+/// overlay identity (`validator_id = BLAKE2b-512(public_key)`, per ADR-0008/0012).
+///
+/// Constructed once at startup from the seed file and held for the lifetime of
+/// the service. The `keypair` is the signing material the attestation-issuance
+/// slice will use via `sign_with_context(ATTESTATION_MLDSA65_CONTEXT, …)`; it is
+/// stored now so the identity is derived from exactly the key that will sign.
+struct ValidatorKey {
+    // Read by the attestation-signing slice (PR-11.x); held now so the advertised
+    // `validator_id` is bound to the key that will actually sign.
+    #[allow(dead_code)]
+    keypair: ml_dsa_65::MLDSA65KeyPair,
+    /// Overlay identity advertised to the network and matched against the bond.
+    validator_id: Hash64,
+}
+
+impl ValidatorKey {
+    fn from_seed(seed: [u8; VALIDATOR_SEED_LEN]) -> Self {
+        let keypair = ml_dsa_65::generate_key_pair(seed);
+        let validator_id = validator_id_from_pubkey(keypair.verification_key.as_ref());
+        Self { keypair, validator_id }
+    }
 }
 
 /// Light shape validation of a "txid:index" stake-bond reference.
@@ -102,18 +131,19 @@ pub struct ValidatorService {
     config: ValidatorConfig,
     consensus_manager: Arc<ConsensusManager>,
     tick_service: Arc<TickService>,
-    /// Loaded signing seed, held for later signing slices. `None` until/unless a key is configured.
-    seed: Option<[u8; VALIDATOR_SEED_LEN]>,
+    /// Loaded signing key + derived identity. `None` until/unless a valid key is configured.
+    key: Option<ValidatorKey>,
 }
 
 impl ValidatorService {
     pub fn new(config: ValidatorConfig, consensus_manager: Arc<ConsensusManager>, tick_service: Arc<TickService>) -> Self {
         // Validate configuration eagerly so misconfiguration surfaces at startup, not at first use.
-        let seed = match &config.key_path {
+        let key = match &config.key_path {
             Some(path) => match load_validator_seed(path) {
                 Ok(seed) => {
-                    info!("[{VALIDATOR}] loaded validator signing key from {path}");
-                    Some(seed)
+                    let key = ValidatorKey::from_seed(seed);
+                    info!("[{VALIDATOR}] loaded validator signing key from {path} (validator_id={})", key.validator_id);
+                    Some(key)
                 }
                 Err(err) => {
                     warn!("[{VALIDATOR}] {err} — validator will run without a signing key");
@@ -125,17 +155,21 @@ impl ValidatorService {
         if let Some(Err(err)) = config.stake_bond.as_deref().map(validate_stake_bond_ref) {
             warn!("[{VALIDATOR}] {err}");
         }
-        Self { config, consensus_manager, tick_service, seed }
+        Self { config, consensus_manager, tick_service, key }
     }
 
     pub async fn worker(self: &Arc<ValidatorService>) {
+        let validator_id = match &self.key {
+            Some(key) => key.validator_id.to_string(),
+            None => "none".to_string(),
+        };
         info!(
-            "[{VALIDATOR}] starting (mode={}, signing-key={}, stake-bond={})",
+            "[{VALIDATOR}] starting (mode={}, validator_id={}, stake-bond={})",
             self.config.mode,
-            if self.seed.is_some() { "loaded" } else { "none" },
+            validator_id,
             self.config.stake_bond.as_deref().unwrap_or("none"),
         );
-        if self.config.mode == ValidatorMode::Active && self.seed.is_none() {
+        if self.config.mode == ValidatorMode::Active && self.key.is_none() {
             warn!("[{VALIDATOR}] mode=active but no signing key is loaded; no attestations can be produced");
         }
 
@@ -232,5 +266,25 @@ mod tests {
         assert!(validate_stake_bond_ref("abcd").is_err()); // no index
         assert!(validate_stake_bond_ref(":0").is_err()); // no txid
         assert!(validate_stake_bond_ref("abcd:x").is_err()); // non-numeric index
+    }
+
+    #[test]
+    fn validator_key_from_seed_is_deterministic_and_seed_dependent() {
+        // Same seed → same keypair → same validator_id (keygen is deterministic).
+        let id_a = ValidatorKey::from_seed([0x11u8; VALIDATOR_SEED_LEN]).validator_id;
+        let id_a2 = ValidatorKey::from_seed([0x11u8; VALIDATOR_SEED_LEN]).validator_id;
+        assert_eq!(id_a, id_a2);
+        // Different seed → different identity.
+        let id_b = ValidatorKey::from_seed([0x22u8; VALIDATOR_SEED_LEN]).validator_id;
+        assert_ne!(id_a, id_b);
+    }
+
+    #[test]
+    fn validator_id_matches_blake2b_512_of_public_key() {
+        // The advertised validator_id must equal the canonical
+        // dns_finality::validator_id_from_pubkey over this key's public key.
+        let key = ValidatorKey::from_seed([0x33u8; VALIDATOR_SEED_LEN]);
+        let expected = validator_id_from_pubkey(key.keypair.verification_key.as_ref());
+        assert_eq!(key.validator_id, expected);
     }
 }

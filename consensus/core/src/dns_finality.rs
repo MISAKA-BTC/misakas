@@ -764,6 +764,31 @@ pub struct DnsConfirmation {
 // Byte-deterministic derivations.
 // ---------------------------------------------------------------------
 
+/// Derive a validator's overlay identity (`validator_id`, equal to its
+/// `validator_pubkey_hash`) from its ML-DSA-65 public key, per ADR-0008
+/// §"Hash64 consensus identity" and ADR-0012 (`validator_id ==
+/// BLAKE2b-512(validator_pubkey)`):
+///
+/// ```text
+/// validator_id = BLAKE2b-512(validator_pubkey)   // unkeyed, 64-byte output
+/// ```
+///
+/// This is the **canonical** derivation and the single source of truth for
+/// the overlay: the in-process validator service uses it to advertise its
+/// own identity, and the stateful `StakeBond` validation rule uses it to
+/// enforce `validator_pubkey_hash == validator_id_from_pubkey(validator_pubkey)`
+/// (the `owner_pubkey_hash` is derived identically from the owner key). It is
+/// intentionally distinct from the 32-byte BLAKE2b-256 P2PKH *spend* address
+/// payload: the overlay identity is the full 64-byte digest that the `Hash64`
+/// registry fields require. Unkeyed (no domain separator) to match the ADR
+/// text byte-for-byte; domain separation is unnecessary because the input is a
+/// fixed-length public key, not a multi-field structure.
+pub fn validator_id_from_pubkey(validator_pubkey: &[u8]) -> Hash64 {
+    let mut out = [0u8; 64];
+    out.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(validator_pubkey).finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
 /// Compute the validator-set commitment for `epoch` over the
 /// `validators` set, per ADR-0010 §"Validator-set commitment
 /// derivation":
@@ -3257,6 +3282,23 @@ mod tests {
 
         let actual = validator_set_commitment(5, &v);
         assert_eq!(actual.as_bytes(), expected);
+    }
+
+    #[test]
+    fn validator_id_from_pubkey_is_unkeyed_blake2b_512() {
+        // Canonical derivation = unkeyed BLAKE2b-512 of the public key
+        // (ADR-0008/0012). Pinning it guards against accidental keying or a
+        // switch to the 32-byte P2PKH address payload — either would be a hard fork.
+        let pubkey = [0x42u8; 1952]; // MLDSA65_PK_LEN-sized sample
+        let mut expected = [0u8; 64];
+        expected.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(&pubkey).finalize().as_bytes());
+        let id = validator_id_from_pubkey(&pubkey);
+        assert_eq!(id, Hash64::from_bytes(expected));
+        // Deterministic and input-sensitive.
+        assert_eq!(validator_id_from_pubkey(&pubkey), id);
+        let mut other = pubkey;
+        other[0] ^= 0x01;
+        assert_ne!(validator_id_from_pubkey(&other), id);
     }
 
     // ---- stake_attestation_message --------------------------------

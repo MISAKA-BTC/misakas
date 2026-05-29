@@ -4005,6 +4005,7 @@ dependencies = [
  "kaspa-utils-tower",
  "kaspa-utxoindex",
  "kaspa-wrpc-server",
+ "libcrux-ml-dsa",
  "log",
  "num_cpus",
  "rand 0.8.6",

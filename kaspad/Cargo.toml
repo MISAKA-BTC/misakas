@@ -50,6 +50,7 @@ dirs.workspace = true
 faster-hex.workspace = true
 futures-util.workspace = true
 itertools.workspace = true
+libcrux-ml-dsa.workspace = true
 log.workspace = true
 num_cpus.workspace = true
 rand.workspace = true
