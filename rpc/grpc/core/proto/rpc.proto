@@ -645,6 +645,27 @@ message GetDnsConfirmationResponseMessage {
   RPCError error = 1000;
 }
 
+// kaspa-pq Phase 11 (ADR-0010): the in-process validator service status.
+message GetValidatorStatusRequestMessage {}
+
+message GetValidatorStatusResponseMessage {
+  bool enabled = 1;
+  string mode = 2;
+  bool hasKey = 3;
+  string validatorId = 4;
+  string fundingAddress = 5;
+  bool overlayConfigured = 6;
+  uint64 epoch = 7;
+  string bondStatus = 8;
+  bool inCommittee = 9;
+  bool hasSignedEpoch = 10;
+  uint64 lastSignedEpoch = 11;
+  uint32 status = 12;
+  string statusLabel = 13;
+
+  RPCError error = 1000;
+}
+
 // NotifySinkBlueScoreChangedRequestMessage registers this connection for
 // sinkBlueScoreChanged notifications.
 //

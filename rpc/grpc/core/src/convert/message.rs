@@ -380,6 +380,26 @@ from!(item: RpcResult<&kaspa_rpc_core::GetDnsConfirmationResponse>, protowire::G
     }
 });
 
+from!(&kaspa_rpc_core::GetValidatorStatusRequest, protowire::GetValidatorStatusRequestMessage);
+from!(item: RpcResult<&kaspa_rpc_core::GetValidatorStatusResponse>, protowire::GetValidatorStatusResponseMessage, {
+    Self {
+        enabled: item.enabled,
+        mode: item.mode.clone(),
+        has_key: item.has_key,
+        validator_id: item.validator_id.clone(),
+        funding_address: item.funding_address.clone(),
+        overlay_configured: item.overlay_configured,
+        epoch: item.epoch,
+        bond_status: item.bond_status.clone(),
+        in_committee: item.in_committee,
+        has_signed_epoch: item.has_signed_epoch,
+        last_signed_epoch: item.last_signed_epoch,
+        status: item.status,
+        status_label: item.status_label.clone(),
+        error: None,
+    }
+});
+
 from!(item: &kaspa_rpc_core::BanRequest, protowire::BanRequestMessage, { Self { ip: item.ip.to_string() } });
 from!(_item: RpcResult<&kaspa_rpc_core::BanResponse>, protowire::BanResponseMessage, { Self { error: None } });
 
@@ -918,6 +938,25 @@ try_from!(item: &protowire::GetDnsConfirmationResponseMessage, RpcResult<kaspa_r
         stake_reorg_risk_upper_bound: item.stake_reorg_risk_upper_bound.clone(),
         dns_reorg_risk_conservative_bound: item.dns_reorg_risk_conservative_bound.clone(),
         note: item.note.clone(),
+    }
+});
+
+try_from!(&protowire::GetValidatorStatusRequestMessage, kaspa_rpc_core::GetValidatorStatusRequest);
+try_from!(item: &protowire::GetValidatorStatusResponseMessage, RpcResult<kaspa_rpc_core::GetValidatorStatusResponse>, {
+    Self {
+        enabled: item.enabled,
+        mode: item.mode.clone(),
+        has_key: item.has_key,
+        validator_id: item.validator_id.clone(),
+        funding_address: item.funding_address.clone(),
+        overlay_configured: item.overlay_configured,
+        epoch: item.epoch,
+        bond_status: item.bond_status.clone(),
+        in_committee: item.in_committee,
+        has_signed_epoch: item.has_signed_epoch,
+        last_signed_epoch: item.last_signed_epoch,
+        status: item.status,
+        status_label: item.status_label.clone(),
     }
 });
 

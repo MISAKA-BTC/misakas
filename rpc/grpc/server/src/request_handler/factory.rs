@@ -84,6 +84,7 @@ impl Factory {
                 GetUtxoReturnAddress,
                 GetVirtualChainFromBlockV2,
                 GetDnsConfirmation,
+                GetValidatorStatus,
                 NotifyBlockAdded,
                 NotifyNewBlockTemplate,
                 NotifyFinalityConflict,

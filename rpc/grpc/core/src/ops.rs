@@ -91,6 +91,8 @@ pub enum KaspadPayloadOps {
     GetVirtualChainFromBlockV2,
     // kaspa-pq Phase 10 (ADR-0009)
     GetDnsConfirmation,
+    // kaspa-pq Phase 11 (ADR-0010)
+    GetValidatorStatus,
 
     // Subscription commands for starting/stopping notifications
     NotifyBlockAdded,
