@@ -169,6 +169,7 @@ mod tests {
             amount,
             activation_daa_score: 100,
             unbonding_period_blocks: 1000,
+            owner_reward_spk_payload: [0xdd; 32],
             unbond_request_daa_score: None,
             slashed_at_daa_score: None,
             status,

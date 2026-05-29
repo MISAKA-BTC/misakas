@@ -60,7 +60,7 @@ use kaspa_utils::mem_size::MemSizeEstimator;
 use crate::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SubnetworkId};
 use crate::{
     BlueWorkType,
-    tx::{Transaction, TransactionOutpoint},
+    tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
 };
 
 /// 1952 bytes — matches `kaspa_txscript::MLDSA65_PK_LEN`. Repeated
@@ -314,6 +314,21 @@ pub struct StakeBondPayload {
     /// against the network-wide `DnsParams::unbonding_period_blocks`
     /// floor.
     pub unbonding_period_blocks: u64,
+
+    /// The owner's **declared** ML-DSA-65 P2PKH spend payload —
+    /// `BLAKE2b-256(owner_public_key)`, i.e. the 32-byte
+    /// `Address { version: PubKeyHashMlDsa65 }` payload (ADR-0002).
+    /// This is the **only** field validator rewards (ADR-0013
+    /// coinbase fan-out) are paid to; `owner_pubkey_hash` above is
+    /// the 64-byte BLAKE2b-512 *identity* hash (ADR-0008) and is
+    /// **not** a payable target — the two are different widths and
+    /// the 64→32 reduction is not derivable. See ADR-0013
+    /// Addendum B. A malformed value only misdirects the owner's
+    /// own rewards (self-griefing), so consensus imposes no check
+    /// beyond the fixed 32-byte width guaranteed by the type.
+    /// Appended last to keep the borsh layout change localized
+    /// (pre-activation wire change — no live bond exists).
+    pub owner_reward_spk_payload: [u8; 32],
 }
 
 /// One validator attestation over a selected-chain anchor.
@@ -512,6 +527,11 @@ pub struct StakeBondRecord {
     pub amount: u64,
     pub activation_daa_score: u64,
     pub unbonding_period_blocks: u64,
+
+    /// Copied verbatim from [`StakeBondPayload::owner_reward_spk_payload`]:
+    /// the owner's declared 32-byte ML-DSA-65 P2PKH spend payload that
+    /// ADR-0013 validator rewards are paid to. See ADR-0013 Addendum B.
+    pub owner_reward_spk_payload: [u8; 32],
 
     /// DAA score at which an `Unbonding` request was submitted, or
     /// `None` if still bondable / active / slashed. Combined with
@@ -1722,6 +1742,85 @@ pub fn compute_attestation_reward_payouts(
     AttestationRewardPayout { total_payout_sompi, refunded_sompi }
 }
 
+/// Build the canonical kaspa-pq ML-DSA-65 P2PKH `scriptPublicKey`
+/// for a 32-byte spend payload (ADR-0002 / ADR-0013 Addendum B).
+///
+/// The 37-byte script is
+/// `OpDup ‖ OpBlake2b ‖ OpData32 ‖ <payload32> ‖ OpEqualVerify ‖ OpCheckSigMlDsa65`
+/// at `ScriptPublicKey` version 0. The opcode bytes are pinned as
+/// literals here because `consensus-core` does not depend on full
+/// `kaspa-txscript` (only `kaspa-txscript-errors`); the output is
+/// **byte-identical** to
+/// `kaspa_txscript::pay_to_address_script(&Address::new(_, Version::PubKeyHashMlDsa65, payload))`
+/// and a parity test in the `consensus` crate
+/// (`processes::coinbase`) pins that equality. The `ScriptPublicKey`
+/// bytes are prefix-independent, so coinbase construction and
+/// validation need agree only on the 32-byte payload.
+pub fn p2pkh_mldsa65_spk(owner_reward_spk_payload: &[u8; 32]) -> ScriptPublicKey {
+    // ADR-0002 §"Script template" opcode bytes (see
+    // crypto/txscript/src/opcodes/mod.rs):
+    const OP_DUP: u8 = 0x76;
+    const OP_BLAKE2B: u8 = 0xaa;
+    const OP_DATA32: u8 = 0x20;
+    const OP_EQUAL_VERIFY: u8 = 0x88;
+    const OP_CHECKSIG_MLDSA65: u8 = 0xa6;
+
+    let mut script = Vec::with_capacity(37);
+    script.push(OP_DUP);
+    script.push(OP_BLAKE2B);
+    script.push(OP_DATA32);
+    script.extend_from_slice(owner_reward_spk_payload);
+    script.push(OP_EQUAL_VERIFY);
+    script.push(OP_CHECKSIG_MLDSA65);
+    // P2PKH-ML-DSA spk version is `MAX_SCRIPT_PUBLIC_KEY_VERSION` == 0.
+    ScriptPublicKey::new(0, ScriptVec::from_slice(&script))
+}
+
+/// Build the validator-side coinbase outputs for a block (ADR-0013
+/// §"Coinbase fan-out", as amended by Addendum B): one
+/// `TransactionOutput { value: per_attestation_reward_sompi,
+/// script_public_key: p2pkh_mldsa65_spk(payload) }` per included
+/// attestation, in the **canonical order the caller supplies**
+/// (ADR-0013 fixes that order as `(shard_index, attestation_index)`;
+/// resolving each attestation → its bond's `owner_reward_spk_payload`
+/// is the caller's job).
+///
+/// The per-block inflation cap is applied as a **whole-output**
+/// truncation: at most `max_validator_inflation_per_block_sompi /
+/// per_attestation_reward_sompi` outputs are emitted, dropping the
+/// canonical-order tail rather than ever minting a partial reward.
+/// Under correct parameterisation
+/// (`per_attestation_reward_sompi × max_attestations_per_block ≤ cap`)
+/// the cap never bites and every supplied payload is paid. This is
+/// the binding output-construction rule;
+/// [`compute_attestation_reward_payouts`] is the matching arithmetic
+/// *bound* on the total (the two agree exactly whenever the cap does
+/// not truncate, which is the only correctly-parameterised regime).
+///
+/// Pure and DAG-free so it can be unit-tested in isolation and called
+/// identically from the coinbase **construction** and **validation**
+/// paths (PR-10.5′-b). With `per_attestation_reward_sompi == 0` or an
+/// empty payload slice it returns no outputs — so on every current
+/// network (where the overlay is dormant and no attestation is
+/// included) the validator side of the coinbase is empty and the
+/// coinbase is byte-for-byte unchanged.
+pub fn validator_reward_outputs(
+    per_attestation_reward_sompi: u64,
+    max_validator_inflation_per_block_sompi: u64,
+    reward_spk_payloads: &[[u8; 32]],
+) -> Vec<TransactionOutput> {
+    if per_attestation_reward_sompi == 0 {
+        return Vec::new();
+    }
+    // Whole-output cap: never emit a partial per-attestation reward.
+    let max_payable =
+        (max_validator_inflation_per_block_sompi / per_attestation_reward_sompi).min(reward_spk_payloads.len() as u64) as usize;
+    reward_spk_payloads[..max_payable]
+        .iter()
+        .map(|payload| TransactionOutput::new(per_attestation_reward_sompi, p2pkh_mldsa65_spk(payload)))
+        .collect()
+}
+
 /// Compute the slashing distribution for a slashed bond
 /// (ADR-0013 §"Slashing distribution"). Sums exactly to
 /// `slashed_amount_sompi` — no value created or destroyed by
@@ -2180,6 +2279,7 @@ pub fn stake_bond_record_from_payload(payload: &StakeBondPayload, bond_outpoint:
         amount: payload.amount,
         activation_daa_score: payload.activation_daa_score,
         unbonding_period_blocks: payload.unbonding_period_blocks,
+        owner_reward_spk_payload: payload.owner_reward_spk_payload,
         unbond_request_daa_score: None,
         slashed_at_daa_score: None,
         status: BondStatus::Pending,
@@ -2666,6 +2766,7 @@ mod tests {
             amount: 100_000_000_000,
             activation_daa_score: 5_000,
             unbonding_period_blocks: 100_000,
+            owner_reward_spk_payload: [0xddu8; 32],
         };
         let bytes = borsh::to_vec(&bond).unwrap();
         let back: StakeBondPayload = borsh::from_slice(&bytes).unwrap();
@@ -2730,6 +2831,7 @@ mod tests {
             amount: 100_000_000_000,
             activation_daa_score: 5_000,
             unbonding_period_blocks: 100_000,
+            owner_reward_spk_payload: [0xddu8; 32],
         }
     }
 
@@ -3258,6 +3360,7 @@ mod tests {
             amount: 100_000_000_000,
             activation_daa_score: 5_000,
             unbonding_period_blocks: 100_000,
+            owner_reward_spk_payload: [0xddu8; 32],
             unbond_request_daa_score: Some(123_456),
             slashed_at_daa_score: None,
             status: BondStatus::Unbonding,
@@ -4092,6 +4195,99 @@ mod tests {
         // (The actual refund value would be u128::MAX minus
         // 1_000_000 which exceeds u64; the cast clamps.)
         assert!(r.refunded_sompi <= u64::MAX);
+    }
+
+    // ---- p2pkh_mldsa65_spk + validator_reward_outputs -------------
+
+    #[test]
+    fn p2pkh_mldsa65_spk_byte_layout() {
+        // Pins the exact 37-byte ADR-0002 script + spk version 0.
+        let payload = [0x11u8; 32];
+        let spk = p2pkh_mldsa65_spk(&payload);
+        assert_eq!(spk.version(), 0);
+        let script = spk.script();
+        assert_eq!(script.len(), 37);
+        assert_eq!(script[0], 0x76, "OpDup");
+        assert_eq!(script[1], 0xaa, "OpBlake2b");
+        assert_eq!(script[2], 0x20, "OpData32");
+        assert_eq!(&script[3..35], &payload, "32-byte payload");
+        assert_eq!(script[35], 0x88, "OpEqualVerify");
+        assert_eq!(script[36], 0xa6, "OpCheckSigMlDsa65");
+    }
+
+    #[test]
+    fn p2pkh_mldsa65_spk_distinct_payloads_distinct_scripts() {
+        // The only varying region is script[3..35]; distinct payloads
+        // must yield distinct scripts (no accidental collision).
+        let a = p2pkh_mldsa65_spk(&[0x01u8; 32]);
+        let b = p2pkh_mldsa65_spk(&[0x02u8; 32]);
+        assert_ne!(a, b);
+        // Same payload → identical script (deterministic).
+        assert_eq!(p2pkh_mldsa65_spk(&[0x01u8; 32]), a);
+    }
+
+    #[test]
+    fn validator_reward_outputs_one_per_attestation() {
+        let reward = 1_000_000u64;
+        let cap = 100_000_000u64; // far above reward × count
+        let payloads = [[0x01u8; 32], [0x02u8; 32], [0x03u8; 32]];
+        let outs = validator_reward_outputs(reward, cap, &payloads);
+        assert_eq!(outs.len(), payloads.len());
+        for (out, p) in outs.iter().zip(payloads.iter()) {
+            assert_eq!(out.value, reward);
+            assert_eq!(out.script_public_key, p2pkh_mldsa65_spk(p));
+        }
+    }
+
+    #[test]
+    fn validator_reward_outputs_preserves_canonical_order() {
+        // Outputs must follow the caller's supplied order verbatim.
+        let payloads = [[0x0au8; 32], [0x0bu8; 32], [0x0cu8; 32]];
+        let outs = validator_reward_outputs(10, 1_000, &payloads);
+        let got: Vec<_> = outs.iter().map(|o| o.script_public_key.clone()).collect();
+        let want: Vec<_> = payloads.iter().map(|p| p2pkh_mldsa65_spk(p)).collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn validator_reward_outputs_whole_output_cap_truncates_tail() {
+        // cap = 25, reward = 10 → only 2 whole outputs (20), never a
+        // partial third. Tail (3rd payload) is dropped.
+        let reward = 10u64;
+        let cap = 25u64;
+        let payloads = [[0x01u8; 32], [0x02u8; 32], [0x03u8; 32]];
+        let outs = validator_reward_outputs(reward, cap, &payloads);
+        assert_eq!(outs.len(), 2);
+        assert_eq!(outs.iter().map(|o| o.value).sum::<u64>(), 20);
+        // The two emitted outputs are the canonical-order head.
+        assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&payloads[0]));
+        assert_eq!(outs[1].script_public_key, p2pkh_mldsa65_spk(&payloads[1]));
+    }
+
+    #[test]
+    fn validator_reward_outputs_empty_when_reward_zero() {
+        // reward = 0 → no validator-side outflow regardless of count.
+        let payloads = [[0x01u8; 32], [0x02u8; 32]];
+        assert!(validator_reward_outputs(0, 1_000_000, &payloads).is_empty());
+    }
+
+    #[test]
+    fn validator_reward_outputs_empty_when_no_payloads() {
+        // No included attestations → empty validator side → coinbase
+        // unchanged. This is the every-current-network case.
+        assert!(validator_reward_outputs(1_000_000, 100_000_000, &[]).is_empty());
+    }
+
+    #[test]
+    fn validator_reward_outputs_duplicate_payloads_not_combined() {
+        // ADR-0013 §"Coinbase fan-out": two attestations sharing an
+        // owner payload emit two outputs, never one combined output.
+        let reward = 5u64;
+        let payloads = [[0x07u8; 32], [0x07u8; 32]];
+        let outs = validator_reward_outputs(reward, 1_000, &payloads);
+        assert_eq!(outs.len(), 2);
+        assert_eq!(outs[0], outs[1]);
+        assert_eq!(outs[0].value, reward);
     }
 
     // ---- compute_slashing_distribution ----------------------------

@@ -388,6 +388,7 @@ mod tests {
             amount: 1_000,
             activation_daa_score: 0,
             unbonding_period_blocks: 1,
+            owner_reward_spk_payload: [0xddu8; 32],
         };
         let mut tx = base.clone();
         tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
