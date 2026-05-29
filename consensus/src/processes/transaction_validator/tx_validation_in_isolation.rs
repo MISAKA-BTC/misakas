@@ -1,6 +1,7 @@
 use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
-    DnsTxKind, dns_tx_kind, validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx,
+    DnsTxKind, dns_tx_kind, validate_slashing_evidence_tx, validate_sortition_commit_payload, validate_sortition_reveal_payload,
+    validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_unreveal_slashing_evidence_tx,
 };
 use kaspa_consensus_core::tx::Transaction;
 use std::collections::HashSet;
@@ -174,6 +175,13 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
             // it must declare no outputs so consensus can mint the reporter
             // reward at (slashing_tx_id, 0) without colliding with a tx output.
             DnsTxKind::SlashingEvidence => validate_slashing_evidence_tx(&tx.payload, &tx.outputs),
+            // ADR-0012 commit-reveal sortition: commit / reveal are ordinary
+            // fee-funded carriers (payload + version only); the unreveal-evidence
+            // tx is a slashing carrier and must declare no outputs (same
+            // consensus-mint rationale as SlashingEvidence).
+            DnsTxKind::SortitionCommit => validate_sortition_commit_payload(&tx.payload),
+            DnsTxKind::SortitionReveal => validate_sortition_reveal_payload(&tx.payload),
+            DnsTxKind::UnrevealSlashingEvidence => validate_unreveal_slashing_evidence_tx(&tx.payload, &tx.outputs),
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())
@@ -353,9 +361,13 @@ mod tests {
     fn validate_dns_overlay_subnetwork_tx() {
         use kaspa_consensus_core::dns_finality::{
             DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
-            StakeAttestation, StakeBondPayload, p2pkh_mldsa65_spk,
+            SortitionCommitPayload, SortitionRevealPayload, StakeAttestation, StakeBondPayload, UnrevealSlashingEvidencePayload,
+            p2pkh_mldsa65_spk,
         };
-        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
+        use kaspa_consensus_core::subnets::{
+            SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_SORTITION_COMMIT, SUBNETWORK_ID_SORTITION_REVEAL, SUBNETWORK_ID_STAKE_BOND,
+            SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE,
+        };
         use kaspa_hashes::Hash64;
 
         let params = MAINNET_PARAMS.clone();
@@ -465,12 +477,63 @@ mod tests {
         // SlashingEvidenceHasOutputs. (A zero-value output is independently
         // caught earlier by the `TxOutZero` range check, so the carrier here
         // keeps `base`'s non-zero output to exercise this rule specifically.)
-        let mut tx_with_out = base;
+        let mut tx_with_out = base.clone();
         tx_with_out.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
         tx_with_out.payload = evidence_payload;
         assert_match!(
             tv.validate_tx_in_isolation(&tx_with_out),
             Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::SlashingEvidenceHasOutputs(1)))
+        );
+
+        // ADR-0012 commit-reveal sortition wiring. A commit tx is an ordinary
+        // fee-funded carrier — its payload passes stateless validation and (unlike
+        // the slashing carriers) it is allowed to keep `base`'s non-zero output.
+        let commit = SortitionCommitPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: Hash64::from_bytes([0x42u8; 64]),
+            target_epoch: 99,
+            commit: Hash64::from_bytes([0xbbu8; 64]),
+        };
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_SORTITION_COMMIT;
+        tx.payload = borsh::to_vec(&commit).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // A reveal tx is likewise an ordinary carrier (output allowed).
+        let reveal = SortitionRevealPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: Hash64::from_bytes([0x42u8; 64]),
+            target_epoch: 99,
+            reveal: [0xcdu8; 32],
+        };
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_SORTITION_REVEAL;
+        tx.payload = borsh::to_vec(&reveal).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // An unreveal-evidence tx is a slashing carrier: its reporter reward is a
+        // consensus side-effect mint at (tx_id, 0), so it must declare no outputs.
+        let unreveal = UnrevealSlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            target_epoch: 7,
+            validator_id: Hash64::from_bytes([0x42u8; 64]),
+            commit_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x55u8; 64]), index: 3 },
+            reporter_reward_spk_payload: [0xeeu8; 32],
+        };
+        let unreveal_payload = borsh::to_vec(&unreveal).unwrap();
+        // No outputs → accepted.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE;
+        tx.payload = unreveal_payload.clone();
+        tx.outputs = vec![];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+        // A (non-zero) declared output → rejected, mirroring the equivocation rule.
+        let mut tx = base;
+        tx.subnetwork_id = SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE;
+        tx.payload = unreveal_payload;
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx),
+            Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::UnrevealEvidenceHasOutputs(1)))
         );
     }
 }
