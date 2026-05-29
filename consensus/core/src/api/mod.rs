@@ -10,7 +10,7 @@ use crate::{
     blockstatus::BlockStatus,
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
-    dns_finality::{DnsConfirmation, StakeBondRecord},
+    dns_finality::{DnsConfirmation, StakeBondRecord, ValidatorCommittee},
     errors::{
         block::{BlockProcessResult, RuleError},
         coinbase::CoinbaseResult,
@@ -158,6 +158,15 @@ pub trait ConsensusApi: Send + Sync {
     /// evaluate its own bond status (active / unbonding / slashed). Default `None`
     /// keeps non-overlay ConsensusApi impls (mocks/tests) trivially correct.
     fn get_stake_bond(&self, _bond_outpoint: TransactionOutpoint) -> Option<StakeBondRecord> {
+        None
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0010/0012): the validator committee for the current
+    /// epoch (at the sink), or `None` when the DNS overlay is not configured or the
+    /// committee cannot be selected yet (e.g. commit-reveal sortition before reveals
+    /// are wired). The in-process validator service checks its own `validator_id`
+    /// against `members` to decide attestation eligibility. Default `None`.
+    fn get_validator_committee(&self) -> Option<ValidatorCommittee> {
         None
     }
 

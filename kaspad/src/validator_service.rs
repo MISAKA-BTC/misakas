@@ -187,17 +187,22 @@ impl ValidatorService {
                 break;
             }
 
-            // Heartbeat: report the node tip, the validator's own bond status, and the
-            // DNS overlay view. NOTE: this slice evaluates only the *bond* half of
-            // eligibility — committee membership, signing, and submission are later slices.
+            // Heartbeat: report the node tip, the validator's own bond status, and its
+            // committee membership for the current epoch. NOTE: this evaluates eligibility
+            // (bond active AND in committee) but does not yet sign or submit anything.
             let session = self.consensus_manager.consensus().session().await;
             let sink = session.async_get_sink_daa_score_timestamp().await;
             let dns = session.async_get_dns_confirmation().await;
-            // Only meaningful while the overlay is configured; the gate also returns None
-            // on non-overlay networks, so skip the lookup there to avoid a misleading status.
-            let bond = match (dns.is_some(), self.bond_outpoint) {
-                (true, Some(outpoint)) => session.async_get_stake_bond(outpoint).await,
-                _ => None,
+            // The overlay reads return None on non-overlay networks too, so skip the
+            // lookups there to avoid misleading status lines.
+            let (bond, committee) = if dns.is_some() {
+                let bond = match self.bond_outpoint {
+                    Some(outpoint) => session.async_get_stake_bond(outpoint).await,
+                    None => None,
+                };
+                (bond, session.async_get_validator_committee().await)
+            } else {
+                (None, None)
             };
             drop(session);
 
@@ -210,9 +215,21 @@ impl ValidatorService {
                         }
                         (true, None) => "not-found".to_string(),
                     };
+                    let my_id = self.key.as_ref().map(|k| k.validator_id);
+                    let committee_status = match (&committee, my_id) {
+                        (Some(c), Some(id)) => format!(
+                            "epoch={} in_committee={} (committee={}/active={})",
+                            c.epoch,
+                            c.members.contains(&id),
+                            c.members.len(),
+                            c.active_validator_count
+                        ),
+                        (Some(c), None) => format!("epoch={} no-signing-key (committee={})", c.epoch, c.members.len()),
+                        (None, _) => "unavailable".to_string(),
+                    };
                     info!(
-                        "[{VALIDATOR}] heartbeat: mode={} sink_daa={} bond={} dns_overlay=configured (stage={:?}, dns_confirmed={})",
-                        self.config.mode, sink.daa_score, bond_status, conf.rollout_stage, conf.dns_confirmed
+                        "[{VALIDATOR}] heartbeat: mode={} sink_daa={} bond={} committee=[{}] dns_overlay=configured (stage={:?}, dns_confirmed={})",
+                        self.config.mode, sink.daa_score, bond_status, committee_status, conf.rollout_stage, conf.dns_confirmed
                     );
                 }
                 None => {

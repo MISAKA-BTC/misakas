@@ -57,7 +57,10 @@ use kaspa_consensus_core::{
     blockstatus::BlockStatus,
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
-    dns_finality::{DnsConfirmation, StakeBondRecord, dns_confirmation_from_state},
+    dns_finality::{
+        DnsConfirmation, StakeBondRecord, ValidatorCommittee, ValidatorRecord, dns_confirmation_from_state, is_bond_active_at,
+        select_committee_for_epoch,
+    },
     errors::{
         coinbase::CoinbaseResult,
         consensus::{ConsensusError, ConsensusResult},
@@ -708,6 +711,36 @@ impl ConsensusApi for Consensus {
         self.config.params.dns_params.as_ref()?;
         let record = self.storage.stake_bonds_store.read().get(&bond_outpoint).ok()?;
         Some((*record).clone())
+    }
+
+    fn get_validator_committee(&self) -> Option<ValidatorCommittee> {
+        // kaspa-pq Phase 11 (ADR-0010/0012): select the committee for the current
+        // epoch at the sink. Assembles the active validator set by scanning the
+        // stake-bond store and filtering on `is_bond_active_at(pov_daa)`, then
+        // delegates seed derivation + selection to `select_committee_for_epoch`.
+        let dns_params = self.config.params.dns_params.as_ref()?;
+        let pov_daa_score = self.get_virtual_daa_score();
+        let epoch = pov_daa_score / dns_params.epoch_length_blocks.max(1);
+
+        let mut active: Vec<ValidatorRecord> = Vec::new();
+        {
+            let store = self.storage.stake_bonds_store.read();
+            // `flatten()` drops unreadable entries defensively — a single corrupt bond
+            // must not blank out the whole committee on this read-only path.
+            for (_, record) in store.iterator().flatten() {
+                if is_bond_active_at(&record, pov_daa_score) {
+                    active.push(ValidatorRecord {
+                        validator_id: record.validator_pubkey_hash,
+                        stake_amount: record.amount,
+                        activation_daa_score: record.activation_daa_score,
+                    });
+                }
+            }
+        }
+
+        let committee_size = dns_params.committee_size as usize;
+        let members = select_committee_for_epoch(epoch, dns_params.sortition_mode, &active, committee_size)?;
+        Some(ValidatorCommittee { epoch, pov_daa_score, committee_size, active_validator_count: active.len(), members })
     }
 
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

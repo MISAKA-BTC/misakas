@@ -760,6 +760,27 @@ pub struct DnsConfirmation {
     pub note: String,
 }
 
+/// Per-epoch validator committee view surfaced by the consensus pipeline to the
+/// in-process validator service (and, later, the `getValidatorStatus` RPC).
+///
+/// Computed deterministically from the current sink DAA score, the stake-bond
+/// store, and `DnsParams` (epoch length, committee size, sortition mode). The
+/// `members` list is the canonical (`validator_id`-sorted) committee for `epoch`;
+/// a validator is eligible to attest iff its `validator_id` appears in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatorCommittee {
+    /// Epoch this committee governs (`= pov_daa_score / epoch_length_blocks`).
+    pub epoch: u64,
+    /// Sink DAA score the active set was evaluated at (point of view).
+    pub pov_daa_score: u64,
+    /// `committee_size` parameter used for selection this epoch.
+    pub committee_size: usize,
+    /// Number of active validators considered for selection at `pov_daa_score`.
+    pub active_validator_count: usize,
+    /// Selected committee, sorted ascending by `validator_id`.
+    pub members: Vec<Hash64>,
+}
+
 // ---------------------------------------------------------------------
 // Byte-deterministic derivations.
 // ---------------------------------------------------------------------
@@ -1087,6 +1108,27 @@ pub fn select_committee(epoch_seed: Hash64, active: &[ValidatorRecord], committe
     let mut ids: Vec<Hash64> = ranked.into_iter().map(|(_, id)| id).collect();
     ids.sort();
     ids
+}
+
+/// Select the committee for `epoch` under the network's [`SortitionMode`],
+/// deriving the epoch seed appropriately and delegating to [`select_committee`].
+///
+/// Returns `None` for [`SortitionMode::CommitReveal`]: that seed is built from
+/// revealed `SortitionRevealPayload`s, which the validator-service path does not
+/// yet read (a later Phase 11 slice). [`SortitionMode::Deterministic`] (simnet /
+/// devnet / pre-switchover testnet) is fully supported via
+/// [`derive_epoch_seed_deterministic`].
+pub fn select_committee_for_epoch(
+    epoch: u64,
+    sortition_mode: SortitionMode,
+    active: &[ValidatorRecord],
+    committee_size: usize,
+) -> Option<Vec<Hash64>> {
+    let epoch_seed = match sortition_mode {
+        SortitionMode::Deterministic => derive_epoch_seed_deterministic(epoch),
+        SortitionMode::CommitReveal => return None,
+    };
+    Some(select_committee(epoch_seed, active, committee_size))
 }
 
 // ---------------------------------------------------------------------
@@ -3810,6 +3852,16 @@ mod tests {
         let mut sorted = chosen.clone();
         sorted.sort();
         assert_eq!(chosen, sorted);
+    }
+
+    #[test]
+    fn select_committee_for_epoch_deterministic_vs_commit_reveal() {
+        let active: Vec<_> = (0u8..10).map(|i| fixture_validator(i, 100)).collect();
+        // Deterministic: Some, and equal to the explicit-seed path for this epoch.
+        let det = select_committee_for_epoch(7, SortitionMode::Deterministic, &active, 4);
+        assert_eq!(det, Some(select_committee(derive_epoch_seed_deterministic(7), &active, 4)));
+        // CommitReveal: seed needs revealed commits (later slice) → None.
+        assert!(select_committee_for_epoch(7, SortitionMode::CommitReveal, &active, 4).is_none());
     }
 
     #[test]
