@@ -27,6 +27,7 @@ use kaspa_consensus_core::{
     acceptance_data::{AcceptedTxEntry, MergesetBlockAcceptanceData},
     api::args::TransactionValidationArgs,
     coinbase::*,
+    dns_finality::ActiveBondView,
     hashing,
     header::Header,
     muhash::MuHashExtensions,
@@ -183,6 +184,11 @@ impl VirtualStateProcessor {
         &self,
         ctx: &mut UtxoProcessingContext,
         selected_parent_utxo_view: &V,
+        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B): the bond set as-of this
+        // block's selected parent, for the validator-reward coinbase fan-out.
+        // Threaded in now (PR-10.5′-b2a) but not yet consumed — the coinbase
+        // fan-out validation lands in PR-10.5′-b3.
+        _selected_parent_bond_view: &ActiveBondView,
         header: &Header,
     ) -> BlockProcessResult<()> {
         // Verify header UTXO commitment

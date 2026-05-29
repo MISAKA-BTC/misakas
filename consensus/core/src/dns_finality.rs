@@ -2409,6 +2409,15 @@ impl ActiveBondView {
         Self::default()
     }
 
+    /// Build a view from an existing set of `(bond_outpoint, record)` pairs —
+    /// used to seed the per-block walk from the virtual-tip bond set (the
+    /// `StakeBonds` store snapshot at the previous sink) in `resolve_virtual`.
+    /// Records are inserted verbatim (including any persisted
+    /// `slashed_at_daa_score` / `status`), so the seed matches the store.
+    pub fn from_records(records: impl IntoIterator<Item = (TransactionOutpoint, StakeBondRecord)>) -> Self {
+        Self { bonds: records.into_iter().collect() }
+    }
+
     /// Apply one block's `bond_diff` (mutations in tx order). Mirrors the
     /// `ChainPath.added` branch of `stage_dns_bond_mutations`.
     pub fn apply(&mut self, mutations: &[BondMutation]) {
@@ -3274,6 +3283,21 @@ mod tests {
         // Unknown outpoint resolves to None.
         let other = TransactionOutpoint::new(Hash64::from_bytes([0x22; 64]), 0);
         assert!(view.active_bond_at(&other, 10_000).is_none());
+    }
+
+    #[test]
+    fn active_bond_view_from_records_seeds_verbatim() {
+        // Seeding from the store snapshot must preserve each record's fields
+        // (incl. an already-slashed one) and resolve them correctly.
+        let op1 = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let op2 = TransactionOutpoint::new(Hash64::from_bytes([0x22; 64]), 0);
+        let mut slashed = fixture_bond_record(op2);
+        slashed.slashed_at_daa_score = Some(1);
+        slashed.status = BondStatus::Slashed;
+        let view = ActiveBondView::from_records([(op1, fixture_bond_record(op1)), (op2, slashed)]);
+        assert_eq!(view.len(), 2);
+        assert!(view.active_bond_at(&op1, 10_000).is_some());
+        assert!(view.active_bond_at(&op2, 10_000).is_none()); // seeded as slashed
     }
 
     #[test]

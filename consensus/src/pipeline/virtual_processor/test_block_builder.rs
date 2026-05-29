@@ -45,9 +45,17 @@ impl TestBlockBuilder {
         let finality_point = ORIGIN; // No real finality point since we are not actually building virtual here
         let sink = virtual_state.ghostdag_data.selected_parent;
         let mut accumulated_diff = virtual_state.utxo_diff.clone().to_reversed();
+        let mut accumulated_bond_view = self.initial_active_bond_view();
         // Search for the sink block from the PoV of this virtual
-        let (pov_sink, virtual_parent_candidates) =
-            self.sink_search_algorithm(&virtual_read, &mut accumulated_diff, sink, parents, finality_point, pruning_point);
+        let (pov_sink, virtual_parent_candidates) = self.sink_search_algorithm(
+            &virtual_read,
+            &mut accumulated_diff,
+            &mut accumulated_bond_view,
+            sink,
+            parents,
+            finality_point,
+            pruning_point,
+        );
         let (pov_virtual_parents, pov_virtual_ghostdag_data) =
             self.pick_virtual_parents(pov_sink, virtual_parent_candidates, pruning_point);
         let pov_sink_multiset = self.utxo_multisets_store.get(pov_sink).unwrap();

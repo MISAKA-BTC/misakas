@@ -59,8 +59,8 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     config::genesis::GenesisBlock,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, AttestationContribution, BondMutation, BondStatus, DnsParams, DnsReorgInputs, DnsReorgMode,
-        DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
+        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, AttestationContribution, BondMutation, BondStatus, DnsParams, DnsReorgInputs,
+        DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
         attestations_from_accepted_txs, bond_mutations_from_accepted_txs, check_dns_reorg_rule, compute_stake_score,
         is_bond_active_at, stake_attestation_message, total_active_stake_by_epoch,
     },
@@ -315,8 +315,25 @@ impl VirtualStateProcessor {
         let prev_sink = prev_state.ghostdag_data.selected_parent;
         let mut accumulated_diff = prev_state.utxo_diff.clone().to_reversed();
 
-        let (new_sink, virtual_parent_candidates) =
-            self.sink_search_algorithm(&virtual_read, &mut accumulated_diff, prev_sink, tips, finality_point, pruning_point);
+        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B): the per-block active-bond
+        // view, walked in lockstep with `accumulated_diff` so that at each
+        // chain-block UTXO verification it equals the bond set as-of that
+        // block's selected parent (the deterministic, as-of-block bond
+        // resolution the validator-reward coinbase fan-out needs — PR-10.5′-b3).
+        // Seeded from the `StakeBonds` store snapshot (= state at `prev_sink`);
+        // empty + untouched on networks without the overlay (`dns_params` None).
+        // No consumer yet (b2a): `verify_expected_utxo_state` receives it inert.
+        let mut accumulated_bond_view = self.initial_active_bond_view();
+
+        let (new_sink, virtual_parent_candidates) = self.sink_search_algorithm(
+            &virtual_read,
+            &mut accumulated_diff,
+            &mut accumulated_bond_view,
+            prev_sink,
+            tips,
+            finality_point,
+            pruning_point,
+        );
         let (virtual_parents, virtual_ghostdag_data) = self.pick_virtual_parents(new_sink, virtual_parent_candidates, pruning_point);
         assert_eq!(virtual_ghostdag_data.selected_parent, new_sink);
 
@@ -400,9 +417,17 @@ impl VirtualStateProcessor {
         &self,
         stores: &VirtualStores,
         diff: &mut UtxoDiff,
+        bond_view: &mut ActiveBondView,
         from: BlockHash,
         to: BlockHash,
     ) -> BlockHash {
+        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.1): walk the active-bond
+        // view in lockstep with `diff` so it always equals the bond set as-of
+        // the block whose UTXO state `diff` represents. No-op on networks
+        // without the overlay. No consumer yet (b2a) — the view is passed to
+        // `verify_expected_utxo_state` inert.
+        let track_bonds = self.dns_params.is_some();
+
         // Avoid reorging if disqualified status is already known
         if self.statuses_store.read().get(to).unwrap() == StatusDisqualifiedFromChain {
             return from;
@@ -420,6 +445,11 @@ impl VirtualStateProcessor {
             let mergeset_diff = self.utxo_diffs_store.get(current).unwrap();
             // Apply the diff in reverse
             diff.with_diff_in_place(&mergeset_diff.as_reversed()).unwrap();
+            if track_bonds {
+                // Mirror the reverse on the bond view. `current` is leaving the
+                // selected chain, so its acceptance data is committed.
+                bond_view.revert(&self.dns_bond_mutations_for_chain_block(current));
+            }
         }
 
         let split_point = split_point.expect("chain iterator was expected to reach the reorg split point");
@@ -447,6 +477,11 @@ impl VirtualStateProcessor {
                 Ok(mergeset_diff) => {
                     diff.with_diff_in_place(mergeset_diff.deref()).unwrap();
                     diff_point = current;
+                    if track_bonds {
+                        // `current` is an already-validated chain block joining
+                        // the diff; its acceptance data is committed.
+                        bond_view.apply(&self.dns_bond_mutations_for_chain_block(current));
+                    }
                 }
                 Err(StoreError::KeyNotFound(_)) => {
                     if self.statuses_store.read().get(current).unwrap() == StatusDisqualifiedFromChain {
@@ -464,7 +499,9 @@ impl VirtualStateProcessor {
                     let mut ctx = UtxoProcessingContext::new(mergeset_data.into(), selected_parent_multiset_hash);
 
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, pov_daa_score);
-                    let res = self.verify_expected_utxo_state(&mut ctx, &selected_parent_utxo_view, &header);
+                    // `bond_view` currently equals the bond set as-of `selected_parent`
+                    // (the verify point's selected-parent view — Addendum B §B.3).
+                    let res = self.verify_expected_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, &header);
 
                     if let Err(rule_error) = res {
                         info!("Block {} is disqualified from virtual chain: {}", current, rule_error);
@@ -477,6 +514,13 @@ impl VirtualStateProcessor {
                         diff.with_diff_in_place(&ctx.mergeset_diff).unwrap();
                         // Update the diff point
                         diff_point = current;
+                        if track_bonds {
+                            // Advance the bond view by THIS block's mutations,
+                            // derived from the in-memory acceptance data (its
+                            // store entry is written by the commit just below).
+                            let bond_muts = self.dns_bond_mutations_from_acceptance(&ctx.mergeset_acceptance_data, pov_daa_score);
+                            bond_view.apply(&bond_muts);
+                        }
                         // Commit UTXO data for current chain block
                         self.commit_utxo_state(
                             current,
@@ -676,6 +720,21 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// Seeds the per-block [`ActiveBondView`] walk (ADR-0009 Addendum B §B.1)
+    /// from the `StakeBonds` store snapshot — which, at the start of
+    /// `resolve_virtual`, reflects the bond set as-of the previous sink (the
+    /// same anchor `accumulated_diff` starts from). Returns an empty view on
+    /// networks without the overlay (`dns_params` is `None`), so the bond-view
+    /// walk is a no-op there.
+    pub(super) fn initial_active_bond_view(&self) -> ActiveBondView {
+        if self.dns_params.is_none() {
+            return ActiveBondView::new();
+        }
+        ActiveBondView::from_records(
+            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (rec.bond_outpoint, (*rec).clone()))),
+        )
+    }
+
     /// Re-derives the [`BondMutation`]s a chain block contributed, from its
     /// retained acceptance data (ADR-0009 Addendum A.4). Deterministic, so it
     /// serves both apply (added) and revert (removed).
@@ -688,7 +747,15 @@ impl VirtualStateProcessor {
     /// (`acceptance_data_store` → `block_transactions_store[index_within_block]`).
     /// Shared by the bond-population (A.4) and StakeScore-aggregation (A.5) passes.
     fn accepted_txs_of_chain_block(&self, chain_block: BlockHash) -> Vec<Transaction> {
-        let acceptance_data = self.acceptance_data_store.get(chain_block).unwrap();
+        self.accepted_txs_from_acceptance_data(&self.acceptance_data_store.get(chain_block).unwrap())
+    }
+
+    /// Resolves accepted transactions from already-loaded acceptance data
+    /// (`block_transactions_store[index_within_block]`). Split out so the
+    /// per-block bond-view walk (ADR-0009 Addendum B) can derive a *not-yet-
+    /// committed* block's mutations from the in-memory `ctx.mergeset_acceptance_data`,
+    /// whose `acceptance_data_store` entry does not exist until `commit_utxo_state`.
+    fn accepted_txs_from_acceptance_data(&self, acceptance_data: &AcceptanceData) -> Vec<Transaction> {
         let mut txs = Vec::new();
         for mergeset in acceptance_data.iter() {
             let block_txs = self.block_transactions_store.get(mergeset.block_hash).unwrap();
@@ -699,6 +766,15 @@ impl VirtualStateProcessor {
             }
         }
         txs
+    }
+
+    /// [`BondMutation`]s for a block whose acceptance data is held in-memory
+    /// (the `KeyNotFound` chain block currently being UTXO-validated, before
+    /// its `acceptance_data_store` entry is committed). Mirrors
+    /// [`Self::dns_bond_mutations_for_chain_block`] but sources the accepted
+    /// txs from the provided acceptance data instead of the store.
+    fn dns_bond_mutations_from_acceptance(&self, acceptance_data: &AcceptanceData, accepted_daa_score: u64) -> Vec<BondMutation> {
+        bond_mutations_from_accepted_txs(&self.accepted_txs_from_acceptance_data(acceptance_data), accepted_daa_score)
     }
 
     /// kaspa-pq Phase 10 (ADR-0009 Addendum A.5): recompute the DNS StakeScore
@@ -904,6 +980,7 @@ impl VirtualStateProcessor {
         &self,
         stores: &VirtualStores,
         diff: &mut UtxoDiff,
+        bond_view: &mut ActiveBondView,
         prev_sink: BlockHash,
         tips: Vec<BlockHash>,
         finality_point: BlockHash,
@@ -926,7 +1003,7 @@ impl VirtualStateProcessor {
         loop {
             let candidate = heap.pop().expect("valid sink must exist").hash;
             if self.reachability_service.is_chain_ancestor_of(finality_point, candidate) {
-                diff_point = self.calculate_utxo_state_relatively(stores, diff, diff_point, candidate);
+                diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, candidate);
                 if diff_point == candidate {
                     // This indicates that candidate has valid UTXO state and that `diff` represents its diff from virtual
 
