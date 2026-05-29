@@ -588,31 +588,6 @@ Do you confirm? (y/n)";
     let consensus_manager = Arc::new(ConsensusManager::new(consensus_factory));
     let consensus_monitor = Arc::new(ConsensusMonitor::new(processing_counters.clone(), tick_service.clone()));
 
-    // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service.
-    // Built only when `--enable-validator` is set, so default node behavior is unchanged.
-    let validator_service = if args.enable_validator {
-        let mode = match args.validator_mode.as_deref() {
-            Some(s) => s.parse::<ValidatorMode>().unwrap_or_else(|err| {
-                warn!("{err}; falling back to observer mode");
-                ValidatorMode::default()
-            }),
-            None => ValidatorMode::default(),
-        };
-        // Equivocation-safety log lives beside the per-network data dir (NOT inside it),
-        // so it survives a `--reset-db` and still binds the validator to its network.
-        let state_path = app_dir.join(network.to_prefixed()).join("validator-state.json");
-        let validator_config = ValidatorConfig {
-            mode,
-            key_path: args.validator_key.clone(),
-            stake_bond: args.stake_bond.clone(),
-            state_path: Some(state_path),
-            address_prefix: config.prefix(),
-        };
-        Some(Arc::new(ValidatorService::new(validator_config, consensus_manager.clone(), tick_service.clone())))
-    } else {
-        None
-    };
-
     let perf_monitor_builder = PerfMonitorBuilder::new()
         .with_fetch_interval(Duration::from_secs(args.perf_metrics_interval_sec))
         .with_tick_service(tick_service.clone());
@@ -680,6 +655,33 @@ Do you confirm? (y/n)";
         hub.clone(),
         mining_rule_engine.clone(),
     ));
+
+    // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Built only
+    // when `--enable-validator` is set (so default node behavior is unchanged) and after
+    // `flow_context`, which it uses to submit attestation-shard transactions.
+    let validator_service = if args.enable_validator {
+        let mode = match args.validator_mode.as_deref() {
+            Some(s) => s.parse::<ValidatorMode>().unwrap_or_else(|err| {
+                warn!("{err}; falling back to observer mode");
+                ValidatorMode::default()
+            }),
+            None => ValidatorMode::default(),
+        };
+        // Equivocation-safety log lives beside the per-network data dir (NOT inside it),
+        // so it survives a `--reset-db` and still binds the validator to its network.
+        let state_path = app_dir.join(network.to_prefixed()).join("validator-state.json");
+        let validator_config = ValidatorConfig {
+            mode,
+            key_path: args.validator_key.clone(),
+            stake_bond: args.stake_bond.clone(),
+            state_path: Some(state_path),
+            address_prefix: config.prefix(),
+        };
+        Some(Arc::new(ValidatorService::new(validator_config, consensus_manager.clone(), tick_service.clone(), flow_context.clone())))
+    } else {
+        None
+    };
+
     let p2p_service = Arc::new(P2pService::new(
         flow_context.clone(),
         connect_peers,

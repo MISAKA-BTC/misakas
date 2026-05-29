@@ -1,13 +1,16 @@
 //! kaspa-pq Phase 11 (ADR-0010): in-process validator node service.
 //!
-//! This is the validator wiring (PR-11.5 skeleton + PR-11.6 key/identity). It
-//! parses validator CLI configuration, loads the ML-DSA-65 signing key and derives
-//! the validator overlay identity (`validator_id = BLAKE2b-512(public_key)`), and
-//! runs an async heartbeat loop that logs validator status. It deliberately does
-//! **not** yet evaluate per-epoch eligibility, sign stake attestations, or submit
-//! attestation shard transactions — those are later Phase 11 slices. The service is
-//! registered only when `--enable-validator` is set, so default node behavior is
-//! unchanged.
+//! Loads the ML-DSA-65 signing key (deriving the overlay `validator_id =
+//! BLAKE2b-512(public_key)` and the P2PKH-ML-DSA funding address) and runs an async
+//! heartbeat that, per epoch: evaluates eligibility (bond active AND in the committee),
+//! and — when eligible — builds + signs a stake attestation, wraps it in a fee-funded
+//! `StakeAttestationShard` transaction (funded from a UTXO at the validator's own
+//! address), and, in `Active` mode, submits it via `flow_context`. A persistent
+//! signed-epoch log (ADR-0011) guards against double-signing across restarts.
+//!
+//! The service is registered only when `--enable-validator` is set, so default node
+//! behavior is unchanged; `Observer`/`Standby` modes never submit. The DNS overlay
+//! reorg gate itself remains dormant until activated per-network.
 
 use blake2b_simd::Params as Blake2bParams;
 use kaspa_addresses::{Address, Prefix, Version};
@@ -15,7 +18,7 @@ use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
     ATTESTATION_MLDSA65_CONTEXT, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
     StakeAttestationShardPayload, ValidatorAttestationTarget, check_signed_epoch_record, effective_bond_status, is_bond_active_at,
-    signature_fingerprint, single_attestation_shard, stake_attestation_shard_tx, validator_id_from_pubkey,
+    signature_fingerprint, single_attestation_shard, validator_id_from_pubkey,
 };
 use kaspa_consensus_core::hashing::sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
@@ -31,7 +34,11 @@ use kaspa_core::{
     trace, warn,
 };
 use kaspa_hashes::Hash64;
-use kaspa_txscript::{MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT, script_builder::ScriptBuilder, verify_mldsa65_with_context};
+use kaspa_mining::mempool::tx::Orphan;
+use kaspa_p2p_flows::flow_context::FlowContext;
+use kaspa_txscript::{
+    MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder, verify_mldsa65_with_context,
+};
 use libcrux_ml_dsa::ml_dsa_65;
 use rand::RngCore;
 use std::{
@@ -52,6 +59,16 @@ const HEARTBEAT_INTERVAL_SECS: u64 = 30;
 /// Length in bytes of the ML-DSA-65 keygen seed consumed by
 /// `ml_dsa_65::generate_key_pair` (matches the wallet's `KaspaPqMlDsa65KeyPair`).
 const VALIDATOR_SEED_LEN: usize = 32;
+
+/// Fixed fee (sompi) paid by an attestation-shard transaction in this first cut.
+/// TODO: derive from the transaction's compute mass + the network minimum-fee rate.
+const ATTESTATION_SHARD_TX_FEE_SOMPI: u64 = 10_000;
+
+/// Bounded paginated scan of the virtual UTXO set when locating a funding UTXO at the
+/// validator's address. This is a full-set scan (NOT address-indexed); the utxoindex is
+/// the production optimization. Caps keep a large UTXO set from stalling the heartbeat.
+const FUNDING_SCAN_CHUNK_SIZE: usize = 1000;
+const MAX_FUNDING_SCAN_CHUNKS: usize = 64;
 
 /// Operating mode for the in-process validator service (ADR-0010, operational modes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -175,8 +192,7 @@ impl ValidatorKey {
     /// `<sig ‖ sighash-type> <pubkey>` so it satisfies `OpCheckSigMlDsa65`.
     ///
     /// `fee` is taken as a parameter; choosing it from the mass-based minimum and
-    /// discovering the funding UTXO are the caller's job (the submission slice).
-    #[allow(dead_code)] // wired by the submission slice (5b-3); exercised by tests today.
+    /// discovering the funding UTXO are the caller's job.
     fn build_funded_shard_tx(
         &self,
         shard: &StakeAttestationShardPayload,
@@ -306,6 +322,8 @@ pub struct ValidatorService {
     config: ValidatorConfig,
     consensus_manager: Arc<ConsensusManager>,
     tick_service: Arc<TickService>,
+    /// Used to submit attestation-shard transactions to the local mempool + p2p.
+    flow_context: Arc<FlowContext>,
     /// Loaded signing key + derived identity. `None` until/unless a valid key is configured.
     key: Option<ValidatorKey>,
     /// Parsed stake-bond outpoint, if `--stake-bond` was provided and well-formed.
@@ -316,7 +334,12 @@ pub struct ValidatorService {
 }
 
 impl ValidatorService {
-    pub fn new(config: ValidatorConfig, consensus_manager: Arc<ConsensusManager>, tick_service: Arc<TickService>) -> Self {
+    pub fn new(
+        config: ValidatorConfig,
+        consensus_manager: Arc<ConsensusManager>,
+        tick_service: Arc<TickService>,
+        flow_context: Arc<FlowContext>,
+    ) -> Self {
         // Validate configuration eagerly so misconfiguration surfaces at startup, not at first use.
         let key = match &config.key_path {
             Some(path) => match load_validator_seed(path) {
@@ -362,7 +385,7 @@ impl ValidatorService {
             },
             _ => None,
         };
-        Self { config, consensus_manager, tick_service, key, bond_outpoint, signed_epochs: Mutex::new(signed_epochs) }
+        Self { config, consensus_manager, tick_service, flow_context, key, bond_outpoint, signed_epochs: Mutex::new(signed_epochs) }
     }
 
     pub async fn worker(self: &Arc<ValidatorService>) {
@@ -442,10 +465,10 @@ impl ValidatorService {
                         self.config.mode, sink.daa_score, bond_status, committee_status, conf.rollout_stage, conf.dns_confirmed
                     );
 
-                    // Eligible: sign under the equivocation guard and build the shard tx
-                    // (DRY-RUN — verified locally and logged, but not gossiped/submitted yet).
+                    // Eligible: fund + sign + (in Active mode) submit the attestation shard tx,
+                    // under the equivocation guard.
                     if let (Some(target), Some(key), Some(outpoint)) = (&attestation, &self.key, self.bond_outpoint) {
-                        self.guarded_sign(target, key, outpoint);
+                        self.try_attest(target, key, outpoint).await;
                     }
                 }
                 None => {
@@ -457,16 +480,71 @@ impl ValidatorService {
         trace!("[{VALIDATOR}] worker exiting");
     }
 
-    /// Equivocation-guarded attestation signing (ADR-0011). Consults the persistent
-    /// signed-epoch log and signs only on [`SignedEpochCheckOutcome::Allow`], persisting
-    /// the record before returning; refuses on `Block` (would be slashable) and skips on
-    /// `AllowRebroadcast` (already signed this exact target). DRY-RUN: the signature is
-    /// verified locally and logged but NOT gossiped/submitted (that is a later slice).
-    fn guarded_sign(&self, target: &ValidatorAttestationTarget, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
+    /// Async attestation cycle for an eligible epoch: discover a funding UTXO, build the
+    /// guarded + signed shard transaction, and — in `Active` mode — submit it. No-ops
+    /// cleanly when there is no funding UTXO or the equivocation guard blocks/skips.
+    async fn try_attest(&self, target: &ValidatorAttestationTarget, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
+        let funding = self.find_funding_utxo(key).await;
+        let Some(tx) = self.guarded_build_funded(target, key, bond_outpoint, funding) else {
+            return;
+        };
+        let tx_id = tx.id();
+        if self.config.mode == ValidatorMode::Active {
+            // Same path the RPC `submitTransaction` uses: validate + insert to mempool, then broadcast.
+            let session = self.consensus_manager.consensus().unguarded_session();
+            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                Ok(()) => info!("[{VALIDATOR}] submitted attestation shard tx {tx_id} for epoch {}", target.epoch),
+                Err(e) => warn!("[{VALIDATOR}] submit of attestation shard tx {tx_id} (epoch {}) failed: {e}", target.epoch),
+            }
+        } else {
+            info!(
+                "[{VALIDATOR}] built funded attestation shard tx {tx_id} for epoch {} — mode={} so NOT submitting",
+                target.epoch, self.config.mode
+            );
+        }
+    }
+
+    /// Scan the virtual UTXO set for a UTXO locked to the validator's own P2PKH-ML-DSA
+    /// address that covers the attestation-shard fee, returning the first match. NOTE: this
+    /// is a bounded full-set scan (NOT address-indexed); the utxoindex is the production
+    /// optimization.
+    async fn find_funding_utxo(&self, key: &ValidatorKey) -> Option<(TransactionOutpoint, UtxoEntry)> {
+        let funding_spk = pay_to_address_script(&key.funding_address(self.config.address_prefix));
+        let session = self.consensus_manager.consensus().session().await;
+        let mut from: Option<TransactionOutpoint> = None;
+        for _ in 0..MAX_FUNDING_SCAN_CHUNKS {
+            let chunk = session.async_get_virtual_utxos(from, FUNDING_SCAN_CHUNK_SIZE, from.is_some()).await;
+            if chunk.is_empty() {
+                break;
+            }
+            from = chunk.last().map(|(outpoint, _)| *outpoint);
+            if let Some(found) = chunk
+                .into_iter()
+                .find(|(_, entry)| entry.script_public_key == funding_spk && entry.amount > ATTESTATION_SHARD_TX_FEE_SOMPI)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Equivocation-guarded build of the funded attestation shard tx (ADR-0011). Only on
+    /// [`SignedEpochCheckOutcome::Allow`] does it sign the attestation, self-verify it,
+    /// persist the signed-epoch record (before any submission), and return the funded
+    /// transaction. Refuses on `Block` (would be slashable), skips on `AllowRebroadcast`
+    /// (already signed this target this epoch), and returns `None` when no funding UTXO is
+    /// available — so the next tick retries once funds arrive.
+    fn guarded_build_funded(
+        &self,
+        target: &ValidatorAttestationTarget,
+        key: &ValidatorKey,
+        bond_outpoint: TransactionOutpoint,
+        funding: Option<(TransactionOutpoint, UtxoEntry)>,
+    ) -> Option<Transaction> {
         let mut guard = self.signed_epochs.lock().unwrap();
         let Some(store) = guard.as_mut() else {
             trace!("[{VALIDATOR}] eligible for epoch {} but no equivocation-safety log; not signing", target.epoch);
-            return;
+            return None;
         };
         // `signature_fingerprint` is not part of the equivocation predicate, so a
         // placeholder is fine for the pre-sign check; the stored record carries the real one.
@@ -477,29 +555,33 @@ impl ValidatorService {
             signature_fingerprint: Hash64::from_bytes([0u8; 64]),
         };
         match store.check(&candidate) {
-            SignedEpochCheckOutcome::Block => warn!(
-                "[{VALIDATOR}] EQUIVOCATION BLOCKED: epoch {} already signed a different target; refusing to sign {}",
-                target.epoch, target.target_hash
-            ),
+            SignedEpochCheckOutcome::Block => {
+                warn!(
+                    "[{VALIDATOR}] EQUIVOCATION BLOCKED: epoch {} already signed a different target; refusing to sign {}",
+                    target.epoch, target.target_hash
+                );
+                None
+            }
             SignedEpochCheckOutcome::AllowRebroadcast => {
-                info!("[{VALIDATOR}] epoch {} already signed this target; rebroadcast-safe, not re-signing", target.epoch)
+                info!("[{VALIDATOR}] epoch {} already signed this target; rebroadcast-safe, not re-signing", target.epoch);
+                None
             }
             SignedEpochCheckOutcome::Allow => {
+                let Some((funding_outpoint, funding_entry)) = funding else {
+                    info!(
+                        "[{VALIDATOR}] eligible for epoch {} but no funding UTXO at the validator address; skipping (send funds to enable submission)",
+                        target.epoch
+                    );
+                    return None;
+                };
+                // Sign the attestation, self-verify (never broadcast a bad sig), then build
+                // the fee-funded shard tx around it.
                 let digest = target.message.as_bytes();
                 let signature = key.sign_attestation(&digest);
-                let verified = key.verify_attestation(&digest, &signature);
-                let record = SignedEpochRecord { signature_fingerprint: signature_fingerprint(&signature), ..candidate };
-                // Persist BEFORE any (future) gossip. If the flush fails, do not advance —
-                // retrying next tick is safe, but signing without a durable record is not.
-                if let Err(e) = store.record_and_flush(record) {
-                    warn!("[{VALIDATOR}] failed to persist signed-epoch record (not advancing): {e}");
-                    return;
+                if !key.verify_attestation(&digest, &signature) {
+                    warn!("[{VALIDATOR}] self-verify of attestation signature failed for epoch {}; not submitting", target.epoch);
+                    return None;
                 }
-
-                // Build the attestation shard transaction (the exact artifact a future
-                // submission slice will broadcast). NOT submitted: admitting a zero-input
-                // overlay tx to the mempool (fee-funded input vs. a consensus exemption) is
-                // an unresolved design question (ADR-0010 step 9), so we only build + log it.
                 let attestation = StakeAttestation {
                     version: DNS_PAYLOAD_VERSION_V1,
                     validator_id: key.validator_id,
@@ -510,15 +592,22 @@ impl ValidatorService {
                     validator_set_commitment: target.validator_set_commitment,
                     signature: signature.to_vec(),
                 };
-                let shard_tx = stake_attestation_shard_tx(&single_attestation_shard(attestation));
-                info!(
-                    "[{VALIDATOR}] eligible — signed + built attestation shard tx (DRY-RUN, not submitted): epoch={} target={} vsc={} tx_id={} self_verify={}",
-                    target.epoch,
-                    target.target_hash,
-                    target.validator_set_commitment,
-                    shard_tx.id(),
-                    verified
-                );
+                let shard = single_attestation_shard(attestation);
+                let tx = match key.build_funded_shard_tx(&shard, funding_outpoint, &funding_entry, ATTESTATION_SHARD_TX_FEE_SOMPI) {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        warn!("[{VALIDATOR}] could not build funded attestation shard tx: {e}");
+                        return None;
+                    }
+                };
+                // Persist BEFORE submission. If the flush fails, do not advance — retrying
+                // next tick is safe, but submitting without a durable record is not.
+                let record = SignedEpochRecord { signature_fingerprint: signature_fingerprint(&signature), ..candidate };
+                if let Err(e) = store.record_and_flush(record) {
+                    warn!("[{VALIDATOR}] failed to persist signed-epoch record (not advancing): {e}");
+                    return None;
+                }
+                Some(tx)
             }
         }
     }
