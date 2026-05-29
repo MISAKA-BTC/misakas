@@ -171,6 +171,18 @@ pub enum RuleError {
     #[error("block includes unverifiable slashing evidence against bond {0}")]
     UnverifiableSlashingEvidenceInBlock(TransactionId),
 
+    // kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate. A block
+    // containing a transaction whose input spends a known bond outpoint (present
+    // in the block's selected-parent active-bond view) whose bond is not
+    // releasable — i.e. not `Unbonding` with the block's DAA score at or past
+    // `unbond_request_daa_score + unbonding_period_blocks` — is rejected, so a
+    // bond's staked output-0 is unspendable while the bond is `Pending`,
+    // `Active`, mid-unbonding, or `Slashed`. This is what makes the declared
+    // stake real locked capital. Args: the spending transaction id and the bond
+    // outpoint it illegally spends. Inert below `dns_activation_daa_score`.
+    #[error("block transaction {0} spends non-releasable bond outpoint {1}")]
+    NonReleasableBondSpendInBlock(TransactionId, TransactionOutpoint),
+
     #[error("{0} non-coinbase transactions (out of {1}) are invalid in UTXO context")]
     InvalidTransactionsInUtxoContext(usize, usize),
 

@@ -4,7 +4,8 @@ use crate::{
         BlockProcessResult,
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, IneligibleAttestationInBlock,
-            InvalidTransactionsInUtxoContext, UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
+            InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock, UnverifiableSlashingEvidenceInBlock,
+            WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -29,15 +30,16 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, RewardedEpochSet, attestations_from_accepted_txs,
-        slashing_evidence_from_accepted_txs, stake_attestation_message, validator_reward_outputs_from_attestations,
+        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, BondStatus, RewardedEpochSet, attestations_from_accepted_txs,
+        bond_release_daa_score, effective_bond_status, slashing_evidence_from_accepted_txs, stake_attestation_message,
+        validator_reward_outputs_from_attestations,
     },
     hashing,
     header::Header,
     muhash::MuHashExtensions,
     tx::{
-        MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutput, ValidatedTransaction,
-        VerifiableTransaction,
+        MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput,
+        ValidatedTransaction, VerifiableTransaction,
     },
     utxo::{
         utxo_diff::UtxoDiff,
@@ -231,6 +233,12 @@ impl VirtualStateProcessor {
         // block whose slashing evidence is not genuine, so a forged evidence
         // can never mutate a bond to `Slashed`. Inert below activation.
         self.check_slashing_evidence_genuine(&txs, selected_parent_bond_view, header.daa_score)?;
+
+        // kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate. Reject
+        // a block whose transactions spend a known bond outpoint whose bond is
+        // not releasable, so a bond's staked output-0 is locked while the bond
+        // is `Pending`/`Active`/mid-unbonding/`Slashed`. Inert below activation.
+        self.check_bond_spend_gate(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): the validator reward
         // outputs the coinbase must carry, derived from the block's included
@@ -460,6 +468,32 @@ impl VirtualStateProcessor {
         let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         slashing_evidence_genuine(txs, selected_parent_bond_view, self.genesis.hash, activated)
             .map_err(UnverifiableSlashingEvidenceInBlock)
+    }
+
+    /// kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate. Rejects a
+    /// block that includes a transaction spending a **known** bond outpoint
+    /// (present in the block's selected-parent bond view) whose bond is **not
+    /// releasable** at the block's DAA score — releasable meaning the bond is
+    /// `Unbonding` and `daa_score >= unbond_request_daa_score +
+    /// unbonding_period_blocks`. A `Pending`/`Active` bond, an `Unbonding` bond
+    /// before its release height, or a `Slashed` bond therefore cannot have its
+    /// staked output-0 spent, which is what makes the declared `amount` real
+    /// locked capital (D.1 pins `value == amount` to that output at acceptance).
+    ///
+    /// Like the sibling overlay checks this reads the same selected-parent
+    /// [`ActiveBondView`], so it is per-block-deterministic and reorg-safe. Inert
+    /// unless the overlay is configured **and** `daa_score` has reached
+    /// `dns_activation_daa_score` (`u64::MAX` on every current network, so this
+    /// returns `Ok(())` immediately everywhere today).
+    fn check_bond_spend_gate(
+        &self,
+        txs: &[Transaction],
+        selected_parent_bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) -> BlockProcessResult<()> {
+        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        bond_spend_gate(txs, selected_parent_bond_view, daa_score, activated)
+            .map_err(|(spending_tx, bond_outpoint)| NonReleasableBondSpendInBlock(spending_tx, bond_outpoint))
     }
 
     /// Validates transactions against the provided `utxo_view` and returns a vector with all transactions
@@ -715,6 +749,41 @@ fn slashing_evidence_genuine(
     Ok(())
 }
 
+/// Pure core of the ADR-0016 §D.2 bond-UTXO spend-gate (testable without a
+/// processor). `activated` folds the `dns_params.is_some() && daa_score >=
+/// dns_activation_daa_score` gate; when `false` the rule is a no-op (every
+/// current network). Scans every input of every transaction (the coinbase has
+/// no inputs, so it contributes nothing); if an input's `previous_outpoint` is
+/// a **known** bond outpoint in `bond_view` whose bond is **not releasable** at
+/// `daa_score`, returns `Err((spending tx id, bond outpoint))` for the caller
+/// to map to [`NonReleasableBondSpendInBlock`]. "Releasable" = the bond is
+/// `Unbonding` (per [`effective_bond_status`]) **and** `daa_score >=
+/// bond_release_daa_score` (`unbond_request_daa_score +
+/// unbonding_period_blocks`). Non-bond outpoints are ignored, so ordinary
+/// transactions are unaffected.
+fn bond_spend_gate(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    daa_score: u64,
+    activated: bool,
+) -> Result<(), (TransactionId, TransactionOutpoint)> {
+    if !activated {
+        return Ok(());
+    }
+    for tx in txs {
+        for input in tx.inputs.iter() {
+            if let Some(bond) = bond_view.get(&input.previous_outpoint) {
+                let releasable = effective_bond_status(bond, daa_score) == BondStatus::Unbonding
+                    && bond_release_daa_score(bond).is_some_and(|release| daa_score >= release);
+                if !releasable {
+                    return Err((tx.id(), input.previous_outpoint));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
@@ -949,6 +1018,122 @@ mod tests {
         #[test]
         fn ok_when_no_slashing_evidence() {
             assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), true), Ok(()));
+        }
+    }
+
+    // kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate's pure
+    // core. Covers the gate plus each releasability branch: Active/Pending/
+    // mid-unbonding/Slashed bonds are locked (reject), a released bond and a
+    // non-bond input are spendable (accept).
+    mod bond_spend_gate {
+        use super::super::bond_spend_gate as gate;
+        use kaspa_consensus_core::{
+            constants::TX_VERSION,
+            dns_finality::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
+            subnets::SUBNETWORK_ID_NATIVE,
+            tx::{Transaction, TransactionInput, TransactionOutpoint},
+        };
+        use kaspa_hashes::Hash64;
+
+        fn outpoint(b: u8) -> TransactionOutpoint {
+            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+        }
+
+        // A normal (non-overlay) tx with a single input spending `op`.
+        fn spending_tx(op: TransactionOutpoint) -> Transaction {
+            let input = TransactionInput::new(op, vec![], 0, 0);
+            Transaction::new(TX_VERSION, vec![input], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![])
+        }
+
+        // A bond record with all DAA-stamped fields cleared (so its effective
+        // status is derived purely from `activation_daa_score`). The caller
+        // tweaks the fields to select Pending/Active/Unbonding/Slashed.
+        fn bond(op: TransactionOutpoint) -> StakeBondRecord {
+            StakeBondRecord {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
+                validator_pubkey_hash: Hash64::from_bytes([0xbb; 64]),
+                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
+                amount: 1_000,
+                activation_daa_score: 0,
+                unbonding_period_blocks: 5_000,
+                owner_reward_spk_payload: [0xdd; 32],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: BondStatus::Active,
+            }
+        }
+
+        const DAA: u64 = 10_000;
+
+        #[test]
+        fn noop_when_not_activated() {
+            // Spending an Active bond is fine while the gate is closed (every
+            // current network: dns_activation = u64::MAX).
+            let op = outpoint(1);
+            let view = ActiveBondView::from_records([(op, bond(op))]);
+            assert_eq!(gate(&[spending_tx(op)], &view, DAA, false), Ok(()));
+        }
+
+        #[test]
+        fn rejects_spend_of_active_bond() {
+            let op = outpoint(2);
+            let view = ActiveBondView::from_records([(op, bond(op))]); // activation 0 ⇒ Active at DAA.
+            let tx = spending_tx(op);
+            assert_eq!(gate(&[tx.clone()], &view, DAA, true), Err((tx.id(), op)));
+        }
+
+        #[test]
+        fn rejects_spend_of_pending_bond() {
+            let op = outpoint(3);
+            let mut b = bond(op);
+            b.activation_daa_score = DAA + 1; // not yet active ⇒ Pending.
+            let view = ActiveBondView::from_records([(op, b)]);
+            let tx = spending_tx(op);
+            assert_eq!(gate(&[tx.clone()], &view, DAA, true), Err((tx.id(), op)));
+        }
+
+        #[test]
+        fn rejects_spend_of_unbonding_before_release() {
+            let op = outpoint(4);
+            let mut b = bond(op);
+            b.unbond_request_daa_score = Some(DAA - 1); // Unbonding, but release = DAA-1+5000 > DAA.
+            let view = ActiveBondView::from_records([(op, b)]);
+            let tx = spending_tx(op);
+            assert_eq!(gate(&[tx.clone()], &view, DAA, true), Err((tx.id(), op)));
+        }
+
+        #[test]
+        fn allows_spend_of_releasable_bond() {
+            let op = outpoint(5);
+            let mut b = bond(op);
+            b.unbond_request_daa_score = Some(1_000); // release = 1_000 + 5_000 = 6_000 ≤ DAA.
+            let view = ActiveBondView::from_records([(op, b)]);
+            assert_eq!(gate(&[spending_tx(op)], &view, DAA, true), Ok(()));
+        }
+
+        #[test]
+        fn rejects_spend_of_slashed_bond() {
+            let op = outpoint(6);
+            let mut b = bond(op);
+            b.slashed_at_daa_score = Some(5_000); // Slashed ⇒ terminal, never releasable.
+            let view = ActiveBondView::from_records([(op, b)]);
+            let tx = spending_tx(op);
+            assert_eq!(gate(&[tx.clone()], &view, DAA, true), Err((tx.id(), op)));
+        }
+
+        #[test]
+        fn ignores_non_bond_inputs() {
+            // An input that is not a known bond outpoint is unaffected, even
+            // when the gate is active.
+            assert_eq!(gate(&[spending_tx(outpoint(7))], &ActiveBondView::new(), DAA, true), Ok(()));
+        }
+
+        #[test]
+        fn ok_when_no_inputs() {
+            let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+            assert_eq!(gate(&[tx], &ActiveBondView::new(), DAA, true), Ok(()));
         }
     }
 }
