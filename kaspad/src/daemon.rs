@@ -8,7 +8,7 @@ use kaspa_consensus_core::{
     mining_rules::MiningRules,
 };
 use kaspa_consensus_notify::{root::ConsensusNotificationRoot, service::NotifyService};
-use kaspa_core::{core::Core, debug, info};
+use kaspa_core::{core::Core, debug, info, warn};
 use kaspa_core::{kaspad_env::version, task::tick::TickService};
 use kaspa_database::{
     prelude::{CachePolicy, DbWriter, DirectDbWriter, RocksDbPreset},
@@ -63,6 +63,7 @@ const MINIMUM_RETENTION_PERIOD_DAYS: f64 = 2.0;
 const ONE_GIGABYTE: f64 = 1_000_000_000.0;
 
 use crate::args::Args;
+use crate::validator_service::{ValidatorConfig, ValidatorMode, ValidatorService};
 
 const DEFAULT_DATA_DIR: &str = "datadir";
 const CONSENSUS_DB: &str = "consensus";
@@ -587,6 +588,22 @@ Do you confirm? (y/n)";
     let consensus_manager = Arc::new(ConsensusManager::new(consensus_factory));
     let consensus_monitor = Arc::new(ConsensusMonitor::new(processing_counters.clone(), tick_service.clone()));
 
+    // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service.
+    // Built only when `--enable-validator` is set, so default node behavior is unchanged.
+    let validator_service = if args.enable_validator {
+        let mode = match args.validator_mode.as_deref() {
+            Some(s) => s.parse::<ValidatorMode>().unwrap_or_else(|err| {
+                warn!("{err}; falling back to observer mode");
+                ValidatorMode::default()
+            }),
+            None => ValidatorMode::default(),
+        };
+        let validator_config = ValidatorConfig { mode, key_path: args.validator_key.clone(), stake_bond: args.stake_bond.clone() };
+        Some(Arc::new(ValidatorService::new(validator_config, consensus_manager.clone(), tick_service.clone())))
+    } else {
+        None
+    };
+
     let perf_monitor_builder = PerfMonitorBuilder::new()
         .with_fetch_interval(Duration::from_secs(args.perf_metrics_interval_sec))
         .with_tick_service(tick_service.clone());
@@ -715,6 +732,9 @@ Do you confirm? (y/n)";
     }
     async_runtime.register(p2p_service);
     async_runtime.register(consensus_monitor);
+    if let Some(validator_service) = validator_service {
+        async_runtime.register(validator_service)
+    };
     async_runtime.register(mining_monitor);
     async_runtime.register(perf_monitor);
     async_runtime.register(mining_rule_engine);

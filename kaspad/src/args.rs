@@ -63,6 +63,13 @@ pub struct Args {
     pub max_tracked_addresses: usize,
     pub enable_unsynced_mining: bool,
     pub enable_mainnet_mining: bool,
+
+    // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Default off.
+    pub enable_validator: bool,
+    pub validator_key: Option<String>,
+    pub stake_bond: Option<String>,
+    pub validator_mode: Option<String>,
+
     pub testnet: bool,
     #[serde(rename = "netsuffix")]
     pub testnet_suffix: u32,
@@ -116,6 +123,10 @@ impl Default for Args {
             max_tracked_addresses: 0,
             enable_unsynced_mining: false,
             enable_mainnet_mining: true,
+            enable_validator: false,
+            validator_key: None,
+            stake_bond: None,
+            validator_mode: None,
             testnet: false,
             testnet_suffix: 10,
             devnet: false,
@@ -335,6 +346,31 @@ pub fn cli() -> Command {
                 .hide(true)
                 .help("Allow mainnet mining (currently enabled by default while the flag is kept for backwards compatibility)"),
         )
+        .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
+        .arg(
+            Arg::new("validator-key")
+                .long("validator-key")
+                .env("KASPAD_VALIDATOR_KEY")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("kaspa-pq: path to the validator ML-DSA-65 signing seed file (64 hex chars = 32 bytes)."),
+        )
+        .arg(
+            Arg::new("stake-bond")
+                .long("stake-bond")
+                .env("KASPAD_STAKE_BOND")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("kaspa-pq: stake-bond outpoint backing this validator's attestations, as 'txid:index'."),
+        )
+        .arg(
+            Arg::new("validator-mode")
+                .long("validator-mode")
+                .env("KASPAD_VALIDATOR_MODE")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("kaspa-pq: validator operating mode {active, standby, observer} (default: observer)."),
+        )
         .arg(arg!(--utxoindex "Enable the UTXO index").env("KASPAD_UTXOINDEX"))
         .arg(
             Arg::new("max-tracked-addresses")
@@ -502,6 +538,10 @@ impl Args {
             reset_db: arg_match_unwrap_or::<bool>(&m, "reset-db", defaults.reset_db),
             enable_unsynced_mining: arg_match_unwrap_or::<bool>(&m, "enable-unsynced-mining", defaults.enable_unsynced_mining),
             enable_mainnet_mining: arg_match_unwrap_or::<bool>(&m, "enable-mainnet-mining", defaults.enable_mainnet_mining),
+            enable_validator: arg_match_unwrap_or::<bool>(&m, "enable-validator", defaults.enable_validator),
+            validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
+            stake_bond: m.get_one::<String>("stake-bond").cloned().or(defaults.stake_bond),
+            validator_mode: m.get_one::<String>("validator-mode").cloned().or(defaults.validator_mode),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
             testnet_suffix: arg_match_unwrap_or::<u32>(&m, "netsuffix", defaults.testnet_suffix),

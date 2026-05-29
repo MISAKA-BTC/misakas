@@ -3977,6 +3977,7 @@ dependencies = [
  "clap 4.5.51",
  "dhat",
  "dirs",
+ "faster-hex 0.9.0",
  "futures-util",
  "itertools 0.13.0",
  "kaspa-addresses",
