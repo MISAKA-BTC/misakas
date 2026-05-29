@@ -6,9 +6,15 @@ use kaspa_consensus_core::hashing::wasm::SighashType;
 use kaspa_consensus_core::sign::sign_input;
 use kaspa_consensus_core::tx::PopulatedTransaction;
 use kaspa_consensus_core::{hashing::sighash_type::SIG_HASH_ALL, sign::verify};
+// kaspa-pq ML-DSA-65 signer imports. `kaspa_pq_wasm` is only compiled for
+// wasm32/test (it pulls wasm-bindgen), so the helper imports and the
+// `signTransactionMlDsa65` fn below are gated to match — native builds exclude them.
+#[cfg(any(target_arch = "wasm32", test))]
 use kaspa_consensus_core::hashing::sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash};
 use kaspa_hashes::Hash;
+#[cfg(any(target_arch = "wasm32", test))]
 use kaspa_txscript::script_builder::ScriptBuilder;
+#[cfg(any(target_arch = "wasm32", test))]
 use kaspa_wallet_keys::kaspa_pq_wasm::KaspaPqKeyPair;
 use kaspa_wallet_keys::privatekey::PrivateKey;
 use kaspa_wasm_core::types::HexString;
@@ -67,6 +73,7 @@ pub fn js_sign_transaction(tx: &Transaction, signer: &PrivateKeyArrayT, verify_s
 /// Assumes the transaction's inputs are fully UTXO-populated and that every
 /// input is locked to this keypair's address (a single-key wallet).
 /// @category Wallet SDK
+#[cfg(any(target_arch = "wasm32", test))]
 #[wasm_bindgen(js_name = "signTransactionMlDsa65")]
 pub fn js_sign_transaction_mldsa65(tx: &Transaction, keypair: &KaspaPqKeyPair, randomness: Vec<u8>) -> Result<Transaction> {
     if randomness.len() != 32 {
