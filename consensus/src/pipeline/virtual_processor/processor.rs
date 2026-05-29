@@ -784,7 +784,7 @@ impl VirtualStateProcessor {
     /// per-block bond-view walk (ADR-0009 Addendum B) can derive a *not-yet-
     /// committed* block's mutations from the in-memory `ctx.mergeset_acceptance_data`,
     /// whose `acceptance_data_store` entry does not exist until `commit_utxo_state`.
-    fn accepted_txs_from_acceptance_data(&self, acceptance_data: &AcceptanceData) -> Vec<Transaction> {
+    pub(super) fn accepted_txs_from_acceptance_data(&self, acceptance_data: &AcceptanceData) -> Vec<Transaction> {
         let mut txs = Vec::new();
         for mergeset in acceptance_data.iter() {
             let block_txs = self.block_transactions_store.get(mergeset.block_hash).unwrap();

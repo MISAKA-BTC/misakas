@@ -3,9 +3,9 @@ use crate::{
     errors::{
         BlockProcessResult,
         RuleError::{
-            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, IneffectiveSlashingInBlock,
-            IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock,
-            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint, WrongSlashingReporterOutput,
+            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, IneligibleAttestationInBlock,
+            InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock, UnverifiableSlashingEvidenceInBlock,
+            WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -30,15 +30,15 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, BondStatus, RewardedEpochSet, SlashingReporterReject,
-        attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status, slashing_evidence_from_accepted_txs,
-        slashing_reporter_outputs_valid, stake_attestation_message, validator_reward_outputs_from_attestations,
+        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, BondStatus, RewardedEpochSet, SlashingSideEffect,
+        attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status, resolve_slashing_side_effects,
+        slashing_evidence_from_accepted_txs, stake_attestation_message, validator_reward_outputs_from_attestations,
     },
     hashing,
     header::Header,
     muhash::MuHashExtensions,
     tx::{
-        MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput,
+        MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry,
         ValidatedTransaction, VerifiableTransaction,
     },
     utxo::{
@@ -126,17 +126,20 @@ impl VirtualStateProcessor {
     ///
     /// kaspa-pq Phase 10/11 (ADR-0016 §D.4): `selected_parent_bond_view` is the
     /// bond set as-of this block's selected parent — the same view the overlay
-    /// block-validity rules in `verify_expected_utxo_state` read. The slashing
-    /// side-effect (PR-16.4-b2) will consume it here to remove a slashed bond's
-    /// locked output-0 from `ctx.mergeset_diff` + `ctx.multiset_hash` (and so the
-    /// `utxo_commitment`) when a genuine `SlashingEvidence` is processed in the
-    /// mergeset. Threaded inert for now — no consumer, no behavior change — so
-    /// construction and validation stay byte-identical on every current network.
+    /// block-validity rules in `verify_expected_utxo_state` read. After the
+    /// mergeset is applied, [`Self::apply_slashing_side_effects`] consumes it to
+    /// remove each slashed bond's locked output-0 from `ctx.mergeset_diff` +
+    /// `ctx.multiset_hash` (and so the `utxo_commitment`) and mint the reporter
+    /// reward at `(slashing_tx_id, 0)`. Both paths into this function (block
+    /// validation and virtual recompute) pass the same view + `pov_daa_score`,
+    /// so the side-effect is byte-identical across construction and validation.
+    /// Gated on `dns_activation_daa_score` (`u64::MAX` on every current network),
+    /// so it is a no-op everywhere today.
     pub(super) fn calculate_utxo_state<V: UtxoView + Sync>(
         &self,
         ctx: &mut UtxoProcessingContext,
         selected_parent_utxo_view: &V,
-        _selected_parent_bond_view: &ActiveBondView,
+        selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
     ) {
         let selected_parent_transactions = self.block_transactions_store.get(ctx.selected_parent()).unwrap();
@@ -196,6 +199,57 @@ impl VirtualStateProcessor {
                 BlockRewardData::new(coinbase_data.subsidy, block_fee, coinbase_data.miner_data.script_public_key),
             );
         }
+
+        // kaspa-pq Phase 11 (ADR-0013 Addendum C / ADR-0016 §D.4): apply the
+        // slashing side-effect over the fully-applied mergeset. Gated/inert on
+        // every current network.
+        self.apply_slashing_side_effects(ctx, selected_parent_utxo_view, selected_parent_bond_view, pov_daa_score);
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0013 Addendum C / ADR-0016 §D.4): the atomic
+    /// consensus side-effect of slashing. For each genuine equivocation evidence
+    /// accepted in this block's mergeset whose bond still holds a locked output-0
+    /// (resolved `Active`/`Unbonding` against the selected-parent bond view),
+    /// remove that output-0 UTXO (`S` leaves the supply) and mint the reporter
+    /// reward `R` at `(slashing_tx_id, 0)` — the slashing tx declares no outputs
+    /// (isolation rule), so index 0 is always free. Net supply change is `R − S`;
+    /// the remainder `S − R` is implicitly burned. Both add/remove are mirrored
+    /// into `ctx.multiset_hash`, so the `utxo_commitment` reflects the side-effect.
+    ///
+    /// Resolution runs over the mergeset's *accepted* txs (the same set the
+    /// acceptance data records) using the block's selected-parent bond view, so
+    /// block validation and virtual recompute — which call
+    /// [`Self::calculate_utxo_state`] with identical inputs — produce byte-for-
+    /// byte identical side-effects, keeping construction == validation and the
+    /// operation reorg-safe.
+    ///
+    /// Activation gating lives here; the resolved effects are applied by
+    /// [`apply_slashing_effects_to_state`], whose per-effect `composed.get`
+    /// lookup yields the exact stored UTXO entry (so its `block_daa_score`
+    /// matches the multiset element being removed) and doubles as a release-race
+    /// guard. Gated on `dns_activation_daa_score` (`u64::MAX` on every current
+    /// network), so this returns immediately everywhere today.
+    fn apply_slashing_side_effects<V: UtxoView>(
+        &self,
+        ctx: &mut UtxoProcessingContext,
+        selected_parent_utxo_view: &V,
+        selected_parent_bond_view: &ActiveBondView,
+        pov_daa_score: u64,
+    ) {
+        let Some(dns_params) = self.dns_params.as_ref() else {
+            return;
+        };
+        if pov_daa_score < dns_params.dns_activation_daa_score {
+            return;
+        }
+        let accepted_txs = self.accepted_txs_from_acceptance_data(&ctx.mergeset_acceptance_data);
+        let effects = resolve_slashing_side_effects(
+            &accepted_txs,
+            selected_parent_bond_view,
+            pov_daa_score,
+            dns_params.reward_params.slashing_reporter_reward_bps,
+        );
+        apply_slashing_effects_to_state(&effects, selected_parent_utxo_view, &mut ctx.mergeset_diff, &mut ctx.multiset_hash, pov_daa_score);
     }
 
     /// Verify that the current block fully respects its own UTXO view. We define a block as
@@ -249,13 +303,6 @@ impl VirtualStateProcessor {
         // not releasable, so a bond's staked output-0 is locked while the bond
         // is `Pending`/`Active`/mid-unbonding/`Slashed`. Inert below activation.
         self.check_bond_spend_gate(&txs, selected_parent_bond_view, header.daa_score)?;
-
-        // kaspa-pq Phase 11 (ADR-0013 Addendum C.1.3/C.1.5): the strict
-        // slashing-tx inclusion + reporter-output rule, run AFTER genuineness
-        // so an included slashing tx is genuine, effective, and mints exactly
-        // the reporter reward at output-0 — making the b2-iv output-0 UTXO
-        // removal a 1:1 mirror of the mint. Inert below activation.
-        self.check_slashing_reporter_outputs(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): the validator reward
         // outputs the coinbase must carry, derived from the block's included
@@ -511,47 +558,6 @@ impl VirtualStateProcessor {
         let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         bond_spend_gate(txs, selected_parent_bond_view, daa_score, activated)
             .map_err(|(spending_tx, bond_outpoint)| NonReleasableBondSpendInBlock(spending_tx, bond_outpoint))
-    }
-
-    /// kaspa-pq Phase 11 (ADR-0013 Addendum C.1.3/C.1.5): the strict
-    /// slashing-tx inclusion + reporter-output block-validity rule. Rejects a
-    /// block carrying any `SUBNETWORK_ID_SLASHING_EVIDENCE` tx that is not
-    /// *effective* (its bond resolves `Active`/`Unbonding` at the block's DAA
-    /// score and is the first slashing tx targeting that bond), or that — being
-    /// effective — does not carry the exact consensus-mandated reporter reward
-    /// at `output[0]`. Together with the genuineness rule (`check_slashing_-
-    /// evidence_genuine`, run first) this makes "included ⇒ effective ∧ mints
-    /// exactly the reward at output-0" a consensus invariant, so the b2-iv
-    /// output-0 UTXO removal maps 1:1 to a minted reporter reward and no
-    /// ineffective slashing tx can inflate supply.
-    ///
-    /// Reads the same selected-parent [`ActiveBondView`] as the sibling overlay
-    /// checks, so it is per-block-deterministic and reorg-safe. The reporter
-    /// distribution uses the network's `slashing_reporter_reward_bps`. Inert
-    /// unless the overlay is configured **and** `daa_score` has reached
-    /// `dns_activation_daa_score` (`u64::MAX` on every current network, so this
-    /// returns `Ok(())` immediately everywhere today).
-    fn check_slashing_reporter_outputs(
-        &self,
-        txs: &[Transaction],
-        selected_parent_bond_view: &ActiveBondView,
-        daa_score: u64,
-    ) -> BlockProcessResult<()> {
-        let Some(dns_params) = self.dns_params.as_ref() else {
-            return Ok(());
-        };
-        let activated = daa_score >= dns_params.dns_activation_daa_score;
-        slashing_reporter_outputs_valid(
-            txs,
-            selected_parent_bond_view,
-            daa_score,
-            dns_params.reward_params.slashing_reporter_reward_bps,
-            activated,
-        )
-        .map_err(|(tx_id, reason)| match reason {
-            SlashingReporterReject::Ineffective => IneffectiveSlashingInBlock(tx_id),
-            SlashingReporterReject::WrongReporterOutput => WrongSlashingReporterOutput(tx_id),
-        })
     }
 
     /// Validates transactions against the provided `utxo_view` and returns a vector with all transactions
@@ -840,6 +846,55 @@ fn bond_spend_gate(
         }
     }
     Ok(())
+}
+
+/// Pure core of the ADR-0013 Addendum C / ADR-0016 §D.4 slashing side-effect,
+/// split out of [`VirtualStateProcessor::apply_slashing_side_effects`] so the
+/// remove-stake + mint-reporter UTXO/multiset mutation can be unit-tested
+/// without a full processor. The caller has already gated on activation and
+/// resolved `effects` (canonical block order) against the selected-parent bond
+/// view; this applies them.
+///
+/// For each effect the bond's locked output-0 is looked up in
+/// `selected_parent_utxo_view` composed with the running `diff`. If present it
+/// is removed — `S` leaves the supply — from both `diff` and `multiset`, and
+/// then, when the reward is non-zero, the reporter UTXO is minted at
+/// `(slashing_tx_id, 0)` into both (the slashing tx declares no outputs, so
+/// index 0 is free). Net supply change is `R − S`; the remainder is implicitly
+/// burned. The per-effect recompose lets a later effect observe an earlier
+/// one's mutations, and the lookup doubles as a release-race guard: a bond
+/// whose output-0 is already gone from the composed view is skipped rather than
+/// double-removed. `mint_daa_score` (the block's DAA score) is stamped as the
+/// minted entry's `block_daa_score`.
+fn apply_slashing_effects_to_state<V: UtxoView>(
+    effects: &[SlashingSideEffect],
+    selected_parent_utxo_view: &V,
+    diff: &mut UtxoDiff,
+    multiset: &mut MuHash,
+    mint_daa_score: u64,
+) {
+    for effect in effects {
+        // The exact stored entry for the bond's locked output-0 (matches the
+        // multiset element); `None` ⇒ already spent in this mergeset ⇒ skip.
+        let Some(entry) = ({
+            let composed = selected_parent_utxo_view.compose(&*diff);
+            composed.get(&effect.bond_outpoint)
+        }) else {
+            continue;
+        };
+        // Remove S (the locked stake) from the diff and the multiset.
+        diff.remove_utxo(&effect.bond_outpoint, &entry).expect("composed view reported the bond output-0 present");
+        multiset.remove_utxo(&effect.bond_outpoint, &entry);
+
+        // Mint the reporter reward R at (slashing_tx_id, 0), if non-zero.
+        if let Some(out) = &effect.reporter_output {
+            let mint_outpoint = TransactionOutpoint::new(effect.slashing_tx_id, 0);
+            let mint_entry = UtxoEntry::new(out.value, out.script_public_key.clone(), mint_daa_score, false);
+            diff.add_utxo(mint_outpoint, mint_entry.clone())
+                .expect("slashing tx declares no outputs, so (slashing_tx_id, 0) is free");
+            multiset.add_utxo(&mint_outpoint, &mint_entry);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1192,6 +1247,172 @@ mod tests {
         fn ok_when_no_inputs() {
             let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
             assert_eq!(gate(&[tx], &ActiveBondView::new(), DAA, true), Ok(()));
+        }
+    }
+
+    // kaspa-pq Phase 11 (ADR-0013 Addendum C / ADR-0016 §D.4): the slashing
+    // side-effect *application* core. Given already-resolved effects, asserts
+    // the remove-stake + mint-reporter mutation of the UTXO diff and the
+    // multiset (and so the utxo_commitment): the stake leaves the supply, the
+    // reporter UTXO is minted at (slashing_tx_id, 0), a zero reward mints
+    // nothing (whole stake burns), and a missing output-0 is skipped whole
+    // (release-race guard) so a reporter is never minted without the matching
+    // stake removal. The expected commitment is rebuilt independently from the
+    // final UTXO set, proving the add/remove history nets to the right state.
+    mod slashing_side_effect_application {
+        use super::super::apply_slashing_effects_to_state as apply;
+        use kaspa_consensus_core::{
+            dns_finality::SlashingSideEffect,
+            muhash::MuHashExtensions,
+            tx::{ScriptPublicKey, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry},
+            utxo::{utxo_collection::UtxoCollection, utxo_diff::UtxoDiff},
+        };
+        use kaspa_hashes::Hash64;
+        use kaspa_muhash::MuHash;
+        use std::collections::HashMap;
+
+        const BOND_DAA: u64 = 1_000; // DAA at which the bond's output-0 was created.
+        const MINT_DAA: u64 = 2_000; // DAA of the slashing block (stamped on the mint).
+
+        fn spk(b: u8) -> ScriptPublicKey {
+            ScriptPublicKey::from_vec(0, vec![b; 32])
+        }
+
+        fn bond_outpoint(b: u8) -> TransactionOutpoint {
+            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+        }
+
+        fn slashing_tx_id(b: u8) -> TransactionId {
+            Hash64::from_bytes([b; 64])
+        }
+
+        // The locked output-0 UTXO of a bond worth `amount`, as it sits in the
+        // selected-parent UTXO set (the base view + the seeded multiset).
+        fn bond_entry(amount: u64) -> UtxoEntry {
+            UtxoEntry::new(amount, spk(0xb0), BOND_DAA, false)
+        }
+
+        // An effect slashing `amount`, paying a reporter `reward` (≤ amount) to
+        // spk(0xee) minted at (tx, 0); `reward == 0` ⇒ no reporter output.
+        fn effect(bond: TransactionOutpoint, amount: u64, reward: u64, tx: TransactionId) -> SlashingSideEffect {
+            SlashingSideEffect {
+                bond_outpoint: bond,
+                slashed_amount_sompi: amount,
+                reporter_output: (reward > 0).then(|| TransactionOutput::new(reward, spk(0xee))),
+                burned_sompi: amount - reward,
+                slashing_tx_id: tx,
+            }
+        }
+
+        // Independent reconstruction of a multiset over an explicit UTXO set —
+        // the apply path must reach the same commitment regardless of the
+        // add/remove history that produced it.
+        fn multiset_of(utxos: &[(TransactionOutpoint, UtxoEntry)]) -> MuHash {
+            let mut mh = MuHash::new();
+            for (op, e) in utxos {
+                mh.add_utxo(op, e);
+            }
+            mh
+        }
+
+        #[test]
+        fn removes_stake_and_mints_reporter() {
+            let bond_op = bond_outpoint(0x01);
+            let tx = slashing_tx_id(0x0a);
+            let (amount, reward) = (1_000u64, 250u64);
+            let entry = bond_entry(amount);
+
+            // Base view holds the bond's locked output-0; empty diff; multiset
+            // already contains the bond UTXO (it is in the committed set).
+            let base: UtxoCollection = HashMap::from([(bond_op, entry.clone())]);
+            let mut diff = UtxoDiff::new(HashMap::new(), HashMap::new());
+            let mut multiset = multiset_of(&[(bond_op, entry.clone())]);
+
+            apply(&[effect(bond_op, amount, reward, tx)], &base, &mut diff, &mut multiset, MINT_DAA);
+
+            let mint_op = TransactionOutpoint::new(tx, 0);
+            let mint_entry = UtxoEntry::new(reward, spk(0xee), MINT_DAA, false);
+
+            // Diff: stake removed, reporter minted, nothing else touched.
+            assert_eq!(diff.remove.get(&bond_op), Some(&entry));
+            assert_eq!(diff.remove.len(), 1);
+            assert_eq!(diff.add.get(&mint_op), Some(&mint_entry));
+            assert_eq!(diff.add.len(), 1);
+
+            // Commitment now equals a set that only ever held the reporter mint:
+            // the removal cancelled the bond and the net set is exactly R.
+            assert_eq!(multiset.finalize(), multiset_of(&[(mint_op, mint_entry)]).finalize());
+        }
+
+        #[test]
+        fn zero_reward_burns_whole_stake() {
+            let bond_op = bond_outpoint(0x02);
+            let tx = slashing_tx_id(0x0b);
+            let entry = bond_entry(1_000);
+
+            let base: UtxoCollection = HashMap::from([(bond_op, entry.clone())]);
+            let mut diff = UtxoDiff::new(HashMap::new(), HashMap::new());
+            let mut multiset = multiset_of(&[(bond_op, entry.clone())]);
+
+            apply(&[effect(bond_op, 1_000, 0, tx)], &base, &mut diff, &mut multiset, MINT_DAA);
+
+            // Stake removed, nothing minted; commitment back to the empty set.
+            assert_eq!(diff.remove.get(&bond_op), Some(&entry));
+            assert!(diff.add.is_empty());
+            assert_eq!(multiset.finalize(), MuHash::new().finalize());
+        }
+
+        #[test]
+        fn skips_effect_when_output0_already_absent() {
+            // Release-race guard: the bond's output-0 is not in the composed
+            // view (already spent in this mergeset). The whole effect — removal
+            // AND reporter mint — is skipped, so a reporter is never minted
+            // without the matching stake removal.
+            let bond_op = bond_outpoint(0x03);
+            let tx = slashing_tx_id(0x0c);
+            let base: UtxoCollection = HashMap::new(); // output-0 already gone.
+            let mut diff = UtxoDiff::new(HashMap::new(), HashMap::new());
+            let mut multiset = MuHash::new();
+
+            apply(&[effect(bond_op, 1_000, 250, tx)], &base, &mut diff, &mut multiset, MINT_DAA);
+
+            assert!(diff.add.is_empty());
+            assert!(diff.remove.is_empty());
+            assert_eq!(multiset.finalize(), MuHash::new().finalize());
+        }
+
+        #[test]
+        fn applies_each_of_several_distinct_bonds() {
+            let (op_a, op_b) = (bond_outpoint(0x04), bond_outpoint(0x05));
+            let (tx_a, tx_b) = (slashing_tx_id(0x0d), slashing_tx_id(0x0e));
+            // Distinct amounts ⇒ distinct multiset elements; bond b's reward is 0
+            // (burns entirely), bond a's reward is non-zero (mints a reporter).
+            let (amt_a, amt_b, rew_a) = (1_000u64, 4_000u64, 100u64);
+            let (e_a, e_b) = (bond_entry(amt_a), bond_entry(amt_b));
+
+            let base: UtxoCollection = HashMap::from([(op_a, e_a.clone()), (op_b, e_b.clone())]);
+            let mut diff = UtxoDiff::new(HashMap::new(), HashMap::new());
+            let mut multiset = multiset_of(&[(op_a, e_a.clone()), (op_b, e_b.clone())]);
+
+            apply(
+                &[effect(op_a, amt_a, rew_a, tx_a), effect(op_b, amt_b, 0, tx_b)],
+                &base,
+                &mut diff,
+                &mut multiset,
+                MINT_DAA,
+            );
+
+            let mint_a = TransactionOutpoint::new(tx_a, 0);
+            let mint_a_entry = UtxoEntry::new(rew_a, spk(0xee), MINT_DAA, false);
+
+            // Both stakes removed; only a's reporter minted (b's reward is 0).
+            assert_eq!(diff.remove.len(), 2);
+            assert!(diff.remove.contains_key(&op_a) && diff.remove.contains_key(&op_b));
+            assert_eq!(diff.add.len(), 1);
+            assert_eq!(diff.add.get(&mint_a), Some(&mint_a_entry));
+
+            // Net committed set = a's reporter mint only.
+            assert_eq!(multiset.finalize(), multiset_of(&[(mint_a, mint_a_entry)]).finalize());
         }
     }
 }

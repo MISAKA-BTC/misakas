@@ -1,6 +1,6 @@
 use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
-    DnsTxKind, dns_tx_kind, validate_slashing_evidence_payload, validate_stake_attestation_shard_payload, validate_stake_bond_tx,
+    DnsTxKind, dns_tx_kind, validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx,
 };
 use kaspa_consensus_core::tx::Transaction;
 use std::collections::HashSet;
@@ -170,7 +170,10 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
             // output-0 locks the declared stake (value == amount, owner P2PKH).
             DnsTxKind::StakeBond => validate_stake_bond_tx(&tx.payload, &tx.outputs),
             DnsTxKind::StakeAttestationShard => validate_stake_attestation_shard_payload(&tx.payload),
-            DnsTxKind::SlashingEvidence => validate_slashing_evidence_payload(&tx.payload),
+            // ADR-0013 Addendum C.2: a slashing tx is a pure evidence carrier —
+            // it must declare no outputs so consensus can mint the reporter
+            // reward at (slashing_tx_id, 0) without colliding with a tx output.
+            DnsTxKind::SlashingEvidence => validate_slashing_evidence_tx(&tx.payload, &tx.outputs),
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())
@@ -349,7 +352,8 @@ mod tests {
     #[test]
     fn validate_dns_overlay_subnetwork_tx() {
         use kaspa_consensus_core::dns_finality::{
-            DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondPayload, p2pkh_mldsa65_spk,
+            DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
+            StakeAttestation, StakeBondPayload, p2pkh_mldsa65_spk,
         };
         use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
         use kaspa_hashes::Hash64;
@@ -419,9 +423,54 @@ mod tests {
 
         // Undecodable bytes on a DNS subnetwork → InvalidDnsOverlayPayload(Decode),
         // proving the id is routed to the validators rather than rejected outright.
-        let mut tx = base;
+        let mut tx = base.clone();
         tx.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
         tx.payload = vec![0xffu8, 0x00];
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::Decode)));
+
+        // ADR-0013 Addendum C.2: a slashing-evidence tx is a pure evidence
+        // carrier whose reporter reward is minted by consensus at
+        // (slashing_tx_id, 0). A well-formed payload is accepted iff the tx
+        // declares no outputs; any output would create a UTXO that collides
+        // with that mint. Build valid equivocation evidence (two attestations
+        // sharing one (bond_outpoint, validator_id, epoch) triple but
+        // approving different anchors).
+        let attestation = |target: u8| StakeAttestation {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: Hash64::from_bytes([0xa5u8; 64]),
+            bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 42 },
+            epoch: 7,
+            target_hash: Hash64::from_bytes([target; 64]),
+            target_daa_score: 1_234_567,
+            validator_set_commitment: Hash64::from_bytes([0x22u8; 64]),
+            signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+        };
+        let evidence = SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 42 },
+            attestation_a: attestation(0x11),
+            attestation_b: attestation(0x33),
+            reporter_reward_spk_payload: [0xeeu8; 32],
+        };
+        let evidence_payload = borsh::to_vec(&evidence).unwrap();
+
+        // Valid evidence + no outputs → accepted.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
+        tx.payload = evidence_payload.clone();
+        tx.outputs = vec![];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Valid evidence + a (non-zero) declared output → rejected with
+        // SlashingEvidenceHasOutputs. (A zero-value output is independently
+        // caught earlier by the `TxOutZero` range check, so the carrier here
+        // keeps `base`'s non-zero output to exercise this rule specifically.)
+        let mut tx_with_out = base;
+        tx_with_out.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
+        tx_with_out.payload = evidence_payload;
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx_with_out),
+            Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::SlashingEvidenceHasOutputs(1)))
+        );
     }
 }

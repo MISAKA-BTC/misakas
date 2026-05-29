@@ -183,26 +183,6 @@ pub enum RuleError {
     #[error("block transaction {0} spends non-releasable bond outpoint {1}")]
     NonReleasableBondSpendInBlock(TransactionId, TransactionOutpoint),
 
-    // kaspa-pq Phase 11 (ADR-0013 Addendum C.1.5): the strict slashing-tx
-    // inclusion discipline. A block carrying a `SlashingEvidence` tx that is not
-    // *effective* — its bond is unknown in the block's selected-parent bond
-    // view, is not `Active`/`Unbonding` at the block's DAA score (no removable
-    // locked output-0), or duplicates a bond already slashed earlier in the
-    // block — is rejected, so every included slashing tx maps 1:1 to exactly one
-    // stake removal + reporter mint. Arg: the offending transaction id. Inert
-    // below `dns_activation_daa_score`.
-    #[error("block includes an ineffective slashing transaction {0}")]
-    IneffectiveSlashingInBlock(TransactionId),
-
-    // kaspa-pq Phase 11 (ADR-0013 Addendum C.1.3): the reporter-output rule. A
-    // block whose effective `SlashingEvidence` tx does not carry the exact
-    // consensus-mandated reporter reward at `output[0]` (value + P2PKH spk), or
-    // whose reward rounds to zero (an unslashable micro-bond), is rejected, so a
-    // slashing tx mints exactly the reward and nothing else. Arg: the offending
-    // transaction id. Inert below `dns_activation_daa_score`.
-    #[error("block slashing transaction {0} has an incorrect reporter output")]
-    WrongSlashingReporterOutput(TransactionId),
-
     #[error("{0} non-coinbase transactions (out of {1}) are invalid in UTXO context")]
     InvalidTransactionsInUtxoContext(usize, usize),
 

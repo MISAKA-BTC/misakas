@@ -21,14 +21,6 @@ pub struct TransactionValidator {
     coinbase_maturity: u64,
     ghostdag_k: KType,
     sig_cache: Cache<SigCacheKey, bool>,
-
-    /// kaspa-pq ADR-0009/0013: DAA score at which the DNS finality overlay
-    /// activates, when the overlay is configured for this network. `None`
-    /// (every current network) keeps every overlay-specific transaction rule
-    /// — notably the ADR-0013 Addendum C.1.2 slashing reporter-output mint
-    /// exemption — inert. See [`Self::dns_overlay_active`].
-    dns_activation_daa_score: Option<u64>,
-
     pub(crate) mass_calculator: MassCalculator,
 }
 
@@ -43,7 +35,6 @@ impl TransactionValidator {
         ghostdag_k: KType,
         counters: Arc<TxScriptCacheCounters>,
         mass_calculator: MassCalculator,
-        dns_activation_daa_score: Option<u64>,
     ) -> Self {
         Self {
             max_tx_inputs,
@@ -54,7 +45,6 @@ impl TransactionValidator {
             coinbase_maturity,
             ghostdag_k,
             sig_cache: Cache::with_counters(10_000, counters),
-            dns_activation_daa_score,
             mass_calculator,
         }
     }
@@ -78,8 +68,6 @@ impl TransactionValidator {
             coinbase_maturity,
             ghostdag_k,
             sig_cache: Cache::with_counters(10_000, counters),
-            // Inert by default: tests opt into the overlay explicitly.
-            dns_activation_daa_score: None,
             mass_calculator: MassCalculator::new(0, 0, 0, 0),
         }
     }
