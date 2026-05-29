@@ -686,6 +686,14 @@ pub struct DnsParams {
     /// `CommitReveal` from genesis). On simnet / devnet this is
     /// also `None` (always `Deterministic`).
     pub commit_reveal_activation_daa_score: Option<u64>,
+
+    /// Validator reward-distribution parameters (ADR-0013). Consumed
+    /// by the PR-10.5′-b coinbase fan-out and the PR-10.12′ slashing
+    /// split. Carried here (rather than as a separate `Params` field)
+    /// so it inherits `DnsParams`'s `Option` gating — the whole
+    /// validator-reward track is inert wherever `dns_params` is `None`
+    /// or `daa_score < dns_activation_daa_score`.
+    pub reward_params: RewardParams,
 }
 
 /// Validator reward-distribution parameters (ADR-0013).
@@ -3290,6 +3298,11 @@ mod tests {
             commit_without_reveal_slash_sompi: 50_000_000_000,
             unreveal_reporter_reward_sompi: 100_000_000,
             commit_reveal_activation_daa_score: None, // mainnet: always CommitReveal
+            reward_params: RewardParams {
+                per_attestation_reward_sompi: 100_000_000,
+                slashing_reporter_reward_bps: 1000,
+                max_validator_inflation_per_block_sompi: 100_000_000 * MAX_ATTESTATIONS_PER_SHARD as u64,
+            },
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();

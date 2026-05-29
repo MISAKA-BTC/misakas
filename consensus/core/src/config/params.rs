@@ -6,7 +6,7 @@ pub use super::{
 use crate::{
     BlockLevel, BlueWorkType, KType,
     constants::STORAGE_MASS_PARAMETER,
-    dns_finality::{DnsParams, MAX_ATTESTATIONS_PER_SHARD, STAKE_SCORE_SCALE, SortitionMode, StakeScore},
+    dns_finality::{DnsParams, MAX_ATTESTATIONS_PER_SHARD, RewardParams, STAKE_SCORE_SCALE, SortitionMode, StakeScore},
     network::{NetworkId, NetworkType},
 };
 use kaspa_addresses::Prefix;
@@ -795,5 +795,15 @@ pub const DEVNET_PARAMS: Params = Params {
         commit_without_reveal_slash_sompi: 50_000_000_000,
         unreveal_reporter_reward_sompi: 100_000_000,
         commit_reveal_activation_daa_score: None,
+        // ADR-0013 reward track — NOT load-bearing on devnet (the
+        // dns_activation gate is u64::MAX, so the coinbase fan-out
+        // never fires). Values are placeholders chosen so the cap
+        // never bites under correct params: cap == reward ×
+        // max_attestations_per_block.
+        reward_params: RewardParams {
+            per_attestation_reward_sompi: 100_000_000,
+            slashing_reporter_reward_bps: 1000,
+            max_validator_inflation_per_block_sompi: 100_000_000 * MAX_ATTESTATIONS_PER_SHARD as u64,
+        },
     }),
 };
