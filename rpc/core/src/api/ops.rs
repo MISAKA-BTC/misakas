@@ -140,6 +140,8 @@ pub enum RpcApiOps {
     GetUtxoReturnAddress = 150,
     /// Get Virtual Chain from Block V2
     GetVirtualChainFromBlockV2 = 151,
+    /// kaspa-pq Phase 10 (ADR-0009): current DNS finality confirmation view
+    GetDnsConfirmation = 152,
 }
 
 impl RpcApiOps {

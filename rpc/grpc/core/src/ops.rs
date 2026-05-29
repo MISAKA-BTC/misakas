@@ -89,6 +89,8 @@ pub enum KaspadPayloadOps {
     GetCurrentBlockColor,
     GetUtxoReturnAddress,
     GetVirtualChainFromBlockV2,
+    // kaspa-pq Phase 10 (ADR-0009)
+    GetDnsConfirmation,
 
     // Subscription commands for starting/stopping notifications
     NotifyBlockAdded,

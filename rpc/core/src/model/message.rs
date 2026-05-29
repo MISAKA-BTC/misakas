@@ -1446,6 +1446,105 @@ impl Deserializer for GetSinkBlueScoreResponse {
     }
 }
 
+// kaspa-pq Phase 10 (ADR-0009): getDnsConfirmation. The response carries
+// RPC-friendly encodings (hex / decimal strings for Hash64 / Uint576 / u128)
+// built from the consensus `DnsConfirmation`. `available` is false when the
+// DNS overlay is not configured for the network (or no DnsState exists yet),
+// in which case the remaining fields are defaults.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetDnsConfirmationRequest {}
+
+impl Serializer for GetDnsConfirmationRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetDnsConfirmationRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {})
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetDnsConfirmationResponse {
+    pub available: bool,
+    pub block_hash: String,
+    pub work_depth: String,
+    pub required_work_depth: String,
+    pub stake_depth: String,
+    pub required_stake_depth: String,
+    pub pow_confirmed: bool,
+    pub dns_confirmed: bool,
+    pub rollout_stage: u32,
+    pub expected_dns_confirmation_seconds: u64,
+    pub work_reorg_risk_upper_bound: String,
+    pub stake_reorg_risk_upper_bound: String,
+    pub dns_reorg_risk_conservative_bound: String,
+    pub note: String,
+}
+
+impl Serializer for GetDnsConfirmationResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(String, &self.block_hash, writer)?;
+        store!(String, &self.work_depth, writer)?;
+        store!(String, &self.required_work_depth, writer)?;
+        store!(String, &self.stake_depth, writer)?;
+        store!(String, &self.required_stake_depth, writer)?;
+        store!(bool, &self.pow_confirmed, writer)?;
+        store!(bool, &self.dns_confirmed, writer)?;
+        store!(u32, &self.rollout_stage, writer)?;
+        store!(u64, &self.expected_dns_confirmation_seconds, writer)?;
+        store!(String, &self.work_reorg_risk_upper_bound, writer)?;
+        store!(String, &self.stake_reorg_risk_upper_bound, writer)?;
+        store!(String, &self.dns_reorg_risk_conservative_bound, writer)?;
+        store!(String, &self.note, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetDnsConfirmationResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let available = load!(bool, reader)?;
+        let block_hash = load!(String, reader)?;
+        let work_depth = load!(String, reader)?;
+        let required_work_depth = load!(String, reader)?;
+        let stake_depth = load!(String, reader)?;
+        let required_stake_depth = load!(String, reader)?;
+        let pow_confirmed = load!(bool, reader)?;
+        let dns_confirmed = load!(bool, reader)?;
+        let rollout_stage = load!(u32, reader)?;
+        let expected_dns_confirmation_seconds = load!(u64, reader)?;
+        let work_reorg_risk_upper_bound = load!(String, reader)?;
+        let stake_reorg_risk_upper_bound = load!(String, reader)?;
+        let dns_reorg_risk_conservative_bound = load!(String, reader)?;
+        let note = load!(String, reader)?;
+        Ok(Self {
+            available,
+            block_hash,
+            work_depth,
+            required_work_depth,
+            stake_depth,
+            required_stake_depth,
+            pow_confirmed,
+            dns_confirmed,
+            rollout_stage,
+            expected_dns_confirmation_seconds,
+            work_reorg_risk_upper_bound,
+            stake_reorg_risk_upper_bound,
+            dns_reorg_risk_conservative_bound,
+            note,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetUtxosByAddressesRequest {

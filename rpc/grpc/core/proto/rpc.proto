@@ -623,6 +623,28 @@ message GetSinkBlueScoreResponseMessage {
   RPCError error = 1000;
 }
 
+// kaspa-pq Phase 10 (ADR-0009): the current DNS finality confirmation view.
+message GetDnsConfirmationRequestMessage {}
+
+message GetDnsConfirmationResponseMessage {
+  bool available = 1;
+  string blockHash = 2;
+  string workDepth = 3;
+  string requiredWorkDepth = 4;
+  string stakeDepth = 5;
+  string requiredStakeDepth = 6;
+  bool powConfirmed = 7;
+  bool dnsConfirmed = 8;
+  uint32 rolloutStage = 9;
+  uint64 expectedDnsConfirmationSeconds = 10;
+  string workReorgRiskUpperBound = 11;
+  string stakeReorgRiskUpperBound = 12;
+  string dnsReorgRiskConservativeBound = 13;
+  string note = 14;
+
+  RPCError error = 1000;
+}
+
 // NotifySinkBlueScoreChangedRequestMessage registers this connection for
 // sinkBlueScoreChanged notifications.
 //

@@ -359,6 +359,27 @@ from!(item: RpcResult<&kaspa_rpc_core::GetSinkBlueScoreResponse>, protowire::Get
     Self { blue_score: item.blue_score, error: None }
 });
 
+from!(&kaspa_rpc_core::GetDnsConfirmationRequest, protowire::GetDnsConfirmationRequestMessage);
+from!(item: RpcResult<&kaspa_rpc_core::GetDnsConfirmationResponse>, protowire::GetDnsConfirmationResponseMessage, {
+    Self {
+        available: item.available,
+        block_hash: item.block_hash.clone(),
+        work_depth: item.work_depth.clone(),
+        required_work_depth: item.required_work_depth.clone(),
+        stake_depth: item.stake_depth.clone(),
+        required_stake_depth: item.required_stake_depth.clone(),
+        pow_confirmed: item.pow_confirmed,
+        dns_confirmed: item.dns_confirmed,
+        rollout_stage: item.rollout_stage,
+        expected_dns_confirmation_seconds: item.expected_dns_confirmation_seconds,
+        work_reorg_risk_upper_bound: item.work_reorg_risk_upper_bound.clone(),
+        stake_reorg_risk_upper_bound: item.stake_reorg_risk_upper_bound.clone(),
+        dns_reorg_risk_conservative_bound: item.dns_reorg_risk_conservative_bound.clone(),
+        note: item.note.clone(),
+        error: None,
+    }
+});
+
 from!(item: &kaspa_rpc_core::BanRequest, protowire::BanRequestMessage, { Self { ip: item.ip.to_string() } });
 from!(_item: RpcResult<&kaspa_rpc_core::BanResponse>, protowire::BanResponseMessage, { Self { error: None } });
 
@@ -878,6 +899,26 @@ try_from!(item: &protowire::GetBalancesByAddressesResponseMessage, RpcResult<kas
 try_from!(&protowire::GetSinkBlueScoreRequestMessage, kaspa_rpc_core::GetSinkBlueScoreRequest);
 try_from!(item: &protowire::GetSinkBlueScoreResponseMessage, RpcResult<kaspa_rpc_core::GetSinkBlueScoreResponse>, {
     Self { blue_score: item.blue_score }
+});
+
+try_from!(&protowire::GetDnsConfirmationRequestMessage, kaspa_rpc_core::GetDnsConfirmationRequest);
+try_from!(item: &protowire::GetDnsConfirmationResponseMessage, RpcResult<kaspa_rpc_core::GetDnsConfirmationResponse>, {
+    Self {
+        available: item.available,
+        block_hash: item.block_hash.clone(),
+        work_depth: item.work_depth.clone(),
+        required_work_depth: item.required_work_depth.clone(),
+        stake_depth: item.stake_depth.clone(),
+        required_stake_depth: item.required_stake_depth.clone(),
+        pow_confirmed: item.pow_confirmed,
+        dns_confirmed: item.dns_confirmed,
+        rollout_stage: item.rollout_stage,
+        expected_dns_confirmation_seconds: item.expected_dns_confirmation_seconds,
+        work_reorg_risk_upper_bound: item.work_reorg_risk_upper_bound.clone(),
+        stake_reorg_risk_upper_bound: item.stake_reorg_risk_upper_bound.clone(),
+        dns_reorg_risk_conservative_bound: item.dns_reorg_risk_conservative_bound.clone(),
+        note: item.note.clone(),
+    }
 });
 
 try_from!(item: &protowire::BanRequestMessage, kaspa_rpc_core::BanRequest, { Self { ip: RpcIpAddress::from_str(&item.ip)? } });

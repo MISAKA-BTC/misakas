@@ -366,6 +366,21 @@ pub trait RpcApi: Sync + Send + AnySync {
         request: GetSinkBlueScoreRequest,
     ) -> RpcResult<GetSinkBlueScoreResponse>;
 
+    /// kaspa-pq Phase 10 (ADR-0009): the current DNS finality confirmation view.
+    async fn get_dns_confirmation(&self) -> RpcResult<GetDnsConfirmationResponse> {
+        self.get_dns_confirmation_call(None, GetDnsConfirmationRequest {}).await
+    }
+    /// Default returns `available: false`, so non-server `RpcApi` impls (gRPC /
+    /// wRPC clients, mocks) inherit a no-op; the node's core service overrides it.
+    async fn get_dns_confirmation_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetDnsConfirmationRequest,
+    ) -> RpcResult<GetDnsConfirmationResponse> {
+        let _ = (connection, request);
+        Ok(GetDnsConfirmationResponse::default())
+    }
+
     /// Bans the given ip.
     async fn ban(&self, ip: RpcIpAddress) -> RpcResult<()> {
         self.ban_call(None, BanRequest::new(ip)).await?;

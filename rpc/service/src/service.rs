@@ -627,6 +627,36 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         Ok(GetSinkBlueScoreResponse::new(session.async_get_ghostdag_data(session.async_get_sink().await).await?.blue_score))
     }
 
+    async fn get_dns_confirmation_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        _: GetDnsConfirmationRequest,
+    ) -> RpcResult<GetDnsConfirmationResponse> {
+        // kaspa-pq Phase 10 (ADR-0009): expose the current DnsState-derived
+        // confirmation view. `available: false` when the overlay is not
+        // configured for this network (or no DnsState has been written yet).
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(match session.async_get_dns_confirmation().await {
+            Some(c) => GetDnsConfirmationResponse {
+                available: true,
+                block_hash: c.block_hash.to_string(),
+                work_depth: c.work_depth.to_string(),
+                required_work_depth: c.required_work_depth.to_string(),
+                stake_depth: c.stake_depth.to_string(),
+                required_stake_depth: c.required_stake_depth.to_string(),
+                pow_confirmed: c.pow_confirmed,
+                dns_confirmed: c.dns_confirmed,
+                rollout_stage: c.rollout_stage as u32,
+                expected_dns_confirmation_seconds: c.expected_dns_confirmation_seconds,
+                work_reorg_risk_upper_bound: c.work_reorg_risk_upper_bound,
+                stake_reorg_risk_upper_bound: c.stake_reorg_risk_upper_bound,
+                dns_reorg_risk_conservative_bound: c.dns_reorg_risk_conservative_bound,
+                note: c.note,
+            },
+            None => GetDnsConfirmationResponse::default(),
+        })
+    }
+
     async fn get_virtual_chain_from_block_call(
         &self,
         _connection: Option<&DynRpcConnection>,
