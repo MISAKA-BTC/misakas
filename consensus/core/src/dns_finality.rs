@@ -49,7 +49,7 @@
 //! Borsh path; `serde` JSON is added via manual impls in the
 //! consumer-facing RPC types only.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
 use blake2b_simd::Params as Blake2bParams;
@@ -2380,6 +2380,139 @@ pub fn bond_mutations_from_accepted_txs(txs: &[Transaction], accepted_daa_score:
     muts
 }
 
+/// Per-block **active-bond view** (ADR-0009 Addendum B §B.1).
+///
+/// An in-memory snapshot of the `StakeBonds` set as-of a specific block,
+/// built by composing per-block [`BondMutation`] diffs along the block's
+/// selected-chain prefix — the bond analogue of the per-block UTXO view
+/// (`selected_parent_utxo_view.compose(&mergeset_diff)`). Pure and
+/// deterministic, so the per-block validator-reward coinbase fan-out
+/// (ADR-0013) and the Model-B block-validity rule can resolve
+/// `bond_outpoint → active bond record` **identically on every node**,
+/// rather than reading the point-of-view-dependent virtual-commit-time
+/// global store (which would chain-split — see Addendum B §B.0).
+///
+/// [`Self::apply`] / [`Self::revert`] mirror the virtual processor's
+/// `stage_dns_bond_mutations` byte-for-byte (the persisted-store path),
+/// so the in-memory view and the on-disk store can never diverge:
+/// `Insert` ⇒ insert / delete; `Slash` ⇒ set / clear
+/// `slashed_at_daa_score` + `status`. Bond *activation* (`Pending →
+/// Active`) is **not** stored — it is derived at read time from
+/// `activation_daa_score` via [`effective_bond_status`] (Addendum A.4).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActiveBondView {
+    bonds: HashMap<TransactionOutpoint, StakeBondRecord>,
+}
+
+impl ActiveBondView {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Apply one block's `bond_diff` (mutations in tx order). Mirrors the
+    /// `ChainPath.added` branch of `stage_dns_bond_mutations`.
+    pub fn apply(&mut self, mutations: &[BondMutation]) {
+        for mutation in mutations {
+            match mutation {
+                BondMutation::Insert(outpoint, record) => {
+                    self.bonds.insert(*outpoint, record.clone());
+                }
+                BondMutation::Slash(outpoint, daa) => {
+                    if let Some(record) = self.bonds.get_mut(outpoint) {
+                        record.slashed_at_daa_score = Some(*daa);
+                        record.status = BondStatus::Slashed;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Revert one block's `bond_diff` (mutations in **reverse** order, so a
+    /// `Slash` whose `Insert` is reverted in the same diff is handled
+    /// gracefully). Mirrors the `ChainPath.removed` branch of
+    /// `stage_dns_bond_mutations`.
+    pub fn revert(&mut self, mutations: &[BondMutation]) {
+        for mutation in mutations.iter().rev() {
+            match mutation {
+                BondMutation::Insert(outpoint, _) => {
+                    self.bonds.remove(outpoint);
+                }
+                BondMutation::Slash(outpoint, _) => {
+                    if let Some(record) = self.bonds.get_mut(outpoint) {
+                        record.slashed_at_daa_score = None;
+                        record.status = BondStatus::Active;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resolve a bond that is `Active` at `pov_daa_score` (Addendum B
+    /// §B.3(a)). `None` if the outpoint is absent or the bond is not
+    /// `Active` at that DAA score.
+    pub fn active_bond_at(&self, outpoint: &TransactionOutpoint, pov_daa_score: u64) -> Option<&StakeBondRecord> {
+        let record = self.bonds.get(outpoint)?;
+        is_bond_active_at(record, pov_daa_score).then_some(record)
+    }
+
+    /// Raw lookup regardless of status (diagnostics / tests).
+    pub fn get(&self, outpoint: &TransactionOutpoint) -> Option<&StakeBondRecord> {
+        self.bonds.get(outpoint)
+    }
+
+    pub fn len(&self) -> usize {
+        self.bonds.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bonds.is_empty()
+    }
+}
+
+/// The set of `(bond_outpoint, epoch)` pairs already rewarded on a block's
+/// selected-chain prefix (ADR-0009 Addendum B §B.3(c) reward uniqueness).
+///
+/// Composed/reverted alongside [`ActiveBondView`] so that each
+/// `(bond, epoch)` earns at most one coinbase reward across the selected
+/// chain, deterministically and reorg-safely — the reward analogue of the
+/// §A.5 `(bond_outpoint, validator_id, epoch)` StakeScore dedup, narrowed
+/// to `(bond_outpoint, epoch)` because the reward is per bond-epoch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RewardedEpochSet {
+    rewarded: HashSet<(TransactionOutpoint, u64)>,
+}
+
+impl RewardedEpochSet {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `true` iff `(outpoint, epoch)` was already rewarded on this prefix.
+    pub fn contains(&self, outpoint: &TransactionOutpoint, epoch: u64) -> bool {
+        self.rewarded.contains(&(*outpoint, epoch))
+    }
+
+    /// Record a reward. Returns `true` if newly inserted, `false` if it was
+    /// already present (a duplicate, which per §B.4 is *not* rewarded again
+    /// and does *not* invalidate the block).
+    pub fn insert(&mut self, outpoint: TransactionOutpoint, epoch: u64) -> bool {
+        self.rewarded.insert((outpoint, epoch))
+    }
+
+    /// Reverse an `insert` on reorg.
+    pub fn remove(&mut self, outpoint: &TransactionOutpoint, epoch: u64) -> bool {
+        self.rewarded.remove(&(*outpoint, epoch))
+    }
+
+    pub fn len(&self) -> usize {
+        self.rewarded.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rewarded.is_empty()
+    }
+}
+
 // =====================================================================
 // PR-10.5 / A.5: deterministic StakeScore aggregation -> DnsState.
 //
@@ -3119,6 +3252,122 @@ mod tests {
         let native = dns_overlay_tx(SubnetworkId::from_byte(0), vec![]);
         let coinbase = dns_overlay_tx(SubnetworkId::from_byte(1), vec![]);
         assert!(bond_mutations_from_accepted_txs(&[native, coinbase], 100).is_empty());
+    }
+
+    // ---- Addendum B §B.1: ActiveBondView + RewardedEpochSet ----
+
+    fn fixture_bond_record(op: TransactionOutpoint) -> StakeBondRecord {
+        // activation_daa_score = 5_000, status = Pending.
+        stake_bond_record_from_payload(&fixture_bond(), op)
+    }
+
+    #[test]
+    fn active_bond_view_apply_insert_then_resolve() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let mut view = ActiveBondView::new();
+        assert!(view.is_empty());
+        view.apply(&[BondMutation::Insert(op, fixture_bond_record(op))]);
+        assert_eq!(view.len(), 1);
+        // Active well past activation; not active before it.
+        assert!(view.active_bond_at(&op, 10_000).is_some());
+        assert!(view.active_bond_at(&op, 0).is_none());
+        // Unknown outpoint resolves to None.
+        let other = TransactionOutpoint::new(Hash64::from_bytes([0x22; 64]), 0);
+        assert!(view.active_bond_at(&other, 10_000).is_none());
+    }
+
+    #[test]
+    fn active_bond_view_revert_insert_removes() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let muts = vec![BondMutation::Insert(op, fixture_bond_record(op))];
+        let mut view = ActiveBondView::new();
+        view.apply(&muts);
+        view.revert(&muts);
+        assert!(view.is_empty());
+        assert!(view.get(&op).is_none());
+    }
+
+    #[test]
+    fn active_bond_view_slash_then_revert_round_trips() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let mut view = ActiveBondView::new();
+        view.apply(&[BondMutation::Insert(op, fixture_bond_record(op))]);
+        assert!(view.active_bond_at(&op, 10_000).is_some());
+
+        // Slash: record becomes Slashed → not active at any DAA score.
+        let slash = vec![BondMutation::Slash(op, 8_000)];
+        view.apply(&slash);
+        assert_eq!(view.get(&op).unwrap().status, BondStatus::Slashed);
+        assert_eq!(view.get(&op).unwrap().slashed_at_daa_score, Some(8_000));
+        assert!(view.active_bond_at(&op, 10_000).is_none());
+
+        // Revert slash (mirrors stage_dns_bond_mutations: clears slash,
+        // status → Active); time-based activation makes it active again.
+        view.revert(&slash);
+        assert_eq!(view.get(&op).unwrap().slashed_at_daa_score, None);
+        assert!(view.active_bond_at(&op, 10_000).is_some());
+    }
+
+    #[test]
+    fn active_bond_view_multi_block_apply_then_reverse_revert_restores_consensus_state() {
+        // Apply blocks b1, b2 then revert b2 (reverse chain order) → the
+        // post-b1 *consensus state* is restored, exactly like a UTXO reorg.
+        //
+        // Note: equality is asserted over the consensus-relevant queries
+        // (existence + `active_bond_at`), NOT full struct equality. A
+        // Slash→revert leaves the cosmetic `status` enum at `Active` even
+        // if the bond was `Pending` pre-slash — this faithfully mirrors
+        // `stage_dns_bond_mutations` (the persisted store does the same),
+        // and is consensus-invisible because every read goes through
+        // `effective_bond_status`, which derives status purely from the
+        // DAA-stamped fields and ignores the stored `status` enum.
+        let op1 = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let op2 = TransactionOutpoint::new(Hash64::from_bytes([0x22; 64]), 0);
+        let b1 = vec![BondMutation::Insert(op1, fixture_bond_record(op1))];
+        let b2 = vec![BondMutation::Insert(op2, fixture_bond_record(op2)), BondMutation::Slash(op1, 9_000)];
+
+        let mut view = ActiveBondView::new();
+        view.apply(&b1);
+        view.apply(&b2);
+        assert_eq!(view.len(), 2);
+        assert!(view.active_bond_at(&op1, 10_000).is_none()); // slashed in b2
+        assert!(view.active_bond_at(&op2, 10_000).is_some());
+
+        // Revert b2 (most-recent first) → post-b1 consensus state.
+        view.revert(&b2);
+        assert_eq!(view.len(), 1);
+        assert!(view.get(&op2).is_none()); // op2's Insert reverted
+        assert!(view.active_bond_at(&op1, 10_000).is_some()); // slash cleared
+        assert_eq!(view.get(&op1).unwrap().owner_reward_spk_payload, fixture_bond_record(op1).owner_reward_spk_payload);
+    }
+
+    #[test]
+    fn rewarded_epoch_set_insert_contains_remove() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let mut set = RewardedEpochSet::new();
+        assert!(!set.contains(&op, 7));
+        assert!(set.insert(op, 7)); // newly inserted
+        assert!(set.contains(&op, 7));
+        assert!(!set.insert(op, 7)); // duplicate → false, not rewarded again
+        assert_eq!(set.len(), 1);
+        assert!(set.remove(&op, 7)); // reorg reverse
+        assert!(!set.contains(&op, 7));
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn rewarded_epoch_set_keys_on_both_outpoint_and_epoch() {
+        let op1 = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let op2 = TransactionOutpoint::new(Hash64::from_bytes([0x22; 64]), 0);
+        let mut set = RewardedEpochSet::new();
+        set.insert(op1, 1);
+        // Same outpoint, different epoch → distinct (a later epoch is payable).
+        assert!(!set.contains(&op1, 2));
+        // Different outpoint, same epoch → distinct.
+        assert!(!set.contains(&op2, 1));
+        set.insert(op1, 2);
+        set.insert(op2, 1);
+        assert_eq!(set.len(), 3);
     }
 
     // ---- A.5: StakeScore aggregation -> DnsState ----
