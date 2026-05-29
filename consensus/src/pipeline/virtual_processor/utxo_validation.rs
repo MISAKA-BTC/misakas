@@ -918,6 +918,7 @@ mod tests {
                 bond_outpoint: op,
                 attestation_a: attestation(op, 0x55),
                 attestation_b: attestation(op, 0x99),
+                reporter_reward_spk_payload: [0xee; 32],
             };
             Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_SLASHING_EVIDENCE, 0, borsh::to_vec(&ev).unwrap())
         }

@@ -433,6 +433,14 @@ pub struct SlashingEvidencePayload {
     pub bond_outpoint: TransactionOutpoint,
     pub attestation_a: StakeAttestation,
     pub attestation_b: StakeAttestation,
+
+    /// The reporter's declared 32-byte ML-DSA-65 P2PKH spend payload
+    /// (`BLAKE2b-256(reporter_public_key)`, ADR-0002) that the
+    /// slashing reporter reward is paid to (ADR-0013 Addendum C). A
+    /// malformed value only misdirects the reporter's own reward, so
+    /// consensus imposes no check beyond the fixed 32-byte width.
+    /// Appended last (pre-activation wire change — no live evidence tx).
+    pub reporter_reward_spk_payload: [u8; 32],
 }
 
 /// Phase 13 sortition commit transaction payload (ADR-0012
@@ -499,6 +507,11 @@ pub struct UnrevealSlashingEvidencePayload {
     /// reveal window blocks; the outpoint here is enough to bind
     /// the evidence to a specific commit.
     pub commit_outpoint: TransactionOutpoint,
+
+    /// The reporter's declared 32-byte ML-DSA-65 P2PKH spend payload
+    /// (ADR-0013 Addendum C). Same role + self-griefing-only property
+    /// as on [`SlashingEvidencePayload`]. Appended last.
+    pub reporter_reward_spk_payload: [u8; 32],
 }
 
 // ---------------------------------------------------------------------
@@ -1940,6 +1953,37 @@ pub fn apply_unreveal_reporter_min_cap(
     SlashingDistribution { reporter_reward_sompi: capped_reporter, burned_sompi: distribution.burned_sompi + extra_burn }
 }
 
+/// Build the consensus-emitted slashing distribution (ADR-0013 Addendum C):
+/// given the slashed amount `S` and the reporter's declared spend payload,
+/// returns the single reporter-reward [`TransactionOutput`] the slashing
+/// transaction must carry — `value =
+/// compute_slashing_distribution(S, bps).reporter_reward_sompi`, `script_public_key
+/// = p2pkh_mldsa65_spk(reporter_reward_spk_payload)` — and the burned amount
+/// (`S − reporter_reward_sompi`, which leaves the active supply implicitly
+/// when the bond's locked UTXO is removed and only the reporter reward is
+/// re-minted). For the **unreveal** case pass
+/// `unreveal_floor = Some(DnsParams::unreveal_reporter_reward_sompi)` to apply
+/// the §"Slashing distribution" `min`-cap; pass `None` for equivocation.
+///
+/// Returns `None` for the output when the reporter reward is zero (e.g.
+/// `bps == 0` — everything burns), so no zero-value output is emitted. Pure
+/// and DAG-free, so the slashing-tx **construction** and **validation** paths
+/// produce byte-identical results.
+pub fn slashing_distribution_output(
+    slashed_amount_sompi: u64,
+    slashing_reporter_reward_bps: u16,
+    reporter_reward_spk_payload: &[u8; 32],
+    unreveal_floor: Option<u64>,
+) -> (Option<TransactionOutput>, u64) {
+    let mut dist = compute_slashing_distribution(slashed_amount_sompi, slashing_reporter_reward_bps);
+    if let Some(floor) = unreveal_floor {
+        dist = apply_unreveal_reporter_min_cap(dist, floor);
+    }
+    let output = (dist.reporter_reward_sompi > 0)
+        .then(|| TransactionOutput::new(dist.reporter_reward_sompi, p2pkh_mldsa65_spk(reporter_reward_spk_payload)));
+    (output, dist.burned_sompi)
+}
+
 // ---------------------------------------------------------------------
 // Consensus rule implementations (PR-10.5).
 //
@@ -3050,6 +3094,7 @@ mod tests {
                 b.target_hash = Hash64::from_bytes([0x33u8; 64]);
                 b
             },
+            reporter_reward_spk_payload: [0xeeu8; 32],
         };
         let bytes = borsh::to_vec(&evidence).unwrap();
         let back: SlashingEvidencePayload = borsh::from_slice(&bytes).unwrap();
@@ -3092,6 +3137,7 @@ mod tests {
                 b.target_hash = Hash64::from_bytes([0x33u8; 64]); // different anchor → equivocation
                 b
             },
+            reporter_reward_spk_payload: [0xeeu8; 32],
         }
     }
 
@@ -4187,6 +4233,7 @@ mod tests {
             target_epoch: 7,
             validator_id: Hash64::from_bytes([0x42u8; 64]),
             commit_outpoint: fixture_outpoint(),
+            reporter_reward_spk_payload: [0xeeu8; 32],
         };
         let bytes = borsh::to_vec(&p).unwrap();
         let back: UnrevealSlashingEvidencePayload = borsh::from_slice(&bytes).unwrap();
@@ -4816,6 +4863,41 @@ mod tests {
         assert_eq!(base.reporter_reward_sompi, 500_000);
         let capped = apply_unreveal_reporter_min_cap(base, 500_000);
         assert_eq!(capped, base);
+    }
+
+    // ---- slashing_distribution_output (Addendum C) ----------------
+
+    #[test]
+    fn slashing_distribution_output_equivocation_pays_reporter_and_burns_rest() {
+        // S = 1_000_000, bps = 1000 (10%) → reporter 100_000, burn 900_000.
+        let payload = [0x5au8; 32];
+        let (out, burned) = slashing_distribution_output(1_000_000, 1000, &payload, None);
+        let out = out.expect("non-zero reporter reward");
+        assert_eq!(out.value, 100_000);
+        assert_eq!(out.script_public_key, p2pkh_mldsa65_spk(&payload));
+        assert_eq!(burned, 900_000);
+        // Conservation: reporter + burn == S.
+        assert_eq!(out.value + burned, 1_000_000);
+    }
+
+    #[test]
+    fn slashing_distribution_output_zero_bps_emits_no_output() {
+        // bps = 0 → everything burns, no reporter output.
+        let (out, burned) = slashing_distribution_output(1_000_000, 0, &[0x5au8; 32], None);
+        assert!(out.is_none());
+        assert_eq!(burned, 1_000_000);
+    }
+
+    #[test]
+    fn slashing_distribution_output_unreveal_applies_floor() {
+        // S = 5_000_000, bps = 1000 → bps-reward 500_000, but the unreveal
+        // floor caps the reporter at 100_000; the extra burns.
+        let payload = [0x5au8; 32];
+        let (out, burned) = slashing_distribution_output(5_000_000, 1000, &payload, Some(100_000));
+        let out = out.expect("non-zero reporter reward");
+        assert_eq!(out.value, 100_000);
+        assert_eq!(burned, 4_900_000);
+        assert_eq!(out.value + burned, 5_000_000);
     }
 
     // ---- Coordinated-failover protocol (ADR-0014) -----------------
