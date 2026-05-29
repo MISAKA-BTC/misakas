@@ -818,3 +818,143 @@ so honest templates always yield valid blocks.
 | 10.12-a | Stateful slashing-evidence **genuineness** rule (forged evidence cannot slash). Done. | yes (activation) |
 | 10.12-b1 | Add `reporter_reward_spk_payload` to both evidence payloads + a pure `slashing_distribution_output(S, bps, payload, unreveal_floor) -> (reporter TxOutput, burned)` helper in `dns_finality.rs`. Inert. | n/a (dormant field + pure helper) |
 | 10.12-b2 | Wire the consensus side-effect: bond-UTXO removal + required reporter-reward output validation in the virtual processor (construction **and** validation, byte-for-byte), behind the activation gate. | yes (activation) |
+
+## Addendum C.2 — Reporter reward as an atomic side-effect (binding)
+
+Status: Accepted
+Date: 2026-05-30
+Supersedes: Addendum C step 3 ("a reporter-reward output **on the
+        slashing transaction**"), and C.1 in full (C.1.1 output-0
+        placement, C.1.2 per-transaction mint exemption, C.1.3 + C.1.5
+        the exact-output / strict-inclusion block rules). The Addendum C
+        step-2 bond output-0 removal, the §"Slashing distribution" split,
+        the recipient payload (Addendum C decision), and the net-supply
+        identity are all **unchanged**.
+
+### The gap C.1 left open (why this supersedes "reporter on the tx")
+
+C.1 pays the reporter by a **minted output on the slashing transaction**
+(`output-0`). That output is created by ordinary transaction application
+in `calculate_utxo_state` — which applies the txs of **every** mergeset
+block (the selected parent **and** every merged blue block), not just the
+block's own txs. The bond output-0 **removal** (Addendum C step 2,
+`resolve_slashing_side_effects`), by contrast, is single-shot per bond:
+it dedups within a block and skips a bond that is already `Slashed` in
+the selected-parent bond view (the view **retains** slashed records).
+
+These two facts do not compose across a GHOSTDAG merge. A single
+equivocation can be reported by **two different** slashing transactions
+on parallel branches; each is genuine (same bond, same valid
+attestations) and each is effective when validated **standalone**, so
+C.1.5's per-block strict-inclusion rule (which sees only a block's *own*
+txs) admits both. When a later block merges both — or one is on the
+selected chain and the other arrives in a merged blue block — both
+mint `R` (one per accepted tx), but the bond's `S` is removed **once**
+(the second resolves against an already-`Slashed` view and is skipped):
+
+```
+net supply change  =  k·R − S    (k = number of accepted, genuine
+                                   slashing txs for the one bond merged
+                                   into the chain; C.1 intended k = 1)
+```
+
+With `k ≥ ⌈10000 / slashing_reporter_reward_bps⌉` merged duplicate
+reports (= 10 at the default 10%), `k·R ≥ S` and the slash becomes
+**net-inflationary**; for any `k ≥ 2` it over-pays reporters and leaks
+supply. The mempool cannot prevent it (each tx is independently valid)
+and no per-block rule can (the duplicates live in *different* blocks).
+This is **inert on every current network** (`dns_activation_daa_score =
+u64::MAX`), but it is a pre-activation supply-safety defect.
+
+### Decision: the reporter reward is a side-effect, not a transaction output
+
+The reporter reward is **removed from the slashing transaction entirely**
+and minted by consensus as a side-effect UTXO, in the **same**
+`resolve_slashing_side_effects` pass that removes the bond's output-0 —
+so the mint and the removal are one atomic, per-bond operation:
+
+1. **A slashing transaction declares no outputs.** A
+   `SUBNETWORK_ID_SLASHING_EVIDENCE` transaction is a pure evidence
+   carrier: `outputs` is **empty**. (It also has no inputs, as today, so
+   it is value-trivial — `Σ in = Σ out = 0`, `fee = 0` — and the C.1.2
+   per-transaction mint exemption is **deleted**: nothing on a slashing
+   transaction ever mints, so the strict `Σ outputs ≤ Σ inputs` rule
+   applies to it unchanged, like every other transaction.) Leaving
+   `output index 0` undeclared frees it for the side-effect mint below.
+2. **For each bond actually slashed** (one per bond, in canonical
+   mergeset order — the *first* effective slashing tx for a bond wins;
+   later duplicates resolve to nothing), consensus, atomically:
+   - **removes** the bond's locked output-0 UTXO (value `S`) from the
+     UTXO set — Addendum C step 2, unchanged; and
+   - **mints** the reporter-reward UTXO at outpoint
+     **`(slashing_tx_id, 0)`** — `value =
+     slashing_distribution_output(S, bps, payload, floor).reporter`,
+     `script_public_key = p2pkh_mldsa65_spk(reporter_reward_spk_payload)`,
+     `is_coinbase = false`, `block_daa_score = pov_daa_score`
+     (immediately spendable; reorged in lockstep with the slash via the
+     mergeset-diff machinery). If `R == 0` (micro-bond), **no** UTXO is
+     minted and the whole `S` burns.
+
+Because the mint is emitted **iff** the removal is — both keyed on the
+same deduped, `Active`/`Unbonding`-gated, per-bond resolution — the net
+supply change is **exactly `R − S` per slashed bond, for any `k`**:
+
+```
+net supply change  =  R − S    (independent of how many duplicate
+                                 slashing txs are merged; k duplicates ⇒
+                                 1 mint + 1 removal, k−1 inert)
+```
+
+The cross-merge gap is closed **structurally**, not by an auxiliary
+rule: there is no longer a free-floating mint to over-count.
+
+### What this resolution requires of `calculate_utxo_state`
+
+The removal+mint resolves over the block's **mergeset** accepted slashing
+txs (via `ctx.mergeset_acceptance_data`), against the **selected-parent**
+bond view at `pov_daa_score` — the same view and as-of-block determinism
+the §A.4 `Slash` mutation already uses — and is applied to
+`ctx.mergeset_diff` + `ctx.multiset_hash` (hence the `utxo_commitment`)
+**after** the mergeset transaction loop. This is the single shared
+construction == validation chokepoint, so a template and a validator
+produce byte-identical side-effects. The per-bond dedup that makes the
+mint single-shot is the **mergeset-level** analogue of C.1.5 — it
+subsumes C.1.5's per-block uniqueness, which is therefore removed.
+
+`resolve_slashing_side_effects` / `SlashingSideEffect` carry the winning
+`slashing_tx_id` so the mint outpoint `(slashing_tx_id, 0)` is fixed
+deterministically.
+
+### Block-validity rule (replaces C.1.3 / C.1.5)
+
+The only block-validity rule a slashing transaction must satisfy is:
+**it declares no outputs** (so `(slashing_tx_id, 0)` is free for the
+side-effect mint and the transaction mints nothing on-chain). A block
+containing a `SUBNETWORK_ID_SLASHING_EVIDENCE` transaction with a
+non-empty `outputs` is invalid (a new `RuleError`). Genuineness is still
+enforced separately (`slashing_evidence_genuine`, run first). An
+**ineffective-but-genuine** slashing transaction (bond unknown,
+already-`Slashed`, `Pending`, or a within-mergeset duplicate) is **no
+longer block-invalidating** — it simply resolves to no side-effect (mints
+nothing, removes nothing), so it is inert and harmless to supply. The
+strict-inclusion rejection (C.1.5) is dropped: with the mint gone from
+the transaction, an ineffective slash can no longer inflate, so a merging
+miner is never forced to exclude a redundant slash to keep a block valid
+(no liveness wrinkle).
+
+### Determinism, reorg, and gating (unchanged)
+
+`S`, `R`, the recipient, and the mint outpoint are pure functions of the
+selected-parent bond view + the accepted evidence, so construction and
+validation match byte-for-byte. The mint and removal live in
+`ctx.mergeset_diff` / `ctx.multiset_hash` and are reverted by the
+existing mergeset-diff reversal on reorg, in lockstep with the §A.4
+`Slashed` mutation. Inert unless the overlay is configured **and** the
+block is past `dns_activation_daa_score` (`u64::MAX` on every current
+network).
+
+### Revised C.1.4 implementation row
+
+| Sub-PR | Title | Gated? |
+|---|---|---|
+| 16.4-b2-iv | The atomic side-effect in `calculate_utxo_state`: per slashed bond (mergeset-resolved, deduped, `Active`/`Unbonding`-gated), **remove** output-0 (`S`) **and mint** the reporter UTXO `R` at `(slashing_tx_id, 0)` — construction == validation, reorg-safe. Supersedes the b2-ii exemption and the b2-iii output rule (now "slashing tx has no outputs"). | yes (activation) |

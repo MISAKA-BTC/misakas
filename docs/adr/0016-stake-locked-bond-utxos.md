@@ -116,13 +116,17 @@ attested range to be slashable **before** release.
 ### D.4 Slash → consume
 
 When a genuine `SlashingEvidence`/`UnrevealSlashingEvidence` is
-accepted (ADR-0013 Addendum C), consensus consumes the bond's
-output-0 UTXO as a side-effect: `S = amount` leaves the supply, the
-reporter-reward output is emitted, and the remainder burns
-(Addendum C). Because D.2 forbids the owner from spending a
-non-releasable bond, and `unbonding_period` outlasts the evidence
-window (D.3), a misbehaving validator can never front-run a slash by
-unbonding first.
+accepted (ADR-0013 Addendum C, as amended by **Addendum C.2**),
+consensus consumes the bond's output-0 UTXO as a side-effect: `S =
+amount` leaves the supply, the reporter-reward UTXO (`R`) is minted in
+the **same atomic per-bond side-effect** at outpoint
+`(slashing_tx_id, 0)` — *not* as an output on the slashing transaction
+— and the remainder `S − R` burns implicitly (Addendum C.2). Pairing
+the mint with the removal makes the net supply change exactly `R − S`
+per slashed bond regardless of how many duplicate reports a block
+merges. Because D.2 forbids the owner from spending a non-releasable
+bond, and `unbonding_period` outlasts the evidence window (D.3), a
+misbehaving validator can never front-run a slash by unbonding first.
 
 ### D.5 Interaction with `StakeScore` / eligibility
 
