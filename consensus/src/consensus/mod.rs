@@ -58,7 +58,7 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget, ValidatorCommittee, ValidatorRecord,
+        ActiveValidatorSet, DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord,
         dns_confirmation_from_state, is_bond_active_at, stake_attestation_message, validator_set_commitment,
     },
     errors::{
@@ -596,7 +596,7 @@ impl Consensus {
 
     /// kaspa-pq Phase 11 (ADR-0010): the active validator set at `pov_daa_score`,
     /// assembled from the stake-bond store (bonds active per `is_bond_active_at`).
-    /// Shared by `get_validator_committee` and `get_validator_attestation_target`
+    /// Shared by `get_active_validator_set` and `get_validator_attestation_target`
     /// so both observe an identical active set. `flatten()` drops unreadable entries
     /// defensively — a single corrupt bond must not blank out the set.
     fn dns_active_validator_records(&self, pov_daa_score: u64) -> Vec<ValidatorRecord> {
@@ -732,7 +732,7 @@ impl ConsensusApi for Consensus {
         Some((*record).clone())
     }
 
-    fn get_validator_committee(&self) -> Option<ValidatorCommittee> {
+    fn get_active_validator_set(&self) -> Option<ActiveValidatorSet> {
         // kaspa-pq Phase 13 (ADR-0017): all active-bond validators attest every
         // epoch — there is no sortition committee. Return the full active set at
         // the sink (the pov is the sink DAA score so the epoch matches the
@@ -745,7 +745,7 @@ impl ConsensusApi for Consensus {
         let active_validator_count = active.len();
         let mut members: Vec<_> = active.into_iter().map(|r| r.validator_id).collect();
         members.sort();
-        Some(ValidatorCommittee { epoch, pov_daa_score, committee_size: active_validator_count, active_validator_count, members })
+        Some(ActiveValidatorSet { epoch, pov_daa_score, active_validator_count, members })
     }
 
     fn get_validator_attestation_target(&self, bond_outpoint: TransactionOutpoint) -> Option<ValidatorAttestationTarget> {

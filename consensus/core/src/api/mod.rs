@@ -10,7 +10,7 @@ use crate::{
     blockstatus::BlockStatus,
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
-    dns_finality::{DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget, ValidatorCommittee},
+    dns_finality::{ActiveValidatorSet, DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget},
     errors::{
         block::{BlockProcessResult, RuleError},
         coinbase::CoinbaseResult,
@@ -166,7 +166,7 @@ pub trait ConsensusApi: Send + Sync {
     /// committee cannot be selected yet (e.g. commit-reveal sortition before reveals
     /// are wired). The in-process validator service checks its own `validator_id`
     /// against `members` to decide attestation eligibility. Default `None`.
-    fn get_validator_committee(&self) -> Option<ValidatorCommittee> {
+    fn get_active_validator_set(&self) -> Option<ActiveValidatorSet> {
         None
     }
 

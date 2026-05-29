@@ -673,24 +673,22 @@ pub struct DnsConfirmation {
     pub note: String,
 }
 
-/// Per-epoch validator committee view surfaced by the consensus pipeline to the
-/// in-process validator service (and, later, the `getValidatorStatus` RPC).
+/// Per-epoch active-validator-set view surfaced by the consensus pipeline to the
+/// in-process validator service (and the `getValidatorStatus` RPC).
 ///
-/// Computed deterministically from the current sink DAA score, the stake-bond
-/// store, and `DnsParams` (epoch length, committee size, sortition mode). The
-/// `members` list is the canonical (`validator_id`-sorted) committee for `epoch`;
-/// a validator is eligible to attest iff its `validator_id` appears in it.
+/// Computed deterministically from the current sink DAA score and the stake-bond
+/// store: under ADR-0017 every active-bond validator attests, so `members` is the
+/// full active set for `epoch`, canonical (`validator_id`-sorted). A validator is
+/// eligible to attest iff its `validator_id` appears in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ValidatorCommittee {
-    /// Epoch this committee governs (`= pov_daa_score / epoch_length_blocks`).
+pub struct ActiveValidatorSet {
+    /// Epoch this set governs (`= pov_daa_score / epoch_length_blocks`).
     pub epoch: u64,
     /// Sink DAA score the active set was evaluated at (point of view).
     pub pov_daa_score: u64,
-    /// `committee_size` parameter used for selection this epoch.
-    pub committee_size: usize,
-    /// Number of active validators considered for selection at `pov_daa_score`.
+    /// Number of active validators at `pov_daa_score` (`== members.len()`).
     pub active_validator_count: usize,
-    /// Selected committee, sorted ascending by `validator_id`.
+    /// The active validators, sorted ascending by `validator_id`.
     pub members: Vec<Hash64>,
 }
 

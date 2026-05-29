@@ -1583,7 +1583,7 @@ pub struct GetValidatorStatusResponse {
     pub epoch: u64,
     /// Effective bond status: "none" / "pending" / "active" / "unbonding" / "slashed".
     pub bond_status: String,
-    pub in_committee: bool,
+    pub is_active_validator: bool,
     pub has_signed_epoch: bool,
     pub last_signed_epoch: u64,
     /// `dns_finality::ValidatorStatus` discriminant.
@@ -1603,7 +1603,7 @@ impl Serializer for GetValidatorStatusResponse {
         store!(bool, &self.overlay_configured, writer)?;
         store!(u64, &self.epoch, writer)?;
         store!(String, &self.bond_status, writer)?;
-        store!(bool, &self.in_committee, writer)?;
+        store!(bool, &self.is_active_validator, writer)?;
         store!(bool, &self.has_signed_epoch, writer)?;
         store!(u64, &self.last_signed_epoch, writer)?;
         store!(u32, &self.status, writer)?;
@@ -1623,7 +1623,7 @@ impl Deserializer for GetValidatorStatusResponse {
         let overlay_configured = load!(bool, reader)?;
         let epoch = load!(u64, reader)?;
         let bond_status = load!(String, reader)?;
-        let in_committee = load!(bool, reader)?;
+        let is_active_validator = load!(bool, reader)?;
         let has_signed_epoch = load!(bool, reader)?;
         let last_signed_epoch = load!(u64, reader)?;
         let status = load!(u32, reader)?;
@@ -1637,7 +1637,7 @@ impl Deserializer for GetValidatorStatusResponse {
             overlay_configured,
             epoch,
             bond_status,
-            in_committee,
+            is_active_validator,
             has_signed_epoch,
             last_signed_epoch,
             status,

@@ -657,7 +657,7 @@ message GetValidatorStatusResponseMessage {
   bool overlayConfigured = 6;
   uint64 epoch = 7;
   string bondStatus = 8;
-  bool inCommittee = 9;
+  bool isActiveValidator = 9;
   bool hasSignedEpoch = 10;
   uint64 lastSignedEpoch = 11;
   uint32 status = 12;

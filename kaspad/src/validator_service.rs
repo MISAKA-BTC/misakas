@@ -2,7 +2,7 @@
 //!
 //! Loads the ML-DSA-65 signing key (deriving the overlay `validator_id =
 //! BLAKE2b-512(public_key)` and the P2PKH-ML-DSA funding address) and runs an async
-//! heartbeat that, per epoch: evaluates eligibility (bond active AND in the committee),
+//! heartbeat that, per epoch: evaluates eligibility (bond active),
 //! and — when eligible — builds + signs a stake attestation, wraps it in a fee-funded
 //! `StakeAttestationShard` transaction (funded from a UTXO at the validator's own
 //! address), and, in `Active` mode, submits it via `flow_context`. A persistent
@@ -130,7 +130,7 @@ pub struct ValidatorConfig {
 /// A point-in-time snapshot of the validator's operational status, produced by
 /// [`ValidatorService::status`] (consumed by the `getValidatorStatus` RPC). Combines
 /// service-local facts (mode, identity, signing history) with a fresh consensus read of
-/// eligibility (bond + committee).
+/// eligibility (bond + active-set membership).
 #[derive(Clone, Debug)]
 pub struct ValidatorStatusSnapshot {
     pub mode: ValidatorMode,
@@ -142,8 +142,8 @@ pub struct ValidatorStatusSnapshot {
     pub epoch: Option<u64>,
     /// Effective bond status at the sink (`None` if no bond is configured/found).
     pub bond_status: Option<BondStatus>,
-    /// Whether the validator is in the current epoch's committee.
-    pub in_committee: bool,
+    /// Whether the validator is in the current epoch's active validator set.
+    pub is_active_validator: bool,
     /// Highest epoch with a local signing record (the equivocation log).
     pub last_signed_epoch: Option<u64>,
     /// Coarse, RPC-stable status code (ADR-0010/0011).
@@ -153,12 +153,12 @@ pub struct ValidatorStatusSnapshot {
 /// Derive the coarse [`ValidatorStatus`] from the validator's mode and its
 /// consensus-derived eligibility facts. Without a key, or outside `Active` mode, the
 /// validator never produces an attestation, so it maps to `DryRun`; `Active` walks the
-/// bond → committee → already-signed ladder.
+/// bond → active-set → already-signed ladder.
 fn derive_validator_status(
     mode: ValidatorMode,
     key_loaded: bool,
     bond_status: Option<BondStatus>,
-    in_committee: bool,
+    is_active_validator: bool,
     signed_this_epoch: bool,
 ) -> ValidatorStatus {
     if !key_loaded || mode != ValidatorMode::Active {
@@ -170,7 +170,7 @@ fn derive_validator_status(
         Some(BondStatus::Unbonding) => ValidatorStatus::Unbonding,
         Some(BondStatus::Slashed) => ValidatorStatus::Slashed,
         Some(BondStatus::Active) => {
-            if !in_committee {
+            if !is_active_validator {
                 ValidatorStatus::ActiveIdle
             } else if signed_this_epoch {
                 ValidatorStatus::SignedThisEpoch
@@ -527,8 +527,8 @@ impl ValidatorService {
             }
 
             // Heartbeat: report the node tip, the validator's own bond status, and its
-            // committee membership for the current epoch. When eligible (bond active AND
-            // in committee) it also builds + signs the attestation for the sink and
+            // active-set membership for the current epoch. When eligible (bond active AND
+            // in the active set) it also builds + signs the attestation for the sink and
             // verifies it locally — but does NOT gossip or submit it (the equivocation
             // guard and submission are later slices).
             let my_id = self.key.as_ref().map(|k| k.validator_id);
@@ -537,14 +537,14 @@ impl ValidatorService {
             let dns = session.async_get_dns_confirmation().await;
             // The overlay reads return None on non-overlay networks too, so skip the
             // lookups there to avoid misleading status lines.
-            let (bond, committee, attestation) = if dns.is_some() {
+            let (bond, active_set, attestation) = if dns.is_some() {
                 let bond = match self.bond_outpoint {
                     Some(outpoint) => session.async_get_stake_bond(outpoint).await,
                     None => None,
                 };
-                let committee = session.async_get_validator_committee().await;
-                // Eligible iff our bond is active AND our validator_id is in the committee.
-                let eligible = match (&bond, &committee, my_id) {
+                let active_set = session.async_get_active_validator_set().await;
+                // Eligible iff our bond is active AND our validator_id is in the active set.
+                let eligible = match (&bond, &active_set, my_id) {
                     (Some(b), Some(c), Some(id)) => is_bond_active_at(b, sink.daa_score) && c.members.contains(&id),
                     _ => false,
                 };
@@ -552,7 +552,7 @@ impl ValidatorService {
                     (true, Some(outpoint)) => session.async_get_validator_attestation_target(outpoint).await,
                     _ => None,
                 };
-                (bond, committee, attestation)
+                (bond, active_set, attestation)
             } else {
                 (None, None, None)
             };
@@ -567,20 +567,21 @@ impl ValidatorService {
                         }
                         (true, None) => "not-found".to_string(),
                     };
-                    let committee_status = match (&committee, my_id) {
+                    let active_set_status = match (&active_set, my_id) {
                         (Some(c), Some(id)) => format!(
-                            "epoch={} in_committee={} (committee={}/active={})",
+                            "epoch={} is_active_validator={} (active_validators={})",
                             c.epoch,
                             c.members.contains(&id),
-                            c.members.len(),
                             c.active_validator_count
                         ),
-                        (Some(c), None) => format!("epoch={} no-signing-key (committee={})", c.epoch, c.members.len()),
+                        (Some(c), None) => {
+                            format!("epoch={} no-signing-key (active_validators={})", c.epoch, c.active_validator_count)
+                        }
                         (None, _) => "unavailable".to_string(),
                     };
                     info!(
-                        "[{VALIDATOR}] heartbeat: mode={} sink_daa={} bond={} committee=[{}] dns_overlay=configured (stage={:?}, dns_confirmed={})",
-                        self.config.mode, sink.daa_score, bond_status, committee_status, conf.rollout_stage, conf.dns_confirmed
+                        "[{VALIDATOR}] heartbeat: mode={} sink_daa={} bond={} active_set=[{}] dns_overlay=configured (stage={:?}, dns_confirmed={})",
+                        self.config.mode, sink.daa_score, bond_status, active_set_status, conf.rollout_stage, conf.dns_confirmed
                     );
 
                     // Eligible: fund + sign + (in Active mode) submit the attestation shard tx,
@@ -600,13 +601,13 @@ impl ValidatorService {
 
     /// On-demand snapshot of the validator's operational status, for the `getValidatorStatus`
     /// RPC. Combines local config/identity + the signing log with a fresh consensus read of
-    /// bond + committee eligibility.
+    /// bond + active-set eligibility.
     pub async fn status(&self) -> ValidatorStatusSnapshot {
         let validator_id = self.key.as_ref().map(|k| k.validator_id);
         let funding_address = self.key.as_ref().map(|k| k.funding_address(self.config.address_prefix).to_string());
 
         let session = self.consensus_manager.consensus().session().await;
-        let committee = session.async_get_validator_committee().await;
+        let active_set = session.async_get_active_validator_set().await;
         let bond = match self.bond_outpoint {
             Some(outpoint) => session.async_get_stake_bond(outpoint).await,
             None => None,
@@ -614,9 +615,9 @@ impl ValidatorService {
         let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
         drop(session);
 
-        let epoch = committee.as_ref().map(|c| c.epoch);
+        let epoch = active_set.as_ref().map(|c| c.epoch);
         let bond_status = bond.as_ref().map(|b| effective_bond_status(b, sink_daa));
-        let in_committee = matches!((&committee, validator_id), (Some(c), Some(id)) if c.members.contains(&id));
+        let is_active_validator = matches!((&active_set, validator_id), (Some(c), Some(id)) if c.members.contains(&id));
         let (last_signed_epoch, signed_this_epoch) = {
             let guard = self.signed_epochs.lock().unwrap();
             match guard.as_ref() {
@@ -624,7 +625,8 @@ impl ValidatorService {
                 None => (None, false),
             }
         };
-        let status = derive_validator_status(self.config.mode, self.key.is_some(), bond_status, in_committee, signed_this_epoch);
+        let status =
+            derive_validator_status(self.config.mode, self.key.is_some(), bond_status, is_active_validator, signed_this_epoch);
 
         ValidatorStatusSnapshot {
             mode: self.config.mode,
@@ -632,7 +634,7 @@ impl ValidatorService {
             funding_address,
             epoch,
             bond_status,
-            in_committee,
+            is_active_validator,
             last_signed_epoch,
             status,
         }
@@ -828,7 +830,7 @@ impl ValidatorStatusProvider for ValidatorService {
                 None => "none",
             }
             .to_string(),
-            in_committee: s.in_committee,
+            is_active_validator: s.is_active_validator,
             has_signed_epoch: s.epoch.is_some() && s.last_signed_epoch == s.epoch,
             last_signed_epoch: s.last_signed_epoch.unwrap_or(0),
             status: s.status as u32,
@@ -911,7 +913,7 @@ mod tests {
         assert_eq!(derive_validator_status(ValidatorMode::Observer, true, Some(BondStatus::Active), true, false), DryRun);
         assert_eq!(derive_validator_status(ValidatorMode::Standby, true, Some(BondStatus::Active), true, false), DryRun);
         assert_eq!(derive_validator_status(ValidatorMode::Active, false, Some(BondStatus::Active), true, false), DryRun);
-        // Active mode walks the bond → committee → already-signed ladder.
+        // Active mode walks the bond → active-set → already-signed ladder.
         assert_eq!(derive_validator_status(ValidatorMode::Active, true, None, false, false), BondNotFound);
         assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Pending), false, false), BondPending);
         assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Unbonding), false, false), Unbonding);
