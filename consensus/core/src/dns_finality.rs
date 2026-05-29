@@ -687,6 +687,20 @@ pub struct DnsParams {
     /// also `None` (always `Deterministic`).
     pub commit_reveal_activation_daa_score: Option<u64>,
 
+    /// DAA-distance window (ADR-0009 Addendum B §B.3(c)) bounding both
+    /// validator-reward *recency* and *cross-block uniqueness*: an
+    /// attestation is rewardable only if `including_block.daa_score −
+    /// target_daa_score ≤ reward_uniqueness_window_blocks`, and the
+    /// coinbase fan-out checks `(bond, epoch)` uniqueness only against
+    /// selected-chain ancestors within this same window. Because two
+    /// rewardable inclusions of one `(bond, epoch)` are then both within
+    /// the window of the attestation's target, they are within the window
+    /// of each other — so the bounded ancestor walk is guaranteed to see
+    /// the earlier reward. Keeps the per-block walk bounded (a stale
+    /// attestation beyond the window is simply unrewarded, never
+    /// double-rewarded).
+    pub reward_uniqueness_window_blocks: u64,
+
     /// Validator reward-distribution parameters (ADR-0013). Consumed
     /// by the PR-10.5′-b coinbase fan-out and the PR-10.12′ slashing
     /// split. Carried here (rather than as a separate `Params` field)
@@ -3624,6 +3638,7 @@ mod tests {
             commit_without_reveal_slash_sompi: 50_000_000_000,
             unreveal_reporter_reward_sompi: 100_000_000,
             commit_reveal_activation_daa_score: None, // mainnet: always CommitReveal
+            reward_uniqueness_window_blocks: 3_600,   // ~6 epochs (epoch_length 600)
             reward_params: RewardParams {
                 per_attestation_reward_sompi: 100_000_000,
                 slashing_reporter_reward_bps: 1000,

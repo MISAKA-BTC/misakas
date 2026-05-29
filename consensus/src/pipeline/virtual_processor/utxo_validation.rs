@@ -12,7 +12,7 @@ use crate::{
         daa::DaaStoreReader,
         ghostdag::{CompactGhostdagData, GhostdagData},
         headers::HeaderStoreReader,
-        rewarded_epochs::RewardedEpochKeys,
+        rewarded_epochs::{RewardedEpochKeys, RewardedEpochsStoreReader},
     },
     processes::{
         pruning::PruningPointReply,
@@ -233,7 +233,7 @@ impl VirtualStateProcessor {
         // (no-op) on every current network. The rewarded `(bond, epoch)` keys
         // are stashed for `commit_utxo_state` to persist (§B.3(c)).
         let (validator_reward_outputs, rewarded_keys) =
-            self.validator_reward_outputs_for_block(&txs, selected_parent_bond_view, header.daa_score);
+            self.validator_reward_outputs_for_block(&txs, selected_parent_bond_view, header.daa_score, ctx.selected_parent());
         ctx.validator_rewarded_keys = rewarded_keys;
 
         // Verify coinbase transaction (incl. the validator reward fan-out).
@@ -315,11 +315,22 @@ impl VirtualStateProcessor {
     /// coinbase is unchanged on every current network. Callers run the §B.4
     /// eligibility rule first, so every attestation here resolves to an
     /// `Active` bond; the `if let Some` is a defensive skip.
+    ///
+    /// `selected_parent` is the block's selected parent — the chain tip the
+    /// `(bond, epoch)` cross-block uniqueness walk starts from (§B.3(c)). The
+    /// walk (this block + its selected-chain ancestors within
+    /// `reward_uniqueness_window_blocks` DAA) reads the per-block
+    /// `rewarded_epochs_store` to build the already-rewarded prefix set; the
+    /// matching recency bound drops attestations whose target is older than the
+    /// window, so the bounded walk is guaranteed to see any prior reward of the
+    /// same pair. The walk reads nothing on every current network (no rows
+    /// while the overlay is dormant), so this stays inert.
     pub(super) fn validator_reward_outputs_for_block(
         &self,
         txs: &[Transaction],
         bond_view: &ActiveBondView,
         daa_score: u64,
+        selected_parent: BlockHash,
     ) -> (Vec<TransactionOutput>, RewardedEpochKeys) {
         let Some(dns_params) = self.dns_params.as_ref() else {
             return (Vec::new(), Vec::new());
@@ -327,21 +338,42 @@ impl VirtualStateProcessor {
         if daa_score < dns_params.dns_activation_daa_score {
             return (Vec::new(), Vec::new());
         }
+        let window = dns_params.reward_uniqueness_window_blocks;
+
+        // Resolve eligible, recent attestations (canonical order). Recency
+        // (§B.3(c)): an attestation whose target is older than the window earns
+        // nothing — keeps the uniqueness walk below bounded.
         let mut attestations = Vec::new();
         for att in attestations_from_accepted_txs(txs) {
+            if daa_score.saturating_sub(att.target_daa_score) > window {
+                continue;
+            }
             if let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) {
                 attestations.push((att.bond_outpoint, att.epoch, bond.owner_reward_spk_payload));
             }
         }
-        // PR-10.5′-b3b-S1: within-block dedup only (empty prefix). The
-        // cross-block prefix set is built from the per-block rewarded-keys
-        // store walk in b3b-S2; the returned keys are persisted now so that
-        // walk has data to read.
+
+        // Build the already-rewarded prefix set: walk the selected parent and
+        // its selected-chain ancestors within `window` DAA, unioning each
+        // block's persisted rewarded `(bond, epoch)` keys (§B.3(c)).
+        let mut already_rewarded = RewardedEpochSet::new();
+        for ancestor in once(selected_parent).chain(self.reachability_service.default_backward_chain_iterator(selected_parent)) {
+            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
+            if daa_score.saturating_sub(ancestor_daa) > window {
+                break;
+            }
+            if let Ok(keys) = self.rewarded_epochs_store.get(ancestor) {
+                for (bond_outpoint, epoch) in keys.iter() {
+                    already_rewarded.insert(*bond_outpoint, *epoch);
+                }
+            }
+        }
+
         validator_reward_outputs_from_attestations(
             dns_params.reward_params.per_attestation_reward_sompi,
             dns_params.reward_params.max_validator_inflation_per_block_sompi,
             &attestations,
-            &RewardedEpochSet::new(),
+            &already_rewarded,
         )
     }
 

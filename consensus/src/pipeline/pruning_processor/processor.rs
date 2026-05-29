@@ -487,6 +487,10 @@ impl PruningProcessor {
                 self.utxo_multisets_store.delete_batch(&mut batch, current).unwrap();
                 self.utxo_diffs_store.delete_batch(&mut batch, current).unwrap();
                 self.acceptance_data_store.delete_batch(&mut batch, current).unwrap();
+                // kaspa-pq (ADR-0009 Addendum B §B.3(c)): prune the per-block
+                // rewarded `(bond, epoch)` keys. A no-op for blocks that rewarded
+                // nothing (no row), i.e. every block while the overlay is dormant.
+                self.rewarded_epochs_store.delete_batch(&mut batch, current).unwrap();
                 self.block_transactions_store.delete_batch(&mut batch, current).unwrap();
 
                 if let Some(&affiliated_proof_level) = keep_relations.get(&current) {

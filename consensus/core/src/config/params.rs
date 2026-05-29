@@ -795,6 +795,9 @@ pub const DEVNET_PARAMS: Params = Params {
         commit_without_reveal_slash_sompi: 50_000_000_000,
         unreveal_reporter_reward_sompi: 100_000_000,
         commit_reveal_activation_daa_score: None,
+        // 6 epochs of recency/uniqueness window (epoch_length 100 × 6). Not
+        // load-bearing while the gate is dormant.
+        reward_uniqueness_window_blocks: 600,
         // ADR-0013 reward track — NOT load-bearing on devnet (the
         // dns_activation gate is u64::MAX, so the coinbase fan-out
         // never fires). Values are placeholders chosen so the cap

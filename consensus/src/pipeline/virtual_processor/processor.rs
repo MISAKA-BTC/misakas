@@ -1424,8 +1424,12 @@ impl VirtualStateProcessor {
         // with the SAME `validator_reward_outputs_for_block` the validation
         // path uses, so a block mined from this template reproduces the
         // coinbase byte-for-byte. Empty (no-op) on every current network.
-        let (validator_reward_outputs, _rewarded_keys) =
-            self.validator_reward_outputs_for_block(&txs, &self.initial_active_bond_view(), virtual_state.daa_score);
+        let (validator_reward_outputs, _rewarded_keys) = self.validator_reward_outputs_for_block(
+            &txs,
+            &self.initial_active_bond_view(),
+            virtual_state.daa_score,
+            virtual_state.ghostdag_data.selected_parent,
+        );
         let coinbase = self
             .coinbase_manager
             .expected_coinbase_transaction(
