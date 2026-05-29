@@ -1417,16 +1417,20 @@ impl VirtualStateProcessor {
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let header_pruning_point =
             self.pruning_point_manager.expected_header_pruning_point(virtual_state.ghostdag_data.to_compact()).pruning_point;
-        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): the validator reward
-        // fan-out for this template. The template extends the current tip, so
-        // the bond set as-of its selected parent is the `StakeBonds` store
-        // snapshot (= state at the sink) — `initial_active_bond_view`. Computed
-        // with the SAME `validator_reward_outputs_for_block` the validation
-        // path uses, so a block mined from this template reproduces the
-        // coinbase byte-for-byte. Empty (no-op) on every current network.
+        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4/§B.5): the validator
+        // reward fan-out for this template. The template extends the current
+        // tip, so the bond set as-of its selected parent is the `StakeBonds`
+        // store snapshot (= state at the sink) — `initial_active_bond_view`.
+        // First drop any ineligible attestation shard so the mined block passes
+        // the §B.4 rule; then compute the reward outputs with the SAME
+        // `validator_reward_outputs_for_block` the validation path uses, so a
+        // block mined from this template reproduces the coinbase byte-for-byte.
+        // Both are no-ops on every current network (overlay dormant).
+        let template_bond_view = self.initial_active_bond_view();
+        self.retain_reward_eligible_attestation_shards(&mut txs, &template_bond_view, virtual_state.daa_score);
         let (validator_reward_outputs, _rewarded_keys) = self.validator_reward_outputs_for_block(
             &txs,
-            &self.initial_active_bond_view(),
+            &template_bond_view,
             virtual_state.daa_score,
             virtual_state.ghostdag_data.selected_parent,
         );

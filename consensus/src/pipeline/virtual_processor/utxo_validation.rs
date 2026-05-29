@@ -377,6 +377,36 @@ impl VirtualStateProcessor {
         )
     }
 
+    /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): block-template
+    /// pre-filter. Drops any `StakeAttestationShard` tx carrying an attestation
+    /// that is not §B.4-eligible (its bond does not resolve to `Active` in
+    /// `bond_view` with a valid signature) so that a block mined from the
+    /// template passes the eligibility rule rather than self-disqualifying.
+    /// Non-shard txs are always retained. Inert unless the overlay is
+    /// configured **and** past `dns_activation_daa_score` (`u64::MAX`
+    /// everywhere today), so on every current network this is a no-op and the
+    /// template is unchanged. Recency is *not* filtered here: a stale-but-
+    /// eligible shard is valid (§B.4 ignores recency) and simply earns no
+    /// reward, so it may remain.
+    pub(super) fn retain_reward_eligible_attestation_shards(
+        &self,
+        txs: &mut Vec<Transaction>,
+        bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) {
+        let Some(dns_params) = self.dns_params.as_ref() else {
+            return;
+        };
+        if daa_score < dns_params.dns_activation_daa_score {
+            return;
+        }
+        let net_id = self.genesis.hash;
+        // A non-shard tx yields no attestations → `attestation_reward_eligibility`
+        // returns Ok, so it is retained. A shard tx is retained iff *all* its
+        // attestations are eligible.
+        txs.retain(|tx| attestation_reward_eligibility(std::slice::from_ref(tx), bond_view, net_id, true).is_ok());
+    }
+
     /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the Model-B
     /// reward-eligibility **block-validity** rule. Rejects a block that
     /// includes a `StakeAttestationShard` whose attestation is not
