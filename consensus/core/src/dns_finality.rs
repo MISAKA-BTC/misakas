@@ -828,6 +828,19 @@ pub fn validator_id_from_pubkey(validator_pubkey: &[u8]) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
+/// Local-only fingerprint of an ML-DSA-65 signature: unkeyed `BLAKE2b-512` of the
+/// signature bytes, stored in [`SignedEpochRecord::signature_fingerprint`] so a
+/// validator can recognise a re-broadcast of its own in-flight attestation across
+/// restarts without persisting the full ~3.3 KB signature. It is **not** part of
+/// the equivocation predicate (see [`check_signed_epoch_record`]) — two valid hedged
+/// signatures over the same message differ, so only `(target_hash, target_daa_score)`
+/// equality decides equivocation.
+pub fn signature_fingerprint(signature: &[u8]) -> Hash64 {
+    let mut out = [0u8; 64];
+    out.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(signature).finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
 /// Compute the validator-set commitment for `epoch` over the
 /// `validators` set, per ADR-0010 §"Validator-set commitment
 /// derivation":
@@ -1220,7 +1233,7 @@ pub enum ValidatorStatus {
 /// storing them again would invite drift. The record carries only
 /// the per-attestation content the equivocation check compares
 /// against.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct SignedEpochRecord {
     /// Epoch this attestation is bound to. Matches
     /// `StakeAttestation::epoch`.
@@ -3359,6 +3372,18 @@ mod tests {
         let mut other = pubkey;
         other[0] ^= 0x01;
         assert_ne!(validator_id_from_pubkey(&other), id);
+    }
+
+    #[test]
+    fn signature_fingerprint_is_unkeyed_blake2b_512() {
+        let sig = [0x7eu8; 3309]; // MLDSA65_SIG_LEN-sized sample
+        let mut expected = [0u8; 64];
+        expected.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(&sig).finalize().as_bytes());
+        assert_eq!(signature_fingerprint(&sig), Hash64::from_bytes(expected));
+        // Input-sensitive (so a re-broadcast of a *different* signature is distinguishable).
+        let mut other = sig;
+        other[0] ^= 0x01;
+        assert_ne!(signature_fingerprint(&other), signature_fingerprint(&sig));
     }
 
     // ---- stake_attestation_message --------------------------------

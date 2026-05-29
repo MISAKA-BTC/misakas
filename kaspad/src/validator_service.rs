@@ -10,7 +10,8 @@
 //! unchanged.
 
 use kaspa_consensus_core::dns_finality::{
-    ATTESTATION_MLDSA65_CONTEXT, effective_bond_status, is_bond_active_at, validator_id_from_pubkey,
+    ATTESTATION_MLDSA65_CONTEXT, SignedEpochCheckOutcome, SignedEpochRecord, ValidatorAttestationTarget, check_signed_epoch_record,
+    effective_bond_status, is_bond_active_at, signature_fingerprint, validator_id_from_pubkey,
 };
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_consensusmanager::ConsensusManager;
@@ -26,7 +27,14 @@ use kaspa_hashes::Hash64;
 use kaspa_txscript::{MLDSA65_SIG_LEN, verify_mldsa65_with_context};
 use libcrux_ml_dsa::ml_dsa_65;
 use rand::RngCore;
-use std::{fmt, fs, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt, fs,
+    path::PathBuf,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 const VALIDATOR: &str = "validator-service";
 
@@ -80,6 +88,9 @@ pub struct ValidatorConfig {
     pub key_path: Option<String>,
     /// Stake-bond outpoint backing this validator's attestations, as "txid:index", if provided.
     pub stake_bond: Option<String>,
+    /// Path to the persistent equivocation-safety log (`validator-state.json`). When
+    /// `None`, signing is disabled (the guard cannot be enforced without persistence).
+    pub state_path: Option<PathBuf>,
 }
 
 /// Read and parse the validator signing seed from a hex file.
@@ -147,6 +158,74 @@ fn parse_stake_bond_ref(s: &str) -> Result<TransactionOutpoint, String> {
     Ok(TransactionOutpoint::new(transaction_id, index))
 }
 
+const SIGNED_EPOCH_FILE_VERSION: u16 = 1;
+
+/// On-disk shape of the per-validator equivocation-safety log (JSON). Bound to a
+/// single `(validator_id, bond_outpoint)` so one host can never silently clobber
+/// another key's safety record.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SignedEpochFile {
+    version: u16,
+    validator_id: Hash64,
+    bond_outpoint: TransactionOutpoint,
+    /// epoch -> the attestation signed for it.
+    records: BTreeMap<u64, SignedEpochRecord>,
+}
+
+/// Persistent per-epoch signing log enforcing ADR-0011 equivocation safety across
+/// restarts. Keyed in memory by epoch (the `(bond_outpoint, validator_id)` part of
+/// the ADR triple is fixed for one running validator and lives in the file header).
+struct SignedEpochStore {
+    path: PathBuf,
+    validator_id: Hash64,
+    bond_outpoint: TransactionOutpoint,
+    records: BTreeMap<u64, SignedEpochRecord>,
+}
+
+impl SignedEpochStore {
+    /// Load the log for `(validator_id, bond_outpoint)` from `path`, or start empty if
+    /// the file is absent. Errors if the file exists but belongs to a different
+    /// validator/bond — refusing to operate is safer than risking cross-key equivocation.
+    fn load_or_empty(path: PathBuf, validator_id: Hash64, bond_outpoint: TransactionOutpoint) -> Result<Self, String> {
+        if !path.exists() {
+            return Ok(Self { path, validator_id, bond_outpoint, records: BTreeMap::new() });
+        }
+        let raw = fs::read_to_string(&path).map_err(|e| format!("cannot read validator-state file {}: {e}", path.display()))?;
+        let file: SignedEpochFile =
+            serde_json::from_str(&raw).map_err(|e| format!("cannot parse validator-state file {}: {e}", path.display()))?;
+        if file.validator_id != validator_id || file.bond_outpoint != bond_outpoint {
+            return Err(format!("validator-state file {} belongs to a different validator/bond; refusing to use it", path.display()));
+        }
+        Ok(Self { path, validator_id, bond_outpoint, records: file.records })
+    }
+
+    /// Equivocation outcome for `candidate` against the persisted record for its epoch.
+    fn check(&self, candidate: &SignedEpochRecord) -> SignedEpochCheckOutcome {
+        check_signed_epoch_record(self.records.get(&candidate.epoch), candidate)
+    }
+
+    /// Persist `record` for its epoch and flush atomically (temp file + rename so a
+    /// crash mid-write cannot truncate the log). Call only after a successful sign and
+    /// after [`Self::check`] returned [`SignedEpochCheckOutcome::Allow`].
+    fn record_and_flush(&mut self, record: SignedEpochRecord) -> Result<(), String> {
+        self.records.insert(record.epoch, record);
+        let file = SignedEpochFile {
+            version: SIGNED_EPOCH_FILE_VERSION,
+            validator_id: self.validator_id,
+            bond_outpoint: self.bond_outpoint,
+            records: self.records.clone(),
+        };
+        let json = serde_json::to_string_pretty(&file).map_err(|e| format!("cannot serialize validator-state: {e}"))?;
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("cannot create validator-state dir {}: {e}", parent.display()))?;
+        }
+        let tmp = self.path.with_extension("json.tmp");
+        fs::write(&tmp, json).map_err(|e| format!("cannot write validator-state tmp {}: {e}", tmp.display()))?;
+        fs::rename(&tmp, &self.path).map_err(|e| format!("cannot commit validator-state {}: {e}", self.path.display()))?;
+        Ok(())
+    }
+}
+
 /// In-process validator node service (skeleton).
 pub struct ValidatorService {
     config: ValidatorConfig,
@@ -156,6 +235,9 @@ pub struct ValidatorService {
     key: Option<ValidatorKey>,
     /// Parsed stake-bond outpoint, if `--stake-bond` was provided and well-formed.
     bond_outpoint: Option<TransactionOutpoint>,
+    /// Persistent equivocation-safety log. `None` (signing disabled) unless a key, bond,
+    /// and state path are all present and the on-disk log belongs to this validator.
+    signed_epochs: Mutex<Option<SignedEpochStore>>,
 }
 
 impl ValidatorService {
@@ -185,7 +267,23 @@ impl ValidatorService {
             },
             None => None,
         };
-        Self { config, consensus_manager, tick_service, key, bond_outpoint }
+        // The equivocation-safety log requires a key (validator_id), a bond, and a path.
+        // A load failure (e.g. a foreign state file) leaves it `None`, which disables signing.
+        let signed_epochs = match (&key, bond_outpoint, &config.state_path) {
+            (Some(key), Some(outpoint), Some(path)) => match SignedEpochStore::load_or_empty(path.clone(), key.validator_id, outpoint)
+            {
+                Ok(store) => {
+                    info!("[{VALIDATOR}] equivocation-safety log {} ({} prior epoch(s))", path.display(), store.records.len());
+                    Some(store)
+                }
+                Err(err) => {
+                    warn!("[{VALIDATOR}] {err} — signing disabled until resolved");
+                    None
+                }
+            },
+            _ => None,
+        };
+        Self { config, consensus_manager, tick_service, key, bond_outpoint, signed_epochs: Mutex::new(signed_epochs) }
     }
 
     pub async fn worker(self: &Arc<ValidatorService>) {
@@ -265,20 +363,10 @@ impl ValidatorService {
                         self.config.mode, sink.daa_score, bond_status, committee_status, conf.rollout_stage, conf.dns_confirmed
                     );
 
-                    // Eligible: build + sign + locally verify the attestation. DRY-RUN —
-                    // not gossiped/submitted (equivocation guard is the next slice).
+                    // Eligible: sign under the equivocation guard (DRY-RUN — verified
+                    // locally and logged, but not gossiped/submitted yet).
                     if let (Some(target), Some(key)) = (&attestation, &self.key) {
-                        let digest = target.message.as_bytes();
-                        let signature = key.sign_attestation(&digest);
-                        let verified = key.verify_attestation(&digest, &signature);
-                        info!(
-                            "[{VALIDATOR}] eligible — signed attestation (DRY-RUN, not submitted): epoch={} target={} vsc={} sig_len={} self_verify={}",
-                            target.epoch,
-                            target.target_hash,
-                            target.validator_set_commitment,
-                            signature.len(),
-                            verified
-                        );
+                        self.guarded_sign(target, key);
                     }
                 }
                 None => {
@@ -288,6 +376,56 @@ impl ValidatorService {
         }
 
         trace!("[{VALIDATOR}] worker exiting");
+    }
+
+    /// Equivocation-guarded attestation signing (ADR-0011). Consults the persistent
+    /// signed-epoch log and signs only on [`SignedEpochCheckOutcome::Allow`], persisting
+    /// the record before returning; refuses on `Block` (would be slashable) and skips on
+    /// `AllowRebroadcast` (already signed this exact target). DRY-RUN: the signature is
+    /// verified locally and logged but NOT gossiped/submitted (that is a later slice).
+    fn guarded_sign(&self, target: &ValidatorAttestationTarget, key: &ValidatorKey) {
+        let mut guard = self.signed_epochs.lock().unwrap();
+        let Some(store) = guard.as_mut() else {
+            trace!("[{VALIDATOR}] eligible for epoch {} but no equivocation-safety log; not signing", target.epoch);
+            return;
+        };
+        // `signature_fingerprint` is not part of the equivocation predicate, so a
+        // placeholder is fine for the pre-sign check; the stored record carries the real one.
+        let candidate = SignedEpochRecord {
+            epoch: target.epoch,
+            target_hash: target.target_hash,
+            target_daa_score: target.target_daa_score,
+            signature_fingerprint: Hash64::from_bytes([0u8; 64]),
+        };
+        match store.check(&candidate) {
+            SignedEpochCheckOutcome::Block => warn!(
+                "[{VALIDATOR}] EQUIVOCATION BLOCKED: epoch {} already signed a different target; refusing to sign {}",
+                target.epoch, target.target_hash
+            ),
+            SignedEpochCheckOutcome::AllowRebroadcast => {
+                info!("[{VALIDATOR}] epoch {} already signed this target; rebroadcast-safe, not re-signing", target.epoch)
+            }
+            SignedEpochCheckOutcome::Allow => {
+                let digest = target.message.as_bytes();
+                let signature = key.sign_attestation(&digest);
+                let verified = key.verify_attestation(&digest, &signature);
+                let record = SignedEpochRecord { signature_fingerprint: signature_fingerprint(&signature), ..candidate };
+                // Persist BEFORE any (future) gossip. If the flush fails, do not advance —
+                // retrying next tick is safe, but signing without a durable record is not.
+                if let Err(e) = store.record_and_flush(record) {
+                    warn!("[{VALIDATOR}] failed to persist signed-epoch record (not advancing): {e}");
+                    return;
+                }
+                info!(
+                    "[{VALIDATOR}] eligible — signed attestation (DRY-RUN, not submitted): epoch={} target={} vsc={} sig_len={} self_verify={}",
+                    target.epoch,
+                    target.target_hash,
+                    target.validator_set_commitment,
+                    signature.len(),
+                    verified
+                );
+            }
+        }
     }
 }
 
@@ -394,5 +532,50 @@ mod tests {
         let mut bad = msg;
         bad[0] ^= 0x01;
         assert!(!key.verify_attestation(&bad, &sig));
+    }
+
+    fn signed_record(epoch: u64, target: u8) -> SignedEpochRecord {
+        SignedEpochRecord {
+            epoch,
+            target_hash: Hash64::from_bytes([target; 64]),
+            target_daa_score: epoch * 100,
+            signature_fingerprint: Hash64::from_bytes([0u8; 64]),
+        }
+    }
+
+    #[test]
+    fn signed_epoch_store_guard_and_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("validator-state.json");
+        let vid = Hash64::from_bytes([0x01u8; 64]);
+        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x02u8; 64]), 0);
+
+        let mut store = SignedEpochStore::load_or_empty(path.clone(), vid, outpoint).unwrap();
+        let a = signed_record(5, 0xaa);
+        // First sign for epoch 5 -> Allow, then record.
+        assert_eq!(store.check(&a), SignedEpochCheckOutcome::Allow);
+        store.record_and_flush(a.clone()).unwrap();
+        // Re-signing the same target is rebroadcast-safe; a different target equivocates.
+        assert_eq!(store.check(&a), SignedEpochCheckOutcome::AllowRebroadcast);
+        assert_eq!(store.check(&signed_record(5, 0xbb)), SignedEpochCheckOutcome::Block);
+
+        // Restart safety: a fresh load from disk must preserve the verdicts.
+        let reloaded = SignedEpochStore::load_or_empty(path, vid, outpoint).unwrap();
+        assert_eq!(reloaded.check(&a), SignedEpochCheckOutcome::AllowRebroadcast);
+        assert_eq!(reloaded.check(&signed_record(5, 0xbb)), SignedEpochCheckOutcome::Block);
+        // A different epoch is unconstrained.
+        assert_eq!(reloaded.check(&signed_record(6, 0xcc)), SignedEpochCheckOutcome::Allow);
+    }
+
+    #[test]
+    fn signed_epoch_store_rejects_foreign_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("validator-state.json");
+        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x02u8; 64]), 0);
+        // Validator A writes its log.
+        let mut a = SignedEpochStore::load_or_empty(path.clone(), Hash64::from_bytes([0x0au8; 64]), outpoint).unwrap();
+        a.record_and_flush(signed_record(1, 0x11)).unwrap();
+        // Validator B must refuse to use A's file rather than clobber it.
+        assert!(SignedEpochStore::load_or_empty(path, Hash64::from_bytes([0x0bu8; 64]), outpoint).is_err());
     }
 }

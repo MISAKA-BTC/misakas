@@ -598,7 +598,15 @@ Do you confirm? (y/n)";
             }),
             None => ValidatorMode::default(),
         };
-        let validator_config = ValidatorConfig { mode, key_path: args.validator_key.clone(), stake_bond: args.stake_bond.clone() };
+        // Equivocation-safety log lives beside the per-network data dir (NOT inside it),
+        // so it survives a `--reset-db` and still binds the validator to its network.
+        let state_path = app_dir.join(network.to_prefixed()).join("validator-state.json");
+        let validator_config = ValidatorConfig {
+            mode,
+            key_path: args.validator_key.clone(),
+            stake_bond: args.stake_bond.clone(),
+            state_path: Some(state_path),
+        };
         Some(Arc::new(ValidatorService::new(validator_config, consensus_manager.clone(), tick_service.clone())))
     } else {
         None
