@@ -57,7 +57,10 @@ use kaspa_hashes::{Hash, Hash64};
 use kaspa_utils::mem_size::MemSizeEstimator;
 
 use crate::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SubnetworkId};
-use crate::{BlueWorkType, tx::TransactionOutpoint};
+use crate::{
+    BlueWorkType,
+    tx::{Transaction, TransactionOutpoint},
+};
 
 /// 1952 bytes — matches `kaspa_txscript::MLDSA65_PK_LEN`. Repeated
 /// here so this module does not have to depend on `kaspa-txscript`;
@@ -2086,6 +2089,59 @@ pub fn is_bond_active_at(record: &StakeBondRecord, pov_daa_score: u64) -> bool {
     effective_bond_status(record, pov_daa_score) == BondStatus::Active
 }
 
+/// A mutation to the `StakeBonds` consensus store derived from accepted
+/// DNS-overlay transactions on the selected chain (ADR-0009 Addendum A.4).
+/// The virtual processor **applies** these for a block joining the selected
+/// chain and **reverts** them for a block leaving it (reorg), exactly like
+/// the UTXO set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BondMutation {
+    /// A new bond created by a `StakeBondPayload` tx, keyed by its output-0
+    /// outpoint (Addendum A.1). Apply = insert; revert = delete.
+    Insert(TransactionOutpoint, StakeBondRecord),
+    /// A bond burned by accepted `SlashingEvidencePayload`, stamped with the
+    /// accepting block's DAA score. Apply = set `slashed_at_daa_score`;
+    /// revert = clear it.
+    Slash(TransactionOutpoint, u64),
+}
+
+/// Derives the ordered [`BondMutation`]s implied by a chain block's
+/// **accepted** transactions (ADR-0009 Addendum A.4 / A.1).
+///
+/// Pure: decodes the DNS-overlay payloads (defensively skipping any that
+/// fail to decode — a committed block's txs already passed PR-10.4 stateless
+/// validation, so this is belt-and-suspenders) and maps them to store
+/// mutations. The caller decides which txs count as "accepted"; this
+/// function is agnostic to that selection so it stays unit-testable.
+///
+/// - `StakeBond` → `Insert` at `bond_outpoint = (tx.id(), 0)`.
+/// - `SlashingEvidence` → `Slash(payload.bond_outpoint, accepted_daa_score)`.
+/// - `StakeAttestationShard` → nothing (it feeds the StakeScore aggregation
+///   in A.5, not the bond set).
+///
+/// Bond *activation* is **not** stamped here; it is derived at read time
+/// from the payload's `activation_daa_score` (see [`effective_bond_status`]).
+pub fn bond_mutations_from_accepted_txs(txs: &[Transaction], accepted_daa_score: u64) -> Vec<BondMutation> {
+    let mut muts = Vec::new();
+    for tx in txs {
+        match dns_tx_kind(&tx.subnetwork_id) {
+            Some(DnsTxKind::StakeBond) => {
+                if let Ok(payload) = borsh::from_slice::<StakeBondPayload>(&tx.payload) {
+                    let outpoint = TransactionOutpoint::new(tx.id(), 0);
+                    muts.push(BondMutation::Insert(outpoint, stake_bond_record_from_payload(&payload, outpoint)));
+                }
+            }
+            Some(DnsTxKind::SlashingEvidence) => {
+                if let Ok(payload) = borsh::from_slice::<SlashingEvidencePayload>(&tx.payload) {
+                    muts.push(BondMutation::Slash(payload.bond_outpoint, accepted_daa_score));
+                }
+            }
+            Some(DnsTxKind::StakeAttestationShard) | None => {}
+        }
+    }
+    muts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2591,6 +2647,43 @@ mod tests {
         // saturating_add: a pathological u64::MAX request height never wraps early.
         rec.unbond_request_daa_score = Some(u64::MAX);
         assert_eq!(bond_release_daa_score(&rec), Some(u64::MAX));
+    }
+
+    fn dns_overlay_tx(subnetwork_id: SubnetworkId, payload: Vec<u8>) -> Transaction {
+        Transaction::new(0, vec![], vec![], 0, subnetwork_id, 0, payload)
+    }
+
+    #[test]
+    fn bond_mutations_extracts_insert_and_slash() {
+        let bond_payload = fixture_bond();
+        let bond_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, borsh::to_vec(&bond_payload).unwrap());
+        let expected_outpoint = TransactionOutpoint::new(bond_tx.id(), 0); // A.1: output 0
+
+        let evidence = fixture_evidence(); // references fixture_outpoint() as its bond
+        let slash_tx = dns_overlay_tx(SUBNETWORK_ID_SLASHING_EVIDENCE, borsh::to_vec(&evidence).unwrap());
+
+        // Attestation-shard + a native tx contribute no bond mutations.
+        let shard_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, borsh::to_vec(&fixture_shard(2)).unwrap());
+        let native_tx = dns_overlay_tx(SubnetworkId::from_byte(0), vec![1, 2, 3]);
+
+        let muts = bond_mutations_from_accepted_txs(&[bond_tx, slash_tx, shard_tx, native_tx], 12_345);
+        assert_eq!(muts.len(), 2);
+        assert_eq!(muts[0], BondMutation::Insert(expected_outpoint, stake_bond_record_from_payload(&bond_payload, expected_outpoint)));
+        assert_eq!(muts[1], BondMutation::Slash(evidence.bond_outpoint, 12_345));
+    }
+
+    #[test]
+    fn bond_mutations_skips_undecodable_overlay_payload() {
+        // A malformed stake-bond payload is defensively skipped, not panicked on.
+        let bad = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, vec![0xff, 0x00, 0x12]);
+        assert!(bond_mutations_from_accepted_txs(&[bad], 0).is_empty());
+    }
+
+    #[test]
+    fn bond_mutations_empty_without_overlay_txs() {
+        let native = dns_overlay_tx(SubnetworkId::from_byte(0), vec![]);
+        let coinbase = dns_overlay_tx(SubnetworkId::from_byte(1), vec![]);
+        assert!(bond_mutations_from_accepted_txs(&[native, coinbase], 100).is_empty());
     }
 
     #[test]
