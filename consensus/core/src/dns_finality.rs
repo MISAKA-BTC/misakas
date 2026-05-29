@@ -1604,37 +1604,289 @@ pub fn apply_unreveal_reporter_min_cap(
 }
 
 // ---------------------------------------------------------------------
-// Consensus rule stubs — implementations land in subsequent PRs.
+// Consensus rule implementations (PR-10.5).
+//
+// `compute_stake_score` and `check_dns_reorg_rule` below replace the
+// PR-10.3 `*_stub` panics with the real deterministic logic from
+// ADR-0009. They are pure functions: the DAG-dependent facts (per-epoch
+// signed/total stake, common-ancestor work/stake split, whether the
+// candidate keeps the confirmed anchor) are computed by the consensus
+// pipeline in a later PR and fed in here, so the rule itself stays
+// unit-testable in isolation and free of any `RuleError` dependency.
 // ---------------------------------------------------------------------
 
-/// PR-10.5 stub: deterministic `StakeScore` aggregation from on-chain
-/// `StakeAttestationShardPayload` data.
-#[doc(hidden)]
-pub fn compute_stake_score_stub() -> StakeScore {
-    unimplemented!(
-        "kaspa-pq Phase 10 PR-10.5: deterministic StakeScore aggregation \
-         from on-chain shards is not implemented in this PR (type stubs only); \
-         see docs/adr/0009-dns-probabilistic-finality.md §StakeScore mechanics."
-    )
+/// Per-epoch stake tally fed into [`compute_stake_score`] (ADR-0009
+/// §"StakeScore mechanics"). The caller enforces the
+/// `(bond_outpoint, validator_id, epoch)` uniqueness rule, so
+/// `signed_stake_sompi` already excludes any validator double-counted
+/// across attestation shards.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct EpochStakeTally {
+    pub epoch: u64,
+    /// Deduplicated active stake whose validators signed this epoch's
+    /// selected-chain anchor.
+    pub signed_stake_sompi: u64,
+    /// Total active stake at this epoch (the normalisation denominator).
+    pub total_active_stake_sompi: u64,
 }
 
-/// PR-10.8 stub: the two-dimensional dominance rule (mainnet
-/// behaviour). Returns `Ok(())` if the candidate either does not
-/// touch the latest DNS-confirmed anchor, or beats the canonical
-/// chain on both `WorkScore` and `StakeScore` by the configured
-/// emergency margins.
-#[doc(hidden)]
-pub fn check_dns_reorg_rule_stub() -> Result<(), &'static str> {
-    unimplemented!(
-        "kaspa-pq Phase 10 PR-10.8: two-dimensional dominance rule is not \
-         implemented in this PR (type stubs only); see \
-         docs/adr/0009-dns-probabilistic-finality.md §Decision."
-    )
+/// Per-epoch StakeScore increment (ADR-0009 §"StakeScore mechanics"):
+///
+/// ```text
+/// increment = floor(signed_stake × STAKE_SCORE_SCALE / total_active_stake)
+/// ```
+///
+/// Returns `0` when `total_active_stake_sompi == 0` (no active stake →
+/// the epoch contributes nothing). `signed` is clamped to `total`, so a
+/// single epoch can never exceed `STAKE_SCORE_SCALE` ("1.0") and a
+/// malformed input where the deduplicated signed stake exceeds the
+/// denominator cannot inflate the score. The multiply is done in `u128`
+/// and cannot overflow (`u64::MAX × 1e9 < u128::MAX`).
+pub fn stake_score_increment(signed_stake_sompi: u64, total_active_stake_sompi: u64) -> u128 {
+    if total_active_stake_sompi == 0 {
+        return 0;
+    }
+    let signed = signed_stake_sompi.min(total_active_stake_sompi) as u128;
+    signed * STAKE_SCORE_SCALE / (total_active_stake_sompi as u128)
+}
+
+/// Deterministic `StakeScore(H)` aggregation over the epochs whose
+/// anchors lie on the selected chain ending at the target (ADR-0009
+/// §"StakeScore mechanics"). Every node observing the same on-chain
+/// shard set reaches the same number — `u128` fixed-point throughout,
+/// no floats. Replaces the PR-10.3 `compute_stake_score_stub`.
+pub fn compute_stake_score(per_epoch: &[EpochStakeTally]) -> StakeScore {
+    let mut acc: u128 = 0;
+    for e in per_epoch {
+        acc = acc.saturating_add(stake_score_increment(e.signed_stake_sompi, e.total_active_stake_sompi));
+    }
+    StakeScore(acc)
+}
+
+/// History-confirmation predicate — the DNS paper's
+/// `WorkDepth(B) ≥ cW ∧ StakeDepth(B) ≥ cS`. An anchor is DNS-confirmed
+/// iff it clears **both** thresholds. Used by the consensus pipeline to
+/// advance [`DnsState::last_dns_confirmed_anchor`].
+pub fn is_dns_confirmed(
+    work_depth: BlueWorkType,
+    stake_depth: StakeScore,
+    required_work_depth: BlueWorkType,
+    required_stake_depth: StakeScore,
+) -> bool {
+    work_depth >= required_work_depth && stake_depth >= required_stake_depth
+}
+
+/// Reorg-gate mode (ADR-0009 §"Phase-specific behaviour").
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum DnsReorgMode {
+    /// PoC / testnet: a candidate that exits the latest DNS-confirmed
+    /// anchor is rejected outright. Loud and easy to test; **not** DNS
+    /// finality — a testing convenience per ADR-0009 §"Public-claim
+    /// discipline".
+    #[default]
+    HardCheckpoint = 0,
+    /// Mainnet: the two-dimensional `WorkScore × StakeScore`
+    /// non-substitutability gate.
+    TwoDimensionalDominance = 1,
+}
+
+/// Inputs to [`check_dns_reorg_rule`]. The DAG-dependent facts are
+/// computed by the consensus pipeline (later PR) and passed in, keeping
+/// the decision a pure, unit-testable function.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DnsReorgInputs {
+    pub rollout_stage: DnsRolloutStage,
+    pub mode: DnsReorgMode,
+    /// `true` iff the candidate chain still contains the latest
+    /// DNS-confirmed anchor (it does not rewrite confirmed history).
+    pub candidate_includes_confirmed_anchor: bool,
+    /// `WorkScore` accumulated by each chain *after* the common
+    /// ancestor `I = common_ancestor(candidate, canonical_tip)`.
+    pub candidate_work_after: BlueWorkType,
+    pub canonical_work_after: BlueWorkType,
+    /// `StakeScore` accumulated after `I`.
+    pub candidate_stake_after: StakeScore,
+    pub canonical_stake_after: StakeScore,
+    pub emergency_work_margin: BlueWorkType,
+    pub emergency_stake_margin: StakeScore,
+}
+
+/// Outcome of the DNS reorg gate. The consensus pipeline maps the
+/// reject variants to a `RuleError`; surfacing a rich enum keeps
+/// consensus-core free of that dependency and mirrors the
+/// [`SignedEpochCheckOutcome`] style.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DnsReorgOutcome {
+    /// Not in `Active` rollout stage — the gate is dormant and
+    /// PoW/GHOSTDAG decides alone (Phases 1–9 behaviour).
+    GateInactive,
+    /// The candidate keeps the latest DNS-confirmed anchor; confirmed
+    /// history is not rewritten, so the gate does not trigger.
+    IncludesConfirmedAnchor,
+    /// Mainnet path: the candidate exits the confirmed prefix and beats
+    /// canonical on **both** `WorkScore` and `StakeScore` by the
+    /// emergency margins. The rare legitimate deep-reorg path.
+    DominanceSatisfied,
+    /// PoC / testnet hard-checkpoint reject: candidate exits the
+    /// confirmed prefix.
+    HardCheckpointReject,
+    /// Mainnet reject: candidate exits the confirmed prefix but fails
+    /// the two-dimensional dominance test (a PoW-only or stake-only
+    /// attacker lands here — non-substitutability).
+    DominanceViolation,
+}
+
+impl DnsReorgOutcome {
+    /// `true` for the accept variants (gate dormant, anchor retained,
+    /// or dominance satisfied).
+    pub fn is_accept(self) -> bool {
+        matches!(self, DnsReorgOutcome::GateInactive | DnsReorgOutcome::IncludesConfirmedAnchor | DnsReorgOutcome::DominanceSatisfied)
+    }
+}
+
+/// Pure decision for the DNS reorg gate (ADR-0009 §"Decision" +
+/// §"Phase-specific behaviour"). Replaces the PR-10.3
+/// `check_dns_reorg_rule_stub`.
+///
+/// Two-dimensional **non-substitutability**: in mainnet mode a
+/// candidate that exits the DNS-confirmed prefix must *strictly* beat
+/// canonical on `WorkScore` **and** `StakeScore`, each by its emergency
+/// margin. A PoW-only surplus or a stake-only surplus is rejected —
+/// "PoW surplus does not substitute for PoS deficit and vice versa".
+pub fn check_dns_reorg_rule(inputs: &DnsReorgInputs) -> DnsReorgOutcome {
+    // The gate engages only in the Active rollout stage (ADR-0009
+    // §"Three-stage rollout"); Launch/Bootstrap run pure PoW/GHOSTDAG.
+    if inputs.rollout_stage != DnsRolloutStage::Active {
+        return DnsReorgOutcome::GateInactive;
+    }
+    // A candidate that still contains the confirmed anchor does not
+    // rewrite confirmed history — the gate does not trigger.
+    if inputs.candidate_includes_confirmed_anchor {
+        return DnsReorgOutcome::IncludesConfirmedAnchor;
+    }
+    // The candidate exits the DNS-confirmed prefix.
+    match inputs.mode {
+        DnsReorgMode::HardCheckpoint => DnsReorgOutcome::HardCheckpointReject,
+        DnsReorgMode::TwoDimensionalDominance => {
+            // `saturating_add` so an (astronomically unlikely) margin
+            // overflow conservatively makes the bound un-beatable.
+            let work_bound = inputs.canonical_work_after.saturating_add(inputs.emergency_work_margin);
+            let stake_bound = inputs.canonical_stake_after.0.saturating_add(inputs.emergency_stake_margin.0);
+            let work_ok = inputs.candidate_work_after > work_bound;
+            let stake_ok = inputs.candidate_stake_after.0 > stake_bound;
+            if work_ok && stake_ok { DnsReorgOutcome::DominanceSatisfied } else { DnsReorgOutcome::DominanceViolation }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- PR-10.5: StakeScore + DNS reorg gate ----
+
+    #[test]
+    fn stake_score_increment_floor_formula() {
+        assert_eq!(stake_score_increment(1, 3), 333_333_333); // floor(1e9/3)
+        assert_eq!(stake_score_increment(50, 50), STAKE_SCORE_SCALE); // 1.0
+        assert_eq!(stake_score_increment(5, 10), STAKE_SCORE_SCALE / 2); // 0.5
+        assert_eq!(stake_score_increment(0, 0), 0); // no active stake
+        assert_eq!(stake_score_increment(7, 0), 0);
+        assert_eq!(stake_score_increment(999, 50), STAKE_SCORE_SCALE); // signed clamped to total
+        assert_eq!(stake_score_increment(u64::MAX, u64::MAX), STAKE_SCORE_SCALE); // no overflow
+    }
+
+    #[test]
+    fn compute_stake_score_sums_increments_deterministically() {
+        let epochs = vec![
+            EpochStakeTally { epoch: 1, signed_stake_sompi: 10, total_active_stake_sompi: 10 }, // 1.0
+            EpochStakeTally { epoch: 2, signed_stake_sompi: 5, total_active_stake_sompi: 10 },  // 0.5
+            EpochStakeTally { epoch: 3, signed_stake_sompi: 0, total_active_stake_sompi: 10 },  // 0.0
+        ];
+        let s = compute_stake_score(&epochs);
+        assert_eq!(s, StakeScore(STAKE_SCORE_SCALE + STAKE_SCORE_SCALE / 2));
+        assert_eq!(compute_stake_score(&epochs), s); // deterministic
+        assert_eq!(compute_stake_score(&[]), StakeScore(0));
+    }
+
+    #[test]
+    fn is_dns_confirmed_requires_both_thresholds() {
+        let w = BlueWorkType::from_u64;
+        let (cw, cs) = (w(100), StakeScore(STAKE_SCORE_SCALE));
+        assert!(is_dns_confirmed(w(100), StakeScore(STAKE_SCORE_SCALE), cw, cs)); // both met
+        assert!(is_dns_confirmed(w(200), StakeScore(STAKE_SCORE_SCALE * 2), cw, cs));
+        assert!(!is_dns_confirmed(w(99), StakeScore(STAKE_SCORE_SCALE), cw, cs)); // work short
+        assert!(!is_dns_confirmed(w(100), StakeScore(STAKE_SCORE_SCALE - 1), cw, cs)); // stake short
+    }
+
+    fn reorg_inputs(
+        stage: DnsRolloutStage,
+        mode: DnsReorgMode,
+        includes: bool,
+        cw: u64,
+        kw: u64,
+        cs: u128,
+        ks: u128,
+    ) -> DnsReorgInputs {
+        DnsReorgInputs {
+            rollout_stage: stage,
+            mode,
+            candidate_includes_confirmed_anchor: includes,
+            candidate_work_after: BlueWorkType::from_u64(cw),
+            canonical_work_after: BlueWorkType::from_u64(kw),
+            candidate_stake_after: StakeScore(cs),
+            canonical_stake_after: StakeScore(ks),
+            emergency_work_margin: BlueWorkType::from_u64(0),
+            emergency_stake_margin: StakeScore(0),
+        }
+    }
+
+    #[test]
+    fn dns_reorg_gate_dormant_before_active() {
+        let i = reorg_inputs(DnsRolloutStage::Bootstrap, DnsReorgMode::TwoDimensionalDominance, false, 1, 100, 1, 100);
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::GateInactive);
+        assert!(check_dns_reorg_rule(&i).is_accept());
+    }
+
+    #[test]
+    fn dns_reorg_includes_confirmed_anchor_ok() {
+        let i = reorg_inputs(DnsRolloutStage::Active, DnsReorgMode::TwoDimensionalDominance, true, 0, 999, 0, 999);
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::IncludesConfirmedAnchor);
+    }
+
+    #[test]
+    fn dns_reorg_hard_checkpoint_rejects_any_exit() {
+        // Even a candidate that dominates on both axes is rejected under hard-checkpoint.
+        let i = reorg_inputs(DnsRolloutStage::Active, DnsReorgMode::HardCheckpoint, false, 9999, 1, 9999, 1);
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::HardCheckpointReject);
+        assert!(!check_dns_reorg_rule(&i).is_accept());
+    }
+
+    #[test]
+    fn dns_reorg_two_dimensional_non_substitutability() {
+        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
+        // beats BOTH → accepted
+        assert_eq!(check_dns_reorg_rule(&reorg_inputs(a, m, false, 200, 100, 200, 100)), DnsReorgOutcome::DominanceSatisfied);
+        // beats WORK only (stake equal) → rejected (non-substitutability)
+        assert_eq!(check_dns_reorg_rule(&reorg_inputs(a, m, false, 200, 100, 100, 100)), DnsReorgOutcome::DominanceViolation);
+        // beats STAKE only (work equal) → rejected
+        assert_eq!(check_dns_reorg_rule(&reorg_inputs(a, m, false, 100, 100, 200, 100)), DnsReorgOutcome::DominanceViolation);
+        // ties on both (must STRICTLY beat) → rejected
+        assert_eq!(check_dns_reorg_rule(&reorg_inputs(a, m, false, 100, 100, 100, 100)), DnsReorgOutcome::DominanceViolation);
+    }
+
+    #[test]
+    fn dns_reorg_dominance_respects_margins() {
+        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
+        let mut i = reorg_inputs(a, m, false, 150, 100, 150, 100);
+        i.emergency_work_margin = BlueWorkType::from_u64(60); // need cand_W > 160; 150 fails
+        i.emergency_stake_margin = StakeScore(10);
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceViolation);
+        i.candidate_work_after = BlueWorkType::from_u64(161); // clears work margin; stake 150 > 110 ok
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceSatisfied);
+    }
 
     #[test]
     fn dns_constants_have_expected_values() {
@@ -3136,17 +3388,8 @@ mod tests {
         assert_ne!(h2_after_insert, h2_clean, "post-insertion chain hash must differ from clean chain hash");
     }
 
-    // ---- Stubs are explicit ---------------------------------------
-
-    #[test]
-    #[should_panic(expected = "kaspa-pq Phase 10 PR-10.5")]
-    fn compute_stake_score_is_explicitly_unimplemented() {
-        let _ = compute_stake_score_stub();
-    }
-
-    #[test]
-    #[should_panic(expected = "kaspa-pq Phase 10 PR-10.8")]
-    fn check_dns_reorg_rule_is_explicitly_unimplemented() {
-        let _ = check_dns_reorg_rule_stub();
-    }
+    // ---- PR-10.5: the former `*_stub` panics are now implemented ----
+    // `compute_stake_score` / `check_dns_reorg_rule` replace the PR-10.3
+    // `unimplemented!()` stubs; behaviour is covered by the StakeScore +
+    // reorg-gate tests above.
 }
