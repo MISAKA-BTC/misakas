@@ -258,6 +258,28 @@ impl UtxoDiff {
         }
         Ok(())
     }
+
+    /// kaspa-pq (ADR-0013 Addendum C.2 / ADR-0016 §D.4): record a single
+    /// pre-existing UTXO as removed by a consensus **side-effect** (not a
+    /// transaction-input spend) — used to consume a slashed bond's locked
+    /// output-0. Semantics mirror an input spend on the diff: if the outpoint
+    /// is in `add` with a matching DAA score it is cancelled there, otherwise
+    /// it is recorded in `remove`. The caller supplies the UTXO's own entry
+    /// (looked up from the composed view) so its `block_daa_score` matches the
+    /// element being removed from the multiset.
+    pub fn remove_utxo(&mut self, outpoint: &TransactionOutpoint, entry: &UtxoEntry) -> UtxoResult<()> {
+        self.remove_entry(outpoint, entry)
+    }
+
+    /// kaspa-pq (ADR-0013 Addendum C.2): record a single UTXO as created by a
+    /// consensus **side-effect** (not a transaction output) — used to mint the
+    /// slashing reporter reward at `(slashing_tx_id, 0)`. Semantics mirror an
+    /// output creation on the diff: if the outpoint is in `remove` with a
+    /// matching DAA score it is cancelled there, otherwise it is recorded in
+    /// `add`.
+    pub fn add_utxo(&mut self, outpoint: TransactionOutpoint, entry: UtxoEntry) -> UtxoResult<()> {
+        self.add_entry(outpoint, entry)
+    }
 }
 
 #[cfg(test)]

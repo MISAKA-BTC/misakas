@@ -1953,10 +1953,11 @@ pub fn apply_unreveal_reporter_min_cap(
     SlashingDistribution { reporter_reward_sompi: capped_reporter, burned_sompi: distribution.burned_sompi + extra_burn }
 }
 
-/// Build the consensus-emitted slashing distribution (ADR-0013 Addendum C):
-/// given the slashed amount `S` and the reporter's declared spend payload,
-/// returns the single reporter-reward [`TransactionOutput`] the slashing
-/// transaction must carry — `value =
+/// Build the consensus-emitted slashing distribution (ADR-0013 Addendum C, as
+/// amended by Addendum C.2): given the slashed amount `S` and the reporter's
+/// declared spend payload, returns the single reporter-reward
+/// [`TransactionOutput`] consensus mints as a side-effect at
+/// `(slashing_tx_id, 0)` — `value =
 /// compute_slashing_distribution(S, bps).reporter_reward_sompi`, `script_public_key
 /// = p2pkh_mldsa65_spk(reporter_reward_spk_payload)` — and the burned amount
 /// (`S − reporter_reward_sompi`, which leaves the active supply implicitly
@@ -1996,12 +1997,20 @@ pub struct SlashingSideEffect {
     /// `S` = the slashed amount (the bond's `amount`) that leaves the supply
     /// when the output-0 UTXO is removed.
     pub slashed_amount_sompi: u64,
-    /// The single reporter-reward output the slashing transaction must carry,
-    /// or `None` when the reward rounds to zero (everything burns).
+    /// The reporter-reward UTXO consensus mints as a side-effect at
+    /// `(slashing_tx_id, 0)` (ADR-0013 Addendum C.2), or `None` when the reward
+    /// rounds to zero (everything burns). Under C.2 this is **not** an output
+    /// on the slashing transaction — the transaction declares no outputs and
+    /// the reward is minted atomically with the output-0 removal.
     pub reporter_output: Option<TransactionOutput>,
     /// The implicitly-burned remainder (`S − reporter_reward`): removed with
     /// the output-0 UTXO and never re-minted.
     pub burned_sompi: u64,
+    /// The id of the **first** (canonical mergeset order) effective slashing
+    /// transaction for this bond. The reporter reward is minted at outpoint
+    /// `(slashing_tx_id, 0)`; a slashing transaction declares no outputs
+    /// (ADR-0013 Addendum C.2), so index 0 is always free.
+    pub slashing_tx_id: TransactionId,
 }
 
 /// Build a block's slashing side-effects from its genuine, accepted slashing
@@ -2023,14 +2032,16 @@ pub struct SlashingSideEffect {
 /// validation. With no evidence it returns no side-effects, so on every
 /// current network (overlay dormant) it is a no-op.
 pub fn slashing_side_effects_from_evidence(
-    evidence: &[(TransactionOutpoint, u64, [u8; 32])],
+    evidence: &[(TransactionOutpoint, u64, [u8; 32], TransactionId)],
     slashing_reporter_reward_bps: u16,
     unreveal_floor: Option<u64>,
 ) -> Vec<SlashingSideEffect> {
     let mut seen: HashSet<TransactionOutpoint> = HashSet::new();
     let mut effects = Vec::new();
-    for (bond_outpoint, slashed_amount, reporter_payload) in evidence {
-        // Within-block dedup: a bond's locked UTXO can be removed only once.
+    for (bond_outpoint, slashed_amount, reporter_payload, slashing_tx_id) in evidence {
+        // Within-block dedup: a bond's locked UTXO can be removed only once, so
+        // the **first** slashing tx targeting it (canonical order) wins both the
+        // removal and the reporter mint at `(slashing_tx_id, 0)`.
         if !seen.insert(*bond_outpoint) {
             continue;
         }
@@ -2041,6 +2052,7 @@ pub fn slashing_side_effects_from_evidence(
             slashed_amount_sompi: *slashed_amount,
             reporter_output,
             burned_sompi,
+            slashing_tx_id: *slashing_tx_id,
         });
     }
     effects
@@ -2077,15 +2089,24 @@ pub fn resolve_slashing_side_effects(
     daa_score: u64,
     slashing_reporter_reward_bps: u16,
 ) -> Vec<SlashingSideEffect> {
-    let mut resolved: Vec<(TransactionOutpoint, u64, [u8; 32])> = Vec::new();
-    for ev in slashing_evidence_from_accepted_txs(txs) {
+    let mut resolved: Vec<(TransactionOutpoint, u64, [u8; 32], TransactionId)> = Vec::new();
+    // Iterate the txs directly (rather than via `slashing_evidence_from_accepted_txs`)
+    // so each evidence keeps its **slashing tx id** — the mint outpoint
+    // `(slashing_tx_id, 0)` under Addendum C.2.
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) != Some(DnsTxKind::SlashingEvidence) {
+            continue;
+        }
+        let Ok(ev) = borsh::from_slice::<SlashingEvidencePayload>(&tx.payload) else {
+            continue;
+        };
         let Some(bond) = bond_view.get(&ev.bond_outpoint) else {
             continue;
         };
         // Only a bond whose stake is still locked (Active/Unbonding) has a
         // removable output-0 UTXO; Pending/Slashed/unknown contribute nothing.
         if matches!(effective_bond_status(bond, daa_score), BondStatus::Active | BondStatus::Unbonding) {
-            resolved.push((ev.bond_outpoint, bond.amount, ev.reporter_reward_spk_payload));
+            resolved.push((ev.bond_outpoint, bond.amount, ev.reporter_reward_spk_payload, tx.id()));
         }
     }
     slashing_side_effects_from_evidence(&resolved, slashing_reporter_reward_bps, None)
@@ -5177,8 +5198,10 @@ mod tests {
     fn slashing_side_effects_distinct_bonds_pay_each_reporter() {
         // Two distinct bonds, bps = 1000 (10%): each yields one side-effect
         // with reporter = 10% and burn = 90% of its own S.
-        let evidence =
-            [(slash_outpoint(1), 1_000_000, [0x11u8; 32]), (slash_outpoint(2), 2_000_000, [0x22u8; 32])];
+        let evidence = [
+            (slash_outpoint(1), 1_000_000, [0x11u8; 32], Hash64::from_bytes([0xa1; 64])),
+            (slash_outpoint(2), 2_000_000, [0x22u8; 32], Hash64::from_bytes([0xa2; 64])),
+        ];
         let effects = slashing_side_effects_from_evidence(&evidence, 1000, None);
         assert_eq!(effects.len(), 2);
 
@@ -5187,10 +5210,14 @@ mod tests {
         assert_eq!(effects[0].reporter_output.as_ref().unwrap().value, 100_000);
         assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa65_spk(&[0x11u8; 32]));
         assert_eq!(effects[0].burned_sompi, 900_000);
+        // The reporter UTXO is minted at (slashing_tx_id, 0), so each effect
+        // carries the id of the tx that fixes its mint outpoint.
+        assert_eq!(effects[0].slashing_tx_id, Hash64::from_bytes([0xa1; 64]));
 
         assert_eq!(effects[1].bond_outpoint, slash_outpoint(2));
         assert_eq!(effects[1].reporter_output.as_ref().unwrap().value, 200_000);
         assert_eq!(effects[1].burned_sompi, 1_800_000);
+        assert_eq!(effects[1].slashing_tx_id, Hash64::from_bytes([0xa2; 64]));
         // Conservation per bond: reporter + burn == S.
         assert_eq!(effects[1].reporter_output.as_ref().unwrap().value + effects[1].burned_sompi, 2_000_000);
     }
@@ -5199,19 +5226,24 @@ mod tests {
     fn slashing_side_effects_dedup_same_bond_within_block() {
         // Two evidences against the SAME bond in one block collapse to a
         // single side-effect (its UTXO can be removed only once).
-        let evidence =
-            [(slash_outpoint(7), 1_000_000, [0x11u8; 32]), (slash_outpoint(7), 1_000_000, [0x99u8; 32])];
+        let evidence = [
+            (slash_outpoint(7), 1_000_000, [0x11u8; 32], Hash64::from_bytes([0xb1; 64])),
+            (slash_outpoint(7), 1_000_000, [0x99u8; 32], Hash64::from_bytes([0xb2; 64])),
+        ];
         let effects = slashing_side_effects_from_evidence(&evidence, 1000, None);
         assert_eq!(effects.len(), 1);
-        // First occurrence wins (the 0x11 reporter payload).
+        // First occurrence wins (the 0x11 reporter payload) — and its tx id fixes
+        // the mint outpoint (slashing_tx_id, 0), so a second tx for the same bond
+        // can neither double-mint nor relocate the reporter UTXO.
         assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa65_spk(&[0x11u8; 32]));
+        assert_eq!(effects[0].slashing_tx_id, Hash64::from_bytes([0xb1; 64]));
     }
 
     #[test]
     fn slashing_side_effects_zero_bps_burns_everything() {
         // bps = 0 → no reporter output, full S burns, but the bond is still
         // slashed (a side-effect is produced so its UTXO is removed).
-        let evidence = [(slash_outpoint(3), 1_000_000, [0x33u8; 32])];
+        let evidence = [(slash_outpoint(3), 1_000_000, [0x33u8; 32], Hash64::from_bytes([0xc3; 64]))];
         let effects = slashing_side_effects_from_evidence(&evidence, 0, None);
         assert_eq!(effects.len(), 1);
         assert!(effects[0].reporter_output.is_none());
@@ -5222,7 +5254,7 @@ mod tests {
     #[test]
     fn slashing_side_effects_unreveal_floor_caps_reporter() {
         // unreveal floor caps the reporter below the bps reward; the extra burns.
-        let evidence = [(slash_outpoint(4), 5_000_000, [0x44u8; 32])];
+        let evidence = [(slash_outpoint(4), 5_000_000, [0x44u8; 32], Hash64::from_bytes([0xc4; 64]))];
         let effects = slashing_side_effects_from_evidence(&evidence, 1000, Some(100_000));
         assert_eq!(effects[0].reporter_output.as_ref().unwrap().value, 100_000);
         assert_eq!(effects[0].burned_sompi, 4_900_000);
