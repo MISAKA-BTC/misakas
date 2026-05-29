@@ -59,7 +59,7 @@ use kaspa_utils::mem_size::MemSizeEstimator;
 
 use crate::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SubnetworkId};
 use crate::{
-    BlueWorkType,
+    BlueWorkType, TransactionId,
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
 };
 
@@ -2089,6 +2089,91 @@ pub fn resolve_slashing_side_effects(
         }
     }
     slashing_side_effects_from_evidence(&resolved, slashing_reporter_reward_bps, None)
+}
+
+/// Why a `SUBNETWORK_ID_SLASHING_EVIDENCE` tx fails the §C.1.3/C.1.5
+/// reporter-output block-validity rule ([`slashing_reporter_outputs_valid`]).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SlashingReporterReject {
+    /// The tx's evidence does not decode, its bond is unknown in the block's
+    /// selected-parent bond view, the bond is not `Active`/`Unbonding` at the
+    /// block's DAA score (no removable locked output-0), or it duplicates a
+    /// bond already slashed earlier in the block. Under the strict-inclusion
+    /// discipline (ADR-0013 Addendum C.1.5) such a tx may not appear in a valid
+    /// block.
+    Ineffective,
+    /// The bond is effective but the tx's `output[0]` is not the exact reporter
+    /// reward the consensus distribution mandates (value + P2PKH spk), or the
+    /// reward rounds to zero so no bounded mint can be admitted (a micro-bond
+    /// with `floor(amount · bps / 10_000) == 0`).
+    WrongReporterOutput,
+}
+
+/// §C.1.3 + C.1.5 block-validity rule: every `SUBNETWORK_ID_SLASHING_EVIDENCE`
+/// tx in a valid block must be *effective* and carry the exact reporter reward
+/// at `output[0]` (ADR-0013 Addendum C.1.5, "strict slashing-tx inclusion
+/// discipline").
+///
+/// A slashing tx is **effective** iff (1) its evidence decodes, (2) its bond
+/// resolves in `bond_view` to `Active`/`Unbonding` at `daa_score` — the only
+/// states still holding a removable locked output-0, per
+/// [`effective_bond_status`] — and (3) it is the *first* slashing tx in
+/// canonical block order targeting that bond (no two slashing txs in one block
+/// may slash the same bond). An effective tx's `output[0]` must equal the
+/// reporter output [`slashing_distribution_output`] computes for the bond's
+/// `amount`, so an included slashing tx mints exactly the reward and nothing
+/// else (the bond's `S` is removed by the separate output-0 UTXO step,
+/// PR-16.4-b2-iv). `output[1..]` are unconstrained here — the per-tx value rule
+/// already funds them from real inputs, so they are spends, not mints.
+///
+/// Returns `Err((tx_id, reason))` for the first offending tx, mirroring the
+/// fail-fast block-validity rules. `activated == false` (overlay dormant /
+/// below activation) short-circuits to `Ok`, so the rule is inert on every
+/// current network. Equivocation only (`unreveal_floor = None`). Pure and
+/// DAG-free — run identically by the honest template pre-filter and by block
+/// validation.
+pub fn slashing_reporter_outputs_valid(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    daa_score: u64,
+    slashing_reporter_reward_bps: u16,
+    activated: bool,
+) -> Result<(), (TransactionId, SlashingReporterReject)> {
+    if !activated {
+        return Ok(());
+    }
+    let mut slashed_bonds: HashSet<TransactionOutpoint> = HashSet::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) != Some(DnsTxKind::SlashingEvidence) {
+            continue;
+        }
+        // A committed block's txs already passed the PR-10.4 stateless decode,
+        // so a malformed payload here is a forged/corrupt tx: reject it rather
+        // than skip it (skipping would let a minting tx through unchecked).
+        let Ok(ev) = borsh::from_slice::<SlashingEvidencePayload>(&tx.payload) else {
+            return Err((tx.id(), SlashingReporterReject::Ineffective));
+        };
+        let Some(bond) = bond_view.get(&ev.bond_outpoint) else {
+            return Err((tx.id(), SlashingReporterReject::Ineffective));
+        };
+        if !matches!(effective_bond_status(bond, daa_score), BondStatus::Active | BondStatus::Unbonding) {
+            return Err((tx.id(), SlashingReporterReject::Ineffective));
+        }
+        // First-occurrence-of-bond discipline: a bond is slashable once per block.
+        if !slashed_bonds.insert(ev.bond_outpoint) {
+            return Err((tx.id(), SlashingReporterReject::Ineffective));
+        }
+        // `output[0]` must be the exact reporter reward. `None` (reward rounds
+        // to zero) is rejected — no bounded mint can be admitted without input
+        // amounts, so such a micro-bond is simply not slashable.
+        let (expected_reporter, _burned) =
+            slashing_distribution_output(bond.amount, slashing_reporter_reward_bps, &ev.reporter_reward_spk_payload, None);
+        match expected_reporter {
+            Some(expected) if tx.outputs.first() == Some(&expected) => {}
+            _ => return Err((tx.id(), SlashingReporterReject::WrongReporterOutput)),
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -5230,6 +5315,189 @@ mod tests {
     fn resolve_slashing_side_effects_empty_without_evidence() {
         let native = dns_overlay_tx(SubnetworkId::from_byte(0), vec![]);
         assert!(resolve_slashing_side_effects(&[native], &ActiveBondView::new(), RESOLVE_DAA, 1000).is_empty());
+    }
+
+    // ---- slashing_reporter_outputs_valid (Addendum C.1.3/C.1.5): the strict
+    // slashing-tx inclusion + reporter-output block-validity rule. An included
+    // slashing tx must be effective (genuine — separate rule — + bond
+    // Active/Unbonding + first-occurrence) and carry the exact reporter reward
+    // at output[0]. Bond fixture: amount = 100_000_000_000, activation = 5_000;
+    // at bps = 1000 the reporter reward R = 10_000_000_000.
+
+    // A slashing-evidence tx for bond `op`, reporter payload `reporter`, with an
+    // explicit output list (so the test controls output[0]).
+    fn slashing_tx_with_outputs(op: TransactionOutpoint, reporter: [u8; 32], outputs: Vec<TransactionOutput>) -> Transaction {
+        let ev = SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: op,
+            attestation_a: fixture_attestation(),
+            attestation_b: fixture_attestation(),
+            reporter_reward_spk_payload: reporter,
+        };
+        Transaction::new(0, vec![], outputs, 0, SUBNETWORK_ID_SLASHING_EVIDENCE, 0, borsh::to_vec(&ev).unwrap())
+    }
+
+    // The exact reporter output the rule mandates for `amount` at bps = 1000.
+    fn want_reporter(amount: u64, reporter: [u8; 32]) -> TransactionOutput {
+        slashing_distribution_output(amount, 1000, &reporter, None).0.unwrap()
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_inert_when_not_activated() {
+        // An otherwise-invalid slashing tx (unknown bond, no reporter output) is
+        // accepted while the overlay is dormant — the rule is fully gated.
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let tx = slashing_tx_with_outputs(op, [0xab; 32], vec![]);
+        assert!(slashing_reporter_outputs_valid(&[tx], &ActiveBondView::new(), RESOLVE_DAA, 1000, false).is_ok());
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_active_bond_exact_reward_ok() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
+        let tx = slashing_tx_with_outputs(op, [0xab; 32], vec![want_reporter(100_000_000_000, [0xab; 32])]);
+        assert!(slashing_reporter_outputs_valid(&[tx], &view, RESOLVE_DAA, 1000, true).is_ok());
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_unbonding_bond_exact_reward_ok() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x22; 64]), 0);
+        let mut b = fixture_bond_record(op);
+        b.unbond_request_daa_score = Some(RESOLVE_DAA - 1); // Unbonding, far from release.
+        let view = ActiveBondView::from_records([(op, b)]);
+        let tx = slashing_tx_with_outputs(op, [0xcd; 32], vec![want_reporter(100_000_000_000, [0xcd; 32])]);
+        assert!(slashing_reporter_outputs_valid(&[tx], &view, RESOLVE_DAA, 1000, true).is_ok());
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_extra_outputs_allowed() {
+        // output[1..] are spends funded by inputs (a separate per-tx rule); the
+        // block-level rule only pins output[0] to the reporter reward.
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
+        let extra = TransactionOutput::new(42, p2pkh_mldsa65_spk(&[0x07; 32]));
+        let tx = slashing_tx_with_outputs(op, [0xab; 32], vec![want_reporter(100_000_000_000, [0xab; 32]), extra]);
+        assert!(slashing_reporter_outputs_valid(&[tx], &view, RESOLVE_DAA, 1000, true).is_ok());
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_wrong_reward_value_rejected() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
+        let wrong = TransactionOutput::new(9_999_999_999, p2pkh_mldsa65_spk(&[0xab; 32]));
+        let tx = slashing_tx_with_outputs(op, [0xab; 32], vec![wrong]);
+        let err = slashing_reporter_outputs_valid(&[tx.clone()], &view, RESOLVE_DAA, 1000, true).unwrap_err();
+        assert_eq!(err, (tx.id(), SlashingReporterReject::WrongReporterOutput));
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_wrong_reward_spk_rejected() {
+        // Reward value right, but output[0] pays a different spk than the
+        // evidence's declared reporter payload.
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
+        let wrong_spk = TransactionOutput::new(10_000_000_000, p2pkh_mldsa65_spk(&[0x00; 32]));
+        let tx = slashing_tx_with_outputs(op, [0xab; 32], vec![wrong_spk]);
+        assert_eq!(
+            slashing_reporter_outputs_valid(&[tx], &view, RESOLVE_DAA, 1000, true).unwrap_err().1,
+            SlashingReporterReject::WrongReporterOutput
+        );
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_missing_output_rejected() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
+        let tx = slashing_tx_with_outputs(op, [0xab; 32], vec![]); // no output[0].
+        assert_eq!(
+            slashing_reporter_outputs_valid(&[tx], &view, RESOLVE_DAA, 1000, true).unwrap_err().1,
+            SlashingReporterReject::WrongReporterOutput
+        );
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_zero_reward_microbond_rejected() {
+        // amount = 9 ⇒ floor(9·1000/10_000) = 0 ⇒ no bounded mint admissible ⇒
+        // such a micro-bond is simply not slashable (WrongReporterOutput), never
+        // a zero-value output.
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let mut b = fixture_bond_record(op);
+        b.amount = 9;
+        let view = ActiveBondView::from_records([(op, b)]);
+        let tx = slashing_tx_with_outputs(op, [0xab; 32], vec![]);
+        assert_eq!(
+            slashing_reporter_outputs_valid(&[tx], &view, RESOLVE_DAA, 1000, true).unwrap_err().1,
+            SlashingReporterReject::WrongReporterOutput
+        );
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_pending_bond_is_ineffective() {
+        // DAA below activation ⇒ Pending ⇒ no removable output-0 ⇒ ineffective.
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x33; 64]), 0);
+        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
+        let tx = slashing_tx_with_outputs(op, [0xab; 32], vec![want_reporter(100_000_000_000, [0xab; 32])]);
+        assert_eq!(
+            slashing_reporter_outputs_valid(&[tx], &view, 1_000, 1000, true).unwrap_err().1,
+            SlashingReporterReject::Ineffective
+        );
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_already_slashed_bond_is_ineffective() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x44; 64]), 0);
+        let mut b = fixture_bond_record(op);
+        b.slashed_at_daa_score = Some(6_000);
+        b.status = BondStatus::Slashed;
+        let view = ActiveBondView::from_records([(op, b)]);
+        let tx = slashing_tx_with_outputs(op, [0xab; 32], vec![want_reporter(100_000_000_000, [0xab; 32])]);
+        assert_eq!(
+            slashing_reporter_outputs_valid(&[tx], &view, RESOLVE_DAA, 1000, true).unwrap_err().1,
+            SlashingReporterReject::Ineffective
+        );
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_unknown_bond_is_ineffective() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x55; 64]), 0);
+        let tx = slashing_tx_with_outputs(op, [0xab; 32], vec![want_reporter(100_000_000_000, [0xab; 32])]);
+        assert_eq!(
+            slashing_reporter_outputs_valid(&[tx], &ActiveBondView::new(), RESOLVE_DAA, 1000, true).unwrap_err().1,
+            SlashingReporterReject::Ineffective
+        );
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_duplicate_bond_in_block_is_ineffective() {
+        // Two slashing txs targeting the same bond: the first is effective, the
+        // second duplicates it ⇒ block invalid (a bond is slashable once/block).
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
+        let first = slashing_tx_with_outputs(op, [0xab; 32], vec![want_reporter(100_000_000_000, [0xab; 32])]);
+        let second = slashing_tx_with_outputs(op, [0xcd; 32], vec![want_reporter(100_000_000_000, [0xcd; 32])]);
+        let dup_id = second.id();
+        let err = slashing_reporter_outputs_valid(&[first, second], &view, RESOLVE_DAA, 1000, true).unwrap_err();
+        assert_eq!(err, (dup_id, SlashingReporterReject::Ineffective));
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_undecodable_payload_is_ineffective() {
+        // A malformed slashing payload is a forged/corrupt tx ⇒ rejected, not
+        // skipped (skipping would let an unchecked mint through).
+        let bad = dns_overlay_tx(SUBNETWORK_ID_SLASHING_EVIDENCE, vec![0xff, 0x00, 0x12]);
+        assert_eq!(
+            slashing_reporter_outputs_valid(&[bad], &ActiveBondView::new(), RESOLVE_DAA, 1000, true).unwrap_err().1,
+            SlashingReporterReject::Ineffective
+        );
+    }
+
+    #[test]
+    fn slashing_reporter_outputs_ignores_non_slashing_txs() {
+        // Native + attestation-shard txs carry no slashing evidence ⇒ no-op even
+        // when activated and even though they have no reporter output.
+        let native = dns_overlay_tx(SubnetworkId::from_byte(0), vec![]);
+        let shard = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, borsh::to_vec(&fixture_shard(2)).unwrap());
+        assert!(slashing_reporter_outputs_valid(&[native, shard], &ActiveBondView::new(), RESOLVE_DAA, 1000, true).is_ok());
     }
 
     // ---- Coordinated-failover protocol (ADR-0014) -----------------

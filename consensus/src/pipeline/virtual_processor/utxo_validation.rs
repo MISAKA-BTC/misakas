@@ -3,9 +3,9 @@ use crate::{
     errors::{
         BlockProcessResult,
         RuleError::{
-            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, IneligibleAttestationInBlock,
-            InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock, UnverifiableSlashingEvidenceInBlock,
-            WrongHeaderPruningPoint,
+            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, IneffectiveSlashingInBlock,
+            IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock,
+            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint, WrongSlashingReporterOutput,
         },
     },
     model::stores::{
@@ -30,9 +30,9 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, BondStatus, RewardedEpochSet, attestations_from_accepted_txs,
-        bond_release_daa_score, effective_bond_status, slashing_evidence_from_accepted_txs, stake_attestation_message,
-        validator_reward_outputs_from_attestations,
+        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, BondStatus, RewardedEpochSet, SlashingReporterReject,
+        attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status, slashing_evidence_from_accepted_txs,
+        slashing_reporter_outputs_valid, stake_attestation_message, validator_reward_outputs_from_attestations,
     },
     hashing,
     header::Header,
@@ -249,6 +249,13 @@ impl VirtualStateProcessor {
         // not releasable, so a bond's staked output-0 is locked while the bond
         // is `Pending`/`Active`/mid-unbonding/`Slashed`. Inert below activation.
         self.check_bond_spend_gate(&txs, selected_parent_bond_view, header.daa_score)?;
+
+        // kaspa-pq Phase 11 (ADR-0013 Addendum C.1.3/C.1.5): the strict
+        // slashing-tx inclusion + reporter-output rule, run AFTER genuineness
+        // so an included slashing tx is genuine, effective, and mints exactly
+        // the reporter reward at output-0 — making the b2-iv output-0 UTXO
+        // removal a 1:1 mirror of the mint. Inert below activation.
+        self.check_slashing_reporter_outputs(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): the validator reward
         // outputs the coinbase must carry, derived from the block's included
@@ -504,6 +511,47 @@ impl VirtualStateProcessor {
         let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         bond_spend_gate(txs, selected_parent_bond_view, daa_score, activated)
             .map_err(|(spending_tx, bond_outpoint)| NonReleasableBondSpendInBlock(spending_tx, bond_outpoint))
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0013 Addendum C.1.3/C.1.5): the strict
+    /// slashing-tx inclusion + reporter-output block-validity rule. Rejects a
+    /// block carrying any `SUBNETWORK_ID_SLASHING_EVIDENCE` tx that is not
+    /// *effective* (its bond resolves `Active`/`Unbonding` at the block's DAA
+    /// score and is the first slashing tx targeting that bond), or that — being
+    /// effective — does not carry the exact consensus-mandated reporter reward
+    /// at `output[0]`. Together with the genuineness rule (`check_slashing_-
+    /// evidence_genuine`, run first) this makes "included ⇒ effective ∧ mints
+    /// exactly the reward at output-0" a consensus invariant, so the b2-iv
+    /// output-0 UTXO removal maps 1:1 to a minted reporter reward and no
+    /// ineffective slashing tx can inflate supply.
+    ///
+    /// Reads the same selected-parent [`ActiveBondView`] as the sibling overlay
+    /// checks, so it is per-block-deterministic and reorg-safe. The reporter
+    /// distribution uses the network's `slashing_reporter_reward_bps`. Inert
+    /// unless the overlay is configured **and** `daa_score` has reached
+    /// `dns_activation_daa_score` (`u64::MAX` on every current network, so this
+    /// returns `Ok(())` immediately everywhere today).
+    fn check_slashing_reporter_outputs(
+        &self,
+        txs: &[Transaction],
+        selected_parent_bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) -> BlockProcessResult<()> {
+        let Some(dns_params) = self.dns_params.as_ref() else {
+            return Ok(());
+        };
+        let activated = daa_score >= dns_params.dns_activation_daa_score;
+        slashing_reporter_outputs_valid(
+            txs,
+            selected_parent_bond_view,
+            daa_score,
+            dns_params.reward_params.slashing_reporter_reward_bps,
+            activated,
+        )
+        .map_err(|(tx_id, reason)| match reason {
+            SlashingReporterReject::Ineffective => IneffectiveSlashingInBlock(tx_id),
+            SlashingReporterReject::WrongReporterOutput => WrongSlashingReporterOutput(tx_id),
+        })
     }
 
     /// Validates transactions against the provided `utxo_view` and returns a vector with all transactions
