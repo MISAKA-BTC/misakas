@@ -10,8 +10,9 @@
 //! unchanged.
 
 use kaspa_consensus_core::dns_finality::{
-    ATTESTATION_MLDSA65_CONTEXT, SignedEpochCheckOutcome, SignedEpochRecord, ValidatorAttestationTarget, check_signed_epoch_record,
-    effective_bond_status, is_bond_active_at, signature_fingerprint, validator_id_from_pubkey,
+    ATTESTATION_MLDSA65_CONTEXT, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
+    ValidatorAttestationTarget, check_signed_epoch_record, effective_bond_status, is_bond_active_at, signature_fingerprint,
+    single_attestation_shard, stake_attestation_shard_tx, validator_id_from_pubkey,
 };
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_consensusmanager::ConsensusManager;
@@ -363,10 +364,10 @@ impl ValidatorService {
                         self.config.mode, sink.daa_score, bond_status, committee_status, conf.rollout_stage, conf.dns_confirmed
                     );
 
-                    // Eligible: sign under the equivocation guard (DRY-RUN — verified
-                    // locally and logged, but not gossiped/submitted yet).
-                    if let (Some(target), Some(key)) = (&attestation, &self.key) {
-                        self.guarded_sign(target, key);
+                    // Eligible: sign under the equivocation guard and build the shard tx
+                    // (DRY-RUN — verified locally and logged, but not gossiped/submitted yet).
+                    if let (Some(target), Some(key), Some(outpoint)) = (&attestation, &self.key, self.bond_outpoint) {
+                        self.guarded_sign(target, key, outpoint);
                     }
                 }
                 None => {
@@ -383,7 +384,7 @@ impl ValidatorService {
     /// the record before returning; refuses on `Block` (would be slashable) and skips on
     /// `AllowRebroadcast` (already signed this exact target). DRY-RUN: the signature is
     /// verified locally and logged but NOT gossiped/submitted (that is a later slice).
-    fn guarded_sign(&self, target: &ValidatorAttestationTarget, key: &ValidatorKey) {
+    fn guarded_sign(&self, target: &ValidatorAttestationTarget, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
         let mut guard = self.signed_epochs.lock().unwrap();
         let Some(store) = guard.as_mut() else {
             trace!("[{VALIDATOR}] eligible for epoch {} but no equivocation-safety log; not signing", target.epoch);
@@ -416,12 +417,28 @@ impl ValidatorService {
                     warn!("[{VALIDATOR}] failed to persist signed-epoch record (not advancing): {e}");
                     return;
                 }
+
+                // Build the attestation shard transaction (the exact artifact a future
+                // submission slice will broadcast). NOT submitted: admitting a zero-input
+                // overlay tx to the mempool (fee-funded input vs. a consensus exemption) is
+                // an unresolved design question (ADR-0010 step 9), so we only build + log it.
+                let attestation = StakeAttestation {
+                    version: DNS_PAYLOAD_VERSION_V1,
+                    validator_id: key.validator_id,
+                    bond_outpoint,
+                    epoch: target.epoch,
+                    target_hash: target.target_hash,
+                    target_daa_score: target.target_daa_score,
+                    validator_set_commitment: target.validator_set_commitment,
+                    signature: signature.to_vec(),
+                };
+                let shard_tx = stake_attestation_shard_tx(&single_attestation_shard(attestation));
                 info!(
-                    "[{VALIDATOR}] eligible — signed attestation (DRY-RUN, not submitted): epoch={} target={} vsc={} sig_len={} self_verify={}",
+                    "[{VALIDATOR}] eligible — signed + built attestation shard tx (DRY-RUN, not submitted): epoch={} target={} vsc={} tx_id={} self_verify={}",
                     target.epoch,
                     target.target_hash,
                     target.validator_set_commitment,
-                    signature.len(),
+                    shard_tx.id(),
                     verified
                 );
             }

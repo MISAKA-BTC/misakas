@@ -376,6 +376,37 @@ pub struct StakeAttestationShardPayload {
     pub attestations: Vec<StakeAttestation>,
 }
 
+/// Wrap a single [`StakeAttestation`] into a one-element
+/// [`StakeAttestationShardPayload`], copying the shard-level
+/// `(epoch, target_hash, target_daa_score, validator_set_commitment)` from the
+/// attestation so the PR-10.4 single-anchor-per-shard invariant holds by
+/// construction. This is the common in-process-validator case (one validator
+/// emitting one attestation per epoch); batching multiple validators' attestations
+/// into a fuller shard is an aggregator concern, not the signer's.
+pub fn single_attestation_shard(attestation: StakeAttestation) -> StakeAttestationShardPayload {
+    StakeAttestationShardPayload {
+        version: DNS_PAYLOAD_VERSION_V1,
+        epoch: attestation.epoch,
+        target_hash: attestation.target_hash,
+        target_daa_score: attestation.target_daa_score,
+        validator_set_commitment: attestation.validator_set_commitment,
+        attestations: vec![attestation],
+    }
+}
+
+/// Build the subnetwork [`Transaction`] carrying a borsh-encoded
+/// [`StakeAttestationShardPayload`] on `SUBNETWORK_ID_STAKE_ATTESTATION_SHARD`.
+///
+/// The transaction has no inputs/outputs — the payload is the whole point. NOTE:
+/// how such zero-input overlay transactions are admitted to the mempool and blocks
+/// (fee-funded input vs. a consensus exemption) is the validator submission path
+/// (ADR-0010 §"Validator service runtime" step 9) and is not yet wired; today the
+/// stock `NoTxInputs` rule would reject this at mempool ingestion.
+pub fn stake_attestation_shard_tx(shard: &StakeAttestationShardPayload) -> Transaction {
+    let payload = borsh::to_vec(shard).expect("borsh serialization of a well-formed shard is infallible");
+    Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, 0, payload)
+}
+
 /// Phase 10 transaction payload that burns a validator's bond by
 /// presenting two incompatible attestations from the same
 /// `(bond_outpoint, validator_id, epoch)` triple. Must be submitted
@@ -2724,6 +2755,26 @@ mod tests {
                 b
             },
         }
+    }
+
+    #[test]
+    fn single_attestation_shard_tx_builds_a_valid_overlay_tx() {
+        let att = fixture_attestation();
+        let shard = single_attestation_shard(att.clone());
+        assert_eq!(shard.attestations, vec![att.clone()]);
+        // Shard-level tuple is copied from the attestation.
+        assert_eq!(
+            (shard.epoch, shard.target_hash, shard.target_daa_score, shard.validator_set_commitment),
+            (att.epoch, att.target_hash, att.target_daa_score, att.validator_set_commitment)
+        );
+
+        let tx = stake_attestation_shard_tx(&shard);
+        assert!(tx.inputs.is_empty() && tx.outputs.is_empty());
+        assert_eq!(dns_tx_kind(&tx.subnetwork_id), Some(DnsTxKind::StakeAttestationShard));
+        // The built payload must pass the stateless shard validator and decode back.
+        assert!(validate_stake_attestation_shard_payload(&tx.payload).is_ok());
+        let decoded: StakeAttestationShardPayload = borsh::from_slice(&tx.payload).unwrap();
+        assert_eq!(decoded, shard);
     }
 
     #[test]
