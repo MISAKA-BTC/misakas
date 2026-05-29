@@ -1852,16 +1852,34 @@ pub fn validator_reward_outputs_from_attestations(
     per_attestation_reward_sompi: u64,
     max_validator_inflation_per_block_sompi: u64,
     attestations: &[(TransactionOutpoint, u64, [u8; 32])],
-) -> Vec<TransactionOutput> {
-    let mut seen: HashSet<(TransactionOutpoint, u64)> = HashSet::new();
-    let mut payloads: Vec<[u8; 32]> = Vec::with_capacity(attestations.len());
-    for (bond_outpoint, epoch, payload) in attestations {
-        // First occurrence of a (bond, epoch) wins; later duplicates skip.
-        if seen.insert((*bond_outpoint, *epoch)) {
-            payloads.push(*payload);
-        }
+    already_rewarded: &RewardedEpochSet,
+) -> (Vec<TransactionOutput>, Vec<(TransactionOutpoint, u64)>) {
+    if per_attestation_reward_sompi == 0 {
+        return (Vec::new(), Vec::new());
     }
-    validator_reward_outputs(per_attestation_reward_sompi, max_validator_inflation_per_block_sompi, &payloads)
+    // Whole-output per-block cap (never emit a partial reward).
+    let max_payable = (max_validator_inflation_per_block_sompi / per_attestation_reward_sompi) as usize;
+    let mut seen_in_block: HashSet<(TransactionOutpoint, u64)> = HashSet::new();
+    let mut outputs: Vec<TransactionOutput> = Vec::new();
+    let mut rewarded_keys: Vec<(TransactionOutpoint, u64)> = Vec::new();
+    for (bond_outpoint, epoch, payload) in attestations {
+        if outputs.len() >= max_payable {
+            break; // cap reached — remaining attestations earn nothing this block
+        }
+        let key = (*bond_outpoint, *epoch);
+        // Cross-block uniqueness (§B.3(c)): skip a (bond, epoch) already
+        // rewarded on the selected-chain prefix.
+        if already_rewarded.contains(bond_outpoint, *epoch) {
+            continue;
+        }
+        // Within-block uniqueness: first occurrence wins.
+        if !seen_in_block.insert(key) {
+            continue;
+        }
+        outputs.push(TransactionOutput::new(per_attestation_reward_sompi, p2pkh_mldsa65_spk(payload)));
+        rewarded_keys.push(key);
+    }
+    (outputs, rewarded_keys)
 }
 
 /// Compute the slashing distribution for a slashed bond
@@ -4621,10 +4639,11 @@ mod tests {
     fn reward_from_attestations_one_per_distinct_bond_epoch() {
         let reward = 100u64;
         let atts = [(op_n(1), 5u64, [0x01u8; 32]), (op_n(2), 5u64, [0x02u8; 32]), (op_n(3), 7u64, [0x03u8; 32])];
-        let outs = validator_reward_outputs_from_attestations(reward, 10_000, &atts);
+        let (outs, keys) = validator_reward_outputs_from_attestations(reward, 10_000, &atts, &RewardedEpochSet::new());
         assert_eq!(outs.len(), 3);
         assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&[0x01u8; 32]));
         assert_eq!(outs[2].script_public_key, p2pkh_mldsa65_spk(&[0x03u8; 32]));
+        assert_eq!(keys, vec![(op_n(1), 5), (op_n(2), 5), (op_n(3), 7)]);
     }
 
     #[test]
@@ -4632,9 +4651,10 @@ mod tests {
         // Same (bond, epoch) twice → one reward; the FIRST occurrence's
         // payload is used (canonical order preserved).
         let atts = [(op_n(1), 5u64, [0xaau8; 32]), (op_n(1), 5u64, [0xbbu8; 32])];
-        let outs = validator_reward_outputs_from_attestations(100, 10_000, &atts);
+        let (outs, keys) = validator_reward_outputs_from_attestations(100, 10_000, &atts, &RewardedEpochSet::new());
         assert_eq!(outs.len(), 1);
         assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&[0xaau8; 32]));
+        assert_eq!(keys, vec![(op_n(1), 5)]);
     }
 
     #[test]
@@ -4642,7 +4662,7 @@ mod tests {
         // ADR-0013: a validator with attestations across two epochs in one
         // block earns for each — dedup is per (bond, epoch), not per bond.
         let atts = [(op_n(1), 5u64, [0xaau8; 32]), (op_n(1), 6u64, [0xaau8; 32])];
-        let outs = validator_reward_outputs_from_attestations(100, 10_000, &atts);
+        let (outs, _) = validator_reward_outputs_from_attestations(100, 10_000, &atts, &RewardedEpochSet::new());
         assert_eq!(outs.len(), 2);
     }
 
@@ -4656,13 +4676,29 @@ mod tests {
             (op_n(3), 1u64, [0x03u8; 32]),
         ];
         // dedup → {(1,1),(2,1),(3,1)} = 3 payloads; cap 25 / reward 10 = 2.
-        let outs = validator_reward_outputs_from_attestations(10, 25, &atts);
+        let (outs, keys) = validator_reward_outputs_from_attestations(10, 25, &atts, &RewardedEpochSet::new());
         assert_eq!(outs.len(), 2);
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[test]
+    fn reward_from_attestations_skips_already_rewarded_prefix() {
+        // Cross-block uniqueness (§B.3(c)): a (bond, epoch) already rewarded on
+        // the prefix earns nothing now; the rest are still paid.
+        let mut prefix = RewardedEpochSet::new();
+        prefix.insert(op_n(1), 5);
+        let atts = [(op_n(1), 5u64, [0x01u8; 32]), (op_n(2), 5u64, [0x02u8; 32])];
+        let (outs, keys) = validator_reward_outputs_from_attestations(100, 10_000, &atts, &prefix);
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&[0x02u8; 32]));
+        assert_eq!(keys, vec![(op_n(2), 5)]);
     }
 
     #[test]
     fn reward_from_attestations_empty_is_empty() {
-        assert!(validator_reward_outputs_from_attestations(100, 10_000, &[]).is_empty());
+        let (outs, keys) = validator_reward_outputs_from_attestations(100, 10_000, &[], &RewardedEpochSet::new());
+        assert!(outs.is_empty());
+        assert!(keys.is_empty());
     }
 
     // ---- compute_slashing_distribution ----------------------------

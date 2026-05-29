@@ -14,6 +14,7 @@ pub mod pruning_meta;
 pub mod pruning_samples;
 pub mod reachability;
 pub mod relations;
+pub mod rewarded_epochs;
 pub mod selected_chain;
 pub mod stake_bonds;
 pub mod statuses;

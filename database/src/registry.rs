@@ -82,6 +82,11 @@ pub enum DatabaseStorePrefixes {
     /// Keyed by `TransactionOutpoint`: the active/unbonding/slashed
     /// `StakeBondRecord` set backing `StakeScore` and bond-existence checks.
     StakeBonds = 196,
+    /// Keyed by `BlockHash`: the `(bond_outpoint, epoch)` pairs a chain block
+    /// rewarded in its coinbase validator fan-out (ADR-0009 Addendum B §B.3(c)).
+    /// Read by descendants' bounded-window uniqueness check so a `(bond,epoch)`
+    /// is rewarded at most once across the selected chain; deleted on prune.
+    RewardedEpochs = 197,
 
     // ---- Separator ----
     /// Reserved as a separator

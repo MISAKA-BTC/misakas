@@ -29,6 +29,7 @@ use crate::{
             pruning_samples::DbPruningSamplesStore,
             reachability::DbReachabilityStore,
             relations::{DbRelationsStore, RelationsStoreReader},
+            rewarded_epochs::{DbRewardedEpochsStore, RewardedEpochKeys},
             selected_chain::{DbSelectedChainStore, SelectedChainStore},
             stake_bonds::{DbStakeBondsStore, StakeBondsStoreReader},
             statuses::{DbStatusesStore, StatusesStore, StatusesStoreBatchExtensions, StatusesStoreReader},
@@ -148,6 +149,9 @@ pub struct VirtualStateProcessor {
 
     // Utxo-related stores
     pub(super) utxo_diffs_store: Arc<DbUtxoDiffsStore>,
+    // kaspa-pq DNS overlay (ADR-0009 Addendum B §B.3(c)): per-block rewarded
+    // `(bond, epoch)` keys for cross-block reward uniqueness.
+    pub(super) rewarded_epochs_store: Arc<DbRewardedEpochsStore>,
     pub(super) utxo_multisets_store: Arc<DbUtxoMultisetsStore>,
     pub(super) acceptance_data_store: Arc<DbAcceptanceDataStore>,
     pub(super) virtual_stores: Arc<RwLock<VirtualStores>>,
@@ -228,6 +232,7 @@ impl VirtualStateProcessor {
             dns_state_store: storage.dns_state_store.clone(),
             dns_params: params.dns_params.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
+            rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             utxo_multisets_store: storage.utxo_multisets_store.clone(),
             acceptance_data_store: storage.acceptance_data_store.clone(),
             virtual_stores: storage.virtual_stores.clone(),
@@ -528,6 +533,7 @@ impl VirtualStateProcessor {
                             ctx.multiset_hash,
                             ctx.mergeset_acceptance_data,
                             ctx.pruning_sample_from_pov.expect("verified"),
+                            ctx.validator_rewarded_keys,
                         );
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
@@ -552,11 +558,19 @@ impl VirtualStateProcessor {
         multiset: MuHash,
         acceptance_data: AcceptanceData,
         pruning_sample_from_pov: BlockHash,
+        // kaspa-pq (ADR-0009 Addendum B §B.3(c)): the `(bond, epoch)` keys this
+        // block rewarded. Persisted only when non-empty — empty on every block
+        // of every current network (the overlay is dormant), so no rows are
+        // written there.
+        rewarded_keys: RewardedEpochKeys,
     ) {
         let mut batch = WriteBatch::default();
         self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
         self.utxo_multisets_store.insert_batch(&mut batch, current, multiset).unwrap();
         self.acceptance_data_store.insert_batch(&mut batch, current, Arc::new(acceptance_data)).unwrap();
+        if !rewarded_keys.is_empty() {
+            self.rewarded_epochs_store.insert_batch(&mut batch, current, Arc::new(rewarded_keys)).unwrap();
+        }
         // Note we call idempotent since this field can be populated during IBD with headers proof
         self.pruning_samples_store.insert_batch(&mut batch, current, pruning_sample_from_pov).idempotent().unwrap();
         let write_guard = self.statuses_store.set_batch(&mut batch, current, StatusUTXOValid).unwrap();
@@ -1410,7 +1424,7 @@ impl VirtualStateProcessor {
         // with the SAME `validator_reward_outputs_for_block` the validation
         // path uses, so a block mined from this template reproduces the
         // coinbase byte-for-byte. Empty (no-op) on every current network.
-        let validator_reward_outputs =
+        let (validator_reward_outputs, _rewarded_keys) =
             self.validator_reward_outputs_for_block(&txs, &self.initial_active_bond_view(), virtual_state.daa_score);
         let coinbase = self
             .coinbase_manager
@@ -1486,7 +1500,14 @@ impl VirtualStateProcessor {
     /// Note that pruning point-related stores are initialized by `init`
     pub fn process_genesis(self: &Arc<Self>) {
         // Write the UTXO state of genesis
-        self.commit_utxo_state(self.genesis.hash, UtxoDiff::default(), MuHash::new(), AcceptanceData::default(), ZERO_HASH64);
+        self.commit_utxo_state(
+            self.genesis.hash,
+            UtxoDiff::default(),
+            MuHash::new(),
+            AcceptanceData::default(),
+            ZERO_HASH64,
+            Vec::new(),
+        );
 
         // Init the virtual selected chain store
         let mut batch = WriteBatch::default();

@@ -12,6 +12,7 @@ use crate::{
         daa::DaaStoreReader,
         ghostdag::{CompactGhostdagData, GhostdagData},
         headers::HeaderStoreReader,
+        rewarded_epochs::RewardedEpochKeys,
     },
     processes::{
         pruning::PruningPointReply,
@@ -28,7 +29,7 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, attestations_from_accepted_txs, stake_attestation_message,
+        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, RewardedEpochSet, attestations_from_accepted_txs, stake_attestation_message,
         validator_reward_outputs_from_attestations,
     },
     hashing,
@@ -92,6 +93,10 @@ pub(super) struct UtxoProcessingContext<'a> {
     pub mergeset_acceptance_data: Vec<MergesetBlockAcceptanceData>,
     pub mergeset_rewards: BlockHashMap<BlockRewardData>,
     pub pruning_sample_from_pov: Option<BlockHash>,
+    /// kaspa-pq (ADR-0009 Addendum B §B.3(c)): the `(bond, epoch)` pairs this
+    /// block's coinbase rewarded, computed during `verify_expected_utxo_state`
+    /// and persisted by `commit_utxo_state` for descendant uniqueness checks.
+    pub validator_rewarded_keys: RewardedEpochKeys,
 }
 
 impl<'a> UtxoProcessingContext<'a> {
@@ -105,6 +110,7 @@ impl<'a> UtxoProcessingContext<'a> {
             mergeset_rewards: BlockHashMap::with_capacity(mergeset_size),
             mergeset_acceptance_data: Vec::with_capacity(mergeset_size),
             pruning_sample_from_pov: Default::default(),
+            validator_rewarded_keys: Vec::new(),
         }
     }
 
@@ -224,8 +230,11 @@ impl VirtualStateProcessor {
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): the validator reward
         // outputs the coinbase must carry, derived from the block's included
         // attestations resolved against its selected-parent bond view. Empty
-        // (no-op) on every current network.
-        let validator_reward_outputs = self.validator_reward_outputs_for_block(&txs, selected_parent_bond_view, header.daa_score);
+        // (no-op) on every current network. The rewarded `(bond, epoch)` keys
+        // are stashed for `commit_utxo_state` to persist (§B.3(c)).
+        let (validator_reward_outputs, rewarded_keys) =
+            self.validator_reward_outputs_for_block(&txs, selected_parent_bond_view, header.daa_score);
+        ctx.validator_rewarded_keys = rewarded_keys;
 
         // Verify coinbase transaction (incl. the validator reward fan-out).
         self.verify_coinbase_transaction(
@@ -311,12 +320,12 @@ impl VirtualStateProcessor {
         txs: &[Transaction],
         bond_view: &ActiveBondView,
         daa_score: u64,
-    ) -> Vec<TransactionOutput> {
+    ) -> (Vec<TransactionOutput>, RewardedEpochKeys) {
         let Some(dns_params) = self.dns_params.as_ref() else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
         if daa_score < dns_params.dns_activation_daa_score {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
         let mut attestations = Vec::new();
         for att in attestations_from_accepted_txs(txs) {
@@ -324,10 +333,15 @@ impl VirtualStateProcessor {
                 attestations.push((att.bond_outpoint, att.epoch, bond.owner_reward_spk_payload));
             }
         }
+        // PR-10.5′-b3b-S1: within-block dedup only (empty prefix). The
+        // cross-block prefix set is built from the per-block rewarded-keys
+        // store walk in b3b-S2; the returned keys are persisted now so that
+        // walk has data to read.
         validator_reward_outputs_from_attestations(
             dns_params.reward_params.per_attestation_reward_sompi,
             dns_params.reward_params.max_validator_inflation_per_block_sompi,
             &attestations,
+            &RewardedEpochSet::new(),
         )
     }
 

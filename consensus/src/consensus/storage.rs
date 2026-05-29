@@ -17,6 +17,7 @@ use crate::{
         pruning_samples::DbPruningSamplesStore,
         reachability::{DbReachabilityStore, ReachabilityData},
         relations::DbRelationsStore,
+        rewarded_epochs::DbRewardedEpochsStore,
         selected_chain::DbSelectedChainStore,
         stake_bonds::DbStakeBondsStore,
         statuses::DbStatusesStore,
@@ -68,6 +69,10 @@ pub struct ConsensusStorage {
     pub utxo_diffs_store: Arc<DbUtxoDiffsStore>,
     pub utxo_multisets_store: Arc<DbUtxoMultisetsStore>,
     pub acceptance_data_store: Arc<DbAcceptanceDataStore>,
+
+    // kaspa-pq DNS overlay (ADR-0009 Addendum B §B.3(c)): per-block rewarded
+    // `(bond_outpoint, epoch)` keys for cross-block reward uniqueness.
+    pub rewarded_epochs_store: Arc<DbRewardedEpochsStore>,
 
     // Block window caches
     pub block_window_cache_for_difficulty: Arc<BlockWindowCacheStore>,
@@ -227,6 +232,9 @@ impl ConsensusStorage {
         let dns_state_store = Arc::new(RwLock::new(DbDnsStateStore::new(db.clone())));
         let stake_bonds_store =
             Arc::new(RwLock::new(DbStakeBondsStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build())));
+        // Per-block rewarded `(bond, epoch)` keys (Addendum B §B.3(c)). Reuses
+        // the per-block UTXO-diff cache policy — same keying + lifecycle.
+        let rewarded_epochs_store = Arc::new(DbRewardedEpochsStore::new(db.clone(), utxo_diffs_builder.build()));
 
         // Block windows
         let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));
@@ -264,6 +272,7 @@ impl ConsensusStorage {
             depth_store,
             pruning_samples_store,
             utxo_diffs_store,
+            rewarded_epochs_store,
             utxo_multisets_store,
             block_window_cache_for_difficulty,
             block_window_cache_for_past_median_time,
