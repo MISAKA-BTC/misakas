@@ -1984,6 +1984,68 @@ pub fn slashing_distribution_output(
     (output, dist.burned_sompi)
 }
 
+/// The deterministic consensus side-effect of slashing one bond
+/// (ADR-0013 Addendum C / ADR-0016 §D.4). Computed per genuine evidence so
+/// the slashing-tx **construction** and **validation** paths agree byte-for-
+/// byte.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlashingSideEffect {
+    /// The slashed bond's outpoint. Its locked output-0 UTXO (value
+    /// `slashed_amount_sompi`, ADR-0016 §D.1) is removed from the UTXO set.
+    pub bond_outpoint: TransactionOutpoint,
+    /// `S` = the slashed amount (the bond's `amount`) that leaves the supply
+    /// when the output-0 UTXO is removed.
+    pub slashed_amount_sompi: u64,
+    /// The single reporter-reward output the slashing transaction must carry,
+    /// or `None` when the reward rounds to zero (everything burns).
+    pub reporter_output: Option<TransactionOutput>,
+    /// The implicitly-burned remainder (`S − reporter_reward`): removed with
+    /// the output-0 UTXO and never re-minted.
+    pub burned_sompi: u64,
+}
+
+/// Build a block's slashing side-effects from its genuine, accepted slashing
+/// evidence (ADR-0013 Addendum C / ADR-0016 §D.4).
+///
+/// `evidence` is `(bond_outpoint, S, reporter_reward_spk_payload)` for each
+/// accepted, genuineness-checked evidence — in the canonical block order the
+/// caller supplies. `S` (the slashed amount) and the reporter payload are
+/// resolved by the caller against the block's selected-parent bond view (the
+/// caller feeds only bonds with a live, removable output-0). Applies
+/// **within-block** `bond_outpoint` uniqueness — a bond is slashed at most
+/// once per block (two evidences against the same bond in one block collapse
+/// to a single removal + reporter payout) — then computes each reporter output
+/// + burn via [`slashing_distribution_output`].
+///
+/// `unreveal_floor` is `None` for equivocation evidence and
+/// `Some(DnsParams::unreveal_reporter_reward_sompi)` for the unreveal case
+/// (ADR-0012). Pure and DAG-free, so it is run identically by construction and
+/// validation. With no evidence it returns no side-effects, so on every
+/// current network (overlay dormant) it is a no-op.
+pub fn slashing_side_effects_from_evidence(
+    evidence: &[(TransactionOutpoint, u64, [u8; 32])],
+    slashing_reporter_reward_bps: u16,
+    unreveal_floor: Option<u64>,
+) -> Vec<SlashingSideEffect> {
+    let mut seen: HashSet<TransactionOutpoint> = HashSet::new();
+    let mut effects = Vec::new();
+    for (bond_outpoint, slashed_amount, reporter_payload) in evidence {
+        // Within-block dedup: a bond's locked UTXO can be removed only once.
+        if !seen.insert(*bond_outpoint) {
+            continue;
+        }
+        let (reporter_output, burned_sompi) =
+            slashing_distribution_output(*slashed_amount, slashing_reporter_reward_bps, reporter_payload, unreveal_floor);
+        effects.push(SlashingSideEffect {
+            bond_outpoint: *bond_outpoint,
+            slashed_amount_sompi: *slashed_amount,
+            reporter_output,
+            burned_sompi,
+        });
+    }
+    effects
+}
+
 // ---------------------------------------------------------------------
 // Consensus rule implementations (PR-10.5).
 //
@@ -4973,6 +5035,72 @@ mod tests {
         assert_eq!(out.value, 100_000);
         assert_eq!(burned, 4_900_000);
         assert_eq!(out.value + burned, 5_000_000);
+    }
+
+    // ---- slashing_side_effects_from_evidence (Addendum C / D.4) ----
+
+    fn slash_outpoint(b: u8) -> TransactionOutpoint {
+        TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+    }
+
+    #[test]
+    fn slashing_side_effects_distinct_bonds_pay_each_reporter() {
+        // Two distinct bonds, bps = 1000 (10%): each yields one side-effect
+        // with reporter = 10% and burn = 90% of its own S.
+        let evidence =
+            [(slash_outpoint(1), 1_000_000, [0x11u8; 32]), (slash_outpoint(2), 2_000_000, [0x22u8; 32])];
+        let effects = slashing_side_effects_from_evidence(&evidence, 1000, None);
+        assert_eq!(effects.len(), 2);
+
+        assert_eq!(effects[0].bond_outpoint, slash_outpoint(1));
+        assert_eq!(effects[0].slashed_amount_sompi, 1_000_000);
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().value, 100_000);
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa65_spk(&[0x11u8; 32]));
+        assert_eq!(effects[0].burned_sompi, 900_000);
+
+        assert_eq!(effects[1].bond_outpoint, slash_outpoint(2));
+        assert_eq!(effects[1].reporter_output.as_ref().unwrap().value, 200_000);
+        assert_eq!(effects[1].burned_sompi, 1_800_000);
+        // Conservation per bond: reporter + burn == S.
+        assert_eq!(effects[1].reporter_output.as_ref().unwrap().value + effects[1].burned_sompi, 2_000_000);
+    }
+
+    #[test]
+    fn slashing_side_effects_dedup_same_bond_within_block() {
+        // Two evidences against the SAME bond in one block collapse to a
+        // single side-effect (its UTXO can be removed only once).
+        let evidence =
+            [(slash_outpoint(7), 1_000_000, [0x11u8; 32]), (slash_outpoint(7), 1_000_000, [0x99u8; 32])];
+        let effects = slashing_side_effects_from_evidence(&evidence, 1000, None);
+        assert_eq!(effects.len(), 1);
+        // First occurrence wins (the 0x11 reporter payload).
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa65_spk(&[0x11u8; 32]));
+    }
+
+    #[test]
+    fn slashing_side_effects_zero_bps_burns_everything() {
+        // bps = 0 → no reporter output, full S burns, but the bond is still
+        // slashed (a side-effect is produced so its UTXO is removed).
+        let evidence = [(slash_outpoint(3), 1_000_000, [0x33u8; 32])];
+        let effects = slashing_side_effects_from_evidence(&evidence, 0, None);
+        assert_eq!(effects.len(), 1);
+        assert!(effects[0].reporter_output.is_none());
+        assert_eq!(effects[0].burned_sompi, 1_000_000);
+        assert_eq!(effects[0].slashed_amount_sompi, 1_000_000);
+    }
+
+    #[test]
+    fn slashing_side_effects_unreveal_floor_caps_reporter() {
+        // unreveal floor caps the reporter below the bps reward; the extra burns.
+        let evidence = [(slash_outpoint(4), 5_000_000, [0x44u8; 32])];
+        let effects = slashing_side_effects_from_evidence(&evidence, 1000, Some(100_000));
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().value, 100_000);
+        assert_eq!(effects[0].burned_sompi, 4_900_000);
+    }
+
+    #[test]
+    fn slashing_side_effects_empty_is_noop() {
+        assert!(slashing_side_effects_from_evidence(&[], 1000, None).is_empty());
     }
 
     // ---- Coordinated-failover protocol (ADR-0014) -----------------
