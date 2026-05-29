@@ -29,6 +29,7 @@ use crate::{
             reachability::DbReachabilityStore,
             relations::{DbRelationsStore, RelationsStoreReader},
             selected_chain::{DbSelectedChainStore, SelectedChainStore},
+            stake_bonds::{DbStakeBondsStore, StakeBondsStoreReader},
             statuses::{DbStatusesStore, StatusesStore, StatusesStoreBatchExtensions, StatusesStoreReader},
             tips::{DbTipsStore, TipsStoreReader},
             utxo_diffs::{DbUtxoDiffsStore, UtxoDiffsStoreReader},
@@ -56,6 +57,7 @@ use kaspa_consensus_core::{
     blockstatus::BlockStatus::{StatusDisqualifiedFromChain, StatusUTXOValid},
     coinbase::MinerData,
     config::genesis::GenesisBlock,
+    dns_finality::{BondMutation, BondStatus, DnsParams, bond_mutations_from_accepted_txs},
     header::Header,
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
@@ -129,6 +131,12 @@ pub struct VirtualStateProcessor {
     pub(super) depth_store: Arc<DbDepthStore>,
     pub(super) selected_chain_store: Arc<RwLock<DbSelectedChainStore>>,
     pub(super) pruning_samples_store: Arc<DbPruningSamplesStore>,
+
+    // kaspa-pq Phase 10 (ADR-0009): DNS finality overlay. `dns_params` is the
+    // dormancy guard — `None` on every current network, so the bond-population
+    // pass below is a single `Option` check and a return.
+    pub(super) stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
+    pub(super) dns_params: Option<DnsParams>,
 
     // Utxo-related stores
     pub(super) utxo_diffs_store: Arc<DbUtxoDiffsStore>,
@@ -208,6 +216,8 @@ impl VirtualStateProcessor {
             depth_store: storage.depth_store.clone(),
             selected_chain_store: storage.selected_chain_store.clone(),
             pruning_samples_store: storage.pruning_samples_store.clone(),
+            stake_bonds_store: storage.stake_bonds_store.clone(),
+            dns_params: params.dns_params.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             utxo_multisets_store: storage.utxo_multisets_store.clone(),
             acceptance_data_store: storage.acceptance_data_store.clone(),
@@ -579,12 +589,95 @@ impl VirtualStateProcessor {
         // Update the virtual selected chain
         selected_chain_write.apply_changes(&mut batch, chain_path).unwrap();
 
+        // kaspa-pq Phase 10 (ADR-0009 A.4): stage the DNS stake-bond set
+        // changes into the same batch so they commit atomically with the
+        // virtual state. Inert unless the overlay is configured.
+        self.stage_dns_bond_mutations(&mut batch, chain_path);
+
         // Flush the batch changes
         self.db.write(batch).unwrap();
 
         // Calling the drops explicitly after the batch is written in order to avoid possible errors.
         drop(virtual_write);
         drop(selected_chain_write);
+    }
+
+    /// kaspa-pq Phase 10 (ADR-0009 Addendum A.4): stage the `StakeBonds`-store
+    /// mutations implied by this selected-chain change into `batch`, so they
+    /// commit atomically with the virtual state. **Inert** unless the DNS
+    /// overlay is configured (`dns_params.is_some()`) — on every current
+    /// network this is a single `Option` check and a return.
+    ///
+    /// Mirrors the UTXO reorg model: blocks leaving the selected chain
+    /// (`chain_path.removed`) are reverted, most-recent first, **before**
+    /// blocks joining it (`chain_path.added`) are applied. Within a block,
+    /// `Insert` reverts by delete and `Slash` by clearing `slashed_at`; a
+    /// `Slash` revert whose bond record is already gone (its `Insert` was
+    /// reverted in the same range) is skipped gracefully. Acceptance data is
+    /// retained on reorg (only pruning deletes it), so removed blocks can be
+    /// re-derived deterministically.
+    fn stage_dns_bond_mutations(&self, batch: &mut WriteBatch, chain_path: &ChainPath) {
+        if self.dns_params.is_none() {
+            return;
+        }
+        let mut store = self.stake_bonds_store.write();
+
+        // Revert blocks that left the selected chain (most-recent first).
+        for removed in chain_path.removed.iter().rev().copied() {
+            for mutation in self.dns_bond_mutations_for_chain_block(removed).into_iter().rev() {
+                match mutation {
+                    BondMutation::Insert(outpoint, _) => {
+                        store.delete_batch(batch, outpoint).unwrap();
+                    }
+                    BondMutation::Slash(outpoint, _) => {
+                        if let Ok(record) = store.get(&outpoint) {
+                            let mut record = (*record).clone();
+                            record.slashed_at_daa_score = None;
+                            record.status = BondStatus::Active;
+                            store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply blocks that joined the selected chain (in chain order).
+        for added in chain_path.added.iter().copied() {
+            for mutation in self.dns_bond_mutations_for_chain_block(added) {
+                match mutation {
+                    BondMutation::Insert(outpoint, record) => {
+                        store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
+                    }
+                    BondMutation::Slash(outpoint, daa) => {
+                        if let Ok(record) = store.get(&outpoint) {
+                            let mut record = (*record).clone();
+                            record.slashed_at_daa_score = Some(daa);
+                            record.status = BondStatus::Slashed;
+                            store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Re-derives the [`BondMutation`]s a chain block contributed, from its
+    /// retained acceptance data (ADR-0009 Addendum A.4). Deterministic, so it
+    /// serves both apply (added) and revert (removed). Resolves each accepted
+    /// tx via `block_transactions_store[index_within_block]`.
+    fn dns_bond_mutations_for_chain_block(&self, chain_block: BlockHash) -> Vec<BondMutation> {
+        let acceptance_data = self.acceptance_data_store.get(chain_block).unwrap();
+        let accepted_daa_score = self.headers_store.get_header(chain_block).unwrap().daa_score;
+        let mut txs = Vec::new();
+        for mergeset in acceptance_data.iter() {
+            let block_txs = self.block_transactions_store.get(mergeset.block_hash).unwrap();
+            for entry in mergeset.accepted_transactions.iter() {
+                if let Some(tx) = block_txs.get(entry.index_within_block as usize) {
+                    txs.push(tx.clone());
+                }
+            }
+        }
+        bond_mutations_from_accepted_txs(&txs, accepted_daa_score)
     }
 
     /// Caches the DAA and Median time windows of the sink block (if needed). Following, virtual's window calculations will
