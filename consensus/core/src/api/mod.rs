@@ -10,6 +10,7 @@ use crate::{
     blockstatus::BlockStatus,
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
+    dns_finality::DnsConfirmation,
     errors::{
         block::{BlockProcessResult, RuleError},
         coinbase::CoinbaseResult,
@@ -141,6 +142,14 @@ pub trait ConsensusApi: Send + Sync {
 
     fn get_sink_blue_score(&self) -> u64 {
         unimplemented!()
+    }
+
+    /// kaspa-pq Phase 10 (ADR-0009): the current DNS finality confirmation view,
+    /// or `None` when the DNS overlay is not configured for this network or no
+    /// DnsState has been written yet. Default `None` keeps non-overlay
+    /// ConsensusApi impls (mocks/tests) trivially correct.
+    fn get_dns_confirmation(&self) -> Option<DnsConfirmation> {
+        None
     }
 
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

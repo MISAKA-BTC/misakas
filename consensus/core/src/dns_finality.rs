@@ -2285,6 +2285,39 @@ pub fn attestations_from_accepted_txs(txs: &[Transaction]) -> Vec<StakeAttestati
     out
 }
 
+/// Builds the [`DnsConfirmation`] RPC view from the current [`DnsState`] and
+/// the network's confirmation thresholds (ADR-0009; the `getDnsConfirmation`
+/// RPC, PR-10.14). Pure. `pow_confirmed` is the work-depth threshold alone;
+/// `dns_confirmed` requires **both** depths (via [`is_dns_confirmed`]).
+///
+/// Per ADR-0009 §"Public-claim discipline", the three `*_risk_*` strings are
+/// deliberately descriptive (not a single joint probability) and must be read
+/// alongside the boolean flags. `expected_dns_confirmation_seconds` is left 0
+/// (a calibrated estimate is a follow-up).
+pub fn dns_confirmation_from_state(
+    state: &DnsState,
+    required_work_depth: BlueWorkType,
+    required_stake_depth: StakeScore,
+) -> DnsConfirmation {
+    let pow_confirmed = state.work_depth >= required_work_depth;
+    let dns_confirmed = is_dns_confirmed(state.work_depth, state.stake_depth, required_work_depth, required_stake_depth);
+    DnsConfirmation {
+        block_hash: state.selected_chain_anchor,
+        work_depth: state.work_depth,
+        required_work_depth,
+        stake_depth: state.stake_depth,
+        required_stake_depth,
+        pow_confirmed,
+        dns_confirmed,
+        rollout_stage: state.rollout_stage,
+        expected_dns_confirmation_seconds: 0,
+        work_reorg_risk_upper_bound: "see ADR-0009 §Public-claim discipline".to_string(),
+        stake_reorg_risk_upper_bound: "see ADR-0009 §Public-claim discipline".to_string(),
+        dns_reorg_risk_conservative_bound: "see ADR-0009 §Public-claim discipline".to_string(),
+        note: format!("rollout_stage={:?}; pow_confirmed={pow_confirmed}; dns_confirmed={dns_confirmed}", state.rollout_stage),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2949,6 +2982,34 @@ mod tests {
         // Undecodable shard payload is skipped.
         let bad = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, vec![0xff]);
         assert!(attestations_from_accepted_txs(&[bad]).is_empty());
+    }
+
+    #[test]
+    fn dns_confirmation_from_state_sets_flags() {
+        let state = DnsState {
+            selected_chain_anchor: Hash64::from_bytes([0x11; 64]),
+            anchor_daa_score: 1000,
+            work_depth: BlueWorkType::from_u64(5000),
+            stake_depth: StakeScore(STAKE_SCORE_SCALE), // 1.0
+            last_dns_confirmed_anchor: Hash64::default(),
+            last_dns_confirmed_anchor_daa_score: 0,
+            rollout_stage: DnsRolloutStage::Active,
+            validator_set_commitment: Hash64::from_bytes([0x22; 64]),
+        };
+        // Both thresholds met -> pow + dns confirmed.
+        let c = dns_confirmation_from_state(&state, BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE / 2));
+        assert_eq!(c.block_hash, state.selected_chain_anchor);
+        assert!(c.pow_confirmed && c.dns_confirmed);
+        assert_eq!(c.rollout_stage, DnsRolloutStage::Active);
+        assert_eq!(c.required_work_depth, BlueWorkType::from_u64(1000));
+
+        // Work met but stake below threshold -> pow only.
+        let c = dns_confirmation_from_state(&state, BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE * 2));
+        assert!(c.pow_confirmed && !c.dns_confirmed);
+
+        // Work below threshold -> neither.
+        let c = dns_confirmation_from_state(&state, BlueWorkType::from_u64(9999), StakeScore(0));
+        assert!(!c.pow_confirmed && !c.dns_confirmed);
     }
 
     #[test]

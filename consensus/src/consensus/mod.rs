@@ -16,6 +16,7 @@ use crate::{
             DB,
             acceptance_data::AcceptanceDataStoreReader,
             block_transactions::BlockTransactionsStoreReader,
+            dns_state::DnsStateStoreReader,
             ghostdag::{GhostdagData, GhostdagStoreReader},
             headers::{CompactHeaderData, HeaderStoreReader},
             headers_selected_tip::HeadersSelectedTipStoreReader,
@@ -55,6 +56,7 @@ use kaspa_consensus_core::{
     blockstatus::BlockStatus,
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
+    dns_finality::{DnsConfirmation, dns_confirmation_from_state},
     errors::{
         coinbase::CoinbaseResult,
         consensus::{ConsensusError, ConsensusResult},
@@ -687,6 +689,15 @@ impl ConsensusApi for Consensus {
 
     fn get_sink_blue_score(&self) -> u64 {
         self.headers_store.get_blue_score(self.get_sink()).unwrap()
+    }
+
+    fn get_dns_confirmation(&self) -> Option<DnsConfirmation> {
+        // kaspa-pq Phase 10 (ADR-0009): build the DNS confirmation view from the
+        // current DnsState + this network's thresholds. `None` when the overlay
+        // is not configured or no DnsState has been written yet.
+        let dns_params = self.config.params.dns_params.as_ref()?;
+        let state = self.storage.dns_state_store.read().get().ok()?;
+        Some(dns_confirmation_from_state(&state, dns_params.required_work_depth, dns_params.required_stake_depth))
     }
 
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

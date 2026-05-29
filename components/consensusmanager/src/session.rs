@@ -9,6 +9,7 @@ use kaspa_consensus_core::{
     block::Block,
     blockstatus::BlockStatus,
     daa_score_timestamp::DaaScoreTimestamp,
+    dns_finality::DnsConfirmation,
     errors::consensus::ConsensusResult,
     header::Header,
     mass::{ContextualMasses, NonContextualMasses},
@@ -251,6 +252,12 @@ impl ConsensusSessionOwned {
 
     pub async fn async_get_sink_blue_score(&self) -> u64 {
         self.clone().spawn_blocking(|c| c.get_sink_blue_score()).await
+    }
+
+    /// kaspa-pq Phase 10 (ADR-0009): current DNS finality confirmation view
+    /// (`None` if the overlay is not configured / no DnsState yet).
+    pub async fn async_get_dns_confirmation(&self) -> Option<DnsConfirmation> {
+        self.clone().spawn_blocking(|c| c.get_dns_confirmation()).await
     }
 
     pub async fn async_get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {
