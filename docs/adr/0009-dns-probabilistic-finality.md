@@ -352,3 +352,124 @@ until the Phases 1–9 baseline is shipped and stable.
 - [ADR-0008 — Hash64 consensus identity](0008-hash64-consensus-identity.md)
   (attestation target hashes are `Hash64`).
 - DNS paper (user-provided, summarised inline above).
+
+## Addendum A — Phase 10 implementation conventions (binding)
+
+The original decision (above) froze the design but left several
+implementation conventions unstated. Implementing them by guess in
+consensus-critical code risks a chain split, so this addendum pins them.
+It is **binding** for PR-10.9 onward and corrects one bug in the original
+§"Attestation target". Added after PR-10.4 / PR-10.4-db / PR-10.9a / the
+PR-10.9 lifecycle helpers landed.
+
+### A.1 Bond outpoint convention
+
+The **bond outpoint** — the `StakeBonds` store key and the value an
+attestation/slashing payload references — is **output index 0** of the
+`StakeBondPayload` transaction (`TransactionOutpoint { transaction_id =
+tx.id(), index = 0 }`). Output 0 is the bond-locking output; any further
+outputs are change. One bond per stake-bond transaction. This makes the
+bond outpoint deterministic and removes any "which output" ambiguity from
+attestation references.
+
+### A.2 Bond visibility = deterministic selected-chain aggregation, NOT per-tx
+
+Bond-dependent validation (existence, `Active` status, attestation
+signature, `(bond_outpoint, validator_id, epoch)` uniqueness, StakeScore
+contribution) is a **deterministic state transition computed over the
+selected chain** — it is **not** performed during per-transaction
+UTXO-context validation. Rationale: the bond set is global derived state
+(like the UTXO set), so a per-tx check against it is point-of-view
+inconsistent across nodes and would split the chain.
+
+Consequently:
+
+- **Transaction-level validation** (isolation + mempool admission) of
+  StakeBond / StakeAttestationShard / SlashingEvidence stays **stateless**:
+  borsh-decodability, payload version, ML-DSA length invariants, shard
+  cardinality + single-anchor tuple, equivocation well-formedness. This is
+  exactly PR-10.4; **no bond store is consulted at tx-validation time**.
+- A `StakeAttestationShardPayload` transaction is **accepted on-chain even
+  if its referenced bonds are not (yet) on the selected chain**; it simply
+  contributes nothing to `StakeScore` until they are. This matches the
+  Bootstrap-phase "attestations are accumulated for visibility only".
+- `StakeScore(H)` (A.5) counts an attestation's stake **only if**, on the
+  selected chain ending at `H`: (a) its referenced bond exists and is
+  `Active` (per `effective_bond_status`) at the attestation's
+  `target_daa_score`, (b) its ML-DSA-65 signature verifies against the
+  bond's `validator_pubkey` under `ATTESTATION_MLDSA65_CONTEXT`, and (c) the
+  `(bond_outpoint, validator_id, epoch)` triple has not already been counted.
+
+### A.3 Attestation message layout (corrects §"Attestation target")
+
+The signed attestation message **MUST** bind `network_id` and
+`bond_outpoint`. The current `stake_attestation_message(epoch, target_hash,
+target_daa_score, validator_set_commitment)` omits both, leaving an
+attestation signature unbound to any specific bond (replayable across
+bonds) or network. The canonical message is:
+
+```text
+msg = BLAKE2b-256(
+    key   = ATTESTATION_MESSAGE_DOMAIN ("kaspa-pq-v1/stake-attestation"),
+    input = network_id
+         || epoch.to_le_bytes()
+         || target_hash            (Hash64)
+         || target_daa_score.to_le_bytes()
+         || validator_set_commitment (Hash64)
+         || bond_outpoint          (transaction_id Hash64 || index u32 LE),
+)
+```
+
+`stake_attestation_message` must be updated to take `network_id` and
+`bond_outpoint`. This changes the signed bytes; it is a pre-activation
+breaking change and therefore acceptable (no live attestations exist).
+
+### A.4 Bond population & reorg handling (PR-10.9b)
+
+The `StakeBonds` store is **derived state of the selected chain**, applied
+exactly like the UTXO set, inside the virtual processor's chain-path
+application:
+
+- On a block **joining** the selected chain (`ChainPath.added`): for each
+  accepted `StakeBondPayload` tx, insert
+  `stake_bond_record_from_payload(payload, bond_outpoint)` keyed by its
+  output-0 outpoint, stamped with the merging block's DAA score; for each
+  accepted `SlashingEvidencePayload`, set the target bond's `slashed_at_daa_score`;
+  for an unbond tx, set `unbond_request_daa_score`.
+- On a block **leaving** the selected chain (`ChainPath.removed`): revert
+  those mutations (delete inserted bonds, clear slash/unbond stamps).
+
+The store therefore always reflects the selected-chain tip's bond set.
+Activation (`Pending → Active`) is **not** a write — it is derived at read
+time from `activation_daa_score` via `effective_bond_status`.
+
+### A.5 StakeScore aggregation pass & uniqueness (PR-10.5 → wired)
+
+After the bond set is updated for a new sink, aggregate per-epoch tallies
+deterministically from the `StakeAttestationShardPayload`s on the selected
+chain: dedup `(bond_outpoint, validator_id, epoch)`, gate each attestation
+by A.2(a–c), build `EpochStakeTally { signed_stake_sompi,
+total_active_stake_sompi }` (denominator = total `Active` stake at the
+epoch), then `compute_stake_score`. Write the result + the last
+DNS-confirmed anchor (`is_dns_confirmed`) into the `DnsState` singleton.
+This is the value the reorg gate (A.6) and `getDnsConfirmation` RPC read.
+
+### A.6 Revised implementation order (supersedes the PR table above for Phase 10)
+
+Done: PR-10.4 (stateless tx kinds), PR-10.4-db (DnsState + StakeBonds
+stores), PR-10.9a (`verify_mldsa65_with_context`), PR-10.9 lifecycle
+helpers. The original "PR-10.9c per-tx bond check" is **dropped** (A.2).
+Remaining, in order:
+
+1. **A.3 fix** — rebind `stake_attestation_message` to `network_id` +
+   `bond_outpoint` (+ update its tests). Pure consensus-core.
+2. **PR-10.9b** — bond population + reorg revert in the virtual processor
+   (A.4), behind the same `dns_params.is_some()` dormancy guard as the gate.
+3. **PR-10.5-wire / A.5** — StakeScore aggregation pass writing `DnsState`.
+4. **PR-10.6/10.7** — reorg gate calling `check_dns_reorg_rule` in
+   `sink_search_algorithm`, guarded; `RuleError::DnsFinalityReorgRejected`.
+5. **PR-10.14** — `getDnsConfirmation` RPC over `DnsState`.
+6. **PR-10.11** — block-template DNS overlay inclusion policy.
+
+Steps 2–4 only become live once a network sets `dns_params = Some(..)` and
+reaches the Activation phase; on all current networks they are inert.
