@@ -606,6 +606,7 @@ Do you confirm? (y/n)";
             key_path: args.validator_key.clone(),
             stake_bond: args.stake_bond.clone(),
             state_path: Some(state_path),
+            address_prefix: config.prefix(),
         };
         Some(Arc::new(ValidatorService::new(validator_config, consensus_manager.clone(), tick_service.clone())))
     } else {

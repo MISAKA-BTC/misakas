@@ -43,6 +43,7 @@ kaspa-utxoindex.workspace = true
 kaspa-wrpc-server.workspace = true
 
 async-channel.workspace = true
+blake2b_simd.workspace = true
 borsh.workspace = true
 cfg-if.workspace = true
 clap = { workspace = true, features = ["env"]}

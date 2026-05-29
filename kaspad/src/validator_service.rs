@@ -9,6 +9,8 @@
 //! registered only when `--enable-validator` is set, so default node behavior is
 //! unchanged.
 
+use blake2b_simd::Params as Blake2bParams;
+use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
     ATTESTATION_MLDSA65_CONTEXT, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
@@ -96,6 +98,8 @@ pub struct ValidatorConfig {
     /// Path to the persistent equivocation-safety log (`validator-state.json`). When
     /// `None`, signing is disabled (the guard cannot be enforced without persistence).
     pub state_path: Option<PathBuf>,
+    /// Network address prefix, used to render the validator's funding address for logs.
+    pub address_prefix: Prefix,
 }
 
 /// Read and parse the validator signing seed from a hex file.
@@ -130,6 +134,18 @@ impl ValidatorKey {
         let keypair = ml_dsa_65::generate_key_pair(seed);
         let validator_id = validator_id_from_pubkey(keypair.verification_key.as_ref());
         Self { keypair, validator_id }
+    }
+
+    /// The validator's own P2PKH-ML-DSA address — `(prefix, PubKeyHashMlDsa65,
+    /// BLAKE2b-256(public_key))`. This is the **spend** address (32-byte BLAKE2b-256
+    /// payload), distinct from the 64-byte overlay `validator_id`. Funding UTXOs sent
+    /// here back the attestation-shard transactions (funding model A).
+    fn funding_address(&self, prefix: Prefix) -> Address {
+        let mut payload = [0u8; 32];
+        payload.copy_from_slice(
+            Blake2bParams::new().hash_length(32).to_state().update(self.keypair.verification_key.as_ref()).finalize().as_bytes(),
+        );
+        Address::new(prefix, Version::PubKeyHashMlDsa65, &payload)
     }
 
     /// Sign `message` under an explicit ML-DSA-65 `context` (domain separator) with
@@ -307,6 +323,10 @@ impl ValidatorService {
                 Ok(seed) => {
                     let key = ValidatorKey::from_seed(seed);
                     info!("[{VALIDATOR}] loaded validator signing key from {path} (validator_id={})", key.validator_id);
+                    info!(
+                        "[{VALIDATOR}] funding address: {} — send UTXOs here to fund attestation-shard submission",
+                        key.funding_address(config.address_prefix)
+                    );
                     Some(key)
                 }
                 Err(err) => {
@@ -594,6 +614,20 @@ mod tests {
         let key = ValidatorKey::from_seed([0x33u8; VALIDATOR_SEED_LEN]);
         let expected = validator_id_from_pubkey(key.keypair.verification_key.as_ref());
         assert_eq!(key.validator_id, expected);
+    }
+
+    #[test]
+    fn funding_address_is_p2pkh_mldsa65_over_blake2b_256_pubkey() {
+        let key = ValidatorKey::from_seed([0x44u8; VALIDATOR_SEED_LEN]);
+        let addr = key.funding_address(Prefix::Devnet);
+        assert_eq!(addr.version, Version::PubKeyHashMlDsa65);
+        assert_eq!(addr.prefix, Prefix::Devnet);
+        // Payload = BLAKE2b-256(pubkey) — the 32-byte spend hash, not the 64-byte validator_id.
+        let mut expected = [0u8; 32];
+        expected.copy_from_slice(
+            Blake2bParams::new().hash_length(32).to_state().update(key.keypair.verification_key.as_ref()).finalize().as_bytes(),
+        );
+        assert_eq!(addr.payload.as_slice(), &expected);
     }
 
     #[test]
