@@ -75,7 +75,18 @@ impl KaspaPqMlDsa65KeyPair {
     /// (the scheme is hedged-randomized), but reusing the *same* signing
     /// key with predictable randomness is bad hygiene.
     pub fn sign(&self, message: &[u8], signing_randomness: [u8; 32]) -> [u8; MLDSA65_SIG_LEN] {
-        let sig = ml_dsa_65::sign(&self.inner.signing_key, message, MLDSA65_TX_CONTEXT, signing_randomness)
+        self.sign_with_context(message, MLDSA65_TX_CONTEXT, signing_randomness)
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0010): sign `message` under an explicit ML-DSA-65
+    /// `context` (domain separator). [`sign`](Self::sign) uses the transaction
+    /// context (`MLDSA65_TX_CONTEXT`); the in-process validator service signs
+    /// stake attestations with `dns_finality::ATTESTATION_MLDSA65_CONTEXT` so the
+    /// produced signature verifies via
+    /// `kaspa_txscript::verify_mldsa65_with_context` and can never be replayed
+    /// as a transaction signature (distinct context ⇒ distinct domain).
+    pub fn sign_with_context(&self, message: &[u8], context: &[u8], signing_randomness: [u8; 32]) -> [u8; MLDSA65_SIG_LEN] {
+        let sig = ml_dsa_65::sign(&self.inner.signing_key, message, context, signing_randomness)
             .expect("ML-DSA-65 sign is infallible on a well-formed message");
         // `MLDSA65Signature::as_ref()` returns `&[u8; SIGNATURE_SIZE]`.
         *sig.as_ref()
@@ -192,6 +203,29 @@ mod tests {
         let sig = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_bytes);
         libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg, MLDSA65_TX_CONTEXT, &sig)
             .expect("kaspa-pq wallet signature must verify under the kaspa-pq tx context");
+    }
+
+    #[test]
+    fn sign_with_context_roundtrip_and_separation() {
+        // PR-11.4 (Phase 11): a signature produced under an explicit context
+        // verifies only under that same context — the domain-separation property
+        // the validator service relies on so an attestation signature can never
+        // be replayed as a transaction signature.
+        let kp = derive_keypair("simnet", 0, 0, 9, &TEST_MASTER_SEED);
+        let msg = b"phase 11 attestation digest";
+        let att_ctx = b"kaspa-pq-v1/att/mldsa65"; // == dns_finality::ATTESTATION_MLDSA65_CONTEXT
+        let sig_bytes = kp.sign_with_context(msg, att_ctx, [0x44u8; 32]);
+        assert_eq!(sig_bytes.len(), MLDSA65_SIG_LEN);
+
+        let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(*kp.public_key_bytes());
+        let sig = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_bytes);
+        // Verifies under the same (attestation) context...
+        libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg, att_ctx, &sig).expect("must verify under the signing context");
+        // ...but NOT under the transaction context (domain separation).
+        assert!(
+            libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg, MLDSA65_TX_CONTEXT, &sig).is_err(),
+            "an attestation-context signature must not verify as a transaction signature"
+        );
     }
 
     #[test]
