@@ -7,7 +7,10 @@ use kaspa_consensus_core::{
     blockhash,
     blockstatus::BlockStatus,
     coinbase::MinerData,
-    config::{ConfigBuilder, params::MAINNET_PARAMS},
+    config::{
+        ConfigBuilder,
+        params::{DEVNET_PARAMS, MAINNET_PARAMS},
+    },
     tx::{ScriptPublicKey, ScriptVec, Transaction},
 };
 use std::{collections::VecDeque, thread::JoinHandle};
@@ -191,6 +194,47 @@ async fn antichain_merge_test() {
 
     // Mine a long enough chain s.t. the antichain is fully merged
     for _ in 0..32 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    ctx.assert_tips_num(1);
+}
+
+/// kaspa-pq Phase 10/11 (ADR-0009/0013): first overlay-ACTIVE integration
+/// test. With `dns_params = Some` and `dns_activation_daa_score = 0`, the
+/// validator-reward code paths that are dormant on every shipping network —
+/// the per-block `ActiveBondView` walk, the §B.4 eligibility check, the
+/// coinbase reward fan-out (construction + validation), the cross-block
+/// uniqueness walk over the rewarded-keys store, and the template
+/// ineligible-shard pre-filter — all RUN here (with empty data, since this
+/// chain carries no bonds or attestations). The chain must still mine and
+/// validate to a valid UTXO tip, proving that activating the overlay does not
+/// break block production or validation and that the empty-reward coinbase is
+/// reproduced byte-for-byte by the validation path.
+///
+/// (A full reward-bearing e2e — a real bond tx, an ML-DSA-signed attestation,
+/// and a non-empty reward coinbase — needs funded UTXO-valid overlay txs and
+/// is a separate harness effort; the reward/eligibility/uniqueness logic is
+/// already unit-tested.)
+#[tokio::test]
+async fn dns_overlay_active_chain_validates() {
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            // Activate the DNS overlay from genesis (reuse the self-consistent
+            // devnet DNS parameters, with activation pulled down to 0).
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            p.dns_params = Some(dns);
+        })
+        .build();
+
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // Mine + validate a chain with the overlay active end-to-end.
+    for _ in 0..10 {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
     }
     ctx.assert_tips_num(1);
