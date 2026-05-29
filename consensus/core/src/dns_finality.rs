@@ -2238,6 +2238,14 @@ pub enum DnsTxError {
     /// The two attestations approve the same anchor — not equivocation,
     /// so they are not slashable evidence.
     EvidenceNotIncompatible,
+    /// ADR-0016 D.1: a `StakeBond` tx has no output-0 to lock the stake in.
+    MissingBondOutput,
+    /// ADR-0016 D.1: the bond output-0 value does not equal `amount`
+    /// (`expected` = payload `amount`, `got` = output-0 value).
+    BondOutputValueMismatch { expected: u64, got: u64 },
+    /// ADR-0016 D.1: the bond output-0 script is not the owner's
+    /// canonical P2PKH-ML-DSA script over `owner_reward_spk_payload`.
+    BondOutputScriptMismatch,
 }
 
 impl Display for DnsTxError {
@@ -2255,6 +2263,11 @@ impl Display for DnsTxError {
                 write!(f, "slashing evidence attestations are not from the same (bond, validator, epoch) triple")
             }
             DnsTxError::EvidenceNotIncompatible => write!(f, "slashing evidence attestations approve the same anchor"),
+            DnsTxError::MissingBondOutput => write!(f, "stake-bond tx has no output-0 to lock the stake"),
+            DnsTxError::BondOutputValueMismatch { expected, got } => {
+                write!(f, "stake-bond output-0 value {got} does not equal the bonded amount {expected}")
+            }
+            DnsTxError::BondOutputScriptMismatch => write!(f, "stake-bond output-0 is not the owner's P2PKH-ML-DSA script"),
         }
     }
 }
@@ -2283,8 +2296,13 @@ fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError
 /// bonded amount, and the fixed 1952-byte ML-DSA-65 validator
 /// public-key length. The `validator_pubkey_hash ==
 /// BLAKE2b-512(validator_pubkey)` and `owner_pubkey_hash`↔funding-input
-/// bindings are deferred to the stateful PR.
+/// bindings are deferred to the stateful PR. Returns the decoded payload
+/// so the tx-level [`validate_stake_bond_tx`] check can reuse it.
 pub fn validate_stake_bond_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    decode_and_check_stake_bond_payload(payload).map(|_| ())
+}
+
+fn decode_and_check_stake_bond_payload(payload: &[u8]) -> Result<StakeBondPayload, DnsTxError> {
     let bond: StakeBondPayload = decode_dns_payload(payload)?;
     if bond.version != DNS_PAYLOAD_VERSION_V1 {
         return Err(DnsTxError::UnsupportedVersion(bond.version));
@@ -2294,6 +2312,32 @@ pub fn validate_stake_bond_payload(payload: &[u8]) -> Result<(), DnsTxError> {
     }
     if bond.validator_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
         return Err(DnsTxError::InvalidPubKeyLen(bond.validator_pubkey.len()));
+    }
+    Ok(bond)
+}
+
+/// Stateless validation of a whole `StakeBond` **transaction** (ADR-0016
+/// D.1 stake-lock rule, on top of [`validate_stake_bond_payload`]): its
+/// output-0 (the bond outpoint, ADR-0009 Addendum A.1) must lock the
+/// declared stake — `value == amount` and `script_public_key ==
+/// p2pkh_mldsa65_spk(owner_reward_spk_payload)` (the owner's P2PKH-ML-DSA
+/// address). This makes `amount` real, owner-controlled coins parked at
+/// output-0 rather than a self-declared number, closing the fake-stake
+/// hole and giving slashing (ADR-0013 Addendum C) something to consume.
+///
+/// Stateless (it inspects only the transaction's own output-0), so it runs
+/// in the PR-10.4 isolation validator alongside the payload checks. Like
+/// all DNS-overlay stateless validation it is "always-on" for
+/// `StakeBond`-subnetwork txs, but inert in practice: no `StakeBond` tx is
+/// submitted on any network while the overlay is dormant.
+pub fn validate_stake_bond_tx(payload: &[u8], outputs: &[TransactionOutput]) -> Result<(), DnsTxError> {
+    let bond = decode_and_check_stake_bond_payload(payload)?;
+    let output0 = outputs.first().ok_or(DnsTxError::MissingBondOutput)?;
+    if output0.value != bond.amount {
+        return Err(DnsTxError::BondOutputValueMismatch { expected: bond.amount, got: output0.value });
+    }
+    if output0.script_public_key != p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload) {
+        return Err(DnsTxError::BondOutputScriptMismatch);
     }
     Ok(())
 }
@@ -3200,6 +3244,37 @@ mod tests {
             validate_stake_bond_payload(&borsh::to_vec(&bad).unwrap()),
             Err(DnsTxError::InvalidPubKeyLen(STAKE_VALIDATOR_PUBKEY_LEN - 1))
         );
+    }
+
+    // ---- ADR-0016 D.1: validate_stake_bond_tx (stake-lock rule) ----
+
+    #[test]
+    fn validate_stake_bond_tx_accepts_locked_output() {
+        let bond = fixture_bond();
+        let bytes = borsh::to_vec(&bond).unwrap();
+        let outputs = vec![TransactionOutput::new(bond.amount, p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload))];
+        assert_eq!(validate_stake_bond_tx(&bytes, &outputs), Ok(()));
+    }
+
+    #[test]
+    fn validate_stake_bond_tx_rejects_unlocked_or_misdirected() {
+        let bond = fixture_bond();
+        let bytes = borsh::to_vec(&bond).unwrap();
+        // No output-0 to lock the stake in.
+        assert_eq!(validate_stake_bond_tx(&bytes, &[]), Err(DnsTxError::MissingBondOutput));
+        // Output-0 value != amount.
+        let wrong_value = vec![TransactionOutput::new(bond.amount - 1, p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload))];
+        assert_eq!(
+            validate_stake_bond_tx(&bytes, &wrong_value),
+            Err(DnsTxError::BondOutputValueMismatch { expected: bond.amount, got: bond.amount - 1 })
+        );
+        // Correct value but the output pays a different (non-owner) payload.
+        let wrong_spk = vec![TransactionOutput::new(bond.amount, p2pkh_mldsa65_spk(&[0x00u8; 32]))];
+        assert_eq!(validate_stake_bond_tx(&bytes, &wrong_spk), Err(DnsTxError::BondOutputScriptMismatch));
+        // Payload checks still fire first (zero amount) regardless of outputs.
+        let mut zero = bond.clone();
+        zero.amount = 0;
+        assert_eq!(validate_stake_bond_tx(&borsh::to_vec(&zero).unwrap(), &[]), Err(DnsTxError::ZeroBondAmount));
     }
 
     #[test]

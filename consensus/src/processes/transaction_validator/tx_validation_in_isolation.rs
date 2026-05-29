@@ -1,6 +1,6 @@
 use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
-    DnsTxKind, dns_tx_kind, validate_slashing_evidence_payload, validate_stake_attestation_shard_payload, validate_stake_bond_payload,
+    DnsTxKind, dns_tx_kind, validate_slashing_evidence_payload, validate_stake_attestation_shard_payload, validate_stake_bond_tx,
 };
 use kaspa_consensus_core::tx::Transaction;
 use std::collections::HashSet;
@@ -166,7 +166,9 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
         // bond existence, rollout-stage gating, ML-DSA-65 signature
         // verification, the `U ≥ R + E` dominance bound — land in later PRs.
         match kind {
-            DnsTxKind::StakeBond => validate_stake_bond_payload(&tx.payload),
+            // ADR-0016 D.1: the StakeBond stateless check also verifies its
+            // output-0 locks the declared stake (value == amount, owner P2PKH).
+            DnsTxKind::StakeBond => validate_stake_bond_tx(&tx.payload, &tx.outputs),
             DnsTxKind::StakeAttestationShard => validate_stake_attestation_shard_payload(&tx.payload),
             DnsTxKind::SlashingEvidence => validate_slashing_evidence_payload(&tx.payload),
         }
@@ -346,7 +348,9 @@ mod tests {
     /// this test only confirms the consensus-layer wiring.
     #[test]
     fn validate_dns_overlay_subnetwork_tx() {
-        use kaspa_consensus_core::dns_finality::{DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondPayload};
+        use kaspa_consensus_core::dns_finality::{
+            DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondPayload, p2pkh_mldsa65_spk,
+        };
         use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
         use kaspa_hashes::Hash64;
 
@@ -393,7 +397,17 @@ mod tests {
         let mut tx = base.clone();
         tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
         tx.payload = borsh::to_vec(&bond).unwrap();
+        // ADR-0016 D.1: output-0 must lock the stake (value == amount, owner P2PKH).
+        tx.outputs[0] = TransactionOutput::new(bond.amount, p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload));
         assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Bond whose output-0 does not lock `amount` (ADR-0016 D.1) → rejected.
+        let mut tx_unlocked = tx.clone();
+        tx_unlocked.outputs[0] = TransactionOutput::new(bond.amount - 1, p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload));
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx_unlocked),
+            Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::BondOutputValueMismatch { .. }))
+        );
 
         // Malformed stake-bond payload (zero amount) → InvalidDnsOverlayPayload.
         let mut bad = bond.clone();
