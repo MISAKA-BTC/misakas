@@ -6,6 +6,7 @@ pub use super::{
 use crate::{
     BlockLevel, KType,
     constants::STORAGE_MASS_PARAMETER,
+    dns_finality::DnsParams,
     network::{NetworkId, NetworkType},
 };
 use kaspa_addresses::Prefix;
@@ -313,6 +314,13 @@ pub struct Params {
 
     /// Crescendo activation DAA score
     pub crescendo_activation: ForkActivation,
+
+    /// kaspa-pq Phase 10 (ADR-0009): DNS finality overlay parameters, or
+    /// `None` when the overlay is not configured for this network. `None`
+    /// on every current network — the overlay's consensus effects
+    /// (bond population, reorg gate) are guarded by `dns_params.is_some()`
+    /// and are therefore fully inert until a network opts in.
+    pub dns_params: Option<DnsParams>,
 }
 
 impl Params {
@@ -481,6 +489,9 @@ impl Params {
                 .unwrap_or(self.pre_crescendo_target_time_per_block),
 
             crescendo_activation: overrides.crescendo_activation.unwrap_or(self.crescendo_activation),
+
+            // kaspa-pq DNS overlay params are not CLI-overridable; carried as-is.
+            dns_params: self.dns_params,
         }
     }
 }
@@ -588,6 +599,7 @@ pub const MAINNET_PARAMS: Params = Params {
 
     // Roughly 2025-05-05 1500 UTC
     crescendo_activation: ForkActivation::new(110_165_000),
+    dns_params: None,
 };
 
 pub const TESTNET_PARAMS: Params = Params {
@@ -650,6 +662,7 @@ pub const TESTNET_PARAMS: Params = Params {
 
     // 18:30 UTC, March 6, 2025
     crescendo_activation: ForkActivation::new(88_657_000),
+    dns_params: None,
 };
 
 pub const SIMNET_PARAMS: Params = Params {
@@ -700,6 +713,7 @@ pub const SIMNET_PARAMS: Params = Params {
     pre_crescendo_target_time_per_block: TenBps::target_time_per_block(),
 
     crescendo_activation: ForkActivation::always(),
+    dns_params: None,
 };
 
 pub const DEVNET_PARAMS: Params = Params {
@@ -748,4 +762,5 @@ pub const DEVNET_PARAMS: Params = Params {
     pre_crescendo_target_time_per_block: 100,
 
     crescendo_activation: ForkActivation::always(),
+    dns_params: None,
 };
