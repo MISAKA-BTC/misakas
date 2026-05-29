@@ -16,9 +16,9 @@ use blake2b_simd::Params as Blake2bParams;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
-    ATTESTATION_MLDSA65_CONTEXT, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
-    StakeAttestationShardPayload, ValidatorAttestationTarget, check_signed_epoch_record, effective_bond_status, is_bond_active_at,
-    signature_fingerprint, single_attestation_shard, validator_id_from_pubkey,
+    ATTESTATION_MLDSA65_CONTEXT, BondStatus, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
+    StakeAttestationShardPayload, ValidatorAttestationTarget, ValidatorStatus, check_signed_epoch_record, effective_bond_status,
+    is_bond_active_at, signature_fingerprint, single_attestation_shard, validator_id_from_pubkey,
 };
 use kaspa_consensus_core::hashing::sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
@@ -117,6 +117,60 @@ pub struct ValidatorConfig {
     pub state_path: Option<PathBuf>,
     /// Network address prefix, used to render the validator's funding address for logs.
     pub address_prefix: Prefix,
+}
+
+/// A point-in-time snapshot of the validator's operational status, produced by
+/// [`ValidatorService::status`] (consumed by the `getValidatorStatus` RPC). Combines
+/// service-local facts (mode, identity, signing history) with a fresh consensus read of
+/// eligibility (bond + committee).
+#[derive(Clone, Debug)]
+pub struct ValidatorStatusSnapshot {
+    pub mode: ValidatorMode,
+    /// `None` if no signing key is configured/loaded.
+    pub validator_id: Option<Hash64>,
+    /// The P2PKH-ML-DSA funding address (bech32), if a key is loaded.
+    pub funding_address: Option<String>,
+    /// Current epoch at the sink (`None` if the overlay is not configured for this network).
+    pub epoch: Option<u64>,
+    /// Effective bond status at the sink (`None` if no bond is configured/found).
+    pub bond_status: Option<BondStatus>,
+    /// Whether the validator is in the current epoch's committee.
+    pub in_committee: bool,
+    /// Highest epoch with a local signing record (the equivocation log).
+    pub last_signed_epoch: Option<u64>,
+    /// Coarse, RPC-stable status code (ADR-0010/0011).
+    pub status: ValidatorStatus,
+}
+
+/// Derive the coarse [`ValidatorStatus`] from the validator's mode and its
+/// consensus-derived eligibility facts. Without a key, or outside `Active` mode, the
+/// validator never produces an attestation, so it maps to `DryRun`; `Active` walks the
+/// bond → committee → already-signed ladder.
+fn derive_validator_status(
+    mode: ValidatorMode,
+    key_loaded: bool,
+    bond_status: Option<BondStatus>,
+    in_committee: bool,
+    signed_this_epoch: bool,
+) -> ValidatorStatus {
+    if !key_loaded || mode != ValidatorMode::Active {
+        return ValidatorStatus::DryRun;
+    }
+    match bond_status {
+        None => ValidatorStatus::BondNotFound,
+        Some(BondStatus::Pending) => ValidatorStatus::BondPending,
+        Some(BondStatus::Unbonding) => ValidatorStatus::Unbonding,
+        Some(BondStatus::Slashed) => ValidatorStatus::Slashed,
+        Some(BondStatus::Active) => {
+            if !in_committee {
+                ValidatorStatus::ActiveIdle
+            } else if signed_this_epoch {
+                ValidatorStatus::SignedThisEpoch
+            } else {
+                ValidatorStatus::ActiveEligible
+            }
+        }
+    }
 }
 
 /// Read and parse the validator signing seed from a hex file.
@@ -293,6 +347,16 @@ impl SignedEpochStore {
     /// Equivocation outcome for `candidate` against the persisted record for its epoch.
     fn check(&self, candidate: &SignedEpochRecord) -> SignedEpochCheckOutcome {
         check_signed_epoch_record(self.records.get(&candidate.epoch), candidate)
+    }
+
+    /// Highest epoch this validator has a signing record for (`None` if it never signed).
+    fn last_signed_epoch(&self) -> Option<u64> {
+        self.records.keys().next_back().copied()
+    }
+
+    /// Whether a signing record exists for `epoch`.
+    fn has_signed_epoch(&self, epoch: u64) -> bool {
+        self.records.contains_key(&epoch)
     }
 
     /// Persist `record` for its epoch and flush atomically (temp file + rename so a
@@ -478,6 +542,46 @@ impl ValidatorService {
         }
 
         trace!("[{VALIDATOR}] worker exiting");
+    }
+
+    /// On-demand snapshot of the validator's operational status, for the `getValidatorStatus`
+    /// RPC. Combines local config/identity + the signing log with a fresh consensus read of
+    /// bond + committee eligibility.
+    pub async fn status(&self) -> ValidatorStatusSnapshot {
+        let validator_id = self.key.as_ref().map(|k| k.validator_id);
+        let funding_address = self.key.as_ref().map(|k| k.funding_address(self.config.address_prefix).to_string());
+
+        let session = self.consensus_manager.consensus().session().await;
+        let committee = session.async_get_validator_committee().await;
+        let bond = match self.bond_outpoint {
+            Some(outpoint) => session.async_get_stake_bond(outpoint).await,
+            None => None,
+        };
+        let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
+        drop(session);
+
+        let epoch = committee.as_ref().map(|c| c.epoch);
+        let bond_status = bond.as_ref().map(|b| effective_bond_status(b, sink_daa));
+        let in_committee = matches!((&committee, validator_id), (Some(c), Some(id)) if c.members.contains(&id));
+        let (last_signed_epoch, signed_this_epoch) = {
+            let guard = self.signed_epochs.lock().unwrap();
+            match guard.as_ref() {
+                Some(s) => (s.last_signed_epoch(), epoch.map(|e| s.has_signed_epoch(e)).unwrap_or(false)),
+                None => (None, false),
+            }
+        };
+        let status = derive_validator_status(self.config.mode, self.key.is_some(), bond_status, in_committee, signed_this_epoch);
+
+        ValidatorStatusSnapshot {
+            mode: self.config.mode,
+            validator_id,
+            funding_address,
+            epoch,
+            bond_status,
+            in_committee,
+            last_signed_epoch,
+            status,
+        }
     }
 
     /// Async attestation cycle for an eligible epoch: discover a funding UTXO, build the
@@ -703,6 +807,23 @@ mod tests {
         let key = ValidatorKey::from_seed([0x33u8; VALIDATOR_SEED_LEN]);
         let expected = validator_id_from_pubkey(key.keypair.verification_key.as_ref());
         assert_eq!(key.validator_id, expected);
+    }
+
+    #[test]
+    fn derive_validator_status_ladder() {
+        use ValidatorStatus::*;
+        // Without a key, or outside Active mode → DryRun regardless of eligibility.
+        assert_eq!(derive_validator_status(ValidatorMode::Observer, true, Some(BondStatus::Active), true, false), DryRun);
+        assert_eq!(derive_validator_status(ValidatorMode::Standby, true, Some(BondStatus::Active), true, false), DryRun);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, false, Some(BondStatus::Active), true, false), DryRun);
+        // Active mode walks the bond → committee → already-signed ladder.
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, None, false, false), BondNotFound);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Pending), false, false), BondPending);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Unbonding), false, false), Unbonding);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Slashed), false, false), Slashed);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Active), false, false), ActiveIdle);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Active), true, false), ActiveEligible);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Active), true, true), SignedThisEpoch);
     }
 
     #[test]
