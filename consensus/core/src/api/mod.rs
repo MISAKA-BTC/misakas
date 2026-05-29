@@ -10,7 +10,7 @@ use crate::{
     blockstatus::BlockStatus,
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
-    dns_finality::DnsConfirmation,
+    dns_finality::{DnsConfirmation, StakeBondRecord},
     errors::{
         block::{BlockProcessResult, RuleError},
         coinbase::CoinbaseResult,
@@ -149,6 +149,15 @@ pub trait ConsensusApi: Send + Sync {
     /// DnsState has been written yet. Default `None` keeps non-overlay
     /// ConsensusApi impls (mocks/tests) trivially correct.
     fn get_dns_confirmation(&self) -> Option<DnsConfirmation> {
+        None
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0010): the stake-bond record registered at
+    /// `bond_outpoint`, or `None` when the DNS overlay is not configured for this
+    /// network or no such bond exists. Used by the in-process validator service to
+    /// evaluate its own bond status (active / unbonding / slashed). Default `None`
+    /// keeps non-overlay ConsensusApi impls (mocks/tests) trivially correct.
+    fn get_stake_bond(&self, _bond_outpoint: TransactionOutpoint) -> Option<StakeBondRecord> {
         None
     }
 

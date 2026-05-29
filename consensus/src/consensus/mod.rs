@@ -24,6 +24,7 @@ use crate::{
             pruning::PruningStoreReader,
             relations::RelationsStoreReader,
             selected_chain::SelectedChainStore,
+            stake_bonds::StakeBondsStoreReader,
             statuses::StatusesStoreReader,
             tips::{TipsStore, TipsStoreReader},
             utxo_set::{UtxoSetStore, UtxoSetStoreReader},
@@ -56,7 +57,7 @@ use kaspa_consensus_core::{
     blockstatus::BlockStatus,
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
-    dns_finality::{DnsConfirmation, dns_confirmation_from_state},
+    dns_finality::{DnsConfirmation, StakeBondRecord, dns_confirmation_from_state},
     errors::{
         coinbase::CoinbaseResult,
         consensus::{ConsensusError, ConsensusResult},
@@ -698,6 +699,15 @@ impl ConsensusApi for Consensus {
         let dns_params = self.config.params.dns_params.as_ref()?;
         let state = self.storage.dns_state_store.read().get().ok()?;
         Some(dns_confirmation_from_state(&state, dns_params.required_work_depth, dns_params.required_stake_depth))
+    }
+
+    fn get_stake_bond(&self, bond_outpoint: TransactionOutpoint) -> Option<StakeBondRecord> {
+        // kaspa-pq Phase 11 (ADR-0010): look up a stake bond by outpoint for the
+        // validator service's eligibility check. `None` when the overlay is not
+        // configured for this network or the bond is absent from the store.
+        self.config.params.dns_params.as_ref()?;
+        let record = self.storage.stake_bonds_store.read().get(&bond_outpoint).ok()?;
+        Some((*record).clone())
     }
 
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

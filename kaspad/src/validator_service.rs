@@ -9,7 +9,8 @@
 //! registered only when `--enable-validator` is set, so default node behavior is
 //! unchanged.
 
-use kaspa_consensus_core::dns_finality::validator_id_from_pubkey;
+use kaspa_consensus_core::dns_finality::{effective_bond_status, is_bond_active_at, validator_id_from_pubkey};
+use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
     info,
@@ -115,15 +116,14 @@ impl ValidatorKey {
     }
 }
 
-/// Light shape validation of a "txid:index" stake-bond reference.
-/// Full `TransactionOutpoint` construction is deferred to the eligibility slice.
-fn validate_stake_bond_ref(s: &str) -> Result<(), String> {
+/// Parse a `"txid:index"` stake-bond reference into a [`TransactionOutpoint`].
+/// `txid` is the 64-byte transaction id (128 hex chars); `index` is the output
+/// index of the bond-creating output.
+fn parse_stake_bond_ref(s: &str) -> Result<TransactionOutpoint, String> {
     let (txid, index) = s.split_once(':').ok_or_else(|| format!("stake-bond '{s}' must be in 'txid:index' form"))?;
-    if txid.is_empty() {
-        return Err(format!("stake-bond '{s}' is missing a transaction id"));
-    }
-    index.parse::<u32>().map_err(|_| format!("stake-bond '{s}' has a non-numeric output index"))?;
-    Ok(())
+    let transaction_id = Hash64::from_str(txid).map_err(|e| format!("stake-bond '{s}' has an invalid transaction id: {e}"))?;
+    let index = index.parse::<u32>().map_err(|_| format!("stake-bond '{s}' has a non-numeric output index"))?;
+    Ok(TransactionOutpoint::new(transaction_id, index))
 }
 
 /// In-process validator node service (skeleton).
@@ -133,6 +133,8 @@ pub struct ValidatorService {
     tick_service: Arc<TickService>,
     /// Loaded signing key + derived identity. `None` until/unless a valid key is configured.
     key: Option<ValidatorKey>,
+    /// Parsed stake-bond outpoint, if `--stake-bond` was provided and well-formed.
+    bond_outpoint: Option<TransactionOutpoint>,
 }
 
 impl ValidatorService {
@@ -152,10 +154,17 @@ impl ValidatorService {
             },
             None => None,
         };
-        if let Some(Err(err)) = config.stake_bond.as_deref().map(validate_stake_bond_ref) {
-            warn!("[{VALIDATOR}] {err}");
-        }
-        Self { config, consensus_manager, tick_service, key }
+        let bond_outpoint = match &config.stake_bond {
+            Some(s) => match parse_stake_bond_ref(s) {
+                Ok(outpoint) => Some(outpoint),
+                Err(err) => {
+                    warn!("[{VALIDATOR}] {err}");
+                    None
+                }
+            },
+            None => None,
+        };
+        Self { config, consensus_manager, tick_service, key, bond_outpoint }
     }
 
     pub async fn worker(self: &Arc<ValidatorService>) {
@@ -178,18 +187,34 @@ impl ValidatorService {
                 break;
             }
 
-            // Skeleton heartbeat: report the node tip and whether the DNS overlay is configured.
-            // NOTE: this slice does not evaluate eligibility, sign, or submit anything.
+            // Heartbeat: report the node tip, the validator's own bond status, and the
+            // DNS overlay view. NOTE: this slice evaluates only the *bond* half of
+            // eligibility — committee membership, signing, and submission are later slices.
             let session = self.consensus_manager.consensus().session().await;
             let sink = session.async_get_sink_daa_score_timestamp().await;
             let dns = session.async_get_dns_confirmation().await;
+            // Only meaningful while the overlay is configured; the gate also returns None
+            // on non-overlay networks, so skip the lookup there to avoid a misleading status.
+            let bond = match (dns.is_some(), self.bond_outpoint) {
+                (true, Some(outpoint)) => session.async_get_stake_bond(outpoint).await,
+                _ => None,
+            };
             drop(session);
 
             match dns {
-                Some(conf) => info!(
-                    "[{VALIDATOR}] heartbeat: mode={} sink_daa={} dns_overlay=configured (stage={:?}, dns_confirmed={})",
-                    self.config.mode, sink.daa_score, conf.rollout_stage, conf.dns_confirmed
-                ),
+                Some(conf) => {
+                    let bond_status = match (self.bond_outpoint.is_some(), &bond) {
+                        (false, _) => "unconfigured".to_string(),
+                        (true, Some(b)) => {
+                            format!("{:?}(active={})", effective_bond_status(b, sink.daa_score), is_bond_active_at(b, sink.daa_score))
+                        }
+                        (true, None) => "not-found".to_string(),
+                    };
+                    info!(
+                        "[{VALIDATOR}] heartbeat: mode={} sink_daa={} bond={} dns_overlay=configured (stage={:?}, dns_confirmed={})",
+                        self.config.mode, sink.daa_score, bond_status, conf.rollout_stage, conf.dns_confirmed
+                    );
+                }
                 None => {
                     trace!("[{VALIDATOR}] heartbeat: mode={} sink_daa={} dns_overlay=not-configured", self.config.mode, sink.daa_score)
                 }
@@ -260,12 +285,16 @@ mod tests {
     }
 
     #[test]
-    fn stake_bond_ref_shape_validation() {
-        assert!(validate_stake_bond_ref("abcd:0").is_ok());
-        assert!(validate_stake_bond_ref("abcd:7").is_ok());
-        assert!(validate_stake_bond_ref("abcd").is_err()); // no index
-        assert!(validate_stake_bond_ref(":0").is_err()); // no txid
-        assert!(validate_stake_bond_ref("abcd:x").is_err()); // non-numeric index
+    fn parse_stake_bond_ref_valid_and_invalid() {
+        let txid = "ab".repeat(64); // 128 hex chars = 64-byte Hash64
+        let op = parse_stake_bond_ref(&format!("{txid}:7")).unwrap();
+        assert_eq!(op.index, 7);
+        assert_eq!(op.transaction_id, Hash64::from_str(&txid).unwrap());
+        // Errors:
+        assert!(parse_stake_bond_ref(&txid).is_err()); // no ':' separator / index
+        assert!(parse_stake_bond_ref(&format!("{txid}:x")).is_err()); // non-numeric index
+        assert!(parse_stake_bond_ref("abcd:0").is_err()); // txid too short for Hash64
+        assert!(parse_stake_bond_ref(":0").is_err()); // empty txid
     }
 
     #[test]
