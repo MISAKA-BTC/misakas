@@ -564,4 +564,5 @@ change to this field would require a versioned payload bump
 | Sub-PR | Title | Gated? |
 |---|---|---|
 | 10.5′-a | Add `owner_reward_spk_payload` to `StakeBondPayload` + `StakeBondRecord` + `stake_bond_record_from_payload`; add the pure `p2pkh_mldsa65_spk` + reward-outputs helper in `dns_finality.rs`; parity test vs `pay_to_address_script`. Inert — no caller on any path. | n/a (dormant type + pure helper) |
-| 10.5′-b | Wire the reward outputs into `CoinbaseManager::expected_coinbase_transaction` (construction **and** validation, byte-for-byte). Behind the overlay activation gate; no behaviour change on any current network. | yes (activation height) |
+| 10.5′-b1 | Plumb `RewardParams` into `DnsParams` (gated). Done. | n/a (dormant param) |
+| 10.5′-b2/b3 | Wire the reward outputs into `CoinbaseManager::expected_coinbase_transaction` (construction **and** validation, byte-for-byte). **Depends on the per-block active-bond view** specified in [ADR-0009 Addendum B](0009-dns-probabilistic-finality.md#addendum-b--per-block-active-bond-view--reward-eligibility-binding) — the coinbase is validated per-block, so bond resolution must be a deterministic function of the block's own view, not the virtual-commit-time global `StakeBonds` store. Behind the overlay activation gate; no behaviour change on any current network. | yes (activation height) |

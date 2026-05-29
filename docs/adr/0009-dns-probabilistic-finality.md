@@ -473,3 +473,190 @@ Remaining, in order:
 
 Steps 2–4 only become live once a network sets `dns_params = Some(..)` and
 reaches the Activation phase; on all current networks they are inert.
+
+## Addendum B — Per-block active-bond view + reward-eligibility (binding)
+
+Status: Accepted
+Date: 2026-05-29
+Extends: Addendum A (§A.2 bond-visibility model, §A.4 bond
+         population/reorg, §A.5 StakeScore aggregation).
+Consumed by: [ADR-0013](0013-validator-reward-distribution.md)
+         §"Coinbase fan-out" + Addendum B (the validator reward
+         track) and the future slashing-validation rule (PR-10.12′).
+Implements: PR-10.5′-b2 / b3.
+
+### B.0 Why this addendum exists (the gap A.2 left)
+
+The ADR-0013 validator-reward track pays per-attestation outputs
+**in the block's own coinbase**. But the coinbase is validated
+**per-block**: `verify_expected_utxo_state` →
+`verify_coinbase_transaction` recomputes the expected coinbase from
+the block's **own selected-parent view** and rejects on hash
+mismatch (`processes/coinbase.rs::expected_coinbase_transaction`,
+called per-block inside `resolve_virtual`). So every coinbase output
+**must be a deterministic function of the block's own view**.
+
+§A.2/§A.4 deliberately built the `StakeBonds` store as a single
+**virtual-commit-time global** (mutated only in
+`stage_dns_bond_mutations` over `ChainPath`, read only by the §A.5
+StakeScore walk) and made **tx-level** validation stateless. There
+is **no per-block bond view** — no bond analogue of
+`selected_parent_utxo_view.compose(&mergeset_diff)`. Resolving a
+bond from the global store during per-block coinbase validation would
+read "whichever virtual happens to be current," which is **not a
+function of the block** → non-deterministic → **chain split**.
+
+A reward output's recipient comes from
+`StakeBondRecord::owner_reward_spk_payload` (ADR-0013 Addendum B);
+the attestation does **not** carry it. So as-of-block bond resolution
+is unavoidable. This addendum pins the missing mechanism.
+
+### B.1 The per-block active-bond view
+
+Introduce a per-block **active-bond view**, built exactly like the
+UTXO view:
+
+```text
+bond_view(H) = bond_view(selected_parent(H)) ∘ bond_diff(H)
+```
+
+- `bond_diff(H)` = the `Vec<BondMutation>` from
+  `bond_mutations_from_accepted_txs(accepted_txs(H), daa_score(H))`
+  (already exists, deterministic from retained acceptance data;
+  §A.4). `Insert` adds a `StakeBondRecord`; `Slash` / unbond stamp
+  the existing one — reversible, so the view composes and **reorgs**
+  identically to the UTXO diff.
+- The **anchor** is the bond set at the **pruning point** (a snapshot
+  persisted like the pruning-point UTXO set); blocks below the
+  pruning point are never re-validated, so the view is only ever
+  reconstructed forward from that anchor — mirroring UTXO exactly.
+- `resolve_virtual` already walks the chain composing the UTXO
+  `accumulated_diff`; it maintains the running `bond_view` the same
+  way and passes the **selected-parent** `bond_view` into
+  `verify_expected_utxo_state` alongside `selected_parent_utxo_view`.
+- A bond's `Pending → Active` transition stays **read-time-derived**
+  from `activation_daa_score` via `effective_bond_status` (§A.4) — it
+  is never a diff entry.
+
+`bond_view(H)` answers, deterministically as-of `H`: *does
+`bond_outpoint` resolve to a record, and is it `Active` at a given
+DAA score, and what is its `owner_reward_spk_payload`?*
+
+### B.2 Relationship to §A.2 (tx-level stays stateless)
+
+This addendum **extends, does not overturn, §A.2**. The boundary:
+
+- **Transaction-level** validation (isolation + mempool admission)
+  remains **stateless** — no bond store, no `bond_view`, exactly as
+  §A.2 froze it. A `StakeAttestationShard` tx is still individually
+  admissible regardless of bond state. This preserves point-of-view
+  consistency at the mempool layer.
+- The `bond_view` is a **block-level** consensus input (a function of
+  the block's selected-chain prefix), used only inside
+  `verify_expected_utxo_state`. It is the same *class* of object §A.2
+  endorsed ("a deterministic state transition computed over the
+  selected chain") — A.2 simply declined to materialise it per-block
+  because StakeScore (its only consumer then) is computed once at
+  virtual-commit. The reward track is the first **per-block**
+  consumer, so the view must now be materialised per-block.
+
+This resolves the apparent tension with the user-selected
+"Model B" (tighten shard acceptance): the tightening is realised as a
+**block-validity rule** over `bond_view` (B.4), **not** as a tx-level
+bond check (which §A.2 correctly forbids).
+
+### B.3 Reward-eligibility predicate (per attestation, as-of `H`)
+
+An attestation `a` in a `StakeAttestationShard` tx included in block
+`H` is **reward-eligible** iff, against `bond_view(H)`:
+
+- **(a) Bond active.** `a.bond_outpoint` resolves to a record that is
+  `Active` (via `effective_bond_status`) at `a.target_daa_score`.
+- **(b) Signature valid.** `a.signature` verifies under
+  `ATTESTATION_MLDSA65_CONTEXT` against the bond's `validator_pubkey`
+  over `stake_attestation_message(network_id, a.epoch, a.target_hash,
+  a.target_daa_score, a.validator_set_commitment, a.bond_outpoint)`
+  (the §A.3 layout — byte-identical to the §A.5 score gate and the
+  validator-service signer).
+- **(c) Not already rewarded.** The `(bond_outpoint, epoch)` pair has
+  not been rewarded by any block on the selected chain in `H`'s past.
+  Enforced via a **composed `rewarded(bond,epoch)` set**, maintained
+  exactly like `bond_view` (anchored at the pruning point, composed
+  forward, reorg-reversible). Mirrors §A.5's
+  `(bond_outpoint, validator_id, epoch)` scoring dedup, narrowed to
+  `(bond_outpoint, epoch)` since the reward is per bond-epoch.
+
+(a)+(b) are **structural**; (c) is **uniqueness**.
+
+### B.4 Model B realised as a block-validity rule
+
+- **Structural strictness (a,b):** a block `H` is **invalid** if any
+  `StakeAttestationShard` tx it includes contains an attestation
+  failing (a) or (b). Thus *every attestation in an included shard is
+  structurally rewardable* → the coinbase fan-out needs **no skip
+  set**, satisfying the Model-B goal. Cost: an ML-DSA-65 verify per
+  included attestation at block validation, bounded by
+  `max_attestations_per_block` (≤ 16) — acceptable.
+- **Uniqueness (c):** a **duplicate** `(bond_outpoint, epoch)` does
+  **not** invalidate the block; it is simply **not rewarded again**
+  (no second output), matching §A.5's dedup-not-reject treatment. So
+  re-including an already-rewarded attestation is allowed but earns
+  nothing.
+- **Block-template policy (PR-10.11):** the template builder must
+  only select shards whose attestations are all (a)+(b)-eligible
+  against the template's `bond_view`, and must skip
+  already-rewarded `(bond,epoch)` for output emission — so the block
+  it produces satisfies this rule by construction.
+
+### B.5 Coinbase output construction = validation (byte-identical)
+
+Validator reward outputs are **appended after** all existing coinbase
+outputs (the mergeset-blue reward outputs + the optional red-reward
+output — see `expected_coinbase_transaction`), in the canonical order
+`(shard_tx_index_within_block, attestation_index_within_shard)`. For
+each reward-eligible, not-yet-rewarded attestation:
+
+```text
+TransactionOutput {
+    value: dns_params.reward_params.per_attestation_reward_sompi,
+    script_public_key:
+        p2pkh_mldsa65_spk(bond_view(H)[a.bond_outpoint].owner_reward_spk_payload),
+}
+```
+
+bounded by the whole-output per-block cap
+(`dns_finality::validator_reward_outputs`, PR-10.5′-a). Construction
+(template) and validation (`verify_coinbase_transaction`) run the
+**same** `bond_view`-based resolver over the **same** ordered
+attestation list, so the coinbase is byte-for-byte reproducible on
+every node. `verify_coinbase_transaction` must receive the full block
+tx vector (today it is handed only `&txs[0]`) plus the selected-parent
+`bond_view` + `rewarded` set.
+
+### B.6 Gating + rollout
+
+Everything in this addendum is inert unless `dns_params = Some(..)`
+**and** `daa_score ≥ dns_activation_daa_score` (currently `u64::MAX`
+on every network, incl. devnet). Below activation: no `bond_view`
+materialisation is required, no reward outputs are emitted, and the
+coinbase is byte-for-byte the pre-overlay coinbase. The pruning-point
+bond-set/`rewarded`-set anchors are only built once a network
+activates.
+
+### B.7 Implementation order (PR-10.5′-b2 / b3)
+
+1. **b2a** — materialise `bond_view` + `rewarded(bond,epoch)` set in
+   `resolve_virtual`; thread the selected-parent view into
+   `verify_expected_utxo_state`. Pure-ish; gated; no behaviour change
+   (no consumer yet).
+2. **b2b** — the B.4 structural block-validity rule
+   (`RuleError::IneligibleAttestationInBlock` or similar), gated.
+3. **b3** — coinbase fan-out: `expected_coinbase_transaction` appends
+   `validator_reward_outputs` (B.5); update both real callers
+   (`verify_coinbase_transaction` validation + `processor.rs` template
+   build) byte-identically; update the PR-10.11 template policy
+   (B.4). Gated.
+
+All three only become live when a network sets a finite
+`dns_activation_daa_score`; until then they are dead code paths
+behind the `dns_params` + activation guard.
