@@ -679,6 +679,94 @@ recipient + the emit/burn mechanism. The reporter reward still equals
 `slashing_reporter_reward_bps / 10000` of the slashed amount (modulo
 the unreveal `min`-cap), and the remainder still leaves supply.
 
+## Addendum C.1 — Reporter-output mint exemption (binding)
+
+Status: Accepted
+Date: 2026-05-30
+Amends: Addendum C step 3, which pinned the reporter output's `value`
+        and `script_public_key` but **not** how the shared
+        per-transaction validator — also used by the mempool — exempts
+        that minted output from the `outputs ≤ inputs` rule, nor the
+        fee / `R == 0` mechanics.
+
+Addendum C step 3's reporter output is **minted**: its value `R` comes
+from the slashed stake `S`, not from the slashing transaction's inputs.
+The transaction *cannot* fund `R` by spending the bond's output-0 —
+ADR-0016 §D.2 forbids spending a non-releasable bond, and the reporter
+does not hold the owner's key. So `check_transaction_output_values`
+(`total_in < total_out ⇒ SpendTooHigh`) would reject the slashing
+transaction, and `fee = total_in − total_out` would underflow.
+Consensus resolves this as follows.
+
+### C.1.1 The reporter output is the slashing transaction's output-0
+
+A genuine slashing transaction carries its consensus-mandated reporter
+output at **output index 0** — mirroring ADR-0009 A.1, where a
+`StakeBond` transaction's output-0 is the bond. The remaining outputs
+(change, etc.) are the reporter's own, funded normally by the
+transaction's inputs.
+
+### C.1.2 Per-transaction exemption (shared validator)
+
+In `validate_populated_transaction_and_get_fee`, for a transaction on
+`SUBNETWORK_ID_SLASHING_EVIDENCE`, **only when** the overlay is active
+(configured **and** `pov_daa_score ≥ dns_activation_daa_score`) **and**
+the transaction mints (`total_out > total_in`):
+
+- output-0 is treated as the minted reporter output and **excluded**
+  from value conservation and the fee. The rest of the outputs must
+  satisfy `Σ outputs[1..] ≤ total_in`, and
+  `fee = total_in − Σ outputs[1..]` — an ordinary mass-based fee paid
+  to the miner.
+
+A slashing transaction that does **not** mint (`total_out ≤ total_in` —
+e.g. `slashing_reporter_reward_bps == 0`, so `R == 0` and there is no
+reporter output) is validated **normally** (no exemption, ordinary
+`fee = total_in − total_out`). Non-slashing transactions, and every
+transaction on every current network (overlay dormant), keep the strict
+`outputs ≤ inputs` rule unchanged — so this is inert today and nothing
+may mint outside this exemption.
+
+Because the non-reporter outputs must still cover a normal fee, a
+slashing transaction is as costly to relay as any other, so the
+exemption gives the mempool **no free-minting spam vector** (a forged
+evidence is rejected by the genuineness rule at block validation, but
+must pay its way into the mempool regardless).
+
+### C.1.3 Block-validity rule (the exact mint constraint)
+
+The per-transaction exemption is deliberately permissive — it cannot
+see the bond view. The **exact** reporter amount is enforced as a
+**block-validity** rule in `verify_expected_utxo_state`, resolved
+against the block's selected-parent active-bond view (Addendum B), the
+same as-of-block determinism the coinbase fan-out uses. For each
+genuine evidence whose bond resolves to `Active`/`Unbonding`
+(`resolve_slashing_side_effects`):
+
+- if `R > 0`: the slashing transaction's **output-0** must equal the
+  expected reporter output **exactly** (`value == R`,
+  `script_public_key == p2pkh_mldsa65_spk(reporter_reward_spk_payload)`);
+- if `R == 0`: the transaction must carry **no** minted reporter output
+  (and must not mint).
+
+So a block is invalid unless every genuine slashing transaction mints
+**exactly** its reporter reward at output-0 — construction and
+validation byte-for-byte (Addendum C's determinism).
+
+### C.1.4 Implementation sub-slices (refines the 10.12-b2 row below)
+
+| Sub-PR | Title | Gated? |
+|---|---|---|
+| 16.4-a / -b1 | Pure aggregator + per-block resolver in `dns_finality.rs` (`slashing_side_effects_from_evidence`, `resolve_slashing_side_effects`). Done, inert. | n/a (pure) |
+| 16.4-b2-i | Thread the selected-parent `ActiveBondView` into `calculate_utxo_state`. Done, inert plumbing. | n/a (no consumer) |
+| 16.4-b2-ii | The §C.1.2 per-transaction mint exemption (output-0, only when minting, overlay-active). | yes (activation) |
+| 16.4-b2-iii | The §C.1.3 block-validity reporter-output rule. | yes (activation) |
+| 16.4-b2-iv | The §C step-2 bond output-0 UTXO removal side-effect in `calculate_utxo_state` (construction == validation, reorg-safe). | yes (activation) |
+
+Equivocation only; the unreveal case fixes `S =
+commit_without_reveal_slash_sompi` and is tied to the sortition
+machinery (ADR-0012).
+
 ### Implementation slots (PR-10.12)
 
 | Sub-PR | Title | Gated? |
