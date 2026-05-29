@@ -381,6 +381,21 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetDnsConfirmationResponse::default())
     }
 
+    /// kaspa-pq Phase 11 (ADR-0010): the in-process validator service's status.
+    async fn get_validator_status(&self) -> RpcResult<GetValidatorStatusResponse> {
+        self.get_validator_status_call(None, GetValidatorStatusRequest {}).await
+    }
+    /// Default returns `enabled: false`, so non-server `RpcApi` impls (gRPC / wRPC
+    /// clients, mocks) inherit a no-op; the node's core service overrides it.
+    async fn get_validator_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetValidatorStatusRequest,
+    ) -> RpcResult<GetValidatorStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetValidatorStatusResponse::default())
+    }
+
     /// Bans the given ip.
     async fn ban(&self, ip: RpcIpAddress) -> RpcResult<()> {
         self.ban_call(None, BanRequest::new(ip)).await?;

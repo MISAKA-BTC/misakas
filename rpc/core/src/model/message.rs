@@ -1545,6 +1545,107 @@ impl Deserializer for GetDnsConfirmationResponse {
     }
 }
 
+// kaspa-pq Phase 11 (ADR-0010): getValidatorStatus. Reports the in-process
+// validator service's operational status. `enabled` is false when the node was
+// started without `--enable-validator`, in which case the other fields are defaults.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetValidatorStatusRequest {}
+
+impl Serializer for GetValidatorStatusRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetValidatorStatusRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {})
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetValidatorStatusResponse {
+    /// Whether the in-process validator service is running (`--enable-validator`).
+    pub enabled: bool,
+    /// Operating mode: "active" / "standby" / "observer".
+    pub mode: String,
+    pub has_key: bool,
+    /// 64-byte overlay validator id, hex (empty when no key is loaded).
+    pub validator_id: String,
+    /// P2PKH-ML-DSA funding address, bech32 (empty when no key is loaded).
+    pub funding_address: String,
+    /// Whether the DNS overlay is configured for this network (epoch available).
+    pub overlay_configured: bool,
+    pub epoch: u64,
+    /// Effective bond status: "none" / "pending" / "active" / "unbonding" / "slashed".
+    pub bond_status: String,
+    pub in_committee: bool,
+    pub has_signed_epoch: bool,
+    pub last_signed_epoch: u64,
+    /// `dns_finality::ValidatorStatus` discriminant.
+    pub status: u32,
+    /// Human-readable status label.
+    pub status_label: String,
+}
+
+impl Serializer for GetValidatorStatusResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.enabled, writer)?;
+        store!(String, &self.mode, writer)?;
+        store!(bool, &self.has_key, writer)?;
+        store!(String, &self.validator_id, writer)?;
+        store!(String, &self.funding_address, writer)?;
+        store!(bool, &self.overlay_configured, writer)?;
+        store!(u64, &self.epoch, writer)?;
+        store!(String, &self.bond_status, writer)?;
+        store!(bool, &self.in_committee, writer)?;
+        store!(bool, &self.has_signed_epoch, writer)?;
+        store!(u64, &self.last_signed_epoch, writer)?;
+        store!(u32, &self.status, writer)?;
+        store!(String, &self.status_label, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetValidatorStatusResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let enabled = load!(bool, reader)?;
+        let mode = load!(String, reader)?;
+        let has_key = load!(bool, reader)?;
+        let validator_id = load!(String, reader)?;
+        let funding_address = load!(String, reader)?;
+        let overlay_configured = load!(bool, reader)?;
+        let epoch = load!(u64, reader)?;
+        let bond_status = load!(String, reader)?;
+        let in_committee = load!(bool, reader)?;
+        let has_signed_epoch = load!(bool, reader)?;
+        let last_signed_epoch = load!(u64, reader)?;
+        let status = load!(u32, reader)?;
+        let status_label = load!(String, reader)?;
+        Ok(Self {
+            enabled,
+            mode,
+            has_key,
+            validator_id,
+            funding_address,
+            overlay_configured,
+            epoch,
+            bond_status,
+            in_committee,
+            has_signed_epoch,
+            last_signed_epoch,
+            status,
+            status_label,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetUtxosByAddressesRequest {

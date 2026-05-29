@@ -18,7 +18,7 @@ use kaspa_grpc_server::service::GrpcService;
 use kaspa_notify::{address::tracker::Tracker, subscription::context::SubscriptionContext};
 use kaspa_p2p_lib::Hub;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
-use kaspa_rpc_service::service::RpcCoreService;
+use kaspa_rpc_service::service::{RpcCoreService, ValidatorStatusProvider};
 use kaspa_txscript::caches::TxScriptCacheCounters;
 use kaspa_utils::git;
 use kaspa_utils::networking::ContextualNetAddress;
@@ -694,6 +694,12 @@ Do you confirm? (y/n)";
         p2p_tower_counters.clone(),
     ));
 
+    // kaspa-pq Phase 11 (ADR-0010): expose the in-process validator service's status via
+    // the `getValidatorStatus` RPC (None when `--enable-validator` is off).
+    let validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>> = match &validator_service {
+        Some(v) => Some(v.clone()),
+        None => None,
+    };
     let rpc_core_service = Arc::new(RpcCoreService::new(
         consensus_manager.clone(),
         notify_service.notifier(),
@@ -712,6 +718,7 @@ Do you confirm? (y/n)";
         grpc_tower_counters.clone(),
         system_info,
         mining_rule_engine.clone(),
+        validator_status_provider,
     ));
     let grpc_service_broadcasters: usize = 3; // TODO: add a command line argument or derive from other arg/config/host-related fields
     let grpc_service = if !args.disable_grpc {

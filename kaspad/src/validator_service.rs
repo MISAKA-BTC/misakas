@@ -12,6 +12,7 @@
 //! behavior is unchanged; `Observer`/`Standby` modes never submit. The DNS overlay
 //! reorg gate itself remains dormant until activated per-network.
 
+use async_trait::async_trait;
 use blake2b_simd::Params as Blake2bParams;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
@@ -36,6 +37,8 @@ use kaspa_core::{
 use kaspa_hashes::Hash64;
 use kaspa_mining::mempool::tx::Orphan;
 use kaspa_p2p_flows::flow_context::FlowContext;
+use kaspa_rpc_core::model::GetValidatorStatusResponse;
+use kaspa_rpc_service::service::ValidatorStatusProvider;
 use kaspa_txscript::{
     MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder, verify_mldsa65_with_context,
 };
@@ -739,6 +742,38 @@ impl AsyncService for ValidatorService {
             trace!("{} stopped", VALIDATOR);
             Ok(())
         })
+    }
+}
+
+// kaspa-pq Phase 11 (ADR-0010): bridge the validator service's status to the RPC layer
+// (`getValidatorStatus`). `RpcCoreService` holds this as `Option<Arc<dyn …>>` to avoid a
+// crate cycle (rpc-service must not depend on kaspad).
+#[async_trait]
+impl ValidatorStatusProvider for ValidatorService {
+    async fn rpc_validator_status(&self) -> GetValidatorStatusResponse {
+        let s = self.status().await;
+        GetValidatorStatusResponse {
+            enabled: true,
+            mode: s.mode.to_string(),
+            has_key: s.validator_id.is_some(),
+            validator_id: s.validator_id.map(|id| id.to_string()).unwrap_or_default(),
+            funding_address: s.funding_address.unwrap_or_default(),
+            overlay_configured: s.epoch.is_some(),
+            epoch: s.epoch.unwrap_or(0),
+            bond_status: match s.bond_status {
+                Some(BondStatus::Pending) => "pending",
+                Some(BondStatus::Active) => "active",
+                Some(BondStatus::Unbonding) => "unbonding",
+                Some(BondStatus::Slashed) => "slashed",
+                None => "none",
+            }
+            .to_string(),
+            in_committee: s.in_committee,
+            has_signed_epoch: s.epoch.is_some() && s.last_signed_epoch == s.epoch,
+            last_signed_epoch: s.last_signed_epoch.unwrap_or(0),
+            status: s.status as u32,
+            status_label: format!("{:?}", s.status),
+        }
     }
 }
 

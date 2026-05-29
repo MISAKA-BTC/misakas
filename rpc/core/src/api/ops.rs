@@ -142,6 +142,8 @@ pub enum RpcApiOps {
     GetVirtualChainFromBlockV2 = 151,
     /// kaspa-pq Phase 10 (ADR-0009): current DNS finality confirmation view
     GetDnsConfirmation = 152,
+    /// kaspa-pq Phase 11 (ADR-0010): in-process validator service status
+    GetValidatorStatus = 153,
 }
 
 impl RpcApiOps {

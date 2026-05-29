@@ -99,6 +99,15 @@ use workflow_rpc::server::WebSocketCounters as WrpcServerCounters;
 /// from this instance to registered services and backwards should occur
 /// by adding respectively to the registered service a Collector and a
 /// Subscriber.
+/// kaspa-pq Phase 11 (ADR-0010): bridges the in-process validator service (defined in
+/// the `kaspad` crate) to the RPC layer without a circular dependency — `kaspad`
+/// implements this trait for its `ValidatorService`, and `RpcCoreService` holds an
+/// optional `dyn` to serve `getValidatorStatus`.
+#[async_trait]
+pub trait ValidatorStatusProvider: Send + Sync {
+    async fn rpc_validator_status(&self) -> GetValidatorStatusResponse;
+}
+
 pub struct RpcCoreService {
     consensus_manager: Arc<ConsensusManager>,
     notifier: Arc<Notifier<Notification, ChannelConnection>>,
@@ -122,6 +131,8 @@ pub struct RpcCoreService {
     fee_estimate_cache: ExpiringCache<RpcFeeEstimate>,
     fee_estimate_verbose_cache: ExpiringCache<kaspa_mining::errors::MiningManagerResult<GetFeeEstimateExperimentalResponse>>,
     mining_rule_engine: Arc<MiningRuleEngine>,
+    /// kaspa-pq Phase 11: optional bridge to the in-process validator service.
+    validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>>,
 }
 
 const RPC_CORE: &str = "rpc-core";
@@ -148,6 +159,7 @@ impl RpcCoreService {
         grpc_tower_counters: Arc<TowerConnectionCounters>,
         system_info: SystemInfo,
         mining_rule_engine: Arc<MiningRuleEngine>,
+        validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>>,
     ) -> Self {
         // This notifier UTXOs subscription granularity to index-processor or consensus notifier
         let policies = match index_notifier {
@@ -227,6 +239,7 @@ impl RpcCoreService {
             fee_estimate_cache: ExpiringCache::new(Duration::from_millis(500), Duration::from_millis(1000)),
             fee_estimate_verbose_cache: ExpiringCache::new(Duration::from_millis(500), Duration::from_millis(1000)),
             mining_rule_engine,
+            validator_status_provider,
         }
     }
 
@@ -654,6 +667,19 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 note: c.note,
             },
             None => GetDnsConfirmationResponse::default(),
+        })
+    }
+
+    async fn get_validator_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        _: GetValidatorStatusRequest,
+    ) -> RpcResult<GetValidatorStatusResponse> {
+        // kaspa-pq Phase 11 (ADR-0010): delegate to the in-process validator service when
+        // present (`--enable-validator`); `enabled: false` otherwise.
+        Ok(match &self.validator_status_provider {
+            Some(provider) => provider.rpc_validator_status().await,
+            None => GetValidatorStatusResponse::default(),
         })
     }
 
