@@ -23,8 +23,11 @@ use kaspa_consensus_core::dns_finality::{
 };
 use kaspa_consensus_core::hashing::sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD;
-use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
+use kaspa_consensus_core::tx::{
+    MutableTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
+};
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
     info,
@@ -42,6 +45,7 @@ use kaspa_rpc_service::service::ValidatorStatusProvider;
 use kaspa_txscript::{
     MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder, verify_mldsa65_with_context,
 };
+use kaspa_utxoindex::api::UtxoIndexProxy;
 use libcrux_ml_dsa::ml_dsa_65;
 use rand::RngCore;
 use std::{
@@ -63,9 +67,10 @@ const HEARTBEAT_INTERVAL_SECS: u64 = 30;
 /// `ml_dsa_65::generate_key_pair` (matches the wallet's `KaspaPqMlDsa65KeyPair`).
 const VALIDATOR_SEED_LEN: usize = 32;
 
-/// Fixed fee (sompi) paid by an attestation-shard transaction in this first cut.
-/// TODO: derive from the transaction's compute mass + the network minimum-fee rate.
-const ATTESTATION_SHARD_TX_FEE_SOMPI: u64 = 10_000;
+/// Floor (sompi) for the attestation-shard transaction fee. The actual fee is the
+/// transaction's compute mass (a safe >= mempool-minimum at the 1 sompi/gram relay rate),
+/// clamped up to this floor — computed once at startup since the tx shape is fixed.
+const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 10_000;
 
 /// Bounded paginated scan of the virtual UTXO set when locating a funding UTXO at the
 /// validator's address. This is a full-set scan (NOT address-indexed); the utxoindex is
@@ -287,6 +292,31 @@ impl ValidatorKey {
         Ok(tx)
     }
 
+    /// Mass-based fee (sompi) for this validator's attestation-shard transaction. The tx
+    /// shape is fixed (1 P2PKH-ML-DSA input, 1 change output, a single-attestation shard),
+    /// so a dummy build's compute mass equals the real one's — letting the service compute
+    /// the fee once at startup. Clamped up to [`ATTESTATION_TX_FEE_FLOOR_SOMPI`].
+    fn estimate_attestation_fee(&self, mass_calculator: &MassCalculator, prefix: Prefix) -> u64 {
+        let funding_spk = pay_to_address_script(&self.funding_address(prefix));
+        let dummy = StakeAttestation {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: self.validator_id,
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0),
+            epoch: 0,
+            target_hash: Hash64::from_bytes([0u8; 64]),
+            target_daa_score: 0,
+            validator_set_commitment: Hash64::from_bytes([0u8; 64]),
+            signature: vec![0u8; MLDSA65_SIG_LEN],
+        };
+        let shard = single_attestation_shard(dummy);
+        let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
+        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
+        match self.build_funded_shard_tx(&shard, outpoint, &funding, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
+            Ok(tx) => mass_calculator.calc_non_contextual_masses(&tx).compute_mass.max(ATTESTATION_TX_FEE_FLOOR_SOMPI),
+            Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
+        }
+    }
+
     /// Verify an attestation signature against this key (local round-trip sanity check).
     fn verify_attestation(&self, message: &[u8], signature: &[u8]) -> bool {
         matches!(
@@ -398,6 +428,11 @@ pub struct ValidatorService {
     /// Persistent equivocation-safety log. `None` (signing disabled) unless a key, bond,
     /// and state path are all present and the on-disk log belongs to this validator.
     signed_epochs: Mutex<Option<SignedEpochStore>>,
+    /// Address-indexed UTXO lookup for funding (when `--utxoindex` is enabled); falls back
+    /// to a bounded virtual-UTXO-set scan otherwise.
+    utxoindex: Option<UtxoIndexProxy>,
+    /// Mass-based fee (sompi) for the attestation-shard tx, computed once at startup.
+    attestation_fee_sompi: u64,
 }
 
 impl ValidatorService {
@@ -406,6 +441,8 @@ impl ValidatorService {
         consensus_manager: Arc<ConsensusManager>,
         tick_service: Arc<TickService>,
         flow_context: Arc<FlowContext>,
+        mass_calculator: MassCalculator,
+        utxoindex: Option<UtxoIndexProxy>,
     ) -> Self {
         // Validate configuration eagerly so misconfiguration surfaces at startup, not at first use.
         let key = match &config.key_path {
@@ -452,7 +489,21 @@ impl ValidatorService {
             },
             _ => None,
         };
-        Self { config, consensus_manager, tick_service, flow_context, key, bond_outpoint, signed_epochs: Mutex::new(signed_epochs) }
+        // The attestation-shard tx shape is fixed, so its mass-based fee is computed once.
+        let attestation_fee_sompi = key
+            .as_ref()
+            .map_or(ATTESTATION_TX_FEE_FLOOR_SOMPI, |k| k.estimate_attestation_fee(&mass_calculator, config.address_prefix));
+        Self {
+            config,
+            consensus_manager,
+            tick_service,
+            flow_context,
+            key,
+            bond_outpoint,
+            signed_epochs: Mutex::new(signed_epochs),
+            utxoindex,
+            attestation_fee_sompi,
+        }
     }
 
     pub async fn worker(self: &Arc<ValidatorService>) {
@@ -591,8 +642,10 @@ impl ValidatorService {
     /// guarded + signed shard transaction, and — in `Active` mode — submit it. No-ops
     /// cleanly when there is no funding UTXO or the equivocation guard blocks/skips.
     async fn try_attest(&self, target: &ValidatorAttestationTarget, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
-        let funding = self.find_funding_utxo(key).await;
-        let Some(tx) = self.guarded_build_funded(target, key, bond_outpoint, funding) else {
+        let funding_spk = pay_to_address_script(&key.funding_address(self.config.address_prefix));
+        let fee = self.attestation_fee_sompi;
+        let funding = self.find_funding_utxo(&funding_spk, fee).await;
+        let Some(tx) = self.guarded_build_funded(target, key, bond_outpoint, funding, fee) else {
             return;
         };
         let tx_id = tx.id();
@@ -611,12 +664,21 @@ impl ValidatorService {
         }
     }
 
-    /// Scan the virtual UTXO set for a UTXO locked to the validator's own P2PKH-ML-DSA
-    /// address that covers the attestation-shard fee, returning the first match. NOTE: this
-    /// is a bounded full-set scan (NOT address-indexed); the utxoindex is the production
-    /// optimization.
-    async fn find_funding_utxo(&self, key: &ValidatorKey) -> Option<(TransactionOutpoint, UtxoEntry)> {
-        let funding_spk = pay_to_address_script(&key.funding_address(self.config.address_prefix));
+    /// Find a UTXO locked to `funding_spk` (the validator's own P2PKH-ML-DSA address) that
+    /// covers `fee`. Prefers the address-indexed utxoindex lookup; falls back to a bounded
+    /// virtual-UTXO-set scan when `--utxoindex` is not enabled.
+    async fn find_funding_utxo(&self, funding_spk: &ScriptPublicKey, fee: u64) -> Option<(TransactionOutpoint, UtxoEntry)> {
+        if let Some(utxoindex) = &self.utxoindex {
+            // Address-indexed: O(matches) instead of O(utxo-set). The utxoindex stores a
+            // compact entry (no spk — it's the lookup key), so rebuild the full UtxoEntry.
+            let set = utxoindex.clone().get_utxos_by_script_public_keys([funding_spk.clone()].into_iter().collect()).await.ok()?;
+            return set
+                .into_values()
+                .flatten()
+                .find(|(_, c)| c.amount > fee)
+                .map(|(outpoint, c)| (outpoint, UtxoEntry::new(c.amount, funding_spk.clone(), c.block_daa_score, c.is_coinbase)));
+        }
+        // Fallback: bounded paginated scan of the virtual UTXO set.
         let session = self.consensus_manager.consensus().session().await;
         let mut from: Option<TransactionOutpoint> = None;
         for _ in 0..MAX_FUNDING_SCAN_CHUNKS {
@@ -625,10 +687,7 @@ impl ValidatorService {
                 break;
             }
             from = chunk.last().map(|(outpoint, _)| *outpoint);
-            if let Some(found) = chunk
-                .into_iter()
-                .find(|(_, entry)| entry.script_public_key == funding_spk && entry.amount > ATTESTATION_SHARD_TX_FEE_SOMPI)
-            {
+            if let Some(found) = chunk.into_iter().find(|(_, entry)| &entry.script_public_key == funding_spk && entry.amount > fee) {
                 return Some(found);
             }
         }
@@ -647,6 +706,7 @@ impl ValidatorService {
         key: &ValidatorKey,
         bond_outpoint: TransactionOutpoint,
         funding: Option<(TransactionOutpoint, UtxoEntry)>,
+        fee: u64,
     ) -> Option<Transaction> {
         let mut guard = self.signed_epochs.lock().unwrap();
         let Some(store) = guard.as_mut() else {
@@ -700,7 +760,7 @@ impl ValidatorService {
                     signature: signature.to_vec(),
                 };
                 let shard = single_attestation_shard(attestation);
-                let tx = match key.build_funded_shard_tx(&shard, funding_outpoint, &funding_entry, ATTESTATION_SHARD_TX_FEE_SOMPI) {
+                let tx = match key.build_funded_shard_tx(&shard, funding_outpoint, &funding_entry, fee) {
                     Ok(tx) => tx,
                     Err(e) => {
                         warn!("[{VALIDATOR}] could not build funded attestation shard tx: {e}");

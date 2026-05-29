@@ -677,7 +677,15 @@ Do you confirm? (y/n)";
             state_path: Some(state_path),
             address_prefix: config.prefix(),
         };
-        Some(Arc::new(ValidatorService::new(validator_config, consensus_manager.clone(), tick_service.clone(), flow_context.clone())))
+        let validator_mass_calculator = kaspa_consensus_core::mass::MassCalculator::new_with_consensus_params(&config.params);
+        Some(Arc::new(ValidatorService::new(
+            validator_config,
+            consensus_manager.clone(),
+            tick_service.clone(),
+            flow_context.clone(),
+            validator_mass_calculator,
+            index_service.as_ref().map(|x| x.utxoindex().unwrap()),
+        )))
     } else {
         None
     };
