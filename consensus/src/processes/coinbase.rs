@@ -103,6 +103,13 @@ impl CoinbaseManager {
         ghostdag_data: &GhostdagData,
         mergeset_rewards: &BlockHashMap<BlockRewardData>,
         mergeset_non_daa: &BlockHashSet,
+        // kaspa-pq Phase 10/11 (ADR-0013 / ADR-0009 Addendum B §B.5): validator
+        // reward outputs, pre-computed by the caller from the block's included
+        // attestations resolved against its selected-parent bond view, in
+        // canonical order. Appended verbatim after the miner outputs. Empty on
+        // every current network (the overlay is dormant), so the coinbase is
+        // byte-for-byte the pre-overlay coinbase there.
+        validator_reward_outputs: &[TransactionOutput],
     ) -> CoinbaseResult<CoinbaseTransactionTemplate> {
         let mut outputs = Vec::with_capacity(ghostdag_data.mergeset_blues.len() + 1); // + 1 for possible red reward
 
@@ -132,6 +139,12 @@ impl CoinbaseManager {
         if red_reward > 0 {
             outputs.push(TransactionOutput::new(red_reward, miner_data.script_public_key.clone()));
         }
+
+        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): append the
+        // validator-side reward outputs after all miner outputs, in the
+        // caller-supplied canonical order. Empty (no-op) on every current
+        // network.
+        outputs.extend_from_slice(validator_reward_outputs);
 
         // Build the current block's payload
         let subsidy = self.calc_block_subsidy(daa_score);

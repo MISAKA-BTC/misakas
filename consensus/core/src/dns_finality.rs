@@ -1829,6 +1829,41 @@ pub fn validator_reward_outputs(
         .collect()
 }
 
+/// Build a block's validator reward outputs from its included attestations
+/// (ADR-0009 Addendum B §B.5 / ADR-0013 §"Coinbase fan-out").
+///
+/// `attestations` is `(bond_outpoint, epoch, owner_reward_spk_payload)` for
+/// each included, already-eligibility-checked attestation, in the canonical
+/// `(shard_tx_index, attestation_index)` order the caller supplies. Applies
+/// **within-block** `(bond_outpoint, epoch)` uniqueness — the first
+/// occurrence is rewarded, later duplicates earn nothing (§B.4) — then the
+/// whole-output per-block cap via [`validator_reward_outputs`].
+///
+/// Pure and DAG-free so the coinbase **construction** (block-template) and
+/// **validation** paths run it identically and produce byte-identical
+/// outputs. With no attestations or a zero reward it returns no outputs, so
+/// the coinbase is unchanged on every current network.
+///
+/// NOTE — cross-block (selected-chain-prefix) `(bond, epoch)` uniqueness
+/// (§B.3(c)) is **not** applied here; it is the caller's responsibility via a
+/// composed [`RewardedEpochSet`] and is wired in PR-10.5′-b3b. Until then only
+/// within-block dedup is enforced (immaterial while the overlay is dormant).
+pub fn validator_reward_outputs_from_attestations(
+    per_attestation_reward_sompi: u64,
+    max_validator_inflation_per_block_sompi: u64,
+    attestations: &[(TransactionOutpoint, u64, [u8; 32])],
+) -> Vec<TransactionOutput> {
+    let mut seen: HashSet<(TransactionOutpoint, u64)> = HashSet::new();
+    let mut payloads: Vec<[u8; 32]> = Vec::with_capacity(attestations.len());
+    for (bond_outpoint, epoch, payload) in attestations {
+        // First occurrence of a (bond, epoch) wins; later duplicates skip.
+        if seen.insert((*bond_outpoint, *epoch)) {
+            payloads.push(*payload);
+        }
+    }
+    validator_reward_outputs(per_attestation_reward_sompi, max_validator_inflation_per_block_sompi, &payloads)
+}
+
 /// Compute the slashing distribution for a slashed bond
 /// (ADR-0013 §"Slashing distribution"). Sums exactly to
 /// `slashed_amount_sompi` — no value created or destroyed by
@@ -4574,6 +4609,60 @@ mod tests {
         assert_eq!(outs.len(), 2);
         assert_eq!(outs[0], outs[1]);
         assert_eq!(outs[0].value, reward);
+    }
+
+    // ---- validator_reward_outputs_from_attestations (within-block dedup) ----
+
+    fn op_n(b: u8) -> TransactionOutpoint {
+        TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+    }
+
+    #[test]
+    fn reward_from_attestations_one_per_distinct_bond_epoch() {
+        let reward = 100u64;
+        let atts = [(op_n(1), 5u64, [0x01u8; 32]), (op_n(2), 5u64, [0x02u8; 32]), (op_n(3), 7u64, [0x03u8; 32])];
+        let outs = validator_reward_outputs_from_attestations(reward, 10_000, &atts);
+        assert_eq!(outs.len(), 3);
+        assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&[0x01u8; 32]));
+        assert_eq!(outs[2].script_public_key, p2pkh_mldsa65_spk(&[0x03u8; 32]));
+    }
+
+    #[test]
+    fn reward_from_attestations_dedups_same_bond_epoch_first_wins() {
+        // Same (bond, epoch) twice → one reward; the FIRST occurrence's
+        // payload is used (canonical order preserved).
+        let atts = [(op_n(1), 5u64, [0xaau8; 32]), (op_n(1), 5u64, [0xbbu8; 32])];
+        let outs = validator_reward_outputs_from_attestations(100, 10_000, &atts);
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&[0xaau8; 32]));
+    }
+
+    #[test]
+    fn reward_from_attestations_same_bond_distinct_epochs_both_paid() {
+        // ADR-0013: a validator with attestations across two epochs in one
+        // block earns for each — dedup is per (bond, epoch), not per bond.
+        let atts = [(op_n(1), 5u64, [0xaau8; 32]), (op_n(1), 6u64, [0xaau8; 32])];
+        let outs = validator_reward_outputs_from_attestations(100, 10_000, &atts);
+        assert_eq!(outs.len(), 2);
+    }
+
+    #[test]
+    fn reward_from_attestations_cap_applies_after_dedup() {
+        // 3 distinct (after dedup) but cap allows only 2 whole rewards.
+        let atts = [
+            (op_n(1), 1u64, [0x01u8; 32]),
+            (op_n(1), 1u64, [0x01u8; 32]),
+            (op_n(2), 1u64, [0x02u8; 32]),
+            (op_n(3), 1u64, [0x03u8; 32]),
+        ];
+        // dedup → {(1,1),(2,1),(3,1)} = 3 payloads; cap 25 / reward 10 = 2.
+        let outs = validator_reward_outputs_from_attestations(10, 25, &atts);
+        assert_eq!(outs.len(), 2);
+    }
+
+    #[test]
+    fn reward_from_attestations_empty_is_empty() {
+        assert!(validator_reward_outputs_from_attestations(100, 10_000, &[]).is_empty());
     }
 
     // ---- compute_slashing_distribution ----------------------------

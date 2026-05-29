@@ -1403,6 +1403,15 @@ impl VirtualStateProcessor {
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let header_pruning_point =
             self.pruning_point_manager.expected_header_pruning_point(virtual_state.ghostdag_data.to_compact()).pruning_point;
+        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): the validator reward
+        // fan-out for this template. The template extends the current tip, so
+        // the bond set as-of its selected parent is the `StakeBonds` store
+        // snapshot (= state at the sink) — `initial_active_bond_view`. Computed
+        // with the SAME `validator_reward_outputs_for_block` the validation
+        // path uses, so a block mined from this template reproduces the
+        // coinbase byte-for-byte. Empty (no-op) on every current network.
+        let validator_reward_outputs =
+            self.validator_reward_outputs_for_block(&txs, &self.initial_active_bond_view(), virtual_state.daa_score);
         let coinbase = self
             .coinbase_manager
             .expected_coinbase_transaction(
@@ -1411,6 +1420,7 @@ impl VirtualStateProcessor {
                 &virtual_state.ghostdag_data,
                 &virtual_state.mergeset_rewards,
                 &virtual_state.mergeset_non_daa,
+                &validator_reward_outputs,
             )
             .unwrap();
         txs.insert(0, coinbase.tx);

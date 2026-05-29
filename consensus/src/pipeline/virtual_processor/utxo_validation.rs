@@ -27,11 +27,17 @@ use kaspa_consensus_core::{
     acceptance_data::{AcceptedTxEntry, MergesetBlockAcceptanceData},
     api::args::TransactionValidationArgs,
     coinbase::*,
-    dns_finality::{ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, attestations_from_accepted_txs, stake_attestation_message},
+    dns_finality::{
+        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, attestations_from_accepted_txs, stake_attestation_message,
+        validator_reward_outputs_from_attestations,
+    },
     hashing,
     header::Header,
     muhash::MuHashExtensions,
-    tx::{MutableTransaction, PopulatedTransaction, Transaction, TransactionId, ValidatedTransaction, VerifiableTransaction},
+    tx::{
+        MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutput, ValidatedTransaction,
+        VerifiableTransaction,
+    },
     utxo::{
         utxo_diff::UtxoDiff,
         utxo_view::{UtxoView, UtxoViewComposition},
@@ -208,18 +214,28 @@ impl VirtualStateProcessor {
 
         let txs = self.block_transactions_store.get(header.hash).unwrap();
 
-        // Verify coinbase transaction
+        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): Model-B
+        // reward-eligibility block-validity rule, run BEFORE the coinbase
+        // check so the fan-out below can assume every included attestation is
+        // eligible (its bond resolves to Active with a valid signature).
+        // Inert below activation.
+        self.check_attestation_reward_eligibility(&txs, selected_parent_bond_view, header.daa_score)?;
+
+        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): the validator reward
+        // outputs the coinbase must carry, derived from the block's included
+        // attestations resolved against its selected-parent bond view. Empty
+        // (no-op) on every current network.
+        let validator_reward_outputs = self.validator_reward_outputs_for_block(&txs, selected_parent_bond_view, header.daa_score);
+
+        // Verify coinbase transaction (incl. the validator reward fan-out).
         self.verify_coinbase_transaction(
             &txs[0],
             header.daa_score,
             &ctx.ghostdag_data,
             &ctx.mergeset_rewards,
             &self.daa_excluded_store.get_mergeset_non_daa(header.hash).unwrap(),
+            &validator_reward_outputs,
         )?;
-
-        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): Model-B
-        // reward-eligibility block-validity rule. Inert below activation.
-        self.check_attestation_reward_eligibility(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // Verify the header pruning point
         let reply = self.verify_header_pruning_point(header, ctx.ghostdag_data.to_compact())?;
@@ -256,15 +272,63 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         mergeset_rewards: &BlockHashMap<BlockRewardData>,
         mergeset_non_daa: &BlockHashSet,
+        validator_reward_outputs: &[TransactionOutput],
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
         let expected_coinbase = self
             .coinbase_manager
-            .expected_coinbase_transaction(daa_score, miner_data, ghostdag_data, mergeset_rewards, mergeset_non_daa)
+            .expected_coinbase_transaction(
+                daa_score,
+                miner_data,
+                ghostdag_data,
+                mergeset_rewards,
+                mergeset_non_daa,
+                validator_reward_outputs,
+            )
             .unwrap()
             .tx;
         if hashing::tx::hash(coinbase) != hashing::tx::hash(&expected_coinbase) { Err(BadCoinbaseTransaction) } else { Ok(()) }
+    }
+
+    /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5 / ADR-0013): the
+    /// validator reward outputs a block's coinbase must carry. Derived
+    /// deterministically from the block's included attestations
+    /// (`attestations_from_accepted_txs`, canonical order) resolved against
+    /// `bond_view` (the bond set as-of the block's selected parent) and the
+    /// network `RewardParams`, with within-block `(bond, epoch)` dedup + the
+    /// per-block cap (see [`validator_reward_outputs_from_attestations`]).
+    ///
+    /// Run identically by the coinbase **construction** (block-template) and
+    /// **validation** paths, so they agree byte-for-byte. Returns no outputs
+    /// unless the overlay is configured AND `daa_score` has reached
+    /// `dns_activation_daa_score` (`u64::MAX` everywhere today) — so the
+    /// coinbase is unchanged on every current network. Callers run the §B.4
+    /// eligibility rule first, so every attestation here resolves to an
+    /// `Active` bond; the `if let Some` is a defensive skip.
+    pub(super) fn validator_reward_outputs_for_block(
+        &self,
+        txs: &[Transaction],
+        bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) -> Vec<TransactionOutput> {
+        let Some(dns_params) = self.dns_params.as_ref() else {
+            return Vec::new();
+        };
+        if daa_score < dns_params.dns_activation_daa_score {
+            return Vec::new();
+        }
+        let mut attestations = Vec::new();
+        for att in attestations_from_accepted_txs(txs) {
+            if let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) {
+                attestations.push((att.bond_outpoint, att.epoch, bond.owner_reward_spk_payload));
+            }
+        }
+        validator_reward_outputs_from_attestations(
+            dns_params.reward_params.per_attestation_reward_sompi,
+            dns_params.reward_params.max_validator_inflation_per_block_sompi,
+            &attestations,
+        )
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the Model-B
