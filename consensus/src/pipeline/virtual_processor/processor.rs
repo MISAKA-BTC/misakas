@@ -51,7 +51,7 @@ use crate::{
     },
 };
 use kaspa_consensus_core::{
-    BlockHash, BlockHashSet, ChainPath,
+    BlockHash, BlockHashSet, BlueWorkType, ChainPath,
     acceptance_data::AcceptanceData,
     api::args::{TransactionValidationArgs, TransactionValidationBatchArgs},
     block::{BlockTemplate, MutableBlock, TemplateBuildMode, TemplateTransactionSelector},
@@ -59,9 +59,10 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     config::genesis::GenesisBlock,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, AttestationContribution, BondMutation, BondStatus, DnsParams, DnsRolloutStage, StakeBondRecord,
-        advance_dns_confirmation, aggregate_epoch_tallies, attestations_from_accepted_txs, bond_mutations_from_accepted_txs,
-        compute_stake_score, is_bond_active_at, stake_attestation_message, total_active_stake_by_epoch,
+        ATTESTATION_MLDSA65_CONTEXT, AttestationContribution, BondMutation, BondStatus, DnsParams, DnsReorgInputs, DnsReorgMode,
+        DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
+        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, check_dns_reorg_rule, compute_stake_score,
+        is_bond_active_at, stake_attestation_message, total_active_stake_by_epoch,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -802,6 +803,46 @@ impl VirtualStateProcessor {
         self.dns_state_store.write().set_batch(batch, new_state).unwrap();
     }
 
+    /// kaspa-pq Phase 10 (ADR-0009 §"Decision"): the DNS finality reorg gate.
+    /// Returns `true` (candidate sink allowed) unless the overlay is configured,
+    /// in the `Active` rollout stage, has a confirmed anchor, and `candidate`
+    /// would abandon that anchor's selected chain. **Inert** on every current
+    /// network (`dns_params` is `None`) and outside the `Active` stage.
+    ///
+    /// Uses `DnsReorgMode::HardCheckpoint` — correct for the PoC/testnet tiers
+    /// (reject any reorg that abandons a DNS-confirmed anchor). The mainnet
+    /// two-dimensional WorkScore×StakeScore dominance path — which needs the
+    /// work/stake each chain accumulates after their common ancestor — is a
+    /// follow-up; until it lands the gate conservatively hard-rejects such exits.
+    fn dns_reorg_allows(&self, candidate: BlockHash) -> bool {
+        if self.dns_params.is_none() {
+            return true;
+        }
+        let Ok(state) = self.dns_state_store.read().get() else {
+            return true; // no DnsState written yet
+        };
+        if state.rollout_stage != DnsRolloutStage::Active {
+            return true; // gate dormant outside the Active stage
+        }
+        let confirmed = state.last_dns_confirmed_anchor;
+        if confirmed == BlockHash::default() {
+            return true; // nothing confirmed yet
+        }
+        let inputs = DnsReorgInputs {
+            rollout_stage: state.rollout_stage,
+            mode: DnsReorgMode::HardCheckpoint,
+            candidate_includes_confirmed_anchor: self.reachability_service.is_chain_ancestor_of(confirmed, candidate),
+            // Unused by HardCheckpoint mode (2D dominance is a mainnet follow-up).
+            candidate_work_after: BlueWorkType::from_u64(0),
+            canonical_work_after: BlueWorkType::from_u64(0),
+            candidate_stake_after: StakeScore(0),
+            canonical_stake_after: StakeScore(0),
+            emergency_work_margin: BlueWorkType::from_u64(0),
+            emergency_stake_margin: StakeScore(0),
+        };
+        check_dns_reorg_rule(&inputs).is_accept()
+    }
+
     /// Caches the DAA and Median time windows of the sink block (if needed). Following, virtual's window calculations will
     /// naturally hit the cache finding the sink's windows and building upon them.
     fn cache_sink_windows(
@@ -873,16 +914,25 @@ impl VirtualStateProcessor {
                 if diff_point == candidate {
                     // This indicates that candidate has valid UTXO state and that `diff` represents its diff from virtual
 
-                    // All blocks with lower blue work than filtering_root are:
-                    // 1. not in its future (bcs blue work is monotonic),
-                    // 2. will be removed eventually by the bounded merge check.
-                    // Hence as an optimization we prefer removing such blocks in advance to allow valid tips to be considered.
-                    let filtering_root = self.depth_store.merge_depth_root(candidate).unwrap();
-                    let filtering_blue_work = self.ghostdag_store.get_blue_work(filtering_root).unwrap_or_default();
-                    return (
-                        candidate,
-                        heap.into_sorted_iter().take_while(|s| s.blue_work >= filtering_blue_work).map(|s| s.hash).collect(),
-                    );
+                    // kaspa-pq Phase 10 (ADR-0009): the DNS finality reorg gate. Inert
+                    // unless the overlay is configured and in the Active stage; it then
+                    // rejects a candidate that would abandon a DNS-confirmed anchor. The
+                    // rejection is soft — we fall through to push the candidate's parents
+                    // and continue, converging on a DNS-valid sink (mirrors the
+                    // invalid-UTXO handling below).
+                    if self.dns_reorg_allows(candidate) {
+                        // All blocks with lower blue work than filtering_root are:
+                        // 1. not in its future (bcs blue work is monotonic),
+                        // 2. will be removed eventually by the bounded merge check.
+                        // Hence as an optimization we prefer removing such blocks in advance to allow valid tips to be considered.
+                        let filtering_root = self.depth_store.merge_depth_root(candidate).unwrap();
+                        let filtering_blue_work = self.ghostdag_store.get_blue_work(filtering_root).unwrap_or_default();
+                        return (
+                            candidate,
+                            heap.into_sorted_iter().take_while(|s| s.blue_work >= filtering_blue_work).map(|s| s.hash).collect(),
+                        );
+                    }
+                    debug!("Block candidate {} rejected by the DNS finality reorg gate; ignored from Virtual chain.", candidate);
                 } else {
                     debug!("Block candidate {} has invalid UTXO state and is ignored from Virtual chain.", candidate)
                 }
