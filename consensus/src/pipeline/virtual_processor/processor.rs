@@ -20,6 +20,7 @@ use crate::{
             block_window_cache::{BlockWindowCacheStore, BlockWindowCacheWriter},
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
+            dns_state::{DbDnsStateStore, DnsStateStoreReader},
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
             past_pruning_points::DbPastPruningPointsStore,
@@ -57,7 +58,11 @@ use kaspa_consensus_core::{
     blockstatus::BlockStatus::{StatusDisqualifiedFromChain, StatusUTXOValid},
     coinbase::MinerData,
     config::genesis::GenesisBlock,
-    dns_finality::{BondMutation, BondStatus, DnsParams, bond_mutations_from_accepted_txs},
+    dns_finality::{
+        ATTESTATION_MLDSA65_CONTEXT, AttestationContribution, BondMutation, BondStatus, DnsParams, DnsRolloutStage, StakeBondRecord,
+        advance_dns_confirmation, aggregate_epoch_tallies, attestations_from_accepted_txs, bond_mutations_from_accepted_txs,
+        compute_stake_score, is_bond_active_at, stake_attestation_message, total_active_stake_by_epoch,
+    },
     header::Header,
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
@@ -87,6 +92,7 @@ use super::errors::{PruningImportError, PruningImportResult};
 use crossbeam_channel::{Receiver as CrossbeamReceiver, Sender as CrossbeamSender};
 use itertools::Itertools;
 use kaspa_consensus_core::tx::ValidatedTransaction;
+use kaspa_txscript::verify_mldsa65_with_context;
 use kaspa_utils::binary_heap::BinaryHeapExtensions;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use rand::{Rng, seq::SliceRandom};
@@ -97,7 +103,7 @@ use rayon::{
 use rocksdb::WriteBatch;
 use std::{
     cmp::min,
-    collections::{BinaryHeap, HashMap, VecDeque},
+    collections::{BTreeMap, BinaryHeap, HashMap, VecDeque},
     ops::Deref,
     sync::{Arc, atomic::Ordering},
 };
@@ -136,6 +142,7 @@ pub struct VirtualStateProcessor {
     // dormancy guard — `None` on every current network, so the bond-population
     // pass below is a single `Option` check and a return.
     pub(super) stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
+    pub(super) dns_state_store: Arc<RwLock<DbDnsStateStore>>,
     pub(super) dns_params: Option<DnsParams>,
 
     // Utxo-related stores
@@ -217,6 +224,7 @@ impl VirtualStateProcessor {
             selected_chain_store: storage.selected_chain_store.clone(),
             pruning_samples_store: storage.pruning_samples_store.clone(),
             stake_bonds_store: storage.stake_bonds_store.clone(),
+            dns_state_store: storage.dns_state_store.clone(),
             dns_params: params.dns_params.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             utxo_multisets_store: storage.utxo_multisets_store.clone(),
@@ -583,7 +591,8 @@ impl VirtualStateProcessor {
         // Apply the accumulated diff to the virtual UTXO set
         virtual_write.utxo_set.write_diff_batch(&mut batch, accumulated_diff).unwrap();
 
-        // Update virtual state
+        // Update virtual state (capture the new sink first — `set_batch` moves the Arc).
+        let dns_sink = new_virtual_state.ghostdag_data.selected_parent;
         virtual_write.state.set_batch(&mut batch, new_virtual_state).unwrap();
 
         // Update the virtual selected chain
@@ -593,6 +602,11 @@ impl VirtualStateProcessor {
         // changes into the same batch so they commit atomically with the
         // virtual state. Inert unless the overlay is configured.
         self.stage_dns_bond_mutations(&mut batch, chain_path);
+
+        // kaspa-pq Phase 10 (ADR-0009 A.5): recompute the DNS StakeScore over
+        // the bounded recent epoch window and stage the updated DnsState into
+        // the same batch. Inert unless the overlay is configured.
+        self.update_dns_state(&mut batch, dns_sink);
 
         // Flush the batch changes
         self.db.write(batch).unwrap();
@@ -663,11 +677,17 @@ impl VirtualStateProcessor {
 
     /// Re-derives the [`BondMutation`]s a chain block contributed, from its
     /// retained acceptance data (ADR-0009 Addendum A.4). Deterministic, so it
-    /// serves both apply (added) and revert (removed). Resolves each accepted
-    /// tx via `block_transactions_store[index_within_block]`.
+    /// serves both apply (added) and revert (removed).
     fn dns_bond_mutations_for_chain_block(&self, chain_block: BlockHash) -> Vec<BondMutation> {
-        let acceptance_data = self.acceptance_data_store.get(chain_block).unwrap();
         let accepted_daa_score = self.headers_store.get_header(chain_block).unwrap().daa_score;
+        bond_mutations_from_accepted_txs(&self.accepted_txs_of_chain_block(chain_block), accepted_daa_score)
+    }
+
+    /// Resolves a chain block's accepted transactions from its acceptance data
+    /// (`acceptance_data_store` → `block_transactions_store[index_within_block]`).
+    /// Shared by the bond-population (A.4) and StakeScore-aggregation (A.5) passes.
+    fn accepted_txs_of_chain_block(&self, chain_block: BlockHash) -> Vec<Transaction> {
+        let acceptance_data = self.acceptance_data_store.get(chain_block).unwrap();
         let mut txs = Vec::new();
         for mergeset in acceptance_data.iter() {
             let block_txs = self.block_transactions_store.get(mergeset.block_hash).unwrap();
@@ -677,7 +697,109 @@ impl VirtualStateProcessor {
                 }
             }
         }
-        bond_mutations_from_accepted_txs(&txs, accepted_daa_score)
+        txs
+    }
+
+    /// kaspa-pq Phase 10 (ADR-0009 Addendum A.5): recompute the DNS StakeScore
+    /// over the bounded recent epoch window ending at `sink` and stage the
+    /// updated [`DnsState`] singleton into `batch`. **Inert** unless the DNS
+    /// overlay is configured (`dns_params.is_some()`).
+    ///
+    /// Bounded-window design (stake_depth is a window quantity, not cumulative):
+    /// walk back at most `max_reorg_horizon_blocks` selected-chain blocks from
+    /// `sink`, collect on-chain attestation shards, verify each ML-DSA-65
+    /// signature against its bond's validator key under
+    /// `ATTESTATION_MLDSA65_CONTEXT`, gate by `is_bond_active_at`, then feed the
+    /// pure aggregation core. No new store; recompute is reorg-safe.
+    fn update_dns_state(&self, batch: &mut WriteBatch, sink: BlockHash) {
+        let Some(dns_params) = self.dns_params.as_ref() else {
+            return;
+        };
+        let sink_daa = self.headers_store.get_header(sink).unwrap().daa_score;
+        // ADR-0009 Addendum A.3 network_id discriminator := the per-network genesis hash.
+        let net_id = self.genesis.hash;
+
+        // Snapshot the bond set (bounded by the active validator count).
+        let bonds: Vec<StakeBondRecord> =
+            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+
+        // Current total active stake + validator count at the sink (rollout gating).
+        let mut total_active: u64 = 0;
+        let mut active_validators: u32 = 0;
+        for b in bonds.iter().filter(|b| is_bond_active_at(b, sink_daa)) {
+            total_active = total_active.saturating_add(b.amount);
+            active_validators = active_validators.saturating_add(1);
+        }
+        let rollout_stage = if sink_daa >= dns_params.dns_activation_daa_score
+            && total_active >= dns_params.min_active_stake_sompi
+            && active_validators >= dns_params.min_active_validators
+        {
+            DnsRolloutStage::Active
+        } else {
+            DnsRolloutStage::Bootstrap
+        };
+
+        // Bounded window walk: collect + verify attestations from selected-chain
+        // shards within `max_reorg_horizon_blocks` of the sink.
+        let mut contributions: Vec<AttestationContribution> = Vec::new();
+        let mut epoch_anchor_daa: BTreeMap<u64, u64> = BTreeMap::new();
+        let mut walked: u64 = 0;
+        for chain_block in self.reachability_service.default_backward_chain_iterator(sink) {
+            if walked >= dns_params.max_reorg_horizon_blocks {
+                break;
+            }
+            walked += 1;
+            let txs = self.accepted_txs_of_chain_block(chain_block);
+            for att in attestations_from_accepted_txs(&txs) {
+                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == att.bond_outpoint) else {
+                    continue;
+                };
+                if !is_bond_active_at(bond, att.target_daa_score) {
+                    continue;
+                }
+                let digest = stake_attestation_message(
+                    net_id.as_byte_slice(),
+                    att.epoch,
+                    att.target_hash,
+                    att.target_daa_score,
+                    att.validator_set_commitment,
+                    att.bond_outpoint,
+                )
+                .as_bytes();
+                if matches!(
+                    verify_mldsa65_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA65_CONTEXT),
+                    Ok(true)
+                ) {
+                    contributions.push(AttestationContribution {
+                        epoch: att.epoch,
+                        validator_id: att.validator_id,
+                        bond_outpoint: att.bond_outpoint,
+                        signed_stake_sompi: bond.amount,
+                    });
+                    epoch_anchor_daa.entry(att.epoch).or_insert(att.target_daa_score);
+                }
+            }
+        }
+
+        let totals = total_active_stake_by_epoch(&bonds, &epoch_anchor_daa);
+        let stake_depth = compute_stake_score(&aggregate_epoch_tallies(&contributions, &totals));
+        let work_depth = self.ghostdag_store.get_blue_work(sink).unwrap_or_default();
+
+        let prev = self.dns_state_store.read().get().ok();
+        let new_state = advance_dns_confirmation(
+            prev.as_ref(),
+            sink,
+            sink_daa,
+            work_depth,
+            stake_depth,
+            rollout_stage,
+            // validator_set_commitment: the committee snapshot lands with
+            // sortition (PR-10.9 sortition); zero until then.
+            BlockHash::default(),
+            dns_params.required_work_depth,
+            dns_params.required_stake_depth,
+        );
+        self.dns_state_store.write().set_batch(batch, new_state).unwrap();
     }
 
     /// Caches the DAA and Median time windows of the sink block (if needed). Following, virtual's window calculations will

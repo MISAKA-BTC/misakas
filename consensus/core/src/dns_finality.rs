@@ -2267,6 +2267,24 @@ pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: 
         .collect()
 }
 
+/// Flattens every [`StakeAttestation`] from the `StakeAttestationShard`
+/// payloads among `txs` (the decode-only first half of the A.5 aggregation
+/// input). Pure; defensively skips undecodable shard payloads. Signature
+/// verification + bond lookup happen in the consensus crate (which can call
+/// `kaspa-txscript`), keeping the borsh decode here and out of the
+/// virtual processor.
+pub fn attestations_from_accepted_txs(txs: &[Transaction]) -> Vec<StakeAttestation> {
+    let mut out = Vec::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::StakeAttestationShard) {
+            if let Ok(shard) = borsh::from_slice::<StakeAttestationShardPayload>(&tx.payload) {
+                out.extend(shard.attestations);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2915,6 +2933,22 @@ mod tests {
         assert_eq!(totals.get(&2), Some(&80)); // daa 200: A(30) + C(50) active
         assert_eq!(totals.get(&3), Some(&30)); // daa 400: A(30); C slashed @300; B not yet
         assert_eq!(totals.get(&4), Some(&50)); // daa 600: A(30) + B(20); C slashed
+    }
+
+    #[test]
+    fn attestations_from_accepted_txs_flattens_shards_only() {
+        // Two shards (2 + 3 attestations) + a non-overlay tx -> 5 attestations.
+        let shard_a = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, borsh::to_vec(&fixture_shard(2)).unwrap());
+        let shard_b = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, borsh::to_vec(&fixture_shard(3)).unwrap());
+        let native = dns_overlay_tx(SubnetworkId::from_byte(0), vec![1, 2, 3]);
+        let bond = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, borsh::to_vec(&fixture_bond()).unwrap());
+        let atts = attestations_from_accepted_txs(&[shard_a, native, shard_b, bond]);
+        assert_eq!(atts.len(), 5);
+        assert!(atts.iter().all(|a| a.signature.len() == STAKE_ATTESTATION_SIG_LEN));
+
+        // Undecodable shard payload is skipped.
+        let bad = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, vec![0xff]);
+        assert!(attestations_from_accepted_txs(&[bad]).is_empty());
     }
 
     #[test]
