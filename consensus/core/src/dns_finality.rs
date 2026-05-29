@@ -806,30 +806,50 @@ pub fn validator_set_commitment(epoch: u64, validators: &[ValidatorRecord]) -> H
 }
 
 /// Compute the BLAKE2b-256 attestation message that ML-DSA-65 signs
-/// over, per ADR-0009 §"Attestation target":
+/// over, per ADR-0009 §"Attestation target" as pinned by **Addendum
+/// A.3**:
 ///
 /// ```text
 /// attestation_message = BLAKE2b-256(
 ///     key   = ATTESTATION_MESSAGE_DOMAIN,
-///     input = epoch.to_le_bytes()
+///     input = network_id
+///          || epoch.to_le_bytes()
 ///          || target_hash.as_bytes()              (64 B)
 ///          || target_daa_score.to_le_bytes()
-///          || validator_set_commitment.as_bytes() (64 B),
+///          || validator_set_commitment.as_bytes() (64 B)
+///          || bond_outpoint.transaction_id        (64 B)
+///          || bond_outpoint.index.to_le_bytes()   (4 B),
 /// )
 /// ```
 ///
-/// The 32-byte digest is returned as the upstream [`Hash`] (alias
-/// for `Hash32`) so it composes directly with the libcrux ML-DSA-65
-/// `sign_ctx` API. The signing context (`ATTESTATION_MLDSA65_CONTEXT`)
-/// is applied at the ML-DSA-65 layer, not inside this hasher — keeping
-/// the two domain separators independent (replay safety analysis in
-/// ADR-0009 §"Attestation target").
-pub fn stake_attestation_message(epoch: u64, target_hash: Hash64, target_daa_score: u64, validator_set_commitment: Hash64) -> Hash {
+/// `network_id` and `bond_outpoint` are **required** (Addendum A.3): they
+/// bind the attestation to a specific network and to the specific bond
+/// whose stake it pledges, so a signature cannot be replayed across
+/// networks or re-associated with a different bond. `network_id` is the
+/// caller-supplied canonical network discriminator bytes; passing it as
+/// `&[u8]` keeps this module decoupled from `NetworkId`.
+///
+/// The 32-byte digest is returned as the upstream [`Hash`] (alias for
+/// `Hash32`) so it composes directly with the libcrux ML-DSA-65 `sign_ctx`
+/// API. The signing context (`ATTESTATION_MLDSA65_CONTEXT`) is applied at
+/// the ML-DSA-65 layer, not inside this hasher — keeping the two domain
+/// separators independent.
+pub fn stake_attestation_message(
+    network_id: &[u8],
+    epoch: u64,
+    target_hash: Hash64,
+    target_daa_score: u64,
+    validator_set_commitment: Hash64,
+    bond_outpoint: TransactionOutpoint,
+) -> Hash {
     let mut hasher = Blake2bParams::new().hash_length(32).key(ATTESTATION_MESSAGE_DOMAIN).to_state();
+    hasher.update(network_id);
     hasher.update(&epoch.to_le_bytes());
     hasher.update(target_hash.as_byte_slice());
     hasher.update(&target_daa_score.to_le_bytes());
     hasher.update(validator_set_commitment.as_byte_slice());
+    hasher.update(bond_outpoint.transaction_id.as_byte_slice());
+    hasher.update(&bond_outpoint.index.to_le_bytes());
 
     let mut out = [0u8; 32];
     out.copy_from_slice(hasher.finalize().as_bytes());
@@ -2826,44 +2846,66 @@ mod tests {
     fn stake_attestation_message_is_deterministic() {
         let target = Hash64::from_bytes([0x11u8; 64]);
         let vsc = Hash64::from_bytes([0x22u8; 64]);
-        let a = stake_attestation_message(7, target, 1_234_567, vsc);
-        let b = stake_attestation_message(7, target, 1_234_567, vsc);
+        let op = fixture_outpoint();
+        let a = stake_attestation_message(b"kaspa-pq-devnet", 7, target, 1_234_567, vsc, op);
+        let b = stake_attestation_message(b"kaspa-pq-devnet", 7, target, 1_234_567, vsc, op);
         assert_eq!(a, b);
     }
 
     #[test]
     fn stake_attestation_message_changes_with_each_field() {
-        let base = stake_attestation_message(7, Hash64::from_bytes([0x11u8; 64]), 100, Hash64::from_bytes([0x22u8; 64]));
+        // ADR-0009 Addendum A.3: every input — including network_id and
+        // bond_outpoint — must perturb the digest.
+        let net = b"kaspa-pq-devnet".as_slice();
+        let th = Hash64::from_bytes([0x11u8; 64]);
+        let vsc = Hash64::from_bytes([0x22u8; 64]);
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x77u8; 64]), 42);
+        let base = stake_attestation_message(net, 7, th, 100, vsc, op);
+        // network_id (A.3 — guards cross-network replay).
+        assert_ne!(base, stake_attestation_message(b"kaspa-pq-testnet", 7, th, 100, vsc, op));
         // Epoch.
-        assert_ne!(base, stake_attestation_message(8, Hash64::from_bytes([0x11u8; 64]), 100, Hash64::from_bytes([0x22u8; 64])));
+        assert_ne!(base, stake_attestation_message(net, 8, th, 100, vsc, op));
         // target_hash.
-        assert_ne!(base, stake_attestation_message(7, Hash64::from_bytes([0x12u8; 64]), 100, Hash64::from_bytes([0x22u8; 64])));
+        assert_ne!(base, stake_attestation_message(net, 7, Hash64::from_bytes([0x12u8; 64]), 100, vsc, op));
         // target_daa_score.
-        assert_ne!(base, stake_attestation_message(7, Hash64::from_bytes([0x11u8; 64]), 101, Hash64::from_bytes([0x22u8; 64])));
+        assert_ne!(base, stake_attestation_message(net, 7, th, 101, vsc, op));
         // validator_set_commitment.
-        assert_ne!(base, stake_attestation_message(7, Hash64::from_bytes([0x11u8; 64]), 100, Hash64::from_bytes([0x23u8; 64])));
+        assert_ne!(base, stake_attestation_message(net, 7, th, 100, Hash64::from_bytes([0x23u8; 64]), op));
+        // bond_outpoint transaction_id (A.3 — guards cross-bond replay).
+        assert_ne!(
+            base,
+            stake_attestation_message(net, 7, th, 100, vsc, TransactionOutpoint::new(Hash64::from_bytes([0x78u8; 64]), 42))
+        );
+        // bond_outpoint index.
+        assert_ne!(
+            base,
+            stake_attestation_message(net, 7, th, 100, vsc, TransactionOutpoint::new(Hash64::from_bytes([0x77u8; 64]), 43))
+        );
     }
 
     #[test]
-    fn stake_attestation_message_uses_attestation_domain_key() {
-        // Hash the same inputs with the *transaction* domain key
-        // (the only other 32-byte BLAKE2b-256 domain on the wire)
-        // and verify the attestation digest is different. Guards
-        // against the two domains accidentally collapsing in a
-        // future refactor.
+    fn stake_attestation_message_uses_attestation_domain_key_and_full_layout() {
+        // Reconstruct the exact Addendum A.3 layout and verify (a) the
+        // attestation domain key differs from the tx domain key, and (b)
+        // `stake_attestation_message` matches the byte-for-byte layout.
+        let net = b"kaspa-pq-devnet".as_slice();
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x77u8; 64]), 42);
         let inputs = |key: &[u8]| {
             let mut h = Blake2bParams::new().hash_length(32).key(key).to_state();
+            h.update(net);
             h.update(&7u64.to_le_bytes());
             h.update(&[0x11u8; 64]);
             h.update(&100u64.to_le_bytes());
             h.update(&[0x22u8; 64]);
+            h.update(&[0x77u8; 64]); // bond_outpoint.transaction_id
+            h.update(&42u32.to_le_bytes()); // bond_outpoint.index
             h.finalize()
         };
         let with_att_key = inputs(ATTESTATION_MESSAGE_DOMAIN);
         let with_tx_key = inputs(b"kaspa-pq-v1/tx/mldsa65");
         assert_ne!(with_att_key.as_bytes(), with_tx_key.as_bytes());
 
-        let actual = stake_attestation_message(7, Hash64::from_bytes([0x11u8; 64]), 100, Hash64::from_bytes([0x22u8; 64]));
+        let actual = stake_attestation_message(net, 7, Hash64::from_bytes([0x11u8; 64]), 100, Hash64::from_bytes([0x22u8; 64]), op);
         assert_eq!(actual.as_bytes(), with_att_key.as_bytes());
     }
 
