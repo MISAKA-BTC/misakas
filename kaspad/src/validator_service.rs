@@ -9,12 +9,16 @@
 //! registered only when `--enable-validator` is set, so default node behavior is
 //! unchanged.
 
+use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
     ATTESTATION_MLDSA65_CONTEXT, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
-    ValidatorAttestationTarget, check_signed_epoch_record, effective_bond_status, is_bond_active_at, signature_fingerprint,
-    single_attestation_shard, stake_attestation_shard_tx, validator_id_from_pubkey,
+    StakeAttestationShardPayload, ValidatorAttestationTarget, check_signed_epoch_record, effective_bond_status, is_bond_active_at,
+    signature_fingerprint, single_attestation_shard, stake_attestation_shard_tx, validator_id_from_pubkey,
 };
-use kaspa_consensus_core::tx::TransactionOutpoint;
+use kaspa_consensus_core::hashing::sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash};
+use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+use kaspa_consensus_core::subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD;
+use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
     info,
@@ -25,7 +29,7 @@ use kaspa_core::{
     trace, warn,
 };
 use kaspa_hashes::Hash64;
-use kaspa_txscript::{MLDSA65_SIG_LEN, verify_mldsa65_with_context};
+use kaspa_txscript::{MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT, script_builder::ScriptBuilder, verify_mldsa65_with_context};
 use libcrux_ml_dsa::ml_dsa_65;
 use rand::RngCore;
 use std::{
@@ -128,16 +132,70 @@ impl ValidatorKey {
         Self { keypair, validator_id }
     }
 
-    /// Sign a stake-attestation `message` digest under [`ATTESTATION_MLDSA65_CONTEXT`].
-    /// The distinct context guarantees the signature can never be replayed as a
-    /// transaction signature, and verifies via [`verify_mldsa65_with_context`] — the
-    /// same call the `virtual_processor` aggregator uses.
-    fn sign_attestation(&self, message: &[u8]) -> [u8; MLDSA65_SIG_LEN] {
+    /// Sign `message` under an explicit ML-DSA-65 `context` (domain separator) with
+    /// fresh hedged randomness. Distinct contexts keep attestation signatures
+    /// ([`ATTESTATION_MLDSA65_CONTEXT`]) and transaction-input signatures
+    /// ([`MLDSA65_TX_CONTEXT`]) in disjoint domains — neither can be replayed as the other.
+    fn sign_with_context(&self, message: &[u8], context: &[u8]) -> [u8; MLDSA65_SIG_LEN] {
         let mut randomness = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut randomness);
-        let sig = ml_dsa_65::sign(&self.keypair.signing_key, message, ATTESTATION_MLDSA65_CONTEXT, randomness)
+        let sig = ml_dsa_65::sign(&self.keypair.signing_key, message, context, randomness)
             .expect("ML-DSA-65 sign is infallible on a well-formed message");
         *sig.as_ref()
+    }
+
+    /// Sign a stake-attestation `message` digest under [`ATTESTATION_MLDSA65_CONTEXT`].
+    /// Verifies via [`verify_mldsa65_with_context`] — the same call the
+    /// `virtual_processor` aggregator uses.
+    fn sign_attestation(&self, message: &[u8]) -> [u8; MLDSA65_SIG_LEN] {
+        self.sign_with_context(message, ATTESTATION_MLDSA65_CONTEXT)
+    }
+
+    /// Build a fee-funded, signed `StakeAttestationShard` transaction (ADR-0010 step 9,
+    /// funding model A). Spends `funding` — a UTXO locked to this key's own P2PKH-ML-DSA
+    /// script — to pay the fee, returns the change to the same script, and carries the
+    /// borsh-encoded `shard` payload. The single input is signed under
+    /// [`MLDSA65_TX_CONTEXT`] over the SIG_HASH_ALL sighash and wrapped as
+    /// `<sig ‖ sighash-type> <pubkey>` so it satisfies `OpCheckSigMlDsa65`.
+    ///
+    /// `fee` is taken as a parameter; choosing it from the mass-based minimum and
+    /// discovering the funding UTXO are the caller's job (the submission slice).
+    #[allow(dead_code)] // wired by the submission slice (5b-3); exercised by tests today.
+    fn build_funded_shard_tx(
+        &self,
+        shard: &StakeAttestationShardPayload,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        if funding.amount <= fee {
+            return Err(format!("funding UTXO amount {} does not cover fee {}", funding.amount, fee));
+        }
+        let payload = borsh::to_vec(shard).expect("borsh serialization of a well-formed shard is infallible");
+        // Input with an empty signature script (filled after the sighash is computed);
+        // change returns to the same script so the validator can fund the next attestation.
+        let input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
+        let change = TransactionOutput::new(funding.amount - fee, funding.script_public_key.clone());
+        let tx = Transaction::new(TX_VERSION, vec![input], vec![change], 0, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, 0, payload);
+
+        // Sighash is computed over the tx with empty signature scripts (canonical), so
+        // signing before filling the script is correct.
+        let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
+        let reused = SigHashReusedValuesUnsync::new();
+        let sighash = calc_schnorr_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused);
+
+        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA65_TX_CONTEXT).to_vec();
+        sig_data.push(SIG_HASH_ALL.to_u8()); // OpCheckSigMlDsa65 pops the trailing sighash-type byte
+        let signature_script = ScriptBuilder::new()
+            .add_data(&sig_data)
+            .map_err(|e| format!("attestation funding sig push failed: {e}"))?
+            .add_data(self.keypair.verification_key.as_ref())
+            .map_err(|e| format!("attestation funding pubkey push failed: {e}"))?
+            .drain();
+
+        let mut tx = mtx.tx;
+        tx.inputs[0].signature_script = signature_script;
+        Ok(tx)
     }
 
     /// Verify an attestation signature against this key (local round-trip sanity check).
@@ -549,6 +607,53 @@ mod tests {
         let mut bad = msg;
         bad[0] ^= 0x01;
         assert!(!key.verify_attestation(&bad, &sig));
+    }
+
+    #[test]
+    fn sign_with_context_is_domain_separated() {
+        let key = ValidatorKey::from_seed([0x88u8; VALIDATOR_SEED_LEN]);
+        let msg = [0x5au8; 32]; // stand-in for a SIG_HASH_ALL sighash
+        let sig = key.sign_with_context(&msg, MLDSA65_TX_CONTEXT);
+        let pk = key.keypair.verification_key.as_ref();
+        // Verifies under the tx context...
+        assert!(matches!(verify_mldsa65_with_context(pk, &msg, &sig, MLDSA65_TX_CONTEXT), Ok(true)));
+        // ...but NOT under the attestation context (domain separation).
+        assert!(!matches!(verify_mldsa65_with_context(pk, &msg, &sig, ATTESTATION_MLDSA65_CONTEXT), Ok(true)));
+    }
+
+    #[test]
+    fn build_funded_shard_tx_structure_and_funding() {
+        use kaspa_consensus_core::dns_finality::validate_stake_attestation_shard_payload;
+        use kaspa_consensus_core::tx::ScriptPublicKey;
+
+        let key = ValidatorKey::from_seed([0x77u8; VALIDATOR_SEED_LEN]);
+        let shard = single_attestation_shard(StakeAttestation {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: key.validator_id,
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([0x01u8; 64]), 0),
+            epoch: 7,
+            target_hash: Hash64::from_bytes([0x11u8; 64]),
+            target_daa_score: 700,
+            validator_set_commitment: Hash64::from_bytes([0x22u8; 64]),
+            signature: vec![0u8; MLDSA65_SIG_LEN],
+        });
+        let funding_spk = ScriptPublicKey::default();
+        let funding = UtxoEntry::new(1_000, funding_spk.clone(), 1, false);
+        let funding_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x99u8; 64]), 3);
+
+        let tx = key.build_funded_shard_tx(&shard, funding_outpoint, &funding, 250).unwrap();
+        assert_eq!(tx.inputs.len(), 1);
+        assert_eq!(tx.inputs[0].previous_outpoint, funding_outpoint);
+        assert!(!tx.inputs[0].signature_script.is_empty()); // signed
+        assert_eq!(tx.outputs.len(), 1);
+        assert_eq!(tx.outputs[0].value, 750); // amount - fee, change back to self
+        assert_eq!(tx.outputs[0].script_public_key, funding_spk);
+        assert_eq!(tx.subnetwork_id, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD);
+        assert_eq!(tx.gas, 0);
+        assert!(validate_stake_attestation_shard_payload(&tx.payload).is_ok());
+
+        // Fee must be strictly less than the funding amount.
+        assert!(key.build_funded_shard_tx(&shard, funding_outpoint, &funding, 1_000).is_err());
     }
 
     fn signed_record(epoch: u64, target: u8) -> SignedEpochRecord {

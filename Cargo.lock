@@ -3973,6 +3973,7 @@ name = "kaspad"
 version = "1.1.0"
 dependencies = [
  "async-channel 2.3.1",
+ "borsh",
  "cfg-if 1.0.0",
  "clap 4.5.51",
  "dhat",
