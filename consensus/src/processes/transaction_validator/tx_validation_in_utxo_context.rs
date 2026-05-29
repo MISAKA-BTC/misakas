@@ -1,6 +1,7 @@
 use crate::constants::{MAX_SOMPI, SEQUENCE_LOCK_TIME_DISABLED, SEQUENCE_LOCK_TIME_MASK};
 use kaspa_consensus_core::{
     hashing::sighash::{SigHashReusedValuesSync, SigHashReusedValuesUnsync},
+    subnets::SUBNETWORK_ID_SLASHING_EVIDENCE,
     tx::{TransactionInput, VerifiableTransaction},
 };
 use kaspa_txscript::{SigCacheKey, TxScriptEngine, caches::Cache};
@@ -40,8 +41,7 @@ impl TransactionValidator {
     ) -> TxResult<u64> {
         self.check_transaction_coinbase_maturity(tx, pov_daa_score)?;
         let total_in = self.check_transaction_input_amounts(tx)?;
-        let total_out = Self::check_transaction_output_values(tx, total_in)?;
-        let fee = total_in - total_out;
+        let fee = self.check_output_values_and_compute_fee(tx, total_in, pov_daa_score)?;
         if flags != TxValidationFlags::SkipMassCheck {
             self.check_mass_commitment(tx)?;
         }
@@ -107,14 +107,54 @@ impl TransactionValidator {
         Ok(total)
     }
 
-    fn check_transaction_output_values(tx: &impl VerifiableTransaction, total_in: u64) -> TxResult<u64> {
+    /// kaspa-pq ADR-0009/0013: the DNS finality overlay is live only when it is
+    /// configured for this network (`Some`) **and** the given DAA score has
+    /// reached activation. `None` — every current network — is always inert, so
+    /// every overlay-specific transaction rule stays dormant.
+    fn dns_overlay_active(&self, pov_daa_score: u64) -> bool {
+        matches!(self.dns_activation_daa_score, Some(activation) if pov_daa_score >= activation)
+    }
+
+    /// Verifies output-value conservation and returns the transaction fee.
+    ///
+    /// The strict rule, in force for every transaction on every current
+    /// network, is `Σ outputs ≤ Σ inputs` with `fee = Σ inputs − Σ outputs`.
+    ///
+    /// kaspa-pq ADR-0013 Addendum C.1.2: once the DNS finality overlay is
+    /// active, a genuine slashing transaction (`SUBNETWORK_ID_SLASHING_EVIDENCE`)
+    /// *mints* its reporter reward at output-0 — that value is paid out of the
+    /// slashed stake removed from the UTXO set as a consensus side-effect, not
+    /// funded by an input. So when (and only when) the overlay is active and
+    /// such a transaction actually mints (`Σ outputs > Σ inputs`), output-0 is
+    /// excluded from conservation and the fee; the remaining outputs must still
+    /// be funded by the inputs (`Σ outputs[1..] ≤ Σ inputs`) and pay an ordinary
+    /// fee, so a slashing transaction is no cheaper to relay than any other. The
+    /// *exact* reporter value is pinned separately as a block-validity rule
+    /// (Addendum C.1.3); this per-transaction check is deliberately permissive.
+    fn check_output_values_and_compute_fee(
+        &self,
+        tx: &impl VerifiableTransaction,
+        total_in: u64,
+        pov_daa_score: u64,
+    ) -> TxResult<u64> {
         // There's no need to check for overflow here because it was already checked by check_transaction_output_value_ranges
         let total_out: u64 = tx.outputs().iter().map(|out| out.value).sum();
+
         if total_in < total_out {
+            // The transaction mints. The only consensus-sanctioned mint is a
+            // slashing reporter output at index 0, once the overlay is active.
+            if self.dns_overlay_active(pov_daa_score) && tx.tx().subnetwork_id == SUBNETWORK_ID_SLASHING_EVIDENCE {
+                let reporter_value = tx.outputs().first().map_or(0, |out| out.value);
+                let conserved_out = total_out - reporter_value; // Σ outputs[1..]
+                if total_in < conserved_out {
+                    return Err(TxRuleError::SpendTooHigh(conserved_out, total_in));
+                }
+                return Ok(total_in - conserved_out);
+            }
             return Err(TxRuleError::SpendTooHigh(total_out, total_in));
         }
 
-        Ok(total_out)
+        Ok(total_in - total_out)
     }
 
     fn check_mass_commitment(&self, tx: &impl VerifiableTransaction) -> TxResult<()> {
@@ -216,7 +256,7 @@ mod tests {
     use kaspa_consensus_core::hashing::sighash::calc_schnorr_signature_hash;
     use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
     use kaspa_consensus_core::sign::sign;
-    use kaspa_consensus_core::subnets::SubnetworkId;
+    use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SubnetworkId};
     use kaspa_consensus_core::tx::{MutableTransaction, PopulatedTransaction, ScriptVec, TransactionId, UtxoEntry};
     use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
     use kaspa_txscript::opcodes::codes::OpData65;
@@ -662,5 +702,127 @@ mod tests {
         let signed_tx = sign(MutableTransaction::with_entries(unsigned_tx, entries), schnorr_key);
         let populated_tx = signed_tx.as_verifiable();
         assert_eq!(tv.check_scripts(&populated_tx), Ok(()));
+    }
+
+    // -----------------------------------------------------------------
+    // kaspa-pq ADR-0013 Addendum C.1.2 — slashing reporter-output mint
+    // exemption in value conservation / fee accounting.
+    //
+    // `check_output_values_and_compute_fee` reads only the outputs and the
+    // subnetwork id; `total_in` is passed explicitly, so the test
+    // transactions need no inputs/entries.
+    // -----------------------------------------------------------------
+
+    /// Native (non-overlay) subnetwork id.
+    fn native_subnet() -> SubnetworkId {
+        SubnetworkId::from_bytes([0u8; 20])
+    }
+
+    /// Builds an input-less tx carrying `output_values` on `subnetwork_id`.
+    fn outputs_only_tx(subnetwork_id: SubnetworkId, output_values: &[u64]) -> Transaction {
+        let dummy_spk = ScriptPublicKey::new(0, ScriptVec::from_slice(&[0x51])); // OP_TRUE
+        let outputs =
+            output_values.iter().map(|&value| TransactionOutput { value, script_public_key: dummy_spk.clone() }).collect();
+        Transaction::new(0, vec![], outputs, 0, subnetwork_id, 0, vec![])
+    }
+
+    #[test]
+    fn reporter_mint_exemption_inert_when_overlay_unconfigured() {
+        // Default validator: dns_activation_daa_score = None ⇒ the overlay is
+        // never configured, so a minting slashing tx is rejected by the strict
+        // rule exactly like any other minting tx. This is the state of every
+        // current network.
+        let tv = test_validator();
+        assert!(tv.dns_activation_daa_score.is_none());
+
+        let tx = outputs_only_tx(SUBNETWORK_ID_SLASHING_EVIDENCE, &[500, 100]); // total_out = 600
+        let ptx = PopulatedTransaction::new(&tx, vec![]);
+        // total_in = 100 < total_out = 600 ⇒ SpendTooHigh on the *full* outputs.
+        assert_eq!(tv.check_output_values_and_compute_fee(&ptx, 100, 0), Err(TxRuleError::SpendTooHigh(600, 100)));
+    }
+
+    #[test]
+    fn reporter_mint_exemption_excludes_output_zero_when_active() {
+        // Overlay active (activation = 0 ⇒ active at every daa). A slashing tx
+        // mints its reporter reward at output-0; the remaining outputs are
+        // funded by the inputs and pay an ordinary fee.
+        let mut tv = test_validator();
+        tv.dns_activation_daa_score = Some(0);
+
+        // output-0 = 1_000_000 (minted reporter), output-1 = 700 (change).
+        let tx = outputs_only_tx(SUBNETWORK_ID_SLASHING_EVIDENCE, &[1_000_000, 700]);
+        let ptx = PopulatedTransaction::new(&tx, vec![]);
+        // Σ outputs[1..] = 700 ≤ total_in = 1000 ⇒ Ok, fee = 1000 − 700 = 300.
+        assert_eq!(tv.check_output_values_and_compute_fee(&ptx, 1000, 0), Ok(300));
+    }
+
+    #[test]
+    fn reporter_mint_exemption_still_requires_remaining_outputs_funded() {
+        // Even with output-0 excluded, outputs[1..] must be covered by inputs.
+        let mut tv = test_validator();
+        tv.dns_activation_daa_score = Some(0);
+
+        // output-0 = 1_000_000 (reporter), output-1 = 1500 (> total_in).
+        let tx = outputs_only_tx(SUBNETWORK_ID_SLASHING_EVIDENCE, &[1_000_000, 1500]);
+        let ptx = PopulatedTransaction::new(&tx, vec![]);
+        // Σ outputs[1..] = 1500 > total_in = 1000 ⇒ SpendTooHigh on outputs[1..].
+        assert_eq!(tv.check_output_values_and_compute_fee(&ptx, 1000, 0), Err(TxRuleError::SpendTooHigh(1500, 1000)));
+    }
+
+    #[test]
+    fn reporter_mint_exemption_only_for_slashing_subnet() {
+        // A non-slashing tx that mints is rejected even with the overlay
+        // active — the exemption is scoped to SUBNETWORK_ID_SLASHING_EVIDENCE,
+        // so nothing else may mint.
+        let mut tv = test_validator();
+        tv.dns_activation_daa_score = Some(0);
+
+        let tx = outputs_only_tx(native_subnet(), &[1_000_000, 700]);
+        let ptx = PopulatedTransaction::new(&tx, vec![]);
+        assert_eq!(tv.check_output_values_and_compute_fee(&ptx, 1000, 0), Err(TxRuleError::SpendTooHigh(1_000_700, 1000)));
+    }
+
+    #[test]
+    fn reporter_mint_exemption_gated_below_activation() {
+        // Overlay configured but the pov DAA score has not reached activation:
+        // the exemption is not yet live, so a minting slashing tx is rejected.
+        let mut tv = test_validator();
+        tv.dns_activation_daa_score = Some(1_000);
+
+        let tx = outputs_only_tx(SUBNETWORK_ID_SLASHING_EVIDENCE, &[1_000_000, 700]);
+        let ptx = PopulatedTransaction::new(&tx, vec![]);
+        // pov_daa_score = 999 < 1000 ⇒ inactive ⇒ strict rule rejects the mint.
+        assert_eq!(tv.check_output_values_and_compute_fee(&ptx, 1000, 999), Err(TxRuleError::SpendTooHigh(1_000_700, 1000)));
+        // At activation the exemption kicks in: fee = 1000 − 700 = 300.
+        assert_eq!(tv.check_output_values_and_compute_fee(&ptx, 1000, 1000), Ok(300));
+    }
+
+    #[test]
+    fn non_minting_slashing_tx_is_validated_normally() {
+        // R == 0: a slashing tx that does not mint (total_out ≤ total_in) takes
+        // the strict path even with the overlay active — no exemption, ordinary
+        // fee, and output-0 is *not* excluded.
+        let mut tv = test_validator();
+        tv.dns_activation_daa_score = Some(0);
+
+        let tx = outputs_only_tx(SUBNETWORK_ID_SLASHING_EVIDENCE, &[600, 100]); // total_out = 700
+        let ptx = PopulatedTransaction::new(&tx, vec![]);
+        // total_in = 1000 ≥ 700 ⇒ fee = 1000 − 700 = 300 (full outputs counted).
+        assert_eq!(tv.check_output_values_and_compute_fee(&ptx, 1000, 0), Ok(300));
+    }
+
+    #[test]
+    fn strict_conservation_unchanged_for_normal_tx() {
+        // Regression: a normal tx still obeys Σ outputs ≤ inputs with
+        // fee = inputs − outputs, and over-spend is rejected.
+        let tv = test_validator();
+
+        let ok_tx = outputs_only_tx(native_subnet(), &[300, 200]); // total_out = 500
+        let ok_ptx = PopulatedTransaction::new(&ok_tx, vec![]);
+        assert_eq!(tv.check_output_values_and_compute_fee(&ok_ptx, 800, 0), Ok(300));
+
+        let bad_tx = outputs_only_tx(native_subnet(), &[900]);
+        let bad_ptx = PopulatedTransaction::new(&bad_tx, vec![]);
+        assert_eq!(tv.check_output_values_and_compute_fee(&bad_ptx, 800, 0), Err(TxRuleError::SpendTooHigh(900, 800)));
     }
 }
