@@ -4,9 +4,9 @@ pub use super::{
     genesis::{DEVNET_GENESIS, GENESIS, GenesisBlock, SIMNET_GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS},
 };
 use crate::{
-    BlockLevel, KType,
+    BlockLevel, BlueWorkType, KType,
     constants::STORAGE_MASS_PARAMETER,
-    dns_finality::DnsParams,
+    dns_finality::{DnsParams, MAX_ATTESTATIONS_PER_SHARD, STAKE_SCORE_SCALE, SortitionMode, StakeScore},
     network::{NetworkId, NetworkType},
 };
 use kaspa_addresses::Prefix;
@@ -762,5 +762,38 @@ pub const DEVNET_PARAMS: Params = Params {
     pre_crescendo_target_time_per_block: 100,
 
     crescendo_activation: ForkActivation::always(),
-    dns_params: None,
+    // kaspa-pq Phase 10 (ADR-0009): devnet DNS overlay config — VISIBILITY ONLY.
+    // `dns_activation_daa_score = u64::MAX` keeps the rollout stage below `Active`
+    // permanently, so the reorg gate stays dormant; the overlay only populates
+    // bonds + computes the per-epoch StakeScore into DnsState for
+    // `getDnsConfirmation`. Small epoch/window keep the PR-10.11-throttled
+    // aggregation walk cheap on the ~10 bps devnet (amortized O(1) per block).
+    dns_params: Some(DnsParams {
+        dns_activation_daa_score: u64::MAX,
+        min_active_stake_sompi: 10_000_000_000_000,
+        min_active_validators: 16,
+        epoch_length_blocks: 100,
+        // ZERO (const-constructible): on devnet the gate is dormant, so the
+        // confirmation thresholds + emergency margins are not load-bearing.
+        // required_work_depth = 0 ⇒ pow_confirmed is always true in the RPC view.
+        required_work_depth: BlueWorkType::ZERO,
+        required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
+        emergency_work_margin: BlueWorkType::ZERO,
+        emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
+        max_reorg_horizon_blocks: 300,
+        evidence_window_blocks: 300,
+        unbonding_period_blocks: 700, // > R + E
+        max_attestations_per_block: MAX_ATTESTATIONS_PER_SHARD as u16,
+        max_attestation_shard_mass: 50_000,
+        sortition_mode: SortitionMode::Deterministic,
+        commit_window_blocks: 30,
+        reveal_window_blocks: 30,
+        min_reveal_threshold_num: 2,
+        min_reveal_threshold_denom: 3,
+        committee_size: 16,
+        commit_reveal_lookahead_epochs: 2,
+        commit_without_reveal_slash_sompi: 50_000_000_000,
+        unreveal_reporter_reward_sompi: 100_000_000,
+        commit_reveal_activation_daa_score: None,
+    }),
 };

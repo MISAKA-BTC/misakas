@@ -720,6 +720,23 @@ impl VirtualStateProcessor {
         // ADR-0009 Addendum A.3 network_id discriminator := the per-network genesis hash.
         let net_id = self.genesis.hash;
 
+        // PR-10.11 throttle: StakeScore is per-epoch, so recompute DnsState only
+        // once per epoch — when the sink's epoch differs from the last-written
+        // DnsState's epoch. This bounds the window walk to ~once per
+        // `epoch_length_blocks` (O(1) amortized per block) instead of walking
+        // `max_reorg_horizon_blocks` on every virtual commit. Deterministic and
+        // epoch-granular; safe on devnet/testnet where the gate is dormant
+        // (Bootstrap). NOTE (mainnet/Active): before the gate relies on this,
+        // anchor the recompute at the epoch's final block (a fixed chain point)
+        // to remove the "first sink to cross the boundary" ambiguity.
+        let prev_dns_state = self.dns_state_store.read().get().ok();
+        let epoch_len = dns_params.epoch_length_blocks.max(1);
+        if let Some(prev) = prev_dns_state.as_ref() {
+            if sink_daa / epoch_len == prev.anchor_daa_score / epoch_len {
+                return;
+            }
+        }
+
         // Snapshot the bond set (bounded by the active validator count).
         let bonds: Vec<StakeBondRecord> =
             self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
@@ -786,9 +803,8 @@ impl VirtualStateProcessor {
         let stake_depth = compute_stake_score(&aggregate_epoch_tallies(&contributions, &totals));
         let work_depth = self.ghostdag_store.get_blue_work(sink).unwrap_or_default();
 
-        let prev = self.dns_state_store.read().get().ok();
         let new_state = advance_dns_confirmation(
-            prev.as_ref(),
+            prev_dns_state.as_ref(),
             sink,
             sink_daa,
             work_depth,
