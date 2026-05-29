@@ -2731,6 +2731,25 @@ pub fn attestations_from_accepted_txs(txs: &[Transaction]) -> Vec<StakeAttestati
     out
 }
 
+/// Flattens every [`SlashingEvidencePayload`] from the
+/// `SUBNETWORK_ID_SLASHING_EVIDENCE` txs among `txs`. Pure; defensively skips
+/// undecodable payloads (a committed block's txs already passed the PR-10.4
+/// stateless check). The consensus crate consumes this to apply the stateful
+/// genuineness rule (both attestations sign-verify against the bond's
+/// `validator_pubkey`) before the bond is mutated to `Slashed`.
+pub fn slashing_evidence_from_accepted_txs(txs: &[Transaction]) -> Vec<SlashingEvidencePayload> {
+    let mut out = Vec::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) != Some(DnsTxKind::SlashingEvidence) {
+            continue;
+        }
+        if let Ok(ev) = borsh::from_slice::<SlashingEvidencePayload>(&tx.payload) {
+            out.push(ev);
+        }
+    }
+    out
+}
+
 /// Builds the [`DnsConfirmation`] RPC view from the current [`DnsState`] and
 /// the network's confirmation thresholds (ADR-0009; the `getDnsConfirmation`
 /// RPC, PR-10.14). Pure. `pow_confirmed` is the work-depth threshold alone;

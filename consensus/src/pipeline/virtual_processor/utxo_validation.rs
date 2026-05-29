@@ -4,7 +4,7 @@ use crate::{
         BlockProcessResult,
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, IneligibleAttestationInBlock,
-            InvalidTransactionsInUtxoContext, WrongHeaderPruningPoint,
+            InvalidTransactionsInUtxoContext, UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -29,8 +29,8 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, RewardedEpochSet, attestations_from_accepted_txs, stake_attestation_message,
-        validator_reward_outputs_from_attestations,
+        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, RewardedEpochSet, attestations_from_accepted_txs,
+        slashing_evidence_from_accepted_txs, stake_attestation_message, validator_reward_outputs_from_attestations,
     },
     hashing,
     header::Header,
@@ -226,6 +226,11 @@ impl VirtualStateProcessor {
         // eligible (its bond resolves to Active with a valid signature).
         // Inert below activation.
         self.check_attestation_reward_eligibility(&txs, selected_parent_bond_view, header.daa_score)?;
+
+        // kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload"): reject a
+        // block whose slashing evidence is not genuine, so a forged evidence
+        // can never mutate a bond to `Slashed`. Inert below activation.
+        self.check_slashing_evidence_genuine(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): the validator reward
         // outputs the coinbase must carry, derived from the block's included
@@ -437,6 +442,26 @@ impl VirtualStateProcessor {
             .map_err(|(bond_tx, epoch)| IneligibleAttestationInBlock(bond_tx, epoch))
     }
 
+    /// kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload"): the stateful
+    /// slashing-evidence genuineness rule. Rejects a block carrying a
+    /// `SlashingEvidence` whose referenced bond is unknown in the block's
+    /// selected-parent bond view, or one of whose two equivocating attestations
+    /// does not ML-DSA-verify against that bond's `validator_pubkey` — so a
+    /// forged-but-well-formed evidence (the §A.2 tx-level check is structural
+    /// only) cannot mutate a bond to `Slashed`. Inert unless the overlay is
+    /// configured **and** past `dns_activation_daa_score` (`u64::MAX`
+    /// everywhere today).
+    fn check_slashing_evidence_genuine(
+        &self,
+        txs: &[Transaction],
+        selected_parent_bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) -> BlockProcessResult<()> {
+        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        slashing_evidence_genuine(txs, selected_parent_bond_view, self.genesis.hash, activated)
+            .map_err(UnverifiableSlashingEvidenceInBlock)
+    }
+
     /// Validates transactions against the provided `utxo_view` and returns a vector with all transactions
     /// which passed the validation along with their original index within the containing block
     pub(crate) fn validate_transactions_in_parallel<'a, V: UtxoView + Sync>(
@@ -644,6 +669,52 @@ fn attestation_reward_eligibility(
     Ok(())
 }
 
+/// Pure core of the ADR-0009 §"SlashingEvidencePayload" stateful genuineness
+/// rule (testable without a processor). `activated` folds the
+/// `dns_params.is_some() && daa_score >= dns_activation_daa_score` gate; when
+/// `false` the rule is a no-op. For each `SlashingEvidence` among `txs` (the
+/// structural triple + incompatibility are already enforced by the §A.2
+/// stateless tx check), requires that the referenced bond resolves in
+/// `bond_view` and that **both** equivocating attestations ML-DSA-verify
+/// against that bond's `validator_pubkey` over their canonical
+/// [`stake_attestation_message`] digests. On the first failure returns
+/// `Err(bond_tx_id)`; the caller maps it to
+/// [`UnverifiableSlashingEvidenceInBlock`].
+fn slashing_evidence_genuine(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    net_id: BlockHash,
+    activated: bool,
+) -> Result<(), TransactionId> {
+    if !activated {
+        return Ok(());
+    }
+    for ev in slashing_evidence_from_accepted_txs(txs) {
+        // The bond must exist so we can verify against its validator key.
+        let Some(bond) = bond_view.get(&ev.bond_outpoint) else {
+            return Err(ev.bond_outpoint.transaction_id);
+        };
+        for att in [&ev.attestation_a, &ev.attestation_b] {
+            let digest = stake_attestation_message(
+                net_id.as_byte_slice(),
+                att.epoch,
+                att.target_hash,
+                att.target_daa_score,
+                att.validator_set_commitment,
+                att.bond_outpoint,
+            )
+            .as_bytes();
+            if !matches!(
+                verify_mldsa65_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA65_CONTEXT),
+                Ok(true)
+            ) {
+                return Err(ev.bond_outpoint.transaction_id);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
@@ -784,6 +855,99 @@ mod tests {
         fn ok_when_no_attestation_shards() {
             // Activated but no shard txs ⇒ nothing to check ⇒ Ok.
             assert_eq!(eligibility(&[], &ActiveBondView::new(), NET(), true), Ok(()));
+        }
+    }
+
+    // kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload" / item 2): the
+    // stateful slashing-evidence genuineness rule's pure core. Covers the gate +
+    // both reject branches (bond absent / signature invalid). The
+    // accept-with-valid-signatures path needs ML-DSA-65 signing (libcrux) and is
+    // covered by the dedicated reward-bearing e2e rather than here.
+    mod slashing_evidence_genuine {
+        use super::super::slashing_evidence_genuine as genuine;
+        use kaspa_consensus_core::{
+            BlockHash,
+            constants::TX_VERSION,
+            dns_finality::{
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
+                SlashingEvidencePayload, StakeAttestation, StakeBondRecord,
+            },
+            subnets::SUBNETWORK_ID_SLASHING_EVIDENCE,
+            tx::{Transaction, TransactionOutpoint},
+        };
+        use kaspa_hashes::Hash64;
+
+        fn outpoint(b: u8) -> TransactionOutpoint {
+            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+        }
+
+        fn attestation(bond_outpoint: TransactionOutpoint, target: u8) -> StakeAttestation {
+            StakeAttestation {
+                version: DNS_PAYLOAD_VERSION_V1,
+                validator_id: Hash64::from_bytes([0xa1; 64]),
+                bond_outpoint,
+                epoch: 1,
+                target_hash: Hash64::from_bytes([target; 64]),
+                target_daa_score: 10_000,
+                validator_set_commitment: Hash64::from_bytes([0x66; 64]),
+                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
+            }
+        }
+
+        fn active_bond(op: TransactionOutpoint) -> StakeBondRecord {
+            StakeBondRecord {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
+                validator_pubkey_hash: Hash64::from_bytes([0xbb; 64]),
+                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
+                amount: 1_000,
+                activation_daa_score: 0,
+                unbonding_period_blocks: 100,
+                owner_reward_spk_payload: [0xdd; 32],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: BondStatus::Active,
+            }
+        }
+
+        // Two incompatible attestations for the same bond (equivocation).
+        fn evidence_tx(op: TransactionOutpoint) -> Transaction {
+            let ev = SlashingEvidencePayload {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                attestation_a: attestation(op, 0x55),
+                attestation_b: attestation(op, 0x99),
+            };
+            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_SLASHING_EVIDENCE, 0, borsh::to_vec(&ev).unwrap())
+        }
+
+        const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
+
+        #[test]
+        fn noop_when_not_activated() {
+            // Forged evidence passes when the gate is closed (every current net).
+            assert_eq!(genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), false), Ok(()));
+        }
+
+        #[test]
+        fn rejects_evidence_with_unknown_bond() {
+            // Activated + empty bond view ⇒ bond unknown ⇒ reject.
+            assert_eq!(genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), true), Err(Hash64::from_bytes([1; 64])));
+        }
+
+        #[test]
+        fn rejects_evidence_with_invalid_signatures() {
+            // Activated + bond present, but the (garbage) attestation signatures
+            // fail verification ⇒ a forged evidence cannot slash the bond.
+            let op = outpoint(2);
+            let view = ActiveBondView::from_records([(op, active_bond(op))]);
+            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), true), Err(Hash64::from_bytes([2; 64])));
+        }
+
+        #[test]
+        fn ok_when_no_slashing_evidence() {
+            assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), true), Ok(()));
         }
     }
 }

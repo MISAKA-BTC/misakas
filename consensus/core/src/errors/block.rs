@@ -161,6 +161,16 @@ pub enum RuleError {
     #[error("block includes an ineligible stake attestation: bond {0} epoch {1} is not an active bond with a valid signature")]
     IneligibleAttestationInBlock(TransactionId, u64),
 
+    // kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload" / ADR-0013):
+    // a block carrying a SlashingEvidence whose evidence is not genuine —
+    // its referenced bond is unknown in the block's selected-parent bond view,
+    // or one of the two equivocating attestations does not ML-DSA-verify
+    // against that bond's validator key — is rejected, so a well-formed but
+    // forged evidence cannot slash a bond. Arg: the referenced bond's
+    // transaction id. Inert below dns_activation_daa_score.
+    #[error("block includes unverifiable slashing evidence against bond {0}")]
+    UnverifiableSlashingEvidenceInBlock(TransactionId),
+
     #[error("{0} non-coinbase transactions (out of {1}) are invalid in UTXO context")]
     InvalidTransactionsInUtxoContext(usize, usize),
 
