@@ -10,7 +10,7 @@ use super::{
 };
 use kaspa_consensus_core::{
     block::TemplateTransactionSelector,
-    subnets::SubnetworkId,
+    subnets::{SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SubnetworkId},
     tx::{Transaction, TransactionId},
 };
 
@@ -50,6 +50,9 @@ pub struct RebalancingWeightedTransactionSelector {
     total_mass: u64,
     total_fees: u64,
     gas_usage_map: HashMap<SubnetworkId, u64>,
+    /// kaspa-pq Phase 10 (ADR-0009): count of `StakeAttestationShard` txs
+    /// selected into the current template, capped by `policy.max_attestation_shard_txs`.
+    selected_attestation_shard_txs: u64,
 }
 
 impl RebalancingWeightedTransactionSelector {
@@ -72,6 +75,7 @@ impl RebalancingWeightedTransactionSelector {
             total_mass: 0,
             total_fees: 0,
             gas_usage_map: Default::default(),
+            selected_attestation_shard_txs: 0,
         };
 
         // Create the selectable transactions
@@ -175,12 +179,31 @@ impl RebalancingWeightedTransactionSelector {
                 *gas_usage = next_gas_usage.unwrap();
             }
 
+            // kaspa-pq Phase 10 (ADR-0009 §"Why partial certificates"): enforce
+            // the per-block StakeAttestationShard tx budget. `0` = unlimited
+            // (overlay off). When the budget is reached, skip this shard tx but
+            // keep selecting other txs (unlike the gas case, other subnetworks
+            // are unaffected).
+            if self.policy.max_attestation_shard_txs > 0
+                && selected_tx.tx.subnetwork_id == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD
+                && self.selected_attestation_shard_txs >= self.policy.max_attestation_shard_txs
+            {
+                trace!("Tx {0} exceeds the per-block attestation-shard budget; skipping.", selected_tx.tx.id());
+                selected_candidate.is_marked_for_deletion = true;
+                self.used_count += 1;
+                self.used_p += self.selectable_txs[selected_candidate.index].p;
+                continue;
+            }
+
             // Add the transaction to the result, increment counters, and
             // save the masses, fees, and signature operation counts to the
             // result.
             self.selected_txs.push(selected_candidate.index);
             self.total_mass += selected_tx.calculated_mass;
             self.total_fees += selected_tx.calculated_fee;
+            if selected_tx.tx.subnetwork_id == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD {
+                self.selected_attestation_shard_txs += 1;
+            }
 
             trace!("Adding tx {0} (fee per gram: {1})", selected_tx.tx.id(), selected_tx.calculated_fee / selected_tx.calculated_mass);
 
@@ -206,6 +229,7 @@ impl RebalancingWeightedTransactionSelector {
         // TODO: consider to min with the approximated amount of txs which fit into max block mass
         self.selected_txs.reserve_exact(self.transactions.len());
         self.selected_txs_map = None;
+        self.selected_attestation_shard_txs = 0;
     }
 
     /// calc_tx_value calculates a value to be used in transaction selection.
@@ -241,6 +265,9 @@ impl TemplateTransactionSelector for RebalancingWeightedTransactionSelector {
         self.total_fees -= tx.calculated_fee;
         if !tx.tx.subnetwork_id.is_builtin_or_native() {
             *self.gas_usage_map.get_mut(&tx.tx.subnetwork_id).expect("previously selected txs have an entry") -= tx.tx.gas;
+        }
+        if tx.tx.subnetwork_id == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD {
+            self.selected_attestation_shard_txs = self.selected_attestation_shard_txs.saturating_sub(1);
         }
         self.overall_rejections += 1;
     }
@@ -335,5 +362,44 @@ mod tests {
         let calculated_fee = DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE;
 
         CandidateTransaction { tx, calculated_fee, calculated_mass }
+    }
+
+    fn create_shard_transaction(value: u64) -> CandidateTransaction {
+        let previous_outpoint = TransactionOutpoint::new(TransactionId::default(), 0);
+        let (script_public_key, redeem_script) = op_true_script();
+        let signature_script = pay_to_script_hash_signature_script(redeem_script, vec![]).expect("the redeem script is canonical");
+        let input = TransactionInput::new(previous_outpoint, signature_script, MAX_TX_IN_SEQUENCE_NUM, 1);
+        let output = TransactionOutput::new(value - DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE, script_public_key);
+        // DNS overlay txs use 0 gas (PR-10.4); the selector counts them by subnetwork id.
+        let tx =
+            Arc::new(Transaction::new(TX_VERSION, vec![input], vec![output], 0, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, 0, vec![]));
+        let calculated_mass = transaction_estimated_serialized_size(&tx);
+        CandidateTransaction { tx, calculated_fee: DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE, calculated_mass }
+    }
+
+    #[test]
+    fn test_attestation_shard_budget() {
+        // 10 native + 6 attestation-shard txs; budget = 2 shards, ample mass.
+        let mut transactions = (0..10).map(|i| create_transaction(SOMPI_PER_KASPA * (i + 1) as u64)).collect_vec();
+        transactions.extend((0..6).map(|i| create_shard_transaction(SOMPI_PER_KASPA * (100 + i) as u64)));
+
+        let policy = Policy::new(100_000).with_max_attestation_shard_txs(2);
+        let mut selector = RebalancingWeightedTransactionSelector::new(policy, transactions);
+        let selected = selector.select_transactions();
+
+        let shards = selected.iter().filter(|tx| tx.subnetwork_id == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD).count();
+        let natives = selected.iter().filter(|tx| tx.subnetwork_id == SUBNETWORK_ID_NATIVE).count();
+        assert_eq!(shards, 2, "attestation-shard budget must cap shard txs at 2");
+        assert_eq!(natives, 10, "the shard budget must not affect non-shard txs");
+
+        // With the budget at 0 (unlimited / overlay off), all 6 shards are eligible.
+        let transactions = (0..10)
+            .map(|i| create_transaction(SOMPI_PER_KASPA * (i + 1) as u64))
+            .chain((0..6).map(|i| create_shard_transaction(SOMPI_PER_KASPA * (100 + i) as u64)))
+            .collect_vec();
+        let mut selector = RebalancingWeightedTransactionSelector::new(Policy::new(100_000), transactions);
+        let selected = selector.select_transactions();
+        let shards = selected.iter().filter(|tx| tx.subnetwork_id == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD).count();
+        assert_eq!(shards, 6, "with an unlimited budget all shard txs are eligible");
     }
 }
