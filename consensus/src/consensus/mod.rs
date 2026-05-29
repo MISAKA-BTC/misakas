@@ -59,8 +59,7 @@ use kaspa_consensus_core::{
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
         DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget, ValidatorCommittee, ValidatorRecord,
-        dns_confirmation_from_state, is_bond_active_at, select_committee_for_epoch, stake_attestation_message,
-        validator_set_commitment,
+        dns_confirmation_from_state, is_bond_active_at, stake_attestation_message, validator_set_commitment,
     },
     errors::{
         coinbase::CoinbaseResult,
@@ -734,34 +733,36 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_validator_committee(&self) -> Option<ValidatorCommittee> {
-        // kaspa-pq Phase 11 (ADR-0010/0012): select the committee for the current
-        // epoch at the sink. The pov is the sink DAA score (so the epoch matches the
+        // kaspa-pq Phase 13 (ADR-0017): all active-bond validators attest every
+        // epoch — there is no sortition committee. Return the full active set at
+        // the sink (the pov is the sink DAA score so the epoch matches the
         // attestation target the validator will sign for).
         let dns_params = self.config.params.dns_params.as_ref()?;
         let pov_daa_score = self.get_sink_daa_score_timestamp().daa_score;
         let epoch = pov_daa_score / dns_params.epoch_length_blocks.max(1);
 
         let active = self.dns_active_validator_records(pov_daa_score);
-        let committee_size = dns_params.committee_size as usize;
-        let members = select_committee_for_epoch(epoch, dns_params.sortition_mode, &active, committee_size)?;
-        Some(ValidatorCommittee { epoch, pov_daa_score, committee_size, active_validator_count: active.len(), members })
+        let active_validator_count = active.len();
+        let mut members: Vec<_> = active.into_iter().map(|r| r.validator_id).collect();
+        members.sort();
+        Some(ValidatorCommittee { epoch, pov_daa_score, committee_size: active_validator_count, active_validator_count, members })
     }
 
     fn get_validator_attestation_target(&self, bond_outpoint: TransactionOutpoint) -> Option<ValidatorAttestationTarget> {
-        // kaspa-pq Phase 11 (ADR-0010): assemble the exact message the validator must
-        // sign for the current sink — bound to network (genesis hash), epoch, target
-        // anchor, and the committee commitment — so it matches the virtual_processor
-        // verifier byte-for-byte. The service only signs `message`.
+        // kaspa-pq Phase 11 (ADR-0010/0017): assemble the exact message the validator
+        // must sign for the current sink — bound to network (genesis hash), epoch,
+        // target anchor, and the active-validator-set commitment — so it matches the
+        // virtual_processor verifier byte-for-byte. The service only signs `message`.
         let dns_params = self.config.params.dns_params.as_ref()?;
         let target_hash = self.get_sink();
         let target_daa_score = self.get_sink_daa_score_timestamp().daa_score;
         let epoch = target_daa_score / dns_params.epoch_length_blocks.max(1);
 
+        // ADR-0017: the VSC commits to the full active validator set (no committee
+        // subset). `validator_set_commitment` sorts internally, so caller order
+        // does not matter.
         let active = self.dns_active_validator_records(target_daa_score);
-        let committee = select_committee_for_epoch(epoch, dns_params.sortition_mode, &active, dns_params.committee_size as usize)?;
-        // Commit over the committee snapshot (the set the attestation binds to).
-        let committee_records: Vec<ValidatorRecord> = active.into_iter().filter(|r| committee.contains(&r.validator_id)).collect();
-        let vsc = validator_set_commitment(epoch, &committee_records);
+        let vsc = validator_set_commitment(epoch, &active);
 
         // ADR-0009 Addendum A.3: network discriminator := the per-network genesis hash.
         let message = stake_attestation_message(

@@ -6,7 +6,7 @@ pub use super::{
 use crate::{
     BlockLevel, BlueWorkType, KType,
     constants::STORAGE_MASS_PARAMETER,
-    dns_finality::{DnsParams, MAX_ATTESTATIONS_PER_SHARD, RewardParams, STAKE_SCORE_SCALE, SortitionMode, StakeScore},
+    dns_finality::{DnsParams, MAX_ATTESTATIONS_PER_SHARD, RewardParams, STAKE_SCORE_SCALE, StakeScore},
     network::{NetworkId, NetworkType},
 };
 use kaspa_addresses::Prefix;
@@ -785,16 +785,6 @@ pub const DEVNET_PARAMS: Params = Params {
         unbonding_period_blocks: 700, // > R + E
         max_attestations_per_block: MAX_ATTESTATIONS_PER_SHARD as u16,
         max_attestation_shard_mass: 50_000,
-        sortition_mode: SortitionMode::Deterministic,
-        commit_window_blocks: 30,
-        reveal_window_blocks: 30,
-        min_reveal_threshold_num: 2,
-        min_reveal_threshold_denom: 3,
-        committee_size: 16,
-        commit_reveal_lookahead_epochs: 2,
-        commit_without_reveal_slash_sompi: 50_000_000_000,
-        unreveal_reporter_reward_sompi: 100_000_000,
-        commit_reveal_activation_daa_score: None,
         // 6 epochs of recency/uniqueness window (epoch_length 100 × 6). Not
         // load-bearing while the gate is dormant.
         reward_uniqueness_window_blocks: 600,
