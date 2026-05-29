@@ -767,6 +767,50 @@ Equivocation only; the unreveal case fixes `S =
 commit_without_reveal_slash_sompi` and is tied to the sortition
 machinery (ADR-0012).
 
+### C.1.5 Strict inclusion discipline (binding — sharpens C.1.3)
+
+C.1.2 makes the per-transaction validator *permissive*: any
+`SUBNETWORK_ID_SLASHING_EVIDENCE` transaction may mint at output-0 once
+the overlay is active. C.1.3 pins what an **effective** slash must mint.
+The gap between them — a genuine-but-ineffective slashing transaction
+that nonetheless mints — is the supply-safety boundary, because a mint
+with no matching stake removal inflates supply. C.1.5 closes it by
+making **inclusion** itself strict, mirroring the §B.4 attestation
+reward-eligibility rule ("included ⇒ effective, else the block is
+invalid").
+
+A `SUBNETWORK_ID_SLASHING_EVIDENCE` transaction is **effective** in a
+block iff **all** hold:
+
+1. it is **genuine** — its bond resolves in the block's selected-parent
+   bond view and both equivocating attestations ML-DSA-verify (the
+   existing `slashing_evidence_genuine` rule, run first);
+2. its bond resolves to **`Active` or `Unbonding`** (per
+   `effective_bond_status` at the block's `daa_score`) — the only
+   states still holding a removable locked output-0; and
+3. it is the **first** slashing transaction, in canonical block order,
+   targeting that `bond_outpoint` — **no two slashing transactions in
+   one block may target the same bond** (a bond is slashed at most once
+   per block; the would-be second removal/mint is rejected, not
+   silently collapsed).
+
+**A block that contains any non-effective slashing transaction is
+invalid** (a new `RuleError`). For each effective transaction, C.1.3
+applies unchanged: its output-0 must equal the expected reporter output
+exactly (`value == R`, `script_public_key ==
+p2pkh_mldsa65_spk(payload)`); `R == 0` ⇒ no minted output.
+
+This makes "included ⇒ effective ∧ mints exactly `R` at output-0" a
+consensus invariant, so the C step-2 removal (one per bond, C.1.4
+row b2-iv) maps **1:1** to a minted reporter — no inflation, and the
+block rule needs **no transaction input amounts** (it never has to ask
+"did this transaction mint?", because an included slashing transaction
+that is not an exact-`R` effective slash is simply rejected). An honest
+block template therefore drops stale, duplicate, or
+non-`Active`/`Unbonding`-bond slashing transactions before assembly
+(a pre-filter mirroring `retain_reward_eligible_attestation_shards`),
+so honest templates always yield valid blocks.
+
 ### Implementation slots (PR-10.12)
 
 | Sub-PR | Title | Gated? |
