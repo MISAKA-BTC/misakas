@@ -2046,6 +2046,51 @@ pub fn slashing_side_effects_from_evidence(
     effects
 }
 
+/// Resolve a block's equivocation-slashing side-effects from its accepted
+/// slashing evidence and the block's selected-parent active-bond view
+/// (ADR-0013 Addendum C / ADR-0016 §D.4).
+///
+/// Each evidence's *genuineness* (its bond resolves and both equivocating
+/// attestations ML-DSA-verify) is a **separate** block-validity rule
+/// (`slashing_evidence_genuine` in the virtual processor) that rejects the
+/// block before any side-effect is applied, so resolution may assume
+/// genuineness and only needs to fix `S` and the reporter payload. For each
+/// accepted evidence whose bond resolves to `Active` or `Unbonding` (per
+/// [`effective_bond_status`] at the block's `daa_score`) — the only states
+/// still holding a removable locked output-0 — `S` is the bond's `amount` and
+/// the reporter payload is taken from the evidence. A bond that is `Pending`,
+/// already `Slashed`, or unknown in the view yields no side-effect, so a stake
+/// is never removed twice. The resolved `(bond_outpoint, S, payload)` triples
+/// (in canonical block order) are handed to
+/// [`slashing_side_effects_from_evidence`], which applies within-block
+/// `bond_outpoint` uniqueness and computes each reporter output + burn.
+///
+/// Equivocation only — `unreveal_floor` is `None`. (The unreveal case fixes
+/// `S` at `commit_without_reveal_slash_sompi` and is tied to the sortition
+/// machinery, ADR-0012.) Pure and DAG-free, so the slashing-tx **construction**
+/// and **validation** paths produce identical side-effects. With no accepted
+/// evidence it returns nothing, so on every current network (overlay dormant)
+/// it is a no-op.
+pub fn resolve_slashing_side_effects(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    daa_score: u64,
+    slashing_reporter_reward_bps: u16,
+) -> Vec<SlashingSideEffect> {
+    let mut resolved: Vec<(TransactionOutpoint, u64, [u8; 32])> = Vec::new();
+    for ev in slashing_evidence_from_accepted_txs(txs) {
+        let Some(bond) = bond_view.get(&ev.bond_outpoint) else {
+            continue;
+        };
+        // Only a bond whose stake is still locked (Active/Unbonding) has a
+        // removable output-0 UTXO; Pending/Slashed/unknown contribute nothing.
+        if matches!(effective_bond_status(bond, daa_score), BondStatus::Active | BondStatus::Unbonding) {
+            resolved.push((ev.bond_outpoint, bond.amount, ev.reporter_reward_spk_payload));
+        }
+    }
+    slashing_side_effects_from_evidence(&resolved, slashing_reporter_reward_bps, None)
+}
+
 // ---------------------------------------------------------------------
 // Consensus rule implementations (PR-10.5).
 //
@@ -5101,6 +5146,90 @@ mod tests {
     #[test]
     fn slashing_side_effects_empty_is_noop() {
         assert!(slashing_side_effects_from_evidence(&[], 1000, None).is_empty());
+    }
+
+    // ---- resolve_slashing_side_effects (Addendum C / D.4): resolve a block's
+    // accepted evidence against its selected-parent bond view. Genuineness is a
+    // separate rule, so these only exercise the bond-status resolution.
+
+    // A slashing-evidence tx referencing `op` as its bond, paying `reporter`.
+    fn evidence_tx_for(op: TransactionOutpoint, reporter: [u8; 32]) -> Transaction {
+        let ev = SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: op,
+            attestation_a: fixture_attestation(),
+            attestation_b: fixture_attestation(),
+            reporter_reward_spk_payload: reporter,
+        };
+        dns_overlay_tx(SUBNETWORK_ID_SLASHING_EVIDENCE, borsh::to_vec(&ev).unwrap())
+    }
+
+    // fixture_bond: amount = 100_000_000_000, activation = 5_000.
+    const RESOLVE_DAA: u64 = 10_000;
+
+    #[test]
+    fn resolve_slashing_side_effects_active_bond_yields_removal() {
+        // Bond Active at the block DAA (activation 5_000 < 10_000) ⇒ one
+        // side-effect, S = amount, reporter = 10% to the evidence's payload.
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
+        let effects = resolve_slashing_side_effects(&[evidence_tx_for(op, [0xab; 32])], &view, RESOLVE_DAA, 1000);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].bond_outpoint, op);
+        assert_eq!(effects[0].slashed_amount_sompi, 100_000_000_000);
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().value, 10_000_000_000);
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa65_spk(&[0xab; 32]));
+        assert_eq!(effects[0].burned_sompi, 90_000_000_000);
+    }
+
+    #[test]
+    fn resolve_slashing_side_effects_unbonding_bond_is_slashable() {
+        // An Unbonding bond (unbond requested, far from release) still holds a
+        // removable stake ⇒ slashable, so a validator cannot escape a slash by
+        // unbonding first (ADR-0016 §D.3/§D.4).
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x22; 64]), 0);
+        let mut b = fixture_bond_record(op);
+        b.unbond_request_daa_score = Some(RESOLVE_DAA - 1); // release = +unbonding_period ≫ DAA.
+        assert_eq!(effective_bond_status(&b, RESOLVE_DAA), BondStatus::Unbonding);
+        let view = ActiveBondView::from_records([(op, b)]);
+        let effects = resolve_slashing_side_effects(&[evidence_tx_for(op, [0xcd; 32])], &view, RESOLVE_DAA, 1000);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].slashed_amount_sompi, 100_000_000_000);
+    }
+
+    #[test]
+    fn resolve_slashing_side_effects_skips_pending_bond() {
+        // A Pending bond (DAA below activation) is not yet slashable-for-
+        // distribution ⇒ no side-effect.
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x33; 64]), 0);
+        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
+        assert!(resolve_slashing_side_effects(&[evidence_tx_for(op, [0x01; 32])], &view, 1_000, 1000).is_empty());
+    }
+
+    #[test]
+    fn resolve_slashing_side_effects_skips_already_slashed_bond() {
+        // An already-Slashed bond yields no side-effect: its stake was already
+        // removed, so it is never removed twice (idempotent).
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x44; 64]), 0);
+        let mut b = fixture_bond_record(op);
+        b.slashed_at_daa_score = Some(6_000);
+        b.status = BondStatus::Slashed;
+        let view = ActiveBondView::from_records([(op, b)]);
+        assert!(resolve_slashing_side_effects(&[evidence_tx_for(op, [0x02; 32])], &view, RESOLVE_DAA, 1000).is_empty());
+    }
+
+    #[test]
+    fn resolve_slashing_side_effects_skips_unknown_bond() {
+        // Evidence whose bond is absent from the view contributes nothing. (The
+        // genuineness rule would already reject such a block.)
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x55; 64]), 0);
+        assert!(resolve_slashing_side_effects(&[evidence_tx_for(op, [0x03; 32])], &ActiveBondView::new(), RESOLVE_DAA, 1000).is_empty());
+    }
+
+    #[test]
+    fn resolve_slashing_side_effects_empty_without_evidence() {
+        let native = dns_overlay_tx(SubnetworkId::from_byte(0), vec![]);
+        assert!(resolve_slashing_side_effects(&[native], &ActiveBondView::new(), RESOLVE_DAA, 1000).is_empty());
     }
 
     // ---- Coordinated-failover protocol (ADR-0014) -----------------
