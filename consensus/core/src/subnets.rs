@@ -70,6 +70,15 @@ impl SubnetworkId {
     pub fn is_builtin_or_native(&self) -> bool {
         self.is_native() || self.is_builtin()
     }
+
+    /// kaspa-pq Phase 10 (ADR-0009): true for the DNS finality overlay
+    /// subnetworks (stake-bond / attestation-shard / slashing-evidence).
+    /// These are validated by full nodes but are **not** `is_builtin()`
+    /// (neither coinbase nor the zero-gas registry subnetwork).
+    #[inline]
+    pub fn is_dns_overlay(&self) -> bool {
+        *self == SUBNETWORK_ID_STAKE_BOND || *self == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD || *self == SUBNETWORK_ID_SLASHING_EVIDENCE
+    }
 }
 
 #[derive(Error, Debug, Clone)]
@@ -135,3 +144,11 @@ pub const SUBNETWORK_ID_COINBASE: SubnetworkId = SubnetworkId::from_byte(1);
 
 /// The subnetwork ID which is used for adding new sub networks to the registry
 pub const SUBNETWORK_ID_REGISTRY: SubnetworkId = SubnetworkId::from_byte(2);
+
+// kaspa-pq Phase 10 (ADR-0009) DNS finality overlay subnetwork ids. Byte
+// values 0x10/0x11/0x12 avoid the upstream built-ins (0/1/2) and the
+// test-only 3. Routed + payload-validated by full nodes (see
+// `dns_finality::dns_tx_kind` + `validate_*_payload`).
+pub const SUBNETWORK_ID_STAKE_BOND: SubnetworkId = SubnetworkId::from_byte(0x10);
+pub const SUBNETWORK_ID_STAKE_ATTESTATION_SHARD: SubnetworkId = SubnetworkId::from_byte(0x11);
+pub const SUBNETWORK_ID_SLASHING_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x12);

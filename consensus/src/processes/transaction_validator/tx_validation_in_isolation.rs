@@ -1,4 +1,7 @@
 use crate::constants::{MAX_SOMPI, TX_VERSION};
+use kaspa_consensus_core::dns_finality::{
+    DnsTxKind, dns_tx_kind, validate_slashing_evidence_payload, validate_stake_attestation_shard_payload, validate_stake_bond_payload,
+};
 use kaspa_consensus_core::tx::Transaction;
 use std::collections::HashSet;
 
@@ -155,6 +158,19 @@ fn check_transaction_output_value_ranges(tx: &Transaction) -> TxResult<()> {
 
 fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
     if tx.is_coinbase() || tx.subnetwork_id.is_native() {
+        Ok(())
+    } else if let Some(kind) = dns_tx_kind(&tx.subnetwork_id) {
+        // kaspa-pq Phase 10 (ADR-0009): DNS finality overlay subnetworks are
+        // routed + stateless-validated by full nodes (unlike the upstream
+        // `SubnetworksDisabled` blanket reject). Stateful checks — on-chain
+        // bond existence, rollout-stage gating, ML-DSA-65 signature
+        // verification, the `U ≥ R + E` dominance bound — land in later PRs.
+        match kind {
+            DnsTxKind::StakeBond => validate_stake_bond_payload(&tx.payload),
+            DnsTxKind::StakeAttestationShard => validate_stake_attestation_shard_payload(&tx.payload),
+            DnsTxKind::SlashingEvidence => validate_slashing_evidence_payload(&tx.payload),
+        }
+        .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())
     } else {
         Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()))
@@ -320,5 +336,77 @@ mod tests {
         let mut tx = valid_tx;
         tx.version = TX_VERSION + 1;
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::UnknownTxVersion(_)));
+    }
+
+    /// kaspa-pq Phase 10 (ADR-0009): a transaction routed by a DNS finality
+    /// overlay subnetwork is accepted when its payload passes stateless
+    /// validation, and rejected with `InvalidDnsOverlayPayload` (not the
+    /// upstream blanket `SubnetworksDisabled`) when it does not. Exhaustive
+    /// per-field payload coverage lives in `kaspa_consensus_core::dns_finality`;
+    /// this test only confirms the consensus-layer wiring.
+    #[test]
+    fn validate_dns_overlay_subnetwork_tx() {
+        use kaspa_consensus_core::dns_finality::{DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondPayload};
+        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
+        use kaspa_hashes::Hash64;
+
+        let params = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.ghostdag_k(),
+            Default::default(),
+        );
+
+        // A native funding-style tx (one input, one output) reused as the
+        // carrier; only `subnetwork_id` + `payload` vary across cases.
+        let base = Transaction::new(
+            0,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
+                signature_script: vec![0u8; 64],
+                sequence: u64::MAX,
+                sig_op_count: 0,
+            }],
+            vec![TransactionOutput { value: 0x2123e300, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x76, 0xa9, 0x14)) }],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+
+        // Well-formed stake-bond payload → accepted.
+        let bond = StakeBondPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            owner_pubkey_hash: Hash64::from_bytes([0xaau8; 64]),
+            validator_pubkey_hash: Hash64::from_bytes([0xbbu8; 64]),
+            validator_pubkey: vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN],
+            amount: 1_000,
+            activation_daa_score: 0,
+            unbonding_period_blocks: 1,
+        };
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
+        tx.payload = borsh::to_vec(&bond).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Malformed stake-bond payload (zero amount) → InvalidDnsOverlayPayload.
+        let mut bad = bond.clone();
+        bad.amount = 0;
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
+        tx.payload = borsh::to_vec(&bad).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::ZeroBondAmount)));
+
+        // Undecodable bytes on a DNS subnetwork → InvalidDnsOverlayPayload(Decode),
+        // proving the id is routed to the validators rather than rejected outright.
+        let mut tx = base;
+        tx.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
+        tx.payload = vec![0xffu8, 0x00];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::Decode)));
     }
 }

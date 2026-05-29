@@ -1,4 +1,5 @@
 use crate::constants::MAX_SOMPI;
+use crate::dns_finality::DnsTxError;
 use crate::subnets::SubnetworkId;
 use crate::tx::TransactionOutpoint;
 use kaspa_txscript_errors::TxScriptError;
@@ -95,6 +96,12 @@ pub enum TxRuleError {
 
     #[error("transaction subnetwork id {0} is neither native nor coinbase")]
     SubnetworksDisabled(SubnetworkId),
+
+    /// kaspa-pq Phase 10 (ADR-0009): a transaction routed by a DNS finality
+    /// overlay subnetwork carried a payload that failed stateless validation
+    /// (see [`crate::dns_finality::dns_tx_kind`] + `validate_*_payload`).
+    #[error("transaction has an invalid DNS finality overlay payload: {0}")]
+    InvalidDnsOverlayPayload(DnsTxError),
 
     /// [`TxRuleError::FeerateTooLow`] is not a consensus error but a mempool error triggered by the
     /// fee/mass RBF validation rule

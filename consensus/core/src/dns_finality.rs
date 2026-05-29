@@ -55,6 +55,7 @@ use blake2b_simd::Params as Blake2bParams;
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
 
+use crate::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SubnetworkId};
 use crate::{BlueWorkType, tx::TransactionOutpoint};
 
 /// 1952 bytes — matches `kaspa_txscript::MLDSA65_PK_LEN`. Repeated
@@ -1781,6 +1782,205 @@ pub fn check_dns_reorg_rule(inputs: &DnsReorgInputs) -> DnsReorgOutcome {
     }
 }
 
+// =====================================================================
+// PR-10.4: DNS finality overlay transaction kinds + stateless payload
+// validation (ADR-0009 §"On-chain artefacts").
+//
+// `dns_tx_kind` maps a routed subnetwork id to its payload kind; the
+// three `validate_*_payload` functions perform *stateless* checks only:
+// borsh-decodability, payload version, the fixed ML-DSA length
+// invariants (1952-byte pubkey / 3309-byte signature), shard cardinality
+// + single-anchor tuple consistency, and equivocation well-formedness.
+// The consensus pipeline calls these from `check_transaction_subnetwork`
+// (PR-10.4 wiring in `tx_validation_in_isolation.rs`).
+//
+// Deferred to later PRs (they need DAG / UTXO / rollout context): the
+// on-chain bond existence + `pubkey_hash == BLAKE2b-512(pubkey)` binding,
+// rollout-stage gating, ML-DSA-65 signature verification against the
+// committed validator set, the `U ≥ R + E` dominance bound, the
+// `(bond_outpoint, validator_id, epoch)` on-chain uniqueness rule, and
+// the `evidence_window_blocks` recency of slashing evidence.
+// =====================================================================
+
+/// Payload kind carried by a DNS finality overlay transaction, keyed by
+/// its routed subnetwork id (`SubnetworkId::is_dns_overlay`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DnsTxKind {
+    /// `SUBNETWORK_ID_STAKE_BOND` — [`StakeBondPayload`].
+    StakeBond,
+    /// `SUBNETWORK_ID_STAKE_ATTESTATION_SHARD` — [`StakeAttestationShardPayload`].
+    StakeAttestationShard,
+    /// `SUBNETWORK_ID_SLASHING_EVIDENCE` — [`SlashingEvidencePayload`].
+    SlashingEvidence,
+}
+
+/// Maps a subnetwork id to its DNS overlay payload kind, or `None` for a
+/// non-overlay subnetwork (native / coinbase / registry / unknown). The
+/// mirror of [`SubnetworkId::is_dns_overlay`] that also names the kind.
+pub fn dns_tx_kind(subnetwork_id: &SubnetworkId) -> Option<DnsTxKind> {
+    if *subnetwork_id == SUBNETWORK_ID_STAKE_BOND {
+        Some(DnsTxKind::StakeBond)
+    } else if *subnetwork_id == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD {
+        Some(DnsTxKind::StakeAttestationShard)
+    } else if *subnetwork_id == SUBNETWORK_ID_SLASHING_EVIDENCE {
+        Some(DnsTxKind::SlashingEvidence)
+    } else {
+        None
+    }
+}
+
+/// Stateless validation failure for a DNS overlay transaction payload.
+/// The consensus tx-validation layer wraps this in
+/// `TxRuleError::InvalidDnsOverlayPayload`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DnsTxError {
+    /// Payload bytes did not borsh-decode into the expected type (also
+    /// fires on trailing bytes after an otherwise-valid prefix).
+    Decode,
+    /// The `version` field is not `DNS_PAYLOAD_VERSION_V1`.
+    UnsupportedVersion(u16),
+    /// Stake-bond amount is zero (a bond must lock non-zero stake).
+    ZeroBondAmount,
+    /// Validator public key is not exactly `STAKE_VALIDATOR_PUBKEY_LEN`.
+    InvalidPubKeyLen(usize),
+    /// An attestation signature is not exactly `STAKE_ATTESTATION_SIG_LEN`.
+    InvalidSignatureLen(usize),
+    /// An attestation shard carries no attestations.
+    EmptyShard,
+    /// An attestation shard exceeds `MAX_ATTESTATIONS_PER_SHARD`.
+    ShardTooLarge(usize),
+    /// An attestation in a shard does not match the shard's
+    /// `(epoch, target_hash, validator_set_commitment)` tuple.
+    ShardTupleMismatch,
+    /// The two attestations in slashing evidence do not share the same
+    /// `(bond_outpoint, validator_id, epoch)` triple.
+    EvidenceTripleMismatch,
+    /// The two attestations approve the same anchor — not equivocation,
+    /// so they are not slashable evidence.
+    EvidenceNotIncompatible,
+}
+
+impl Display for DnsTxError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            DnsTxError::Decode => write!(f, "DNS overlay payload failed to decode"),
+            DnsTxError::UnsupportedVersion(v) => write!(f, "unsupported DNS overlay payload version {v}"),
+            DnsTxError::ZeroBondAmount => write!(f, "stake-bond amount must be non-zero"),
+            DnsTxError::InvalidPubKeyLen(n) => write!(f, "validator public key length {n} is invalid"),
+            DnsTxError::InvalidSignatureLen(n) => write!(f, "attestation signature length {n} is invalid"),
+            DnsTxError::EmptyShard => write!(f, "attestation shard is empty"),
+            DnsTxError::ShardTooLarge(n) => write!(f, "attestation shard has {n} attestations, above the maximum"),
+            DnsTxError::ShardTupleMismatch => write!(f, "attestation does not match the shard's anchor tuple"),
+            DnsTxError::EvidenceTripleMismatch => {
+                write!(f, "slashing evidence attestations are not from the same (bond, validator, epoch) triple")
+            }
+            DnsTxError::EvidenceNotIncompatible => write!(f, "slashing evidence attestations approve the same anchor"),
+        }
+    }
+}
+
+/// Borsh-decode a DNS overlay payload, mapping any decode failure (bad
+/// bytes *or* trailing data — `borsh::from_slice` rejects both) to
+/// [`DnsTxError::Decode`].
+fn decode_dns_payload<T: BorshDeserialize>(payload: &[u8]) -> Result<T, DnsTxError> {
+    borsh::from_slice::<T>(payload).map_err(|_| DnsTxError::Decode)
+}
+
+/// Per-attestation version + ML-DSA signature-length invariants, shared
+/// by the shard and the slashing-evidence validators.
+fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError> {
+    if att.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(att.version));
+    }
+    if att.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+        return Err(DnsTxError::InvalidSignatureLen(att.signature.len()));
+    }
+    Ok(())
+}
+
+/// Stateless validation of a [`StakeBondPayload`] (subnetwork
+/// `SUBNETWORK_ID_STAKE_BOND`): decodability, payload version, non-zero
+/// bonded amount, and the fixed 1952-byte ML-DSA-65 validator
+/// public-key length. The `validator_pubkey_hash ==
+/// BLAKE2b-512(validator_pubkey)` and `owner_pubkey_hash`↔funding-input
+/// bindings are deferred to the stateful PR.
+pub fn validate_stake_bond_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    let bond: StakeBondPayload = decode_dns_payload(payload)?;
+    if bond.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(bond.version));
+    }
+    if bond.amount == 0 {
+        return Err(DnsTxError::ZeroBondAmount);
+    }
+    if bond.validator_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
+        return Err(DnsTxError::InvalidPubKeyLen(bond.validator_pubkey.len()));
+    }
+    Ok(())
+}
+
+/// Stateless validation of a [`StakeAttestationShardPayload`] (subnetwork
+/// `SUBNETWORK_ID_STAKE_ATTESTATION_SHARD`): decodability, payload
+/// version, shard cardinality (`1..=MAX_ATTESTATIONS_PER_SHARD`), and
+/// that every attestation is well-formed **and** shares the shard's
+/// `(epoch, target_hash, validator_set_commitment)` tuple — the PR-10.4
+/// single-anchor-per-shard rule. Signature verification and the
+/// `(bond_outpoint, validator_id, epoch)` on-chain uniqueness rule are
+/// deferred to the stateful PR.
+pub fn validate_stake_attestation_shard_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    let shard: StakeAttestationShardPayload = decode_dns_payload(payload)?;
+    if shard.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(shard.version));
+    }
+    if shard.attestations.is_empty() {
+        return Err(DnsTxError::EmptyShard);
+    }
+    if shard.attestations.len() > MAX_ATTESTATIONS_PER_SHARD {
+        return Err(DnsTxError::ShardTooLarge(shard.attestations.len()));
+    }
+    for att in &shard.attestations {
+        check_attestation_wellformed(att)?;
+        if att.epoch != shard.epoch
+            || att.target_hash != shard.target_hash
+            || att.validator_set_commitment != shard.validator_set_commitment
+        {
+            return Err(DnsTxError::ShardTupleMismatch);
+        }
+    }
+    Ok(())
+}
+
+/// Stateless validation of a [`SlashingEvidencePayload`] (subnetwork
+/// `SUBNETWORK_ID_SLASHING_EVIDENCE`): decodability, payload version,
+/// both attestations well-formed and sharing the same
+/// `(bond_outpoint, validator_id, epoch)` triple (bound to the payload's
+/// own `bond_outpoint`), and *incompatible* — approving different anchors
+/// (`target_hash` differs), which is the equivocation being punished.
+/// Signature verification and the `evidence_window_blocks` recency check
+/// are deferred to the stateful PR.
+pub fn validate_slashing_evidence_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    let ev: SlashingEvidencePayload = decode_dns_payload(payload)?;
+    if ev.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(ev.version));
+    }
+    check_attestation_wellformed(&ev.attestation_a)?;
+    check_attestation_wellformed(&ev.attestation_b)?;
+    let (a, b) = (&ev.attestation_a, &ev.attestation_b);
+    // Same (bond_outpoint, validator_id, epoch) triple, both bound to the
+    // payload's own bond_outpoint.
+    if a.bond_outpoint != ev.bond_outpoint
+        || b.bond_outpoint != ev.bond_outpoint
+        || a.validator_id != b.validator_id
+        || a.epoch != b.epoch
+    {
+        return Err(DnsTxError::EvidenceTripleMismatch);
+    }
+    // Incompatible == different anchors at the same epoch (equivocation).
+    if a.target_hash == b.target_hash {
+        return Err(DnsTxError::EvidenceNotIncompatible);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2051,6 +2251,181 @@ mod tests {
         let bytes = borsh::to_vec(&evidence).unwrap();
         let back: SlashingEvidencePayload = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, evidence);
+    }
+
+    // ---- PR-10.4: DNS overlay tx kinds + stateless payload validation ----
+
+    fn fixture_bond() -> StakeBondPayload {
+        StakeBondPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            owner_pubkey_hash: Hash64::from_bytes([0xaau8; 64]),
+            validator_pubkey_hash: Hash64::from_bytes([0xbbu8; 64]),
+            validator_pubkey: vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN],
+            amount: 100_000_000_000,
+            activation_daa_score: 5_000,
+            unbonding_period_blocks: 100_000,
+        }
+    }
+
+    fn fixture_shard(n: usize) -> StakeAttestationShardPayload {
+        StakeAttestationShardPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            epoch: 7,
+            target_hash: Hash64::from_bytes([0x11u8; 64]),
+            target_daa_score: 1_234_567,
+            validator_set_commitment: Hash64::from_bytes([0x22u8; 64]),
+            attestations: vec![fixture_attestation(); n],
+        }
+    }
+
+    fn fixture_evidence() -> SlashingEvidencePayload {
+        SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: fixture_outpoint(),
+            attestation_a: fixture_attestation(),
+            attestation_b: {
+                let mut b = fixture_attestation();
+                b.target_hash = Hash64::from_bytes([0x33u8; 64]); // different anchor → equivocation
+                b
+            },
+        }
+    }
+
+    #[test]
+    fn dns_tx_kind_maps_overlay_subnetworks() {
+        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_STAKE_BOND), Some(DnsTxKind::StakeBond));
+        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_STAKE_ATTESTATION_SHARD), Some(DnsTxKind::StakeAttestationShard));
+        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_SLASHING_EVIDENCE), Some(DnsTxKind::SlashingEvidence));
+        // Non-overlay subnetworks (native=0, coinbase=1, registry=2, unknown=3) → None.
+        for b in [0u8, 1, 2, 3] {
+            assert_eq!(dns_tx_kind(&SubnetworkId::from_byte(b)), None);
+        }
+        // dns_tx_kind agrees with the SubnetworkId::is_dns_overlay predicate.
+        assert!(SUBNETWORK_ID_STAKE_BOND.is_dns_overlay());
+        assert!(!SubnetworkId::from_byte(0).is_dns_overlay());
+    }
+
+    #[test]
+    fn validate_stake_bond_payload_accepts_wellformed() {
+        let bytes = borsh::to_vec(&fixture_bond()).unwrap();
+        assert_eq!(validate_stake_bond_payload(&bytes), Ok(()));
+    }
+
+    #[test]
+    fn validate_stake_bond_payload_rejects_malformed() {
+        // Undecodable bytes.
+        assert_eq!(validate_stake_bond_payload(&[0xff, 0x00, 0x12]), Err(DnsTxError::Decode));
+        // Bad version.
+        let mut bad = fixture_bond();
+        bad.version = 2;
+        assert_eq!(validate_stake_bond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::UnsupportedVersion(2)));
+        // Zero bonded amount.
+        let mut bad = fixture_bond();
+        bad.amount = 0;
+        assert_eq!(validate_stake_bond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ZeroBondAmount));
+        // Wrong validator pubkey length.
+        let mut bad = fixture_bond();
+        bad.validator_pubkey = vec![0u8; STAKE_VALIDATOR_PUBKEY_LEN - 1];
+        assert_eq!(
+            validate_stake_bond_payload(&borsh::to_vec(&bad).unwrap()),
+            Err(DnsTxError::InvalidPubKeyLen(STAKE_VALIDATOR_PUBKEY_LEN - 1))
+        );
+    }
+
+    #[test]
+    fn validate_attestation_shard_accepts_wellformed() {
+        // The MAX-sized shard and the single-attestation lower bound both pass.
+        assert_eq!(
+            validate_stake_attestation_shard_payload(&borsh::to_vec(&fixture_shard(MAX_ATTESTATIONS_PER_SHARD)).unwrap()),
+            Ok(())
+        );
+        assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&fixture_shard(1)).unwrap()), Ok(()));
+    }
+
+    #[test]
+    fn validate_attestation_shard_rejects_malformed() {
+        // Undecodable.
+        assert_eq!(validate_stake_attestation_shard_payload(&[0x00]), Err(DnsTxError::Decode));
+        // Empty shard.
+        assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&fixture_shard(0)).unwrap()), Err(DnsTxError::EmptyShard));
+        // Over the cardinality cap.
+        let over = MAX_ATTESTATIONS_PER_SHARD + 1;
+        assert_eq!(
+            validate_stake_attestation_shard_payload(&borsh::to_vec(&fixture_shard(over)).unwrap()),
+            Err(DnsTxError::ShardTooLarge(over))
+        );
+        // Bad shard version.
+        let mut bad = fixture_shard(2);
+        bad.version = 9;
+        assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::UnsupportedVersion(9)));
+        // Member attestation with wrong signature length.
+        let mut bad = fixture_shard(2);
+        bad.attestations[1].signature = vec![0u8; STAKE_ATTESTATION_SIG_LEN + 1];
+        assert_eq!(
+            validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()),
+            Err(DnsTxError::InvalidSignatureLen(STAKE_ATTESTATION_SIG_LEN + 1))
+        );
+        // Member attestation that disagrees with the shard's anchor hash.
+        let mut bad = fixture_shard(2);
+        bad.attestations[1].target_hash = Hash64::from_bytes([0xee; 64]);
+        assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ShardTupleMismatch));
+        // Member attestation whose epoch disagrees.
+        let mut bad = fixture_shard(2);
+        bad.attestations[0].epoch = 999;
+        assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ShardTupleMismatch));
+    }
+
+    #[test]
+    fn validate_slashing_evidence_accepts_wellformed() {
+        assert_eq!(validate_slashing_evidence_payload(&borsh::to_vec(&fixture_evidence()).unwrap()), Ok(()));
+    }
+
+    #[test]
+    fn validate_slashing_evidence_rejects_malformed() {
+        // Undecodable.
+        assert_eq!(validate_slashing_evidence_payload(&[0x01, 0x02]), Err(DnsTxError::Decode));
+        // Bad version.
+        let mut bad = fixture_evidence();
+        bad.version = 5;
+        assert_eq!(validate_slashing_evidence_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::UnsupportedVersion(5)));
+        // Same anchor → not equivocation.
+        let mut bad = fixture_evidence();
+        bad.attestation_b.target_hash = bad.attestation_a.target_hash;
+        assert_eq!(validate_slashing_evidence_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::EvidenceNotIncompatible));
+        // Different validator_id → not the same triple.
+        let mut bad = fixture_evidence();
+        bad.attestation_b.validator_id = Hash64::from_bytes([0x5a; 64]);
+        assert_eq!(validate_slashing_evidence_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::EvidenceTripleMismatch));
+        // Different epoch → not the same triple.
+        let mut bad = fixture_evidence();
+        bad.attestation_b.epoch += 1;
+        assert_eq!(validate_slashing_evidence_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::EvidenceTripleMismatch));
+        // Payload bond_outpoint that does not match the cited attestations.
+        let mut bad = fixture_evidence();
+        bad.bond_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x01; 64]), 0);
+        assert_eq!(validate_slashing_evidence_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::EvidenceTripleMismatch));
+        // Bad signature length in the first attestation.
+        let mut bad = fixture_evidence();
+        bad.attestation_a.signature = vec![0u8; 10];
+        assert_eq!(validate_slashing_evidence_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::InvalidSignatureLen(10)));
+    }
+
+    #[test]
+    fn dns_tx_error_display_is_nonempty() {
+        for e in [
+            DnsTxError::Decode,
+            DnsTxError::UnsupportedVersion(2),
+            DnsTxError::ZeroBondAmount,
+            DnsTxError::InvalidPubKeyLen(3),
+            DnsTxError::InvalidSignatureLen(4),
+            DnsTxError::EmptyShard,
+            DnsTxError::ShardTooLarge(99),
+            DnsTxError::ShardTupleMismatch,
+            DnsTxError::EvidenceTripleMismatch,
+            DnsTxError::EvidenceNotIncompatible,
+        ] {
+            assert!(!e.to_string().is_empty());
+        }
     }
 
     #[test]
