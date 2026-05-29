@@ -57,10 +57,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
 use kaspa_utils::mem_size::MemSizeEstimator;
 
-use crate::subnets::{
-    SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_SORTITION_COMMIT, SUBNETWORK_ID_SORTITION_REVEAL,
-    SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE, SubnetworkId,
-};
+use crate::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SubnetworkId};
 use crate::{
     BlueWorkType, TransactionId,
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
@@ -2323,13 +2320,6 @@ pub enum DnsTxKind {
     StakeAttestationShard,
     /// `SUBNETWORK_ID_SLASHING_EVIDENCE` — [`SlashingEvidencePayload`].
     SlashingEvidence,
-    /// `SUBNETWORK_ID_SORTITION_COMMIT` — [`SortitionCommitPayload`] (ADR-0012).
-    SortitionCommit,
-    /// `SUBNETWORK_ID_SORTITION_REVEAL` — [`SortitionRevealPayload`] (ADR-0012).
-    SortitionReveal,
-    /// `SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE` —
-    /// [`UnrevealSlashingEvidencePayload`] (ADR-0012).
-    UnrevealSlashingEvidence,
 }
 
 /// Maps a subnetwork id to its DNS overlay payload kind, or `None` for a
@@ -2342,12 +2332,6 @@ pub fn dns_tx_kind(subnetwork_id: &SubnetworkId) -> Option<DnsTxKind> {
         Some(DnsTxKind::StakeAttestationShard)
     } else if *subnetwork_id == SUBNETWORK_ID_SLASHING_EVIDENCE {
         Some(DnsTxKind::SlashingEvidence)
-    } else if *subnetwork_id == SUBNETWORK_ID_SORTITION_COMMIT {
-        Some(DnsTxKind::SortitionCommit)
-    } else if *subnetwork_id == SUBNETWORK_ID_SORTITION_REVEAL {
-        Some(DnsTxKind::SortitionReveal)
-    } else if *subnetwork_id == SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE {
-        Some(DnsTxKind::UnrevealSlashingEvidence)
     } else {
         None
     }
@@ -2396,11 +2380,6 @@ pub enum DnsTxError {
     /// declared output (even a zero-value one) would collide with that mint.
     /// `n` is the offending output count.
     SlashingEvidenceHasOutputs(usize),
-    /// ADR-0012 §"Slashing rule": an `UnrevealSlashingEvidence` tx must declare
-    /// **no** outputs for the same reason as [`Self::SlashingEvidenceHasOutputs`]
-    /// — its reporter reward is a consensus side-effect minted at
-    /// `(unreveal_evidence_tx_id, 0)`. `n` is the offending output count.
-    UnrevealEvidenceHasOutputs(usize),
 }
 
 impl Display for DnsTxError {
@@ -2425,9 +2404,6 @@ impl Display for DnsTxError {
             DnsTxError::BondOutputScriptMismatch => write!(f, "stake-bond output-0 is not the owner's P2PKH-ML-DSA script"),
             DnsTxError::SlashingEvidenceHasOutputs(n) => {
                 write!(f, "slashing-evidence tx must declare no outputs but has {n}")
-            }
-            DnsTxError::UnrevealEvidenceHasOutputs(n) => {
-                write!(f, "unreveal-evidence tx must declare no outputs but has {n}")
             }
         }
     }
@@ -2587,67 +2563,6 @@ pub fn validate_slashing_evidence_tx(payload: &[u8], outputs: &[TransactionOutpu
     Ok(())
 }
 
-/// Stateless validation of a [`SortitionCommitPayload`] (subnetwork
-/// `SUBNETWORK_ID_SORTITION_COMMIT`, ADR-0012 §"Commit window"):
-/// decodability and payload version. The `commit` field is an opaque keyed
-/// hash whose only structural property — being a 64-byte `Hash64` — is already
-/// guaranteed by Borsh decoding, so there is nothing further to check without
-/// chain context. The commit window (`epoch_start(E−2) ≤ daa < … + commit_window_blocks`),
-/// the at-most-one-per-`(validator_id, target_epoch)` uniqueness rule, and the
-/// "validator must be active" predicate are all stateful and land in a later PR.
-///
-/// A commit tx is an ordinary fee-funded carrier (it may have inputs and a
-/// change output), so — unlike the slashing-evidence carriers — no output
-/// restriction is imposed here.
-pub fn validate_sortition_commit_payload(payload: &[u8]) -> Result<(), DnsTxError> {
-    let commit: SortitionCommitPayload = decode_dns_payload(payload)?;
-    if commit.version != DNS_PAYLOAD_VERSION_V1 {
-        return Err(DnsTxError::UnsupportedVersion(commit.version));
-    }
-    Ok(())
-}
-
-/// Stateless validation of a [`SortitionRevealPayload`] (subnetwork
-/// `SUBNETWORK_ID_SORTITION_REVEAL`, ADR-0012 §"Reveal window"):
-/// decodability and payload version. The 32-byte `reveal` secret has no
-/// stateless invariant — the binding rule "`compute_commit(reveal, target_epoch,
-/// validator_id)` equals a prior on-chain commit's `commit`" is stateful
-/// (it needs the matching `SortitionCommitPayload` from epoch `E−2`), as are the
-/// reveal window and per-`(validator_id, target_epoch)` uniqueness checks; all
-/// land in a later PR.
-///
-/// Like the commit tx, a reveal tx is an ordinary fee-funded carrier, so no
-/// output restriction is imposed here.
-pub fn validate_sortition_reveal_payload(payload: &[u8]) -> Result<(), DnsTxError> {
-    let reveal: SortitionRevealPayload = decode_dns_payload(payload)?;
-    if reveal.version != DNS_PAYLOAD_VERSION_V1 {
-        return Err(DnsTxError::UnsupportedVersion(reveal.version));
-    }
-    Ok(())
-}
-
-/// Stateless validation of a `SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE`
-/// **transaction** (ADR-0012 §"Slashing rule: commit-without-reveal"):
-/// payload decodability + version, **and** that it declares **no outputs**.
-///
-/// Like the equivocation [`validate_slashing_evidence_tx`], an unreveal-evidence
-/// tx is a pure evidence carrier whose reporter reward
-/// (`DnsParams::unreveal_reporter_reward_sompi`) is minted by consensus as a
-/// side-effect at `(unreveal_evidence_tx_id, 0)`, so any declared output would
-/// collide with that mint. The stateful part — that the named `commit_outpoint`
-/// is a real commit for `(validator_id, target_epoch)` and that **no** matching
-/// reveal landed in the reveal window — is deferred to a later PR.
-pub fn validate_unreveal_slashing_evidence_tx(payload: &[u8], outputs: &[TransactionOutput]) -> Result<(), DnsTxError> {
-    let evidence: UnrevealSlashingEvidencePayload = decode_dns_payload(payload)?;
-    if evidence.version != DNS_PAYLOAD_VERSION_V1 {
-        return Err(DnsTxError::UnsupportedVersion(evidence.version));
-    }
-    if !outputs.is_empty() {
-        return Err(DnsTxError::UnrevealEvidenceHasOutputs(outputs.len()));
-    }
-    Ok(())
-}
-
 // =====================================================================
 // PR-10.9 (foundation): pure stake-bond lifecycle helpers.
 //
@@ -2772,15 +2687,7 @@ pub fn bond_mutations_from_accepted_txs(txs: &[Transaction], accepted_daa_score:
                     muts.push(BondMutation::Slash(payload.bond_outpoint, accepted_daa_score));
                 }
             }
-            // Attestation shards feed StakeScore (A.5), not the bond set; the
-            // ADR-0012 sortition commit/reveal carriers do not mutate bonds, and
-            // the unreveal-slash bond mutation is a stateful side-effect deferred
-            // to a later PR. All produce no bond mutation here.
-            Some(DnsTxKind::StakeAttestationShard)
-            | Some(DnsTxKind::SortitionCommit)
-            | Some(DnsTxKind::SortitionReveal)
-            | Some(DnsTxKind::UnrevealSlashingEvidence)
-            | None => {}
+            Some(DnsTxKind::StakeAttestationShard) | None => {}
         }
     }
     muts
@@ -3461,27 +3368,12 @@ mod tests {
         assert_eq!(dns_tx_kind(&SUBNETWORK_ID_STAKE_BOND), Some(DnsTxKind::StakeBond));
         assert_eq!(dns_tx_kind(&SUBNETWORK_ID_STAKE_ATTESTATION_SHARD), Some(DnsTxKind::StakeAttestationShard));
         assert_eq!(dns_tx_kind(&SUBNETWORK_ID_SLASHING_EVIDENCE), Some(DnsTxKind::SlashingEvidence));
-        // ADR-0012 commit-reveal sortition subnetworks (0x13–0x15).
-        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_SORTITION_COMMIT), Some(DnsTxKind::SortitionCommit));
-        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_SORTITION_REVEAL), Some(DnsTxKind::SortitionReveal));
-        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE), Some(DnsTxKind::UnrevealSlashingEvidence));
         // Non-overlay subnetworks (native=0, coinbase=1, registry=2, unknown=3) → None.
         for b in [0u8, 1, 2, 3] {
             assert_eq!(dns_tx_kind(&SubnetworkId::from_byte(b)), None);
         }
-        // dns_tx_kind agrees with the SubnetworkId::is_dns_overlay predicate for
-        // every overlay id (including the three sortition ids).
-        for id in [
-            SUBNETWORK_ID_STAKE_BOND,
-            SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
-            SUBNETWORK_ID_SLASHING_EVIDENCE,
-            SUBNETWORK_ID_SORTITION_COMMIT,
-            SUBNETWORK_ID_SORTITION_REVEAL,
-            SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE,
-        ] {
-            assert!(id.is_dns_overlay());
-            assert!(dns_tx_kind(&id).is_some());
-        }
+        // dns_tx_kind agrees with the SubnetworkId::is_dns_overlay predicate.
+        assert!(SUBNETWORK_ID_STAKE_BOND.is_dns_overlay());
         assert!(!SubnetworkId::from_byte(0).is_dns_overlay());
     }
 
@@ -4579,71 +4471,6 @@ mod tests {
         let bytes = borsh::to_vec(&p).unwrap();
         let back: UnrevealSlashingEvidencePayload = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, p);
-    }
-
-    // ---- ADR-0012 stateless sortition tx validators ---------------
-
-    #[test]
-    fn validate_sortition_commit_payload_accepts_and_rejects() {
-        let commit = SortitionCommitPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id: Hash64::from_bytes([0x42u8; 64]),
-            target_epoch: 99,
-            commit: Hash64::from_bytes([0xbbu8; 64]),
-        };
-        // Well-formed → Ok.
-        assert_eq!(validate_sortition_commit_payload(&borsh::to_vec(&commit).unwrap()), Ok(()));
-        // Bad version → UnsupportedVersion.
-        let mut bad = commit.clone();
-        bad.version = 2;
-        assert_eq!(validate_sortition_commit_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::UnsupportedVersion(2)));
-        // Undecodable bytes → Decode.
-        assert_eq!(validate_sortition_commit_payload(&[0xffu8, 0x00]), Err(DnsTxError::Decode));
-    }
-
-    #[test]
-    fn validate_sortition_reveal_payload_accepts_and_rejects() {
-        let reveal = SortitionRevealPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id: Hash64::from_bytes([0x42u8; 64]),
-            target_epoch: 99,
-            reveal: fixture_reveal(0xcd),
-        };
-        // Well-formed → Ok.
-        assert_eq!(validate_sortition_reveal_payload(&borsh::to_vec(&reveal).unwrap()), Ok(()));
-        // Bad version → UnsupportedVersion.
-        let mut bad = reveal.clone();
-        bad.version = 7;
-        assert_eq!(validate_sortition_reveal_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::UnsupportedVersion(7)));
-        // Undecodable bytes → Decode.
-        assert_eq!(validate_sortition_reveal_payload(&[0x01u8]), Err(DnsTxError::Decode));
-    }
-
-    #[test]
-    fn validate_unreveal_slashing_evidence_tx_accepts_and_rejects() {
-        let evidence = UnrevealSlashingEvidencePayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            target_epoch: 7,
-            validator_id: Hash64::from_bytes([0x42u8; 64]),
-            commit_outpoint: fixture_outpoint(),
-            reporter_reward_spk_payload: [0xeeu8; 32],
-        };
-        let bytes = borsh::to_vec(&evidence).unwrap();
-        // Well-formed payload + no outputs → Ok (the reporter reward is a
-        // consensus side-effect mint, so the carrier declares nothing).
-        assert_eq!(validate_unreveal_slashing_evidence_tx(&bytes, &[]), Ok(()));
-        // A declared output collides with the (tx_id, 0) mint → reject.
-        let out = vec![TransactionOutput::new(1, p2pkh_mldsa65_spk(&[0x00u8; 32]))];
-        assert_eq!(validate_unreveal_slashing_evidence_tx(&bytes, &out), Err(DnsTxError::UnrevealEvidenceHasOutputs(1)));
-        // Version is checked before the output rule.
-        let mut bad = evidence.clone();
-        bad.version = 3;
-        assert_eq!(
-            validate_unreveal_slashing_evidence_tx(&borsh::to_vec(&bad).unwrap(), &out),
-            Err(DnsTxError::UnsupportedVersion(3))
-        );
-        // Undecodable bytes → Decode.
-        assert_eq!(validate_unreveal_slashing_evidence_tx(&[0xffu8, 0x00], &[]), Err(DnsTxError::Decode));
     }
 
     // ---- compute_commit -------------------------------------------

@@ -71,20 +71,13 @@ impl SubnetworkId {
         self.is_native() || self.is_builtin()
     }
 
-    /// kaspa-pq Phase 10 (ADR-0009) + Phase 13 (ADR-0012): true for the DNS
-    /// finality overlay subnetworks — stake-bond / attestation-shard /
-    /// slashing-evidence (0x10–0x12) and the commit-reveal sortition
-    /// commit / reveal / unreveal-evidence (0x13–0x15). These are validated by
-    /// full nodes but are **not** `is_builtin()` (neither coinbase nor the
-    /// zero-gas registry subnetwork).
+    /// kaspa-pq Phase 10 (ADR-0009): true for the DNS finality overlay
+    /// subnetworks (stake-bond / attestation-shard / slashing-evidence).
+    /// These are validated by full nodes but are **not** `is_builtin()`
+    /// (neither coinbase nor the zero-gas registry subnetwork).
     #[inline]
     pub fn is_dns_overlay(&self) -> bool {
-        *self == SUBNETWORK_ID_STAKE_BOND
-            || *self == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD
-            || *self == SUBNETWORK_ID_SLASHING_EVIDENCE
-            || *self == SUBNETWORK_ID_SORTITION_COMMIT
-            || *self == SUBNETWORK_ID_SORTITION_REVEAL
-            || *self == SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE
+        *self == SUBNETWORK_ID_STAKE_BOND || *self == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD || *self == SUBNETWORK_ID_SLASHING_EVIDENCE
     }
 }
 
@@ -159,12 +152,3 @@ pub const SUBNETWORK_ID_REGISTRY: SubnetworkId = SubnetworkId::from_byte(2);
 pub const SUBNETWORK_ID_STAKE_BOND: SubnetworkId = SubnetworkId::from_byte(0x10);
 pub const SUBNETWORK_ID_STAKE_ATTESTATION_SHARD: SubnetworkId = SubnetworkId::from_byte(0x11);
 pub const SUBNETWORK_ID_SLASHING_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x12);
-
-// kaspa-pq Phase 13 (ADR-0012) commit-reveal sortition subnetwork ids,
-// continuing the overlay range at 0x13/0x14/0x15. Routed + stateless-validated
-// by full nodes exactly like their 0x10–0x12 siblings; the stateful
-// windowing / uniqueness / reveal-matching / seed-derivation rules land in
-// later PRs.
-pub const SUBNETWORK_ID_SORTITION_COMMIT: SubnetworkId = SubnetworkId::from_byte(0x13);
-pub const SUBNETWORK_ID_SORTITION_REVEAL: SubnetworkId = SubnetworkId::from_byte(0x14);
-pub const SUBNETWORK_ID_UNREVEAL_SLASHING_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x15);
