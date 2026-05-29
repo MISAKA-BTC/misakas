@@ -28,8 +28,8 @@
 //! ```
 //!
 //! `Address` is the existing kaspa-addresses WASM class; `networkId` and
-//! `networkPrefix` use the kaspa-pq prefix family (`kaspapq`,
-//! `kaspapqtest`, `kaspapqsim`, `kaspapqdev`).
+//! `networkPrefix` use the kaspa-pq prefix family (`misaka`,
+//! `misakatest`, `misakasim`, `misakadev`).
 //!
 //! Internally each `Result<_, JsValue>`-returning method delegates to a
 //! private `_inner` method that returns `Result<_, String>`. That keeps the
@@ -219,10 +219,10 @@ impl KaspaPqKeyPair {
         // test-only `a`/`b` synthetic prefixes from kaspa_addresses are
         // intentionally not part of the kaspa-pq wire vocabulary.
         let prefix = match network_prefix {
-            "kaspapq" => Prefix::Mainnet,
-            "kaspapqtest" => Prefix::Testnet,
-            "kaspapqsim" => Prefix::Simnet,
-            "kaspapqdev" => Prefix::Devnet,
+            "misaka" => Prefix::Mainnet,
+            "misakatest" => Prefix::Testnet,
+            "misakasim" => Prefix::Simnet,
+            "misakadev" => Prefix::Devnet,
             other => {
                 return Err(format!("kaspa-pq KaspaPqKeyPair.address: unsupported network prefix '{other}'"));
             }
@@ -273,8 +273,8 @@ impl KaspaPqKeyPair {
     }
 
     /// kaspa-pq P2PKH address for the given prefix string. Accepts the
-    /// kaspa-pq prefix family (`kaspapq`, `kaspapqtest`, `kaspapqsim`,
-    /// `kaspapqdev`).
+    /// kaspa-pq prefix family (`misaka`, `misakatest`, `misakasim`,
+    /// `misakadev`).
     pub fn address(&self, network_prefix: &str) -> Result<Address, JsValue> {
         self.address_inner(network_prefix).map_err(jsv)
     }
@@ -310,23 +310,23 @@ mod tests {
     }
 
     #[test]
-    fn address_uses_kaspapq_prefix() {
+    fn address_uses_misaka_prefix() {
         let kp = KaspaPqKeyPair::from_mnemonic_inner(TEST_MASTER_PHRASE, "", "mainnet", 0, 0, 0).unwrap();
-        let mainnet = kp.address_inner("kaspapq").unwrap();
+        let mainnet = kp.address_inner("misaka").unwrap();
         let mainnet_str: String = mainnet.into();
-        assert!(mainnet_str.starts_with("kaspapq:"), "got {mainnet_str}");
+        assert!(mainnet_str.starts_with("misaka:"), "got {mainnet_str}");
 
-        let testnet = kp.address_inner("kaspapqtest").unwrap();
+        let testnet = kp.address_inner("misakatest").unwrap();
         let testnet_str: String = testnet.into();
-        assert!(testnet_str.starts_with("kaspapqtest:"), "got {testnet_str}");
+        assert!(testnet_str.starts_with("misakatest:"), "got {testnet_str}");
 
-        let simnet = kp.address_inner("kaspapqsim").unwrap();
+        let simnet = kp.address_inner("misakasim").unwrap();
         let simnet_str: String = simnet.into();
-        assert!(simnet_str.starts_with("kaspapqsim:"), "got {simnet_str}");
+        assert!(simnet_str.starts_with("misakasim:"), "got {simnet_str}");
 
-        let devnet = kp.address_inner("kaspapqdev").unwrap();
+        let devnet = kp.address_inner("misakadev").unwrap();
         let devnet_str: String = devnet.into();
-        assert!(devnet_str.starts_with("kaspapqdev:"), "got {devnet_str}");
+        assert!(devnet_str.starts_with("misakadev:"), "got {devnet_str}");
     }
 
     #[test]

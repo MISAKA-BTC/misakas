@@ -3,7 +3,7 @@
 //! What this binary does:
 //!
 //! - Generate / re-derive an ML-DSA-65 keypair from a BIP39 mnemonic.
-//! - Derive the corresponding kaspa-pq P2PKH address (kaspapq*).
+//! - Derive the corresponding kaspa-pq P2PKH address (misaka*).
 //! - Sign / verify messages with the kaspa-pq tx context
 //!   ([`MLDSA65_TX_CONTEXT`]).
 //! - Store the mnemonic encrypted at rest with Argon2id + ChaCha20-Poly1305.

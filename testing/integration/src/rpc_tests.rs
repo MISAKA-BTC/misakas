@@ -4,7 +4,9 @@ use crate::common::{client_notify::ChannelNotify, daemon::Daemon};
 use futures_util::future::try_join_all;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus::params::SIMNET_GENESIS;
-use kaspa_consensus_core::{constants::MAX_SOMPI, header::Header, subnets::SubnetworkId, tx::Transaction};
+use kaspa_consensus_core::{
+    config::premine::MISAKA_PREMINE_SOMPI, constants::MAX_SOMPI, header::Header, subnets::SubnetworkId, tx::Transaction,
+};
 use kaspa_core::{assert_match, info};
 use kaspa_grpc_core::ops::KaspadPayloadOps;
 use kaspa_notify::{
@@ -503,7 +505,8 @@ async fn sanity_test() {
                 let rpc_client = client.clone();
                 tst!(op, {
                     let response = rpc_client.get_coin_supply_call(None, GetCoinSupplyRequest {}).await.unwrap();
-                    assert_eq!(response.circulating_sompi, 0);
+                    // kaspa-pq: the 15B genesis premine is part of the circulating supply.
+                    assert_eq!(response.circulating_sompi, MISAKA_PREMINE_SOMPI);
                     assert_eq!(response.max_sompi, MAX_SOMPI);
                 })
             }

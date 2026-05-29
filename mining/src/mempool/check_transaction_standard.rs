@@ -21,10 +21,11 @@ const MAX_STANDARD_P2SH_SIG_OPS: u8 = 15;
 /// 15-of-15 Schnorr CHECKMULTISIG: `(1 + 15*74 + 3) + (15*34 + 3) + 23 = 1650`).
 /// A kaspa-pq ML-DSA-65 P2PKH unlock script is
 ///   OP_PUSHDATA2 <sig 3309B || sighash-type 1B> + OP_PUSHDATA2 <pubkey 1952B>
-///   = 3 + 3310 + 3 + 1952 = 5268 bytes,
-/// which far exceeds 1650. 8192 fits a single ML-DSA-65 P2PKH spend with headroom
-/// while remaining well under the consensus script-size cap MAX_SCRIPTS_SIZE (10000).
-const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 8192;
+///   = 3 + 3310 + 3 + 1952 = 5268 bytes.
+/// A P2SH ML-DSA-65 **2-of-3 multisig** spend is larger still: 2 sig pushes plus
+/// the redeem-script push = 2*(3+3310) + (3+5868) = 12_497 bytes. 16_384 admits
+/// that with headroom, matching the consensus cap MAX_SCRIPTS_SIZE (16_384).
+const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 16_384;
 
 /// MAXIMUM_STANDARD_TRANSACTION_MASS is the maximum mass allowed for transactions that
 /// are considered standard and will therefore be relayed and considered for mining.

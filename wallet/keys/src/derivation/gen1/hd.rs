@@ -498,10 +498,10 @@ mod tests {
         ]
     }
 
-    // kaspa-pq Phase 2 changed the address prefix family from `kaspa*`
-    // to `kaspapq*`; the upstream HD-test bech32 string fixtures below
+    // kaspa-pq changed the address prefix family from upstream `kaspa*`
+    // to `misaka*`; the upstream HD-test bech32 string fixtures below
     // were generated against the legacy prefix and no longer match.
-    // Phase 9 (PR-9.5) will regenerate kaspapq* HD test vectors as part
+    // Phase 9 (PR-9.5) will regenerate misaka* HD test vectors as part
     // of the wallet-keys migration.
     #[ignore = "kaspa-pq Phase 2: upstream `kaspa*`-prefixed HD vectors superseded; regenerate in PR-9.5"]
     #[tokio::test]

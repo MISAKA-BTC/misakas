@@ -467,19 +467,20 @@ mod tests {
                 unchecked: false,
             },
             // kaspa-pq: MAX_SCRIPT_ELEMENT_SIZE was widened from upstream's
-            // 520 to 4096 to admit the 3310-byte ML-DSA-65 signature push
-            // and 1952-byte ML-DSA-65 public-key push. The two tests below
-            // verify pushes around the new boundary.
+            // 520 to 4096 (ML-DSA-65 single sig/pubkey pushes) and then to
+            // 8192 so a P2SH ML-DSA-65 multisig redeem script (5868 bytes for
+            // 2-of-3) can be pushed as one element. The two tests below verify
+            // pushes around the new boundary (8192 = 0x2000 -> LE [0x00, 0x20]).
             Test {
-                name: "push data len 4096 (just at MAX_SCRIPT_ELEMENT_SIZE)",
-                data: vec![0x49; 4096],
-                expected: Ok(once(OpPushData2).chain([0, 16]).chain(repeat_n(0x49, 4096)).collect()),
+                name: "push data len 8192 (just at MAX_SCRIPT_ELEMENT_SIZE)",
+                data: vec![0x49; 8192],
+                expected: Ok(once(OpPushData2).chain([0, 32]).chain(repeat_n(0x49, 8192)).collect()),
                 unchecked: false,
             },
             Test {
-                name: "push data len 4097 (just over MAX_SCRIPT_ELEMENT_SIZE)",
-                data: vec![0x49; 4097],
-                expected: Err(ScriptBuilderError::ElementExceedsMaxSize(4097)),
+                name: "push data len 8193 (just over MAX_SCRIPT_ELEMENT_SIZE)",
+                data: vec![0x49; 8193],
+                expected: Err(ScriptBuilderError::ElementExceedsMaxSize(8193)),
                 unchecked: false,
             },
             Test {

@@ -2,8 +2,8 @@
 mod macros;
 
 use crate::{
-    LOCK_TIME_THRESHOLD, MAX_TX_IN_SEQUENCE_NUM, NO_COST_OPCODE, SEQUENCE_LOCK_TIME_DISABLED, SEQUENCE_LOCK_TIME_MASK, ScriptSource,
-    SpkEncoding, TxScriptEngine, TxScriptError,
+    LOCK_TIME_THRESHOLD, MAX_TX_IN_SEQUENCE_NUM, MultisigScheme, NO_COST_OPCODE, SEQUENCE_LOCK_TIME_DISABLED, SEQUENCE_LOCK_TIME_MASK,
+    ScriptSource, SpkEncoding, TxScriptEngine, TxScriptError,
     data_stack::{DataStack, OpcodeData},
 };
 use blake2b_simd::Params;
@@ -745,8 +745,14 @@ opcode_list! {
         }
     }
 
-    // Undefined opcodes.
-    opcode OpUnknown167<0xa7, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
+    // kaspa-pq: ML-DSA-65 M-of-N CHECKMULTISIG (was upstream OpUnknown167).
+    // Mirrors OpCheckMultiSig (0xae) but verifies ML-DSA-65 signatures via
+    // check_mldsa65_signature. Stack layout (Kaspa CHECKMULTISIG has no dummy
+    // element): <sig_1> .. <sig_M> <M> <pk_1> .. <pk_N> <N>. Each sig push is
+    // <3309-byte ML-DSA-65 sig || 1-byte sighash type>. See docs/adr/0002.
+    opcode OpCheckMultiSigMlDsa65<0xa7, 1>(self, vm) {
+        vm.op_check_multisig(MultisigScheme::MlDsa65)
+    }
 
     // Crypto opcodes.
     opcode OpSHA256<0xa8, 1>(self, vm) {
@@ -758,7 +764,7 @@ opcode_list! {
     }
 
     opcode OpCheckMultiSigECDSA<0xa9, 1>(self, vm) {
-        vm.op_check_multisig_schnorr_or_ecdsa(true)
+        vm.op_check_multisig(MultisigScheme::Ecdsa)
     }
 
     opcode OpBlake2b<0xaa, 1>(self, vm) {
@@ -826,7 +832,7 @@ opcode_list! {
     }
 
     opcode OpCheckMultiSig<0xae, 1>(self, vm) {
-        vm.op_check_multisig_schnorr_or_ecdsa(false)
+        vm.op_check_multisig(MultisigScheme::Schnorr)
     }
 
     opcode OpCheckMultiSigVerify<0xaf, 1>(self, vm) {
@@ -1222,9 +1228,8 @@ mod test {
     #[test]
     fn test_opcode_invalid() {
         let tests: Vec<Box<dyn OpCodeImplementation<PopulatedTransaction, SigHashReusedValuesUnsync>>> = vec![
-            // kaspa-pq: 0xa6 is now OpCheckSigMlDsa65, not the upstream
-            // OpUnknown166. 0xa7 remains undefined.
-            opcodes::OpUnknown167::empty().expect("Should accept empty"),
+            // kaspa-pq: 0xa6 is OpCheckSigMlDsa65 and 0xa7 is
+            // OpCheckMultiSigMlDsa65 (both defined, not unknown).
             opcodes::OpUnknown196::empty().expect("Should accept empty"),
             opcodes::OpUnknown197::empty().expect("Should accept empty"),
             opcodes::OpUnknown198::empty().expect("Should accept empty"),

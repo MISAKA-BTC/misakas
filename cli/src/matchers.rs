@@ -25,7 +25,7 @@ pub fn register_link_matchers(cli: &Arc<KaspaCli>) -> Result<()> {
         })),
     )?;
 
-    // addresses (open,copy). kaspa-pq URIs use the `kaspapq*` prefix family
+    // addresses (open,copy). kaspa-pq URIs use the `misaka*` prefix family
     // (see docs/adr/0001-network-isolation.md). There is no public kaspa-pq
     // block explorer yet, so the ctrl/meta-click action only copies the URI
     // to the clipboard and writes an informational line. The regex still
@@ -34,7 +34,7 @@ pub fn register_link_matchers(cli: &Arc<KaspaCli>) -> Result<()> {
     // lookup is performed.
     let cli_ = cli.clone();
     cli.term().register_link_matcher(
-        &js_sys::RegExp::new(r"(kaspapq|kaspapqtest|kaspapqsim|kaspapqdev|kaspa|kaspatest):\S+", "i"),
+        &js_sys::RegExp::new(r"(misaka|misakatest|misakasim|misakadev|kaspa|kaspatest):\S+", "i"),
         Arc::new(Box::new(move |modifiers, uri| {
             if modifiers.ctrl || modifiers.meta {
                 if uri.starts_with("kaspa:") || uri.starts_with("kaspatest:") {

@@ -17,3 +17,7 @@ release
 package-sizes.js
 rustbridge_*.log
 target/
+
+# kaspa-pq: devnet multisig key material (contains seed_hex private keys) — never commit
+misaka-devnet-multisig-keys.json
+**/misaka-devnet-multisig-keys.json

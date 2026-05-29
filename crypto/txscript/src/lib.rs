@@ -40,12 +40,17 @@ pub use standard::*;
 
 pub const MAX_SCRIPT_PUBLIC_KEY_VERSION: u16 = 0;
 pub const MAX_STACK_SIZE: usize = 244;
-pub const MAX_SCRIPTS_SIZE: usize = 10_000;
-// kaspa-pq: widened from upstream `520` to admit the 3310-byte ML-DSA-65
-// signature push (3309 + 1 sighash type byte) and the 1952-byte ML-DSA-65
-// public-key push. See docs/adr/0002-mldsa65-p2pkh.md and
-// docs/adr/0005-mass-policy.md.
-pub const MAX_SCRIPT_ELEMENT_SIZE: usize = 4096;
+// kaspa-pq: widened from upstream `10_000` to admit a P2SH ML-DSA-65 multisig
+// **spend** scriptSig. A 2-of-3 unlock is 2 sig pushes (2 * (3 + 3310)) plus the
+// redeem-script push (3 + 5868) = 12_497 bytes; 16_384 fits it with headroom.
+// MAX_SCRIPTS_SIZE is enforced per-script (see `execute`), not cumulatively.
+pub const MAX_SCRIPTS_SIZE: usize = 16_384;
+// kaspa-pq: widened from upstream `520` -> `4096` (to admit the 3310-byte
+// ML-DSA-65 signature push and 1952-byte public-key push) and now -> `8192`
+// so a P2SH ML-DSA-65 multisig **redeem script** can be pushed as a single
+// element (a 2-of-3 redeem script is 5868 bytes). See docs/adr/0002-mldsa65-p2pkh.md
+// and docs/adr/0005-mass-policy.md.
+pub const MAX_SCRIPT_ELEMENT_SIZE: usize = 8192;
 pub const MAX_OPS_PER_SCRIPT: i32 = 201;
 
 /// ML-DSA-65 (FIPS 204) public key length in bytes. Pre-verify
@@ -101,6 +106,16 @@ pub const SEQUENCE_LOCK_TIME_DISABLED: u64 = 1 << 63;
 pub const SEQUENCE_LOCK_TIME_MASK: u64 = 0x00000000ffffffff;
 pub const LOCK_TIME_THRESHOLD: u64 = 500_000_000_000;
 pub const MAX_PUB_KEYS_PER_MUTLTISIG: i32 = 20;
+
+/// Signature scheme selector for the `OP_CHECKMULTISIG*` opcode family.
+/// kaspa-pq adds [`MultisigScheme::MlDsa65`] for post-quantum M-of-N multisig
+/// (verified via [`TxScriptEngine::check_mldsa65_signature`]).
+#[derive(Clone, Copy)]
+pub(crate) enum MultisigScheme {
+    Schnorr,
+    Ecdsa,
+    MlDsa65,
+}
 
 // The last opcode that does not count toward operations.
 // Note that this includes OP_RESERVED which counts as a push operation.
@@ -269,7 +284,10 @@ fn get_sig_op_count_by_opcodes<T: VerifiableTransaction, Reused: SigHashReusedVa
             Ok(op) => {
                 match op.value() {
                     codes::OpCheckSig | codes::OpCheckSigVerify | codes::OpCheckSigECDSA => num_sigs += 1,
-                    codes::OpCheckMultiSig | codes::OpCheckMultiSigVerify | codes::OpCheckMultiSigECDSA => {
+                    codes::OpCheckMultiSig
+                    | codes::OpCheckMultiSigVerify
+                    | codes::OpCheckMultiSigECDSA
+                    | codes::OpCheckMultiSigMlDsa65 => {
                         if i == 0 {
                             num_sigs += MAX_PUB_KEYS_PER_MUTLTISIG as u64;
                             continue;
@@ -551,7 +569,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
         }
     }
 
-    fn op_check_multisig_schnorr_or_ecdsa(&mut self, ecdsa: bool) -> Result<(), TxScriptError> {
+    fn op_check_multisig(&mut self, scheme: MultisigScheme) -> Result<(), TxScriptError> {
         let [num_keys]: [i32; 1] = self.dstack.pop_items()?;
         if num_keys < 0 {
             return Err(TxScriptError::InvalidPubKeyCount(format!("number of pubkeys {num_keys} is negative")));
@@ -608,10 +626,10 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 // SAFETY: we just checked the len
                 let pub_key = pub_key_iter.next().unwrap();
 
-                let check_signature_result = if ecdsa {
-                    self.check_ecdsa_signature(hash_type, pub_key.as_slice(), signature)
-                } else {
-                    self.check_schnorr_signature(hash_type, pub_key.as_slice(), signature)
+                let check_signature_result = match scheme {
+                    MultisigScheme::Ecdsa => self.check_ecdsa_signature(hash_type, pub_key.as_slice(), signature),
+                    MultisigScheme::Schnorr => self.check_schnorr_signature(hash_type, pub_key.as_slice(), signature),
+                    MultisigScheme::MlDsa65 => self.check_mldsa65_signature(hash_type, pub_key.as_slice(), signature),
                 };
 
                 match check_signature_result {

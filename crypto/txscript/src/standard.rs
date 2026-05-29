@@ -12,7 +12,9 @@ use std::iter::once;
 
 mod multisig;
 
-pub use multisig::{Error as MultisigCreateError, multisig_redeem_script, multisig_redeem_script_ecdsa};
+pub use multisig::{
+    Error as MultisigCreateError, multisig_redeem_script, multisig_redeem_script_ecdsa, multisig_redeem_script_mldsa65,
+};
 
 /// Creates a new script to pay a transaction output to a 32-byte pubkey.
 fn pay_to_pub_key(address_payload: &[u8]) -> ScriptVec {
@@ -186,8 +188,8 @@ mod tests {
 
     #[test]
     fn test_extract_address_and_encode_script() {
-        // kaspa-pq Phase 2 changed the address prefix family from `kaspa*`
-        // to `kaspapq*`; Phase 4 added `Version::PubKeyHashMlDsa65`. The
+        // kaspa-pq changed the address prefix family from upstream `kaspa*`
+        // to `misaka*`; Phase 4 added `Version::PubKeyHashMlDsa65`. The
         // hardcoded bech32 strings below are reconstructed from the
         // (prefix, version, payload) triple at runtime so that the test
         // exercises encode/decode/extract round-tripping without

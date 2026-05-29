@@ -15,10 +15,10 @@ use clap::Parser;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_bip32::{Language, Mnemonic};
 use kaspa_consensus_core::header::Header;
-use kaspa_wallet_keys::kaspa_pq::derive_keypair;
 use kaspa_grpc_client::GrpcClient;
 use kaspa_notify::subscription::context::SubscriptionContext;
 use kaspa_rpc_core::{api::rpc::RpcApi, notify::mode::NotificationMode};
+use kaspa_wallet_keys::kaspa_pq::derive_keypair;
 use rayon::prelude::*;
 
 #[derive(Parser, Debug)]

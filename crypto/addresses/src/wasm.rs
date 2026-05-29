@@ -124,10 +124,10 @@ mod tests {
     use workflow_wasm::{extensions::ObjectExtension, serde::from_value, serde::to_value};
 
     // kaspa-pq Phase 7 (PR-7.4): re-enabled after the Phase 2 prefix
-    // family swap (kaspa* -> kaspapq*). Address strings are computed at
+    // family swap (kaspa* -> misaka*). Address strings are computed at
     // test time from (prefix, version, payload) so the tests don't depend
     // on a hardcoded bech32 checksum value — the same test pattern Phase
-    // 2 used for `test_kaspapq_prefix_roundtrip` in src/lib.rs.
+    // 2 used for `test_misaka_prefix_roundtrip` in src/lib.rs.
     //
     // A 32-byte synthetic payload is used; the original upstream test
     // used `qpauqs...`-style bech32-data-encoded bytes. We use a
@@ -148,7 +148,7 @@ mod tests {
         // Confirm the bech32-encoded string really does start with the
         // kaspa-pq mainnet HRP. A mainline `kaspa:` here would mean Phase 2
         // regressed.
-        assert!(address_str.starts_with("kaspapq:"), "got {address_str}");
+        assert!(address_str.starts_with("misaka:"), "got {address_str}");
 
         let a = Address::constructor(&address_str);
         let value = to_value(&a).unwrap();
@@ -166,8 +166,8 @@ mod tests {
 
         let obj = Object::new();
         obj.set("version", &JsValue::from_str("PubKey")).unwrap();
-        // serde rename on Prefix::Mainnet is "kaspapq" after Phase 2.
-        obj.set("prefix", &JsValue::from_str("kaspapq")).unwrap();
+        // serde rename on Prefix::Mainnet is "misaka" after Phase 2.
+        obj.set("prefix", &JsValue::from_str("misaka")).unwrap();
         obj.set("payload", &JsValue::from_str(&payload_hex)).unwrap();
 
         assert_eq!(JsValue::from_str("object"), obj.js_typeof());

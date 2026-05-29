@@ -162,7 +162,7 @@ impl TryFrom<&NetworkTypeT> for Prefix {
 
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum NetworkIdError {
-    #[error("Invalid network name prefix: {0}. The expected prefix is 'kaspapq'.")]
+    #[error("Invalid network name prefix: {0}. The expected prefix is 'misaka'.")]
     InvalidPrefix(String),
 
     #[error(transparent)]
@@ -271,15 +271,15 @@ impl NetworkId {
         NETWORK_IDS.iter().copied()
     }
 
-    /// Returns a textual description of the network prefixed with `kaspapq-`
+    /// Returns a textual description of the network prefixed with `misaka-`
     /// (kaspa-pq is a fork of Kaspa with ML-DSA-65 signatures and an LtHash
     /// UTXO accumulator; see docs/adr/0001-network-isolation.md).
     pub fn to_prefixed(&self) -> String {
-        format!("kaspapq-{}", self)
+        format!("misaka-{}", self)
     }
 
     pub fn from_prefixed(prefixed: &str) -> Result<Self, NetworkIdError> {
-        if let Some(stripped) = prefixed.strip_prefix("kaspapq-") {
+        if let Some(stripped) = prefixed.strip_prefix("misaka-") {
             Self::from_str(stripped)
         } else {
             Err(NetworkIdError::InvalidPrefix(prefixed.to_string()))

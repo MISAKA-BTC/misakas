@@ -22,7 +22,9 @@ const MIN_PAYLOAD_LENGTH: usize =
 // SECONDS_PER_MONTH = 30.4375 * 24 * 60 * 60
 const SECONDS_PER_MONTH: u64 = 2629800;
 
-pub const SUBSIDY_BY_MONTH_TABLE_SIZE: usize = 426;
+// kaspa-pq emission: 20 years of additional issuance (240 months) + a
+// terminal 0 entry marking the end of issuance.
+pub const SUBSIDY_BY_MONTH_TABLE_SIZE: usize = 241;
 pub type SubsidyByMonthTable = [u64; SUBSIDY_BY_MONTH_TABLE_SIZE];
 
 #[derive(Clone)]
@@ -252,50 +254,38 @@ impl CoinbaseManager {
 
         seconds_since_deflationary_phase_started / SECONDS_PER_MONTH
     }
-
-    #[cfg(test)]
-    pub fn legacy_calc_block_subsidy(&self, daa_score: u64) -> u64 {
-        if daa_score < self.deflationary_phase_daa_score {
-            return self.pre_deflationary_phase_base_subsidy;
-        }
-
-        // Note that this calculation implicitly assumes that block per second = 1 (by assuming daa score diff is in second units).
-        let months_since_deflationary_phase_started = (daa_score - self.deflationary_phase_daa_score) / SECONDS_PER_MONTH;
-        assert!(months_since_deflationary_phase_started <= usize::MAX as u64);
-        let months_since_deflationary_phase_started: usize = months_since_deflationary_phase_started as usize;
-        if months_since_deflationary_phase_started >= SUBSIDY_BY_MONTH_TABLE.len() {
-            *SUBSIDY_BY_MONTH_TABLE.last().unwrap()
-        } else {
-            SUBSIDY_BY_MONTH_TABLE[months_since_deflationary_phase_started]
-        }
-    }
 }
 
 /*
-    This table was pre-calculated by calling `calcDeflationaryPeriodBlockSubsidyFloatCalc` (in kaspad-go) for all months until reaching 0 subsidy.
-    To regenerate this table, run `TestBuildSubsidyTable` in coinbasemanager_test.go (note the `deflationaryPhaseBaseSubsidy` therein).
-    These values represent the reward per second for each month (= reward per block for 1 BPS).
+    kaspa-pq additional-issuance emission table.
+
+    Tokenomics: 15B KAS of additional issuance over 20 years, decaying at a
+    5%/year exponential rate (q = 0.95), on top of a 15B genesis premine for a
+    30B final supply. The schedule steps once per year (12 identical months),
+    so the table holds 20 yearly rates × 12 months = 240 entries followed by a
+    terminal 0 (issuance ends after year 20).
+
+    Values are the reward per second (= reward per block at 1 BPS); the manager
+    divides each by the actual BPS via `div_ceil` at construction. Each yearly
+    rate is `round(E_y / SECONDS_PER_YEAR)` with `E_y = E_1 · 0.95^(y-1)` and
+    `E_1 = 15e9 · (1 - 0.95) / (1 - 0.95^20) ≈ 1.169109184e9 KAS`. This yields
+    ≈ 3.70468 KAS/block in year 1 at 10 BPS and a 20-year total of ≈ 15B KAS.
+
+    To regenerate, recompute the 20 yearly rates with the formula above
+    (SECONDS_PER_YEAR = 12 · SECONDS_PER_MONTH = 31_557_600) and repeat each 12×.
 */
 #[rustfmt::skip]
-const SUBSIDY_BY_MONTH_TABLE: [u64; 426] = [
-	44000000000, 41530469757, 39199543598, 36999442271, 34922823143, 32962755691, 31112698372, 29366476791, 27718263097, 26162556530, 24694165062, 23308188075, 22000000000, 20765234878, 19599771799, 18499721135, 17461411571, 16481377845, 15556349186, 14683238395, 13859131548, 13081278265, 12347082531, 11654094037, 11000000000,
-	10382617439, 9799885899, 9249860567, 8730705785, 8240688922, 7778174593, 7341619197, 6929565774, 6540639132, 6173541265, 5827047018, 5500000000, 5191308719, 4899942949, 4624930283, 4365352892, 4120344461, 3889087296, 3670809598, 3464782887, 3270319566, 3086770632, 2913523509, 2750000000, 2595654359,
-	2449971474, 2312465141, 2182676446, 2060172230, 1944543648, 1835404799, 1732391443, 1635159783, 1543385316, 1456761754, 1375000000, 1297827179, 1224985737, 1156232570, 1091338223, 1030086115, 972271824, 917702399, 866195721, 817579891, 771692658, 728380877, 687500000, 648913589, 612492868,
-	578116285, 545669111, 515043057, 486135912, 458851199, 433097860, 408789945, 385846329, 364190438, 343750000, 324456794, 306246434, 289058142, 272834555, 257521528, 243067956, 229425599, 216548930, 204394972, 192923164, 182095219, 171875000, 162228397, 153123217, 144529071,
-	136417277, 128760764, 121533978, 114712799, 108274465, 102197486, 96461582, 91047609, 85937500, 81114198, 76561608, 72264535, 68208638, 64380382, 60766989, 57356399, 54137232, 51098743, 48230791, 45523804, 42968750, 40557099, 38280804, 36132267, 34104319,
-	32190191, 30383494, 28678199, 27068616, 25549371, 24115395, 22761902, 21484375, 20278549, 19140402, 18066133, 17052159, 16095095, 15191747, 14339099, 13534308, 12774685, 12057697, 11380951, 10742187, 10139274, 9570201, 9033066, 8526079, 8047547,
-	7595873, 7169549, 6767154, 6387342, 6028848, 5690475, 5371093, 5069637, 4785100, 4516533, 4263039, 4023773, 3797936, 3584774, 3383577, 3193671, 3014424, 2845237, 2685546, 2534818, 2392550, 2258266, 2131519, 2011886, 1898968,
-	1792387, 1691788, 1596835, 1507212, 1422618, 1342773, 1267409, 1196275, 1129133, 1065759, 1005943, 949484, 896193, 845894, 798417, 753606, 711309, 671386, 633704, 598137, 564566, 532879, 502971, 474742, 448096,
-	422947, 399208, 376803, 355654, 335693, 316852, 299068, 282283, 266439, 251485, 237371, 224048, 211473, 199604, 188401, 177827, 167846, 158426, 149534, 141141, 133219, 125742, 118685, 112024, 105736,
-	99802, 94200, 88913, 83923, 79213, 74767, 70570, 66609, 62871, 59342, 56012, 52868, 49901, 47100, 44456, 41961, 39606, 37383, 35285, 33304, 31435, 29671, 28006, 26434, 24950,
-	23550, 22228, 20980, 19803, 18691, 17642, 16652, 15717, 14835, 14003, 13217, 12475, 11775, 11114, 10490, 9901, 9345, 8821, 8326, 7858, 7417, 7001, 6608, 6237, 5887,
-	5557, 5245, 4950, 4672, 4410, 4163, 3929, 3708, 3500, 3304, 3118, 2943, 2778, 2622, 2475, 2336, 2205, 2081, 1964, 1854, 1750, 1652, 1559, 1471, 1389,
-	1311, 1237, 1168, 1102, 1040, 982, 927, 875, 826, 779, 735, 694, 655, 618, 584, 551, 520, 491, 463, 437, 413, 389, 367, 347, 327,
-	309, 292, 275, 260, 245, 231, 218, 206, 194, 183, 173, 163, 154, 146, 137, 130, 122, 115, 109, 103, 97, 91, 86, 81, 77,
-	73, 68, 65, 61, 57, 54, 51, 48, 45, 43, 40, 38, 36, 34, 32, 30, 28, 27, 25, 24, 22, 21, 20, 19, 18,
-	17, 16, 15, 14, 13, 12, 12, 11, 10, 10, 9, 9, 8, 8, 7, 7, 6, 6, 6, 5, 5, 5, 4, 4, 4,
-	4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-	0,
+const SUBSIDY_BY_MONTH_TABLE: [u64; SUBSIDY_BY_MONTH_TABLE_SIZE] = [
+    3704683450, 3704683450, 3704683450, 3704683450, 3704683450, 3704683450, 3704683450, 3704683450, 3704683450, 3704683450, 3704683450, 3704683450, 3519449277, 3519449277, 3519449277, 3519449277, 3519449277, 3519449277, 3519449277, 3519449277, 3519449277, 3519449277, 3519449277, 3519449277, 3343476813,
+    3343476813, 3343476813, 3343476813, 3343476813, 3343476813, 3343476813, 3343476813, 3343476813, 3343476813, 3343476813, 3343476813, 3176302973, 3176302973, 3176302973, 3176302973, 3176302973, 3176302973, 3176302973, 3176302973, 3176302973, 3176302973, 3176302973, 3176302973, 3017487824, 3017487824,
+    3017487824, 3017487824, 3017487824, 3017487824, 3017487824, 3017487824, 3017487824, 3017487824, 3017487824, 3017487824, 2866613433, 2866613433, 2866613433, 2866613433, 2866613433, 2866613433, 2866613433, 2866613433, 2866613433, 2866613433, 2866613433, 2866613433, 2723282761, 2723282761, 2723282761,
+    2723282761, 2723282761, 2723282761, 2723282761, 2723282761, 2723282761, 2723282761, 2723282761, 2723282761, 2587118623, 2587118623, 2587118623, 2587118623, 2587118623, 2587118623, 2587118623, 2587118623, 2587118623, 2587118623, 2587118623, 2587118623, 2457762692, 2457762692, 2457762692, 2457762692,
+    2457762692, 2457762692, 2457762692, 2457762692, 2457762692, 2457762692, 2457762692, 2457762692, 2334874557, 2334874557, 2334874557, 2334874557, 2334874557, 2334874557, 2334874557, 2334874557, 2334874557, 2334874557, 2334874557, 2334874557, 2218130830, 2218130830, 2218130830, 2218130830, 2218130830,
+    2218130830, 2218130830, 2218130830, 2218130830, 2218130830, 2218130830, 2218130830, 2107224288, 2107224288, 2107224288, 2107224288, 2107224288, 2107224288, 2107224288, 2107224288, 2107224288, 2107224288, 2107224288, 2107224288, 2001863074, 2001863074, 2001863074, 2001863074, 2001863074, 2001863074,
+    2001863074, 2001863074, 2001863074, 2001863074, 2001863074, 2001863074, 1901769920, 1901769920, 1901769920, 1901769920, 1901769920, 1901769920, 1901769920, 1901769920, 1901769920, 1901769920, 1901769920, 1901769920, 1806681424, 1806681424, 1806681424, 1806681424, 1806681424, 1806681424, 1806681424,
+    1806681424, 1806681424, 1806681424, 1806681424, 1806681424, 1716347353, 1716347353, 1716347353, 1716347353, 1716347353, 1716347353, 1716347353, 1716347353, 1716347353, 1716347353, 1716347353, 1716347353, 1630529985, 1630529985, 1630529985, 1630529985, 1630529985, 1630529985, 1630529985, 1630529985,
+    1630529985, 1630529985, 1630529985, 1630529985, 1549003486, 1549003486, 1549003486, 1549003486, 1549003486, 1549003486, 1549003486, 1549003486, 1549003486, 1549003486, 1549003486, 1549003486, 1471553312, 1471553312, 1471553312, 1471553312, 1471553312, 1471553312, 1471553312, 1471553312, 1471553312,
+    1471553312, 1471553312, 1471553312, 1397975646, 1397975646, 1397975646, 1397975646, 1397975646, 1397975646, 1397975646, 1397975646, 1397975646, 1397975646, 1397975646, 1397975646, 0,
 ];
 
 #[cfg(test)]
@@ -303,9 +293,9 @@ mod tests {
     use super::*;
     use crate::params::MAINNET_PARAMS;
     use kaspa_consensus_core::{
-        config::params::{ForkActivation, Params, SIMNET_PARAMS},
+        config::params::{Params, SIMNET_PARAMS},
         constants::SOMPI_PER_KASPA,
-        network::{NetworkId, NetworkType},
+        network::NetworkId,
         tx::scriptvec,
     };
 
@@ -358,158 +348,81 @@ mod tests {
         }
     }
 
-    /// Takes over 60 seconds, run with the following command line:
-    /// `cargo test --release --package kaspa-consensus --lib -- processes::coinbase::tests::verify_crescendo_emission_schedule --exact --nocapture --ignored`
+    /// Verifies the kaspa-pq additional-issuance schedule sums to ~15B KAS over
+    /// 20 years. The per-month table holds reward-per-second values, so the total
+    /// issuance is `Σ table[m] * SECONDS_PER_MONTH` (BPS-invariant: higher BPS
+    /// divides the per-block reward but produces proportionally more blocks, up to
+    /// a small `div_ceil` rounding surplus).
     #[test]
-    #[ignore = "long"]
-    fn verify_crescendo_emission_schedule() {
-        // No need to loop over all nets since the relevant params are only
-        // deflation and activation DAA scores (and the test is long anyway)
-        for network_id in [NetworkId::new(NetworkType::Mainnet)] {
-            let mut params: Params = network_id.into();
-            params.crescendo_activation = ForkActivation::never();
-            let cbm = create_manager(&params);
-            let (baseline_epochs, baseline_total) = calculate_emission(cbm);
+    fn verify_total_emission() {
+        // 1 BPS reference total (the clean figure the table is derived from).
+        let total_sompi: u128 = SUBSIDY_BY_MONTH_TABLE.iter().map(|&x| x as u128 * SECONDS_PER_MONTH as u128).sum();
+        let total_kas = total_sompi / SOMPI_PER_KASPA as u128;
+        println!("kaspa-pq additional issuance: {total_sompi} sompi => {total_kas} KAS");
 
-            let mut activations = vec![10000, 33444444, 120727479];
-            for network_id in NetworkId::iter() {
-                let activation = Params::from(network_id).crescendo_activation;
-                if activation != ForkActivation::never() && activation != ForkActivation::always() {
-                    activations.push(activation.daa_score());
-                }
-            }
+        const TARGET_KAS: u128 = 15_000_000_000;
+        let delta_kas = TARGET_KAS as i128 - total_kas as i128;
+        assert!(delta_kas.abs() <= 1, "additional issuance {total_kas} KAS deviates from 15B by {delta_kas} KAS");
+        // The clean 1 BPS figure stays within the 15B budget; the live network adds
+        // only the small div_ceil rounding surplus checked below.
+        assert!(total_kas <= TARGET_KAS, "additional issuance {total_kas} KAS exceeds the 15B budget");
 
-            // Loop over a few random activation points + specified activation points for all nets
-            for activation in activations {
-                params.crescendo_activation = ForkActivation::new(activation);
-                let cbm = create_manager(&params);
-                let (new_epochs, new_total) = calculate_emission(cbm);
-
-                // Epochs only represents the number of times the subsidy changed (lower after activation due to rounding)
-                println!("BASELINE:\t{}\tepochs, total emission: {}", baseline_epochs, baseline_total);
-                println!("CRESCENDO:\t{}\tepochs, total emission: {}, activation: {}", new_epochs, new_total, activation);
-
-                let diff = (new_total as i64 - baseline_total as i64) / SOMPI_PER_KASPA as i64;
-                assert!(diff.abs() <= 51, "activation: {}", activation);
-                println!("DIFF (KAS): {}", diff);
-            }
+        // Per-network totals differ from the 1 BPS reference only by the per-month
+        // div_ceil rounding surplus: at most (bps-1) sompi/month * SECONDS_PER_MONTH *
+        // 240 months ≈ 57 KAS at 10 BPS (cf. the upstream "+51 KAS" note). Negligible
+        // against the 30B supply (1 part in ~5e8) and far below the MAX_SOMPI cap.
+        for network_id in NetworkId::iter() {
+            let cbm = create_manager(&network_id.into());
+            let bps = Params::from(network_id).bps();
+            let net_total: u128 =
+                cbm.subsidy_by_month_table_after.iter().map(|&x| x as u128 * SECONDS_PER_MONTH as u128 * bps as u128).sum();
+            let surplus_kas = net_total as i128 / SOMPI_PER_KASPA as i128 - total_kas as i128;
+            assert!((0..=64).contains(&surplus_kas), "{network_id}: bps rounding surplus {surplus_kas} KAS out of range");
         }
-    }
-
-    fn calculate_emission(cbm: CoinbaseManager) -> (u64, u64) {
-        let activation = cbm.bps().activation().daa_score();
-        let mut current = 0;
-        let mut total = 0;
-        let mut epoch = 0u64;
-        let mut prev = cbm.calc_block_subsidy(0);
-        loop {
-            let subsidy = cbm.calc_block_subsidy(current);
-            // Pre activation we expect the legacy calc (1bps)
-            if current < activation {
-                assert_eq!(cbm.legacy_calc_block_subsidy(current), subsidy);
-            }
-            if subsidy == 0 {
-                break;
-            }
-            total += subsidy;
-            if subsidy != prev {
-                println!("epoch: {}, subsidy: {}", epoch, subsidy);
-                prev = subsidy;
-                epoch += 1;
-            }
-            current += 1;
-        }
-
-        (epoch, total)
     }
 
     #[test]
     fn subsidy_test() {
-        const PRE_DEFLATIONARY_PHASE_BASE_SUBSIDY: u64 = 50000000000;
-        const DEFLATIONARY_PHASE_INITIAL_SUBSIDY: u64 = 44000000000;
-        const SECONDS_PER_MONTH: u64 = 2629800;
-        const SECONDS_PER_HALVING: u64 = SECONDS_PER_MONTH * 12;
+        // Year-1 per-block subsidy at 10 BPS = table[0].div_ceil(10) ≈ 3.70468 KAS.
+        const YEAR1_PER_BLOCK_10BPS: u64 = 370468345;
 
         for network_id in NetworkId::iter() {
-            let mut params: Params = network_id.into();
-            if params.crescendo_activation != ForkActivation::always() {
-                // We test activation scenarios in verify_crescendo_emission_schedule
-                params.crescendo_activation = ForkActivation::never();
-            }
+            let params: Params = network_id.into();
             let cbm = create_manager(&params);
-            let bps = params.bps_history().before();
+            let bps = params.bps();
+            let blocks_per_month = SECONDS_PER_MONTH * bps;
 
-            let pre_deflationary_phase_base_subsidy = PRE_DEFLATIONARY_PHASE_BASE_SUBSIDY / bps;
-            let deflationary_phase_initial_subsidy = DEFLATIONARY_PHASE_INITIAL_SUBSIDY / bps;
-            let blocks_per_halving = SECONDS_PER_HALVING * bps;
+            // kaspa-pq has no flat pre-deflationary phase: the decay table applies from genesis.
+            assert_eq!(params.deflationary_phase_daa_score, 0, "{network_id}: expected no pre-deflationary phase");
 
-            struct Test {
-                name: &'static str,
-                daa_score: u64,
-                expected: u64,
+            // Genesis / year-1 subsidy.
+            let expected_year1 = SUBSIDY_BY_MONTH_TABLE[0].div_ceil(bps);
+            assert_eq!(cbm.calc_block_subsidy(0), expected_year1, "{network_id}: genesis subsidy");
+            if bps == 10 {
+                assert_eq!(expected_year1, YEAR1_PER_BLOCK_10BPS, "{network_id}: year-1 per-block subsidy");
             }
 
-            let mut tests = vec![
-                Test {
-                    name: "first mined block",
-                    daa_score: 1,
-                    expected: if params.deflationary_phase_daa_score > 0 {
-                        pre_deflationary_phase_base_subsidy
-                    } else {
-                        deflationary_phase_initial_subsidy
-                    },
-                },
-                Test {
-                    name: "start of deflationary phase",
-                    daa_score: params.deflationary_phase_daa_score,
-                    expected: deflationary_phase_initial_subsidy,
-                },
-                Test {
-                    name: "after one halving",
-                    daa_score: params.deflationary_phase_daa_score + blocks_per_halving,
-                    expected: deflationary_phase_initial_subsidy / 2,
-                },
-                Test {
-                    name: "after 2 halvings",
-                    daa_score: params.deflationary_phase_daa_score + 2 * blocks_per_halving,
-                    expected: deflationary_phase_initial_subsidy / 4,
-                },
-                Test {
-                    name: "after 5 halvings",
-                    daa_score: params.deflationary_phase_daa_score + 5 * blocks_per_halving,
-                    expected: deflationary_phase_initial_subsidy / 32,
-                },
-                Test {
-                    name: "after 32 halvings",
-                    daa_score: params.deflationary_phase_daa_score + 32 * blocks_per_halving,
-                    expected: (DEFLATIONARY_PHASE_INITIAL_SUBSIDY / 2_u64.pow(32)).div_ceil(bps),
-                },
-                Test {
-                    name: "just before subsidy depleted",
-                    daa_score: params.deflationary_phase_daa_score + 35 * blocks_per_halving,
-                    expected: 1,
-                },
-                Test {
-                    name: "after subsidy depleted",
-                    daa_score: params.deflationary_phase_daa_score + 36 * blocks_per_halving,
-                    expected: 0,
-                },
-            ];
-
-            if params.deflationary_phase_daa_score > 0 {
-                tests.push(Test {
-                    name: "before deflationary phase",
-                    daa_score: params.deflationary_phase_daa_score - 1,
-                    expected: pre_deflationary_phase_base_subsidy,
-                });
+            // Every emission month pays table[m].div_ceil(bps), flat within the month
+            // (stepped schedule: the same rate holds from the first to the last block of the month).
+            for m in 0..SUBSIDY_BY_MONTH_TABLE_SIZE - 1 {
+                let daa = m as u64 * blocks_per_month;
+                let expected = SUBSIDY_BY_MONTH_TABLE[m].div_ceil(bps);
+                assert_eq!(cbm.calc_block_subsidy(daa), expected, "{network_id}: month {m} start");
+                assert_eq!(cbm.calc_block_subsidy(daa + blocks_per_month - 1), expected, "{network_id}: month {m} end");
             }
 
-            for t in tests {
-                assert_eq!(cbm.calc_block_subsidy(t.daa_score), t.expected, "{} test '{}' failed", network_id, t.name);
-                if bps == 1 {
-                    assert_eq!(cbm.legacy_calc_block_subsidy(t.daa_score), t.expected, "{} test '{}' failed", network_id, t.name);
-                }
+            // 5%/year exponential decay: each year's rate is ~0.95x the previous year's.
+            for y in 1..20usize {
+                let prev = SUBSIDY_BY_MONTH_TABLE[(y - 1) * 12] as f64;
+                let curr = SUBSIDY_BY_MONTH_TABLE[y * 12] as f64;
+                let ratio = curr / prev;
+                assert!((ratio - 0.95).abs() < 1e-4, "{network_id}: year {y}->{} decay ratio {ratio}", y + 1);
             }
+
+            // Issuance ends after 20 years: month index >= 240 yields zero subsidy.
+            let end_daa = (SUBSIDY_BY_MONTH_TABLE_SIZE - 1) as u64 * blocks_per_month;
+            assert_eq!(cbm.calc_block_subsidy(end_daa), 0, "{network_id}: end of issuance");
+            assert_eq!(cbm.calc_block_subsidy(end_daa + blocks_per_month * 100), 0, "{network_id}: after issuance");
         }
     }
 

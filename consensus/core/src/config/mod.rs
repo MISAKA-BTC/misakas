@@ -2,6 +2,7 @@ pub mod bps;
 pub mod constants;
 pub mod genesis;
 pub mod params;
+pub mod premine;
 
 use kaspa_utils::networking::{ContextualNetAddress, NetAddress};
 

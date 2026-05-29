@@ -279,7 +279,13 @@ async fn daemon_utxos_propagation_test() {
     // The transaction here is later used to verify utxo return address RPC
     const NUMBER_INPUTS: u64 = 2;
     const NUMBER_OUTPUTS: u64 = 2;
-    const TX_AMOUNT: u64 = SIMNET_PARAMS.pre_deflationary_phase_base_subsidy * (NUMBER_INPUTS * 5 - 1) / 5;
+    // `generate_tx` splits TX_AMOUNT into NUMBER_OUTPUTS equal outputs via integer
+    // division, so TX_AMOUNT must be a multiple of NUMBER_OUTPUTS for the output sum
+    // (and the resulting user balance) to equal it. kaspa-pq: the per-block subsidy
+    // 370_468_345 makes the raw `* 9/5` value odd (unlike upstream's 50 KAS), so we
+    // round down to a NUMBER_OUTPUTS multiple.
+    const TX_AMOUNT: u64 =
+        SIMNET_PARAMS.pre_deflationary_phase_base_subsidy * (NUMBER_INPUTS * 5 - 1) / 5 / NUMBER_OUTPUTS * NUMBER_OUTPUTS;
     let transaction = generate_tx(miner_schnorr_key, &utxos[0..NUMBER_INPUTS as usize], TX_AMOUNT, NUMBER_OUTPUTS, &user_address);
     rpc_client1.submit_transaction((&transaction).into(), false).await.unwrap();
 

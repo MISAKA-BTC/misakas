@@ -168,11 +168,11 @@ mod tests {
 
         let mainnet = kp.address(Prefix::Mainnet);
         let s: String = mainnet.into();
-        assert!(s.starts_with("kaspapq:"), "got {s}");
+        assert!(s.starts_with("misaka:"), "got {s}");
 
         let testnet = kp.address(Prefix::Testnet);
         let s_tn: String = testnet.into();
-        assert!(s_tn.starts_with("kaspapqtest:"), "got {s_tn}");
+        assert!(s_tn.starts_with("misakatest:"), "got {s_tn}");
     }
 
     #[test]

@@ -21,7 +21,12 @@ pub const STORAGE_MASS_PARAMETER: u64 = SOMPI_PER_KASPA * 10_000;
 pub const TRANSIENT_BYTE_TO_MASS_FACTOR: u64 = 4;
 
 /// MaxSompi is the maximum transaction amount allowed in sompi.
-pub const MAX_SOMPI: u64 = 29_000_000_000 * SOMPI_PER_KASPA;
+///
+/// kaspa-pq tokenomics (see docs): final supply is capped at 30B KAS =
+/// 15B genesis premine + 15B additional issuance over 20 years (5%/yr
+/// exponential decay). This is the per-amount sanity cap used by tx
+/// validation and reported by `GetCoinSupply` as the max supply.
+pub const MAX_SOMPI: u64 = 30_000_000_000 * SOMPI_PER_KASPA;
 
 // MAX_TX_IN_SEQUENCE_NUM is the maximum sequence number the sequence field
 // of a transaction input can be.

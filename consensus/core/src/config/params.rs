@@ -567,21 +567,24 @@ pub const MAINNET_PARAMS: Params = Params {
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
 
-    // deflationary_phase_daa_score is the DAA score after which the pre-deflationary period
-    // switches to the deflationary period. This number is calculated as follows:
-    // We define a year as 365.25 days
-    // Half a year in seconds = 365.25 / 2 * 24 * 60 * 60 = 15778800
-    // The network was down for three days shortly after launch
-    // Three days in seconds = 3 * 24 * 60 * 60 = 259200
-    deflationary_phase_daa_score: 15778800 - 259200,
-    pre_deflationary_phase_base_subsidy: 50000000000,
+    // kaspa-pq emission: there is no flat pre-deflationary phase — the decay
+    // table in `SUBSIDY_BY_MONTH_TABLE` (15B over 20 years at 5%/yr) applies from
+    // genesis, so `deflationary_phase_daa_score` is 0. That makes
+    // `pre_deflationary_phase_base_subsidy` unused by `calc_block_subsidy`; it is
+    // kept equal to the year-1 per-block subsidy at 10 BPS (table[0].div_ceil(10)
+    // = 370_468_345 sompi ≈ 3.70468 KAS) so callers reading it see the genesis rate.
+    deflationary_phase_daa_score: 0,
+    pre_deflationary_phase_base_subsidy: 370468345,
     skip_proof_of_work: false,
     max_block_level: 225,
     pruning_proof_m: 1000,
 
     blockrate: BlockrateParams::new::<10>(),
 
-    pre_crescendo_target_time_per_block: 1000,
+    // kaspa-pq: 10 BPS since genesis. This field only feeds the subsidy-month
+    // calc (`bps_history`); setting it to 100ms keeps emission on the 10 BPS
+    // schedule throughout, independent of the (legacy) crescendo activation score.
+    pre_crescendo_target_time_per_block: 100,
 
     // Roughly 2025-05-05 1500 UTC
     crescendo_activation: ForkActivation::new(110_165_000),
@@ -626,21 +629,24 @@ pub const TESTNET_PARAMS: Params = Params {
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
-    // deflationary_phase_daa_score is the DAA score after which the pre-deflationary period
-    // switches to the deflationary period. This number is calculated as follows:
-    // We define a year as 365.25 days
-    // Half a year in seconds = 365.25 / 2 * 24 * 60 * 60 = 15778800
-    // The network was down for three days shortly after launch
-    // Three days in seconds = 3 * 24 * 60 * 60 = 259200
-    deflationary_phase_daa_score: 15778800 - 259200,
-    pre_deflationary_phase_base_subsidy: 50000000000,
+    // kaspa-pq emission: there is no flat pre-deflationary phase — the decay
+    // table in `SUBSIDY_BY_MONTH_TABLE` (15B over 20 years at 5%/yr) applies from
+    // genesis, so `deflationary_phase_daa_score` is 0. That makes
+    // `pre_deflationary_phase_base_subsidy` unused by `calc_block_subsidy`; it is
+    // kept equal to the year-1 per-block subsidy at 10 BPS (table[0].div_ceil(10)
+    // = 370_468_345 sompi ≈ 3.70468 KAS) so callers reading it see the genesis rate.
+    deflationary_phase_daa_score: 0,
+    pre_deflationary_phase_base_subsidy: 370468345,
     skip_proof_of_work: false,
     max_block_level: 250,
     pruning_proof_m: 1000,
 
     blockrate: BlockrateParams::new::<10>(),
 
-    pre_crescendo_target_time_per_block: 1000,
+    // kaspa-pq: 10 BPS since genesis. This field only feeds the subsidy-month
+    // calc (`bps_history`); setting it to 100ms keeps emission on the 10 BPS
+    // schedule throughout, independent of the (legacy) crescendo activation score.
+    pre_crescendo_target_time_per_block: 100,
 
     // 18:30 UTC, March 6, 2025
     crescendo_activation: ForkActivation::new(88_657_000),
@@ -657,8 +663,9 @@ pub const SIMNET_PARAMS: Params = Params {
     difficulty_window_size: DIFFICULTY_SAMPLED_WINDOW_SIZE as usize,
     min_difficulty_window_size: MIN_DIFFICULTY_WINDOW_SIZE,
 
-    deflationary_phase_daa_score: TenBps::deflationary_phase_daa_score(),
-    pre_deflationary_phase_base_subsidy: TenBps::pre_deflationary_phase_base_subsidy(),
+    // kaspa-pq emission: decay table applies from genesis (see MAINNET_PARAMS).
+    deflationary_phase_daa_score: 0,
+    pre_deflationary_phase_base_subsidy: 370468345,
     coinbase_payload_script_public_key_max_len: 150,
     max_coinbase_payload_len: 204,
 
@@ -729,15 +736,16 @@ pub const DEVNET_PARAMS: Params = Params {
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
 
+    // kaspa-pq emission: decay table applies from genesis (see MAINNET_PARAMS).
     deflationary_phase_daa_score: 0,
-    pre_deflationary_phase_base_subsidy: 50000000000,
+    pre_deflationary_phase_base_subsidy: 370468345,
     skip_proof_of_work: false,
     max_block_level: 250,
     pruning_proof_m: 1000,
 
     blockrate: BlockrateParams::new::<10>(),
 
-    pre_crescendo_target_time_per_block: 1000,
+    pre_crescendo_target_time_per_block: 100,
 
     crescendo_activation: ForkActivation::always(),
 };
