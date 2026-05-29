@@ -566,3 +566,123 @@ change to this field would require a versioned payload bump
 | 10.5′-a | Add `owner_reward_spk_payload` to `StakeBondPayload` + `StakeBondRecord` + `stake_bond_record_from_payload`; add the pure `p2pkh_mldsa65_spk` + reward-outputs helper in `dns_finality.rs`; parity test vs `pay_to_address_script`. Inert — no caller on any path. | n/a (dormant type + pure helper) |
 | 10.5′-b1 | Plumb `RewardParams` into `DnsParams` (gated). Done. | n/a (dormant param) |
 | 10.5′-b2/b3 | Wire the reward outputs into `CoinbaseManager::expected_coinbase_transaction` (construction **and** validation, byte-for-byte). **Depends on the per-block active-bond view** specified in [ADR-0009 Addendum B](0009-dns-probabilistic-finality.md#addendum-b--per-block-active-bond-view--reward-eligibility-binding) — the coinbase is validated per-block, so bond resolution must be a deterministic function of the block's own view, not the virtual-commit-time global `StakeBonds` store. Behind the overlay activation gate; no behaviour change on any current network. | yes (activation height) |
+
+## Addendum C — Slashing reporter-reward recipient + distribution mechanism (binding)
+
+Status: Accepted
+Date: 2026-05-29
+Amends: this ADR's §"Slashing distribution" (which left the
+        reporter recipient and the emit/burn mechanism unspecified).
+Depends on: Addendum B (the `p2pkh_mldsa65_spk` reward-script
+        helper this reuses), [ADR-0009 Addendum B](0009-dns-probabilistic-finality.md#addendum-b--per-block-active-bond-view--reward-eligibility-binding)
+        (the per-block active-bond view that supplies the slashed
+        amount `S` deterministically), ADR-0009 §"`SlashingEvidencePayload`"
+        + [ADR-0012](0012-mainnet-validator-sortition-commit-reveal.md)
+        §"Slashing rule" (the two evidence kinds).
+
+### The gap
+
+§"Slashing distribution" pins the split (`reporter_reward = S ×
+bps / 10000`, remainder burned) and says the reporter is paid via
+"a fresh consensus-emitted output on the slashing transaction
+itself," but **neither evidence payload carries a reporter
+recipient**:
+
+```rust
+SlashingEvidencePayload         { version, bond_outpoint, attestation_a, attestation_b }
+UnrevealSlashingEvidencePayload { version, target_epoch, validator_id, commit_outpoint }
+```
+
+This is the same class of gap Addendum B closed for validator
+rewards: consensus cannot pay a reporter it has no address for.
+
+### Decision: declare the reporter spend payload in the evidence
+
+Add one field to each evidence payload:
+
+```rust
+// SlashingEvidencePayload + UnrevealSlashingEvidencePayload
+//   reporter_reward_spk_payload == BLAKE2b-256(reporter_public_key)  (ADR-0002)
+// i.e. the 32-byte P2PKH-ML-DSA spend payload of the cold key the
+// reporter wants the reward paid to. Appended last (pre-activation
+// wire change — no live evidence tx exists).
+pub reporter_reward_spk_payload: [u8; 32],
+```
+
+The reporter-reward output's `script_public_key` is
+`p2pkh_mldsa65_spk(reporter_reward_spk_payload)` (Addendum B's
+canonical 37-byte ML-DSA-65 P2PKH script). A malformed payload
+only misdirects the reporter's **own** reward (self-griefing), so
+consensus imposes no check beyond the fixed 32-byte width — exactly
+as in Addendum B.
+
+### The distribution is a consensus side-effect (not a script spend)
+
+The slashed stake is the bond's locking output
+(`bond_outpoint = (stake_bond_tx, 0)`, value `S = bond.amount`, ADR-0009
+Addendum A.1). It **cannot** be redistributed by a normal UTXO spend
+whose script authorises slashing, because `txscript` cannot verify
+equivocation evidence (compare two attestation anchors **and** verify
+two ML-DSA-65 signatures over derived digests inside a script). The
+genuineness is therefore established by the **consensus rule** (the
+PR-10.12-a stateful check) and the redistribution is a **consensus
+side-effect** of accepting a genuine evidence on the selected chain —
+exactly mirroring how the block coinbase mints validator rewards
+rather than spending an input:
+
+On accepting a genuine `SlashingEvidence` whose target bond resolves
+to `Active` (or `Unbonding`) in the block's selected-parent
+[active-bond view](0009-dns-probabilistic-finality.md#addendum-b--per-block-active-bond-view--reward-eligibility-binding):
+
+1. **`S` is fixed deterministically** = the bond's `amount` from that
+   view (equivocation) or `commit_without_reveal_slash_sompi`
+   (unreveal). Same as-of-block determinism property as Addendum B's
+   reward — construction and validation read the identical `S`.
+2. **The bond's output-0 UTXO is removed** from the UTXO set (the
+   owner can no longer reclaim the locked stake), as a reorg-safe
+   side-effect tied to the `Active/Unbonding → Slashed` mutation that
+   §A.4 already stages (and reverts).
+3. **A single consensus-emitted reporter-reward output is required on
+   the slashing transaction**: `value = compute_slashing_distribution(
+   S, slashing_reporter_reward_bps).reporter_reward_sompi`, `script_public_key
+   = p2pkh_mldsa65_spk(reporter_reward_spk_payload)`. Consensus
+   validates its presence, value, and spk (construction == validation,
+   byte-for-byte, like the coinbase fan-out). For the **unreveal**
+   case the reward is first passed through
+   [`apply_unreveal_reporter_min_cap`](../../consensus/core/src/dns_finality.rs)
+   with the `DnsParams::unreveal_reporter_reward_sompi` floor (ADR-0012).
+4. **The remainder burns implicitly**: `S` left the supply in step 2
+   and only `reporter_reward_sompi` was re-minted in step 3, so
+   `burned_sompi = S − reporter_reward_sompi` leaves the active supply
+   with no explicit burn output — satisfying §"Slashing distribution"'s
+   "the remainder leaves the active supply."
+
+Net supply change = `reporter_reward_sompi − S = −burned_sompi`.
+
+### Determinism, reorg, and gating
+
+- `S` and the reporter output are pure functions of the block's own
+  selected-parent bond view + the evidence payload, so the slashing
+  transaction is reproducible by construction and validation byte-for-
+  byte (same discipline as Addendum B's coinbase fan-out).
+- The bond-UTXO removal and the `Slashed` mutation are staged/reverted
+  together in `stage_dns_bond_mutations` (§A.4), so a reorg that drops
+  the slashing block restores both the bond and its locking UTXO.
+- Inert unless the overlay is configured **and** the block is past
+  `dns_activation_daa_score` (`u64::MAX` on every current network), so
+  no evidence is ever processed for distribution today.
+
+### Public-claim discipline (unchanged)
+
+The §"Slashing distribution" claims stand; Addendum C only pins the
+recipient + the emit/burn mechanism. The reporter reward still equals
+`slashing_reporter_reward_bps / 10000` of the slashed amount (modulo
+the unreveal `min`-cap), and the remainder still leaves supply.
+
+### Implementation slots (PR-10.12)
+
+| Sub-PR | Title | Gated? |
+|---|---|---|
+| 10.12-a | Stateful slashing-evidence **genuineness** rule (forged evidence cannot slash). Done. | yes (activation) |
+| 10.12-b1 | Add `reporter_reward_spk_payload` to both evidence payloads + a pure `slashing_distribution_output(S, bps, payload, unreveal_floor) -> (reporter TxOutput, burned)` helper in `dns_finality.rs`. Inert. | n/a (dormant field + pure helper) |
+| 10.12-b2 | Wire the consensus side-effect: bond-UTXO removal + required reporter-reward output validation in the virtual processor (construction **and** validation, byte-for-byte), behind the activation gate. | yes (activation) |
