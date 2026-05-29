@@ -3,8 +3,8 @@ use crate::{
     errors::{
         BlockProcessResult,
         RuleError::{
-            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, InvalidTransactionsInUtxoContext,
-            WrongHeaderPruningPoint,
+            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, IneligibleAttestationInBlock,
+            InvalidTransactionsInUtxoContext, WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -27,7 +27,7 @@ use kaspa_consensus_core::{
     acceptance_data::{AcceptedTxEntry, MergesetBlockAcceptanceData},
     api::args::TransactionValidationArgs,
     coinbase::*,
-    dns_finality::ActiveBondView,
+    dns_finality::{ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, attestations_from_accepted_txs, stake_attestation_message},
     hashing,
     header::Header,
     muhash::MuHashExtensions,
@@ -39,6 +39,7 @@ use kaspa_consensus_core::{
 };
 use kaspa_core::{info, trace};
 use kaspa_muhash::MuHash;
+use kaspa_txscript::verify_mldsa65_with_context;
 use kaspa_utils::refs::Refs;
 
 use rayon::prelude::*;
@@ -185,10 +186,9 @@ impl VirtualStateProcessor {
         ctx: &mut UtxoProcessingContext,
         selected_parent_utxo_view: &V,
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B): the bond set as-of this
-        // block's selected parent, for the validator-reward coinbase fan-out.
-        // Threaded in now (PR-10.5′-b2a) but not yet consumed — the coinbase
-        // fan-out validation lands in PR-10.5′-b3.
-        _selected_parent_bond_view: &ActiveBondView,
+        // block's selected parent. Consumed by the Model-B reward-eligibility
+        // rule (PR-10.5′-b2b); the coinbase reward fan-out reader lands in b3.
+        selected_parent_bond_view: &ActiveBondView,
         header: &Header,
     ) -> BlockProcessResult<()> {
         // Verify header UTXO commitment
@@ -216,6 +216,10 @@ impl VirtualStateProcessor {
             &ctx.mergeset_rewards,
             &self.daa_excluded_store.get_mergeset_non_daa(header.hash).unwrap(),
         )?;
+
+        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): Model-B
+        // reward-eligibility block-validity rule. Inert below activation.
+        self.check_attestation_reward_eligibility(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // Verify the header pruning point
         let reply = self.verify_header_pruning_point(header, ctx.ghostdag_data.to_compact())?;
@@ -261,6 +265,36 @@ impl VirtualStateProcessor {
             .unwrap()
             .tx;
         if hashing::tx::hash(coinbase) != hashing::tx::hash(&expected_coinbase) { Err(BadCoinbaseTransaction) } else { Ok(()) }
+    }
+
+    /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the Model-B
+    /// reward-eligibility **block-validity** rule. Rejects a block that
+    /// includes a `StakeAttestationShard` whose attestation is not
+    /// structurally reward-eligible against this block's own selected-parent
+    /// bond view — its bond must resolve to `Active` (at the attestation's
+    /// `target_daa_score`) **and** its ML-DSA-65 signature must verify. This
+    /// makes "included ⇒ rewardable" a consensus invariant, so the coinbase
+    /// reward fan-out (PR-10.5′-b3) needs no skip set. Reward **uniqueness**
+    /// (Addendum B §B.3(c)) is a reward-emission concern, not a validity one
+    /// (a duplicate `(bond, epoch)` is simply unrewarded), and is not checked
+    /// here.
+    ///
+    /// Inert unless the overlay is configured **and** `daa_score` has reached
+    /// `dns_activation_daa_score` (`u64::MAX` on every current network, so
+    /// this returns `Ok(())` immediately everywhere today). The canonical
+    /// digest + signature verification mirror the StakeScore aggregation pass
+    /// (`processor.rs`) byte-for-byte and the validator-service signer.
+    fn check_attestation_reward_eligibility(
+        &self,
+        txs: &[Transaction],
+        selected_parent_bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) -> BlockProcessResult<()> {
+        // Fold the gate: configured overlay AND past activation.
+        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        // ADR-0009 Addendum A.3: the network_id discriminator is the genesis hash.
+        attestation_reward_eligibility(txs, selected_parent_bond_view, self.genesis.hash, activated)
+            .map_err(|(bond_tx, epoch)| IneligibleAttestationInBlock(bond_tx, epoch))
     }
 
     /// Validates transactions against the provided `utxo_view` and returns a vector with all transactions
@@ -426,6 +460,50 @@ impl VirtualStateProcessor {
     }
 }
 
+/// Pure core of the ADR-0009 Addendum B §B.4 reward-eligibility rule, split
+/// out from [`VirtualStateProcessor::check_attestation_reward_eligibility`] so
+/// it can be unit-tested without a full processor. `activated` folds the
+/// `dns_params.is_some() && daa_score >= dns_activation_daa_score` gate; when
+/// `false` the rule is a no-op (every current network). On the first
+/// ineligible attestation returns `Err((bond tx id, epoch))`; the caller maps
+/// it to [`IneligibleAttestationInBlock`]. An attestation is eligible iff its
+/// bond resolves to `Active` in `bond_view` at the attestation's
+/// `target_daa_score` **and** its ML-DSA-65 signature verifies over the
+/// canonical [`stake_attestation_message`] digest (Addendum A.3 layout).
+fn attestation_reward_eligibility(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    net_id: BlockHash,
+    activated: bool,
+) -> Result<(), (TransactionId, u64)> {
+    if !activated {
+        return Ok(());
+    }
+    for att in attestations_from_accepted_txs(txs) {
+        // (a) bond resolves to Active at the attestation's anchor.
+        let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) else {
+            return Err((att.bond_outpoint.transaction_id, att.epoch));
+        };
+        // (b) ML-DSA-65 signature verifies over the canonical digest.
+        let digest = stake_attestation_message(
+            net_id.as_byte_slice(),
+            att.epoch,
+            att.target_hash,
+            att.target_daa_score,
+            att.validator_set_commitment,
+            att.bond_outpoint,
+        )
+        .as_bytes();
+        if !matches!(
+            verify_mldsa65_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA65_CONTEXT),
+            Ok(true)
+        ) {
+            return Err((att.bond_outpoint.transaction_id, att.epoch));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
@@ -480,5 +558,92 @@ mod tests {
             // Data was originally sorted, so we check if they remain sorted after filtering
             assert!(prev < curr, "expected {} < {} if original sort was preserved", prev, curr);
         });
+    }
+
+    // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the reward-eligibility
+    // rule's pure core. Covers the gate + both reject branches (bond absent /
+    // signature invalid). The accept-with-valid-signature path requires
+    // ML-DSA-65 signing (libcrux) and is covered by the PR-10.5′-b3 end-to-end
+    // integration test rather than here.
+    mod attestation_reward_eligibility {
+        use super::super::attestation_reward_eligibility as eligibility;
+        use kaspa_consensus_core::{
+            BlockHash,
+            dns_finality::{
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
+                StakeAttestation, StakeBondRecord, single_attestation_shard, stake_attestation_shard_tx,
+            },
+            tx::TransactionOutpoint,
+        };
+        use kaspa_hashes::Hash64;
+
+        fn outpoint(b: u8) -> TransactionOutpoint {
+            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+        }
+
+        fn attestation(bond_outpoint: TransactionOutpoint) -> StakeAttestation {
+            StakeAttestation {
+                version: DNS_PAYLOAD_VERSION_V1,
+                validator_id: Hash64::from_bytes([0xa1; 64]),
+                bond_outpoint,
+                epoch: 1,
+                target_hash: Hash64::from_bytes([0x55; 64]),
+                target_daa_score: 10_000,
+                validator_set_commitment: Hash64::from_bytes([0x66; 64]),
+                // Garbage signature — never verifies. The accept path is tested
+                // end-to-end in b3 (a real validator-signed attestation).
+                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            }
+        }
+
+        fn active_bond(op: TransactionOutpoint) -> StakeBondRecord {
+            StakeBondRecord {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
+                validator_pubkey_hash: Hash64::from_bytes([0xbb; 64]),
+                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
+                amount: 1_000,
+                activation_daa_score: 0, // Active from genesis.
+                unbonding_period_blocks: 100,
+                owner_reward_spk_payload: [0xdd; 32],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: BondStatus::Active,
+            }
+        }
+
+        const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
+
+        #[test]
+        fn noop_when_not_activated() {
+            // Even an attestation referencing an unknown bond passes when the
+            // gate is closed (every current network: dns_activation = u64::MAX).
+            let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(outpoint(1))));
+            assert_eq!(eligibility(&[tx], &ActiveBondView::new(), NET(), false), Ok(()));
+        }
+
+        #[test]
+        fn rejects_attestation_with_unknown_bond() {
+            // Activated + empty bond view ⇒ the bond does not resolve ⇒ reject.
+            let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(outpoint(1))));
+            assert_eq!(eligibility(&[tx], &ActiveBondView::new(), NET(), true), Err((Hash64::from_bytes([1; 64]), 1)));
+        }
+
+        #[test]
+        fn rejects_attestation_with_invalid_signature() {
+            // Activated + bond present & Active, but the (garbage) signature
+            // fails verification ⇒ reject at branch (b).
+            let op = outpoint(2);
+            let view = ActiveBondView::from_records([(op, active_bond(op))]);
+            let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(op)));
+            assert_eq!(eligibility(&[tx], &view, NET(), true), Err((Hash64::from_bytes([2; 64]), 1)));
+        }
+
+        #[test]
+        fn ok_when_no_attestation_shards() {
+            // Activated but no shard txs ⇒ nothing to check ⇒ Ok.
+            assert_eq!(eligibility(&[], &ActiveBondView::new(), NET(), true), Ok(()));
+        }
     }
 }

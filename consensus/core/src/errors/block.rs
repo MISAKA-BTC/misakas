@@ -149,6 +149,18 @@ pub enum RuleError {
     #[error("coinbase transaction is not built as expected")]
     BadCoinbaseTransaction,
 
+    // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the Model-B
+    // reward-eligibility block-validity rule. A block carrying a
+    // `StakeAttestationShard` whose attestation does not resolve to an
+    // `Active` bond (in the block's selected-parent bond view, at the
+    // attestation's target DAA score) with a valid ML-DSA-65 signature is
+    // rejected, so that every included attestation is rewardable and the
+    // coinbase fan-out needs no skip set. Args: the referenced bond's
+    // transaction id and the attestation epoch. Inert below
+    // `dns_activation_daa_score`.
+    #[error("block includes an ineligible stake attestation: bond {0} epoch {1} is not an active bond with a valid signature")]
+    IneligibleAttestationInBlock(TransactionId, u64),
+
     #[error("{0} non-coinbase transactions (out of {1}) are invalid in UTXO context")]
     InvalidTransactionsInUtxoContext(usize, usize),
 
