@@ -75,6 +75,14 @@ pub enum DatabaseStorePrefixes {
     UtxoIndexTips = 193,
     CirculatingSupply = 194,
 
+    // ---- kaspa-pq DNS finality overlay (ADR-0009, Phase 10) ----
+    /// Singleton: the per-anchor `DnsState` (work/stake depth, last
+    /// DNS-confirmed anchor, rollout stage).
+    DnsState = 195,
+    /// Keyed by `TransactionOutpoint`: the active/unbonding/slashed
+    /// `StakeBondRecord` set backing `StakeScore` and bond-existence checks.
+    StakeBonds = 196,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

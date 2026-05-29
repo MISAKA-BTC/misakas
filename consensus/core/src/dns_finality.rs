@@ -54,6 +54,7 @@ use std::fmt::{self, Display, Formatter};
 use blake2b_simd::Params as Blake2bParams;
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
+use kaspa_utils::mem_size::MemSizeEstimator;
 
 use crate::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SubnetworkId};
 use crate::{BlueWorkType, tx::TransactionOutpoint};
@@ -184,7 +185,9 @@ pub const CAP_HSM_BACKED: u32 = 0x20;
 /// Fixed-point scaled stake score. Wrapper for documentation /
 /// arithmetic clarity; the underlying `u128` is the same number of
 /// "stake-score units" used throughout the overlay.
-#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+#[derive(
+    Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize,
+)]
 pub struct StakeScore(pub u128);
 
 impl Display for StakeScore {
@@ -202,7 +205,7 @@ impl Display for StakeScore {
 /// Never appears explicitly in tx payloads; it is a view of network
 /// state used by the RPC layer and by node-internal activation
 /// gating. Persisted as a single byte.
-#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum DnsRolloutStage {
@@ -223,7 +226,7 @@ pub enum DnsRolloutStage {
 /// predicate as `bond ∈ active_bonds ∧ bond ∉ unbonding_bonds ∧
 /// bond ∉ slashed_bonds`; the four-state enum below makes that
 /// predicate a single field comparison.
-#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum BondStatus {
@@ -459,7 +462,7 @@ pub struct UnrevealSlashingEvidencePayload {
 /// PR-10.5) keyed by `bond_outpoint`. Carries all fields the
 /// validator-service eligibility check (ADR-0010 §"Validator service
 /// runtime") needs without re-loading the original payload.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct StakeBondRecord {
     pub version: u16,
 
@@ -485,6 +488,12 @@ pub struct StakeBondRecord {
 
     pub status: BondStatus,
 }
+
+/// PR-10.4-db: the `StakeBonds` consensus store (`CachedDbAccess`) requires
+/// its value to estimate its memory footprint. The store uses an
+/// item-capped (`untracked`) cache policy, so the default `size_of::<Self>()`
+/// estimate is unused for eviction — an empty impl mirrors `UtxoEntry`.
+impl MemSizeEstimator for StakeBondRecord {}
 
 /// Per-validator entry inside a [`ValidatorSetSnapshot`]. Carries the
 /// minimal fields fed into [`validator_set_commitment`]:
@@ -514,7 +523,7 @@ pub struct ValidatorSetSnapshot {
 /// RPC layer and to the validator service. Lives in
 /// `database/src/stores/stake_score.rs` (PR-10.5) keyed by
 /// `selected_chain_anchor`.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct DnsState {
     pub selected_chain_anchor: Hash64,
     pub anchor_daa_score: u64,

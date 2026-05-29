@@ -7,6 +7,7 @@ use crate::{
         block_window_cache::BlockWindowCacheStore,
         daa::DbDaaStore,
         depth::DbDepthStore,
+        dns_state::DbDnsStateStore,
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
         headers_selected_tip::DbHeadersSelectedTipStore,
@@ -17,6 +18,7 @@ use crate::{
         reachability::{DbReachabilityStore, ReachabilityData},
         relations::DbRelationsStore,
         selected_chain::DbSelectedChainStore,
+        stake_bonds::DbStakeBondsStore,
         statuses::DbStatusesStore,
         tips::DbTipsStore,
         utxo_diffs::DbUtxoDiffsStore,
@@ -48,6 +50,10 @@ pub struct ConsensusStorage {
     pub pruning_meta_stores: Arc<RwLock<PruningMetaStores>>,
     pub virtual_stores: Arc<RwLock<VirtualStores>>,
     pub selected_chain_store: Arc<RwLock<DbSelectedChainStore>>,
+
+    // kaspa-pq DNS finality overlay stores (ADR-0009, Phase 10)
+    pub dns_state_store: Arc<RwLock<DbDnsStateStore>>,
+    pub stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
 
     // Append-only stores
     pub ghostdag_store: Arc<DbGhostdagStore>,
@@ -215,6 +221,13 @@ impl ConsensusStorage {
         let headers_selected_tip_store = Arc::new(RwLock::new(DbHeadersSelectedTipStore::new(db.clone())));
         let body_tips_store = Arc::new(RwLock::new(DbTipsStore::new(db.clone())));
 
+        // kaspa-pq DNS finality overlay stores (ADR-0009, Phase 10). The
+        // bond set is small (bounded by the active validator count), so a
+        // modest item-capped cache suffices.
+        let dns_state_store = Arc::new(RwLock::new(DbDnsStateStore::new(db.clone())));
+        let stake_bonds_store =
+            Arc::new(RwLock::new(DbStakeBondsStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build())));
+
         // Block windows
         let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));
         let block_window_cache_for_past_median_time = Arc::new(BlockWindowCacheStore::new(median_window_builder.build()));
@@ -243,6 +256,8 @@ impl ConsensusStorage {
             pruning_meta_stores,
             virtual_stores,
             selected_chain_store,
+            dns_state_store,
+            stake_bonds_store,
             acceptance_data_store,
             past_pruning_points_store,
             daa_excluded_store,
