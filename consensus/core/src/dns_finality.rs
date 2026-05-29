@@ -49,6 +49,7 @@
 //! Borsh path; `serde` JSON is added via manual impls in the
 //! consumer-facing RPC types only.
 
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
 use blake2b_simd::Params as Blake2bParams;
@@ -2142,6 +2143,110 @@ pub fn bond_mutations_from_accepted_txs(txs: &[Transaction], accepted_daa_score:
     muts
 }
 
+// =====================================================================
+// PR-10.5 / A.5: deterministic StakeScore aggregation -> DnsState.
+//
+// Pure, store-free helpers. The consensus crate (which can call into
+// kaspa-txscript for ML-DSA verification) is responsible for walking the
+// selected chain, verifying each attestation's signature against its
+// bond's `validator_pubkey` under `ATTESTATION_MLDSA65_CONTEXT`, and
+// gating by `is_bond_active_at` — then it passes the surviving
+// contributions here. Keeping the aggregation pure makes the
+// dedup + normalisation deterministic and unit-testable.
+// =====================================================================
+
+/// One signature-verified, bond-active attestation contribution fed into
+/// [`aggregate_epoch_tallies`]. The caller (consensus aggregation pass)
+/// has already (a) confirmed the referenced bond exists and is `Active` at
+/// the attestation's `target_daa_score`, and (b) verified the ML-DSA-65
+/// signature — so only the dedup key and the bond's stake remain.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct AttestationContribution {
+    pub epoch: u64,
+    pub validator_id: Hash64,
+    pub bond_outpoint: TransactionOutpoint,
+    /// The contributing bond's stake in sompi.
+    pub signed_stake_sompi: u64,
+}
+
+/// Aggregate validated attestation contributions into per-epoch
+/// [`EpochStakeTally`]s (ADR-0009 §"StakeScore mechanics" / Addendum A.5).
+///
+/// Enforces the `(bond_outpoint, validator_id, epoch)` uniqueness rule —
+/// each triple contributes its stake at most once, even across multiple
+/// shards. `total_active_stake_by_epoch` supplies each epoch's
+/// normalisation denominator (total `Active` stake at that epoch); an
+/// epoch with a denominator but no signed stake yields a `0` tally, and
+/// signed contributions for an epoch absent from the denominator map are
+/// ignored (no denominator ⇒ the epoch is not yet normalisable). Tallies
+/// are returned ascending by epoch for deterministic downstream hashing.
+pub fn aggregate_epoch_tallies(
+    contributions: &[AttestationContribution],
+    total_active_stake_by_epoch: &BTreeMap<u64, u64>,
+) -> Vec<EpochStakeTally> {
+    let mut seen: HashSet<(TransactionOutpoint, Hash64, u64)> = HashSet::new();
+    let mut signed_by_epoch: BTreeMap<u64, u64> = BTreeMap::new();
+    for c in contributions {
+        // Dedup the (bond, validator, epoch) triple; count its stake once.
+        if seen.insert((c.bond_outpoint, c.validator_id, c.epoch)) {
+            let entry = signed_by_epoch.entry(c.epoch).or_insert(0);
+            *entry = entry.saturating_add(c.signed_stake_sompi);
+        }
+    }
+    total_active_stake_by_epoch
+        .iter()
+        .map(|(&epoch, &total)| EpochStakeTally {
+            epoch,
+            // `signed` is clamped to `total` inside `stake_score_increment`,
+            // so an over-count cannot inflate the score.
+            signed_stake_sompi: signed_by_epoch.get(&epoch).copied().unwrap_or(0),
+            total_active_stake_sompi: total,
+        })
+        .collect()
+}
+
+/// Build the new [`DnsState`] for `anchor`, advancing the last
+/// DNS-confirmed anchor when `anchor` clears **both** depth thresholds
+/// (ADR-0009 Addendum A.5; via [`is_dns_confirmed`]).
+///
+/// `prev` is the previous `DnsState` (the singleton store's current value,
+/// or `None` before the overlay's first write). When `anchor` is not
+/// itself confirmed, the previously-confirmed anchor is carried forward;
+/// if there is no previous confirmation, `last_dns_confirmed_anchor`
+/// defaults to the zero `Hash64` — meaning "nothing confirmed yet", which
+/// the reorg gate treats as dormant (every candidate trivially includes it).
+#[allow(clippy::too_many_arguments)]
+pub fn advance_dns_confirmation(
+    prev: Option<&DnsState>,
+    anchor: Hash64,
+    anchor_daa_score: u64,
+    work_depth: BlueWorkType,
+    stake_depth: StakeScore,
+    rollout_stage: DnsRolloutStage,
+    validator_set_commitment: Hash64,
+    required_work_depth: BlueWorkType,
+    required_stake_depth: StakeScore,
+) -> DnsState {
+    let confirmed = is_dns_confirmed(work_depth, stake_depth, required_work_depth, required_stake_depth);
+    let (last_dns_confirmed_anchor, last_dns_confirmed_anchor_daa_score) = if confirmed {
+        (anchor, anchor_daa_score)
+    } else if let Some(p) = prev {
+        (p.last_dns_confirmed_anchor, p.last_dns_confirmed_anchor_daa_score)
+    } else {
+        (Hash64::default(), 0)
+    };
+    DnsState {
+        selected_chain_anchor: anchor,
+        anchor_daa_score,
+        work_depth,
+        stake_depth,
+        last_dns_confirmed_anchor,
+        last_dns_confirmed_anchor_daa_score,
+        rollout_stage,
+        validator_set_commitment,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2684,6 +2789,89 @@ mod tests {
         let native = dns_overlay_tx(SubnetworkId::from_byte(0), vec![]);
         let coinbase = dns_overlay_tx(SubnetworkId::from_byte(1), vec![]);
         assert!(bond_mutations_from_accepted_txs(&[native, coinbase], 100).is_empty());
+    }
+
+    // ---- A.5: StakeScore aggregation -> DnsState ----
+
+    #[test]
+    fn aggregate_epoch_tallies_dedups_triple_and_normalises() {
+        let op1 = TransactionOutpoint::new(Hash64::from_bytes([0x01; 64]), 0);
+        let op2 = TransactionOutpoint::new(Hash64::from_bytes([0x02; 64]), 0);
+        let v1 = Hash64::from_bytes([0xa1; 64]);
+        let v2 = Hash64::from_bytes([0xa2; 64]);
+        let contribs = vec![
+            AttestationContribution { epoch: 1, validator_id: v1, bond_outpoint: op1, signed_stake_sompi: 30 },
+            // Duplicate (op1, v1, epoch 1) — must NOT be double-counted.
+            AttestationContribution { epoch: 1, validator_id: v1, bond_outpoint: op1, signed_stake_sompi: 30 },
+            AttestationContribution { epoch: 1, validator_id: v2, bond_outpoint: op2, signed_stake_sompi: 20 },
+            AttestationContribution { epoch: 2, validator_id: v1, bond_outpoint: op1, signed_stake_sompi: 30 },
+        ];
+        let totals = BTreeMap::from([(1u64, 100u64), (2u64, 100u64), (3u64, 100u64)]);
+        let tallies = aggregate_epoch_tallies(&contribs, &totals);
+        assert_eq!(tallies.len(), 3); // ascending by epoch
+        assert_eq!(tallies[0], EpochStakeTally { epoch: 1, signed_stake_sompi: 50, total_active_stake_sompi: 100 });
+        assert_eq!(tallies[1], EpochStakeTally { epoch: 2, signed_stake_sompi: 30, total_active_stake_sompi: 100 });
+        assert_eq!(tallies[2], EpochStakeTally { epoch: 3, signed_stake_sompi: 0, total_active_stake_sompi: 100 });
+        // End-to-end: 0.5 + 0.3 + 0.0 = 0.8.
+        assert_eq!(compute_stake_score(&tallies), StakeScore(STAKE_SCORE_SCALE / 2 + STAKE_SCORE_SCALE * 3 / 10));
+    }
+
+    #[test]
+    fn aggregate_epoch_tallies_ignores_epoch_without_denominator() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x01; 64]), 0);
+        let contribs = vec![AttestationContribution {
+            epoch: 9,
+            validator_id: Hash64::from_bytes([0xa1; 64]),
+            bond_outpoint: op,
+            signed_stake_sompi: 50,
+        }];
+        assert!(aggregate_epoch_tallies(&contribs, &BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn advance_dns_confirmation_advances_only_when_both_thresholds_met() {
+        let vsc = Hash64::from_bytes([0x22; 64]);
+        let (cw, cs) = (BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE)); // require work>=1000, stake>=1.0
+        let stage = DnsRolloutStage::Active;
+
+        // Not confirmed (stake below cS) + no prev -> last confirmed = zero ("none yet").
+        let a1 = Hash64::from_bytes([0x11; 64]);
+        let s1 = advance_dns_confirmation(
+            None,
+            a1,
+            500,
+            BlueWorkType::from_u64(2000),
+            StakeScore(STAKE_SCORE_SCALE / 2),
+            stage,
+            vsc,
+            cw,
+            cs,
+        );
+        assert_eq!(s1.selected_chain_anchor, a1);
+        assert_eq!(s1.last_dns_confirmed_anchor, Hash64::default());
+
+        // Both thresholds met -> last confirmed advances to this anchor.
+        let a2 = Hash64::from_bytes([0x33; 64]);
+        let s2 = advance_dns_confirmation(
+            Some(&s1),
+            a2,
+            600,
+            BlueWorkType::from_u64(2000),
+            StakeScore(STAKE_SCORE_SCALE),
+            stage,
+            vsc,
+            cw,
+            cs,
+        );
+        assert_eq!(s2.last_dns_confirmed_anchor, a2);
+        assert_eq!(s2.last_dns_confirmed_anchor_daa_score, 600);
+
+        // Next anchor not confirmed -> carries s2's confirmed anchor forward.
+        let a3 = Hash64::from_bytes([0x44; 64]);
+        let s3 = advance_dns_confirmation(Some(&s2), a3, 700, BlueWorkType::from_u64(2000), StakeScore(0), stage, vsc, cw, cs);
+        assert_eq!(s3.selected_chain_anchor, a3);
+        assert_eq!(s3.last_dns_confirmed_anchor, a2);
+        assert_eq!(s3.last_dns_confirmed_anchor_daa_score, 600);
     }
 
     #[test]
