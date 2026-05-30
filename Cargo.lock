@@ -2609,6 +2609,7 @@ dependencies = [
  "kaspa-txscript",
  "kaspa-txscript-errors",
  "kaspa-utils",
+ "libcrux-ml-dsa",
  "log",
  "once_cell",
  "parking_lot",

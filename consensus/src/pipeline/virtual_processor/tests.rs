@@ -240,6 +240,129 @@ async fn dns_overlay_active_chain_validates() {
     ctx.assert_tips_num(1);
 }
 
+// ============================================================================
+// kaspa-pq ADR-0018 §G — DNS-overlay DAG integration harness (foundation).
+//
+// Retires the "ML-DSA-65 signing unavailable in the consensus test crate"
+// blocker for the reward-bearing / reorg / slashing DAG tests (DAG-2..7): these
+// helpers let a consensus test build stake-bond + attestation-shard txs and
+// produce an attestation signature the §B.4 verifier
+// (`kaspa_txscript::verify_mldsa65_with_context` under
+// `ATTESTATION_MLDSA65_CONTEXT`) accepts. Funding a bond tx from a coinbase UTXO
+// (so a full reward-bearing chain validates) is the next harness step (DAG-2).
+// ============================================================================
+#[cfg(test)]
+mod dns_harness {
+    use kaspa_consensus_core::{
+        Hash64,
+        dns_finality::{
+            ATTESTATION_MLDSA65_CONTEXT, DNS_PAYLOAD_VERSION_V1, StakeAttestation, StakeBondPayload,
+            attestations_from_accepted_txs, single_attestation_shard, stake_attestation_message, stake_attestation_shard_tx,
+            validator_id_from_pubkey,
+        },
+        subnets::{SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND},
+        tx::{Transaction, TransactionOutpoint},
+    };
+    use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+
+    /// A test validator: an ML-DSA-65 key (re-derived deterministically from
+    /// `seed`) plus its 1952-byte pubkey and overlay `validator_id`.
+    pub(super) struct HarnessValidator {
+        pub seed: [u8; 32],
+        pub pubkey: Vec<u8>,
+        pub validator_id: Hash64,
+    }
+
+    pub(super) fn harness_validator(seed: [u8; 32]) -> HarnessValidator {
+        let kp = mldsa::generate_key_pair(seed);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let validator_id = validator_id_from_pubkey(&pubkey);
+        HarnessValidator { seed, pubkey, validator_id }
+    }
+
+    /// Build a stake-bond tx (subnetwork `SUBNETWORK_ID_STAKE_BOND`, payload =
+    /// borsh `StakeBondPayload`). The funded variant (output-0 = `amount` locked
+    /// stake spent from a coinbase UTXO) is the next step; here the tx is
+    /// payload-first for shape / borsh checks.
+    pub(super) fn build_stake_bond_tx(v: &HarnessValidator, amount: u64, activation_daa_score: u64, reward_payload: [u8; 32]) -> Transaction {
+        let payload = StakeBondPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            owner_pubkey_hash: v.validator_id,
+            validator_pubkey_hash: v.validator_id,
+            validator_pubkey: v.pubkey.clone(),
+            amount,
+            activation_daa_score,
+            unbonding_period_blocks: 700,
+            owner_reward_spk_payload: reward_payload,
+        };
+        Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_BOND, 0, borsh::to_vec(&payload).unwrap())
+    }
+
+    /// Build a fully ML-DSA-65-signed attestation for `bond_outpoint`, signing
+    /// exactly the digest the §B.4 verifier reconstructs.
+    pub(super) fn build_signed_attestation(
+        v: &HarnessValidator,
+        network_id: &[u8],
+        bond_outpoint: TransactionOutpoint,
+        epoch: u64,
+        target_hash: Hash64,
+        target_daa_score: u64,
+        validator_set_commitment: Hash64,
+    ) -> StakeAttestation {
+        let msg = stake_attestation_message(network_id, epoch, target_hash, target_daa_score, validator_set_commitment, bond_outpoint);
+        let mb = msg.as_bytes();
+        let kp = mldsa::generate_key_pair(v.seed);
+        let sig = mldsa::sign(&kp.signing_key, &mb[..], ATTESTATION_MLDSA65_CONTEXT, [0x55u8; 32]).expect("ml-dsa-65 sign");
+        StakeAttestation {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: v.validator_id,
+            bond_outpoint,
+            epoch,
+            target_hash,
+            target_daa_score,
+            validator_set_commitment,
+            signature: sig.as_ref().to_vec(),
+        }
+    }
+
+    /// DAG-harness foundation (ADR-0018 §G): a consensus test can build overlay
+    /// txs and produce an attestation signature the §B.4 verifier accepts.
+    #[test]
+    fn dns_harness_signs_attestations_the_verifier_accepts() {
+        let v = harness_validator([0x11u8; 32]);
+        assert_eq!(v.pubkey.len(), 1952);
+        assert_eq!(v.validator_id, validator_id_from_pubkey(&v.pubkey));
+
+        // Stake-bond tx shape + payload round-trip; validator_pubkey_hash binds the pubkey.
+        let bond_tx = build_stake_bond_tx(&v, 10_000_000_000, 0, [0x33u8; 32]);
+        assert_eq!(bond_tx.subnetwork_id, SUBNETWORK_ID_STAKE_BOND);
+        let bond_outpoint = TransactionOutpoint::new(bond_tx.id(), 0);
+        let decoded: StakeBondPayload = borsh::from_slice(&bond_tx.payload).unwrap();
+        assert_eq!(decoded.amount, 10_000_000_000);
+        assert_eq!(decoded.validator_pubkey_hash, validator_id_from_pubkey(&decoded.validator_pubkey));
+
+        // Signed attestation: the §B.4 verifier (txscript) must accept it.
+        let net_id = [0xabu8; 32];
+        let target_hash = Hash64::from_bytes([0x44u8; 64]);
+        let vsc = Hash64::from_bytes([0x22u8; 64]);
+        let att = build_signed_attestation(&v, &net_id, bond_outpoint, 7, target_hash, 700, vsc);
+        let msg = stake_attestation_message(&net_id, att.epoch, att.target_hash, att.target_daa_score, att.validator_set_commitment, att.bond_outpoint);
+        let mb = msg.as_bytes();
+        assert!(
+            kaspa_txscript::verify_mldsa65_with_context(&v.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA65_CONTEXT).unwrap(),
+            "the §B.4 verifier must accept the harness-signed attestation"
+        );
+        // A different key must NOT verify (sanity).
+        let v2 = harness_validator([0x99u8; 32]);
+        assert!(!kaspa_txscript::verify_mldsa65_with_context(&v2.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA65_CONTEXT).unwrap());
+
+        // Shard tx wraps exactly one extractable attestation.
+        let shard_tx = stake_attestation_shard_tx(&single_attestation_shard(att));
+        assert_eq!(shard_tx.subnetwork_id, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD);
+        assert_eq!(attestations_from_accepted_txs(std::slice::from_ref(&shard_tx)).len(), 1);
+    }
+}
+
 #[tokio::test]
 async fn basic_utxo_disqualified_test() {
     kaspa_core::log::try_init_logger("info");

@@ -57,6 +57,9 @@ rand_distr.workspace = true
 kaspa-txscript-errors.workspace = true
 kaspa-addresses.workspace = true
 borsh.workspace = true
+# kaspa-pq (ADR-0018 §G): ML-DSA-65 signing for the DNS-overlay DAG test harness
+# (the verification side, kaspa-txscript, is already a normal dependency).
+libcrux-ml-dsa.workspace = true
 
 [[bench]]
 name = "parallel_muhash"
