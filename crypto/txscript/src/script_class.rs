@@ -109,6 +109,15 @@ impl ScriptClass {
             && (script_public_key[68] == opcodes::codes::OpCheckSigMlDsa65)
     }
 
+    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): the sole
+    /// standard and consensus-allowed script class on a PQ-active network is
+    /// ML-DSA P2PKH. Used by mempool standardness and by consensus output-class
+    /// enforcement (`check_transaction_pq_output_classes`) to reject every
+    /// legacy (secp256k1 / P2SH) class.
+    pub fn is_pq_standard(&self) -> bool {
+        matches!(self, ScriptClass::PubKeyHashMlDsa65)
+    }
+
     fn as_str(&self) -> &'static str {
         match self {
             ScriptClass::NonStandard => NON_STANDARD,
