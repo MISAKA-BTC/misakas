@@ -263,7 +263,7 @@ mod dns_harness {
         subnets::{SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND},
         tx::{Transaction, TransactionOutpoint},
     };
-    use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+    use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
     /// A test validator: an ML-DSA-65 key (re-derived deterministically from
     /// `seed`) plus its 1952-byte pubkey and overlay `validator_id`.
@@ -330,7 +330,7 @@ mod dns_harness {
     #[test]
     fn dns_harness_signs_attestations_the_verifier_accepts() {
         let v = harness_validator([0x11u8; 32]);
-        assert_eq!(v.pubkey.len(), 1952);
+        assert_eq!(v.pubkey.len(), 2592);
         assert_eq!(v.validator_id, validator_id_from_pubkey(&v.pubkey));
 
         // Stake-bond tx shape + payload round-trip; validator_pubkey_hash binds the pubkey.

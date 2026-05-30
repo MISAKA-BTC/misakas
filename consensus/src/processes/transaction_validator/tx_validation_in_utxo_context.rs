@@ -3,7 +3,7 @@ use kaspa_consensus_core::{
     hashing::sighash::{SigHashReusedValuesSync, SigHashReusedValuesUnsync},
     tx::{TransactionInput, VerifiableTransaction},
 };
-use kaspa_txscript::{SigCacheKey, TxScriptEngine, caches::Cache};
+use kaspa_txscript::{ScriptPolicy, SigCacheKey, TxScriptEngine, caches::Cache};
 use kaspa_txscript_errors::TxScriptError;
 use rayon::ThreadPool;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -52,7 +52,10 @@ impl TransactionValidator {
 
         match flags {
             TxValidationFlags::Full | TxValidationFlags::SkipMassCheck => {
-                self.check_scripts(tx)?;
+                // kaspa-pq: resolve the PQ-only script policy from the point-of-view
+                // DAA score (ADR-0019). On PQ-active networks this makes legacy
+                // secp256k1 signature opcodes and P2SH hard consensus errors.
+                self.check_scripts_with_policy(tx, pov_daa_score)?;
             }
             TxValidationFlags::SkipScriptChecks => {}
         }
@@ -164,34 +167,46 @@ impl TransactionValidator {
         Ok(())
     }
 
+    /// Back-compat / test entry point: runs scripts under [`ScriptPolicy::LEGACY`]
+    /// (no PQ restriction). Production validation uses
+    /// [`Self::check_scripts_with_policy`] so PQ-only enforcement is applied.
     pub fn check_scripts(&self, tx: &(impl VerifiableTransaction + Sync)) -> TxResult<()> {
-        check_scripts(&self.sig_cache, tx)
+        check_scripts(&self.sig_cache, tx, ScriptPolicy::LEGACY)
+    }
+
+    /// kaspa-pq: run scripts with the PQ-only policy resolved from `pov_daa_score`
+    /// (ADR-0019). Legacy secp256k1 signature opcodes and P2SH become hard errors
+    /// on PQ-active networks.
+    pub fn check_scripts_with_policy(&self, tx: &(impl VerifiableTransaction + Sync), pov_daa_score: u64) -> TxResult<()> {
+        check_scripts(&self.sig_cache, tx, self.resolved_script_policy(pov_daa_score))
     }
 }
 
-pub fn check_scripts(sig_cache: &Cache<SigCacheKey, bool>, tx: &(impl VerifiableTransaction + Sync)) -> TxResult<()> {
+pub fn check_scripts(sig_cache: &Cache<SigCacheKey, bool>, tx: &(impl VerifiableTransaction + Sync), policy: ScriptPolicy) -> TxResult<()> {
     if tx.inputs().len() > CHECK_SCRIPTS_PARALLELISM_THRESHOLD {
-        check_scripts_par_iter(sig_cache, tx)
+        check_scripts_par_iter(sig_cache, tx, policy)
     } else {
-        check_scripts_sequential(sig_cache, tx)
+        check_scripts_sequential(sig_cache, tx, policy)
     }
 }
 
-pub fn check_scripts_sequential(sig_cache: &Cache<SigCacheKey, bool>, tx: &impl VerifiableTransaction) -> TxResult<()> {
+pub fn check_scripts_sequential(sig_cache: &Cache<SigCacheKey, bool>, tx: &impl VerifiableTransaction, policy: ScriptPolicy) -> TxResult<()> {
     let reused_values = SigHashReusedValuesUnsync::new();
     for (i, (input, entry)) in tx.populated_inputs().enumerate() {
         TxScriptEngine::from_transaction_input(tx, input, i, entry, &reused_values, sig_cache)
+            .with_script_policy(policy)
             .execute()
             .map_err(|err| map_script_err(err, input))?;
     }
     Ok(())
 }
 
-pub fn check_scripts_par_iter(sig_cache: &Cache<SigCacheKey, bool>, tx: &(impl VerifiableTransaction + Sync)) -> TxResult<()> {
+pub fn check_scripts_par_iter(sig_cache: &Cache<SigCacheKey, bool>, tx: &(impl VerifiableTransaction + Sync), policy: ScriptPolicy) -> TxResult<()> {
     let reused_values = SigHashReusedValuesSync::new();
     (0..tx.inputs().len()).into_par_iter().try_for_each(|idx| {
         let (input, utxo) = tx.populated_input(idx);
         TxScriptEngine::from_transaction_input(tx, input, idx, utxo, &reused_values, sig_cache)
+            .with_script_policy(policy)
             .execute()
             .map_err(|err| map_script_err(err, input))
     })
@@ -201,8 +216,9 @@ pub fn check_scripts_par_iter_pool(
     sig_cache: &Cache<SigCacheKey, bool>,
     tx: &(impl VerifiableTransaction + Sync),
     pool: &ThreadPool,
+    policy: ScriptPolicy,
 ) -> TxResult<()> {
-    pool.install(|| check_scripts_par_iter(sig_cache, tx))
+    pool.install(|| check_scripts_par_iter(sig_cache, tx, policy))
 }
 
 fn map_script_err(script_err: TxScriptError, input: &TransactionInput) -> TxRuleError {

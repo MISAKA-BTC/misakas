@@ -165,7 +165,7 @@ mod tests {
             bond_outpoint: op,
             owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
             validator_pubkey_hash: Hash64::from_bytes([0xbb; 64]),
-            validator_pubkey: vec![0xcc; 1952],
+            validator_pubkey: vec![0xcc; 2592],
             amount,
             activation_daa_score: 100,
             unbonding_period_blocks: 1000,

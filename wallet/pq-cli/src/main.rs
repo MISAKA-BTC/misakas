@@ -53,7 +53,7 @@ use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_txscript::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT};
 use kaspa_wallet_keys::kaspa_pq;
 use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
-use libcrux_ml_dsa::ml_dsa_65;
+use libcrux_ml_dsa::ml_dsa_87;
 use thiserror::Error;
 
 const ENCRYPTED_MAGIC: &[u8; 4] = b"KPQ1";
@@ -387,9 +387,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             let msg = decode_hex("message_hex", message_hex)?;
             let pk_arr: [u8; MLDSA65_PK_LEN] = pk_bytes.as_slice().try_into().unwrap();
             let sig_arr: [u8; MLDSA65_SIG_LEN] = sig_bytes.as_slice().try_into().unwrap();
-            let vk = ml_dsa_65::MLDSA65VerificationKey::new(pk_arr);
-            let sig = ml_dsa_65::MLDSA65Signature::new(sig_arr);
-            ml_dsa_65::verify(&vk, &msg, MLDSA65_TX_CONTEXT, &sig).map_err(|_| CliError::SignatureInvalid)?;
+            let vk = ml_dsa_87::MLDSA87VerificationKey::new(pk_arr);
+            let sig = ml_dsa_87::MLDSA87Signature::new(sig_arr);
+            ml_dsa_87::verify(&vk, &msg, MLDSA65_TX_CONTEXT, &sig).map_err(|_| CliError::SignatureInvalid)?;
             println!("OK: signature verifies under the kaspa-pq tx context.");
         }
         Command::Info { node } => {

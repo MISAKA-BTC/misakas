@@ -66,11 +66,11 @@ use crate::{
 /// 1952 bytes — matches `kaspa_txscript::MLDSA65_PK_LEN`. Repeated
 /// here so this module does not have to depend on `kaspa-txscript`;
 /// asserted-equal by [`tests::dns_constants_have_expected_values`].
-pub const STAKE_VALIDATOR_PUBKEY_LEN: usize = 1952;
+pub const STAKE_VALIDATOR_PUBKEY_LEN: usize = 2592;
 
 /// 3309 bytes — matches `kaspa_txscript::MLDSA65_SIG_LEN`. Same
 /// re-export rationale as [`STAKE_VALIDATOR_PUBKEY_LEN`].
-pub const STAKE_ATTESTATION_SIG_LEN: usize = 3309;
+pub const STAKE_ATTESTATION_SIG_LEN: usize = 4627;
 
 /// Per-block upper bound on the number of attestations a single
 /// [`StakeAttestationShardPayload`] may carry. See ADR-0009 §"Why
@@ -3380,8 +3380,8 @@ mod tests {
         // MLDSA65_SIG_LEN from there directly without creating a
         // dependency cycle; the values are duplicated here and the
         // assertion is the contract).
-        assert_eq!(STAKE_VALIDATOR_PUBKEY_LEN, 1952);
-        assert_eq!(STAKE_ATTESTATION_SIG_LEN, 3309);
+        assert_eq!(STAKE_VALIDATOR_PUBKEY_LEN, 2592);
+        assert_eq!(STAKE_ATTESTATION_SIG_LEN, 4627);
 
         // ADR-0009 / ADR-0010 / ADR-0012 / ADR-0014 domain-
         // separator strings. All consensus-fixed (or consensus-
@@ -4439,7 +4439,7 @@ mod tests {
         // Canonical derivation = unkeyed BLAKE2b-512 of the public key
         // (ADR-0008/0012). Pinning it guards against accidental keying or a
         // switch to the 32-byte P2PKH address payload — either would be a hard fork.
-        let pubkey = [0x42u8; 1952]; // MLDSA65_PK_LEN-sized sample
+        let pubkey = [0x42u8; 2592]; // MLDSA65_PK_LEN-sized sample
         let mut expected = [0u8; 64];
         expected.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(&pubkey).finalize().as_bytes());
         let id = validator_id_from_pubkey(&pubkey);
@@ -4453,7 +4453,7 @@ mod tests {
 
     #[test]
     fn signature_fingerprint_is_unkeyed_blake2b_512() {
-        let sig = [0x7eu8; 3309]; // MLDSA65_SIG_LEN-sized sample
+        let sig = [0x7eu8; 4627]; // MLDSA65_SIG_LEN-sized sample
         let mut expected = [0u8; 64];
         expected.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(&sig).finalize().as_bytes());
         assert_eq!(signature_fingerprint(&sig), Hash64::from_bytes(expected));

@@ -23,7 +23,7 @@ use kaspa_hashes::Hash64;
 use kaspa_txscript::{
     MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder, verify_mldsa65_with_context,
 };
-use libcrux_ml_dsa::ml_dsa_65;
+use libcrux_ml_dsa::ml_dsa_87;
 use rand::RngCore;
 use std::collections::BTreeMap;
 use std::fs;
@@ -62,14 +62,14 @@ pub fn load_validator_seed(path: &str) -> Result<[u8; VALIDATOR_SEED_LEN], Strin
 ///
 /// Constructed once at startup from the seed file and held for the validator's lifetime.
 pub struct ValidatorKey {
-    keypair: ml_dsa_65::MLDSA65KeyPair,
+    keypair: ml_dsa_87::MLDSA87KeyPair,
     /// Overlay identity advertised to the network and matched against the bond.
     pub validator_id: Hash64,
 }
 
 impl ValidatorKey {
     pub fn from_seed(seed: [u8; VALIDATOR_SEED_LEN]) -> Self {
-        let keypair = ml_dsa_65::generate_key_pair(seed);
+        let keypair = ml_dsa_87::generate_key_pair(seed);
         let validator_id = validator_id_from_pubkey(keypair.verification_key.as_ref());
         Self { keypair, validator_id }
     }
@@ -93,7 +93,7 @@ impl ValidatorKey {
     pub fn sign_with_context(&self, message: &[u8], context: &[u8]) -> [u8; MLDSA65_SIG_LEN] {
         let mut randomness = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut randomness);
-        let sig = ml_dsa_65::sign(&self.keypair.signing_key, message, context, randomness)
+        let sig = ml_dsa_87::sign(&self.keypair.signing_key, message, context, randomness)
             .expect("ML-DSA-65 sign is infallible on a well-formed message");
         *sig.as_ref()
     }

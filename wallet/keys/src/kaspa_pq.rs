@@ -24,7 +24,7 @@
 use blake2b_simd::Params;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_txscript::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT};
-use libcrux_ml_dsa::ml_dsa_65;
+use libcrux_ml_dsa::ml_dsa_87;
 
 /// Domain separator for the kaspa-pq wallet keygen XOF. Used as the BLAKE2b
 /// key (max 64 bytes; this string is 33 bytes).
@@ -33,7 +33,7 @@ pub const KASPA_PQ_WALLET_KEYGEN_DOMAIN: &[u8] = b"kaspa-pq-wallet-v1/mldsa65/ke
 /// kaspa-pq ML-DSA-65 wallet keypair, deterministically derived from a
 /// 32-byte `keygen_seed` (see [`derive_keygen_seed`]).
 pub struct KaspaPqMlDsa65KeyPair {
-    inner: ml_dsa_65::MLDSA65KeyPair,
+    inner: ml_dsa_87::MLDSA87KeyPair,
 }
 
 impl KaspaPqMlDsa65KeyPair {
@@ -42,7 +42,7 @@ impl KaspaPqMlDsa65KeyPair {
     /// address can be recomputed from the BIP39 mnemonic + account/index
     /// alone.
     pub fn from_seed(seed: [u8; 32]) -> Self {
-        Self { inner: ml_dsa_65::generate_key_pair(seed) }
+        Self { inner: ml_dsa_87::generate_key_pair(seed) }
     }
 
     /// 1952-byte ML-DSA-65 public key bytes. This is exactly
@@ -86,9 +86,9 @@ impl KaspaPqMlDsa65KeyPair {
     /// `kaspa_txscript::verify_mldsa65_with_context` and can never be replayed
     /// as a transaction signature (distinct context ⇒ distinct domain).
     pub fn sign_with_context(&self, message: &[u8], context: &[u8], signing_randomness: [u8; 32]) -> [u8; MLDSA65_SIG_LEN] {
-        let sig = ml_dsa_65::sign(&self.inner.signing_key, message, context, signing_randomness)
+        let sig = ml_dsa_87::sign(&self.inner.signing_key, message, context, signing_randomness)
             .expect("ML-DSA-65 sign is infallible on a well-formed message");
-        // `MLDSA65Signature::as_ref()` returns `&[u8; SIGNATURE_SIZE]`.
+        // `MLDSA87Signature::as_ref()` returns `&[u8; SIGNATURE_SIZE]`.
         *sig.as_ref()
     }
 }
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn sign_and_locally_verify() {
         // Sanity check that a signature produced by `KaspaPqMlDsa65KeyPair::sign`
-        // verifies under `libcrux_ml_dsa::ml_dsa_65::verify` with the
+        // verifies under `libcrux_ml_dsa::ml_dsa_87::verify` with the
         // kaspa-pq context. (The script engine's hash-keyed
         // `check_mldsa65_signature` is tested end-to-end in
         // `kaspa-txscript`'s `test_mldsa65_p2pkh_spend_roundtrip`.)
@@ -199,9 +199,9 @@ mod tests {
         let sig_bytes = kp.sign(msg, randomness);
         assert_eq!(sig_bytes.len(), MLDSA65_SIG_LEN);
 
-        let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(*kp.public_key_bytes());
-        let sig = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_bytes);
-        libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg, MLDSA65_TX_CONTEXT, &sig)
+        let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(*kp.public_key_bytes());
+        let sig = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_bytes);
+        libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg, MLDSA65_TX_CONTEXT, &sig)
             .expect("kaspa-pq wallet signature must verify under the kaspa-pq tx context");
     }
 
@@ -217,13 +217,13 @@ mod tests {
         let sig_bytes = kp.sign_with_context(msg, att_ctx, [0x44u8; 32]);
         assert_eq!(sig_bytes.len(), MLDSA65_SIG_LEN);
 
-        let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(*kp.public_key_bytes());
-        let sig = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_bytes);
+        let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(*kp.public_key_bytes());
+        let sig = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_bytes);
         // Verifies under the same (attestation) context...
-        libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg, att_ctx, &sig).expect("must verify under the signing context");
+        libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg, att_ctx, &sig).expect("must verify under the signing context");
         // ...but NOT under the transaction context (domain separation).
         assert!(
-            libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg, MLDSA65_TX_CONTEXT, &sig).is_err(),
+            libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg, MLDSA65_TX_CONTEXT, &sig).is_err(),
             "an attestation-context signature must not verify as a transaction signature"
         );
     }
@@ -233,11 +233,11 @@ mod tests {
         let kp = derive_keypair("simnet", 0, 0, 1, &TEST_MASTER_SEED);
         let msg = b"context-binding test";
         let sig_bytes = kp.sign(msg, [0x11u8; 32]);
-        let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(*kp.public_key_bytes());
-        let sig = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_bytes);
+        let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(*kp.public_key_bytes());
+        let sig = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_bytes);
         // Wrong context => verify must reject.
         assert!(
-            libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg, b"not-the-kaspa-pq-context", &sig).is_err(),
+            libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg, b"not-the-kaspa-pq-context", &sig).is_err(),
             "ML-DSA must reject under a different ctx — domain separation is the whole point",
         );
     }

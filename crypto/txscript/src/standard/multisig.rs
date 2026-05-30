@@ -352,7 +352,7 @@ mod tests {
         use crate::MLDSA65_PK_LEN;
         use blake2b_simd::Params;
         use kaspa_addresses::{Address, Prefix, Version};
-        use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
         let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
         // Deterministic, documented devnet seeds (reproducible; DEVNET ONLY).
@@ -410,14 +410,21 @@ mod tests {
         println!("\nsaved seeds + pubkeys to misaka-devnet-multisig-keys.json (DEVNET ONLY — keep safe)");
     }
 
-    /// End-to-end kaspa-pq ML-DSA-65 2-of-3 P2SH multisig spend through the
-    /// script engine: build the redeem script, wrap in P2SH, sign the sighash
-    /// with M of the N keys, and execute. Exercises `OP_CHECKMULTISIGMLDSA65`
-    /// (0xa7) and the widened size limits.
+    /// End-to-end ML-DSA 2-of-3 P2SH multisig spend through the script engine:
+    /// build the redeem script, wrap in P2SH, sign the sighash with M of the N
+    /// keys, and execute. Exercises `OP_CHECKMULTISIGMLDSA65` (0xa7).
+    ///
+    /// kaspa-pq PQ-only (ADR-0019 §6.5 / docs/kaspa-pq-design-mldsa87.md §11.1):
+    /// P2SH/multisig is **out of launch scope**. With ML-DSA-87 a 2-of-3 unlock
+    /// is ~17 KB (2 × (3 + 4628) sig pushes + (3 + 7788) redeem push), exceeding
+    /// the P2PKH-only `MAX_SCRIPTS_SIZE` (10_000), and the `redeem.len() == 5868`
+    /// assertion below is ML-DSA-65-specific. Ignored until multisig returns via a
+    /// dedicated ADR (redeem static-analysis class + recalculated caps).
     #[test]
+    #[ignore = "P2SH/multisig out of PQ-only launch scope (ADR-0019 §6.5)"]
     fn test_multisig_mldsa65_2_of_3() {
         use crate::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT};
-        use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
         // Three deterministic ML-DSA-65 keypairs.
         let keypairs: Vec<_> = [[0x11u8; 32], [0x22u8; 32], [0x33u8; 32]].iter().map(|s| mldsa::generate_key_pair(*s)).collect();

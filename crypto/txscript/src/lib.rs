@@ -40,16 +40,20 @@ pub use standard::*;
 
 pub const MAX_SCRIPT_PUBLIC_KEY_VERSION: u16 = 0;
 pub const MAX_STACK_SIZE: usize = 244;
-// kaspa-pq: widened from upstream `10_000` to admit a P2SH ML-DSA-65 multisig
-// **spend** scriptSig. A 2-of-3 unlock is 2 sig pushes (2 * (3 + 3310)) plus the
-// redeem-script push (3 + 5868) = 12_497 bytes; 16_384 fits it with headroom.
+// kaspa-pq PQ-only (ADR-0019 / docs/kaspa-pq-design-mldsa87.md §11.1): launch
+// scope is ML-DSA-87 P2PKH only; a P2PKH unlock is `<sig 4628B> <pubkey 2592B>`
+// = (3 + 4628) + (3 + 2592) = 7226 bytes. The design target is the upstream
+// 10_000 cap, but the fork's proven 16_384 is retained here: existing
+// kaspa-pq vectors in `test-data/script_tests.json` are calibrated to it (a
+// 10,001-byte scriptPubKey is expected to reach STACK_SIZE, not ScriptSize),
+// and the legacy multisig vectors run under ScriptPolicy::LEGACY still need it.
+// The 10_000 tightening lands in Phase 4 with those legacy vectors' removal.
 // MAX_SCRIPTS_SIZE is enforced per-script (see `execute`), not cumulatively.
 pub const MAX_SCRIPTS_SIZE: usize = 16_384;
-// kaspa-pq: widened from upstream `520` -> `4096` (to admit the 3310-byte
-// ML-DSA-65 signature push and 1952-byte public-key push) and now -> `8192`
-// so a P2SH ML-DSA-65 multisig **redeem script** can be pushed as a single
-// element (a 2-of-3 redeem script is 5868 bytes). See docs/adr/0002-mldsa65-p2pkh.md
-// and docs/adr/0005-mass-policy.md.
+// kaspa-pq PQ-only: widened from upstream `520` to `8192` so the two ML-DSA-87
+// P2PKH stack items — the 4628-byte signature push (sig 4627B + sighash type)
+// and the 2592-byte public-key push — each fit as a single element. P2SH
+// multisig redeem scripts are out of launch scope (ADR-0019 §6.5).
 pub const MAX_SCRIPT_ELEMENT_SIZE: usize = 8192;
 pub const MAX_OPS_PER_SCRIPT: i32 = 201;
 
@@ -57,17 +61,61 @@ pub const MAX_OPS_PER_SCRIPT: i32 = 201;
 /// length-check constant: the script engine must reject a public-key
 /// push of any other length **before** entering libcrux. See
 /// docs/adr/0002-mldsa65-p2pkh.md §"Acceptance criteria".
-pub const MLDSA65_PK_LEN: usize = 1952;
+pub const MLDSA65_PK_LEN: usize = 2592; // ML-DSA-87 public key size (ADR-0019; legacy const name retained)
 
 /// ML-DSA-65 signature length in bytes (without the trailing 1-byte
 /// sighash type). The signature push on the stack is `MLDSA65_SIG_LEN + 1`
 /// bytes; the last byte is the sighash type.
-pub const MLDSA65_SIG_LEN: usize = 3309;
+pub const MLDSA65_SIG_LEN: usize = 4627; // ML-DSA-87 signature size (ADR-0019; legacy const name retained)
 
 /// ML-DSA `ctx` parameter for kaspa-pq transaction signatures. The 255-byte
 /// upper bound on `ctx` is enforced by libcrux. See
 /// docs/kaspa-pq-spec.md §2.
 pub const MLDSA65_TX_CONTEXT: &[u8] = b"kaspa-pq-v1/tx/mldsa65";
+
+/// kaspa-pq PQ-only script policy (ADR-0019 / docs/kaspa-pq-design-mldsa87.md §6).
+/// Threaded into [`TxScriptEngine`] to gate legacy secp256k1 signature opcodes
+/// and pay-to-script-hash. Defaults to [`ScriptPolicy::LEGACY`] (fully permissive,
+/// upstream-identical) so the mechanism is inert until consensus opts a network
+/// in by constructing the engine with [`ScriptPolicy::PQ_ONLY`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScriptPolicy {
+    /// When true, legacy secp256k1 signature opcodes are a hard error.
+    pub pq_only: bool,
+    /// When false (and `pq_only`), pay-to-script-hash spends are rejected.
+    pub allow_p2sh: bool,
+}
+
+impl ScriptPolicy {
+    /// PQ-only: legacy signature opcodes disabled, P2SH disabled. kaspa-pq nets.
+    pub const PQ_ONLY: Self = Self { pq_only: true, allow_p2sh: false };
+    /// Upstream-compatible: no PQ restriction. The default.
+    pub const LEGACY: Self = Self { pq_only: false, allow_p2sh: true };
+}
+
+impl Default for ScriptPolicy {
+    fn default() -> Self {
+        Self::LEGACY
+    }
+}
+
+/// kaspa-pq PQ-only (§6.4): the legacy secp256k1 signature opcodes that are
+/// consensus-disabled under [`ScriptPolicy::pq_only`]. The ML-DSA-87 signature
+/// opcodes `OpCheckSigMlDsa65` (0xa6) and `OpCheckMultiSigMlDsa65` (0xa7) are
+/// deliberately NOT in this set — they remain the only permitted signature
+/// opcodes. Tags are stable consensus identifiers (see `opcodes::codes`).
+#[inline]
+pub const fn is_legacy_signature_opcode(tag: u8) -> bool {
+    matches!(
+        tag,
+        crate::opcodes::codes::OpCheckMultiSigECDSA   // 0xa9
+            | crate::opcodes::codes::OpCheckSigECDSA          // 0xab
+            | crate::opcodes::codes::OpCheckSig               // 0xac
+            | crate::opcodes::codes::OpCheckSigVerify         // 0xad
+            | crate::opcodes::codes::OpCheckMultiSig          // 0xae
+            | crate::opcodes::codes::OpCheckMultiSigVerify    // 0xaf
+    )
+}
 
 /// Stateless ML-DSA-65 (FIPS 204) verification with a caller-supplied `ctx`
 /// (kaspa-pq Phase 10, ADR-0009). The transaction opcode path
@@ -97,9 +145,9 @@ pub fn verify_mldsa65_with_context(
     }
     let key_arr: [u8; MLDSA65_PK_LEN] = public_key.try_into().expect("checked above");
     let sig_arr: [u8; MLDSA65_SIG_LEN] = signature.try_into().expect("checked above");
-    let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(key_arr);
-    let sig_obj = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_arr);
-    Ok(libcrux_ml_dsa::ml_dsa_65::verify(&vk, message, context, &sig_obj).is_ok())
+    let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(key_arr);
+    let sig_obj = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_arr);
+    Ok(libcrux_ml_dsa::ml_dsa_87::verify(&vk, message, context, &sig_obj).is_ok())
 }
 pub const MAX_TX_IN_SEQUENCE_NUM: u64 = u64::MAX;
 pub const SEQUENCE_LOCK_TIME_DISABLED: u64 = 1 << 63;
@@ -176,6 +224,11 @@ pub struct TxScriptEngine<'a, T: VerifiableTransaction, Reused: SigHashReusedVal
     num_ops: i32,
     runtime_sig_op_counter: RuntimeSigOpCounter,
     opcode_execution_log_buffer: Option<&'a mut dyn Write>,
+
+    /// kaspa-pq PQ-only enforcement policy. Defaults to [`ScriptPolicy::LEGACY`]
+    /// in every constructor; consensus opts a network in via
+    /// [`TxScriptEngine::with_script_policy`]. See ADR-0019.
+    policy: ScriptPolicy,
 }
 
 pub fn parse_script<T: VerifiableTransaction, Reused: SigHashReusedValues>(
@@ -328,6 +381,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             num_ops: 0,
             runtime_sig_op_counter: RuntimeSigOpCounter::new(u8::MAX),
             opcode_execution_log_buffer: None,
+            policy: ScriptPolicy::LEGACY,
         }
     }
 
@@ -338,6 +392,14 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
 
     pub fn with_opcode_execution_log_buffer(mut self, buffer: &'a mut dyn Write) -> Self {
         self.opcode_execution_log_buffer = Some(buffer);
+        self
+    }
+
+    /// kaspa-pq: set the PQ-only [`ScriptPolicy`] for this engine. Consensus
+    /// uses this to enforce ML-DSA-87-only signing on PQ-active networks
+    /// (legacy secp256k1 opcodes + P2SH become hard errors). See ADR-0019.
+    pub fn with_script_policy(mut self, policy: ScriptPolicy) -> Self {
+        self.policy = policy;
         self
     }
 
@@ -380,6 +442,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             num_ops: 0,
             runtime_sig_op_counter: RuntimeSigOpCounter::new(input.sig_op_count),
             opcode_execution_log_buffer: None,
+            policy: ScriptPolicy::LEGACY,
         }
     }
 
@@ -395,6 +458,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             // Runtime sig op counting is not needed for standalone scripts, only inputs have sig op count value
             runtime_sig_op_counter: RuntimeSigOpCounter::new(u8::MAX),
             opcode_execution_log_buffer: None,
+            policy: ScriptPolicy::LEGACY,
         }
     }
 
@@ -455,6 +519,14 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 return Err(TxScriptError::OpcodeReserved(format!("{:?}", opcode)));
             }
 
+            // kaspa-pq PQ-only (ADR-0019 §6): reject legacy secp256k1 signature
+            // opcodes outright. Checked on parse so a legacy opcode anywhere in
+            // the script (even an untaken conditional branch) fails — only the
+            // ML-DSA-87 signature opcodes survive. Inert under ScriptPolicy::LEGACY.
+            if self.policy.pq_only && is_legacy_signature_opcode(opcode.value()) {
+                return Err(TxScriptError::LegacySignatureOpcodeDisabled(opcode.value()));
+            }
+
             if verify_only_push && !opcode.is_push_opcode() {
                 return Err(TxScriptError::SignatureScriptNotPushOnly);
             }
@@ -491,6 +563,13 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             }
             ScriptSource::StandAloneScripts(scripts) => (scripts.clone(), false),
         };
+
+        // kaspa-pq PQ-only (ADR-0019 §6.5): pay-to-script-hash is out of launch
+        // scope, so reject any P2SH spend before redeem-script execution. Inert
+        // under ScriptPolicy::LEGACY (allow_p2sh = true).
+        if self.policy.pq_only && !self.policy.allow_p2sh && is_p2sh {
+            return Err(TxScriptError::ScriptHashDisabledInPqMode);
+        }
 
         // TODO: run all in same iterator?
         // When both the signature script and public key script are empty the
@@ -780,10 +859,10 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                         // here cannot fail.
                         let key_arr: [u8; MLDSA65_PK_LEN] = key.try_into().expect("checked above");
                         let sig_arr: [u8; MLDSA65_SIG_LEN] = sig.try_into().expect("checked above");
-                        let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(key_arr);
-                        let sig_obj = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_arr);
+                        let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(key_arr);
+                        let sig_obj = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_arr);
                         // TODO: Find a way to parallelize this part.
-                        let valid = libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg_bytes.as_slice(), MLDSA65_TX_CONTEXT, &sig_obj).is_ok();
+                        let valid = libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg_bytes.as_slice(), MLDSA65_TX_CONTEXT, &sig_obj).is_ok();
                         self.sig_cache.insert(sig_cache_key, valid);
                         Ok(valid)
                     }
@@ -1523,7 +1602,7 @@ mod bitcoind_tests {
     /// spend on a populated transaction must pass `vm.execute()`. This
     /// test threads the full Phase 4 surface end-to-end:
     ///
-    ///   1. ML-DSA-65 keypair via `libcrux_ml_dsa::ml_dsa_65::generate_key_pair`
+    ///   1. ML-DSA-65 keypair via `libcrux_ml_dsa::ml_dsa_87::generate_key_pair`
     ///   2. Address = BLAKE2b-256(public_key)
     ///   3. `scriptPubKey` via `pay_to_address_script`
     ///   4. Sighash via `calc_schnorr_signature_hash` (same digest the
@@ -1543,7 +1622,7 @@ mod bitcoind_tests {
         use blake2b_simd::Params;
         use kaspa_addresses::{Address, Prefix, Version};
         use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
-        use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
         // 1. Deterministic ML-DSA-65 keypair from a 32-byte seed.
         let keygen_seed = [0xa1u8; 32];
@@ -1612,7 +1691,7 @@ mod bitcoind_tests {
     /// signature, and vice versa).
     #[test]
     fn test_verify_mldsa65_with_context() {
-        use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
         const ATT_CTX: &[u8] = b"kaspa-pq-v1/att/mldsa65";
 

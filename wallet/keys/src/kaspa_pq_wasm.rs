@@ -42,7 +42,7 @@
 use kaspa_addresses::{Address, Prefix};
 use kaspa_bip32::{Language, Mnemonic};
 use kaspa_txscript::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT};
-use libcrux_ml_dsa::ml_dsa_65;
+use libcrux_ml_dsa::ml_dsa_87;
 use wasm_bindgen::prelude::*;
 
 use crate::kaspa_pq::{KaspaPqMlDsa65KeyPair, derive_keypair};
@@ -135,9 +135,9 @@ impl MlDsa65Signature {
         let Ok(sig_arr): Result<[u8; MLDSA65_SIG_LEN], _> = self.inner.as_slice().try_into() else {
             return false;
         };
-        let vk = ml_dsa_65::MLDSA65VerificationKey::new(pk_arr);
-        let sig = ml_dsa_65::MLDSA65Signature::new(sig_arr);
-        ml_dsa_65::verify(&vk, message, MLDSA65_TX_CONTEXT, &sig).is_ok()
+        let vk = ml_dsa_87::MLDSA87VerificationKey::new(pk_arr);
+        let sig = ml_dsa_87::MLDSA87Signature::new(sig_arr);
+        ml_dsa_87::verify(&vk, message, MLDSA65_TX_CONTEXT, &sig).is_ok()
     }
 }
 
@@ -363,13 +363,13 @@ mod tests {
     #[test]
     fn wrong_length_inputs_are_rejected_with_clear_messages() {
         let err = MlDsa65PublicKey::from_bytes_inner(vec![0u8; 100]).unwrap_err();
-        assert!(err.contains("expected 1952 bytes, got 100"), "got {err}");
+        assert!(err.contains("expected 2592 bytes, got 100"), "got {err}");
 
         let err = MlDsa65PublicKey::from_hex_inner("00").unwrap_err();
-        assert!(err.contains("3904 hex characters"), "got {err}");
+        assert!(err.contains("5184 hex characters"), "got {err}");
 
         let err = MlDsa65Signature::from_bytes_inner(vec![0u8; 100]).unwrap_err();
-        assert!(err.contains("expected 3309 bytes, got 100"), "got {err}");
+        assert!(err.contains("expected 4627 bytes, got 100"), "got {err}");
 
         let err = KaspaPqKeyPair::from_seed_inner(vec![0u8; 16]).unwrap_err();
         assert!(err.contains("expected 32 bytes, got 16"), "got {err}");

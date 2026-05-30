@@ -11,7 +11,7 @@
 //      test.
 //   4. Build a placeholder 32-byte sighash digest and sign it with the
 //      kaspa-pq tx context (`MLDSA65_TX_CONTEXT`).
-//   5. Locally verify the signature with `libcrux_ml_dsa::ml_dsa_65::verify`.
+//   5. Locally verify the signature with `libcrux_ml_dsa::ml_dsa_87::verify`.
 //
 // Building an actual signed transaction against a real UTXO requires
 // node-side UTXO selection, which depends on a connected client and is left
@@ -29,7 +29,7 @@ use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_txscript::{MLDSA65_PK_LEN, MLDSA65_TX_CONTEXT};
 use kaspa_wallet_keys::kaspa_pq::derive_keypair;
 use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
-use libcrux_ml_dsa::ml_dsa_65;
+use libcrux_ml_dsa::ml_dsa_87;
 
 const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
@@ -95,9 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 5. Local verify — same primitive the consensus opcode runs.
     assert_eq!(pk_bytes.len(), MLDSA65_PK_LEN);
-    let vk = ml_dsa_65::MLDSA65VerificationKey::new(*pk_bytes);
-    let sig = ml_dsa_65::MLDSA65Signature::new(signature_bytes);
-    ml_dsa_65::verify(&vk, &sighash, MLDSA65_TX_CONTEXT, &sig).map_err(|e| format!("kaspa-pq local verify failed: {e:?}"))?;
+    let vk = ml_dsa_87::MLDSA87VerificationKey::new(*pk_bytes);
+    let sig = ml_dsa_87::MLDSA87Signature::new(signature_bytes);
+    ml_dsa_87::verify(&vk, &sighash, MLDSA65_TX_CONTEXT, &sig).map_err(|e| format!("kaspa-pq local verify failed: {e:?}"))?;
     println!("Step 5: local verify OK under MLDSA65_TX_CONTEXT.");
 
     println!("\n(Building a real signed transaction against live UTXOs is a Phase 5'");

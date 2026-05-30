@@ -38,11 +38,11 @@ use serde::{
 /// crate level to avoid pulling in `kaspa_txscript` purely for the
 /// constant — the value must match `kaspa_txscript::MLDSA65_PK_LEN`
 /// (asserted by [`tests::pq_constants_match_txscript`]).
-pub const RPC_MLDSA65_PK_LEN: usize = 1952;
+pub const RPC_MLDSA65_PK_LEN: usize = 2592;
 
 /// ML-DSA-65 signature length in bytes. Same alignment-with-txscript
 /// contract as [`RPC_MLDSA65_PK_LEN`].
-pub const RPC_MLDSA65_SIG_LEN: usize = 3309;
+pub const RPC_MLDSA65_SIG_LEN: usize = 4627;
 
 /// kaspa-pq PoC UTXO-commitment width in bytes (32). The production
 /// 64-byte switch is `RpcUtxoCommitment64` (added in PR-7.6).

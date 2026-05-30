@@ -4,7 +4,7 @@
 //!
 //!  - `secp256k1::schnorr::Signature::verify` — the upstream Kaspa baseline
 //!    that the consensus `mass_per_sig_op = 1000` was originally tuned for.
-//!  - `libcrux_ml_dsa::ml_dsa_65::verify` with `MLDSA65_TX_CONTEXT` — the
+//!  - `libcrux_ml_dsa::ml_dsa_87::verify` with `MLDSA65_TX_CONTEXT` — the
 //!    kaspa-pq replacement.
 //!
 //! The ratio between the two medians, multiplied by a safety factor
@@ -16,7 +16,7 @@
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use kaspa_txscript::MLDSA65_TX_CONTEXT;
-use libcrux_ml_dsa::ml_dsa_65;
+use libcrux_ml_dsa::ml_dsa_87;
 use secp256k1::{Message, Secp256k1};
 
 /// Pre-build a deterministic ML-DSA-65 keypair + signature over a fixed
@@ -31,18 +31,18 @@ use secp256k1::{Message, Secp256k1};
 /// that the mass-policy calibration must accommodate
 /// (docs/adr/0005-mass-policy.md §"Phase 6 calibration result").
 fn bench_mldsa65_verify(c: &mut Criterion) {
-    let keypair = ml_dsa_65::generate_key_pair([0x11u8; 32]);
+    let keypair = ml_dsa_87::generate_key_pair([0x11u8; 32]);
     let vk_bytes = *keypair.verification_key.as_ref();
-    let vk = ml_dsa_65::MLDSA65VerificationKey::new(vk_bytes);
+    let vk = ml_dsa_87::MLDSA87VerificationKey::new(vk_bytes);
 
     let message = [0xa5u8; 32];
-    let signature = ml_dsa_65::sign(&keypair.signing_key, &message, MLDSA65_TX_CONTEXT, [0x55u8; 32]).expect("ML-DSA sign");
+    let signature = ml_dsa_87::sign(&keypair.signing_key, &message, MLDSA65_TX_CONTEXT, [0x55u8; 32]).expect("ML-DSA sign");
     let sig_bytes = *signature.as_ref();
-    let sig = ml_dsa_65::MLDSA65Signature::new(sig_bytes);
+    let sig = ml_dsa_87::MLDSA87Signature::new(sig_bytes);
 
     c.bench_function("kaspa_pq::mldsa65_verify_default", |b| {
         b.iter(|| {
-            let r = ml_dsa_65::verify(black_box(&vk), black_box(&message), black_box(MLDSA65_TX_CONTEXT), black_box(&sig));
+            let r = ml_dsa_87::verify(black_box(&vk), black_box(&message), black_box(MLDSA65_TX_CONTEXT), black_box(&sig));
             black_box(r.is_ok());
         });
     });
@@ -52,7 +52,7 @@ fn bench_mldsa65_verify(c: &mut Criterion) {
         // measurement here is the "slowest reference platform" upper
         // bound on the platforms where libcrux ships SIMD acceleration.
         b.iter(|| {
-            let r = ml_dsa_65::portable::verify(black_box(&vk), black_box(&message), black_box(MLDSA65_TX_CONTEXT), black_box(&sig));
+            let r = ml_dsa_87::portable::verify(black_box(&vk), black_box(&message), black_box(MLDSA65_TX_CONTEXT), black_box(&sig));
             black_box(r.is_ok());
         });
     });

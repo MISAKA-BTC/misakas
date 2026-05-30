@@ -254,6 +254,20 @@ impl From<Params> for OverrideParams {
     }
 }
 
+/// kaspa-pq PQ-only enforcement mode (ADR-0019 / docs/kaspa-pq-design-mldsa87.md).
+/// Selects whether legacy secp256k1 signature paths are merely non-standard
+/// (mempool) or hard consensus failures. Every kaspa-pq network uses `Consensus`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PqEnforcementMode {
+    /// Upstream-compatible: no PQ restriction. Test / legacy-compat only.
+    Disabled,
+    /// Mempool + wallet reject legacy, but consensus still accepts. Migration
+    /// testing only; never valid for a launched network.
+    PolicyOnly,
+    /// Block validation + script engine enforce ML-DSA-87-only. kaspa-pq default.
+    Consensus,
+}
+
 /// Consensus parameters. Contains settings and configurations which are consensus-sensitive.
 /// Changing one of these on a network node would exclude and prevent it from reaching consensus
 /// with the other unmodified nodes.
@@ -321,9 +335,26 @@ pub struct Params {
     /// (bond population, reorg gate) are guarded by `dns_params.is_some()`
     /// and are therefore fully inert until a network opts in.
     pub dns_params: Option<DnsParams>,
+
+    /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
+    /// docs/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
+    pub pq_enforcement: PqEnforcementMode,
+
+    /// DAA score at/after which `PqEnforcementMode::Consensus` takes effect.
+    /// `0` on kaspa-pq nets (PQ-only from genesis).
+    pub pq_activation_daa_score: u64,
 }
 
 impl Params {
+    /// kaspa-pq: `true` when PQ-only enforcement is active at `daa_score`.
+    /// In `Consensus` mode this gates legacy secp256k1 signature opcodes,
+    /// P2SH, and non-ML-DSA-87 script classes at the consensus and script-
+    /// engine level. See ADR-0019 / docs/kaspa-pq-design-mldsa87.md.
+    #[inline]
+    #[must_use]
+    pub fn is_pq_active(&self, daa_score: u64) -> bool {
+        matches!(self.pq_enforcement, PqEnforcementMode::Consensus) && daa_score >= self.pq_activation_daa_score
+    }
     /// Returns the past median time sample rate
     #[inline]
     #[must_use]
@@ -492,6 +523,9 @@ impl Params {
 
             // kaspa-pq DNS overlay params are not CLI-overridable; carried as-is.
             dns_params: self.dns_params,
+            // kaspa-pq: PQ enforcement is consensus-fixed, never runtime-overridable.
+            pq_enforcement: self.pq_enforcement,
+            pq_activation_daa_score: self.pq_activation_daa_score,
         }
     }
 }
@@ -600,6 +634,8 @@ pub const MAINNET_PARAMS: Params = Params {
     // Roughly 2025-05-05 1500 UTC
     crescendo_activation: ForkActivation::new(110_165_000),
     dns_params: None,
+    pq_enforcement: PqEnforcementMode::Consensus,
+    pq_activation_daa_score: 0,
 };
 
 pub const TESTNET_PARAMS: Params = Params {
@@ -663,6 +699,8 @@ pub const TESTNET_PARAMS: Params = Params {
     // 18:30 UTC, March 6, 2025
     crescendo_activation: ForkActivation::new(88_657_000),
     dns_params: None,
+    pq_enforcement: PqEnforcementMode::Consensus,
+    pq_activation_daa_score: 0,
 };
 
 pub const SIMNET_PARAMS: Params = Params {
@@ -714,9 +752,14 @@ pub const SIMNET_PARAMS: Params = Params {
 
     crescendo_activation: ForkActivation::always(),
     dns_params: None,
+    pq_enforcement: PqEnforcementMode::Consensus,
+    pq_activation_daa_score: 0,
 };
 
 pub const DEVNET_PARAMS: Params = Params {
+    // kaspa-pq: PQ-only enforcement from genesis (ADR-0019).
+    pq_enforcement: PqEnforcementMode::Consensus,
+    pq_activation_daa_score: 0,
     dns_seeders: &[],
     net: NetworkId::new(NetworkType::Devnet),
     genesis: DEVNET_GENESIS,

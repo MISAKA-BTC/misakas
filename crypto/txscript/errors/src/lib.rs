@@ -75,6 +75,14 @@ pub enum TxScriptError {
     Serialization(#[from] SerializationError),
     #[error("sig op count exceeds passed limit of {0}")]
     ExceededSigOpLimit(u8),
+    // kaspa-pq PQ-only (ADR-0019 / docs/kaspa-pq-design-mldsa87.md §6): legacy
+    // secp256k1 signature opcodes are consensus-disabled; only ML-DSA-87
+    // signature opcodes are permitted.
+    #[error("legacy signature opcode {0:#04x} is disabled in PQ-only mode")]
+    LegacySignatureOpcodeDisabled(u8),
+    // kaspa-pq PQ-only (§6.5): pay-to-script-hash is out of launch scope.
+    #[error("pay-to-script-hash is disabled in PQ-only mode")]
+    ScriptHashDisabledInPqMode,
 }
 
 #[derive(Error, PartialEq, Eq, Debug, Clone, Copy)]
