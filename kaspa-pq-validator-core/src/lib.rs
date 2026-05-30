@@ -36,8 +36,12 @@ pub const VALIDATOR_SEED_LEN: usize = 32;
 
 /// Floor (sompi) for the attestation-shard transaction fee. The actual fee should be the
 /// transaction's compute mass (a safe >= mempool-minimum at the 1 sompi/gram relay rate),
-/// clamped up to this floor.
-pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 10_000;
+/// clamped up to this floor. Set above the node's mass-based standard minimum for the
+/// single-input ML-DSA-65 shard shape (observed ~15600 on devnet) so the shard is not
+/// rejected as non-standard; the mass-based path (`estimate_attestation_fee`) overrides this
+/// when a `MassCalculator` is available (the in-process service), and the sidecar's flat
+/// fallback uses this floor.
+pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 30_000;
 
 const SIGNED_EPOCH_FILE_VERSION: u16 = 1;
 
