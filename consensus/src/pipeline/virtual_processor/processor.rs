@@ -905,7 +905,8 @@ impl VirtualStateProcessor {
         }
 
         let totals = total_active_stake_by_epoch(&bonds, &epoch_anchor_daa);
-        let stake_depth = compute_stake_score(&aggregate_epoch_tallies(&contributions, &totals));
+        let stake_depth =
+            compute_stake_score(&aggregate_epoch_tallies(&contributions, &totals), dns_params.stake_event_quality_floor_bps);
         let work_depth = self.ghostdag_store.get_blue_work(sink).unwrap_or_default();
 
         let new_state = advance_dns_confirmation(

@@ -788,6 +788,9 @@ pub const DEVNET_PARAMS: Params = Params {
         // 6 epochs of recency/uniqueness window (epoch_length 100 × 6). Not
         // load-bearing while the gate is dormant.
         reward_uniqueness_window_blocks: 600,
+        // ADR-0018 §B: 0.60 stake-event quality floor. Visibility-only on devnet (the
+        // reorg gate is dormant at dns_activation = u64::MAX).
+        stake_event_quality_floor_bps: 6000,
         // ADR-0013 reward track — NOT load-bearing on devnet (the
         // dns_activation gate is u64::MAX, so the coinbase fan-out
         // never fires). Values are placeholders chosen so the cap

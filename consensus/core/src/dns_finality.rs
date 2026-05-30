@@ -544,6 +544,15 @@ pub struct DnsParams {
     /// double-rewarded).
     pub reward_uniqueness_window_blocks: u64,
 
+    /// kaspa-pq Phase 13 (ADR-0018 §B): the **stake-event quality floor** `φS` (basis
+    /// points). An epoch whose included-attestation stake fraction
+    /// `included_stake / expected_active_stake` is below `φS` earns **zero** StakeScore;
+    /// above it the credit is the smooth `(fraction − φS)/(1 − φS)`
+    /// ([`epoch_stake_credit`]). NOT a BFT 2/3 supermajority — set `φS >` the modelled
+    /// adversarial stake-inclusion rate so a minority cannot accumulate StakeScore.
+    /// `φS == 0` reproduces the pre-ADR-0018 linear credit exactly.
+    pub stake_event_quality_floor_bps: u16,
+
     /// Validator reward-distribution parameters (ADR-0013). Consumed
     /// by the PR-10.5′-b coinbase fan-out and the PR-10.12′ slashing
     /// split. Carried here (rather than as a separate `Params` field)
@@ -1729,35 +1738,56 @@ pub struct EpochStakeTally {
     pub total_active_stake_sompi: u64,
 }
 
-/// Per-epoch StakeScore increment (ADR-0009 §"StakeScore mechanics"):
+/// Per-epoch **quality-gated** StakeScore credit (ADR-0018 §B; refines ADR-0009
+/// §"StakeScore mechanics"):
 ///
 /// ```text
-/// increment = floor(signed_stake × STAKE_SCORE_SCALE / total_active_stake)
+/// f = included_stake / expected_stake                        (clamped to 1.0)
+/// credit = 0,                                      if f < φS
+///        = (f − φS) / (1 − φS) × STAKE_SCORE_SCALE, otherwise
 /// ```
 ///
-/// Returns `0` when `total_active_stake_sompi == 0` (no active stake →
-/// the epoch contributes nothing). `signed` is clamped to `total`, so a
-/// single epoch can never exceed `STAKE_SCORE_SCALE` ("1.0") and a
-/// malformed input where the deduplicated signed stake exceeds the
-/// denominator cannot inflate the score. The multiply is done in `u128`
-/// and cannot overflow (`u64::MAX × 1e9 < u128::MAX`).
-pub fn stake_score_increment(signed_stake_sompi: u64, total_active_stake_sompi: u64) -> u128 {
-    if total_active_stake_sompi == 0 {
+/// `φS` (`quality_floor_bps`, basis points) is the **stake-event quality floor** — an
+/// epoch below it earns nothing, so a minority included-stake fraction can never
+/// accumulate StakeScore (the attack the prior linear credit allowed). `φS == 0`
+/// reproduces that linear credit **exactly** (the `10_000` factors cancel). The numerator
+/// is clamped to the denominator (an over-count cannot inflate the score) and the
+/// arithmetic is integer `u128` throughout (no floats; `saturating_mul` is defensive —
+/// the real products are far below `u128::MAX`).
+pub fn epoch_stake_credit(included_stake: u128, expected_stake: u128, quality_floor_bps: u16) -> u128 {
+    if expected_stake == 0 {
         return 0;
     }
-    let signed = signed_stake_sompi.min(total_active_stake_sompi) as u128;
-    signed * STAKE_SCORE_SCALE / (total_active_stake_sompi as u128)
+    let expected = expected_stake;
+    let included = included_stake.min(expected);
+    let floor = (quality_floor_bps as u128).min(10_000);
+    // f < φS  ⟺  included × 10_000 < expected × floor.
+    if included.saturating_mul(10_000) < expected.saturating_mul(floor) {
+        return 0;
+    }
+    let denom = 10_000 - floor; // (1 − φS) in bps units
+    if denom == 0 {
+        // φS == 100%: only full inclusion reaches here, and earns the full scale.
+        return STAKE_SCORE_SCALE;
+    }
+    // (included×10_000 − expected×floor) × SCALE / (expected × denom).
+    let numerator = included * 10_000 - expected * floor;
+    numerator.saturating_mul(STAKE_SCORE_SCALE) / expected.saturating_mul(denom)
 }
 
-/// Deterministic `StakeScore(H)` aggregation over the epochs whose
-/// anchors lie on the selected chain ending at the target (ADR-0009
-/// §"StakeScore mechanics"). Every node observing the same on-chain
-/// shard set reaches the same number — `u128` fixed-point throughout,
-/// no floats. Replaces the PR-10.3 `compute_stake_score_stub`.
-pub fn compute_stake_score(per_epoch: &[EpochStakeTally]) -> StakeScore {
+/// Deterministic `StakeScore(H)` aggregation over the epochs whose anchors lie on the
+/// selected chain ending at the target (ADR-0009 §"StakeScore mechanics", quality-gated
+/// per ADR-0018 §B). Each epoch's credit passes through the `quality_floor_bps` φS gate
+/// ([`epoch_stake_credit`]); every node observing the same on-chain shard set + the same
+/// `φS` reaches the same number — integer `u128` throughout, no floats.
+pub fn compute_stake_score(per_epoch: &[EpochStakeTally], quality_floor_bps: u16) -> StakeScore {
     let mut acc: u128 = 0;
     for e in per_epoch {
-        acc = acc.saturating_add(stake_score_increment(e.signed_stake_sompi, e.total_active_stake_sompi));
+        acc = acc.saturating_add(epoch_stake_credit(
+            e.signed_stake_sompi as u128,
+            e.total_active_stake_sompi as u128,
+            quality_floor_bps,
+        ));
     }
     StakeScore(acc)
 }
@@ -2479,7 +2509,7 @@ pub fn aggregate_epoch_tallies(
         .iter()
         .map(|(&epoch, &total)| EpochStakeTally {
             epoch,
-            // `signed` is clamped to `total` inside `stake_score_increment`,
+            // `signed` is clamped to `total` inside `epoch_stake_credit`,
             // so an over-count cannot inflate the score.
             signed_stake_sompi: signed_by_epoch.get(&epoch).copied().unwrap_or(0),
             total_active_stake_sompi: total,
@@ -2626,27 +2656,38 @@ mod tests {
     // ---- PR-10.5: StakeScore + DNS reorg gate ----
 
     #[test]
-    fn stake_score_increment_floor_formula() {
-        assert_eq!(stake_score_increment(1, 3), 333_333_333); // floor(1e9/3)
-        assert_eq!(stake_score_increment(50, 50), STAKE_SCORE_SCALE); // 1.0
-        assert_eq!(stake_score_increment(5, 10), STAKE_SCORE_SCALE / 2); // 0.5
-        assert_eq!(stake_score_increment(0, 0), 0); // no active stake
-        assert_eq!(stake_score_increment(7, 0), 0);
-        assert_eq!(stake_score_increment(999, 50), STAKE_SCORE_SCALE); // signed clamped to total
-        assert_eq!(stake_score_increment(u64::MAX, u64::MAX), STAKE_SCORE_SCALE); // no overflow
+    fn epoch_stake_credit_quality_floor() {
+        // φS = 0 reproduces the prior linear credit EXACTLY (the 10_000 factors cancel).
+        assert_eq!(epoch_stake_credit(1, 3, 0), 333_333_333); // floor(1e9/3)
+        assert_eq!(epoch_stake_credit(5, 10, 0), STAKE_SCORE_SCALE / 2); // 0.5
+        assert_eq!(epoch_stake_credit(50, 50, 0), STAKE_SCORE_SCALE); // 1.0
+        // φS = 0.60: below → 0, exactly-at → 0 (continuous), above → smooth (f−φS)/(1−φS).
+        let floor = 6000u16;
+        assert_eq!(epoch_stake_credit(5, 10, floor), 0); // 0.50 < 0.60
+        assert_eq!(epoch_stake_credit(6, 10, floor), 0); // exactly at the floor → 0
+        assert_eq!(epoch_stake_credit(8, 10, floor), STAKE_SCORE_SCALE / 2); // (0.80−0.60)/0.40 = 0.5
+        assert_eq!(epoch_stake_credit(10, 10, floor), STAKE_SCORE_SCALE); // full inclusion → 1.0
+        // Edges.
+        assert_eq!(epoch_stake_credit(7, 0, floor), 0); // no active stake
+        assert_eq!(epoch_stake_credit(999, 50, floor), STAKE_SCORE_SCALE); // numerator clamped to expected
+        assert_eq!(epoch_stake_credit(10, 10, 10_000), STAKE_SCORE_SCALE); // φS = 100%: full inclusion only
+        assert_eq!(epoch_stake_credit(9, 10, 10_000), 0); // φS = 100%: < 100% → 0
     }
 
     #[test]
-    fn compute_stake_score_sums_increments_deterministically() {
+    fn compute_stake_score_sums_credits_deterministically() {
         let epochs = vec![
             EpochStakeTally { epoch: 1, signed_stake_sompi: 10, total_active_stake_sompi: 10 }, // 1.0
             EpochStakeTally { epoch: 2, signed_stake_sompi: 5, total_active_stake_sompi: 10 },  // 0.5
             EpochStakeTally { epoch: 3, signed_stake_sompi: 0, total_active_stake_sompi: 10 },  // 0.0
         ];
-        let s = compute_stake_score(&epochs);
+        // φS = 0 (no floor): linear sum 1.0 + 0.5 + 0.0.
+        let s = compute_stake_score(&epochs, 0);
         assert_eq!(s, StakeScore(STAKE_SCORE_SCALE + STAKE_SCORE_SCALE / 2));
-        assert_eq!(compute_stake_score(&epochs), s); // deterministic
-        assert_eq!(compute_stake_score(&[]), StakeScore(0));
+        assert_eq!(compute_stake_score(&epochs, 0), s); // deterministic
+        assert_eq!(compute_stake_score(&[], 0), StakeScore(0));
+        // φS = 0.60: epoch 2 (0.50) and 3 (0.0) drop to 0; only epoch 1 (1.0) credits.
+        assert_eq!(compute_stake_score(&epochs, 6000), StakeScore(STAKE_SCORE_SCALE));
     }
 
     #[test]
@@ -3352,8 +3393,8 @@ mod tests {
         assert_eq!(tallies[0], EpochStakeTally { epoch: 1, signed_stake_sompi: 50, total_active_stake_sompi: 100 });
         assert_eq!(tallies[1], EpochStakeTally { epoch: 2, signed_stake_sompi: 30, total_active_stake_sompi: 100 });
         assert_eq!(tallies[2], EpochStakeTally { epoch: 3, signed_stake_sompi: 0, total_active_stake_sompi: 100 });
-        // End-to-end: 0.5 + 0.3 + 0.0 = 0.8.
-        assert_eq!(compute_stake_score(&tallies), StakeScore(STAKE_SCORE_SCALE / 2 + STAKE_SCORE_SCALE * 3 / 10));
+        // End-to-end (φS = 0, linear): 0.5 + 0.3 + 0.0 = 0.8.
+        assert_eq!(compute_stake_score(&tallies, 0), StakeScore(STAKE_SCORE_SCALE / 2 + STAKE_SCORE_SCALE * 3 / 10));
     }
 
     #[test]
@@ -3498,6 +3539,7 @@ mod tests {
             max_attestations_per_block: MAX_ATTESTATIONS_PER_SHARD as u16,
             max_attestation_shard_mass: 50_000,
             reward_uniqueness_window_blocks: 3_600, // ~6 epochs (epoch_length 600)
+            stake_event_quality_floor_bps: 6000,    // ADR-0018 §B (φS = 0.60)
             reward_params: RewardParams {
                 per_attestation_reward_sompi: 100_000_000,
                 slashing_reporter_reward_bps: 1000,
