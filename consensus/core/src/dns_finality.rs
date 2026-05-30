@@ -601,6 +601,16 @@ pub struct DnsParams {
     /// validator-reward track is inert wherever `dns_params` is `None`
     /// or `daa_score < dns_activation_daa_score`.
     pub reward_params: RewardParams,
+
+    /// kaspa-pq Phase 13 (ADR-0018 §H): which reorg-dominance rule the gate enforces in
+    /// the `Active` stage. Mainnet selects [`DnsReorgMode::TwoDimensionalDominance`] (a
+    /// candidate that exits the DNS-confirmed prefix must out-Work **and** out-Stake
+    /// canonical since their common ancestor); PoC/testnet/devnet stay
+    /// [`DnsReorgMode::HardCheckpoint`] (reject any such exit — the loud testing
+    /// convenience). Read by the processor's reorg gate (`dns_reorg_allows`); inert below
+    /// `dns_activation_daa_score` (`u64::MAX` everywhere) like the rest of the overlay.
+    /// Appended last to keep the borsh layout change localized.
+    pub reorg_mode: DnsReorgMode,
 }
 
 /// Validator reward-distribution parameters (ADR-0013).
@@ -2232,6 +2242,46 @@ pub fn check_dns_reorg_rule(inputs: &DnsReorgInputs) -> DnsReorgOutcome {
     }
 }
 
+/// ADR-0018 §H — assemble [`DnsReorgInputs`] from the raw per-chain facts the
+/// consensus pipeline gathers, computing the `*_work_after` fields as the
+/// **WorkScore accumulated since the common ancestor** `I = common_ancestor(
+/// candidate, canonical_tip)`: `blue_work(tip) − blue_work(I)`. Blue work is a
+/// cumulative GHOSTDAG quantity, so this delta is an exact `saturating_sub` (a
+/// `tip` that is itself `I` contributes zero, the floor).
+///
+/// `candidate_stake_after` / `canonical_stake_after` are passed in already
+/// reduced to the since-`I` delta — StakeScore is a *windowed*, non-cumulative
+/// quantity (see [`compute_stake_score`]), so its since-ancestor value is **not**
+/// a subtraction and must be computed per branch by the caller (the heavier
+/// DAG walk wired in a follow-up). Keeping that out of this helper leaves the
+/// Work-dimension derivation pure and unit-testable, and makes the two-input
+/// shape explicit for the gate.
+#[allow(clippy::too_many_arguments)]
+pub fn reorg_inputs_since_common_ancestor(
+    rollout_stage: DnsRolloutStage,
+    mode: DnsReorgMode,
+    candidate_includes_confirmed_anchor: bool,
+    candidate_blue_work: BlueWorkType,
+    canonical_blue_work: BlueWorkType,
+    common_ancestor_blue_work: BlueWorkType,
+    candidate_stake_after: StakeScore,
+    canonical_stake_after: StakeScore,
+    emergency_work_margin: BlueWorkType,
+    emergency_stake_margin: StakeScore,
+) -> DnsReorgInputs {
+    DnsReorgInputs {
+        rollout_stage,
+        mode,
+        candidate_includes_confirmed_anchor,
+        candidate_work_after: candidate_blue_work.saturating_sub(common_ancestor_blue_work),
+        canonical_work_after: canonical_blue_work.saturating_sub(common_ancestor_blue_work),
+        candidate_stake_after,
+        canonical_stake_after,
+        emergency_work_margin,
+        emergency_stake_margin,
+    }
+}
+
 // =====================================================================
 // PR-10.4: DNS finality overlay transaction kinds + stateless payload
 // validation (ADR-0009 §"On-chain artefacts").
@@ -3125,6 +3175,48 @@ mod tests {
     }
 
     #[test]
+    fn reorg_inputs_since_common_ancestor_subtracts_work() {
+        let w = BlueWorkType::from_u64;
+        // work_after = blue_work(tip) − blue_work(common ancestor); cumulative → exact subtraction.
+        // Stake is windowed (not cumulative) so it is passed through verbatim, not subtracted.
+        let i = reorg_inputs_since_common_ancestor(
+            DnsRolloutStage::Active,
+            DnsReorgMode::TwoDimensionalDominance,
+            false,
+            w(1000), // candidate tip cumulative work
+            w(900),  // canonical tip cumulative work
+            w(500),  // common ancestor cumulative work
+            StakeScore(7),
+            StakeScore(3),
+            w(0),
+            StakeScore(0),
+        );
+        assert_eq!(i.candidate_work_after, w(500)); // 1000 − 500
+        assert_eq!(i.canonical_work_after, w(400)); // 900 − 500
+        assert_eq!((i.candidate_stake_after, i.canonical_stake_after), (StakeScore(7), StakeScore(3))); // passed through
+        // Candidate out-works (500 > 400) AND out-stakes (7 > 3) → dominance satisfied.
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceSatisfied);
+
+        // A tip that IS the common ancestor contributes zero since-ancestor work (saturating
+        // floor) → it cannot dominate, so the gate rejects.
+        let i = reorg_inputs_since_common_ancestor(
+            DnsRolloutStage::Active,
+            DnsReorgMode::TwoDimensionalDominance,
+            false,
+            w(500), // candidate tip == common ancestor
+            w(900),
+            w(500),
+            StakeScore(9),
+            StakeScore(1),
+            w(0),
+            StakeScore(0),
+        );
+        assert_eq!(i.candidate_work_after, w(0)); // 500 − 500, floored
+        assert_eq!(i.canonical_work_after, w(400));
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceViolation); // zero work cannot dominate
+    }
+
+    #[test]
     fn dns_constants_have_expected_values() {
         // Cross-check against the consensus-core kaspa-pq constant
         // values (the kaspa-txscript crate is downstream of
@@ -3944,6 +4036,7 @@ mod tests {
                 worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
                 fee_split: fixture_fee_split(),
             },
+            reorg_mode: DnsReorgMode::TwoDimensionalDominance,
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();

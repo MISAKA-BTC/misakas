@@ -6,7 +6,7 @@ pub use super::{
 use crate::{
     BlockLevel, BlueWorkType, KType,
     constants::STORAGE_MASS_PARAMETER,
-    dns_finality::{DnsParams, FeeSplitParams, MAX_ATTESTATIONS_PER_SHARD, RewardParams, STAKE_SCORE_SCALE, StakeScore},
+    dns_finality::{DnsParams, DnsReorgMode, FeeSplitParams, MAX_ATTESTATIONS_PER_SHARD, RewardParams, STAKE_SCORE_SCALE, StakeScore},
     network::{NetworkId, NetworkType},
 };
 use kaspa_addresses::Prefix;
@@ -826,5 +826,8 @@ pub const DEVNET_PARAMS: Params = Params {
                 finality_fee_service_bps: 1500,
             },
         },
+        // ADR-0018 §H: devnet stays HardCheckpoint (the loud testing convenience) — the
+        // two-dimensional dominance rule is the mainnet path. Inert here anyway (gate u64::MAX).
+        reorg_mode: DnsReorgMode::HardCheckpoint,
     }),
 };
