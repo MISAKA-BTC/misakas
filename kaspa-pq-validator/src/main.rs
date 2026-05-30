@@ -2,21 +2,36 @@
 //!
 //! A standalone process that connects to a co-located `kaspad` over a 127.0.0.1 wRPC
 //! (borsh) endpoint and, once its stake bond is active, attests to the selected-chain
-//! anchor each epoch. This is the **skeleton** slice (ADR-0011 slot 10.6′): it wires
-//! the wRPC client, the network/sync start-up guards, and the ADR-0011 status state
-//! machine (`NodeNotSynced → BondNotFound → BondPending → Active → …`) with `--dry-run`
-//! support. It does **not** yet load the validator key, sign, or submit — that lands in
-//! the next slice. The recommended deployment runs this beside `kaspad` under systemd
-//! (see ADR-0011 §"Systemd reference units").
+//! anchor each epoch: it fetches the ready-to-sign target over wRPC, signs it with its
+//! ML-DSA-65 validator key (under the equivocation-safety guard), funds a
+//! `StakeAttestationShard` transaction from a UTXO at its own address, and submits it.
+//! The signing primitives are shared with the in-process `--enable-validator` service via
+//! `kaspa-pq-validator-core`. Recommended deployment: beside `kaspad` under systemd
+//! (ADR-0011 §"Systemd reference units"); the node must run `--utxoindex` for the
+//! sidecar's funding lookup.
 
 use clap::Parser;
+use kaspa_addresses::Prefix;
+use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::dns_finality::{
+    DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation, signature_fingerprint,
+    single_attestation_shard,
+};
+use kaspa_consensus_core::network::NetworkType;
+use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_core::{info, warn};
-use kaspa_rpc_core::{GetStakeBondRequest, GetValidatorAttestationTargetRequest, api::rpc::RpcApi};
+use kaspa_pq_validator_core::{
+    ATTESTATION_TX_FEE_FLOOR_SOMPI, SignedEpochStore, ValidatorKey, load_validator_seed, parse_stake_bond_ref,
+};
+use kaspa_rpc_core::{
+    GetStakeBondRequest, GetValidatorAttestationTargetRequest, GetValidatorAttestationTargetResponse, RpcTransaction, api::rpc::RpcApi,
+};
 use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
 };
 use std::process::ExitCode;
+use std::str::FromStr;
 use std::time::Duration;
 
 const VALIDATOR: &str = "kaspa-pq-validator";
@@ -30,18 +45,22 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:17110", env = "KASPA_PQ_NODE_RPC")]
     node_rpc: String,
 
-    /// Stake-bond outpoint backing this validator, "txid_hex:index". Without it the
-    /// sidecar only observes (no attestation eligibility).
+    /// Stake-bond outpoint backing this validator, "txid_hex:index". Required (together
+    /// with --validator-key and --signed-epoch-db) to attest; otherwise observe-only.
     #[arg(long, env = "KASPA_PQ_STAKE_BOND")]
     stake_bond: Option<String>,
 
-    /// Path to the ML-DSA-65 validator signing key. Skeleton slice: not yet loaded —
-    /// signing lands in the next slice.
+    /// Path to the ML-DSA-65 validator signing key (32-byte seed, hex). Required to attest.
     #[arg(long, env = "KASPA_PQ_VALIDATOR_KEY")]
     validator_key: Option<String>,
 
-    /// Compute eligibility + the attestation target and log them, but never sign or
-    /// submit. New operators should run this first to verify their bond.
+    /// Path to the persistent equivocation-safety log (JSON). Required to attest — the
+    /// guard cannot be enforced across restarts without it. Back this file up.
+    #[arg(long, env = "KASPA_PQ_SIGNED_EPOCH_DB")]
+    signed_epoch_db: Option<String>,
+
+    /// Compute eligibility + the attestation target and sign it locally, but never submit.
+    /// New operators should run this first to verify their bond.
     #[arg(long, env = "KASPA_PQ_DRY_RUN")]
     dry_run: bool,
 
@@ -72,9 +91,6 @@ async fn main() -> ExitCode {
 async fn run(args: Args) -> Result<(), String> {
     let url = format!("ws://{}", args.node_rpc);
     info!("[{VALIDATOR}] connecting to local node at {url} (dry_run={})", args.dry_run);
-    if args.validator_key.is_some() {
-        info!("[{VALIDATOR}] a validator key was provided but this skeleton slice does not sign yet");
-    }
 
     let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None)
         .map_err(|e| format!("failed to build wRPC client: {e}"))?;
@@ -95,12 +111,19 @@ async fn run(args: Args) -> Result<(), String> {
         }
         _ => {}
     }
+    let prefix = prefix_for(server.network_id.network_type);
     info!("[{VALIDATOR}] connected: network={node_network} synced={} version={}", server.is_synced, server.server_version);
 
-    // ADR-0011 §"Auto-startup ordering": tolerate every "not yet" state and loop until
-    // shutdown. Ctrl-C / SIGINT exits cleanly.
+    // Load the signing identity if fully configured (key + bond + state DB); else observe.
+    let attestor = Attestor::load(&args, prefix)?;
+    match &attestor {
+        Some(a) => info!("[{VALIDATOR}] attesting as validator_id={} (funding {})", a.key.validator_id, a.key.funding_address(prefix)),
+        None => info!("[{VALIDATOR}] observe-only (need --validator-key + --stake-bond + --signed-epoch-db to attest)"),
+    }
+
+    // ADR-0011 §"Auto-startup ordering": tolerate every "not yet" state, loop until shutdown.
     let result = tokio::select! {
-        r = run_loop(&client, &args) => r,
+        r = run_loop(&client, &args, attestor) => r,
         _ = tokio::signal::ctrl_c() => {
             info!("[{VALIDATOR}] shutdown signal received");
             Ok(())
@@ -110,10 +133,119 @@ async fn run(args: Args) -> Result<(), String> {
     result
 }
 
-/// The ADR-0011 validator runtime loop. Skeleton: computes the status and (when active)
-/// fetches the ready-to-sign target, but does not sign/submit. Returns `Err` only on the
-/// fatal `Slashed` state; every other state sleeps and retries.
-async fn run_loop(client: &KaspaRpcClient, args: &Args) -> Result<(), String> {
+/// The ML-DSA-65 signing identity + equivocation guard, present only when fully
+/// configured. Shares its primitives with the in-process service via
+/// `kaspa-pq-validator-core`.
+struct Attestor {
+    key: ValidatorKey,
+    bond_outpoint: TransactionOutpoint,
+    signed_store: SignedEpochStore,
+    prefix: Prefix,
+}
+
+impl Attestor {
+    /// Load the signing identity iff `--validator-key`, `--stake-bond` and
+    /// `--signed-epoch-db` are all provided. The state file is rejected if it belongs to a
+    /// different validator/bond (cross-key equivocation guard).
+    fn load(args: &Args, prefix: Prefix) -> Result<Option<Self>, String> {
+        let (Some(key_path), Some(bond_ref), Some(db)) = (&args.validator_key, &args.stake_bond, &args.signed_epoch_db) else {
+            return Ok(None);
+        };
+        let key = ValidatorKey::from_seed(load_validator_seed(key_path)?);
+        let bond_outpoint = parse_stake_bond_ref(bond_ref)?;
+        let signed_store = SignedEpochStore::load_or_empty(db.into(), key.validator_id, bond_outpoint)?;
+        Ok(Some(Self { key, bond_outpoint, signed_store, prefix }))
+    }
+
+    /// Sign the attestation `target` under the equivocation guard and (unless `dry_run`)
+    /// fund + submit the `StakeAttestationShard` transaction. Returns `Err` only on a
+    /// genuine failure (self-verify, funding, build, submit); the benign "already attested
+    /// this epoch" path logs and returns `Ok`.
+    async fn attest(
+        &mut self,
+        client: &KaspaRpcClient,
+        target: &GetValidatorAttestationTargetResponse,
+        dry_run: bool,
+    ) -> Result<(), String> {
+        let message = decode_message(&target.message)?;
+        let target_hash = parse_hash64(&target.target_hash)?;
+        let vsc = parse_hash64(&target.validator_set_commitment)?;
+
+        // Sign + local self-verify (the same check the consensus aggregator runs).
+        let signature = self.key.sign_attestation(&message);
+        if !self.key.verify_attestation(&message, &signature) {
+            return Err("local attestation self-verify failed".to_string());
+        }
+        let record = SignedEpochRecord {
+            epoch: target.epoch,
+            target_hash,
+            target_daa_score: target.target_daa_score,
+            signature_fingerprint: signature_fingerprint(&signature),
+        };
+
+        // ADR-0011 equivocation guard.
+        let outcome = self.signed_store.check(&record);
+        match outcome {
+            SignedEpochCheckOutcome::Block => {
+                // One key signs at most one target per epoch; once it has committed to the
+                // first anchor it saw this epoch, a later (moved-sink) target is refused.
+                info!("[{VALIDATOR}] already attested epoch {} (target moved); skipping", target.epoch);
+                return Ok(());
+            }
+            SignedEpochCheckOutcome::Allow | SignedEpochCheckOutcome::AllowRebroadcast => {}
+        }
+
+        if dry_run {
+            info!("[{VALIDATOR}] DRY-RUN signed epoch {} target={} (not submitting)", target.epoch, target.target_hash);
+            return Ok(());
+        }
+
+        // Build the attestation shard.
+        let att = StakeAttestation {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: self.key.validator_id,
+            bond_outpoint: self.bond_outpoint,
+            epoch: target.epoch,
+            target_hash,
+            target_daa_score: target.target_daa_score,
+            validator_set_commitment: vsc,
+            signature: signature.to_vec(),
+        };
+        let shard = single_attestation_shard(att);
+
+        // Find a funding UTXO at the validator's own P2PKH-ML-DSA address (needs node
+        // --utxoindex). Funding model A: a small input pays the fee, change returns to self.
+        let fee = ATTESTATION_TX_FEE_FLOOR_SOMPI;
+        let funding_addr = self.key.funding_address(self.prefix);
+        let utxos = client
+            .get_utxos_by_addresses(vec![funding_addr])
+            .await
+            .map_err(|e| format!("getUtxosByAddresses failed (does the node run --utxoindex?): {e}"))?;
+        let funding = utxos
+            .into_iter()
+            .find(|e| e.utxo_entry.amount > fee)
+            .ok_or_else(|| format!("no funding UTXO > {fee} sompi at the validator funding address; send funds there"))?;
+        let funding_outpoint: TransactionOutpoint = funding.outpoint.into();
+        let funding_entry: UtxoEntry = funding.utxo_entry.into();
+
+        let tx = self.key.build_funded_shard_tx(&shard, funding_outpoint, &funding_entry, fee)?;
+
+        // Persist the signing record BEFORE broadcasting, so a crash post-submit cannot
+        // lose the record and let a restart sign a different target for this epoch.
+        if outcome == SignedEpochCheckOutcome::Allow {
+            self.signed_store.record_and_flush(record)?;
+        }
+
+        let txid =
+            client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
+        info!("[{VALIDATOR}] submitted attestation shard for epoch {} (txid={txid})", target.epoch);
+        Ok(())
+    }
+}
+
+/// The ADR-0011 validator runtime loop. Returns `Err` only on the fatal `Slashed` state;
+/// every other state sleeps and retries.
+async fn run_loop(client: &KaspaRpcClient, args: &Args, mut attestor: Option<Attestor>) -> Result<(), String> {
     loop {
         // 1. Sync guard (NodeNotSynced).
         let server = match client.get_server_info().await {
@@ -165,24 +297,22 @@ async fn run_loop(client: &KaspaRpcClient, args: &Args) -> Result<(), String> {
             }
             "active" => {
                 // ADR-0017: every active-bond validator attests. Fetch the ready-to-sign
-                // target; signing + submission land in the next slice.
+                // target, then sign + (unless dry-run / observe-only) fund + submit.
                 match client
                     .get_validator_attestation_target(GetValidatorAttestationTargetRequest { bond_outpoint: bond.to_owned() })
                     .await
                 {
-                    Ok(t) if t.available => {
-                        if args.dry_run {
-                            info!(
-                                "[{VALIDATOR}] status=ActiveEligible DRY-RUN epoch={} target={} message={} (not signing)",
-                                t.epoch, t.target_hash, t.message
-                            );
-                        } else {
-                            info!(
-                                "[{VALIDATOR}] status=ActiveEligible epoch={} target={} (signing lands in the next slice; not yet submitting)",
-                                t.epoch, t.target_hash
-                            );
+                    Ok(t) if t.available => match &mut attestor {
+                        Some(a) => {
+                            if let Err(e) = a.attest(client, &t, args.dry_run).await {
+                                warn!("[{VALIDATOR}] attest failed for epoch {}: {e}", t.epoch);
+                            }
                         }
-                    }
+                        None => info!(
+                            "[{VALIDATOR}] status=ActiveEligible epoch={} target={} (observe-only; not signing)",
+                            t.epoch, t.target_hash
+                        ),
+                    },
                     Ok(_) => info!("[{VALIDATOR}] status=ActiveIdle (no attestation target available this tick)"),
                     Err(e) => warn!("[{VALIDATOR}] getValidatorAttestationTarget failed: {e}"),
                 }
@@ -194,6 +324,28 @@ async fn run_loop(client: &KaspaRpcClient, args: &Args) -> Result<(), String> {
             }
         }
     }
+}
+
+/// Map the node's `NetworkType` to the bech32 address `Prefix` (for the funding address).
+fn prefix_for(network_type: NetworkType) -> Prefix {
+    match network_type {
+        NetworkType::Mainnet => Prefix::Mainnet,
+        NetworkType::Testnet => Prefix::Testnet,
+        NetworkType::Devnet => Prefix::Devnet,
+        NetworkType::Simnet => Prefix::Simnet,
+    }
+}
+
+/// Decode the 32-byte ready-to-sign attestation message digest (hex).
+fn decode_message(hex: &str) -> Result<[u8; 32], String> {
+    let mut out = [0u8; 32];
+    faster_hex::hex_decode(hex.as_bytes(), &mut out).map_err(|e| format!("bad attestation message hex '{hex}': {e}"))?;
+    Ok(out)
+}
+
+/// Parse a 64-byte Hash64 from hex (128 chars).
+fn parse_hash64(hex: &str) -> Result<Hash64, String> {
+    Hash64::from_str(hex).map_err(|e| format!("bad Hash64 hex '{hex}': {e}"))
 }
 
 async fn sleep_secs(secs: u64) {

@@ -3297,7 +3297,11 @@ name = "kaspa-pq-validator"
 version = "1.1.0"
 dependencies = [
  "clap 4.5.51",
+ "faster-hex 0.9.0",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
  "kaspa-core",
+ "kaspa-pq-validator-core",
  "kaspa-rpc-core",
  "kaspa-wrpc-client",
  "log",
