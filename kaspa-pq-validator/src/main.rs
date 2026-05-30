@@ -55,6 +55,8 @@ enum Command {
     Keygen(KeygenArgs),
     /// One-shot: query the node + bond status and print it.
     Status(StatusArgs),
+    /// Stake mined coins: build + submit a StakeBond tx from a UTXO at the funding address.
+    Bond(BondArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -112,6 +114,40 @@ struct StatusArgs {
     stake_bond: Option<String>,
 }
 
+#[derive(Parser, Debug)]
+struct BondArgs {
+    /// Local node wRPC (borsh) endpoint, host:port. The node must run --utxoindex.
+    #[arg(long, default_value = "127.0.0.1:17110", env = "KASPA_PQ_NODE_RPC")]
+    node_rpc: String,
+
+    /// Path to the ML-DSA-65 validator signing key (32-byte seed, hex). The bond is staked
+    /// from a UTXO at this key's own funding address and binds this key as the validator.
+    #[arg(long, env = "KASPA_PQ_VALIDATOR_KEY")]
+    validator_key: String,
+
+    /// Amount to stake, in sompi. Becomes the bond's locked output-0; must be covered by a
+    /// single funding UTXO together with the fee.
+    #[arg(long)]
+    amount: u64,
+
+    /// First DAA score at which the bond's attestations count. 0 = active as soon as accepted.
+    #[arg(long, default_value_t = 0)]
+    activation_daa_score: u64,
+
+    /// Per-bond unbonding window in blocks. Must be >= the network's
+    /// `unbonding_period_blocks` floor (devnet harness = 700).
+    #[arg(long, default_value_t = 700)]
+    unbonding_period_blocks: u64,
+
+    /// Fee in sompi for the bond transaction (flat). Defaults to the attestation fee floor.
+    #[arg(long, default_value_t = ATTESTATION_TX_FEE_FLOOR_SOMPI)]
+    fee: u64,
+
+    /// Expected node network id; refuse on mismatch.
+    #[arg(long, env = "KASPA_PQ_NETWORK")]
+    network: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -122,6 +158,10 @@ async fn main() -> ExitCode {
         }
         Command::Keygen(args) => keygen(args),
         Command::Status(args) => status(args).await,
+        Command::Bond(args) => {
+            kaspa_core::log::init_logger(None, "info");
+            bond(args).await
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -180,6 +220,56 @@ async fn status(args: StatusArgs) -> Result<(), String> {
             Err(e) => println!("bond:         query failed: {e} (does the node configure the overlay?)"),
         }
     }
+    let _ = client.disconnect().await;
+    Ok(())
+}
+
+/// Stake mined coins into a new bond: load the validator key, find a funding UTXO at its own
+/// address, build a signed `StakeBond` tx (locked output-0 == amount, change back to self),
+/// submit it, and print the resulting `bond_outpoint` (`txid:0`) to pass to `run --stake-bond`.
+async fn bond(args: BondArgs) -> Result<(), String> {
+    let key = ValidatorKey::from_seed(load_validator_seed(&args.validator_key)?);
+    let client = connect(&args.node_rpc).await?;
+    let server = client.get_server_info().await.map_err(|e| format!("getServerInfo failed: {e}"))?;
+    let node_network = server.network_id.to_string();
+    if let Some(expected) = args.network.as_deref() {
+        if node_network != expected {
+            return Err(format!("network mismatch: node is '{node_network}' but --network is '{expected}'"));
+        }
+    }
+    let prefix = prefix_for(server.network_id.network_type);
+    let funding_addr = key.funding_address(prefix);
+    info!("[{VALIDATOR}] staking {} sompi as validator_id={} (funding {})", args.amount, key.validator_id, funding_addr);
+
+    // Need a single UTXO covering amount + fee. Pick the largest available (most likely to fit).
+    let needed = args.amount.checked_add(args.fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
+    let utxos = client
+        .get_utxos_by_addresses(vec![funding_addr.clone()])
+        .await
+        .map_err(|e| format!("getUtxosByAddresses failed (does the node run --utxoindex?): {e}"))?;
+    let funding = utxos
+        .into_iter()
+        .filter(|e| e.utxo_entry.amount >= needed)
+        .max_by_key(|e| e.utxo_entry.amount)
+        .ok_or_else(|| format!("no single funding UTXO >= {needed} sompi (amount+fee) at {funding_addr}; mine/send funds there first"))?;
+    let funding_outpoint: TransactionOutpoint = funding.outpoint.into();
+    let funding_entry: UtxoEntry = funding.utxo_entry.into();
+
+    let tx = key.build_funded_stake_bond_tx(
+        args.amount,
+        args.activation_daa_score,
+        args.unbonding_period_blocks,
+        key.reward_spk_payload(),
+        funding_outpoint,
+        &funding_entry,
+        args.fee,
+    )?;
+
+    let txid = client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
+    info!("[{VALIDATOR}] submitted stake-bond tx (txid={txid})");
+    // The bond outpoint is always output-0 of the bond tx.
+    println!("bond_outpoint: {txid}:0");
+    println!("(once accepted + activation_daa_score reached, run: {VALIDATOR} run --validator-key <key> --stake-bond {txid}:0 --signed-epoch-db <db>)");
     let _ = client.disconnect().await;
     Ok(())
 }
