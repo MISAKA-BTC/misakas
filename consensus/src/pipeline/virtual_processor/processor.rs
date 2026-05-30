@@ -1583,7 +1583,7 @@ impl VirtualStateProcessor {
                 fs,
             )
         });
-        let (validator_reward_outputs, _rewarded_keys) = self.validator_reward_outputs_for_block(
+        let (validator_reward_outputs, _rewarded_keys, newly_included_stake, expected_stake) = self.validator_reward_outputs_for_block(
             &txs,
             &template_bond_view,
             virtual_state.daa_score,
@@ -1600,6 +1600,7 @@ impl VirtualStateProcessor {
                 &virtual_state.mergeset_non_daa,
                 &validator_reward_outputs,
                 carve,
+                (newly_included_stake, expected_stake),
             )
             .unwrap();
         txs.insert(0, coinbase.tx);

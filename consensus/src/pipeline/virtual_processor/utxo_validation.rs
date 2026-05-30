@@ -319,7 +319,7 @@ impl VirtualStateProcessor {
         let validator_pool = carve.map_or(0, |fs| {
             self.coinbase_manager.coinbase_validator_pool(&ctx.ghostdag_data, &ctx.mergeset_rewards, &mergeset_non_daa, fs)
         });
-        let (validator_reward_outputs, rewarded_keys) = self.validator_reward_outputs_for_block(
+        let (validator_reward_outputs, rewarded_keys, newly_included_stake, expected_stake) = self.validator_reward_outputs_for_block(
             &txs,
             selected_parent_bond_view,
             header.daa_score,
@@ -328,7 +328,7 @@ impl VirtualStateProcessor {
         );
         ctx.validator_rewarded_keys = rewarded_keys;
 
-        // Verify coinbase transaction (incl. the §F carve + §E reward fan-out).
+        // Verify coinbase transaction (incl. the §F carve + §E fan-out + §D bounty).
         self.verify_coinbase_transaction(
             &txs[0],
             header.daa_score,
@@ -337,6 +337,7 @@ impl VirtualStateProcessor {
             &mergeset_non_daa,
             &validator_reward_outputs,
             carve,
+            (newly_included_stake, expected_stake),
         )?;
 
         // Verify the header pruning point
@@ -379,6 +380,9 @@ impl VirtualStateProcessor {
         // threaded to `expected_coinbase_transaction`. `None` on every current
         // network (matches the construction path).
         carve: Option<&FeeSplitParams>,
+        // kaspa-pq Phase 13 (ADR-0018 §D): `(newly_included_stake, expected_stake)`,
+        // threaded to `expected_coinbase_transaction` for the inclusion bounty.
+        inclusion: (u128, u128),
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
@@ -392,6 +396,7 @@ impl VirtualStateProcessor {
                 mergeset_non_daa,
                 validator_reward_outputs,
                 carve,
+                inclusion,
             )
             .unwrap()
             .tx;
@@ -437,12 +442,14 @@ impl VirtualStateProcessor {
         // participation rewards are distributed from. 0 on every current network
         // (the caller computes it only past `dns_activation_daa_score`).
         validator_pool: u64,
-    ) -> (Vec<TransactionOutput>, RewardedEpochKeys) {
+        // kaspa-pq Phase 13 (ADR-0018 §D): also returns `(newly_included_stake,
+        // expected_stake)` so the coinbase can pay the §D worker inclusion bounty.
+    ) -> (Vec<TransactionOutput>, RewardedEpochKeys, u128, u128) {
         let Some(dns_params) = self.dns_params.as_ref() else {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), 0, 0);
         };
         if daa_score < dns_params.dns_activation_daa_score {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), 0, 0);
         }
         let window = dns_params.reward_uniqueness_window_blocks;
 
@@ -486,7 +493,24 @@ impl VirtualStateProcessor {
         let expected_stake = bond_view.total_active_stake_at(daa_score) as u128;
         let (participation_pool, _quality_bonus_pool) =
             split_validator_pool(validator_pool as u128, dns_params.reward_params.validator_participation_bps);
-        validator_participation_reward_outputs(participation_pool, expected_stake, &attestations, &already_rewarded)
+
+        // ADR-0018 §D base inclusion bounty: the stake this block NEWLY includes — the
+        // same recency-filtered attestations under the same within-block + cross-block
+        // (§B.3(c)) `(bond, epoch)` dedup as §E, but summed pre-pool-cap (the miner
+        // included them regardless of what §E could pay). The coinbase pays the includer
+        // a proportional share of the §D pool against `expected_stake`.
+        let mut seen_in_block = RewardedEpochSet::new();
+        let mut newly_included_stake: u128 = 0;
+        for (bond_outpoint, epoch, _payload, stake) in &attestations {
+            if already_rewarded.contains(bond_outpoint, *epoch) || !seen_in_block.insert(*bond_outpoint, *epoch) {
+                continue;
+            }
+            newly_included_stake += *stake as u128;
+        }
+
+        let (outputs, rewarded_keys) =
+            validator_participation_reward_outputs(participation_pool, expected_stake, &attestations, &already_rewarded);
+        (outputs, rewarded_keys, newly_included_stake, expected_stake)
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): block-template

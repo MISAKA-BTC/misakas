@@ -2,7 +2,9 @@ use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet,
     coinbase::*,
     config::params::ForkedParam,
-    dns_finality::{FeeSplitParams, split_block_reward},
+    dns_finality::{
+        FeeSplitParams, STAKE_SCORE_SCALE, split_block_reward, split_block_subsidy, split_normal_tx_fees, worker_inclusion_bounty,
+    },
     errors::coinbase::{CoinbaseError, CoinbaseResult},
     subnets,
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutput},
@@ -120,16 +122,32 @@ impl CoinbaseManager {
         // coinbase is byte-identical on every current network (the caller passes
         // `Some` only past `dns_activation_daa_score`, `u64::MAX` everywhere today).
         carve: Option<&FeeSplitParams>,
+        // kaspa-pq Phase 13 (ADR-0018 §D base inclusion bounty): `(newly_included_stake,
+        // expected_stake)` for this block — the stake of attestations it newly includes
+        // (caller-computed, post-dedup) and the epoch's expected active stake. When
+        // carving, the §D worker-inclusion sub-pool (8% of subsidy) is NOT paid to the
+        // source-block miners; instead a stake-proportional bounty goes to THIS block's
+        // miner (the includer), unspent remainder burned. `(0, _)` → no bounty. Ignored
+        // when `carve` is `None`.
+        inclusion: (u128, u128),
     ) -> CoinbaseResult<CoinbaseTransactionTemplate> {
+        // §D base inclusion bounty: the worker-inclusion sub-pool summed over the SAME
+        // mergeset blue(∩DAA)+red iteration the Worker carve uses (paid to the includer below).
+        let mut worker_inclusion_pool = 0u64;
         let mut outputs = Vec::with_capacity(ghostdag_data.mergeset_blues.len() + 1); // + 1 for possible red reward
 
         // Add an output for each mergeset blue block (∩ DAA window), paying to the script reported by the block.
         // Note that combinatorically it is nearly impossible for a blue block to be non-DAA
         for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
             let reward_data = mergeset_rewards.get(blue).unwrap();
-            // §F carve: pay the Worker share when carving, else the full reward.
+            // §F carve: pay the Worker share EXCLUDING the §D worker-inclusion sub-pool
+            // (carved into `worker_inclusion_pool`, paid to the includer below); else full.
             let value = match carve {
-                Some(fs) => split_block_reward(reward_data.subsidy, reward_data.total_fees, fs).worker_sompi,
+                Some(fs) => {
+                    let s = split_block_subsidy(reward_data.subsidy, fs);
+                    worker_inclusion_pool = worker_inclusion_pool.saturating_add(s.worker_inclusion_sompi);
+                    s.worker_base_sompi.saturating_add(split_normal_tx_fees(reward_data.total_fees, fs).worker_sompi)
+                }
                 None => reward_data.subsidy + reward_data.total_fees,
             };
             if value > 0 {
@@ -146,9 +164,13 @@ impl CoinbaseManager {
             // Reds ∩ DAA earn subsidy + fees; non-DAA reds earn fees only.
             let (eff_subsidy, eff_fees) =
                 if mergeset_non_daa.contains(red) { (0, reward_data.total_fees) } else { (reward_data.subsidy, reward_data.total_fees) };
-            // §F carve: accumulate the Worker share when carving, else the full reward.
+            // §F carve: accumulate the Worker share EXCLUDING the §D inclusion sub-pool; else full.
             red_reward += match carve {
-                Some(fs) => split_block_reward(eff_subsidy, eff_fees, fs).worker_sompi,
+                Some(fs) => {
+                    let s = split_block_subsidy(eff_subsidy, fs);
+                    worker_inclusion_pool = worker_inclusion_pool.saturating_add(s.worker_inclusion_sompi);
+                    s.worker_base_sompi.saturating_add(split_normal_tx_fees(eff_fees, fs).worker_sompi)
+                }
                 None => eff_subsidy + eff_fees,
             };
         }
@@ -162,6 +184,21 @@ impl CoinbaseManager {
         // caller-supplied canonical order. Empty (no-op) on every current
         // network.
         outputs.extend_from_slice(validator_reward_outputs);
+
+        // kaspa-pq Phase 13 (ADR-0018 §D base inclusion bounty): pay THIS block's miner
+        // (the includer) a stake-proportional share of the §D worker-inclusion pool for
+        // the attestation stake it newly includes, against the epoch's expected stake. No
+        // urgency multiplier (1.0×) and no quality-gate bonus yet (those need the
+        // epoch-cumulative accumulator). The unspent remainder is burned (don't-mint).
+        // Inert when `carve` is `None` (the pool stays 0 and this is skipped).
+        if carve.is_some() {
+            let (newly_included_stake, expected_stake) = inclusion;
+            let bounty = worker_inclusion_bounty(worker_inclusion_pool as u128, newly_included_stake, expected_stake, STAKE_SCORE_SCALE, false, 0)
+                .min(worker_inclusion_pool as u128) as u64;
+            if bounty > 0 {
+                outputs.push(TransactionOutput::new(bounty, miner_data.script_public_key.clone()));
+            }
+        }
 
         // Build the current block's payload
         let subsidy = self.calc_block_subsidy(daa_score);
