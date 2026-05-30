@@ -7,6 +7,7 @@ use crate::{
     data_stack::{DataStack, OpcodeData},
 };
 use blake2b_simd::Params;
+use kaspa_hashes::blake2b_512;
 use kaspa_consensus_core::hashing::sighash::SigHashReusedValues;
 use kaspa_consensus_core::hashing::sighash_type::SigHashType;
 use kaspa_consensus_core::tx::VerifiableTransaction;
@@ -1028,8 +1029,19 @@ opcode_list! {
             _ => Err(TxScriptError::InvalidSource("OpOutputSpk only applies to transaction inputs".to_string()))
         }
     }
+    // kaspa-pq PQ-only (ADR-0019 §8): 64-byte BLAKE2b-512 hash opcode, the
+    // hash step of the widened ML-DSA P2PKH template
+    //   OP_DUP OP_BLAKE2B_512 OP_DATA64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA65
+    // (repurposes the upstream reserved `OpUnknown196`). Mirrors `OpBlake2b`
+    // (0xaa) but with `hash_length(64)`, so it pushes a 64-byte digest. The
+    // 32-byte `OP_BLAKE2B` (0xaa) is retained for the legacy P2SH template.
+    opcode OpBlake2b512<0xc4, 1>(self, vm) {
+        let [last] = vm.dstack.pop_raw()?;
+        let hash = blake2b_512(last.as_slice());
+        vm.dstack.push(hash.as_bytes().to_vec());
+        Ok(())
+    }
     // Undefined opcodes
-    opcode OpUnknown196<0xc4, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
     opcode OpUnknown197<0xc5, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
     opcode OpUnknown198<0xc6, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
     opcode OpUnknown199<0xc7, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
@@ -1229,8 +1241,9 @@ mod test {
     fn test_opcode_invalid() {
         let tests: Vec<Box<dyn OpCodeImplementation<PopulatedTransaction, SigHashReusedValuesUnsync>>> = vec![
             // kaspa-pq: 0xa6 is OpCheckSigMlDsa65 and 0xa7 is
-            // OpCheckMultiSigMlDsa65 (both defined, not unknown).
-            opcodes::OpUnknown196::empty().expect("Should accept empty"),
+            // OpCheckMultiSigMlDsa65 (both defined, not unknown). 0xc4 is now
+            // OpBlake2b512 (ADR-0019 §8), so the first remaining invalid opcode
+            // is 0xc5 / OpUnknown197.
             opcodes::OpUnknown197::empty().expect("Should accept empty"),
             opcodes::OpUnknown198::empty().expect("Should accept empty"),
             opcodes::OpUnknown199::empty().expect("Should accept empty"),

@@ -431,7 +431,7 @@ mod tests {
             amount: 1_000,
             activation_daa_score: 0,
             unbonding_period_blocks: 1,
-            owner_reward_spk_payload: [0xddu8; 32],
+            owner_reward_spk_payload: [0xddu8; 64],
         };
         let mut tx = base.clone();
         tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
@@ -485,7 +485,7 @@ mod tests {
             bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 42 },
             attestation_a: attestation(0x11),
             attestation_b: attestation(0x33),
-            reporter_reward_spk_payload: [0xeeu8; 32],
+            reporter_reward_spk_payload: [0xeeu8; 64],
         };
         let evidence_payload = borsh::to_vec(&evidence).unwrap();
 

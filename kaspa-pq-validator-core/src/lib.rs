@@ -75,13 +75,14 @@ impl ValidatorKey {
     }
 
     /// The validator's own P2PKH-ML-DSA address — `(prefix, PubKeyHashMlDsa65,
-    /// BLAKE2b-256(public_key))`. This is the **spend** address (32-byte BLAKE2b-256
-    /// payload), distinct from the 64-byte overlay `validator_id`. Funding UTXOs sent
-    /// here back the attestation-shard transactions (funding model A).
+    /// BLAKE2b-512(public_key))`. This is the **spend** address (64-byte BLAKE2b-512
+    /// payload — ADR-0019 §8), distinct from the 64-byte overlay `validator_id` (a
+    /// separately-keyed BLAKE2b-512). Funding UTXOs sent here back the
+    /// attestation-shard transactions (funding model A).
     pub fn funding_address(&self, prefix: Prefix) -> Address {
-        let mut payload = [0u8; 32];
+        let mut payload = [0u8; 64];
         payload.copy_from_slice(
-            Blake2bParams::new().hash_length(32).to_state().update(self.keypair.verification_key.as_ref()).finalize().as_bytes(),
+            Blake2bParams::new().hash_length(64).to_state().update(self.keypair.verification_key.as_ref()).finalize().as_bytes(),
         );
         Address::new(prefix, Version::PubKeyHashMlDsa65, &payload)
     }
@@ -164,8 +165,8 @@ impl ValidatorKey {
     /// 1952-byte ML-DSA-65 pubkey and the matching `validator_pubkey_hash`/`owner_pubkey_hash`
     /// (both = `validator_id`) are written so any node can verify attestations without a
     /// registry. `owner_reward_spk_payload` is where this bond's rewards are paid — set to the
-    /// caller-supplied 32-byte P2PKH-ML-DSA payload (defaults to the validator's own funding
-    /// payload). The single input is signed under [`MLDSA65_TX_CONTEXT`] exactly as
+    /// caller-supplied 64-byte P2PKH-ML-DSA payload (ADR-0019 §8; defaults to the validator's
+    /// own funding payload). The single input is signed under [`MLDSA65_TX_CONTEXT`] exactly as
     /// [`Self::build_funded_shard_tx`].
     #[allow(clippy::too_many_arguments)]
     pub fn build_funded_stake_bond_tx(
@@ -173,7 +174,7 @@ impl ValidatorKey {
         amount: u64,
         activation_daa_score: u64,
         unbonding_period_blocks: u64,
-        owner_reward_spk_payload: [u8; 32],
+        owner_reward_spk_payload: [u8; 64],
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
         fee: u64,
@@ -186,7 +187,7 @@ impl ValidatorKey {
             return Err(format!("funding UTXO amount {} does not cover amount {} + fee {}", funding.amount, amount, fee));
         }
         // validator_id = BLAKE2b-512(pubkey) is both the owner and validator identity for a
-        // self-bonded validator; the 32-byte reward payload is a separate spend target.
+        // self-bonded validator; the 64-byte reward payload is a separate spend target.
         let payload = StakeBondPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             owner_pubkey_hash: self.validator_id,
@@ -226,13 +227,14 @@ impl ValidatorKey {
         Ok(tx)
     }
 
-    /// The 32-byte P2PKH-ML-DSA reward payload for this key — `BLAKE2b-256(public_key)`, the
-    /// same payload as [`Self::funding_address`]. Default `owner_reward_spk_payload` for a
-    /// self-bonded validator (rewards return to the validator's own spend address).
-    pub fn reward_spk_payload(&self) -> [u8; 32] {
-        let mut payload = [0u8; 32];
+    /// The 64-byte P2PKH-ML-DSA reward payload for this key — `BLAKE2b-512(public_key)`
+    /// (ADR-0019 §8), the same payload as [`Self::funding_address`]. Default
+    /// `owner_reward_spk_payload` for a self-bonded validator (rewards return to the
+    /// validator's own spend address).
+    pub fn reward_spk_payload(&self) -> [u8; 64] {
+        let mut payload = [0u8; 64];
         payload.copy_from_slice(
-            Blake2bParams::new().hash_length(32).to_state().update(self.keypair.verification_key.as_ref()).finalize().as_bytes(),
+            Blake2bParams::new().hash_length(64).to_state().update(self.keypair.verification_key.as_ref()).finalize().as_bytes(),
         );
         payload
     }
@@ -417,15 +419,16 @@ mod tests {
     }
 
     #[test]
-    fn funding_address_is_p2pkh_mldsa65_over_blake2b_256_pubkey() {
+    fn funding_address_is_p2pkh_mldsa65_over_blake2b_512_pubkey() {
         let key = ValidatorKey::from_seed([0x44u8; VALIDATOR_SEED_LEN]);
         let addr = key.funding_address(Prefix::Devnet);
         assert_eq!(addr.version, Version::PubKeyHashMlDsa65);
         assert_eq!(addr.prefix, Prefix::Devnet);
-        // Payload = BLAKE2b-256(pubkey) — the 32-byte spend hash, not the 64-byte validator_id.
-        let mut expected = [0u8; 32];
+        // Payload = BLAKE2b-512(pubkey) — the 64-byte spend hash (ADR-0019 §8); the
+        // overlay validator_id is a separately-keyed BLAKE2b-512, not this value.
+        let mut expected = [0u8; 64];
         expected.copy_from_slice(
-            Blake2bParams::new().hash_length(32).to_state().update(key.keypair.verification_key.as_ref()).finalize().as_bytes(),
+            Blake2bParams::new().hash_length(64).to_state().update(key.keypair.verification_key.as_ref()).finalize().as_bytes(),
         );
         assert_eq!(addr.payload.as_slice(), &expected);
     }

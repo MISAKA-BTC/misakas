@@ -3823,16 +3823,10 @@
   ],
   [
     "1",
-    "IF 0xc4 ELSE 1 ENDIF",
-    "",
-    "BAD_OPCODE",
-    "opcodes above OpTxOutputSpk invalid if executed"
-  ],
-  [
-    "1",
     "IF 0xc5 ELSE 1 ENDIF",
     "",
-    "BAD_OPCODE"
+    "BAD_OPCODE",
+    "opcodes above OpBlake2b512 (0xc4) invalid if executed (ADR-0019 §8 repurposed 0xc4 as OP_BLAKE2B_512)"
   ],
   [
     "1",

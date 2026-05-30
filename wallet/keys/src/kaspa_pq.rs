@@ -11,8 +11,8 @@
 //!           key   = b"kaspa-pq-wallet-v1/mldsa65/keygen",
 //!           input = network_id || account_le || change_le || index_le || master_seed,
 //!       )
-//!   (verification_key, signing_key) = ML-DSA-65.KeyGen(keygen_seed)
-//!   address = (prefix, Version::PubKeyHashMlDsa65, BLAKE2b-256(verification_key))
+//!   (verification_key, signing_key) = ML-DSA-87.KeyGen(keygen_seed)
+//!   address = (prefix, Version::PubKeyHashMlDsa65, BLAKE2b-512(verification_key))  // ADR-0019 §8
 //! ```
 //!
 //! See docs/kaspa-pq-spec.md §8 for the normative spec. Phase 5 keeps the
@@ -52,10 +52,11 @@ impl KaspaPqMlDsa65KeyPair {
         self.inner.verification_key.as_ref()
     }
 
-    /// 32-byte address payload: `BLAKE2b-256(public_key)`.
-    pub fn public_key_hash(&self) -> [u8; 32] {
-        let mut out = [0u8; 32];
-        out.copy_from_slice(Params::new().hash_length(32).to_state().update(self.public_key_bytes()).finalize().as_bytes());
+    /// 64-byte address payload: `BLAKE2b-512(public_key)` (ADR-0019 §8;
+    /// widened from the former 32-byte BLAKE2b-256 form).
+    pub fn public_key_hash(&self) -> [u8; 64] {
+        let mut out = [0u8; 64];
+        out.copy_from_slice(Params::new().hash_length(64).to_state().update(self.public_key_bytes()).finalize().as_bytes());
         out
     }
 

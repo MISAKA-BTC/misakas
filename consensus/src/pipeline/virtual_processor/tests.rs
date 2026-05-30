@@ -284,7 +284,7 @@ mod dns_harness {
     /// borsh `StakeBondPayload`). The funded variant (output-0 = `amount` locked
     /// stake spent from a coinbase UTXO) is the next step; here the tx is
     /// payload-first for shape / borsh checks.
-    pub(super) fn build_stake_bond_tx(v: &HarnessValidator, amount: u64, activation_daa_score: u64, reward_payload: [u8; 32]) -> Transaction {
+    pub(super) fn build_stake_bond_tx(v: &HarnessValidator, amount: u64, activation_daa_score: u64, reward_payload: [u8; 64]) -> Transaction {
         let payload = StakeBondPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             owner_pubkey_hash: v.validator_id,
@@ -334,7 +334,7 @@ mod dns_harness {
         assert_eq!(v.validator_id, validator_id_from_pubkey(&v.pubkey));
 
         // Stake-bond tx shape + payload round-trip; validator_pubkey_hash binds the pubkey.
-        let bond_tx = build_stake_bond_tx(&v, 10_000_000_000, 0, [0x33u8; 32]);
+        let bond_tx = build_stake_bond_tx(&v, 10_000_000_000, 0, [0x33u8; 64]);
         assert_eq!(bond_tx.subnetwork_id, SUBNETWORK_ID_STAKE_BOND);
         let bond_outpoint = TransactionOutpoint::new(bond_tx.id(), 0);
         let decoded: StakeBondPayload = borsh::from_slice(&bond_tx.payload).unwrap();

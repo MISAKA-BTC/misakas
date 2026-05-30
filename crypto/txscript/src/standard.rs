@@ -1,5 +1,8 @@
 use crate::{
-    opcodes::codes::{OpBlake2b, OpCheckSig, OpCheckSigECDSA, OpCheckSigMlDsa65, OpData32, OpData33, OpDup, OpEqual, OpEqualVerify},
+    opcodes::codes::{
+        OpBlake2b, OpBlake2b512, OpCheckSig, OpCheckSigECDSA, OpCheckSigMlDsa65, OpData32, OpData33, OpData64, OpDup, OpEqual,
+        OpEqualVerify,
+    },
     script_builder::{ScriptBuilder, ScriptBuilderResult},
     script_class::ScriptClass,
 };
@@ -38,24 +41,25 @@ fn pay_to_script_hash(script_hash: &[u8]) -> ScriptVec {
     SmallVec::from_iter([OpBlake2b, OpData32].iter().copied().chain(script_hash.iter().copied()).chain(once(OpEqual)))
 }
 
-/// Creates a new kaspa-pq ML-DSA-65 P2PKH `scriptPubKey`.
+/// Creates a new kaspa-pq ML-DSA P2PKH `scriptPubKey`.
 ///
-/// The script template is:
+/// The script template is (ADR-0019 §8 — widened from the former 32-byte
+/// BLAKE2b-256 form):
 /// ```text
 ///   OP_DUP
-///   OP_BLAKE2B_256
-///   OP_DATA32 <BLAKE2b-256(ML-DSA-65 public key)>
+///   OP_BLAKE2B_512
+///   OP_DATA64 <BLAKE2b-512(ML-DSA public key)>
 ///   OP_EQUALVERIFY
 ///   OP_CHECKSIG_MLDSA65
 /// ```
 ///
-/// Total length 37 bytes (5 opcodes + 32-byte payload). See
-/// docs/adr/0002-mldsa65-p2pkh.md.
+/// Total length 69 bytes (5 opcodes + 64-byte payload). See
+/// docs/adr/0002-mldsa65-p2pkh.md and docs/kaspa-pq-design-mldsa87.md §8.
 fn pay_to_pub_key_hash_mldsa65(address_payload: &[u8]) -> ScriptVec {
     // TODO: use ScriptBuilder when add_op and add_data fns or equivalents are available
-    assert_eq!(address_payload.len(), 32);
+    assert_eq!(address_payload.len(), 64);
     SmallVec::from_iter(
-        [OpDup, OpBlake2b, OpData32]
+        [OpDup, OpBlake2b512, OpData64]
             .iter()
             .copied()
             .chain(address_payload.iter().copied())
@@ -107,10 +111,10 @@ pub fn extract_script_pub_key_address(script_public_key: &ScriptPublicKey, prefi
         ScriptClass::NonStandard => Err(TxScriptError::PubKeyFormat),
         ScriptClass::PubKey => Ok(Address::new(prefix, Version::PubKey, &script[1..33])),
         ScriptClass::PubKeyECDSA => Ok(Address::new(prefix, Version::PubKeyECDSA, &script[1..34])),
-        // kaspa-pq ML-DSA-65 P2PKH: layout is
-        //   [OpDup, OpBlake2b, OpData32, <32-byte payload>, OpEqualVerify, OpCheckSigMlDsa65]
-        // so the address payload occupies script[3..35].
-        ScriptClass::PubKeyHashMlDsa65 => Ok(Address::new(prefix, Version::PubKeyHashMlDsa65, &script[3..35])),
+        // kaspa-pq ML-DSA P2PKH (ADR-0019 §8): layout is
+        //   [OpDup, OpBlake2b512, OpData64, <64-byte payload>, OpEqualVerify, OpCheckSigMlDsa65]
+        // so the address payload occupies script[3..67].
+        ScriptClass::PubKeyHashMlDsa65 => Ok(Address::new(prefix, Version::PubKeyHashMlDsa65, &script[3..67])),
         ScriptClass::ScriptHash => Ok(Address::new(prefix, Version::ScriptHash, &script[2..34])),
     }
 }
@@ -211,9 +215,12 @@ mod tests {
             0xba, 0x01, 0xfc, 0x5f, 0x4e, 0x9d, 0x98, 0x79, 0x59, 0x9c, 0x69, 0xa3, 0xda, 0xfd, 0xb8, 0x35, 0xa7, 0x25, 0x5e, 0x5f,
             0x2e, 0x93, 0x4e, 0x93, 0x22, 0xec, 0xd3, 0xaf, 0x19, 0x0a, 0xb0, 0xf6, 0x0e,
         ];
-        let p32_pq: [u8; 32] = [
+        // ADR-0019 §8: ML-DSA P2PKH payload is a 64-byte BLAKE2b-512 hash.
+        let p64_pq: [u8; 64] = [
             0x88, 0x44, 0xcc, 0x77, 0xee, 0x11, 0xaa, 0x99, 0x00, 0x33, 0xbb, 0x66, 0xdd, 0x22, 0x55, 0x44, 0x77, 0xee, 0x11, 0xaa,
-            0x99, 0x88, 0x33, 0xbb, 0x66, 0xdd, 0x22, 0x55, 0x44, 0x77, 0xee, 0x11,
+            0x99, 0x88, 0x33, 0xbb, 0x66, 0xdd, 0x22, 0x55, 0x44, 0x77, 0xee, 0x11, 0x88, 0x44, 0xcc, 0x77, 0xee, 0x11, 0xaa, 0x99,
+            0x00, 0x33, 0xbb, 0x66, 0xdd, 0x22, 0x55, 0x44, 0x77, 0xee, 0x11, 0xaa, 0x99, 0x88, 0x33, 0xbb, 0x66, 0xdd, 0x22, 0x55,
+            0x44, 0x77, 0xee, 0x11,
         ];
 
         // cspell:disable
@@ -237,10 +244,10 @@ mod tests {
                 expected_address: Ok(Address::new(Prefix::Testnet, Version::PubKeyECDSA, &p33_b)),
             },
             Test {
-                name: "Mainnet ML-DSA-65 P2PKH script and address (kaspa-pq standard)",
-                script_pub_key: pay_to_address_script(&Address::new(Prefix::Mainnet, Version::PubKeyHashMlDsa65, &p32_pq)),
+                name: "Mainnet ML-DSA P2PKH script and address (kaspa-pq standard, ADR-0019 §8)",
+                script_pub_key: pay_to_address_script(&Address::new(Prefix::Mainnet, Version::PubKeyHashMlDsa65, &p64_pq)),
                 prefix: Prefix::Mainnet,
-                expected_address: Ok(Address::new(Prefix::Mainnet, Version::PubKeyHashMlDsa65, &p32_pq)),
+                expected_address: Ok(Address::new(Prefix::Mainnet, Version::PubKeyHashMlDsa65, &p64_pq)),
             },
             Test {
                 name: "Testnet non standard script",

@@ -158,9 +158,10 @@ pub enum Version {
     /// Carries a 33-byte compressed ECDSA (secp256k1) public key.
     /// Non-standard in kaspa-pq for the same reason as PubKey.
     PubKeyECDSA = 1,
-    /// kaspa-pq ML-DSA-65 P2PKH (the only standard send template).
-    /// Carries a 32-byte `BLAKE2b-256(public_key)`. See
-    /// docs/adr/0002-mldsa65-p2pkh.md.
+    /// kaspa-pq ML-DSA P2PKH (the only standard send template).
+    /// Carries a 64-byte `BLAKE2b-512(public_key)` (ADR-0019 §8; widened
+    /// from the former 32-byte BLAKE2b-256). See docs/adr/0002-mldsa65-p2pkh.md
+    /// and docs/kaspa-pq-design-mldsa87.md §8.
     PubKeyHashMlDsa65 = 2,
     /// ScriptHash addresses always have the version byte set to 8
     ScriptHash = 8,
@@ -183,15 +184,16 @@ impl TryFrom<&str> for Version {
 impl Version {
     /// Address payload length for each [`Version`].
     ///
-    /// `PubKeyHashMlDsa65` carries a 32-byte BLAKE2b-256 hash of the
-    /// ML-DSA-65 public key. The raw 1952-byte ML-DSA-65 public key is
-    /// **never** an address payload — it appears only on the spending
-    /// input side. See docs/adr/0002-mldsa65-p2pkh.md.
+    /// `PubKeyHashMlDsa65` carries a 64-byte BLAKE2b-512 hash of the
+    /// ML-DSA public key (ADR-0019 §8; widened from the former 32-byte
+    /// BLAKE2b-256). The raw ML-DSA public key is **never** an address
+    /// payload — it appears only on the spending input side. See
+    /// docs/adr/0002-mldsa65-p2pkh.md.
     pub fn public_key_len(&self) -> usize {
         match self {
             Version::PubKey => 32,
             Version::PubKeyECDSA => 33,
-            Version::PubKeyHashMlDsa65 => 32,
+            Version::PubKeyHashMlDsa65 => 64,
             Version::ScriptHash => 32,
         }
     }
@@ -224,11 +226,15 @@ impl Display for Version {
 
 /// Size of the payload vector of an address.
 ///
-/// This size is the smallest SmallVec supported backing store size greater or equal to the largest
-/// possible payload, which is 33 for [`Version::PubKeyECDSA`].
-pub const PAYLOAD_VECTOR_SIZE: usize = 36;
+/// This size is the SmallVec inline backing store size, chosen to be ≥ the
+/// largest possible payload. In kaspa-pq the largest payload is the 64-byte
+/// BLAKE2b-512 public-key hash of [`Version::PubKeyHashMlDsa65`] (ADR-0019
+/// §8), so this is 64 (was 36 when the largest payload was the 33-byte
+/// [`Version::PubKeyECDSA`] key).
+pub const PAYLOAD_VECTOR_SIZE: usize = 64;
 
-/// Used as the underlying type for address payload, optimized for the largest version length (33).
+/// Used as the underlying type for address payload, optimized for the largest
+/// version length (64, the ML-DSA P2PKH BLAKE2b-512 hash — ADR-0019 §8).
 pub type PayloadVec = SmallVec<[u8; PAYLOAD_VECTOR_SIZE]>;
 
 /// [`Address`] struct that serializes to and from an address format string:

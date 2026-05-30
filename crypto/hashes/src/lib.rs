@@ -22,11 +22,28 @@ pub const HASH_SIZE: usize = 32;
 pub use hash64::*;
 pub use hashers::*;
 
+use blake2b_simd::Params as Blake2bParams;
+
 /// kaspa-pq Phase 9 documentation alias for the upstream 32-byte
 /// [`Hash`]. Use `Hash32` in source that wants to be explicit about
 /// "this is the legacy 32-byte width, not the kaspa-pq 64-byte
 /// consensus identity" (ADR-0008). The 64-byte type is [`Hash64`].
 pub type Hash32 = Hash;
+
+/// kaspa-pq PQ-only (ADR-0019 §8): 64-byte BLAKE2b-512 of `data`, returned
+/// as a [`Hash64`]. Used by the `OP_BLAKE2B_512` opcode and the ML-DSA P2PKH
+/// address payload (BLAKE2b-512 of the ML-DSA-87 public key).
+///
+/// This is an *unkeyed* BLAKE2b-512 (no domain separator), matching the
+/// unkeyed 32-byte `OP_BLAKE2B` hashing the ML-DSA P2PKH template replaces.
+/// It is deliberately distinct from the keyed `*Hash64` consensus-identity
+/// hashers in [`crate::hashers`].
+#[inline]
+pub fn blake2b_512(data: &[u8]) -> Hash64 {
+    let mut out = [0u8; HASH64_SIZE];
+    out.copy_from_slice(Blake2bParams::new().hash_length(HASH64_SIZE).to_state().update(data).finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
 
 // TODO: Check if we use hash more as an array of u64 or of bytes and change the default accordingly
 /// @category General

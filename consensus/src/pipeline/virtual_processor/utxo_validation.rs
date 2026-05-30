@@ -1058,7 +1058,7 @@ mod tests {
                 amount: 1_000,
                 activation_daa_score: 0, // Active from genesis.
                 unbonding_period_blocks: 100,
-                owner_reward_spk_payload: [0xdd; 32],
+                owner_reward_spk_payload: [0xdd; 64],
                 unbond_request_daa_score: None,
                 slashed_at_daa_score: None,
                 status: BondStatus::Active,
@@ -1145,7 +1145,7 @@ mod tests {
                 amount: 1_000,
                 activation_daa_score: 0,
                 unbonding_period_blocks: 100,
-                owner_reward_spk_payload: [0xdd; 32],
+                owner_reward_spk_payload: [0xdd; 64],
                 unbond_request_daa_score: None,
                 slashed_at_daa_score: None,
                 status: BondStatus::Active,
@@ -1159,7 +1159,7 @@ mod tests {
                 bond_outpoint: op,
                 attestation_a: attestation(op, 0x55),
                 attestation_b: attestation(op, 0x99),
-                reporter_reward_spk_payload: [0xee; 32],
+                reporter_reward_spk_payload: [0xee; 64],
             };
             Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_SLASHING_EVIDENCE, 0, borsh::to_vec(&ev).unwrap())
         }
@@ -1230,7 +1230,7 @@ mod tests {
                 amount: 1_000,
                 activation_daa_score: 0,
                 unbonding_period_blocks: 5_000,
-                owner_reward_spk_payload: [0xdd; 32],
+                owner_reward_spk_payload: [0xdd; 64],
                 unbond_request_daa_score: None,
                 slashed_at_daa_score: None,
                 status: BondStatus::Active,

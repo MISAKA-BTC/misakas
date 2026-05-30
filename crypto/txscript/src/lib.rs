@@ -1653,9 +1653,9 @@ mod bitcoind_tests {
         let sk = &keypair.signing_key;
         assert_eq!(pk_bytes.len(), MLDSA65_PK_LEN);
 
-        // 2. Address payload = BLAKE2b-256(public_key).
-        let mut pk_hash = [0u8; 32];
-        pk_hash.copy_from_slice(Params::new().hash_length(32).to_state().update(pk_bytes).finalize().as_bytes());
+        // 2. Address payload = BLAKE2b-512(public_key) (ADR-0019 §8).
+        let mut pk_hash = [0u8; 64];
+        pk_hash.copy_from_slice(Params::new().hash_length(64).to_state().update(pk_bytes).finalize().as_bytes());
         let address = Address::new(Prefix::Simnet, Version::PubKeyHashMlDsa65, &pk_hash);
 
         // 3. scriptPubKey = pay_to_address_script.

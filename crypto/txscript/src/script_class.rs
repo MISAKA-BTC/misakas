@@ -34,9 +34,9 @@ pub enum ScriptClass {
     PubKeyECDSA,
     /// Pay to script hash (32-byte BLAKE2b-256 of redeem script)
     ScriptHash,
-    /// kaspa-pq pay to ML-DSA-65 public-key hash (32-byte BLAKE2b-256 of
-    /// the 1952-byte ML-DSA-65 public key). The only kaspa-pq standard
-    /// send template.
+    /// kaspa-pq pay to ML-DSA public-key hash (64-byte BLAKE2b-512 of
+    /// the ML-DSA public key — ADR-0019 §8, widened from the former
+    /// 32-byte BLAKE2b-256). The only kaspa-pq standard send template.
     PubKeyHashMlDsa65,
 }
 
@@ -95,17 +95,18 @@ impl ScriptClass {
     }
 
     /// Returns true if the script is in the kaspa-pq standard
-    /// ML-DSA-65 P2PKH format, false otherwise. The byte layout is:
-    /// `[OpDup, OpBlake2b, OpData32, <32-byte pubkey hash>, OpEqualVerify, OpCheckSigMlDsa65]`
-    /// — total 37 bytes (5 opcodes + 32 data).
+    /// ML-DSA P2PKH format, false otherwise. The byte layout is
+    /// (ADR-0019 §8 — widened from the former 32-byte BLAKE2b-256 form):
+    /// `[OpDup, OpBlake2b512, OpData64, <64-byte pubkey hash>, OpEqualVerify, OpCheckSigMlDsa65]`
+    /// — total 69 bytes (5 opcodes + 64 data).
     #[inline(always)]
     pub fn is_pay_to_pub_key_hash_mldsa65(script_public_key: &[u8]) -> bool {
-        (script_public_key.len() == 37)
+        (script_public_key.len() == 69)
             && (script_public_key[0] == opcodes::codes::OpDup)
-            && (script_public_key[1] == opcodes::codes::OpBlake2b)
-            && (script_public_key[2] == opcodes::codes::OpData32)
-            && (script_public_key[35] == opcodes::codes::OpEqualVerify)
-            && (script_public_key[36] == opcodes::codes::OpCheckSigMlDsa65)
+            && (script_public_key[1] == opcodes::codes::OpBlake2b512)
+            && (script_public_key[2] == opcodes::codes::OpData64)
+            && (script_public_key[67] == opcodes::codes::OpEqualVerify)
+            && (script_public_key[68] == opcodes::codes::OpCheckSigMlDsa65)
     }
 
     fn as_str(&self) -> &'static str {
