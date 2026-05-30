@@ -3293,6 +3293,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaspa-pq-validator"
+version = "1.1.0"
+dependencies = [
+ "clap 4.5.51",
+ "kaspa-core",
+ "kaspa-rpc-core",
+ "kaspa-wrpc-client",
+ "log",
+ "tokio",
+]
+
+[[package]]
 name = "kaspa-rpc-core"
 version = "1.1.0"
 dependencies = [

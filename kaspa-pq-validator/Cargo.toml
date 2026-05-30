@@ -1,0 +1,28 @@
+[package]
+name = "kaspa-pq-validator"
+description = "Kaspa-PQ validator sidecar (ADR-0011): connects to a local node over 127.0.0.1 wRPC and attests when its stake bond is active"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kaspa-pq-validator"
+path = "src/main.rs"
+
+[dependencies]
+kaspa-core.workspace = true
+kaspa-rpc-core.workspace = true
+kaspa-wrpc-client.workspace = true
+
+log.workspace = true
+
+clap = { workspace = true, features = ["env"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal"] }
+
+[lints]
+workspace = true
