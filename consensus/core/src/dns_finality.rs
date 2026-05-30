@@ -611,6 +611,38 @@ pub struct DnsParams {
     /// `dns_activation_daa_score` (`u64::MAX` everywhere) like the rest of the overlay.
     /// Appended last to keep the borsh layout change localized.
     pub reorg_mode: DnsReorgMode,
+
+    /// kaspa-pq Phase 13 (ADR-0018 §F staged rollout): DAA score at which the
+    /// reward split reaches its full Stage-3 ratios (Worker 75 / Validator 25 /
+    /// Node 0). Between [`Self::dns_activation_daa_score`] (Stage 2 bootstrap,
+    /// smaller validator share) and this score the bootstrap split applies; below
+    /// activation there is no carve (Stage 1: the miner takes the whole reward).
+    /// Keyed on DAA (not the pov-dependent `DnsState.rollout_stage`) so the
+    /// construction and validation coinbase paths pick the same stage. Appended
+    /// last to keep the borsh layout change localized. `u64::MAX` everywhere today.
+    pub full_reward_split_daa_score: u64,
+}
+
+impl DnsParams {
+    /// ADR-0018 §F staged reward rollout — the effective fee/subsidy split for a
+    /// block at `daa_score`, selected deterministically from the score (NOT the
+    /// node-local `DnsState.rollout_stage`, which is pov-dependent and would split
+    /// the chain). `None` below [`Self::dns_activation_daa_score`] (Stage 1: no
+    /// carve — the miner takes the whole subsidy + fees, the pre-overlay behavior).
+    /// Between activation and [`Self::full_reward_split_daa_score`] it is the
+    /// bootstrap split (Stage 2, smaller validator share); at/after it, the full
+    /// split (Stage 3). Both the coinbase carve and `coinbase_validator_pool`
+    /// consume the returned params, so construction and validation agree. Inert on
+    /// every current network (`dns_activation_daa_score = u64::MAX`).
+    pub fn reward_fee_split(&self, daa_score: u64) -> Option<&FeeSplitParams> {
+        if daa_score < self.dns_activation_daa_score {
+            None
+        } else if daa_score >= self.full_reward_split_daa_score {
+            Some(&self.reward_params.fee_split)
+        } else {
+            Some(&self.reward_params.fee_split_bootstrap)
+        }
+    }
 }
 
 /// Validator reward-distribution parameters (ADR-0013).
@@ -682,6 +714,14 @@ pub struct RewardParams {
     /// [`SubsidySplit::validator_sompi`] the §E pool) and the Service reserve. Appended
     /// last to keep the borsh layout change localized (pre-activation; no live reward).
     pub fee_split: FeeSplitParams,
+
+    /// kaspa-pq Phase 13 (ADR-0018 §F staged rollout): the Stage-2 *bootstrap*
+    /// split (smaller validator share, e.g. subsidy 90/10/0) applied between
+    /// `DnsParams::dns_activation_daa_score` and
+    /// `DnsParams::full_reward_split_daa_score`; [`Self::fee_split`] is the final
+    /// Stage-3 split. Selected by [`DnsParams::reward_fee_split`]. Appended last to
+    /// keep the borsh layout change localized (pre-activation; no live reward).
+    pub fee_split_bootstrap: FeeSplitParams,
 }
 
 /// Outcome of [`compute_attestation_reward_payouts`] — the per-block
@@ -1596,21 +1636,24 @@ pub fn validator_quality_bonus(
 /// tests). Nested in [`RewardParams`].
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FeeSplitParams {
-    /// Block-subsidy split (DNS Active). Worker total (70%) = `base` (62%, the
-    /// primary — takes the remainder) + `inclusion` (8%, the §D
-    /// `worker_inclusion_pool`); `validator` (25%) is the §E finality pool;
-    /// `service` (5%) is the protocol reserve.
+    /// Block-subsidy split (DNS Active, Stage 3). Worker total (75%) = `base`
+    /// (67%, the primary — takes the remainder) + `inclusion` (8%, the §D
+    /// `worker_inclusion_pool`); `validator` (25%) is the §E pool. `service` is
+    /// **0** — the Node reward was dropped (Sybil-prone; node duty is enforced via
+    /// the validator role instead). The field is retained at 0 for borsh stability
+    /// / future re-activation.
     pub subsidy_worker_base_bps: u16,
     pub subsidy_worker_inclusion_bps: u16,
     pub subsidy_validator_bps: u16,
     pub subsidy_service_bps: u16,
     /// Normal-tx-fee split (a permanent validator share so the layer outlives the
-    /// subsidy). Worker (85%, primary) / Validator (10%) / Service (5%).
+    /// subsidy). Worker (90%, primary) / Validator (10%) / Service (0, retained).
     pub normal_fee_worker_bps: u16,
     pub normal_fee_validator_bps: u16,
     pub normal_fee_service_bps: u16,
     /// DNS-finality-fee split (validators directly provide finality). Validator
-    /// (60%, primary) / Worker (25%) / Service (15%).
+    /// (75%, primary) / Worker (25%) / Service (0, retained). NOTE: unwired — no
+    /// distinct finality-fee class exists yet, so these ratios have no live effect.
     pub finality_fee_validator_bps: u16,
     pub finality_fee_worker_bps: u16,
     pub finality_fee_service_bps: u16,
@@ -3392,20 +3435,37 @@ mod tests {
         TransactionOutpoint::new(Hash64::from_bytes([0x77u8; 64]), 42)
     }
 
-    /// ADR-0018 §F canonical splits: subsidy 62/8/25/5, normal-tx 85/10/5,
-    /// finality 60/25/15 (each group sums to 100%).
+    /// ADR-0018 §F canonical splits (Node share = 0): Stage-3 subsidy 67/8/25/0,
+    /// normal-tx 90/10/0, finality 75/25/0 (each group sums to 100%).
     fn fixture_fee_split() -> FeeSplitParams {
         FeeSplitParams {
-            subsidy_worker_base_bps: 6200,
+            subsidy_worker_base_bps: 6700,
             subsidy_worker_inclusion_bps: 800,
             subsidy_validator_bps: 2500,
-            subsidy_service_bps: 500,
-            normal_fee_worker_bps: 8500,
+            subsidy_service_bps: 0,
+            normal_fee_worker_bps: 9000,
             normal_fee_validator_bps: 1000,
-            normal_fee_service_bps: 500,
-            finality_fee_validator_bps: 6000,
+            normal_fee_service_bps: 0,
+            finality_fee_validator_bps: 7500,
             finality_fee_worker_bps: 2500,
-            finality_fee_service_bps: 1500,
+            finality_fee_service_bps: 0,
+        }
+    }
+
+    /// ADR-0018 §F Stage-2 bootstrap split (smaller validator share): subsidy
+    /// 82/8/10/0, normal-tx 90/10/0, finality 75/25/0.
+    fn fixture_fee_split_bootstrap() -> FeeSplitParams {
+        FeeSplitParams {
+            subsidy_worker_base_bps: 8200,
+            subsidy_worker_inclusion_bps: 800,
+            subsidy_validator_bps: 1000,
+            subsidy_service_bps: 0,
+            normal_fee_worker_bps: 9000,
+            normal_fee_validator_bps: 1000,
+            normal_fee_service_bps: 0,
+            finality_fee_validator_bps: 7500,
+            finality_fee_worker_bps: 2500,
+            finality_fee_service_bps: 0,
         }
     }
 
@@ -4154,8 +4214,10 @@ mod tests {
                 quality_gate_bonus_sompi: 50_000_000,
                 worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
                 fee_split: fixture_fee_split(),
+                fee_split_bootstrap: fixture_fee_split_bootstrap(),
             },
             reorg_mode: DnsReorgMode::TwoDimensionalDominance,
+            full_reward_split_daa_score: 2_000_000,
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();
@@ -4625,6 +4687,7 @@ mod tests {
             quality_gate_bonus_sompi: 25_000_000,
             worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
             fee_split: fixture_fee_split(),
+            fee_split_bootstrap: fixture_fee_split_bootstrap(),
         };
         let bytes = borsh::to_vec(&p).unwrap();
         let back: RewardParams = borsh::from_slice(&bytes).unwrap();
@@ -4699,28 +4762,28 @@ mod tests {
     #[test]
     fn fee_splits_are_dust_free_and_match_adr_ratios() {
         let p = fixture_fee_split();
-        // Subsidy 62/8/25/5 on a round 1_000_000; Worker total = base + inclusion = 70%.
+        // Subsidy 67/8/25/0 on a round 1_000_000; Worker total = base + inclusion = 75%.
         let s = split_block_subsidy(1_000_000, &p);
         assert_eq!(
             (s.worker_base_sompi, s.worker_inclusion_sompi, s.validator_sompi, s.service_sompi),
-            (620_000, 80_000, 250_000, 50_000)
+            (670_000, 80_000, 250_000, 0)
         );
-        assert_eq!(s.worker_base_sompi + s.worker_inclusion_sompi, 700_000); // Worker 70%
+        assert_eq!(s.worker_base_sompi + s.worker_inclusion_sompi, 750_000); // Worker 75%
         // Dust-free: the four parts always sum to the input, even on a non-round value;
         // the primary (worker_base) absorbs the rounding remainder, so it is ≥ its nominal.
         let s = split_block_subsidy(1_000_003, &p);
         assert_eq!(s.worker_base_sompi + s.worker_inclusion_sompi + s.validator_sompi + s.service_sompi, 1_000_003);
-        assert!(s.worker_base_sompi >= 620_001);
+        assert!(s.worker_base_sompi >= 670_001);
 
-        // Normal-tx 85/10/5 (Worker primary).
+        // Normal-tx 90/10/0 (Worker primary).
         let n = split_normal_tx_fees(1_000_000, &p);
-        assert_eq!((n.worker_sompi, n.validator_sompi, n.service_sompi), (850_000, 100_000, 50_000));
+        assert_eq!((n.worker_sompi, n.validator_sompi, n.service_sompi), (900_000, 100_000, 0));
         let n = split_normal_tx_fees(777, &p);
         assert_eq!(n.worker_sompi + n.validator_sompi + n.service_sompi, 777); // dust-free
 
-        // DNS-finality 60/25/15 (Validator primary).
+        // DNS-finality 75/25/0 (Validator primary; unwired).
         let f = split_finality_fees(1_000_000, &p);
-        assert_eq!((f.validator_sompi, f.worker_sompi, f.service_sompi), (600_000, 250_000, 150_000));
+        assert_eq!((f.validator_sompi, f.worker_sompi, f.service_sompi), (750_000, 250_000, 0));
         let f = split_finality_fees(333, &p);
         assert_eq!(f.worker_sompi + f.validator_sompi + f.service_sompi, 333); // dust-free
 
@@ -4753,15 +4816,15 @@ mod tests {
     #[test]
     fn split_block_reward_combines_subsidy_and_fee_splits() {
         let p = fixture_fee_split();
-        // 1_000_000 subsidy (62+8/25/5) + 1_000_000 fees (85/10/5):
-        // worker 620k+80k+850k = 1_550_000; validator 250k+100k = 350_000; service 50k+50k = 100_000.
+        // 1_000_000 subsidy (67+8/25/0) + 1_000_000 fees (90/10/0):
+        // worker 670k+80k+900k = 1_650_000; validator 250k+100k = 350_000; service 0.
         let r = split_block_reward(1_000_000, 1_000_000, &p);
-        assert_eq!((r.worker_sompi, r.validator_sompi, r.service_sompi), (1_550_000, 350_000, 100_000));
+        assert_eq!((r.worker_sompi, r.validator_sompi, r.service_sompi), (1_650_000, 350_000, 0));
         // Value-conserving: the three sum to subsidy + fees exactly.
         assert_eq!(r.worker_sompi + r.validator_sompi + r.service_sompi, 2_000_000);
-        // No fees → just the subsidy split (70/25/5 of 1_000_000).
+        // No fees → just the subsidy split (75/25/0 of 1_000_000).
         let r = split_block_reward(1_000_000, 0, &p);
-        assert_eq!((r.worker_sompi, r.validator_sompi, r.service_sompi), (700_000, 250_000, 50_000));
+        assert_eq!((r.worker_sompi, r.validator_sompi, r.service_sompi), (750_000, 250_000, 0));
     }
 
     #[test]

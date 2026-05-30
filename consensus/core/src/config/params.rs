@@ -812,22 +812,42 @@ pub const DEVNET_PARAMS: Params = Params {
             quality_gate_bonus_sompi: 0,
             worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
             // ADR-0018 §F fee/subsidy splits — NOT load-bearing on devnet (gate u64::MAX).
-            // Subsidy 62/8/25/5, normal-tx 85/10/5, finality 60/25/15 (each sums to 100%).
+            // Node share dropped to 0: Stage-3 subsidy 75/25/0, normal-tx 90/10/0,
+            // finality 75/25/0 (each sums to 100%; `service` fields retained at 0).
             fee_split: FeeSplitParams {
-                subsidy_worker_base_bps: 6200,
+                subsidy_worker_base_bps: 6700,
                 subsidy_worker_inclusion_bps: 800,
                 subsidy_validator_bps: 2500,
-                subsidy_service_bps: 500,
-                normal_fee_worker_bps: 8500,
+                subsidy_service_bps: 0,
+                normal_fee_worker_bps: 9000,
                 normal_fee_validator_bps: 1000,
-                normal_fee_service_bps: 500,
-                finality_fee_validator_bps: 6000,
+                normal_fee_service_bps: 0,
+                finality_fee_validator_bps: 7500,
                 finality_fee_worker_bps: 2500,
-                finality_fee_service_bps: 1500,
+                finality_fee_service_bps: 0,
+            },
+            // ADR-0018 §F staged rollout — Stage-2 (bootstrap) split: subsidy
+            // 90/10/0, normal-tx 90/10/0, finality 75/25/0. Applied between
+            // `dns_activation_daa_score` and `full_reward_split_daa_score`.
+            fee_split_bootstrap: FeeSplitParams {
+                subsidy_worker_base_bps: 8200,
+                subsidy_worker_inclusion_bps: 800,
+                subsidy_validator_bps: 1000,
+                subsidy_service_bps: 0,
+                normal_fee_worker_bps: 9000,
+                normal_fee_validator_bps: 1000,
+                normal_fee_service_bps: 0,
+                finality_fee_validator_bps: 7500,
+                finality_fee_worker_bps: 2500,
+                finality_fee_service_bps: 0,
             },
         },
         // ADR-0018 §H: devnet stays HardCheckpoint (the loud testing convenience) — the
         // two-dimensional dominance rule is the mainnet path. Inert here anyway (gate u64::MAX).
         reorg_mode: DnsReorgMode::HardCheckpoint,
+        // ADR-0018 §F staged rollout — Stage-3 (full 75/25/0) threshold. u64::MAX
+        // on devnet keeps the carve dormant (Stage 1: miner takes the whole
+        // reward) like the rest of the overlay.
+        full_reward_split_daa_score: u64::MAX,
     }),
 };

@@ -1572,11 +1572,9 @@ impl VirtualStateProcessor {
         // this template, computed identically to the validation path so a block
         // mined from this template reproduces the coinbase byte-for-byte. `None`/0
         // on every current network (overlay dormant).
-        let carve = self
-            .dns_params
-            .as_ref()
-            .filter(|p| virtual_state.daa_score >= p.dns_activation_daa_score)
-            .map(|p| &p.reward_params.fee_split);
+        // ADR-0018 §F staged rollout: None (Stage 1) / bootstrap (Stage 2) / full
+        // (Stage 3) selected by DAA, identically to the validation path.
+        let carve = self.dns_params.as_ref().and_then(|p| p.reward_fee_split(virtual_state.daa_score));
         let validator_pool = carve.map_or(0, |fs| {
             self.coinbase_manager.coinbase_validator_pool(
                 &virtual_state.ghostdag_data,
