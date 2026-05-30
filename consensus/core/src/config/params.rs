@@ -791,6 +791,10 @@ pub const DEVNET_PARAMS: Params = Params {
         // ADR-0018 §B: 0.60 stake-event quality floor. Visibility-only on devnet (the
         // reorg gate is dormant at dns_activation = u64::MAX).
         stake_event_quality_floor_bps: 6000,
+        // ADR-0018 §C: health degrades after 4 consecutive sub-φS epochs; < 0.10 inclusion
+        // reads as censorship rather than low participation.
+        degraded_stake_quality_epochs: 4,
+        stake_censorship_floor_bps: 1000,
         // ADR-0013 reward track — NOT load-bearing on devnet (the
         // dns_activation gate is u64::MAX, so the coinbase fan-out
         // never fires). Values are placeholders chosen so the cap

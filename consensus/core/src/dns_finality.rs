@@ -197,6 +197,28 @@ pub enum DnsRolloutStage {
     Active = 2,
 }
 
+/// kaspa-pq Phase 13 (ADR-0018 §C): a read-only DNS-finality **health** signal,
+/// orthogonal to [`DnsRolloutStage`]. It **never** invalidates a block — when degraded,
+/// PoW/GHOSTDAG, normal txs, and PoW-confirmation all continue; only the DNS-confirmed
+/// anchor stops advancing. Derived from the per-epoch included-stake fractions by
+/// [`derive_dns_health`] and surfaced (later) via `getDnsConfirmation`.
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum DnsHealth {
+    /// Overlay not yet `Active` — there is no DNS finality to judge.
+    #[default]
+    DisabledBeforeActivation = 0,
+    /// StakeScore advancing normally (a recent epoch met the quality floor φS).
+    Active = 1,
+    /// The last `degraded_stake_quality_epochs` epochs all fell below φS — sustained
+    /// sub-quality inclusion. Finality stalls; the base ledger is unaffected.
+    DegradedStakeQualityLow = 2,
+    /// The last `degraded_stake_quality_epochs` epochs all fell below the censorship
+    /// floor (near-zero inclusion — the signature of Worker attestation censorship).
+    DegradedCertificateCensored = 3,
+}
+
 /// Per-bond lifecycle state stored alongside the registry entry.
 /// ADR-0010 §"Validator service runtime" specifies the eligibility
 /// predicate as `bond ∈ active_bonds ∧ bond ∉ unbonding_bonds ∧
@@ -552,6 +574,16 @@ pub struct DnsParams {
     /// adversarial stake-inclusion rate so a minority cannot accumulate StakeScore.
     /// `φS == 0` reproduces the pre-ADR-0018 linear credit exactly.
     pub stake_event_quality_floor_bps: u16,
+
+    /// kaspa-pq Phase 13 (ADR-0018 §C): consecutive recent epochs that must all fall below
+    /// φS before [`DnsHealth`] reports a sustained degradation (shorter = reacts faster;
+    /// longer = tolerates transient dips).
+    pub degraded_stake_quality_epochs: u32,
+    /// kaspa-pq Phase 13 (ADR-0018 §C): the near-zero included-stake fraction (basis
+    /// points, `< φS`) below which sustained degradation is read as **censorship**
+    /// (`DegradedCertificateCensored`) rather than low participation
+    /// (`DegradedStakeQualityLow`).
+    pub stake_censorship_floor_bps: u16,
 
     /// Validator reward-distribution parameters (ADR-0013). Consumed
     /// by the PR-10.5′-b coinbase fan-out and the PR-10.12′ slashing
@@ -1792,6 +1824,48 @@ pub fn compute_stake_score(per_epoch: &[EpochStakeTally], quality_floor_bps: u16
     StakeScore(acc)
 }
 
+/// Derive the read-only [`DnsHealth`] signal (ADR-0018 §C) from the per-epoch tallies of
+/// the bounded StakeScore window (sorted ascending by epoch, as produced by
+/// [`aggregate_epoch_tallies`]). **Not** a consensus gate — purely a liveness signal that
+/// never affects block validity.
+///
+/// - `overlay_active == false` → `DisabledBeforeActivation`.
+/// - Healthy (`Active`) if any of the last `degraded_epochs` epochs meets φS
+///   (`quality_floor_bps`), or if there is less than `degraded_epochs` epochs of history.
+/// - Otherwise the last `degraded_epochs` epochs are all below φS → degraded:
+///   `DegradedCertificateCensored` when they are **all** below the near-zero
+///   `censorship_floor_bps` (the censorship signature), else `DegradedStakeQualityLow`.
+pub fn derive_dns_health(
+    per_epoch: &[EpochStakeTally],
+    quality_floor_bps: u16,
+    censorship_floor_bps: u16,
+    degraded_epochs: u32,
+    overlay_active: bool,
+) -> DnsHealth {
+    if !overlay_active {
+        return DnsHealth::DisabledBeforeActivation;
+    }
+    let m = (degraded_epochs as usize).max(1);
+    if per_epoch.len() < m {
+        return DnsHealth::Active; // insufficient history for a sustained-degradation signal
+    }
+    let window = &per_epoch[per_epoch.len() - m..];
+    let frac_bps = |e: &EpochStakeTally| -> u128 {
+        if e.total_active_stake_sompi == 0 {
+            return 0;
+        }
+        (e.signed_stake_sompi.min(e.total_active_stake_sompi) as u128) * 10_000 / (e.total_active_stake_sompi as u128)
+    };
+    if window.iter().any(|e| frac_bps(e) >= quality_floor_bps as u128) {
+        return DnsHealth::Active; // a recent epoch met φS
+    }
+    if window.iter().all(|e| frac_bps(e) < censorship_floor_bps as u128) {
+        DnsHealth::DegradedCertificateCensored
+    } else {
+        DnsHealth::DegradedStakeQualityLow
+    }
+}
+
 /// History-confirmation predicate — the DNS paper's
 /// `WorkDepth(B) ≥ cW ∧ StakeDepth(B) ≥ cS`. An anchor is DNS-confirmed
 /// iff it clears **both** thresholds. Used by the consensus pipeline to
@@ -2691,6 +2765,31 @@ mod tests {
     }
 
     #[test]
+    fn derive_dns_health_signal() {
+        let tally =
+            |signed: u64, total: u64| EpochStakeTally { epoch: 0, signed_stake_sompi: signed, total_active_stake_sompi: total };
+        let (floor, censor, m) = (6000u16, 1000u16, 3u32);
+        // Not active → DisabledBeforeActivation regardless of tallies.
+        assert_eq!(derive_dns_health(&[tally(0, 10)], floor, censor, m, false), DnsHealth::DisabledBeforeActivation);
+        // Fewer than M epochs of history → Active (no sustained signal yet).
+        assert_eq!(derive_dns_health(&[tally(0, 10), tally(0, 10)], floor, censor, m, true), DnsHealth::Active);
+        // A recent epoch meets φS → Active even after a dip (health recovers immediately).
+        let recovered = vec![tally(0, 10), tally(0, 10), tally(7, 10)]; // last = 0.70 ≥ 0.60
+        assert_eq!(derive_dns_health(&recovered, floor, censor, m, true), DnsHealth::Active);
+        // Last M all below φS but above the censorship floor → StakeQualityLow.
+        let low = vec![tally(3, 10), tally(2, 10), tally(4, 10)]; // 0.30 / 0.20 / 0.40, in [0.10, 0.60)
+        assert_eq!(derive_dns_health(&low, floor, censor, m, true), DnsHealth::DegradedStakeQualityLow);
+        // Last M all near-zero (below the censorship floor) → CertificateCensored.
+        assert_eq!(
+            derive_dns_health(&[tally(0, 10), tally(0, 10), tally(0, 10)], floor, censor, m, true),
+            DnsHealth::DegradedCertificateCensored
+        );
+        // Not ALL below the censorship floor within the window → StakeQualityLow.
+        let mixed = vec![tally(0, 10), tally(0, 10), tally(3, 10)]; // last 0.30 > 0.10 censorship floor
+        assert_eq!(derive_dns_health(&mixed, floor, censor, m, true), DnsHealth::DegradedStakeQualityLow);
+    }
+
+    #[test]
     fn is_dns_confirmed_requires_both_thresholds() {
         let w = BlueWorkType::from_u64;
         let (cw, cs) = (w(100), StakeScore(STAKE_SCORE_SCALE));
@@ -3540,6 +3639,8 @@ mod tests {
             max_attestation_shard_mass: 50_000,
             reward_uniqueness_window_blocks: 3_600, // ~6 epochs (epoch_length 600)
             stake_event_quality_floor_bps: 6000,    // ADR-0018 §B (φS = 0.60)
+            degraded_stake_quality_epochs: 4,       // ADR-0018 §C
+            stake_censorship_floor_bps: 1000,       // ADR-0018 §C (0.10)
             reward_params: RewardParams {
                 per_attestation_reward_sompi: 100_000_000,
                 slashing_reporter_reward_bps: 1000,
