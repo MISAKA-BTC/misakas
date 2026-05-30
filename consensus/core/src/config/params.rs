@@ -6,7 +6,7 @@ pub use super::{
 use crate::{
     BlockLevel, BlueWorkType, KType,
     constants::STORAGE_MASS_PARAMETER,
-    dns_finality::{DnsParams, MAX_ATTESTATIONS_PER_SHARD, RewardParams, STAKE_SCORE_SCALE, StakeScore},
+    dns_finality::{DnsParams, FeeSplitParams, MAX_ATTESTATIONS_PER_SHARD, RewardParams, STAKE_SCORE_SCALE, StakeScore},
     network::{NetworkId, NetworkType},
 };
 use kaspa_addresses::Prefix;
@@ -811,6 +811,20 @@ pub const DEVNET_PARAMS: Params = Params {
             validator_quality_bonus_bps: 3000,
             quality_gate_bonus_sompi: 0,
             worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
+            // ADR-0018 §F fee/subsidy splits — NOT load-bearing on devnet (gate u64::MAX).
+            // Subsidy 62/8/25/5, normal-tx 85/10/5, finality 60/25/15 (each sums to 100%).
+            fee_split: FeeSplitParams {
+                subsidy_worker_base_bps: 6200,
+                subsidy_worker_inclusion_bps: 800,
+                subsidy_validator_bps: 2500,
+                subsidy_service_bps: 500,
+                normal_fee_worker_bps: 8500,
+                normal_fee_validator_bps: 1000,
+                normal_fee_service_bps: 500,
+                finality_fee_validator_bps: 6000,
+                finality_fee_worker_bps: 2500,
+                finality_fee_service_bps: 1500,
+            },
         },
     }),
 };

@@ -665,6 +665,13 @@ pub struct RewardParams {
     /// later policy scale the bounty up as an epoch ages without inclusion; the inert
     /// default is `STAKE_SCORE_SCALE`. Consumed by [`worker_inclusion_bounty`].
     pub worker_urgency_multiplier_scaled: u64,
+
+    /// kaspa-pq Phase 13 (ADR-0018 §F): the Worker / Validator / Service basis-point
+    /// split ratios for the block subsidy and the two fee classes. These **size** the
+    /// §D/§E pools ([`SubsidySplit::worker_inclusion_sompi`] is the §D pool,
+    /// [`SubsidySplit::validator_sompi`] the §E pool) and the Service reserve. Appended
+    /// last to keep the borsh layout change localized (pre-activation; no live reward).
+    pub fee_split: FeeSplitParams,
 }
 
 /// Outcome of [`compute_attestation_reward_payouts`] — the per-block
@@ -1553,6 +1560,109 @@ pub fn validator_quality_bonus(
         return 0;
     }
     proportional_share(quality_bonus_pool, included_valid_stake, expected_stake)
+}
+
+// ---------------------------------------------------------------------
+// kaspa-pq Phase 13 fee / subsidy split (ADR-0018 §F).
+//
+// Three independent, **dust-free** splits that size the §D/§E pools and the
+// Service reserve from a block's subsidy and fees. All basis-points; the
+// *primary* recipient of each split takes the remainder, so the parts sum to
+// the input exactly — no value is minted or lost to rounding regardless of
+// whether the configured bps sum to 10_000 (a misconfiguration only mis-weights
+// the split, never breaks supply). Pure; consumed by the coinbase fan-out (a
+// later slice) and inert until then — every current net gates the whole overlay
+// below `dns_activation_daa_score` (`u64::MAX`).
+//
+// The §D `worker_inclusion_pool` is `SubsidySplit::worker_inclusion_sompi`; the
+// §E validator pool is `SubsidySplit::validator_sompi` (plus the validator share
+// of normal-tx and finality fees). The normal-tx year-10 ramp (85/10/5 →
+// 80/15/5) is a documented follow-up; the fixed 85/10/5 is ADR-acceptable.
+// ---------------------------------------------------------------------
+
+/// Per-network §F split ratios (basis points). Each group is intended to sum to
+/// `10_000`; the split helpers route any rounding remainder to the group's
+/// primary recipient, so the stored "primary" bps is documentary (asserted in
+/// tests). Nested in [`RewardParams`].
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct FeeSplitParams {
+    /// Block-subsidy split (DNS Active). Worker total (70%) = `base` (62%, the
+    /// primary — takes the remainder) + `inclusion` (8%, the §D
+    /// `worker_inclusion_pool`); `validator` (25%) is the §E finality pool;
+    /// `service` (5%) is the protocol reserve.
+    pub subsidy_worker_base_bps: u16,
+    pub subsidy_worker_inclusion_bps: u16,
+    pub subsidy_validator_bps: u16,
+    pub subsidy_service_bps: u16,
+    /// Normal-tx-fee split (a permanent validator share so the layer outlives the
+    /// subsidy). Worker (85%, primary) / Validator (10%) / Service (5%).
+    pub normal_fee_worker_bps: u16,
+    pub normal_fee_validator_bps: u16,
+    pub normal_fee_service_bps: u16,
+    /// DNS-finality-fee split (validators directly provide finality). Validator
+    /// (60%, primary) / Worker (25%) / Service (15%).
+    pub finality_fee_validator_bps: u16,
+    pub finality_fee_worker_bps: u16,
+    pub finality_fee_service_bps: u16,
+}
+
+/// ADR-0018 §F block-subsidy split outcome. `worker_base + worker_inclusion` is
+/// the Worker's 70%; `validator` is the §E validator pool; `service` is the
+/// protocol reserve. The four fields sum to the input subsidy exactly.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SubsidySplit {
+    pub worker_base_sompi: u64,
+    pub worker_inclusion_sompi: u64,
+    pub validator_sompi: u64,
+    pub service_sompi: u64,
+}
+
+/// ADR-0018 §F three-way fee split outcome (normal-tx or DNS-finality). The three
+/// fields sum to the input fee exactly.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct FeeSplit {
+    pub worker_sompi: u64,
+    pub validator_sompi: u64,
+    pub service_sompi: u64,
+}
+
+/// `amount × min(bps, 10_000) / 10_000` as u64 (u128 intermediate, saturating).
+/// Shared by the §F split helpers, which derive the primary recipient as the
+/// remainder so each split is dust-free.
+#[inline]
+fn bps_share(amount: u64, bps: u16) -> u64 {
+    let bps = (bps as u128).min(10_000);
+    ((amount as u128).saturating_mul(bps) / 10_000) as u64
+}
+
+/// ADR-0018 §F — split a block subsidy four ways (Worker base + inclusion,
+/// Validator, Service). `worker_base` is the primary recipient and takes the
+/// remainder, so the four parts sum to `subsidy_sompi` exactly.
+pub fn split_block_subsidy(subsidy_sompi: u64, p: &FeeSplitParams) -> SubsidySplit {
+    let worker_inclusion_sompi = bps_share(subsidy_sompi, p.subsidy_worker_inclusion_bps);
+    let validator_sompi = bps_share(subsidy_sompi, p.subsidy_validator_bps);
+    let service_sompi = bps_share(subsidy_sompi, p.subsidy_service_bps);
+    let worker_base_sompi =
+        subsidy_sompi.saturating_sub(worker_inclusion_sompi).saturating_sub(validator_sompi).saturating_sub(service_sompi);
+    SubsidySplit { worker_base_sompi, worker_inclusion_sompi, validator_sompi, service_sompi }
+}
+
+/// ADR-0018 §F — split normal-tx fees three ways. Worker is primary and takes the
+/// remainder, so the three parts sum to `fees_sompi` exactly.
+pub fn split_normal_tx_fees(fees_sompi: u64, p: &FeeSplitParams) -> FeeSplit {
+    let validator_sompi = bps_share(fees_sompi, p.normal_fee_validator_bps);
+    let service_sompi = bps_share(fees_sompi, p.normal_fee_service_bps);
+    let worker_sompi = fees_sompi.saturating_sub(validator_sompi).saturating_sub(service_sompi);
+    FeeSplit { worker_sompi, validator_sompi, service_sompi }
+}
+
+/// ADR-0018 §F — split DNS-finality fees three ways. Validator is primary and
+/// takes the remainder, so the three parts sum to `fees_sompi` exactly.
+pub fn split_finality_fees(fees_sompi: u64, p: &FeeSplitParams) -> FeeSplit {
+    let worker_sompi = bps_share(fees_sompi, p.finality_fee_worker_bps);
+    let service_sompi = bps_share(fees_sompi, p.finality_fee_service_bps);
+    let validator_sompi = fees_sompi.saturating_sub(worker_sompi).saturating_sub(service_sompi);
+    FeeSplit { worker_sompi, validator_sompi, service_sompi }
 }
 
 /// Build the canonical kaspa-pq ML-DSA-65 P2PKH `scriptPublicKey`
@@ -3077,6 +3187,23 @@ mod tests {
         TransactionOutpoint::new(Hash64::from_bytes([0x77u8; 64]), 42)
     }
 
+    /// ADR-0018 §F canonical splits: subsidy 62/8/25/5, normal-tx 85/10/5,
+    /// finality 60/25/15 (each group sums to 100%).
+    fn fixture_fee_split() -> FeeSplitParams {
+        FeeSplitParams {
+            subsidy_worker_base_bps: 6200,
+            subsidy_worker_inclusion_bps: 800,
+            subsidy_validator_bps: 2500,
+            subsidy_service_bps: 500,
+            normal_fee_worker_bps: 8500,
+            normal_fee_validator_bps: 1000,
+            normal_fee_service_bps: 500,
+            finality_fee_validator_bps: 6000,
+            finality_fee_worker_bps: 2500,
+            finality_fee_service_bps: 1500,
+        }
+    }
+
     fn fixture_attestation() -> StakeAttestation {
         StakeAttestation {
             version: DNS_PAYLOAD_VERSION_V1,
@@ -3815,6 +3942,7 @@ mod tests {
                 validator_quality_bonus_bps: 3000,
                 quality_gate_bonus_sompi: 50_000_000,
                 worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
+                fee_split: fixture_fee_split(),
             },
         };
         let bytes = borsh::to_vec(&params).unwrap();
@@ -4284,6 +4412,7 @@ mod tests {
             validator_quality_bonus_bps: 3000,
             quality_gate_bonus_sompi: 25_000_000,
             worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
+            fee_split: fixture_fee_split(),
         };
         let bytes = borsh::to_vec(&p).unwrap();
         let back: RewardParams = borsh::from_slice(&bytes).unwrap();
@@ -4351,6 +4480,62 @@ mod tests {
         let combined = |met| validator_participation_reward(part_pool, 10, 100) + validator_quality_bonus(bonus_pool, 10, 100, met);
         assert_eq!(combined(true), 70 + 30);
         assert_eq!(combined(false), 70);
+    }
+
+    // ---- ADR-0018 §F fee / subsidy split -----------------------------
+
+    #[test]
+    fn fee_splits_are_dust_free_and_match_adr_ratios() {
+        let p = fixture_fee_split();
+        // Subsidy 62/8/25/5 on a round 1_000_000; Worker total = base + inclusion = 70%.
+        let s = split_block_subsidy(1_000_000, &p);
+        assert_eq!(
+            (s.worker_base_sompi, s.worker_inclusion_sompi, s.validator_sompi, s.service_sompi),
+            (620_000, 80_000, 250_000, 50_000)
+        );
+        assert_eq!(s.worker_base_sompi + s.worker_inclusion_sompi, 700_000); // Worker 70%
+        // Dust-free: the four parts always sum to the input, even on a non-round value;
+        // the primary (worker_base) absorbs the rounding remainder, so it is ≥ its nominal.
+        let s = split_block_subsidy(1_000_003, &p);
+        assert_eq!(s.worker_base_sompi + s.worker_inclusion_sompi + s.validator_sompi + s.service_sompi, 1_000_003);
+        assert!(s.worker_base_sompi >= 620_001);
+
+        // Normal-tx 85/10/5 (Worker primary).
+        let n = split_normal_tx_fees(1_000_000, &p);
+        assert_eq!((n.worker_sompi, n.validator_sompi, n.service_sompi), (850_000, 100_000, 50_000));
+        let n = split_normal_tx_fees(777, &p);
+        assert_eq!(n.worker_sompi + n.validator_sompi + n.service_sompi, 777); // dust-free
+
+        // DNS-finality 60/25/15 (Validator primary).
+        let f = split_finality_fees(1_000_000, &p);
+        assert_eq!((f.validator_sompi, f.worker_sompi, f.service_sompi), (600_000, 250_000, 150_000));
+        let f = split_finality_fees(333, &p);
+        assert_eq!(f.worker_sompi + f.validator_sompi + f.service_sompi, 333); // dust-free
+
+        // Zero input → all-zero (inert: no subsidy/fees → no split outputs).
+        let z = split_block_subsidy(0, &p);
+        assert_eq!((z.worker_base_sompi, z.worker_inclusion_sompi, z.validator_sompi, z.service_sompi), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn fee_split_params_partition_to_100_percent() {
+        let p = fixture_fee_split();
+        assert_eq!(
+            p.subsidy_worker_base_bps + p.subsidy_worker_inclusion_bps + p.subsidy_validator_bps + p.subsidy_service_bps,
+            10_000
+        );
+        assert_eq!(p.normal_fee_worker_bps + p.normal_fee_validator_bps + p.normal_fee_service_bps, 10_000);
+        assert_eq!(p.finality_fee_validator_bps + p.finality_fee_worker_bps + p.finality_fee_service_bps, 10_000);
+    }
+
+    #[test]
+    fn fee_split_types_borsh_roundtrip() {
+        let fsp = fixture_fee_split();
+        assert_eq!(borsh::from_slice::<FeeSplitParams>(&borsh::to_vec(&fsp).unwrap()).unwrap(), fsp);
+        let s = SubsidySplit { worker_base_sompi: 620_000, worker_inclusion_sompi: 80_000, validator_sompi: 250_000, service_sompi: 50_000 };
+        assert_eq!(borsh::from_slice::<SubsidySplit>(&borsh::to_vec(&s).unwrap()).unwrap(), s);
+        let f = FeeSplit { worker_sompi: 850_000, validator_sompi: 100_000, service_sompi: 50_000 };
+        assert_eq!(borsh::from_slice::<FeeSplit>(&borsh::to_vec(&f).unwrap()).unwrap(), f);
     }
 
     #[test]
