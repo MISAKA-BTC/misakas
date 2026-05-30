@@ -73,6 +73,7 @@ impl Router {
                 GetDnsConfirmation,
                 GetValidatorStatus,
                 GetValidatorAttestationTarget,
+                GetStakeBond,
                 ResolveFinalityConflict,
                 Shutdown,
                 SubmitBlock,

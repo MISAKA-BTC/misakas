@@ -1717,6 +1717,71 @@ impl Deserializer for GetValidatorAttestationTargetResponse {
     }
 }
 
+// kaspa-pq Phase 12 (ADR-0011): getStakeBond. The sidecar's own stake-bond status,
+// evaluated at the node's sink so it matches what the validator would attest for.
+// `available` is false when the overlay is not configured or no such bond exists.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetStakeBondRequest {
+    /// Stake-bond outpoint, "txid_hex:index" (txid is a 64-byte Hash64 = 128 hex chars).
+    pub bond_outpoint: String,
+}
+
+impl Serializer for GetStakeBondRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond_outpoint, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetStakeBondRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let bond_outpoint = load!(String, reader)?;
+        Ok(Self { bond_outpoint })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetStakeBondResponse {
+    /// False when the overlay is not configured or no such bond exists; the remaining
+    /// fields are then defaults. (A malformed outpoint is a request error.)
+    pub available: bool,
+    /// The bond's validator id (validator_pubkey_hash, Hash64 hex). The sidecar checks
+    /// this matches its own key.
+    pub validator_id: String,
+    pub amount: u64,
+    pub activation_daa_score: u64,
+    /// Effective status at the node's sink: "pending" / "active" / "unbonding" / "slashed".
+    pub effective_status: String,
+}
+
+impl Serializer for GetStakeBondResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(String, &self.validator_id, writer)?;
+        store!(u64, &self.amount, writer)?;
+        store!(u64, &self.activation_daa_score, writer)?;
+        store!(String, &self.effective_status, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetStakeBondResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let available = load!(bool, reader)?;
+        let validator_id = load!(String, reader)?;
+        let amount = load!(u64, reader)?;
+        let activation_daa_score = load!(u64, reader)?;
+        let effective_status = load!(String, reader)?;
+        Ok(Self { available, validator_id, amount, activation_daa_score, effective_status })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetUtxosByAddressesRequest {

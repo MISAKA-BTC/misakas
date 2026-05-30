@@ -108,6 +108,16 @@ pub trait ValidatorStatusProvider: Send + Sync {
     async fn rpc_validator_status(&self) -> GetValidatorStatusResponse;
 }
 
+/// Parse a "txid_hex:index" stake-bond outpoint (txid = 64-byte Hash64) for the
+/// kaspa-pq Phase 12 (ADR-0011) validator RPCs. A malformed value is a client error.
+fn parse_bond_outpoint(s: &str) -> RpcResult<kaspa_consensus_core::tx::TransactionOutpoint> {
+    let (txid, index) = s.split_once(':').ok_or_else(|| RpcError::General(format!("bond outpoint '{s}' must be 'txid_hex:index'")))?;
+    let transaction_id: kaspa_hashes::Hash64 =
+        txid.parse().map_err(|_| RpcError::General(format!("bond outpoint '{s}' has an invalid 64-byte txid")))?;
+    let index: u32 = index.parse().map_err(|_| RpcError::General(format!("bond outpoint '{s}' has a non-numeric index")))?;
+    Ok(kaspa_consensus_core::tx::TransactionOutpoint::new(transaction_id, index))
+}
+
 pub struct RpcCoreService {
     consensus_manager: Arc<ConsensusManager>,
     notifier: Arc<Notifier<Notification, ChannelConnection>>,
@@ -692,18 +702,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // `request.bond_outpoint` so the `kaspa-pq-validator` sidecar can fetch the signing
         // message over local wRPC. A malformed outpoint is a request error; `available: false`
         // when the overlay is not configured or no target could be assembled.
-        let (txid, index) = request
-            .bond_outpoint
-            .split_once(':')
-            .ok_or_else(|| RpcError::General(format!("bond outpoint '{}' must be 'txid_hex:index'", request.bond_outpoint)))?;
-        let transaction_id: kaspa_hashes::Hash64 = txid
-            .parse()
-            .map_err(|_| RpcError::General(format!("bond outpoint '{}' has an invalid 64-byte txid", request.bond_outpoint)))?;
-        let index: u32 = index
-            .parse()
-            .map_err(|_| RpcError::General(format!("bond outpoint '{}' has a non-numeric index", request.bond_outpoint)))?;
-        let bond_outpoint = kaspa_consensus_core::tx::TransactionOutpoint::new(transaction_id, index);
-
+        let bond_outpoint = parse_bond_outpoint(&request.bond_outpoint)?;
         let session = self.consensus_manager.consensus().unguarded_session();
         Ok(match session.async_get_validator_attestation_target(bond_outpoint).await {
             Some(t) => GetValidatorAttestationTargetResponse {
@@ -715,6 +714,39 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 message: t.message.to_string(),
             },
             None => GetValidatorAttestationTargetResponse::default(),
+        })
+    }
+
+    async fn get_stake_bond_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetStakeBondRequest,
+    ) -> RpcResult<GetStakeBondResponse> {
+        // kaspa-pq Phase 12 (ADR-0011): the sidecar's own stake-bond status, evaluated at
+        // the node's sink so it matches what the validator would attest for. A malformed
+        // outpoint is a request error; `available: false` when the overlay is off or no
+        // such bond exists.
+        let bond_outpoint = parse_bond_outpoint(&request.bond_outpoint)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(match session.async_get_stake_bond(bond_outpoint).await {
+            Some(r) => {
+                let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
+                let effective = kaspa_consensus_core::dns_finality::effective_bond_status(&r, sink_daa);
+                GetStakeBondResponse {
+                    available: true,
+                    validator_id: r.validator_pubkey_hash.to_string(),
+                    amount: r.amount,
+                    activation_daa_score: r.activation_daa_score,
+                    effective_status: match effective {
+                        kaspa_consensus_core::dns_finality::BondStatus::Pending => "pending",
+                        kaspa_consensus_core::dns_finality::BondStatus::Active => "active",
+                        kaspa_consensus_core::dns_finality::BondStatus::Unbonding => "unbonding",
+                        kaspa_consensus_core::dns_finality::BondStatus::Slashed => "slashed",
+                    }
+                    .to_string(),
+                }
+            }
+            None => GetStakeBondResponse::default(),
         })
     }
 

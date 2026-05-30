@@ -658,6 +658,7 @@ impl RpcApi for KaspaRpcClient {
             GetVirtualChainFromBlock,
             GetVirtualChainFromBlockV2,
             GetValidatorAttestationTarget,
+            GetStakeBond,
             ResolveFinalityConflict,
             Shutdown,
             SubmitBlock,

@@ -415,6 +415,22 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetValidatorAttestationTargetResponse::default())
     }
 
+    /// kaspa-pq Phase 12 (ADR-0011): a stake bond's status at the node's sink, for the
+    /// `kaspa-pq-validator` sidecar's bond-lifecycle state machine.
+    async fn get_stake_bond(&self, request: GetStakeBondRequest) -> RpcResult<GetStakeBondResponse> {
+        self.get_stake_bond_call(None, request).await
+    }
+    /// Default returns `available: false`, so non-server `RpcApi` impls inherit a no-op;
+    /// the node's core service overrides it.
+    async fn get_stake_bond_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetStakeBondRequest,
+    ) -> RpcResult<GetStakeBondResponse> {
+        let _ = (connection, request);
+        Ok(GetStakeBondResponse::default())
+    }
+
     /// Bans the given ip.
     async fn ban(&self, ip: RpcIpAddress) -> RpcResult<()> {
         self.ban_call(None, BanRequest::new(ip)).await?;
