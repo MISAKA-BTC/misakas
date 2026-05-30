@@ -1,0 +1,36 @@
+[package]
+name = "kaspa-pq-cli"
+description = "kaspa-pq minimal CLI: BIP39 mnemonic + ML-DSA-65 keypair + P2PKH address + sign/verify (no RPC)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kaspa-pq-cli"
+path = "src/main.rs"
+
+[dependencies]
+argon2.workspace = true
+chacha20poly1305.workspace = true
+clap.workspace = true
+faster-hex.workspace = true
+kaspa-addresses = { workspace = true, features = ["std"] }
+kaspa-bip32.workspace = true
+kaspa-rpc-core.workspace = true
+kaspa-txscript.workspace = true
+kaspa-wallet-keys.workspace = true
+kaspa-wrpc-client.workspace = true
+libcrux-ml-dsa.workspace = true
+rand.workspace = true
+rpassword = "7"
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
