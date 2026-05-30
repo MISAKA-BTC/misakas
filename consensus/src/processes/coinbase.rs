@@ -2,6 +2,7 @@ use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet,
     coinbase::*,
     config::params::ForkedParam,
+    dns_finality::{FeeSplitParams, split_block_reward},
     errors::coinbase::{CoinbaseError, CoinbaseResult},
     subnets,
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutput},
@@ -110,6 +111,15 @@ impl CoinbaseManager {
         // every current network (the overlay is dormant), so the coinbase is
         // byte-for-byte the pre-overlay coinbase there.
         validator_reward_outputs: &[TransactionOutput],
+        // kaspa-pq Phase 13 (ADR-0018 §F): when `Some`, carve each source block's
+        // reward into Worker / Validator / Service shares and pay only the Worker
+        // share to the miner. The Validator share funds the appended
+        // `validator_reward_outputs` (the §E distribution); the Service share and
+        // the undistributed validator remainder are burned by don't-mint. `None`
+        // → the pre-carve behavior (full subsidy+fees to the miner), so the
+        // coinbase is byte-identical on every current network (the caller passes
+        // `Some` only past `dns_activation_daa_score`, `u64::MAX` everywhere today).
+        carve: Option<&FeeSplitParams>,
     ) -> CoinbaseResult<CoinbaseTransactionTemplate> {
         let mut outputs = Vec::with_capacity(ghostdag_data.mergeset_blues.len() + 1); // + 1 for possible red reward
 
@@ -117,9 +127,13 @@ impl CoinbaseManager {
         // Note that combinatorically it is nearly impossible for a blue block to be non-DAA
         for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
             let reward_data = mergeset_rewards.get(blue).unwrap();
-            if reward_data.subsidy + reward_data.total_fees > 0 {
-                outputs
-                    .push(TransactionOutput::new(reward_data.subsidy + reward_data.total_fees, reward_data.script_public_key.clone()));
+            // §F carve: pay the Worker share when carving, else the full reward.
+            let value = match carve {
+                Some(fs) => split_block_reward(reward_data.subsidy, reward_data.total_fees, fs).worker_sompi,
+                None => reward_data.subsidy + reward_data.total_fees,
+            };
+            if value > 0 {
+                outputs.push(TransactionOutput::new(value, reward_data.script_public_key.clone()));
             }
         }
 
@@ -129,11 +143,14 @@ impl CoinbaseManager {
 
         for red in ghostdag_data.mergeset_reds.iter() {
             let reward_data = mergeset_rewards.get(red).unwrap();
-            if mergeset_non_daa.contains(red) {
-                red_reward += reward_data.total_fees;
-            } else {
-                red_reward += reward_data.subsidy + reward_data.total_fees;
-            }
+            // Reds ∩ DAA earn subsidy + fees; non-DAA reds earn fees only.
+            let (eff_subsidy, eff_fees) =
+                if mergeset_non_daa.contains(red) { (0, reward_data.total_fees) } else { (reward_data.subsidy, reward_data.total_fees) };
+            // §F carve: accumulate the Worker share when carving, else the full reward.
+            red_reward += match carve {
+                Some(fs) => split_block_reward(eff_subsidy, eff_fees, fs).worker_sompi,
+                None => eff_subsidy + eff_fees,
+            };
         }
 
         if red_reward > 0 {
@@ -154,6 +171,38 @@ impl CoinbaseManager {
             tx: Transaction::new(constants::TX_VERSION, vec![], outputs, 0, subnets::SUBNETWORK_ID_COINBASE, 0, payload),
             has_red_reward: red_reward > 0,
         })
+    }
+
+    /// kaspa-pq Phase 13 (ADR-0018 §F/§E): the validator-side pool funded by this
+    /// block's coinbase — Σ of the per-source-block Validator share
+    /// (`split_block_reward(..).validator_sompi`) over the SAME mergeset
+    /// blue(∩DAA) + red iteration [`Self::expected_coinbase_transaction`] carves
+    /// the Worker outputs from, so the pool and the carve never drift. Reds use
+    /// their effective subsidy (0 when non-DAA) plus fees, exactly as the Worker
+    /// carve does. The §E participation distribution draws from this pool; the
+    /// result is fed back as `expected_coinbase_transaction`'s
+    /// `validator_reward_outputs`. The caller passes `fee_split` only past
+    /// `dns_activation_daa_score` (`u64::MAX` everywhere today), so this is unused
+    /// on every current network.
+    pub fn coinbase_validator_pool(
+        &self,
+        ghostdag_data: &GhostdagData,
+        mergeset_rewards: &BlockHashMap<BlockRewardData>,
+        mergeset_non_daa: &BlockHashSet,
+        fee_split: &FeeSplitParams,
+    ) -> u64 {
+        let mut pool = 0u64;
+        for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
+            let reward_data = mergeset_rewards.get(blue).unwrap();
+            pool = pool.saturating_add(split_block_reward(reward_data.subsidy, reward_data.total_fees, fee_split).validator_sompi);
+        }
+        for red in ghostdag_data.mergeset_reds.iter() {
+            let reward_data = mergeset_rewards.get(red).unwrap();
+            let (eff_subsidy, eff_fees) =
+                if mergeset_non_daa.contains(red) { (0, reward_data.total_fees) } else { (reward_data.subsidy, reward_data.total_fees) };
+            pool = pool.saturating_add(split_block_reward(eff_subsidy, eff_fees, fee_split).validator_sompi);
+        }
+        pool
     }
 
     pub fn serialize_coinbase_payload<T: AsRef<[u8]>>(&self, data: &CoinbaseData<T>) -> CoinbaseResult<Vec<u8>> {

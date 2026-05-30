@@ -1568,11 +1568,29 @@ impl VirtualStateProcessor {
         // Both are no-ops on every current network (overlay dormant).
         let template_bond_view = self.initial_active_bond_view();
         self.retain_reward_eligible_attestation_shards(&mut txs, &template_bond_view, virtual_state.daa_score);
+        // kaspa-pq Phase 13 (ADR-0018 §F+§E): the §F carve + §E validator pool for
+        // this template, computed identically to the validation path so a block
+        // mined from this template reproduces the coinbase byte-for-byte. `None`/0
+        // on every current network (overlay dormant).
+        let carve = self
+            .dns_params
+            .as_ref()
+            .filter(|p| virtual_state.daa_score >= p.dns_activation_daa_score)
+            .map(|p| &p.reward_params.fee_split);
+        let validator_pool = carve.map_or(0, |fs| {
+            self.coinbase_manager.coinbase_validator_pool(
+                &virtual_state.ghostdag_data,
+                &virtual_state.mergeset_rewards,
+                &virtual_state.mergeset_non_daa,
+                fs,
+            )
+        });
         let (validator_reward_outputs, _rewarded_keys) = self.validator_reward_outputs_for_block(
             &txs,
             &template_bond_view,
             virtual_state.daa_score,
             virtual_state.ghostdag_data.selected_parent,
+            validator_pool,
         );
         let coinbase = self
             .coinbase_manager
@@ -1583,6 +1601,7 @@ impl VirtualStateProcessor {
                 &virtual_state.mergeset_rewards,
                 &virtual_state.mergeset_non_daa,
                 &validator_reward_outputs,
+                carve,
             )
             .unwrap();
         txs.insert(0, coinbase.tx);

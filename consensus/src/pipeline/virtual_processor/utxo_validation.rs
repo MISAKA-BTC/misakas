@@ -30,9 +30,10 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, BondStatus, RewardedEpochSet, SlashingSideEffect,
+        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, BondStatus, FeeSplitParams, RewardedEpochSet, SlashingSideEffect,
         attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status, resolve_slashing_side_effects,
-        slashing_evidence_from_accepted_txs, stake_attestation_message, validator_reward_outputs_from_attestations,
+        slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
+        validator_participation_reward_outputs,
     },
     hashing,
     header::Header,
@@ -304,23 +305,37 @@ impl VirtualStateProcessor {
         // is `Pending`/`Active`/mid-unbonding/`Slashed`. Inert below activation.
         self.check_bond_spend_gate(&txs, selected_parent_bond_view, header.daa_score)?;
 
-        // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): the validator reward
-        // outputs the coinbase must carry, derived from the block's included
-        // attestations resolved against its selected-parent bond view. Empty
-        // (no-op) on every current network. The rewarded `(bond, epoch)` keys
-        // are stashed for `commit_utxo_state` to persist (§B.3(c)).
-        let (validator_reward_outputs, rewarded_keys) =
-            self.validator_reward_outputs_for_block(&txs, selected_parent_bond_view, header.daa_score, ctx.selected_parent());
+        // kaspa-pq Phase 10/11 + Phase 13 (ADR-0009 Addendum B §B.5 / ADR-0018
+        // §F+§E): the validator reward outputs the coinbase must carry. The §F
+        // carve (`carve`) splits each source block's reward Worker/Validator/
+        // Service; the Validator total (`validator_pool`) funds the §E
+        // participation distribution computed by `validator_reward_outputs_for_block`.
+        // Both are no-ops on every current network (overlay dormant). The rewarded
+        // `(bond, epoch)` keys are stashed for `commit_utxo_state` (§B.3(c)).
+        let mergeset_non_daa = self.daa_excluded_store.get_mergeset_non_daa(header.hash).unwrap();
+        let carve =
+            self.dns_params.as_ref().filter(|p| header.daa_score >= p.dns_activation_daa_score).map(|p| &p.reward_params.fee_split);
+        let validator_pool = carve.map_or(0, |fs| {
+            self.coinbase_manager.coinbase_validator_pool(&ctx.ghostdag_data, &ctx.mergeset_rewards, &mergeset_non_daa, fs)
+        });
+        let (validator_reward_outputs, rewarded_keys) = self.validator_reward_outputs_for_block(
+            &txs,
+            selected_parent_bond_view,
+            header.daa_score,
+            ctx.selected_parent(),
+            validator_pool,
+        );
         ctx.validator_rewarded_keys = rewarded_keys;
 
-        // Verify coinbase transaction (incl. the validator reward fan-out).
+        // Verify coinbase transaction (incl. the §F carve + §E reward fan-out).
         self.verify_coinbase_transaction(
             &txs[0],
             header.daa_score,
             &ctx.ghostdag_data,
             &ctx.mergeset_rewards,
-            &self.daa_excluded_store.get_mergeset_non_daa(header.hash).unwrap(),
+            &mergeset_non_daa,
             &validator_reward_outputs,
+            carve,
         )?;
 
         // Verify the header pruning point
@@ -359,6 +374,10 @@ impl VirtualStateProcessor {
         mergeset_rewards: &BlockHashMap<BlockRewardData>,
         mergeset_non_daa: &BlockHashSet,
         validator_reward_outputs: &[TransactionOutput],
+        // kaspa-pq Phase 13 (ADR-0018 §F): the per-source-block reward carve,
+        // threaded to `expected_coinbase_transaction`. `None` on every current
+        // network (matches the construction path).
+        carve: Option<&FeeSplitParams>,
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
@@ -371,6 +390,7 @@ impl VirtualStateProcessor {
                 mergeset_rewards,
                 mergeset_non_daa,
                 validator_reward_outputs,
+                carve,
             )
             .unwrap()
             .tx;
@@ -382,8 +402,11 @@ impl VirtualStateProcessor {
     /// deterministically from the block's included attestations
     /// (`attestations_from_accepted_txs`, canonical order) resolved against
     /// `bond_view` (the bond set as-of the block's selected parent) and the
-    /// network `RewardParams`, with within-block `(bond, epoch)` dedup + the
-    /// per-block cap (see [`validator_reward_outputs_from_attestations`]).
+    /// network `RewardParams`. ADR-0018 §E: each included validator earns a
+    /// stake-proportional share of the §F validator pool's participation
+    /// sub-pool against the epoch's expected (total active) stake, with
+    /// within-block + cross-block `(bond, epoch)` dedup and a whole-output pool
+    /// cap (see [`validator_participation_reward_outputs`]).
     ///
     /// Run identically by the coinbase **construction** (block-template) and
     /// **validation** paths, so they agree byte-for-byte. Returns no outputs
@@ -408,6 +431,11 @@ impl VirtualStateProcessor {
         bond_view: &ActiveBondView,
         daa_score: u64,
         selected_parent: BlockHash,
+        // kaspa-pq Phase 13 (ADR-0018 §F/§E): the validator-side coinbase pool
+        // (`CoinbaseManager::coinbase_validator_pool`) this block's §E
+        // participation rewards are distributed from. 0 on every current network
+        // (the caller computes it only past `dns_activation_daa_score`).
+        validator_pool: u64,
     ) -> (Vec<TransactionOutput>, RewardedEpochKeys) {
         let Some(dns_params) = self.dns_params.as_ref() else {
             return (Vec::new(), Vec::new());
@@ -426,7 +454,9 @@ impl VirtualStateProcessor {
                 continue;
             }
             if let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) {
-                attestations.push((att.bond_outpoint, att.epoch, bond.owner_reward_spk_payload));
+                // ADR-0018 §E: carry the bond's stake — the proportional weight in the
+                // participation distribution (against the expected-stake denominator).
+                attestations.push((att.bond_outpoint, att.epoch, bond.owner_reward_spk_payload, bond.amount));
             }
         }
 
@@ -446,12 +476,16 @@ impl VirtualStateProcessor {
             }
         }
 
-        validator_reward_outputs_from_attestations(
-            dns_params.reward_params.per_attestation_reward_sompi,
-            dns_params.reward_params.max_validator_inflation_per_block_sompi,
-            &attestations,
-            &already_rewarded,
-        )
+        // ADR-0018 §E: distribute the participation sub-pool (the 70% split of the
+        // §F validator pool; the 30% quality-bonus sub-pool is a later slice and is
+        // burned for now) proportionally by stake against the epoch's expected
+        // (total active) stake — the anti-capture denominator — with the same
+        // within-block + cross-block (§B.3(c)) `(bond, epoch)` uniqueness and a
+        // whole-output pool cap (Σ ≤ pool; the unspent remainder is not minted).
+        let expected_stake = bond_view.total_active_stake_at(daa_score) as u128;
+        let (participation_pool, _quality_bonus_pool) =
+            split_validator_pool(validator_pool as u128, dns_params.reward_params.validator_participation_bps);
+        validator_participation_reward_outputs(participation_pool, expected_stake, &attestations, &already_rewarded)
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): block-template
