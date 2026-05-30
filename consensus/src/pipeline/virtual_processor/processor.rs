@@ -915,8 +915,8 @@ impl VirtualStateProcessor {
             work_depth,
             stake_depth,
             rollout_stage,
-            // validator_set_commitment: the committee snapshot lands with
-            // sortition (PR-10.9 sortition); zero until then.
+            // validator_set_commitment: ADR-0017 dropped the sortition committee, so the
+            // StakeScore path binds no committee snapshot — this stays zero.
             BlockHash::default(),
             dns_params.required_work_depth,
             dns_params.required_stake_depth,

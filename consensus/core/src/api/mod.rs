@@ -161,19 +161,19 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
-    /// kaspa-pq Phase 11 (ADR-0010/0012): the validator committee for the current
-    /// epoch (at the sink), or `None` when the DNS overlay is not configured or the
-    /// committee cannot be selected yet (e.g. commit-reveal sortition before reveals
-    /// are wired). The in-process validator service checks its own `validator_id`
-    /// against `members` to decide attestation eligibility. Default `None`.
+    /// kaspa-pq Phase 11 (ADR-0010/0017): the active validator set for the current epoch
+    /// (at the sink), or `None` when the DNS overlay is not configured. Under ADR-0017
+    /// every active-bond validator attests (no committee, no sortition); the in-process
+    /// validator service checks its own `validator_id` against `members` to decide
+    /// attestation eligibility. Default `None`.
     fn get_active_validator_set(&self) -> Option<ActiveValidatorSet> {
         None
     }
 
-    /// kaspa-pq Phase 11 (ADR-0010): the ready-to-sign stake-attestation target for
-    /// `bond_outpoint` at the current sink (epoch, target, committee commitment, and
-    /// the bound message digest), or `None` when the overlay is not configured or no
-    /// committee can be selected yet. The validator service signs `message` under
+    /// kaspa-pq Phase 11 (ADR-0010/0017): the ready-to-sign stake-attestation target for
+    /// `bond_outpoint` at the current sink (epoch, target, active-validator-set
+    /// commitment, and the bound message digest), or `None` when the overlay is not
+    /// configured. The validator service signs `message` under
     /// `ATTESTATION_MLDSA65_CONTEXT`. Default `None`.
     fn get_validator_attestation_target(&self, _bond_outpoint: TransactionOutpoint) -> Option<ValidatorAttestationTarget> {
         None

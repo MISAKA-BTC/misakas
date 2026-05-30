@@ -217,7 +217,7 @@ pub enum BondStatus {
     /// accepted.
     Unbonding = 2,
     /// Slashed by a `SlashingEvidencePayload`; bond is burned and
-    /// the validator is removed from all future committees.
+    /// the validator is removed from the active validator set.
     Slashed = 3,
 }
 
@@ -452,8 +452,7 @@ pub struct ValidatorRecord {
 
 /// Snapshot of the active validator set at a given epoch.
 ///
-/// Built by `consensus/src/processes/validator_sortition.rs`
-/// (PR-10.9). The `validators` vector **must** be sorted ascending
+/// The `validators` vector **must** be sorted ascending
 /// by `validator_id` for [`validator_set_commitment`] to be
 /// byte-deterministic across nodes; the helper sorts a clone before
 /// hashing, so callers can pass in any order, but persistence stores
@@ -694,7 +693,7 @@ pub struct ActiveValidatorSet {
 
 /// Everything the in-process validator service needs to issue one stake
 /// attestation for the current epoch, assembled by the consensus pipeline so the
-/// network-, committee-, and target-binding match the verifier (`virtual_processor`)
+/// network-, active-set-, and target-binding match the verifier (`virtual_processor`)
 /// byte-for-byte. The service's only remaining job is to sign [`Self::message`]
 /// under [`ATTESTATION_MLDSA65_CONTEXT`] with its ML-DSA-65 key.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -882,8 +881,8 @@ pub enum ValidatorStatus {
     BondNotFound = 1,
     /// Bond exists, `daa_score < activation_daa_score`.
     BondPending = 2,
-    /// Bond is active; current epoch validator-set sortition has
-    /// not yet picked this validator.
+    /// Bond is active but not yet reflected in the current epoch's active validator
+    /// set (a transient; under ADR-0017 every active bond attests).
     ActiveIdle = 3,
     /// Bond is active, validator is in the current epoch's set,
     /// and `signed_epoch_db` shows no prior signature for this

@@ -126,7 +126,7 @@ pub mod daa_score_timestamp;
 /// kaspa-pq Phase 10 (PR-10.3): DNS Probabilistic Finality Overlay
 /// type stubs (see docs/adr/0009-dns-probabilistic-finality.md).
 /// Carries the type surface only; consensus rule implementations
-/// (StakeScore aggregation, reorg gate, sortition) land in PR-10.4
+/// (StakeScore aggregation, reorg gate) land in PR-10.4
 /// onward once Phases 1–9 stabilise.
 pub mod dns_finality;
 pub mod errors;

@@ -1,6 +1,9 @@
 # ADR-0012: Mainnet Validator Sortition via On-Chain Commit-Reveal
 
-Status: Accepted (Phase 13 design freeze; implementation deferred to Phase 10 PR-10.9)
+Status: **Superseded by [ADR-0017](0017-all-active-staker-attestation.md)** — the
+        commit-reveal sortition committee was removed; PoS participation is now
+        permissionless-by-stake with every active bond attesting (no committee,
+        no sortition). Retained for history. (Originally: Accepted, Phase 13 design freeze.)
 Date: 2026-05-28
 Supersedes: ADR-0009 §"Sortition" mainnet "TBD" pointer.
 Depends on: [ADR-0008](0008-hash64-consensus-identity.md) (Hash64 throughout the
