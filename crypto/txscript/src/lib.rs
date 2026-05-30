@@ -71,7 +71,7 @@ pub const MLDSA65_SIG_LEN: usize = 4627; // ML-DSA-87 signature size (ADR-0019; 
 /// ML-DSA `ctx` parameter for kaspa-pq transaction signatures. The 255-byte
 /// upper bound on `ctx` is enforced by libcrux. See
 /// docs/kaspa-pq-spec.md §2.
-pub const MLDSA65_TX_CONTEXT: &[u8] = b"kaspa-pq-v1/tx/mldsa65";
+pub const MLDSA65_TX_CONTEXT: &[u8] = b"kaspa-pq-v1/tx/mldsa87";
 
 /// kaspa-pq PQ-only script policy (ADR-0019 / docs/kaspa-pq-design-mldsa87.md §6).
 /// Threaded into [`TxScriptEngine`] to gate legacy secp256k1 signature opcodes
@@ -815,13 +815,20 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
     ///   1952-byte public key and 3309-byte signature into the cache, never
     ///   the raw bytes (see docs/adr/0002-mldsa65-p2pkh.md §7 + ADR-0005).
     /// - A fixed ML-DSA `ctx` parameter of [`MLDSA65_TX_CONTEXT`]
-    ///   (`"kaspa-pq-v1/tx/mldsa65"`).
-    /// - The signed message is currently the existing 32-byte
-    ///   `calc_schnorr_signature_hash` output; ML-DSA's own `ctx` provides
-    ///   the algorithm-level domain separation, so we don't need an
-    ///   additional kaspa-pq-specific sighash function. A dedicated
-    ///   `calc_mldsa65_signature_hash` may be introduced in a later phase
-    ///   if mass / replay analysis demands it.
+    ///   (`"kaspa-pq-v1/tx/mldsa87"`).
+    /// - The signed message is the dedicated 64-byte
+    ///   [`calc_mldsa87_signature_hash`](kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash)
+    ///   output (ADR-0019 §9): a `Hash64` digest under the
+    ///   `b"TransactionSigningHash64"` domain plus the `MLDSA87_SIGHASH_DOMAIN`
+    ///   prefix, so a signature made over the legacy 32-byte schnorr digest can
+    ///   never verify here. Every ML-DSA signer (wallet WASM, validator-core)
+    ///   feeds this same 64-byte digest to `ml_dsa_87::sign`, keeping signer and
+    ///   verifier byte-for-byte in lockstep.
+    /// - The [`secp256k1::Message`] below is a cache-key artifact ONLY — the
+    ///   real verify consumes the full 64-byte digest. `secp256k1::Message`
+    ///   requires exactly 32 bytes, so the 64-byte digest is folded to 32 via
+    ///   BLAKE2b-256 purely to populate the [`SigCacheKey::message`] slot,
+    ///   pending the Phase-8 native 64-byte `SigCacheKey` redesign.
     fn check_mldsa65_signature(&mut self, hash_type: SigHashType, key: &[u8], sig: &[u8]) -> Result<bool, TxScriptError> {
         self.runtime_sig_op_counter.consume_sig_op()?;
         match self.script_source {
@@ -835,9 +842,24 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                     return Err(TxScriptError::SigLength(sig.len()));
                 }
 
-                let sig_hash = calc_schnorr_signature_hash(tx, idx, hash_type, self.reused_values);
-                let msg_bytes = sig_hash.as_bytes();
-                let msg = secp256k1::Message::from_digest_slice(msg_bytes.as_slice()).unwrap();
+                // 64-byte ML-DSA-87 sighash (ADR-0019 §9). Build a LOCAL reuse
+                // cache: `self.reused_values` is the 32-byte `SigHashReusedValues`
+                // trait and cannot be passed here. This loses cross-input reuse
+                // caching; that is acceptable for now.
+                // TODO(perf): thread a 64-byte reuse cache through the engine.
+                let reused_mldsa = kaspa_consensus_core::hashing::sighash::Mldsa87SigHashReusedValuesUnsync::new();
+                let sig_hash =
+                    kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(tx, idx, hash_type, &reused_mldsa);
+                let msg_bytes = sig_hash.as_bytes(); // 64 bytes
+                // `secp256k1::Message` requires EXACTLY 32 bytes and would panic
+                // on 64. Fold the 64-byte digest to 32 via BLAKE2b-256 purely to
+                // populate the cache-key `message` slot; the real verify below
+                // consumes the full 64-byte `msg_bytes`.
+                let mut msg_digest32 = [0u8; 32];
+                msg_digest32.copy_from_slice(
+                    blake2b_simd::Params::new().hash_length(32).to_state().update(msg_bytes.as_slice()).finalize().as_bytes(),
+                );
+                let msg = secp256k1::Message::from_digest_slice(&msg_digest32).unwrap();
 
                 // Hash-based cache key. BLAKE2b-256 chosen for consistency
                 // with the consensus opcode `OP_BLAKE2B_256` already used
@@ -1605,8 +1627,8 @@ mod bitcoind_tests {
     ///   1. ML-DSA-65 keypair via `libcrux_ml_dsa::ml_dsa_87::generate_key_pair`
     ///   2. Address = BLAKE2b-256(public_key)
     ///   3. `scriptPubKey` via `pay_to_address_script`
-    ///   4. Sighash via `calc_schnorr_signature_hash` (same digest the
-    ///      script engine recomputes during verify)
+    ///   4. Sighash via `calc_mldsa87_signature_hash` (the same 64-byte digest
+    ///      the script engine recomputes during verify — ADR-0019 §9)
     ///   5. ML-DSA-65 sign with `MLDSA65_TX_CONTEXT`
     ///   6. `signatureScript = PUSH<sig||sighash_type> PUSH<public_key>`
     ///   7. `TxScriptEngine::from_transaction_input(...).execute()` -> Ok
@@ -1646,14 +1668,18 @@ mod bitcoind_tests {
         let unsigned_tx = create_spending_transaction(Vec::new(), script_pub_key.clone());
         let utxo_entry = UtxoEntry::new(0, script_pub_key.clone(), 0, true);
         let populated_unsigned = PopulatedTransaction::new(&unsigned_tx, vec![utxo_entry.clone()]);
-        let reused = SigHashReusedValuesUnsync::new();
-        let sig_hash =
-            kaspa_consensus_core::hashing::sighash::calc_schnorr_signature_hash(&populated_unsigned, 0, SIG_HASH_ALL, &reused);
+        let reused_mldsa = kaspa_consensus_core::hashing::sighash::Mldsa87SigHashReusedValuesUnsync::new();
+        let sig_hash = kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(
+            &populated_unsigned,
+            0,
+            SIG_HASH_ALL,
+            &reused_mldsa,
+        );
 
         // 5. Sign the sighash with the kaspa-pq context.
         let signing_randomness = [0xb2u8; 32];
         let signature = mldsa::sign(sk, sig_hash.as_bytes().as_slice(), MLDSA65_TX_CONTEXT, signing_randomness)
-            .expect("ML-DSA-65 sign should succeed on a 32-byte message");
+            .expect("ML-DSA-87 sign should succeed on the 64-byte sighash");
         let sig_bytes = signature.as_ref();
         assert_eq!(sig_bytes.len(), MLDSA65_SIG_LEN);
 

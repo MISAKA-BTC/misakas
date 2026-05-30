@@ -14,7 +14,7 @@ use kaspa_consensus_core::dns_finality::{
     ATTESTATION_MLDSA65_CONTEXT, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
     StakeAttestationShardPayload, StakeBondPayload, check_signed_epoch_record, single_attestation_shard, validator_id_from_pubkey,
 };
-use kaspa_consensus_core::hashing::sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash};
+use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::subnets::{SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND};
@@ -134,8 +134,8 @@ impl ValidatorKey {
         // Sighash is computed over the tx with empty signature scripts (canonical), so
         // signing before filling the script is correct.
         let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
-        let reused = SigHashReusedValuesUnsync::new();
-        let sighash = calc_schnorr_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused);
+        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
+        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
 
         let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA65_TX_CONTEXT).to_vec();
         sig_data.push(SIG_HASH_ALL.to_u8()); // OpCheckSigMlDsa65 pops the trailing sighash-type byte
@@ -211,8 +211,8 @@ impl ValidatorKey {
 
         // Sighash over the canonical (empty-sig-script) tx, then fill input 0's script.
         let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
-        let reused = SigHashReusedValuesUnsync::new();
-        let sighash = calc_schnorr_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused);
+        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
+        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
         let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA65_TX_CONTEXT).to_vec();
         sig_data.push(SIG_HASH_ALL.to_u8());
         let signature_script = ScriptBuilder::new()

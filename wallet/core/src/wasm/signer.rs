@@ -10,7 +10,7 @@ use kaspa_consensus_core::{hashing::sighash_type::SIG_HASH_ALL, sign::verify};
 // wasm32/test (it pulls wasm-bindgen), so the helper imports and the
 // `signTransactionMlDsa65` fn below are gated to match — native builds exclude them.
 #[cfg(any(target_arch = "wasm32", test))]
-use kaspa_consensus_core::hashing::sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash};
+use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_hashes::Hash;
 #[cfg(any(target_arch = "wasm32", test))]
 use kaspa_txscript::script_builder::ScriptBuilder;
@@ -62,9 +62,9 @@ pub fn js_sign_transaction(tx: &Transaction, signer: &PrivateKeyArrayT, verify_s
 /// `signTransactionMlDsa65()` signs every input of `tx` with a kaspa-pq
 /// ML-DSA-65 keypair, producing the canonical P2PKH unlock script
 /// `<signature || sighash_type> <public_key>` for each input. The signed
-/// message is `calc_schnorr_signature_hash(.., SIG_HASH_ALL, ..)` — the exact
-/// digest the `OpCheckSigMlDsa65` consensus opcode recomputes and verifies
-/// under `MLDSA65_TX_CONTEXT`.
+/// message is the 64-byte `calc_mldsa87_signature_hash(.., SIG_HASH_ALL, ..)`
+/// (ADR-0019 §9) — the exact digest the `OpCheckSigMlDsa65` consensus opcode
+/// recomputes and verifies under `MLDSA65_TX_CONTEXT`.
 ///
 /// `randomness` must be 32 bytes (e.g. `crypto.getRandomValues`). Per-input
 /// randomness is derived from it so distinct inputs use distinct hedging
@@ -81,12 +81,12 @@ pub fn js_sign_transaction_mldsa65(tx: &Transaction, keypair: &KaspaPqKeyPair, r
     }
     let public_key = keypair.public_key().to_bytes();
 
-    let reused_values = SigHashReusedValuesUnsync::new();
+    let reused_values = Mldsa87SigHashReusedValuesUnsync::new();
     let input_len = tx.inner().inputs.len();
     let (cctx, utxos) = tx.tx_and_utxos()?;
     let populated_transaction = PopulatedTransaction::new(&cctx, utxos);
     for i in 0..input_len {
-        let sig_hash = calc_schnorr_signature_hash(&populated_transaction, i, SIG_HASH_ALL, &reused_values);
+        let sig_hash = calc_mldsa87_signature_hash(&populated_transaction, i, SIG_HASH_ALL, &reused_values);
 
         // Derive per-input hedging randomness without an extra hashing dep: ML-DSA
         // is not nonce-sensitive across distinct messages, but varying it is tidy.
