@@ -1719,6 +1719,57 @@ pub fn validator_participation_outputs(
         .collect()
 }
 
+/// ADR-0018 §E — build a block's validator participation-reward outputs from its included
+/// attestations, the §E analogue of the flat [`validator_reward_outputs_from_attestations`]
+/// it replaces in the coinbase fan-out. `attestations` is `(bond_outpoint, epoch,
+/// owner_reward_spk_payload, included_stake)` per included, eligibility-checked attestation,
+/// in canonical order. Applies the same uniqueness as the flat path — **within-block**
+/// `(bond_outpoint, epoch)` dedup (first occurrence wins) and **cross-block** dedup against
+/// `already_rewarded` (§B.3(c)) — then pays each surviving validator
+/// [`validator_participation_reward`]`(participation_pool, stake, expected_stake)`.
+///
+/// `expected_stake` is the per-block expected-stake denominator
+/// ([`ActiveBondView::total_active_stake_at`]); using *expected* (not included) stake is the
+/// §E anti-capture property. A **whole-output pool cap** guarantees the outputs sum to ≤
+/// `participation_pool` even under multi-epoch multiplicities (the canonical-order tail that
+/// would exceed the pool is dropped — left unrewarded, so a later block may pay it). The
+/// unspent remainder is **not minted** (don't-mint rollover). Pure and DAG-free → the
+/// coinbase construction and validation paths produce byte-identical outputs. Returns the
+/// outputs plus the rewarded `(bond_outpoint, epoch)` keys for `rewarded_epochs_store`.
+pub fn validator_participation_reward_outputs(
+    participation_pool: u128,
+    expected_stake: u128,
+    attestations: &[(TransactionOutpoint, u64, [u8; 32], u64)],
+    already_rewarded: &RewardedEpochSet,
+) -> (Vec<TransactionOutput>, Vec<(TransactionOutpoint, u64)>) {
+    let mut seen_in_block: HashSet<(TransactionOutpoint, u64)> = HashSet::new();
+    let mut outputs: Vec<TransactionOutput> = Vec::new();
+    let mut rewarded_keys: Vec<(TransactionOutpoint, u64)> = Vec::new();
+    let mut spent: u128 = 0;
+    for (bond_outpoint, epoch, payload, stake) in attestations {
+        let key = (*bond_outpoint, *epoch);
+        // Cross-block uniqueness (§B.3(c)): skip a (bond, epoch) already rewarded on the
+        // selected-chain prefix. Within-block uniqueness: first occurrence wins.
+        if already_rewarded.contains(bond_outpoint, *epoch) || !seen_in_block.insert(key) {
+            continue;
+        }
+        let reward = validator_participation_reward(participation_pool, *stake as u128, expected_stake);
+        if reward == 0 {
+            continue; // zero stake / zero pool / degenerate denominator → no output, still allowed later
+        }
+        // Whole-output pool cap (value-conserving): stop at the first reward that would push
+        // the total past the pool; the canonical-order tail is dropped (not marked rewarded,
+        // so a later block may pay it).
+        if spent.saturating_add(reward) > participation_pool {
+            break;
+        }
+        spent += reward;
+        outputs.push(TransactionOutput::new(reward as u64, p2pkh_mldsa65_spk(payload)));
+        rewarded_keys.push(key);
+    }
+    (outputs, rewarded_keys)
+}
+
 /// Build the canonical kaspa-pq ML-DSA-65 P2PKH `scriptPublicKey`
 /// for a 32-byte spend payload (ADR-0002 / ADR-0013 Addendum B).
 ///
@@ -2825,6 +2876,15 @@ impl ActiveBondView {
     /// that abandons confirmed history. Callers gate each record by [`is_bond_active_at`].
     pub fn records(&self) -> Vec<StakeBondRecord> {
         self.bonds.values().cloned().collect()
+    }
+
+    /// Total stake of all bonds that are `Active` at `pov_daa_score`. The ADR-0018 §E
+    /// expected-stake **denominator** for the per-block validator-reward distribution
+    /// ([`validator_participation_reward_outputs`]): normalising by *expected* (not included)
+    /// stake is the anti-capture property — a minority earns only its proportional slice.
+    /// Bounded by the active validator count.
+    pub fn total_active_stake_at(&self, pov_daa_score: u64) -> u64 {
+        self.bonds.values().filter(|b| is_bond_active_at(b, pov_daa_score)).fold(0u64, |acc, b| acc.saturating_add(b.amount))
     }
 
     pub fn len(&self) -> usize {
@@ -4719,6 +4779,54 @@ mod tests {
         assert!(validator_participation_outputs(1000, &[([0xcc; 32], 0)], 100).is_empty());
         assert!(validator_participation_outputs(1000, &[], 100).is_empty());
         assert!(validator_participation_outputs(1000, &[(a, 60)], 0).is_empty());
+    }
+
+    #[test]
+    fn validator_participation_reward_outputs_dedup_and_cap() {
+        let op1 = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let op2 = TransactionOutpoint::new(Hash64::from_bytes([0x22; 64]), 0);
+        let (a, b) = ([0xa1u8; 32], [0xb2u8; 32]);
+        let empty = RewardedEpochSet::new();
+
+        // Pool 1000, expected 100: op1/epoch5 stake 60 → 600; op2/epoch5 stake 30 → 300 (10 uncovered).
+        let atts = vec![(op1, 5u64, a, 60u64), (op2, 5, b, 30)];
+        let (outs, keys) = validator_participation_reward_outputs(1000, 100, &atts, &empty);
+        assert_eq!(outs.iter().map(|o| o.value).collect::<Vec<_>>(), vec![600, 300]);
+        assert_eq!(keys, vec![(op1, 5), (op2, 5)]);
+
+        // Within-block dedup: a repeated (op1, epoch5) earns nothing the second time.
+        let (outs, keys) = validator_participation_reward_outputs(1000, 100, &[(op1, 5, a, 60), (op1, 5, a, 60)], &empty);
+        assert_eq!((outs.len(), keys), (1, vec![(op1, 5)]));
+
+        // Cross-block dedup: a (bond, epoch) already rewarded on the prefix is skipped.
+        let mut seen = RewardedEpochSet::new();
+        seen.insert(op1, 5);
+        let (outs, keys) = validator_participation_reward_outputs(1000, 100, &atts, &seen);
+        assert_eq!((outs.iter().map(|o| o.value).collect::<Vec<_>>(), keys), (vec![300], vec![(op2, 5)]));
+
+        // Whole-output pool cap: op1 in epochs 5 AND 6 (distinct keys), each 600 → 1200 > pool 1000.
+        // The first fits; the second is dropped (break) and left unrewarded → Σ ≤ pool.
+        let (outs, keys) = validator_participation_reward_outputs(1000, 100, &[(op1, 5, a, 60), (op1, 6, a, 60)], &empty);
+        assert_eq!(outs.iter().map(|o| o.value).sum::<u64>(), 600);
+        assert_eq!(keys, vec![(op1, 5)]); // (op1, 6) NOT marked rewarded — a later block may pay it
+
+        // Degenerate denominator → no outputs.
+        assert!(validator_participation_reward_outputs(1000, 0, &[(op1, 5, a, 60)], &empty).0.is_empty());
+    }
+
+    #[test]
+    fn total_active_stake_at_sums_only_active() {
+        let op1 = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let op2 = TransactionOutpoint::new(Hash64::from_bytes([0x22; 64]), 0);
+        let mut active = fixture_bond_record(op1);
+        active.amount = 100;
+        active.activation_daa_score = 50;
+        let mut pending = fixture_bond_record(op2);
+        pending.amount = 200;
+        pending.activation_daa_score = 1000; // not active until daa 1000
+        let view = ActiveBondView::from_records([(op1, active), (op2, pending)]);
+        assert_eq!(view.total_active_stake_at(500), 100); // only op1 active; op2 still pending
+        assert_eq!(view.total_active_stake_at(2000), 300); // both active
     }
 
     #[test]
