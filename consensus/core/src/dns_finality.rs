@@ -2774,6 +2774,15 @@ impl ActiveBondView {
         self.bonds.get(outpoint)
     }
 
+    /// Snapshot every bond record in the view (any status). Used by the ADR-0018 §H
+    /// reorg gate to score a *candidate* branch's StakeScore-since-common-ancestor under
+    /// that branch's OWN bond set (the in-loop view advanced to the candidate) — scoring a
+    /// branch under the wrong view would mis-credit it and risk wrongly accepting a reorg
+    /// that abandons confirmed history. Callers gate each record by [`is_bond_active_at`].
+    pub fn records(&self) -> Vec<StakeBondRecord> {
+        self.bonds.values().cloned().collect()
+    }
+
     pub fn len(&self) -> usize {
         self.bonds.len()
     }
@@ -3742,6 +3751,12 @@ mod tests {
         assert_eq!(view.len(), 2);
         assert!(view.active_bond_at(&op1, 10_000).is_some());
         assert!(view.active_bond_at(&op2, 10_000).is_none()); // seeded as slashed
+
+        // ADR-0018 §H: `records()` snapshots every bond (any status) for the per-branch
+        // reorg-gate StakeScore walk — both the active and the slashed one.
+        let outpoints: Vec<_> = view.records().iter().map(|r| r.bond_outpoint).collect();
+        assert_eq!(outpoints.len(), 2);
+        assert!(outpoints.contains(&op1) && outpoints.contains(&op2));
     }
 
     #[test]

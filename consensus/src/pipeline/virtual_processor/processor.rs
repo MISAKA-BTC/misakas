@@ -61,9 +61,10 @@ use kaspa_consensus_core::{
     config::genesis::GenesisBlock,
     dns_finality::{
         ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, AttestationContribution, BondMutation, BondStatus, DnsParams,
-        DnsReorgInputs, DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation,
-        aggregate_epoch_tallies, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, check_dns_reorg_rule,
-        compute_stake_score, derive_dns_health, is_bond_active_at, stake_attestation_message, total_active_stake_by_epoch,
+        DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
+        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, check_dns_reorg_rule, compute_stake_score,
+        derive_dns_health, is_bond_active_at, reorg_inputs_since_common_ancestor, stake_attestation_message,
+        total_active_stake_by_epoch,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -863,46 +864,10 @@ impl VirtualStateProcessor {
         };
 
         // Bounded window walk: collect + verify attestations from selected-chain
-        // shards within `max_reorg_horizon_blocks` of the sink.
-        let mut contributions: Vec<AttestationContribution> = Vec::new();
-        let mut epoch_anchor_daa: BTreeMap<u64, u64> = BTreeMap::new();
-        let mut walked: u64 = 0;
-        for chain_block in self.reachability_service.default_backward_chain_iterator(sink) {
-            if walked >= dns_params.max_reorg_horizon_blocks {
-                break;
-            }
-            walked += 1;
-            let txs = self.accepted_txs_of_chain_block(chain_block);
-            for att in attestations_from_accepted_txs(&txs) {
-                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == att.bond_outpoint) else {
-                    continue;
-                };
-                if !is_bond_active_at(bond, att.target_daa_score) {
-                    continue;
-                }
-                let digest = stake_attestation_message(
-                    net_id.as_byte_slice(),
-                    att.epoch,
-                    att.target_hash,
-                    att.target_daa_score,
-                    att.validator_set_commitment,
-                    att.bond_outpoint,
-                )
-                .as_bytes();
-                if matches!(
-                    verify_mldsa65_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA65_CONTEXT),
-                    Ok(true)
-                ) {
-                    contributions.push(AttestationContribution {
-                        epoch: att.epoch,
-                        validator_id: att.validator_id,
-                        bond_outpoint: att.bond_outpoint,
-                        signed_stake_sompi: bond.amount,
-                    });
-                    epoch_anchor_daa.entry(att.epoch).or_insert(att.target_daa_score);
-                }
-            }
-        }
+        // shards within `max_reorg_horizon_blocks` of the sink (no `stop_at` — the full
+        // window). Shared with the ADR-0018 §H reorg gate via `collect_stake_contributions`.
+        let (contributions, epoch_anchor_daa) =
+            self.collect_stake_contributions(sink, None, &bonds, net_id.as_byte_slice(), dns_params.max_reorg_horizon_blocks);
 
         let totals = total_active_stake_by_epoch(&bonds, &epoch_anchor_daa);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
@@ -939,21 +904,132 @@ impl VirtualStateProcessor {
         self.dns_state_store.write().set_batch(batch, new_state).unwrap();
     }
 
-    /// kaspa-pq Phase 10 (ADR-0009 §"Decision"): the DNS finality reorg gate.
-    /// Returns `true` (candidate sink allowed) unless the overlay is configured,
-    /// in the `Active` rollout stage, has a confirmed anchor, and `candidate`
-    /// would abandon that anchor's selected chain. **Inert** on every current
-    /// network (`dns_params` is `None`) and outside the `Active` stage.
-    ///
-    /// Uses `DnsReorgMode::HardCheckpoint` — correct for the PoC/testnet tiers
-    /// (reject any reorg that abandons a DNS-confirmed anchor). The mainnet
-    /// two-dimensional WorkScore×StakeScore dominance path — which needs the
-    /// work/stake each chain accumulates after their common ancestor — is a
-    /// follow-up; until it lands the gate conservatively hard-rejects such exits.
-    fn dns_reorg_allows(&self, candidate: BlockHash) -> bool {
-        if self.dns_params.is_none() {
-            return true;
+    /// kaspa-pq Phase 10/13 (ADR-0009 Addendum A.5 / ADR-0018 §H): collect + verify the
+    /// stake attestations on the selected chain ending at `tip`, walking back at most
+    /// `max_walk` chain blocks and stopping when `stop_at` is reached (exclusive — its
+    /// attestations belong to the shared prefix, not the since-ancestor segment). Each
+    /// attestation is resolved against `bonds` (the bond set of the SAME branch — safety:
+    /// a candidate branch must be scored under its own bonds), DAA-gated by
+    /// `is_bond_active_at`, and its ML-DSA-65 signature verified under
+    /// `ATTESTATION_MLDSA65_CONTEXT`. Returns the per-`(bond, validator, epoch)`
+    /// contributions and each epoch's anchor DAA score — the inputs to
+    /// `aggregate_epoch_tallies` / `total_active_stake_by_epoch`. Reads only committed
+    /// acceptance data, so it is deterministic and reorg-safe; inert wherever the overlay
+    /// is dormant.
+    fn collect_stake_contributions(
+        &self,
+        tip: BlockHash,
+        stop_at: Option<BlockHash>,
+        bonds: &[StakeBondRecord],
+        net_id: &[u8],
+        max_walk: u64,
+    ) -> (Vec<AttestationContribution>, BTreeMap<u64, u64>) {
+        let mut contributions: Vec<AttestationContribution> = Vec::new();
+        let mut epoch_anchor_daa: BTreeMap<u64, u64> = BTreeMap::new();
+        let mut walked: u64 = 0;
+        for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
+            if walked >= max_walk || Some(chain_block) == stop_at {
+                break;
+            }
+            walked += 1;
+            let txs = self.accepted_txs_of_chain_block(chain_block);
+            for att in attestations_from_accepted_txs(&txs) {
+                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == att.bond_outpoint) else {
+                    continue;
+                };
+                if !is_bond_active_at(bond, att.target_daa_score) {
+                    continue;
+                }
+                let digest = stake_attestation_message(
+                    net_id,
+                    att.epoch,
+                    att.target_hash,
+                    att.target_daa_score,
+                    att.validator_set_commitment,
+                    att.bond_outpoint,
+                )
+                .as_bytes();
+                if matches!(
+                    verify_mldsa65_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA65_CONTEXT),
+                    Ok(true)
+                ) {
+                    contributions.push(AttestationContribution {
+                        epoch: att.epoch,
+                        validator_id: att.validator_id,
+                        bond_outpoint: att.bond_outpoint,
+                        signed_stake_sompi: bond.amount,
+                    });
+                    epoch_anchor_daa.entry(att.epoch).or_insert(att.target_daa_score);
+                }
+            }
         }
+        (contributions, epoch_anchor_daa)
+    }
+
+    /// kaspa-pq Phase 13 (ADR-0018 §H): the StakeScore a branch accumulated **since the
+    /// common ancestor** — the selected chain from `tip` back to (but excluding) `ancestor`,
+    /// scored under `bonds` (that branch's bond set) and this network's `φS`. Pairs
+    /// `collect_stake_contributions` with the same quality-gated aggregation
+    /// (`total_active_stake_by_epoch` → `aggregate_epoch_tallies` → `compute_stake_score`)
+    /// the sink-side StakeScore uses, so the two are byte-identical.
+    fn stake_score_since_ancestor(
+        &self,
+        tip: BlockHash,
+        ancestor: BlockHash,
+        bonds: &[StakeBondRecord],
+        dns_params: &DnsParams,
+        net_id: &[u8],
+    ) -> StakeScore {
+        let (contributions, epoch_anchor_daa) =
+            self.collect_stake_contributions(tip, Some(ancestor), bonds, net_id, dns_params.max_reorg_horizon_blocks);
+        let totals = total_active_stake_by_epoch(bonds, &epoch_anchor_daa);
+        let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
+        compute_stake_score(&per_epoch, dns_params.stake_event_quality_floor_bps)
+    }
+
+    /// kaspa-pq Phase 13 (ADR-0018 §H): the selected-chain common ancestor of `a` and `b`
+    /// — the first block on `a`'s selected chain (from `a` inclusive, walking back) that is
+    /// also a chain-ancestor of `b`. `None` if none is found within `max_walk` (a reorg
+    /// deeper than the reorg horizon is not gate-eligible — the caller rejects it).
+    fn selected_chain_common_ancestor(&self, a: BlockHash, b: BlockHash, max_walk: u64) -> Option<BlockHash> {
+        let mut walked: u64 = 0;
+        for block in std::iter::once(a).chain(self.reachability_service.default_backward_chain_iterator(a)) {
+            if walked > max_walk {
+                return None;
+            }
+            walked += 1;
+            if self.reachability_service.is_chain_ancestor_of(block, b) {
+                return Some(block);
+            }
+        }
+        None
+    }
+
+    /// kaspa-pq Phase 10/13 (ADR-0009 §"Decision" / ADR-0018 §H): the DNS finality reorg
+    /// gate. Returns `true` (candidate sink allowed) unless the overlay is configured, in
+    /// the `Active` rollout stage, has a confirmed anchor, and `candidate` would abandon
+    /// that anchor's selected chain. **Inert** on every current network (`dns_params` is
+    /// `None`) and outside the `Active` stage.
+    ///
+    /// `reorg_mode` (per-network, ADR-0018 §H) selects the rule when a candidate exits the
+    /// confirmed prefix:
+    /// - `HardCheckpoint` (PoC/testnet/devnet): reject any such exit.
+    /// - `TwoDimensionalDominance` (mainnet): accept only if the candidate **strictly
+    ///   out-Works AND out-Stakes** canonical since their common ancestor `I`, each by its
+    ///   emergency margin (non-substitutability — neither dimension alone suffices).
+    ///
+    /// Safety: each branch's StakeScore-since-`I` is scored under **its own** bond set —
+    /// `candidate_bond_view` (the sink-search view already advanced to `candidate`) for the
+    /// candidate, and the persisted `stake_bonds_store` (still at `prev_sink`, because the
+    /// bond store is written only at the final virtual commit, never during this sink
+    /// search) for canonical. Scoring a branch under the wrong view could over-credit it
+    /// and wrongly accept a confirmed-history-abandoning reorg. Both branches' acceptance
+    /// data is committed by the time the gate runs (the candidate's by
+    /// `calculate_utxo_state_relatively`), so the per-branch walks are deterministic.
+    fn dns_reorg_allows(&self, candidate: BlockHash, prev_sink: BlockHash, candidate_bond_view: &ActiveBondView) -> bool {
+        let Some(dns_params) = self.dns_params.as_ref() else {
+            return true;
+        };
         let Ok(state) = self.dns_state_store.read().get() else {
             return true; // no DnsState written yet
         };
@@ -964,17 +1040,51 @@ impl VirtualStateProcessor {
         if confirmed == BlockHash::default() {
             return true; // nothing confirmed yet
         }
-        let inputs = DnsReorgInputs {
-            rollout_stage: state.rollout_stage,
-            mode: DnsReorgMode::HardCheckpoint,
-            candidate_includes_confirmed_anchor: self.reachability_service.is_chain_ancestor_of(confirmed, candidate),
-            // Unused by HardCheckpoint mode (2D dominance is a mainnet follow-up).
-            candidate_work_after: BlueWorkType::from_u64(0),
-            canonical_work_after: BlueWorkType::from_u64(0),
-            candidate_stake_after: StakeScore(0),
-            canonical_stake_after: StakeScore(0),
-            emergency_work_margin: BlueWorkType::from_u64(0),
-            emergency_stake_margin: StakeScore(0),
+        let includes = self.reachability_service.is_chain_ancestor_of(confirmed, candidate);
+
+        // The heavy two-dimensional inputs (common ancestor + per-branch Work/Stake walks)
+        // are computed ONLY when the candidate abandons the confirmed prefix AND the
+        // network runs the mainnet dominance rule. HardCheckpoint and the includes-anchor
+        // case ignore Work/Stake, so they skip the walks entirely.
+        let inputs = if dns_params.reorg_mode == DnsReorgMode::TwoDimensionalDominance && !includes {
+            // Selected-chain common ancestor I. Beyond the reorg horizon → not gate-eligible;
+            // reject (a reorg deeper than the horizon cannot rewrite confirmed history).
+            let Some(ancestor) = self.selected_chain_common_ancestor(candidate, prev_sink, dns_params.max_reorg_horizon_blocks)
+            else {
+                return false;
+            };
+            let net_id_hash = self.genesis.hash;
+            let net_id = net_id_hash.as_byte_slice();
+            // Per-branch bond sets (safety — each branch under its OWN view; see doc comment).
+            let candidate_bonds = candidate_bond_view.records();
+            let canonical_bonds: Vec<StakeBondRecord> =
+                self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+            reorg_inputs_since_common_ancestor(
+                state.rollout_stage,
+                dns_params.reorg_mode,
+                includes,
+                self.ghostdag_store.get_blue_work(candidate).unwrap_or_default(),
+                self.ghostdag_store.get_blue_work(prev_sink).unwrap_or_default(),
+                self.ghostdag_store.get_blue_work(ancestor).unwrap_or_default(),
+                self.stake_score_since_ancestor(candidate, ancestor, &candidate_bonds, dns_params, net_id),
+                self.stake_score_since_ancestor(prev_sink, ancestor, &canonical_bonds, dns_params, net_id),
+                dns_params.emergency_work_margin,
+                dns_params.emergency_stake_margin,
+            )
+        } else {
+            // HardCheckpoint, or candidate keeps the confirmed anchor: Work/Stake unused.
+            reorg_inputs_since_common_ancestor(
+                state.rollout_stage,
+                dns_params.reorg_mode,
+                includes,
+                BlueWorkType::from_u64(0),
+                BlueWorkType::from_u64(0),
+                BlueWorkType::from_u64(0),
+                StakeScore(0),
+                StakeScore(0),
+                dns_params.emergency_work_margin,
+                dns_params.emergency_stake_margin,
+            )
         };
         check_dns_reorg_rule(&inputs).is_accept()
     }
@@ -1057,7 +1167,7 @@ impl VirtualStateProcessor {
                     // rejection is soft — we fall through to push the candidate's parents
                     // and continue, converging on a DNS-valid sink (mirrors the
                     // invalid-UTXO handling below).
-                    if self.dns_reorg_allows(candidate) {
+                    if self.dns_reorg_allows(candidate, prev_sink, bond_view) {
                         // All blocks with lower blue work than filtering_root are:
                         // 1. not in its future (bcs blue work is monotonic),
                         // 2. will be removed eventually by the bounded merge check.
