@@ -39,6 +39,11 @@ struct Args {
     /// PubKey placeholder is used.
     #[arg(long)]
     pay_mnemonic: Option<String>,
+    /// Mine the coinbase directly to this bech32 address (e.g. a validator funding address
+    /// `misakadev:...`). Takes priority over `--pay-mnemonic`; its prefix must match the
+    /// network. Lets mined coins be staked as a validator bond.
+    #[arg(long)]
+    pay_address: Option<String>,
     /// Minimum wall-clock interval between submitted blocks, in milliseconds
     /// (0 = no throttle). At trivial difficulty, set this to pace block
     /// production so a multi-datacenter mesh does not outrun cross-DC
@@ -64,8 +69,16 @@ async fn main() {
     // P2PKH address (matching the wallet's `KaspaPqKeyPair.fromMnemonic` path) so a
     // wallet importing the same mnemonic can spend the mined coins. Otherwise use an
     // unspendable PubKey placeholder (PoW-smoke only).
-    let pay_address = match &args.pay_mnemonic {
-        Some(phrase) => {
+    let pay_address = match (&args.pay_address, &args.pay_mnemonic) {
+        // Explicit address wins — e.g. a validator funding address, so mined coins can be
+        // staked into a bond. Its prefix must match the mining network.
+        (Some(addr), _) => {
+            let parsed = Address::try_from(addr.trim()).expect("invalid --pay-address bech32");
+            assert_eq!(parsed.prefix, prefix, "--pay-address prefix does not match network {}", args.network_id);
+            log::info!("mining coinbase to explicit address: {parsed}");
+            parsed
+        }
+        (None, Some(phrase)) => {
             let mnemonic = Mnemonic::new(phrase.trim(), Language::English).expect("invalid BIP39 mnemonic");
             let seed = mnemonic.to_seed("");
             let kp = derive_keypair(&args.network_id, 0, 0, 0, seed.as_bytes());
@@ -73,7 +86,7 @@ async fn main() {
             log::info!("mining coinbase to ML-DSA-65 address: {addr}");
             addr
         }
-        None => Address::new(prefix, Version::PubKey, &[0u8; 32]),
+        (None, None) => Address::new(prefix, Version::PubKey, &[0u8; 32]),
     };
     let network_id = args.network_id.clone().into_bytes();
 

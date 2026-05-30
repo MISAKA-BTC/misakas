@@ -769,9 +769,17 @@ pub const DEVNET_PARAMS: Params = Params {
     // `getDnsConfirmation`. Small epoch/window keep the PR-10.11-throttled
     // aggregation walk cheap on the ~10 bps devnet (amortized O(1) per block).
     dns_params: Some(DnsParams {
-        dns_activation_daa_score: u64::MAX,
-        min_active_stake_sompi: 10_000_000_000_000,
-        min_active_validators: 16,
+        // kaspa-pq DEVNET LIVE ACTIVATION (experimental): the DNS-overlay reward
+        // economics are ACTIVE from genesis on devnet so a real bond → attestation →
+        // reward-bearing coinbase can be observed. `0` makes the §F carve + §E/§D reward
+        // path load-bearing here (mainnet/testnet/simnet keep `dns_params: None`, so they
+        // are unaffected). No minimum validator count / stake: a single self-bonded
+        // validator earns. NOTE: rewards do NOT depend on `min_active_*` (those only flip
+        // `rollout_stage` → Active, which engages DnsHealth + the reorg gate once StakeScore
+        // confirms); the per-block §E reward fires on `daa >= dns_activation_daa_score` alone.
+        dns_activation_daa_score: 0,
+        min_active_stake_sompi: 0,
+        min_active_validators: 1,
         epoch_length_blocks: 100,
         // ZERO (const-constructible): on devnet the gate is dormant, so the
         // confirmation thresholds + emergency margins are not load-bearing.
