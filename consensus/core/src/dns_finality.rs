@@ -510,6 +510,15 @@ pub struct DnsState {
     /// so the RPC layer can echo it back to clients without
     /// recomputing.
     pub validator_set_commitment: Hash64,
+
+    /// kaspa-pq Phase 13 (ADR-0018 §C): read-only DNS-finality health for this anchor,
+    /// derived once per epoch by [`derive_dns_health`] over the same bounded StakeScore
+    /// window (`DisabledBeforeActivation` until the overlay reaches `Active`). Carried
+    /// here so `getDnsConfirmation` can surface it without re-walking the window. **Never**
+    /// a block-validity input — degraded health stalls the DNS-confirmed anchor only; PoW
+    /// confirmation and the base ledger are unaffected. Appended last to keep the borsh
+    /// layout change localized.
+    pub health: DnsHealth,
 }
 
 // ---------------------------------------------------------------------
@@ -711,6 +720,12 @@ pub struct DnsConfirmation {
     pub stake_reorg_risk_upper_bound: String,
     pub dns_reorg_risk_conservative_bound: String,
     pub note: String,
+
+    /// kaspa-pq Phase 13 (ADR-0018 §C): the DNS-finality health signal for `block_hash`
+    /// (mirrors [`DnsState::health`]). Read-only liveness — `DegradedStakeQualityLow` /
+    /// `DegradedCertificateCensored` mean the DNS-confirmed anchor has stopped advancing,
+    /// **not** that any block is invalid; `pow_confirmed` is unaffected. Appended last.
+    pub health: DnsHealth,
 }
 
 /// Per-epoch active-validator-set view surfaced by the consensus pipeline to the
@@ -2601,6 +2616,10 @@ pub fn aggregate_epoch_tallies(
 /// if there is no previous confirmation, `last_dns_confirmed_anchor`
 /// defaults to the zero `Hash64` — meaning "nothing confirmed yet", which
 /// the reorg gate treats as dormant (every candidate trivially includes it).
+///
+/// `health` is the per-epoch [`DnsHealth`] signal the caller derived for this anchor
+/// (via [`derive_dns_health`]); it is stored verbatim — a pure liveness annotation that
+/// never influences whether the anchor confirms.
 #[allow(clippy::too_many_arguments)]
 pub fn advance_dns_confirmation(
     prev: Option<&DnsState>,
@@ -2610,6 +2629,7 @@ pub fn advance_dns_confirmation(
     stake_depth: StakeScore,
     rollout_stage: DnsRolloutStage,
     validator_set_commitment: Hash64,
+    health: DnsHealth,
     required_work_depth: BlueWorkType,
     required_stake_depth: StakeScore,
 ) -> DnsState {
@@ -2630,6 +2650,7 @@ pub fn advance_dns_confirmation(
         last_dns_confirmed_anchor_daa_score,
         rollout_stage,
         validator_set_commitment,
+        health,
     }
 }
 
@@ -2719,7 +2740,11 @@ pub fn dns_confirmation_from_state(
         work_reorg_risk_upper_bound: "see ADR-0009 §Public-claim discipline".to_string(),
         stake_reorg_risk_upper_bound: "see ADR-0009 §Public-claim discipline".to_string(),
         dns_reorg_risk_conservative_bound: "see ADR-0009 §Public-claim discipline".to_string(),
-        note: format!("rollout_stage={:?}; pow_confirmed={pow_confirmed}; dns_confirmed={dns_confirmed}", state.rollout_stage),
+        note: format!(
+            "rollout_stage={:?}; health={:?}; pow_confirmed={pow_confirmed}; dns_confirmed={dns_confirmed}",
+            state.rollout_stage, state.health
+        ),
+        health: state.health,
     }
 }
 
@@ -3524,11 +3549,13 @@ mod tests {
             StakeScore(STAKE_SCORE_SCALE / 2),
             stage,
             vsc,
+            DnsHealth::Active,
             cw,
             cs,
         );
         assert_eq!(s1.selected_chain_anchor, a1);
         assert_eq!(s1.last_dns_confirmed_anchor, Hash64::default());
+        assert_eq!(s1.health, DnsHealth::Active); // stored verbatim, independent of confirmation
 
         // Both thresholds met -> last confirmed advances to this anchor.
         let a2 = Hash64::from_bytes([0x33; 64]);
@@ -3540,15 +3567,29 @@ mod tests {
             StakeScore(STAKE_SCORE_SCALE),
             stage,
             vsc,
+            DnsHealth::DegradedStakeQualityLow,
             cw,
             cs,
         );
         assert_eq!(s2.last_dns_confirmed_anchor, a2);
         assert_eq!(s2.last_dns_confirmed_anchor_daa_score, 600);
+        // Anchor confirms even while health is degraded — health never gates confirmation.
+        assert_eq!(s2.health, DnsHealth::DegradedStakeQualityLow);
 
         // Next anchor not confirmed -> carries s2's confirmed anchor forward.
         let a3 = Hash64::from_bytes([0x44; 64]);
-        let s3 = advance_dns_confirmation(Some(&s2), a3, 700, BlueWorkType::from_u64(2000), StakeScore(0), stage, vsc, cw, cs);
+        let s3 = advance_dns_confirmation(
+            Some(&s2),
+            a3,
+            700,
+            BlueWorkType::from_u64(2000),
+            StakeScore(0),
+            stage,
+            vsc,
+            DnsHealth::DisabledBeforeActivation,
+            cw,
+            cs,
+        );
         assert_eq!(s3.selected_chain_anchor, a3);
         assert_eq!(s3.last_dns_confirmed_anchor, a2);
         assert_eq!(s3.last_dns_confirmed_anchor_daa_score, 600);
@@ -3604,12 +3645,14 @@ mod tests {
             last_dns_confirmed_anchor_daa_score: 0,
             rollout_stage: DnsRolloutStage::Active,
             validator_set_commitment: Hash64::from_bytes([0x22; 64]),
+            health: DnsHealth::DegradedCertificateCensored,
         };
         // Both thresholds met -> pow + dns confirmed.
         let c = dns_confirmation_from_state(&state, BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE / 2));
         assert_eq!(c.block_hash, state.selected_chain_anchor);
         assert!(c.pow_confirmed && c.dns_confirmed);
         assert_eq!(c.rollout_stage, DnsRolloutStage::Active);
+        assert_eq!(c.health, DnsHealth::DegradedCertificateCensored); // surfaced verbatim from DnsState
         assert_eq!(c.required_work_depth, BlueWorkType::from_u64(1000));
 
         // Work met but stake below threshold -> pow only.
@@ -3671,6 +3714,7 @@ mod tests {
             stake_reorg_risk_upper_bound: "n/a".into(),
             dns_reorg_risk_conservative_bound: "n/a".into(),
             note: "Phase 10 stub".into(),
+            health: DnsHealth::DegradedStakeQualityLow,
         };
         let bytes = borsh::to_vec(&c).unwrap();
         let back: DnsConfirmation = borsh::from_slice(&bytes).unwrap();
@@ -3741,6 +3785,7 @@ mod tests {
             last_dns_confirmed_anchor_daa_score: 900,
             rollout_stage: DnsRolloutStage::Active,
             validator_set_commitment: Hash64::from_bytes([0x77u8; 64]),
+            health: DnsHealth::DegradedCertificateCensored,
         };
         let bytes = borsh::to_vec(&s).unwrap();
         let back: DnsState = borsh::from_slice(&bytes).unwrap();

@@ -62,7 +62,7 @@ impl DnsStateStore for DbDnsStateStore {
 mod tests {
     use super::*;
     use kaspa_consensus_core::BlueWorkType;
-    use kaspa_consensus_core::dns_finality::{DnsRolloutStage, StakeScore};
+    use kaspa_consensus_core::dns_finality::{DnsHealth, DnsRolloutStage, StakeScore};
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::ConnBuilder;
     use kaspa_hashes::Hash64;
@@ -78,6 +78,7 @@ mod tests {
             last_dns_confirmed_anchor_daa_score: 123_000,
             rollout_stage: DnsRolloutStage::Active,
             validator_set_commitment: Hash64::from_bytes([0x33; 64]),
+            health: DnsHealth::DegradedStakeQualityLow,
         }
     }
 
@@ -99,6 +100,7 @@ mod tests {
         s2.anchor_daa_score = 999;
         s2.stake_depth = StakeScore(0);
         s2.rollout_stage = DnsRolloutStage::Bootstrap;
+        s2.health = DnsHealth::Active;
         let mut batch = WriteBatch::default();
         store.set_batch(&mut batch, s2.clone()).unwrap();
         db.write(batch).unwrap();

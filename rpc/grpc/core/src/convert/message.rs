@@ -376,6 +376,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetDnsConfirmationResponse>, protowire::G
         stake_reorg_risk_upper_bound: item.stake_reorg_risk_upper_bound.clone(),
         dns_reorg_risk_conservative_bound: item.dns_reorg_risk_conservative_bound.clone(),
         note: item.note.clone(),
+        health: item.health,
         error: None,
     }
 });
@@ -938,6 +939,7 @@ try_from!(item: &protowire::GetDnsConfirmationResponseMessage, RpcResult<kaspa_r
         stake_reorg_risk_upper_bound: item.stake_reorg_risk_upper_bound.clone(),
         dns_reorg_risk_conservative_bound: item.dns_reorg_risk_conservative_bound.clone(),
         note: item.note.clone(),
+        health: item.health,
     }
 });
 

@@ -60,10 +60,10 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     config::genesis::GenesisBlock,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, AttestationContribution, BondMutation, BondStatus, DnsParams, DnsReorgInputs,
-        DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
-        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, check_dns_reorg_rule, compute_stake_score,
-        is_bond_active_at, stake_attestation_message, total_active_stake_by_epoch,
+        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, AttestationContribution, BondMutation, BondStatus, DnsParams,
+        DnsReorgInputs, DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation,
+        aggregate_epoch_tallies, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, check_dns_reorg_rule,
+        compute_stake_score, derive_dns_health, is_bond_active_at, stake_attestation_message, total_active_stake_by_epoch,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -905,9 +905,22 @@ impl VirtualStateProcessor {
         }
 
         let totals = total_active_stake_by_epoch(&bonds, &epoch_anchor_daa);
-        let stake_depth =
-            compute_stake_score(&aggregate_epoch_tallies(&contributions, &totals), dns_params.stake_event_quality_floor_bps);
+        let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
+        let stake_depth = compute_stake_score(&per_epoch, dns_params.stake_event_quality_floor_bps);
         let work_depth = self.ghostdag_store.get_blue_work(sink).unwrap_or_default();
+
+        // kaspa-pq Phase 13 (ADR-0018 §C): derive the read-only DnsHealth liveness signal
+        // from the same per-epoch tallies that fed the StakeScore. `overlay_active` iff the
+        // reorg gate is engaged (`Active`); in Bootstrap there is no DNS finality to judge,
+        // so health stays `DisabledBeforeActivation`. Purely a signal — never a
+        // block-validity input, so this is inert wherever the gate is dormant.
+        let health = derive_dns_health(
+            &per_epoch,
+            dns_params.stake_event_quality_floor_bps,
+            dns_params.stake_censorship_floor_bps,
+            dns_params.degraded_stake_quality_epochs,
+            rollout_stage == DnsRolloutStage::Active,
+        );
 
         let new_state = advance_dns_confirmation(
             prev_dns_state.as_ref(),
@@ -919,6 +932,7 @@ impl VirtualStateProcessor {
             // validator_set_commitment: ADR-0017 dropped the sortition committee, so the
             // StakeScore path binds no committee snapshot — this stays zero.
             BlockHash::default(),
+            health,
             dns_params.required_work_depth,
             dns_params.required_stake_depth,
         );

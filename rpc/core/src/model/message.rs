@@ -1486,6 +1486,11 @@ pub struct GetDnsConfirmationResponse {
     pub stake_reorg_risk_upper_bound: String,
     pub dns_reorg_risk_conservative_bound: String,
     pub note: String,
+    /// kaspa-pq Phase 13 (ADR-0018 §C): DnsHealth discriminant (0 = DisabledBeforeActivation,
+    /// 1 = Active, 2 = DegradedStakeQualityLow, 3 = DegradedCertificateCensored). A read-only
+    /// liveness signal — a degraded value means the DNS-confirmed anchor has stalled, never
+    /// that any block is invalid. `0` when `available` is false.
+    pub health: u32,
 }
 
 impl Serializer for GetDnsConfirmationResponse {
@@ -1505,6 +1510,7 @@ impl Serializer for GetDnsConfirmationResponse {
         store!(String, &self.stake_reorg_risk_upper_bound, writer)?;
         store!(String, &self.dns_reorg_risk_conservative_bound, writer)?;
         store!(String, &self.note, writer)?;
+        store!(u32, &self.health, writer)?;
         Ok(())
     }
 }
@@ -1526,6 +1532,7 @@ impl Deserializer for GetDnsConfirmationResponse {
         let stake_reorg_risk_upper_bound = load!(String, reader)?;
         let dns_reorg_risk_conservative_bound = load!(String, reader)?;
         let note = load!(String, reader)?;
+        let health = load!(u32, reader)?;
         Ok(Self {
             available,
             block_hash,
@@ -1541,6 +1548,7 @@ impl Deserializer for GetDnsConfirmationResponse {
             stake_reorg_risk_upper_bound,
             dns_reorg_risk_conservative_bound,
             note,
+            health,
         })
     }
 }

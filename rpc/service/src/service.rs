@@ -675,6 +675,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 stake_reorg_risk_upper_bound: c.stake_reorg_risk_upper_bound,
                 dns_reorg_risk_conservative_bound: c.dns_reorg_risk_conservative_bound,
                 note: c.note,
+                health: c.health as u32,
             },
             None => GetDnsConfirmationResponse::default(),
         })

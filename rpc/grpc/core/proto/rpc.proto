@@ -641,6 +641,9 @@ message GetDnsConfirmationResponseMessage {
   string stakeReorgRiskUpperBound = 12;
   string dnsReorgRiskConservativeBound = 13;
   string note = 14;
+  // kaspa-pq Phase 13 (ADR-0018 §C): DnsHealth discriminant (0=Disabled, 1=Active,
+  // 2=DegradedStakeQualityLow, 3=DegradedCertificateCensored). Read-only liveness signal.
+  uint32 health = 15;
 
   RPCError error = 1000;
 }
