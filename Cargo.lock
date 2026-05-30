@@ -3305,6 +3305,7 @@ dependencies = [
  "kaspa-rpc-core",
  "kaspa-wrpc-client",
  "log",
+ "rand 0.8.6",
  "tokio",
 ]
 

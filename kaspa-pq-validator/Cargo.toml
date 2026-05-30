@@ -24,6 +24,7 @@ kaspa-wrpc-client.workspace = true
 
 faster-hex.workspace = true
 log.workspace = true
+rand.workspace = true
 
 clap = { workspace = true, features = ["env"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal"] }
