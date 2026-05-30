@@ -545,10 +545,11 @@ mod pq_output_class_enforcement_tests {
         tv
     }
 
-    /// `OP_DUP OP_BLAKE2B OP_DATA32 <32B> OP_EQUALVERIFY OP_CHECKSIGMLDSA65` (37 bytes).
+    /// kaspa-pq ML-DSA-87 P2PKH (ADR-0019 §8):
+    /// `OP_DUP OP_BLAKE2B_512 OP_DATA64 <64B> OP_EQUALVERIFY OP_CHECKSIGMLDSA65` (69 bytes).
     fn pq_p2pkh_spk() -> ScriptPublicKey {
-        let mut s = vec![codes::OpDup, codes::OpBlake2b, codes::OpData32];
-        s.extend_from_slice(&[0u8; 32]);
+        let mut s = vec![codes::OpDup, codes::OpBlake2b512, codes::OpData64];
+        s.extend_from_slice(&[0u8; 64]);
         s.push(codes::OpEqualVerify);
         s.push(codes::OpCheckSigMlDsa65);
         ScriptPublicKey::new(0, s.into())

@@ -54,6 +54,10 @@ criterion.workspace = true
 bincode.workspace = true
 wasm-bindgen-test.workspace = true
 web-sys.workspace = true
+# kaspa-pq Phase 4b: deterministic ML-DSA-87 single-key premine generator
+# (config::premine::tests::gen_misaka_devnet_premine_key). Mirrors how
+# kaspa-txscript declares libcrux-ml-dsa for its ML-DSA test vectors.
+libcrux-ml-dsa.workspace = true
 
 [[bench]]
 name = "serde_benchmark"

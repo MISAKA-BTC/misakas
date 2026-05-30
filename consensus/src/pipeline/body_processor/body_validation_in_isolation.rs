@@ -138,6 +138,7 @@ mod tests {
         errors::RuleError,
         params::MAINNET_PARAMS,
     };
+    use kaspa_consensus_core::config::params::PqEnforcementMode;
     use kaspa_consensus_core::{
         BlockHash,
         api::{BlockValidationFutures, ConsensusApi},
@@ -156,7 +157,16 @@ mod tests {
     // construction.
     #[test]
     fn validate_body_in_isolation_test() {
-        let consensus = TestConsensus::new(&Config::new(MAINNET_PARAMS));
+        // kaspa-pq: this test exercises body-level isolation mechanics (merkle
+        // root, compute-mass limit, duplicate txs, coinbase position, double
+        // spend) using legacy upstream secp256k1 transaction fixtures. Run it
+        // with PQ enforcement Disabled so the §7 ML-DSA-only output-class rule
+        // (PR-19-S2) does not reject those legacy-shaped outputs — that rule has
+        // dedicated coverage in `pq_output_class_enforcement_tests`. (ADR-0019:
+        // Disabled = upstream-compatible.)
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        let consensus = TestConsensus::new(&Config::new(params));
         let wait_handles = consensus.init();
 
         let body_processor = consensus.block_body_processor();

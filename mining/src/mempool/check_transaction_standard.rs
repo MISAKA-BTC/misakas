@@ -17,14 +17,13 @@ const MAX_STANDARD_P2SH_SIG_OPS: u8 = 15;
 /// MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE is the maximum size allowed for a
 /// transaction input signature script to be considered standard.
 ///
-/// kaspa-pq PQ-only (ADR-0019 / docs/kaspa-pq-design-mldsa87.md §11.1): launch
-/// scope is ML-DSA-87 P2PKH only. The unlock script is
-///   OP_PUSHDATA2 <sig 4627B || sighash-type 1B> + OP_PUSHDATA2 <pubkey 2592B>
-///   = 3 + 4628 + 3 + 2592 = 7226 bytes.
-/// Kept at the fork's 16_384 in lockstep with the consensus cap MAX_SCRIPTS_SIZE
-/// (see its note); both tighten to the design target 10_000 in Phase 4 when the
-/// legacy secp256k1 / P2SH vectors are removed.
-const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 16_384;
+/// kaspa-pq (ML-DSA-87): a standard ML-DSA-87 P2PKH signature script holds a
+/// 4628-byte signature + 2592-byte public key (plus push opcodes) for a max
+/// standard unlock of ~7.3 KB, so the legacy 1,650-byte limit is far too
+/// small. Launch scope is ML-DSA-87 P2PKH only (ADR-0019 §11.1); multisig /
+/// P2SH is out of scope. Kept in lockstep with the 10_000 design cap in
+/// `kaspa_txscript::MAX_SCRIPTS_SIZE`.
+const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 10_000;
 
 /// MAXIMUM_STANDARD_TRANSACTION_MASS is the maximum mass allowed for transactions that
 /// are considered standard and will therefore be relayed and considered for mining.
