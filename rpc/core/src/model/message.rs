@@ -1646,6 +1646,77 @@ impl Deserializer for GetValidatorStatusResponse {
     }
 }
 
+// kaspa-pq Phase 12 (ADR-0011): getValidatorAttestationTarget. Given a stake-bond
+// outpoint ("txid_hex:index"), returns the exact ready-to-sign attestation message
+// (and its bound fields) the validator must ML-DSA-65-sign for the current sink — so
+// the `kaspa-pq-validator` sidecar can fetch the signing target over local wRPC.
+// `available` is false when the overlay is not configured or no target can be assembled.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetValidatorAttestationTargetRequest {
+    /// Stake-bond outpoint, "txid_hex:index" (txid is a 64-byte Hash64 = 128 hex chars).
+    pub bond_outpoint: String,
+}
+
+impl Serializer for GetValidatorAttestationTargetRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond_outpoint, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetValidatorAttestationTargetRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let bond_outpoint = load!(String, reader)?;
+        Ok(Self { bond_outpoint })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetValidatorAttestationTargetResponse {
+    /// False when the overlay is not configured or no target could be assembled; the
+    /// remaining fields are then defaults. (A malformed outpoint is a request error.)
+    pub available: bool,
+    pub epoch: u64,
+    /// Selected-chain anchor the attestation approves (Hash64, hex).
+    pub target_hash: String,
+    pub target_daa_score: u64,
+    /// Commitment over the active validator set (Hash64, hex).
+    pub validator_set_commitment: String,
+    /// The ready-to-sign 32-byte attestation message digest (hex). The sidecar signs
+    /// this with its ML-DSA-65 validator key under the attestation context.
+    pub message: String,
+}
+
+impl Serializer for GetValidatorAttestationTargetResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.epoch, writer)?;
+        store!(String, &self.target_hash, writer)?;
+        store!(u64, &self.target_daa_score, writer)?;
+        store!(String, &self.validator_set_commitment, writer)?;
+        store!(String, &self.message, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetValidatorAttestationTargetResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let available = load!(bool, reader)?;
+        let epoch = load!(u64, reader)?;
+        let target_hash = load!(String, reader)?;
+        let target_daa_score = load!(u64, reader)?;
+        let validator_set_commitment = load!(String, reader)?;
+        let message = load!(String, reader)?;
+        Ok(Self { available, epoch, target_hash, target_daa_score, validator_set_commitment, message })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetUtxosByAddressesRequest {

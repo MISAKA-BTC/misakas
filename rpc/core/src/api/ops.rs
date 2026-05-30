@@ -144,6 +144,8 @@ pub enum RpcApiOps {
     GetDnsConfirmation = 152,
     /// kaspa-pq Phase 11 (ADR-0010): in-process validator service status
     GetValidatorStatus = 153,
+    /// kaspa-pq Phase 12 (ADR-0011): ready-to-sign attestation target for a stake bond
+    GetValidatorAttestationTarget = 154,
 }
 
 impl RpcApiOps {

@@ -396,6 +396,25 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetValidatorStatusResponse::default())
     }
 
+    /// kaspa-pq Phase 12 (ADR-0011): the ready-to-sign attestation target for the given
+    /// stake-bond outpoint — the message the `kaspa-pq-validator` sidecar ML-DSA-65-signs.
+    async fn get_validator_attestation_target(
+        &self,
+        request: GetValidatorAttestationTargetRequest,
+    ) -> RpcResult<GetValidatorAttestationTargetResponse> {
+        self.get_validator_attestation_target_call(None, request).await
+    }
+    /// Default returns `available: false`, so non-server `RpcApi` impls inherit a no-op;
+    /// the node's core service overrides it.
+    async fn get_validator_attestation_target_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetValidatorAttestationTargetRequest,
+    ) -> RpcResult<GetValidatorAttestationTargetResponse> {
+        let _ = (connection, request);
+        Ok(GetValidatorAttestationTargetResponse::default())
+    }
+
     /// Bans the given ip.
     async fn ban(&self, ip: RpcIpAddress) -> RpcResult<()> {
         self.ban_call(None, BanRequest::new(ip)).await?;

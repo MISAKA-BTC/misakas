@@ -72,6 +72,7 @@ impl Router {
                 GetVirtualChainFromBlockV2,
                 GetDnsConfirmation,
                 GetValidatorStatus,
+                GetValidatorAttestationTarget,
                 ResolveFinalityConflict,
                 Shutdown,
                 SubmitBlock,

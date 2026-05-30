@@ -683,6 +683,41 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_validator_attestation_target_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetValidatorAttestationTargetRequest,
+    ) -> RpcResult<GetValidatorAttestationTargetResponse> {
+        // kaspa-pq Phase 12 (ADR-0011): assemble the ready-to-sign attestation target for
+        // `request.bond_outpoint` so the `kaspa-pq-validator` sidecar can fetch the signing
+        // message over local wRPC. A malformed outpoint is a request error; `available: false`
+        // when the overlay is not configured or no target could be assembled.
+        let (txid, index) = request
+            .bond_outpoint
+            .split_once(':')
+            .ok_or_else(|| RpcError::General(format!("bond outpoint '{}' must be 'txid_hex:index'", request.bond_outpoint)))?;
+        let transaction_id: kaspa_hashes::Hash64 = txid
+            .parse()
+            .map_err(|_| RpcError::General(format!("bond outpoint '{}' has an invalid 64-byte txid", request.bond_outpoint)))?;
+        let index: u32 = index
+            .parse()
+            .map_err(|_| RpcError::General(format!("bond outpoint '{}' has a non-numeric index", request.bond_outpoint)))?;
+        let bond_outpoint = kaspa_consensus_core::tx::TransactionOutpoint::new(transaction_id, index);
+
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(match session.async_get_validator_attestation_target(bond_outpoint).await {
+            Some(t) => GetValidatorAttestationTargetResponse {
+                available: true,
+                epoch: t.epoch,
+                target_hash: t.target_hash.to_string(),
+                target_daa_score: t.target_daa_score,
+                validator_set_commitment: t.validator_set_commitment.to_string(),
+                message: t.message.to_string(),
+            },
+            None => GetValidatorAttestationTargetResponse::default(),
+        })
+    }
+
     async fn get_virtual_chain_from_block_call(
         &self,
         _connection: Option<&DynRpcConnection>,
