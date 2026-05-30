@@ -1,0 +1,24 @@
+target
+web-root
+**/.idea/
+/rust-toolchain
+/.vscode/
+.zed
+**/db-*
+/testing/integration/testdata/dags_for_json_tests/goref-mainnet
+/testing/integration/testdata/dags_for_json_tests/goref-1.6M-tx-10K-blocks
+analyzer-target
+.DS_Store
+*.code-workspace
+/setup
+testing/integration/perflogs*
+Servers.toml
+release
+package-sizes.js
+rustbridge_*.log
+target/
+
+# kaspa-pq: devnet multisig key material (contains seed_hex private keys) — never commit
+misaka-devnet-multisig-keys.json
+**/misaka-devnet-multisig-keys.json
+crypto/txscript/misaka-devnet-multisig-keys.json

@@ -1,0 +1,29 @@
+[package]
+name = "kaspa-pq-miner"
+description = "kaspa-pq Layer 0 (BLAKE2b-512) CPU grinder / miner — get_block_template -> grind StateLayer0 nonce -> submit_block"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-addresses.workspace = true
+kaspa-bip32.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-core.workspace = true
+kaspa-grpc-client.workspace = true
+kaspa-wallet-keys.workspace = true
+kaspa-notify.workspace = true
+kaspa-pow.workspace = true
+kaspa-rpc-core.workspace = true
+
+clap.workspace = true
+log.workspace = true
+rayon.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,863 @@
+pub use super::{
+    bps::{Bps, TenBps},
+    constants::consensus::*,
+    genesis::{DEVNET_GENESIS, GENESIS, GenesisBlock, SIMNET_GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS},
+};
+use crate::{
+    BlockLevel, BlueWorkType, KType,
+    constants::STORAGE_MASS_PARAMETER,
+    dns_finality::{DnsParams, DnsReorgMode, FeeSplitParams, MAX_ATTESTATIONS_PER_SHARD, RewardParams, STAKE_SCORE_SCALE, StakeScore},
+    network::{NetworkId, NetworkType},
+};
+use kaspa_addresses::Prefix;
+use kaspa_math::Uint256;
+use serde::{Deserialize, Serialize};
+use std::{
+    cmp::min,
+    ops::{Deref, DerefMut},
+};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForkActivation(u64);
+
+impl ForkActivation {
+    const NEVER: u64 = u64::MAX;
+    const ALWAYS: u64 = 0;
+
+    pub const fn new(daa_score: u64) -> Self {
+        Self(daa_score)
+    }
+
+    pub const fn never() -> Self {
+        Self(Self::NEVER)
+    }
+
+    pub const fn always() -> Self {
+        Self(Self::ALWAYS)
+    }
+
+    /// Returns the actual DAA score triggering the activation. Should be used only
+    /// for cases where the explicit value is required for computations (e.g., coinbase subsidy).
+    /// Otherwise, **activation checks should always go through `self.is_active(..)`**
+    pub fn daa_score(self) -> u64 {
+        self.0
+    }
+
+    pub fn is_active(self, current_daa_score: u64) -> bool {
+        current_daa_score >= self.0
+    }
+
+    /// Checks if the fork was "recently" activated, i.e., in the time frame of the provided range.
+    /// This function returns false for forks that were always active, since they were never activated.
+    pub fn is_within_range_from_activation(self, current_daa_score: u64, range: u64) -> bool {
+        self != Self::always() && self.is_active(current_daa_score) && current_daa_score < self.0 + range
+    }
+
+    /// Checks if the fork is expected to be activated "soon", i.e., in the time frame of the provided range.
+    /// Returns the distance from activation if so, or `None` otherwise.  
+    pub fn is_within_range_before_activation(self, current_daa_score: u64, range: u64) -> Option<u64> {
+        if !self.is_active(current_daa_score) && current_daa_score + range > self.0 { Some(self.0 - current_daa_score) } else { None }
+    }
+}
+
+/// A consensus parameter which depends on forking activation
+#[derive(Clone, Copy, Debug)]
+pub struct ForkedParam<T: Copy> {
+    pre: T,
+    post: T,
+    activation: ForkActivation,
+}
+
+impl<T: Copy> ForkedParam<T> {
+    const fn new(pre: T, post: T, activation: ForkActivation) -> Self {
+        Self { pre, post, activation }
+    }
+
+    pub const fn new_const(val: T) -> Self {
+        Self { pre: val, post: val, activation: ForkActivation::never() }
+    }
+
+    pub fn activation(&self) -> ForkActivation {
+        self.activation
+    }
+
+    pub fn get(&self, daa_score: u64) -> T {
+        if self.activation.is_active(daa_score) { self.post } else { self.pre }
+    }
+
+    /// Returns the value before activation (=pre unless activation = always)
+    pub fn before(&self) -> T {
+        match self.activation.0 {
+            ForkActivation::ALWAYS => self.post,
+            _ => self.pre,
+        }
+    }
+
+    /// Returns the permanent long-term value after activation (=post unless the activation is never scheduled)
+    pub fn after(&self) -> T {
+        match self.activation.0 {
+            ForkActivation::NEVER => self.pre,
+            _ => self.post,
+        }
+    }
+
+    /// Maps the ForkedParam<T> to a new ForkedParam<U> by applying a map function on both pre and post
+    pub fn map<U: Copy, F: Fn(T) -> U>(&self, f: F) -> ForkedParam<U> {
+        ForkedParam::new(f(self.pre), f(self.post), self.activation)
+    }
+}
+
+impl<T: Copy + Ord> ForkedParam<T> {
+    /// Returns the min of `pre` and `post` values. Useful for non-consensus initializations
+    /// which require knowledge of the value bounds.
+    ///
+    /// Note that if activation is not scheduled (set to never) then pre is always returned,
+    /// and if activation is set to always (since inception), post will be returned.
+    pub fn lower_bound(&self) -> T {
+        match self.activation.0 {
+            ForkActivation::NEVER => self.pre,
+            ForkActivation::ALWAYS => self.post,
+            _ => self.pre.min(self.post),
+        }
+    }
+
+    /// Returns the max of `pre` and `post` values. Useful for non-consensus initializations
+    /// which require knowledge of the value bounds.
+    ///
+    /// Note that if activation is not scheduled (set to never) then pre is always returned,
+    /// and if activation is set to always (since inception), post will be returned.
+    pub fn upper_bound(&self) -> T {
+        match self.activation.0 {
+            ForkActivation::NEVER => self.pre,
+            ForkActivation::ALWAYS => self.post,
+            _ => self.pre.max(self.post),
+        }
+    }
+}
+
+/// Blockrate-related consensus params.
+/// Grouped together under a single struct because they are logically related and
+/// in order to easily support **future BPS acceleration hardforks** (by simply adding
+/// a forked instance of blockrate params to the main [`Params`]).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BlockrateParams {
+    pub target_time_per_block: u64, // (milliseconds)
+    pub ghostdag_k: KType,
+    pub past_median_time_sample_rate: u64,
+    pub difficulty_sample_rate: u64,
+    pub max_block_parents: u8,
+    pub mergeset_size_limit: u64,
+    pub merge_depth: u64,
+    pub finality_depth: u64,
+    pub pruning_depth: u64,
+    pub coinbase_maturity: u64,
+}
+
+impl BlockrateParams {
+    pub const fn new<const BPS: u64>() -> Self {
+        Self {
+            target_time_per_block: Bps::<BPS>::target_time_per_block(),
+            ghostdag_k: Bps::<BPS>::ghostdag_k(),
+            past_median_time_sample_rate: Bps::<BPS>::past_median_time_sample_rate(),
+            difficulty_sample_rate: Bps::<BPS>::difficulty_adjustment_sample_rate(),
+            max_block_parents: Bps::<BPS>::max_block_parents(),
+            mergeset_size_limit: Bps::<BPS>::mergeset_size_limit(),
+            merge_depth: Bps::<BPS>::merge_depth_bound(),
+            finality_depth: Bps::<BPS>::finality_depth(),
+            pruning_depth: Bps::<BPS>::pruning_depth(),
+            coinbase_maturity: Bps::<BPS>::coinbase_maturity(),
+        }
+    }
+
+    pub const fn increase_max_block_parents(mut self, max_block_parents: u8) -> Self {
+        if self.max_block_parents < max_block_parents {
+            self.max_block_parents = max_block_parents;
+        }
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OverrideParams {
+    /// Timestamp deviation tolerance (in seconds)
+    pub timestamp_deviation_tolerance: Option<u64>,
+
+    /// Size of the sampled block window that is used to calculate the past median time of each block
+    pub past_median_time_window_size: Option<usize>,
+
+    /// Size of the sampled block window that is used to calculate the required difficulty of each block
+    pub difficulty_window_size: Option<usize>,
+
+    /// The minimum size a difficulty window (full or sampled) must have to trigger a DAA calculation
+    pub min_difficulty_window_size: Option<usize>,
+
+    pub coinbase_payload_script_public_key_max_len: Option<u8>,
+    pub max_coinbase_payload_len: Option<usize>,
+
+    pub max_tx_inputs: Option<usize>,
+    pub max_tx_outputs: Option<usize>,
+    pub max_signature_script_len: Option<usize>,
+    pub max_script_public_key_len: Option<usize>,
+    pub mass_per_tx_byte: Option<u64>,
+    pub mass_per_script_pub_key_byte: Option<u64>,
+    pub mass_per_sig_op: Option<u64>,
+    pub max_block_mass: Option<u64>,
+
+    /// The parameter for scaling inverse KAS value to mass units (KIP-0009)
+    pub storage_mass_parameter: Option<u64>,
+
+    /// DAA score after which the pre-deflationary period switches to the deflationary period
+    pub deflationary_phase_daa_score: Option<u64>,
+
+    pub pre_deflationary_phase_base_subsidy: Option<u64>,
+    pub skip_proof_of_work: Option<bool>,
+    pub max_block_level: Option<BlockLevel>,
+    pub pruning_proof_m: Option<u64>,
+
+    /// Blockrate-related params
+    pub blockrate: Option<BlockrateParams>,
+
+    /// Target time per block prior to the crescendo hardfork (in milliseconds)
+    pub pre_crescendo_target_time_per_block: Option<u64>,
+
+    /// Crescendo activation DAA score
+    pub crescendo_activation: Option<ForkActivation>,
+}
+
+impl From<Params> for OverrideParams {
+    fn from(p: Params) -> Self {
+        Self {
+            timestamp_deviation_tolerance: Some(p.timestamp_deviation_tolerance),
+            pre_crescendo_target_time_per_block: Some(p.pre_crescendo_target_time_per_block),
+            difficulty_window_size: Some(p.difficulty_window_size),
+            past_median_time_window_size: Some(p.past_median_time_window_size),
+            min_difficulty_window_size: Some(p.min_difficulty_window_size),
+            coinbase_payload_script_public_key_max_len: Some(p.coinbase_payload_script_public_key_max_len),
+            max_coinbase_payload_len: Some(p.max_coinbase_payload_len),
+            max_tx_inputs: Some(p.max_tx_inputs),
+            max_tx_outputs: Some(p.max_tx_outputs),
+            max_signature_script_len: Some(p.max_signature_script_len),
+            max_script_public_key_len: Some(p.max_script_public_key_len),
+            mass_per_tx_byte: Some(p.mass_per_tx_byte),
+            mass_per_script_pub_key_byte: Some(p.mass_per_script_pub_key_byte),
+            mass_per_sig_op: Some(p.mass_per_sig_op),
+            max_block_mass: Some(p.max_block_mass),
+            storage_mass_parameter: Some(p.storage_mass_parameter),
+            deflationary_phase_daa_score: Some(p.deflationary_phase_daa_score),
+            pre_deflationary_phase_base_subsidy: Some(p.pre_deflationary_phase_base_subsidy),
+            skip_proof_of_work: Some(p.skip_proof_of_work),
+            max_block_level: Some(p.max_block_level),
+            pruning_proof_m: Some(p.pruning_proof_m),
+            blockrate: Some(p.blockrate),
+            crescendo_activation: Some(p.crescendo_activation),
+        }
+    }
+}
+
+/// Consensus parameters. Contains settings and configurations which are consensus-sensitive.
+/// Changing one of these on a network node would exclude and prevent it from reaching consensus
+/// with the other unmodified nodes.
+#[derive(Clone, Debug)]
+pub struct Params {
+    pub dns_seeders: &'static [&'static str],
+    pub net: NetworkId,
+    pub genesis: GenesisBlock,
+
+    /// Timestamp deviation tolerance (in seconds)
+    pub timestamp_deviation_tolerance: u64,
+
+    /// Defines the highest allowed proof of work difficulty value for a block as a [`Uint256`]
+    pub max_difficulty_target: Uint256,
+
+    /// Highest allowed proof of work difficulty as a floating number
+    pub max_difficulty_target_f64: f64,
+
+    /// Size of the sampled block window that is used to calculate the past median time of each block
+    pub past_median_time_window_size: usize,
+
+    /// Size of the sampled block window that is used to calculate the required difficulty of each block
+    pub difficulty_window_size: usize,
+
+    /// The minimum size a difficulty window must have to trigger a DAA calculation
+    pub min_difficulty_window_size: usize,
+
+    pub coinbase_payload_script_public_key_max_len: u8,
+    pub max_coinbase_payload_len: usize,
+
+    pub max_tx_inputs: usize,
+    pub max_tx_outputs: usize,
+    pub max_signature_script_len: usize,
+    pub max_script_public_key_len: usize,
+
+    pub mass_per_tx_byte: u64,
+    pub mass_per_script_pub_key_byte: u64,
+    pub mass_per_sig_op: u64,
+    pub max_block_mass: u64,
+
+    /// The parameter for scaling inverse KAS value to mass units (KIP-0009)
+    pub storage_mass_parameter: u64,
+
+    /// DAA score after which the pre-deflationary period switches to the deflationary period
+    pub deflationary_phase_daa_score: u64,
+
+    pub pre_deflationary_phase_base_subsidy: u64,
+    pub skip_proof_of_work: bool,
+    pub max_block_level: BlockLevel,
+    pub pruning_proof_m: u64,
+
+    /// Blockrate-related params
+    pub blockrate: BlockrateParams,
+
+    /// Target time per block prior to the crescendo hardfork (in milliseconds).
+    /// Required permanently in order to calculate the subsidy month from the current DAA score
+    pub pre_crescendo_target_time_per_block: u64,
+
+    /// Crescendo activation DAA score
+    pub crescendo_activation: ForkActivation,
+
+    /// kaspa-pq Phase 10 (ADR-0009): DNS finality overlay parameters, or
+    /// `None` when the overlay is not configured for this network. `None`
+    /// on every current network — the overlay's consensus effects
+    /// (bond population, reorg gate) are guarded by `dns_params.is_some()`
+    /// and are therefore fully inert until a network opts in.
+    pub dns_params: Option<DnsParams>,
+}
+
+impl Params {
+    /// Returns the past median time sample rate
+    #[inline]
+    #[must_use]
+    pub fn past_median_time_sample_rate(&self) -> u64 {
+        self.blockrate.past_median_time_sample_rate
+    }
+
+    /// Returns the difficulty sample rate
+    #[inline]
+    #[must_use]
+    pub fn difficulty_sample_rate(&self) -> u64 {
+        self.blockrate.difficulty_sample_rate
+    }
+
+    /// Returns the target time per block
+    #[inline]
+    #[must_use]
+    pub fn target_time_per_block(&self) -> u64 {
+        self.blockrate.target_time_per_block
+    }
+
+    /// Returns the expected number of blocks per second
+    #[inline]
+    #[must_use]
+    pub fn bps(&self) -> u64 {
+        1000 / self.blockrate.target_time_per_block
+    }
+
+    /// Returns the expected number of blocks per second throughout history (currently represented as [`ForkedParam`]).
+    /// Required permanently in order to calculate the subsidy month from the current DAA score.
+    #[inline]
+    #[must_use]
+    pub fn bps_history(&self) -> ForkedParam<u64> {
+        ForkedParam::new(
+            1000 / self.pre_crescendo_target_time_per_block,
+            1000 / self.blockrate.target_time_per_block,
+            self.crescendo_activation,
+        )
+    }
+
+    pub fn ghostdag_k(&self) -> KType {
+        self.blockrate.ghostdag_k
+    }
+
+    pub fn max_block_parents(&self) -> u8 {
+        self.blockrate.max_block_parents
+    }
+
+    pub fn mergeset_size_limit(&self) -> u64 {
+        self.blockrate.mergeset_size_limit
+    }
+
+    pub fn merge_depth(&self) -> u64 {
+        self.blockrate.merge_depth
+    }
+
+    pub fn finality_depth(&self) -> u64 {
+        self.blockrate.finality_depth
+    }
+
+    pub fn pruning_depth(&self) -> u64 {
+        self.blockrate.pruning_depth
+    }
+
+    pub fn coinbase_maturity(&self) -> u64 {
+        self.blockrate.coinbase_maturity
+    }
+
+    pub fn finality_duration_in_milliseconds(&self) -> u64 {
+        self.blockrate.target_time_per_block * self.blockrate.finality_depth
+    }
+
+    pub fn difficulty_window_duration_in_block_units(&self) -> u64 {
+        self.blockrate.difficulty_sample_rate * self.difficulty_window_size as u64
+    }
+
+    pub fn expected_difficulty_window_duration_in_milliseconds(&self) -> u64 {
+        self.blockrate.target_time_per_block * self.blockrate.difficulty_sample_rate * self.difficulty_window_size as u64
+    }
+
+    /// Returns the depth at which the anticone of a chain block is final (i.e., is a permanently closed set).
+    /// Based on the analysis at <https://github.com/kaspanet/docs/blob/main/Reference/prunality/Prunality.pdf>
+    /// and on the decomposition of merge depth (rule R-I therein) from finality depth (φ)
+    pub fn anticone_finalization_depth(&self) -> u64 {
+        let anticone_finalization_depth = self.blockrate.finality_depth
+            + self.blockrate.merge_depth
+            + 4 * self.blockrate.mergeset_size_limit * self.blockrate.ghostdag_k as u64
+            + 2 * self.blockrate.ghostdag_k as u64
+            + 2;
+
+        // In mainnet it's guaranteed that `self.pruning_depth` is greater
+        // than `anticone_finalization_depth`, but for some tests we use
+        // a smaller (unsafe) pruning depth, so we return the minimum of
+        // the two to avoid a situation where a block can be pruned and
+        // not finalized.
+        min(self.blockrate.pruning_depth, anticone_finalization_depth)
+    }
+
+    pub fn network_name(&self) -> String {
+        self.net.to_prefixed()
+    }
+
+    pub fn prefix(&self) -> Prefix {
+        self.net.into()
+    }
+
+    pub fn default_p2p_port(&self) -> u16 {
+        self.net.default_p2p_port()
+    }
+
+    pub fn default_rpc_port(&self) -> u16 {
+        self.net.default_rpc_port()
+    }
+
+    pub fn override_params(self, overrides: OverrideParams) -> Self {
+        Self {
+            dns_seeders: self.dns_seeders,
+            net: self.net,
+            genesis: self.genesis.clone(),
+
+            timestamp_deviation_tolerance: overrides.timestamp_deviation_tolerance.unwrap_or(self.timestamp_deviation_tolerance),
+
+            max_difficulty_target: self.max_difficulty_target,
+            max_difficulty_target_f64: self.max_difficulty_target_f64,
+
+            difficulty_window_size: overrides.difficulty_window_size.unwrap_or(self.difficulty_window_size),
+            past_median_time_window_size: overrides.past_median_time_window_size.unwrap_or(self.past_median_time_window_size),
+            min_difficulty_window_size: overrides.min_difficulty_window_size.unwrap_or(self.min_difficulty_window_size),
+
+            coinbase_payload_script_public_key_max_len: overrides
+                .coinbase_payload_script_public_key_max_len
+                .unwrap_or(self.coinbase_payload_script_public_key_max_len),
+
+            max_coinbase_payload_len: overrides.max_coinbase_payload_len.unwrap_or(self.max_coinbase_payload_len),
+
+            max_tx_inputs: overrides.max_tx_inputs.unwrap_or(self.max_tx_inputs),
+            max_tx_outputs: overrides.max_tx_outputs.unwrap_or(self.max_tx_outputs),
+            max_signature_script_len: overrides.max_signature_script_len.unwrap_or(self.max_signature_script_len),
+            max_script_public_key_len: overrides.max_script_public_key_len.unwrap_or(self.max_script_public_key_len),
+            mass_per_tx_byte: overrides.mass_per_tx_byte.unwrap_or(self.mass_per_tx_byte),
+            mass_per_script_pub_key_byte: overrides.mass_per_script_pub_key_byte.unwrap_or(self.mass_per_script_pub_key_byte),
+            mass_per_sig_op: overrides.mass_per_sig_op.unwrap_or(self.mass_per_sig_op),
+            max_block_mass: overrides.max_block_mass.unwrap_or(self.max_block_mass),
+
+            storage_mass_parameter: overrides.storage_mass_parameter.unwrap_or(self.storage_mass_parameter),
+
+            deflationary_phase_daa_score: overrides.deflationary_phase_daa_score.unwrap_or(self.deflationary_phase_daa_score),
+
+            pre_deflationary_phase_base_subsidy: overrides
+                .pre_deflationary_phase_base_subsidy
+                .unwrap_or(self.pre_deflationary_phase_base_subsidy),
+
+            skip_proof_of_work: overrides.skip_proof_of_work.unwrap_or(self.skip_proof_of_work),
+
+            max_block_level: overrides.max_block_level.unwrap_or(self.max_block_level),
+
+            pruning_proof_m: overrides.pruning_proof_m.unwrap_or(self.pruning_proof_m),
+
+            blockrate: overrides.blockrate.clone().unwrap_or(self.blockrate.clone()),
+
+            pre_crescendo_target_time_per_block: overrides
+                .pre_crescendo_target_time_per_block
+                .unwrap_or(self.pre_crescendo_target_time_per_block),
+
+            crescendo_activation: overrides.crescendo_activation.unwrap_or(self.crescendo_activation),
+
+            // kaspa-pq DNS overlay params are not CLI-overridable; carried as-is.
+            dns_params: self.dns_params,
+        }
+    }
+}
+
+impl Deref for Params {
+    type Target = BlockrateParams;
+
+    fn deref(&self) -> &Self::Target {
+        &self.blockrate
+    }
+}
+
+impl DerefMut for Params {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.blockrate
+    }
+}
+
+impl From<NetworkType> for Params {
+    fn from(value: NetworkType) -> Self {
+        match value {
+            NetworkType::Mainnet => MAINNET_PARAMS,
+            NetworkType::Testnet => TESTNET_PARAMS,
+            NetworkType::Devnet => DEVNET_PARAMS,
+            NetworkType::Simnet => SIMNET_PARAMS,
+        }
+    }
+}
+
+impl From<NetworkId> for Params {
+    fn from(value: NetworkId) -> Self {
+        match value.network_type {
+            NetworkType::Mainnet => MAINNET_PARAMS,
+            NetworkType::Testnet => match value.suffix {
+                Some(10) => TESTNET_PARAMS,
+                Some(x) => panic!("Testnet suffix {} is not supported", x),
+                None => panic!("Testnet suffix not provided"),
+            },
+            NetworkType::Devnet => DEVNET_PARAMS,
+            NetworkType::Simnet => SIMNET_PARAMS,
+        }
+    }
+}
+
+pub const MAINNET_PARAMS: Params = Params {
+    // kaspa-pq mainnet has no mainline-Kaspa-style DNS seeders. Upstream
+    // Kaspa seeds are deliberately removed to enforce network isolation
+    // (see docs/adr/0001-network-isolation.md). Operator-supplied seeds
+    // can be added by editing this list or by passing addnode flags.
+    dns_seeders: &[],
+    net: NetworkId::new(NetworkType::Mainnet),
+    genesis: GENESIS,
+    timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
+    max_difficulty_target: MAX_DIFFICULTY_TARGET,
+    max_difficulty_target_f64: MAX_DIFFICULTY_TARGET_AS_F64,
+    past_median_time_window_size: MEDIAN_TIME_SAMPLED_WINDOW_SIZE as usize,
+    difficulty_window_size: DIFFICULTY_SAMPLED_WINDOW_SIZE as usize,
+    min_difficulty_window_size: MIN_DIFFICULTY_WINDOW_SIZE,
+    coinbase_payload_script_public_key_max_len: 150,
+    max_coinbase_payload_len: 204,
+
+    // Limit the cost of calculating compute/transient/storage masses
+    max_tx_inputs: 1000,
+    max_tx_outputs: 1000,
+    // Transient mass enforces a limit of 125Kb, however script engine max scripts size is 10Kb so there's no point in surpassing that.
+    max_signature_script_len: 10_000,
+    // Compute mass enforces a limit of ~45.5Kb, however script engine max scripts size is 10Kb so there's no point in surpassing that.
+    // Note that storage mass will kick in and gradually penalize also for lower lengths (generalized KIP-0009, plurality will be high).
+    max_script_public_key_len: 10_000,
+
+    mass_per_tx_byte: 1,
+    mass_per_script_pub_key_byte: 10,
+    // kaspa-pq Phase 6 + Phase 6 reinforcement:
+    //   Schnorr verify (secp256k1):            12.71 µs
+    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
+    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    //
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
+    // value is calibrated against the slowest variant so that no-SIMD
+    // low-end reference platforms remain safely budgeted:
+    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
+    mass_per_sig_op: 6000,
+    max_block_mass: 500_000,
+
+    storage_mass_parameter: STORAGE_MASS_PARAMETER,
+
+    // kaspa-pq emission: there is no flat pre-deflationary phase — the decay
+    // table in `SUBSIDY_BY_MONTH_TABLE` (15B over 20 years at 5%/yr) applies from
+    // genesis, so `deflationary_phase_daa_score` is 0. That makes
+    // `pre_deflationary_phase_base_subsidy` unused by `calc_block_subsidy`; it is
+    // kept equal to the year-1 per-block subsidy at 10 BPS (table[0].div_ceil(10)
+    // = 370_468_345 sompi ≈ 3.70468 KAS) so callers reading it see the genesis rate.
+    deflationary_phase_daa_score: 0,
+    pre_deflationary_phase_base_subsidy: 370468345,
+    skip_proof_of_work: false,
+    max_block_level: 225,
+    pruning_proof_m: 1000,
+
+    blockrate: BlockrateParams::new::<10>(),
+
+    // kaspa-pq: 10 BPS since genesis. This field only feeds the subsidy-month
+    // calc (`bps_history`); setting it to 100ms keeps emission on the 10 BPS
+    // schedule throughout, independent of the (legacy) crescendo activation score.
+    pre_crescendo_target_time_per_block: 100,
+
+    // Roughly 2025-05-05 1500 UTC
+    crescendo_activation: ForkActivation::new(110_165_000),
+    dns_params: None,
+};
+
+pub const TESTNET_PARAMS: Params = Params {
+    // kaspa-pq testnet inherits the same isolation rationale as mainnet —
+    // operator-supplied seeds only. See docs/adr/0001-network-isolation.md.
+    dns_seeders: &[],
+    net: NetworkId::with_suffix(NetworkType::Testnet, 10),
+    genesis: TESTNET_GENESIS,
+    timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
+    max_difficulty_target: MAX_DIFFICULTY_TARGET,
+    max_difficulty_target_f64: MAX_DIFFICULTY_TARGET_AS_F64,
+    past_median_time_window_size: MEDIAN_TIME_SAMPLED_WINDOW_SIZE as usize,
+    difficulty_window_size: DIFFICULTY_SAMPLED_WINDOW_SIZE as usize,
+    min_difficulty_window_size: MIN_DIFFICULTY_WINDOW_SIZE,
+    coinbase_payload_script_public_key_max_len: 150,
+    max_coinbase_payload_len: 204,
+
+    // Limit the cost of calculating compute/transient/storage masses
+    max_tx_inputs: 1000,
+    max_tx_outputs: 1000,
+    // Transient mass enforces a limit of 125Kb, however script engine max scripts size is 10Kb so there's no point in surpassing that.
+    max_signature_script_len: 10_000,
+    // Compute mass enforces a limit of ~45.5Kb, however script engine max scripts size is 10Kb so there's no point in surpassing that.
+    // Note that storage mass will kick in and gradually penalize also for lower lengths (generalized KIP-0009, plurality will be high).
+    max_script_public_key_len: 10_000,
+
+    mass_per_tx_byte: 1,
+    mass_per_script_pub_key_byte: 10,
+    // kaspa-pq Phase 6 + Phase 6 reinforcement:
+    //   Schnorr verify (secp256k1):            12.71 µs
+    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
+    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    //
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
+    // value is calibrated against the slowest variant so that no-SIMD
+    // low-end reference platforms remain safely budgeted:
+    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
+    mass_per_sig_op: 6000,
+    max_block_mass: 500_000,
+
+    storage_mass_parameter: STORAGE_MASS_PARAMETER,
+    // kaspa-pq emission: there is no flat pre-deflationary phase — the decay
+    // table in `SUBSIDY_BY_MONTH_TABLE` (15B over 20 years at 5%/yr) applies from
+    // genesis, so `deflationary_phase_daa_score` is 0. That makes
+    // `pre_deflationary_phase_base_subsidy` unused by `calc_block_subsidy`; it is
+    // kept equal to the year-1 per-block subsidy at 10 BPS (table[0].div_ceil(10)
+    // = 370_468_345 sompi ≈ 3.70468 KAS) so callers reading it see the genesis rate.
+    deflationary_phase_daa_score: 0,
+    pre_deflationary_phase_base_subsidy: 370468345,
+    skip_proof_of_work: false,
+    max_block_level: 250,
+    pruning_proof_m: 1000,
+
+    blockrate: BlockrateParams::new::<10>(),
+
+    // kaspa-pq: 10 BPS since genesis. This field only feeds the subsidy-month
+    // calc (`bps_history`); setting it to 100ms keeps emission on the 10 BPS
+    // schedule throughout, independent of the (legacy) crescendo activation score.
+    pre_crescendo_target_time_per_block: 100,
+
+    // 18:30 UTC, March 6, 2025
+    crescendo_activation: ForkActivation::new(88_657_000),
+    dns_params: None,
+};
+
+pub const SIMNET_PARAMS: Params = Params {
+    dns_seeders: &[],
+    net: NetworkId::new(NetworkType::Simnet),
+    genesis: SIMNET_GENESIS,
+    timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
+    max_difficulty_target: MAX_DIFFICULTY_TARGET,
+    max_difficulty_target_f64: MAX_DIFFICULTY_TARGET_AS_F64,
+    past_median_time_window_size: MEDIAN_TIME_SAMPLED_WINDOW_SIZE as usize,
+    difficulty_window_size: DIFFICULTY_SAMPLED_WINDOW_SIZE as usize,
+    min_difficulty_window_size: MIN_DIFFICULTY_WINDOW_SIZE,
+
+    // kaspa-pq emission: decay table applies from genesis (see MAINNET_PARAMS).
+    deflationary_phase_daa_score: 0,
+    pre_deflationary_phase_base_subsidy: 370468345,
+    coinbase_payload_script_public_key_max_len: 150,
+    max_coinbase_payload_len: 204,
+
+    max_tx_inputs: 1000,
+    max_tx_outputs: 1000,
+    max_signature_script_len: 10_000,
+    max_script_public_key_len: 10_000,
+
+    mass_per_tx_byte: 1,
+    mass_per_script_pub_key_byte: 10,
+    // kaspa-pq Phase 6 + Phase 6 reinforcement:
+    //   Schnorr verify (secp256k1):            12.71 µs
+    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
+    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    //
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
+    // value is calibrated against the slowest variant so that no-SIMD
+    // low-end reference platforms remain safely budgeted:
+    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
+    mass_per_sig_op: 6000,
+    max_block_mass: 500_000,
+
+    storage_mass_parameter: STORAGE_MASS_PARAMETER,
+
+    skip_proof_of_work: true, // For simnet only, PoW can be simulated by default
+    max_block_level: 250,
+    pruning_proof_m: PRUNING_PROOF_M,
+
+    // For simnet, we deviate from default 10BPS configuration and allow at least 64 parents in order to support mempool benchmarks out of the box
+    blockrate: BlockrateParams::new::<10>().increase_max_block_parents(64),
+
+    pre_crescendo_target_time_per_block: TenBps::target_time_per_block(),
+
+    crescendo_activation: ForkActivation::always(),
+    dns_params: None,
+};
+
+pub const DEVNET_PARAMS: Params = Params {
+    dns_seeders: &[],
+    net: NetworkId::new(NetworkType::Devnet),
+    genesis: DEVNET_GENESIS,
+    timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
+    max_difficulty_target: MAX_DIFFICULTY_TARGET,
+    max_difficulty_target_f64: MAX_DIFFICULTY_TARGET_AS_F64,
+    past_median_time_window_size: MEDIAN_TIME_SAMPLED_WINDOW_SIZE as usize,
+    difficulty_window_size: DIFFICULTY_SAMPLED_WINDOW_SIZE as usize,
+    min_difficulty_window_size: MIN_DIFFICULTY_WINDOW_SIZE,
+    coinbase_payload_script_public_key_max_len: 150,
+    max_coinbase_payload_len: 204,
+
+    max_tx_inputs: 1000,
+    max_tx_outputs: 1000,
+    max_signature_script_len: 10_000,
+    max_script_public_key_len: 10_000,
+
+    mass_per_tx_byte: 1,
+    mass_per_script_pub_key_byte: 10,
+    // kaspa-pq Phase 6 + Phase 6 reinforcement:
+    //   Schnorr verify (secp256k1):            12.71 µs
+    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
+    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    //
+    // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
+    // value is calibrated against the slowest variant so that no-SIMD
+    // low-end reference platforms remain safely budgeted:
+    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
+    mass_per_sig_op: 6000,
+    max_block_mass: 500_000,
+
+    storage_mass_parameter: STORAGE_MASS_PARAMETER,
+
+    // kaspa-pq emission: decay table applies from genesis (see MAINNET_PARAMS).
+    deflationary_phase_daa_score: 0,
+    pre_deflationary_phase_base_subsidy: 370468345,
+    skip_proof_of_work: false,
+    max_block_level: 250,
+    pruning_proof_m: 1000,
+
+    blockrate: BlockrateParams::new::<10>(),
+
+    pre_crescendo_target_time_per_block: 100,
+
+    crescendo_activation: ForkActivation::always(),
+    // kaspa-pq Phase 10 (ADR-0009): devnet DNS overlay config — VISIBILITY ONLY.
+    // `dns_activation_daa_score = u64::MAX` keeps the rollout stage below `Active`
+    // permanently, so the reorg gate stays dormant; the overlay only populates
+    // bonds + computes the per-epoch StakeScore into DnsState for
+    // `getDnsConfirmation`. Small epoch/window keep the PR-10.11-throttled
+    // aggregation walk cheap on the ~10 bps devnet (amortized O(1) per block).
+    dns_params: Some(DnsParams {
+        // kaspa-pq DEVNET LIVE ACTIVATION (experimental): the DNS-overlay reward
+        // economics are ACTIVE from genesis on devnet so a real bond → attestation →
+        // reward-bearing coinbase can be observed. `0` makes the §F carve + §E/§D reward
+        // path load-bearing here (mainnet/testnet/simnet keep `dns_params: None`, so they
+        // are unaffected). No minimum validator count / stake: a single self-bonded
+        // validator earns. NOTE: rewards do NOT depend on `min_active_*` (those only flip
+        // `rollout_stage` → Active, which engages DnsHealth + the reorg gate once StakeScore
+        // confirms); the per-block §E reward fires on `daa >= dns_activation_daa_score` alone.
+        dns_activation_daa_score: 0,
+        min_active_stake_sompi: 0,
+        min_active_validators: 1,
+        epoch_length_blocks: 100,
+        // ZERO (const-constructible): on devnet the gate is dormant, so the
+        // confirmation thresholds + emergency margins are not load-bearing.
+        // required_work_depth = 0 ⇒ pow_confirmed is always true in the RPC view.
+        required_work_depth: BlueWorkType::ZERO,
+        required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
+        emergency_work_margin: BlueWorkType::ZERO,
+        emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
+        max_reorg_horizon_blocks: 300,
+        evidence_window_blocks: 300,
+        unbonding_period_blocks: 700, // > R + E
+        max_attestations_per_block: MAX_ATTESTATIONS_PER_SHARD as u16,
+        max_attestation_shard_mass: 50_000,
+        // 6 epochs of recency/uniqueness window (epoch_length 100 × 6). Not
+        // load-bearing while the gate is dormant.
+        reward_uniqueness_window_blocks: 600,
+        // ADR-0018 §B: 0.60 stake-event quality floor. Visibility-only on devnet (the
+        // reorg gate is dormant at dns_activation = u64::MAX).
+        stake_event_quality_floor_bps: 6000,
+        // ADR-0018 §C: health degrades after 4 consecutive sub-φS epochs; < 0.10 inclusion
+        // reads as censorship rather than low participation.
+        degraded_stake_quality_epochs: 4,
+        stake_censorship_floor_bps: 1000,
+        // ADR-0013 reward track — NOT load-bearing on devnet (the
+        // dns_activation gate is u64::MAX, so the coinbase fan-out
+        // never fires). Values are placeholders chosen so the cap
+        // never bites under correct params: cap == reward ×
+        // max_attestations_per_block.
+        reward_params: RewardParams {
+            per_attestation_reward_sompi: 100_000_000,
+            slashing_reporter_reward_bps: 1000,
+            max_validator_inflation_per_block_sompi: 100_000_000 * MAX_ATTESTATIONS_PER_SHARD as u64,
+            // ADR-0018 §D/§E inclusion economics — NOT load-bearing on devnet (the
+            // dns_activation gate is u64::MAX, so the coinbase fan-out never fires).
+            // 100/0 validator split: the FULL validator pool is paid as stake-proportional
+            // participation (the §E quality-bonus is dropped under the burn sink — revisit
+            // if SecurityRollover is adopted). 1.0× urgency (inert).
+            validator_participation_bps: 10000,
+            validator_quality_bonus_bps: 0,
+            quality_gate_bonus_sompi: 0,
+            worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
+            // ADR-0018 §F fee/subsidy splits — NOT load-bearing on devnet (gate u64::MAX).
+            // Node share dropped to 0: Stage-3 subsidy 75/25/0, normal-tx 90/10/0,
+            // finality 75/25/0 (each sums to 100%; `service` fields retained at 0).
+            fee_split: FeeSplitParams {
+                subsidy_worker_base_bps: 6700,
+                subsidy_worker_inclusion_bps: 800,
+                subsidy_validator_bps: 2500,
+                subsidy_service_bps: 0,
+                normal_fee_worker_bps: 9000,
+                normal_fee_validator_bps: 1000,
+                normal_fee_service_bps: 0,
+                finality_fee_validator_bps: 7500,
+                finality_fee_worker_bps: 2500,
+                finality_fee_service_bps: 0,
+            },
+            // ADR-0018 §F staged rollout — Stage-2 (bootstrap) split: subsidy
+            // 90/10/0, normal-tx 90/10/0, finality 75/25/0. Applied between
+            // `dns_activation_daa_score` and `full_reward_split_daa_score`.
+            fee_split_bootstrap: FeeSplitParams {
+                subsidy_worker_base_bps: 8200,
+                subsidy_worker_inclusion_bps: 800,
+                subsidy_validator_bps: 1000,
+                subsidy_service_bps: 0,
+                normal_fee_worker_bps: 9000,
+                normal_fee_validator_bps: 1000,
+                normal_fee_service_bps: 0,
+                finality_fee_validator_bps: 7500,
+                finality_fee_worker_bps: 2500,
+                finality_fee_service_bps: 0,
+            },
+        },
+        // ADR-0018 §H: devnet stays HardCheckpoint (the loud testing convenience) — the
+        // two-dimensional dominance rule is the mainnet path. Inert here anyway (gate u64::MAX).
+        reorg_mode: DnsReorgMode::HardCheckpoint,
+        // ADR-0018 §F staged rollout — Stage-3 (full 75/25/0) threshold. u64::MAX
+        // on devnet keeps the carve dormant (Stage 1: miner takes the whole
+        // reward) like the rest of the overlay.
+        full_reward_split_daa_score: u64::MAX,
+    }),
+};
