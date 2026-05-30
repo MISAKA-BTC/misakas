@@ -1675,6 +1675,50 @@ pub fn split_finality_fees(fees_sompi: u64, p: &FeeSplitParams) -> FeeSplit {
     FeeSplit { worker_sompi, validator_sompi, service_sompi }
 }
 
+/// ADR-0018 §F — the combined Worker / Validator / Service split of ONE block's coinbase
+/// reward: its `subsidy` under the subsidy ratios ([`split_block_subsidy`]) plus its `fees`
+/// under the normal-tx ratios ([`split_normal_tx_fees`]). The Worker total goes to that
+/// block's miner; the Validator total funds the §E pool; the Service total is the reserve
+/// (don't-mint in the first coinbase slice). Sums to `subsidy + fees` exactly (each
+/// sub-split is dust-free). The §D worker-inclusion sub-pool stays inside the Worker total
+/// here — its conditional bounty is a later slice; the §F DNS-finality fee class is not yet
+/// a distinct on-chain fee type, so only subsidy + normal fees are split.
+pub fn split_block_reward(subsidy_sompi: u64, fees_sompi: u64, fee_split: &FeeSplitParams) -> FeeSplit {
+    let s = split_block_subsidy(subsidy_sompi, fee_split);
+    let f = split_normal_tx_fees(fees_sompi, fee_split);
+    FeeSplit {
+        worker_sompi: s.worker_base_sompi.saturating_add(s.worker_inclusion_sompi).saturating_add(f.worker_sompi),
+        validator_sompi: s.validator_sompi.saturating_add(f.validator_sompi),
+        service_sompi: s.service_sompi.saturating_add(f.service_sompi),
+    }
+}
+
+/// ADR-0018 §E — the validator-side coinbase outputs distributing `participation_pool`
+/// proportionally among the included validators. Each validator is paid
+/// [`validator_participation_reward`]`(pool, its_stake, expected_stake)` to its
+/// `owner_reward_spk_payload`; zero-value shares emit no output. `included` is
+/// `(owner_reward_spk_payload, included_stake)` per first-included validator, in the
+/// caller's canonical order.
+///
+/// The outputs sum to **≤ `participation_pool`** (Σ included stake ≤ `expected_stake`); the
+/// unspent remainder is **not minted** (the ADR-0018 §E rollover, realised as don't-mint —
+/// so a censoring miner cannot keep it, preserving anti-capture). Pure and DAG-free, so the
+/// coinbase **construction** and **validation** paths build byte-identical outputs. The §E
+/// quality-bonus and §D worker-bounty are later slices.
+pub fn validator_participation_outputs(
+    participation_pool: u128,
+    included: &[([u8; 32], u64)],
+    expected_stake: u128,
+) -> Vec<TransactionOutput> {
+    included
+        .iter()
+        .filter_map(|(payload, stake)| {
+            let reward = validator_participation_reward(participation_pool, *stake as u128, expected_stake).min(u64::MAX as u128) as u64;
+            (reward > 0).then(|| TransactionOutput::new(reward, p2pkh_mldsa65_spk(payload)))
+        })
+        .collect()
+}
+
 /// Build the canonical kaspa-pq ML-DSA-65 P2PKH `scriptPublicKey`
 /// for a 32-byte spend payload (ADR-0002 / ADR-0013 Addendum B).
 ///
@@ -4644,6 +4688,37 @@ mod tests {
         assert_eq!(borsh::from_slice::<SubsidySplit>(&borsh::to_vec(&s).unwrap()).unwrap(), s);
         let f = FeeSplit { worker_sompi: 850_000, validator_sompi: 100_000, service_sompi: 50_000 };
         assert_eq!(borsh::from_slice::<FeeSplit>(&borsh::to_vec(&f).unwrap()).unwrap(), f);
+    }
+
+    #[test]
+    fn split_block_reward_combines_subsidy_and_fee_splits() {
+        let p = fixture_fee_split();
+        // 1_000_000 subsidy (62+8/25/5) + 1_000_000 fees (85/10/5):
+        // worker 620k+80k+850k = 1_550_000; validator 250k+100k = 350_000; service 50k+50k = 100_000.
+        let r = split_block_reward(1_000_000, 1_000_000, &p);
+        assert_eq!((r.worker_sompi, r.validator_sompi, r.service_sompi), (1_550_000, 350_000, 100_000));
+        // Value-conserving: the three sum to subsidy + fees exactly.
+        assert_eq!(r.worker_sompi + r.validator_sompi + r.service_sompi, 2_000_000);
+        // No fees → just the subsidy split (70/25/5 of 1_000_000).
+        let r = split_block_reward(1_000_000, 0, &p);
+        assert_eq!((r.worker_sompi, r.validator_sompi, r.service_sompi), (700_000, 250_000, 50_000));
+    }
+
+    #[test]
+    fn validator_participation_outputs_distribute_proportionally() {
+        let a = [0xa1u8; 32];
+        let b = [0xb2u8; 32];
+        // Pool 1000, expected 100. A holds 60 → 600, B holds 30 → 300; the 10 uncovered stake's
+        // 100 is unspent → not minted (don't-mint rollover).
+        let outs = validator_participation_outputs(1000, &[(a, 60), (b, 30)], 100);
+        assert_eq!(outs.len(), 2);
+        assert_eq!((outs[0].value, outs[1].value), (600, 300));
+        assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&a));
+        assert!(outs.iter().map(|o| o.value).sum::<u64>() <= 1000); // never over-mints the pool
+        // Zero-value shares (zero stake / empty set) and a degenerate expected_stake emit nothing.
+        assert!(validator_participation_outputs(1000, &[([0xcc; 32], 0)], 100).is_empty());
+        assert!(validator_participation_outputs(1000, &[], 100).is_empty());
+        assert!(validator_participation_outputs(1000, &[(a, 60)], 0).is_empty());
     }
 
     #[test]
