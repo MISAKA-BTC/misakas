@@ -640,6 +640,31 @@ pub struct RewardParams {
     /// the difference rather than overflowing into the coinbase
     /// accumulator. See ADR-0013 §"Inflation cap".
     pub max_validator_inflation_per_block_sompi: u64,
+
+    /// kaspa-pq Phase 13 (ADR-0018 §E): basis-points share of the per-epoch validator
+    /// pool routed to the **participation** sub-pool (paid proportionally to every
+    /// included validator via [`validator_participation_reward`]). The remainder funds
+    /// the **quality-bonus** sub-pool. Recommended `7000` (70%). Appended last to keep
+    /// the borsh layout change localized (pre-activation; no live reward exists).
+    pub validator_participation_bps: u16,
+    /// kaspa-pq Phase 13 (ADR-0018 §E): basis-points share of the per-epoch validator
+    /// pool routed to the **quality-bonus** sub-pool (paid via [`validator_quality_bonus`]
+    /// only when the epoch's included fraction met φS). Recommended `3000` (30%);
+    /// `validator_participation_bps + validator_quality_bonus_bps` should equal `10_000`.
+    /// [`split_validator_pool`] takes the remainder, so any rounding dust lands in the
+    /// bonus pool rather than being lost.
+    pub validator_quality_bonus_bps: u16,
+    /// kaspa-pq Phase 13 (ADR-0018 §D): fixed sompi bonus paid to the Worker on the block
+    /// that first pushes an epoch's included fraction from `< φS` to `≥ φS` (the
+    /// "quality-gate bonus" — an economic nudge to complete an epoch, **not** a
+    /// certificate). Consumed by [`worker_inclusion_bounty`]. Placeholder; calibrated
+    /// pre-mainnet.
+    pub quality_gate_bonus_sompi: u64,
+    /// kaspa-pq Phase 13 (ADR-0018 §D): Worker inclusion-bounty urgency multiplier in
+    /// [`STAKE_SCORE_SCALE`] fixed-point (`STAKE_SCORE_SCALE` = 1.0×, no boost). Lets a
+    /// later policy scale the bounty up as an epoch ages without inclusion; the inert
+    /// default is `STAKE_SCORE_SCALE`. Consumed by [`worker_inclusion_bounty`].
+    pub worker_urgency_multiplier_scaled: u64,
 }
 
 /// Outcome of [`compute_attestation_reward_payouts`] — the per-block
@@ -1430,6 +1455,104 @@ pub fn compute_attestation_reward_payouts(
     let total_payout_sompi = capped as u64;
     let refunded_sompi = (uncapped - capped) as u64;
     AttestationRewardPayout { total_payout_sompi, refunded_sompi }
+}
+
+// ---------------------------------------------------------------------
+// kaspa-pq Phase 13 inclusion economics (ADR-0018 §D/§E).
+//
+// These pure functions replace the ADR-0013 *flat* per-attestation reward
+// ([`compute_attestation_reward_payouts`]) with **proportional, anti-capture**
+// payouts: every payout is a share of a per-epoch *pool*, normalised by the
+// epoch's **expected** active stake (`total_active_stake_by_epoch`), never by the
+// included count. So including a few attestations earns only a small slice — a
+// minority can never drain a pool (the rejected `pool / included_count` design).
+// The unspent remainder of each pool rolls over (a caller concern); these helpers
+// only compute the per-recipient share. The pool amounts are produced by the §F
+// fee/subsidy split (a later slice); here they are inputs, so this whole section
+// is inert until both the split and the coinbase fan-out wire it (gated below
+// `dns_activation_daa_score`, `u64::MAX` everywhere today).
+// ---------------------------------------------------------------------
+
+/// Shared anti-capture proportional share: `pool × min(stake, expected_stake) /
+/// expected_stake` (`0` when `expected_stake == 0`). Integer `u128`, multiply-
+/// before-divide (no lossy `unit` intermediate, mirroring [`epoch_stake_credit`]).
+/// The `min` clamp is the anti-capture invariant — a single share can never exceed
+/// the whole `pool`, so over-counting (duplicate inclusion) cannot over-drain it. In
+/// the valid domain (`stake ≤ expected_stake`) the clamp is a no-op, so the result
+/// equals the ADR-0018 §D/§E formulas byte-for-byte.
+#[inline]
+fn proportional_share(pool: u128, stake: u128, expected_stake: u128) -> u128 {
+    if expected_stake == 0 {
+        return 0;
+    }
+    pool.saturating_mul(stake.min(expected_stake)) / expected_stake
+}
+
+/// ADR-0018 §D — the Worker inclusion bounty for one block.
+///
+/// The Worker that includes attestation shards is paid for **quality contribution**,
+/// not for the act of inclusion: the base bounty is a [`proportional_share`] of the
+/// epoch's `worker_inclusion_pool` against the epoch's **expected** stake, scaled by
+/// `urgency_multiplier_scaled` ([`STAKE_SCORE_SCALE`] fixed-point, `STAKE_SCORE_SCALE`
+/// = 1.0×). When this block is the one that first lifts the epoch's included fraction
+/// from `< φS` to `≥ φS` (`crossed_quality_floor`), the fixed `quality_gate_bonus` is
+/// added — an economic nudge to complete an epoch, **not** a certificate.
+///
+/// `newly_included_stake` is the stake of attestations *first* included by this block
+/// (valid signature + bond, correct epoch/target, within the reward window); duplicate
+/// / invalid / expired / already-included stake is excluded by the caller. The unspent
+/// remainder of the pool is the caller's rollover concern.
+pub fn worker_inclusion_bounty(
+    pool: u128,
+    newly_included_stake: u128,
+    expected_stake: u128,
+    urgency_multiplier_scaled: u128,
+    crossed_quality_floor: bool,
+    quality_gate_bonus: u128,
+) -> u128 {
+    let base = proportional_share(pool, newly_included_stake, expected_stake);
+    let urgent = base.saturating_mul(urgency_multiplier_scaled) / STAKE_SCORE_SCALE;
+    if crossed_quality_floor {
+        urgent.saturating_add(quality_gate_bonus)
+    } else {
+        urgent
+    }
+}
+
+/// ADR-0018 §E — split a per-epoch validator pool into its `(participation,
+/// quality_bonus)` sub-pools by `participation_bps`. The quality-bonus sub-pool takes
+/// the **remainder** (`pool − participation`), so the two sum to `pool` exactly and no
+/// sompi is lost to rounding (any dust lands in the bonus pool). `participation_bps` is
+/// clamped to `10_000`.
+pub fn split_validator_pool(validator_pool: u128, participation_bps: u16) -> (u128, u128) {
+    let bps = (participation_bps as u128).min(10_000);
+    let participation = validator_pool.saturating_mul(bps) / 10_000;
+    let quality_bonus = validator_pool.saturating_sub(participation);
+    (participation, quality_bonus)
+}
+
+/// ADR-0018 §E — one validator's **participation** reward: a [`proportional_share`] of
+/// the participation sub-pool against the epoch's expected stake. Paid to every included
+/// validator regardless of whether the epoch met φS. Minority inclusion earns only its
+/// proportional slice, never the whole pool.
+pub fn validator_participation_reward(participation_pool: u128, included_valid_stake: u128, expected_stake: u128) -> u128 {
+    proportional_share(participation_pool, included_valid_stake, expected_stake)
+}
+
+/// ADR-0018 §E — one validator's **quality bonus**: a [`proportional_share`] of the
+/// quality-bonus sub-pool, **but only when the epoch's included fraction met φS**
+/// (`epoch_meets_quality_floor`). Below the floor the bonus pool pays nothing and rolls
+/// over entirely.
+pub fn validator_quality_bonus(
+    quality_bonus_pool: u128,
+    included_valid_stake: u128,
+    expected_stake: u128,
+    epoch_meets_quality_floor: bool,
+) -> u128 {
+    if !epoch_meets_quality_floor {
+        return 0;
+    }
+    proportional_share(quality_bonus_pool, included_valid_stake, expected_stake)
 }
 
 /// Build the canonical kaspa-pq ML-DSA-65 P2PKH `scriptPublicKey`
@@ -3688,6 +3811,10 @@ mod tests {
                 per_attestation_reward_sompi: 100_000_000,
                 slashing_reporter_reward_bps: 1000,
                 max_validator_inflation_per_block_sompi: 100_000_000 * MAX_ATTESTATIONS_PER_SHARD as u64,
+                validator_participation_bps: 7000,
+                validator_quality_bonus_bps: 3000,
+                quality_gate_bonus_sompi: 50_000_000,
+                worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
             },
         };
         let bytes = borsh::to_vec(&params).unwrap();
@@ -3696,6 +3823,11 @@ mod tests {
 
         // ADR-0009 §"Long-range bound" requires U >= R + E.
         assert!(params.unbonding_period_blocks >= params.max_reorg_horizon_blocks + params.evidence_window_blocks);
+        // ADR-0018 §E: the validator pool split is a partition (the two shares sum to 100%).
+        assert_eq!(
+            params.reward_params.validator_participation_bps + params.reward_params.validator_quality_bonus_bps,
+            10_000
+        );
     }
 
     #[test]
@@ -4148,6 +4280,10 @@ mod tests {
             per_attestation_reward_sompi: 100_000,
             slashing_reporter_reward_bps: 1000, // 10%
             max_validator_inflation_per_block_sompi: 5_000_000_000,
+            validator_participation_bps: 7000,
+            validator_quality_bonus_bps: 3000,
+            quality_gate_bonus_sompi: 25_000_000,
+            worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
         };
         let bytes = borsh::to_vec(&p).unwrap();
         let back: RewardParams = borsh::from_slice(&bytes).unwrap();
@@ -4160,6 +4296,61 @@ mod tests {
         let bytes = borsh::to_vec(&p).unwrap();
         let back: AttestationRewardPayout = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, p);
+    }
+
+    // ---- ADR-0018 §D/§E inclusion economics --------------------------
+
+    #[test]
+    fn worker_inclusion_bounty_is_proportional_and_anti_capture() {
+        let scale = STAKE_SCORE_SCALE; // 1.0× urgency
+        // Degenerate epoch (no expected stake) → 0.
+        assert_eq!(worker_inclusion_bounty(1000, 5, 0, scale, false, 0), 0);
+        // Proportional: 5/10 of a 1000 pool at 1.0× urgency, no cross → 500.
+        assert_eq!(worker_inclusion_bounty(1000, 5, 10, scale, false, 0), 500);
+        // Urgency 2.0× doubles the base.
+        assert_eq!(worker_inclusion_bounty(1000, 5, 10, 2 * scale, false, 0), 1000);
+        // Crossing φS adds the fixed quality-gate bonus on top of the urgent base...
+        assert_eq!(worker_inclusion_bounty(1000, 5, 10, scale, true, 123), 500 + 123);
+        // ...but only when this block actually crosses the floor.
+        assert_eq!(worker_inclusion_bounty(1000, 5, 10, scale, false, 123), 500);
+        // Anti-capture: a few attestations earn only a tiny slice (1/1000 of the pool),
+        // NOT the whole pool (the rejected `pool / included_count` design).
+        assert_eq!(worker_inclusion_bounty(1000, 1, 1000, scale, false, 0), 1);
+        // Anti-drain: over-counted stake (> expected) clamps to the whole pool, never more.
+        assert_eq!(worker_inclusion_bounty(1000, 9999, 10, scale, false, 0), 1000);
+    }
+
+    #[test]
+    fn split_validator_pool_is_dustfree() {
+        // 70/30 split sums to the pool exactly.
+        assert_eq!(split_validator_pool(1000, 7000), (700, 300));
+        // Rounding dust lands in the bonus pool; the two still sum to the pool.
+        let (p, q) = split_validator_pool(1001, 7000); // 1001 × 0.70 = 700.7 → 700
+        assert_eq!((p, q), (700, 301));
+        assert_eq!(p + q, 1001);
+        // Edges: all-participation / all-bonus; bps clamps at 10_000.
+        assert_eq!(split_validator_pool(1000, 10_000), (1000, 0));
+        assert_eq!(split_validator_pool(1000, 0), (0, 1000));
+        assert_eq!(split_validator_pool(1000, 20_000), (1000, 0)); // clamp
+    }
+
+    #[test]
+    fn validator_two_pool_reward_is_proportional_and_gated() {
+        // Participation: 10/100 of a 1000 pool → 100, paid regardless of the floor.
+        assert_eq!(validator_participation_reward(1000, 10, 100), 100);
+        assert_eq!(validator_participation_reward(1000, 10, 0), 0); // expected == 0
+        // Anti-capture: a minority validator earns only its proportional slice, not the pool.
+        assert_eq!(validator_participation_reward(1000, 1, 1000), 1);
+        // Quality bonus: same proportional share, but ONLY when the epoch met φS.
+        assert_eq!(validator_quality_bonus(300, 10, 100, true), 30);
+        assert_eq!(validator_quality_bonus(300, 10, 100, false), 0); // below φS → 0, pool rolls over
+        assert_eq!(validator_quality_bonus(300, 10, 0, true), 0); // expected == 0
+        // Combined per-validator payout = participation + (bonus iff floor met). A 1000 pool
+        // split 70/30, validator holds 10% of expected stake → 70 + 30 above φS, 70 below.
+        let (part_pool, bonus_pool) = split_validator_pool(1000, 7000);
+        let combined = |met| validator_participation_reward(part_pool, 10, 100) + validator_quality_bonus(bonus_pool, 10, 100, met);
+        assert_eq!(combined(true), 70 + 30);
+        assert_eq!(combined(false), 70);
     }
 
     #[test]

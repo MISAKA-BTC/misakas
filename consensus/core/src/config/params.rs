@@ -804,6 +804,13 @@ pub const DEVNET_PARAMS: Params = Params {
             per_attestation_reward_sompi: 100_000_000,
             slashing_reporter_reward_bps: 1000,
             max_validator_inflation_per_block_sompi: 100_000_000 * MAX_ATTESTATIONS_PER_SHARD as u64,
+            // ADR-0018 §D/§E inclusion economics — NOT load-bearing on devnet (the
+            // dns_activation gate is u64::MAX, so the coinbase fan-out never fires).
+            // 70/30 validator split; no quality-gate bonus and 1.0× urgency (inert).
+            validator_participation_bps: 7000,
+            validator_quality_bonus_bps: 3000,
+            quality_gate_bonus_sompi: 0,
+            worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
         },
     }),
 };
