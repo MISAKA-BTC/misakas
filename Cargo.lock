@@ -3305,6 +3305,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaspa-pq-validator-core"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "faster-hex 0.9.0",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-txscript",
+ "libcrux-ml-dsa",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "kaspa-rpc-core"
 version = "1.1.0"
 dependencies = [
@@ -4013,6 +4031,7 @@ dependencies = [
  "kaspa-p2p-lib",
  "kaspa-p2p-mining",
  "kaspa-perf-monitor",
+ "kaspa-pq-validator-core",
  "kaspa-rpc-core",
  "kaspa-rpc-service",
  "kaspa-txscript",

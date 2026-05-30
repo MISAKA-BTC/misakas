@@ -20,6 +20,7 @@ members = [
     "consensus/wasm",
     "kaspad",
     "kaspa-pq-validator",
+    "kaspa-pq-validator-core",
     "simpa",
     "wasm",
     "wasm/core",
@@ -142,6 +143,7 @@ kaspa-wrpc-server = { version = "1.1.0", path = "rpc/wrpc/server" }
 kaspa-wrpc-wasm = { version = "1.1.0", path = "rpc/wrpc/wasm" }
 kaspa-wrpc-example-subscriber = { version = "1.1.0", path = "rpc/wrpc/examples/subscriber" }
 kaspad = { version = "1.1.0", path = "kaspad" }
+kaspa-pq-validator-core = { version = "1.1.0", path = "kaspa-pq-validator-core" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 
 # external
