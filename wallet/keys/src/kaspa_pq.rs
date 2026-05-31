@@ -30,6 +30,20 @@ use libcrux_ml_dsa::ml_dsa_87;
 /// key (max 64 bytes; this string is 33 bytes).
 pub const KASPA_PQ_WALLET_KEYGEN_DOMAIN: &[u8] = b"kaspa-pq-wallet-v1/mldsa65/keygen";
 
+/// kaspa-pq (ADR-0019 §13): true when legacy secp256k1 addresses must not be
+/// produced for `network` — i.e. its consensus params enforce PQ-only
+/// (`PqEnforcementMode::Consensus`). The wallet-key `to_address` /
+/// `to_address_ecdsa` helpers (Keypair / PublicKey / XOnlyPublicKey /
+/// PrivateKey) return [`crate::error::Error::LegacyAddressDisabled`] in that
+/// case: a PQ-only wallet must not hand out a spendable legacy address.
+///
+/// The consensus `Params` type is referenced fully-qualified because this
+/// module already binds `Params` to `blake2b_simd::Params`.
+pub fn legacy_address_disabled(network: kaspa_consensus_core::network::NetworkType) -> bool {
+    use kaspa_consensus_core::config::params::PqEnforcementMode;
+    matches!(kaspa_consensus_core::config::params::Params::from(network).pq_enforcement, PqEnforcementMode::Consensus)
+}
+
 /// kaspa-pq ML-DSA-65 wallet keypair, deterministically derived from a
 /// 32-byte `keygen_seed` (see [`derive_keygen_seed`]).
 pub struct KaspaPqMlDsa65KeyPair {
@@ -210,6 +224,16 @@ mod tests {
         let a = derive_keygen_seed("mainnet", 0, 0, 0, &TEST_MASTER_SEED);
         let b = derive_keygen_seed("mainnet", 0, 0, 0, &TEST_MASTER_SEED);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn legacy_address_disabled_on_all_kaspa_pq_nets() {
+        use kaspa_consensus_core::network::NetworkType;
+        // Every kaspa-pq preset sets PqEnforcementMode::Consensus, so legacy
+        // secp256k1 addresses are disabled on every network of this chain.
+        for net in [NetworkType::Mainnet, NetworkType::Testnet, NetworkType::Devnet, NetworkType::Simnet] {
+            assert!(legacy_address_disabled(net), "{net:?} must disable legacy secp256k1 addresses");
+        }
     }
 
     #[test]

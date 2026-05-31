@@ -20,6 +20,7 @@
 //!
 
 use crate::imports::*;
+use kaspa_consensus_core::network::NetworkType;
 use secp256k1::{Secp256k1, XOnlyPublicKey};
 use serde_wasm_bindgen::to_value;
 
@@ -64,8 +65,13 @@ impl Keypair {
     #[wasm_bindgen(js_name = toAddress)]
     // pub fn to_address(&self, network_type: NetworkType) -> Result<Address> {
     pub fn to_address(&self, network: &NetworkTypeT) -> Result<Address> {
+        let network_type: NetworkType = network.try_into()?;
+        // kaspa-pq (ADR-0019 §13): no legacy secp256k1 address on a PQ-only net.
+        if crate::kaspa_pq::legacy_address_disabled(network_type) {
+            return Err(Error::LegacyAddressDisabled);
+        }
         let payload = &self.xonly_public_key.serialize();
-        let address = Address::new(network.try_into()?, AddressVersion::PubKey, payload);
+        let address = Address::new(network_type.into(), AddressVersion::PubKey, payload);
         Ok(address)
     }
 
@@ -75,8 +81,13 @@ impl Keypair {
     /// JavaScript: `let address = keypair.toAddress(NetworkType.MAINNET);`.
     #[wasm_bindgen(js_name = toAddressECDSA)]
     pub fn to_address_ecdsa(&self, network: &NetworkTypeT) -> Result<Address> {
+        let network_type: NetworkType = network.try_into()?;
+        // kaspa-pq (ADR-0019 §13): no legacy secp256k1 ECDSA address on a PQ-only net.
+        if crate::kaspa_pq::legacy_address_disabled(network_type) {
+            return Err(Error::LegacyAddressDisabled);
+        }
         let payload = &self.public_key.serialize();
-        let address = Address::new(network.try_into()?, AddressVersion::PubKeyECDSA, payload);
+        let address = Address::new(network_type.into(), AddressVersion::PubKeyECDSA, payload);
         Ok(address)
     }
 

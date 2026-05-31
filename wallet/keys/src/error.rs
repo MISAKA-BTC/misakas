@@ -16,6 +16,11 @@ pub enum Error {
     #[error("{0}")]
     Custom(String),
 
+    /// kaspa-pq (ADR-0019 §13): a legacy secp256k1 address was requested on a
+    /// PQ-only network. The wallet refuses to produce a spendable legacy address.
+    #[error("legacy secp256k1 address is disabled on kaspa-pq")]
+    LegacyAddressDisabled,
+
     #[error("Bip32 -> {0}")]
     BIP32Error(#[from] BIP32Error),
 

@@ -492,6 +492,12 @@ pub fn create_address(
     ecdsa: bool,
     account_kind: Option<AccountKind>,
 ) -> Result<Address> {
+    // kaspa-pq (ADR-0019 §13): legacy secp256k1 addresses (BIP32-derived single
+    // key or multisig P2SH) are unrepresentable on a PQ-only network — refuse to
+    // derive one rather than hand out an address that consensus would reject.
+    if kaspa_wallet_keys::kaspa_pq::legacy_address_disabled(NetworkType::try_from(prefix)?) {
+        return Err(Error::LegacyAddressDisabled);
+    }
     let length = keys.len();
     if length < minimum_signatures {
         return Err(format!{"The minimum amount of signatures ({}) is greater than the amount of provided public keys ({length})", minimum_signatures}.into());
@@ -571,4 +577,20 @@ pub fn build_derivate_paths(
     let receive_path = build_derivate_path(account_kind, account_index, cosigner_index, AddressType::Receive)?;
     let change_path = build_derivate_path(account_kind, account_index, cosigner_index, AddressType::Change)?;
     Ok((receive_path, change_path))
+}
+
+#[cfg(test)]
+mod pq_gate_tests {
+    use super::*;
+
+    /// kaspa-pq (ADR-0019 §13): create_address must refuse to derive a legacy
+    /// secp256k1 address on a PQ-only network (every kaspa-pq net is PQ-only).
+    #[test]
+    fn create_address_rejected_on_pq_net() {
+        let secp = secp256k1::Secp256k1::new();
+        let sk = secp256k1::SecretKey::from_slice(&[0x11u8; 32]).unwrap();
+        let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
+        let result = create_address(1, vec![pk], Prefix::Mainnet, false, None);
+        assert!(matches!(result, Err(Error::LegacyAddressDisabled)), "expected LegacyAddressDisabled, got {result:?}");
+    }
 }

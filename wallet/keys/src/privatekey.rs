@@ -5,6 +5,7 @@
 use crate::imports::*;
 use crate::keypair::Keypair;
 use js_sys::{Array, Uint8Array};
+use kaspa_consensus_core::network::NetworkType;
 
 /// Data structure that envelops a Private Key.
 /// @category Wallet SDK
@@ -73,10 +74,15 @@ impl PrivateKey {
     /// JavaScript: `let address = privateKey.toAddress(NetworkType.MAINNET);`.
     #[wasm_bindgen(js_name = toAddress)]
     pub fn to_address(&self, network: &NetworkTypeT) -> Result<Address> {
+        let network_type: NetworkType = network.try_into()?;
+        // kaspa-pq (ADR-0019 §13): no legacy secp256k1 address on a PQ-only net.
+        if crate::kaspa_pq::legacy_address_disabled(network_type) {
+            return Err(Error::LegacyAddressDisabled);
+        }
         let public_key = secp256k1::PublicKey::from_secret_key_global(&self.inner);
         let (x_only_public_key, _) = public_key.x_only_public_key();
         let payload = x_only_public_key.serialize();
-        let address = Address::new(network.try_into()?, AddressVersion::PubKey, &payload);
+        let address = Address::new(network_type.into(), AddressVersion::PubKey, &payload);
         Ok(address)
     }
 
@@ -86,9 +92,14 @@ impl PrivateKey {
     /// JavaScript: `let address = privateKey.toAddress(NetworkType.MAINNET);`.
     #[wasm_bindgen(js_name = toAddressECDSA)]
     pub fn to_address_ecdsa(&self, network: &NetworkTypeT) -> Result<Address> {
+        let network_type: NetworkType = network.try_into()?;
+        // kaspa-pq (ADR-0019 §13): no legacy secp256k1 ECDSA address on a PQ-only net.
+        if crate::kaspa_pq::legacy_address_disabled(network_type) {
+            return Err(Error::LegacyAddressDisabled);
+        }
         let public_key = secp256k1::PublicKey::from_secret_key_global(&self.inner);
         let payload = public_key.serialize();
-        let address = Address::new(network.try_into()?, AddressVersion::PubKeyECDSA, &payload);
+        let address = Address::new(network_type.into(), AddressVersion::PubKeyECDSA, &payload);
         Ok(address)
     }
 }
