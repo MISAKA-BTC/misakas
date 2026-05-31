@@ -51,7 +51,7 @@ pub fn register_link_matchers(cli: &Arc<KaspaCli>) -> Result<()> {
     // blocks (open,copy) https://explorer.kaspa.org/blocks/
     let cli_ = cli.clone();
     cli.term().register_link_matcher(
-        &js_sys::RegExp::new(r"(block|pool):?\s+[0-9a-fA-F]{64}", "i"),
+        &js_sys::RegExp::new(r"(block|pool):?\s+[0-9a-fA-F]{128}", "i"),
         Arc::new(Box::new(move |modifiers, text| {
             let re = Regex::new(r"(?i)^(block|pool):?\s+").unwrap();
             let uri = re.replace(text, "");
@@ -67,7 +67,7 @@ pub fn register_link_matchers(cli: &Arc<KaspaCli>) -> Result<()> {
     // transactions
     let cli_ = cli.clone();
     cli.term().register_link_matcher(
-        &js_sys::RegExp::new(r"(transaction|tx|txid)(\s+|\s*:\s*)[0-9a-fA-F]{64}", "i"),
+        &js_sys::RegExp::new(r"(transaction|tx|txid)(\s+|\s*:\s*)[0-9a-fA-F]{128}", "i"),
         Arc::new(Box::new(move |modifiers, text| {
             let re = Regex::new(r"(?i)^(transaction|tx|txid)\s*:?\s*").unwrap();
             let uri = re.replace(text, "");
@@ -80,10 +80,10 @@ pub fn register_link_matchers(cli: &Arc<KaspaCli>) -> Result<()> {
         })),
     )?;
 
-    // 32 byte hex encoded sequences (copy)
+    // 64 byte hex encoded sequences (copy) — kaspa-pq hashes are Hash64 (128 hex chars)
     let cli_ = cli.clone();
     cli.term().register_link_matcher(
-        &js_sys::RegExp::new(r"[0-9a-fA-F]{64}", "i"),
+        &js_sys::RegExp::new(r"[0-9a-fA-F]{128}", "i"),
         Arc::new(Box::new(move |_modifiers, text| {
             let re = Regex::new(r"(?i)^(transaction|tx|txid)\s*:?\s*").unwrap();
             let text = re.replace(text, "");

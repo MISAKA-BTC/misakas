@@ -551,11 +551,17 @@ fn test_generator_compound_200k_10kas_transactions() -> Result<()> {
 
 #[test]
 fn test_generator_fee_rate_compound_200k_10kas_transactions() -> Result<()> {
+    // kaspa-pq recalibration: the 64-byte Hash64 txid raises KIP-0009's fixed UTXO storage
+    // overhead from 63 to 95 bytes (consensus mass/mod.rs::utxo_plurality). At the original
+    // fee_rate of 100 sompi/gram an intermediate compounding change output was squeezed small
+    // enough that its storage mass crossed MAXIMUM_STANDARD_TRANSACTION_MASS (100_000) — correct
+    // generator behaviour. A realistic 1 sompi/gram keeps the change above the cap while still
+    // exercising the fee-rate compound path; validate() then checks mass-consistency tree-wide.
     generator(
         test_network_id(),
         &[10.0; 200_000],
         &[],
-        Some(100.0),
+        Some(1.0),
         Fees::sender(Sompi(0)),
         [(output_address, Kaspa(190_000.0))].as_slice(),
     )
