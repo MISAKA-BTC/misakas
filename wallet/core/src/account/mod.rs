@@ -1010,6 +1010,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "kaspa-pq ADR-0019 §13: legacy secp256k1 wallet (HD vectors / golang import) is not representable on a PQ-only chain (addresses gated to ML-DSA-87)."]
     async fn gen0_prv_keys() {
         let receive_addresses = gen0_receive_addresses()
             .iter()

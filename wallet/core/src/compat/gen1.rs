@@ -48,6 +48,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[ignore = "kaspa-pq ADR-0019 §13: legacy secp256k1 wallet (HD vectors / golang import) is not representable on a PQ-only chain (addresses gated to ML-DSA-87)."]
     async fn import_golang_single_wallet_test() {
         let resident_store = Wallet::resident_store().unwrap();
         let wallet = Arc::new(Wallet::try_new(resident_store, None, Some(NetworkId::new(NetworkType::Mainnet))).unwrap());
@@ -85,6 +86,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[ignore = "kaspa-pq ADR-0019 §13: legacy secp256k1 wallet (HD vectors / golang import) is not representable on a PQ-only chain (addresses gated to ML-DSA-87)."]
     async fn import_golang_multisig_v1_wallet_test() {
         let resident_store = Wallet::resident_store().unwrap();
         let wallet = Arc::new(Wallet::try_new(resident_store, None, Some(NetworkId::new(NetworkType::Mainnet))).unwrap());

@@ -171,3 +171,88 @@ fn sign_hash(sig_hash: Hash, privkey: &[u8; 32]) -> Result<Vec<u8>> {
     let signature = std::iter::once(65u8).chain(sig).chain([SIG_HASH_ALL.to_u8()]).collect();
     Ok(signature)
 }
+
+#[cfg(test)]
+mod mldsa_parity_tests {
+    //! kaspa-pq (ADR-0019 §13) Phase 5e: the WASM `signTransactionMlDsa65` helper
+    //! and the native `kaspa_wallet_keys::kaspa_pq::sign_transaction_inputs_mldsa87`
+    //! must produce byte-identical unlock scripts for the same key + transaction +
+    //! randomness, so the WASM (JS) wallet and the native Rust wallet are
+    //! interoperable (a tx signed by one verifies / is indistinguishable from the
+    //! other). This is reachable natively because both the WASM signer and its
+    //! `KaspaPqKeyPair` dependency are `#[cfg(any(target_arch = "wasm32", test))]`.
+
+    use super::*;
+    use ahash::AHashMap;
+    use kaspa_consensus_client::{Transaction as ClientTransaction, UtxoEntry as ClientUtxoEntry};
+    use kaspa_consensus_core::tx::{
+        SignableTransaction, Transaction as CcTransaction, TransactionId, TransactionInput, TransactionOutpoint as CcOutpoint,
+        TransactionOutput, UtxoEntry as CcUtxoEntry,
+    };
+    use kaspa_txscript::pay_to_address_script;
+    use kaspa_wallet_keys::kaspa_pq::{KaspaPqMlDsa65KeyPair, sign_transaction_inputs_mldsa87};
+
+    #[test]
+    fn wasm_and_native_mldsa_signers_agree() {
+        // Same 32-byte seed => identical ML-DSA-87 keypair in both worlds.
+        let seed = [0x42u8; 32];
+        let native_kp = KaspaPqMlDsa65KeyPair::from_seed(seed);
+        let wasm_kp = KaspaPqKeyPair::from_seed(seed.to_vec()).ok().expect("valid 32-byte seed");
+
+        // A 1-input / 1-output spend of a UTXO locked to that key.
+        let address = native_kp.address(kaspa_addresses::Prefix::Mainnet);
+        let spk = pay_to_address_script(&address);
+        let outpoint = CcOutpoint { transaction_id: TransactionId::from_bytes([0x09u8; 64]), index: 0 };
+        let cctx = CcTransaction::new(
+            0,
+            vec![TransactionInput { previous_outpoint: outpoint, signature_script: vec![], sequence: 0, sig_op_count: 1 }],
+            vec![TransactionOutput { value: 500, script_public_key: spk.clone() }],
+            0,
+            Default::default(),
+            0,
+            vec![],
+        );
+        let cc_entry = CcUtxoEntry { amount: 1000, script_public_key: spk.clone(), block_daa_score: 0, is_coinbase: false };
+
+        // Shared base randomness. The WASM signer derives per-input randomness as
+        // `base XOR (input_index as u64 LE)`; the native closure replicates it so
+        // the two signatures are byte-identical (ML-DSA sign is deterministic given
+        // key + message + context + randomness). For input 0 the xor is a no-op.
+        let base = [0x5au8; 32];
+
+        // Native signer over a SignableTransaction.
+        let mut signable = SignableTransaction::with_entries(cctx.clone(), vec![cc_entry.clone()]);
+        let signed = sign_transaction_inputs_mldsa87(&native_kp, &mut signable, |i| {
+            let mut r = base;
+            let ib = (i as u64).to_le_bytes();
+            for k in 0..8 {
+                r[k] ^= ib[k];
+            }
+            r
+        });
+        assert_eq!(signed, 1, "native signer signed exactly one input");
+        let native_script = signable.tx.inputs[0].signature_script.clone();
+        assert!(!native_script.is_empty());
+
+        // WASM signer over the equivalent client transaction (inputs populated with
+        // the same UTXO so the sighash is computed over identical data).
+        let client_utxo = ClientUtxoEntry {
+            address: None,
+            outpoint: outpoint.into(),
+            amount: 1000,
+            script_public_key: spk.clone(),
+            block_daa_score: 0,
+            is_coinbase: false,
+        };
+        let utxo_ref: kaspa_consensus_client::UtxoEntryReference = client_utxo.into();
+        let mut utxos = AHashMap::new();
+        utxos.insert(utxo_ref.id(), utxo_ref);
+        let client_tx = ClientTransaction::from_cctx_transaction(&cctx, &utxos);
+        let signed_client = js_sign_transaction_mldsa65(&client_tx, &wasm_kp, base.to_vec()).expect("wasm ML-DSA sign");
+        let (wasm_cctx, _utxos) = signed_client.tx_and_utxos().expect("tx_and_utxos");
+        let wasm_script = wasm_cctx.inputs[0].signature_script.clone();
+
+        // The whole point: identical unlock scripts from the two implementations.
+        assert_eq!(native_script, wasm_script, "WASM and native ML-DSA signers must produce identical unlock scripts");
+    }
+}
