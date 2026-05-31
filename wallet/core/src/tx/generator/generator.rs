@@ -67,9 +67,25 @@ use crate::utxo::{NetworkParams, UtxoContext, UtxoEntryReference};
 use kaspa_consensus_client::UtxoEntry;
 use kaspa_consensus_core::constants::UNACCEPTED_DAA_SCORE;
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
-use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
-use kaspa_txscript::pay_to_address_script;
+use kaspa_consensus_core::config::params::{Params, PqEnforcementMode};
+use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
+use kaspa_txscript::{pay_to_address_script, pay_to_address_script_pq};
 use std::collections::VecDeque;
+
+/// kaspa-pq (ADR-0019 §13): the standard scriptPubKey for `address`, refusing
+/// legacy (non-ML-DSA) recipients on a PQ network. On a network whose
+/// [`PqEnforcementMode`] is `Consensus` this routes through
+/// [`pay_to_address_script_pq`], which returns an error for every
+/// `Version::PubKey`/`PubKeyECDSA`/`ScriptHash` address — the wallet must
+/// neither pay to nor change into a legacy address once PQ enforcement is
+/// active. On non-PQ networks it is the plain [`pay_to_address_script`].
+fn pq_aware_output_script(network_id: NetworkId, address: &Address) -> Result<ScriptPublicKey> {
+    if matches!(Params::from(network_id).pq_enforcement, PqEnforcementMode::Consensus) {
+        Ok(pay_to_address_script_pq(address)?)
+    } else {
+        Ok(pay_to_address_script(address))
+    }
+}
 
 use super::SignerT;
 
@@ -397,8 +413,8 @@ impl Generator {
                 (
                     outputs
                         .iter()
-                        .map(|output| TransactionOutput::new(output.amount, pay_to_address_script(&output.address)))
-                        .collect(),
+                        .map(|output| Ok(TransactionOutput::new(output.amount, pq_aware_output_script(network_id, &output.address)?)))
+                        .collect::<Result<Vec<_>>>()?,
                     Some(outputs.iter().map(|output| output.amount).sum()),
                 )
             }
@@ -413,8 +429,11 @@ impl Generator {
             return Err(Error::GeneratorChangeAddressNetworkTypeMismatch);
         }
 
-        let standard_change_output_mass = mass_calculator
-            .calc_compute_mass_for_client_transaction_output(&TransactionOutput::new(0, pay_to_address_script(&change_address)));
+        let standard_change_output_mass = mass_calculator.calc_compute_mass_for_client_transaction_output(&TransactionOutput::new(
+            0,
+            // PQ-gated: rejects a legacy change address at construction time (ADR-0019 §13).
+            pq_aware_output_script(network_id, &change_address)?,
+        ));
         let signature_mass_per_input = mass_calculator.calc_compute_mass_for_signature(minimum_signatures);
         let final_transaction_outputs_compute_mass =
             mass_calculator.calc_compute_mass_for_client_transaction_outputs(&final_transaction_outputs);
@@ -1220,5 +1239,35 @@ impl Generator {
             number_of_generated_transactions: context.number_of_transactions,
             number_of_generated_stages: context.number_of_stages,
         }
+    }
+}
+
+#[cfg(test)]
+mod pq_output_tests {
+    use super::*;
+    use kaspa_addresses::{Prefix, Version};
+    use kaspa_wallet_keys::kaspa_pq::derive_keypair;
+
+    /// kaspa-pq (ADR-0019 §13): on a PQ network the generator's output scripts
+    /// accept only ML-DSA-87 P2PKH addresses; every legacy secp256k1 address
+    /// (the wallet must neither pay to nor change into one) is rejected at
+    /// transaction-construction time.
+    #[test]
+    fn pq_aware_output_script_rejects_legacy_and_accepts_mldsa() {
+        // testnet-10 is a kaspa-pq network: PqEnforcementMode::Consensus.
+        let net = NetworkId::with_suffix(NetworkType::Testnet, 10);
+
+        // ML-DSA-87 P2PKH recipient/change → accepted.
+        let kp = derive_keypair("testnet-10", 0, 0, 0, &[0xab; 64]);
+        let mldsa_addr = kp.address(Prefix::Testnet);
+        assert!(pq_aware_output_script(net, &mldsa_addr).is_ok(), "ML-DSA P2PKH must be a valid PQ output");
+
+        // Legacy secp256k1 outputs → rejected.
+        let legacy_pubkey = Address::new(Prefix::Testnet, Version::PubKey, &[0x02; 32]);
+        let legacy_ecdsa = Address::new(Prefix::Testnet, Version::PubKeyECDSA, &[0x02; 33]);
+        let legacy_p2sh = Address::new(Prefix::Testnet, Version::ScriptHash, &[0x03; 32]);
+        assert!(pq_aware_output_script(net, &legacy_pubkey).is_err(), "legacy PubKey output must be rejected on a PQ net");
+        assert!(pq_aware_output_script(net, &legacy_ecdsa).is_err(), "legacy ECDSA output must be rejected on a PQ net");
+        assert!(pq_aware_output_script(net, &legacy_p2sh).is_err(), "legacy P2SH output must be rejected on a PQ net");
     }
 }

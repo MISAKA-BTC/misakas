@@ -21,6 +21,7 @@ use crate::account::Inner;
 use crate::imports::*;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_hashes::blake2b_512;
+use kaspa_wallet_keys::kaspa_pq::{KaspaPqMlDsa65KeyPair, derive_keypair};
 
 pub const MLDSA_ACCOUNT_KIND: &str = "kaspa-mldsa-standard";
 
@@ -230,6 +231,33 @@ impl Account for MlDsa {
         // returns no secp256k1 keys.
         Ok(vec![])
     }
+
+    fn try_pq_keypair(
+        &self,
+        keydata: &PrvKeyData,
+        payment_secret: &Option<Secret>,
+    ) -> Result<Option<KaspaPqMlDsa65KeyPair>> {
+        // Re-derive the ML-DSA-87 keypair from the wallet's BIP39 master seed,
+        // matching the derivation used when the account's verification key was
+        // first generated (network id + account index, change=0, index=0).
+        let network_id = self.inner().wallet.network_id()?;
+        let mnemonic = keydata
+            .as_mnemonic(payment_secret.as_ref())?
+            .ok_or_else(|| Error::custom("kaspa-pq ML-DSA account requires a BIP39 mnemonic private-key source"))?;
+        let passphrase = payment_secret.as_ref().map(|s| std::str::from_utf8(s.as_ref())).transpose()?.unwrap_or_default();
+        let seed = mnemonic.to_seed(passphrase);
+        let keypair = derive_keypair(&network_id.to_string(), self.account_index as u32, 0, 0, seed.as_bytes());
+
+        // The re-derived verification key must match the stored one; a mismatch
+        // means the wrong wallet secret/passphrase/network — fail loudly rather
+        // than sign with a key that does not own the account's UTXOs.
+        if keypair.public_key_bytes().as_slice() != self.public_key.as_slice() {
+            return Err(Error::custom(
+                "kaspa-pq ML-DSA account: re-derived key does not match the stored verification key (wrong secret or network)",
+            ));
+        }
+        Ok(Some(keypair))
+    }
 }
 
 #[cfg(test)]
@@ -267,5 +295,87 @@ mod tests {
         assert_eq!(storable_in.public_key, storable_out.public_key);
         assert_eq!(storable_in.account_index, storable_out.account_index);
         assert_eq!(storable_out.public_key.len(), 2592);
+    }
+
+    /// kaspa-pq (ADR-0019 §13) Phase 5d: an ML-DSA account re-derives its signing
+    /// key from the wallet master seed (`try_pq_keypair`) and the generator's
+    /// `Signer` uses it to produce an unlock script that verifies under the
+    /// consensus script engine — the full native PQ sign path, end to end.
+    #[tokio::test]
+    async fn pq_account_signs_through_generator_signer() {
+        use crate::encryption::EncryptionKind;
+        use crate::tx::generator::{Signer, SignerT};
+        use kaspa_bip32::{Language, Mnemonic};
+        use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
+        use kaspa_consensus_core::tx::{
+            PopulatedTransaction, SignableTransaction, Transaction, TransactionId, TransactionInput, TransactionOutpoint,
+            TransactionOutput, UtxoEntry,
+        };
+        use kaspa_txscript::caches::Cache;
+        use kaspa_txscript::{TxScriptEngine, pay_to_address_script};
+
+        // In-memory wallet on a kaspa-pq network (testnet-10 => Consensus enforcement).
+        let store = Wallet::resident_store().unwrap();
+        let net = NetworkId::with_suffix(NetworkType::Testnet, 10);
+        let wallet = Arc::new(Wallet::try_new(store, None, Some(net)).unwrap());
+        let wallet_secret = Secret::new(vec![]);
+        wallet
+            .create_wallet(
+                &wallet_secret,
+                WalletCreateArgs {
+                    title: None,
+                    filename: None,
+                    encryption_kind: EncryptionKind::XChaCha20Poly1305,
+                    user_hint: None,
+                    overwrite_wallet_storage: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        // BIP39 key data + the ML-DSA verification key derived from it the way the
+        // wallet would at account-creation time (network id + account index 0).
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let mnemonic = Mnemonic::new(phrase, Language::English).unwrap();
+        let keydata = PrvKeyData::try_new_from_mnemonic(mnemonic.clone(), None, EncryptionKind::XChaCha20Poly1305).unwrap();
+        let seed = mnemonic.to_seed("");
+        let expected = derive_keypair(&net.to_string(), 0, 0, 0, seed.as_bytes());
+        let vk = expected.public_key_bytes().to_vec();
+
+        let account = Arc::new(MlDsa::try_new(&wallet, None, vk.clone(), 0, keydata.id).await.unwrap());
+
+        // try_pq_keypair must re-derive exactly the stored verification key.
+        let rederived = account.try_pq_keypair(&keydata, &None).unwrap().expect("PQ account yields a keypair");
+        assert_eq!(rederived.public_key_bytes().as_slice(), vk.as_slice());
+
+        // A 1-in / 1-out spend of a UTXO locked to the account's receive address.
+        let address = account.receive_address().unwrap();
+        assert_eq!(address.version, Version::PubKeyHashMlDsa65);
+        let spk = pay_to_address_script(&address);
+        let prev = TransactionOutpoint { transaction_id: TransactionId::from_bytes([0x11u8; 64]), index: 0 };
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput { previous_outpoint: prev, signature_script: vec![], sequence: 0, sig_op_count: 1 }],
+            vec![TransactionOutput { value: 500, script_public_key: spk.clone() }],
+            0,
+            Default::default(),
+            0,
+            vec![],
+        );
+        let entry = UtxoEntry { amount: 1000, script_public_key: spk.clone(), block_daa_score: 0, is_coinbase: false };
+        let signable = SignableTransaction::with_entries(tx, vec![entry.clone()]);
+
+        // Sign via the generator's Signer — routes through the native ML-DSA path.
+        let signer = Signer::new(account.clone().as_dyn_arc(), keydata, None);
+        let signed = signer.try_sign(signable, std::slice::from_ref(&address)).unwrap();
+        assert!(!signed.tx.inputs[0].signature_script.is_empty(), "Signer produced an ML-DSA unlock script");
+
+        // The produced signature must verify in the consensus script engine.
+        let populated = PopulatedTransaction::new(&signed.tx, vec![entry]);
+        let reused = SigHashReusedValuesUnsync::new();
+        let cache = Cache::new(10_000);
+        let mut vm =
+            TxScriptEngine::from_transaction_input(&populated, &populated.tx.inputs[0], 0, &populated.entries[0], &reused, &cache);
+        vm.execute().expect("ML-DSA signature from the generator Signer must verify in the script engine");
     }
 }
