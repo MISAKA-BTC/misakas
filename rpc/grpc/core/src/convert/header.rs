@@ -59,7 +59,7 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcHeader, {
         item.parents.iter().map(Vec::<RpcHash>::try_from).collect::<RpcResult<Vec<Vec<RpcHash>>>>()?.try_into()?,
         kaspa_consensus_core::Hash64::from_str(&item.hash_merkle_root)?,
         kaspa_consensus_core::Hash64::from_str(&item.accepted_id_merkle_root)?,
-        kaspa_consensus_core::Hash::from_str(&item.utxo_commitment)? /* PR-9.5e: utxo_commitment stays 32-byte Hash, not RpcHash(Hash64) */,
+        kaspa_consensus_core::Hash64::from_str(&item.utxo_commitment)? /* kaspa-pq (ADR-0004 / design §12): utxo_commitment is 64-byte Hash64 */,
         item.timestamp.try_into()?,
         item.bits,
         item.nonce,
@@ -82,7 +82,7 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcRawHeader, {
         // PR-9.5c/f: merkle roots widened to Hash64.
         hash_merkle_root: kaspa_consensus_core::Hash64::from_str(&item.hash_merkle_root)?,
         accepted_id_merkle_root: kaspa_consensus_core::Hash64::from_str(&item.accepted_id_merkle_root)?,
-        utxo_commitment: kaspa_consensus_core::Hash::from_str(&item.utxo_commitment)? /* PR-9.5e: utxo_commitment stays 32-byte Hash, not RpcHash(Hash64) */,
+        utxo_commitment: kaspa_consensus_core::Hash64::from_str(&item.utxo_commitment)? /* kaspa-pq (ADR-0004 / design §12): utxo_commitment is 64-byte Hash64 */,
         timestamp: item.timestamp.try_into()?,
         bits: item.bits,
         nonce: item.nonce,
@@ -101,7 +101,7 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcOptionalHeader, {
         item.parents.iter().map(Vec::<RpcHash>::try_from).collect::<RpcResult<Vec<Vec<RpcHash>>>>()?.try_into()?,
         kaspa_consensus_core::Hash64::from_str(&item.hash_merkle_root)?,
         kaspa_consensus_core::Hash64::from_str(&item.accepted_id_merkle_root)?,
-        kaspa_consensus_core::Hash::from_str(&item.utxo_commitment)? /* PR-9.5e: utxo_commitment stays 32-byte Hash, not RpcHash(Hash64) */,
+        kaspa_consensus_core::Hash64::from_str(&item.utxo_commitment)? /* kaspa-pq (ADR-0004 / design §12): utxo_commitment is 64-byte Hash64 */,
         item.timestamp.try_into()?,
         item.bits,
         item.nonce,
@@ -205,10 +205,10 @@ mod tests {
                 .try_into()
                 .unwrap(),
             // PR-9.5c/f: hash_merkle_root + accepted_id_merkle_root are Hash64.
-            // PR-9.5e: utxo_commitment (3rd) stays a 32-byte accumulator commitment.
+            // kaspa-pq (ADR-0004 / design §12): utxo_commitment (3rd) is also Hash64.
             new_unique_hash64(),
             new_unique_hash64(),
-            new_unique_hash32(),
+            new_unique_hash64(),
             123,
             12345,
             98765,
@@ -243,10 +243,10 @@ mod tests {
                 .try_into()
                 .unwrap(),
             // PR-9.5c/f: hash_merkle_root + accepted_id_merkle_root are Hash64.
-            // PR-9.5e: utxo_commitment (3rd) stays a 32-byte accumulator commitment.
+            // kaspa-pq (ADR-0004 / design §12): utxo_commitment (3rd) is also Hash64.
             new_unique_hash64(),
             new_unique_hash64(),
-            new_unique_hash32(),
+            new_unique_hash64(),
             123,
             12345,
             98765,

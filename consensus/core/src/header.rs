@@ -1,11 +1,12 @@
 use crate::{BlockHash, BlueWorkType, PruningPoint, hashing};
 use borsh::{BorshDeserialize, BorshSerialize};
 use itertools::Itertools;
-// PR-9.5e: `Hash` (= `Hash32`) is retained ONLY for `utxo_commitment`
-// (an LtHash/muhash accumulator commitment, not a block-hash
-// identity). Every block-hash field/parent below uses `BlockHash`
+// kaspa-pq (ADR-0004 / design §12): `utxo_commitment` is now `Hash64`
+// (64-byte BLAKE2b-512 of the LtHash state) like every other PQ consensus
+// identity. `Hash` (= `Hash32`) is retained only for the legacy 32-byte
+// kHeavyHash PoW path; every block-hash field/parent below uses `BlockHash`
 // (= `Hash64`); the pruning point uses `PruningPoint` (also `Hash64`).
-use kaspa_hashes::Hash;
+use kaspa_hashes::Hash64;
 use kaspa_utils::{
     iter::{IterExtensions, IterExtensionsRle},
     mem_size::MemSizeEstimator,
@@ -149,7 +150,8 @@ pub struct Header {
     /// Same rationale; underlying branch hasher is the
     /// domain-separated [`kaspa_hashes::AcceptedIdMerkleBranchHash64`].
     pub accepted_id_merkle_root: crate::AcceptedIdMerkleRoot,
-    pub utxo_commitment: Hash,
+    /// kaspa-pq (ADR-0004 / design §12): 64-byte BLAKE2b-512 UTXO-set commitment.
+    pub utxo_commitment: Hash64,
     /// Timestamp is in milliseconds
     pub timestamp: u64,
     pub bits: u32,
@@ -178,7 +180,7 @@ impl Header {
         parents_by_level: CompressedParents,
         hash_merkle_root: crate::MerkleRoot,
         accepted_id_merkle_root: crate::AcceptedIdMerkleRoot,
-        utxo_commitment: Hash,
+        utxo_commitment: Hash64,
         timestamp: u64,
         bits: u32,
         nonce: u64,

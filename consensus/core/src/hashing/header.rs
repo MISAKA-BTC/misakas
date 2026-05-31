@@ -13,8 +13,9 @@ use kaspa_hashes::{Hash, Hash64, HasherBase};
 /// levels, hash_merkle_root, accepted_id_merkle_root, utxo_commitment,
 /// timestamp, bits, nonce, pow_algo_id, daa_score, blue_score,
 /// blue_work, pruning_point. As of PR-9.5e the parent hashes, merkle
-/// roots and pruning point are all 64-byte; `utxo_commitment` stays
-/// 32-byte (it is an accumulator commitment, not a block identity).
+/// roots and pruning point are all 64-byte; kaspa-pq (ADR-0004 /
+/// design §12) widened `utxo_commitment` to 64-byte too, so every
+/// field fed into the preimage is now a 64-byte PQ consensus identity.
 #[inline]
 fn write_header_preimage<H: HasherBase>(hasher: &mut H, header: &Header, nonce: u64, timestamp: u64) {
     hasher.update(header.version.to_le_bytes()).write_len(header.parents_by_level.expanded_len()); // Write the number of parent levels
@@ -77,9 +78,10 @@ pub fn hash(header: &Header) -> Hash64 {
 // consensus/pow).
 //
 // As of PR-9.5e the parent hashes, merkle roots and pruning point fed
-// into this hasher are 64-byte; `utxo_commitment` stays 32-byte. The
-// preimage is identical to the 32-byte and identity-64 digests (see
-// `write_header_preimage`); only the hasher domain differs.
+// into this hasher are 64-byte; kaspa-pq (ADR-0004 / design §12) widened
+// `utxo_commitment` to 64-byte too. The preimage is identical to the
+// 32-byte and identity-64 digests (see `write_header_preimage`); only
+// the hasher domain differs.
 
 /// 64-byte pre-PoW hash for the kaspa-pq Layer 0 PoW path. Same
 /// preimage layout as `hash_override_nonce_time` (via the shared

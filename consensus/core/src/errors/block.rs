@@ -6,9 +6,9 @@ use crate::{
     tx::{TransactionId, TransactionOutpoint},
 };
 use itertools::Itertools;
-// PR-9.5e: `Hash` (32-byte) retained only for the two utxo-commitment
-// positions of `BadUTXOCommitment`; block-identifier positions use `BlockHash`.
-use kaspa_hashes::Hash;
+// kaspa-pq (ADR-0004 / design §12): the two utxo-commitment positions of
+// `BadUTXOCommitment` are 64-byte `Hash64`; block-identifier positions use `BlockHash`.
+use kaspa_hashes::Hash64;
 use thiserror::Error;
 
 #[derive(Clone, Debug)]
@@ -137,7 +137,8 @@ pub enum RuleError {
     UnexpectedIndirectParents(TwoDimVecDisplay<BlockHash>, TwoDimVecDisplay<BlockHash>),
 
     #[error("block {0} UTXO commitment is invalid - block header indicates {1}, but calculated value is {2}")]
-    BadUTXOCommitment(BlockHash, Hash, Hash),
+    // kaspa-pq (ADR-0004 / design §12): the two commitment positions are 64-byte Hash64.
+    BadUTXOCommitment(BlockHash, Hash64, Hash64),
 
     #[error("block {0} accepted ID merkle root is invalid - block header indicates {1}, but calculated value is {2}")]
     // PR-9.5c: positions 1 and 2 carry `AcceptedIdMerkleRoot`

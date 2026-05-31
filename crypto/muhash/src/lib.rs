@@ -13,10 +13,11 @@
 //!     plus the [`MuHashElementBuilder`] hasher-style API.
 //!   - [`MuHash::combine`] (component-wise addition mod 2^16).
 //!   - [`MuHash::serialize`] / [`MuHash::deserialize`] (2048 bytes, was 384).
-//!   - [`MuHash::finalize`] — returns a 32-byte [`Hash`] (BLAKE2b-256 keyed
-//!     with `b"MuHashFinalize"`). The 64-byte production commitment lives
-//!     in a separate `UtxoCommitment64` type per ADR-0004 and is not
-//!     produced by this PoC.
+//!   - [`MuHash::finalize`] — kaspa-pq (ADR-0004 / design §12): returns the
+//!     64-byte [`Hash64`] UTXO-set commitment (keyed BLAKE2b-512 under the
+//!     `b"UtxoCommitment64"` domain), so it matches every other 64-byte PQ
+//!     consensus identity. Only this final down-hash is 64-byte; the element
+//!     hash and the u3072/LtHash math are unchanged.
 //!   - [`EMPTY_MUHASH`] — finalize of a fresh accumulator (2048 zero bytes).
 //!   - [`SERIALIZED_MUHASH_SIZE`] — now `LTHASH_STATE_BYTES` = 2048.
 //!   - [`OverflowError`] / [`MuHashError`] — kept for API compat but never
@@ -28,7 +29,7 @@
 //! 32 bytes.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use kaspa_hashes::{Hash, Hasher, HasherBase, MuHashElementHash, MuHashFinalizeHash};
+use kaspa_hashes::{Hash, Hash64, Hasher, HasherBase, MuHashElementHash, UtxoCommitmentHash64};
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use serde::{
@@ -45,41 +46,30 @@ pub const LTHASH_LANE_BYTES: usize = 2;
 /// Serialized LtHash state size in bytes (`LTHASH_LANES * LTHASH_LANE_BYTES`).
 pub const LTHASH_STATE_BYTES: usize = LTHASH_LANES * LTHASH_LANE_BYTES;
 
-/// Output size of `finalize()` in bytes (kaspa-pq PoC keeps the upstream
-/// 32-byte width — see ADR-0004).
-pub const HASH_SIZE: usize = 32;
+/// Output size of `finalize()` in bytes. kaspa-pq (ADR-0004 / design §12):
+/// the UTXO commitment is 64-byte (BLAKE2b-512) so it matches every other
+/// PQ consensus identity.
+pub const HASH_SIZE: usize = 64;
 
 /// Serialized accumulator state size. Renamed conceptually to "LtHash state
 /// size" — but the constant name is kept for source compatibility with the
 /// many call sites that already reference `SERIALIZED_MUHASH_SIZE`.
 pub const SERIALIZED_MUHASH_SIZE: usize = LTHASH_STATE_BYTES;
 
-/// `MuHash::new().finalize()` — the 32-byte commitment of an empty UTXO set.
+/// `MuHash::new().finalize()` — the 64-byte commitment of an empty UTXO set.
 ///
-/// Concretely this is `MuHashFinalizeHash::hash([0u8; 2048])`.
-/// The value below is asserted at runtime by `test_empty_hash`; if the
-/// underlying hasher or state size ever changes, that test will fail and
-/// this constant must be re-derived from the test panic.
-pub const EMPTY_MUHASH: Hash = Hash::from_bytes([
-    0x25, 0x0b, 0x9d, 0x19, 0x78, 0x3f, 0x24, 0xcd, 0xf5, 0x4a, 0x3b, 0xc7, 0xab, 0x2f, 0xaa, 0x52, 0x5f, 0xeb, 0x09, 0x0d, 0xe4,
-    0x10, 0x7d, 0xbb, 0xa0, 0xab, 0x64, 0xb5, 0xd8, 0x77, 0xe0, 0xea,
+/// kaspa-pq (ADR-0004 / design §12): concretely this is
+/// `UtxoCommitmentHash64::hash([0u8; 2048])` (keyed BLAKE2b-512 over the
+/// LtHash state). The value below is asserted at runtime by
+/// `test_empty_hash`; if the underlying hasher or state size ever changes,
+/// that test will fail and this constant must be re-derived from the test
+/// panic.
+pub const EMPTY_MUHASH: Hash64 = Hash64::from_bytes([
+    0x63, 0xaa, 0x5f, 0xf7, 0x4c, 0x41, 0x03, 0x5e, 0x98, 0x54, 0xfe, 0x59, 0x53, 0x2a, 0xc6, 0x8b, 0x2f, 0x5f, 0x3b, 0x97, 0xdd,
+    0x49, 0x12, 0x07, 0x3d, 0xdf, 0x4b, 0x76, 0x9b, 0x38, 0x9f, 0x14, 0x6f, 0x6b, 0x2e, 0xf6, 0xb7, 0x00, 0xc9, 0x2e, 0x9e, 0xe9,
+    0x7f, 0x02, 0x43, 0x17, 0x83, 0xac, 0xeb, 0xe8, 0xd0, 0x62, 0x67, 0x27, 0x63, 0x79, 0x94, 0x4d, 0xa9, 0x90, 0x26, 0x62, 0xc8,
+    0x82,
 ]);
-
-/// `MuHash::new().finalize_64()` — the 64-byte (production-width)
-/// commitment of an empty UTXO set, returned as raw bytes.
-///
-/// Concretely this is `BLAKE2b-512(LtHash state of [0u8; 2048])`.
-/// kaspa-pq Phase 7 (PR-7.6) — see
-/// `consensus/core/src/utxo_commitment.rs` for the `UtxoCommitment64`
-/// newtype. The value below is asserted at runtime by
-/// `test_empty_hash_64`; re-derive from the test panic if the
-/// underlying finalize function ever changes.
-pub const EMPTY_MUHASH_64: [u8; 64] = [
-    0x29, 0x38, 0xee, 0xb1, 0x25, 0x21, 0xe0, 0x1d, 0x1f, 0x8c, 0x65, 0xf5, 0x87, 0x80, 0x21, 0x48, 0xa8, 0x1b, 0x6e, 0x50, 0x28,
-    0xed, 0x27, 0xb5, 0x0a, 0x69, 0x20, 0x03, 0x3b, 0x2e, 0x97, 0x23, 0xd4, 0x60, 0xf6, 0x89, 0x59, 0x86, 0x0e, 0x61, 0xd5, 0x49,
-    0x53, 0x8a, 0xf1, 0xdc, 0x38, 0xd9, 0x62, 0xcd, 0x5b, 0x10, 0x16, 0xfd, 0xf8, 0xe0, 0xaf, 0xda, 0x2a, 0xb8, 0xeb, 0x82, 0x0d,
-    0x6b,
-];
 
 /// LtHash16_1024 UTXO accumulator.
 ///
@@ -171,34 +161,20 @@ impl MuHash {
         }
     }
 
-    /// 32-byte finalize: `BLAKE2b-256` (keyed `"MuHashFinalize"`) over the
-    /// 2048-byte serialized state. The `&mut self` receiver is retained
-    /// for source compatibility with upstream Kaspa's `MuHash::finalize`;
-    /// no normalization is performed.
+    /// kaspa-pq (ADR-0004 / design §12): 64-byte finalize — keyed
+    /// `BLAKE2b-512` (`UtxoCommitmentHash64`, domain `"UtxoCommitment64"`)
+    /// over the 2048-byte serialized LtHash state. This is the UTXO-set
+    /// commitment stored in the block header's `utxo_commitment` field; it
+    /// is 64-byte so it carries the full security margin of LtHash16_1024
+    /// and matches every other PQ consensus identity. The element hash and
+    /// the LtHash group math are unchanged — only this final down-hash is
+    /// 64-byte. The `&mut self` receiver is retained for source
+    /// compatibility with upstream Kaspa's `MuHash::finalize`; no
+    /// normalization is performed.
     #[inline]
-    pub fn finalize(&mut self) -> Hash {
+    pub fn finalize(&mut self) -> Hash64 {
         let bytes = self.serialize();
-        MuHashFinalizeHash::hash(bytes)
-    }
-
-    /// 64-byte finalize: unkeyed `BLAKE2b-512` over the 2048-byte
-    /// serialized state. This is the production-width kaspa-pq UTXO
-    /// commitment (kaspa-pq Phase 7 PR-7.6; see
-    /// `consensus/core/src/utxo_commitment.rs` for the dedicated
-    /// `UtxoCommitment64` newtype that wraps the returned bytes).
-    ///
-    /// The 32-byte [`finalize`] stays as the active header field for
-    /// the PoC; the header switch to `UtxoCommitment64` is a separate
-    /// follow-up. Both finalize variants run off the same serialized
-    /// LtHash state — they differ only in the truncation width chosen
-    /// at the final BLAKE2b call.
-    #[inline]
-    pub fn finalize_64(&mut self) -> [u8; 64] {
-        let bytes = self.serialize();
-        let digest = blake2b_simd::Params::new().hash_length(64).to_state().update(&bytes).finalize();
-        let mut out = [0u8; 64];
-        out.copy_from_slice(digest.as_bytes());
-        out
+        UtxoCommitmentHash64::hash(bytes)
     }
 
     /// Serialize the LtHash state as little-endian 16-bit lanes. The byte
@@ -383,7 +359,7 @@ impl<'de> Deserialize<'de> for MuHash {
 #[cfg(test)]
 mod tests {
     use crate::{EMPTY_MUHASH, LTHASH_LANES, LTHASH_STATE_BYTES, MuHash, OverflowError, SERIALIZED_MUHASH_SIZE};
-    use kaspa_hashes::Hash;
+    use kaspa_hashes::Hash64;
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
@@ -409,47 +385,7 @@ mod tests {
         // pasted back into `lib.rs`.
         let mut empty = MuHash::new();
         let got = empty.finalize();
-        assert_eq!(got, EMPTY_MUHASH, "if this fails, replace EMPTY_MUHASH with {:#04x?}", got.as_bytes());
-    }
-
-    #[test]
-    fn test_empty_hash_64() {
-        // kaspa-pq Phase 7 (PR-7.6) production-width empty-state digest.
-        // Same re-derivation rule as `test_empty_hash` if the test ever
-        // fails after a finalize change.
-        let mut empty = MuHash::new();
-        let got = empty.finalize_64();
-        assert_eq!(got, crate::EMPTY_MUHASH_64, "if this fails, replace EMPTY_MUHASH_64 with {got:#04x?}");
-    }
-
-    #[test]
-    fn test_finalize_64_length_and_distinct_from_finalize_32() {
-        let mut acc = MuHash::new();
-        acc.add_element(b"some non-empty element");
-        let d32 = acc.finalize();
-        let d64 = acc.finalize_64();
-        assert_eq!(d32.as_bytes().len(), 32);
-        assert_eq!(d64.len(), 64);
-        // 32-byte and 64-byte finalize use different keyed BLAKE2 widths;
-        // the 32-byte digest must not be a prefix or suffix of the 64-byte
-        // digest (they're different hash personalisations).
-        assert_ne!(&d64[..32], d32.as_bytes());
-        assert_ne!(&d64[32..], d32.as_bytes());
-    }
-
-    #[test]
-    fn test_finalize_64_changes_with_state() {
-        let mut a = MuHash::new();
-        a.add_element(b"a");
-        let mut b = MuHash::new();
-        b.add_element(b"b");
-        assert_ne!(a.finalize_64(), b.finalize_64());
-        // Add-then-remove still returns the empty digest under finalize_64
-        // (i.e. `EMPTY_MUHASH_64`).
-        let mut c = MuHash::new();
-        c.add_element(b"x");
-        c.remove_element(b"x");
-        assert_eq!(c.finalize_64(), crate::EMPTY_MUHASH_64);
+        assert_eq!(got, EMPTY_MUHASH, "EMPTYHEX={}=END", got);
     }
 
     #[test]
@@ -578,7 +514,7 @@ mod tests {
         // finalized commitment.
         let mut rng = ChaCha8Rng::seed_from_u64(1);
         for _ in 0..10 {
-            let mut res = Hash::default();
+            let mut res = Hash64::default();
             let mut table = [0u8; 4];
             rng.fill(&mut table[..]);
             for order in 0..4 {

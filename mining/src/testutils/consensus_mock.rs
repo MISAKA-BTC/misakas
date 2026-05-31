@@ -19,7 +19,7 @@ use kaspa_consensus_core::{
     utxo::utxo_collection::UtxoCollection,
 };
 use kaspa_core::time::unix_now;
-use kaspa_hashes::{Hash64, ZERO_HASH, ZERO_HASH64}; // PR-9.5e: block ids + merkle roots are Hash64; ZERO_HASH retained for utxo_commitment
+use kaspa_hashes::{Hash64, ZERO_HASH64}; // kaspa-pq: block ids + merkle roots + utxo_commitment are all Hash64
 
 use parking_lot::RwLock;
 use std::{collections::HashMap, sync::Arc};
@@ -92,7 +92,7 @@ impl ConsensusApi for ConsensusMock {
             CompressedParents::default(),
             hash_merkle_root,
             ZERO_HASH64, // PR-9.5e: accepted_id_merkle_root (Hash64)
-            ZERO_HASH,   // utxo_commitment stays 32-byte
+            ZERO_HASH64, // kaspa-pq (ADR-0004 / design §12): utxo_commitment (Hash64)
             now,
             123456789u32, // bits
             0,            // nonce

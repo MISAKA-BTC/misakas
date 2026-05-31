@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_consensus_core::{BlockHash, BlueWorkType, header::Header}; // PR-9.5e: block ids are Hash64
-use kaspa_hashes::Hash; // PR-9.5e: retained for utxo_commitment (32-byte accumulator commitment, stays Hash)
+use kaspa_hashes::Hash64; // kaspa-pq (ADR-0004 / design §12): utxo_commitment is 64-byte BLAKE2b-512
 use serde::{Deserialize, Serialize};
 use workflow_serializer::prelude::*;
 
@@ -22,7 +22,7 @@ pub struct RpcOptionalHeader {
     /// PR-9.5c: widened to `AcceptedIdMerkleRoot` (Hash64).
     pub accepted_id_merkle_root: Option<kaspa_consensus_core::AcceptedIdMerkleRoot>,
     /// Level: Full
-    pub utxo_commitment: Option<Hash>,
+    pub utxo_commitment: Option<Hash64>,
     /// Level: Low - Timestamp is in milliseconds
     pub timestamp: Option<u64>,
     /// Level: Low
@@ -184,7 +184,7 @@ impl Serializer for RpcOptionalHeader {
         // PR-9.5c: merkle roots serialised as Hash64.
         store!(Option<kaspa_hashes::Hash64>, &self.hash_merkle_root, writer)?;
         store!(Option<kaspa_hashes::Hash64>, &self.accepted_id_merkle_root, writer)?;
-        store!(Option<Hash>, &self.utxo_commitment, writer)?;
+        store!(Option<Hash64>, &self.utxo_commitment, writer)?;
         store!(Option<u64>, &self.timestamp, writer)?;
         store!(Option<u32>, &self.bits, writer)?;
         store!(Option<u64>, &self.nonce, writer)?;
@@ -207,7 +207,7 @@ impl Deserializer for RpcOptionalHeader {
         // PR-9.5c: merkle roots deserialised as Hash64.
         let hash_merkle_root = load!(Option<kaspa_hashes::Hash64>, reader)?;
         let accepted_id_merkle_root = load!(Option<kaspa_hashes::Hash64>, reader)?;
-        let utxo_commitment = load!(Option<Hash>, reader)?;
+        let utxo_commitment = load!(Option<Hash64>, reader)?;
         let timestamp = load!(Option<u64>, reader)?;
         let bits = load!(Option<u32>, reader)?;
         let nonce = load!(Option<u64>, reader)?;

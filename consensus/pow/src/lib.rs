@@ -250,7 +250,7 @@ impl StateLayer0 {
 mod tests_pq {
     use super::*;
     use kaspa_consensus_core::{BlueWorkType, header::Header, pow_layer0::POW_ALGO_ID_KHEAVYHASH};
-    use kaspa_hashes::{ZERO_HASH, ZERO_HASH64};
+    use kaspa_hashes::ZERO_HASH64;
 
     fn dummy_header(bits: u32, nonce: u64, timestamp: u64) -> Header {
         Header::new_finalized(
@@ -259,7 +259,7 @@ mod tests_pq {
             // PR-9.5c: merkle roots are Hash64; PR-9.5d: pow_algo_id added.
             ZERO_HASH64, // hash_merkle_root
             ZERO_HASH64, // accepted_id_merkle_root
-            ZERO_HASH,   // utxo_commitment (still 32-byte)
+            ZERO_HASH64, // kaspa-pq (ADR-0004 / design §12): utxo_commitment (Hash64)
             timestamp,
             bits,
             nonce,

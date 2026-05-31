@@ -71,7 +71,7 @@ mod tests {
         }
         let commitment = ms.finalize();
         let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
-        println!("PREMINE_UTXO_COMMITMENT: Hash::from_bytes([{rust}])");
+        println!("PREMINE_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
     }
 
     /// Deterministically derives the single-key ML-DSA-87 premine keypair and its

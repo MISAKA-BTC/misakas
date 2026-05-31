@@ -34,10 +34,10 @@ pub use kaspa_hashes::Hash64;
 //              identities) and every user — the header, stores,
 //              GHOSTDAG, reachability, pruning, relations  → Hash64
 //
-// UtxoCommitment deliberately stays 32 B: it is an LtHash/muhash
-// accumulator commitment, NOT a block-hash identity, so it is not
-// keyed into any BlockHashMap. Its 64-byte production form is the
-// separate `utxo_commitment::UtxoCommitment64` (PR-7.6).
+// kaspa-pq (ADR-0004 / design §12): UtxoCommitment is 64-byte
+// (BLAKE2b-512 of the LtHash state) like every other PQ consensus
+// identity. It is an accumulator commitment, not a block-hash
+// identity, so it is never keyed into a BlockHashMap.
 //
 // `LegacyHash32` is the **stable** 32-byte name — it is the alias
 // that NEVER widens. Use it in source that wants to be explicit
@@ -147,11 +147,6 @@ pub mod subnets;
 pub mod trusted;
 pub mod tx;
 pub mod utxo;
-/// kaspa-pq Phase 7 (PR-7.6): 64-byte production UTXO commitment type
-/// (see docs/adr/0004-utxo-commitment64.md). The header field is still
-/// 32-byte `Hash` for the PoC; this module exists so the header switch
-/// PR is a small mechanical type swap.
-pub mod utxo_commitment;
 
 /// Integer type for accumulated PoW of blue blocks.
 ///
