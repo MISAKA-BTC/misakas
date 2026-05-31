@@ -1,8 +1,9 @@
 # ADR-0002: ML-DSA-65 P2PKH as the only standard script
 
-Status: Accepted (Phase 1)
+Status: Accepted (Phase 1). **Signature scheme superseded by [ADR-0019](0019-mldsa87-migration.md)** — ML-DSA-65 → **ML-DSA-87**, full PQ-only. The P2PKH structure and acceptance criteria here still hold; what changed: the scheme name/sizes (pk 2592 / sig 4627), the tx context `b"kaspa-pq-v1/tx/mldsa87"`, and the address payload (64-byte BLAKE2b-512). Source identifiers still read `MlDsa65` pending a cosmetic rename (design doc §J / ADR-0019 P8, deferred).
 Date: 2026-05-28
 Supersedes: —
+Superseded-by: ADR-0019 (signature scheme)
 
 ## Context
 

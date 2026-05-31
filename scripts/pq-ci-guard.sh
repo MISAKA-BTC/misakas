@@ -3,9 +3,9 @@
 #
 #   1) Advisory audit of dependencies (libcrux-ml-dsa et al.) — active now.
 #   2) secp256k1 MUST be absent from the kaspa-consensus dependency tree.
-#      This is the Phase-8 gate: it is a SOFT warning during phases 1–7
-#      (secp256k1 is still pulled in until the legacy-secp256k1 feature is
-#      gated out) and becomes a HARD failure once Phase 8 lands.
+#      Phase 8 (PR-19-S8a/S8b) gated secp256k1 behind the `legacy-secp256k1`
+#      feature, so this is now a HARD failure by default. Export HARD_SECP_GATE=0
+#      to soften it back to a warning (e.g. while bisecting a regression).
 #
 # Usage: scripts/pq-ci-guard.sh
 set -uo pipefail
@@ -24,15 +24,16 @@ else
 fi
 
 echo "== [2/2] secp256k1 must be absent from kaspa-consensus tree (Phase-8 gate) =="
-# Set HARD_SECP_GATE=1 once Phase 8 (secp256k1 feature isolation) has landed.
-HARD_SECP_GATE="${HARD_SECP_GATE:-0}"
+# Phase 8 has landed (PR-19-S8a/S8b): secp256k1 is feature-gated out of the
+# consensus tree, so the gate is HARD by default. Export HARD_SECP_GATE=0 to soften.
+HARD_SECP_GATE="${HARD_SECP_GATE:-1}"
 if cargo tree -p kaspa-consensus -e normal 2>/dev/null | grep -qi secp256k1; then
   echo "secp256k1 IS present in the kaspa-consensus dependency tree."
   if [ "$HARD_SECP_GATE" = "1" ]; then
     echo "  -> FAIL: PQ-only release must not link secp256k1 into consensus."
     fail=1
   else
-    echo "  -> soft warning (expected during phases 1–7; gate hardens in Phase 8)."
+    echo "  -> soft warning (HARD_SECP_GATE=0); Phase 8 expects this to be empty."
   fi
 else
   echo "OK: no secp256k1 in the kaspa-consensus dependency tree."

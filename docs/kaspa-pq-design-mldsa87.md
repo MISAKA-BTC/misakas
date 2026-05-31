@@ -154,6 +154,8 @@ legacy-secp256k1 = ["dep:secp256k1"]
 ```
 legacy opcode 実装 / legacy wallet API / legacy tests は `legacy-secp256k1` のみ。release/node binary では無効。CI: `cargo deny check advisories`, `cargo audit`, `cargo tree -p kaspa-consensus | grep secp256k1 && exit 1`。`libcrux-ml-dsa >= 0.0.9` 必須。
 
+**実装済 (Phase 8 — S8a `b278817` / S8b `a1d93f5` / S8c):** `secp256k1` は `kaspa-txscript(-errors)` / `kaspa-consensus-core` / `kaspa-consensus` で `optional = true` 化し `legacy-secp256k1` feature に gate（default = `pq-only`）。`cargo tree -p kaspa-consensus -e normal` は secp256k1 ゼロ（`scripts/pq-ci-guard.sh` の `HARD_SECP_GATE=1` で hard gate、CI `lints` job に組込済）。SigCache key は secp-free（`SigAlg {MlDsa87, #[cfg(legacy)] Schnorr/Ecdsa}` + 3×`[u8;64]` BLAKE2b digest, §10）。legacy sign helper を呼ぶ wallet-core / simpa / rothschild / testing-integration は `kaspa-consensus-core/legacy-secp256k1` を有効化（いずれも kaspad の依存外）。残（非ブロッキング）: RPC/SDK 層 (`rpc-core → consensus-wasm → consensus-client`) の secp（client tx serialization、consensus 検証外）と cosmetic な `MlDsa65`→`87` rename。
+
 ## 15. 設計 K: transport PQ scope
 
 初回は **transport を PQ claim に含めない**（README/spec に「PQC claim は tx authorization と consensus identity に限定」）。ML-KEM hybrid は別 ADR。
@@ -187,7 +189,7 @@ legacy opcode 実装 / legacy wallet API / legacy tests は `legacy-secp256k1` �
 - P5: wallet/API PQ-only
 - P6: UTXO commitment64
 - P7: Mass/DoS calibration
-- P8: Release hardening（`legacy-secp256k1` なし release、docs、integration）
+- P8 (done): Release hardening — `secp256k1` を `legacy-secp256k1` feature に gate（release/consensus tree は secp ゼロ、`cargo tree -p kaspa-consensus -e normal` で確認）、CI hard gate（`scripts/pq-ci-guard.sh`）、docs。残: cosmetic rename と RPC/SDK 層 secp（consensus 検証外）
 
 ## 18. 受け入れ基準（要約）
 - Consensus: PQ active で legacy output/input/opcode/P2SH を含む block・tx が invalid、ML-DSA P2PKH は valid。

@@ -21,17 +21,20 @@ The original 1.0 decision was a minimal value/variant swap (ML-DSA-65→87) that
 - **Script caps:** P2PKH-only → `MAX_SCRIPT_ELEMENT_SIZE = 8192`, `MAX_SCRIPTS_SIZE = 10_000`, `max_signature_script_len = 10_000`. (Revises the 1.0 multisig-sized 16384/32768.)
 
 ### Net-new consensus/wallet work (8 phases; design doc §17, §22 order)
+All eight phases have landed on branch `pr-19-…` (not yet pushed to `main`):
+
 - **P1 (done):** `PqEnforcementMode {Disabled, PolicyOnly, Consensus}` + `pq_activation_daa_score` + `Params::is_pq_active(daa)` in `params.rs`; all kaspa-pq nets = `Consensus` @ genesis. (Inert until consumed in P2.)
-- **P2:** `ScriptPolicy` in `TxScriptEngine`; legacy signature opcodes → consensus error; P2SH disabled; PQ-only script-class reject at mempool **and** consensus (output + input).
-- **P3:** `calc_mldsa87_signature_hash` → `Hash64` + `Mldsa87SigHashReusedValues`; context `mldsa87`; drop `secp256k1::Message` from the ML-DSA path.
-- **P4:** 64-byte address + premine P2PKH + caps; **then** regenerate genesis once.
-- **P5:** wallet/API PQ-only (legacy address reject, PQ change address).
-- **P6:** `utxo_commitment` → `Hash64`.
-- **P7:** mass/DoS calibration (benchmark `mass_per_sig_op`, dust).
-- **P8:** rename finalize + `secp256k1` feature-gate (no secp256k1 in consensus tree) + SigCache PQ key + spec/ADR/README + build/test.
+- **P2 (done):** `ScriptPolicy` in `TxScriptEngine`; legacy signature opcodes → consensus error; P2SH disabled; PQ-only script-class reject at mempool **and** consensus (output + input).
+- **P3 (done):** `calc_mldsa87_signature_hash` → `Hash64` + `Mldsa87SigHashReusedValues`; context `mldsa87`; ML-DSA verify/sign in lockstep on the 64-byte digest.
+- **P4 (done):** 64-byte address + premine P2PKH + caps; genesis regenerated once.
+- **P5 (done):** wallet/API PQ-only (legacy address reject, PQ change address); native ML-DSA wallet-core.
+- **P6 (done):** `utxo_commitment` → `Hash64`.
+- **P7 (done):** mass/DoS calibration (`mass_per_sig_op` = 10000 from the measured ML-DSA-87/Schnorr verify ratio).
+- **P8 (secp256k1 feature-gate + SigCache PQ key + docs done — S8a `b278817`, S8b `a1d93f5`, S8c):**
+  `secp256k1` is now an **optional** dependency of `kaspa-txscript(-errors)`, `kaspa-consensus-core`, and `kaspa-consensus`, gated behind a `legacy-secp256k1` feature (default = `pq-only`). The SigCache key is secp-free — `SigAlg {MlDsa87, #[cfg(legacy)] Schnorr/Ecdsa}` + three `[u8; 64]` BLAKE2b digests (design §10), dropping the S3b `secp256k1::Message` fold. `cargo tree -p kaspa-consensus -e normal` now links **zero** secp256k1, enforced as a hard gate by `scripts/pq-ci-guard.sh` (`HARD_SECP_GATE=1` default), wired into the CI `lints` job. **Deferred (non-blocking):** the cosmetic `MlDsa65`→`87` identifier rename; and secp256k1 in the RPC/SDK layer (`kaspa-rpc-core → kaspa-consensus-wasm → kaspa-consensus-client`), which is the client transaction-serialization path, **not** consensus validation.
 
 ### Security note (libcrux advisories)
-Local `advisory-db` lists `RUSTSEC-2026-0076` / `-0077` for `libcrux-ml-dsa`, both `patched >= 0.0.8`; we pin `=0.0.9` → **clear**. The design doc's cited `RUSTSEC-2026-0125/0126` are not present in the local advisory-db snapshot. `cargo audit` / `cargo deny check advisories` are wired into the P1 CI guard (`scripts/pq-ci-guard.sh`) and become a hard gate in P8.
+Local `advisory-db` lists `RUSTSEC-2026-0076` / `-0077` for `libcrux-ml-dsa`, both `patched >= 0.0.8`; we pin `=0.0.9` → **clear**. The design doc's cited `RUSTSEC-2026-0125/0126` are not present in the local advisory-db snapshot. `cargo audit` / `cargo deny check advisories` are wired into the P1 CI guard (`scripts/pq-ci-guard.sh`); as of P8 the secp256k1-tree check is a **hard** gate (`HARD_SECP_GATE=1` default), run by the CI `lints` job.
 
 ### Normative launch-scope values (design doc §16.2)
 | Item | Value |
