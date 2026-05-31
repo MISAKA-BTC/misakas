@@ -20,18 +20,19 @@
 use crate::account::Inner;
 use crate::imports::*;
 use kaspa_addresses::{Address, Prefix, Version};
-use kaspa_hashes::blake2b_512;
+use kaspa_hashes::blake2b_512_address_payload;
 use kaspa_wallet_keys::kaspa_pq::{KaspaPqMlDsa87KeyPair, derive_keypair};
 
 pub const MLDSA_ACCOUNT_KIND: &str = "kaspa-mldsa-standard";
 
 /// kaspa-pq ML-DSA-87 P2PKH [`Address`] for `public_key` (the 2592-byte
 /// verification key) under `prefix`: `Version::PubKeyHashMlDsa87` over the
-/// 64-byte BLAKE2b-512 of the key (ADR-0019 §8/§13). This is the single source
-/// of truth for receive/change address derivation and is kept free-standing so
-/// it can be unit-tested without constructing a [`Wallet`].
+/// 64-byte keyed BLAKE2b-512 of the key (md2 §4.2, `kaspa-pq-v2/address/mldsa87`;
+/// ADR-0019 §8/§13). This is the single source of truth for receive/change
+/// address derivation and is kept free-standing so it can be unit-tested without
+/// constructing a [`Wallet`].
 pub fn mldsa_p2pkh_address(prefix: Prefix, public_key: &[u8]) -> Address {
-    let payload = blake2b_512(public_key);
+    let payload = blake2b_512_address_payload(public_key);
     Address::new(prefix, Version::PubKeyHashMlDsa87, payload.as_byte_slice())
 }
 

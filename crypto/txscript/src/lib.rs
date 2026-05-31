@@ -1696,7 +1696,6 @@ mod bitcoind_tests {
     #[test]
     fn test_mldsa87_p2pkh_spend_roundtrip() {
         use crate::standard::pay_to_address_script;
-        use blake2b_simd::Params;
         use kaspa_addresses::{Address, Prefix, Version};
         use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
         use libcrux_ml_dsa::ml_dsa_87 as mldsa;
@@ -1708,9 +1707,10 @@ mod bitcoind_tests {
         let sk = &keypair.signing_key;
         assert_eq!(pk_bytes.len(), MLDSA87_PK_LEN);
 
-        // 2. Address payload = BLAKE2b-512(public_key) (ADR-0019 §8).
-        let mut pk_hash = [0u8; 64];
-        pk_hash.copy_from_slice(Params::new().hash_length(64).to_state().update(pk_bytes).finalize().as_bytes());
+        // 2. Address payload = keyed BLAKE2b-512(public_key) under
+        //    `kaspa-pq-v2/address/mldsa87` (md2 §4.2 / ADR-0019 §8) — the exact
+        //    digest OP_BLAKE2B_512 recomputes at spend time.
+        let pk_hash = kaspa_hashes::blake2b_512_address_payload(pk_bytes).as_bytes();
         let address = Address::new(Prefix::Simnet, Version::PubKeyHashMlDsa87, &pk_hash);
 
         // 3. scriptPubKey = pay_to_address_script.

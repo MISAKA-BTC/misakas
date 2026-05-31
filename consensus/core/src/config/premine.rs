@@ -8,9 +8,10 @@
 //! The lock is the standard ML-DSA P2PKH `scriptPubKey`
 //! `OP_DUP OP_BLAKE2B_512 OP_DATA_64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87`
 //! (built by `crate::dns_finality::p2pkh_mldsa87_spk`), where the 64-byte payload
-//! is the BLAKE2b-512 of the single premine public key. The devnet signing key is
+//! is the keyed BLAKE2b-512 (md2 §4.2, `kaspa-pq-v2/address/mldsa87`) of the
+//! single premine public key. The devnet signing key is
 //! in the repo-root `misaka-devnet-premine-key.json` and the devnet address is
-//! `misakadev:qgtad66msrm6qvkvum8m3450zlkegqhrxfwaygwa5hfll4ys2xtj8xuj8fr0elvvk80k79nxplrm05ldr40tqkjdpgq66js2aa6v4uv8g73c5q4p`.
+//! `misakadev:qgy9unt0rhyghqw3mxnf0rdg2e8tcspnhz9clnpclzmsk49l6n7xvd5c3fch0r3qrfx73vfa6rpvy6wxef7xegrk6qg2dkzgya7d6mhe2dfrpxev`.
 //! Multisig / P2SH is out of launch scope (ADR-0019 §8/§6.5). Regenerate the key
 //! via the `gen_misaka_devnet_premine_key` test in this module.
 
@@ -24,15 +25,15 @@ use kaspa_hashes::Hash64;
 /// Premine amount: 15B KAS.
 pub const MISAKA_PREMINE_SOMPI: u64 = 15_000_000_000 * SOMPI_PER_KASPA;
 
-/// BLAKE2b-512 of the single-key ML-DSA-87 premine public key; the 15B genesis
-/// UTXO is locked to its P2PKH. Regenerate via `gen_misaka_devnet_premine_key`.
-/// ADR-0019.
+/// Keyed BLAKE2b-512 (md2 §4.2 address context `kaspa-pq-v2/address/mldsa87`) of
+/// the single-key ML-DSA-87 premine public key; the 15B genesis UTXO is locked to
+/// its P2PKH. Regenerate via `gen_misaka_devnet_premine_key`. ADR-0019.
 #[rustfmt::skip]
 const MISAKA_PREMINE_OWNER_PAYLOAD: [u8; 64] = [
-    0x17, 0xd6, 0xeb, 0x5b, 0x80, 0xf7, 0xa0, 0x32, 0xcc, 0xe6, 0xcf, 0xb8, 0xd6, 0x8f, 0x17, 0xed,
-    0x94, 0x02, 0xe3, 0x32, 0x5d, 0xd2, 0x21, 0xdd, 0xa5, 0xd3, 0xff, 0xd4, 0x90, 0x51, 0x97, 0x23,
-    0x9b, 0x92, 0x3a, 0x46, 0xfc, 0xfd, 0x8c, 0xb1, 0xdf, 0x6f, 0x16, 0x66, 0x0f, 0xc7, 0xb7, 0xd3,
-    0xed, 0x1d, 0x5e, 0xb0, 0x5a, 0x4d, 0x0a, 0x01, 0xad, 0x4a, 0x0a, 0xef, 0x74, 0xca, 0xf1, 0x87,
+    0x08, 0x5e, 0x4d, 0x6f, 0x1d, 0xc8, 0x8b, 0x81, 0xd1, 0xd9, 0xa6, 0x97, 0x8d, 0xa8, 0x56, 0x4e,
+    0xbc, 0x40, 0x33, 0xb8, 0x8b, 0x8f, 0xcc, 0x38, 0xf8, 0xb7, 0x0b, 0x54, 0xbf, 0xd4, 0xfc, 0x66,
+    0x36, 0x98, 0x8a, 0x71, 0x77, 0x8e, 0x20, 0x1a, 0x4d, 0xe8, 0xb1, 0x3d, 0xd0, 0xc2, 0xc2, 0x69,
+    0xc6, 0xca, 0x7c, 0x6c, 0xa0, 0x76, 0xd0, 0x10, 0xa6, 0xd8, 0x48, 0x27, 0x7c, 0xdd, 0x6e, 0xf9,
 ];
 
 /// Deterministic sentinel txid for the single premine UTXO: ASCII "misaka-premine"
@@ -86,7 +87,7 @@ mod tests {
     fn gen_misaka_devnet_premine_key() {
         use blake2b_simd::Params;
         use kaspa_addresses::{Address, Prefix, Version};
-        use kaspa_hashes::blake2b_512;
+        use kaspa_hashes::blake2b_512_address_payload;
         use libcrux_ml_dsa::ml_dsa_87;
 
         // Documented deterministic devnet seed: BLAKE2b-256("misaka-devnet-premine-key").
@@ -98,8 +99,10 @@ mod tests {
         let key_pair = ml_dsa_87::generate_key_pair(seed);
         let pubkey = key_pair.verification_key.as_ref();
 
-        // Owner payload = BLAKE2b-512(public key) — the 64-byte address payload.
-        let payload: [u8; 64] = blake2b_512(pubkey).as_bytes();
+        // Owner payload = keyed BLAKE2b-512(public key) under
+        // `kaspa-pq-v2/address/mldsa87` (md2 §4.2) — the 64-byte address payload the
+        // OP_BLAKE2B_512 opcode recomputes at spend time.
+        let payload: [u8; 64] = blake2b_512_address_payload(pubkey).as_bytes();
 
         // Standard ML-DSA P2PKH scriptPubKey must be exactly 69 bytes.
         let spk = crate::dns_finality::p2pkh_mldsa87_spk(&payload);

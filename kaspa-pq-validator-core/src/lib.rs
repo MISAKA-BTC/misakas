@@ -7,7 +7,6 @@
 //! persistent equivocation-safety log ([`SignedEpochStore`], ADR-0011). No consensus
 //! surface — this is a node-local helper crate.
 
-use blake2b_simd::Params as Blake2bParams;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
@@ -19,7 +18,7 @@ use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::subnets::{SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND};
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
-use kaspa_hashes::Hash64;
+use kaspa_hashes::{Hash64, blake2b_512_address_payload};
 use kaspa_txscript::{
     MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder, verify_mldsa87_with_context,
 };
@@ -75,15 +74,13 @@ impl ValidatorKey {
     }
 
     /// The validator's own P2PKH-ML-DSA address — `(prefix, PubKeyHashMlDsa87,
-    /// BLAKE2b-512(public_key))`. This is the **spend** address (64-byte BLAKE2b-512
-    /// payload — ADR-0019 §8), distinct from the 64-byte overlay `validator_id` (a
-    /// separately-keyed BLAKE2b-512). Funding UTXOs sent here back the
-    /// attestation-shard transactions (funding model A).
+    /// keyed_BLAKE2b-512("kaspa-pq-v2/address/mldsa87", public_key))`. This is the
+    /// **spend** address (64-byte keyed BLAKE2b-512 payload — md2 §4.2 / ADR-0019
+    /// §8), distinct from the 64-byte overlay `validator_id` (an *unkeyed*
+    /// BLAKE2b-512). Funding UTXOs sent here back the attestation-shard
+    /// transactions (funding model A).
     pub fn funding_address(&self, prefix: Prefix) -> Address {
-        let mut payload = [0u8; 64];
-        payload.copy_from_slice(
-            Blake2bParams::new().hash_length(64).to_state().update(self.keypair.verification_key.as_ref()).finalize().as_bytes(),
-        );
+        let payload = blake2b_512_address_payload(self.keypair.verification_key.as_ref()).as_bytes();
         Address::new(prefix, Version::PubKeyHashMlDsa87, &payload)
     }
 
@@ -227,16 +224,13 @@ impl ValidatorKey {
         Ok(tx)
     }
 
-    /// The 64-byte P2PKH-ML-DSA reward payload for this key — `BLAKE2b-512(public_key)`
-    /// (ADR-0019 §8), the same payload as [`Self::funding_address`]. Default
+    /// The 64-byte P2PKH-ML-DSA reward payload for this key — keyed
+    /// `BLAKE2b-512(public_key)` under `kaspa-pq-v2/address/mldsa87` (md2 §4.2 /
+    /// ADR-0019 §8), the same payload as [`Self::funding_address`]. Default
     /// `owner_reward_spk_payload` for a self-bonded validator (rewards return to the
     /// validator's own spend address).
     pub fn reward_spk_payload(&self) -> [u8; 64] {
-        let mut payload = [0u8; 64];
-        payload.copy_from_slice(
-            Blake2bParams::new().hash_length(64).to_state().update(self.keypair.verification_key.as_ref()).finalize().as_bytes(),
-        );
-        payload
+        blake2b_512_address_payload(self.keypair.verification_key.as_ref()).as_bytes()
     }
 
     /// Mass-based fee (sompi) for this validator's attestation-shard transaction. The tx
@@ -424,12 +418,10 @@ mod tests {
         let addr = key.funding_address(Prefix::Devnet);
         assert_eq!(addr.version, Version::PubKeyHashMlDsa87);
         assert_eq!(addr.prefix, Prefix::Devnet);
-        // Payload = BLAKE2b-512(pubkey) — the 64-byte spend hash (ADR-0019 §8); the
-        // overlay validator_id is a separately-keyed BLAKE2b-512, not this value.
-        let mut expected = [0u8; 64];
-        expected.copy_from_slice(
-            Blake2bParams::new().hash_length(64).to_state().update(key.keypair.verification_key.as_ref()).finalize().as_bytes(),
-        );
+        // Payload = keyed BLAKE2b-512(pubkey) under `kaspa-pq-v2/address/mldsa87`
+        // (md2 §4.2) — the 64-byte spend hash; the overlay validator_id is an
+        // unkeyed BLAKE2b-512, not this value.
+        let expected = blake2b_512_address_payload(key.keypair.verification_key.as_ref()).as_bytes();
         assert_eq!(addr.payload.as_slice(), &expected);
     }
 

@@ -12,7 +12,8 @@
 //!           input = network_id || account_le || change_le || index_le || master_seed,
 //!       )
 //!   (verification_key, signing_key) = ML-DSA-87.KeyGen(keygen_seed)
-//!   address = (prefix, Version::PubKeyHashMlDsa87, BLAKE2b-512(verification_key))  // ADR-0019 §8
+//!   address = (prefix, Version::PubKeyHashMlDsa87,
+//!             keyed_BLAKE2b-512("kaspa-pq-v2/address/mldsa87", verification_key))  // md2 §4.2 / ADR-0019 §8
 //! ```
 //!
 //! See docs/kaspa-pq-spec.md §8 for the normative spec. Phase 5 keeps the
@@ -66,12 +67,12 @@ impl KaspaPqMlDsa87KeyPair {
         self.inner.verification_key.as_ref()
     }
 
-    /// 64-byte address payload: `BLAKE2b-512(public_key)` (ADR-0019 §8;
-    /// widened from the former 32-byte BLAKE2b-256 form).
+    /// 64-byte address payload: keyed `BLAKE2b-512(public_key)` under
+    /// `kaspa-pq-v2/address/mldsa87` (md2 §4.2 / ADR-0019 §8). Delegates to the
+    /// shared [`kaspa_hashes::blake2b_512_address_payload`] so this stays in
+    /// lock-step with the `OP_BLAKE2B_512` consensus opcode and the premine.
     pub fn public_key_hash(&self) -> [u8; 64] {
-        let mut out = [0u8; 64];
-        out.copy_from_slice(Params::new().hash_length(64).to_state().update(self.public_key_bytes()).finalize().as_bytes());
-        out
+        kaspa_hashes::blake2b_512_address_payload(self.public_key_bytes()).as_bytes()
     }
 
     /// kaspa-pq P2PKH `Address` for the given network prefix.

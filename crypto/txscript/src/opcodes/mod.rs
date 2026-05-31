@@ -7,7 +7,7 @@ use crate::{
     data_stack::{DataStack, OpcodeData},
 };
 use blake2b_simd::Params;
-use kaspa_hashes::blake2b_512;
+use kaspa_hashes::blake2b_512_address_payload;
 use kaspa_consensus_core::hashing::sighash::SigHashReusedValues;
 use kaspa_consensus_core::hashing::sighash_type::SigHashType;
 use kaspa_consensus_core::tx::VerifiableTransaction;
@@ -1029,15 +1029,19 @@ opcode_list! {
             _ => Err(TxScriptError::InvalidSource("OpOutputSpk only applies to transaction inputs".to_string()))
         }
     }
-    // kaspa-pq PQ-only (ADR-0019 §8): 64-byte BLAKE2b-512 hash opcode, the
-    // hash step of the widened ML-DSA P2PKH template
+    // kaspa-pq PQ-only (ADR-0019 §8 / md2 §4.2): 64-byte BLAKE2b-512 hash opcode,
+    // the hash step of the widened ML-DSA P2PKH template
     //   OP_DUP OP_BLAKE2B_512 OP_DATA64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87
     // (repurposes the upstream reserved `OpUnknown196`). Mirrors `OpBlake2b`
-    // (0xaa) but with `hash_length(64)`, so it pushes a 64-byte digest. The
+    // (0xaa) but with `hash_length(64)`, so it pushes a 64-byte digest. md2 v2
+    // KEYS this hash under `kaspa-pq-v2/address/mldsa87` (the
+    // `blake2b_512_address_payload` domain), so the digest it recomputes over the
+    // unlock pubkey matches the keyed address payload the wallet/premine commit;
+    // the two MUST stay in lock-step or every P2PKH becomes unspendable. The
     // 32-byte `OP_BLAKE2B` (0xaa) is retained for the legacy P2SH template.
     opcode OpBlake2b512<0xc4, 1>(self, vm) {
         let [last] = vm.dstack.pop_raw()?;
-        let hash = blake2b_512(last.as_slice());
+        let hash = blake2b_512_address_payload(last.as_slice());
         vm.dstack.push(hash.as_bytes().to_vec());
         Ok(())
     }

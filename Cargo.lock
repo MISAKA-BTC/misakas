@@ -3753,6 +3753,7 @@ dependencies = [
  "kaspa-addresses",
  "kaspa-bip32",
  "kaspa-consensus-core",
+ "kaspa-hashes",
  "kaspa-txscript",
  "kaspa-txscript-errors",
  "kaspa-utils",
