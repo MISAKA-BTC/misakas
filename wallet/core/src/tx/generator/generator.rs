@@ -318,8 +318,6 @@ struct Inner {
     final_transaction_priority_fee: Fees,
     // issued only in the final transaction
     final_transaction_outputs: Vec<TransactionOutput>,
-    // pre-calculated partial harmonic for user outputs (does not include change)
-    final_transaction_outputs_harmonic: u64,
     // mass of the final transaction
     final_transaction_outputs_compute_mass: u64,
     // final transaction payload
@@ -347,7 +345,6 @@ impl std::fmt::Debug for Inner {
             .field("fee_rate", &self.fee_rate)
             .field("final_transaction_priority_fee", &self.final_transaction_priority_fee)
             .field("final_transaction_outputs", &self.final_transaction_outputs)
-            .field("final_transaction_outputs_harmonic", &self.final_transaction_outputs_harmonic)
             .field("final_transaction_outputs_compute_mass", &self.final_transaction_outputs_compute_mass)
             .field("final_transaction_payload", &self.final_transaction_payload)
             .field("final_transaction_payload_mass", &self.final_transaction_payload_mass)
@@ -439,8 +436,6 @@ impl Generator {
             mass_calculator.calc_compute_mass_for_client_transaction_outputs(&final_transaction_outputs);
         let final_transaction_payload = final_transaction_payload.unwrap_or_default();
         let final_transaction_payload_mass = mass_calculator.calc_compute_mass_for_payload(final_transaction_payload.len());
-        let final_transaction_outputs_harmonic =
-            mass_calculator.calc_storage_mass_output_harmonic(&final_transaction_outputs).ok_or(Error::MassCalculationError)?;
 
         // reject transactions where the payload and outputs are more than 2/3rds of the maximum tx mass
         let final_transaction = final_transaction_amount.map(|amount| FinalTransaction {
@@ -490,7 +485,6 @@ impl Generator {
             final_transaction,
             final_transaction_priority_fee,
             final_transaction_outputs,
-            final_transaction_outputs_harmonic,
             final_transaction_outputs_compute_mass,
             final_transaction_payload,
             final_transaction_payload_mass,
@@ -751,7 +745,13 @@ impl Generator {
             context.utxo_stash.push_back(utxo_entry_reference);
             data.aggregate_mass +=
                 self.inner.standard_change_output_compute_mass + self.inner.network_params.additional_compound_transaction_mass();
-            data.transaction_fees = self.calc_relay_transaction_compute_fees(data);
+            // kaspa-pq (ADR-0019 §13): `data.aggregate_mass` now already includes the relay's
+            // single change output and the compound margin, so charge the fee on that mass
+            // directly. The previous `calc_relay_transaction_compute_fees(data)` added the
+            // change-output mass a *second* time, overcharging by one change output's compute
+            // mass. That overcharge was below the dust threshold for 35-byte secp256k1 change
+            // (423) but exceeds it for 69-byte ML-DSA-87 change (797).
+            data.transaction_fees = self.calc_fees_from_mass(data.aggregate_mass);
             stage.aggregate_fees += data.transaction_fees;
             context.aggregate_fees += data.transaction_fees;
             Some(DataKind::Node)
@@ -795,11 +795,28 @@ impl Generator {
         }
     }
 
-    /// Calculate storage mass using inputs from `Data`
-    /// and `output_harmonics` supplied by the user
-    fn calc_storage_mass(&self, data: &Data, output_harmonics: u64) -> u64 {
-        let calc = &self.inner.mass_calculator;
-        calc.calc_storage_mass(output_harmonics, data.aggregate_input_value, data.inputs.len() as u64)
+    /// kaspa-pq (ADR-0019 §13): storage mass for a candidate output set, computed with
+    /// the *consensus* (plurality-aware) calculation so the generator's fee and
+    /// input-selection decisions match the storage mass the network will actually charge.
+    ///
+    /// The earlier value-only harmonic estimate (`Σ C/value`) ignored per-output
+    /// plurality. A 69-byte ML-DSA-87 P2PKH output has plurality 2, contributing
+    /// `2²·C/value` to the output term — roughly 4× a plurality-1 (≤33-byte) output of
+    /// the same value. Ignoring this made the generator under-estimate storage mass and
+    /// therefore under-fee fan-out transactions (the actual transaction mass, computed
+    /// via the consensus calc at emit time, was higher than the fee covered).
+    ///
+    /// `include_final` appends the user outputs; `change_value` appends a change output
+    /// (built with the same script the final/relay transaction emits) when present.
+    /// Returns `u64::MAX` when the consensus calc reports an overflow, so the caller's
+    /// `storage_mass > MAXIMUM_STANDARD_TRANSACTION_MASS` guard rejects the transaction.
+    fn calc_consensus_storage_mass(&self, data: &Data, include_final: bool, change_value: Option<u64>) -> u64 {
+        let mut outputs: Vec<TransactionOutput> =
+            if include_final { self.inner.final_transaction_outputs.clone() } else { Vec::new() };
+        if let Some(value) = change_value {
+            outputs.push(TransactionOutput::new(value, pay_to_address_script(&self.inner.change_address)));
+        }
+        self.inner.mass_calculator.calc_storage_mass_for_transaction_parts(&data.utxo_entry_references, &outputs).unwrap_or(u64::MAX)
     }
 
     fn calc_fee_rate(&self, mass: u64) -> u64 {
@@ -857,6 +874,10 @@ impl Generator {
             }
             // ---
 
+            // kaspa-pq (ADR-0019 §13): capture the with-change mass fee so the absorb / no-change
+            // branch below can recover the priority component and recompute the fee from the mass
+            // of the transaction that is actually emitted.
+            let base_mass_fee = transaction_fees;
             let (mut transaction_fees, change_output_value) = match self.inner.final_transaction_priority_fee {
                 Fees::SenderPays(priority_fees) => {
                     let transaction_fees = transaction_fees + priority_fees;
@@ -875,19 +896,27 @@ impl Generator {
             // checks output dust threshold in network params
             // if is_dust(&self.inner.network_params, change_output_value) {
             if absorb_change_to_fees || change_output_value == 0 {
-                transaction_fees += change_output_value;
-
                 // as we might absorb an input as a part of the receiver
                 // pays fee reduction, we should update the mass to make
                 // sure internal metrics and unit tests check out.
                 let compute_mass = data.aggregate_mass
                     + self.inner.final_transaction_outputs_compute_mass
                     + self.inner.final_transaction_payload_mass;
-                let storage_mass = self.calc_storage_mass(data, self.inner.final_transaction_outputs_harmonic);
+                // change is absorbed into fees here, so storage mass is for the final outputs only
+                let storage_mass = self.calc_consensus_storage_mass(data, true, None);
 
                 data.aggregate_mass = calc.combine_mass(compute_mass, storage_mass);
 
-                transaction_fees += change_output_value;
+                // kaspa-pq (ADR-0019 §13): recompute the fee from the *actual* (no-change)
+                // transaction mass. `calculate_mass` estimated the mass with a reserved change
+                // output; when no change is emitted (receiver-pays single output, or dust change
+                // absorbed into the fee) charging that reservation overcharged by one change
+                // output's compute mass (797 for a 69-byte ML-DSA-87 change vs 423 for 35-byte
+                // secp256k1 — the latter stayed within the test's dust tolerance, the former did
+                // not). `transaction_fees - base_mass_fee` recovers the priority component; the
+                // absorbed change value (dust, if any) is then added to the fee exactly once.
+                transaction_fees =
+                    transaction_fees - base_mass_fee + self.calc_fees_from_mass(data.aggregate_mass) + change_output_value;
                 data.transaction_fees = transaction_fees;
                 stage.aggregate_fees += transaction_fees;
                 context.aggregate_fees += transaction_fees;
@@ -918,29 +947,27 @@ impl Generator {
         let storage_mass = if stage.number_of_transactions > 0 {
             // calculate for edge transaction boundaries
             // we know that stage.number_of_transactions > 0 will trigger stage generation
-            let edge_compute_mass = data.aggregate_mass + self.inner.standard_change_output_compute_mass; //self.inner.final_transaction_outputs_compute_mass + self.inner.final_transaction_payload_mass;
+            let edge_compute_mass = data.aggregate_mass + self.inner.standard_change_output_compute_mass;
             let edge_fees = self.calc_fees_from_mass(edge_compute_mass);
             let edge_output_value = data.aggregate_input_value.saturating_sub(edge_fees);
             if edge_output_value != 0 {
-                let edge_output_harmonic = calc.calc_storage_mass_output_harmonic_single(edge_output_value);
-                self.calc_storage_mass(data, edge_output_harmonic)
+                // edge transactions emit a single change output
+                self.calc_consensus_storage_mass(data, false, Some(edge_output_value))
             } else {
                 0
             }
         } else if data.aggregate_input_value <= transaction_target_value {
             // calculate for final transaction boundaries
-            self.calc_storage_mass(data, self.inner.final_transaction_outputs_harmonic)
+            self.calc_consensus_storage_mass(data, true, None)
         } else {
             // calculate for final transaction boundaries
             let change_value = data.aggregate_input_value - transaction_target_value;
 
             if self.inner.mass_calculator.is_dust(change_value) {
                 absorb_change_to_fees = true;
-                self.calc_storage_mass(data, self.inner.final_transaction_outputs_harmonic)
+                self.calc_consensus_storage_mass(data, true, None)
             } else {
-                let output_harmonic_with_change =
-                    calc.calc_storage_mass_output_harmonic_single(change_value) + self.inner.final_transaction_outputs_harmonic;
-                let storage_mass_with_change = self.calc_storage_mass(data, output_harmonic_with_change);
+                let storage_mass_with_change = self.calc_consensus_storage_mass(data, true, Some(change_value));
 
                 // TODO - review and potentially simplify:
                 // this profiles the storage mass with change and without change
@@ -948,7 +975,7 @@ impl Generator {
                 if storage_mass_with_change == 0 || (storage_mass_with_change < compute_mass_with_change) {
                     0
                 } else {
-                    let storage_mass_no_change = self.calc_storage_mass(data, self.inner.final_transaction_outputs_harmonic);
+                    let storage_mass_no_change = self.calc_consensus_storage_mass(data, true, None);
                     if storage_mass_with_change < storage_mass_no_change {
                         storage_mass_with_change
                     } else {
@@ -988,10 +1015,9 @@ impl Generator {
         // let compute_fees = calc.calc_minimum_transaction_fee_from_mass(compute_mass) + self.calc_fee_rate(compute_mass);
         let compute_fees = self.calc_fees_from_mass(compute_mass);
 
-        // TODO - consider removing this as calculated storage mass should produce `0` value
-        let edge_output_harmonic =
-            calc.calc_storage_mass_output_harmonic_single(data.aggregate_input_value.saturating_sub(compute_fees));
-        let storage_mass = self.calc_storage_mass(data, edge_output_harmonic);
+        let edge_output_value = data.aggregate_input_value.saturating_sub(compute_fees);
+        let storage_mass =
+            if edge_output_value != 0 { self.calc_consensus_storage_mass(data, false, Some(edge_output_value)) } else { 0 };
         let transaction_mass = calc.combine_mass(compute_mass, storage_mass);
 
         if transaction_mass > MAXIMUM_STANDARD_TRANSACTION_MASS {
