@@ -1,6 +1,6 @@
 # kaspa-pq 量子耐性完了設計書
 
-- 文書版: 1.1（ML-DSA-87 版）
+- 文書版: 1.1（ML-DSA-87 版）。**v2 整合追補 (2026-06-01)**: 署名 context は `kaspa-pq-v2/{tx,sighash}/mldsa87`、address payload は keyed BLAKE2b-512(`kaspa-pq-v2/address/mldsa87`)、caps は 16_384、識別子は `MlDsa87` に rename 済み。本書の該当値は更新済（経緯は ADR-0019 Revision 1.2）。
 - 作成日: 2026-05-30 / リポジトリ凍結: 2026-05-31
 - 統治 ADR: [docs/adr/0019-mldsa87-migration.md](adr/0019-mldsa87-migration.md)（本書を採用）
 - 目的: 既存コードを「ML-DSAを一部導入した実験実装」から、「PQネットワークとして量子耐性を主張できる実装」へ変更するための設計を定義する。
@@ -33,7 +33,7 @@
 ### 3.1 署名
 - 方式: ML-DSA-87 / FIPS 204 / `libcrux-ml-dsa` / 最小 `0.0.9`（consensus は exact pin + lockfile audit）
 - 公開鍵 2592 / 秘密鍵 4896 / 署名 4627 bytes。signature script 上の署名要素 = `signature || sighash_type` = 4628 bytes
-- Context: `b"kaspa-pq-v1/tx/mldsa87"` / NIST Category 5
+- Context: `b"kaspa-pq-v2/tx/mldsa87"` / NIST Category 5
 
 ### 3.2 鍵確立・通信
 - transport を PQ claim に含めるなら ML-KEM-768 以上を hybrid KEM。含めないなら「transport は PQ scope 外」と明記。
@@ -101,7 +101,7 @@ impl ScriptClass {
 ## 8. 設計 D: address payload 幅の確定（**決定: 64-byte**）
 
 ```
-address payload = BLAKE2b-512(ML-DSA-87 verification key)   // 64 bytes
+address payload = keyed BLAKE2b-512("kaspa-pq-v2/address/mldsa87", ML-DSA-87 verification key)   // 64 bytes
 scriptPubKey = OP_DUP OP_BLAKE2B_512 OP_DATA64 <payload64> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87
 ```
 実装: `crypto/addresses/src/lib.rs`（`Version::PubKeyHashMlDsa87.public_key_len()` = 64）、`standard.rs`（`pay_to_pub_key_hash_mldsa87` 64B）、`script_class.rs`（`OpData64`）、`wallet/keys/src/kaspa_pq.rs`（`public_key_hash()` を BLAKE2b-512）、各 fixture。`OP_BLAKE2B_512` が未実装なら追加（既存 `OpBlake2b` が 32B 固定のため）。
@@ -116,7 +116,7 @@ pub fn calc_mldsa87_signature_hash(
     hash_type: SigHashType, reused_values: &impl Mldsa87SigHashReusedValues,
 ) -> Hash64
 ```
-Transcript は Schnorr と同じ semantic fields + `literal domain tag "kaspa-pq-v1/sighash/mldsa87"` + script class tag `PubKeyHashMlDsa87`、全 hash を Hash64 化。`Mldsa87SigHashReusedValues`（previous_outputs/sequences/sig_op_counts/outputs/payload の Hash64 版）を追加。検証側 `check_mldsa87_signature` は `calc_mldsa87_signature_hash` の 64B を `ml_dsa_87::verify(..., MLDSA87_TX_CONTEXT, ..)` に渡し、`secp256k1::Message` を ML-DSA path から除去。
+Transcript は Schnorr と同じ semantic fields + `literal domain tag "kaspa-pq-v2/sighash/mldsa87"` + script class tag `PubKeyHashMlDsa87`、全 hash を Hash64 化。`Mldsa87SigHashReusedValues`（previous_outputs/sequences/sig_op_counts/outputs/payload の Hash64 版）を追加。検証側 `check_mldsa87_signature` は `calc_mldsa87_signature_hash` の 64B を `ml_dsa_87::verify(..., MLDSA87_TX_CONTEXT, ..)` に渡し、`secp256k1::Message` を ML-DSA path から除去。
 
 ## 10. 設計 F: SigCache key の PQ 化
 
@@ -129,7 +129,7 @@ raw key/sig を保持しない（BLAKE2b-512 digest）。capacity は ML-DSA ver
 ## 11. 設計 G: script size と mass policy（**launch = P2PKH only**）
 
 - `MAX_SCRIPT_ELEMENT_SIZE = 8192`（sig 4628 + pk 2592 が収まる）
-- `MAX_SCRIPTS_SIZE = 10_000` / `max_signature_script_len = 10_000`（P2PKH unlock ≈ 7.3KB）
+- `MAX_SCRIPTS_SIZE = 16_384` / `max_signature_script_len = 16_384`（P2PKH unlock ≈ 7.3KB; md2 で 10_000 から引き上げ。`max_script_public_key_len` は 10_000 維持）
 - `P2SH = disabled`
 
 ML-DSA multisig を標準化する場合のみ caps を k-of-n で再計算（2-of-3 は 16,384 超の可能性、暫定下限 32_768、実測で確定）+ redeem parser + mass benchmark + ADR。**現時点では scope 外。**
@@ -167,9 +167,9 @@ legacy opcode 実装 / legacy wallet API / legacy tests は `legacy-secp256k1` �
 | 項目 | 値 |
 |---|---|
 | Signature | ML-DSA-87 |
-| Tx signature context | `kaspa-pq-v1/tx/mldsa87` |
+| Tx signature context | `kaspa-pq-v2/tx/mldsa87` |
 | Address version | `PubKeyHashMlDsa87` only |
-| Address payload | BLAKE2b-512 64 bytes |
+| Address payload | keyed BLAKE2b-512 (`kaspa-pq-v2/address/mldsa87`) 64 bytes |
 | Standard script | ML-DSA P2PKH only |
 | P2SH | disabled |
 | Legacy secp256k1 opcode | consensus disabled |

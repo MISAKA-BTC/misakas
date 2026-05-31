@@ -1,7 +1,7 @@
 # kaspa-pq ML-DSA-87 PQ-only 移行 — 動作確認手順書 (PR-19 series)
 
-- 対象: ブランチ上のコミット列 `PR-19-S1 … S5a`（**未 push / ローカルのみ**）
-- 統治文書: [docs/adr/0019-mldsa87-migration.md](adr/0019-mldsa87-migration.md)（rev 1.1）+ [docs/kaspa-pq-design-mldsa87.md](kaspa-pq-design-mldsa87.md)
+- 対象: ブランチ上のコミット列 `PR-19-S1 … S11c` + crash 修正（`MISAKA-BTC/misakas` に snapshot push 済）
+- 統治文書: [docs/adr/0019-mldsa87-migration.md](adr/0019-mldsa87-migration.md)（rev 1.2 = md2 整合）+ [docs/kaspa-pq-design-mldsa87.md](kaspa-pq-design-mldsa87.md)
 - リポジトリ: `/Users/wata/Downloads/rusty-kaspa-master 2`（パスに空白を含むのでクオート必須）
 
 この文書は **Phases 1-4 + 5a（コミット済み）** が正しく動くことを自分で検証する手順。Phase 5b-5e / 6 / 7 / 8 と実デプロイは**未実施**（末尾参照）。
@@ -10,17 +10,17 @@
 
 ## 0. 何が入ったか（1行サマリ）
 
-署名方式を **ML-DSA-65 → ML-DSA-87**（NIST cat3→cat5）に移行し、**PQ-only 強制**（legacy secp256k1 / P2SH / 非 ML-DSA アドレスを consensus・mempool で実行不能化）+ **64-byte BLAKE2b-512 アドレス** + **premine を単一鍵 ML-DSA-87 P2PKH 化** + **genesis 再生成**。新 genesis につき旧チェーンとは非互換。
+署名方式を **ML-DSA-65 → ML-DSA-87**（NIST cat3→cat5）に移行し、**PQ-only 強制**（legacy secp256k1 / P2SH / 非 ML-DSA アドレスを consensus・mempool で実行不能化）+ **64-byte keyed BLAKE2b-512 アドレス**（`kaspa-pq-v2/address/mldsa87`）+ **premine を単一鍵 ML-DSA-87 P2PKH 化** + **genesis 再生成**。新 genesis につき旧チェーンとは非互換。署名 context は v2、caps は 16_384、識別子は `MlDsa87`（md2 整合, ADR-0019 rev 1.2）。
 
 主要な確定値:
 | 項目 | 値 |
 |---|---|
 | 公開鍵 / 署名 サイズ | 2592 B / 4627 B |
-| tx 署名 context | `b"kaspa-pq-v1/tx/mldsa87"`（`MLDSA65_TX_CONTEXT` の値、名前は据置） |
-| tx sighash | `calc_mldsa87_signature_hash` → 64-byte `Hash64`（domain `b"kaspa-pq-v1/sighash/mldsa87"`） |
-| アドレス | `Version::PubKeyHashMlDsa65` のみ・payload = 64-byte BLAKE2b-512(pubkey) |
-| 標準 scriptPubKey | 69 byte: `OP_DUP OP_BLAKE2B_512(0xc4) OP_DATA64(0x40) <64B> OP_EQUALVERIFY OP_CHECKSIG_MLDSA65(0xa6)` |
-| caps | `MAX_SCRIPT_ELEMENT_SIZE`=8192 / `MAX_SCRIPTS_SIZE`=10_000 |
+| tx 署名 context | `b"kaspa-pq-v2/tx/mldsa87"`（`MLDSA87_TX_CONTEXT`） |
+| tx sighash | `calc_mldsa87_signature_hash` → 64-byte `Hash64`（domain `b"kaspa-pq-v2/sighash/mldsa87"`） |
+| アドレス | `Version::PubKeyHashMlDsa87` のみ・payload = 64-byte **keyed** BLAKE2b-512(`kaspa-pq-v2/address/mldsa87`, pubkey) |
+| 標準 scriptPubKey | 69 byte: `OP_DUP OP_BLAKE2B_512(0xc4) OP_DATA64(0x40) <64B> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87(0xa6)` |
+| caps | `MAX_SCRIPT_ELEMENT_SIZE`=8192 / `MAX_SCRIPTS_SIZE`=16_384 / `max_signature_script_len`=16_384 |
 | premine | 15B KAS を単一鍵 ML-DSA-87 P2PKH にロック（旧 2-of-3 multisig P2SH を廃止） |
 | PQ 強制 | `Params.pq_enforcement = PqEnforcementMode::Consensus`（全 kaspa-pq ネット, activation=genesis） |
 

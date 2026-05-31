@@ -3,6 +3,8 @@
 Status: Draft. Frozen values listed here are the contract every phase must
 respect. Any change must go through an ADR update under `docs/adr/`.
 
+> **md2 alignment (2026-06-01):** the signature scheme is now **ML-DSA-87** (sizes/version/context in the normative table below updated) per [ADR-0019 rev 1.2](adr/0019-mldsa87-migration.md) + [the design doc](kaspa-pq-design-mldsa87.md). Tx/sighash contexts are `kaspa-pq-v2/{tx,sighash}/mldsa87`; the address payload is a **keyed** BLAKE2b-512 under `kaspa-pq-v2/address/mldsa87`; `MAX_SCRIPTS_SIZE` / `max_signature_script_len` are `16_384` and `MAX_SCRIPT_ELEMENT_SIZE` is `8192`. Any remaining `*65*` / `kaspa-pq-v1/{tx,sighash}` / `4096` mentions in the prose below are historical (ML-DSA-65 draft era).
+
 ADR-0007 (Layered PoW) and ADR-0008 (Hash64 consensus identity) widen
 the original "signatures + UTXO accumulator" target to "full 64-byte
 consensus identity + 512-bit PoW domain". ADR-0009 (DNS Probabilistic
@@ -150,19 +152,21 @@ unless a follow-up ADR amends them.
 
 | Constant | Value | Where it appears |
 |---|---|---|
-| `MLDSA65_PK_LEN`  | `1952`  | ML-DSA-65 public key length (bytes) |
-| `MLDSA65_SIG_LEN` | `3309`  | ML-DSA-65 signature length (bytes) |
-| `MLDSA65_SIG_ITEM_MAX_LEN` | `3310` | signature item incl. 1-byte sighash type |
+| `MLDSA87_PK_LEN`  | `2592`  | ML-DSA-87 public key length (bytes) |
+| `MLDSA87_SIG_LEN` | `4627`  | ML-DSA-87 signature length (bytes) |
+| `MLDSA87_SIG_ITEM_MAX_LEN` | `4628` | signature item incl. 1-byte sighash type |
 | `LTHASH_LANES`    | `1024`  | Number of 16-bit lanes in LtHash state |
 | `LTHASH_LANE_BYTES` | `2`   | Bytes per lane |
 | `LTHASH_STATE_BYTES` | `2048` | Serialized accumulator state size |
 | `UTXO_COMMITMENT_BYTES` (production) | `64` | Header UTXO commitment field |
 | `UTXO_COMMITMENT_BYTES` (PoC, optional) | `32` | PoC-only shortcut, must be flagged |
-| `MAX_SCRIPT_ELEMENT_SIZE` (kaspa-pq) | `4096` | up from upstream `520` |
-| `MAX_SCRIPTS_SIZE` (kaspa-pq) | `10_000` | initial value, unchanged from upstream |
+| `MAX_SCRIPT_ELEMENT_SIZE` (kaspa-pq) | `8192` | fits 4628 sig + 2592 pk (up from upstream `520`) |
+| `MAX_SCRIPTS_SIZE` / `max_signature_script_len` | `16_384` | md2; `max_script_public_key_len` stays `10_000` |
 | `MAX_STACK_SIZE` (kaspa-pq) | `244` | initial value, unchanged from upstream |
-| Signature context (default) | `"kaspa-pq-v1/tx/mldsa65"` | ML-DSA `ctx` parameter |
-| Wallet keygen domain | `"kaspa-pq-wallet-v1/mldsa65/keygen"` | XOF domain separator |
+| Signature context (tx) | `"kaspa-pq-v2/tx/mldsa87"` | ML-DSA `ctx` parameter |
+| Sighash domain | `"kaspa-pq-v2/sighash/mldsa87"` | sighash transcript domain tag |
+| Address payload | keyed BLAKE2b-512(`"kaspa-pq-v2/address/mldsa87"`, vk) → 64 B | P2PKH-ML-DSA-87 |
+| Wallet keygen domain | `"kaspa-pq-wallet-v1/mldsa87/keygen"` | XOF domain separator |
 
 These are pre-implementation freezes — they are the spec, not derived from
 running code.
@@ -211,7 +215,7 @@ running code.
 
 ### 5.1 Address
 
-- New `Version::PubKeyHashMlDsa65 = 2`.
+- New `Version::PubKeyHashMlDsa87 = 2`.
 - Payload: `BLAKE2b-256(public_key)` = 32 bytes.
 - The existing `PAYLOAD_VECTOR_SIZE = 36` SmallVec accommodates 32-byte
   payloads without resizing.

@@ -1,9 +1,23 @@
 # ADR-0019: Migrate Signature Scheme from ML-DSA-65 to ML-DSA-87
 
 ## Status
-Accepted (2026-05-30); **Revised 1.1 — 2026-05-31** (scope expanded to PQ-only completion).
+Accepted (2026-05-30); **Revised 1.1 — 2026-05-31** (scope expanded to PQ-only completion); **Revised 1.2 — 2026-06-01** (md2 alignment: identifier rename, v2 contexts, keyed address payload, 16_384 caps).
 
 Supersedes the signature-level choice in [ADR-0002](0002-mldsa65-p2pkh.md). Forces a new genesis (see [ADR-0008](0008-pq-genesis-premine.md)); **not compatible** with any prior kaspa-pq chain state, UTXO set, or address.
+
+---
+
+## Revision 1.2 — md2 (PQ-only design v2.0) alignment (2026-06-01)
+
+Revision 1.1 deferred the identifier rename and used v1 signing contexts, an *unkeyed* address payload, and 10_000 caps. The **md2** design pass closed these. The current code governs; where 1.1 / 1.0 conflict with the items below, **1.2 governs**.
+
+- **Naming — DONE (S10).** The deferred `MlDsa65`→`MlDsa87` rename has landed: `MlDsa87` / `MLDSA87_*` / `mldsa87` across all crates, the address version `PubKeyHashMlDsa87`, opcode idents, and the WASM `signTransactionMlDsa87` binding. (Only ADR-0002's *filename* keeps `mldsa65`.) The 1.0/1.1 "keep `MlDsa65` identifiers" policy is **withdrawn**.
+- **Signing contexts v1→v2 — DONE (S11b).** Tx context = `b"kaspa-pq-v2/tx/mldsa87"`, sighash domain = `b"kaspa-pq-v2/sighash/mldsa87"`. Signer + verifier move in lock-step; no genesis change.
+- **Address payload now KEYED — DONE (S11c).** The 64-byte ML-DSA-87 P2PKH payload is a **keyed** BLAKE2b-512 of the verification key under `b"kaspa-pq-v2/address/mldsa87"` (was *unkeyed*). The `OP_BLAKE2B_512` opcode recomputes this keyed hash at spend time; the opcode, the wallet/premine/validator derivations all share `kaspa_hashes::blake2b_512_address_payload` so a P2PKH stays spendable. This **re-genesised** the chain (new premine payload + `utxo_commitment` + all 5 genesis block hashes; `hash_merkle_root`s unchanged since the coinbase is unchanged).
+- **Script caps 10_000→16_384 — DONE (S11a).** `MAX_SCRIPTS_SIZE`, the mempool `MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE`, and the 4 `Params` presets' `max_signature_script_len` are now **16_384**. `MAX_SCRIPT_ELEMENT_SIZE` stays 8192; `max_script_public_key_len` stays 10_000.
+- **Validator-attestation crash fix (`67dfbb0`).** The DNS-overlay `rewarded_epochs_store` (per-block `(bond, epoch)` reward keys) reused the `tracked_bytes` utxo_diffs cache policy, but its `Vec` value implements only `estimate_mem_units` (not `_bytes`) → the first reward-bearing coinbase panicked the `virtual-processor` (`not implemented` @ `utils/src/mem_size.rs:40`). Fixed to an untracked `Count` policy (+ regression test).
+
+The normative table in *Revision 1.1* below is updated in place to these values.
 
 ---
 
@@ -40,16 +54,17 @@ Local `advisory-db` lists `RUSTSEC-2026-0076` / `-0077` for `libcrux-ml-dsa`, bo
 | Item | Value |
 |---|---|
 | Signature | ML-DSA-87 (FIPS 204, NIST cat 5) |
-| Tx signature context | `kaspa-pq-v1/tx/mldsa87` |
+| Tx signature context | `kaspa-pq-v2/tx/mldsa87` |
 | Address version | `PubKeyHashMlDsa87` only |
-| Address payload | BLAKE2b-512, 64 bytes |
+| Address payload | keyed BLAKE2b-512 (`kaspa-pq-v2/address/mldsa87`), 64 bytes |
 | Standard script | ML-DSA-87 P2PKH only |
 | P2SH | disabled |
 | Legacy secp256k1 opcodes | consensus-disabled |
-| ML-DSA sighash | `calc_mldsa87_signature_hash`, 64 bytes |
+| ML-DSA sighash | `calc_mldsa87_signature_hash`, 64 bytes (domain `kaspa-pq-v2/sighash/mldsa87`) |
 | UTXO commitment | `Hash64` (64 bytes) |
 | `MAX_SCRIPT_ELEMENT_SIZE` | 8192 |
-| `MAX_SCRIPTS_SIZE` / `max_signature_script_len` | 10_000 |
+| `MAX_SCRIPTS_SIZE` / `max_signature_script_len` | 16_384 |
+| `mass_per_sig_op` | 10000 |
 
 The 1.0 body below is retained for history; where it conflicts with this revision (naming, caps, P2SH/premine, address width), **this revision governs**.
 
