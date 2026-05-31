@@ -8,7 +8,7 @@ use crate::imports::*;
 use crate::parents::CompressedParents as WasmCompressedParents;
 use js_sys::Object;
 use kaspa_consensus_core::{BlockHash, BlueWorkType}; // PR-9.5e: hash + pruning_point are block ids (Hash64)
-use kaspa_hashes::Hash; // PR-9.5e: retained for utxo_commitment (32-byte accumulator commitment, stays Hash)
+use kaspa_hashes::Hash64; // kaspa-pq (ADR-0004 / design §12): utxo_commitment is 64-byte BLAKE2b-512
 use kaspa_utils::hex::ToHex;
 use workflow_wasm::extensions::{JsValueExtension, ObjectExtension};
 
@@ -52,7 +52,7 @@ pub struct OptionalHeader {
     // PR-9.5c: merkle roots widened to Hash64.
     hash_merkle_root: Option<kaspa_hashes::Hash64>,
     accepted_id_merkle_root: Option<kaspa_hashes::Hash64>,
-    utxo_commitment: Option<Hash>,
+    utxo_commitment: Option<Hash64>,
     timestamp: Option<u64>,
     bits: Option<u32>,
     nonce: Option<u64>,
@@ -71,7 +71,7 @@ impl OptionalHeader {
         // PR-9.5c: merkle roots widened to Hash64.
         hash_merkle_root: Option<kaspa_hashes::Hash64>,
         accepted_id_merkle_root: Option<kaspa_hashes::Hash64>,
-        utxo_commitment: Option<Hash>,
+        utxo_commitment: Option<Hash64>,
         timestamp: Option<u64>,
         bits: Option<u32>,
         nonce: Option<u64>,

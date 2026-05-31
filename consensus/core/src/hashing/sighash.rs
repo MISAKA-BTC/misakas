@@ -1,5 +1,8 @@
 use arc_swap::ArcSwapOption;
-use kaspa_hashes::{Hash, Hasher, HasherBase, TransactionSigningHash, TransactionSigningHashECDSA, ZERO_HASH};
+use kaspa_hashes::{
+    Hash, Hash64, Hasher, HasherBase, TransactionSigningHash, TransactionSigningHash64, TransactionSigningHashECDSA, ZERO_HASH,
+    ZERO_HASH64,
+};
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -273,6 +276,300 @@ pub fn calc_ecdsa_signature_hash(
     let hash = calc_schnorr_signature_hash(tx, input_index, hash_type, reused_values);
     let mut hasher = TransactionSigningHashECDSA::new();
     hasher.update(hash);
+    hasher.finalize()
+}
+
+// =====================================================================
+// kaspa-pq PQ-only ML-DSA-87 signature hash (ADR-0019 §9 /
+// docs/kaspa-pq-design-mldsa87.md §9).
+//
+// The legacy ML-DSA opcode path reused `calc_schnorr_signature_hash`
+// (a 32-byte digest under the `b"TransactionSigningHash"` domain). That
+// is weak on two axes: hash width (256-bit, ~128-bit post-quantum
+// preimage margin under Grover) and scheme separation (ML-DSA shares the
+// secp256k1 signing transcript). This module replaces it with a dedicated
+// 64-byte digest:
+//
+//  - **Width:** built with [`TransactionSigningHash64`] (BLAKE2b,
+//    64-byte output) so the commitment domain matches the rest of the
+//    kaspa-pq 64-byte consensus identity (ADR-0008).
+//  - **Scheme + version separation:** the hasher is keyed by the distinct
+//    `b"TransactionSigningHash64"` domain string AND the transcript is
+//    prefixed with the literal [`MLDSA87_SIGHASH_DOMAIN`]. A signature
+//    made over a schnorr (32-byte) digest can therefore never verify here,
+//    and vice-versa.
+//
+// The transcript covers exactly the same semantic fields as the schnorr
+// sighash, in the same order, so the security review carries over field
+// for field. The [`Hash64`] hasher family intentionally does NOT
+// implement the 32-byte `Hasher` trait (ADR-0008), so the field encoding
+// is written explicitly via the inherent `write`, using little-endian
+// integer encodings and a u64 length prefix for variable-length data
+// (the same convention as `HasherExtensions`).
+// =====================================================================
+
+/// Literal domain tag prefixed to every ML-DSA-87 transaction sighash
+/// transcript (docs/kaspa-pq-design-mldsa87.md §9.3 / md2 §3.1, v2). Belt-and-
+/// braces scheme/version separation on top of the keyed 64-byte hasher.
+pub const MLDSA87_SIGHASH_DOMAIN: &[u8] = b"kaspa-pq-v2/sighash/mldsa87";
+
+/// Hash64 analogue of [`SigHashReusedValues`]: caches the per-transaction
+/// sub-hashes that are identical across all inputs, preventing the
+/// quadratic-hashing problem for multi-input ML-DSA-87 transactions.
+pub trait Mldsa87SigHashReusedValues {
+    fn previous_outputs_hash(&self, set: impl Fn() -> Hash64) -> Hash64;
+    fn sequences_hash(&self, set: impl Fn() -> Hash64) -> Hash64;
+    fn sig_op_counts_hash(&self, set: impl Fn() -> Hash64) -> Hash64;
+    fn outputs_hash(&self, set: impl Fn() -> Hash64) -> Hash64;
+    fn payload_hash(&self, set: impl Fn() -> Hash64) -> Hash64;
+}
+
+/// Single-threaded reuse cache (mirrors [`SigHashReusedValuesUnsync`]).
+#[derive(Default)]
+pub struct Mldsa87SigHashReusedValuesUnsync {
+    previous_outputs_hash: Cell<Option<Hash64>>,
+    sequences_hash: Cell<Option<Hash64>>,
+    sig_op_counts_hash: Cell<Option<Hash64>>,
+    outputs_hash: Cell<Option<Hash64>>,
+    payload_hash: Cell<Option<Hash64>>,
+}
+
+impl Mldsa87SigHashReusedValuesUnsync {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Thread-safe reuse cache (mirrors [`SigHashReusedValuesSync`]), used by
+/// the parallel script-verification path.
+#[derive(Default)]
+pub struct Mldsa87SigHashReusedValuesSync {
+    previous_outputs_hash: ArcSwapOption<Hash64>,
+    sequences_hash: ArcSwapOption<Hash64>,
+    sig_op_counts_hash: ArcSwapOption<Hash64>,
+    outputs_hash: ArcSwapOption<Hash64>,
+    payload_hash: ArcSwapOption<Hash64>,
+}
+
+impl Mldsa87SigHashReusedValuesSync {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Mldsa87SigHashReusedValues for Mldsa87SigHashReusedValuesUnsync {
+    fn previous_outputs_hash(&self, set: impl Fn() -> Hash64) -> Hash64 {
+        self.previous_outputs_hash.get().unwrap_or_else(|| {
+            let hash = set();
+            self.previous_outputs_hash.set(Some(hash));
+            hash
+        })
+    }
+    fn sequences_hash(&self, set: impl Fn() -> Hash64) -> Hash64 {
+        self.sequences_hash.get().unwrap_or_else(|| {
+            let hash = set();
+            self.sequences_hash.set(Some(hash));
+            hash
+        })
+    }
+    fn sig_op_counts_hash(&self, set: impl Fn() -> Hash64) -> Hash64 {
+        self.sig_op_counts_hash.get().unwrap_or_else(|| {
+            let hash = set();
+            self.sig_op_counts_hash.set(Some(hash));
+            hash
+        })
+    }
+    fn outputs_hash(&self, set: impl Fn() -> Hash64) -> Hash64 {
+        self.outputs_hash.get().unwrap_or_else(|| {
+            let hash = set();
+            self.outputs_hash.set(Some(hash));
+            hash
+        })
+    }
+    fn payload_hash(&self, set: impl Fn() -> Hash64) -> Hash64 {
+        self.payload_hash.get().unwrap_or_else(|| {
+            let hash = set();
+            self.payload_hash.set(Some(hash));
+            hash
+        })
+    }
+}
+
+impl Mldsa87SigHashReusedValues for Mldsa87SigHashReusedValuesSync {
+    fn previous_outputs_hash(&self, set: impl Fn() -> Hash64) -> Hash64 {
+        if let Some(value) = self.previous_outputs_hash.load().as_ref() {
+            return **value;
+        }
+        let hash = set();
+        self.previous_outputs_hash.rcu(|_| Arc::new(hash));
+        hash
+    }
+    fn sequences_hash(&self, set: impl Fn() -> Hash64) -> Hash64 {
+        if let Some(value) = self.sequences_hash.load().as_ref() {
+            return **value;
+        }
+        let hash = set();
+        self.sequences_hash.rcu(|_| Arc::new(hash));
+        hash
+    }
+    fn sig_op_counts_hash(&self, set: impl Fn() -> Hash64) -> Hash64 {
+        if let Some(value) = self.sig_op_counts_hash.load().as_ref() {
+            return **value;
+        }
+        let hash = set();
+        self.sig_op_counts_hash.rcu(|_| Arc::new(hash));
+        hash
+    }
+    fn outputs_hash(&self, set: impl Fn() -> Hash64) -> Hash64 {
+        if let Some(value) = self.outputs_hash.load().as_ref() {
+            return **value;
+        }
+        let hash = set();
+        self.outputs_hash.rcu(|_| Arc::new(hash));
+        hash
+    }
+    fn payload_hash(&self, set: impl Fn() -> Hash64) -> Hash64 {
+        if let Some(value) = self.payload_hash.load().as_ref() {
+            return **value;
+        }
+        let hash = set();
+        self.payload_hash.rcu(|_| Arc::new(hash));
+        hash
+    }
+}
+
+// --- 64-bit transcript field encoders (explicit; the Hash64 hasher has
+// no `Hasher`/`HasherExtensions` impl). ---
+
+#[inline]
+fn mldsa87_write_outpoint(hasher: &mut TransactionSigningHash64, outpoint: &TransactionOutpoint) {
+    hasher.write(outpoint.transaction_id.as_bytes());
+    hasher.write(outpoint.index.to_le_bytes());
+}
+
+#[inline]
+fn mldsa87_write_script_public_key(hasher: &mut TransactionSigningHash64, spk: &ScriptPublicKey) {
+    hasher.write(spk.version().to_le_bytes());
+    // var-bytes: u64 little-endian length prefix, then the bytes.
+    hasher.write((spk.script().len() as u64).to_le_bytes());
+    hasher.write(spk.script());
+}
+
+#[inline]
+fn mldsa87_write_output(hasher: &mut TransactionSigningHash64, output: &TransactionOutput) {
+    hasher.write(output.value.to_le_bytes());
+    mldsa87_write_script_public_key(hasher, &output.script_public_key);
+}
+
+fn mldsa87_previous_outputs_hash(tx: &Transaction, hash_type: SigHashType, reused: &impl Mldsa87SigHashReusedValues) -> Hash64 {
+    if hash_type.is_sighash_anyone_can_pay() {
+        return ZERO_HASH64;
+    }
+    reused.previous_outputs_hash(|| {
+        let mut hasher = TransactionSigningHash64::new();
+        for input in tx.inputs.iter() {
+            mldsa87_write_outpoint(&mut hasher, &input.previous_outpoint);
+        }
+        hasher.finalize()
+    })
+}
+
+fn mldsa87_sequences_hash(tx: &Transaction, hash_type: SigHashType, reused: &impl Mldsa87SigHashReusedValues) -> Hash64 {
+    if hash_type.is_sighash_single() || hash_type.is_sighash_anyone_can_pay() || hash_type.is_sighash_none() {
+        return ZERO_HASH64;
+    }
+    reused.sequences_hash(|| {
+        let mut hasher = TransactionSigningHash64::new();
+        for input in tx.inputs.iter() {
+            hasher.write(input.sequence.to_le_bytes());
+        }
+        hasher.finalize()
+    })
+}
+
+fn mldsa87_sig_op_counts_hash(tx: &Transaction, hash_type: SigHashType, reused: &impl Mldsa87SigHashReusedValues) -> Hash64 {
+    if hash_type.is_sighash_anyone_can_pay() {
+        return ZERO_HASH64;
+    }
+    reused.sig_op_counts_hash(|| {
+        let mut hasher = TransactionSigningHash64::new();
+        for input in tx.inputs.iter() {
+            hasher.write(&[input.sig_op_count][..]);
+        }
+        hasher.finalize()
+    })
+}
+
+fn mldsa87_payload_hash(tx: &Transaction, reused: &impl Mldsa87SigHashReusedValues) -> Hash64 {
+    if tx.subnetwork_id.is_native() && tx.payload.is_empty() {
+        return ZERO_HASH64;
+    }
+    reused.payload_hash(|| {
+        let mut hasher = TransactionSigningHash64::new();
+        hasher.write((tx.payload.len() as u64).to_le_bytes());
+        hasher.write(&tx.payload);
+        hasher.finalize()
+    })
+}
+
+fn mldsa87_outputs_hash(
+    tx: &Transaction,
+    hash_type: SigHashType,
+    reused: &impl Mldsa87SigHashReusedValues,
+    input_index: usize,
+) -> Hash64 {
+    if hash_type.is_sighash_none() {
+        return ZERO_HASH64;
+    }
+    if hash_type.is_sighash_single() {
+        if input_index >= tx.outputs.len() {
+            return ZERO_HASH64;
+        }
+        let mut hasher = TransactionSigningHash64::new();
+        mldsa87_write_output(&mut hasher, &tx.outputs[input_index]);
+        return hasher.finalize();
+    }
+    reused.outputs_hash(|| {
+        let mut hasher = TransactionSigningHash64::new();
+        for output in tx.outputs.iter() {
+            mldsa87_write_output(&mut hasher, output);
+        }
+        hasher.finalize()
+    })
+}
+
+/// kaspa-pq PQ-only (ADR-0019 §9): compute the 64-byte ML-DSA-87 signature
+/// hash for `input_index` of `verifiable_tx`. This is the message both the
+/// wallet/validator signer and the `OP_CHECKSIG_MLDSA87` verifier feed into
+/// `libcrux_ml_dsa::ml_dsa_87` under `MLDSA87_TX_CONTEXT`; they MUST call
+/// this same function so signer and verifier stay byte-for-byte in lockstep.
+pub fn calc_mldsa87_signature_hash(
+    verifiable_tx: &impl VerifiableTransaction,
+    input_index: usize,
+    hash_type: SigHashType,
+    reused_values: &impl Mldsa87SigHashReusedValues,
+) -> Hash64 {
+    let input = verifiable_tx.populated_input(input_index);
+    let tx = verifiable_tx.tx();
+    let mut hasher = TransactionSigningHash64::new();
+    hasher.write(MLDSA87_SIGHASH_DOMAIN);
+    hasher.write(tx.version.to_le_bytes());
+    hasher.write(mldsa87_previous_outputs_hash(tx, hash_type, reused_values).as_bytes());
+    hasher.write(mldsa87_sequences_hash(tx, hash_type, reused_values).as_bytes());
+    hasher.write(mldsa87_sig_op_counts_hash(tx, hash_type, reused_values).as_bytes());
+    mldsa87_write_outpoint(&mut hasher, &input.0.previous_outpoint);
+    mldsa87_write_script_public_key(&mut hasher, &input.1.script_public_key);
+    hasher.write(input.1.amount.to_le_bytes());
+    hasher.write(input.0.sequence.to_le_bytes());
+    hasher.write(&[input.0.sig_op_count][..]);
+    hasher.write(mldsa87_outputs_hash(tx, hash_type, reused_values, input_index).as_bytes());
+    hasher.write(tx.lock_time.to_le_bytes());
+    // SubnetworkId impls both AsRef<[u8;20]> and AsRef<[u8]>; pin the 20-byte
+    // array form explicitly (matches the schnorr transcript's `update(&id)`).
+    hasher.write(AsRef::<[u8; crate::subnets::SUBNETWORK_ID_SIZE]>::as_ref(&tx.subnetwork_id));
+    hasher.write(tx.gas.to_le_bytes());
+    hasher.write(mldsa87_payload_hash(tx, reused_values).as_bytes());
+    hasher.write(&[hash_type.to_u8()][..]);
     hasher.finalize()
 }
 
@@ -689,5 +986,133 @@ mod tests {
                 test.name
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod mldsa87_sighash_tests {
+    //! kaspa-pq PQ-only (ADR-0019 §9): the ML-DSA-87 signature hash. These
+    //! lock the consensus-critical properties of `calc_mldsa87_signature_hash`:
+    //! determinism, 64-byte width, field sensitivity, and — crucially — that it
+    //! is a DIFFERENT digest from the legacy 32-byte schnorr sighash (so a
+    //! signature made over one can never verify against the other).
+    use super::*;
+    use crate::hashing::sighash_type::{SIG_HASH_ALL, SIG_HASH_NONE, SIG_HASH_SINGLE};
+    use crate::subnets::SUBNETWORK_ID_NATIVE;
+    use crate::tx::{PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
+    use smallvec::smallvec;
+
+    fn sample_tx() -> Transaction {
+        Transaction::new(
+            0,
+            vec![
+                TransactionInput {
+                    previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
+                    signature_script: vec![],
+                    sequence: 5,
+                    sig_op_count: 1,
+                },
+                TransactionInput {
+                    previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x22u8; 64]), index: 7 },
+                    signature_script: vec![],
+                    sequence: 9,
+                    sig_op_count: 1,
+                },
+            ],
+            vec![
+                TransactionOutput { value: 300, script_public_key: ScriptPublicKey::new(0, smallvec![0x76, 0xaa, 0x20]) },
+                TransactionOutput { value: 400, script_public_key: ScriptPublicKey::new(0, smallvec![0x51]) },
+            ],
+            123,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        )
+    }
+
+    fn entries() -> Vec<UtxoEntry> {
+        vec![
+            UtxoEntry { amount: 1000, script_public_key: ScriptPublicKey::new(0, smallvec![0x76, 0xaa, 0x20]), block_daa_score: 0, is_coinbase: false },
+            UtxoEntry { amount: 2000, script_public_key: ScriptPublicKey::new(0, smallvec![0x51]), block_daa_score: 0, is_coinbase: false },
+        ]
+    }
+
+    fn digest(tx: &Transaction, entries: Vec<UtxoEntry>, idx: usize, ht: SigHashType) -> Hash64 {
+        let pt = PopulatedTransaction::new(tx, entries);
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        calc_mldsa87_signature_hash(&pt, idx, ht, &reused)
+    }
+
+    #[test]
+    fn deterministic_and_64_bytes() {
+        let tx = sample_tx();
+        let a = digest(&tx, entries(), 0, SIG_HASH_ALL);
+        let b = digest(&tx, entries(), 0, SIG_HASH_ALL);
+        assert_eq!(a, b, "same input must yield same digest");
+        assert_eq!(a.as_bytes().len(), 64, "ML-DSA-87 sighash must be 64 bytes");
+        assert_ne!(a, ZERO_HASH64, "a real digest is never the zero hash");
+    }
+
+    #[test]
+    fn sync_and_unsync_reuse_caches_agree() {
+        let tx = sample_tx();
+        let pt = PopulatedTransaction::new(&tx, entries());
+        let unsync = Mldsa87SigHashReusedValuesUnsync::new();
+        let sync = Mldsa87SigHashReusedValuesSync::new();
+        // Two inputs exercise the cross-input reuse cache on both impls.
+        for idx in 0..2 {
+            let u = calc_mldsa87_signature_hash(&pt, idx, SIG_HASH_ALL, &unsync);
+            let s = calc_mldsa87_signature_hash(&pt, idx, SIG_HASH_ALL, &sync);
+            assert_eq!(u, s, "sync and unsync reuse caches must agree at input {idx}");
+        }
+    }
+
+    #[test]
+    fn distinct_inputs_distinct_digests() {
+        let tx = sample_tx();
+        let d0 = digest(&tx, entries(), 0, SIG_HASH_ALL);
+        let d1 = digest(&tx, entries(), 1, SIG_HASH_ALL);
+        assert_ne!(d0, d1, "different input indices must produce different digests");
+    }
+
+    #[test]
+    fn output_mutation_changes_digest() {
+        let tx = sample_tx();
+        let base = digest(&tx, entries(), 0, SIG_HASH_ALL);
+        let mut tx2 = sample_tx();
+        tx2.outputs[0].value = 301;
+        let mutated = digest(&tx2, entries(), 0, SIG_HASH_ALL);
+        assert_ne!(base, mutated, "mutating an output must change the SIG_HASH_ALL digest");
+    }
+
+    #[test]
+    fn hash_type_changes_digest() {
+        let tx = sample_tx();
+        let all = digest(&tx, entries(), 0, SIG_HASH_ALL);
+        let none = digest(&tx, entries(), 0, SIG_HASH_NONE);
+        let single = digest(&tx, entries(), 0, SIG_HASH_SINGLE);
+        assert_ne!(all, none);
+        assert_ne!(all, single);
+        assert_ne!(none, single);
+    }
+
+    #[test]
+    fn differs_from_schnorr_sighash() {
+        // The whole point of §9: the ML-DSA-87 digest must NOT equal the legacy
+        // 32-byte schnorr sighash (scheme + width separation). Compare the raw
+        // bytes — a 64-byte digest can never share all bytes with a 32-byte one,
+        // but we also assert the 32-byte prefix differs so a truncating verifier
+        // could not be fooled.
+        let tx = sample_tx();
+        let pt = PopulatedTransaction::new(&tx, entries());
+        let mldsa = {
+            let reused = Mldsa87SigHashReusedValuesUnsync::new();
+            calc_mldsa87_signature_hash(&pt, 0, SIG_HASH_ALL, &reused)
+        };
+        let schnorr = {
+            let reused = SigHashReusedValuesUnsync::new();
+            calc_schnorr_signature_hash(&pt, 0, SIG_HASH_ALL, &reused)
+        };
+        assert_ne!(&mldsa.as_bytes()[..32], &schnorr.as_bytes()[..], "ML-DSA-87 digest must differ from schnorr digest");
     }
 }

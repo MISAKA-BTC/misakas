@@ -247,8 +247,8 @@ async fn dns_overlay_active_chain_validates() {
 // blocker for the reward-bearing / reorg / slashing DAG tests (DAG-2..7): these
 // helpers let a consensus test build stake-bond + attestation-shard txs and
 // produce an attestation signature the §B.4 verifier
-// (`kaspa_txscript::verify_mldsa65_with_context` under
-// `ATTESTATION_MLDSA65_CONTEXT`) accepts. Funding a bond tx from a coinbase UTXO
+// (`kaspa_txscript::verify_mldsa87_with_context` under
+// `ATTESTATION_MLDSA87_CONTEXT`) accepts. Funding a bond tx from a coinbase UTXO
 // (so a full reward-bearing chain validates) is the next harness step (DAG-2).
 // ============================================================================
 #[cfg(test)]
@@ -256,14 +256,14 @@ mod dns_harness {
     use kaspa_consensus_core::{
         Hash64,
         dns_finality::{
-            ATTESTATION_MLDSA65_CONTEXT, DNS_PAYLOAD_VERSION_V1, StakeAttestation, StakeBondPayload,
+            ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, StakeAttestation, StakeBondPayload,
             attestations_from_accepted_txs, single_attestation_shard, stake_attestation_message, stake_attestation_shard_tx,
             validator_id_from_pubkey,
         },
         subnets::{SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND},
         tx::{Transaction, TransactionOutpoint},
     };
-    use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+    use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
     /// A test validator: an ML-DSA-65 key (re-derived deterministically from
     /// `seed`) plus its 1952-byte pubkey and overlay `validator_id`.
@@ -284,7 +284,7 @@ mod dns_harness {
     /// borsh `StakeBondPayload`). The funded variant (output-0 = `amount` locked
     /// stake spent from a coinbase UTXO) is the next step; here the tx is
     /// payload-first for shape / borsh checks.
-    pub(super) fn build_stake_bond_tx(v: &HarnessValidator, amount: u64, activation_daa_score: u64, reward_payload: [u8; 32]) -> Transaction {
+    pub(super) fn build_stake_bond_tx(v: &HarnessValidator, amount: u64, activation_daa_score: u64, reward_payload: [u8; 64]) -> Transaction {
         let payload = StakeBondPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             owner_pubkey_hash: v.validator_id,
@@ -312,7 +312,7 @@ mod dns_harness {
         let msg = stake_attestation_message(network_id, epoch, target_hash, target_daa_score, validator_set_commitment, bond_outpoint);
         let mb = msg.as_bytes();
         let kp = mldsa::generate_key_pair(v.seed);
-        let sig = mldsa::sign(&kp.signing_key, &mb[..], ATTESTATION_MLDSA65_CONTEXT, [0x55u8; 32]).expect("ml-dsa-65 sign");
+        let sig = mldsa::sign(&kp.signing_key, &mb[..], ATTESTATION_MLDSA87_CONTEXT, [0x55u8; 32]).expect("ml-dsa-65 sign");
         StakeAttestation {
             version: DNS_PAYLOAD_VERSION_V1,
             validator_id: v.validator_id,
@@ -330,11 +330,11 @@ mod dns_harness {
     #[test]
     fn dns_harness_signs_attestations_the_verifier_accepts() {
         let v = harness_validator([0x11u8; 32]);
-        assert_eq!(v.pubkey.len(), 1952);
+        assert_eq!(v.pubkey.len(), 2592);
         assert_eq!(v.validator_id, validator_id_from_pubkey(&v.pubkey));
 
         // Stake-bond tx shape + payload round-trip; validator_pubkey_hash binds the pubkey.
-        let bond_tx = build_stake_bond_tx(&v, 10_000_000_000, 0, [0x33u8; 32]);
+        let bond_tx = build_stake_bond_tx(&v, 10_000_000_000, 0, [0x33u8; 64]);
         assert_eq!(bond_tx.subnetwork_id, SUBNETWORK_ID_STAKE_BOND);
         let bond_outpoint = TransactionOutpoint::new(bond_tx.id(), 0);
         let decoded: StakeBondPayload = borsh::from_slice(&bond_tx.payload).unwrap();
@@ -349,12 +349,12 @@ mod dns_harness {
         let msg = stake_attestation_message(&net_id, att.epoch, att.target_hash, att.target_daa_score, att.validator_set_commitment, att.bond_outpoint);
         let mb = msg.as_bytes();
         assert!(
-            kaspa_txscript::verify_mldsa65_with_context(&v.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA65_CONTEXT).unwrap(),
+            kaspa_txscript::verify_mldsa87_with_context(&v.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA87_CONTEXT).unwrap(),
             "the §B.4 verifier must accept the harness-signed attestation"
         );
         // A different key must NOT verify (sanity).
         let v2 = harness_validator([0x99u8; 32]);
-        assert!(!kaspa_txscript::verify_mldsa65_with_context(&v2.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA65_CONTEXT).unwrap());
+        assert!(!kaspa_txscript::verify_mldsa87_with_context(&v2.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA87_CONTEXT).unwrap());
 
         // Shard tx wraps exactly one extractable attestation.
         let shard_tx = stake_attestation_shard_tx(&single_attestation_shard(att));
@@ -464,9 +464,10 @@ async fn double_search_disqualified_test() {
 }
 
 fn new_miner_data() -> MinerData {
-    let secp = secp256k1::Secp256k1::new();
-    let mut rng = rand::thread_rng();
-    let (_sk, pk) = secp.generate_keypair(&mut rng);
-    let script = ScriptVec::from_slice(&pk.serialize());
+    // kaspa-pq PQ-only: the coinbase recipient script only needs arbitrary bytes
+    // (coinbase outputs are not signature-checked), so use a random 32-byte payload
+    // instead of a secp256k1 public key — keeps this test helper secp-free.
+    let payload: [u8; 32] = rand::random();
+    let script = ScriptVec::from_slice(&payload);
     MinerData::new(ScriptPublicKey::new(0, script), vec![])
 }

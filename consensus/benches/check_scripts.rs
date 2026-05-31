@@ -3,6 +3,7 @@ use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus::processes::transaction_validator::tx_validation_in_utxo_context::{
     check_scripts_par_iter, check_scripts_par_iter_pool, check_scripts_sequential,
 };
+use kaspa_txscript::ScriptPolicy;
 use kaspa_consensus_core::hashing::sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
 use kaspa_consensus_core::subnets::SubnetworkId;
@@ -89,7 +90,7 @@ fn benchmark_check_scripts(c: &mut Criterion) {
                 let cache = Cache::new(inputs_count as u64);
                 b.iter(|| {
                     cache.clear();
-                    check_scripts_sequential(black_box(&cache), black_box(&tx.as_verifiable())).unwrap();
+                    check_scripts_sequential(black_box(&cache), black_box(&tx.as_verifiable()), ScriptPolicy::LEGACY).unwrap();
                 })
             });
 
@@ -98,7 +99,7 @@ fn benchmark_check_scripts(c: &mut Criterion) {
                 let cache = Cache::new(inputs_count as u64);
                 b.iter(|| {
                     cache.clear();
-                    check_scripts_par_iter(black_box(&cache), black_box(&tx.as_verifiable())).unwrap();
+                    check_scripts_par_iter(black_box(&cache), black_box(&tx.as_verifiable()), ScriptPolicy::LEGACY).unwrap();
                 })
             });
 
@@ -110,7 +111,8 @@ fn benchmark_check_scripts(c: &mut Criterion) {
                         let cache = Cache::new(inputs_count as u64);
                         b.iter(|| {
                             cache.clear();
-                            check_scripts_par_iter_pool(black_box(&cache), black_box(&tx.as_verifiable()), black_box(&pool)).unwrap();
+                            check_scripts_par_iter_pool(black_box(&cache), black_box(&tx.as_verifiable()), black_box(&pool), ScriptPolicy::LEGACY)
+                                .unwrap();
                         })
                     });
                 }
@@ -146,7 +148,7 @@ fn benchmark_check_scripts_with_payload(c: &mut Criterion) {
                 let cache = Cache::new(inputs_count as u64);
                 b.iter(|| {
                     cache.clear();
-                    check_scripts_par_iter(black_box(&cache), black_box(&tx.as_verifiable())).unwrap();
+                    check_scripts_par_iter(black_box(&cache), black_box(&tx.as_verifiable()), ScriptPolicy::LEGACY).unwrap();
                 })
             });
         }

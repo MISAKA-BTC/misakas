@@ -35,6 +35,8 @@ pub fn factories() -> &'static FactoryMap {
             (MULTISIG_ACCOUNT_KIND.into(), Arc::new(multisig::Ctor {})),
             (KEYPAIR_ACCOUNT_KIND.into(), Arc::new(keypair::Ctor {})),
             (BIP32_WATCH_ACCOUNT_KIND.into(), Arc::new(bip32watch::Ctor {})),
+            // kaspa-pq ML-DSA-87 PQ-only single-key account (ADR-0019 §13).
+            (MLDSA_ACCOUNT_KIND.into(), Arc::new(mldsa::Ctor {})),
         ];
 
         let external = EXTERNAL.get_or_init(|| Mutex::new(AHashMap::new())).lock().unwrap().clone();

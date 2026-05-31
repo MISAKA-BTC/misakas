@@ -320,7 +320,7 @@ mod tests {
                     .unwrap(),
                     hash_merkle_root: 1.into(),
                     accepted_id_merkle_root: 1.into(),
-                    utxo_commitment: 1.into(),
+                    utxo_commitment: Default::default(), // kaspa-pq: utxo_commitment is Hash64; value unused in this test
                     timestamp: 0,
                     bits: 0,
                     nonce: 0,
@@ -353,7 +353,7 @@ mod tests {
                     .unwrap(),
                     hash_merkle_root: 1.into(),
                     accepted_id_merkle_root: 1.into(),
-                    utxo_commitment: 1.into(),
+                    utxo_commitment: Default::default(), // kaspa-pq: utxo_commitment is Hash64; value unused in this test
                     timestamp: 0,
                     bits: 0,
                     nonce: 0,
@@ -386,7 +386,7 @@ mod tests {
                     .unwrap(),
                     hash_merkle_root: 1.into(),
                     accepted_id_merkle_root: 1.into(),
-                    utxo_commitment: 1.into(),
+                    utxo_commitment: Default::default(), // kaspa-pq: utxo_commitment is Hash64; value unused in this test
                     timestamp: 0,
                     bits: 0,
                     nonce: 0,
@@ -490,7 +490,7 @@ mod tests {
                         parents_by_level: expected_parents.try_into().unwrap(),
                         hash_merkle_root: 1.into(),
                         accepted_id_merkle_root: 1.into(),
-                        utxo_commitment: 1.into(),
+                        utxo_commitment: Default::default(), // kaspa-pq: utxo_commitment is Hash64; value unused in this test
                         timestamp: 0,
                         bits: 0,
                         nonce: 0,
@@ -554,7 +554,7 @@ mod tests {
                     parents_by_level: vec![vec![1001.into(), 1002.into()], vec![1001.into(), 1002.into()]].try_into().unwrap(),
                     hash_merkle_root: 1.into(),
                     accepted_id_merkle_root: 1.into(),
-                    utxo_commitment: 1.into(),
+                    utxo_commitment: Default::default(), // kaspa-pq: utxo_commitment is Hash64; value unused in this test
                     timestamp: 0,
                     bits: 0,
                     nonce: 0,
@@ -597,7 +597,7 @@ mod tests {
                         parents_by_level: expected_parents.try_into().unwrap(),
                         hash_merkle_root: 1.into(),
                         accepted_id_merkle_root: 1.into(),
-                        utxo_commitment: 1.into(),
+                        utxo_commitment: Default::default(), // kaspa-pq: utxo_commitment is Hash64; value unused in this test
                         timestamp: 0,
                         bits: 0,
                         nonce: 0,

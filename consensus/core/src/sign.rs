@@ -1,20 +1,30 @@
+use crate::tx::SignableTransaction;
+use thiserror::Error;
+// kaspa-pq PQ-only: the legacy secp256k1 signing helpers (sign*/verify) and their
+// supporting imports compile only under `legacy-secp256k1` (ADR-0019 §14).
+#[cfg(feature = "legacy-secp256k1")]
 use crate::{
     hashing::{
         sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash},
         sighash_type::{SIG_HASH_ALL, SigHashType},
     },
-    tx::{SignableTransaction, VerifiableTransaction},
+    tx::VerifiableTransaction,
 };
+#[cfg(feature = "legacy-secp256k1")]
 use itertools::Itertools;
+#[cfg(feature = "legacy-secp256k1")]
 use std::collections::BTreeMap;
+#[cfg(feature = "legacy-secp256k1")]
 use std::iter::once;
-use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
 pub enum Error {
     #[error("{0}")]
     Message(String),
 
+    // kaspa-pq PQ-only: the legacy secp256k1 error is compiled only under
+    // `legacy-secp256k1` (ADR-0019 §14).
+    #[cfg(feature = "legacy-secp256k1")]
     #[error("Secp256k1 -> {0}")]
     Secp256k1Error(#[from] secp256k1::Error),
 
@@ -79,6 +89,7 @@ impl Signed {
 }
 
 /// Sign a transaction using schnorr
+#[cfg(feature = "legacy-secp256k1")]
 pub fn sign(mut signable_tx: SignableTransaction, schnorr_key: secp256k1::Keypair) -> SignableTransaction {
     for i in 0..signable_tx.tx.inputs.len() {
         signable_tx.tx.inputs[i].sig_op_count = 1;
@@ -96,6 +107,7 @@ pub fn sign(mut signable_tx: SignableTransaction, schnorr_key: secp256k1::Keypai
 }
 
 /// Sign a transaction using schnorr
+#[cfg(feature = "legacy-secp256k1")]
 pub fn sign_with_multiple(mut mutable_tx: SignableTransaction, privkeys: Vec<[u8; 32]>) -> SignableTransaction {
     let mut map = BTreeMap::new();
     for privkey in privkeys {
@@ -122,6 +134,7 @@ pub fn sign_with_multiple(mut mutable_tx: SignableTransaction, privkeys: Vec<[u8
 
 /// TODO (aspect) - merge this with `v1` fn above or refactor wallet core to use the script engine.
 /// Sign a transaction using schnorr
+#[cfg(feature = "legacy-secp256k1")]
 #[allow(clippy::result_large_err)]
 pub fn sign_with_multiple_v2(mut mutable_tx: SignableTransaction, privkeys: &[[u8; 32]]) -> Signed {
     let mut map = BTreeMap::new();
@@ -150,6 +163,7 @@ pub fn sign_with_multiple_v2(mut mutable_tx: SignableTransaction, privkeys: &[[u
 }
 
 /// Sign a transaction input with a sighash_type using schnorr
+#[cfg(feature = "legacy-secp256k1")]
 pub fn sign_input(tx: &impl VerifiableTransaction, input_index: usize, private_key: &[u8; 32], hash_type: SigHashType) -> Vec<u8> {
     let reused_values = SigHashReusedValuesUnsync::new();
 
@@ -162,6 +176,7 @@ pub fn sign_input(tx: &impl VerifiableTransaction, input_index: usize, private_k
     std::iter::once(65u8).chain(sig).chain([hash_type.to_u8()]).collect()
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 pub fn verify(tx: &impl VerifiableTransaction) -> Result<(), Error> {
     let reused_values = SigHashReusedValuesUnsync::new();
     for (i, (input, entry)) in tx.populated_inputs().enumerate() {
@@ -179,7 +194,7 @@ pub fn verify(tx: &impl VerifiableTransaction) -> Result<(), Error> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-secp256k1"))]
 mod tests {
     use super::*;
     use crate::{subnets::SubnetworkId, tx::*};

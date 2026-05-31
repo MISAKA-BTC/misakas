@@ -1136,7 +1136,7 @@ async fn difficulty_test() {
             parents_by_level: Vec::<Vec<BlockHash>>::new().try_into().unwrap(),
             hash_merkle_root: 0.into(),
             accepted_id_merkle_root: 0.into(),
-            utxo_commitment: 0.into(),
+            utxo_commitment: Default::default(), // kaspa-pq: utxo_commitment is Hash64; value unused in this test
             timestamp: 0,
             bits: 0,
             nonce: 0,

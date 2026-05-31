@@ -190,6 +190,11 @@ impl From<&TransactionOutpoint> for cctx::TransactionOutpoint {
 
 impl TransactionOutpoint {
     pub fn simulated() -> Self {
-        Self::new(TransactionId::from_slice(&rand::random::<[u8; kaspa_hashes::HASH_SIZE]>()), 0)
+        // kaspa-pq: TransactionId is a 64-byte Hash64 (Phase 9.5 consensus-identity
+        // migration), so the simulated id must be 64 random bytes — the former
+        // 32-byte (`HASH_SIZE`) fill panicked in `Hash64::from_slice`.
+        let mut bytes = [0u8; kaspa_hashes::HASH64_SIZE];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut bytes);
+        Self::new(TransactionId::from_slice(&bytes), 0)
     }
 }

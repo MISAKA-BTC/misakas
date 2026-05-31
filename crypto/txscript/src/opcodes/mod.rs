@@ -7,6 +7,7 @@ use crate::{
     data_stack::{DataStack, OpcodeData},
 };
 use blake2b_simd::Params;
+use kaspa_hashes::blake2b_512_address_payload;
 use kaspa_consensus_core::hashing::sighash::SigHashReusedValues;
 use kaspa_consensus_core::hashing::sighash_type::SigHashType;
 use kaspa_consensus_core::tx::VerifiableTransaction;
@@ -723,12 +724,12 @@ opcode_list! {
     // Layout mirrors OpCheckSig (0xac): pops <sig>, <key>, then pops the
     // 1-byte sighash type off the signature, length-checks both items
     // before any libcrux call, and pushes the boolean verify result.
-    opcode OpCheckSigMlDsa65<0xa6, 1>(self, vm) {
+    opcode OpCheckSigMlDsa87<0xa6, 1>(self, vm) {
         let [mut sig, key] = vm.dstack.pop_raw()?;
         match sig.pop() {
             Some(typ) => {
                 let hash_type = SigHashType::from_u8(typ).map_err(|_e| TxScriptError::InvalidSigHashType(typ))?;
-                match vm.check_mldsa65_signature(hash_type, key.as_slice(), sig.as_slice()) {
+                match vm.check_mldsa87_signature(hash_type, key.as_slice(), sig.as_slice()) {
                     Ok(valid) => {
                         vm.dstack.push_item(valid)?;
                         Ok(())
@@ -747,11 +748,11 @@ opcode_list! {
 
     // kaspa-pq: ML-DSA-65 M-of-N CHECKMULTISIG (was upstream OpUnknown167).
     // Mirrors OpCheckMultiSig (0xae) but verifies ML-DSA-65 signatures via
-    // check_mldsa65_signature. Stack layout (Kaspa CHECKMULTISIG has no dummy
+    // check_mldsa87_signature. Stack layout (Kaspa CHECKMULTISIG has no dummy
     // element): <sig_1> .. <sig_M> <M> <pk_1> .. <pk_N> <N>. Each sig push is
     // <3309-byte ML-DSA-65 sig || 1-byte sighash type>. See docs/adr/0002.
-    opcode OpCheckMultiSigMlDsa65<0xa7, 1>(self, vm) {
-        vm.op_check_multisig(MultisigScheme::MlDsa65)
+    opcode OpCheckMultiSigMlDsa87<0xa7, 1>(self, vm) {
+        vm.op_check_multisig(MultisigScheme::MlDsa87)
     }
 
     // Crypto opcodes.
@@ -1028,8 +1029,23 @@ opcode_list! {
             _ => Err(TxScriptError::InvalidSource("OpOutputSpk only applies to transaction inputs".to_string()))
         }
     }
+    // kaspa-pq PQ-only (ADR-0019 §8 / md2 §4.2): 64-byte BLAKE2b-512 hash opcode,
+    // the hash step of the widened ML-DSA P2PKH template
+    //   OP_DUP OP_BLAKE2B_512 OP_DATA64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87
+    // (repurposes the upstream reserved `OpUnknown196`). Mirrors `OpBlake2b`
+    // (0xaa) but with `hash_length(64)`, so it pushes a 64-byte digest. md2 v2
+    // KEYS this hash under `kaspa-pq-v2/address/mldsa87` (the
+    // `blake2b_512_address_payload` domain), so the digest it recomputes over the
+    // unlock pubkey matches the keyed address payload the wallet/premine commit;
+    // the two MUST stay in lock-step or every P2PKH becomes unspendable. The
+    // 32-byte `OP_BLAKE2B` (0xaa) is retained for the legacy P2SH template.
+    opcode OpBlake2b512<0xc4, 1>(self, vm) {
+        let [last] = vm.dstack.pop_raw()?;
+        let hash = blake2b_512_address_payload(last.as_slice());
+        vm.dstack.push(hash.as_bytes().to_vec());
+        Ok(())
+    }
     // Undefined opcodes
-    opcode OpUnknown196<0xc4, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
     opcode OpUnknown197<0xc5, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
     opcode OpUnknown198<0xc6, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
     opcode OpUnknown199<0xc7, 1>(self, vm) Err(TxScriptError::InvalidOpcode(format!("{self:?}")))
@@ -1228,9 +1244,10 @@ mod test {
     #[test]
     fn test_opcode_invalid() {
         let tests: Vec<Box<dyn OpCodeImplementation<PopulatedTransaction, SigHashReusedValuesUnsync>>> = vec![
-            // kaspa-pq: 0xa6 is OpCheckSigMlDsa65 and 0xa7 is
-            // OpCheckMultiSigMlDsa65 (both defined, not unknown).
-            opcodes::OpUnknown196::empty().expect("Should accept empty"),
+            // kaspa-pq: 0xa6 is OpCheckSigMlDsa87 and 0xa7 is
+            // OpCheckMultiSigMlDsa87 (both defined, not unknown). 0xc4 is now
+            // OpBlake2b512 (ADR-0019 §8), so the first remaining invalid opcode
+            // is 0xc5 / OpUnknown197.
             opcodes::OpUnknown197::empty().expect("Should accept empty"),
             opcodes::OpUnknown198::empty().expect("Should accept empty"),
             opcodes::OpUnknown199::empty().expect("Should accept empty"),

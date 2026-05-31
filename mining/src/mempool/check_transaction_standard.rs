@@ -17,14 +17,12 @@ const MAX_STANDARD_P2SH_SIG_OPS: u8 = 15;
 /// MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE is the maximum size allowed for a
 /// transaction input signature script to be considered standard.
 ///
-/// kaspa-pq: raised from the upstream Kaspa value of 1650 (which sized for a
-/// 15-of-15 Schnorr CHECKMULTISIG: `(1 + 15*74 + 3) + (15*34 + 3) + 23 = 1650`).
-/// A kaspa-pq ML-DSA-65 P2PKH unlock script is
-///   OP_PUSHDATA2 <sig 3309B || sighash-type 1B> + OP_PUSHDATA2 <pubkey 1952B>
-///   = 3 + 3310 + 3 + 1952 = 5268 bytes.
-/// A P2SH ML-DSA-65 **2-of-3 multisig** spend is larger still: 2 sig pushes plus
-/// the redeem-script push = 2*(3+3310) + (3+5868) = 12_497 bytes. 16_384 admits
-/// that with headroom, matching the consensus cap MAX_SCRIPTS_SIZE (16_384).
+/// kaspa-pq (ML-DSA-87): a standard ML-DSA-87 P2PKH signature script holds a
+/// 4628-byte signature + 2592-byte public key (plus push opcodes) for a max
+/// standard unlock of ~7.3 KB, so the legacy 1,650-byte limit is far too
+/// small. Launch scope is ML-DSA-87 P2PKH only (ADR-0019 §11.1); multisig /
+/// P2SH is out of scope. Kept in lockstep with the 16_384 design cap in
+/// `kaspa_txscript::MAX_SCRIPTS_SIZE` (md2 §3.2).
 const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 16_384;
 
 /// MAXIMUM_STANDARD_TRANSACTION_MASS is the maximum mass allowed for transactions that
@@ -199,7 +197,7 @@ impl Mempool {
                 // libcrux verify. The mass-budget side of the policy is
                 // calibrated in Phase 6 via `mass_per_sig_op` (see
                 // docs/adr/0005-mass-policy.md), not here.
-                ScriptClass::PubKeyHashMlDsa65 => {}
+                ScriptClass::PubKeyHashMlDsa87 => {}
                 ScriptClass::ScriptHash => {
                     // todo relax due to on fly calculation
                     let num_sig_ops = get_sig_op_count_upper_bound::<PopulatedTransaction, SigHashReusedValuesUnsync>(

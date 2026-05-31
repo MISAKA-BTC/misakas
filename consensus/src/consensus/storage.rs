@@ -232,9 +232,19 @@ impl ConsensusStorage {
         let dns_state_store = Arc::new(RwLock::new(DbDnsStateStore::new(db.clone())));
         let stake_bonds_store =
             Arc::new(RwLock::new(DbStakeBondsStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build())));
-        // Per-block rewarded `(bond, epoch)` keys (Addendum B §B.3(c)). Reuses
-        // the per-block UTXO-diff cache policy — same keying + lifecycle.
-        let rewarded_epochs_store = Arc::new(DbRewardedEpochsStore::new(db.clone(), utxo_diffs_builder.build()));
+        // Per-block rewarded `(bond, epoch)` keys (Addendum B §B.3(c)), keyed by
+        // block hash. NOTE: the value `RewardedEpochKeys` is a `Vec<(outpoint, epoch)>`,
+        // which implements `estimate_mem_units` but NOT `estimate_mem_bytes`; it must
+        // therefore use an UNTRACKED (Count) policy. A `tracked_bytes` policy (e.g. the
+        // utxo_diffs builder it used to borrow) panics in `mem_size` (`not implemented`)
+        // on the first non-empty reward write — this was the validator-attestation
+        // `virtual-processor` crash. The DB is the source of truth; this cache is only a
+        // per-block read accelerator, so an item cap (mirroring `block_data_builder`)
+        // suffices.
+        let rewarded_epochs_store = Arc::new(DbRewardedEpochsStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
 
         // Block windows
         let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));

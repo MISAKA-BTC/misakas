@@ -1,8 +1,10 @@
 use crate::constants::{MAX_SOMPI, TX_VERSION};
+use kaspa_consensus_core::config::params::PqEnforcementMode;
 use kaspa_consensus_core::dns_finality::{
     DnsTxKind, dns_tx_kind, validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx,
 };
 use kaspa_consensus_core::tx::Transaction;
+use kaspa_txscript::script_class::ScriptClass;
 use std::collections::HashSet;
 
 use super::{
@@ -19,6 +21,7 @@ impl TransactionValidator {
     pub fn validate_tx_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
         self.check_transaction_inputs_in_isolation(tx)?;
         self.check_transaction_outputs_in_isolation(tx)?;
+        self.check_transaction_pq_output_classes(tx)?;
         self.check_coinbase_in_isolation(tx)?;
 
         check_transaction_output_value_ranges(tx)?;
@@ -26,6 +29,38 @@ impl TransactionValidator {
         check_gas(tx)?;
         check_transaction_subnetwork(tx)?;
         check_transaction_version(tx)
+    }
+
+    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): on a
+    /// PQ-active network every standard-spend transaction output must use the
+    /// sole standard ML-DSA-87 P2PKH script class, so no legacy secp256k1 /
+    /// P2SH output can ever enter the UTXO set. This complements §6 (which
+    /// rejects *spending* legacy UTXOs at the script engine) by blocking their
+    /// *creation*.
+    ///
+    /// Exemptions: coinbase outputs (header-supplied miner script or the
+    /// validator-reward P2PKH built by `p2pkh_mldsa87_spk`) and DNS-overlay
+    /// transactions (their outputs are governed by their own payload validators
+    /// — `validate_stake_bond_tx` already pins output-0 to ML-DSA P2PKH, and
+    /// attestation / slashing txs carry no outputs).
+    ///
+    /// This is a context-free rule, so it lives in isolation. kaspa-pq networks
+    /// activate PQ enforcement at genesis (`pq_activation_daa_score = 0`), so
+    /// gating on `pq_enforcement == Consensus` alone is correct here (isolation
+    /// has no DAA score available).
+    fn check_transaction_pq_output_classes(&self, tx: &Transaction) -> TxResult<()> {
+        if !matches!(self.pq_enforcement, PqEnforcementMode::Consensus) {
+            return Ok(());
+        }
+        if tx.is_coinbase() || dns_tx_kind(&tx.subnetwork_id).is_some() {
+            return Ok(());
+        }
+        for (i, output) in tx.outputs.iter().enumerate() {
+            if !ScriptClass::from_script(&output.script_public_key).is_pq_standard() {
+                return Err(TxRuleError::NonPqStandardOutputClass(i));
+            }
+        }
+        Ok(())
     }
 
     fn check_transaction_inputs_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
@@ -353,7 +388,7 @@ mod tests {
     fn validate_dns_overlay_subnetwork_tx() {
         use kaspa_consensus_core::dns_finality::{
             DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
-            StakeAttestation, StakeBondPayload, p2pkh_mldsa65_spk,
+            StakeAttestation, StakeBondPayload, p2pkh_mldsa87_spk,
         };
         use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
         use kaspa_hashes::Hash64;
@@ -396,18 +431,18 @@ mod tests {
             amount: 1_000,
             activation_daa_score: 0,
             unbonding_period_blocks: 1,
-            owner_reward_spk_payload: [0xddu8; 32],
+            owner_reward_spk_payload: [0xddu8; 64],
         };
         let mut tx = base.clone();
         tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
         tx.payload = borsh::to_vec(&bond).unwrap();
         // ADR-0016 D.1: output-0 must lock the stake (value == amount, owner P2PKH).
-        tx.outputs[0] = TransactionOutput::new(bond.amount, p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload));
+        tx.outputs[0] = TransactionOutput::new(bond.amount, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload));
         assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
 
         // Bond whose output-0 does not lock `amount` (ADR-0016 D.1) → rejected.
         let mut tx_unlocked = tx.clone();
-        tx_unlocked.outputs[0] = TransactionOutput::new(bond.amount - 1, p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload));
+        tx_unlocked.outputs[0] = TransactionOutput::new(bond.amount - 1, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload));
         assert_match!(
             tv.validate_tx_in_isolation(&tx_unlocked),
             Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::BondOutputValueMismatch { .. }))
@@ -450,7 +485,7 @@ mod tests {
             bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 42 },
             attestation_a: attestation(0x11),
             attestation_b: attestation(0x33),
-            reporter_reward_spk_payload: [0xeeu8; 32],
+            reporter_reward_spk_payload: [0xeeu8; 64],
         };
         let evidence_payload = borsh::to_vec(&evidence).unwrap();
 
@@ -472,5 +507,98 @@ mod tests {
             tv.validate_tx_in_isolation(&tx_with_out),
             Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::SlashingEvidenceHasOutputs(1)))
         );
+    }
+}
+
+#[cfg(test)]
+mod pq_output_class_enforcement_tests {
+    //! kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): the
+    //! consensus output-class rule. On a PQ-active network every non-coinbase,
+    //! non-overlay transaction output must be ML-DSA P2PKH; coinbase and DNS
+    //! overlay txs are exempt. Drives the private `check_transaction_pq_output_classes`
+    //! directly so it is isolated from the other in-isolation checks.
+    use super::TransactionValidator;
+    use kaspa_consensus_core::config::params::{MAINNET_PARAMS, PqEnforcementMode};
+    use kaspa_consensus_core::errors::tx::TxRuleError;
+    use kaspa_consensus_core::subnets::{SUBNETWORK_ID_COINBASE, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_BOND};
+    use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput};
+    use kaspa_txscript::opcodes::codes;
+    use kaspa_txscript::caches::TxScriptCacheCounters;
+    use smallvec::smallvec;
+    use std::sync::Arc;
+
+    fn validator(mode: PqEnforcementMode) -> TransactionValidator {
+        let p = &MAINNET_PARAMS;
+        let mut tv = TransactionValidator::new_for_tests(
+            p.max_tx_inputs,
+            p.max_tx_outputs,
+            p.max_signature_script_len,
+            p.max_script_public_key_len,
+            p.coinbase_payload_script_public_key_max_len,
+            p.coinbase_maturity,
+            p.ghostdag_k(),
+            Arc::new(TxScriptCacheCounters::default()),
+        );
+        // new_for_tests defaults to Disabled; set the mode under test.
+        tv.pq_enforcement = mode;
+        tv.pq_activation_daa_score = 0;
+        tv
+    }
+
+    /// kaspa-pq ML-DSA-87 P2PKH (ADR-0019 §8):
+    /// `OP_DUP OP_BLAKE2B_512 OP_DATA64 <64B> OP_EQUALVERIFY OP_CHECKSIGMLDSA87` (69 bytes).
+    fn pq_p2pkh_spk() -> ScriptPublicKey {
+        let mut s = vec![codes::OpDup, codes::OpBlake2b512, codes::OpData64];
+        s.extend_from_slice(&[0u8; 64]);
+        s.push(codes::OpEqualVerify);
+        s.push(codes::OpCheckSigMlDsa87);
+        ScriptPublicKey::new(0, s.into())
+    }
+
+    /// A non-ML-DSA-P2PKH script (`OP_TRUE` -> ScriptClass::NonStandard).
+    fn legacy_spk() -> ScriptPublicKey {
+        ScriptPublicKey::new(0, smallvec![codes::OpTrue])
+    }
+
+    fn tx_with_output(spk: ScriptPublicKey, subnetwork: kaspa_consensus_core::subnets::SubnetworkId) -> Transaction {
+        Transaction::new(0, vec![], vec![TransactionOutput { value: 1000, script_public_key: spk }], 0, subnetwork, 0, vec![])
+    }
+
+    #[test]
+    fn disabled_mode_allows_any_output_class() {
+        let tv = validator(PqEnforcementMode::Disabled);
+        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_NATIVE)).is_ok());
+    }
+
+    #[test]
+    fn consensus_mode_allows_mldsa_p2pkh_output() {
+        let tv = validator(PqEnforcementMode::Consensus);
+        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE)).is_ok());
+    }
+
+    #[test]
+    fn consensus_mode_rejects_legacy_output() {
+        let tv = validator(PqEnforcementMode::Consensus);
+        assert_eq!(
+            tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_NATIVE)),
+            Err(TxRuleError::NonPqStandardOutputClass(0))
+        );
+    }
+
+    #[test]
+    fn consensus_mode_exempts_coinbase() {
+        let tv = validator(PqEnforcementMode::Consensus);
+        // Coinbase outputs inherit miner/header scripts (or the P2PKH validator
+        // reward); they are not subject to the standard-spend class rule.
+        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_COINBASE)).is_ok());
+    }
+
+    #[test]
+    fn consensus_mode_exempts_overlay_subnetwork() {
+        let tv = validator(PqEnforcementMode::Consensus);
+        // DNS-overlay tx outputs are governed by their own payload validators
+        // (stake-bond output-0 is pinned to ML-DSA P2PKH; attestation/slashing
+        // carry no outputs), so the generic class rule must not fire here.
+        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_STAKE_BOND)).is_ok());
     }
 }

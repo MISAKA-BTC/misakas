@@ -4,26 +4,26 @@
 //! TypeScript-facing API (camelCased automatically by wasm-bindgen):
 //!
 //! ```text
-//!   class MlDsa65PublicKey {
-//!     static fromHex(hex: string): MlDsa65PublicKey;
-//!     static fromBytes(bytes: Uint8Array): MlDsa65PublicKey;
+//!   class MlDsa87PublicKey {
+//!     static fromHex(hex: string): MlDsa87PublicKey;
+//!     static fromBytes(bytes: Uint8Array): MlDsa87PublicKey;
 //!     toHex(): string;
 //!     toBytes(): Uint8Array;       // length 1952
 //!   }
-//!   class MlDsa65Signature {
-//!     static fromHex(hex: string): MlDsa65Signature;
-//!     static fromBytes(bytes: Uint8Array): MlDsa65Signature;
+//!   class MlDsa87Signature {
+//!     static fromHex(hex: string): MlDsa87Signature;
+//!     static fromBytes(bytes: Uint8Array): MlDsa87Signature;
 //!     toHex(): string;
 //!     toBytes(): Uint8Array;       // length 3309
-//!     verify(publicKey: MlDsa65PublicKey, message: Uint8Array): boolean;
+//!     verify(publicKey: MlDsa87PublicKey, message: Uint8Array): boolean;
 //!   }
 //!   class KaspaPqKeyPair {
 //!     static fromSeed(seed: Uint8Array): KaspaPqKeyPair;     // 32-byte seed
 //!     static fromMnemonic(phrase, passphrase, networkId,
 //!                          account, change, index): KaspaPqKeyPair;
-//!     publicKey(): MlDsa65PublicKey;
+//!     publicKey(): MlDsa87PublicKey;
 //!     address(networkPrefix: string): Address;
-//!     sign(message: Uint8Array, randomness: Uint8Array): MlDsa65Signature;
+//!     sign(message: Uint8Array, randomness: Uint8Array): MlDsa87Signature;
 //!   }
 //! ```
 //!
@@ -41,11 +41,11 @@
 
 use kaspa_addresses::{Address, Prefix};
 use kaspa_bip32::{Language, Mnemonic};
-use kaspa_txscript::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT};
-use libcrux_ml_dsa::ml_dsa_65;
+use kaspa_txscript::{MLDSA87_PK_LEN, MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT};
+use libcrux_ml_dsa::ml_dsa_87;
 use wasm_bindgen::prelude::*;
 
-use crate::kaspa_pq::{KaspaPqMlDsa65KeyPair, derive_keypair};
+use crate::kaspa_pq::{KaspaPqMlDsa87KeyPair, derive_keypair};
 
 fn require_len(bytes: &[u8], expected: usize, label: &str) -> Result<(), String> {
     if bytes.len() != expected { Err(format!("kaspa-pq {label}: expected {expected} bytes, got {}", bytes.len())) } else { Ok(()) }
@@ -57,36 +57,36 @@ fn jsv<E: std::fmt::Display>(e: E) -> JsValue {
 
 /// 1952-byte ML-DSA-65 public key, WASM-facing newtype.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[wasm_bindgen(js_name = "MlDsa65PublicKey")]
-pub struct MlDsa65PublicKey {
+#[wasm_bindgen(js_name = "MlDsa87PublicKey")]
+pub struct MlDsa87PublicKey {
     inner: Vec<u8>,
 }
 
-impl MlDsa65PublicKey {
-    fn from_bytes_inner(bytes: Vec<u8>) -> Result<MlDsa65PublicKey, String> {
-        require_len(&bytes, MLDSA65_PK_LEN, "MlDsa65PublicKey")?;
-        Ok(MlDsa65PublicKey { inner: bytes })
+impl MlDsa87PublicKey {
+    fn from_bytes_inner(bytes: Vec<u8>) -> Result<MlDsa87PublicKey, String> {
+        require_len(&bytes, MLDSA87_PK_LEN, "MlDsa87PublicKey")?;
+        Ok(MlDsa87PublicKey { inner: bytes })
     }
 
-    fn from_hex_inner(hex: &str) -> Result<MlDsa65PublicKey, String> {
-        if hex.len() != MLDSA65_PK_LEN * 2 {
-            return Err(format!("kaspa-pq MlDsa65PublicKey: expected {} hex characters, got {}", MLDSA65_PK_LEN * 2, hex.len()));
+    fn from_hex_inner(hex: &str) -> Result<MlDsa87PublicKey, String> {
+        if hex.len() != MLDSA87_PK_LEN * 2 {
+            return Err(format!("kaspa-pq MlDsa87PublicKey: expected {} hex characters, got {}", MLDSA87_PK_LEN * 2, hex.len()));
         }
-        let mut buf = vec![0u8; MLDSA65_PK_LEN];
-        faster_hex::hex_decode(hex.as_bytes(), &mut buf).map_err(|e| format!("kaspa-pq MlDsa65PublicKey hex: {e}"))?;
-        Ok(MlDsa65PublicKey { inner: buf })
+        let mut buf = vec![0u8; MLDSA87_PK_LEN];
+        faster_hex::hex_decode(hex.as_bytes(), &mut buf).map_err(|e| format!("kaspa-pq MlDsa87PublicKey hex: {e}"))?;
+        Ok(MlDsa87PublicKey { inner: buf })
     }
 }
 
-#[wasm_bindgen(js_class = "MlDsa65PublicKey")]
-impl MlDsa65PublicKey {
+#[wasm_bindgen(js_class = "MlDsa87PublicKey")]
+impl MlDsa87PublicKey {
     #[wasm_bindgen(js_name = "fromBytes")]
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<MlDsa65PublicKey, JsValue> {
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<MlDsa87PublicKey, JsValue> {
         Self::from_bytes_inner(bytes).map_err(jsv)
     }
 
     #[wasm_bindgen(js_name = "fromHex")]
-    pub fn from_hex(hex: &str) -> Result<MlDsa65PublicKey, JsValue> {
+    pub fn from_hex(hex: &str) -> Result<MlDsa87PublicKey, JsValue> {
         Self::from_hex_inner(hex).map_err(jsv)
     }
 
@@ -105,51 +105,51 @@ impl MlDsa65PublicKey {
 
 /// 3309-byte ML-DSA-65 signature, WASM-facing newtype.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[wasm_bindgen(js_name = "MlDsa65Signature")]
-pub struct MlDsa65Signature {
+#[wasm_bindgen(js_name = "MlDsa87Signature")]
+pub struct MlDsa87Signature {
     inner: Vec<u8>,
 }
 
-impl MlDsa65Signature {
-    fn from_bytes_inner(bytes: Vec<u8>) -> Result<MlDsa65Signature, String> {
-        require_len(&bytes, MLDSA65_SIG_LEN, "MlDsa65Signature")?;
-        Ok(MlDsa65Signature { inner: bytes })
+impl MlDsa87Signature {
+    fn from_bytes_inner(bytes: Vec<u8>) -> Result<MlDsa87Signature, String> {
+        require_len(&bytes, MLDSA87_SIG_LEN, "MlDsa87Signature")?;
+        Ok(MlDsa87Signature { inner: bytes })
     }
 
-    fn from_hex_inner(hex: &str) -> Result<MlDsa65Signature, String> {
-        if hex.len() != MLDSA65_SIG_LEN * 2 {
-            return Err(format!("kaspa-pq MlDsa65Signature: expected {} hex characters, got {}", MLDSA65_SIG_LEN * 2, hex.len()));
+    fn from_hex_inner(hex: &str) -> Result<MlDsa87Signature, String> {
+        if hex.len() != MLDSA87_SIG_LEN * 2 {
+            return Err(format!("kaspa-pq MlDsa87Signature: expected {} hex characters, got {}", MLDSA87_SIG_LEN * 2, hex.len()));
         }
-        let mut buf = vec![0u8; MLDSA65_SIG_LEN];
-        faster_hex::hex_decode(hex.as_bytes(), &mut buf).map_err(|e| format!("kaspa-pq MlDsa65Signature hex: {e}"))?;
-        Ok(MlDsa65Signature { inner: buf })
+        let mut buf = vec![0u8; MLDSA87_SIG_LEN];
+        faster_hex::hex_decode(hex.as_bytes(), &mut buf).map_err(|e| format!("kaspa-pq MlDsa87Signature hex: {e}"))?;
+        Ok(MlDsa87Signature { inner: buf })
     }
 
-    fn verify_inner(&self, public_key: &MlDsa65PublicKey, message: &[u8]) -> bool {
-        if public_key.inner.len() != MLDSA65_PK_LEN || self.inner.len() != MLDSA65_SIG_LEN {
+    fn verify_inner(&self, public_key: &MlDsa87PublicKey, message: &[u8]) -> bool {
+        if public_key.inner.len() != MLDSA87_PK_LEN || self.inner.len() != MLDSA87_SIG_LEN {
             return false;
         }
-        let Ok(pk_arr): Result<[u8; MLDSA65_PK_LEN], _> = public_key.inner.as_slice().try_into() else {
+        let Ok(pk_arr): Result<[u8; MLDSA87_PK_LEN], _> = public_key.inner.as_slice().try_into() else {
             return false;
         };
-        let Ok(sig_arr): Result<[u8; MLDSA65_SIG_LEN], _> = self.inner.as_slice().try_into() else {
+        let Ok(sig_arr): Result<[u8; MLDSA87_SIG_LEN], _> = self.inner.as_slice().try_into() else {
             return false;
         };
-        let vk = ml_dsa_65::MLDSA65VerificationKey::new(pk_arr);
-        let sig = ml_dsa_65::MLDSA65Signature::new(sig_arr);
-        ml_dsa_65::verify(&vk, message, MLDSA65_TX_CONTEXT, &sig).is_ok()
+        let vk = ml_dsa_87::MLDSA87VerificationKey::new(pk_arr);
+        let sig = ml_dsa_87::MLDSA87Signature::new(sig_arr);
+        ml_dsa_87::verify(&vk, message, MLDSA87_TX_CONTEXT, &sig).is_ok()
     }
 }
 
-#[wasm_bindgen(js_class = "MlDsa65Signature")]
-impl MlDsa65Signature {
+#[wasm_bindgen(js_class = "MlDsa87Signature")]
+impl MlDsa87Signature {
     #[wasm_bindgen(js_name = "fromBytes")]
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<MlDsa65Signature, JsValue> {
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<MlDsa87Signature, JsValue> {
         Self::from_bytes_inner(bytes).map_err(jsv)
     }
 
     #[wasm_bindgen(js_name = "fromHex")]
-    pub fn from_hex(hex: &str) -> Result<MlDsa65Signature, JsValue> {
+    pub fn from_hex(hex: &str) -> Result<MlDsa87Signature, JsValue> {
         Self::from_hex_inner(hex).map_err(jsv)
     }
 
@@ -165,10 +165,10 @@ impl MlDsa65Signature {
         String::from_utf8(out).expect("hex output is ASCII")
     }
 
-    /// Verify under the kaspa-pq tx context `MLDSA65_TX_CONTEXT`. Self-contained;
+    /// Verify under the kaspa-pq tx context `MLDSA87_TX_CONTEXT`. Self-contained;
     /// does not require a `KaspaPqKeyPair`. Returns `true` for a valid signature,
     /// `false` for any failure (length / context / cryptographic).
-    pub fn verify(&self, public_key: &MlDsa65PublicKey, message: Vec<u8>) -> bool {
+    pub fn verify(&self, public_key: &MlDsa87PublicKey, message: Vec<u8>) -> bool {
         self.verify_inner(public_key, &message)
     }
 }
@@ -176,10 +176,10 @@ impl MlDsa65Signature {
 /// kaspa-pq ML-DSA-65 keypair, WASM-facing.
 #[wasm_bindgen(js_name = "KaspaPqKeyPair")]
 pub struct KaspaPqKeyPair {
-    inner: KaspaPqMlDsa65KeyPair,
+    inner: KaspaPqMlDsa87KeyPair,
 }
 
-// `KaspaPqMlDsa65KeyPair` does not derive Debug (it contains the libcrux
+// `KaspaPqMlDsa87KeyPair` does not derive Debug (it contains the libcrux
 // signing key), and we do not want test code to print private key
 // material anyway. Implement Debug as a redacted form for the WASM
 // wrapper.
@@ -194,7 +194,7 @@ impl KaspaPqKeyPair {
         require_len(&seed, 32, "fromSeed")?;
         let mut arr = [0u8; 32];
         arr.copy_from_slice(&seed);
-        Ok(KaspaPqKeyPair { inner: KaspaPqMlDsa65KeyPair::from_seed(arr) })
+        Ok(KaspaPqKeyPair { inner: KaspaPqMlDsa87KeyPair::from_seed(arr) })
     }
 
     fn from_mnemonic_inner(
@@ -210,8 +210,8 @@ impl KaspaPqKeyPair {
         Ok(KaspaPqKeyPair { inner: derive_keypair(network_id, account, change, index, seed.as_bytes()) })
     }
 
-    fn public_key_inner(&self) -> MlDsa65PublicKey {
-        MlDsa65PublicKey { inner: self.inner.public_key_bytes().to_vec() }
+    fn public_key_inner(&self) -> MlDsa87PublicKey {
+        MlDsa87PublicKey { inner: self.inner.public_key_bytes().to_vec() }
     }
 
     fn address_inner(&self, network_prefix: &str) -> Result<Address, String> {
@@ -230,12 +230,12 @@ impl KaspaPqKeyPair {
         Ok(self.inner.address(prefix))
     }
 
-    fn sign_inner(&self, message: &[u8], randomness: Vec<u8>) -> Result<MlDsa65Signature, String> {
+    fn sign_inner(&self, message: &[u8], randomness: Vec<u8>) -> Result<MlDsa87Signature, String> {
         require_len(&randomness, 32, "sign randomness")?;
         let mut r_arr = [0u8; 32];
         r_arr.copy_from_slice(&randomness);
         let sig_bytes = self.inner.sign(message, r_arr);
-        Ok(MlDsa65Signature { inner: sig_bytes.to_vec() })
+        Ok(MlDsa87Signature { inner: sig_bytes.to_vec() })
     }
 }
 
@@ -268,7 +268,7 @@ impl KaspaPqKeyPair {
 
     /// 1952-byte ML-DSA-65 public key.
     #[wasm_bindgen(js_name = "publicKey")]
-    pub fn public_key(&self) -> MlDsa65PublicKey {
+    pub fn public_key(&self) -> MlDsa87PublicKey {
         self.public_key_inner()
     }
 
@@ -281,7 +281,7 @@ impl KaspaPqKeyPair {
 
     /// Sign `message` under the kaspa-pq transaction context. The
     /// returned signature is exactly 3309 bytes.
-    pub fn sign(&self, message: Vec<u8>, randomness: Vec<u8>) -> Result<MlDsa65Signature, JsValue> {
+    pub fn sign(&self, message: Vec<u8>, randomness: Vec<u8>) -> Result<MlDsa87Signature, JsValue> {
         self.sign_inner(&message, randomness).map_err(jsv)
     }
 }
@@ -301,11 +301,11 @@ mod tests {
     fn keypair_roundtrip_from_mnemonic() {
         let kp = KaspaPqKeyPair::from_mnemonic_inner(TEST_MASTER_PHRASE, "", "mainnet", 0, 0, 0).unwrap();
         let pk = kp.public_key_inner();
-        assert_eq!(pk.to_bytes().len(), MLDSA65_PK_LEN);
+        assert_eq!(pk.to_bytes().len(), MLDSA87_PK_LEN);
         let hex = pk.to_hex();
-        assert_eq!(hex.len(), MLDSA65_PK_LEN * 2);
+        assert_eq!(hex.len(), MLDSA87_PK_LEN * 2);
 
-        let pk_back = MlDsa65PublicKey::from_hex_inner(&hex).unwrap();
+        let pk_back = MlDsa87PublicKey::from_hex_inner(&hex).unwrap();
         assert_eq!(pk_back.to_bytes(), pk.to_bytes());
     }
 
@@ -345,7 +345,7 @@ mod tests {
         let pk = kp.public_key_inner();
         let message = b"kaspa-pq Phase 7 PR-7.4 wasm bindings smoke test".to_vec();
         let sig = kp.sign_inner(&message, vec![0x77u8; 32]).unwrap();
-        assert_eq!(sig.to_bytes().len(), MLDSA65_SIG_LEN);
+        assert_eq!(sig.to_bytes().len(), MLDSA87_SIG_LEN);
         assert!(sig.verify_inner(&pk, &message));
     }
 
@@ -362,14 +362,14 @@ mod tests {
 
     #[test]
     fn wrong_length_inputs_are_rejected_with_clear_messages() {
-        let err = MlDsa65PublicKey::from_bytes_inner(vec![0u8; 100]).unwrap_err();
-        assert!(err.contains("expected 1952 bytes, got 100"), "got {err}");
+        let err = MlDsa87PublicKey::from_bytes_inner(vec![0u8; 100]).unwrap_err();
+        assert!(err.contains("expected 2592 bytes, got 100"), "got {err}");
 
-        let err = MlDsa65PublicKey::from_hex_inner("00").unwrap_err();
-        assert!(err.contains("3904 hex characters"), "got {err}");
+        let err = MlDsa87PublicKey::from_hex_inner("00").unwrap_err();
+        assert!(err.contains("5184 hex characters"), "got {err}");
 
-        let err = MlDsa65Signature::from_bytes_inner(vec![0u8; 100]).unwrap_err();
-        assert!(err.contains("expected 3309 bytes, got 100"), "got {err}");
+        let err = MlDsa87Signature::from_bytes_inner(vec![0u8; 100]).unwrap_err();
+        assert!(err.contains("expected 4627 bytes, got 100"), "got {err}");
 
         let err = KaspaPqKeyPair::from_seed_inner(vec![0u8; 16]).unwrap_err();
         assert!(err.contains("expected 32 bytes, got 16"), "got {err}");

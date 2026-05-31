@@ -21,4 +21,7 @@ target/
 # kaspa-pq: devnet multisig key material (contains seed_hex private keys) — never commit
 misaka-devnet-multisig-keys.json
 **/misaka-devnet-multisig-keys.json
-crypto/txscript/misaka-devnet-multisig-keys.json
+# kaspa-pq: devnet single-key ML-DSA-87 P2PKH premine key (ADR-0019). The owner
+# payload + address are public (in premine.rs); the seed_hex is private — never commit.
+misaka-devnet-premine-key.json
+**/misaka-devnet-premine-key.json

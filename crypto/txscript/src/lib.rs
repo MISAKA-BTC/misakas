@@ -20,9 +20,11 @@ use crate::caches::Cache;
 use crate::data_stack::{DataStack, Stack};
 use crate::opcodes::{OpCodeImplementation, deserialize_next_opcode};
 use itertools::Itertools;
-use kaspa_consensus_core::hashing::sighash::{
-    SigHashReusedValues, SigHashReusedValuesUnsync, calc_ecdsa_signature_hash, calc_schnorr_signature_hash,
-};
+use kaspa_consensus_core::hashing::sighash::{SigHashReusedValues, SigHashReusedValuesUnsync};
+// kaspa-pq PQ-only: the legacy schnorr/ecdsa sighash helpers are used only by the
+// `legacy-secp256k1`-gated verify paths (ADR-0019 §14).
+#[cfg(feature = "legacy-secp256k1")]
+use kaspa_consensus_core::hashing::sighash::{calc_ecdsa_signature_hash, calc_schnorr_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SigHashType;
 use kaspa_consensus_core::tx::{PopulatedTransaction, ScriptPublicKey, TransactionInput, UtxoEntry, VerifiableTransaction};
 use kaspa_txscript_errors::TxScriptError;
@@ -40,16 +42,19 @@ pub use standard::*;
 
 pub const MAX_SCRIPT_PUBLIC_KEY_VERSION: u16 = 0;
 pub const MAX_STACK_SIZE: usize = 244;
-// kaspa-pq: widened from upstream `10_000` to admit a P2SH ML-DSA-65 multisig
-// **spend** scriptSig. A 2-of-3 unlock is 2 sig pushes (2 * (3 + 3310)) plus the
-// redeem-script push (3 + 5868) = 12_497 bytes; 16_384 fits it with headroom.
+// kaspa-pq PQ-only design cap (md2 §3.2 / docs/kaspa-pq-design-mldsa87.md §11.1):
+// launch scope is ML-DSA-87 P2PKH only; multisig / P2SH is out of scope. A P2PKH
+// unlock is `<sig 4628B> <pubkey 2592B>` = (3 + 4628) + (3 + 2592) = 7226 bytes,
+// so a single input fits comfortably; the cap is 16_384 for headroom and constant
+// unification across consensus / mempool / script engine (md2 §3.2). A script over
+// this cap fails with `ScriptSize` ("SCRIPT_SIZE") before execution (see the
+// >MAX_SCRIPTS_SIZE vector in `test-data/script_tests.json`).
 // MAX_SCRIPTS_SIZE is enforced per-script (see `execute`), not cumulatively.
 pub const MAX_SCRIPTS_SIZE: usize = 16_384;
-// kaspa-pq: widened from upstream `520` -> `4096` (to admit the 3310-byte
-// ML-DSA-65 signature push and 1952-byte public-key push) and now -> `8192`
-// so a P2SH ML-DSA-65 multisig **redeem script** can be pushed as a single
-// element (a 2-of-3 redeem script is 5868 bytes). See docs/adr/0002-mldsa65-p2pkh.md
-// and docs/adr/0005-mass-policy.md.
+// kaspa-pq PQ-only: widened from upstream `520` to `8192` so the two ML-DSA-87
+// P2PKH stack items — the 4628-byte signature push (sig 4627B + sighash type)
+// and the 2592-byte public-key push — each fit as a single element. P2SH
+// multisig redeem scripts are out of launch scope (ADR-0019 §6.5).
 pub const MAX_SCRIPT_ELEMENT_SIZE: usize = 8192;
 pub const MAX_OPS_PER_SCRIPT: i32 = 201;
 
@@ -57,49 +62,93 @@ pub const MAX_OPS_PER_SCRIPT: i32 = 201;
 /// length-check constant: the script engine must reject a public-key
 /// push of any other length **before** entering libcrux. See
 /// docs/adr/0002-mldsa65-p2pkh.md §"Acceptance criteria".
-pub const MLDSA65_PK_LEN: usize = 1952;
+pub const MLDSA87_PK_LEN: usize = 2592; // ML-DSA-87 public key size (ADR-0019; legacy const name retained)
 
 /// ML-DSA-65 signature length in bytes (without the trailing 1-byte
-/// sighash type). The signature push on the stack is `MLDSA65_SIG_LEN + 1`
+/// sighash type). The signature push on the stack is `MLDSA87_SIG_LEN + 1`
 /// bytes; the last byte is the sighash type.
-pub const MLDSA65_SIG_LEN: usize = 3309;
+pub const MLDSA87_SIG_LEN: usize = 4627; // ML-DSA-87 signature size (ADR-0019; legacy const name retained)
 
-/// ML-DSA `ctx` parameter for kaspa-pq transaction signatures. The 255-byte
-/// upper bound on `ctx` is enforced by libcrux. See
+/// ML-DSA `ctx` parameter for kaspa-pq transaction signatures (md2 §3.1, v2).
+/// The 255-byte upper bound on `ctx` is enforced by libcrux. See
 /// docs/kaspa-pq-spec.md §2.
-pub const MLDSA65_TX_CONTEXT: &[u8] = b"kaspa-pq-v1/tx/mldsa65";
+pub const MLDSA87_TX_CONTEXT: &[u8] = b"kaspa-pq-v2/tx/mldsa87";
+
+/// kaspa-pq PQ-only script policy (ADR-0019 / docs/kaspa-pq-design-mldsa87.md §6).
+/// Threaded into [`TxScriptEngine`] to gate legacy secp256k1 signature opcodes
+/// and pay-to-script-hash. Defaults to [`ScriptPolicy::LEGACY`] (fully permissive,
+/// upstream-identical) so the mechanism is inert until consensus opts a network
+/// in by constructing the engine with [`ScriptPolicy::PQ_ONLY`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScriptPolicy {
+    /// When true, legacy secp256k1 signature opcodes are a hard error.
+    pub pq_only: bool,
+    /// When false (and `pq_only`), pay-to-script-hash spends are rejected.
+    pub allow_p2sh: bool,
+}
+
+impl ScriptPolicy {
+    /// PQ-only: legacy signature opcodes disabled, P2SH disabled. kaspa-pq nets.
+    pub const PQ_ONLY: Self = Self { pq_only: true, allow_p2sh: false };
+    /// Upstream-compatible: no PQ restriction. The default.
+    pub const LEGACY: Self = Self { pq_only: false, allow_p2sh: true };
+}
+
+impl Default for ScriptPolicy {
+    fn default() -> Self {
+        Self::LEGACY
+    }
+}
+
+/// kaspa-pq PQ-only (§6.4): the legacy secp256k1 signature opcodes that are
+/// consensus-disabled under [`ScriptPolicy::pq_only`]. The ML-DSA-87 signature
+/// opcodes `OpCheckSigMlDsa87` (0xa6) and `OpCheckMultiSigMlDsa87` (0xa7) are
+/// deliberately NOT in this set — they remain the only permitted signature
+/// opcodes. Tags are stable consensus identifiers (see `opcodes::codes`).
+#[inline]
+pub const fn is_legacy_signature_opcode(tag: u8) -> bool {
+    matches!(
+        tag,
+        crate::opcodes::codes::OpCheckMultiSigECDSA   // 0xa9
+            | crate::opcodes::codes::OpCheckSigECDSA          // 0xab
+            | crate::opcodes::codes::OpCheckSig               // 0xac
+            | crate::opcodes::codes::OpCheckSigVerify         // 0xad
+            | crate::opcodes::codes::OpCheckMultiSig          // 0xae
+            | crate::opcodes::codes::OpCheckMultiSigVerify    // 0xaf
+    )
+}
 
 /// Stateless ML-DSA-65 (FIPS 204) verification with a caller-supplied `ctx`
 /// (kaspa-pq Phase 10, ADR-0009). The transaction opcode path
-/// ([`TxScriptEngine::check_mldsa65_signature`]) hard-codes
-/// [`MLDSA65_TX_CONTEXT`]; this free function lets consensus DNS-overlay
+/// ([`TxScriptEngine::check_mldsa87_signature`]) hard-codes
+/// [`MLDSA87_TX_CONTEXT`]; this free function lets consensus DNS-overlay
 /// validation verify *attestation* signatures under
-/// `dns_finality::ATTESTATION_MLDSA65_CONTEXT` (and takeover tokens under
+/// `dns_finality::ATTESTATION_MLDSA87_CONTEXT` (and takeover tokens under
 /// their own context) without going through a `TxScriptEngine`.
 ///
 /// Performs the same pre-libcrux length rejection as the opcode path
-/// (pubkey [`MLDSA65_PK_LEN`], signature [`MLDSA65_SIG_LEN`]) so a malformed
+/// (pubkey [`MLDSA87_PK_LEN`], signature [`MLDSA87_SIG_LEN`]) so a malformed
 /// flood cannot reach the PQ verify routine. Returns `Ok(true)`/`Ok(false)`
 /// for a well-formed key+sig that does / does not verify, and `Err` only for
 /// a length violation. No signature cache is consulted (callers that need one
 /// supply it at a higher layer).
-pub fn verify_mldsa65_with_context(
+pub fn verify_mldsa87_with_context(
     public_key: &[u8],
     message: &[u8],
     signature: &[u8],
     context: &[u8],
 ) -> Result<bool, TxScriptError> {
-    if public_key.len() != MLDSA65_PK_LEN {
+    if public_key.len() != MLDSA87_PK_LEN {
         return Err(TxScriptError::PubKeyFormat);
     }
-    if signature.len() != MLDSA65_SIG_LEN {
+    if signature.len() != MLDSA87_SIG_LEN {
         return Err(TxScriptError::SigLength(signature.len()));
     }
-    let key_arr: [u8; MLDSA65_PK_LEN] = public_key.try_into().expect("checked above");
-    let sig_arr: [u8; MLDSA65_SIG_LEN] = signature.try_into().expect("checked above");
-    let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(key_arr);
-    let sig_obj = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_arr);
-    Ok(libcrux_ml_dsa::ml_dsa_65::verify(&vk, message, context, &sig_obj).is_ok())
+    let key_arr: [u8; MLDSA87_PK_LEN] = public_key.try_into().expect("checked above");
+    let sig_arr: [u8; MLDSA87_SIG_LEN] = signature.try_into().expect("checked above");
+    let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(key_arr);
+    let sig_obj = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_arr);
+    Ok(libcrux_ml_dsa::ml_dsa_87::verify(&vk, message, context, &sig_obj).is_ok())
 }
 pub const MAX_TX_IN_SEQUENCE_NUM: u64 = u64::MAX;
 pub const SEQUENCE_LOCK_TIME_DISABLED: u64 = 1 << 63;
@@ -108,13 +157,13 @@ pub const LOCK_TIME_THRESHOLD: u64 = 500_000_000_000;
 pub const MAX_PUB_KEYS_PER_MUTLTISIG: i32 = 20;
 
 /// Signature scheme selector for the `OP_CHECKMULTISIG*` opcode family.
-/// kaspa-pq adds [`MultisigScheme::MlDsa65`] for post-quantum M-of-N multisig
-/// (verified via [`TxScriptEngine::check_mldsa65_signature`]).
+/// kaspa-pq adds [`MultisigScheme::MlDsa87`] for post-quantum M-of-N multisig
+/// (verified via [`TxScriptEngine::check_mldsa87_signature`]).
 #[derive(Clone, Copy)]
 pub(crate) enum MultisigScheme {
     Schnorr,
     Ecdsa,
-    MlDsa65,
+    MlDsa87,
 }
 
 // The last opcode that does not count toward operations.
@@ -123,37 +172,47 @@ pub const NO_COST_OPCODE: u8 = 0x60;
 
 pub type DynOpcodeImplementation<Tx, Reused> = Box<dyn OpCodeImplementation<Tx, Reused>>;
 
+/// Signature scheme tag for the verification cache key ([`SigCacheKey`]).
+///
+/// kaspa-pq is PQ-only: [`SigAlg::MlDsa87`] is the sole consensus-active scheme.
+/// The legacy secp256k1 schemes exist only under the `legacy-secp256k1` feature
+/// and are compiled out of release builds (ADR-0019 §14).
 #[derive(Clone, Hash, PartialEq, Eq)]
-enum Signature {
-    Secp256k1(secp256k1::schnorr::Signature),
-    Ecdsa(secp256k1::ecdsa::Signature),
-    /// kaspa-pq ML-DSA-65 signature, identified in the cache by the
-    /// BLAKE2b-256 of the 3309-byte signature bytes. The raw signature is
-    /// **never** stored in the cache key (DoS budget — see ADR-0002 §7).
-    MlDsa65 {
-        sig_digest: [u8; 32],
-    },
-}
-
-#[derive(Clone, Hash, PartialEq, Eq)]
-enum PublicKey {
-    Schnorr(secp256k1::XOnlyPublicKey),
-    Ecdsa(secp256k1::PublicKey),
-    /// kaspa-pq ML-DSA-65 public key, identified in the cache by the
-    /// BLAKE2b-256 of the 1952-byte public-key bytes (i.e. the same value
-    /// that appears as the address payload). The raw public key is **never**
-    /// stored in the cache key (DoS budget — see ADR-0002 §7).
-    MlDsa65 {
-        pk_digest: [u8; 32],
-    },
+enum SigAlg {
+    MlDsa87,
+    #[cfg(feature = "legacy-secp256k1")]
+    Schnorr,
+    #[cfg(feature = "legacy-secp256k1")]
+    Ecdsa,
 }
 
 // TODO: Make it pub(crate)
+/// Memoization key for signature-verification results (ADR-0019 §10).
+///
+/// Every field is a 64-byte BLAKE2b digest, tagged by [`SigAlg`], so the key
+/// carries no scheme-specific (e.g. `secp256k1`) types — that is what lets the
+/// consensus signature engine link with **no** secp256k1 in PQ-only builds. For
+/// `MlDsa87` the `message_digest` is the 64-byte ML-DSA-87 sighash used
+/// directly; the secp schemes fold their 32-byte legacy sighash to 64 bytes via
+/// BLAKE2b-512. The public key and signature are always BLAKE2b-512 digests, so
+/// the raw (multi-KB) ML-DSA bytes never enter the cache (DoS budget — ADR-0005).
+///
+/// This is a pure result cache: a miss always runs the real verification and a
+/// hit requires exact equality across all three 64-byte digests plus the scheme
+/// tag, so the key shape can never cause a consensus split (ADR-0019 §10).
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct SigCacheKey {
-    signature: Signature,
-    pub_key: PublicKey,
-    message: secp256k1::Message,
+    sig_alg: SigAlg,
+    pub_key_digest: [u8; 64],
+    signature_digest: [u8; 64],
+    message_digest: [u8; 64],
+}
+
+/// 64-byte BLAKE2b-512 digest, used to build the secp-free [`SigCacheKey`].
+fn blake2b_512_digest(bytes: &[u8]) -> [u8; 64] {
+    let mut out = [0u8; 64];
+    out.copy_from_slice(blake2b_simd::Params::new().hash_length(64).to_state().update(bytes).finalize().as_bytes());
+    out
 }
 
 enum ScriptSource<'a, T: VerifiableTransaction> {
@@ -168,6 +227,8 @@ pub struct TxScriptEngine<'a, T: VerifiableTransaction, Reused: SigHashReusedVal
     script_source: ScriptSource<'a, T>,
 
     // Outer caches for quicker calculation
+    // kaspa-pq PQ-only: read only by the gated legacy schnorr/ecdsa sighash path.
+    #[cfg_attr(not(feature = "legacy-secp256k1"), allow(dead_code))]
     reused_values: &'a Reused,
     sig_cache: &'a Cache<SigCacheKey, bool>,
 
@@ -176,6 +237,11 @@ pub struct TxScriptEngine<'a, T: VerifiableTransaction, Reused: SigHashReusedVal
     num_ops: i32,
     runtime_sig_op_counter: RuntimeSigOpCounter,
     opcode_execution_log_buffer: Option<&'a mut dyn Write>,
+
+    /// kaspa-pq PQ-only enforcement policy. Defaults to [`ScriptPolicy::LEGACY`]
+    /// in every constructor; consensus opts a network in via
+    /// [`TxScriptEngine::with_script_policy`]. See ADR-0019.
+    policy: ScriptPolicy,
 }
 
 pub fn parse_script<T: VerifiableTransaction, Reused: SigHashReusedValues>(
@@ -287,7 +353,7 @@ fn get_sig_op_count_by_opcodes<T: VerifiableTransaction, Reused: SigHashReusedVa
                     codes::OpCheckMultiSig
                     | codes::OpCheckMultiSigVerify
                     | codes::OpCheckMultiSigECDSA
-                    | codes::OpCheckMultiSigMlDsa65 => {
+                    | codes::OpCheckMultiSigMlDsa87 => {
                         if i == 0 {
                             num_sigs += MAX_PUB_KEYS_PER_MUTLTISIG as u64;
                             continue;
@@ -328,6 +394,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             num_ops: 0,
             runtime_sig_op_counter: RuntimeSigOpCounter::new(u8::MAX),
             opcode_execution_log_buffer: None,
+            policy: ScriptPolicy::LEGACY,
         }
     }
 
@@ -338,6 +405,14 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
 
     pub fn with_opcode_execution_log_buffer(mut self, buffer: &'a mut dyn Write) -> Self {
         self.opcode_execution_log_buffer = Some(buffer);
+        self
+    }
+
+    /// kaspa-pq: set the PQ-only [`ScriptPolicy`] for this engine. Consensus
+    /// uses this to enforce ML-DSA-87-only signing on PQ-active networks
+    /// (legacy secp256k1 opcodes + P2SH become hard errors). See ADR-0019.
+    pub fn with_script_policy(mut self, policy: ScriptPolicy) -> Self {
+        self.policy = policy;
         self
     }
 
@@ -380,6 +455,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             num_ops: 0,
             runtime_sig_op_counter: RuntimeSigOpCounter::new(input.sig_op_count),
             opcode_execution_log_buffer: None,
+            policy: ScriptPolicy::LEGACY,
         }
     }
 
@@ -395,6 +471,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             // Runtime sig op counting is not needed for standalone scripts, only inputs have sig op count value
             runtime_sig_op_counter: RuntimeSigOpCounter::new(u8::MAX),
             opcode_execution_log_buffer: None,
+            policy: ScriptPolicy::LEGACY,
         }
     }
 
@@ -455,6 +532,14 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 return Err(TxScriptError::OpcodeReserved(format!("{:?}", opcode)));
             }
 
+            // kaspa-pq PQ-only (ADR-0019 §6): reject legacy secp256k1 signature
+            // opcodes outright. Checked on parse so a legacy opcode anywhere in
+            // the script (even an untaken conditional branch) fails — only the
+            // ML-DSA-87 signature opcodes survive. Inert under ScriptPolicy::LEGACY.
+            if self.policy.pq_only && is_legacy_signature_opcode(opcode.value()) {
+                return Err(TxScriptError::LegacySignatureOpcodeDisabled(opcode.value()));
+            }
+
             if verify_only_push && !opcode.is_push_opcode() {
                 return Err(TxScriptError::SignatureScriptNotPushOnly);
             }
@@ -491,6 +576,13 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             }
             ScriptSource::StandAloneScripts(scripts) => (scripts.clone(), false),
         };
+
+        // kaspa-pq PQ-only (ADR-0019 §6.5): pay-to-script-hash is out of launch
+        // scope, so reject any P2SH spend before redeem-script execution. Inert
+        // under ScriptPolicy::LEGACY (allow_p2sh = true).
+        if self.policy.pq_only && !self.policy.allow_p2sh && is_p2sh {
+            return Err(TxScriptError::ScriptHashDisabledInPqMode);
+        }
 
         // TODO: run all in same iterator?
         // When both the signature script and public key script are empty the
@@ -555,6 +647,9 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
 
     // *** SIGNATURE SPECIFIC CODE **
 
+    // kaspa-pq PQ-only: called by the gated legacy schnorr verify path and by an
+    // (ungated) encoding-validation unit test; dead in non-test PQ-only builds.
+    #[cfg_attr(not(feature = "legacy-secp256k1"), allow(dead_code))]
     fn check_pub_key_encoding(pub_key: &[u8]) -> Result<(), TxScriptError> {
         match pub_key.len() {
             32 => Ok(()),
@@ -562,6 +657,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
         }
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     fn check_pub_key_encoding_ecdsa(pub_key: &[u8]) -> Result<(), TxScriptError> {
         match pub_key.len() {
             33 => Ok(()),
@@ -629,7 +725,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 let check_signature_result = match scheme {
                     MultisigScheme::Ecdsa => self.check_ecdsa_signature(hash_type, pub_key.as_slice(), signature),
                     MultisigScheme::Schnorr => self.check_schnorr_signature(hash_type, pub_key.as_slice(), signature),
-                    MultisigScheme::MlDsa65 => self.check_mldsa65_signature(hash_type, pub_key.as_slice(), signature),
+                    MultisigScheme::MlDsa87 => self.check_mldsa87_signature(hash_type, pub_key.as_slice(), signature),
                 };
 
                 match check_signature_result {
@@ -657,6 +753,17 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
     #[inline]
     fn check_schnorr_signature(&mut self, hash_type: SigHashType, key: &[u8], sig: &[u8]) -> Result<bool, TxScriptError> {
         self.runtime_sig_op_counter.consume_sig_op()?;
+        // kaspa-pq PQ-only (ADR-0019 §6/§14): legacy secp256k1 Schnorr verification
+        // is compiled out of release builds. On PQ networks the opcode that reaches
+        // here is already a hard consensus error at parse time (ScriptPolicy::PQ_ONLY),
+        // so this `not` arm fires only if a LEGACY-policy engine runs OP_CHECKSIG in a
+        // build without `legacy-secp256k1` — where no secp signature can be valid.
+        #[cfg(not(feature = "legacy-secp256k1"))]
+        {
+            let _ = (hash_type, key, sig);
+            Ok(false)
+        }
+        #[cfg(feature = "legacy-secp256k1")]
         match self.script_source {
             ScriptSource::TxInput { tx, idx, .. } => {
                 if sig.len() != 64 {
@@ -664,17 +771,21 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 }
                 Self::check_pub_key_encoding(key)?;
                 let pk = secp256k1::XOnlyPublicKey::from_slice(key).map_err(TxScriptError::InvalidSignature)?;
-                let sig = secp256k1::schnorr::Signature::from_slice(sig).map_err(TxScriptError::InvalidSignature)?;
+                let sig_obj = secp256k1::schnorr::Signature::from_slice(sig).map_err(TxScriptError::InvalidSignature)?;
                 let sig_hash = calc_schnorr_signature_hash(tx, idx, hash_type, self.reused_values);
                 let msg = secp256k1::Message::from_digest_slice(sig_hash.as_bytes().as_slice()).unwrap();
-                let sig_cache_key =
-                    SigCacheKey { signature: Signature::Secp256k1(sig), pub_key: PublicKey::Schnorr(pk), message: msg };
+                let sig_cache_key = SigCacheKey {
+                    sig_alg: SigAlg::Schnorr,
+                    pub_key_digest: blake2b_512_digest(key),
+                    signature_digest: blake2b_512_digest(sig),
+                    message_digest: blake2b_512_digest(sig_hash.as_bytes().as_slice()),
+                };
 
                 match self.sig_cache.get(&sig_cache_key) {
                     Some(valid) => Ok(valid),
                     None => {
                         // TODO: Find a way to parallelize this part.
-                        match sig.verify(&msg, &pk) {
+                        match sig_obj.verify(&msg, &pk) {
                             Ok(()) => {
                                 self.sig_cache.insert(sig_cache_key, true);
                                 Ok(true)
@@ -693,6 +804,15 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
 
     fn check_ecdsa_signature(&mut self, hash_type: SigHashType, key: &[u8], sig: &[u8]) -> Result<bool, TxScriptError> {
         self.runtime_sig_op_counter.consume_sig_op()?;
+        // kaspa-pq PQ-only (ADR-0019 §6/§14): legacy secp256k1 ECDSA verification is
+        // compiled out of release builds — see `check_schnorr_signature` for the
+        // reachability rationale. No secp signature can be valid in a PQ-only build.
+        #[cfg(not(feature = "legacy-secp256k1"))]
+        {
+            let _ = (hash_type, key, sig);
+            Ok(false)
+        }
+        #[cfg(feature = "legacy-secp256k1")]
         match self.script_source {
             ScriptSource::TxInput { tx, idx, .. } => {
                 if sig.len() != 64 {
@@ -700,16 +820,21 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 }
                 Self::check_pub_key_encoding_ecdsa(key)?;
                 let pk = secp256k1::PublicKey::from_slice(key).map_err(TxScriptError::InvalidSignature)?;
-                let sig = secp256k1::ecdsa::Signature::from_compact(sig).map_err(TxScriptError::InvalidSignature)?;
+                let sig_obj = secp256k1::ecdsa::Signature::from_compact(sig).map_err(TxScriptError::InvalidSignature)?;
                 let sig_hash = calc_ecdsa_signature_hash(tx, idx, hash_type, self.reused_values);
                 let msg = secp256k1::Message::from_digest_slice(sig_hash.as_bytes().as_slice()).unwrap();
-                let sig_cache_key = SigCacheKey { signature: Signature::Ecdsa(sig), pub_key: PublicKey::Ecdsa(pk), message: msg };
+                let sig_cache_key = SigCacheKey {
+                    sig_alg: SigAlg::Ecdsa,
+                    pub_key_digest: blake2b_512_digest(key),
+                    signature_digest: blake2b_512_digest(sig),
+                    message_digest: blake2b_512_digest(sig_hash.as_bytes().as_slice()),
+                };
 
                 match self.sig_cache.get(&sig_cache_key) {
                     Some(valid) => Ok(valid),
                     None => {
                         // TODO: Find a way to parallelize this part.
-                        match sig.verify(&msg, &pk) {
+                        match sig_obj.verify(&msg, &pk) {
                             Ok(()) => {
                                 self.sig_cache.insert(sig_cache_key, true);
                                 Ok(true)
@@ -732,45 +857,55 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
     /// - Length pre-checks that reject before any libcrux call (so a
     ///   malformed-tx flood cannot exercise the PQ verify routine —
     ///   see docs/adr/0002-mldsa65-p2pkh.md "Acceptance criteria").
-    /// - A hash-based [`SigCacheKey`]: we only put 32-byte digests of the
-    ///   1952-byte public key and 3309-byte signature into the cache, never
+    /// - A hash-based [`SigCacheKey`]: we only put 64-byte BLAKE2b digests of the
+    ///   2592-byte public key and 4627-byte signature into the cache, never
     ///   the raw bytes (see docs/adr/0002-mldsa65-p2pkh.md §7 + ADR-0005).
-    /// - A fixed ML-DSA `ctx` parameter of [`MLDSA65_TX_CONTEXT`]
-    ///   (`"kaspa-pq-v1/tx/mldsa65"`).
-    /// - The signed message is currently the existing 32-byte
-    ///   `calc_schnorr_signature_hash` output; ML-DSA's own `ctx` provides
-    ///   the algorithm-level domain separation, so we don't need an
-    ///   additional kaspa-pq-specific sighash function. A dedicated
-    ///   `calc_mldsa65_signature_hash` may be introduced in a later phase
-    ///   if mass / replay analysis demands it.
-    fn check_mldsa65_signature(&mut self, hash_type: SigHashType, key: &[u8], sig: &[u8]) -> Result<bool, TxScriptError> {
+    /// - A fixed ML-DSA `ctx` parameter of [`MLDSA87_TX_CONTEXT`]
+    ///   (`"kaspa-pq-v2/tx/mldsa87"`).
+    /// - The signed message is the dedicated 64-byte
+    ///   [`calc_mldsa87_signature_hash`](kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash)
+    ///   output (ADR-0019 §9): a `Hash64` digest under the
+    ///   `b"TransactionSigningHash64"` domain plus the `MLDSA87_SIGHASH_DOMAIN`
+    ///   prefix, so a signature made over the legacy 32-byte schnorr digest can
+    ///   never verify here. Every ML-DSA signer (wallet WASM, validator-core)
+    ///   feeds this same 64-byte digest to `ml_dsa_87::sign`, keeping signer and
+    ///   verifier byte-for-byte in lockstep.
+    /// - The [`SigCacheKey`] is secp-free (ADR-0019 §10/§14): the `message_digest`
+    ///   is the 64-byte ML-DSA-87 sighash used directly, and no `secp256k1` type
+    ///   appears anywhere on the verification path.
+    fn check_mldsa87_signature(&mut self, hash_type: SigHashType, key: &[u8], sig: &[u8]) -> Result<bool, TxScriptError> {
         self.runtime_sig_op_counter.consume_sig_op()?;
         match self.script_source {
             ScriptSource::TxInput { tx, idx, .. } => {
                 // Cheap-path length rejection — must come before any
                 // allocation that scales with input size.
-                if key.len() != MLDSA65_PK_LEN {
+                if key.len() != MLDSA87_PK_LEN {
                     return Err(TxScriptError::PubKeyFormat);
                 }
-                if sig.len() != MLDSA65_SIG_LEN {
+                if sig.len() != MLDSA87_SIG_LEN {
                     return Err(TxScriptError::SigLength(sig.len()));
                 }
 
-                let sig_hash = calc_schnorr_signature_hash(tx, idx, hash_type, self.reused_values);
-                let msg_bytes = sig_hash.as_bytes();
-                let msg = secp256k1::Message::from_digest_slice(msg_bytes.as_slice()).unwrap();
+                // 64-byte ML-DSA-87 sighash (ADR-0019 §9). Build a LOCAL reuse
+                // cache: `self.reused_values` is the 32-byte `SigHashReusedValues`
+                // trait and cannot be passed here. This loses cross-input reuse
+                // caching; that is acceptable for now.
+                // TODO(perf): thread a 64-byte reuse cache through the engine.
+                let reused_mldsa = kaspa_consensus_core::hashing::sighash::Mldsa87SigHashReusedValuesUnsync::new();
+                let sig_hash =
+                    kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(tx, idx, hash_type, &reused_mldsa);
+                let msg_bytes = sig_hash.as_bytes(); // 64 bytes
 
-                // Hash-based cache key. BLAKE2b-256 chosen for consistency
-                // with the consensus opcode `OP_BLAKE2B_256` already used
-                // for the address payload hash.
-                let mut pk_digest = [0u8; 32];
-                pk_digest.copy_from_slice(blake2b_simd::Params::new().hash_length(32).to_state().update(key).finalize().as_bytes());
-                let mut sig_digest = [0u8; 32];
-                sig_digest.copy_from_slice(blake2b_simd::Params::new().hash_length(32).to_state().update(sig).finalize().as_bytes());
+                // Secp-free cache key (ADR-0019 §10): 64-byte BLAKE2b-512 digests of
+                // the public key and signature, plus the 64-byte ML-DSA-87 sighash
+                // used directly as the message digest (no secp256k1::Message fold).
+                let mut message_digest = [0u8; 64];
+                message_digest.copy_from_slice(msg_bytes.as_slice());
                 let sig_cache_key = SigCacheKey {
-                    signature: Signature::MlDsa65 { sig_digest },
-                    pub_key: PublicKey::MlDsa65 { pk_digest },
-                    message: msg,
+                    sig_alg: SigAlg::MlDsa87,
+                    pub_key_digest: blake2b_512_digest(key),
+                    signature_digest: blake2b_512_digest(sig),
+                    message_digest,
                 };
 
                 match self.sig_cache.get(&sig_cache_key) {
@@ -778,12 +913,12 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                     None => {
                         // Length already verified above, so the try_into's
                         // here cannot fail.
-                        let key_arr: [u8; MLDSA65_PK_LEN] = key.try_into().expect("checked above");
-                        let sig_arr: [u8; MLDSA65_SIG_LEN] = sig.try_into().expect("checked above");
-                        let vk = libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey::new(key_arr);
-                        let sig_obj = libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature::new(sig_arr);
+                        let key_arr: [u8; MLDSA87_PK_LEN] = key.try_into().expect("checked above");
+                        let sig_arr: [u8; MLDSA87_SIG_LEN] = sig.try_into().expect("checked above");
+                        let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(key_arr);
+                        let sig_obj = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_arr);
                         // TODO: Find a way to parallelize this part.
-                        let valid = libcrux_ml_dsa::ml_dsa_65::verify(&vk, msg_bytes.as_slice(), MLDSA65_TX_CONTEXT, &sig_obj).is_ok();
+                        let valid = libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg_bytes.as_slice(), MLDSA87_TX_CONTEXT, &sig_obj).is_ok();
                         self.sig_cache.insert(sig_cache_key, valid);
                         Ok(valid)
                     }
@@ -808,18 +943,23 @@ impl SpkEncoding for ScriptPublicKey {
 mod tests {
     use std::iter::once;
 
-    use crate::opcodes::codes::{
-        OpBlake2b, OpCheckMultiSig, OpCheckSig, OpCheckSigECDSA, OpCheckSigVerify, OpData1, OpData2, OpData32, OpDup, OpEndIf,
-        OpEqual, OpFalse, OpIf, OpPushData1, OpTrue, OpVerify,
-    };
+    use crate::opcodes::codes::{OpBlake2b, OpCheckSig, OpData1, OpData2, OpData32, OpDup, OpEqual, OpPushData1, OpTrue};
+    // kaspa-pq PQ-only: these imports are used only by the `legacy-secp256k1`-gated
+    // legacy sig-op-count test (`test_runtime_sig_op_count`) — ADR-0019 §14.
+    #[cfg(feature = "legacy-secp256k1")]
+    use crate::opcodes::codes::{OpCheckMultiSig, OpCheckSigECDSA, OpCheckSigVerify, OpEndIf, OpFalse, OpIf, OpVerify};
 
     use super::*;
+    #[cfg(feature = "legacy-secp256k1")]
     use crate::script_builder::{ScriptBuilder, ScriptBuilderResult};
     use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
+    #[cfg(feature = "legacy-secp256k1")]
     use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
     use kaspa_consensus_core::tx::{
-        MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, TransactionOutput,
+        PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, TransactionOutput,
     };
+    #[cfg(feature = "legacy-secp256k1")]
+    use kaspa_consensus_core::tx::MutableTransaction;
     use kaspa_utils::hex::FromHex;
     use smallvec::SmallVec;
 
@@ -1249,6 +1389,9 @@ mod tests {
         }
     }
 
+    // kaspa-pq PQ-only: the legacy Schnorr/ECDSA sig-op-count test and its
+    // helper types compile only under `legacy-secp256k1` (ADR-0019 §14).
+    #[cfg(feature = "legacy-secp256k1")]
     #[derive(Clone)]
     struct SignatureData {
         signature: Vec<u8>,
@@ -1256,6 +1399,7 @@ mod tests {
     }
 
     /// Builder for constructing signature scripts with different signature types and combinations.
+    #[cfg(feature = "legacy-secp256k1")]
     enum SignatureScriptBuilder {
         /// Multisignature script that requires multiple signatures to be valid.
         Multisig(Vec<SignatureData>),
@@ -1270,9 +1414,12 @@ mod tests {
         None,
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     type SigBuilder = Box<dyn Fn(&MutableTransaction<Transaction>, &SigHashReusedValuesUnsync) -> SignatureScriptBuilder>;
+    #[cfg(feature = "legacy-secp256k1")]
     type ScriptBuilderFn = Box<dyn Fn(&mut ScriptBuilder) -> ScriptBuilderResult<&mut ScriptBuilder>>;
 
+    #[cfg(feature = "legacy-secp256k1")]
     struct TestCase {
         name: &'static str,
         script_builder: ScriptBuilderFn,
@@ -1282,6 +1429,7 @@ mod tests {
         should_pass: bool,
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     impl SignatureScriptBuilder {
         fn build(self, script: &[u8]) -> ScriptBuilderResult<Vec<u8>> {
             let mut builder = ScriptBuilder::new();
@@ -1310,6 +1458,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[test]
     fn test_runtime_sig_op_count() -> ScriptBuilderResult<()> {
         // Setup keys and test environment
@@ -1491,6 +1640,11 @@ mod bitcoind_tests {
     use std::path::Path;
 
     use super::*;
+    // kaspa-pq PQ-only: the legacy script_tests.json *execution* harness
+    // (`test_bitcoind_tests`) compiles only under `legacy-secp256k1`, since it
+    // runs legacy secp256k1 CHECKSIG/CHECKMULTISIG vectors (ADR-0019 §14). The
+    // ML-DSA spend tests and the parse-only string-roundtrip test stay ungated.
+    #[cfg(feature = "legacy-secp256k1")]
     use crate::script_builder::ScriptBuilderError;
     use kaspa_consensus_core::constants::MAX_TX_IN_SEQUENCE_NUM;
     use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
@@ -1498,12 +1652,14 @@ mod bitcoind_tests {
         PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, TransactionOutput,
     };
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[derive(PartialEq, Eq, Debug, Clone)]
     enum UnifiedError {
         TxScriptError(TxScriptError),
         ScriptBuilderError(ScriptBuilderError),
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[derive(PartialEq, Eq, Debug, Clone)]
     struct TestError {
         expected_result: String,
@@ -1523,12 +1679,12 @@ mod bitcoind_tests {
     /// spend on a populated transaction must pass `vm.execute()`. This
     /// test threads the full Phase 4 surface end-to-end:
     ///
-    ///   1. ML-DSA-65 keypair via `libcrux_ml_dsa::ml_dsa_65::generate_key_pair`
+    ///   1. ML-DSA-65 keypair via `libcrux_ml_dsa::ml_dsa_87::generate_key_pair`
     ///   2. Address = BLAKE2b-256(public_key)
     ///   3. `scriptPubKey` via `pay_to_address_script`
-    ///   4. Sighash via `calc_schnorr_signature_hash` (same digest the
-    ///      script engine recomputes during verify)
-    ///   5. ML-DSA-65 sign with `MLDSA65_TX_CONTEXT`
+    ///   4. Sighash via `calc_mldsa87_signature_hash` (the same 64-byte digest
+    ///      the script engine recomputes during verify — ADR-0019 §9)
+    ///   5. ML-DSA-65 sign with `MLDSA87_TX_CONTEXT`
     ///   6. `signatureScript = PUSH<sig||sighash_type> PUSH<public_key>`
     ///   7. `TxScriptEngine::from_transaction_input(...).execute()` -> Ok
     ///
@@ -1538,28 +1694,28 @@ mod bitcoind_tests {
     /// `docs/adr/0002-mldsa65-p2pkh.md` and will be exercised by a richer
     /// fuzz / property-test corpus in a follow-up.
     #[test]
-    fn test_mldsa65_p2pkh_spend_roundtrip() {
+    fn test_mldsa87_p2pkh_spend_roundtrip() {
         use crate::standard::pay_to_address_script;
-        use blake2b_simd::Params;
         use kaspa_addresses::{Address, Prefix, Version};
         use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
-        use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
         // 1. Deterministic ML-DSA-65 keypair from a 32-byte seed.
         let keygen_seed = [0xa1u8; 32];
         let keypair = mldsa::generate_key_pair(keygen_seed);
         let pk_bytes = keypair.verification_key.as_ref();
         let sk = &keypair.signing_key;
-        assert_eq!(pk_bytes.len(), MLDSA65_PK_LEN);
+        assert_eq!(pk_bytes.len(), MLDSA87_PK_LEN);
 
-        // 2. Address payload = BLAKE2b-256(public_key).
-        let mut pk_hash = [0u8; 32];
-        pk_hash.copy_from_slice(Params::new().hash_length(32).to_state().update(pk_bytes).finalize().as_bytes());
-        let address = Address::new(Prefix::Simnet, Version::PubKeyHashMlDsa65, &pk_hash);
+        // 2. Address payload = keyed BLAKE2b-512(public_key) under
+        //    `kaspa-pq-v2/address/mldsa87` (md2 §4.2 / ADR-0019 §8) — the exact
+        //    digest OP_BLAKE2B_512 recomputes at spend time.
+        let pk_hash = kaspa_hashes::blake2b_512_address_payload(pk_bytes).as_bytes();
+        let address = Address::new(Prefix::Simnet, Version::PubKeyHashMlDsa87, &pk_hash);
 
         // 3. scriptPubKey = pay_to_address_script.
         let script_pub_key = pay_to_address_script(&address);
-        assert_eq!(ScriptClass::from_script(&script_pub_key), ScriptClass::PubKeyHashMlDsa65);
+        assert_eq!(ScriptClass::from_script(&script_pub_key), ScriptClass::PubKeyHashMlDsa87);
 
         // 4. Build a populated spending transaction (sig_script left empty
         //    for now — we sign over the resulting sighash and then
@@ -1567,21 +1723,25 @@ mod bitcoind_tests {
         let unsigned_tx = create_spending_transaction(Vec::new(), script_pub_key.clone());
         let utxo_entry = UtxoEntry::new(0, script_pub_key.clone(), 0, true);
         let populated_unsigned = PopulatedTransaction::new(&unsigned_tx, vec![utxo_entry.clone()]);
-        let reused = SigHashReusedValuesUnsync::new();
-        let sig_hash =
-            kaspa_consensus_core::hashing::sighash::calc_schnorr_signature_hash(&populated_unsigned, 0, SIG_HASH_ALL, &reused);
+        let reused_mldsa = kaspa_consensus_core::hashing::sighash::Mldsa87SigHashReusedValuesUnsync::new();
+        let sig_hash = kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(
+            &populated_unsigned,
+            0,
+            SIG_HASH_ALL,
+            &reused_mldsa,
+        );
 
         // 5. Sign the sighash with the kaspa-pq context.
         let signing_randomness = [0xb2u8; 32];
-        let signature = mldsa::sign(sk, sig_hash.as_bytes().as_slice(), MLDSA65_TX_CONTEXT, signing_randomness)
-            .expect("ML-DSA-65 sign should succeed on a 32-byte message");
+        let signature = mldsa::sign(sk, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, signing_randomness)
+            .expect("ML-DSA-87 sign should succeed on the 64-byte sighash");
         let sig_bytes = signature.as_ref();
-        assert_eq!(sig_bytes.len(), MLDSA65_SIG_LEN);
+        assert_eq!(sig_bytes.len(), MLDSA87_SIG_LEN);
 
         // 6. signatureScript = PUSH <sig||sighash_type> PUSH <public_key>.
-        let mut sig_script = Vec::with_capacity(MLDSA65_SIG_LEN + MLDSA65_PK_LEN + 16);
+        let mut sig_script = Vec::with_capacity(MLDSA87_SIG_LEN + MLDSA87_PK_LEN + 16);
         let mut builder = script_builder::ScriptBuilder::new();
-        let mut sig_item = Vec::with_capacity(MLDSA65_SIG_LEN + 1);
+        let mut sig_item = Vec::with_capacity(MLDSA87_SIG_LEN + 1);
         sig_item.extend_from_slice(sig_bytes);
         sig_item.push(SIG_HASH_ALL.to_u8());
         builder.add_data(&sig_item).expect("signature push fits MAX_SCRIPT_ELEMENT_SIZE");
@@ -1604,17 +1764,17 @@ mod bitcoind_tests {
         vm.execute().expect("ML-DSA-65 P2PKH spend should verify");
     }
 
-    /// kaspa-pq Phase 10: the standalone `verify_mldsa65_with_context` used by
+    /// kaspa-pq Phase 10: the standalone `verify_mldsa87_with_context` used by
     /// the DNS overlay (attestation / takeover-token signatures). Exercises a
     /// real libcrux sign/verify roundtrip and the critical domain-separation
     /// property — a signature produced under one `ctx` must NOT verify under a
     /// different `ctx` (so an attestation signature can't be replayed as a tx
     /// signature, and vice versa).
     #[test]
-    fn test_verify_mldsa65_with_context() {
-        use libcrux_ml_dsa::ml_dsa_65 as mldsa;
+    fn test_verify_mldsa87_with_context() {
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
-        const ATT_CTX: &[u8] = b"kaspa-pq-v1/att/mldsa65";
+        const ATT_CTX: &[u8] = b"kaspa-pq-v1/att/mldsa87";
 
         let keypair = mldsa::generate_key_pair([0x5cu8; 32]);
         let pk = keypair.verification_key.as_ref();
@@ -1623,22 +1783,22 @@ mod bitcoind_tests {
         let sig_bytes = sig.as_ref();
 
         // Correct (pk, message, sig, ctx) verifies.
-        assert_eq!(verify_mldsa65_with_context(pk, &message, sig_bytes, ATT_CTX), Ok(true));
+        assert_eq!(verify_mldsa87_with_context(pk, &message, sig_bytes, ATT_CTX), Ok(true));
 
-        // Wrong context → does not verify (domain separation vs. MLDSA65_TX_CONTEXT).
-        assert_eq!(verify_mldsa65_with_context(pk, &message, sig_bytes, MLDSA65_TX_CONTEXT), Ok(false));
+        // Wrong context → does not verify (domain separation vs. MLDSA87_TX_CONTEXT).
+        assert_eq!(verify_mldsa87_with_context(pk, &message, sig_bytes, MLDSA87_TX_CONTEXT), Ok(false));
 
         // Tampered message → does not verify.
         let mut bad_msg = message;
         bad_msg[0] ^= 0xff;
-        assert_eq!(verify_mldsa65_with_context(pk, &bad_msg, sig_bytes, ATT_CTX), Ok(false));
+        assert_eq!(verify_mldsa87_with_context(pk, &bad_msg, sig_bytes, ATT_CTX), Ok(false));
 
         // Length violations are rejected before libcrux is entered.
         assert_eq!(
-            verify_mldsa65_with_context(&pk[..MLDSA65_PK_LEN - 1], &message, sig_bytes, ATT_CTX),
+            verify_mldsa87_with_context(&pk[..MLDSA87_PK_LEN - 1], &message, sig_bytes, ATT_CTX),
             Err(TxScriptError::PubKeyFormat)
         );
-        assert!(matches!(verify_mldsa65_with_context(pk, &message, &sig_bytes[..10], ATT_CTX), Err(TxScriptError::SigLength(10))));
+        assert!(matches!(verify_mldsa87_with_context(pk, &message, &sig_bytes[..10], ATT_CTX), Err(TxScriptError::SigLength(10))));
     }
 
     fn create_spending_transaction(sig_script: Vec<u8>, script_public_key: ScriptPublicKey) -> Transaction {
@@ -1673,6 +1833,7 @@ mod bitcoind_tests {
         )
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     impl JsonTestRow {
         fn test_row(&self) -> Result<(), TestError> {
             // Parse test to objects
@@ -1808,6 +1969,7 @@ mod bitcoind_tests {
         }
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[test]
     fn test_bitcoind_tests() {
         // Script test files are split into two versions to test behavior after KIP-10:

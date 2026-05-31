@@ -1,9 +1,9 @@
 use crate::{BlockHash, BlockLevel};
 
 use super::{block::RuleError, tx::TxRuleError};
-// PR-9.5e: `Hash` (32-byte) retained only for `ImportedMultisetHashMismatch`
-// (two muhash/multiset values); block-identifier positions use `BlockHash`.
-use kaspa_hashes::Hash;
+// kaspa-pq (ADR-0004 / design §12): `ImportedMultisetHashMismatch` carries two
+// 64-byte `Hash64` muhash/multiset values; block-identifier positions use `BlockHash`.
+use kaspa_hashes::Hash64;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
@@ -57,7 +57,8 @@ pub enum PruningImportError {
     NewPruningPointTxMissingUTXOEntry(BlockHash),
 
     #[error("the imported multiset hash was expected to be {0} and was actually {1}")]
-    ImportedMultisetHashMismatch(Hash, Hash),
+    // kaspa-pq (ADR-0004 / design §12): both muhash/multiset values are 64-byte Hash64.
+    ImportedMultisetHashMismatch(Hash64, Hash64),
 
     #[error("pruning import data lead to validation rule error")]
     PruningImportRuleError(#[from] RuleError),

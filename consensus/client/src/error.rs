@@ -27,6 +27,10 @@ pub enum Error {
     #[error("invalid transaction outpoint: {0}")]
     InvalidTransactionOutpoint(String),
 
+    // kaspa-pq PQ-only: the legacy secp256k1 error is compiled only under
+    // `legacy-secp256k1` (ADR-0019 §14). This is what keeps rpc-core / kaspad
+    // secp-free — the node never enables `wasm32-sdk`/`legacy-secp256k1`.
+    #[cfg(feature = "legacy-secp256k1")]
     #[error(transparent)]
     Secp256k1(#[from] secp256k1::Error),
 

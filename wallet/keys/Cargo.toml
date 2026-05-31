@@ -11,6 +11,10 @@ repository.workspace = true
 
 [features]
 default = []
+# Exposes the wasm-binding helper modules (e.g. `kaspa_pq_wasm`) to *native*
+# (non-wasm32) test builds of downstream crates such as kaspa-wallet-core, which
+# cannot see this crate's own `#[cfg(test)]` gate. See ADR-0019 §13 (PR-19-S5e).
+test-utils = []
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -26,6 +30,7 @@ js-sys.workspace = true
 kaspa-addresses.workspace = true
 kaspa-bip32.workspace = true
 kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
 kaspa-txscript-errors.workspace = true
 kaspa-txscript.workspace = true
 kaspa-utils.workspace = true

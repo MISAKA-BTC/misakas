@@ -146,6 +146,8 @@ impl ConsensusServices {
             params.ghostdag_k(),
             tx_script_cache_counters,
             mass_calculator.clone(),
+            params.pq_enforcement,
+            params.pq_activation_daa_score,
         );
 
         let pruning_point_manager = PruningPointManager::new(

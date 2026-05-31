@@ -22,11 +22,42 @@ pub const HASH_SIZE: usize = 32;
 pub use hash64::*;
 pub use hashers::*;
 
+use blake2b_simd::Params as Blake2bParams;
+
 /// kaspa-pq Phase 9 documentation alias for the upstream 32-byte
 /// [`Hash`]. Use `Hash32` in source that wants to be explicit about
 /// "this is the legacy 32-byte width, not the kaspa-pq 64-byte
 /// consensus identity" (ADR-0008). The 64-byte type is [`Hash64`].
 pub type Hash32 = Hash;
+
+/// kaspa-pq PQ-only (md2 §4.2): domain separator for the 64-byte ML-DSA-87
+/// P2PKH address payload. md2 v2 keys the address hash under this context
+/// (raised from the earlier *unkeyed* BLAKE2b-512) so the address commitment
+/// is domain-separated from every other BLAKE2b-512 use in the protocol — the
+/// unkeyed overlay `validator_id` / signature fingerprint, the keyed
+/// consensus-identity `*Hash64` hashers in [`crate::hashers`], and the
+/// signature-cache fingerprint. Sibling of the ML-DSA signing contexts
+/// `kaspa-pq-v2/{tx,sighash}/mldsa87`.
+pub const MLDSA87_ADDRESS_CONTEXT: &[u8] = b"kaspa-pq-v2/address/mldsa87";
+
+/// kaspa-pq PQ-only (md2 §4.2 / ADR-0019 §8): the 64-byte ML-DSA-87 P2PKH
+/// address payload — a **keyed** BLAKE2b-512 of `data` (the ML-DSA-87
+/// verification key) under [`MLDSA87_ADDRESS_CONTEXT`], returned as a
+/// [`Hash64`].
+///
+/// This is the single source of truth shared by the lock-step call sites that
+/// must all agree for a P2PKH output to stay spendable: the `OP_BLAKE2B_512`
+/// consensus opcode (recomputes it at spend time over the unlock pubkey), the
+/// wallet / validator address derivation, and the genesis premine (which
+/// commit it in the scriptPubKey).
+#[inline]
+pub fn blake2b_512_address_payload(data: &[u8]) -> Hash64 {
+    let mut out = [0u8; HASH64_SIZE];
+    out.copy_from_slice(
+        Blake2bParams::new().hash_length(HASH64_SIZE).key(MLDSA87_ADDRESS_CONTEXT).to_state().update(data).finalize().as_bytes(),
+    );
+    Hash64::from_bytes(out)
+}
 
 // TODO: Check if we use hash more as an array of u64 or of bytes and change the default accordingly
 /// @category General

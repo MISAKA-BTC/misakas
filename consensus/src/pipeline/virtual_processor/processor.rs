@@ -60,7 +60,7 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     config::genesis::GenesisBlock,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, AttestationContribution, BondMutation, BondStatus, DnsParams,
+        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BondMutation, BondStatus, DnsParams,
         DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
         attestations_from_accepted_txs, bond_mutations_from_accepted_txs, check_dns_reorg_rule, compute_stake_score,
         derive_dns_health, is_bond_active_at, reorg_inputs_since_common_ancestor, stake_attestation_message,
@@ -95,7 +95,7 @@ use super::errors::{PruningImportError, PruningImportResult};
 use crossbeam_channel::{Receiver as CrossbeamReceiver, Sender as CrossbeamSender};
 use itertools::Itertools;
 use kaspa_consensus_core::tx::ValidatedTransaction;
-use kaspa_txscript::verify_mldsa65_with_context;
+use kaspa_txscript::verify_mldsa87_with_context;
 use kaspa_utils::binary_heap::BinaryHeapExtensions;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use rand::{Rng, seq::SliceRandom};
@@ -816,7 +816,7 @@ impl VirtualStateProcessor {
     /// walk back at most `max_reorg_horizon_blocks` selected-chain blocks from
     /// `sink`, collect on-chain attestation shards, verify each ML-DSA-65
     /// signature against its bond's validator key under
-    /// `ATTESTATION_MLDSA65_CONTEXT`, gate by `is_bond_active_at`, then feed the
+    /// `ATTESTATION_MLDSA87_CONTEXT`, gate by `is_bond_active_at`, then feed the
     /// pure aggregation core. No new store; recompute is reorg-safe.
     fn update_dns_state(&self, batch: &mut WriteBatch, sink: BlockHash) {
         let Some(dns_params) = self.dns_params.as_ref() else {
@@ -911,7 +911,7 @@ impl VirtualStateProcessor {
     /// attestation is resolved against `bonds` (the bond set of the SAME branch — safety:
     /// a candidate branch must be scored under its own bonds), DAA-gated by
     /// `is_bond_active_at`, and its ML-DSA-65 signature verified under
-    /// `ATTESTATION_MLDSA65_CONTEXT`. Returns the per-`(bond, validator, epoch)`
+    /// `ATTESTATION_MLDSA87_CONTEXT`. Returns the per-`(bond, validator, epoch)`
     /// contributions and each epoch's anchor DAA score — the inputs to
     /// `aggregate_epoch_tallies` / `total_active_stake_by_epoch`. Reads only committed
     /// acceptance data, so it is deterministic and reorg-safe; inert wherever the overlay
@@ -950,7 +950,7 @@ impl VirtualStateProcessor {
                 )
                 .as_bytes();
                 if matches!(
-                    verify_mldsa65_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA65_CONTEXT),
+                    verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
                     Ok(true)
                 ) {
                     contributions.push(AttestationContribution {

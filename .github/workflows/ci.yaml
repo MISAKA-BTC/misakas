@@ -114,7 +114,10 @@ jobs:
       - name: Run cargo doc
         run: cargo doc --no-deps --workspace
       - name: Run kip-10 example
-        run: cargo run --example kip-10
+        # kaspa-pq PQ-only: the kip-10 example is built on legacy secp256k1
+        # P2PKH/P2SH scripts, so it requires the `legacy-secp256k1` feature
+        # (ADR-0019 §14).
+        run: cargo run -p kaspa-txscript --example kip-10 --features legacy-secp256k1
 
 
   # test-release:
@@ -192,6 +195,11 @@ jobs:
 
       - name: Run cargo clippy
         run: cargo clippy --workspace --tests --benches --examples -- -D warnings
+
+      - name: PQ-only secp256k1 isolation gate (ADR-0019 §14)
+        # Hard-fails if secp256k1 re-enters the kaspa-consensus dependency tree
+        # (`cargo tree -p kaspa-consensus -e normal`). See scripts/pq-ci-guard.sh.
+        run: bash scripts/pq-ci-guard.sh
 
   check-no-std:
     name: Check no_std

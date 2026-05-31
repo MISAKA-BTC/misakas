@@ -193,6 +193,12 @@ pub enum Error {
     #[error("Account not found: {0}")]
     AccountNotFound(AccountId),
 
+    /// kaspa-pq (ADR-0019 §13): a legacy secp256k1 (BIP32-derived or multisig)
+    /// address was requested on a PQ-only network. PQ-only wallets produce only
+    /// ML-DSA-87 P2PKH addresses.
+    #[error("legacy secp256k1 address is disabled on kaspa-pq")]
+    LegacyAddressDisabled,
+
     #[error("Account not active: {0}")]
     AccountNotActive(AccountId),
 

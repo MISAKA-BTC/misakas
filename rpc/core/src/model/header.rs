@@ -5,7 +5,7 @@ use kaspa_consensus_core::{
     BlueWorkType,
     header::{CompressedParents, Header},
 };
-use kaspa_hashes::Hash; // PR-9.5e: retained for utxo_commitment (32-byte accumulator commitment, stays Hash)
+use kaspa_hashes::Hash64; // kaspa-pq (ADR-0004 / design §12): utxo_commitment is 64-byte BLAKE2b-512
 use serde::{Deserialize, Serialize};
 use workflow_serializer::prelude::*;
 
@@ -25,7 +25,7 @@ pub struct RpcRawHeader {
     pub parents_by_level: Vec<Vec<BlockHash>>,
     pub hash_merkle_root: kaspa_consensus_core::MerkleRoot,
     pub accepted_id_merkle_root: kaspa_consensus_core::AcceptedIdMerkleRoot,
-    pub utxo_commitment: Hash,
+    pub utxo_commitment: Hash64,
     /// Timestamp is in milliseconds
     pub timestamp: u64,
     pub bits: u32,
@@ -45,7 +45,7 @@ pub struct RpcHeader {
     pub parents_by_level: Vec<Vec<BlockHash>>,
     pub hash_merkle_root: kaspa_consensus_core::MerkleRoot,
     pub accepted_id_merkle_root: kaspa_consensus_core::AcceptedIdMerkleRoot,
-    pub utxo_commitment: Hash,
+    pub utxo_commitment: Hash64,
     /// Timestamp is in milliseconds
     pub timestamp: u64,
     pub bits: u32,
@@ -167,7 +167,7 @@ impl Serializer for RpcHeader {
         // PR-9.5c: serialised as Hash64 (64 raw bytes on the wire).
         store!(kaspa_hashes::Hash64, &self.hash_merkle_root, writer)?;
         store!(kaspa_hashes::Hash64, &self.accepted_id_merkle_root, writer)?;
-        store!(Hash, &self.utxo_commitment, writer)?;
+        store!(Hash64, &self.utxo_commitment, writer)?;
         store!(u64, &self.timestamp, writer)?;
         store!(u32, &self.bits, writer)?;
         store!(u64, &self.nonce, writer)?;
@@ -190,7 +190,7 @@ impl Deserializer for RpcHeader {
         // PR-9.5c: deserialised as Hash64 (64 raw bytes on the wire).
         let hash_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
         let accepted_id_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
-        let utxo_commitment = load!(Hash, reader)?;
+        let utxo_commitment = load!(Hash64, reader)?;
         let timestamp = load!(u64, reader)?;
         let bits = load!(u32, reader)?;
         let nonce = load!(u64, reader)?;
@@ -312,7 +312,7 @@ impl Serializer for RpcRawHeader {
         // PR-9.5c: serialised as Hash64.
         store!(kaspa_hashes::Hash64, &self.hash_merkle_root, writer)?;
         store!(kaspa_hashes::Hash64, &self.accepted_id_merkle_root, writer)?;
-        store!(Hash, &self.utxo_commitment, writer)?;
+        store!(Hash64, &self.utxo_commitment, writer)?;
         store!(u64, &self.timestamp, writer)?;
         store!(u32, &self.bits, writer)?;
         store!(u64, &self.nonce, writer)?;
@@ -334,7 +334,7 @@ impl Deserializer for RpcRawHeader {
         // PR-9.5c: deserialised as Hash64.
         let hash_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
         let accepted_id_merkle_root = load!(kaspa_hashes::Hash64, reader)?;
-        let utxo_commitment = load!(Hash, reader)?;
+        let utxo_commitment = load!(Hash64, reader)?;
         let timestamp = load!(u64, reader)?;
         let bits = load!(u32, reader)?;
         let nonce = load!(u64, reader)?;

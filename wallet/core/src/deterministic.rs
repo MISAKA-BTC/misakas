@@ -2,7 +2,7 @@
 //! Deterministic byte sequence generation (used by Account ids).
 //!
 
-pub use crate::account::{bip32, bip32watch, keypair, legacy, multisig};
+pub use crate::account::{bip32, bip32watch, keypair, legacy, mldsa, multisig};
 use crate::encryption::sha256_hash;
 use crate::imports::*;
 use crate::storage::PrvKeyDataId;
@@ -173,6 +173,21 @@ pub(crate) fn from_keypair<const N: usize>(prv_key_data_id: &PrvKeyDataId, data:
         account_index: None,
         secp256k1_public_key: Some(data.public_key.serialize().to_vec()),
         data: None,
+    };
+    make_hashes(hashable)
+}
+
+/// Create deterministic hashes from kaspa-pq ML-DSA-87 single-key account data
+/// (ADR-0019 §13). The ML-DSA verification key (2592 bytes) goes in the generic
+/// `data` slot — there is no secp256k1 public key for a PQ account.
+pub(crate) fn from_mldsa<const N: usize>(prv_key_data_id: &PrvKeyDataId, data: &mldsa::Payload) -> [Hash; N] {
+    let hashable = DeterministicHashData {
+        account_kind: &mldsa::MLDSA_ACCOUNT_KIND.into(),
+        prv_key_data_ids: &Some([*prv_key_data_id]),
+        ecdsa: Some(false),
+        account_index: Some(data.account_index),
+        secp256k1_public_key: None,
+        data: Some(data.public_key.clone()),
     };
     make_hashes(hashable)
 }

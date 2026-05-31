@@ -107,6 +107,12 @@ pub enum TxRuleError {
     /// fee/mass RBF validation rule
     #[error("fee rate per contextual mass gram is not greater than the fee rate of the replaced transaction")]
     FeerateTooLow,
+
+    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): on a
+    /// PQ-active network, a non-coinbase / non-overlay transaction created an
+    /// output whose script is not the sole standard ML-DSA-87 P2PKH class.
+    #[error("transaction output #{0} uses a non-PQ script class (only ML-DSA P2PKH is standard in PQ-only mode)")]
+    NonPqStandardOutputClass(usize),
 }
 
 pub type TxResult<T> = std::result::Result<T, TxRuleError>;

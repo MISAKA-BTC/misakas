@@ -5,7 +5,8 @@ use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess};
 use kaspa_database::prelude::{CachePolicy, DB};
 use kaspa_database::prelude::{StoreError, StoreResult};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_hashes::Hash;
+// kaspa-pq (ADR-0004 / design §12): Header2.utxo_commitment is 64-byte Hash64.
+use kaspa_hashes::Hash64;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
@@ -54,7 +55,8 @@ struct Header2 {
     pub parents_by_level: Vec<Vec<BlockHash>>,
     pub hash_merkle_root: kaspa_consensus_core::MerkleRoot,
     pub accepted_id_merkle_root: kaspa_consensus_core::AcceptedIdMerkleRoot,
-    pub utxo_commitment: Hash,
+    // kaspa-pq (ADR-0004 / design §12): 64-byte BLAKE2b-512 UTXO-set commitment.
+    pub utxo_commitment: Hash64,
     pub timestamp: u64,
     pub bits: u32,
     pub nonce: u64,

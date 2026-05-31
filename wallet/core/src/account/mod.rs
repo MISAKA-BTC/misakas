@@ -590,6 +590,20 @@ pub trait Account: AnySync + Send + Sync + 'static {
         let private_keys = account.create_private_keys(key_data, payment_secret, &receive, &change)?;
         Ok(private_keys)
     }
+
+    /// kaspa-pq (ADR-0019 §13): if this is a post-quantum (ML-DSA-87) account,
+    /// re-derive its signing keypair from the wallet's BIP39 master seed so the
+    /// transaction [`Signer`](crate::tx::generator::signer) can produce ML-DSA
+    /// unlock scripts via the native `sign_transaction_inputs_mldsa87`. Returns
+    /// `Ok(None)` for legacy secp256k1 accounts (the default) — those sign
+    /// through the secp256k1 key map in `create_address_private_keys`.
+    fn try_pq_keypair(
+        &self,
+        _keydata: &PrvKeyData,
+        _payment_secret: &Option<Secret>,
+    ) -> Result<Option<kaspa_wallet_keys::kaspa_pq::KaspaPqMlDsa87KeyPair>> {
+        Ok(None)
+    }
 }
 
 downcast_sync!(dyn Account);
@@ -996,6 +1010,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "kaspa-pq ADR-0019 §13: legacy secp256k1 wallet (HD vectors / golang import) is not representable on a PQ-only chain (addresses gated to ML-DSA-87)."]
     async fn gen0_prv_keys() {
         let receive_addresses = gen0_receive_addresses()
             .iter()

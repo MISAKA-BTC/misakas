@@ -38,7 +38,7 @@ once_cell.workspace = true
 parking_lot.workspace = true
 rayon.workspace = true
 rocksdb.workspace = true
-secp256k1.workspace = true
+secp256k1 = { workspace = true, optional = true }
 serde.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
@@ -68,8 +68,23 @@ harness = false
 [[bench]]
 name = "check_scripts"
 harness = false
+# kaspa-pq PQ-only: this bench signs its fixtures with legacy secp256k1, so it is
+# skipped unless `legacy-secp256k1` is enabled (ADR-0019 §14).
+required-features = ["legacy-secp256k1"]
 
 [features]
+# kaspa-pq PQ-only (ADR-0019 §14): `pq-only` (default) builds the consensus crate
+# without secp256k1; `legacy-secp256k1` re-enables the legacy secp256k1 test
+# fixtures and propagates to consensus-core + txscript. The release/node build is
+# secp-free — enforced by `cargo tree -p kaspa-consensus -e normal`
+# (scripts/pq-ci-guard.sh, HARD_SECP_GATE=1).
+default = ["pq-only"]
+pq-only = []
+legacy-secp256k1 = [
+    "dep:secp256k1",
+    "kaspa-consensus-core/legacy-secp256k1",
+    "kaspa-txscript/legacy-secp256k1",
+]
 html_reports = []
 devnet-prealloc = ["kaspa-consensus-core/devnet-prealloc"]
 

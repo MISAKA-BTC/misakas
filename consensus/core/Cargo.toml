@@ -10,9 +10,14 @@ license.workspace = true
 repository.workspace = true
 
 [features]
+# kaspa-pq PQ-only (ADR-0019 §14): `pq-only` (default) builds consensus-core
+# without secp256k1; `legacy-secp256k1` re-enables the legacy schnorr signing
+# helpers in `sign.rs` (and their secp dep) for legacy wallets / tools / tests.
+default = ["pq-only"]
+pq-only = []
+legacy-secp256k1 = ["dep:secp256k1"]
 devnet-prealloc = []
 wasm32-sdk = []
-default = []
 
 [dependencies]
 arc-swap.workspace = true
@@ -37,7 +42,7 @@ kaspa-muhash.workspace = true
 kaspa-txscript-errors.workspace = true
 kaspa-utils.workspace = true
 rand.workspace = true
-secp256k1.workspace = true
+secp256k1 = { workspace = true, optional = true }
 serde_json.workspace = true
 serde-wasm-bindgen.workspace = true
 serde.workspace = true
@@ -54,6 +59,10 @@ criterion.workspace = true
 bincode.workspace = true
 wasm-bindgen-test.workspace = true
 web-sys.workspace = true
+# kaspa-pq Phase 4b: deterministic ML-DSA-87 single-key premine generator
+# (config::premine::tests::gen_misaka_devnet_premine_key). Mirrors how
+# kaspa-txscript declares libcrux-ml-dsa for its ML-DSA test vectors.
+libcrux-ml-dsa.workspace = true
 
 [[bench]]
 name = "serde_benchmark"

@@ -116,7 +116,8 @@ pub fn generate_random_header(rng: &mut SmallRng, parent_amount: usize) -> Heade
         vec![generate_random_hashes(rng, parent_amount)].try_into().unwrap(),
         generate_random_hash64(rng),
         generate_random_hash64(rng),
-        generate_random_hash(rng),
+        // kaspa-pq (ADR-0004 / design §12): utxo_commitment is Hash64.
+        generate_random_hash64(rng),
         rng.r#gen(), // timestamp
         rng.r#gen(), // bits
         rng.r#gen(), // nonce

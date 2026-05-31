@@ -254,6 +254,20 @@ impl From<Params> for OverrideParams {
     }
 }
 
+/// kaspa-pq PQ-only enforcement mode (ADR-0019 / docs/kaspa-pq-design-mldsa87.md).
+/// Selects whether legacy secp256k1 signature paths are merely non-standard
+/// (mempool) or hard consensus failures. Every kaspa-pq network uses `Consensus`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PqEnforcementMode {
+    /// Upstream-compatible: no PQ restriction. Test / legacy-compat only.
+    Disabled,
+    /// Mempool + wallet reject legacy, but consensus still accepts. Migration
+    /// testing only; never valid for a launched network.
+    PolicyOnly,
+    /// Block validation + script engine enforce ML-DSA-87-only. kaspa-pq default.
+    Consensus,
+}
+
 /// Consensus parameters. Contains settings and configurations which are consensus-sensitive.
 /// Changing one of these on a network node would exclude and prevent it from reaching consensus
 /// with the other unmodified nodes.
@@ -321,9 +335,26 @@ pub struct Params {
     /// (bond population, reorg gate) are guarded by `dns_params.is_some()`
     /// and are therefore fully inert until a network opts in.
     pub dns_params: Option<DnsParams>,
+
+    /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
+    /// docs/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
+    pub pq_enforcement: PqEnforcementMode,
+
+    /// DAA score at/after which `PqEnforcementMode::Consensus` takes effect.
+    /// `0` on kaspa-pq nets (PQ-only from genesis).
+    pub pq_activation_daa_score: u64,
 }
 
 impl Params {
+    /// kaspa-pq: `true` when PQ-only enforcement is active at `daa_score`.
+    /// In `Consensus` mode this gates legacy secp256k1 signature opcodes,
+    /// P2SH, and non-ML-DSA-87 script classes at the consensus and script-
+    /// engine level. See ADR-0019 / docs/kaspa-pq-design-mldsa87.md.
+    #[inline]
+    #[must_use]
+    pub fn is_pq_active(&self, daa_score: u64) -> bool {
+        matches!(self.pq_enforcement, PqEnforcementMode::Consensus) && daa_score >= self.pq_activation_daa_score
+    }
     /// Returns the past median time sample rate
     #[inline]
     #[must_use]
@@ -492,6 +523,9 @@ impl Params {
 
             // kaspa-pq DNS overlay params are not CLI-overridable; carried as-is.
             dns_params: self.dns_params,
+            // kaspa-pq: PQ enforcement is consensus-fixed, never runtime-overridable.
+            pq_enforcement: self.pq_enforcement,
+            pq_activation_daa_score: self.pq_activation_daa_score,
         }
     }
 }
@@ -556,24 +590,26 @@ pub const MAINNET_PARAMS: Params = Params {
     // Limit the cost of calculating compute/transient/storage masses
     max_tx_inputs: 1000,
     max_tx_outputs: 1000,
-    // Transient mass enforces a limit of 125Kb, however script engine max scripts size is 10Kb so there's no point in surpassing that.
-    max_signature_script_len: 10_000,
-    // Compute mass enforces a limit of ~45.5Kb, however script engine max scripts size is 10Kb so there's no point in surpassing that.
+    // Transient mass enforces a limit of 125Kb, however script engine max scripts size is 16Kb so there's no point in surpassing that.
+    max_signature_script_len: 16_384,
+    // Compute mass enforces a limit of ~45.5Kb, however script engine max scripts size is 16Kb so there's no point in surpassing that.
     // Note that storage mass will kick in and gradually penalize also for lower lengths (generalized KIP-0009, plurality will be high).
     max_script_public_key_len: 10_000,
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6 + Phase 6 reinforcement:
-    //   Schnorr verify (secp256k1):            12.71 µs
-    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
-    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
+    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
+    //   Schnorr verify (secp256k1):              12.74 µs
+    //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
+    //   ML-DSA-87 verify (libcrux portable):     76.52 µs  (6.01× ratio — slowest)
     //
     // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
     // value is calibrated against the slowest variant so that no-SIMD
     // low-end reference platforms remain safely budgeted:
-    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
-    mass_per_sig_op: 6000,
+    //   1000 (upstream) × 6.01 (slowest ratio) × 1.59 (safety) = 9548 → 10_000.
+    mass_per_sig_op: 10000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -600,6 +636,8 @@ pub const MAINNET_PARAMS: Params = Params {
     // Roughly 2025-05-05 1500 UTC
     crescendo_activation: ForkActivation::new(110_165_000),
     dns_params: None,
+    pq_enforcement: PqEnforcementMode::Consensus,
+    pq_activation_daa_score: 0,
 };
 
 pub const TESTNET_PARAMS: Params = Params {
@@ -620,24 +658,26 @@ pub const TESTNET_PARAMS: Params = Params {
     // Limit the cost of calculating compute/transient/storage masses
     max_tx_inputs: 1000,
     max_tx_outputs: 1000,
-    // Transient mass enforces a limit of 125Kb, however script engine max scripts size is 10Kb so there's no point in surpassing that.
-    max_signature_script_len: 10_000,
-    // Compute mass enforces a limit of ~45.5Kb, however script engine max scripts size is 10Kb so there's no point in surpassing that.
+    // Transient mass enforces a limit of 125Kb, however script engine max scripts size is 16Kb so there's no point in surpassing that.
+    max_signature_script_len: 16_384,
+    // Compute mass enforces a limit of ~45.5Kb, however script engine max scripts size is 16Kb so there's no point in surpassing that.
     // Note that storage mass will kick in and gradually penalize also for lower lengths (generalized KIP-0009, plurality will be high).
     max_script_public_key_len: 10_000,
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6 + Phase 6 reinforcement:
-    //   Schnorr verify (secp256k1):            12.71 µs
-    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
-    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
+    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
+    //   Schnorr verify (secp256k1):              12.74 µs
+    //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
+    //   ML-DSA-87 verify (libcrux portable):     76.52 µs  (6.01× ratio — slowest)
     //
     // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
     // value is calibrated against the slowest variant so that no-SIMD
     // low-end reference platforms remain safely budgeted:
-    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
-    mass_per_sig_op: 6000,
+    //   1000 (upstream) × 6.01 (slowest ratio) × 1.59 (safety) = 9548 → 10_000.
+    mass_per_sig_op: 10000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -663,6 +703,8 @@ pub const TESTNET_PARAMS: Params = Params {
     // 18:30 UTC, March 6, 2025
     crescendo_activation: ForkActivation::new(88_657_000),
     dns_params: None,
+    pq_enforcement: PqEnforcementMode::Consensus,
+    pq_activation_daa_score: 0,
 };
 
 pub const SIMNET_PARAMS: Params = Params {
@@ -684,21 +726,23 @@ pub const SIMNET_PARAMS: Params = Params {
 
     max_tx_inputs: 1000,
     max_tx_outputs: 1000,
-    max_signature_script_len: 10_000,
+    max_signature_script_len: 16_384,
     max_script_public_key_len: 10_000,
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6 + Phase 6 reinforcement:
-    //   Schnorr verify (secp256k1):            12.71 µs
-    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
-    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
+    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
+    //   Schnorr verify (secp256k1):              12.74 µs
+    //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
+    //   ML-DSA-87 verify (libcrux portable):     76.52 µs  (6.01× ratio — slowest)
     //
     // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
     // value is calibrated against the slowest variant so that no-SIMD
     // low-end reference platforms remain safely budgeted:
-    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
-    mass_per_sig_op: 6000,
+    //   1000 (upstream) × 6.01 (slowest ratio) × 1.59 (safety) = 9548 → 10_000.
+    mass_per_sig_op: 10000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -714,9 +758,14 @@ pub const SIMNET_PARAMS: Params = Params {
 
     crescendo_activation: ForkActivation::always(),
     dns_params: None,
+    pq_enforcement: PqEnforcementMode::Consensus,
+    pq_activation_daa_score: 0,
 };
 
 pub const DEVNET_PARAMS: Params = Params {
+    // kaspa-pq: PQ-only enforcement from genesis (ADR-0019).
+    pq_enforcement: PqEnforcementMode::Consensus,
+    pq_activation_daa_score: 0,
     dns_seeders: &[],
     net: NetworkId::new(NetworkType::Devnet),
     genesis: DEVNET_GENESIS,
@@ -731,21 +780,23 @@ pub const DEVNET_PARAMS: Params = Params {
 
     max_tx_inputs: 1000,
     max_tx_outputs: 1000,
-    max_signature_script_len: 10_000,
+    max_signature_script_len: 16_384,
     max_script_public_key_len: 10_000,
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6 + Phase 6 reinforcement:
-    //   Schnorr verify (secp256k1):            12.71 µs
-    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
-    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
+    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
+    //   Schnorr verify (secp256k1):              12.74 µs
+    //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
+    //   ML-DSA-87 verify (libcrux portable):     76.52 µs  (6.01× ratio — slowest)
     //
     // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
     // value is calibrated against the slowest variant so that no-SIMD
     // low-end reference platforms remain safely budgeted:
-    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
-    mass_per_sig_op: 6000,
+    //   1000 (upstream) × 6.01 (slowest ratio) × 1.59 (safety) = 9548 → 10_000.
+    mass_per_sig_op: 10000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
