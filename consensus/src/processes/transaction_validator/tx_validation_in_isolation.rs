@@ -39,7 +39,7 @@ impl TransactionValidator {
     /// *creation*.
     ///
     /// Exemptions: coinbase outputs (header-supplied miner script or the
-    /// validator-reward P2PKH built by `p2pkh_mldsa65_spk`) and DNS-overlay
+    /// validator-reward P2PKH built by `p2pkh_mldsa87_spk`) and DNS-overlay
     /// transactions (their outputs are governed by their own payload validators
     /// — `validate_stake_bond_tx` already pins output-0 to ML-DSA P2PKH, and
     /// attestation / slashing txs carry no outputs).
@@ -388,7 +388,7 @@ mod tests {
     fn validate_dns_overlay_subnetwork_tx() {
         use kaspa_consensus_core::dns_finality::{
             DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
-            StakeAttestation, StakeBondPayload, p2pkh_mldsa65_spk,
+            StakeAttestation, StakeBondPayload, p2pkh_mldsa87_spk,
         };
         use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
         use kaspa_hashes::Hash64;
@@ -437,12 +437,12 @@ mod tests {
         tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
         tx.payload = borsh::to_vec(&bond).unwrap();
         // ADR-0016 D.1: output-0 must lock the stake (value == amount, owner P2PKH).
-        tx.outputs[0] = TransactionOutput::new(bond.amount, p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload));
+        tx.outputs[0] = TransactionOutput::new(bond.amount, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload));
         assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
 
         // Bond whose output-0 does not lock `amount` (ADR-0016 D.1) → rejected.
         let mut tx_unlocked = tx.clone();
-        tx_unlocked.outputs[0] = TransactionOutput::new(bond.amount - 1, p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload));
+        tx_unlocked.outputs[0] = TransactionOutput::new(bond.amount - 1, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload));
         assert_match!(
             tv.validate_tx_in_isolation(&tx_unlocked),
             Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::BondOutputValueMismatch { .. }))
@@ -546,12 +546,12 @@ mod pq_output_class_enforcement_tests {
     }
 
     /// kaspa-pq ML-DSA-87 P2PKH (ADR-0019 §8):
-    /// `OP_DUP OP_BLAKE2B_512 OP_DATA64 <64B> OP_EQUALVERIFY OP_CHECKSIGMLDSA65` (69 bytes).
+    /// `OP_DUP OP_BLAKE2B_512 OP_DATA64 <64B> OP_EQUALVERIFY OP_CHECKSIGMLDSA87` (69 bytes).
     fn pq_p2pkh_spk() -> ScriptPublicKey {
         let mut s = vec![codes::OpDup, codes::OpBlake2b512, codes::OpData64];
         s.extend_from_slice(&[0u8; 64]);
         s.push(codes::OpEqualVerify);
-        s.push(codes::OpCheckSigMlDsa65);
+        s.push(codes::OpCheckSigMlDsa87);
         ScriptPublicKey::new(0, s.into())
     }
 

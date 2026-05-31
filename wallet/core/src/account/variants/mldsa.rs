@@ -3,7 +3,7 @@
 //!
 //! This is the post-quantum analogue of [`keypair`](super::keypair): a
 //! single-key account whose receive and change addresses are
-//! [`Version::PubKeyHashMlDsa65`] P2PKH addresses (64-byte BLAKE2b-512 of the
+//! [`Version::PubKeyHashMlDsa87`] P2PKH addresses (64-byte BLAKE2b-512 of the
 //! 2592-byte ML-DSA-87 verification key). It is the *only* account variant that
 //! produces spendable addresses on a PQ-only network — the legacy secp256k1
 //! variants emit `Version::PubKey`/`PubKeyECDSA` addresses, which are
@@ -21,18 +21,18 @@ use crate::account::Inner;
 use crate::imports::*;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_hashes::blake2b_512;
-use kaspa_wallet_keys::kaspa_pq::{KaspaPqMlDsa65KeyPair, derive_keypair};
+use kaspa_wallet_keys::kaspa_pq::{KaspaPqMlDsa87KeyPair, derive_keypair};
 
 pub const MLDSA_ACCOUNT_KIND: &str = "kaspa-mldsa-standard";
 
 /// kaspa-pq ML-DSA-87 P2PKH [`Address`] for `public_key` (the 2592-byte
-/// verification key) under `prefix`: `Version::PubKeyHashMlDsa65` over the
+/// verification key) under `prefix`: `Version::PubKeyHashMlDsa87` over the
 /// 64-byte BLAKE2b-512 of the key (ADR-0019 §8/§13). This is the single source
 /// of truth for receive/change address derivation and is kept free-standing so
 /// it can be unit-tested without constructing a [`Wallet`].
 pub fn mldsa_p2pkh_address(prefix: Prefix, public_key: &[u8]) -> Address {
     let payload = blake2b_512(public_key);
-    Address::new(prefix, Version::PubKeyHashMlDsa65, payload.as_byte_slice())
+    Address::new(prefix, Version::PubKeyHashMlDsa87, payload.as_byte_slice())
 }
 
 pub struct Ctor {}
@@ -179,7 +179,7 @@ impl Account for MlDsa {
     }
 
     fn change_address(&self) -> Result<Address> {
-        // Single-key account: change == receive, always Version::PubKeyHashMlDsa65.
+        // Single-key account: change == receive, always Version::PubKeyHashMlDsa87.
         Ok(mldsa_p2pkh_address(self.inner().wallet.network_id()?.into(), &self.public_key))
     }
 
@@ -236,7 +236,7 @@ impl Account for MlDsa {
         &self,
         keydata: &PrvKeyData,
         payment_secret: &Option<Secret>,
-    ) -> Result<Option<KaspaPqMlDsa65KeyPair>> {
+    ) -> Result<Option<KaspaPqMlDsa87KeyPair>> {
         // Re-derive the ML-DSA-87 keypair from the wallet's BIP39 master seed,
         // matching the derivation used when the account's verification key was
         // first generated (network id + account index, change=0, index=0).
@@ -274,11 +274,11 @@ mod tests {
         let addr = mldsa_p2pkh_address(Prefix::Mainnet, kp.public_key_bytes());
 
         // Post-quantum P2PKH shape: 64-byte BLAKE2b-512 payload, ML-DSA version.
-        assert_eq!(addr.version, Version::PubKeyHashMlDsa65);
+        assert_eq!(addr.version, Version::PubKeyHashMlDsa87);
         assert_eq!(addr.payload.len(), 64);
 
         // The account's address derivation must agree byte-for-byte with the
-        // canonical `KaspaPqMlDsa65KeyPair::address` used by the WASM wallet and
+        // canonical `KaspaPqMlDsa87KeyPair::address` used by the WASM wallet and
         // the native signer (so the wallet and consensus see the same spk).
         assert_eq!(addr, kp.address(Prefix::Mainnet));
 
@@ -350,7 +350,7 @@ mod tests {
 
         // A 1-in / 1-out spend of a UTXO locked to the account's receive address.
         let address = account.receive_address().unwrap();
-        assert_eq!(address.version, Version::PubKeyHashMlDsa65);
+        assert_eq!(address.version, Version::PubKeyHashMlDsa87);
         let spk = pay_to_address_script(&address);
         let prev = TransactionOutpoint { transaction_id: TransactionId::from_bytes([0x11u8; 64]), index: 0 };
         let tx = Transaction::new(

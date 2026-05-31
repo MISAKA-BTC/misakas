@@ -247,8 +247,8 @@ async fn dns_overlay_active_chain_validates() {
 // blocker for the reward-bearing / reorg / slashing DAG tests (DAG-2..7): these
 // helpers let a consensus test build stake-bond + attestation-shard txs and
 // produce an attestation signature the §B.4 verifier
-// (`kaspa_txscript::verify_mldsa65_with_context` under
-// `ATTESTATION_MLDSA65_CONTEXT`) accepts. Funding a bond tx from a coinbase UTXO
+// (`kaspa_txscript::verify_mldsa87_with_context` under
+// `ATTESTATION_MLDSA87_CONTEXT`) accepts. Funding a bond tx from a coinbase UTXO
 // (so a full reward-bearing chain validates) is the next harness step (DAG-2).
 // ============================================================================
 #[cfg(test)]
@@ -256,7 +256,7 @@ mod dns_harness {
     use kaspa_consensus_core::{
         Hash64,
         dns_finality::{
-            ATTESTATION_MLDSA65_CONTEXT, DNS_PAYLOAD_VERSION_V1, StakeAttestation, StakeBondPayload,
+            ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, StakeAttestation, StakeBondPayload,
             attestations_from_accepted_txs, single_attestation_shard, stake_attestation_message, stake_attestation_shard_tx,
             validator_id_from_pubkey,
         },
@@ -312,7 +312,7 @@ mod dns_harness {
         let msg = stake_attestation_message(network_id, epoch, target_hash, target_daa_score, validator_set_commitment, bond_outpoint);
         let mb = msg.as_bytes();
         let kp = mldsa::generate_key_pair(v.seed);
-        let sig = mldsa::sign(&kp.signing_key, &mb[..], ATTESTATION_MLDSA65_CONTEXT, [0x55u8; 32]).expect("ml-dsa-65 sign");
+        let sig = mldsa::sign(&kp.signing_key, &mb[..], ATTESTATION_MLDSA87_CONTEXT, [0x55u8; 32]).expect("ml-dsa-65 sign");
         StakeAttestation {
             version: DNS_PAYLOAD_VERSION_V1,
             validator_id: v.validator_id,
@@ -349,12 +349,12 @@ mod dns_harness {
         let msg = stake_attestation_message(&net_id, att.epoch, att.target_hash, att.target_daa_score, att.validator_set_commitment, att.bond_outpoint);
         let mb = msg.as_bytes();
         assert!(
-            kaspa_txscript::verify_mldsa65_with_context(&v.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA65_CONTEXT).unwrap(),
+            kaspa_txscript::verify_mldsa87_with_context(&v.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA87_CONTEXT).unwrap(),
             "the §B.4 verifier must accept the harness-signed attestation"
         );
         // A different key must NOT verify (sanity).
         let v2 = harness_validator([0x99u8; 32]);
-        assert!(!kaspa_txscript::verify_mldsa65_with_context(&v2.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA65_CONTEXT).unwrap());
+        assert!(!kaspa_txscript::verify_mldsa87_with_context(&v2.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA87_CONTEXT).unwrap());
 
         // Shard tx wraps exactly one extractable attestation.
         let shard_tx = stake_attestation_shard_tx(&single_attestation_shard(att));

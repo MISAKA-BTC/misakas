@@ -30,7 +30,7 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA65_CONTEXT, ActiveBondView, BondStatus, FeeSplitParams, RewardedEpochSet, SlashingSideEffect,
+        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BondStatus, FeeSplitParams, RewardedEpochSet, SlashingSideEffect,
         attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status, resolve_slashing_side_effects,
         slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
         validator_participation_reward_outputs,
@@ -49,7 +49,7 @@ use kaspa_consensus_core::{
 };
 use kaspa_core::{info, trace};
 use kaspa_muhash::MuHash;
-use kaspa_txscript::verify_mldsa65_with_context;
+use kaspa_txscript::verify_mldsa87_with_context;
 use kaspa_utils::refs::Refs;
 
 use rayon::prelude::*;
@@ -817,7 +817,7 @@ fn attestation_reward_eligibility(
         )
         .as_bytes();
         if !matches!(
-            verify_mldsa65_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA65_CONTEXT),
+            verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
             Ok(true)
         ) {
             return Err((att.bond_outpoint.transaction_id, att.epoch));
@@ -862,7 +862,7 @@ fn slashing_evidence_genuine(
             )
             .as_bytes();
             if !matches!(
-                verify_mldsa65_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA65_CONTEXT),
+                verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
                 Ok(true)
             ) {
                 return Err(ev.bond_outpoint.transaction_id);

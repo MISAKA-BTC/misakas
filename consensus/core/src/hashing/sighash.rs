@@ -540,7 +540,7 @@ fn mldsa87_outputs_hash(
 
 /// kaspa-pq PQ-only (ADR-0019 §9): compute the 64-byte ML-DSA-87 signature
 /// hash for `input_index` of `verifiable_tx`. This is the message both the
-/// wallet/validator signer and the `OP_CHECKSIG_MLDSA65` verifier feed into
+/// wallet/validator signer and the `OP_CHECKSIG_MLDSA87` verifier feed into
 /// `libcrux_ml_dsa::ml_dsa_87` under `MLDSA87_TX_CONTEXT`; they MUST call
 /// this same function so signer and verifier stay byte-for-byte in lockstep.
 pub fn calc_mldsa87_signature_hash(

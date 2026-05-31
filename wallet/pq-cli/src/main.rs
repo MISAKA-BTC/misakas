@@ -5,7 +5,7 @@
 //! - Generate / re-derive an ML-DSA-65 keypair from a BIP39 mnemonic.
 //! - Derive the corresponding kaspa-pq P2PKH address (misaka*).
 //! - Sign / verify messages with the kaspa-pq tx context
-//!   ([`MLDSA65_TX_CONTEXT`]).
+//!   ([`MLDSA87_TX_CONTEXT`]).
 //! - Store the mnemonic encrypted at rest with Argon2id + ChaCha20-Poly1305.
 //! - Smoke-test a wRPC connection to a kaspa-pq node (`info` subcommand).
 //! - Submit a hex-encoded already-built transaction
@@ -18,7 +18,7 @@
 //!   address    Print the kaspa-pq P2PKH address at a given path.
 //!   sign       Sign a hex-encoded message with the mnemonic/path.
 //!   verify     Verify (pubkey_hex, message_hex, signature_hex) under
-//!              `MLDSA65_TX_CONTEXT`. Self-contained.
+//!              `MLDSA87_TX_CONTEXT`. Self-contained.
 //!   info       Connect to a kaspa-pq node over wRPC and call get_info.
 //!   submit-tx  Submit an already-built, hex-encoded transaction.
 //!
@@ -50,7 +50,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use kaspa_addresses::Prefix;
 use kaspa_bip32::{Language, Mnemonic, WordCount};
 use kaspa_rpc_core::api::rpc::RpcApi;
-use kaspa_txscript::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT};
+use kaspa_txscript::{MLDSA87_PK_LEN, MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT};
 use kaspa_wallet_keys::kaspa_pq;
 use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
 use libcrux_ml_dsa::ml_dsa_87;
@@ -159,7 +159,7 @@ enum Command {
         #[arg(long)]
         randomness_hex: Option<String>,
     },
-    /// Verify (pubkey, message, signature) under `MLDSA65_TX_CONTEXT`.
+    /// Verify (pubkey, message, signature) under `MLDSA87_TX_CONTEXT`.
     /// Does not read the mnemonic file — self-contained.
     Verify {
         #[arg(long)]
@@ -377,19 +377,19 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         Command::Verify { public_key_hex, message_hex, signature_hex } => {
             let pk_bytes = decode_hex("public_key_hex", public_key_hex)?;
-            if pk_bytes.len() != MLDSA65_PK_LEN {
-                return Err(CliError::PublicKeyLength { expected: MLDSA65_PK_LEN, got: pk_bytes.len() });
+            if pk_bytes.len() != MLDSA87_PK_LEN {
+                return Err(CliError::PublicKeyLength { expected: MLDSA87_PK_LEN, got: pk_bytes.len() });
             }
             let sig_bytes = decode_hex("signature_hex", signature_hex)?;
-            if sig_bytes.len() != MLDSA65_SIG_LEN {
-                return Err(CliError::SignatureLength { expected: MLDSA65_SIG_LEN, got: sig_bytes.len() });
+            if sig_bytes.len() != MLDSA87_SIG_LEN {
+                return Err(CliError::SignatureLength { expected: MLDSA87_SIG_LEN, got: sig_bytes.len() });
             }
             let msg = decode_hex("message_hex", message_hex)?;
-            let pk_arr: [u8; MLDSA65_PK_LEN] = pk_bytes.as_slice().try_into().unwrap();
-            let sig_arr: [u8; MLDSA65_SIG_LEN] = sig_bytes.as_slice().try_into().unwrap();
+            let pk_arr: [u8; MLDSA87_PK_LEN] = pk_bytes.as_slice().try_into().unwrap();
+            let sig_arr: [u8; MLDSA87_SIG_LEN] = sig_bytes.as_slice().try_into().unwrap();
             let vk = ml_dsa_87::MLDSA87VerificationKey::new(pk_arr);
             let sig = ml_dsa_87::MLDSA87Signature::new(sig_arr);
-            ml_dsa_87::verify(&vk, &msg, MLDSA65_TX_CONTEXT, &sig).map_err(|_| CliError::SignatureInvalid)?;
+            ml_dsa_87::verify(&vk, &msg, MLDSA87_TX_CONTEXT, &sig).map_err(|_| CliError::SignatureInvalid)?;
             println!("OK: signature verifies under the kaspa-pq tx context.");
         }
         Command::Info { node } => {

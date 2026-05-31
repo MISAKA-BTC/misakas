@@ -70,7 +70,7 @@ mod tests {
         assert!(!entry.is_coinbase, "premine must be non-coinbase (spendable from block 0)");
         assert_eq!(entry.block_daa_score, 0);
         // kaspa-pq ML-DSA-87 P2PKH template (ADR-0019 §8): OP_DUP OP_BLAKE2B_512
-        // OP_DATA64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA65 = 69 bytes.
+        // OP_DATA64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87 = 69 bytes.
         assert_eq!(entry.script_public_key.script().len(), 69);
     }
 

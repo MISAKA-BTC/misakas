@@ -197,7 +197,7 @@ impl Mempool {
                 // libcrux verify. The mass-budget side of the policy is
                 // calibrated in Phase 6 via `mass_per_sig_op` (see
                 // docs/adr/0005-mass-policy.md), not here.
-                ScriptClass::PubKeyHashMlDsa65 => {}
+                ScriptClass::PubKeyHashMlDsa87 => {}
                 ScriptClass::ScriptHash => {
                     // todo relax due to on fly calculation
                     let num_sig_ops = get_sig_op_count_upper_bound::<PopulatedTransaction, SigHashReusedValuesUnsync>(

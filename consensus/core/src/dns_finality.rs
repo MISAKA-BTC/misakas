@@ -124,12 +124,12 @@ use crate::{
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
 };
 
-/// 1952 bytes — matches `kaspa_txscript::MLDSA65_PK_LEN`. Repeated
+/// 1952 bytes — matches `kaspa_txscript::MLDSA87_PK_LEN`. Repeated
 /// here so this module does not have to depend on `kaspa-txscript`;
 /// asserted-equal by [`tests::dns_constants_have_expected_values`].
 pub const STAKE_VALIDATOR_PUBKEY_LEN: usize = 2592;
 
-/// 3309 bytes — matches `kaspa_txscript::MLDSA65_SIG_LEN`. Same
+/// 3309 bytes — matches `kaspa_txscript::MLDSA87_SIG_LEN`. Same
 /// re-export rationale as [`STAKE_VALIDATOR_PUBKEY_LEN`].
 pub const STAKE_ATTESTATION_SIG_LEN: usize = 4627;
 
@@ -151,10 +151,10 @@ pub const STAKE_SCORE_SCALE: u128 = 1_000_000_000;
 pub const DNS_PAYLOAD_VERSION_V1: u16 = 1;
 
 /// kaspa-pq Phase 10 ML-DSA-65 attestation signing context. Distinct
-/// from the transaction context (`b"kaspa-pq-v1/tx/mldsa65"`,
+/// from the transaction context (`b"kaspa-pq-v1/tx/mldsa87"`,
 /// ADR-0002) so an attestation signature can never be replayed as a
 /// transaction signature (and vice versa).
-pub const ATTESTATION_MLDSA65_CONTEXT: &[u8] = b"kaspa-pq-v1/att/mldsa65";
+pub const ATTESTATION_MLDSA87_CONTEXT: &[u8] = b"kaspa-pq-v1/att/mldsa87";
 
 /// kaspa-pq Phase 10 BLAKE2b-256 domain key used when constructing
 /// the attestation message that ML-DSA-65 signs over. Consumed by
@@ -178,8 +178,8 @@ pub const VALIDATOR_SET_COMMITMENT_KEY: &[u8] = b"kaspa-pq-validator-set-v1";
 /// - `TAKEOVER_TOKEN_CONTEXT` — ML-DSA-65 `ctx` parameter for the
 ///   `sign_ctx` call that produces the
 ///   [`TakeoverToken::signature`]. Distinct from both the
-///   transaction context (`b"kaspa-pq-v1/tx/mldsa65"`) and the
-///   attestation context (`b"kaspa-pq-v1/att/mldsa65"`,
+///   transaction context (`b"kaspa-pq-v1/tx/mldsa87"`) and the
+///   attestation context (`b"kaspa-pq-v1/att/mldsa87"`,
 ///   ADR-0009 §"Attestation target") so a takeover-token
 ///   signature can never be replayed as a transaction or
 ///   attestation signature, and vice versa.
@@ -189,7 +189,7 @@ pub const VALIDATOR_SET_COMMITMENT_KEY: &[u8] = b"kaspa-pq-validator-set-v1";
 /// the `-v1` suffix is the contract — renaming auditable.
 pub const HOST_ID_KEY: &[u8] = b"kaspa-pq-validator-host-id-v1";
 pub const TAKEOVER_TOKEN_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-takeover-token-v1";
-pub const TAKEOVER_TOKEN_CONTEXT: &[u8] = b"kaspa-pq-v1/takeover/mldsa65";
+pub const TAKEOVER_TOKEN_CONTEXT: &[u8] = b"kaspa-pq-v1/takeover/mldsa87";
 
 /// kaspa-pq Phase 13 remote-signer protocol (ADR-0015) — node-
 /// local wire format between a validator client and a separate
@@ -348,7 +348,7 @@ pub struct StakeBondPayload {
 
     /// The owner's **declared** ML-DSA P2PKH spend payload —
     /// `BLAKE2b-512(owner_public_key)`, i.e. the 64-byte
-    /// `Address { version: PubKeyHashMlDsa65 }` payload (ADR-0019 §8;
+    /// `Address { version: PubKeyHashMlDsa87 }` payload (ADR-0019 §8;
     /// widened from the former 32-byte BLAKE2b-256 form).
     /// This is the **only** field validator rewards (ADR-0013
     /// coinbase fan-out) are paid to. `owner_pubkey_hash` above is the
@@ -400,7 +400,7 @@ pub struct StakeAttestation {
 
     /// 3309-byte ML-DSA-65 signature over the BLAKE2b-256
     /// attestation message produced by [`stake_attestation_message`]
-    /// with `ATTESTATION_MLDSA65_CONTEXT` as the libcrux `ctx`
+    /// with `ATTESTATION_MLDSA87_CONTEXT` as the libcrux `ctx`
     /// parameter.
     pub signature: Vec<u8>,
 }
@@ -898,7 +898,7 @@ pub struct ActiveValidatorSet {
 /// attestation for the current epoch, assembled by the consensus pipeline so the
 /// network-, active-set-, and target-binding match the verifier (`virtual_processor`)
 /// byte-for-byte. The service's only remaining job is to sign [`Self::message`]
-/// under [`ATTESTATION_MLDSA65_CONTEXT`] with its ML-DSA-65 key.
+/// under [`ATTESTATION_MLDSA87_CONTEXT`] with its ML-DSA-65 key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidatorAttestationTarget {
     pub epoch: u64,
@@ -1025,7 +1025,7 @@ pub fn validator_set_commitment(epoch: u64, validators: &[ValidatorRecord]) -> H
 ///
 /// The 32-byte digest is returned as the upstream [`Hash`] (alias for
 /// `Hash32`) so it composes directly with the libcrux ML-DSA-65 `sign_ctx`
-/// API. The signing context (`ATTESTATION_MLDSA65_CONTEXT`) is applied at
+/// API. The signing context (`ATTESTATION_MLDSA87_CONTEXT`) is applied at
 /// the ML-DSA-65 layer, not inside this hasher — keeping the two domain
 /// separators independent.
 pub fn stake_attestation_message(
@@ -1358,12 +1358,12 @@ pub fn takeover_token_message(
 pub enum SigningPurpose {
     /// Standard transaction signing — message digest is whatever
     /// the tx-script ML-DSA-65 sign path produces; context is
-    /// `b"kaspa-pq-v1/tx/mldsa65"`.
+    /// `b"kaspa-pq-v1/tx/mldsa87"`.
     #[default]
     Transaction = 0,
     /// DNS overlay attestation — message digest is from
     /// [`stake_attestation_message`]; context is
-    /// `ATTESTATION_MLDSA65_CONTEXT`.
+    /// `ATTESTATION_MLDSA87_CONTEXT`.
     Attestation = 1,
     /// Coordinated-failover takeover token — message digest is
     /// from [`takeover_token_message`]; context is
@@ -1822,7 +1822,7 @@ pub fn validator_participation_outputs(
         .iter()
         .filter_map(|(payload, stake)| {
             let reward = validator_participation_reward(participation_pool, *stake as u128, expected_stake).min(u64::MAX as u128) as u64;
-            (reward > 0).then(|| TransactionOutput::new(reward, p2pkh_mldsa65_spk(payload)))
+            (reward > 0).then(|| TransactionOutput::new(reward, p2pkh_mldsa87_spk(payload)))
         })
         .collect()
 }
@@ -1872,7 +1872,7 @@ pub fn validator_participation_reward_outputs(
             break;
         }
         spent += reward;
-        outputs.push(TransactionOutput::new(reward as u64, p2pkh_mldsa65_spk(payload)));
+        outputs.push(TransactionOutput::new(reward as u64, p2pkh_mldsa87_spk(payload)));
         rewarded_keys.push(key);
     }
     (outputs, rewarded_keys)
@@ -1882,18 +1882,18 @@ pub fn validator_participation_reward_outputs(
 /// for a 32-byte spend payload (ADR-0002 / ADR-0013 Addendum B).
 ///
 /// The 37-byte script is
-/// `OpDup ‖ OpBlake2b512 ‖ OpData64 ‖ <payload64> ‖ OpEqualVerify ‖ OpCheckSigMlDsa65`
+/// `OpDup ‖ OpBlake2b512 ‖ OpData64 ‖ <payload64> ‖ OpEqualVerify ‖ OpCheckSigMlDsa87`
 /// at `ScriptPublicKey` version 0 (ADR-0019 §8 — widened from the former
 /// 32-byte BLAKE2b-256 / `OpBlake2b`+`OpData32` form). The opcode bytes are
 /// pinned as literals here because `consensus-core` does not depend on full
 /// `kaspa-txscript` (only `kaspa-txscript-errors`); the output is
 /// **byte-identical** to
-/// `kaspa_txscript::pay_to_address_script(&Address::new(_, Version::PubKeyHashMlDsa65, payload))`
+/// `kaspa_txscript::pay_to_address_script(&Address::new(_, Version::PubKeyHashMlDsa87, payload))`
 /// and a parity test in the `consensus` crate
 /// (`processes::coinbase`) pins that equality. The `ScriptPublicKey`
 /// bytes are prefix-independent, so coinbase construction and
 /// validation need agree only on the 64-byte payload.
-pub fn p2pkh_mldsa65_spk(owner_reward_spk_payload: &[u8; 64]) -> ScriptPublicKey {
+pub fn p2pkh_mldsa87_spk(owner_reward_spk_payload: &[u8; 64]) -> ScriptPublicKey {
     // ADR-0019 §8 "Script template" opcode bytes (see
     // crypto/txscript/src/opcodes/mod.rs): OP_BLAKE2B_512 == 0xc4
     // (repurposed reserved opcode `OpUnknown196`), OP_DATA64 == 0x40.
@@ -1901,7 +1901,7 @@ pub fn p2pkh_mldsa65_spk(owner_reward_spk_payload: &[u8; 64]) -> ScriptPublicKey
     const OP_BLAKE2B_512: u8 = 0xc4;
     const OP_DATA64: u8 = 0x40;
     const OP_EQUAL_VERIFY: u8 = 0x88;
-    const OP_CHECKSIG_MLDSA65: u8 = 0xa6;
+    const OP_CHECKSIG_MLDSA87: u8 = 0xa6;
 
     let mut script = Vec::with_capacity(69);
     script.push(OP_DUP);
@@ -1909,7 +1909,7 @@ pub fn p2pkh_mldsa65_spk(owner_reward_spk_payload: &[u8; 64]) -> ScriptPublicKey
     script.push(OP_DATA64);
     script.extend_from_slice(owner_reward_spk_payload);
     script.push(OP_EQUAL_VERIFY);
-    script.push(OP_CHECKSIG_MLDSA65);
+    script.push(OP_CHECKSIG_MLDSA87);
     // P2PKH-ML-DSA spk version is `MAX_SCRIPT_PUBLIC_KEY_VERSION` == 0.
     ScriptPublicKey::new(0, ScriptVec::from_slice(&script))
 }
@@ -1917,7 +1917,7 @@ pub fn p2pkh_mldsa65_spk(owner_reward_spk_payload: &[u8; 64]) -> ScriptPublicKey
 /// Build the validator-side coinbase outputs for a block (ADR-0013
 /// §"Coinbase fan-out", as amended by Addendum B): one
 /// `TransactionOutput { value: per_attestation_reward_sompi,
-/// script_public_key: p2pkh_mldsa65_spk(payload) }` per included
+/// script_public_key: p2pkh_mldsa87_spk(payload) }` per included
 /// attestation, in the **canonical order the caller supplies**
 /// (ADR-0013 fixes that order as `(shard_index, attestation_index)`;
 /// resolving each attestation → its bond's `owner_reward_spk_payload`
@@ -1955,7 +1955,7 @@ pub fn validator_reward_outputs(
         (max_validator_inflation_per_block_sompi / per_attestation_reward_sompi).min(reward_spk_payloads.len() as u64) as usize;
     reward_spk_payloads[..max_payable]
         .iter()
-        .map(|payload| TransactionOutput::new(per_attestation_reward_sompi, p2pkh_mldsa65_spk(payload)))
+        .map(|payload| TransactionOutput::new(per_attestation_reward_sompi, p2pkh_mldsa87_spk(payload)))
         .collect()
 }
 
@@ -2006,7 +2006,7 @@ pub fn validator_reward_outputs_from_attestations(
         if !seen_in_block.insert(key) {
             continue;
         }
-        outputs.push(TransactionOutput::new(per_attestation_reward_sompi, p2pkh_mldsa65_spk(payload)));
+        outputs.push(TransactionOutput::new(per_attestation_reward_sompi, p2pkh_mldsa87_spk(payload)));
         rewarded_keys.push(key);
     }
     (outputs, rewarded_keys)
@@ -2054,7 +2054,7 @@ pub fn apply_unreveal_reporter_min_cap(
 /// [`TransactionOutput`] consensus mints as a side-effect at
 /// `(slashing_tx_id, 0)` — `value =
 /// compute_slashing_distribution(S, bps).reporter_reward_sompi`, `script_public_key
-/// = p2pkh_mldsa65_spk(reporter_reward_spk_payload)` — and the burned amount
+/// = p2pkh_mldsa87_spk(reporter_reward_spk_payload)` — and the burned amount
 /// (`S − reporter_reward_sompi`, which leaves the active supply implicitly
 /// when the bond's locked UTXO is removed and only the reporter reward is
 /// re-minted). Pass `unreveal_floor = Some(floor)` to apply the
@@ -2075,7 +2075,7 @@ pub fn slashing_distribution_output(
         dist = apply_unreveal_reporter_min_cap(dist, floor);
     }
     let output = (dist.reporter_reward_sompi > 0)
-        .then(|| TransactionOutput::new(dist.reporter_reward_sompi, p2pkh_mldsa65_spk(reporter_reward_spk_payload)));
+        .then(|| TransactionOutput::new(dist.reporter_reward_sompi, p2pkh_mldsa87_spk(reporter_reward_spk_payload)));
     (output, dist.burned_sompi)
 }
 
@@ -2654,7 +2654,7 @@ fn decode_and_check_stake_bond_payload(payload: &[u8]) -> Result<StakeBondPayloa
 /// D.1 stake-lock rule, on top of [`validate_stake_bond_payload`]): its
 /// output-0 (the bond outpoint, ADR-0009 Addendum A.1) must lock the
 /// declared stake — `value == amount` and `script_public_key ==
-/// p2pkh_mldsa65_spk(owner_reward_spk_payload)` (the owner's P2PKH-ML-DSA
+/// p2pkh_mldsa87_spk(owner_reward_spk_payload)` (the owner's P2PKH-ML-DSA
 /// address). This makes `amount` real, owner-controlled coins parked at
 /// output-0 rather than a self-declared number, closing the fake-stake
 /// hole and giving slashing (ADR-0013 Addendum C) something to consume.
@@ -2670,7 +2670,7 @@ pub fn validate_stake_bond_tx(payload: &[u8], outputs: &[TransactionOutput]) -> 
     if output0.value != bond.amount {
         return Err(DnsTxError::BondOutputValueMismatch { expected: bond.amount, got: output0.value });
     }
-    if output0.script_public_key != p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload) {
+    if output0.script_public_key != p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload) {
         return Err(DnsTxError::BondOutputScriptMismatch);
     }
     Ok(())
@@ -3056,7 +3056,7 @@ impl RewardedEpochSet {
 // Pure, store-free helpers. The consensus crate (which can call into
 // kaspa-txscript for ML-DSA verification) is responsible for walking the
 // selected chain, verifying each attestation's signature against its
-// bond's `validator_pubkey` under `ATTESTATION_MLDSA65_CONTEXT`, and
+// bond's `validator_pubkey` under `ATTESTATION_MLDSA87_CONTEXT`, and
 // gating by `is_bond_active_at` — then it passes the surviving
 // contributions here. Keeping the aggregation pure makes the
 // dedup + normalisation deterministic and unit-testable.
@@ -3443,8 +3443,8 @@ mod tests {
     fn dns_constants_have_expected_values() {
         // Cross-check against the consensus-core kaspa-pq constant
         // values (the kaspa-txscript crate is downstream of
-        // consensus-core, so we cannot pull MLDSA65_PK_LEN /
-        // MLDSA65_SIG_LEN from there directly without creating a
+        // consensus-core, so we cannot pull MLDSA87_PK_LEN /
+        // MLDSA87_SIG_LEN from there directly without creating a
         // dependency cycle; the values are duplicated here and the
         // assertion is the contract).
         assert_eq!(STAKE_VALIDATOR_PUBKEY_LEN, 2592);
@@ -3455,13 +3455,13 @@ mod tests {
         // adjacent, for the node-local failover keys) and bumped
         // only by a hard-fork ADR — pin the bytes so any
         // accidental rename trips this test.
-        assert_eq!(ATTESTATION_MLDSA65_CONTEXT, b"kaspa-pq-v1/att/mldsa65");
+        assert_eq!(ATTESTATION_MLDSA87_CONTEXT, b"kaspa-pq-v1/att/mldsa87");
         assert_eq!(ATTESTATION_MESSAGE_DOMAIN, b"kaspa-pq-v1/stake-attestation");
         assert_eq!(VALIDATOR_SET_COMMITMENT_KEY, b"kaspa-pq-validator-set-v1");
         // ADR-0014 — node-local failover protocol keys.
         assert_eq!(HOST_ID_KEY, b"kaspa-pq-validator-host-id-v1");
         assert_eq!(TAKEOVER_TOKEN_MESSAGE_DOMAIN, b"kaspa-pq-takeover-token-v1");
-        assert_eq!(TAKEOVER_TOKEN_CONTEXT, b"kaspa-pq-v1/takeover/mldsa65");
+        assert_eq!(TAKEOVER_TOKEN_CONTEXT, b"kaspa-pq-v1/takeover/mldsa87");
         // ADR-0015 — node-local remote-signer audit chain key
         // and protocol-version pin.
         assert_eq!(AUDIT_LOG_CHAIN_KEY, b"kaspa-pq-signer-audit-v1");
@@ -3483,9 +3483,9 @@ mod tests {
         // Replay safety: tx vs attestation vs takeover contexts
         // must all differ (ADR-0002 / ADR-0009 §"Attestation
         // target" / ADR-0014 §"Public-claim discipline").
-        assert_ne!(ATTESTATION_MLDSA65_CONTEXT, b"kaspa-pq-v1/tx/mldsa65");
-        assert_ne!(TAKEOVER_TOKEN_CONTEXT, b"kaspa-pq-v1/tx/mldsa65");
-        assert_ne!(TAKEOVER_TOKEN_CONTEXT, ATTESTATION_MLDSA65_CONTEXT);
+        assert_ne!(ATTESTATION_MLDSA87_CONTEXT, b"kaspa-pq-v1/tx/mldsa87");
+        assert_ne!(TAKEOVER_TOKEN_CONTEXT, b"kaspa-pq-v1/tx/mldsa87");
+        assert_ne!(TAKEOVER_TOKEN_CONTEXT, ATTESTATION_MLDSA87_CONTEXT);
     }
 
     #[test]
@@ -3729,7 +3729,7 @@ mod tests {
     fn validate_stake_bond_tx_accepts_locked_output() {
         let bond = fixture_bond();
         let bytes = borsh::to_vec(&bond).unwrap();
-        let outputs = vec![TransactionOutput::new(bond.amount, p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload))];
+        let outputs = vec![TransactionOutput::new(bond.amount, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload))];
         assert_eq!(validate_stake_bond_tx(&bytes, &outputs), Ok(()));
     }
 
@@ -3740,13 +3740,13 @@ mod tests {
         // No output-0 to lock the stake in.
         assert_eq!(validate_stake_bond_tx(&bytes, &[]), Err(DnsTxError::MissingBondOutput));
         // Output-0 value != amount.
-        let wrong_value = vec![TransactionOutput::new(bond.amount - 1, p2pkh_mldsa65_spk(&bond.owner_reward_spk_payload))];
+        let wrong_value = vec![TransactionOutput::new(bond.amount - 1, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload))];
         assert_eq!(
             validate_stake_bond_tx(&bytes, &wrong_value),
             Err(DnsTxError::BondOutputValueMismatch { expected: bond.amount, got: bond.amount - 1 })
         );
         // Correct value but the output pays a different (non-owner) payload.
-        let wrong_spk = vec![TransactionOutput::new(bond.amount, p2pkh_mldsa65_spk(&[0x00u8; 64]))];
+        let wrong_spk = vec![TransactionOutput::new(bond.amount, p2pkh_mldsa87_spk(&[0x00u8; 64]))];
         assert_eq!(validate_stake_bond_tx(&bytes, &wrong_spk), Err(DnsTxError::BondOutputScriptMismatch));
         // Payload checks still fire first (zero amount) regardless of outputs.
         let mut zero = bond.clone();
@@ -4506,7 +4506,7 @@ mod tests {
         // Canonical derivation = unkeyed BLAKE2b-512 of the public key
         // (ADR-0008/0012). Pinning it guards against accidental keying or a
         // switch to the 32-byte P2PKH address payload — either would be a hard fork.
-        let pubkey = [0x42u8; 2592]; // MLDSA65_PK_LEN-sized sample
+        let pubkey = [0x42u8; 2592]; // MLDSA87_PK_LEN-sized sample
         let mut expected = [0u8; 64];
         expected.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(&pubkey).finalize().as_bytes());
         let id = validator_id_from_pubkey(&pubkey);
@@ -4520,7 +4520,7 @@ mod tests {
 
     #[test]
     fn signature_fingerprint_is_unkeyed_blake2b_512() {
-        let sig = [0x7eu8; 4627]; // MLDSA65_SIG_LEN-sized sample
+        let sig = [0x7eu8; 4627]; // MLDSA87_SIG_LEN-sized sample
         let mut expected = [0u8; 64];
         expected.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(&sig).finalize().as_bytes());
         assert_eq!(signature_fingerprint(&sig), Hash64::from_bytes(expected));
@@ -4592,7 +4592,7 @@ mod tests {
             h.finalize()
         };
         let with_att_key = inputs(ATTESTATION_MESSAGE_DOMAIN);
-        let with_tx_key = inputs(b"kaspa-pq-v1/tx/mldsa65");
+        let with_tx_key = inputs(b"kaspa-pq-v1/tx/mldsa87");
         assert_ne!(with_att_key.as_bytes(), with_tx_key.as_bytes());
 
         let actual = stake_attestation_message(net, 7, Hash64::from_bytes([0x11u8; 64]), 100, Hash64::from_bytes([0x22u8; 64]), op);
@@ -4903,7 +4903,7 @@ mod tests {
         let outs = validator_participation_outputs(1000, &[(a, 60), (b, 30)], 100);
         assert_eq!(outs.len(), 2);
         assert_eq!((outs[0].value, outs[1].value), (600, 300));
-        assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&a));
+        assert_eq!(outs[0].script_public_key, p2pkh_mldsa87_spk(&a));
         assert!(outs.iter().map(|o| o.value).sum::<u64>() <= 1000); // never over-mints the pool
         // Zero-value shares (zero stake / empty set) and a degenerate expected_stake emit nothing.
         assert!(validator_participation_outputs(1000, &[([0xcc; 64], 0)], 100).is_empty());
@@ -5026,14 +5026,14 @@ mod tests {
         assert!(r.refunded_sompi <= u64::MAX);
     }
 
-    // ---- p2pkh_mldsa65_spk + validator_reward_outputs -------------
+    // ---- p2pkh_mldsa87_spk + validator_reward_outputs -------------
 
     #[test]
-    fn p2pkh_mldsa65_spk_byte_layout() {
+    fn p2pkh_mldsa87_spk_byte_layout() {
         // ADR-0019 §8: widened to OP_BLAKE2B_512 (0xc4) + OP_DATA64 (0x40)
         // over a 64-byte BLAKE2b-512 payload — total 69 bytes + spk version 0.
         let payload = [0x11u8; 64];
-        let spk = p2pkh_mldsa65_spk(&payload);
+        let spk = p2pkh_mldsa87_spk(&payload);
         assert_eq!(spk.version(), 0);
         let script = spk.script();
         assert_eq!(script.len(), 69);
@@ -5042,18 +5042,18 @@ mod tests {
         assert_eq!(script[2], 0x40, "OpData64");
         assert_eq!(&script[3..67], &payload, "64-byte payload");
         assert_eq!(script[67], 0x88, "OpEqualVerify");
-        assert_eq!(script[68], 0xa6, "OpCheckSigMlDsa65");
+        assert_eq!(script[68], 0xa6, "OpCheckSigMlDsa87");
     }
 
     #[test]
-    fn p2pkh_mldsa65_spk_distinct_payloads_distinct_scripts() {
+    fn p2pkh_mldsa87_spk_distinct_payloads_distinct_scripts() {
         // The only varying region is script[3..67]; distinct payloads
         // must yield distinct scripts (no accidental collision).
-        let a = p2pkh_mldsa65_spk(&[0x01u8; 64]);
-        let b = p2pkh_mldsa65_spk(&[0x02u8; 64]);
+        let a = p2pkh_mldsa87_spk(&[0x01u8; 64]);
+        let b = p2pkh_mldsa87_spk(&[0x02u8; 64]);
         assert_ne!(a, b);
         // Same payload → identical script (deterministic).
-        assert_eq!(p2pkh_mldsa65_spk(&[0x01u8; 64]), a);
+        assert_eq!(p2pkh_mldsa87_spk(&[0x01u8; 64]), a);
     }
 
     #[test]
@@ -5065,7 +5065,7 @@ mod tests {
         assert_eq!(outs.len(), payloads.len());
         for (out, p) in outs.iter().zip(payloads.iter()) {
             assert_eq!(out.value, reward);
-            assert_eq!(out.script_public_key, p2pkh_mldsa65_spk(p));
+            assert_eq!(out.script_public_key, p2pkh_mldsa87_spk(p));
         }
     }
 
@@ -5075,7 +5075,7 @@ mod tests {
         let payloads = [[0x0au8; 64], [0x0bu8; 64], [0x0cu8; 64]];
         let outs = validator_reward_outputs(10, 1_000, &payloads);
         let got: Vec<_> = outs.iter().map(|o| o.script_public_key.clone()).collect();
-        let want: Vec<_> = payloads.iter().map(|p| p2pkh_mldsa65_spk(p)).collect();
+        let want: Vec<_> = payloads.iter().map(|p| p2pkh_mldsa87_spk(p)).collect();
         assert_eq!(got, want);
     }
 
@@ -5090,8 +5090,8 @@ mod tests {
         assert_eq!(outs.len(), 2);
         assert_eq!(outs.iter().map(|o| o.value).sum::<u64>(), 20);
         // The two emitted outputs are the canonical-order head.
-        assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&payloads[0]));
-        assert_eq!(outs[1].script_public_key, p2pkh_mldsa65_spk(&payloads[1]));
+        assert_eq!(outs[0].script_public_key, p2pkh_mldsa87_spk(&payloads[0]));
+        assert_eq!(outs[1].script_public_key, p2pkh_mldsa87_spk(&payloads[1]));
     }
 
     #[test]
@@ -5132,8 +5132,8 @@ mod tests {
         let atts = [(op_n(1), 5u64, [0x01u8; 64]), (op_n(2), 5u64, [0x02u8; 64]), (op_n(3), 7u64, [0x03u8; 64])];
         let (outs, keys) = validator_reward_outputs_from_attestations(reward, 10_000, &atts, &RewardedEpochSet::new());
         assert_eq!(outs.len(), 3);
-        assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&[0x01u8; 64]));
-        assert_eq!(outs[2].script_public_key, p2pkh_mldsa65_spk(&[0x03u8; 64]));
+        assert_eq!(outs[0].script_public_key, p2pkh_mldsa87_spk(&[0x01u8; 64]));
+        assert_eq!(outs[2].script_public_key, p2pkh_mldsa87_spk(&[0x03u8; 64]));
         assert_eq!(keys, vec![(op_n(1), 5), (op_n(2), 5), (op_n(3), 7)]);
     }
 
@@ -5144,7 +5144,7 @@ mod tests {
         let atts = [(op_n(1), 5u64, [0xaau8; 64]), (op_n(1), 5u64, [0xbbu8; 64])];
         let (outs, keys) = validator_reward_outputs_from_attestations(100, 10_000, &atts, &RewardedEpochSet::new());
         assert_eq!(outs.len(), 1);
-        assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&[0xaau8; 64]));
+        assert_eq!(outs[0].script_public_key, p2pkh_mldsa87_spk(&[0xaau8; 64]));
         assert_eq!(keys, vec![(op_n(1), 5)]);
     }
 
@@ -5181,7 +5181,7 @@ mod tests {
         let atts = [(op_n(1), 5u64, [0x01u8; 64]), (op_n(2), 5u64, [0x02u8; 64])];
         let (outs, keys) = validator_reward_outputs_from_attestations(100, 10_000, &atts, &prefix);
         assert_eq!(outs.len(), 1);
-        assert_eq!(outs[0].script_public_key, p2pkh_mldsa65_spk(&[0x02u8; 64]));
+        assert_eq!(outs[0].script_public_key, p2pkh_mldsa87_spk(&[0x02u8; 64]));
         assert_eq!(keys, vec![(op_n(2), 5)]);
     }
 
@@ -5284,7 +5284,7 @@ mod tests {
         let (out, burned) = slashing_distribution_output(1_000_000, 1000, &payload, None);
         let out = out.expect("non-zero reporter reward");
         assert_eq!(out.value, 100_000);
-        assert_eq!(out.script_public_key, p2pkh_mldsa65_spk(&payload));
+        assert_eq!(out.script_public_key, p2pkh_mldsa87_spk(&payload));
         assert_eq!(burned, 900_000);
         // Conservation: reporter + burn == S.
         assert_eq!(out.value + burned, 1_000_000);
@@ -5330,7 +5330,7 @@ mod tests {
         assert_eq!(effects[0].bond_outpoint, slash_outpoint(1));
         assert_eq!(effects[0].slashed_amount_sompi, 1_000_000);
         assert_eq!(effects[0].reporter_output.as_ref().unwrap().value, 100_000);
-        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa65_spk(&[0x11u8; 64]));
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa87_spk(&[0x11u8; 64]));
         assert_eq!(effects[0].burned_sompi, 900_000);
         // The reporter UTXO is minted at (slashing_tx_id, 0), so each effect
         // carries the id of the tx that fixes its mint outpoint.
@@ -5357,7 +5357,7 @@ mod tests {
         // First occurrence wins (the 0x11 reporter payload) — and its tx id fixes
         // the mint outpoint (slashing_tx_id, 0), so a second tx for the same bond
         // can neither double-mint nor relocate the reporter UTXO.
-        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa65_spk(&[0x11u8; 64]));
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa87_spk(&[0x11u8; 64]));
         assert_eq!(effects[0].slashing_tx_id, Hash64::from_bytes([0xb1; 64]));
     }
 
@@ -5417,7 +5417,7 @@ mod tests {
         assert_eq!(effects[0].bond_outpoint, op);
         assert_eq!(effects[0].slashed_amount_sompi, 100_000_000_000);
         assert_eq!(effects[0].reporter_output.as_ref().unwrap().value, 10_000_000_000);
-        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa65_spk(&[0xab; 64]));
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa87_spk(&[0xab; 64]));
         assert_eq!(effects[0].burned_sompi, 90_000_000_000);
     }
 
@@ -5723,7 +5723,7 @@ mod tests {
             request_id: 7,
             validator_id: Hash64::from_bytes([0x42u8; 64]),
             purpose: SigningPurpose::Attestation,
-            context: ATTESTATION_MLDSA65_CONTEXT.to_vec(),
+            context: ATTESTATION_MLDSA87_CONTEXT.to_vec(),
             message_digest: Hash::from_bytes([0xcdu8; 32]),
             metadata: SignerMetadata::Attestation { epoch: 42, target_hash: Hash64::from_bytes([0x11u8; 64]), target_daa_score: 100 },
         }

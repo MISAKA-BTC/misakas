@@ -174,7 +174,7 @@ pub trait ConsensusApi: Send + Sync {
     /// `bond_outpoint` at the current sink (epoch, target, active-validator-set
     /// commitment, and the bound message digest), or `None` when the overlay is not
     /// configured. The validator service signs `message` under
-    /// `ATTESTATION_MLDSA65_CONTEXT`. Default `None`.
+    /// `ATTESTATION_MLDSA87_CONTEXT`. Default `None`.
     fn get_validator_attestation_target(&self, _bond_outpoint: TransactionOutpoint) -> Option<ValidatorAttestationTarget> {
         None
     }

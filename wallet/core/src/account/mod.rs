@@ -601,7 +601,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
         &self,
         _keydata: &PrvKeyData,
         _payment_secret: &Option<Secret>,
-    ) -> Result<Option<kaspa_wallet_keys::kaspa_pq::KaspaPqMlDsa65KeyPair>> {
+    ) -> Result<Option<kaspa_wallet_keys::kaspa_pq::KaspaPqMlDsa87KeyPair>> {
         Ok(None)
     }
 }

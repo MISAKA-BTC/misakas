@@ -8,7 +8,7 @@ use kaspa_consensus_core::tx::PopulatedTransaction;
 use kaspa_consensus_core::{hashing::sighash_type::SIG_HASH_ALL, sign::verify};
 // kaspa-pq ML-DSA-65 signer imports. `kaspa_pq_wasm` is only compiled for
 // wasm32/test (it pulls wasm-bindgen), so the helper imports and the
-// `signTransactionMlDsa65` fn below are gated to match — native builds exclude them.
+// `signTransactionMlDsa87` fn below are gated to match — native builds exclude them.
 #[cfg(any(target_arch = "wasm32", test))]
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_hashes::Hash;
@@ -59,12 +59,12 @@ pub fn js_sign_transaction(tx: &Transaction, signer: &PrivateKeyArrayT, verify_s
     }
 }
 
-/// `signTransactionMlDsa65()` signs every input of `tx` with a kaspa-pq
+/// `signTransactionMlDsa87()` signs every input of `tx` with a kaspa-pq
 /// ML-DSA-65 keypair, producing the canonical P2PKH unlock script
 /// `<signature || sighash_type> <public_key>` for each input. The signed
 /// message is the 64-byte `calc_mldsa87_signature_hash(.., SIG_HASH_ALL, ..)`
-/// (ADR-0019 §9) — the exact digest the `OpCheckSigMlDsa65` consensus opcode
-/// recomputes and verifies under `MLDSA65_TX_CONTEXT`.
+/// (ADR-0019 §9) — the exact digest the `OpCheckSigMlDsa87` consensus opcode
+/// recomputes and verifies under `MLDSA87_TX_CONTEXT`.
 ///
 /// `randomness` must be 32 bytes (e.g. `crypto.getRandomValues`). Per-input
 /// randomness is derived from it so distinct inputs use distinct hedging
@@ -74,10 +74,10 @@ pub fn js_sign_transaction(tx: &Transaction, signer: &PrivateKeyArrayT, verify_s
 /// input is locked to this keypair's address (a single-key wallet).
 /// @category Wallet SDK
 #[cfg(any(target_arch = "wasm32", test))]
-#[wasm_bindgen(js_name = "signTransactionMlDsa65")]
-pub fn js_sign_transaction_mldsa65(tx: &Transaction, keypair: &KaspaPqKeyPair, randomness: Vec<u8>) -> Result<Transaction> {
+#[wasm_bindgen(js_name = "signTransactionMlDsa87")]
+pub fn js_sign_transaction_mldsa87(tx: &Transaction, keypair: &KaspaPqKeyPair, randomness: Vec<u8>) -> Result<Transaction> {
     if randomness.len() != 32 {
-        return Err(Error::custom("signTransactionMlDsa65() requires 32 bytes of randomness"));
+        return Err(Error::custom("signTransactionMlDsa87() requires 32 bytes of randomness"));
     }
     let public_key = keypair.public_key().to_bytes();
 
@@ -101,7 +101,7 @@ pub fn js_sign_transaction_mldsa65(tx: &Transaction, keypair: &KaspaPqKeyPair, r
             .sign(sig_hash.as_bytes().to_vec(), input_randomness.to_vec())
             .map_err(|e| Error::Custom(format!("ML-DSA-65 sign failed: {e:?}")))?;
 
-        // OpCheckSigMlDsa65 pops [sig, key] and strips the trailing sighash-type
+        // OpCheckSigMlDsa87 pops [sig, key] and strips the trailing sighash-type
         // byte off the signature, mirroring schnorr OP_CHECKSIG.
         let mut sig_data = signature.to_bytes();
         sig_data.push(SIG_HASH_ALL.to_u8());
@@ -174,7 +174,7 @@ fn sign_hash(sig_hash: Hash, privkey: &[u8; 32]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod mldsa_parity_tests {
-    //! kaspa-pq (ADR-0019 §13) Phase 5e: the WASM `signTransactionMlDsa65` helper
+    //! kaspa-pq (ADR-0019 §13) Phase 5e: the WASM `signTransactionMlDsa87` helper
     //! and the native `kaspa_wallet_keys::kaspa_pq::sign_transaction_inputs_mldsa87`
     //! must produce byte-identical unlock scripts for the same key + transaction +
     //! randomness, so the WASM (JS) wallet and the native Rust wallet are
@@ -190,13 +190,13 @@ mod mldsa_parity_tests {
         TransactionOutput, UtxoEntry as CcUtxoEntry,
     };
     use kaspa_txscript::pay_to_address_script;
-    use kaspa_wallet_keys::kaspa_pq::{KaspaPqMlDsa65KeyPair, sign_transaction_inputs_mldsa87};
+    use kaspa_wallet_keys::kaspa_pq::{KaspaPqMlDsa87KeyPair, sign_transaction_inputs_mldsa87};
 
     #[test]
     fn wasm_and_native_mldsa_signers_agree() {
         // Same 32-byte seed => identical ML-DSA-87 keypair in both worlds.
         let seed = [0x42u8; 32];
-        let native_kp = KaspaPqMlDsa65KeyPair::from_seed(seed);
+        let native_kp = KaspaPqMlDsa87KeyPair::from_seed(seed);
         let wasm_kp = KaspaPqKeyPair::from_seed(seed.to_vec()).ok().expect("valid 32-byte seed");
 
         // A 1-input / 1-output spend of a UTXO locked to that key.
@@ -248,7 +248,7 @@ mod mldsa_parity_tests {
         let mut utxos = AHashMap::new();
         utxos.insert(utxo_ref.id(), utxo_ref);
         let client_tx = ClientTransaction::from_cctx_transaction(&cctx, &utxos);
-        let signed_client = js_sign_transaction_mldsa65(&client_tx, &wasm_kp, base.to_vec()).expect("wasm ML-DSA sign");
+        let signed_client = js_sign_transaction_mldsa87(&client_tx, &wasm_kp, base.to_vec()).expect("wasm ML-DSA sign");
         let (wasm_cctx, _utxos) = signed_client.tx_and_utxos().expect("tx_and_utxos");
         let wasm_script = wasm_cctx.inputs[0].signature_script.clone();
 

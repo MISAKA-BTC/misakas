@@ -724,12 +724,12 @@ opcode_list! {
     // Layout mirrors OpCheckSig (0xac): pops <sig>, <key>, then pops the
     // 1-byte sighash type off the signature, length-checks both items
     // before any libcrux call, and pushes the boolean verify result.
-    opcode OpCheckSigMlDsa65<0xa6, 1>(self, vm) {
+    opcode OpCheckSigMlDsa87<0xa6, 1>(self, vm) {
         let [mut sig, key] = vm.dstack.pop_raw()?;
         match sig.pop() {
             Some(typ) => {
                 let hash_type = SigHashType::from_u8(typ).map_err(|_e| TxScriptError::InvalidSigHashType(typ))?;
-                match vm.check_mldsa65_signature(hash_type, key.as_slice(), sig.as_slice()) {
+                match vm.check_mldsa87_signature(hash_type, key.as_slice(), sig.as_slice()) {
                     Ok(valid) => {
                         vm.dstack.push_item(valid)?;
                         Ok(())
@@ -748,11 +748,11 @@ opcode_list! {
 
     // kaspa-pq: ML-DSA-65 M-of-N CHECKMULTISIG (was upstream OpUnknown167).
     // Mirrors OpCheckMultiSig (0xae) but verifies ML-DSA-65 signatures via
-    // check_mldsa65_signature. Stack layout (Kaspa CHECKMULTISIG has no dummy
+    // check_mldsa87_signature. Stack layout (Kaspa CHECKMULTISIG has no dummy
     // element): <sig_1> .. <sig_M> <M> <pk_1> .. <pk_N> <N>. Each sig push is
     // <3309-byte ML-DSA-65 sig || 1-byte sighash type>. See docs/adr/0002.
-    opcode OpCheckMultiSigMlDsa65<0xa7, 1>(self, vm) {
-        vm.op_check_multisig(MultisigScheme::MlDsa65)
+    opcode OpCheckMultiSigMlDsa87<0xa7, 1>(self, vm) {
+        vm.op_check_multisig(MultisigScheme::MlDsa87)
     }
 
     // Crypto opcodes.
@@ -1031,7 +1031,7 @@ opcode_list! {
     }
     // kaspa-pq PQ-only (ADR-0019 §8): 64-byte BLAKE2b-512 hash opcode, the
     // hash step of the widened ML-DSA P2PKH template
-    //   OP_DUP OP_BLAKE2B_512 OP_DATA64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA65
+    //   OP_DUP OP_BLAKE2B_512 OP_DATA64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87
     // (repurposes the upstream reserved `OpUnknown196`). Mirrors `OpBlake2b`
     // (0xaa) but with `hash_length(64)`, so it pushes a 64-byte digest. The
     // 32-byte `OP_BLAKE2B` (0xaa) is retained for the legacy P2SH template.
@@ -1240,8 +1240,8 @@ mod test {
     #[test]
     fn test_opcode_invalid() {
         let tests: Vec<Box<dyn OpCodeImplementation<PopulatedTransaction, SigHashReusedValuesUnsync>>> = vec![
-            // kaspa-pq: 0xa6 is OpCheckSigMlDsa65 and 0xa7 is
-            // OpCheckMultiSigMlDsa65 (both defined, not unknown). 0xc4 is now
+            // kaspa-pq: 0xa6 is OpCheckSigMlDsa87 and 0xa7 is
+            // OpCheckMultiSigMlDsa87 (both defined, not unknown). 0xc4 is now
             // OpBlake2b512 (ADR-0019 §8), so the first remaining invalid opcode
             // is 0xc5 / OpUnknown197.
             opcodes::OpUnknown197::empty().expect("Should accept empty"),

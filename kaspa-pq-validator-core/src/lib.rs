@@ -11,7 +11,7 @@ use blake2b_simd::Params as Blake2bParams;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
-    ATTESTATION_MLDSA65_CONTEXT, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
+    ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
     StakeAttestationShardPayload, StakeBondPayload, check_signed_epoch_record, single_attestation_shard, validator_id_from_pubkey,
 };
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
@@ -21,7 +21,7 @@ use kaspa_consensus_core::subnets::{SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNE
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_hashes::Hash64;
 use kaspa_txscript::{
-    MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder, verify_mldsa65_with_context,
+    MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder, verify_mldsa87_with_context,
 };
 use libcrux_ml_dsa::ml_dsa_87;
 use rand::RngCore;
@@ -31,7 +31,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 /// Length in bytes of the ML-DSA-65 keygen seed consumed by [`ValidatorKey::from_seed`]
-/// (matches the wallet's `KaspaPqMlDsa65KeyPair`).
+/// (matches the wallet's `KaspaPqMlDsa87KeyPair`).
 pub const VALIDATOR_SEED_LEN: usize = 32;
 
 /// Floor (sompi) for the attestation-shard transaction fee. The actual fee should be the
@@ -74,7 +74,7 @@ impl ValidatorKey {
         Self { keypair, validator_id }
     }
 
-    /// The validator's own P2PKH-ML-DSA address — `(prefix, PubKeyHashMlDsa65,
+    /// The validator's own P2PKH-ML-DSA address — `(prefix, PubKeyHashMlDsa87,
     /// BLAKE2b-512(public_key))`. This is the **spend** address (64-byte BLAKE2b-512
     /// payload — ADR-0019 §8), distinct from the 64-byte overlay `validator_id` (a
     /// separately-keyed BLAKE2b-512). Funding UTXOs sent here back the
@@ -84,14 +84,14 @@ impl ValidatorKey {
         payload.copy_from_slice(
             Blake2bParams::new().hash_length(64).to_state().update(self.keypair.verification_key.as_ref()).finalize().as_bytes(),
         );
-        Address::new(prefix, Version::PubKeyHashMlDsa65, &payload)
+        Address::new(prefix, Version::PubKeyHashMlDsa87, &payload)
     }
 
     /// Sign `message` under an explicit ML-DSA-65 `context` (domain separator) with fresh
     /// hedged randomness. Distinct contexts keep attestation signatures
-    /// ([`ATTESTATION_MLDSA65_CONTEXT`]) and transaction-input signatures
-    /// ([`MLDSA65_TX_CONTEXT`]) in disjoint domains — neither can be replayed as the other.
-    pub fn sign_with_context(&self, message: &[u8], context: &[u8]) -> [u8; MLDSA65_SIG_LEN] {
+    /// ([`ATTESTATION_MLDSA87_CONTEXT`]) and transaction-input signatures
+    /// ([`MLDSA87_TX_CONTEXT`]) in disjoint domains — neither can be replayed as the other.
+    pub fn sign_with_context(&self, message: &[u8], context: &[u8]) -> [u8; MLDSA87_SIG_LEN] {
         let mut randomness = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut randomness);
         let sig = ml_dsa_87::sign(&self.keypair.signing_key, message, context, randomness)
@@ -99,19 +99,19 @@ impl ValidatorKey {
         *sig.as_ref()
     }
 
-    /// Sign a stake-attestation `message` digest under [`ATTESTATION_MLDSA65_CONTEXT`].
-    /// Verifies via [`verify_mldsa65_with_context`] — the same call the `virtual_processor`
+    /// Sign a stake-attestation `message` digest under [`ATTESTATION_MLDSA87_CONTEXT`].
+    /// Verifies via [`verify_mldsa87_with_context`] — the same call the `virtual_processor`
     /// aggregator uses.
-    pub fn sign_attestation(&self, message: &[u8]) -> [u8; MLDSA65_SIG_LEN] {
-        self.sign_with_context(message, ATTESTATION_MLDSA65_CONTEXT)
+    pub fn sign_attestation(&self, message: &[u8]) -> [u8; MLDSA87_SIG_LEN] {
+        self.sign_with_context(message, ATTESTATION_MLDSA87_CONTEXT)
     }
 
     /// Build a fee-funded, signed `StakeAttestationShard` transaction (ADR-0010 step 9,
     /// funding model A). Spends `funding` — a UTXO locked to this key's own P2PKH-ML-DSA
     /// script — to pay the fee, returns the change to the same script, and carries the
     /// borsh-encoded `shard` payload. The single input is signed under
-    /// [`MLDSA65_TX_CONTEXT`] over the SIG_HASH_ALL sighash and wrapped as
-    /// `<sig ‖ sighash-type> <pubkey>` so it satisfies `OpCheckSigMlDsa65`.
+    /// [`MLDSA87_TX_CONTEXT`] over the SIG_HASH_ALL sighash and wrapped as
+    /// `<sig ‖ sighash-type> <pubkey>` so it satisfies `OpCheckSigMlDsa87`.
     ///
     /// `fee` is taken as a parameter; choosing it from the mass-based minimum and
     /// discovering the funding UTXO are the caller's job.
@@ -138,8 +138,8 @@ impl ValidatorKey {
         let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
         let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
 
-        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA65_TX_CONTEXT).to_vec();
-        sig_data.push(SIG_HASH_ALL.to_u8()); // OpCheckSigMlDsa65 pops the trailing sighash-type byte
+        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+        sig_data.push(SIG_HASH_ALL.to_u8()); // OpCheckSigMlDsa87 pops the trailing sighash-type byte
         let signature_script = ScriptBuilder::new()
             .add_data(&sig_data)
             .map_err(|e| format!("attestation funding sig push failed: {e}"))?
@@ -166,7 +166,7 @@ impl ValidatorKey {
     /// (both = `validator_id`) are written so any node can verify attestations without a
     /// registry. `owner_reward_spk_payload` is where this bond's rewards are paid — set to the
     /// caller-supplied 64-byte P2PKH-ML-DSA payload (ADR-0019 §8; defaults to the validator's
-    /// own funding payload). The single input is signed under [`MLDSA65_TX_CONTEXT`] exactly as
+    /// own funding payload). The single input is signed under [`MLDSA87_TX_CONTEXT`] exactly as
     /// [`Self::build_funded_shard_tx`].
     #[allow(clippy::too_many_arguments)]
     pub fn build_funded_stake_bond_tx(
@@ -214,7 +214,7 @@ impl ValidatorKey {
         let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
         let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
         let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
-        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA65_TX_CONTEXT).to_vec();
+        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
         sig_data.push(SIG_HASH_ALL.to_u8());
         let signature_script = ScriptBuilder::new()
             .add_data(&sig_data)
@@ -253,7 +253,7 @@ impl ValidatorKey {
             target_hash: Hash64::from_bytes([0u8; 64]),
             target_daa_score: 0,
             validator_set_commitment: Hash64::from_bytes([0u8; 64]),
-            signature: vec![0u8; MLDSA65_SIG_LEN],
+            signature: vec![0u8; MLDSA87_SIG_LEN],
         };
         let shard = single_attestation_shard(dummy);
         let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
@@ -267,7 +267,7 @@ impl ValidatorKey {
     /// Verify an attestation signature against this key (local round-trip sanity check).
     pub fn verify_attestation(&self, message: &[u8], signature: &[u8]) -> bool {
         matches!(
-            verify_mldsa65_with_context(self.keypair.verification_key.as_ref(), message, signature, ATTESTATION_MLDSA65_CONTEXT),
+            verify_mldsa87_with_context(self.keypair.verification_key.as_ref(), message, signature, ATTESTATION_MLDSA87_CONTEXT),
             Ok(true)
         )
     }
@@ -419,10 +419,10 @@ mod tests {
     }
 
     #[test]
-    fn funding_address_is_p2pkh_mldsa65_over_blake2b_512_pubkey() {
+    fn funding_address_is_p2pkh_mldsa87_over_blake2b_512_pubkey() {
         let key = ValidatorKey::from_seed([0x44u8; VALIDATOR_SEED_LEN]);
         let addr = key.funding_address(Prefix::Devnet);
-        assert_eq!(addr.version, Version::PubKeyHashMlDsa65);
+        assert_eq!(addr.version, Version::PubKeyHashMlDsa87);
         assert_eq!(addr.prefix, Prefix::Devnet);
         // Payload = BLAKE2b-512(pubkey) — the 64-byte spend hash (ADR-0019 §8); the
         // overlay validator_id is a separately-keyed BLAKE2b-512, not this value.
@@ -438,7 +438,7 @@ mod tests {
         let key = ValidatorKey::from_seed([0x55u8; VALIDATOR_SEED_LEN]);
         let msg = [0x99u8; 32]; // stand-in for a stake_attestation_message digest
         let sig = key.sign_attestation(&msg);
-        assert_eq!(sig.len(), MLDSA65_SIG_LEN);
+        assert_eq!(sig.len(), MLDSA87_SIG_LEN);
         assert!(key.verify_attestation(&msg, &sig));
         // A tampered digest must fail verification.
         let mut bad = msg;
@@ -450,12 +450,12 @@ mod tests {
     fn sign_with_context_is_domain_separated() {
         let key = ValidatorKey::from_seed([0x88u8; VALIDATOR_SEED_LEN]);
         let msg = [0x5au8; 32]; // stand-in for a SIG_HASH_ALL sighash
-        let sig = key.sign_with_context(&msg, MLDSA65_TX_CONTEXT);
+        let sig = key.sign_with_context(&msg, MLDSA87_TX_CONTEXT);
         let pk = key.keypair.verification_key.as_ref();
         // Verifies under the tx context...
-        assert!(matches!(verify_mldsa65_with_context(pk, &msg, &sig, MLDSA65_TX_CONTEXT), Ok(true)));
+        assert!(matches!(verify_mldsa87_with_context(pk, &msg, &sig, MLDSA87_TX_CONTEXT), Ok(true)));
         // ...but NOT under the attestation context (domain separation).
-        assert!(!matches!(verify_mldsa65_with_context(pk, &msg, &sig, ATTESTATION_MLDSA65_CONTEXT), Ok(true)));
+        assert!(!matches!(verify_mldsa87_with_context(pk, &msg, &sig, ATTESTATION_MLDSA87_CONTEXT), Ok(true)));
     }
 
     #[test]
@@ -472,7 +472,7 @@ mod tests {
             target_hash: Hash64::from_bytes([0x11u8; 64]),
             target_daa_score: 700,
             validator_set_commitment: Hash64::from_bytes([0x22u8; 64]),
-            signature: vec![0u8; MLDSA65_SIG_LEN],
+            signature: vec![0u8; MLDSA87_SIG_LEN],
         });
         let funding_spk = ScriptPublicKey::default();
         let funding = UtxoEntry::new(1_000, funding_spk.clone(), 1, false);

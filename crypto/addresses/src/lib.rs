@@ -162,7 +162,7 @@ pub enum Version {
     /// Carries a 64-byte `BLAKE2b-512(public_key)` (ADR-0019 §8; widened
     /// from the former 32-byte BLAKE2b-256). See docs/adr/0002-mldsa65-p2pkh.md
     /// and docs/kaspa-pq-design-mldsa87.md §8.
-    PubKeyHashMlDsa65 = 2,
+    PubKeyHashMlDsa87 = 2,
     /// ScriptHash addresses always have the version byte set to 8
     ScriptHash = 8,
 }
@@ -174,7 +174,7 @@ impl TryFrom<&str> for Version {
         match value {
             "PubKey" => Ok(Version::PubKey),
             "PubKeyECDSA" => Ok(Version::PubKeyECDSA),
-            "PubKeyHashMlDsa65" => Ok(Version::PubKeyHashMlDsa65),
+            "PubKeyHashMlDsa87" => Ok(Version::PubKeyHashMlDsa87),
             "ScriptHash" => Ok(Version::ScriptHash),
             _ => Err(AddressError::InvalidVersionString(value.to_string())),
         }
@@ -184,7 +184,7 @@ impl TryFrom<&str> for Version {
 impl Version {
     /// Address payload length for each [`Version`].
     ///
-    /// `PubKeyHashMlDsa65` carries a 64-byte BLAKE2b-512 hash of the
+    /// `PubKeyHashMlDsa87` carries a 64-byte BLAKE2b-512 hash of the
     /// ML-DSA public key (ADR-0019 §8; widened from the former 32-byte
     /// BLAKE2b-256). The raw ML-DSA public key is **never** an address
     /// payload — it appears only on the spending input side. See
@@ -193,7 +193,7 @@ impl Version {
         match self {
             Version::PubKey => 32,
             Version::PubKeyECDSA => 33,
-            Version::PubKeyHashMlDsa65 => 64,
+            Version::PubKeyHashMlDsa87 => 64,
             Version::ScriptHash => 32,
         }
     }
@@ -206,7 +206,7 @@ impl TryFrom<u8> for Version {
         match value {
             0 => Ok(Version::PubKey),
             1 => Ok(Version::PubKeyECDSA),
-            2 => Ok(Version::PubKeyHashMlDsa65),
+            2 => Ok(Version::PubKeyHashMlDsa87),
             8 => Ok(Version::ScriptHash),
             _ => Err(AddressError::InvalidVersion(value)),
         }
@@ -218,7 +218,7 @@ impl Display for Version {
         match self {
             Version::PubKey => write!(f, "PubKey"),
             Version::PubKeyECDSA => write!(f, "PubKeyECDSA"),
-            Version::PubKeyHashMlDsa65 => write!(f, "PubKeyHashMlDsa65"),
+            Version::PubKeyHashMlDsa87 => write!(f, "PubKeyHashMlDsa87"),
             Version::ScriptHash => write!(f, "ScriptHash"),
         }
     }
@@ -228,7 +228,7 @@ impl Display for Version {
 ///
 /// This size is the SmallVec inline backing store size, chosen to be ≥ the
 /// largest possible payload. In kaspa-pq the largest payload is the 64-byte
-/// BLAKE2b-512 public-key hash of [`Version::PubKeyHashMlDsa65`] (ADR-0019
+/// BLAKE2b-512 public-key hash of [`Version::PubKeyHashMlDsa87`] (ADR-0019
 /// §8), so this is 64 (was 36 when the largest payload was the 33-byte
 /// [`Version::PubKeyECDSA`] key).
 pub const PAYLOAD_VECTOR_SIZE: usize = 64;

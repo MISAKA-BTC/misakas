@@ -570,14 +570,14 @@ mod tests {
     }
 
     /// ADR-0013 Addendum B parity pin: the consensus-core
-    /// opcode-literal `p2pkh_mldsa65_spk` (used by the PR-10.5′
+    /// opcode-literal `p2pkh_mldsa87_spk` (used by the PR-10.5′
     /// coinbase fan-out) must be byte-identical to the canonical
     /// `kaspa_txscript::pay_to_address_script` over the same 64-byte
     /// payload (ADR-0019 §8), and prefix-independent.
     #[test]
     fn validator_reward_spk_matches_pay_to_address_script() {
         use kaspa_addresses::{Address, Prefix, Version};
-        use kaspa_consensus_core::dns_finality::p2pkh_mldsa65_spk;
+        use kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk;
         use kaspa_txscript::pay_to_address_script;
 
         let mut counting = [0u8; 64];
@@ -585,9 +585,9 @@ mod tests {
             *b = i as u8;
         }
         for payload in [[0x00u8; 64], [0x11u8; 64], [0xffu8; 64], counting] {
-            let core_spk = p2pkh_mldsa65_spk(&payload);
+            let core_spk = p2pkh_mldsa87_spk(&payload);
             for prefix in [Prefix::Mainnet, Prefix::Testnet, Prefix::Simnet, Prefix::Devnet] {
-                let addr = Address::new(prefix, Version::PubKeyHashMlDsa65, &payload);
+                let addr = Address::new(prefix, Version::PubKeyHashMlDsa87, &payload);
                 assert_eq!(core_spk, pay_to_address_script(&addr), "prefix {prefix:?} payload {payload:?}");
             }
         }

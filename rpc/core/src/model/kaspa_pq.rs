@@ -4,8 +4,8 @@
 //! These newtypes carry the fixed-size byte blobs that the kaspa-pq
 //! consensus produces:
 //!
-//! - [`RpcMlDsa65PublicKey`] — 1952 bytes (ADR-0002).
-//! - [`RpcMlDsa65Signature`] — 3309 bytes (ADR-0002).
+//! - [`RpcMlDsa87PublicKey`] — 1952 bytes (ADR-0002).
+//! - [`RpcMlDsa87Signature`] — 3309 bytes (ADR-0002).
 //! - [`RpcUtxoCommitment`]   — 32 bytes, the kaspa-pq PoC final
 //!   commitment width (see ADR-0004 §"Decision"). The production
 //!   64-byte switch lands in PR-7.6 and introduces a separate
@@ -36,13 +36,13 @@ use serde::{
 
 /// ML-DSA-65 (FIPS 204) public key length in bytes. Locked at this
 /// crate level to avoid pulling in `kaspa_txscript` purely for the
-/// constant — the value must match `kaspa_txscript::MLDSA65_PK_LEN`
+/// constant — the value must match `kaspa_txscript::MLDSA87_PK_LEN`
 /// (asserted by [`tests::pq_constants_match_txscript`]).
-pub const RPC_MLDSA65_PK_LEN: usize = 2592;
+pub const RPC_MLDSA87_PK_LEN: usize = 2592;
 
 /// ML-DSA-65 signature length in bytes. Same alignment-with-txscript
-/// contract as [`RPC_MLDSA65_PK_LEN`].
-pub const RPC_MLDSA65_SIG_LEN: usize = 4627;
+/// contract as [`RPC_MLDSA87_PK_LEN`].
+pub const RPC_MLDSA87_SIG_LEN: usize = 4627;
 
 /// kaspa-pq PoC UTXO-commitment width in bytes (32). The production
 pub const RPC_UTXO_COMMITMENT_LEN: usize = 32;
@@ -51,12 +51,12 @@ pub const RPC_UTXO_COMMITMENT_LEN: usize = 32;
 /// 1952-byte ML-DSA-65 public key, RPC-serialized as a 3904-character
 /// lowercase hex string.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
-pub struct RpcMlDsa65PublicKey(pub [u8; RPC_MLDSA65_PK_LEN]);
+pub struct RpcMlDsa87PublicKey(pub [u8; RPC_MLDSA87_PK_LEN]);
 
 /// 3309-byte ML-DSA-65 signature, RPC-serialized as a 6618-character
 /// lowercase hex string.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
-pub struct RpcMlDsa65Signature(pub [u8; RPC_MLDSA65_SIG_LEN]);
+pub struct RpcMlDsa87Signature(pub [u8; RPC_MLDSA87_SIG_LEN]);
 
 /// 32-byte kaspa-pq UTXO commitment (PoC width). Production
 /// `Default` is supplied by the [`impl_rpc_pq_bytes`] macro below
@@ -122,7 +122,7 @@ macro_rules! impl_rpc_pq_bytes {
 
         impl Default for $name {
             fn default() -> Self {
-                // `RpcMlDsa65PublicKey` / `RpcMlDsa65Signature` are too large
+                // `RpcMlDsa87PublicKey` / `RpcMlDsa87Signature` are too large
                 // for derive(Default) on stable; we provide an all-zeros
                 // default, which is structurally valid but cryptographically
                 // never produced by libcrux. Tests that depend on a
@@ -180,8 +180,8 @@ macro_rules! impl_rpc_pq_bytes {
     };
 }
 
-impl_rpc_pq_bytes!(RpcMlDsa65PublicKey, RPC_MLDSA65_PK_LEN, "RpcMlDsa65PublicKey");
-impl_rpc_pq_bytes!(RpcMlDsa65Signature, RPC_MLDSA65_SIG_LEN, "RpcMlDsa65Signature");
+impl_rpc_pq_bytes!(RpcMlDsa87PublicKey, RPC_MLDSA87_PK_LEN, "RpcMlDsa87PublicKey");
+impl_rpc_pq_bytes!(RpcMlDsa87Signature, RPC_MLDSA87_SIG_LEN, "RpcMlDsa87Signature");
 impl_rpc_pq_bytes!(RpcUtxoCommitment, RPC_UTXO_COMMITMENT_LEN, "RpcUtxoCommitment");
 
 // Bidirectional conversion between the consensus-core type and its
@@ -195,8 +195,8 @@ mod tests {
 
     #[test]
     fn pq_constants_match_txscript() {
-        assert_eq!(RPC_MLDSA65_PK_LEN, kaspa_txscript::MLDSA65_PK_LEN);
-        assert_eq!(RPC_MLDSA65_SIG_LEN, kaspa_txscript::MLDSA65_SIG_LEN);
+        assert_eq!(RPC_MLDSA87_PK_LEN, kaspa_txscript::MLDSA87_PK_LEN);
+        assert_eq!(RPC_MLDSA87_SIG_LEN, kaspa_txscript::MLDSA87_SIG_LEN);
     }
 
 
@@ -205,30 +205,30 @@ mod tests {
 
     #[test]
     fn pubkey_hex_roundtrip() {
-        let mut bytes = [0u8; RPC_MLDSA65_PK_LEN];
+        let mut bytes = [0u8; RPC_MLDSA87_PK_LEN];
         for (i, b) in bytes.iter_mut().enumerate() {
             *b = (i & 0xff) as u8;
         }
-        let pk = RpcMlDsa65PublicKey::new(bytes);
+        let pk = RpcMlDsa87PublicKey::new(bytes);
         let h = pk.to_hex();
-        assert_eq!(h.len(), RPC_MLDSA65_PK_LEN * 2);
-        let parsed = RpcMlDsa65PublicKey::from_hex(&h).unwrap();
+        assert_eq!(h.len(), RPC_MLDSA87_PK_LEN * 2);
+        let parsed = RpcMlDsa87PublicKey::from_hex(&h).unwrap();
         assert_eq!(parsed, pk);
         // FromStr matches from_hex.
-        let parsed_str: RpcMlDsa65PublicKey = h.parse().unwrap();
+        let parsed_str: RpcMlDsa87PublicKey = h.parse().unwrap();
         assert_eq!(parsed_str, pk);
     }
 
     #[test]
     fn signature_hex_roundtrip() {
-        let mut bytes = [0u8; RPC_MLDSA65_SIG_LEN];
+        let mut bytes = [0u8; RPC_MLDSA87_SIG_LEN];
         for (i, b) in bytes.iter_mut().enumerate() {
             *b = ((i * 3) & 0xff) as u8;
         }
-        let sig = RpcMlDsa65Signature::new(bytes);
+        let sig = RpcMlDsa87Signature::new(bytes);
         let h = sig.to_hex();
-        assert_eq!(h.len(), RPC_MLDSA65_SIG_LEN * 2);
-        let parsed = RpcMlDsa65Signature::from_hex(&h).unwrap();
+        assert_eq!(h.len(), RPC_MLDSA87_SIG_LEN * 2);
+        let parsed = RpcMlDsa87Signature::from_hex(&h).unwrap();
         assert_eq!(parsed, sig);
     }
 
@@ -245,8 +245,8 @@ mod tests {
     #[test]
     fn hex_wrong_length_rejected() {
         assert_eq!(
-            RpcMlDsa65PublicKey::from_hex("00").unwrap_err(),
-            RpcPqParseError::WrongHexLength { expected: RPC_MLDSA65_PK_LEN * 2, got: 2 },
+            RpcMlDsa87PublicKey::from_hex("00").unwrap_err(),
+            RpcPqParseError::WrongHexLength { expected: RPC_MLDSA87_PK_LEN * 2, got: 2 },
         );
         assert_eq!(
             RpcUtxoCommitment::from_hex(&"00".repeat(31)).unwrap_err(),
@@ -265,19 +265,19 @@ mod tests {
 
     #[test]
     fn borsh_roundtrip_pubkey() {
-        let pk = RpcMlDsa65PublicKey::new([0x11; RPC_MLDSA65_PK_LEN]);
+        let pk = RpcMlDsa87PublicKey::new([0x11; RPC_MLDSA87_PK_LEN]);
         let bytes = borsh::to_vec(&pk).unwrap();
-        assert_eq!(bytes.len(), RPC_MLDSA65_PK_LEN);
-        let parsed: RpcMlDsa65PublicKey = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(bytes.len(), RPC_MLDSA87_PK_LEN);
+        let parsed: RpcMlDsa87PublicKey = borsh::from_slice(&bytes).unwrap();
         assert_eq!(parsed, pk);
     }
 
     #[test]
     fn borsh_roundtrip_signature() {
-        let sig = RpcMlDsa65Signature::new([0x22; RPC_MLDSA65_SIG_LEN]);
+        let sig = RpcMlDsa87Signature::new([0x22; RPC_MLDSA87_SIG_LEN]);
         let bytes = borsh::to_vec(&sig).unwrap();
-        assert_eq!(bytes.len(), RPC_MLDSA65_SIG_LEN);
-        let parsed: RpcMlDsa65Signature = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(bytes.len(), RPC_MLDSA87_SIG_LEN);
+        let parsed: RpcMlDsa87Signature = borsh::from_slice(&bytes).unwrap();
         assert_eq!(parsed, sig);
     }
 
@@ -292,20 +292,20 @@ mod tests {
 
     #[test]
     fn serde_json_roundtrip_pubkey() {
-        let pk = RpcMlDsa65PublicKey::new([0x44; RPC_MLDSA65_PK_LEN]);
+        let pk = RpcMlDsa87PublicKey::new([0x44; RPC_MLDSA87_PK_LEN]);
         let s = serde_json::to_string(&pk).unwrap();
         // Wire form is a hex string (note the surrounding quotes).
         assert!(s.starts_with('"') && s.ends_with('"'));
-        assert_eq!(s.len(), RPC_MLDSA65_PK_LEN * 2 + 2);
-        let parsed: RpcMlDsa65PublicKey = serde_json::from_str(&s).unwrap();
+        assert_eq!(s.len(), RPC_MLDSA87_PK_LEN * 2 + 2);
+        let parsed: RpcMlDsa87PublicKey = serde_json::from_str(&s).unwrap();
         assert_eq!(parsed, pk);
     }
 
     #[test]
     fn serde_json_roundtrip_signature() {
-        let sig = RpcMlDsa65Signature::new([0x55; RPC_MLDSA65_SIG_LEN]);
+        let sig = RpcMlDsa87Signature::new([0x55; RPC_MLDSA87_SIG_LEN]);
         let s = serde_json::to_string(&sig).unwrap();
-        let parsed: RpcMlDsa65Signature = serde_json::from_str(&s).unwrap();
+        let parsed: RpcMlDsa87Signature = serde_json::from_str(&s).unwrap();
         assert_eq!(parsed, sig);
     }
 
@@ -346,26 +346,26 @@ mod tests {
     fn wrpc_store_load_roundtrip() {
         use workflow_serializer::prelude::{load, store};
 
-        let pk = RpcMlDsa65PublicKey::new([0x88; RPC_MLDSA65_PK_LEN]);
-        let sig = RpcMlDsa65Signature::new([0x99; RPC_MLDSA65_SIG_LEN]);
+        let pk = RpcMlDsa87PublicKey::new([0x88; RPC_MLDSA87_PK_LEN]);
+        let sig = RpcMlDsa87Signature::new([0x99; RPC_MLDSA87_SIG_LEN]);
         let commitment = RpcUtxoCommitment::new([0xaa; RPC_UTXO_COMMITMENT_LEN]);
 
         // Emulate the per-message wRPC encoder layout: write a version
         // tag, then each field through store!.
         let mut buf = Vec::new();
         store!(u16, &1, &mut buf).unwrap();
-        store!(RpcMlDsa65PublicKey, &pk, &mut buf).unwrap();
-        store!(RpcMlDsa65Signature, &sig, &mut buf).unwrap();
+        store!(RpcMlDsa87PublicKey, &pk, &mut buf).unwrap();
+        store!(RpcMlDsa87Signature, &sig, &mut buf).unwrap();
         store!(RpcUtxoCommitment, &commitment, &mut buf).unwrap();
 
         // Expected length: 2 (u16 version tag) + 1952 (pk) + 3309 (sig)
         //                + 32 (commitment) = 5295.
-        assert_eq!(buf.len(), 2 + RPC_MLDSA65_PK_LEN + RPC_MLDSA65_SIG_LEN + RPC_UTXO_COMMITMENT_LEN);
+        assert_eq!(buf.len(), 2 + RPC_MLDSA87_PK_LEN + RPC_MLDSA87_SIG_LEN + RPC_UTXO_COMMITMENT_LEN);
 
         let mut r = std::io::Cursor::new(&buf[..]);
         let _ver = load!(u16, &mut r).unwrap();
-        let pk_in = load!(RpcMlDsa65PublicKey, &mut r).unwrap();
-        let sig_in = load!(RpcMlDsa65Signature, &mut r).unwrap();
+        let pk_in = load!(RpcMlDsa87PublicKey, &mut r).unwrap();
+        let sig_in = load!(RpcMlDsa87Signature, &mut r).unwrap();
         let c_in = load!(RpcUtxoCommitment, &mut r).unwrap();
         assert_eq!(pk_in, pk);
         assert_eq!(sig_in, sig);

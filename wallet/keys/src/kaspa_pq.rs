@@ -8,11 +8,11 @@
 //! ```text
 //!   keygen_seed =
 //!       BLAKE2b-256(
-//!           key   = b"kaspa-pq-wallet-v1/mldsa65/keygen",
+//!           key   = b"kaspa-pq-wallet-v1/mldsa87/keygen",
 //!           input = network_id || account_le || change_le || index_le || master_seed,
 //!       )
 //!   (verification_key, signing_key) = ML-DSA-87.KeyGen(keygen_seed)
-//!   address = (prefix, Version::PubKeyHashMlDsa65, BLAKE2b-512(verification_key))  // ADR-0019 §8
+//!   address = (prefix, Version::PubKeyHashMlDsa87, BLAKE2b-512(verification_key))  // ADR-0019 §8
 //! ```
 //!
 //! See docs/kaspa-pq-spec.md §8 for the normative spec. Phase 5 keeps the
@@ -23,12 +23,12 @@
 
 use blake2b_simd::Params;
 use kaspa_addresses::{Address, Prefix, Version};
-use kaspa_txscript::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MLDSA65_TX_CONTEXT};
+use kaspa_txscript::{MLDSA87_PK_LEN, MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT};
 use libcrux_ml_dsa::ml_dsa_87;
 
 /// Domain separator for the kaspa-pq wallet keygen XOF. Used as the BLAKE2b
 /// key (max 64 bytes; this string is 33 bytes).
-pub const KASPA_PQ_WALLET_KEYGEN_DOMAIN: &[u8] = b"kaspa-pq-wallet-v1/mldsa65/keygen";
+pub const KASPA_PQ_WALLET_KEYGEN_DOMAIN: &[u8] = b"kaspa-pq-wallet-v1/mldsa87/keygen";
 
 /// kaspa-pq (ADR-0019 §13): true when legacy secp256k1 addresses must not be
 /// produced for `network` — i.e. its consensus params enforce PQ-only
@@ -46,11 +46,11 @@ pub fn legacy_address_disabled(network: kaspa_consensus_core::network::NetworkTy
 
 /// kaspa-pq ML-DSA-65 wallet keypair, deterministically derived from a
 /// 32-byte `keygen_seed` (see [`derive_keygen_seed`]).
-pub struct KaspaPqMlDsa65KeyPair {
+pub struct KaspaPqMlDsa87KeyPair {
     inner: ml_dsa_87::MLDSA87KeyPair,
 }
 
-impl KaspaPqMlDsa65KeyPair {
+impl KaspaPqMlDsa87KeyPair {
     /// Build a fresh keypair from a 32-byte deterministic seed. The seed
     /// should come from [`derive_keygen_seed`] in production paths so the
     /// address can be recomputed from the BIP39 mnemonic + account/index
@@ -60,8 +60,8 @@ impl KaspaPqMlDsa65KeyPair {
     }
 
     /// 1952-byte ML-DSA-65 public key bytes. This is exactly
-    /// `MLDSA65_PK_LEN` long.
-    pub fn public_key_bytes(&self) -> &[u8; MLDSA65_PK_LEN] {
+    /// `MLDSA87_PK_LEN` long.
+    pub fn public_key_bytes(&self) -> &[u8; MLDSA87_PK_LEN] {
         // The libcrux constants match ours by construction (Phase 1 spec).
         self.inner.verification_key.as_ref()
     }
@@ -76,11 +76,11 @@ impl KaspaPqMlDsa65KeyPair {
 
     /// kaspa-pq P2PKH `Address` for the given network prefix.
     pub fn address(&self, prefix: Prefix) -> Address {
-        Address::new(prefix, Version::PubKeyHashMlDsa65, &self.public_key_hash())
+        Address::new(prefix, Version::PubKeyHashMlDsa87, &self.public_key_hash())
     }
 
     /// Sign an arbitrary message with the kaspa-pq transaction context
-    /// ([`MLDSA65_TX_CONTEXT`]). Returns the 3309-byte signature bytes.
+    /// ([`MLDSA87_TX_CONTEXT`]). Returns the 3309-byte signature bytes.
     ///
     /// The caller is responsible for choosing `message` correctly — for a
     /// transaction input that means the sighash digest from
@@ -89,18 +89,18 @@ impl KaspaPqMlDsa65KeyPair {
     /// reusing it across signatures is **not** required for ML-DSA security
     /// (the scheme is hedged-randomized), but reusing the *same* signing
     /// key with predictable randomness is bad hygiene.
-    pub fn sign(&self, message: &[u8], signing_randomness: [u8; 32]) -> [u8; MLDSA65_SIG_LEN] {
-        self.sign_with_context(message, MLDSA65_TX_CONTEXT, signing_randomness)
+    pub fn sign(&self, message: &[u8], signing_randomness: [u8; 32]) -> [u8; MLDSA87_SIG_LEN] {
+        self.sign_with_context(message, MLDSA87_TX_CONTEXT, signing_randomness)
     }
 
     /// kaspa-pq Phase 11 (ADR-0010): sign `message` under an explicit ML-DSA-65
     /// `context` (domain separator). [`sign`](Self::sign) uses the transaction
-    /// context (`MLDSA65_TX_CONTEXT`); the in-process validator service signs
-    /// stake attestations with `dns_finality::ATTESTATION_MLDSA65_CONTEXT` so the
+    /// context (`MLDSA87_TX_CONTEXT`); the in-process validator service signs
+    /// stake attestations with `dns_finality::ATTESTATION_MLDSA87_CONTEXT` so the
     /// produced signature verifies via
-    /// `kaspa_txscript::verify_mldsa65_with_context` and can never be replayed
+    /// `kaspa_txscript::verify_mldsa87_with_context` and can never be replayed
     /// as a transaction signature (distinct context ⇒ distinct domain).
-    pub fn sign_with_context(&self, message: &[u8], context: &[u8], signing_randomness: [u8; 32]) -> [u8; MLDSA65_SIG_LEN] {
+    pub fn sign_with_context(&self, message: &[u8], context: &[u8], signing_randomness: [u8; 32]) -> [u8; MLDSA87_SIG_LEN] {
         let sig = ml_dsa_87::sign(&self.inner.signing_key, message, context, signing_randomness)
             .expect("ML-DSA-65 sign is infallible on a well-formed message");
         // `MLDSA87Signature::as_ref()` returns `&[u8; SIGNATURE_SIZE]`.
@@ -139,8 +139,8 @@ pub fn derive_keygen_seed(network_id: &str, account: u32, change: u32, index: u3
 }
 
 /// One-shot helper: derive a keygen seed and materialise the keypair.
-pub fn derive_keypair(network_id: &str, account: u32, change: u32, index: u32, master_seed: &[u8]) -> KaspaPqMlDsa65KeyPair {
-    KaspaPqMlDsa65KeyPair::from_seed(derive_keygen_seed(network_id, account, change, index, master_seed))
+pub fn derive_keypair(network_id: &str, account: u32, change: u32, index: u32, master_seed: &[u8]) -> KaspaPqMlDsa87KeyPair {
+    KaspaPqMlDsa87KeyPair::from_seed(derive_keygen_seed(network_id, account, change, index, master_seed))
 }
 
 /// kaspa-pq PQ-only (ADR-0019 §13): native (non-WASM) ML-DSA-87 transaction
@@ -148,8 +148,8 @@ pub fn derive_keypair(network_id: &str, account: u32, change: u32, index: u32, m
 /// to `keypair`'s address, producing the canonical unlock script
 /// `<signature || sighash_type> <public_key>` for each. The signed message is
 /// the 64-byte [`calc_mldsa87_signature_hash`] under `SIG_HASH_ALL` — the exact
-/// digest the `OP_CHECKSIG_MLDSA65` consensus opcode recomputes — so this is
-/// byte-for-byte equivalent to the WASM `signTransactionMlDsa65` helper, just
+/// digest the `OP_CHECKSIG_MLDSA87` consensus opcode recomputes — so this is
+/// byte-for-byte equivalent to the WASM `signTransactionMlDsa87` helper, just
 /// reachable from native Rust (wallet generator, CLI, tests).
 ///
 /// `per_input_randomness(i)` supplies 32 bytes of signing randomness for input
@@ -160,7 +160,7 @@ pub fn derive_keypair(network_id: &str, account: u32, change: u32, index: u32, m
 /// Inputs already carrying a non-empty signature script, or whose previous
 /// output is not this keypair's P2PKH, are left untouched.
 pub fn sign_transaction_inputs_mldsa87(
-    keypair: &KaspaPqMlDsa65KeyPair,
+    keypair: &KaspaPqMlDsa87KeyPair,
     mutable_tx: &mut kaspa_consensus_core::tx::SignableTransaction,
     per_input_randomness: impl Fn(usize) -> [u8; 32],
 ) -> usize {
@@ -193,9 +193,9 @@ pub fn sign_transaction_inputs_mldsa87(
             calc_mldsa87_signature_hash(&verifiable, i, SIG_HASH_ALL, &reused)
         };
         let sig = keypair.sign(sig_hash.as_bytes().as_slice(), per_input_randomness(i));
-        // OP_CHECKSIG_MLDSA65 pops [sig, key] and strips the trailing sighash-type
+        // OP_CHECKSIG_MLDSA87 pops [sig, key] and strips the trailing sighash-type
         // byte from the signature, mirroring schnorr OP_CHECKSIG.
-        let mut sig_item = Vec::with_capacity(MLDSA65_SIG_LEN + 1);
+        let mut sig_item = Vec::with_capacity(MLDSA87_SIG_LEN + 1);
         sig_item.extend_from_slice(&sig);
         sig_item.push(SIG_HASH_ALL.to_u8());
         let script = kaspa_txscript::script_builder::ScriptBuilder::new()
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn keypair_round_trip_and_address_shape() {
         let kp = derive_keypair("mainnet", 0, 0, 0, &TEST_MASTER_SEED);
-        assert_eq!(kp.public_key_bytes().len(), MLDSA65_PK_LEN);
+        assert_eq!(kp.public_key_bytes().len(), MLDSA87_PK_LEN);
 
         let mainnet = kp.address(Prefix::Mainnet);
         let s: String = mainnet.into();
@@ -280,20 +280,20 @@ mod tests {
 
     #[test]
     fn sign_and_locally_verify() {
-        // Sanity check that a signature produced by `KaspaPqMlDsa65KeyPair::sign`
+        // Sanity check that a signature produced by `KaspaPqMlDsa87KeyPair::sign`
         // verifies under `libcrux_ml_dsa::ml_dsa_87::verify` with the
         // kaspa-pq context. (The script engine's hash-keyed
-        // `check_mldsa65_signature` is tested end-to-end in
-        // `kaspa-txscript`'s `test_mldsa65_p2pkh_spend_roundtrip`.)
+        // `check_mldsa87_signature` is tested end-to-end in
+        // `kaspa-txscript`'s `test_mldsa87_p2pkh_spend_roundtrip`.)
         let kp = derive_keypair("simnet", 0, 0, 7, &TEST_MASTER_SEED);
         let msg = b"kaspa-pq Phase 5 wallet derivation smoke test";
         let randomness = [0x33u8; 32];
         let sig_bytes = kp.sign(msg, randomness);
-        assert_eq!(sig_bytes.len(), MLDSA65_SIG_LEN);
+        assert_eq!(sig_bytes.len(), MLDSA87_SIG_LEN);
 
         let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(*kp.public_key_bytes());
         let sig = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_bytes);
-        libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg, MLDSA65_TX_CONTEXT, &sig)
+        libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg, MLDSA87_TX_CONTEXT, &sig)
             .expect("kaspa-pq wallet signature must verify under the kaspa-pq tx context");
     }
 
@@ -305,9 +305,9 @@ mod tests {
         // be replayed as a transaction signature.
         let kp = derive_keypair("simnet", 0, 0, 9, &TEST_MASTER_SEED);
         let msg = b"phase 11 attestation digest";
-        let att_ctx = b"kaspa-pq-v1/att/mldsa65"; // == dns_finality::ATTESTATION_MLDSA65_CONTEXT
+        let att_ctx = b"kaspa-pq-v1/att/mldsa87"; // == dns_finality::ATTESTATION_MLDSA87_CONTEXT
         let sig_bytes = kp.sign_with_context(msg, att_ctx, [0x44u8; 32]);
-        assert_eq!(sig_bytes.len(), MLDSA65_SIG_LEN);
+        assert_eq!(sig_bytes.len(), MLDSA87_SIG_LEN);
 
         let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(*kp.public_key_bytes());
         let sig = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_bytes);
@@ -315,7 +315,7 @@ mod tests {
         libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg, att_ctx, &sig).expect("must verify under the signing context");
         // ...but NOT under the transaction context (domain separation).
         assert!(
-            libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg, MLDSA65_TX_CONTEXT, &sig).is_err(),
+            libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg, MLDSA87_TX_CONTEXT, &sig).is_err(),
             "an attestation-context signature must not verify as a transaction signature"
         );
     }

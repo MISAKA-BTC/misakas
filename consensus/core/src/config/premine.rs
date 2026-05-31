@@ -6,8 +6,8 @@
 //! emission table in `consensus/src/processes/coinbase.rs`).
 //!
 //! The lock is the standard ML-DSA P2PKH `scriptPubKey`
-//! `OP_DUP OP_BLAKE2B_512 OP_DATA_64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA65`
-//! (built by `crate::dns_finality::p2pkh_mldsa65_spk`), where the 64-byte payload
+//! `OP_DUP OP_BLAKE2B_512 OP_DATA_64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87`
+//! (built by `crate::dns_finality::p2pkh_mldsa87_spk`), where the 64-byte payload
 //! is the BLAKE2b-512 of the single premine public key. The devnet signing key is
 //! in the repo-root `misaka-devnet-premine-key.json` and the devnet address is
 //! `misakadev:qgtad66msrm6qvkvum8m3450zlkegqhrxfwaygwa5hfll4ys2xtj8xuj8fr0elvvk80k79nxplrm05ldr40tqkjdpgq66js2aa6v4uv8g73c5q4p`.
@@ -49,7 +49,7 @@ const MISAKA_PREMINE_TXID: [u8; 64] = [
 /// ML-DSA-87 P2PKH UTXO, spendable from block 0 (`is_coinbase: false`, no
 /// maturity delay).
 pub fn misaka_premine_utxos() -> UtxoCollection {
-    let script_public_key = crate::dns_finality::p2pkh_mldsa65_spk(&MISAKA_PREMINE_OWNER_PAYLOAD);
+    let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&MISAKA_PREMINE_OWNER_PAYLOAD);
     let outpoint = TransactionOutpoint { transaction_id: Hash64::from_bytes(MISAKA_PREMINE_TXID), index: 0 };
     let entry = UtxoEntry { amount: MISAKA_PREMINE_SOMPI, script_public_key, block_daa_score: 0, is_coinbase: false };
     UtxoCollection::from_iter([(outpoint, entry)])
@@ -102,14 +102,14 @@ mod tests {
         let payload: [u8; 64] = blake2b_512(pubkey).as_bytes();
 
         // Standard ML-DSA P2PKH scriptPubKey must be exactly 69 bytes.
-        let spk = crate::dns_finality::p2pkh_mldsa65_spk(&payload);
+        let spk = crate::dns_finality::p2pkh_mldsa87_spk(&payload);
         assert_eq!(spk.script().len(), 69, "ML-DSA P2PKH scriptPubKey must be 69 bytes");
 
         let payload_rust = payload.iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
         let payload_hex = payload.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let seed_hex = seed.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let pubkey_hex = pubkey.iter().map(|b| format!("{b:02x}")).collect::<String>();
-        let devnet_address = Address::new(Prefix::Devnet, Version::PubKeyHashMlDsa65, &payload).to_string();
+        let devnet_address = Address::new(Prefix::Devnet, Version::PubKeyHashMlDsa87, &payload).to_string();
 
         println!("MISAKA_PREMINE_OWNER_PAYLOAD: [{payload_rust}]");
         println!("DEVNET_ADDRESS: {devnet_address}");
