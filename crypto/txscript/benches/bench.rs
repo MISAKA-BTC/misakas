@@ -17,6 +17,9 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use kaspa_txscript::MLDSA65_TX_CONTEXT;
 use libcrux_ml_dsa::ml_dsa_87;
+// kaspa-pq PQ-only: the legacy secp256k1 Schnorr baseline benchmark compiles only
+// under `legacy-secp256k1` (ADR-0019 §14); the ML-DSA-87 benches are the default.
+#[cfg(feature = "legacy-secp256k1")]
 use secp256k1::{Message, Secp256k1};
 
 /// Pre-build a deterministic ML-DSA-65 keypair + signature over a fixed
@@ -62,22 +65,29 @@ fn bench_mldsa65_verify(c: &mut Criterion) {
 /// `secp256k1::schnorr::Signature::verify` after parsing the 64-byte
 /// signature and X-only public key.
 fn bench_schnorr_verify(c: &mut Criterion) {
-    let secp = Secp256k1::new();
-    let mut rng = secp256k1::rand::thread_rng();
-    let (sk, _pk) = secp.generate_keypair(&mut rng);
-    let kp = secp256k1::Keypair::from_secret_key(&secp, &sk);
-    let xonly = secp256k1::XOnlyPublicKey::from_keypair(&kp).0;
+    // kaspa-pq PQ-only: secp256k1 is gated out of release builds, so the legacy
+    // Schnorr baseline registers no benchmark unless `legacy-secp256k1` is on.
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    let _ = c;
+    #[cfg(feature = "legacy-secp256k1")]
+    {
+        let secp = Secp256k1::new();
+        let mut rng = secp256k1::rand::thread_rng();
+        let (sk, _pk) = secp.generate_keypair(&mut rng);
+        let kp = secp256k1::Keypair::from_secret_key(&secp, &sk);
+        let xonly = secp256k1::XOnlyPublicKey::from_keypair(&kp).0;
 
-    let msg_bytes = [0x5au8; 32];
-    let msg = Message::from_digest_slice(&msg_bytes).unwrap();
-    let sig = secp.sign_schnorr_no_aux_rand(&msg, &kp);
+        let msg_bytes = [0x5au8; 32];
+        let msg = Message::from_digest_slice(&msg_bytes).unwrap();
+        let sig = secp.sign_schnorr_no_aux_rand(&msg, &kp);
 
-    c.bench_function("kaspa_pq::schnorr_verify_baseline", |b| {
-        b.iter(|| {
-            let r = sig.verify(black_box(&msg), black_box(&xonly));
-            black_box(r.is_ok());
+        c.bench_function("kaspa_pq::schnorr_verify_baseline", |b| {
+            b.iter(|| {
+                let r = sig.verify(black_box(&msg), black_box(&xonly));
+                black_box(r.is_ok());
+            });
         });
-    });
+    }
 }
 
 criterion_group! {

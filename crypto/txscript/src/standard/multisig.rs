@@ -107,27 +107,34 @@ pub fn multisig_redeem_script_mldsa65(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{TxScriptEngine, caches::Cache, opcodes::codes::OpData65, pay_to_script_hash_script};
+    use crate::{TxScriptEngine, caches::Cache, pay_to_script_hash_script};
     use core::str::FromStr;
     use kaspa_consensus_core::{
         hashing::{
-            sighash::{SigHashReusedValuesUnsync, calc_ecdsa_signature_hash, calc_schnorr_signature_hash},
+            sighash::{SigHashReusedValuesUnsync, calc_schnorr_signature_hash},
             sighash_type::SIG_HASH_ALL,
         },
         subnets::SubnetworkId,
         tx::*,
     };
+    // kaspa-pq PQ-only: the legacy secp256k1 multisig sign/verify tests below
+    // compile only under `legacy-secp256k1` (ADR-0019 §14).
+    #[cfg(feature = "legacy-secp256k1")]
     use kaspa_utils::hex::FromHex;
+    #[cfg(feature = "legacy-secp256k1")]
     use rand::thread_rng;
+    #[cfg(feature = "legacy-secp256k1")]
     use secp256k1::Keypair;
     use std::{iter, iter::empty};
 
+    #[cfg(feature = "legacy-secp256k1")]
     struct Input {
         kp: Keypair,
         required: bool,
         sign: bool,
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     fn kp() -> [Keypair; 3] {
         let kp1 = Keypair::from_seckey_slice(
             secp256k1::SECP256K1,
@@ -157,7 +164,10 @@ mod tests {
         assert_eq!(result, Err(Error::EmptyKeys));
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     fn check_multisig_scenario(inputs: Vec<Input>, required: usize, is_ok: bool, is_ecdsa: bool) {
+        use crate::opcodes::codes::OpData65;
+        use kaspa_consensus_core::hashing::sighash::calc_ecdsa_signature_hash;
         // Taken from: d839d29b549469d0f9a23e51febe68d4084967a6a477868b511a5a8d88c5ae06
         // PR-9.5c: TransactionId is now Hash64 (128 hex chars); the original 64-char
         // fixture is zero-extended. The value is arbitrary — this is a sign/verify
@@ -231,6 +241,7 @@ mod tests {
         let mut engine = TxScriptEngine::from_transaction_input(&tx, input, 0, entry, &reused_values, &cache);
         assert_eq!(engine.execute().is_ok(), is_ok);
     }
+    #[cfg(feature = "legacy-secp256k1")]
     #[test]
     fn test_multisig_1_2() {
         let [kp1, kp2, ..] = kp();
@@ -264,6 +275,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[test]
     fn test_multisig_2_2() {
         let [kp1, kp2, ..] = kp();
@@ -284,6 +296,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[test]
     fn test_multisig_wrong_signer() {
         let [kp1, kp2, kp3] = kp();
@@ -312,6 +325,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[test]
     fn test_multisig_not_enough() {
         let [kp1, kp2, kp3] = kp();

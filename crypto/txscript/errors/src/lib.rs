@@ -29,6 +29,10 @@ pub enum TxScriptError {
     VerifyError,
     #[error("encountered invalid state while running script: {0}")]
     InvalidState(String),
+    // kaspa-pq PQ-only (ADR-0019 §14): the legacy secp256k1 signature error is
+    // compiled only under `legacy-secp256k1`. ML-DSA-87 verification reports
+    // failures via `SigLength`/`PubKeyFormat`/a `false` verify result instead.
+    #[cfg(feature = "legacy-secp256k1")]
     #[error("signature invalid: {0}")]
     InvalidSignature(secp256k1::Error),
     #[error("invalid signature in sig cache")]

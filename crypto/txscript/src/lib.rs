@@ -20,9 +20,11 @@ use crate::caches::Cache;
 use crate::data_stack::{DataStack, Stack};
 use crate::opcodes::{OpCodeImplementation, deserialize_next_opcode};
 use itertools::Itertools;
-use kaspa_consensus_core::hashing::sighash::{
-    SigHashReusedValues, SigHashReusedValuesUnsync, calc_ecdsa_signature_hash, calc_schnorr_signature_hash,
-};
+use kaspa_consensus_core::hashing::sighash::{SigHashReusedValues, SigHashReusedValuesUnsync};
+// kaspa-pq PQ-only: the legacy schnorr/ecdsa sighash helpers are used only by the
+// `legacy-secp256k1`-gated verify paths (ADR-0019 §14).
+#[cfg(feature = "legacy-secp256k1")]
+use kaspa_consensus_core::hashing::sighash::{calc_ecdsa_signature_hash, calc_schnorr_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SigHashType;
 use kaspa_consensus_core::tx::{PopulatedTransaction, ScriptPublicKey, TransactionInput, UtxoEntry, VerifiableTransaction};
 use kaspa_txscript_errors::TxScriptError;
@@ -171,37 +173,47 @@ pub const NO_COST_OPCODE: u8 = 0x60;
 
 pub type DynOpcodeImplementation<Tx, Reused> = Box<dyn OpCodeImplementation<Tx, Reused>>;
 
+/// Signature scheme tag for the verification cache key ([`SigCacheKey`]).
+///
+/// kaspa-pq is PQ-only: [`SigAlg::MlDsa87`] is the sole consensus-active scheme.
+/// The legacy secp256k1 schemes exist only under the `legacy-secp256k1` feature
+/// and are compiled out of release builds (ADR-0019 §14).
 #[derive(Clone, Hash, PartialEq, Eq)]
-enum Signature {
-    Secp256k1(secp256k1::schnorr::Signature),
-    Ecdsa(secp256k1::ecdsa::Signature),
-    /// kaspa-pq ML-DSA-65 signature, identified in the cache by the
-    /// BLAKE2b-256 of the 3309-byte signature bytes. The raw signature is
-    /// **never** stored in the cache key (DoS budget — see ADR-0002 §7).
-    MlDsa65 {
-        sig_digest: [u8; 32],
-    },
-}
-
-#[derive(Clone, Hash, PartialEq, Eq)]
-enum PublicKey {
-    Schnorr(secp256k1::XOnlyPublicKey),
-    Ecdsa(secp256k1::PublicKey),
-    /// kaspa-pq ML-DSA-65 public key, identified in the cache by the
-    /// BLAKE2b-256 of the 1952-byte public-key bytes (i.e. the same value
-    /// that appears as the address payload). The raw public key is **never**
-    /// stored in the cache key (DoS budget — see ADR-0002 §7).
-    MlDsa65 {
-        pk_digest: [u8; 32],
-    },
+enum SigAlg {
+    MlDsa87,
+    #[cfg(feature = "legacy-secp256k1")]
+    Schnorr,
+    #[cfg(feature = "legacy-secp256k1")]
+    Ecdsa,
 }
 
 // TODO: Make it pub(crate)
+/// Memoization key for signature-verification results (ADR-0019 §10).
+///
+/// Every field is a 64-byte BLAKE2b digest, tagged by [`SigAlg`], so the key
+/// carries no scheme-specific (e.g. `secp256k1`) types — that is what lets the
+/// consensus signature engine link with **no** secp256k1 in PQ-only builds. For
+/// `MlDsa87` the `message_digest` is the 64-byte ML-DSA-87 sighash used
+/// directly; the secp schemes fold their 32-byte legacy sighash to 64 bytes via
+/// BLAKE2b-512. The public key and signature are always BLAKE2b-512 digests, so
+/// the raw (multi-KB) ML-DSA bytes never enter the cache (DoS budget — ADR-0005).
+///
+/// This is a pure result cache: a miss always runs the real verification and a
+/// hit requires exact equality across all three 64-byte digests plus the scheme
+/// tag, so the key shape can never cause a consensus split (ADR-0019 §10).
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct SigCacheKey {
-    signature: Signature,
-    pub_key: PublicKey,
-    message: secp256k1::Message,
+    sig_alg: SigAlg,
+    pub_key_digest: [u8; 64],
+    signature_digest: [u8; 64],
+    message_digest: [u8; 64],
+}
+
+/// 64-byte BLAKE2b-512 digest, used to build the secp-free [`SigCacheKey`].
+fn blake2b_512_digest(bytes: &[u8]) -> [u8; 64] {
+    let mut out = [0u8; 64];
+    out.copy_from_slice(blake2b_simd::Params::new().hash_length(64).to_state().update(bytes).finalize().as_bytes());
+    out
 }
 
 enum ScriptSource<'a, T: VerifiableTransaction> {
@@ -216,6 +228,8 @@ pub struct TxScriptEngine<'a, T: VerifiableTransaction, Reused: SigHashReusedVal
     script_source: ScriptSource<'a, T>,
 
     // Outer caches for quicker calculation
+    // kaspa-pq PQ-only: read only by the gated legacy schnorr/ecdsa sighash path.
+    #[cfg_attr(not(feature = "legacy-secp256k1"), allow(dead_code))]
     reused_values: &'a Reused,
     sig_cache: &'a Cache<SigCacheKey, bool>,
 
@@ -634,6 +648,9 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
 
     // *** SIGNATURE SPECIFIC CODE **
 
+    // kaspa-pq PQ-only: called by the gated legacy schnorr verify path and by an
+    // (ungated) encoding-validation unit test; dead in non-test PQ-only builds.
+    #[cfg_attr(not(feature = "legacy-secp256k1"), allow(dead_code))]
     fn check_pub_key_encoding(pub_key: &[u8]) -> Result<(), TxScriptError> {
         match pub_key.len() {
             32 => Ok(()),
@@ -641,6 +658,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
         }
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     fn check_pub_key_encoding_ecdsa(pub_key: &[u8]) -> Result<(), TxScriptError> {
         match pub_key.len() {
             33 => Ok(()),
@@ -736,6 +754,17 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
     #[inline]
     fn check_schnorr_signature(&mut self, hash_type: SigHashType, key: &[u8], sig: &[u8]) -> Result<bool, TxScriptError> {
         self.runtime_sig_op_counter.consume_sig_op()?;
+        // kaspa-pq PQ-only (ADR-0019 §6/§14): legacy secp256k1 Schnorr verification
+        // is compiled out of release builds. On PQ networks the opcode that reaches
+        // here is already a hard consensus error at parse time (ScriptPolicy::PQ_ONLY),
+        // so this `not` arm fires only if a LEGACY-policy engine runs OP_CHECKSIG in a
+        // build without `legacy-secp256k1` — where no secp signature can be valid.
+        #[cfg(not(feature = "legacy-secp256k1"))]
+        {
+            let _ = (hash_type, key, sig);
+            Ok(false)
+        }
+        #[cfg(feature = "legacy-secp256k1")]
         match self.script_source {
             ScriptSource::TxInput { tx, idx, .. } => {
                 if sig.len() != 64 {
@@ -743,17 +772,21 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 }
                 Self::check_pub_key_encoding(key)?;
                 let pk = secp256k1::XOnlyPublicKey::from_slice(key).map_err(TxScriptError::InvalidSignature)?;
-                let sig = secp256k1::schnorr::Signature::from_slice(sig).map_err(TxScriptError::InvalidSignature)?;
+                let sig_obj = secp256k1::schnorr::Signature::from_slice(sig).map_err(TxScriptError::InvalidSignature)?;
                 let sig_hash = calc_schnorr_signature_hash(tx, idx, hash_type, self.reused_values);
                 let msg = secp256k1::Message::from_digest_slice(sig_hash.as_bytes().as_slice()).unwrap();
-                let sig_cache_key =
-                    SigCacheKey { signature: Signature::Secp256k1(sig), pub_key: PublicKey::Schnorr(pk), message: msg };
+                let sig_cache_key = SigCacheKey {
+                    sig_alg: SigAlg::Schnorr,
+                    pub_key_digest: blake2b_512_digest(key),
+                    signature_digest: blake2b_512_digest(sig),
+                    message_digest: blake2b_512_digest(sig_hash.as_bytes().as_slice()),
+                };
 
                 match self.sig_cache.get(&sig_cache_key) {
                     Some(valid) => Ok(valid),
                     None => {
                         // TODO: Find a way to parallelize this part.
-                        match sig.verify(&msg, &pk) {
+                        match sig_obj.verify(&msg, &pk) {
                             Ok(()) => {
                                 self.sig_cache.insert(sig_cache_key, true);
                                 Ok(true)
@@ -772,6 +805,15 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
 
     fn check_ecdsa_signature(&mut self, hash_type: SigHashType, key: &[u8], sig: &[u8]) -> Result<bool, TxScriptError> {
         self.runtime_sig_op_counter.consume_sig_op()?;
+        // kaspa-pq PQ-only (ADR-0019 §6/§14): legacy secp256k1 ECDSA verification is
+        // compiled out of release builds — see `check_schnorr_signature` for the
+        // reachability rationale. No secp signature can be valid in a PQ-only build.
+        #[cfg(not(feature = "legacy-secp256k1"))]
+        {
+            let _ = (hash_type, key, sig);
+            Ok(false)
+        }
+        #[cfg(feature = "legacy-secp256k1")]
         match self.script_source {
             ScriptSource::TxInput { tx, idx, .. } => {
                 if sig.len() != 64 {
@@ -779,16 +821,21 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 }
                 Self::check_pub_key_encoding_ecdsa(key)?;
                 let pk = secp256k1::PublicKey::from_slice(key).map_err(TxScriptError::InvalidSignature)?;
-                let sig = secp256k1::ecdsa::Signature::from_compact(sig).map_err(TxScriptError::InvalidSignature)?;
+                let sig_obj = secp256k1::ecdsa::Signature::from_compact(sig).map_err(TxScriptError::InvalidSignature)?;
                 let sig_hash = calc_ecdsa_signature_hash(tx, idx, hash_type, self.reused_values);
                 let msg = secp256k1::Message::from_digest_slice(sig_hash.as_bytes().as_slice()).unwrap();
-                let sig_cache_key = SigCacheKey { signature: Signature::Ecdsa(sig), pub_key: PublicKey::Ecdsa(pk), message: msg };
+                let sig_cache_key = SigCacheKey {
+                    sig_alg: SigAlg::Ecdsa,
+                    pub_key_digest: blake2b_512_digest(key),
+                    signature_digest: blake2b_512_digest(sig),
+                    message_digest: blake2b_512_digest(sig_hash.as_bytes().as_slice()),
+                };
 
                 match self.sig_cache.get(&sig_cache_key) {
                     Some(valid) => Ok(valid),
                     None => {
                         // TODO: Find a way to parallelize this part.
-                        match sig.verify(&msg, &pk) {
+                        match sig_obj.verify(&msg, &pk) {
                             Ok(()) => {
                                 self.sig_cache.insert(sig_cache_key, true);
                                 Ok(true)
@@ -811,8 +858,8 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
     /// - Length pre-checks that reject before any libcrux call (so a
     ///   malformed-tx flood cannot exercise the PQ verify routine —
     ///   see docs/adr/0002-mldsa65-p2pkh.md "Acceptance criteria").
-    /// - A hash-based [`SigCacheKey`]: we only put 32-byte digests of the
-    ///   1952-byte public key and 3309-byte signature into the cache, never
+    /// - A hash-based [`SigCacheKey`]: we only put 64-byte BLAKE2b digests of the
+    ///   2592-byte public key and 4627-byte signature into the cache, never
     ///   the raw bytes (see docs/adr/0002-mldsa65-p2pkh.md §7 + ADR-0005).
     /// - A fixed ML-DSA `ctx` parameter of [`MLDSA65_TX_CONTEXT`]
     ///   (`"kaspa-pq-v1/tx/mldsa87"`).
@@ -824,11 +871,9 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
     ///   never verify here. Every ML-DSA signer (wallet WASM, validator-core)
     ///   feeds this same 64-byte digest to `ml_dsa_87::sign`, keeping signer and
     ///   verifier byte-for-byte in lockstep.
-    /// - The [`secp256k1::Message`] below is a cache-key artifact ONLY — the
-    ///   real verify consumes the full 64-byte digest. `secp256k1::Message`
-    ///   requires exactly 32 bytes, so the 64-byte digest is folded to 32 via
-    ///   BLAKE2b-256 purely to populate the [`SigCacheKey::message`] slot,
-    ///   pending the Phase-8 native 64-byte `SigCacheKey` redesign.
+    /// - The [`SigCacheKey`] is secp-free (ADR-0019 §10/§14): the `message_digest`
+    ///   is the 64-byte ML-DSA-87 sighash used directly, and no `secp256k1` type
+    ///   appears anywhere on the verification path.
     fn check_mldsa65_signature(&mut self, hash_type: SigHashType, key: &[u8], sig: &[u8]) -> Result<bool, TxScriptError> {
         self.runtime_sig_op_counter.consume_sig_op()?;
         match self.script_source {
@@ -851,27 +896,17 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 let sig_hash =
                     kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(tx, idx, hash_type, &reused_mldsa);
                 let msg_bytes = sig_hash.as_bytes(); // 64 bytes
-                // `secp256k1::Message` requires EXACTLY 32 bytes and would panic
-                // on 64. Fold the 64-byte digest to 32 via BLAKE2b-256 purely to
-                // populate the cache-key `message` slot; the real verify below
-                // consumes the full 64-byte `msg_bytes`.
-                let mut msg_digest32 = [0u8; 32];
-                msg_digest32.copy_from_slice(
-                    blake2b_simd::Params::new().hash_length(32).to_state().update(msg_bytes.as_slice()).finalize().as_bytes(),
-                );
-                let msg = secp256k1::Message::from_digest_slice(&msg_digest32).unwrap();
 
-                // Hash-based cache key. BLAKE2b-256 chosen for consistency
-                // with the consensus opcode `OP_BLAKE2B_256` already used
-                // for the address payload hash.
-                let mut pk_digest = [0u8; 32];
-                pk_digest.copy_from_slice(blake2b_simd::Params::new().hash_length(32).to_state().update(key).finalize().as_bytes());
-                let mut sig_digest = [0u8; 32];
-                sig_digest.copy_from_slice(blake2b_simd::Params::new().hash_length(32).to_state().update(sig).finalize().as_bytes());
+                // Secp-free cache key (ADR-0019 §10): 64-byte BLAKE2b-512 digests of
+                // the public key and signature, plus the 64-byte ML-DSA-87 sighash
+                // used directly as the message digest (no secp256k1::Message fold).
+                let mut message_digest = [0u8; 64];
+                message_digest.copy_from_slice(msg_bytes.as_slice());
                 let sig_cache_key = SigCacheKey {
-                    signature: Signature::MlDsa65 { sig_digest },
-                    pub_key: PublicKey::MlDsa65 { pk_digest },
-                    message: msg,
+                    sig_alg: SigAlg::MlDsa87,
+                    pub_key_digest: blake2b_512_digest(key),
+                    signature_digest: blake2b_512_digest(sig),
+                    message_digest,
                 };
 
                 match self.sig_cache.get(&sig_cache_key) {
@@ -909,18 +944,23 @@ impl SpkEncoding for ScriptPublicKey {
 mod tests {
     use std::iter::once;
 
-    use crate::opcodes::codes::{
-        OpBlake2b, OpCheckMultiSig, OpCheckSig, OpCheckSigECDSA, OpCheckSigVerify, OpData1, OpData2, OpData32, OpDup, OpEndIf,
-        OpEqual, OpFalse, OpIf, OpPushData1, OpTrue, OpVerify,
-    };
+    use crate::opcodes::codes::{OpBlake2b, OpCheckSig, OpData1, OpData2, OpData32, OpDup, OpEqual, OpPushData1, OpTrue};
+    // kaspa-pq PQ-only: these imports are used only by the `legacy-secp256k1`-gated
+    // legacy sig-op-count test (`test_runtime_sig_op_count`) — ADR-0019 §14.
+    #[cfg(feature = "legacy-secp256k1")]
+    use crate::opcodes::codes::{OpCheckMultiSig, OpCheckSigECDSA, OpCheckSigVerify, OpEndIf, OpFalse, OpIf, OpVerify};
 
     use super::*;
+    #[cfg(feature = "legacy-secp256k1")]
     use crate::script_builder::{ScriptBuilder, ScriptBuilderResult};
     use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
+    #[cfg(feature = "legacy-secp256k1")]
     use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
     use kaspa_consensus_core::tx::{
-        MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, TransactionOutput,
+        PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, TransactionOutput,
     };
+    #[cfg(feature = "legacy-secp256k1")]
+    use kaspa_consensus_core::tx::MutableTransaction;
     use kaspa_utils::hex::FromHex;
     use smallvec::SmallVec;
 
@@ -1350,6 +1390,9 @@ mod tests {
         }
     }
 
+    // kaspa-pq PQ-only: the legacy Schnorr/ECDSA sig-op-count test and its
+    // helper types compile only under `legacy-secp256k1` (ADR-0019 §14).
+    #[cfg(feature = "legacy-secp256k1")]
     #[derive(Clone)]
     struct SignatureData {
         signature: Vec<u8>,
@@ -1357,6 +1400,7 @@ mod tests {
     }
 
     /// Builder for constructing signature scripts with different signature types and combinations.
+    #[cfg(feature = "legacy-secp256k1")]
     enum SignatureScriptBuilder {
         /// Multisignature script that requires multiple signatures to be valid.
         Multisig(Vec<SignatureData>),
@@ -1371,9 +1415,12 @@ mod tests {
         None,
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     type SigBuilder = Box<dyn Fn(&MutableTransaction<Transaction>, &SigHashReusedValuesUnsync) -> SignatureScriptBuilder>;
+    #[cfg(feature = "legacy-secp256k1")]
     type ScriptBuilderFn = Box<dyn Fn(&mut ScriptBuilder) -> ScriptBuilderResult<&mut ScriptBuilder>>;
 
+    #[cfg(feature = "legacy-secp256k1")]
     struct TestCase {
         name: &'static str,
         script_builder: ScriptBuilderFn,
@@ -1383,6 +1430,7 @@ mod tests {
         should_pass: bool,
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     impl SignatureScriptBuilder {
         fn build(self, script: &[u8]) -> ScriptBuilderResult<Vec<u8>> {
             let mut builder = ScriptBuilder::new();
@@ -1411,6 +1459,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[test]
     fn test_runtime_sig_op_count() -> ScriptBuilderResult<()> {
         // Setup keys and test environment
@@ -1592,6 +1641,11 @@ mod bitcoind_tests {
     use std::path::Path;
 
     use super::*;
+    // kaspa-pq PQ-only: the legacy script_tests.json *execution* harness
+    // (`test_bitcoind_tests`) compiles only under `legacy-secp256k1`, since it
+    // runs legacy secp256k1 CHECKSIG/CHECKMULTISIG vectors (ADR-0019 §14). The
+    // ML-DSA spend tests and the parse-only string-roundtrip test stay ungated.
+    #[cfg(feature = "legacy-secp256k1")]
     use crate::script_builder::ScriptBuilderError;
     use kaspa_consensus_core::constants::MAX_TX_IN_SEQUENCE_NUM;
     use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
@@ -1599,12 +1653,14 @@ mod bitcoind_tests {
         PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, TransactionOutput,
     };
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[derive(PartialEq, Eq, Debug, Clone)]
     enum UnifiedError {
         TxScriptError(TxScriptError),
         ScriptBuilderError(ScriptBuilderError),
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[derive(PartialEq, Eq, Debug, Clone)]
     struct TestError {
         expected_result: String,
@@ -1778,6 +1834,7 @@ mod bitcoind_tests {
         )
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     impl JsonTestRow {
         fn test_row(&self) -> Result<(), TestError> {
             // Parse test to objects
@@ -1913,6 +1970,7 @@ mod bitcoind_tests {
         }
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[test]
     fn test_bitcoind_tests() {
         // Script test files are split into two versions to test behavior after KIP-10:
