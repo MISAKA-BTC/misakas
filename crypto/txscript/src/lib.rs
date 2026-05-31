@@ -42,16 +42,15 @@ pub use standard::*;
 
 pub const MAX_SCRIPT_PUBLIC_KEY_VERSION: u16 = 0;
 pub const MAX_STACK_SIZE: usize = 244;
-// kaspa-pq PQ-only design cap (ADR-0019 / docs/kaspa-pq-design-mldsa87.md
-// §11.1): launch scope is ML-DSA-87 P2PKH only; multisig / P2SH is out of
-// scope. A P2PKH unlock is `<sig 4628B> <pubkey 2592B>` = (3 + 4628) +
-// (3 + 2592) = 7226 bytes, so 10_000 leaves comfortable headroom while
-// staying well below the 16_384 that was only needed for the now-out-of-scope
-// multisig redeem vectors. A script over this cap fails with `ScriptSize`
-// ("SCRIPT_SIZE") before execution (see the >MAX_SCRIPTS_SIZE vector in
-// `test-data/script_tests.json`).
+// kaspa-pq PQ-only design cap (md2 §3.2 / docs/kaspa-pq-design-mldsa87.md §11.1):
+// launch scope is ML-DSA-87 P2PKH only; multisig / P2SH is out of scope. A P2PKH
+// unlock is `<sig 4628B> <pubkey 2592B>` = (3 + 4628) + (3 + 2592) = 7226 bytes,
+// so a single input fits comfortably; the cap is 16_384 for headroom and constant
+// unification across consensus / mempool / script engine (md2 §3.2). A script over
+// this cap fails with `ScriptSize` ("SCRIPT_SIZE") before execution (see the
+// >MAX_SCRIPTS_SIZE vector in `test-data/script_tests.json`).
 // MAX_SCRIPTS_SIZE is enforced per-script (see `execute`), not cumulatively.
-pub const MAX_SCRIPTS_SIZE: usize = 10_000;
+pub const MAX_SCRIPTS_SIZE: usize = 16_384;
 // kaspa-pq PQ-only: widened from upstream `520` to `8192` so the two ML-DSA-87
 // P2PKH stack items — the 4628-byte signature push (sig 4627B + sighash type)
 // and the 2592-byte public-key push — each fit as a single element. P2SH

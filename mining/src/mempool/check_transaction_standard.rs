@@ -21,9 +21,9 @@ const MAX_STANDARD_P2SH_SIG_OPS: u8 = 15;
 /// 4628-byte signature + 2592-byte public key (plus push opcodes) for a max
 /// standard unlock of ~7.3 KB, so the legacy 1,650-byte limit is far too
 /// small. Launch scope is ML-DSA-87 P2PKH only (ADR-0019 §11.1); multisig /
-/// P2SH is out of scope. Kept in lockstep with the 10_000 design cap in
-/// `kaspa_txscript::MAX_SCRIPTS_SIZE`.
-const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 10_000;
+/// P2SH is out of scope. Kept in lockstep with the 16_384 design cap in
+/// `kaspa_txscript::MAX_SCRIPTS_SIZE` (md2 §3.2).
+const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 16_384;
 
 /// MAXIMUM_STANDARD_TRANSACTION_MASS is the maximum mass allowed for transactions that
 /// are considered standard and will therefore be relayed and considered for mining.
