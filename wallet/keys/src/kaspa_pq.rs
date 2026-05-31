@@ -129,6 +129,73 @@ pub fn derive_keypair(network_id: &str, account: u32, change: u32, index: u32, m
     KaspaPqMlDsa65KeyPair::from_seed(derive_keygen_seed(network_id, account, change, index, master_seed))
 }
 
+/// kaspa-pq PQ-only (ADR-0019 §13): native (non-WASM) ML-DSA-87 transaction
+/// signer. Signs every input of `mutable_tx` whose previous-output P2PKH locks
+/// to `keypair`'s address, producing the canonical unlock script
+/// `<signature || sighash_type> <public_key>` for each. The signed message is
+/// the 64-byte [`calc_mldsa87_signature_hash`] under `SIG_HASH_ALL` — the exact
+/// digest the `OP_CHECKSIG_MLDSA65` consensus opcode recomputes — so this is
+/// byte-for-byte equivalent to the WASM `signTransactionMlDsa65` helper, just
+/// reachable from native Rust (wallet generator, CLI, tests).
+///
+/// `per_input_randomness(i)` supplies 32 bytes of signing randomness for input
+/// `i` (ML-DSA is hedged-randomized; distinct values are tidy but not required
+/// for security). Returns the number of inputs signed.
+///
+/// The transaction's inputs must be fully UTXO-populated (`entries` all `Some`).
+/// Inputs already carrying a non-empty signature script, or whose previous
+/// output is not this keypair's P2PKH, are left untouched.
+pub fn sign_transaction_inputs_mldsa87(
+    keypair: &KaspaPqMlDsa65KeyPair,
+    mutable_tx: &mut kaspa_consensus_core::tx::SignableTransaction,
+    per_input_randomness: impl Fn(usize) -> [u8; 32],
+) -> usize {
+    use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
+    use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+    use kaspa_txscript::pay_to_address_script;
+
+    // The kaspa-pq P2PKH scriptPubKey this keypair owns; only inputs spending it
+    // are signed here (single-key wallet semantics).
+    let owned_spk = pay_to_address_script(&keypair.address(Prefix::Mainnet));
+    // Address prefix doesn't affect the script bytes (the prefix is bech32-only),
+    // so comparing the 69-byte script is prefix-independent.
+    let owned_script = owned_spk.script().to_vec();
+
+    let reused = Mldsa87SigHashReusedValuesUnsync::new();
+    let input_len = mutable_tx.tx.inputs.len();
+    let mut signed = 0usize;
+    for i in 0..input_len {
+        if !mutable_tx.tx.inputs[i].signature_script.is_empty() {
+            continue;
+        }
+        let Some(entry) = mutable_tx.entries.get(i).and_then(|e| e.as_ref()) else {
+            continue;
+        };
+        if entry.script_public_key.script() != owned_script.as_slice() {
+            continue;
+        }
+        let sig_hash = {
+            let verifiable = mutable_tx.as_verifiable();
+            calc_mldsa87_signature_hash(&verifiable, i, SIG_HASH_ALL, &reused)
+        };
+        let sig = keypair.sign(sig_hash.as_bytes().as_slice(), per_input_randomness(i));
+        // OP_CHECKSIG_MLDSA65 pops [sig, key] and strips the trailing sighash-type
+        // byte from the signature, mirroring schnorr OP_CHECKSIG.
+        let mut sig_item = Vec::with_capacity(MLDSA65_SIG_LEN + 1);
+        sig_item.extend_from_slice(&sig);
+        sig_item.push(SIG_HASH_ALL.to_u8());
+        let script = kaspa_txscript::script_builder::ScriptBuilder::new()
+            .add_data(&sig_item)
+            .expect("ML-DSA signature push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .add_data(keypair.public_key_bytes())
+            .expect("ML-DSA public-key push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .drain();
+        mutable_tx.tx.inputs[i].signature_script = script;
+        signed += 1;
+    }
+    signed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +308,97 @@ mod tests {
             libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg, b"not-the-kaspa-pq-context", &sig).is_err(),
             "ML-DSA must reject under a different ctx — domain separation is the whole point",
         );
+    }
+
+    #[test]
+    fn native_signer_round_trips_through_engine() {
+        // kaspa-pq PQ-only (ADR-0019 §13): a transaction signed by the native
+        // ML-DSA-87 signer must verify under the kaspa_txscript engine — i.e. the
+        // native signer is byte-for-byte compatible with the consensus verifier.
+        use kaspa_consensus_core::tx::{
+            PopulatedTransaction, ScriptPublicKey, SignableTransaction, Transaction, TransactionId, TransactionInput,
+            TransactionOutpoint, TransactionOutput, UtxoEntry,
+        };
+        use kaspa_txscript::caches::Cache;
+        use kaspa_txscript::{TxScriptEngine, pay_to_address_script};
+        use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
+
+        let kp = derive_keypair("mainnet", 0, 0, 0, &TEST_MASTER_SEED);
+        let spk = pay_to_address_script(&kp.address(Prefix::Mainnet));
+        assert_eq!(spk.script().len(), 69, "ML-DSA-87 P2PKH spk is 69 bytes");
+
+        // A 1-input / 1-output spend of a UTXO locked to this keypair.
+        let prev = TransactionOutpoint { transaction_id: TransactionId::from_bytes([0x33u8; 64]), index: 0 };
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput { previous_outpoint: prev, signature_script: vec![], sequence: 0, sig_op_count: 1 }],
+            vec![TransactionOutput { value: 500, script_public_key: spk.clone() }],
+            0,
+            Default::default(),
+            0,
+            vec![],
+        );
+        let entry = UtxoEntry { amount: 1000, script_public_key: spk.clone(), block_daa_score: 0, is_coinbase: false };
+        let mut signable: SignableTransaction = SignableTransaction::with_entries(tx, vec![entry.clone()]);
+
+        let n = sign_transaction_inputs_mldsa87(&kp, &mut signable, |i| [0x40u8 ^ (i as u8); 32]);
+        assert_eq!(n, 1, "exactly one input signed");
+        assert!(!signable.tx.inputs[0].signature_script.is_empty(), "input 0 now has an unlock script");
+
+        // Verify via the consensus script engine.
+        let populated = PopulatedTransaction::new(&signable.tx, vec![entry]);
+        let reused = SigHashReusedValuesUnsync::new();
+        let cache = Cache::new(10_000);
+        let mut vm = TxScriptEngine::from_transaction_input(
+            &populated,
+            &populated.tx.inputs[0],
+            0,
+            &populated.entries[0],
+            &reused,
+            &cache,
+        );
+        vm.execute().expect("native ML-DSA-87 signature must verify in the script engine");
+    }
+
+    #[test]
+    fn native_signer_skips_foreign_and_prefilled_inputs() {
+        use kaspa_consensus_core::tx::{
+            ScriptPublicKey, SignableTransaction, Transaction, TransactionId, TransactionInput, TransactionOutpoint, TransactionOutput,
+            UtxoEntry,
+        };
+        use kaspa_txscript::pay_to_address_script;
+
+        let kp = derive_keypair("mainnet", 0, 0, 0, &TEST_MASTER_SEED);
+        let mine = pay_to_address_script(&kp.address(Prefix::Mainnet));
+        // A different keypair's spk (foreign input — must be skipped).
+        let other = derive_keypair("mainnet", 9, 0, 0, &TEST_MASTER_SEED);
+        let foreign = pay_to_address_script(&other.address(Prefix::Mainnet));
+
+        let mk_in = |pre_filled: bool| TransactionInput {
+            previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_bytes([0x01u8; 64]), index: 0 },
+            signature_script: if pre_filled { vec![0xaa] } else { vec![] },
+            sequence: 0,
+            sig_op_count: 1,
+        };
+        let tx = Transaction::new(
+            0,
+            vec![mk_in(false), mk_in(true), mk_in(false)],
+            vec![TransactionOutput { value: 1, script_public_key: mine.clone() }],
+            0,
+            Default::default(),
+            0,
+            vec![],
+        );
+        let entries = vec![
+            UtxoEntry { amount: 10, script_public_key: mine.clone(), block_daa_score: 0, is_coinbase: false }, // signable
+            UtxoEntry { amount: 10, script_public_key: mine.clone(), block_daa_score: 0, is_coinbase: false }, // pre-filled -> skip
+            UtxoEntry { amount: 10, script_public_key: foreign, block_daa_score: 0, is_coinbase: false },       // foreign -> skip
+        ];
+        let mut signable: SignableTransaction = SignableTransaction::with_entries(tx, entries);
+        let n = sign_transaction_inputs_mldsa87(&kp, &mut signable, |_| [0x77u8; 32]);
+        assert_eq!(n, 1, "only the empty, owned input is signed");
+        assert!(!signable.tx.inputs[0].signature_script.is_empty());
+        assert_eq!(signable.tx.inputs[1].signature_script, vec![0xaa], "pre-filled input untouched");
+        assert!(signable.tx.inputs[2].signature_script.is_empty(), "foreign input untouched");
     }
 }

@@ -83,6 +83,11 @@ pub enum TxScriptError {
     // kaspa-pq PQ-only (§6.5): pay-to-script-hash is out of launch scope.
     #[error("pay-to-script-hash is disabled in PQ-only mode")]
     ScriptHashDisabledInPqMode,
+    // kaspa-pq PQ-only (ADR-0019 §13): the wallet/tx-generator refuses to build
+    // an output paying to a legacy (secp256k1 / P2SH) address on a PQ network —
+    // only the ML-DSA-87 P2PKH address class is permitted.
+    #[error("legacy address (version {0:?}) is disabled on kaspa-pq; only ML-DSA P2PKH is permitted")]
+    LegacyAddressDisabledInPqMode(String),
 }
 
 #[derive(Error, PartialEq, Eq, Debug, Clone, Copy)]

@@ -78,6 +78,23 @@ pub fn pay_to_address_script(address: &Address) -> ScriptPublicKey {
     ScriptPublicKey::new(ScriptClass::from(address.version).version(), script)
 }
 
+/// kaspa-pq PQ-only (ADR-0019 §13 / docs/kaspa-pq-design-mldsa87.md §13.5): the
+/// PQ-network variant of [`pay_to_address_script`]. It accepts ONLY the standard
+/// ML-DSA-87 P2PKH address class ([`Version::PubKeyHashMlDsa65`]); any legacy
+/// secp256k1 (`PubKey` / `PubKeyECDSA`) or `ScriptHash` address is rejected with
+/// [`TxScriptError::LegacyAddressDisabledInPqMode`].
+///
+/// The wallet's transaction generator routes BOTH recipient and change outputs
+/// through this on a PQ network, so no legacy output can ever be created by a
+/// kaspa-pq wallet — the creation-side complement to the consensus output-class
+/// rule (ADR-0019 §7) and the script-engine legacy-opcode rejection (§6).
+pub fn pay_to_address_script_pq(address: &Address) -> Result<ScriptPublicKey, TxScriptError> {
+    match address.version {
+        Version::PubKeyHashMlDsa65 => Ok(pay_to_address_script(address)),
+        other => Err(TxScriptError::LegacyAddressDisabledInPqMode(format!("{other:?}"))),
+    }
+}
+
 /// Takes a script and returns an equivalent pay-to-script-hash script
 pub fn pay_to_script_hash_script(redeem_script: &[u8]) -> ScriptPublicKey {
     let redeem_script_hash = Params::new().hash_length(32).to_state().update(redeem_script).finalize();
@@ -187,6 +204,28 @@ pub mod test_helpers {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pay_to_address_script_pq_gates_legacy() {
+        use kaspa_addresses::{Prefix, Version};
+        // ML-DSA P2PKH (64-byte payload) is accepted and matches the non-gated builder.
+        let ml = Address::new(Prefix::Mainnet, Version::PubKeyHashMlDsa65, &[0x11u8; 64]);
+        let gated = pay_to_address_script_pq(&ml).expect("ML-DSA P2PKH is the standard PQ class");
+        assert_eq!(gated, pay_to_address_script(&ml));
+        assert_eq!(gated.script().len(), 69);
+        // Every legacy class is rejected.
+        for (ver, payload) in [
+            (Version::PubKey, vec![0u8; 32]),
+            (Version::PubKeyECDSA, vec![0u8; 33]),
+            (Version::ScriptHash, vec![0u8; 32]),
+        ] {
+            let addr = Address::new(Prefix::Mainnet, ver, &payload);
+            assert!(
+                matches!(pay_to_address_script_pq(&addr), Err(TxScriptError::LegacyAddressDisabledInPqMode(_))),
+                "version {ver:?} must be rejected on a PQ network"
+            );
+        }
+    }
+
     use super::*;
     use kaspa_utils::hex::FromHex;
 
