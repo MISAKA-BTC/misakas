@@ -72,6 +72,7 @@ impl FromStr for AccountKind {
                 "multisig" => Ok(MULTISIG_ACCOUNT_KIND.into()),
                 "keypair" => Ok(KEYPAIR_ACCOUNT_KIND.into()),
                 "bip32watch" => Ok(BIP32_WATCH_ACCOUNT_KIND.into()),
+                "mldsa" => Ok(MLDSA_ACCOUNT_KIND.into()),
                 _ => Err(Error::InvalidAccountKind),
             }
         }

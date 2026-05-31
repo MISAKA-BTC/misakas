@@ -121,6 +121,10 @@ home.workspace = true
 [dev-dependencies]
 hex-literal.workspace = true
 serde_repr.workspace = true
+# kaspa-pq PR-19-S5e: native test builds need `kaspa_wallet_keys::kaspa_pq_wasm`
+# (the `KaspaPqKeyPair` WASM wrapper) for the WASM-vs-native ML-DSA signer parity
+# test in wasm/signer.rs. The `test-utils` feature exposes it off-wasm.
+kaspa-wallet-keys = { workspace = true, features = ["test-utils"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio.workspace = true
