@@ -23,21 +23,25 @@ else
   echo "      install: cargo install cargo-deny  (or cargo-audit)"
 fi
 
-echo "== [2/2] secp256k1 must be absent from kaspa-consensus tree (Phase-8 gate) =="
-# Phase 8 has landed (PR-19-S8a/S8b): secp256k1 is feature-gated out of the
-# consensus tree, so the gate is HARD by default. Export HARD_SECP_GATE=0 to soften.
+echo "== [2/2] secp256k1 must be absent from the consensus + node trees (Phase-8/S9 gate) =="
+# Phase 8 (PR-19-S8a/S8b) feature-gated secp256k1 out of the consensus tree; S9
+# extended this to the kaspad node binary (the RPC/SDK layer:
+# rpc-core -> consensus-wasm -> consensus-client). The gate is HARD by default.
+# Export HARD_SECP_GATE=0 to soften it back to a warning (e.g. while bisecting).
 HARD_SECP_GATE="${HARD_SECP_GATE:-1}"
-if cargo tree -p kaspa-consensus -e normal 2>/dev/null | grep -qi secp256k1; then
-  echo "secp256k1 IS present in the kaspa-consensus dependency tree."
-  if [ "$HARD_SECP_GATE" = "1" ]; then
-    echo "  -> FAIL: PQ-only release must not link secp256k1 into consensus."
-    fail=1
+for crate in kaspa-consensus kaspad; do
+  if cargo tree -p "$crate" -e normal 2>/dev/null | grep -qi secp256k1; then
+    echo "secp256k1 IS present in the $crate dependency tree."
+    if [ "$HARD_SECP_GATE" = "1" ]; then
+      echo "  -> FAIL: PQ-only release must not link secp256k1 into $crate."
+      fail=1
+    else
+      echo "  -> soft warning (HARD_SECP_GATE=0); Phase 8/S9 expects this to be empty."
+    fi
   else
-    echo "  -> soft warning (HARD_SECP_GATE=0); Phase 8 expects this to be empty."
+    echo "OK: no secp256k1 in the $crate dependency tree."
   fi
-else
-  echo "OK: no secp256k1 in the kaspa-consensus dependency tree."
-fi
+done
 
 if [ "$fail" -ne 0 ]; then
   echo "PQ CI guard: FAIL"

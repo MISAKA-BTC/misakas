@@ -25,6 +25,10 @@ pub enum Error {
     #[error("invalid transaction outpoint: {0}")]
     InvalidTransactionOutpoint(String),
 
+    // kaspa-pq PQ-only: the legacy secp256k1 error is compiled only under
+    // `legacy-secp256k1` (ADR-0019 §14). consensus-wasm has no secp signing path,
+    // so this variant is inert in every shipping build.
+    #[cfg(feature = "legacy-secp256k1")]
     #[error(transparent)]
     Secp256k1(#[from] secp256k1::Error),
 
