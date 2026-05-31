@@ -1,12 +1,10 @@
-# Contributing to Kaspa
+# Contributing to misakas
 
-Thanks for your interest in contributing to Kaspa!
+Thanks for your interest in contributing to misakas — the post-quantum (PQ-only, ML-DSA-87) fork of [rusty-kaspa](https://github.com/kaspanet/rusty-kaspa)!
 
 We welcome contributions of all sizes and there are many opportunities to contribute at any level — from clarifying documentation and fixing small bugs to implementing full features and reviewing pull requests.
 
-Reach out to `@Node Developers` in Discord in the [#development](https://discord.com/channels/599153230659846165/755890250643144788) channel.
-
-Follow along the R&D Telegram group [@kasparnd](https://t.me/kasparnd).
+Open a [GitHub Issue or Pull Request](https://github.com/MISAKA-BTC/misakas/issues) to start any discussion. For upstream Kaspa-protocol questions unrelated to the PQ migration, please refer to the rusty-kaspa project.
 
 ## Quick summary
 
@@ -27,10 +25,10 @@ If you can meaningfully review a pull request, please do so even if you have not
 ## How to get started
 
 1. Find an issue (or open one) — good first issues are a great first step.
-2. Fork the repo (See [Installation](https://github.com/kaspanet/rusty-kaspa?tab=readme-ov-file#installation) guide) and create a feature branch with a short, descriptive name.
+2. Fork the repo (see the [Building from source](https://github.com/MISAKA-BTC/misakas?tab=readme-ov-file#building-from-source) guide) and create a feature branch with a short, descriptive name.
 3. Implement your change and include tests where appropriate.
 4. Make each commit atomic and focused. Update tests or add new ones in the same commit that changes behaviour.
-5. Push to your fork and open a Pull Request against the `master` branch (or the branch named in the issue).
+5. Push to your fork and open a Pull Request against the `main` branch (or the branch named in the issue).
 
 ## Pull request guidelines
 
@@ -69,5 +67,5 @@ Be respectful and constructive in discussions. We expect contributors to follow 
 
 ## Thank You
 
-Thanks for helping make Kaspa better. If you have questions, reach out to the channels described at the top of this document
+Thanks for helping make misakas better. If you have questions, open a GitHub Issue on [MISAKA-BTC/misakas](https://github.com/MISAKA-BTC/misakas/issues).
 
