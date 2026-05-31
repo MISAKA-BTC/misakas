@@ -69,10 +69,10 @@ pub const MLDSA87_PK_LEN: usize = 2592; // ML-DSA-87 public key size (ADR-0019; 
 /// bytes; the last byte is the sighash type.
 pub const MLDSA87_SIG_LEN: usize = 4627; // ML-DSA-87 signature size (ADR-0019; legacy const name retained)
 
-/// ML-DSA `ctx` parameter for kaspa-pq transaction signatures. The 255-byte
-/// upper bound on `ctx` is enforced by libcrux. See
+/// ML-DSA `ctx` parameter for kaspa-pq transaction signatures (md2 §3.1, v2).
+/// The 255-byte upper bound on `ctx` is enforced by libcrux. See
 /// docs/kaspa-pq-spec.md §2.
-pub const MLDSA87_TX_CONTEXT: &[u8] = b"kaspa-pq-v1/tx/mldsa87";
+pub const MLDSA87_TX_CONTEXT: &[u8] = b"kaspa-pq-v2/tx/mldsa87";
 
 /// kaspa-pq PQ-only script policy (ADR-0019 / docs/kaspa-pq-design-mldsa87.md §6).
 /// Threaded into [`TxScriptEngine`] to gate legacy secp256k1 signature opcodes
@@ -861,7 +861,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
     ///   2592-byte public key and 4627-byte signature into the cache, never
     ///   the raw bytes (see docs/adr/0002-mldsa65-p2pkh.md §7 + ADR-0005).
     /// - A fixed ML-DSA `ctx` parameter of [`MLDSA87_TX_CONTEXT`]
-    ///   (`"kaspa-pq-v1/tx/mldsa87"`).
+    ///   (`"kaspa-pq-v2/tx/mldsa87"`).
     /// - The signed message is the dedicated 64-byte
     ///   [`calc_mldsa87_signature_hash`](kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash)
     ///   output (ADR-0019 §9): a `Hash64` digest under the

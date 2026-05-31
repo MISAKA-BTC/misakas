@@ -309,9 +309,9 @@ pub fn calc_ecdsa_signature_hash(
 // =====================================================================
 
 /// Literal domain tag prefixed to every ML-DSA-87 transaction sighash
-/// transcript (docs/kaspa-pq-design-mldsa87.md §9.3). Belt-and-braces
-/// scheme/version separation on top of the keyed 64-byte hasher.
-pub const MLDSA87_SIGHASH_DOMAIN: &[u8] = b"kaspa-pq-v1/sighash/mldsa87";
+/// transcript (docs/kaspa-pq-design-mldsa87.md §9.3 / md2 §3.1, v2). Belt-and-
+/// braces scheme/version separation on top of the keyed 64-byte hasher.
+pub const MLDSA87_SIGHASH_DOMAIN: &[u8] = b"kaspa-pq-v2/sighash/mldsa87";
 
 /// Hash64 analogue of [`SigHashReusedValues`]: caches the per-transaction
 /// sub-hashes that are identical across all inputs, preventing the
