@@ -570,6 +570,74 @@ impl From<NetworkId> for Params {
     }
 }
 
+/// kaspa-pq overlay activation — shared by ALL FOUR networks (user decision 2026-06-01).
+///
+/// The DNS-finality PoS overlay (ADR-0009/0017/0018) is **genesis-active everywhere**:
+/// `dns_activation_daa_score: 0` so the two-stage confirmation model (PoW WorkScore +
+/// validator StakeScore, each cleared against its `required_*_depth` threshold) is live
+/// from block 0, and `full_reward_split_daa_score: 0` so the Stage-3 reward split applies
+/// immediately. The rollout still advances Bootstrap→Active only once a real bond exists
+/// (`min_active_validators: 1`, `min_active_stake_sompi: 0`), so an unbonded chain runs on
+/// pure PoW/GHOSTDAG and Active (with the reorg gate) engages the moment a validator bonds
+/// + attests. `reorg_mode: HardCheckpoint` (current devnet mechanism, kept for all nets by
+/// user request): once an anchor is DNS-confirmed, any candidate that exits the confirmed
+/// prefix is rejected. NOTE: `dns_params` is NOT a genesis-block input (genesis.rs never
+/// reads it), so making every net `Some(..)` leaves all genesis hashes unchanged.
+pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
+    dns_activation_daa_score: 0,
+    min_active_stake_sompi: 0,
+    min_active_validators: 1,
+    epoch_length_blocks: 100,
+    required_work_depth: BlueWorkType::ZERO,
+    required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
+    emergency_work_margin: BlueWorkType::ZERO,
+    emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
+    max_reorg_horizon_blocks: 300,
+    evidence_window_blocks: 300,
+    unbonding_period_blocks: 700, // > max_reorg_horizon + evidence_window
+    max_attestations_per_block: MAX_ATTESTATIONS_PER_SHARD as u16,
+    max_attestation_shard_mass: 50_000,
+    reward_uniqueness_window_blocks: 600,
+    stake_event_quality_floor_bps: 6000,
+    degraded_stake_quality_epochs: 4,
+    stake_censorship_floor_bps: 1000,
+    reward_params: RewardParams {
+        per_attestation_reward_sompi: 100_000_000,
+        slashing_reporter_reward_bps: 1000,
+        max_validator_inflation_per_block_sompi: 100_000_000 * MAX_ATTESTATIONS_PER_SHARD as u64,
+        validator_participation_bps: 10000,
+        validator_quality_bonus_bps: 0,
+        quality_gate_bonus_sompi: 0,
+        worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
+        fee_split: FeeSplitParams {
+            subsidy_worker_base_bps: 6700,
+            subsidy_worker_inclusion_bps: 800,
+            subsidy_validator_bps: 2500,
+            subsidy_service_bps: 0,
+            normal_fee_worker_bps: 9000,
+            normal_fee_validator_bps: 1000,
+            normal_fee_service_bps: 0,
+            finality_fee_validator_bps: 7500,
+            finality_fee_worker_bps: 2500,
+            finality_fee_service_bps: 0,
+        },
+        fee_split_bootstrap: FeeSplitParams {
+            subsidy_worker_base_bps: 8200,
+            subsidy_worker_inclusion_bps: 800,
+            subsidy_validator_bps: 1000,
+            subsidy_service_bps: 0,
+            normal_fee_worker_bps: 9000,
+            normal_fee_validator_bps: 1000,
+            normal_fee_service_bps: 0,
+            finality_fee_validator_bps: 7500,
+            finality_fee_worker_bps: 2500,
+            finality_fee_service_bps: 0,
+        },
+    },
+    reorg_mode: DnsReorgMode::HardCheckpoint,
+    full_reward_split_daa_score: 0,
+};
+
 pub const MAINNET_PARAMS: Params = Params {
     // kaspa-pq mainnet has no mainline-Kaspa-style DNS seeders. Upstream
     // Kaspa seeds are deliberately removed to enforce network isolation
@@ -635,7 +703,9 @@ pub const MAINNET_PARAMS: Params = Params {
 
     // Roughly 2025-05-05 1500 UTC
     crescendo_activation: ForkActivation::new(110_165_000),
-    dns_params: None,
+    // kaspa-pq: DNS-finality PoS overlay genesis-active on every network (see
+    // GENESIS_ACTIVE_DNS_PARAMS). Not a genesis-block input, so the genesis hash is unchanged.
+    dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
 };
@@ -702,7 +772,9 @@ pub const TESTNET_PARAMS: Params = Params {
 
     // 18:30 UTC, March 6, 2025
     crescendo_activation: ForkActivation::new(88_657_000),
-    dns_params: None,
+    // kaspa-pq: DNS-finality PoS overlay genesis-active on every network (see
+    // GENESIS_ACTIVE_DNS_PARAMS). Not a genesis-block input, so the genesis hash is unchanged.
+    dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
 };
@@ -757,7 +829,9 @@ pub const SIMNET_PARAMS: Params = Params {
     pre_crescendo_target_time_per_block: TenBps::target_time_per_block(),
 
     crescendo_activation: ForkActivation::always(),
-    dns_params: None,
+    // kaspa-pq: DNS-finality PoS overlay genesis-active on every network (see
+    // GENESIS_ACTIVE_DNS_PARAMS). Not a genesis-block input, so the genesis hash is unchanged.
+    dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
 };
@@ -819,96 +893,9 @@ pub const DEVNET_PARAMS: Params = Params {
     // bonds + computes the per-epoch StakeScore into DnsState for
     // `getDnsConfirmation`. Small epoch/window keep the PR-10.11-throttled
     // aggregation walk cheap on the ~10 bps devnet (amortized O(1) per block).
-    dns_params: Some(DnsParams {
-        // kaspa-pq DEVNET LIVE ACTIVATION (experimental): the DNS-overlay reward
-        // economics are ACTIVE from genesis on devnet so a real bond → attestation →
-        // reward-bearing coinbase can be observed. `0` makes the §F carve + §E/§D reward
-        // path load-bearing here (mainnet/testnet/simnet keep `dns_params: None`, so they
-        // are unaffected). No minimum validator count / stake: a single self-bonded
-        // validator earns. NOTE: rewards do NOT depend on `min_active_*` (those only flip
-        // `rollout_stage` → Active, which engages DnsHealth + the reorg gate once StakeScore
-        // confirms); the per-block §E reward fires on `daa >= dns_activation_daa_score` alone.
-        dns_activation_daa_score: 0,
-        min_active_stake_sompi: 0,
-        min_active_validators: 1,
-        epoch_length_blocks: 100,
-        // ZERO (const-constructible): on devnet the gate is dormant, so the
-        // confirmation thresholds + emergency margins are not load-bearing.
-        // required_work_depth = 0 ⇒ pow_confirmed is always true in the RPC view.
-        required_work_depth: BlueWorkType::ZERO,
-        required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
-        emergency_work_margin: BlueWorkType::ZERO,
-        emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
-        max_reorg_horizon_blocks: 300,
-        evidence_window_blocks: 300,
-        unbonding_period_blocks: 700, // > R + E
-        max_attestations_per_block: MAX_ATTESTATIONS_PER_SHARD as u16,
-        max_attestation_shard_mass: 50_000,
-        // 6 epochs of recency/uniqueness window (epoch_length 100 × 6). Not
-        // load-bearing while the gate is dormant.
-        reward_uniqueness_window_blocks: 600,
-        // ADR-0018 §B: 0.60 stake-event quality floor. Visibility-only on devnet (the
-        // reorg gate is dormant at dns_activation = u64::MAX).
-        stake_event_quality_floor_bps: 6000,
-        // ADR-0018 §C: health degrades after 4 consecutive sub-φS epochs; < 0.10 inclusion
-        // reads as censorship rather than low participation.
-        degraded_stake_quality_epochs: 4,
-        stake_censorship_floor_bps: 1000,
-        // ADR-0013 reward track — NOT load-bearing on devnet (the
-        // dns_activation gate is u64::MAX, so the coinbase fan-out
-        // never fires). Values are placeholders chosen so the cap
-        // never bites under correct params: cap == reward ×
-        // max_attestations_per_block.
-        reward_params: RewardParams {
-            per_attestation_reward_sompi: 100_000_000,
-            slashing_reporter_reward_bps: 1000,
-            max_validator_inflation_per_block_sompi: 100_000_000 * MAX_ATTESTATIONS_PER_SHARD as u64,
-            // ADR-0018 §D/§E inclusion economics — NOT load-bearing on devnet (the
-            // dns_activation gate is u64::MAX, so the coinbase fan-out never fires).
-            // 100/0 validator split: the FULL validator pool is paid as stake-proportional
-            // participation (the §E quality-bonus is dropped under the burn sink — revisit
-            // if SecurityRollover is adopted). 1.0× urgency (inert).
-            validator_participation_bps: 10000,
-            validator_quality_bonus_bps: 0,
-            quality_gate_bonus_sompi: 0,
-            worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
-            // ADR-0018 §F fee/subsidy splits — NOT load-bearing on devnet (gate u64::MAX).
-            // Node share dropped to 0: Stage-3 subsidy 75/25/0, normal-tx 90/10/0,
-            // finality 75/25/0 (each sums to 100%; `service` fields retained at 0).
-            fee_split: FeeSplitParams {
-                subsidy_worker_base_bps: 6700,
-                subsidy_worker_inclusion_bps: 800,
-                subsidy_validator_bps: 2500,
-                subsidy_service_bps: 0,
-                normal_fee_worker_bps: 9000,
-                normal_fee_validator_bps: 1000,
-                normal_fee_service_bps: 0,
-                finality_fee_validator_bps: 7500,
-                finality_fee_worker_bps: 2500,
-                finality_fee_service_bps: 0,
-            },
-            // ADR-0018 §F staged rollout — Stage-2 (bootstrap) split: subsidy
-            // 90/10/0, normal-tx 90/10/0, finality 75/25/0. Applied between
-            // `dns_activation_daa_score` and `full_reward_split_daa_score`.
-            fee_split_bootstrap: FeeSplitParams {
-                subsidy_worker_base_bps: 8200,
-                subsidy_worker_inclusion_bps: 800,
-                subsidy_validator_bps: 1000,
-                subsidy_service_bps: 0,
-                normal_fee_worker_bps: 9000,
-                normal_fee_validator_bps: 1000,
-                normal_fee_service_bps: 0,
-                finality_fee_validator_bps: 7500,
-                finality_fee_worker_bps: 2500,
-                finality_fee_service_bps: 0,
-            },
-        },
-        // ADR-0018 §H: devnet stays HardCheckpoint (the loud testing convenience) — the
-        // two-dimensional dominance rule is the mainnet path. Inert here anyway (gate u64::MAX).
-        reorg_mode: DnsReorgMode::HardCheckpoint,
-        // ADR-0018 §F staged rollout — Stage-3 (full 75/25/0) threshold. u64::MAX
-        // on devnet keeps the carve dormant (Stage 1: miner takes the whole
-        // reward) like the rest of the overlay.
-        full_reward_split_daa_score: u64::MAX,
-    }),
+    // kaspa-pq: DNS-finality PoS overlay genesis-active on every network (see
+    // GENESIS_ACTIVE_DNS_PARAMS). Devnet shares the identical fully-active config as
+    // mainnet/testnet/simnet (user decision 2026-06-01: all four nets genesis-active,
+    // HardCheckpoint reorg mode, full Stage-3 reward split from genesis).
+    dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
 };
