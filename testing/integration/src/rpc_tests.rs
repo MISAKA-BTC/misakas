@@ -785,6 +785,17 @@ async fn sanity_test() {
                     rpc_client.stop_notify(id, PruningPointUtxoSetOverrideScope {}.into()).await.unwrap();
                 })
             }
+
+            // kaspa-pq overlay/validator RPC (Phase 10/11): these methods are
+            // default-off (DNS overlay gated at dns_activation = u64::MAX; the
+            // validator service is opt-in), so the basic sanity test skips them.
+            // See ADR-0009 / ADR-0010.
+            KaspadPayloadOps::GetDnsConfirmation => {
+                tst!(op, "DNS-overlay confirmation RPC — overlay default-off (dns_activation = u64::MAX)")
+            }
+            KaspadPayloadOps::GetValidatorStatus => {
+                tst!(op, "validator status RPC — validator service is opt-in (default-off)")
+            }
         };
         tasks.push(task);
     }

@@ -10,12 +10,16 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-wasm32-sdk = []
+# kaspa-pq PQ-only (ADR-0019 §14): the only consumer of kaspa-consensus-client
+# (which pulls secp256k1) is the `wasm32-sdk`-gated `wasm` module, so that dep is
+# pulled in only with this feature — keeping the native kaspa-consensus tree
+# secp-free (`cargo tree -p kaspa-consensus -e normal`).
+wasm32-sdk = ["dep:kaspa-consensus-client"]
 
 [dependencies]
 js-sys.workspace = true
 kaspa-consensus-core.workspace = true
-kaspa-consensus-client.workspace = true
+kaspa-consensus-client = { workspace = true, optional = true }
 kaspa-hashes.workspace = true
 kaspa-math.workspace = true
 kaspa-utils.workspace = true

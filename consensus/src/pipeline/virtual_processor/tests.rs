@@ -464,9 +464,10 @@ async fn double_search_disqualified_test() {
 }
 
 fn new_miner_data() -> MinerData {
-    let secp = secp256k1::Secp256k1::new();
-    let mut rng = rand::thread_rng();
-    let (_sk, pk) = secp.generate_keypair(&mut rng);
-    let script = ScriptVec::from_slice(&pk.serialize());
+    // kaspa-pq PQ-only: the coinbase recipient script only needs arbitrary bytes
+    // (coinbase outputs are not signature-checked), so use a random 32-byte payload
+    // instead of a secp256k1 public key — keeps this test helper secp-free.
+    let payload: [u8; 32] = rand::random();
+    let script = ScriptVec::from_slice(&payload);
     MinerData::new(ScriptPublicKey::new(0, script), vec![])
 }

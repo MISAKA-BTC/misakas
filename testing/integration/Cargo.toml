@@ -14,7 +14,9 @@ kaspa-alloc.workspace = true            # This changes the global allocator for 
 
 kaspa-addresses.workspace = true
 kaspa-bip32.workspace = true
-kaspa-consensus-core.workspace = true
+# kaspa-pq PQ-only: integration tests use the legacy secp256k1 `sign` helper,
+# gated behind `legacy-secp256k1` in kaspa-consensus-core (ADR-0019 §14).
+kaspa-consensus-core = { workspace = true, features = ["legacy-secp256k1"] }
 kaspa-consensus-notify.workspace = true
 kaspa-consensus.workspace = true
 kaspa-consensusmanager.workspace = true

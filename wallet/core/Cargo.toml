@@ -58,7 +58,10 @@ js-sys.workspace = true
 kaspa-addresses.workspace = true
 kaspa-bip32.workspace = true
 kaspa-consensus-client.workspace = true
-kaspa-consensus-core.workspace = true
+# kaspa-pq PQ-only: wallet-core calls the legacy secp256k1 sign helpers in
+# kaspa-consensus-core::sign (sign_input / sign_with_multiple_v2 / verify), gated
+# behind `legacy-secp256k1` (ADR-0019 §14).
+kaspa-consensus-core = { workspace = true, features = ["legacy-secp256k1"] }
 kaspa-consensus-wasm.workspace = true
 kaspa-core.workspace = true
 kaspa-hashes.workspace = true
