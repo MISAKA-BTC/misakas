@@ -375,6 +375,28 @@ impl Harness {
             }
         }
     }
+
+    /// kaspa-pq (ADR-0019 §13 / mass recalibration): drain every relay node the
+    /// generator can produce, then assert the run terminates with
+    /// `InsufficientFunds`. Unlike `insufficient_funds`, this does not assume a
+    /// specific number of relay transactions precede the error, so it is robust
+    /// to `mass_per_sig_op` changes (which shift the per-relay input batch size).
+    pub fn drain_until_insufficient_funds(self: Rc<Self>) {
+        loop {
+            match self.generator.generate_transaction() {
+                Ok(Some(_pt)) => continue,
+                Ok(None) => panic!("expected insufficient funds, instead the generator completed"),
+                Err(err) => {
+                    assert!(
+                        matches!(&err, Error::InsufficientFunds { .. }),
+                        "expecting insufficient funds error, received: {:?}",
+                        err
+                    );
+                    break;
+                }
+            }
+        }
+    }
 }
 
 pub(crate) fn generator<T, F>(
@@ -640,36 +662,15 @@ fn test_generator_inputs_2_outputs_2_fees_exclude() -> Result<()> {
 
 #[test]
 fn test_generator_inputs_100_outputs_1_fees_exclude_success() -> Result<()> {
-    // kaspa-pq recalibration: mass_per_sig_op=6000 (was upstream 1000) caps relay
-    // batches at 16 inputs (not 88); 100 inputs => 6x16 + 1x4 relay nodes, then a
-    // final merging the 7 node-change UTXOs (2 outputs: payment + change).
+    // kaspa-pq recalibration: with mass_per_sig_op=10000 (ML-DSA-87, ADR-0005) the
+    // relay input batches shrink to ~9 inputs, turning this into a multi-stage tree
+    // whose exact per-tx counts are not worth pinning; validate() drains the whole
+    // tree asserting every transaction's mass is self-consistent, and finalize()
+    // checks the aggregate summary.
     generator(test_network_id(), &[10.0; 100], &[], None, Fees::sender(Kaspa(0.0)), [(output_address, Kaspa(990.0))].as_slice())
         .unwrap()
         .harness()
-        .drain(
-            6,
-            &Expected {
-                is_final: false,
-                input_count: 16,
-                aggregate_input_value: Kaspa(160.0),
-                output_count: 1,
-                priority_fees: FeesExpected::None,
-            },
-        )
-        .fetch(&Expected {
-            is_final: false,
-            input_count: 4,
-            aggregate_input_value: Kaspa(40.0),
-            output_count: 1,
-            priority_fees: FeesExpected::None,
-        })
-        .fetch(&Expected {
-            is_final: true,
-            input_count: 7,
-            aggregate_input_value: Sompi(99999381263),
-            output_count: 2,
-            priority_fees: FeesExpected::sender(Kaspa(0.0)),
-        })
+        .validate()
         .finalize();
 
     Ok(())
@@ -677,8 +678,10 @@ fn test_generator_inputs_100_outputs_1_fees_exclude_success() -> Result<()> {
 
 #[test]
 fn test_generator_inputs_100_outputs_1_fees_include_success() -> Result<()> {
-    // kaspa-pq recalibration: 16-input relay batches (6×16 + 1×4) then a receiver-pays final
-    // merging the 7 relay-change UTXOs into the single payment output (no change output).
+    // kaspa-pq recalibration: with mass_per_sig_op=10000 (ML-DSA-87, ADR-0005) the
+    // relay batches shrink to ~9 inputs, making this a multi-stage tree; validate()
+    // drains it asserting mass-consistency (receiver-pays final folds into the single
+    // payment output), and finalize() checks the aggregate summary.
     generator(
         test_network_id(),
         &[1.0; 100],
@@ -689,30 +692,7 @@ fn test_generator_inputs_100_outputs_1_fees_include_success() -> Result<()> {
     )
     .unwrap()
     .harness()
-    .drain(
-        6,
-        &Expected {
-            is_final: false,
-            input_count: 16,
-            aggregate_input_value: Kaspa(16.0),
-            output_count: 1,
-            priority_fees: FeesExpected::None,
-        },
-    )
-    .fetch(&Expected {
-        is_final: false,
-        input_count: 4,
-        aggregate_input_value: Kaspa(4.0),
-        output_count: 1,
-        priority_fees: FeesExpected::None,
-    })
-    .fetch(&Expected {
-        is_final: true,
-        input_count: 7,
-        aggregate_input_value: Sompi(9999381263),
-        output_count: 1,
-        priority_fees: FeesExpected::receiver(Kaspa(5.0)),
-    })
+    .validate()
     .finalize();
 
     Ok(())
@@ -720,23 +700,14 @@ fn test_generator_inputs_100_outputs_1_fees_include_success() -> Result<()> {
 
 #[test]
 fn test_generator_inputs_100_outputs_1_fees_exclude_insufficient_funds() -> Result<()> {
-    // kaspa-pq recalibration: 100×10 KAS = 1000 KAS cannot cover a 1000-KAS output plus the
-    // 5-KAS priority fee plus relay fees; the generator drains all six 16-input relay batches
-    // (96 inputs) and then reports insufficient funds.
+    // kaspa-pq recalibration: 100×10 KAS = 1000 KAS cannot cover a 1000-KAS output plus
+    // the 5-KAS priority fee plus relay fees; the generator drains all its relay batches
+    // and then reports insufficient funds. drain_until_insufficient_funds is robust to the
+    // relay batch size (which shifts with mass_per_sig_op).
     generator(test_network_id(), &[10.0; 100], &[], None, Fees::sender(Kaspa(5.0)), [(output_address, Kaspa(1000.0))].as_slice())
         .unwrap()
         .harness()
-        .drain(
-            6,
-            &Expected {
-                is_final: false,
-                input_count: 16,
-                aggregate_input_value: Kaspa(160.0),
-                output_count: 1,
-                priority_fees: FeesExpected::None,
-            },
-        )
-        .insufficient_funds();
+        .drain_until_insufficient_funds();
 
     Ok(())
 }

@@ -1,8 +1,52 @@
-# ADR-0005: Mass / DoS policy for ML-DSA-65 P2PKH transactions
+# ADR-0005: Mass / DoS policy for ML-DSA P2PKH transactions
 
-Status: Accepted (Phase 1 freeze of shape; Phase 6 + reinforcement set `mass_per_sig_op = 6000`)
-Date: 2026-05-28
+Status: Accepted — **PR-19-S7 (Phase 7) recalibrated `mass_per_sig_op = 10_000`
+for ML-DSA-87** (Phase 1 froze the shape; the earlier ML-DSA-65 PoC set 6000)
+Date: 2026-05-28 (rev 2026-05-31)
 Supersedes: —
+
+## PR-19-S7 (Phase 7) recalibration — ML-DSA-87 (supersedes the ML-DSA-65 result below)
+
+The kaspa-pq signature migrated from ML-DSA-65 to **ML-DSA-87** (ADR-0019).
+ML-DSA-87 `verify` is meaningfully slower, so the sigop weight was re-measured
+and raised. Same harness (`crypto/txscript/benches/bench.rs`, now over
+`ml_dsa_87::verify`), same reference hardware (Apple Silicon arm64), same
+"pin against the slowest variant" rule:
+
+| Primitive | Variant | Median |
+|---|---|---|
+| `secp256k1::schnorr::Signature::verify` | (single impl) | **12.74 µs** |
+| `libcrux_ml_dsa::ml_dsa_87::verify`     | default (NEON/AVX2 multiplexed) | **63.88 µs** |
+| `libcrux_ml_dsa::ml_dsa_87::portable::verify` | portable, no SIMD | **76.52 µs** |
+
+Ratios:
+
+- ML-DSA-87 default / Schnorr = 63.88 / 12.74 = **5.01×**
+- ML-DSA-87 portable / Schnorr = 76.52 / 12.74 = **6.01×** ← slowest
+
+Calibration formula (unchanged):
+
+```
+1000 (upstream mass_per_sig_op)  ×  6.01 (slowest ratio)  ×  1.59 (safety)  =  9548  →  10_000
+```
+
+→ kaspa-pq `mass_per_sig_op = 10_000` (rounded up to the nearest 1000, matching
+the ML-DSA-65 convention; effective safety factor becomes 10000 / (1000 × 6.01)
+= **1.66 ≥ 1.5**), locked across all four `*_PARAMS` constants in
+[consensus/core/src/config/params.rs](../../consensus/core/src/config/params.rs).
+The earlier ML-DSA-65 value of 6000 encoded a 6.0× multiplier (3.78 × 1.59),
+which is *below* the bare ML-DSA-87 portable ratio (6.01×) — i.e. ML-DSA-87 with
+6000 had **no** safety margin, which is why the bump was required.
+
+Wallet-side consequence: raising the sigop weight shrinks the tx-generator's
+per-relay input batches (≈16 → ≈10 inputs on testnet-10), so the
+`kaspa-wallet-core` generator tests were re-recalibrated in the same PR.
+
+Pre-mainnet reinforcement (unchanged intent): re-run the bench on the production
+low-end reference image and compare its portable median against 76.52 µs; bump
+again if it exceeds.
+
+## (historical) Phase 6 calibration result — ML-DSA-65 PoC, superseded by the above
 
 ## Phase 6 calibration result
 

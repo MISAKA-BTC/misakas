@@ -598,16 +598,18 @@ pub const MAINNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6 + Phase 6 reinforcement:
-    //   Schnorr verify (secp256k1):            12.71 µs
-    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
-    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
+    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
+    //   Schnorr verify (secp256k1):              12.74 µs
+    //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
+    //   ML-DSA-87 verify (libcrux portable):     76.52 µs  (6.01× ratio — slowest)
     //
     // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
     // value is calibrated against the slowest variant so that no-SIMD
     // low-end reference platforms remain safely budgeted:
-    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
-    mass_per_sig_op: 6000,
+    //   1000 (upstream) × 6.01 (slowest ratio) × 1.59 (safety) = 9548 → 10_000.
+    mass_per_sig_op: 10000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -664,16 +666,18 @@ pub const TESTNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6 + Phase 6 reinforcement:
-    //   Schnorr verify (secp256k1):            12.71 µs
-    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
-    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
+    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
+    //   Schnorr verify (secp256k1):              12.74 µs
+    //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
+    //   ML-DSA-87 verify (libcrux portable):     76.52 µs  (6.01× ratio — slowest)
     //
     // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
     // value is calibrated against the slowest variant so that no-SIMD
     // low-end reference platforms remain safely budgeted:
-    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
-    mass_per_sig_op: 6000,
+    //   1000 (upstream) × 6.01 (slowest ratio) × 1.59 (safety) = 9548 → 10_000.
+    mass_per_sig_op: 10000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -727,16 +731,18 @@ pub const SIMNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6 + Phase 6 reinforcement:
-    //   Schnorr verify (secp256k1):            12.71 µs
-    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
-    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
+    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
+    //   Schnorr verify (secp256k1):              12.74 µs
+    //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
+    //   ML-DSA-87 verify (libcrux portable):     76.52 µs  (6.01× ratio — slowest)
     //
     // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
     // value is calibrated against the slowest variant so that no-SIMD
     // low-end reference platforms remain safely budgeted:
-    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
-    mass_per_sig_op: 6000,
+    //   1000 (upstream) × 6.01 (slowest ratio) × 1.59 (safety) = 9548 → 10_000.
+    mass_per_sig_op: 10000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
@@ -779,16 +785,18 @@ pub const DEVNET_PARAMS: Params = Params {
 
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
-    // kaspa-pq Phase 6 + Phase 6 reinforcement:
-    //   Schnorr verify (secp256k1):            12.71 µs
-    //   ML-DSA-65 verify (default, multiplexed): 40.75 µs  (3.21× ratio)
-    //   ML-DSA-65 verify (libcrux portable):   48.02 µs  (3.78× ratio — slowest)
+    // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
+    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
+    //   Schnorr verify (secp256k1):              12.74 µs
+    //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
+    //   ML-DSA-87 verify (libcrux portable):     76.52 µs  (6.01× ratio — slowest)
     //
     // Per `docs/adr/0005-mass-policy.md` §"Calibration formula" the
     // value is calibrated against the slowest variant so that no-SIMD
     // low-end reference platforms remain safely budgeted:
-    //   1000 (upstream) × 3.78 (slowest ratio) × 1.59 (safety) ≈ 6000.
-    mass_per_sig_op: 6000,
+    //   1000 (upstream) × 6.01 (slowest ratio) × 1.59 (safety) = 9548 → 10_000.
+    mass_per_sig_op: 10000,
     max_block_mass: 500_000,
 
     storage_mass_parameter: STORAGE_MASS_PARAMETER,
