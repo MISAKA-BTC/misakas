@@ -10,7 +10,7 @@ use kaspa_wallet_pskt::{
 };
 
 #[derive(Default, Handler)]
-#[help("Send a Kaspa transaction to a public address")]
+#[help("Send a Misaka transaction to a public address")]
 pub struct Pskb;
 
 impl Pskb {
