@@ -5,7 +5,7 @@ pub use super::{
 };
 use crate::{
     BlockLevel, BlueWorkType, KType,
-    constants::STORAGE_MASS_PARAMETER,
+    constants::{SOMPI_PER_KASPA, STORAGE_MASS_PARAMETER},
     dns_finality::{DnsParams, DnsReorgMode, FeeSplitParams, MAX_ATTESTATIONS_PER_SHARD, RewardParams, STAKE_SCORE_SCALE, StakeScore},
     network::{NetworkId, NetworkType},
 };
@@ -593,6 +593,8 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     dns_activation_daa_score: 0,
     min_active_stake_sompi: 0,
     min_active_validators: 1,
+    // devnet/simnet: no per-bond minimum (any positive bond is accepted).
+    min_bond_amount_sompi: 0,
     epoch_length_blocks: 100,
     required_work_depth: BlueWorkType::ZERO,
     required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
@@ -609,6 +611,87 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     max_reorg_horizon_blocks: 300,
     evidence_window_blocks: 300,
     unbonding_period_blocks: 700, // > max_reorg_horizon + evidence_window
+    max_attestations_per_block: MAX_ATTESTATIONS_PER_SHARD as u16,
+    max_attestation_shard_mass: 50_000,
+    reward_uniqueness_window_blocks: 600,
+    stake_event_quality_floor_bps: 6000,
+    degraded_stake_quality_epochs: 4,
+    stake_censorship_floor_bps: 1000,
+    reward_params: RewardParams {
+        per_attestation_reward_sompi: 100_000_000,
+        slashing_reporter_reward_bps: 1000,
+        max_validator_inflation_per_block_sompi: 100_000_000 * MAX_ATTESTATIONS_PER_SHARD as u64,
+        validator_participation_bps: 10000,
+        validator_quality_bonus_bps: 0,
+        quality_gate_bonus_sompi: 0,
+        worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
+        fee_split: FeeSplitParams {
+            subsidy_worker_base_bps: 6700,
+            subsidy_worker_inclusion_bps: 800,
+            subsidy_validator_bps: 2500,
+            subsidy_service_bps: 0,
+            normal_fee_worker_bps: 9000,
+            normal_fee_validator_bps: 1000,
+            normal_fee_service_bps: 0,
+            finality_fee_validator_bps: 7500,
+            finality_fee_worker_bps: 2500,
+            finality_fee_service_bps: 0,
+        },
+        fee_split_bootstrap: FeeSplitParams {
+            subsidy_worker_base_bps: 8200,
+            subsidy_worker_inclusion_bps: 800,
+            subsidy_validator_bps: 1000,
+            subsidy_service_bps: 0,
+            normal_fee_worker_bps: 9000,
+            normal_fee_validator_bps: 1000,
+            normal_fee_service_bps: 0,
+            finality_fee_validator_bps: 7500,
+            finality_fee_worker_bps: 2500,
+            finality_fee_service_bps: 0,
+        },
+    },
+    reorg_mode: DnsReorgMode::TwoDimensionalDominance,
+    full_reward_split_daa_score: 0,
+};
+
+/// Number of blocks in 14 days at the production 10 BPS block rate
+/// (`14 d × 86_400 s/d × 10 blk/s`). Used for the unbonding window and the
+/// equivocation-evidence window so a withdrawing validator stays slashable for
+/// the whole 14-day exit.
+pub const FOURTEEN_DAYS_BLOCKS_10BPS: u64 = 14 * 86_400 * 10; // 12_096_000
+
+/// kaspa-pq production (mainnet + testnet) DNS-finality overlay params. Differs from the
+/// shared [`GENESIS_ACTIVE_DNS_PARAMS`] (used by devnet/simnet) in the economically
+/// load-bearing knobs:
+///   * `min_active_stake_sompi = 20_000_000 KAS` — the network does not reach the `Active`
+///     rollout stage until at least 20M KAS of stake is bonded (user decision 2026-06-01).
+///   * `unbonding_period_blocks = 14 days` (+ the reorg horizon, to keep the ADR-0009
+///     §"Long-range bound" invariant `U ≥ R + E`). A withdrawal request only releases the
+///     locked stake after this window; the stake stays slashable the entire time.
+///   * `evidence_window_blocks = 14 days` — equivocation evidence remains acceptable for the
+///     full unbonding window, so a validator that double-signs and then immediately requests
+///     unbond can still be slashed at any point before the stake is released (the user's
+///     "slash during the unbonding period" requirement).
+/// Genesis-active (`dns_activation_daa_score: 0`) and `TwoDimensionalDominance` like devnet;
+/// `dns_params` is NOT a genesis-block input, so adopting this leaves genesis hashes unchanged.
+pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
+    dns_activation_daa_score: 0,
+    // Production: the overlay reaches the Active stage once >= 20M KAS of stake is bonded.
+    min_active_stake_sompi: 20_000_000 * SOMPI_PER_KASPA,
+    min_active_validators: 1,
+    // Production: every individual validator must bond >= 20M KAS; a smaller StakeBond is
+    // rejected at acceptance and can never attest (user decision 2026-06-01).
+    min_bond_amount_sompi: 20_000_000 * SOMPI_PER_KASPA,
+    epoch_length_blocks: 100,
+    required_work_depth: BlueWorkType::ZERO,
+    required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
+    emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
+    emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
+    max_reorg_horizon_blocks: 300,
+    // 14 days; equivocation stays slashable for the whole exit window.
+    evidence_window_blocks: FOURTEEN_DAYS_BLOCKS_10BPS,
+    // 14-day unbonding + the reorg horizon so `U ≥ R + E` (ADR-0009 §"Long-range bound").
+    unbonding_period_blocks: FOURTEEN_DAYS_BLOCKS_10BPS + 300,
     max_attestations_per_block: MAX_ATTESTATIONS_PER_SHARD as u16,
     max_attestation_shard_mass: 50_000,
     reward_uniqueness_window_blocks: 600,
@@ -717,9 +800,10 @@ pub const MAINNET_PARAMS: Params = Params {
 
     // Roughly 2025-05-05 1500 UTC
     crescendo_activation: ForkActivation::new(110_165_000),
-    // kaspa-pq: DNS-finality PoS overlay genesis-active on every network (see
-    // GENESIS_ACTIVE_DNS_PARAMS). Not a genesis-block input, so the genesis hash is unchanged.
-    dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
+    // kaspa-pq: MAINNET uses the production overlay params — 20M-KAS min active stake + 14-day
+    // unbonding/evidence window (slashable through the whole exit). See PRODUCTION_DNS_PARAMS.
+    // Not a genesis-block input, so the genesis hash is unchanged.
+    dns_params: Some(PRODUCTION_DNS_PARAMS),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
 };
@@ -786,9 +870,10 @@ pub const TESTNET_PARAMS: Params = Params {
 
     // 18:30 UTC, March 6, 2025
     crescendo_activation: ForkActivation::new(88_657_000),
-    // kaspa-pq: DNS-finality PoS overlay genesis-active on every network (see
-    // GENESIS_ACTIVE_DNS_PARAMS). Not a genesis-block input, so the genesis hash is unchanged.
-    dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
+    // kaspa-pq: TESTNET mirrors mainnet's production overlay params — 20M-KAS min active stake +
+    // 14-day unbonding/evidence window (slashable through the whole exit). See PRODUCTION_DNS_PARAMS.
+    // Not a genesis-block input, so the genesis hash is unchanged.
+    dns_params: Some(PRODUCTION_DNS_PARAMS),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
 };

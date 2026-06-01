@@ -770,7 +770,18 @@ impl VirtualStateProcessor {
     /// serves both apply (added) and revert (removed).
     fn dns_bond_mutations_for_chain_block(&self, chain_block: BlockHash) -> Vec<BondMutation> {
         let accepted_daa_score = self.headers_store.get_header(chain_block).unwrap().daa_score;
-        bond_mutations_from_accepted_txs(&self.accepted_txs_of_chain_block(chain_block), accepted_daa_score)
+        let (min_bond, unbonding_floor) = self.dns_bond_floors();
+        bond_mutations_from_accepted_txs(&self.accepted_txs_of_chain_block(chain_block), accepted_daa_score, min_bond, unbonding_floor)
+    }
+
+    /// The per-bond acceptance floors (min stake amount, min unbonding window) from the network's
+    /// `DnsParams`, or `(0, 0)` where the overlay is off — so the bond-acceptance filter is a no-op
+    /// on networks without `dns_params`.
+    fn dns_bond_floors(&self) -> (u64, u64) {
+        self.dns_params
+            .as_ref()
+            .map(|p| (p.min_bond_amount_sompi, p.unbonding_period_blocks))
+            .unwrap_or((0, 0))
     }
 
     /// Resolves a chain block's accepted transactions from its acceptance data
@@ -804,7 +815,8 @@ impl VirtualStateProcessor {
     /// [`Self::dns_bond_mutations_for_chain_block`] but sources the accepted
     /// txs from the provided acceptance data instead of the store.
     fn dns_bond_mutations_from_acceptance(&self, acceptance_data: &AcceptanceData, accepted_daa_score: u64) -> Vec<BondMutation> {
-        bond_mutations_from_accepted_txs(&self.accepted_txs_from_acceptance_data(acceptance_data), accepted_daa_score)
+        let (min_bond, unbonding_floor) = self.dns_bond_floors();
+        bond_mutations_from_accepted_txs(&self.accepted_txs_from_acceptance_data(acceptance_data), accepted_daa_score, min_bond, unbonding_floor)
     }
 
     /// kaspa-pq Phase 10 (ADR-0009 Addendum A.5): recompute the DNS StakeScore

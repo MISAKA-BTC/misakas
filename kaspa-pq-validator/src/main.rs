@@ -19,6 +19,7 @@ use kaspa_consensus_core::dns_finality::{
     DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation, signature_fingerprint,
     single_attestation_shard,
 };
+use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::NetworkType;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_core::{info, warn};
@@ -241,8 +242,15 @@ async fn bond(args: BondArgs) -> Result<(), String> {
     let funding_addr = key.funding_address(prefix);
     info!("[{VALIDATOR}] staking {} sompi as validator_id={} (funding {})", args.amount, key.validator_id, funding_addr);
 
-    // Need a single UTXO covering amount + fee. Pick the largest available (most likely to fit).
+    // Need a single MATURE UTXO covering amount + fee. Pick the largest available (most likely to
+    // fit). A coinbase UTXO is unspendable until `coinbase_maturity` blocks have passed
+    // (consensus rule); a miner still paying this funding address mints a fresh (immature)
+    // coinbase every block, so without this filter the "largest" pick is almost always the
+    // newest = immature one, and the bond tx is rejected forever ("spends an immature UTXO").
+    // Filtering by maturity here makes `bond` succeed even while the funding miner keeps running.
     let needed = args.amount.checked_add(args.fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
+    let coinbase_maturity = Params::from(server.network_id).coinbase_maturity();
+    let virtual_daa = server.virtual_daa_score;
     let utxos = client
         .get_utxos_by_addresses(vec![funding_addr.clone()])
         .await
@@ -250,8 +258,10 @@ async fn bond(args: BondArgs) -> Result<(), String> {
     let funding = utxos
         .into_iter()
         .filter(|e| e.utxo_entry.amount >= needed)
+        .filter(|e| is_spendable(e.utxo_entry.is_coinbase, e.utxo_entry.block_daa_score, virtual_daa, coinbase_maturity))
         .max_by_key(|e| e.utxo_entry.amount)
-        .ok_or_else(|| format!("no single funding UTXO >= {needed} sompi (amount+fee) at {funding_addr}; mine/send funds there first"))?;
+        .ok_or_else(|| format!("no single MATURE funding UTXO >= {needed} sompi (amount+fee) at {funding_addr}; \
+            mine/send funds there and wait for coinbase maturity ({coinbase_maturity} blocks)"))?;
     let funding_outpoint: TransactionOutpoint = funding.outpoint.into();
     let funding_entry: UtxoEntry = funding.utxo_entry.into();
 
@@ -302,10 +312,11 @@ async fn run_daemon(args: RunArgs) -> Result<(), String> {
         _ => {}
     }
     let prefix = prefix_for(server.network_id.network_type);
+    let coinbase_maturity = Params::from(server.network_id).coinbase_maturity();
     info!("[{VALIDATOR}] connected: network={node_network} synced={} version={}", server.is_synced, server.server_version);
 
     // Load the signing identity if fully configured (key + bond + state DB); else observe.
-    let attestor = Attestor::load(&args, prefix)?;
+    let attestor = Attestor::load(&args, prefix, coinbase_maturity)?;
     match &attestor {
         Some(a) => info!("[{VALIDATOR}] attesting as validator_id={} (funding {})", a.key.validator_id, a.key.funding_address(prefix)),
         None => info!("[{VALIDATOR}] observe-only (need --validator-key + --stake-bond + --signed-epoch-db to attest)"),
@@ -331,20 +342,23 @@ struct Attestor {
     bond_outpoint: TransactionOutpoint,
     signed_store: SignedEpochStore,
     prefix: Prefix,
+    /// Network coinbase-maturity (blocks); a coinbase funding UTXO younger than this cannot be
+    /// spent for the attestation tx. Captured once at load from the node's network id.
+    coinbase_maturity: u64,
 }
 
 impl Attestor {
     /// Load the signing identity iff `--validator-key`, `--stake-bond` and
     /// `--signed-epoch-db` are all provided. The state file is rejected if it belongs to a
     /// different validator/bond (cross-key equivocation guard).
-    fn load(args: &RunArgs, prefix: Prefix) -> Result<Option<Self>, String> {
+    fn load(args: &RunArgs, prefix: Prefix, coinbase_maturity: u64) -> Result<Option<Self>, String> {
         let (Some(key_path), Some(bond_ref), Some(db)) = (&args.validator_key, &args.stake_bond, &args.signed_epoch_db) else {
             return Ok(None);
         };
         let key = ValidatorKey::from_seed(load_validator_seed(key_path)?);
         let bond_outpoint = parse_stake_bond_ref(bond_ref)?;
         let signed_store = SignedEpochStore::load_or_empty(db.into(), key.validator_id, bond_outpoint)?;
-        Ok(Some(Self { key, bond_outpoint, signed_store, prefix }))
+        Ok(Some(Self { key, bond_outpoint, signed_store, prefix, coinbase_maturity }))
     }
 
     /// Sign the attestation `target` under the equivocation guard and (unless `dry_run`)
@@ -356,6 +370,7 @@ impl Attestor {
         client: &KaspaRpcClient,
         target: &GetValidatorAttestationTargetResponse,
         dry_run: bool,
+        virtual_daa: u64,
     ) -> Result<(), String> {
         let message = decode_message(&target.message)?;
         let target_hash = parse_hash64(&target.target_hash)?;
@@ -411,10 +426,15 @@ impl Attestor {
             .get_utxos_by_addresses(vec![funding_addr])
             .await
             .map_err(|e| format!("getUtxosByAddresses failed (does the node run --utxoindex?): {e}"))?;
+        // Skip immature coinbase UTXOs (consensus coinbase-maturity rule): a funding miner mints a
+        // fresh coinbase each block, so an unfiltered pick keeps grabbing the newest=immature one
+        // and the shard tx is rejected ("spends an immature UTXO"). Prefer a mature one.
         let funding = utxos
             .into_iter()
-            .find(|e| e.utxo_entry.amount > fee)
-            .ok_or_else(|| format!("no funding UTXO > {fee} sompi at the validator funding address; send funds there"))?;
+            .filter(|e| e.utxo_entry.amount > fee)
+            .find(|e| is_spendable(e.utxo_entry.is_coinbase, e.utxo_entry.block_daa_score, virtual_daa, self.coinbase_maturity))
+            .ok_or_else(|| format!("no MATURE funding UTXO > {fee} sompi at the validator funding address; \
+                send funds there and wait for coinbase maturity ({} blocks)", self.coinbase_maturity))?;
         let funding_outpoint: TransactionOutpoint = funding.outpoint.into();
         let funding_entry: UtxoEntry = funding.utxo_entry.into();
 
@@ -494,7 +514,7 @@ async fn run_loop(client: &KaspaRpcClient, args: &RunArgs, mut attestor: Option<
                 {
                     Ok(t) if t.available => match &mut attestor {
                         Some(a) => {
-                            if let Err(e) = a.attest(client, &t, args.dry_run).await {
+                            if let Err(e) = a.attest(client, &t, args.dry_run, server.virtual_daa_score).await {
                                 warn!("[{VALIDATOR}] attest failed for epoch {}: {e}", t.epoch);
                             }
                         }
@@ -514,6 +534,19 @@ async fn run_loop(client: &KaspaRpcClient, args: &RunArgs, mut attestor: Option<
             }
         }
     }
+}
+
+/// Whether a funding UTXO can be spent right now. A coinbase output is locked until
+/// `coinbase_maturity` blocks have passed since it was mined (consensus rule); a non-coinbase
+/// output is always spendable. `virtual_daa` is the node's current virtual DAA score.
+/// Saturating so a (transient) `block_daa_score > virtual_daa` reads as "not yet mature".
+/// Takes the two raw fields (not a typed entry) so it works for both `UtxoEntry` and the
+/// RPC `RpcUtxoEntry` returned by `get_utxos_by_addresses` (same fields, different type).
+fn is_spendable(is_coinbase: bool, block_daa_score: u64, virtual_daa: u64, coinbase_maturity: u64) -> bool {
+    if !is_coinbase {
+        return true;
+    }
+    virtual_daa.saturating_sub(block_daa_score) >= coinbase_maturity
 }
 
 /// Map the node's `NetworkType` to the bech32 address `Prefix` (for the funding address).
@@ -570,6 +603,21 @@ mod tests {
         assert_eq!(prefix_for(NetworkType::Testnet), Prefix::Testnet);
         assert_eq!(prefix_for(NetworkType::Devnet), Prefix::Devnet);
         assert_eq!(prefix_for(NetworkType::Simnet), Prefix::Simnet);
+    }
+
+    #[test]
+    fn is_spendable_respects_coinbase_maturity() {
+        let maturity = 1000;
+        // coinbase mined at daa 5000: needs virtual_daa - 5000 >= 1000
+        assert!(!is_spendable(true, 5000, 5500, maturity), "depth 500 < 1000 → immature");
+        assert!(!is_spendable(true, 5000, 5999, maturity), "depth 999 < 1000 → immature");
+        assert!(is_spendable(true, 5000, 6000, maturity), "depth exactly 1000 → mature");
+        assert!(is_spendable(true, 5000, 9000, maturity), "depth 4000 → mature");
+        // a coinbase from the future (transient reorg view) reads as not-yet-mature, never panics
+        assert!(!is_spendable(true, 6000, 5000, maturity));
+        // non-coinbase outputs are always spendable regardless of age
+        assert!(is_spendable(false, 5999, 6000, maturity));
+        assert!(is_spendable(false, 6000, 6000, maturity));
     }
 
     #[test]

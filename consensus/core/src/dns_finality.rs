@@ -604,6 +604,13 @@ pub struct DnsParams {
     pub min_active_stake_sompi: u64,
     pub min_active_validators: u32,
 
+    /// Per-bond minimum stake (sompi). A `StakeBond` whose `amount` is below this is **not**
+    /// admitted to the bond registry at acceptance (`bond_mutations_from_accepted_txs`), so it
+    /// can never become `Active` or attest — i.e. the network's minimum stake-per-validator.
+    /// Distinct from `min_active_stake_sompi` (the network-wide total needed to reach the
+    /// `Active` rollout stage). `0` = no per-bond floor (devnet/simnet).
+    pub min_bond_amount_sompi: u64,
+
     pub epoch_length_blocks: u64,
 
     /// `cW` — minimum work-depth for history confirmation.
@@ -2869,14 +2876,30 @@ pub enum BondMutation {
 ///
 /// Bond *activation* is **not** stamped here; it is derived at read time
 /// from the payload's `activation_daa_score` (see [`effective_bond_status`]).
-pub fn bond_mutations_from_accepted_txs(txs: &[Transaction], accepted_daa_score: u64) -> Vec<BondMutation> {
+pub fn bond_mutations_from_accepted_txs(
+    txs: &[Transaction],
+    accepted_daa_score: u64,
+    min_bond_amount_sompi: u64,
+    unbonding_floor_blocks: u64,
+) -> Vec<BondMutation> {
     let mut muts = Vec::new();
     for tx in txs {
         match dns_tx_kind(&tx.subnetwork_id) {
             Some(DnsTxKind::StakeBond) => {
                 if let Ok(payload) = borsh::from_slice::<StakeBondPayload>(&tx.payload) {
+                    // Per-bond minimum stake: a bond below the network floor is NOT admitted to
+                    // the registry (so it can never become Active / attest). Deterministic, so
+                    // the coinbase-construction and validation passes agree.
+                    if payload.amount < min_bond_amount_sompi {
+                        continue;
+                    }
                     let outpoint = TransactionOutpoint::new(tx.id(), 0);
-                    muts.push(BondMutation::Insert(outpoint, stake_bond_record_from_payload(&payload, outpoint)));
+                    let mut record = stake_bond_record_from_payload(&payload, outpoint);
+                    // Clamp the operator-declared unbonding window up to the network floor, so a
+                    // validator cannot shorten its exit-lock (and thus its slashable window) by
+                    // declaring a tiny `unbonding_period_blocks`.
+                    record.unbonding_period_blocks = record.unbonding_period_blocks.max(unbonding_floor_blocks);
+                    muts.push(BondMutation::Insert(outpoint, record));
                 }
             }
             Some(DnsTxKind::SlashingEvidence) => {
@@ -3927,7 +3950,7 @@ mod tests {
         let shard_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, borsh::to_vec(&fixture_shard(2)).unwrap());
         let native_tx = dns_overlay_tx(SubnetworkId::from_byte(0), vec![1, 2, 3]);
 
-        let muts = bond_mutations_from_accepted_txs(&[bond_tx, slash_tx, shard_tx, native_tx], 12_345);
+        let muts = bond_mutations_from_accepted_txs(&[bond_tx, slash_tx, shard_tx, native_tx], 12_345, 0, 0);
         assert_eq!(muts.len(), 2);
         assert_eq!(muts[0], BondMutation::Insert(expected_outpoint, stake_bond_record_from_payload(&bond_payload, expected_outpoint)));
         assert_eq!(muts[1], BondMutation::Slash(evidence.bond_outpoint, 12_345));
@@ -3937,14 +3960,42 @@ mod tests {
     fn bond_mutations_skips_undecodable_overlay_payload() {
         // A malformed stake-bond payload is defensively skipped, not panicked on.
         let bad = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, vec![0xff, 0x00, 0x12]);
-        assert!(bond_mutations_from_accepted_txs(&[bad], 0).is_empty());
+        assert!(bond_mutations_from_accepted_txs(&[bad], 0, 0, 0).is_empty());
     }
 
     #[test]
     fn bond_mutations_empty_without_overlay_txs() {
         let native = dns_overlay_tx(SubnetworkId::from_byte(0), vec![]);
         let coinbase = dns_overlay_tx(SubnetworkId::from_byte(1), vec![]);
-        assert!(bond_mutations_from_accepted_txs(&[native, coinbase], 100).is_empty());
+        assert!(bond_mutations_from_accepted_txs(&[native, coinbase], 100, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn bond_mutations_enforce_min_amount_and_unbonding_floor() {
+        // fixture_bond: amount = 100_000_000_000, declared unbonding_period_blocks = 100_000.
+        let bond_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, borsh::to_vec(&fixture_bond()).unwrap());
+
+        // (a) below the per-bond minimum → not admitted (no mutation).
+        assert!(
+            bond_mutations_from_accepted_txs(&[bond_tx.clone()], 1, 100_000_000_001, 0).is_empty(),
+            "a bond below min_bond_amount must be rejected"
+        );
+        // (b) at/above the minimum → admitted.
+        let muts = bond_mutations_from_accepted_txs(&[bond_tx.clone()], 1, 100_000_000_000, 0);
+        assert_eq!(muts.len(), 1, "a bond at exactly the minimum is accepted");
+
+        // (c) the stored unbonding period is clamped UP to the floor (declared 100_000 < 500_000).
+        let muts = bond_mutations_from_accepted_txs(&[bond_tx.clone()], 1, 0, 500_000);
+        match &muts[0] {
+            BondMutation::Insert(_, rec) => assert_eq!(rec.unbonding_period_blocks, 500_000, "unbonding clamped to floor"),
+            other => panic!("expected Insert, got {other:?}"),
+        }
+        // (d) a floor below the declared value leaves the larger declared value intact.
+        let muts = bond_mutations_from_accepted_txs(&[bond_tx], 1, 0, 50_000);
+        match &muts[0] {
+            BondMutation::Insert(_, rec) => assert_eq!(rec.unbonding_period_blocks, 100_000, "declared > floor is kept"),
+            other => panic!("expected Insert, got {other:?}"),
+        }
     }
 
     // ---- Addendum B §B.1: ActiveBondView + RewardedEpochSet ----
@@ -4258,6 +4309,7 @@ mod tests {
             dns_activation_daa_score: 1_000_000,
             min_active_stake_sompi: 10_000_000_000_000,
             min_active_validators: 32,
+            min_bond_amount_sompi: 2_000_000_000_000,
             epoch_length_blocks: 600,
             required_work_depth: BlueWorkType::from_u64(1_000_000),
             required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
