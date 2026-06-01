@@ -1,7 +1,7 @@
 use crate::imports::*;
 
 #[derive(Default, Handler)]
-#[help("Send a Kaspa transaction to a public address")]
+#[help("Send a Misaka transaction to a public address")]
 pub struct Send;
 
 impl Send {
