@@ -9,7 +9,7 @@ use kaspa_consensus_client::UtxoEntryReference;
 use kaspa_consensus_core::mass::calc_storage_mass as consensus_calc_storage_mass;
 use kaspa_consensus_core::tx::{SCRIPT_VECTOR_SIZE, Transaction, TransactionInput, TransactionOutput};
 use kaspa_consensus_core::{config::params::Params, constants::*, subnets::SUBNETWORK_ID_SIZE};
-use kaspa_hashes::HASH_SIZE;
+use kaspa_hashes::{HASH64_SIZE, HASH_SIZE};
 
 // pub const ECDSA_SIGNATURE_SIZE: u64 = 64;
 // pub const SCHNORR_SIGNATURE_SIZE: u64 = 64;
@@ -188,7 +188,7 @@ fn transaction_input_serialized_byte_size(input: &TransactionInput) -> u64 {
 
 const fn outpoint_estimated_serialized_size() -> u64 {
     let mut size: u64 = 0;
-    size += HASH_SIZE as u64; // Previous tx ID
+    size += HASH64_SIZE as u64; // Previous tx ID (64-byte Hash64 TransactionId)
     size += 4; // Index (u32)
     size
 }

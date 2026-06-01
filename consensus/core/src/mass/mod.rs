@@ -4,7 +4,7 @@ use crate::{
     subnets::SUBNETWORK_ID_SIZE,
     tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry, VerifiableTransaction},
 };
-use kaspa_hashes::HASH_SIZE;
+use kaspa_hashes::{HASH64_SIZE, HASH_SIZE};
 
 // transaction_estimated_serialized_size is the estimated size of a transaction in some
 // serialization. This has to be deterministic, but not necessarily accurate, since
@@ -44,7 +44,7 @@ fn transaction_input_estimated_serialized_size(input: &TransactionInput) -> u64 
 
 const fn outpoint_estimated_serialized_size() -> u64 {
     let mut size: u64 = 0;
-    size += HASH_SIZE as u64; // Previous tx ID
+    size += HASH64_SIZE as u64; // Previous tx ID (64-byte Hash64 TransactionId)
     size += 4; // Index (u32)
     size
 }
@@ -64,7 +64,7 @@ pub fn transaction_output_estimated_serialized_size(output: &TransactionOutput) 
 pub fn utxo_plurality(spk: &ScriptPublicKey) -> u64 {
     /// A constant representing the number of bytes used by the fixed parts of a UTXO.
     const UTXO_CONST_STORAGE: usize =
-        32  // outpoint::tx_id
+        HASH64_SIZE  // outpoint::tx_id (64-byte Hash64 TransactionId)
         + 4 // outpoint::index
         + 8 // entry amount
         + 8 // entry DAA score
@@ -73,8 +73,9 @@ pub fn utxo_plurality(spk: &ScriptPublicKey) -> u64 {
         + 8 // entry spk len
     ;
 
-    // The base (63 bytes) plus the max standard public key length (33 bytes) fits into one 100-byte unit.
-    // Hence, all standard SPKs end up with a plurality of 1.
+    // The fixed base is now 95 bytes (64-byte Hash64 outpoint tx_id + 31 bytes of other fixed fields).
+    // kaspa-pq has no 33-byte "standard" SPKs (PQ public keys are far larger), so the plurality is
+    // effectively driven by the script length.
     const UTXO_UNIT_SIZE: usize = 100;
 
     (UTXO_CONST_STORAGE + spk.script().len()).div_ceil(UTXO_UNIT_SIZE) as u64
@@ -422,7 +423,7 @@ mod tests {
     };
     use std::str::FromStr;
 
-    const UTXO_CONST_STORAGE: u64 = 63;
+    const UTXO_CONST_STORAGE: u64 = 95;
     const UTXO_UNIT_SIZE: u64 = 100;
 
     #[test]
@@ -443,7 +444,7 @@ mod tests {
 
         // verify P >= 1 also when the script is empty
         assert!(utxo_plurality(&ScriptPublicKey::new(0, ScriptVec::from_slice(&[]))) == 1);
-        // Assert the UTXO_CONST_STORAGE=63, UTXO_UNIT_SIZE=100 constants
+        // Assert the UTXO_CONST_STORAGE=95, UTXO_UNIT_SIZE=100 constants
         assert!(utxo_plurality(&ScriptPublicKey::from_vec(0, vec![1; (UTXO_UNIT_SIZE - UTXO_CONST_STORAGE) as usize])) == 1);
         assert!(utxo_plurality(&ScriptPublicKey::from_vec(0, vec![1; (UTXO_UNIT_SIZE - UTXO_CONST_STORAGE + 1) as usize])) == 2);
     }
