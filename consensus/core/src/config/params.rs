@@ -10,7 +10,7 @@ use crate::{
     network::{NetworkId, NetworkType},
 };
 use kaspa_addresses::Prefix;
-use kaspa_math::Uint256;
+use kaspa_math::{Uint256, Uint576};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::min,
@@ -579,10 +579,16 @@ impl From<NetworkId> for Params {
 /// immediately. The rollout still advances Bootstrap→Active only once a real bond exists
 /// (`min_active_validators: 1`, `min_active_stake_sompi: 0`), so an unbonded chain runs on
 /// pure PoW/GHOSTDAG and Active (with the reorg gate) engages the moment a validator bonds
-/// + attests. `reorg_mode: HardCheckpoint` (current devnet mechanism, kept for all nets by
-/// user request): once an anchor is DNS-confirmed, any candidate that exits the confirmed
-/// prefix is rejected. NOTE: `dns_params` is NOT a genesis-block input (genesis.rs never
-/// reads it), so making every net `Some(..)` leaves all genesis hashes unchanged.
+/// + attests. `reorg_mode: TwoDimensionalDominance` (ADR-0009/0018 §H mainnet spec, applied
+/// to all nets per user request 2026-06-01): once an anchor is DNS-confirmed, a candidate
+/// that exits the confirmed prefix is accepted ONLY if it **strictly beats** the canonical
+/// chain on BOTH accumulated `WorkScore` AND `StakeScore` since their common ancestor, each
+/// by its emergency margin (`emergency_work_margin` / `emergency_stake_margin`) — the
+/// "non-substitutability" rule: a PoW-only surplus cannot buy past a PoS deficit and vice
+/// versa. This replaces the prior PoC `HardCheckpoint` (which rejected ANY confirmed-prefix
+/// exit — a loud testing convenience, not real DNS finality). NOTE: `dns_params` is NOT a
+/// genesis-block input (genesis.rs never reads it), so every net stays `Some(..)` with the
+/// genesis hashes unchanged.
 pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     dns_activation_daa_score: 0,
     min_active_stake_sompi: 0,
@@ -590,7 +596,15 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     epoch_length_blocks: 100,
     required_work_depth: BlueWorkType::ZERO,
     required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
-    emergency_work_margin: BlueWorkType::ZERO,
+    // ADR-0018 §H two-dimensional dominance margins. A deep reorg that abandons a
+    // DNS-confirmed anchor must out-Work the canonical chain by > emergency_work_margin
+    // AND out-Stake it by > emergency_stake_margin (non-substitutability). The work margin
+    // is a fixed ~2-blocks-of-devnet-work buffer (1_000_000; one BlueWorkType u64 limb);
+    // on higher-difficulty nets it is a proportionally tighter — but always strict —
+    // positive buffer. The stake margin is 1× the required_stake_depth unit.
+    // BlueWorkType is a type alias for Uint576 (9 little-endian u64 limbs); construct via the
+    // real struct name (the alias is not a tuple-struct ctor). Low limb = 1_000_000.
+    emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
     emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
     max_reorg_horizon_blocks: 300,
     evidence_window_blocks: 300,
@@ -634,7 +648,7 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
             finality_fee_service_bps: 0,
         },
     },
-    reorg_mode: DnsReorgMode::HardCheckpoint,
+    reorg_mode: DnsReorgMode::TwoDimensionalDominance,
     full_reward_split_daa_score: 0,
 };
 
@@ -896,6 +910,6 @@ pub const DEVNET_PARAMS: Params = Params {
     // kaspa-pq: DNS-finality PoS overlay genesis-active on every network (see
     // GENESIS_ACTIVE_DNS_PARAMS). Devnet shares the identical fully-active config as
     // mainnet/testnet/simnet (user decision 2026-06-01: all four nets genesis-active,
-    // HardCheckpoint reorg mode, full Stage-3 reward split from genesis).
+    // TwoDimensionalDominance reorg mode, full Stage-3 reward split from genesis).
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
 };
