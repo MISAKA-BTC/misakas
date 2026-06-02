@@ -1089,6 +1089,12 @@ fn attestation_reward_eligibility(
         let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) else {
             return Err((att.bond_outpoint.transaction_id, att.epoch));
         };
+        // kaspa-pq DNS v2 (P-1A): the self-declared validator_id must match the bond's
+        // validator_pubkey_hash (validator_id is not in the signed digest); reward eligibility
+        // shares the StakeScore binding so no reward can be earned by a non-canonical validator_id.
+        if att.validator_id != bond.validator_pubkey_hash {
+            return Err((att.bond_outpoint.transaction_id, att.epoch));
+        }
         // (b) ML-DSA-65 signature verifies over the canonical digest.
         let digest = stake_attestation_message(
             net_id.as_byte_slice(),
@@ -1135,6 +1141,12 @@ fn slashing_evidence_genuine(
             return Err(ev.bond_outpoint.transaction_id);
         };
         for att in [&ev.attestation_a, &ev.attestation_b] {
+            // kaspa-pq DNS v2 (P-1A): both equivocating attestations must be bound to the bond's
+            // validator_pubkey_hash (validator_id is not in the signed digest), so slashing can't be
+            // spoofed against a bond via a mismatched validator_id.
+            if att.validator_id != bond.validator_pubkey_hash {
+                return Err(ev.bond_outpoint.transaction_id);
+            }
             let digest = stake_attestation_message(
                 net_id.as_byte_slice(),
                 att.epoch,

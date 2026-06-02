@@ -1053,6 +1053,13 @@ impl VirtualStateProcessor {
                 let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == att.bond_outpoint) else {
                     continue;
                 };
+                // kaspa-pq DNS v2 (P-1A): the attestation's self-declared validator_id MUST match
+                // the bond's validator_pubkey_hash. validator_id is not part of the signed digest,
+                // so without this an attacker could vary it on otherwise-valid attestations to evade
+                // the (bond, validator_id, epoch) dedup and inflate signed stake past the φS floor.
+                if att.validator_id != bond.validator_pubkey_hash {
+                    continue;
+                }
                 if !is_bond_active_at(bond, att.target_daa_score) {
                     continue;
                 }

@@ -2864,6 +2864,7 @@ pub fn validate_stake_attestation_shard_payload(payload: &[u8]) -> Result<(), Dn
         check_attestation_wellformed(att)?;
         if att.epoch != shard.epoch
             || att.target_hash != shard.target_hash
+            || att.target_daa_score != shard.target_daa_score
             || att.validator_set_commitment != shard.validator_set_commitment
         {
             return Err(DnsTxError::ShardTupleMismatch);
@@ -3053,6 +3054,13 @@ pub fn bond_mutations_from_accepted_txs(
                     }
                     let outpoint = TransactionOutpoint::new(tx.id(), 0);
                     let mut record = stake_bond_record_from_payload(&payload, outpoint);
+                    // kaspa-pq DNS v2 (P-1B): activation is NON-RETROACTIVE. A bond may not declare a
+                    // past `activation_daa_score` and thereby insert itself into a historical epoch's
+                    // active set, which would retroactively change that epoch's StakeScore / reward
+                    // denominator (the lagged-anchor denominator is evaluated at a past anchor DAA).
+                    // Clamp activation up to the bond's acceptance DAA so it can only affect future
+                    // epochs. Deterministic, so coinbase construction and validation agree.
+                    record.activation_daa_score = record.activation_daa_score.max(accepted_daa_score);
                     // Clamp the operator-declared unbonding window up to the network floor, so a
                     // validator cannot shorten its exit-lock (and thus its slashable window) by
                     // declaring a tiny `unbonding_period_blocks`.
@@ -4256,8 +4264,53 @@ mod tests {
 
         let muts = bond_mutations_from_accepted_txs(&[bond_tx, slash_tx, shard_tx, native_tx], 12_345, 0, 0);
         assert_eq!(muts.len(), 2);
-        assert_eq!(muts[0], BondMutation::Insert(expected_outpoint, stake_bond_record_from_payload(&bond_payload, expected_outpoint)));
+        // P-1B: the inserted record's activation is clamped up to the acceptance DAA (12_345 here),
+        // so a bond cannot back-date itself into a past epoch's active set / StakeScore denominator.
+        let mut expected_record = stake_bond_record_from_payload(&bond_payload, expected_outpoint);
+        expected_record.activation_daa_score = expected_record.activation_daa_score.max(12_345);
+        assert_eq!(muts[0], BondMutation::Insert(expected_outpoint, expected_record));
         assert_eq!(muts[1], BondMutation::Slash(evidence.bond_outpoint, 12_345));
+    }
+
+    #[test]
+    fn bond_activation_clamped_to_acceptance_daa() {
+        // P-1B (DNS v2/v3): a bond declaring a past (or zero) activation cannot back-date itself
+        // into a historical epoch's active set — the inserted record's activation is
+        // max(declared, acceptance DAA). A future-dated activation is left as declared.
+        let mut past = fixture_bond();
+        past.activation_daa_score = 5;
+        let past_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, borsh::to_vec(&past).unwrap());
+        match &bond_mutations_from_accepted_txs(&[past_tx], 10_000, 0, 0)[0] {
+            BondMutation::Insert(_, record) => {
+                assert_eq!(record.activation_daa_score, 10_000, "past activation is clamped up to acceptance DAA");
+            }
+            _ => panic!("expected an Insert mutation"),
+        }
+
+        let mut future = fixture_bond();
+        future.activation_daa_score = 50_000;
+        let future_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, borsh::to_vec(&future).unwrap());
+        match &bond_mutations_from_accepted_txs(&[future_tx], 10_000, 0, 0)[0] {
+            BondMutation::Insert(_, record) => {
+                assert_eq!(record.activation_daa_score, 50_000, "future activation is left as declared (no down-clamp)");
+            }
+            _ => panic!("expected an Insert mutation"),
+        }
+    }
+
+    #[test]
+    fn shard_tuple_rejects_target_daa_score_mismatch() {
+        // P-1C (DNS v2/v3): the shard's (epoch, target_hash, target_daa_score, vsc) tuple must
+        // match every contained attestation — including target_daa_score (previously unchecked).
+        let att = fixture_attestation();
+        let mut shard = single_attestation_shard(att);
+        // Desync ONLY target_daa_score (the attestation keeps its own value).
+        shard.target_daa_score = shard.target_daa_score.wrapping_add(1);
+        let payload = borsh::to_vec(&shard).unwrap();
+        assert!(
+            matches!(validate_stake_attestation_shard_payload(&payload), Err(DnsTxError::ShardTupleMismatch)),
+            "a shard whose target_daa_score disagrees with its attestation must be rejected"
+        );
     }
 
     #[test]

@@ -758,11 +758,12 @@ impl ConsensusApi for Consensus {
         let target_daa_score = self.get_sink_daa_score_timestamp().daa_score;
         let epoch = target_daa_score / dns_params.epoch_length_blocks.max(1);
 
-        // ADR-0017: the VSC commits to the full active validator set (no committee
-        // subset). `validator_set_commitment` sorts internally, so caller order
-        // does not matter.
-        let active = self.dns_active_validator_records(target_daa_score);
-        let vsc = validator_set_commitment(epoch, &active);
+        // kaspa-pq DNS v2 (P-1D): the VSC is NOT a consensus gate. ADR-0017 retired the committee;
+        // DnsState's validator_set_commitment is zero-fixed and the verifier never recomputes or
+        // compares it — it stays in the signed digest for domain separation only. Computing it from
+        // the active validator set made the signed message depend on the (back-dateable) active set;
+        // emit a fixed zero so the attestation target is stable and viewpoint-independent.
+        let vsc = kaspa_consensus_core::Hash64::default();
 
         // ADR-0009 Addendum A.3: network discriminator := the per-network genesis hash.
         let message = stake_attestation_message(
