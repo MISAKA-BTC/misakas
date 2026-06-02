@@ -3,7 +3,6 @@ use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk;
 use kaspa_consensus_core::mining_rules::MiningRules;
-use kaspa_consensus_core::tx::ScriptPublicKey;
 use kaspa_consensus_core::{
     api::ConsensusApi, block::MutableBlock, blockstatus::BlockStatus, header::Header, merkle::calc_hash_merkle_root,
     subnets::SUBNETWORK_ID_COINBASE, tx::Transaction,
