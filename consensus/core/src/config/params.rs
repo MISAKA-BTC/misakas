@@ -759,8 +759,15 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     },
     reorg_mode: DnsReorgMode::TwoDimensionalDominance,
     full_reward_split_daa_score: 0,
-    // PoS-v2 "本格版" economics master fence — dormant on every net (no re-genesis).
-    pos_v2_activation_daa_score: u64::MAX,
+    // PoS-v2 "本格版" economics master fence. ACTIVE from genesis (0) on mainnet +
+    // testnet (this PRODUCTION preset): the §E participation/quality split, 4-way
+    // slashing (reporter/reserve/victim/burn) + victim compensation, and the
+    // security-reserve drip all run from block 1. devnet + simnet keep
+    // GENESIS_ACTIVE_DNS_PARAMS's fence (`u64::MAX`), so v2 stays dormant there.
+    // Not a genesis-block input, so the genesis hash is unchanged; the existing
+    // pre-v2 chains are invalid under the new PQ-only/mass rules and need a
+    // re-genesis regardless, which this activation rides along with.
+    pos_v2_activation_daa_score: 0,
 };
 
 pub const MAINNET_PARAMS: Params = Params {
