@@ -30,10 +30,11 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BondStatus, FeeSplitParams, RewardedEpochSet, SlashingSideEffect,
-        attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status, resolve_slashing_side_effects,
+        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondStatus, DnsParams, FeeSplitParams,
+        RewardedEpochSet, SlashingSideEffect, attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status,
+        epoch_meets_quality_floor, epochs_finalized_at, recompute_epoch_tallies, resolve_slashing_side_effects,
         slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
-        validator_participation_reward_outputs,
+        validator_participation_reward_outputs, validator_quality_bonus_outputs, victim_compensation_outputs,
     },
     hashing,
     header::Header,
@@ -100,6 +101,20 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// block's coinbase rewarded, computed during `verify_expected_utxo_state`
     /// and persisted by `commit_utxo_state` for descendant uniqueness checks.
     pub validator_rewarded_keys: RewardedEpochKeys,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): this block's validator quality
+    /// sub-pool (`split_validator_pool(.).1`), persisted by `commit_utxo_state` as
+    /// the per-epoch accumulator's recompute input. `0` (never persisted) below
+    /// `pos_v2_activation_daa_score` (`u64::MAX` everywhere today).
+    pub validator_quality_subpool: u64,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): this block's security-reserve **accrual** — the
+    /// `Σ security_reserve_sompi` of its slashing side-effects (set in `apply_slashing_side_effects`).
+    /// Feeds the per-block reserve-balance recurrence. `0` below the v2 fence.
+    pub reserve_accrual: u64,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): this block's **cumulative reserve balance**
+    /// (`balance_after(selected_parent) + reserve_accrual − drip`), persisted by `commit_utxo_state`
+    /// when non-zero. The finalizing coinbase reads the selected parent's value for the drip. `0`
+    /// (never persisted) below the v2 fence.
+    pub reserve_balance_after: u64,
 }
 
 impl<'a> UtxoProcessingContext<'a> {
@@ -114,6 +129,9 @@ impl<'a> UtxoProcessingContext<'a> {
             mergeset_acceptance_data: Vec::with_capacity(mergeset_size),
             pruning_sample_from_pov: Default::default(),
             validator_rewarded_keys: Vec::new(),
+            validator_quality_subpool: 0,
+            reserve_accrual: 0,
+            reserve_balance_after: 0,
         }
     }
 
@@ -244,13 +262,162 @@ impl VirtualStateProcessor {
             return;
         }
         let accepted_txs = self.accepted_txs_from_acceptance_data(&ctx.mergeset_acceptance_data);
-        let effects = resolve_slashing_side_effects(
+        // ADR-0018 "本格版" (PoS-v2) §slashing: the reserve + victim shares are fenced — `0` below
+        // `pos_v2_activation_daa_score`, so `compute_slashing_distribution` degenerates to the pre-v2
+        // 2-way (reporter + burn) and slashing is byte-identical on every current network.
+        let (security_reserve_bps, victim_epoch_pool_bps) = if pov_daa_score >= dns_params.pos_v2_activation_daa_score {
+            (dns_params.reward_params.security_reserve_bps, dns_params.reward_params.victim_epoch_pool_bps)
+        } else {
+            (0, 0)
+        };
+        let mut effects = resolve_slashing_side_effects(
             &accepted_txs,
             selected_parent_bond_view,
             pov_daa_score,
             dns_params.reward_params.slashing_reporter_reward_bps,
+            security_reserve_bps,
+            victim_epoch_pool_bps,
         );
+        // ADR-0018 "本格版" (PoS-v2) victim compensation: for each slashed bond with a victim pool,
+        // recompute the slashed validator's epoch's honest (non-slashed) included set from the
+        // selected-parent window and build the victim outputs. Inert when fenced (pool = 0 ⇒ skip),
+        // so this is a no-op on every current network. The recompute reads the same selected-parent
+        // view in both the block-validation and virtual-recompute paths ⇒ construction == validation.
+        for effect in effects.iter_mut() {
+            if effect.victim_epoch_pool_sompi == 0 {
+                continue;
+            }
+            let slashed_payload = selected_parent_bond_view.get(&effect.bond_outpoint).map(|b| b.owner_reward_spk_payload);
+            effect.victim_outputs = self.slashed_epoch_victim_outputs(
+                dns_params,
+                ctx.selected_parent(),
+                selected_parent_bond_view,
+                effect.slashed_epoch,
+                slashed_payload,
+                effect.victim_epoch_pool_sompi,
+            );
+        }
+        // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): this block's security-reserve accrual = Σ of
+        // the slashed bonds' reserve shares (0 when fenced). Feeds the reserve-balance recurrence
+        // (`commit_utxo_state` persists `parent_balance + reserve_accrual − drip`). The reserve share
+        // is NOT minted (it leaves the supply with the bond removal until it later drips back out).
+        ctx.reserve_accrual = effects.iter().fold(0u64, |acc, e| acc.saturating_add(e.security_reserve_sompi));
         apply_slashing_effects_to_state(&effects, selected_parent_utxo_view, &mut ctx.mergeset_diff, &mut ctx.multiset_hash, pov_daa_score);
+    }
+
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2) §slashing — the victim-compensation outputs for one
+    /// slashed bond: the `victim_pool` distributed stake-proportionally among the **honest**
+    /// validators of the slashed validator's epoch. Recomputes `slashed_epoch`'s accumulator
+    /// `included` set from the selected-parent window (the same bounded walk + pure
+    /// `recompute_epoch_tallies` Phase 1/2 use), drops the slashed validator (matched by its
+    /// `owner_reward_spk_payload`), and pays the rest via [`victim_compensation_outputs`]. Resolves
+    /// bonds against `bond_view` (as-of the selected parent) so the block-validation and
+    /// virtual-recompute paths build byte-identical outputs (construction == validation, reorg-safe
+    /// — a finalized/buried epoch's blocks are immutable). Empty while the v2 fence is closed (no
+    /// accumulator rows in the window), so this is a no-op on every current network.
+    fn slashed_epoch_victim_outputs(
+        &self,
+        dns_params: &DnsParams,
+        selected_parent: BlockHash,
+        bond_view: &ActiveBondView,
+        slashed_epoch: u64,
+        slashed_payload: Option<[u8; 64]>,
+        victim_pool: u64,
+    ) -> Vec<TransactionOutput> {
+        let epoch_len = dns_params.epoch_length_blocks.max(1);
+        let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
+        let walk_bound = finalization_depth.saturating_add(epoch_len.saturating_mul(2));
+        let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
+
+        // Gather the selected-parent window's per-block contributions (sink-parent first, then
+        // ancestors), stopping at the window edge or the v2 fence.
+        let mut contributions: Vec<BlockEpochContribution> = Vec::new();
+        for ancestor in once(selected_parent).chain(self.reachability_service.default_backward_chain_iterator(selected_parent)) {
+            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
+            if parent_daa.saturating_sub(ancestor_daa) > walk_bound || ancestor_daa < dns_params.pos_v2_activation_daa_score {
+                break;
+            }
+            let rewarded_keys = self.rewarded_epochs_store.get(ancestor).map(|k| (*k).clone()).unwrap_or_default();
+            let quality_subpool = self.block_quality_pool_store.get(ancestor).unwrap_or(0);
+            contributions.push(BlockEpochContribution { block_daa_score: ancestor_daa, rewarded_keys, quality_subpool });
+        }
+        contributions.reverse();
+
+        let bonds = bond_view.records();
+        let tallies = recompute_epoch_tallies(parent_daa, epoch_len, finalization_depth, &contributions, &bonds);
+        let included = tallies.into_iter().find(|(epoch, _)| *epoch == slashed_epoch).map(|(_, tally)| tally.included).unwrap_or_default();
+        // Drop the slashed (equivocating) validator — it earns no victim compensation in its own
+        // misbehavior epoch. Matched by the owner reward payload carried in the accumulator.
+        let honest: Vec<_> =
+            included.into_iter().filter(|(payload, _)| slashed_payload.is_none_or(|sp| payload.as_bytes() != sp)).collect();
+        let total_honest_stake: u128 = honest.iter().map(|(_, stake)| *stake as u128).sum();
+        victim_compensation_outputs(victim_pool, &honest, total_honest_stake)
+    }
+
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4) §reserve drip — the security-reserve **drip**
+    /// coinbase outputs THIS block emits for the epoch(s) it finalizes, plus the total dripped (for
+    /// the reserve-balance recurrence). For each epoch the block finalizes (the same crossing as the
+    /// quality bonus), drips `min(remaining_balance, reserve_drip_per_epoch_cap_sompi)` distributed
+    /// stake-proportionally to that epoch's included validators (reusing the bonus distributor). The
+    /// reserve decreases by exactly the **minted** amount (≤ budget), so it is value-conserving and
+    /// the unspent tail rolls over. `parent_balance` is the selected parent's committed cumulative
+    /// reserve balance (read by the caller from `reserve_balance_store`), so construction (template)
+    /// and validation read the identical as-of-selected-parent balance ⇒ byte-identical, reorg-safe.
+    /// Returns no outputs below the v2 fence / when the parent balance or the per-epoch cap is 0 /
+    /// when no epoch crosses — so it is inert on every current network.
+    pub(super) fn reserve_drip_outputs(
+        &self,
+        dns_params: &DnsParams,
+        daa_score: u64,
+        selected_parent: BlockHash,
+        bond_view: &ActiveBondView,
+        parent_balance: u64,
+    ) -> (Vec<TransactionOutput>, u64) {
+        let cap = dns_params.reward_params.reserve_drip_per_epoch_cap_sompi;
+        if daa_score < dns_params.pos_v2_activation_daa_score || parent_balance == 0 || cap == 0 {
+            return (Vec::new(), 0);
+        }
+        let epoch_len = dns_params.epoch_length_blocks.max(1);
+        let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
+        let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
+        let Some((e_min, e_max)) = epochs_finalized_at(parent_daa, daa_score, epoch_len, finalization_depth) else {
+            return (Vec::new(), 0);
+        };
+
+        let walk_bound = finalization_depth.saturating_add(epoch_len.saturating_mul(2));
+        let mut contributions: Vec<BlockEpochContribution> = Vec::new();
+        for ancestor in once(selected_parent).chain(self.reachability_service.default_backward_chain_iterator(selected_parent)) {
+            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
+            if parent_daa.saturating_sub(ancestor_daa) > walk_bound || ancestor_daa < dns_params.pos_v2_activation_daa_score {
+                break;
+            }
+            let rewarded_keys = self.rewarded_epochs_store.get(ancestor).map(|k| (*k).clone()).unwrap_or_default();
+            let quality_subpool = self.block_quality_pool_store.get(ancestor).unwrap_or(0);
+            contributions.push(BlockEpochContribution { block_daa_score: ancestor_daa, rewarded_keys, quality_subpool });
+        }
+        contributions.reverse();
+        let bonds = bond_view.records();
+        let tallies = recompute_epoch_tallies(daa_score, epoch_len, finalization_depth, &contributions, &bonds);
+
+        let mut outputs = Vec::new();
+        let mut remaining = parent_balance;
+        let mut total_drip = 0u64;
+        for (epoch, tally) in &tallies {
+            if *epoch < e_min || *epoch > e_max || remaining == 0 {
+                continue;
+            }
+            let budget = remaining.min(cap);
+            if budget == 0 {
+                continue;
+            }
+            // Stake-proportional distribution to the epoch's included validators (meets=true ⇒ pays).
+            let drip = validator_quality_bonus_outputs(budget as u128, &tally.included, tally.expected_stake, true);
+            let minted: u64 = drip.iter().fold(0u64, |acc, o| acc.saturating_add(o.value));
+            outputs.extend(drip);
+            remaining = remaining.saturating_sub(minted);
+            total_drip = total_drip.saturating_add(minted);
+        }
+        (outputs, total_drip)
     }
 
     /// Verify that the current block fully respects its own UTXO view. We define a block as
@@ -327,6 +494,35 @@ impl VirtualStateProcessor {
             validator_pool,
         );
         ctx.validator_rewarded_keys = rewarded_keys;
+
+        // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): stash this block's validator
+        // quality sub-pool (the §E split's bonus share) for the per-epoch
+        // accumulator. Gated by the v2 fence (`pos_v2_activation_daa_score`,
+        // `u64::MAX` today) so it stays 0 and `commit_utxo_state` writes no row on
+        // every current network — fully inert. (Below `dns_activation` the pool is
+        // already 0, since `validator_pool` is.) Does NOT affect the coinbase, so
+        // construction == validation is untouched.
+        ctx.validator_quality_subpool = self
+            .dns_params
+            .as_ref()
+            .filter(|p| header.daa_score >= p.pos_v2_activation_daa_score)
+            .map_or(0, |p| {
+                split_validator_pool(validator_pool as u128, p.reward_params.validator_participation_bps).1.min(u64::MAX as u128) as u64
+            });
+
+        // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): append the security-reserve **drip** outputs
+        // (for the epoch[s] this block finalizes) after the participation + quality-bonus outputs, and
+        // advance the per-block reserve-balance recurrence `balance_after = parent_balance +
+        // reserve_accrual − drip`. The drip reads the selected parent's COMMITTED balance (so the
+        // construction (template) and validation paths agree byte-for-byte). Inert below the v2 fence.
+        let mut validator_reward_outputs = validator_reward_outputs;
+        if let Some(dns_params) = self.dns_params.as_ref() {
+            let parent_balance = self.reserve_balance_store.get(ctx.selected_parent()).unwrap_or(0);
+            let (drip_outputs, drip_total) =
+                self.reserve_drip_outputs(dns_params, header.daa_score, ctx.selected_parent(), selected_parent_bond_view, parent_balance);
+            validator_reward_outputs.extend(drip_outputs);
+            ctx.reserve_balance_after = parent_balance.saturating_add(ctx.reserve_accrual).saturating_sub(drip_total);
+        }
 
         // Verify coinbase transaction (incl. the §F carve + §E fan-out + §D bounty).
         self.verify_coinbase_transaction(
@@ -484,15 +680,24 @@ impl VirtualStateProcessor {
             }
         }
 
-        // ADR-0018 §E: distribute the participation sub-pool (the 70% split of the
-        // §F validator pool; the 30% quality-bonus sub-pool is a later slice and is
-        // burned for now) proportionally by stake against the epoch's expected
-        // (total active) stake — the anti-capture denominator — with the same
-        // within-block + cross-block (§B.3(c)) `(bond, epoch)` uniqueness and a
-        // whole-output pool cap (Σ ≤ pool; the unspent remainder is not minted).
+        // ADR-0018 §E: distribute the participation sub-pool proportionally by stake against the
+        // epoch's expected (total active) stake — the anti-capture denominator — with the same
+        // within-block + cross-block (§B.3(c)) `(bond, epoch)` uniqueness and a whole-output pool
+        // cap (Σ ≤ pool; the unspent remainder is not minted).
+        //
+        // ADR-0018 "本格版" (PoS-v2): the participation/quality split is **fenced**. Below
+        // `pos_v2_activation_daa_score` the FULL pool funds participation (effective bps = 10_000),
+        // byte-identical to the pre-v2 behavior regardless of the configured `validator_participation_bps`
+        // — so raising the quality share in the presets stays inert on every current network. At/above
+        // the fence the configured split carves the quality-bonus sub-pool, which the per-epoch
+        // accumulator accrues (Phase 1) and `deferred_quality_bonus_outputs` (below) pays at finalization.
         let expected_stake = bond_view.total_active_stake_at(daa_score) as u128;
-        let (participation_pool, _quality_bonus_pool) =
-            split_validator_pool(validator_pool as u128, dns_params.reward_params.validator_participation_bps);
+        let participation_bps = if daa_score >= dns_params.pos_v2_activation_daa_score {
+            dns_params.reward_params.validator_participation_bps
+        } else {
+            10_000
+        };
+        let (participation_pool, _quality_bonus_pool) = split_validator_pool(validator_pool as u128, participation_bps);
 
         // ADR-0018 §D base inclusion bounty: the stake this block NEWLY includes — the
         // same recency-filtered attestations under the same within-block + cross-block
@@ -508,9 +713,87 @@ impl VirtualStateProcessor {
             newly_included_stake += *stake as u128;
         }
 
-        let (outputs, rewarded_keys) =
+        let (mut outputs, rewarded_keys) =
             validator_participation_reward_outputs(participation_pool, expected_stake, &attestations, &already_rewarded);
+
+        // ADR-0018 "本格版" (PoS-v2) §E deferred quality bonus: append the bonus outputs for any
+        // epoch THIS block first buries beyond the finalization window (φS-gated), recomputed from
+        // the selected-parent window. Inert below the v2 fence. The finalized epochs are old
+        // (buried by `reward_window + max_reorg_horizon`) and disjoint from the participation
+        // epochs (recent, within `reward_window`), so the two output sets never double-pay.
+        outputs.extend(self.deferred_quality_bonus_outputs(dns_params, daa_score, selected_parent, bond_view));
+
         (outputs, rewarded_keys, newly_included_stake, expected_stake)
+    }
+
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 2) §E — the **deferred quality-bonus** coinbase
+    /// outputs THIS block emits for every epoch it newly finalizes. An epoch `E` is finalized-by-
+    /// this-block iff its finalization threshold `(E+1)·L + finalization_depth` falls in
+    /// `(selected_parent.daa_score, daa_score]` — a pure DAA crossing, so on any chain exactly one
+    /// block pays `E` (the once-per-epoch guard; no extra store). For each crossed `E` the tally is
+    /// recomputed from the selected-parent window via [`recompute_epoch_tallies`] (the same pure
+    /// core the Phase-1 accumulator store uses); because `E` is buried beyond `reward_window +
+    /// max_reorg_horizon` its contributing blocks are reorg-immutable, so the coinbase
+    /// **construction** and **validation** paths — and any competing chain — build byte-identical
+    /// outputs. Each crossed epoch that met φS pays its accrued quality pool to its included
+    /// validators ([`validator_quality_bonus_outputs`]); one that missed φS pays nothing (rollover).
+    ///
+    /// Returns no outputs below the v2 fence (`pos_v2_activation_daa_score`, `u64::MAX` everywhere
+    /// today), or when no epoch crosses this block — so it is inert on every current network and
+    /// O(1) amortized otherwise (the deep window walk runs only on the ~1-in-`L` crossing blocks).
+    fn deferred_quality_bonus_outputs(
+        &self,
+        dns_params: &DnsParams,
+        daa_score: u64,
+        selected_parent: BlockHash,
+        // The bond set as-of the block's selected parent (the deterministic, as-of-block view the
+        // participation path uses). Resolving the finalized epochs against THIS — not the live
+        // `stake_bonds_store` (as-of the current sink) — is what keeps construction == validation
+        // when a non-tip block is validated. Buried bonds are immutable, so this is also reorg-safe.
+        bond_view: &ActiveBondView,
+    ) -> Vec<TransactionOutput> {
+        if daa_score < dns_params.pos_v2_activation_daa_score {
+            return Vec::new();
+        }
+        let epoch_len = dns_params.epoch_length_blocks.max(1);
+        let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
+        let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
+
+        // The inclusive epoch range this block newly finalizes (thresholds crossed in
+        // `(parent_daa, daa_score]`); `None` ⇒ this block finalizes nothing (the common case).
+        let Some((e_min, e_max)) = epochs_finalized_at(parent_daa, daa_score, epoch_len, finalization_depth) else {
+            return Vec::new();
+        };
+
+        // Recompute the finalized epochs' tallies from the selected-parent window (the same bounded
+        // walk + pure core the Phase-1 accumulator uses), anchored at the selected parent so
+        // construction and validation read the identical buried history.
+        let walk_bound = finalization_depth.saturating_add(epoch_len.saturating_mul(2));
+        let mut contributions: Vec<BlockEpochContribution> = Vec::new();
+        for ancestor in once(selected_parent).chain(self.reachability_service.default_backward_chain_iterator(selected_parent)) {
+            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
+            if parent_daa.saturating_sub(ancestor_daa) > walk_bound || ancestor_daa < dns_params.pos_v2_activation_daa_score {
+                break;
+            }
+            let rewarded_keys = self.rewarded_epochs_store.get(ancestor).map(|k| (*k).clone()).unwrap_or_default();
+            let quality_subpool = self.block_quality_pool_store.get(ancestor).unwrap_or(0);
+            contributions.push(BlockEpochContribution { block_daa_score: ancestor_daa, rewarded_keys, quality_subpool });
+        }
+        contributions.reverse();
+        let bonds = bond_view.records();
+        let tallies = recompute_epoch_tallies(daa_score, epoch_len, finalization_depth, &contributions, &bonds);
+
+        // Pay each crossed epoch in `[e_min, e_max]` that met φS.
+        let mut outputs = Vec::new();
+        for (epoch, tally) in &tallies {
+            if *epoch < e_min || *epoch > e_max {
+                continue;
+            }
+            let included_sum: u128 = tally.included.iter().map(|(_, s)| *s as u128).sum();
+            let meets = epoch_meets_quality_floor(included_sum, tally.expected_stake, dns_params.stake_event_quality_floor_bps);
+            outputs.extend(validator_quality_bonus_outputs(tally.quality_pool_accrued, &tally.included, tally.expected_stake, meets));
+        }
+        outputs
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): block-template
@@ -953,6 +1236,20 @@ fn apply_slashing_effects_to_state<V: UtxoView>(
                 .expect("slashing tx declares no outputs, so (slashing_tx_id, 0) is free");
             multiset.add_utxo(&mint_outpoint, &mint_entry);
         }
+
+        // kaspa-pq ADR-0018 "本格版" (PoS-v2): mint the victim-compensation outputs at
+        // `(slashing_tx_id, 2..)` (index 1 is reserved/kept free). Empty while the v2 fence is closed
+        // ⇒ no extra mints ⇒ byte-identical to the pre-v2 2-way slashing. The security-reserve share
+        // (`effect.security_reserve_sompi`) is NOT minted here: it leaves the supply with the bond
+        // removal (≡ burn) until Phase 4 accrues it to the reserve pool. Σ(reporter + victim) ≤ S, so
+        // the slash stays value-conserving.
+        for (i, out) in effect.victim_outputs.iter().enumerate() {
+            let mint_outpoint = TransactionOutpoint::new(effect.slashing_tx_id, 2 + i as u32);
+            let mint_entry = UtxoEntry::new(out.value, out.script_public_key.clone(), mint_daa_score, false);
+            diff.add_utxo(mint_outpoint, mint_entry.clone())
+                .expect("slashing tx declares no outputs, so (slashing_tx_id, 2+i) is free");
+            multiset.add_utxo(&mint_outpoint, &mint_entry);
+        }
     }
 }
 
@@ -1360,6 +1657,11 @@ mod tests {
                 reporter_output: (reward > 0).then(|| TransactionOutput::new(reward, spk(0xee))),
                 burned_sompi: amount - reward,
                 slashing_tx_id: tx,
+                // PoS-v2 4-way fields: inert (2-way) in these apply-path tests.
+                security_reserve_sompi: 0,
+                victim_epoch_pool_sompi: 0,
+                slashed_epoch: 0,
+                victim_outputs: vec![],
             }
         }
 
@@ -1401,6 +1703,42 @@ mod tests {
             // Commitment now equals a set that only ever held the reporter mint:
             // the removal cancelled the bond and the net set is exactly R.
             assert_eq!(multiset.finalize(), multiset_of(&[(mint_op, mint_entry)]).finalize());
+        }
+
+        #[test]
+        fn mints_victim_outputs_at_index_two_onward() {
+            // PoS-v2 4-way: reporter minted at (tx,0), victim compensations at (tx,2),(tx,3) — index
+            // 1 stays free — and the security-reserve share is NOT minted (it burns until Phase 4).
+            let bond_op = bond_outpoint(0x06);
+            let tx = slashing_tx_id(0x0f);
+            let amount = 1_000u64;
+            let entry = bond_entry(amount);
+
+            let base: UtxoCollection = HashMap::from([(bond_op, entry.clone())]);
+            let mut diff = UtxoDiff::new(HashMap::new(), HashMap::new());
+            let mut multiset = multiset_of(&[(bond_op, entry.clone())]);
+
+            // reporter 100, reserve 200 (unminted), victim pool 700 → two victim outputs 300 + 400.
+            let mut eff = effect(bond_op, amount, 100, tx);
+            eff.security_reserve_sompi = 200;
+            eff.victim_epoch_pool_sompi = 700;
+            eff.victim_outputs = vec![TransactionOutput::new(300, spk(0xc1)), TransactionOutput::new(400, spk(0xc2))];
+
+            apply(&[eff], &base, &mut diff, &mut multiset, MINT_DAA);
+
+            let r = (TransactionOutpoint::new(tx, 0), UtxoEntry::new(100, spk(0xee), MINT_DAA, false));
+            let v1 = (TransactionOutpoint::new(tx, 2), UtxoEntry::new(300, spk(0xc1), MINT_DAA, false));
+            let v2 = (TransactionOutpoint::new(tx, 3), UtxoEntry::new(400, spk(0xc2), MINT_DAA, false));
+
+            // Bond removed; reporter + two victims minted; index 1 unused; reserve (200) NOT minted.
+            assert_eq!(diff.remove.get(&bond_op), Some(&entry));
+            assert_eq!(diff.add.len(), 3);
+            assert_eq!(diff.add.get(&r.0), Some(&r.1));
+            assert_eq!(diff.add.get(&v1.0), Some(&v1.1));
+            assert_eq!(diff.add.get(&v2.0), Some(&v2.1));
+            assert!(diff.add.get(&TransactionOutpoint::new(tx, 1)).is_none());
+            // Commitment equals a set holding only reporter + victim mints (bond cancelled, reserve burned).
+            assert_eq!(multiset.finalize(), multiset_of(&[r, v1, v2]).finalize());
         }
 
         #[test]

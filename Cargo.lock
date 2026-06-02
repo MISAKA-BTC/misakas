@@ -4566,6 +4566,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaminer"
+version = "1.0.0"
+dependencies = [
+ "clap 4.5.51",
+ "kaspa-addresses",
+ "kaspa-bip32",
+ "kaspa-consensus-core",
+ "kaspa-core",
+ "kaspa-grpc-client",
+ "kaspa-notify",
+ "kaspa-pow",
+ "kaspa-rpc-core",
+ "kaspa-wallet-keys",
+ "log",
+ "rayon",
+ "tokio",
+]
+
+[[package]]
 name = "mock_instant"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

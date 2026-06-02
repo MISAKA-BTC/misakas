@@ -100,6 +100,14 @@ pub enum RuleError {
     #[error("coinbase blue score of {0} is not the expected value of {1}")]
     BadCoinbasePayloadBlueScore(u64, u64),
 
+    /// kaspa-pq PQ-only invariant: the coinbase payload's miner script must itself be ML-DSA
+    /// P2PKH. Unlike the block's coinbase outputs (PQ-class-checked in isolation), the payload
+    /// miner script flows into descendant blocks' reward fan-out, so a non-PQ script here would
+    /// poison the reward path (every descendant's coinbase would carry a non-PQ output the PQ
+    /// rule rejects) — a consensus-liveness hazard. Rejected at the source block.
+    #[error("coinbase payload miner script is not a PQ-standard (ML-DSA P2PKH) script")]
+    NonPqCoinbasePayloadScript,
+
     #[error("transaction in isolation validation failed for tx {0}: {1}")]
     TxInIsolationValidationFailed(TransactionId, TxRuleError),
 

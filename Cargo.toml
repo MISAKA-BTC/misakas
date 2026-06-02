@@ -64,6 +64,7 @@ members = [
     "utils/tower",
     "rothschild",
     "pq-miner",
+    "misaminer",
     "metrics/core",
     "metrics/perf_monitor",
     "utils/alloc",

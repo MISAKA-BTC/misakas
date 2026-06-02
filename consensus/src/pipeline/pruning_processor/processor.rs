@@ -491,6 +491,16 @@ impl PruningProcessor {
                 // rewarded `(bond, epoch)` keys. A no-op for blocks that rewarded
                 // nothing (no row), i.e. every block while the overlay is dormant.
                 self.rewarded_epochs_store.delete_batch(&mut batch, current).unwrap();
+                // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): prune the per-block
+                // validator quality sub-pool sibling. A no-op while inert (no row).
+                // The per-epoch `epoch_accumulator_store` is keyed by epoch (not
+                // block), so it is not pruned here — bounded by epoch count and
+                // inert today; pruning finalized-and-buried epochs is a later slice.
+                self.block_quality_pool_store.delete_batch(&mut batch, current).unwrap();
+                // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): prune the per-block reserve balance.
+                // A no-op while inert (no row). The drip recurrence only reads the immediate
+                // (recent) selected parent, so pruning deep blocks never breaks it.
+                self.reserve_balance_store.delete_batch(&mut batch, current).unwrap();
                 self.block_transactions_store.delete_batch(&mut batch, current).unwrap();
 
                 if let Some(&affiliated_proof_level) = keep_relations.get(&current) {

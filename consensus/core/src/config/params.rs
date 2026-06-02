@@ -621,8 +621,11 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
         per_attestation_reward_sompi: 100_000_000,
         slashing_reporter_reward_bps: 1000,
         max_validator_inflation_per_block_sompi: 100_000_000 * MAX_ATTESTATIONS_PER_SHARD as u64,
-        validator_participation_bps: 10000,
-        validator_quality_bonus_bps: 0,
+        // ADR-0018 "本格版" (PoS-v2): 70/30 participation/quality split. INERT until
+        // `pos_v2_activation_daa_score` — below the v2 fence the reward path forces the full pool
+        // into participation (effective bps 10_000), so this is byte-identical on every net today.
+        validator_participation_bps: 7000,
+        validator_quality_bonus_bps: 3000,
         quality_gate_bonus_sompi: 0,
         worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
         fee_split: FeeSplitParams {
@@ -649,9 +652,20 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
             finality_fee_worker_bps: 2500,
             finality_fee_service_bps: 0,
         },
+        // ADR-0018 "本格版" (PoS-v2) 4-way slashing split: reporter 10% (slashing_reporter_reward_bps)
+        // / reserve 40% / victim 40% / burn 10%. INERT until pos_v2_activation — the slashing path
+        // forces reserve/victim to 0 below the fence, degenerating to the byte-identical pre-v2 2-way
+        // (reporter + burn). Calibratable economic defaults. The reserve **drip** (Phase 4) releases
+        // at most `reserve_drip_per_epoch_cap_sompi` from the security reserve into the participation
+        // pool per finalized epoch. All inert via the v2 fence.
+        security_reserve_bps: 4000,
+        victim_epoch_pool_bps: 4000,
+        reserve_drip_per_epoch_cap_sompi: 1000 * SOMPI_PER_KASPA,
     },
     reorg_mode: DnsReorgMode::TwoDimensionalDominance,
     full_reward_split_daa_score: 0,
+    // PoS-v2 "本格版" economics master fence — dormant on every net (no re-genesis).
+    pos_v2_activation_daa_score: u64::MAX,
 };
 
 /// Number of blocks in 14 days at the production 10 BPS block rate
@@ -702,8 +716,11 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
         per_attestation_reward_sompi: 100_000_000,
         slashing_reporter_reward_bps: 1000,
         max_validator_inflation_per_block_sompi: 100_000_000 * MAX_ATTESTATIONS_PER_SHARD as u64,
-        validator_participation_bps: 10000,
-        validator_quality_bonus_bps: 0,
+        // ADR-0018 "本格版" (PoS-v2): 70/30 participation/quality split. INERT until
+        // `pos_v2_activation_daa_score` — below the v2 fence the reward path forces the full pool
+        // into participation (effective bps 10_000), so this is byte-identical on every net today.
+        validator_participation_bps: 7000,
+        validator_quality_bonus_bps: 3000,
         quality_gate_bonus_sompi: 0,
         worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
         fee_split: FeeSplitParams {
@@ -730,9 +747,27 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
             finality_fee_worker_bps: 2500,
             finality_fee_service_bps: 0,
         },
+        // ADR-0018 "本格版" (PoS-v2) 4-way slashing split: reporter 10% (slashing_reporter_reward_bps)
+        // / reserve 40% / victim 40% / burn 10%. INERT until pos_v2_activation — the slashing path
+        // forces reserve/victim to 0 below the fence, degenerating to the byte-identical pre-v2 2-way
+        // (reporter + burn). Calibratable economic defaults. The reserve **drip** (Phase 4) releases
+        // at most `reserve_drip_per_epoch_cap_sompi` from the security reserve into the participation
+        // pool per finalized epoch. All inert via the v2 fence.
+        security_reserve_bps: 4000,
+        victim_epoch_pool_bps: 4000,
+        reserve_drip_per_epoch_cap_sompi: 1000 * SOMPI_PER_KASPA,
     },
     reorg_mode: DnsReorgMode::TwoDimensionalDominance,
     full_reward_split_daa_score: 0,
+    // PoS-v2 "本格版" economics master fence. ACTIVE from genesis (0) on mainnet +
+    // testnet (this PRODUCTION preset): the §E participation/quality split, 4-way
+    // slashing (reporter/reserve/victim/burn) + victim compensation, and the
+    // security-reserve drip all run from block 1. devnet + simnet keep
+    // GENESIS_ACTIVE_DNS_PARAMS's fence (`u64::MAX`), so v2 stays dormant there.
+    // Not a genesis-block input, so the genesis hash is unchanged; the existing
+    // pre-v2 chains are invalid under the new PQ-only/mass rules and need a
+    // re-genesis regardless, which this activation rides along with.
+    pos_v2_activation_daa_score: 0,
 };
 
 pub const MAINNET_PARAMS: Params = Params {
@@ -986,15 +1021,14 @@ pub const DEVNET_PARAMS: Params = Params {
     pre_crescendo_target_time_per_block: 100,
 
     crescendo_activation: ForkActivation::always(),
-    // kaspa-pq Phase 10 (ADR-0009): devnet DNS overlay config — VISIBILITY ONLY.
-    // `dns_activation_daa_score = u64::MAX` keeps the rollout stage below `Active`
-    // permanently, so the reorg gate stays dormant; the overlay only populates
-    // bonds + computes the per-epoch StakeScore into DnsState for
-    // `getDnsConfirmation`. Small epoch/window keep the PR-10.11-throttled
+    // kaspa-pq DNS-finality PoS overlay — GENESIS-ACTIVE on devnet (see GENESIS_ACTIVE_DNS_PARAMS:
+    // `dns_activation_daa_score = 0`, so the rollout reaches `Active` once stake bonds and the
+    // TwoDimensionalDominance reorg gate engages — NOT visibility-only). Devnet shares simnet's
+    // fully-active config, and the same shape as mainnet/testnet's PRODUCTION_DNS_PARAMS minus the
+    // 20M-KAS stake/bond minimums and 14-day evidence/unbonding windows. Full Stage-3 reward split
+    // from genesis (`full_reward_split_daa_score = 0`); the PoS-v2 "本格版" economics stay fenced
+    // (`pos_v2_activation_daa_score = u64::MAX`). The small epoch/window (epoch 100, reorg/evidence
+    // 300, unbond 700, reward 600 — consistent with U ≥ R+E) keep the PR-10.11-throttled StakeScore
     // aggregation walk cheap on the ~10 bps devnet (amortized O(1) per block).
-    // kaspa-pq: DNS-finality PoS overlay genesis-active on every network (see
-    // GENESIS_ACTIVE_DNS_PARAMS). Devnet shares the identical fully-active config as
-    // mainnet/testnet/simnet (user decision 2026-06-01: all four nets genesis-active,
-    // TwoDimensionalDominance reorg mode, full Stage-3 reward split from genesis).
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
 };

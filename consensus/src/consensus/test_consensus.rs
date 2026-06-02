@@ -1,6 +1,7 @@
 use async_channel::Sender;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::coinbase::MinerData;
+use kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk;
 use kaspa_consensus_core::mining_rules::MiningRules;
 use kaspa_consensus_core::tx::ScriptPublicKey;
 use kaspa_consensus_core::{
@@ -152,7 +153,9 @@ impl TestConsensus {
         parents: Vec<BlockHash>,
         txs: Vec<Transaction>,
     ) -> impl Future<Output = BlockProcessResult<BlockStatus>> {
-        let miner_data = MinerData::new(ScriptPublicKey::from_vec(0, vec![]), vec![]);
+        // kaspa-pq PQ-only: coinbase outputs (and any reward derived from this block)
+        // must be the standard ML-DSA-87 P2PKH class — see check_transaction_pq_output_classes.
+        let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
         self.validate_and_insert_block(self.build_utxo_valid_block_with_parents(hash, parents, miner_data, txs).to_immutable())
             .virtual_state_task
     }
@@ -190,10 +193,18 @@ impl TestConsensus {
         mut txs: Vec<Transaction>,
     ) -> MutableBlock {
         let mut header = self.build_header_with_parents(hash, parents);
+        // kaspa-pq PQ-only: encode an ML-DSA-87 P2PKH miner script in the coinbase
+        // payload so that if this block is rewarded in a merging block's coinbase, the
+        // reward output is the standard class and passes check_transaction_pq_output_classes.
+        // (The coinbase itself carries no outputs, so the block is still disqualified at
+        // coinbase verification, which is what these tests exercise.)
+        let miner_spk = p2pkh_mldsa87_spk(&[0u8; 64]);
+        let miner_script = miner_spk.script();
         let cb_payload: Vec<u8> = header.blue_score.to_le_bytes().iter().copied() // Blue score
             .chain(self.consensus.services.coinbase_manager.calc_block_subsidy(header.daa_score).to_le_bytes().iter().copied()) // Subsidy
             .chain((0_u16).to_le_bytes().iter().copied()) // Script public key version
-            .chain((0_u8).to_le_bytes().iter().copied()) // Script public key length
+            .chain((miner_script.len() as u8).to_le_bytes().iter().copied()) // Script public key length
+            .chain(miner_script.iter().copied()) // Script public key
             .collect();
 
         let cb = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_COINBASE, 0, cb_payload);

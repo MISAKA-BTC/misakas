@@ -33,10 +33,10 @@ struct Args {
     /// Stop after mining this many blocks (0 = run forever).
     #[arg(long, default_value_t = 0)]
     blocks: u64,
-    /// Mine the coinbase to the kaspa-pq ML-DSA-65 address derived from this BIP39
+    /// Mine the coinbase to the kaspa-pq ML-DSA-87 address derived from this BIP39
     /// mnemonic (path m/0/0/0 under `--network-id`). Lets a kaspa-pq wallet that
     /// imports the same mnemonic see the mined funds. If unset, an unspendable
-    /// PubKey placeholder is used.
+    /// ML-DSA-87 P2PKH placeholder is used.
     #[arg(long)]
     pay_mnemonic: Option<String>,
     /// Mine the coinbase directly to this bech32 address (e.g. a validator funding address
@@ -65,10 +65,10 @@ async fn main() {
         s if s.starts_with("testnet") => Prefix::Testnet,
         _ => Prefix::Devnet,
     };
-    // Coinbase pay address. With `--pay-mnemonic`, derive the kaspa-pq ML-DSA-65
+    // Coinbase pay address. With `--pay-mnemonic`, derive the kaspa-pq ML-DSA-87
     // P2PKH address (matching the wallet's `KaspaPqKeyPair.fromMnemonic` path) so a
     // wallet importing the same mnemonic can spend the mined coins. Otherwise use an
-    // unspendable PubKey placeholder (PoW-smoke only).
+    // unspendable ML-DSA-87 P2PKH placeholder (PoW-smoke only).
     let pay_address = match (&args.pay_address, &args.pay_mnemonic) {
         // Explicit address wins — e.g. a validator funding address, so mined coins can be
         // staked into a bond. Its prefix must match the mining network.
@@ -83,10 +83,13 @@ async fn main() {
             let seed = mnemonic.to_seed("");
             let kp = derive_keypair(&args.network_id, 0, 0, 0, seed.as_bytes());
             let addr = kp.address(prefix);
-            log::info!("mining coinbase to ML-DSA-65 address: {addr}");
+            log::info!("mining coinbase to ML-DSA-87 address: {addr}");
             addr
         }
-        (None, None) => Address::new(prefix, Version::PubKey, &[0u8; 32]),
+        // kaspa-pq PQ-only: the no-wallet placeholder must itself be the standard
+        // ML-DSA-87 P2PKH class (all-zero hash → unspendable but class-valid), so a
+        // placeholder-mined coinbase passes the consensus output-class rule.
+        (None, None) => Address::new(prefix, Version::PubKeyHashMlDsa87, &[0u8; 64]),
     };
     let network_id = args.network_id.clone().into_bytes();
 

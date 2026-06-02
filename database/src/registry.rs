@@ -88,6 +88,28 @@ pub enum DatabaseStorePrefixes {
     /// is rewarded at most once across the selected chain; deleted on prune.
     RewardedEpochs = 197,
 
+    // ---- kaspa-pq ADR-0018 "本格版" (PoS-v2 economics, Phase 1) ----
+    /// Keyed by `u64` epoch: the per-epoch [`EpochTally`] accumulator
+    /// (expected stake, included validators, accrued quality pool, finalized
+    /// flag), recomputed from the selected-chain window at each virtual-state
+    /// commit and read by the deferred §E quality-bonus payout. Inert
+    /// (never written) until `pos_v2_activation_daa_score` (`u64::MAX` today).
+    EpochAccumulator = 198,
+    /// Keyed by `BlockHash`: the per-block validator **quality sub-pool**
+    /// (`split_validator_pool(.).1`), the recompute input that the per-epoch
+    /// accumulator sums (the per-block `validator_pool` is not cheaply
+    /// re-derivable from a historical block). Written only past
+    /// `pos_v2_activation_daa_score` (so inert on every net today); deleted on
+    /// prune alongside `RewardedEpochs`.
+    BlockValidatorQualityPool = 199,
+    /// Keyed by `BlockHash`: the per-block **cumulative security-reserve balance**
+    /// (`balance_after(block) = balance_after(selected_parent) + slashing-reserve
+    /// accrual − drip`). The finalizing coinbase reads the selected parent's balance
+    /// for the per-epoch reserve drip (so construction == validation without a
+    /// lagging singleton). Written only past `pos_v2_activation_daa_score` (inert
+    /// today); deleted on prune alongside `RewardedEpochs`.
+    ReserveBalance = 200,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

@@ -109,10 +109,21 @@ pub enum TxRuleError {
     FeerateTooLow,
 
     /// kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): on a
-    /// PQ-active network, a non-coinbase / non-overlay transaction created an
-    /// output whose script is not the sole standard ML-DSA-87 P2PKH class.
+    /// PQ-active network a transaction (native, coinbase, or DNS overlay) created
+    /// an output whose script is not the sole standard ML-DSA-87 P2PKH class.
+    /// Enforced with no exemptions so non-PQ, signature-free UTXOs (e.g. OP_TRUE)
+    /// cannot enter the set via a coinbase miner output or an overlay output.
     #[error("transaction output #{0} uses a non-PQ script class (only ML-DSA P2PKH is standard in PQ-only mode)")]
     NonPqStandardOutputClass(usize),
+
+    /// kaspa-pq PQ-only (ADR-0019 §6): on a PQ-active network a transaction spent
+    /// an input whose referenced UTXO script is not the standard ML-DSA-87 P2PKH
+    /// class. The spend-side complement to [`Self::NonPqStandardOutputClass`]: it
+    /// makes any non-PQ UTXO (one created via a pre-fix exemption, or carrying an
+    /// unknown script version) unspendable, so no value can move without an
+    /// ML-DSA signature.
+    #[error("transaction input #{0} spends a non-PQ script class UTXO (only ML-DSA P2PKH is spendable in PQ-only mode)")]
+    NonPqStandardInputClass(usize),
 }
 
 pub type TxResult<T> = std::result::Result<T, TxRuleError>;

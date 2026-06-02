@@ -4,8 +4,8 @@
 //! These newtypes carry the fixed-size byte blobs that the kaspa-pq
 //! consensus produces:
 //!
-//! - [`RpcMlDsa87PublicKey`] — 1952 bytes (ADR-0002).
-//! - [`RpcMlDsa87Signature`] — 3309 bytes (ADR-0002).
+//! - [`RpcMlDsa87PublicKey`] — 2592 bytes (ADR-0002).
+//! - [`RpcMlDsa87Signature`] — 4627 bytes (ADR-0002).
 //! - [`RpcUtxoCommitment`]   — 32 bytes, the kaspa-pq PoC final
 //!   commitment width (see ADR-0004 §"Decision"). The production
 //!   64-byte switch lands in PR-7.6 and introduces a separate
@@ -34,13 +34,13 @@ use serde::{
     de::{self, Visitor},
 };
 
-/// ML-DSA-65 (FIPS 204) public key length in bytes. Locked at this
+/// ML-DSA-87 (FIPS 204) public key length in bytes. Locked at this
 /// crate level to avoid pulling in `kaspa_txscript` purely for the
 /// constant — the value must match `kaspa_txscript::MLDSA87_PK_LEN`
 /// (asserted by [`tests::pq_constants_match_txscript`]).
 pub const RPC_MLDSA87_PK_LEN: usize = 2592;
 
-/// ML-DSA-65 signature length in bytes. Same alignment-with-txscript
+/// ML-DSA-87 signature length in bytes. Same alignment-with-txscript
 /// contract as [`RPC_MLDSA87_PK_LEN`].
 pub const RPC_MLDSA87_SIG_LEN: usize = 4627;
 
@@ -48,12 +48,12 @@ pub const RPC_MLDSA87_SIG_LEN: usize = 4627;
 pub const RPC_UTXO_COMMITMENT_LEN: usize = 32;
 
 
-/// 1952-byte ML-DSA-65 public key, RPC-serialized as a 3904-character
+/// 2592-byte ML-DSA-87 public key, RPC-serialized as a 5184-character
 /// lowercase hex string.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
 pub struct RpcMlDsa87PublicKey(pub [u8; RPC_MLDSA87_PK_LEN]);
 
-/// 3309-byte ML-DSA-65 signature, RPC-serialized as a 6618-character
+/// 4627-byte ML-DSA-87 signature, RPC-serialized as a 9254-character
 /// lowercase hex string.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
 pub struct RpcMlDsa87Signature(pub [u8; RPC_MLDSA87_SIG_LEN]);
@@ -358,7 +358,7 @@ mod tests {
         store!(RpcMlDsa87Signature, &sig, &mut buf).unwrap();
         store!(RpcUtxoCommitment, &commitment, &mut buf).unwrap();
 
-        // Expected length: 2 (u16 version tag) + 1952 (pk) + 3309 (sig)
+        // Expected length: 2 (u16 version tag) + 2592 (pk) + 4627 (sig)
         //                + 32 (commitment) = 5295.
         assert_eq!(buf.len(), 2 + RPC_MLDSA87_PK_LEN + RPC_MLDSA87_SIG_LEN + RPC_UTXO_COMMITMENT_LEN);
 

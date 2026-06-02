@@ -49,7 +49,7 @@
 //! Borsh path; `serde` JSON is added via manual impls in the
 //! consumer-facing RPC types only.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
 use blake2b_simd::Params as Blake2bParams;
@@ -124,12 +124,12 @@ use crate::{
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
 };
 
-/// 1952 bytes — matches `kaspa_txscript::MLDSA87_PK_LEN`. Repeated
+/// 2592 bytes — matches `kaspa_txscript::MLDSA87_PK_LEN`. Repeated
 /// here so this module does not have to depend on `kaspa-txscript`;
 /// asserted-equal by [`tests::dns_constants_have_expected_values`].
 pub const STAKE_VALIDATOR_PUBKEY_LEN: usize = 2592;
 
-/// 3309 bytes — matches `kaspa_txscript::MLDSA87_SIG_LEN`. Same
+/// 4627 bytes — matches `kaspa_txscript::MLDSA87_SIG_LEN`. Same
 /// re-export rationale as [`STAKE_VALIDATOR_PUBKEY_LEN`].
 pub const STAKE_ATTESTATION_SIG_LEN: usize = 4627;
 
@@ -327,7 +327,7 @@ pub struct StakeBondPayload {
     /// `BLAKE2b-512(validator_public_key)`.
     pub validator_pubkey_hash: Hash64,
 
-    /// Raw 1952-byte ML-DSA-65 public key for the validator. Stored
+    /// Raw 2592-byte ML-DSA-87 public key for the validator. Stored
     /// in full so attestations can be verified by any node without an
     /// out-of-band registry lookup. Validated against
     /// `validator_pubkey_hash` at consensus time.
@@ -398,7 +398,7 @@ pub struct StakeAttestation {
     /// validator set. Derived via [`validator_set_commitment`].
     pub validator_set_commitment: Hash64,
 
-    /// 3309-byte ML-DSA-65 signature over the BLAKE2b-256
+    /// 4627-byte ML-DSA-87 signature over the BLAKE2b-256
     /// attestation message produced by [`stake_attestation_message`]
     /// with `ATTESTATION_MLDSA87_CONTEXT` as the libcrux `ctx`
     /// parameter.
@@ -693,6 +693,15 @@ pub struct DnsParams {
     /// construction and validation coinbase paths pick the same stage. Appended
     /// last to keep the borsh layout change localized. `u64::MAX` everywhere today.
     pub full_reward_split_daa_score: u64,
+
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2 economics): the master activation fence for the
+    /// post-launch validator economics — the φS-gated **quality-bonus** payout, the 4-way
+    /// **slashing** distribution (reserve + victim-epoch shares), and the **security-reserve**
+    /// drip. Independent of [`Self::dns_activation_daa_score`] (which already activates the base
+    /// participation reward + 2-way slashing on devnet), so the v2 economics stay byte-identical
+    /// everywhere until explicitly switched on. `u64::MAX` on every net today (inert; no
+    /// consensus / genesis change). Appended last to keep the borsh layout change localized.
+    pub pos_v2_activation_daa_score: u64,
 }
 
 impl DnsParams {
@@ -794,6 +803,20 @@ pub struct RewardParams {
     /// Stage-3 split. Selected by [`DnsParams::reward_fee_split`]. Appended last to
     /// keep the borsh layout change localized (pre-activation; no live reward).
     pub fee_split_bootstrap: FeeSplitParams,
+
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2): basis-points share of a slashed bond routed to the
+    /// **security-reserve** pool (the long-term validator-security budget 原資). Gated by
+    /// [`DnsParams::pos_v2_activation_daa_score`]; `0` (inert) until activation. Together with
+    /// the reporter + victim shares, `reporter + reserve + victim ≤ 10_000`; the remainder burns.
+    pub security_reserve_bps: u16,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2): basis-points share of a slashed bond routed to the
+    /// **victim-epoch pool** — compensation distributed to the honest (non-slashed) validators
+    /// who participated in the slashed epoch. Gated by the v2 fence; `0` (inert) until activation.
+    pub victim_epoch_pool_bps: u16,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2): per-epoch cap (sompi) on the **security-reserve drip**
+    /// released into the validator participation pool at epoch finalization. Gated by the v2
+    /// fence; `0` (inert) until activation.
+    pub reserve_drip_per_epoch_cap_sompi: u64,
 }
 
 /// Outcome of [`compute_attestation_reward_payouts`] — the per-block
@@ -812,12 +835,23 @@ pub struct AttestationRewardPayout {
     pub refunded_sompi: u64,
 }
 
-/// Outcome of [`compute_slashing_distribution`] — how to split a
-/// slashed bond between the reporter and the burn sink.
+/// Outcome of [`compute_slashing_distribution`] — how a slashed bond splits across
+/// the ADR-0018 "本格版" (PoS-v2) **4 ways** (priority reporter → reserve → victim →
+/// burn; the four fields sum to `slashed_amount_sompi` exactly). The reserve + victim
+/// shares are `0` until the v2 fence opens (`security_reserve_bps = victim_epoch_pool_bps
+/// = 0`), so the split degenerates to the pre-v2 2-way reporter + burn and is byte-identical.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SlashingDistribution {
-    /// Sompi paid to whoever submitted the slashing evidence.
+    /// Sompi paid to whoever submitted the slashing evidence (minted at `(slashing_tx_id, 0)`).
     pub reporter_reward_sompi: u64,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2): sompi routed to the **security-reserve** pool (the
+    /// long-term validator-security budget 原資). Accrued to the reserve pool (Phase 4); `0` until
+    /// `pos_v2_activation`. Until the pool exists it is unminted (≡ burn).
+    pub security_reserve_sompi: u64,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2): sompi routed to the **victim-epoch pool** — compensation
+    /// minted to the honest (non-slashed) validators who participated in the slashed validator's
+    /// epoch (minted at `(slashing_tx_id, 2..)`). `0` until `pos_v2_activation`.
+    pub victim_epoch_pool_sompi: u64,
     /// Sompi removed from active supply. Mechanism is a PR-10.12
     /// implementation detail (zero-script_public_key sink or
     /// inflation-accumulator decrement); either way the value
@@ -1145,7 +1179,7 @@ pub struct SignedEpochRecord {
     /// rule catches the rare case of a node bug producing the same
     /// `target_hash` at different DAA scores.
     pub target_daa_score: u64,
-    /// `BLAKE2b-512` of the 3309-byte ML-DSA-65 signature bytes.
+    /// `BLAKE2b-512` of the 4627-byte ML-DSA-87 signature bytes.
     /// Pinned so the validator can recognise a re-broadcast of an
     /// in-flight attestation across restarts without re-storing
     /// the full ~3.3 KB signature. **Not** part of the
@@ -1275,7 +1309,7 @@ pub struct TakeoverToken {
     /// does not rely on it).
     pub issued_at_unix_secs: u64,
 
-    /// 3309-byte ML-DSA-65 signature by the validator key over
+    /// 4627-byte ML-DSA-87 signature by the validator key over
     /// [`takeover_token_message`] with `TAKEOVER_TOKEN_CONTEXT`
     /// as the libcrux `ctx` parameter.
     pub signature: Vec<u8>,
@@ -1479,7 +1513,7 @@ pub struct SignerRequest {
 }
 
 /// Server → client response. The `result` payload is either the
-/// 3309-byte ML-DSA-65 signature or a structured failure.
+/// 4627-byte ML-DSA-87 signature or a structured failure.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SignerResponse {
     pub request_id: u64,
@@ -1509,7 +1543,7 @@ pub struct SignerAuditRecord {
     pub purpose: SigningPurpose,
     pub metadata: SignerMetadata,
     pub message_digest: Hash,
-    /// `BLAKE2b-512` of the 3309-byte signature bytes (zero
+    /// `BLAKE2b-512` of the 4627-byte signature bytes (zero
     /// `Hash64` if the request was refused). Pinned so the audit
     /// record stays small while still witnessing what was
     /// signed.
@@ -1834,6 +1868,47 @@ pub fn validator_participation_outputs(
         .collect()
 }
 
+/// ADR-0018 "本格版" (PoS-v2) §E/§B — does an epoch's **included** (rewarded) stake meet the
+/// stake-event quality floor φS? `true` iff `included_stake / expected_stake ≥ φS_bps / 10_000`,
+/// evaluated as the overflow-safe integer cross-multiply `included_stake · 10_000 ≥ φS_bps ·
+/// expected_stake`. This is the **whole-epoch** gate (ADR-0018 locked decision): at/above φS the
+/// epoch's quality-bonus pool is distributed to its included validators; below it the pool rolls
+/// over (don't-mint). `expected_stake == 0` ⇒ vacuously meets (there is no stake to include, and
+/// every bonus share is then 0 anyway). `φS_bps == 0` ⇒ always meets (the pre-ADR-0018 behavior).
+pub fn epoch_meets_quality_floor(included_stake: u128, expected_stake: u128, phi_s_bps: u16) -> bool {
+    included_stake.saturating_mul(10_000) >= (phi_s_bps as u128).saturating_mul(expected_stake)
+}
+
+/// ADR-0018 "本格版" (PoS-v2) §E — the **deferred quality-bonus** coinbase outputs for a finalized
+/// epoch, the §E analogue of [`validator_participation_outputs`]. Pays each included validator
+/// [`validator_quality_bonus`]`(quality_pool, stake, expected_stake, meets_floor)` to its
+/// `owner_reward_spk_payload`. When the epoch did **not** meet φS (`meets_floor == false`) every
+/// share is 0 → no outputs (the whole pool rolls over, realised as don't-mint). Zero-value shares
+/// emit no output.
+///
+/// `included` is the finalized [`EpochTally::included`] — `(owner_reward_spk_payload, stake)` per
+/// rewarded validator, in its stored (chain-deterministic) order, with the 64-byte payload as a
+/// [`Hash64`]. The outputs sum to **≤ `quality_pool`** (Σ included stake ≤ `expected_stake`); the
+/// unspent remainder is **not minted** (anti-capture rollover). Pure and DAG-free → the coinbase
+/// construction and validation paths build byte-identical outputs from the same finalized tally.
+pub fn validator_quality_bonus_outputs(
+    quality_pool: u128,
+    included: &[(Hash64, u64)],
+    expected_stake: u128,
+    meets_floor: bool,
+) -> Vec<TransactionOutput> {
+    if !meets_floor {
+        return Vec::new();
+    }
+    included
+        .iter()
+        .filter_map(|(payload, stake)| {
+            let reward = validator_quality_bonus(quality_pool, *stake as u128, expected_stake, true).min(u64::MAX as u128) as u64;
+            (reward > 0).then(|| TransactionOutput::new(reward, p2pkh_mldsa87_spk(&payload.as_bytes())))
+        })
+        .collect()
+}
+
 /// ADR-0018 §E — build a block's validator participation-reward outputs from its included
 /// attestations, the §E analogue of the flat [`validator_reward_outputs_from_attestations`]
 /// it replaces in the coinbase fan-out. `attestations` is `(bond_outpoint, epoch,
@@ -2028,16 +2103,26 @@ pub fn validator_reward_outputs_from_attestations(
 /// callers that need a reward floor `min`-cap the result through
 /// [`apply_unreveal_reporter_min_cap`] (separate helper for
 /// clarity).
-pub fn compute_slashing_distribution(slashed_amount_sompi: u64, slashing_reporter_reward_bps: u16) -> SlashingDistribution {
-    // Promote to u128 for the multiplication so a max-bond × bps
-    // product cannot overflow. Maximum intermediate value is
-    // `u64::MAX × 10000 ≈ 1.8e23`, well within u128.
-    let numerator = (slashed_amount_sompi as u128).saturating_mul(slashing_reporter_reward_bps as u128);
-    let reporter_reward_sompi = (numerator / 10000) as u64;
-    // burned = slashed - reporter (subtract in u64; reporter
-    // cannot exceed slashed because bps ≤ 10000 by type).
-    let burned_sompi = slashed_amount_sompi - reporter_reward_sompi;
-    SlashingDistribution { reporter_reward_sompi, burned_sompi }
+pub fn compute_slashing_distribution(
+    slashed_amount_sompi: u64,
+    slashing_reporter_reward_bps: u16,
+    // kaspa-pq ADR-0018 "本格版" (PoS-v2): the reserve + victim shares. `0` (the pre-v2 2-way split:
+    // reporter + burn, byte-identical) until the v2 fence opens.
+    security_reserve_bps: u16,
+    victim_epoch_pool_bps: u16,
+) -> SlashingDistribution {
+    // Promote to u128 for the multiplication so a max-bond × bps product cannot overflow
+    // (`u64::MAX × 10000 ≈ 1.8e23`, well within u128). `bps_of` floors each share.
+    let bps_of = |bps: u16| (slashed_amount_sompi as u128).saturating_mul(bps as u128) / 10000;
+    // Priority reporter → reserve → victim → burn: clamp each share to what remains so a
+    // misconfiguration (Σbps > 10_000) can never push `burned` negative. Under correct params
+    // (Σbps ≤ 10_000) no clamp bites and the four shares sum to `slashed_amount_sompi`.
+    let reporter_reward_sompi = (bps_of(slashing_reporter_reward_bps) as u64).min(slashed_amount_sompi);
+    let security_reserve_sompi = (bps_of(security_reserve_bps) as u64).min(slashed_amount_sompi - reporter_reward_sompi);
+    let victim_epoch_pool_sompi =
+        (bps_of(victim_epoch_pool_bps) as u64).min(slashed_amount_sompi - reporter_reward_sompi - security_reserve_sompi);
+    let burned_sompi = slashed_amount_sompi - reporter_reward_sompi - security_reserve_sompi - victim_epoch_pool_sompi;
+    SlashingDistribution { reporter_reward_sompi, security_reserve_sompi, victim_epoch_pool_sompi, burned_sompi }
 }
 
 /// Apply the ADR-0013 `min`-cap to a reporter reward: the reporter
@@ -2052,7 +2137,14 @@ pub fn apply_unreveal_reporter_min_cap(
 ) -> SlashingDistribution {
     let capped_reporter = distribution.reporter_reward_sompi.min(unreveal_reporter_reward_sompi_floor);
     let extra_burn = distribution.reporter_reward_sompi - capped_reporter;
-    SlashingDistribution { reporter_reward_sompi: capped_reporter, burned_sompi: distribution.burned_sompi + extra_burn }
+    SlashingDistribution {
+        reporter_reward_sompi: capped_reporter,
+        // The reserve / victim shares are unaffected by the reporter floor; the reporter's
+        // uncollected remainder rolls into burn.
+        security_reserve_sompi: distribution.security_reserve_sompi,
+        victim_epoch_pool_sompi: distribution.victim_epoch_pool_sompi,
+        burned_sompi: distribution.burned_sompi + extra_burn,
+    }
 }
 
 /// Build the consensus-emitted slashing distribution (ADR-0013 Addendum C, as
@@ -2074,16 +2166,46 @@ pub fn apply_unreveal_reporter_min_cap(
 pub fn slashing_distribution_output(
     slashed_amount_sompi: u64,
     slashing_reporter_reward_bps: u16,
+    // kaspa-pq ADR-0018 "本格版" (PoS-v2): the reserve + victim shares (0 until the v2 fence).
+    security_reserve_bps: u16,
+    victim_epoch_pool_bps: u16,
     reporter_reward_spk_payload: &[u8; 64],
     unreveal_floor: Option<u64>,
-) -> (Option<TransactionOutput>, u64) {
-    let mut dist = compute_slashing_distribution(slashed_amount_sompi, slashing_reporter_reward_bps);
+) -> (Option<TransactionOutput>, SlashingDistribution) {
+    let mut dist =
+        compute_slashing_distribution(slashed_amount_sompi, slashing_reporter_reward_bps, security_reserve_bps, victim_epoch_pool_bps);
     if let Some(floor) = unreveal_floor {
         dist = apply_unreveal_reporter_min_cap(dist, floor);
     }
     let output = (dist.reporter_reward_sompi > 0)
         .then(|| TransactionOutput::new(dist.reporter_reward_sompi, p2pkh_mldsa87_spk(reporter_reward_spk_payload)));
-    (output, dist.burned_sompi)
+    // Returns the full 4-way split so the caller can carry the reserve + victim shares into the
+    // side-effect (the victim *outputs* are built later from the slashed epoch's accumulator).
+    (output, dist)
+}
+
+/// kaspa-pq ADR-0018 "本格版" (PoS-v2) §slashing — the **victim-epoch compensation** outputs: the
+/// `victim_pool` (the slashed bond's victim share) distributed stake-proportionally among the
+/// **honest** validators who participated in the slashed validator's epoch. `honest_included` is
+/// `(owner_reward_spk_payload, included_stake)` per honest validator — the slashed epoch's
+/// accumulator `included` set **with the slashed validator removed** (the caller excludes it) — and
+/// `total_honest_stake` is the sum of those stakes (the denominator). Each is paid
+/// [`proportional_share`]`(victim_pool, stake, total_honest_stake)` to its ML-DSA P2PKH script;
+/// zero-value shares emit no output. The outputs sum to ≤ `victim_pool` (Σ honest stake =
+/// `total_honest_stake`); the unspent remainder is not minted. Pure and DAG-free, so the slashing
+/// **validation** and **virtual-recompute** paths build byte-identical victim outputs.
+pub fn victim_compensation_outputs(
+    victim_pool: u64,
+    honest_included: &[(Hash64, u64)],
+    total_honest_stake: u128,
+) -> Vec<TransactionOutput> {
+    honest_included
+        .iter()
+        .filter_map(|(payload, stake)| {
+            let comp = proportional_share(victim_pool as u128, *stake as u128, total_honest_stake).min(u64::MAX as u128) as u64;
+            (comp > 0).then(|| TransactionOutput::new(comp, p2pkh_mldsa87_spk(&payload.as_bytes())))
+        })
+        .collect()
 }
 
 /// The deterministic consensus side-effect of slashing one bond
@@ -2112,6 +2234,21 @@ pub struct SlashingSideEffect {
     /// `(slashing_tx_id, 0)`; a slashing transaction declares no outputs
     /// (ADR-0013 Addendum C.2), so index 0 is always free.
     pub slashing_tx_id: TransactionId,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2): the **security-reserve** share of `S`. Accrued to the
+    /// reserve pool (Phase 4); until that pool exists it stays unminted (≡ burn). `0` until the v2 fence.
+    pub security_reserve_sompi: u64,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2): the **victim-epoch** pool — the share to compensate the
+    /// slashed validator's honest epoch peers. `0` until the v2 fence.
+    pub victim_epoch_pool_sompi: u64,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2): the slashed validator's equivocation epoch (from the
+    /// evidence's attestations), used to recompute that epoch's honest included set for the victim
+    /// payout.
+    pub slashed_epoch: u64,
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2): the victim-compensation outputs, minted at
+    /// `(slashing_tx_id, 2..)`. EMPTY from the pure resolver — filled by the processor's
+    /// selected-parent-window recompute of `slashed_epoch`'s honest set (construction == validation,
+    /// reorg-safe). Inert (empty) while the v2 fence is closed.
+    pub victim_outputs: Vec<TransactionOutput>,
 }
 
 /// Build a block's slashing side-effects from its genuine, accepted slashing
@@ -2133,27 +2270,42 @@ pub struct SlashingSideEffect {
 /// validation. With no evidence it returns no side-effects, so on every
 /// current network (overlay dormant) it is a no-op.
 pub fn slashing_side_effects_from_evidence(
-    evidence: &[(TransactionOutpoint, u64, [u8; 64], TransactionId)],
+    // `(bond_outpoint, S, reporter_reward_spk_payload, slashing_tx_id, slashed_epoch)`.
+    evidence: &[(TransactionOutpoint, u64, [u8; 64], TransactionId, u64)],
     slashing_reporter_reward_bps: u16,
+    // kaspa-pq ADR-0018 "本格版" (PoS-v2): reserve + victim shares (0 until the v2 fence ⇒ 2-way).
+    security_reserve_bps: u16,
+    victim_epoch_pool_bps: u16,
     unreveal_floor: Option<u64>,
 ) -> Vec<SlashingSideEffect> {
     let mut seen: HashSet<TransactionOutpoint> = HashSet::new();
     let mut effects = Vec::new();
-    for (bond_outpoint, slashed_amount, reporter_payload, slashing_tx_id) in evidence {
+    for (bond_outpoint, slashed_amount, reporter_payload, slashing_tx_id, slashed_epoch) in evidence {
         // Within-block dedup: a bond's locked UTXO can be removed only once, so
         // the **first** slashing tx targeting it (canonical order) wins both the
         // removal and the reporter mint at `(slashing_tx_id, 0)`.
         if !seen.insert(*bond_outpoint) {
             continue;
         }
-        let (reporter_output, burned_sompi) =
-            slashing_distribution_output(*slashed_amount, slashing_reporter_reward_bps, reporter_payload, unreveal_floor);
+        let (reporter_output, dist) = slashing_distribution_output(
+            *slashed_amount,
+            slashing_reporter_reward_bps,
+            security_reserve_bps,
+            victim_epoch_pool_bps,
+            reporter_payload,
+            unreveal_floor,
+        );
         effects.push(SlashingSideEffect {
             bond_outpoint: *bond_outpoint,
             slashed_amount_sompi: *slashed_amount,
             reporter_output,
-            burned_sompi,
+            burned_sompi: dist.burned_sompi,
             slashing_tx_id: *slashing_tx_id,
+            security_reserve_sompi: dist.security_reserve_sompi,
+            victim_epoch_pool_sompi: dist.victim_epoch_pool_sompi,
+            slashed_epoch: *slashed_epoch,
+            // Filled by the processor's selected-parent-window recompute of `slashed_epoch`.
+            victim_outputs: Vec::new(),
         });
     }
     effects
@@ -2189,8 +2341,12 @@ pub fn resolve_slashing_side_effects(
     bond_view: &ActiveBondView,
     daa_score: u64,
     slashing_reporter_reward_bps: u16,
+    // kaspa-pq ADR-0018 "本格版" (PoS-v2): reserve + victim shares (0 until the v2 fence ⇒ 2-way).
+    security_reserve_bps: u16,
+    victim_epoch_pool_bps: u16,
 ) -> Vec<SlashingSideEffect> {
-    let mut resolved: Vec<(TransactionOutpoint, u64, [u8; 64], TransactionId)> = Vec::new();
+    // `(bond_outpoint, S, reporter_reward_spk_payload, slashing_tx_id, slashed_epoch)`.
+    let mut resolved: Vec<(TransactionOutpoint, u64, [u8; 64], TransactionId, u64)> = Vec::new();
     // Iterate the txs directly (rather than via `slashing_evidence_from_accepted_txs`)
     // so each evidence keeps its **slashing tx id** — the mint outpoint
     // `(slashing_tx_id, 0)` under Addendum C.2.
@@ -2207,10 +2363,12 @@ pub fn resolve_slashing_side_effects(
         // Only a bond whose stake is still locked (Active/Unbonding) has a
         // removable output-0 UTXO; Pending/Slashed/unknown contribute nothing.
         if matches!(effective_bond_status(bond, daa_score), BondStatus::Active | BondStatus::Unbonding) {
-            resolved.push((ev.bond_outpoint, bond.amount, ev.reporter_reward_spk_payload, tx.id()));
+            // The slashed (equivocation) epoch is the attestations' shared epoch (both attestations
+            // are for the same epoch — that is what makes them equivocating).
+            resolved.push((ev.bond_outpoint, bond.amount, ev.reporter_reward_spk_payload, tx.id(), ev.attestation_a.epoch));
         }
     }
-    slashing_side_effects_from_evidence(&resolved, slashing_reporter_reward_bps, None)
+    slashing_side_effects_from_evidence(&resolved, slashing_reporter_reward_bps, security_reserve_bps, victim_epoch_pool_bps, None)
 }
 
 // ---------------------------------------------------------------------
@@ -2501,7 +2659,7 @@ pub fn reorg_inputs_since_common_ancestor(
 // `dns_tx_kind` maps a routed subnetwork id to its payload kind; the
 // three `validate_*_payload` functions perform *stateless* checks only:
 // borsh-decodability, payload version, the fixed ML-DSA length
-// invariants (1952-byte pubkey / 3309-byte signature), shard cardinality
+// invariants (2592-byte pubkey / 4627-byte signature), shard cardinality
 // + single-anchor tuple consistency, and equivocation well-formedness.
 // The consensus pipeline calls these from `check_transaction_subnetwork`
 // (PR-10.4 wiring in `tx_validation_in_isolation.rs`).
@@ -3201,6 +3359,152 @@ pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: 
             (epoch, total)
         })
         .collect()
+}
+
+/// kaspa-pq ADR-0018 "本格版" (PoS-v2) — the per-epoch accumulator tally (Phase 1).
+///
+/// One entry per epoch in the consensus `DbEpochAccumulatorStore`, recomputed
+/// deterministically from the selected-chain bounded window at each virtual-state commit
+/// (the `update_dns_state` recompute precedent). It records everything the deferred §E
+/// quality-bonus payout (Phase 2) needs once an epoch is buried and final:
+///
+/// * `expected_stake` — the epoch's total `Active` stake at its anchor (`epoch · epoch_length`),
+///   the §E anti-capture **denominator** (mirrors [`total_active_stake_by_epoch`]).
+/// * `included` — the validators whose attestations for this epoch were **rewarded** (included
+///   in a coinbase fan-out) on the selected chain, as `(owner_reward_spk_payload, included_stake)`.
+///   Addendum B §B.3(c) cross-block `(bond, epoch)` uniqueness guarantees each validator appears
+///   at most once, so this is a union with no dedup. The §E φS gate's numerator is `Σ` of these
+///   stakes (Phase 2).
+/// * `quality_pool_accrued` — `Σ` of the per-block validator quality sub-pools
+///   ([`split_validator_pool`]`.1`) of the blocks **in** this epoch (`block_daa / epoch_length`).
+///   Paid out stake-proportionally to `included` iff the epoch met φS (Phase 2); else it rolls
+///   over (don't-mint).
+/// * `finalized` — `true` once the epoch is buried beyond `finalization_depth` past its end, so
+///   neither its included set nor its pool can change under any future block or reorg; the
+///   deferred payout reads only finalized epochs.
+///
+/// `included` stores the 64-byte payload as a [`Hash64`] (serde-stable; `[u8; 64]` has no derive),
+/// converted back via [`Hash64::as_bytes`] for [`p2pkh_mldsa87_spk`] at payout.
+///
+/// Entirely inert today: the recompute is gated by `pos_v2_activation_daa_score` (`u64::MAX` on
+/// every net), so no tally is ever written.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct EpochTally {
+    pub expected_stake: u128,
+    pub included: Vec<(Hash64, u64)>,
+    pub quality_pool_accrued: u128,
+    pub finalized: bool,
+}
+
+// The accumulator store uses an untracked (`Count`) cache policy, so this estimate is never
+// consulted for eviction — an empty impl mirrors [`StakeBondRecord`] / `UtxoEntry`.
+impl MemSizeEstimator for EpochTally {}
+
+/// kaspa-pq ADR-0018 "本格版" (PoS-v2) — one selected-chain block's contribution to the epoch
+/// accumulator recompute (Phase 1): its DAA score (→ its block-epoch), the `(bond_outpoint, epoch)`
+/// keys its coinbase rewarded (from the per-block `rewarded_epochs_store`), and the per-block
+/// validator quality sub-pool (from the per-block quality-pool store). Pure input to
+/// [`recompute_epoch_tallies`]; the processor gathers it from the bounded-window walk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockEpochContribution {
+    pub block_daa_score: u64,
+    pub rewarded_keys: Vec<(TransactionOutpoint, u64)>,
+    pub quality_subpool: u64,
+}
+
+/// kaspa-pq ADR-0018 "本格版" (PoS-v2) — recompute the [`EpochTally`] of every epoch touched by the
+/// selected-chain window `contributions`, deterministically and reorg-safely (Phase 1).
+///
+/// Mirrors the `update_dns_state` design: the accumulator is a **pure function** of the selected
+/// chain (the per-block rewarded keys + quality sub-pools in `contributions`, all keyed by block
+/// hash and therefore reorg-safe) and the current `bonds` snapshot — so a reorg simply re-derives
+/// the live epochs from the new chain, with no incremental delta to revert.
+///
+/// For each touched epoch E:
+/// * `included` collects, in `contributions` order, `(owner_reward_spk_payload, amount)` for every
+///   rewarded `(bond, E)` key whose bond resolves in `bonds` (raw lookup — a *later* slash/unbond
+///   does not retroactively un-include a past participation). §B.3(c) makes each `(bond, E)` appear
+///   once across the chain, so no dedup is needed.
+/// * `quality_pool_accrued` sums the quality sub-pool of every block whose own epoch is E.
+/// * `expected_stake` is the total stake of bonds `Active` at E's anchor (`E · epoch_length`).
+/// * `finalized` is set once `sink_daa_score ≥ (E+1)·epoch_length + finalization_depth`. The caller
+///   passes `finalization_depth = reward_uniqueness_window_blocks + max_reorg_horizon_blocks`: the
+///   epoch's blocks (pool, `≤ (E+1)·L`) and its attestation-rewarding blocks (included set, `≤ E·L +
+///   window`) are then both buried beyond the reorg horizon, so the tally is immutable. The caller
+///   never re-derives an already-finalized epoch (its blocks may lie partly outside the window), so
+///   finalization is one-way.
+///
+/// Returns the tallies ascending by epoch (deterministic). The caller supplies `contributions` in
+/// selected-chain order so the `included` ordering is chain-deterministic.
+pub fn recompute_epoch_tallies(
+    sink_daa_score: u64,
+    epoch_length_blocks: u64,
+    finalization_depth: u64,
+    contributions: &[BlockEpochContribution],
+    bonds: &[StakeBondRecord],
+) -> Vec<(u64, EpochTally)> {
+    let epoch_len = epoch_length_blocks.max(1);
+    let bond_by_outpoint: HashMap<TransactionOutpoint, &StakeBondRecord> = bonds.iter().map(|b| (b.bond_outpoint, b)).collect();
+
+    let mut quality_by_epoch: BTreeMap<u64, u128> = BTreeMap::new();
+    let mut included_by_epoch: BTreeMap<u64, Vec<(Hash64, u64)>> = BTreeMap::new();
+
+    for c in contributions {
+        // Every block marks its own epoch present (even with a 0 pool), so an epoch with blocks
+        // but no rewarded attestations still gets a tally + finalized flag.
+        let block_epoch = c.block_daa_score / epoch_len;
+        let q = quality_by_epoch.entry(block_epoch).or_insert(0);
+        *q = q.saturating_add(c.quality_subpool as u128);
+        for (outpoint, epoch) in &c.rewarded_keys {
+            if let Some(bond) = bond_by_outpoint.get(outpoint) {
+                included_by_epoch.entry(*epoch).or_default().push((Hash64::from_bytes(bond.owner_reward_spk_payload), bond.amount));
+            }
+        }
+    }
+
+    // Union of epochs touched by either a block (quality) or a rewarded attestation (included).
+    let epochs: BTreeSet<u64> = quality_by_epoch.keys().copied().chain(included_by_epoch.keys().copied()).collect();
+    epochs
+        .into_iter()
+        .map(|epoch| {
+            let anchor_daa = epoch.saturating_mul(epoch_len);
+            let expected_stake =
+                bonds.iter().filter(|b| is_bond_active_at(b, anchor_daa)).fold(0u128, |acc, b| acc.saturating_add(b.amount as u128));
+            let finalized = sink_daa_score >= epoch.saturating_add(1).saturating_mul(epoch_len).saturating_add(finalization_depth);
+            let included = included_by_epoch.get(&epoch).cloned().unwrap_or_default();
+            let quality_pool_accrued = quality_by_epoch.get(&epoch).copied().unwrap_or(0);
+            (epoch, EpochTally { expected_stake, included, quality_pool_accrued, finalized })
+        })
+        .collect()
+}
+
+/// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 2) §E — the inclusive epoch range `[E_min, E_max]`
+/// a block at `daa_score` (selected parent at `parent_daa`) **newly finalizes**, i.e. the epochs
+/// whose finalization threshold `(E+1)·epoch_length + finalization_depth` first falls in
+/// `(parent_daa, daa_score]`. Because DAA is monotonic on a chain, each epoch's threshold is
+/// crossed by exactly one block, so this is the **once-per-epoch** guard for the deferred
+/// quality-bonus payout (no extra store needed; reorg-safe because a competing chain's crossing
+/// block re-pays the identical immutable tally). `None` when the block crosses no threshold — the
+/// common case (a block advances DAA by far less than an epoch length, so most blocks finalize
+/// nothing). Pure; usually a single epoch.
+pub fn epochs_finalized_at(parent_daa: u64, daa_score: u64, epoch_length_blocks: u64, finalization_depth: u64) -> Option<(u64, u64)> {
+    let epoch_len = epoch_length_blocks.max(1);
+    // threshold(E) = (E+1)·L + fd ∈ (parent_daa, daa_score].  With m = E+1 (≥ 1):
+    //   parent_daa − fd < m·L ≤ daa_score − fd.
+    let hi = daa_score.checked_sub(finalization_depth)?; // need daa_score ≥ fd, else nothing finalized
+    let m_max = hi / epoch_len; // ⌊(daa_score − fd)/L⌋  (largest m with m·L ≤ daa_score − fd)
+    if m_max == 0 {
+        return None; // not even epoch 0 is buried yet
+    }
+    let m_min = match parent_daa.checked_sub(finalization_depth) {
+        None => 1,                                      // parent below the first threshold ⇒ from epoch 0
+        Some(lo) => (lo / epoch_len).saturating_add(1), // smallest m with m·L > lo
+    }
+    .max(1);
+    if m_min > m_max {
+        return None; // the parent already crossed every threshold ≤ daa_score
+    }
+    Some((m_min - 1, m_max - 1)) // E = m − 1
 }
 
 /// Flattens every [`StakeAttestation`] from the `StakeAttestationShard`
@@ -4005,6 +4309,197 @@ mod tests {
         stake_bond_record_from_payload(&fixture_bond(), op)
     }
 
+    // ----- ADR-0018 "本格版" (PoS-v2) Phase 1: epoch accumulator pure core -----
+
+    fn op(byte: u8) -> TransactionOutpoint {
+        TransactionOutpoint::new(Hash64::from_bytes([byte; 64]), 0)
+    }
+
+    /// A bond with controllable amount / activation / reward payload (for accumulator tests).
+    fn bond_rec(op: TransactionOutpoint, amount: u64, activation: u64, payload_byte: u8) -> StakeBondRecord {
+        let mut r = fixture_bond_record(op);
+        r.amount = amount;
+        r.activation_daa_score = activation;
+        r.owner_reward_spk_payload = [payload_byte; 64];
+        r
+    }
+
+    fn contrib(daa: u64, keys: &[(TransactionOutpoint, u64)], quality: u64) -> BlockEpochContribution {
+        BlockEpochContribution { block_daa_score: daa, rewarded_keys: keys.to_vec(), quality_subpool: quality }
+    }
+
+    /// Accumulation: `included` is keyed by **attestation** epoch (resolved against the bond
+    /// snapshot, in contribution order) while `quality_pool_accrued` is keyed by **block** epoch
+    /// — the two attributions are independent. Each block also makes its own epoch present.
+    #[test]
+    fn recompute_epoch_tallies_accumulates_included_and_quality() {
+        let (a, b) = (op(0xA1), op(0xB2));
+        let bonds = vec![bond_rec(a, 100, 0, 0xA1), bond_rec(b, 200, 0, 0xB2)];
+        // Two blocks in epoch 1 reward epoch-0 attestations (recency lag); no block in epoch 0.
+        let contributions = vec![contrib(12, &[(a, 0)], 5), contrib(15, &[(b, 0)], 7)];
+
+        let tallies = recompute_epoch_tallies(30, 10, 100, &contributions, &bonds);
+        assert_eq!(
+            tallies,
+            vec![
+                // epoch 0: included = both attesters (contribution order), no block of its own → pool 0.
+                (
+                    0,
+                    EpochTally {
+                        expected_stake: 300,
+                        included: vec![(Hash64::from_bytes([0xA1; 64]), 100), (Hash64::from_bytes([0xB2; 64]), 200)],
+                        quality_pool_accrued: 0,
+                        finalized: false,
+                    }
+                ),
+                // epoch 1: the two blocks live here → pool 5+7, but no epoch-1 attestation was rewarded.
+                (1, EpochTally { expected_stake: 300, included: vec![], quality_pool_accrued: 12, finalized: false }),
+            ]
+        );
+    }
+
+    /// `expected_stake` is evaluated at each epoch's anchor (`epoch · epoch_length`): a bond that
+    /// only activates later is excluded from earlier epochs' denominators.
+    #[test]
+    fn recompute_epoch_tallies_expected_stake_respects_activation() {
+        let (a, b) = (op(0xA1), op(0xB2));
+        // b activates at daa 100 (epoch 10) — absent from epoch 0/1 denominators.
+        let bonds = vec![bond_rec(a, 100, 0, 0xA1), bond_rec(b, 200, 100, 0xB2)];
+        let contributions = vec![contrib(5, &[(a, 0)], 0), contrib(15, &[(a, 1)], 0)];
+        let tallies = recompute_epoch_tallies(40, 10, 100, &contributions, &bonds);
+        // epoch 0 anchor 0, epoch 1 anchor 10 — both before b's activation → expected 100.
+        assert_eq!(tallies[0].1.expected_stake, 100);
+        assert_eq!(tallies[1].1.expected_stake, 100);
+    }
+
+    /// Finalization is one-way at `sink_daa ≥ (E+1)·epoch_length + finalization_depth`.
+    #[test]
+    fn recompute_epoch_tallies_finalization_boundary() {
+        let a = op(0xA1);
+        let bonds = vec![bond_rec(a, 100, 0, 0xA1)];
+        let contributions = vec![contrib(5, &[], 3)]; // one block in epoch 0
+        // epoch 0 finalizes at (0+1)*10 + 100 = 110.
+        assert!(!recompute_epoch_tallies(109, 10, 100, &contributions, &bonds)[0].1.finalized);
+        assert!(recompute_epoch_tallies(110, 10, 100, &contributions, &bonds)[0].1.finalized);
+    }
+
+    /// No contributions ⇒ no tallies.
+    #[test]
+    fn recompute_epoch_tallies_empty() {
+        assert!(recompute_epoch_tallies(1_000, 10, 100, &[], &[bond_rec(op(0xA1), 100, 0, 0xA1)]).is_empty());
+    }
+
+    /// A rewarded key whose bond is absent from the snapshot is skipped from `included` (the epoch
+    /// is still emitted because the block lives in it).
+    #[test]
+    fn recompute_epoch_tallies_unresolvable_bond_skipped() {
+        let (a, ghost) = (op(0xA1), op(0xEE));
+        let bonds = vec![bond_rec(a, 100, 0, 0xA1)];
+        let contributions = vec![contrib(3, &[(ghost, 0)], 4)]; // block in epoch 0 rewards an unknown bond
+        let tallies = recompute_epoch_tallies(30, 10, 100, &contributions, &bonds);
+        assert_eq!(tallies.len(), 1);
+        assert_eq!(tallies[0].0, 0);
+        assert!(tallies[0].1.included.is_empty());
+        assert_eq!(tallies[0].1.quality_pool_accrued, 4);
+    }
+
+    /// One block may reward attestations for several distinct epochs; each lands in its own tally.
+    #[test]
+    fn recompute_epoch_tallies_multi_epoch_block() {
+        let (a, b) = (op(0xA1), op(0xB2));
+        let bonds = vec![bond_rec(a, 100, 0, 0xA1), bond_rec(b, 200, 0, 0xB2)];
+        let contributions = vec![contrib(25, &[(a, 0), (b, 1)], 9)]; // block in epoch 2
+        let tallies = recompute_epoch_tallies(30, 10, 100, &contributions, &bonds);
+        assert_eq!(tallies.len(), 3);
+        assert_eq!(tallies[0], (0, EpochTally { expected_stake: 300, included: vec![(Hash64::from_bytes([0xA1; 64]), 100)], quality_pool_accrued: 0, finalized: false }));
+        assert_eq!(tallies[1], (1, EpochTally { expected_stake: 300, included: vec![(Hash64::from_bytes([0xB2; 64]), 200)], quality_pool_accrued: 0, finalized: false }));
+        assert_eq!(tallies[2], (2, EpochTally { expected_stake: 300, included: vec![], quality_pool_accrued: 9, finalized: false }));
+    }
+
+    /// Reorg-safety: the tally is a pure function of the supplied (selected-chain) contributions, so
+    /// re-deriving an epoch from a different chain's blocks yields that chain's tally — no stale state.
+    #[test]
+    fn recompute_epoch_tallies_is_pure_per_chain() {
+        let (a, b) = (op(0xA1), op(0xB2));
+        let bonds = vec![bond_rec(a, 100, 0, 0xA1), bond_rec(b, 200, 0, 0xB2)];
+        let chain_a = recompute_epoch_tallies(30, 10, 100, &[contrib(2, &[(a, 0)], 5)], &bonds);
+        let chain_b = recompute_epoch_tallies(30, 10, 100, &[contrib(2, &[(b, 0)], 8)], &bonds);
+        assert_eq!(chain_a[0].1.included, vec![(Hash64::from_bytes([0xA1; 64]), 100)]);
+        assert_eq!(chain_a[0].1.quality_pool_accrued, 5);
+        assert_eq!(chain_b[0].1.included, vec![(Hash64::from_bytes([0xB2; 64]), 200)]);
+        assert_eq!(chain_b[0].1.quality_pool_accrued, 8);
+    }
+
+    // ----- ADR-0018 "本格版" (PoS-v2) Phase 2: φS gate + deferred quality-bonus outputs -----
+
+    /// The φS gate is the integer cross-multiply `included·10_000 ≥ φS_bps·expected`, with the
+    /// `expected == 0` and `φS_bps == 0` edge cases both meeting vacuously.
+    #[test]
+    fn epoch_meets_quality_floor_boundary() {
+        // φS = 60%: included must be ≥ 600/1000.
+        assert!(epoch_meets_quality_floor(600, 1000, 6000)); // exactly at the floor → meets
+        assert!(!epoch_meets_quality_floor(599, 1000, 6000)); // one below → misses
+        assert!(epoch_meets_quality_floor(601, 1000, 6000));
+        // φS = 0 → always meets (pre-ADR-0018 behavior).
+        assert!(epoch_meets_quality_floor(0, 1000, 0));
+        // expected = 0 → vacuously meets.
+        assert!(epoch_meets_quality_floor(0, 0, 6000));
+    }
+
+    /// Met epoch: each included validator is paid a proportional share of the quality pool, in
+    /// stored order, to its ML-DSA P2PKH script.
+    #[test]
+    fn validator_quality_bonus_outputs_met_pays_proportional() {
+        let included = vec![(Hash64::from_bytes([0xA1; 64]), 100u64), (Hash64::from_bytes([0xB2; 64]), 300u64)];
+        let out = validator_quality_bonus_outputs(1000, &included, 400, true);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].value, 250); // 1000 · 100/400
+        assert_eq!(out[0].script_public_key, p2pkh_mldsa87_spk(&[0xA1; 64]));
+        assert_eq!(out[1].value, 750); // 1000 · 300/400
+        assert_eq!(out[1].script_public_key, p2pkh_mldsa87_spk(&[0xB2; 64]));
+        // Value-conserving: Σ ≤ pool.
+        assert!(out.iter().map(|o| o.value as u128).sum::<u128>() <= 1000);
+    }
+
+    /// Unmet epoch ⇒ no outputs (the whole pool rolls over).
+    #[test]
+    fn validator_quality_bonus_outputs_unmet_is_empty() {
+        let included = vec![(Hash64::from_bytes([0xA1; 64]), 100u64)];
+        assert!(validator_quality_bonus_outputs(1000, &included, 400, false).is_empty());
+    }
+
+    /// A zero-stake (or zero-share) validator emits no output even when the epoch met φS.
+    #[test]
+    fn validator_quality_bonus_outputs_zero_share_skipped() {
+        let included = vec![(Hash64::from_bytes([0xA1; 64]), 0u64), (Hash64::from_bytes([0xB2; 64]), 400u64)];
+        let out = validator_quality_bonus_outputs(1000, &included, 400, true);
+        assert_eq!(out.len(), 1); // only the 0xB2 validator
+        assert_eq!(out[0].value, 1000);
+        assert_eq!(out[0].script_public_key, p2pkh_mldsa87_spk(&[0xB2; 64]));
+    }
+
+    /// The deferred-payout once-per-epoch guard: a block finalizes exactly the epochs whose
+    /// threshold `(E+1)·L + fd` is crossed in `(parent_daa, daa_score]`. With L=10, fd=100 the
+    /// thresholds are 110 (E0), 120 (E1), 130 (E2), …
+    #[test]
+    fn epochs_finalized_at_crossing() {
+        // Nothing buried yet (daa below epoch-0's threshold 110).
+        assert_eq!(epochs_finalized_at(108, 109, 10, 100), None);
+        assert_eq!(epochs_finalized_at(0, 50, 10, 100), None); // daa < fd
+        // Exactly epoch 0 crosses at 110.
+        assert_eq!(epochs_finalized_at(109, 110, 10, 100), Some((0, 0)));
+        // Parent already finalized epoch 0 ⇒ this block finalizes nothing new.
+        assert_eq!(epochs_finalized_at(110, 111, 10, 100), None);
+        // Next block to reach 120 finalizes epoch 1.
+        assert_eq!(epochs_finalized_at(110, 120, 10, 100), Some((1, 1)));
+        // A DAA jump finalizes a contiguous range at once (epochs 0,1,2 at 110/120/130).
+        assert_eq!(epochs_finalized_at(109, 130, 10, 100), Some((0, 2)));
+        // Early chain: parent below the first threshold ⇒ range starts at epoch 0.
+        assert_eq!(epochs_finalized_at(50, 115, 10, 100), Some((0, 0)));
+        // epoch_length 0 is clamped to 1 (no panic / div-by-zero).
+        assert_eq!(epochs_finalized_at(0, 105, 0, 100), Some((0, 4)));
+    }
+
     #[test]
     fn active_bond_view_apply_insert_then_resolve() {
         let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
@@ -4334,9 +4829,13 @@ mod tests {
                 worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
                 fee_split: fixture_fee_split(),
                 fee_split_bootstrap: fixture_fee_split_bootstrap(),
+                security_reserve_bps: 2000,
+                victim_epoch_pool_bps: 1000,
+                reserve_drip_per_epoch_cap_sompi: 1_000_000,
             },
             reorg_mode: DnsReorgMode::TwoDimensionalDominance,
             full_reward_split_daa_score: 2_000_000,
+            pos_v2_activation_daa_score: 3_000_000,
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();
@@ -4807,6 +5306,9 @@ mod tests {
             worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
             fee_split: fixture_fee_split(),
             fee_split_bootstrap: fixture_fee_split_bootstrap(),
+            security_reserve_bps: 2000,
+            victim_epoch_pool_bps: 1000,
+            reserve_drip_per_epoch_cap_sompi: 1_000_000,
         };
         let bytes = borsh::to_vec(&p).unwrap();
         let back: RewardParams = borsh::from_slice(&bytes).unwrap();
@@ -5013,7 +5515,8 @@ mod tests {
 
     #[test]
     fn slashing_distribution_borsh_roundtrip() {
-        let s = SlashingDistribution { reporter_reward_sompi: 100_000, burned_sompi: 900_000 };
+        let s =
+            SlashingDistribution { reporter_reward_sompi: 100_000, security_reserve_sompi: 0, victim_epoch_pool_sompi: 0, burned_sompi: 900_000 };
         let bytes = borsh::to_vec(&s).unwrap();
         let back: SlashingDistribution = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, s);
@@ -5252,22 +5755,26 @@ mod tests {
         // requires: no value created or destroyed by rounding.
         for slashed in [1u64, 100, 12345, 1_000_000_000, u64::MAX / 2] {
             for bps in [0u16, 1, 1000, 5000, 9999, 10000] {
-                let d = compute_slashing_distribution(slashed, bps);
-                assert_eq!(d.reporter_reward_sompi + d.burned_sompi, slashed, "slashed={slashed} bps={bps}");
+                let d = compute_slashing_distribution(slashed, bps, 0, 0);
+                assert_eq!(
+                    d.reporter_reward_sompi + d.security_reserve_sompi + d.victim_epoch_pool_sompi + d.burned_sompi,
+                    slashed,
+                    "slashed={slashed} bps={bps}"
+                );
             }
         }
     }
 
     #[test]
     fn slashing_distribution_zero_bps_burns_everything() {
-        let d = compute_slashing_distribution(1_000_000_000, 0);
+        let d = compute_slashing_distribution(1_000_000_000, 0, 0, 0);
         assert_eq!(d.reporter_reward_sompi, 0);
         assert_eq!(d.burned_sompi, 1_000_000_000);
     }
 
     #[test]
     fn slashing_distribution_full_bps_burns_nothing() {
-        let d = compute_slashing_distribution(1_000_000_000, 10000);
+        let d = compute_slashing_distribution(1_000_000_000, 10000, 0, 0);
         assert_eq!(d.reporter_reward_sompi, 1_000_000_000);
         assert_eq!(d.burned_sompi, 0);
     }
@@ -5276,7 +5783,7 @@ mod tests {
     fn slashing_distribution_mainnet_10pct_recommendation() {
         // ADR-0013 §"Slashing distribution" mainnet recommendation:
         // 1000 bps = 10% to reporter, 90% burned.
-        let d = compute_slashing_distribution(100_000_000_000, 1000);
+        let d = compute_slashing_distribution(100_000_000_000, 1000, 0, 0);
         assert_eq!(d.reporter_reward_sompi, 10_000_000_000);
         assert_eq!(d.burned_sompi, 90_000_000_000);
     }
@@ -5286,9 +5793,56 @@ mod tests {
         // u64::MAX × 10000 would overflow u64; the helper promotes
         // to u128 internally so it cannot. Pin this with the
         // largest plausible slashed amount (full u64 supply).
-        let d = compute_slashing_distribution(u64::MAX, 10000);
+        let d = compute_slashing_distribution(u64::MAX, 10000, 0, 0);
         assert_eq!(d.reporter_reward_sompi, u64::MAX);
         assert_eq!(d.burned_sompi, 0);
+    }
+
+    // ---- ADR-0018 "本格版" (PoS-v2) Phase 3: 4-way slashing + victim compensation ----
+
+    /// 4-way split (reporter→reserve→victim→burn) sums to S; reserve/victim = 0 ⇒ byte-identical 2-way.
+    #[test]
+    fn slashing_distribution_four_way_splits_and_conserves() {
+        // 10% reporter, 20% reserve, 30% victim, 40% burn of 1_000_000.
+        let d = compute_slashing_distribution(1_000_000, 1000, 2000, 3000);
+        assert_eq!(d.reporter_reward_sompi, 100_000);
+        assert_eq!(d.security_reserve_sompi, 200_000);
+        assert_eq!(d.victim_epoch_pool_sompi, 300_000);
+        assert_eq!(d.burned_sompi, 400_000);
+        assert_eq!(d.reporter_reward_sompi + d.security_reserve_sompi + d.victim_epoch_pool_sompi + d.burned_sompi, 1_000_000);
+        // Fenced (reserve/victim bps = 0): exactly the pre-v2 reporter + burn.
+        let two = compute_slashing_distribution(1_000_000, 1000, 0, 0);
+        assert_eq!(
+            (two.reporter_reward_sompi, two.security_reserve_sompi, two.victim_epoch_pool_sompi, two.burned_sompi),
+            (100_000, 0, 0, 900_000)
+        );
+    }
+
+    /// Misconfigured Σbps > 10_000: priority clamp (reporter→reserve→victim) keeps burn ≥ 0 and Σ = S.
+    #[test]
+    fn slashing_distribution_overallocated_bps_clamps_in_priority() {
+        // 6000+6000+6000 = 18000 bps. reporter 600k, reserve min(600k, 400k)=400k, victim 0, burn 0.
+        let d = compute_slashing_distribution(1_000_000, 6000, 6000, 6000);
+        assert_eq!(
+            (d.reporter_reward_sompi, d.security_reserve_sompi, d.victim_epoch_pool_sompi, d.burned_sompi),
+            (600_000, 400_000, 0, 0)
+        );
+        assert_eq!(d.reporter_reward_sompi + d.security_reserve_sompi + d.victim_epoch_pool_sompi + d.burned_sompi, 1_000_000);
+    }
+
+    /// Victim compensation is stake-proportional over the honest set; Σ ≤ pool; degenerate ⇒ empty.
+    #[test]
+    fn victim_compensation_outputs_stake_proportional() {
+        let honest = vec![(Hash64::from_bytes([0xA1; 64]), 100u64), (Hash64::from_bytes([0xB2; 64]), 300u64)];
+        let out = victim_compensation_outputs(1000, &honest, 400);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].value, 250); // 1000 · 100/400
+        assert_eq!(out[0].script_public_key, p2pkh_mldsa87_spk(&[0xA1; 64]));
+        assert_eq!(out[1].value, 750); // 1000 · 300/400
+        assert!(out.iter().map(|o| o.value as u128).sum::<u128>() <= 1000);
+        // Zero pool / empty honest set / zero denominator ⇒ no outputs.
+        assert!(victim_compensation_outputs(0, &honest, 400).is_empty());
+        assert!(victim_compensation_outputs(1000, &[], 0).is_empty());
     }
 
     // ---- apply_unreveal_reporter_min_cap --------------------------
@@ -5298,7 +5852,7 @@ mod tests {
         // bps-derived reporter = 1_000_000 (10% of 10_000_000),
         // floor = 500_000. After cap: reporter = 500_000, burned
         // grows by 500_000.
-        let base = compute_slashing_distribution(10_000_000, 1000);
+        let base = compute_slashing_distribution(10_000_000, 1000, 0, 0);
         assert_eq!(base.reporter_reward_sompi, 1_000_000);
         assert_eq!(base.burned_sompi, 9_000_000);
 
@@ -5313,7 +5867,7 @@ mod tests {
     fn unreveal_min_cap_noop_when_bps_reward_under_floor() {
         // bps-derived reporter = 1_000 (10% of 10_000),
         // floor = 500_000. cap is a no-op.
-        let base = compute_slashing_distribution(10_000, 1000);
+        let base = compute_slashing_distribution(10_000, 1000, 0, 0);
         let capped = apply_unreveal_reporter_min_cap(base, 500_000);
         assert_eq!(capped, base);
     }
@@ -5321,7 +5875,7 @@ mod tests {
     #[test]
     fn unreveal_min_cap_at_exact_floor_is_noop() {
         // bps-derived reporter == floor. No clamp applies.
-        let base = compute_slashing_distribution(5_000_000, 1000); // → reporter = 500_000
+        let base = compute_slashing_distribution(5_000_000, 1000, 0, 0); // → reporter = 500_000
         assert_eq!(base.reporter_reward_sompi, 500_000);
         let capped = apply_unreveal_reporter_min_cap(base, 500_000);
         assert_eq!(capped, base);
@@ -5333,21 +5887,21 @@ mod tests {
     fn slashing_distribution_output_equivocation_pays_reporter_and_burns_rest() {
         // S = 1_000_000, bps = 1000 (10%) → reporter 100_000, burn 900_000.
         let payload = [0x5au8; 64];
-        let (out, burned) = slashing_distribution_output(1_000_000, 1000, &payload, None);
+        let (out, dist) = slashing_distribution_output(1_000_000, 1000, 0, 0, &payload, None);
         let out = out.expect("non-zero reporter reward");
         assert_eq!(out.value, 100_000);
         assert_eq!(out.script_public_key, p2pkh_mldsa87_spk(&payload));
-        assert_eq!(burned, 900_000);
-        // Conservation: reporter + burn == S.
-        assert_eq!(out.value + burned, 1_000_000);
+        assert_eq!(dist.burned_sompi, 900_000);
+        // Conservation: reporter + burn == S (reserve + victim are 0 in the 2-way case).
+        assert_eq!(out.value + dist.burned_sompi, 1_000_000);
     }
 
     #[test]
     fn slashing_distribution_output_zero_bps_emits_no_output() {
         // bps = 0 → everything burns, no reporter output.
-        let (out, burned) = slashing_distribution_output(1_000_000, 0, &[0x5au8; 64], None);
+        let (out, dist) = slashing_distribution_output(1_000_000, 0, 0, 0, &[0x5au8; 64], None);
         assert!(out.is_none());
-        assert_eq!(burned, 1_000_000);
+        assert_eq!(dist.burned_sompi, 1_000_000);
     }
 
     #[test]
@@ -5355,11 +5909,11 @@ mod tests {
         // S = 5_000_000, bps = 1000 → bps-reward 500_000, but the unreveal
         // floor caps the reporter at 100_000; the extra burns.
         let payload = [0x5au8; 64];
-        let (out, burned) = slashing_distribution_output(5_000_000, 1000, &payload, Some(100_000));
+        let (out, dist) = slashing_distribution_output(5_000_000, 1000, 0, 0, &payload, Some(100_000));
         let out = out.expect("non-zero reporter reward");
         assert_eq!(out.value, 100_000);
-        assert_eq!(burned, 4_900_000);
-        assert_eq!(out.value + burned, 5_000_000);
+        assert_eq!(dist.burned_sompi, 4_900_000);
+        assert_eq!(out.value + dist.burned_sompi, 5_000_000);
     }
 
     // ---- slashing_side_effects_from_evidence (Addendum C / D.4) ----
@@ -5373,10 +5927,10 @@ mod tests {
         // Two distinct bonds, bps = 1000 (10%): each yields one side-effect
         // with reporter = 10% and burn = 90% of its own S.
         let evidence = [
-            (slash_outpoint(1), 1_000_000, [0x11u8; 64], Hash64::from_bytes([0xa1; 64])),
-            (slash_outpoint(2), 2_000_000, [0x22u8; 64], Hash64::from_bytes([0xa2; 64])),
+            (slash_outpoint(1), 1_000_000, [0x11u8; 64], Hash64::from_bytes([0xa1; 64]), 0),
+            (slash_outpoint(2), 2_000_000, [0x22u8; 64], Hash64::from_bytes([0xa2; 64]), 0),
         ];
-        let effects = slashing_side_effects_from_evidence(&evidence, 1000, None);
+        let effects = slashing_side_effects_from_evidence(&evidence, 1000, 0, 0, None);
         assert_eq!(effects.len(), 2);
 
         assert_eq!(effects[0].bond_outpoint, slash_outpoint(1));
@@ -5401,10 +5955,10 @@ mod tests {
         // Two evidences against the SAME bond in one block collapse to a
         // single side-effect (its UTXO can be removed only once).
         let evidence = [
-            (slash_outpoint(7), 1_000_000, [0x11u8; 64], Hash64::from_bytes([0xb1; 64])),
-            (slash_outpoint(7), 1_000_000, [0x99u8; 64], Hash64::from_bytes([0xb2; 64])),
+            (slash_outpoint(7), 1_000_000, [0x11u8; 64], Hash64::from_bytes([0xb1; 64]), 0),
+            (slash_outpoint(7), 1_000_000, [0x99u8; 64], Hash64::from_bytes([0xb2; 64]), 0),
         ];
-        let effects = slashing_side_effects_from_evidence(&evidence, 1000, None);
+        let effects = slashing_side_effects_from_evidence(&evidence, 1000, 0, 0, None);
         assert_eq!(effects.len(), 1);
         // First occurrence wins (the 0x11 reporter payload) — and its tx id fixes
         // the mint outpoint (slashing_tx_id, 0), so a second tx for the same bond
@@ -5417,8 +5971,8 @@ mod tests {
     fn slashing_side_effects_zero_bps_burns_everything() {
         // bps = 0 → no reporter output, full S burns, but the bond is still
         // slashed (a side-effect is produced so its UTXO is removed).
-        let evidence = [(slash_outpoint(3), 1_000_000, [0x33u8; 64], Hash64::from_bytes([0xc3; 64]))];
-        let effects = slashing_side_effects_from_evidence(&evidence, 0, None);
+        let evidence = [(slash_outpoint(3), 1_000_000, [0x33u8; 64], Hash64::from_bytes([0xc3; 64]), 0)];
+        let effects = slashing_side_effects_from_evidence(&evidence, 0, 0, 0, None);
         assert_eq!(effects.len(), 1);
         assert!(effects[0].reporter_output.is_none());
         assert_eq!(effects[0].burned_sompi, 1_000_000);
@@ -5428,15 +5982,15 @@ mod tests {
     #[test]
     fn slashing_side_effects_unreveal_floor_caps_reporter() {
         // unreveal floor caps the reporter below the bps reward; the extra burns.
-        let evidence = [(slash_outpoint(4), 5_000_000, [0x44u8; 64], Hash64::from_bytes([0xc4; 64]))];
-        let effects = slashing_side_effects_from_evidence(&evidence, 1000, Some(100_000));
+        let evidence = [(slash_outpoint(4), 5_000_000, [0x44u8; 64], Hash64::from_bytes([0xc4; 64]), 0)];
+        let effects = slashing_side_effects_from_evidence(&evidence, 1000, 0, 0, Some(100_000));
         assert_eq!(effects[0].reporter_output.as_ref().unwrap().value, 100_000);
         assert_eq!(effects[0].burned_sompi, 4_900_000);
     }
 
     #[test]
     fn slashing_side_effects_empty_is_noop() {
-        assert!(slashing_side_effects_from_evidence(&[], 1000, None).is_empty());
+        assert!(slashing_side_effects_from_evidence(&[], 1000, 0, 0, None).is_empty());
     }
 
     // ---- resolve_slashing_side_effects (Addendum C / D.4): resolve a block's
@@ -5464,7 +6018,7 @@ mod tests {
         // side-effect, S = amount, reporter = 10% to the evidence's payload.
         let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
         let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
-        let effects = resolve_slashing_side_effects(&[evidence_tx_for(op, [0xab; 64])], &view, RESOLVE_DAA, 1000);
+        let effects = resolve_slashing_side_effects(&[evidence_tx_for(op, [0xab; 64])], &view, RESOLVE_DAA, 1000, 0, 0);
         assert_eq!(effects.len(), 1);
         assert_eq!(effects[0].bond_outpoint, op);
         assert_eq!(effects[0].slashed_amount_sompi, 100_000_000_000);
@@ -5483,7 +6037,7 @@ mod tests {
         b.unbond_request_daa_score = Some(RESOLVE_DAA - 1); // release = +unbonding_period ≫ DAA.
         assert_eq!(effective_bond_status(&b, RESOLVE_DAA), BondStatus::Unbonding);
         let view = ActiveBondView::from_records([(op, b)]);
-        let effects = resolve_slashing_side_effects(&[evidence_tx_for(op, [0xcd; 64])], &view, RESOLVE_DAA, 1000);
+        let effects = resolve_slashing_side_effects(&[evidence_tx_for(op, [0xcd; 64])], &view, RESOLVE_DAA, 1000, 0, 0);
         assert_eq!(effects.len(), 1);
         assert_eq!(effects[0].slashed_amount_sompi, 100_000_000_000);
     }
@@ -5494,7 +6048,7 @@ mod tests {
         // distribution ⇒ no side-effect.
         let op = TransactionOutpoint::new(Hash64::from_bytes([0x33; 64]), 0);
         let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
-        assert!(resolve_slashing_side_effects(&[evidence_tx_for(op, [0x01; 64])], &view, 1_000, 1000).is_empty());
+        assert!(resolve_slashing_side_effects(&[evidence_tx_for(op, [0x01; 64])], &view, 1_000, 1000, 0, 0).is_empty());
     }
 
     #[test]
@@ -5506,7 +6060,7 @@ mod tests {
         b.slashed_at_daa_score = Some(6_000);
         b.status = BondStatus::Slashed;
         let view = ActiveBondView::from_records([(op, b)]);
-        assert!(resolve_slashing_side_effects(&[evidence_tx_for(op, [0x02; 64])], &view, RESOLVE_DAA, 1000).is_empty());
+        assert!(resolve_slashing_side_effects(&[evidence_tx_for(op, [0x02; 64])], &view, RESOLVE_DAA, 1000, 0, 0).is_empty());
     }
 
     #[test]
@@ -5515,14 +6069,14 @@ mod tests {
         // genuineness rule would already reject such a block.)
         let op = TransactionOutpoint::new(Hash64::from_bytes([0x55; 64]), 0);
         assert!(
-            resolve_slashing_side_effects(&[evidence_tx_for(op, [0x03; 64])], &ActiveBondView::new(), RESOLVE_DAA, 1000).is_empty()
+            resolve_slashing_side_effects(&[evidence_tx_for(op, [0x03; 64])], &ActiveBondView::new(), RESOLVE_DAA, 1000, 0, 0).is_empty()
         );
     }
 
     #[test]
     fn resolve_slashing_side_effects_empty_without_evidence() {
         let native = dns_overlay_tx(SubnetworkId::from_byte(0), vec![]);
-        assert!(resolve_slashing_side_effects(&[native], &ActiveBondView::new(), RESOLVE_DAA, 1000).is_empty());
+        assert!(resolve_slashing_side_effects(&[native], &ActiveBondView::new(), RESOLVE_DAA, 1000, 0, 0).is_empty());
     }
 
     // ---- Coordinated-failover protocol (ADR-0014) -----------------

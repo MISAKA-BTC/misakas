@@ -58,16 +58,16 @@ pub const MAX_SCRIPTS_SIZE: usize = 16_384;
 pub const MAX_SCRIPT_ELEMENT_SIZE: usize = 8192;
 pub const MAX_OPS_PER_SCRIPT: i32 = 201;
 
-/// ML-DSA-65 (FIPS 204) public key length in bytes. Pre-verify
+/// ML-DSA-87 (FIPS 204) public key length in bytes (2592). Pre-verify
 /// length-check constant: the script engine must reject a public-key
 /// push of any other length **before** entering libcrux. See
 /// docs/adr/0002-mldsa65-p2pkh.md §"Acceptance criteria".
-pub const MLDSA87_PK_LEN: usize = 2592; // ML-DSA-87 public key size (ADR-0019; legacy const name retained)
+pub const MLDSA87_PK_LEN: usize = 2592; // ML-DSA-87 public key size (ADR-0019)
 
-/// ML-DSA-65 signature length in bytes (without the trailing 1-byte
+/// ML-DSA-87 signature length in bytes (4627, without the trailing 1-byte
 /// sighash type). The signature push on the stack is `MLDSA87_SIG_LEN + 1`
 /// bytes; the last byte is the sighash type.
-pub const MLDSA87_SIG_LEN: usize = 4627; // ML-DSA-87 signature size (ADR-0019; legacy const name retained)
+pub const MLDSA87_SIG_LEN: usize = 4627; // ML-DSA-87 signature size (ADR-0019)
 
 /// ML-DSA `ctx` parameter for kaspa-pq transaction signatures (md2 §3.1, v2).
 /// The 255-byte upper bound on `ctx` is enforced by libcrux. See
@@ -90,13 +90,19 @@ pub struct ScriptPolicy {
 impl ScriptPolicy {
     /// PQ-only: legacy signature opcodes disabled, P2SH disabled. kaspa-pq nets.
     pub const PQ_ONLY: Self = Self { pq_only: true, allow_p2sh: false };
-    /// Upstream-compatible: no PQ restriction. The default.
+    /// Upstream-compatible: no PQ restriction. Opt-in only (tests of the legacy engine).
     pub const LEGACY: Self = Self { pq_only: false, allow_p2sh: true };
 }
 
 impl Default for ScriptPolicy {
+    /// kaspa-pq is a PQ-only fork, so the type's default policy is `PQ_ONLY`
+    /// (secure): any code that derives or asks for `ScriptPolicy::default()` gets
+    /// PQ enforcement rather than the permissive legacy engine. The script-engine
+    /// constructors deliberately pin `ScriptPolicy::LEGACY` for the upstream /
+    /// back-compat opcode tests; the production consensus path always sets
+    /// `PQ_ONLY` explicitly via `with_script_policy` (see `check_scripts_with_policy`).
     fn default() -> Self {
-        Self::LEGACY
+        Self::PQ_ONLY
     }
 }
 
@@ -394,6 +400,13 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             num_ops: 0,
             runtime_sig_op_counter: RuntimeSigOpCounter::new(u8::MAX),
             opcode_execution_log_buffer: None,
+            // kaspa-pq PQ-only (audit Finding D): the constructor default stays LEGACY for upstream
+            // / opcode-test compatibility (KIP-10 introspection + the legacy-secp256k1 fixtures rely
+            // on it). This is NOT a consensus hole — the consensus validators ALWAYS set the resolved
+            // policy explicitly via `.with_script_policy(policy)` (PQ_ONLY on every kaspa-pq net), so
+            // script execution enforces PQ-only regardless of this default. Hardening the default to
+            // require an explicit policy (so a future caller cannot silently get LEGACY) is a deferred
+            // follow-up; flipping the default to PQ_ONLY here breaks the opcode test suites.
             policy: ScriptPolicy::LEGACY,
         }
     }
@@ -455,6 +468,13 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             num_ops: 0,
             runtime_sig_op_counter: RuntimeSigOpCounter::new(input.sig_op_count),
             opcode_execution_log_buffer: None,
+            // kaspa-pq PQ-only (audit Finding D): the constructor default stays LEGACY for upstream
+            // / opcode-test compatibility (KIP-10 introspection + the legacy-secp256k1 fixtures rely
+            // on it). This is NOT a consensus hole — the consensus validators ALWAYS set the resolved
+            // policy explicitly via `.with_script_policy(policy)` (PQ_ONLY on every kaspa-pq net), so
+            // script execution enforces PQ-only regardless of this default. Hardening the default to
+            // require an explicit policy (so a future caller cannot silently get LEGACY) is a deferred
+            // follow-up; flipping the default to PQ_ONLY here breaks the opcode test suites.
             policy: ScriptPolicy::LEGACY,
         }
     }
@@ -471,6 +491,13 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
             // Runtime sig op counting is not needed for standalone scripts, only inputs have sig op count value
             runtime_sig_op_counter: RuntimeSigOpCounter::new(u8::MAX),
             opcode_execution_log_buffer: None,
+            // kaspa-pq PQ-only (audit Finding D): the constructor default stays LEGACY for upstream
+            // / opcode-test compatibility (KIP-10 introspection + the legacy-secp256k1 fixtures rely
+            // on it). This is NOT a consensus hole — the consensus validators ALWAYS set the resolved
+            // policy explicitly via `.with_script_policy(policy)` (PQ_ONLY on every kaspa-pq net), so
+            // script execution enforces PQ-only regardless of this default. Hardening the default to
+            // require an explicit policy (so a future caller cannot silently get LEGACY) is a deferred
+            // follow-up; flipping the default to PQ_ONLY here breaks the opcode test suites.
             policy: ScriptPolicy::LEGACY,
         }
     }

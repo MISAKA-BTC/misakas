@@ -4,7 +4,7 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` / `misakadev…`), and project branding are misakas.
 
-> Status: **devnet** (experimental). The DNS-finality reward overlay is **active on devnet** (`dns_activation_daa_score = 0`) so a real bond → attestation → reward-bearing coinbase can be exercised. No mainnet.
+> Status: **devnet** (experimental) is the only network operated today. PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`) — **including the `mainnet` parameter set, which is defined but NOT launched or endorsed for production**. Do not run `--mainnet` expecting a live or supported network.
 
 ## What's different from Kaspa
 

@@ -1,0 +1,33 @@
+[package]
+name = "misaminer"
+description = "misaminer — MISAKA (kaspa-pq) Layer-0 BLAKE2b-512 CPU miner. Point it at a node/gateway, set your wallet, and mine."
+version = "1.0.0"
+rust-version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "misaminer"
+path = "src/main.rs"
+
+[dependencies]
+kaspa-addresses.workspace = true
+kaspa-bip32.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-core.workspace = true
+kaspa-grpc-client.workspace = true
+kaspa-wallet-keys.workspace = true
+kaspa-notify.workspace = true
+kaspa-pow.workspace = true
+kaspa-rpc-core.workspace = true
+
+clap.workspace = true
+log.workspace = true
+rayon.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true
