@@ -1204,7 +1204,7 @@ impl VirtualStateProcessor {
     /// fall inside the collected window (so the duplicate flag is reliable). Older / unready
     /// / duplicate epochs are simply absent. Position comes from header-committed
     /// `blue_score`, never the store index, so archival and IBD-synced nodes agree.
-    fn canonical_anchors_in_window(&self, tip: BlockHash, dns_params: &DnsParams) -> BTreeMap<u64, CanonicalLaggedEpochAnchor> {
+    pub(super) fn canonical_anchors_in_window(&self, tip: BlockHash, dns_params: &DnsParams) -> BTreeMap<u64, CanonicalLaggedEpochAnchor> {
         let epoch_len = dns_params.attestation_epoch_length_blue_score.max(1);
         let backoff = dns_params.attestation_anchor_backoff_blue_score;
         let lag = dns_params.attestation_lag_blue_score;
