@@ -12,31 +12,38 @@ use kaspa_consensus_core::{
         params::{DEVNET_PARAMS, MAINNET_PARAMS},
     },
     dns_finality::p2pkh_mldsa87_spk,
-    tx::Transaction,
+    tx::{Transaction, TransactionOutpoint},
 };
 use std::{collections::VecDeque, thread::JoinHandle};
 
 struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
+    rejected: bool,
 }
 
 impl OnetimeTxSelector {
     fn new(txs: Vec<Transaction>) -> Self {
-        Self { txs: Some(txs) }
+        Self { txs: Some(txs), rejected: false }
     }
 }
 
 impl TemplateTransactionSelector for OnetimeTxSelector {
     fn select_transactions(&mut self) -> Vec<Transaction> {
-        self.txs.take().unwrap()
+        // First call returns the fixed set; subsequent calls (the builder's
+        // rejection re-selection loop) return empty so the loop terminates
+        // instead of unwrapping `None`.
+        self.txs.take().unwrap_or_default()
     }
 
     fn reject_selection(&mut self, _tx_id: kaspa_consensus_core::tx::TransactionId) {
-        unimplemented!()
+        // Record the rejection so `is_successful` reports failure and
+        // `build_block_template` surfaces the per-tx `RuleError` (instead of
+        // panicking or silently dropping the tx).
+        self.rejected = true;
     }
 
     fn is_successful(&self) -> bool {
-        true
+        !self.rejected
     }
 }
 
@@ -132,6 +139,30 @@ impl TestContext {
         let status = self.consensus.validate_and_insert_block(block).virtual_state_task.await.unwrap();
         assert!(status.has_block_body());
         self
+    }
+
+    /// kaspa-pq ADR-0018 §G (DAG-2 harness): build ONE block from a template with a
+    /// custom `miner_data` (so the coinbase can pay a known, spendable key) and a
+    /// custom tx set fed through `OnetimeTxSelector` (so the coinbase is computed
+    /// correctly and the block can reach a valid UTXO tip — unlike
+    /// `build_block_with_parents_and_transactions`, which builds a utxo-invalid
+    /// coinbase). Parents are auto-selected from the current virtual tips, so the
+    /// caller just mines a linear chain. Returns the inserted (immutable) block so
+    /// the caller can read its coinbase outputs / daa score. NOTE: an invalid tx in
+    /// `txs` makes the template builder call `OnetimeTxSelector::reject_selection`,
+    /// which panics — i.e. an invalid funded spend fails loudly here.
+    pub async fn mine_block(&mut self, miner_data: MinerData, txs: Vec<Transaction>) -> Block {
+        self.simulated_time += self.consensus.params().target_time_per_block();
+        let mut t = self
+            .consensus
+            .build_block_template(miner_data, Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
+            .unwrap();
+        t.block.header.timestamp = self.simulated_time;
+        t.block.header.nonce = self.simulated_time;
+        t.block.header.finalize();
+        let block = t.block.to_immutable();
+        self.validate_and_insert_block(block.clone()).await;
+        block
     }
 
     pub fn assert_tips(&mut self) -> &mut Self {
@@ -287,6 +318,195 @@ async fn pos_v2_active_empty_chain_validates() {
     ctx.assert_tips_num(1);
 }
 
+/// kaspa-pq ADR-0018 §G DAG-2 (funded-bond milestone — retires the "fund a bond
+/// from a coinbase UTXO" wall). With the overlay + v2 economics ACTIVE, a real
+/// ML-DSA-87 keypair mines a coinbase; after maturity its output is SPENT into a
+/// funded stake-bond tx (output-0 = locked stake, input-0 signed over the v2 tx
+/// sighash under `MLDSA87_TX_CONTEXT`). The block carrying the bond must reach a
+/// valid UTXO tip — proving the script engine (`OpCheckSigMlDsa87`) accepts the
+/// real ML-DSA-87 P2PKH spend through full consensus validation, the precondition
+/// for the reward-bearing / slashing DAG e2e (DAG-2..6).
+#[tokio::test]
+async fn pos_v2_funded_bond_chain_validates() {
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            // Shrink coinbase maturity so the funding coinbase is spendable within a short chain.
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 2;
+            dns.max_reorg_horizon_blocks = 2;
+            p.dns_params = Some(dns);
+        })
+        .build();
+
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // A known validator/funding key; its coinbase P2PKH spk.
+    let seed = [0x42u8; 32];
+    let v = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+
+    // 1) Mine a run of blocks whose coinbase pays K. In Kaspa a block's coinbase
+    //    rewards the blocks it MERGES (each merged block's reported miner script),
+    //    not its own miner — so K's reward for the funding block b1 (which merges
+    //    only genesis → 0 reward) appears in the coinbase of the block that merges
+    //    b1 (the harvest block b2).
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    let _b1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let harvest = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let coinbase = &harvest.transactions[0];
+    let coinbase_id = coinbase.id();
+    let coinbase_daa = harvest.header.daa_score;
+    let (idx, out) = coinbase
+        .outputs
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.script_public_key == k_spk)
+        .expect("the harvest coinbase must pay the known key");
+    let coinbase_outpoint = TransactionOutpoint::new(coinbase_id, idx as u32);
+    let coinbase_value = out.value;
+    assert!(coinbase_value > 200_000, "coinbase value must cover the bond + fee");
+
+    // 2) Mine filler blocks so the harvested coinbase matures (coinbase_maturity = 2).
+    for _ in 0..5 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+
+    // 3) Spend the matured coinbase into a funded, ML-DSA-87-signed stake-bond tx.
+    let amount = coinbase_value - 100_000; // small fee; bond almost the whole coinbase
+    let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+    let (bond_tx, _validator_id, _reward_payload) = dns_harness::funded_signed_bond_tx(
+        seed,
+        coinbase_outpoint,
+        coinbase_value,
+        coinbase_daa,
+        amount,
+        0,
+        storage_mass_parameter,
+    );
+    let bond_tx_id = bond_tx.id();
+
+    // 4) Mine the block carrying the bond tx; it must reach a valid UTXO tip.
+    let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+    assert!(
+        bond_block.transactions.iter().any(|t| t.id() == bond_tx_id),
+        "the funded stake-bond tx must be included in the block"
+    );
+    assert_eq!(
+        ctx.consensus.block_status(bond_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "the block carrying the funded ML-DSA-87 stake-bond spend must be UTXO-valid (construction == validation)"
+    );
+    ctx.assert_valid_utxo_tip();
+}
+
+/// kaspa-pq ADR-0018 §G DAG-2 (reward-bearing e2e): the full overlay + v2 reward
+/// path over a real BlockDAG. A funded ML-DSA-87 bond is created (as in the funding
+/// milestone), then the validator ML-DSA-signs a recent attestation; the block that
+/// includes the attestation shard must pay the validator a non-empty §E
+/// participation reward in its coinbase AND validate to a UTXO-valid tip — proving
+/// the reward fan-out (eligibility → distribution → coinbase) is
+/// construction == validation with real bonds + attestations, not just by unit test.
+#[tokio::test]
+async fn pos_v2_reward_bearing_attestation_validates() {
+    use kaspa_consensus_core::Hash64;
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 2;
+            dns.max_reorg_horizon_blocks = 2;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // A known validator/funding key.
+    let seed = [0x42u8; 32];
+    let v = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+
+    // Fund: b1 funds, then two harvest blocks — h_a pays K for b1, h_b pays K for h_a.
+    // coinbase_a funds the bond; coinbase_b funds the attestation shard tx (a 0-input
+    // shard tx is rejected by the isolation `NoTxInputs` check, so production funds it).
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    let _b1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_a = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_b = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let cb_a = &h_a.transactions[0];
+    let (ia, oa) = cb_a.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_a pays K");
+    let (coinbase_a, value_a, daa_a) = (TransactionOutpoint::new(cb_a.id(), ia as u32), oa.value, h_a.header.daa_score);
+    let cb_b = &h_b.transactions[0];
+    let (ib, ob) = cb_b.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_b pays K");
+    let (coinbase_b, value_b, daa_b) = (TransactionOutpoint::new(cb_b.id(), ib as u32), ob.value, h_b.header.daa_score);
+    for _ in 0..5 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+    let (bond_tx, _vid, reward_payload) =
+        dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, value_a - 100_000, 0, storage_mass_parameter);
+    let bond_tx_id = bond_tx.id();
+    let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+    assert_eq!(
+        ctx.consensus.block_status(bond_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "the bond block must be UTXO-valid"
+    );
+    assert_eq!(reward_payload, k_payload, "rewards pay back to K");
+
+    // A recent filler so the bond settles into the as-of-selected-parent view and
+    // supplies a recent attestation target.
+    let pre = ctx.mine_block(new_miner_data(), vec![]).await;
+    let target_daa = pre.header.daa_score;
+    let epoch = target_daa / 2; // epoch_length_blocks = 2
+
+    // The validator ML-DSA-signs a recent attestation for its bond. net_id = genesis
+    // hash (Addendum A.3); target_hash / vsc are signed-message fields only (no
+    // independent on-chain check), so any value works as long as the signature covers
+    // it and the bond is Active at target_daa within the recency window.
+    let genesis_hash = ctx.consensus.params().genesis.hash;
+    let att = dns_harness::build_signed_attestation(
+        &v,
+        genesis_hash.as_byte_slice(),
+        TransactionOutpoint::new(bond_tx_id, 0),
+        epoch,
+        Hash64::from_bytes([0x5au8; 64]),
+        target_daa,
+        Hash64::from_bytes([0x11u8; 64]),
+    );
+    let shard_tx = dns_harness::funded_signed_shard_tx(seed, coinbase_b, value_b, daa_b, att, storage_mass_parameter);
+
+    // The block that includes the attestation shard pays the validator the §E
+    // participation reward (to owner_reward_spk_payload == k_spk) and must validate.
+    let reward_block = ctx.mine_block(new_miner_data(), vec![shard_tx]).await;
+    assert_eq!(
+        ctx.consensus.block_status(reward_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "the attestation-including block must be UTXO-valid with a non-empty reward coinbase"
+    );
+    let reward_value = reward_block.transactions[0].outputs.iter().find(|o| o.script_public_key == k_spk).map(|o| o.value);
+    assert!(
+        reward_value.unwrap_or(0) > 0,
+        "the coinbase must pay the validator a non-empty §E participation reward (got {reward_value:?})"
+    );
+}
+
 // ============================================================================
 // kaspa-pq ADR-0018 §G — DNS-overlay DAG integration harness (foundation).
 //
@@ -304,12 +524,16 @@ mod dns_harness {
         Hash64,
         dns_finality::{
             ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, StakeAttestation, StakeBondPayload,
-            attestations_from_accepted_txs, single_attestation_shard, stake_attestation_message, stake_attestation_shard_tx,
-            validator_id_from_pubkey,
+            attestations_from_accepted_txs, p2pkh_mldsa87_spk, single_attestation_shard, stake_attestation_message,
+            stake_attestation_shard_tx, validator_id_from_pubkey,
         },
+        hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash},
+        hashing::sighash_type::SIG_HASH_ALL,
+        mass::MassCalculator,
         subnets::{SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND},
-        tx::{Transaction, TransactionOutpoint},
+        tx::{PopulatedTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry},
     };
+    use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
     use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
     /// A test validator: an ML-DSA-65 key (re-derived deterministically from
@@ -343,6 +567,137 @@ mod dns_harness {
             owner_reward_spk_payload: reward_payload,
         };
         Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_BOND, 0, borsh::to_vec(&payload).unwrap())
+    }
+
+    /// kaspa-pq ADR-0018 §G (DAG-2): build a FUNDED, ML-DSA-87-signed stake-bond tx.
+    /// Spends the matured coinbase UTXO `coinbase_outpoint` (value `coinbase_value`,
+    /// paid to this validator's own P2PKH) into output-0 = `amount` locked stake
+    /// (P2PKH to the same key), carrying the `StakeBondPayload`. Input-0 is signed
+    /// over `calc_mldsa87_signature_hash(.., SIG_HASH_ALL)` under `MLDSA87_TX_CONTEXT`
+    /// — the exact 64-byte digest `OpCheckSigMlDsa87` recomputes — so the block
+    /// validates through the full script engine (construction == validation).
+    /// Returns `(signed tx, validator_id, owner_reward_spk_payload)`.
+    pub(super) fn funded_signed_bond_tx(
+        seed: [u8; 32],
+        coinbase_outpoint: TransactionOutpoint,
+        coinbase_value: u64,
+        coinbase_daa_score: u64,
+        amount: u64,
+        activation_daa_score: u64,
+        storage_mass_parameter: u64,
+    ) -> (Transaction, Hash64, [u8; 64]) {
+        let kp = mldsa::generate_key_pair(seed);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let validator_id = validator_id_from_pubkey(&pubkey);
+        // Keyed BLAKE2b-512 address payload (the same digest the spk's OP_BLAKE2B_512
+        // recomputes); rewards + the locked-stake output both pay this P2PKH.
+        let reward_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes();
+        let spk = p2pkh_mldsa87_spk(&reward_payload);
+
+        let payload = StakeBondPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            owner_pubkey_hash: validator_id,
+            validator_pubkey_hash: validator_id,
+            validator_pubkey: pubkey.clone(),
+            amount,
+            activation_daa_score,
+            unbonding_period_blocks: 700,
+            owner_reward_spk_payload: reward_payload,
+        };
+        // input-0 spends the coinbase; output-0 = the locked stake; fee = coinbase_value - amount.
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(coinbase_outpoint, vec![], 0, 1)],
+            vec![TransactionOutput::new(amount, spk.clone())],
+            0,
+            SUBNETWORK_ID_STAKE_BOND,
+            0,
+            borsh::to_vec(&payload).unwrap(),
+        );
+
+        // KIP-9 storage-mass commitment: value-based, so independent of the (still
+        // empty) signature_script — committing it now matches the validator's
+        // `calc_contextual_masses(..).storage_mass` recheck (else WrongMass).
+        let utxo = UtxoEntry::new(coinbase_value, spk, coinbase_daa_score, true);
+        let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
+            .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![utxo.clone()]))
+            .expect("contextual mass is computable for the funded bond tx")
+            .storage_mass;
+        tx.set_mass(storage_mass);
+
+        // Sign input-0 over the SIG_HASH_ALL digest of the (mass-committed) tx.
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        let sig_hash = {
+            let populated = PopulatedTransaction::new(&tx, vec![utxo]);
+            calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
+        };
+        let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x77u8; 32])
+            .expect("ML-DSA-87 sign on the 64-byte sighash");
+        let mut sig_item = sig.as_ref().to_vec();
+        sig_item.push(SIG_HASH_ALL.to_u8());
+        let sig_script = ScriptBuilder::new()
+            .add_data(&sig_item)
+            .expect("ML-DSA-87 signature push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .add_data(&pubkey)
+            .expect("ML-DSA-87 public-key push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .drain();
+        tx.inputs[0].signature_script = sig_script;
+        (tx, validator_id, reward_payload)
+    }
+
+    /// kaspa-pq ADR-0018 §G (DAG-2): build a FUNDED, ML-DSA-87-signed attestation
+    /// shard tx — the production shape (`build_funded_shard_tx`). A canonical 0-input
+    /// shard tx is rejected by the isolation `NoTxInputs` check, so the shard must
+    /// spend a (matured) coinbase like any other tx: one P2PKH change output back to
+    /// the same key, with the attestation carried verbatim in the payload on
+    /// `SUBNETWORK_ID_STAKE_ATTESTATION_SHARD`. Input-0 is ML-DSA-signed over the v2
+    /// tx sighash; the storage mass is committed.
+    pub(super) fn funded_signed_shard_tx(
+        seed: [u8; 32],
+        coinbase_outpoint: TransactionOutpoint,
+        coinbase_value: u64,
+        coinbase_daa_score: u64,
+        attestation: StakeAttestation,
+        storage_mass_parameter: u64,
+    ) -> Transaction {
+        let kp = mldsa::generate_key_pair(seed);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let reward_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes();
+        let spk = p2pkh_mldsa87_spk(&reward_payload);
+        // The payload is exactly what the canonical zero-input shard builder emits.
+        let payload = stake_attestation_shard_tx(&single_attestation_shard(attestation)).payload;
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(coinbase_outpoint, vec![], 0, 1)],
+            vec![TransactionOutput::new(coinbase_value - 100_000, spk.clone())],
+            0,
+            SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
+            0,
+            payload,
+        );
+        let utxo = UtxoEntry::new(coinbase_value, spk, coinbase_daa_score, true);
+        let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
+            .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![utxo.clone()]))
+            .expect("contextual mass is computable for the funded shard tx")
+            .storage_mass;
+        tx.set_mass(storage_mass);
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        let sig_hash = {
+            let populated = PopulatedTransaction::new(&tx, vec![utxo]);
+            calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
+        };
+        let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x88u8; 32])
+            .expect("ML-DSA-87 sign on the 64-byte sighash");
+        let mut sig_item = sig.as_ref().to_vec();
+        sig_item.push(SIG_HASH_ALL.to_u8());
+        let sig_script = ScriptBuilder::new()
+            .add_data(&sig_item)
+            .expect("ML-DSA-87 signature push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .add_data(&pubkey)
+            .expect("ML-DSA-87 public-key push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .drain();
+        tx.inputs[0].signature_script = sig_script;
+        tx
     }
 
     /// Build a fully ML-DSA-65-signed attestation for `bond_outpoint`, signing
