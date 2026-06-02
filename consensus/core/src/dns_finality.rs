@@ -702,6 +702,104 @@ pub struct DnsParams {
     /// everywhere until explicitly switched on. `u64::MAX` on every net today (inert; no
     /// consensus / genesis change). Appended last to keep the borsh layout change localized.
     pub pos_v2_activation_daa_score: u64,
+
+    // ---- kaspa-pq DNS v3: Canonical Lagged Anchor (blue_score-coordinated epochs) ----
+    // DNS attestation epochs are coordinated by header-committed `blue_score`, NOT the
+    // selected-chain *index*. The index is store-local: an archival node numbers from genesis,
+    // an IBD node from its pruning point, so the same block gets different indices and
+    // `index / L` would split StakeScore permanently between archival and IBD-synced nodes.
+    // blue_score is consensus-validated, strictly monotonic on the selected-parent chain, and
+    // pruning-invariant, so all nodes agree on a block's epoch.
+    /// DNS attestation epoch length in blue_score units. `epoch(b) = blue_score(b) / L`.
+    pub attestation_epoch_length_blue_score: u64,
+    /// blue_score the tip must advance past an epoch's end before that epoch is "ready" to
+    /// attest (absorbs selected-chain churn so honest validators converge on one lagged anchor).
+    pub attestation_lag_blue_score: u64,
+    /// blue_score backoff below an epoch's end for the canonical-anchor cutoff:
+    /// `anchor(E) = latest selected-chain ancestor with blue_score <= epoch_end(E) - backoff`.
+    pub attestation_anchor_backoff_blue_score: u64,
+    /// How far back (blue_score) the StakeScore / canonical-anchor walk scans from the tip; must
+    /// cover `required_stake_depth` epochs + lag + grace (replaces reusing
+    /// `max_reorg_horizon_blocks` for the stake walk).
+    pub stake_score_window_blue_score: u64,
+}
+
+/// kaspa-pq DNS v3 — the canonical, lagged, blue_score-coordinated epoch anchor that the
+/// signer, verifier, reward path, and reorg gate all derive identically. `anchor_hash` is a
+/// block hash (`Hash64`); the wire attestation's `target_hash` must equal it, and the verifier
+/// must additionally confirm `header(target_hash).blue_score == anchor_blue_score` and
+/// `header(target_hash).daa_score == anchor_daa_score`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanonicalLaggedEpochAnchor {
+    pub epoch: u64,
+    pub epoch_start_blue_score: u64,
+    pub epoch_end_blue_score: u64,
+    pub cutoff_blue_score: u64,
+    pub anchor_hash: Hash64,
+    pub anchor_blue_score: u64,
+    pub anchor_daa_score: u64,
+    /// `anchor(E) == anchor(E-1)` — a sparse / jumpy selected chain made this epoch reuse the
+    /// previous epoch's anchor. Such an epoch earns NO new StakeScore / reward credit (a
+    /// consensus rule), so the same history state cannot be credited under multiple epoch ids.
+    pub duplicate_of_previous_anchor: bool,
+}
+
+/// blue_score at which epoch `E` begins: `E * L`.
+pub fn epoch_start_blue_score(epoch: u64, epoch_len_blue_score: u64) -> u64 {
+    epoch.saturating_mul(epoch_len_blue_score.max(1))
+}
+
+/// blue_score at which epoch `E` ends (inclusive): `(E + 1) * L - 1`.
+pub fn epoch_end_blue_score(epoch: u64, epoch_len_blue_score: u64) -> u64 {
+    epoch_start_blue_score(epoch.saturating_add(1), epoch_len_blue_score).saturating_sub(1)
+}
+
+/// Canonical-anchor cutoff for epoch `E`: `epoch_end(E) - backoff`.
+pub fn anchor_cutoff_blue_score(epoch: u64, epoch_len_blue_score: u64, backoff_blue_score: u64) -> u64 {
+    epoch_end_blue_score(epoch, epoch_len_blue_score).saturating_sub(backoff_blue_score)
+}
+
+/// The latest epoch "ready" to attest given the current tip blue_score, or `None` if no epoch
+/// has buried by `lag` yet. Epoch `E` is ready iff `tip_blue_score >= epoch_end(E) + lag`.
+pub fn ready_epoch_from_tip_blue_score(tip_blue_score: u64, epoch_len_blue_score: u64, lag_blue_score: u64) -> Option<u64> {
+    let epoch_len = epoch_len_blue_score.max(1);
+    let safe = tip_blue_score.checked_sub(lag_blue_score)?;
+    let completed = safe.checked_add(1)? / epoch_len;
+    if completed == 0 { None } else { Some(completed - 1) }
+}
+
+/// Pure core of canonical-anchor selection (testable without a store). `ancestors` is the tip's
+/// selected-parent chain, tip-first, each `(hash, blue_score, daa_score)` with blue_score
+/// strictly decreasing; it must reach down to at least `anchor_cutoff(E-1)`. Returns the
+/// canonical anchor for `epoch` — the most-recent ancestor with `blue_score <= anchor_cutoff(E)`
+/// (NOT an in-epoch block, so a sparse / jumpy selected chain never leaves an epoch without an
+/// anchor) — and flags `duplicate_of_previous_anchor` when that same block is also `anchor(E-1)`.
+/// `None` only if the window doesn't reach the cutoff (epoch not yet buried, or walk too short).
+pub fn canonical_lagged_epoch_anchor(
+    epoch: u64,
+    epoch_len_blue_score: u64,
+    backoff_blue_score: u64,
+    ancestors: &[(Hash64, u64, u64)],
+) -> Option<CanonicalLaggedEpochAnchor> {
+    let epoch_len = epoch_len_blue_score.max(1);
+    let cutoff = anchor_cutoff_blue_score(epoch, epoch_len, backoff_blue_score);
+    let (anchor_hash, anchor_blue_score, anchor_daa_score) = *ancestors.iter().find(|(_, bs, _)| *bs <= cutoff)?;
+    let duplicate_of_previous_anchor = if epoch == 0 {
+        false
+    } else {
+        let prev_cutoff = anchor_cutoff_blue_score(epoch - 1, epoch_len, backoff_blue_score);
+        ancestors.iter().find(|(_, bs, _)| *bs <= prev_cutoff).map(|(h, _, _)| *h) == Some(anchor_hash)
+    };
+    Some(CanonicalLaggedEpochAnchor {
+        epoch,
+        epoch_start_blue_score: epoch_start_blue_score(epoch, epoch_len),
+        epoch_end_blue_score: epoch_end_blue_score(epoch, epoch_len),
+        cutoff_blue_score: cutoff,
+        anchor_hash,
+        anchor_blue_score,
+        anchor_daa_score,
+        duplicate_of_previous_anchor,
+    })
 }
 
 impl DnsParams {
@@ -4313,6 +4411,64 @@ mod tests {
         );
     }
 
+    // ---- DNS v3: Canonical Lagged Anchor (blue_score-coordinated) ----
+
+    #[test]
+    fn ready_epoch_from_tip_blue_score_off_by_one() {
+        // L=100, lag=20 -> epoch E is ready iff tip_blue >= epoch_end(E)+lag = (E+1)*100-1+20.
+        assert_eq!(ready_epoch_from_tip_blue_score(118, 100, 20), None); // epoch_end(0)+lag = 119
+        assert_eq!(ready_epoch_from_tip_blue_score(119, 100, 20), Some(0));
+        assert_eq!(ready_epoch_from_tip_blue_score(219, 100, 20), Some(1));
+        assert_eq!(ready_epoch_from_tip_blue_score(0, 100, 20), None);
+    }
+
+    #[test]
+    fn canonical_anchor_most_recent_at_or_below_cutoff() {
+        // L=100, backoff=10 -> cutoff(1) = epoch_end(1)-10 = 199-10 = 189.
+        let h = |n: u8| Hash64::from_bytes([n; 64]);
+        let ancestors = vec![(h(9), 250, 2500), (h(8), 190, 1900), (h(7), 185, 1850), (h(6), 100, 1000), (h(5), 50, 500)];
+        let a = canonical_lagged_epoch_anchor(1, 100, 10, &ancestors).unwrap();
+        assert_eq!(a.anchor_hash, h(7), "most-recent ancestor with blue_score <= 189 is h7@185");
+        assert_eq!(a.anchor_blue_score, 185);
+        assert_eq!(a.anchor_daa_score, 1850);
+        assert_eq!(a.cutoff_blue_score, 189);
+        assert_eq!(a.epoch_end_blue_score, 199);
+        assert!(!a.duplicate_of_previous_anchor);
+    }
+
+    #[test]
+    fn canonical_anchor_no_hole_on_blue_score_jump() {
+        // High-parallel: blue_score jumps 300 -> 80 across one selected-chain step, so NO ancestor
+        // lands inside epoch 1's [100,199] band — yet the anchor still exists (most-recent at/below
+        // the cutoff). The "in-epoch block" requirement is what created the original hole; the
+        // cutoff (<=) formulation removes it without falling back to the (split-prone) chain index.
+        let h = |n: u8| Hash64::from_bytes([n; 64]);
+        let ancestors = vec![(h(9), 300, 3000), (h(8), 80, 800), (h(7), 10, 100)];
+        let a = canonical_lagged_epoch_anchor(1, 100, 10, &ancestors).unwrap(); // cutoff = 189
+        assert_eq!(a.anchor_hash, h(8), "anchor exists even with no in-epoch block");
+        assert_eq!(a.anchor_blue_score, 80);
+    }
+
+    #[test]
+    fn canonical_anchor_duplicate_flagged_and_pruning_base_invariant() {
+        // The anchor depends ONLY on (hash, blue_score) — there is no index input — so the
+        // selected-chain index ORIGIN (archival genesis=0 vs IBD pruning_point=0) is irrelevant:
+        // identical blue_score data => identical anchor. That is the pruning-base invariance that
+        // the retracted chain-index design lacked.
+        let h = |n: u8| Hash64::from_bytes([n; 64]);
+        // Sparse chain: nothing in (189,289] or (289,389], so epochs 2 and 3 reuse anchors.
+        let ancestors = vec![(h(9), 400, 4000), (h(8), 250, 2500), (h(7), 150, 1500), (h(6), 50, 500)];
+        let e1 = canonical_lagged_epoch_anchor(1, 100, 10, &ancestors).unwrap(); // cutoff 189 -> h7@150
+        let e2 = canonical_lagged_epoch_anchor(2, 100, 10, &ancestors).unwrap(); // cutoff 289 -> h8@250
+        let e3 = canonical_lagged_epoch_anchor(3, 100, 10, &ancestors).unwrap(); // cutoff 389 -> h8@250
+        assert_eq!(e1.anchor_hash, h(7));
+        assert!(!e1.duplicate_of_previous_anchor);
+        assert_eq!(e2.anchor_hash, h(8));
+        assert!(!e2.duplicate_of_previous_anchor, "e2 anchor (h8) differs from e1 anchor (h7)");
+        assert_eq!(e3.anchor_hash, h(8));
+        assert!(e3.duplicate_of_previous_anchor, "epoch 3 reuses epoch 2's anchor -> not creditable");
+    }
+
     #[test]
     fn bond_mutations_skips_undecodable_overlay_payload() {
         // A malformed stake-bond payload is defensively skipped, not panicked on.
@@ -4889,6 +5045,10 @@ mod tests {
             reorg_mode: DnsReorgMode::TwoDimensionalDominance,
             full_reward_split_daa_score: 2_000_000,
             pos_v2_activation_daa_score: 3_000_000,
+            attestation_epoch_length_blue_score: 4_000_000,
+            attestation_lag_blue_score: 5_000_000,
+            attestation_anchor_backoff_blue_score: 6_000_000,
+            stake_score_window_blue_score: 7_000_000,
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();
