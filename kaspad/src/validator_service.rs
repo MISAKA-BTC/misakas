@@ -53,6 +53,10 @@ const VALIDATOR: &str = "validator-service";
 /// fixed tick with epoch-boundary–driven attestation issuance.
 const HEARTBEAT_INTERVAL_SECS: u64 = 30;
 
+/// kaspa-pq DNS v3: max ready epochs to (re-)attest per heartbeat when catching up after
+/// downtime. Bounds per-tick work + fees; a deeper backlog converges over several ticks.
+const ATTESTATION_CATCH_UP_LIMIT: usize = 16;
+
 /// Bounded paginated scan of the virtual UTXO set when locating a funding UTXO at the
 /// validator's address. This is a full-set scan (NOT address-indexed); the utxoindex is
 /// the production optimization. Caps keep a large UTXO set from stalling the heartbeat.
@@ -285,7 +289,7 @@ impl ValidatorService {
             let dns = session.async_get_dns_confirmation().await;
             // The overlay reads return None on non-overlay networks too, so skip the
             // lookups there to avoid misleading status lines.
-            let (bond, active_set, attestation) = if dns.is_some() {
+            let (bond, active_set, attestation_targets) = if dns.is_some() {
                 let bond = match self.bond_outpoint {
                     Some(outpoint) => session.async_get_stake_bond(outpoint).await,
                     None => None,
@@ -296,13 +300,25 @@ impl ValidatorService {
                     (Some(b), Some(c), Some(id)) => is_bond_active_at(b, sink.daa_score) && c.members.contains(&id),
                     _ => false,
                 };
-                let attestation = match (eligible, self.bond_outpoint) {
-                    (true, Some(outpoint)) => session.async_get_validator_attestation_target(outpoint).await,
-                    _ => None,
+                // kaspa-pq DNS v3: sign the canonical lagged anchor(s). Once we have signed at
+                // least one epoch, batch-sign every ready epoch SINCE then (catch-up after
+                // downtime / when epoch_duration < heartbeat); on the first run just take the
+                // latest ready target. `SignedEpochStore` dedups, so re-offered epochs are no-ops.
+                let attestation_targets = match (eligible, self.bond_outpoint) {
+                    (true, Some(outpoint)) => {
+                        let last_signed = self.signed_epochs.lock().unwrap().as_ref().and_then(|s| s.last_signed_epoch());
+                        match last_signed {
+                            Some(e) => {
+                                session.async_get_validator_attestation_targets(outpoint, e + 1, ATTESTATION_CATCH_UP_LIMIT).await
+                            }
+                            None => session.async_get_validator_attestation_target(outpoint).await.into_iter().collect(),
+                        }
+                    }
+                    _ => Vec::new(),
                 };
-                (bond, active_set, attestation)
+                (bond, active_set, attestation_targets)
             } else {
-                (None, None, None)
+                (None, None, Vec::new())
             };
             drop(session);
 
@@ -332,10 +348,12 @@ impl ValidatorService {
                         self.config.mode, sink.daa_score, bond_status, active_set_status, conf.rollout_stage, conf.dns_confirmed
                     );
 
-                    // Eligible: fund + sign + (in Active mode) submit the attestation shard tx,
-                    // under the equivocation guard.
-                    if let (Some(target), Some(key), Some(outpoint)) = (&attestation, &self.key, self.bond_outpoint) {
-                        self.try_attest(target, key, outpoint).await;
+                    // Eligible: fund + sign + (in Active mode) submit each ready epoch's
+                    // attestation shard tx, under the per-epoch equivocation guard.
+                    if let (Some(key), Some(outpoint)) = (&self.key, self.bond_outpoint) {
+                        for target in &attestation_targets {
+                            self.try_attest(target, key, outpoint).await;
+                        }
                     }
                 }
                 None => {

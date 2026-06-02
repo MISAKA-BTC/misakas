@@ -1159,8 +1159,7 @@ impl VirtualStateProcessor {
     /// when the chain within the window does not reach the cutoff (epoch too old to
     /// credit). The stronger `attestation_lag_blue_score` readiness gate is applied by the
     /// signer / verifier on top of this.
-    #[allow(dead_code)] // PR2b lands the walk inert; PR4 wires it into the verifier.
-    pub(super) fn canonical_anchor_by_blue_score(
+    pub(crate) fn canonical_anchor_by_blue_score(
         &self,
         epoch: u64,
         tip: BlockHash,

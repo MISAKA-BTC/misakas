@@ -282,6 +282,18 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.get_validator_attestation_target(bond_outpoint)).await
     }
 
+    /// kaspa-pq DNS v3 (batch): the READY, creditable canonical-anchor attestation targets
+    /// for `bond_outpoint` in `[from_epoch, latest_ready]` (ascending, capped at `limit`),
+    /// so a validator that fell behind can sign every missed epoch.
+    pub async fn async_get_validator_attestation_targets(
+        &self,
+        bond_outpoint: TransactionOutpoint,
+        from_epoch: u64,
+        limit: usize,
+    ) -> Vec<ValidatorAttestationTarget> {
+        self.clone().spawn_blocking(move |c| c.get_validator_attestation_targets(bond_outpoint, from_epoch, limit)).await
+    }
+
     pub async fn async_get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {
         self.clone().spawn_blocking(|c| c.get_sink_daa_score_timestamp()).await
     }

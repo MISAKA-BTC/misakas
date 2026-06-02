@@ -58,8 +58,9 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord,
-        dns_confirmation_from_state, is_bond_active_at, stake_attestation_message,
+        ActiveValidatorSet, CanonicalLaggedEpochAnchor, DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget,
+        ValidatorRecord, dns_confirmation_from_state, is_bond_active_at, ready_epoch_from_tip_blue_score,
+        stake_attestation_message,
     },
     errors::{
         coinbase::CoinbaseResult,
@@ -612,6 +613,31 @@ impl Consensus {
             })
             .collect()
     }
+
+    /// kaspa-pq DNS v3: assemble the signed `ValidatorAttestationTarget` for a canonical
+    /// lagged anchor — the exact `(net_id, epoch, target_hash, target_daa_score, vsc=0,
+    /// bond)` digest the v3 verifier reconstructs (`collect_stake_contributions_v2`). The VSC
+    /// is a fixed zero (P-1D: ADR-0017 retired the committee; not a gate, kept for domain
+    /// separation). The service only signs `message`. Shared by the singular + batch signers.
+    fn build_attestation_target(&self, anchor: &CanonicalLaggedEpochAnchor, bond_outpoint: TransactionOutpoint) -> ValidatorAttestationTarget {
+        let vsc = kaspa_consensus_core::Hash64::default();
+        // ADR-0009 Addendum A.3: network discriminator := the per-network genesis hash.
+        let message = stake_attestation_message(
+            self.config.params.genesis.hash.as_byte_slice(),
+            anchor.epoch,
+            anchor.anchor_hash,
+            anchor.anchor_daa_score,
+            vsc,
+            bond_outpoint,
+        );
+        ValidatorAttestationTarget {
+            epoch: anchor.epoch,
+            target_hash: anchor.anchor_hash,
+            target_daa_score: anchor.anchor_daa_score,
+            validator_set_commitment: vsc,
+            message,
+        }
+    }
 }
 
 impl ConsensusApi for Consensus {
@@ -749,32 +775,61 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_validator_attestation_target(&self, bond_outpoint: TransactionOutpoint) -> Option<ValidatorAttestationTarget> {
-        // kaspa-pq Phase 11 (ADR-0010/0017): assemble the exact message the validator
-        // must sign for the current sink — bound to network (genesis hash), epoch,
-        // target anchor, and the active-validator-set commitment — so it matches the
-        // virtual_processor verifier byte-for-byte. The service only signs `message`.
+        // kaspa-pq DNS v3 (Canonical Lagged Anchor): sign the latest READY canonical lagged
+        // anchor, NOT the live sink. Under fast PoW / a wide DAG each validator's sink differs
+        // at poll time, so the v1 sink-signing split honest validators across many targets
+        // (1:1 < φS -> 0 credit); a lagged, blue_score-coordinated anchor is the SAME block for
+        // every honest validator once an epoch is buried by `attestation_lag_blue_score`. The
+        // verifier credits only this canonical target.
         let dns_params = self.config.params.dns_params.as_ref()?;
-        let target_hash = self.get_sink();
-        let target_daa_score = self.get_sink_daa_score_timestamp().daa_score;
-        let epoch = target_daa_score / dns_params.epoch_length_blocks.max(1);
+        let sink = self.get_sink();
+        let latest_ready = ready_epoch_from_tip_blue_score(
+            self.get_sink_blue_score(),
+            dns_params.attestation_epoch_length_blue_score,
+            dns_params.attestation_lag_blue_score,
+        )?;
+        let anchor = self.virtual_processor.canonical_anchor_by_blue_score(latest_ready, sink, dns_params)?;
+        // A duplicate-anchor epoch (sparse chain reused the previous anchor) earns no credit —
+        // never ask the validator to sign it.
+        if anchor.duplicate_of_previous_anchor {
+            return None;
+        }
+        Some(self.build_attestation_target(&anchor, bond_outpoint))
+    }
 
-        // kaspa-pq DNS v2 (P-1D): the VSC is NOT a consensus gate. ADR-0017 retired the committee;
-        // DnsState's validator_set_commitment is zero-fixed and the verifier never recomputes or
-        // compares it — it stays in the signed digest for domain separation only. Computing it from
-        // the active validator set made the signed message depend on the (back-dateable) active set;
-        // emit a fixed zero so the attestation target is stable and viewpoint-independent.
-        let vsc = kaspa_consensus_core::Hash64::default();
-
-        // ADR-0009 Addendum A.3: network discriminator := the per-network genesis hash.
-        let message = stake_attestation_message(
-            self.config.params.genesis.hash.as_byte_slice(),
-            epoch,
-            target_hash,
-            target_daa_score,
-            vsc,
-            bond_outpoint,
-        );
-        Some(ValidatorAttestationTarget { epoch, target_hash, target_daa_score, validator_set_commitment: vsc, message })
+    fn get_validator_attestation_targets(
+        &self,
+        bond_outpoint: TransactionOutpoint,
+        from_epoch: u64,
+        limit: usize,
+    ) -> Vec<ValidatorAttestationTarget> {
+        // kaspa-pq DNS v3 (batch): all READY, creditable (non-duplicate) canonical anchors in
+        // `[from_epoch, latest_ready]`, ascending, capped at `limit`. Lets a validator that
+        // fell behind (downtime, or epoch_duration < heartbeat) sign every epoch it missed
+        // rather than only the latest — single-target signing silently drops the gap. The
+        // verifier credits each at most once (`SignedEpochStore` + the `(bond, epoch)` dedup).
+        let Some(dns_params) = self.config.params.dns_params.as_ref() else {
+            return Vec::new();
+        };
+        let sink = self.get_sink();
+        let Some(latest_ready) = ready_epoch_from_tip_blue_score(
+            self.get_sink_blue_score(),
+            dns_params.attestation_epoch_length_blue_score,
+            dns_params.attestation_lag_blue_score,
+        ) else {
+            return Vec::new();
+        };
+        let mut targets = Vec::new();
+        let mut epoch = from_epoch;
+        while epoch <= latest_ready && targets.len() < limit {
+            if let Some(anchor) = self.virtual_processor.canonical_anchor_by_blue_score(epoch, sink, dns_params) {
+                if !anchor.duplicate_of_previous_anchor {
+                    targets.push(self.build_attestation_target(&anchor, bond_outpoint));
+                }
+            }
+            epoch += 1;
+        }
+        targets
     }
 
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

@@ -815,6 +815,79 @@ async fn dns_v3_noncanonical_attestation_rejected() {
     assert!(denom.contains_key(&anchor.epoch), "the epoch is ready/creditable; only the non-canonical target is rejected");
 }
 
+/// kaspa-pq DNS v3 (PR3) — the signer hands the validator the canonical lagged anchor, NOT
+/// the live sink. The singular `get_validator_attestation_target` returns the latest READY
+/// epoch's canonical anchor (epoch/target_hash/target_daa_score all match
+/// `canonical_anchor_by_blue_score`, VSC = zero per P-1D), and the batch
+/// `get_validator_attestation_targets` returns every ready, non-duplicate epoch ascending up
+/// to the latest — so a fallen-behind validator can catch up. Both feed the exact target the
+/// PR4 verifier credits.
+#[tokio::test]
+async fn dns_v3_signer_produces_canonical_ready_targets() {
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::{Hash64, dns_finality::ready_epoch_from_tip_blue_score};
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let miner = new_miner_data();
+    let first = ctx.mine_block(miner.clone(), vec![]).await;
+    // Any outpoint works — the signer assembles the message for whatever bond it is asked
+    // about; eligibility is the validator service's concern, not the signer's.
+    let outpoint = TransactionOutpoint::new(first.transactions[0].id(), 0);
+    for _ in 0..20 {
+        ctx.mine_block(miner.clone(), vec![]).await;
+    }
+
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let sink = ctx.consensus.get_sink();
+
+    // The singular target == the canonical anchor for the latest ready epoch.
+    let target = ctx.consensus.get_validator_attestation_target(outpoint).expect("a ready canonical target");
+    let (latest_ready, anchor) = {
+        let vp = ctx.consensus.virtual_processor();
+        let sink_blue = vp.headers_store.get_blue_score(sink).unwrap();
+        let lr = ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+            .expect("an epoch is ready");
+        (lr, vp.canonical_anchor_by_blue_score(lr, sink, &dns).expect("canonical anchor for the latest ready epoch"))
+    };
+    assert_eq!(target.epoch, latest_ready, "signs the latest ready epoch");
+    assert_eq!(target.target_hash, anchor.anchor_hash, "target is the canonical anchor hash");
+    assert_eq!(target.target_daa_score, anchor.anchor_daa_score, "target daa is the canonical anchor daa");
+    assert_eq!(target.validator_set_commitment, Hash64::default(), "VSC is a fixed zero (P-1D)");
+
+    // The batch returns every ready, non-duplicate epoch ascending up to the latest.
+    let targets = ctx.consensus.get_validator_attestation_targets(outpoint, 0, 100);
+    assert!(!targets.is_empty());
+    assert!(targets.windows(2).all(|w| w[0].epoch < w[1].epoch), "ascending, unique epochs");
+    assert_eq!(targets.last().unwrap().epoch, latest_ready, "the batch reaches the latest ready epoch");
+    {
+        let vp = ctx.consensus.virtual_processor();
+        for t in &targets {
+            let a = vp.canonical_anchor_by_blue_score(t.epoch, sink, &dns).expect("each batched epoch has a canonical anchor");
+            assert!(!a.duplicate_of_previous_anchor, "duplicate epochs are excluded from the batch");
+            assert_eq!(t.target_hash, a.anchor_hash);
+            assert_eq!(t.target_daa_score, a.anchor_daa_score);
+        }
+    }
+
+    // A `from_epoch` past the latest ready epoch yields nothing (no future epochs to sign).
+    assert!(ctx.consensus.get_validator_attestation_targets(outpoint, latest_ready + 1, 100).is_empty());
+}
+
 // ============================================================================
 // kaspa-pq ADR-0018 §G — DNS-overlay DAG integration harness (foundation).
 //
