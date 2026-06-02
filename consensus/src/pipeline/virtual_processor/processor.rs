@@ -65,8 +65,8 @@ use kaspa_consensus_core::{
         CanonicalLaggedEpochAnchor, DnsParams, DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore,
         advance_dns_confirmation, aggregate_epoch_tallies, anchor_cutoff_blue_score, attestations_from_accepted_txs,
         bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, check_dns_reorg_rule, compute_stake_score,
-        derive_dns_health, is_bond_active_at, recompute_epoch_tallies, reorg_inputs_since_common_ancestor,
-        stake_attestation_message, total_active_stake_by_epoch,
+        derive_dns_health, is_bond_active_at, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
+        reorg_inputs_since_common_ancestor, stake_attestation_message, total_active_stake_by_epoch,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -883,9 +883,16 @@ impl VirtualStateProcessor {
         // anchor the recompute at the epoch's final block (a fixed chain point)
         // to remove the "first sink to cross the boundary" ambiguity.
         let prev_dns_state = self.dns_state_store.read().get().ok();
-        let epoch_len = dns_params.epoch_length_blocks.max(1);
+        // kaspa-pq DNS v3: throttle the recompute to once per BLUE_SCORE epoch (epochs are
+        // blue_score-coordinated now), not the DAA epoch. The recompute is canonical
+        // regardless of cadence — this only bounds how often the window walk runs, and must
+        // fire at least once per blue_score epoch so confirmations don't lag. `prev`'s
+        // blue_score is read from its anchor (recent — at most ~1 epoch old, never pruned).
+        let sink_blue = self.headers_store.get_blue_score(sink).unwrap();
+        let epoch_len_blue = dns_params.attestation_epoch_length_blue_score.max(1);
         if let Some(prev) = prev_dns_state.as_ref() {
-            if sink_daa / epoch_len == prev.anchor_daa_score / epoch_len {
+            let prev_blue = self.headers_store.get_blue_score(prev.selected_chain_anchor).unwrap_or(0);
+            if sink_blue / epoch_len_blue == prev_blue / epoch_len_blue {
                 return;
             }
         }
@@ -910,11 +917,12 @@ impl VirtualStateProcessor {
             DnsRolloutStage::Bootstrap
         };
 
-        // Bounded window walk: collect + verify attestations from selected-chain
-        // shards within `max_reorg_horizon_blocks` of the sink (no `stop_at` — the full
-        // window). Shared with the ADR-0018 §H reorg gate via `collect_stake_contributions`.
+        // kaspa-pq DNS v3: canonical, blue_score-coordinated StakeScore. Credit only
+        // attestations naming THIS chain's canonical lagged anchor for their (ready,
+        // non-duplicate) epoch, with the per-epoch denominator keyed by the canonical anchor
+        // DAA and zero-attestation ready epochs included (`collect_stake_contributions_v2`).
         let (contributions, epoch_anchor_daa) =
-            self.collect_stake_contributions(sink, None, &bonds, net_id.as_byte_slice(), dns_params.max_reorg_horizon_blocks);
+            self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params);
 
         let totals = total_active_stake_by_epoch(&bonds, &epoch_anchor_daa);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
@@ -1187,6 +1195,168 @@ impl VirtualStateProcessor {
             }
         }
         canonical_lagged_epoch_anchor(epoch, epoch_len, backoff, &ancestors)
+    }
+
+    /// kaspa-pq DNS v3: the canonical anchors for every **creditable** epoch within the
+    /// stake-score window ending at `tip`, computed in ONE selected-parent-chain walk.
+    /// "Creditable" = ready (buried by `attestation_lag_blue_score`), non-duplicate
+    /// (`anchor(E) != anchor(E-1)`; a sparse chain that reused the previous anchor earns no
+    /// new credit), and recent enough that both `anchor_cutoff(E)` and `anchor_cutoff(E-1)`
+    /// fall inside the collected window (so the duplicate flag is reliable). Older / unready
+    /// / duplicate epochs are simply absent. Position comes from header-committed
+    /// `blue_score`, never the store index, so archival and IBD-synced nodes agree.
+    fn canonical_anchors_in_window(&self, tip: BlockHash, dns_params: &DnsParams) -> BTreeMap<u64, CanonicalLaggedEpochAnchor> {
+        let epoch_len = dns_params.attestation_epoch_length_blue_score.max(1);
+        let backoff = dns_params.attestation_anchor_backoff_blue_score;
+        let lag = dns_params.attestation_lag_blue_score;
+        let window = dns_params.stake_score_window_blue_score;
+
+        let mut anchors: BTreeMap<u64, CanonicalLaggedEpochAnchor> = BTreeMap::new();
+        let Ok(tip_blue) = self.headers_store.get_blue_score(tip) else {
+            return anchors;
+        };
+        let Some(latest_ready) = ready_epoch_from_tip_blue_score(tip_blue, epoch_len, lag) else {
+            return anchors; // no epoch buried by `lag` yet
+        };
+
+        // One walk: collect the selected chain tip-first down to the window bound.
+        let mut ancestors: Vec<(BlockHash, u64, u64)> = Vec::new();
+        for hash in std::iter::once(tip).chain(self.reachability_service.default_backward_chain_iterator(tip)) {
+            let Ok(c) = self.headers_store.get_compact_header_data(hash) else {
+                break;
+            };
+            if tip_blue.saturating_sub(c.blue_score) > window {
+                break;
+            }
+            ancestors.push((hash, c.blue_score, c.daa_score));
+        }
+        let oldest_blue = ancestors.last().map(|a| a.1).unwrap_or(tip_blue);
+
+        // From the latest ready epoch downward, derive each epoch's anchor over the shared
+        // ancestor slice; stop once the PREVIOUS epoch's cutoff falls below the collected
+        // window (older epochs aren't reliably decidable, hence not creditable). Skip
+        // duplicates (no new credit).
+        let mut epoch = latest_ready;
+        loop {
+            let prev_cutoff = anchor_cutoff_blue_score(epoch.saturating_sub(1), epoch_len, backoff);
+            if prev_cutoff < oldest_blue {
+                break;
+            }
+            if let Some(anchor) = canonical_lagged_epoch_anchor(epoch, epoch_len, backoff, &ancestors) {
+                if !anchor.duplicate_of_previous_anchor {
+                    anchors.insert(epoch, anchor);
+                }
+            }
+            if epoch == 0 {
+                break;
+            }
+            epoch -= 1;
+        }
+        anchors
+    }
+
+    /// kaspa-pq DNS v3 verifier: collect + verify the stake attestations on the selected
+    /// chain ending at `tip`, crediting an attestation ONLY if it targets THIS chain's
+    /// canonical anchor for its epoch (**GoodAttestation v3**): `att.target_hash` and
+    /// `att.target_daa_score` equal the canonical `(anchor_hash, anchor_daa_score)` for
+    /// `att.epoch`, the bond is `Active` at the canonical anchor DAA, the self-declared
+    /// `validator_id` is bound to the bond (P-1A), and the ML-DSA-87 signature verifies under
+    /// `ATTESTATION_MLDSA87_CONTEXT`. The per-epoch denominator (`epoch_anchor_daa`) is keyed
+    /// by the CANONICAL anchor DAA (not the v1 first-seen self-reported value) and includes
+    /// every creditable (ready, non-duplicate) epoch in the window — **even those with zero
+    /// attestations** — so a participation gap is visible to φS / DnsHealth instead of
+    /// silently vanishing (the v1 weakness that let honest validators signing divergent
+    /// current-sink targets all fall below the φS floor).
+    ///
+    /// Replaces the v1 self-reported-target `collect_stake_contributions` for the sink-side
+    /// StakeScore. For a branch segment (reorg gate, `stop_at = Some(I)`) it credits only
+    /// epochs anchored strictly above the common ancestor `I` (the shared prefix belongs to
+    /// neither branch's since-`I` delta); the reorg gate itself is migrated to this path in
+    /// PR6 (it stays on v1 until then — inert, Active-only). Reads only committed acceptance
+    /// + header data, so it is deterministic and reorg-safe; inert wherever the overlay is
+    /// dormant.
+    pub(super) fn collect_stake_contributions_v2(
+        &self,
+        tip: BlockHash,
+        stop_at: Option<BlockHash>,
+        bonds: &[StakeBondRecord],
+        net_id: &[u8],
+        dns_params: &DnsParams,
+    ) -> (Vec<AttestationContribution>, BTreeMap<u64, u64>) {
+        // Canonical anchors for the creditable epoch window, computed from THIS chain's tip.
+        let anchors = self.canonical_anchors_in_window(tip, dns_params);
+        // For a branch segment (`stop_at = Some(I)`), credit only epochs anchored strictly
+        // above `I`; the sink-side path (`None`) keeps them all.
+        let creditable: BTreeMap<u64, CanonicalLaggedEpochAnchor> = anchors
+            .into_iter()
+            .filter(|(_, a)| match stop_at {
+                Some(i) => a.anchor_hash != i && !self.reachability_service.is_chain_ancestor_of(a.anchor_hash, i),
+                None => true,
+            })
+            .collect();
+        let epoch_anchor_daa: BTreeMap<u64, u64> = creditable.iter().map(|(&e, a)| (e, a.anchor_daa_score)).collect();
+
+        let mut contributions: Vec<AttestationContribution> = Vec::new();
+        let Ok(tip_blue) = self.headers_store.get_blue_score(tip) else {
+            return (contributions, epoch_anchor_daa);
+        };
+        for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
+            if Some(chain_block) == stop_at {
+                break;
+            }
+            let Ok(bs) = self.headers_store.get_blue_score(chain_block) else {
+                break;
+            };
+            if tip_blue.saturating_sub(bs) > dns_params.stake_score_window_blue_score {
+                break;
+            }
+            let txs = self.accepted_txs_of_chain_block(chain_block);
+            for att in attestations_from_accepted_txs(&txs) {
+                // v3 canonical gate: the attestation must name THIS chain's canonical anchor
+                // for its epoch, and that epoch must be creditable (ready, non-duplicate,
+                // in-window — i.e. present in `creditable`).
+                let Some(anchor) = creditable.get(&att.epoch) else {
+                    continue;
+                };
+                if att.target_hash != anchor.anchor_hash || att.target_daa_score != anchor.anchor_daa_score {
+                    continue;
+                }
+                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == att.bond_outpoint) else {
+                    continue;
+                };
+                // P-1A: the self-declared validator_id (not in the signed digest) must be
+                // bound to the bond, else varying it would evade the dedup + inflate stake.
+                if att.validator_id != bond.validator_pubkey_hash {
+                    continue;
+                }
+                // The bond must be Active at the CANONICAL anchor DAA (== att.target_daa_score
+                // by the gate above), not a self-reported / current value.
+                if !is_bond_active_at(bond, anchor.anchor_daa_score) {
+                    continue;
+                }
+                let digest = stake_attestation_message(
+                    net_id,
+                    att.epoch,
+                    att.target_hash,
+                    att.target_daa_score,
+                    att.validator_set_commitment,
+                    att.bond_outpoint,
+                )
+                .as_bytes();
+                if matches!(
+                    verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
+                    Ok(true)
+                ) {
+                    contributions.push(AttestationContribution {
+                        epoch: att.epoch,
+                        validator_id: att.validator_id,
+                        bond_outpoint: att.bond_outpoint,
+                        signed_stake_sompi: bond.amount,
+                    });
+                }
+            }
+        }
+        (contributions, epoch_anchor_daa)
     }
 
     /// kaspa-pq Phase 10/13 (ADR-0009 §"Decision" / ADR-0018 §H): the DNS finality reorg

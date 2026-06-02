@@ -575,6 +575,246 @@ async fn dns_v3_canonical_anchor_walk_matches_chain() {
     assert!(vp.canonical_anchor_by_blue_score(1_000_000, tip, &dns).is_none());
 }
 
+/// kaspa-pq DNS v3 (PR4) — POSITIVE: an attestation that names THIS chain's canonical
+/// lagged anchor for a ready blue_score epoch IS credited by the v3 verifier
+/// (`collect_stake_contributions_v2`) with the bond's full stake, the per-epoch
+/// denominator is keyed by the CANONICAL anchor DAA, and a ready epoch the validator did
+/// NOT attest still appears in the denominator (so a participation gap is visible to φS
+/// instead of vanishing — the v1 weakness). Reuses the funded-bond + funded-shard DAG-2
+/// harness; the attestation is signed over the canonical `(epoch, anchor_hash,
+/// anchor_daa_score)` rather than a free-floating self-reported target.
+#[tokio::test]
+async fn dns_v3_canonical_attestation_credited() {
+    use crate::model::stores::{headers::HeaderStoreReader, stake_bonds::StakeBondsStoreReader};
+    use kaspa_consensus_core::{Hash64, dns_finality::ready_epoch_from_tip_blue_score};
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 2;
+            dns.max_reorg_horizon_blocks = 2;
+            // Small blue_score epochs so several bury within this chain: L=3, backoff=1 ->
+            // cutoff(E)=3E+1; lag=2 -> epoch E ready once tip_blue >= 3E+4.
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let seed = [0x42u8; 32];
+    let v = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+
+    // Fund a bond (coinbase_a) + a shard-funding coinbase (coinbase_b), same as the e2e.
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    let _b1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_a = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_b = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let cb_a = &h_a.transactions[0];
+    let (ia, oa) = cb_a.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_a pays K");
+    let (coinbase_a, value_a, daa_a) = (TransactionOutpoint::new(cb_a.id(), ia as u32), oa.value, h_a.header.daa_score);
+    let cb_b = &h_b.transactions[0];
+    let (ib, ob) = cb_b.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_b pays K");
+    let (coinbase_b, value_b, daa_b) = (TransactionOutpoint::new(cb_b.id(), ib as u32), ob.value, h_b.header.daa_score);
+    for _ in 0..5 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+    let (bond_tx, _vid, _reward_payload) =
+        dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, value_a - 100_000, 0, storage_mass_parameter);
+    let bond_tx_id = bond_tx.id();
+    let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+    assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid, "the bond block is UTXO-valid");
+    let bond_outpoint = TransactionOutpoint::new(bond_tx_id, 0);
+
+    // Bury several blue_score epochs past the bond so a ready, bond-active anchor exists.
+    for _ in 0..8 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+
+    // THIS chain's canonical anchor for the latest ready epoch at the current sink.
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let genesis_hash = ctx.consensus.params().genesis.hash;
+    let sink = ctx.consensus.get_sink();
+    let anchor = {
+        let vp = ctx.consensus.virtual_processor();
+        let sink_blue = vp.headers_store.get_blue_score(sink).unwrap();
+        let latest_ready =
+            ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+                .expect("an epoch is ready");
+        vp.canonical_anchor_by_blue_score(latest_ready, sink, &dns).expect("canonical anchor for the ready epoch")
+    };
+
+    // Sign an attestation that names the canonical anchor exactly, fund + include it.
+    let att = dns_harness::build_signed_attestation(
+        &v,
+        genesis_hash.as_byte_slice(),
+        bond_outpoint,
+        anchor.epoch,
+        anchor.anchor_hash,
+        anchor.anchor_daa_score,
+        Hash64::default(),
+    );
+    let shard_tx = dns_harness::funded_signed_shard_tx(seed, coinbase_b, value_b, daa_b, att, storage_mass_parameter);
+    let reward_block = ctx.mine_block(new_miner_data(), vec![shard_tx]).await;
+    assert_eq!(
+        ctx.consensus.block_status(reward_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "the canonical-attestation block validates"
+    );
+    // Mine 2 fillers so the shard is MERGED -> accepted by a chain block in past(sink), the
+    // view the StakeScore verifier walks (accepted txs, not a block's own body).
+    ctx.mine_block(new_miner_data(), vec![]).await;
+    ctx.mine_block(new_miner_data(), vec![]).await;
+
+    let new_sink = ctx.consensus.get_sink();
+    let (contributions, denom, bond_amount) = {
+        let vp = ctx.consensus.virtual_processor();
+        let bonds: Vec<_> =
+            vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+        let bond_amount = bonds.iter().find(|b| b.bond_outpoint == bond_outpoint).expect("the funded bond is persisted").amount;
+        let (c, d) = vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns);
+        (c, d, bond_amount)
+    };
+
+    // The canonical attestation is credited with the bond's full stake at its epoch.
+    let credited =
+        contributions.iter().find(|c| c.bond_outpoint == bond_outpoint).expect("the canonical attestation is credited");
+    assert_eq!(credited.epoch, anchor.epoch, "credited at the canonical epoch");
+    assert_eq!(credited.signed_stake_sompi, bond_amount, "credited with the bond's full stake");
+    // The denominator is keyed by the CANONICAL anchor DAA for that epoch.
+    assert_eq!(denom.get(&anchor.epoch).copied(), Some(anchor.anchor_daa_score), "denominator keyed by the canonical anchor DAA");
+    // A ready epoch with no attestation still appears in the denominator (visible gap).
+    assert!(
+        denom.keys().any(|&e| !contributions.iter().any(|c| c.epoch == e)),
+        "a ready, un-attested epoch is still in the denominator (got epochs {:?})",
+        denom.keys().collect::<Vec<_>>()
+    );
+}
+
+/// kaspa-pq DNS v3 (PR4) — NEGATIVE: a validly-signed, bonded, reward-eligible attestation
+/// for a ready epoch whose `target_hash` is NOT this chain's canonical anchor is NOT
+/// credited by the v3 verifier. The including block still validates (the reward path is
+/// migrated to the canonical rule in PR5; until then a non-canonical attestation can still
+/// earn the v1 reward), which is exactly the divergence PR5 closes — here we prove the
+/// StakeScore verifier already refuses the non-canonical target.
+#[tokio::test]
+async fn dns_v3_noncanonical_attestation_rejected() {
+    use crate::model::stores::{headers::HeaderStoreReader, stake_bonds::StakeBondsStoreReader};
+    use kaspa_consensus_core::{Hash64, dns_finality::ready_epoch_from_tip_blue_score};
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 2;
+            dns.max_reorg_horizon_blocks = 2;
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let seed = [0x42u8; 32];
+    let v = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    let _b1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_a = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_b = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let cb_a = &h_a.transactions[0];
+    let (ia, oa) = cb_a.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_a pays K");
+    let (coinbase_a, value_a, daa_a) = (TransactionOutpoint::new(cb_a.id(), ia as u32), oa.value, h_a.header.daa_score);
+    let cb_b = &h_b.transactions[0];
+    let (ib, ob) = cb_b.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_b pays K");
+    let (coinbase_b, value_b, daa_b) = (TransactionOutpoint::new(cb_b.id(), ib as u32), ob.value, h_b.header.daa_score);
+    for _ in 0..5 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+    let (bond_tx, _vid, _reward_payload) =
+        dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, value_a - 100_000, 0, storage_mass_parameter);
+    let bond_tx_id = bond_tx.id();
+    let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+    assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid);
+    let bond_outpoint = TransactionOutpoint::new(bond_tx_id, 0);
+    for _ in 0..8 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let genesis_hash = ctx.consensus.params().genesis.hash;
+    let sink = ctx.consensus.get_sink();
+    let anchor = {
+        let vp = ctx.consensus.virtual_processor();
+        let sink_blue = vp.headers_store.get_blue_score(sink).unwrap();
+        let latest_ready =
+            ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+                .expect("an epoch is ready");
+        vp.canonical_anchor_by_blue_score(latest_ready, sink, &dns).expect("canonical anchor for the ready epoch")
+    };
+
+    // Same ready epoch + canonical DAA, but a BOGUS target_hash (not this chain's anchor).
+    let bogus_target = Hash64::from_bytes([0xdeu8; 64]);
+    assert_ne!(bogus_target, anchor.anchor_hash);
+    let att = dns_harness::build_signed_attestation(
+        &v,
+        genesis_hash.as_byte_slice(),
+        bond_outpoint,
+        anchor.epoch,
+        bogus_target,
+        anchor.anchor_daa_score,
+        Hash64::default(),
+    );
+    let shard_tx = dns_harness::funded_signed_shard_tx(seed, coinbase_b, value_b, daa_b, att, storage_mass_parameter);
+    let reward_block = ctx.mine_block(new_miner_data(), vec![shard_tx]).await;
+    assert_eq!(
+        ctx.consensus.block_status(reward_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "the block still validates (v1 reward path); PR5 makes the reward canonical too"
+    );
+    ctx.mine_block(new_miner_data(), vec![]).await;
+    ctx.mine_block(new_miner_data(), vec![]).await;
+
+    let new_sink = ctx.consensus.get_sink();
+    let (contributions, denom) = {
+        let vp = ctx.consensus.virtual_processor();
+        let bonds: Vec<_> =
+            vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+        vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns)
+    };
+
+    // The non-canonical attestation earns NO StakeScore credit...
+    assert!(
+        contributions.iter().all(|c| c.bond_outpoint != bond_outpoint),
+        "a non-canonical-target attestation must not be credited"
+    );
+    // ...even though its epoch IS a ready, creditable epoch (present in the denominator).
+    assert!(denom.contains_key(&anchor.epoch), "the epoch is ready/creditable; only the non-canonical target is rejected");
+}
+
 // ============================================================================
 // kaspa-pq ADR-0018 §G — DNS-overlay DAG integration harness (foundation).
 //
