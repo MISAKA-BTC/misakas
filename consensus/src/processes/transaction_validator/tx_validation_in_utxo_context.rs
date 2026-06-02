@@ -3,7 +3,7 @@ use kaspa_consensus_core::{
     hashing::sighash::{SigHashReusedValuesSync, SigHashReusedValuesUnsync},
     tx::{TransactionInput, VerifiableTransaction},
 };
-use kaspa_txscript::{ScriptPolicy, SigCacheKey, TxScriptEngine, caches::Cache};
+use kaspa_txscript::{ScriptPolicy, SigCacheKey, TxScriptEngine, caches::Cache, script_class::ScriptClass};
 use kaspa_txscript_errors::TxScriptError;
 use rayon::ThreadPool;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -55,6 +55,17 @@ impl TransactionValidator {
                 // kaspa-pq: resolve the PQ-only script policy from the point-of-view
                 // DAA score (ADR-0019). On PQ-active networks this makes legacy
                 // secp256k1 signature opcodes and P2SH hard consensus errors.
+                //
+                // PQ-only spend-side backstop (§6): before running scripts, require
+                // every *spent* UTXO to be the standard ML-DSA-87 P2PKH class. The
+                // script engine alone would let a non-PQ but truthy spk (e.g.
+                // `OP_TRUE`) — or an unknown script version, which the engine treats
+                // as anyone-can-spend — move value without any ML-DSA signature.
+                // This renders such a UTXO unspendable, complementing the
+                // creation-side output-class rule so non-PQ value can never move.
+                if self.resolved_script_policy(pov_daa_score).pq_only {
+                    self.check_input_script_classes(tx)?;
+                }
                 self.check_scripts_with_policy(tx, pov_daa_score)?;
             }
             TxValidationFlags::SkipScriptChecks => {}
@@ -179,6 +190,22 @@ impl TransactionValidator {
     /// on PQ-active networks.
     pub fn check_scripts_with_policy(&self, tx: &(impl VerifiableTransaction + Sync), pov_daa_score: u64) -> TxResult<()> {
         check_scripts(&self.sig_cache, tx, self.resolved_script_policy(pov_daa_score))
+    }
+
+    /// kaspa-pq PQ-only (ADR-0019 §6): every spent input UTXO must itself be the
+    /// standard ML-DSA-87 P2PKH script class. Run only on PQ-active networks (the
+    /// caller gates on `resolved_script_policy(...).pq_only`). The spend-side
+    /// complement to the creation-side `check_transaction_pq_output_classes`:
+    /// together they guarantee no UTXO can be spent without an ML-DSA signature,
+    /// even one that reached the set via a coinbase / overlay path or an unknown
+    /// script version (which the engine would otherwise treat as anyone-can-spend).
+    fn check_input_script_classes(&self, tx: &impl VerifiableTransaction) -> TxResult<()> {
+        for (i, (_, entry)) in tx.populated_inputs().enumerate() {
+            if !ScriptClass::from_script(&entry.script_public_key).is_pq_standard() {
+                return Err(TxRuleError::NonPqStandardInputClass(i));
+            }
+        }
+        Ok(())
     }
 }
 

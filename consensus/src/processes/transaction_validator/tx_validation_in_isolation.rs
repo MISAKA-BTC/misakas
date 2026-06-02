@@ -32,27 +32,31 @@ impl TransactionValidator {
     }
 
     /// kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): on a
-    /// PQ-active network every standard-spend transaction output must use the
-    /// sole standard ML-DSA-87 P2PKH script class, so no legacy secp256k1 /
-    /// P2SH output can ever enter the UTXO set. This complements §6 (which
-    /// rejects *spending* legacy UTXOs at the script engine) by blocking their
+    /// PQ-active network **every** transaction output — native spend, coinbase
+    /// (miner payout *and* validator-reward), and DNS-overlay — must use the sole
+    /// standard ML-DSA-87 P2PKH script class, so no non-PQ output (legacy
+    /// secp256k1, P2SH, or a signature-free script such as `OP_TRUE`) can ever
+    /// enter the UTXO set. This complements §6 (which rejects *spending* non-PQ
+    /// UTXOs at the script engine and the input-class check) by blocking their
     /// *creation*.
     ///
-    /// Exemptions: coinbase outputs (header-supplied miner script or the
-    /// validator-reward P2PKH built by `p2pkh_mldsa87_spk`) and DNS-overlay
-    /// transactions (their outputs are governed by their own payload validators
-    /// — `validate_stake_bond_tx` already pins output-0 to ML-DSA P2PKH, and
-    /// attestation / slashing txs carry no outputs).
+    /// There are intentionally **no exemptions**. The earlier coinbase / DNS
+    /// carve-outs were a consensus hole: a block producer could put a non-PQ
+    /// script in the coinbase miner output, or in a stake-bond output-1+ /
+    /// attestation output, and mint a UTXO spendable without an ML-DSA signature.
+    /// Every legitimate output is already ML-DSA P2PKH — validator-reward and
+    /// stake-bond outputs are built by `p2pkh_mldsa87_spk`, and miners must pay a
+    /// real ML-DSA P2PKH address (the no-wallet placeholder is ML-DSA P2PKH too).
+    /// `SlashingEvidence` carries no outputs, so it is unaffected.
     ///
     /// This is a context-free rule, so it lives in isolation. kaspa-pq networks
     /// activate PQ enforcement at genesis (`pq_activation_daa_score = 0`), so
     /// gating on `pq_enforcement == Consensus` alone is correct here (isolation
-    /// has no DAA score available).
+    /// has no DAA score available). The genesis block is committed directly
+    /// (`process_genesis`), never through this validator, and its premine output
+    /// is ML-DSA P2PKH regardless.
     fn check_transaction_pq_output_classes(&self, tx: &Transaction) -> TxResult<()> {
         if !matches!(self.pq_enforcement, PqEnforcementMode::Consensus) {
-            return Ok(());
-        }
-        if tx.is_coinbase() || dns_tx_kind(&tx.subnetwork_id).is_some() {
             return Ok(());
         }
         for (i, output) in tx.outputs.iter().enumerate() {
@@ -513,10 +517,11 @@ mod tests {
 #[cfg(test)]
 mod pq_output_class_enforcement_tests {
     //! kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): the
-    //! consensus output-class rule. On a PQ-active network every non-coinbase,
-    //! non-overlay transaction output must be ML-DSA P2PKH; coinbase and DNS
-    //! overlay txs are exempt. Drives the private `check_transaction_pq_output_classes`
-    //! directly so it is isolated from the other in-isolation checks.
+    //! consensus output-class rule. On a PQ-active network every transaction
+    //! output — native, coinbase (miner + validator-reward), and DNS-overlay —
+    //! must be ML-DSA P2PKH; there are no exemptions. Drives the private
+    //! `check_transaction_pq_output_classes` directly so it is isolated from the
+    //! other in-isolation checks.
     use super::TransactionValidator;
     use kaspa_consensus_core::config::params::{MAINNET_PARAMS, PqEnforcementMode};
     use kaspa_consensus_core::errors::tx::TxRuleError;
@@ -586,19 +591,27 @@ mod pq_output_class_enforcement_tests {
     }
 
     #[test]
-    fn consensus_mode_exempts_coinbase() {
+    fn consensus_mode_rejects_non_pq_coinbase_output() {
         let tv = validator(PqEnforcementMode::Consensus);
-        // Coinbase outputs inherit miner/header scripts (or the P2PKH validator
-        // reward); they are not subject to the standard-spend class rule.
-        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_COINBASE)).is_ok());
+        // The coinbase miner output is block-producer-controlled; a non-PQ script
+        // there (e.g. OP_TRUE) would mint a signature-free UTXO. No exemption now.
+        assert_eq!(
+            tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_COINBASE)),
+            Err(TxRuleError::NonPqStandardOutputClass(0))
+        );
+        // A canonical ML-DSA P2PKH coinbase output is accepted.
+        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_COINBASE)).is_ok());
     }
 
     #[test]
-    fn consensus_mode_exempts_overlay_subnetwork() {
+    fn consensus_mode_rejects_non_pq_overlay_output() {
         let tv = validator(PqEnforcementMode::Consensus);
-        // DNS-overlay tx outputs are governed by their own payload validators
-        // (stake-bond output-0 is pinned to ML-DSA P2PKH; attestation/slashing
-        // carry no outputs), so the generic class rule must not fire here.
-        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_STAKE_BOND)).is_ok());
+        // DNS-overlay outputs beyond the payload-pinned bond output-0 (stake-bond
+        // change / attestation change) are class-checked too — no blanket exemption.
+        assert_eq!(
+            tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_STAKE_BOND)),
+            Err(TxRuleError::NonPqStandardOutputClass(0))
+        );
+        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_STAKE_BOND)).is_ok());
     }
 }

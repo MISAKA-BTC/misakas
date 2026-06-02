@@ -13,6 +13,7 @@ use crate::{
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::block::Block;
 use kaspa_database::prelude::StoreResultExt;
+use kaspa_txscript::script_class::ScriptClass;
 use once_cell::unsync::Lazy;
 use std::sync::Arc;
 
@@ -73,6 +74,21 @@ impl BlockBodyProcessor {
                     return Err(RuleError::WrongSubsidy(expected_subsidy, data.subsidy));
                 }
 
+                // kaspa-pq PQ-only invariant: the coinbase payload's miner script must itself be
+                // ML-DSA P2PKH. The block's own coinbase OUTPUTS are PQ-class-checked in isolation,
+                // but the payload miner script is a SEPARATE field that descendant blocks read into
+                // their reward fan-out (`expected_coinbase_transaction` pays this block's merged
+                // reward to `reward_data.script_public_key` = this miner script). A non-PQ script
+                // here would force every descendant's coinbase to carry a non-PQ output, which the
+                // PQ output-class rule rejects — a reward-path / liveness poison rather than a
+                // mintable non-PQ UTXO. Reject it at the source. Gated by the PQ script policy,
+                // active from genesis on every kaspa-pq network (`pq_activation_daa_score = 0`).
+                if self.transaction_validator.resolved_script_policy(block.header.daa_score).pq_only
+                    && !ScriptClass::from_script(&data.miner_data.script_public_key).is_pq_standard()
+                {
+                    return Err(RuleError::NonPqCoinbasePayloadScript);
+                }
+
                 Ok(())
             }
             Err(e) => Err(RuleError::BadCoinbasePayload(e)),
@@ -94,10 +110,12 @@ mod tests {
     use kaspa_consensus_core::{
         BlockHash, // PR-9.5e: block ids are Hash64
         api::ConsensusApi,
+        coinbase::MinerData,
         config::params::MAINNET_PARAMS,
+        dns_finality::p2pkh_mldsa87_spk,
         merkle::calc_hash_merkle_root,
         subnets::SUBNETWORK_ID_NATIVE,
-        tx::{Transaction, TransactionInput, TransactionOutpoint},
+        tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionInput, TransactionOutpoint},
     };
     use kaspa_core::assert_match;
 
@@ -203,6 +221,45 @@ mod tests {
             check_for_lock_time_and_sequence(&consensus, valid_block_child.header.hash, 15.into(), tip_daa_score + 1, u64::MAX, true)
                 .await;
         }
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// kaspa-pq PQ-only invariant (audit Finding A): the coinbase **payload** miner script must
+    /// be ML-DSA P2PKH, independently of the coinbase outputs. A non-PQ payload miner script
+    /// would flow into descendant blocks' reward fan-out and force a non-PQ reward output (which
+    /// the PQ output-class rule rejects) — a reward-path / liveness poison. Verifies the source
+    /// block is rejected at body validation even though its coinbase carries no outputs (so the
+    /// isolation output-class check cannot catch it).
+    #[tokio::test]
+    async fn coinbase_payload_miner_script_must_be_pq() {
+        let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+        let consensus = TestConsensus::new(&config);
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+
+        // Control: an ML-DSA P2PKH miner script in the coinbase payload passes body validation.
+        let good = consensus.build_utxo_valid_block_with_parents(
+            1.into(),
+            vec![config.genesis.hash],
+            MinerData::new(p2pkh_mldsa87_spk(&[0x07; 64]), vec![]),
+            vec![],
+        );
+        body_processor.validate_body_in_context(&good.to_immutable()).unwrap();
+
+        // Finding A: a non-PQ miner script (here a bare OP_TRUE) in the payload is rejected,
+        // although the genesis-child coinbase has no outputs for the output-class rule to flag.
+        let non_pq_spk = ScriptPublicKey::new(0, ScriptVec::from_slice(&[0x51]));
+        let bad = consensus.build_utxo_valid_block_with_parents(
+            2.into(),
+            vec![config.genesis.hash],
+            MinerData::new(non_pq_spk, vec![]),
+            vec![],
+        );
+        assert_match!(
+            body_processor.validate_body_in_context(&bad.to_immutable()),
+            Err(RuleError::NonPqCoinbasePayloadScript)
+        );
 
         consensus.shutdown(wait_handles);
     }

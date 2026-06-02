@@ -395,6 +395,17 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Err(kaspa_addresses::AddressError::InvalidPrefix(request.pay_address.prefix.to_string()))?;
         }
 
+        // kaspa-pq PQ-only: the miner pay address must be ML-DSA-87 P2PKH. A legacy / ECDSA / P2SH
+        // pay address would place a non-PQ miner script in the coinbase payload, which the PQ-only
+        // consensus rule rejects (incl. the coinbase-payload check) — the mined block would be dead
+        // on arrival and its reward would poison descendants' fan-out. Reject the request up front so
+        // the miner gets a clear error instead of an unminable template.
+        if request.pay_address.version != kaspa_addresses::Version::PubKeyHashMlDsa87 {
+            return Err(RpcError::InvalidRpcScriptClass(
+                "pay address must be an ML-DSA-87 P2PKH (PubKeyHashMlDsa87) address".to_owned(),
+            ));
+        }
+
         // Build block template
         let session = self.consensus_manager.consensus().unguarded_session();
 

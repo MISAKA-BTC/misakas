@@ -63,8 +63,10 @@ fn script_policy_constants_are_correct() {
     assert!(!ScriptPolicy::LEGACY.pq_only);
     assert!(ScriptPolicy::LEGACY.allow_p2sh);
 
-    // The default MUST be LEGACY so the mechanism is inert until consensus
-    // explicitly opts a network in (every existing engine construction site
-    // gets LEGACY and is therefore byte-for-byte unchanged in behaviour).
-    assert_eq!(ScriptPolicy::default(), ScriptPolicy::LEGACY);
+    // kaspa-pq PQ-only: the type's default policy is PQ_ONLY (secure) so any code
+    // that asks for `ScriptPolicy::default()` gets PQ enforcement rather than the
+    // permissive legacy engine. The engine *constructors* still pin LEGACY explicitly
+    // for the upstream/back-compat opcode tests, and the production consensus path
+    // sets PQ_ONLY via `with_script_policy`.
+    assert_eq!(ScriptPolicy::default(), ScriptPolicy::PQ_ONLY);
 }

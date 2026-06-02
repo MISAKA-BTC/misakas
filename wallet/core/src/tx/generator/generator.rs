@@ -1096,7 +1096,11 @@ impl Generator {
 
                 let change_output_index = if change_output_value > 0 {
                     let change_output_index = Some(final_outputs.len());
-                    final_outputs.push(TransactionOutput::new(change_output_value, pay_to_address_script(&self.inner.change_address)));
+                    // kaspa-pq PQ-only: the change output must be an ML-DSA-87 P2PKH script (the only
+                    // consensus-standard class), else this transaction would be rejected. Reject a
+                    // non-PQ change address here rather than emit a consensus-invalid output.
+                    let change_spk = pq_aware_output_script(self.inner.network_id, &self.inner.change_address)?;
+                    final_outputs.push(TransactionOutput::new(change_output_value, change_spk));
                     change_output_index
                 } else {
                     None
@@ -1173,7 +1177,8 @@ impl Generator {
                 }
 
                 let output_value = aggregate_input_value.saturating_sub(transaction_fees);
-                let script_public_key = pay_to_address_script(&self.inner.change_address);
+                // kaspa-pq PQ-only: the change output must be an ML-DSA-87 P2PKH script (see above).
+                let script_public_key = pq_aware_output_script(self.inner.network_id, &self.inner.change_address)?;
                 let output = TransactionOutput::new(output_value, script_public_key.clone());
                 let tx = Transaction::new(0, inputs, vec![output], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
 
