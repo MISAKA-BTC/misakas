@@ -8,6 +8,7 @@ use crate::{
         daa::DbDaaStore,
         depth::DbDepthStore,
         dns_state::DbDnsStateStore,
+        epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
         headers_selected_tip::DbHeadersSelectedTipStore,
@@ -73,6 +74,13 @@ pub struct ConsensusStorage {
     // kaspa-pq DNS overlay (ADR-0009 Addendum B §B.3(c)): per-block rewarded
     // `(bond_outpoint, epoch)` keys for cross-block reward uniqueness.
     pub rewarded_epochs_store: Arc<DbRewardedEpochsStore>,
+
+    // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): the per-epoch accumulator
+    // ([`EpochTally`]) and its per-block validator quality sub-pool input. Both
+    // inert (never written) until `pos_v2_activation_daa_score` (`u64::MAX` today).
+    pub epoch_accumulator_store: Arc<DbEpochAccumulatorStore>,
+    pub block_quality_pool_store: Arc<DbBlockQualityPoolStore>,
+    pub reserve_balance_store: Arc<DbReserveBalanceStore>,
 
     // Block window caches
     pub block_window_cache_for_difficulty: Arc<BlockWindowCacheStore>,
@@ -245,6 +253,22 @@ impl ConsensusStorage {
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
+        // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1). Both values (`EpochTally`,
+        // `u64`) are unit-/count-estimable only, so — like `rewarded_epochs_store`
+        // — they MUST use an UNTRACKED (Count) policy; a `tracked_bytes` policy
+        // would call `estimate_mem_bytes` and panic. The per-epoch accumulator is
+        // small (one row per epoch); the per-block quality pool mirrors the
+        // per-block rewarded-keys cache sizing.
+        let epoch_accumulator_store =
+            Arc::new(DbEpochAccumulatorStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
+        let block_quality_pool_store = Arc::new(DbBlockQualityPoolStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let reserve_balance_store = Arc::new(DbReserveBalanceStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
 
         // Block windows
         let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));
@@ -283,6 +307,9 @@ impl ConsensusStorage {
             pruning_samples_store,
             utxo_diffs_store,
             rewarded_epochs_store,
+            epoch_accumulator_store,
+            block_quality_pool_store,
+            reserve_balance_store,
             utxo_multisets_store,
             block_window_cache_for_difficulty,
             block_window_cache_for_past_median_time,

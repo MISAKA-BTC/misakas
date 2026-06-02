@@ -5,6 +5,7 @@ pub mod children;
 pub mod daa;
 pub mod depth;
 pub mod dns_state;
+pub mod epoch_accumulator;
 pub mod ghostdag;
 pub mod headers;
 pub mod headers_selected_tip;

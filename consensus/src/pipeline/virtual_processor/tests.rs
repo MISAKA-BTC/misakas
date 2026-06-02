@@ -11,7 +11,8 @@ use kaspa_consensus_core::{
         ConfigBuilder,
         params::{DEVNET_PARAMS, MAINNET_PARAMS},
     },
-    tx::{ScriptPublicKey, ScriptVec, Transaction},
+    dns_finality::p2pkh_mldsa87_spk,
+    tx::Transaction,
 };
 use std::{collections::VecDeque, thread::JoinHandle};
 
@@ -235,6 +236,52 @@ async fn dns_overlay_active_chain_validates() {
 
     // Mine + validate a chain with the overlay active end-to-end.
     for _ in 0..10 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    ctx.assert_tips_num(1);
+}
+
+/// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 2): overlay **and** v2-economics ACTIVE integration
+/// test. With `dns_activation_daa_score = 0` AND `pos_v2_activation_daa_score = 0` (plus shrunk
+/// windows so epochs actually bury within a short chain), the full v2 machinery RUNS on every
+/// block: the fence-gated 70/30 participation/quality split, the per-block quality-pool
+/// persistence (`block_quality_pool_store`, written non-empty here since the §F carve funds a
+/// validator pool even with no attestations), the per-epoch accumulator recompute + finalization
+/// (`update_epoch_accumulator`), and the deferred quality-bonus payout
+/// (`deferred_quality_bonus_outputs` — incl. the finalization-crossing detection and the φS gate).
+///
+/// This chain carries no bonds/attestations, so every *reward* set is empty — but the code paths
+/// execute, write the stores, and the chain must still mine and validate to a valid UTXO tip.
+/// Because the validation path rebuilds the coinbase and rejects any mismatch, reaching a valid
+/// UTXO tip proves the v2 economics neither break block production nor desynchronise coinbase
+/// construction vs validation. (A reward-bearing e2e — real bonds + attestations paid a non-empty
+/// bonus — needs the funded-bond DAG harness, DAG-2.)
+#[tokio::test]
+async fn pos_v2_active_empty_chain_validates() {
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            // Activate the v2 economics from genesis and shrink the finalization window
+            // (= reward_uniqueness_window + max_reorg_horizon = 4) so epochs bury and the
+            // deferred-bonus crossing fires within a short chain.
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 2;
+            dns.max_reorg_horizon_blocks = 2;
+            p.dns_params = Some(dns);
+        })
+        .build();
+
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // threshold(E) = (E+1)·2 + 4, so by ~daa 12 several epochs have finalized and the deferred
+    // quality-bonus path has fired (with empty included sets — exercised, not paid).
+    for _ in 0..12 {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
     }
     ctx.assert_tips_num(1);
@@ -464,10 +511,13 @@ async fn double_search_disqualified_test() {
 }
 
 fn new_miner_data() -> MinerData {
-    // kaspa-pq PQ-only: the coinbase recipient script only needs arbitrary bytes
-    // (coinbase outputs are not signature-checked), so use a random 32-byte payload
-    // instead of a secp256k1 public key — keeps this test helper secp-free.
-    let payload: [u8; 32] = rand::random();
-    let script = ScriptVec::from_slice(&payload);
-    MinerData::new(ScriptPublicKey::new(0, script), vec![])
+    // kaspa-pq PQ-only: coinbase outputs must be the standard ML-DSA-87 P2PKH class
+    // (enforced with no exemption — see `check_transaction_pq_output_classes`). Use a
+    // random 64-byte hash payload: the script is class-valid but unspendable (no
+    // preimage), which is all this helper needs, and stays distinct per call.
+    let mut payload = [0u8; 64];
+    for b in payload.iter_mut() {
+        *b = rand::random();
+    }
+    MinerData::new(p2pkh_mldsa87_spk(&payload), vec![])
 }

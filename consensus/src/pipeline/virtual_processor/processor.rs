@@ -21,6 +21,7 @@ use crate::{
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
             dns_state::{DbDnsStateStore, DnsStateStoreReader},
+            epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
             past_pruning_points::DbPastPruningPointsStore,
@@ -29,7 +30,7 @@ use crate::{
             pruning_samples::DbPruningSamplesStore,
             reachability::DbReachabilityStore,
             relations::{DbRelationsStore, RelationsStoreReader},
-            rewarded_epochs::{DbRewardedEpochsStore, RewardedEpochKeys},
+            rewarded_epochs::{DbRewardedEpochsStore, RewardedEpochKeys, RewardedEpochsStoreReader},
             selected_chain::{DbSelectedChainStore, SelectedChainStore},
             stake_bonds::{DbStakeBondsStore, StakeBondsStoreReader},
             statuses::{DbStatusesStore, StatusesStore, StatusesStoreBatchExtensions, StatusesStoreReader},
@@ -60,11 +61,11 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     config::genesis::GenesisBlock,
     dns_finality::{
-        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BondMutation, BondStatus, DnsParams,
-        DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
+        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BondMutation, BondStatus,
+        DnsParams, DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
         attestations_from_accepted_txs, bond_mutations_from_accepted_txs, check_dns_reorg_rule, compute_stake_score,
-        derive_dns_health, is_bond_active_at, reorg_inputs_since_common_ancestor, stake_attestation_message,
-        total_active_stake_by_epoch,
+        derive_dns_health, is_bond_active_at, recompute_epoch_tallies, reorg_inputs_since_common_ancestor,
+        stake_attestation_message, total_active_stake_by_epoch,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -153,6 +154,12 @@ pub struct VirtualStateProcessor {
     // kaspa-pq DNS overlay (ADR-0009 Addendum B §B.3(c)): per-block rewarded
     // `(bond, epoch)` keys for cross-block reward uniqueness.
     pub(super) rewarded_epochs_store: Arc<DbRewardedEpochsStore>,
+    // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): the per-epoch accumulator and
+    // its per-block validator quality sub-pool input. Inert until
+    // `pos_v2_activation_daa_score` (`u64::MAX` today).
+    pub(super) epoch_accumulator_store: Arc<DbEpochAccumulatorStore>,
+    pub(super) block_quality_pool_store: Arc<DbBlockQualityPoolStore>,
+    pub(super) reserve_balance_store: Arc<DbReserveBalanceStore>,
     pub(super) utxo_multisets_store: Arc<DbUtxoMultisetsStore>,
     pub(super) acceptance_data_store: Arc<DbAcceptanceDataStore>,
     pub(super) virtual_stores: Arc<RwLock<VirtualStores>>,
@@ -234,6 +241,9 @@ impl VirtualStateProcessor {
             dns_params: params.dns_params.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
+            epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
+            block_quality_pool_store: storage.block_quality_pool_store.clone(),
+            reserve_balance_store: storage.reserve_balance_store.clone(),
             utxo_multisets_store: storage.utxo_multisets_store.clone(),
             acceptance_data_store: storage.acceptance_data_store.clone(),
             virtual_stores: storage.virtual_stores.clone(),
@@ -540,6 +550,8 @@ impl VirtualStateProcessor {
                             ctx.mergeset_acceptance_data,
                             ctx.pruning_sample_from_pov.expect("verified"),
                             ctx.validator_rewarded_keys,
+                            ctx.validator_quality_subpool,
+                            ctx.reserve_balance_after,
                         );
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
@@ -569,6 +581,15 @@ impl VirtualStateProcessor {
         // of every current network (the overlay is dormant), so no rows are
         // written there.
         rewarded_keys: RewardedEpochKeys,
+        // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): this block's validator quality
+        // sub-pool, the per-epoch accumulator's recompute input. Non-zero (and
+        // therefore persisted) only past `pos_v2_activation_daa_score` (`u64::MAX`
+        // today), so no row is written on any current network.
+        quality_subpool: u64,
+        // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): this block's cumulative reserve balance.
+        // Persisted only when non-zero (the 0 default is never stored), so no row on any current
+        // network. Children read it as their `parent_balance` for the reserve drip.
+        reserve_balance: u64,
     ) {
         let mut batch = WriteBatch::default();
         self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
@@ -576,6 +597,12 @@ impl VirtualStateProcessor {
         self.acceptance_data_store.insert_batch(&mut batch, current, Arc::new(acceptance_data)).unwrap();
         if !rewarded_keys.is_empty() {
             self.rewarded_epochs_store.insert_batch(&mut batch, current, Arc::new(rewarded_keys)).unwrap();
+        }
+        if quality_subpool > 0 {
+            self.block_quality_pool_store.insert_batch(&mut batch, current, quality_subpool).unwrap();
+        }
+        if reserve_balance > 0 {
+            self.reserve_balance_store.insert_batch(&mut batch, current, reserve_balance).unwrap();
         }
         // Note we call idempotent since this field can be populated during IBD with headers proof
         self.pruning_samples_store.insert_batch(&mut batch, current, pruning_sample_from_pov).idempotent().unwrap();
@@ -682,6 +709,13 @@ impl VirtualStateProcessor {
         // the bounded recent epoch window and stage the updated DnsState into
         // the same batch. Inert unless the overlay is configured.
         self.update_dns_state(&mut batch, dns_sink);
+
+        // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): recompute the per-epoch
+        // accumulator over the bounded selected-chain window ending at the new
+        // sink and stage it into the same batch. Inert below the v2 fence
+        // (`pos_v2_activation_daa_score`, `u64::MAX` today) — returns after a
+        // single header read on every current network.
+        self.update_epoch_accumulator(&mut batch, dns_sink);
 
         // Flush the batch changes
         self.db.write(batch).unwrap();
@@ -914,6 +948,76 @@ impl VirtualStateProcessor {
             dns_params.required_stake_depth,
         );
         self.dns_state_store.write().set_batch(batch, new_state).unwrap();
+    }
+
+    /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): recompute the per-epoch
+    /// `EpochTally` accumulator over the bounded selected-chain window ending at
+    /// `sink` and stage the live (non-finalized) epochs into `batch`. **Inert**
+    /// unless the DNS overlay is configured AND `sink`'s DAA score has reached the
+    /// v2 fence `pos_v2_activation_daa_score` (`u64::MAX` on every current
+    /// network), so this returns after a single header read everywhere today.
+    ///
+    /// Recompute design (the `update_dns_state` precedent — reorg-safe with no
+    /// incremental delta): the accumulator is a pure function of the selected
+    /// chain (each block's persisted rewarded `(bond, epoch)` keys + quality
+    /// sub-pool, both block-hash-keyed so only the current chain's rows are read)
+    /// and the current bond snapshot, so a reorg simply re-derives the live epochs
+    /// from the new chain.
+    ///
+    /// Window: `finalization_depth = reward_uniqueness_window_blocks +
+    /// max_reorg_horizon_blocks` — a non-final epoch's included set stays mutable
+    /// up to `window` past its anchor and a reorg can rewrite up to
+    /// `max_reorg_horizon` blocks, so burying past their sum makes the tally
+    /// immutable. The walk covers `finalization_depth + 2·epoch_length` so every
+    /// non-final epoch's contributing blocks are seen. An epoch already `finalized`
+    /// in the store is never re-derived (its blocks may lie partly outside the
+    /// window — an incomplete recompute).
+    ///
+    /// NOTE (post-activation perf): unlike `update_dns_state` this does not yet
+    /// throttle to once-per-epoch; while fenced it is a no-op, so the window walk
+    /// only runs once the v2 economics are switched on — add an epoch throttle
+    /// before then.
+    fn update_epoch_accumulator(&self, batch: &mut WriteBatch, sink: BlockHash) {
+        let Some(dns_params) = self.dns_params.as_ref() else {
+            return;
+        };
+        let sink_daa = self.headers_store.get_daa_score(sink).unwrap();
+        // The v2 master fence: inert (no walk, no write) on every current network.
+        if sink_daa < dns_params.pos_v2_activation_daa_score {
+            return;
+        }
+
+        let epoch_len = dns_params.epoch_length_blocks.max(1);
+        let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
+        let walk_bound = finalization_depth.saturating_add(epoch_len.saturating_mul(2));
+
+        // Gather this selected chain's per-block contributions within the window
+        // (sink first, then ancestors), stopping at the window edge or the fence.
+        let mut contributions: Vec<BlockEpochContribution> = Vec::new();
+        for ancestor in std::iter::once(sink).chain(self.reachability_service.default_backward_chain_iterator(sink)) {
+            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
+            if sink_daa.saturating_sub(ancestor_daa) > walk_bound || ancestor_daa < dns_params.pos_v2_activation_daa_score {
+                break;
+            }
+            let rewarded_keys = self.rewarded_epochs_store.get(ancestor).map(|k| (*k).clone()).unwrap_or_default();
+            let quality_subpool = self.block_quality_pool_store.get(ancestor).unwrap_or(0);
+            contributions.push(BlockEpochContribution { block_daa_score: ancestor_daa, rewarded_keys, quality_subpool });
+        }
+        // Selected-chain order (oldest → newest) so the `included` ordering is chain-deterministic.
+        contributions.reverse();
+
+        // Snapshot the bond set (bounded by the active validator count), as update_dns_state does.
+        let bonds: Vec<StakeBondRecord> =
+            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+
+        for (epoch, tally) in recompute_epoch_tallies(sink_daa, epoch_len, finalization_depth, &contributions, &bonds) {
+            // Never re-derive a finalized epoch — it is immutable and its blocks may
+            // already lie partly outside the walk window (an incomplete recompute).
+            if self.epoch_accumulator_store.get(epoch).map(|t| t.finalized).unwrap_or(false) {
+                continue;
+            }
+            self.epoch_accumulator_store.set_batch(batch, epoch, tally).unwrap();
+        }
     }
 
     /// kaspa-pq Phase 10/13 (ADR-0009 Addendum A.5 / ADR-0018 §H): collect + verify the
@@ -1602,6 +1706,21 @@ impl VirtualStateProcessor {
             virtual_state.ghostdag_data.selected_parent,
             validator_pool,
         );
+        // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): append the reserve-drip outputs so a block
+        // mined from this template reproduces the validated coinbase byte-for-byte. Reads the sink's
+        // committed reserve balance (= the template's selected parent). Inert below the v2 fence.
+        let mut validator_reward_outputs = validator_reward_outputs;
+        if let Some(dns_params) = self.dns_params.as_ref() {
+            let parent_balance = self.reserve_balance_store.get(virtual_state.ghostdag_data.selected_parent).unwrap_or(0);
+            let (drip_outputs, _) = self.reserve_drip_outputs(
+                dns_params,
+                virtual_state.daa_score,
+                virtual_state.ghostdag_data.selected_parent,
+                &template_bond_view,
+                parent_balance,
+            );
+            validator_reward_outputs.extend(drip_outputs);
+        }
         let coinbase = self
             .coinbase_manager
             .expected_coinbase_transaction(
@@ -1685,6 +1804,8 @@ impl VirtualStateProcessor {
             AcceptanceData::default(),
             ZERO_HASH64,
             Vec::new(),
+            0, // kaspa-pq ADR-0018 "本格版": genesis has no validator quality sub-pool.
+            0, // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
         );
 
         // Init the virtual selected chain store
