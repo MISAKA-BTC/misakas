@@ -14,6 +14,17 @@ use kaspa_txscript::{get_sig_op_count_upper_bound, is_unspendable, script_class:
 /// that are considered standard in a pay-to-script-hash script.
 const MAX_STANDARD_P2SH_SIG_OPS: u8 = 15;
 
+/// kaspa-pq PQ-only: estimated serialized size (bytes) of the ML-DSA-87 P2PKH
+/// input that spends an output, used by the dust calculation — versus the legacy
+/// 148-byte p2pk input. Reflects the true cost to spend. Breakdown:
+///   outpoint (Hash64 txid 64 + index 4) ............ 68
+///   signature-script length field (u64) ............  8
+///   sig push: <sig 4627 + sighash 1> + PUSHDATA2 3 . 4631
+///   pubkey push: <pubkey 2592> + PUSHDATA2 3 ....... 2595
+///   sequence (u64) .................................  8
+///   total .......................................... 7310
+const MLDSA87_P2PKH_SPEND_INPUT_SIZE: u64 = 7310;
+
 /// MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE is the maximum size allowed for a
 /// transaction input signature script to be considered standard.
 ///
@@ -29,7 +40,7 @@ const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 16_384;
 /// are considered standard and will therefore be relayed and considered for mining.
 ///
 /// kaspa-pq: raised from the upstream 100_000. This limit is checked against BOTH the
-/// compute mass and the transient (KIP-0009 storage) mass. ML-DSA-65 P2PKH spends are
+/// compute mass and the transient (KIP-0009 storage) mass. ML-DSA-87 P2PKH spends are
 /// heavy on both axes: ~12_000 compute mass per input (5268-byte sig script + sig-op),
 /// and multi-input transactions also accrue large transient mass (e.g. a 16-input send
 /// measured 183_160 compute / 341_296 transient). To let any block-mineable ML-DSA tx
@@ -94,7 +105,14 @@ impl Mempool {
                 return Err(NonStandardError::RejectScriptPublicKeyVersion(transaction_id, i));
             }
 
-            if ScriptClass::from_script(&output.script_public_key) == ScriptClass::NonStandard {
+            // kaspa-pq PQ-only relay: require the ML-DSA-87 P2PKH class (matching the hard
+            // consensus rule `check_transaction_pq_output_classes`), so the mempool never relays a
+            // transaction that consensus will reject. The legacy-permissive "reject only
+            // NonStandard" rule is kept for the (legacy-fixture) unit tests via `pq_only = false`.
+            let output_class = ScriptClass::from_script(&output.script_public_key);
+            let output_rejected =
+                if self.config.pq_only { !output_class.is_pq_standard() } else { output_class == ScriptClass::NonStandard };
+            if output_rejected {
                 return Err(NonStandardError::RejectOutputScriptClass(transaction_id, i));
             }
 
@@ -121,24 +139,14 @@ impl Mempool {
             return true;
         }
 
-        // The total serialized size consists of the output and the associated
-        // input script to redeem it. Since there is no input script
-        // to redeem it yet, use the minimum size of a typical input script.
-        //
-        // Pay-to-pubkey bytes breakdown:
-        //
-        //  Output to pubkey (43 bytes):
-        //   8 value, 1 script len, 34 script [1 OP_DATA_32,
-        //   32 pubkey, 1 OP_CHECKSIG]
-        //
-        //  Input (105 bytes):
-        //   36 prev outpoint, 1 script len, 64 script [1 OP_DATA_64,
-        //   64 sig], 4 sequence
-        //
-        // The most common scripts are pay-to-pubkey, and as per the above
-        // breakdown, the minimum size of a p2pk input script is 148 bytes. So
-        // that figure is used.
-        let total_serialized_size = mass::transaction_output_estimated_serialized_size(transaction_output) + 148;
+        // The total serialized size consists of the output plus the input that
+        // would redeem it. In kaspa-pq the only spend class is ML-DSA-87 P2PKH, so
+        // the redeeming input is ~7.3 KB (a 68-byte Hash64 outpoint + a ~7226-byte
+        // `<sig 4628><pubkey 2592>` signature script + sequence) — not the legacy
+        // 148-byte p2pk input. Using the real ML-DSA spend size makes "dust" reflect
+        // the true cost to spend the output.
+        let total_serialized_size =
+            mass::transaction_output_estimated_serialized_size(transaction_output) + MLDSA87_P2PKH_SPEND_INPUT_SIZE;
 
         // The output is considered dust if the cost to the network to spend the
         // coins is more than 1/3 of the minimum free transaction relay fee.
@@ -182,21 +190,26 @@ impl Mempool {
             // they have already been checked prior to calling this
             // function.
             let entry = transaction.entries[i].as_ref().unwrap();
-            match ScriptClass::from_script(&entry.script_public_key) {
+            // kaspa-pq PQ-only relay: the spent input UTXO must be ML-DSA-87 P2PKH (matching the
+            // consensus input-class rule in the UTXO-context validator), so the mempool never
+            // relays a transaction consensus will reject. The upstream-permissive class table
+            // below is kept for the (legacy-fixture) unit tests via `pq_only = false`.
+            let input_class = ScriptClass::from_script(&entry.script_public_key);
+            if self.config.pq_only && !input_class.is_pq_standard() {
+                return Err(NonStandardError::RejectInputScriptClass(transaction_id, i));
+            }
+            match input_class {
                 ScriptClass::NonStandard => {
                     return Err(NonStandardError::RejectInputScriptClass(transaction_id, i));
                 }
                 ScriptClass::PubKey => {}
                 ScriptClass::PubKeyECDSA => {}
-                // kaspa-pq: ML-DSA-65 P2PKH is the kaspa-pq standard spend
-                // template (see docs/adr/0002-mldsa65-p2pkh.md). Each input
-                // contributes exactly one ML-DSA verify (= one sig-op);
-                // no per-input sig-op-count check is needed here because
-                // the script template is fixed and the engine itself
-                // length-checks the public key and signature before the
-                // libcrux verify. The mass-budget side of the policy is
-                // calibrated in Phase 6 via `mass_per_sig_op` (see
-                // docs/adr/0005-mass-policy.md), not here.
+                // kaspa-pq: ML-DSA-87 P2PKH is the kaspa-pq standard spend template.
+                // Each input contributes exactly one ML-DSA verify (= one sig-op); no
+                // per-input sig-op-count check is needed because the script template
+                // is fixed and the engine length-checks the public key and signature
+                // before the libcrux verify. The mass-budget side of the policy is
+                // calibrated via `mass_per_sig_op` (docs/adr/0005-mass-policy.md).
                 ScriptClass::PubKeyHashMlDsa87 => {}
                 ScriptClass::ScriptHash => {
                     // todo relax due to on fly calculation
@@ -294,7 +307,9 @@ mod tests {
                 name: "max standard tx size with default minimum relay fee",
                 size: MAXIMUM_STANDARD_TRANSACTION_MASS,
                 minimum_relay_transaction_fee: DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE,
-                want: 100000,
+                // kaspa-pq raised MAXIMUM_STANDARD_TRANSACTION_MASS to 480_000 (was the
+                // upstream 100_000); the expected fee tracks that at the default fee rate.
+                want: 480000,
             },
             Test { name: "1500 bytes with 5000 relay fee", size: 1500, minimum_relay_transaction_fee: 5000, want: 7500 },
             Test { name: "1500 bytes with 3000 relay fee", size: 1500, minimum_relay_transaction_fee: 3000, want: 4500 },
@@ -359,9 +374,12 @@ mod tests {
                 minimum_relay_transaction_fee: 1000,
                 is_dust: true,
             },
+            // kaspa-pq: with the ~7.3 KB ML-DSA-87 spend-input size, the fee=1000
+            // dust boundary is ~22_077 sompi (was ~606 with the legacy 148-byte
+            // input). 605 above stays dust; a clearly-larger value is not dust.
             Test {
-                name: "36 byte public key script with value 606",
-                tx_out: TransactionOutput::new(606, script_public_key.clone()),
+                name: "value above the ML-DSA dust threshold",
+                tx_out: TransactionOutput::new(50_000, script_public_key.clone()),
                 minimum_relay_transaction_fee: 1000,
                 is_dust: false,
             },
@@ -375,9 +393,11 @@ mod tests {
             // Maximum uint64 value causes NO overflow.
             // Rust rewrite: caution, this differs from the golang version
             Test {
+                // Still exercises the u128 overflow path (value * 1000 overflows u64);
+                // a max-value output is never dust at a normal relay fee.
                 name: "maximum uint64 value",
                 tx_out: TransactionOutput::new(u64::MAX, script_public_key),
-                minimum_relay_transaction_fee: u64::MAX,
+                minimum_relay_transaction_fee: 1000,
                 is_dust: false,
             },
             // Unspendable script_public_key due to an invalid public key script.
@@ -571,7 +591,10 @@ mod tests {
         for test in tests {
             for net in NetworkType::iter() {
                 let params: Params = net.into();
-                let config = Config::build_default(params.target_time_per_block(), false, params.max_block_mass);
+                let mut config = Config::build_default(params.target_time_per_block(), false, params.max_block_mass);
+                // This test exercises the upstream (legacy-permissive) output-class table with
+                // non-ML-DSA fixtures, so opt out of the kaspa-pq PQ-only relay tightening.
+                config.pq_only = false;
                 let counters = Arc::new(MiningCounters::default());
                 let mempool = Mempool::new(Arc::new(config), counters);
 

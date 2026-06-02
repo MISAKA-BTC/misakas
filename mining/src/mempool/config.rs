@@ -16,7 +16,22 @@ pub(crate) const DEFAULT_MAXIMUM_ORPHAN_TRANSACTION_COUNT: u64 = 500;
 
 /// DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE specifies the minimum transaction fee for a transaction to be accepted to
 /// the mempool and relayed. It is specified in sompi per 1kg (or 1000 grams) of transaction mass.
+///
+/// This is the upstream Kaspa base rate, used by `Config::build_default` (and the mempool unit-test
+/// fixtures calibrated to it). The PRODUCTION kaspa-pq node raises it ×10 to
+/// [`PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE`] via `MiningManager::new_with_extended_config`.
 pub(crate) const DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE: u64 = 1000;
+
+/// kaspa-pq production relay fee rate: **10× the upstream Kaspa rate (1000 → 10_000)**. An ML-DSA-87
+/// P2PKH transaction's compute mass is ≈ 10× a secp256k1 transaction's (its ~7.3 KB spend input — a
+/// 4628-byte signature + a 2592-byte public key — plus `mass_per_sig_op = 10_000`), so this ×10
+/// relay rate makes the effective minimum fee of a kaspa-pq transaction ≈ **100× a Kaspa
+/// transaction's** — the intended reconciliation ("辻褄合わせ") for the ~72×-larger post-quantum
+/// signature, and the fee base that funds validator/worker rewards once the 20-year block subsidy
+/// reaches 0 (the §F fee split keeps routing fees worker 90% / validator 10%). Relay/mempool policy
+/// only — NOT consensus, so no genesis change. The production node applies it; the test path keeps
+/// the upstream base so the mempool unit fixtures stay calibrated. Calibratable.
+pub const PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE: u64 = 10_000;
 
 /// Standard transaction version range might be different from what consensus accepts, therefore
 /// we define separate values in mempool.
@@ -46,6 +61,12 @@ pub struct Config {
     pub minimum_standard_transaction_version: u16,
     pub maximum_standard_transaction_version: u16,
     pub network_blocks_per_second: u64,
+    /// kaspa-pq PQ-only: when set, mempool standardness requires every output AND every spent
+    /// input UTXO to be the ML-DSA-87 P2PKH class (the only kaspa-pq standard class), matching
+    /// the PQ-only consensus rule instead of the upstream legacy-permissive relay policy. `true`
+    /// for production (this fork enforces PQ at genesis on every net); the legacy-fixture unit
+    /// tests opt out (`pq_only = false`) to keep exercising the upstream class behavior.
+    pub pq_only: bool,
 }
 
 impl Config {
@@ -91,6 +112,11 @@ impl Config {
             minimum_standard_transaction_version,
             maximum_standard_transaction_version,
             network_blocks_per_second,
+            // kaspa-pq PQ-only relay is OFF in the base config so the (non-ML-DSA) mempool unit
+            // tests and the `MiningManager::new` test path keep the upstream class behavior; the
+            // production node turns it on explicitly (see `MiningManager::new`'s `pq_only` arg /
+            // the daemon wiring).
+            pq_only: false,
         }
     }
 
@@ -120,6 +146,11 @@ impl Config {
             minimum_standard_transaction_version: DEFAULT_MINIMUM_STANDARD_TRANSACTION_VERSION,
             maximum_standard_transaction_version: DEFAULT_MAXIMUM_STANDARD_TRANSACTION_VERSION,
             network_blocks_per_second: 1000 / target_milliseconds_per_block,
+            // kaspa-pq PQ-only relay is OFF in the base config so the (non-ML-DSA) mempool unit
+            // tests and the `MiningManager::new` test path keep the upstream class behavior; the
+            // production node turns it on explicitly (see `MiningManager::new`'s `pq_only` arg /
+            // the daemon wiring).
+            pq_only: false,
         }
     }
 

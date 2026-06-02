@@ -632,6 +632,9 @@ Do you confirm? (y/n)";
         config.ram_scale,
         config.block_template_cache_lifetime,
         mining_counters.clone(),
+        // kaspa-pq PQ-only relay: every kaspa-pq network enforces PQ at genesis, so the production
+        // mempool requires ML-DSA-87 P2PKH outputs/inputs (audit Finding C).
+        true,
     )));
     let mining_monitor =
         Arc::new(MiningMonitor::new(mining_manager.clone(), mining_counters, tx_script_cache_counters.clone(), tick_service.clone()));

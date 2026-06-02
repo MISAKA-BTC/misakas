@@ -57,6 +57,7 @@ impl MiningManager {
         Self::with_config(config, cache_lifetime, counters)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_extended_config(
         target_time_per_block: u64,
         relay_non_std_transactions: bool,
@@ -64,9 +65,20 @@ impl MiningManager {
         ram_scale: f64,
         cache_lifetime: Option<u64>,
         counters: Arc<MiningCounters>,
+        // kaspa-pq PQ-only relay (audit Finding C): require ML-DSA-87 P2PKH for every mempool
+        // output AND spent input, matching the PQ-only consensus rule. The production daemon passes
+        // `true`; the `MiningManager::new` test path leaves it `false` (base-config default) so the
+        // non-ML-DSA mempool unit tests keep exercising the upstream class table.
+        pq_only: bool,
     ) -> Self {
-        let config =
+        let mut config =
             Config::build_default(target_time_per_block, relay_non_std_transactions, max_block_mass).apply_ram_scale(ram_scale);
+        config.pq_only = pq_only;
+        // kaspa-pq: the production node charges ≈100× a Kaspa transaction's fee (the ×10 relay rate
+        // on top of the ~10× ML-DSA compute mass) to reconcile the ~72×-larger post-quantum
+        // signature. The `MiningManager::new` test path keeps the upstream base rate so the mempool
+        // unit fixtures stay calibrated.
+        config.minimum_relay_transaction_fee = crate::mempool::config::PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE;
         Self::with_config(config, cache_lifetime, counters)
     }
 
@@ -234,10 +246,14 @@ impl MiningManager {
         };
         // calculate next_block_template_feerate_xxx
         {
+            // kaspa-pq PQ-only: use an ML-DSA-87 P2PKH placeholder (the only standard class) so
+            // this fee-estimate template's coinbase miner script matches the consensus PQ rule —
+            // a legacy `PubKey` placeholder would build a non-PQ coinbase payload script that the
+            // PQ-only invariant (incl. the coinbase-payload check) rejects.
             let script_public_key = kaspa_txscript::pay_to_address_script(&kaspa_addresses::Address::new(
                 prefix,
-                kaspa_addresses::Version::PubKey,
-                &[0u8; 32],
+                kaspa_addresses::Version::PubKeyHashMlDsa87,
+                &[0u8; 64],
             ));
             let miner_data: MinerData = MinerData::new(script_public_key, vec![]);
 
