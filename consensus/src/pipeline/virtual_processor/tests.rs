@@ -911,6 +911,77 @@ async fn dns_v3_signer_produces_canonical_ready_targets() {
     assert!(ctx.consensus.get_validator_attestation_targets(outpoint, latest_ready + 1, 100).is_empty());
 }
 
+/// kaspa-pq DNS v3 (PR6) — high-parallel no-hole: on a WIDE DAG the selected chain's
+/// blue_score jumps by the merged-set size, skipping whole epoch [start, end] ranges. Every
+/// buried epoch must still resolve to a canonical anchor (the most-recent selected-chain block
+/// at-or-below its cutoff — which, for a skipped epoch, is a block below the jump → a
+/// correctly-flagged duplicate), NEVER a hole (None / panic). This is the DAG-level analogue of
+/// PR2a's pure `no-hole-on-jump` test, exercising the real store walk over a jumpy chain.
+#[tokio::test]
+async fn dns_v3_high_parallel_blue_score_jump_no_hole() {
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::dns_finality::ready_epoch_from_tip_blue_score;
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 16;
+            p.mergeset_size_limit = 16;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            // Small epochs vs. wide merges (up to 16) so a single merge jumps past whole epochs.
+            dns.attestation_epoch_length_blue_score = 5;
+            dns.attestation_lag_blue_score = 3;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 100_000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // Warm up, then alternate WIDE antichains + single merge blocks so the selected chain's
+    // blue_score jumps by the merged set size (skipping whole epoch ranges), then settle.
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await;
+    }
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..14).validate_and_insert_row().await; // wide antichain
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await; // merge -> blue_score jump
+    }
+    for _ in 0..6 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await;
+    }
+    ctx.assert_tips_num(1);
+
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let sink = ctx.consensus.get_sink();
+    let vp = ctx.consensus.virtual_processor();
+    let sink_blue = vp.headers_store.get_blue_score(sink).unwrap();
+    let latest_ready =
+        ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+            .expect("epochs are ready on a chain this long");
+    assert!(latest_ready >= 2, "the chain spans several epochs (latest_ready = {latest_ready})");
+
+    // NO HOLE + monotonic: every buried epoch resolves to a canonical anchor whose blue_score is
+    // non-decreasing across epochs, even across the blue_score jumps.
+    let mut prev_blue = 0u64;
+    let mut distinct = std::collections::HashSet::new();
+    for e in 0..=latest_ready {
+        let a = vp.canonical_anchor_by_blue_score(e, sink, &dns).unwrap_or_else(|| panic!("epoch {e} has no canonical anchor (hole)"));
+        assert!(a.anchor_blue_score >= prev_blue, "anchor blue_score is monotonic across epochs");
+        prev_blue = a.anchor_blue_score;
+        distinct.insert(a.anchor_hash);
+    }
+    // The wide merges actually skipped >=1 epoch range: fewer distinct anchors than epochs (some
+    // epochs share an anchor) — proving the test exercised real blue_score jumps, not a dense chain.
+    assert!(
+        distinct.len() <= latest_ready as usize,
+        "a blue_score jump made >=1 epoch reuse a prior anchor ({} distinct anchors over {} epochs)",
+        distinct.len(),
+        latest_ready + 1
+    );
+}
+
 // ============================================================================
 // kaspa-pq ADR-0018 §G — DNS-overlay DAG integration harness (foundation).
 //

@@ -911,6 +911,10 @@ impl VirtualStateProcessor {
         let rollout_stage = if sink_daa >= dns_params.dns_activation_daa_score
             && total_active >= dns_params.min_active_stake_sompi
             && active_validators >= dns_params.min_active_validators
+            // kaspa-pq DNS v3 (PR6): refuse Active unless the blue_score canonical-anchor params
+            // are self-consistent. In Active the reorg gate's finality depends entirely on them,
+            // so an invalid config fails safe (stay Bootstrap, gate dormant) rather than splitting.
+            && dns_params.dns_v3_params_consistent()
         {
             DnsRolloutStage::Active
         } else {
@@ -1029,81 +1033,14 @@ impl VirtualStateProcessor {
         }
     }
 
-    /// kaspa-pq Phase 10/13 (ADR-0009 Addendum A.5 / ADR-0018 §H): collect + verify the
-    /// stake attestations on the selected chain ending at `tip`, walking back at most
-    /// `max_walk` chain blocks and stopping when `stop_at` is reached (exclusive — its
-    /// attestations belong to the shared prefix, not the since-ancestor segment). Each
-    /// attestation is resolved against `bonds` (the bond set of the SAME branch — safety:
-    /// a candidate branch must be scored under its own bonds), DAA-gated by
-    /// `is_bond_active_at`, and its ML-DSA-65 signature verified under
-    /// `ATTESTATION_MLDSA87_CONTEXT`. Returns the per-`(bond, validator, epoch)`
-    /// contributions and each epoch's anchor DAA score — the inputs to
-    /// `aggregate_epoch_tallies` / `total_active_stake_by_epoch`. Reads only committed
-    /// acceptance data, so it is deterministic and reorg-safe; inert wherever the overlay
-    /// is dormant.
-    fn collect_stake_contributions(
-        &self,
-        tip: BlockHash,
-        stop_at: Option<BlockHash>,
-        bonds: &[StakeBondRecord],
-        net_id: &[u8],
-        max_walk: u64,
-    ) -> (Vec<AttestationContribution>, BTreeMap<u64, u64>) {
-        let mut contributions: Vec<AttestationContribution> = Vec::new();
-        let mut epoch_anchor_daa: BTreeMap<u64, u64> = BTreeMap::new();
-        let mut walked: u64 = 0;
-        for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
-            if walked >= max_walk || Some(chain_block) == stop_at {
-                break;
-            }
-            walked += 1;
-            let txs = self.accepted_txs_of_chain_block(chain_block);
-            for att in attestations_from_accepted_txs(&txs) {
-                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == att.bond_outpoint) else {
-                    continue;
-                };
-                // kaspa-pq DNS v2 (P-1A): the attestation's self-declared validator_id MUST match
-                // the bond's validator_pubkey_hash. validator_id is not part of the signed digest,
-                // so without this an attacker could vary it on otherwise-valid attestations to evade
-                // the (bond, validator_id, epoch) dedup and inflate signed stake past the φS floor.
-                if att.validator_id != bond.validator_pubkey_hash {
-                    continue;
-                }
-                if !is_bond_active_at(bond, att.target_daa_score) {
-                    continue;
-                }
-                let digest = stake_attestation_message(
-                    net_id,
-                    att.epoch,
-                    att.target_hash,
-                    att.target_daa_score,
-                    att.validator_set_commitment,
-                    att.bond_outpoint,
-                )
-                .as_bytes();
-                if matches!(
-                    verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
-                    Ok(true)
-                ) {
-                    contributions.push(AttestationContribution {
-                        epoch: att.epoch,
-                        validator_id: att.validator_id,
-                        bond_outpoint: att.bond_outpoint,
-                        signed_stake_sompi: bond.amount,
-                    });
-                    epoch_anchor_daa.entry(att.epoch).or_insert(att.target_daa_score);
-                }
-            }
-        }
-        (contributions, epoch_anchor_daa)
-    }
-
-    /// kaspa-pq Phase 13 (ADR-0018 §H): the StakeScore a branch accumulated **since the
-    /// common ancestor** — the selected chain from `tip` back to (but excluding) `ancestor`,
-    /// scored under `bonds` (that branch's bond set) and this network's `φS`. Pairs
-    /// `collect_stake_contributions` with the same quality-gated aggregation
-    /// (`total_active_stake_by_epoch` → `aggregate_epoch_tallies` → `compute_stake_score`)
-    /// the sink-side StakeScore uses, so the two are byte-identical.
+    /// kaspa-pq Phase 13 (ADR-0018 §H) + DNS v3 (PR6): the StakeScore a branch accumulated
+    /// **since the common ancestor** — the selected chain from `tip` back to (but excluding)
+    /// `ancestor`, scored under `bonds` (that branch's bond set) and this network's `φS`. Uses
+    /// the v3 canonical-anchor verifier (`collect_stake_contributions_v2`) with
+    /// `stop_at = ancestor`, so the branch is scored only on canonical attestations for the
+    /// epochs anchored strictly above the common ancestor (its OWN segment) — byte-identical to
+    /// the sink-side StakeScore and immune to a branch inflating its score with non-canonical
+    /// (current-sink / fabricated) targets. Inert wherever the overlay is dormant.
     fn stake_score_since_ancestor(
         &self,
         tip: BlockHash,
@@ -1113,7 +1050,7 @@ impl VirtualStateProcessor {
         net_id: &[u8],
     ) -> StakeScore {
         let (contributions, epoch_anchor_daa) =
-            self.collect_stake_contributions(tip, Some(ancestor), bonds, net_id, dns_params.max_reorg_horizon_blocks);
+            self.collect_stake_contributions_v2(tip, Some(ancestor), bonds, net_id, dns_params);
         let totals = total_active_stake_by_epoch(bonds, &epoch_anchor_daa);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         compute_stake_score(&per_epoch, dns_params.stake_event_quality_floor_bps)

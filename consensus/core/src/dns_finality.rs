@@ -803,6 +803,30 @@ pub fn canonical_lagged_epoch_anchor(
 }
 
 impl DnsParams {
+    /// kaspa-pq DNS v3: are the blue_score canonical-anchor parameters self-consistent?
+    /// The reorg gate only engages in the `Active` stage, where finality depends entirely on
+    /// these; a misconfiguration (e.g. a zero epoch length, or a stake-score window too short
+    /// to cover the creditable epochs + their lag) would make the canonical anchor / StakeScore
+    /// ill-defined. `update_dns_state` refuses to enter `Active` unless this holds, so an
+    /// invalid v3 config fails safe (the gate stays dormant) rather than splitting finality.
+    ///
+    /// Invariants:
+    /// - `attestation_epoch_length_blue_score >= 1` (the epoch divisor).
+    /// - `attestation_lag_blue_score >= 1` (an epoch must bury before it is attestable, else
+    ///   honest validators never converge off the churning tip).
+    /// - `attestation_anchor_backoff_blue_score < attestation_epoch_length_blue_score` (the
+    ///   cutoff `epoch_end - backoff` stays within the epoch's own span).
+    /// - `stake_score_window_blue_score >= 2·L + lag + backoff` — the walk must reach the
+    ///   PREVIOUS ready epoch's cutoff so the duplicate-anchor flag is always decidable for a
+    ///   creditable epoch (a real deployment sizes it for `required_stake_depth` epochs + grace).
+    pub fn dns_v3_params_consistent(&self) -> bool {
+        let l = self.attestation_epoch_length_blue_score;
+        let lag = self.attestation_lag_blue_score;
+        let backoff = self.attestation_anchor_backoff_blue_score;
+        let window = self.stake_score_window_blue_score;
+        l >= 1 && lag >= 1 && backoff < l && window >= l.saturating_mul(2).saturating_add(lag).saturating_add(backoff)
+    }
+
     /// ADR-0018 §F staged reward rollout — the effective fee/subsidy split for a
     /// block at `daa_score`, selected deterministically from the score (NOT the
     /// node-local `DnsState.rollout_stage`, which is pov-dependent and would split
@@ -4467,6 +4491,33 @@ mod tests {
         assert!(!e2.duplicate_of_previous_anchor, "e2 anchor (h8) differs from e1 anchor (h7)");
         assert_eq!(e3.anchor_hash, h(8));
         assert!(e3.duplicate_of_previous_anchor, "epoch 3 reuses epoch 2's anchor -> not creditable");
+    }
+
+    #[test]
+    fn dns_v3_params_consistency_gate() {
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS};
+        // The SHIPPED presets must be v3-consistent — else the reorg gate could never enter
+        // Active on the very networks that use them.
+        assert!(GENESIS_ACTIVE_DNS_PARAMS.dns_v3_params_consistent(), "devnet/simnet preset is v3-consistent");
+        assert!(PRODUCTION_DNS_PARAMS.dns_v3_params_consistent(), "mainnet/testnet preset is v3-consistent");
+
+        // Each invariant violation flips the gate false (fail-safe: update_dns_state then never
+        // enters Active, so finality stays dormant rather than ill-defined).
+        let mut p = GENESIS_ACTIVE_DNS_PARAMS;
+        p.attestation_epoch_length_blue_score = 0;
+        assert!(!p.dns_v3_params_consistent(), "a zero epoch length is rejected");
+
+        let mut p = GENESIS_ACTIVE_DNS_PARAMS;
+        p.attestation_lag_blue_score = 0;
+        assert!(!p.dns_v3_params_consistent(), "a zero lag is rejected");
+
+        let mut p = GENESIS_ACTIVE_DNS_PARAMS;
+        p.attestation_anchor_backoff_blue_score = p.attestation_epoch_length_blue_score;
+        assert!(!p.dns_v3_params_consistent(), "backoff >= epoch length is rejected");
+
+        let mut p = GENESIS_ACTIVE_DNS_PARAMS;
+        p.stake_score_window_blue_score = p.attestation_epoch_length_blue_score; // < 2L + lag + backoff
+        assert!(!p.dns_v3_params_consistent(), "a window too short to cover 2L + lag + backoff is rejected");
     }
 
     #[test]
