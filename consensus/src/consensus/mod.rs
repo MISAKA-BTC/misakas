@@ -59,7 +59,7 @@ use kaspa_consensus_core::{
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
         ActiveValidatorSet, DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord,
-        dns_confirmation_from_state, is_bond_active_at, stake_attestation_message, validator_set_commitment,
+        dns_confirmation_from_state, is_bond_active_at, stake_attestation_message,
     },
     errors::{
         coinbase::CoinbaseResult,

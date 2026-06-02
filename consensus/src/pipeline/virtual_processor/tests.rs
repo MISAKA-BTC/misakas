@@ -507,6 +507,74 @@ async fn pos_v2_reward_bearing_attestation_validates() {
     );
 }
 
+/// kaspa-pq DNS v3 (PR2b): the processor's blue_score canonical-anchor walk
+/// (`canonical_anchor_by_blue_score`) feeds the pure core the *real* selected-chain
+/// `(hash, blue_score, daa_score)` ancestors, so the anchor it returns is a genuine
+/// selected-chain block, most-recent-at-or-below the epoch cutoff, and stable as the tip
+/// advances (the v3 position-invariance property). The hot path does not call it yet (PR4
+/// wires it into the verifier), so this white-box test is the only thing exercising the
+/// store walk until then. A future / unburied epoch must return `None`, never the tip.
+#[tokio::test]
+async fn dns_v3_canonical_anchor_walk_matches_chain() {
+    use std::collections::HashMap;
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            // Tiny blue_score epochs so several bury within a short linear chain.
+            // L=3, backoff=1 -> cutoff(E) = (E+1)*3 - 1 - 1 = 3E+1; lag=2.
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    // A linear chain (one block per row); each block's only parent is the prior tip, so
+    // mergeset_blues = {selected_parent} and blue_score increments by exactly 1 (genesis = 0).
+    let miner = new_miner_data();
+    let mut by_blue: HashMap<u64, BlockHash> = HashMap::new();
+    for _ in 0..20 {
+        let b = ctx.mine_block(miner.clone(), vec![]).await;
+        by_blue.insert(b.header.blue_score, b.header.hash);
+    }
+
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let tip = ctx.consensus.get_sink();
+    let vp = ctx.consensus.virtual_processor();
+
+    // cutoff(E) = 3E+1 on this dense chain, and every integer blue_score 0..=20 is present
+    // exactly once, so the most-recent-at-or-below is the block whose blue_score == cutoff(E).
+    let a0 = vp.canonical_anchor_by_blue_score(0, tip, &dns).expect("epoch 0 buried");
+    assert_eq!(a0.epoch, 0);
+    assert_eq!(a0.cutoff_blue_score, 1);
+    assert_eq!(a0.anchor_blue_score, 1);
+    assert_eq!(a0.anchor_hash, by_blue[&1], "epoch 0 anchors the real bs=1 block");
+    assert!(!a0.duplicate_of_previous_anchor);
+
+    let a1 = vp.canonical_anchor_by_blue_score(1, tip, &dns).expect("epoch 1 buried");
+    assert_eq!(a1.cutoff_blue_score, 4);
+    assert_eq!(a1.anchor_blue_score, 4);
+    assert_eq!(a1.anchor_hash, by_blue[&4], "epoch 1 anchors the real bs=4 block");
+    assert!(!a1.duplicate_of_previous_anchor); // distinct anchors on a dense chain
+
+    // Position-invariance: anchor(0) is the SAME block no matter how far the tip advanced
+    // (the walk reads blue_score, not the store index) — the core v3 property.
+    let mid = by_blue[&10];
+    let a0_mid = vp.canonical_anchor_by_blue_score(0, mid, &dns).expect("epoch 0 buried at mid-chain tip");
+    assert_eq!(a0_mid.anchor_hash, a0.anchor_hash, "the anchor is independent of the observing tip");
+
+    // A future / unburied epoch has no canonical anchor on this chain (cutoff > tip.blue_score)
+    // and must NOT degenerate to returning the tip.
+    assert!(vp.canonical_anchor_by_blue_score(1_000_000, tip, &dns).is_none());
+}
+
 // ============================================================================
 // kaspa-pq ADR-0018 §G — DNS-overlay DAG integration harness (foundation).
 //

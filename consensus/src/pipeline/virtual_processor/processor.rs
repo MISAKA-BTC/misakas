@@ -62,8 +62,9 @@ use kaspa_consensus_core::{
     config::genesis::GenesisBlock,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BondMutation, BondStatus,
-        DnsParams, DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
-        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, check_dns_reorg_rule, compute_stake_score,
+        CanonicalLaggedEpochAnchor, DnsParams, DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore,
+        advance_dns_confirmation, aggregate_epoch_tallies, anchor_cutoff_blue_score, attestations_from_accepted_txs,
+        bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, check_dns_reorg_rule, compute_stake_score,
         derive_dns_health, is_bond_active_at, recompute_epoch_tallies, reorg_inputs_since_common_ancestor,
         stake_attestation_message, total_active_stake_by_epoch,
     },
@@ -1126,6 +1127,66 @@ impl VirtualStateProcessor {
             }
         }
         None
+    }
+
+    /// kaspa-pq DNS v3 (Canonical Lagged Anchor): the canonical, blue_score-coordinated
+    /// epoch anchor for `epoch` as seen from `tip`'s selected chain — the **most-recent
+    /// selected-chain ancestor with `blue_score <= anchor_cutoff(epoch)`** (cutoff =
+    /// `epoch_end(epoch) - backoff`). Walks the selected-parent chain from `tip`
+    /// (inclusive) reading each block's header `blue_score`/`daa_score`, collecting
+    /// `(hash, blue_score, daa_score)` tip-first (blue_score strictly decreasing) until it
+    /// buries the *previous* epoch's cutoff (so the pure core can decide the
+    /// duplicate-anchor flag) or runs past `stake_score_window_blue_score`, then defers to
+    /// the pure [`canonical_lagged_epoch_anchor`] core.
+    ///
+    /// The selected-chain *position* is read from header-committed `blue_score`, NEVER the
+    /// store index (which is store-local: archival numbers from genesis, IBD from its
+    /// pruning point), so archival and IBD-synced nodes derive the identical anchor. The
+    /// signer (PR3), verifier (PR4), reward path (PR5) and reorg gate all call this so they
+    /// agree on which block anchors an epoch. Reads only committed header data → reorg-safe.
+    ///
+    /// Returns `None` when the epoch's anchor cutoff is not yet buried by the tip
+    /// (`cutoff > tip.blue_score` — a future / unburied epoch has no canonical anchor on
+    /// this chain yet; the degenerate "most-recent-at-or-below == tip" is suppressed) or
+    /// when the chain within the window does not reach the cutoff (epoch too old to
+    /// credit). The stronger `attestation_lag_blue_score` readiness gate is applied by the
+    /// signer / verifier on top of this.
+    #[allow(dead_code)] // PR2b lands the walk inert; PR4 wires it into the verifier.
+    pub(super) fn canonical_anchor_by_blue_score(
+        &self,
+        epoch: u64,
+        tip: BlockHash,
+        dns_params: &DnsParams,
+    ) -> Option<CanonicalLaggedEpochAnchor> {
+        let epoch_len = dns_params.attestation_epoch_length_blue_score.max(1);
+        let backoff = dns_params.attestation_anchor_backoff_blue_score;
+        let window = dns_params.stake_score_window_blue_score;
+
+        let tip_blue_score = self.headers_store.get_blue_score(tip).ok()?;
+        // The epoch's anchor cutoff must be buried by the tip; otherwise "most-recent
+        // at-or-below" would degenerate to the tip itself (a future / unburied epoch has no
+        // canonical anchor on this chain yet).
+        let cutoff = anchor_cutoff_blue_score(epoch, epoch_len, backoff);
+        if cutoff > tip_blue_score {
+            return None;
+        }
+        // Walk the selected-parent chain tip -> down, collecting (hash, blue, daa) until we
+        // have buried the PREVIOUS epoch's cutoff (so the duplicate-anchor check is
+        // decidable; for epoch 0 this coincides with this epoch's cutoff) or run past the
+        // configured stake-score window. Position is read from blue_score, never the index.
+        let needed = anchor_cutoff_blue_score(epoch.saturating_sub(1), epoch_len, backoff);
+        let mut ancestors: Vec<(BlockHash, u64, u64)> = Vec::new();
+        for hash in std::iter::once(tip).chain(self.reachability_service.default_backward_chain_iterator(tip)) {
+            let compact = self.headers_store.get_compact_header_data(hash).ok()?;
+            if tip_blue_score.saturating_sub(compact.blue_score) > window {
+                break; // out of the stake-score window
+            }
+            ancestors.push((hash, compact.blue_score, compact.daa_score));
+            if compact.blue_score <= needed {
+                break; // buried the prev cutoff (and a fortiori this one) -> enough to decide
+            }
+        }
+        canonical_lagged_epoch_anchor(epoch, epoch_len, backoff, &ancestors)
     }
 
     /// kaspa-pq Phase 10/13 (ADR-0009 §"Decision" / ADR-0018 §H): the DNS finality reorg
