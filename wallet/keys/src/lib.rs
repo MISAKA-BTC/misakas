@@ -5,6 +5,7 @@
 //! This includes extended key generation and derivation.
 //!
 
+#[cfg(feature = "legacy-secp256k1")]
 pub mod derivation;
 pub mod derivation_path;
 pub mod error;
@@ -22,14 +23,21 @@ pub mod kaspa_pq;
 /// compiles cleanly off-wasm (it only delegates to the native ML-DSA keypair).
 #[cfg(any(target_arch = "wasm32", test, feature = "test-utils"))]
 pub mod kaspa_pq_wasm;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod keypair;
 pub mod prelude;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod privatekey;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod privkeygen;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod pubkeygen;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod publickey;
 pub mod result;
 pub mod secret;
 pub mod types;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod xprv;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod xpub;

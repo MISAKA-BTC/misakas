@@ -129,9 +129,14 @@ pub enum Error {
     #[error(transparent)]
     KaspaWalletKeys(#[from] kaspa_wallet_keys::error::Error),
 
+    // kaspa-pq PQ-only (ADR-0019 §14): PSKB/PSKT is a classical secp256k1-only
+    // feature; the `kaspa-wallet-pskt` crate (and these error variants) only exist
+    // in a `legacy-secp256k1` build.
+    #[cfg(feature = "legacy-secp256k1")]
     #[error(transparent)]
     PskbLockScriptSigError(#[from] kaspa_wallet_pskt::error::Error),
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[error("To hex serialization error")]
     PskbSerializeToHexError,
 }

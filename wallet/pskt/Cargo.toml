@@ -15,7 +15,15 @@ include.workspace = true
 crate-type = ["cdylib", "lib"]
 
 [features]
-wasm32-sdk = ["kaspa-consensus-client/wasm32-sdk"]
+# kaspa-pq PQ-only (ADR-0019 §14): PSKT is an inherently classical
+# (ECDSA/Schnorr/BIP32) format — every primitive is keyed on secp256k1
+# PublicKey/Signature and there is no ML-DSA PSKT. The whole crate is therefore
+# gated behind `legacy-secp256k1`; `pq-only` (default) builds an empty crate that
+# links no secp256k1. `wasm32-sdk` re-enables it so the browser SDK keeps PSKT.
+default = ["pq-only"]
+pq-only = []
+legacy-secp256k1 = ["dep:secp256k1", "kaspa-bip32/legacy-secp256k1"]
+wasm32-sdk = ["legacy-secp256k1", "kaspa-consensus-client/wasm32-sdk"]
 wasm32-types = ["kaspa-consensus-client/wasm32-types"]
 
 [dependencies]
@@ -32,7 +40,7 @@ derive_builder.workspace = true
 js-sys.workspace = true
 futures.workspace = true
 hex.workspace = true
-secp256k1.workspace = true
+secp256k1 = { workspace = true, optional = true }
 serde_repr.workspace = true
 serde-value.workspace = true
 serde.workspace = true

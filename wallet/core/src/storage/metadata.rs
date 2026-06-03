@@ -5,9 +5,35 @@
 //! new address generation) without the need to re-encrypt the
 //! wallet data when storing.
 
-use crate::derivation::AddressDerivationMeta;
 use crate::imports::*;
 use crate::storage::IdT;
+
+/// kaspa-pq PQ-only (ADR-0019 §14): the receive/change address-derivation index
+/// pair carried by [`AccountMetadata`]. It is curve-independent (two counters),
+/// so it lives here in `storage::metadata` rather than in the secp256k1-gated
+/// `derivation` module — keeping it available to the PQ-only wallet build.
+#[derive(Default, Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AddressDerivationMeta([u32; 2]);
+
+impl AddressDerivationMeta {
+    pub fn new(receive: u32, change: u32) -> Self {
+        Self([receive, change])
+    }
+
+    pub fn receive(&self) -> u32 {
+        self.0[0]
+    }
+
+    pub fn change(&self) -> u32 {
+        self.0[1]
+    }
+}
+
+impl std::fmt::Display for AddressDerivationMeta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}, {}]", self.receive(), self.change())
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AccountMetadata {

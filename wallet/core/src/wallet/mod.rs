@@ -14,9 +14,12 @@ pub mod args;
 pub mod maps;
 pub use args::*;
 
+#[cfg(feature = "legacy-secp256k1")]
 use crate::account::ScanNotifier;
 use crate::api::traits::WalletApi;
+#[cfg(feature = "legacy-secp256k1")]
 use crate::compat::gen1::decrypt_mnemonic;
+#[cfg(feature = "legacy-secp256k1")]
 use crate::error::Error::Custom;
 use crate::factory::try_load_account;
 use crate::imports::*;
@@ -26,11 +29,16 @@ use crate::storage::local::Storage;
 use crate::storage::local::interface::LocalStore;
 use crate::wallet::keydata::PrvKeyDataVariantKind;
 use crate::wallet::maps::ActiveAccountMap;
-use kaspa_bip32::{ExtendedKey, Language, Mnemonic, Prefix as KeyPrefix, WordCount};
+#[cfg(feature = "legacy-secp256k1")]
+use kaspa_bip32::ExtendedKey;
+#[cfg(feature = "legacy-secp256k1")]
+use kaspa_bip32::{Prefix as KeyPrefix, WordCount};
+use kaspa_bip32::{Language, Mnemonic};
 use kaspa_notify::{
     listener::ListenerId,
     scope::{Scope, VirtualDaaScoreChangedScope},
 };
+#[cfg(feature = "legacy-secp256k1")]
 use kaspa_wallet_keys::xpub::NetworkTaggedXpub;
 use kaspa_wrpc_client::{KaspaRpcClient, Resolver, WrpcEncoding};
 use workflow_core::task::spawn;
@@ -58,6 +66,7 @@ pub struct SingleWalletFileV1<'a, T: AsRef<[u8]>> {
     pub ecdsa: bool,
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 impl<T: AsRef<[u8]>> SingleWalletFileV1<'_, T> {
     const NUM_THREADS: u32 = 8;
 }
@@ -81,6 +90,7 @@ pub struct MultisigWalletFileV1<'a, T: AsRef<[u8]>> {
     pub ecdsa: bool,
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 impl<T: AsRef<[u8]>> MultisigWalletFileV1<'_, T> {
     const NUM_THREADS: u32 = 8;
 }
@@ -362,6 +372,7 @@ impl Wallet {
 
         let accounts: Option<Vec<Arc<dyn Account>>> = if args.load_account_descriptors() {
             let stored_accounts = self.inner.store.as_account_store().unwrap().iter(None).await?.try_collect::<Vec<_>>().await?;
+            #[cfg(feature = "legacy-secp256k1")]
             let stored_accounts = if !args.is_legacy_only() {
                 stored_accounts
             } else {
@@ -381,6 +392,7 @@ impl Wallet {
             None
         };
 
+        #[cfg(feature = "legacy-secp256k1")]
         if let Some(accounts) = &accounts {
             for account in accounts.iter() {
                 if let Ok(legacy_account) = account.clone().as_legacy_account() {
@@ -434,6 +446,7 @@ impl Wallet {
         let ids = stored_accounts.iter().map(|(account, _)| *account.id()).collect::<Vec<_>>();
 
         for (account_storage, meta) in stored_accounts.into_iter() {
+            #[cfg(feature = "legacy-secp256k1")]
             if account_storage.kind.as_ref() == LEGACY_ACCOUNT_KIND {
                 let legacy_account = self
                     .legacy_accounts()
@@ -444,6 +457,11 @@ impl Wallet {
                 legacy_account.clone().start().await?;
                 legacy_account.clear_private_context().await?;
             } else if self.active_accounts().get(account_storage.id()).is_none() {
+                let account = try_load_account(self, account_storage, meta).await?;
+                account.clone().start().await?;
+            }
+            #[cfg(not(feature = "legacy-secp256k1"))]
+            if self.active_accounts().get(account_storage.id()).is_none() {
                 let account = try_load_account(self, account_storage, meta).await?;
                 account.clone().start().await?;
             }
@@ -671,6 +689,7 @@ impl Wallet {
         }
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn create_account(
         self: &Arc<Wallet>,
         wallet_secret: &Secret,
@@ -703,6 +722,22 @@ impl Wallet {
         Ok(account)
     }
 
+    // kaspa-pq PQ-only (ADR-0019 §14): all `AccountCreateArgs` variants are classical
+    // secp256k1 account kinds (bip32/legacy/multisig/bip32watch/keypair); none are
+    // representable on a PQ-only chain. ML-DSA-87 accounts are constructed via the
+    // PQ-specific path, not this RPC create surface.
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    pub async fn create_account(
+        self: &Arc<Wallet>,
+        _wallet_secret: &Secret,
+        _account_create_args: AccountCreateArgs,
+        _notify: bool,
+        _guard: &WalletGuard<'_>,
+    ) -> Result<Arc<dyn Account>> {
+        Err(Error::AccountKindFeature)
+    }
+
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn create_account_multisig(
         self: &Arc<Wallet>,
         wallet_secret: &Secret,
@@ -779,6 +814,7 @@ impl Wallet {
         Ok(account)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn create_account_bip32(
         self: &Arc<Wallet>,
         wallet_secret: &Secret,
@@ -826,6 +862,7 @@ impl Wallet {
         Ok(account)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn create_account_bip32_watch(
         self: &Arc<Wallet>,
         wallet_secret: &Secret,
@@ -856,6 +893,7 @@ impl Wallet {
         Ok(account)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     async fn create_account_legacy(
         self: &Arc<Wallet>,
         wallet_secret: &Secret,
@@ -890,6 +928,7 @@ impl Wallet {
         Ok(account)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn create_account_keypair(
         self: &Arc<Wallet>,
         wallet_secret: &Secret,
@@ -960,6 +999,7 @@ impl Wallet {
                 let mnemonic = Mnemonic::new(secret.as_str()?, Language::default())?;
                 PrvKeyData::try_from_mnemonic(mnemonic.clone(), payment_secret.as_ref(), self.store().encryption_kind()?, name)?
             }
+            #[cfg(feature = "legacy-secp256k1")]
             PrvKeyDataVariantKind::SecretKey => {
                 //let secp = secp256k1::Secp256k1::new();
                 let secret_key = secp256k1::SecretKey::from_slice(secret.as_ref())?;
@@ -983,6 +1023,7 @@ impl Wallet {
         Ok(prv_key_data_id)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn create_wallet_with_accounts(
         self: &Arc<Wallet>,
         wallet_secret: &Secret,
@@ -1359,6 +1400,7 @@ impl Wallet {
     //     Ok(Box::pin(stream))
     // }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn import_kaspawallet_golang_single_v1<T: AsRef<[u8]>>(
         self: &Arc<Wallet>,
         import_secret: &Secret,
@@ -1381,6 +1423,7 @@ impl Wallet {
         self.import_with_mnemonic(wallet_secret, None, mnemonic, BIP32_ACCOUNT_KIND.into()).await
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn import_kaspawallet_golang_single_v0<T: AsRef<[u8]>>(
         self: &Arc<Wallet>,
         import_secret: &Secret,
@@ -1402,6 +1445,7 @@ impl Wallet {
         self.import_with_mnemonic(wallet_secret, None, mnemonic, BIP32_ACCOUNT_KIND.into()).await
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn import_kaspawallet_golang_multisig_v0<T: AsRef<[u8]>>(
         self: &Arc<Wallet>,
         import_secret: &Secret,
@@ -1443,6 +1487,7 @@ impl Wallet {
         self.import_multisig_with_mnemonic(wallet_secret, mnemonics_and_secrets, file.required_signatures, additional_pub_keys).await
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn import_kaspawallet_golang_multisig_v1<T: AsRef<[u8]>>(
         self: &Arc<Wallet>,
         import_secret: &Secret,
@@ -1494,6 +1539,7 @@ impl Wallet {
         Ok(acc)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn import_legacy_keydata(
         self: &Arc<Wallet>,
         import_secret: &Secret,
@@ -1548,6 +1594,7 @@ impl Wallet {
         // Ok(())
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn import_with_mnemonic(
         self: &Arc<Wallet>,
         wallet_secret: &Secret,
@@ -1612,6 +1659,21 @@ impl Wallet {
     /// Report back the last account index that has UTXOs. The scan is performed
     /// until we have encountered at least `account_scan_extent` of empty
     /// accounts.
+    // kaspa-pq PQ-only (ADR-0019 §14): BIP44 multi-account discovery is a classical
+    // secp256k1 derivation feature (it derives an xpub per account index). PQ-only
+    // accounts are single-key ML-DSA-87 and are not discovered this way.
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    pub async fn scan_bip44_accounts(
+        self: &Arc<Self>,
+        _bip39_mnemonic: Secret,
+        _bip39_passphrase: Option<Secret>,
+        _address_scan_extent: u32,
+        _account_scan_extent: u32,
+    ) -> Result<u32> {
+        Err(Error::AccountKindFeature)
+    }
+
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn scan_bip44_accounts(
         self: &Arc<Self>,
         bip39_mnemonic: Secret,
@@ -1648,6 +1710,7 @@ impl Wallet {
         Ok(last_account_index)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn import_multisig_with_mnemonic(
         self: &Arc<Wallet>,
         wallet_secret: &Secret,
@@ -1721,6 +1784,7 @@ impl Wallet {
         Ok(())
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     async fn ensure_default_account_impl(
         self: Arc<Self>,
         wallet_secret: &Secret,
@@ -1762,6 +1826,21 @@ impl Wallet {
         }
     }
 
+    // kaspa-pq PQ-only (ADR-0019 §14): "ensure default account" only supports the
+    // classical BIP32 account kind, which is not representable on a PQ-only chain.
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    async fn ensure_default_account_impl(
+        self: Arc<Self>,
+        _wallet_secret: &Secret,
+        _payment_secret: Option<&Secret>,
+        _kind: AccountKind,
+        _mnemonic_phrase: Option<&Secret>,
+        _guard: &WalletGuard<'_>,
+    ) -> Result<AccountDescriptor> {
+        Err(Error::AccountKindFeature)
+    }
+
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn network_format_xpub(&self, xpub_key: &ExtendedPublicKeySecp256k1) -> String {
         NetworkTaggedXpub::from((xpub_key.clone(), self.network_id().unwrap())).to_string()
     }

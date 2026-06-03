@@ -74,8 +74,10 @@ extern crate self as kaspa_wallet_core;
 
 pub mod account;
 pub mod api;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod compat;
 pub mod cryptobox;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod derivation;
 pub mod deterministic;
 pub mod encryption;
@@ -83,6 +85,7 @@ pub mod error;
 pub mod events;
 pub mod factory;
 mod imports;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod message;
 pub mod metrics;
 pub mod prelude;

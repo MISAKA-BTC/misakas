@@ -1,5 +1,6 @@
 use crate::types::*;
 use ripemd::{Digest, Ripemd160};
+#[cfg(feature = "legacy-secp256k1")]
 use secp256k1::{Secp256k1, VerifyOnly, scalar::Scalar};
 use sha2::Sha256;
 
@@ -23,6 +24,7 @@ pub trait PublicKey: Sized {
     }
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 impl PublicKey for secp256k1::PublicKey {
     fn from_bytes(bytes: PublicKeyBytes) -> Result<Self> {
         Ok(secp256k1::PublicKey::from_slice(&bytes)?)

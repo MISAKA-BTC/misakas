@@ -67,10 +67,15 @@ impl FromStr for AccountKind {
             Ok(s.into())
         } else {
             match s.to_lowercase().as_str() {
+                #[cfg(feature = "legacy-secp256k1")]
                 "legacy" => Ok(LEGACY_ACCOUNT_KIND.into()),
+                #[cfg(feature = "legacy-secp256k1")]
                 "bip32" => Ok(BIP32_ACCOUNT_KIND.into()),
+                #[cfg(feature = "legacy-secp256k1")]
                 "multisig" => Ok(MULTISIG_ACCOUNT_KIND.into()),
+                #[cfg(feature = "legacy-secp256k1")]
                 "keypair" => Ok(KEYPAIR_ACCOUNT_KIND.into()),
+                #[cfg(feature = "legacy-secp256k1")]
                 "bip32watch" => Ok(BIP32_WATCH_ACCOUNT_KIND.into()),
                 "mldsa" => Ok(MLDSA_ACCOUNT_KIND.into()),
                 _ => Err(Error::InvalidAccountKind),

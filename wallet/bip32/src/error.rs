@@ -55,7 +55,12 @@ pub enum Error {
     #[error("Invalid child number")]
     ChildNumber,
 
+    /// Extended key has the wrong prefix/format for the requested key type.
+    #[error("Invalid extended key type")]
+    InvalidKeyType,
+
     /// Cryptographic errors.
+    #[cfg(feature = "legacy-secp256k1")]
     #[error("Secp256k1 -> {0}")]
     Crypto(#[from] secp256k1::Error),
 
@@ -80,6 +85,7 @@ pub enum Error {
     SeedLength,
 
     /// Scalar OutOfRangeError
+    #[cfg(feature = "legacy-secp256k1")]
     #[error("Scalar bytes length invalid : {0}")]
     ScalarOutOfRangeError(#[from] secp256k1::scalar::OutOfRangeError),
 

@@ -3,8 +3,11 @@
 //!
 
 use crate::imports::*;
+#[cfg(feature = "legacy-secp256k1")]
 use kaspa_bip32::PrivateKey;
-use kaspa_consensus_core::{sign::sign_with_multiple_v2, tx::SignableTransaction};
+#[cfg(feature = "legacy-secp256k1")]
+use kaspa_consensus_core::sign::sign_with_multiple_v2;
+use kaspa_consensus_core::tx::SignableTransaction;
 use kaspa_wallet_keys::kaspa_pq::sign_transaction_inputs_mldsa87;
 
 pub trait SignerT: Send + Sync + 'static {
@@ -15,6 +18,9 @@ struct Inner {
     keydata: PrvKeyData,
     account: Arc<dyn Account>,
     payment_secret: Option<Secret>,
+    // kaspa-pq PQ-only (ADR-0019 §14): the per-address secp256k1 key cache is only
+    // used by the classical signing path (`ingest`).
+    #[cfg(feature = "legacy-secp256k1")]
     keys: Mutex<AHashMap<Address, [u8; 32]>>,
 }
 
@@ -24,9 +30,18 @@ pub struct Signer {
 
 impl Signer {
     pub fn new(account: Arc<dyn Account>, keydata: PrvKeyData, payment_secret: Option<Secret>) -> Self {
-        Self { inner: Arc::new(Inner { keydata, account, payment_secret, keys: Mutex::new(AHashMap::new()) }) }
+        Self {
+            inner: Arc::new(Inner {
+                keydata,
+                account,
+                payment_secret,
+                #[cfg(feature = "legacy-secp256k1")]
+                keys: Mutex::new(AHashMap::new()),
+            }),
+        }
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     fn ingest(&self, addresses: &[Address]) -> Result<()> {
         let mut keys = self.inner.keys.lock().unwrap();
         // skip address that are already present in the key map
@@ -66,27 +81,41 @@ impl SignerT for Signer {
             return Ok(mutable_tx);
         }
 
-        self.ingest(addresses)?;
+        #[cfg(feature = "legacy-secp256k1")]
+        {
+            self.ingest(addresses)?;
 
-        let keys = self.inner.keys.lock().unwrap();
-        let mut keys_for_signing = addresses.iter().map(|address| *keys.get(address).unwrap()).collect::<Vec<_>>();
-        // TODO - refactor for multisig
-        let signable_tx = sign_with_multiple_v2(mutable_tx, &keys_for_signing).fully_signed()?;
-        keys_for_signing.zeroize();
-        Ok(signable_tx)
+            let keys = self.inner.keys.lock().unwrap();
+            let mut keys_for_signing = addresses.iter().map(|address| *keys.get(address).unwrap()).collect::<Vec<_>>();
+            // TODO - refactor for multisig
+            let signable_tx = sign_with_multiple_v2(mutable_tx, &keys_for_signing).fully_signed()?;
+            keys_for_signing.zeroize();
+            Ok(signable_tx)
+        }
+        // kaspa-pq PQ-only (ADR-0019 §14): there is no secp256k1 signing path. Every
+        // spendable account is ML-DSA-87 and is handled by `try_pq_keypair` above; an
+        // account that yields neither a PQ keypair nor secp keys cannot be signed.
+        #[cfg(not(feature = "legacy-secp256k1"))]
+        {
+            let _ = (addresses, mutable_tx);
+            Err(Error::custom("kaspa-pq PQ-only: account has no ML-DSA signing key (legacy secp256k1 signing is disabled)"))
+        }
     }
 }
 
 // ---
 
+#[cfg(feature = "legacy-secp256k1")]
 struct KeydataSignerInner {
     keys: HashMap<Address, [u8; 32]>,
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 pub struct KeydataSigner {
     inner: Arc<KeydataSignerInner>,
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 impl KeydataSigner {
     pub fn new(keydata: Vec<(Address, secp256k1::SecretKey)>) -> Self {
         let keys = keydata.into_iter().map(|(address, key)| (address, key.to_bytes())).collect();
@@ -94,6 +123,7 @@ impl KeydataSigner {
     }
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 impl SignerT for KeydataSigner {
     fn try_sign(&self, mutable_tx: SignableTransaction, addresses: &[Address]) -> Result<SignableTransaction> {
         let mut keys_for_signing = addresses.iter().map(|address| *self.inner.keys.get(address).unwrap()).collect::<Vec<_>>();

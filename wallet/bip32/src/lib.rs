@@ -1,6 +1,9 @@
+#[cfg(feature = "legacy-secp256k1")]
 use zeroize::Zeroizing;
 
+#[cfg(feature = "legacy-secp256k1")]
 pub use secp256k1;
+#[cfg(feature = "legacy-secp256k1")]
 pub use secp256k1::SecretKey;
 
 mod private_key;
@@ -39,11 +42,13 @@ pub use xpublic_key::ExtendedPublicKey;
 
 /// Extension for [`secp256k1::SecretKey`] that provides access
 /// to [`secp256k1::PublicKey`] and the public key string representation.
+#[cfg(feature = "legacy-secp256k1")]
 pub trait SecretKeyExt {
     fn get_public_key(&self) -> secp256k1::PublicKey;
     fn as_str(&self, attrs: ExtendedKeyAttrs, prefix: Prefix) -> Zeroizing<String>;
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 impl SecretKeyExt for secp256k1::SecretKey {
     fn get_public_key(&self) -> secp256k1::PublicKey {
         secp256k1::PublicKey::from_secret_key_global(self)

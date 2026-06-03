@@ -30,6 +30,10 @@ pub use metadata::AccountMetadata;
 pub use storable::Storable;
 pub use transaction::{TransactionData, TransactionId, TransactionKind, TransactionRecord};
 
+// kaspa-pq PQ-only (ADR-0019 §14): this storage round-trip fixture builds classical
+// BIP32 accounts (`create_xpub` / `BIP32_ACCOUNT_KIND`), which do not exist on a
+// PQ-only build.
+#[cfg(feature = "legacy-secp256k1")]
 #[cfg(test)]
 mod tests {
 

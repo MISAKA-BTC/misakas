@@ -30,10 +30,15 @@ pub fn factories() -> &'static FactoryMap {
         INITIALIZED.store(true, Ordering::Relaxed);
 
         let factories: &[(AccountKind, Arc<dyn Factory + Sync + Send + 'static>)] = &[
+            #[cfg(feature = "legacy-secp256k1")]
             (BIP32_ACCOUNT_KIND.into(), Arc::new(bip32::Ctor {})),
+            #[cfg(feature = "legacy-secp256k1")]
             (LEGACY_ACCOUNT_KIND.into(), Arc::new(legacy::Ctor {})),
+            #[cfg(feature = "legacy-secp256k1")]
             (MULTISIG_ACCOUNT_KIND.into(), Arc::new(multisig::Ctor {})),
+            #[cfg(feature = "legacy-secp256k1")]
             (KEYPAIR_ACCOUNT_KIND.into(), Arc::new(keypair::Ctor {})),
+            #[cfg(feature = "legacy-secp256k1")]
             (BIP32_WATCH_ACCOUNT_KIND.into(), Arc::new(bip32watch::Ctor {})),
             // kaspa-pq ML-DSA-87 PQ-only single-key account (ADR-0019 §13).
             (MLDSA_ACCOUNT_KIND.into(), Arc::new(mldsa::Ctor {})),

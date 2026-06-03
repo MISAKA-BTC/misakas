@@ -2,12 +2,15 @@
 //! Deterministic byte sequence generation (used by Account ids).
 //!
 
-pub use crate::account::{bip32, bip32watch, keypair, legacy, mldsa, multisig};
+pub use crate::account::mldsa;
+#[cfg(feature = "legacy-secp256k1")]
+pub use crate::account::{bip32, bip32watch, keypair, legacy, multisig};
 use crate::encryption::sha256_hash;
 use crate::imports::*;
 use crate::storage::PrvKeyDataId;
 use kaspa_hashes::Hash;
 use kaspa_utils::as_slice::AsSlice;
+#[cfg(feature = "legacy-secp256k1")]
 use secp256k1::PublicKey;
 
 /// Deterministic byte sequence derived from account data (can be used for auxiliary data storage encryption).
@@ -110,6 +113,7 @@ where
 }
 
 /// Create deterministic hashes from BIP32 account data.
+#[cfg(feature = "legacy-secp256k1")]
 pub fn from_bip32<const N: usize>(prv_key_data_id: &PrvKeyDataId, data: &bip32::Payload) -> [Hash; N] {
     let hashable = DeterministicHashData {
         account_kind: &bip32::BIP32_ACCOUNT_KIND.into(),
@@ -123,6 +127,7 @@ pub fn from_bip32<const N: usize>(prv_key_data_id: &PrvKeyDataId, data: &bip32::
 }
 
 /// Create deterministic hashes from legacy account data.
+#[cfg(feature = "legacy-secp256k1")]
 pub fn from_legacy<const N: usize>(prv_key_data_id: &PrvKeyDataId, _data: &legacy::Payload) -> [Hash; N] {
     let hashable = DeterministicHashData {
         account_kind: &legacy::LEGACY_ACCOUNT_KIND.into(),
@@ -136,6 +141,7 @@ pub fn from_legacy<const N: usize>(prv_key_data_id: &PrvKeyDataId, _data: &legac
 }
 
 /// Create deterministic hashes from multisig account data.
+#[cfg(feature = "legacy-secp256k1")]
 pub fn from_multisig<const N: usize>(prv_key_data_ids: &Option<Arc<Vec<PrvKeyDataId>>>, data: &multisig::Payload) -> [Hash; N] {
     let hashable = DeterministicHashData {
         account_kind: &multisig::MULTISIG_ACCOUNT_KIND.into(),
@@ -149,6 +155,7 @@ pub fn from_multisig<const N: usize>(prv_key_data_ids: &Option<Arc<Vec<PrvKeyDat
 }
 
 /// Create deterministic hashes from bip32-watch multisig account data.
+#[cfg(feature = "legacy-secp256k1")]
 pub fn from_bip32_watch_multisig<const N: usize>(
     prv_key_data_ids: &Option<Arc<Vec<PrvKeyDataId>>>,
     data: &bip32watch::Payload,
@@ -165,6 +172,7 @@ pub fn from_bip32_watch_multisig<const N: usize>(
 }
 
 /// Create deterministic hashes from keypair account data.
+#[cfg(feature = "legacy-secp256k1")]
 pub(crate) fn from_keypair<const N: usize>(prv_key_data_id: &PrvKeyDataId, data: &keypair::Payload) -> [Hash; N] {
     let hashable = DeterministicHashData {
         account_kind: &keypair::KEYPAIR_ACCOUNT_KIND.into(),
@@ -193,6 +201,7 @@ pub(crate) fn from_mldsa<const N: usize>(prv_key_data_id: &PrvKeyDataId, data: &
 }
 
 /// Create deterministic hashes from a public key.
+#[cfg(feature = "legacy-secp256k1")]
 pub fn from_public_key<const N: usize>(account_kind: &AccountKind, public_key: &PublicKey) -> [Hash; N] {
     let hashable: DeterministicHashData<[PrvKeyDataId; 0]> = DeterministicHashData {
         account_kind,
@@ -206,6 +215,7 @@ pub fn from_public_key<const N: usize>(account_kind: &AccountKind, public_key: &
 }
 
 /// Create deterministic hashes from bip32-watch.
+#[cfg(feature = "legacy-secp256k1")]
 pub fn from_bip32_watch<const N: usize>(public_key: &PublicKey) -> [Hash; N] {
     let hashable: DeterministicHashData<[PrvKeyDataId; 0]> = DeterministicHashData {
         account_kind: &bip32watch::BIP32_WATCH_ACCOUNT_KIND.into(),

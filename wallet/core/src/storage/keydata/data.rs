@@ -2,10 +2,15 @@
 //! Private key storage and encryption.
 //!
 
+#[cfg(feature = "legacy-secp256k1")]
 use crate::derivation::create_xpub_from_xprv;
 use crate::imports::*;
-use kaspa_bip32::{ExtendedPrivateKey, ExtendedPublicKey, Language, Mnemonic};
+#[cfg(feature = "legacy-secp256k1")]
+use kaspa_bip32::{ExtendedPrivateKey, ExtendedPublicKey};
+use kaspa_bip32::{Language, Mnemonic};
+#[cfg(feature = "legacy-secp256k1")]
 use kaspa_utils::hex::ToHex;
+#[cfg(feature = "legacy-secp256k1")]
 use secp256k1::SecretKey;
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -77,6 +82,7 @@ impl PrvKeyDataVariant {
         PrvKeyDataVariant::Mnemonic(mnemonic.phrase_string())
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn from_secret_key(secret_key: SecretKey) -> Self {
         PrvKeyDataVariant::SecretKey(secret_key.secret_bytes().to_vec().to_hex())
     }
@@ -125,10 +131,12 @@ impl PrvKeyDataPayload {
         Ok(Self { prv_key_variant: PrvKeyDataVariant::from_mnemonic(mnemonic) })
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn try_new_with_secret_key(secret_key: SecretKey) -> Result<Self> {
         Ok(Self { prv_key_variant: PrvKeyDataVariant::from_secret_key(secret_key) })
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn get_xprv(&self, payment_secret: Option<&Secret>) -> Result<ExtendedPrivateKey<SecretKey>> {
         let payment_secret = payment_secret.map(|s| std::str::from_utf8(s.as_ref())).transpose()?;
 
@@ -162,6 +170,7 @@ impl PrvKeyDataPayload {
         Zeroizing::new(self.prv_key_variant.clone())
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn as_secret_key(&self) -> Result<Option<SecretKey>> {
         match &self.prv_key_variant {
             PrvKeyDataVariant::SecretKey(private_key) => Ok(Some(SecretKey::from_str(private_key)?)),
@@ -197,6 +206,7 @@ pub struct PrvKeyData {
 }
 
 impl PrvKeyData {
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn create_xpub(
         &self,
         payment_secret: Option<&Secret>,
@@ -208,6 +218,7 @@ impl PrvKeyData {
         create_xpub_from_xprv(xprv, account_kind, account_index).await
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn get_xprv(&self, payment_secret: Option<&Secret>) -> Result<ExtendedPrivateKey<secp256k1::SecretKey>> {
         let payload = self.payload.decrypt(payment_secret)?;
         payload.get_xprv(payment_secret)
@@ -241,11 +252,13 @@ impl PrvKeyData {
         Ok(prv_key_data)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn as_secret_key(&self, payment_secret: Option<&Secret>) -> Result<Option<SecretKey>> {
         let payload = self.payload.decrypt(payment_secret)?;
         payload.as_secret_key()
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn try_from_secret_key(
         secret_key: SecretKey,
         payment_secret: Option<&Secret>,
@@ -304,6 +317,7 @@ impl PrvKeyData {
         Ok(prv_key_data)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn try_new_from_secret_key(
         secret_key: SecretKey,
         payment_secret: Option<&Secret>,

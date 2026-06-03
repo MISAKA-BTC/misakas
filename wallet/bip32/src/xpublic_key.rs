@@ -8,6 +8,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use core::str::FromStr;
 use hmac::Mac;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+#[cfg(feature = "legacy-secp256k1")]
 use std::fmt;
 
 ///// Extended public secp256k1 ECDSA verification key.
@@ -130,11 +131,12 @@ where
         if extended_key.prefix.is_public() {
             Ok(ExtendedPublicKey { public_key: PublicKey::from_bytes(extended_key.key_bytes)?, attrs: extended_key.attrs.clone() })
         } else {
-            Err(Error::Crypto(secp256k1::Error::InvalidPublicKey))
+            Err(Error::InvalidKeyType)
         }
     }
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 impl fmt::Display for ExtendedPublicKey<secp256k1::PublicKey> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.to_string(None).fmt(f)

@@ -20,28 +20,7 @@ use kaspa_txscript::{
     extract_script_pub_key_address, multisig_redeem_script, multisig_redeem_script_ecdsa, pay_to_script_hash_script,
 };
 
-#[derive(Default, Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct AddressDerivationMeta([u32; 2]);
-
-impl AddressDerivationMeta {
-    pub fn new(receive: u32, change: u32) -> Self {
-        Self([receive, change])
-    }
-
-    pub fn receive(&self) -> u32 {
-        self.0[0]
-    }
-
-    pub fn change(&self) -> u32 {
-        self.0[1]
-    }
-}
-
-impl std::fmt::Display for AddressDerivationMeta {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}, {}]", self.receive(), self.change())
-    }
-}
+use crate::storage::metadata::AddressDerivationMeta;
 
 pub struct Inner {
     pub index: u32,

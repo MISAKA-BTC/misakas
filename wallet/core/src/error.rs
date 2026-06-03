@@ -52,6 +52,7 @@ pub enum Error {
     #[error("Poison error -> {0}")]
     PoisonError(String),
 
+    #[cfg(feature = "legacy-secp256k1")]
     #[error("Secp256k1 -> {0}")]
     Secp256k1Error(#[from] secp256k1::Error),
 
@@ -345,6 +346,7 @@ pub enum Error {
 
     #[error("Connected node is not synced")]
     NotSynced,
+    #[cfg(feature = "legacy-secp256k1")]
     #[error(transparent)]
     Pskt(#[from] kaspa_wallet_pskt::error::Error),
 

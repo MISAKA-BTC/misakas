@@ -122,6 +122,10 @@ impl BorshDeserialize for AccountStorage {
     }
 }
 
+// kaspa-pq PQ-only (ADR-0019 §14): this wrapper round-trip builds a classical BIP32
+// account payload (`bip32::Payload` / `ExtendedPublicKeys` / `BIP32_ACCOUNT_KIND`),
+// none of which exist on a PQ-only build.
+#[cfg(feature = "legacy-secp256k1")]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -11,6 +11,16 @@ repository.workspace = true
 include = ["src/**/*.rs", "Cargo.toml", "src/**/*.txt"]
 # include.workspace = true
 
+[features]
+# kaspa-pq PQ-only (ADR-0019 §14): `pq-only` (default) builds kaspa-bip32 without
+# secp256k1 — only the curve-independent BIP39 mnemonic, derivation-path, prefix
+# and extended-key-serialization machinery. `legacy-secp256k1` re-enables the
+# secp256k1 BIP32 extended-key (xprv/xpub) derivation used by the classical wallet
+# and the WASM SDK signer.
+default = ["pq-only"]
+pq-only = []
+legacy-secp256k1 = ["dep:secp256k1"]
+
 [dependencies]
 borsh.workspace = true
 bs58.workspace = true
@@ -23,7 +33,7 @@ pbkdf2.workspace = true
 rand_core.workspace = true
 rand.workspace = true
 ripemd.workspace = true
-secp256k1.workspace = true
+secp256k1 = { workspace = true, optional = true }
 serde.workspace = true
 sha2.workspace = true
 subtle.workspace = true

@@ -10,6 +10,7 @@ use crate::storage::Binding;
 use crate::storage::interface::TransactionRangeResult;
 use crate::tx::Fees;
 use kaspa_rpc_core::RpcFeeEstimate;
+#[cfg(feature = "legacy-secp256k1")]
 use kaspa_wallet_pskt::bundle::Bundle;
 use workflow_core::channel::Receiver;
 #[async_trait]
@@ -379,9 +380,18 @@ impl WalletApi for super::Wallet {
 
         let account = self.get_account_by_id(&account_id, &guard).await?.ok_or(Error::AccountNotFound(account_id))?;
 
+        #[cfg(feature = "legacy-secp256k1")]
         let address = match kind {
             NewAddressKind::Receive => account.as_derivation_capable()?.new_receive_address().await?,
             NewAddressKind::Change => account.as_derivation_capable()?.new_change_address().await?,
+        };
+        // kaspa-pq PQ-only (ADR-0019 §14): accounts are single-key ML-DSA-87, so the
+        // receive and change addresses are fixed (change == receive) and there is no
+        // derivation-based "new address".
+        #[cfg(not(feature = "legacy-secp256k1"))]
+        let address = match kind {
+            NewAddressKind::Receive => account.receive_address()?,
+            NewAddressKind::Change => account.change_address()?,
         };
 
         Ok(AccountsCreateNewAddressResponse { address })
@@ -402,6 +412,7 @@ impl WalletApi for super::Wallet {
         Ok(AccountsSendResponse { generator_summary, transaction_ids })
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     async fn accounts_pskb_sign_call(self: Arc<Self>, request: AccountsPskbSignRequest) -> Result<AccountsPskbSignResponse> {
         let AccountsPskbSignRequest { account_id, pskb, wallet_secret, payment_secret, sign_for_address } = request;
         let pskb = Bundle::deserialize(&pskb)?;
@@ -414,6 +425,15 @@ impl WalletApi for super::Wallet {
         Ok(AccountsPskbSignResponse { pskb: pskb.serialize()? })
     }
 
+    // kaspa-pq PQ-only (ADR-0019 §14): PSKB (Partial Signed Kaspa Transaction
+    // Bundles) ride the classical secp256k1 PSKT stack, which is unavailable on a
+    // PQ-only build.
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    async fn accounts_pskb_sign_call(self: Arc<Self>, _request: AccountsPskbSignRequest) -> Result<AccountsPskbSignResponse> {
+        Err(Error::NotImplemented)
+    }
+
+    #[cfg(feature = "legacy-secp256k1")]
     async fn accounts_pskb_broadcast_call(
         self: Arc<Self>,
         request: AccountsPskbBroadcastRequest,
@@ -428,6 +448,14 @@ impl WalletApi for super::Wallet {
         Ok(AccountsPskbBroadcastResponse { transaction_ids })
     }
 
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    async fn accounts_pskb_broadcast_call(
+        self: Arc<Self>,
+        _request: AccountsPskbBroadcastRequest,
+    ) -> Result<AccountsPskbBroadcastResponse> {
+        Err(Error::NotImplemented)
+    }
+
     async fn accounts_get_utxos_call(self: Arc<Self>, request: AccountsGetUtxosRequest) -> Result<AccountsGetUtxosResponse> {
         let AccountsGetUtxosRequest { account_id, addresses, min_amount_sompi } = request;
         let guard = self.guard();
@@ -437,6 +465,7 @@ impl WalletApi for super::Wallet {
         Ok(AccountsGetUtxosResponse { utxos: utxos.into_iter().map(|entry| entry.into()).collect::<Vec<UtxoEntryWrapper>>() })
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     async fn accounts_pskb_send_call(self: Arc<Self>, request: AccountsPskbSendRequest) -> Result<AccountsPskbSendResponse> {
         let AccountsPskbSendRequest { account_id, pskb, wallet_secret, payment_secret, sign_for_address } = request;
         let pskb = Bundle::deserialize(&pskb)?;
@@ -447,6 +476,11 @@ impl WalletApi for super::Wallet {
         let pskb = account.clone().pskb_sign(&pskb, wallet_secret, payment_secret, sign_for_address.as_ref()).await?;
         let transaction_ids = account.pskb_broadcast(&pskb).await?;
         Ok(AccountsPskbSendResponse { transaction_ids })
+    }
+
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    async fn accounts_pskb_send_call(self: Arc<Self>, _request: AccountsPskbSendRequest) -> Result<AccountsPskbSendResponse> {
+        Err(Error::NotImplemented)
     }
 
     async fn accounts_transfer_call(self: Arc<Self>, request: AccountsTransferRequest) -> Result<AccountsTransferResponse> {
@@ -484,6 +518,7 @@ impl WalletApi for super::Wallet {
         Ok(AccountsTransferResponse { generator_summary, transaction_ids })
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     async fn accounts_commit_reveal_manual_call(
         self: Arc<Self>,
         request: AccountsCommitRevealManualRequest,
@@ -526,6 +561,15 @@ impl WalletApi for super::Wallet {
         Ok(AccountsCommitRevealManualResponse { transaction_ids })
     }
 
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    async fn accounts_commit_reveal_manual_call(
+        self: Arc<Self>,
+        _request: AccountsCommitRevealManualRequest,
+    ) -> Result<AccountsCommitRevealManualResponse> {
+        Err(Error::NotImplemented)
+    }
+
+    #[cfg(feature = "legacy-secp256k1")]
     async fn accounts_commit_reveal_call(
         self: Arc<Self>,
         request: AccountsCommitRevealRequest,
@@ -584,6 +628,14 @@ impl WalletApi for super::Wallet {
 
         let transaction_ids = account.pskb_broadcast(&bundle).await?;
         Ok(AccountsCommitRevealResponse { transaction_ids })
+    }
+
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    async fn accounts_commit_reveal_call(
+        self: Arc<Self>,
+        _request: AccountsCommitRevealRequest,
+    ) -> Result<AccountsCommitRevealResponse> {
+        Err(Error::NotImplemented)
     }
 
     async fn accounts_estimate_call(self: Arc<Self>, request: AccountsEstimateRequest) -> Result<AccountsEstimateResponse> {

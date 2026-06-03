@@ -204,7 +204,7 @@ where
                 attrs: extended_key.attrs.clone(),
             })
         } else {
-            Err(Error::Crypto(secp256k1::Error::InvalidSecretKey))
+            Err(Error::InvalidKeyType)
         }
     }
 }

@@ -1,3 +1,11 @@
+// kaspa-pq PQ-only (ADR-0019 §14): every account-creation wizard here builds a
+// classical secp256k1 account kind (bip32 / multisig / bip32-watch); the
+// underlying `Wallet::create_account_*` methods and the classical account-kind
+// constants do not exist in a PQ-only build. The whole module is therefore gated;
+// the `account create`/`account watch` command branches that call these wizards
+// are gated to match in `modules/account.rs`.
+#![cfg(feature = "legacy-secp256k1")]
+
 use crate::cli::KaspaCli;
 use crate::imports::*;
 use crate::result::Result;
