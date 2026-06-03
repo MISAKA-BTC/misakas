@@ -23,13 +23,15 @@ else
   echo "      install: cargo install cargo-deny  (or cargo-audit)"
 fi
 
-echo "== [2/2] secp256k1 must be absent from the consensus + node trees (Phase-8/S9 gate) =="
+echo "== [2/2] secp256k1 must be absent from the consensus + node + wallet trees (Phase-8/S9/QL-1 gate) =="
 # Phase 8 (PR-19-S8a/S8b) feature-gated secp256k1 out of the consensus tree; S9
 # extended this to the kaspad node binary (the RPC/SDK layer:
-# rpc-core -> consensus-wasm -> consensus-client). The gate is HARD by default.
-# Export HARD_SECP_GATE=0 to soften it back to a warning (e.g. while bisecting).
+# rpc-core -> consensus-wasm -> consensus-client). Audit QL-1 (P10) extended the
+# fence through the whole wallet stack (bip32 / wallet-keys / wallet-pskt /
+# wallet-core, all default pq-only), so every production binary is now secp-free.
+# The gate is HARD by default. Export HARD_SECP_GATE=0 to soften it to a warning.
 HARD_SECP_GATE="${HARD_SECP_GATE:-1}"
-for crate in kaspa-consensus kaspad; do
+for crate in kaspa-consensus kaspad kaspa-pq-cli kaspa-wallet kaspa-cli kaspa-daemon misaminer kaspa-pq-miner kaspa-pq-validator; do
   if cargo tree -p "$crate" -e normal 2>/dev/null | grep -qi secp256k1; then
     echo "secp256k1 IS present in the $crate dependency tree."
     if [ "$HARD_SECP_GATE" = "1" ]; then
