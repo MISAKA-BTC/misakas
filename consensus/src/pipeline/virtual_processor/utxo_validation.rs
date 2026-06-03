@@ -903,9 +903,17 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> BlockProcessResult<()> {
-        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
-        slashing_evidence_genuine(txs, selected_parent_bond_view, self.genesis.hash, activated)
-            .map_err(UnverifiableSlashingEvidenceInBlock)
+        let Some(params) = self.dns_params.as_ref() else { return Ok(()) };
+        let activated = daa_score >= params.dns_activation_daa_score;
+        slashing_evidence_genuine(
+            txs,
+            selected_parent_bond_view,
+            self.genesis.hash,
+            daa_score,
+            params.evidence_window_blocks,
+            activated,
+        )
+        .map_err(UnverifiableSlashingEvidenceInBlock)
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate. Rejects a
@@ -1177,6 +1185,8 @@ fn slashing_evidence_genuine(
     txs: &[Transaction],
     bond_view: &ActiveBondView,
     net_id: BlockHash,
+    including_daa: u64,
+    evidence_window_blocks: u64,
     activated: bool,
 ) -> Result<(), TransactionId> {
     if !activated {
@@ -1187,11 +1197,28 @@ fn slashing_evidence_genuine(
         let Some(bond) = bond_view.get(&ev.bond_outpoint) else {
             return Err(ev.bond_outpoint.transaction_id);
         };
+        // audit #2: freshness — the evidence must be included within `evidence_window_blocks` of the
+        // newer equivocating attestation's target. This bounds how far back slashing can reach and
+        // keeps it inside the bond's still-locked window (the params invariant `unbonding_period >=
+        // max_reorg_horizon + evidence_window` guarantees a fresh evidence still finds the staked
+        // output-0 present for the slashing side-effect to remove). A stale equivocation dredged up
+        // long after the fact to grief a since-honest validator is rejected.
+        let newest_target = ev.attestation_a.target_daa_score.max(ev.attestation_b.target_daa_score);
+        if including_daa.saturating_sub(newest_target) > evidence_window_blocks {
+            return Err(ev.bond_outpoint.transaction_id);
+        }
         for att in [&ev.attestation_a, &ev.attestation_b] {
             // kaspa-pq DNS v2 (P-1A): both equivocating attestations must be bound to the bond's
             // validator_pubkey_hash (validator_id is not in the signed digest), so slashing can't be
             // spoofed against a bond via a mismatched validator_id.
             if att.validator_id != bond.validator_pubkey_hash {
+                return Err(ev.bond_outpoint.transaction_id);
+            }
+            // audit #2: the bond must have had slashable locked stake at the attestation's target —
+            // Active or Unbonding, the same set `resolve_slashing_side_effects` can slash. An
+            // equivocation by a bond that was still Pending (never activated) or already Slashed at
+            // that target had no stake at risk, so it is not slashable.
+            if !matches!(effective_bond_status(bond, att.target_daa_score), BondStatus::Active | BondStatus::Unbonding) {
                 return Err(ev.bond_outpoint.transaction_id);
             }
             let digest = stake_attestation_message(
@@ -1682,30 +1709,60 @@ mod tests {
 
         const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
 
+        // The fixture attestations target DAA 10_000; a block at FRESH_DAA with a WINDOW-block
+        // evidence window is well within the freshness bound.
+        const FRESH_DAA: u64 = 10_000;
+        const WINDOW: u64 = 200_000;
+
         #[test]
         fn noop_when_not_activated() {
             // Forged evidence passes when the gate is closed (every current net).
-            assert_eq!(genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), false), Ok(()));
+            assert_eq!(genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, false), Ok(()));
         }
 
         #[test]
         fn rejects_evidence_with_unknown_bond() {
             // Activated + empty bond view ⇒ bond unknown ⇒ reject.
-            assert_eq!(genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), true), Err(Hash64::from_bytes([1; 64])));
+            assert_eq!(
+                genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true),
+                Err(Hash64::from_bytes([1; 64]))
+            );
         }
 
         #[test]
         fn rejects_evidence_with_invalid_signatures() {
-            // Activated + bond present, but the (garbage) attestation signatures
-            // fail verification ⇒ a forged evidence cannot slash the bond.
+            // Activated + bond present + fresh, but the (garbage) attestation signatures fail
+            // verification ⇒ a forged evidence cannot slash the bond.
             let op = outpoint(2);
             let view = ActiveBondView::from_records([(op, active_bond(op))]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), true), Err(Hash64::from_bytes([2; 64])));
+            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+        }
+
+        #[test]
+        fn rejects_stale_evidence_outside_the_window() {
+            // audit #2: bond present, but the including block is more than `evidence_window_blocks`
+            // past the equivocating attestations' target ⇒ stale ⇒ reject.
+            let op = outpoint(2);
+            let view = ActiveBondView::from_records([(op, active_bond(op))]);
+            let stale_daa = 10_000 + WINDOW + 1; // target=10_000; diff = WINDOW+1 > WINDOW.
+            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), stale_daa, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+        }
+
+        #[test]
+        fn rejects_evidence_when_bond_not_slashable_at_target() {
+            // audit #2: bond present + fresh + validator_id matches, but the bond was still Pending
+            // (activation after the target) ⇒ no stake at risk at that target ⇒ not slashable.
+            let op = outpoint(2);
+            let mut bond = active_bond(op);
+            bond.validator_pubkey_hash = Hash64::from_bytes([0xa1; 64]); // match the attestation's validator_id
+            bond.activation_daa_score = 50_000; // Pending at target 10_000
+            let view = ActiveBondView::from_records([(op, bond)]);
+            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
         }
 
         #[test]
         fn ok_when_no_slashing_evidence() {
-            assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), true), Ok(()));
+            assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true), Ok(()));
         }
     }
 
