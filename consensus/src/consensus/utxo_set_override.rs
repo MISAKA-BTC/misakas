@@ -14,7 +14,7 @@ use crate::consensus::Consensus;
 
 /// The genesis UTXO set imported at consensus initialization: the canonical
 /// kaspa-pq (misaka) premine — a single 15B KAS UTXO locked to a 2-of-3
-/// ML-DSA-65 P2SH multisig (see `kaspa_consensus_core::config::premine`) — plus,
+/// ML-DSA-87 P2SH multisig (see `kaspa_consensus_core::config::premine`) — plus,
 /// when the `devnet-prealloc` feature is enabled, any CLI-preallocated UTXOs from
 /// `config.initial_utxo_set`.
 fn genesis_initial_utxo_set(config: &Config) -> Vec<(TransactionOutpoint, UtxoEntry)> {

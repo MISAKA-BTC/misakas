@@ -118,7 +118,10 @@ mod serde_reward_payload64 {
     }
 }
 
-use crate::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SubnetworkId};
+use crate::subnets::{
+    SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND,
+    SubnetworkId,
+};
 use crate::{
     BlueWorkType, TransactionId,
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
@@ -150,16 +153,29 @@ pub const STAKE_SCORE_SCALE: u128 = 1_000_000_000;
 /// Bumped only by a hard-fork ADR; consumers reject foreign versions.
 pub const DNS_PAYLOAD_VERSION_V1: u16 = 1;
 
-/// kaspa-pq Phase 10 ML-DSA-65 attestation signing context. Distinct
-/// from the transaction context (`b"kaspa-pq-v1/tx/mldsa87"`,
-/// ADR-0002) so an attestation signature can never be replayed as a
-/// transaction signature (and vice versa).
+/// kaspa-pq Phase 10 ML-DSA-87 attestation signing context. Distinct from the
+/// transaction context (`b"kaspa-pq-v2/tx/mldsa87"`), the address context, and
+/// the sighash domain, so an attestation signature can never be replayed as any
+/// of those (and vice versa). NOTE (audit L-1): the leading `-v1`/`-v2` digit is
+/// a *per-domain* separation tag, not a global scheme version — the overlay
+/// domains (att/takeover) keep `-v1` while the tx/address/sighash domains use
+/// `-v2` (the md2 context bump). Each string is consensus-fixed; changing any of
+/// them is a hard-fork (re-genesis) change.
 pub const ATTESTATION_MLDSA87_CONTEXT: &[u8] = b"kaspa-pq-v1/att/mldsa87";
 
 /// kaspa-pq Phase 10 BLAKE2b-256 domain key used when constructing
-/// the attestation message that ML-DSA-65 signs over. Consumed by
+/// the attestation message that ML-DSA-87 signs over. Consumed by
 /// [`stake_attestation_message`]. See ADR-0009 §"Attestation target".
 pub const ATTESTATION_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-v1/stake-attestation";
+
+/// kaspa-pq H-05 (ADR-0010 "Unbonding"): ML-DSA-87 signing context for a
+/// `StakeUnbondRequest`. Distinct from the tx / attestation / takeover contexts
+/// so an unbond authorization can never be replayed as any of those.
+pub const UNBOND_REQUEST_CONTEXT: &[u8] = b"kaspa-pq-v1/unbond/mldsa87";
+
+/// kaspa-pq H-05: BLAKE2b-256 domain key for the unbond-request message the
+/// owner signs over (binds the authorization to the specific bond outpoint).
+pub const UNBOND_REQUEST_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-v1/unbond-request";
 
 /// kaspa-pq Phase 11 BLAKE2b-512 domain key used by
 /// [`validator_set_commitment`]. Consensus-fixed and bumped only by
@@ -175,10 +191,10 @@ pub const VALIDATOR_SET_COMMITMENT_KEY: &[u8] = b"kaspa-pq-validator-set-v1";
 /// - `TAKEOVER_TOKEN_MESSAGE_DOMAIN` — keys the BLAKE2b-256 over
 ///   the takeover-token signing material (see
 ///   [`takeover_token_message`]).
-/// - `TAKEOVER_TOKEN_CONTEXT` — ML-DSA-65 `ctx` parameter for the
+/// - `TAKEOVER_TOKEN_CONTEXT` — ML-DSA-87 `ctx` parameter for the
 ///   `sign_ctx` call that produces the
 ///   [`TakeoverToken::signature`]. Distinct from both the
-///   transaction context (`b"kaspa-pq-v1/tx/mldsa87"`) and the
+///   transaction context (`b"kaspa-pq-v2/tx/mldsa87"`) and the
 ///   attestation context (`b"kaspa-pq-v1/att/mldsa87"`,
 ///   ADR-0009 §"Attestation target") so a takeover-token
 ///   signature can never be replayed as a transaction or
@@ -312,7 +328,7 @@ pub enum BondStatus {
 ///
 /// Carried inside a transaction with subnetwork id
 /// `SUBNETWORK_ID_STAKE_BOND` (consensus rule to be added in PR-10.4).
-/// The bond locks an amount of coins to a validator ML-DSA-65 key for
+/// The bond locks an amount of coins to a validator ML-DSA-87 key for
 /// at least `unbonding_period_blocks` blocks past any later withdraw
 /// request. ADR-0009 §"Long-range bound" requires
 /// `unbonding_period_blocks ≥ max_reorg_horizon + evidence_window`.
@@ -366,7 +382,7 @@ pub struct StakeBondPayload {
 ///
 /// Many `StakeAttestation`s are batched into
 /// `StakeAttestationShardPayload` for on-chain commitment. A raw
-/// attestation is ~3300+100 bytes (the ML-DSA-65 signature
+/// attestation is ~4600+100 bytes (the ML-DSA-87 signature
 /// dominates).
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct StakeAttestation {
@@ -443,11 +459,12 @@ pub fn single_attestation_shard(attestation: StakeAttestation) -> StakeAttestati
 /// Build the subnetwork [`Transaction`] carrying a borsh-encoded
 /// [`StakeAttestationShardPayload`] on `SUBNETWORK_ID_STAKE_ATTESTATION_SHARD`.
 ///
-/// The transaction has no inputs/outputs — the payload is the whole point. NOTE:
-/// how such zero-input overlay transactions are admitted to the mempool and blocks
-/// (fee-funded input vs. a consensus exemption) is the validator submission path
-/// (ADR-0010 §"Validator service runtime" step 9) and is not yet wired; today the
-/// stock `NoTxInputs` rule would reject this at mempool ingestion.
+/// **TEST HELPER — NOT for production (audit M-02).** The transaction has no inputs/outputs, so
+/// the stock `NoTxInputs` isolation rule rejects it at mempool ingestion and in blocks. It exists
+/// only to exercise payload/eligibility logic in unit tests. Production validators MUST build the
+/// fee-funded, signed shard via `kaspa_pq_validator_core::ValidatorKey::build_funded_shard_tx`
+/// (ADR-0010 §"Validator service runtime" step 9). `#[doc(hidden)]` to keep it off the public API.
+#[doc(hidden)]
 pub fn stake_attestation_shard_tx(shard: &StakeAttestationShardPayload) -> Transaction {
     let payload = borsh::to_vec(shard).expect("borsh serialization of a well-formed shard is infallible");
     Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, 0, payload)
@@ -613,7 +630,13 @@ pub struct DnsParams {
 
     pub epoch_length_blocks: u64,
 
-    /// `cW` — minimum work-depth for history confirmation.
+    /// `cW` — minimum work-depth for history confirmation. **Intentionally `ZERO`
+    /// in both current presets (audit H-03):** the two-dimensional (work × stake)
+    /// finality safety lives in the v3 reorg gate (`TwoDimensionalDominance` plus
+    /// `emergency_work_margin`/`emergency_stake_margin` below) — a heavier but
+    /// stake-less branch cannot pass it. The confirmation predicate's WorkDepth
+    /// term is retained as an optional extra buffer; a deployment that wants the
+    /// confirmation itself to also require buried PoW can raise this above 0.
     pub required_work_depth: BlueWorkType,
     /// `cS` — minimum stake-depth (in [`STAKE_SCORE_SCALE`] units)
     /// for history confirmation.
@@ -679,8 +702,8 @@ pub struct DnsParams {
     /// candidate that exits the DNS-confirmed prefix must out-Work **and** out-Stake
     /// canonical since their common ancestor); PoC/testnet/devnet stay
     /// [`DnsReorgMode::HardCheckpoint`] (reject any such exit — the loud testing
-    /// convenience). Read by the processor's reorg gate (`dns_reorg_allows`); inert below
-    /// `dns_activation_daa_score` (`u64::MAX` everywhere) like the rest of the overlay.
+    /// convenience). Read by the processor's reorg gate (`dns_reorg_allows`); genesis-active
+    /// (`dns_activation_daa_score` = 0 everywhere) like the rest of the overlay.
     /// Appended last to keep the borsh layout change localized.
     pub reorg_mode: DnsReorgMode,
 
@@ -816,15 +839,21 @@ impl DnsParams {
     ///   honest validators never converge off the churning tip).
     /// - `attestation_anchor_backoff_blue_score < attestation_epoch_length_blue_score` (the
     ///   cutoff `epoch_end - backoff` stays within the epoch's own span).
-    /// - `stake_score_window_blue_score >= 2·L + lag + backoff` — the walk must reach the
-    ///   PREVIOUS ready epoch's cutoff so the duplicate-anchor flag is always decidable for a
-    ///   creditable epoch (a real deployment sizes it for `required_stake_depth` epochs + grace).
+    /// - `stake_score_window_blue_score >= max(2, required_stake_depth/SCALE)·L + lag + backoff`
+    ///   — the walk must reach back over every creditable epoch (`required_stake_depth` epochs;
+    ///   StakeScore accrues `STAKE_SCORE_SCALE` units per fully-participated epoch) plus the lag
+    ///   and backoff, and over at least the PREVIOUS ready epoch's cutoff so the duplicate-anchor
+    ///   flag stays decidable (audit M-05 — the depth term was previously only documented, not
+    ///   enforced).
     pub fn dns_v3_params_consistent(&self) -> bool {
         let l = self.attestation_epoch_length_blue_score;
         let lag = self.attestation_lag_blue_score;
         let backoff = self.attestation_anchor_backoff_blue_score;
         let window = self.stake_score_window_blue_score;
-        l >= 1 && lag >= 1 && backoff < l && window >= l.saturating_mul(2).saturating_add(lag).saturating_add(backoff)
+        // audit M-05: cover the full creditable horizon, not just 2 epochs.
+        let depth_epochs = ((self.required_stake_depth.0 / STAKE_SCORE_SCALE) as u64).max(2);
+        let needed = depth_epochs.saturating_mul(l).saturating_add(lag).saturating_add(backoff);
+        l >= 1 && lag >= 1 && backoff < l && window >= needed
     }
 
     /// ADR-0018 §F staged reward rollout — the effective fee/subsidy split for a
@@ -835,8 +864,8 @@ impl DnsParams {
     /// Between activation and [`Self::full_reward_split_daa_score`] it is the
     /// bootstrap split (Stage 2, smaller validator share); at/after it, the full
     /// split (Stage 3). Both the coinbase carve and `coinbase_validator_pool`
-    /// consume the returned params, so construction and validation agree. Inert on
-    /// every current network (`dns_activation_daa_score = u64::MAX`).
+    /// consume the returned params, so construction and validation agree. Active on
+    /// every current network (`dns_activation_daa_score = 0`).
     pub fn reward_fee_split(&self, daa_score: u64) -> Option<&FeeSplitParams> {
         if daa_score < self.dns_activation_daa_score {
             None
@@ -1061,7 +1090,7 @@ pub struct ActiveValidatorSet {
 /// attestation for the current epoch, assembled by the consensus pipeline so the
 /// network-, active-set-, and target-binding match the verifier (`virtual_processor`)
 /// byte-for-byte. The service's only remaining job is to sign [`Self::message`]
-/// under [`ATTESTATION_MLDSA87_CONTEXT`] with its ML-DSA-65 key.
+/// under [`ATTESTATION_MLDSA87_CONTEXT`] with its ML-DSA-87 key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidatorAttestationTarget {
     pub epoch: u64,
@@ -1080,7 +1109,7 @@ pub struct ValidatorAttestationTarget {
 // ---------------------------------------------------------------------
 
 /// Derive a validator's overlay identity (`validator_id`, equal to its
-/// `validator_pubkey_hash`) from its ML-DSA-65 public key, per ADR-0008
+/// `validator_pubkey_hash`) from its ML-DSA-87 public key, per ADR-0008
 /// §"Hash64 consensus identity" and ADR-0012 (`validator_id ==
 /// BLAKE2b-512(validator_pubkey)`):
 ///
@@ -1104,7 +1133,7 @@ pub fn validator_id_from_pubkey(validator_pubkey: &[u8]) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
-/// Local-only fingerprint of an ML-DSA-65 signature: unkeyed `BLAKE2b-512` of the
+/// Local-only fingerprint of an ML-DSA-87 signature: unkeyed `BLAKE2b-512` of the
 /// signature bytes, stored in [`SignedEpochRecord::signature_fingerprint`] so a
 /// validator can recognise a re-broadcast of its own in-flight attestation across
 /// restarts without persisting the full ~3.3 KB signature. It is **not** part of
@@ -1162,7 +1191,7 @@ pub fn validator_set_commitment(epoch: u64, validators: &[ValidatorRecord]) -> H
     Hash64::from_bytes(out)
 }
 
-/// Compute the BLAKE2b-256 attestation message that ML-DSA-65 signs
+/// Compute the BLAKE2b-256 attestation message that ML-DSA-87 signs
 /// over, per ADR-0009 §"Attestation target" as pinned by **Addendum
 /// A.3**:
 ///
@@ -1187,9 +1216,9 @@ pub fn validator_set_commitment(epoch: u64, validators: &[ValidatorRecord]) -> H
 /// `&[u8]` keeps this module decoupled from `NetworkId`.
 ///
 /// The 32-byte digest is returned as the upstream [`Hash`] (alias for
-/// `Hash32`) so it composes directly with the libcrux ML-DSA-65 `sign_ctx`
+/// `Hash32`) so it composes directly with the libcrux ML-DSA-87 `sign_ctx`
 /// API. The signing context (`ATTESTATION_MLDSA87_CONTEXT`) is applied at
-/// the ML-DSA-65 layer, not inside this hasher — keeping the two domain
+/// the ML-DSA-87 layer, not inside this hasher — keeping the two domain
 /// separators independent.
 pub fn stake_attestation_message(
     network_id: &[u8],
@@ -1211,6 +1240,60 @@ pub fn stake_attestation_message(
     let mut out = [0u8; 32];
     out.copy_from_slice(hasher.finalize().as_bytes());
     Hash::from_bytes(out)
+}
+
+/// kaspa-pq H-05 (audit, ADR-0010 "Unbonding"): an owner-authorized request to
+/// begin unbonding a `StakeBond`, carried on `SUBNETWORK_ID_STAKE_UNBOND`.
+/// Accepting it stamps the bond's `unbond_request_daa_score` (→ `Unbonding`);
+/// the staked output-0 then becomes spendable once `unbond_request_daa_score +
+/// unbonding_period_blocks` is reached (the `bond_spend_gate`). Authorization is
+/// the owner's ML-DSA-87 signature over [`unbond_request_message`] under
+/// [`UNBOND_REQUEST_CONTEXT`]: without it an attacker could force every honest
+/// validator's bond into `Unbonding` and grief them out of the active set (a
+/// liveness attack), so the *request* — not just the eventual spend — must be
+/// owner-authorized.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct StakeUnbondRequestPayload {
+    pub version: u16,
+    /// The bond being unbonded (its creating tx's output-0 outpoint).
+    pub bond_outpoint: TransactionOutpoint,
+    /// The bond owner's 2592-byte ML-DSA-87 public key. Bound to the bond at
+    /// acceptance: `validator_id_from_pubkey(owner_pubkey) == bond.owner_pubkey_hash`.
+    pub owner_pubkey: Vec<u8>,
+    /// 4627-byte ML-DSA-87 signature over [`unbond_request_message`].
+    pub signature: Vec<u8>,
+}
+
+/// kaspa-pq H-05: the BLAKE2b-256 digest the bond owner signs to authorize
+/// unbonding `bond_outpoint`. Keyed by [`UNBOND_REQUEST_MESSAGE_DOMAIN`] and
+/// bound to the bond outpoint so the authorization cannot be reused for another
+/// bond.
+pub fn unbond_request_message(bond_outpoint: TransactionOutpoint) -> Hash {
+    let mut hasher = Blake2bParams::new().hash_length(32).key(UNBOND_REQUEST_MESSAGE_DOMAIN).to_state();
+    hasher.update(bond_outpoint.transaction_id.as_byte_slice());
+    hasher.update(&bond_outpoint.index.to_le_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash::from_bytes(out)
+}
+
+/// Stateless validation of a [`StakeUnbondRequestPayload`] (subnetwork
+/// `SUBNETWORK_ID_STAKE_UNBOND`): decodability, version, and the owner key /
+/// signature lengths. Like the attestation check, the ML-DSA-87 signature is
+/// verified in the stateful block-validity rule (`unbond_request_authorized`),
+/// which also binds the key to the bond's `owner_pubkey_hash`.
+pub fn validate_stake_unbond_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    let req: StakeUnbondRequestPayload = decode_dns_payload(payload)?;
+    if req.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(req.version));
+    }
+    if req.owner_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
+        return Err(DnsTxError::InvalidPubKeyLen(req.owner_pubkey.len()));
+    }
+    if req.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+        return Err(DnsTxError::InvalidSignatureLen(req.signature.len()));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -1305,7 +1388,7 @@ pub struct SignedEpochRecord {
     /// Pinned so the validator can recognise a re-broadcast of an
     /// in-flight attestation across restarts without re-storing
     /// the full ~3.3 KB signature. **Not** part of the
-    /// equivocation predicate — ML-DSA-65 is hedged by default and
+    /// equivocation predicate — ML-DSA-87 is hedged by default and
     /// two valid signatures over the same message differ on the
     /// `rnd` parameter, so bit-equality would be too strict.
     pub signature_fingerprint: Hash64,
@@ -1350,7 +1433,7 @@ pub enum SignedEpochCheckOutcome {
 /// the decision table.
 ///
 /// The function deliberately does **not** validate the
-/// `signature_fingerprint`: two valid hedged ML-DSA-65 signatures
+/// `signature_fingerprint`: two valid hedged ML-DSA-87 signatures
 /// over the same message will have different fingerprints, so the
 /// predicate that matters is target-hash + target-daa-score
 /// equality.
@@ -1391,7 +1474,7 @@ pub fn check_signed_epoch_record(prev: Option<&SignedEpochRecord>, candidate: &S
 pub type HostId = Hash;
 
 /// Coordinated-failover takeover token (ADR-0014
-/// §"`TakeoverToken`"). Carries an ML-DSA-65 signature by the
+/// §"`TakeoverToken`"). Carries an ML-DSA-87 signature by the
 /// validator key transferring signing authority from
 /// `yielding_host_id` to `taking_over_host_id` at
 /// `valid_from_epoch`. Stored locally on both hosts in
@@ -1478,11 +1561,11 @@ pub fn compute_host_id(hostname: &[u8], boot_nonce: &[u8; 32]) -> HostId {
 /// ```
 ///
 /// The 32-byte digest is returned as the upstream [`Hash`] so it
-/// composes directly with the libcrux ML-DSA-65 `sign_ctx` /
-/// `verify_ctx` APIs. The ML-DSA-65 signing context
-/// (`TAKEOVER_TOKEN_CONTEXT`) is applied at the ML-DSA-65 layer,
+/// composes directly with the libcrux ML-DSA-87 `sign_ctx` /
+/// `verify_ctx` APIs. The ML-DSA-87 signing context
+/// (`TAKEOVER_TOKEN_CONTEXT`) is applied at the ML-DSA-87 layer,
 /// not inside this hasher — keeping the two domain separators
-/// independent and distinct from every other ML-DSA-65 use site
+/// independent and distinct from every other ML-DSA-87 use site
 /// in the protocol (ADR-0014 §"Public-claim discipline" replay
 /// safety claim).
 pub fn takeover_token_message(
@@ -1520,7 +1603,7 @@ pub fn takeover_token_message(
 #[repr(u8)]
 pub enum SigningPurpose {
     /// Standard transaction signing — message digest is whatever
-    /// the tx-script ML-DSA-65 sign path produces; context is
+    /// the tx-script ML-DSA-87 sign path produces; context is
     /// `b"kaspa-pq-v1/tx/mldsa87"`.
     #[default]
     Transaction = 0,
@@ -1624,12 +1707,12 @@ pub struct SignerRequest {
     /// request selects via this field.
     pub validator_id: Hash64,
     pub purpose: SigningPurpose,
-    /// libcrux ML-DSA-65 `sign_ctx` ctx parameter. Caller
+    /// libcrux ML-DSA-87 `sign_ctx` ctx parameter. Caller
     /// provides; the signer does not infer the context from
     /// the purpose tag because future protocol extensions may
     /// need a non-standard context for the same purpose.
     pub context: Vec<u8>,
-    /// 32-byte BLAKE2b-256 the ML-DSA-65 will sign over.
+    /// 32-byte BLAKE2b-256 the ML-DSA-87 will sign over.
     pub message_digest: Hash,
     pub metadata: SignerMetadata,
 }
@@ -1753,9 +1836,9 @@ pub fn compute_attestation_reward_payouts(
 // minority can never drain a pool (the rejected `pool / included_count` design).
 // The unspent remainder of each pool rolls over (a caller concern); these helpers
 // only compute the per-recipient share. The pool amounts are produced by the §F
-// fee/subsidy split (a later slice); here they are inputs, so this whole section
-// is inert until both the split and the coinbase fan-out wire it (gated below
-// `dns_activation_daa_score`, `u64::MAX` everywhere today).
+// fee/subsidy split; here they are inputs. The split and the coinbase fan-out are
+// wired, and the section is active from genesis (gated on `dns_activation_daa_score`
+// = 0 everywhere today).
 // ---------------------------------------------------------------------
 
 /// Shared anti-capture proportional share: `pool × min(stake, expected_stake) /
@@ -1848,9 +1931,9 @@ pub fn validator_quality_bonus(
 // *primary* recipient of each split takes the remainder, so the parts sum to
 // the input exactly — no value is minted or lost to rounding regardless of
 // whether the configured bps sum to 10_000 (a misconfiguration only mis-weights
-// the split, never breaks supply). Pure; consumed by the coinbase fan-out (a
-// later slice) and inert until then — every current net gates the whole overlay
-// below `dns_activation_daa_score` (`u64::MAX`).
+// the split, never breaks supply). Pure; consumed by the coinbase fan-out, and
+// active from genesis — every current net runs the whole overlay from
+// `dns_activation_daa_score` = 0.
 //
 // The §D `worker_inclusion_pool` is `SubsidySplit::worker_inclusion_sompi`; the
 // §E validator pool is `SubsidySplit::validator_sompi` (plus the validator share
@@ -2082,7 +2165,7 @@ pub fn validator_participation_reward_outputs(
     (outputs, rewarded_keys)
 }
 
-/// Build the canonical kaspa-pq ML-DSA-65 P2PKH `scriptPublicKey`
+/// Build the canonical kaspa-pq ML-DSA-87 P2PKH `scriptPublicKey`
 /// for a 32-byte spend payload (ADR-0002 / ADR-0013 Addendum B).
 ///
 /// The 37-byte script is
@@ -2788,7 +2871,7 @@ pub fn reorg_inputs_since_common_ancestor(
 //
 // Deferred to later PRs (they need DAG / UTXO / rollout context): the
 // on-chain bond existence + `pubkey_hash == BLAKE2b-512(pubkey)` binding,
-// rollout-stage gating, ML-DSA-65 signature verification against the
+// rollout-stage gating, ML-DSA-87 signature verification against the
 // committed validator set, the `U ≥ R + E` dominance bound, the
 // `(bond_outpoint, validator_id, epoch)` on-chain uniqueness rule, and
 // the `evidence_window_blocks` recency of slashing evidence.
@@ -2804,6 +2887,8 @@ pub enum DnsTxKind {
     StakeAttestationShard,
     /// `SUBNETWORK_ID_SLASHING_EVIDENCE` — [`SlashingEvidencePayload`].
     SlashingEvidence,
+    /// `SUBNETWORK_ID_STAKE_UNBOND` — [`StakeUnbondRequestPayload`].
+    StakeUnbond,
 }
 
 /// Maps a subnetwork id to its DNS overlay payload kind, or `None` for a
@@ -2816,6 +2901,8 @@ pub fn dns_tx_kind(subnetwork_id: &SubnetworkId) -> Option<DnsTxKind> {
         Some(DnsTxKind::StakeAttestationShard)
     } else if *subnetwork_id == SUBNETWORK_ID_SLASHING_EVIDENCE {
         Some(DnsTxKind::SlashingEvidence)
+    } else if *subnetwork_id == SUBNETWORK_ID_STAKE_UNBOND {
+        Some(DnsTxKind::StakeUnbond)
     } else {
         None
     }
@@ -2835,6 +2922,10 @@ pub enum DnsTxError {
     ZeroBondAmount,
     /// Validator public key is not exactly `STAKE_VALIDATOR_PUBKEY_LEN`.
     InvalidPubKeyLen(usize),
+    /// The declared `validator_pubkey_hash` is not the canonical
+    /// `validator_id_from_pubkey(validator_pubkey)` (audit H-04): the overlay
+    /// identity must be the unkeyed BLAKE2b-512 of the bond's own key.
+    ValidatorPubkeyHashMismatch,
     /// An attestation signature is not exactly `STAKE_ATTESTATION_SIG_LEN`.
     InvalidSignatureLen(usize),
     /// An attestation shard carries no attestations.
@@ -2873,6 +2964,9 @@ impl Display for DnsTxError {
             DnsTxError::UnsupportedVersion(v) => write!(f, "unsupported DNS overlay payload version {v}"),
             DnsTxError::ZeroBondAmount => write!(f, "stake-bond amount must be non-zero"),
             DnsTxError::InvalidPubKeyLen(n) => write!(f, "validator public key length {n} is invalid"),
+            DnsTxError::ValidatorPubkeyHashMismatch => {
+                write!(f, "stake-bond validator_pubkey_hash is not BLAKE2b-512(validator_pubkey)")
+            }
             DnsTxError::InvalidSignatureLen(n) => write!(f, "attestation signature length {n} is invalid"),
             DnsTxError::EmptyShard => write!(f, "attestation shard is empty"),
             DnsTxError::ShardTooLarge(n) => write!(f, "attestation shard has {n} attestations, above the maximum"),
@@ -2914,11 +3008,13 @@ fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError
 
 /// Stateless validation of a [`StakeBondPayload`] (subnetwork
 /// `SUBNETWORK_ID_STAKE_BOND`): decodability, payload version, non-zero
-/// bonded amount, and the fixed 1952-byte ML-DSA-65 validator
-/// public-key length. The `validator_pubkey_hash ==
-/// BLAKE2b-512(validator_pubkey)` and `owner_pubkey_hash`↔funding-input
-/// bindings are deferred to the stateful PR. Returns the decoded payload
-/// so the tx-level [`validate_stake_bond_tx`] check can reuse it.
+/// bonded amount, the fixed 2592-byte ML-DSA-87 validator public-key
+/// length, and the canonical identity binding `validator_pubkey_hash ==
+/// validator_id_from_pubkey(validator_pubkey)` (audit H-04 — a bond may
+/// not declare an overlay identity not derived from its own key). The
+/// `owner_pubkey_hash`↔funding-input binding remains stateful (checked at
+/// acceptance). Returns the decoded payload so the tx-level
+/// [`validate_stake_bond_tx`] check can reuse it.
 pub fn validate_stake_bond_payload(payload: &[u8]) -> Result<(), DnsTxError> {
     decode_and_check_stake_bond_payload(payload).map(|_| ())
 }
@@ -2933,6 +3029,15 @@ fn decode_and_check_stake_bond_payload(payload: &[u8]) -> Result<StakeBondPayloa
     }
     if bond.validator_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
         return Err(DnsTxError::InvalidPubKeyLen(bond.validator_pubkey.len()));
+    }
+    // audit H-04 / ADR-0008/0012: bind the declared overlay identity to the key.
+    // `validator_id` is the canonical unkeyed BLAKE2b-512(validator_pubkey); a bond
+    // must not declare a `validator_pubkey_hash` that is not derived from its own
+    // key, or validator identity stops being uniquely key-derived (breaking
+    // dup-detection, the validator-set commitment, and external key->id monitoring).
+    // Purely intra-payload, so enforced statelessly here.
+    if bond.validator_pubkey_hash != validator_id_from_pubkey(&bond.validator_pubkey) {
+        return Err(DnsTxError::ValidatorPubkeyHashMismatch);
     }
     Ok(bond)
 }
@@ -3139,6 +3244,12 @@ pub enum BondMutation {
     /// accepting block's DAA score. Apply = set `slashed_at_daa_score`;
     /// revert = clear it.
     Slash(TransactionOutpoint, u64),
+    /// A bond moved to `Unbonding` by an accepted `StakeUnbondRequest` (audit
+    /// H-05), stamped with the accepting block's DAA score. Apply = set
+    /// `unbond_request_daa_score`; revert = clear it. The stateful rule rejects
+    /// unbond on a non-`Pending`/`Active` bond, so at most one applies per bond
+    /// per chain (clean revert).
+    Unbond(TransactionOutpoint, u64),
 }
 
 /// Derives the ordered [`BondMutation`]s implied by a chain block's
@@ -3193,6 +3304,15 @@ pub fn bond_mutations_from_accepted_txs(
             Some(DnsTxKind::SlashingEvidence) => {
                 if let Ok(payload) = borsh::from_slice::<SlashingEvidencePayload>(&tx.payload) {
                     muts.push(BondMutation::Slash(payload.bond_outpoint, accepted_daa_score));
+                }
+            }
+            Some(DnsTxKind::StakeUnbond) => {
+                // audit H-05: an accepted, owner-authorized unbond request stamps the bond's
+                // unbond clock. Authorization (owner-key binding + signature) and the
+                // Pending/Active precondition are enforced by `unbond_request_authorized` as a
+                // block-validity rule, so any unbond reaching here is valid and applies once.
+                if let Ok(req) = borsh::from_slice::<StakeUnbondRequestPayload>(&tx.payload) {
+                    muts.push(BondMutation::Unbond(req.bond_outpoint, accepted_daa_score));
                 }
             }
             Some(DnsTxKind::StakeAttestationShard) | None => {}
@@ -3253,6 +3373,11 @@ impl ActiveBondView {
                         record.status = BondStatus::Slashed;
                     }
                 }
+                BondMutation::Unbond(outpoint, daa) => {
+                    if let Some(record) = self.bonds.get_mut(outpoint) {
+                        record.unbond_request_daa_score = Some(*daa);
+                    }
+                }
             }
         }
     }
@@ -3271,6 +3396,11 @@ impl ActiveBondView {
                     if let Some(record) = self.bonds.get_mut(outpoint) {
                         record.slashed_at_daa_score = None;
                         record.status = BondStatus::Active;
+                    }
+                }
+                BondMutation::Unbond(outpoint, _) => {
+                    if let Some(record) = self.bonds.get_mut(outpoint) {
+                        record.unbond_request_daa_score = None;
                     }
                 }
             }
@@ -3376,7 +3506,7 @@ impl RewardedEpochSet {
 /// One signature-verified, bond-active attestation contribution fed into
 /// [`aggregate_epoch_tallies`]. The caller (consensus aggregation pass)
 /// has already (a) confirmed the referenced bond exists and is `Active` at
-/// the attestation's `target_daa_score`, and (b) verified the ML-DSA-65
+/// the attestation's `target_daa_score`, and (b) verified the ML-DSA-87
 /// signature — so only the dedup key and the bond's stake remain.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct AttestationContribution {
@@ -3649,6 +3779,23 @@ pub fn attestations_from_accepted_txs(txs: &[Transaction]) -> Vec<StakeAttestati
         if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::StakeAttestationShard) {
             if let Ok(shard) = borsh::from_slice::<StakeAttestationShardPayload>(&tx.payload) {
                 out.extend(shard.attestations);
+            }
+        }
+    }
+    out
+}
+
+/// kaspa-pq H-05: the `(tx_id, StakeUnbondRequestPayload)` of every decodable
+/// `StakeUnbondRequest` among `txs` (mirrors [`attestations_from_accepted_txs`];
+/// the tx id is carried so the block-validity rule can name the offending tx).
+/// Pure; defensively skips undecodable payloads (the stateless tx check already
+/// rejected them).
+pub fn unbond_requests_from_accepted_txs(txs: &[Transaction]) -> Vec<(TransactionId, StakeUnbondRequestPayload)> {
+    let mut out = Vec::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::StakeUnbond) {
+            if let Ok(req) = borsh::from_slice::<StakeUnbondRequestPayload>(&tx.payload) {
+                out.push((tx.id(), req));
             }
         }
     }
@@ -4037,10 +4184,10 @@ mod tests {
         let bytes = borsh::to_vec(&att).unwrap();
         let back: StakeAttestation = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, att);
-        // Spot-check the dominant size component: the ML-DSA-65
+        // Spot-check the dominant size component: the ML-DSA-87
         // signature plus borsh framing. The Vec<u8> Borsh layout is
-        // 4-byte length prefix + N data bytes, so a 3309-byte sig
-        // contributes 4 + 3309 = 3313 bytes plus the other fixed
+        // 4-byte length prefix + N data bytes, so a 4627-byte sig
+        // contributes 4 + 4627 = 4631 bytes plus the other fixed
         // fields.
         assert!(bytes.len() >= STAKE_ATTESTATION_SIG_LEN);
     }
@@ -4082,11 +4229,13 @@ mod tests {
     // ---- PR-10.4: DNS overlay tx kinds + stateless payload validation ----
 
     fn fixture_bond() -> StakeBondPayload {
+        let validator_pubkey = vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN];
         StakeBondPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             owner_pubkey_hash: Hash64::from_bytes([0xaau8; 64]),
-            validator_pubkey_hash: Hash64::from_bytes([0xbbu8; 64]),
-            validator_pubkey: vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN],
+            // audit H-04: declare the canonical key-derived overlay identity.
+            validator_pubkey_hash: validator_id_from_pubkey(&validator_pubkey),
+            validator_pubkey,
             amount: 100_000_000_000,
             activation_daa_score: 5_000,
             unbonding_period_blocks: 100_000,
@@ -4178,6 +4327,60 @@ mod tests {
             validate_stake_bond_payload(&borsh::to_vec(&bad).unwrap()),
             Err(DnsTxError::InvalidPubKeyLen(STAKE_VALIDATOR_PUBKEY_LEN - 1))
         );
+        // audit H-04: validator_pubkey_hash not derived from the validator key.
+        let mut bad = fixture_bond();
+        bad.validator_pubkey_hash = Hash64::from_bytes([0x01u8; 64]);
+        assert_eq!(validate_stake_bond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ValidatorPubkeyHashMismatch));
+    }
+
+    // ---- kaspa-pq H-05: StakeUnbondRequest (audit) ----
+
+    fn fixture_unbond(bond_outpoint: TransactionOutpoint) -> StakeUnbondRequestPayload {
+        StakeUnbondRequestPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint,
+            owner_pubkey: vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN],
+            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+        }
+    }
+
+    #[test]
+    fn validate_stake_unbond_payload_accepts_and_rejects() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11u8; 64]), 0);
+        assert_eq!(validate_stake_unbond_payload(&borsh::to_vec(&fixture_unbond(op)).unwrap()), Ok(()));
+        assert_eq!(validate_stake_unbond_payload(&[0xff, 0x00]), Err(DnsTxError::Decode));
+        let mut bad = fixture_unbond(op);
+        bad.version = 2;
+        assert_eq!(validate_stake_unbond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::UnsupportedVersion(2)));
+        let mut bad = fixture_unbond(op);
+        bad.owner_pubkey = vec![0u8; 10];
+        assert_eq!(validate_stake_unbond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::InvalidPubKeyLen(10)));
+        let mut bad = fixture_unbond(op);
+        bad.signature = vec![0u8; 10];
+        assert_eq!(validate_stake_unbond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::InvalidSignatureLen(10)));
+    }
+
+    #[test]
+    fn dns_tx_kind_maps_stake_unbond() {
+        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_STAKE_UNBOND), Some(DnsTxKind::StakeUnbond));
+    }
+
+    #[test]
+    fn unbond_mutation_and_view_apply_revert() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x22u8; 64]), 0);
+        let payload = borsh::to_vec(&fixture_unbond(op)).unwrap();
+        let tx = Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_UNBOND, 0, payload);
+        // bond_mutations derives exactly one Unbond stamped at the accepting DAA.
+        let muts = bond_mutations_from_accepted_txs(&[tx], 5_000, 0, 0);
+        assert_eq!(muts, vec![BondMutation::Unbond(op, 5_000)]);
+        // apply → unbond clock set → effective status Unbonding (precedence over activation).
+        let mut view = ActiveBondView::from_records([(op, stake_bond_record_from_payload(&fixture_bond(), op))]);
+        view.apply(&muts);
+        assert_eq!(view.get(&op).unwrap().unbond_request_daa_score, Some(5_000));
+        assert_eq!(effective_bond_status(view.get(&op).unwrap(), 5_000), BondStatus::Unbonding);
+        // revert → cleared (clean, because the rule admits at most one unbond per bond).
+        view.revert(&muts);
+        assert_eq!(view.get(&op).unwrap().unbond_request_daa_score, None);
     }
 
     // ---- ADR-0016 D.1: validate_stake_bond_tx (stake-lock rule) ----
@@ -4516,8 +4719,15 @@ mod tests {
         assert!(!p.dns_v3_params_consistent(), "backoff >= epoch length is rejected");
 
         let mut p = GENESIS_ACTIVE_DNS_PARAMS;
-        p.stake_score_window_blue_score = p.attestation_epoch_length_blue_score; // < 2L + lag + backoff
-        assert!(!p.dns_v3_params_consistent(), "a window too short to cover 2L + lag + backoff is rejected");
+        p.stake_score_window_blue_score = p.attestation_epoch_length_blue_score; // < depth·L + lag + backoff
+        assert!(!p.dns_v3_params_consistent(), "a window too short to cover the creditable horizon is rejected");
+        // audit M-05: covering only 2L (not required_stake_depth epochs) must be rejected.
+        let mut p = GENESIS_ACTIVE_DNS_PARAMS;
+        let depth_epochs = (p.required_stake_depth.0 / STAKE_SCORE_SCALE) as u64;
+        assert!(depth_epochs > 2, "fixture assumes a deep stake horizon");
+        p.stake_score_window_blue_score =
+            2 * p.attestation_epoch_length_blue_score + p.attestation_lag_blue_score + p.attestation_anchor_backoff_blue_score;
+        assert!(!p.dns_v3_params_consistent(), "covering only 2L is insufficient when required_stake_depth > 2 epochs");
     }
 
     #[test]
@@ -5510,7 +5720,7 @@ mod tests {
 
     #[test]
     fn equivocation_check_allow_rebroadcast_when_only_signature_fingerprint_differs() {
-        // ML-DSA-65 is hedged by default (FIPS 204 §3.4); two
+        // ML-DSA-87 is hedged by default (FIPS 204 §3.4); two
         // valid signatures over the same message differ on the
         // `rnd` parameter. Bit-equality on the fingerprint would
         // therefore be too strict, and would falsely block honest
@@ -6411,8 +6621,8 @@ mod tests {
         let bytes = borsh::to_vec(&t).unwrap();
         let back: TakeoverToken = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, t);
-        // Sanity: the dominant size component is the 3309-byte
-        // ML-DSA-65 signature.
+        // Sanity: the dominant size component is the 4627-byte
+        // ML-DSA-87 signature.
         assert!(bytes.len() >= STAKE_ATTESTATION_SIG_LEN);
     }
 
@@ -6492,7 +6702,7 @@ mod tests {
     #[test]
     fn signing_purpose_default_is_transaction() {
         // Conservative default — `Transaction` is the original
-        // ML-DSA-65 use site (ADR-0002), pre-DNS-overlay.
+        // ML-DSA-87 use site (ADR-0002), pre-DNS-overlay.
         assert_eq!(SigningPurpose::default(), SigningPurpose::Transaction);
     }
 

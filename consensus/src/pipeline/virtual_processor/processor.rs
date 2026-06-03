@@ -761,6 +761,14 @@ impl VirtualStateProcessor {
                             store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
                         }
                     }
+                    // kaspa-pq H-05: revert an unbond request (clear the unbond clock).
+                    BondMutation::Unbond(outpoint, _) => {
+                        if let Ok(record) = store.get(&outpoint) {
+                            let mut record = (*record).clone();
+                            record.unbond_request_daa_score = None;
+                            store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
+                        }
+                    }
                 }
             }
         }
@@ -777,6 +785,14 @@ impl VirtualStateProcessor {
                             let mut record = (*record).clone();
                             record.slashed_at_daa_score = Some(daa);
                             record.status = BondStatus::Slashed;
+                            store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
+                        }
+                    }
+                    // kaspa-pq H-05: apply an accepted unbond request (start the unbond clock).
+                    BondMutation::Unbond(outpoint, daa) => {
+                        if let Ok(record) = store.get(&outpoint) {
+                            let mut record = (*record).clone();
+                            record.unbond_request_daa_score = Some(daa);
                             store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
                         }
                     }
@@ -861,7 +877,7 @@ impl VirtualStateProcessor {
     ///
     /// Bounded-window design (stake_depth is a window quantity, not cumulative):
     /// walk back at most `max_reorg_horizon_blocks` selected-chain blocks from
-    /// `sink`, collect on-chain attestation shards, verify each ML-DSA-65
+    /// `sink`, collect on-chain attestation shards, verify each ML-DSA-87
     /// signature against its bond's validator key under
     /// `ATTESTATION_MLDSA87_CONTEXT`, gate by `is_bond_active_at`, then feed the
     /// pure aggregation core. No new store; recompute is reorg-safe.
@@ -879,9 +895,12 @@ impl VirtualStateProcessor {
         // `epoch_length_blocks` (O(1) amortized per block) instead of walking
         // `max_reorg_horizon_blocks` on every virtual commit. Deterministic and
         // epoch-granular; safe on devnet/testnet where the gate is dormant
-        // (Bootstrap). NOTE (mainnet/Active): before the gate relies on this,
-        // anchor the recompute at the epoch's final block (a fixed chain point)
-        // to remove the "first sink to cross the boundary" ambiguity.
+        // (Bootstrap). M-01 (resolved by DNS v3): the recompute no longer depends
+        // on which sink first crosses the boundary — `collect_stake_contributions_v2`
+        // (below) credits only THIS chain's *canonical lagged anchor* for each ready
+        // epoch (a fixed selected-chain point, blue_score-coordinated), so two nodes
+        // whose sinks differ within the same epoch compute the identical DnsState.
+        // The throttle only bounds recompute cadence, never the canonical result.
         let prev_dns_state = self.dns_state_store.read().get().ok();
         // kaspa-pq DNS v3: throttle the recompute to once per BLUE_SCORE epoch (epochs are
         // blue_score-coordinated now), not the DAA epoch. The recompute is canonical

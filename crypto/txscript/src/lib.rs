@@ -124,7 +124,7 @@ pub const fn is_legacy_signature_opcode(tag: u8) -> bool {
     )
 }
 
-/// Stateless ML-DSA-65 (FIPS 204) verification with a caller-supplied `ctx`
+/// Stateless ML-DSA-87 (FIPS 204) verification with a caller-supplied `ctx`
 /// (kaspa-pq Phase 10, ADR-0009). The transaction opcode path
 /// ([`TxScriptEngine::check_mldsa87_signature`]) hard-codes
 /// [`MLDSA87_TX_CONTEXT`]; this free function lets consensus DNS-overlay
@@ -154,7 +154,12 @@ pub fn verify_mldsa87_with_context(
     let sig_arr: [u8; MLDSA87_SIG_LEN] = signature.try_into().expect("checked above");
     let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(key_arr);
     let sig_obj = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_arr);
-    Ok(libcrux_ml_dsa::ml_dsa_87::verify(&vk, message, context, &sig_obj).is_ok())
+    // Consensus determinism (audit H-2): use the PORTABLE verify, not the runtime-multiplexed
+    // `ml_dsa_87::verify` which dispatches to AVX2/NEON/portable per-CPU. A single, bit-identical
+    // code path on every node removes any cross-backend accept/reject divergence (a libcrux
+    // pre-0.0.9 advisory had AVX2 accept signatures the portable path rejected) -> no consensus
+    // split between nodes on different CPUs. The hash-keyed SigCache amortises the extra cost.
+    Ok(libcrux_ml_dsa::ml_dsa_87::portable::verify(&vk, message, context, &sig_obj).is_ok())
 }
 pub const MAX_TX_IN_SEQUENCE_NUM: u64 = u64::MAX;
 pub const SEQUENCE_LOCK_TIME_DISABLED: u64 = 1 << 63;
@@ -878,7 +883,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
         }
     }
 
-    /// kaspa-pq ML-DSA-65 signature check. Layout mirrors the existing
+    /// kaspa-pq ML-DSA-87 signature check. Layout mirrors the existing
     /// [`check_schnorr_signature`] / [`check_ecdsa_signature`] but with:
     ///
     /// - Length pre-checks that reject before any libcrux call (so a
@@ -945,7 +950,12 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                         let vk = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(key_arr);
                         let sig_obj = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(sig_arr);
                         // TODO: Find a way to parallelize this part.
-                        let valid = libcrux_ml_dsa::ml_dsa_87::verify(&vk, msg_bytes.as_slice(), MLDSA87_TX_CONTEXT, &sig_obj).is_ok();
+                        // Consensus determinism (audit H-2): PORTABLE verify (one code path on every
+                        // CPU), never the runtime-multiplexed `verify` (AVX2/NEON/portable per-CPU),
+                        // so no two nodes can disagree on a signature's validity.
+                        let valid =
+                            libcrux_ml_dsa::ml_dsa_87::portable::verify(&vk, msg_bytes.as_slice(), MLDSA87_TX_CONTEXT, &sig_obj)
+                                .is_ok();
                         self.sig_cache.insert(sig_cache_key, valid);
                         Ok(valid)
                     }
@@ -1702,16 +1712,16 @@ mod bitcoind_tests {
         Comment((String,)),
     }
 
-    /// kaspa-pq Phase 4 acceptance test: a well-formed ML-DSA-65 P2PKH
+    /// kaspa-pq Phase 4 acceptance test: a well-formed ML-DSA-87 P2PKH
     /// spend on a populated transaction must pass `vm.execute()`. This
     /// test threads the full Phase 4 surface end-to-end:
     ///
-    ///   1. ML-DSA-65 keypair via `libcrux_ml_dsa::ml_dsa_87::generate_key_pair`
+    ///   1. ML-DSA-87 keypair via `libcrux_ml_dsa::ml_dsa_87::generate_key_pair`
     ///   2. Address = BLAKE2b-256(public_key)
     ///   3. `scriptPubKey` via `pay_to_address_script`
     ///   4. Sighash via `calc_mldsa87_signature_hash` (the same 64-byte digest
     ///      the script engine recomputes during verify — ADR-0019 §9)
-    ///   5. ML-DSA-65 sign with `MLDSA87_TX_CONTEXT`
+    ///   5. ML-DSA-87 sign with `MLDSA87_TX_CONTEXT`
     ///   6. `signatureScript = PUSH<sig||sighash_type> PUSH<public_key>`
     ///   7. `TxScriptEngine::from_transaction_input(...).execute()` -> Ok
     ///
@@ -1727,7 +1737,7 @@ mod bitcoind_tests {
         use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
         use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
-        // 1. Deterministic ML-DSA-65 keypair from a 32-byte seed.
+        // 1. Deterministic ML-DSA-87 keypair from a 32-byte seed.
         let keygen_seed = [0xa1u8; 32];
         let keypair = mldsa::generate_key_pair(keygen_seed);
         let pk_bytes = keypair.verification_key.as_ref();
@@ -1788,7 +1798,7 @@ mod bitcoind_tests {
             &reused,
             &sig_cache,
         );
-        vm.execute().expect("ML-DSA-65 P2PKH spend should verify");
+        vm.execute().expect("ML-DSA-87 P2PKH spend should verify");
     }
 
     /// kaspa-pq Phase 10: the standalone `verify_mldsa87_with_context` used by
@@ -1826,6 +1836,61 @@ mod bitcoind_tests {
             Err(TxScriptError::PubKeyFormat)
         );
         assert!(matches!(verify_mldsa87_with_context(pk, &message, &sig_bytes[..10], ATT_CTX), Err(TxScriptError::SigLength(10))));
+    }
+
+    /// Consensus determinism (audit H-2): the PORTABLE verify path — which the consensus tx and
+    /// DNS-overlay verifiers are pinned to — must agree with the runtime-multiplexed `verify` (the
+    /// platform's SIMD backend: AVX2 on x86_64, NEON on aarch64) on accept/reject for BOTH a valid
+    /// signature and a battery of length-valid-but-INVALID ones. A divergence here is a consensus
+    /// split between nodes on different CPUs — the exact class libcrux's pre-0.0.9 AVX2 advisory
+    /// hit. On a SIMD-capable host (e.g. an x86_64 CI runner) this is a genuine portable-vs-SIMD
+    /// differential, since the multiplexed entry dispatches to AVX2 there.
+    #[test]
+    fn mldsa87_portable_matches_multiplexed_verify() {
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+        let kp = mldsa::generate_key_pair([0x42u8; 32]);
+        let vk: [u8; MLDSA87_PK_LEN] = *kp.verification_key.as_ref();
+        let msg = b"kaspa-pq H-2 differential corpus".to_vec();
+        let good: [u8; MLDSA87_SIG_LEN] =
+            *mldsa::sign(&kp.signing_key, &msg, MLDSA87_TX_CONTEXT, [0x11u8; 32]).expect("sign").as_ref();
+
+        // (portable.is_ok(), multiplexed.is_ok()) for one (key, msg, ctx, sig) case.
+        let both = |vkb: [u8; MLDSA87_PK_LEN], m: &[u8], c: &[u8], sgb: [u8; MLDSA87_SIG_LEN]| -> (bool, bool) {
+            let p = mldsa::portable::verify(&mldsa::MLDSA87VerificationKey::new(vkb), m, c, &mldsa::MLDSA87Signature::new(sgb))
+                .is_ok();
+            let x =
+                mldsa::verify(&mldsa::MLDSA87VerificationKey::new(vkb), m, c, &mldsa::MLDSA87Signature::new(sgb)).is_ok();
+            (p, x)
+        };
+
+        // The valid signature: both backends accept (and agree).
+        assert_eq!(both(vk, &msg, MLDSA87_TX_CONTEXT, good), (true, true), "valid sig must verify on both backends");
+
+        // Length-valid but INVALID signatures: both backends must AGREE — and reject.
+        let mut head = good;
+        head[0] ^= 0xff;
+        let mut mid = good;
+        mid[MLDSA87_SIG_LEN / 2] ^= 0x01;
+        let mut tail = good;
+        *tail.last_mut().unwrap() ^= 0x80;
+        let mut wrong_vk = vk;
+        wrong_vk[0] ^= 0xff;
+        #[allow(clippy::type_complexity)]
+        let invalid: Vec<([u8; MLDSA87_PK_LEN], Vec<u8>, Vec<u8>, [u8; MLDSA87_SIG_LEN])> = vec![
+            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), head),                      // tampered head byte
+            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), mid),                       // tampered middle byte
+            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), tail),                      // tampered tail byte
+            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), [0u8; MLDSA87_SIG_LEN]),    // all-zero
+            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), [0xffu8; MLDSA87_SIG_LEN]), // all-ones
+            (vk, b"different-message".to_vec(), MLDSA87_TX_CONTEXT.to_vec(), good),    // wrong message
+            (vk, msg.clone(), b"kaspa-pq-v2/tx/WRONG".to_vec(), good),                 // wrong context
+            (wrong_vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), good),                // wrong key
+        ];
+        for (i, (k, m, c, s)) in invalid.into_iter().enumerate() {
+            let (p, x) = both(k, &m, &c, s);
+            assert_eq!(p, x, "BACKEND DIVERGENCE on invalid case {i}: portable={p} multiplexed={x}");
+            assert!(!p, "invalid case {i} was unexpectedly accepted");
+        }
     }
 
     fn create_spending_transaction(sig_script: Vec<u8>, script_public_key: ScriptPublicKey) -> Transaction {
@@ -1878,9 +1943,9 @@ mod bitcoind_tests {
 
             // kaspa-pq: upstream-imported bitcoind tests carry a "PUSH_SIZE"
             // expectation for >520-byte pushes (their 520-byte
-            // MAX_SCRIPT_ELEMENT_SIZE). kaspa-pq raised this limit to 4096
-            // to admit the 3310-byte ML-DSA-65 signature push and the
-            // 1952-byte ML-DSA-65 public-key push (see
+            // MAX_SCRIPT_ELEMENT_SIZE). kaspa-pq raised this limit to admit
+            // the 4627-byte ML-DSA-87 signature push and the
+            // 2592-byte ML-DSA-87 public-key push (see
             // docs/adr/0002-mldsa65-p2pkh.md). For these specific cases —
             // identified by the trailing ">520 byte push" comment — a
             // success result is the kaspa-pq-correct outcome and is

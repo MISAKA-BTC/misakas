@@ -272,7 +272,7 @@ impl NetworkId {
     }
 
     /// Returns a textual description of the network prefixed with `misaka-`
-    /// (kaspa-pq is a fork of Kaspa with ML-DSA-65 signatures and an LtHash
+    /// (kaspa-pq is a fork of Kaspa with ML-DSA-87 signatures and an LtHash
     /// UTXO accumulator; see docs/adr/0001-network-isolation.md).
     pub fn to_prefixed(&self) -> String {
         format!("misaka-{}", self)

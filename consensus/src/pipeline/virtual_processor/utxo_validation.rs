@@ -4,7 +4,8 @@ use crate::{
         BlockProcessResult,
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, IneligibleAttestationInBlock,
-            InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock, UnverifiableSlashingEvidenceInBlock,
+            InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock, UnauthorizedUnbondRequestInBlock,
+            UnverifiableSlashingEvidenceInBlock,
             WrongHeaderPruningPoint,
         },
     },
@@ -33,7 +34,8 @@ use kaspa_consensus_core::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondStatus, DnsParams, FeeSplitParams,
         RewardedEpochSet, SlashingSideEffect, attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status,
         epoch_meets_quality_floor, epochs_finalized_at, recompute_epoch_tallies, resolve_slashing_side_effects,
-        slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
+        UNBOND_REQUEST_CONTEXT, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
+        unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
         validator_participation_reward_outputs, validator_quality_bonus_outputs, victim_compensation_outputs,
     },
     hashing,
@@ -152,8 +154,8 @@ impl VirtualStateProcessor {
     /// reward at `(slashing_tx_id, 0)`. Both paths into this function (block
     /// validation and virtual recompute) pass the same view + `pov_daa_score`,
     /// so the side-effect is byte-identical across construction and validation.
-    /// Gated on `dns_activation_daa_score` (`u64::MAX` on every current network),
-    /// so it is a no-op everywhere today.
+    /// Gated on `dns_activation_daa_score` (= 0 on every current network), so it
+    /// runs from genesis today. (The gate is retained for any net that sets it > 0.)
     pub(super) fn calculate_utxo_state<V: UtxoView + Sync>(
         &self,
         ctx: &mut UtxoProcessingContext,
@@ -246,8 +248,8 @@ impl VirtualStateProcessor {
     /// [`apply_slashing_effects_to_state`], whose per-effect `composed.get`
     /// lookup yields the exact stored UTXO entry (so its `block_daa_score`
     /// matches the multiset element being removed) and doubles as a release-race
-    /// guard. Gated on `dns_activation_daa_score` (`u64::MAX` on every current
-    /// network), so this returns immediately everywhere today.
+    /// guard. Gated on `dns_activation_daa_score` (= 0 on every current
+    /// network), so this runs from genesis today.
     fn apply_slashing_side_effects<V: UtxoView>(
         &self,
         ctx: &mut UtxoProcessingContext,
@@ -472,6 +474,12 @@ impl VirtualStateProcessor {
         // is `Pending`/`Active`/mid-unbonding/`Slashed`. Inert below activation.
         self.check_bond_spend_gate(&txs, selected_parent_bond_view, header.daa_score)?;
 
+        // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): reject a block whose
+        // StakeUnbondRequest is not owner-authorized (unknown/ineligible bond, or a
+        // bad owner key / signature), so an attacker cannot force honest bonds into
+        // Unbonding to grief them out of the active set. Genesis-active.
+        self.check_unbond_request_authorized(&txs, selected_parent_bond_view, header.daa_score)?;
+
         // kaspa-pq Phase 10/11 + Phase 13 (ADR-0009 Addendum B §B.5 / ADR-0018
         // §F+§E): the validator reward outputs the coinbase must carry. The §F
         // carve (`carve`) splits each source block's reward Worker/Validator/
@@ -613,8 +621,8 @@ impl VirtualStateProcessor {
     /// Run identically by the coinbase **construction** (block-template) and
     /// **validation** paths, so they agree byte-for-byte. Returns no outputs
     /// unless the overlay is configured AND `daa_score` has reached
-    /// `dns_activation_daa_score` (`u64::MAX` everywhere today) — so the
-    /// coinbase is unchanged on every current network. Callers run the §B.4
+    /// `dns_activation_daa_score` (= 0 everywhere today) — so it is active
+    /// from genesis on every current network. Callers run the §B.4
     /// eligibility rule first, so every attestation here resolves to an
     /// `Active` bond; the `if let Some` is a defensive skip.
     ///
@@ -701,6 +709,13 @@ impl VirtualStateProcessor {
         // epoch's expected (total active) stake — the anti-capture denominator — with the same
         // within-block + cross-block (§B.3(c)) `(bond, epoch)` uniqueness and a whole-output pool
         // cap (Σ ≤ pool; the unspent remainder is not minted).
+        //
+        // M-04 (denominator definition): the per-block reward intentionally uses the INCLUSION-time
+        // active set (`total_active_stake_at(daa_score)`, below) as the expected-stake denominator,
+        // whereas the StakeScore security signal uses the epoch-ANCHOR-time set. Both are
+        // per-block-deterministic (read from the same selected-parent bond view), so neither splits;
+        // they differ only in reference point, which is correct — the reward pays inclusion in THIS
+        // block against the stake live at THIS block, while StakeScore measures buried-epoch security.
         //
         // ADR-0018 "本格版" (PoS-v2): the participation/quality split is **fenced**. Below
         // `pos_v2_activation_daa_score` the FULL pool funds participation (effective bps = 10_000),
@@ -818,10 +833,10 @@ impl VirtualStateProcessor {
     /// that is not §B.4-eligible (its bond does not resolve to `Active` in
     /// `bond_view` with a valid signature) so that a block mined from the
     /// template passes the eligibility rule rather than self-disqualifying.
-    /// Non-shard txs are always retained. Inert unless the overlay is
-    /// configured **and** past `dns_activation_daa_score` (`u64::MAX`
-    /// everywhere today), so on every current network this is a no-op and the
-    /// template is unchanged. Recency is *not* filtered here: a stale-but-
+    /// Non-shard txs are always retained. Active when the overlay is
+    /// configured **and** past `dns_activation_daa_score` (= 0
+    /// everywhere today), so on every current network this runs and the
+    /// template reflects the overlay. Recency is *not* filtered here: a stale-but-
     /// eligible shard is valid (§B.4 ignores recency) and simply earns no
     /// reward, so it may remain.
     pub(super) fn retain_reward_eligible_attestation_shards(
@@ -848,16 +863,16 @@ impl VirtualStateProcessor {
     /// includes a `StakeAttestationShard` whose attestation is not
     /// structurally reward-eligible against this block's own selected-parent
     /// bond view — its bond must resolve to `Active` (at the attestation's
-    /// `target_daa_score`) **and** its ML-DSA-65 signature must verify. This
+    /// `target_daa_score`) **and** its ML-DSA-87 signature must verify. This
     /// makes "included ⇒ rewardable" a consensus invariant, so the coinbase
     /// reward fan-out (PR-10.5′-b3) needs no skip set. Reward **uniqueness**
     /// (Addendum B §B.3(c)) is a reward-emission concern, not a validity one
     /// (a duplicate `(bond, epoch)` is simply unrewarded), and is not checked
     /// here.
     ///
-    /// Inert unless the overlay is configured **and** `daa_score` has reached
-    /// `dns_activation_daa_score` (`u64::MAX` on every current network, so
-    /// this returns `Ok(())` immediately everywhere today). The canonical
+    /// Active when the overlay is configured **and** `daa_score` has reached
+    /// `dns_activation_daa_score` (= 0 on every current network, so
+    /// this runs from genesis today). The canonical
     /// digest + signature verification mirror the StakeScore aggregation pass
     /// (`processor.rs`) byte-for-byte and the validator-service signer.
     fn check_attestation_reward_eligibility(
@@ -879,8 +894,8 @@ impl VirtualStateProcessor {
     /// selected-parent bond view, or one of whose two equivocating attestations
     /// does not ML-DSA-verify against that bond's `validator_pubkey` — so a
     /// forged-but-well-formed evidence (the §A.2 tx-level check is structural
-    /// only) cannot mutate a bond to `Slashed`. Inert unless the overlay is
-    /// configured **and** past `dns_activation_daa_score` (`u64::MAX`
+    /// only) cannot mutate a bond to `Slashed`. Active when the overlay is
+    /// configured **and** past `dns_activation_daa_score` (= 0
     /// everywhere today).
     fn check_slashing_evidence_genuine(
         &self,
@@ -904,10 +919,10 @@ impl VirtualStateProcessor {
     /// locked capital (D.1 pins `value == amount` to that output at acceptance).
     ///
     /// Like the sibling overlay checks this reads the same selected-parent
-    /// [`ActiveBondView`], so it is per-block-deterministic and reorg-safe. Inert
-    /// unless the overlay is configured **and** `daa_score` has reached
-    /// `dns_activation_daa_score` (`u64::MAX` on every current network, so this
-    /// returns `Ok(())` immediately everywhere today).
+    /// [`ActiveBondView`], so it is per-block-deterministic and reorg-safe. Active
+    /// when the overlay is configured **and** `daa_score` has reached
+    /// `dns_activation_daa_score` (= 0 on every current network, so this
+    /// runs from genesis today).
     fn check_bond_spend_gate(
         &self,
         txs: &[Transaction],
@@ -917,6 +932,21 @@ impl VirtualStateProcessor {
         let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         bond_spend_gate(txs, selected_parent_bond_view, daa_score, activated)
             .map_err(|(spending_tx, bond_outpoint)| NonReleasableBondSpendInBlock(spending_tx, bond_outpoint))
+    }
+
+    /// kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): the stake-unbond owner-
+    /// authorization rule. Rejects a block carrying a `StakeUnbondRequest` that
+    /// is not authorized by the bond owner (see [`unbond_request_authorized`]).
+    /// Inert below activation.
+    fn check_unbond_request_authorized(
+        &self,
+        txs: &[Transaction],
+        selected_parent_bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) -> BlockProcessResult<()> {
+        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        unbond_request_authorized(txs, selected_parent_bond_view, daa_score, activated)
+            .map_err(|(tx_id, bond_outpoint)| UnauthorizedUnbondRequestInBlock(tx_id, bond_outpoint))
     }
 
     /// Validates transactions against the provided `utxo_view` and returns a vector with all transactions
@@ -1090,7 +1120,7 @@ impl VirtualStateProcessor {
 /// ineligible attestation returns `Err((bond tx id, epoch))`; the caller maps
 /// it to [`IneligibleAttestationInBlock`]. An attestation is eligible iff its
 /// bond resolves to `Active` in `bond_view` at the attestation's
-/// `target_daa_score` **and** its ML-DSA-65 signature verifies over the
+/// `target_daa_score` **and** its ML-DSA-87 signature verifies over the
 /// canonical [`stake_attestation_message`] digest (Addendum A.3 layout).
 fn attestation_reward_eligibility(
     txs: &[Transaction],
@@ -1112,7 +1142,7 @@ fn attestation_reward_eligibility(
         if att.validator_id != bond.validator_pubkey_hash {
             return Err((att.bond_outpoint.transaction_id, att.epoch));
         }
-        // (b) ML-DSA-65 signature verifies over the canonical digest.
+        // (b) ML-DSA-87 signature verifies over the canonical digest.
         let digest = stake_attestation_message(
             net_id.as_byte_slice(),
             att.epoch,
@@ -1214,6 +1244,53 @@ fn bond_spend_gate(
                     return Err((tx.id(), input.previous_outpoint));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): pure core of the stake-unbond
+/// owner-authorization block-validity rule (testable without a processor).
+/// `activated` folds the `dns_params.is_some() && daa_score >=
+/// dns_activation_daa_score` gate; when `false` the rule is a no-op. For each
+/// `StakeUnbondRequest` among `txs`, requires: (a) the referenced bond resolves
+/// in `bond_view` and is `Pending`/`Active` at `daa_score` (not already
+/// `Unbonding`/`Slashed`, so at most one unbond mutation applies per bond per
+/// chain — keeping `ActiveBondView` apply/revert clean); (b) the payload's
+/// `owner_pubkey` hashes to the bond's `owner_pubkey_hash`; and (c) its
+/// ML-DSA-87 signature verifies over the canonical [`unbond_request_message`]
+/// digest under [`UNBOND_REQUEST_CONTEXT`]. On the first failure returns
+/// `Err((unbond tx id, bond outpoint))`, mapped to
+/// [`UnauthorizedUnbondRequestInBlock`]. This is what stops an attacker forcing
+/// honest bonds into `Unbonding` to grief them out of the active set.
+fn unbond_request_authorized(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    daa_score: u64,
+    activated: bool,
+) -> Result<(), (TransactionId, TransactionOutpoint)> {
+    if !activated {
+        return Ok(());
+    }
+    for (tx_id, req) in unbond_requests_from_accepted_txs(txs) {
+        // (a) the bond must exist and still be locked-but-not-yet-exiting.
+        let Some(bond) = bond_view.get(&req.bond_outpoint) else {
+            return Err((tx_id, req.bond_outpoint));
+        };
+        if !matches!(effective_bond_status(bond, daa_score), BondStatus::Pending | BondStatus::Active) {
+            return Err((tx_id, req.bond_outpoint));
+        }
+        // (b) the signing key must be THIS bond's owner.
+        if validator_id_from_pubkey(&req.owner_pubkey) != bond.owner_pubkey_hash {
+            return Err((tx_id, req.bond_outpoint));
+        }
+        // (c) the owner's signature over the bond-bound digest must verify.
+        let digest = unbond_request_message(req.bond_outpoint).as_bytes();
+        if !matches!(
+            verify_mldsa87_with_context(&req.owner_pubkey, &digest, &req.signature, UNBOND_REQUEST_CONTEXT),
+            Ok(true)
+        ) {
+            return Err((tx_id, req.bond_outpoint));
         }
     }
     Ok(())
@@ -1341,7 +1418,7 @@ mod tests {
     // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the reward-eligibility
     // rule's pure core. Covers the gate + both reject branches (bond absent /
     // signature invalid). The accept-with-valid-signature path requires
-    // ML-DSA-65 signing (libcrux) and is covered by the PR-10.5′-b3 end-to-end
+    // ML-DSA-87 signing (libcrux) and is covered by the PR-10.5′-b3 end-to-end
     // integration test rather than here.
     mod attestation_reward_eligibility {
         use super::super::attestation_reward_eligibility as eligibility;
@@ -1396,7 +1473,8 @@ mod tests {
         #[test]
         fn noop_when_not_activated() {
             // Even an attestation referencing an unknown bond passes when the
-            // gate is closed (every current network: dns_activation = u64::MAX).
+            // gate is closed (the `false` arg below). Current nets run with the
+            // gate open (dns_activation = 0); this covers the pre-activation path.
             let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(outpoint(1))));
             assert_eq!(eligibility(&[tx], &ActiveBondView::new(), NET(), false), Ok(()));
         }
@@ -1425,10 +1503,122 @@ mod tests {
         }
     }
 
+    // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): the stake-unbond owner-
+    // authorization rule. Unlike the mods above, this exercises the full ACCEPT
+    // path with a real ML-DSA-87 owner signature (libcrux) — owner-authorization
+    // is THE security property (it blocks the active-set grief attack).
+    mod unbond_request_authorized {
+        use super::super::unbond_request_authorized as authz;
+        use kaspa_consensus_core::{
+            constants::TX_VERSION,
+            dns_finality::{
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
+                StakeBondRecord, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, unbond_request_message,
+                validator_id_from_pubkey,
+            },
+            subnets::SUBNETWORK_ID_STAKE_UNBOND,
+            tx::{Transaction, TransactionOutpoint},
+        };
+        use kaspa_hashes::Hash64;
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+
+        fn outpoint(b: u8) -> TransactionOutpoint {
+            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+        }
+
+        fn owner_kp(seed: u8) -> mldsa::MLDSA87KeyPair {
+            mldsa::generate_key_pair([seed; 32])
+        }
+
+        // A bond whose `owner_pubkey_hash` binds to `kp`, Active from genesis.
+        fn bond_owned_by(op: TransactionOutpoint, kp: &mldsa::MLDSA87KeyPair) -> StakeBondRecord {
+            let owner_pubkey = kp.verification_key.as_ref().to_vec();
+            StakeBondRecord {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                owner_pubkey_hash: validator_id_from_pubkey(&owner_pubkey),
+                validator_pubkey_hash: Hash64::from_bytes([0xbb; 64]),
+                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
+                amount: 1_000,
+                activation_daa_score: 0,
+                unbonding_period_blocks: 100,
+                owner_reward_spk_payload: [0xdd; 64],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: BondStatus::Active,
+            }
+        }
+
+        fn unbond_tx(op: TransactionOutpoint, owner_pubkey: Vec<u8>, signature: Vec<u8>) -> Transaction {
+            let payload =
+                borsh::to_vec(&StakeUnbondRequestPayload { version: DNS_PAYLOAD_VERSION_V1, bond_outpoint: op, owner_pubkey, signature })
+                    .unwrap();
+            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_UNBOND, 0, payload)
+        }
+
+        fn signed_unbond_tx(op: TransactionOutpoint, kp: &mldsa::MLDSA87KeyPair) -> Transaction {
+            let digest = unbond_request_message(op).as_bytes();
+            let sig = mldsa::sign(&kp.signing_key, &digest, UNBOND_REQUEST_CONTEXT, [0x99u8; 32]).expect("sign");
+            unbond_tx(op, kp.verification_key.as_ref().to_vec(), sig.as_ref().to_vec())
+        }
+
+        #[test]
+        fn noop_when_not_activated() {
+            let op = outpoint(1);
+            let tx = unbond_tx(op, vec![0u8; STAKE_VALIDATOR_PUBKEY_LEN], vec![0u8; STAKE_ATTESTATION_SIG_LEN]);
+            assert_eq!(authz(&[tx], &ActiveBondView::new(), 10_000, false), Ok(()));
+        }
+
+        #[test]
+        fn accepts_owner_authorized_request() {
+            let op = outpoint(2);
+            let kp = owner_kp(2);
+            let view = ActiveBondView::from_records([(op, bond_owned_by(op, &kp))]);
+            assert_eq!(authz(&[signed_unbond_tx(op, &kp)], &view, 10_000, true), Ok(()));
+        }
+
+        #[test]
+        fn rejects_unknown_bond() {
+            let op = outpoint(3);
+            let kp = owner_kp(3);
+            assert!(authz(&[signed_unbond_tx(op, &kp)], &ActiveBondView::new(), 10_000, true).is_err());
+        }
+
+        #[test]
+        fn rejects_request_signed_by_non_owner() {
+            // The grief attack: a bond owned by `owner`, request signed by `attacker` → blocked.
+            let op = outpoint(4);
+            let owner = owner_kp(4);
+            let attacker = owner_kp(40);
+            let view = ActiveBondView::from_records([(op, bond_owned_by(op, &owner))]);
+            assert!(authz(&[signed_unbond_tx(op, &attacker)], &view, 10_000, true).is_err());
+        }
+
+        #[test]
+        fn rejects_bad_signature() {
+            let op = outpoint(5);
+            let kp = owner_kp(5);
+            let view = ActiveBondView::from_records([(op, bond_owned_by(op, &kp))]);
+            let tx = unbond_tx(op, kp.verification_key.as_ref().to_vec(), vec![0u8; STAKE_ATTESTATION_SIG_LEN]);
+            assert!(authz(&[tx], &view, 10_000, true).is_err());
+        }
+
+        #[test]
+        fn rejects_already_unbonding_bond() {
+            // at-most-once: a bond already Unbonding cannot be unbonded again (clean revert).
+            let op = outpoint(6);
+            let kp = owner_kp(6);
+            let mut rec = bond_owned_by(op, &kp);
+            rec.unbond_request_daa_score = Some(1);
+            let view = ActiveBondView::from_records([(op, rec)]);
+            assert!(authz(&[signed_unbond_tx(op, &kp)], &view, 10_000, true).is_err());
+        }
+    }
+
     // kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload" / item 2): the
     // stateful slashing-evidence genuineness rule's pure core. Covers the gate +
     // both reject branches (bond absent / signature invalid). The
-    // accept-with-valid-signatures path needs ML-DSA-65 signing (libcrux) and is
+    // accept-with-valid-signatures path needs ML-DSA-87 signing (libcrux) and is
     // covered by the dedicated reward-bearing e2e rather than here.
     mod slashing_evidence_genuine {
         use super::super::slashing_evidence_genuine as genuine;
@@ -1567,8 +1757,8 @@ mod tests {
 
         #[test]
         fn noop_when_not_activated() {
-            // Spending an Active bond is fine while the gate is closed (every
-            // current network: dns_activation = u64::MAX).
+            // Spending an Active bond is fine while the gate is closed (the
+            // gate-closed path; current nets run with it open, dns_activation = 0).
             let op = outpoint(1);
             let view = ActiveBondView::from_records([(op, bond(op))]);
             assert_eq!(gate(&[spending_tx(op)], &view, DAA, false), Ok(()));

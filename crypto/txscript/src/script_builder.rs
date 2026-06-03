@@ -467,8 +467,8 @@ mod tests {
                 unchecked: false,
             },
             // kaspa-pq: MAX_SCRIPT_ELEMENT_SIZE was widened from upstream's
-            // 520 to 4096 (ML-DSA-65 single sig/pubkey pushes) and then to
-            // 8192 so a P2SH ML-DSA-65 multisig redeem script (5868 bytes for
+            // 520 to 4096 (ML-DSA-87 single sig/pubkey pushes) and then to
+            // 8192 so a P2SH ML-DSA-87 multisig redeem script (5868 bytes for
             // 2-of-3) can be pushed as one element. The two tests below verify
             // pushes around the new boundary (8192 = 0x2000 -> LE [0x00, 0x20]).
             Test {

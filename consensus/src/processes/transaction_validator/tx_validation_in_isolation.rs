@@ -2,6 +2,7 @@ use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::config::params::PqEnforcementMode;
 use kaspa_consensus_core::dns_finality::{
     DnsTxKind, dns_tx_kind, validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx,
+    validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::tx::Transaction;
 use kaspa_txscript::script_class::ScriptClass;
@@ -54,7 +55,10 @@ impl TransactionValidator {
     /// gating on `pq_enforcement == Consensus` alone is correct here (isolation
     /// has no DAA score available). The genesis block is committed directly
     /// (`process_genesis`), never through this validator, and its premine output
-    /// is ML-DSA P2PKH regardless.
+    /// is ML-DSA P2PKH regardless. M-06 (launch policy): this design assumes PQ is
+    /// genesis-active. A future net wanting a NON-genesis PQ activation could not
+    /// reuse this isolation rule as-is — it would have to thread the activation DAA
+    /// score into a context-bearing check instead.
     fn check_transaction_pq_output_classes(&self, tx: &Transaction) -> TxResult<()> {
         if !matches!(self.pq_enforcement, PqEnforcementMode::Consensus) {
             return Ok(());
@@ -202,7 +206,7 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
         // kaspa-pq Phase 10 (ADR-0009): DNS finality overlay subnetworks are
         // routed + stateless-validated by full nodes (unlike the upstream
         // `SubnetworksDisabled` blanket reject). Stateful checks — on-chain
-        // bond existence, rollout-stage gating, ML-DSA-65 signature
+        // bond existence, rollout-stage gating, ML-DSA-87 signature
         // verification, the `U ≥ R + E` dominance bound — land in later PRs.
         match kind {
             // ADR-0016 D.1: the StakeBond stateless check also verifies its
@@ -213,6 +217,9 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
             // it must declare no outputs so consensus can mint the reporter
             // reward at (slashing_tx_id, 0) without colliding with a tx output.
             DnsTxKind::SlashingEvidence => validate_slashing_evidence_tx(&tx.payload, &tx.outputs),
+            // kaspa-pq H-05: stateless shape of a stake-unbond request (owner-key
+            // binding + signature are verified in the stateful block-validity rule).
+            DnsTxKind::StakeUnbond => validate_stake_unbond_payload(&tx.payload),
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())
@@ -392,7 +399,7 @@ mod tests {
     fn validate_dns_overlay_subnetwork_tx() {
         use kaspa_consensus_core::dns_finality::{
             DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
-            StakeAttestation, StakeBondPayload, p2pkh_mldsa87_spk,
+            StakeAttestation, StakeBondPayload, p2pkh_mldsa87_spk, validator_id_from_pubkey,
         };
         use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
         use kaspa_hashes::Hash64;
@@ -427,11 +434,13 @@ mod tests {
         );
 
         // Well-formed stake-bond payload → accepted.
+        let validator_pubkey = vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN];
         let bond = StakeBondPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             owner_pubkey_hash: Hash64::from_bytes([0xaau8; 64]),
-            validator_pubkey_hash: Hash64::from_bytes([0xbbu8; 64]),
-            validator_pubkey: vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN],
+            // audit H-04: canonical key-derived overlay identity.
+            validator_pubkey_hash: validator_id_from_pubkey(&validator_pubkey),
+            validator_pubkey,
             amount: 1_000,
             activation_daa_score: 0,
             unbonding_period_blocks: 1,

@@ -165,7 +165,7 @@ pub enum RuleError {
     // reward-eligibility block-validity rule. A block carrying a
     // `StakeAttestationShard` whose attestation does not resolve to an
     // `Active` bond (in the block's selected-parent bond view, at the
-    // attestation's target DAA score) with a valid ML-DSA-65 signature is
+    // attestation's target DAA score) with a valid ML-DSA-87 signature is
     // rejected, so that every included attestation is rewardable and the
     // coinbase fan-out needs no skip set. Args: the referenced bond's
     // transaction id and the attestation epoch. Inert below
@@ -194,6 +194,17 @@ pub enum RuleError {
     // outpoint it illegally spends. Inert below `dns_activation_daa_score`.
     #[error("block transaction {0} spends non-releasable bond outpoint {1}")]
     NonReleasableBondSpendInBlock(TransactionId, TransactionOutpoint),
+
+    // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): a block carrying a
+    // `StakeUnbondRequest` that is not owner-authorized — its bond is unknown in
+    // the block's selected-parent view, is not `Pending`/`Active` at the block's
+    // DAA score, or its `owner_pubkey` does not hash to the bond's
+    // `owner_pubkey_hash` / does not ML-DSA-verify over the canonical unbond
+    // digest — is rejected, so an attacker cannot force an honest validator's
+    // bond into `Unbonding` (a liveness/grief attack). Args: the unbond tx id
+    // and the referenced bond outpoint.
+    #[error("block includes an unauthorized stake-unbond request: tx {0} for bond {1}")]
+    UnauthorizedUnbondRequestInBlock(TransactionId, TransactionOutpoint),
 
     #[error("{0} non-coinbase transactions (out of {1}) are invalid in UTXO context")]
     InvalidTransactionsInUtxoContext(usize, usize),

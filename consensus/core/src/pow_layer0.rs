@@ -204,6 +204,14 @@ pub fn lift_target_256_to_512(target_256: Uint256) -> Uint512 {
 /// re-export of `Uint512::calc_work_512` so consumers can pull the
 /// kaspa-pq work-computation surface from `pow_layer0` without
 /// also pulling `kaspa_math` directly.
+///
+/// NOTE (audit L): GHOSTDAG blue-work is **intentionally** still computed by the
+/// legacy `difficulty::calc_work(bits)` (32-bit-compact target), NOT this 512-bit
+/// form — the kaspa-pq difficulty lift keeps the historical work unit so blue-work
+/// accounting is unchanged. This helper exists for the Layer-0 512-bit PoW surface
+/// and block-level derivation. Switching only *part* of the work accounting to
+/// `calc_work_512` would change blue-work and split the DAG, so the two MUST NOT be
+/// mixed within a single accounting domain.
 #[inline]
 pub fn calc_work_512(target: Uint512) -> Uint576 {
     target.calc_work_512()

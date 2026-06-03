@@ -77,7 +77,10 @@ impl SubnetworkId {
     /// (neither coinbase nor the zero-gas registry subnetwork).
     #[inline]
     pub fn is_dns_overlay(&self) -> bool {
-        *self == SUBNETWORK_ID_STAKE_BOND || *self == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD || *self == SUBNETWORK_ID_SLASHING_EVIDENCE
+        *self == SUBNETWORK_ID_STAKE_BOND
+            || *self == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD
+            || *self == SUBNETWORK_ID_SLASHING_EVIDENCE
+            || *self == SUBNETWORK_ID_STAKE_UNBOND
     }
 }
 
@@ -152,3 +155,5 @@ pub const SUBNETWORK_ID_REGISTRY: SubnetworkId = SubnetworkId::from_byte(2);
 pub const SUBNETWORK_ID_STAKE_BOND: SubnetworkId = SubnetworkId::from_byte(0x10);
 pub const SUBNETWORK_ID_STAKE_ATTESTATION_SHARD: SubnetworkId = SubnetworkId::from_byte(0x11);
 pub const SUBNETWORK_ID_SLASHING_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x12);
+/// kaspa-pq H-05 (ADR-0010 "Unbonding"): an owner-authorized request to begin unbonding a bond.
+pub const SUBNETWORK_ID_STAKE_UNBOND: SubnetworkId = SubnetworkId::from_byte(0x13);

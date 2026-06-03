@@ -2,7 +2,7 @@
 //!
 //! Used by BOTH the in-process `--enable-validator` service in `kaspad` and the
 //! standalone `kaspa-pq-validator` sidecar binary, so the two deployment shapes share a
-//! single implementation of: the ML-DSA-65 validator key + its derived overlay identity
+//! single implementation of: the ML-DSA-87 validator key + its derived overlay identity
 //! ([`ValidatorKey`]), fee-funded attestation-shard transaction building, and the
 //! persistent equivocation-safety log ([`SignedEpochStore`], ADR-0011). No consensus
 //! surface — this is a node-local helper crate.
@@ -32,14 +32,14 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-/// Length in bytes of the ML-DSA-65 keygen seed consumed by [`ValidatorKey::from_seed`]
+/// Length in bytes of the ML-DSA-87 keygen seed consumed by [`ValidatorKey::from_seed`]
 /// (matches the wallet's `KaspaPqMlDsa87KeyPair`).
 pub const VALIDATOR_SEED_LEN: usize = 32;
 
 /// Floor (sompi) for the attestation-shard transaction fee. The actual fee should be the
 /// transaction's compute mass (a safe >= mempool-minimum at the 1 sompi/gram relay rate),
 /// clamped up to this floor. Set above the node's mass-based standard minimum for the
-/// single-input ML-DSA-65 shard shape (observed ~15600 on devnet) so the shard is not
+/// single-input ML-DSA-87 shard shape (observed ~15600 on devnet) so the shard is not
 /// rejected as non-standard; the mass-based path (`estimate_attestation_fee`) overrides this
 /// when a `MassCalculator` is available (the in-process service), and the sidecar's flat
 /// fallback uses this floor.
@@ -47,9 +47,9 @@ pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 30_000;
 
 const SIGNED_EPOCH_FILE_VERSION: u16 = 1;
 
-/// Load a 32-byte ML-DSA-65 seed from a hex file (whitespace-trimmed). The file must
+/// Load a 32-byte ML-DSA-87 seed from a hex file (whitespace-trimmed). The file must
 /// contain exactly [`VALIDATOR_SEED_LEN`] bytes as hex, which seeds the deterministic
-/// ML-DSA-65 keypair via [`ValidatorKey::from_seed`].
+/// ML-DSA-87 keypair via [`ValidatorKey::from_seed`].
 pub fn load_validator_seed(path: &str) -> Result<[u8; VALIDATOR_SEED_LEN], String> {
     let raw = fs::read_to_string(path).map_err(|e| format!("cannot read validator key file '{path}': {e}"))?;
     let hex = raw.trim();
@@ -59,7 +59,7 @@ pub fn load_validator_seed(path: &str) -> Result<[u8; VALIDATOR_SEED_LEN], Strin
     Ok(seed)
 }
 
-/// Materialised validator signing key: the ML-DSA-65 keypair plus its derived overlay
+/// Materialised validator signing key: the ML-DSA-87 keypair plus its derived overlay
 /// identity (`validator_id = BLAKE2b-512(public_key)`, per ADR-0008/0012).
 ///
 /// Constructed once at startup from the seed file and held for the validator's lifetime.
@@ -87,15 +87,20 @@ impl ValidatorKey {
         Address::new(prefix, Version::PubKeyHashMlDsa87, &payload)
     }
 
-    /// Sign `message` under an explicit ML-DSA-65 `context` (domain separator) with fresh
+    /// Sign `message` under an explicit ML-DSA-87 `context` (domain separator) with fresh
     /// hedged randomness. Distinct contexts keep attestation signatures
     /// ([`ATTESTATION_MLDSA87_CONTEXT`]) and transaction-input signatures
     /// ([`MLDSA87_TX_CONTEXT`]) in disjoint domains — neither can be replayed as the other.
     pub fn sign_with_context(&self, message: &[u8], context: &[u8]) -> [u8; MLDSA87_SIG_LEN] {
+        // audit L: ML-DSA `sign` only fails for an over-long (>255-byte) context; every caller
+        // passes a short fixed domain-separator constant, so this precondition turns the
+        // (otherwise unreachable) failure into an explicit, clearly-attributed panic rather than
+        // an opaque libcrux error. Randomness is hedged; ML-DSA is not randomness-fragile.
+        assert!(context.len() <= 255, "ML-DSA signing context must be <= 255 bytes, got {}", context.len());
         let mut randomness = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut randomness);
         let sig = ml_dsa_87::sign(&self.keypair.signing_key, message, context, randomness)
-            .expect("ML-DSA-65 sign is infallible on a well-formed message");
+            .expect("ML-DSA-87 sign is infallible for a <= 255-byte context");
         *sig.as_ref()
     }
 
@@ -217,7 +222,7 @@ impl ValidatorKey {
     ///   - **output-1** = change (`funding.amount − amount − fee`) to the same script, emitted
     ///     only when non-zero.
     /// The borsh-encoded [`StakeBondPayload`] carries the bond terms; the validator's own
-    /// 1952-byte ML-DSA-65 pubkey and the matching `validator_pubkey_hash`/`owner_pubkey_hash`
+    /// 2592-byte ML-DSA-87 pubkey and the matching `validator_pubkey_hash`/`owner_pubkey_hash`
     /// (both = `validator_id`) are written so any node can verify attestations without a
     /// registry. `owner_reward_spk_payload` is where this bond's rewards are paid — set to the
     /// caller-supplied 64-byte P2PKH-ML-DSA payload (ADR-0019 §8; defaults to the validator's

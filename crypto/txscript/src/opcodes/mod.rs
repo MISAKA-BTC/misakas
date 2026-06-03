@@ -719,7 +719,7 @@ opcode_list! {
         Ok(())
     }
 
-    // kaspa-pq: ML-DSA-65 P2PKH check-signature. Allocated at 0xa6
+    // kaspa-pq: ML-DSA-87 P2PKH check-signature. Allocated at 0xa6
     // (was upstream `OpUnknown166`); see docs/adr/0002-mldsa65-p2pkh.md.
     // Layout mirrors OpCheckSig (0xac): pops <sig>, <key>, then pops the
     // 1-byte sighash type off the signature, length-checks both items
@@ -746,11 +746,11 @@ opcode_list! {
         }
     }
 
-    // kaspa-pq: ML-DSA-65 M-of-N CHECKMULTISIG (was upstream OpUnknown167).
-    // Mirrors OpCheckMultiSig (0xae) but verifies ML-DSA-65 signatures via
+    // kaspa-pq: ML-DSA-87 M-of-N CHECKMULTISIG (was upstream OpUnknown167).
+    // Mirrors OpCheckMultiSig (0xae) but verifies ML-DSA-87 signatures via
     // check_mldsa87_signature. Stack layout (Kaspa CHECKMULTISIG has no dummy
     // element): <sig_1> .. <sig_M> <M> <pk_1> .. <pk_N> <N>. Each sig push is
-    // <3309-byte ML-DSA-65 sig || 1-byte sighash type>. See docs/adr/0002.
+    // <4627-byte ML-DSA-87 sig || 1-byte sighash type>. See docs/adr/0002.
     opcode OpCheckMultiSigMlDsa87<0xa7, 1>(self, vm) {
         vm.op_check_multisig(MultisigScheme::MlDsa87)
     }
@@ -1039,6 +1039,10 @@ opcode_list! {
     // unlock pubkey matches the keyed address payload the wallet/premine commit;
     // the two MUST stay in lock-step or every P2PKH becomes unspendable. The
     // 32-byte `OP_BLAKE2B` (0xaa) is retained for the legacy P2SH template.
+    // NOTE (audit L): despite the generic-sounding `OP_BLAKE2B_512` name, this is a
+    // KEYED hash (keyed under `kaspa-pq-v2/address/mldsa87` via
+    // `blake2b_512_address_payload`), NOT a vanilla BLAKE2b-512 — it must not be
+    // reused as a general-purpose hash opcode.
     opcode OpBlake2b512<0xc4, 1>(self, vm) {
         let [last] = vm.dstack.pop_raw()?;
         let hash = blake2b_512_address_payload(last.as_slice());

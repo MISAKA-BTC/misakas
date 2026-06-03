@@ -664,7 +664,8 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     },
     reorg_mode: DnsReorgMode::TwoDimensionalDominance,
     full_reward_split_daa_score: 0,
-    // PoS-v2 "本格版" economics master fence — dormant on every net (no re-genesis).
+    // PoS-v2 "本格版" economics master fence — dormant on devnet/simnet (this
+    // GENESIS_ACTIVE preset); mainnet/testnet activate it from block 0 (PRODUCTION). No re-genesis.
     pos_v2_activation_daa_score: u64::MAX,
     // kaspa-pq DNS v3 (Canonical Lagged Anchor): blue_score-coordinated attestation epochs.
     // devnet/simnet use small windows for fast finality in tests. blue_score ≈ height at low DAG
@@ -815,7 +816,7 @@ pub const MAINNET_PARAMS: Params = Params {
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
     // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
-    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // Phase-6 ML-DSA-87 numbers). Measured on Apple Silicon arm64 via
     // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
     //   Schnorr verify (secp256k1):              12.74 µs
     //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
@@ -888,7 +889,7 @@ pub const TESTNET_PARAMS: Params = Params {
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
     // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
-    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // Phase-6 ML-DSA-87 numbers). Measured on Apple Silicon arm64 via
     // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
     //   Schnorr verify (secp256k1):              12.74 µs
     //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
@@ -956,7 +957,7 @@ pub const SIMNET_PARAMS: Params = Params {
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
     // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
-    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // Phase-6 ML-DSA-87 numbers). Measured on Apple Silicon arm64 via
     // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
     //   Schnorr verify (secp256k1):              12.74 µs
     //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
@@ -1012,7 +1013,7 @@ pub const DEVNET_PARAMS: Params = Params {
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
     // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
-    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // Phase-6 ML-DSA-87 numbers). Measured on Apple Silicon arm64 via
     // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
     //   Schnorr verify (secp256k1):              12.74 µs
     //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)

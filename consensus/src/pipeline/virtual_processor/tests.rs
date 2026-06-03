@@ -1373,7 +1373,7 @@ async fn header_with_unknown_pow_algo_id_is_rejected() {
 // ============================================================================
 // kaspa-pq ADR-0018 §G — DNS-overlay DAG integration harness (foundation).
 //
-// Retires the "ML-DSA-65 signing unavailable in the consensus test crate"
+// Retires the "ML-DSA-87 signing unavailable in the consensus test crate"
 // blocker for the reward-bearing / reorg / slashing DAG tests (DAG-2..7): these
 // helpers let a consensus test build stake-bond + attestation-shard txs and
 // produce an attestation signature the §B.4 verifier
@@ -1399,8 +1399,8 @@ mod dns_harness {
     use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
     use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
-    /// A test validator: an ML-DSA-65 key (re-derived deterministically from
-    /// `seed`) plus its 1952-byte pubkey and overlay `validator_id`.
+    /// A test validator: an ML-DSA-87 key (re-derived deterministically from
+    /// `seed`) plus its 2592-byte pubkey and overlay `validator_id`.
     pub(super) struct HarnessValidator {
         pub seed: [u8; 32],
         pub pubkey: Vec<u8>,
@@ -1563,7 +1563,7 @@ mod dns_harness {
         tx
     }
 
-    /// Build a fully ML-DSA-65-signed attestation for `bond_outpoint`, signing
+    /// Build a fully ML-DSA-87-signed attestation for `bond_outpoint`, signing
     /// exactly the digest the §B.4 verifier reconstructs.
     pub(super) fn build_signed_attestation(
         v: &HarnessValidator,
@@ -1577,7 +1577,7 @@ mod dns_harness {
         let msg = stake_attestation_message(network_id, epoch, target_hash, target_daa_score, validator_set_commitment, bond_outpoint);
         let mb = msg.as_bytes();
         let kp = mldsa::generate_key_pair(v.seed);
-        let sig = mldsa::sign(&kp.signing_key, &mb[..], ATTESTATION_MLDSA87_CONTEXT, [0x55u8; 32]).expect("ml-dsa-65 sign");
+        let sig = mldsa::sign(&kp.signing_key, &mb[..], ATTESTATION_MLDSA87_CONTEXT, [0x55u8; 32]).expect("ml-dsa-87 sign");
         StakeAttestation {
             version: DNS_PAYLOAD_VERSION_V1,
             validator_id: v.validator_id,

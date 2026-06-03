@@ -187,6 +187,12 @@ impl ProofContext {
                 proof[level as usize].first().map(|header| header.hash).ok_or(PruningImportError::PruningProofNotEnoughHeaders)?;
             for (i, header) in proof[level as usize].iter().enumerate() {
                 let (header_level, pow_passes) = calc_block_level_check_pow_layer0(header, &ppm.network_id, ppm.max_block_level);
+                // audit H-02(b): reject a proof header carrying a non-Phase-1 pow_algo_id, mirroring
+                // the header-isolation rule (M-3) so the pruning-proof path cannot admit a header
+                // with algo_id != 1 even if its kHeavyHash PoW passes.
+                if kaspa_consensus_core::pow_layer0::check_algo_id_phase1(header.pow_algo_id).is_err() {
+                    return Err(PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id));
+                }
                 if header_level < level {
                     return Err(PruningImportError::PruningProofWrongBlockLevel(header.hash, header_level, level));
                 }
