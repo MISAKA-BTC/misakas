@@ -15,6 +15,7 @@ impl HeaderProcessor {
     /// Returns the block level as computed from pow state or a rule error if such was encountered
     pub(super) fn validate_header_in_isolation(&self, header: &Header) -> BlockProcessResult<BlockLevel> {
         self.check_header_version(header)?;
+        self.check_pow_algo_id(header)?;
         self.check_block_timestamp_in_isolation(header)?;
         self.check_parents_limit(header)?;
         Self::check_parents_not_origin(header)?;
@@ -32,6 +33,16 @@ impl HeaderProcessor {
             return Err(RuleError::WrongBlockVersion(header.version));
         }
         Ok(())
+    }
+
+    /// kaspa-pq Layer-0 (PR-9.5d / audit M-3): reject a header whose `pow_algo_id` is not the
+    /// Phase-1 kHeavyHash id (`POW_ALGO_ID_KHEAVYHASH = 1`). Enforces the single-algo invariant
+    /// (no mixed-`algo_id` DAG) so a future hard-fork can introduce `algo_id >= 2` cleanly. A no-op
+    /// on the current chain — genesis and every block/template build `algo_id = 1` — and checked
+    /// before the PoW seed (which consumes `algo_id`) is derived.
+    fn check_pow_algo_id(&self, header: &Header) -> BlockProcessResult<()> {
+        kaspa_consensus_core::pow_layer0::check_algo_id_phase1(header.pow_algo_id)
+            .map_err(|_| RuleError::UnknownPowAlgoId(header.pow_algo_id))
     }
 
     fn check_block_timestamp_in_isolation(&self, header: &Header) -> BlockProcessResult<()> {

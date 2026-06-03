@@ -28,6 +28,7 @@ use libcrux_ml_dsa::ml_dsa_87;
 use rand::RngCore;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -409,8 +410,25 @@ impl SignedEpochStore {
             fs::create_dir_all(parent).map_err(|e| format!("cannot create validator-state dir {}: {e}", parent.display()))?;
         }
         let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, json).map_err(|e| format!("cannot write validator-state tmp {}: {e}", tmp.display()))?;
+        // Durability (audit H-3): the equivocation log MUST survive a crash. atomic rename alone
+        // is not enough — if a written-AND-broadcast record is lost to a crash before it hits
+        // stable storage, the validator could re-sign a DIFFERENT anchor for the same epoch on
+        // restart (slashable). So fsync the temp file BEFORE the rename, then fsync the parent
+        // directory so the new dirent is durable too. Fail-closed on any error.
+        {
+            let mut f =
+                fs::File::create(&tmp).map_err(|e| format!("cannot create validator-state tmp {}: {e}", tmp.display()))?;
+            f.write_all(json.as_bytes()).map_err(|e| format!("cannot write validator-state tmp {}: {e}", tmp.display()))?;
+            f.sync_all().map_err(|e| format!("cannot fsync validator-state tmp {}: {e}", tmp.display()))?;
+        }
         fs::rename(&tmp, &self.path).map_err(|e| format!("cannot commit validator-state {}: {e}", self.path.display()))?;
+        if let Some(parent) = self.path.parent() {
+            // Best-effort: persist the rename. Unix fsyncs a directory via an opened handle; other
+            // platforms may not support it, in which case the temp-file fsync above still holds.
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
         Ok(())
     }
 }

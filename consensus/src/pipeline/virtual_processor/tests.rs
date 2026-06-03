@@ -1344,6 +1344,32 @@ async fn dns_v3_many_validators_agree_on_anchor_under_fast_wide_dag() {
     );
 }
 
+/// kaspa-pq Layer-0 (audit M-3): a header whose `pow_algo_id` is not the Phase-1 kHeavyHash id
+/// is rejected by header-in-isolation validation (`check_algo_id_phase1` is now wired into
+/// `validate_header_in_isolation`). Enforces the single-`algo_id` invariant before a future
+/// hard-fork introduces `algo_id >= 2`. (Every honest builder — genesis, template, tests —
+/// emits `algo_id = 1`, so this only ever fires on a crafted header.)
+#[tokio::test]
+async fn header_with_unknown_pow_algo_id_is_rejected() {
+    use kaspa_consensus_core::errors::block::RuleError;
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    // Establish a virtual chain with one valid (algo_id = 1) block.
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+
+    // Build a template, then corrupt the Phase-1 algo id to a non-kHeavyHash value and re-finalize.
+    let mut t = ctx.build_block_template(0, ctx.simulated_time + 1_000);
+    t.block.header.pow_algo_id = 2;
+    t.block.header.finalize();
+    let block = t.block.to_immutable();
+
+    // Header-in-isolation validation must reject it (the M-3 wiring), before the PoW seed —
+    // which consumes algo_id — is even derived.
+    let res = ctx.consensus.validate_and_insert_block(block).block_task.await;
+    assert!(matches!(res, Err(RuleError::UnknownPowAlgoId(2))), "expected UnknownPowAlgoId(2), got {res:?}");
+}
+
 // ============================================================================
 // kaspa-pq ADR-0018 §G — DNS-overlay DAG integration harness (foundation).
 //
