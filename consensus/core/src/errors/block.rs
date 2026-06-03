@@ -32,6 +32,9 @@ pub enum RuleError {
     #[error("wrong block version: got {0} but expected {}", constants::BLOCK_VERSION)]
     WrongBlockVersion(u16),
 
+    #[error("unknown pow_algo_id {0}: Phase 1 admits only kHeavyHash (POW_ALGO_ID_KHEAVYHASH = 1)")]
+    UnknownPowAlgoId(u8),
+
     #[error("the block timestamp is too far into the future: block timestamp is {0} but maximum timestamp allowed is {1}")]
     TimeTooFarIntoTheFuture(u64, u64),
 
