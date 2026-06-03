@@ -1943,9 +1943,9 @@ mod bitcoind_tests {
 
             // kaspa-pq: upstream-imported bitcoind tests carry a "PUSH_SIZE"
             // expectation for >520-byte pushes (their 520-byte
-            // MAX_SCRIPT_ELEMENT_SIZE). kaspa-pq raised this limit to 4096
-            // to admit the 3310-byte ML-DSA-65 signature push and the
-            // 1952-byte ML-DSA-65 public-key push (see
+            // MAX_SCRIPT_ELEMENT_SIZE). kaspa-pq raised this limit to admit
+            // the 4627-byte ML-DSA-87 signature push and the
+            // 2592-byte ML-DSA-87 public-key push (see
             // docs/adr/0002-mldsa65-p2pkh.md). For these specific cases —
             // identified by the trailing ">520 byte push" comment — a
             // success result is the kaspa-pq-correct outcome and is

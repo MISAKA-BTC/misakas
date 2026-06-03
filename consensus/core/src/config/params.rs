@@ -664,7 +664,8 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     },
     reorg_mode: DnsReorgMode::TwoDimensionalDominance,
     full_reward_split_daa_score: 0,
-    // PoS-v2 "本格版" economics master fence — dormant on every net (no re-genesis).
+    // PoS-v2 "本格版" economics master fence — dormant on devnet/simnet (this
+    // GENESIS_ACTIVE preset); mainnet/testnet activate it from block 0 (PRODUCTION). No re-genesis.
     pos_v2_activation_daa_score: u64::MAX,
     // kaspa-pq DNS v3 (Canonical Lagged Anchor): blue_score-coordinated attestation epochs.
     // devnet/simnet use small windows for fast finality in tests. blue_score ≈ height at low DAG

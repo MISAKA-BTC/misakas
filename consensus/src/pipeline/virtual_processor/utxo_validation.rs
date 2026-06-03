@@ -152,8 +152,8 @@ impl VirtualStateProcessor {
     /// reward at `(slashing_tx_id, 0)`. Both paths into this function (block
     /// validation and virtual recompute) pass the same view + `pov_daa_score`,
     /// so the side-effect is byte-identical across construction and validation.
-    /// Gated on `dns_activation_daa_score` (`u64::MAX` on every current network),
-    /// so it is a no-op everywhere today.
+    /// Gated on `dns_activation_daa_score` (= 0 on every current network), so it
+    /// runs from genesis today. (The gate is retained for any net that sets it > 0.)
     pub(super) fn calculate_utxo_state<V: UtxoView + Sync>(
         &self,
         ctx: &mut UtxoProcessingContext,
@@ -246,8 +246,8 @@ impl VirtualStateProcessor {
     /// [`apply_slashing_effects_to_state`], whose per-effect `composed.get`
     /// lookup yields the exact stored UTXO entry (so its `block_daa_score`
     /// matches the multiset element being removed) and doubles as a release-race
-    /// guard. Gated on `dns_activation_daa_score` (`u64::MAX` on every current
-    /// network), so this returns immediately everywhere today.
+    /// guard. Gated on `dns_activation_daa_score` (= 0 on every current
+    /// network), so this runs from genesis today.
     fn apply_slashing_side_effects<V: UtxoView>(
         &self,
         ctx: &mut UtxoProcessingContext,
@@ -613,8 +613,8 @@ impl VirtualStateProcessor {
     /// Run identically by the coinbase **construction** (block-template) and
     /// **validation** paths, so they agree byte-for-byte. Returns no outputs
     /// unless the overlay is configured AND `daa_score` has reached
-    /// `dns_activation_daa_score` (`u64::MAX` everywhere today) — so the
-    /// coinbase is unchanged on every current network. Callers run the §B.4
+    /// `dns_activation_daa_score` (= 0 everywhere today) — so it is active
+    /// from genesis on every current network. Callers run the §B.4
     /// eligibility rule first, so every attestation here resolves to an
     /// `Active` bond; the `if let Some` is a defensive skip.
     ///
@@ -818,10 +818,10 @@ impl VirtualStateProcessor {
     /// that is not §B.4-eligible (its bond does not resolve to `Active` in
     /// `bond_view` with a valid signature) so that a block mined from the
     /// template passes the eligibility rule rather than self-disqualifying.
-    /// Non-shard txs are always retained. Inert unless the overlay is
-    /// configured **and** past `dns_activation_daa_score` (`u64::MAX`
-    /// everywhere today), so on every current network this is a no-op and the
-    /// template is unchanged. Recency is *not* filtered here: a stale-but-
+    /// Non-shard txs are always retained. Active when the overlay is
+    /// configured **and** past `dns_activation_daa_score` (= 0
+    /// everywhere today), so on every current network this runs and the
+    /// template reflects the overlay. Recency is *not* filtered here: a stale-but-
     /// eligible shard is valid (§B.4 ignores recency) and simply earns no
     /// reward, so it may remain.
     pub(super) fn retain_reward_eligible_attestation_shards(
@@ -855,9 +855,9 @@ impl VirtualStateProcessor {
     /// (a duplicate `(bond, epoch)` is simply unrewarded), and is not checked
     /// here.
     ///
-    /// Inert unless the overlay is configured **and** `daa_score` has reached
-    /// `dns_activation_daa_score` (`u64::MAX` on every current network, so
-    /// this returns `Ok(())` immediately everywhere today). The canonical
+    /// Active when the overlay is configured **and** `daa_score` has reached
+    /// `dns_activation_daa_score` (= 0 on every current network, so
+    /// this runs from genesis today). The canonical
     /// digest + signature verification mirror the StakeScore aggregation pass
     /// (`processor.rs`) byte-for-byte and the validator-service signer.
     fn check_attestation_reward_eligibility(
@@ -879,8 +879,8 @@ impl VirtualStateProcessor {
     /// selected-parent bond view, or one of whose two equivocating attestations
     /// does not ML-DSA-verify against that bond's `validator_pubkey` — so a
     /// forged-but-well-formed evidence (the §A.2 tx-level check is structural
-    /// only) cannot mutate a bond to `Slashed`. Inert unless the overlay is
-    /// configured **and** past `dns_activation_daa_score` (`u64::MAX`
+    /// only) cannot mutate a bond to `Slashed`. Active when the overlay is
+    /// configured **and** past `dns_activation_daa_score` (= 0
     /// everywhere today).
     fn check_slashing_evidence_genuine(
         &self,
@@ -904,10 +904,10 @@ impl VirtualStateProcessor {
     /// locked capital (D.1 pins `value == amount` to that output at acceptance).
     ///
     /// Like the sibling overlay checks this reads the same selected-parent
-    /// [`ActiveBondView`], so it is per-block-deterministic and reorg-safe. Inert
-    /// unless the overlay is configured **and** `daa_score` has reached
-    /// `dns_activation_daa_score` (`u64::MAX` on every current network, so this
-    /// returns `Ok(())` immediately everywhere today).
+    /// [`ActiveBondView`], so it is per-block-deterministic and reorg-safe. Active
+    /// when the overlay is configured **and** `daa_score` has reached
+    /// `dns_activation_daa_score` (= 0 on every current network, so this
+    /// runs from genesis today).
     fn check_bond_spend_gate(
         &self,
         txs: &[Transaction],
@@ -1396,7 +1396,8 @@ mod tests {
         #[test]
         fn noop_when_not_activated() {
             // Even an attestation referencing an unknown bond passes when the
-            // gate is closed (every current network: dns_activation = u64::MAX).
+            // gate is closed (the `false` arg below). Current nets run with the
+            // gate open (dns_activation = 0); this covers the pre-activation path.
             let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(outpoint(1))));
             assert_eq!(eligibility(&[tx], &ActiveBondView::new(), NET(), false), Ok(()));
         }
@@ -1567,8 +1568,8 @@ mod tests {
 
         #[test]
         fn noop_when_not_activated() {
-            // Spending an Active bond is fine while the gate is closed (every
-            // current network: dns_activation = u64::MAX).
+            // Spending an Active bond is fine while the gate is closed (the
+            // gate-closed path; current nets run with it open, dns_activation = 0).
             let op = outpoint(1);
             let view = ActiveBondView::from_records([(op, bond(op))]);
             assert_eq!(gate(&[spending_tx(op)], &view, DAA, false), Ok(()));

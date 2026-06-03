@@ -150,14 +150,18 @@ pub const STAKE_SCORE_SCALE: u128 = 1_000_000_000;
 /// Bumped only by a hard-fork ADR; consumers reject foreign versions.
 pub const DNS_PAYLOAD_VERSION_V1: u16 = 1;
 
-/// kaspa-pq Phase 10 ML-DSA-65 attestation signing context. Distinct
-/// from the transaction context (`b"kaspa-pq-v1/tx/mldsa87"`,
-/// ADR-0002) so an attestation signature can never be replayed as a
-/// transaction signature (and vice versa).
+/// kaspa-pq Phase 10 ML-DSA-87 attestation signing context. Distinct from the
+/// transaction context (`b"kaspa-pq-v2/tx/mldsa87"`), the address context, and
+/// the sighash domain, so an attestation signature can never be replayed as any
+/// of those (and vice versa). NOTE (audit L-1): the leading `-v1`/`-v2` digit is
+/// a *per-domain* separation tag, not a global scheme version — the overlay
+/// domains (att/takeover) keep `-v1` while the tx/address/sighash domains use
+/// `-v2` (the md2 context bump). Each string is consensus-fixed; changing any of
+/// them is a hard-fork (re-genesis) change.
 pub const ATTESTATION_MLDSA87_CONTEXT: &[u8] = b"kaspa-pq-v1/att/mldsa87";
 
 /// kaspa-pq Phase 10 BLAKE2b-256 domain key used when constructing
-/// the attestation message that ML-DSA-65 signs over. Consumed by
+/// the attestation message that ML-DSA-87 signs over. Consumed by
 /// [`stake_attestation_message`]. See ADR-0009 §"Attestation target".
 pub const ATTESTATION_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-v1/stake-attestation";
 
@@ -175,10 +179,10 @@ pub const VALIDATOR_SET_COMMITMENT_KEY: &[u8] = b"kaspa-pq-validator-set-v1";
 /// - `TAKEOVER_TOKEN_MESSAGE_DOMAIN` — keys the BLAKE2b-256 over
 ///   the takeover-token signing material (see
 ///   [`takeover_token_message`]).
-/// - `TAKEOVER_TOKEN_CONTEXT` — ML-DSA-65 `ctx` parameter for the
+/// - `TAKEOVER_TOKEN_CONTEXT` — ML-DSA-87 `ctx` parameter for the
 ///   `sign_ctx` call that produces the
 ///   [`TakeoverToken::signature`]. Distinct from both the
-///   transaction context (`b"kaspa-pq-v1/tx/mldsa87"`) and the
+///   transaction context (`b"kaspa-pq-v2/tx/mldsa87"`) and the
 ///   attestation context (`b"kaspa-pq-v1/att/mldsa87"`,
 ///   ADR-0009 §"Attestation target") so a takeover-token
 ///   signature can never be replayed as a transaction or
@@ -679,8 +683,8 @@ pub struct DnsParams {
     /// candidate that exits the DNS-confirmed prefix must out-Work **and** out-Stake
     /// canonical since their common ancestor); PoC/testnet/devnet stay
     /// [`DnsReorgMode::HardCheckpoint`] (reject any such exit — the loud testing
-    /// convenience). Read by the processor's reorg gate (`dns_reorg_allows`); inert below
-    /// `dns_activation_daa_score` (`u64::MAX` everywhere) like the rest of the overlay.
+    /// convenience). Read by the processor's reorg gate (`dns_reorg_allows`); genesis-active
+    /// (`dns_activation_daa_score` = 0 everywhere) like the rest of the overlay.
     /// Appended last to keep the borsh layout change localized.
     pub reorg_mode: DnsReorgMode,
 
@@ -835,8 +839,8 @@ impl DnsParams {
     /// Between activation and [`Self::full_reward_split_daa_score`] it is the
     /// bootstrap split (Stage 2, smaller validator share); at/after it, the full
     /// split (Stage 3). Both the coinbase carve and `coinbase_validator_pool`
-    /// consume the returned params, so construction and validation agree. Inert on
-    /// every current network (`dns_activation_daa_score = u64::MAX`).
+    /// consume the returned params, so construction and validation agree. Active on
+    /// every current network (`dns_activation_daa_score = 0`).
     pub fn reward_fee_split(&self, daa_score: u64) -> Option<&FeeSplitParams> {
         if daa_score < self.dns_activation_daa_score {
             None
@@ -1753,9 +1757,9 @@ pub fn compute_attestation_reward_payouts(
 // minority can never drain a pool (the rejected `pool / included_count` design).
 // The unspent remainder of each pool rolls over (a caller concern); these helpers
 // only compute the per-recipient share. The pool amounts are produced by the §F
-// fee/subsidy split (a later slice); here they are inputs, so this whole section
-// is inert until both the split and the coinbase fan-out wire it (gated below
-// `dns_activation_daa_score`, `u64::MAX` everywhere today).
+// fee/subsidy split; here they are inputs. The split and the coinbase fan-out are
+// wired, and the section is active from genesis (gated on `dns_activation_daa_score`
+// = 0 everywhere today).
 // ---------------------------------------------------------------------
 
 /// Shared anti-capture proportional share: `pool × min(stake, expected_stake) /
@@ -1848,9 +1852,9 @@ pub fn validator_quality_bonus(
 // *primary* recipient of each split takes the remainder, so the parts sum to
 // the input exactly — no value is minted or lost to rounding regardless of
 // whether the configured bps sum to 10_000 (a misconfiguration only mis-weights
-// the split, never breaks supply). Pure; consumed by the coinbase fan-out (a
-// later slice) and inert until then — every current net gates the whole overlay
-// below `dns_activation_daa_score` (`u64::MAX`).
+// the split, never breaks supply). Pure; consumed by the coinbase fan-out, and
+// active from genesis — every current net runs the whole overlay from
+// `dns_activation_daa_score` = 0.
 //
 // The §D `worker_inclusion_pool` is `SubsidySplit::worker_inclusion_sompi`; the
 // §E validator pool is `SubsidySplit::validator_sompi` (plus the validator share
@@ -2914,7 +2918,7 @@ fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError
 
 /// Stateless validation of a [`StakeBondPayload`] (subnetwork
 /// `SUBNETWORK_ID_STAKE_BOND`): decodability, payload version, non-zero
-/// bonded amount, and the fixed 1952-byte ML-DSA-65 validator
+/// bonded amount, and the fixed 2592-byte ML-DSA-87 validator
 /// public-key length. The `validator_pubkey_hash ==
 /// BLAKE2b-512(validator_pubkey)` and `owner_pubkey_hash`↔funding-input
 /// bindings are deferred to the stateful PR. Returns the decoded payload
@@ -4037,10 +4041,10 @@ mod tests {
         let bytes = borsh::to_vec(&att).unwrap();
         let back: StakeAttestation = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, att);
-        // Spot-check the dominant size component: the ML-DSA-65
+        // Spot-check the dominant size component: the ML-DSA-87
         // signature plus borsh framing. The Vec<u8> Borsh layout is
-        // 4-byte length prefix + N data bytes, so a 3309-byte sig
-        // contributes 4 + 3309 = 3313 bytes plus the other fixed
+        // 4-byte length prefix + N data bytes, so a 4627-byte sig
+        // contributes 4 + 4627 = 4631 bytes plus the other fixed
         // fields.
         assert!(bytes.len() >= STAKE_ATTESTATION_SIG_LEN);
     }
@@ -6411,8 +6415,8 @@ mod tests {
         let bytes = borsh::to_vec(&t).unwrap();
         let back: TakeoverToken = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, t);
-        // Sanity: the dominant size component is the 3309-byte
-        // ML-DSA-65 signature.
+        // Sanity: the dominant size component is the 4627-byte
+        // ML-DSA-87 signature.
         assert!(bytes.len() >= STAKE_ATTESTATION_SIG_LEN);
     }
 

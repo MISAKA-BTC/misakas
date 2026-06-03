@@ -118,9 +118,9 @@ impl CoinbaseManager {
         // share to the miner. The Validator share funds the appended
         // `validator_reward_outputs` (the §E distribution); the Service share and
         // the undistributed validator remainder are burned by don't-mint. `None`
-        // → the pre-carve behavior (full subsidy+fees to the miner), so the
-        // coinbase is byte-identical on every current network (the caller passes
-        // `Some` only past `dns_activation_daa_score`, `u64::MAX` everywhere today).
+        // → the pre-carve behavior (full subsidy+fees to the miner). The carve
+        // applies from genesis on every current network (the caller passes `Some`
+        // past `dns_activation_daa_score`, = 0 everywhere today).
         carve: Option<&FeeSplitParams>,
         // kaspa-pq Phase 13 (ADR-0018 §D base inclusion bounty): `(newly_included_stake,
         // expected_stake)` for this block — the stake of attestations it newly includes
@@ -219,8 +219,8 @@ impl CoinbaseManager {
     /// carve does. The §E participation distribution draws from this pool; the
     /// result is fed back as `expected_coinbase_transaction`'s
     /// `validator_reward_outputs`. The caller passes `fee_split` only past
-    /// `dns_activation_daa_score` (`u64::MAX` everywhere today), so this is unused
-    /// on every current network.
+    /// `dns_activation_daa_score` (= 0 everywhere today), so this is active from
+    /// genesis on every current network.
     pub fn coinbase_validator_pool(
         &self,
         ghostdag_data: &GhostdagData,

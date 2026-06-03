@@ -217,7 +217,7 @@ impl ValidatorKey {
     ///   - **output-1** = change (`funding.amount − amount − fee`) to the same script, emitted
     ///     only when non-zero.
     /// The borsh-encoded [`StakeBondPayload`] carries the bond terms; the validator's own
-    /// 1952-byte ML-DSA-65 pubkey and the matching `validator_pubkey_hash`/`owner_pubkey_hash`
+    /// 2592-byte ML-DSA-87 pubkey and the matching `validator_pubkey_hash`/`owner_pubkey_hash`
     /// (both = `validator_id`) are written so any node can verify attestations without a
     /// registry. `owner_reward_spk_payload` is where this bond's rewards are paid — set to the
     /// caller-supplied 64-byte P2PKH-ML-DSA payload (ADR-0019 §8; defaults to the validator's
