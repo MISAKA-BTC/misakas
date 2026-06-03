@@ -209,7 +209,7 @@ ipnet = "2.9.0"
 itertools = "0.13.0"
 js-sys = "=0.3.77"
 keccak = "0.1.4"
-# kaspa-pq: ML-DSA-65 (FIPS 204) post-quantum signatures via libcrux. Exact
+# kaspa-pq: ML-DSA-87 (FIPS 204) post-quantum signatures via libcrux. Exact
 # version pin per docs/adr/0002-mldsa65-p2pkh.md. Bumping requires:
 #   - cargo audit clean for advisories against the new version,
 #   - KAT differential test against a second ML-DSA implementation,

@@ -108,9 +108,9 @@ pub fn generate_random_block(
 
 ///Note: generate_random_header is filled with random data, it does not represent a consensus-valid header!
 pub fn generate_random_header(rng: &mut SmallRng, parent_amount: usize) -> Header {
-    // PR-9.5c: positions 3 and 4 (`hash_merkle_root`,
-    // `accepted_id_merkle_root`) are now `Hash64`; position 5
-    // (`utxo_commitment`) stays 32-byte `Hash` until PR-9.5d.
+    // PR-9.5c/d: positions 3 and 4 (`hash_merkle_root`,
+    // `accepted_id_merkle_root`) and position 5 (`utxo_commitment`) are
+    // all now 64-byte `Hash64`.
     Header::new_finalized(
         rng.r#gen(),
         vec![generate_random_hashes(rng, parent_amount)].try_into().unwrap(),

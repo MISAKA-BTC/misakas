@@ -66,7 +66,7 @@ impl KaspaPqMlDsa87KeyPair {
         Self { inner }
     }
 
-    /// 1952-byte ML-DSA-65 public key bytes. This is exactly
+    /// 2592-byte ML-DSA-87 public key bytes. This is exactly
     /// `MLDSA87_PK_LEN` long.
     pub fn public_key_bytes(&self) -> &[u8; MLDSA87_PK_LEN] {
         // The libcrux constants match ours by construction (Phase 1 spec).
@@ -87,7 +87,7 @@ impl KaspaPqMlDsa87KeyPair {
     }
 
     /// Sign an arbitrary message with the kaspa-pq transaction context
-    /// ([`MLDSA87_TX_CONTEXT`]). Returns the 3309-byte signature bytes.
+    /// ([`MLDSA87_TX_CONTEXT`]). Returns the 4627-byte signature bytes.
     ///
     /// The caller is responsible for choosing `message` correctly — for a
     /// transaction input that means the sighash digest from

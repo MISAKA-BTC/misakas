@@ -6,10 +6,11 @@
 //!
 //! - [`RpcMlDsa87PublicKey`] — 2592 bytes (ADR-0002).
 //! - [`RpcMlDsa87Signature`] — 4627 bytes (ADR-0002).
-//! - [`RpcUtxoCommitment`]   — 32 bytes, the kaspa-pq PoC final
-//!   commitment width (see ADR-0004 §"Decision"). The production
-//!   64-byte switch lands in PR-7.6 and introduces a separate
-//!   `RpcUtxoCommitment64` type rather than widening this one.
+//!
+//! The UTXO commitment travels on the wire as a 64-byte `Hash64` (the
+//! production accumulator width, ADR-0004 §"Decision"); the RPC layer
+//! reuses the existing `Hash64` hex encoding for it rather than a
+//! dedicated newtype.
 //!
 //! Wire formats:
 //!
@@ -44,10 +45,6 @@ pub const RPC_MLDSA87_PK_LEN: usize = 2592;
 /// contract as [`RPC_MLDSA87_PK_LEN`].
 pub const RPC_MLDSA87_SIG_LEN: usize = 4627;
 
-/// kaspa-pq PoC UTXO-commitment width in bytes (32). The production
-pub const RPC_UTXO_COMMITMENT_LEN: usize = 32;
-
-
 /// 2592-byte ML-DSA-87 public key, RPC-serialized as a 5184-character
 /// lowercase hex string.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
@@ -57,15 +54,6 @@ pub struct RpcMlDsa87PublicKey(pub [u8; RPC_MLDSA87_PK_LEN]);
 /// lowercase hex string.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
 pub struct RpcMlDsa87Signature(pub [u8; RPC_MLDSA87_SIG_LEN]);
-
-/// 32-byte kaspa-pq UTXO commitment (PoC width). Production
-/// `Default` is supplied by the [`impl_rpc_pq_bytes`] macro below
-/// (not the derive list) for symmetry with the two ML-DSA types.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
-pub struct RpcUtxoCommitment(pub [u8; RPC_UTXO_COMMITMENT_LEN]);
-
-/// 64-byte kaspa-pq UTXO commitment, production width. PR-7.6.
-///
 
 /// Error returned when a hex-encoded kaspa-pq RPC field fails to parse.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -182,7 +170,6 @@ macro_rules! impl_rpc_pq_bytes {
 
 impl_rpc_pq_bytes!(RpcMlDsa87PublicKey, RPC_MLDSA87_PK_LEN, "RpcMlDsa87PublicKey");
 impl_rpc_pq_bytes!(RpcMlDsa87Signature, RPC_MLDSA87_SIG_LEN, "RpcMlDsa87Signature");
-impl_rpc_pq_bytes!(RpcUtxoCommitment, RPC_UTXO_COMMITMENT_LEN, "RpcUtxoCommitment");
 
 // Bidirectional conversion between the consensus-core type and its
 // RPC wire form. The two newtypes intentionally exist in separate
@@ -233,34 +220,24 @@ mod tests {
     }
 
     #[test]
-    fn utxo_commitment_hex_roundtrip() {
-        let bytes = [0xa5u8; RPC_UTXO_COMMITMENT_LEN];
-        let c = RpcUtxoCommitment::new(bytes);
-        let h = c.to_hex();
-        assert_eq!(h.len(), RPC_UTXO_COMMITMENT_LEN * 2);
-        let parsed = RpcUtxoCommitment::from_hex(&h).unwrap();
-        assert_eq!(parsed, c);
-    }
-
-    #[test]
     fn hex_wrong_length_rejected() {
         assert_eq!(
             RpcMlDsa87PublicKey::from_hex("00").unwrap_err(),
             RpcPqParseError::WrongHexLength { expected: RPC_MLDSA87_PK_LEN * 2, got: 2 },
         );
         assert_eq!(
-            RpcUtxoCommitment::from_hex(&"00".repeat(31)).unwrap_err(),
-            RpcPqParseError::WrongHexLength { expected: 64, got: 62 },
+            RpcMlDsa87Signature::from_hex(&"00".repeat(31)).unwrap_err(),
+            RpcPqParseError::WrongHexLength { expected: RPC_MLDSA87_SIG_LEN * 2, got: 62 },
         );
     }
 
     #[test]
     fn hex_invalid_chars_rejected() {
-        let mut bad = "zz".repeat(RPC_UTXO_COMMITMENT_LEN);
-        assert!(matches!(RpcUtxoCommitment::from_hex(&bad), Err(RpcPqParseError::Hex(_))));
+        let mut bad = "zz".repeat(RPC_MLDSA87_PK_LEN);
+        assert!(matches!(RpcMlDsa87PublicKey::from_hex(&bad), Err(RpcPqParseError::Hex(_))));
         // After fixing length, an embedded non-hex char still fails.
-        bad = "00".repeat(RPC_UTXO_COMMITMENT_LEN - 1) + "0g";
-        assert!(matches!(RpcUtxoCommitment::from_hex(&bad), Err(RpcPqParseError::Hex(_))));
+        bad = "00".repeat(RPC_MLDSA87_PK_LEN - 1) + "0g";
+        assert!(matches!(RpcMlDsa87PublicKey::from_hex(&bad), Err(RpcPqParseError::Hex(_))));
     }
 
     #[test]
@@ -279,15 +256,6 @@ mod tests {
         assert_eq!(bytes.len(), RPC_MLDSA87_SIG_LEN);
         let parsed: RpcMlDsa87Signature = borsh::from_slice(&bytes).unwrap();
         assert_eq!(parsed, sig);
-    }
-
-    #[test]
-    fn borsh_roundtrip_utxo_commitment() {
-        let c = RpcUtxoCommitment::new([0x33; RPC_UTXO_COMMITMENT_LEN]);
-        let bytes = borsh::to_vec(&c).unwrap();
-        assert_eq!(bytes.len(), RPC_UTXO_COMMITMENT_LEN);
-        let parsed: RpcUtxoCommitment = borsh::from_slice(&bytes).unwrap();
-        assert_eq!(parsed, c);
     }
 
     #[test]
@@ -310,26 +278,16 @@ mod tests {
     }
 
     #[test]
-    fn serde_json_roundtrip_utxo_commitment() {
-        let c = RpcUtxoCommitment::new([0x66; RPC_UTXO_COMMITMENT_LEN]);
-        let s = serde_json::to_string(&c).unwrap();
-        // 32 bytes -> 64-char hex + 2 quotes = 66 chars.
-        assert_eq!(s.len(), 66);
-        let parsed: RpcUtxoCommitment = serde_json::from_str(&s).unwrap();
-        assert_eq!(parsed, c);
-    }
-
-    #[test]
     fn serde_json_rejects_wrong_length() {
-        // A 30-byte hex string is rejected as RpcUtxoCommitment.
+        // A 30-byte hex string is rejected as RpcMlDsa87PublicKey.
         let too_short = format!("\"{}\"", "00".repeat(30));
-        let err = serde_json::from_str::<RpcUtxoCommitment>(&too_short).unwrap_err();
+        let err = serde_json::from_str::<RpcMlDsa87PublicKey>(&too_short).unwrap_err();
         assert!(err.to_string().contains("expected"), "got {err}");
     }
 
     #[test]
     fn display_and_debug_match_hex() {
-        let c = RpcUtxoCommitment::new([0xab; RPC_UTXO_COMMITMENT_LEN]);
+        let c = RpcMlDsa87PublicKey::new([0xab; RPC_MLDSA87_PK_LEN]);
         let hex = c.to_hex();
         assert_eq!(format!("{c}"), hex);
         assert!(format!("{c:?}").contains(&hex));
@@ -348,7 +306,6 @@ mod tests {
 
         let pk = RpcMlDsa87PublicKey::new([0x88; RPC_MLDSA87_PK_LEN]);
         let sig = RpcMlDsa87Signature::new([0x99; RPC_MLDSA87_SIG_LEN]);
-        let commitment = RpcUtxoCommitment::new([0xaa; RPC_UTXO_COMMITMENT_LEN]);
 
         // Emulate the per-message wRPC encoder layout: write a version
         // tag, then each field through store!.
@@ -356,19 +313,15 @@ mod tests {
         store!(u16, &1, &mut buf).unwrap();
         store!(RpcMlDsa87PublicKey, &pk, &mut buf).unwrap();
         store!(RpcMlDsa87Signature, &sig, &mut buf).unwrap();
-        store!(RpcUtxoCommitment, &commitment, &mut buf).unwrap();
 
-        // Expected length: 2 (u16 version tag) + 2592 (pk) + 4627 (sig)
-        //                + 32 (commitment) = 5295.
-        assert_eq!(buf.len(), 2 + RPC_MLDSA87_PK_LEN + RPC_MLDSA87_SIG_LEN + RPC_UTXO_COMMITMENT_LEN);
+        // Expected length: 2 (u16 version tag) + 2592 (pk) + 4627 (sig) = 7221.
+        assert_eq!(buf.len(), 2 + RPC_MLDSA87_PK_LEN + RPC_MLDSA87_SIG_LEN);
 
         let mut r = std::io::Cursor::new(&buf[..]);
         let _ver = load!(u16, &mut r).unwrap();
         let pk_in = load!(RpcMlDsa87PublicKey, &mut r).unwrap();
         let sig_in = load!(RpcMlDsa87Signature, &mut r).unwrap();
-        let c_in = load!(RpcUtxoCommitment, &mut r).unwrap();
         assert_eq!(pk_in, pk);
         assert_eq!(sig_in, sig);
-        assert_eq!(c_in, commitment);
     }
 }

@@ -106,7 +106,9 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): this block's validator quality
     /// sub-pool (`split_validator_pool(.).1`), persisted by `commit_utxo_state` as
     /// the per-epoch accumulator's recompute input. `0` (never persisted) below
-    /// `pos_v2_activation_daa_score` (`u64::MAX` everywhere today).
+    /// `pos_v2_activation_daa_score` — i.e. on the devnet/simnet preset
+    /// (`GENESIS_ACTIVE_DNS_PARAMS`, fenced at `u64::MAX`); on mainnet/testnet
+    /// (`PRODUCTION_DNS_PARAMS`, fence = 0) it is populated from block 1.
     pub validator_quality_subpool: u64,
     /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): this block's security-reserve **accrual** — the
     /// `Σ security_reserve_sompi` of its slashing side-effects (set in `apply_slashing_side_effects`).
@@ -222,8 +224,10 @@ impl VirtualStateProcessor {
         }
 
         // kaspa-pq Phase 11 (ADR-0013 Addendum C / ADR-0016 §D.4): apply the
-        // slashing side-effect over the fully-applied mergeset. Gated/inert on
-        // every current network.
+        // slashing side-effect over the fully-applied mergeset. Gated on
+        // `dns_activation_daa_score` (= 0 on every current network), so it runs
+        // from genesis everywhere (the 4-way reserve/victim split is the part
+        // fenced behind `pos_v2_activation_daa_score` — see below).
         self.apply_slashing_side_effects(ctx, selected_parent_utxo_view, selected_parent_bond_view, pov_daa_score);
     }
 
@@ -266,7 +270,8 @@ impl VirtualStateProcessor {
         let accepted_txs = self.accepted_txs_from_acceptance_data(&ctx.mergeset_acceptance_data);
         // ADR-0018 "本格版" (PoS-v2) §slashing: the reserve + victim shares are fenced — `0` below
         // `pos_v2_activation_daa_score`, so `compute_slashing_distribution` degenerates to the pre-v2
-        // 2-way (reporter + burn) and slashing is byte-identical on every current network.
+        // 2-way (reporter + burn) on the devnet/simnet preset (fence = `u64::MAX`). On mainnet/testnet
+        // (`PRODUCTION_DNS_PARAMS`, fence = 0) the full 4-way split runs from block 1.
         let (security_reserve_bps, victim_epoch_pool_bps) = if pov_daa_score >= dns_params.pos_v2_activation_daa_score {
             (dns_params.reward_params.security_reserve_bps, dns_params.reward_params.victim_epoch_pool_bps)
         } else {
@@ -282,9 +287,10 @@ impl VirtualStateProcessor {
         );
         // ADR-0018 "本格版" (PoS-v2) victim compensation: for each slashed bond with a victim pool,
         // recompute the slashed validator's epoch's honest (non-slashed) included set from the
-        // selected-parent window and build the victim outputs. Inert when fenced (pool = 0 ⇒ skip),
-        // so this is a no-op on every current network. The recompute reads the same selected-parent
-        // view in both the block-validation and virtual-recompute paths ⇒ construction == validation.
+        // selected-parent window and build the victim outputs. Inert when fenced (pool = 0 ⇒ skip) —
+        // i.e. on the devnet/simnet preset; on mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence = 0) the
+        // victim pool is non-zero and these outputs are built from block 1. The recompute reads the same
+        // selected-parent view in both the block-validation and virtual-recompute paths ⇒ construction == validation.
         for effect in effects.iter_mut() {
             if effect.victim_epoch_pool_sompi == 0 {
                 continue;
@@ -316,7 +322,8 @@ impl VirtualStateProcessor {
     /// bonds against `bond_view` (as-of the selected parent) so the block-validation and
     /// virtual-recompute paths build byte-identical outputs (construction == validation, reorg-safe
     /// — a finalized/buried epoch's blocks are immutable). Empty while the v2 fence is closed (no
-    /// accumulator rows in the window), so this is a no-op on every current network.
+    /// accumulator rows in the window) — i.e. on the devnet/simnet preset; on mainnet/testnet
+    /// (`PRODUCTION_DNS_PARAMS`, fence = 0) it runs from block 1.
     fn slashed_epoch_victim_outputs(
         &self,
         dns_params: &DnsParams,
@@ -366,7 +373,8 @@ impl VirtualStateProcessor {
     /// reserve balance (read by the caller from `reserve_balance_store`), so construction (template)
     /// and validation read the identical as-of-selected-parent balance ⇒ byte-identical, reorg-safe.
     /// Returns no outputs below the v2 fence / when the parent balance or the per-epoch cap is 0 /
-    /// when no epoch crosses — so it is inert on every current network.
+    /// when no epoch crosses — so it is inert on the devnet/simnet preset (fence = `u64::MAX`); on
+    /// mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence = 0) the drip runs from block 1.
     pub(super) fn reserve_drip_outputs(
         &self,
         dns_params: &DnsParams,
@@ -485,7 +493,9 @@ impl VirtualStateProcessor {
         // carve (`carve`) splits each source block's reward Worker/Validator/
         // Service; the Validator total (`validator_pool`) funds the §E
         // participation distribution computed by `validator_reward_outputs_for_block`.
-        // Both are no-ops on every current network (overlay dormant). The rewarded
+        // Both are gated on `dns_activation_daa_score` (= 0 on every current network)
+        // with the §F carve in Stage 3 (`full_reward_split_daa_score` = 0), so the
+        // overlay is active and the fan-out runs from genesis everywhere. The rewarded
         // `(bond, epoch)` keys are stashed for `commit_utxo_state` (§B.3(c)).
         let mergeset_non_daa = self.daa_excluded_store.get_mergeset_non_daa(header.hash).unwrap();
         // ADR-0018 §F staged rollout: None (Stage 1) / bootstrap (Stage 2) / full
@@ -505,9 +515,10 @@ impl VirtualStateProcessor {
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): stash this block's validator
         // quality sub-pool (the §E split's bonus share) for the per-epoch
-        // accumulator. Gated by the v2 fence (`pos_v2_activation_daa_score`,
-        // `u64::MAX` today) so it stays 0 and `commit_utxo_state` writes no row on
-        // every current network — fully inert. (Below `dns_activation` the pool is
+        // accumulator. Gated by the v2 fence (`pos_v2_activation_daa_score`): on the
+        // devnet/simnet preset (fence = `u64::MAX`) it stays 0 and `commit_utxo_state`
+        // writes no row — inert there; on mainnet/testnet (`PRODUCTION_DNS_PARAMS`,
+        // fence = 0) it is populated from block 1. (Below `dns_activation` the pool is
         // already 0, since `validator_pool` is.) Does NOT affect the coinbase, so
         // construction == validation is untouched.
         ctx.validator_quality_subpool = self
@@ -633,8 +644,9 @@ impl VirtualStateProcessor {
     /// `rewarded_epochs_store` to build the already-rewarded prefix set; the
     /// matching recency bound drops attestations whose target is older than the
     /// window, so the bounded walk is guaranteed to see any prior reward of the
-    /// same pair. The walk reads nothing on every current network (no rows
-    /// while the overlay is dormant), so this stays inert.
+    /// same pair. The overlay is genesis-active on every current network
+    /// (`dns_activation_daa_score` = 0), so the walk reads the rows written as
+    /// validators are rewarded.
     pub(super) fn validator_reward_outputs_for_block(
         &self,
         txs: &[Transaction],
@@ -643,8 +655,9 @@ impl VirtualStateProcessor {
         selected_parent: BlockHash,
         // kaspa-pq Phase 13 (ADR-0018 §F/§E): the validator-side coinbase pool
         // (`CoinbaseManager::coinbase_validator_pool`) this block's §E
-        // participation rewards are distributed from. 0 on every current network
-        // (the caller computes it only past `dns_activation_daa_score`).
+        // participation rewards are distributed from. The caller computes it past
+        // `dns_activation_daa_score` (= 0 on every current network), so it is
+        // funded from genesis everywhere.
         validator_pool: u64,
         // kaspa-pq Phase 13 (ADR-0018 §D): also returns `(newly_included_stake,
         // expected_stake)` so the coinbase can pay the §D worker inclusion bounty.
@@ -720,8 +733,9 @@ impl VirtualStateProcessor {
         // ADR-0018 "本格版" (PoS-v2): the participation/quality split is **fenced**. Below
         // `pos_v2_activation_daa_score` the FULL pool funds participation (effective bps = 10_000),
         // byte-identical to the pre-v2 behavior regardless of the configured `validator_participation_bps`
-        // — so raising the quality share in the presets stays inert on every current network. At/above
-        // the fence the configured split carves the quality-bonus sub-pool, which the per-epoch
+        // — so on the devnet/simnet preset (fence = `u64::MAX`) raising the quality share in the presets
+        // stays inert. At/above the fence — i.e. on mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence = 0)
+        // from block 1 — the configured split carves the quality-bonus sub-pool, which the per-epoch
         // accumulator accrues (Phase 1) and `deferred_quality_bonus_outputs` (below) pays at finalization.
         let expected_stake = bond_view.total_active_stake_at(daa_score) as u128;
         let participation_bps = if daa_score >= dns_params.pos_v2_activation_daa_score {
@@ -770,9 +784,10 @@ impl VirtualStateProcessor {
     /// outputs. Each crossed epoch that met φS pays its accrued quality pool to its included
     /// validators ([`validator_quality_bonus_outputs`]); one that missed φS pays nothing (rollover).
     ///
-    /// Returns no outputs below the v2 fence (`pos_v2_activation_daa_score`, `u64::MAX` everywhere
-    /// today), or when no epoch crosses this block — so it is inert on every current network and
-    /// O(1) amortized otherwise (the deep window walk runs only on the ~1-in-`L` crossing blocks).
+    /// Returns no outputs below the v2 fence (`pos_v2_activation_daa_score`), or when no epoch
+    /// crosses this block — so it is inert on the devnet/simnet preset (fence = `u64::MAX`); on
+    /// mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence = 0) it pays from block 1, and is
+    /// O(1) amortized (the deep window walk runs only on the ~1-in-`L` crossing blocks).
     fn deferred_quality_bonus_outputs(
         &self,
         dns_params: &DnsParams,
@@ -1124,8 +1139,9 @@ impl VirtualStateProcessor {
 /// out from [`VirtualStateProcessor::check_attestation_reward_eligibility`] so
 /// it can be unit-tested without a full processor. `activated` folds the
 /// `dns_params.is_some() && daa_score >= dns_activation_daa_score` gate; when
-/// `false` the rule is a no-op (every current network). On the first
-/// ineligible attestation returns `Err((bond tx id, epoch))`; the caller maps
+/// `false` the rule is a no-op. On every current network the gate is `true`
+/// from genesis (`dns_activation_daa_score` = 0), so the rule is active. On the
+/// first ineligible attestation returns `Err((bond tx id, epoch))`; the caller maps
 /// it to [`IneligibleAttestationInBlock`]. An attestation is eligible iff its
 /// bond resolves to `Active` in `bond_view` at the attestation's
 /// `target_daa_score` **and** its ML-DSA-87 signature verifies over the
@@ -1371,8 +1387,10 @@ fn apply_slashing_effects_to_state<V: UtxoView>(
         }
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2): mint the victim-compensation outputs at
-        // `(slashing_tx_id, 2..)` (index 1 is reserved/kept free). Empty while the v2 fence is closed
-        // ⇒ no extra mints ⇒ byte-identical to the pre-v2 2-way slashing. The security-reserve share
+        // `(slashing_tx_id, 2..)` (index 1 is reserved/kept free). Empty while the v2 fence is closed —
+        // i.e. on the devnet/simnet preset (fence = `u64::MAX`) ⇒ no extra mints ⇒ byte-identical to the
+        // pre-v2 2-way slashing; on mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence = 0) these mint from
+        // block 1. The security-reserve share
         // (`effect.security_reserve_sompi`) is NOT minted here: it leaves the supply with the bond
         // removal (≡ burn) until Phase 4 accrues it to the reserve pool. Σ(reporter + victim) ≤ S, so
         // the slash stays value-conserving.

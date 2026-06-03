@@ -109,9 +109,9 @@ impl CoinbaseManager {
         // kaspa-pq Phase 10/11 (ADR-0013 / ADR-0009 Addendum B §B.5): validator
         // reward outputs, pre-computed by the caller from the block's included
         // attestations resolved against its selected-parent bond view, in
-        // canonical order. Appended verbatim after the miner outputs. Empty on
-        // every current network (the overlay is dormant), so the coinbase is
-        // byte-for-byte the pre-overlay coinbase there.
+        // canonical order. Appended verbatim after the miner outputs. The overlay
+        // is genesis-active on every current network (`dns_activation_daa_score` = 0),
+        // so these are populated and the coinbase carries them from block 1.
         validator_reward_outputs: &[TransactionOutput],
         // kaspa-pq Phase 13 (ADR-0018 §F): when `Some`, carve each source block's
         // reward into Worker / Validator / Service shares and pay only the Worker
