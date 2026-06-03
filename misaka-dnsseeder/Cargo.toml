@@ -1,0 +1,28 @@
+[package]
+name = "misaka-dnsseeder"
+description = "MISAKA (kaspa-pq) DNS seeder: serves live peer IPs over DNS for Kaspa-style peer auto-discovery"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "misaka-dnsseeder"
+path = "src/main.rs"
+
+[dependencies]
+kaspa-core.workspace = true
+kaspa-rpc-core.workspace = true
+kaspa-wrpc-client.workspace = true
+
+log.workspace = true
+rand.workspace = true
+clap = { workspace = true, features = ["env"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
+
+[lints]
+workspace = true
