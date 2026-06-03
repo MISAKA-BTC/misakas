@@ -122,6 +122,12 @@ struct Cli {
     #[arg(long, global = true)]
     encrypted: bool,
 
+    /// Acknowledge writing the mnemonic to disk in PLAINTEXT (audit QM-2). `init` refuses to write
+    /// plaintext unless this or `--encrypted` is given, so plaintext is never the silent default.
+    /// No effect on read / `address` / `sign`.
+    #[arg(long, global = true)]
+    plaintext: bool,
+
     /// Optional: read the encrypted-seed password from this environment
     /// variable instead of an interactive prompt.
     #[arg(long, global = true)]
@@ -266,6 +272,14 @@ fn derive_aead_key(password: &str, salt: &[u8; SALT_LEN]) -> Result<[u8; KEY_LEN
 fn save_mnemonic(cli: &Cli, mnemonic: &Mnemonic) -> Result<(), CliError> {
     let plaintext = format!("{}\n", mnemonic.phrase());
     if !cli.encrypted {
+        // audit QM-2: never write the mnemonic to disk in plaintext silently — require an explicit
+        // opt-in (--plaintext) so it is a deliberate choice. Encryption (--encrypted: Argon2id +
+        // ChaCha20-Poly1305) is the recommended default.
+        if !cli.plaintext {
+            return Err(CliError::Io(std::io::Error::other(
+                "refusing to write the mnemonic in plaintext; pass --encrypted (recommended) or --plaintext to acknowledge",
+            )));
+        }
         fs::write(&cli.mnemonic_file, plaintext)?;
         return Ok(());
     }

@@ -26,8 +26,11 @@ pub type Entropy16 = [u8; 16];
 #[derive(Default, PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WordCount {
-    #[default]
     Words12,
+    // audit QH-1: default to 24 words (256-bit seed) so no code path that relies on the default
+    // ever produces a 128-bit seed — which on a post-quantum chain caps key strength at ~2^64
+    // (Grover on the seed) regardless of the ML-DSA-87 signature's own margin.
+    #[default]
     Words24,
 }
 

@@ -22,8 +22,10 @@ pub(crate) async fn create(
         Some(locked_guard) => locked_guard,
         None => local_guard.lock().await,
     };
-    // TODO @aspect
-    let word_count = WordCount::Words12;
+    // audit QH-1: 24 words (256-bit seed entropy) so the BIP39 seed never caps the post-quantum
+    // signature strength — a 12-word (128-bit) seed would let an attacker Grover-search the seed at
+    // ~2^64 instead of attacking the ML-DSA-87 lattice.
+    let word_count = WordCount::Words24;
 
     if let Err(err) = wallet.network_id() {
         tprintln!(ctx);

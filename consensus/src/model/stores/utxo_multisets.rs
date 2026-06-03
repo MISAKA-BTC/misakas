@@ -11,9 +11,9 @@ use std::sync::Arc;
 
 // kaspa-pq: upstream Kaspa stored a `Uint3072` as the on-disk representation
 // of the multiplicative-MuHash field and reconstructed `MuHash` from it on
-// read. LtHash16_1024 has no compressed-field representation, so we just
+// read. LtHash32_1024 has no compressed-field representation, so we just
 // store the `MuHash` directly. The wire format is its serde encoding,
-// which is the 2048-byte little-endian LtHash state (see
+// which is the 4096-byte little-endian LtHash state (see
 // `crypto/muhash/src/lib.rs`).
 
 pub trait UtxoMultisetsStoreReader {
