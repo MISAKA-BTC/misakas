@@ -96,17 +96,6 @@ pub type MerkleRoot = kaspa_hashes::Hash64;
 /// `AcceptedIdMerkleBranchHash64`.
 pub type AcceptedIdMerkleRoot = kaspa_hashes::Hash64;
 
-/// UTXO accumulator commitment stored in `Header::utxo_commitment`.
-/// **Stays 32 B** — it is an LtHash/muhash accumulator commitment,
-/// not a block-hash identity, so it is never keyed into a
-/// `BlockHashMap` and does not widen with `BlockHash` in PR-9.5e.
-///
-/// Note: the **64-byte production** UTXO commitment type
-/// [`utxo_commitment::UtxoCommitment64`] already exists from PR-7.6
-/// for the RPC surface; this alias is the **header field** width
-/// (32 B), distinct from that production accumulator output.
-pub type UtxoCommitment = kaspa_hashes::Hash32;
-
 /// Pruning-point block hash (`Header::pruning_point`). This is a
 /// **block-hash identity** (it references the pruning-point block),
 /// so it **flipped to `Hash64` in PR-9.5e** together with
