@@ -2935,6 +2935,10 @@ pub enum DnsTxError {
     /// An attestation in a shard does not match the shard's
     /// `(epoch, target_hash, validator_set_commitment)` tuple.
     ShardTupleMismatch,
+    /// An attestation declares a non-zero `validator_set_commitment` (audit #4):
+    /// ADR-0017 dropped the sortition committee, so the VSC is a fixed-zero wire
+    /// invariant; a non-zero value is rejected at the stateless layer.
+    NonZeroValidatorSetCommitment,
     /// The two attestations in slashing evidence do not share the same
     /// `(bond_outpoint, validator_id, epoch)` triple.
     EvidenceTripleMismatch,
@@ -2971,6 +2975,7 @@ impl Display for DnsTxError {
             DnsTxError::EmptyShard => write!(f, "attestation shard is empty"),
             DnsTxError::ShardTooLarge(n) => write!(f, "attestation shard has {n} attestations, above the maximum"),
             DnsTxError::ShardTupleMismatch => write!(f, "attestation does not match the shard's anchor tuple"),
+            DnsTxError::NonZeroValidatorSetCommitment => write!(f, "attestation validator_set_commitment must be zero (ADR-0017)"),
             DnsTxError::EvidenceTripleMismatch => {
                 write!(f, "slashing evidence attestations are not from the same (bond, validator, epoch) triple")
             }
@@ -3002,6 +3007,15 @@ fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError
     }
     if att.signature.len() != STAKE_ATTESTATION_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(att.signature.len()));
+    }
+    // audit #4: the validator_set_commitment is a fixed-zero wire invariant (ADR-0017 dropped the
+    // sortition committee). Enforce it at the single per-attestation gate that BOTH the shard
+    // (`validate_stake_attestation_shard_payload`) and the slashing-evidence
+    // (`validate_slashing_evidence_payload`) paths funnel through, so no attestation with a
+    // non-zero VSC ever reaches a block and the downstream eligibility / StakeScore paths only
+    // ever see VSC == 0 (the signed digest's VSC field is then always zero too).
+    if att.validator_set_commitment != Hash64::default() {
+        return Err(DnsTxError::NonZeroValidatorSetCommitment);
     }
     Ok(())
 }
@@ -4155,7 +4169,7 @@ mod tests {
             epoch: 7,
             target_hash: Hash64::from_bytes([0x11u8; 64]),
             target_daa_score: 1_234_567,
-            validator_set_commitment: Hash64::from_bytes([0x22u8; 64]),
+            validator_set_commitment: Hash64::default(), // audit #4: VSC is a fixed-zero invariant
             signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
         }
     }
@@ -4256,7 +4270,7 @@ mod tests {
             epoch: 7,
             target_hash: Hash64::from_bytes([0x11u8; 64]),
             target_daa_score: 1_234_567,
-            validator_set_commitment: Hash64::from_bytes([0x22u8; 64]),
+            validator_set_commitment: Hash64::default(), // audit #4: VSC is a fixed-zero invariant
             attestations: vec![fixture_attestation(); n],
         }
     }
@@ -4462,6 +4476,13 @@ mod tests {
         let mut bad = fixture_shard(2);
         bad.attestations[0].epoch = 999;
         assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ShardTupleMismatch));
+        // audit #4: a non-zero validator_set_commitment is rejected (fixed-zero invariant).
+        let mut bad = fixture_shard(1);
+        bad.attestations[0].validator_set_commitment = Hash64::from_bytes([0x01; 64]);
+        assert_eq!(
+            validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()),
+            Err(DnsTxError::NonZeroValidatorSetCommitment)
+        );
     }
 
     #[test]
