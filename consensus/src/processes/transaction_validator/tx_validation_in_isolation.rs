@@ -490,7 +490,7 @@ mod tests {
             epoch: 7,
             target_hash: Hash64::from_bytes([target; 64]),
             target_daa_score: 1_234_567,
-            validator_set_commitment: Hash64::from_bytes([0x22u8; 64]),
+            validator_set_commitment: Hash64::default(), // audit #4: VSC is a fixed-zero invariant
             signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
         };
         let evidence = SlashingEvidencePayload {

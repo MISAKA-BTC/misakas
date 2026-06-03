@@ -2935,6 +2935,10 @@ pub enum DnsTxError {
     /// An attestation in a shard does not match the shard's
     /// `(epoch, target_hash, validator_set_commitment)` tuple.
     ShardTupleMismatch,
+    /// An attestation declares a non-zero `validator_set_commitment` (audit #4):
+    /// ADR-0017 dropped the sortition committee, so the VSC is a fixed-zero wire
+    /// invariant; a non-zero value is rejected at the stateless layer.
+    NonZeroValidatorSetCommitment,
     /// The two attestations in slashing evidence do not share the same
     /// `(bond_outpoint, validator_id, epoch)` triple.
     EvidenceTripleMismatch,
@@ -2971,6 +2975,7 @@ impl Display for DnsTxError {
             DnsTxError::EmptyShard => write!(f, "attestation shard is empty"),
             DnsTxError::ShardTooLarge(n) => write!(f, "attestation shard has {n} attestations, above the maximum"),
             DnsTxError::ShardTupleMismatch => write!(f, "attestation does not match the shard's anchor tuple"),
+            DnsTxError::NonZeroValidatorSetCommitment => write!(f, "attestation validator_set_commitment must be zero (ADR-0017)"),
             DnsTxError::EvidenceTripleMismatch => {
                 write!(f, "slashing evidence attestations are not from the same (bond, validator, epoch) triple")
             }
@@ -3002,6 +3007,15 @@ fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError
     }
     if att.signature.len() != STAKE_ATTESTATION_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(att.signature.len()));
+    }
+    // audit #4: the validator_set_commitment is a fixed-zero wire invariant (ADR-0017 dropped the
+    // sortition committee). Enforce it at the single per-attestation gate that BOTH the shard
+    // (`validate_stake_attestation_shard_payload`) and the slashing-evidence
+    // (`validate_slashing_evidence_payload`) paths funnel through, so no attestation with a
+    // non-zero VSC ever reaches a block and the downstream eligibility / StakeScore paths only
+    // ever see VSC == 0 (the signed digest's VSC field is then always zero too).
+    if att.validator_set_commitment != Hash64::default() {
+        return Err(DnsTxError::NonZeroValidatorSetCommitment);
     }
     Ok(())
 }
@@ -3558,11 +3572,18 @@ pub fn aggregate_epoch_tallies(
 /// (ADR-0009 Addendum A.5; via [`is_dns_confirmed`]).
 ///
 /// `prev` is the previous `DnsState` (the singleton store's current value,
-/// or `None` before the overlay's first write). When `anchor` is not
-/// itself confirmed, the previously-confirmed anchor is carried forward;
-/// if there is no previous confirmation, `last_dns_confirmed_anchor`
-/// defaults to the zero `Hash64` — meaning "nothing confirmed yet", which
-/// the reorg gate treats as dormant (every candidate trivially includes it).
+/// or `None` before the overlay's first write).
+///
+/// **audit #3 (consensus-split fix):** `anchor` is the POV-dependent `sink` and is stored
+/// as `selected_chain_anchor` ONLY for the recompute throttle — it is NOT what gets confirmed.
+/// The confirmed point is `confirmable_anchor`: the canonical lagged anchor of the latest ready
+/// epoch (a fixed, blue_score-coordinated selected-chain block every node derives identically).
+/// A candidate is confirmed only when the depth predicate holds AND a canonical anchor exists;
+/// then `last_dns_confirmed_anchor` is that canonical anchor, so all nodes protect the identical
+/// anchor in the reorg gate. (Confirming the `sink` instead would let nodes that recompute at
+/// different boundary sinks protect different anchors and split the gate.) When not confirmed the
+/// previously-confirmed anchor is carried forward; with no previous confirmation it defaults to
+/// the zero `Hash64` ("nothing confirmed yet"), which the reorg gate treats as dormant.
 ///
 /// `health` is the per-epoch [`DnsHealth`] signal the caller derived for this anchor
 /// (via [`derive_dns_health`]); it is stored verbatim — a pure liveness annotation that
@@ -3572,6 +3593,7 @@ pub fn advance_dns_confirmation(
     prev: Option<&DnsState>,
     anchor: Hash64,
     anchor_daa_score: u64,
+    confirmable_anchor: Option<(Hash64, u64)>,
     work_depth: BlueWorkType,
     stake_depth: StakeScore,
     rollout_stage: DnsRolloutStage,
@@ -3580,13 +3602,12 @@ pub fn advance_dns_confirmation(
     required_work_depth: BlueWorkType,
     required_stake_depth: StakeScore,
 ) -> DnsState {
-    let confirmed = is_dns_confirmed(work_depth, stake_depth, required_work_depth, required_stake_depth);
-    let (last_dns_confirmed_anchor, last_dns_confirmed_anchor_daa_score) = if confirmed {
-        (anchor, anchor_daa_score)
-    } else if let Some(p) = prev {
-        (p.last_dns_confirmed_anchor, p.last_dns_confirmed_anchor_daa_score)
-    } else {
-        (Hash64::default(), 0)
+    // Confirm the CANONICAL anchor (deterministic across nodes), never the POV-dependent sink.
+    let confirmed = confirmable_anchor.is_some() && is_dns_confirmed(work_depth, stake_depth, required_work_depth, required_stake_depth);
+    let (last_dns_confirmed_anchor, last_dns_confirmed_anchor_daa_score) = match (confirmed, confirmable_anchor, prev) {
+        (true, Some(canonical), _) => canonical,
+        (_, _, Some(p)) => (p.last_dns_confirmed_anchor, p.last_dns_confirmed_anchor_daa_score),
+        _ => (Hash64::default(), 0),
     };
     DnsState {
         selected_chain_anchor: anchor,
@@ -4148,7 +4169,7 @@ mod tests {
             epoch: 7,
             target_hash: Hash64::from_bytes([0x11u8; 64]),
             target_daa_score: 1_234_567,
-            validator_set_commitment: Hash64::from_bytes([0x22u8; 64]),
+            validator_set_commitment: Hash64::default(), // audit #4: VSC is a fixed-zero invariant
             signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
         }
     }
@@ -4249,7 +4270,7 @@ mod tests {
             epoch: 7,
             target_hash: Hash64::from_bytes([0x11u8; 64]),
             target_daa_score: 1_234_567,
-            validator_set_commitment: Hash64::from_bytes([0x22u8; 64]),
+            validator_set_commitment: Hash64::default(), // audit #4: VSC is a fixed-zero invariant
             attestations: vec![fixture_attestation(); n],
         }
     }
@@ -4455,6 +4476,13 @@ mod tests {
         let mut bad = fixture_shard(2);
         bad.attestations[0].epoch = 999;
         assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ShardTupleMismatch));
+        // audit #4: a non-zero validator_set_commitment is rejected (fixed-zero invariant).
+        let mut bad = fixture_shard(1);
+        bad.attestations[0].validator_set_commitment = Hash64::from_bytes([0x01; 64]);
+        assert_eq!(
+            validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()),
+            Err(DnsTxError::NonZeroValidatorSetCommitment)
+        );
     }
 
     #[test]
@@ -5138,17 +5166,19 @@ mod tests {
     }
 
     #[test]
-    fn advance_dns_confirmation_advances_only_when_both_thresholds_met() {
+    fn advance_dns_confirmation_confirms_canonical_anchor_not_sink() {
         let vsc = Hash64::from_bytes([0x22; 64]);
-        let (cw, cs) = (BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE)); // require work>=1000, stake>=1.0
+        let (cw, cs) = (BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE)); // work>=1000, stake>=1.0
         let stage = DnsRolloutStage::Active;
 
-        // Not confirmed (stake below cS) + no prev -> last confirmed = zero ("none yet").
-        let a1 = Hash64::from_bytes([0x11; 64]);
+        // Stake below cS, no prev -> nothing confirmed (zero), even with a candidate anchor.
+        let sink1 = Hash64::from_bytes([0x11; 64]);
+        let canon1 = Hash64::from_bytes([0x91; 64]);
         let s1 = advance_dns_confirmation(
             None,
-            a1,
+            sink1,
             500,
+            Some((canon1, 480)),
             BlueWorkType::from_u64(2000),
             StakeScore(STAKE_SCORE_SCALE / 2),
             stage,
@@ -5157,16 +5187,17 @@ mod tests {
             cw,
             cs,
         );
-        assert_eq!(s1.selected_chain_anchor, a1);
+        assert_eq!(s1.selected_chain_anchor, sink1);
         assert_eq!(s1.last_dns_confirmed_anchor, Hash64::default());
-        assert_eq!(s1.health, DnsHealth::Active); // stored verbatim, independent of confirmation
 
-        // Both thresholds met -> last confirmed advances to this anchor.
-        let a2 = Hash64::from_bytes([0x33; 64]);
+        // audit #3: thresholds met -> confirm the CANONICAL anchor, NOT the POV-dependent sink.
+        let sink2 = Hash64::from_bytes([0x33; 64]);
+        let canon2 = Hash64::from_bytes([0x99; 64]);
         let s2 = advance_dns_confirmation(
             Some(&s1),
-            a2,
+            sink2,
             600,
+            Some((canon2, 580)),
             BlueWorkType::from_u64(2000),
             StakeScore(STAKE_SCORE_SCALE),
             stage,
@@ -5175,28 +5206,46 @@ mod tests {
             cw,
             cs,
         );
-        assert_eq!(s2.last_dns_confirmed_anchor, a2);
-        assert_eq!(s2.last_dns_confirmed_anchor_daa_score, 600);
-        // Anchor confirms even while health is degraded — health never gates confirmation.
-        assert_eq!(s2.health, DnsHealth::DegradedStakeQualityLow);
+        assert_eq!(s2.selected_chain_anchor, sink2, "selected_chain_anchor stays the sink (throttle only)");
+        assert_eq!(s2.last_dns_confirmed_anchor, canon2, "confirmed anchor is the canonical anchor");
+        assert_eq!(s2.last_dns_confirmed_anchor_daa_score, 580);
+        assert_ne!(s2.last_dns_confirmed_anchor, sink2, "the sink is NOT what gets confirmed");
+        assert_eq!(s2.health, DnsHealth::DegradedStakeQualityLow); // health never gates confirmation
 
-        // Next anchor not confirmed -> carries s2's confirmed anchor forward.
-        let a3 = Hash64::from_bytes([0x44; 64]);
+        // No canonical anchor (None) -> cannot confirm even if depth passes; carry prev forward.
+        let sink3 = Hash64::from_bytes([0x44; 64]);
         let s3 = advance_dns_confirmation(
             Some(&s2),
-            a3,
+            sink3,
             700,
+            None,
+            BlueWorkType::from_u64(2000),
+            StakeScore(STAKE_SCORE_SCALE),
+            stage,
+            vsc,
+            DnsHealth::Active,
+            cw,
+            cs,
+        );
+        assert_eq!(s3.selected_chain_anchor, sink3);
+        assert_eq!(s3.last_dns_confirmed_anchor, canon2, "no ready anchor -> keep prev confirmed");
+
+        // Below-threshold stake (with a candidate anchor present) also carries prev forward.
+        let s4 = advance_dns_confirmation(
+            Some(&s2),
+            sink3,
+            700,
+            Some((Hash64::from_bytes([0x77; 64]), 690)),
             BlueWorkType::from_u64(2000),
             StakeScore(0),
             stage,
             vsc,
-            DnsHealth::DisabledBeforeActivation,
+            DnsHealth::Active,
             cw,
             cs,
         );
-        assert_eq!(s3.selected_chain_anchor, a3);
-        assert_eq!(s3.last_dns_confirmed_anchor, a2);
-        assert_eq!(s3.last_dns_confirmed_anchor_daa_score, 600);
+        assert_eq!(s4.last_dns_confirmed_anchor, canon2, "below-threshold -> keep prev confirmed");
+        assert_eq!(s4.last_dns_confirmed_anchor_daa_score, 580);
     }
 
     #[test]

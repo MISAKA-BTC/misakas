@@ -895,12 +895,13 @@ impl VirtualStateProcessor {
         // `epoch_length_blocks` (O(1) amortized per block) instead of walking
         // `max_reorg_horizon_blocks` on every virtual commit. Deterministic and
         // epoch-granular; safe on devnet/testnet where the gate is dormant
-        // (Bootstrap). M-01 (resolved by DNS v3): the recompute no longer depends
-        // on which sink first crosses the boundary — `collect_stake_contributions_v2`
-        // (below) credits only THIS chain's *canonical lagged anchor* for each ready
-        // epoch (a fixed selected-chain point, blue_score-coordinated), so two nodes
-        // whose sinks differ within the same epoch compute the identical DnsState.
-        // The throttle only bounds recompute cadence, never the canonical result.
+        // (Bootstrap). M-01 / audit #3: the recompute no longer depends on which sink first
+        // crosses the boundary. The StakeScore is canonical (`collect_stake_contributions_v2`
+        // credits only this chain's canonical lagged anchor per ready epoch), AND the
+        // DNS-confirmed anchor is that canonical lagged anchor — NOT the sink (see
+        // `confirmable_anchor` below). The reorg gate protects ONLY the confirmed anchor, so two
+        // nodes that recompute at different boundary sinks still protect the identical anchor;
+        // only `selected_chain_anchor` (read solely by this throttle) differs between them.
         let prev_dns_state = self.dns_state_store.read().get().ok();
         // kaspa-pq DNS v3: throttle the recompute to once per BLUE_SCORE epoch (epochs are
         // blue_score-coordinated now), not the DAA epoch. The recompute is canonical
@@ -965,10 +966,19 @@ impl VirtualStateProcessor {
             rollout_stage == DnsRolloutStage::Active,
         );
 
+        // audit #3: the canonical lagged anchor of the latest ready epoch — a fixed,
+        // blue_score-coordinated selected-chain point every node derives identically. THIS (not
+        // the POV-dependent `sink`) is what gets DNS-confirmed and protected by the reorg gate, so
+        // nodes that recompute at different boundary sinks still protect the same anchor. `None`
+        // until an epoch's anchor is buried and lag-ready (early chain / not yet ready).
+        let confirmable_anchor = ready_epoch_from_tip_blue_score(sink_blue, epoch_len_blue, dns_params.attestation_lag_blue_score)
+            .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, sink, dns_params))
+            .map(|a| (a.anchor_hash, a.anchor_daa_score));
         let new_state = advance_dns_confirmation(
             prev_dns_state.as_ref(),
             sink,
             sink_daa,
+            confirmable_anchor,
             work_depth,
             stake_depth,
             rollout_stage,
