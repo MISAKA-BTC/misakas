@@ -26,6 +26,7 @@ use blake2b_simd::Params;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_txscript::{MLDSA87_PK_LEN, MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT};
 use libcrux_ml_dsa::ml_dsa_87;
+use zeroize::Zeroize;
 
 /// Domain separator for the kaspa-pq wallet keygen XOF. Used as the BLAKE2b
 /// key (max 64 bytes; this string is 33 bytes).
@@ -56,8 +57,13 @@ impl KaspaPqMlDsa87KeyPair {
     /// should come from [`derive_keygen_seed`] in production paths so the
     /// address can be recomputed from the BIP39 mnemonic + account/index
     /// alone.
-    pub fn from_seed(seed: [u8; 32]) -> Self {
-        Self { inner: ml_dsa_87::generate_key_pair(seed) }
+    pub fn from_seed(mut seed: [u8; 32]) -> Self {
+        let inner = ml_dsa_87::generate_key_pair(seed);
+        // audit QM-2: scrub the keygen seed (the master secret that re-derives this keypair) from
+        // the stack after use, so it does not linger in a core dump / swap. The libcrux key material
+        // itself is opaque (no upstream Zeroize), so the seed is the highest-value secret we control.
+        seed.zeroize();
+        Self { inner }
     }
 
     /// 1952-byte ML-DSA-65 public key bytes. This is exactly
