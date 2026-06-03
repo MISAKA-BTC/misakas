@@ -58,6 +58,9 @@ enum Command {
     Status(StatusArgs),
     /// Stake mined coins: build + submit a StakeBond tx from a UTXO at the funding address.
     Bond(BondArgs),
+    /// Load generator: continuously spend mature UTXOs at the funding address into fan-out
+    /// NATIVE transfers, flooding the node's mempool with valid ML-DSA transactions.
+    Spam(SpamArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -149,6 +152,36 @@ struct BondArgs {
     network: Option<String>,
 }
 
+#[derive(Parser, Debug)]
+struct SpamArgs {
+    /// Local node wRPC (borsh) endpoint, host:port. The node must run --utxoindex.
+    #[arg(long, default_value = "127.0.0.1:17110", env = "KASPA_PQ_NODE_RPC")]
+    node_rpc: String,
+    /// ML-DSA validator key (32-byte seed, hex) whose funding address holds the coins to spam.
+    /// Mine to its `funding_address` first (e.g. `misaminer --wallet <addr>`).
+    #[arg(long, env = "KASPA_PQ_VALIDATOR_KEY")]
+    validator_key: String,
+    /// Outputs per split tx (fan-out). Each becomes a fresh spendable UTXO, so a chain of these
+    /// grows the UTXO set and the tx rate. 2-4 is a good sustained load.
+    #[arg(long, default_value_t = 3)]
+    fanout: usize,
+    /// Flat fee (sompi) per tx; must cover the tx's mass at the relay rate.
+    #[arg(long, default_value_t = 50_000)]
+    fee: u64,
+    /// Max txs to submit per round (per UTXO-set scan).
+    #[arg(long, default_value_t = 300)]
+    max_per_round: usize,
+    /// Milliseconds to sleep between rounds.
+    #[arg(long, default_value_t = 200)]
+    interval_ms: u64,
+    /// Skip UTXOs smaller than this (sompi) — keeps splits above the dust floor.
+    #[arg(long, default_value_t = 1_000_000)]
+    min_utxo: u64,
+    /// Expected node network id; refuse on mismatch.
+    #[arg(long, env = "KASPA_PQ_NETWORK")]
+    network: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -162,6 +195,10 @@ async fn main() -> ExitCode {
         Command::Bond(args) => {
             kaspa_core::log::init_logger(None, "info");
             bond(args).await
+        }
+        Command::Spam(args) => {
+            kaspa_core::log::init_logger(None, "info");
+            spam(args).await
         }
     };
     match result {
@@ -282,6 +319,69 @@ async fn bond(args: BondArgs) -> Result<(), String> {
     println!("(once accepted + activation_daa_score reached, run: {VALIDATOR} run --validator-key <key> --stake-bond {txid}:0 --signed-epoch-db <db>)");
     let _ = client.disconnect().await;
     Ok(())
+}
+
+/// Load generator (devnet stress): continuously scan mature UTXOs at the key's funding address
+/// and spend each into a fan-out NATIVE transfer back to self, flooding the node's mempool with
+/// valid ML-DSA transactions. Each fan-out output becomes a fresh spendable UTXO, so the UTXO
+/// set (and the tx rate) grows until the mempool saturates. Submit errors (mempool full, already
+/// spent, orphan) are expected under load and ignored. Runs until killed.
+async fn spam(args: SpamArgs) -> Result<(), String> {
+    let key = ValidatorKey::from_seed(load_validator_seed(&args.validator_key)?);
+    let client = connect(&args.node_rpc).await?;
+    let server = client.get_server_info().await.map_err(|e| format!("getServerInfo failed: {e}"))?;
+    let node_network = server.network_id.to_string();
+    if let Some(expected) = args.network.as_deref() {
+        if node_network != expected {
+            return Err(format!("network mismatch: node is '{node_network}' but --network is '{expected}'"));
+        }
+    }
+    let prefix = prefix_for(server.network_id.network_type);
+    let funding_addr = key.funding_address(prefix);
+    let params = Params::from(server.network_id);
+    let coinbase_maturity = params.coinbase_maturity();
+    let storage_mass_parameter = params.storage_mass_parameter;
+    info!(
+        "[{VALIDATOR}] SPAM: flooding {node_network} from {funding_addr} (fanout={}, fee={}, interval={}ms). Fund it via `misaminer --wallet {funding_addr}`.",
+        args.fanout, args.fee, args.interval_ms
+    );
+
+    let mut total: u64 = 0;
+    loop {
+        let virtual_daa = client.get_server_info().await.map(|s| s.virtual_daa_score).unwrap_or(0);
+        let utxos = match client.get_utxos_by_addresses(vec![funding_addr.clone()]).await {
+            Ok(u) => u,
+            Err(e) => {
+                warn!("[{VALIDATOR}] SPAM: getUtxosByAddresses failed: {e}");
+                tokio::time::sleep(Duration::from_millis(args.interval_ms)).await;
+                continue;
+            }
+        };
+        let mut spendable: Vec<_> = utxos
+            .into_iter()
+            .filter(|e| e.utxo_entry.amount >= args.min_utxo)
+            .filter(|e| is_spendable(e.utxo_entry.is_coinbase, e.utxo_entry.block_daa_score, virtual_daa, coinbase_maturity))
+            .collect();
+        spendable.sort_by_key(|e| std::cmp::Reverse(e.utxo_entry.amount));
+
+        let mut round = 0u64;
+        for e in spendable.into_iter().take(args.max_per_round) {
+            let funding_outpoint: TransactionOutpoint = e.outpoint.into();
+            let funding_entry: UtxoEntry = e.utxo_entry.into();
+            let Ok(tx) = key.build_funded_split_tx(funding_outpoint, &funding_entry, args.fee, args.fanout, storage_mass_parameter)
+            else {
+                continue;
+            };
+            if client.submit_transaction(RpcTransaction::from(&tx), false).await.is_ok() {
+                round += 1;
+                total += 1;
+            }
+        }
+        if round > 0 {
+            info!("[{VALIDATOR}] SPAM: +{round} txs this round (total {total}, vDAA {virtual_daa})");
+        }
+        tokio::time::sleep(Duration::from_millis(args.interval_ms)).await;
+    }
 }
 
 async fn connect(node_rpc: &str) -> Result<KaspaRpcClient, String> {

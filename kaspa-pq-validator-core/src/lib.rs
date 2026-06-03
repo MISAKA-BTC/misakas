@@ -16,8 +16,10 @@ use kaspa_consensus_core::dns_finality::{
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
 use kaspa_consensus_core::mass::MassCalculator;
-use kaspa_consensus_core::subnets::{SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND};
-use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
+use kaspa_consensus_core::subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND};
+use kaspa_consensus_core::tx::{
+    MutableTransaction, PopulatedTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
+};
 use kaspa_hashes::{Hash64, blake2b_512_address_payload};
 use kaspa_txscript::{
     MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder, verify_mldsa87_with_context,
@@ -144,6 +146,61 @@ impl ValidatorKey {
             .map_err(|e| format!("attestation funding pubkey push failed: {e}"))?
             .drain();
 
+        let mut tx = mtx.tx;
+        tx.inputs[0].signature_script = signature_script;
+        Ok(tx)
+    }
+
+    /// Build a fee-funded, signed NATIVE transfer that SPLITS one funding UTXO into
+    /// `num_outputs` change outputs back to this key's own P2PKH-ML-DSA script — a generic
+    /// value-moving transaction used for load generation (each output becomes a fresh
+    /// spendable UTXO, so a chain of these fans out into many transactions). The KIP-9
+    /// storage mass is committed (value-based, so it matches the node's `calc_contextual_masses`
+    /// recheck), and input-0 is ML-DSA-signed over the `SIG_HASH_ALL` v2 sighash under
+    /// [`MLDSA87_TX_CONTEXT`] exactly as [`Self::build_funded_shard_tx`].
+    pub fn build_funded_split_tx(
+        &self,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+        num_outputs: usize,
+        storage_mass_parameter: u64,
+    ) -> Result<Transaction, String> {
+        let n = (num_outputs.max(1)) as u64;
+        if funding.amount <= fee {
+            return Err(format!("funding UTXO amount {} does not cover fee {}", funding.amount, fee));
+        }
+        let spendable = funding.amount - fee;
+        let per = spendable / n;
+        if per == 0 {
+            return Err(format!("funding {} too small to split into {} outputs after fee {}", funding.amount, n, fee));
+        }
+        // K outputs back to self; the division remainder is folded into output-0.
+        let spk = funding.script_public_key.clone();
+        let remainder = spendable - per * n;
+        let outputs: Vec<TransactionOutput> =
+            (0..n).map(|i| TransactionOutput::new(if i == 0 { per + remainder } else { per }, spk.clone())).collect();
+        let input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
+        let tx = Transaction::new(TX_VERSION, vec![input], outputs, 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+
+        // KIP-9 storage-mass commitment (value-based, independent of the empty signature script).
+        let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
+            .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![funding.clone()]))
+            .ok_or_else(|| "contextual mass not computable for the split tx".to_string())?
+            .storage_mass;
+        tx.set_mass(storage_mass);
+
+        let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused);
+        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+        sig_data.push(SIG_HASH_ALL.to_u8());
+        let signature_script = ScriptBuilder::new()
+            .add_data(&sig_data)
+            .map_err(|e| format!("split funding sig push failed: {e}"))?
+            .add_data(self.keypair.verification_key.as_ref())
+            .map_err(|e| format!("split funding pubkey push failed: {e}"))?
+            .drain();
         let mut tx = mtx.tx;
         tx.inputs[0].signature_script = signature_script;
         Ok(tx)
