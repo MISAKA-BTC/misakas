@@ -630,7 +630,13 @@ pub struct DnsParams {
 
     pub epoch_length_blocks: u64,
 
-    /// `cW` — minimum work-depth for history confirmation.
+    /// `cW` — minimum work-depth for history confirmation. **Intentionally `ZERO`
+    /// in both current presets (audit H-03):** the two-dimensional (work × stake)
+    /// finality safety lives in the v3 reorg gate (`TwoDimensionalDominance` plus
+    /// `emergency_work_margin`/`emergency_stake_margin` below) — a heavier but
+    /// stake-less branch cannot pass it. The confirmation predicate's WorkDepth
+    /// term is retained as an optional extra buffer; a deployment that wants the
+    /// confirmation itself to also require buried PoW can raise this above 0.
     pub required_work_depth: BlueWorkType,
     /// `cS` — minimum stake-depth (in [`STAKE_SCORE_SCALE`] units)
     /// for history confirmation.

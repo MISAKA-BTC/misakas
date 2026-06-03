@@ -895,9 +895,12 @@ impl VirtualStateProcessor {
         // `epoch_length_blocks` (O(1) amortized per block) instead of walking
         // `max_reorg_horizon_blocks` on every virtual commit. Deterministic and
         // epoch-granular; safe on devnet/testnet where the gate is dormant
-        // (Bootstrap). NOTE (mainnet/Active): before the gate relies on this,
-        // anchor the recompute at the epoch's final block (a fixed chain point)
-        // to remove the "first sink to cross the boundary" ambiguity.
+        // (Bootstrap). M-01 (resolved by DNS v3): the recompute no longer depends
+        // on which sink first crosses the boundary — `collect_stake_contributions_v2`
+        // (below) credits only THIS chain's *canonical lagged anchor* for each ready
+        // epoch (a fixed selected-chain point, blue_score-coordinated), so two nodes
+        // whose sinks differ within the same epoch compute the identical DnsState.
+        // The throttle only bounds recompute cadence, never the canonical result.
         let prev_dns_state = self.dns_state_store.read().get().ok();
         // kaspa-pq DNS v3: throttle the recompute to once per BLUE_SCORE epoch (epochs are
         // blue_score-coordinated now), not the DAA epoch. The recompute is canonical

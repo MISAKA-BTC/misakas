@@ -710,6 +710,13 @@ impl VirtualStateProcessor {
         // within-block + cross-block (§B.3(c)) `(bond, epoch)` uniqueness and a whole-output pool
         // cap (Σ ≤ pool; the unspent remainder is not minted).
         //
+        // M-04 (denominator definition): the per-block reward intentionally uses the INCLUSION-time
+        // active set (`total_active_stake_at(daa_score)`, below) as the expected-stake denominator,
+        // whereas the StakeScore security signal uses the epoch-ANCHOR-time set. Both are
+        // per-block-deterministic (read from the same selected-parent bond view), so neither splits;
+        // they differ only in reference point, which is correct — the reward pays inclusion in THIS
+        // block against the stake live at THIS block, while StakeScore measures buried-epoch security.
+        //
         // ADR-0018 "本格版" (PoS-v2): the participation/quality split is **fenced**. Below
         // `pos_v2_activation_daa_score` the FULL pool funds participation (effective bps = 10_000),
         // byte-identical to the pre-v2 behavior regardless of the configured `validator_participation_bps`

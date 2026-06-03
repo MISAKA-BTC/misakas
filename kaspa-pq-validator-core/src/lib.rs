@@ -92,10 +92,15 @@ impl ValidatorKey {
     /// ([`ATTESTATION_MLDSA87_CONTEXT`]) and transaction-input signatures
     /// ([`MLDSA87_TX_CONTEXT`]) in disjoint domains — neither can be replayed as the other.
     pub fn sign_with_context(&self, message: &[u8], context: &[u8]) -> [u8; MLDSA87_SIG_LEN] {
+        // audit L: ML-DSA `sign` only fails for an over-long (>255-byte) context; every caller
+        // passes a short fixed domain-separator constant, so this precondition turns the
+        // (otherwise unreachable) failure into an explicit, clearly-attributed panic rather than
+        // an opaque libcrux error. Randomness is hedged; ML-DSA is not randomness-fragile.
+        assert!(context.len() <= 255, "ML-DSA signing context must be <= 255 bytes, got {}", context.len());
         let mut randomness = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut randomness);
         let sig = ml_dsa_87::sign(&self.keypair.signing_key, message, context, randomness)
-            .expect("ML-DSA-87 sign is infallible on a well-formed message");
+            .expect("ML-DSA-87 sign is infallible for a <= 255-byte context");
         *sig.as_ref()
     }
 

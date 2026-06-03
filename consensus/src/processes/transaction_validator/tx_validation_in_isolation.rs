@@ -55,7 +55,10 @@ impl TransactionValidator {
     /// gating on `pq_enforcement == Consensus` alone is correct here (isolation
     /// has no DAA score available). The genesis block is committed directly
     /// (`process_genesis`), never through this validator, and its premine output
-    /// is ML-DSA P2PKH regardless.
+    /// is ML-DSA P2PKH regardless. M-06 (launch policy): this design assumes PQ is
+    /// genesis-active. A future net wanting a NON-genesis PQ activation could not
+    /// reuse this isolation rule as-is — it would have to thread the activation DAA
+    /// score into a context-bearing check instead.
     fn check_transaction_pq_output_classes(&self, tx: &Transaction) -> TxResult<()> {
         if !matches!(self.pq_enforcement, PqEnforcementMode::Consensus) {
             return Ok(());

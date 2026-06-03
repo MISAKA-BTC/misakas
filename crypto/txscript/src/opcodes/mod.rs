@@ -1039,6 +1039,10 @@ opcode_list! {
     // unlock pubkey matches the keyed address payload the wallet/premine commit;
     // the two MUST stay in lock-step or every P2PKH becomes unspendable. The
     // 32-byte `OP_BLAKE2B` (0xaa) is retained for the legacy P2SH template.
+    // NOTE (audit L): despite the generic-sounding `OP_BLAKE2B_512` name, this is a
+    // KEYED hash (keyed under `kaspa-pq-v2/address/mldsa87` via
+    // `blake2b_512_address_payload`), NOT a vanilla BLAKE2b-512 — it must not be
+    // reused as a general-purpose hash opcode.
     opcode OpBlake2b512<0xc4, 1>(self, vm) {
         let [last] = vm.dstack.pop_raw()?;
         let hash = blake2b_512_address_payload(last.as_slice());
