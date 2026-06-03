@@ -982,6 +982,260 @@ async fn dns_v3_high_parallel_blue_score_jump_no_hole() {
     );
 }
 
+/// kaspa-pq DNS v3 — the validator FUNCTIONS end-to-end: a bonded validator's canonical
+/// attestation drives the StakeScore over `required_stake_depth`, so `update_dns_state`
+/// promotes the overlay to the `Active` stage AND records a DNS-confirmed anchor — the
+/// precondition the §H reorg gate needs to protect finality. Shrunk params: a single
+/// validator is the whole active stake, so one fully-attested ready epoch earns exactly
+/// `1·SCALE`, clearing `required_stake_depth = SCALE/2`. (Foundation for the 51%-attack test.)
+#[tokio::test]
+async fn dns_v3_validator_drives_confirmed_anchor() {
+    use crate::model::stores::{dns_state::DnsStateStoreReader, headers::HeaderStoreReader};
+    use kaspa_consensus_core::{
+        Hash64,
+        dns_finality::{DnsRolloutStage, STAKE_SCORE_SCALE, StakeScore, ready_epoch_from_tip_blue_score},
+    };
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap(); // GENESIS_ACTIVE: TwoDimensionalDominance
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 50;
+            dns.max_reorg_horizon_blocks = 2;
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            // Confirm on a short chain: work threshold trivial, one fully-attested epoch suffices.
+            dns.required_work_depth = kaspa_consensus_core::BlueWorkType::ZERO;
+            dns.required_stake_depth = StakeScore(STAKE_SCORE_SCALE / 2);
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let seed = [0x42u8; 32];
+    let v = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+
+    // Fund a bond + a shard-funding coinbase.
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    let _b1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_a = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_b = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let cb_a = &h_a.transactions[0];
+    let (ia, oa) = cb_a.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_a pays K");
+    let (coinbase_a, value_a, daa_a) = (TransactionOutpoint::new(cb_a.id(), ia as u32), oa.value, h_a.header.daa_score);
+    let cb_b = &h_b.transactions[0];
+    let (ib, ob) = cb_b.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_b pays K");
+    let (coinbase_b, value_b, daa_b) = (TransactionOutpoint::new(cb_b.id(), ib as u32), ob.value, h_b.header.daa_score);
+    for _ in 0..5 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+    let (bond_tx, _vid, _reward_payload) =
+        dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, value_a - 100_000, 0, storage_mass_parameter);
+    let bond_tx_id = bond_tx.id();
+    let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+    assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid);
+    let bond_outpoint = TransactionOutpoint::new(bond_tx_id, 0);
+
+    for _ in 0..8 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let genesis_hash = ctx.consensus.params().genesis.hash;
+    let sink = ctx.consensus.get_sink();
+    let anchor = {
+        let vp = ctx.consensus.virtual_processor();
+        let sink_blue = vp.headers_store.get_blue_score(sink).unwrap();
+        let lr = ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+            .expect("an epoch is ready");
+        vp.canonical_anchor_by_blue_score(lr, sink, &dns).expect("canonical anchor")
+    };
+    let att = dns_harness::build_signed_attestation(
+        &v,
+        genesis_hash.as_byte_slice(),
+        bond_outpoint,
+        anchor.epoch,
+        anchor.anchor_hash,
+        anchor.anchor_daa_score,
+        Hash64::default(),
+    );
+    let shard_tx = dns_harness::funded_signed_shard_tx(seed, coinbase_b, value_b, daa_b, att, storage_mass_parameter);
+    let reward_block = ctx.mine_block(new_miner_data(), vec![shard_tx]).await;
+    assert_eq!(ctx.consensus.block_status(reward_block.header.hash), BlockStatus::StatusUTXOValid);
+
+    // Mine generously so the shard merges (accepted on the selected chain), the attested epoch
+    // buries, and update_dns_state recomputes (it throttles to once per blue_score epoch) with
+    // the attestation credited -> stake_depth >= required -> the anchor confirms.
+    for _ in 0..15 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+
+    let state = {
+        let vp = ctx.consensus.virtual_processor();
+        vp.dns_state_store.read().get().expect("DnsState is written once the overlay is active")
+    };
+    assert_eq!(state.rollout_stage, DnsRolloutStage::Active, "one active validator -> Active stage");
+    assert!(
+        state.stake_depth >= StakeScore(STAKE_SCORE_SCALE / 2),
+        "the validator's canonical attestation drove StakeScore over the threshold (got {:?})",
+        state.stake_depth
+    );
+    assert_ne!(
+        state.last_dns_confirmed_anchor,
+        Hash64::default(),
+        "a DNS-confirmed anchor is recorded (the reorg gate now protects it)"
+    );
+}
+
+/// kaspa-pq DNS v3 (§H finality) — **51%-PoW attack is stopped**: a stake-less attacker that
+/// out-mines the honest chain (strictly higher blue_work — a PoW majority) CANNOT rewrite a
+/// DNS-confirmed anchor. The honest node bonds a validator and reaches a confirmed anchor;
+/// a second consensus instance (the attacker, same genesis) mines a longer STAKE-LESS chain;
+/// its heavier blocks are delivered to the honest node, whose sink-search runs the
+/// `TwoDimensionalDominance` gate (`dns_reorg_allows`): the candidate exits the confirmed
+/// prefix and out-Works but does NOT out-Stake (zero attestations) → `DominanceViolation` →
+/// soft-reject. The honest sink therefore STILL contains the confirmed anchor, never the
+/// heavier attacker tip — PoW surplus does not substitute for a PoS deficit (the
+/// non-substitutability finality property). Completes the PR6-deferred 51%-finality-stop sim.
+#[tokio::test]
+async fn dns_v3_pow_majority_cannot_rewrite_confirmed_anchor() {
+    use crate::model::stores::{dns_state::DnsStateStoreReader, ghostdag::GhostdagStoreReader, headers::HeaderStoreReader};
+    use kaspa_consensus_core::{
+        Hash64,
+        dns_finality::{DnsRolloutStage, STAKE_SCORE_SCALE, StakeScore, ready_epoch_from_tip_blue_score},
+    };
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap(); // GENESIS_ACTIVE: TwoDimensionalDominance
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 50;
+            // Large reorg horizon so a from-genesis fork is GATE-ELIGIBLE (the dominance test
+            // runs) instead of being auto-rejected as deeper than the horizon.
+            dns.max_reorg_horizon_blocks = 1000;
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            dns.required_work_depth = kaspa_consensus_core::BlueWorkType::ZERO;
+            dns.required_stake_depth = StakeScore(STAKE_SCORE_SCALE / 2);
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // ---- Honest node: bond a validator, attest, reach a DNS-confirmed anchor. ----
+    let seed = [0x42u8; 32];
+    let v = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    let _b1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_a = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_b = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let cb_a = &h_a.transactions[0];
+    let (ia, oa) = cb_a.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_a pays K");
+    let (coinbase_a, value_a, daa_a) = (TransactionOutpoint::new(cb_a.id(), ia as u32), oa.value, h_a.header.daa_score);
+    let cb_b = &h_b.transactions[0];
+    let (ib, ob) = cb_b.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_b pays K");
+    let (coinbase_b, value_b, daa_b) = (TransactionOutpoint::new(cb_b.id(), ib as u32), ob.value, h_b.header.daa_score);
+    for _ in 0..5 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+    let (bond_tx, _vid, _rp) =
+        dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, value_a - 100_000, 0, storage_mass_parameter);
+    let bond_tx_id = bond_tx.id();
+    let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+    assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid);
+    let bond_outpoint = TransactionOutpoint::new(bond_tx_id, 0);
+    for _ in 0..8 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let genesis_hash = ctx.consensus.params().genesis.hash;
+    let sink = ctx.consensus.get_sink();
+    let anchor = {
+        let vp = ctx.consensus.virtual_processor();
+        let sink_blue = vp.headers_store.get_blue_score(sink).unwrap();
+        let lr = ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+            .expect("an epoch is ready");
+        vp.canonical_anchor_by_blue_score(lr, sink, &dns).expect("canonical anchor")
+    };
+    let att = dns_harness::build_signed_attestation(
+        &v,
+        genesis_hash.as_byte_slice(),
+        bond_outpoint,
+        anchor.epoch,
+        anchor.anchor_hash,
+        anchor.anchor_daa_score,
+        Hash64::default(),
+    );
+    let shard_tx = dns_harness::funded_signed_shard_tx(seed, coinbase_b, value_b, daa_b, att, storage_mass_parameter);
+    ctx.mine_block(new_miner_data(), vec![shard_tx]).await;
+    for _ in 0..15 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+
+    let honest_sink = ctx.consensus.get_sink();
+    let (confirmed_anchor, honest_work) = {
+        let vp = ctx.consensus.virtual_processor();
+        let st = vp.dns_state_store.read().get().expect("DnsState");
+        assert_eq!(st.rollout_stage, DnsRolloutStage::Active, "honest node is Active");
+        assert_ne!(st.last_dns_confirmed_anchor, Hash64::default(), "honest node has a confirmed anchor");
+        (st.last_dns_confirmed_anchor, vp.ghostdag_store.get_blue_work(honest_sink).unwrap())
+    };
+
+    // ---- Attacker: a SEPARATE instance (same genesis) mines a longer STAKE-LESS chain. ----
+    let mut atk = TestContext::new(TestConsensus::new(&config));
+    let mut attacker_blocks = Vec::new();
+    for _ in 0..60 {
+        attacker_blocks.push(atk.mine_block(new_miner_data(), vec![]).await);
+    }
+    let attacker_tip = attacker_blocks.last().unwrap().header.hash;
+    let attacker_work = { atk.consensus.virtual_processor().ghostdag_store.get_blue_work(attacker_tip).unwrap() };
+    assert!(
+        attacker_work > honest_work,
+        "the attacker is a genuine PoW majority (heavier blue_work): attacker {attacker_work} vs honest {honest_work}"
+    );
+
+    // ---- Deliver the attacker's heavier branch to the honest node. ----
+    for b in &attacker_blocks {
+        ctx.validate_and_insert_block(b.clone()).await;
+    }
+
+    // ---- Finality held: the honest sink STILL contains the confirmed anchor, NOT the heavier
+    //      attacker tip. PoW surplus could not substitute for the attacker's zero stake. ----
+    let new_sink = ctx.consensus.get_sink();
+    assert_ne!(new_sink, attacker_tip, "the honest node did NOT reorg onto the heavier stake-less attacker chain");
+    {
+        let vp = ctx.consensus.virtual_processor();
+        assert!(
+            vp.reachability_service.is_chain_ancestor_of(confirmed_anchor, new_sink),
+            "the DNS-confirmed anchor is still on the selected chain (the reorg gate stopped the 51% attack)"
+        );
+        // The confirmed anchor is unchanged — finality was not rewritten.
+        let st = vp.dns_state_store.read().get().expect("DnsState");
+        assert_eq!(st.last_dns_confirmed_anchor, confirmed_anchor, "the confirmed anchor was not rewritten by the attack");
+    }
+}
+
 // ============================================================================
 // kaspa-pq ADR-0018 §G — DNS-overlay DAG integration harness (foundation).
 //
