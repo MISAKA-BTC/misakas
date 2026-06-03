@@ -649,12 +649,29 @@ impl VirtualStateProcessor {
         }
         let window = dns_params.reward_uniqueness_window_blocks;
 
-        // Resolve eligible, recent attestations (canonical order). Recency
+        // kaspa-pq DNS v3: canonical anchors as-of the selected parent (the deterministic
+        // as-of-block view, like `bond_view` / the deferred-bonus path). Only an attestation
+        // naming THIS chain's canonical lagged anchor for a READY, NON-DUPLICATE epoch earns a
+        // reward — exactly the GoodAttestation v3 rule the PR4 StakeScore verifier applies, so
+        // reward and StakeScore agree on what counts. A non-canonical or duplicate target earns
+        // nothing (it is simply absent from `creditable`), and so never enters `rewarded_keys`
+        // (hence never the §D bounty, §E pool, cross-block dedup, or the deferred bonus).
+        let creditable = self.canonical_anchors_in_window(selected_parent, dns_params);
+
+        // Resolve eligible, recent, CANONICAL attestations (canonical order). Recency
         // (§B.3(c)): an attestation whose target is older than the window earns
         // nothing — keeps the uniqueness walk below bounded.
         let mut attestations = Vec::new();
         for att in attestations_from_accepted_txs(txs) {
             if daa_score.saturating_sub(att.target_daa_score) > window {
+                continue;
+            }
+            // v3 canonical gate: the epoch must be creditable (ready, non-duplicate) and the
+            // attestation must name its canonical anchor exactly.
+            let Some(anchor) = creditable.get(&att.epoch) else {
+                continue;
+            };
+            if att.target_hash != anchor.anchor_hash || att.target_daa_score != anchor.anchor_daa_score {
                 continue;
             }
             if let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) {
@@ -1089,6 +1106,12 @@ fn attestation_reward_eligibility(
         let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) else {
             return Err((att.bond_outpoint.transaction_id, att.epoch));
         };
+        // kaspa-pq DNS v2 (P-1A): the self-declared validator_id must match the bond's
+        // validator_pubkey_hash (validator_id is not in the signed digest); reward eligibility
+        // shares the StakeScore binding so no reward can be earned by a non-canonical validator_id.
+        if att.validator_id != bond.validator_pubkey_hash {
+            return Err((att.bond_outpoint.transaction_id, att.epoch));
+        }
         // (b) ML-DSA-65 signature verifies over the canonical digest.
         let digest = stake_attestation_message(
             net_id.as_byte_slice(),
@@ -1135,6 +1158,12 @@ fn slashing_evidence_genuine(
             return Err(ev.bond_outpoint.transaction_id);
         };
         for att in [&ev.attestation_a, &ev.attestation_b] {
+            // kaspa-pq DNS v2 (P-1A): both equivocating attestations must be bound to the bond's
+            // validator_pubkey_hash (validator_id is not in the signed digest), so slashing can't be
+            // spoofed against a bond via a mismatched validator_id.
+            if att.validator_id != bond.validator_pubkey_hash {
+                return Err(ev.bond_outpoint.transaction_id);
+            }
             let digest = stake_attestation_message(
                 net_id.as_byte_slice(),
                 att.epoch,

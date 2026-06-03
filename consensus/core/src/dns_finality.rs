@@ -702,9 +702,131 @@ pub struct DnsParams {
     /// everywhere until explicitly switched on. `u64::MAX` on every net today (inert; no
     /// consensus / genesis change). Appended last to keep the borsh layout change localized.
     pub pos_v2_activation_daa_score: u64,
+
+    // ---- kaspa-pq DNS v3: Canonical Lagged Anchor (blue_score-coordinated epochs) ----
+    // DNS attestation epochs are coordinated by header-committed `blue_score`, NOT the
+    // selected-chain *index*. The index is store-local: an archival node numbers from genesis,
+    // an IBD node from its pruning point, so the same block gets different indices and
+    // `index / L` would split StakeScore permanently between archival and IBD-synced nodes.
+    // blue_score is consensus-validated, strictly monotonic on the selected-parent chain, and
+    // pruning-invariant, so all nodes agree on a block's epoch.
+    /// DNS attestation epoch length in blue_score units. `epoch(b) = blue_score(b) / L`.
+    pub attestation_epoch_length_blue_score: u64,
+    /// blue_score the tip must advance past an epoch's end before that epoch is "ready" to
+    /// attest (absorbs selected-chain churn so honest validators converge on one lagged anchor).
+    pub attestation_lag_blue_score: u64,
+    /// blue_score backoff below an epoch's end for the canonical-anchor cutoff:
+    /// `anchor(E) = latest selected-chain ancestor with blue_score <= epoch_end(E) - backoff`.
+    pub attestation_anchor_backoff_blue_score: u64,
+    /// How far back (blue_score) the StakeScore / canonical-anchor walk scans from the tip; must
+    /// cover `required_stake_depth` epochs + lag + grace (replaces reusing
+    /// `max_reorg_horizon_blocks` for the stake walk).
+    pub stake_score_window_blue_score: u64,
+}
+
+/// kaspa-pq DNS v3 — the canonical, lagged, blue_score-coordinated epoch anchor that the
+/// signer, verifier, reward path, and reorg gate all derive identically. `anchor_hash` is a
+/// block hash (`Hash64`); the wire attestation's `target_hash` must equal it, and the verifier
+/// must additionally confirm `header(target_hash).blue_score == anchor_blue_score` and
+/// `header(target_hash).daa_score == anchor_daa_score`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanonicalLaggedEpochAnchor {
+    pub epoch: u64,
+    pub epoch_start_blue_score: u64,
+    pub epoch_end_blue_score: u64,
+    pub cutoff_blue_score: u64,
+    pub anchor_hash: Hash64,
+    pub anchor_blue_score: u64,
+    pub anchor_daa_score: u64,
+    /// `anchor(E) == anchor(E-1)` — a sparse / jumpy selected chain made this epoch reuse the
+    /// previous epoch's anchor. Such an epoch earns NO new StakeScore / reward credit (a
+    /// consensus rule), so the same history state cannot be credited under multiple epoch ids.
+    pub duplicate_of_previous_anchor: bool,
+}
+
+/// blue_score at which epoch `E` begins: `E * L`.
+pub fn epoch_start_blue_score(epoch: u64, epoch_len_blue_score: u64) -> u64 {
+    epoch.saturating_mul(epoch_len_blue_score.max(1))
+}
+
+/// blue_score at which epoch `E` ends (inclusive): `(E + 1) * L - 1`.
+pub fn epoch_end_blue_score(epoch: u64, epoch_len_blue_score: u64) -> u64 {
+    epoch_start_blue_score(epoch.saturating_add(1), epoch_len_blue_score).saturating_sub(1)
+}
+
+/// Canonical-anchor cutoff for epoch `E`: `epoch_end(E) - backoff`.
+pub fn anchor_cutoff_blue_score(epoch: u64, epoch_len_blue_score: u64, backoff_blue_score: u64) -> u64 {
+    epoch_end_blue_score(epoch, epoch_len_blue_score).saturating_sub(backoff_blue_score)
+}
+
+/// The latest epoch "ready" to attest given the current tip blue_score, or `None` if no epoch
+/// has buried by `lag` yet. Epoch `E` is ready iff `tip_blue_score >= epoch_end(E) + lag`.
+pub fn ready_epoch_from_tip_blue_score(tip_blue_score: u64, epoch_len_blue_score: u64, lag_blue_score: u64) -> Option<u64> {
+    let epoch_len = epoch_len_blue_score.max(1);
+    let safe = tip_blue_score.checked_sub(lag_blue_score)?;
+    let completed = safe.checked_add(1)? / epoch_len;
+    if completed == 0 { None } else { Some(completed - 1) }
+}
+
+/// Pure core of canonical-anchor selection (testable without a store). `ancestors` is the tip's
+/// selected-parent chain, tip-first, each `(hash, blue_score, daa_score)` with blue_score
+/// strictly decreasing; it must reach down to at least `anchor_cutoff(E-1)`. Returns the
+/// canonical anchor for `epoch` — the most-recent ancestor with `blue_score <= anchor_cutoff(E)`
+/// (NOT an in-epoch block, so a sparse / jumpy selected chain never leaves an epoch without an
+/// anchor) — and flags `duplicate_of_previous_anchor` when that same block is also `anchor(E-1)`.
+/// `None` only if the window doesn't reach the cutoff (epoch not yet buried, or walk too short).
+pub fn canonical_lagged_epoch_anchor(
+    epoch: u64,
+    epoch_len_blue_score: u64,
+    backoff_blue_score: u64,
+    ancestors: &[(Hash64, u64, u64)],
+) -> Option<CanonicalLaggedEpochAnchor> {
+    let epoch_len = epoch_len_blue_score.max(1);
+    let cutoff = anchor_cutoff_blue_score(epoch, epoch_len, backoff_blue_score);
+    let (anchor_hash, anchor_blue_score, anchor_daa_score) = *ancestors.iter().find(|(_, bs, _)| *bs <= cutoff)?;
+    let duplicate_of_previous_anchor = if epoch == 0 {
+        false
+    } else {
+        let prev_cutoff = anchor_cutoff_blue_score(epoch - 1, epoch_len, backoff_blue_score);
+        ancestors.iter().find(|(_, bs, _)| *bs <= prev_cutoff).map(|(h, _, _)| *h) == Some(anchor_hash)
+    };
+    Some(CanonicalLaggedEpochAnchor {
+        epoch,
+        epoch_start_blue_score: epoch_start_blue_score(epoch, epoch_len),
+        epoch_end_blue_score: epoch_end_blue_score(epoch, epoch_len),
+        cutoff_blue_score: cutoff,
+        anchor_hash,
+        anchor_blue_score,
+        anchor_daa_score,
+        duplicate_of_previous_anchor,
+    })
 }
 
 impl DnsParams {
+    /// kaspa-pq DNS v3: are the blue_score canonical-anchor parameters self-consistent?
+    /// The reorg gate only engages in the `Active` stage, where finality depends entirely on
+    /// these; a misconfiguration (e.g. a zero epoch length, or a stake-score window too short
+    /// to cover the creditable epochs + their lag) would make the canonical anchor / StakeScore
+    /// ill-defined. `update_dns_state` refuses to enter `Active` unless this holds, so an
+    /// invalid v3 config fails safe (the gate stays dormant) rather than splitting finality.
+    ///
+    /// Invariants:
+    /// - `attestation_epoch_length_blue_score >= 1` (the epoch divisor).
+    /// - `attestation_lag_blue_score >= 1` (an epoch must bury before it is attestable, else
+    ///   honest validators never converge off the churning tip).
+    /// - `attestation_anchor_backoff_blue_score < attestation_epoch_length_blue_score` (the
+    ///   cutoff `epoch_end - backoff` stays within the epoch's own span).
+    /// - `stake_score_window_blue_score >= 2·L + lag + backoff` — the walk must reach the
+    ///   PREVIOUS ready epoch's cutoff so the duplicate-anchor flag is always decidable for a
+    ///   creditable epoch (a real deployment sizes it for `required_stake_depth` epochs + grace).
+    pub fn dns_v3_params_consistent(&self) -> bool {
+        let l = self.attestation_epoch_length_blue_score;
+        let lag = self.attestation_lag_blue_score;
+        let backoff = self.attestation_anchor_backoff_blue_score;
+        let window = self.stake_score_window_blue_score;
+        l >= 1 && lag >= 1 && backoff < l && window >= l.saturating_mul(2).saturating_add(lag).saturating_add(backoff)
+    }
+
     /// ADR-0018 §F staged reward rollout — the effective fee/subsidy split for a
     /// block at `daa_score`, selected deterministically from the score (NOT the
     /// node-local `DnsState.rollout_stage`, which is pov-dependent and would split
@@ -2864,6 +2986,7 @@ pub fn validate_stake_attestation_shard_payload(payload: &[u8]) -> Result<(), Dn
         check_attestation_wellformed(att)?;
         if att.epoch != shard.epoch
             || att.target_hash != shard.target_hash
+            || att.target_daa_score != shard.target_daa_score
             || att.validator_set_commitment != shard.validator_set_commitment
         {
             return Err(DnsTxError::ShardTupleMismatch);
@@ -3053,6 +3176,13 @@ pub fn bond_mutations_from_accepted_txs(
                     }
                     let outpoint = TransactionOutpoint::new(tx.id(), 0);
                     let mut record = stake_bond_record_from_payload(&payload, outpoint);
+                    // kaspa-pq DNS v2 (P-1B): activation is NON-RETROACTIVE. A bond may not declare a
+                    // past `activation_daa_score` and thereby insert itself into a historical epoch's
+                    // active set, which would retroactively change that epoch's StakeScore / reward
+                    // denominator (the lagged-anchor denominator is evaluated at a past anchor DAA).
+                    // Clamp activation up to the bond's acceptance DAA so it can only affect future
+                    // epochs. Deterministic, so coinbase construction and validation agree.
+                    record.activation_daa_score = record.activation_daa_score.max(accepted_daa_score);
                     // Clamp the operator-declared unbonding window up to the network floor, so a
                     // validator cannot shorten its exit-lock (and thus its slashable window) by
                     // declaring a tiny `unbonding_period_blocks`.
@@ -4256,8 +4386,138 @@ mod tests {
 
         let muts = bond_mutations_from_accepted_txs(&[bond_tx, slash_tx, shard_tx, native_tx], 12_345, 0, 0);
         assert_eq!(muts.len(), 2);
-        assert_eq!(muts[0], BondMutation::Insert(expected_outpoint, stake_bond_record_from_payload(&bond_payload, expected_outpoint)));
+        // P-1B: the inserted record's activation is clamped up to the acceptance DAA (12_345 here),
+        // so a bond cannot back-date itself into a past epoch's active set / StakeScore denominator.
+        let mut expected_record = stake_bond_record_from_payload(&bond_payload, expected_outpoint);
+        expected_record.activation_daa_score = expected_record.activation_daa_score.max(12_345);
+        assert_eq!(muts[0], BondMutation::Insert(expected_outpoint, expected_record));
         assert_eq!(muts[1], BondMutation::Slash(evidence.bond_outpoint, 12_345));
+    }
+
+    #[test]
+    fn bond_activation_clamped_to_acceptance_daa() {
+        // P-1B (DNS v2/v3): a bond declaring a past (or zero) activation cannot back-date itself
+        // into a historical epoch's active set — the inserted record's activation is
+        // max(declared, acceptance DAA). A future-dated activation is left as declared.
+        let mut past = fixture_bond();
+        past.activation_daa_score = 5;
+        let past_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, borsh::to_vec(&past).unwrap());
+        match &bond_mutations_from_accepted_txs(&[past_tx], 10_000, 0, 0)[0] {
+            BondMutation::Insert(_, record) => {
+                assert_eq!(record.activation_daa_score, 10_000, "past activation is clamped up to acceptance DAA");
+            }
+            _ => panic!("expected an Insert mutation"),
+        }
+
+        let mut future = fixture_bond();
+        future.activation_daa_score = 50_000;
+        let future_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, borsh::to_vec(&future).unwrap());
+        match &bond_mutations_from_accepted_txs(&[future_tx], 10_000, 0, 0)[0] {
+            BondMutation::Insert(_, record) => {
+                assert_eq!(record.activation_daa_score, 50_000, "future activation is left as declared (no down-clamp)");
+            }
+            _ => panic!("expected an Insert mutation"),
+        }
+    }
+
+    #[test]
+    fn shard_tuple_rejects_target_daa_score_mismatch() {
+        // P-1C (DNS v2/v3): the shard's (epoch, target_hash, target_daa_score, vsc) tuple must
+        // match every contained attestation — including target_daa_score (previously unchecked).
+        let att = fixture_attestation();
+        let mut shard = single_attestation_shard(att);
+        // Desync ONLY target_daa_score (the attestation keeps its own value).
+        shard.target_daa_score = shard.target_daa_score.wrapping_add(1);
+        let payload = borsh::to_vec(&shard).unwrap();
+        assert!(
+            matches!(validate_stake_attestation_shard_payload(&payload), Err(DnsTxError::ShardTupleMismatch)),
+            "a shard whose target_daa_score disagrees with its attestation must be rejected"
+        );
+    }
+
+    // ---- DNS v3: Canonical Lagged Anchor (blue_score-coordinated) ----
+
+    #[test]
+    fn ready_epoch_from_tip_blue_score_off_by_one() {
+        // L=100, lag=20 -> epoch E is ready iff tip_blue >= epoch_end(E)+lag = (E+1)*100-1+20.
+        assert_eq!(ready_epoch_from_tip_blue_score(118, 100, 20), None); // epoch_end(0)+lag = 119
+        assert_eq!(ready_epoch_from_tip_blue_score(119, 100, 20), Some(0));
+        assert_eq!(ready_epoch_from_tip_blue_score(219, 100, 20), Some(1));
+        assert_eq!(ready_epoch_from_tip_blue_score(0, 100, 20), None);
+    }
+
+    #[test]
+    fn canonical_anchor_most_recent_at_or_below_cutoff() {
+        // L=100, backoff=10 -> cutoff(1) = epoch_end(1)-10 = 199-10 = 189.
+        let h = |n: u8| Hash64::from_bytes([n; 64]);
+        let ancestors = vec![(h(9), 250, 2500), (h(8), 190, 1900), (h(7), 185, 1850), (h(6), 100, 1000), (h(5), 50, 500)];
+        let a = canonical_lagged_epoch_anchor(1, 100, 10, &ancestors).unwrap();
+        assert_eq!(a.anchor_hash, h(7), "most-recent ancestor with blue_score <= 189 is h7@185");
+        assert_eq!(a.anchor_blue_score, 185);
+        assert_eq!(a.anchor_daa_score, 1850);
+        assert_eq!(a.cutoff_blue_score, 189);
+        assert_eq!(a.epoch_end_blue_score, 199);
+        assert!(!a.duplicate_of_previous_anchor);
+    }
+
+    #[test]
+    fn canonical_anchor_no_hole_on_blue_score_jump() {
+        // High-parallel: blue_score jumps 300 -> 80 across one selected-chain step, so NO ancestor
+        // lands inside epoch 1's [100,199] band — yet the anchor still exists (most-recent at/below
+        // the cutoff). The "in-epoch block" requirement is what created the original hole; the
+        // cutoff (<=) formulation removes it without falling back to the (split-prone) chain index.
+        let h = |n: u8| Hash64::from_bytes([n; 64]);
+        let ancestors = vec![(h(9), 300, 3000), (h(8), 80, 800), (h(7), 10, 100)];
+        let a = canonical_lagged_epoch_anchor(1, 100, 10, &ancestors).unwrap(); // cutoff = 189
+        assert_eq!(a.anchor_hash, h(8), "anchor exists even with no in-epoch block");
+        assert_eq!(a.anchor_blue_score, 80);
+    }
+
+    #[test]
+    fn canonical_anchor_duplicate_flagged_and_pruning_base_invariant() {
+        // The anchor depends ONLY on (hash, blue_score) — there is no index input — so the
+        // selected-chain index ORIGIN (archival genesis=0 vs IBD pruning_point=0) is irrelevant:
+        // identical blue_score data => identical anchor. That is the pruning-base invariance that
+        // the retracted chain-index design lacked.
+        let h = |n: u8| Hash64::from_bytes([n; 64]);
+        // Sparse chain: nothing in (189,289] or (289,389], so epochs 2 and 3 reuse anchors.
+        let ancestors = vec![(h(9), 400, 4000), (h(8), 250, 2500), (h(7), 150, 1500), (h(6), 50, 500)];
+        let e1 = canonical_lagged_epoch_anchor(1, 100, 10, &ancestors).unwrap(); // cutoff 189 -> h7@150
+        let e2 = canonical_lagged_epoch_anchor(2, 100, 10, &ancestors).unwrap(); // cutoff 289 -> h8@250
+        let e3 = canonical_lagged_epoch_anchor(3, 100, 10, &ancestors).unwrap(); // cutoff 389 -> h8@250
+        assert_eq!(e1.anchor_hash, h(7));
+        assert!(!e1.duplicate_of_previous_anchor);
+        assert_eq!(e2.anchor_hash, h(8));
+        assert!(!e2.duplicate_of_previous_anchor, "e2 anchor (h8) differs from e1 anchor (h7)");
+        assert_eq!(e3.anchor_hash, h(8));
+        assert!(e3.duplicate_of_previous_anchor, "epoch 3 reuses epoch 2's anchor -> not creditable");
+    }
+
+    #[test]
+    fn dns_v3_params_consistency_gate() {
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS};
+        // The SHIPPED presets must be v3-consistent — else the reorg gate could never enter
+        // Active on the very networks that use them.
+        assert!(GENESIS_ACTIVE_DNS_PARAMS.dns_v3_params_consistent(), "devnet/simnet preset is v3-consistent");
+        assert!(PRODUCTION_DNS_PARAMS.dns_v3_params_consistent(), "mainnet/testnet preset is v3-consistent");
+
+        // Each invariant violation flips the gate false (fail-safe: update_dns_state then never
+        // enters Active, so finality stays dormant rather than ill-defined).
+        let mut p = GENESIS_ACTIVE_DNS_PARAMS;
+        p.attestation_epoch_length_blue_score = 0;
+        assert!(!p.dns_v3_params_consistent(), "a zero epoch length is rejected");
+
+        let mut p = GENESIS_ACTIVE_DNS_PARAMS;
+        p.attestation_lag_blue_score = 0;
+        assert!(!p.dns_v3_params_consistent(), "a zero lag is rejected");
+
+        let mut p = GENESIS_ACTIVE_DNS_PARAMS;
+        p.attestation_anchor_backoff_blue_score = p.attestation_epoch_length_blue_score;
+        assert!(!p.dns_v3_params_consistent(), "backoff >= epoch length is rejected");
+
+        let mut p = GENESIS_ACTIVE_DNS_PARAMS;
+        p.stake_score_window_blue_score = p.attestation_epoch_length_blue_score; // < 2L + lag + backoff
+        assert!(!p.dns_v3_params_consistent(), "a window too short to cover 2L + lag + backoff is rejected");
     }
 
     #[test]
@@ -4836,6 +5096,10 @@ mod tests {
             reorg_mode: DnsReorgMode::TwoDimensionalDominance,
             full_reward_split_daa_score: 2_000_000,
             pos_v2_activation_daa_score: 3_000_000,
+            attestation_epoch_length_blue_score: 4_000_000,
+            attestation_lag_blue_score: 5_000_000,
+            attestation_anchor_backoff_blue_score: 6_000_000,
+            stake_score_window_blue_score: 7_000_000,
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();

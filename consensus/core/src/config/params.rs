@@ -666,6 +666,13 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     full_reward_split_daa_score: 0,
     // PoS-v2 "本格版" economics master fence — dormant on every net (no re-genesis).
     pos_v2_activation_daa_score: u64::MAX,
+    // kaspa-pq DNS v3 (Canonical Lagged Anchor): blue_score-coordinated attestation epochs.
+    // devnet/simnet use small windows for fast finality in tests. blue_score ≈ height at low DAG
+    // parallelism, so these mirror the legacy epoch_length_blocks=100 cadence. Calibratable.
+    attestation_epoch_length_blue_score: 100,
+    attestation_lag_blue_score: 40,
+    attestation_anchor_backoff_blue_score: 10,
+    stake_score_window_blue_score: 1500,
 };
 
 /// Number of blocks in 14 days at the production 10 BPS block rate
@@ -768,6 +775,13 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // pre-v2 chains are invalid under the new PQ-only/mass rules and need a
     // re-genesis regardless, which this activation rides along with.
     pos_v2_activation_daa_score: 0,
+    // kaspa-pq DNS v3 (Canonical Lagged Anchor): blue_score-coordinated attestation epochs.
+    // mainnet/testnet use larger lag/backoff than devnet for selected-chain convergence margin.
+    // stake_score_window_blue_score must cover required_stake_depth (10 epochs) + lag + grace.
+    attestation_epoch_length_blue_score: 100,
+    attestation_lag_blue_score: 100,
+    attestation_anchor_backoff_blue_score: 20,
+    stake_score_window_blue_score: 1500,
 };
 
 pub const MAINNET_PARAMS: Params = Params {

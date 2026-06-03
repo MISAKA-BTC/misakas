@@ -179,6 +179,19 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// kaspa-pq DNS v3 (batch): all READY, creditable (non-duplicate) canonical-anchor
+    /// attestation targets for `bond_outpoint` in `[from_epoch, latest_ready]`, ascending,
+    /// capped at `limit`. Lets a validator that fell behind sign every epoch it missed (a
+    /// single latest-only target silently drops the gap). Default empty.
+    fn get_validator_attestation_targets(
+        &self,
+        _bond_outpoint: TransactionOutpoint,
+        _from_epoch: u64,
+        _limit: usize,
+    ) -> Vec<ValidatorAttestationTarget> {
+        Vec::new()
+    }
+
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {
         unimplemented!()
     }
