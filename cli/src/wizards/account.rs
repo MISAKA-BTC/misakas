@@ -17,8 +17,9 @@ pub(crate) async fn create(
     let term = ctx.term();
     let wallet = ctx.wallet();
 
-    // TODO @aspect
-    let word_count = WordCount::Words12;
+    // audit QH-1: 24 words (256-bit seed entropy) so the BIP39 seed never caps the post-quantum
+    // signature strength (a 12-word/128-bit seed is Grover-searchable at ~2^64).
+    let word_count = WordCount::Words24;
 
     let name = if let Some(name) = name {
         Some(name.to_string())
