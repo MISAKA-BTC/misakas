@@ -1236,6 +1236,114 @@ async fn dns_v3_pow_majority_cannot_rewrite_confirmed_anchor() {
     }
 }
 
+/// kaspa-pq DNS v3 — **many validators converge on ONE anchor at the epoch boundary**, the
+/// core reason v3 replaces v1 current-sink signing. Under fast mining / a wide DAG, validators
+/// transiently observe DIFFERENT sinks (the multi-tip frontier + propagation lag) — v1 had each
+/// sign its own differing sink, splitting honest stake below φS. Here we build a wide DAG, take
+/// many divergent validator VIEWS (the multiple frontier tips a fast network produces + lagging
+/// ancestors at different heights), and show that although their views differ (≥2 distinct
+/// blocks → ≥2 distinct v1 sink-targets), every one of them computes the SAME v3 canonical
+/// lagged anchor for a buried epoch (exactly 1) — unanimous, so honest stake never splits.
+#[tokio::test]
+async fn dns_v3_many_validators_agree_on_anchor_under_fast_wide_dag() {
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::dns_finality::ready_epoch_from_tip_blue_score;
+    use std::collections::HashSet;
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 16;
+            p.mergeset_size_limit = 16;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            // Moderate epoch + a generous lag so the latest ready epoch's anchor is buried well
+            // below the churning multi-tip frontier (where the views diverge) into shared history.
+            dns.attestation_epoch_length_blue_score = 5;
+            dns.attestation_lag_blue_score = 20;
+            dns.attestation_anchor_backoff_blue_score = 2;
+            dns.stake_score_window_blue_score = 100_000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // Fast mining / wide DAG: wide antichains merged repeatedly, ENDING on a wide antichain so the
+    // frontier is genuinely multi-tip (the different sinks a fast network's validators observe).
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await;
+    }
+    for _ in 0..6 {
+        ctx.build_block_template_row(0..12).validate_and_insert_row().await; // wide antichain
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await; // merge -> blue_score jump
+    }
+    ctx.build_block_template_row(0..12).validate_and_insert_row().await; // leave a multi-tip frontier
+
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let sink = ctx.consensus.get_sink();
+
+    // Collect many divergent VALIDATOR VIEWS: every frontier tip (a fast network's competing
+    // sinks) + several RECENT lagging ancestors at different heights (validators a little behind
+    // on propagation — but still past the readiness threshold, like real honest nodes).
+    let mut views: Vec<BlockHash> = ctx.consensus.get_tips().into_iter().collect();
+    {
+        let vp = ctx.consensus.virtual_processor();
+        let sink_blue = vp.headers_store.get_blue_score(sink).unwrap();
+        for anc in vp.reachability_service.default_backward_chain_iterator(sink) {
+            let b = vp.headers_store.get_blue_score(anc).unwrap();
+            // Only "slightly behind" validators (recent ancestors); stop once we'd reach nodes too
+            // far back to have a ready epoch (a genesis-deep view is not a realistic poll state).
+            if sink_blue.saturating_sub(b) > 40
+                || ready_epoch_from_tip_blue_score(b, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+                    .is_none()
+            {
+                break;
+            }
+            views.push(anc);
+            if views.len() >= 24 {
+                break;
+            }
+        }
+    }
+    views.sort();
+    views.dedup();
+
+    let (anchors, blue_scores, buried_epoch) = {
+        let vp = ctx.consensus.virtual_processor();
+        // A buried epoch every view agrees is ready: the min over views of each view's latest
+        // ready epoch (so canonical_anchor_by_blue_score returns Some for every view).
+        let buried_epoch = views
+            .iter()
+            .map(|t| {
+                let b = vp.headers_store.get_blue_score(*t).unwrap();
+                ready_epoch_from_tip_blue_score(b, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+                    .expect("each view has at least one ready epoch")
+            })
+            .min()
+            .unwrap();
+        let anchors: HashSet<BlockHash> = views
+            .iter()
+            .map(|t| vp.canonical_anchor_by_blue_score(buried_epoch, *t, &dns).expect("every view resolves the buried epoch").anchor_hash)
+            .collect();
+        let blue_scores: HashSet<u64> = views.iter().map(|t| vp.headers_store.get_blue_score(*t).unwrap()).collect();
+        (anchors, blue_scores, buried_epoch)
+    };
+
+    // The views are genuinely divergent (a fast network: many distinct tips at several heights) —
+    // under v1 these would be ≥2 different current-sink targets, splitting honest stake.
+    assert!(views.len() >= 5, "many validator views ({})", views.len());
+    assert!(blue_scores.len() >= 2, "the views sit at genuinely different positions (would be different v1 sinks)");
+    // ...yet under v3 every view computes the SAME canonical anchor for the buried epoch.
+    assert_eq!(
+        anchors.len(),
+        1,
+        "all {} validator views must agree on ONE canonical anchor for epoch {} (got {} distinct)",
+        views.len(),
+        buried_epoch,
+        anchors.len()
+    );
+}
+
 // ============================================================================
 // kaspa-pq ADR-0018 §G — DNS-overlay DAG integration harness (foundation).
 //
