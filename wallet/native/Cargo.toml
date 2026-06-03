@@ -10,7 +10,11 @@ license.workspace = true
 repository.workspace = true
 
 [features]
+# kaspa-pq PQ-only (ADR-0019 §14): the native `kaspa-wallet` CLI is PQ-only by
+# default (secp-free, via kaspa-cli's pq-only default); `legacy-secp256k1` builds
+# the classical wallet.
 default = []
+legacy-secp256k1 = ["kaspa-cli/legacy-secp256k1"]
 
 [dependencies]
 async-lock.workspace = true

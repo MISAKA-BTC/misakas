@@ -280,7 +280,7 @@ impl PruningProcessor {
     }
 
     // PR-9.5e: `pruning_point` is a block hash (BlockHash) despite the fn name; the
-    // utxo_commitment read below stays a 32-byte Hash.
+    // utxo_commitment read below is a 64-byte Hash64 (the MuHash accumulator commitment).
     fn assert_utxo_commitment(&self, pruning_point: BlockHash) {
         info!("Verifying the new pruning point UTXO commitment (sanity test)");
         let commitment = self.headers_store.get_header(pruning_point).unwrap().utxo_commitment;

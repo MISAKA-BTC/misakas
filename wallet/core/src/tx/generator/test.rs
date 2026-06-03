@@ -1,4 +1,8 @@
 #![allow(clippy::inconsistent_digit_grouping)]
+// Several generator-test helpers (the receiver-pays fee fixtures and the
+// `drain`/`insufficient_funds` drivers) are retained for reference but are not
+// currently exercised, so allow them to be dead code.
+#![allow(dead_code)]
 
 use crate::error::Error;
 use crate::result::Result;

@@ -164,6 +164,16 @@ pub enum AccountCreateArgs {
         account_name: Option<String>,
         ecdsa: bool,
     },
+    /// kaspa-pq (ADR-0019 §13/§14): ML-DSA-87 single-key (PQ-only) account. The
+    /// verification key is derived deterministically from the private-key-data
+    /// BIP39 master seed at `account_index`; this is the only account kind
+    /// representable on a PQ-only chain. Curve-independent (no secp256k1), so it
+    /// is available in both the pq-only and legacy builds.
+    Mldsa {
+        prv_key_data_id: PrvKeyDataId,
+        account_name: Option<String>,
+        account_index: Option<u64>,
+    },
 }
 
 impl AccountCreateArgs {
@@ -184,6 +194,12 @@ impl AccountCreateArgs {
 
     pub fn new_keypair_key(prv_key_data_id: PrvKeyDataId, account_name: Option<String>, ecdsa: bool) -> Self {
         AccountCreateArgs::Keypair { prv_key_data_id, account_name, ecdsa }
+    }
+
+    /// kaspa-pq ML-DSA-87 single-key account (PQ-only). `account_index` is the
+    /// derivation slot in the keygen XOF (default 0 / auto-assigned when `None`).
+    pub fn new_mldsa(prv_key_data_id: PrvKeyDataId, account_name: Option<String>, account_index: Option<u64>) -> Self {
+        AccountCreateArgs::Mldsa { prv_key_data_id, account_name, account_index }
     }
 
     pub fn new_multisig(

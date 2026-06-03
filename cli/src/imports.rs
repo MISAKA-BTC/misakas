@@ -11,6 +11,9 @@ pub use futures::stream::{Stream, StreamExt, TryStreamExt};
 pub use futures::{future::FutureExt, select};
 pub use kaspa_consensus_core::network::{NetworkId, NetworkType};
 pub use kaspa_utils::hex::*;
+// kaspa-pq PQ-only (ADR-0019 §14): `compat` is the classical (secp256k1) legacy
+// wallet compatibility surface; it does not exist in a PQ-only build.
+#[cfg(feature = "legacy-secp256k1")]
 pub use kaspa_wallet_core::compat::*;
 pub use kaspa_wallet_core::prelude::*;
 pub use kaspa_wallet_core::settings::{DefaultSettings, SettingsStore, WalletSettings};

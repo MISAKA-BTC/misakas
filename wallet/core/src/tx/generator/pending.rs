@@ -10,6 +10,7 @@ use crate::rpc::DynRpcApi;
 use crate::tx::{DataKind, Generator, MAXIMUM_STANDARD_TRANSACTION_MASS};
 use crate::utxo::{UtxoContext, UtxoEntryId, UtxoEntryReference, UtxoIterator};
 use kaspa_consensus_core::hashing::sighash_type::SigHashType;
+#[cfg(feature = "legacy-secp256k1")]
 use kaspa_consensus_core::sign::{Signed, sign_input, sign_with_multiple_v2};
 use kaspa_consensus_core::tx::{SignableTransaction, Transaction, TransactionId, TransactionInput, TransactionOutput};
 use kaspa_rpc_core::{RpcTransaction, RpcTransactionId};
@@ -249,6 +250,7 @@ impl PendingTransaction {
         Ok(())
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn create_input_signature(&self, input_index: usize, private_key: &[u8; 32], hash_type: SigHashType) -> Result<Vec<u8>> {
         let mutable_tx = self.inner.signable_tx.lock()?.clone();
         let verifiable_tx = mutable_tx.as_verifiable();
@@ -264,6 +266,7 @@ impl PendingTransaction {
         Ok(())
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn sign_input(&self, input_index: usize, private_key: &[u8; 32], hash_type: SigHashType) -> Result<()> {
         let mut mutable_tx = self.inner.signable_tx.lock()?.clone();
 
@@ -278,6 +281,7 @@ impl PendingTransaction {
         Ok(())
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn try_sign_with_keys(&self, privkeys: &[[u8; 32]], check_fully_signed: Option<bool>) -> Result<()> {
         let mutable_tx = self.inner.signable_tx.lock()?.clone();
         let signed = sign_with_multiple_v2(mutable_tx, privkeys);

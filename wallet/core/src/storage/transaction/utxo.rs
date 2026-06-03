@@ -25,7 +25,7 @@ impl From<&UtxoEntryReference> for UtxoRecord {
     fn from(utxo: &UtxoEntryReference) -> Self {
         let UtxoEntryReference { utxo } = utxo;
         UtxoRecord {
-            index: utxo.outpoint.get_index(),
+            index: utxo.outpoint.index(),
             address: utxo.address.clone(),
             amount: utxo.amount,
             script_public_key: utxo.script_public_key.clone(),

@@ -4566,6 +4566,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-dnsseeder"
+version = "1.1.0"
+dependencies = [
+ "clap 4.5.51",
+ "kaspa-core",
+ "kaspa-rpc-core",
+ "kaspa-wrpc-client",
+ "log",
+ "rand 0.8.6",
+ "tokio",
+]
+
+[[package]]
 name = "misaminer"
 version = "1.0.0"
 dependencies = [

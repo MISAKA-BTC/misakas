@@ -148,9 +148,10 @@ mod tests {
         kaspa_consensus_core::Hash64::from_bytes(bytes)
     }
 
-    // PR-9.5e: 32-byte unique generator for the utxo_commitment header
-    // position, which stays a 32-byte accumulator commitment (`Hash`)
-    // while block ids / merkle roots widened to Hash64.
+    // 32-byte unique generator (`Hash`). Retained as a helper; the
+    // utxo_commitment header position is now 64-byte `Hash64` (see
+    // `new_unique_hash64`), as are the block ids / merkle roots.
+    #[allow(dead_code)]
     fn new_unique_hash32() -> kaspa_consensus_core::Hash {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(1);

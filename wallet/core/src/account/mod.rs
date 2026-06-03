@@ -5,17 +5,22 @@
 
 pub mod descriptor;
 pub mod kind;
+#[cfg(feature = "legacy-secp256k1")]
 pub mod pskb;
 pub mod variants;
+#[cfg(feature = "legacy-secp256k1")]
 use kaspa_wallet_pskt::bundle::Bundle;
 pub use kind::*;
+#[cfg(feature = "legacy-secp256k1")]
 use pskb::{
     PSKBSigner, PSKTGenerator, bundle_from_pskt_generator, bundle_to_finalizer_stream, commit_reveal_batch_bundle,
     pskb_signer_for_address, pskt_to_pending_transaction,
 };
 pub use variants::*;
 
+#[cfg(feature = "legacy-secp256k1")]
 use crate::derivation::AddressDerivationManagerTrait;
+#[cfg(feature = "legacy-secp256k1")]
 use crate::derivation::build_derivate_paths;
 use crate::imports::*;
 use crate::storage::AccountMetadata;
@@ -25,9 +30,12 @@ use crate::tx::PaymentOutput;
 use crate::tx::{Fees, Generator, GeneratorSettings, GeneratorSummary, PaymentDestination, PendingTransaction, Signer};
 use crate::utxo::UtxoContextBinding;
 use crate::utxo::balance::{AtomicBalance, BalanceStrings};
+#[cfg(feature = "legacy-secp256k1")]
 use kaspa_bip32::{ChildNumber, ExtendedPrivateKey, PrivateKey};
 use kaspa_consensus_client::UtxoEntry;
+#[cfg(feature = "legacy-secp256k1")]
 use kaspa_consensus_client::UtxoEntryReference;
+#[cfg(feature = "legacy-secp256k1")]
 use kaspa_wallet_keys::derivation::gen0::WalletDerivationManagerV0;
 use workflow_core::abortable::Abortable;
 
@@ -127,6 +135,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
         None
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     fn xpub_keys(&self) -> Option<&ExtendedPublicKeys> {
         None
     }
@@ -204,6 +213,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
         let current_daa_score = self.wallet().current_daa_score().ok_or(Error::NotConnected)?;
         let balance = Arc::new(AtomicBalance::default());
 
+        #[cfg(feature = "legacy-secp256k1")]
         match self.clone().as_derivation_capable() {
             Ok(account) => {
                 let derivation = account.derivation();
@@ -242,6 +252,19 @@ pub trait Account: AnySync + Send + Sync + 'static {
                 let scan = Scan::new_with_address_set(address_set, &balance, current_daa_score);
                 scan.scan(self.utxo_context()).await?;
             }
+        }
+        // kaspa-pq PQ-only (ADR-0019 §14): `as_derivation_capable` is a classical
+        // (secp256k1) capability. On a PQ-only build every account is single-key
+        // (ML-DSA-87), so the scan always uses the receive/change address set.
+        #[cfg(not(feature = "legacy-secp256k1"))]
+        {
+            // `window_size`/`extent` only steer the classical HD derivation scan.
+            let _ = (window_size, extent);
+            let mut address_set = HashSet::<Address>::new();
+            address_set.insert(self.receive_address()?);
+            address_set.insert(self.change_address()?);
+            let scan = Scan::new_with_address_set(address_set, &balance, current_daa_score);
+            scan.scan(self.utxo_context()).await?;
         }
 
         self.utxo_context().update_balance().await?;
@@ -369,6 +392,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
         Ok((generator.summary(), ids))
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     async fn commit_reveal_manual(
         self: Arc<Self>,
         start_destination: PaymentDestination,
@@ -395,6 +419,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
         .await
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     async fn commit_reveal(
         self: Arc<Self>,
         address: Address,
@@ -421,6 +446,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
         .await
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     async fn pskb_from_send_generator(
         self: Arc<Self>,
         destination: PaymentDestination,
@@ -440,6 +466,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
         bundle_from_pskt_generator(pskt_generator).await
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     async fn pskb_sign(
         self: Arc<Self>,
         bundle: &Bundle,
@@ -472,6 +499,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
     }
 
     // PR-9.5f: collects submitted txids, which are now Hash64.
+    #[cfg(feature = "legacy-secp256k1")]
     async fn pskb_broadcast(self: Arc<Self>, bundle: &Bundle) -> Result<Vec<kaspa_hashes::Hash64>, Error> {
         let mut ids = Vec::new();
         let mut stream = bundle_to_finalizer_stream(bundle);
@@ -571,14 +599,17 @@ pub trait Account: AnySync + Send + Sync + 'static {
         Ok(generator.summary())
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     fn as_derivation_capable(self: Arc<Self>) -> Result<Arc<dyn DerivationCapableAccount>> {
         Err(Error::AccountAddressDerivationCaps)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     fn as_legacy_account(self: Arc<Self>) -> Result<Arc<dyn AsLegacyAccount>> {
         Err(Error::InvalidAccountKind)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     fn create_address_private_keys<'l>(
         self: Arc<Self>,
         key_data: &PrvKeyData,
@@ -609,6 +640,7 @@ pub trait Account: AnySync + Send + Sync + 'static {
 downcast_sync!(dyn Account);
 
 /// Account trait used by legacy account types (BIP32 account types with the `'972` derivation path).
+#[cfg(feature = "legacy-secp256k1")]
 #[async_trait]
 pub trait AsLegacyAccount: Account {
     async fn create_private_context(
@@ -622,6 +654,7 @@ pub trait AsLegacyAccount: Account {
 }
 
 /// Account trait used by derivation capable account types (BIP32, MultiSig, etc.)
+#[cfg(feature = "legacy-secp256k1")]
 #[allow(clippy::too_many_arguments)]
 #[async_trait]
 pub trait DerivationCapableAccount: Account {
@@ -849,8 +882,10 @@ pub trait DerivationCapableAccount: Account {
     }
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 downcast_sync!(dyn DerivationCapableAccount);
 
+#[cfg(feature = "legacy-secp256k1")]
 pub(crate) fn create_private_keys<'l>(
     account_kind: &AccountKind,
     cosigner_index: u32,
@@ -889,6 +924,7 @@ pub(crate) fn create_private_keys<'l>(
     Ok(private_keys)
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {

@@ -2,8 +2,8 @@
 //! Account descriptors (client-side account information representation).
 //!
 
-use crate::derivation::AddressDerivationMeta;
 use crate::imports::*;
+use crate::storage::metadata::AddressDerivationMeta;
 use borsh::{BorshDeserialize, BorshSerialize};
 use convert_case::{Case, Casing};
 use kaspa_addresses::Address;
@@ -91,6 +91,7 @@ pub enum AccountDescriptorValue {
     String(String),
     Bool(bool),
     AddressDerivationMeta(AddressDerivationMeta),
+    #[cfg(feature = "legacy-secp256k1")]
     XPubKeys(ExtendedPublicKeys),
     Json(String),
 }
@@ -108,6 +109,7 @@ impl TryFrom<AccountDescriptorValue> for JsValue {
                 object.set("change", &value.change().into())?;
                 object.into()
             }
+            #[cfg(feature = "legacy-secp256k1")]
             AccountDescriptorValue::XPubKeys(value) => {
                 let array = Array::new();
                 for xpub in value.iter() {
@@ -129,6 +131,7 @@ impl std::fmt::Display for AccountDescriptorValue {
             AccountDescriptorValue::String(value) => write!(f, "{}", value),
             AccountDescriptorValue::Bool(value) => write!(f, "{}", value),
             AccountDescriptorValue::AddressDerivationMeta(value) => write!(f, "{}", value),
+            #[cfg(feature = "legacy-secp256k1")]
             AccountDescriptorValue::XPubKeys(value) => {
                 let mut s = vec![];
                 for xpub in value.iter() {
@@ -172,6 +175,7 @@ impl From<&str> for AccountDescriptorValue {
     }
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 impl From<ExtendedPublicKeys> for AccountDescriptorValue {
     fn from(value: ExtendedPublicKeys) -> Self {
         Self::XPubKeys(value)

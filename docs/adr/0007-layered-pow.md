@@ -237,6 +237,54 @@ Layer 0 design + math + module can land first and the
 consensus-breaking changes can be reviewed and rolled out on a
 known good base.
 
+## Phase 2 (deferred): `pow_algo_id` wire support (audit H-04)
+
+**Status: planned; NOT required for the Phase-1 single-algo launch.**
+
+### Why it is safe to defer (the Phase-1 posture)
+
+At Phase 1 only `POW_ALGO_ID_KHEAVYHASH = 1` is admitted, and the rule is already
+enforced on the **live** path: `validate_header_in_isolation` calls
+`check_algo_id_phase1(header.pow_algo_id)` (→ `RuleError::UnknownPowAlgoId`) for
+every ordinary and trusted-IBD header, and pruning-proof import enforces the same
+rule (`PruningProofUnknownPowAlgoId`). The field is **internal-only**: it is not
+carried on the P2P or RPC wire, so every node reconstructs `pow_algo_id = 1` from
+`POW_ALGO_ID_KHEAVYHASH` when decoding a header (`protocol/p2p/src/convert/header.rs`,
+the `rpc-core` / `rpc-grpc-core` header models) — there is no `new_finalized`-bypassing
+borsh/serde header decode on any network receive path — and binds the locally-recomputed
+identity hash to it. So there is no wire field through which a peer can inject a deviating
+value, and no mixed-`algo_id` regime: **no Phase-1 consensus-split risk** (audit H-04:
+validation present + on the live path; the only residual is forward-compatibility, below).
+
+### Phase-2 work (release-blocker for the `algo_id ≥ 2` hard fork)
+
+Introducing an ASIC-hard Layer-1 variant (`algo_id = 2, …`) is a **hard fork** and MUST
+land all of the following together, gated on a new `pow_algo_id_phase2_activation_daa_score`:
+
+1. **P2P wire.** Add `uint32 powAlgoId` to `BlockHeader` in `protocol/p2p/proto/p2p.proto`;
+   regenerate the protowire. Plumb it through `From<(HeaderFormat,&Header)>` (send) and
+   `Header::try_from` (read — drop the hardcoded `POW_ALGO_ID_KHEAVYHASH` default) in
+   `protocol/p2p/src/convert/header.rs`.
+2. **RPC wire.** Add the field to `RpcBlockHeader` in `rpc/grpc/core/proto/rpc.proto`
+   (regenerate) and to the `rpc-core` header models; carry it through
+   `rpc/grpc/core/src/convert/header.rs` and the `rpc-core` `TryFrom`s (replace the
+   hardcoded default). Keep `submit_block` / block-template round-tripping the real value.
+3. **Consensus rule.** Replace `check_algo_id_phase1` with a height-aware check: below
+   `pow_algo_id_phase2_activation_daa_score` admit only `1`; at/above admit `{1, 2}`. Apply
+   the same rule in pruning-proof validation.
+4. **PoW dispatch.** Route `header.pow_algo_id` to the L1 algorithm in `consensus/pow` (the
+   `StateLayer0` finalizer + the L1 tag are already `pow_algo_id`-aware; wire the dispatch to
+   the new variant's verifier).
+5. **No re-genesis required** — the field already exists on `Header` and is in the
+   identity-hash preimage with value `1`; only the wire transport and the rule's admitted set
+   change. Existing `algo_id = 1` headers stay valid.
+6. **Tests.** A header carrying `pow_algo_id = 2` below activation is rejected; at/above
+   activation it validates and dispatches to the L1 verifier; a P2P + RPC round-trip preserves
+   the field (no longer defaulted).
+
+Until this lands, `pow_algo_id` MUST remain `1` everywhere and the `check_algo_id_phase1`
+gate MUST stay enforced.
+
 ## References
 
 - [ADR-0001 — Network isolation](0001-network-isolation.md)

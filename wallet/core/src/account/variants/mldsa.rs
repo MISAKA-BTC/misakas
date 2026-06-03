@@ -220,6 +220,7 @@ impl Account for MlDsa {
         Ok(descriptor)
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     fn create_address_private_keys<'l>(
         self: Arc<Self>,
         _key_data: &PrvKeyData,

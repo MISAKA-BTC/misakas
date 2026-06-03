@@ -1099,8 +1099,13 @@ try_from! (args: IAccountsCreateRequest, AccountsCreateRequest, {
                 ecdsa: args.get_bool("ecdsa").unwrap_or(false),
             }
         }
+        crate::account::MLDSA_ACCOUNT_KIND => AccountCreateArgs::Mldsa {
+            prv_key_data_id: args.try_get_prv_key_data_id("prvKeyDataId")?.ok_or(Error::custom("prvKeyDataId is required"))?,
+            account_name: args.try_get_string("accountName")?,
+            account_index: args.get_u64("accountIndex").ok(),
+        },
         _ => {
-            return Err(Error::custom("only BIP32/kaspa-keypair-standard accounts are currently supported"));
+            return Err(Error::custom("only BIP32/kaspa-keypair-standard/kaspa-mldsa-standard accounts are currently supported"));
         }
     };
 

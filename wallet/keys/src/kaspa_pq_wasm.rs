@@ -8,13 +8,13 @@
 //!     static fromHex(hex: string): MlDsa87PublicKey;
 //!     static fromBytes(bytes: Uint8Array): MlDsa87PublicKey;
 //!     toHex(): string;
-//!     toBytes(): Uint8Array;       // length 1952
+//!     toBytes(): Uint8Array;       // length 2592
 //!   }
 //!   class MlDsa87Signature {
 //!     static fromHex(hex: string): MlDsa87Signature;
 //!     static fromBytes(bytes: Uint8Array): MlDsa87Signature;
 //!     toHex(): string;
-//!     toBytes(): Uint8Array;       // length 3309
+//!     toBytes(): Uint8Array;       // length 4627
 //!     verify(publicKey: MlDsa87PublicKey, message: Uint8Array): boolean;
 //!   }
 //!   class KaspaPqKeyPair {
@@ -55,7 +55,7 @@ fn jsv<E: std::fmt::Display>(e: E) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
-/// 1952-byte ML-DSA-65 public key, WASM-facing newtype.
+/// 2592-byte ML-DSA-87 public key, WASM-facing newtype.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[wasm_bindgen(js_name = "MlDsa87PublicKey")]
 pub struct MlDsa87PublicKey {
@@ -103,7 +103,7 @@ impl MlDsa87PublicKey {
     }
 }
 
-/// 3309-byte ML-DSA-65 signature, WASM-facing newtype.
+/// 4627-byte ML-DSA-87 signature, WASM-facing newtype.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[wasm_bindgen(js_name = "MlDsa87Signature")]
 pub struct MlDsa87Signature {
@@ -173,7 +173,7 @@ impl MlDsa87Signature {
     }
 }
 
-/// kaspa-pq ML-DSA-65 keypair, WASM-facing.
+/// kaspa-pq ML-DSA-87 keypair, WASM-facing.
 #[wasm_bindgen(js_name = "KaspaPqKeyPair")]
 pub struct KaspaPqKeyPair {
     inner: KaspaPqMlDsa87KeyPair,
@@ -266,7 +266,7 @@ impl KaspaPqKeyPair {
         Self::from_mnemonic_inner(phrase, passphrase, network_id, account, change, index).map_err(jsv)
     }
 
-    /// 1952-byte ML-DSA-65 public key.
+    /// 2592-byte ML-DSA-87 public key.
     #[wasm_bindgen(js_name = "publicKey")]
     pub fn public_key(&self) -> MlDsa87PublicKey {
         self.public_key_inner()
@@ -280,7 +280,7 @@ impl KaspaPqKeyPair {
     }
 
     /// Sign `message` under the kaspa-pq transaction context. The
-    /// returned signature is exactly 3309 bytes.
+    /// returned signature is exactly 4627 bytes.
     pub fn sign(&self, message: Vec<u8>, randomness: Vec<u8>) -> Result<MlDsa87Signature, JsValue> {
         self.sign_inner(&message, randomness).map_err(jsv)
     }

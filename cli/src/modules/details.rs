@@ -5,6 +5,19 @@ use crate::imports::*;
 pub struct Details;
 
 impl Details {
+    // kaspa-pq PQ-only (ADR-0019 §14): `details` displays the classical (secp256k1)
+    // extended-key derivation chain (receive/change address ranges + xpubs), which
+    // does not exist for single-key ML-DSA accounts. The command stays registered so
+    // help/UX is unchanged, but reports that there is nothing to show in a PQ-only
+    // build.
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    async fn main(self: Arc<Self>, ctx: &Arc<dyn Context>, _argv: Vec<String>, _cmd: &str) -> Result<()> {
+        let ctx = ctx.clone().downcast_arc::<KaspaCli>()?;
+        tprintln!(ctx, "account details (extended-key derivation) are not available for ML-DSA accounts");
+        Ok(())
+    }
+
+    #[cfg(feature = "legacy-secp256k1")]
     async fn main(self: Arc<Self>, ctx: &Arc<dyn Context>, _argv: Vec<String>, _cmd: &str) -> Result<()> {
         let ctx = ctx.clone().downcast_arc::<KaspaCli>()?;
         let account = ctx.select_account().await?.as_derivation_capable()?;

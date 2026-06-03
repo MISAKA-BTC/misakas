@@ -13,14 +13,17 @@ use kaspa_muhash::MuHash;
 use crate::consensus::Consensus;
 
 /// The genesis UTXO set imported at consensus initialization: the canonical
-/// kaspa-pq (misaka) premine — a single 15B KAS UTXO locked to a 2-of-3
-/// ML-DSA-87 P2SH multisig (see `kaspa_consensus_core::config::premine`) — plus,
-/// when the `devnet-prealloc` feature is enabled, any CLI-preallocated UTXOs from
+/// kaspa-pq (misaka) premine — a single 15B KAS UTXO locked to a single-key
+/// ML-DSA-87 P2PKH whose owner payload is network-dependent (see
+/// `kaspa_consensus_core::config::premine`: an unspendable ceremony placeholder on
+/// mainnet, the public test key on testnet/devnet/simnet) — plus, when the
+/// `devnet-prealloc` feature is enabled, any CLI-preallocated UTXOs from
 /// `config.initial_utxo_set`.
 fn genesis_initial_utxo_set(config: &Config) -> Vec<(TransactionOutpoint, UtxoEntry)> {
     // `mut` is only exercised under `devnet-prealloc` (the extend below).
     #[cfg_attr(not(feature = "devnet-prealloc"), allow(unused_mut))]
-    let mut set: Vec<(TransactionOutpoint, UtxoEntry)> = misaka_premine_utxos().into_iter().collect();
+    let mut set: Vec<(TransactionOutpoint, UtxoEntry)> =
+        misaka_premine_utxos(config.params.net.network_type).into_iter().collect();
     #[cfg(feature = "devnet-prealloc")]
     set.extend(config.initial_utxo_set.iter().map(|(op, entry)| (*op, entry.clone())));
     #[cfg(not(feature = "devnet-prealloc"))]
@@ -58,11 +61,12 @@ mod tests {
         config::{Config, params::SIMNET_PARAMS, premine::MISAKA_PREMINE_SOMPI},
         constants::SOMPI_PER_KASPA,
         muhash::MuHashExtensions,
+        network::NetworkType,
     };
 
     #[test]
     fn premine_is_a_single_15b_utxo() {
-        let utxos = misaka_premine_utxos();
+        let utxos = misaka_premine_utxos(NetworkType::Simnet);
         assert_eq!(utxos.len(), 1, "premine is a single UTXO");
         let entry = utxos.values().next().unwrap();
         assert_eq!(entry.amount, MISAKA_PREMINE_SOMPI);
@@ -76,9 +80,11 @@ mod tests {
 
     #[test]
     fn static_genesis_commits_to_premine_and_recompute_is_idempotent() {
-        // The expected commitment is the MuHash over the premine UTXO set.
+        // The expected commitment is the MuHash over the premine UTXO set. The
+        // test config is SIMNET (a test network), so the premine uses the public
+        // test owner payload — unchanged by the mainnet custody split (audit H-01).
         let mut ms = MuHash::new();
-        for (outpoint, entry) in misaka_premine_utxos() {
+        for (outpoint, entry) in misaka_premine_utxos(NetworkType::Simnet) {
             ms.add_utxo(&outpoint, &entry);
         }
         let expected_commitment = ms.finalize();

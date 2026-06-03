@@ -247,7 +247,7 @@ impl Drop for Mnemonic {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-secp256k1"))]
 mod tests {
     use super::Mnemonic;
     use crate::ExtendedPrivateKey;

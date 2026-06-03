@@ -4,10 +4,12 @@
 //! building corresponding balances.
 //!
 
+#[cfg(feature = "legacy-secp256k1")]
 use crate::derivation::AddressManager;
 use crate::imports::*;
 use crate::utxo::balance::AtomicBalance;
 use crate::utxo::{UtxoContext, UtxoEntryReference, UtxoEntryReferenceExtension};
+#[cfg(feature = "legacy-secp256k1")]
 use std::cmp::max;
 
 pub const DEFAULT_WINDOW_SIZE: usize = 8;
@@ -22,19 +24,24 @@ pub enum ScanExtent {
 }
 
 enum Provider {
+    #[cfg(feature = "legacy-secp256k1")]
     AddressManager(Arc<AddressManager>),
     AddressSet(HashSet<Address>),
 }
 
 pub struct Scan {
     provider: Provider,
+    // `window_size`/`extent` only steer the classical HD derivation scan.
+    #[cfg(feature = "legacy-secp256k1")]
     window_size: Option<usize>,
+    #[cfg(feature = "legacy-secp256k1")]
     extent: Option<ScanExtent>,
     balance: Arc<AtomicBalance>,
     current_daa_score: u64,
 }
 
 impl Scan {
+    #[cfg(feature = "legacy-secp256k1")]
     pub fn new_with_address_manager(
         address_manager: Arc<AddressManager>,
         balance: &Arc<AtomicBalance>,
@@ -47,7 +54,9 @@ impl Scan {
     pub fn new_with_address_set(addresses: HashSet<Address>, balance: &Arc<AtomicBalance>, current_daa_score: u64) -> Scan {
         Scan {
             provider: Provider::AddressSet(addresses),
+            #[cfg(feature = "legacy-secp256k1")]
             window_size: None,
+            #[cfg(feature = "legacy-secp256k1")]
             extent: None,
             balance: balance.clone(),
             current_daa_score,
@@ -59,11 +68,13 @@ impl Scan {
         let _lock = utxo_context.processor().notification_lock().await;
 
         match &self.provider {
+            #[cfg(feature = "legacy-secp256k1")]
             Provider::AddressManager(address_manager) => self.scan_with_address_manager(address_manager, utxo_context).await,
             Provider::AddressSet(addresses) => self.scan_with_address_set(addresses, utxo_context).await,
         }
     }
 
+    #[cfg(feature = "legacy-secp256k1")]
     pub async fn scan_with_address_manager(&self, address_manager: &Arc<AddressManager>, utxo_context: &UtxoContext) -> Result<()> {
         let params = utxo_context.processor().network_params()?;
 

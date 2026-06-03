@@ -1,7 +1,9 @@
 use crate::PublicKey;
 use crate::Result;
 use crate::types::*;
+#[cfg(feature = "legacy-secp256k1")]
 pub use secp256k1::SecretKey;
+#[cfg(feature = "legacy-secp256k1")]
 use secp256k1::{Secp256k1, SignOnly, scalar::Scalar};
 
 /// Trait for private key types which can be derived using BIP32.
@@ -24,6 +26,7 @@ pub trait PrivateKey: Sized {
     fn public_key(&self) -> Self::PublicKey;
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 impl PrivateKey for SecretKey {
     type PublicKey = secp256k1::PublicKey;
 

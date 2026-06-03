@@ -3,13 +3,21 @@
 //! are used internally in the wallet framework core.
 //!
 
-pub use crate::account::descriptor::{AccountDescriptor, AccountDescriptorProperty};
+pub use crate::account::descriptor::AccountDescriptor;
+// `AccountDescriptorProperty` is consumed by the classical account variants.
+#[cfg(feature = "legacy-secp256k1")]
+pub use crate::account::descriptor::AccountDescriptorProperty;
 pub use crate::account::variants::*;
-pub use crate::account::{Account, AccountKind, DerivationCapableAccount};
+pub use crate::account::{Account, AccountKind};
+#[cfg(feature = "legacy-secp256k1")]
+pub use crate::account::DerivationCapableAccount;
 pub use crate::deterministic::*;
 pub use crate::encryption::{Encryptable, EncryptionKind};
 pub use crate::error::Error;
-pub use crate::events::{EventKind, Events, SyncState};
+pub use crate::events::{Events, SyncState};
+// `EventKind` is consumed only by the WASM event-sink layer.
+#[cfg(any(feature = "wasm32-sdk", feature = "wasm32-core"))]
+pub use crate::events::EventKind;
 pub use crate::factory::{Factory, factories};
 pub use crate::metrics::{MetricsUpdate, MetricsUpdateKind};
 pub use crate::result::Result;
@@ -18,7 +26,10 @@ pub use crate::rpc::{DynRpcApi, RpcCtl};
 pub use crate::serializer::*;
 pub use crate::storage::*;
 pub use crate::utxo::balance::Balance;
-pub use crate::utxo::scan::{Scan, ScanExtent};
+pub use crate::utxo::scan::Scan;
+// `ScanExtent` only steers the classical HD derivation scan.
+#[cfg(feature = "legacy-secp256k1")]
+pub use crate::utxo::scan::ScanExtent;
 pub use crate::utxo::{Maturity, NetworkParams, OutgoingTransaction, UtxoContext, UtxoEntryReference, UtxoProcessor};
 pub use crate::wallet::*;
 pub use crate::{storage, utils};
@@ -35,13 +46,16 @@ pub use downcast::{AnySync, downcast_sync};
 pub use futures::future::join_all;
 pub use futures::{FutureExt, Stream, StreamExt, TryStreamExt, select, select_biased};
 pub use js_sys::{Array, BigInt, Object};
-pub use kaspa_addresses::{Address, Prefix};
+pub use kaspa_addresses::Address;
+#[cfg(feature = "legacy-secp256k1")]
+pub use kaspa_addresses::Prefix;
 pub use kaspa_consensus_core::network::{NetworkId, NetworkType};
 pub use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionId, TransactionIndexType};
 pub use kaspa_metrics_core::{Metric, Metrics, MetricsSnapshot};
 pub use kaspa_utils::hashmap::*;
 pub use kaspa_utils::hex::{FromHex, ToHex};
 pub use kaspa_wallet_keys::secret::Secret;
+#[cfg(feature = "legacy-secp256k1")]
 pub use kaspa_wallet_keys::types::*;
 pub use pad::PadStr;
 pub use separator::Separatable;

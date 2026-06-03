@@ -1893,6 +1893,61 @@ mod bitcoind_tests {
         }
     }
 
+    /// audit H-10: deterministic FIPS-204 ML-DSA-87 known-answer / regression test.
+    /// Pins BLAKE2b-256 digests of the libcrux `ml_dsa_87` keygen public key and of
+    /// the DETERMINISTIC (randomness = 0) signature for a fixed seed/message under
+    /// the consensus tx context, so any change in the shipped primitive — most
+    /// importantly a `libcrux-ml-dsa` version bump — is caught by CI rather than
+    /// silently changing consensus signature bytes; and asserts the consensus
+    /// verifier accepts the pinned signature and rejects a one-bit tamper.
+    ///
+    /// NOTE (audit H-10, pre-mainnet): these pins validate libcrux =0.0.9 against
+    /// itself (a regression gate). Before a value-bearing mainnet, ALSO cross-check
+    /// keygen/sign/verify against official NIST ACVP ML-DSA-87 vectors and/or an
+    /// independent FIPS-204 implementation — see the `libcrux-ml-dsa` bump checklist
+    /// in the workspace `Cargo.toml`.
+    #[test]
+    fn kat_mldsa87_deterministic_regression() {
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+        let d32 = |b: &[u8]| -> [u8; 32] {
+            let mut o = [0u8; 32];
+            o.copy_from_slice(blake2b_simd::Params::new().hash_length(32).hash(b).as_bytes());
+            o
+        };
+
+        // Fixed FIPS-204 keygen seed (xi) -> deterministic key pair.
+        let kp = mldsa::generate_key_pair([0x4bu8; 32]);
+        let pk: [u8; MLDSA87_PK_LEN] = *kp.verification_key.as_ref();
+        assert_eq!(
+            d32(&pk),
+            [
+                0x2a, 0xff, 0x53, 0xbc, 0x56, 0xda, 0x5b, 0x8f, 0x35, 0xb4, 0x7b, 0x8c, 0xfd, 0x37, 0xd9, 0x24, 0x60, 0x2c, 0xb7,
+                0xfb, 0xf1, 0x85, 0x68, 0x19, 0x81, 0x9c, 0x24, 0x7a, 0x98, 0x3c, 0x88, 0x47,
+            ],
+            "ML-DSA-87 keygen public key changed — libcrux primitive regression (audit H-10)"
+        );
+
+        // Deterministic signature: randomness = 0 (FIPS-204 deterministic variant).
+        let msg = b"kaspa-pq ML-DSA-87 FIPS-204 deterministic KAT".to_vec();
+        let sig: [u8; MLDSA87_SIG_LEN] =
+            *mldsa::sign(&kp.signing_key, &msg, MLDSA87_TX_CONTEXT, [0u8; 32]).expect("deterministic sign").as_ref();
+        assert_eq!(
+            d32(&sig),
+            [
+                0x77, 0x7e, 0x46, 0x3f, 0x77, 0x5b, 0xdb, 0x5e, 0x7e, 0xa8, 0xd6, 0x86, 0x78, 0x64, 0x9f, 0x94, 0x1a, 0x17, 0x77,
+                0xfc, 0x63, 0x72, 0xaf, 0xf8, 0xb4, 0x21, 0xd4, 0xf4, 0x7d, 0x74, 0xf5, 0x86,
+            ],
+            "ML-DSA-87 deterministic signature changed — libcrux primitive regression (audit H-10)"
+        );
+
+        // The consensus verifier accepts the pinned (pk, msg, sig) under the tx context...
+        assert_eq!(verify_mldsa87_with_context(&pk, &msg, &sig, MLDSA87_TX_CONTEXT), Ok(true));
+        // ...and rejects a single-bit tamper.
+        let mut bad = sig;
+        bad[MLDSA87_SIG_LEN / 2] ^= 0x01;
+        assert_eq!(verify_mldsa87_with_context(&pk, &msg, &bad, MLDSA87_TX_CONTEXT), Ok(false));
+    }
+
     fn create_spending_transaction(sig_script: Vec<u8>, script_public_key: ScriptPublicKey) -> Transaction {
         let coinbase = Transaction::new(
             1,

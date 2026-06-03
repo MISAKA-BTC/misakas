@@ -1,10 +1,17 @@
-use crate::KaspaCli;
 use crate::error::Error;
 use crate::imports::*;
 use crate::result::Result;
-use kaspa_bip32::{Language, Mnemonic};
-use kaspa_wallet_core::account::{BIP32_ACCOUNT_KIND, LEGACY_ACCOUNT_KIND, MULTISIG_ACCOUNT_KIND};
 use std::sync::Arc;
+// kaspa-pq PQ-only (ADR-0019 §14): `import_with_mnemonic` imports classical
+// secp256k1 account kinds (bip32 / legacy / multisig) via `Wallet::import_*`,
+// which do not exist in a PQ-only build. `prompt_for_mnemonic` below is a generic
+// terminal helper (also used by the wallet-create wizard) and stays available.
+#[cfg(feature = "legacy-secp256k1")]
+use crate::KaspaCli;
+#[cfg(feature = "legacy-secp256k1")]
+use kaspa_bip32::{Language, Mnemonic};
+#[cfg(feature = "legacy-secp256k1")]
+use kaspa_wallet_core::account::{BIP32_ACCOUNT_KIND, LEGACY_ACCOUNT_KIND, MULTISIG_ACCOUNT_KIND};
 
 pub async fn prompt_for_mnemonic(term: &Arc<Terminal>) -> Result<Vec<String>> {
     let mut words: Vec<String> = vec![];
@@ -34,6 +41,7 @@ pub async fn prompt_for_mnemonic(term: &Arc<Terminal>) -> Result<Vec<String>> {
     if words.len() > 24 { Err("Mnemonic must be 12 or 24 words".into()) } else { Ok(words) }
 }
 
+#[cfg(feature = "legacy-secp256k1")]
 pub(crate) async fn import_with_mnemonic(ctx: &Arc<KaspaCli>, account_kind: AccountKind, additional_xpubs: &[String]) -> Result<()> {
     let wallet = ctx.wallet();
 

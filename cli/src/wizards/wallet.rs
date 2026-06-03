@@ -147,8 +147,18 @@ pub(crate) async fn create(
     let (_wallet_descriptor, storage_descriptor) = ctx.wallet().create_wallet(&wallet_secret, wallet_args).await?;
     let prv_key_data_id = wallet.create_prv_key_data(&wallet_secret, prv_key_data_args).await?;
 
-    let account_args = AccountCreateArgsBip32::new(account_name, None);
-    let account = wallet.create_account_bip32(&wallet_secret, prv_key_data_id, payment_secret.as_ref(), account_args).await?;
+    // kaspa-pq PQ-only (ADR-0019 §14): the default wallet account is a classical
+    // secp256k1 BIP32 account, which is not representable on a PQ-only chain. The
+    // shared wallet + private-key data are still created above; the (ML-DSA)
+    // account is created separately, so in a PQ-only build we skip the BIP32
+    // default account here.
+    #[cfg(feature = "legacy-secp256k1")]
+    let account = {
+        let account_args = AccountCreateArgsBip32::new(account_name, None);
+        wallet.create_account_bip32(&wallet_secret, prv_key_data_id, payment_secret.as_ref(), account_args).await?
+    };
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    let _ = (account_name, prv_key_data_id);
 
     // flush data to storage
     wallet.store().flush(&wallet_secret).await?;
@@ -185,10 +195,20 @@ pub(crate) async fn create(
     term.writeln(format!("Your wallet is stored in: {}", storage_descriptor));
     term.writeln("");
 
-    let receive_address = account.receive_address()?;
-    term.writeln("Your default account deposit address:");
-    term.writeln(style(receive_address).blue().to_string());
-    term.writeln("");
+    #[cfg(feature = "legacy-secp256k1")]
+    {
+        let receive_address = account.receive_address()?;
+        term.writeln("Your default account deposit address:");
+        term.writeln(style(receive_address).blue().to_string());
+        term.writeln("");
+    }
+    #[cfg(not(feature = "legacy-secp256k1"))]
+    {
+        // kaspa-pq PQ-only (ADR-0019 §14): no classical default account was created;
+        // create an ML-DSA account to receive funds.
+        term.writeln("Use 'account create' to create an ML-DSA account for this wallet.");
+        term.writeln("");
+    }
 
     wallet.open(&wallet_secret, name.map(String::from), WalletOpenArgs::default_with_legacy_accounts(), &guard).await?;
     wallet.activate_accounts(None, &guard).await?;
