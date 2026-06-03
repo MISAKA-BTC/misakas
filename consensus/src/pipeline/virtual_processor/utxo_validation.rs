@@ -4,7 +4,8 @@ use crate::{
         BlockProcessResult,
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, IneligibleAttestationInBlock,
-            InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock, UnverifiableSlashingEvidenceInBlock,
+            InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock, UnauthorizedUnbondRequestInBlock,
+            UnverifiableSlashingEvidenceInBlock,
             WrongHeaderPruningPoint,
         },
     },
@@ -33,7 +34,8 @@ use kaspa_consensus_core::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondStatus, DnsParams, FeeSplitParams,
         RewardedEpochSet, SlashingSideEffect, attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status,
         epoch_meets_quality_floor, epochs_finalized_at, recompute_epoch_tallies, resolve_slashing_side_effects,
-        slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
+        UNBOND_REQUEST_CONTEXT, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
+        unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
         validator_participation_reward_outputs, validator_quality_bonus_outputs, victim_compensation_outputs,
     },
     hashing,
@@ -471,6 +473,12 @@ impl VirtualStateProcessor {
         // not releasable, so a bond's staked output-0 is locked while the bond
         // is `Pending`/`Active`/mid-unbonding/`Slashed`. Inert below activation.
         self.check_bond_spend_gate(&txs, selected_parent_bond_view, header.daa_score)?;
+
+        // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): reject a block whose
+        // StakeUnbondRequest is not owner-authorized (unknown/ineligible bond, or a
+        // bad owner key / signature), so an attacker cannot force honest bonds into
+        // Unbonding to grief them out of the active set. Genesis-active.
+        self.check_unbond_request_authorized(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // kaspa-pq Phase 10/11 + Phase 13 (ADR-0009 Addendum B §B.5 / ADR-0018
         // §F+§E): the validator reward outputs the coinbase must carry. The §F
@@ -919,6 +927,21 @@ impl VirtualStateProcessor {
             .map_err(|(spending_tx, bond_outpoint)| NonReleasableBondSpendInBlock(spending_tx, bond_outpoint))
     }
 
+    /// kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): the stake-unbond owner-
+    /// authorization rule. Rejects a block carrying a `StakeUnbondRequest` that
+    /// is not authorized by the bond owner (see [`unbond_request_authorized`]).
+    /// Inert below activation.
+    fn check_unbond_request_authorized(
+        &self,
+        txs: &[Transaction],
+        selected_parent_bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) -> BlockProcessResult<()> {
+        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        unbond_request_authorized(txs, selected_parent_bond_view, daa_score, activated)
+            .map_err(|(tx_id, bond_outpoint)| UnauthorizedUnbondRequestInBlock(tx_id, bond_outpoint))
+    }
+
     /// Validates transactions against the provided `utxo_view` and returns a vector with all transactions
     /// which passed the validation along with their original index within the containing block
     pub(crate) fn validate_transactions_in_parallel<'a, V: UtxoView + Sync>(
@@ -1219,6 +1242,53 @@ fn bond_spend_gate(
     Ok(())
 }
 
+/// kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): pure core of the stake-unbond
+/// owner-authorization block-validity rule (testable without a processor).
+/// `activated` folds the `dns_params.is_some() && daa_score >=
+/// dns_activation_daa_score` gate; when `false` the rule is a no-op. For each
+/// `StakeUnbondRequest` among `txs`, requires: (a) the referenced bond resolves
+/// in `bond_view` and is `Pending`/`Active` at `daa_score` (not already
+/// `Unbonding`/`Slashed`, so at most one unbond mutation applies per bond per
+/// chain — keeping `ActiveBondView` apply/revert clean); (b) the payload's
+/// `owner_pubkey` hashes to the bond's `owner_pubkey_hash`; and (c) its
+/// ML-DSA-87 signature verifies over the canonical [`unbond_request_message`]
+/// digest under [`UNBOND_REQUEST_CONTEXT`]. On the first failure returns
+/// `Err((unbond tx id, bond outpoint))`, mapped to
+/// [`UnauthorizedUnbondRequestInBlock`]. This is what stops an attacker forcing
+/// honest bonds into `Unbonding` to grief them out of the active set.
+fn unbond_request_authorized(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    daa_score: u64,
+    activated: bool,
+) -> Result<(), (TransactionId, TransactionOutpoint)> {
+    if !activated {
+        return Ok(());
+    }
+    for (tx_id, req) in unbond_requests_from_accepted_txs(txs) {
+        // (a) the bond must exist and still be locked-but-not-yet-exiting.
+        let Some(bond) = bond_view.get(&req.bond_outpoint) else {
+            return Err((tx_id, req.bond_outpoint));
+        };
+        if !matches!(effective_bond_status(bond, daa_score), BondStatus::Pending | BondStatus::Active) {
+            return Err((tx_id, req.bond_outpoint));
+        }
+        // (b) the signing key must be THIS bond's owner.
+        if validator_id_from_pubkey(&req.owner_pubkey) != bond.owner_pubkey_hash {
+            return Err((tx_id, req.bond_outpoint));
+        }
+        // (c) the owner's signature over the bond-bound digest must verify.
+        let digest = unbond_request_message(req.bond_outpoint).as_bytes();
+        if !matches!(
+            verify_mldsa87_with_context(&req.owner_pubkey, &digest, &req.signature, UNBOND_REQUEST_CONTEXT),
+            Ok(true)
+        ) {
+            return Err((tx_id, req.bond_outpoint));
+        }
+    }
+    Ok(())
+}
+
 /// Pure core of the ADR-0013 Addendum C / ADR-0016 §D.4 slashing side-effect,
 /// split out of [`VirtualStateProcessor::apply_slashing_side_effects`] so the
 /// remove-stake + mint-reporter UTXO/multiset mutation can be unit-tested
@@ -1423,6 +1493,118 @@ mod tests {
         fn ok_when_no_attestation_shards() {
             // Activated but no shard txs ⇒ nothing to check ⇒ Ok.
             assert_eq!(eligibility(&[], &ActiveBondView::new(), NET(), true), Ok(()));
+        }
+    }
+
+    // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): the stake-unbond owner-
+    // authorization rule. Unlike the mods above, this exercises the full ACCEPT
+    // path with a real ML-DSA-87 owner signature (libcrux) — owner-authorization
+    // is THE security property (it blocks the active-set grief attack).
+    mod unbond_request_authorized {
+        use super::super::unbond_request_authorized as authz;
+        use kaspa_consensus_core::{
+            constants::TX_VERSION,
+            dns_finality::{
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
+                StakeBondRecord, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, unbond_request_message,
+                validator_id_from_pubkey,
+            },
+            subnets::SUBNETWORK_ID_STAKE_UNBOND,
+            tx::{Transaction, TransactionOutpoint},
+        };
+        use kaspa_hashes::Hash64;
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+
+        fn outpoint(b: u8) -> TransactionOutpoint {
+            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+        }
+
+        fn owner_kp(seed: u8) -> mldsa::MLDSA87KeyPair {
+            mldsa::generate_key_pair([seed; 32])
+        }
+
+        // A bond whose `owner_pubkey_hash` binds to `kp`, Active from genesis.
+        fn bond_owned_by(op: TransactionOutpoint, kp: &mldsa::MLDSA87KeyPair) -> StakeBondRecord {
+            let owner_pubkey = kp.verification_key.as_ref().to_vec();
+            StakeBondRecord {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                owner_pubkey_hash: validator_id_from_pubkey(&owner_pubkey),
+                validator_pubkey_hash: Hash64::from_bytes([0xbb; 64]),
+                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
+                amount: 1_000,
+                activation_daa_score: 0,
+                unbonding_period_blocks: 100,
+                owner_reward_spk_payload: [0xdd; 64],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: BondStatus::Active,
+            }
+        }
+
+        fn unbond_tx(op: TransactionOutpoint, owner_pubkey: Vec<u8>, signature: Vec<u8>) -> Transaction {
+            let payload =
+                borsh::to_vec(&StakeUnbondRequestPayload { version: DNS_PAYLOAD_VERSION_V1, bond_outpoint: op, owner_pubkey, signature })
+                    .unwrap();
+            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_UNBOND, 0, payload)
+        }
+
+        fn signed_unbond_tx(op: TransactionOutpoint, kp: &mldsa::MLDSA87KeyPair) -> Transaction {
+            let digest = unbond_request_message(op).as_bytes();
+            let sig = mldsa::sign(&kp.signing_key, &digest, UNBOND_REQUEST_CONTEXT, [0x99u8; 32]).expect("sign");
+            unbond_tx(op, kp.verification_key.as_ref().to_vec(), sig.as_ref().to_vec())
+        }
+
+        #[test]
+        fn noop_when_not_activated() {
+            let op = outpoint(1);
+            let tx = unbond_tx(op, vec![0u8; STAKE_VALIDATOR_PUBKEY_LEN], vec![0u8; STAKE_ATTESTATION_SIG_LEN]);
+            assert_eq!(authz(&[tx], &ActiveBondView::new(), 10_000, false), Ok(()));
+        }
+
+        #[test]
+        fn accepts_owner_authorized_request() {
+            let op = outpoint(2);
+            let kp = owner_kp(2);
+            let view = ActiveBondView::from_records([(op, bond_owned_by(op, &kp))]);
+            assert_eq!(authz(&[signed_unbond_tx(op, &kp)], &view, 10_000, true), Ok(()));
+        }
+
+        #[test]
+        fn rejects_unknown_bond() {
+            let op = outpoint(3);
+            let kp = owner_kp(3);
+            assert!(authz(&[signed_unbond_tx(op, &kp)], &ActiveBondView::new(), 10_000, true).is_err());
+        }
+
+        #[test]
+        fn rejects_request_signed_by_non_owner() {
+            // The grief attack: a bond owned by `owner`, request signed by `attacker` → blocked.
+            let op = outpoint(4);
+            let owner = owner_kp(4);
+            let attacker = owner_kp(40);
+            let view = ActiveBondView::from_records([(op, bond_owned_by(op, &owner))]);
+            assert!(authz(&[signed_unbond_tx(op, &attacker)], &view, 10_000, true).is_err());
+        }
+
+        #[test]
+        fn rejects_bad_signature() {
+            let op = outpoint(5);
+            let kp = owner_kp(5);
+            let view = ActiveBondView::from_records([(op, bond_owned_by(op, &kp))]);
+            let tx = unbond_tx(op, kp.verification_key.as_ref().to_vec(), vec![0u8; STAKE_ATTESTATION_SIG_LEN]);
+            assert!(authz(&[tx], &view, 10_000, true).is_err());
+        }
+
+        #[test]
+        fn rejects_already_unbonding_bond() {
+            // at-most-once: a bond already Unbonding cannot be unbonded again (clean revert).
+            let op = outpoint(6);
+            let kp = owner_kp(6);
+            let mut rec = bond_owned_by(op, &kp);
+            rec.unbond_request_daa_score = Some(1);
+            let view = ActiveBondView::from_records([(op, rec)]);
+            assert!(authz(&[signed_unbond_tx(op, &kp)], &view, 10_000, true).is_err());
         }
     }
 

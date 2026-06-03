@@ -118,7 +118,10 @@ mod serde_reward_payload64 {
     }
 }
 
-use crate::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SubnetworkId};
+use crate::subnets::{
+    SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND,
+    SubnetworkId,
+};
 use crate::{
     BlueWorkType, TransactionId,
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
@@ -164,6 +167,15 @@ pub const ATTESTATION_MLDSA87_CONTEXT: &[u8] = b"kaspa-pq-v1/att/mldsa87";
 /// the attestation message that ML-DSA-87 signs over. Consumed by
 /// [`stake_attestation_message`]. See ADR-0009 §"Attestation target".
 pub const ATTESTATION_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-v1/stake-attestation";
+
+/// kaspa-pq H-05 (ADR-0010 "Unbonding"): ML-DSA-87 signing context for a
+/// `StakeUnbondRequest`. Distinct from the tx / attestation / takeover contexts
+/// so an unbond authorization can never be replayed as any of those.
+pub const UNBOND_REQUEST_CONTEXT: &[u8] = b"kaspa-pq-v1/unbond/mldsa87";
+
+/// kaspa-pq H-05: BLAKE2b-256 domain key for the unbond-request message the
+/// owner signs over (binds the authorization to the specific bond outpoint).
+pub const UNBOND_REQUEST_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-v1/unbond-request";
 
 /// kaspa-pq Phase 11 BLAKE2b-512 domain key used by
 /// [`validator_set_commitment`]. Consensus-fixed and bumped only by
@@ -1222,6 +1234,60 @@ pub fn stake_attestation_message(
     let mut out = [0u8; 32];
     out.copy_from_slice(hasher.finalize().as_bytes());
     Hash::from_bytes(out)
+}
+
+/// kaspa-pq H-05 (audit, ADR-0010 "Unbonding"): an owner-authorized request to
+/// begin unbonding a `StakeBond`, carried on `SUBNETWORK_ID_STAKE_UNBOND`.
+/// Accepting it stamps the bond's `unbond_request_daa_score` (→ `Unbonding`);
+/// the staked output-0 then becomes spendable once `unbond_request_daa_score +
+/// unbonding_period_blocks` is reached (the `bond_spend_gate`). Authorization is
+/// the owner's ML-DSA-87 signature over [`unbond_request_message`] under
+/// [`UNBOND_REQUEST_CONTEXT`]: without it an attacker could force every honest
+/// validator's bond into `Unbonding` and grief them out of the active set (a
+/// liveness attack), so the *request* — not just the eventual spend — must be
+/// owner-authorized.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct StakeUnbondRequestPayload {
+    pub version: u16,
+    /// The bond being unbonded (its creating tx's output-0 outpoint).
+    pub bond_outpoint: TransactionOutpoint,
+    /// The bond owner's 2592-byte ML-DSA-87 public key. Bound to the bond at
+    /// acceptance: `validator_id_from_pubkey(owner_pubkey) == bond.owner_pubkey_hash`.
+    pub owner_pubkey: Vec<u8>,
+    /// 4627-byte ML-DSA-87 signature over [`unbond_request_message`].
+    pub signature: Vec<u8>,
+}
+
+/// kaspa-pq H-05: the BLAKE2b-256 digest the bond owner signs to authorize
+/// unbonding `bond_outpoint`. Keyed by [`UNBOND_REQUEST_MESSAGE_DOMAIN`] and
+/// bound to the bond outpoint so the authorization cannot be reused for another
+/// bond.
+pub fn unbond_request_message(bond_outpoint: TransactionOutpoint) -> Hash {
+    let mut hasher = Blake2bParams::new().hash_length(32).key(UNBOND_REQUEST_MESSAGE_DOMAIN).to_state();
+    hasher.update(bond_outpoint.transaction_id.as_byte_slice());
+    hasher.update(&bond_outpoint.index.to_le_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash::from_bytes(out)
+}
+
+/// Stateless validation of a [`StakeUnbondRequestPayload`] (subnetwork
+/// `SUBNETWORK_ID_STAKE_UNBOND`): decodability, version, and the owner key /
+/// signature lengths. Like the attestation check, the ML-DSA-87 signature is
+/// verified in the stateful block-validity rule (`unbond_request_authorized`),
+/// which also binds the key to the bond's `owner_pubkey_hash`.
+pub fn validate_stake_unbond_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    let req: StakeUnbondRequestPayload = decode_dns_payload(payload)?;
+    if req.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(req.version));
+    }
+    if req.owner_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
+        return Err(DnsTxError::InvalidPubKeyLen(req.owner_pubkey.len()));
+    }
+    if req.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+        return Err(DnsTxError::InvalidSignatureLen(req.signature.len()));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -2815,6 +2881,8 @@ pub enum DnsTxKind {
     StakeAttestationShard,
     /// `SUBNETWORK_ID_SLASHING_EVIDENCE` — [`SlashingEvidencePayload`].
     SlashingEvidence,
+    /// `SUBNETWORK_ID_STAKE_UNBOND` — [`StakeUnbondRequestPayload`].
+    StakeUnbond,
 }
 
 /// Maps a subnetwork id to its DNS overlay payload kind, or `None` for a
@@ -2827,6 +2895,8 @@ pub fn dns_tx_kind(subnetwork_id: &SubnetworkId) -> Option<DnsTxKind> {
         Some(DnsTxKind::StakeAttestationShard)
     } else if *subnetwork_id == SUBNETWORK_ID_SLASHING_EVIDENCE {
         Some(DnsTxKind::SlashingEvidence)
+    } else if *subnetwork_id == SUBNETWORK_ID_STAKE_UNBOND {
+        Some(DnsTxKind::StakeUnbond)
     } else {
         None
     }
@@ -3168,6 +3238,12 @@ pub enum BondMutation {
     /// accepting block's DAA score. Apply = set `slashed_at_daa_score`;
     /// revert = clear it.
     Slash(TransactionOutpoint, u64),
+    /// A bond moved to `Unbonding` by an accepted `StakeUnbondRequest` (audit
+    /// H-05), stamped with the accepting block's DAA score. Apply = set
+    /// `unbond_request_daa_score`; revert = clear it. The stateful rule rejects
+    /// unbond on a non-`Pending`/`Active` bond, so at most one applies per bond
+    /// per chain (clean revert).
+    Unbond(TransactionOutpoint, u64),
 }
 
 /// Derives the ordered [`BondMutation`]s implied by a chain block's
@@ -3222,6 +3298,15 @@ pub fn bond_mutations_from_accepted_txs(
             Some(DnsTxKind::SlashingEvidence) => {
                 if let Ok(payload) = borsh::from_slice::<SlashingEvidencePayload>(&tx.payload) {
                     muts.push(BondMutation::Slash(payload.bond_outpoint, accepted_daa_score));
+                }
+            }
+            Some(DnsTxKind::StakeUnbond) => {
+                // audit H-05: an accepted, owner-authorized unbond request stamps the bond's
+                // unbond clock. Authorization (owner-key binding + signature) and the
+                // Pending/Active precondition are enforced by `unbond_request_authorized` as a
+                // block-validity rule, so any unbond reaching here is valid and applies once.
+                if let Ok(req) = borsh::from_slice::<StakeUnbondRequestPayload>(&tx.payload) {
+                    muts.push(BondMutation::Unbond(req.bond_outpoint, accepted_daa_score));
                 }
             }
             Some(DnsTxKind::StakeAttestationShard) | None => {}
@@ -3282,6 +3367,11 @@ impl ActiveBondView {
                         record.status = BondStatus::Slashed;
                     }
                 }
+                BondMutation::Unbond(outpoint, daa) => {
+                    if let Some(record) = self.bonds.get_mut(outpoint) {
+                        record.unbond_request_daa_score = Some(*daa);
+                    }
+                }
             }
         }
     }
@@ -3300,6 +3390,11 @@ impl ActiveBondView {
                     if let Some(record) = self.bonds.get_mut(outpoint) {
                         record.slashed_at_daa_score = None;
                         record.status = BondStatus::Active;
+                    }
+                }
+                BondMutation::Unbond(outpoint, _) => {
+                    if let Some(record) = self.bonds.get_mut(outpoint) {
+                        record.unbond_request_daa_score = None;
                     }
                 }
             }
@@ -3678,6 +3773,23 @@ pub fn attestations_from_accepted_txs(txs: &[Transaction]) -> Vec<StakeAttestati
         if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::StakeAttestationShard) {
             if let Ok(shard) = borsh::from_slice::<StakeAttestationShardPayload>(&tx.payload) {
                 out.extend(shard.attestations);
+            }
+        }
+    }
+    out
+}
+
+/// kaspa-pq H-05: the `(tx_id, StakeUnbondRequestPayload)` of every decodable
+/// `StakeUnbondRequest` among `txs` (mirrors [`attestations_from_accepted_txs`];
+/// the tx id is carried so the block-validity rule can name the offending tx).
+/// Pure; defensively skips undecodable payloads (the stateless tx check already
+/// rejected them).
+pub fn unbond_requests_from_accepted_txs(txs: &[Transaction]) -> Vec<(TransactionId, StakeUnbondRequestPayload)> {
+    let mut out = Vec::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::StakeUnbond) {
+            if let Ok(req) = borsh::from_slice::<StakeUnbondRequestPayload>(&tx.payload) {
+                out.push((tx.id(), req));
             }
         }
     }
@@ -4213,6 +4325,56 @@ mod tests {
         let mut bad = fixture_bond();
         bad.validator_pubkey_hash = Hash64::from_bytes([0x01u8; 64]);
         assert_eq!(validate_stake_bond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ValidatorPubkeyHashMismatch));
+    }
+
+    // ---- kaspa-pq H-05: StakeUnbondRequest (audit) ----
+
+    fn fixture_unbond(bond_outpoint: TransactionOutpoint) -> StakeUnbondRequestPayload {
+        StakeUnbondRequestPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint,
+            owner_pubkey: vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN],
+            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+        }
+    }
+
+    #[test]
+    fn validate_stake_unbond_payload_accepts_and_rejects() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11u8; 64]), 0);
+        assert_eq!(validate_stake_unbond_payload(&borsh::to_vec(&fixture_unbond(op)).unwrap()), Ok(()));
+        assert_eq!(validate_stake_unbond_payload(&[0xff, 0x00]), Err(DnsTxError::Decode));
+        let mut bad = fixture_unbond(op);
+        bad.version = 2;
+        assert_eq!(validate_stake_unbond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::UnsupportedVersion(2)));
+        let mut bad = fixture_unbond(op);
+        bad.owner_pubkey = vec![0u8; 10];
+        assert_eq!(validate_stake_unbond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::InvalidPubKeyLen(10)));
+        let mut bad = fixture_unbond(op);
+        bad.signature = vec![0u8; 10];
+        assert_eq!(validate_stake_unbond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::InvalidSignatureLen(10)));
+    }
+
+    #[test]
+    fn dns_tx_kind_maps_stake_unbond() {
+        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_STAKE_UNBOND), Some(DnsTxKind::StakeUnbond));
+    }
+
+    #[test]
+    fn unbond_mutation_and_view_apply_revert() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x22u8; 64]), 0);
+        let payload = borsh::to_vec(&fixture_unbond(op)).unwrap();
+        let tx = Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_UNBOND, 0, payload);
+        // bond_mutations derives exactly one Unbond stamped at the accepting DAA.
+        let muts = bond_mutations_from_accepted_txs(&[tx], 5_000, 0, 0);
+        assert_eq!(muts, vec![BondMutation::Unbond(op, 5_000)]);
+        // apply → unbond clock set → effective status Unbonding (precedence over activation).
+        let mut view = ActiveBondView::from_records([(op, stake_bond_record_from_payload(&fixture_bond(), op))]);
+        view.apply(&muts);
+        assert_eq!(view.get(&op).unwrap().unbond_request_daa_score, Some(5_000));
+        assert_eq!(effective_bond_status(view.get(&op).unwrap(), 5_000), BondStatus::Unbonding);
+        // revert → cleared (clean, because the rule admits at most one unbond per bond).
+        view.revert(&muts);
+        assert_eq!(view.get(&op).unwrap().unbond_request_daa_score, None);
     }
 
     // ---- ADR-0016 D.1: validate_stake_bond_tx (stake-lock rule) ----

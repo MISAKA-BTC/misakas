@@ -2,6 +2,7 @@ use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::config::params::PqEnforcementMode;
 use kaspa_consensus_core::dns_finality::{
     DnsTxKind, dns_tx_kind, validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx,
+    validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::tx::Transaction;
 use kaspa_txscript::script_class::ScriptClass;
@@ -213,6 +214,9 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
             // it must declare no outputs so consensus can mint the reporter
             // reward at (slashing_tx_id, 0) without colliding with a tx output.
             DnsTxKind::SlashingEvidence => validate_slashing_evidence_tx(&tx.payload, &tx.outputs),
+            // kaspa-pq H-05: stateless shape of a stake-unbond request (owner-key
+            // binding + signature are verified in the stateful block-validity rule).
+            DnsTxKind::StakeUnbond => validate_stake_unbond_payload(&tx.payload),
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())

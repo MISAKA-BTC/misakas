@@ -761,6 +761,14 @@ impl VirtualStateProcessor {
                             store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
                         }
                     }
+                    // kaspa-pq H-05: revert an unbond request (clear the unbond clock).
+                    BondMutation::Unbond(outpoint, _) => {
+                        if let Ok(record) = store.get(&outpoint) {
+                            let mut record = (*record).clone();
+                            record.unbond_request_daa_score = None;
+                            store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
+                        }
+                    }
                 }
             }
         }
@@ -777,6 +785,14 @@ impl VirtualStateProcessor {
                             let mut record = (*record).clone();
                             record.slashed_at_daa_score = Some(daa);
                             record.status = BondStatus::Slashed;
+                            store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
+                        }
+                    }
+                    // kaspa-pq H-05: apply an accepted unbond request (start the unbond clock).
+                    BondMutation::Unbond(outpoint, daa) => {
+                        if let Ok(record) = store.get(&outpoint) {
+                            let mut record = (*record).clone();
+                            record.unbond_request_daa_score = Some(daa);
                             store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
                         }
                     }
