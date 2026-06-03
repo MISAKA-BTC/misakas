@@ -69,6 +69,9 @@ pub enum PruningImportError {
     #[error("block {0} at level {1} has invalid proof of work for level")]
     ProofOfWorkFailed(BlockHash, BlockLevel),
 
+    #[error("pruning proof header {0} at level {1} has unknown pow_algo_id {2}; Phase 1 admits only POW_ALGO_ID_KHEAVYHASH = 1")]
+    PruningProofUnknownPowAlgoId(BlockHash, BlockLevel, u8),
+
     #[error("past pruning points at indices {0}, {1} have non monotonic blue score {2}, {3}")]
     InconsistentPastPruningPoints(usize, usize, u64, u64),
 

@@ -447,11 +447,12 @@ pub fn single_attestation_shard(attestation: StakeAttestation) -> StakeAttestati
 /// Build the subnetwork [`Transaction`] carrying a borsh-encoded
 /// [`StakeAttestationShardPayload`] on `SUBNETWORK_ID_STAKE_ATTESTATION_SHARD`.
 ///
-/// The transaction has no inputs/outputs — the payload is the whole point. NOTE:
-/// how such zero-input overlay transactions are admitted to the mempool and blocks
-/// (fee-funded input vs. a consensus exemption) is the validator submission path
-/// (ADR-0010 §"Validator service runtime" step 9) and is not yet wired; today the
-/// stock `NoTxInputs` rule would reject this at mempool ingestion.
+/// **TEST HELPER — NOT for production (audit M-02).** The transaction has no inputs/outputs, so
+/// the stock `NoTxInputs` isolation rule rejects it at mempool ingestion and in blocks. It exists
+/// only to exercise payload/eligibility logic in unit tests. Production validators MUST build the
+/// fee-funded, signed shard via `kaspa_pq_validator_core::ValidatorKey::build_funded_shard_tx`
+/// (ADR-0010 §"Validator service runtime" step 9). `#[doc(hidden)]` to keep it off the public API.
+#[doc(hidden)]
 pub fn stake_attestation_shard_tx(shard: &StakeAttestationShardPayload) -> Transaction {
     let payload = borsh::to_vec(shard).expect("borsh serialization of a well-formed shard is infallible");
     Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, 0, payload)
@@ -820,15 +821,21 @@ impl DnsParams {
     ///   honest validators never converge off the churning tip).
     /// - `attestation_anchor_backoff_blue_score < attestation_epoch_length_blue_score` (the
     ///   cutoff `epoch_end - backoff` stays within the epoch's own span).
-    /// - `stake_score_window_blue_score >= 2·L + lag + backoff` — the walk must reach the
-    ///   PREVIOUS ready epoch's cutoff so the duplicate-anchor flag is always decidable for a
-    ///   creditable epoch (a real deployment sizes it for `required_stake_depth` epochs + grace).
+    /// - `stake_score_window_blue_score >= max(2, required_stake_depth/SCALE)·L + lag + backoff`
+    ///   — the walk must reach back over every creditable epoch (`required_stake_depth` epochs;
+    ///   StakeScore accrues `STAKE_SCORE_SCALE` units per fully-participated epoch) plus the lag
+    ///   and backoff, and over at least the PREVIOUS ready epoch's cutoff so the duplicate-anchor
+    ///   flag stays decidable (audit M-05 — the depth term was previously only documented, not
+    ///   enforced).
     pub fn dns_v3_params_consistent(&self) -> bool {
         let l = self.attestation_epoch_length_blue_score;
         let lag = self.attestation_lag_blue_score;
         let backoff = self.attestation_anchor_backoff_blue_score;
         let window = self.stake_score_window_blue_score;
-        l >= 1 && lag >= 1 && backoff < l && window >= l.saturating_mul(2).saturating_add(lag).saturating_add(backoff)
+        // audit M-05: cover the full creditable horizon, not just 2 epochs.
+        let depth_epochs = ((self.required_stake_depth.0 / STAKE_SCORE_SCALE) as u64).max(2);
+        let needed = depth_epochs.saturating_mul(l).saturating_add(lag).saturating_add(backoff);
+        l >= 1 && lag >= 1 && backoff < l && window >= needed
     }
 
     /// ADR-0018 §F staged reward rollout — the effective fee/subsidy split for a
@@ -4544,8 +4551,15 @@ mod tests {
         assert!(!p.dns_v3_params_consistent(), "backoff >= epoch length is rejected");
 
         let mut p = GENESIS_ACTIVE_DNS_PARAMS;
-        p.stake_score_window_blue_score = p.attestation_epoch_length_blue_score; // < 2L + lag + backoff
-        assert!(!p.dns_v3_params_consistent(), "a window too short to cover 2L + lag + backoff is rejected");
+        p.stake_score_window_blue_score = p.attestation_epoch_length_blue_score; // < depth·L + lag + backoff
+        assert!(!p.dns_v3_params_consistent(), "a window too short to cover the creditable horizon is rejected");
+        // audit M-05: covering only 2L (not required_stake_depth epochs) must be rejected.
+        let mut p = GENESIS_ACTIVE_DNS_PARAMS;
+        let depth_epochs = (p.required_stake_depth.0 / STAKE_SCORE_SCALE) as u64;
+        assert!(depth_epochs > 2, "fixture assumes a deep stake horizon");
+        p.stake_score_window_blue_score =
+            2 * p.attestation_epoch_length_blue_score + p.attestation_lag_blue_score + p.attestation_anchor_backoff_blue_score;
+        assert!(!p.dns_v3_params_consistent(), "covering only 2L is insufficient when required_stake_depth > 2 epochs");
     }
 
     #[test]
