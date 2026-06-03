@@ -65,6 +65,7 @@ members = [
     "rothschild",
     "pq-miner",
     "misaminer",
+    "misaka-dnsseeder",
     "metrics/core",
     "metrics/perf_monitor",
     "utils/alloc",

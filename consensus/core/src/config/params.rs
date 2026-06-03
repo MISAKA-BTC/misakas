@@ -785,11 +785,13 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 };
 
 pub const MAINNET_PARAMS: Params = Params {
-    // kaspa-pq mainnet has no mainline-Kaspa-style DNS seeders. Upstream
-    // Kaspa seeds are deliberately removed to enforce network isolation
-    // (see docs/adr/0001-network-isolation.md). Operator-supplied seeds
-    // can be added by editing this list or by passing addnode flags.
-    dns_seeders: &[],
+    // kaspa-pq mainnet DNS seeders (isolated from upstream Kaspa per
+    // docs/adr/0001-network-isolation.md — these are MISAKA-operated only). A node
+    // resolves each hostname's A/AAAA records to a list of peer IPs and randomly
+    // selects among them (Kaspa-style auto-discovery), connecting on the mainnet
+    // default P2P port (26111). The hosts behind these records must run a reachable
+    // mainnet node on 26111. `addnode` flags still augment this list.
+    dns_seeders: &["seeder1.misakascan.com", "seeder2.misakascan.com"],
     net: NetworkId::new(NetworkType::Mainnet),
     genesis: GENESIS,
     timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
@@ -858,9 +860,11 @@ pub const MAINNET_PARAMS: Params = Params {
 };
 
 pub const TESTNET_PARAMS: Params = Params {
-    // kaspa-pq testnet inherits the same isolation rationale as mainnet —
-    // operator-supplied seeds only. See docs/adr/0001-network-isolation.md.
-    dns_seeders: &[],
+    // kaspa-pq testnet DNS seeders (MISAKA-operated, isolated per
+    // docs/adr/0001-network-isolation.md). Same Kaspa-style auto-discovery as mainnet,
+    // but nodes connect on the testnet-10 default P2P port (26211) — so the hosts
+    // behind these records must also run a reachable testnet-10 node on 26211.
+    dns_seeders: &["seeder1.misakascan.com", "seeder2.misakascan.com"],
     net: NetworkId::with_suffix(NetworkType::Testnet, 10),
     genesis: TESTNET_GENESIS,
     timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
