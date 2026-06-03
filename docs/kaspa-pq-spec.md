@@ -65,8 +65,8 @@ mainline Kaspa network.
 1. Signature scheme replacement: ML-DSA-65 (FIPS 204) P2PKH only. Address
    payload is the 64-byte BLAKE2b-512 hash of the public key
    (ADR-0008 §"Address payload width").
-2. UTXO accumulator replacement: LtHash16_1024. Final commitment is the
-   64-byte BLAKE2b-512 of the 2048-byte LtHash state
+2. UTXO accumulator replacement: LtHash32_1024. Final commitment is the
+   64-byte BLAKE2b-512 of the 4096-byte LtHash state
    (`UtxoCommitmentHash64`, ADR-0008).
 3. Network-level isolation (NetworkId, genesis, address prefix, ports).
 4. **Layered PoW** (ADR-0007): Layer 0 is the consensus-critical
@@ -155,9 +155,9 @@ unless a follow-up ADR amends them.
 | `MLDSA87_PK_LEN`  | `2592`  | ML-DSA-87 public key length (bytes) |
 | `MLDSA87_SIG_LEN` | `4627`  | ML-DSA-87 signature length (bytes) |
 | `MLDSA87_SIG_ITEM_MAX_LEN` | `4628` | signature item incl. 1-byte sighash type |
-| `LTHASH_LANES`    | `1024`  | Number of 16-bit lanes in LtHash state |
-| `LTHASH_LANE_BYTES` | `2`   | Bytes per lane |
-| `LTHASH_STATE_BYTES` | `2048` | Serialized accumulator state size |
+| `LTHASH_LANES`    | `1024`  | Number of 32-bit lanes in LtHash state |
+| `LTHASH_LANE_BYTES` | `4`   | Bytes per lane |
+| `LTHASH_STATE_BYTES` | `4096` | Serialized accumulator state size |
 | `UTXO_COMMITMENT_BYTES` (production) | `64` | Header UTXO commitment field |
 | `UTXO_COMMITMENT_BYTES` (PoC, optional) | `32` | PoC-only shortcut, must be flagged |
 | `MAX_SCRIPT_ELEMENT_SIZE` (kaspa-pq) | `8192` | fits 4628 sig + 2592 pk (up from upstream `520`) |
@@ -184,8 +184,8 @@ running code.
 
 ### 3.2 UTXO accumulator
 
-- Algorithm: LtHash16_1024 (Meta).
-- State: 1024 lanes × 16 bits = 2048 bytes.
+- Algorithm: LtHash32_1024 (Meta).
+- State: 1024 lanes × 32 bits = 4096 bytes.
 - Element serialization includes the spending outpoint to defeat the
   2^16 duplication wrap-around.
 - See [ADR-0003](adr/0003-lthash-utxo-accumulator.md).
@@ -325,7 +325,7 @@ last commit to this branch:
 |---|---|---|
 | 1 | Spec freeze (this document, ADRs 0001–0005) | ✅ landed |
 | 2 | Network isolation (`kaspapq*` prefix, ports, genesis, DNS seeds) | ✅ landed |
-| 3 | LtHash16_1024 UTXO accumulator (PoC, 32-byte commitment) | ✅ landed |
+| 3 | LtHash32_1024 UTXO accumulator (PoC, 32-byte commitment) | ✅ landed |
 | 4 | ML-DSA-65 P2PKH script | ✅ landed |
 | 5 | Wallet key derivation + minimal CLI | ✅ landed |
 | 5'| `kaspa-pq-cli` standalone binary + encrypted seed + wRPC info | ✅ landed |
@@ -451,7 +451,7 @@ mandatory acceptance criteria for each phase:
 - **Phase 2** simnet launches with kaspa-pq genesis; existing Kaspa
   mainnet/testnet nodes are rejected at handshake.
 - **Phase 3** add-then-remove on LtHash returns the empty-state
-  commitment; serialized state is exactly 2048 bytes; invalid-block
+  commitment; serialized state is exactly 4096 bytes; invalid-block
   rollback leaves the accumulator consistent with a slow recompute.
 - **Phase 4** a well-formed ML-DSA-65 P2PKH spend is accepted; any
   length/context/hash mismatch is rejected before `verify` is called.
@@ -589,7 +589,7 @@ mandatory acceptance criteria for each phase:
 
 - [ADR-0001 — Network isolation](adr/0001-network-isolation.md)
 - [ADR-0002 — ML-DSA-65 P2PKH as the only standard script](adr/0002-mldsa65-p2pkh.md)
-- [ADR-0003 — LtHash16_1024 UTXO accumulator](adr/0003-lthash-utxo-accumulator.md)
+- [ADR-0003 — LtHash32_1024 UTXO accumulator](adr/0003-lthash-utxo-accumulator.md)
 - [ADR-0004 — 64-byte UTXO commitment](adr/0004-utxo-commitment64.md)
 - [ADR-0005 — Mass / DoS policy](adr/0005-mass-policy.md)
 - [ADR-0006 — RPC / WASM / SDK types](adr/0006-rpc-wasm-sdk-types.md) (Phase 7 scope freeze)

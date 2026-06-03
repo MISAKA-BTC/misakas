@@ -1,8 +1,17 @@
-# ADR-0003: LtHash16_1024 UTXO accumulator
+# ADR-0003: LtHash UTXO accumulator (LtHash16_1024 → LtHash32_1024)
 
-Status: Accepted (Phase 1)
-Date: 2026-05-28
+Status: Accepted (Phase 1); REVISED (audit QM-1) — migrated to LtHash32_1024.
+Date: 2026-05-28 (rev. 2026-06-03)
 Supersedes: —
+
+> **Revision (audit QM-1):** the accumulator was migrated from the 16-bit-lane
+> `LtHash16_1024` (~100-bit quantum collision margin — the weakest quantum link
+> in the system) to the 32-bit-lane `LtHash32_1024` (4096-byte state, ~170-bit
+> quantum collision), the variant §"Alternatives considered" below listed as
+> deferred. The serialized state doubled (2048 → 4096 B) and the genesis
+> `utxo_commitment` / block hashes were recomputed (re-genesis); the element
+> expansion and 64-byte BLAKE2b-512 finalize are otherwise unchanged. The
+> 16-bit analysis below is retained for historical context.
 
 ## Context
 
