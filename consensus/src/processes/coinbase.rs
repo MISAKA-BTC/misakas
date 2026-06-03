@@ -181,8 +181,11 @@ impl CoinbaseManager {
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): append the
         // validator-side reward outputs after all miner outputs, in the
-        // caller-supplied canonical order. Empty (no-op) on every current
-        // network.
+        // caller-supplied canonical order. Empty while no validator is bonded
+        // (the bootstrap state): with no §E recipients the whole validator carve
+        // is the "unspent remainder" and is burned by don't-mint — a deliberate
+        // bootstrap-period supply reduction (no minting without recipients). Once
+        // validators bond, this carries their participation payouts.
         outputs.extend_from_slice(validator_reward_outputs);
 
         // kaspa-pq Phase 13 (ADR-0018 §D base inclusion bounty): pay THIS block's miner
