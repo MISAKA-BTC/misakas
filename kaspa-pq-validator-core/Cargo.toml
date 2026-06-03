@@ -1,6 +1,6 @@
 [package]
 name = "kaspa-pq-validator-core"
-description = "Shared kaspa-pq validator signing primitives (ADR-0010/0011): ML-DSA-65 validator key, attestation-shard tx building, and the equivocation-safety signed-epoch store — used by both the in-process validator service and the kaspa-pq-validator sidecar"
+description = "Shared kaspa-pq validator signing primitives (ADR-0010/0011): ML-DSA-87 validator key, attestation-shard tx building, and the equivocation-safety signed-epoch store — used by both the in-process validator service and the kaspa-pq-validator sidecar"
 publish = false
 rust-version.workspace = true
 version.workspace = true

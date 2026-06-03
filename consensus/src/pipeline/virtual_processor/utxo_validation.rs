@@ -848,7 +848,7 @@ impl VirtualStateProcessor {
     /// includes a `StakeAttestationShard` whose attestation is not
     /// structurally reward-eligible against this block's own selected-parent
     /// bond view — its bond must resolve to `Active` (at the attestation's
-    /// `target_daa_score`) **and** its ML-DSA-65 signature must verify. This
+    /// `target_daa_score`) **and** its ML-DSA-87 signature must verify. This
     /// makes "included ⇒ rewardable" a consensus invariant, so the coinbase
     /// reward fan-out (PR-10.5′-b3) needs no skip set. Reward **uniqueness**
     /// (Addendum B §B.3(c)) is a reward-emission concern, not a validity one
@@ -1090,7 +1090,7 @@ impl VirtualStateProcessor {
 /// ineligible attestation returns `Err((bond tx id, epoch))`; the caller maps
 /// it to [`IneligibleAttestationInBlock`]. An attestation is eligible iff its
 /// bond resolves to `Active` in `bond_view` at the attestation's
-/// `target_daa_score` **and** its ML-DSA-65 signature verifies over the
+/// `target_daa_score` **and** its ML-DSA-87 signature verifies over the
 /// canonical [`stake_attestation_message`] digest (Addendum A.3 layout).
 fn attestation_reward_eligibility(
     txs: &[Transaction],
@@ -1112,7 +1112,7 @@ fn attestation_reward_eligibility(
         if att.validator_id != bond.validator_pubkey_hash {
             return Err((att.bond_outpoint.transaction_id, att.epoch));
         }
-        // (b) ML-DSA-65 signature verifies over the canonical digest.
+        // (b) ML-DSA-87 signature verifies over the canonical digest.
         let digest = stake_attestation_message(
             net_id.as_byte_slice(),
             att.epoch,
@@ -1341,7 +1341,7 @@ mod tests {
     // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the reward-eligibility
     // rule's pure core. Covers the gate + both reject branches (bond absent /
     // signature invalid). The accept-with-valid-signature path requires
-    // ML-DSA-65 signing (libcrux) and is covered by the PR-10.5′-b3 end-to-end
+    // ML-DSA-87 signing (libcrux) and is covered by the PR-10.5′-b3 end-to-end
     // integration test rather than here.
     mod attestation_reward_eligibility {
         use super::super::attestation_reward_eligibility as eligibility;
@@ -1429,7 +1429,7 @@ mod tests {
     // kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload" / item 2): the
     // stateful slashing-evidence genuineness rule's pure core. Covers the gate +
     // both reject branches (bond absent / signature invalid). The
-    // accept-with-valid-signatures path needs ML-DSA-65 signing (libcrux) and is
+    // accept-with-valid-signatures path needs ML-DSA-87 signing (libcrux) and is
     // covered by the dedicated reward-bearing e2e rather than here.
     mod slashing_evidence_genuine {
         use super::super::slashing_evidence_genuine as genuine;

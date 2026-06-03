@@ -1,6 +1,6 @@
 //! kaspa-pq Phase 11 (ADR-0010): in-process validator node service.
 //!
-//! Loads the ML-DSA-65 signing key (deriving the overlay `validator_id =
+//! Loads the ML-DSA-87 signing key (deriving the overlay `validator_id =
 //! BLAKE2b-512(public_key)` and the P2PKH-ML-DSA funding address) and runs an async
 //! heartbeat that, per epoch: evaluates eligibility (bond active),
 //! and — when eligible — builds + signs a stake attestation, wraps it in a fee-funded
@@ -101,7 +101,7 @@ impl FromStr for ValidatorMode {
 #[derive(Debug, Clone)]
 pub struct ValidatorConfig {
     pub mode: ValidatorMode,
-    /// Path to the ML-DSA-65 signing seed file (64 hex chars = 32 bytes), if provided.
+    /// Path to the ML-DSA-87 signing seed file (64 hex chars = 32 bytes), if provided.
     pub key_path: Option<String>,
     /// Stake-bond outpoint backing this validator's attestations, as "txid:index", if provided.
     pub stake_bond: Option<String>,

@@ -202,7 +202,7 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
         // kaspa-pq Phase 10 (ADR-0009): DNS finality overlay subnetworks are
         // routed + stateless-validated by full nodes (unlike the upstream
         // `SubnetworksDisabled` blanket reject). Stateful checks — on-chain
-        // bond existence, rollout-stage gating, ML-DSA-65 signature
+        // bond existence, rollout-stage gating, ML-DSA-87 signature
         // verification, the `U ≥ R + E` dominance bound — land in later PRs.
         match kind {
             // ADR-0016 D.1: the StakeBond stateless check also verifies its

@@ -719,7 +719,7 @@ opcode_list! {
         Ok(())
     }
 
-    // kaspa-pq: ML-DSA-65 P2PKH check-signature. Allocated at 0xa6
+    // kaspa-pq: ML-DSA-87 P2PKH check-signature. Allocated at 0xa6
     // (was upstream `OpUnknown166`); see docs/adr/0002-mldsa65-p2pkh.md.
     // Layout mirrors OpCheckSig (0xac): pops <sig>, <key>, then pops the
     // 1-byte sighash type off the signature, length-checks both items
@@ -746,11 +746,11 @@ opcode_list! {
         }
     }
 
-    // kaspa-pq: ML-DSA-65 M-of-N CHECKMULTISIG (was upstream OpUnknown167).
-    // Mirrors OpCheckMultiSig (0xae) but verifies ML-DSA-65 signatures via
+    // kaspa-pq: ML-DSA-87 M-of-N CHECKMULTISIG (was upstream OpUnknown167).
+    // Mirrors OpCheckMultiSig (0xae) but verifies ML-DSA-87 signatures via
     // check_mldsa87_signature. Stack layout (Kaspa CHECKMULTISIG has no dummy
     // element): <sig_1> .. <sig_M> <M> <pk_1> .. <pk_N> <N>. Each sig push is
-    // <3309-byte ML-DSA-65 sig || 1-byte sighash type>. See docs/adr/0002.
+    // <4627-byte ML-DSA-87 sig || 1-byte sighash type>. See docs/adr/0002.
     opcode OpCheckMultiSigMlDsa87<0xa7, 1>(self, vm) {
         vm.op_check_multisig(MultisigScheme::MlDsa87)
     }

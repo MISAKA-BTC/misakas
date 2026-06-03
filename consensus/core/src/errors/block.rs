@@ -165,7 +165,7 @@ pub enum RuleError {
     // reward-eligibility block-validity rule. A block carrying a
     // `StakeAttestationShard` whose attestation does not resolve to an
     // `Active` bond (in the block's selected-parent bond view, at the
-    // attestation's target DAA score) with a valid ML-DSA-65 signature is
+    // attestation's target DAA score) with a valid ML-DSA-87 signature is
     // rejected, so that every included attestation is rewardable and the
     // coinbase fan-out needs no skip set. Args: the referenced bond's
     // transaction id and the attestation epoch. Inert below

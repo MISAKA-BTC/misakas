@@ -861,7 +861,7 @@ impl VirtualStateProcessor {
     ///
     /// Bounded-window design (stake_depth is a window quantity, not cumulative):
     /// walk back at most `max_reorg_horizon_blocks` selected-chain blocks from
-    /// `sink`, collect on-chain attestation shards, verify each ML-DSA-65
+    /// `sink`, collect on-chain attestation shards, verify each ML-DSA-87
     /// signature against its bond's validator key under
     /// `ATTESTATION_MLDSA87_CONTEXT`, gate by `is_bond_active_at`, then feed the
     /// pure aggregation core. No new store; recompute is reorg-safe.

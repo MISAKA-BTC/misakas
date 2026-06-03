@@ -68,10 +68,10 @@ pub fn multisig_redeem_script_ecdsa(pub_keys: impl Iterator<Item = impl Borrow<[
     Ok(builder.drain())
 }
 
-/// Build an M-of-N **ML-DSA-65** multisig redeem script (kaspa-pq, post-quantum):
+/// Build an M-of-N **ML-DSA-87** multisig redeem script (kaspa-pq, post-quantum):
 /// `<required> <pk_1> <pk_2> ... <pk_N> <N> OP_CHECKMULTISIGMLDSA87`.
 ///
-/// Each public key must be the 1952-byte ML-DSA-65 (FIPS 204) encoding. The
+/// Each public key must be the 2592-byte ML-DSA-87 (FIPS 204) encoding. The
 /// resulting redeem script is intended to be wrapped in P2SH via
 /// [`crate::pay_to_script_hash_script`]. Note the large size: each key adds
 /// ~1955 bytes, so an M-of-N spend script is constrained by `MAX_SCRIPTS_SIZE`.
@@ -354,7 +354,7 @@ mod tests {
     }
 
     /// kaspa-pq devnet multisig key generator (run manually). Derives three
-    /// ML-DSA-65 keypairs from documented devnet seeds, builds the 2-of-3
+    /// ML-DSA-87 keypairs from documented devnet seeds, builds the 2-of-3
     /// redeem script + P2SH, and prints the multisig address, P2SH
     /// `script_public_key` (hex), redeem-script hash, and saves seeds+pubkeys to
     /// `misaka-devnet-multisig-keys.json` so the premine can be wired and later
@@ -400,7 +400,7 @@ mod tests {
         let spk = pay_to_script_hash_script(&redeem);
         let addr = Address::new(Prefix::Devnet, Version::ScriptHash, redeem_hash.as_bytes()).to_string();
 
-        println!("=== misaka devnet 2-of-3 ML-DSA-65 multisig ===");
+        println!("=== misaka devnet 2-of-3 ML-DSA-87 multisig ===");
         println!("multisig address (devnet) : {addr}");
         println!("redeem script len         : {} bytes", redeem.len());
         println!("redeem script hash (b2b)  : {}", hex(redeem_hash.as_bytes()));
@@ -432,7 +432,7 @@ mod tests {
     /// P2SH/multisig is **out of launch scope**. With ML-DSA-87 a 2-of-3 unlock
     /// is ~17 KB (2 × (3 + 4628) sig pushes + (3 + 7788) redeem push), exceeding
     /// the P2PKH-only `MAX_SCRIPTS_SIZE` (10_000), and the `redeem.len() == 5868`
-    /// assertion below is ML-DSA-65-specific. Ignored until multisig returns via a
+    /// assertion below is ML-DSA-87-specific. Ignored until multisig returns via a
     /// dedicated ADR (redeem static-analysis class + recalculated caps).
     #[test]
     #[ignore = "P2SH/multisig out of PQ-only launch scope (ADR-0019 §6.5)"]
@@ -440,7 +440,7 @@ mod tests {
         use crate::{MLDSA87_PK_LEN, MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT};
         use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
-        // Three deterministic ML-DSA-65 keypairs.
+        // Three deterministic ML-DSA-87 keypairs.
         let keypairs: Vec<_> = [[0x11u8; 32], [0x22u8; 32], [0x33u8; 32]].iter().map(|s| mldsa::generate_key_pair(*s)).collect();
         let pubkeys: Vec<[u8; MLDSA87_PK_LEN]> = keypairs
             .iter()
@@ -453,7 +453,7 @@ mod tests {
 
         // 2-of-3 redeem script (5868 bytes) wrapped in P2SH.
         let redeem = multisig_redeem_script_mldsa87(pubkeys.iter(), 2).unwrap();
-        assert_eq!(redeem.len(), 5868, "2-of-3 ML-DSA-65 redeem script size");
+        assert_eq!(redeem.len(), 5868, "2-of-3 ML-DSA-87 redeem script size");
         let spk = pay_to_script_hash_script(&redeem);
 
         let prev_tx_id = TransactionId::from_str(
@@ -488,7 +488,7 @@ mod tests {
             let mut builder = ScriptBuilder::new();
             for &i in signers {
                 let sig = mldsa::sign(&keypairs[i].signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x99u8; 32])
-                    .expect("ML-DSA-65 sign");
+                    .expect("ML-DSA-87 sign");
                 let mut item = Vec::with_capacity(MLDSA87_SIG_LEN + 1);
                 item.extend_from_slice(sig.as_ref());
                 item.push(SIG_HASH_ALL.to_u8());

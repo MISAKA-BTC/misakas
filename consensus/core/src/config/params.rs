@@ -816,7 +816,7 @@ pub const MAINNET_PARAMS: Params = Params {
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
     // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
-    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // Phase-6 ML-DSA-87 numbers). Measured on Apple Silicon arm64 via
     // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
     //   Schnorr verify (secp256k1):              12.74 µs
     //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
@@ -889,7 +889,7 @@ pub const TESTNET_PARAMS: Params = Params {
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
     // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
-    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // Phase-6 ML-DSA-87 numbers). Measured on Apple Silicon arm64 via
     // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
     //   Schnorr verify (secp256k1):              12.74 µs
     //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
@@ -957,7 +957,7 @@ pub const SIMNET_PARAMS: Params = Params {
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
     // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
-    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // Phase-6 ML-DSA-87 numbers). Measured on Apple Silicon arm64 via
     // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
     //   Schnorr verify (secp256k1):              12.74 µs
     //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)
@@ -1013,7 +1013,7 @@ pub const DEVNET_PARAMS: Params = Params {
     mass_per_tx_byte: 1,
     mass_per_script_pub_key_byte: 10,
     // kaspa-pq Phase 7 (ML-DSA-87 verify recalibration; supersedes the
-    // Phase-6 ML-DSA-65 numbers). Measured on Apple Silicon arm64 via
+    // Phase-6 ML-DSA-87 numbers). Measured on Apple Silicon arm64 via
     // `crypto/txscript/benches/bench.rs` (ml_dsa_87::verify):
     //   Schnorr verify (secp256k1):              12.74 µs
     //   ML-DSA-87 verify (default, NEON/AVX2):   63.88 µs  (5.01× ratio)

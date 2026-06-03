@@ -22,7 +22,7 @@ use libcrux_ml_dsa::ml_dsa_87;
 #[cfg(feature = "legacy-secp256k1")]
 use secp256k1::{Message, Secp256k1};
 
-/// Pre-build a deterministic ML-DSA-65 keypair + signature over a fixed
+/// Pre-build a deterministic ML-DSA-87 keypair + signature over a fixed
 /// 32-byte message. The benchmark loop then calls `verify` repeatedly on
 /// that same (vk, msg, sig) triple — exactly the verify-only cost.
 ///

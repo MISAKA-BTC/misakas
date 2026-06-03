@@ -278,7 +278,7 @@ impl Factory {
     ) -> Self {
         assert!(fd_budget > 0, "fd_budget has to be positive");
         let mut config = config.clone();
-        // kaspa-pq: bake the genesis premine (15B KAS -> 2-of-3 ML-DSA-65 multisig
+        // kaspa-pq: bake the genesis premine (15B KAS -> 2-of-3 ML-DSA-87 multisig
         // P2SH) into the genesis utxo_commitment + hash for every network, so all
         // nodes agree on the premine-aware genesis identity.
         set_genesis_utxo_commitment_from_config(&mut config);

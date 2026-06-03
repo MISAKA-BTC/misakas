@@ -124,7 +124,7 @@ pub const fn is_legacy_signature_opcode(tag: u8) -> bool {
     )
 }
 
-/// Stateless ML-DSA-65 (FIPS 204) verification with a caller-supplied `ctx`
+/// Stateless ML-DSA-87 (FIPS 204) verification with a caller-supplied `ctx`
 /// (kaspa-pq Phase 10, ADR-0009). The transaction opcode path
 /// ([`TxScriptEngine::check_mldsa87_signature`]) hard-codes
 /// [`MLDSA87_TX_CONTEXT`]; this free function lets consensus DNS-overlay
@@ -883,7 +883,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
         }
     }
 
-    /// kaspa-pq ML-DSA-65 signature check. Layout mirrors the existing
+    /// kaspa-pq ML-DSA-87 signature check. Layout mirrors the existing
     /// [`check_schnorr_signature`] / [`check_ecdsa_signature`] but with:
     ///
     /// - Length pre-checks that reject before any libcrux call (so a
@@ -1712,16 +1712,16 @@ mod bitcoind_tests {
         Comment((String,)),
     }
 
-    /// kaspa-pq Phase 4 acceptance test: a well-formed ML-DSA-65 P2PKH
+    /// kaspa-pq Phase 4 acceptance test: a well-formed ML-DSA-87 P2PKH
     /// spend on a populated transaction must pass `vm.execute()`. This
     /// test threads the full Phase 4 surface end-to-end:
     ///
-    ///   1. ML-DSA-65 keypair via `libcrux_ml_dsa::ml_dsa_87::generate_key_pair`
+    ///   1. ML-DSA-87 keypair via `libcrux_ml_dsa::ml_dsa_87::generate_key_pair`
     ///   2. Address = BLAKE2b-256(public_key)
     ///   3. `scriptPubKey` via `pay_to_address_script`
     ///   4. Sighash via `calc_mldsa87_signature_hash` (the same 64-byte digest
     ///      the script engine recomputes during verify — ADR-0019 §9)
-    ///   5. ML-DSA-65 sign with `MLDSA87_TX_CONTEXT`
+    ///   5. ML-DSA-87 sign with `MLDSA87_TX_CONTEXT`
     ///   6. `signatureScript = PUSH<sig||sighash_type> PUSH<public_key>`
     ///   7. `TxScriptEngine::from_transaction_input(...).execute()` -> Ok
     ///
@@ -1737,7 +1737,7 @@ mod bitcoind_tests {
         use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
         use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
-        // 1. Deterministic ML-DSA-65 keypair from a 32-byte seed.
+        // 1. Deterministic ML-DSA-87 keypair from a 32-byte seed.
         let keygen_seed = [0xa1u8; 32];
         let keypair = mldsa::generate_key_pair(keygen_seed);
         let pk_bytes = keypair.verification_key.as_ref();
@@ -1798,7 +1798,7 @@ mod bitcoind_tests {
             &reused,
             &sig_cache,
         );
-        vm.execute().expect("ML-DSA-65 P2PKH spend should verify");
+        vm.execute().expect("ML-DSA-87 P2PKH spend should verify");
     }
 
     /// kaspa-pq Phase 10: the standalone `verify_mldsa87_with_context` used by

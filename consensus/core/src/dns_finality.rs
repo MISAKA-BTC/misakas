@@ -316,7 +316,7 @@ pub enum BondStatus {
 ///
 /// Carried inside a transaction with subnetwork id
 /// `SUBNETWORK_ID_STAKE_BOND` (consensus rule to be added in PR-10.4).
-/// The bond locks an amount of coins to a validator ML-DSA-65 key for
+/// The bond locks an amount of coins to a validator ML-DSA-87 key for
 /// at least `unbonding_period_blocks` blocks past any later withdraw
 /// request. ADR-0009 §"Long-range bound" requires
 /// `unbonding_period_blocks ≥ max_reorg_horizon + evidence_window`.
@@ -370,7 +370,7 @@ pub struct StakeBondPayload {
 ///
 /// Many `StakeAttestation`s are batched into
 /// `StakeAttestationShardPayload` for on-chain commitment. A raw
-/// attestation is ~3300+100 bytes (the ML-DSA-65 signature
+/// attestation is ~4600+100 bytes (the ML-DSA-87 signature
 /// dominates).
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct StakeAttestation {
@@ -1065,7 +1065,7 @@ pub struct ActiveValidatorSet {
 /// attestation for the current epoch, assembled by the consensus pipeline so the
 /// network-, active-set-, and target-binding match the verifier (`virtual_processor`)
 /// byte-for-byte. The service's only remaining job is to sign [`Self::message`]
-/// under [`ATTESTATION_MLDSA87_CONTEXT`] with its ML-DSA-65 key.
+/// under [`ATTESTATION_MLDSA87_CONTEXT`] with its ML-DSA-87 key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidatorAttestationTarget {
     pub epoch: u64,
@@ -1084,7 +1084,7 @@ pub struct ValidatorAttestationTarget {
 // ---------------------------------------------------------------------
 
 /// Derive a validator's overlay identity (`validator_id`, equal to its
-/// `validator_pubkey_hash`) from its ML-DSA-65 public key, per ADR-0008
+/// `validator_pubkey_hash`) from its ML-DSA-87 public key, per ADR-0008
 /// §"Hash64 consensus identity" and ADR-0012 (`validator_id ==
 /// BLAKE2b-512(validator_pubkey)`):
 ///
@@ -1108,7 +1108,7 @@ pub fn validator_id_from_pubkey(validator_pubkey: &[u8]) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
-/// Local-only fingerprint of an ML-DSA-65 signature: unkeyed `BLAKE2b-512` of the
+/// Local-only fingerprint of an ML-DSA-87 signature: unkeyed `BLAKE2b-512` of the
 /// signature bytes, stored in [`SignedEpochRecord::signature_fingerprint`] so a
 /// validator can recognise a re-broadcast of its own in-flight attestation across
 /// restarts without persisting the full ~3.3 KB signature. It is **not** part of
@@ -1166,7 +1166,7 @@ pub fn validator_set_commitment(epoch: u64, validators: &[ValidatorRecord]) -> H
     Hash64::from_bytes(out)
 }
 
-/// Compute the BLAKE2b-256 attestation message that ML-DSA-65 signs
+/// Compute the BLAKE2b-256 attestation message that ML-DSA-87 signs
 /// over, per ADR-0009 §"Attestation target" as pinned by **Addendum
 /// A.3**:
 ///
@@ -1191,9 +1191,9 @@ pub fn validator_set_commitment(epoch: u64, validators: &[ValidatorRecord]) -> H
 /// `&[u8]` keeps this module decoupled from `NetworkId`.
 ///
 /// The 32-byte digest is returned as the upstream [`Hash`] (alias for
-/// `Hash32`) so it composes directly with the libcrux ML-DSA-65 `sign_ctx`
+/// `Hash32`) so it composes directly with the libcrux ML-DSA-87 `sign_ctx`
 /// API. The signing context (`ATTESTATION_MLDSA87_CONTEXT`) is applied at
-/// the ML-DSA-65 layer, not inside this hasher — keeping the two domain
+/// the ML-DSA-87 layer, not inside this hasher — keeping the two domain
 /// separators independent.
 pub fn stake_attestation_message(
     network_id: &[u8],
@@ -1309,7 +1309,7 @@ pub struct SignedEpochRecord {
     /// Pinned so the validator can recognise a re-broadcast of an
     /// in-flight attestation across restarts without re-storing
     /// the full ~3.3 KB signature. **Not** part of the
-    /// equivocation predicate — ML-DSA-65 is hedged by default and
+    /// equivocation predicate — ML-DSA-87 is hedged by default and
     /// two valid signatures over the same message differ on the
     /// `rnd` parameter, so bit-equality would be too strict.
     pub signature_fingerprint: Hash64,
@@ -1354,7 +1354,7 @@ pub enum SignedEpochCheckOutcome {
 /// the decision table.
 ///
 /// The function deliberately does **not** validate the
-/// `signature_fingerprint`: two valid hedged ML-DSA-65 signatures
+/// `signature_fingerprint`: two valid hedged ML-DSA-87 signatures
 /// over the same message will have different fingerprints, so the
 /// predicate that matters is target-hash + target-daa-score
 /// equality.
@@ -1395,7 +1395,7 @@ pub fn check_signed_epoch_record(prev: Option<&SignedEpochRecord>, candidate: &S
 pub type HostId = Hash;
 
 /// Coordinated-failover takeover token (ADR-0014
-/// §"`TakeoverToken`"). Carries an ML-DSA-65 signature by the
+/// §"`TakeoverToken`"). Carries an ML-DSA-87 signature by the
 /// validator key transferring signing authority from
 /// `yielding_host_id` to `taking_over_host_id` at
 /// `valid_from_epoch`. Stored locally on both hosts in
@@ -1482,11 +1482,11 @@ pub fn compute_host_id(hostname: &[u8], boot_nonce: &[u8; 32]) -> HostId {
 /// ```
 ///
 /// The 32-byte digest is returned as the upstream [`Hash`] so it
-/// composes directly with the libcrux ML-DSA-65 `sign_ctx` /
-/// `verify_ctx` APIs. The ML-DSA-65 signing context
-/// (`TAKEOVER_TOKEN_CONTEXT`) is applied at the ML-DSA-65 layer,
+/// composes directly with the libcrux ML-DSA-87 `sign_ctx` /
+/// `verify_ctx` APIs. The ML-DSA-87 signing context
+/// (`TAKEOVER_TOKEN_CONTEXT`) is applied at the ML-DSA-87 layer,
 /// not inside this hasher — keeping the two domain separators
-/// independent and distinct from every other ML-DSA-65 use site
+/// independent and distinct from every other ML-DSA-87 use site
 /// in the protocol (ADR-0014 §"Public-claim discipline" replay
 /// safety claim).
 pub fn takeover_token_message(
@@ -1524,7 +1524,7 @@ pub fn takeover_token_message(
 #[repr(u8)]
 pub enum SigningPurpose {
     /// Standard transaction signing — message digest is whatever
-    /// the tx-script ML-DSA-65 sign path produces; context is
+    /// the tx-script ML-DSA-87 sign path produces; context is
     /// `b"kaspa-pq-v1/tx/mldsa87"`.
     #[default]
     Transaction = 0,
@@ -1628,12 +1628,12 @@ pub struct SignerRequest {
     /// request selects via this field.
     pub validator_id: Hash64,
     pub purpose: SigningPurpose,
-    /// libcrux ML-DSA-65 `sign_ctx` ctx parameter. Caller
+    /// libcrux ML-DSA-87 `sign_ctx` ctx parameter. Caller
     /// provides; the signer does not infer the context from
     /// the purpose tag because future protocol extensions may
     /// need a non-standard context for the same purpose.
     pub context: Vec<u8>,
-    /// 32-byte BLAKE2b-256 the ML-DSA-65 will sign over.
+    /// 32-byte BLAKE2b-256 the ML-DSA-87 will sign over.
     pub message_digest: Hash,
     pub metadata: SignerMetadata,
 }
@@ -2086,7 +2086,7 @@ pub fn validator_participation_reward_outputs(
     (outputs, rewarded_keys)
 }
 
-/// Build the canonical kaspa-pq ML-DSA-65 P2PKH `scriptPublicKey`
+/// Build the canonical kaspa-pq ML-DSA-87 P2PKH `scriptPublicKey`
 /// for a 32-byte spend payload (ADR-0002 / ADR-0013 Addendum B).
 ///
 /// The 37-byte script is
@@ -2792,7 +2792,7 @@ pub fn reorg_inputs_since_common_ancestor(
 //
 // Deferred to later PRs (they need DAG / UTXO / rollout context): the
 // on-chain bond existence + `pubkey_hash == BLAKE2b-512(pubkey)` binding,
-// rollout-stage gating, ML-DSA-65 signature verification against the
+// rollout-stage gating, ML-DSA-87 signature verification against the
 // committed validator set, the `U ≥ R + E` dominance bound, the
 // `(bond_outpoint, validator_id, epoch)` on-chain uniqueness rule, and
 // the `evidence_window_blocks` recency of slashing evidence.
@@ -3380,7 +3380,7 @@ impl RewardedEpochSet {
 /// One signature-verified, bond-active attestation contribution fed into
 /// [`aggregate_epoch_tallies`]. The caller (consensus aggregation pass)
 /// has already (a) confirmed the referenced bond exists and is `Active` at
-/// the attestation's `target_daa_score`, and (b) verified the ML-DSA-65
+/// the attestation's `target_daa_score`, and (b) verified the ML-DSA-87
 /// signature — so only the dedup key and the bond's stake remain.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct AttestationContribution {
@@ -5514,7 +5514,7 @@ mod tests {
 
     #[test]
     fn equivocation_check_allow_rebroadcast_when_only_signature_fingerprint_differs() {
-        // ML-DSA-65 is hedged by default (FIPS 204 §3.4); two
+        // ML-DSA-87 is hedged by default (FIPS 204 §3.4); two
         // valid signatures over the same message differ on the
         // `rnd` parameter. Bit-equality on the fingerprint would
         // therefore be too strict, and would falsely block honest
@@ -6496,7 +6496,7 @@ mod tests {
     #[test]
     fn signing_purpose_default_is_transaction() {
         // Conservative default — `Transaction` is the original
-        // ML-DSA-65 use site (ADR-0002), pre-DNS-overlay.
+        // ML-DSA-87 use site (ADR-0002), pre-DNS-overlay.
         assert_eq!(SigningPurpose::default(), SigningPurpose::Transaction);
     }
 

@@ -353,7 +353,7 @@ pub fn cli() -> Command {
                 .env("KASPAD_VALIDATOR_KEY")
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
-                .help("kaspa-pq: path to the validator ML-DSA-65 signing seed file (64 hex chars = 32 bytes)."),
+                .help("kaspa-pq: path to the validator ML-DSA-87 signing seed file (64 hex chars = 32 bytes)."),
         )
         .arg(
             Arg::new("stake-bond")
