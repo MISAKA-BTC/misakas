@@ -392,7 +392,7 @@ mod tests {
     fn validate_dns_overlay_subnetwork_tx() {
         use kaspa_consensus_core::dns_finality::{
             DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
-            StakeAttestation, StakeBondPayload, p2pkh_mldsa87_spk,
+            StakeAttestation, StakeBondPayload, p2pkh_mldsa87_spk, validator_id_from_pubkey,
         };
         use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
         use kaspa_hashes::Hash64;
@@ -427,11 +427,13 @@ mod tests {
         );
 
         // Well-formed stake-bond payload → accepted.
+        let validator_pubkey = vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN];
         let bond = StakeBondPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             owner_pubkey_hash: Hash64::from_bytes([0xaau8; 64]),
-            validator_pubkey_hash: Hash64::from_bytes([0xbbu8; 64]),
-            validator_pubkey: vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN],
+            // audit H-04: canonical key-derived overlay identity.
+            validator_pubkey_hash: validator_id_from_pubkey(&validator_pubkey),
+            validator_pubkey,
             amount: 1_000,
             activation_daa_score: 0,
             unbonding_period_blocks: 1,

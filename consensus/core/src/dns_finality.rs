@@ -2839,6 +2839,10 @@ pub enum DnsTxError {
     ZeroBondAmount,
     /// Validator public key is not exactly `STAKE_VALIDATOR_PUBKEY_LEN`.
     InvalidPubKeyLen(usize),
+    /// The declared `validator_pubkey_hash` is not the canonical
+    /// `validator_id_from_pubkey(validator_pubkey)` (audit H-04): the overlay
+    /// identity must be the unkeyed BLAKE2b-512 of the bond's own key.
+    ValidatorPubkeyHashMismatch,
     /// An attestation signature is not exactly `STAKE_ATTESTATION_SIG_LEN`.
     InvalidSignatureLen(usize),
     /// An attestation shard carries no attestations.
@@ -2877,6 +2881,9 @@ impl Display for DnsTxError {
             DnsTxError::UnsupportedVersion(v) => write!(f, "unsupported DNS overlay payload version {v}"),
             DnsTxError::ZeroBondAmount => write!(f, "stake-bond amount must be non-zero"),
             DnsTxError::InvalidPubKeyLen(n) => write!(f, "validator public key length {n} is invalid"),
+            DnsTxError::ValidatorPubkeyHashMismatch => {
+                write!(f, "stake-bond validator_pubkey_hash is not BLAKE2b-512(validator_pubkey)")
+            }
             DnsTxError::InvalidSignatureLen(n) => write!(f, "attestation signature length {n} is invalid"),
             DnsTxError::EmptyShard => write!(f, "attestation shard is empty"),
             DnsTxError::ShardTooLarge(n) => write!(f, "attestation shard has {n} attestations, above the maximum"),
@@ -2918,11 +2925,13 @@ fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError
 
 /// Stateless validation of a [`StakeBondPayload`] (subnetwork
 /// `SUBNETWORK_ID_STAKE_BOND`): decodability, payload version, non-zero
-/// bonded amount, and the fixed 2592-byte ML-DSA-87 validator
-/// public-key length. The `validator_pubkey_hash ==
-/// BLAKE2b-512(validator_pubkey)` and `owner_pubkey_hash`↔funding-input
-/// bindings are deferred to the stateful PR. Returns the decoded payload
-/// so the tx-level [`validate_stake_bond_tx`] check can reuse it.
+/// bonded amount, the fixed 2592-byte ML-DSA-87 validator public-key
+/// length, and the canonical identity binding `validator_pubkey_hash ==
+/// validator_id_from_pubkey(validator_pubkey)` (audit H-04 — a bond may
+/// not declare an overlay identity not derived from its own key). The
+/// `owner_pubkey_hash`↔funding-input binding remains stateful (checked at
+/// acceptance). Returns the decoded payload so the tx-level
+/// [`validate_stake_bond_tx`] check can reuse it.
 pub fn validate_stake_bond_payload(payload: &[u8]) -> Result<(), DnsTxError> {
     decode_and_check_stake_bond_payload(payload).map(|_| ())
 }
@@ -2937,6 +2946,15 @@ fn decode_and_check_stake_bond_payload(payload: &[u8]) -> Result<StakeBondPayloa
     }
     if bond.validator_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
         return Err(DnsTxError::InvalidPubKeyLen(bond.validator_pubkey.len()));
+    }
+    // audit H-04 / ADR-0008/0012: bind the declared overlay identity to the key.
+    // `validator_id` is the canonical unkeyed BLAKE2b-512(validator_pubkey); a bond
+    // must not declare a `validator_pubkey_hash` that is not derived from its own
+    // key, or validator identity stops being uniquely key-derived (breaking
+    // dup-detection, the validator-set commitment, and external key->id monitoring).
+    // Purely intra-payload, so enforced statelessly here.
+    if bond.validator_pubkey_hash != validator_id_from_pubkey(&bond.validator_pubkey) {
+        return Err(DnsTxError::ValidatorPubkeyHashMismatch);
     }
     Ok(bond)
 }
@@ -4086,11 +4104,13 @@ mod tests {
     // ---- PR-10.4: DNS overlay tx kinds + stateless payload validation ----
 
     fn fixture_bond() -> StakeBondPayload {
+        let validator_pubkey = vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN];
         StakeBondPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             owner_pubkey_hash: Hash64::from_bytes([0xaau8; 64]),
-            validator_pubkey_hash: Hash64::from_bytes([0xbbu8; 64]),
-            validator_pubkey: vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN],
+            // audit H-04: declare the canonical key-derived overlay identity.
+            validator_pubkey_hash: validator_id_from_pubkey(&validator_pubkey),
+            validator_pubkey,
             amount: 100_000_000_000,
             activation_daa_score: 5_000,
             unbonding_period_blocks: 100_000,
@@ -4182,6 +4202,10 @@ mod tests {
             validate_stake_bond_payload(&borsh::to_vec(&bad).unwrap()),
             Err(DnsTxError::InvalidPubKeyLen(STAKE_VALIDATOR_PUBKEY_LEN - 1))
         );
+        // audit H-04: validator_pubkey_hash not derived from the validator key.
+        let mut bad = fixture_bond();
+        bad.validator_pubkey_hash = Hash64::from_bytes([0x01u8; 64]);
+        assert_eq!(validate_stake_bond_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ValidatorPubkeyHashMismatch));
     }
 
     // ---- ADR-0016 D.1: validate_stake_bond_tx (stake-lock rule) ----
