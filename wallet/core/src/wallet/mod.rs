@@ -712,6 +712,9 @@ impl Wallet {
             AccountCreateArgs::Keypair { prv_key_data_id, account_name, ecdsa } => {
                 self.create_account_keypair(wallet_secret, None, prv_key_data_id, account_name, ecdsa).await?
             }
+            AccountCreateArgs::Mldsa { prv_key_data_id, account_name, account_index } => {
+                self.create_account_mldsa(wallet_secret, None, prv_key_data_id, account_name, account_index).await?
+            }
         };
 
         if notify {
@@ -722,19 +725,30 @@ impl Wallet {
         Ok(account)
     }
 
-    // kaspa-pq PQ-only (ADR-0019 §14): all `AccountCreateArgs` variants are classical
-    // secp256k1 account kinds (bip32/legacy/multisig/bip32watch/keypair); none are
-    // representable on a PQ-only chain. ML-DSA-87 accounts are constructed via the
-    // PQ-specific path, not this RPC create surface.
+    // kaspa-pq PQ-only (ADR-0019 §13/§14): the classical secp256k1 account kinds
+    // (bip32/legacy/multisig/bip32watch/keypair) are not representable on a PQ-only
+    // chain, so only the ML-DSA-87 (`mldsa`) account can be created here.
     #[cfg(not(feature = "legacy-secp256k1"))]
     pub async fn create_account(
         self: &Arc<Wallet>,
-        _wallet_secret: &Secret,
-        _account_create_args: AccountCreateArgs,
-        _notify: bool,
+        wallet_secret: &Secret,
+        account_create_args: AccountCreateArgs,
+        notify: bool,
         _guard: &WalletGuard<'_>,
     ) -> Result<Arc<dyn Account>> {
-        Err(Error::AccountKindFeature)
+        let account = match account_create_args {
+            AccountCreateArgs::Mldsa { prv_key_data_id, account_name, account_index } => {
+                self.create_account_mldsa(wallet_secret, None, prv_key_data_id, account_name, account_index).await?
+            }
+            _ => return Err(Error::AccountKindFeature),
+        };
+
+        if notify {
+            let account_descriptor = account.descriptor()?;
+            self.notify(Events::AccountCreate { account_descriptor }).await?;
+        }
+
+        Ok(account)
     }
 
     #[cfg(feature = "legacy-secp256k1")]
@@ -957,6 +971,67 @@ impl Wallet {
         let prv_key_data_id = prv_key_data.id;
         let account: Arc<dyn Account> =
             Arc::new(keypair::Keypair::try_new(self, account_name, public_key, prv_key_data_id, ecdsa).await?);
+
+        if account_store.load_single(account.id()).await?.is_some() {
+            return Err(Error::AccountAlreadyExists(*account.id()));
+        }
+
+        self.inner.store.clone().as_account_store()?.store_single(&account.to_storage()?, None).await?;
+        self.inner.store.commit(wallet_secret).await?;
+
+        Ok(account)
+    }
+
+    /// kaspa-pq (ADR-0019 §13/§14): create an ML-DSA-87 single-key account — the
+    /// PQ analogue of [`create_account_keypair`](Self::create_account_keypair) and
+    /// the only account-create path representable on a PQ-only chain. The 2592-byte
+    /// verification key is derived from the private-key-data BIP39 master seed via
+    /// the kaspa-pq keygen XOF (`network_id` + `account_index`, change = 0,
+    /// index = 0), matching the signing-time re-derivation in `MlDsa::try_pq_keypair`
+    /// so the stored key and the re-derived signing key always agree.
+    pub async fn create_account_mldsa(
+        self: &Arc<Wallet>,
+        wallet_secret: &Secret,
+        payment_secret: Option<&Secret>,
+        prv_key_data_id: PrvKeyDataId,
+        account_name: Option<String>,
+        account_index: Option<u64>,
+    ) -> Result<Arc<dyn Account>> {
+        let account_store = self.inner.store.clone().as_account_store()?;
+
+        let prv_key_data = self
+            .inner
+            .store
+            .as_prv_key_data_store()?
+            .load_key_data(wallet_secret, &prv_key_data_id)
+            .await?
+            .ok_or_else(|| Error::PrivateKeyNotFound(prv_key_data_id))?;
+
+        let mnemonic = prv_key_data
+            .as_mnemonic(payment_secret)?
+            .ok_or_else(|| Error::custom("kaspa-pq ML-DSA account requires a BIP39 mnemonic private-key source"))?;
+        let passphrase = payment_secret.map(|s| std::str::from_utf8(s.as_ref())).transpose()?.unwrap_or_default();
+        let seed = mnemonic.to_seed(passphrase);
+        let network_id = self.network_id()?;
+
+        // Auto-assign the next ML-DSA account index for this key when unspecified.
+        let account_index = if let Some(account_index) = account_index {
+            account_index
+        } else {
+            let accounts = account_store.clone().iter(Some(prv_key_data_id)).await?.collect::<Vec<_>>().await;
+            accounts
+                .into_iter()
+                .filter(|a| a.as_ref().ok().and_then(|(a, _)| (a.kind == MLDSA_ACCOUNT_KIND).then_some(true)).unwrap_or(false))
+                .collect::<Vec<_>>()
+                .len() as u64
+        };
+
+        let keypair =
+            kaspa_wallet_keys::kaspa_pq::derive_keypair(&network_id.to_string(), account_index as u32, 0, 0, seed.as_bytes());
+        let public_key = keypair.public_key_bytes().to_vec();
+
+        let account: Arc<dyn Account> =
+            Arc::new(mldsa::MlDsa::try_new(self, account_name, public_key, account_index, prv_key_data.id).await?);
 
         if account_store.load_single(account.id()).await?.is_some() {
             return Err(Error::AccountAlreadyExists(*account.id()));
@@ -1866,6 +1941,75 @@ impl Wallet {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod test {
+    use super::*;
+    use kaspa_bip32::{Language, Mnemonic};
+    use kaspa_consensus_core::network::{NetworkId, NetworkType};
+    use kaspa_wallet_keys::kaspa_pq::derive_keypair;
+
+    /// kaspa-pq (ADR-0019 §13/§14): the full wallet can CREATE an ML-DSA-87 account
+    /// via the generic `create_account` API (not merely manage a pre-built one).
+    /// The account's receive address must equal the directly-derived keypair's
+    /// address — proving the stored verification key and the signing-time
+    /// re-derivation in `MlDsa::try_pq_keypair` agree — and a second account must
+    /// auto-assign a fresh index. Runs in both the pq-only and legacy builds.
+    #[tokio::test]
+    async fn create_account_mldsa_end_to_end() {
+        let store = Wallet::resident_store().unwrap();
+        let net = NetworkId::with_suffix(NetworkType::Testnet, 10);
+        let wallet = Arc::new(Wallet::try_new(store, None, Some(net)).unwrap());
+        let wallet_secret = Secret::new(vec![]);
+        wallet
+            .create_wallet(
+                &wallet_secret,
+                WalletCreateArgs {
+                    title: None,
+                    filename: None,
+                    encryption_kind: EncryptionKind::XChaCha20Poly1305,
+                    user_hint: None,
+                    overwrite_wallet_storage: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Store a BIP39 mnemonic as the wallet's private-key data.
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let prv_key_data_id = wallet
+            .create_prv_key_data(
+                &wallet_secret,
+                PrvKeyDataCreateArgs {
+                    name: None,
+                    payment_secret: None,
+                    secret: Secret::from(phrase),
+                    kind: PrvKeyDataVariantKind::Mnemonic,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Create an ML-DSA account through the generic create_account API.
+        let guard = wallet.guard();
+        let guard = guard.lock().await;
+        let account = wallet
+            .create_account(&wallet_secret, AccountCreateArgs::new_mldsa(prv_key_data_id, Some("pq".into()), None), false, &guard)
+            .await
+            .unwrap();
+        assert_eq!(account.account_kind().as_ref(), MLDSA_ACCOUNT_KIND);
+
+        // The account's receive address must equal the directly-derived ML-DSA keypair's address.
+        let mnemonic = Mnemonic::new(phrase, Language::English).unwrap();
+        let seed = mnemonic.to_seed("");
+        let expected = derive_keypair(&net.to_string(), 0, 0, 0, seed.as_bytes());
+        assert_eq!(account.receive_address().unwrap(), expected.address(net.into()));
+
+        // A second account for the same key auto-assigns index 1 (a distinct address).
+        let account2 = wallet
+            .create_account(&wallet_secret, AccountCreateArgs::new_mldsa(prv_key_data_id, None, None), false, &guard)
+            .await
+            .unwrap();
+        assert_ne!(account.receive_address().unwrap(), account2.receive_address().unwrap());
+    }
+
     // use hex_literal::hex;
 
     // use super::*;

@@ -72,6 +72,34 @@ impl Account {
                 let account_name = account_name.as_deref();
                 wizards::account::create(&ctx, prv_key_data_info, account_kind, account_name).await?;
             }
+            // kaspa-pq PQ-only (ADR-0019 §13/§14): the only spendable account kind is the
+            // ML-DSA-87 single-key account, so `account create [<name>]` always makes one.
+            #[cfg(not(feature = "legacy-secp256k1"))]
+            "create" => {
+                let account_name = if argv.is_empty() {
+                    None
+                } else {
+                    let name = argv.remove(0);
+                    Some(name.trim().to_string())
+                };
+
+                let prv_key_data_info = ctx.select_private_key().await?;
+
+                let (wallet_secret, _) = ctx.ask_wallet_secret(None).await?;
+                let payment_secret = if prv_key_data_info.is_encrypted() {
+                    Some(Secret::new(ctx.term().ask(true, "Enter payment(payload) secret: ").await?.trim().as_bytes().to_vec()))
+                } else {
+                    None
+                };
+
+                let wallet = ctx.wallet();
+                let account = wallet
+                    .create_account_mldsa(&wallet_secret, payment_secret.as_ref(), prv_key_data_info.id, account_name, None)
+                    .await?;
+
+                tprintln!(ctx, "\naccount created: {}\n", account.get_list_string()?);
+                wallet.select(Some(&account)).await?;
+            }
             #[cfg(feature = "legacy-secp256k1")]
             "import" => {
                 if argv.is_empty() {
@@ -262,14 +290,20 @@ impl Account {
     async fn display_help(self: Arc<Self>, ctx: Arc<KaspaCli>, _argv: Vec<String>) -> Result<()> {
         ctx.term().help(
             &[
+                #[cfg(feature = "legacy-secp256k1")]
                 ("create [<type>] [<name>]", "Create a new account (types: 'bip32' (default), 'legacy', 'multisig')"),
+                #[cfg(not(feature = "legacy-secp256k1"))]
+                ("create [<name>]", "Create a new ML-DSA-87 (PQ) account"),
+                #[cfg(feature = "legacy-secp256k1")]
                 (
                     "import <import-type> [<key-type> [extra keys]]",
                     "Import accounts from a private key using 24 or 12 word mnemonic or legacy data \
                 (KDX and kaspanet web wallet). Use 'account import' for additional help.",
                 ),
                 ("name <name>", "Name or rename the selected account (use 'remove' to remove the name"),
+                #[cfg(feature = "legacy-secp256k1")]
                 ("scan [<derivations>] or scan [<start>] [<derivations>]", "Scan extended address derivation chain (legacy accounts)"),
+                #[cfg(feature = "legacy-secp256k1")]
                 (
                     "sweep [<derivations>] or sweep [<start>] [<derivations>]",
                     "Sweep extended address derivation chain (legacy accounts)",
