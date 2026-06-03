@@ -94,7 +94,7 @@ impl KaspaPqMlDsa87KeyPair {
         self.sign_with_context(message, MLDSA87_TX_CONTEXT, signing_randomness)
     }
 
-    /// kaspa-pq Phase 11 (ADR-0010): sign `message` under an explicit ML-DSA-65
+    /// kaspa-pq Phase 11 (ADR-0010): sign `message` under an explicit ML-DSA-87
     /// `context` (domain separator). [`sign`](Self::sign) uses the transaction
     /// context (`MLDSA87_TX_CONTEXT`); the in-process validator service signs
     /// stake attestations with `dns_finality::ATTESTATION_MLDSA87_CONTEXT` so the
@@ -102,14 +102,18 @@ impl KaspaPqMlDsa87KeyPair {
     /// `kaspa_txscript::verify_mldsa87_with_context` and can never be replayed
     /// as a transaction signature (distinct context ⇒ distinct domain).
     pub fn sign_with_context(&self, message: &[u8], context: &[u8], signing_randomness: [u8; 32]) -> [u8; MLDSA87_SIG_LEN] {
+        // audit L: ML-DSA `sign` only fails for an over-long (>255-byte) context; callers pass a
+        // short fixed domain-separator, so this precondition makes the unreachable failure an
+        // explicit, attributed panic rather than an opaque libcrux error.
+        assert!(context.len() <= 255, "ML-DSA signing context must be <= 255 bytes, got {}", context.len());
         let sig = ml_dsa_87::sign(&self.inner.signing_key, message, context, signing_randomness)
-            .expect("ML-DSA-65 sign is infallible on a well-formed message");
+            .expect("ML-DSA-87 sign is infallible for a <= 255-byte context");
         // `MLDSA87Signature::as_ref()` returns `&[u8; SIGNATURE_SIZE]`.
         *sig.as_ref()
     }
 }
 
-/// Derive the 32-byte ML-DSA-65 keygen seed from BIP39-style inputs.
+/// Derive the 32-byte ML-DSA-87 keygen seed from BIP39-style inputs.
 ///
 /// Inputs are mixed via a keyed BLAKE2b-256 with
 /// [`KASPA_PQ_WALLET_KEYGEN_DOMAIN`] as the key. The exact wire form is:
@@ -117,22 +121,28 @@ impl KaspaPqMlDsa87KeyPair {
 /// ```text
 ///   keyed_blake2b_256(
 ///       key   = KASPA_PQ_WALLET_KEYGEN_DOMAIN,
-///       input = network_id_bytes || account_le_u32 || change_le_u32 || index_le_u32 || master_seed,
+///       input = len(network_id)_le_u32 || network_id_bytes || account_le_u32 || change_le_u32
+///               || index_le_u32 || len(master_seed)_le_u32 || master_seed,
 ///   )
 /// ```
 ///
 /// `network_id` is the kaspa-pq [`NetworkId::to_string`] form
 /// (`"mainnet"`, `"testnet-10"`, etc.) so that the same BIP39 mnemonic on
-/// mainnet and testnet produces distinct addresses. The encoded length is
-/// included implicitly via the trailing master_seed (BLAKE2b-256 is
-/// collision-resistant, so the lack of an explicit length tag is fine
-/// here).
+/// mainnet and testnet produces distinct addresses. audit L (domain
+/// separation): the two variable-length fields (network_id, master_seed) are
+/// length-prefixed so the concatenation is unambiguous (no field can borrow a
+/// byte from its neighbour). NOTE: this changed the derivation, so addresses
+/// derived by an older build differ — re-derive wallets after this change.
 pub fn derive_keygen_seed(network_id: &str, account: u32, change: u32, index: u32, master_seed: &[u8]) -> [u8; 32] {
     let mut state = Params::new().hash_length(32).key(KASPA_PQ_WALLET_KEYGEN_DOMAIN).to_state();
+    // audit L: length-prefix the variable-length fields so the concatenation is unambiguous
+    // (e.g. network_id "main" can never alias "mainnet"). Fixed-width u32 fields need no prefix.
+    state.update(&(network_id.len() as u32).to_le_bytes());
     state.update(network_id.as_bytes());
     state.update(&account.to_le_bytes());
     state.update(&change.to_le_bytes());
     state.update(&index.to_le_bytes());
+    state.update(&(master_seed.len() as u32).to_le_bytes());
     state.update(master_seed);
     let mut out = [0u8; 32];
     out.copy_from_slice(state.finalize().as_bytes());

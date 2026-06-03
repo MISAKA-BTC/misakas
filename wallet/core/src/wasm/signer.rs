@@ -88,18 +88,20 @@ pub fn js_sign_transaction_mldsa87(tx: &Transaction, keypair: &KaspaPqKeyPair, r
     for i in 0..input_len {
         let sig_hash = calc_mldsa87_signature_hash(&populated_transaction, i, SIG_HASH_ALL, &reused_values);
 
-        // Derive per-input hedging randomness without an extra hashing dep: ML-DSA
-        // is not nonce-sensitive across distinct messages, but varying it is tidy.
+        // audit L: per-input hedging randomness = root XOR the input's full 32-byte sig_hash
+        // (a BLAKE2b digest committing to this input's outpoint/amounts), so all 32 bytes vary by
+        // a per-input cryptographic value rather than the old 8-byte-XOR-index. ML-DSA is not
+        // nonce-fragile across distinct messages (each input signs a distinct sig_hash, and
+        // deterministic ML-DSA is itself secure), so this is robustness, not a correctness fix.
         let mut input_randomness = [0u8; 32];
-        input_randomness.copy_from_slice(&randomness);
-        let ib = (i as u64).to_le_bytes();
-        for k in 0..8 {
-            input_randomness[k] ^= ib[k];
+        let sh = sig_hash.as_bytes();
+        for k in 0..32 {
+            input_randomness[k] = randomness[k] ^ sh[k];
         }
 
         let signature = keypair
             .sign(sig_hash.as_bytes().to_vec(), input_randomness.to_vec())
-            .map_err(|e| Error::Custom(format!("ML-DSA-65 sign failed: {e:?}")))?;
+            .map_err(|e| Error::Custom(format!("ML-DSA-87 sign failed: {e:?}")))?;
 
         // OpCheckSigMlDsa87 pops [sig, key] and strips the trailing sighash-type
         // byte off the signature, mirroring schnorr OP_CHECKSIG.
