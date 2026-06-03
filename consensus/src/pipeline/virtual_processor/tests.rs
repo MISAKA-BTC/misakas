@@ -523,6 +523,154 @@ async fn pos_v2_reward_bearing_attestation_validates() {
     );
 }
 
+/// kaspa-pq ADR-0018 §G (DAG-6): full-consensus equivocation-slashing e2e. A funded,
+/// ML-DSA-87-signed bond goes active; the validator then EQUIVOCATES — two signed
+/// attestations for the same `(bond, validator, epoch)` but DIFFERENT anchors — and a
+/// `SlashingEvidence` tx carries both. The block including it must validate
+/// (construction == validation), and as a consensus side-effect must REMOVE the locked
+/// stake UTXO (the bond's output-0 leaves the supply) and MINT the reporter reward
+/// (`slashing_reporter_reward_bps` = 10%) at `(slashing_tx, 0)`. This proves the slashing
+/// economics end-to-end through `mine_block`/validate-and-insert, not just at the
+/// `UtxoDiff` unit level (closes the audit's DAG-6 test gap).
+#[tokio::test]
+async fn pos_v2_slashing_evidence_removes_bond_and_pays_reporter() {
+    use kaspa_consensus_core::{
+        Hash64,
+        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
+    };
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 50;
+            dns.max_reorg_horizon_blocks = 2;
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // One validator/funding/reporter key suffices to exercise the slashing mechanism.
+    let seed = [0x42u8; 32];
+    let v = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+
+    // Fund: h_a pays K (funds the bond), h_b pays K (funds the evidence tx).
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    let _b1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_a = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_b = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let cb_a = &h_a.transactions[0];
+    let (ia, oa) = cb_a.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_a pays K");
+    let (coinbase_a, value_a, daa_a) = (TransactionOutpoint::new(cb_a.id(), ia as u32), oa.value, h_a.header.daa_score);
+    let cb_b = &h_b.transactions[0];
+    let (ib, ob) = cb_b.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_b pays K");
+    let (coinbase_b, value_b, daa_b) = (TransactionOutpoint::new(cb_b.id(), ib as u32), ob.value, h_b.header.daa_score);
+    for _ in 0..5 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+
+    // Fund + mine the bond — active from activation_daa_score = 0.
+    let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+    let bond_amount = value_a - 100_000;
+    let (bond_tx, _vid, _reward_payload) =
+        dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, bond_amount, 0, storage_mass_parameter);
+    let bond_tx_id = bond_tx.id();
+    let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+    assert_eq!(
+        ctx.consensus.block_status(bond_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "the bond block must be UTXO-valid"
+    );
+    let bond_outpoint = TransactionOutpoint::new(bond_tx_id, 0);
+    assert!(
+        ctx.consensus.get_virtual_utxos(None, 100_000, false).iter().any(|(o, _)| *o == bond_outpoint),
+        "the bond's locked-stake UTXO must exist before slashing"
+    );
+    // Bury the bond so its record is committed into the active bond view the slashing
+    // verifier reads (mirrors the burial the reward-bearing e2e does before attesting).
+    let mut buried = Vec::new();
+    for _ in 0..5 {
+        buried.push(ctx.mine_block(new_miner_data(), vec![]).await);
+    }
+
+    // Equivocation: two ML-DSA-87-signed attestations, same (bond, validator, epoch),
+    // DIFFERENT target_hash (approving two conflicting anchors) — the punishable act.
+    let net_id = ctx.consensus.params().genesis.hash;
+    let epoch = 1u64;
+    // A buried block's DAA: past the bond's (inclusion-set) activation so the bond is
+    // Active at the target, and well within `evidence_window_blocks` of the including block.
+    let target_daa = buried[1].header.daa_score;
+    let att_a = dns_harness::build_signed_attestation(
+        &v, net_id.as_byte_slice(), bond_outpoint, epoch, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+    );
+    let att_b = dns_harness::build_signed_attestation(
+        &v, net_id.as_byte_slice(), bond_outpoint, epoch, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+    );
+    // Sanity (localizes a signature/net_id mismatch vs a freshness/status rejection): both
+    // attestations must verify under the net_id (genesis hash) the consensus slashing
+    // verifier reconstructs the digest with.
+    for att in [&att_a, &att_b] {
+        let msg = kaspa_consensus_core::dns_finality::stake_attestation_message(
+            net_id.as_byte_slice(),
+            att.epoch,
+            att.target_hash,
+            att.target_daa_score,
+            att.validator_set_commitment,
+            att.bond_outpoint,
+        );
+        assert!(
+            kaspa_txscript::verify_mldsa87_with_context(
+                &v.pubkey,
+                &msg.as_bytes()[..],
+                &att.signature,
+                kaspa_consensus_core::dns_finality::ATTESTATION_MLDSA87_CONTEXT
+            )
+            .unwrap(),
+            "attestation must self-verify under the consensus net_id"
+        );
+    }
+    let evidence = SlashingEvidencePayload {
+        version: DNS_PAYLOAD_VERSION_V1,
+        bond_outpoint,
+        attestation_a: att_a,
+        attestation_b: att_b,
+        reporter_reward_spk_payload: k_payload,
+    };
+    let slash_tx =
+        dns_harness::funded_signed_slashing_evidence_tx(seed, coinbase_b, value_b, daa_b, evidence, storage_mass_parameter);
+    let slash_tx_id = slash_tx.id();
+
+    // The block including the slashing evidence must validate AND apply the side-effects.
+    let slash_block = ctx.mine_block(new_miner_data(), vec![slash_tx]).await;
+    assert_eq!(
+        ctx.consensus.block_status(slash_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "the slashing-evidence block must be UTXO-valid (construction == validation of the slashing side-effects)"
+    );
+
+    // Consensus side-effects: the locked stake is REMOVED and the reporter reward is minted.
+    let utxos: std::collections::HashMap<_, _> = ctx.consensus.get_virtual_utxos(None, 100_000, false).into_iter().collect();
+    assert!(!utxos.contains_key(&bond_outpoint), "the slashed bond's locked stake must be removed from the UTXO set");
+    let reporter_mint = TransactionOutpoint::new(slash_tx_id, 0);
+    let reporter_bps = ctx.consensus.params().dns_params.clone().unwrap().reward_params.slashing_reporter_reward_bps as u128;
+    let expected_reporter = (bond_amount as u128 * reporter_bps / 10_000) as u64;
+    let r = utxos.get(&reporter_mint).expect("the reporter reward must be minted at (slashing_tx, 0)");
+    assert_eq!(r.amount, expected_reporter, "reporter reward = bond_amount * reporter_bps / 10000");
+    assert_eq!(r.script_public_key, k_spk, "the reporter reward pays the declared reporter P2PKH");
+}
+
 /// kaspa-pq DNS v3 (PR2b): the processor's blue_score canonical-anchor walk
 /// (`canonical_anchor_by_blue_score`) feeds the pure core the *real* selected-chain
 /// `(hash, blue_score, daa_score)` ancestors, so the anchor it returns is a genuine
@@ -1386,14 +1534,14 @@ mod dns_harness {
     use kaspa_consensus_core::{
         Hash64,
         dns_finality::{
-            ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, StakeAttestation, StakeBondPayload,
+            ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload, StakeAttestation, StakeBondPayload,
             attestations_from_accepted_txs, p2pkh_mldsa87_spk, single_attestation_shard, stake_attestation_message,
             stake_attestation_shard_tx, validator_id_from_pubkey,
         },
         hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash},
         hashing::sighash_type::SIG_HASH_ALL,
         mass::MassCalculator,
-        subnets::{SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND},
+        subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND},
         tx::{PopulatedTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry},
     };
     use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
@@ -1550,6 +1698,60 @@ mod dns_harness {
             calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
         };
         let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x88u8; 32])
+            .expect("ML-DSA-87 sign on the 64-byte sighash");
+        let mut sig_item = sig.as_ref().to_vec();
+        sig_item.push(SIG_HASH_ALL.to_u8());
+        let sig_script = ScriptBuilder::new()
+            .add_data(&sig_item)
+            .expect("ML-DSA-87 signature push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .add_data(&pubkey)
+            .expect("ML-DSA-87 public-key push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .drain();
+        tx.inputs[0].signature_script = sig_script;
+        tx
+    }
+
+    /// kaspa-pq ADR-0018 §G (DAG-6): build a FUNDED, ML-DSA-87-signed slashing-evidence
+    /// tx. Spends the matured coinbase `coinbase_outpoint` (paid to this key's P2PKH) with
+    /// **no outputs** — the reporter reward is minted by consensus as a side-effect at
+    /// `(tx, 0)` (ADR-0013 Addendum C.2), so any declared output would collide with the
+    /// mint — carrying the `SlashingEvidencePayload` on `SUBNETWORK_ID_SLASHING_EVIDENCE`.
+    /// Input-0 is ML-DSA-87-signed over the v2 sighash and the storage mass is committed,
+    /// so the block validates through the full script engine (construction == validation).
+    pub(super) fn funded_signed_slashing_evidence_tx(
+        seed: [u8; 32],
+        coinbase_outpoint: TransactionOutpoint,
+        coinbase_value: u64,
+        coinbase_daa_score: u64,
+        evidence: SlashingEvidencePayload,
+        storage_mass_parameter: u64,
+    ) -> Transaction {
+        let kp = mldsa::generate_key_pair(seed);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let reward_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes();
+        let spk = p2pkh_mldsa87_spk(&reward_payload);
+        // Evidence tx: input-0 funds it (the entire value becomes fee), NO outputs.
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(coinbase_outpoint, vec![], 0, 1)],
+            vec![],
+            0,
+            SUBNETWORK_ID_SLASHING_EVIDENCE,
+            0,
+            borsh::to_vec(&evidence).unwrap(),
+        );
+        let utxo = UtxoEntry::new(coinbase_value, spk, coinbase_daa_score, true);
+        let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
+            .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![utxo.clone()]))
+            .expect("contextual mass is computable for the funded slashing-evidence tx")
+            .storage_mass;
+        tx.set_mass(storage_mass);
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        let sig_hash = {
+            let populated = PopulatedTransaction::new(&tx, vec![utxo]);
+            calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
+        };
+        let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x99u8; 32])
             .expect("ML-DSA-87 sign on the 64-byte sighash");
         let mut sig_item = sig.as_ref().to_vec();
         sig_item.push(SIG_HASH_ALL.to_u8());
