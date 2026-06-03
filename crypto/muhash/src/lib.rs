@@ -1,7 +1,7 @@
-//! kaspa-pq UTXO accumulator: LtHash16_1024.
+//! kaspa-pq UTXO accumulator: LtHash32_1024.
 //!
 //! This module replaces the upstream Kaspa 3072-bit multiplicative MuHash
-//! with a 16-bit-lane, 1024-lane additive LtHash (Meta LtHash16_1024). The
+//! with a 32-bit-lane, 1024-lane additive LtHash (Meta LtHash32_1024). The
 //! struct name `MuHash` is **kept** during the kaspa-pq PoC so that
 //! downstream call sites do not have to be retyped; the internal data and
 //! the on-the-wire serialization, however, are completely different.
@@ -11,15 +11,15 @@
 //!   - [`MuHash::add_element`] / [`MuHash::remove_element`]
 //!   - [`MuHash::add_element_builder`] / [`MuHash::remove_element_builder`]
 //!     plus the [`MuHashElementBuilder`] hasher-style API.
-//!   - [`MuHash::combine`] (component-wise addition mod 2^16).
-//!   - [`MuHash::serialize`] / [`MuHash::deserialize`] (2048 bytes, was 384).
+//!   - [`MuHash::combine`] (component-wise addition mod 2^32).
+//!   - [`MuHash::serialize`] / [`MuHash::deserialize`] (4096 bytes, was 384).
 //!   - [`MuHash::finalize`] — kaspa-pq (ADR-0004 / design §12): returns the
 //!     64-byte [`Hash64`] UTXO-set commitment (keyed BLAKE2b-512 under the
 //!     `b"UtxoCommitment64"` domain), so it matches every other 64-byte PQ
 //!     consensus identity. Only this final down-hash is 64-byte; the element
 //!     hash and the u3072/LtHash math are unchanged.
-//!   - [`EMPTY_MUHASH`] — finalize of a fresh accumulator (2048 zero bytes).
-//!   - [`SERIALIZED_MUHASH_SIZE`] — now `LTHASH_STATE_BYTES` = 2048.
+//!   - [`EMPTY_MUHASH`] — finalize of a fresh accumulator (4096 zero bytes).
+//!   - [`SERIALIZED_MUHASH_SIZE`] — now `LTHASH_STATE_BYTES` = 4096.
 //!   - [`OverflowError`] / [`MuHashError`] — kept for API compat but never
 //!     actually returned, because every byte string of the correct length
 //!     decodes to a valid LtHash state.
@@ -39,10 +39,10 @@ use serde::{
 use std::error::Error;
 use std::fmt::Display;
 
-/// Number of 16-bit lanes in the LtHash state.
+/// Number of 32-bit lanes in the LtHash state.
 pub const LTHASH_LANES: usize = 1024;
-/// Bytes per LtHash lane (16-bit lanes => 2 bytes).
-pub const LTHASH_LANE_BYTES: usize = 2;
+/// Bytes per LtHash lane (32-bit lanes => 4 bytes).
+pub const LTHASH_LANE_BYTES: usize = 4;
 /// Serialized LtHash state size in bytes (`LTHASH_LANES * LTHASH_LANE_BYTES`).
 pub const LTHASH_STATE_BYTES: usize = LTHASH_LANES * LTHASH_LANE_BYTES;
 
@@ -59,25 +59,25 @@ pub const SERIALIZED_MUHASH_SIZE: usize = LTHASH_STATE_BYTES;
 /// `MuHash::new().finalize()` — the 64-byte commitment of an empty UTXO set.
 ///
 /// kaspa-pq (ADR-0004 / design §12): concretely this is
-/// `UtxoCommitmentHash64::hash([0u8; 2048])` (keyed BLAKE2b-512 over the
+/// `UtxoCommitmentHash64::hash([0u8; 4096])` (keyed BLAKE2b-512 over the
 /// LtHash state). The value below is asserted at runtime by
 /// `test_empty_hash`; if the underlying hasher or state size ever changes,
 /// that test will fail and this constant must be re-derived from the test
 /// panic.
 pub const EMPTY_MUHASH: Hash64 = Hash64::from_bytes([
-    0x63, 0xaa, 0x5f, 0xf7, 0x4c, 0x41, 0x03, 0x5e, 0x98, 0x54, 0xfe, 0x59, 0x53, 0x2a, 0xc6, 0x8b, 0x2f, 0x5f, 0x3b, 0x97, 0xdd,
-    0x49, 0x12, 0x07, 0x3d, 0xdf, 0x4b, 0x76, 0x9b, 0x38, 0x9f, 0x14, 0x6f, 0x6b, 0x2e, 0xf6, 0xb7, 0x00, 0xc9, 0x2e, 0x9e, 0xe9,
-    0x7f, 0x02, 0x43, 0x17, 0x83, 0xac, 0xeb, 0xe8, 0xd0, 0x62, 0x67, 0x27, 0x63, 0x79, 0x94, 0x4d, 0xa9, 0x90, 0x26, 0x62, 0xc8,
-    0x82,
+    0x7c, 0xa0, 0x83, 0xb7, 0xbf, 0x5b, 0xe3, 0x81, 0x23, 0xa2, 0x45, 0x77, 0x46, 0x16, 0x07, 0x6e, 0x1c, 0x5f, 0x04, 0x43, 0xa1,
+    0xa7, 0xbe, 0x2a, 0xa8, 0xee, 0x7f, 0x6d, 0x7d, 0x10, 0x9e, 0x38, 0x6f, 0xe8, 0xb0, 0x97, 0xba, 0x7c, 0xa0, 0xb3, 0x9a, 0xd0,
+    0xb3, 0x7d, 0xc4, 0x4b, 0x19, 0xc9, 0x6d, 0x7a, 0x68, 0x6a, 0xe5, 0x69, 0x4a, 0xd9, 0xdd, 0xed, 0x95, 0xee, 0xe2, 0xa2, 0x76,
+    0xdc,
 ]);
 
-/// LtHash16_1024 UTXO accumulator.
+/// LtHash32_1024 UTXO accumulator.
 ///
-/// The state is `LTHASH_LANES` ( = 1024 ) lanes of 16 bits each. Add and
-/// remove are component-wise addition and subtraction modulo `2^16`.
+/// The state is `LTHASH_LANES` ( = 1024 ) lanes of 32 bits each. Add and
+/// remove are component-wise addition and subtraction modulo `2^32`.
 /// `combine` is component-wise addition.
 ///
-/// Note: 16-bit lanes wrap after 2^16 identical additions. The kaspa-pq
+/// Note: 32-bit lanes wrap after 2^32 identical additions. The kaspa-pq
 /// design defends against this by **always** including the spending
 /// outpoint `(txid, index)` in the element bytes (see
 /// `consensus/core/src/muhash.rs::write_utxo`), which makes every UTXO
@@ -86,18 +86,18 @@ pub const EMPTY_MUHASH: Hash64 = Hash64::from_bytes([
 // supports primitive arrays of any length. The serde `Serialize` /
 // `Deserialize` impls are written by hand (further down this file) because
 // serde does not provide derives for `[T; N]` with `N > 32`. The serde
-// encoding is the same 2048-byte little-endian state that
+// encoding is the same 4096-byte little-endian state that
 // `MuHash::serialize` produces.
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub struct MuHash {
-    /// `[u16; LTHASH_LANES]` stored as a fixed-size array so that
+    /// `[u32; LTHASH_LANES]` stored as a fixed-size array so that
     /// `BorshSerialize` / `BorshDeserialize` are trivially correct
     /// (Borsh handles primitive arrays natively).
-    lanes: [u16; LTHASH_LANES],
+    lanes: [u32; LTHASH_LANES],
 }
 
 /// Kept for API compatibility with the upstream multiplicative MuHash.
-/// LtHash16_1024 cannot overflow: every 2048-byte sequence is a valid
+/// LtHash32_1024 cannot overflow: every 4096-byte sequence is a valid
 /// state, so this error is no longer constructed.
 #[derive(Debug, PartialEq, Eq)]
 pub struct OverflowError;
@@ -115,7 +115,7 @@ impl MuHash {
     /// `MuHash` equals [`EMPTY_MUHASH`].
     #[inline]
     pub fn new() -> Self {
-        Self { lanes: [0u16; LTHASH_LANES] }
+        Self { lanes: [0u32; LTHASH_LANES] }
     }
 
     /// Hash `data` and add it to the accumulator. Supports arbitrary-length
@@ -163,9 +163,9 @@ impl MuHash {
 
     /// kaspa-pq (ADR-0004 / design §12): 64-byte finalize — keyed
     /// `BLAKE2b-512` (`UtxoCommitmentHash64`, domain `"UtxoCommitment64"`)
-    /// over the 2048-byte serialized LtHash state. This is the UTXO-set
+    /// over the 4096-byte serialized LtHash state. This is the UTXO-set
     /// commitment stored in the block header's `utxo_commitment` field; it
-    /// is 64-byte so it carries the full security margin of LtHash16_1024
+    /// is 64-byte so it carries the full security margin of LtHash32_1024
     /// and matches every other PQ consensus identity. The element hash and
     /// the LtHash group math are unchanged — only this final down-hash is
     /// 64-byte. The `&mut self` receiver is retained for source
@@ -177,8 +177,8 @@ impl MuHash {
         UtxoCommitmentHash64::hash(bytes)
     }
 
-    /// Serialize the LtHash state as little-endian 16-bit lanes. The byte
-    /// length is `SERIALIZED_MUHASH_SIZE` = 2048.
+    /// Serialize the LtHash state as little-endian 32-bit lanes. The byte
+    /// length is `SERIALIZED_MUHASH_SIZE` = 4096.
     #[inline]
     pub fn serialize(&mut self) -> [u8; SERIALIZED_MUHASH_SIZE] {
         let mut out = [0u8; SERIALIZED_MUHASH_SIZE];
@@ -189,16 +189,16 @@ impl MuHash {
         out
     }
 
-    /// Deserialize a 2048-byte LtHash state. Always succeeds — every byte
+    /// Deserialize a 4096-byte LtHash state. Always succeeds — every byte
     /// sequence of the correct length is a valid state. The `Result`
     /// signature is preserved for source compatibility with upstream
     /// Kaspa's `MuHash::deserialize`.
     #[inline]
     pub fn deserialize(data: [u8; SERIALIZED_MUHASH_SIZE]) -> Result<Self, OverflowError> {
-        let mut lanes = [0u16; LTHASH_LANES];
+        let mut lanes = [0u32; LTHASH_LANES];
         for (i, lane) in lanes.iter_mut().enumerate() {
             let off = i * LTHASH_LANE_BYTES;
-            *lane = u16::from_le_bytes([data[off], data[off + 1]]);
+            *lane = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
         }
         Ok(Self { lanes })
     }
@@ -209,7 +209,7 @@ pub enum MuHashError {
     /// Retained for API compatibility with upstream Kaspa, where a `MuHash`
     /// could not be unwrapped to a `Uint3072` (the multiplicative-MuHash
     /// field element) while the denominator was still non-trivial.
-    /// LtHash16_1024 has no denominator, so this variant is never
+    /// LtHash32_1024 has no denominator, so this variant is never
     /// produced by kaspa-pq code, but downstream `match` arms that
     /// handle it remain valid.
     NonNormalizedValue,
@@ -229,14 +229,14 @@ pub enum MuHashError {
 /// already-domain-separated `MuHashElementHash` so add/remove are bound
 /// to the kaspa-pq UTXO context.
 #[inline]
-fn element_lanes(hash: Hash) -> [u16; LTHASH_LANES] {
+fn element_lanes(hash: Hash) -> [u32; LTHASH_LANES] {
     let mut bytes = [0u8; LTHASH_STATE_BYTES];
     let mut stream = ChaCha20Rng::from_seed(hash.as_bytes());
     stream.fill_bytes(&mut bytes);
-    let mut lanes = [0u16; LTHASH_LANES];
+    let mut lanes = [0u32; LTHASH_LANES];
     for (i, lane) in lanes.iter_mut().enumerate() {
         let off = i * LTHASH_LANE_BYTES;
-        *lane = u16::from_le_bytes([bytes[off], bytes[off + 1]]);
+        *lane = u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
     }
     lanes
 }
@@ -251,7 +251,7 @@ enum BuilderSign {
 /// accumulator. The `finalize(self)` step applies the resulting element
 /// to the borrowed `lanes` array using the configured sign.
 pub struct MuHashElementBuilder<'a> {
-    lanes_field: &'a mut [u16; LTHASH_LANES],
+    lanes_field: &'a mut [u32; LTHASH_LANES],
     sign: BuilderSign,
     element_hasher: MuHashElementHash,
 }
@@ -264,7 +264,7 @@ impl HasherBase for MuHashElementBuilder<'_> {
 }
 
 impl<'a> MuHashElementBuilder<'a> {
-    fn new(lanes_field: &'a mut [u16; LTHASH_LANES], sign: BuilderSign) -> Self {
+    fn new(lanes_field: &'a mut [u32; LTHASH_LANES], sign: BuilderSign) -> Self {
         Self { lanes_field, sign, element_hasher: MuHashElementHash::new() }
     }
 
@@ -299,7 +299,7 @@ impl kaspa_utils::mem_size::MemSizeEstimator for MuHash {
 }
 
 // Manual serde impls: see the comment above the `MuHash` struct. The wire
-// format is the same 2048-byte little-endian state that
+// format is the same 4096-byte little-endian state that
 // `MuHash::serialize` produces, so swapping the on-disk store between
 // borsh and serde-based encoders yields the same bytes.
 impl Serialize for MuHash {
@@ -320,7 +320,7 @@ impl<'de> Deserialize<'de> for MuHash {
             type Value = MuHash;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "a {} -byte LtHash16_1024 state", SERIALIZED_MUHASH_SIZE)
+                write!(f, "a {} -byte LtHash32_1024 state", SERIALIZED_MUHASH_SIZE)
             }
 
             fn visit_bytes<E: de::Error>(self, bytes: &[u8]) -> Result<MuHash, E> {
@@ -373,7 +373,7 @@ mod tests {
     fn test_constants_match_spec() {
         // Locked by docs/kaspa-pq-spec.md §2.
         assert_eq!(LTHASH_LANES, 1024);
-        assert_eq!(LTHASH_STATE_BYTES, 2048);
+        assert_eq!(LTHASH_STATE_BYTES, 4096);
         assert_eq!(SERIALIZED_MUHASH_SIZE, LTHASH_STATE_BYTES);
     }
 
@@ -455,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_size_is_2048() {
+    fn test_serialize_size_is_4096() {
         let mut acc = MuHash::new();
         acc.add_element(b"some data");
         let ser = acc.serialize();
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_never_overflows() {
-        // Every 2048-byte sequence is a valid LtHash state — this is the
+        // Every 4096-byte sequence is a valid LtHash state — this is the
         // explicit replacement for the old upstream `OverflowError`
         // behaviour. The function returns `Result` only for source
         // compatibility.
