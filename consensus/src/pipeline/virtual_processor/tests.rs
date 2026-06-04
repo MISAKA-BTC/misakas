@@ -697,6 +697,166 @@ async fn pos_v2_slashing_evidence_removes_bond_and_pays_reporter() {
     );
 }
 
+/// kaspa-pq ADR-0018 "本格版" (PoS-v2) — victim compensation (audit M-01). TWO validators: A
+/// (equivocator) and B (honest). B attests the canonical anchor for a ready epoch E and is rewarded
+/// (so it joins epoch E's accumulator `included` set); A then EQUIVOCATES the SAME epoch E (two
+/// conflicting attestations) and is slashed. The slashing routes the victim-epoch share of A's
+/// slashed stake to epoch E's honest peers = {B} (A is dropped by its `owner_reward_spk_payload`),
+/// minting a victim-compensation output to B's reward P2PKH at `(slash_tx, 2)`. Proves the
+/// multi-validator victim-compensation economics end-to-end through `mine_block`.
+#[tokio::test]
+async fn pos_v2_slashing_victim_compensates_honest_peer() {
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::{
+        Hash64,
+        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload, compute_slashing_distribution, ready_epoch_from_tip_blue_score},
+    };
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 50;
+            dns.max_reorg_horizon_blocks = 2;
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            // Ensure a non-zero victim pool (the 4-way split): reporter 10% / reserve 40% /
+            // victim 40% / burn 10%.
+            dns.reward_params.slashing_reporter_reward_bps = 1000;
+            dns.reward_params.security_reserve_bps = 4000;
+            dns.reward_params.victim_epoch_pool_bps = 4000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let (va, vb) = (dns_harness::harness_validator([0x42u8; 32]), dns_harness::harness_validator([0x43u8; 32]));
+    let payload_a: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&va.pubkey).as_bytes();
+    let payload_b: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&vb.pubkey).as_bytes();
+    let (spk_a, spk_b) = (p2pkh_mldsa87_spk(&payload_a), p2pkh_mldsa87_spk(&payload_b));
+
+    // Fund: A needs two coinbases (bond + slashing-evidence tx), B two (bond + attestation shard).
+    // A block's coinbase pays its MERGESET (the previous block's miner), not its own, so mine a
+    // batch per miner and SCAN all coinbases for ones paying each validator.
+    let (miner_a, miner_b) = (MinerData::new(spk_a.clone(), vec![]), MinerData::new(spk_b.clone(), vec![]));
+    let mut blocks = Vec::new();
+    for _ in 0..4 {
+        blocks.push(ctx.mine_block(miner_a.clone(), vec![]).await);
+    }
+    for _ in 0..4 {
+        blocks.push(ctx.mine_block(miner_b.clone(), vec![]).await);
+    }
+    for _ in 0..5 {
+        blocks.push(ctx.mine_block(new_miner_data(), vec![]).await); // mature the coinbases
+    }
+    let (mut a_funds, mut b_funds) = (Vec::new(), Vec::new());
+    for blk in &blocks {
+        let cb = &blk.transactions[0];
+        for (i, o) in cb.outputs.iter().enumerate() {
+            let f = (TransactionOutpoint::new(cb.id(), i as u32), o.value, blk.header.daa_score);
+            if o.script_public_key == spk_a {
+                a_funds.push(f);
+            } else if o.script_public_key == spk_b {
+                b_funds.push(f);
+            }
+        }
+    }
+    assert!(a_funds.len() >= 2 && b_funds.len() >= 2, "need ≥2 funding coinbases each (a={}, b={})", a_funds.len(), b_funds.len());
+    let ((cb_a1, va1, da1), (cb_a2, va2, da2)) = (a_funds[0], a_funds[1]);
+    let ((cb_b1, vb1, db1), (cb_b2, vb2, db2)) = (b_funds[0], b_funds[1]);
+
+    // Bond A and B (active from activation_daa_score = 0).
+    let storage = ctx.consensus.params().storage_mass_parameter;
+    let bond_a_amount = va1 - 100_000;
+    let (bond_a_tx, _, _) = dns_harness::funded_signed_bond_tx([0x42u8; 32], cb_a1, va1, da1, bond_a_amount, 0, storage);
+    let (bond_b_tx, _, _) = dns_harness::funded_signed_bond_tx([0x43u8; 32], cb_b1, vb1, db1, vb1 - 100_000, 0, storage);
+    let (bond_a_id, bond_b_id) = (bond_a_tx.id(), bond_b_tx.id());
+    ctx.mine_block(new_miner_data(), vec![bond_a_tx]).await;
+    ctx.mine_block(new_miner_data(), vec![bond_b_tx]).await;
+    let (bond_a_outpoint, bond_b_outpoint) = (TransactionOutpoint::new(bond_a_id, 0), TransactionOutpoint::new(bond_b_id, 0));
+
+    // Bury so a ready, bond-active canonical anchor exists for a real epoch E.
+    for _ in 0..8 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    let genesis_hash = ctx.consensus.params().genesis.hash;
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let sink = ctx.consensus.get_sink();
+    let anchor = {
+        let vp = ctx.consensus.virtual_processor();
+        let sink_blue = vp.headers_store.get_blue_score(sink).unwrap();
+        let lr = ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+            .expect("an epoch is ready");
+        vp.canonical_anchor_by_blue_score(lr, sink, &dns).expect("canonical anchor for the ready epoch")
+    };
+    let epoch_e = anchor.epoch;
+
+    // B HONESTLY attests the canonical anchor for epoch E → B is rewarded ⇒ joins epoch E's
+    // accumulator `included` set (keyed by the attestation epoch).
+    let att_b = dns_harness::build_signed_attestation(
+        &vb, genesis_hash.as_byte_slice(), bond_b_outpoint, epoch_e, anchor.anchor_hash, anchor.anchor_daa_score, Hash64::default(),
+    );
+    let shard_b = dns_harness::funded_signed_shard_tx([0x43u8; 32], cb_b2, vb2, db2, att_b, storage);
+    let reward_block = ctx.mine_block(new_miner_data(), vec![shard_b]).await;
+    assert!(
+        reward_block.transactions[0].outputs.iter().any(|o| o.script_public_key == spk_b),
+        "B must be rewarded for attesting epoch E (so it joins the epoch's included set)"
+    );
+
+    // Bury so A's bond is committed into the active bond view the slashing verifier reads.
+    let mut buried = Vec::new();
+    for _ in 0..5 {
+        buried.push(ctx.mine_block(new_miner_data(), vec![]).await);
+    }
+
+    // A EQUIVOCATES the SAME epoch E: two conflicting attestations (different anchors).
+    let target_daa = buried[1].header.daa_score;
+    let att_a1 = dns_harness::build_signed_attestation(
+        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, epoch_e, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+    );
+    let att_a2 = dns_harness::build_signed_attestation(
+        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, epoch_e, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+    );
+    let evidence = SlashingEvidencePayload {
+        version: DNS_PAYLOAD_VERSION_V1,
+        bond_outpoint: bond_a_outpoint,
+        attestation_a: att_a1,
+        attestation_b: att_a2,
+        reporter_reward_spk_payload: payload_a, // reporter paid to A's address (payout is independent of who is slashed)
+    };
+    let slash_tx = dns_harness::funded_signed_slashing_evidence_tx([0x42u8; 32], cb_a2, va2, da2, evidence, storage);
+    let slash_tx_id = slash_tx.id();
+    let slash_block = ctx.mine_block(new_miner_data(), vec![slash_tx]).await;
+    assert_eq!(
+        ctx.consensus.block_status(slash_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "the slashing block must validate AND mint the victim-compensation outputs (construction == validation)"
+    );
+
+    let utxos: std::collections::HashMap<_, _> = ctx.consensus.get_virtual_utxos(None, 100_000, false).into_iter().collect();
+    assert!(!utxos.contains_key(&bond_a_outpoint), "A's slashed locked stake is removed");
+    let dist = compute_slashing_distribution(
+        bond_a_amount,
+        dns.reward_params.slashing_reporter_reward_bps,
+        dns.reward_params.security_reserve_bps,
+        dns.reward_params.victim_epoch_pool_bps,
+    );
+    let reporter = utxos.get(&TransactionOutpoint::new(slash_tx_id, 0)).expect("reporter reward minted at (slash_tx, 0)");
+    assert_eq!(reporter.amount, dist.reporter_reward_sompi, "reporter = reporter_bps share");
+    // VICTIM COMPENSATION: the single honest peer B receives the whole victim pool at (slash_tx, 2).
+    let victim = utxos.get(&TransactionOutpoint::new(slash_tx_id, 2)).expect("victim-compensation output minted at (slash_tx, 2)");
+    assert_eq!(victim.script_public_key, spk_b, "victim compensation pays the honest peer B");
+    assert_eq!(victim.amount, dist.victim_epoch_pool_sompi, "the lone honest peer receives the entire victim pool");
+}
+
 /// kaspa-pq H-06 (unbond lifecycle): full-consensus unbond-REQUEST e2e + the client-side
 /// funded builder (`funded_signed_unbond_tx`). A funded, ML-DSA-87-signed bond goes
 /// Active; the owner then submits a funded, signed `StakeUnbondRequest` — the shape an
