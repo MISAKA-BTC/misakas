@@ -857,6 +857,187 @@ async fn pos_v2_slashing_victim_compensates_honest_peer() {
     assert_eq!(victim.amount, dist.victim_epoch_pool_sompi, "the lone honest peer receives the entire victim pool");
 }
 
+/// kaspa-pq ADR-0018 "本格版" (PoS-v2) — multiple slashings in ONE block (audit M-01). TWO
+/// independently-bonded validators A and B BOTH equivocate and are slashed by SEPARATE evidence
+/// transactions carried in the SAME block. Proves the slashing pipeline applies N>1 side-effects
+/// atomically and independently: both locked stakes are removed, each reporter reward is minted at
+/// its own `(slash_tx, 0)`, each bond's 4-way split conserves value, and — the multi-slash-specific
+/// invariant — the block's committed security-reserve accrual is the SUM of both bonds' reserve
+/// shares (`apply_slashing_side_effects`'s fold over the resolved effects, persisted by the
+/// `parent_balance + reserve_accrual − drip` recurrence). With no honest epoch peer, no
+/// victim-compensation output is minted for either.
+#[tokio::test]
+async fn pos_v2_multi_slashing_in_one_block() {
+    use kaspa_consensus_core::{
+        Hash64,
+        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload, compute_slashing_distribution},
+    };
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 50;
+            dns.max_reorg_horizon_blocks = 2;
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            // 4-way split with non-zero reserve + victim shares (so the summed reserve accrual is observable).
+            dns.reward_params.slashing_reporter_reward_bps = 1000;
+            dns.reward_params.security_reserve_bps = 4000;
+            dns.reward_params.victim_epoch_pool_bps = 4000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let (va, vb) = (dns_harness::harness_validator([0x42u8; 32]), dns_harness::harness_validator([0x43u8; 32]));
+    let payload_a: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&va.pubkey).as_bytes();
+    let payload_b: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&vb.pubkey).as_bytes();
+    let (spk_a, spk_b) = (p2pkh_mldsa87_spk(&payload_a), p2pkh_mldsa87_spk(&payload_b));
+
+    // Fund: each validator needs two coinbases (bond + slashing-evidence tx). A block's coinbase pays
+    // its MERGESET (the previous block's) miner, so mine a batch per miner and SCAN all coinbases.
+    let (miner_a, miner_b) = (MinerData::new(spk_a.clone(), vec![]), MinerData::new(spk_b.clone(), vec![]));
+    let mut blocks = Vec::new();
+    for _ in 0..4 {
+        blocks.push(ctx.mine_block(miner_a.clone(), vec![]).await);
+    }
+    for _ in 0..4 {
+        blocks.push(ctx.mine_block(miner_b.clone(), vec![]).await);
+    }
+    for _ in 0..5 {
+        blocks.push(ctx.mine_block(new_miner_data(), vec![]).await); // mature the coinbases
+    }
+    let (mut a_funds, mut b_funds) = (Vec::new(), Vec::new());
+    for blk in &blocks {
+        let cb = &blk.transactions[0];
+        for (i, o) in cb.outputs.iter().enumerate() {
+            let f = (TransactionOutpoint::new(cb.id(), i as u32), o.value, blk.header.daa_score);
+            if o.script_public_key == spk_a {
+                a_funds.push(f);
+            } else if o.script_public_key == spk_b {
+                b_funds.push(f);
+            }
+        }
+    }
+    assert!(a_funds.len() >= 2 && b_funds.len() >= 2, "need ≥2 funding coinbases each (a={}, b={})", a_funds.len(), b_funds.len());
+    let ((cb_a1, va1, da1), (cb_a2, va2, da2)) = (a_funds[0], a_funds[1]);
+    let ((cb_b1, vb1, db1), (cb_b2, vb2, db2)) = (b_funds[0], b_funds[1]);
+
+    // Bond A and B (active from activation_daa_score = 0).
+    let storage = ctx.consensus.params().storage_mass_parameter;
+    let (bond_a_amount, bond_b_amount) = (va1 - 100_000, vb1 - 100_000);
+    let (bond_a_tx, _, _) = dns_harness::funded_signed_bond_tx([0x42u8; 32], cb_a1, va1, da1, bond_a_amount, 0, storage);
+    let (bond_b_tx, _, _) = dns_harness::funded_signed_bond_tx([0x43u8; 32], cb_b1, vb1, db1, bond_b_amount, 0, storage);
+    let (bond_a_id, bond_b_id) = (bond_a_tx.id(), bond_b_tx.id());
+    ctx.mine_block(new_miner_data(), vec![bond_a_tx]).await;
+    ctx.mine_block(new_miner_data(), vec![bond_b_tx]).await;
+    let (bond_a_outpoint, bond_b_outpoint) = (TransactionOutpoint::new(bond_a_id, 0), TransactionOutpoint::new(bond_b_id, 0));
+
+    // Bury so BOTH bonds are committed into the active bond view the slashing verifier reads.
+    let mut buried = Vec::new();
+    for _ in 0..6 {
+        buried.push(ctx.mine_block(new_miner_data(), vec![]).await);
+    }
+
+    // Both A and B equivocate: each emits two conflicting attestations for the same epoch (different
+    // anchors). With no honest peer the epoch only has to be shared by each validator's own pair.
+    let genesis_hash = ctx.consensus.params().genesis.hash;
+    let epoch = 1u64;
+    let target_daa = buried[1].header.daa_score; // past each bond's activation, within evidence_window of the slash block
+    let att_a1 = dns_harness::build_signed_attestation(
+        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, epoch, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+    );
+    let att_a2 = dns_harness::build_signed_attestation(
+        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, epoch, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+    );
+    let att_b1 = dns_harness::build_signed_attestation(
+        &vb, genesis_hash.as_byte_slice(), bond_b_outpoint, epoch, Hash64::from_bytes([0xc3u8; 64]), target_daa, Hash64::default(),
+    );
+    let att_b2 = dns_harness::build_signed_attestation(
+        &vb, genesis_hash.as_byte_slice(), bond_b_outpoint, epoch, Hash64::from_bytes([0xd4u8; 64]), target_daa, Hash64::default(),
+    );
+    let ev_a = SlashingEvidencePayload {
+        version: DNS_PAYLOAD_VERSION_V1,
+        bond_outpoint: bond_a_outpoint,
+        attestation_a: att_a1,
+        attestation_b: att_a2,
+        reporter_reward_spk_payload: payload_a,
+    };
+    let ev_b = SlashingEvidencePayload {
+        version: DNS_PAYLOAD_VERSION_V1,
+        bond_outpoint: bond_b_outpoint,
+        attestation_a: att_b1,
+        attestation_b: att_b2,
+        reporter_reward_spk_payload: payload_b,
+    };
+    let slash_a = dns_harness::funded_signed_slashing_evidence_tx([0x42u8; 32], cb_a2, va2, da2, ev_a, storage);
+    let slash_b = dns_harness::funded_signed_slashing_evidence_tx([0x43u8; 32], cb_b2, vb2, db2, ev_b, storage);
+    let (slash_a_id, slash_b_id) = (slash_a.id(), slash_b.id());
+
+    // BOTH slashing-evidence txs in ONE block.
+    let slash_block = ctx.mine_block(new_miner_data(), vec![slash_a, slash_b]).await;
+    assert_eq!(
+        ctx.consensus.block_status(slash_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "the block carrying TWO slashing-evidence txs must validate (both side-effects apply atomically)"
+    );
+    // A block's own transactions (and thus their slashing side-effects + the reserve accrual they
+    // commit) are applied to the persisted UTXO state only once the block becomes a SELECTED PARENT.
+    // Mine one empty block on top so `slash_block`'s effects settle into a committed chain block
+    // (`settle`), whose `reserve_balance_store` row we read below.
+    let settle = ctx.mine_block(new_miner_data(), vec![]).await;
+
+    let utxos: std::collections::HashMap<_, _> = ctx.consensus.get_virtual_utxos(None, 100_000, false).into_iter().collect();
+    // Both locked stakes removed.
+    assert!(!utxos.contains_key(&bond_a_outpoint), "A's slashed locked stake is removed");
+    assert!(!utxos.contains_key(&bond_b_outpoint), "B's slashed locked stake is removed");
+
+    let rp = ctx.consensus.params().dns_params.clone().unwrap().reward_params;
+    let dist_a = compute_slashing_distribution(bond_a_amount, rp.slashing_reporter_reward_bps, rp.security_reserve_bps, rp.victim_epoch_pool_bps);
+    let dist_b = compute_slashing_distribution(bond_b_amount, rp.slashing_reporter_reward_bps, rp.security_reserve_bps, rp.victim_epoch_pool_bps);
+    // Each reporter reward minted independently at its own (slash_tx, 0).
+    let ra = utxos.get(&TransactionOutpoint::new(slash_a_id, 0)).expect("A's reporter reward minted at (slash_a, 0)");
+    let rb = utxos.get(&TransactionOutpoint::new(slash_b_id, 0)).expect("B's reporter reward minted at (slash_b, 0)");
+    assert_eq!((ra.amount, &ra.script_public_key), (dist_a.reporter_reward_sompi, &spk_a), "A's reporter share pays A");
+    assert_eq!((rb.amount, &rb.script_public_key), (dist_b.reporter_reward_sompi, &spk_b), "B's reporter share pays B");
+    // No honest epoch peer ⇒ no victim-compensation output for either bond.
+    assert!(!utxos.contains_key(&TransactionOutpoint::new(slash_a_id, 2)), "no victim output without an honest peer (A)");
+    assert!(!utxos.contains_key(&TransactionOutpoint::new(slash_b_id, 2)), "no victim output without an honest peer (B)");
+
+    // Per-bond value conservation: each 4-way split sums back to the slashed amount.
+    assert_eq!(
+        dist_a.reporter_reward_sompi + dist_a.security_reserve_sompi + dist_a.victim_epoch_pool_sompi + dist_a.burned_sompi,
+        bond_a_amount,
+        "A's slash split conserves value"
+    );
+    assert_eq!(
+        dist_b.reporter_reward_sompi + dist_b.security_reserve_sompi + dist_b.victim_epoch_pool_sompi + dist_b.burned_sompi,
+        bond_b_amount,
+        "B's slash split conserves value"
+    );
+
+    // MULTI-SLASH INVARIANT: the committed security-reserve accrual is the SUM of both bonds' reserve
+    // shares (the fold in `apply_slashing_side_effects`). It commits under `settle` (the block whose
+    // selected parent is `slash_block`, so its mergeset carries the two slash txs). `settle`'s parent
+    // (`slash_block`) accrued no reserve (balance 0 ⇒ no drip), so the recurrence reduces to
+    // `0 + (reserve_a + reserve_b) − 0`.
+    let committed_reserve = ctx.consensus.virtual_processor().reserve_balance_store.get(settle.header.hash).unwrap_or(0);
+    assert_eq!(
+        committed_reserve,
+        dist_a.security_reserve_sompi + dist_b.security_reserve_sompi,
+        "the block's reserve accrual is the SUM of both slashed bonds' reserve shares"
+    );
+}
+
 /// kaspa-pq H-06 (unbond lifecycle): full-consensus unbond-REQUEST e2e + the client-side
 /// funded builder (`funded_signed_unbond_tx`). A funded, ML-DSA-87-signed bond goes
 /// Active; the owner then submits a funded, signed `StakeUnbondRequest` — the shape an
