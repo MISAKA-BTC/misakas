@@ -278,9 +278,10 @@ impl Factory {
     ) -> Self {
         assert!(fd_budget > 0, "fd_budget has to be positive");
         let mut config = config.clone();
-        // kaspa-pq: bake the genesis premine (15B KAS -> 2-of-3 ML-DSA-87 multisig
-        // P2SH) into the genesis utxo_commitment + hash for every network, so all
-        // nodes agree on the premine-aware genesis identity.
+        // kaspa-pq (audit L-01): bake the genesis premine (15B KAS single-key ML-DSA-87
+        // P2PKH, network-specific owner payload — see config::premine) into the genesis
+        // utxo_commitment + hash for every network, so all nodes agree on the
+        // premine-aware genesis identity. (Multisig/P2SH is consensus-disabled in PQ-only.)
         set_genesis_utxo_commitment_from_config(&mut config);
         config.process_genesis = false;
         let management_store = Arc::new(RwLock::new(MultiConsensusManagementStore::new(management_db)));

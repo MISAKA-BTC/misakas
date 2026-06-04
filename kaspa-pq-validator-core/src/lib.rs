@@ -333,6 +333,7 @@ impl ValidatorKey {
     ///     under [`MLDSA87_TX_CONTEXT`] exactly as [`Self::build_funded_shard_tx`].
     pub fn build_funded_unbond_tx(
         &self,
+        network_id: &[u8],
         bond_outpoint: TransactionOutpoint,
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
@@ -341,10 +342,11 @@ impl ValidatorKey {
         if funding.amount <= fee {
             return Err(format!("funding UTXO amount {} does not cover fee {}", funding.amount, fee));
         }
-        // Owner authorization: ML-DSA-87 signature over the bond-bound unbond message under the
-        // unbond context (domain-separated from the tx-spend context). Standalone — no trailing
+        // Owner authorization: ML-DSA-87 signature over the network- and bond-bound unbond message
+        // (audit M-04: `network_id` = the node's genesis hash, prevents cross-network replay) under
+        // the unbond context (domain-separated from the tx-spend context). Standalone — no trailing
         // sighash-type byte — since it is the payload's own authorization, not a script signature.
-        let auth_bytes = unbond_request_message(bond_outpoint).as_bytes();
+        let auth_bytes = unbond_request_message(network_id, bond_outpoint).as_bytes();
         let auth_sig = self.sign_with_context(&auth_bytes[..], UNBOND_REQUEST_CONTEXT).to_vec();
         let payload = borsh::to_vec(&StakeUnbondRequestPayload {
             version: DNS_PAYLOAD_VERSION_V1,
@@ -437,8 +439,9 @@ impl ValidatorKey {
         let funding_spk = pay_to_address_script(&self.funding_address(prefix));
         let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
         let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
-        // Dummy bond_outpoint — the payload's field sizes drive the mass, not the values.
-        match self.build_funded_unbond_tx(TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0), outpoint, &funding, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
+        // Dummy bond_outpoint + net_id — the payload's field sizes drive the mass (the ML-DSA-87
+        // signature is fixed-length regardless of the message), not the values.
+        match self.build_funded_unbond_tx(&[0u8; 32], TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0), outpoint, &funding, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
             Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
             Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
         }
@@ -698,8 +701,9 @@ mod tests {
         let funding_spk = ScriptPublicKey::default();
         let funding = UtxoEntry::new(1_000, funding_spk.clone(), 1, false);
         let funding_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x44u8; 64]), 2);
+        let net_id: &[u8] = &[0x55u8; 32]; // audit M-04: the network the unbond authorizes on
 
-        let tx = key.build_funded_unbond_tx(bond_outpoint, funding_outpoint, &funding, 250).unwrap();
+        let tx = key.build_funded_unbond_tx(net_id, bond_outpoint, funding_outpoint, &funding, 250).unwrap();
         assert_eq!(tx.inputs.len(), 1);
         assert_eq!(tx.inputs[0].previous_outpoint, funding_outpoint);
         assert!(!tx.inputs[0].signature_script.is_empty()); // funding spend signed
@@ -716,21 +720,29 @@ mod tests {
         assert_eq!(req.bond_outpoint, bond_outpoint);
         assert_eq!(validator_id_from_pubkey(&req.owner_pubkey), key.validator_id);
 
-        // The owner authorization signature verifies over the bond-bound message under the
-        // unbond context — and is bound to THIS bond (it must not verify for another outpoint).
-        let auth_bytes = unbond_request_message(bond_outpoint).as_bytes();
+        // The owner authorization signature verifies over the network- and bond-bound message under
+        // the unbond context — and is bound to THIS (network, bond) pair.
+        let auth_bytes = unbond_request_message(net_id, bond_outpoint).as_bytes();
         assert!(matches!(
             verify_mldsa87_with_context(&req.owner_pubkey, &auth_bytes[..], &req.signature, UNBOND_REQUEST_CONTEXT),
             Ok(true)
         ));
-        let other_bytes = unbond_request_message(TransactionOutpoint::new(Hash64::from_bytes([0x08u8; 64]), 0)).as_bytes();
+        // Bond-binding: a DIFFERENT bond (same network) must not verify.
+        let other_bond = unbond_request_message(net_id, TransactionOutpoint::new(Hash64::from_bytes([0x08u8; 64]), 0)).as_bytes();
         assert!(!matches!(
-            verify_mldsa87_with_context(&req.owner_pubkey, &other_bytes[..], &req.signature, UNBOND_REQUEST_CONTEXT),
+            verify_mldsa87_with_context(&req.owner_pubkey, &other_bond[..], &req.signature, UNBOND_REQUEST_CONTEXT),
+            Ok(true)
+        ));
+        // audit M-04 — network-binding: the SAME bond on a DIFFERENT network must not verify
+        // (cross-network replay of the unbond authorization is prevented).
+        let other_net = unbond_request_message(&[0xAAu8; 32], bond_outpoint).as_bytes();
+        assert!(!matches!(
+            verify_mldsa87_with_context(&req.owner_pubkey, &other_net[..], &req.signature, UNBOND_REQUEST_CONTEXT),
             Ok(true)
         ));
 
         // Fee must be strictly less than the funding amount.
-        assert!(key.build_funded_unbond_tx(bond_outpoint, funding_outpoint, &funding, 1_000).is_err());
+        assert!(key.build_funded_unbond_tx(net_id, bond_outpoint, funding_outpoint, &funding, 1_000).is_err());
     }
 
     #[test]

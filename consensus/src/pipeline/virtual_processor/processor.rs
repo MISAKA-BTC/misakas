@@ -994,10 +994,11 @@ impl VirtualStateProcessor {
 
     /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): recompute the per-epoch
     /// `EpochTally` accumulator over the bounded selected-chain window ending at
-    /// `sink` and stage the live (non-finalized) epochs into `batch`. **Inert**
-    /// unless the DNS overlay is configured AND `sink`'s DAA score has reached the
-    /// v2 fence `pos_v2_activation_daa_score` (`u64::MAX` on every current
-    /// network), so this returns after a single header read everywhere today.
+    /// `sink` and stage the live (non-finalized) epochs into `batch`. Gated by the
+    /// v2 fence `pos_v2_activation_daa_score`: **inert** (returns after a single
+    /// header read) on devnet/simnet (`GENESIS_ACTIVE_DNS_PARAMS`, fence `u64::MAX`);
+    /// **active from block 1** on mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence `0`)
+    /// — also requires the DNS overlay to be configured.
     ///
     /// Recompute design (the `update_dns_state` precedent — reorg-safe with no
     /// incremental delta): the accumulator is a pure function of the selected
@@ -1015,16 +1016,20 @@ impl VirtualStateProcessor {
     /// in the store is never re-derived (its blocks may lie partly outside the
     /// window — an incomplete recompute).
     ///
-    /// NOTE (post-activation perf): unlike `update_dns_state` this does not yet
-    /// throttle to once-per-epoch; while fenced it is a no-op, so the window walk
-    /// only runs once the v2 economics are switched on — add an epoch throttle
-    /// before then.
+    /// NOTE (perf): unlike `update_dns_state` this does not throttle to
+    /// once-per-epoch — instead the per-block work is **bounded by design** to the
+    /// `walk_bound = finalization_depth + 2·epoch_length` window (a few thousand
+    /// header/store reads at production params, all block-hash-keyed and cached), so
+    /// it is O(window) per virtual commit, not O(chain). This bounded-window walk is
+    /// what makes it reorg-safe (a pure function of the current selected chain, no
+    /// incremental delta), and it runs from block 1 on mainnet/testnet (fence `0`).
     fn update_epoch_accumulator(&self, batch: &mut WriteBatch, sink: BlockHash) {
         let Some(dns_params) = self.dns_params.as_ref() else {
             return;
         };
         let sink_daa = self.headers_store.get_daa_score(sink).unwrap();
-        // The v2 master fence: inert (no walk, no write) on every current network.
+        // The v2 master fence: inert (no walk, no write) on devnet/simnet (`u64::MAX`);
+        // the walk runs from block 1 on mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence `0`).
         if sink_daa < dns_params.pos_v2_activation_daa_score {
             return;
         }

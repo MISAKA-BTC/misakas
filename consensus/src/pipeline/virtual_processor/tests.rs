@@ -1825,7 +1825,10 @@ async fn pos_v2_funded_unbond_request_validates() {
     }
 
     // The owner submits a funded, ML-DSA-87-signed unbond request; the block must validate.
-    let unbond_tx = dns_harness::funded_signed_unbond_tx(seed, coinbase_b, value_b, daa_b, bond_outpoint, storage_mass_parameter);
+    // audit M-04: the authorization binds the network id (genesis hash), as the consensus rule reconstructs it.
+    let net_id = ctx.consensus.params().genesis.hash;
+    let unbond_tx =
+        dns_harness::funded_signed_unbond_tx(seed, net_id.as_byte_slice(), coinbase_b, value_b, daa_b, bond_outpoint, storage_mass_parameter);
     let unbond_block = ctx.mine_block(new_miner_data(), vec![unbond_tx]).await;
     assert_eq!(
         ctx.consensus.block_status(unbond_block.header.hash),
@@ -2941,6 +2944,7 @@ mod dns_harness {
     /// signed over the v2 tx sighash so the block validates through the script engine.
     pub(super) fn funded_signed_unbond_tx(
         seed: [u8; 32],
+        net_id: &[u8],
         coinbase_outpoint: TransactionOutpoint,
         coinbase_value: u64,
         coinbase_daa_score: u64,
@@ -2951,8 +2955,8 @@ mod dns_harness {
         let pubkey = kp.verification_key.as_ref().to_vec();
         let reward_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes();
         let spk = p2pkh_mldsa87_spk(&reward_payload);
-        // Owner authorization: ML-DSA-87 signature over the bond-bound unbond message.
-        let auth_digest = unbond_request_message(bond_outpoint);
+        // Owner authorization: ML-DSA-87 signature over the network- and bond-bound unbond message (M-04).
+        let auth_digest = unbond_request_message(net_id, bond_outpoint);
         let auth_sig = mldsa::sign(&kp.signing_key, &auth_digest.as_bytes()[..], UNBOND_REQUEST_CONTEXT, [0xaau8; 32])
             .expect("ML-DSA-87 unbond authorization sign");
         let payload = borsh::to_vec(&StakeUnbondRequestPayload {

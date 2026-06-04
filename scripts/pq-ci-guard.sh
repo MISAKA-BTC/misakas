@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 fail=0
 
-echo "== [1/3] dependency advisory audit =="
+echo "== [1/5] dependency advisory audit =="
 if command -v cargo-deny >/dev/null 2>&1; then
   cargo deny check advisories || fail=1
 elif command -v cargo-audit >/dev/null 2>&1; then
@@ -27,7 +27,7 @@ else
   echo "      install: cargo install cargo-deny  (or cargo-audit)"
 fi
 
-echo "== [2/3] secp256k1 must be absent from the consensus + node + wallet trees (Phase-8/S9/QL-1 gate) =="
+echo "== [2/5] secp256k1 must be absent from the consensus + node + wallet trees (Phase-8/S9/QL-1 gate) =="
 # Phase 8 (PR-19-S8a/S8b) feature-gated secp256k1 out of the consensus tree; S9
 # extended this to the kaspad node binary (the RPC/SDK layer:
 # rpc-core -> consensus-wasm -> consensus-client). Audit QL-1 (P10) extended the
@@ -49,7 +49,7 @@ for crate in kaspa-consensus kaspad kaspa-pq-cli kaspa-wallet kaspa-cli kaspa-da
   fi
 done
 
-echo "== [3/3] ML-DSA-87 FIPS-204 KAT + official NIST ACVP + verifier gate (audit H-10/H-04) =="
+echo "== [3/5] ML-DSA-87 FIPS-204 KAT + official NIST ACVP + verifier gate (audit H-10/H-04) =="
 # The deterministic keygen/sign regression pins (kat_mldsa87_deterministic_regression),
 # the OFFICIAL NIST ACVP FIPS-204 differential (acvp_mldsa87_official_nist_vectors — audit
 # H-04: keygen/sign/verify cross-checked against usnistgov/ACVP-Server vectors, the
@@ -63,6 +63,28 @@ if cargo test -p kaspa-txscript --lib mldsa87 >/dev/null 2>&1; then
 else
   echo "  -> FAIL: ML-DSA-87 KAT / verifier tests did not pass."
   fail=1
+fi
+
+echo "== [4/5] normative spec must not carry stale ML-DSA-65 copy-paste hazards (audit M-03) =="
+# The current scheme is ML-DSA-87. Forbid the concrete WRONG values an external implementer could
+# copy from docs/kaspa-pq-spec.md (sizes / opcode / fn / struct / keygen-context). Generic historical
+# "ML-DSA-65" prose (clearly flagged in the spec header + the ADR-0002/0015 historical banners) is allowed.
+if grep -nE "3309|1952|OP_CHECKSIG_MLDSA65|OP_BLAKE2B_256|OP_DATA32|calc_mldsa65|Mldsa65SigCacheKey|mldsa65/keygen" docs/kaspa-pq-spec.md; then
+  echo "  -> FAIL: docs/kaspa-pq-spec.md contains a stale ML-DSA-65 concrete value (see matches above)."
+  fail=1
+else
+  echo "OK: spec is free of stale ML-DSA-65 sizes/opcodes/fns."
+fi
+
+echo "== [5/5] ML-DSA-87 multisig helper must not be exposed outside txscript (audit L-03) =="
+# multisig_redeem_script_mldsa87 is #[doc(hidden)] and P2SH is consensus-disabled in PQ-only, so
+# surfacing it from wallet / CLI / RPC would let a user lock funds. It may only appear inside
+# crypto/txscript (its def + re-export + tests).
+if grep -rn "multisig_redeem_script_mldsa87" --include="*.rs" wallet/ cli/ rpc/ kaspa-pq-validator*/ 2>/dev/null; then
+  echo "  -> FAIL: the ML-DSA-87 multisig helper is referenced outside crypto/txscript (see above)."
+  fail=1
+else
+  echo "OK: multisig helper not exposed by wallet/CLI/RPC."
 fi
 
 if [ "$fail" -ne 0 ]; then

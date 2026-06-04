@@ -425,7 +425,9 @@ async fn unbond(args: UnbondArgs) -> Result<(), String> {
     let funding_outpoint: TransactionOutpoint = funding.outpoint.into();
     let funding_entry: UtxoEntry = funding.utxo_entry.into();
 
-    let tx = key.build_funded_unbond_tx(bond_outpoint, funding_outpoint, &funding_entry, fee)?;
+    // audit M-04: bind the unbond authorization to this network's genesis hash (prevents replay
+    // of the signed authorization on another network).
+    let tx = key.build_funded_unbond_tx(params.genesis.hash.as_byte_slice(), bond_outpoint, funding_outpoint, &funding_entry, fee)?;
 
     let txid = client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
     info!("[{VALIDATOR}] submitted unbond request (txid={txid}) for bond {bond_outpoint}");

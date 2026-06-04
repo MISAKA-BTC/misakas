@@ -700,6 +700,11 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     dns_activation_daa_score: 0,
     // Production: the overlay reaches the Active stage once >= 20M KAS of stake is bonded.
     min_active_stake_sompi: 20_000_000 * SOMPI_PER_KASPA,
+    // audit H-05 (policy, user decision 2026-06-01): `min_active_validators = 1` means a SINGLE
+    // validator bonding >= 20M KAS suffices to drive the DNS Active stage — finality then depends on
+    // one operator's key/availability/honesty. This is a deliberate bootstrap-phase relaxation; the
+    // safety floor is the 20M KAS `min_active_stake_sompi`, not validator COUNT. Raise this to N (e.g.
+    // 3-5) before relying on DNS finality as a multi-operator security claim (revisit post-launch).
     min_active_validators: 1,
     // Production: every individual validator must bond >= 20M KAS; a smaller StakeBond is
     // rejected at acceptance and can never attest (user decision 2026-06-01).

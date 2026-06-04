@@ -714,7 +714,8 @@ pub struct DnsParams {
     /// activation there is no carve (Stage 1: the miner takes the whole reward).
     /// Keyed on DAA (not the pov-dependent `DnsState.rollout_stage`) so the
     /// construction and validation coinbase paths pick the same stage. Appended
-    /// last to keep the borsh layout change localized. `u64::MAX` everywhere today.
+    /// last to keep the borsh layout change localized. `0` on every current net
+    /// (GENESIS_ACTIVE + PRODUCTION) — the Stage-3 full split applies from genesis.
     pub full_reward_split_daa_score: u64,
 
     /// kaspa-pq ADR-0018 "本格版" (PoS-v2 economics): the master activation fence for the
@@ -722,8 +723,10 @@ pub struct DnsParams {
     /// **slashing** distribution (reserve + victim-epoch shares), and the **security-reserve**
     /// drip. Independent of [`Self::dns_activation_daa_score`] (which already activates the base
     /// participation reward + 2-way slashing on devnet), so the v2 economics stay byte-identical
-    /// everywhere until explicitly switched on. `u64::MAX` on every net today (inert; no
-    /// consensus / genesis change). Appended last to keep the borsh layout change localized.
+    /// until explicitly switched on. `u64::MAX` on devnet/simnet (`GENESIS_ACTIVE_DNS_PARAMS`, inert);
+    /// `0` on mainnet/testnet (`PRODUCTION_DNS_PARAMS`) — the v2 economics are ACTIVE from genesis
+    /// there (no genesis-block change; the per-net fence is not a genesis input). Appended last to
+    /// keep the borsh layout change localized.
     pub pos_v2_activation_daa_score: u64,
 
     // ---- kaspa-pq DNS v3: Canonical Lagged Anchor (blue_score-coordinated epochs) ----
@@ -1065,6 +1068,13 @@ pub struct DnsConfirmation {
     /// `DegradedCertificateCensored` mean the DNS-confirmed anchor has stopped advancing,
     /// **not** that any block is invalid; `pow_confirmed` is unaffected. Appended last.
     pub health: DnsHealth,
+
+    /// audit M-01: the LAST DNS-confirmed canonical lagged anchor — the actual, stable finality
+    /// point — and its DAA score. Distinct from `block_hash`, which is the (pov-dependent, every-block)
+    /// selected-chain anchor (the sink). Explorers/exchanges MUST treat THIS as the DNS-final point,
+    /// not `block_hash`. `Hash64::default()` (and score 0) until an anchor is first confirmed.
+    pub last_dns_confirmed_anchor: Hash64,
+    pub last_dns_confirmed_anchor_daa_score: u64,
 }
 
 /// Per-epoch active-validator-set view surfaced by the consensus pipeline to the
@@ -1264,12 +1274,16 @@ pub struct StakeUnbondRequestPayload {
     pub signature: Vec<u8>,
 }
 
-/// kaspa-pq H-05: the BLAKE2b-256 digest the bond owner signs to authorize
-/// unbonding `bond_outpoint`. Keyed by [`UNBOND_REQUEST_MESSAGE_DOMAIN`] and
-/// bound to the bond outpoint so the authorization cannot be reused for another
-/// bond.
-pub fn unbond_request_message(bond_outpoint: TransactionOutpoint) -> Hash {
+/// kaspa-pq H-05 / audit M-04: the BLAKE2b-256 digest the bond owner signs to
+/// authorize unbonding `bond_outpoint`. Keyed by [`UNBOND_REQUEST_MESSAGE_DOMAIN`]
+/// (purpose separation from attestations/slashing) and bound to BOTH the
+/// `network_id` (audit M-04 — prevents cross-network replay of an unbond
+/// authorization, mirroring [`stake_attestation_message`]) AND the bond outpoint
+/// (so the authorization cannot be reused for another bond). `network_id` is the
+/// chain's genesis hash (ADR-0009 Addendum A.3).
+pub fn unbond_request_message(network_id: &[u8], bond_outpoint: TransactionOutpoint) -> Hash {
     let mut hasher = Blake2bParams::new().hash_length(32).key(UNBOND_REQUEST_MESSAGE_DOMAIN).to_state();
+    hasher.update(network_id);
     hasher.update(bond_outpoint.transaction_id.as_byte_slice());
     hasher.update(&bond_outpoint.index.to_le_bytes());
     let mut out = [0u8; 32];
@@ -2746,10 +2760,19 @@ pub fn derive_dns_health(
     }
 }
 
-/// History-confirmation predicate — the DNS paper's
-/// `WorkDepth(B) ≥ cW ∧ StakeDepth(B) ≥ cS`. An anchor is DNS-confirmed
-/// iff it clears **both** thresholds. Used by the consensus pipeline to
-/// advance [`DnsState::last_dns_confirmed_anchor`].
+/// History-confirmation predicate — `WorkDepth(B) ≥ cW ∧ StakeDepth(B) ≥ cS`. An anchor is
+/// DNS-confirmed iff it clears **both** thresholds. Used by the consensus pipeline to advance
+/// [`DnsState::last_dns_confirmed_anchor`].
+///
+/// audit H-02 — what this is and is NOT: on the production presets `cW = required_work_depth =
+/// BlueWorkType::ZERO`, so the work term is satisfied trivially and confirmation is effectively
+/// **stake-depth only** (a stake-confirmed canonical lagged anchor). This is NOT the "Double
+/// Nakamoto" claim of an independent PoW *and* PoS confirmation count — the PoW dimension does NOT
+/// gate confirmation here. The two-dimensional **finality safety** (non-substitutability: a heavier
+/// PoW chain cannot rewrite a stake-confirmed anchor) is enforced separately by the reorg gate
+/// [`check_dns_reorg_rule`], which requires BOTH a WorkScore and a StakeScore dominance margin over
+/// canonical SINCE THE COMMON ANCESTOR (deltas, not the absolute cumulative `work_depth` read here).
+/// Set `cW > 0` only if you also switch `work_depth` to an anchor-relative delta (see the audit note).
 pub fn is_dns_confirmed(
     work_depth: BlueWorkType,
     stake_depth: StakeScore,
@@ -3714,8 +3737,9 @@ pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: 
 /// `included` stores the 64-byte payload as a [`Hash64`] (serde-stable; `[u8; 64]` has no derive),
 /// converted back via [`Hash64::as_bytes`] for [`p2pkh_mldsa87_spk`] at payout.
 ///
-/// Entirely inert today: the recompute is gated by `pos_v2_activation_daa_score` (`u64::MAX` on
-/// every net), so no tally is ever written.
+/// Gated by `pos_v2_activation_daa_score`: inert on devnet/simnet (`GENESIS_ACTIVE_DNS_PARAMS`,
+/// fence `u64::MAX` — no tally is ever written); written from block 1 on mainnet/testnet
+/// (`PRODUCTION_DNS_PARAMS`, fence `0` — the v2 economics are active).
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct EpochTally {
     pub expected_stake: u128,
@@ -3923,6 +3947,9 @@ pub fn dns_confirmation_from_state(
             state.rollout_stage, state.health
         ),
         health: state.health,
+        // audit M-01: surface the stable DNS-confirmed anchor (≠ the pov-dependent sink block_hash).
+        last_dns_confirmed_anchor: state.last_dns_confirmed_anchor,
+        last_dns_confirmed_anchor_daa_score: state.last_dns_confirmed_anchor_daa_score,
     }
 }
 
@@ -5437,6 +5464,8 @@ mod tests {
             dns_reorg_risk_conservative_bound: "n/a".into(),
             note: "Phase 10 stub".into(),
             health: DnsHealth::DegradedStakeQualityLow,
+            last_dns_confirmed_anchor: Hash64::from_bytes([0x77u8; 64]),
+            last_dns_confirmed_anchor_daa_score: 12345,
         };
         let bytes = borsh::to_vec(&c).unwrap();
         let back: DnsConfirmation = borsh::from_slice(&bytes).unwrap();

@@ -72,11 +72,11 @@ impl SignerT for Signer {
         if let Some(keypair) = self.inner.account.try_pq_keypair(&self.inner.keydata, &self.inner.payment_secret)? {
             let mut mutable_tx = mutable_tx;
             sign_transaction_inputs_mldsa87(&keypair, &mut mutable_tx, |_i, sig_hash| {
-                // audit M-05: per-input ML-DSA hedging randomness = a domain-keyed BLAKE2b over the
-                // key's public hash and the input's sighash (a full 32-byte, per-key, per-input
-                // value), mirroring the WASM signer's `root ⊕ sighash`. Replaces the old 8-byte
-                // index. ML-DSA is hedged and secure even fully deterministic, so this is hygiene.
-                keypair.input_hedge_randomness(sig_hash)
+                // audit M-05/M-06: per-input ML-DSA signing randomness = a DETERMINISTIC domain-keyed
+                // BLAKE2b over the key's public hash and the input's sighash (a full 32-byte, per-key,
+                // per-input value), mirroring the WASM signer's `root ⊕ sighash`. NO OS RNG / secret
+                // entropy — ML-DSA is secure even fully deterministic, so this is hygiene, not hedging.
+                keypair.deterministic_input_signing_randomness(sig_hash)
             });
             return Ok(mutable_tx);
         }
