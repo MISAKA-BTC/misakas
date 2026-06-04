@@ -58,6 +58,9 @@ enum Command {
     Status(StatusArgs),
     /// Stake mined coins: build + submit a StakeBond tx from a UTXO at the funding address.
     Bond(BondArgs),
+    /// Begin unbonding a StakeBond: build + submit a signed StakeUnbondRequest for the given
+    /// bond outpoint (its locked stake becomes spendable after the unbonding window elapses).
+    Unbond(UnbondArgs),
     /// Load generator: continuously spend mature UTXOs at the funding address into fan-out
     /// NATIVE transfers, flooding the node's mempool with valid ML-DSA transactions.
     Spam(SpamArgs),
@@ -153,6 +156,31 @@ struct BondArgs {
 }
 
 #[derive(Parser, Debug)]
+struct UnbondArgs {
+    /// Local node wRPC (borsh) endpoint, host:port. The node must run --utxoindex.
+    #[arg(long, default_value = "127.0.0.1:17110", env = "KASPA_PQ_NODE_RPC")]
+    node_rpc: String,
+
+    /// Path to the ML-DSA-87 validator signing key (32-byte seed, hex). Must be the key that
+    /// owns the bond (its derived `validator_id` == the bond's `owner_pubkey_hash`), otherwise
+    /// the node rejects the unauthorized request.
+    #[arg(long, env = "KASPA_PQ_VALIDATOR_KEY")]
+    validator_key: String,
+
+    /// The bond to unbond, "txid:index" — the `bond_outpoint` that `bond` printed (i.e. `<txid>:0`).
+    #[arg(long)]
+    stake_bond: String,
+
+    /// Fee in sompi for the unbond transaction (flat). Defaults to the attestation fee floor.
+    #[arg(long, default_value_t = ATTESTATION_TX_FEE_FLOOR_SOMPI)]
+    fee: u64,
+
+    /// Expected node network id; refuse on mismatch.
+    #[arg(long, env = "KASPA_PQ_NETWORK")]
+    network: Option<String>,
+}
+
+#[derive(Parser, Debug)]
 struct SpamArgs {
     /// Local node wRPC (borsh) endpoint, host:port. The node must run --utxoindex.
     #[arg(long, default_value = "127.0.0.1:17110", env = "KASPA_PQ_NODE_RPC")]
@@ -195,6 +223,10 @@ async fn main() -> ExitCode {
         Command::Bond(args) => {
             kaspa_core::log::init_logger(None, "info");
             bond(args).await
+        }
+        Command::Unbond(args) => {
+            kaspa_core::log::init_logger(None, "info");
+            unbond(args).await
         }
         Command::Spam(args) => {
             kaspa_core::log::init_logger(None, "info");
@@ -317,6 +349,56 @@ async fn bond(args: BondArgs) -> Result<(), String> {
     // The bond outpoint is always output-0 of the bond tx.
     println!("bond_outpoint: {txid}:0");
     println!("(once accepted + activation_daa_score reached, run: {VALIDATOR} run --validator-key <key> --stake-bond {txid}:0 --signed-epoch-db <db>)");
+    let _ = client.disconnect().await;
+    Ok(())
+}
+
+/// Begin unbonding a `StakeBond`: load the validator key, find a single MATURE funding UTXO at its
+/// funding address (NOT the bond's own locked output-0), build a signed `StakeUnbondRequest` for
+/// `--stake-bond`, submit it, and print the result. After acceptance the bond enters `Unbonding`;
+/// its locked stake becomes spendable once `unbonding_period_blocks` further blocks elapse.
+async fn unbond(args: UnbondArgs) -> Result<(), String> {
+    let key = ValidatorKey::from_seed(load_validator_seed(&args.validator_key)?);
+    let bond_outpoint = parse_stake_bond_ref(&args.stake_bond)?;
+    let client = connect(&args.node_rpc).await?;
+    let server = client.get_server_info().await.map_err(|e| format!("getServerInfo failed: {e}"))?;
+    let node_network = server.network_id.to_string();
+    if let Some(expected) = args.network.as_deref() {
+        if node_network != expected {
+            return Err(format!("network mismatch: node is '{node_network}' but --network is '{expected}'"));
+        }
+    }
+    let prefix = prefix_for(server.network_id.network_type);
+    let funding_addr = key.funding_address(prefix);
+    info!("[{VALIDATOR}] unbonding {bond_outpoint} for validator_id={} (funding {funding_addr})", key.validator_id);
+
+    // Need a single MATURE UTXO that covers the fee — and it must NOT be the bond's own locked
+    // output-0: the consensus bond-spend-gate keeps that locked until release, so trying to pay the
+    // fee from it would be rejected. Coinbase maturity is filtered for the same reason as `bond`
+    // (a miner still paying this address mints a fresh immature coinbase every block).
+    let coinbase_maturity = Params::from(server.network_id).coinbase_maturity();
+    let virtual_daa = server.virtual_daa_score;
+    let utxos = client
+        .get_utxos_by_addresses(vec![funding_addr.clone()])
+        .await
+        .map_err(|e| format!("getUtxosByAddresses failed (does the node run --utxoindex?): {e}"))?;
+    let funding = utxos
+        .into_iter()
+        .filter(|e| TransactionOutpoint::from(e.outpoint.clone()) != bond_outpoint)
+        .filter(|e| e.utxo_entry.amount > args.fee)
+        .filter(|e| is_spendable(e.utxo_entry.is_coinbase, e.utxo_entry.block_daa_score, virtual_daa, coinbase_maturity))
+        .max_by_key(|e| e.utxo_entry.amount)
+        .ok_or_else(|| format!("no single MATURE funding UTXO > {} sompi (fee) at {funding_addr} other than the bond itself; \
+            send funds there and wait for coinbase maturity ({coinbase_maturity} blocks)", args.fee))?;
+    let funding_outpoint: TransactionOutpoint = funding.outpoint.into();
+    let funding_entry: UtxoEntry = funding.utxo_entry.into();
+
+    let tx = key.build_funded_unbond_tx(bond_outpoint, funding_outpoint, &funding_entry, args.fee)?;
+
+    let txid = client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
+    info!("[{VALIDATOR}] submitted unbond request (txid={txid}) for bond {bond_outpoint}");
+    println!("unbond_request_txid: {txid}");
+    println!("(once accepted the bond enters Unbonding; its locked stake is spendable after unbonding_period_blocks more blocks)");
     let _ = client.disconnect().await;
     Ok(())
 }
