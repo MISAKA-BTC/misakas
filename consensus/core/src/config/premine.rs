@@ -141,6 +141,87 @@ mod tests {
         assert_ne!(MAINNET_PREMINE_OWNER_PAYLOAD, PUBLIC_TEST_PREMINE_OWNER_PAYLOAD);
     }
 
+    /// audit H-01 launch-safety guard: the [`MAINNET_PREMINE_CEREMONY_PENDING`] flag MUST
+    /// agree with the actual payload state — `true` IFF the mainnet payload is still the
+    /// all-zero unspendable placeholder. This catches the two release mistakes the ceremony
+    /// could make: shipping a real ceremony payload while the flag still says "pending"
+    /// (the runbook would skip the re-genesis steps), or flipping the flag to "done" while
+    /// the payload is still the unspendable placeholder (a permanently locked 15B premine).
+    #[test]
+    fn mainnet_ceremony_pending_flag_matches_placeholder_state() {
+        let is_placeholder = MAINNET_PREMINE_OWNER_PAYLOAD == [0u8; 64];
+        assert_eq!(
+            MAINNET_PREMINE_CEREMONY_PENDING, is_placeholder,
+            "MAINNET_PREMINE_CEREMONY_PENDING ({MAINNET_PREMINE_CEREMONY_PENDING}) must equal 'payload is the all-zero placeholder' ({is_placeholder}) — flip the flag in the same change that installs the ceremony payload"
+        );
+    }
+
+    /// audit H-01 ceremony tool — turn the OFFLINE-generated custody public key into the exact
+    /// re-genesis values, so the mainnet premine ceremony is mechanical (and the private key never
+    /// touches this repo). Feed the ceremony's ML-DSA-87 **public** key (2592 bytes) via the
+    /// `CEREMONY_PUBKEY_HEX` env var and run:
+    ///   `CEREMONY_PUBKEY_HEX=<hex> cargo test -p kaspa-consensus-core --lib \
+    ///      config::premine::tests::mainnet_premine_regenesis_from_ceremony_pubkey -- --ignored --nocapture`
+    /// It prints (1) the 64-byte `MAINNET_PREMINE_OWNER_PAYLOAD` to paste in, (2) the mainnet
+    /// address, and (3) the new `MAINNET_PREMINE_UTXO_COMMITMENT` for `genesis.rs` — after which the
+    /// operator recomputes `GENESIS.hash` and flips `MAINNET_PREMINE_CEREMONY_PENDING` to `false`.
+    /// With no env var it SELF-TESTS the derivation against a deterministic sample key (no I/O, no key
+    /// persisted), so the pipeline is proven correct without exposing any custody material.
+    #[test]
+    #[ignore]
+    fn mainnet_premine_regenesis_from_ceremony_pubkey() {
+        use kaspa_addresses::{Address, Prefix, Version};
+        use kaspa_hashes::blake2b_512_address_payload;
+        use libcrux_ml_dsa::ml_dsa_87;
+
+        // The pubkey-→re-genesis derivation, identical to the genesis path.
+        let regenesis = |pubkey: &[u8]| -> ([u8; 64], Hash64, String) {
+            assert_eq!(pubkey.len(), 2592, "ML-DSA-87 public key must be 2592 bytes");
+            let payload: [u8; 64] = blake2b_512_address_payload(pubkey).as_bytes();
+            let spk = crate::dns_finality::p2pkh_mldsa87_spk(&payload);
+            assert_eq!(spk.script().len(), 69, "ML-DSA P2PKH scriptPubKey must be 69 bytes");
+            // utxo_commitment = MuHash over the single premine UTXO locked to this payload.
+            let outpoint = TransactionOutpoint { transaction_id: Hash64::from_bytes(MISAKA_PREMINE_TXID), index: 0 };
+            let entry = UtxoEntry { amount: MISAKA_PREMINE_SOMPI, script_public_key: spk, block_daa_score: 0, is_coinbase: false };
+            let mut ms = MuHash::new();
+            ms.add_utxo(&outpoint, &entry);
+            let commitment = ms.finalize();
+            let address = Address::new(Prefix::Mainnet, Version::PubKeyHashMlDsa87, &payload).to_string();
+            (payload, commitment, address)
+        };
+
+        match std::env::var("CEREMONY_PUBKEY_HEX") {
+            Ok(hex) => {
+                let pubkey: Vec<u8> = (0..hex.trim().len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex.trim()[i..i + 2], 16).expect("CEREMONY_PUBKEY_HEX is hex"))
+                    .collect();
+                let (payload, commitment, address) = regenesis(&pubkey);
+                let payload_rust = payload.iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
+                let commit_rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
+                println!("=== MAINNET PREMINE CEREMONY RE-GENESIS (audit H-01) ===");
+                println!("// 1. config/premine.rs — replace MAINNET_PREMINE_OWNER_PAYLOAD with:");
+                println!("const MAINNET_PREMINE_OWNER_PAYLOAD: [u8; 64] = [{payload_rust}];");
+                println!("// 2. config/premine.rs — set: pub const MAINNET_PREMINE_CEREMONY_PENDING: bool = false;");
+                println!("// 3. config/genesis.rs — set Mainnet utxo_commitment:");
+                println!("Hash64::from_bytes([{commit_rust}])");
+                println!("// 4. recompute GENESIS.hash (re-run the genesis-hash test) and the mainnet address is:");
+                println!("MAINNET_ADDRESS: {address}");
+            }
+            Err(_) => {
+                // No custody key supplied: self-test the derivation on a deterministic sample so the
+                // tool is proven correct. The sample key is NOT a custody key and is never persisted.
+                let sample = ml_dsa_87::generate_key_pair([0x5au8; 32]);
+                let (payload, commitment, address) = regenesis(sample.verification_key.as_ref());
+                assert_ne!(payload, [0u8; 64], "a real key never derives the all-zero placeholder payload");
+                assert_ne!(payload, PUBLIC_TEST_PREMINE_OWNER_PAYLOAD, "sample differs from the public test key");
+                assert_ne!(commitment, Hash64::default(), "commitment is well-defined");
+                assert!(address.starts_with("misaka:"), "mainnet address renders with the misaka prefix ({address})");
+                println!("SELF-TEST OK (no CEREMONY_PUBKEY_HEX): set it to your offline ML-DSA-87 pubkey hex to emit the real re-genesis values.");
+            }
+        }
+    }
+
     /// Deterministically derives the **PUBLIC** test-network ML-DSA-87 premine
     /// keypair and prints its 64-byte BLAKE2b-512 owner payload (the value baked
     /// into [`PUBLIC_TEST_PREMINE_OWNER_PAYLOAD`]) and the devnet address. The key
