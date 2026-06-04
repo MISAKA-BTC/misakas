@@ -11,12 +11,15 @@ use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
     ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
-    StakeAttestationShardPayload, StakeBondPayload, check_signed_epoch_record, single_attestation_shard, validator_id_from_pubkey,
+    StakeAttestationShardPayload, StakeBondPayload, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, check_signed_epoch_record,
+    single_attestation_shard, unbond_request_message, validator_id_from_pubkey,
 };
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
 use kaspa_consensus_core::mass::MassCalculator;
-use kaspa_consensus_core::subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND};
+use kaspa_consensus_core::subnets::{
+    SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND,
+};
 use kaspa_consensus_core::tx::{
     MutableTransaction, PopulatedTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
 };
@@ -287,6 +290,72 @@ impl ValidatorKey {
         Ok(tx)
     }
 
+    /// Build a fee-funded, signed `StakeUnbondRequest` transaction (subnetwork
+    /// `SUBNETWORK_ID_STAKE_UNBOND`, ADR-0016 / audit H-05) that begins unbonding the
+    /// `StakeBond` at `bond_outpoint`. Accepting it stamps the bond's
+    /// `unbond_request_daa_score` (→ `Unbonding`); the bond's locked output-0 then becomes
+    /// spendable once `unbond_request_daa_score + unbonding_period_blocks` is reached
+    /// (the consensus `bond_spend_gate`).
+    ///
+    /// `funding` is a UTXO at this key's own P2PKH-ML-DSA funding script — and MUST NOT be the
+    /// bond's locked output-0 (the spend-gate keeps that locked until release). It is spent into
+    /// a single change output (`funding.amount − fee`) back to the same script so the validator
+    /// can fund the next overlay tx. The borsh-encoded [`StakeUnbondRequestPayload`] carries the
+    /// owner's authorization, and input-0 carries the funding-spend authorization — two
+    /// independent ML-DSA-87 signatures under two distinct domains:
+    ///   - the payload `signature` is the owner's authorization over [`unbond_request_message`]
+    ///     (`bond_outpoint`) under [`UNBOND_REQUEST_CONTEXT`] — without it any party could grief
+    ///     honest validators into `Unbonding` and out of the active set (audit H-05). It carries
+    ///     no trailing sighash-type byte: it is verified by the stateful `unbond_request_authorized`
+    ///     rule, which also binds the key (`validator_id_from_pubkey(owner_pubkey) ==
+    ///     bond.owner_pubkey_hash`).
+    ///   - input-0's `signature_script` proves the funding spend, signed over the tx sighash
+    ///     under [`MLDSA87_TX_CONTEXT`] exactly as [`Self::build_funded_shard_tx`].
+    pub fn build_funded_unbond_tx(
+        &self,
+        bond_outpoint: TransactionOutpoint,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        if funding.amount <= fee {
+            return Err(format!("funding UTXO amount {} does not cover fee {}", funding.amount, fee));
+        }
+        // Owner authorization: ML-DSA-87 signature over the bond-bound unbond message under the
+        // unbond context (domain-separated from the tx-spend context). Standalone — no trailing
+        // sighash-type byte — since it is the payload's own authorization, not a script signature.
+        let auth_bytes = unbond_request_message(bond_outpoint).as_bytes();
+        let auth_sig = self.sign_with_context(&auth_bytes[..], UNBOND_REQUEST_CONTEXT).to_vec();
+        let payload = borsh::to_vec(&StakeUnbondRequestPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint,
+            owner_pubkey: self.keypair.verification_key.as_ref().to_vec(),
+            signature: auth_sig,
+        })
+        .expect("borsh serialization of a well-formed unbond request is infallible");
+
+        let spk = funding.script_public_key.clone(); // self-spend; change returns to the funding script
+        let input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
+        let change = TransactionOutput::new(funding.amount - fee, spk);
+        let tx = Transaction::new(TX_VERSION, vec![input], vec![change], 0, SUBNETWORK_ID_STAKE_UNBOND, 0, payload);
+
+        // Sighash over the canonical (empty-sig-script) tx, then fill input 0's spend script.
+        let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
+        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
+        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
+        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+        sig_data.push(SIG_HASH_ALL.to_u8());
+        let signature_script = ScriptBuilder::new()
+            .add_data(&sig_data)
+            .map_err(|e| format!("unbond funding sig push failed: {e}"))?
+            .add_data(self.keypair.verification_key.as_ref())
+            .map_err(|e| format!("unbond funding pubkey push failed: {e}"))?
+            .drain();
+        let mut tx = mtx.tx;
+        tx.inputs[0].signature_script = signature_script;
+        Ok(tx)
+    }
+
     /// The 64-byte P2PKH-ML-DSA reward payload for this key — keyed
     /// `BLAKE2b-512(public_key)` under `kaspa-pq-v2/address/mldsa87` (md2 §4.2 /
     /// ADR-0019 §8), the same payload as [`Self::funding_address`]. Default
@@ -543,7 +612,7 @@ mod tests {
             epoch: 7,
             target_hash: Hash64::from_bytes([0x11u8; 64]),
             target_daa_score: 700,
-            validator_set_commitment: Hash64::from_bytes([0x22u8; 64]),
+            validator_set_commitment: Hash64::from_bytes([0u8; 64]), // ADR-0017: VSC is a fixed-zero wire invariant (sortition committee dropped)
             signature: vec![0u8; MLDSA87_SIG_LEN],
         });
         let funding_spk = ScriptPublicKey::default();
@@ -563,6 +632,51 @@ mod tests {
 
         // Fee must be strictly less than the funding amount.
         assert!(key.build_funded_shard_tx(&shard, funding_outpoint, &funding, 1_000).is_err());
+    }
+
+    #[test]
+    fn build_funded_unbond_tx_structure_and_auth() {
+        use kaspa_consensus_core::dns_finality::validate_stake_unbond_payload;
+        use kaspa_consensus_core::tx::ScriptPublicKey;
+
+        let key = ValidatorKey::from_seed([0x33u8; VALIDATOR_SEED_LEN]);
+        let bond_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x07u8; 64]), 0);
+        let funding_spk = ScriptPublicKey::default();
+        let funding = UtxoEntry::new(1_000, funding_spk.clone(), 1, false);
+        let funding_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x44u8; 64]), 2);
+
+        let tx = key.build_funded_unbond_tx(bond_outpoint, funding_outpoint, &funding, 250).unwrap();
+        assert_eq!(tx.inputs.len(), 1);
+        assert_eq!(tx.inputs[0].previous_outpoint, funding_outpoint);
+        assert!(!tx.inputs[0].signature_script.is_empty()); // funding spend signed
+        assert_eq!(tx.outputs.len(), 1);
+        assert_eq!(tx.outputs[0].value, 750); // funding − fee, change back to self
+        assert_eq!(tx.outputs[0].script_public_key, funding_spk);
+        assert_eq!(tx.subnetwork_id, SUBNETWORK_ID_STAKE_UNBOND);
+        assert_eq!(tx.gas, 0);
+
+        // Payload decodes + passes stateless validation, carries the requested bond_outpoint,
+        // and binds THIS validator's key (its derived overlay id matches).
+        assert!(validate_stake_unbond_payload(&tx.payload).is_ok());
+        let req: StakeUnbondRequestPayload = borsh::from_slice(&tx.payload).unwrap();
+        assert_eq!(req.bond_outpoint, bond_outpoint);
+        assert_eq!(validator_id_from_pubkey(&req.owner_pubkey), key.validator_id);
+
+        // The owner authorization signature verifies over the bond-bound message under the
+        // unbond context — and is bound to THIS bond (it must not verify for another outpoint).
+        let auth_bytes = unbond_request_message(bond_outpoint).as_bytes();
+        assert!(matches!(
+            verify_mldsa87_with_context(&req.owner_pubkey, &auth_bytes[..], &req.signature, UNBOND_REQUEST_CONTEXT),
+            Ok(true)
+        ));
+        let other_bytes = unbond_request_message(TransactionOutpoint::new(Hash64::from_bytes([0x08u8; 64]), 0)).as_bytes();
+        assert!(!matches!(
+            verify_mldsa87_with_context(&req.owner_pubkey, &other_bytes[..], &req.signature, UNBOND_REQUEST_CONTEXT),
+            Ok(true)
+        ));
+
+        // Fee must be strictly less than the funding amount.
+        assert!(key.build_funded_unbond_tx(bond_outpoint, funding_outpoint, &funding, 1_000).is_err());
     }
 
     #[test]
