@@ -644,6 +644,11 @@ message GetDnsConfirmationResponseMessage {
   // kaspa-pq Phase 13 (ADR-0018 §C): DnsHealth discriminant (0=Disabled, 1=Active,
   // 2=DegradedStakeQualityLow, 3=DegradedCertificateCensored). Read-only liveness signal.
   uint32 health = 15;
+  // kaspa-pq audit M-01: the LAST DNS-confirmed canonical lagged anchor (the stable finality point)
+  // and its DAA score — distinct from blockHash (the pov-dependent selected-chain sink). Clients
+  // MUST treat this as DNS-final, not blockHash. Empty / 0 until an anchor is first confirmed.
+  string lastDnsConfirmedAnchor = 16;
+  uint64 lastDnsConfirmedAnchorDaaScore = 17;
 
   RPCError error = 1000;
 }

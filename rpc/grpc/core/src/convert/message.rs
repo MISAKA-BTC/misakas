@@ -377,6 +377,8 @@ from!(item: RpcResult<&kaspa_rpc_core::GetDnsConfirmationResponse>, protowire::G
         dns_reorg_risk_conservative_bound: item.dns_reorg_risk_conservative_bound.clone(),
         note: item.note.clone(),
         health: item.health,
+        last_dns_confirmed_anchor: item.last_dns_confirmed_anchor.clone(),
+        last_dns_confirmed_anchor_daa_score: item.last_dns_confirmed_anchor_daa_score,
         error: None,
     }
 });
@@ -940,6 +942,8 @@ try_from!(item: &protowire::GetDnsConfirmationResponseMessage, RpcResult<kaspa_r
         dns_reorg_risk_conservative_bound: item.dns_reorg_risk_conservative_bound.clone(),
         note: item.note.clone(),
         health: item.health,
+        last_dns_confirmed_anchor: item.last_dns_confirmed_anchor.clone(),
+        last_dns_confirmed_anchor_daa_score: item.last_dns_confirmed_anchor_daa_score,
     }
 });
 

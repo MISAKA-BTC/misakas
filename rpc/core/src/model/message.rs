@@ -1491,11 +1491,16 @@ pub struct GetDnsConfirmationResponse {
     /// liveness signal — a degraded value means the DNS-confirmed anchor has stalled, never
     /// that any block is invalid. `0` when `available` is false.
     pub health: u32,
+    /// audit M-01: the LAST DNS-confirmed canonical lagged anchor (the stable finality point) and
+    /// its DAA score — distinct from `block_hash`, which is the pov-dependent selected-chain sink.
+    /// Explorers/exchanges MUST treat THIS as DNS-final, not `block_hash`. Empty / 0 until confirmed.
+    pub last_dns_confirmed_anchor: String,
+    pub last_dns_confirmed_anchor_daa_score: u64,
 }
 
 impl Serializer for GetDnsConfirmationResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.block_hash, writer)?;
         store!(String, &self.work_depth, writer)?;
@@ -1511,13 +1516,15 @@ impl Serializer for GetDnsConfirmationResponse {
         store!(String, &self.dns_reorg_risk_conservative_bound, writer)?;
         store!(String, &self.note, writer)?;
         store!(u32, &self.health, writer)?;
+        store!(String, &self.last_dns_confirmed_anchor, writer)?;
+        store!(u64, &self.last_dns_confirmed_anchor_daa_score, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetDnsConfirmationResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         let available = load!(bool, reader)?;
         let block_hash = load!(String, reader)?;
         let work_depth = load!(String, reader)?;
@@ -1533,6 +1540,9 @@ impl Deserializer for GetDnsConfirmationResponse {
         let dns_reorg_risk_conservative_bound = load!(String, reader)?;
         let note = load!(String, reader)?;
         let health = load!(u32, reader)?;
+        // audit M-01: fields appended in v2 — tolerate v1 payloads (empty/0).
+        let (last_dns_confirmed_anchor, last_dns_confirmed_anchor_daa_score) =
+            if version >= 2 { (load!(String, reader)?, load!(u64, reader)?) } else { (String::new(), 0) };
         Ok(Self {
             available,
             block_hash,
@@ -1549,6 +1559,8 @@ impl Deserializer for GetDnsConfirmationResponse {
             dns_reorg_risk_conservative_bound,
             note,
             health,
+            last_dns_confirmed_anchor,
+            last_dns_confirmed_anchor_daa_score,
         })
     }
 }

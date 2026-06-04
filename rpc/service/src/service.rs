@@ -687,6 +687,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 dns_reorg_risk_conservative_bound: c.dns_reorg_risk_conservative_bound,
                 note: c.note,
                 health: c.health as u32,
+                // audit M-01: the stable DNS-confirmed anchor (≠ the pov-dependent sink `block_hash`).
+                last_dns_confirmed_anchor: c.last_dns_confirmed_anchor.to_string(),
+                last_dns_confirmed_anchor_daa_score: c.last_dns_confirmed_anchor_daa_score,
             },
             None => GetDnsConfirmationResponse::default(),
         })

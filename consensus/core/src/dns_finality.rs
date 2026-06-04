@@ -1068,6 +1068,13 @@ pub struct DnsConfirmation {
     /// `DegradedCertificateCensored` mean the DNS-confirmed anchor has stopped advancing,
     /// **not** that any block is invalid; `pow_confirmed` is unaffected. Appended last.
     pub health: DnsHealth,
+
+    /// audit M-01: the LAST DNS-confirmed canonical lagged anchor — the actual, stable finality
+    /// point — and its DAA score. Distinct from `block_hash`, which is the (pov-dependent, every-block)
+    /// selected-chain anchor (the sink). Explorers/exchanges MUST treat THIS as the DNS-final point,
+    /// not `block_hash`. `Hash64::default()` (and score 0) until an anchor is first confirmed.
+    pub last_dns_confirmed_anchor: Hash64,
+    pub last_dns_confirmed_anchor_daa_score: u64,
 }
 
 /// Per-epoch active-validator-set view surfaced by the consensus pipeline to the
@@ -3931,6 +3938,9 @@ pub fn dns_confirmation_from_state(
             state.rollout_stage, state.health
         ),
         health: state.health,
+        // audit M-01: surface the stable DNS-confirmed anchor (≠ the pov-dependent sink block_hash).
+        last_dns_confirmed_anchor: state.last_dns_confirmed_anchor,
+        last_dns_confirmed_anchor_daa_score: state.last_dns_confirmed_anchor_daa_score,
     }
 }
 
@@ -5445,6 +5455,8 @@ mod tests {
             dns_reorg_risk_conservative_bound: "n/a".into(),
             note: "Phase 10 stub".into(),
             health: DnsHealth::DegradedStakeQualityLow,
+            last_dns_confirmed_anchor: Hash64::from_bytes([0x77u8; 64]),
+            last_dns_confirmed_anchor_daa_score: 12345,
         };
         let bytes = borsh::to_vec(&c).unwrap();
         let back: DnsConfirmation = borsh::from_slice(&bytes).unwrap();
