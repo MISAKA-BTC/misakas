@@ -669,6 +669,32 @@ async fn pos_v2_slashing_evidence_removes_bond_and_pays_reporter() {
     let r = utxos.get(&reporter_mint).expect("the reporter reward must be minted at (slashing_tx, 0)");
     assert_eq!(r.amount, expected_reporter, "reporter reward = bond_amount * reporter_bps / 10000");
     assert_eq!(r.script_public_key, k_spk, "the reporter reward pays the declared reporter P2PKH");
+
+    // ── Supply invariant (audit M-01) ──────────────────────────────────────────────────────
+    // The 4-way slashing split is value-conserving: reporter + reserve + victim + burn equals the
+    // slashed amount EXACTLY (no coins are created or destroyed by slashing), and only the reporter
+    // is re-minted into the UTXO set. With a single (self-)validator there is no honest epoch peer,
+    // so no victim-compensation output is emitted at (slash_tx, 2); the reserve share is pool-accrued
+    // (not a UTXO) and the victim/burn shares leave the supply with the removed locked stake. Hence
+    // minted (reporter) ≤ slashed ⇒ slashing cannot inflate supply.
+    let rp = ctx.consensus.params().dns_params.clone().unwrap().reward_params;
+    let dist = kaspa_consensus_core::dns_finality::compute_slashing_distribution(
+        bond_amount,
+        rp.slashing_reporter_reward_bps,
+        rp.security_reserve_bps,
+        rp.victim_epoch_pool_bps,
+    );
+    assert_eq!(
+        dist.reporter_reward_sompi + dist.security_reserve_sompi + dist.victim_epoch_pool_sompi + dist.burned_sompi,
+        bond_amount,
+        "slashing split conserves value: reporter + reserve + victim + burn == slashed amount"
+    );
+    assert_eq!(dist.reporter_reward_sompi, expected_reporter, "minted reporter reward == the split's reporter share");
+    assert!(dist.reporter_reward_sompi <= bond_amount, "the minted reporter reward never exceeds the slashed amount (no inflation)");
+    assert!(
+        !utxos.contains_key(&TransactionOutpoint::new(slash_tx_id, 2)),
+        "no victim-compensation output is minted with a single (self-)validator"
+    );
 }
 
 /// kaspa-pq H-06 (unbond lifecycle): full-consensus unbond-REQUEST e2e + the client-side
