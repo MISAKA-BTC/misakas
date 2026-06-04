@@ -1490,6 +1490,65 @@ async fn pos_v2_slashing_survives_reorg_via_evidence_merge() {
     );
 }
 
+/// kaspa-pq ADR-0018 §F (DAG-3) — STAGED reward-split rollout across the `full_reward_split_daa_score`
+/// boundary. The §F carve selects the fee/subsidy split deterministically from the block's DAA score:
+/// below `full_reward_split_daa_score` the BOOTSTRAP split (smaller validator carve — worker base
+/// 8200bps), at/above it the FULL split (worker base 6700bps). This mines a constant-miner chain
+/// straight across the boundary and asserts (a) EVERY block stays UTXO-valid — the coinbase carve the
+/// template builds equals the one validation recomputes, on BOTH sides AND at the crossing block
+/// (construction == validation across a staged consensus parameter), and (b) the miner's per-block
+/// subsidy share visibly DROPS at the boundary (bootstrap 82% → full 67% of subsidy), proving the
+/// split actually changed rather than the stage being inert.
+#[tokio::test]
+async fn pos_v2_staged_full_reward_split_across_boundary() {
+    kaspa_core::log::try_init_logger("info");
+    const H: u64 = 20; // full_reward_split_daa_score
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0; // overlay active ⇒ the §F carve applies (Some(split))
+            dns.full_reward_split_daa_score = H; // Stage 2 (bootstrap) below H, Stage 3 (full) at/above
+            // pos_v2 stays fenced (preset u64::MAX) — §F fee-split staging is independent of the v2 economics.
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // A single, constant miner so every coinbase pays the same spk (the reward is the prev block's
+    // carved subsidy — the coinbase pays its mergeset miner).
+    let v = dns_harness::harness_validator([0x42u8; 32]);
+    let k_spk = p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes());
+    let miner = MinerData::new(k_spk.clone(), vec![]);
+
+    let mut rewards: Vec<(u64, u64)> = Vec::new(); // (block daa_score, miner's coinbase reward)
+    for _ in 0..(H + 15) {
+        let b = ctx.mine_block(miner.clone(), vec![]).await;
+        assert_eq!(
+            ctx.consensus.block_status(b.header.hash),
+            BlockStatus::StatusUTXOValid,
+            "every block stays UTXO-valid across the staged-split boundary (construction == validation)"
+        );
+        let r: u64 = b.transactions[0].outputs.iter().filter(|o| o.script_public_key == k_spk).map(|o| o.value).sum();
+        rewards.push((b.header.daa_score, r));
+    }
+
+    // The coinbase of a block at DAA d carves the mergeset (prev block's) subsidy by the split
+    // SELECTED FROM d. Sample a block clearly in Stage 2 (bootstrap) and one clearly in Stage 3
+    // (full); both adjacent enough that subsidy decay is negligible, so the ratio isolates the carve.
+    let stage2 = rewards.iter().rev().find(|(d, r)| *d < H && *r > 0).map(|(_, r)| *r).expect("a Stage-2 reward");
+    let stage3 = rewards.iter().find(|(d, r)| *d >= H && *r > 0).map(|(_, r)| *r).expect("a Stage-3 reward");
+    // Worker base share drops 8200bps → 6700bps ⇒ ratio ≈ 0.8170. Tolerance absorbs the tiny per-block decay.
+    let ratio = stage3 as f64 / stage2 as f64;
+    assert!(
+        (0.80..=0.83).contains(&ratio),
+        "the miner's subsidy share drops at the boundary by the bootstrap→full worker-base carve (8200→6700bps ≈ 0.817); got stage2={stage2} stage3={stage3} ratio={ratio:.4}"
+    );
+}
+
 /// kaspa-pq H-06 (unbond lifecycle): full-consensus unbond-REQUEST e2e + the client-side
 /// funded builder (`funded_signed_unbond_tx`). A funded, ML-DSA-87-signed bond goes
 /// Active; the owner then submits a funded, signed `StakeUnbondRequest` — the shape an
