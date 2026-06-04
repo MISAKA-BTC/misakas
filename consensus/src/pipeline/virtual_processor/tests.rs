@@ -1228,6 +1228,119 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     assert_eq!(drip_out.value, reserve_accrued, "the entire accrued reserve drips to the lone included validator B");
 }
 
+/// kaspa-pq ADR-0016 §D.2 — the bond-UTXO spend-gate races the slashing side-effect (audit M-01). A
+/// validator's locked stake (the bond's output-0) is NOT releasable while the bond is Active, so a
+/// block that SPENDS it must be rejected — even when the SAME block also carries a slashing-evidence
+/// tx for that bond (which would otherwise remove output-0). The spend-gate wins the race: the block
+/// is disqualified (`NonReleasableBondSpendInBlock`), so NEITHER the spend NOR the slash takes effect
+/// — the locked stake survives intact and no reporter reward is minted. Proves a validator cannot
+/// reclaim locked capital by smuggling a self-spend into a block, and that the spend-gate takes
+/// precedence over the slashing side-effect.
+#[tokio::test]
+async fn pos_v2_spend_gate_rejects_locked_bond_racing_slash() {
+    use kaspa_consensus_core::{
+        Hash64,
+        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
+    };
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 50;
+            dns.max_reorg_horizon_blocks = 2;
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // One validator/funding/reporter key.
+    let seed = [0x42u8; 32];
+    let v = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+
+    // Fund: h_a pays K (funds the bond), h_b pays K (funds the slashing-evidence tx).
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    let _b1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_a = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let h_b = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let cb_a = &h_a.transactions[0];
+    let (ia, oa) = cb_a.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_a pays K");
+    let (coinbase_a, value_a, daa_a) = (TransactionOutpoint::new(cb_a.id(), ia as u32), oa.value, h_a.header.daa_score);
+    let cb_b = &h_b.transactions[0];
+    let (ib, ob) = cb_b.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_b pays K");
+    let (coinbase_b, value_b, daa_b) = (TransactionOutpoint::new(cb_b.id(), ib as u32), ob.value, h_b.header.daa_score);
+    for _ in 0..5 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+
+    // Bond: output-0 is the locked stake (a P2PKH to K), Active from activation 0.
+    let storage = ctx.consensus.params().storage_mass_parameter;
+    let bond_amount = value_a - 100_000;
+    let (bond_tx, _vid, _payload) = dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, bond_amount, 0, storage);
+    let bond_tx_id = bond_tx.id();
+    let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+    assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid, "the bond block must be UTXO-valid");
+    let bond_outpoint = TransactionOutpoint::new(bond_tx_id, 0);
+    let bond_daa = bond_block.header.daa_score;
+
+    // Bury so the bond is committed into the active bond view the slashing verifier reads.
+    let mut buried = Vec::new();
+    for _ in 0..6 {
+        buried.push(ctx.mine_block(new_miner_data(), vec![]).await);
+    }
+
+    // Equivocation evidence (two conflicting attestations for the same (bond, epoch)).
+    let genesis_hash = ctx.consensus.params().genesis.hash;
+    let target_daa = buried[1].header.daa_score;
+    let att_a = dns_harness::build_signed_attestation(
+        &v, genesis_hash.as_byte_slice(), bond_outpoint, 1, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+    );
+    let att_b = dns_harness::build_signed_attestation(
+        &v, genesis_hash.as_byte_slice(), bond_outpoint, 1, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+    );
+    let evidence = SlashingEvidencePayload {
+        version: DNS_PAYLOAD_VERSION_V1,
+        bond_outpoint,
+        attestation_a: att_a,
+        attestation_b: att_b,
+        reporter_reward_spk_payload: k_payload,
+    };
+    let slash_tx = dns_harness::funded_signed_slashing_evidence_tx(seed, coinbase_b, value_b, daa_b, evidence, storage);
+    let slash_tx_id = slash_tx.id();
+    // A self-spend of the still-locked bond output-0 (the spend-gate violation).
+    let spend_tx = dns_harness::funded_signed_p2pkh_spend(seed, bond_outpoint, bond_amount, bond_daa, storage);
+
+    // ONE block carries BOTH: the slash (which would remove output-0) AND the self-spend of output-0.
+    // The Active bond is not releasable ⇒ the spend-gate disqualifies the whole block.
+    let race_block = ctx.mine_block(new_miner_data(), vec![slash_tx, spend_tx]).await;
+    assert_ne!(
+        ctx.consensus.block_status(race_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "spending the locked bond output-0 must disqualify the block (the spend-gate wins over the slash)"
+    );
+
+    // The block had NO effect: the locked stake survives (neither spent nor slashed-away) and no
+    // reporter reward was minted.
+    let utxos: std::collections::HashMap<_, _> = ctx.consensus.get_virtual_utxos(None, 100_000, false).into_iter().collect();
+    assert!(utxos.contains_key(&bond_outpoint), "the locked stake survives — the spend-gate rejected the racing block");
+    assert!(
+        !utxos.contains_key(&TransactionOutpoint::new(slash_tx_id, 0)),
+        "no reporter reward — the slash never applied (block disqualified)"
+    );
+}
+
 /// kaspa-pq H-06 (unbond lifecycle): full-consensus unbond-REQUEST e2e + the client-side
 /// funded builder (`funded_signed_unbond_tx`). A funded, ML-DSA-87-signed bond goes
 /// Active; the owner then submits a funded, signed `StakeUnbondRequest` — the shape an
@@ -2176,7 +2289,7 @@ mod dns_harness {
         hashing::sighash_type::SIG_HASH_ALL,
         mass::MassCalculator,
         subnets::{
-            SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND,
+            SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND,
             SUBNETWORK_ID_STAKE_UNBOND,
         },
         tx::{PopulatedTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry},
@@ -2453,6 +2566,56 @@ mod dns_harness {
             calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
         };
         let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0xabu8; 32])
+            .expect("ML-DSA-87 sign on the 64-byte sighash");
+        let mut sig_item = sig.as_ref().to_vec();
+        sig_item.push(SIG_HASH_ALL.to_u8());
+        let sig_script = ScriptBuilder::new()
+            .add_data(&sig_item)
+            .expect("ML-DSA-87 signature push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .add_data(&pubkey)
+            .expect("ML-DSA-87 public-key push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .drain();
+        tx.inputs[0].signature_script = sig_script;
+        tx
+    }
+
+    /// Build a FUNDED, ML-DSA-87-signed NATIVE spend of a P2PKH UTXO (e.g. a bond's locked
+    /// output-0) back to the same key. Exercises the ADR-0016 §D.2 bond-UTXO spend-gate: consensus
+    /// must reject a block that spends a still-locked (non-releasable) bond output. The spent output
+    /// is a regular (non-coinbase) tx output; the sighash commits its value + spk (both supplied),
+    /// so the signature verifies through the full script engine.
+    pub(super) fn funded_signed_p2pkh_spend(
+        seed: [u8; 32],
+        outpoint: TransactionOutpoint,
+        value: u64,
+        daa_score: u64,
+        storage_mass_parameter: u64,
+    ) -> Transaction {
+        let kp = mldsa::generate_key_pair(seed);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let reward_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes();
+        let spk = p2pkh_mldsa87_spk(&reward_payload);
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(outpoint, vec![], 0, 1)],
+            vec![TransactionOutput::new(value - 100_000, spk.clone())],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        let utxo = UtxoEntry::new(value, spk, daa_score, false);
+        let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
+            .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![utxo.clone()]))
+            .expect("contextual mass is computable for the bond-output spend")
+            .storage_mass;
+        tx.set_mass(storage_mass);
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        let sig_hash = {
+            let populated = PopulatedTransaction::new(&tx, vec![utxo]);
+            calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
+        };
+        let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0xacu8; 32])
             .expect("ML-DSA-87 sign on the 64-byte sighash");
         let mut sig_item = sig.as_ref().to_vec();
         sig_item.push(SIG_HASH_ALL.to_u8());
