@@ -144,7 +144,9 @@ pub const GENESIS: GenesisBlock = GenesisBlock {
         0xf4, 0x52, 0x25, 0x02, 0xcb, 0xca, 0x7a, 0x43, 0x3f, 0xec, 0x49, 0xe8, 0x94, 0x73, 0x96, 0xba, 0xa3, 0x6e, 0x81, 0x87, 0x51,
         0x0f,
     ]),
-    // 2026-05-28 00:00:00 UTC — kaspa-pq launch reference timestamp.
+    // 2025-05-28 00:00:00 UTC (= 1748390400000 ms) — kaspa-pq genesis reference timestamp (audit
+    // M-06: comment now matches the value; the real mainnet launch timestamp is set at the
+    // premine-ceremony re-genesis — see config/premine.rs MAINNET_PREMINE_CEREMONY_PENDING).
     timestamp: 1748390400000,
     // Difficulty target carried over from upstream Kaspa mainnet genesis; the
     // kaspa-pq launch op-team may want to revisit this once Phase 3/6 settle.

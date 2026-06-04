@@ -224,7 +224,7 @@ mod mldsa_parity_tests {
 
         // Native signer over a SignableTransaction.
         let mut signable = SignableTransaction::with_entries(cctx.clone(), vec![cc_entry.clone()]);
-        let signed = sign_transaction_inputs_mldsa87(&native_kp, &mut signable, |i| {
+        let signed = sign_transaction_inputs_mldsa87(&native_kp, &mut signable, |i, _sig_hash| {
             let mut r = base;
             let ib = (i as u64).to_le_bytes();
             for k in 0..8 {

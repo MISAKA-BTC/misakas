@@ -32,6 +32,10 @@ use zeroize::Zeroize;
 /// key (max 64 bytes; this string is 33 bytes).
 pub const KASPA_PQ_WALLET_KEYGEN_DOMAIN: &[u8] = b"kaspa-pq-wallet-v1/mldsa87/keygen";
 
+/// Domain separator (BLAKE2b key) for per-input ML-DSA-87 transaction-signing hedging randomness
+/// ([`KaspaPqMlDsa87KeyPair::input_hedge_randomness`], audit M-05).
+pub const KASPA_PQ_SIGNING_HEDGE_DOMAIN: &[u8] = b"kaspa-pq-wallet-v1/mldsa87/sign-hedge";
+
 /// kaspa-pq (ADR-0019 §13): true when legacy secp256k1 addresses must not be
 /// produced for `network` — i.e. its consensus params enforce PQ-only
 /// (`PqEnforcementMode::Consensus`). The wallet-key `to_address` /
@@ -117,6 +121,23 @@ impl KaspaPqMlDsa87KeyPair {
         // `MLDSA87Signature::as_ref()` returns `&[u8; SIGNATURE_SIZE]`.
         *sig.as_ref()
     }
+
+    /// Per-input ML-DSA-87 hedging randomness for transaction signing (audit M-05). The native
+    /// signer can't rely on fresh OS entropy on every build target (wallet-core also compiles to
+    /// WASM, where OS RNG is constrained, and the keypair deliberately never exposes its secret),
+    /// so — mirroring the WASM signer's `root ⊕ sighash` — this derives a full 32-byte, per-key,
+    /// per-input value via a domain-keyed BLAKE2b over the public-key hash and the input's sighash.
+    /// It replaces the old 8-byte-index randomness. ML-DSA is hedged and stays secure even fully
+    /// deterministic (re-using `rnd` across distinct messages is safe, unlike ECDSA/Schnorr), so
+    /// this is a hygiene improvement (a distinct cryptographic value per input), not a fix.
+    pub fn input_hedge_randomness(&self, sig_hash: &[u8; 64]) -> [u8; 32] {
+        let mut state = Params::new().hash_length(32).key(KASPA_PQ_SIGNING_HEDGE_DOMAIN).to_state();
+        state.update(&self.public_key_hash());
+        state.update(sig_hash);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(state.finalize().as_bytes());
+        out
+    }
 }
 
 /// Derive the 32-byte ML-DSA-87 keygen seed from BIP39-style inputs.
@@ -179,7 +200,7 @@ pub fn derive_keypair(network_id: &str, account: u32, change: u32, index: u32, m
 pub fn sign_transaction_inputs_mldsa87(
     keypair: &KaspaPqMlDsa87KeyPair,
     mutable_tx: &mut kaspa_consensus_core::tx::SignableTransaction,
-    per_input_randomness: impl Fn(usize) -> [u8; 32],
+    per_input_randomness: impl Fn(usize, &[u8; 64]) -> [u8; 32],
 ) -> usize {
     use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
     use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
@@ -209,7 +230,8 @@ pub fn sign_transaction_inputs_mldsa87(
             let verifiable = mutable_tx.as_verifiable();
             calc_mldsa87_signature_hash(&verifiable, i, SIG_HASH_ALL, &reused)
         };
-        let sig = keypair.sign(sig_hash.as_bytes().as_slice(), per_input_randomness(i));
+        let sig_hash_bytes = sig_hash.as_bytes();
+        let sig = keypair.sign(sig_hash_bytes.as_slice(), per_input_randomness(i, &sig_hash_bytes));
         // OP_CHECKSIG_MLDSA87 pops [sig, key] and strips the trailing sighash-type
         // byte from the signature, mirroring schnorr OP_CHECKSIG.
         let mut sig_item = Vec::with_capacity(MLDSA87_SIG_LEN + 1);
@@ -382,7 +404,7 @@ mod tests {
         let entry = UtxoEntry { amount: 1000, script_public_key: spk.clone(), block_daa_score: 0, is_coinbase: false };
         let mut signable: SignableTransaction = SignableTransaction::with_entries(tx, vec![entry.clone()]);
 
-        let n = sign_transaction_inputs_mldsa87(&kp, &mut signable, |i| [0x40u8 ^ (i as u8); 32]);
+        let n = sign_transaction_inputs_mldsa87(&kp, &mut signable, |i, _sig_hash| [0x40u8 ^ (i as u8); 32]);
         assert_eq!(n, 1, "exactly one input signed");
         assert!(!signable.tx.inputs[0].signature_script.is_empty(), "input 0 now has an unlock script");
 
@@ -436,7 +458,7 @@ mod tests {
             UtxoEntry { amount: 10, script_public_key: foreign, block_daa_score: 0, is_coinbase: false },       // foreign -> skip
         ];
         let mut signable: SignableTransaction = SignableTransaction::with_entries(tx, entries);
-        let n = sign_transaction_inputs_mldsa87(&kp, &mut signable, |_| [0x77u8; 32]);
+        let n = sign_transaction_inputs_mldsa87(&kp, &mut signable, |_, _sig_hash| [0x77u8; 32]);
         assert_eq!(n, 1, "only the empty, owned input is signed");
         assert!(!signable.tx.inputs[0].signature_script.is_empty());
         assert_eq!(signable.tx.inputs[1].signature_script, vec![0xaa], "pre-filled input untouched");
