@@ -1549,6 +1549,65 @@ async fn pos_v2_staged_full_reward_split_across_boundary() {
     );
 }
 
+/// kaspa-pq ADR-0018 §G (DAG-7) — MULTI-NODE mesh convergence with the DNS overlay ACTIVE. Three
+/// independent consensus instances (same overlay-active config) each mine a DIVERGENT chain from
+/// genesis; then every block is gossiped to every node. All three must converge on the SAME sink —
+/// i.e. the overlay's per-block machinery (epoch accumulator / reserve / rewarded-keys stores) and
+/// the reorg gate (dormant here: no attestations ⇒ no confirmed anchor) do NOT break GHOSTDAG's
+/// deterministic multi-node convergence. Complements the single-instance wide-DAG anchor-agreement
+/// test (which proves divergent VIEWS pick one anchor) with real cross-instance block exchange.
+#[tokio::test]
+async fn dag7_multi_node_mesh_converges_with_overlay_active() {
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 8; // enough to merge the divergent tips
+            p.mergeset_size_limit = 16;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0; // overlay ACTIVE on every node
+            p.dns_params = Some(dns);
+        })
+        .build();
+
+    // Three nodes, each mining a chain of a DIFFERENT length from genesis (genuinely divergent tips).
+    let mut nodes: Vec<TestContext> = (0..3).map(|_| TestContext::new(TestConsensus::new(&config))).collect();
+    let lengths = [5usize, 8, 6];
+    let mut chains: Vec<Vec<Block>> = Vec::new();
+    for i in 0..nodes.len() {
+        let mut blocks = Vec::new();
+        for _ in 0..lengths[i] {
+            blocks.push(nodes[i].mine_block(new_miner_data(), vec![]).await);
+        }
+        chains.push(blocks);
+    }
+
+    // Before gossip the nodes disagree (each sees only its own chain's tip).
+    let pre: Vec<_> = nodes.iter().map(|n| n.consensus.get_sink()).collect();
+    assert!(pre[0] != pre[1] || pre[1] != pre[2], "pre-gossip the nodes' sinks diverge");
+
+    // Gossip: deliver every OTHER node's chain (parents-first) to each node.
+    for i in 0..nodes.len() {
+        for j in 0..chains.len() {
+            if i == j {
+                continue;
+            }
+            for b in &chains[j] {
+                nodes[i].validate_and_insert_block(b.clone()).await;
+            }
+        }
+    }
+
+    // After gossip every node holds the identical union DAG ⇒ all converge on ONE sink.
+    let sinks: Vec<_> = nodes.iter().map(|n| n.consensus.get_sink()).collect();
+    assert_eq!(sinks[0], sinks[1], "node 0 and node 1 converge on the same sink ({} vs {})", sinks[0], sinks[1]);
+    assert_eq!(sinks[1], sinks[2], "node 1 and node 2 converge on the same sink ({} vs {})", sinks[1], sinks[2]);
+    // The converged sink is the heaviest divergent chain's tip (node 1's 8-block chain), and every
+    // node's chosen sink is one of the gossiped tips (a real block, not genesis).
+    let tips: std::collections::HashSet<_> = chains.iter().map(|c| c.last().unwrap().header.hash).collect();
+    assert!(tips.contains(&sinks[0]), "the converged sink is one of the mined chain tips");
+}
+
 /// kaspa-pq H-06 (unbond lifecycle): full-consensus unbond-REQUEST e2e + the client-side
 /// funded builder (`funded_signed_unbond_tx`). A funded, ML-DSA-87-signed bond goes
 /// Active; the owner then submits a funded, signed `StakeUnbondRequest` — the shape an
