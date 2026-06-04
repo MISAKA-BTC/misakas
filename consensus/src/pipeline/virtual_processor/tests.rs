@@ -1608,6 +1608,156 @@ async fn dag7_multi_node_mesh_converges_with_overlay_active() {
     assert!(tips.contains(&sinks[0]), "the converged sink is one of the mined chain tips");
 }
 
+/// kaspa-pq ADR-0018 §D/§E (DAG-5) — SELECTIVE attestation CENSORSHIP does not pay: a miner that
+/// excludes a validator's attestation cannot redistribute that validator's reward share to the
+/// validators it DID include, because the §E participation pool is divided by the EXPECTED (total
+/// active) stake — a fixed denominator set by the active BOND set, not by who was included
+/// (test-plan DNS-D3: "included-fraction drops, φS gates, NOT redistributed; denominator fixed").
+///
+/// Two equal-stake validators A and B are both bonded for the whole test. In epoch E1 both attest
+/// and both are included → each earns `pool/2` (equal stake ⇒ equal reward). In epoch E2 the miner
+/// CENSORS B (includes only A's attestation) — yet A still earns `pool/2`, NOT the whole pool: B's
+/// bond is still active so the denominator stays `A+B`, and B's uncredited share is simply not
+/// minted (don't-mint rollover). The decisive check is `A_reward(E2) ≈ A_reward(E1)` (NOT ≈ 2×):
+/// censoring B left A's reward unchanged, so censorship yields the miner/included-validator nothing.
+#[tokio::test]
+async fn dag5_selective_censorship_does_not_redistribute_reward() {
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::{Hash64, dns_finality::ready_epoch_from_tip_blue_score};
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 50;
+            dns.max_reorg_horizon_blocks = 2;
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let (va, vb) = (dns_harness::harness_validator([0x42u8; 32]), dns_harness::harness_validator([0x43u8; 32]));
+    let payload_a: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&va.pubkey).as_bytes();
+    let payload_b: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&vb.pubkey).as_bytes();
+    let (spk_a, spk_b) = (p2pkh_mldsa87_spk(&payload_a), p2pkh_mldsa87_spk(&payload_b));
+
+    // Fund: A needs three coinbases (bond + E1 shard + E2 shard), B two (bond + E1 shard).
+    let (miner_a, miner_b) = (MinerData::new(spk_a.clone(), vec![]), MinerData::new(spk_b.clone(), vec![]));
+    let mut blocks = Vec::new();
+    for _ in 0..4 {
+        blocks.push(ctx.mine_block(miner_a.clone(), vec![]).await);
+    }
+    for _ in 0..4 {
+        blocks.push(ctx.mine_block(miner_b.clone(), vec![]).await);
+    }
+    for _ in 0..5 {
+        blocks.push(ctx.mine_block(new_miner_data(), vec![]).await);
+    }
+    let (mut a_funds, mut b_funds) = (Vec::new(), Vec::new());
+    for blk in &blocks {
+        let cb = &blk.transactions[0];
+        for (i, o) in cb.outputs.iter().enumerate() {
+            let f = (TransactionOutpoint::new(cb.id(), i as u32), o.value, blk.header.daa_score);
+            if o.script_public_key == spk_a {
+                a_funds.push(f);
+            } else if o.script_public_key == spk_b {
+                b_funds.push(f);
+            }
+        }
+    }
+    assert!(a_funds.len() >= 3 && b_funds.len() >= 2, "need ≥3 A / ≥2 B funding coinbases (a={}, b={})", a_funds.len(), b_funds.len());
+    let ((cb_a_bond, va1, da_bond), (cb_a_e1, va_e1, da_a_e1), (cb_a_e2, va_e2, da_a_e2)) = (a_funds[0], a_funds[1], a_funds[2]);
+    let ((cb_b_bond, vb1, db_bond), (cb_b_e1, vb_e1, db_b_e1)) = (b_funds[0], b_funds[1]);
+
+    // Bond A and B with EXACTLY equal stake (so equal-stake ⇒ equal reward is exact).
+    let storage = ctx.consensus.params().storage_mass_parameter;
+    let bond_amount = va1.min(vb1) - 100_000;
+    let (bond_a_tx, _, _) = dns_harness::funded_signed_bond_tx([0x42u8; 32], cb_a_bond, va1, da_bond, bond_amount, 0, storage);
+    let (bond_b_tx, _, _) = dns_harness::funded_signed_bond_tx([0x43u8; 32], cb_b_bond, vb1, db_bond, bond_amount, 0, storage);
+    let (bond_a_id, bond_b_id) = (bond_a_tx.id(), bond_b_tx.id());
+    ctx.mine_block(new_miner_data(), vec![bond_a_tx]).await;
+    ctx.mine_block(new_miner_data(), vec![bond_b_tx]).await;
+    let (bond_a_outpoint, bond_b_outpoint) = (TransactionOutpoint::new(bond_a_id, 0), TransactionOutpoint::new(bond_b_id, 0));
+    for _ in 0..8 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    let genesis_hash = ctx.consensus.params().genesis.hash;
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let anchor_at = |ctx: &TestContext, epoch: u64| {
+        let vp = ctx.consensus.virtual_processor();
+        vp.canonical_anchor_by_blue_score(epoch, ctx.consensus.get_sink(), &dns).expect("canonical anchor")
+    };
+    let ready_epoch = |ctx: &TestContext| -> u64 {
+        let vp = ctx.consensus.virtual_processor();
+        let sink_blue = vp.headers_store.get_blue_score(ctx.consensus.get_sink()).unwrap();
+        ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+            .expect("an epoch is ready")
+    };
+
+    // ── Epoch E1: BOTH A and B attest and BOTH are included ⇒ each earns pool/2 (equal stake) ──
+    let e1 = ready_epoch(&ctx);
+    let anchor_e1 = anchor_at(&ctx, e1);
+    let att_a1 = dns_harness::build_signed_attestation(
+        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, e1, anchor_e1.anchor_hash, anchor_e1.anchor_daa_score, Hash64::default(),
+    );
+    let att_b1 = dns_harness::build_signed_attestation(
+        &vb, genesis_hash.as_byte_slice(), bond_b_outpoint, e1, anchor_e1.anchor_hash, anchor_e1.anchor_daa_score, Hash64::default(),
+    );
+    let shard_a1 = dns_harness::funded_signed_shard_tx([0x42u8; 32], cb_a_e1, va_e1, da_a_e1, att_a1, storage);
+    let shard_b1 = dns_harness::funded_signed_shard_tx([0x43u8; 32], cb_b_e1, vb_e1, db_b_e1, att_b1, storage);
+    let block_full = ctx.mine_block(new_miner_data(), vec![shard_a1, shard_b1]).await;
+    let reward = |blk: &Block, spk: &kaspa_consensus_core::tx::ScriptPublicKey| -> u64 {
+        blk.transactions[0].outputs.iter().filter(|o| o.script_public_key == *spk).map(|o| o.value).sum()
+    };
+    let (a_reward_e1, b_reward_e1) = (reward(&block_full, &spk_a), reward(&block_full, &spk_b));
+
+    // ── Mine forward to the NEXT ready epoch E2 ──
+    let mut e2 = ready_epoch(&ctx);
+    let mut guard = 0;
+    while e2 <= e1 && guard < 20 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+        e2 = ready_epoch(&ctx);
+        guard += 1;
+    }
+    assert!(e2 > e1, "a later epoch E2 must become ready");
+
+    // ── Epoch E2: the miner CENSORS B (includes only A's attestation). B's bond is still active, so
+    //    the §E denominator stays A+B and A earns the SAME pool/2 — B's share is NOT redistributed. ──
+    let anchor_e2 = anchor_at(&ctx, e2);
+    let att_a2 = dns_harness::build_signed_attestation(
+        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, e2, anchor_e2.anchor_hash, anchor_e2.anchor_daa_score, Hash64::default(),
+    );
+    let shard_a2 = dns_harness::funded_signed_shard_tx([0x42u8; 32], cb_a_e2, va_e2, da_a_e2, att_a2, storage);
+    let block_censor = ctx.mine_block(new_miner_data(), vec![shard_a2]).await; // B's E2 attestation is omitted
+    let (a_reward_e2, b_reward_censor) = (reward(&block_censor, &spk_a), reward(&block_censor, &spk_b));
+
+    // E1, both included, equal stake ⇒ equal, non-zero rewards.
+    assert!(a_reward_e1 > 0 && b_reward_e1 > 0, "E1: both included validators are rewarded");
+    assert_eq!(a_reward_e1, b_reward_e1, "E1: equal stake ⇒ equal §E participation reward");
+
+    // E2, B censored: A is rewarded, B earns NOTHING (its attestation was excluded).
+    assert!(a_reward_e2 > 0, "E2: the included validator A is still rewarded");
+    assert_eq!(b_reward_censor, 0, "E2: the CENSORED validator B earns nothing");
+
+    // DECISIVE anti-redistribution check: censoring B did NOT hand B's share to A. A's E2 reward is
+    // the SAME pool/2 it earned in E1 (the denominator stayed A+B) — NOT ≈ 2× (the whole pool), which
+    // is what a redistribute-to-included bug would produce.
+    assert!(
+        a_reward_e2 <= a_reward_e1 && a_reward_e2 * 100 >= a_reward_e1 * 90,
+        "censorship is not rewarded: A_reward(E2)={a_reward_e2} must stay ≈ A_reward(E1)={a_reward_e1} (same pool/2 share), not be inflated toward the full pool"
+    );
+}
+
 /// kaspa-pq H-06 (unbond lifecycle): full-consensus unbond-REQUEST e2e + the client-side
 /// funded builder (`funded_signed_unbond_tx`). A funded, ML-DSA-87-signed bond goes
 /// Active; the owner then submits a funded, signed `StakeUnbondRequest` — the shape an
