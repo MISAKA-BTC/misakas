@@ -1615,6 +1615,42 @@ pub enum SigningPurpose {
     /// from [`takeover_token_message`]; context is
     /// `TAKEOVER_TOKEN_CONTEXT`.
     TakeoverToken = 2,
+    /// DNS overlay unbond request — message digest is from
+    /// [`unbond_request_message`]; context is `UNBOND_REQUEST_CONTEXT`
+    /// (audit H-03; appended, so discriminants 0-2 are unchanged).
+    Unbond = 3,
+}
+
+/// The digest the signer will ML-DSA-87-sign, **typed by purpose** (audit H-03). This makes the
+/// digest size a compile-time property of the request: a [`SigningPurpose::Transaction`] carries a
+/// 64-byte [`Hash64`] transaction sighash, while the overlay digests (attestation / unbond /
+/// takeover) are the 32-byte BLAKE2b-256 [`Hash`] their `*_message` helpers produce. The previous
+/// fixed `message_digest: Hash` (32 bytes) could not represent a transaction sighash at all — so
+/// passing a 32-byte value for a tx-signing request was a silent protocol break; it is now
+/// unrepresentable.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum SignerMessageDigest {
+    /// 64-byte ML-DSA-87 transaction sighash (`calc_mldsa87_signature_hash`).
+    Transaction(Hash64),
+    /// 32-byte attestation message digest ([`stake_attestation_message`]).
+    Attestation(Hash),
+    /// 32-byte unbond-request message digest ([`unbond_request_message`]).
+    Unbond(Hash),
+    /// 32-byte takeover-token message digest ([`takeover_token_message`]).
+    TakeoverToken(Hash),
+}
+
+impl SignerMessageDigest {
+    /// The [`SigningPurpose`] this digest is for. A [`SignerRequest`] is well-formed only when its
+    /// `purpose` equals this (see [`SignerRequest::purpose_matches_digest`]).
+    pub fn purpose(&self) -> SigningPurpose {
+        match self {
+            SignerMessageDigest::Transaction(_) => SigningPurpose::Transaction,
+            SignerMessageDigest::Attestation(_) => SigningPurpose::Attestation,
+            SignerMessageDigest::Unbond(_) => SigningPurpose::Unbond,
+            SignerMessageDigest::TakeoverToken(_) => SigningPurpose::TakeoverToken,
+        }
+    }
 }
 
 /// Per-purpose structured metadata attached to a
@@ -1712,9 +1748,20 @@ pub struct SignerRequest {
     /// the purpose tag because future protocol extensions may
     /// need a non-standard context for the same purpose.
     pub context: Vec<u8>,
-    /// 32-byte BLAKE2b-256 the ML-DSA-87 will sign over.
-    pub message_digest: Hash,
+    /// The digest to sign, typed by purpose (audit H-03). Must agree with `purpose` — see
+    /// [`SignerRequest::purpose_matches_digest`]. A `Transaction` request carries a 64-byte sighash;
+    /// the others carry a 32-byte BLAKE2b-256 digest.
+    pub message_digest: SignerMessageDigest,
     pub metadata: SignerMetadata,
+}
+
+impl SignerRequest {
+    /// Audit H-03: the request is well-formed only when its `purpose` tag agrees with the typed
+    /// `message_digest` variant. A signer MUST reject a request where they disagree (the typed
+    /// digest already makes a wrong *size* unrepresentable; this catches a wrong *tag*).
+    pub fn purpose_matches_digest(&self) -> bool {
+        self.purpose == self.message_digest.purpose()
+    }
 }
 
 /// Server → client response. The `result` payload is either the
@@ -1747,7 +1794,7 @@ pub struct SignerAuditRecord {
     pub validator_id: Hash64,
     pub purpose: SigningPurpose,
     pub metadata: SignerMetadata,
-    pub message_digest: Hash,
+    pub message_digest: SignerMessageDigest,
     /// `BLAKE2b-512` of the 4627-byte signature bytes (zero
     /// `Hash64` if the request was refused). Pinned so the audit
     /// record stays small while still witnessing what was
@@ -6746,6 +6793,7 @@ mod tests {
         assert_eq!(SigningPurpose::Transaction as u8, 0);
         assert_eq!(SigningPurpose::Attestation as u8, 1);
         assert_eq!(SigningPurpose::TakeoverToken as u8, 2);
+        assert_eq!(SigningPurpose::Unbond as u8, 3);
     }
 
     #[test]
@@ -6757,7 +6805,7 @@ mod tests {
 
     #[test]
     fn signing_purpose_borsh_roundtrip() {
-        for p in [SigningPurpose::Transaction, SigningPurpose::Attestation, SigningPurpose::TakeoverToken] {
+        for p in [SigningPurpose::Transaction, SigningPurpose::Attestation, SigningPurpose::TakeoverToken, SigningPurpose::Unbond] {
             let bytes = borsh::to_vec(&p).unwrap();
             let back: SigningPurpose = borsh::from_slice(&bytes).unwrap();
             assert_eq!(back, p);
@@ -6853,7 +6901,7 @@ mod tests {
             validator_id: Hash64::from_bytes([0x42u8; 64]),
             purpose: SigningPurpose::Attestation,
             context: ATTESTATION_MLDSA87_CONTEXT.to_vec(),
-            message_digest: Hash::from_bytes([0xcdu8; 32]),
+            message_digest: SignerMessageDigest::Attestation(Hash::from_bytes([0xcdu8; 32])),
             metadata: SignerMetadata::Attestation { epoch: 42, target_hash: Hash64::from_bytes([0x11u8; 64]), target_daa_score: 100 },
         }
     }
@@ -6864,6 +6912,23 @@ mod tests {
         let bytes = borsh::to_vec(&r).unwrap();
         let back: SignerRequest = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, r);
+    }
+
+    #[test]
+    fn signer_request_purpose_matches_typed_digest() {
+        // audit H-03: the typed digest's purpose must agree with the request purpose, and a
+        // transaction request carries a 64-byte sighash (unrepresentable under the old 32-byte field).
+        assert!(fixture_signer_request().purpose_matches_digest()); // Attestation + Attestation
+        let tx = SignerRequest {
+            purpose: SigningPurpose::Transaction,
+            message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0x09u8; 64])),
+            ..fixture_signer_request()
+        };
+        assert!(tx.purpose_matches_digest());
+        // Transaction tag + Attestation digest (from the fixture) => mismatch, must be refused.
+        let mismatched = SignerRequest { purpose: SigningPurpose::Transaction, ..fixture_signer_request() };
+        assert!(!mismatched.purpose_matches_digest());
+        assert_eq!(SignerMessageDigest::Unbond(Hash::from_bytes([0x1u8; 32])).purpose(), SigningPurpose::Unbond);
     }
 
     #[test]
@@ -6893,7 +6958,7 @@ mod tests {
             validator_id: Hash64::from_bytes([0x42u8; 64]),
             purpose: SigningPurpose::Attestation,
             metadata: SignerMetadata::Attestation { epoch: 42, target_hash: Hash64::from_bytes([0x11u8; 64]), target_daa_score: 100 },
-            message_digest: Hash::from_bytes([0xcdu8; 32]),
+            message_digest: SignerMessageDigest::Attestation(Hash::from_bytes([0xcdu8; 32])),
             signature_fingerprint: sig_fingerprint,
             outcome,
         }
