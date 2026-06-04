@@ -71,12 +71,12 @@ impl SignerT for Signer {
         // keys, so the secp256k1 key map below never applies to it.
         if let Some(keypair) = self.inner.account.try_pq_keypair(&self.inner.keydata, &self.inner.payment_secret)? {
             let mut mutable_tx = mutable_tx;
-            sign_transaction_inputs_mldsa87(&keypair, &mut mutable_tx, |i| {
-                // ML-DSA is hedged-randomized; deterministic per-input randomness is
-                // secure (see kaspa_wallet_keys::kaspa_pq). Vary per input for tidiness.
-                let mut r = [0u8; 32];
-                r[..8].copy_from_slice(&(i as u64).to_le_bytes());
-                r
+            sign_transaction_inputs_mldsa87(&keypair, &mut mutable_tx, |_i, sig_hash| {
+                // audit M-05: per-input ML-DSA hedging randomness = a domain-keyed BLAKE2b over the
+                // key's public hash and the input's sighash (a full 32-byte, per-key, per-input
+                // value), mirroring the WASM signer's `root ⊕ sighash`. Replaces the old 8-byte
+                // index. ML-DSA is hedged and secure even fully deterministic, so this is hygiene.
+                keypair.input_hedge_randomness(sig_hash)
             });
             return Ok(mutable_tx);
         }

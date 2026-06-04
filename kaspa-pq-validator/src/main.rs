@@ -3,7 +3,7 @@
 //! A standalone process that connects to a co-located `kaspad` over a 127.0.0.1 wRPC
 //! (borsh) endpoint and, once its stake bond is active, attests to the selected-chain
 //! anchor each epoch: it fetches the ready-to-sign target over wRPC, signs it with its
-//! ML-DSA-65 validator key (under the equivocation-safety guard), funds a
+//! ML-DSA-87 validator key (under the equivocation-safety guard), funds a
 //! `StakeAttestationShard` transaction from a UTXO at its own address, and submits it.
 //! The signing primitives are shared with the in-process `--enable-validator` service via
 //! `kaspa-pq-validator-core`.
@@ -53,7 +53,7 @@ struct Cli {
 enum Command {
     /// Run the validator daemon: connect to the local node and attest while the bond is active.
     Run(RunArgs),
-    /// Generate a new ML-DSA-65 validator key and print its identity + funding address.
+    /// Generate a new ML-DSA-87 validator key and print its identity + funding address.
     Keygen(KeygenArgs),
     /// One-shot: query the node + bond status and print it.
     Status(StatusArgs),
@@ -78,7 +78,7 @@ struct RunArgs {
     #[arg(long, env = "KASPA_PQ_STAKE_BOND")]
     stake_bond: Option<String>,
 
-    /// Path to the ML-DSA-65 validator signing key (32-byte seed, hex). Required to attest.
+    /// Path to the ML-DSA-87 validator signing key (32-byte seed, hex). Required to attest.
     #[arg(long, env = "KASPA_PQ_VALIDATOR_KEY")]
     validator_key: Option<String>,
 
@@ -128,7 +128,7 @@ struct BondArgs {
     #[arg(long, default_value = "127.0.0.1:17110", env = "KASPA_PQ_NODE_RPC")]
     node_rpc: String,
 
-    /// Path to the ML-DSA-65 validator signing key (32-byte seed, hex). The bond is staked
+    /// Path to the ML-DSA-87 validator signing key (32-byte seed, hex). The bond is staked
     /// from a UTXO at this key's own funding address and binds this key as the validator.
     #[arg(long, env = "KASPA_PQ_VALIDATOR_KEY")]
     validator_key: String,
@@ -247,7 +247,7 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Generate a fresh ML-DSA-65 validator key, write the seed to `--out`, and print the
+/// Generate a fresh ML-DSA-87 validator key, write the seed to `--out`, and print the
 /// derived overlay identity + funding address. The owner / withdrawal key is NOT produced
 /// here (ADR-0011 key-separation policy: validator key on the host, owner key off it).
 fn keygen(args: KeygenArgs) -> Result<(), String> {
@@ -556,7 +556,7 @@ async fn run_daemon(args: RunArgs) -> Result<(), String> {
     result
 }
 
-/// The ML-DSA-65 signing identity + equivocation guard, present only when fully
+/// The ML-DSA-87 signing identity + equivocation guard, present only when fully
 /// configured. Shares its primitives with the in-process service via
 /// `kaspa-pq-validator-core`.
 struct Attestor {

@@ -78,7 +78,7 @@ async fn main() {
         _ => Prefix::Devnet,
     };
     // Coinbase payout address. `--wallet` (explicit bech32) wins; else derive from
-    // `--pay-mnemonic` (ML-DSA-65 P2PKH, m/0/0/0) so a wallet importing the same
+    // `--pay-mnemonic` (ML-DSA-87 P2PKH, m/0/0/0) so a wallet importing the same
     // mnemonic can spend the rewards; else an unspendable placeholder (PoW-smoke only).
     let pay_address = match (&args.wallet, &args.pay_mnemonic) {
         (Some(addr), _) => {

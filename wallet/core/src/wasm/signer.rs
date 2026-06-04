@@ -6,7 +6,7 @@ use kaspa_consensus_core::hashing::wasm::SighashType;
 use kaspa_consensus_core::sign::sign_input;
 use kaspa_consensus_core::tx::PopulatedTransaction;
 use kaspa_consensus_core::{hashing::sighash_type::SIG_HASH_ALL, sign::verify};
-// kaspa-pq ML-DSA-65 signer imports. `kaspa_pq_wasm` is only compiled for
+// kaspa-pq ML-DSA-87 signer imports. `kaspa_pq_wasm` is only compiled for
 // wasm32/test (it pulls wasm-bindgen), so the helper imports and the
 // `signTransactionMlDsa87` fn below are gated to match — native builds exclude them.
 #[cfg(any(target_arch = "wasm32", test))]
@@ -60,7 +60,7 @@ pub fn js_sign_transaction(tx: &Transaction, signer: &PrivateKeyArrayT, verify_s
 }
 
 /// `signTransactionMlDsa87()` signs every input of `tx` with a kaspa-pq
-/// ML-DSA-65 keypair, producing the canonical P2PKH unlock script
+/// ML-DSA-87 keypair, producing the canonical P2PKH unlock script
 /// `<signature || sighash_type> <public_key>` for each input. The signed
 /// message is the 64-byte `calc_mldsa87_signature_hash(.., SIG_HASH_ALL, ..)`
 /// (ADR-0019 §9) — the exact digest the `OpCheckSigMlDsa87` consensus opcode
@@ -224,7 +224,7 @@ mod mldsa_parity_tests {
 
         // Native signer over a SignableTransaction.
         let mut signable = SignableTransaction::with_entries(cctx.clone(), vec![cc_entry.clone()]);
-        let signed = sign_transaction_inputs_mldsa87(&native_kp, &mut signable, |i| {
+        let signed = sign_transaction_inputs_mldsa87(&native_kp, &mut signable, |i, _sig_hash| {
             let mut r = base;
             let ib = (i as u64).to_le_bytes();
             for k in 0..8 {

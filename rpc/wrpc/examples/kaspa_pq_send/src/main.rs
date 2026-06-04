@@ -3,7 +3,7 @@
 // This example walks through the kaspa-pq sending workflow end-to-end on the
 // kaspa-pq SDK surface:
 //
-//   1. Derive an ML-DSA-65 keypair from a BIP39 mnemonic using the
+//   1. Derive an ML-DSA-87 keypair from a BIP39 mnemonic using the
 //      kaspa-pq keygen XOF (`kaspa_wallet_keys::kaspa_pq::derive_keypair`).
 //   2. Compute the kaspa-pq P2PKH address for the chosen network prefix.
 //   3. (Optional) wRPC-connect to a kaspa-pq node on its default simnet
@@ -48,12 +48,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("=== kaspa-pq Phase 7 PR-7.5 SDK example ===\n");
 
-    // 1. BIP39 mnemonic -> ML-DSA-65 keypair on simnet, path m/0/0/0.
+    // 1. BIP39 mnemonic -> ML-DSA-87 keypair on simnet, path m/0/0/0.
     let mnemonic = Mnemonic::new(TEST_MNEMONIC, Language::English)?;
     let seed = mnemonic.to_seed("");
     let kp = derive_keypair("simnet", 0, 0, 0, seed.as_bytes());
     let pk_bytes = kp.public_key_bytes();
-    println!("Step 1: derived ML-DSA-65 keypair from BIP39 mnemonic + simnet/0/0/0");
+    println!("Step 1: derived ML-DSA-87 keypair from BIP39 mnemonic + simnet/0/0/0");
     println!("        public_key.len  = {}", pk_bytes.len());
 
     // 2. kaspa-pq P2PKH address.

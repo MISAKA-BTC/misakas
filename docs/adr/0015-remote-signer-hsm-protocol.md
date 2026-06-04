@@ -1,5 +1,7 @@
 # ADR-0015: Remote-Signer / HSM Protocol for Validator Signing
 
+> **⚠️ ML-DSA-65-era design doc (HISTORICAL — audit M-03).** The signature scheme is now **ML-DSA-87** (pk 2592 B / sig 4627 B) per [ADR-0019](0019-mldsa87-migration.md); the `ML-DSA-65` / `1952` / `3309` values below are the original draft and are **not current consensus**. This remote-signer/HSM protocol is deferred/unwired roadmap (see audit H-03), and the `message_digest` field must become purpose-specific (32-byte attestation vs 64-byte tx sighash) before any HSM tx-signing.
+
 Status: Accepted (Phase 13 design freeze; implementation deferred to Phase 10 PR series)
 Date: 2026-05-28
 Supersedes: —

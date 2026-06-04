@@ -71,10 +71,18 @@ pub fn multisig_redeem_script_ecdsa(pub_keys: impl Iterator<Item = impl Borrow<[
 /// Build an M-of-N **ML-DSA-87** multisig redeem script (kaspa-pq, post-quantum):
 /// `<required> <pk_1> <pk_2> ... <pk_N> <N> OP_CHECKMULTISIGMLDSA87`.
 ///
-/// Each public key must be the 2592-byte ML-DSA-87 (FIPS 204) encoding. The
-/// resulting redeem script is intended to be wrapped in P2SH via
-/// [`crate::pay_to_script_hash_script`]. Note the large size: each key adds
-/// ~1955 bytes, so an M-of-N spend script is constrained by `MAX_SCRIPTS_SIZE`.
+/// Each public key must be the 2592-byte ML-DSA-87 (FIPS 204) encoding.
+///
+/// **CONSENSUS-DISABLED in PQ-only (audit M-04).** This redeem script is meant to be wrapped in
+/// P2SH via [`crate::pay_to_script_hash_script`], but the PQ-only output gate
+/// (`ScriptClass::PubKeyHashMlDsa87` only — see `script_class.rs` / `tx_validation_in_isolation`)
+/// **rejects P2SH outputs as non-standard**, so coins sent to a P2SH-wrapped multisig of this
+/// script are unspendable on the launch network. This builder therefore exists only for tests and
+/// future use (a PQ-native multisig *output* class would be a separate design); it is
+/// `#[doc(hidden)]` and **must NOT be surfaced by the wallet/CLI as a spendable address** — doing so
+/// would lock funds. Note the large size: each key adds ~2594 bytes, so an M-of-N spend script is
+/// constrained by `MAX_SCRIPTS_SIZE`.
+#[doc(hidden)]
 pub fn multisig_redeem_script_mldsa87(
     pub_keys: impl Iterator<Item = impl Borrow<[u8; MLDSA87_PK_LEN]>>,
     required: usize,
