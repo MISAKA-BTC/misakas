@@ -2,7 +2,7 @@
 //!
 //! What this binary does:
 //!
-//! - Generate / re-derive an ML-DSA-65 keypair from a BIP39 mnemonic.
+//! - Generate / re-derive an ML-DSA-87 keypair from a BIP39 mnemonic.
 //! - Derive the corresponding kaspa-pq P2PKH address (misaka*).
 //! - Sign / verify messages with the kaspa-pq tx context
 //!   ([`MLDSA87_TX_CONTEXT`]).

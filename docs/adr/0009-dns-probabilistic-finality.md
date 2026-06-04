@@ -1,5 +1,7 @@
 # ADR-0009: DNS Probabilistic Finality Overlay
 
+> **⚠️ ML-DSA-65-era design doc (HISTORICAL — audit M-03).** The signature scheme is now **ML-DSA-87** (pk 2592 B / sig 4627 B) per [ADR-0019](0019-mldsa87-migration.md); the `ML-DSA-65` / `1952` / `3309` values below are the original draft and are **not current consensus**. The protocol/design structure still applies, and the live finality model has since moved to the DNS-v3 canonical-lagged-anchor + two-dimensional reorg gate.
+
 Status: Accepted (Phase 10 design freeze; activation deferred until Phases 1–9 stabilise)
 Date: 2026-05-28
 Supersedes: —

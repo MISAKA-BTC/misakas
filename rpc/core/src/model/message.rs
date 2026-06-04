@@ -1656,7 +1656,7 @@ impl Deserializer for GetValidatorStatusResponse {
 
 // kaspa-pq Phase 12 (ADR-0011): getValidatorAttestationTarget. Given a stake-bond
 // outpoint ("txid_hex:index"), returns the exact ready-to-sign attestation message
-// (and its bound fields) the validator must ML-DSA-65-sign for the current sink — so
+// (and its bound fields) the validator must ML-DSA-87-sign for the current sink — so
 // the `kaspa-pq-validator` sidecar can fetch the signing target over local wRPC.
 // `available` is false when the overlay is not configured or no target can be assembled.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1695,7 +1695,7 @@ pub struct GetValidatorAttestationTargetResponse {
     /// Commitment over the active validator set (Hash64, hex).
     pub validator_set_commitment: String,
     /// The ready-to-sign 32-byte attestation message digest (hex). The sidecar signs
-    /// this with its ML-DSA-65 validator key under the attestation context.
+    /// this with its ML-DSA-87 validator key under the attestation context.
     pub message: String,
 }
 

@@ -8,7 +8,7 @@ pub mod feerate_estimate;
 pub mod hash;
 pub mod header;
 pub mod hex_cnv;
-/// kaspa-pq Phase 7: byte-typed RPC fields for ML-DSA-65 + UTXO commitment.
+/// kaspa-pq Phase 7: byte-typed RPC fields for ML-DSA-87 + UTXO commitment.
 pub mod kaspa_pq;
 pub mod mempool;
 pub mod message;

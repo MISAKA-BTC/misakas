@@ -1,7 +1,7 @@
-//! kaspa-pq Phase 5: ML-DSA-65 wallet key derivation.
+//! kaspa-pq Phase 5: ML-DSA-87 wallet key derivation.
 //!
 //! BIP32-style hierarchical key derivation assumes a discrete-log-friendly
-//! curve (secp256k1) and is therefore unavailable for an ML-DSA-65 wallet.
+//! curve (secp256k1) and is therefore unavailable for an ML-DSA-87 wallet.
 //! kaspa-pq replaces it with a domain-separated XOF keyed by the BIP39
 //! master seed:
 //!
@@ -50,7 +50,7 @@ pub fn legacy_address_disabled(network: kaspa_consensus_core::network::NetworkTy
     matches!(kaspa_consensus_core::config::params::Params::from(network).pq_enforcement, PqEnforcementMode::Consensus)
 }
 
-/// kaspa-pq ML-DSA-65 wallet keypair, deterministically derived from a
+/// kaspa-pq ML-DSA-87 wallet keypair, deterministically derived from a
 /// 32-byte `keygen_seed` (see [`derive_keygen_seed`]).
 pub struct KaspaPqMlDsa87KeyPair {
     inner: ml_dsa_87::MLDSA87KeyPair,

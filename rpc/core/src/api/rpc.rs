@@ -397,7 +397,7 @@ pub trait RpcApi: Sync + Send + AnySync {
     }
 
     /// kaspa-pq Phase 12 (ADR-0011): the ready-to-sign attestation target for the given
-    /// stake-bond outpoint — the message the `kaspa-pq-validator` sidecar ML-DSA-65-signs.
+    /// stake-bond outpoint — the message the `kaspa-pq-validator` sidecar ML-DSA-87-signs.
     async fn get_validator_attestation_target(
         &self,
         request: GetValidatorAttestationTargetRequest,
