@@ -1341,6 +1341,155 @@ async fn pos_v2_spend_gate_rejects_locked_bond_racing_slash() {
     );
 }
 
+/// kaspa-pq ADR-0018 "本格版" (PoS-v2) — slashing is REORG-RESISTANT and reorg-SAFE (audit M-01). An
+/// equivocator cannot escape its slash by getting the network to reorg onto a heavier branch that
+/// omits the evidence. A bond X is buried in a shared prefix; one branch (A) slashes X — committing
+/// the side-effect (output-0 removed, reporter minted at `(slash_tx, 0)`) — while a HEAVIER competing
+/// branch (B), built by a second consensus instance over the SAME prefix, omits the slash. When B's
+/// blocks arrive the node reorgs onto B (the reorg gate is held dormant — Bootstrap stage, since
+/// `min_active_validators` is raised so a lone bond never activates it — so selection is pure
+/// blue_work). The slash block leaves the SELECTED chain, but branch A is still a DAG tip and is
+/// MERGED into the virtual, so the slash side-effect is RECOMPUTED and re-applies deterministically:
+/// X stays slashed and the reporter stays minted, exactly once (no double-removal, no panic, supply
+/// conserved). This is the economically correct, reorg-safe outcome — the equivocation evidence is
+/// permanent in the DAG, so the punishment survives the reorg rather than being stranded or replayed.
+#[tokio::test]
+async fn pos_v2_slashing_survives_reorg_via_evidence_merge() {
+    use kaspa_consensus_core::{
+        Hash64,
+        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
+    };
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+            dns.dns_activation_daa_score = 0;
+            dns.pos_v2_activation_daa_score = 0;
+            dns.epoch_length_blocks = 2;
+            dns.reward_uniqueness_window_blocks = 50;
+            // A large reorg horizon so the fork is within range (the gate is dormant anyway).
+            dns.max_reorg_horizon_blocks = 1000;
+            dns.attestation_epoch_length_blue_score = 3;
+            dns.attestation_lag_blue_score = 2;
+            dns.attestation_anchor_backoff_blue_score = 1;
+            dns.stake_score_window_blue_score = 10_000;
+            // Keep the rollout stage in Bootstrap (one bond can never reach Active), so the reorg gate
+            // stays GateInactive and selection is pure blue_work — the heaviest branch wins.
+            dns.min_active_validators = 100;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let seed = [0x42u8; 32];
+    let v = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+
+    // ── Shared prefix on the honest node: fund + bond X + bury (collected for delivery to the 2nd
+    //    instance, so both branches share an identical bond-creation history) ────────────────────
+    let mut prefix = Vec::new();
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    prefix.push(ctx.mine_block(k_miner.clone(), vec![]).await);
+    let h_a = ctx.mine_block(k_miner.clone(), vec![]).await;
+    prefix.push(h_a.clone());
+    let h_b = ctx.mine_block(k_miner.clone(), vec![]).await;
+    prefix.push(h_b.clone());
+    let cb_a = &h_a.transactions[0];
+    let (ia, oa) = cb_a.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_a pays K");
+    let (coinbase_a, value_a, daa_a) = (TransactionOutpoint::new(cb_a.id(), ia as u32), oa.value, h_a.header.daa_score);
+    let cb_b = &h_b.transactions[0];
+    let (ib, ob) = cb_b.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_b pays K");
+    let (coinbase_b, value_b, daa_b) = (TransactionOutpoint::new(cb_b.id(), ib as u32), ob.value, h_b.header.daa_score);
+    for _ in 0..5 {
+        prefix.push(ctx.mine_block(new_miner_data(), vec![]).await);
+    }
+    let storage = ctx.consensus.params().storage_mass_parameter;
+    let bond_amount = value_a - 100_000;
+    let (bond_tx, _vid, _rp) = dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, bond_amount, 0, storage);
+    let bond_tx_id = bond_tx.id();
+    prefix.push(ctx.mine_block(new_miner_data(), vec![bond_tx]).await);
+    let bond_outpoint = TransactionOutpoint::new(bond_tx_id, 0);
+    let mut buried = Vec::new();
+    for _ in 0..6 {
+        let b = ctx.mine_block(new_miner_data(), vec![]).await;
+        buried.push(b.clone());
+        prefix.push(b);
+    }
+
+    // ── Second instance: replay the SAME prefix, then build a HEAVIER no-slash branch B ─────────
+    let mut atk = TestContext::new(TestConsensus::new(&config));
+    for b in &prefix {
+        atk.validate_and_insert_block(b.clone()).await;
+    }
+    atk.simulated_time = ctx.simulated_time; // so branch B's timestamps stay ahead of the prefix
+    let mut branch_b = Vec::new();
+    for _ in 0..12 {
+        branch_b.push(atk.mine_block(new_miner_data(), vec![]).await);
+    }
+    let branch_b_tip = branch_b.last().unwrap().header.hash;
+
+    // ── Honest branch A: slash X (equivocation) and settle so the side-effect is COMMITTED ──────
+    let genesis_hash = ctx.consensus.params().genesis.hash;
+    let target_daa = buried[1].header.daa_score;
+    let att_a = dns_harness::build_signed_attestation(
+        &v, genesis_hash.as_byte_slice(), bond_outpoint, 1, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+    );
+    let att_b = dns_harness::build_signed_attestation(
+        &v, genesis_hash.as_byte_slice(), bond_outpoint, 1, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+    );
+    let evidence = SlashingEvidencePayload {
+        version: DNS_PAYLOAD_VERSION_V1,
+        bond_outpoint,
+        attestation_a: att_a,
+        attestation_b: att_b,
+        reporter_reward_spk_payload: k_payload,
+    };
+    let slash_tx = dns_harness::funded_signed_slashing_evidence_tx(seed, coinbase_b, value_b, daa_b, evidence, storage);
+    let slash_tx_id = slash_tx.id();
+    let slash_block = ctx.mine_block(new_miner_data(), vec![slash_tx]).await;
+    assert_eq!(ctx.consensus.block_status(slash_block.header.hash), BlockStatus::StatusUTXOValid, "branch A's slash block validates");
+    ctx.mine_block(new_miner_data(), vec![]).await; // settle so the slash side-effect commits
+
+    // Slash applied on branch A: X's locked stake is gone and the reporter reward is minted.
+    let dns = ctx.consensus.params().dns_params.clone().unwrap();
+    let expected_reporter = kaspa_consensus_core::dns_finality::compute_slashing_distribution(
+        bond_amount,
+        dns.reward_params.slashing_reporter_reward_bps,
+        dns.reward_params.security_reserve_bps,
+        dns.reward_params.victim_epoch_pool_bps,
+    )
+    .reporter_reward_sompi;
+    let reporter_outpoint = TransactionOutpoint::new(slash_tx_id, 0);
+    let pre: std::collections::HashMap<_, _> = ctx.consensus.get_virtual_utxos(None, 100_000, false).into_iter().collect();
+    assert!(!pre.contains_key(&bond_outpoint), "branch A: the slashed bond's locked stake is removed");
+    assert_eq!(pre.get(&reporter_outpoint).map(|u| u.amount), Some(expected_reporter), "branch A: the reporter reward is minted");
+
+    // ── Deliver branch B → the node reorgs onto the heavier no-slash branch ─────────────────────
+    for b in &branch_b {
+        ctx.validate_and_insert_block(b.clone()).await;
+    }
+    assert_eq!(ctx.consensus.get_sink(), branch_b_tip, "the node reorged onto the heavier branch B (gate dormant ⇒ pure blue_work)");
+
+    // ── The slash SURVIVES the reorg: branch A leaves the selected chain but is merged back into the
+    //    virtual, so the side-effect re-applies deterministically — X stays slashed, reporter stays
+    //    minted EXACTLY ONCE (no double-removal, no double-mint, no panic). ──────────────────────
+    let post: std::collections::HashMap<_, _> = ctx.consensus.get_virtual_utxos(None, 100_000, false).into_iter().collect();
+    assert!(
+        !post.contains_key(&bond_outpoint),
+        "after reorg: the equivocator is STILL slashed — its locked stake stays removed (evidence merged back)"
+    );
+    assert_eq!(
+        post.get(&reporter_outpoint).map(|u| u.amount),
+        Some(expected_reporter),
+        "after reorg: the reporter reward is still minted, exactly once (recomputed over the new selected chain + merge set)"
+    );
+}
+
 /// kaspa-pq H-06 (unbond lifecycle): full-consensus unbond-REQUEST e2e + the client-side
 /// funded builder (`funded_signed_unbond_tx`). A funded, ML-DSA-87-signed bond goes
 /// Active; the owner then submits a funded, signed `StakeUnbondRequest` — the shape an
