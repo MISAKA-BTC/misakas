@@ -1901,11 +1901,10 @@ mod bitcoind_tests {
     /// silently changing consensus signature bytes; and asserts the consensus
     /// verifier accepts the pinned signature and rejects a one-bit tamper.
     ///
-    /// NOTE (audit H-10, pre-mainnet): these pins validate libcrux =0.0.9 against
-    /// itself (a regression gate). Before a value-bearing mainnet, ALSO cross-check
-    /// keygen/sign/verify against official NIST ACVP ML-DSA-87 vectors and/or an
-    /// independent FIPS-204 implementation — see the `libcrux-ml-dsa` bump checklist
-    /// in the workspace `Cargo.toml`.
+    /// NOTE (audit H-10): these pins validate libcrux =0.0.9 against itself (a
+    /// regression gate). The independent-source cross-check the audit asked for is
+    /// done by [`acvp_mldsa87_official_nist_vectors`] below, which differentials the
+    /// SAME primitive against the official NIST ACVP FIPS-204 vectors.
     #[test]
     fn kat_mldsa87_deterministic_regression() {
         use libcrux_ml_dsa::ml_dsa_87 as mldsa;
@@ -1946,6 +1945,65 @@ mod bitcoind_tests {
         let mut bad = sig;
         bad[MLDSA87_SIG_LEN / 2] ^= 0x01;
         assert_eq!(verify_mldsa87_with_context(&pk, &msg, &bad, MLDSA87_TX_CONTEXT), Ok(false));
+    }
+
+    /// audit H-04 (the H-10 follow-up): OFFICIAL NIST ACVP differential for ML-DSA-87.
+    /// Cross-checks the shipped `libcrux_ml_dsa::ml_dsa_87` primitive — keygen, deterministic
+    /// sign, and the consensus `verify_mldsa87_with_context` path — against the official NIST
+    /// `usnistgov/ACVP-Server` FIPS-204 vectors (ML-DSA-87, EXTERNAL/pure interface, the same
+    /// context-domain-separated interface consensus uses). This is the independent-source check
+    /// the regression KAT above cannot give (those pins only validate libcrux against itself):
+    ///   - keyGen: a NIST seed (ξ) must derive the EXACT public + signing key bytes;
+    ///   - sigGen: DETERMINISTIC signing (randomness = 0^32) must reproduce the EXACT NIST
+    ///             signature bytes (proves our signer matches the standard, not just itself);
+    ///   - sigVer: the consensus verifier must ACCEPT every valid NIST (pk,msg,ctx,sig) and
+    ///             REJECT the official tampered cases (modified signature / modified message).
+    /// Vectors are a curated subset embedded in `mldsa87_acvp_vectors.json` (see its `source`).
+    #[test]
+    fn acvp_mldsa87_official_nist_vectors() {
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+        fn unhex(s: &str) -> Vec<u8> {
+            (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex digit")).collect()
+        }
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("mldsa87_acvp_vectors.json")).expect("ACVP vectors parse");
+
+        // keyGen — deterministic key derivation matches NIST exactly.
+        let kg = v["keyGen"].as_array().expect("keyGen array");
+        assert!(!kg.is_empty(), "keyGen vectors present");
+        for (i, t) in kg.iter().enumerate() {
+            let seed: [u8; 32] = unhex(t["seed"].as_str().unwrap()).try_into().expect("32-byte seed");
+            let kp = mldsa::generate_key_pair(seed);
+            assert_eq!(kp.verification_key.as_ref()[..], unhex(t["pk"].as_str().unwrap())[..], "ACVP keyGen pk (case {i})");
+            assert_eq!(kp.signing_key.as_ref()[..], unhex(t["sk"].as_str().unwrap())[..], "ACVP keyGen sk (case {i})");
+        }
+
+        // sigGen — deterministic (rnd = 0^32) external signing reproduces the exact NIST signature.
+        let sg = v["sigGen"].as_array().expect("sigGen array");
+        assert!(!sg.is_empty(), "sigGen vectors present");
+        for (i, t) in sg.iter().enumerate() {
+            // ML-DSA-87 SIGNING_KEY_SIZE = 4896 bytes (FIPS-204).
+            let sk_bytes: [u8; 4896] = unhex(t["sk"].as_str().unwrap()).try_into().expect("4896-byte sk");
+            let sk = mldsa::MLDSA87SigningKey::new(sk_bytes);
+            let (msg, ctx) = (unhex(t["message"].as_str().unwrap()), unhex(t["context"].as_str().unwrap()));
+            let sig = mldsa::sign(&sk, &msg, &ctx, [0u8; 32]).expect("deterministic sign");
+            assert_eq!(sig.as_ref()[..], unhex(t["signature"].as_str().unwrap())[..], "ACVP sigGen signature (case {i})");
+        }
+
+        // sigVer — the consensus verifier accepts valid NIST vectors and rejects the tampered ones.
+        let sv = v["sigVer"].as_array().expect("sigVer array");
+        let (mut saw_accept, mut saw_reject) = (false, false);
+        for (i, t) in sv.iter().enumerate() {
+            let pk = unhex(t["pk"].as_str().unwrap());
+            let (msg, ctx, sig) =
+                (unhex(t["message"].as_str().unwrap()), unhex(t["context"].as_str().unwrap()), unhex(t["signature"].as_str().unwrap()));
+            let expected = t["testPassed"].as_bool().expect("testPassed");
+            let got = verify_mldsa87_with_context(&pk, &msg, &sig, &ctx).expect("verify returns Ok");
+            assert_eq!(got, expected, "ACVP sigVer case {i} ({}): expected {expected} got {got}", t["reason"].as_str().unwrap_or(""));
+            saw_accept |= expected;
+            saw_reject |= !expected;
+        }
+        assert!(saw_accept && saw_reject, "sigVer exercises BOTH accept and reject (official tampered) directions");
     }
 
     fn create_spending_transaction(sig_script: Vec<u8>, script_public_key: ScriptPublicKey) -> Transaction {
