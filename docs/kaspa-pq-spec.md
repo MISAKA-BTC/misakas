@@ -76,6 +76,13 @@ mainline Kaspa network.
    `algo_id`-identified ASIC-resistance tag (`algo_id = 1` =
    kHeavyHash-compatible at Phase 1; ASIC-hard variants are Phase
    2+ separate hard-fork ADRs). `BlueWorkType = Uint576` in Phase 1.
+   **Phase-1 wire constraint (audit M-05):** `pow_algo_id` is consensus-fixed
+   to `POW_ALGO_ID_KHEAVYHASH = 1` and is **NOT** carried on the P2P
+   `BlockHeader` proto (the field is absent); on deserialization from a P2P
+   message the `Header.pow_algo_id` is always initialized to `1`
+   (`protocol/p2p/src/convert/header.rs`), and consensus rejects any other
+   value (`check_algo_id_phase1`). Adding `algo_id ≥ 2` is a Phase-2 change
+   that must add the proto field + a hard-fork activation together (ADR-0007).
 5. **64-byte consensus identity** end-to-end (ADR-0008). Block hash,
    transaction id, transaction hash, merkle root, accepted-id merkle
    root, UTXO commitment, pruning point, parent references all move
@@ -227,27 +234,28 @@ running code.
 
 ```
 OP_DUP
-OP_BLAKE2B_256
-OP_DATA32 <BLAKE2b-256(public_key)>
+OP_BLAKE2B_512
+OP_DATA64 <keyed BLAKE2b-512(public_key) — 64-byte address payload>
 OP_EQUALVERIFY
-OP_CHECKSIG_MLDSA65
+OP_CHECKSIG_MLDSA87
 ```
 
-Approximately 36–37 bytes per output.
+Exactly 69 bytes per output (the address payload is the **keyed** BLAKE2b-512
+of the public key under `kaspa-pq-v2/address/mldsa87`; md2 §4.2 / ADR-0019).
 
 ### 5.3 signatureScript (input)
 
 ```
-PUSH <signature || sighash_type>     ; 3309 + 1 = 3310 bytes payload
-PUSH <ML-DSA-65 public key>          ; 1952 bytes payload
+PUSH <signature || sighash_type>     ; 4627 + 1 = 4628 bytes payload
+PUSH <ML-DSA-87 public key>          ; 2592 bytes payload
 ```
 
-Approximately 5267 bytes including push opcodes. The full input
-(outpoint + length + script + sequence) is approximately 5319 bytes.
+(The ML-DSA-87 signature is 4627 bytes and the public key 2592 bytes;
+ADR-0019.)
 
 ### 5.4 sighash
 
-`calc_mldsa65_signature_hash` is added as a new function alongside
+`calc_mldsa87_signature_hash` is added as a new function alongside
 the existing `calc_schnorr_signature_hash` / `calc_ecdsa_signature_hash`.
 The ML-DSA `ctx` parameter binds the signature to the network and scheme
 (see §2).
@@ -263,18 +271,18 @@ benchmarked values in Phase 6 — see [ADR-0005](adr/0005-mass-policy.md).
 | `mass_per_script_pub_key_byte` | `10` | unchanged |
 | `mass_per_sig_op` | TBD (Phase 6) | scale from upstream `1000` by measured ML-DSA verify cost × safety factor ≥ 1.5 |
 | `max_block_mass` | `500_000` | unchanged, may be tightened in Phase 6 |
-| `max_signature_script_len` | `10_000` | unchanged, fits one ML-DSA P2PKH input |
+| `MAX_SCRIPTS_SIZE` / `max_signature_script_len` | `16_384` | fits one ML-DSA-87 P2PKH input (md2; widened from the 10_000 draft) |
 | `max_script_public_key_len` | `10_000` | unchanged |
-| `MAX_SCRIPT_ELEMENT_SIZE` | `4096` | widened from `520` to accommodate 3310-byte signature item |
+| `MAX_SCRIPT_ELEMENT_SIZE` | `8192` | widened to accommodate the 4628-byte signature item (md2) |
 
 ## 7. SigCache shape
 
-ML-DSA-65 public keys and signatures are far too large to keep verbatim
+ML-DSA-87 public keys and signatures are far too large to keep verbatim
 in a hot signature-verification cache. The cache key shape is:
 
 ```
-struct Mldsa65SigCacheKey {
-    sig_alg: SigAlg,           // tag = ML-DSA-65
+struct Mldsa87SigCacheKey {
+    sig_alg: SigAlg,           // tag = ML-DSA-87
     pubkey_hash: [u8; 32],     // BLAKE2b-256 of public key bytes
     signature_hash: [u8; 32],  // BLAKE2b-256 of signature bytes
     message_hash: [u8; 32],    // sighash digest
@@ -294,14 +302,14 @@ allocation policy decision.
 ```
 keygen_seed =
     XOF(
-        "kaspa-pq-wallet-v1/mldsa65/keygen" ||
+        "kaspa-pq-wallet-v1/mldsa87/keygen" ||
         network_id ||
         account ||
         change ||
         index ||
         master_seed
     )[0..32]
-keypair = MLDSA65.KeyGen(keygen_seed)
+keypair = MLDSA87.KeyGen(keygen_seed)
 ```
 
 The PoC PRF is BLAKE3 XOF; the spec admits BLAKE2b-512 as an

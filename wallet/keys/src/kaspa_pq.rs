@@ -32,8 +32,9 @@ use zeroize::Zeroize;
 /// key (max 64 bytes; this string is 33 bytes).
 pub const KASPA_PQ_WALLET_KEYGEN_DOMAIN: &[u8] = b"kaspa-pq-wallet-v1/mldsa87/keygen";
 
-/// Domain separator (BLAKE2b key) for per-input ML-DSA-87 transaction-signing hedging randomness
-/// ([`KaspaPqMlDsa87KeyPair::input_hedge_randomness`], audit M-05).
+/// Domain separator (BLAKE2b key) for per-input ML-DSA-87 transaction-signing DETERMINISTIC
+/// randomness ([`KaspaPqMlDsa87KeyPair::deterministic_input_signing_randomness`], audit M-05/M-06).
+/// (Wire value unchanged to preserve existing signatures; only the Rust identifier was clarified.)
 pub const KASPA_PQ_SIGNING_HEDGE_DOMAIN: &[u8] = b"kaspa-pq-wallet-v1/mldsa87/sign-hedge";
 
 /// kaspa-pq (ADR-0019 §13): true when legacy secp256k1 addresses must not be
@@ -122,15 +123,15 @@ impl KaspaPqMlDsa87KeyPair {
         *sig.as_ref()
     }
 
-    /// Per-input ML-DSA-87 hedging randomness for transaction signing (audit M-05). The native
-    /// signer can't rely on fresh OS entropy on every build target (wallet-core also compiles to
-    /// WASM, where OS RNG is constrained, and the keypair deliberately never exposes its secret),
-    /// so — mirroring the WASM signer's `root ⊕ sighash` — this derives a full 32-byte, per-key,
-    /// per-input value via a domain-keyed BLAKE2b over the public-key hash and the input's sighash.
-    /// It replaces the old 8-byte-index randomness. ML-DSA is hedged and stays secure even fully
-    /// deterministic (re-using `rnd` across distinct messages is safe, unlike ECDSA/Schnorr), so
-    /// this is a hygiene improvement (a distinct cryptographic value per input), not a fix.
-    pub fn input_hedge_randomness(&self, sig_hash: &[u8; 64]) -> [u8; 32] {
+    /// Per-input ML-DSA-87 **deterministic** signing randomness (audit M-05/M-06). Despite ML-DSA's
+    /// `rnd` parameter being called "hedging" in FIPS-204, this derives the value DETERMINISTICALLY —
+    /// a domain-keyed BLAKE2b over the public-key hash and the input's sighash — with NO OS RNG and
+    /// NO secret entropy (the keypair deliberately never exposes its secret, and wallet-core also
+    /// compiles to WASM where OS RNG is constrained). Mirrors the WASM signer's `root ⊕ sighash` and
+    /// replaces the old 8-byte-index randomness. This is safe BECAUSE ML-DSA stays secure even fully
+    /// deterministic (re-using `rnd` across distinct messages is fine, unlike ECDSA/Schnorr): it is a
+    /// hygiene improvement (a distinct value per input), NOT fresh hedging entropy (audit M-06).
+    pub fn deterministic_input_signing_randomness(&self, sig_hash: &[u8; 64]) -> [u8; 32] {
         let mut state = Params::new().hash_length(32).key(KASPA_PQ_SIGNING_HEDGE_DOMAIN).to_state();
         state.update(&self.public_key_hash());
         state.update(sig_hash);

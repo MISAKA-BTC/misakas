@@ -1,6 +1,8 @@
 # ADR-0015: Remote-Signer / HSM Protocol for Validator Signing
 
-> **⚠️ ML-DSA-65-era design doc (HISTORICAL — audit M-03).** The signature scheme is now **ML-DSA-87** (pk 2592 B / sig 4627 B) per [ADR-0019](0019-mldsa87-migration.md); the `ML-DSA-65` / `1952` / `3309` values below are the original draft and are **not current consensus**. This remote-signer/HSM protocol is deferred/unwired roadmap (see audit H-03), and the `message_digest` field must become purpose-specific (32-byte attestation vs 64-byte tx sighash) before any HSM tx-signing.
+> **🚧 EXPERIMENTAL — DESIGN-ONLY, NOT IMPLEMENTED (audit H-04).** This remote-signer / HSM protocol is **not a production feature**. What exists today is only the *type layer* in `kaspa_consensus_core::dns_finality` — the purpose-specific `SignerMessageDigest` enum (`Transaction(Hash64)` / `Attestation(Hash)` / `Unbond` / `TakeoverToken`) + `purpose_matches_digest` (the audit H-03 digest-type fix is **done**). There is **NO** standalone signer daemon, HSM bridge, authenticated socket transport, anti-equivocation DB, or failover workflow. **The only production signing path is the local key-file signer (ADR-0010).** Do not advertise HSM / remote-signer custody until the daemon + strict-policy enforcement land and are tested.
+>
+> **⚠️ ML-DSA-65-era design doc (HISTORICAL — audit M-03).** The signature scheme is now **ML-DSA-87** (pk 2592 B / sig 4627 B) per [ADR-0019](0019-mldsa87-migration.md); the `ML-DSA-65` / `1952` / `3309` values below are the original draft and are **not current consensus**.
 
 Status: Accepted (Phase 13 design freeze; implementation deferred to Phase 10 PR series)
 Date: 2026-05-28

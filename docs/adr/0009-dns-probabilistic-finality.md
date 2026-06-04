@@ -34,6 +34,21 @@ The DNS paper defines the value of the overlay precisely:
 > versa. The reorg probabilities do **not** multiply unconditionally —
 > the value is non-substitutability, not joint independence.
 
+**Implementation note (audit H-02 — read this before quoting the predicate above).**
+The shipped production presets set `cW = required_work_depth = 0`, so the confirmation
+*predicate* (`is_dns_confirmed`) reduces to **stake-depth only**: it confirms a
+**stake-confirmed canonical lagged anchor**, not an independent PoW-depth count. The
+PoW dimension is NOT part of confirmation. Non-substitutability — the property that a
+heavier PoW chain cannot rewrite a stake-confirmed anchor — is enforced by the
+**two-dimensional reorg gate** (`check_dns_reorg_rule`, `TwoDimensionalDominance`),
+which demands BOTH a WorkScore and a StakeScore dominance margin over canonical
+*measured since the common ancestor* (deltas), not the absolute cumulative work the
+predicate reads. So the accurate public description of the current design is
+**"stake-confirmed canonical anchor + two-dimensional reorg gate"**, NOT "Double
+Nakamoto confirmation". To make `WorkDepth` a real confirmation input, set `cW > 0`
+AND change the pipeline's `work_depth` from `blue_work(sink)` (cumulative) to
+`blue_work(tip) − blue_work(confirmable_anchor)` (anchor-relative depth).
+
 A previous design draft proposed a hard `dns_finality_point` cutoff
 ("anything before this block is consensus-final"). That is BFT-flavoured
 hard finality, not DNS, and it conflicts with the DNS paper's explicit

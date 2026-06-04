@@ -2760,10 +2760,19 @@ pub fn derive_dns_health(
     }
 }
 
-/// History-confirmation predicate — the DNS paper's
-/// `WorkDepth(B) ≥ cW ∧ StakeDepth(B) ≥ cS`. An anchor is DNS-confirmed
-/// iff it clears **both** thresholds. Used by the consensus pipeline to
-/// advance [`DnsState::last_dns_confirmed_anchor`].
+/// History-confirmation predicate — `WorkDepth(B) ≥ cW ∧ StakeDepth(B) ≥ cS`. An anchor is
+/// DNS-confirmed iff it clears **both** thresholds. Used by the consensus pipeline to advance
+/// [`DnsState::last_dns_confirmed_anchor`].
+///
+/// audit H-02 — what this is and is NOT: on the production presets `cW = required_work_depth =
+/// BlueWorkType::ZERO`, so the work term is satisfied trivially and confirmation is effectively
+/// **stake-depth only** (a stake-confirmed canonical lagged anchor). This is NOT the "Double
+/// Nakamoto" claim of an independent PoW *and* PoS confirmation count — the PoW dimension does NOT
+/// gate confirmation here. The two-dimensional **finality safety** (non-substitutability: a heavier
+/// PoW chain cannot rewrite a stake-confirmed anchor) is enforced separately by the reorg gate
+/// [`check_dns_reorg_rule`], which requires BOTH a WorkScore and a StakeScore dominance margin over
+/// canonical SINCE THE COMMON ANCESTOR (deltas, not the absolute cumulative `work_depth` read here).
+/// Set `cW > 0` only if you also switch `work_depth` to an anchor-relative delta (see the audit note).
 pub fn is_dns_confirmed(
     work_depth: BlueWorkType,
     stake_depth: StakeScore,
