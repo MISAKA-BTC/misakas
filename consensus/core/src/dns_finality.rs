@@ -714,7 +714,8 @@ pub struct DnsParams {
     /// activation there is no carve (Stage 1: the miner takes the whole reward).
     /// Keyed on DAA (not the pov-dependent `DnsState.rollout_stage`) so the
     /// construction and validation coinbase paths pick the same stage. Appended
-    /// last to keep the borsh layout change localized. `u64::MAX` everywhere today.
+    /// last to keep the borsh layout change localized. `0` on every current net
+    /// (GENESIS_ACTIVE + PRODUCTION) — the Stage-3 full split applies from genesis.
     pub full_reward_split_daa_score: u64,
 
     /// kaspa-pq ADR-0018 "本格版" (PoS-v2 economics): the master activation fence for the
@@ -722,8 +723,10 @@ pub struct DnsParams {
     /// **slashing** distribution (reserve + victim-epoch shares), and the **security-reserve**
     /// drip. Independent of [`Self::dns_activation_daa_score`] (which already activates the base
     /// participation reward + 2-way slashing on devnet), so the v2 economics stay byte-identical
-    /// everywhere until explicitly switched on. `u64::MAX` on every net today (inert; no
-    /// consensus / genesis change). Appended last to keep the borsh layout change localized.
+    /// until explicitly switched on. `u64::MAX` on devnet/simnet (`GENESIS_ACTIVE_DNS_PARAMS`, inert);
+    /// `0` on mainnet/testnet (`PRODUCTION_DNS_PARAMS`) — the v2 economics are ACTIVE from genesis
+    /// there (no genesis-block change; the per-net fence is not a genesis input). Appended last to
+    /// keep the borsh layout change localized.
     pub pos_v2_activation_daa_score: u64,
 
     // ---- kaspa-pq DNS v3: Canonical Lagged Anchor (blue_score-coordinated epochs) ----
@@ -3714,8 +3717,9 @@ pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: 
 /// `included` stores the 64-byte payload as a [`Hash64`] (serde-stable; `[u8; 64]` has no derive),
 /// converted back via [`Hash64::as_bytes`] for [`p2pkh_mldsa87_spk`] at payout.
 ///
-/// Entirely inert today: the recompute is gated by `pos_v2_activation_daa_score` (`u64::MAX` on
-/// every net), so no tally is ever written.
+/// Gated by `pos_v2_activation_daa_score`: inert on devnet/simnet (`GENESIS_ACTIVE_DNS_PARAMS`,
+/// fence `u64::MAX` — no tally is ever written); written from block 1 on mainnet/testnet
+/// (`PRODUCTION_DNS_PARAMS`, fence `0` — the v2 economics are active).
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct EpochTally {
     pub expected_stake: u128,

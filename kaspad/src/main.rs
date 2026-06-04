@@ -24,6 +24,23 @@ pub fn main() {
 
     let args = parse_args();
 
+    // audit H-01: refuse to launch a MAINNET node while the premine custody ceremony is pending.
+    // MAINNET_PREMINE_OWNER_PAYLOAD is the all-zero UNSPENDABLE placeholder, so a mainnet started now
+    // would run a chain whose 15B premine is permanently locked. The operator must first complete the
+    // offline ML-DSA-87 key-generation ceremony, re-genesis (re-pin GENESIS.hash + utxo_commitment via
+    // the ceremony tool), and flip MAINNET_PREMINE_CEREMONY_PENDING to false. Test/devnet/simnet are
+    // unaffected (public test key); consensus unit/integration harnesses never reach this binary entry.
+    if args.network().network_type == kaspa_consensus_core::network::NetworkType::Mainnet
+        && kaspa_consensus_core::config::premine::MAINNET_PREMINE_CEREMONY_PENDING
+    {
+        eprintln!(
+            "FATAL (audit H-01): refusing to start a MAINNET node — the premine custody ceremony is \
+             pending (the mainnet premine is an unspendable all-zero placeholder). Complete the offline \
+             ML-DSA-87 key ceremony + re-genesis and set MAINNET_PREMINE_CEREMONY_PENDING=false first."
+        );
+        std::process::exit(1);
+    }
+
     match fd_budget::try_set_fd_limit(DESIRED_DAEMON_SOFT_FD_LIMIT) {
         Ok(limit) => {
             if limit < MINIMUM_DAEMON_SOFT_FD_LIMIT {

@@ -92,22 +92,26 @@ pub enum DatabaseStorePrefixes {
     /// Keyed by `u64` epoch: the per-epoch [`EpochTally`] accumulator
     /// (expected stake, included validators, accrued quality pool, finalized
     /// flag), recomputed from the selected-chain window at each virtual-state
-    /// commit and read by the deferred §E quality-bonus payout. Inert
-    /// (never written) until `pos_v2_activation_daa_score` (`u64::MAX` today).
+    /// commit and read by the deferred §E quality-bonus payout. Gated by
+    /// `pos_v2_activation_daa_score`: inert (never written) on devnet/simnet
+    /// (`GENESIS_ACTIVE_DNS_PARAMS`, fence `u64::MAX`); written from block 1 on
+    /// mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence `0` — v2 active).
     EpochAccumulator = 198,
     /// Keyed by `BlockHash`: the per-block validator **quality sub-pool**
     /// (`split_validator_pool(.).1`), the recompute input that the per-epoch
     /// accumulator sums (the per-block `validator_pool` is not cheaply
     /// re-derivable from a historical block). Written only past
-    /// `pos_v2_activation_daa_score` (so inert on every net today); deleted on
+    /// `pos_v2_activation_daa_score` (inert on devnet/simnet with fence `u64::MAX`;
+    /// written from block 1 on mainnet/testnet with fence `0`); deleted on
     /// prune alongside `RewardedEpochs`.
     BlockValidatorQualityPool = 199,
     /// Keyed by `BlockHash`: the per-block **cumulative security-reserve balance**
     /// (`balance_after(block) = balance_after(selected_parent) + slashing-reserve
     /// accrual − drip`). The finalizing coinbase reads the selected parent's balance
     /// for the per-epoch reserve drip (so construction == validation without a
-    /// lagging singleton). Written only past `pos_v2_activation_daa_score` (inert
-    /// today); deleted on prune alongside `RewardedEpochs`.
+    /// lagging singleton). Written only past `pos_v2_activation_daa_score` (inert on
+    /// devnet/simnet with fence `u64::MAX`; written from block 1 on mainnet/testnet
+    /// with fence `0`); deleted on prune alongside `RewardedEpochs`.
     ReserveBalance = 200,
 
     // ---- Separator ----

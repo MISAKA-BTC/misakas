@@ -35,6 +35,13 @@ fn genesis_initial_utxo_set(config: &Config) -> Vec<(TransactionOutpoint, UtxoEn
 /// from the baked-in premine UTXO set. Called unconditionally for every network,
 /// so all nodes agree on the premine-aware genesis identity.
 pub fn set_genesis_utxo_commitment_from_config(config: &mut Config) {
+    // audit M-07: the hardcoded `GENESIS.hash`/`utxo_commitment` MUST equal the premine-derived
+    // values, so an operator can never silently run a divergent genesis (e.g. a premine payload
+    // edited — or a ceremony payload installed — without re-pinning the constants). We recompute and
+    // then assert equality below.
+    let hardcoded_commitment = config.params.genesis.utxo_commitment;
+    let hardcoded_hash = config.params.genesis.hash;
+
     let mut genesis_multiset = MuHash::new();
     for (outpoint, entry) in genesis_initial_utxo_set(config) {
         genesis_multiset.add_utxo(&outpoint, &entry);
@@ -43,6 +50,24 @@ pub fn set_genesis_utxo_commitment_from_config(config: &mut Config) {
     config.params.genesis.utxo_commitment = genesis_multiset.finalize();
     let genesis_header: Header = (&config.params.genesis).into();
     config.params.genesis.hash = genesis_header.hash;
+
+    // The canonical premine MUST round-trip to the pinned constants. Skipped under
+    // `devnet-prealloc`, where CLI-injected UTXOs legitimately change the commitment.
+    #[cfg(not(feature = "devnet-prealloc"))]
+    {
+        assert_eq!(
+            config.params.genesis.utxo_commitment, hardcoded_commitment,
+            "genesis utxo_commitment mismatch (audit M-07): the pinned GENESIS.utxo_commitment does not match the premine UTXO set — re-pin it after any premine change via the config::premine ceremony tool"
+        );
+        assert_eq!(
+            config.params.genesis.hash, hardcoded_hash,
+            "genesis hash mismatch (audit M-07): the pinned GENESIS.hash does not match the premine-derived hash — re-pin GENESIS.hash + utxo_commitment after any premine change"
+        );
+    }
+    #[cfg(feature = "devnet-prealloc")]
+    {
+        let _ = (hardcoded_commitment, hardcoded_hash);
+    }
 }
 
 /// Imports the premine UTXO set into a freshly created consensus. The imported
@@ -101,5 +126,20 @@ mod tests {
         set_genesis_utxo_commitment_from_config(&mut recomputed);
         assert_eq!(recomputed.params.genesis.utxo_commitment, expected_commitment);
         assert_eq!(recomputed.params.genesis.hash, static_hash, "premine commitment recompute must be idempotent");
+    }
+
+    /// audit M-07: on EVERY network the hardcoded `GENESIS.hash` / `utxo_commitment` must round-trip
+    /// to the premine UTXO set — `set_genesis_utxo_commitment_from_config` now asserts this, so this
+    /// test fails (panics) the instant a network's pinned genesis constants drift from its premine
+    /// (including the mainnet all-zero-placeholder premine). It is the static guarantee behind the
+    /// runtime "can't run a divergent genesis" property.
+    #[test]
+    fn all_networks_genesis_constants_match_premine() {
+        use kaspa_consensus_core::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS};
+        for params in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS] {
+            let mut config = Config::new(params);
+            // The assert inside panics if the pinned constants do not match the premine-derived ones.
+            set_genesis_utxo_commitment_from_config(&mut config);
+        }
     }
 }
