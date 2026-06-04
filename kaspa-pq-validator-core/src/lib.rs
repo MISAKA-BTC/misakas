@@ -39,13 +39,13 @@ use std::str::FromStr;
 /// (matches the wallet's `KaspaPqMlDsa87KeyPair`).
 pub const VALIDATOR_SEED_LEN: usize = 32;
 
-/// Floor (sompi) for the attestation-shard transaction fee. The actual fee should be the
-/// transaction's compute mass (a safe >= mempool-minimum at the 1 sompi/gram relay rate),
-/// clamped up to this floor. Set above the node's mass-based standard minimum for the
-/// single-input ML-DSA-87 shard shape (observed ~15600 on devnet) so the shard is not
-/// rejected as non-standard; the mass-based path (`estimate_attestation_fee`) overrides this
-/// when a `MassCalculator` is available (the in-process service), and the sidecar's flat
-/// fallback uses this floor.
+/// Floor (sompi) for an overlay-tx fee — attestation shard / StakeBond / StakeUnbondRequest. It is
+/// the minimum the mass-based estimators ([`ValidatorKey::estimate_attestation_fee`],
+/// [`ValidatorKey::estimate_bond_fee`], [`ValidatorKey::estimate_unbond_fee`]) ever return, and the
+/// fallback when a `MassCalculator` is unavailable. The real fee is the relay-rate fee derived from
+/// the transaction's compute mass — see [`relay_fee_for_compute_mass`], which mirrors the node's
+/// `minimum_required_transaction_relay_fee` at the kaspa-pq production rate (10× compute mass), so
+/// these payload-heavy ML-DSA txs (2592-byte pubkey, 4627-byte sig) are not rejected as under-fee.
 pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 30_000;
 
 /// Convert a transaction's non-contextual **compute mass** into the node's minimum relay fee
@@ -405,7 +405,7 @@ impl ValidatorKey {
         let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
         let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
         match self.build_funded_shard_tx(&shard, outpoint, &funding, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
-            Ok(tx) => mass_calculator.calc_non_contextual_masses(&tx).compute_mass.max(ATTESTATION_TX_FEE_FLOOR_SOMPI),
+            Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
             Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
         }
     }
