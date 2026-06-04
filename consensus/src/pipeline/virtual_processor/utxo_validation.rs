@@ -968,7 +968,7 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> BlockProcessResult<()> {
         let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
-        unbond_request_authorized(txs, selected_parent_bond_view, daa_score, activated)
+        unbond_request_authorized(txs, selected_parent_bond_view, self.genesis.hash.as_byte_slice(), daa_score, activated)
             .map_err(|(tx_id, bond_outpoint)| UnauthorizedUnbondRequestInBlock(tx_id, bond_outpoint))
     }
 
@@ -1309,6 +1309,7 @@ fn bond_spend_gate(
 fn unbond_request_authorized(
     txs: &[Transaction],
     bond_view: &ActiveBondView,
+    net_id: &[u8],
     daa_score: u64,
     activated: bool,
 ) -> Result<(), (TransactionId, TransactionOutpoint)> {
@@ -1327,8 +1328,8 @@ fn unbond_request_authorized(
         if validator_id_from_pubkey(&req.owner_pubkey) != bond.owner_pubkey_hash {
             return Err((tx_id, req.bond_outpoint));
         }
-        // (c) the owner's signature over the bond-bound digest must verify.
-        let digest = unbond_request_message(req.bond_outpoint).as_bytes();
+        // (c) the owner's signature over the network- and bond-bound digest must verify (audit M-04).
+        let digest = unbond_request_message(net_id, req.bond_outpoint).as_bytes();
         if !matches!(
             verify_mldsa87_with_context(&req.owner_pubkey, &digest, &req.signature, UNBOND_REQUEST_CONTEXT),
             Ok(true)
@@ -1567,6 +1568,9 @@ mod tests {
         use kaspa_hashes::Hash64;
         use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
+        // audit M-04: the signer and verifier must agree on the network id bound into the digest.
+        const NET_ID: &[u8] = b"audit-m04-unbond-test-net";
+
         fn outpoint(b: u8) -> TransactionOutpoint {
             TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
         }
@@ -1602,7 +1606,7 @@ mod tests {
         }
 
         fn signed_unbond_tx(op: TransactionOutpoint, kp: &mldsa::MLDSA87KeyPair) -> Transaction {
-            let digest = unbond_request_message(op).as_bytes();
+            let digest = unbond_request_message(NET_ID, op).as_bytes();
             let sig = mldsa::sign(&kp.signing_key, &digest, UNBOND_REQUEST_CONTEXT, [0x99u8; 32]).expect("sign");
             unbond_tx(op, kp.verification_key.as_ref().to_vec(), sig.as_ref().to_vec())
         }
@@ -1611,7 +1615,7 @@ mod tests {
         fn noop_when_not_activated() {
             let op = outpoint(1);
             let tx = unbond_tx(op, vec![0u8; STAKE_VALIDATOR_PUBKEY_LEN], vec![0u8; STAKE_ATTESTATION_SIG_LEN]);
-            assert_eq!(authz(&[tx], &ActiveBondView::new(), 10_000, false), Ok(()));
+            assert_eq!(authz(&[tx], &ActiveBondView::new(), NET_ID, 10_000, false), Ok(()));
         }
 
         #[test]
@@ -1619,14 +1623,14 @@ mod tests {
             let op = outpoint(2);
             let kp = owner_kp(2);
             let view = ActiveBondView::from_records([(op, bond_owned_by(op, &kp))]);
-            assert_eq!(authz(&[signed_unbond_tx(op, &kp)], &view, 10_000, true), Ok(()));
+            assert_eq!(authz(&[signed_unbond_tx(op, &kp)], &view, NET_ID, 10_000, true), Ok(()));
         }
 
         #[test]
         fn rejects_unknown_bond() {
             let op = outpoint(3);
             let kp = owner_kp(3);
-            assert!(authz(&[signed_unbond_tx(op, &kp)], &ActiveBondView::new(), 10_000, true).is_err());
+            assert!(authz(&[signed_unbond_tx(op, &kp)], &ActiveBondView::new(), NET_ID, 10_000, true).is_err());
         }
 
         #[test]
@@ -1636,7 +1640,7 @@ mod tests {
             let owner = owner_kp(4);
             let attacker = owner_kp(40);
             let view = ActiveBondView::from_records([(op, bond_owned_by(op, &owner))]);
-            assert!(authz(&[signed_unbond_tx(op, &attacker)], &view, 10_000, true).is_err());
+            assert!(authz(&[signed_unbond_tx(op, &attacker)], &view, NET_ID, 10_000, true).is_err());
         }
 
         #[test]
@@ -1645,7 +1649,7 @@ mod tests {
             let kp = owner_kp(5);
             let view = ActiveBondView::from_records([(op, bond_owned_by(op, &kp))]);
             let tx = unbond_tx(op, kp.verification_key.as_ref().to_vec(), vec![0u8; STAKE_ATTESTATION_SIG_LEN]);
-            assert!(authz(&[tx], &view, 10_000, true).is_err());
+            assert!(authz(&[tx], &view, NET_ID, 10_000, true).is_err());
         }
 
         #[test]
@@ -1656,7 +1660,7 @@ mod tests {
             let mut rec = bond_owned_by(op, &kp);
             rec.unbond_request_daa_score = Some(1);
             let view = ActiveBondView::from_records([(op, rec)]);
-            assert!(authz(&[signed_unbond_tx(op, &kp)], &view, 10_000, true).is_err());
+            assert!(authz(&[signed_unbond_tx(op, &kp)], &view, NET_ID, 10_000, true).is_err());
         }
     }
 

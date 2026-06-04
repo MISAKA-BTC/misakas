@@ -1267,12 +1267,16 @@ pub struct StakeUnbondRequestPayload {
     pub signature: Vec<u8>,
 }
 
-/// kaspa-pq H-05: the BLAKE2b-256 digest the bond owner signs to authorize
-/// unbonding `bond_outpoint`. Keyed by [`UNBOND_REQUEST_MESSAGE_DOMAIN`] and
-/// bound to the bond outpoint so the authorization cannot be reused for another
-/// bond.
-pub fn unbond_request_message(bond_outpoint: TransactionOutpoint) -> Hash {
+/// kaspa-pq H-05 / audit M-04: the BLAKE2b-256 digest the bond owner signs to
+/// authorize unbonding `bond_outpoint`. Keyed by [`UNBOND_REQUEST_MESSAGE_DOMAIN`]
+/// (purpose separation from attestations/slashing) and bound to BOTH the
+/// `network_id` (audit M-04 — prevents cross-network replay of an unbond
+/// authorization, mirroring [`stake_attestation_message`]) AND the bond outpoint
+/// (so the authorization cannot be reused for another bond). `network_id` is the
+/// chain's genesis hash (ADR-0009 Addendum A.3).
+pub fn unbond_request_message(network_id: &[u8], bond_outpoint: TransactionOutpoint) -> Hash {
     let mut hasher = Blake2bParams::new().hash_length(32).key(UNBOND_REQUEST_MESSAGE_DOMAIN).to_state();
+    hasher.update(network_id);
     hasher.update(bond_outpoint.transaction_id.as_byte_slice());
     hasher.update(&bond_outpoint.index.to_le_bytes());
     let mut out = [0u8; 32];
