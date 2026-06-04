@@ -25,7 +25,7 @@ use kaspa_consensus_core::network::NetworkType;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_core::{info, warn};
 use kaspa_pq_validator_core::{
-    ATTESTATION_TX_FEE_FLOOR_SOMPI, SignedEpochStore, VALIDATOR_SEED_LEN, ValidatorKey, load_validator_seed, parse_stake_bond_ref,
+    SignedEpochStore, VALIDATOR_SEED_LEN, ValidatorKey, load_validator_seed, parse_stake_bond_ref,
 };
 use kaspa_rpc_core::{
     GetStakeBondRequest, GetValidatorAttestationTargetRequest, GetValidatorAttestationTargetResponse, RpcTransaction, api::rpc::RpcApi,
@@ -526,13 +526,21 @@ async fn run_daemon(args: RunArgs) -> Result<(), String> {
         _ => {}
     }
     let prefix = prefix_for(server.network_id.network_type);
-    let coinbase_maturity = Params::from(server.network_id).coinbase_maturity();
+    let params = Params::from(server.network_id);
+    let coinbase_maturity = params.coinbase_maturity();
+    let mass_calc =
+        MassCalculator::new(params.mass_per_tx_byte, params.mass_per_script_pub_key_byte, params.mass_per_sig_op, params.storage_mass_parameter);
     info!("[{VALIDATOR}] connected: network={node_network} synced={} version={}", server.is_synced, server.server_version);
 
     // Load the signing identity if fully configured (key + bond + state DB); else observe.
-    let attestor = Attestor::load(&args, prefix, coinbase_maturity)?;
+    let attestor = Attestor::load(&args, prefix, coinbase_maturity, &mass_calc)?;
     match &attestor {
-        Some(a) => info!("[{VALIDATOR}] attesting as validator_id={} (funding {})", a.key.validator_id, a.key.funding_address(prefix)),
+        Some(a) => info!(
+            "[{VALIDATOR}] attesting as validator_id={} (funding {}, fee {} sompi mass-based)",
+            a.key.validator_id,
+            a.key.funding_address(prefix),
+            a.attestation_fee
+        ),
         None => info!("[{VALIDATOR}] observe-only (need --validator-key + --stake-bond + --signed-epoch-db to attest)"),
     }
 
@@ -559,20 +567,25 @@ struct Attestor {
     /// Network coinbase-maturity (blocks); a coinbase funding UTXO younger than this cannot be
     /// spent for the attestation tx. Captured once at load from the node's network id.
     coinbase_maturity: u64,
+    /// Mass-based attestation-shard fee (sompi), computed once at load from the network's mass
+    /// params (the shard tx shape is fixed, so the fee is constant across epochs). Replaces the
+    /// flat floor, which is ~10× below the kaspa-pq mempool minimum for this payload-heavy tx.
+    attestation_fee: u64,
 }
 
 impl Attestor {
     /// Load the signing identity iff `--validator-key`, `--stake-bond` and
     /// `--signed-epoch-db` are all provided. The state file is rejected if it belongs to a
     /// different validator/bond (cross-key equivocation guard).
-    fn load(args: &RunArgs, prefix: Prefix, coinbase_maturity: u64) -> Result<Option<Self>, String> {
+    fn load(args: &RunArgs, prefix: Prefix, coinbase_maturity: u64, mass_calc: &MassCalculator) -> Result<Option<Self>, String> {
         let (Some(key_path), Some(bond_ref), Some(db)) = (&args.validator_key, &args.stake_bond, &args.signed_epoch_db) else {
             return Ok(None);
         };
         let key = ValidatorKey::from_seed(load_validator_seed(key_path)?);
         let bond_outpoint = parse_stake_bond_ref(bond_ref)?;
         let signed_store = SignedEpochStore::load_or_empty(db.into(), key.validator_id, bond_outpoint)?;
-        Ok(Some(Self { key, bond_outpoint, signed_store, prefix, coinbase_maturity }))
+        let attestation_fee = key.estimate_attestation_fee(mass_calc, prefix);
+        Ok(Some(Self { key, bond_outpoint, signed_store, prefix, coinbase_maturity, attestation_fee }))
     }
 
     /// Sign the attestation `target` under the equivocation guard and (unless `dry_run`)
@@ -634,7 +647,7 @@ impl Attestor {
 
         // Find a funding UTXO at the validator's own P2PKH-ML-DSA address (needs node
         // --utxoindex). Funding model A: a small input pays the fee, change returns to self.
-        let fee = ATTESTATION_TX_FEE_FLOOR_SOMPI;
+        let fee = self.attestation_fee;
         let funding_addr = self.key.funding_address(self.prefix);
         let utxos = client
             .get_utxos_by_addresses(vec![funding_addr])
