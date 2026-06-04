@@ -48,6 +48,26 @@ pub const VALIDATOR_SEED_LEN: usize = 32;
 /// fallback uses this floor.
 pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 30_000;
 
+/// Convert a transaction's non-contextual **compute mass** into the node's minimum relay fee
+/// (sompi), matching `minimum_required_transaction_relay_fee` in
+/// `kaspa_mining::mempool::check_transaction_standard`:
+///
+/// ```text
+///   min_fee = compute_mass * relay_rate / 1000        (relay_rate in sompi per kilogram of mass)
+/// ```
+///
+/// kaspa-pq's `MiningManager` sets `relay_rate` unconditionally to
+/// `PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE` (= 10_000 sompi/kg, i.e. fee = 10 × compute_mass) —
+/// so the payload-heavy StakeBond / StakeUnbondRequest transactions (2592-byte pubkey, 4627-byte
+/// sig) need a fee far above the flat [`ATTESTATION_TX_FEE_FLOOR_SOMPI`]. We mirror that rate here
+/// rather than depend on the heavy `kaspa-mining` crate. A 25% margin absorbs a few bytes of size
+/// variance (or a node configured with a higher rate); the result is clamped up to the floor.
+pub(crate) fn relay_fee_for_compute_mass(compute_mass: u64) -> u64 {
+    const MEMPOOL_RELAY_FEE_SOMPI_PER_KG: u64 = 10_000; // == kaspa_mining ... PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE
+    let min_fee = compute_mass.saturating_mul(MEMPOOL_RELAY_FEE_SOMPI_PER_KG) / 1000;
+    (min_fee + min_fee / 4).max(ATTESTATION_TX_FEE_FLOOR_SOMPI)
+}
+
 const SIGNED_EPOCH_FILE_VERSION: u16 = 1;
 
 /// Load a 32-byte ML-DSA-87 seed from a hex file (whitespace-trimmed). The file must
@@ -390,6 +410,40 @@ impl ValidatorKey {
         }
     }
 
+    /// Mass-based fee (sompi) for this validator's `StakeBond` transaction — same approach as
+    /// [`Self::estimate_attestation_fee`]. Builds a dummy bond of the real shape (a bond is always
+    /// a 2592-byte-pubkey payload + locked output + change output, so the field *sizes* — not the
+    /// amount/term *values* — drive the compute mass; a dummy's mass equals the real one's), takes
+    /// its non-contextual compute mass (the 1 sompi/gram relay minimum), and clamps up to
+    /// [`ATTESTATION_TX_FEE_FLOOR_SOMPI`]. The flat attestation floor is far below a bond's
+    /// mempool minimum, so `bond` sizes its fee from the network's mass params via this.
+    pub fn estimate_bond_fee(&self, mass_calculator: &MassCalculator, prefix: Prefix) -> u64 {
+        let funding_spk = pay_to_address_script(&self.funding_address(prefix));
+        let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
+        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
+        // Dummy terms (amount=1, zero activation/unbonding, zero reward payload): the payload's
+        // field sizes drive the mass, so the value choices do not change the result.
+        match self.build_funded_stake_bond_tx(1, 0, 0, [0u8; 64], outpoint, &funding, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
+            Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
+            Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
+        }
+    }
+
+    /// Mass-based fee (sompi) for this validator's `StakeUnbondRequest` transaction — same approach
+    /// as [`Self::estimate_bond_fee`]. The unbond payload carries the 2592-byte owner pubkey plus a
+    /// 4627-byte authorization signature, so its compute mass (and thus this fee) is well above the
+    /// flat attestation floor.
+    pub fn estimate_unbond_fee(&self, mass_calculator: &MassCalculator, prefix: Prefix) -> u64 {
+        let funding_spk = pay_to_address_script(&self.funding_address(prefix));
+        let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
+        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
+        // Dummy bond_outpoint — the payload's field sizes drive the mass, not the values.
+        match self.build_funded_unbond_tx(TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0), outpoint, &funding, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
+            Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
+            Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
+        }
+    }
+
     /// Verify an attestation signature against this key (local round-trip sanity check).
     pub fn verify_attestation(&self, message: &[u8], signature: &[u8]) -> bool {
         matches!(
@@ -677,6 +731,20 @@ mod tests {
 
         // Fee must be strictly less than the funding amount.
         assert!(key.build_funded_unbond_tx(bond_outpoint, funding_outpoint, &funding, 1_000).is_err());
+    }
+
+    #[test]
+    fn mass_based_bond_and_unbond_fees_exceed_the_flat_floor() {
+        // StakeBond / StakeUnbondRequest carry the 2592-byte ML-DSA-87 pubkey (+ a 4627-byte sig),
+        // so a mass-based fee is far above the flat attestation floor — that gap is exactly why the
+        // bond/unbond commands estimate from the network mass params instead of the floor.
+        let key = ValidatorKey::from_seed([0x5au8; VALIDATOR_SEED_LEN]);
+        // kaspa-pq mass params (mass_per_sig_op = 10_000 per the Phase-7 recalibration).
+        let mc = MassCalculator::new(1, 10, 10_000, 10_000_000_000);
+        let bond_fee = key.estimate_bond_fee(&mc, Prefix::Testnet);
+        let unbond_fee = key.estimate_unbond_fee(&mc, Prefix::Testnet);
+        assert!(bond_fee > ATTESTATION_TX_FEE_FLOOR_SOMPI, "mass-based bond fee {bond_fee} must exceed the flat floor {ATTESTATION_TX_FEE_FLOOR_SOMPI}");
+        assert!(unbond_fee > ATTESTATION_TX_FEE_FLOOR_SOMPI, "mass-based unbond fee {unbond_fee} must exceed the flat floor {ATTESTATION_TX_FEE_FLOOR_SOMPI}");
     }
 
     #[test]

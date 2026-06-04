@@ -20,6 +20,7 @@ use kaspa_consensus_core::dns_finality::{
     single_attestation_shard,
 };
 use kaspa_consensus_core::config::params::Params;
+use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::network::NetworkType;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_core::{info, warn};
@@ -146,9 +147,11 @@ struct BondArgs {
     #[arg(long, default_value_t = 700)]
     unbonding_period_blocks: u64,
 
-    /// Fee in sompi for the bond transaction (flat). Defaults to the attestation fee floor.
-    #[arg(long, default_value_t = ATTESTATION_TX_FEE_FLOOR_SOMPI)]
-    fee: u64,
+    /// Fee in sompi for the bond transaction. Default: a mass-based estimate from the network's
+    /// mass params (the StakeBond payload carries the 2592-byte pubkey, so the flat attestation
+    /// floor is too low to relay). Pass an explicit value to override (e.g. bump under congestion).
+    #[arg(long)]
+    fee: Option<u64>,
 
     /// Expected node network id; refuse on mismatch.
     #[arg(long, env = "KASPA_PQ_NETWORK")]
@@ -171,9 +174,11 @@ struct UnbondArgs {
     #[arg(long)]
     stake_bond: String,
 
-    /// Fee in sompi for the unbond transaction (flat). Defaults to the attestation fee floor.
-    #[arg(long, default_value_t = ATTESTATION_TX_FEE_FLOOR_SOMPI)]
-    fee: u64,
+    /// Fee in sompi for the unbond transaction. Default: a mass-based estimate from the network's
+    /// mass params (the unbond payload carries the 2592-byte pubkey + 4627-byte sig, so the flat
+    /// attestation floor is too low to relay). Pass an explicit value to override.
+    #[arg(long)]
+    fee: Option<u64>,
 
     /// Expected node network id; refuse on mismatch.
     #[arg(long, env = "KASPA_PQ_NETWORK")]
@@ -309,7 +314,22 @@ async fn bond(args: BondArgs) -> Result<(), String> {
     }
     let prefix = prefix_for(server.network_id.network_type);
     let funding_addr = key.funding_address(prefix);
-    info!("[{VALIDATOR}] staking {} sompi as validator_id={} (funding {})", args.amount, key.validator_id, funding_addr);
+    let params = Params::from(server.network_id);
+    let mass_calc =
+        MassCalculator::new(params.mass_per_tx_byte, params.mass_per_script_pub_key_byte, params.mass_per_sig_op, params.storage_mass_parameter);
+    // Mass-based fee unless overridden: the StakeBond payload carries the 2592-byte validator
+    // pubkey, so the flat attestation floor is far below the mempool minimum (live finding 2026-06-04).
+    let fee = match args.fee {
+        Some(f) => f,
+        None => key.estimate_bond_fee(&mass_calc, prefix),
+    };
+    info!(
+        "[{VALIDATOR}] staking {} sompi (fee {fee} sompi{}) as validator_id={} (funding {})",
+        args.amount,
+        if args.fee.is_some() { "" } else { ", mass-based" },
+        key.validator_id,
+        funding_addr
+    );
 
     // Need a single MATURE UTXO covering amount + fee. Pick the largest available (most likely to
     // fit). A coinbase UTXO is unspendable until `coinbase_maturity` blocks have passed
@@ -317,8 +337,8 @@ async fn bond(args: BondArgs) -> Result<(), String> {
     // coinbase every block, so without this filter the "largest" pick is almost always the
     // newest = immature one, and the bond tx is rejected forever ("spends an immature UTXO").
     // Filtering by maturity here makes `bond` succeed even while the funding miner keeps running.
-    let needed = args.amount.checked_add(args.fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
-    let coinbase_maturity = Params::from(server.network_id).coinbase_maturity();
+    let needed = args.amount.checked_add(fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
+    let coinbase_maturity = params.coinbase_maturity();
     let virtual_daa = server.virtual_daa_score;
     let utxos = client
         .get_utxos_by_addresses(vec![funding_addr.clone()])
@@ -341,7 +361,7 @@ async fn bond(args: BondArgs) -> Result<(), String> {
         key.reward_spk_payload(),
         funding_outpoint,
         &funding_entry,
-        args.fee,
+        fee,
     )?;
 
     let txid = client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
@@ -370,13 +390,25 @@ async fn unbond(args: UnbondArgs) -> Result<(), String> {
     }
     let prefix = prefix_for(server.network_id.network_type);
     let funding_addr = key.funding_address(prefix);
-    info!("[{VALIDATOR}] unbonding {bond_outpoint} for validator_id={} (funding {funding_addr})", key.validator_id);
+    let params = Params::from(server.network_id);
+    let mass_calc =
+        MassCalculator::new(params.mass_per_tx_byte, params.mass_per_script_pub_key_byte, params.mass_per_sig_op, params.storage_mass_parameter);
+    // Mass-based fee unless overridden (the unbond payload carries the 2592-byte pubkey + 4627-byte sig).
+    let fee = match args.fee {
+        Some(f) => f,
+        None => key.estimate_unbond_fee(&mass_calc, prefix),
+    };
+    info!(
+        "[{VALIDATOR}] unbonding {bond_outpoint} (fee {fee} sompi{}) for validator_id={} (funding {funding_addr})",
+        if args.fee.is_some() { "" } else { ", mass-based" },
+        key.validator_id
+    );
 
     // Need a single MATURE UTXO that covers the fee — and it must NOT be the bond's own locked
     // output-0: the consensus bond-spend-gate keeps that locked until release, so trying to pay the
     // fee from it would be rejected. Coinbase maturity is filtered for the same reason as `bond`
     // (a miner still paying this address mints a fresh immature coinbase every block).
-    let coinbase_maturity = Params::from(server.network_id).coinbase_maturity();
+    let coinbase_maturity = params.coinbase_maturity();
     let virtual_daa = server.virtual_daa_score;
     let utxos = client
         .get_utxos_by_addresses(vec![funding_addr.clone()])
@@ -385,15 +417,15 @@ async fn unbond(args: UnbondArgs) -> Result<(), String> {
     let funding = utxos
         .into_iter()
         .filter(|e| TransactionOutpoint::from(e.outpoint.clone()) != bond_outpoint)
-        .filter(|e| e.utxo_entry.amount > args.fee)
+        .filter(|e| e.utxo_entry.amount > fee)
         .filter(|e| is_spendable(e.utxo_entry.is_coinbase, e.utxo_entry.block_daa_score, virtual_daa, coinbase_maturity))
         .max_by_key(|e| e.utxo_entry.amount)
         .ok_or_else(|| format!("no single MATURE funding UTXO > {} sompi (fee) at {funding_addr} other than the bond itself; \
-            send funds there and wait for coinbase maturity ({coinbase_maturity} blocks)", args.fee))?;
+            send funds there and wait for coinbase maturity ({coinbase_maturity} blocks)", fee))?;
     let funding_outpoint: TransactionOutpoint = funding.outpoint.into();
     let funding_entry: UtxoEntry = funding.utxo_entry.into();
 
-    let tx = key.build_funded_unbond_tx(bond_outpoint, funding_outpoint, &funding_entry, args.fee)?;
+    let tx = key.build_funded_unbond_tx(bond_outpoint, funding_outpoint, &funding_entry, fee)?;
 
     let txid = client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
     info!("[{VALIDATOR}] submitted unbond request (txid={txid}) for bond {bond_outpoint}");
