@@ -49,13 +49,15 @@ for crate in kaspa-consensus kaspad kaspa-pq-cli kaspa-wallet kaspa-cli kaspa-da
   fi
 done
 
-echo "== [3/3] ML-DSA-87 FIPS-204 KAT + consensus verifier gate (audit H-10) =="
+echo "== [3/3] ML-DSA-87 FIPS-204 KAT + official NIST ACVP + verifier gate (audit H-10/H-04) =="
 # The deterministic keygen/sign regression pins (kat_mldsa87_deterministic_regression),
-# the portable-vs-SIMD backend differential (mldsa87_portable_matches_multiplexed_verify),
-# and the verify/roundtrip/rejection tests must pass before any release: a
-# libcrux-ml-dsa version bump that changes the primitive (or a CPU-backend
-# divergence) is caught here. Pre-mainnet, ALSO vendor official NIST ACVP ML-DSA-87
-# vectors / an independent-impl differential (see the libcrux checklist in Cargo.toml).
+# the OFFICIAL NIST ACVP FIPS-204 differential (acvp_mldsa87_official_nist_vectors — audit
+# H-04: keygen/sign/verify cross-checked against usnistgov/ACVP-Server vectors, the
+# independent-source check), the portable-vs-SIMD backend differential
+# (mldsa87_portable_matches_multiplexed_verify), and the verify/roundtrip/rejection tests
+# must pass before any release: a libcrux-ml-dsa version bump that changes the primitive (or
+# a CPU-backend divergence, or a drift from the standard) is caught here. The `mldsa87`
+# filter matches all of the above (incl. the `acvp_mldsa87_*` differential).
 if cargo test -p kaspa-txscript --lib mldsa87 >/dev/null 2>&1; then
   echo "OK: ML-DSA-87 KAT + consensus verifier tests pass."
 else
