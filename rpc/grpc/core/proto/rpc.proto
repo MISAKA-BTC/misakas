@@ -624,7 +624,11 @@ message GetSinkBlueScoreResponseMessage {
 }
 
 // kaspa-pq Phase 10 (ADR-0009): the current DNS finality confirmation view.
-message GetDnsConfirmationRequestMessage {}
+message GetDnsConfirmationRequestMessage {
+  // kaspa-pq: optional 128-hex block hash. When set, the response's block* fields report that
+  // block's DNS finality. Empty = the node-wide current view only.
+  string blockHash = 1;
+}
 
 message GetDnsConfirmationResponseMessage {
   bool available = 1;
@@ -649,6 +653,11 @@ message GetDnsConfirmationResponseMessage {
   // MUST treat this as DNS-final, not blockHash. Empty / 0 until an anchor is first confirmed.
   string lastDnsConfirmedAnchor = 16;
   uint64 lastDnsConfirmedAnchorDaaScore = 17;
+  // kaspa-pq: per-block DNS finality, populated only when the request carried a blockHash.
+  bool blockFound = 18;
+  bool blockIsDnsFinal = 19;
+  bool blockIsConfirmedAnchor = 20;
+  uint64 blockDaaScore = 21;
 
   RPCError error = 1000;
 }

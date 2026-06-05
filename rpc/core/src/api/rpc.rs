@@ -368,7 +368,14 @@ pub trait RpcApi: Sync + Send + AnySync {
 
     /// kaspa-pq Phase 10 (ADR-0009): the current DNS finality confirmation view.
     async fn get_dns_confirmation(&self) -> RpcResult<GetDnsConfirmationResponse> {
-        self.get_dns_confirmation_call(None, GetDnsConfirmationRequest {}).await
+        self.get_dns_confirmation_call(None, GetDnsConfirmationRequest { block_hash: String::new() }).await
+    }
+    /// kaspa-pq: DNS finality scoped to a single block — populates the response's `block_*` fields
+    /// (`block_found`, `block_is_dns_final`, `block_is_confirmed_anchor`, `block_daa_score`).
+    /// `block_is_dns_final` means the block is a selected-chain ancestor of (or equal to) the
+    /// stake-confirmed anchor, i.e. irreversible under DNS finality.
+    async fn get_block_dns_score(&self, block_hash: String) -> RpcResult<GetDnsConfirmationResponse> {
+        self.get_dns_confirmation_call(None, GetDnsConfirmationRequest { block_hash }).await
     }
     /// Default returns `available: false`, so non-server `RpcApi` impls (gRPC /
     /// wRPC clients, mocks) inherit a no-op; the node's core service overrides it.

@@ -664,13 +664,17 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     async fn get_dns_confirmation_call(
         &self,
         _connection: Option<&DynRpcConnection>,
-        _: GetDnsConfirmationRequest,
+        request: GetDnsConfirmationRequest,
     ) -> RpcResult<GetDnsConfirmationResponse> {
         // kaspa-pq Phase 10 (ADR-0009): expose the current DnsState-derived
         // confirmation view. `available: false` when the overlay is not
         // configured for this network (or no DnsState has been written yet).
         let session = self.consensus_manager.consensus().unguarded_session();
-        Ok(match session.async_get_dns_confirmation().await {
+        let confirmation = session.async_get_dns_confirmation().await;
+        // Per-block finality is evaluated relative to the stable confirmed anchor; both
+        // fields are `Copy`, so snapshot them before `confirmation` is consumed below.
+        let anchor_info = confirmation.as_ref().map(|c| (c.last_dns_confirmed_anchor, c.dns_confirmed));
+        let mut response = match confirmation {
             Some(c) => GetDnsConfirmationResponse {
                 available: true,
                 block_hash: c.block_hash.to_string(),
@@ -690,9 +694,40 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 // audit M-01: the stable DNS-confirmed anchor (≠ the pov-dependent sink `block_hash`).
                 last_dns_confirmed_anchor: c.last_dns_confirmed_anchor.to_string(),
                 last_dns_confirmed_anchor_daa_score: c.last_dns_confirmed_anchor_daa_score,
+                // kaspa-pq explorer: per-block fields filled below when `request.block_hash` is set.
+                block_found: false,
+                block_is_dns_final: false,
+                block_is_confirmed_anchor: false,
+                block_daa_score: 0,
             },
             None => GetDnsConfirmationResponse::default(),
-        })
+        };
+
+        // kaspa-pq explorer support (`getBlockDnsScore`): when the caller supplies a specific
+        // `block_hash`, answer "is THIS block DNS-final?" relative to the confirmed canonical
+        // anchor. A block is DNS-final iff the overlay has confirmed an anchor and the block is
+        // that anchor or one of its selected-chain ancestors (i.e. at/below the anchor on the
+        // selected chain). Header-only blocks still count as `block_found`.
+        if !request.block_hash.is_empty() {
+            let hash = request
+                .block_hash
+                .parse::<kaspa_hashes::Hash64>()
+                .map_err(|_| RpcError::General(format!("block_hash '{}' is not a valid 64-byte hash", request.block_hash)))?;
+            if let Ok(block) = session.async_get_block_even_if_header_only(hash).await {
+                response.block_found = true;
+                response.block_daa_score = block.header.daa_score;
+            }
+            if let Some((anchor, dns_confirmed)) = anchor_info {
+                if anchor != kaspa_hashes::Hash64::default() {
+                    response.block_is_confirmed_anchor = hash == anchor;
+                    response.block_is_dns_final = dns_confirmed
+                        && (response.block_is_confirmed_anchor
+                            || session.async_is_chain_ancestor_of(hash, anchor).await.unwrap_or(false));
+                }
+            }
+        }
+
+        Ok(response)
     }
 
     async fn get_validator_status_call(

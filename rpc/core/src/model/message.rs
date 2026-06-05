@@ -1453,19 +1453,27 @@ impl Deserializer for GetSinkBlueScoreResponse {
 // in which case the remaining fields are defaults.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GetDnsConfirmationRequest {}
+pub struct GetDnsConfirmationRequest {
+    /// Optional. When non-empty, the response additionally reports whether THIS block (128-hex hash)
+    /// is DNS-final — a selected-chain ancestor of (or equal to) the stake-confirmed anchor. Empty
+    /// (the back-compatible default) returns only the node-wide current view.
+    #[serde(default)]
+    pub block_hash: String,
+}
 
 impl Serializer for GetDnsConfirmationRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
+        store!(String, &self.block_hash, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetDnsConfirmationRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
-        Ok(Self {})
+        let version = load!(u16, reader)?;
+        let block_hash = if version >= 2 { load!(String, reader)? } else { String::new() };
+        Ok(Self { block_hash })
     }
 }
 
@@ -1496,11 +1504,23 @@ pub struct GetDnsConfirmationResponse {
     /// Explorers/exchanges MUST treat THIS as DNS-final, not `block_hash`. Empty / 0 until confirmed.
     pub last_dns_confirmed_anchor: String,
     pub last_dns_confirmed_anchor_daa_score: u64,
+    /// kaspa-pq: per-block DNS finality — populated only when the request carried a `block_hash`.
+    /// `block_found` = the block exists; `block_is_dns_final` = it is a selected-chain ancestor of
+    /// (or equal to) the stake-confirmed anchor (i.e. irreversible under DNS finality);
+    /// `block_is_confirmed_anchor` = it IS the current confirmed anchor; `block_daa_score` = its DAA.
+    #[serde(default)]
+    pub block_found: bool,
+    #[serde(default)]
+    pub block_is_dns_final: bool,
+    #[serde(default)]
+    pub block_is_confirmed_anchor: bool,
+    #[serde(default)]
+    pub block_daa_score: u64,
 }
 
 impl Serializer for GetDnsConfirmationResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &3, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.block_hash, writer)?;
         store!(String, &self.work_depth, writer)?;
@@ -1518,6 +1538,10 @@ impl Serializer for GetDnsConfirmationResponse {
         store!(u32, &self.health, writer)?;
         store!(String, &self.last_dns_confirmed_anchor, writer)?;
         store!(u64, &self.last_dns_confirmed_anchor_daa_score, writer)?;
+        store!(bool, &self.block_found, writer)?;
+        store!(bool, &self.block_is_dns_final, writer)?;
+        store!(bool, &self.block_is_confirmed_anchor, writer)?;
+        store!(u64, &self.block_daa_score, writer)?;
         Ok(())
     }
 }
@@ -1543,6 +1567,12 @@ impl Deserializer for GetDnsConfirmationResponse {
         // audit M-01: fields appended in v2 — tolerate v1 payloads (empty/0).
         let (last_dns_confirmed_anchor, last_dns_confirmed_anchor_daa_score) =
             if version >= 2 { (load!(String, reader)?, load!(u64, reader)?) } else { (String::new(), 0) };
+        // kaspa-pq: per-block DNS finality appended in v3 — tolerate v1/v2 payloads (false/0).
+        let (block_found, block_is_dns_final, block_is_confirmed_anchor, block_daa_score) = if version >= 3 {
+            (load!(bool, reader)?, load!(bool, reader)?, load!(bool, reader)?, load!(u64, reader)?)
+        } else {
+            (false, false, false, 0)
+        };
         Ok(Self {
             available,
             block_hash,
@@ -1561,6 +1591,10 @@ impl Deserializer for GetDnsConfirmationResponse {
             health,
             last_dns_confirmed_anchor,
             last_dns_confirmed_anchor_daa_score,
+            block_found,
+            block_is_dns_final,
+            block_is_confirmed_anchor,
+            block_daa_score,
         })
     }
 }

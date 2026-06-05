@@ -359,7 +359,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetSinkBlueScoreResponse>, protowire::Get
     Self { blue_score: item.blue_score, error: None }
 });
 
-from!(&kaspa_rpc_core::GetDnsConfirmationRequest, protowire::GetDnsConfirmationRequestMessage);
+from!(item: &kaspa_rpc_core::GetDnsConfirmationRequest, protowire::GetDnsConfirmationRequestMessage, { Self { block_hash: item.block_hash.clone() } });
 from!(item: RpcResult<&kaspa_rpc_core::GetDnsConfirmationResponse>, protowire::GetDnsConfirmationResponseMessage, {
     Self {
         available: item.available,
@@ -379,6 +379,10 @@ from!(item: RpcResult<&kaspa_rpc_core::GetDnsConfirmationResponse>, protowire::G
         health: item.health,
         last_dns_confirmed_anchor: item.last_dns_confirmed_anchor.clone(),
         last_dns_confirmed_anchor_daa_score: item.last_dns_confirmed_anchor_daa_score,
+        block_found: item.block_found,
+        block_is_dns_final: item.block_is_dns_final,
+        block_is_confirmed_anchor: item.block_is_confirmed_anchor,
+        block_daa_score: item.block_daa_score,
         error: None,
     }
 });
@@ -924,7 +928,7 @@ try_from!(item: &protowire::GetSinkBlueScoreResponseMessage, RpcResult<kaspa_rpc
     Self { blue_score: item.blue_score }
 });
 
-try_from!(&protowire::GetDnsConfirmationRequestMessage, kaspa_rpc_core::GetDnsConfirmationRequest);
+try_from!(item: &protowire::GetDnsConfirmationRequestMessage, kaspa_rpc_core::GetDnsConfirmationRequest, { Self { block_hash: item.block_hash.clone() } });
 try_from!(item: &protowire::GetDnsConfirmationResponseMessage, RpcResult<kaspa_rpc_core::GetDnsConfirmationResponse>, {
     Self {
         available: item.available,
@@ -944,6 +948,10 @@ try_from!(item: &protowire::GetDnsConfirmationResponseMessage, RpcResult<kaspa_r
         health: item.health,
         last_dns_confirmed_anchor: item.last_dns_confirmed_anchor.clone(),
         last_dns_confirmed_anchor_daa_score: item.last_dns_confirmed_anchor_daa_score,
+        block_found: item.block_found,
+        block_is_dns_final: item.block_is_dns_final,
+        block_is_confirmed_anchor: item.block_is_confirmed_anchor,
+        block_daa_score: item.block_daa_score,
     }
 });
 
