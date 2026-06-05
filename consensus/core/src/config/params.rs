@@ -1008,7 +1008,12 @@ pub const DEVNET_PARAMS: Params = Params {
     // kaspa-pq: PQ-only enforcement from genesis (ADR-0019).
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
-    dns_seeders: &[],
+    // kaspa-pq: devnet now uses the same MISAKA DNS seeders as mainnet/testnet for automatic
+    // peer discovery (devnet default P2P port is 26611, matching the live mesh — see
+    // NetworkId::default_p2p_port). Nodes launched WITHOUT `--nodnsseed` resolve these to find
+    // peers; the seeders' A records (160.16.131.119 / 95.111.236.186) run devnet nodes on 26611.
+    // dns_seeders is NOT a genesis-block input, so the genesis hash is unchanged (no re-genesis).
+    dns_seeders: &["seeder1.misakascan.com", "seeder2.misakascan.com"],
     net: NetworkId::new(NetworkType::Devnet),
     genesis: DEVNET_GENESIS,
     timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
