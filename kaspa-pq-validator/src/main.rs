@@ -95,6 +95,16 @@ struct RunArgs {
     #[arg(long, env = "KASPA_PQ_NETWORK")]
     network: Option<String>,
 
+    /// Seconds between attestation rounds. Each round attests at most the ONE current
+    /// canonical-ready epoch, so this poll period must be ≤ an epoch's wall-clock duration
+    /// (≈ epoch_length_blocks / blocks-per-second) for a single validator to cover EVERY epoch
+    /// and reach the DNS stake-depth threshold. Default 30 suits mainnet (~1 BPS ⇒ ~100 s
+    /// epochs); LOWER it on a fast devnet (e.g. 3 at ~9 BPS ⇒ ~11 s epochs) so one validator
+    /// keeps up. Revisiting the same epoch within a run is deduped (no re-sign / no rebroadcast),
+    /// so a small value only adds cheap RPC polls.
+    #[arg(long, default_value_t = 30, env = "KASPA_PQ_ATTEST_POLL_SECS")]
+    attest_poll_secs: u64,
+
     /// Logging level {off, error, warn, info, debug, trace}.
     #[arg(long, default_value = "info", env = "KASPA_PQ_LOG_LEVEL")]
     log_level: String,
@@ -573,6 +583,11 @@ struct Attestor {
     /// params (the shard tx shape is fixed, so the fee is constant across epochs). Replaces the
     /// flat floor, which is ~10× below the kaspa-pq mempool minimum for this payload-heavy tx.
     attestation_fee: u64,
+    /// The last epoch this PROCESS has already attested (submitted a shard for). Lets a short
+    /// `--attest-poll-secs` revisit the same canonical-ready epoch cheaply without re-signing or
+    /// rebroadcasting (which would burn a funding UTXO each poll). Reset on restart, so the
+    /// persistent `SignedEpochStore` still drives a single crash-recovery rebroadcast.
+    last_attested_epoch: Option<u64>,
 }
 
 impl Attestor {
@@ -587,7 +602,7 @@ impl Attestor {
         let bond_outpoint = parse_stake_bond_ref(bond_ref)?;
         let signed_store = SignedEpochStore::load_or_empty(db.into(), key.validator_id, bond_outpoint)?;
         let attestation_fee = key.estimate_attestation_fee(mass_calc, prefix);
-        Ok(Some(Self { key, bond_outpoint, signed_store, prefix, coinbase_maturity, attestation_fee }))
+        Ok(Some(Self { key, bond_outpoint, signed_store, prefix, coinbase_maturity, attestation_fee, last_attested_epoch: None }))
     }
 
     /// Sign the attestation `target` under the equivocation guard and (unless `dry_run`)
@@ -742,11 +757,14 @@ async fn run_loop(client: &KaspaRpcClient, args: &RunArgs, mut attestor: Option<
                     .await
                 {
                     Ok(t) if t.available => match &mut attestor {
-                        Some(a) => {
-                            if let Err(e) = a.attest(client, &t, args.dry_run, server.virtual_daa_score).await {
-                                warn!("[{VALIDATOR}] attest failed for epoch {}: {e}", t.epoch);
-                            }
-                        }
+                        // Already attested this epoch this run: a short --attest-poll-secs revisits the
+                        // same canonical-ready epoch until it advances; skip cheaply (no re-sign / no
+                        // rebroadcast) so fast polling doesn't burn a funding UTXO per round.
+                        Some(a) if a.last_attested_epoch == Some(t.epoch) => {}
+                        Some(a) => match a.attest(client, &t, args.dry_run, server.virtual_daa_score).await {
+                            Ok(()) => a.last_attested_epoch = Some(t.epoch),
+                            Err(e) => warn!("[{VALIDATOR}] attest failed for epoch {}: {e}", t.epoch),
+                        },
                         None => info!(
                             "[{VALIDATOR}] status=ActiveEligible epoch={} target={} (observe-only; not signing)",
                             t.epoch, t.target_hash
@@ -755,7 +773,7 @@ async fn run_loop(client: &KaspaRpcClient, args: &RunArgs, mut attestor: Option<
                     Ok(_) => info!("[{VALIDATOR}] status=ActiveIdle (no attestation target available this tick)"),
                     Err(e) => warn!("[{VALIDATOR}] getValidatorAttestationTarget failed: {e}"),
                 }
-                sleep_secs(30).await;
+                sleep_secs(args.attest_poll_secs).await;
             }
             other => {
                 warn!("[{VALIDATOR}] unknown bond status '{other}'; retrying");
