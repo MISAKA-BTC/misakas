@@ -96,12 +96,23 @@ before Step 3. After the bond is accepted you can resume mining to anything.
 ### 3. Stake the coins into a bond
 ```
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27610 --validator-key validator.seed \
-                        --amount 50000000 --fee 30000 --network devnet
+                        --amount 50000000 --network devnet
 ```
-Prints `bond_outpoint: <txid>:0`. Output-0 is the locked stake (ADR-0016 §D.1). Pick
-`--fee` ≥ the node's mass-based minimum for the bond shape. The 10000 default floor is too low,
-and even `--fee 20000` can be rejected with `under the required amount of 21812` depending on
-the exact ML-DSA signature script size — **use `--fee 30000`** to be safely above the minimum.
+Prints `bond_outpoint: <txid>:0`. Output-0 is the locked stake (ADR-0016 §D.1).
+
+**Omit `--fee` — it is auto-computed (mass-based).** A StakeBond carries the 2592-byte ML-DSA-87
+public key, so its compute mass is large and the mempool's minimum relay fee is **10× the compute
+mass** (`PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE` = 10 000 sompi/kg): a bond needs **≈ 270 000
+sompi**, NOT the flat `ATTESTATION_TX_FEE_FLOOR_SOMPI` (30 000). A flat `--fee 30000` is therefore
+**rejected** with `fees … under the required amount of ≈218120` — pass nothing and the validator
+computes the right fee from the node's mass params. Use `--fee <sompi>` only to override (e.g. bump
+under congestion). The auto-fee logic is network-independent (same relay rate + bond shape), so it
+works unchanged on testnet/mainnet.
+
+> **Bond amount differs by network.** Devnet/simnet have no per-bond minimum (`min_bond_amount_sompi
+> = 0`), so any positive `--amount` works (e.g. the 2 MSK a tester used). **Mainnet/testnet require
+> `--amount ≥ 20 000 000 KAS`** (`min_bond_amount_sompi` in the PRODUCTION DNS params, user decision
+> 2026-06-01) — a smaller bond is rejected at acceptance and can never attest.
 
 ### 4. Verify the bond is active
 ```
