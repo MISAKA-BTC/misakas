@@ -516,10 +516,18 @@ async fn connect(node_rpc: &str) -> Result<KaspaRpcClient, String> {
     let url = format!("ws://{node_rpc}");
     let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None)
         .map_err(|e| format!("failed to build wRPC client: {e}"))?;
+    // ConnectStrategy::Retry keeps the wRPC client's reconnection loop alive, so a node restart
+    // (or any transient WebSocket drop) is recovered AUTOMATICALLY: the validator resumes attesting
+    // once the node is back, instead of getting wedged in "WebSocket is not connected; retrying"
+    // forever (Fallback tears the reconnect loop down on the first failure). `block_async_connect`
+    // still waits for the FIRST connection so the network-id guard + first attestation run against a
+    // live node. Combined with run_loop's per-round retry, this makes the validator survive node
+    // restarts unattended — important on every network (a node bounce no longer silently stops
+    // attestation, which would otherwise degrade DNS finality until a manual restart).
     let options = ConnectOptions {
         block_async_connect: true,
         connect_timeout: Some(Duration::from_millis(5_000)),
-        strategy: ConnectStrategy::Fallback,
+        strategy: ConnectStrategy::Retry,
         ..Default::default()
     };
     client.connect(Some(options)).await.map_err(|e| format!("failed to connect to node {url}: {e}"))?;
