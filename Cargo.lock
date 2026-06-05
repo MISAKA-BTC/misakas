@@ -3295,6 +3295,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaspa-pq-signer"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "clap 4.5.51",
+ "kaspa-consensus-core",
+ "kaspa-core",
+ "kaspa-hashes",
+ "kaspa-pq-validator-core",
+ "log",
+]
+
+[[package]]
 name = "kaspa-pq-validator"
 version = "1.1.0"
 dependencies = [
