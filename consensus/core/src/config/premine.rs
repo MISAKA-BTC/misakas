@@ -1,8 +1,8 @@
 //! kaspa-pq (misaka) genesis premine.
 //!
-//! A single 15B KAS UTXO locked to a **single-key ML-DSA-87 P2PKH**, baked into
-//! genesis. This is the genesis half of the 30B final supply (the other 15B is
-//! mined over 20 years; see the emission table in
+//! A single 12B KAS UTXO locked to a **single-key ML-DSA-87 P2PKH**, baked into
+//! genesis. This is the genesis premine of the 30B final supply (the other 18B is
+//! mined/staked over 20 years; see the emission table in
 //! `consensus/src/processes/coinbase.rs`).
 //!
 //! The lock is the standard ML-DSA P2PKH `scriptPubKey`
@@ -42,8 +42,10 @@ use crate::{
 };
 use kaspa_hashes::Hash64;
 
-/// Premine amount: 15B KAS.
-pub const MISAKA_PREMINE_SOMPI: u64 = 15_000_000_000 * SOMPI_PER_KASPA;
+/// Premine amount: 12B KAS. (The 30B cap's remaining 18B is emitted over 20 years;
+/// see `coinbase::SUBSIDY_BY_MONTH_TABLE`. Reduced from 15B → 12B with the 3B moved
+/// to network emission.)
+pub const MISAKA_PREMINE_SOMPI: u64 = 12_000_000_000 * SOMPI_PER_KASPA;
 
 /// **PUBLIC** test-network premine owner payload (testnet / devnet / simnet):
 /// keyed BLAKE2b-512 (md2 §4.2 address context `kaspa-pq-v2/address/mldsa87`) of an
@@ -61,7 +63,7 @@ const PUBLIC_TEST_PREMINE_OWNER_PAYLOAD: [u8; 64] = [
 
 /// 🔴 **LAUNCH BLOCKER (audit H-01):** mainnet premine owner payload. The all-zero
 /// placeholder is **unspendable** (no ML-DSA-87 verification key hashes to an
-/// all-zero 64-byte address payload), so the 15B mainnet genesis UTXO is locked
+/// all-zero 64-byte address payload), so the 12B mainnet genesis UTXO is locked
 /// until a ceremony-generated payload replaces it and mainnet is re-genesised.
 /// Kept distinct from the public test key by construction — guarded by the
 /// `mainnet_premine_is_not_the_public_test_key` test.
@@ -93,7 +95,7 @@ const MISAKA_PREMINE_TXID: [u8; 64] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
-/// The canonical kaspa-pq genesis premine UTXO set for `network_type`: one 15B KAS
+/// The canonical kaspa-pq genesis premine UTXO set for `network_type`: one 12B KAS
 /// single-key ML-DSA-87 P2PKH UTXO, spendable from block 0 (`is_coinbase: false`,
 /// no maturity delay). The owner payload is network-dependent (see
 /// [`premine_owner_payload`]): unspendable placeholder on mainnet until the
@@ -146,7 +148,7 @@ mod tests {
     /// all-zero unspendable placeholder. This catches the two release mistakes the ceremony
     /// could make: shipping a real ceremony payload while the flag still says "pending"
     /// (the runbook would skip the re-genesis steps), or flipping the flag to "done" while
-    /// the payload is still the unspendable placeholder (a permanently locked 15B premine).
+    /// the payload is still the unspendable placeholder (a permanently locked 12B premine).
     #[test]
     fn mainnet_ceremony_pending_flag_matches_placeholder_state() {
         let is_placeholder = MAINNET_PREMINE_OWNER_PAYLOAD == [0u8; 64];

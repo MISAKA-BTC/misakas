@@ -87,13 +87,13 @@ Spec: homomorphic UTXO-set commitment. **Verify current backend (LtHash vs MuHas
 | UTXO-4 | reorg: commitment rolls back + replays correctly | L4 | post-reorg == recomputed |
 | UTXO-5 | LtHash migration (if/when from MuHash): no consensus split | L4 | gated/forked cleanly |
 
-## E. Tokenomics — 30B cap (15B premine + 15B/20yr 5%-decay)
+## E. Tokenomics — 30B cap (12B premine + 18B/20yr 5%-decay)
 
 | id | item | level | pass criteria |
 |---|---|---|---|
-| TOK-1 | emission table sums to ~15B over 20yr (`verify_total_emission`) | L1 | within budget |
+| TOK-1 | emission table sums to ~18B over 20yr (`verify_total_emission`) | L1 | within budget |
 | TOK-2 | per-block subsidy schedule (`subsidy_test`, decay 0.95/yr) | L1 | matches table |
-| TOK-3 | premine: single 15B UTXO → 2-of-3 P2SH at genesis | L2/L3 | UTXO present, spendable |
+| TOK-3 | premine: single 12B UTXO → single-key ML-DSA-87 P2PKH at genesis | L2/L3 | UTXO present, spendable |
 | TOK-4 | circulating-supply RPC == `MISAKA_PREMINE_SOMPI` + emitted | L3 | matches |
 | TOK-5 | `MAX_SOMPI` = 30B never exceeded (incl. bps rounding surplus) | L1/L4 | ≤ cap |
 
