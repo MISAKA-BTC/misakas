@@ -96,13 +96,15 @@ struct RunArgs {
     network: Option<String>,
 
     /// Seconds between attestation rounds. Each round attests at most the ONE current
-    /// canonical-ready epoch, so this poll period must be ≤ an epoch's wall-clock duration
-    /// (≈ epoch_length_blocks / blocks-per-second) for a single validator to cover EVERY epoch
-    /// and reach the DNS stake-depth threshold. Default 30 suits mainnet (~1 BPS ⇒ ~100 s
-    /// epochs); LOWER it on a fast devnet (e.g. 3 at ~9 BPS ⇒ ~11 s epochs) so one validator
-    /// keeps up. Revisiting the same epoch within a run is deduped (no re-sign / no rebroadcast),
-    /// so a small value only adds cheap RPC polls.
-    #[arg(long, default_value_t = 30, env = "KASPA_PQ_ATTEST_POLL_SECS")]
+    /// canonical-ready epoch, so this poll period MUST be ≤ an epoch's wall-clock duration for a
+    /// single validator to cover EVERY epoch and reach the DNS stake-depth threshold. ALL kaspa-pq
+    /// networks (mainnet/testnet/devnet/simnet) run at 10 BPS (`BlockrateParams::new::<10>()`,
+    /// target_time_per_block = 100 ms) with `attestation_epoch_length_blue_score = 100`, so an
+    /// epoch is ≈ 10 s — hence the default 3 s (≈3 polls/epoch, keeps a single validator caught up
+    /// on every network). Revisiting the same epoch within a run is deduped (no re-sign / no
+    /// rebroadcast), so a small value only adds cheap local-node RPC polls; raise it only if you
+    /// deliberately throttle the chain to a slower block rate.
+    #[arg(long, default_value_t = 3, env = "KASPA_PQ_ATTEST_POLL_SECS")]
     attest_poll_secs: u64,
 
     /// Logging level {off, error, warn, info, debug, trace}.
