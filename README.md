@@ -32,7 +32,7 @@ Authoritative design & spec live under [`docs/`](docs/):
 
 ## Prebuilt binaries
 
-Linux x86_64 devnet binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-validator`) are published under [Releases](https://github.com/MISAKA-BTC/misakas/releases). Each release is built from the source snapshot of the same tag.
+Linux x86_64 binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-validator`, `kaspa-pq-signer`) are published under [Releases](https://github.com/MISAKA-BTC/misakas/releases). Each release is built from the source snapshot of the same tag; verify with the `SHA256SUMS` attached to the release.
 
 ## Building from source
 
@@ -76,7 +76,7 @@ Linux x86_64 devnet binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-validator`) 
       ```
   7. Build the node + tools
       ```bash
-      cargo build --release -p kaspad -p kaspa-pq-miner -p kaspa-pq-validator
+      cargo build --release -p kaspad -p kaspa-pq-miner -p kaspa-pq-validator -p kaspa-pq-signer
       ```
   </details>
 
@@ -178,6 +178,21 @@ kaspa-pq-validator bond --node-rpc 127.0.0.1:27610 --validator-key val.seed \
 kaspa-pq-validator run --node-rpc 127.0.0.1:27610 --validator-key val.seed \
   --stake-bond <txid:index> --signed-epoch-db val.state --network devnet
 ```
+
+The validator attests the one current canonical-ready epoch per round; the round cadence is `--attest-poll-secs` (default **3 s**). Every misakas network runs at **10 BPS**, so an attestation epoch (`attestation_epoch_length_blue_score = 100`) is only ~10 s of wall-clock — the 3 s default keeps a single validator caught up on every network. Raise it only if you deliberately throttle the chain to a slower block rate.
+
+Once enough stake has attested across the recent epochs, `getDnsConfirmation` reports `dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat THIS as DNS-final, not the pov-dependent `blockHash` sink). On the `mainnet`/`testnet` parameter sets confirmation is **two-dimensional** — it requires `WorkDepth ≥ required_work_depth` (anchor-relative accumulated blue work) **and** `StakeDepth ≥ required_stake_depth`; devnet/simnet confirm on stake alone (`required_work_depth = 0`) for fast tests.
+
+### Remote signer / HSM (optional, ADR-0015)
+
+`kaspa-pq-signer` is a standalone daemon that holds the ML-DSA-87 validator key **outside** the validator process and answers sign requests over a `0700` (owner-only) Unix domain socket, enforcing a signing policy (`permissive` / `audit-only` / `strict`), a `strict`-policy anti-equivocation guard (backed by a crash-consistent `SignedEpochStore`), and a tamper-evident hash-chained audit log. A compromised validator node then cannot exfiltrate the key or double-sign.
+
+```bash
+kaspa-pq-signer --socket /run/kaspa-pq-signer.sock --key val.seed \
+  --state-dir ./kpq-signer-state --policy strict
+```
+
+This is a **software** signer; a hardware-HSM / PKCS#11 backend and HA failover are out of scope (see [docs/adr/0015-remote-signer-hsm-protocol.md](docs/adr/0015-remote-signer-hsm-protocol.md)). The local key-file signer used by `kaspa-pq-validator` above remains the default.
 
 <details>
 <summary>Using a configuration file</summary>
