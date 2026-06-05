@@ -951,7 +951,6 @@ impl VirtualStateProcessor {
         let totals = total_active_stake_by_epoch(&bonds, &epoch_anchor_daa);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         let stake_depth = compute_stake_score(&per_epoch, dns_params.stake_event_quality_floor_bps);
-        let work_depth = self.ghostdag_store.get_blue_work(sink).unwrap_or_default();
 
         // kaspa-pq Phase 13 (ADR-0018 §C): derive the read-only DnsHealth liveness signal
         // from the same per-epoch tallies that fed the StakeScore. `overlay_active` iff the
@@ -974,6 +973,23 @@ impl VirtualStateProcessor {
         let confirmable_anchor = ready_epoch_from_tip_blue_score(sink_blue, epoch_len_blue, dns_params.attestation_lag_blue_score)
             .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, sink, dns_params))
             .map(|a| (a.anchor_hash, a.anchor_daa_score));
+
+        // true WorkDepth (audit H-02 Option A): WorkDepth(B) is the blue work accumulated SINCE the
+        // confirmable anchor B — anchor-relative (`blue_work(sink) − blue_work(anchor)`), NOT the
+        // cumulative-from-genesis `blue_work(sink)`. This makes it a real confirmation DEPTH (how much
+        // PoW is piled on the confirmed point), so `is_dns_confirmed` genuinely requires BOTH a
+        // work-depth AND a stake-depth (two-dimensional confirmation, matching the reorg gate's
+        // anchor-relative work∧stake dominance). With `required_work_depth = 0` (devnet/simnet) this is
+        // inert (stake-only); on mainnet/testnet (`required_work_depth > 0`) the work term gates too.
+        // `ZERO` when no anchor is ready yet (no confirmation happens then anyway).
+        let work_depth = confirmable_anchor
+            .map(|(anchor_hash, _)| {
+                self.ghostdag_store
+                    .get_blue_work(sink)
+                    .unwrap_or_default()
+                    .saturating_sub(self.ghostdag_store.get_blue_work(anchor_hash).unwrap_or_default())
+            })
+            .unwrap_or_default();
         let new_state = advance_dns_confirmation(
             prev_dns_state.as_ref(),
             sink,

@@ -576,6 +576,9 @@ pub struct DnsState {
     pub selected_chain_anchor: Hash64,
     pub anchor_daa_score: u64,
 
+    /// audit H-02 (true WorkDepth): the blue work accumulated SINCE the confirmable canonical
+    /// anchor (`blue_work(sink) − blue_work(anchor)`), i.e. an anchor-relative confirmation DEPTH —
+    /// NOT cumulative-from-genesis work. Compared against `required_work_depth` in `is_dns_confirmed`.
     pub work_depth: BlueWorkType,
     pub stake_depth: StakeScore,
 
@@ -5320,6 +5323,43 @@ mod tests {
         );
         assert_eq!(s4.last_dns_confirmed_anchor, canon2, "below-threshold -> keep prev confirmed");
         assert_eq!(s4.last_dns_confirmed_anchor_daa_score, 580);
+    }
+
+    /// audit H-02 (true WorkDepth, Option A): with `required_work_depth > 0`, confirmation is
+    /// genuinely TWO-DIMENSIONAL — it requires BOTH `WorkDepth ≥ cW` AND `StakeDepth ≥ cS`. The
+    /// decisive new property: a candidate with ENOUGH STAKE but SHALLOW work (`WorkDepth < cW`) is
+    /// NOT confirmed (a stake-side adversary can no longer fast-finalize a low-PoW anchor). This is
+    /// the behavior that `required_work_depth = 0` (devnet/simnet) collapses to "stake-only".
+    #[test]
+    fn true_workdepth_requires_both_work_and_stake() {
+        let vsc = Hash64::from_bytes([0x22; 64]);
+        let (cw, cs) = (BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE)); // cW=1000, cS=1.0
+        let stage = DnsRolloutStage::Active;
+        let canon = Hash64::from_bytes([0xC0; 64]);
+        let confirm = |work: u64, stake: u128| {
+            advance_dns_confirmation(
+                None,
+                Hash64::from_bytes([0x10; 64]),
+                900,
+                Some((canon, 880)),
+                BlueWorkType::from_u64(work),
+                StakeScore(stake),
+                stage,
+                vsc,
+                DnsHealth::Active,
+                cw,
+                cs,
+            )
+            .last_dns_confirmed_anchor
+        };
+        // Both dimensions clear ⇒ confirmed.
+        assert_eq!(confirm(2000, STAKE_SCORE_SCALE), canon, "work≥cW ∧ stake≥cS ⇒ confirmed");
+        // Enough STAKE but SHALLOW work ⇒ NOT confirmed (the true-WorkDepth gate; stake-only would confirm).
+        assert_eq!(confirm(999, STAKE_SCORE_SCALE), Hash64::default(), "stake≥cS but work<cW ⇒ NOT confirmed (true WorkDepth)");
+        // Enough WORK but insufficient stake ⇒ NOT confirmed (the stake gate).
+        assert_eq!(confirm(2000, STAKE_SCORE_SCALE / 2), Hash64::default(), "work≥cW but stake<cS ⇒ NOT confirmed");
+        // Exactly at both thresholds ⇒ confirmed (inclusive ≥).
+        assert_eq!(confirm(1000, STAKE_SCORE_SCALE), canon, "work==cW ∧ stake==cS ⇒ confirmed");
     }
 
     #[test]

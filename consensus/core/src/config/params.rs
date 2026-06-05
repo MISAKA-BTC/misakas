@@ -710,7 +710,17 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // rejected at acceptance and can never attest (user decision 2026-06-01).
     min_bond_amount_sompi: 20_000_000 * SOMPI_PER_KASPA,
     epoch_length_blocks: 100,
-    required_work_depth: BlueWorkType::ZERO,
+    // audit H-02 (true WorkDepth, Option A): a DNS-confirmed anchor must be buried by at least this
+    // much ACCUMULATED blue work SINCE it became the canonical lagged anchor (anchor-relative
+    // WorkDepth, computed in `update_dns_state`), so confirmation is genuinely two-dimensional —
+    // it requires BOTH `WorkDepth ≥ required_work_depth` AND `StakeDepth ≥ required_stake_depth`.
+    // This closes the "stake confirms a shallow-PoW anchor" corner (a stake-side adversary can no
+    // longer fast-finalize an anchor with little PoW behind it). CALIBRATION FLOOR (operator knob,
+    // like `emergency_work_margin`): set so the work term is satisfied WELL BEFORE the stake window
+    // at the launch difficulty (stake stays the liveness bottleneck) yet non-trivial; tune to the
+    // live difficulty before mainnet. Devnet/simnet (`GENESIS_ACTIVE_DNS_PARAMS`) keep `ZERO`
+    // (stake-only) for fast tests + fast bring-up.
+    required_work_depth: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
     required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
     emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
     emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
