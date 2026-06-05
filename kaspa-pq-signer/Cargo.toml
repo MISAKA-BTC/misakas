@@ -1,0 +1,34 @@
+[package]
+name = "kaspa-pq-signer"
+description = "Kaspa-PQ remote signer / HSM daemon (ADR-0015, audit H-04): a standalone process that holds the ML-DSA-87 validator key(s), enforces a signing policy (purpose/digest typing + an equivocation guard), keeps a tamper-evident audit log, and answers length-prefixed Borsh sign requests over a Unix domain socket — so a compromised validator node never touches the key directly."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "kaspa_pq_signer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kaspa-pq-signer"
+path = "src/main.rs"
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-pq-validator-core.workspace = true
+
+blake2b_simd.workspace = true
+borsh.workspace = true
+log.workspace = true
+
+clap = { workspace = true, features = ["env"] }
+
+[lints]
+workspace = true

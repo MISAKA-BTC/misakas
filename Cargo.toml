@@ -21,6 +21,7 @@ members = [
     "kaspad",
     "kaspa-pq-validator",
     "kaspa-pq-validator-core",
+    "kaspa-pq-signer",
     "simpa",
     "wasm",
     "wasm/core",
