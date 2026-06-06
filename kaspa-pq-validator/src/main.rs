@@ -107,6 +107,13 @@ struct RunArgs {
     #[arg(long, default_value_t = 3, env = "KASPA_PQ_ATTEST_POLL_SECS")]
     attest_poll_secs: u64,
 
+    /// Fee in sompi for each attestation-shard transaction. Default: a mass-based estimate from the
+    /// network's mass params (the shard carries a 4627-byte ML-DSA-87 signature, so the flat floor
+    /// is far below the mempool minimum — ≈ 232 600 sompi on devnet). Pass an explicit value to
+    /// override (e.g. bump under congestion); like `bond`/`unbond`, omit it to auto-size.
+    #[arg(long, env = "KASPA_PQ_ATTEST_FEE")]
+    fee: Option<u64>,
+
     /// Logging level {off, error, warn, info, debug, trace}.
     #[arg(long, default_value = "info", env = "KASPA_PQ_LOG_LEVEL")]
     log_level: String,
@@ -558,10 +565,11 @@ async fn run_daemon(args: RunArgs) -> Result<(), String> {
     let attestor = Attestor::load(&args, prefix, coinbase_maturity, &mass_calc)?;
     match &attestor {
         Some(a) => info!(
-            "[{VALIDATOR}] attesting as validator_id={} (funding {}, fee {} sompi mass-based)",
+            "[{VALIDATOR}] attesting as validator_id={} (funding {}, fee {} sompi{})",
             a.key.validator_id,
             a.key.funding_address(prefix),
-            a.attestation_fee
+            a.attestation_fee,
+            if args.fee.is_some() { "" } else { ", mass-based" }
         ),
         None => info!("[{VALIDATOR}] observe-only (need --validator-key + --stake-bond + --signed-epoch-db to attest)"),
     }
@@ -589,9 +597,10 @@ struct Attestor {
     /// Network coinbase-maturity (blocks); a coinbase funding UTXO younger than this cannot be
     /// spent for the attestation tx. Captured once at load from the node's network id.
     coinbase_maturity: u64,
-    /// Mass-based attestation-shard fee (sompi), computed once at load from the network's mass
-    /// params (the shard tx shape is fixed, so the fee is constant across epochs). Replaces the
-    /// flat floor, which is ~10× below the kaspa-pq mempool minimum for this payload-heavy tx.
+    /// Attestation-shard fee (sompi), fixed once at load: the explicit `--fee` if given, else a
+    /// mass-based estimate from the network's mass params (the shard tx shape is fixed, so the fee
+    /// is constant across epochs). Either way it is far above the flat floor, which is below the
+    /// kaspa-pq mempool minimum for this payload-heavy tx.
     attestation_fee: u64,
     /// The last epoch this PROCESS has already attested (submitted a shard for). Lets a short
     /// `--attest-poll-secs` revisit the same canonical-ready epoch cheaply without re-signing or
@@ -611,7 +620,9 @@ impl Attestor {
         let key = ValidatorKey::from_seed(load_validator_seed(key_path)?);
         let bond_outpoint = parse_stake_bond_ref(bond_ref)?;
         let signed_store = SignedEpochStore::load_or_empty(db.into(), key.validator_id, bond_outpoint)?;
-        let attestation_fee = key.estimate_attestation_fee(mass_calc, prefix);
+        // Mass-based fee unless overridden (mirrors `bond`/`unbond`): an explicit `--fee` wins, else
+        // size it from the network mass params (≈ 290 000 sompi for the shard's 4627-byte signature).
+        let attestation_fee = args.fee.unwrap_or_else(|| key.estimate_attestation_fee(mass_calc, prefix));
         Ok(Some(Self { key, bond_outpoint, signed_store, prefix, coinbase_maturity, attestation_fee, last_attested_epoch: None }))
     }
 

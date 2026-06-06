@@ -39,14 +39,23 @@ use std::str::FromStr;
 /// (matches the wallet's `KaspaPqMlDsa87KeyPair`).
 pub const VALIDATOR_SEED_LEN: usize = 32;
 
-/// Floor (sompi) for an overlay-tx fee — attestation shard / StakeBond / StakeUnbondRequest. It is
-/// the minimum the mass-based estimators ([`ValidatorKey::estimate_attestation_fee`],
+/// Safety floor (sompi) for an overlay-tx fee — attestation shard / StakeBond / StakeUnbondRequest.
+/// It is the minimum the mass-based estimators ([`ValidatorKey::estimate_attestation_fee`],
 /// [`ValidatorKey::estimate_bond_fee`], [`ValidatorKey::estimate_unbond_fee`]) ever return, and the
-/// fallback when a `MassCalculator` is unavailable. The real fee is the relay-rate fee derived from
-/// the transaction's compute mass — see [`relay_fee_for_compute_mass`], which mirrors the node's
-/// `minimum_required_transaction_relay_fee` at the kaspa-pq production rate (10× compute mass), so
-/// these payload-heavy ML-DSA txs (2592-byte pubkey, 4627-byte sig) are not rejected as under-fee.
-pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 30_000;
+/// value used when a `MassCalculator` is unavailable. The real fee is the relay-rate fee derived
+/// from the transaction's compute mass — see [`relay_fee_for_compute_mass`], which mirrors the
+/// node's `minimum_required_transaction_relay_fee` at the kaspa-pq production rate (10× compute
+/// mass); for these payload-heavy ML-DSA txs (2592-byte pubkey, 4627-byte sig) that lands at
+/// ≈ 272 000–319 000 sompi, all comfortably above this floor (so on the normal path the floor never
+/// bites — it only guards the rare fallback path and any caller that uses the flat constant
+/// directly).
+///
+/// Set to 250 000 (was a flat 30 000): the live devnet mempool minimum for an attestation shard is
+/// ≈ 232 600 sompi, so a 30 000 fallback was ~8× too low and got **rejected as under-fee**
+/// (`fees 30000 … under the required amount of 232600`), wedging any validator that hit the
+/// fallback. 250 000 sits above that observed minimum yet below every real mass-based fee, so it can
+/// never be the under-fee cause again without over-charging the normal path.
+pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 250_000;
 
 /// Convert a transaction's non-contextual **compute mass** into the node's minimum relay fee
 /// (sompi), matching `minimum_required_transaction_relay_fee` in
@@ -748,8 +757,9 @@ mod tests {
     #[test]
     fn mass_based_bond_and_unbond_fees_exceed_the_flat_floor() {
         // StakeBond / StakeUnbondRequest carry the 2592-byte ML-DSA-87 pubkey (+ a 4627-byte sig),
-        // so a mass-based fee is far above the flat attestation floor — that gap is exactly why the
-        // bond/unbond commands estimate from the network mass params instead of the floor.
+        // so a mass-based fee (≈ 272 000 / 319 000 sompi) stays above the safety floor even after it
+        // was raised to 250 000 — that gap is exactly why the bond/unbond commands estimate from the
+        // network mass params instead of pinning the floor.
         let key = ValidatorKey::from_seed([0x5au8; VALIDATOR_SEED_LEN]);
         // kaspa-pq mass params (mass_per_sig_op = 10_000 per the Phase-7 recalibration).
         let mc = MassCalculator::new(1, 10, 10_000, 10_000_000_000);
