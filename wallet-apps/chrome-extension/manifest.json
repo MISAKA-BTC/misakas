@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "MISAKA Wallet (post-quantum)",
+  "version": "0.1.0",
+  "description": "Self-custody ML-DSA-87 (post-quantum) wallet for misakas (kaspa-pq) — testnet & mainnet.",
+  "action": {
+    "default_title": "MISAKA Wallet",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["storage", "alarms"],
+  "host_permissions": [
+    "wss://*.misakascan.com/*",
+    "ws://127.0.0.1/*",
+    "wss://*/*",
+    "ws://*/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src wss: ws: https: 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'"
+  }
+}

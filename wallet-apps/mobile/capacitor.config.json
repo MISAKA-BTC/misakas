@@ -1,0 +1,8 @@
+{
+  "appId": "com.misaka.wallet",
+  "appName": "MISAKA Wallet",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "ios": { "contentInset": "always" },
+  "android": { "allowMixedContent": false }
+}

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MISAKA Wallet</title>
+<link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+<header class="bar">
+  <span class="brand">MISAKA <span class="pq">PQ</span></span>
+  <select id="net" class="net" title="Network"></select>
+  <span id="conn" class="conn" title="node">●</span>
+</header>
+
+<main id="view"><div class="loading">Loading…</div></main>
+
+<!-- ========================= templates ========================= -->
+<template id="t-onboard">
+  <div class="pad">
+    <h1>Post-quantum wallet</h1>
+    <p class="muted">ML-DSA-87 self-custody for misakas (kaspa-pq). Your keys never leave this device.</p>
+    <button class="primary" data-act="create">Create a new wallet</button>
+    <button class="ghost" data-act="import">Import a recovery phrase</button>
+  </div>
+</template>
+
+<template id="t-backup">
+  <div class="pad">
+    <h2>Back up your recovery phrase</h2>
+    <p class="warn">Write these 24 words down and keep them offline. Anyone with them controls your funds. They are shown only once.</p>
+    <ol id="seed-words" class="seed"></ol>
+    <button class="ghost sm" data-act="copy-seed">Copy phrase</button>
+    <label class="chk"><input type="checkbox" id="bk-ack" /> I have saved my recovery phrase securely</label>
+    <button class="primary" data-act="to-setpass" id="bk-next" disabled>Continue</button>
+  </div>
+</template>
+
+<template id="t-import">
+  <div class="pad">
+    <h2>Import recovery phrase</h2>
+    <textarea id="imp-phrase" rows="3" placeholder="24 words separated by spaces" spellcheck="false"></textarea>
+    <div id="imp-err" class="err"></div>
+    <button class="primary" data-act="import-next">Continue</button>
+    <button class="ghost sm" data-act="back-onboard">Back</button>
+  </div>
+</template>
+
+<template id="t-setpass">
+  <div class="pad">
+    <h2>Set a password</h2>
+    <p class="muted">Encrypts your recovery phrase on this device (AES-256-GCM). Minimum 8 characters. There is no recovery if you forget it — keep your phrase.</p>
+    <input type="password" id="pw1" placeholder="Password" autocomplete="new-password" />
+    <input type="password" id="pw2" placeholder="Confirm password" autocomplete="new-password" />
+    <div id="pass-err" class="err"></div>
+    <button class="primary" data-act="finish-setup">Create wallet</button>
+  </div>
+</template>
+
+<template id="t-unlock">
+  <div class="pad">
+    <h2>Unlock</h2>
+    <input type="password" id="unlock-pw" placeholder="Password" autocomplete="current-password" />
+    <div id="unlock-err" class="err"></div>
+    <button class="primary" data-act="unlock">Unlock</button>
+    <button class="link" data-act="forgot">Forgot? Reset with recovery phrase</button>
+  </div>
+</template>
+
+<template id="t-home">
+  <div class="pad">
+    <div class="balance"><span id="bal">—</span> <span class="sym" id="bal-sym">MSK</span></div>
+    <div class="addr-row">
+      <span id="home-addr" class="addr mono" title="your address"></span>
+      <button class="icon" data-act="copy-addr" title="copy">⧉</button>
+    </div>
+    <div class="actions">
+      <button class="primary" data-act="go-send">Send</button>
+      <button class="ghost" data-act="go-receive">Receive</button>
+    </div>
+    <div class="row sub"><span class="muted">UTXOs</span><span id="utxo-n">—</span></div>
+    <div class="foot">
+      <button class="link" data-act="go-settings">Settings</button>
+      <button class="link" data-act="lock">Lock</button>
+      <a id="explorer-link" class="link" target="_blank" rel="noopener">Explorer ↗</a>
+    </div>
+  </div>
+</template>
+
+<template id="t-receive">
+  <div class="pad">
+    <h2>Receive</h2>
+    <p class="muted">Share this address to receive <span class="sym2"></span>. It is valid only on the selected network.</p>
+    <div class="addr-box mono" id="rx-addr"></div>
+    <button class="primary" data-act="copy-addr2">Copy address</button>
+    <button class="ghost sm" data-act="go-home">Back</button>
+  </div>
+</template>
+
+<template id="t-send">
+  <div class="pad">
+    <h2>Send</h2>
+    <label>Recipient</label>
+    <input id="snd-to" placeholder="misaka… address" spellcheck="false" />
+    <label>Amount (<span class="sym2"></span>)</label>
+    <input id="snd-amt" inputmode="decimal" placeholder="0.0" />
+    <div class="row sub"><span class="muted">Available</span><span id="snd-avail">—</span></div>
+    <div id="snd-err" class="err"></div>
+    <div id="snd-ok" class="ok"></div>
+    <button class="primary" data-act="do-send" id="snd-btn">Review &amp; send</button>
+    <button class="ghost sm" data-act="go-home">Back</button>
+  </div>
+</template>
+
+<template id="t-settings">
+  <div class="pad">
+    <h2>Settings</h2>
+    <label>Auto-lock (minutes idle)</label>
+    <input id="set-lock" type="number" min="1" max="60" />
+    <label>Custom node RPC (wss/ws URL — optional)</label>
+    <input id="set-rpc" placeholder="wss://host/path" spellcheck="false" />
+    <button class="ghost sm" data-act="save-settings">Save</button>
+    <hr/>
+    <button class="ghost sm" data-act="reveal-seed">Reveal recovery phrase</button>
+    <div id="seed-reveal" class="seed-reveal mono"></div>
+    <hr/>
+    <button class="danger sm" data-act="remove">Remove wallet from this device</button>
+    <button class="ghost sm" data-act="go-home">Back</button>
+  </div>
+</template>
+
+<script type="module" src="popup.js"></script>
+</body>
+</html>
