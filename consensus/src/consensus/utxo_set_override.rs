@@ -13,7 +13,7 @@ use kaspa_muhash::MuHash;
 use crate::consensus::Consensus;
 
 /// The genesis UTXO set imported at consensus initialization: the canonical
-/// kaspa-pq (misaka) premine — a single 12B KAS UTXO locked to a single-key
+/// kaspa-pq (misaka) premine — a single 15B KAS UTXO locked to a single-key
 /// ML-DSA-87 P2PKH whose owner payload is network-dependent (see
 /// `kaspa_consensus_core::config::premine`: an unspendable ceremony placeholder on
 /// mainnet, the public test key on testnet/devnet/simnet) — plus, when the
@@ -90,12 +90,12 @@ mod tests {
     };
 
     #[test]
-    fn premine_is_a_single_12b_utxo() {
+    fn premine_is_a_single_15b_utxo() {
         let utxos = misaka_premine_utxos(NetworkType::Simnet);
         assert_eq!(utxos.len(), 1, "premine is a single UTXO");
         let entry = utxos.values().next().unwrap();
         assert_eq!(entry.amount, MISAKA_PREMINE_SOMPI);
-        assert_eq!(entry.amount, 12_000_000_000 * SOMPI_PER_KASPA, "12B KAS");
+        assert_eq!(entry.amount, 15_000_000_000 * SOMPI_PER_KASPA, "15B KAS");
         assert!(!entry.is_coinbase, "premine must be non-coinbase (spendable from block 0)");
         assert_eq!(entry.block_daa_score, 0);
         // kaspa-pq ML-DSA-87 P2PKH template (ADR-0019 §8): OP_DUP OP_BLAKE2B_512
@@ -142,5 +142,4 @@ mod tests {
             set_genesis_utxo_commitment_from_config(&mut config);
         }
     }
-
 }

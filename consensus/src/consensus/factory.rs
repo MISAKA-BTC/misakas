@@ -278,7 +278,7 @@ impl Factory {
     ) -> Self {
         assert!(fd_budget > 0, "fd_budget has to be positive");
         let mut config = config.clone();
-        // kaspa-pq (audit L-01): bake the genesis premine (12B KAS single-key ML-DSA-87
+        // kaspa-pq (audit L-01): bake the genesis premine (15B KAS single-key ML-DSA-87
         // P2PKH, network-specific owner payload — see config::premine) into the genesis
         // utxo_commitment + hash for every network, so all nodes agree on the
         // premine-aware genesis identity. (Multisig/P2SH is consensus-disabled in PQ-only.)
