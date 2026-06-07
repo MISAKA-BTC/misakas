@@ -336,6 +336,13 @@ pub struct Params {
     /// and are therefore fully inert until a network opts in.
     pub dns_params: Option<DnsParams>,
 
+    /// kaspa-pq Phase 2 PoW (ADR-0007): activation of the memory-hard **Argon2id** Layer-1
+    /// (`POW_ALGO_ID_ARGON2ID = 2`). Past this DAA score every block header MUST declare
+    /// `algo_id = 2`; before it, the Phase-1 kHeavyHash (`algo_id = 1`). `always()` ⇒ Argon2id from
+    /// genesis (testnet/mainnet); `never()` ⇒ stay kHeavyHash (devnet/simnet keep fast local PoW).
+    /// Genesis (the parentless trusted root) is exempt from the check.
+    pub pow_argon2id_activation: ForkActivation,
+
     /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
     /// docs/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
     pub pq_enforcement: PqEnforcementMode,
@@ -523,6 +530,8 @@ impl Params {
 
             // kaspa-pq DNS overlay params are not CLI-overridable; carried as-is.
             dns_params: self.dns_params,
+            // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
+            pow_argon2id_activation: self.pow_argon2id_activation,
             // kaspa-pq: PQ enforcement is consensus-fixed, never runtime-overridable.
             pq_enforcement: self.pq_enforcement,
             pq_activation_daa_score: self.pq_activation_daa_score,
@@ -871,6 +880,7 @@ pub const MAINNET_PARAMS: Params = Params {
     // unbonding/evidence window (slashable through the whole exit). See PRODUCTION_DNS_PARAMS.
     // Not a genesis-block input, so the genesis hash is unchanged.
     dns_params: Some(PRODUCTION_DNS_PARAMS),
+    pow_argon2id_activation: ForkActivation::always(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
 };
@@ -943,6 +953,7 @@ pub const TESTNET_PARAMS: Params = Params {
     // 14-day unbonding/evidence window (slashable through the whole exit). See PRODUCTION_DNS_PARAMS.
     // Not a genesis-block input, so the genesis hash is unchanged.
     dns_params: Some(PRODUCTION_DNS_PARAMS),
+    pow_argon2id_activation: ForkActivation::always(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
 };
@@ -1000,6 +1011,7 @@ pub const SIMNET_PARAMS: Params = Params {
     // kaspa-pq: DNS-finality PoS overlay genesis-active on every network (see
     // GENESIS_ACTIVE_DNS_PARAMS). Not a genesis-block input, so the genesis hash is unchanged.
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
+    pow_argon2id_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
 };
@@ -1070,4 +1082,5 @@ pub const DEVNET_PARAMS: Params = Params {
     // 300, unbond 700, reward 600 — consistent with U ≥ R+E) keep the PR-10.11-throttled StakeScore
     // aggregation walk cheap on the ~10 bps devnet (amortized O(1) per block).
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
+    pow_argon2id_activation: ForkActivation::never(),
 };

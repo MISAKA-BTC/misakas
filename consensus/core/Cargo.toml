@@ -21,6 +21,8 @@ wasm32-sdk = []
 
 [dependencies]
 arc-swap.workspace = true
+# kaspa-pq Phase 2 PoW (ADR-0007): memory-hard Argon2id Layer-1 (algo_id = 2).
+argon2.workspace = true
 async-trait.workspace = true
 # kaspa-pq Phase 8 (PR-8.3): the Layer 0 PoW finalizer is keyed
 # BLAKE2b-512, which `blake2b_simd` already implements natively.

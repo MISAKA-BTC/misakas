@@ -15,7 +15,10 @@ use kaspa_consensus_core::{
     header::Header,
     // PR-9.5d: POW_ALGO_ID_KHEAVYHASH no longer imported here — the
     // finalizer now reads `header.pow_algo_id` via `State::pow_algo_id`.
-    pow_layer0::{POW_FINALIZER_BYTES, PowLayer0Error, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512},
+    pow_layer0::{
+        POW_ALGO_ID_ARGON2ID, POW_FINALIZER_BYTES, PowLayer0Error, argon2id_l1_tag_v1, l1_seed32_for_kheavyhash_v1,
+        pow_finalizer_blake2b_512,
+    },
 };
 use kaspa_hashes::{Hash64, PowHash};
 use kaspa_math::{Uint256, Uint512};
@@ -210,9 +213,16 @@ impl StateLayer0 {
     /// kHeavyHash matrix step. Returns the 32-byte L1 tag bytes.
     #[inline]
     fn calculate_l1_tag(&self, nonce: u64) -> [u8; 32] {
-        let hash = self.hasher.clone().finalize_with_nonce(nonce);
-        let l1 = self.matrix.heavy_hash(hash);
-        l1.as_bytes()
+        match self.pow_algo_id {
+            // Phase 2 (algo_id = 2): memory-hard Argon2id over (pre_pow_hash, nonce).
+            POW_ALGO_ID_ARGON2ID => argon2id_l1_tag_v1(self.pre_pow_hash_64, nonce, &self.network_id),
+            // Phase 1 (algo_id = 1, kHeavyHash) and the default. Any other id is rejected up-stack
+            // by header validation (`check_algo_id`) before PoW is ever computed.
+            _ => {
+                let hash = self.hasher.clone().finalize_with_nonce(nonce);
+                self.matrix.heavy_hash(hash).as_bytes()
+            }
+        }
     }
 
     /// Compute the full Layer 0 PoW digest for the given nonce.
@@ -253,6 +263,10 @@ mod tests_pq {
     use kaspa_hashes::ZERO_HASH64;
 
     fn dummy_header(bits: u32, nonce: u64, timestamp: u64) -> Header {
+        dummy_header_algo(bits, nonce, timestamp, POW_ALGO_ID_KHEAVYHASH)
+    }
+
+    fn dummy_header_algo(bits: u32, nonce: u64, timestamp: u64, pow_algo_id: u8) -> Header {
         Header::new_finalized(
             1,
             vec![vec![1.into()]].try_into().unwrap(),
@@ -263,8 +277,8 @@ mod tests_pq {
             timestamp,
             bits,
             nonce,
-            POW_ALGO_ID_KHEAVYHASH, // pow_algo_id
-            0,                      // daa_score
+            pow_algo_id,
+            0, // daa_score
             BlueWorkType::from_u64(0),
             0,
             ZERO_HASH64, // PR-9.5e: pruning_point is a block hash (Hash64)
@@ -324,5 +338,36 @@ mod tests_pq {
         let s_hard = StateLayer0::new(&hard, b"simnet");
         let (pass, _) = s_hard.check_pow_layer0(0).unwrap();
         assert!(!pass, "trivially-hard target must reject");
+    }
+
+    /// PR-9.5d Phase 2 (ADR-0007): the Layer-0 verifier dispatches its
+    /// swappable Layer-1 tag on `header.pow_algo_id`. An `algo_id = 2`
+    /// header is validated with memory-hard Argon2id (NOT kHeavyHash):
+    /// the verifier's internal tag matches the standalone
+    /// `argon2id_l1_tag_v1`, differs from the kHeavyHash path, and a
+    /// nonce at the easiest target is accepted by `check_pow_layer0`.
+    /// This is the consensus-side proof that a re-genesised Argon2id
+    /// chain's blocks validate end-to-end.
+    #[test]
+    fn layer0_dispatches_argon2id_for_algo_id_2() {
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_ARGON2ID, argon2id_l1_tag_v1};
+        let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_ARGON2ID);
+        let s = StateLayer0::new(&h, b"testnet-10");
+
+        // Dispatch: the verifier's internal L1 tag must equal the
+        // standalone Argon2id tag for the same (pre_pow_hash, nonce).
+        let tag = s.calculate_l1_tag(7);
+        let expect = argon2id_l1_tag_v1(s.pre_pow_hash_64, 7, b"testnet-10");
+        assert_eq!(tag, expect, "algo_id=2 must compute the Argon2id L1 tag");
+
+        // ...and differ from the kHeavyHash path for the same input.
+        let kh = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_KHEAVYHASH);
+        let s_kh = StateLayer0::new(&kh, b"testnet-10");
+        assert_ne!(s_kh.calculate_l1_tag(7), tag, "kHeavyHash and Argon2id tags must differ");
+
+        // Acceptance: the easiest target accepts at least one Argon2id
+        // nonce in a small scan (P(all 64 reject) ≈ 2^-64).
+        let any_pass = (0u64..64).any(|n| s.check_pow_layer0(n).unwrap().0);
+        assert!(any_pass, "easiest target must accept an Argon2id nonce");
     }
 }
