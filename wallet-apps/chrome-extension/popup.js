@@ -271,6 +271,7 @@ function renderUnlock() {
 
 function renderHome() {
   mount(tpl("t-home"));
+  setSyms();
   $("#home-addr").textContent = W.address;
   $("#bal").textContent = fmt(W.balance);
   const ex = $("#explorer-link"); ex.href = W.cfg.explorer;
