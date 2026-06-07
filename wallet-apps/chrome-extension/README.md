@@ -34,8 +34,11 @@ The testnet talks to `wss://misakascan.com/kaspa` by default; set a custom node 
 - The WASM SDK is bundled (no remote fetch); CSP `script-src 'self' 'wasm-unsafe-eval'`.
 
 ## Packaging for the Web Store
-Zip the folder contents (not the parent): `cd chrome-extension && zip -r ../misaka-wallet.zip .`
-(add 16/48/128 px icons under `icons/` and reference them in the manifest before submitting).
+A ready-to-upload package is built at `../dist/misaka-wallet-extension-v0.1.0.zip` (manifest at the
+zip root, icons + `PRIVACY.md` included). Rebuild with:
+`cd chrome-extension && zip -r ../dist/misaka-wallet-extension-v0.1.0.zip . -x '*.DS_Store'`.
+See **[STORE-LISTING.md](STORE-LISTING.md)** for the full submission walkthrough (manual + API),
+the listing copy, the privacy-policy URL, and permission justifications.
 
 ## Updating the WASM core
 `kaspa/` is copied from the same `kaspa-wasm` build that powers `wallet.misakascan.com`. Rebuild it
@@ -47,4 +50,4 @@ from the repo (`wasm-pack build` of the `kaspa-wasm` target) and replace `kaspa/
   may need a "send max to self" consolidation first; the multi-tx auto-consolidation from the web
   wallet (`app.js`) can be ported here.
 - No QR code on the receive screen yet (address + copy only).
-- Icons are not bundled (add before Web Store submission).
+- Store submission still needs 1–4 screenshots (1280×800) and a hosted privacy-policy URL (see STORE-LISTING.md).
