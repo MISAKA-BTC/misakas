@@ -22,6 +22,7 @@ from!(item: &kaspa_rpc_core::RpcHeader, protowire::RpcBlockHeader, {
         blue_work: item.blue_work.to_rpc_hex(),
         blue_score: item.blue_score,
         pruning_point: item.pruning_point.to_string(),
+        pow_algo_id: item.pow_algo_id as u32,
         hash: item.hash.to_string(),
     }
 });
@@ -41,6 +42,7 @@ from!(item: &kaspa_rpc_core::RpcRawHeader, protowire::RpcBlockHeader, {
         blue_work: item.blue_work.to_rpc_hex(),
         blue_score: item.blue_score,
         pruning_point: item.pruning_point.to_string(),
+        pow_algo_id: item.pow_algo_id as u32,
     }
 });
 
@@ -63,9 +65,8 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcHeader, {
         item.timestamp.try_into()?,
         item.bits,
         item.nonce,
-        // PR-9.5d: Phase 1 kHeavyHash; proto pow_algo_id field is a
-        // Phase-2 follow-on (ADR-0007 algo_id=2).
-        kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+        // kaspa-pq Phase 2 (ADR-0007): carry the declared Layer-1 algo id through the proto.
+        item.pow_algo_id as u8,
         item.daa_score,
         kaspa_rpc_core::RpcBlueWorkType::from_rpc_hex(&item.blue_work)?,
         item.blue_score,
@@ -90,6 +91,7 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcRawHeader, {
         blue_work: kaspa_rpc_core::RpcBlueWorkType::from_rpc_hex(&item.blue_work)?,
         blue_score: item.blue_score,
         pruning_point: RpcHash::from_str(&item.pruning_point)?,
+        pow_algo_id: item.pow_algo_id as u8,
     }
 });
 
@@ -105,9 +107,8 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcOptionalHeader, {
         item.timestamp.try_into()?,
         item.bits,
         item.nonce,
-        // PR-9.5d: Phase 1 kHeavyHash; proto pow_algo_id field is a
-        // Phase-2 follow-on (ADR-0007 algo_id=2).
-        kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+        // kaspa-pq Phase 2 (ADR-0007): carry the declared Layer-1 algo id through the proto.
+        item.pow_algo_id as u8,
         item.daa_score,
         kaspa_rpc_core::RpcBlueWorkType::from_rpc_hex(&item.blue_work)?,
         item.blue_score,

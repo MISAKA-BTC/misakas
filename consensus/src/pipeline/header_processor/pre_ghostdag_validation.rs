@@ -35,13 +35,17 @@ impl HeaderProcessor {
         Ok(())
     }
 
-    /// kaspa-pq Layer-0 (PR-9.5d / audit M-3): reject a header whose `pow_algo_id` is not the
-    /// Phase-1 kHeavyHash id (`POW_ALGO_ID_KHEAVYHASH = 1`). Enforces the single-algo invariant
-    /// (no mixed-`algo_id` DAG) so a future hard-fork can introduce `algo_id >= 2` cleanly. A no-op
-    /// on the current chain — genesis and every block/template build `algo_id = 1` — and checked
-    /// before the PoW seed (which consumes `algo_id`) is derived.
+    /// kaspa-pq Layer-0 (PR-9.5d / ADR-0007): a header MUST declare the exact Layer-1 `algo_id` the
+    /// network mandates at its DAA score — `algo_id = 2` (Argon2id) once the Phase-2 fork is active,
+    /// else `algo_id = 1` (kHeavyHash). Enforces the single-algo invariant (no mixed-`algo_id` DAG)
+    /// and is checked before the PoW seed (which consumes `algo_id`) is derived. Genesis — the
+    /// parentless trusted root — is exempt (its PoW is never validated; it may carry either id).
     fn check_pow_algo_id(&self, header: &Header) -> BlockProcessResult<()> {
-        kaspa_consensus_core::pow_layer0::check_algo_id_phase1(header.pow_algo_id)
+        if header.direct_parents().is_empty() {
+            return Ok(());
+        }
+        let argon2id_active = self.pow_argon2id_activation.is_active(header.daa_score);
+        kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, argon2id_active)
             .map_err(|_| RuleError::UnknownPowAlgoId(header.pow_algo_id))
     }
 

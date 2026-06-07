@@ -112,6 +112,9 @@ pub struct HeaderProcessor {
     /// bytes) fed to the kaspa-pq Layer 0 PoW finalizer (ADR-0007 §4.2)
     /// during header PoW validation.
     pub(super) network_id: Vec<u8>,
+    /// kaspa-pq Phase 2 PoW (ADR-0007): Argon2id (`algo_id = 2`) activation. Drives the per-header
+    /// `pow_algo_id` rule (see `check_pow_algo_id`).
+    pub(super) pow_argon2id_activation: kaspa_consensus_core::config::params::ForkActivation,
 
     // DB
     db: Arc<DB>,
@@ -200,6 +203,7 @@ impl HeaderProcessor {
             max_block_level: params.max_block_level,
             // PR-8.6: Layer 0 PoW per-network domain separation tag.
             network_id: params.net.to_string().into_bytes(),
+            pow_argon2id_activation: params.pow_argon2id_activation,
         }
     }
 

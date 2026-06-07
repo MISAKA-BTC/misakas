@@ -30,6 +30,10 @@ pub struct RpcRawHeader {
     pub timestamp: u64,
     pub bits: u32,
     pub nonce: u64,
+    /// kaspa-pq Phase 2 PoW (ADR-0007): Layer-1 algorithm id (1 = kHeavyHash, 2 = Argon2id). Must
+    /// round-trip so the get_block_template → miner → submit_block path mines/submits the
+    /// network-correct algorithm.
+    pub pow_algo_id: u8,
     pub daa_score: u64,
     pub blue_work: BlueWorkType,
     pub blue_score: u64,
@@ -50,6 +54,8 @@ pub struct RpcHeader {
     pub timestamp: u64,
     pub bits: u32,
     pub nonce: u64,
+    /// kaspa-pq Phase 2 PoW (ADR-0007): Layer-1 algorithm id (1 = kHeavyHash, 2 = Argon2id).
+    pub pow_algo_id: u8,
     pub daa_score: u64,
     pub blue_work: BlueWorkType,
     pub blue_score: u64,
@@ -80,6 +86,7 @@ impl From<Header> for RpcHeader {
             timestamp: header.timestamp,
             bits: header.bits,
             nonce: header.nonce,
+            pow_algo_id: header.pow_algo_id,
             daa_score: header.daa_score,
             blue_work: header.blue_work,
             blue_score: header.blue_score,
@@ -100,6 +107,7 @@ impl From<&Header> for RpcHeader {
             timestamp: header.timestamp,
             bits: header.bits,
             nonce: header.nonce,
+            pow_algo_id: header.pow_algo_id,
             daa_score: header.daa_score,
             blue_work: header.blue_work,
             blue_score: header.blue_score,
@@ -121,9 +129,8 @@ impl TryFrom<RpcHeader> for Header {
             timestamp: header.timestamp,
             bits: header.bits,
             nonce: header.nonce,
-            // PR-9.5d: RpcHeader has no pow_algo_id field yet (Phase-2
-            // follow-on); default to the Phase 1 kHeavyHash algo id.
-            pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+            // kaspa-pq Phase 2 (ADR-0007): carry the declared Layer-1 algo id through the RPC.
+            pow_algo_id: header.pow_algo_id,
             daa_score: header.daa_score,
             blue_work: header.blue_work,
             blue_score: header.blue_score,
@@ -146,9 +153,8 @@ impl TryFrom<&RpcHeader> for Header {
             timestamp: header.timestamp,
             bits: header.bits,
             nonce: header.nonce,
-            // PR-9.5d: RpcHeader has no pow_algo_id field yet (Phase-2
-            // follow-on); default to the Phase 1 kHeavyHash algo id.
-            pow_algo_id: kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+            // kaspa-pq Phase 2 (ADR-0007): carry the declared Layer-1 algo id through the RPC.
+            pow_algo_id: header.pow_algo_id,
             daa_score: header.daa_score,
             blue_work: header.blue_work,
             blue_score: header.blue_score,
@@ -159,7 +165,7 @@ impl TryFrom<&RpcHeader> for Header {
 
 impl Serializer for RpcHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
 
         store!(BlockHash, &self.hash, writer)?;
         store!(u16, &self.version, writer)?;
@@ -171,6 +177,7 @@ impl Serializer for RpcHeader {
         store!(u64, &self.timestamp, writer)?;
         store!(u32, &self.bits, writer)?;
         store!(u64, &self.nonce, writer)?;
+        store!(u8, &self.pow_algo_id, writer)?;
         store!(u64, &self.daa_score, writer)?;
         store!(BlueWorkType, &self.blue_work, writer)?;
         store!(u64, &self.blue_score, writer)?;
@@ -182,7 +189,7 @@ impl Serializer for RpcHeader {
 
 impl Deserializer for RpcHeader {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
 
         let hash = load!(BlockHash, reader)?;
         let version = load!(u16, reader)?;
@@ -194,6 +201,9 @@ impl Deserializer for RpcHeader {
         let timestamp = load!(u64, reader)?;
         let bits = load!(u32, reader)?;
         let nonce = load!(u64, reader)?;
+        // kaspa-pq Phase 2 (ADR-0007): pow_algo_id added in serializer v2; v1 → default kHeavyHash.
+        let pow_algo_id =
+            if version >= 2 { load!(u8, reader)? } else { kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH };
         let daa_score = load!(u64, reader)?;
         let blue_work = load!(BlueWorkType, reader)?;
         let blue_score = load!(u64, reader)?;
@@ -209,6 +219,7 @@ impl Deserializer for RpcHeader {
             timestamp,
             bits,
             nonce,
+            pow_algo_id,
             daa_score,
             blue_work,
             blue_score,
@@ -230,10 +241,8 @@ impl TryFrom<RpcRawHeader> for Header {
             header.timestamp,
             header.bits,
             header.nonce,
-            // PR-9.5d: Phase 1 admits only kHeavyHash; the RPC/proto
-            // pow_algo_id round-trip field is a Phase-2 follow-on
-            // (added when algo_id = 2 lands per ADR-0007).
-            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+            // kaspa-pq Phase 2 (ADR-0007): carry the declared Layer-1 algo id through the RPC.
+            header.pow_algo_id,
             header.daa_score,
             header.blue_work,
             header.blue_score,
@@ -255,8 +264,8 @@ impl TryFrom<&RpcRawHeader> for Header {
             header.timestamp,
             header.bits,
             header.nonce,
-            // PR-9.5d: Phase 1 kHeavyHash (see above).
-            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+            // kaspa-pq Phase 2 (ADR-0007): carry the declared Layer-1 algo id through the RPC.
+            header.pow_algo_id,
             header.daa_score,
             header.blue_work,
             header.blue_score,
@@ -276,6 +285,7 @@ impl From<&Header> for RpcRawHeader {
             timestamp: header.timestamp,
             bits: header.bits,
             nonce: header.nonce,
+            pow_algo_id: header.pow_algo_id,
             daa_score: header.daa_score,
             blue_work: header.blue_work,
             blue_score: header.blue_score,
@@ -295,6 +305,7 @@ impl From<Header> for RpcRawHeader {
             timestamp: header.timestamp,
             bits: header.bits,
             nonce: header.nonce,
+            pow_algo_id: header.pow_algo_id,
             daa_score: header.daa_score,
             blue_work: header.blue_work,
             blue_score: header.blue_score,
@@ -305,7 +316,7 @@ impl From<Header> for RpcRawHeader {
 
 impl Serializer for RpcRawHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
 
         store!(u16, &self.version, writer)?;
         store!(Vec<Vec<BlockHash>>, &self.parents_by_level, writer)?;
@@ -316,6 +327,7 @@ impl Serializer for RpcRawHeader {
         store!(u64, &self.timestamp, writer)?;
         store!(u32, &self.bits, writer)?;
         store!(u64, &self.nonce, writer)?;
+        store!(u8, &self.pow_algo_id, writer)?;
         store!(u64, &self.daa_score, writer)?;
         store!(BlueWorkType, &self.blue_work, writer)?;
         store!(u64, &self.blue_score, writer)?;
@@ -327,7 +339,7 @@ impl Serializer for RpcRawHeader {
 
 impl Deserializer for RpcRawHeader {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
 
         let version = load!(u16, reader)?;
         let parents_by_level = load!(Vec<Vec<BlockHash>>, reader)?;
@@ -338,6 +350,9 @@ impl Deserializer for RpcRawHeader {
         let timestamp = load!(u64, reader)?;
         let bits = load!(u32, reader)?;
         let nonce = load!(u64, reader)?;
+        // kaspa-pq Phase 2 (ADR-0007): pow_algo_id added in serializer v2; v1 → default kHeavyHash.
+        let pow_algo_id =
+            if version >= 2 { load!(u8, reader)? } else { kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH };
         let daa_score = load!(u64, reader)?;
         let blue_work = load!(BlueWorkType, reader)?;
         let blue_score = load!(u64, reader)?;
@@ -352,6 +367,7 @@ impl Deserializer for RpcRawHeader {
             timestamp,
             bits,
             nonce,
+            pow_algo_id,
             daa_score,
             blue_work,
             blue_score,
