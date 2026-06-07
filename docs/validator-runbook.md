@@ -16,7 +16,7 @@ action.
 > validator confirms after ~10 attested epochs rather than instantly. Use a **fresh
 > `--signed-epoch-db`** per network (the anti-equivocation guard keys on epoch numbers).
 
-**Proven live on the activated testnet (12B premine + 18B emission tokenomics):** keygen → bond
+**Proven live on the activated testnet (15B premine + 15B emission tokenomics):** keygen → bond
 (20M MSK from the premine) → run → attests every epoch, `dnsConfirmed: true` with the
 equivocation guard firing and **0 BadCoinbaseTransaction** (the reward coinbase is
 construction==validation on the live chain). The same flow was first proven on devnet (2026-05-30).

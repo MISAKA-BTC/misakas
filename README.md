@@ -18,7 +18,7 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 | Consensus identity | 64-byte BLAKE2b-512 (`Hash64`): block hash / txid / merkle roots / UTXO commitment / parents |
 | secp256k1 | feature-gated out of both `kaspa-consensus` and the `kaspad` node binary (default `pq-only`) |
 | Script caps | `MAX_SCRIPT_ELEMENT_SIZE` = 8192, `MAX_SCRIPTS_SIZE` / `max_signature_script_len` = 16_384 |
-| Genesis / tokenomics | new genesis; **30B MSK cap = 12B premine** (single-key ML-DSA-87 P2PKH) **+ 18B network emission** over 20 yr, 5%/yr exponential decay (`coinbase::SUBSIDY_BY_MONTH_TABLE`) |
+| Genesis / tokenomics | new genesis; **30B MSK cap = 15B premine** (single-key ML-DSA-87 P2PKH) **+ 15B network emission** over 20 yr, 5%/yr exponential decay (`coinbase::SUBSIDY_BY_MONTH_TABLE`) |
 
 Authoritative design & spec live under [`docs/`](docs/):
 
