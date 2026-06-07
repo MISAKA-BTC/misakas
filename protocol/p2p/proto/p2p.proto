@@ -80,6 +80,10 @@ message BlockHeader{
   bytes blueWork = 10;
   Hash pruningPoint = 14;
   uint64 blueScore = 13;
+  // kaspa-pq Phase 2 (ADR-0007): Layer-1 PoW algo id (1=kHeavyHash, 2=Argon2id).
+  // Part of the block hash, so it MUST survive P2P relay/IBD serialization or
+  // peers compute mismatching hashes ("requested X but got Y").
+  uint32 powAlgoId = 15;
 }
 
 message BlockLevelParents {
