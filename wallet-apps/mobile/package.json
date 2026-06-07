@@ -1,0 +1,21 @@
+{
+  "name": "misaka-wallet-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MISAKA post-quantum (ML-DSA-87) wallet — iOS/Android via Capacitor, shared kaspa-wasm signing core.",
+  "scripts": {
+    "sync": "cap sync",
+    "ios": "cap open ios",
+    "android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0",
+    "@capacitor/android": "^6.0.0",
+    "@aparajita/capacitor-biometric-auth": "^7.0.0",
+    "@aparajita/capacitor-secure-storage": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0"
+  }
+}
