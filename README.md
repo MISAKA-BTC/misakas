@@ -152,7 +152,12 @@ cargo run --release --bin kaspad -- --testnet --utxoindex \
   --rpclisten=127.0.0.1:26610 --rpclisten-borsh=127.0.0.1:27610 --rpclisten-json=127.0.0.1:28610
 ```
 
-- To **join the public testnet**, let the node discover peers via the misakas DNS seeders (`seeder1.misakascan.com` / `seeder2.misakascan.com`, the `testnet` parameter default), or bootstrap explicitly with `--addpeer=<host:16611>` of a known testnet node. Block explorer: **[misakascan.com](https://misakascan.com)**.
+- To **join the public testnet**, the node discovers peers via the misakas DNS seeders
+  (`seeder1.misakascan.com` / `seeder2.misakascan.com`) automatically. **testnet-10's P2P port is
+  `26211`** (mainnet `26111`, devnet `26611`) — make sure it isn't blocked outbound. If discovery is
+  slow, bootstrap explicitly against a public node:
+  `--addpeer=95.111.236.186:26211` (or `--connect=95.111.236.186:26211` to use only that peer).
+  Block explorer: **[misakascan.com](https://misakascan.com)**.
 - `--utxoindex` is required for wallet/validator funding lookups.
 - `--rpclisten-borsh` is required by the miner and the `kaspa-pq-validator` sidecar.
 - Add `--enable-unsynced-mining` **only** when bootstrapping a brand-new isolated network with no peers (mining before you have synced to the public testnet would fork from genesis).

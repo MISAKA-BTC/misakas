@@ -45,9 +45,15 @@ explorers/wallets (optional but handy).
   --rpclisten-json=0.0.0.0:28610 \
   --appdir ~/.kaspa-pq-devnet
 ```
-Add `--connect=<seed-ip>:26611` to join an existing devnet mesh, or `--nodnsseed --disable-upnp
---enable-unsynced-mining` for a fresh local chain. Wait until it reports `IBD ... finished` /
-the chain stops advancing during sync before proceeding (`isSynced: true`).
+Add `--connect=<seed-ip>:<p2p-port>` to join an existing mesh (P2P port is **26211 for
+testnet-10**, 26611 for devnet, 26111 for mainnet — e.g. the public testnet bootstrap is
+`--addpeer=95.111.236.186:26211`), or `--nodnsseed --disable-upnp --enable-unsynced-mining` for a
+fresh local chain. Wait until it reports `IBD ... finished` / the chain stops advancing during sync
+before proceeding (`isSynced: true`).
+> If you sit at `has 0/8 outgoing P2P connections` even though the DNS seeders return addresses, the
+> usual cause is a **P2P-port mismatch**: DNS returns only IPs and the node dials them on the
+> network's *default* P2P port, so a peer listening on a non-default port is unreachable by
+> discovery — bootstrap with an explicit `--addpeer=<ip>:26211`.
 
 **0b. Start the miner** — note the binary is **`kaspa-pq-miner`** (NOT `pq-miner`). For now
 mine to ANY address just to grow the chain; Step 2 switches it to your funding address. `--rpc`
