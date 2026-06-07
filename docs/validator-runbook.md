@@ -4,15 +4,22 @@
 **YES — on a network where the DNS overlay is activated.** The per-validator flow below uses
 only the shipped binaries (`kaspad`, `kaspa-pq-validator`, `kaspa-pq-miner`). Zero source edits.
 
-The one thing that is a *network-launch* parameter (not a per-validator step): the DNS
-overlay must be ACTIVE on the network — `DnsParams.dns_activation_daa_score` reached. On
-mainnet/testnet/simnet today `dns_params = None` (overlay off); on the experimental devnet
-it is `0` (active from genesis). Activating is a one-time launch choice, not a per-validator
+The DNS overlay is now **active from genesis on every defined network**
+(`dns_activation_daa_score = 0`). Activating is a one-time launch choice, not a per-validator
 action.
 
-**Proven live 2026-05-30** on the activated devnet (binary `2125be18`): keygen → mine → bond
-(active) → run → attested epochs 87/88 with the equivocation guard firing and **0
-BadCoinbaseTransaction** (the reward coinbase is construction==validation on the live chain).
+> **Live network = `testnet-10`** (explorer: [misakascan.com](https://misakascan.com)). The
+> command examples below were written for the earlier `devnet`; for the live testnet substitute
+> **`--network testnet-10`** (or `--network-id testnet-10` for the miner), **`misakatest:`**
+> addresses, and the PRODUCTION-policy stake-bond minimum **20,000,000 MSK = `--amount 2000000000000000`**.
+> testnet also enforces **two-dimensional** finality (WorkDepth + StakeDepth), so a single
+> validator confirms after ~10 attested epochs rather than instantly. Use a **fresh
+> `--signed-epoch-db`** per network (the anti-equivocation guard keys on epoch numbers).
+
+**Proven live on the activated testnet (12B premine + 18B emission tokenomics):** keygen → bond
+(20M MSK from the premine) → run → attests every epoch, `dnsConfirmed: true` with the
+equivocation guard firing and **0 BadCoinbaseTransaction** (the reward coinbase is
+construction==validation on the live chain). The same flow was first proven on devnet (2026-05-30).
 
 ---
 

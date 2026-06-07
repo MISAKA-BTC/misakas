@@ -2,9 +2,9 @@
 
 **misakas** is a post-quantum, **PQ-only** fork of [rusty-kaspa](https://github.com/kaspanet/rusty-kaspa). It replaces Kaspa's secp256k1/Schnorr transaction authorization with **ML-DSA-87** (FIPS 204, NIST category 5) and makes every non-PQ path — legacy secp256k1/Schnorr/ECDSA signatures, legacy addresses, and P2SH — **unrepresentable at the consensus, mempool, and wallet layers**. It is a new, independent network with its own genesis; it is **not** compatible with Kaspa or with any prior kaspa-pq chain state, UTXO set, or address.
 
-The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` / `misakadev…`), and project branding are misakas.
+The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> Status: **devnet** (experimental) is the only network operated today. PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`) — **including the `mainnet` parameter set, which is defined but NOT launched or endorsed for production**. Do not run `--mainnet` expecting a live or supported network.
+> Status: a public **testnet** (`testnet-10`, experimental) is the network operated today — explorer at **[misakascan.com](https://misakascan.com)**. PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`). The `testnet`/`mainnet` parameter sets additionally enforce the **production** DNS-finality policy (two-dimensional confirmation + a 20M-MSK minimum stake bond). The `mainnet` parameter set is **defined but NOT launched or endorsed for production** — do not run `--mainnet` expecting a live or supported network. (The earlier experimental `devnet` has been retired in favor of this testnet.)
 
 ## What's different from Kaspa
 
@@ -18,7 +18,7 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 | Consensus identity | 64-byte BLAKE2b-512 (`Hash64`): block hash / txid / merkle roots / UTXO commitment / parents |
 | secp256k1 | feature-gated out of both `kaspa-consensus` and the `kaspad` node binary (default `pq-only`) |
 | Script caps | `MAX_SCRIPT_ELEMENT_SIZE` = 8192, `MAX_SCRIPTS_SIZE` / `max_signature_script_len` = 16_384 |
-| Genesis / premine | new genesis; 15B premine locked to a single-key ML-DSA-87 P2PKH |
+| Genesis / tokenomics | new genesis; **30B MSK cap = 12B premine** (single-key ML-DSA-87 P2PKH) **+ 18B network emission** over 20 yr, 5%/yr exponential decay (`coinbase::SUBSIDY_BY_MONTH_TABLE`) |
 
 Authoritative design & spec live under [`docs/`](docs/):
 
@@ -143,45 +143,49 @@ Linux x86_64 binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-validator`, `kaspa-
   Replace `Dockerfile.kaspad` with the appropriate Dockerfile for your target. For multi-arch builds use `./build-docker-multi-arch.sh --tag <tag> --artifact kaspad [--arches "linux/amd64 linux/arm64"] [--push]` (requires Docker Buildx).
  </details>
 
-## Running a devnet node
+## Running a testnet node
 
-Start a misakas devnet node (the overlay + PQ rules are active from genesis on devnet):
+Start a misakas testnet node (network id `testnet-10`; the overlay + PQ rules are active from genesis):
 
 ```bash
-cargo run --release --bin kaspad -- --devnet --enable-unsynced-mining --utxoindex \
+cargo run --release --bin kaspad -- --testnet --utxoindex \
   --rpclisten=127.0.0.1:26610 --rpclisten-borsh=127.0.0.1:27610 --rpclisten-json=127.0.0.1:28610
 ```
 
-- `--enable-unsynced-mining` is required on first launch (no peers yet).
+- To **join the public testnet**, let the node discover peers via the misakas DNS seeders (`seeder1.misakascan.com` / `seeder2.misakascan.com`, the `testnet` parameter default), or bootstrap explicitly with `--addpeer=<host:16611>` of a known testnet node. Block explorer: **[misakascan.com](https://misakascan.com)**.
 - `--utxoindex` is required for wallet/validator funding lookups.
 - `--rpclisten-borsh` is required by the miner and the `kaspa-pq-validator` sidecar.
+- Add `--enable-unsynced-mining` **only** when bootstrapping a brand-new isolated network with no peers (mining before you have synced to the public testnet would fork from genesis).
 
-Mine to a **64-byte** ML-DSA-87 (`misakadev:`) address — legacy 32-byte addresses are rejected:
+Mine to a **64-byte** ML-DSA-87 (`misakatest:`) address — legacy 32-byte addresses are rejected:
 
 ```bash
-cargo run --release --bin kaspa-pq-miner -- --rpc 127.0.0.1:26610 --network-id devnet \
-  --blocks 0 --min-block-interval-ms 1000 --pay-address <misakadev:...>
+cargo run --release --bin kaspa-pq-miner -- --rpc 127.0.0.1:26610 --network-id testnet-10 \
+  --blocks 0 --min-block-interval-ms 250 --pay-address <misakatest:...>
 ```
 
-## Running a validator (devnet)
+## Running a validator (testnet)
 
 The `kaspa-pq-validator` sidecar connects to a local node over wRPC and attests while its ML-DSA-87 stake bond is active. See [docs/validator-runbook.md](docs/validator-runbook.md). Quickstart:
 
 ```bash
 # 1. generate a validator key + print its funding address
-kaspa-pq-validator keygen --out val.seed --network devnet
-# 2. send funds to the printed funding address (mine to it, or send from the premine)
-# 3. stake a bond (active immediately with activation-daa-score 0)
+kaspa-pq-validator keygen --out val.seed --network testnet
+# 2. send funds to the printed funding address (mine to it, or transfer from another wallet)
+# 3. stake a bond. testnet enforces the PRODUCTION minimum: 20,000,000 MSK = 2e15 sompi.
+#    Omit --fee to auto-size it (mass-based; the flat floor is too low for the 2592-byte pubkey).
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27610 --validator-key val.seed \
-  --amount 10000000 --activation-daa-score 0 --network devnet
+  --amount 2000000000000000 --network testnet-10
 # 4. run the validator daemon (attests every epoch while the bond is active)
 kaspa-pq-validator run --node-rpc 127.0.0.1:27610 --validator-key val.seed \
-  --stake-bond <txid:index> --signed-epoch-db val.state --network devnet
+  --stake-bond <txid:index> --signed-epoch-db val.state --network testnet-10 --attest-poll-secs 3
 ```
 
-The validator attests the one current canonical-ready epoch per round; the round cadence is `--attest-poll-secs` (default **3 s**). Every misakas network runs at **10 BPS**, so an attestation epoch (`attestation_epoch_length_blue_score = 100`) is only ~10 s of wall-clock — the 3 s default keeps a single validator caught up on every network. Raise it only if you deliberately throttle the chain to a slower block rate.
+> Note: the funding/`run`/`bond` subcommands want the **full** network id (`testnet-10`); `keygen`'s `--network` takes the short form (`testnet`). Use a **fresh** `--signed-epoch-db` per network — reusing one across networks trips the anti-equivocation guard on overlapping epoch numbers.
 
-Once enough stake has attested across the recent epochs, `getDnsConfirmation` reports `dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat THIS as DNS-final, not the pov-dependent `blockHash` sink). On the `mainnet`/`testnet` parameter sets confirmation is **two-dimensional** — it requires `WorkDepth ≥ required_work_depth` (anchor-relative accumulated blue work) **and** `StakeDepth ≥ required_stake_depth`; devnet/simnet confirm on stake alone (`required_work_depth = 0`) for fast tests.
+The validator attests the one current canonical-ready epoch per round; the round cadence is `--attest-poll-secs` (default **3 s**). Every misakas network runs at **10 BPS**, so an attestation epoch (`attestation_epoch_length_blue_score = 100`) is only ~10 s of wall-clock — the 3 s default keeps a single validator caught up on every network.
+
+Once enough stake has attested across the recent epochs, `getDnsConfirmation` reports `dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat THIS as DNS-final, not the pov-dependent `blockHash` sink). On the `testnet`/`mainnet` parameter sets confirmation is **two-dimensional** — it requires `WorkDepth ≥ required_work_depth` (anchor-relative accumulated blue work) **and** `StakeDepth ≥ required_stake_depth` (so a single 20M-MSK validator confirms after ~10 attested epochs); the retired devnet/simnet sets confirm on stake alone (`required_work_depth = 0`). Per-block finality is queryable: `getDnsConfirmation` accepts an optional `blockHash` and answers whether THAT block is DNS-final (`blockIsDnsFinal` / `blockIsConfirmedAnchor`); the explorer's **DNS Finality** page lists the confirmed chain in order.
 
 ### Remote signer / HSM (optional, ADR-0015)
 
