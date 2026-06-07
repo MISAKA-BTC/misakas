@@ -809,6 +809,21 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     stake_score_window_blue_score: 1500,
 };
 
+/// kaspa-pq Phase 2 (ADR-0007): testnet DNS params = [`PRODUCTION_DNS_PARAMS`] with a lowered
+/// `required_work_depth`. Argon2id's memory-hard PoW (CPU hash-rate ~hundreds H/s) drives the
+/// testnet difficulty all the way to `max_difficulty_target`, so the anchor-relative WorkDepth
+/// settles at a tiny floor (~200-300 at the live 3-CPU-miner difficulty) and the kHeavyHash-era
+/// 1_000_000 floor is unreachable — `dnsConfirmed` would never flip even though stake is
+/// confirmed (`StakeDepth ≥ required_stake_depth`). Lower the testnet work floor to a token value
+/// the Argon2id chain reliably exceeds so the 2-D gate confirms on stake; the work dimension is
+/// near-trivial at floored CPU difficulty (stake is the real finality). Mainnet keeps PRODUCTION's
+/// 1_000_000 (the operator tunes it to the live mainnet difficulty at launch — see the field
+/// comment in PRODUCTION_DNS_PARAMS). NOT a genesis-block input, so the genesis hash is unchanged.
+pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
+    required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
+    ..PRODUCTION_DNS_PARAMS
+};
+
 pub const MAINNET_PARAMS: Params = Params {
     // kaspa-pq mainnet DNS seeders (isolated from upstream Kaspa per
     // docs/adr/0001-network-isolation.md — these are MISAKA-operated only). A node
@@ -950,9 +965,10 @@ pub const TESTNET_PARAMS: Params = Params {
     // 18:30 UTC, March 6, 2025
     crescendo_activation: ForkActivation::new(88_657_000),
     // kaspa-pq: TESTNET mirrors mainnet's production overlay params — 20M-KAS min active stake +
-    // 14-day unbonding/evidence window (slashable through the whole exit). See PRODUCTION_DNS_PARAMS.
-    // Not a genesis-block input, so the genesis hash is unchanged.
-    dns_params: Some(PRODUCTION_DNS_PARAMS),
+    // 14-day unbonding/evidence window (slashable through the whole exit) — but with a lowered
+    // `required_work_depth` (see TESTNET_DNS_PARAMS) so the 2-D DNS gate confirms at Argon2id's
+    // floored CPU difficulty. Not a genesis-block input, so the genesis hash is unchanged.
+    dns_params: Some(TESTNET_DNS_PARAMS),
     pow_argon2id_activation: ForkActivation::always(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
