@@ -38,7 +38,6 @@ workflow-core.workspace = true
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
-protoc-bin-vendored = { workspace = true }
 
 [dev-dependencies]
 itertools.workspace = true

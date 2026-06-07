@@ -4,15 +4,22 @@
 **YES — on a network where the DNS overlay is activated.** The per-validator flow below uses
 only the shipped binaries (`kaspad`, `kaspa-pq-validator`, `kaspa-pq-miner`). Zero source edits.
 
-The one thing that is a *network-launch* parameter (not a per-validator step): the DNS
-overlay must be ACTIVE on the network — `DnsParams.dns_activation_daa_score` reached. On
-mainnet/testnet/simnet today `dns_params = None` (overlay off); on the experimental devnet
-it is `0` (active from genesis). Activating is a one-time launch choice, not a per-validator
+The DNS overlay is now **active from genesis on every defined network**
+(`dns_activation_daa_score = 0`). Activating is a one-time launch choice, not a per-validator
 action.
 
-**Proven live 2026-05-30** on the activated devnet (binary `2125be18`): keygen → mine → bond
-(active) → run → attested epochs 87/88 with the equivocation guard firing and **0
-BadCoinbaseTransaction** (the reward coinbase is construction==validation on the live chain).
+> **Live network = `testnet-10`** (explorer: [misakascan.com](https://misakascan.com)). The
+> command examples below were written for the earlier `devnet`; for the live testnet substitute
+> **`--network testnet-10`** (or `--network-id testnet-10` for the miner), **`misakatest:`**
+> addresses, and the PRODUCTION-policy stake-bond minimum **20,000,000 MSK = `--amount 2000000000000000`**.
+> testnet also enforces **two-dimensional** finality (WorkDepth + StakeDepth), so a single
+> validator confirms after ~10 attested epochs rather than instantly. Use a **fresh
+> `--signed-epoch-db`** per network (the anti-equivocation guard keys on epoch numbers).
+
+**Proven live on the activated testnet (12B premine + 18B emission tokenomics):** keygen → bond
+(20M MSK from the premine) → run → attests every epoch, `dnsConfirmed: true` with the
+equivocation guard firing and **0 BadCoinbaseTransaction** (the reward coinbase is
+construction==validation on the live chain). The same flow was first proven on devnet (2026-05-30).
 
 ---
 
@@ -103,11 +110,12 @@ Prints `bond_outpoint: <txid>:0`. Output-0 is the locked stake (ADR-0016 §D.1).
 **Omit `--fee` — it is auto-computed (mass-based).** A StakeBond carries the 2592-byte ML-DSA-87
 public key, so its compute mass is large and the mempool's minimum relay fee is **10× the compute
 mass** (`PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE` = 10 000 sompi/kg): a bond needs **≈ 270 000
-sompi**, NOT the flat `ATTESTATION_TX_FEE_FLOOR_SOMPI` (30 000). A flat `--fee 30000` is therefore
+sompi**, computed from the node's mass params. A manually-passed `--fee 30000` is therefore
 **rejected** with `fees … under the required amount of ≈218120` — pass nothing and the validator
-computes the right fee from the node's mass params. Use `--fee <sompi>` only to override (e.g. bump
-under congestion). The auto-fee logic is network-independent (same relay rate + bond shape), so it
-works unchanged on testnet/mainnet.
+sizes the fee itself. (The `ATTESTATION_TX_FEE_FLOOR_SOMPI` safety floor is **250 000**, raised from
+a flat 30 000 that sat below the mempool minimum and wedged any path that fell back to it.) Use
+`--fee <sompi>` only to override (e.g. bump under congestion). The auto-fee logic is
+network-independent (same relay rate + bond shape), so it works unchanged on testnet/mainnet.
 
 > **Bond amount differs by network.** Devnet/simnet have no per-bond minimum (`min_bond_amount_sompi
 > = 0`), so any positive `--amount` works (e.g. the 2 MSK a tester used). **Mainnet/testnet require
@@ -128,6 +136,14 @@ kaspa-pq-validator run --node-rpc 127.0.0.1:27610 --validator-key validator.seed
 Logs `submitted attestation shard for epoch N` each epoch; the equivocation guard logs
 `already attested epoch N (target moved); skipping` when the sink moves mid-epoch. Back up
 `validator.state` (it is the cross-restart double-sign guard).
+
+**Attestation fee is auto-computed (mass-based), same as `bond`/`unbond`.** Each shard carries a
+4627-byte ML-DSA-87 signature, so its mempool minimum is **≈ 232 600 sompi** — the validator sizes
+the fee from the node's mass params (**≈ 290 000 sompi**) at startup and logs it
+(`fee … sompi, mass-based`). Omit `--fee` to auto-size; pass `--fee <sompi>` only to override (e.g.
+bump under congestion). A node whose attestations are rejected with `fees 30000 … under the required
+amount of 232600` is running a **pre-fix binary** that pinned the flat 30 000 floor — rebuild from
+this revision (the floor is now 250 000 and `run` auto-sizes the fee) to clear the deadlock.
 
 ### 6. Reward
 Every active bond whose attestation is included earns a stake-proportional **§E

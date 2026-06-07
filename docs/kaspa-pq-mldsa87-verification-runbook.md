@@ -21,7 +21,7 @@
 | アドレス | `Version::PubKeyHashMlDsa87` のみ・payload = 64-byte **keyed** BLAKE2b-512(`kaspa-pq-v2/address/mldsa87`, pubkey) |
 | 標準 scriptPubKey | 69 byte: `OP_DUP OP_BLAKE2B_512(0xc4) OP_DATA64(0x40) <64B> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87(0xa6)` |
 | caps | `MAX_SCRIPT_ELEMENT_SIZE`=8192 / `MAX_SCRIPTS_SIZE`=16_384 / `max_signature_script_len`=16_384 |
-| premine | 15B KAS を単一鍵 ML-DSA-87 P2PKH にロック（旧 2-of-3 multisig P2SH を廃止） |
+| premine | 12B KAS を単一鍵 ML-DSA-87 P2PKH にロック（旧 2-of-3 multisig P2SH を廃止）。残り 18B はネットワーク報酬として 20 年かけて発行 |
 | PQ 強制 | `Params.pq_enforcement = PqEnforcementMode::Consensus`（全 kaspa-pq ネット, activation=genesis） |
 
 ---
@@ -56,7 +56,7 @@ cargo test -p kaspa-consensus --lib
 ```
 期待: `… passed; 0 failed`（約 322）。特に:
 - `processes::transaction_validator::tx_validation_in_isolation::pq_output_class_enforcement_tests::*`（5 本）— coinbase/overlay 免除 + legacy 拒否。
-- `consensus::utxo_set_override::tests::premine_is_a_single_15b_utxo` — premine が 69-byte P2PKH。
+- `consensus::utxo_set_override::tests::premine_is_a_single_12b_utxo` — premine が 69-byte P2PKH。
 - `pipeline::body_processor::…::validate_body_in_isolation_test` — legacy fixture は `PqEnforcementMode::Disabled` で実行。
 
 ### Phase 2 §6 + Phase 3 (sighash64) + Phase 4a (64B address/opcode) + Phase 5a (gate) — txscript

@@ -26,7 +26,7 @@ pub fn main() {
 
     // audit H-01: refuse to launch a MAINNET node while the premine custody ceremony is pending.
     // MAINNET_PREMINE_OWNER_PAYLOAD is the all-zero UNSPENDABLE placeholder, so a mainnet started now
-    // would run a chain whose 15B premine is permanently locked. The operator must first complete the
+    // would run a chain whose 12B premine is permanently locked. The operator must first complete the
     // offline ML-DSA-87 key-generation ceremony, re-genesis (re-pin GENESIS.hash + utxo_commitment via
     // the ceremony tool), and flip MAINNET_PREMINE_CEREMONY_PENDING to false. Test/devnet/simnet are
     // unaffected (public test key); consensus unit/integration harnesses never reach this binary entry.
