@@ -1,0 +1,70 @@
+name: Publish Chrome extension
+
+# Push a tag like `wallet-ext-v0.1.0` to build + publish the MISAKA Wallet extension to the
+# Chrome Web Store, or run manually (Actions → this workflow → Run workflow). The zip is always
+# produced as a build artifact; publishing happens only when the CWS_* secrets are configured.
+#
+# One-time setup (you, once — see wallet-apps/PUBLISHING.md): add repo secrets
+#   CWS_EXTENSION_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN
+# The AI/CI never logs into your Google account; it only uses these tokens you provide.
+
+on:
+  push:
+    tags: ["wallet-ext-v*"]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "upload (draft only) or publish (submit for review)"
+        type: choice
+        default: publish
+        options: [upload, publish]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wallet-apps/chrome-extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build extension zip
+        run: |
+          mkdir -p ../dist
+          zip -r -q ../dist/misaka-wallet-extension.zip . \
+            -x '*.DS_Store' -x '*/.*' -x 'package.json' -x '*.md' -x 'package-lock.json'
+          echo "Built $(du -h ../dist/misaka-wallet-extension.zip | cut -f1) package"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: misaka-wallet-extension
+          path: wallet-apps/dist/misaka-wallet-extension.zip
+
+      - name: Publish to Chrome Web Store
+        env:
+          EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          MODE: ${{ github.event.inputs.mode || 'publish' }}
+        run: |
+          if [ -z "$CLIENT_ID" ] || [ -z "$EXTENSION_ID" ]; then
+            echo "::warning::CWS_* secrets not set — skipping publish (zip is in the build artifacts). See wallet-apps/PUBLISHING.md."
+            exit 0
+          fi
+          ZIP=../dist/misaka-wallet-extension.zip
+          if [ "$MODE" = "upload" ]; then
+            echo "Uploading a new draft (no publish)…"
+            npx --yes chrome-webstore-upload-cli@3 upload --source "$ZIP"
+          else
+            echo "Uploading + submitting for review…"
+            npx --yes chrome-webstore-upload-cli@3 upload --source "$ZIP" --auto-publish
+          fi

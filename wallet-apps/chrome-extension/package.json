@@ -1,0 +1,14 @@
+{
+  "name": "misaka-wallet-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MISAKA post-quantum (ML-DSA-87) wallet — Chrome/Chromium MV3 extension (testnet & mainnet).",
+  "scripts": {
+    "build:zip": "mkdir -p ../dist && rm -f ../dist/misaka-wallet-extension.zip && zip -r -q ../dist/misaka-wallet-extension.zip . -x '*.DS_Store' -x '*/.*' -x 'package.json' -x 'package-lock.json' -x 'node_modules/*' -x '*.md' && echo packaged ../dist/misaka-wallet-extension.zip",
+    "upload": "npm run build:zip && chrome-webstore-upload upload --source ../dist/misaka-wallet-extension.zip",
+    "publish": "npm run build:zip && chrome-webstore-upload upload --source ../dist/misaka-wallet-extension.zip --auto-publish"
+  },
+  "devDependencies": {
+    "chrome-webstore-upload-cli": "^3.3.0"
+  }
+}
