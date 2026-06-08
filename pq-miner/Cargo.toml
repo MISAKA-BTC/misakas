@@ -14,6 +14,7 @@ kaspa-addresses.workspace = true
 kaspa-bip32.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-core.workspace = true
+kaspa-hashes.workspace = true
 kaspa-grpc-client.workspace = true
 kaspa-wallet-keys.workspace = true
 kaspa-notify.workspace = true

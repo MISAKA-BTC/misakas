@@ -52,12 +52,58 @@ struct Args {
     /// interval is far below the inter-node propagation delay.
     #[arg(long, default_value_t = 0)]
     min_block_interval_ms: u64,
+    /// Benchmark mode: measure the raw Argon2id-16MiB Layer-1 hash-rate (H/s) across all cores
+    /// for this many seconds, print it, and exit (no node connection). Used to calibrate the
+    /// difficulty — at equilibrium the DAA settles difficulty ≈ aggregate-H/s ÷ target-BPS.
+    #[arg(long)]
+    bench_secs: Option<u64>,
 }
 
 #[tokio::main]
 async fn main() {
     kaspa_core::log::try_init_logger("INFO");
     let args = Args::parse();
+
+    // --bench-secs N: measure the raw Argon2id-16MiB Layer-1 hash-rate across all cores (no RPC),
+    // print it, and exit. The DAA settles difficulty ≈ aggregate-H/s ÷ target-BPS, so this predicts
+    // the difficulty the network will reach once the throttle no longer caps block production.
+    if let Some(secs) = args.bench_secs {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{Duration, Instant};
+        let pre = kaspa_hashes::Hash64::from_bytes([0u8; 64]);
+        let net: Arc<Vec<u8>> = Arc::new(args.network_id.clone().into_bytes());
+        let nthreads = rayon::current_num_threads();
+        let counter = Arc::new(AtomicU64::new(0));
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(secs.max(1));
+        log::info!("benchmarking Argon2id 16 MiB hash-rate for {}s across {} threads…", secs.max(1), nthreads);
+        let handles: Vec<_> = (0..nthreads)
+            .map(|tid| {
+                let c = counter.clone();
+                let net = net.clone();
+                std::thread::spawn(move || {
+                    let mut n = tid as u64;
+                    let mut local = 0u64;
+                    while Instant::now() < deadline {
+                        for _ in 0..8 {
+                            let _ = kaspa_consensus_core::pow_layer0::argon2id_l1_tag_v1(pre, n, net.as_slice());
+                            n = n.wrapping_add(nthreads as u64);
+                            local += 1;
+                        }
+                    }
+                    c.fetch_add(local, Ordering::Relaxed);
+                })
+            })
+            .collect();
+        for h in handles {
+            let _ = h.join();
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        let total = counter.load(Ordering::Relaxed);
+        println!("ARGON2ID_HASHRATE {:.1} H/s  ({} hashes / {:.2}s, {} threads, 16 MiB m_cost)", total as f64 / elapsed, total, elapsed, nthreads);
+        return;
+    }
 
     let prefix = match args.network_id.as_str() {
         "mainnet" => Prefix::Mainnet,
