@@ -819,8 +819,17 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// near-trivial at floored CPU difficulty (stake is the real finality). Mainnet keeps PRODUCTION's
 /// 1_000_000 (the operator tunes it to the live mainnet difficulty at launch — see the field
 /// comment in PRODUCTION_DNS_PARAMS). NOT a genesis-block input, so the genesis hash is unchanged.
+///
+/// Also lowers the staking thresholds so testers can actually run a validator: at the testnet
+/// block subsidy (~3.7 MSK/block) the mainnet `min_bond_amount_sompi`/`min_active_stake_sompi` of
+/// 20M KAS would need ~26 days of CPU mining (or a premine grant) to fund, and the coinbase
+/// arrives as ~3.7-MSK fragments. Lowering both to 10 KAS lets a tester mine for a few seconds
+/// and bond (the `bond` CLI aggregates several mature coinbase UTXOs — see `build_funded_stake_bond_tx_multi`).
+/// Mainnet keeps the 20M-KAS floors. None of these are genesis-block inputs.
 pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
+    min_bond_amount_sompi: 10 * SOMPI_PER_KASPA,
+    min_active_stake_sompi: 10 * SOMPI_PER_KASPA,
     ..PRODUCTION_DNS_PARAMS
 };
 
