@@ -336,50 +336,73 @@ async fn bond(args: BondArgs) -> Result<(), String> {
     let params = Params::from(server.network_id);
     let mass_calc =
         MassCalculator::new(params.mass_per_tx_byte, params.mass_per_script_pub_key_byte, params.mass_per_sig_op, params.storage_mass_parameter);
-    // Mass-based fee unless overridden: the StakeBond payload carries the 2592-byte validator
-    // pubkey, so the flat attestation floor is far below the mempool minimum (live finding 2026-06-04).
-    let fee = match args.fee {
-        Some(f) => f,
-        None => key.estimate_bond_fee(&mass_calc, prefix),
-    };
-    info!(
-        "[{VALIDATOR}] staking {} sompi (fee {fee} sompi{}) as validator_id={} (funding {})",
-        args.amount,
-        if args.fee.is_some() { "" } else { ", mass-based" },
-        key.validator_id,
-        funding_addr
-    );
+    info!("[{VALIDATOR}] staking {} sompi as validator_id={} (funding {})", args.amount, key.validator_id, funding_addr);
 
-    // Need a single MATURE UTXO covering amount + fee. Pick the largest available (most likely to
-    // fit). A coinbase UTXO is unspendable until `coinbase_maturity` blocks have passed
-    // (consensus rule); a miner still paying this funding address mints a fresh (immature)
-    // coinbase every block, so without this filter the "largest" pick is almost always the
-    // newest = immature one, and the bond tx is rejected forever ("spends an immature UTXO").
-    // Filtering by maturity here makes `bond` succeed even while the funding miner keeps running.
-    let needed = args.amount.checked_add(fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
+    // Aggregate enough MATURE funding UTXOs to cover amount + fee. Mining pays the funding address
+    // as many ~subsidy-sized coinbase fragments, so a single UTXO rarely covers a bond; sum the
+    // largest mature ones (`build_funded_stake_bond_tx_multi`). A coinbase UTXO is unspendable
+    // until `coinbase_maturity` blocks pass (consensus rule); a miner still paying this address
+    // mints a fresh immature coinbase every block, so filter by maturity (else an immature pick
+    // gets the bond tx rejected "spends an immature UTXO"). Mass-based fee unless overridden — the
+    // StakeBond payload carries the 2592-byte pubkey and each ML-DSA-87 input is ~7 KB, so the fee
+    // grows with the input count and is re-estimated as UTXOs are added.
     let coinbase_maturity = params.coinbase_maturity();
     let virtual_daa = server.virtual_daa_score;
     let utxos = client
         .get_utxos_by_addresses(vec![funding_addr.clone()])
         .await
         .map_err(|e| format!("getUtxosByAddresses failed (does the node run --utxoindex?): {e}"))?;
-    let funding = utxos
+    let mut mature: Vec<_> = utxos
         .into_iter()
-        .filter(|e| e.utxo_entry.amount >= needed)
         .filter(|e| is_spendable(e.utxo_entry.is_coinbase, e.utxo_entry.block_daa_score, virtual_daa, coinbase_maturity))
-        .max_by_key(|e| e.utxo_entry.amount)
-        .ok_or_else(|| format!("no single MATURE funding UTXO >= {needed} sompi (amount+fee) at {funding_addr}; \
-            mine/send funds there and wait for coinbase maturity ({coinbase_maturity} blocks)"))?;
-    let funding_outpoint: TransactionOutpoint = funding.outpoint.into();
-    let funding_entry: UtxoEntry = funding.utxo_entry.into();
+        .collect();
+    // Largest-first greedy selection. Cap the input count so the bond tx stays within the block
+    // mass limit (each ML-DSA-87 input is ~7 KB); 20 comfortably fits a reasonable testnet bond.
+    mature.sort_by(|a, b| b.utxo_entry.amount.cmp(&a.utxo_entry.amount));
+    const MAX_BOND_INPUTS: usize = 20;
+    let mut selected = Vec::new();
+    let mut sum: u64 = 0;
+    let mut fee = match args.fee {
+        Some(f) => f,
+        None => key.estimate_bond_fee_for_inputs(&mass_calc, prefix, 1),
+    };
+    for e in mature.into_iter() {
+        if selected.len() >= MAX_BOND_INPUTS {
+            break;
+        }
+        sum = sum.saturating_add(e.utxo_entry.amount);
+        selected.push(e);
+        if args.fee.is_none() {
+            fee = key.estimate_bond_fee_for_inputs(&mass_calc, prefix, selected.len());
+        }
+        if sum >= args.amount.saturating_add(fee) {
+            break;
+        }
+    }
+    let needed = args.amount.checked_add(fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
+    if selected.is_empty() || sum < needed {
+        return Err(format!(
+            "not enough MATURE funding at {funding_addr}: have {sum} sompi across {} mature UTXO(s) (cap {MAX_BOND_INPUTS}), \
+             need {needed} sompi (amount {} + fee {fee}). Mine more to this address and wait for coinbase maturity \
+             ({coinbase_maturity} blocks), or lower --amount.",
+            selected.len(),
+            args.amount
+        ));
+    }
+    info!(
+        "[{VALIDATOR}] funding bond from {} mature UTXO(s) totalling {sum} sompi (fee {fee} sompi{})",
+        selected.len(),
+        if args.fee.is_some() { "" } else { ", mass-based" }
+    );
+    let fundings: Vec<(TransactionOutpoint, UtxoEntry)> =
+        selected.into_iter().map(|e| (e.outpoint.into(), e.utxo_entry.into())).collect();
 
-    let tx = key.build_funded_stake_bond_tx(
+    let tx = key.build_funded_stake_bond_tx_multi(
         args.amount,
         args.activation_daa_score,
         args.unbonding_period_blocks,
         key.reward_spk_payload(),
-        funding_outpoint,
-        &funding_entry,
+        &fundings,
         fee,
     )?;
 

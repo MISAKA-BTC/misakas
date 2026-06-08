@@ -271,12 +271,47 @@ impl ValidatorKey {
         funding: &UtxoEntry,
         fee: u64,
     ) -> Result<Transaction, String> {
+        self.build_funded_stake_bond_tx_multi(
+            amount,
+            activation_daa_score,
+            unbonding_period_blocks,
+            owner_reward_spk_payload,
+            &[(funding_outpoint, funding.clone())],
+            fee,
+        )
+    }
+
+    /// Multi-input variant of [`Self::build_funded_stake_bond_tx`]: fund the bond from SEVERAL
+    /// mature UTXOs at this key's own funding address. Mining pays the funding address as many
+    /// ~subsidy-sized coinbase fragments, so a single UTXO rarely covers `amount + fee`; the `bond`
+    /// CLI aggregates the largest mature ones here. All `fundings` MUST be at this key's funding
+    /// script (self-spend); each input is signed independently under [`MLDSA87_TX_CONTEXT`].
+    /// output-0 is the locked stake (== `amount`); the remainder (Σ funding − amount − fee) is a
+    /// single change output back to the funding script. The caller keeps the input count within the
+    /// block mass limit (each ML-DSA-87 input adds a ~2592-byte pubkey + ~4627-byte signature).
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_funded_stake_bond_tx_multi(
+        &self,
+        amount: u64,
+        activation_daa_score: u64,
+        unbonding_period_blocks: u64,
+        owner_reward_spk_payload: [u8; 64],
+        fundings: &[(TransactionOutpoint, UtxoEntry)],
+        fee: u64,
+    ) -> Result<Transaction, String> {
         if amount == 0 {
             return Err("stake-bond amount must be > 0".to_string());
         }
+        if fundings.is_empty() {
+            return Err("stake-bond needs at least one funding UTXO".to_string());
+        }
         let needed = amount.checked_add(fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
-        if funding.amount < needed {
-            return Err(format!("funding UTXO amount {} does not cover amount {} + fee {}", funding.amount, amount, fee));
+        let mut total: u64 = 0;
+        for (_, e) in fundings {
+            total = total.checked_add(e.amount).ok_or_else(|| "funding total overflows u64".to_string())?;
+        }
+        if total < needed {
+            return Err(format!("funding UTXOs total {total} does not cover amount {amount} + fee {fee}"));
         }
         // validator_id = BLAKE2b-512(pubkey) is both the owner and validator identity for a
         // self-bonded validator; the 64-byte reward payload is a separate spend target.
@@ -292,30 +327,40 @@ impl ValidatorKey {
         };
         let payload = borsh::to_vec(&payload).expect("borsh serialization of a well-formed stake-bond is infallible");
 
-        let spk = funding.script_public_key.clone(); // == pay_to_address_script(funding_address): self-spend
-        let input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
+        // All fundings are at this key's own funding script (self-spend), so change goes back there.
+        let spk = fundings[0].1.script_public_key.clone();
+        let inputs: Vec<TransactionInput> =
+            fundings.iter().map(|(op, _)| TransactionInput::new(*op, vec![], MAX_TX_IN_SEQUENCE_NUM, 1)).collect();
         // output-0 MUST be the locked stake (value == amount); change (if any) follows.
         let mut outputs = vec![TransactionOutput::new(amount, spk.clone())];
-        let change = funding.amount - needed;
+        let change = total - needed;
         if change > 0 {
             outputs.push(TransactionOutput::new(change, spk));
         }
-        let tx = Transaction::new(TX_VERSION, vec![input], outputs, 0, SUBNETWORK_ID_STAKE_BOND, 0, payload);
+        let tx = Transaction::new(TX_VERSION, inputs, outputs, 0, SUBNETWORK_ID_STAKE_BOND, 0, payload);
 
-        // Sighash over the canonical (empty-sig-script) tx, then fill input 0's script.
-        let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
+        // Sighash over the canonical (empty-sig-script) tx for EACH input, then fill the scripts.
+        // Every input spends the same self funding script, so all are signed with this key.
+        let entries: Vec<UtxoEntry> = fundings.iter().map(|(_, e)| e.clone()).collect();
+        let mtx = MutableTransaction::with_entries(tx, entries);
         let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
-        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
-        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
-        sig_data.push(SIG_HASH_ALL.to_u8());
-        let signature_script = ScriptBuilder::new()
-            .add_data(&sig_data)
-            .map_err(|e| format!("stake-bond funding sig push failed: {e}"))?
-            .add_data(self.keypair.verification_key.as_ref())
-            .map_err(|e| format!("stake-bond funding pubkey push failed: {e}"))?
-            .drain();
+        let mut sig_scripts = Vec::with_capacity(fundings.len());
+        for i in 0..fundings.len() {
+            let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), i, SIG_HASH_ALL, &reused_mldsa);
+            let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+            sig_data.push(SIG_HASH_ALL.to_u8());
+            let signature_script = ScriptBuilder::new()
+                .add_data(&sig_data)
+                .map_err(|e| format!("stake-bond funding sig push failed: {e}"))?
+                .add_data(self.keypair.verification_key.as_ref())
+                .map_err(|e| format!("stake-bond funding pubkey push failed: {e}"))?
+                .drain();
+            sig_scripts.push(signature_script);
+        }
         let mut tx = mtx.tx;
-        tx.inputs[0].signature_script = signature_script;
+        for (i, script) in sig_scripts.into_iter().enumerate() {
+            tx.inputs[i].signature_script = script;
+        }
         Ok(tx)
     }
 
@@ -429,12 +474,26 @@ impl ValidatorKey {
     /// [`ATTESTATION_TX_FEE_FLOOR_SOMPI`]. The flat attestation floor is far below a bond's
     /// mempool minimum, so `bond` sizes its fee from the network's mass params via this.
     pub fn estimate_bond_fee(&self, mass_calculator: &MassCalculator, prefix: Prefix) -> u64 {
+        self.estimate_bond_fee_for_inputs(mass_calculator, prefix, 1)
+    }
+
+    /// Mass-based bond fee for `n_inputs` funding UTXOs. Each ML-DSA-87 input adds a ~2592-byte
+    /// pubkey + ~4627-byte signature, so the fee grows materially with the input count; `bond`
+    /// recomputes this as it aggregates coinbase fragments. Builds a dummy `n_inputs`-input bond of
+    /// the real shape (field *sizes*, not values, drive the mass) and takes its relay fee.
+    pub fn estimate_bond_fee_for_inputs(&self, mass_calculator: &MassCalculator, prefix: Prefix, n_inputs: usize) -> u64 {
         let funding_spk = pay_to_address_script(&self.funding_address(prefix));
-        let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
-        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
-        // Dummy terms (amount=1, zero activation/unbonding, zero reward payload): the payload's
-        // field sizes drive the mass, so the value choices do not change the result.
-        match self.build_funded_stake_bond_tx(1, 0, 0, [0u8; 64], outpoint, &funding, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
+        let n = n_inputs.max(1);
+        let per = u64::MAX / (2 * n as u64); // each dummy big enough that Σ ≥ amount(1) + fee floor
+        let fundings: Vec<(TransactionOutpoint, UtxoEntry)> = (0..n)
+            .map(|i| {
+                let mut id = [0u8; 64];
+                id[0] = i as u8;
+                id[1] = (i >> 8) as u8;
+                (TransactionOutpoint::new(Hash64::from_bytes(id), 0), UtxoEntry::new(per, funding_spk.clone(), 0, false))
+            })
+            .collect();
+        match self.build_funded_stake_bond_tx_multi(1, 0, 0, [0u8; 64], &fundings, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
             Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
             Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
         }

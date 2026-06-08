@@ -11,10 +11,13 @@ action.
 > **Live network = `testnet-10`** (explorer: [misakascan.com](https://misakascan.com)). The
 > command examples below were written for the earlier `devnet`; for the live testnet substitute
 > **`--network testnet-10`** (or `--network-id testnet-10` for the miner), **`misakatest:`**
-> addresses, and the PRODUCTION-policy stake-bond minimum **20,000,000 MSK = `--amount 2000000000000000`**.
-> testnet also enforces **two-dimensional** finality (WorkDepth + StakeDepth), so a single
-> validator confirms after ~10 attested epochs rather than instantly. Use a **fresh
-> `--signed-epoch-db`** per network (the anti-equivocation guard keys on epoch numbers).
+> addresses, and the testnet stake-bond minimum **10 MSK = `--amount 1000000000`** (lowered from
+> mainnet's 20,000,000 MSK so a tester can mine a bondable amount in seconds — see Step 3;
+> **mainnet keeps 20M**). `bond` aggregates several mature coinbase UTXOs, so the
+> ~3.7-MSK-per-block mining fragments no longer need manual consolidation. testnet also enforces
+> **two-dimensional** finality (WorkDepth + StakeDepth), so a single validator confirms after ~10
+> attested epochs rather than instantly. Use a **fresh `--signed-epoch-db`** per network (the
+> anti-equivocation guard keys on epoch numbers).
 
 **Proven live on the activated testnet (15B premine + 15B emission tokenomics):** keygen → bond
 (20M MSK from the premine) → run → attests every epoch, `dnsConfirmed: true` with the
@@ -83,35 +86,36 @@ pkill -f kaspa-pq-miner   # stop the Step-0b miner
   --blocks 0 --min-block-interval-ms 1000 --pay-address <funding_address>
 ```
 
-### 2b. ⚠️ IMPORTANT — stop the miner before bonding (immature-UTXO trap)
-A coinbase UTXO is only spendable after **coinbase maturity = 1000 DAA**. The validator's
-funding scan picks the **newest** coinbase at your address — so if the miner keeps paying that
-address every block, the newest UTXO is ALWAYS younger than 1000 and `bond` is rejected with:
-```
-Rejected ... spends an immature UTXO: coinbase ... daa N while merging daa M, maturity 1000 hasn't passed yet
-```
-This repeats forever no matter how long you wait. **Fix: stop minting new coins to the funding
-address, then let the last one mature.**
-```
-# Option A (simplest): stop the miner entirely, wait ~1000 DAA, then bond.
-pkill -f kaspa-pq-miner
-# (the chain pauses if this is the only miner — that's fine for a bond)
+### 2b. Wait for coinbase maturity (no need to stop the miner)
+A coinbase UTXO is only spendable after **coinbase maturity = 1000 DAA**. `bond` (1) filters out
+immature coinbases and (2) **aggregates the largest *mature* UTXOs** until they cover
+`--amount + fee`, so you can leave the miner running — it skips the fresh immature coinbases and
+sums the older mature ones. (This replaces the old single-UTXO behavior, which always picked the
+newest = immature coinbase and was rejected with `spends an immature UTXO … maturity 1000 hasn't
+passed yet`; consolidation is no longer required.)
 
-# Option B (chain keeps moving): repoint the miner to a DIFFERENT address so no NEW funding
-# coinbases are created, then wait ~1000 DAA past the last funding coinbase, then bond.
-pkill -f kaspa-pq-miner
-./target/release/kaspa-pq-miner --rpc 127.0.0.1:26610 --network-id devnet \
-  --blocks 0 --min-block-interval-ms 1000 --pay-address <some_OTHER_address>
-```
-Confirm a mature UTXO exists (its `blockDaaScore` must be ≥ 1000 below the current virtual DAA)
-before Step 3. After the bond is accepted you can resume mining to anything.
+Just give the first batch of coinbases time to mature: mine for a short while, then wait until the
+virtual DAA is ≥ 1000 past those blocks (≈ a few minutes on the live testnet). At the testnet
+subsidy (~2.5–3.7 MSK/block, decaying over time) a 10-MSK bond needs only ~4–5 mature coinbases; a
+larger `--amount` needs proportionally more. The bond tx aggregates **up to 20 inputs** (to stay
+within the block mass limit), so a single bond tops out at ≈ 20 × the per-block subsidy (≈ **50
+MSK** at the current rate); for a larger stake, bond again (run a second `bond`) or lower
+`--amount`. If `bond` reports `not enough MATURE funding … have X sompi across N mature UTXO(s)
+(cap 20)`, either mine more / wait longer for maturity, or — if you've already hit the 20-input
+cap — lower `--amount`. (Verified live 2026-06-08: a 10-MSK bond aggregated 5 mature coinbase UTXOs
+and was accepted; the 5-input ML-DSA signing validates through consensus.)
 
 ### 3. Stake the coins into a bond
 ```
+# devnet/simnet (no per-bond minimum): any positive amount, e.g. 0.5 MSK
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27610 --validator-key validator.seed \
                         --amount 50000000 --network devnet
+# testnet-10 (min 10 MSK): e.g. bond 10 MSK
+kaspa-pq-validator bond --node-rpc 127.0.0.1:27610 --validator-key validator.seed \
+                        --amount 1000000000 --network testnet-10
 ```
-Prints `bond_outpoint: <txid>:0`. Output-0 is the locked stake (ADR-0016 §D.1).
+Prints `bond_outpoint: <txid>:0` (and `funding bond from N mature UTXO(s) …` showing how many
+coinbase fragments were aggregated). Output-0 is the locked stake (ADR-0016 §D.1).
 
 **Omit `--fee` — it is auto-computed (mass-based).** A StakeBond carries the 2592-byte ML-DSA-87
 public key, so its compute mass is large and the mempool's minimum relay fee is **10× the compute
@@ -124,9 +128,11 @@ a flat 30 000 that sat below the mempool minimum and wedged any path that fell b
 network-independent (same relay rate + bond shape), so it works unchanged on testnet/mainnet.
 
 > **Bond amount differs by network.** Devnet/simnet have no per-bond minimum (`min_bond_amount_sompi
-> = 0`), so any positive `--amount` works (e.g. the 2 MSK a tester used). **Mainnet/testnet require
-> `--amount ≥ 20 000 000 KAS`** (`min_bond_amount_sompi` in the PRODUCTION DNS params, user decision
-> 2026-06-01) — a smaller bond is rejected at acceptance and can never attest.
+> = 0`), so any positive `--amount` works. **testnet-10 requires `--amount ≥ 10 MSK`
+> (`= 1000000000 sompi`)** — lowered from mainnet's floor (`TESTNET_DNS_PARAMS`, kaspa-pq Phase 2)
+> so testers can mine a bondable amount in seconds. **Mainnet requires `--amount ≥ 20 000 000 KAS`**
+> (`min_bond_amount_sompi` in `PRODUCTION_DNS_PARAMS`, user decision 2026-06-01). A smaller bond is
+> rejected at acceptance and can never attest.
 
 ### 4. Verify the bond is active
 ```
