@@ -93,6 +93,13 @@ impl From<HeaderWithBlockLevel2> for HeaderWithBlockLevel {
                 blue_work: value.header.blue_work,
                 blue_score: value.header.blue_score,
                 pruning_point: value.header.pruning_point,
+                // ADR-0020: `Header2` is the pre-EVM (v0/v1) back-compat shape and
+                // carries no EVM fields; default them to zero. Dead under ADR-0001
+                // (old DBs are rejected) but must type-check.
+                evm_state_root: Default::default(),
+                evm_transactions_root: Default::default(),
+                evm_receipts_root: Default::default(),
+                evm_commitment_root: Default::default(),
             }
             .into(),
             block_level: value.block_level,

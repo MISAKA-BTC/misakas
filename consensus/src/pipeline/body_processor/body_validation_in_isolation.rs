@@ -4,6 +4,7 @@ use super::BlockBodyProcessor;
 use crate::errors::{BlockProcessResult, RuleError};
 use kaspa_consensus_core::{
     block::Block,
+    constants::EVM_HEADER_VERSION,
     mass::{ContextualMasses, Mass, NonContextualMasses},
     merkle::calc_hash_merkle_root,
     tx::TransactionOutpoint,
@@ -14,6 +15,7 @@ impl BlockBodyProcessor {
         Self::check_has_transactions(block)?;
         Self::check_hash_merkle_root(block)?;
         Self::check_only_one_coinbase(block)?;
+        Self::check_evm_payload(block)?;
         self.check_transactions_in_isolation(block)?;
         let mass = self.check_block_mass(block)?;
         self.check_duplicate_transactions(block)?;
@@ -35,6 +37,20 @@ impl BlockBodyProcessor {
         let calculated = calc_hash_merkle_root(block.transactions.iter());
         if calculated != block.header.hash_merkle_root {
             return Err(RuleError::BadMerkleRoot(block.header.hash_merkle_root, calculated));
+        }
+        Ok(())
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020). Isolation rule: a pre-EVM
+    /// header (`version < EVM_HEADER_VERSION`) MUST carry an empty `evm_payload`.
+    /// EVM-version (v2+) blocks may carry a non-empty payload, which is executed
+    /// and verified by the EVM executor in a later phase. This is context-free
+    /// (no DAA/params needed); the version itself is gated against activation by
+    /// header validation, so on a net where the EVM lane is inactive no v2 header
+    /// — and therefore no non-empty payload — is admitted.
+    fn check_evm_payload(block: &Block) -> BlockProcessResult<()> {
+        if block.header.version < EVM_HEADER_VERSION && !block.evm_payload.is_empty() {
+            return Err(RuleError::NonEmptyEvmPayloadBeforeActivation);
         }
         Ok(())
     }
@@ -529,6 +545,46 @@ mod tests {
         assert_match!(
             consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await,
             Err(RuleError::MissingParents(_))
+        );
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): a non-empty `evm_payload` on
+    /// a pre-EVM (v0/v1) header is rejected by body validation.
+    #[test]
+    fn evm_payload_rejected_before_activation() {
+        use kaspa_consensus_core::evm::EvmExecutionPayload;
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        let consensus = TestConsensus::new(&Config::new(params));
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+
+        // Minimal block reaching `check_evm_payload`: one coinbase tx + correct merkle root.
+        let coinbase = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_COINBASE, 0, vec![0u8; 19]);
+        let txs = vec![coinbase];
+        let hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        let header = Header::new_finalized(
+            0, // pre-EVM header version (< EVM_HEADER_VERSION)
+            vec![vec![1.into()]].try_into().unwrap(),
+            hash_merkle_root,
+            Default::default(),
+            Default::default(),
+            1,
+            0x207fffff,
+            1,
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+            0,
+            0.into(),
+            0,
+            Default::default(),
+        );
+        let mut block = MutableBlock::new(header, txs);
+        block.evm_payload = EvmExecutionPayload { txs: vec![vec![1, 2, 3]], ..Default::default() };
+        assert_match!(
+            body_processor.validate_body_in_isolation(&block.to_immutable()),
+            Err(RuleError::NonEmptyEvmPayloadBeforeActivation)
         );
 
         consensus.shutdown(wait_handles);

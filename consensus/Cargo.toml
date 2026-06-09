@@ -87,6 +87,9 @@ legacy-secp256k1 = [
 ]
 html_reports = []
 devnet-prealloc = ["kaspa-consensus-core/devnet-prealloc"]
+# kaspa-pq Selected-Parent EVM Lane (ADR-0020). Empty in P1; forwards to the
+# executor feature on consensus-core when revm lands (P2).
+evm = ["kaspa-consensus-core/evm"]
 
 [lints]
 workspace = true

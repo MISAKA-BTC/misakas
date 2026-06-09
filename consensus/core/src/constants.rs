@@ -1,6 +1,21 @@
 /// BLOCK_VERSION represents the current block version
 pub const BLOCK_VERSION: u16 = 1;
 
+/// kaspa-pq Selected-Parent EVM Lane (ADR-0020): the block/header version at
+/// which the EVM execution commitments (`evm_state_root`,
+/// `evm_transactions_root`, `evm_receipts_root`, `evm_commitment_root`) enter
+/// the header-hash preimage and an `evm_payload` becomes mandatory.
+///
+/// MUST be strictly greater than every pre-EVM header version that already
+/// exists on-chain — namely the genesis version `0`
+/// (`consensus/core/src/config/genesis.rs`) and the live mined-block
+/// [`BLOCK_VERSION`] = `1`. Picking `2` keeps the preimage of every existing
+/// v0/v1 header byte-identical (the EVM fields are *not* hashed below the
+/// gate), so all current genesis hashes and block identities are unchanged.
+/// NEVER lower this value: doing so would pull the EVM fields into the
+/// preimage of already-mined blocks and rewrite every block identity.
+pub const EVM_HEADER_VERSION: u16 = 2;
+
 /// TX_VERSION is the current latest supported transaction version.
 pub const TX_VERSION: u16 = 0;
 

@@ -1342,6 +1342,8 @@ impl ConsensusApi for Consensus {
         Ok(Block {
             header: self.headers_store.get_header(hash).optional().unwrap().ok_or(ConsensusError::BlockNotFound(hash))?,
             transactions: self.block_transactions_store.get(hash).optional().unwrap().ok_or(ConsensusError::BlockNotFound(hash))?,
+            // ADR-0020: the EVM payload store lands in P3; default to empty here.
+            evm_payload: Default::default(),
         })
     }
 
@@ -1398,6 +1400,8 @@ impl ConsensusApi for Consensus {
             } else {
                 self.block_transactions_store.get(hash).optional().unwrap().unwrap_or_default()
             },
+            // ADR-0020: the EVM payload store lands in P3; default to empty here.
+            evm_payload: Default::default(),
         })
     }
 

@@ -63,6 +63,8 @@ impl TryFrom<RpcBlock> for Block {
                     .map(kaspa_consensus_core::tx::Transaction::try_from)
                     .collect::<RpcResult<Vec<kaspa_consensus_core::tx::Transaction>>>()?,
             ),
+            // ADR-0020: RpcBlock carries no EVM payload in P1; default to empty.
+            evm_payload: Default::default(),
         })
     }
 }
@@ -78,6 +80,8 @@ impl TryFrom<RpcRawBlock> for Block {
                     .map(kaspa_consensus_core::tx::Transaction::try_from)
                     .collect::<RpcResult<Vec<kaspa_consensus_core::tx::Transaction>>>()?,
             ),
+            // ADR-0020: RpcBlock carries no EVM payload in P1; default to empty.
+            evm_payload: Default::default(),
         })
     }
 }
@@ -124,6 +128,8 @@ impl TryFrom<RpcOptionalBlock> for Block {
                     .map(kaspa_consensus_core::tx::Transaction::try_from)
                     .collect::<RpcResult<Vec<kaspa_consensus_core::tx::Transaction>>>()?,
             ),
+            // ADR-0020: RpcBlock carries no EVM payload in P1; default to empty.
+            evm_payload: Default::default(),
         })
     }
 }

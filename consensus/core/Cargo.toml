@@ -18,6 +18,12 @@ pq-only = []
 legacy-secp256k1 = ["dep:secp256k1"]
 devnet-prealloc = []
 wasm32-sdk = []
+# kaspa-pq Selected-Parent EVM Lane (ADR-0020): the EVM execution lane. P1
+# declares it EMPTY — the consensus *types* (header EVM roots, block evm_payload)
+# are always compiled in and are secp-free. The revm executor + its secp256k1
+# dependency are pulled in behind this feature in P2, so the default node build
+# stays secp-free (enforced by scripts/pq-ci-guard.sh).
+evm = []
 
 [dependencies]
 arc-swap.workspace = true

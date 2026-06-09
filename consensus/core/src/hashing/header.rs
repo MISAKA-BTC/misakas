@@ -16,6 +16,12 @@ use kaspa_hashes::{Hash, Hash64, HasherBase};
 /// roots and pruning point are all 64-byte; kaspa-pq (ADR-0004 /
 /// design §12) widened `utxo_commitment` to 64-byte too, so every
 /// field fed into the preimage is now a 64-byte PQ consensus identity.
+///
+/// kaspa-pq Selected-Parent EVM Lane (ADR-0020): for `version >=
+/// EVM_HEADER_VERSION` (= 2) only, four EVM commitments are appended after
+/// `pruning_point` — evm_state_root, evm_transactions_root,
+/// evm_receipts_root, evm_commitment_root. The gate keeps every v0/v1
+/// preimage byte-identical to the pre-EVM protocol.
 #[inline]
 fn write_header_preimage<H: HasherBase>(hasher: &mut H, header: &Header, nonce: u64, timestamp: u64) {
     hasher.update(header.version.to_le_bytes()).write_len(header.parents_by_level.expanded_len()); // Write the number of parent levels
@@ -41,6 +47,22 @@ fn write_header_preimage<H: HasherBase>(hasher: &mut H, header: &Header, nonce: 
         .update(header.blue_score.to_le_bytes())
         .write_blue_work(header.blue_work)
         .update(header.pruning_point);
+
+    // kaspa-pq Selected-Parent EVM Lane (ADR-0020): the four EVM execution
+    // commitments enter the preimage ONLY for v2+ (`version >=
+    // EVM_HEADER_VERSION`) headers. For every existing v0 (genesis) / v1 (live)
+    // header this branch is skipped, so the preimage — and therefore all three
+    // digests below (legacy-32, identity-64, pre-PoW-64) — is byte-identical to
+    // the pre-EVM protocol and no genesis hash or block identity changes. Frozen
+    // v2+ byte order (hard-fork to change): evm_state_root ||
+    // evm_transactions_root || evm_receipts_root || evm_commitment_root.
+    if header.version >= crate::constants::EVM_HEADER_VERSION {
+        hasher
+            .update(header.evm_state_root)
+            .update(header.evm_transactions_root)
+            .update(header.evm_receipts_root)
+            .update(header.evm_commitment_root);
+    }
 }
 
 /// Returns the **legacy 32-byte** header hash using the provided
@@ -141,5 +163,50 @@ mod tests {
             hasher2.update(test.1);
             assert_eq!(hasher.finalize(), hasher2.finalize())
         }
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): proves the version gate in
+    /// `write_header_preimage` — the four EVM commitments enter the header hash
+    /// for v2+ headers only. This is the load-bearing property that keeps every
+    /// existing v0/v1 genesis hash and block identity unchanged.
+    #[test]
+    fn evm_commitments_gated_by_header_version() {
+        use kaspa_hashes::EvmH256;
+        let mk = |version: u16| {
+            Header::new_finalized(
+                version,
+                vec![vec![1.into()]].try_into().unwrap(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                234,
+                23,
+                567,
+                crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+                0,
+                0.into(),
+                0,
+                Default::default(),
+            )
+        };
+        let evm = |h: Header| {
+            h.with_evm_commitments(
+                EvmH256::from_bytes([1u8; 32]),
+                EvmH256::from_bytes([2u8; 32]),
+                EvmH256::from_bytes([3u8; 32]),
+                Hash64::from_bytes([4u8; 64]),
+            )
+        };
+
+        // v1 (current BLOCK_VERSION): EVM commitments are hash-invisible.
+        let v1 = mk(crate::constants::BLOCK_VERSION);
+        assert!(crate::constants::BLOCK_VERSION < crate::constants::EVM_HEADER_VERSION);
+        assert_eq!(evm(v1.clone()).hash, v1.hash, "v1 header hash must NOT change with EVM commitments");
+
+        // v2 (EVM_HEADER_VERSION): EVM commitments are part of the preimage.
+        let v2 = mk(crate::constants::EVM_HEADER_VERSION);
+        assert_ne!(evm(v2.clone()).hash, v2.hash, "v2 header hash MUST change with EVM commitments");
+        // Version itself participates in the preimage, so v1 != v2 even at zero EVM commitments.
+        assert_ne!(v1.hash, v2.hash);
     }
 }

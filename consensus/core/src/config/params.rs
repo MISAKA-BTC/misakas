@@ -350,6 +350,16 @@ pub struct Params {
     /// DAA score at/after which `PqEnforcementMode::Consensus` takes effect.
     /// `0` on kaspa-pq nets (PQ-only from genesis).
     pub pq_activation_daa_score: u64,
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): DAA score at/after which the
+    /// EVM execution lane is active on this network. Past this score, a block
+    /// header must be version `>= EVM_HEADER_VERSION` and may carry a non-empty
+    /// `evm_payload`; before it, the `evm_payload` must be empty (see
+    /// `body_validation_in_isolation::check_evm_payload`). `u64::MAX` ⇒ EVM never
+    /// active on this net (mainnet/devnet/simnet for now); a finite value (or
+    /// `0` for genesis-active) ⇒ active. Mirrors the `pos_v2_activation_daa_score`
+    /// / `pq_activation_daa_score` fence precedent.
+    pub evm_activation_daa_score: u64,
 }
 
 impl Params {
@@ -361,6 +371,15 @@ impl Params {
     #[must_use]
     pub fn is_pq_active(&self, daa_score: u64) -> bool {
         matches!(self.pq_enforcement, PqEnforcementMode::Consensus) && daa_score >= self.pq_activation_daa_score
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): `true` when the EVM
+    /// execution lane is active at `daa_score` on this network. Below the fence
+    /// (the default `u64::MAX` for non-EVM nets) the `evm_payload` must be empty.
+    #[inline]
+    #[must_use]
+    pub fn is_evm_active(&self, daa_score: u64) -> bool {
+        daa_score >= self.evm_activation_daa_score
     }
     /// Returns the past median time sample rate
     #[inline]
@@ -535,6 +554,8 @@ impl Params {
             // kaspa-pq: PQ enforcement is consensus-fixed, never runtime-overridable.
             pq_enforcement: self.pq_enforcement,
             pq_activation_daa_score: self.pq_activation_daa_score,
+            // kaspa-pq EVM lane activation is consensus-fixed, never runtime-overridable.
+            evm_activation_daa_score: self.evm_activation_daa_score,
         }
     }
 }
@@ -907,6 +928,9 @@ pub const MAINNET_PARAMS: Params = Params {
     pow_argon2id_activation: ForkActivation::always(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
+    // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
+    // a finite activation score when the revm executor lands (P2+). u64::MAX = never.
+    evm_activation_daa_score: u64::MAX,
 };
 
 pub const TESTNET_PARAMS: Params = Params {
@@ -981,6 +1005,9 @@ pub const TESTNET_PARAMS: Params = Params {
     pow_argon2id_activation: ForkActivation::always(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
+    // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
+    // a finite activation score when the revm executor lands (P2+). u64::MAX = never.
+    evm_activation_daa_score: u64::MAX,
 };
 
 pub const SIMNET_PARAMS: Params = Params {
@@ -1039,12 +1066,17 @@ pub const SIMNET_PARAMS: Params = Params {
     pow_argon2id_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
+    // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
+    // a finite activation score when the revm executor lands (P2+). u64::MAX = never.
+    evm_activation_daa_score: u64::MAX,
 };
 
 pub const DEVNET_PARAMS: Params = Params {
     // kaspa-pq: PQ-only enforcement from genesis (ADR-0019).
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
+    // ADR-0020: EVM lane inert in P1 (no executor yet). u64::MAX = never active.
+    evm_activation_daa_score: u64::MAX,
     // kaspa-pq: devnet now uses the same MISAKA DNS seeders as mainnet/testnet for automatic
     // peer discovery (devnet default P2P port is 26611, matching the live mesh — see
     // NetworkId::default_p2p_port). Nodes launched WITHOUT `--nodnsseed` resolve these to find

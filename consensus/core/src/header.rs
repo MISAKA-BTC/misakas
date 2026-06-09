@@ -6,7 +6,10 @@ use itertools::Itertools;
 // identity. `Hash` (= `Hash32`) is retained only for the legacy 32-byte
 // kHeavyHash PoW path; every block-hash field/parent below uses `BlockHash`
 // (= `Hash64`); the pruning point uses `PruningPoint` (also `Hash64`).
-use kaspa_hashes::Hash64;
+// kaspa-pq Selected-Parent EVM Lane (ADR-0020): `EvmH256` is the 32-byte
+// Ethereum-compatible root carried by the three EVM trie commitments below;
+// `evm_commitment_root` stays the 64-byte PQ `Hash64`.
+use kaspa_hashes::{EvmH256, Hash64};
 use kaspa_utils::{
     iter::{IterExtensions, IterExtensionsRle},
     mem_size::MemSizeEstimator,
@@ -171,6 +174,25 @@ pub struct Header {
     pub blue_work: BlueWorkType,
     pub blue_score: u64,
     pub pruning_point: PruningPoint,
+
+    // kaspa-pq Selected-Parent EVM Lane (ADR-0020). These four EVM execution
+    // commitments are present in every `Header` but only enter the header-hash
+    // preimage when `version >= EVM_HEADER_VERSION` (see
+    // `hashing::header::write_header_preimage`), so for all existing v0/v1
+    // headers they are zero and hash-invisible — every current genesis hash and
+    // block identity is unchanged. Hard-fork fields: the v2+ preimage byte order
+    // (state || transactions || receipts || commitment, appended after
+    // `pruning_point`) is frozen once testnet activates.
+    /// EVM post-execution state-trie root (Ethereum `stateRoot`).
+    pub evm_state_root: EvmH256,
+    /// Ethereum transactions-trie root over `evm_payload.txs`.
+    pub evm_transactions_root: EvmH256,
+    /// Ethereum receipts-trie root after executing `evm_payload.txs`.
+    pub evm_receipts_root: EvmH256,
+    /// Keyed BLAKE2b-512 (MISAKA domain) over the full `EvmExecutionHeader`
+    /// (gas / basefee / logs_bloom / system_ops_root / withdrawals_root / EVM
+    /// block hash …). The 64-byte PQ companion to the 32-byte trie roots above.
+    pub evm_commitment_root: Hash64,
 }
 
 impl Header {
@@ -207,9 +229,36 @@ impl Header {
             blue_work,
             blue_score,
             pruning_point,
+            // ADR-0020: EVM commitments default to zero. v0/v1 headers never
+            // hash them; the EVM-version (v2+) mining/template path sets them via
+            // `with_evm_commitments` before the PoW finalize.
+            evm_state_root: EvmH256::default(),
+            evm_transactions_root: EvmH256::default(),
+            evm_receipts_root: EvmH256::default(),
+            evm_commitment_root: Hash64::default(),
         };
         header.finalize();
         header
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): set the four EVM execution
+    /// commitments and re-finalize the header hash. Consuming builder used by the
+    /// EVM-version (v2+) mining/template path and by tests. For v0/v1 headers the
+    /// commitments stay hash-invisible regardless of value, but callers that set
+    /// them are expected to also have bumped `version` to `EVM_HEADER_VERSION`.
+    pub fn with_evm_commitments(
+        mut self,
+        evm_state_root: EvmH256,
+        evm_transactions_root: EvmH256,
+        evm_receipts_root: EvmH256,
+        evm_commitment_root: Hash64,
+    ) -> Self {
+        self.evm_state_root = evm_state_root;
+        self.evm_transactions_root = evm_transactions_root;
+        self.evm_receipts_root = evm_receipts_root;
+        self.evm_commitment_root = evm_commitment_root;
+        self.finalize();
+        self
     }
 
     /// Finalizes the header and recomputes the header hash
@@ -242,6 +291,12 @@ impl Header {
             blue_work: 0.into(),
             blue_score: 0,
             pruning_point: Default::default(),
+            // ADR-0020: this test ctor pins `version = BLOCK_VERSION` (= 1), so
+            // the EVM fields are hash-invisible; default them to zero.
+            evm_state_root: Default::default(),
+            evm_transactions_root: Default::default(),
+            evm_receipts_root: Default::default(),
+            evm_commitment_root: Default::default(),
         }
     }
 }

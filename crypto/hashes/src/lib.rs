@@ -1,3 +1,4 @@
+mod evm_h256;
 mod hash64;
 mod hashers;
 mod pow_hashers;
@@ -19,6 +20,7 @@ use workflow_wasm::prelude::*;
 
 pub const HASH_SIZE: usize = 32;
 
+pub use evm_h256::*;
 pub use hash64::*;
 pub use hashers::*;
 

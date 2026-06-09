@@ -82,6 +82,17 @@ impl SubnetworkId {
             || *self == SUBNETWORK_ID_SLASHING_EVIDENCE
             || *self == SUBNETWORK_ID_STAKE_UNBOND
     }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): true for the EVM bridge
+    /// subnetworks (UTXO→EVM deposit, plus the reserved withdraw-claim / admin
+    /// ids). Like the DNS overlay these are full-node-validated but are **not**
+    /// `is_builtin()` (neither coinbase nor the zero-gas registry subnetwork).
+    #[inline]
+    pub fn is_evm_overlay(&self) -> bool {
+        *self == SUBNETWORK_ID_EVM_DEPOSIT
+            || *self == SUBNETWORK_ID_EVM_WITHDRAW_CLAIM
+            || *self == SUBNETWORK_ID_EVM_ADMIN
+    }
 }
 
 #[derive(Error, Debug, Clone)]
@@ -157,3 +168,16 @@ pub const SUBNETWORK_ID_STAKE_ATTESTATION_SHARD: SubnetworkId = SubnetworkId::fr
 pub const SUBNETWORK_ID_SLASHING_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x12);
 /// kaspa-pq H-05 (ADR-0010 "Unbonding"): an owner-authorized request to begin unbonding a bond.
 pub const SUBNETWORK_ID_STAKE_UNBOND: SubnetworkId = SubnetworkId::from_byte(0x13);
+
+// kaspa-pq Selected-Parent EVM Lane (ADR-0020) EVM bridge subnetwork ids. Byte
+// values 0x20/0x21/0x22 sit above the DNS overlay band (0x10-0x13) and the
+// upstream built-ins (0/1/2). Routed + payload-validated by full nodes.
+/// UTXO → EVM native-coin deposit (ADR-0020 §6). Payload: version, evm_address,
+/// amount_atomic, asset_id, memo.
+pub const SUBNETWORK_ID_EVM_DEPOSIT: SubnetworkId = SubnetworkId::from_byte(0x20);
+/// Reserved for a future claim-style withdrawal; unused in the initial design
+/// (EVM → UTXO withdrawals are an in-consensus side-effect, ADR-0020 §7).
+pub const SUBNETWORK_ID_EVM_WITHDRAW_CLAIM: SubnetworkId = SubnetworkId::from_byte(0x21);
+/// Reserved for future EVM fork-activation / system-contract migration admin
+/// txs; unused on a governance-free network.
+pub const SUBNETWORK_ID_EVM_ADMIN: SubnetworkId = SubnetworkId::from_byte(0x22);

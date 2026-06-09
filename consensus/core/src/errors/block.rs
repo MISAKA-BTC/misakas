@@ -35,6 +35,12 @@ pub enum RuleError {
     #[error("unknown pow_algo_id {0}: Phase 1 admits only kHeavyHash (POW_ALGO_ID_KHEAVYHASH = 1)")]
     UnknownPowAlgoId(u8),
 
+    // kaspa-pq Selected-Parent EVM Lane (ADR-0020). The EVM state-root / receipts
+    // / commitment mismatch variants are added in the executor phase (P2) when
+    // they are actually produced.
+    #[error("block carries a non-empty EVM payload but its header version is below EVM_HEADER_VERSION (EVM lane not active)")]
+    NonEmptyEvmPayloadBeforeActivation,
+
     #[error("the block timestamp is too far into the future: block timestamp is {0} but maximum timestamp allowed is {1}")]
     TimeTooFarIntoTheFuture(u64, u64),
 

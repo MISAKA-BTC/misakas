@@ -1,6 +1,7 @@
 use crate::{
     BlockHash, BlueWorkType,
     coinbase::MinerData,
+    evm::EvmExecutionPayload,
     header::Header,
     tx::{Transaction, TransactionId},
 };
@@ -14,11 +15,14 @@ use std::sync::Arc;
 pub struct MutableBlock {
     pub header: Header,
     pub transactions: Vec<Transaction>,
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): EVM execution payload.
+    /// Empty/default for pre-EVM (v0/v1) templates.
+    pub evm_payload: EvmExecutionPayload,
 }
 
 impl MutableBlock {
     pub fn new(header: Header, txs: Vec<Transaction>) -> Self {
-        Self { header, transactions: txs }
+        Self { header, transactions: txs, evm_payload: EvmExecutionPayload::default() }
     }
 
     pub fn from_header(header: Header) -> Self {
@@ -26,7 +30,7 @@ impl MutableBlock {
     }
 
     pub fn to_immutable(self) -> Block {
-        Block::new(self.header, self.transactions)
+        Block::new(self.header, self.transactions).with_evm_payload(Arc::new(self.evm_payload))
     }
 }
 
@@ -37,23 +41,46 @@ impl MutableBlock {
 pub struct Block {
     pub header: Arc<Header>,
     pub transactions: Arc<Vec<Transaction>>,
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): EVM execution payload,
+    /// carried separately from the UTXO `transactions` because EVM txs become
+    /// canonical only when their block enters the selected-parent chain. Empty
+    /// (`EvmExecutionPayload::default()`) for pre-EVM (v0/v1) blocks; required
+    /// non-trivial only past activation. Committed via the header's `evm_*_root`
+    /// fields, NOT via `hash_merkle_root` (which covers `transactions` only).
+    pub evm_payload: Arc<EvmExecutionPayload>,
 }
 
 impl Block {
     pub fn new(header: Header, txs: Vec<Transaction>) -> Self {
-        Self { header: Arc::new(header), transactions: Arc::new(txs) }
+        Self {
+            header: Arc::new(header),
+            transactions: Arc::new(txs),
+            evm_payload: Arc::new(EvmExecutionPayload::default()),
+        }
     }
 
     pub fn from_arcs(header: Arc<Header>, transactions: Arc<Vec<Transaction>>) -> Self {
-        Self { header, transactions }
+        Self { header, transactions, evm_payload: Arc::new(EvmExecutionPayload::default()) }
     }
 
     pub fn from_header_arc(header: Arc<Header>) -> Self {
-        Self { header, transactions: Arc::new(Vec::new()) }
+        Self { header, transactions: Arc::new(Vec::new()), evm_payload: Arc::new(EvmExecutionPayload::default()) }
     }
 
     pub fn from_header(header: Header) -> Self {
-        Self { header: Arc::new(header), transactions: Arc::new(Vec::new()) }
+        Self {
+            header: Arc::new(header),
+            transactions: Arc::new(Vec::new()),
+            evm_payload: Arc::new(EvmExecutionPayload::default()),
+        }
+    }
+
+    /// kaspa-pq ADR-0020: attach an EVM execution payload (consuming builder).
+    /// Used by the block-decode paths (P2P / RPC) and the EVM mining template so
+    /// a non-empty payload round-trips; all base constructors default to empty.
+    pub fn with_evm_payload(mut self, evm_payload: Arc<EvmExecutionPayload>) -> Self {
+        self.evm_payload = evm_payload;
+        self
     }
 
     pub fn is_header_only(&self) -> bool {
@@ -83,6 +110,8 @@ impl MemSizeEstimator for Block {
             + self.header.estimate_mem_bytes()
             + size_of::<Vec<Transaction>>()
             + self.transactions.iter().map(Transaction::estimate_mem_bytes).sum::<usize>()
+            // ADR-0020: account for the EVM payload (empty for pre-activation blocks).
+            + self.evm_payload.estimate_mem_bytes()
     }
 }
 

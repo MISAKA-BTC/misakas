@@ -732,7 +732,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
                 if blk_body.is_empty() {
                     return Err(ProtocolError::OtherOwned(format!("sent empty block body for block {}", hash)));
                 }
-                let block = Block { header: blk_header, transactions: blk_body.into() };
+                // ADR-0020: the P2P block body does not carry an EVM payload in P1
+                // (the wire extension lands with the executor in P2); default to empty.
+                let block = Block { header: blk_header, transactions: blk_body.into(), evm_payload: Default::default() };
                 // TODO (relaxed): sending ghostdag data may be redundant, especially when the headers were already verified.
                 // Consider sending empty ghostdag data, simplifying a great deal. The result should be the same -
                 // a trusted task is sent, however the header is already verified, and hence only the block body will be verified.
@@ -904,7 +906,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             if blk_body.is_empty() {
                 return Err(ProtocolError::OtherOwned(format!("sent empty block body for block {}", expected_hash)));
             }
-            let block = Block { header: blk_header, transactions: blk_body.into() };
+            // ADR-0020: the P2P block body does not carry an EVM payload in P1
+            // (the wire extension lands with the executor in P2); default to empty.
+            let block = Block { header: blk_header, transactions: blk_body.into(), evm_payload: Default::default() };
             current_daa_score = block.header.daa_score;
             current_timestamp = block.header.timestamp;
             jobs.push(consensus.validate_and_insert_block(block).virtual_state_task);
