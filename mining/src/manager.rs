@@ -32,7 +32,7 @@ use kaspa_consensus_core::{
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutput},
 };
 use kaspa_consensusmanager::{ConsensusProxy, spawn_blocking};
-use kaspa_core::{debug, error, info, time::Stopwatch, warn};
+use kaspa_core::{debug, error, info, time::{unix_now, Stopwatch}, warn};
 use kaspa_mining_errors::{manager::MiningManagerError, mempool::RuleError};
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -42,6 +42,9 @@ pub struct MiningManager {
     config: Arc<Config>,
     block_template_cache: BlockTemplateCache,
     mempool: RwLock<Mempool>,
+    // kaspa-pq EVM Lane v0.4 (§15/§16): the EVM tx pool, SEPARATE from the UTXO
+    // mempool (§14.1 budget isolation). Fills the node's own template payload.
+    evm_mempool: RwLock<crate::evm_mempool::EvmMempool>,
     counters: Arc<MiningCounters>,
 }
 
@@ -86,7 +89,44 @@ impl MiningManager {
         let config = Arc::new(config);
         let mempool = RwLock::new(Mempool::new(config.clone(), counters.clone()));
         let block_template_cache = BlockTemplateCache::new(cache_lifetime);
-        Self { config, block_template_cache, mempool, counters }
+        let evm_mempool = RwLock::new(crate::evm_mempool::EvmMempool::new());
+        Self { config, block_template_cache, mempool, evm_mempool, counters }
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): admit a raw EIP-2718 EVM transaction into
+    /// the EVM mempool. Admission applies EXACTLY the body-validation class-1
+    /// rule (kaspa-evm `admit_tx_info`), so a pooled tx can never make the
+    /// node's own template payload-block-invalid. Returns the Ethereum tx hash
+    /// (keccak256 of the raw bytes).
+    #[cfg(feature = "evm")]
+    pub fn submit_evm_transaction(&self, raw: Vec<u8>) -> Result<kaspa_hashes::EvmH256, crate::evm_mempool::EvmMempoolError> {
+        let info = kaspa_evm::tx::admit_tx_info(&raw).map_err(crate::evm_mempool::EvmMempoolError::Inadmissible)?;
+        let now_secs = unix_now() / 1000;
+        let mut pool = self.evm_mempool.write();
+        pool.expire(now_secs);
+        pool.insert(crate::evm_mempool::PendingEvmTx {
+            hash: info.hash,
+            sender: info.sender,
+            nonce: info.nonce,
+            max_fee_per_gas: info.max_fee_per_gas,
+            raw,
+            added_at: now_secs,
+        })
+    }
+
+    /// Non-`evm` builds cannot decode/admit EVM transactions (the lane is
+    /// `u64::MAX`-inert on every default network; an evm-active net requires an
+    /// `--features evm` node — the same refusal as the consensus seam).
+    #[cfg(not(feature = "evm"))]
+    pub fn submit_evm_transaction(&self, _raw: Vec<u8>) -> Result<kaspa_hashes::EvmH256, crate::evm_mempool::EvmMempoolError> {
+        Err(crate::evm_mempool::EvmMempoolError::Inadmissible(
+            "this kaspad was built without the `evm` feature — cannot admit EVM transactions".to_string(),
+        ))
+    }
+
+    /// Snapshot of the pending EVM tx count (RPC/diagnostics).
+    pub fn evm_mempool_len(&self) -> usize {
+        self.evm_mempool.read().len()
     }
 
     pub fn get_block_template(&self, consensus: &dyn ConsensusApi, miner_data: &MinerData) -> MiningManagerResult<BlockTemplate> {
@@ -115,6 +155,14 @@ impl MiningManager {
         // We remove recursion seen in blockTemplateBuilder.BuildBlockTemplate here.
         debug!("Building a new block template...");
         let _swo = Stopwatch::<22>::with_threshold("build_block_template full loop");
+        // kaspa-pq EVM Lane v0.4 (§15 step 6): the node's own payload candidates,
+        // fee-ordered + nonce-ascending + byte-capped. Selected once per template
+        // (inclusion only — acceptance/execution happens in a later chain block).
+        let evm_payload_candidates = {
+            let mut pool = self.evm_mempool.write();
+            pool.expire(unix_now() / 1000);
+            pool.select_candidates(kaspa_consensus_core::evm::MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK)
+        };
         let mut attempts: u64 = 0;
         loop {
             attempts += 1;
@@ -126,7 +174,7 @@ impl MiningManager {
             } else {
                 TemplateBuildMode::Infallible
             };
-            match block_template_builder.build_block_template(consensus, miner_data, selector, build_mode) {
+            match block_template_builder.build_block_template(consensus, miner_data, selector, build_mode, evm_payload_candidates.clone()) {
                 Ok(block_template) => {
                     let block_template = cache_lock.set_immutable_cached_template(block_template);
                     match attempts {

@@ -30,6 +30,21 @@ impl std::fmt::Display for TxDecodeError {
     }
 }
 
+/// Metadata of an admitted EVM transaction (the fields a mempool needs to key,
+/// order, replace, and select it). Produced by [`admit_tx_info`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmittedEvmTx {
+    /// keccak256 over the raw EIP-2718 bytes — the Ethereum tx hash.
+    pub hash: kaspa_hashes::EvmH256,
+    /// Recovered ECDSA signer.
+    pub sender: kaspa_consensus_core::evm::EvmAddress,
+    pub nonce: u64,
+    pub gas_limit: u64,
+    /// EIP-1559 `max_fee_per_gas` (legacy/2930: the gas price) — the mempool's
+    /// fee-ordering key.
+    pub max_fee_per_gas: u128,
+}
+
 /// v0.4 §6.1 class-1 payload admission (syntactic, per tx): EIP-2718 decode +
 /// ECDSA signer recovery + chain-id binding + a declared gas-limit sanity band
 /// (≥ the 21k intrinsic floor, +32k for creates; ≤ the per-chain-block accepted
@@ -38,10 +53,17 @@ impl std::fmt::Display for TxDecodeError {
 /// producer chose its own payload (design v0.4 §6.2). Deterministic and
 /// context-free (no state, no basefee: those are class-2 acceptance skips).
 pub fn admit_tx(raw: &[u8]) -> Result<(), String> {
-    use kaspa_consensus_core::evm::{EVM_CHAIN_ID, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK};
+    admit_tx_info(raw).map(|_| ())
+}
+
+/// [`admit_tx`] returning the admitted tx's metadata (§16 EVM mempool: the
+/// SAME rule the body-validation class-1 check applies, so a mempool-admitted
+/// tx can never make the node's own template payload-block-invalid).
+pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
+    use kaspa_consensus_core::evm::{EvmAddress, EVM_CHAIN_ID, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK};
 
     let envelope = TxEnvelope::decode_2718(&mut &raw[..]).map_err(|e| format!("decode: {e}"))?;
-    envelope.recover_signer().map_err(|e| format!("signer recovery: {e}"))?;
+    let sender = envelope.recover_signer().map_err(|e| format!("signer recovery: {e}"))?;
     match envelope.chain_id() {
         Some(EVM_CHAIN_ID) => {}
         other => return Err(format!("chain_id {other:?} != EVM_CHAIN_ID {EVM_CHAIN_ID}")),
@@ -56,7 +78,68 @@ pub fn admit_tx(raw: &[u8]) -> Result<(), String> {
             envelope.gas_limit()
         ));
     }
-    Ok(())
+    Ok(AdmittedEvmTx {
+        hash: kaspa_hashes::EvmH256::from_bytes(revm::primitives::keccak256(raw).0),
+        sender: EvmAddress::from_bytes(sender.into_array()),
+        nonce: envelope.nonce(),
+        gas_limit: envelope.gas_limit(),
+        max_fee_per_gas: envelope.max_fee_per_gas(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_raw(nonce: u64) -> Vec<u8> {
+        use alloy_consensus::{SignableTransaction, TxEip1559};
+        use alloy_eips::eip2718::Encodable2718;
+        use alloy_signer::SignerSync;
+        use alloy_signer_local::PrivateKeySigner;
+        use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE};
+        use revm::primitives::{Address, TxKind, B256, U256};
+        let signer = PrivateKeySigner::from_bytes(&B256::from([0x11u8; 32])).unwrap();
+        let tx = TxEip1559 {
+            chain_id: EVM_CHAIN_ID,
+            nonce,
+            gas_limit: 21_000,
+            max_fee_per_gas: EVM_INITIAL_BASE_FEE as u128,
+            max_priority_fee_per_gas: 0,
+            to: TxKind::Call(Address::with_last_byte(0x22)),
+            value: U256::from(500u64),
+            access_list: Default::default(),
+            input: Default::default(),
+        };
+        let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        TxEnvelope::from(tx.into_signed(sig)).encoded_2718()
+    }
+
+    #[test]
+    fn admit_tx_info_extracts_the_mempool_metadata() {
+        let raw = fixture_raw(7);
+        let info = admit_tx_info(&raw).unwrap();
+        assert_eq!(info.nonce, 7);
+        assert_eq!(info.gas_limit, 21_000);
+        assert_eq!(info.max_fee_per_gas, kaspa_consensus_core::evm::EVM_INITIAL_BASE_FEE as u128);
+        assert_eq!(info.hash.as_bytes(), revm::primitives::keccak256(&raw).0, "Ethereum tx hash = keccak256(raw 2718 bytes)");
+        // admit_tx and admit_tx_info enforce the identical rule.
+        assert!(admit_tx(&raw).is_ok());
+        // A truncated tx is inadmissible, not a panic.
+        assert!(admit_tx_info(&raw[..raw.len() - 5]).is_err());
+    }
+
+    /// Prints the canonical signed-tx fixture used by the consensus §16 e2e
+    /// test (consensus has no signing deps, so it embeds these bytes as hex).
+    /// Regenerate with:
+    ///   cargo test -p kaspa-evm fixture_generator -- --ignored --nocapture
+    #[test]
+    #[ignore = "fixture generator, run with --ignored --nocapture"]
+    fn fixture_generator() {
+        for nonce in [0u64, 1] {
+            let raw = fixture_raw(nonce);
+            println!("nonce {nonce}: {}", alloy_primitives::hex::encode(&raw));
+        }
+    }
 }
 
 /// Decode one EIP-2718 typed-transaction byte string and map it to a revm

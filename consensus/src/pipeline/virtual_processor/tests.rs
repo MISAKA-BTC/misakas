@@ -3387,5 +3387,53 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     assert!(storage.evm_header_store.has(5.into()).unwrap(), "the self-mined block executed + persisted");
     assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(5u64));
 
+    // ---- b6 (§16-1): a template with an EVM-mempool candidate — the §15
+    // step-6 own-payload path. The fixture is a signed EIP-1559 transfer on
+    // EVM_CHAIN_ID (regenerate: `cargo test -p kaspa-evm fixture_generator --
+    // --ignored --nocapture`); its sender is UNFUNDED, which is irrelevant for
+    // inclusion (data-only) and makes acceptance a deterministic class-2 skip.
+    const FIXTURE_TX_NONCE0: &str = "02f86b834d534b8080843b9aca008252089400000000000000000000000000000000000000228201f480c001a03244f5d74a96a52bd1c42fa1b9c336f4d3ae5509190ed9a526f17971c7fd743ca07f58e09399b50636b84f0ae4a7634c60a11c6f32427b613ebf6f4a638d6c68c1";
+    let mut raw_n0 = vec![0u8; FIXTURE_TX_NONCE0.len() / 2];
+    faster_hex::hex_decode(FIXTURE_TX_NONCE0.as_bytes(), &mut raw_n0).unwrap();
+
+    let template = consensus
+        .build_block_template_with_evm(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+            vec![raw_n0.clone()],
+        )
+        .unwrap();
+    assert_eq!(template.block.evm_payload.transactions, vec![raw_n0], "the candidate landed in the own payload");
+    assert_eq!(
+        template.block.header.evm_payload_hash,
+        template.block.evm_payload.payload_hash(),
+        "the header commits the NON-empty payload"
+    );
+    let mut b6 = template.block;
+    b6.header.hash = 6u64.into();
+    consensus.validate_and_insert_block(b6.to_immutable()).virtual_state_task.await.unwrap();
+    assert!(storage.evm_payload_store.has(6.into()).unwrap(), "the non-empty own payload persisted at commit_body");
+
+    // ---- b7: the NEXT template accepts b6's payload (mergeset delayed
+    // acceptance): the unfunded sender makes the tx a deterministic class-2
+    // skip — counted, no receipt, block valid. This closes the full §16-1
+    // loop: pool candidate → template inclusion → wire/body validation →
+    // acceptance processing by the selected child.
+    let template = consensus
+        .build_block_template(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+        )
+        .unwrap();
+    let mut b7 = template.block;
+    b7.header.hash = 7u64.into();
+    consensus.validate_and_insert_block(b7.to_immutable()).virtual_state_task.await.unwrap();
+    let h7 = storage.evm_header_store.get(7.into()).unwrap();
+    assert_eq!(h7.skipped_tx_count, 1, "b6's unfunded payload tx was class-2 skipped at acceptance");
+    assert_eq!(h7.accepted_tx_count, 0);
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(7u64));
+
     consensus.shutdown(wait_handles);
 }

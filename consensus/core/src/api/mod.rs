@@ -62,6 +62,22 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§15 step 6): [`Self::build_block_template`] with
+    /// the node's own EVM payload candidates (raw EIP-2718 bytes from the EVM
+    /// mempool, pre-admitted + fee-ordered + nonce-ascending). The default
+    /// ignores the candidates — correct for every mock and for pre-activation
+    /// templates, where the own payload is empty anyway.
+    fn build_block_template_with_evm(
+        &self,
+        miner_data: MinerData,
+        tx_selector: Box<dyn TemplateTransactionSelector>,
+        build_mode: TemplateBuildMode,
+        evm_payload_candidates: Vec<Vec<u8>>,
+    ) -> Result<BlockTemplate, RuleError> {
+        let _ = evm_payload_candidates;
+        self.build_block_template(miner_data, tx_selector, build_mode)
+    }
+
     fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
         unimplemented!()
     }

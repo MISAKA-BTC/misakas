@@ -749,12 +749,43 @@ impl VirtualStateProcessor {
         &self,
         header: Header,
         virtual_state: &VirtualState,
+        evm_payload_candidates: Vec<Vec<u8>>,
     ) -> (Header, kaspa_consensus_core::evm::EvmExecutionPayload) {
         use crate::processes::evm::evm_execute_acceptance;
         if header.daa_score < self.evm_activation_daa_score {
             return (header, Default::default());
         }
-        let own_payload = kaspa_consensus_core::evm::EvmExecutionPayload::default();
+        // §15 step 6: assemble the own payload from the mempool candidates.
+        // Defense-in-depth re-admission (the body class-1 rule): an inadmissible
+        // tx here would make our OWN block payload-block-invalid, so hard-filter
+        // rather than trust the pool; independently re-enforce the byte cap.
+        // The candidates execute in a LATER accepting chain block, never here.
+        // own evm_coinbase stays zero until `misaka_feeRecipient` lands (§16-2):
+        // priority fees of these txs then credit the zero address on acceptance.
+        let own_payload = {
+            use kaspa_consensus_core::evm::{EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+            let mut payload = EvmExecutionPayload::default();
+            let base = payload.payload_bytes().len();
+            let mut budget = MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK.saturating_sub(base);
+            for raw in evm_payload_candidates {
+                if 4 + raw.len() > budget {
+                    continue;
+                }
+                match crate::processes::evm::admit_evm_payload_txs(&EvmExecutionPayload {
+                    transactions: vec![raw.clone()],
+                    ..Default::default()
+                }) {
+                    Ok(()) => {
+                        budget -= 4 + raw.len();
+                        payload.transactions.push(raw);
+                    }
+                    Err((_, reason)) => {
+                        warn!("EVM template: dropping inadmissible mempool candidate ({reason})");
+                    }
+                }
+            }
+            payload
+        };
         let sorted_mergeset: Vec<BlockHash> =
             virtual_state.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
         let (result, _snapshot) = evm_execute_acceptance(
@@ -778,6 +809,7 @@ impl VirtualStateProcessor {
         &self,
         header: Header,
         _virtual_state: &VirtualState,
+        _evm_payload_candidates: Vec<Vec<u8>>,
     ) -> (Header, kaspa_consensus_core::evm::EvmExecutionPayload) {
         if header.daa_score >= self.evm_activation_daa_score {
             panic!(
@@ -2031,6 +2063,10 @@ impl VirtualStateProcessor {
         miner_data: MinerData,
         mut tx_selector: Box<dyn TemplateTransactionSelector>,
         build_mode: TemplateBuildMode,
+        // kaspa-pq EVM Lane v0.4 (§15 step 6): the node's own payload candidates
+        // (raw EIP-2718 bytes). Assembled into the template payload by
+        // `evm_template_fields`; ignored pre-activation.
+        evm_payload_candidates: Vec<Vec<u8>>,
     ) -> Result<BlockTemplate, RuleError> {
         //
         // TODO (relaxed): additional tests
@@ -2096,7 +2132,7 @@ impl VirtualStateProcessor {
         drop(virtual_read);
 
         // Build the template
-        self.build_block_template_from_virtual_state(virtual_state, miner_data, txs, calculated_fees)
+        self.build_block_template_from_virtual_state(virtual_state, miner_data, txs, calculated_fees, evm_payload_candidates)
     }
 
     pub(crate) fn validate_block_template_transactions(
@@ -2121,6 +2157,8 @@ impl VirtualStateProcessor {
         miner_data: MinerData,
         mut txs: Vec<Transaction>,
         calculated_fees: Vec<u64>,
+        // kaspa-pq EVM Lane v0.4 (§15 step 6): own-payload candidates.
+        evm_payload_candidates: Vec<Vec<u8>>,
     ) -> Result<BlockTemplate, RuleError> {
         // [`calc_block_parents`] can use deep blocks below the pruning point for this calculation, so we
         // need to hold the pruning lock.
@@ -2230,7 +2268,7 @@ impl VirtualStateProcessor {
         // code) and commit both EVM header fields. The own payload is empty
         // until the EVM mempool lands (§16 phase) — its (non-zero) hash is
         // still committed. Inert (returns the header unchanged) pre-activation.
-        let (header, evm_payload) = self.evm_template_fields(header, &virtual_state);
+        let (header, evm_payload) = self.evm_template_fields(header, &virtual_state, evm_payload_candidates);
         let selected_parent_hash = virtual_state.ghostdag_data.selected_parent;
         let selected_parent_timestamp = self.headers_store.get_timestamp(selected_parent_hash).unwrap();
         let selected_parent_daa_score = self.headers_store.get_daa_score(selected_parent_hash).unwrap();

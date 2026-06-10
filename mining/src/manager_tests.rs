@@ -1289,6 +1289,7 @@ mod tests {
             &miner_data_2,
             Box::new(TakeAllSelector::new(transactions)),
             TemplateBuildMode::Standard,
+            Vec::new(),
         );
         assert!(result.is_ok(), "build block template failed for miner data 2");
         let expected_template = result.unwrap();

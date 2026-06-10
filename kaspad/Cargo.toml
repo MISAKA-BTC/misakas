@@ -76,7 +76,7 @@ devnet-prealloc = ["kaspa-consensus/devnet-prealloc"]
 semaphore-trace = ["kaspa-utils/semaphore-trace"]
 # kaspa-pq Selected-Parent EVM Lane (ADR-0020). Empty in P1; opt-in EVM build
 # (revm executor + EVM lane lands in P2). The default build stays secp-free.
-evm = ["kaspa-consensus/evm"]
+evm = ["kaspa-consensus/evm", "kaspa-mining/evm"]
 
 [lints]
 workspace = true

@@ -647,7 +647,17 @@ impl ConsensusApi for Consensus {
         tx_selector: Box<dyn TemplateTransactionSelector>,
         build_mode: TemplateBuildMode,
     ) -> Result<BlockTemplate, RuleError> {
-        self.virtual_processor.build_block_template(miner_data, tx_selector, build_mode)
+        self.virtual_processor.build_block_template(miner_data, tx_selector, build_mode, Vec::new())
+    }
+
+    fn build_block_template_with_evm(
+        &self,
+        miner_data: MinerData,
+        tx_selector: Box<dyn TemplateTransactionSelector>,
+        build_mode: TemplateBuildMode,
+        evm_payload_candidates: Vec<Vec<u8>>,
+    ) -> Result<BlockTemplate, RuleError> {
+        self.virtual_processor.build_block_template(miner_data, tx_selector, build_mode, evm_payload_candidates)
     }
 
     fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {

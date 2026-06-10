@@ -83,9 +83,12 @@ impl BlockTemplateBuilder {
         miner_data: &MinerData,
         selector: Box<dyn TemplateTransactionSelector>,
         build_mode: TemplateBuildMode,
+        // kaspa-pq EVM Lane v0.4 (§15 step 6): the node's own payload candidates
+        // from the EVM mempool (raw EIP-2718 bytes, pre-admitted + byte-capped).
+        evm_payload_candidates: Vec<Vec<u8>>,
     ) -> BuilderResult<BlockTemplate> {
         let _sw = Stopwatch::<20>::with_threshold("build_block_template op");
-        Ok(consensus.build_block_template(miner_data.clone(), selector, build_mode)?)
+        Ok(consensus.build_block_template_with_evm(miner_data.clone(), selector, build_mode, evm_payload_candidates)?)
     }
 
     /// modify_block_template clones an existing block template, modifies it to the requested coinbase data and updates the timestamp

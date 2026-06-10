@@ -12,6 +12,10 @@ repository.workspace = true
 [dependencies]
 kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
+# kaspa-pq EVM Lane v0.4 (§16): the EVM mempool's admission decoder. OPTIONAL —
+# pulled only by the non-default `evm` feature so the default node stays
+# secp-free (pq-ci-guard); the pool data structure itself is feature-free.
+kaspa-evm = { workspace = true, optional = true }
 kaspa-consensusmanager.workspace = true
 kaspa-core.workspace = true
 kaspa-hashes.workspace = true
@@ -42,3 +46,9 @@ harness = false
 
 [lints]
 workspace = true
+
+[features]
+# kaspa-pq EVM Lane v0.4 (§16): enables raw-tx admission into the EVM mempool
+# (kaspa-evm decode + signer recovery). Twin of the consensus `evm` feature;
+# forwarded from kaspad. Without it `submit_evm_transaction` refuses.
+evm = ["dep:kaspa-evm"]

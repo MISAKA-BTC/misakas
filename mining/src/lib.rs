@@ -8,6 +8,8 @@ use mempool::tx::Priority;
 mod block_template;
 pub(crate) mod cache;
 pub mod errors;
+// kaspa-pq EVM Lane v0.4 (§15/§16): the EVM transaction mempool.
+pub mod evm_mempool;
 pub mod feerate;
 pub mod manager;
 mod manager_tests;
