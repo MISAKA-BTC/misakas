@@ -684,6 +684,43 @@ message SubmitEvmTransactionResponseMessage {
   RPCError error = 1000;
 }
 
+// kaspa-pq EVM Lane v0.4 (§16): one EVM log entry.
+message RpcEvmLogMessage {
+  string address = 1;
+  repeated string topics = 2;
+  string data = 3;
+}
+
+// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved EVM receipt.
+message GetEvmTransactionReceiptRequestMessage {
+  string transactionHash = 1;
+}
+
+message GetEvmTransactionReceiptResponseMessage {
+  bool found = 1;
+  string acceptingBlock = 2;
+  uint64 evmNumber = 3;
+  uint32 receiptIndex = 4;
+  bool succeeded = 5;
+  uint64 gasUsed = 6;
+  uint64 cumulativeGasUsed = 7;
+  repeated RpcEvmLogMessage logs = 8;
+  RPCError error = 1000;
+}
+
+// kaspa-pq EVM Lane v0.4 (§16): DA-inclusion / acceptance / skip status.
+message GetEvmTxInclusionStatusRequestMessage {
+  string transactionHash = 1;
+}
+
+message GetEvmTxInclusionStatusResponseMessage {
+  repeated string includedIn = 1;
+  string acceptedIn = 2;
+  uint32 receiptIndex = 3;
+  uint32 lastSkipClass = 4;
+  RPCError error = 1000;
+}
+
 message GetValidatorStatusRequestMessage {}
 
 message GetValidatorStatusResponseMessage {

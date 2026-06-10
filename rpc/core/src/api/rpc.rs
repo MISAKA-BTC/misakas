@@ -404,6 +404,32 @@ pub trait RpcApi: Sync + Send + AnySync {
         Err(RpcError::NotImplemented)
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved EVM receipt.
+    async fn get_evm_transaction_receipt(&self, transaction_hash: String) -> RpcResult<GetEvmTransactionReceiptResponse> {
+        self.get_evm_transaction_receipt_call(None, GetEvmTransactionReceiptRequest { transaction_hash }).await
+    }
+    async fn get_evm_transaction_receipt_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetEvmTransactionReceiptRequest,
+    ) -> RpcResult<GetEvmTransactionReceiptResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): DA-inclusion / acceptance / skip status.
+    async fn get_evm_tx_inclusion_status(&self, transaction_hash: String) -> RpcResult<GetEvmTxInclusionStatusResponse> {
+        self.get_evm_tx_inclusion_status_call(None, GetEvmTxInclusionStatusRequest { transaction_hash }).await
+    }
+    async fn get_evm_tx_inclusion_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetEvmTxInclusionStatusRequest,
+    ) -> RpcResult<GetEvmTxInclusionStatusResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
+    }
+
     /// kaspa-pq Phase 11 (ADR-0010): the in-process validator service's status.
     async fn get_validator_status(&self) -> RpcResult<GetValidatorStatusResponse> {
         self.get_validator_status_call(None, GetValidatorStatusRequest {}).await

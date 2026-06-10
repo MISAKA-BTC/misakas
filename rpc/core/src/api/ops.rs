@@ -150,6 +150,10 @@ pub enum RpcApiOps {
     GetStakeBond = 155,
     /// kaspa-pq EVM Lane v0.4 (§16): submit a raw EIP-2718 EVM transaction to the EVM mempool
     SubmitEvmTransaction = 156,
+    /// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved EVM receipt (eth_getTransactionReceipt semantics)
+    GetEvmTransactionReceipt = 157,
+    /// kaspa-pq EVM Lane v0.4 (§16): DA-inclusion / acceptance / skip status of an EVM tx
+    GetEvmTxInclusionStatus = 158,
 }
 
 impl RpcApiOps {

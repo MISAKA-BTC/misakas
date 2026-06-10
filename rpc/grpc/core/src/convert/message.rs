@@ -394,6 +394,39 @@ from!(item: RpcResult<&kaspa_rpc_core::SubmitEvmTransactionResponse>, protowire:
     Self { transaction_hash: item.transaction_hash.clone(), error: None }
 });
 
+from!(item: &kaspa_rpc_core::GetEvmTransactionReceiptRequest, protowire::GetEvmTransactionReceiptRequestMessage, {
+    Self { transaction_hash: item.transaction_hash.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetEvmTransactionReceiptResponse>, protowire::GetEvmTransactionReceiptResponseMessage, {
+    Self {
+        found: item.found,
+        accepting_block: item.accepting_block.clone(),
+        evm_number: item.evm_number,
+        receipt_index: item.receipt_index,
+        succeeded: item.succeeded,
+        gas_used: item.gas_used,
+        cumulative_gas_used: item.cumulative_gas_used,
+        logs: item
+            .logs
+            .iter()
+            .map(|l| protowire::RpcEvmLogMessage { address: l.address.clone(), topics: l.topics.clone(), data: l.data.clone() })
+            .collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetEvmTxInclusionStatusRequest, protowire::GetEvmTxInclusionStatusRequestMessage, {
+    Self { transaction_hash: item.transaction_hash.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetEvmTxInclusionStatusResponse>, protowire::GetEvmTxInclusionStatusResponseMessage, {
+    Self {
+        included_in: item.included_in.clone(),
+        accepted_in: item.accepted_in.clone(),
+        receipt_index: item.receipt_index,
+        last_skip_class: item.last_skip_class,
+        error: None,
+    }
+});
+
 from!(&kaspa_rpc_core::GetValidatorStatusRequest, protowire::GetValidatorStatusRequestMessage);
 from!(item: RpcResult<&kaspa_rpc_core::GetValidatorStatusResponse>, protowire::GetValidatorStatusResponseMessage, {
     Self {
@@ -967,6 +1000,37 @@ try_from!(item: &protowire::SubmitEvmTransactionRequestMessage, kaspa_rpc_core::
 });
 try_from!(item: &protowire::SubmitEvmTransactionResponseMessage, RpcResult<kaspa_rpc_core::SubmitEvmTransactionResponse>, {
     Self { transaction_hash: item.transaction_hash.clone() }
+});
+
+try_from!(item: &protowire::GetEvmTransactionReceiptRequestMessage, kaspa_rpc_core::GetEvmTransactionReceiptRequest, {
+    Self { transaction_hash: item.transaction_hash.clone() }
+});
+try_from!(item: &protowire::GetEvmTransactionReceiptResponseMessage, RpcResult<kaspa_rpc_core::GetEvmTransactionReceiptResponse>, {
+    Self {
+        found: item.found,
+        accepting_block: item.accepting_block.clone(),
+        evm_number: item.evm_number,
+        receipt_index: item.receipt_index,
+        succeeded: item.succeeded,
+        gas_used: item.gas_used,
+        cumulative_gas_used: item.cumulative_gas_used,
+        logs: item
+            .logs
+            .iter()
+            .map(|l| kaspa_rpc_core::RpcEvmLog { address: l.address.clone(), topics: l.topics.clone(), data: l.data.clone() })
+            .collect(),
+    }
+});
+try_from!(item: &protowire::GetEvmTxInclusionStatusRequestMessage, kaspa_rpc_core::GetEvmTxInclusionStatusRequest, {
+    Self { transaction_hash: item.transaction_hash.clone() }
+});
+try_from!(item: &protowire::GetEvmTxInclusionStatusResponseMessage, RpcResult<kaspa_rpc_core::GetEvmTxInclusionStatusResponse>, {
+    Self {
+        included_in: item.included_in.clone(),
+        accepted_in: item.accepted_in.clone(),
+        receipt_index: item.receipt_index,
+        last_skip_class: item.last_skip_class,
+    }
 });
 
 try_from!(&protowire::GetValidatorStatusRequestMessage, kaspa_rpc_core::GetValidatorStatusRequest);

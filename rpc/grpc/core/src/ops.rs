@@ -93,6 +93,8 @@ pub enum KaspadPayloadOps {
     GetDnsConfirmation,
     // kaspa-pq EVM Lane v0.4 (§16)
     SubmitEvmTransaction,
+    GetEvmTransactionReceipt,
+    GetEvmTxInclusionStatus,
     // kaspa-pq Phase 11 (ADR-0010)
     GetValidatorStatus,
 

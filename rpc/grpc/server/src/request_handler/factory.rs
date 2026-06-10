@@ -85,6 +85,8 @@ impl Factory {
                 GetVirtualChainFromBlockV2,
                 GetDnsConfirmation,
                 SubmitEvmTransaction,
+                GetEvmTransactionReceipt,
+                GetEvmTxInclusionStatus,
                 GetValidatorStatus,
                 NotifyBlockAdded,
                 NotifyNewBlockTemplate,

@@ -75,6 +75,8 @@ message KaspadRequest {
     GetDnsConfirmationRequestMessage getDnsConfirmationRequest = 1116;
     GetValidatorStatusRequestMessage getValidatorStatusRequest = 1118;
     SubmitEvmTransactionRequestMessage submitEvmTransactionRequest = 1120;
+    GetEvmTransactionReceiptRequestMessage getEvmTransactionReceiptRequest = 1122;
+    GetEvmTxInclusionStatusRequestMessage getEvmTxInclusionStatusRequest = 1124;
   }
 }
 
@@ -145,6 +147,8 @@ message KaspadResponse {
     GetDnsConfirmationResponseMessage getDnsConfirmationResponse = 1117;
     GetValidatorStatusResponseMessage getValidatorStatusResponse = 1119;
     SubmitEvmTransactionResponseMessage submitEvmTransactionResponse = 1121;
+    GetEvmTransactionReceiptResponseMessage getEvmTransactionReceiptResponse = 1123;
+    GetEvmTxInclusionStatusResponseMessage getEvmTxInclusionStatusResponse = 1125;
   }
 }
 

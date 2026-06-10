@@ -118,6 +118,17 @@ fn parse_bond_outpoint(s: &str) -> RpcResult<kaspa_consensus_core::tx::Transacti
     Ok(kaspa_consensus_core::tx::TransactionOutpoint::new(transaction_id, index))
 }
 
+/// kaspa-pq EVM Lane v0.4 (§16): parse a 32-byte EVM tx hash (hex, optional 0x).
+fn parse_evm_tx_hash(s: &str) -> RpcResult<kaspa_hashes::EvmH256> {
+    let h = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    if h.len() != 64 {
+        return Err(RpcError::RpcSubsystem(format!("evm tx hash must be 64 hex chars, got {}", h.len())));
+    }
+    let mut bytes = [0u8; 32];
+    faster_hex::hex_decode(h.as_bytes(), &mut bytes).map_err(|e| RpcError::RpcSubsystem(format!("malformed evm tx hash: {e}")))?;
+    Ok(kaspa_hashes::EvmH256::from_bytes(bytes))
+}
+
 pub struct RpcCoreService {
     consensus_manager: Arc<ConsensusManager>,
     notifier: Arc<Notifier<Notification, ChannelConnection>>,
@@ -749,6 +760,62 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let hash =
             self.mining_manager.submit_evm_transaction(raw).map_err(|e| RpcError::RpcSubsystem(format!("evm mempool: {e}")))?;
         Ok(SubmitEvmTransactionResponse { transaction_hash: hash.to_string() })
+    }
+
+    async fn get_evm_transaction_receipt_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetEvmTransactionReceiptRequest,
+    ) -> RpcResult<GetEvmTransactionReceiptResponse> {
+        let tx_hash = parse_evm_tx_hash(&request.transaction_hash)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let view = session.async_get_evm_tx_receipt(tx_hash).await?;
+        Ok(match view {
+            None => GetEvmTransactionReceiptResponse::default(),
+            Some(v) => GetEvmTransactionReceiptResponse {
+                found: true,
+                accepting_block: v.accepting_block.to_string(),
+                evm_number: v.evm_number,
+                receipt_index: v.receipt_index,
+                succeeded: v.receipt.succeeded,
+                gas_used: v.receipt.gas_used,
+                cumulative_gas_used: v.receipt.cumulative_gas_used,
+                logs: v
+                    .receipt
+                    .logs
+                    .iter()
+                    .map(|l| RpcEvmLog {
+                        address: l.address.to_string(),
+                        topics: l.topics.iter().map(|t| t.to_string()).collect(),
+                        data: {
+                            let mut hex = vec![0u8; l.data.len() * 2];
+                            faster_hex::hex_encode(&l.data, &mut hex).expect("twice the input size");
+                            // SAFETY: hex_encode writes ASCII hex only.
+                            unsafe { String::from_utf8_unchecked(hex) }
+                        },
+                    })
+                    .collect(),
+            },
+        })
+    }
+
+    async fn get_evm_tx_inclusion_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetEvmTxInclusionStatusRequest,
+    ) -> RpcResult<GetEvmTxInclusionStatusResponse> {
+        let tx_hash = parse_evm_tx_hash(&request.transaction_hash)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let row = session.async_get_evm_tx_locations(tx_hash).await?;
+        // Canonical acceptance = the receipt view's resolution (§16: orphaned
+        // acceptances read as not-accepted at `latest`).
+        let receipt = session.async_get_evm_tx_receipt(tx_hash).await?;
+        Ok(GetEvmTxInclusionStatusResponse {
+            included_in: row.included_in.iter().map(|h| h.to_string()).collect(),
+            accepted_in: receipt.as_ref().map(|v| v.accepting_block.to_string()).unwrap_or_default(),
+            receipt_index: receipt.as_ref().map(|v| v.receipt_index).unwrap_or_default(),
+            last_skip_class: if receipt.is_some() { 0 } else { row.last_skip_class.unwrap_or(0) as u32 },
+        })
     }
 
     async fn get_validator_status_call(
