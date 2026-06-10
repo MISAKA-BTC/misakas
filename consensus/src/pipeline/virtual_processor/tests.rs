@@ -3232,3 +3232,141 @@ fn new_miner_data() -> MinerData {
     MinerData::new(p2pkh_mldsa87_spk(&payload), vec![])
 }
 
+
+/// kaspa-pq EVM Lane v0.4 (ADR-0020) — first EVM-ACTIVE pipeline integration
+/// test: with `evm_activation_daa_score = 0`, real blocks inserted through the
+/// full pipeline (header → body → virtual) drive the lazy chain-context step:
+/// each chain block's mergeset acceptance executes ONCE, its result + state
+/// snapshot persist atomically with its UTXO diff, the canonical EVM heads
+/// move with the sink, a commitment fault disqualifies the block from the
+/// chain (the block stays in the DAG — no poison), and the chain recovers
+/// past the disqualified block without re-executing prior EVM results.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_active_chain_executes_persists_and_moves_heads() {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader, EvmPayloadStoreReader};
+    use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+    use kaspa_consensus_core::evm::{DepositClaim, EvmAddress, EvmExecutionPayload, EvmStateSnapshot, EvmSystemOp};
+    use kaspa_evm::EvmBlockInput;
+    use kaspa_hashes::Hash64;
+
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let storage = consensus.consensus_clone().storage.clone();
+
+    let genesis = consensus.params().genesis.hash;
+    let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
+
+    // ---- b1: empty payload. The §4.3 version rule demands v2 post-activation;
+    // the producer (this test) computes the mergeset-acceptance commitment the
+    // same way the verifier will (mergeset = [genesis], no payloads ⇒ no
+    // accepted txs; EVM parent = none ⇒ genesis state).
+    let payload1 = EvmExecutionPayload::default();
+    let mut b1 = consensus.build_utxo_valid_block_with_parents(1.into(), vec![genesis], miner_data.clone(), vec![]);
+    b1.header.version = EVM_HEADER_VERSION;
+    b1.header.evm_payload_hash = payload1.payload_hash();
+    let input1 = EvmBlockInput {
+        parent: None,
+        header_timestamp_ms: b1.header.timestamp,
+        selected_parent_hash: genesis.as_bytes(),
+        blue_work_be: b1.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: b1.header.daa_score,
+        payload: &payload1,
+        accepted_txs: &[],
+    };
+    let (exp1, snap1) = kaspa_evm::snapshot::execute_block_from_snapshot(&EvmStateSnapshot::default(), &input1).unwrap();
+    b1.header.evm_commitment_root = exp1.header.commitment_root();
+    b1.evm_payload = payload1;
+    consensus.validate_and_insert_block(b1.to_immutable()).virtual_state_task.await.unwrap();
+
+    assert_eq!(storage.evm_header_store.get(1.into()).unwrap(), exp1.header, "b1's EVM result persisted by the pipeline");
+    assert_eq!(exp1.header.evm_number, 1);
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(1u64), "heads moved to the sink");
+
+    // ---- b2: carries its OWN system-op payload (a deposit claim — executes in
+    // b2 itself, §3.2) — proving payload persistence at body commit and EVM
+    // state chaining b1 → b2 through the real pipeline.
+    let payload2 = EvmExecutionPayload {
+        system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+            deposit_outpoint: Default::default(),
+            evm_address: EvmAddress::from_bytes([0xCC; 20]),
+            amount_sompi: 7,
+        })],
+        evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
+        ..Default::default()
+    };
+    let mut b2 = consensus.build_utxo_valid_block_with_parents(2.into(), vec![1.into()], miner_data.clone(), vec![]);
+    b2.header.version = EVM_HEADER_VERSION;
+    b2.header.evm_payload_hash = payload2.payload_hash();
+    let input2 = EvmBlockInput {
+        parent: Some(&exp1.header),
+        header_timestamp_ms: b2.header.timestamp,
+        selected_parent_hash: BlockHash::from(1u64).as_bytes(),
+        blue_work_be: b2.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: b2.header.daa_score,
+        payload: &payload2,
+        accepted_txs: &[], // b1's payload was empty ⇒ nothing to accept
+    };
+    let (exp2, _snap2) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap1, &input2).unwrap();
+    b2.header.evm_commitment_root = exp2.header.commitment_root();
+    b2.evm_payload = payload2.clone();
+    consensus.validate_and_insert_block(b2.to_immutable()).virtual_state_task.await.unwrap();
+
+    let stored2 = storage.evm_header_store.get(2.into()).unwrap();
+    assert_eq!(stored2, exp2.header);
+    assert_eq!(stored2.evm_number, 2);
+    assert_eq!(stored2.parent_state_root, exp1.header.state_root, "EVM state chains selected-parent-wise");
+    assert_eq!(storage.evm_payload_store.get(2.into()).unwrap(), payload2, "own payload persisted at body commit");
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(2u64));
+
+    // ---- b3: a commitment FAULT (producer lied about the acceptance result).
+    // The block enters the DAG but is disqualified from the chain — exactly the
+    // UTXO-fault shape — and no EVM rows are written for it.
+    let payload3 = EvmExecutionPayload::default();
+    let mut b3 = consensus.build_utxo_valid_block_with_parents(3.into(), vec![2.into()], miner_data.clone(), vec![]);
+    b3.header.version = EVM_HEADER_VERSION;
+    b3.header.evm_payload_hash = payload3.payload_hash();
+    b3.header.evm_commitment_root = Hash64::from_bytes([0xEE; 64]);
+    b3.evm_payload = payload3.clone();
+    let _ = consensus.validate_and_insert_block(b3.to_immutable()).virtual_state_task.await;
+    assert_eq!(consensus.block_status(3.into()), BlockStatus::StatusDisqualifiedFromChain, "commitment mismatch ⇒ chain-disqualified");
+    assert!(!storage.evm_header_store.has(3.into()).unwrap(), "no EVM rows for a disqualified block");
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(2u64), "heads did NOT follow the faulty block");
+
+    // ---- b4: a valid sibling continuation on b2 — the chain recovers past the
+    // disqualified b3 (b3 ∉ past(b4), so b3's payload is NOT accepted by b4)
+    // and the heads advance. b1/b2 results are reused (their diffs exist ⇒ the
+    // KeyNotFound execution arm is never re-entered: no re-execution on reorg).
+    let payload4 = EvmExecutionPayload::default();
+    let mut b4 = consensus.build_utxo_valid_block_with_parents(4.into(), vec![2.into()], miner_data, vec![]);
+    b4.header.version = EVM_HEADER_VERSION;
+    b4.header.evm_payload_hash = payload4.payload_hash();
+    let input4 = EvmBlockInput {
+        parent: Some(&exp2.header),
+        header_timestamp_ms: b4.header.timestamp,
+        selected_parent_hash: BlockHash::from(2u64).as_bytes(),
+        blue_work_be: b4.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: b4.header.daa_score,
+        payload: &payload4,
+        accepted_txs: &[], // b2's payload txs are empty (system ops are not delayed-accepted)
+    };
+    let snap2 = {
+        // Recompute b2's child snapshot the same way the node stored it.
+        let (_, s) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap1, &input2).unwrap();
+        s
+    };
+    let (exp4, _) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap2, &input4).unwrap();
+    b4.header.evm_commitment_root = exp4.header.commitment_root();
+    b4.evm_payload = payload4;
+    consensus.validate_and_insert_block(b4.to_immutable()).virtual_state_task.await.unwrap();
+
+    assert_eq!(storage.evm_header_store.get(4.into()).unwrap().evm_number, 3, "b4 is EVM block 3 on the selected chain");
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(4u64), "heads recovered past the disqualified block");
+
+    consensus.shutdown(wait_handles);
+}

@@ -28,8 +28,21 @@ impl HeaderProcessor {
         Ok(())
     }
 
+    /// kaspa-pq EVM Lane v0.4 (ADR-0020 §4.3): the header version is fork-gated
+    /// on the header's declared DAA score (the same pattern as
+    /// `check_pow_algo_id`; the declared score is itself consensus-validated
+    /// post-GHOSTDAG). Before activation only `BLOCK_VERSION` (v1) is admitted;
+    /// at/after activation only `EVM_HEADER_VERSION` (v2) is — every
+    /// post-activation block must carry the two EVM commitments, so the
+    /// selected-parent EVM lane has no gaps. Inert on every current network
+    /// (`evm_activation_daa_score = u64::MAX` ⇒ the rule stays `== v1`).
     fn check_header_version(&self, header: &Header) -> BlockProcessResult<()> {
-        if header.version != constants::BLOCK_VERSION {
+        let expected = if header.daa_score >= self.evm_activation_daa_score {
+            kaspa_consensus_core::constants::EVM_HEADER_VERSION
+        } else {
+            constants::BLOCK_VERSION
+        };
+        if header.version != expected {
             return Err(RuleError::WrongBlockVersion(header.version));
         }
         Ok(())

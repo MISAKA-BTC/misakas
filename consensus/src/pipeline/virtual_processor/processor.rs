@@ -21,6 +21,7 @@ use crate::{
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
             dns_state::{DbDnsStateStore, DnsStateStoreReader},
+            evm::{DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore, EvmHeaderStore, EvmStateStore},
             epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
@@ -153,6 +154,16 @@ pub struct VirtualStateProcessor {
     pub(super) dns_state_store: Arc<RwLock<DbDnsStateStore>>,
     pub(super) dns_params: Option<DnsParams>,
 
+    // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4). The lazy
+    // chain-context EVM step + canonical head pointers. Inert until
+    // `evm_activation_daa_score` is finite (`u64::MAX` on every current net).
+    pub(super) evm_header_store: Arc<DbEvmHeaderStore>,
+    pub(super) evm_state_store: Arc<DbEvmStateStore>,
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))] // read by the cfg(evm) chain-context step only
+    pub(super) evm_payload_store: Arc<DbEvmPayloadStore>,
+    pub(super) evm_heads_store: Arc<RwLock<DbEvmCanonicalHeadsStore>>,
+    pub(super) evm_activation_daa_score: u64,
+
     // Utxo-related stores
     pub(super) utxo_diffs_store: Arc<DbUtxoDiffsStore>,
     // kaspa-pq DNS overlay (ADR-0009 Addendum B §B.3(c)): per-block rewarded
@@ -243,6 +254,11 @@ impl VirtualStateProcessor {
             pruning_samples_store: storage.pruning_samples_store.clone(),
             stake_bonds_store: storage.stake_bonds_store.clone(),
             dns_state_store: storage.dns_state_store.clone(),
+            evm_header_store: storage.evm_header_store.clone(),
+            evm_state_store: storage.evm_state_store.clone(),
+            evm_payload_store: storage.evm_payload_store.clone(),
+            evm_heads_store: storage.evm_heads_store.clone(),
+            evm_activation_daa_score: params.evm_activation_daa_score,
             dns_params: params.dns_params.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
@@ -529,6 +545,28 @@ impl VirtualStateProcessor {
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
                     let res = self.verify_expected_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, &header);
 
+                    // kaspa-pq EVM Lane v0.4 (§2.3): the lazy chain-context EVM
+                    // step — the FIRST time a block becomes a selected-chain
+                    // candidate (this KeyNotFound arm), execute its mergeset
+                    // acceptance and verify `evm_commitment_root`. A mismatch
+                    // disqualifies the block from the chain exactly like a UTXO
+                    // fault (no poison; the block stays in the DAG). Returns
+                    // None (and is a single u64 compare) while the lane is
+                    // inert, and skips when the result already exists
+                    // (no-replay: a reorg never re-executes).
+                    let evm_staged = match res {
+                        Ok(()) => match self.evm_chain_context_step(current, selected_parent, &header, &ctx) {
+                            Ok(staged) => staged,
+                            Err(evm_error) => {
+                                info!("Block {} is disqualified from virtual chain (EVM): {}", current, evm_error);
+                                self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                chain_disqualified_counter += 1;
+                                continue;
+                            }
+                        },
+                        Err(_) => None,
+                    };
+
                     if let Err(rule_error) = res {
                         info!("Block {} is disqualified from virtual chain: {}", current, rule_error);
                         self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
@@ -557,6 +595,7 @@ impl VirtualStateProcessor {
                             ctx.validator_rewarded_keys,
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
+                            evm_staged,
                         );
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
@@ -572,6 +611,102 @@ impl VirtualStateProcessor {
         }
 
         diff_point
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§2.3): the lazy chain-context EVM step for one
+    /// selected-chain candidate. Gated on `evm_activation_daa_score` (a single
+    /// u64 compare on every current network); no-replay and the commitment
+    /// check live in `processes::evm::evm_validate`. `Err` = the block is
+    /// disqualified from the chain (commitment fault), mirroring a UTXO fault.
+    #[cfg(feature = "evm")]
+    fn evm_chain_context_step(
+        &self,
+        current: BlockHash,
+        selected_parent: BlockHash,
+        header: &Header,
+        ctx: &UtxoProcessingContext<'_>,
+    ) -> Result<Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)>, String> {
+        use crate::model::stores::evm::EvmPayloadStoreReader;
+        use crate::processes::evm::{evm_validate, EvmValidateError};
+        if header.daa_score < self.evm_activation_daa_score {
+            return Ok(None);
+        }
+        // The §4.3 version rule admits only v2+ headers at/after activation.
+        debug_assert!(header.version >= kaspa_consensus_core::constants::EVM_HEADER_VERSION);
+        // B's own payload (system_ops + the accepting coinbase); absent ⇒ empty
+        // (only non-empty payloads are persisted at body commit).
+        let own_payload = match self.evm_payload_store.get(current) {
+            Ok(p) => p,
+            Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => Default::default(),
+            Err(e) => return Err(format!("evm payload store: {e}")),
+        };
+        // AcceptedEvmTxs(B) source: the consensus-ordered mergeset (selected
+        // parent first, then ascending blue work — §3.1 canonical order).
+        let sorted_mergeset: Vec<BlockHash> = ctx.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
+        evm_validate(
+            &self.evm_header_store,
+            &self.evm_state_store,
+            &self.evm_payload_store,
+            current,
+            selected_parent,
+            &sorted_mergeset,
+            header,
+            &own_payload,
+        )
+        .map_err(|e| match e {
+            EvmValidateError::CommitmentMismatch { .. } => "evm_commitment_root mismatch (mergeset acceptance re-execution)".to_string(),
+            EvmValidateError::Exec(e) => format!("evm execution: {e}"),
+            EvmValidateError::Store(e) => format!("evm store: {e}"),
+        })
+    }
+
+    /// Non-`evm` builds cannot validate the lane. On every default network the
+    /// lane is `u64::MAX`-inert so this is unreachable; on an evm-ACTIVE net a
+    /// non-evm binary must refuse to follow a chain it cannot validate rather
+    /// than silently fork.
+    #[cfg(not(feature = "evm"))]
+    fn evm_chain_context_step(
+        &self,
+        _current: BlockHash,
+        _selected_parent: BlockHash,
+        header: &Header,
+        _ctx: &UtxoProcessingContext<'_>,
+    ) -> Result<Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)>, String> {
+        if header.daa_score >= self.evm_activation_daa_score {
+            panic!(
+                "the EVM lane is active at DAA {} but this kaspad was built without the `evm` feature — refusing to follow a chain it cannot validate (rebuild with --features evm)",
+                header.daa_score
+            );
+        }
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§10 / invariant I3): a virtual change only moves
+    /// the canonical EVM head POINTERS — never executes. Pre-§16 (RPC) policy:
+    /// `latest` = the new sink; `safe` tracks `latest`; `finalized` tracks the
+    /// pruning point once it carries an EVM result (consensus-final), else the
+    /// previous finalized. The blue-work-depth `safe` + DNS-confirmed-anchor
+    /// `finalized` selection lands with the RPC phase that first exposes the
+    /// tags. Inert (one u64 compare) on every current network.
+    fn update_evm_canonical_heads(&self, batch: &mut WriteBatch, sink: BlockHash) {
+        use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
+        if self.evm_activation_daa_score == u64::MAX {
+            return;
+        }
+        // The sink carries an EVM result iff the lane is live for it (it may
+        // predate activation right after the fork).
+        if !self.evm_header_store.has(sink).unwrap_or(false) {
+            return;
+        }
+        let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
+        let prev_finalized = self.evm_heads_store.read().get().ok().map(|h| h.finalized);
+        let finalized = if self.evm_header_store.has(pruning_point).unwrap_or(false) {
+            pruning_point
+        } else {
+            prev_finalized.unwrap_or(sink)
+        };
+        let heads = kaspa_consensus_core::evm::CanonicalEvmHeads { latest: sink, safe: sink, finalized };
+        self.evm_heads_store.write().set_batch(batch, heads).unwrap();
     }
 
     fn commit_utxo_state(
@@ -595,8 +730,17 @@ impl VirtualStateProcessor {
         // Persisted only when non-zero (the 0 default is never stored), so no row on any current
         // network. Children read it as their `parent_balance` for the reserve drip.
         reserve_balance: u64,
+        // kaspa-pq EVM Lane v0.4 (§2.3): the validated EVM rows staged by
+        // `evm_chain_context_step` — committed in THIS batch so the EVM result
+        // and the block's UTXO diff are atomic. `None` on every current
+        // network (lane inert) and on non-evm builds.
+        evm_staged: Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)>,
     ) {
         let mut batch = WriteBatch::default();
+        if let Some((evm_header, evm_snapshot)) = evm_staged {
+            self.evm_header_store.insert_batch(&mut batch, current, evm_header).unwrap();
+            self.evm_state_store.insert_batch(&mut batch, current, evm_snapshot).unwrap();
+        }
         self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
         self.utxo_multisets_store.insert_batch(&mut batch, current, multiset).unwrap();
         self.acceptance_data_store.insert_batch(&mut batch, current, Arc::new(acceptance_data)).unwrap();
@@ -714,6 +858,10 @@ impl VirtualStateProcessor {
         // the bounded recent epoch window and stage the updated DnsState into
         // the same batch. Inert unless the overlay is configured.
         self.update_dns_state(&mut batch, dns_sink);
+
+        // kaspa-pq EVM Lane v0.4 (§10 / invariant I3): a virtual change only
+        // MOVES the canonical EVM head pointers — no execution happens here.
+        self.update_evm_canonical_heads(&mut batch, dns_sink);
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): recompute the per-epoch
         // accumulator over the bounded selected-chain window ending at the new
@@ -2036,6 +2184,7 @@ impl VirtualStateProcessor {
             Vec::new(),
             0, // kaspa-pq ADR-0018 "本格版": genesis has no validator quality sub-pool.
             0, // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
+            None, // kaspa-pq ADR-0020 v0.4: genesis is EVM-inert (v0 header).
         );
 
         // Init the virtual selected chain store

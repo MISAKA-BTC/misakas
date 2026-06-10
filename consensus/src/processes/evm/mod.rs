@@ -62,11 +62,15 @@ mod driver {
         Store(StoreError),
     }
 
+    /// The staged output of a validated EVM step: the rows the caller commits
+    /// in ITS batch (atomically with the block's UTXO diff).
+    pub type EvmStaged = (kaspa_consensus_core::evm::EvmExecutionHeader, EvmStateSnapshot);
+
     /// The lazy chain-context EVM step (design v0.4 §2.3/§3): execute a
     /// selected-chain block's **mergeset acceptance** against its
     /// `selected_parent`'s committed state, verify the `evm_commitment_root`,
-    /// and stage the resulting header + child state snapshot into `batch`
-    /// (committed atomically with the block's UTXO diff by the caller).
+    /// and hand back the resulting header + child state snapshot for the caller
+    /// to commit atomically with the block's UTXO diff.
     ///
     /// `AcceptedEvmTxs(B)` (§3.1) is assembled here: `sorted_mergeset` is B's
     /// consensus mergeset in canonical order (it never contains B itself — the
@@ -82,22 +86,23 @@ mod driver {
     /// pointers, it never recomputes a block's EVM state. The genesis EVM state
     /// (`EVM_GENESIS_STATE_ROOT`, empty snapshot) is the implicit parent of the
     /// first EVM block.
+    /// Validation half of the step: computes + verifies and RETURNS the rows to
+    /// stage; `None` = already stored (no-replay). The caller decides the batch.
     #[allow(clippy::too_many_arguments)]
-    pub fn evm_validate_and_persist(
+    pub fn evm_validate(
         header_store: &DbEvmHeaderStore,
         state_store: &DbEvmStateStore,
         payload_store: &DbEvmPayloadStore,
-        batch: &mut WriteBatch,
         block: BlockHash,
         selected_parent: BlockHash,
         sorted_mergeset: &[BlockHash],
         l1_header: &Header,
         payload: &EvmExecutionPayload,
-    ) -> Result<(), EvmValidateError> {
+    ) -> Result<Option<EvmStaged>, EvmValidateError> {
         // No-replay: this block's EVM result was computed when it first joined the
         // selected chain; never recompute it.
         if header_store.has(block).map_err(EvmValidateError::Store)? {
-            return Ok(());
+            return Ok(None);
         }
 
         // AcceptedEvmTxs(B): the mergeset's payload txs in canonical order
@@ -145,19 +150,42 @@ mod driver {
             kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).map_err(|e| EvmValidateError::Exec(e.to_string()))?;
 
         // The only block-invalidating EVM condition: producer commitment mismatch
-        // (user tx failures are status-0 receipts inside `result`, design §6.3).
+        // (user tx failures are status-0 receipts inside `result`, design §6.2).
         if result.header.commitment_root() != l1_header.evm_commitment_root {
             return Err(EvmValidateError::CommitmentMismatch { block });
         }
 
-        header_store.insert_batch(batch, block, result.header).map_err(EvmValidateError::Store)?;
-        state_store.insert_batch(batch, block, child_snapshot).map_err(EvmValidateError::Store)?;
+        Ok(Some((result.header, child_snapshot)))
+    }
+
+    /// Validate + stage into `batch` in one call (the unit-test surface; the
+    /// virtual processor calls [`evm_validate`] and stages inside its own
+    /// `commit_utxo_state` batch instead).
+    #[allow(clippy::too_many_arguments)]
+    pub fn evm_validate_and_persist(
+        header_store: &DbEvmHeaderStore,
+        state_store: &DbEvmStateStore,
+        payload_store: &DbEvmPayloadStore,
+        batch: &mut WriteBatch,
+        block: BlockHash,
+        selected_parent: BlockHash,
+        sorted_mergeset: &[BlockHash],
+        l1_header: &Header,
+        payload: &EvmExecutionPayload,
+    ) -> Result<(), EvmValidateError> {
+        let Some((header, snapshot)) =
+            evm_validate(header_store, state_store, payload_store, block, selected_parent, sorted_mergeset, l1_header, payload)?
+        else {
+            return Ok(());
+        };
+        header_store.insert_batch(batch, block, header).map_err(EvmValidateError::Store)?;
+        state_store.insert_batch(batch, block, snapshot).map_err(EvmValidateError::Store)?;
         Ok(())
     }
 }
 
 #[cfg(feature = "evm")]
-pub use driver::{evm_validate_and_persist, EvmValidateError};
+pub use driver::{evm_validate, evm_validate_and_persist, EvmStaged, EvmValidateError};
 
 #[cfg(all(test, feature = "evm"))]
 mod tests {

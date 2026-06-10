@@ -9,6 +9,7 @@ use crate::{
         stores::{
             DB,
             block_transactions::DbBlockTransactionsStore,
+            evm::EvmPayloadStore as _,
             ghostdag::DbGhostdagStore,
             headers::DbHeadersStore,
             reachability::DbReachabilityStore,
@@ -64,6 +65,12 @@ pub struct BlockBodyProcessor {
     pub(super) _ghostdag_store: Arc<DbGhostdagStore>,
     pub(super) _headers_store: Arc<DbHeadersStore>,
     pub(super) block_transactions_store: Arc<DbBlockTransactionsStore>,
+    /// kaspa-pq EVM Lane v0.4 (§3.1): each block's own payload, persisted at
+    /// body commit so the virtual processor can assemble `AcceptedEvmTxs(B)`
+    /// from MERGESET blocks' payloads. Only non-empty payloads are written
+    /// (possible only on v2+ headers, i.e. post-activation), so this is inert
+    /// on every current network.
+    pub(super) evm_payload_store: Arc<crate::model::stores::evm::DbEvmPayloadStore>,
     pub(super) body_tips_store: Arc<RwLock<DbTipsStore>>,
 
     // Managers and services
@@ -115,6 +122,7 @@ impl BlockBodyProcessor {
             _ghostdag_store: storage.ghostdag_store.clone(),
             _headers_store: storage.headers_store.clone(),
             block_transactions_store: storage.block_transactions_store.clone(),
+            evm_payload_store: storage.evm_payload_store.clone(),
             body_tips_store: storage.body_tips_store.clone(),
 
             _reachability_service: services.reachability_service.clone(),
@@ -203,7 +211,7 @@ impl BlockBodyProcessor {
             }
         };
 
-        self.commit_body(block.hash(), block.header.direct_parents(), block.transactions.clone());
+        self.commit_body(block.hash(), block.header.direct_parents(), block.transactions.clone(), &block.evm_payload);
 
         // Send a BlockAdded notification
         self.notification_root
@@ -225,11 +233,25 @@ impl BlockBodyProcessor {
         Ok(mass)
     }
 
-    fn commit_body(self: &Arc<BlockBodyProcessor>, hash: BlockHash, parents: &[BlockHash], transactions: Arc<Vec<Transaction>>) {
+    fn commit_body(
+        self: &Arc<BlockBodyProcessor>,
+        hash: BlockHash,
+        parents: &[BlockHash],
+        transactions: Arc<Vec<Transaction>>,
+        evm_payload: &kaspa_consensus_core::evm::EvmExecutionPayload,
+    ) {
         let mut batch = WriteBatch::default();
 
         // This is an append only store so it requires no lock.
         self.block_transactions_store.insert_batch(&mut batch, hash, transactions).unwrap();
+
+        // kaspa-pq EVM Lane v0.4 (§3.1): persist the block's own payload so the
+        // virtual processor can later read it as part of some chain block's
+        // mergeset acceptance. Empty payloads are skipped (absent = empty);
+        // insert is idempotent under body revalidation.
+        if !evm_payload.is_empty() {
+            self.evm_payload_store.insert_batch(&mut batch, hash, evm_payload.clone()).unwrap();
+        }
 
         let mut body_tips_write_guard = self.body_tips_store.write();
         body_tips_write_guard.add_tip_batch(&mut batch, hash, parents).unwrap();
@@ -252,6 +274,6 @@ impl BlockBodyProcessor {
         drop(body_tips_write_guard);
 
         // Write the genesis body
-        self.commit_body(self.genesis.hash, &[], Arc::new(self.genesis.build_genesis_transactions()))
+        self.commit_body(self.genesis.hash, &[], Arc::new(self.genesis.build_genesis_transactions()), &Default::default())
     }
 }
