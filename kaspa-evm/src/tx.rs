@@ -30,6 +30,35 @@ impl std::fmt::Display for TxDecodeError {
     }
 }
 
+/// v0.4 §6.1 class-1 payload admission (syntactic, per tx): EIP-2718 decode +
+/// ECDSA signer recovery + chain-id binding + a declared gas-limit sanity band
+/// (≥ the 21k intrinsic floor, +32k for creates; ≤ the per-chain-block accepted
+/// gas cap, since a never-acceptable tx is not includable data). Runs at body
+/// validation, where a violation invalidates the PAYLOAD block itself — the
+/// producer chose its own payload (design v0.4 §6.2). Deterministic and
+/// context-free (no state, no basefee: those are class-2 acceptance skips).
+pub fn admit_tx(raw: &[u8]) -> Result<(), String> {
+    use kaspa_consensus_core::evm::{EVM_CHAIN_ID, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK};
+
+    let envelope = TxEnvelope::decode_2718(&mut &raw[..]).map_err(|e| format!("decode: {e}"))?;
+    envelope.recover_signer().map_err(|e| format!("signer recovery: {e}"))?;
+    match envelope.chain_id() {
+        Some(EVM_CHAIN_ID) => {}
+        other => return Err(format!("chain_id {other:?} != EVM_CHAIN_ID {EVM_CHAIN_ID}")),
+    }
+    let intrinsic_floor = if envelope.kind().is_create() { 53_000 } else { 21_000 };
+    if envelope.gas_limit() < intrinsic_floor {
+        return Err(format!("gas_limit {} below the intrinsic floor {intrinsic_floor}", envelope.gas_limit()));
+    }
+    if envelope.gas_limit() > MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK {
+        return Err(format!(
+            "gas_limit {} exceeds MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK {MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK}",
+            envelope.gas_limit()
+        ));
+    }
+    Ok(())
+}
+
 /// Decode one EIP-2718 typed-transaction byte string and map it to a revm
 /// `TxEnv` (recovering the sender). Deterministic: the same bytes always yield
 /// the same caller + env.

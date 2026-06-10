@@ -144,6 +144,12 @@ pub enum DatabaseStorePrefixes {
     EvmCanonicalHeads = 209,
     /// Keyed by EVM block hash: the L1 `BlockHash` (for `eth_getBlockByHash`).
     EvmBlockHashMap = 210,
+    /// Keyed by `BlockHash`: the block's own `EvmExecutionPayload` (v0.4 §3.1),
+    /// persisted at body validation. The virtual processor reads MERGESET
+    /// blocks' payloads from here to assemble `AcceptedEvmTxs(B)` — a chain
+    /// block's acceptance executes OTHER blocks' payloads, which the chain
+    /// block's own body cannot supply.
+    EvmPayload = 211,
 
     // ---- Separator ----
     /// Reserved as a separator

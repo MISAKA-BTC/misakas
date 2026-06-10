@@ -41,6 +41,24 @@ pub enum RuleError {
     #[error("block carries a non-empty EVM payload but its header version is below EVM_HEADER_VERSION (EVM lane not active)")]
     NonEmptyEvmPayloadBeforeActivation,
 
+    // v0.4 §4.1 / §6.2: the header's payload DATA commitment must match the body.
+    #[error("header evm_payload_hash does not match the block body's EVM payload")]
+    EvmPayloadHashMismatch,
+
+    // v0.4 §7 (D4 inclusion-side cap, checked at body validation).
+    #[error("EVM payload too large: {0} bytes exceeds MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK = {1}")]
+    EvmPayloadTooLarge(usize, usize),
+
+    // v0.4 §9.2: bounded producer-selected system ops.
+    #[error("too many EVM system ops: {0} exceeds MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK = {1}")]
+    TooManyEvmSystemOps(usize, usize),
+
+    // v0.4 §6.1 class 1: payload admission — a producer including a
+    // syntactically inadmissible tx invalidates ITS OWN block (cheap syntactic
+    // check; acceptance-time conditions are class-2 skips, never block faults).
+    #[error("EVM payload tx {0} fails class-1 admission: {1}")]
+    EvmPayloadTxInadmissible(usize, String),
+
     #[error("the block timestamp is too far into the future: block timestamp is {0} but maximum timestamp allowed is {1}")]
     TimeTooFarIntoTheFuture(u64, u64),
 

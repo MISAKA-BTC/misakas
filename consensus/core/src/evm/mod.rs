@@ -479,6 +479,14 @@ impl EvmExecutionPayload {
         self.system_ops.is_empty() && self.transactions.is_empty() && self.extra_data.is_empty() && self.evm_coinbase.is_zero()
     }
 
+    /// The canonical commitment encoding of this payload (borsh, design v0.4
+    /// §4.1) — the byte string [`payload_hash_of_bytes`] digests and the D4
+    /// inclusion-side size cap measures.
+    #[inline]
+    pub fn payload_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("EvmExecutionPayload borsh serialization is infallible")
+    }
+
     /// `EvmPayloadHash(B)` (design v0.4 §4.1) — keyed BLAKE2b-512 under
     /// [`MISAKA_EVM_PAYLOAD_HASH_CONTEXT`] over this payload's borsh encoding,
     /// carried in `Header::evm_payload_hash`. The DATA commitment: it binds the
@@ -487,9 +495,15 @@ impl EvmExecutionPayload {
     /// validation.
     #[inline]
     pub fn payload_hash(&self) -> Hash64 {
-        let bytes = borsh::to_vec(self).expect("EvmExecutionPayload borsh serialization is infallible");
-        blake2b_512_keyed(MISAKA_EVM_PAYLOAD_HASH_CONTEXT, &bytes)
+        payload_hash_of_bytes(&self.payload_bytes())
     }
+}
+
+/// [`EvmExecutionPayload::payload_hash`] over pre-serialized payload bytes
+/// (lets body validation serialize once for both the size cap and the digest).
+#[inline]
+pub fn payload_hash_of_bytes(bytes: &[u8]) -> Hash64 {
+    blake2b_512_keyed(MISAKA_EVM_PAYLOAD_HASH_CONTEXT, bytes)
 }
 
 impl MemSizeEstimator for EvmExecutionPayload {

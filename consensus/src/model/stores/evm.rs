@@ -6,11 +6,12 @@
 //! atomically. `insert_batch` refuses to overwrite an existing key — a backstop
 //! for the no-replay rule (a block's result is computed once, never re-executed).
 //!
-//! Reusing the reserved prefixes `EvmHeader` (201), `EvmStateDiff` (206) and
-//! `EvmCanonicalHeads` (209). Cache policies are caller-supplied; the store
-//! values all implement a real `MemSizeEstimator`, so any policy is safe.
+//! Reusing the reserved prefixes `EvmHeader` (201), `EvmStateDiff` (206),
+//! `EvmCanonicalHeads` (209) and `EvmPayload` (211). Cache policies are
+//! caller-supplied; the store values all implement a real `MemSizeEstimator`,
+//! so any policy is safe.
 
-use kaspa_consensus_core::evm::{CanonicalEvmHeads, EvmExecutionHeader, EvmStateSnapshot};
+use kaspa_consensus_core::evm::{CanonicalEvmHeads, EvmExecutionHeader, EvmExecutionPayload, EvmStateSnapshot};
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
     BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DirectDbWriter, StoreError, StoreResult, DB,
@@ -113,6 +114,59 @@ impl EvmStateStore for DbEvmStateStore {
 }
 
 // ---------------------------------------------------------------------------
+// EvmExecutionPayload store (prefix 211) — each block's OWN payload, persisted
+// at body validation (v0.4 §3.1). The virtual processor assembles
+// `AcceptedEvmTxs(B)` by reading B's MERGESET blocks' payloads from here in
+// canonical (sorted_mergeset) order. Unlike the result stores, re-insert is an
+// idempotent no-op: the payload is immutable data committed by the header's
+// `evm_payload_hash`, and a block body can legitimately be revalidated.
+// ---------------------------------------------------------------------------
+
+pub trait EvmPayloadStoreReader {
+    fn get(&self, hash: BlockHash) -> Result<EvmExecutionPayload, StoreError>;
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError>;
+}
+
+pub trait EvmPayloadStore: EvmPayloadStoreReader {
+    fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, payload: EvmExecutionPayload) -> Result<(), StoreError>;
+    fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmPayloadStore {
+    access: CachedDbAccess<BlockHash, EvmExecutionPayload, BlockHasher>,
+}
+
+impl DbEvmPayloadStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmPayload.into()) }
+    }
+}
+
+impl EvmPayloadStoreReader for DbEvmPayloadStore {
+    fn get(&self, hash: BlockHash) -> Result<EvmExecutionPayload, StoreError> {
+        self.access.read(hash)
+    }
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
+        self.access.has(hash)
+    }
+}
+
+impl EvmPayloadStore for DbEvmPayloadStore {
+    fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, payload: EvmExecutionPayload) -> Result<(), StoreError> {
+        if self.access.has(hash)? {
+            // Idempotent: the payload is immutable per block (committed by
+            // `evm_payload_hash`); a body revalidation must not fail here.
+            return Ok(());
+        }
+        self.access.write(BatchDbWriter::new(batch), hash, payload)
+    }
+    fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), hash)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CanonicalEvmHeads singleton (prefix 209) — latest / safe / finalized pointers,
 // updated on each virtual-state commit (mirrors `DbDnsStateStore`).
 // ---------------------------------------------------------------------------
@@ -195,6 +249,18 @@ mod tests {
         state_store.insert_batch(&mut batch, bh(1), snap.clone()).unwrap();
         db.write(batch).unwrap();
         assert_eq!(state_store.get(bh(1)).unwrap(), snap);
+
+        // Payload store: round-trips and re-insert is an idempotent no-op (the
+        // payload is immutable data committed by `evm_payload_hash`).
+        let payload_store = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty);
+        let payload = EvmExecutionPayload { transactions: vec![vec![1, 2, 3]], ..Default::default() };
+        let mut batch = WriteBatch::default();
+        payload_store.insert_batch(&mut batch, bh(1), payload.clone()).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(payload_store.get(bh(1)).unwrap(), payload);
+        let mut batch = WriteBatch::default();
+        payload_store.insert_batch(&mut batch, bh(1), payload.clone()).unwrap();
+        assert!(matches!(payload_store.get(bh(2)), Err(StoreError::KeyNotFound(_))), "absent payload reads as KeyNotFound (driver maps it to empty)");
 
         // Canonical heads singleton: absent → set → read.
         let mut heads_store = DbEvmCanonicalHeadsStore::new(db.clone());
