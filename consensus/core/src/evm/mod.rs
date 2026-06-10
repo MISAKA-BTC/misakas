@@ -575,6 +575,49 @@ pub struct EvmExecutionResult {
 
 impl MemSizeEstimator for EvmExecutionResult {}
 
+// ---------------------------------------------------------------------------
+// EvmStateSnapshot — persisted full EVM account state (design §11, P3).
+// ---------------------------------------------------------------------------
+
+/// One account in a persisted EVM state snapshot. Secp-free + borsh, so the
+/// consensus stores (P3, prefix 206) can persist EVM state without pulling revm:
+/// the `evm`-feature executor converts `EvmAccountSnapshot <-> revm AccountInfo`
+/// at its boundary. `storage` is sorted by slot (deterministic encoding).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmAccountSnapshot {
+    pub address: EvmAddress,
+    pub nonce: u64,
+    pub balance: EvmU256,
+    pub code_hash: EvmH256,
+    /// Account bytecode (empty for an EOA).
+    pub code: Vec<u8>,
+    /// Non-zero storage slots, sorted by slot key.
+    pub storage: Vec<(EvmU256, EvmU256)>,
+}
+
+impl MemSizeEstimator for EvmAccountSnapshot {}
+
+/// A full EVM account-state snapshot after a block (design §11.1). P3 stores one
+/// per block hash to seed the executor for the block's selected children; a later
+/// phase replaces this O(state) form with an incremental persistent trie.
+/// Accounts are sorted by address (deterministic encoding). The empty snapshot is
+/// the EVM genesis state (root = `EVM_GENESIS_STATE_ROOT`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmStateSnapshot {
+    pub accounts: Vec<EvmAccountSnapshot>,
+}
+
+impl EvmStateSnapshot {
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.accounts.is_empty()
+    }
+}
+
+impl MemSizeEstimator for EvmStateSnapshot {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

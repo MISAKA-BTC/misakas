@@ -14,6 +14,7 @@
 pub mod env;
 pub mod executor;
 pub mod roots;
+pub mod snapshot;
 pub mod state;
 pub mod tx;
 
