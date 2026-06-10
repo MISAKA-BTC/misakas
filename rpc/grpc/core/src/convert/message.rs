@@ -387,6 +387,13 @@ from!(item: RpcResult<&kaspa_rpc_core::GetDnsConfirmationResponse>, protowire::G
     }
 });
 
+from!(item: &kaspa_rpc_core::SubmitEvmTransactionRequest, protowire::SubmitEvmTransactionRequestMessage, {
+    Self { transaction: item.transaction.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::SubmitEvmTransactionResponse>, protowire::SubmitEvmTransactionResponseMessage, {
+    Self { transaction_hash: item.transaction_hash.clone(), error: None }
+});
+
 from!(&kaspa_rpc_core::GetValidatorStatusRequest, protowire::GetValidatorStatusRequestMessage);
 from!(item: RpcResult<&kaspa_rpc_core::GetValidatorStatusResponse>, protowire::GetValidatorStatusResponseMessage, {
     Self {
@@ -953,6 +960,13 @@ try_from!(item: &protowire::GetDnsConfirmationResponseMessage, RpcResult<kaspa_r
         block_is_confirmed_anchor: item.block_is_confirmed_anchor,
         block_daa_score: item.block_daa_score,
     }
+});
+
+try_from!(item: &protowire::SubmitEvmTransactionRequestMessage, kaspa_rpc_core::SubmitEvmTransactionRequest, {
+    Self { transaction: item.transaction.clone() }
+});
+try_from!(item: &protowire::SubmitEvmTransactionResponseMessage, RpcResult<kaspa_rpc_core::SubmitEvmTransactionResponse>, {
+    Self { transaction_hash: item.transaction_hash.clone() }
 });
 
 try_from!(&protowire::GetValidatorStatusRequestMessage, kaspa_rpc_core::GetValidatorStatusRequest);

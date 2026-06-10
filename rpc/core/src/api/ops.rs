@@ -148,6 +148,8 @@ pub enum RpcApiOps {
     GetValidatorAttestationTarget = 154,
     /// kaspa-pq Phase 12 (ADR-0011): a stake bond's status at the node's sink
     GetStakeBond = 155,
+    /// kaspa-pq EVM Lane v0.4 (§16): submit a raw EIP-2718 EVM transaction to the EVM mempool
+    SubmitEvmTransaction = 156,
 }
 
 impl RpcApiOps {

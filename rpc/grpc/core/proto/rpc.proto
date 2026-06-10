@@ -673,6 +673,17 @@ message GetDnsConfirmationResponseMessage {
 }
 
 // kaspa-pq Phase 11 (ADR-0010): the in-process validator service status.
+// kaspa-pq EVM Lane v0.4 (§16): submit a raw EIP-2718 EVM transaction (hex) to
+// the node's EVM mempool. Returns the Ethereum tx hash (keccak256 of the bytes).
+message SubmitEvmTransactionRequestMessage {
+  string transaction = 1;
+}
+
+message SubmitEvmTransactionResponseMessage {
+  string transactionHash = 1;
+  RPCError error = 1000;
+}
+
 message GetValidatorStatusRequestMessage {}
 
 message GetValidatorStatusResponseMessage {

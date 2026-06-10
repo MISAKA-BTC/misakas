@@ -1602,6 +1602,56 @@ impl Deserializer for GetDnsConfirmationResponse {
 // kaspa-pq Phase 11 (ADR-0010): getValidatorStatus. Reports the in-process
 // validator service's operational status. `enabled` is false when the node was
 // started without `--enable-validator`, in which case the other fields are defaults.
+/// kaspa-pq EVM Lane v0.4 (§16): submit a raw EIP-2718 EVM transaction (hex,
+/// optional 0x prefix) to the node's EVM mempool. Admission applies the
+/// body-validation class-1 rule; the tx is data-only until a chain block
+/// ACCEPTS the payload block that includes it (mergeset delayed acceptance).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitEvmTransactionRequest {
+    /// Raw EIP-2718 transaction bytes, hex-encoded (eth_sendRawTransaction convention).
+    pub transaction: String,
+}
+
+impl Serializer for SubmitEvmTransactionRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.transaction, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for SubmitEvmTransactionRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let transaction = load!(String, reader)?;
+        Ok(Self { transaction })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitEvmTransactionResponse {
+    /// Ethereum transaction hash (keccak256 of the raw bytes), hex.
+    pub transaction_hash: String,
+}
+
+impl Serializer for SubmitEvmTransactionResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.transaction_hash, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for SubmitEvmTransactionResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let transaction_hash = load!(String, reader)?;
+        Ok(Self { transaction_hash })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetValidatorStatusRequest {}

@@ -72,9 +72,9 @@ pub trait ConsensusApi: Send + Sync {
         miner_data: MinerData,
         tx_selector: Box<dyn TemplateTransactionSelector>,
         build_mode: TemplateBuildMode,
-        evm_payload_candidates: Vec<Vec<u8>>,
+        evm_template_data: crate::evm::EvmTemplateData,
     ) -> Result<BlockTemplate, RuleError> {
-        let _ = evm_payload_candidates;
+        let _ = evm_template_data;
         self.build_block_template(miner_data, tx_selector, build_mode)
     }
 

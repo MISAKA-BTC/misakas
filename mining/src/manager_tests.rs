@@ -925,7 +925,7 @@ mod tests {
         // Limit the orphan pool to 2 transactions
         config.maximum_orphan_transaction_count = 2;
         let counters = Arc::new(MiningCounters::default());
-        let mining_manager = MiningManager::with_config(config.clone(), None, counters);
+        let mining_manager = MiningManager::with_config(config.clone(), None, counters, None);
 
         // Create pairs of transaction parent-and-child pairs according to the test vector
         let (parent_txs, child_txs) = create_arrays_of_parent_and_children_transactions(&consensus, tests.len());
@@ -1153,7 +1153,7 @@ mod tests {
         let tx_size = txs[0].mempool_estimated_bytes();
         let size_limit = TX_COUNT * tx_size;
         config.mempool_size_limit = size_limit;
-        let mining_manager = MiningManager::with_config(config, None, counters);
+        let mining_manager = MiningManager::with_config(config, None, counters, None);
 
         for tx in txs {
             validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), tx).unwrap();
@@ -1289,7 +1289,7 @@ mod tests {
             &miner_data_2,
             Box::new(TakeAllSelector::new(transactions)),
             TemplateBuildMode::Standard,
-            Vec::new(),
+            Default::default(),
         );
         assert!(result.is_ok(), "build block template failed for miner data 2");
         let expected_template = result.unwrap();

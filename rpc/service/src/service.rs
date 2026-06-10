@@ -730,6 +730,27 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         Ok(response)
     }
 
+    async fn submit_evm_transaction_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: SubmitEvmTransactionRequest,
+    ) -> RpcResult<SubmitEvmTransactionResponse> {
+        // kaspa-pq EVM Lane v0.4 (§16): hex → raw EIP-2718 bytes → EVM mempool.
+        // Admission is the body-validation class-1 rule (non-evm builds refuse).
+        // P2P relay of pending EVM txs is the §14 gossip item — until then the
+        // tx reaches the chain via this node's own template payload.
+        let hex_str = request.transaction.strip_prefix("0x").unwrap_or(&request.transaction);
+        if hex_str.len() % 2 != 0 {
+            return Err(RpcError::RpcSubsystem("odd-length transaction hex".to_string()));
+        }
+        let mut raw = vec![0u8; hex_str.len() / 2];
+        faster_hex::hex_decode(hex_str.as_bytes(), &mut raw)
+            .map_err(|e| RpcError::RpcSubsystem(format!("malformed transaction hex: {e}")))?;
+        let hash =
+            self.mining_manager.submit_evm_transaction(raw).map_err(|e| RpcError::RpcSubsystem(format!("evm mempool: {e}")))?;
+        Ok(SubmitEvmTransactionResponse { transaction_hash: hash.to_string() })
+    }
+
     async fn get_validator_status_call(
         &self,
         _connection: Option<&DynRpcConnection>,

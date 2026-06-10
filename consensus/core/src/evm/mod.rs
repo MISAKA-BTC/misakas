@@ -505,6 +505,17 @@ pub struct EvmExecutionPayload {
     pub extra_data: Vec<u8>,
 }
 
+/// kaspa-pq EVM Lane v0.4 (§15 step 6 / §16): the producer-side inputs for the
+/// node's OWN template payload — the mempool-selected raw EIP-2718 txs plus the
+/// miner's declared EVM coinbase (`--evm-fee-recipient`, §8.2: receives the
+/// priority fees of this payload's txs when they are accepted). `Default` = no
+/// candidates + zero coinbase = the empty pre-§16 payload.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EvmTemplateData {
+    pub evm_coinbase: EvmAddress,
+    pub transactions: Vec<Vec<u8>>,
+}
+
 impl EvmExecutionPayload {
     /// An EVM-inert payload (`== Default`): no system ops, no txs, no extra
     /// data, zero coinbase. Pre-activation blocks must satisfy this.

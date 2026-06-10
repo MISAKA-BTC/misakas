@@ -3401,10 +3401,18 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
             MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
             Box::new(OnetimeTxSelector::new(Default::default())),
             TemplateBuildMode::Standard,
-            vec![raw_n0.clone()],
+            kaspa_consensus_core::evm::EvmTemplateData {
+                evm_coinbase: kaspa_consensus_core::evm::EvmAddress::from_bytes([0xCB; 20]),
+                transactions: vec![raw_n0.clone()],
+            },
         )
         .unwrap();
     assert_eq!(template.block.evm_payload.transactions, vec![raw_n0], "the candidate landed in the own payload");
+    assert_eq!(
+        template.block.evm_payload.evm_coinbase,
+        kaspa_consensus_core::evm::EvmAddress::from_bytes([0xCB; 20]),
+        "the declared fee recipient landed as the payload coinbase (§8.2)"
+    );
     assert_eq!(
         template.block.header.evm_payload_hash,
         template.block.evm_payload.payload_hash(),

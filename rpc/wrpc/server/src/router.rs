@@ -71,6 +71,7 @@ impl Router {
                 GetVirtualChainFromBlock,
                 GetVirtualChainFromBlockV2,
                 GetDnsConfirmation,
+                SubmitEvmTransaction,
                 GetValidatorStatus,
                 GetValidatorAttestationTarget,
                 GetStakeBond,

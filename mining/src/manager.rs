@@ -45,6 +45,10 @@ pub struct MiningManager {
     // kaspa-pq EVM Lane v0.4 (§15/§16): the EVM tx pool, SEPARATE from the UTXO
     // mempool (§14.1 budget isolation). Fills the node's own template payload.
     evm_mempool: RwLock<crate::evm_mempool::EvmMempool>,
+    // §8.2 / §16: the miner's declared EVM coinbase (`--evm-fee-recipient`) —
+    // claims the priority fees of this node's own payload txs on acceptance.
+    // Zero (None) burns nothing but credits the zero address; set it on miners.
+    evm_fee_recipient: Option<kaspa_consensus_core::evm::EvmAddress>,
     counters: Arc<MiningCounters>,
 }
 
@@ -57,7 +61,7 @@ impl MiningManager {
         counters: Arc<MiningCounters>,
     ) -> Self {
         let config = Config::build_default(target_time_per_block, relay_non_std_transactions, max_block_mass);
-        Self::with_config(config, cache_lifetime, counters)
+        Self::with_config(config, cache_lifetime, counters, None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -73,6 +77,8 @@ impl MiningManager {
         // `true`; the `MiningManager::new` test path leaves it `false` (base-config default) so the
         // non-ML-DSA mempool unit tests keep exercising the upstream class table.
         pq_only: bool,
+        // kaspa-pq EVM Lane v0.4 (§16): the miner's EVM coinbase (None = zero).
+        evm_fee_recipient: Option<kaspa_consensus_core::evm::EvmAddress>,
     ) -> Self {
         let mut config =
             Config::build_default(target_time_per_block, relay_non_std_transactions, max_block_mass).apply_ram_scale(ram_scale);
@@ -82,15 +88,20 @@ impl MiningManager {
         // signature. The `MiningManager::new` test path keeps the upstream base rate so the mempool
         // unit fixtures stay calibrated.
         config.minimum_relay_transaction_fee = crate::mempool::config::PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE;
-        Self::with_config(config, cache_lifetime, counters)
+        Self::with_config(config, cache_lifetime, counters, evm_fee_recipient)
     }
 
-    pub(crate) fn with_config(config: Config, cache_lifetime: Option<u64>, counters: Arc<MiningCounters>) -> Self {
+    pub(crate) fn with_config(
+        config: Config,
+        cache_lifetime: Option<u64>,
+        counters: Arc<MiningCounters>,
+        evm_fee_recipient: Option<kaspa_consensus_core::evm::EvmAddress>,
+    ) -> Self {
         let config = Arc::new(config);
         let mempool = RwLock::new(Mempool::new(config.clone(), counters.clone()));
         let block_template_cache = BlockTemplateCache::new(cache_lifetime);
         let evm_mempool = RwLock::new(crate::evm_mempool::EvmMempool::new());
-        Self { config, block_template_cache, mempool, evm_mempool, counters }
+        Self { config, block_template_cache, mempool, evm_mempool, evm_fee_recipient, counters }
     }
 
     /// kaspa-pq EVM Lane v0.4 (§16): admit a raw EIP-2718 EVM transaction into
@@ -158,10 +169,13 @@ impl MiningManager {
         // kaspa-pq EVM Lane v0.4 (§15 step 6): the node's own payload candidates,
         // fee-ordered + nonce-ascending + byte-capped. Selected once per template
         // (inclusion only — acceptance/execution happens in a later chain block).
-        let evm_payload_candidates = {
-            let mut pool = self.evm_mempool.write();
-            pool.expire(unix_now() / 1000);
-            pool.select_candidates(kaspa_consensus_core::evm::MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK)
+        let evm_template_data = kaspa_consensus_core::evm::EvmTemplateData {
+            evm_coinbase: self.evm_fee_recipient.unwrap_or_default(),
+            transactions: {
+                let mut pool = self.evm_mempool.write();
+                pool.expire(unix_now() / 1000);
+                pool.select_candidates(kaspa_consensus_core::evm::MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK)
+            },
         };
         let mut attempts: u64 = 0;
         loop {
@@ -174,7 +188,7 @@ impl MiningManager {
             } else {
                 TemplateBuildMode::Infallible
             };
-            match block_template_builder.build_block_template(consensus, miner_data, selector, build_mode, evm_payload_candidates.clone()) {
+            match block_template_builder.build_block_template(consensus, miner_data, selector, build_mode, evm_template_data.clone()) {
                 Ok(block_template) => {
                     let block_template = cache_lock.set_immutable_cached_template(block_template);
                     match attempts {
@@ -918,6 +932,12 @@ impl MiningManagerProxy {
     }
 
     /// Returns realtime feerate estimations based on internal mempool state
+    /// kaspa-pq EVM Lane v0.4 (§16): admit a raw EIP-2718 EVM tx into the EVM
+    /// mempool (sync + cheap: decode + k256 recovery + pool insert).
+    pub fn submit_evm_transaction(&self, raw: Vec<u8>) -> Result<kaspa_hashes::EvmH256, crate::evm_mempool::EvmMempoolError> {
+        self.inner.submit_evm_transaction(raw)
+    }
+
     pub async fn get_realtime_feerate_estimations(self) -> FeerateEstimations {
         spawn_blocking(move || self.inner.get_realtime_feerate_estimations()).await.unwrap()
     }

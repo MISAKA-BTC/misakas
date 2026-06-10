@@ -67,6 +67,7 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetVirtualChainFromBlockV2);
     impl_into_kaspad_request!(GetDnsConfirmation);
     impl_into_kaspad_request!(GetValidatorStatus);
+    impl_into_kaspad_request!(SubmitEvmTransaction);
 
     impl_into_kaspad_request!(NotifyBlockAdded);
     impl_into_kaspad_request!(NotifyNewBlockTemplate);
@@ -208,6 +209,7 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetVirtualChainFromBlockV2);
     impl_into_kaspad_response!(GetDnsConfirmation);
     impl_into_kaspad_response!(GetValidatorStatus);
+    impl_into_kaspad_response!(SubmitEvmTransaction);
 
     impl_into_kaspad_notify_response!(NotifyBlockAdded);
     impl_into_kaspad_notify_response!(NotifyNewBlockTemplate);
