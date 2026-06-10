@@ -37,6 +37,92 @@ pub fn admit_evm_payload_txs(_payload: &kaspa_consensus_core::evm::EvmExecutionP
     Ok(())
 }
 
+/// v0.4 §9.2: validate a chain block's own `DepositClaim` system ops against
+/// the claim view (the selected-parent UTXO set composed with the mergeset
+/// diff so far — a lock spent by a mergeset tx is no longer claimable, and a
+/// lock created in B's own body is not visible yet, the "same-block" rule).
+/// Returns the consumed `(outpoint, entry)` pairs in payload order.
+///
+/// Every violation is a fault of the ACCEPTING producer (it selected its own
+/// system ops, §6.2): missing/spent lock, a non-lock outpoint, field mismatch
+/// (address / amount / tip), tip > amount, a claim at/after the refund
+/// timeout (AC-2 exclusivity), or a duplicate outpoint within the block.
+/// Pure + always compiled (the lock parses via kaspa-txscript; no revm).
+pub fn validate_evm_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::UtxoView>(
+    payload: &kaspa_consensus_core::evm::EvmExecutionPayload,
+    claim_view: &V,
+    pov_daa_score: u64,
+) -> Result<Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>, String> {
+    use kaspa_consensus_core::evm::EvmSystemOp;
+    let mut consumed = Vec::with_capacity(payload.system_ops.len());
+    let mut seen = std::collections::HashSet::new();
+    for (i, op) in payload.system_ops.iter().enumerate() {
+        let EvmSystemOp::DepositClaim(claim) = op;
+        if !seen.insert(claim.deposit_outpoint) {
+            return Err(format!("system op #{i}: duplicate deposit-lock outpoint {}", claim.deposit_outpoint));
+        }
+        let Some(entry) = claim_view.get(&claim.deposit_outpoint) else {
+            return Err(format!("system op #{i}: deposit lock {} is absent/spent in the claim view", claim.deposit_outpoint));
+        };
+        let Some(lock) = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key) else {
+            return Err(format!("system op #{i}: outpoint {} is not an EVM_DEPOSIT_LOCK output", claim.deposit_outpoint));
+        };
+        if lock.evm_address != claim.evm_address.as_bytes() {
+            return Err(format!("system op #{i}: claim address does not match the lock"));
+        }
+        if entry.amount != claim.amount_sompi {
+            return Err(format!("system op #{i}: claim amount {} != lock value {}", claim.amount_sompi, entry.amount));
+        }
+        if lock.claim_tip_sompi != claim.claim_tip_sompi {
+            return Err(format!("system op #{i}: claim tip {} != lock tip {}", claim.claim_tip_sompi, lock.claim_tip_sompi));
+        }
+        if claim.claim_tip_sompi > claim.amount_sompi {
+            return Err(format!("system op #{i}: tip exceeds the locked amount"));
+        }
+        // AC-2 exclusivity: claim valid iff accepting daa < timeout (at/after
+        // the timeout the lock belongs to the refund path).
+        if pov_daa_score >= lock.timeout_daa_score {
+            return Err(format!(
+                "system op #{i}: claim at daa {pov_daa_score} ≥ refund timeout {} (refund window open)",
+                lock.timeout_daa_score
+            ));
+        }
+        consumed.push((claim.deposit_outpoint, entry));
+    }
+    Ok(consumed)
+}
+
+/// v0.4 §9 — fold the bridge's UTXO side-effects into the accepting block's
+/// OWN per-block diff + multiset (the slashing-side-effect mechanism,
+/// verbatim): consumed deposit locks leave the UTXO set; each `WithdrawOp`
+/// materializes as a synthetic output at
+/// `(synthetic_withdrawal_txid(block, tx, op), 0)`. Because they ride the
+/// persisted per-block diff, reorg apply/revert is the existing UTXO
+/// machinery — the EVM side never reverts (pointer-switch only), so combined
+/// supply is conserved across any reorg with zero bespoke code (invariant I7).
+pub fn apply_evm_bridge_effects(
+    diff: &mut kaspa_consensus_core::utxo::utxo_diff::UtxoDiff,
+    multiset: &mut kaspa_muhash::MuHash,
+    block: kaspa_consensus_core::BlockHash,
+    pov_daa_score: u64,
+    consumed_locks: &[(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)],
+    withdrawals: &[kaspa_consensus_core::evm::WithdrawOp],
+) -> Result<(), String> {
+    use kaspa_consensus_core::muhash::MuHashExtensions;
+    for (outpoint, entry) in consumed_locks {
+        diff.remove_utxo(outpoint, entry).map_err(|e| format!("consume deposit lock {outpoint}: {e}"))?;
+        multiset.remove_utxo(outpoint, entry);
+    }
+    for w in withdrawals {
+        let txid = kaspa_consensus_core::evm::synthetic_withdrawal_txid(block, w.evm_tx_index, w.op_index);
+        let outpoint = kaspa_consensus_core::tx::TransactionOutpoint::new(txid, 0);
+        let entry = kaspa_consensus_core::tx::UtxoEntry::new(w.amount_sompi, w.script_public_key.clone(), pov_daa_score, false);
+        diff.add_utxo(outpoint, entry.clone()).map_err(|e| format!("materialize withdrawal {outpoint}: {e}"))?;
+        multiset.add_utxo(&outpoint, &entry);
+    }
+    Ok(())
+}
+
 #[cfg(feature = "evm")]
 mod driver {
     use crate::model::stores::evm::{
@@ -62,9 +148,10 @@ mod driver {
         Store(StoreError),
     }
 
-    /// The staged output of a validated EVM step: the rows the caller commits
-    /// in ITS batch (atomically with the block's UTXO diff).
-    pub type EvmStaged = (kaspa_consensus_core::evm::EvmExecutionHeader, EvmStateSnapshot);
+    /// The staged output of a validated EVM step: the full execution result
+    /// (its `.header` row + `withdrawals` feed the bridge) and the child state
+    /// snapshot, committed by the caller atomically with the block's UTXO diff.
+    pub type EvmStaged = (kaspa_consensus_core::evm::EvmExecutionResult, EvmStateSnapshot);
 
     /// The lazy chain-context EVM step (design v0.4 §2.3/§3): execute a
     /// selected-chain block's **mergeset acceptance** against its
@@ -155,7 +242,7 @@ mod driver {
             return Err(EvmValidateError::CommitmentMismatch { block });
         }
 
-        Ok(Some((result.header, child_snapshot)))
+        Ok(Some((result, child_snapshot)))
     }
 
     /// Validate + stage into `batch` in one call (the unit-test surface; the
@@ -173,12 +260,12 @@ mod driver {
         l1_header: &Header,
         payload: &EvmExecutionPayload,
     ) -> Result<(), EvmValidateError> {
-        let Some((header, snapshot)) =
+        let Some((result, snapshot)) =
             evm_validate(header_store, state_store, payload_store, block, selected_parent, sorted_mergeset, l1_header, payload)?
         else {
             return Ok(());
         };
-        header_store.insert_batch(batch, block, header).map_err(EvmValidateError::Store)?;
+        header_store.insert_batch(batch, block, result.header).map_err(EvmValidateError::Store)?;
         state_store.insert_batch(batch, block, snapshot).map_err(EvmValidateError::Store)?;
         Ok(())
     }
@@ -186,6 +273,112 @@ mod driver {
 
 #[cfg(feature = "evm")]
 pub use driver::{evm_validate, evm_validate_and_persist, EvmStaged, EvmValidateError};
+
+#[cfg(test)]
+mod bridge_tests {
+    use super::*;
+    use kaspa_consensus_core::evm::{DepositClaim, EvmAddress, EvmExecutionPayload, EvmSystemOp, WithdrawOp};
+    use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionOutpoint, UtxoEntry};
+    use kaspa_consensus_core::utxo::{utxo_collection::UtxoCollection, utxo_diff::UtxoDiff, utxo_view::UtxoView};
+    use kaspa_hashes::Hash64;
+    use kaspa_muhash::MuHash;
+    use kaspa_txscript::script_class::evm_deposit_lock_script;
+
+    struct MapView(UtxoCollection);
+    impl UtxoView for MapView {
+        fn get(&self, outpoint: &TransactionOutpoint) -> Option<UtxoEntry> {
+            self.0.get(outpoint).cloned()
+        }
+    }
+
+    fn refund_script() -> Vec<u8> {
+        // The standard 69-byte ML-DSA P2PKH shape.
+        let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        spk.script().to_vec()
+    }
+
+    fn lock_spk(addr: [u8; 20], timeout: u64, tip: u64) -> ScriptPublicKey {
+        evm_deposit_lock_script(addr, timeout, tip, &refund_script())
+    }
+
+    fn outpoint(b: u8) -> TransactionOutpoint {
+        TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+    }
+
+    fn claim_payload(claims: Vec<DepositClaim>) -> EvmExecutionPayload {
+        EvmExecutionPayload { system_ops: claims.into_iter().map(EvmSystemOp::DepositClaim).collect(), ..Default::default() }
+    }
+
+    fn claim(op: TransactionOutpoint, addr: [u8; 20], amount: u64, tip: u64) -> DepositClaim {
+        DepositClaim { deposit_outpoint: op, evm_address: EvmAddress::from_bytes(addr), amount_sompi: amount, claim_tip_sompi: tip }
+    }
+
+    /// v0.4 §9.2: the full claim-validation matrix — one valid claim passes and
+    /// returns the consumed entry; every producer fault is rejected.
+    #[test]
+    fn deposit_claim_validation_matrix() {
+        let addr = [0xCC; 20];
+        let op = outpoint(1);
+        let mut view = UtxoCollection::default();
+        view.insert(op, UtxoEntry::new(500, lock_spk(addr, 1_000, 7), 10, false));
+        let view = MapView(view);
+
+        // Valid: fields match, pov below the timeout.
+        let consumed = validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &view, 999).unwrap();
+        assert_eq!(consumed.len(), 1);
+        assert_eq!(consumed[0].0, op);
+        assert_eq!(consumed[0].1.amount, 500);
+
+        // Faults, each rejected: absent lock / wrong amount / wrong tip /
+        // wrong address / claim at-or-after the refund timeout (AC-2) /
+        // duplicate outpoint / a non-lock outpoint.
+        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(outpoint(9), addr, 500, 7)]), &view, 999).is_err());
+        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 400, 7)]), &view, 999).is_err());
+        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 8)]), &view, 999).is_err());
+        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, [0xDD; 20], 500, 7)]), &view, 999).is_err());
+        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &view, 1_000).is_err(), "refund window open");
+        assert!(
+            validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7), claim(op, addr, 500, 7)]), &view, 999).is_err(),
+            "duplicate outpoint"
+        );
+        let mut plain = UtxoCollection::default();
+        plain.insert(op, UtxoEntry::new(500, kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[1u8; 64]), 10, false));
+        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &MapView(plain), 999).is_err(), "not a lock");
+    }
+
+    /// v0.4 §9 / I7: the bridge effects ride the block's own diff + multiset —
+    /// a consumed lock lands in `diff.remove`, a withdrawal materializes as a
+    /// synthetic output at the frozen-domain txid in `diff.add`, and the
+    /// multiset mirrors both (so `utxo_commitment` covers the bridge).
+    #[test]
+    fn bridge_effects_enter_diff_and_multiset() {
+        let block = Hash64::from_bytes([7; 64]);
+        let op = outpoint(1);
+        let lock_entry = UtxoEntry::new(500, lock_spk([0xCC; 20], 1_000, 0), 10, false);
+        let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        let w = WithdrawOp { evm_tx_index: 3, op_index: 1, from: EvmAddress::from_bytes([0xAA; 20]), script_public_key: spk.clone(), amount_sompi: 5 };
+
+        let mut diff = UtxoDiff::default();
+        let mut multiset = MuHash::new();
+        let baseline = multiset.clone();
+        apply_evm_bridge_effects(&mut diff, &mut multiset, block, 42, &[(op, lock_entry.clone())], &[w.clone()]).unwrap();
+
+        assert!(diff.remove.contains_key(&op), "the consumed lock leaves the UTXO set via this block's diff");
+        let expected_txid = kaspa_consensus_core::evm::synthetic_withdrawal_txid(block, 3, 1);
+        let synthetic = TransactionOutpoint::new(expected_txid, 0);
+        let entry = diff.add.get(&synthetic).expect("the withdrawal materialized at the frozen-domain outpoint");
+        assert_eq!(entry.amount, 5);
+        assert_eq!(entry.script_public_key, spk);
+        assert_eq!(entry.block_daa_score, 42);
+        assert!(!entry.is_coinbase, "synthetic outputs are NOT coinbase (no maturity wait)");
+        assert_ne!(multiset.finalize(), baseline.clone().finalize(), "the multiset covers the bridge");
+
+        // Determinism + uniqueness of the synthetic txid.
+        assert_eq!(expected_txid, kaspa_consensus_core::evm::synthetic_withdrawal_txid(block, 3, 1));
+        assert_ne!(expected_txid, kaspa_consensus_core::evm::synthetic_withdrawal_txid(block, 3, 2));
+        assert_ne!(expected_txid, kaspa_consensus_core::evm::synthetic_withdrawal_txid(Hash64::from_bytes([8; 64]), 3, 1));
+    }
+}
 
 #[cfg(all(test, feature = "evm"))]
 mod tests {

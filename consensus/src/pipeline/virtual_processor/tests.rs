@@ -3246,7 +3246,7 @@ fn new_miner_data() -> MinerData {
 async fn evm_active_chain_executes_persists_and_moves_heads() {
     use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader, EvmPayloadStoreReader};
     use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
-    use kaspa_consensus_core::evm::{DepositClaim, EvmAddress, EvmExecutionPayload, EvmStateSnapshot, EvmSystemOp};
+    use kaspa_consensus_core::evm::{EvmAddress, EvmExecutionPayload, EvmStateSnapshot};
     use kaspa_evm::EvmBlockInput;
     use kaspa_hashes::Hash64;
 
@@ -3288,17 +3288,14 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     assert_eq!(exp1.header.evm_number, 1);
     assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(1u64), "heads moved to the sink");
 
-    // ---- b2: carries its OWN system-op payload (a deposit claim — executes in
-    // b2 itself, §3.2) — proving payload persistence at body commit and EVM
-    // state chaining b1 → b2 through the real pipeline.
+    // ---- b2: carries its OWN non-empty payload (a declared coinbase + extra
+    // data) — proving payload persistence at body commit and EVM state chaining
+    // b1 → b2 through the real pipeline. (A real DepositClaim needs a funded
+    // EVM_DEPOSIT_LOCK UTXO — P4 claim validation rejects a dangling one; the
+    // claim/bridge paths are unit-tested in processes::evm.)
     let payload2 = EvmExecutionPayload {
-        system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
-            deposit_outpoint: Default::default(),
-            evm_address: EvmAddress::from_bytes([0xCC; 20]),
-            amount_sompi: 7,
-            claim_tip_sompi: 0,
-        })],
         evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
+        extra_data: vec![0x4D, 0x53, 0x4B],
         ..Default::default()
     };
     let mut b2 = consensus.build_utxo_valid_block_with_parents(2.into(), vec![1.into()], miner_data.clone(), vec![]);

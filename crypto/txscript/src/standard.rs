@@ -133,6 +133,10 @@ pub fn extract_script_pub_key_address(script_public_key: &ScriptPublicKey, prefi
         // so the address payload occupies script[3..67].
         ScriptClass::PubKeyHashMlDsa87 => Ok(Address::new(prefix, Version::PubKeyHashMlDsa87, &script[3..67])),
         ScriptClass::ScriptHash => Ok(Address::new(prefix, Version::ScriptHash, &script[2..34])),
+        // kaspa-pq EVM Lane v0.4 §9.2: the deposit lock is not an
+        // address-bearing send template (it is claimed by a system op or
+        // refunded via its embedded P2PKH); no address form exists for it.
+        ScriptClass::EvmDepositLock => Err(TxScriptError::PubKeyFormat),
     }
 }
 

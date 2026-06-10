@@ -64,7 +64,17 @@ impl TransactionValidator {
             return Ok(());
         }
         for (i, output) in tx.outputs.iter().enumerate() {
-            if !ScriptClass::from_script(&output.script_public_key).is_pq_standard() {
+            let class = ScriptClass::from_script(&output.script_public_key);
+            // kaspa-pq EVM Lane v0.4 §9.2: the EVM_DEPOSIT_LOCK output class is
+            // consensus-allowed (PQ-safe — its only script spend path is the
+            // embedded ML-DSA P2PKH refund, gated by the timeout context rule;
+            // the claim path consumes it via the accepting block's diff with no
+            // script run). It is NOT a standard send class: wallets/mempool
+            // standardness still treat it as deliberate-construction-only.
+            if class == ScriptClass::EvmDepositLock {
+                continue;
+            }
+            if !class.is_pq_standard() {
                 return Err(TxRuleError::NonPqStandardOutputClass(i));
             }
         }

@@ -543,19 +543,20 @@ impl VirtualStateProcessor {
                     // so it is the same view both `calculate_utxo_state` (slashing
                     // side-effect, PR-16.4-b2) and `verify_expected_utxo_state` read.
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
-                    let res = self.verify_expected_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, &header);
 
-                    // kaspa-pq EVM Lane v0.4 (§2.3): the lazy chain-context EVM
-                    // step — the FIRST time a block becomes a selected-chain
-                    // candidate (this KeyNotFound arm), execute its mergeset
-                    // acceptance and verify `evm_commitment_root`. A mismatch
+                    // kaspa-pq EVM Lane v0.4 (§2.3/§9): the lazy chain-context
+                    // EVM step — the FIRST time a block becomes a selected-chain
+                    // candidate (this KeyNotFound arm), validate its deposit
+                    // claims, execute its mergeset acceptance, verify
+                    // `evm_commitment_root`, and fold the bridge's UTXO
+                    // side-effects (consumed locks + synthetic withdrawal
+                    // outputs) into ctx BEFORE `verify_expected_utxo_state`, so
+                    // the header's `utxo_commitment` covers them. A fault
                     // disqualifies the block from the chain exactly like a UTXO
-                    // fault (no poison; the block stays in the DAG). Returns
-                    // None (and is a single u64 compare) while the lane is
-                    // inert, and skips when the result already exists
-                    // (no-replay: a reorg never re-executes).
-                    let evm_staged = match res {
-                        Ok(()) => match self.evm_chain_context_step(current, selected_parent, &header, &ctx) {
+                    // fault (no poison; the block stays in the DAG). A single
+                    // u64 compare while the lane is inert.
+                    let evm_staged =
+                        match self.evm_chain_context_step(current, selected_parent, &header, &mut ctx, &selected_parent_utxo_view) {
                             Ok(staged) => staged,
                             Err(evm_error) => {
                                 info!("Block {} is disqualified from virtual chain (EVM): {}", current, evm_error);
@@ -563,9 +564,9 @@ impl VirtualStateProcessor {
                                 chain_disqualified_counter += 1;
                                 continue;
                             }
-                        },
-                        Err(_) => None,
-                    };
+                        };
+
+                    let res = self.verify_expected_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, &header);
 
                     if let Err(rule_error) = res {
                         info!("Block {} is disqualified from virtual chain: {}", current, rule_error);
@@ -619,15 +620,16 @@ impl VirtualStateProcessor {
     /// check live in `processes::evm::evm_validate`. `Err` = the block is
     /// disqualified from the chain (commitment fault), mirroring a UTXO fault.
     #[cfg(feature = "evm")]
-    fn evm_chain_context_step(
+    fn evm_chain_context_step<V: UtxoView>(
         &self,
         current: BlockHash,
         selected_parent: BlockHash,
         header: &Header,
-        ctx: &UtxoProcessingContext<'_>,
+        ctx: &mut UtxoProcessingContext<'_>,
+        selected_parent_utxo_view: &V,
     ) -> Result<Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)>, String> {
         use crate::model::stores::evm::EvmPayloadStoreReader;
-        use crate::processes::evm::{evm_validate, EvmValidateError};
+        use crate::processes::evm::{apply_evm_bridge_effects, evm_validate, validate_evm_deposit_claims, EvmValidateError};
         if header.daa_score < self.evm_activation_daa_score {
             return Ok(None);
         }
@@ -640,10 +642,18 @@ impl VirtualStateProcessor {
             Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => Default::default(),
             Err(e) => return Err(format!("evm payload store: {e}")),
         };
+        // §9.2: deposit claims are validated against the CLAIM VIEW = the
+        // selected-parent UTXO set composed with the mergeset diff so far (a
+        // lock spent by a mergeset tx is not claimable; a same-block lock is
+        // not visible). Any violation is an accepting-producer fault.
+        let consumed_locks = {
+            let claim_view = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
+            validate_evm_deposit_claims(&own_payload, &claim_view, header.daa_score)?
+        };
         // AcceptedEvmTxs(B) source: the consensus-ordered mergeset (selected
         // parent first, then ascending blue work — §3.1 canonical order).
         let sorted_mergeset: Vec<BlockHash> = ctx.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
-        evm_validate(
+        let staged = evm_validate(
             &self.evm_header_store,
             &self.evm_state_store,
             &self.evm_payload_store,
@@ -657,7 +667,24 @@ impl VirtualStateProcessor {
             EvmValidateError::CommitmentMismatch { .. } => "evm_commitment_root mismatch (mergeset acceptance re-execution)".to_string(),
             EvmValidateError::Exec(e) => format!("evm execution: {e}"),
             EvmValidateError::Store(e) => format!("evm store: {e}"),
-        })
+        })?;
+        let Some((result, snapshot)) = staged else {
+            // The EVM rows commit in the SAME batch as the UTXO diff, so a
+            // present result with an absent diff (this KeyNotFound arm) is
+            // store corruption — never a reachable consensus state.
+            panic!("EVM result for {current} exists but its UTXO diff does not — corrupt store");
+        };
+        // §9: fold the bridge's UTXO side-effects into THIS block's diff +
+        // multiset (before verify_expected_utxo_state reads them).
+        apply_evm_bridge_effects(
+            &mut ctx.mergeset_diff,
+            &mut ctx.multiset_hash,
+            current,
+            header.daa_score,
+            &consumed_locks,
+            &result.withdrawals,
+        )?;
+        Ok(Some((result.header, snapshot)))
     }
 
     /// Non-`evm` builds cannot validate the lane. On every default network the
@@ -665,12 +692,13 @@ impl VirtualStateProcessor {
     /// non-evm binary must refuse to follow a chain it cannot validate rather
     /// than silently fork.
     #[cfg(not(feature = "evm"))]
-    fn evm_chain_context_step(
+    fn evm_chain_context_step<V: UtxoView>(
         &self,
         _current: BlockHash,
         _selected_parent: BlockHash,
         header: &Header,
-        _ctx: &UtxoProcessingContext<'_>,
+        _ctx: &mut UtxoProcessingContext<'_>,
+        _selected_parent_utxo_view: &V,
     ) -> Result<Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)>, String> {
         if header.daa_score >= self.evm_activation_daa_score {
             panic!(
