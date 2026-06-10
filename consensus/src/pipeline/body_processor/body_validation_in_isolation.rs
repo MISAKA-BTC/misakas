@@ -581,7 +581,7 @@ mod tests {
             Default::default(),
         );
         let mut block = MutableBlock::new(header, txs);
-        block.evm_payload = EvmExecutionPayload { txs: vec![vec![1, 2, 3]], ..Default::default() };
+        block.evm_payload = EvmExecutionPayload { transactions: vec![vec![1, 2, 3]], ..Default::default() };
         assert_match!(
             body_processor.validate_body_in_isolation(&block.to_immutable()),
             Err(RuleError::NonEmptyEvmPayloadBeforeActivation)

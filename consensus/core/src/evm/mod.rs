@@ -1,20 +1,27 @@
-//! kaspa-pq Selected-Parent EVM Lane (ADR-0020) — consensus type surface.
+//! kaspa-pq Selected-Parent EVM Lane (ADR-0020) — consensus type surface (v0.2/v0.3).
 //!
 //! This module carries the **types only** for the EVM execution lane: the
-//! block-body [`EvmExecutionPayload`], the executor-output
-//! [`EvmExecutionHeader`] (whose keyed BLAKE2b-512 digest becomes
-//! `Header::evm_commitment_root`), and the small EVM-domain newtypes
-//! ([`EvmAddress`], [`EvmBloom`]). The executor itself (revm) lands in a
-//! later phase behind the `evm` cargo feature; nothing here pulls revm or
-//! secp256k1.
+//! block-body [`EvmExecutionPayload`] (bounded system ops + EIP-2718 user txs),
+//! the executor-output [`EvmExecutionHeader`] (whose keyed BLAKE2b-512 digest
+//! becomes `Header::evm_commitment_root`), the UTXO↔EVM op types
+//! ([`EvmSystemOp`]/[`DepositClaim`]/[`WithdrawOp`]/[`EvmDepositLockOutput`]),
+//! and the small EVM-domain newtypes ([`EvmAddress`], [`EvmBloom`],
+//! [`EvmU256`]). The executor itself (revm) lands in the `kaspa-evm` crate
+//! behind the `evm` cargo feature; nothing here pulls revm or secp256k1.
 //!
-//! Design invariant (ADR-0020 §3): the EVM parent of a DAG block `B` is its
-//! GHOSTDAG `selected_parent(B)`, so an EVM result is an append-only function
-//! of the block alone and never needs re-execution on a virtual reorg.
+//! Design alignment (v0.2 §3.2): the L1 header carries a **single**
+//! `evm_commitment_root`; the full execution metadata lives here in the block
+//! body and is committed by that one keyed digest. The EVM parent of a DAG
+//! block `B` is its GHOSTDAG `selected_parent(B)` (§2.1), so an EVM result is an
+//! append-only function of the block alone and is never re-executed on a
+//! virtual reorg (§2.3 / §10.1).
 
-use crate::BlockHash;
+mod u256;
+pub use u256::*;
+
+use crate::tx::{ScriptPublicKey, TransactionOutpoint};
 use borsh::{BorshDeserialize, BorshSerialize};
-use kaspa_hashes::{EvmH256, Hash64};
+use kaspa_hashes::{EvmH256, Hash64, blake2b_512_keyed};
 use kaspa_utils::{
     hex::{FromHex, ToHex},
     mem_size::MemSizeEstimator,
@@ -33,27 +40,73 @@ use std::{
 // ---------------------------------------------------------------------------
 
 /// Ratio between one UTXO atomic unit (sompi, 8 decimals) and the EVM native
-/// unit (wei, 18 decimals): `10^(18-8) = 10^10`. A deposit of `amount_atomic`
-/// sompi credits `amount_atomic * EVM_NATIVE_SCALE` wei; a withdrawal must be
-/// an exact multiple of this scale (ADR-0020 §6/§7).
+/// unit (wei, 18 decimals): `10^(18-8) = 10^10`. A deposit of `amount_sompi`
+/// credits `amount_sompi * EVM_NATIVE_SCALE` wei; a withdrawal must be an exact
+/// multiple of this scale, else the precompile reverts (design §7/§8/§9.1).
 pub const EVM_NATIVE_SCALE: u64 = 10_000_000_000;
 
 /// MISAKA EVM chain id (testnet target). Deliberately distinct from every
 /// public Ethereum network so `eth_chainId` can never collide with mainnet
 /// (1) or common testnets. `0x4D534B` spells "MSK". Frozen in ADR-0020; the
-/// mainnet id will be a different value chosen at mainnet launch.
+/// mainnet id will be a different value chosen at mainnet launch. EIP-155
+/// replay protection is mandatory (design §4.4).
 pub const EVM_CHAIN_ID: u64 = 0x4D_53_4B;
 
-/// Reserved precompile address for `MISAKA_WITHDRAW` (EVM → UTXO), ADR-0020 §7.
-/// Carried as a constant here so the (later) precompile and the RPC layer agree.
+/// Reserved system-predeploy address for **WMISAKA** (the WETH9-equivalent
+/// wrapped-native ERC-20 used by v2/v3 DEX pools, design §19.3). A normal EVM
+/// contract (not a precompile) deployed into the activation state; carried here
+/// so the executor and RPC agree on the canonical wrapped-native address.
+pub const WMISAKA_ADDRESS: EvmAddress = EvmAddress::from_bytes([
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x01,
+]);
+
+/// Reserved precompile address for `MISAKA_WITHDRAW` (EVM → UTXO, design §8.1).
+/// User-input failures here revert the tx (block stays valid, §8.2); only a
+/// producer commitment/diff mismatch makes a block invalid.
 pub const MISAKA_WITHDRAW_PRECOMPILE: EvmAddress = EvmAddress::from_bytes([
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x02,
 ]);
 
-/// The EVM genesis state root. **P1 placeholder** = all-zero; the EVM executor
-/// phase (P2) pins this to the canonical empty Merkle-Patricia-Trie root
-/// `keccak256(rlp(()))` once the trie backend is wired.
-pub const EVM_GENESIS_STATE_ROOT: EvmH256 = kaspa_hashes::ZERO_EVM_H256;
+/// The EVM genesis state root — the `parent_state_root` of the first EVM block.
+/// With no system predeploys this is the canonical empty Merkle-Patricia-Trie
+/// root `keccak256(rlp(()))` (= `alloy_trie::EMPTY_ROOT_HASH`); the P2 executor
+/// asserts an empty block reproduces it. When the WMISAKA predeploy lands
+/// (design §19.3, P5+) this becomes the post-predeploy state root.
+pub const EVM_GENESIS_STATE_ROOT: EvmH256 = EvmH256::from_bytes([
+    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b,
+    0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+]);
+
+// --- Domain separators (design §3.3). Frozen once testnet activates. ---
+
+/// Keyed-BLAKE2b-512 domain for the L1 `evm_commitment_root` over the full
+/// [`EvmExecutionHeader`].
+pub const MISAKA_EVM_COMMITMENT_CONTEXT: &[u8] = b"MISAKA_EVM_COMMITMENT_V2";
+/// Keyed-BLAKE2b-256 domain for `EvmExecutionHeader::system_ops_root`.
+pub const MISAKA_EVM_SYSTEM_OPS_CONTEXT: &[u8] = b"MISAKA_EVM_SYSTEM_OPS_V2";
+/// Keyed-BLAKE2b-256 domain for `EvmExecutionHeader::withdrawals_root`.
+pub const MISAKA_EVM_WITHDRAWAL_CONTEXT: &[u8] = b"MISAKA_EVM_WITHDRAWAL_V2";
+/// Keyed-BLAKE2b-256 domain for `EvmExecutionHeader::deposit_claim_queue_root`.
+pub const MISAKA_EVM_DEPOSIT_CLAIM_CONTEXT: &[u8] = b"MISAKA_EVM_DEPOSIT_CLAIM_V2";
+/// Keyed-BLAKE2b-512 domain for withdrawal synthetic-outpoint txids (P4, §8.3).
+/// MUST stay separate from the normal transaction-id domain so a synthetic
+/// outpoint can never collide with a real txid.
+pub const MISAKA_EVM_SYNTHETIC_OUTPOINT_CONTEXT: &[u8] = b"MISAKA_EVM_SYNTHETIC_OUTPOINT_V2";
+/// Keyed-BLAKE2b-256 domain for the EVM `prevrandao` derivation (design §4.3).
+pub const MISAKA_EVM_PREVRANDAO_CONTEXT: &[u8] = b"MISAKA_EVM_PREVRANDAO_V2";
+
+// --- Bounded deposit-claim / system-gas limits (design §7.3 / §15.2). ---
+// Enforced in P4 when DepositClaim validation lands; defined here so the
+// limits are frozen with the rest of the spec.
+
+/// Max `DepositClaim` system ops per EVM block.
+pub const MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK: usize = 256;
+/// Max total serialized `DepositClaim` bytes per EVM block.
+pub const MAX_DEPOSIT_CLAIM_BYTES_PER_EVM_BLOCK: usize = 64 * 1024;
+/// System gas charged to `gas_used` per applied deposit claim (design §7.4).
+pub const SYSTEM_DEPOSIT_GAS_PER_CLAIM: u64 = 25_000;
+/// Max total system gas (deposit claims + future system ops) per EVM block.
+pub const MAX_SYSTEM_GAS_PER_EVM_BLOCK: u64 = 10_000_000;
 
 // ---------------------------------------------------------------------------
 // EvmAddress — 20-byte Ethereum account address.
@@ -154,11 +207,52 @@ impl MemSizeEstimator for EvmAddress {}
 /// Width of an [`EvmBloom`] in bytes (Ethereum logs bloom).
 pub const EVM_BLOOM_SIZE: usize = 256;
 
-/// A 256-byte Ethereum logs bloom filter. `serde` is intentionally omitted in
-/// P1 (nothing serializes an `EvmExecutionHeader` over the wire yet); borsh is
-/// derived for the future EVM header store.
+/// A 256-byte Ethereum logs bloom filter.
 #[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct EvmBloom([u8; EVM_BLOOM_SIZE]);
+
+// `EvmBloom` is 256 bytes; the `serde_impl_*_fixed_bytes_ref!` macros bottom out
+// on serde's fixed-array impls (which only cover N ≤ 32), so hand-roll serde: a
+// hex string in human-readable encoders (JSON/RPC), raw bytes otherwise
+// (bincode/compact). borsh is handled by the derive above (no array cap).
+impl Serialize for EvmBloom {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&self.to_hex())
+        } else {
+            serializer.serialize_bytes(&self.0)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EvmBloom {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            let s = <String as serde::Deserialize>::deserialize(deserializer)?;
+            EvmBloom::from_hex(&s).map_err(serde::de::Error::custom)
+        } else {
+            struct BloomVisitor;
+            impl<'de> serde::de::Visitor<'de> for BloomVisitor {
+                type Value = EvmBloom;
+                fn expecting(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                    write!(f, "a {EVM_BLOOM_SIZE}-byte EVM logs bloom")
+                }
+                fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<EvmBloom, E> {
+                    let arr: [u8; EVM_BLOOM_SIZE] = v.try_into().map_err(E::custom)?;
+                    Ok(EvmBloom(arr))
+                }
+                fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<EvmBloom, A::Error> {
+                    let mut arr = [0u8; EVM_BLOOM_SIZE];
+                    for (i, slot) in arr.iter_mut().enumerate() {
+                        *slot = seq.next_element()?.ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
+                    }
+                    Ok(EvmBloom(arr))
+                }
+            }
+            deserializer.deserialize_bytes(BloomVisitor)
+        }
+    }
+}
 
 impl EvmBloom {
     #[inline(always)]
@@ -188,6 +282,12 @@ impl PartialEq for EvmBloom {
 }
 impl Eq for EvmBloom {}
 
+impl From<[u8; EVM_BLOOM_SIZE]> for EvmBloom {
+    fn from(value: [u8; EVM_BLOOM_SIZE]) -> Self {
+        EvmBloom(value)
+    }
+}
+
 impl Debug for EvmBloom {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "EvmBloom([0x{:02x}{:02x}{:02x}{:02x}…; {} bytes])", self.0[0], self.0[1], self.0[2], self.0[3], EVM_BLOOM_SIZE)
@@ -201,44 +301,141 @@ impl AsRef<[u8]> for EvmBloom {
     }
 }
 
+impl AsRef<[u8; EVM_BLOOM_SIZE]> for EvmBloom {
+    #[inline(always)]
+    fn as_ref(&self) -> &[u8; EVM_BLOOM_SIZE] {
+        &self.0
+    }
+}
+
+impl ToHex for EvmBloom {
+    fn to_hex(&self) -> String {
+        let mut hex = vec![0u8; EVM_BLOOM_SIZE * 2];
+        faster_hex::hex_encode(&self.0, &mut hex).expect("twice the input size");
+        // SAFETY: hex_encode only writes ASCII hex digits.
+        unsafe { String::from_utf8_unchecked(hex) }
+    }
+}
+
+impl FromHex for EvmBloom {
+    type Error = faster_hex::Error;
+    fn from_hex(hex_str: &str) -> Result<Self, Self::Error> {
+        let hex_str = hex_str.strip_prefix("0x").or_else(|| hex_str.strip_prefix("0X")).unwrap_or(hex_str);
+        let mut bytes = [0u8; EVM_BLOOM_SIZE];
+        faster_hex::hex_decode(hex_str.as_bytes(), &mut bytes)?;
+        Ok(EvmBloom(bytes))
+    }
+}
+
 impl MemSizeEstimator for EvmBloom {}
 
 // ---------------------------------------------------------------------------
-// EvmExecutionPayload — the block-body EVM unit (ADR-0020 §4.3).
+// UTXO ↔ EVM op types (design §7 / §8). Types only this pass; the bounded
+// validation + UTXO-diff materialization land in P4.
+// ---------------------------------------------------------------------------
+
+/// A bounded, producer-selected, consensus-validated EVM system op carried in
+/// `EvmExecutionPayload::system_ops` (design §3.1 / §7.3). The op ordering is
+/// the payload order, committed by `system_ops_root`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EvmSystemOp {
+    /// Claim an `EVM_DEPOSIT_LOCK` UTXO output and credit the EVM account
+    /// (design §7.3). The lock is consumed in the same block's UTXO diff (P4).
+    DepositClaim(DepositClaim),
+}
+
+impl MemSizeEstimator for EvmSystemOp {}
+
+/// Claims a previously-locked deposit (an unspent `EVM_DEPOSIT_LOCK` output in
+/// the `selected_parent(B)` UTXO view) and credits the EVM account (design §7.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepositClaim {
+    /// The `EVM_DEPOSIT_LOCK` output being claimed.
+    pub deposit_outpoint: TransactionOutpoint,
+    /// EVM account credited `amount_sompi * EVM_NATIVE_SCALE` wei. MUST equal
+    /// the lock output's recorded address.
+    pub evm_address: EvmAddress,
+    /// Sompi amount. MUST equal the lock output's value.
+    pub amount_sompi: u64,
+}
+
+impl MemSizeEstimator for DepositClaim {}
+
+/// A successful withdrawal emitted by the F002 precompile (design §8.1). The
+/// executor materializes one synthetic UTXO output per `WithdrawOp` in the
+/// block's UTXO diff (P4, §8.3). User-input failures do **not** emit a
+/// `WithdrawOp` (they revert the tx, §8.2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawOp {
+    /// Index of the user EVM tx (within `transactions`) that emitted this op.
+    pub evm_tx_index: u32,
+    /// Index of this op within that tx (a tx may withdraw more than once).
+    pub op_index: u32,
+    /// EVM account debited.
+    pub from: EvmAddress,
+    /// Destination UTXO script (consensus script-rule validated; failure ⇒ revert).
+    pub script_public_key: ScriptPublicKey,
+    /// Sompi paid out (= `amount_wei / EVM_NATIVE_SCALE`, exact multiple required).
+    pub amount_sompi: u64,
+}
+
+impl MemSizeEstimator for WithdrawOp {}
+
+/// The `EVM_DEPOSIT_LOCK` UTXO output payload (design §7.2). Created by a
+/// `DepositLockTx` on the UTXO layer; later claimed via [`DepositClaim`] or, if
+/// `timeout_daa_score` elapses unclaimed, refunded to `refund_script_public_key`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmDepositLockOutput {
+    pub value_sompi: u64,
+    pub evm_address: EvmAddress,
+    pub refund_script_public_key: ScriptPublicKey,
+    pub timeout_daa_score: Option<u64>,
+}
+
+impl MemSizeEstimator for EvmDepositLockOutput {}
+
+// ---------------------------------------------------------------------------
+// EvmExecutionPayload — the block-body EVM unit (design §3.1).
 // ---------------------------------------------------------------------------
 
 /// The EVM execution payload carried in a block body, separate from the UTXO
 /// `transactions` because UTXO txs are DAG-inclusive-accepted while EVM txs are
-/// canonical only when their block enters the selected-parent chain (ADR-0020
-/// §3.3). Pre-activation blocks (header version &lt; `EVM_HEADER_VERSION`) MUST
+/// canonical only when their block enters the selected-parent chain (design
+/// §2.2). Pre-activation blocks (header version &lt; `EVM_HEADER_VERSION`) MUST
 /// carry the [`Default`] (empty) payload.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvmExecutionPayload {
+    /// Bounded, producer-selected system ops (deposit claims), applied before
+    /// user txs and committed by `system_ops_root` in their payload order.
+    pub system_ops: Vec<EvmSystemOp>,
     /// EIP-2718 typed-transaction bytes, in execution order.
-    pub txs: Vec<Vec<u8>>,
-    /// Block gas limit declared by the miner for this EVM block.
-    pub declared_gas_limit: u64,
-    /// Priority-fee recipient (also committed in the EVM env `block.coinbase`).
+    pub transactions: Vec<Vec<u8>>,
+    /// Priority-fee recipient / EVM `block.coinbase` declared by the producer.
     pub fee_recipient: EvmAddress,
     /// Optional miner extra data (consensus-rule length-capped at activation).
     pub extra_data: Vec<u8>,
 }
 
 impl EvmExecutionPayload {
-    /// An EVM-inert payload (`== Default`): no txs, no extra data, zero gas
-    /// limit, zero fee recipient. Pre-activation blocks must satisfy this.
+    /// An EVM-inert payload (`== Default`): no system ops, no txs, no extra
+    /// data, zero fee recipient. Pre-activation blocks must satisfy this.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.txs.is_empty() && self.extra_data.is_empty() && self.declared_gas_limit == 0 && self.fee_recipient.is_zero()
+        self.system_ops.is_empty() && self.transactions.is_empty() && self.extra_data.is_empty() && self.fee_recipient.is_zero()
     }
 }
 
 impl MemSizeEstimator for EvmExecutionPayload {
     fn estimate_mem_bytes(&self) -> usize {
         size_of::<Self>()
-            + self.txs.capacity() * size_of::<Vec<u8>>()
-            + self.txs.iter().map(|t| t.capacity()).sum::<usize>()
+            + self.transactions.capacity() * size_of::<Vec<u8>>()
+            + self.transactions.iter().map(|t| t.capacity()).sum::<usize>()
+            + self.system_ops.capacity() * size_of::<EvmSystemOp>()
             + self.extra_data.capacity()
     }
 }
@@ -247,65 +444,118 @@ impl MemSizeEstimator for EvmExecutionPayload {
 // EvmExecutionHeader — executor output, committed via evm_commitment_root.
 // ---------------------------------------------------------------------------
 
-/// The full EVM execution header for a block (ADR-0020 §4.2). Its keyed
-/// BLAKE2b-512 digest under the `MISAKA_EVM_HEADER` domain is committed in
-/// `Header::evm_commitment_root`. The current L1 block hash and current EVM
-/// block hash are intentionally **not** inputs to the EVM execution
-/// environment (would be a circular dependency); only ancestor hashes are.
+/// The consensus-committed EVM execution header (design §3.2). Its keyed
+/// BLAKE2b-512 digest under [`MISAKA_EVM_COMMITMENT_CONTEXT`] is carried in
+/// `Header::evm_commitment_root`; the verifier re-executes, rebuilds this
+/// header, and checks the digest. The current L1 block hash and current EVM
+/// block hash are intentionally **absent** (they would be a circular
+/// dependency, design §4.2); only ancestor-derived values appear.
 ///
-/// `serde` is omitted in P1 — this type is produced by the executor (P2) and
-/// persisted in the EVM header store (P3); neither path exists yet.
-#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+/// **FROZEN FIELD ORDER (hard fork to change once testnet activates):** the
+/// commitment preimage is this struct's borsh encoding in declared order
+/// ([`EvmExecutionHeader::commitment_preimage`]). All fields are fixed-width, so
+/// borsh is a deterministic concatenation. Never reorder, remove, or change the
+/// width of a field below after activation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EvmExecutionHeader {
-    pub version: u16,
-    pub chain_id: u64,
-
-    /// The L1 (kaspa) block this EVM header belongs to. For store association
-    /// only — NOT fed into the EVM commitment (avoids a hash cycle).
-    pub l1_block_hash: BlockHash,
-    /// `selected_parent(B)` — the EVM parent block on the L1 side.
-    pub parent_l1_block_hash: BlockHash,
-    pub parent_evm_block_hash: EvmH256,
+    /// `EvmStateRoot(selected_parent(B))` — the parent EVM state this block executed against.
     pub parent_state_root: EvmH256,
-
-    /// keccak256 over the canonical EVM header view.
-    pub evm_block_hash: EvmH256,
-    /// Selected-parent-tree height: `evm_number(selected_parent) + 1`.
-    pub evm_number: u64,
+    /// keccak256 MPT state root after applying system ops + user txs.
     pub state_root: EvmH256,
+    /// keccak256 MPT root over the executed `transactions`.
     pub transactions_root: EvmH256,
+    /// keccak256 MPT root over the per-tx receipts.
     pub receipts_root: EvmH256,
-    pub logs_bloom: EvmBloom,
-
-    /// Commitment over the ordered system deposits + withdrawals.
+    /// MISAKA keyed root over the ordered `system_ops` (`MISAKA_EVM_SYSTEM_OPS_V2`).
     pub system_ops_root: EvmH256,
+    /// MISAKA keyed root over the ordered `WithdrawOp`s (`MISAKA_EVM_WITHDRAWAL_V2`).
     pub withdrawals_root: EvmH256,
-
-    pub gas_limit: u64,
+    /// MISAKA keyed root over the applied deposit-claim queue (`MISAKA_EVM_DEPOSIT_CLAIM_V2`).
+    pub deposit_claim_queue_root: EvmH256,
+    /// Ethereum logs bloom over all receipts' logs.
+    pub logs_bloom: EvmBloom,
     pub gas_used: u64,
-    /// EIP-1559 base fee. Ethereum types it as `U256`; wei base fees fit in
-    /// `u128` with vast headroom, so P1 stores it as `u128` (the revm executor
-    /// in P2 converts to/from `U256`).
-    pub base_fee_per_gas: u128,
-    pub timestamp_ms: u64,
-    pub fee_recipient: EvmAddress,
-    pub prev_randao: EvmH256,
+    pub gas_limit: u64,
+    /// EIP-1559 base fee (wei). 32-byte to match Ethereum `uint256`; the
+    /// executor converts to/from `alloy_primitives::U256`.
+    pub base_fee_per_gas: EvmU256,
+    /// Selected-parent-tree height: `evm_number(selected_parent) + 1` (§4.1).
+    pub evm_number: u64,
+    /// Strictly-monotonic EVM logical time `max(header_ts_sec, parent_ts+1)` (§4.1).
+    pub evm_timestamp_sec: u64,
+    pub evm_chain_id: u64,
+    /// Cumulative EVM basefee burn up to and including this block (design §9.2).
+    pub evm_burn_accumulator: EvmU256,
+}
+
+impl EvmExecutionHeader {
+    /// The canonical commitment preimage = the borsh encoding of this header in
+    /// declared field order. All fields are fixed-width, so borsh is a stable,
+    /// deterministic concatenation (design §3.2 `SCALE(EvmExecutionHeader)`).
+    #[inline]
+    pub fn commitment_preimage(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("EvmExecutionHeader borsh serialization is infallible")
+    }
+
+    /// `evm_commitment_root(B)` (design §3.2) — keyed BLAKE2b-512 over the
+    /// canonical preimage under [`MISAKA_EVM_COMMITMENT_CONTEXT`], producing the
+    /// 64-byte digest carried in `Header::evm_commitment_root`. Pure (no revm),
+    /// so a non-`evm` build can still recompute/verify the L1 field.
+    #[inline]
+    pub fn commitment_root(&self) -> Hash64 {
+        blake2b_512_keyed(MISAKA_EVM_COMMITMENT_CONTEXT, &self.commitment_preimage())
+    }
 }
 
 impl MemSizeEstimator for EvmExecutionHeader {}
 
-/// Domain separator for the keyed BLAKE2b-512 EVM header commitment
-/// (`Header::evm_commitment_root`). The actual digest helper lands with the
-/// executor (P2); the domain is frozen here so signer/verifier/RPC agree.
-pub const MISAKA_EVM_HEADER_CONTEXT: &[u8] = b"MISAKA_EVM_HEADER";
+// ---------------------------------------------------------------------------
+// Executor output (design §6 / §11.1). Returned by the `kaspa-evm` executor
+// (P2) and persisted across the EVM stores (P3). Not consensus-committed
+// directly — the committed digest is `header.commitment_root()`.
+// ---------------------------------------------------------------------------
 
-/// Placeholder for the (P2) `evm_commitment_root(&EvmExecutionHeader) -> Hash64`
-/// helper. In P1 a pre-activation / empty EVM header commits to the zero
-/// `Hash64` (carried by v0/v1 headers, which never hash the EVM fields anyway).
-#[inline]
-pub fn empty_evm_commitment_root() -> Hash64 {
-    Hash64::default()
+/// A single EVM log entry.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmLog {
+    pub address: EvmAddress,
+    pub topics: Vec<EvmH256>,
+    pub data: Vec<u8>,
 }
+
+impl MemSizeEstimator for EvmLog {}
+
+/// A per-transaction EVM receipt. `succeeded == false` for a user-caused
+/// failure (revert / out-of-gas / bad nonce) — which is NOT block-invalid
+/// (design §6.3 / §8.2); gas is still consumed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmReceipt {
+    pub succeeded: bool,
+    pub cumulative_gas_used: u64,
+    pub gas_used: u64,
+    pub logs: Vec<EvmLog>,
+}
+
+impl MemSizeEstimator for EvmReceipt {}
+
+/// The full output of executing one block's EVM lane. The committed
+/// `header.commitment_root()` equals the L1 `Header::evm_commitment_root`; the
+/// rest is store/RPC data and the UTXO-diff source for P4.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmExecutionResult {
+    pub header: EvmExecutionHeader,
+    pub receipts: Vec<EvmReceipt>,
+    /// Withdrawal ops in receipt/log order → synthetic UTXO outputs (P4).
+    pub withdrawals: Vec<WithdrawOp>,
+    /// Deposit claims applied this block → consumed lock outputs (P4).
+    pub applied_deposit_claims: Vec<DepositClaim>,
+}
+
+impl MemSizeEstimator for EvmExecutionResult {}
 
 #[cfg(test)]
 mod tests {
@@ -316,16 +566,54 @@ mod tests {
         let p = EvmExecutionPayload::default();
         assert!(p.is_empty());
         assert_eq!(p, EvmExecutionPayload::default());
-        // A non-empty payload is detected.
-        let p2 = EvmExecutionPayload { txs: vec![vec![1, 2, 3]], ..Default::default() };
+        // A non-empty payload (any of the four fields) is detected.
+        let p2 = EvmExecutionPayload { transactions: vec![vec![1, 2, 3]], ..Default::default() };
         assert!(!p2.is_empty());
+        let p3 = EvmExecutionPayload {
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: TransactionOutpoint::default(),
+                evm_address: EvmAddress::default(),
+                amount_sompi: 1,
+            })],
+            ..Default::default()
+        };
+        assert!(!p3.is_empty());
     }
 
     #[test]
-    fn execution_header_defaults() {
+    fn execution_header_defaults_and_genesis_state_root() {
         let h = EvmExecutionHeader::default();
-        assert_eq!(h.version, 0);
+        assert_eq!(h.evm_number, 0);
         assert!(h.state_root.is_zero());
         assert_eq!(h.logs_bloom, EvmBloom::default());
+        assert_eq!(h.base_fee_per_gas, EvmU256::ZERO);
+        // The pinned genesis state root is the canonical empty-trie root.
+        assert_eq!(EVM_GENESIS_STATE_ROOT.to_string(), "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421");
+    }
+
+    #[test]
+    fn commitment_root_is_deterministic_and_field_sensitive() {
+        let mut h = EvmExecutionHeader { evm_chain_id: EVM_CHAIN_ID, gas_used: 21_000, ..Default::default() };
+        let c1 = h.commitment_root();
+        // Same inputs ⇒ identical commitment.
+        assert_eq!(c1, h.clone().commitment_root());
+        // Domain-separated 64-byte digest, not the all-zero default.
+        assert_ne!(c1, Hash64::default());
+        // Any field change ⇒ different commitment.
+        h.gas_used = 21_001;
+        assert_ne!(c1, h.commitment_root());
+    }
+
+    #[test]
+    fn bloom_serde_roundtrip() {
+        let mut bytes = [0u8; EVM_BLOOM_SIZE];
+        bytes[0] = 0xAB;
+        bytes[255] = 0xCD;
+        let bloom = EvmBloom::from_bytes(bytes);
+        let j = serde_json::to_string(&bloom).unwrap();
+        assert_eq!(bloom, serde_json::from_str::<EvmBloom>(&j).unwrap());
+        let b = borsh::to_vec(&bloom).unwrap();
+        assert_eq!(b.len(), EVM_BLOOM_SIZE);
+        assert_eq!(bloom, borsh::from_slice::<EvmBloom>(&b).unwrap());
     }
 }

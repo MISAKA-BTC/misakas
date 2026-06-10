@@ -1,10 +1,13 @@
 # ADR-0020: Selected-Parent EVM Execution Lane on L1
 
 ## Status
-Proposed (2026-06-10). **P0 (spec freeze) + P1 (consensus types) implemented**; P2–P7 pending.
+Proposed; updated 2026-06-10 to design **v0.2 (audit-revised) + v0.3 (DEX addendum)**. **P0 (spec
+freeze) + P1 (consensus types) implemented**; **P2 (revm executor) in progress**; P3–P7 pending.
 
-Source design: `MISAKA_Kaspa_L1_Selected_Parent_EVM_Design.docx` (Draft v0.1). This ADR is the
-code-grounded freeze of that design against the current kaspa-pq tree.
+Source design: `MISAKA_Kaspa_L1_Selected_Parent_EVM_Design_v0.2_Audit_Revised.docx` +
+`..._v0.3_DEX_Uniswap_Addendum.docx`. This ADR is the code-grounded freeze of that design against the
+current kaspa-pq tree. The v0.2 audit elevated 6 consensus-safety rules and **collapsed the header to a
+single `evm_commitment_root`** (the four-root v0.1 layout is gone — see "Version gating").
 
 Adds header fields and a block-body payload → a hard fork, but **version-gated** so every existing
 v0/v1 genesis hash and block identity is byte-for-byte unchanged (see §"Version gating"). Interacts
@@ -53,11 +56,11 @@ Trade-off (accepted): EVM throughput tracks the single selected-parent chain, **
 |---|---|---|
 | `EVM_HEADER_VERSION` | `2` | `constants.rs`. Must exceed genesis v0 and `BLOCK_VERSION`=1. Never lower. |
 | `EVM_CHAIN_ID` | `0x4D534B` ("MSK") | `evm/mod.rs`. Distinct from all public Ethereum nets; mainnet id chosen at launch. |
-| EVM fork | revm Cancun-equivalent (pinned in P2) | Never auto-follows upstream latest; fork bump = hard fork. |
+| EVM fork | revm `SpecId::SHANGHAI` (pinned P2) | London+ baseline runs Uniswap v2/v3 + current-solc contracts (design §19.2); Cancun/EIP-1153 (v4) is a deliberate later fork. Never auto-follows upstream; bump = hard fork. |
 | `EVM_NATIVE_SCALE` | `10^10` | sompi (8 dec) → wei (18 dec). Withdrawals must be exact multiples. |
-| `EVM_GENESIS_STATE_ROOT` | zero (P1 placeholder) | P2 pins `keccak256(rlp(()))` empty-trie root. |
-| Header preimage suffix (v2+ only) | `evm_state_root(32) ‖ evm_transactions_root(32) ‖ evm_receipts_root(32) ‖ evm_commitment_root(64)` | Appended after `pruning_point`. Frozen byte order. |
-| EVM commitment domain | `b"MISAKA_EVM_HEADER"` | keyed BLAKE2b-512 over `EvmExecutionHeader`. |
+| `EVM_GENESIS_STATE_ROOT` | `keccak256(rlp(()))` empty-trie root (`56e81f17…b421`) | The P2 executor asserts an empty block reproduces it. |
+| Header preimage suffix (v2+ only) | `evm_commitment_root(64)` | Single keyed BLAKE2b-512 root, appended after `pruning_point` (design v0.2 §3.2). Frozen byte order. |
+| EVM commitment domain | `b"MISAKA_EVM_COMMITMENT_V2"` | keyed BLAKE2b-512 over the body-side `EvmExecutionHeader` (state/tx/receipts/system-ops/withdrawals/deposit-claim roots, gas, basefee, logs bloom, evm_number, evm_timestamp_sec, burn accumulator). |
 | Subnetwork ids | `0x20` deposit, `0x21` withdraw-claim (reserved), `0x22` admin (reserved) | `subnets.rs`. |
 | DB store prefixes | `201`–`210` | `database/registry.rs` (`EvmHeader`…`EvmBlockHashMap`). |
 | Withdraw precompile | `0x…F002` (`MISAKA_WITHDRAW`) | `evm/mod.rs`. |
@@ -71,8 +74,8 @@ Trade-off (accepted): EVM throughput tracks the single selected-parent chain, **
 
 ## Version gating (the load-bearing correctness property)
 
-The four EVM header fields are **always present** in the `Header` struct (defaulting to zero) but enter
-the header-hash preimage **only when `header.version >= EVM_HEADER_VERSION`**
+The single `evm_commitment_root` field is **always present** in the `Header` struct (defaulting to
+zero) but enters the header-hash preimage **only when `header.version >= EVM_HEADER_VERSION`**
 (`hashing::header::write_header_preimage`). Because genesis headers are v0 and live mined blocks are
 v1 (both `< 2`), their preimage — and all three digests (legacy-32, identity-64, pre-PoW-64) — is
 byte-identical to the pre-EVM protocol. `consensus-core::config::genesis::test_genesis_hashes` stays
@@ -100,8 +103,8 @@ explicitly out of scope.
 | Phase | Scope | Status |
 |---|---|---|
 | **P0** | Spec freeze (this ADR) | **Done** |
-| **P1** | Consensus types: `EvmH256`/`EvmExecutionHeader`/`EvmExecutionPayload`; 4 header fields + version-gated preimage; block `evm_payload`; subnets; store prefixes; `evm_activation_daa_score`; body rule; `evm` feature declared | **Done** |
-| P2 | revm executor behind `evm` (parent root → state/receipts roots); Ethereum state-transition + ACVP differential tests; pin fork + `EVM_GENESIS_STATE_ROOT` | Pending |
+| **P1** | Consensus types: `EvmH256`/`EvmExecutionHeader`/`EvmExecutionPayload` + deposit/withdraw ops; single `evm_commitment_root` + version-gated preimage; block `evm_payload`; subnets; store prefixes; `evm_activation_daa_score`; body rule; `evm` feature declared | **Done** |
+| P2 | revm `SpecId::SHANGHAI` executor behind `evm` (parent state root → keccak state/tx/receipts roots); deterministic env (number/ts-clamp/prevrandao/EIP-1559 basefee); deposit-claim credit; F002 withdraw precompile; commitment matches `EvmExecutionHeader.commitment_root()`; differential tests | In progress |
 | P3 | EVM stores (201–210), multi-root state backend, canonical heads (no-replay on virtual change), pruning/GC | Pending |
 | P4 | Deposit (subnet 0x20) extraction from acceptance data; withdraw precompile; UTXO-diff materialization; combined supply-invariant tests | Pending |
 | P5 | EVM txpool, template builder (EVM roots + withdrawals in utxo_commitment), EIP-1559 basefee | Pending |
@@ -111,8 +114,9 @@ explicitly out of scope.
 ### P1 surface (implemented)
 - `crypto/hashes`: `EvmH256` (32-byte Ethereum H256, mirrors `Hash`).
 - `consensus-core`: `constants::EVM_HEADER_VERSION`; `evm` module (`EvmExecutionPayload`,
-  `EvmExecutionHeader`, `EvmAddress`, `EvmBloom`, frozen constants); 4 `Header` fields +
-  `with_evm_commitments`; version-gated `write_header_preimage`; `Block`/`MutableBlock.evm_payload` +
+  `EvmExecutionHeader`, deposit/withdraw op types, `EvmAddress`, `EvmBloom`, frozen constants); single
+  `Header::evm_commitment_root` + `with_evm_commitment`; version-gated `write_header_preimage`;
+  `Block`/`MutableBlock.evm_payload` +
   `with_evm_payload`; subnet ids + `is_evm_overlay`; `Params::evm_activation_daa_score` +
   `is_evm_active`; `RuleError::NonEmptyEvmPayloadBeforeActivation`.
 - `consensus`: body-isolation rule `check_evm_payload` (pre-EVM header ⇒ empty payload);

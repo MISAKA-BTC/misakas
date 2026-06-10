@@ -139,9 +139,6 @@ impl TryFrom<RpcHeader> for Header {
             // (EVM data is exposed via the future eth_* RPC from the EVM stores);
             // default to zero. For v0/v1 headers these are hash-invisible, so the
             // cached `hash` carried above stays consistent.
-            evm_state_root: Default::default(),
-            evm_transactions_root: Default::default(),
-            evm_receipts_root: Default::default(),
             evm_commitment_root: Default::default(),
         })
     }
@@ -171,9 +168,6 @@ impl TryFrom<&RpcHeader> for Header {
             // (EVM data is exposed via the future eth_* RPC from the EVM stores);
             // default to zero. For v0/v1 headers these are hash-invisible, so the
             // cached `hash` carried above stays consistent.
-            evm_state_root: Default::default(),
-            evm_transactions_root: Default::default(),
-            evm_receipts_root: Default::default(),
             evm_commitment_root: Default::default(),
         })
     }

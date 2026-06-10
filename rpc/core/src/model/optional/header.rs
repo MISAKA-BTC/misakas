@@ -135,9 +135,6 @@ impl TryFrom<RpcOptionalHeader> for Header {
                 .pruning_point
                 .ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "pruning_point".to_owned()))?,
             // ADR-0020: RpcOptionalHeader has no EVM fields yet (P1); default to zero.
-            evm_state_root: Default::default(),
-            evm_transactions_root: Default::default(),
-            evm_receipts_root: Default::default(),
             evm_commitment_root: Default::default(),
         })
     }
@@ -176,9 +173,6 @@ impl TryFrom<&RpcOptionalHeader> for Header {
                 .pruning_point
                 .ok_or(RpcError::MissingRpcFieldError("RpcHeader".to_owned(), "pruning_point".to_owned()))?,
             // ADR-0020: RpcOptionalHeader has no EVM fields yet (P1); default to zero.
-            evm_state_root: Default::default(),
-            evm_transactions_root: Default::default(),
-            evm_receipts_root: Default::default(),
             evm_commitment_root: Default::default(),
         })
     }

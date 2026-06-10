@@ -2,9 +2,8 @@
 pub const BLOCK_VERSION: u16 = 1;
 
 /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): the block/header version at
-/// which the EVM execution commitments (`evm_state_root`,
-/// `evm_transactions_root`, `evm_receipts_root`, `evm_commitment_root`) enter
-/// the header-hash preimage and an `evm_payload` becomes mandatory.
+/// which the single EVM commitment (`evm_commitment_root`) enters the
+/// header-hash preimage and an `evm_payload` becomes mandatory.
 ///
 /// MUST be strictly greater than every pre-EVM header version that already
 /// exists on-chain — namely the genesis version `0`
