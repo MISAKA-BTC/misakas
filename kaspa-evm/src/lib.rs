@@ -1,9 +1,12 @@
 //! kaspa-pq Selected-Parent EVM execution lane (ADR-0020) — revm-backed executor.
 //!
-//! The EVM parent of a DAG block `B` is its GHOSTDAG `selected_parent(B)`, so a
-//! block's EVM result is an append-only function of the block alone: computed
-//! once when the block becomes a selected-chain candidate, stored by block hash,
-//! and never re-executed on a virtual reorg (design v0.2 §2.1/§10.1).
+//! v0.4 mergeset delayed acceptance (design §3): the EVM parent of a DAG block
+//! `B` is its GHOSTDAG `selected_parent(B)`, and `EvmResult(B)` executes the
+//! MERGESET's payload txs (`AcceptedEvmTxs(B)`) — never B's own payload, which
+//! is data accepted by B's selected child. The result is a pure function of
+//! B's parents + B's system ops: computed once when the block becomes a
+//! selected-chain candidate, stored by block hash, and never re-executed on a
+//! virtual reorg (design §2.2/§10).
 //!
 //! This crate is the only place revm (and an EVM secp256k1/k256 ecrecover stack)
 //! enters the tree. It is an **optional** dependency of `kaspa-consensus`, gated
@@ -18,7 +21,7 @@ pub mod snapshot;
 pub mod state;
 pub mod tx;
 
-pub use executor::{execute_block_evm, EvmBlockInput};
+pub use executor::{execute_block_evm, AcceptedTxCandidate, EvmBlockInput};
 
 use revm::primitives::{AccountInfo, Address, SpecId, TxKind, U256, KECCAK_EMPTY};
 use revm::{

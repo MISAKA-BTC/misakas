@@ -39,9 +39,15 @@ pub fn derive_env(
         None => (0, 0, EVM_INITIAL_BASE_FEE as u128),
     };
 
-    // Strict-monotone EVM logical time (design §4.1 / §15.3): never < parent+1.
+    // Non-decreasing EVM logical time (design v0.4 §5.3, D6 — replaced the
+    // v0.2 strict-monotone parent+1 clamp): consecutive EVM blocks may share a
+    // timestamp, which keeps logical time bounded by the header's deviation
+    // tolerance at ANY chain-block rate (kills the BPS≤1 coupling, audit
+    // K-3/AH-3). Uniswap v2 (`timeElapsed > 0`) and v3 (same-ts early return)
+    // oracles are equal-timestamp-safe; contracts must sequence by
+    // block.number, not block.timestamp.
     let header_sec = header_timestamp_ms / 1000;
-    let evm_timestamp_sec = header_sec.max(parent_ts + 1);
+    let evm_timestamp_sec = header_sec.max(parent_ts);
 
     // prevrandao = keyed-BLAKE2b-256(domain, selected_parent_hash ‖ blue_work ‖ daa_score)
     // (design §4.3). FROZEN byte order. Grindable, not secure randomness.
@@ -85,4 +91,34 @@ pub fn next_base_fee(parent_base_fee: u128, parent_gas_used: u64) -> u128 {
 /// a (spec-impossible) overflow saturates rather than panicking the verifier.
 fn evmu256_to_u128(v: kaspa_consensus_core::evm::EvmU256) -> u128 {
     v.try_to_u128().unwrap_or(u128::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parent(ts: u64) -> EvmExecutionHeader {
+        EvmExecutionHeader { evm_number: 1, evm_timestamp_sec: ts, ..Default::default() }
+    }
+
+    /// v0.4 §5.3 (D6) / invariant I8: the EVM logical clock is NON-decreasing —
+    /// equal timestamps across consecutive EVM blocks are allowed, and the
+    /// clock never runs ahead of `max(header time, parent time)`.
+    #[test]
+    fn timestamp_clamp_is_non_decreasing_not_strict() {
+        let cb = Address::ZERO;
+        // Header behind the parent clock ⇒ clamped UP to the parent (not parent+1).
+        let e = derive_env(Some(&parent(100)), 98_000, &[0u8; 64], &[], 0, cb);
+        assert_eq!(e.evm_timestamp_sec, 100);
+        // Header equal to the parent clock ⇒ EQUAL is allowed (the v0.2
+        // strict-monotone clamp would have forced 101 here).
+        let e = derive_env(Some(&parent(100)), 100_000, &[0u8; 64], &[], 0, cb);
+        assert_eq!(e.evm_timestamp_sec, 100);
+        // Header ahead ⇒ wall clock wins.
+        let e = derive_env(Some(&parent(100)), 102_000, &[0u8; 64], &[], 0, cb);
+        assert_eq!(e.evm_timestamp_sec, 102);
+        // First EVM block: parent clock is 0.
+        let e = derive_env(None, 5_000, &[0u8; 64], &[], 0, cb);
+        assert_eq!(e.evm_timestamp_sec, 5);
+    }
 }

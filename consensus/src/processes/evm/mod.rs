@@ -82,6 +82,10 @@ mod driver {
             blue_work_be: l1_header.blue_work.to_be_bytes().to_vec(),
             daa_score: l1_header.daa_score,
             payload,
+            // TODO(M10-C): gather AcceptedEvmTxs(B) — the sorted_mergeset's
+            // payload txs from the payload store (prefix 211) in canonical
+            // order. Until then only B's system_ops execute (v0.4 §3.2).
+            accepted_txs: &[],
         };
 
         let (result, child_snapshot) =
@@ -164,6 +168,7 @@ mod tests {
             blue_work_be: l1.blue_work.to_be_bytes().to_vec(),
             daa_score: l1.daa_score,
             payload: &payload,
+            accepted_txs: &[],
         };
         let (expected, _) = kaspa_evm::snapshot::execute_block_from_snapshot(&EvmStateSnapshot::default(), &input).unwrap();
         let l1 = l1.with_evm_commitment(expected.header.commitment_root());

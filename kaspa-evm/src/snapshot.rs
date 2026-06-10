@@ -105,8 +105,24 @@ mod tests {
         (signer.address(), TxEnvelope::from(tx.into_signed(sig)).encoded_2718())
     }
 
-    fn input<'a>(payload: &'a EvmExecutionPayload, parent: Option<&'a EvmExecutionHeader>) -> EvmBlockInput<'a> {
-        EvmBlockInput { parent, header_timestamp_ms: 10_000, selected_parent_hash: [7u8; 64], blue_work_be: vec![0, 1], daa_score: 1, payload }
+    fn input<'a>(
+        payload: &'a EvmExecutionPayload,
+        accepted: &'a [crate::AcceptedTxCandidate],
+        parent: Option<&'a EvmExecutionHeader>,
+    ) -> EvmBlockInput<'a> {
+        EvmBlockInput {
+            parent,
+            header_timestamp_ms: 10_000,
+            selected_parent_hash: [7u8; 64],
+            blue_work_be: vec![0, 1],
+            daa_score: 1,
+            payload,
+            accepted_txs: accepted,
+        }
+    }
+
+    fn cand(raw: Vec<u8>) -> crate::AcceptedTxCandidate {
+        crate::AcceptedTxCandidate { raw, payload_coinbase: EvmAddress::from_bytes([0xEE; 20]) }
     }
 
     #[test]
@@ -127,20 +143,23 @@ mod tests {
             }],
         };
 
-        let p1 = EvmExecutionPayload { transactions: vec![raw1], ..Default::default() };
-        let (r1, snap1) = execute_block_from_snapshot(&snap0, &input(&p1, None)).unwrap();
+        // v0.4 §3.1: user txs enter as ACCEPTED txs (mergeset payloads), not as
+        // the block's own payload.
+        let p = EvmExecutionPayload::default();
+        let a1 = [cand(raw1)];
+        let (r1, snap1) = execute_block_from_snapshot(&snap0, &input(&p, &a1, None)).unwrap();
         assert_eq!(r1.header.evm_number, 1);
         assert!(snap1.accounts.iter().any(|a| a.address.as_bytes() == to.into_array() && a.balance == EvmU256::from(500u128)), "recipient credited in child snapshot");
 
         // Re-running block 1 from snap0 is identical (the no-replay basis).
-        let (r1b, snap1b) = execute_block_from_snapshot(&snap0, &input(&p1, None)).unwrap();
+        let (r1b, snap1b) = execute_block_from_snapshot(&snap0, &input(&p, &a1, None)).unwrap();
         assert_eq!(r1.header.commitment_root(), r1b.header.commitment_root());
         assert_eq!(snap1, snap1b);
 
         // Block 2 chains on block 1: parent_state_root = block1's state_root, number 2.
         let (_from2, raw2) = signed_transfer(1, to, 300, basefee);
-        let p2 = EvmExecutionPayload { transactions: vec![raw2], ..Default::default() };
-        let (r2, _snap2) = execute_block_from_snapshot(&snap1, &input(&p2, Some(&r1.header))).unwrap();
+        let a2 = [cand(raw2)];
+        let (r2, _snap2) = execute_block_from_snapshot(&snap1, &input(&p, &a2, Some(&r1.header))).unwrap();
         assert_eq!(r2.header.parent_state_root, r1.header.state_root);
         assert_eq!(r2.header.evm_number, 2);
     }
