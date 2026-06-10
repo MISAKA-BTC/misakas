@@ -108,6 +108,24 @@ pub const SYSTEM_DEPOSIT_GAS_PER_CLAIM: u64 = 25_000;
 /// Max total system gas (deposit claims + future system ops) per EVM block.
 pub const MAX_SYSTEM_GAS_PER_EVM_BLOCK: u64 = 10_000_000;
 
+// --- EVM block gas schedule + EIP-1559 base fee (design §5; P2 freeze). ---
+// The design's per-second gas targeting (§5.2: `G_target_sec × τ_sc` from
+// `W_eff/BPS`) is a documented pre-activation refinement. P2 freezes a fixed
+// block gas limit so the gas schedule and base-fee update are deterministic and
+// independently verifiable by every node (the values feed the committed
+// `EvmExecutionHeader`). Refining before activation is not a hard fork (the lane
+// is `u64::MAX`-inert until deploy); changing them after activation is.
+
+/// EVM block gas limit (frozen). `gas_target = EVM_GAS_LIMIT / EVM_ELASTICITY_MULTIPLIER`.
+pub const EVM_GAS_LIMIT: u64 = 30_000_000;
+/// EIP-1559 elasticity multiplier: `gas_limit = EVM_ELASTICITY_MULTIPLIER × gas_target`.
+pub const EVM_ELASTICITY_MULTIPLIER: u64 = 2;
+/// EIP-1559 base-fee max change denominator (≤ `1/8` change per EVM block).
+pub const EVM_BASE_FEE_MAX_CHANGE_DENOMINATOR: u64 = 8;
+/// Base fee (wei) of the first EVM block (1 gwei). Base fee is burned, never paid
+/// to the block coinbase (design §9.2), and accumulates in `evm_burn_accumulator`.
+pub const EVM_INITIAL_BASE_FEE: u64 = 1_000_000_000;
+
 // ---------------------------------------------------------------------------
 // EvmAddress — 20-byte Ethereum account address.
 // ---------------------------------------------------------------------------

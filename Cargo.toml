@@ -18,6 +18,7 @@ members = [
     "consensus/notify",
     "consensus/pow",
     "consensus/wasm",
+    "kaspa-evm",
     "kaspad",
     "kaspa-pq-validator",
     "kaspa-pq-validator-core",
@@ -106,6 +107,7 @@ kaspa-consensusmanager = { version = "1.1.0", path = "components/consensusmanage
 kaspa-core = { version = "1.1.0", path = "core" }
 kaspa-daemon = { version = "1.1.0", path = "daemon" }
 kaspa-database = { version = "1.1.0", path = "database" }
+kaspa-evm = { version = "1.1.0", path = "kaspa-evm" }
 kaspa-grpc-client = { version = "1.1.0", path = "rpc/grpc/client" }
 kaspa-grpc-core = { version = "1.1.0", path = "rpc/grpc/core" }
 kaspa-grpc-server = { version = "1.1.0", path = "rpc/grpc/server" }
@@ -241,6 +243,7 @@ paste = "1.0.15"
 pbkdf2 = "0.12.2"
 portable-atomic = { version = "1.5.1", features = ["float"] }
 prost = "0.14.3"
+protoc-bin-vendored = "3"
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 rand_core = { version = "0.6.4", features = ["std"] }
