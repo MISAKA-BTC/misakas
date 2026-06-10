@@ -6,6 +6,9 @@ pub mod daa;
 pub mod depth;
 pub mod dns_state;
 pub mod epoch_accumulator;
+// kaspa-pq Selected-Parent EVM Lane (ADR-0020): per-block EVM header / state
+// snapshot + canonical-heads stores (prefixes 201/206/209).
+pub mod evm;
 pub mod ghostdag;
 pub mod headers;
 pub mod headers_selected_tip;

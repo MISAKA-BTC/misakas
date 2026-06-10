@@ -526,7 +526,11 @@ impl EvmExecutionHeader {
     }
 }
 
-impl MemSizeEstimator for EvmExecutionHeader {}
+impl MemSizeEstimator for EvmExecutionHeader {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Executor output (design §6 / §11.1). Returned by the `kaspa-evm` executor
@@ -616,7 +620,35 @@ impl EvmStateSnapshot {
     }
 }
 
-impl MemSizeEstimator for EvmStateSnapshot {}
+impl MemSizeEstimator for EvmStateSnapshot {
+    // Implemented (not the panicking default) so the P3 store is safe under any
+    // cache policy — the documented validator-attestation crash was a Vec-valued
+    // store left on the default `unimplemented!()` estimator.
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.accounts.capacity() * size_of::<EvmAccountSnapshot>()
+            + self.accounts.iter().map(|a| a.code.capacity() + a.storage.capacity() * size_of::<(EvmU256, EvmU256)>()).sum::<usize>()
+    }
+}
+
+/// The three canonical EVM head pointers (design §10.3 / §11.1). A virtual reorg
+/// only updates these — it never re-executes (design §2.3 / §10.1). `latest` =
+/// virtual selected-chain head; `safe` = a blue_work-threshold ancestor;
+/// `finalized` = the finality / pruning / DNS anchor. (P3 persists them; the
+/// blue_work / finality selection lands with the hot-path hook.)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalEvmHeads {
+    pub latest: Hash64,
+    pub safe: Hash64,
+    pub finalized: Hash64,
+}
+
+impl MemSizeEstimator for CanonicalEvmHeads {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>()
+    }
+}
 
 #[cfg(test)]
 mod tests {
