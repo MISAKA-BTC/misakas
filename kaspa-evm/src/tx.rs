@@ -30,6 +30,11 @@ impl std::fmt::Display for TxDecodeError {
     }
 }
 
+/// The Ethereum transaction hash: keccak256 over the raw EIP-2718 bytes.
+pub fn tx_hash(raw: &[u8]) -> kaspa_hashes::EvmH256 {
+    kaspa_hashes::EvmH256::from_bytes(revm::primitives::keccak256(raw).0)
+}
+
 /// Metadata of an admitted EVM transaction (the fields a mempool needs to key,
 /// order, replace, and select it). Produced by [`admit_tx_info`].
 #[derive(Debug, Clone, PartialEq, Eq)]

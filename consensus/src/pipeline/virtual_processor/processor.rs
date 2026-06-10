@@ -162,6 +162,8 @@ pub struct VirtualStateProcessor {
     #[cfg_attr(not(feature = "evm"), allow(dead_code))] // read by the cfg(evm) chain-context step only
     pub(super) evm_payload_store: Arc<DbEvmPayloadStore>,
     pub(super) evm_heads_store: Arc<RwLock<DbEvmCanonicalHeadsStore>>,
+    pub(super) evm_receipts_store: Arc<crate::model::stores::evm::DbEvmReceiptsStore>,
+    pub(super) evm_tx_index_store: Arc<crate::model::stores::evm::DbEvmTxIndexStore>,
     pub(super) evm_activation_daa_score: u64,
 
     // Utxo-related stores
@@ -258,6 +260,8 @@ impl VirtualStateProcessor {
             evm_state_store: storage.evm_state_store.clone(),
             evm_payload_store: storage.evm_payload_store.clone(),
             evm_heads_store: storage.evm_heads_store.clone(),
+            evm_receipts_store: storage.evm_receipts_store.clone(),
+            evm_tx_index_store: storage.evm_tx_index_store.clone(),
             evm_activation_daa_score: params.evm_activation_daa_score,
             dns_params: params.dns_params.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
@@ -627,7 +631,7 @@ impl VirtualStateProcessor {
         header: &Header,
         ctx: &mut UtxoProcessingContext<'_>,
         selected_parent_utxo_view: &V,
-    ) -> Result<Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)>, String> {
+    ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
         use crate::model::stores::evm::EvmPayloadStoreReader;
         use crate::processes::evm::{apply_evm_bridge_effects, evm_validate, validate_evm_deposit_claims, EvmValidateError};
         if header.daa_score < self.evm_activation_daa_score {
@@ -668,7 +672,7 @@ impl VirtualStateProcessor {
             EvmValidateError::Exec(e) => format!("evm execution: {e}"),
             EvmValidateError::Store(e) => format!("evm store: {e}"),
         })?;
-        let Some((result, snapshot)) = staged else {
+        let Some(staged) = staged else {
             // The EVM rows commit in the SAME batch as the UTXO diff, so a
             // present result with an absent diff (this KeyNotFound arm) is
             // store corruption — never a reachable consensus state.
@@ -682,9 +686,9 @@ impl VirtualStateProcessor {
             current,
             header.daa_score,
             &consumed_locks,
-            &result.withdrawals,
+            &staged.result.withdrawals,
         )?;
-        Ok(Some((result.header, snapshot)))
+        Ok(Some(staged))
     }
 
     /// Non-`evm` builds cannot validate the lane. On every default network the
@@ -699,7 +703,7 @@ impl VirtualStateProcessor {
         header: &Header,
         _ctx: &mut UtxoProcessingContext<'_>,
         _selected_parent_utxo_view: &V,
-    ) -> Result<Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)>, String> {
+    ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
         if header.daa_score >= self.evm_activation_daa_score {
             panic!(
                 "the EVM lane is active at DAA {} but this kaspad was built without the `evm` feature — refusing to follow a chain it cannot validate (rebuild with --features evm)",
@@ -794,7 +798,7 @@ impl VirtualStateProcessor {
         };
         let sorted_mergeset: Vec<BlockHash> =
             virtual_state.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
-        let (result, _snapshot) = evm_execute_acceptance(
+        let (result, _snapshot, _candidate_meta) = evm_execute_acceptance(
             &self.evm_header_store,
             &self.evm_state_store,
             &self.evm_payload_store,
@@ -851,12 +855,22 @@ impl VirtualStateProcessor {
         // `evm_chain_context_step` — committed in THIS batch so the EVM result
         // and the block's UTXO diff are atomic. `None` on every current
         // network (lane inert) and on non-evm builds.
-        evm_staged: Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)>,
+        evm_staged: Option<crate::processes::evm::EvmStaged>,
     ) {
         let mut batch = WriteBatch::default();
-        if let Some((evm_header, evm_snapshot)) = evm_staged {
-            self.evm_header_store.insert_batch(&mut batch, current, evm_header).unwrap();
-            self.evm_state_store.insert_batch(&mut batch, current, evm_snapshot).unwrap();
+        if let Some(staged) = evm_staged {
+            self.evm_header_store.insert_batch(&mut batch, current, staged.result.header.clone()).unwrap();
+            // §16: receipts + tx-lookup index rows (store/RPC data only) commit
+            // in the SAME batch — atomic with the result and the UTXO diff.
+            crate::processes::evm::stage_evm_index_rows(
+                &self.evm_receipts_store,
+                &self.evm_tx_index_store,
+                &mut batch,
+                current,
+                &staged,
+            )
+            .unwrap();
+            self.evm_state_store.insert_batch(&mut batch, current, staged.snapshot).unwrap();
         }
         self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
         self.utxo_multisets_store.insert_batch(&mut batch, current, multiset).unwrap();

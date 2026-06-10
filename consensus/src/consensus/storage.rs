@@ -8,7 +8,7 @@ use crate::{
         daa::DbDaaStore,
         depth::DbDepthStore,
         dns_state::DbDnsStateStore,
-        evm::{DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore},
+        evm::{DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmReceiptsStore, DbEvmStateStore, DbEvmTxIndexStore},
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
@@ -66,6 +66,10 @@ pub struct ConsensusStorage {
     pub evm_state_store: Arc<DbEvmStateStore>,
     pub evm_payload_store: Arc<DbEvmPayloadStore>,
     pub evm_heads_store: Arc<RwLock<DbEvmCanonicalHeadsStore>>,
+    /// §16: receipts of each ACCEPTING chain block (prefix 203).
+    pub evm_receipts_store: Arc<DbEvmReceiptsStore>,
+    /// §16: tx-hash → locations lookup (prefix 204).
+    pub evm_tx_index_store: Arc<DbEvmTxIndexStore>,
 
     // Append-only stores
     pub ghostdag_store: Arc<DbGhostdagStore>,
@@ -295,6 +299,14 @@ impl ConsensusStorage {
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
         let evm_heads_store = Arc::new(RwLock::new(DbEvmCanonicalHeadsStore::new(db.clone())));
+        let evm_receipts_store = Arc::new(DbEvmReceiptsStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_tx_index_store = Arc::new(DbEvmTxIndexStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
 
         // Block windows
         let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));
@@ -330,6 +342,8 @@ impl ConsensusStorage {
             evm_state_store,
             evm_payload_store,
             evm_heads_store,
+            evm_receipts_store,
+            evm_tx_index_store,
             acceptance_data_store,
             past_pruning_points_store,
             daa_excluded_store,

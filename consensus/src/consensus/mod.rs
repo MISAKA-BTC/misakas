@@ -1402,6 +1402,35 @@ impl ConsensusApi for Consensus {
         self.block_transactions_store.get(hash).optional().unwrap().ok_or(ConsensusError::BlockNotFound(hash))
     }
 
+    fn get_evm_tx_locations(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<kaspa_consensus_core::evm::EvmTxLocations> {
+        Ok(self.storage.evm_tx_index_store.get_or_default(tx_hash).unwrap())
+    }
+
+    fn get_evm_tx_receipt(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmTxReceiptView>> {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
+        let row = self.storage.evm_tx_index_store.get_or_default(tx_hash).unwrap();
+        for (accepting, receipt_index) in row.accepted_in.iter().rev() {
+            // Canonical resolution: only an acceptance on the CURRENT selected
+            // chain counts (§16 — orphaned receipts read as null at `latest`).
+            if !self.is_chain_block(*accepting).unwrap_or(false) {
+                continue;
+            }
+            let receipts = self.storage.evm_receipts_store.get(*accepting).optional().unwrap().unwrap_or_default();
+            let idx = *receipt_index as usize;
+            if idx >= receipts.receipts.len() || receipts.tx_hashes.get(idx) != Some(&tx_hash) {
+                continue; // defensive: index row out of sync with the receipts row
+            }
+            let evm_number = self.storage.evm_header_store.get(*accepting).optional().unwrap().map(|h| h.evm_number).unwrap_or_default();
+            return Ok(Some(kaspa_consensus_core::evm::EvmTxReceiptView {
+                accepting_block: *accepting,
+                evm_number,
+                receipt_index: *receipt_index,
+                receipt: receipts.receipts[idx].clone(),
+            }));
+        }
+        Ok(None)
+    }
+
     fn get_block_evm_payload(&self, hash: BlockHash) -> ConsensusResult<kaspa_consensus_core::evm::EvmExecutionPayload> {
         // kaspa-pq EVM Lane v0.4 (§3.1): the payload store only holds rows for
         // non-empty payloads (commit_body persists them), so absence is the

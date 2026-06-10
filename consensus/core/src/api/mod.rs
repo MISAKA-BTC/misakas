@@ -401,6 +401,21 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§16): the raw tx-lookup row for an EVM tx hash
+    /// (absent = never seen). `accepted_in` entries may include orphaned
+    /// branches; pair with [`Self::get_evm_tx_receipt`] for canonical state.
+    fn get_evm_tx_locations(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<crate::evm::EvmTxLocations> {
+        unimplemented!()
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the canonical-resolved receipt of an EVM
+    /// tx — `Some` iff some ACCEPTING block on the CURRENT selected chain
+    /// executed it (`eth_getTransactionReceipt` semantics: pending / skipped /
+    /// orphaned ⇒ `None`).
+    fn get_evm_tx_receipt(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<crate::evm::EvmTxReceiptView>> {
+        unimplemented!()
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own `EvmExecutionPayload`
     /// (the bytes `evm_payload_hash` commits to). The payload store only holds
     /// rows for non-empty payloads, so absence maps to the empty payload —

@@ -11,7 +11,10 @@
 //! caller-supplied; the store values all implement a real `MemSizeEstimator`,
 //! so any policy is safe.
 
-use kaspa_consensus_core::evm::{CanonicalEvmHeads, EvmExecutionHeader, EvmExecutionPayload, EvmStateSnapshot};
+use kaspa_consensus_core::evm::{
+    CanonicalEvmHeads, EvmBlockReceipts, EvmExecutionHeader, EvmExecutionPayload, EvmStateSnapshot, EvmTxLocations,
+};
+use kaspa_hashes::EvmH256;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
     BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DirectDbWriter, StoreError, StoreResult, DB,
@@ -163,6 +166,86 @@ impl EvmPayloadStore for DbEvmPayloadStore {
     }
     fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(BatchDbWriter::new(batch), hash)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EvmBlockReceipts store (prefix 203) — receipts of one ACCEPTING chain block.
+// ---------------------------------------------------------------------------
+
+pub trait EvmReceiptsStoreReader {
+    fn get(&self, hash: BlockHash) -> Result<EvmBlockReceipts, StoreError>;
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmReceiptsStore {
+    access: CachedDbAccess<BlockHash, EvmBlockReceipts, BlockHasher>,
+}
+
+impl DbEvmReceiptsStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmReceipts.into()) }
+    }
+
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, receipts: EvmBlockReceipts) -> Result<(), StoreError> {
+        if self.access.has(hash)? {
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
+        }
+        self.access.write(BatchDbWriter::new(batch), hash, receipts)
+    }
+
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), hash)
+    }
+}
+
+impl EvmReceiptsStoreReader for DbEvmReceiptsStore {
+    fn get(&self, hash: BlockHash) -> Result<EvmBlockReceipts, StoreError> {
+        self.access.read(hash)
+    }
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
+        self.access.has(hash)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EvmTxLookup store (prefix 204) — tx hash → locations. UNGUARDED upsert: a
+// row accretes entries as side branches / payload re-inclusions are seen.
+// ---------------------------------------------------------------------------
+
+pub trait EvmTxIndexStoreReader {
+    fn get(&self, tx_hash: EvmH256) -> Result<EvmTxLocations, StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmTxIndexStore {
+    access: CachedDbAccess<EvmH256, EvmTxLocations>,
+}
+
+impl DbEvmTxIndexStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmTxLookup.into()) }
+    }
+
+    /// Read-or-default (absent row = a tx never seen).
+    pub fn get_or_default(&self, tx_hash: EvmH256) -> Result<EvmTxLocations, StoreError> {
+        match self.access.read(tx_hash) {
+            Ok(row) => Ok(row),
+            Err(StoreError::KeyNotFound(_)) => Ok(Default::default()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Unguarded write (upsert) into the caller's batch.
+    pub fn write_batch(&self, batch: &mut WriteBatch, tx_hash: EvmH256, row: EvmTxLocations) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), tx_hash, row)
+    }
+}
+
+impl EvmTxIndexStoreReader for DbEvmTxIndexStore {
+    fn get(&self, tx_hash: EvmH256) -> Result<EvmTxLocations, StoreError> {
+        self.access.read(tx_hash)
     }
 }
 

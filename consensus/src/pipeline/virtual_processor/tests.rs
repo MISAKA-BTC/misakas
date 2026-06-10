@@ -3443,5 +3443,18 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     assert_eq!(h7.accepted_tx_count, 0);
     assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(7u64));
 
+    // §16-3: the tx-lookup index recorded the journey — included in b6 (DA
+    // visibility), never accepted, last skip = class 2 (unfunded sender). The
+    // exact data misaka_getTxInclusionStatus serves.
+    let fixture_hash = kaspa_evm::tx::tx_hash(&{
+        let mut raw = vec![0u8; FIXTURE_TX_NONCE0.len() / 2];
+        faster_hex::hex_decode(FIXTURE_TX_NONCE0.as_bytes(), &mut raw).unwrap();
+        raw
+    });
+    let row = storage.evm_tx_index_store.get_or_default(fixture_hash).unwrap();
+    assert_eq!(row.included_in, vec![BlockHash::from(6u64)], "DA visibility: the payload block carrying the tx");
+    assert!(row.accepted_in.is_empty(), "never executed (unfunded)");
+    assert_eq!(row.last_skip_class, Some(2));
+
     consensus.shutdown(wait_handles);
 }

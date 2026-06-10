@@ -132,18 +132,23 @@ pub fn execute_block_evm(
     //    (class-1 admission); defense-in-depth maps it to a deterministic skip
     //    so every implementation that reaches it stays consensus-consistent.
     let mut skipped_tx_count: u32 = 0;
-    let mut planned: Vec<(revm::primitives::TxEnv, &AcceptedTxCandidate)> = Vec::with_capacity(input.accepted_txs.len());
+    // §16: per-candidate outcomes (parallel to input order) — store/RPC data
+    // feeding the tx-lookup index, never part of the commitment.
+    let mut outcomes: Vec<Option<kaspa_consensus_core::evm::EvmCandidateOutcome>> = vec![None; input.accepted_txs.len()];
+    let mut planned: Vec<(revm::primitives::TxEnv, &AcceptedTxCandidate, usize)> = Vec::with_capacity(input.accepted_txs.len());
     let mut cumulative_gas_limit: u64 = 0;
     let mut over_cap = false;
-    for cand in input.accepted_txs {
+    for (cand_idx, cand) in input.accepted_txs.iter().enumerate() {
         if over_cap {
             skipped_tx_count += 1; // class 5 (strict prefix: everything after the first over-cap tx)
+            outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 5 });
             continue;
         }
         let txenv = match crate::tx::decode_tx_to_env(&cand.raw) {
             Ok(t) => t,
             Err(_) => {
                 skipped_tx_count += 1; // defensive: class-1 material that slipped past admission
+                outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
                 continue;
             }
         };
@@ -151,9 +156,10 @@ pub fn execute_block_evm(
         if cumulative_gas_limit > MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK {
             over_cap = true;
             skipped_tx_count += 1; // class 5
+            outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 5 });
             continue;
         }
-        planned.push((txenv, cand));
+        planned.push((txenv, cand, cand_idx));
     }
 
     // 3. Accepted user txs in canonical order.
@@ -162,7 +168,7 @@ pub fn execute_block_evm(
     let mut executed_raws: Vec<Vec<u8>> = Vec::with_capacity(planned.len());
     let mut burn_this_block: u128 = 0;
     let mut withdrawals: Vec<WithdrawOp> = Vec::new();
-    for (txenv, cand) in planned {
+    for (txenv, cand, cand_idx) in planned {
         let derived = derived.clone();
         let basefee = derived.base_fee_per_gas;
         // Effective gas price (EIP-1559): legacy txs carry no priority field —
@@ -236,6 +242,8 @@ pub fn execute_block_evm(
                 if withdrawn_wei > 0 {
                     burn_balance(&mut state_db, crate::withdraw::f002_address(), U256::from(withdrawn_wei))?;
                 }
+                outcomes[cand_idx] =
+                    Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Accepted { receipt_index: receipts.len() as u32 });
                 receipts.push(make_receipt(&result, gas_used));
                 executed_raws.push(cand.raw.clone());
             }
@@ -245,6 +253,7 @@ pub fn execute_block_evm(
             Err(EVMError::Transaction(_)) => {
                 drop(evm);
                 skipped_tx_count += 1;
+                outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
             }
             Err(other) => return Err(EvmExecError::InvalidTx(format!("{other:?}"))),
         }
@@ -286,7 +295,12 @@ pub fn execute_block_evm(
         evm_burn_accumulator: EvmU256::from(parent_burn.saturating_add(burn_this_block)),
     };
 
-    let result = EvmExecutionResult { header, receipts, withdrawals, applied_deposit_claims: applied_claims };
+    let candidate_outcomes = outcomes
+        .into_iter()
+        .map(|o| o.expect("every candidate received an outcome in the planning or execution loop"))
+        .collect();
+    let result =
+        EvmExecutionResult { header, receipts, withdrawals, applied_deposit_claims: applied_claims, candidate_outcomes };
     Ok((result, state_db))
 }
 

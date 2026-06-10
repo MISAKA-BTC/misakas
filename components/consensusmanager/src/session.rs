@@ -440,6 +440,23 @@ impl ConsensusSessionOwned {
     /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own EVM payload (absent row =
     /// the empty payload). Served with body-only IBD responses so a v2 block
     /// reassembles with a matching `evm_payload_hash` on the requester.
+    /// kaspa-pq EVM Lane v0.4 (§16): raw tx-lookup row (DA visibility + skips).
+    pub async fn async_get_evm_tx_locations(
+        &self,
+        tx_hash: kaspa_consensus_core::EvmH256,
+    ) -> ConsensusResult<kaspa_consensus_core::evm::EvmTxLocations> {
+        self.clone().spawn_blocking(move |c| c.get_evm_tx_locations(tx_hash)).await
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved receipt (None = not
+    /// accepted under the current chain).
+    pub async fn async_get_evm_tx_receipt(
+        &self,
+        tx_hash: kaspa_consensus_core::EvmH256,
+    ) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmTxReceiptView>> {
+        self.clone().spawn_blocking(move |c| c.get_evm_tx_receipt(tx_hash)).await
+    }
+
     pub async fn async_get_block_evm_payload(
         &self,
         hash: BlockHash,

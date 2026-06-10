@@ -685,6 +685,22 @@ impl MemSizeEstimator for EvmReceipt {}
 /// The full output of executing one block's EVM lane. The committed
 /// `header.commitment_root()` equals the L1 `Header::evm_commitment_root`; the
 /// rest is store/RPC data and the UTXO-diff source for P4.
+/// Per-candidate outcome of one acceptance run (§6.1), parallel to the input
+/// `AcceptedEvmTxs(B)` order. Store/RPC data ONLY — outcomes never enter the
+/// commitment preimage (the committed surface is `EvmExecutionHeader`), so the
+/// receipt/lookup indexes can evolve without a fork.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EvmCandidateOutcome {
+    /// Executed: `receipt_index` points into `EvmExecutionResult::receipts`.
+    Accepted { receipt_index: u32 },
+    /// Deterministically skipped with the §6.1 class (2 = acceptance-invalid
+    /// [subsumes 3], 5 = over-cap prefix-take).
+    Skipped { class: u8 },
+}
+
+impl MemSizeEstimator for EvmCandidateOutcome {}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvmExecutionResult {
@@ -694,9 +710,71 @@ pub struct EvmExecutionResult {
     pub withdrawals: Vec<WithdrawOp>,
     /// Deposit claims applied this block → consumed lock outputs (P4).
     pub applied_deposit_claims: Vec<DepositClaim>,
+    /// §16: per-candidate outcomes, parallel to the acceptance input order
+    /// (feeds the tx-lookup index; NOT part of the commitment).
+    pub candidate_outcomes: Vec<EvmCandidateOutcome>,
 }
 
 impl MemSizeEstimator for EvmExecutionResult {}
+
+/// The receipts row of one ACCEPTING chain block (§16, store prefix 203):
+/// receipts in accepted order plus the parallel Ethereum tx hashes (so
+/// `eth_getTransactionReceipt` can return `transactionHash` without re-reading
+/// payloads). Store/RPC data only — never part of the commitment.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmBlockReceipts {
+    pub receipts: Vec<EvmReceipt>,
+    pub tx_hashes: Vec<EvmH256>,
+}
+
+impl MemSizeEstimator for EvmBlockReceipts {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.tx_hashes.capacity() * size_of::<EvmH256>()
+            + self.receipts.capacity() * size_of::<EvmReceipt>()
+            + self.receipts.iter().map(|r| r.logs.iter().map(|l| l.data.capacity() + l.topics.capacity() * 32).sum::<usize>()).sum::<usize>()
+    }
+}
+
+/// The tx-lookup row (§16, store prefix 204): where a tx hash was SEEN
+/// (payload blocks, DA visibility), where it was ACCEPTED (executing chain
+/// blocks — side branches allowed, the reader resolves canonicality against
+/// the current chain), and the most recent skip class when never accepted
+/// (informational, §6.1). All vecs are bounded at write time.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmTxLocations {
+    /// Payload blocks carrying the raw tx (bounded; inclusion ≠ execution).
+    pub included_in: Vec<Hash64>,
+    /// `(accepting chain block, receipt index)` per acceptance (bounded).
+    pub accepted_in: Vec<(Hash64, u32)>,
+    /// §6.1 class of the most recent skip, while never accepted (2 or 5).
+    pub last_skip_class: Option<u8>,
+}
+
+impl MemSizeEstimator for EvmTxLocations {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>() + self.included_in.capacity() * size_of::<Hash64>() + self.accepted_in.capacity() * (size_of::<Hash64>() + 4)
+    }
+}
+
+/// Write-time bounds for [`EvmTxLocations`] (DoS caps on a single row).
+pub const MAX_TX_LOCATION_INCLUSIONS: usize = 16;
+pub const MAX_TX_LOCATION_ACCEPTANCES: usize = 8;
+
+/// A canonical-resolved receipt view (§16 `eth_getTransactionReceipt`
+/// semantics): the ACCEPTING chain block currently on the selected chain, its
+/// EVM number, and the executed receipt. `None` upstream = the tx is not
+/// accepted under the current chain (it may be included-but-skipped, pending,
+/// or on an orphaned branch — `EvmTxLocations` tells which).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvmTxReceiptView {
+    pub accepting_block: Hash64,
+    pub evm_number: u64,
+    pub receipt_index: u32,
+    pub receipt: EvmReceipt,
+}
 
 // ---------------------------------------------------------------------------
 // EvmStateSnapshot — persisted full EVM account state (design §11, P3).
