@@ -48,6 +48,10 @@ pub enum KaspadMessagePayloadType {
     RequestNextPruningPointAndItsAnticoneBlocks,
     BlockBody,
     RequestBlockBodies,
+    InvEvmTransactions,
+    RequestEvmTransactions,
+    EvmTransaction,
+    EvmTransactionNotFound,
 }
 
 impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
@@ -104,6 +108,10 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             }
             KaspadMessagePayload::BlockBody(_) => KaspadMessagePayloadType::BlockBody,
             KaspadMessagePayload::RequestBlockBodies(_) => KaspadMessagePayloadType::RequestBlockBodies,
+            KaspadMessagePayload::InvEvmTransactions(_) => KaspadMessagePayloadType::InvEvmTransactions,
+            KaspadMessagePayload::RequestEvmTransactions(_) => KaspadMessagePayloadType::RequestEvmTransactions,
+            KaspadMessagePayload::EvmTransaction(_) => KaspadMessagePayloadType::EvmTransaction,
+            KaspadMessagePayload::EvmTransactionNotFound(_) => KaspadMessagePayloadType::EvmTransactionNotFound,
         }
     }
 }

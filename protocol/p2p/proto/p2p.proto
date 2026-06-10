@@ -211,6 +211,25 @@ message RequestBlockBodiesMessage{
   repeated Hash hashes = 1;
 }
 
+// kaspa-pq EVM Lane v0.4 (§14.2): pending EVM tx gossip (protocol ≥ 101 only).
+// Hashes are 32-byte keccak256 tx hashes; raw is the EIP-2718 envelope a
+// payload carries. Relay happens only AFTER the class-1 admission precheck.
+message InvEvmTransactionsMessage{
+  repeated bytes hashes = 1;
+}
+
+message RequestEvmTransactionsMessage{
+  repeated bytes hashes = 1;
+}
+
+message EvmTransactionMessage{
+  bytes raw = 1;
+}
+
+message EvmTransactionNotFoundMessage{
+  bytes hash = 1;
+}
+
 message UnexpectedPruningPointMessage{
 }
 

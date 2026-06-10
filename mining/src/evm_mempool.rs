@@ -109,6 +109,11 @@ impl EvmMempool {
         self.txs.contains_key(hash)
     }
 
+    /// Raw EIP-2718 bytes of a pending tx (§14.2: served to requesting peers).
+    pub fn get_raw(&self, hash: &EvmH256) -> Option<Vec<u8>> {
+        self.txs.get(hash).map(|t| t.raw.clone())
+    }
+
     /// Insert a pre-admitted pending tx (admission itself happens in
     /// [`crate::manager::MiningManager::submit_evm_transaction`], which is the
     /// only production caller; tests construct `PendingEvmTx` directly).
@@ -321,6 +326,9 @@ mod tests {
         let h = pool.insert(tx(0xA, 0, 100, 10, 1)).unwrap();
         pool.insert(tx(0xB, 0, 100, 20, 2)).unwrap();
         assert_eq!(pool.total_bytes(), 30);
+        // §14.2 relay serving: pending raw bytes by hash, None when absent.
+        assert_eq!(pool.get_raw(&h), Some(vec![1u8; 10]));
+        assert_eq!(pool.get_raw(&EvmH256::from_bytes([0xFF; 32])), None);
         pool.remove(&h);
         assert_eq!(pool.total_bytes(), 20);
         // Within TTL: nothing expires. Past TTL: everything goes.

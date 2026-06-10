@@ -140,6 +140,32 @@ impl MiningManager {
         self.evm_mempool.read().len()
     }
 
+    /// §14.2 relay: whether this build can run the class-1 admission precheck.
+    /// A non-`evm` build must never REQUEST pending EVM txs (it could neither
+    /// admit them nor fairly judge the sending peer), so the relay flow checks
+    /// this before acting on an inv.
+    pub fn supports_evm_admission(&self) -> bool {
+        cfg!(feature = "evm")
+    }
+
+    /// §14.2 relay: of `tx_hashes`, the ones NOT already pending in the EVM
+    /// mempool (the request filter for incoming EVM invs).
+    pub fn evm_unknown_transactions(&self, tx_hashes: Vec<kaspa_hashes::EvmH256>) -> Vec<kaspa_hashes::EvmH256> {
+        let pool = self.evm_mempool.read();
+        tx_hashes.into_iter().filter(|h| !pool.contains(h)).collect()
+    }
+
+    /// §14.2 relay: serve a pending EVM tx's raw bytes to a requesting peer.
+    pub fn get_evm_transaction_raw(&self, tx_hash: &kaspa_hashes::EvmH256) -> Option<Vec<u8>> {
+        self.evm_mempool.read().get_raw(tx_hash)
+    }
+
+    /// §18.1 / §16: whether the given EVM tx is currently pending in this
+    /// node's EVM mempool (the "pending" tier of the inclusion-status ladder).
+    pub fn has_pending_evm_transaction(&self, tx_hash: &kaspa_hashes::EvmH256) -> bool {
+        self.evm_mempool.read().contains(tx_hash)
+    }
+
     pub fn get_block_template(&self, consensus: &dyn ConsensusApi, miner_data: &MinerData) -> MiningManagerResult<BlockTemplate> {
         let virtual_state_approx_id = consensus.get_virtual_state_approx_id();
         let mut cache_lock = self.block_template_cache.lock(virtual_state_approx_id);
@@ -936,6 +962,26 @@ impl MiningManagerProxy {
     /// mempool (sync + cheap: decode + k256 recovery + pool insert).
     pub fn submit_evm_transaction(&self, raw: Vec<u8>) -> Result<kaspa_hashes::EvmH256, crate::evm_mempool::EvmMempoolError> {
         self.inner.submit_evm_transaction(raw)
+    }
+
+    /// §14.2 relay: whether this build can run the class-1 admission precheck.
+    pub fn supports_evm_admission(&self) -> bool {
+        self.inner.supports_evm_admission()
+    }
+
+    /// §14.2 relay: filter out EVM tx hashes already pending in the EVM mempool.
+    pub fn evm_unknown_transactions(&self, tx_hashes: Vec<kaspa_hashes::EvmH256>) -> Vec<kaspa_hashes::EvmH256> {
+        self.inner.evm_unknown_transactions(tx_hashes)
+    }
+
+    /// §14.2 relay: serve a pending EVM tx's raw bytes to a requesting peer.
+    pub fn get_evm_transaction_raw(&self, tx_hash: &kaspa_hashes::EvmH256) -> Option<Vec<u8>> {
+        self.inner.get_evm_transaction_raw(tx_hash)
+    }
+
+    /// §18.1: whether the given EVM tx is pending in this node's EVM mempool.
+    pub fn has_pending_evm_transaction(&self, tx_hash: &kaspa_hashes::EvmH256) -> bool {
+        self.inner.has_pending_evm_transaction(tx_hash)
     }
 
     pub async fn get_realtime_feerate_estimations(self) -> FeerateEstimations {

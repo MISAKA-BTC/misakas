@@ -1,4 +1,5 @@
 use crate::flowcontext::{
+    evm_transactions::EvmTransactionsSpread,
     orphans::{OrphanBlocksPool, OrphanOutput},
     process_queue::ProcessQueue,
     transactions::TransactionsSpread,
@@ -25,6 +26,8 @@ use kaspa_core::{
     task::tick::TickService,
 };
 use kaspa_core::{time::unix_now, warn};
+use kaspa_hashes::EvmH256;
+use kaspa_mining::evm_mempool::EvmMempoolError;
 use kaspa_mining::mempool::tx::{Orphan, Priority};
 use kaspa_mining::{manager::MiningManagerProxy, mempool::tx::RbfPolicy};
 use kaspa_notify::notifier::Notify;
@@ -63,7 +66,16 @@ use uuid::Uuid;
 // kaspa-pq protocol version: bumped well above upstream Kaspa (which is at 9)
 // so that any handshake with a mainline Kaspa peer fails the version check
 // immediately. See docs/adr/0001-network-isolation.md.
-const PROTOCOL_VERSION: u32 = 100;
+//
+// 101 (EVM Lane §14.2) adds the pending-EVM-tx relay messages. 100 peers are
+// still fully served (they negotiate the same flow set minus the EVM relay
+// flows), but must never be sent an EVM message: routing an unknown payload
+// type disconnects the peer, so all EVM gossip is version-filtered.
+const PROTOCOL_VERSION: u32 = 101;
+/// The last protocol version WITHOUT the EVM relay messages (still accepted).
+const PROTOCOL_VERSION_NO_EVM_RELAY: u32 = 100;
+/// The minimum protocol version that understands the EVM relay messages.
+pub(crate) const PROTOCOL_VERSION_EVM_RELAY: u32 = 101;
 
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
@@ -218,6 +230,10 @@ pub struct FlowContextInner {
     shared_block_requests: Arc<Mutex<HashMap<BlockHash, RequestScopeMetadata>>>,
     transactions_spread: AsyncRwLock<TransactionsSpread>,
     shared_transaction_requests: Arc<Mutex<HashMap<TransactionId, RequestScopeMetadata>>>,
+    // kaspa-pq EVM Lane §14.2: pending-EVM-tx gossip state, fully separate from
+    // the UTXO tx spread (independent queue, longer batching interval).
+    evm_transactions_spread: AsyncRwLock<EvmTransactionsSpread>,
+    shared_evm_transaction_requests: Arc<Mutex<HashMap<EvmH256, RequestScopeMetadata>>>,
     is_ibd_running: Arc<AtomicBool>,
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
     pub address_manager: Arc<Mutex<AddressManager>>,
@@ -326,6 +342,8 @@ impl FlowContext {
                 shared_block_requests: Arc::new(Mutex::new(HashMap::new())),
                 transactions_spread: AsyncRwLock::new(TransactionsSpread::new(hub.clone())),
                 shared_transaction_requests: Arc::new(Mutex::new(HashMap::new())),
+                evm_transactions_spread: AsyncRwLock::new(EvmTransactionsSpread::new(hub.clone())),
+                shared_evm_transaction_requests: Arc::new(Mutex::new(HashMap::new())),
                 is_ibd_running: Default::default(),
                 ibd_metadata: Default::default(),
                 hub,
@@ -445,6 +463,12 @@ impl FlowContext {
 
     pub fn try_adding_transaction_request(&self, req: TransactionId) -> Option<RequestScope<TransactionId>> {
         Self::try_adding_request_impl(req, &self.shared_transaction_requests)
+    }
+
+    /// §14.2: cross-peer dedup for pending-EVM-tx requests (same scope semantics
+    /// as UTXO tx requests; `EvmH256` is `Hash + Eq + Copy` like the other keys).
+    pub fn try_adding_evm_transaction_request(&self, req: EvmH256) -> Option<RequestScope<EvmH256>> {
+        Self::try_adding_request_impl(req, &self.shared_evm_transaction_requests)
     }
 
     pub async fn add_orphan(&self, consensus: &ConsensusProxy, orphan_block: Block) -> Option<OrphanOutput> {
@@ -705,6 +729,22 @@ impl FlowContext {
     pub async fn broadcast_transactions<I: IntoIterator<Item = TransactionId>>(&self, transaction_ids: I, should_throttle: bool) {
         self.transactions_spread.write().await.broadcast_transactions(transaction_ids, should_throttle).await
     }
+
+    /// §14.2: queue pending-EVM-tx hashes for inv broadcast to EVM-relay-capable
+    /// (protocol ≥ 101) peers. Lower priority than UTXO tx gossip by design:
+    /// the spread batches on a longer interval and its invs are shed (not
+    /// disconnected) on receiver overflow.
+    pub async fn broadcast_evm_transactions<I: IntoIterator<Item = EvmH256>>(&self, tx_hashes: I) {
+        self.evm_transactions_spread.write().await.broadcast_evm_transactions(tx_hashes).await
+    }
+
+    /// Adds the rpc-submitted EVM transaction to the EVM mempool (class-1
+    /// admission inside) and, on success, queues it for P2P relay (§14.2).
+    pub async fn submit_rpc_evm_transaction(&self, raw: Vec<u8>) -> Result<EvmH256, EvmMempoolError> {
+        let hash = self.mining_manager().clone().submit_evm_transaction(raw)?;
+        self.broadcast_evm_transactions(once(hash)).await;
+        Ok(hash)
+    }
 }
 
 #[async_trait]
@@ -752,6 +792,12 @@ impl ConnectionInitializer for FlowContext {
         // Register all flows according to version
         let (flows, applied_protocol_version) = match peer_version.protocol_version {
             v if v >= PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            // §14.2 back-compat: pre-EVM-relay kaspa-pq binaries. Same flow set
+            // minus the EVM relay flows; all EVM gossip towards such peers is
+            // version-filtered (an unroutable payload type disconnects them).
+            PROTOCOL_VERSION_NO_EVM_RELAY => {
+                (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_NO_EVM_RELAY), PROTOCOL_VERSION_NO_EVM_RELAY)
+            }
             8 => (v8::register(self.clone(), router.clone(), 8), 8),
             7 => (v7::register(self.clone(), router.clone()), 7),
             v => return Err(ProtocolError::VersionMismatch(PROTOCOL_VERSION, v)),
