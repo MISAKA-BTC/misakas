@@ -106,8 +106,18 @@ impl BlockTemplateBuilder {
         }
         // Update the hash merkle root according to the modified transactions
         block_template.block.header.hash_merkle_root = consensus.calc_transaction_hash_merkle_root(&block_template.block.transactions);
+        // kaspa-pq EVM Lane v0.4 (§15): on a v2 (evm-active) template the EVM
+        // commitment derives from the header timestamp (the executor env), and
+        // this mining-side path cannot re-execute the lane — bumping the
+        // timestamp here would make every self-mined block from a
+        // coinbase-modified template fail the verifier's commitment check and
+        // be disqualified. Keep the consensus-built timestamp instead: the
+        // coinbase/merkle edits above do not enter the EVM commitment, and
+        // staleness is bounded by the template cache lifetime (the template is
+        // rebuilt on each virtual change anyway).
+        let evm_committed_template = block_template.block.header.version >= kaspa_consensus_core::constants::EVM_HEADER_VERSION;
         let new_timestamp = unix_now();
-        if new_timestamp > block_template.block.header.timestamp {
+        if !evm_committed_template && new_timestamp > block_template.block.header.timestamp {
             // Only if new time stamp is later than current, update the header. Otherwise,
             // we keep the previous time as built by internal consensus median time logic
             block_template.block.header.timestamp = new_timestamp;

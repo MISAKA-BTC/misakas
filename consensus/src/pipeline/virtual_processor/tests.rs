@@ -3366,5 +3366,26 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     assert_eq!(storage.evm_header_store.get(4.into()).unwrap().evm_number, 3, "b4 is EVM block 3 on the selected chain");
     assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(4u64), "heads recovered past the disqualified block");
 
+    // ---- b5: the node's OWN template (§15 producer path) — the builder must
+    // declare v2, commit the (empty) payload hash and the REAL acceptance
+    // commitment, and the resulting block must validate through the full
+    // pipeline. (Template used as-is: on an evm-active net a miner must not
+    // mutate the template timestamp — the commitment derives from it.)
+    let template = consensus
+        .build_block_template(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+        )
+        .unwrap();
+    assert_eq!(template.block.header.version, EVM_HEADER_VERSION, "evm-active template declares v2");
+    assert_eq!(template.block.header.evm_payload_hash, EvmExecutionPayload::default().payload_hash());
+    assert_ne!(template.block.header.evm_commitment_root, Hash64::default(), "the template committed a real acceptance result");
+    let mut b5 = template.block;
+    b5.header.hash = 5u64.into(); // test identity (PoW skipped)
+    consensus.validate_and_insert_block(b5.to_immutable()).virtual_state_task.await.unwrap();
+    assert!(storage.evm_header_store.has(5.into()).unwrap(), "the self-mined block executed + persisted");
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(5u64));
+
     consensus.shutdown(wait_handles);
 }

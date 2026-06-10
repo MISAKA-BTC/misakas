@@ -737,6 +737,57 @@ impl VirtualStateProcessor {
         self.evm_heads_store.write().set_batch(batch, heads).unwrap();
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§15): producer-side EVM fields for a template
+    /// built from the current virtual state. Runs the SAME acceptance-execution
+    /// core the verifier uses, so a block mined from this template reproduces
+    /// `evm_commitment_root` byte-for-byte. The own payload is empty until the
+    /// EVM mempool lands (§16). NOTE: the commitment derives from the header's
+    /// timestamp — a miner must not mutate the template timestamp (refreshing
+    /// the template re-derives the commitment).
+    #[cfg(feature = "evm")]
+    fn evm_template_fields(
+        &self,
+        header: Header,
+        virtual_state: &VirtualState,
+    ) -> (Header, kaspa_consensus_core::evm::EvmExecutionPayload) {
+        use crate::processes::evm::evm_execute_acceptance;
+        if header.daa_score < self.evm_activation_daa_score {
+            return (header, Default::default());
+        }
+        let own_payload = kaspa_consensus_core::evm::EvmExecutionPayload::default();
+        let sorted_mergeset: Vec<BlockHash> =
+            virtual_state.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
+        let (result, _snapshot) = evm_execute_acceptance(
+            &self.evm_header_store,
+            &self.evm_state_store,
+            &self.evm_payload_store,
+            virtual_state.ghostdag_data.selected_parent,
+            &sorted_mergeset,
+            &header,
+            &own_payload,
+        )
+        .expect("template acceptance execution reads committed stores; failure is store corruption");
+        let header = header.with_evm_payload_hash(own_payload.payload_hash()).with_evm_commitment(result.header.commitment_root());
+        (header, own_payload)
+    }
+
+    /// Non-`evm` builds cannot produce evm-active templates (same refusal as
+    /// the validation seam); unreachable on every default network.
+    #[cfg(not(feature = "evm"))]
+    fn evm_template_fields(
+        &self,
+        header: Header,
+        _virtual_state: &VirtualState,
+    ) -> (Header, kaspa_consensus_core::evm::EvmExecutionPayload) {
+        if header.daa_score >= self.evm_activation_daa_score {
+            panic!(
+                "the EVM lane is active at DAA {} but this kaspad was built without the `evm` feature — cannot build a valid template (rebuild with --features evm)",
+                header.daa_score
+            );
+        }
+        (header, Default::default())
+    }
+
     fn commit_utxo_state(
         &self,
         current: BlockHash,
@@ -2139,7 +2190,14 @@ impl VirtualStateProcessor {
             )
             .unwrap();
         txs.insert(0, coinbase.tx);
-        let version = BLOCK_VERSION;
+        // kaspa-pq EVM Lane v0.4 (§4.3/§15): the template declares the
+        // fork-correct header version — v2 (two EVM commitments) at/after
+        // activation, v1 before (mirrors the check_header_version rule).
+        let version = if virtual_state.daa_score >= self.evm_activation_daa_score {
+            kaspa_consensus_core::constants::EVM_HEADER_VERSION
+        } else {
+            BLOCK_VERSION
+        };
         let parents_by_level = self.parents_manager.calc_block_parents(pruning_point, &virtual_state.parents);
         let hash_merkle_root = calc_hash_merkle_root(txs.iter());
 
@@ -2167,11 +2225,19 @@ impl VirtualStateProcessor {
             virtual_state.ghostdag_data.blue_score,
             header_pruning_point,
         );
+        // kaspa-pq EVM Lane v0.4 (§15): on an evm-active template, execute the
+        // mergeset acceptance NOW (the producer-side run of the exact verifier
+        // code) and commit both EVM header fields. The own payload is empty
+        // until the EVM mempool lands (§16 phase) — its (non-zero) hash is
+        // still committed. Inert (returns the header unchanged) pre-activation.
+        let (header, evm_payload) = self.evm_template_fields(header, &virtual_state);
         let selected_parent_hash = virtual_state.ghostdag_data.selected_parent;
         let selected_parent_timestamp = self.headers_store.get_timestamp(selected_parent_hash).unwrap();
         let selected_parent_daa_score = self.headers_store.get_daa_score(selected_parent_hash).unwrap();
+        let mut template_block = MutableBlock::new(header, txs);
+        template_block.evm_payload = evm_payload;
         Ok(BlockTemplate::new(
-            MutableBlock::new(header, txs),
+            template_block,
             miner_data,
             coinbase.has_red_reward,
             selected_parent_timestamp,

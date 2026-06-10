@@ -191,11 +191,39 @@ mod driver {
         if header_store.has(block).map_err(EvmValidateError::Store)? {
             return Ok(None);
         }
+        debug_assert!(!sorted_mergeset.contains(&block), "a block is never in its own mergeset (off-by-one, §3.1)");
 
+        let (result, child_snapshot) =
+            evm_execute_acceptance(header_store, state_store, payload_store, selected_parent, sorted_mergeset, l1_header, payload)?;
+
+        // The only block-invalidating EVM condition: producer commitment mismatch
+        // (user tx failures are status-0 receipts inside `result`, design §6.2).
+        if result.header.commitment_root() != l1_header.evm_commitment_root {
+            return Err(EvmValidateError::CommitmentMismatch { block });
+        }
+
+        Ok(Some((result, child_snapshot)))
+    }
+
+    /// The shared execution core: run one block's mergeset acceptance from the
+    /// stores. Used by the verifier ([`evm_validate`]) AND by the template
+    /// builder (§15 — the producer computes the commitment it will declare,
+    /// with the exact code the verifier later re-runs, so a mined block
+    /// reproduces the commitment byte-for-byte). `l1_header` supplies only the
+    /// env inputs (timestamp / blue_work / daa_score) — its EVM fields are not
+    /// read here.
+    pub fn evm_execute_acceptance(
+        header_store: &DbEvmHeaderStore,
+        state_store: &DbEvmStateStore,
+        payload_store: &DbEvmPayloadStore,
+        selected_parent: BlockHash,
+        sorted_mergeset: &[BlockHash],
+        l1_header: &Header,
+        payload: &EvmExecutionPayload,
+    ) -> Result<(kaspa_consensus_core::evm::EvmExecutionResult, EvmStateSnapshot), EvmValidateError> {
         // AcceptedEvmTxs(B): the mergeset's payload txs in canonical order
         // (sorted_mergeset, then payload order — design §3.1). The class-5
         // prefix-take and class-2/3 skips are applied inside the executor.
-        debug_assert!(!sorted_mergeset.contains(&block), "a block is never in its own mergeset (off-by-one, §3.1)");
         let mut accepted_txs: Vec<AcceptedTxCandidate> = Vec::new();
         for merged in sorted_mergeset {
             let merged_payload = match payload_store.get(*merged) {
@@ -233,16 +261,7 @@ mod driver {
             accepted_txs: &accepted_txs,
         };
 
-        let (result, child_snapshot) =
-            kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).map_err(|e| EvmValidateError::Exec(e.to_string()))?;
-
-        // The only block-invalidating EVM condition: producer commitment mismatch
-        // (user tx failures are status-0 receipts inside `result`, design §6.2).
-        if result.header.commitment_root() != l1_header.evm_commitment_root {
-            return Err(EvmValidateError::CommitmentMismatch { block });
-        }
-
-        Ok(Some((result, child_snapshot)))
+        kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).map_err(|e| EvmValidateError::Exec(e.to_string()))
     }
 
     /// Validate + stage into `batch` in one call (the unit-test surface; the
@@ -272,7 +291,7 @@ mod driver {
 }
 
 #[cfg(feature = "evm")]
-pub use driver::{evm_validate, evm_validate_and_persist, EvmStaged, EvmValidateError};
+pub use driver::{evm_execute_acceptance, evm_validate, evm_validate_and_persist, EvmStaged, EvmValidateError};
 
 #[cfg(test)]
 mod bridge_tests {
