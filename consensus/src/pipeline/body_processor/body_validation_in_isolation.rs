@@ -655,6 +655,7 @@ mod tests {
                 deposit_outpoint: Default::default(),
                 evm_address: EvmAddress::from_bytes([0xCC; 20]),
                 amount_sompi: 1,
+                claim_tip_sompi: 0,
             })],
             ..Default::default()
         };

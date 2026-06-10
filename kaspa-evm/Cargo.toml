@@ -18,6 +18,10 @@ repository.workspace = true
 [dependencies]
 kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
+# ScriptClass check for the F002 withdraw destination (PQ-only: the synthetic
+# UTXO output must be the standard ML-DSA P2PKH class). kaspa-txscript's default
+# feature set is pq-only — no secp enters this graph.
+kaspa-txscript.workspace = true
 kaspa-utils.workspace = true
 borsh.workspace = true
 # `EvmExecError: Display`, and (load-bearing) forces `derive_more/display` ON for

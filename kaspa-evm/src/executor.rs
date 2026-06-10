@@ -23,7 +23,7 @@
 use crate::{env, roots, state, EvmExecError};
 use kaspa_consensus_core::evm::{
     DepositClaim, EvmAddress, EvmBloom, EvmExecutionHeader, EvmExecutionPayload, EvmExecutionResult, EvmLog, EvmReceipt,
-    EvmSystemOp, EvmU256, EVM_GENESIS_STATE_ROOT, EVM_NATIVE_SCALE, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
+    EvmSystemOp, EvmU256, WithdrawOp, EVM_GENESIS_STATE_ROOT, EVM_NATIVE_SCALE, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
     SYSTEM_DEPOSIT_GAS_PER_CLAIM,
 };
 use kaspa_hashes::EvmH256;
@@ -100,23 +100,22 @@ pub fn execute_block_evm(
     let mut gas_used: u64 = 0;
     let mut applied_claims: Vec<DepositClaim> = Vec::new();
 
-    // 1. Bounded deposit claims, applied before user txs (design §6.2/§7.4):
-    //    credit `amount_sompi × EVM_NATIVE_SCALE` wei and charge system gas.
+    // 1. Bounded deposit claims, applied before user txs (design §3.2): credit
+    //    `(amount − claim_tip) × EVM_NATIVE_SCALE` wei to the deposit address
+    //    and `claim_tip × SCALE` to the ACCEPTING block's coinbase (the AH-1
+    //    claim-inclusion incentive — supply-neutral split of the lock amount);
+    //    charge system gas. Tip ≤ amount is consensus-validated; the executor
+    //    clamps defensively.
     for op in &input.payload.system_ops {
         match op {
             EvmSystemOp::DepositClaim(claim) => {
-                let wei = U256::from(claim.amount_sompi as u128 * EVM_NATIVE_SCALE as u128);
-                let addr = to_revm_address(&claim.evm_address);
-                // Credit the EVM balance. `load_account` materializes the entry (a
-                // new address starts as `NotExisting`, which `basic()` reports as
-                // absent); give it a real (EOA) code hash and mark it `Touched` so
-                // the credit is visible to execution + the state trie + spendable.
-                let acct = state_db.load_account(addr).map_err(|e| EvmExecError::InvalidTx(format!("deposit credit: {e:?}")))?;
-                if acct.info.code_hash == B256::ZERO {
-                    acct.info.code_hash = KECCAK_EMPTY;
+                let tip_sompi = claim.claim_tip_sompi.min(claim.amount_sompi);
+                let credit_wei = U256::from((claim.amount_sompi - tip_sompi) as u128 * EVM_NATIVE_SCALE as u128);
+                let tip_wei = U256::from(tip_sompi as u128 * EVM_NATIVE_SCALE as u128);
+                credit_balance(&mut state_db, to_revm_address(&claim.evm_address), credit_wei)?;
+                if !tip_wei.is_zero() {
+                    credit_balance(&mut state_db, coinbase, tip_wei)?;
                 }
-                acct.info.balance = acct.info.balance.saturating_add(wei);
-                acct.account_state = AccountState::Touched;
                 gas_used = gas_used.saturating_add(SYSTEM_DEPOSIT_GAS_PER_CLAIM);
                 applied_claims.push(claim.clone());
             }
@@ -162,6 +161,7 @@ pub fn execute_block_evm(
     let mut receipts: Vec<EvmReceipt> = Vec::with_capacity(planned.len());
     let mut executed_raws: Vec<Vec<u8>> = Vec::with_capacity(planned.len());
     let mut burn_this_block: u128 = 0;
+    let mut withdrawals: Vec<WithdrawOp> = Vec::new();
     for (txenv, cand) in planned {
         let derived = derived.clone();
         let basefee = derived.base_fee_per_gas;
@@ -192,6 +192,9 @@ pub fn execute_block_evm(
                 b.prevrandao = Some(derived.prev_randao);
             })
             .modify_tx_env(move |t| *t = tx_for_env)
+            // F002 withdraw (design §9.3): intercept calls targeting the
+            // MISAKA_WITHDRAW address (see crate::withdraw).
+            .append_handler_register(crate::withdraw::register_f002_withdraw)
             .build();
 
         match evm.transact_commit() {
@@ -209,6 +212,30 @@ pub fn execute_block_evm(
                 if !tip.is_zero() && payload_cb != accepting_coinbase {
                     reroute_balance(&mut state_db, accepting_coinbase, payload_cb, tip)?;
                 }
+                // F002 withdrawals (design §9.3): the COMMITTED logs are exactly
+                // the effective (non-reverted) withdraw calls. Materialize each
+                // as a WithdrawOp and burn the escrowed wei out of F002 — the
+                // value leaves the EVM lane here; consensus re-creates it as a
+                // synthetic UTXO output in this block's diff.
+                let evm_tx_index = receipts.len() as u32;
+                let mut op_index = 0u32;
+                let mut withdrawn_wei: u128 = 0;
+                for log in result.logs() {
+                    if let Some(w) = crate::withdraw::decode_withdraw_log(log) {
+                        withdrawals.push(WithdrawOp {
+                            evm_tx_index,
+                            op_index,
+                            from: EvmAddress::from_bytes(w.from),
+                            script_public_key: w.script_public_key,
+                            amount_sompi: (w.amount_wei / EVM_NATIVE_SCALE as u128) as u64,
+                        });
+                        op_index += 1;
+                        withdrawn_wei = withdrawn_wei.saturating_add(w.amount_wei);
+                    }
+                }
+                if withdrawn_wei > 0 {
+                    burn_balance(&mut state_db, crate::withdraw::f002_address(), U256::from(withdrawn_wei))?;
+                }
                 receipts.push(make_receipt(&result, gas_used));
                 executed_raws.push(cand.raw.clone());
             }
@@ -222,9 +249,6 @@ pub fn execute_block_evm(
             Err(other) => return Err(EvmExecError::InvalidTx(format!("{other:?}"))),
         }
     }
-
-    // 3. F002 withdrawals — P2 sub-B (the inspector). Empty here.
-    let withdrawals = Vec::new();
 
     // 4. Roots + bloom + accumulators.
     let logs_bloom = EvmBloom::from_bytes(roots::logs_bloom(&receipts));
@@ -264,6 +288,32 @@ pub fn execute_block_evm(
 
     let result = EvmExecutionResult { header, receipts, withdrawals, applied_deposit_claims: applied_claims };
     Ok((result, state_db))
+}
+
+/// Credit `amount` wei directly in the working state. `load_account`
+/// materializes the entry (a new address starts as `NotExisting`, which
+/// `basic()` reports as absent); give it a real (EOA) code hash and mark it
+/// `Touched` so the credit is visible to execution + the state trie.
+fn credit_balance(db: &mut CacheDB<EmptyDB>, addr: Address, amount: U256) -> Result<(), EvmExecError> {
+    let acct = db.load_account(addr).map_err(|e| EvmExecError::InvalidTx(format!("balance credit: {e:?}")))?;
+    if acct.info.code_hash == B256::ZERO {
+        acct.info.code_hash = KECCAK_EMPTY;
+    }
+    acct.info.balance = acct.info.balance.saturating_add(amount);
+    acct.account_state = AccountState::Touched;
+    Ok(())
+}
+
+/// Burn `amount` wei out of `addr` (the F002 escrow exit): the wei leaves the
+/// EVM lane entirely — total native balance decreases by exactly this amount.
+fn burn_balance(db: &mut CacheDB<EmptyDB>, addr: Address, amount: U256) -> Result<(), EvmExecError> {
+    let acct = db.load_account(addr).map_err(|e| EvmExecError::InvalidTx(format!("balance burn: {e:?}")))?;
+    if acct.info.code_hash == B256::ZERO {
+        acct.info.code_hash = KECCAK_EMPTY;
+    }
+    acct.info.balance = acct.info.balance.saturating_sub(amount);
+    acct.account_state = AccountState::Touched;
+    Ok(())
 }
 
 /// Move `amount` wei `from → to` directly in the working state (the §8.1 tip
@@ -374,6 +424,7 @@ mod tests {
                 deposit_outpoint: Default::default(),
                 evm_address: claim_addr,
                 amount_sompi: 7,
+                claim_tip_sompi: 0,
             })],
             evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
             ..Default::default()
@@ -505,6 +556,7 @@ mod tests {
                 deposit_outpoint: Default::default(),
                 evm_address: EvmAddress::from_bytes(sender.into_array()),
                 amount_sompi: 10_000,
+                claim_tip_sompi: 0,
             })],
             evm_coinbase: EvmAddress::from_bytes([0xFE; 20]), // accepting coinbase F
             ..Default::default()
@@ -526,4 +578,133 @@ mod tests {
         let actual: u128 = snapshot.accounts.iter().map(|a| a.balance.try_to_u128().unwrap()).sum();
         assert_eq!(actual, expected_total);
     }
+    /// Build + sign an arbitrary call (value + calldata) from a test key.
+    #[allow(clippy::too_many_arguments)]
+    fn signed_call(key: u8, nonce: u64, to: Address, value: u128, gas_limit: u64, max_fee: u128, input: Vec<u8>) -> (Address, Vec<u8>) {
+        use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
+        use alloy_eips::eip2718::Encodable2718;
+        use alloy_signer::SignerSync;
+        use alloy_signer_local::PrivateKeySigner;
+
+        let signer = PrivateKeySigner::from_bytes(&B256::from([key; 32])).unwrap();
+        let tx = TxEip1559 {
+            chain_id: EVM_CHAIN_ID,
+            nonce,
+            gas_limit,
+            max_fee_per_gas: max_fee,
+            max_priority_fee_per_gas: 0,
+            to: revm::primitives::TxKind::Call(to),
+            value: U256::from(value),
+            access_list: Default::default(),
+            input: input.into(),
+        };
+        let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        (signer.address(), TxEnvelope::from(tx.into_signed(sig)).encoded_2718())
+    }
+
+    fn withdraw_calldata(spk: &kaspa_consensus_core::tx::ScriptPublicKey) -> Vec<u8> {
+        let mut data = spk.version().to_be_bytes().to_vec();
+        data.extend_from_slice(spk.script());
+        data
+    }
+
+    /// v0.4 §9.3 (F002): a payable withdraw call burns the wei out of the EVM
+    /// lane, emits exactly one WithdrawOp with the caller/amount/destination,
+    /// and the O(1) supply accumulator tracks the exit (deposits − withdrawals
+    /// − burn == actual state sum).
+    #[test]
+    fn f002_withdraw_emits_op_and_burns_from_evm() {
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        let f002 = crate::withdraw::f002_address();
+        // Withdraw 5 sompi = 5e10 wei.
+        let withdraw_wei = 5u128 * EVM_NATIVE_SCALE as u128;
+        let (sender, raw) = signed_call(0x11, 0, f002, withdraw_wei, 60_000, basefee, withdraw_calldata(&spk));
+
+        // Fund the sender ONLY via a same-block deposit (exact supply math).
+        let payload = EvmExecutionPayload {
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: Default::default(),
+                evm_address: EvmAddress::from_bytes(sender.into_array()),
+                amount_sompi: 10_000, // 1e14 wei
+                claim_tip_sompi: 0,
+            })],
+            evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
+            ..Default::default()
+        };
+        let accepted = [cand(raw, 0xFE)];
+        let (result, mut db) = execute_block_evm(CacheDB::new(EmptyDB::default()), &input_with(&payload, &accepted)).unwrap();
+
+        assert!(result.receipts[0].succeeded, "the withdraw call succeeded");
+        assert_eq!(result.withdrawals.len(), 1);
+        let w = &result.withdrawals[0];
+        assert_eq!(w.evm_tx_index, 0);
+        assert_eq!(w.op_index, 0);
+        assert_eq!(w.from, EvmAddress::from_bytes(sender.into_array()));
+        assert_eq!(w.amount_sompi, 5);
+        assert_eq!(w.script_public_key, spk);
+        // The withdraw log is part of the committed receipt (RPC-visible).
+        assert!(result.receipts[0].logs.iter().any(|l| l.address.as_bytes() == f002.into_array()));
+        // The escrow was burned: F002 holds nothing.
+        assert_eq!(db.basic(f002).unwrap().map(|a| a.balance).unwrap_or_default(), U256::ZERO);
+        // Supply: total = deposit − withdrawal − basefee burn, and matches the
+        // actual state sum (gas: 21k intrinsic + calldata + 9k F002).
+        let gas_burn = result.receipts[0].gas_used as u128 * basefee;
+        let expected_total = 10_000u128 * EVM_NATIVE_SCALE as u128 - withdraw_wei - gas_burn;
+        assert_eq!(result.header.evm_total_native_balance, EvmU256::from(expected_total));
+        let snapshot = crate::snapshot::snapshot_from_cachedb(&db);
+        let actual: u128 = snapshot.accounts.iter().map(|a| a.balance.try_to_u128().unwrap()).sum();
+        assert_eq!(actual, expected_total);
+    }
+
+    /// v0.4 §9.3 / §6.1 class 4: user-input faults at F002 (non-multiple
+    /// amount, zero value, garbage destination) REVERT the call — the carrying
+    /// tx gets a status-0 receipt, gas is charged, no WithdrawOp is emitted,
+    /// and the value returns to the sender. The block stays valid.
+    #[test]
+    fn f002_user_faults_revert_without_withdrawal() {
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        let f002 = crate::withdraw::f002_address();
+
+        // (a) amount not an exact sompi multiple; (b) zero value;
+        // (c) destination not the PQ-standard class.
+        let (_s1, raw_frac) = signed_call(0x11, 0, f002, EVM_NATIVE_SCALE as u128 + 1, 60_000, basefee, withdraw_calldata(&spk));
+        let (_s2, raw_zero) = signed_call(0x11, 1, f002, 0, 60_000, basefee, withdraw_calldata(&spk));
+        let (sender, raw_badspk) =
+            signed_call(0x11, 2, f002, 5 * EVM_NATIVE_SCALE as u128, 60_000, basefee, vec![0, 0, 0xAA, 0xBB]);
+
+        let seed = funded_seed(sender, 1_000_000_000_000_000_000);
+        let payload = EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes([0xFE; 20]), ..Default::default() };
+        let accepted = [cand(raw_frac, 0xFE), cand(raw_zero, 0xFE), cand(raw_badspk, 0xFE)];
+        let (result, mut db) = execute_block_evm(seed, &input_with(&payload, &accepted)).unwrap();
+
+        assert_eq!(result.receipts.len(), 3, "all three executed (class 4, not skipped)");
+        assert!(result.receipts.iter().all(|r| !r.succeeded), "every fault reverted");
+        assert!(result.receipts.iter().all(|r| r.gas_used > 0), "reverts are charged");
+        assert!(result.withdrawals.is_empty(), "no withdrawal escaped");
+        assert_eq!(db.basic(f002).unwrap().map(|a| a.balance).unwrap_or_default(), U256::ZERO, "no value stuck in F002");
+    }
+
+    /// AH-1 (v0.4 §9.2): the claim tip splits the deposited amount between the
+    /// deposit address and the ACCEPTING coinbase — supply-neutral.
+    #[test]
+    fn deposit_claim_tip_credits_accepting_coinbase() {
+        let payload = EvmExecutionPayload {
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: Default::default(),
+                evm_address: EvmAddress::from_bytes([0xCC; 20]),
+                amount_sompi: 100,
+                claim_tip_sompi: 7,
+            })],
+            evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
+            ..Default::default()
+        };
+        let (result, mut db) = execute_block_evm(CacheDB::new(EmptyDB::default()), &input_with(&payload, &[])).unwrap();
+        let scale = EVM_NATIVE_SCALE as u128;
+        assert_eq!(db.basic(Address::from([0xCC; 20])).unwrap().unwrap().balance, U256::from(93 * scale));
+        assert_eq!(db.basic(Address::from([0xFE; 20])).unwrap().unwrap().balance, U256::from(7 * scale));
+        assert_eq!(result.header.evm_total_native_balance, EvmU256::from(100 * scale), "the split is supply-neutral");
+    }
+
 }

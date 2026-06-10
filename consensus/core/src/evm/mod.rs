@@ -149,6 +149,32 @@ pub const MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK: usize = 128 * 1024;
 /// (design §5.1: kept equal to the EVM block gas limit, audit AH-2).
 pub const MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK: u64 = EVM_GAS_LIMIT;
 
+// --- F002 withdraw precompile (design §9.3). ---
+
+/// Fixed gas charged by a successful (or user-fault-reverted) `F002` withdraw
+/// call, on top of the carrying tx's intrinsic gas. Frozen at activation.
+pub const F002_WITHDRAW_GAS: u64 = 9_000;
+/// Max byte length of the destination `ScriptPublicKey` SCRIPT a withdraw may
+/// name (the standard ML-DSA P2PKH script is 69 bytes; this is a sanity bound,
+/// the class check is the real gate).
+pub const MAX_WITHDRAW_SCRIPT_BYTES: usize = 128;
+
+/// `synthetic_withdrawal_txid` (design §9.3): the deterministic txid of the
+/// synthetic UTXO output materializing one `WithdrawOp` in the accepting block
+/// B's own UTXO diff. Keyed under the FROZEN
+/// [`MISAKA_EVM_SYNTHETIC_OUTPOINT_CONTEXT`] domain — deliberately separate
+/// from the real transaction-id domain so a synthetic outpoint can never
+/// collide with a real txid. Preimage (fixed-width, frozen byte order):
+/// `block_hash(64) ‖ evm_tx_index(4 LE) ‖ op_index(4 LE)`. Stable across reorg
+/// (the EVM result is append-only per block).
+pub fn synthetic_withdrawal_txid(block: Hash64, evm_tx_index: u32, op_index: u32) -> Hash64 {
+    let mut preimage = [0u8; 64 + 4 + 4];
+    preimage[..64].copy_from_slice(&block.as_bytes());
+    preimage[64..68].copy_from_slice(&evm_tx_index.to_le_bytes());
+    preimage[68..72].copy_from_slice(&op_index.to_le_bytes());
+    blake2b_512_keyed(MISAKA_EVM_SYNTHETIC_OUTPOINT_CONTEXT, &preimage)
+}
+
 // ---------------------------------------------------------------------------
 // EvmAddress — 20-byte Ethereum account address.
 // ---------------------------------------------------------------------------
@@ -395,11 +421,16 @@ impl MemSizeEstimator for EvmSystemOp {}
 pub struct DepositClaim {
     /// The `EVM_DEPOSIT_LOCK` output being claimed.
     pub deposit_outpoint: TransactionOutpoint,
-    /// EVM account credited `amount_sompi * EVM_NATIVE_SCALE` wei. MUST equal
-    /// the lock output's recorded address.
+    /// EVM account credited `(amount_sompi − claim_tip_sompi) × EVM_NATIVE_SCALE`
+    /// wei. MUST equal the lock output's recorded address.
     pub evm_address: EvmAddress,
     /// Sompi amount. MUST equal the lock output's value.
     pub amount_sompi: u64,
+    /// The claim-inclusion incentive (audit AH-1, v0.4 §9.2): credited as
+    /// `claim_tip_sompi × EVM_NATIVE_SCALE` wei to the ACCEPTING block's
+    /// declared `evm_coinbase`. MUST equal the lock output's recorded tip
+    /// (≤ `amount_sompi`, consensus-validated).
+    pub claim_tip_sompi: u64,
 }
 
 impl MemSizeEstimator for DepositClaim {}
@@ -435,6 +466,9 @@ pub struct EvmDepositLockOutput {
     pub evm_address: EvmAddress,
     pub refund_script_public_key: ScriptPublicKey,
     pub timeout_daa_score: Option<u64>,
+    /// The claim-inclusion incentive the depositor offers (audit AH-1): paid to
+    /// the accepting block's `evm_coinbase` when the lock is claimed.
+    pub claim_tip_sompi: u64,
 }
 
 impl MemSizeEstimator for EvmDepositLockOutput {}
@@ -741,6 +775,7 @@ mod tests {
                 deposit_outpoint: TransactionOutpoint::default(),
                 evm_address: EvmAddress::default(),
                 amount_sompi: 1,
+                claim_tip_sompi: 0,
             })],
             ..Default::default()
         };

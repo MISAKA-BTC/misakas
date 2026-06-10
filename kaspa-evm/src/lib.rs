@@ -20,6 +20,7 @@ pub mod roots;
 pub mod snapshot;
 pub mod state;
 pub mod tx;
+pub mod withdraw;
 
 pub use executor::{execute_block_evm, AcceptedTxCandidate, EvmBlockInput};
 

@@ -3296,6 +3296,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
             deposit_outpoint: Default::default(),
             evm_address: EvmAddress::from_bytes([0xCC; 20]),
             amount_sompi: 7,
+            claim_tip_sompi: 0,
         })],
         evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
         ..Default::default()
