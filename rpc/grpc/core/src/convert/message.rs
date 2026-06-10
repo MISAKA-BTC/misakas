@@ -419,6 +419,7 @@ from!(item: &kaspa_rpc_core::GetEvmTxInclusionStatusRequest, protowire::GetEvmTx
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetEvmTxInclusionStatusResponse>, protowire::GetEvmTxInclusionStatusResponseMessage, {
     Self {
+        pending: item.pending,
         included_in: item.included_in.clone(),
         accepted_in: item.accepted_in.clone(),
         receipt_index: item.receipt_index,
@@ -1026,6 +1027,7 @@ try_from!(item: &protowire::GetEvmTxInclusionStatusRequestMessage, kaspa_rpc_cor
 });
 try_from!(item: &protowire::GetEvmTxInclusionStatusResponseMessage, RpcResult<kaspa_rpc_core::GetEvmTxInclusionStatusResponse>, {
     Self {
+        pending: item.pending,
         included_in: item.included_in.clone(),
         accepted_in: item.accepted_in.clone(),
         receipt_index: item.receipt_index,

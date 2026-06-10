@@ -685,4 +685,80 @@ mod tests {
 
         consensus.shutdown(wait_handles);
     }
+
+    /// kaspa-pq EVM Lane v0.4 §14.1 — Y9 budget independence (audit K-10): the
+    /// EVM payload byte budget never enters the UTXO mass budget. A payload
+    /// filled to just under `MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK` contributes
+    /// ZERO block mass (the in-isolation mass result is identical with and
+    /// without it), and the byte cap trips on payload bytes alone, regardless
+    /// of how much mass headroom the block has.
+    #[test]
+    #[cfg(feature = "evm")]
+    fn evm_y9_payload_byte_budget_independent_of_utxo_mass_budget() {
+        use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+        use kaspa_consensus_core::evm::{EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        let consensus = TestConsensus::new(&Config::new(params));
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+
+        // The §16 e2e fixture: a class-1-VALID signed EIP-1559 transfer.
+        // Class-1 admission is per-tx and duplication is an ACCEPTANCE-side
+        // skip (never a body fault), so repeating it legally fills the payload
+        // to the byte cap.
+        const FIXTURE_TX_NONCE0: &str = "02f86b834d534b8080843b9aca008252089400000000000000000000000000000000000000228201f480c001a03244f5d74a96a52bd1c42fa1b9c336f4d3ae5509190ed9a526f17971c7fd743ca07f58e09399b50636b84f0ae4a7634c60a11c6f32427b613ebf6f4a638d6c68c1";
+        let mut raw = vec![0u8; FIXTURE_TX_NONCE0.len() / 2];
+        faster_hex::hex_decode(FIXTURE_TX_NONCE0.as_bytes(), &mut raw).unwrap();
+
+        let base = EvmExecutionPayload::default().payload_bytes().len();
+        let per_tx = 4 + raw.len(); // borsh: 4-byte length prefix + raw bytes
+        let n = (MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK - base) / per_tx;
+        let full_payload = EvmExecutionPayload { transactions: vec![raw.clone(); n], ..Default::default() };
+        let full_len = full_payload.payload_bytes().len();
+        assert!(full_len <= MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, "filled payload is within the cap");
+        assert!(full_len > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK - per_tx, "filled payload is NEAR the cap");
+
+        let coinbase = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_COINBASE, 0, vec![0u8; 19]);
+        let txs = vec![coinbase];
+        let hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        let mk_header = || {
+            Header::new_finalized(
+                EVM_HEADER_VERSION,
+                vec![vec![1.into()]].try_into().unwrap(),
+                hash_merkle_root,
+                Default::default(),
+                Default::default(),
+                1,
+                0x207fffff,
+                1,
+                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+                0,
+                0.into(),
+                0,
+                Default::default(),
+            )
+        };
+
+        // Identical UTXO content, empty vs near-cap payload: bit-identical mass.
+        let empty_payload = EvmExecutionPayload::default();
+        let block_empty = MutableBlock::new(mk_header().with_evm_payload_hash(empty_payload.payload_hash()), txs.clone());
+        let mass_empty = body_processor.validate_body_in_isolation(&block_empty.to_immutable()).unwrap();
+        let mut block_full = MutableBlock::new(mk_header().with_evm_payload_hash(full_payload.payload_hash()), txs.clone());
+        block_full.evm_payload = full_payload;
+        let mass_full = body_processor.validate_body_in_isolation(&block_full.to_immutable()).unwrap();
+        assert_eq!(mass_empty, mass_full, "a near-cap EVM payload contributes ZERO mass to the UTXO budget (§14.1)");
+
+        // One tx over the cap: the BYTE budget trips on its own — the block's
+        // huge remaining mass headroom is irrelevant.
+        let over_payload = EvmExecutionPayload { transactions: vec![raw; n + 1], ..Default::default() };
+        let mut block_over = MutableBlock::new(mk_header().with_evm_payload_hash(over_payload.payload_hash()), txs.clone());
+        block_over.evm_payload = over_payload;
+        assert_match!(
+            body_processor.validate_body_in_isolation(&block_over.to_immutable()),
+            Err(RuleError::EvmPayloadTooLarge(_, _))
+        );
+
+        consensus.shutdown(wait_handles);
+    }
 }

@@ -764,8 +764,6 @@ impl VirtualStateProcessor {
         // tx here would make our OWN block payload-block-invalid, so hard-filter
         // rather than trust the pool; independently re-enforce the byte cap.
         // The candidates execute in a LATER accepting chain block, never here.
-        // own evm_coinbase stays zero until `misaka_feeRecipient` lands (§16-2):
-        // priority fees of these txs then credit the zero address on acceptance.
         let own_payload = {
             use kaspa_consensus_core::evm::{EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
             let mut payload = EvmExecutionPayload::default();

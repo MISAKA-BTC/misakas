@@ -129,6 +129,14 @@ pub fn apply_evm_bridge_effects(
 /// the per-candidate `(tx hash, source payload block)` meta — committed by the
 /// caller atomically with the block's UTXO diff. Always compiled (plain
 /// consensus types) so the commit path signature is feature-free.
+///
+/// §14.1 disk-budget note: phase-1 DELIBERATELY shares the consensus RocksDB
+/// batch instead of a separate EVM write queue — the no-replay/commitment
+/// guarantees rest on the EVM rows landing atomically with the UTXO diff, and
+/// the write volume is bounded per chain block by the payload byte cap +
+/// accepted-gas cap (D4). A separate EVM state DB (with its own flush and
+/// compaction queue) becomes mandatory only with Stage 2+ state growth, where
+/// snapshots stop being the state representation.
 pub struct EvmStaged {
     pub result: kaspa_consensus_core::evm::EvmExecutionResult,
     pub snapshot: kaspa_consensus_core::evm::EvmStateSnapshot,

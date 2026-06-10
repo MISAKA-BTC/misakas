@@ -814,6 +814,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // acceptances read as not-accepted at `latest`).
         let receipt = session.async_get_evm_tx_receipt(tx_hash).await?;
         Ok(GetEvmTxInclusionStatusResponse {
+            // §14/§18.1: the pre-inclusion tier — pending in this node's EVM
+            // mempool (a tx can be both pending and included: inclusion does
+            // not remove it from the pool under delayed acceptance).
+            pending: self.mining_manager.has_pending_evm_transaction(&tx_hash),
             included_in: row.included_in.iter().map(|h| h.to_string()).collect(),
             accepted_in: receipt.as_ref().map(|v| v.accepting_block.to_string()).unwrap_or_default(),
             receipt_index: receipt.as_ref().map(|v| v.receipt_index).unwrap_or_default(),

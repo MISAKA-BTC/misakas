@@ -3458,3 +3458,78 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
 
     consensus.shutdown(wait_handles);
 }
+
+/// kaspa-pq EVM Lane v0.4 §14.1/§14.3 — Y9 budget independence, pipeline e2e:
+/// a template assembled from an OVERSUPPLIED candidate list fills the payload
+/// to the byte cap (and no further), the resulting full-cap block keeps its
+/// normal UTXO content and passes the complete pipeline (mass rules included),
+/// and the next chain block processes the entire payload at acceptance without
+/// invalidating or stalling the UTXO lane. Complements the in-isolation mass
+/// equality test (`evm_y9_payload_byte_budget_independent_of_utxo_mass_budget`);
+/// the λ·D propagation re-validation with measured payload-laden D is Y10 —
+/// testnet work and an activation precondition (§14.3), not a unit concern.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_y9_full_cap_payload_block_validates_and_executes() {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader, EvmPayloadStoreReader};
+    use kaspa_consensus_core::evm::{EvmAddress, EvmExecutionPayload, EvmTemplateData, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let storage = consensus.consensus_clone().storage.clone();
+
+    // The class-1-valid §16 fixture, oversupplied: duplication is legal at the
+    // body (admission is per-tx) and a deterministic skip at acceptance.
+    const FIXTURE_TX_NONCE0: &str = "02f86b834d534b8080843b9aca008252089400000000000000000000000000000000000000228201f480c001a03244f5d74a96a52bd1c42fa1b9c336f4d3ae5509190ed9a526f17971c7fd743ca07f58e09399b50636b84f0ae4a7634c60a11c6f32427b613ebf6f4a638d6c68c1";
+    let mut raw = vec![0u8; FIXTURE_TX_NONCE0.len() / 2];
+    faster_hex::hex_decode(FIXTURE_TX_NONCE0.as_bytes(), &mut raw).unwrap();
+    let base = EvmExecutionPayload::default().payload_bytes().len();
+    let per_tx = 4 + raw.len();
+    let n = (MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK - base) / per_tx;
+
+    let template = consensus
+        .build_block_template_with_evm(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+            EvmTemplateData {
+                evm_coinbase: EvmAddress::from_bytes([0xCB; 20]),
+                transactions: vec![raw.clone(); n + 32], // 32 candidates beyond the cap
+            },
+        )
+        .unwrap();
+    assert_eq!(template.block.evm_payload.transactions.len(), n, "template fills to the byte cap and not one tx further");
+    let assembled = template.block.evm_payload.payload_bytes().len();
+    assert!(assembled <= MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, "assembled payload within the cap");
+    assert!(assembled > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK - per_tx, "assembled payload NEAR the cap");
+
+    let mut b1 = template.block;
+    b1.header.hash = 1u64.into();
+    consensus.validate_and_insert_block(b1.to_immutable()).virtual_state_task.await.unwrap();
+    assert!(storage.evm_payload_store.has(1.into()).unwrap(), "full-cap payload persisted at commit_body");
+
+    // The next chain block accepts b1's payload: every copy is a deterministic
+    // skip (unfunded sender), the block stays valid, the heads advance — a
+    // payload-maxed DAG block never blocks the UTXO lane (§14.2).
+    let template = consensus
+        .build_block_template(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+        )
+        .unwrap();
+    let mut b2 = template.block;
+    b2.header.hash = 2u64.into();
+    consensus.validate_and_insert_block(b2.to_immutable()).virtual_state_task.await.unwrap();
+    let h2 = storage.evm_header_store.get(2.into()).unwrap();
+    assert_eq!(h2.skipped_tx_count, n as u32, "the full-cap payload was processed: every copy skipped, none accepted");
+    assert_eq!(h2.accepted_tx_count, 0);
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(2u64));
+
+    consensus.shutdown(wait_handles);
+}

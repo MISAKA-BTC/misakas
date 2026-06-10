@@ -718,6 +718,7 @@ message GetEvmTxInclusionStatusResponseMessage {
   string acceptedIn = 2;
   uint32 receiptIndex = 3;
   uint32 lastSkipClass = 4;
+  bool pending = 5;
   RPCError error = 1000;
 }
 

@@ -1734,6 +1734,8 @@ impl Deserializer for GetEvmTxInclusionStatusRequest {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetEvmTxInclusionStatusResponse {
+    /// Pending in this node's EVM mempool (§14/§18.1: the pre-inclusion tier).
+    pub pending: bool,
     /// Payload blocks carrying the raw tx (DA visibility ≠ execution).
     pub included_in: Vec<String>,
     /// The CANONICAL accepting chain block (empty = not accepted at `latest`).
@@ -1747,6 +1749,7 @@ pub struct GetEvmTxInclusionStatusResponse {
 impl Serializer for GetEvmTxInclusionStatusResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         store!(u16, &1, writer)?;
+        store!(bool, &self.pending, writer)?;
         store!(Vec<String>, &self.included_in, writer)?;
         store!(String, &self.accepted_in, writer)?;
         store!(u32, &self.receipt_index, writer)?;
@@ -1758,11 +1761,12 @@ impl Serializer for GetEvmTxInclusionStatusResponse {
 impl Deserializer for GetEvmTxInclusionStatusResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u16, reader)?;
+        let pending = load!(bool, reader)?;
         let included_in = load!(Vec<String>, reader)?;
         let accepted_in = load!(String, reader)?;
         let receipt_index = load!(u32, reader)?;
         let last_skip_class = load!(u32, reader)?;
-        Ok(Self { included_in, accepted_in, receipt_index, last_skip_class })
+        Ok(Self { pending, included_in, accepted_in, receipt_index, last_skip_class })
     }
 }
 
