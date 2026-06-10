@@ -195,7 +195,13 @@ impl Mempool {
             // relays a transaction consensus will reject. The upstream-permissive class table
             // below is kept for the (legacy-fixture) unit tests via `pq_only = false`.
             let input_class = ScriptClass::from_script(&entry.script_public_key);
-            if self.config.pq_only && !input_class.is_pq_standard() {
+            // kaspa-pq EVM Lane v0.4 (AC-2): an EVM_DEPOSIT_LOCK input is the
+            // embedded ML-DSA-87 refund spend — consensus-valid at/after the lock
+            // timeout (the UTXO-context validator has this exact carve-out). The
+            // mempool must relay it or refunds become miner-direct-only; a
+            // premature refund is rejected by consensus validation at mempool
+            // entry, not by standardness.
+            if self.config.pq_only && !input_class.is_pq_standard() && input_class != ScriptClass::EvmDepositLock {
                 return Err(NonStandardError::RejectInputScriptClass(transaction_id, i));
             }
             match input_class {
@@ -210,7 +216,10 @@ impl Mempool {
                 // is fixed and the engine length-checks the public key and signature
                 // before the libcrux verify. The mass-budget side of the policy is
                 // calibrated via `mass_per_sig_op` (docs/adr/0005-mass-policy.md).
-                ScriptClass::PubKeyHashMlDsa87 => {}
+                // The EVM_DEPOSIT_LOCK refund spend IS that same template (the
+                // lock's push-and-drop prefix + embedded ML-DSA-87 refund P2PKH):
+                // exactly one sig-op.
+                ScriptClass::PubKeyHashMlDsa87 | ScriptClass::EvmDepositLock => {}
                 ScriptClass::ScriptHash => {
                     // todo relax due to on fly calculation
                     let num_sig_ops = get_sig_op_count_upper_bound::<PopulatedTransaction, SigHashReusedValuesUnsync>(
