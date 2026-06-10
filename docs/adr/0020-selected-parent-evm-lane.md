@@ -4,6 +4,14 @@
 Proposed; updated 2026-06-10 to design **v0.2 (audit-revised) + v0.3 (DEX addendum)**. **P0 (spec
 freeze) + P1 (consensus types) implemented**; **P2 (revm executor) in progress**; P3–P7 pending.
 
+> **Design superseded by v0.4** — the unified design doc
+> [`docs/misaka-evm-design-v0.4.md`](../misaka-evm-design-v0.4.md) replaces the v0.3 immediate-execution
+> model with **mergeset delayed acceptance** (B's own payload is executed by its selected child), adds
+> `evm_payload_hash` as a second header commitment, 5-class skip semantics, payload-miner fee routing,
+> two-stage caps, and a non-decreasing timestamp clamp. The code in tree still implements v0.2/v0.3
+> (inert on every net, `evm_activation_daa_score = u64::MAX`); the v0.4 migration deltas are listed in
+> design §21. This ADR will be re-frozen against v0.4 when that rework starts.
+
 Source design: `MISAKA_Kaspa_L1_Selected_Parent_EVM_Design_v0.2_Audit_Revised.docx` +
 `..._v0.3_DEX_Uniswap_Addendum.docx`. This ADR is the code-grounded freeze of that design against the
 current kaspa-pq tree. The v0.2 audit elevated 6 consensus-safety rules and **collapsed the header to a

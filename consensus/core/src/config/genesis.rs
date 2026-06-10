@@ -36,8 +36,9 @@ impl GenesisBlock {
 impl From<&GenesisBlock> for Header {
     fn from(genesis: &GenesisBlock) -> Self {
         // ADR-0020: genesis is EVM-inert. `genesis.version` is `0` (< EVM_HEADER_VERSION),
-        // so `new_finalized` defaults the four EVM commitments to zero and the preimage
-        // gate skips them — every existing genesis hash is unchanged by the EVM lane.
+        // so `new_finalized` defaults the EVM commitments (payload hash + execution root)
+        // to zero and the preimage gate skips them — every existing genesis hash is
+        // unchanged by the EVM lane.
         Header::new_finalized(
             genesis.version,
             CompressedParents::default(),

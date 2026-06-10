@@ -96,6 +96,7 @@ impl From<HeaderWithBlockLevel2> for HeaderWithBlockLevel {
                 // ADR-0020: `Header2` is the pre-EVM (v0/v1) back-compat shape and
                 // carries no EVM fields; default them to zero. Dead under ADR-0001
                 // (old DBs are rejected) but must type-check.
+                evm_payload_hash: Default::default(),
                 evm_commitment_root: Default::default(),
             }
             .into(),

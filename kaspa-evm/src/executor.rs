@@ -58,7 +58,7 @@ pub fn execute_block_evm(
     input: &EvmBlockInput,
 ) -> Result<(EvmExecutionResult, CacheDB<EmptyDB>), EvmExecError> {
     let parent_state_root = input.parent.map(|p| p.state_root).unwrap_or(EVM_GENESIS_STATE_ROOT);
-    let coinbase = to_revm_address(&input.payload.fee_recipient);
+    let coinbase = to_revm_address(&input.payload.evm_coinbase);
     let derived = env::derive_env(
         input.parent,
         input.header_timestamp_ms,
@@ -138,9 +138,17 @@ pub fn execute_block_evm(
     // 3. F002 withdrawals — P2 sub-B (the inspector). Empty here.
     let withdrawals = Vec::new();
 
-    // 4. Roots + bloom.
+    // 4. Roots + bloom + accumulators.
     let logs_bloom = EvmBloom::from_bytes(roots::logs_bloom(&receipts));
     let parent_burn = input.parent.map(|p| evmu256_to_u128(p.evm_burn_accumulator)).unwrap_or(0);
+    // O(1) supply-invariant accumulator (design v0.4 §9.1, audit AM-5):
+    // total(B) = total(parent) + deposits(B) − withdrawals(B) − burn(B).
+    // Priority fees and value transfers move wei BETWEEN EVM accounts (net
+    // zero); only deposits add, and withdrawals/basefee-burn remove.
+    let parent_total = input.parent.map(|p| evmu256_to_u128(p.evm_total_native_balance)).unwrap_or(0);
+    let deposited: u128 = applied_claims.iter().map(|c| c.amount_sompi as u128 * EVM_NATIVE_SCALE as u128).sum();
+    let withdrawn: u128 = withdrawals.iter().map(|w: &kaspa_consensus_core::evm::WithdrawOp| w.amount_sompi as u128 * EVM_NATIVE_SCALE as u128).sum();
+    let total_native_balance = parent_total.saturating_add(deposited).saturating_sub(withdrawn).saturating_sub(burn_this_block);
     let header = EvmExecutionHeader {
         parent_state_root,
         state_root: b256_to_evmh256(state::state_root(&state_db)),
@@ -156,6 +164,13 @@ pub fn execute_block_evm(
         evm_number: derived.evm_number,
         evm_timestamp_sec: derived.evm_timestamp_sec,
         evm_chain_id: derived.chain_id,
+        // v0.4 §8.2 (audit AM-3): the accepting block's declared coinbase.
+        coinbase: input.payload.evm_coinbase,
+        accepted_tx_count: receipts.len() as u32,
+        // The class-2/3/5 skip classifier lands with the mergeset-acceptance
+        // executor (M10-B); until then every supplied tx is executed.
+        skipped_tx_count: 0,
+        evm_total_native_balance: EvmU256::from(total_native_balance),
         evm_burn_accumulator: EvmU256::from(parent_burn.saturating_add(burn_this_block)),
     };
 
@@ -231,7 +246,7 @@ mod tests {
                 amount_sompi: 7,
             })],
             transactions: vec![raw],
-            fee_recipient: EvmAddress::from_bytes([0xFE; 20]),
+            evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
             extra_data: vec![],
         };
         let input = EvmBlockInput {

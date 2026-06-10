@@ -1147,6 +1147,7 @@ async fn difficulty_test() {
             blue_score: 0,
             pruning_point: 0.into(),
             // ADR-0020: pre-EVM (v0) fake genesis; EVM commitments default to zero.
+            evm_payload_hash: Default::default(),
             evm_commitment_root: Default::default(),
         };
 

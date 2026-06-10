@@ -1,4 +1,5 @@
-//! kaspa-pq Selected-Parent EVM Lane (ADR-0020) — consensus type surface (v0.2/v0.3).
+//! kaspa-pq Selected-Parent EVM Lane (ADR-0020) — consensus type surface
+//! (design v0.4, `docs/misaka-evm-design-v0.4.md`).
 //!
 //! This module carries the **types only** for the EVM execution lane: the
 //! block-body [`EvmExecutionPayload`] (bounded system ops + EIP-2718 user txs),
@@ -9,12 +10,16 @@
 //! [`EvmU256`]). The executor itself (revm) lands in the `kaspa-evm` crate
 //! behind the `evm` cargo feature; nothing here pulls revm or secp256k1.
 //!
-//! Design alignment (v0.2 §3.2): the L1 header carries a **single**
-//! `evm_commitment_root`; the full execution metadata lives here in the block
-//! body and is committed by that one keyed digest. The EVM parent of a DAG
-//! block `B` is its GHOSTDAG `selected_parent(B)` (§2.1), so an EVM result is an
-//! append-only function of the block alone and is never re-executed on a
-//! virtual reorg (§2.3 / §10.1).
+//! Design alignment (v0.4 §3/§4): execution is **mergeset delayed acceptance**
+//! — `EvmResult(B) = exec(state(selected_parent(B)), B.system_ops,
+//! AcceptedEvmTxs(B))` where `AcceptedEvmTxs(B)` is the mergeset's payload txs
+//! in canonical order; a block's OWN user payload is data committed by
+//! `Header::evm_payload_hash` and is executed by its selected child. The L1
+//! header carries exactly two EVM commitments (`evm_payload_hash` +
+//! `evm_commitment_root`); the full execution metadata lives here in the block
+//! body. An EVM result is a pure function of the block's parents + its own
+//! system ops, so it is computed once and never re-executed on a virtual reorg
+//! (§2.2 / §10).
 
 mod u256;
 pub use u256::*;
@@ -77,11 +82,14 @@ pub const EVM_GENESIS_STATE_ROOT: EvmH256 = EvmH256::from_bytes([
     0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
 ]);
 
-// --- Domain separators (design §3.3). Frozen once testnet activates. ---
+// --- Domain separators (design v0.4 §4.1). Frozen once testnet activates. ---
 
 /// Keyed-BLAKE2b-512 domain for the L1 `evm_commitment_root` over the full
-/// [`EvmExecutionHeader`].
-pub const MISAKA_EVM_COMMITMENT_CONTEXT: &[u8] = b"MISAKA_EVM_COMMITMENT_V2";
+/// [`EvmExecutionHeader`] (design v0.4 §4.1 normative key).
+pub const MISAKA_EVM_COMMITMENT_CONTEXT: &[u8] = b"EvmCommitment64";
+/// Keyed-BLAKE2b-512 domain for the L1 `evm_payload_hash` over the borsh
+/// encoding of the block's own [`EvmExecutionPayload`] (design v0.4 §4.1).
+pub const MISAKA_EVM_PAYLOAD_HASH_CONTEXT: &[u8] = b"EvmPayload64";
 /// Keyed-BLAKE2b-256 domain for `EvmExecutionHeader::system_ops_root`.
 pub const MISAKA_EVM_SYSTEM_OPS_CONTEXT: &[u8] = b"MISAKA_EVM_SYSTEM_OPS_V2";
 /// Keyed-BLAKE2b-256 domain for `EvmExecutionHeader::withdrawals_root`.
@@ -126,6 +134,21 @@ pub const EVM_BASE_FEE_MAX_CHANGE_DENOMINATOR: u64 = 8;
 /// to the block coinbase (design §9.2), and accumulates in `evm_burn_accumulator`.
 pub const EVM_INITIAL_BASE_FEE: u64 = 1_000_000_000;
 
+// --- v0.4 two-stage caps (design §7, D4). ---
+// Inclusion-side: a DAG block's own payload size, checked at body validation
+// (class-1 admission). Execution-side: the accepted-gas budget of one chain
+// block's mergeset acceptance, applied as a deterministic prefix-take over
+// `AcceptedEvmTxs(B)` by declared tx gas_limit (over-cap txs are class-5
+// skipped; nonce unchanged, re-acceptable later). Numeric freeze before
+// activation = open decision O13 (per-second G_limit derivation + measured
+// propagation, design §14.3); changing them pre-activation is not a hard fork.
+
+/// Max serialized `EvmExecutionPayload` bytes per DAG block (inclusion cap).
+pub const MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK: usize = 128 * 1024;
+/// Max accepted user-tx gas per chain block (execution cap) = `G_limit_block`
+/// (design §5.1: kept equal to the EVM block gas limit, audit AH-2).
+pub const MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK: u64 = EVM_GAS_LIMIT;
+
 // ---------------------------------------------------------------------------
 // EvmAddress — 20-byte Ethereum account address.
 // ---------------------------------------------------------------------------
@@ -133,7 +156,7 @@ pub const EVM_INITIAL_BASE_FEE: u64 = 1_000_000_000;
 /// Width of an [`EvmAddress`] in bytes.
 pub const EVM_ADDRESS_SIZE: usize = 20;
 
-/// A 20-byte Ethereum account address (the `fee_recipient` / `to` surface).
+/// A 20-byte Ethereum account address (the `evm_coinbase` / `to` surface).
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Default, BorshSerialize, BorshDeserialize)]
 pub struct EvmAddress([u8; EVM_ADDRESS_SIZE]);
 
@@ -422,29 +445,50 @@ impl MemSizeEstimator for EvmDepositLockOutput {}
 
 /// The EVM execution payload carried in a block body, separate from the UTXO
 /// `transactions` because UTXO txs are DAG-inclusive-accepted while EVM txs are
-/// canonical only when their block enters the selected-parent chain (design
-/// §2.2). Pre-activation blocks (header version &lt; `EVM_HEADER_VERSION`) MUST
-/// carry the [`Default`] (empty) payload.
+/// executed via mergeset delayed acceptance (design v0.4 §3): a block's own
+/// `transactions` are pure DATA — they are NOT part of this block's own
+/// `EvmResult`; they are accepted/executed by the chain block whose mergeset
+/// includes this block (its selected child, for a chain block). Only
+/// `system_ops` (producer-selected, validated against `selected_parent(B)`)
+/// execute in this block itself. Pre-activation blocks (header version &lt;
+/// `EVM_HEADER_VERSION`) MUST carry the [`Default`] (empty) payload.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvmExecutionPayload {
     /// Bounded, producer-selected system ops (deposit claims), applied before
-    /// user txs and committed by `system_ops_root` in their payload order.
+    /// the accepted user txs and committed by `system_ops_root` in their
+    /// payload order. Unlike `transactions`, these execute in THIS block.
     pub system_ops: Vec<EvmSystemOp>,
-    /// EIP-2718 typed-transaction bytes, in execution order.
+    /// EIP-2718 typed-transaction bytes, in payload order. Data-only here;
+    /// executed by the accepting chain block (design v0.4 §3.1).
     pub transactions: Vec<Vec<u8>>,
-    /// Priority-fee recipient / EVM `block.coinbase` declared by the producer.
-    pub fee_recipient: EvmAddress,
+    /// The producer's declared EVM coinbase (design v0.4 §8.2): receives the
+    /// priority fees of THIS payload's txs when they are accepted (wherever
+    /// that happens), and is the `COINBASE`/`block.coinbase` value of the EVM
+    /// block this block forms when it is a chain block.
+    pub evm_coinbase: EvmAddress,
     /// Optional miner extra data (consensus-rule length-capped at activation).
     pub extra_data: Vec<u8>,
 }
 
 impl EvmExecutionPayload {
     /// An EVM-inert payload (`== Default`): no system ops, no txs, no extra
-    /// data, zero fee recipient. Pre-activation blocks must satisfy this.
+    /// data, zero coinbase. Pre-activation blocks must satisfy this.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.system_ops.is_empty() && self.transactions.is_empty() && self.extra_data.is_empty() && self.fee_recipient.is_zero()
+        self.system_ops.is_empty() && self.transactions.is_empty() && self.extra_data.is_empty() && self.evm_coinbase.is_zero()
+    }
+
+    /// `EvmPayloadHash(B)` (design v0.4 §4.1) — keyed BLAKE2b-512 under
+    /// [`MISAKA_EVM_PAYLOAD_HASH_CONTEXT`] over this payload's borsh encoding,
+    /// carried in `Header::evm_payload_hash`. The DATA commitment: it binds the
+    /// payload bytes a producer includes, independent of who later accepts and
+    /// executes them. Pure (no revm), so every build can verify it at body
+    /// validation.
+    #[inline]
+    pub fn payload_hash(&self) -> Hash64 {
+        let bytes = borsh::to_vec(self).expect("EvmExecutionPayload borsh serialization is infallible");
+        blake2b_512_keyed(MISAKA_EVM_PAYLOAD_HASH_CONTEXT, &bytes)
     }
 }
 
@@ -498,11 +542,27 @@ pub struct EvmExecutionHeader {
     /// EIP-1559 base fee (wei). 32-byte to match Ethereum `uint256`; the
     /// executor converts to/from `alloy_primitives::U256`.
     pub base_fee_per_gas: EvmU256,
-    /// Selected-parent-tree height: `evm_number(selected_parent) + 1` (§4.1).
+    /// Selected-parent-tree height: `evm_number(selected_parent) + 1` (§5.2).
     pub evm_number: u64,
-    /// Strictly-monotonic EVM logical time `max(header_ts_sec, parent_ts+1)` (§4.1).
+    /// Non-decreasing EVM logical time `max(header_ts_sec, parent_ts)` (design
+    /// v0.4 §5.3, D6 — replaced the v0.2 strict-monotone clamp; consecutive EVM
+    /// blocks may share a timestamp).
     pub evm_timestamp_sec: u64,
     pub evm_chain_id: u64,
+    /// The accepting block's declared `evm_coinbase` — the `COINBASE` opcode
+    /// value of this EVM block (design v0.4 §8.2, audit AM-3). Priority fees
+    /// route per-tx to each PAYLOAD block's coinbase, not (necessarily) here.
+    pub coinbase: EvmAddress,
+    /// Accepted-and-executed user txs in this block's mergeset acceptance
+    /// (skips excluded; class-4 executed failures included). (v0.4 §4.2)
+    pub accepted_tx_count: u32,
+    /// Deterministically skipped user txs (classes 2/3/5). Statistics only —
+    /// skips leave no other trace in the execution result. (v0.4 §4.2/§6)
+    pub skipped_tx_count: u32,
+    /// Total native (wei) balance held across ALL EVM accounts after this
+    /// block — the O(1) supply-invariant accumulator (v0.4 §9.1, audit AM-5):
+    /// `total(B) = total(parent) + deposits(B) − withdrawals(B) − burn(B)`.
+    pub evm_total_native_balance: EvmU256,
     /// Cumulative EVM basefee burn up to and including this block (design §9.2).
     pub evm_burn_accumulator: EvmU256,
 }
@@ -671,6 +731,23 @@ mod tests {
             ..Default::default()
         };
         assert!(!p3.is_empty());
+    }
+
+    #[test]
+    fn payload_hash_is_deterministic_domain_separated_and_field_sensitive() {
+        // v0.4 §4.1: the payload DATA commitment carried in `Header::evm_payload_hash`.
+        let p = EvmExecutionPayload::default();
+        let h_empty = p.payload_hash();
+        assert_eq!(h_empty, p.payload_hash(), "deterministic");
+        assert_ne!(h_empty, Hash64::default(), "a keyed digest, not the zero default");
+        // Every field participates: txs and the declared evm_coinbase.
+        let p_tx = EvmExecutionPayload { transactions: vec![vec![1, 2, 3]], ..Default::default() };
+        assert_ne!(p_tx.payload_hash(), h_empty);
+        let p_cb = EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes([0xFE; 20]), ..Default::default() };
+        assert_ne!(p_cb.payload_hash(), h_empty);
+        // Domain separation from the execution commitment (b"EvmPayload64" vs
+        // b"EvmCommitment64"): the two roots can never alias.
+        assert_ne!(h_empty, EvmExecutionHeader::default().commitment_root());
     }
 
     #[test]

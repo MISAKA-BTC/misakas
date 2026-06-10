@@ -327,6 +327,7 @@ impl TryCastFromJs for Header {
                     // ADR-0020: EVM commitments are optional JS fields; default to
                     // zero (a v2 EVM-aware WASM getter/setter is a later follow-on,
                     // mirroring the pow_algo_id note above).
+                    evm_payload_hash: Default::default(),
                     evm_commitment_root: Default::default(),
                 };
 
