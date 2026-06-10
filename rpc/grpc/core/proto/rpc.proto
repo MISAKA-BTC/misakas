@@ -40,6 +40,10 @@ message RpcBlock {
   RpcBlockHeader header = 1;
   repeated RpcTransaction transactions = 2;
   RpcBlockVerboseData verboseData = 3;
+  // kaspa-pq EVM Lane v0.4 (ADR-0020 §3.1): the block's own EvmExecutionPayload
+  // as canonical borsh bytes (what evmPayloadHash commits to). Empty = empty
+  // payload. MUST round-trip through get_block_template / submit_block.
+  bytes evmPayload = 4;
 }
 
 message RpcBlockHeader {
@@ -57,6 +61,11 @@ message RpcBlockHeader {
   string pruningPoint = 14;
   string hash = 15;
   uint32 powAlgoId = 16; // kaspa-pq Phase 2 (ADR-0007): Layer-1 algo id (1=kHeavyHash, 2=Argon2id)
+  // kaspa-pq EVM Lane v0.4 (ADR-0020 §4): the two EVM commitments (128-char hex).
+  // Part of the v2+ header-hash preimage — MUST survive the mining round-trip
+  // (the powAlgoId precedent). Empty/zero on v0/v1 headers.
+  string evmPayloadHash = 17;
+  string evmCommitmentRoot = 18;
 }
 
 message RpcBlockLevelParents {

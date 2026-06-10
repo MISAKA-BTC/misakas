@@ -385,6 +385,15 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own `EvmExecutionPayload`
+    /// (the bytes `evm_payload_hash` commits to). The payload store only holds
+    /// rows for non-empty payloads, so absence maps to the empty payload —
+    /// total for any block with a body. Used by the body-only IBD server so a
+    /// served body can reassemble into a valid v2 block on the requester.
+    fn get_block_evm_payload(&self, hash: BlockHash) -> ConsensusResult<crate::evm::EvmExecutionPayload> {
+        unimplemented!()
+    }
+
     fn get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {
         unimplemented!()
     }

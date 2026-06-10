@@ -3755,6 +3755,7 @@ dependencies = [
  "derive_more 1.0.0",
  "kaspa-consensus-core",
  "kaspa-hashes",
+ "kaspa-txscript",
  "kaspa-utils",
  "revm",
 ]

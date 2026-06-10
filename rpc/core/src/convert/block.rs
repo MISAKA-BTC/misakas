@@ -16,13 +16,18 @@ impl From<&Block> for RpcBlock {
             transactions: item.transactions.iter().map(RpcTransaction::from).collect(),
             // TODO: Implement a populating process inspired from kaspad\app\rpc\rpccontext\verbosedata.go
             verbose_data: None,
+            evm_payload: if item.evm_payload.is_empty() { Vec::new() } else { item.evm_payload.payload_bytes() },
         }
     }
 }
 
 impl From<&Block> for RpcRawBlock {
     fn from(item: &Block) -> Self {
-        Self { header: item.header.as_ref().into(), transactions: item.transactions.iter().map(RpcTransaction::from).collect() }
+        Self {
+            header: item.header.as_ref().into(),
+            transactions: item.transactions.iter().map(RpcTransaction::from).collect(),
+            evm_payload: if item.evm_payload.is_empty() { Vec::new() } else { item.evm_payload.payload_bytes() },
+        }
     }
 }
 
@@ -32,19 +37,28 @@ impl From<&MutableBlock> for RpcBlock {
             header: item.header.as_ref().into(),
             transactions: item.transactions.iter().map(RpcTransaction::from).collect(),
             verbose_data: None,
+            evm_payload: if item.evm_payload.is_empty() { Vec::new() } else { item.evm_payload.payload_bytes() },
         }
     }
 }
 
 impl From<&MutableBlock> for RpcRawBlock {
     fn from(item: &MutableBlock) -> Self {
-        Self { header: item.header.as_ref().into(), transactions: item.transactions.iter().map(RpcTransaction::from).collect() }
+        Self {
+            header: item.header.as_ref().into(),
+            transactions: item.transactions.iter().map(RpcTransaction::from).collect(),
+            evm_payload: if item.evm_payload.is_empty() { Vec::new() } else { item.evm_payload.payload_bytes() },
+        }
     }
 }
 
 impl From<MutableBlock> for RpcRawBlock {
     fn from(item: MutableBlock) -> Self {
-        Self { header: item.header.into(), transactions: item.transactions.iter().map(RpcTransaction::from).collect() }
+        Self {
+            evm_payload: if item.evm_payload.is_empty() { Vec::new() } else { item.evm_payload.payload_bytes() },
+            header: item.header.into(),
+            transactions: item.transactions.iter().map(RpcTransaction::from).collect(),
+        }
     }
 }
 
@@ -63,8 +77,9 @@ impl TryFrom<RpcBlock> for Block {
                     .map(kaspa_consensus_core::tx::Transaction::try_from)
                     .collect::<RpcResult<Vec<kaspa_consensus_core::tx::Transaction>>>()?,
             ),
-            // ADR-0020: RpcBlock carries no EVM payload in P1; default to empty.
-            evm_payload: Default::default(),
+            // kaspa-pq EVM Lane v0.4: decode the canonical borsh payload bytes
+            // (body validation re-derives evm_payload_hash from them).
+            evm_payload: Arc::new(decode_evm_payload(&item.evm_payload)?),
         })
     }
 }
@@ -80,10 +95,18 @@ impl TryFrom<RpcRawBlock> for Block {
                     .map(kaspa_consensus_core::tx::Transaction::try_from)
                     .collect::<RpcResult<Vec<kaspa_consensus_core::tx::Transaction>>>()?,
             ),
-            // ADR-0020: RpcBlock carries no EVM payload in P1; default to empty.
-            evm_payload: Default::default(),
+            // kaspa-pq EVM Lane v0.4: decode the canonical borsh payload bytes.
+            evm_payload: Arc::new(decode_evm_payload(&item.evm_payload)?),
         })
     }
+}
+
+/// Decode the wire payload bytes (canonical borsh; empty = empty payload).
+fn decode_evm_payload(bytes: &[u8]) -> RpcResult<kaspa_consensus_core::evm::EvmExecutionPayload> {
+    if bytes.is_empty() {
+        return Ok(Default::default());
+    }
+    borsh::from_slice(bytes).map_err(|_| RpcError::RpcSubsystem("malformed EVM payload bytes".to_string()))
 }
 
 // ----------------------------------------------------------------------------

@@ -437,6 +437,16 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.get_block_body(hash)).await
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own EVM payload (absent row =
+    /// the empty payload). Served with body-only IBD responses so a v2 block
+    /// reassembles with a matching `evm_payload_hash` on the requester.
+    pub async fn async_get_block_evm_payload(
+        &self,
+        hash: BlockHash,
+    ) -> ConsensusResult<kaspa_consensus_core::evm::EvmExecutionPayload> {
+        self.clone().spawn_blocking(move |c| c.get_block_evm_payload(hash)).await
+    }
+
     pub async fn async_get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {
         self.clone().spawn_blocking(move |c| c.get_block_even_if_header_only(hash)).await
     }

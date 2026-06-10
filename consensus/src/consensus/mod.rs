@@ -1342,8 +1342,11 @@ impl ConsensusApi for Consensus {
         Ok(Block {
             header: self.headers_store.get_header(hash).optional().unwrap().ok_or(ConsensusError::BlockNotFound(hash))?,
             transactions: self.block_transactions_store.get(hash).optional().unwrap().ok_or(ConsensusError::BlockNotFound(hash))?,
-            // ADR-0020: the EVM payload store lands in P3; default to empty here.
-            evm_payload: Default::default(),
+            // kaspa-pq EVM Lane v0.4 (§3.1): the block's own payload (absent
+            // store row = the empty payload) — getBlock RPC and the IBD
+            // full-block server must serve the bytes `evm_payload_hash`
+            // commits to, or a served v2 block fails the receiver's body rule.
+            evm_payload: Arc::new(self.get_block_evm_payload(hash)?),
         })
     }
 
@@ -1389,6 +1392,15 @@ impl ConsensusApi for Consensus {
         self.block_transactions_store.get(hash).optional().unwrap().ok_or(ConsensusError::BlockNotFound(hash))
     }
 
+    fn get_block_evm_payload(&self, hash: BlockHash) -> ConsensusResult<kaspa_consensus_core::evm::EvmExecutionPayload> {
+        // kaspa-pq EVM Lane v0.4 (§3.1): the payload store only holds rows for
+        // non-empty payloads (commit_body persists them), so absence is the
+        // empty payload — every pre-activation block and every v2 block whose
+        // producer carried no EVM data.
+        use crate::model::stores::evm::EvmPayloadStoreReader;
+        Ok(self.storage.evm_payload_store.get(hash).optional().unwrap().unwrap_or_default())
+    }
+
     fn get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {
         let Some(status) = self.statuses_store.read().get(hash).optional().unwrap().filter(|&status| status.has_block_header()) else {
             return Err(ConsensusError::HeaderNotFound(hash));
@@ -1400,8 +1412,10 @@ impl ConsensusApi for Consensus {
             } else {
                 self.block_transactions_store.get(hash).optional().unwrap().unwrap_or_default()
             },
-            // ADR-0020: the EVM payload store lands in P3; default to empty here.
-            evm_payload: Default::default(),
+            // kaspa-pq EVM Lane v0.4 (§3.1): a header-only block has no body and
+            // therefore no payload row — `get_block_evm_payload` maps the absent
+            // row to the empty payload, mirroring the tolerant transactions read.
+            evm_payload: Arc::new(self.get_block_evm_payload(hash)?),
         })
     }
 

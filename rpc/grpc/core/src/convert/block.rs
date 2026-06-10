@@ -12,6 +12,7 @@ from!(item: &kaspa_rpc_core::RpcBlock, protowire::RpcBlock, {
         header: Some(protowire::RpcBlockHeader::from(&item.header)),
         transactions: item.transactions.iter().map(protowire::RpcTransaction::from).collect(),
         verbose_data: item.verbose_data.as_ref().map(|x| x.into()),
+        evm_payload: item.evm_payload.clone(),
     }
 });
 
@@ -20,6 +21,7 @@ from!(item: &kaspa_rpc_core::RpcRawBlock, protowire::RpcBlock, {
         header: Some(protowire::RpcBlockHeader::from(&item.header)),
         transactions: item.transactions.iter().map(protowire::RpcTransaction::from).collect(),
         verbose_data: None,
+        evm_payload: item.evm_payload.clone(),
     }
 });
 
@@ -63,6 +65,7 @@ try_from!(item: &protowire::RpcBlock, kaspa_rpc_core::RpcBlock, {
             .try_into()?,
         transactions: item.transactions.iter().map(kaspa_rpc_core::RpcTransaction::try_from).collect::<Result<Vec<_>, _>>()?,
         verbose_data: item.verbose_data.as_ref().map(kaspa_rpc_core::RpcBlockVerboseData::try_from).transpose()?,
+        evm_payload: item.evm_payload.clone(),
     }
 });
 
@@ -70,6 +73,7 @@ try_from!(item: &protowire::RpcBlock, kaspa_rpc_core::RpcRawBlock, {
     Self {
     header: kaspa_rpc_core::RpcRawHeader::try_from(item.header.as_ref().ok_or(RpcError::MissingRpcFieldError("RpcBlock".to_string(), "header".to_string()))?)?,
     transactions: item.transactions.iter().map(kaspa_rpc_core::RpcTransaction::try_from).collect::<Result<Vec<_>, _>>()?,
+    evm_payload: item.evm_payload.clone(),
     }
 });
 

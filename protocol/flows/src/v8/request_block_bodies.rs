@@ -36,7 +36,12 @@ impl HandleBlockBodyRequests {
 
             for hash in hashes {
                 let body = session.async_get_block_body(hash).await?;
-                self.router.enqueue(make_response!(Payload::BlockBody, body.as_ref().into(), request_id)).await?;
+                // kaspa-pq EVM Lane v0.4 (§3.1): serve the block's own EVM payload
+                // with the body — the requester reassembles `Block` from (stored
+                // header + this response), and on a v2 block a missing payload
+                // would fail its `evm_payload_hash` body rule (absent row = empty).
+                let evm_payload = session.async_get_block_evm_payload(hash).await?;
+                self.router.enqueue(make_response!(Payload::BlockBody, (body.as_ref(), &evm_payload).into(), request_id)).await?;
             }
         }
     }

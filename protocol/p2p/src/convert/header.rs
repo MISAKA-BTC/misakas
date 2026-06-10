@@ -54,6 +54,11 @@ impl From<(HeaderFormat, &Header)> for protowire::BlockHeader {
             // kaspa-pq Phase 2 (ADR-0007): carry the Layer-1 algo id so the
             // relay/IBD peer reconstructs the identical block hash.
             pow_algo_id: item.pow_algo_id as u32,
+            // kaspa-pq EVM Lane v0.4 (ADR-0020 §4): both EVM commitments are
+            // part of the v2+ header-hash preimage — they MUST survive relay/
+            // IBD (the powAlgoId split-brain precedent). Zero on v0/v1 headers.
+            evm_payload_hash: Some(item.evm_payload_hash.into()),
+            evm_commitment_root: Some(item.evm_commitment_root.into()),
         }
     }
 }
@@ -116,7 +121,13 @@ impl TryFrom<Versioned<protowire::BlockHeader>> for Header {
             BlueWorkType::from_be_bytes_var(&item.blue_work)?,
             item.blue_score,
             item.pruning_point.try_into_ex()?,
-        ))
+        )
+        // kaspa-pq EVM Lane v0.4: restore the EVM commitments (absent from an
+        // old peer ⇒ zero, matching every v0/v1 header where they are
+        // hash-invisible anyway; on a v2 header a zero would simply fail the
+        // header-hash check, never silently fork).
+        .with_evm_payload_hash(item.evm_payload_hash.map(BlockHash::try_from).transpose()?.unwrap_or_default())
+        .with_evm_commitment(item.evm_commitment_root.map(BlockHash::try_from).transpose()?.unwrap_or_default()))
     }
 }
 

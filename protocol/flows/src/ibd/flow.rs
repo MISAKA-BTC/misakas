@@ -722,7 +722,13 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
 
             for &hash in chunk.iter() {
                 let msg = dequeue_with_timeout!(self.incoming_route, Payload::BlockBody)?;
-                let blk_body: BlockBody = msg.try_into()?;
+                // kaspa-pq EVM Lane v0.4 (§3.1): the body response carries the
+                // block's own EVM payload — without it a reassembled v2 block
+                // would fail its `evm_payload_hash` body rule (a VALID block
+                // rejected). The header (already stored + hash-validated)
+                // commits to the payload hash, so a tampered payload is caught
+                // by body validation.
+                let (blk_body, evm_payload): (BlockBody, kaspa_consensus_core::evm::EvmExecutionPayload) = msg.try_into()?;
                 // TODO (relaxed): make header queries in a batch.
                 let blk_header = consensus.async_get_header(hash).await.map_err(|err| {
                     // Conceptually this indicates local inconsistency, since we received the expected hashes via a local
@@ -732,9 +738,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
                 if blk_body.is_empty() {
                     return Err(ProtocolError::OtherOwned(format!("sent empty block body for block {}", hash)));
                 }
-                // ADR-0020: the P2P block body does not carry an EVM payload in P1
-                // (the wire extension lands with the executor in P2); default to empty.
-                let block = Block { header: blk_header, transactions: blk_body.into(), evm_payload: Default::default() };
+                let block = Block { header: blk_header, transactions: blk_body.into(), evm_payload: Arc::new(evm_payload) };
                 // TODO (relaxed): sending ghostdag data may be redundant, especially when the headers were already verified.
                 // Consider sending empty ghostdag data, simplifying a great deal. The result should be the same -
                 // a trusted task is sent, however the header is already verified, and hence only the block body will be verified.
@@ -902,13 +906,13 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
                 // get_missing_block_body_hashes call. However for now we fail gracefully and only disconnect from this peer.
                 ProtocolError::OtherOwned(format!("syncee inconsistency: missing block header for {}, err: {}", expected_hash, err))
             })?;
-            let blk_body: BlockBody = msg.try_into()?;
+            // kaspa-pq EVM Lane v0.4 (§3.1): the body response carries the block's
+            // own EVM payload (see sync_missing_trusted_bodies_no_headers).
+            let (blk_body, evm_payload): (BlockBody, kaspa_consensus_core::evm::EvmExecutionPayload) = msg.try_into()?;
             if blk_body.is_empty() {
                 return Err(ProtocolError::OtherOwned(format!("sent empty block body for block {}", expected_hash)));
             }
-            // ADR-0020: the P2P block body does not carry an EVM payload in P1
-            // (the wire extension lands with the executor in P2); default to empty.
-            let block = Block { header: blk_header, transactions: blk_body.into(), evm_payload: Default::default() };
+            let block = Block { header: blk_header, transactions: blk_body.into(), evm_payload: Arc::new(evm_payload) };
             current_daa_score = block.header.daa_score;
             current_timestamp = block.header.timestamp;
             jobs.push(consensus.validate_and_insert_block(block).virtual_state_task);
