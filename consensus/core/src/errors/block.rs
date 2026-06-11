@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Display};
 
 use crate::{
-    BlockHash, BlueWorkType, constants,
+    BlockHash, BlueWorkType,
     errors::{coinbase::CoinbaseError, tx::TxRuleError},
     tx::{TransactionId, TransactionOutpoint},
 };
@@ -29,8 +29,8 @@ impl<T: Display + Clone> Display for TwoDimVecDisplay<T> {
 
 #[derive(Error, Debug, Clone)]
 pub enum RuleError {
-    #[error("wrong block version: got {0} but expected {}", constants::BLOCK_VERSION)]
-    WrongBlockVersion(u16),
+    #[error("wrong block version: got {0} but expected {1}")]
+    WrongBlockVersion(u16, u16),
 
     #[error("unknown pow_algo_id {0}: Phase 1 admits only kHeavyHash (POW_ALGO_ID_KHEAVYHASH = 1)")]
     UnknownPowAlgoId(u8),

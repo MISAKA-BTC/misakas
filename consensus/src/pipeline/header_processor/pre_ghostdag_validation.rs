@@ -43,7 +43,7 @@ impl HeaderProcessor {
             constants::BLOCK_VERSION
         };
         if header.version != expected {
-            return Err(RuleError::WrongBlockVersion(header.version));
+            return Err(RuleError::WrongBlockVersion(header.version, expected));
         }
         Ok(())
     }
