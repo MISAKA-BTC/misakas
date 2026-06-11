@@ -625,6 +625,17 @@ Do you confirm? (y/n)";
 
     let (address_manager, port_mapping_extender_svc) = AddressManager::new(config.clone(), meta_db, tick_service.clone());
 
+    // kaspa-pq EVM Lane v0.4 (§8.2/§16): the miner's declared EVM coinbase.
+    // A malformed value is a startup error (silently burning a miner's priority
+    // fees to the zero address would be worse).
+    let evm_fee_recipient = args.evm_fee_recipient.as_ref().map(|s| {
+        let h = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+        let mut bytes = [0u8; 20];
+        if h.len() != 40 || faster_hex::hex_decode(h.as_bytes(), &mut bytes).is_err() {
+            panic!("--evm-fee-recipient must be a 20-byte hex address (40 hex chars, optional 0x): got {s}");
+        }
+        kaspa_consensus_core::evm::EvmAddress::from_bytes(bytes)
+    });
     let mining_manager = MiningManagerProxy::new(Arc::new(MiningManager::new_with_extended_config(
         config.target_time_per_block(),
         false,
@@ -635,6 +646,7 @@ Do you confirm? (y/n)";
         // kaspa-pq PQ-only relay: every kaspa-pq network enforces PQ at genesis, so the production
         // mempool requires ML-DSA-87 P2PKH outputs/inputs (audit Finding C).
         true,
+        evm_fee_recipient,
     )));
     let mining_monitor =
         Arc::new(MiningMonitor::new(mining_manager.clone(), mining_counters, tx_script_cache_counters.clone(), tick_service.clone()));

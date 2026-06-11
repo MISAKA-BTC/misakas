@@ -144,6 +144,23 @@ impl Hub {
         }
     }
 
+    /// Broadcast a message to all peers whose negotiated protocol version is at least
+    /// `min_protocol_version`. Used for message types older-protocol peers have no
+    /// route for: routing an unknown type disconnects the peer, so the filter is a
+    /// compatibility requirement, not an optimization (kaspa-pq EVM Lane §14.2).
+    pub async fn broadcast_to_peers_with_min_version(&self, msg: KaspadMessage, min_protocol_version: u32) {
+        let peers = self
+            .peers
+            .read()
+            .values()
+            .filter(|&r| r.properties().protocol_version >= min_protocol_version)
+            .cloned()
+            .collect::<Vec<_>>();
+        for router in peers {
+            let _ = router.enqueue(msg.clone()).await;
+        }
+    }
+
     /// Broadcast a message to only some number of peers
     pub async fn broadcast_to_some_peers(&self, msg: KaspadMessage, num_peers: usize) {
         assert!(num_peers > 0);

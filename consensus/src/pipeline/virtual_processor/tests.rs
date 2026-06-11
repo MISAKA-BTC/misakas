@@ -2658,30 +2658,35 @@ async fn dns_v3_many_validators_agree_on_anchor_under_fast_wide_dag() {
     );
 }
 
-/// kaspa-pq Layer-0 (audit M-3): a header whose `pow_algo_id` is not the Phase-1 kHeavyHash id
-/// is rejected by header-in-isolation validation (`check_algo_id_phase1` is now wired into
-/// `validate_header_in_isolation`). Enforces the single-`algo_id` invariant before a future
-/// hard-fork introduces `algo_id >= 2`. (Every honest builder — genesis, template, tests —
-/// emits `algo_id = 1`, so this only ever fires on a crafted header.)
+/// kaspa-pq Layer-0 (audit M-3, updated for ADR-0007 Phase 2): a header whose
+/// `pow_algo_id` is not the algo the network mandates at its DAA score is
+/// rejected by header-in-isolation validation. On the Argon2id-active mainnet
+/// params the mandated id is `2`, so both the wrong-but-known Phase-1 id (`1` —
+/// a miner trying the cheap kHeavyHash on an Argon2id network) and a garbage id
+/// (`99`) must be rejected, before the PoW seed — which consumes algo_id — is
+/// even derived.
 #[tokio::test]
 async fn header_with_unknown_pow_algo_id_is_rejected() {
     use kaspa_consensus_core::errors::block::RuleError;
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
-    // Establish a virtual chain with one valid (algo_id = 1) block.
+    // Establish a virtual chain with one valid (template-built ⇒ correct algo id) block.
     ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
 
-    // Build a template, then corrupt the Phase-1 algo id to a non-kHeavyHash value and re-finalize.
+    // Corrupt the algo id to the wrong-but-known Phase-1 id and re-finalize.
     let mut t = ctx.build_block_template(0, ctx.simulated_time + 1_000);
-    t.block.header.pow_algo_id = 2;
+    t.block.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH;
     t.block.header.finalize();
-    let block = t.block.to_immutable();
+    let res = ctx.consensus.validate_and_insert_block(t.block.to_immutable()).block_task.await;
+    assert!(matches!(res, Err(RuleError::UnknownPowAlgoId(1))), "expected UnknownPowAlgoId(1), got {res:?}");
 
-    // Header-in-isolation validation must reject it (the M-3 wiring), before the PoW seed —
-    // which consumes algo_id — is even derived.
-    let res = ctx.consensus.validate_and_insert_block(block).block_task.await;
-    assert!(matches!(res, Err(RuleError::UnknownPowAlgoId(2))), "expected UnknownPowAlgoId(2), got {res:?}");
+    // A garbage id is rejected the same way.
+    let mut t = ctx.build_block_template(0, ctx.simulated_time + 2_000);
+    t.block.header.pow_algo_id = 99;
+    t.block.header.finalize();
+    let res = ctx.consensus.validate_and_insert_block(t.block.to_immutable()).block_task.await;
+    assert!(matches!(res, Err(RuleError::UnknownPowAlgoId(99))), "expected UnknownPowAlgoId(99), got {res:?}");
 }
 
 // ============================================================================
@@ -3225,4 +3230,399 @@ fn new_miner_data() -> MinerData {
         *b = rand::random();
     }
     MinerData::new(p2pkh_mldsa87_spk(&payload), vec![])
+}
+
+
+/// kaspa-pq EVM Lane v0.4 (ADR-0020) — first EVM-ACTIVE pipeline integration
+/// test: with `evm_activation_daa_score = 0`, real blocks inserted through the
+/// full pipeline (header → body → virtual) drive the lazy chain-context step:
+/// each chain block's mergeset acceptance executes ONCE, its result + state
+/// snapshot persist atomically with its UTXO diff, the canonical EVM heads
+/// move with the sink, a commitment fault disqualifies the block from the
+/// chain (the block stays in the DAG — no poison), and the chain recovers
+/// past the disqualified block without re-executing prior EVM results.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_active_chain_executes_persists_and_moves_heads() {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader, EvmPayloadStoreReader};
+    use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+    use kaspa_consensus_core::evm::{EvmAddress, EvmExecutionPayload, EvmStateSnapshot};
+    use kaspa_evm::EvmBlockInput;
+    use kaspa_hashes::Hash64;
+
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let storage = consensus.consensus_clone().storage.clone();
+
+    let genesis = consensus.params().genesis.hash;
+    let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
+
+    // ---- b1: empty payload. The §4.3 version rule demands v2 post-activation;
+    // the producer (this test) computes the mergeset-acceptance commitment the
+    // same way the verifier will (mergeset = [genesis], no payloads ⇒ no
+    // accepted txs; EVM parent = none ⇒ genesis state).
+    let payload1 = EvmExecutionPayload::default();
+    let mut b1 = consensus.build_utxo_valid_block_with_parents(1.into(), vec![genesis], miner_data.clone(), vec![]);
+    b1.header.version = EVM_HEADER_VERSION;
+    b1.header.evm_payload_hash = payload1.payload_hash();
+    let input1 = EvmBlockInput {
+        parent: None,
+        header_timestamp_ms: b1.header.timestamp,
+        selected_parent_hash: genesis.as_bytes(),
+        blue_work_be: b1.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: b1.header.daa_score,
+        payload: &payload1,
+        accepted_txs: &[],
+    };
+    let (exp1, snap1) = kaspa_evm::snapshot::execute_block_from_snapshot(&EvmStateSnapshot::default(), &input1).unwrap();
+    b1.header.evm_commitment_root = exp1.header.commitment_root();
+    b1.evm_payload = payload1;
+    consensus.validate_and_insert_block(b1.to_immutable()).virtual_state_task.await.unwrap();
+
+    assert_eq!(storage.evm_header_store.get(1.into()).unwrap(), exp1.header, "b1's EVM result persisted by the pipeline");
+    assert_eq!(exp1.header.evm_number, 1);
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(1u64), "heads moved to the sink");
+
+    // ---- b2: carries its OWN non-empty payload (a declared coinbase + extra
+    // data) — proving payload persistence at body commit and EVM state chaining
+    // b1 → b2 through the real pipeline. (A real DepositClaim needs a funded
+    // EVM_DEPOSIT_LOCK UTXO — P4 claim validation rejects a dangling one; the
+    // claim/bridge paths are unit-tested in processes::evm.)
+    let payload2 = EvmExecutionPayload {
+        evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
+        extra_data: vec![0x4D, 0x53, 0x4B],
+        ..Default::default()
+    };
+    let mut b2 = consensus.build_utxo_valid_block_with_parents(2.into(), vec![1.into()], miner_data.clone(), vec![]);
+    b2.header.version = EVM_HEADER_VERSION;
+    b2.header.evm_payload_hash = payload2.payload_hash();
+    let input2 = EvmBlockInput {
+        parent: Some(&exp1.header),
+        header_timestamp_ms: b2.header.timestamp,
+        selected_parent_hash: BlockHash::from(1u64).as_bytes(),
+        blue_work_be: b2.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: b2.header.daa_score,
+        payload: &payload2,
+        accepted_txs: &[], // b1's payload was empty ⇒ nothing to accept
+    };
+    let (exp2, _snap2) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap1, &input2).unwrap();
+    b2.header.evm_commitment_root = exp2.header.commitment_root();
+    b2.evm_payload = payload2.clone();
+    consensus.validate_and_insert_block(b2.to_immutable()).virtual_state_task.await.unwrap();
+
+    let stored2 = storage.evm_header_store.get(2.into()).unwrap();
+    assert_eq!(stored2, exp2.header);
+    assert_eq!(stored2.evm_number, 2);
+    assert_eq!(stored2.parent_state_root, exp1.header.state_root, "EVM state chains selected-parent-wise");
+    assert_eq!(storage.evm_payload_store.get(2.into()).unwrap(), payload2, "own payload persisted at body commit");
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(2u64));
+
+    // ---- b3: a commitment FAULT (producer lied about the acceptance result).
+    // The block enters the DAG but is disqualified from the chain — exactly the
+    // UTXO-fault shape — and no EVM rows are written for it.
+    let payload3 = EvmExecutionPayload::default();
+    let mut b3 = consensus.build_utxo_valid_block_with_parents(3.into(), vec![2.into()], miner_data.clone(), vec![]);
+    b3.header.version = EVM_HEADER_VERSION;
+    b3.header.evm_payload_hash = payload3.payload_hash();
+    b3.header.evm_commitment_root = Hash64::from_bytes([0xEE; 64]);
+    b3.evm_payload = payload3.clone();
+    let _ = consensus.validate_and_insert_block(b3.to_immutable()).virtual_state_task.await;
+    assert_eq!(consensus.block_status(3.into()), BlockStatus::StatusDisqualifiedFromChain, "commitment mismatch ⇒ chain-disqualified");
+    assert!(!storage.evm_header_store.has(3.into()).unwrap(), "no EVM rows for a disqualified block");
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(2u64), "heads did NOT follow the faulty block");
+
+    // ---- b4: a valid sibling continuation on b2 — the chain recovers past the
+    // disqualified b3 (b3 ∉ past(b4), so b3's payload is NOT accepted by b4)
+    // and the heads advance. b1/b2 results are reused (their diffs exist ⇒ the
+    // KeyNotFound execution arm is never re-entered: no re-execution on reorg).
+    let payload4 = EvmExecutionPayload::default();
+    let mut b4 = consensus.build_utxo_valid_block_with_parents(4.into(), vec![2.into()], miner_data, vec![]);
+    b4.header.version = EVM_HEADER_VERSION;
+    b4.header.evm_payload_hash = payload4.payload_hash();
+    let input4 = EvmBlockInput {
+        parent: Some(&exp2.header),
+        header_timestamp_ms: b4.header.timestamp,
+        selected_parent_hash: BlockHash::from(2u64).as_bytes(),
+        blue_work_be: b4.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: b4.header.daa_score,
+        payload: &payload4,
+        accepted_txs: &[], // b2's payload txs are empty (system ops are not delayed-accepted)
+    };
+    let snap2 = {
+        // Recompute b2's child snapshot the same way the node stored it.
+        let (_, s) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap1, &input2).unwrap();
+        s
+    };
+    let (exp4, _) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap2, &input4).unwrap();
+    b4.header.evm_commitment_root = exp4.header.commitment_root();
+    b4.evm_payload = payload4;
+    consensus.validate_and_insert_block(b4.to_immutable()).virtual_state_task.await.unwrap();
+
+    assert_eq!(storage.evm_header_store.get(4.into()).unwrap().evm_number, 3, "b4 is EVM block 3 on the selected chain");
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(4u64), "heads recovered past the disqualified block");
+
+    // ---- b5: the node's OWN template (§15 producer path) — the builder must
+    // declare v2, commit the (empty) payload hash and the REAL acceptance
+    // commitment, and the resulting block must validate through the full
+    // pipeline. (Template used as-is: on an evm-active net a miner must not
+    // mutate the template timestamp — the commitment derives from it.)
+    let template = consensus
+        .build_block_template(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+        )
+        .unwrap();
+    assert_eq!(template.block.header.version, EVM_HEADER_VERSION, "evm-active template declares v2");
+    assert_eq!(template.block.header.evm_payload_hash, EvmExecutionPayload::default().payload_hash());
+    assert_ne!(template.block.header.evm_commitment_root, Hash64::default(), "the template committed a real acceptance result");
+    let mut b5 = template.block;
+    b5.header.hash = 5u64.into(); // test identity (PoW skipped)
+    consensus.validate_and_insert_block(b5.to_immutable()).virtual_state_task.await.unwrap();
+    assert!(storage.evm_header_store.has(5.into()).unwrap(), "the self-mined block executed + persisted");
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(5u64));
+
+    // ---- b6 (§16-1): a template with an EVM-mempool candidate — the §15
+    // step-6 own-payload path. The fixture is a signed EIP-1559 transfer on
+    // EVM_CHAIN_ID (regenerate: `cargo test -p kaspa-evm fixture_generator --
+    // --ignored --nocapture`); its sender is UNFUNDED, which is irrelevant for
+    // inclusion (data-only) and makes acceptance a deterministic class-2 skip.
+    const FIXTURE_TX_NONCE0: &str = "02f86b834d534b8080843b9aca008252089400000000000000000000000000000000000000228201f480c001a03244f5d74a96a52bd1c42fa1b9c336f4d3ae5509190ed9a526f17971c7fd743ca07f58e09399b50636b84f0ae4a7634c60a11c6f32427b613ebf6f4a638d6c68c1";
+    let mut raw_n0 = vec![0u8; FIXTURE_TX_NONCE0.len() / 2];
+    faster_hex::hex_decode(FIXTURE_TX_NONCE0.as_bytes(), &mut raw_n0).unwrap();
+
+    let template = consensus
+        .build_block_template_with_evm(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+            kaspa_consensus_core::evm::EvmTemplateData {
+                evm_coinbase: kaspa_consensus_core::evm::EvmAddress::from_bytes([0xCB; 20]),
+                transactions: vec![raw_n0.clone()],
+                system_ops: vec![],
+            },
+        )
+        .unwrap();
+    assert_eq!(template.block.evm_payload.transactions, vec![raw_n0], "the candidate landed in the own payload");
+    assert_eq!(
+        template.block.evm_payload.evm_coinbase,
+        kaspa_consensus_core::evm::EvmAddress::from_bytes([0xCB; 20]),
+        "the declared fee recipient landed as the payload coinbase (§8.2)"
+    );
+    assert_eq!(
+        template.block.header.evm_payload_hash,
+        template.block.evm_payload.payload_hash(),
+        "the header commits the NON-empty payload"
+    );
+    let mut b6 = template.block;
+    b6.header.hash = 6u64.into();
+    consensus.validate_and_insert_block(b6.to_immutable()).virtual_state_task.await.unwrap();
+    assert!(storage.evm_payload_store.has(6.into()).unwrap(), "the non-empty own payload persisted at commit_body");
+
+    // ---- b7: the NEXT template accepts b6's payload (mergeset delayed
+    // acceptance): the unfunded sender makes the tx a deterministic class-2
+    // skip — counted, no receipt, block valid. This closes the full §16-1
+    // loop: pool candidate → template inclusion → wire/body validation →
+    // acceptance processing by the selected child.
+    let template = consensus
+        .build_block_template(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+        )
+        .unwrap();
+    let mut b7 = template.block;
+    b7.header.hash = 7u64.into();
+    consensus.validate_and_insert_block(b7.to_immutable()).virtual_state_task.await.unwrap();
+    let h7 = storage.evm_header_store.get(7.into()).unwrap();
+    assert_eq!(h7.skipped_tx_count, 1, "b6's unfunded payload tx was class-2 skipped at acceptance");
+    assert_eq!(h7.accepted_tx_count, 0);
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(7u64));
+
+    // §16-3: the tx-lookup index recorded the journey — included in b6 (DA
+    // visibility), never accepted, last skip = class 2 (unfunded sender). The
+    // exact data misaka_getTxInclusionStatus serves.
+    let fixture_hash = kaspa_evm::tx::tx_hash(&{
+        let mut raw = vec![0u8; FIXTURE_TX_NONCE0.len() / 2];
+        faster_hex::hex_decode(FIXTURE_TX_NONCE0.as_bytes(), &mut raw).unwrap();
+        raw
+    });
+    let row = storage.evm_tx_index_store.get_or_default(fixture_hash).unwrap();
+    assert_eq!(row.included_in, vec![BlockHash::from(6u64)], "DA visibility: the payload block carrying the tx");
+    assert!(row.accepted_in.is_empty(), "never executed (unfunded)");
+    assert_eq!(row.last_skip_class, Some(2));
+
+    consensus.shutdown(wait_handles);
+}
+
+/// kaspa-pq EVM Lane v0.4 §9.2 — producer-side deposit-claim path: a queued
+/// `DepositClaim` (resolved from a real EVM_DEPOSIT_LOCK UTXO, the work the
+/// `submitEvmDepositClaim` RPC does) lands in the node's OWN template
+/// `system_ops` after the template path re-validates it against the live claim
+/// view; a claim for a non-existent/stale lock is dropped — so a queued claim
+/// can never make the producer's own block invalid. This closes the production
+/// half of the bridge: deposits are now both validatable (P4) AND producible.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_producer_deposit_claim_fills_and_filters_template_system_ops() {
+    use kaspa_consensus_core::evm::{DepositClaim, EvmAddress, EvmSystemOp, EvmTemplateData};
+    use kaspa_consensus_core::header::Header;
+    use kaspa_consensus_core::muhash::MuHashExtensions;
+    use kaspa_consensus_core::tx::UtxoEntry;
+    use kaspa_muhash::MuHash;
+    use kaspa_txscript::script_class::evm_deposit_lock_script;
+
+    kaspa_core::log::try_init_logger("info");
+
+    // A real EVM_DEPOSIT_LOCK output: 1000 sompi locked to an EVM address, claim
+    // tip 7, timeout far in the future; refund = a standard ML-DSA P2PKH.
+    let evm_addr = [0xAB; 20];
+    let refund_spk = p2pkh_mldsa87_spk(&[0x42; 64]);
+    let lock_spk = evm_deposit_lock_script(evm_addr, 1_000_000, 7, refund_spk.script());
+    let lock_outpoint = TransactionOutpoint::new(99u64.into(), 0);
+    let initial_utxos = [(
+        lock_outpoint,
+        UtxoEntry { amount: 1000, script_public_key: lock_spk, block_daa_score: 0, is_coinbase: false },
+    )];
+
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .apply_args(|cfg| {
+            let mut ms = MuHash::new();
+            initial_utxos.iter().for_each(|(op, u)| ms.add_utxo(op, u));
+            cfg.params.genesis.utxo_commitment = ms.finalize();
+            let genesis_header: Header = (&cfg.params.genesis).into();
+            cfg.params.genesis.hash = genesis_header.hash;
+        })
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let mut genesis_ms = MuHash::new();
+    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms);
+    consensus.import_pruning_point_utxo_set(config.genesis.hash, genesis_ms).unwrap();
+
+    // (1) the valid claim for the real lock; (2) a claim for a non-existent
+    // outpoint that re-validation must drop.
+    let good_claim = DepositClaim {
+        deposit_outpoint: lock_outpoint,
+        evm_address: EvmAddress::from_bytes(evm_addr),
+        amount_sompi: 1000,
+        claim_tip_sompi: 7,
+    };
+    let bogus_claim = DepositClaim {
+        deposit_outpoint: TransactionOutpoint::new(123u64.into(), 0),
+        evm_address: EvmAddress::from_bytes([0xCD; 20]),
+        amount_sompi: 500,
+        claim_tip_sompi: 0,
+    };
+
+    let template = consensus
+        .build_block_template_with_evm(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+            EvmTemplateData {
+                evm_coinbase: EvmAddress::from_bytes([0xCB; 20]),
+                transactions: vec![],
+                system_ops: vec![good_claim.clone(), bogus_claim],
+            },
+        )
+        .unwrap();
+
+    assert_eq!(template.block.evm_payload.system_ops.len(), 1, "only the valid claim survives template re-validation");
+    assert_eq!(
+        template.block.evm_payload.system_ops[0],
+        EvmSystemOp::DepositClaim(good_claim),
+        "the resolved lock's claim is in the own payload"
+    );
+    assert_eq!(
+        template.block.evm_payload.evm_coinbase,
+        EvmAddress::from_bytes([0xCB; 20]),
+        "a claim-bearing payload declares the coinbase (the tip routes to it)"
+    );
+    assert_eq!(template.block.header.evm_payload_hash, template.block.evm_payload.payload_hash(), "header commits the claim payload");
+
+    consensus.shutdown(wait_handles);
+}
+
+/// kaspa-pq EVM Lane v0.4 §14.1/§14.3 — Y9 budget independence, pipeline e2e:
+/// a template assembled from an OVERSUPPLIED candidate list fills the payload
+/// to the byte cap (and no further), the resulting full-cap block keeps its
+/// normal UTXO content and passes the complete pipeline (mass rules included),
+/// and the next chain block processes the entire payload at acceptance without
+/// invalidating or stalling the UTXO lane. Complements the in-isolation mass
+/// equality test (`evm_y9_payload_byte_budget_independent_of_utxo_mass_budget`);
+/// the λ·D propagation re-validation with measured payload-laden D is Y10 —
+/// testnet work and an activation precondition (§14.3), not a unit concern.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_y9_full_cap_payload_block_validates_and_executes() {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader, EvmPayloadStoreReader};
+    use kaspa_consensus_core::evm::{EvmAddress, EvmExecutionPayload, EvmTemplateData, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let storage = consensus.consensus_clone().storage.clone();
+
+    // The class-1-valid §16 fixture, oversupplied: duplication is legal at the
+    // body (admission is per-tx) and a deterministic skip at acceptance.
+    const FIXTURE_TX_NONCE0: &str = "02f86b834d534b8080843b9aca008252089400000000000000000000000000000000000000228201f480c001a03244f5d74a96a52bd1c42fa1b9c336f4d3ae5509190ed9a526f17971c7fd743ca07f58e09399b50636b84f0ae4a7634c60a11c6f32427b613ebf6f4a638d6c68c1";
+    let mut raw = vec![0u8; FIXTURE_TX_NONCE0.len() / 2];
+    faster_hex::hex_decode(FIXTURE_TX_NONCE0.as_bytes(), &mut raw).unwrap();
+    let base = EvmExecutionPayload::default().payload_bytes().len();
+    let per_tx = 4 + raw.len();
+    let n = (MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK - base) / per_tx;
+
+    let template = consensus
+        .build_block_template_with_evm(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+            EvmTemplateData {
+                evm_coinbase: EvmAddress::from_bytes([0xCB; 20]),
+                transactions: vec![raw.clone(); n + 32], // 32 candidates beyond the cap
+                system_ops: vec![],
+            },
+        )
+        .unwrap();
+    assert_eq!(template.block.evm_payload.transactions.len(), n, "template fills to the byte cap and not one tx further");
+    let assembled = template.block.evm_payload.payload_bytes().len();
+    assert!(assembled <= MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, "assembled payload within the cap");
+    assert!(assembled > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK - per_tx, "assembled payload NEAR the cap");
+
+    let mut b1 = template.block;
+    b1.header.hash = 1u64.into();
+    consensus.validate_and_insert_block(b1.to_immutable()).virtual_state_task.await.unwrap();
+    assert!(storage.evm_payload_store.has(1.into()).unwrap(), "full-cap payload persisted at commit_body");
+
+    // The next chain block accepts b1's payload: every copy is a deterministic
+    // skip (unfunded sender), the block stays valid, the heads advance — a
+    // payload-maxed DAG block never blocks the UTXO lane (§14.2).
+    let template = consensus
+        .build_block_template(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+        )
+        .unwrap();
+    let mut b2 = template.block;
+    b2.header.hash = 2u64.into();
+    consensus.validate_and_insert_block(b2.to_immutable()).virtual_state_task.await.unwrap();
+    let h2 = storage.evm_header_store.get(2.into()).unwrap();
+    assert_eq!(h2.skipped_tx_count, n as u32, "the full-cap payload was processed: every copy skipped, none accepted");
+    assert_eq!(h2.accepted_tx_count, 0);
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(2u64));
+
+    consensus.shutdown(wait_handles);
 }

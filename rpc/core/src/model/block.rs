@@ -10,6 +10,11 @@ use workflow_serializer::prelude::*;
 pub struct RpcRawBlock {
     pub header: RpcRawHeader,
     pub transactions: Vec<RpcTransaction>,
+    /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own EvmExecutionPayload as
+    /// its canonical borsh bytes (what `evm_payload_hash` commits to). Empty =
+    /// the empty payload. MUST round-trip through get_block_template /
+    /// submit_block on an evm-active net.
+    pub evm_payload: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -18,14 +23,19 @@ pub struct RpcBlock {
     pub header: RpcHeader,
     pub transactions: Vec<RpcTransaction>,
     pub verbose_data: Option<RpcBlockVerboseData>,
+    /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own payload (canonical borsh
+    /// bytes; empty = the empty payload).
+    pub evm_payload: Vec<u8>,
 }
 
 impl Serializer for RpcBlock {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         serialize!(RpcHeader, &self.header, writer)?;
         serialize!(Vec<RpcTransaction>, &self.transactions, writer)?;
         serialize!(Option<RpcBlockVerboseData>, &self.verbose_data, writer)?;
+        // kaspa-pq EVM Lane v0.4 (serializer v2): the block's own payload bytes.
+        store!(Vec<u8>, &self.evm_payload, writer)?;
 
         Ok(())
     }
@@ -33,20 +43,24 @@ impl Serializer for RpcBlock {
 
 impl Deserializer for RpcBlock {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         let header = deserialize!(RpcHeader, reader)?;
         let transactions = deserialize!(Vec<RpcTransaction>, reader)?;
         let verbose_data = deserialize!(Option<RpcBlockVerboseData>, reader)?;
+        // kaspa-pq EVM Lane v0.4: added in serializer v2; older peers ⇒ empty.
+        let evm_payload = if version >= 2 { load!(Vec<u8>, reader)? } else { Vec::new() };
 
-        Ok(Self { header, transactions, verbose_data })
+        Ok(Self { header, transactions, verbose_data, evm_payload })
     }
 }
 
 impl Serializer for RpcRawBlock {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         serialize!(RpcRawHeader, &self.header, writer)?;
         serialize!(Vec<RpcTransaction>, &self.transactions, writer)?;
+        // kaspa-pq EVM Lane v0.4 (serializer v2): the block's own payload bytes.
+        store!(Vec<u8>, &self.evm_payload, writer)?;
 
         Ok(())
     }
@@ -54,11 +68,13 @@ impl Serializer for RpcRawBlock {
 
 impl Deserializer for RpcRawBlock {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         let header = deserialize!(RpcRawHeader, reader)?;
         let transactions = deserialize!(Vec<RpcTransaction>, reader)?;
+        // kaspa-pq EVM Lane v0.4: added in serializer v2; older peers ⇒ empty.
+        let evm_payload = if version >= 2 { load!(Vec<u8>, reader)? } else { Vec::new() };
 
-        Ok(Self { header, transactions })
+        Ok(Self { header, transactions, evm_payload })
     }
 }
 

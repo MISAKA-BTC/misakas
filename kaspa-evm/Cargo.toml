@@ -1,0 +1,60 @@
+[package]
+name = "kaspa-evm"
+description = "kaspa-pq Selected-Parent EVM execution lane (ADR-0020) — revm-backed executor"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# NOTE: this crate pulls revm (and therefore an EVM secp256k1/k256 ecrecover
+# stack). It is an OPTIONAL dependency of `kaspa-consensus`, enabled only by the
+# non-default `evm` feature, so the default node build never links it — the
+# secp-free guarantee enforced by scripts/pq-ci-guard.sh (`cargo tree -e normal`)
+# is unaffected. See ADR-0020 §"PQ-only reconciliation".
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+# ScriptClass check for the F002 withdraw destination (PQ-only: the synthetic
+# UTXO output must be the standard ML-DSA P2PKH class). kaspa-txscript's default
+# feature set is pq-only — no secp enters this graph.
+kaspa-txscript.workspace = true
+kaspa-utils.workspace = true
+borsh.workspace = true
+# `EvmExecError: Display`, and (load-bearing) forces `derive_more/display` ON for
+# the whole graph — alloy-eip7702 0.4.2 (via alloy-consensus/eips) needs it, and
+# without it the secp-free node's `--features evm` build fails to compile that
+# transitive crate (the kaspa-evm dev-deps were masking it).
+derive_more = { version = "1", features = ["display"] }
+
+# EVM execution. Shanghai baseline (no c-kzg/blob precompile); ecrecover uses the
+# pure-Rust k256 path (secp256k1 C feature left off).
+revm = { version = "14", default-features = false, features = ["std"] }
+# Ethereum keccak256 MPT roots (state / storage / tx / receipts) and RLP. Share
+# revm's alloy-primitives 0.8.26 (no duplicate primitive types / version skew);
+# the `rlp` feature gives `U256`/`B256: Encodable` for account/storage encoding.
+alloy-primitives = { version = "0.8", features = ["rlp"] }
+alloy-trie = "0.7"
+alloy-rlp = "0.3"
+# EIP-2718 typed-transaction decode + secp/k256 sender recovery (`k256` enables
+# `TxEnvelope::recover_signer`).
+alloy-consensus = { version = "0.8", features = ["k256"] }
+alloy-eips = "0.8"
+
+[dev-dependencies]
+# Build + sign EIP-2718 txs in unit tests (secp keys live only in test deps; the
+# secp-free guard checks the default node tree, not kaspa-evm's dev-deps).
+alloy-signer = "0.8"
+alloy-signer-local = "0.8"
+# Activation-prep tooling (examples/evm_tx_gen): submit signed txs to a live
+# node + poll inclusion status. Dev-only — never in the production tree.
+kaspa-grpc-client.workspace = true
+kaspa-rpc-core.workspace = true
+faster-hex.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -796,6 +796,21 @@ async fn sanity_test() {
             KaspadPayloadOps::GetValidatorStatus => {
                 tst!(op, "validator status RPC — validator service is opt-in (default-off)")
             }
+
+            // kaspa-pq EVM Lane v0.4 (§16): the lane is inert on the sanity
+            // daemon's network (evm_activation = u64::MAX on simnet) and the
+            // node is a non-`evm` build — submit refuses by design and the
+            // query RPCs need an evm-active chain. The `--features evm` e2e
+            // suite covers them; the basic sanity test skips.
+            KaspadPayloadOps::SubmitEvmTransaction => {
+                tst!(op, "EVM tx submit RPC — lane inert + non-evm build refuses (covered by the evm e2e suite)")
+            }
+            KaspadPayloadOps::GetEvmTransactionReceipt => {
+                tst!(op, "EVM receipt RPC — needs an evm-active chain (covered by the evm e2e suite)")
+            }
+            KaspadPayloadOps::GetEvmTxInclusionStatus => {
+                tst!(op, "EVM inclusion-status RPC — needs an evm-active chain (covered by the evm e2e suite)")
+            }
         };
         tasks.push(task);
     }

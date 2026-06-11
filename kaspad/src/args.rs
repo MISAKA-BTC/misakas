@@ -67,6 +67,9 @@ pub struct Args {
     // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Default off.
     pub enable_validator: bool,
     pub validator_key: Option<String>,
+    /// kaspa-pq EVM Lane v0.4 (§8.2/§16): the miner's EVM coinbase (20-byte hex,
+    /// optional 0x) — claims the priority fees of this node's own payload txs.
+    pub evm_fee_recipient: Option<String>,
     pub stake_bond: Option<String>,
     pub validator_mode: Option<String>,
 
@@ -125,6 +128,7 @@ impl Default for Args {
             enable_mainnet_mining: true,
             enable_validator: false,
             validator_key: None,
+            evm_fee_recipient: None,
             stake_bond: None,
             validator_mode: None,
             testnet: false,
@@ -348,6 +352,14 @@ pub fn cli() -> Command {
         )
         .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
         .arg(
+            Arg::new("evm-fee-recipient")
+                .long("evm-fee-recipient")
+                .env("KASPAD_EVM_FEE_RECIPIENT")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("kaspa-pq EVM Lane: the miner's EVM coinbase address (20-byte hex, optional 0x) — receives the priority fees of this node's own EVM payload txs."),
+        )
+        .arg(
             Arg::new("validator-key")
                 .long("validator-key")
                 .env("KASPAD_VALIDATOR_KEY")
@@ -540,6 +552,7 @@ impl Args {
             enable_mainnet_mining: arg_match_unwrap_or::<bool>(&m, "enable-mainnet-mining", defaults.enable_mainnet_mining),
             enable_validator: arg_match_unwrap_or::<bool>(&m, "enable-validator", defaults.enable_validator),
             validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
+            evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),
             stake_bond: m.get_one::<String>("stake-bond").cloned().or(defaults.stake_bond),
             validator_mode: m.get_one::<String>("validator-mode").cloned().or(defaults.validator_mode),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),

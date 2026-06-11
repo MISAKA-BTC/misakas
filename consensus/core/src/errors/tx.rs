@@ -124,6 +124,12 @@ pub enum TxRuleError {
     /// ML-DSA signature.
     #[error("transaction input #{0} spends a non-PQ script class UTXO (only ML-DSA P2PKH is spendable in PQ-only mode)")]
     NonPqStandardInputClass(usize),
+
+    /// kaspa-pq EVM Lane v0.4 §9.2 (AC-2): an `EVM_DEPOSIT_LOCK` input was
+    /// spent before its refund window opened — while `pov_daa < timeout` the
+    /// lock is exclusively claimable by a `DepositClaim` system op.
+    #[error("transaction input #{0} refunds an EVM deposit lock too early (pov daa {1} < timeout {2})")]
+    EvmDepositLockNotRefundableYet(usize, u64, u64),
 }
 
 pub type TxResult<T> = std::result::Result<T, TxRuleError>;

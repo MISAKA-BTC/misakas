@@ -148,6 +148,14 @@ pub enum RpcApiOps {
     GetValidatorAttestationTarget = 154,
     /// kaspa-pq Phase 12 (ADR-0011): a stake bond's status at the node's sink
     GetStakeBond = 155,
+    /// kaspa-pq EVM Lane v0.4 (§16): submit a raw EIP-2718 EVM transaction to the EVM mempool
+    SubmitEvmTransaction = 156,
+    /// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved EVM receipt (eth_getTransactionReceipt semantics)
+    GetEvmTransactionReceipt = 157,
+    /// kaspa-pq EVM Lane v0.4 (§16): DA-inclusion / acceptance / skip status of an EVM tx
+    GetEvmTxInclusionStatus = 158,
+    /// kaspa-pq EVM Lane v0.4 (§9.2): submit an EVM_DEPOSIT_LOCK outpoint to be claimed (bridge deposit)
+    SubmitEvmDepositClaim = 159,
 }
 
 impl RpcApiOps {

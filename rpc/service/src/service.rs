@@ -118,6 +118,17 @@ fn parse_bond_outpoint(s: &str) -> RpcResult<kaspa_consensus_core::tx::Transacti
     Ok(kaspa_consensus_core::tx::TransactionOutpoint::new(transaction_id, index))
 }
 
+/// kaspa-pq EVM Lane v0.4 (§16): parse a 32-byte EVM tx hash (hex, optional 0x).
+fn parse_evm_tx_hash(s: &str) -> RpcResult<kaspa_hashes::EvmH256> {
+    let h = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    if h.len() != 64 {
+        return Err(RpcError::RpcSubsystem(format!("evm tx hash must be 64 hex chars, got {}", h.len())));
+    }
+    let mut bytes = [0u8; 32];
+    faster_hex::hex_decode(h.as_bytes(), &mut bytes).map_err(|e| RpcError::RpcSubsystem(format!("malformed evm tx hash: {e}")))?;
+    Ok(kaspa_hashes::EvmH256::from_bytes(bytes))
+}
+
 pub struct RpcCoreService {
     consensus_manager: Arc<ConsensusManager>,
     notifier: Arc<Notifier<Notification, ChannelConnection>>,
@@ -728,6 +739,148 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         }
 
         Ok(response)
+    }
+
+    async fn submit_evm_transaction_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: SubmitEvmTransactionRequest,
+    ) -> RpcResult<SubmitEvmTransactionResponse> {
+        // kaspa-pq EVM Lane v0.4 (§16): hex → raw EIP-2718 bytes → EVM mempool.
+        // Admission is the body-validation class-1 rule (non-evm builds refuse).
+        // On success the tx is also queued for P2P relay to EVM-relay-capable
+        // peers (§14.2), in addition to this node's own template payload.
+        let hex_str = request.transaction.strip_prefix("0x").unwrap_or(&request.transaction);
+        if hex_str.len() % 2 != 0 {
+            return Err(RpcError::RpcSubsystem("odd-length transaction hex".to_string()));
+        }
+        let mut raw = vec![0u8; hex_str.len() / 2];
+        faster_hex::hex_decode(hex_str.as_bytes(), &mut raw)
+            .map_err(|e| RpcError::RpcSubsystem(format!("malformed transaction hex: {e}")))?;
+        let hash = self
+            .flow_context
+            .submit_rpc_evm_transaction(raw)
+            .await
+            .map_err(|e| RpcError::RpcSubsystem(format!("evm mempool: {e}")))?;
+        Ok(SubmitEvmTransactionResponse { transaction_hash: hash.to_string() })
+    }
+
+    async fn get_evm_transaction_receipt_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetEvmTransactionReceiptRequest,
+    ) -> RpcResult<GetEvmTransactionReceiptResponse> {
+        let tx_hash = parse_evm_tx_hash(&request.transaction_hash)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let view = session.async_get_evm_tx_receipt(tx_hash).await?;
+        Ok(match view {
+            None => GetEvmTransactionReceiptResponse::default(),
+            Some(v) => GetEvmTransactionReceiptResponse {
+                found: true,
+                accepting_block: v.accepting_block.to_string(),
+                evm_number: v.evm_number,
+                receipt_index: v.receipt_index,
+                succeeded: v.receipt.succeeded,
+                gas_used: v.receipt.gas_used,
+                cumulative_gas_used: v.receipt.cumulative_gas_used,
+                logs: v
+                    .receipt
+                    .logs
+                    .iter()
+                    .map(|l| RpcEvmLog {
+                        address: l.address.to_string(),
+                        topics: l.topics.iter().map(|t| t.to_string()).collect(),
+                        data: {
+                            let mut hex = vec![0u8; l.data.len() * 2];
+                            faster_hex::hex_encode(&l.data, &mut hex).expect("twice the input size");
+                            // SAFETY: hex_encode writes ASCII hex only.
+                            unsafe { String::from_utf8_unchecked(hex) }
+                        },
+                    })
+                    .collect(),
+            },
+        })
+    }
+
+    async fn get_evm_tx_inclusion_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetEvmTxInclusionStatusRequest,
+    ) -> RpcResult<GetEvmTxInclusionStatusResponse> {
+        let tx_hash = parse_evm_tx_hash(&request.transaction_hash)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let row = session.async_get_evm_tx_locations(tx_hash).await?;
+        // Canonical acceptance = the receipt view's resolution (§16: orphaned
+        // acceptances read as not-accepted at `latest`).
+        let receipt = session.async_get_evm_tx_receipt(tx_hash).await?;
+        Ok(GetEvmTxInclusionStatusResponse {
+            // §14/§18.1: the pre-inclusion tier — pending in this node's EVM
+            // mempool (a tx can be both pending and included: inclusion does
+            // not remove it from the pool under delayed acceptance).
+            pending: self.mining_manager.has_pending_evm_transaction(&tx_hash),
+            included_in: row.included_in.iter().map(|h| h.to_string()).collect(),
+            accepted_in: receipt.as_ref().map(|v| v.accepting_block.to_string()).unwrap_or_default(),
+            receipt_index: receipt.as_ref().map(|v| v.receipt_index).unwrap_or_default(),
+            last_skip_class: if receipt.is_some() { 0 } else { row.last_skip_class.unwrap_or(0) as u32 },
+        })
+    }
+
+    async fn submit_evm_deposit_claim_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: SubmitEvmDepositClaimRequest,
+    ) -> RpcResult<SubmitEvmDepositClaimResponse> {
+        // kaspa-pq EVM Lane v0.4 (§9.2): resolve the submitted EVM_DEPOSIT_LOCK
+        // outpoint in the virtual UTXO set, read the locked fields, build +
+        // validate a DepositClaim, and queue it for this node's own template.
+        // The depositor knows their own outpoint, so this is a point lookup —
+        // no scan, no index. The VSP template path re-validates against the
+        // live selected-parent view before committing.
+        let transaction_id: kaspa_hashes::Hash64 = request
+            .transaction_id
+            .strip_prefix("0x")
+            .unwrap_or(&request.transaction_id)
+            .parse()
+            .map_err(|_| RpcError::RpcSubsystem("transaction_id must be a 64-byte hex hash".to_string()))?;
+        let outpoint = kaspa_consensus_core::tx::TransactionOutpoint::new(transaction_id, request.index);
+
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let entry = session
+            .async_get_virtual_utxo_entry(outpoint)
+            .await
+            .ok_or_else(|| RpcError::RpcSubsystem(format!("outpoint {outpoint} is absent/spent in the virtual UTXO set")))?;
+        let lock = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key)
+            .ok_or_else(|| RpcError::RpcSubsystem(format!("outpoint {outpoint} is not an EVM_DEPOSIT_LOCK output")))?;
+
+        // The claim mirrors the lock exactly (the consensus rule binds them).
+        let claim = kaspa_consensus_core::evm::DepositClaim {
+            deposit_outpoint: outpoint,
+            evm_address: kaspa_consensus_core::evm::EvmAddress::from_bytes(lock.evm_address),
+            amount_sompi: entry.amount,
+            claim_tip_sompi: lock.claim_tip_sompi,
+        };
+
+        // Reject early if already in the refund window (AC-2 exclusivity): a
+        // claim at/after the lock timeout is invalid, so do not queue it.
+        let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
+        if sink_daa >= lock.timeout_daa_score {
+            return Err(RpcError::RpcSubsystem(format!(
+                "deposit lock {outpoint} is at/past its refund timeout {} (sink daa {sink_daa})",
+                lock.timeout_daa_score
+            )));
+        }
+
+        if !self.mining_manager.submit_evm_deposit_claim(claim.clone()) {
+            return Err(RpcError::RpcSubsystem("the deposit-claim queue is full".to_string()));
+        }
+        let mut evm_address_hex = vec![0u8; 40];
+        faster_hex::hex_encode(&lock.evm_address, &mut evm_address_hex)
+            .map_err(|e| RpcError::RpcSubsystem(format!("hex encode: {e}")))?;
+        Ok(SubmitEvmDepositClaimResponse {
+            evm_address: format!("0x{}", String::from_utf8(evm_address_hex).unwrap()),
+            amount_sompi: claim.amount_sompi.saturating_sub(claim.claim_tip_sompi),
+            claim_tip_sompi: claim.claim_tip_sompi,
+        })
     }
 
     async fn get_validator_status_call(

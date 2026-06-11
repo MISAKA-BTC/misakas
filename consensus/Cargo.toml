@@ -24,6 +24,7 @@ kaspa-consensus-notify.workspace = true
 kaspa-consensusmanager.workspace = true
 kaspa-core.workspace = true
 kaspa-database.workspace = true
+kaspa-evm = { workspace = true, optional = true }
 kaspa-hashes.workspace = true
 kaspa-math.workspace = true
 kaspa-merkle.workspace = true
@@ -87,6 +88,11 @@ legacy-secp256k1 = [
 ]
 html_reports = []
 devnet-prealloc = ["kaspa-consensus-core/devnet-prealloc"]
+# kaspa-pq Selected-Parent EVM Lane (ADR-0020). Pulls the optional `kaspa-evm`
+# executor crate (revm + secp/k256 ecrecover) ONLY here — non-default, so the
+# secp-free guard (`cargo tree -e normal`) is unaffected. Twin of the
+# `legacy-secp256k1` opt-in.
+evm = ["dep:kaspa-evm", "kaspa-consensus-core/evm"]
 
 [lints]
 workspace = true

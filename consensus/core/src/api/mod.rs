@@ -62,6 +62,22 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§15 step 6): [`Self::build_block_template`] with
+    /// the node's own EVM payload candidates (raw EIP-2718 bytes from the EVM
+    /// mempool, pre-admitted + fee-ordered + nonce-ascending). The default
+    /// ignores the candidates — correct for every mock and for pre-activation
+    /// templates, where the own payload is empty anyway.
+    fn build_block_template_with_evm(
+        &self,
+        miner_data: MinerData,
+        tx_selector: Box<dyn TemplateTransactionSelector>,
+        build_mode: TemplateBuildMode,
+        evm_template_data: crate::evm::EvmTemplateData,
+    ) -> Result<BlockTemplate, RuleError> {
+        let _ = evm_template_data;
+        self.build_block_template(miner_data, tx_selector, build_mode)
+    }
+
     fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
         unimplemented!()
     }
@@ -274,6 +290,14 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Point lookup of a single outpoint in the virtual UTXO set (kaspa-pq EVM
+    /// Lane §9.2: a depositor submits a lock outpoint; the node resolves the
+    /// `EVM_DEPOSIT_LOCK` entry to build + validate a `DepositClaim`). `None` if
+    /// the outpoint is unspent-absent (never existed or already spent).
+    fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
+        unimplemented!()
+    }
+
     fn get_tips(&self) -> Vec<BlockHash> {
         unimplemented!()
     }
@@ -382,6 +406,30 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     fn get_block_body(&self, hash: BlockHash) -> ConsensusResult<Arc<Vec<Transaction>>> {
+        unimplemented!()
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the raw tx-lookup row for an EVM tx hash
+    /// (absent = never seen). `accepted_in` entries may include orphaned
+    /// branches; pair with [`Self::get_evm_tx_receipt`] for canonical state.
+    fn get_evm_tx_locations(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<crate::evm::EvmTxLocations> {
+        unimplemented!()
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the canonical-resolved receipt of an EVM
+    /// tx — `Some` iff some ACCEPTING block on the CURRENT selected chain
+    /// executed it (`eth_getTransactionReceipt` semantics: pending / skipped /
+    /// orphaned ⇒ `None`).
+    fn get_evm_tx_receipt(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<crate::evm::EvmTxReceiptView>> {
+        unimplemented!()
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own `EvmExecutionPayload`
+    /// (the bytes `evm_payload_hash` commits to). The payload store only holds
+    /// rows for non-empty payloads, so absence maps to the empty payload —
+    /// total for any block with a body. Used by the body-only IBD server so a
+    /// served body can reassemble into a valid v2 block on the requester.
+    fn get_block_evm_payload(&self, hash: BlockHash) -> ConsensusResult<crate::evm::EvmExecutionPayload> {
         unimplemented!()
     }
 

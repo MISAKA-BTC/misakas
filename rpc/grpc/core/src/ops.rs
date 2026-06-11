@@ -91,6 +91,12 @@ pub enum KaspadPayloadOps {
     GetVirtualChainFromBlockV2,
     // kaspa-pq Phase 10 (ADR-0009)
     GetDnsConfirmation,
+    // kaspa-pq EVM Lane v0.4 (§16)
+    SubmitEvmTransaction,
+    GetEvmTransactionReceipt,
+    GetEvmTxInclusionStatus,
+    // kaspa-pq EVM Lane v0.4 (§9.2)
+    SubmitEvmDepositClaim,
     // kaspa-pq Phase 11 (ADR-0010)
     GetValidatorStatus,
 

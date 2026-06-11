@@ -40,6 +40,10 @@ message RpcBlock {
   RpcBlockHeader header = 1;
   repeated RpcTransaction transactions = 2;
   RpcBlockVerboseData verboseData = 3;
+  // kaspa-pq EVM Lane v0.4 (ADR-0020 §3.1): the block's own EvmExecutionPayload
+  // as canonical borsh bytes (what evmPayloadHash commits to). Empty = empty
+  // payload. MUST round-trip through get_block_template / submit_block.
+  bytes evmPayload = 4;
 }
 
 message RpcBlockHeader {
@@ -57,6 +61,11 @@ message RpcBlockHeader {
   string pruningPoint = 14;
   string hash = 15;
   uint32 powAlgoId = 16; // kaspa-pq Phase 2 (ADR-0007): Layer-1 algo id (1=kHeavyHash, 2=Argon2id)
+  // kaspa-pq EVM Lane v0.4 (ADR-0020 §4): the two EVM commitments (128-char hex).
+  // Part of the v2+ header-hash preimage — MUST survive the mining round-trip
+  // (the powAlgoId precedent). Empty/zero on v0/v1 headers.
+  string evmPayloadHash = 17;
+  string evmCommitmentRoot = 18;
 }
 
 message RpcBlockLevelParents {
@@ -664,6 +673,70 @@ message GetDnsConfirmationResponseMessage {
 }
 
 // kaspa-pq Phase 11 (ADR-0010): the in-process validator service status.
+// kaspa-pq EVM Lane v0.4 (§16): submit a raw EIP-2718 EVM transaction (hex) to
+// the node's EVM mempool. Returns the Ethereum tx hash (keccak256 of the bytes).
+message SubmitEvmTransactionRequestMessage {
+  string transaction = 1;
+}
+
+message SubmitEvmTransactionResponseMessage {
+  string transactionHash = 1;
+  RPCError error = 1000;
+}
+
+// kaspa-pq EVM Lane v0.4 (§16): one EVM log entry.
+message RpcEvmLogMessage {
+  string address = 1;
+  repeated string topics = 2;
+  string data = 3;
+}
+
+// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved EVM receipt.
+message GetEvmTransactionReceiptRequestMessage {
+  string transactionHash = 1;
+}
+
+message GetEvmTransactionReceiptResponseMessage {
+  bool found = 1;
+  string acceptingBlock = 2;
+  uint64 evmNumber = 3;
+  uint32 receiptIndex = 4;
+  bool succeeded = 5;
+  uint64 gasUsed = 6;
+  uint64 cumulativeGasUsed = 7;
+  repeated RpcEvmLogMessage logs = 8;
+  RPCError error = 1000;
+}
+
+// kaspa-pq EVM Lane v0.4 (§16): DA-inclusion / acceptance / skip status.
+message GetEvmTxInclusionStatusRequestMessage {
+  string transactionHash = 1;
+}
+
+message GetEvmTxInclusionStatusResponseMessage {
+  repeated string includedIn = 1;
+  string acceptedIn = 2;
+  uint32 receiptIndex = 3;
+  uint32 lastSkipClass = 4;
+  bool pending = 5;
+  RPCError error = 1000;
+}
+
+// kaspa-pq EVM Lane v0.4 (§9.2): submit an EVM_DEPOSIT_LOCK outpoint to be
+// claimed as a bridge deposit. The node resolves + validates it and queues a
+// DepositClaim for its own template.
+message SubmitEvmDepositClaimRequestMessage {
+  string transactionId = 1;
+  uint32 index = 2;
+}
+
+message SubmitEvmDepositClaimResponseMessage {
+  string evmAddress = 1;
+  uint64 amountSompi = 2;
+  uint64 claimTipSompi = 3;
+  RPCError error = 1000;
+}
+
 message GetValidatorStatusRequestMessage {}
 
 message GetValidatorStatusResponseMessage {

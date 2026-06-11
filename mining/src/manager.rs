@@ -32,7 +32,7 @@ use kaspa_consensus_core::{
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutput},
 };
 use kaspa_consensusmanager::{ConsensusProxy, spawn_blocking};
-use kaspa_core::{debug, error, info, time::Stopwatch, warn};
+use kaspa_core::{debug, error, info, time::{unix_now, Stopwatch}, warn};
 use kaspa_mining_errors::{manager::MiningManagerError, mempool::RuleError};
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -42,6 +42,13 @@ pub struct MiningManager {
     config: Arc<Config>,
     block_template_cache: BlockTemplateCache,
     mempool: RwLock<Mempool>,
+    // kaspa-pq EVM Lane v0.4 (§15/§16): the EVM tx pool, SEPARATE from the UTXO
+    // mempool (§14.1 budget isolation). Fills the node's own template payload.
+    evm_mempool: RwLock<crate::evm_mempool::EvmMempool>,
+    // §8.2 / §16: the miner's declared EVM coinbase (`--evm-fee-recipient`) —
+    // claims the priority fees of this node's own payload txs on acceptance.
+    // Zero (None) burns nothing but credits the zero address; set it on miners.
+    evm_fee_recipient: Option<kaspa_consensus_core::evm::EvmAddress>,
     counters: Arc<MiningCounters>,
 }
 
@@ -54,7 +61,7 @@ impl MiningManager {
         counters: Arc<MiningCounters>,
     ) -> Self {
         let config = Config::build_default(target_time_per_block, relay_non_std_transactions, max_block_mass);
-        Self::with_config(config, cache_lifetime, counters)
+        Self::with_config(config, cache_lifetime, counters, None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -70,6 +77,8 @@ impl MiningManager {
         // `true`; the `MiningManager::new` test path leaves it `false` (base-config default) so the
         // non-ML-DSA mempool unit tests keep exercising the upstream class table.
         pq_only: bool,
+        // kaspa-pq EVM Lane v0.4 (§16): the miner's EVM coinbase (None = zero).
+        evm_fee_recipient: Option<kaspa_consensus_core::evm::EvmAddress>,
     ) -> Self {
         let mut config =
             Config::build_default(target_time_per_block, relay_non_std_transactions, max_block_mass).apply_ram_scale(ram_scale);
@@ -79,14 +88,98 @@ impl MiningManager {
         // signature. The `MiningManager::new` test path keeps the upstream base rate so the mempool
         // unit fixtures stay calibrated.
         config.minimum_relay_transaction_fee = crate::mempool::config::PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE;
-        Self::with_config(config, cache_lifetime, counters)
+        Self::with_config(config, cache_lifetime, counters, evm_fee_recipient)
     }
 
-    pub(crate) fn with_config(config: Config, cache_lifetime: Option<u64>, counters: Arc<MiningCounters>) -> Self {
+    pub(crate) fn with_config(
+        config: Config,
+        cache_lifetime: Option<u64>,
+        counters: Arc<MiningCounters>,
+        evm_fee_recipient: Option<kaspa_consensus_core::evm::EvmAddress>,
+    ) -> Self {
         let config = Arc::new(config);
         let mempool = RwLock::new(Mempool::new(config.clone(), counters.clone()));
         let block_template_cache = BlockTemplateCache::new(cache_lifetime);
-        Self { config, block_template_cache, mempool, counters }
+        let evm_mempool = RwLock::new(crate::evm_mempool::EvmMempool::new());
+        Self { config, block_template_cache, mempool, evm_mempool, evm_fee_recipient, counters }
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): admit a raw EIP-2718 EVM transaction into
+    /// the EVM mempool. Admission applies EXACTLY the body-validation class-1
+    /// rule (kaspa-evm `admit_tx_info`), so a pooled tx can never make the
+    /// node's own template payload-block-invalid. Returns the Ethereum tx hash
+    /// (keccak256 of the raw bytes).
+    #[cfg(feature = "evm")]
+    pub fn submit_evm_transaction(&self, raw: Vec<u8>) -> Result<kaspa_hashes::EvmH256, crate::evm_mempool::EvmMempoolError> {
+        let info = kaspa_evm::tx::admit_tx_info(&raw).map_err(crate::evm_mempool::EvmMempoolError::Inadmissible)?;
+        let now_secs = unix_now() / 1000;
+        let mut pool = self.evm_mempool.write();
+        pool.expire(now_secs);
+        pool.insert(crate::evm_mempool::PendingEvmTx {
+            hash: info.hash,
+            sender: info.sender,
+            nonce: info.nonce,
+            max_fee_per_gas: info.max_fee_per_gas,
+            raw,
+            added_at: now_secs,
+        })
+    }
+
+    /// Non-`evm` builds cannot decode/admit EVM transactions (the lane is
+    /// `u64::MAX`-inert on every default network; an evm-active net requires an
+    /// `--features evm` node — the same refusal as the consensus seam).
+    #[cfg(not(feature = "evm"))]
+    pub fn submit_evm_transaction(&self, _raw: Vec<u8>) -> Result<kaspa_hashes::EvmH256, crate::evm_mempool::EvmMempoolError> {
+        Err(crate::evm_mempool::EvmMempoolError::Inadmissible(
+            "this kaspad was built without the `evm` feature — cannot admit EVM transactions".to_string(),
+        ))
+    }
+
+    /// Snapshot of the pending EVM tx count (RPC/diagnostics).
+    pub fn evm_mempool_len(&self) -> usize {
+        self.evm_mempool.read().len()
+    }
+
+    /// §9.2: queue a pre-resolved + pre-validated deposit claim for inclusion in
+    /// this node's own template `system_ops`. The RPC layer (which holds the
+    /// UTXO view) resolves the lock outpoint into the `DepositClaim` and checks
+    /// it is currently claimable; the VSP template path re-validates against the
+    /// live selected-parent view before committing. Returns `false` only when
+    /// the claim queue is full. Always available (DepositClaim is a plain
+    /// consensus type — no revm needed to QUEUE a claim).
+    pub fn submit_evm_deposit_claim(&self, claim: kaspa_consensus_core::evm::DepositClaim) -> bool {
+        self.evm_mempool.write().insert_claim(claim)
+    }
+
+    /// Whether a deposit claim for this lock outpoint is already queued.
+    pub fn has_pending_evm_deposit_claim(&self, outpoint: &kaspa_consensus_core::tx::TransactionOutpoint) -> bool {
+        self.evm_mempool.read().contains_claim(outpoint)
+    }
+
+    /// §14.2 relay: whether this build can run the class-1 admission precheck.
+    /// A non-`evm` build must never REQUEST pending EVM txs (it could neither
+    /// admit them nor fairly judge the sending peer), so the relay flow checks
+    /// this before acting on an inv.
+    pub fn supports_evm_admission(&self) -> bool {
+        cfg!(feature = "evm")
+    }
+
+    /// §14.2 relay: of `tx_hashes`, the ones NOT already pending in the EVM
+    /// mempool (the request filter for incoming EVM invs).
+    pub fn evm_unknown_transactions(&self, tx_hashes: Vec<kaspa_hashes::EvmH256>) -> Vec<kaspa_hashes::EvmH256> {
+        let pool = self.evm_mempool.read();
+        tx_hashes.into_iter().filter(|h| !pool.contains(h)).collect()
+    }
+
+    /// §14.2 relay: serve a pending EVM tx's raw bytes to a requesting peer.
+    pub fn get_evm_transaction_raw(&self, tx_hash: &kaspa_hashes::EvmH256) -> Option<Vec<u8>> {
+        self.evm_mempool.read().get_raw(tx_hash)
+    }
+
+    /// §18.1 / §16: whether the given EVM tx is currently pending in this
+    /// node's EVM mempool (the "pending" tier of the inclusion-status ladder).
+    pub fn has_pending_evm_transaction(&self, tx_hash: &kaspa_hashes::EvmH256) -> bool {
+        self.evm_mempool.read().contains(tx_hash)
     }
 
     pub fn get_block_template(&self, consensus: &dyn ConsensusApi, miner_data: &MinerData) -> MiningManagerResult<BlockTemplate> {
@@ -115,6 +208,22 @@ impl MiningManager {
         // We remove recursion seen in blockTemplateBuilder.BuildBlockTemplate here.
         debug!("Building a new block template...");
         let _swo = Stopwatch::<22>::with_threshold("build_block_template full loop");
+        // kaspa-pq EVM Lane v0.4 (§15 step 6): the node's own payload candidates,
+        // fee-ordered + nonce-ascending + byte-capped. Selected once per template
+        // (inclusion only — acceptance/execution happens in a later chain block).
+        let evm_template_data = {
+            let mut pool = self.evm_mempool.write();
+            pool.expire(unix_now() / 1000);
+            kaspa_consensus_core::evm::EvmTemplateData {
+                evm_coinbase: self.evm_fee_recipient.unwrap_or_default(),
+                transactions: pool.select_candidates(kaspa_consensus_core::evm::MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK),
+                // §9.2: queued deposit claims for the own-payload system ops. The
+                // VSP re-validates each against the live selected-parent view and
+                // drops stale ones, so this over-approximates (cap matches the
+                // per-block consensus limit).
+                system_ops: pool.select_claims(kaspa_consensus_core::evm::MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK),
+            }
+        };
         let mut attempts: u64 = 0;
         loop {
             attempts += 1;
@@ -126,8 +235,17 @@ impl MiningManager {
             } else {
                 TemplateBuildMode::Infallible
             };
-            match block_template_builder.build_block_template(consensus, miner_data, selector, build_mode) {
+            match block_template_builder.build_block_template(consensus, miner_data, selector, build_mode, evm_template_data.clone()) {
                 Ok(block_template) => {
+                    // §9.2: claims the template path proved stale against the live
+                    // claim view can never execute — evict them so future templates
+                    // stop re-validating (and re-warning) on them.
+                    if !block_template.stale_evm_claims.is_empty() {
+                        let mut pool = self.evm_mempool.write();
+                        for outpoint in &block_template.stale_evm_claims {
+                            pool.remove_claim(outpoint);
+                        }
+                    }
                     let block_template = cache_lock.set_immutable_cached_template(block_template);
                     match attempts {
                         1 => {
@@ -870,6 +988,42 @@ impl MiningManagerProxy {
     }
 
     /// Returns realtime feerate estimations based on internal mempool state
+    /// kaspa-pq EVM Lane v0.4 (§16): admit a raw EIP-2718 EVM tx into the EVM
+    /// mempool (sync + cheap: decode + k256 recovery + pool insert).
+    pub fn submit_evm_transaction(&self, raw: Vec<u8>) -> Result<kaspa_hashes::EvmH256, crate::evm_mempool::EvmMempoolError> {
+        self.inner.submit_evm_transaction(raw)
+    }
+
+    /// §14.2 relay: whether this build can run the class-1 admission precheck.
+    pub fn supports_evm_admission(&self) -> bool {
+        self.inner.supports_evm_admission()
+    }
+
+    /// §14.2 relay: filter out EVM tx hashes already pending in the EVM mempool.
+    pub fn evm_unknown_transactions(&self, tx_hashes: Vec<kaspa_hashes::EvmH256>) -> Vec<kaspa_hashes::EvmH256> {
+        self.inner.evm_unknown_transactions(tx_hashes)
+    }
+
+    /// §14.2 relay: serve a pending EVM tx's raw bytes to a requesting peer.
+    pub fn get_evm_transaction_raw(&self, tx_hash: &kaspa_hashes::EvmH256) -> Option<Vec<u8>> {
+        self.inner.get_evm_transaction_raw(tx_hash)
+    }
+
+    /// §18.1: whether the given EVM tx is pending in this node's EVM mempool.
+    pub fn has_pending_evm_transaction(&self, tx_hash: &kaspa_hashes::EvmH256) -> bool {
+        self.inner.has_pending_evm_transaction(tx_hash)
+    }
+
+    /// §9.2: queue a pre-validated deposit claim for the own-payload system ops.
+    pub fn submit_evm_deposit_claim(&self, claim: kaspa_consensus_core::evm::DepositClaim) -> bool {
+        self.inner.submit_evm_deposit_claim(claim)
+    }
+
+    /// §9.2: whether a deposit claim for this lock outpoint is already queued.
+    pub fn has_pending_evm_deposit_claim(&self, outpoint: &kaspa_consensus_core::tx::TransactionOutpoint) -> bool {
+        self.inner.has_pending_evm_deposit_claim(outpoint)
+    }
+
     pub async fn get_realtime_feerate_estimations(self) -> FeerateEstimations {
         spawn_blocking(move || self.inner.get_realtime_feerate_estimations()).await.unwrap()
     }

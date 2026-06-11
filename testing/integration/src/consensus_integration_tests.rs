@@ -15,7 +15,7 @@ use kaspa_consensus::model::stores::headers::HeaderStoreReader;
 use kaspa_consensus::model::stores::reachability::DbReachabilityStore;
 use kaspa_consensus::model::stores::relations::DbRelationsStore;
 use kaspa_consensus::model::stores::selected_chain::SelectedChainStoreReader;
-use kaspa_consensus::params::{DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, OverrideParams};
+use kaspa_consensus::params::{DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, OverrideParams, Params};
 use kaspa_consensus::pipeline::ProcessingCounters;
 use kaspa_consensus::pipeline::monitor::ConsensusMonitor;
 use kaspa_consensus::processes::reachability::tests::{DagBlock, DagBuilder, StoreValidationExtensions};
@@ -99,6 +99,16 @@ impl From<&JsonBlock> for DagBlock {
 
 // Test configuration
 const NUM_BLOCKS_EXPONENT: i32 = 12;
+
+/// DEVNET_PARAMS with the EVM lane pinned inert: devnet is EVM-genesis-active
+/// (every post-genesis header must be v2 with the two EVM commitments), but
+/// these integration tests build v1 DAG-layer blocks — they test the DAG, not
+/// the EVM lane (which has its own `--features evm` e2e suite).
+fn devnet_dag_params() -> Params {
+    let mut params = DEVNET_PARAMS;
+    params.evm_activation_daa_score = u64::MAX;
+    params
+}
 
 fn reachability_stretch_test(use_attack_json: bool) {
     // Arrange
@@ -457,7 +467,7 @@ async fn header_in_isolation_validation_test() {
         let block_version = BLOCK_VERSION - 1;
         block.header.version = block_version;
         match consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await {
-            Err(RuleError::WrongBlockVersion(wrong_version)) => {
+            Err(RuleError::WrongBlockVersion(wrong_version, _)) => {
                 assert_eq!(wrong_version, block_version)
             }
             res => {
@@ -763,6 +773,10 @@ async fn json_test(file_path: &str, concurrency: bool) {
             params
         }
     };
+    // The replayed JSON DAGs carry v1 headers; devnet is now EVM-genesis-active
+    // (v2-only), so pin the lane inert — this test replays the DAG layer.
+    let mut params = params;
+    params.evm_activation_daa_score = u64::MAX;
 
     let mut config = Config::new(params);
     if proof_exists {
@@ -947,7 +961,7 @@ fn submit_body_chunk(
 #[tokio::test]
 async fn bounded_merge_depth_test() {
     init_allocator_with_default_settings();
-    let config = ConfigBuilder::new(DEVNET_PARAMS)
+    let config = ConfigBuilder::new(devnet_dag_params())
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
             p.ghostdag_k = 5;
@@ -1146,6 +1160,9 @@ async fn difficulty_test() {
             blue_work: 0.into(),
             blue_score: 0,
             pruning_point: 0.into(),
+            // ADR-0020: pre-EVM (v0) fake genesis; EVM commitments default to zero.
+            evm_payload_hash: Default::default(),
+            evm_commitment_root: Default::default(),
         };
 
         // Stage 0
@@ -1480,7 +1497,7 @@ async fn kip10_test() {
     )];
 
     // Initialize consensus with KIP-10 activation point
-    let config = ConfigBuilder::new(DEVNET_PARAMS)
+    let config = ConfigBuilder::new(devnet_dag_params())
         .skip_proof_of_work()
         .apply_args(|cfg| {
             let mut genesis_multiset = MuHash::new();
@@ -1535,7 +1552,7 @@ async fn kip10_test() {
 
 #[tokio::test]
 async fn payload_test() {
-    let config = ConfigBuilder::new(DEVNET_PARAMS)
+    let config = ConfigBuilder::new(devnet_dag_params())
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
             p.coinbase_maturity = 0;
@@ -1603,7 +1620,7 @@ async fn payload_for_native_tx_test() {
     )];
 
     // Initialize consensus with payload activation point
-    let config = ConfigBuilder::new(DEVNET_PARAMS)
+    let config = ConfigBuilder::new(devnet_dag_params())
         .skip_proof_of_work()
         .apply_args(|cfg| {
             let mut genesis_multiset = MuHash::new();
@@ -1706,7 +1723,7 @@ async fn runtime_sig_op_counting_test() {
         UtxoEntry { amount: SOMPI_PER_KASPA, script_public_key: script_pub_key.clone(), block_daa_score: 0, is_coinbase: false },
     )];
 
-    let config = ConfigBuilder::new(DEVNET_PARAMS)
+    let config = ConfigBuilder::new(devnet_dag_params())
         .skip_proof_of_work()
         .apply_args(|cfg| {
             let mut genesis_multiset = MuHash::new();
@@ -1815,7 +1832,7 @@ async fn sighash_type_commitment_test() {
         ));
     }
 
-    let config = ConfigBuilder::new(DEVNET_PARAMS)
+    let config = ConfigBuilder::new(devnet_dag_params())
         .skip_proof_of_work()
         .apply_args(|cfg| {
             let mut genesis_multiset = MuHash::new();
@@ -2048,7 +2065,7 @@ async fn pruning_test() {
 #[tokio::test]
 async fn indirect_parents_test() {
     init_allocator_with_default_settings();
-    let config = ConfigBuilder::new(DEVNET_PARAMS).skip_proof_of_work().build();
+    let config = ConfigBuilder::new(devnet_dag_params()).skip_proof_of_work().build();
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
 

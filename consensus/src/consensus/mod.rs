@@ -647,7 +647,17 @@ impl ConsensusApi for Consensus {
         tx_selector: Box<dyn TemplateTransactionSelector>,
         build_mode: TemplateBuildMode,
     ) -> Result<BlockTemplate, RuleError> {
-        self.virtual_processor.build_block_template(miner_data, tx_selector, build_mode)
+        self.virtual_processor.build_block_template(miner_data, tx_selector, build_mode, Default::default())
+    }
+
+    fn build_block_template_with_evm(
+        &self,
+        miner_data: MinerData,
+        tx_selector: Box<dyn TemplateTransactionSelector>,
+        build_mode: TemplateBuildMode,
+        evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
+    ) -> Result<BlockTemplate, RuleError> {
+        self.virtual_processor.build_block_template(miner_data, tx_selector, build_mode, evm_template_data)
     }
 
     fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
@@ -1157,6 +1167,19 @@ impl ConsensusApi for Consensus {
         iter.map(|item| item.unwrap()).collect()
     }
 
+    fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
+        // Seek to the first entry at-or-after `outpoint`; it is the requested
+        // entry iff the key matches exactly (the outpoint is unspent).
+        let virtual_stores = self.virtual_stores.read();
+        virtual_stores
+            .utxo_set
+            .seek_iterator(Some(outpoint), 1, false)
+            .next()
+            .and_then(|item| item.ok())
+            .filter(|(op, _)| *op == outpoint)
+            .map(|(_, entry)| entry)
+    }
+
     fn get_tips(&self) -> Vec<BlockHash> {
         self.body_tips_store.read().get().unwrap().read().iter().copied().collect_vec()
     }
@@ -1342,6 +1365,11 @@ impl ConsensusApi for Consensus {
         Ok(Block {
             header: self.headers_store.get_header(hash).optional().unwrap().ok_or(ConsensusError::BlockNotFound(hash))?,
             transactions: self.block_transactions_store.get(hash).optional().unwrap().ok_or(ConsensusError::BlockNotFound(hash))?,
+            // kaspa-pq EVM Lane v0.4 (§3.1): the block's own payload (absent
+            // store row = the empty payload) — getBlock RPC and the IBD
+            // full-block server must serve the bytes `evm_payload_hash`
+            // commits to, or a served v2 block fails the receiver's body rule.
+            evm_payload: Arc::new(self.get_block_evm_payload(hash)?),
         })
     }
 
@@ -1387,6 +1415,44 @@ impl ConsensusApi for Consensus {
         self.block_transactions_store.get(hash).optional().unwrap().ok_or(ConsensusError::BlockNotFound(hash))
     }
 
+    fn get_evm_tx_locations(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<kaspa_consensus_core::evm::EvmTxLocations> {
+        Ok(self.storage.evm_tx_index_store.get_or_default(tx_hash).unwrap())
+    }
+
+    fn get_evm_tx_receipt(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmTxReceiptView>> {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
+        let row = self.storage.evm_tx_index_store.get_or_default(tx_hash).unwrap();
+        for (accepting, receipt_index) in row.accepted_in.iter().rev() {
+            // Canonical resolution: only an acceptance on the CURRENT selected
+            // chain counts (§16 — orphaned receipts read as null at `latest`).
+            if !self.is_chain_block(*accepting).unwrap_or(false) {
+                continue;
+            }
+            let receipts = self.storage.evm_receipts_store.get(*accepting).optional().unwrap().unwrap_or_default();
+            let idx = *receipt_index as usize;
+            if idx >= receipts.receipts.len() || receipts.tx_hashes.get(idx) != Some(&tx_hash) {
+                continue; // defensive: index row out of sync with the receipts row
+            }
+            let evm_number = self.storage.evm_header_store.get(*accepting).optional().unwrap().map(|h| h.evm_number).unwrap_or_default();
+            return Ok(Some(kaspa_consensus_core::evm::EvmTxReceiptView {
+                accepting_block: *accepting,
+                evm_number,
+                receipt_index: *receipt_index,
+                receipt: receipts.receipts[idx].clone(),
+            }));
+        }
+        Ok(None)
+    }
+
+    fn get_block_evm_payload(&self, hash: BlockHash) -> ConsensusResult<kaspa_consensus_core::evm::EvmExecutionPayload> {
+        // kaspa-pq EVM Lane v0.4 (§3.1): the payload store only holds rows for
+        // non-empty payloads (commit_body persists them), so absence is the
+        // empty payload — every pre-activation block and every v2 block whose
+        // producer carried no EVM data.
+        use crate::model::stores::evm::EvmPayloadStoreReader;
+        Ok(self.storage.evm_payload_store.get(hash).optional().unwrap().unwrap_or_default())
+    }
+
     fn get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {
         let Some(status) = self.statuses_store.read().get(hash).optional().unwrap().filter(|&status| status.has_block_header()) else {
             return Err(ConsensusError::HeaderNotFound(hash));
@@ -1398,6 +1464,10 @@ impl ConsensusApi for Consensus {
             } else {
                 self.block_transactions_store.get(hash).optional().unwrap().unwrap_or_default()
             },
+            // kaspa-pq EVM Lane v0.4 (§3.1): a header-only block has no body and
+            // therefore no payload row — `get_block_evm_payload` maps the absent
+            // row to the empty payload, mirroring the tolerant transactions read.
+            evm_payload: Arc::new(self.get_block_evm_payload(hash)?),
         })
     }
 

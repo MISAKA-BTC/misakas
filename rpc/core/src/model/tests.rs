@@ -173,6 +173,10 @@ mod mockery {
                 blue_score: mock(),
                 blue_work: mock(),
                 pruning_point: mock(),
+                // kaspa-pq: ADR-0007 algo id + ADR-0020 EVM commitments (wire v3).
+                pow_algo_id: mock(),
+                evm_payload_hash: mock(),
+                evm_commitment_root: mock(),
             }
         }
     }
@@ -192,6 +196,10 @@ mod mockery {
                 blue_score: mock(),
                 blue_work: mock(),
                 pruning_point: mock(),
+                // kaspa-pq: ADR-0007 algo id + ADR-0020 EVM commitments (wire v3).
+                pow_algo_id: mock(),
+                evm_payload_hash: mock(),
+                evm_commitment_root: mock(),
             }
         }
     }
@@ -215,13 +223,15 @@ mod mockery {
 
     impl Mock for RpcBlock {
         fn mock() -> Self {
-            RpcBlock { header: mock(), transactions: mock(), verbose_data: mock() }
+            // kaspa-pq EVM Lane v0.4 (wire v2): non-empty payload bytes exercise the
+            // new field through the serializer round-trip.
+            RpcBlock { header: mock(), transactions: mock(), verbose_data: mock(), evm_payload: mock() }
         }
     }
 
     impl Mock for RpcRawBlock {
         fn mock() -> Self {
-            RpcRawBlock { header: mock(), transactions: mock() }
+            RpcRawBlock { header: mock(), transactions: mock(), evm_payload: mock() }
         }
     }
 

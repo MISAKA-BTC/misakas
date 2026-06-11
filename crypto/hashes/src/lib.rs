@@ -1,3 +1,4 @@
+mod evm_h256;
 mod hash64;
 mod hashers;
 mod pow_hashers;
@@ -19,6 +20,7 @@ use workflow_wasm::prelude::*;
 
 pub const HASH_SIZE: usize = 32;
 
+pub use evm_h256::*;
 pub use hash64::*;
 pub use hashers::*;
 
@@ -57,6 +59,40 @@ pub fn blake2b_512_address_payload(data: &[u8]) -> Hash64 {
         Blake2bParams::new().hash_length(HASH64_SIZE).key(MLDSA87_ADDRESS_CONTEXT).to_state().update(data).finalize().as_bytes(),
     );
     Hash64::from_bytes(out)
+}
+
+/// kaspa-pq Selected-Parent EVM Lane (ADR-0020 §3.3): generic **keyed**
+/// BLAKE2b-512 helper for the MISAKA EVM-domain 64-byte commitments — the L1
+/// `evm_commitment_root` (`MISAKA_EVM_COMMITMENT_V2`) and the withdrawal
+/// synthetic-outpoint txid (`MISAKA_EVM_SYNTHETIC_OUTPOINT_V2`). `context` is
+/// the domain separator (≤ 64 bytes, the BLAKE2b key limit); `data` is the
+/// canonical (borsh) preimage. Mirrors [`blake2b_512_address_payload`] for an
+/// arbitrary EVM domain so all EVM-lane 64-byte commitments are
+/// domain-separated from each other and from the consensus-identity hashers.
+#[inline]
+pub fn blake2b_512_keyed(context: &[u8], data: &[u8]) -> Hash64 {
+    let mut out = [0u8; HASH64_SIZE];
+    out.copy_from_slice(
+        Blake2bParams::new().hash_length(HASH64_SIZE).key(context).to_state().update(data).finalize().as_bytes(),
+    );
+    Hash64::from_bytes(out)
+}
+
+/// kaspa-pq Selected-Parent EVM Lane (ADR-0020 §3.3): keyed BLAKE2b-**256**
+/// (32-byte) helper for the MISAKA EVM-domain roots carried inside the
+/// 32-byte-rooted `EvmExecutionHeader` — `system_ops_root`
+/// (`MISAKA_EVM_SYSTEM_OPS_V2`), `withdrawals_root` (`MISAKA_EVM_WITHDRAWAL_V2`),
+/// `deposit_claim_queue_root` (`MISAKA_EVM_DEPOSIT_CLAIM_V2`) — and the EVM
+/// `prevrandao` (`MISAKA_EVM_PREVRANDAO_V2`). Domain-separated from every
+/// keccak256 Ethereum trie root so a MISAKA commitment can never collide with a
+/// native Ethereum hash.
+#[inline]
+pub fn blake2b_256_keyed(context: &[u8], data: &[u8]) -> [u8; HASH_SIZE] {
+    let mut out = [0u8; HASH_SIZE];
+    out.copy_from_slice(
+        Blake2bParams::new().hash_length(HASH_SIZE).key(context).to_state().update(data).finalize().as_bytes(),
+    );
+    out
 }
 
 // TODO: Check if we use hash more as an array of u64 or of bytes and change the default accordingly

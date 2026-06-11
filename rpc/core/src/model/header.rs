@@ -38,6 +38,12 @@ pub struct RpcRawHeader {
     pub blue_work: BlueWorkType,
     pub blue_score: u64,
     pub pruning_point: BlockHash,
+    /// kaspa-pq EVM Lane v0.4 (ADR-0020 §4): both EVM commitments are part of
+    /// the v2+ header-hash preimage, so they MUST round-trip through the
+    /// mining (get_block_template → submit_block) and block RPCs — the
+    /// pow_algo_id precedent. Zero on v0/v1 headers (hash-invisible there).
+    pub evm_payload_hash: Hash64,
+    pub evm_commitment_root: Hash64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -60,6 +66,12 @@ pub struct RpcHeader {
     pub blue_work: BlueWorkType,
     pub blue_score: u64,
     pub pruning_point: BlockHash,
+    /// kaspa-pq EVM Lane v0.4 (ADR-0020 §4): both EVM commitments are part of
+    /// the v2+ header-hash preimage, so they MUST round-trip through the
+    /// mining (get_block_template → submit_block) and block RPCs — the
+    /// pow_algo_id precedent. Zero on v0/v1 headers (hash-invisible there).
+    pub evm_payload_hash: Hash64,
+    pub evm_commitment_root: Hash64,
 }
 
 impl RpcHeader {
@@ -91,6 +103,8 @@ impl From<Header> for RpcHeader {
             blue_work: header.blue_work,
             blue_score: header.blue_score,
             pruning_point: header.pruning_point,
+            evm_payload_hash: header.evm_payload_hash,
+            evm_commitment_root: header.evm_commitment_root,
         }
     }
 }
@@ -112,6 +126,8 @@ impl From<&Header> for RpcHeader {
             blue_work: header.blue_work,
             blue_score: header.blue_score,
             pruning_point: header.pruning_point,
+            evm_payload_hash: header.evm_payload_hash,
+            evm_commitment_root: header.evm_commitment_root,
         }
     }
 }
@@ -135,6 +151,10 @@ impl TryFrom<RpcHeader> for Header {
             blue_work: header.blue_work,
             blue_score: header.blue_score,
             pruning_point: header.pruning_point,
+            // kaspa-pq EVM Lane v0.4: carry both EVM commitments through the RPC
+            // (part of the v2+ hash preimage — the pow_algo_id precedent).
+            evm_payload_hash: header.evm_payload_hash,
+            evm_commitment_root: header.evm_commitment_root,
         })
     }
 }
@@ -159,13 +179,17 @@ impl TryFrom<&RpcHeader> for Header {
             blue_work: header.blue_work,
             blue_score: header.blue_score,
             pruning_point: header.pruning_point,
+            // kaspa-pq EVM Lane v0.4: carry both EVM commitments through the RPC
+            // (part of the v2+ hash preimage — the pow_algo_id precedent).
+            evm_payload_hash: header.evm_payload_hash,
+            evm_commitment_root: header.evm_commitment_root,
         })
     }
 }
 
 impl Serializer for RpcHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &3, writer)?;
 
         store!(BlockHash, &self.hash, writer)?;
         store!(u16, &self.version, writer)?;
@@ -182,6 +206,9 @@ impl Serializer for RpcHeader {
         store!(BlueWorkType, &self.blue_work, writer)?;
         store!(u64, &self.blue_score, writer)?;
         store!(BlockHash, &self.pruning_point, writer)?;
+        // kaspa-pq EVM Lane v0.4 (serializer v3): the two EVM commitments.
+        store!(Hash64, &self.evm_payload_hash, writer)?;
+        store!(Hash64, &self.evm_commitment_root, writer)?;
 
         Ok(())
     }
@@ -189,7 +216,7 @@ impl Serializer for RpcHeader {
 
 impl Deserializer for RpcHeader {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let version = load!(u16, reader)?;
+        let serializer_version = load!(u16, reader)?;
 
         let hash = load!(BlockHash, reader)?;
         let version = load!(u16, reader)?;
@@ -202,12 +229,20 @@ impl Deserializer for RpcHeader {
         let bits = load!(u32, reader)?;
         let nonce = load!(u64, reader)?;
         // kaspa-pq Phase 2 (ADR-0007): pow_algo_id added in serializer v2; v1 → default kHeavyHash.
+        // (Fixed: this previously tested the SHADOWED header version (0/1), never the
+        // serializer version — any v2 stream with a written algo id would desync.)
         let pow_algo_id =
-            if version >= 2 { load!(u8, reader)? } else { kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH };
+            if serializer_version >= 2 { load!(u8, reader)? } else { kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH };
         let daa_score = load!(u64, reader)?;
         let blue_work = load!(BlueWorkType, reader)?;
         let blue_score = load!(u64, reader)?;
         let pruning_point = load!(BlockHash, reader)?;
+        // kaspa-pq EVM Lane v0.4: added in serializer v3; older peers ⇒ zero.
+        let (evm_payload_hash, evm_commitment_root) = if serializer_version >= 3 {
+            (load!(Hash64, reader)?, load!(Hash64, reader)?)
+        } else {
+            (Default::default(), Default::default())
+        };
 
         Ok(Self {
             hash,
@@ -224,6 +259,8 @@ impl Deserializer for RpcHeader {
             blue_work,
             blue_score,
             pruning_point,
+            evm_payload_hash,
+            evm_commitment_root,
         })
     }
 }
@@ -247,7 +284,10 @@ impl TryFrom<RpcRawHeader> for Header {
             header.blue_work,
             header.blue_score,
             header.pruning_point,
-        ))
+        )
+        // kaspa-pq EVM Lane v0.4: restore both EVM commitments (v2+ preimage).
+        .with_evm_payload_hash(header.evm_payload_hash)
+        .with_evm_commitment(header.evm_commitment_root))
     }
 }
 
@@ -270,7 +310,10 @@ impl TryFrom<&RpcRawHeader> for Header {
             header.blue_work,
             header.blue_score,
             header.pruning_point,
-        ))
+        )
+        // kaspa-pq EVM Lane v0.4: restore both EVM commitments (v2+ preimage).
+        .with_evm_payload_hash(header.evm_payload_hash)
+        .with_evm_commitment(header.evm_commitment_root))
     }
 }
 
@@ -290,6 +333,8 @@ impl From<&Header> for RpcRawHeader {
             blue_work: header.blue_work,
             blue_score: header.blue_score,
             pruning_point: header.pruning_point,
+            evm_payload_hash: header.evm_payload_hash,
+            evm_commitment_root: header.evm_commitment_root,
         }
     }
 }
@@ -310,13 +355,15 @@ impl From<Header> for RpcRawHeader {
             blue_work: header.blue_work,
             blue_score: header.blue_score,
             pruning_point: header.pruning_point,
+            evm_payload_hash: header.evm_payload_hash,
+            evm_commitment_root: header.evm_commitment_root,
         }
     }
 }
 
 impl Serializer for RpcRawHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &3, writer)?;
 
         store!(u16, &self.version, writer)?;
         store!(Vec<Vec<BlockHash>>, &self.parents_by_level, writer)?;
@@ -332,6 +379,9 @@ impl Serializer for RpcRawHeader {
         store!(BlueWorkType, &self.blue_work, writer)?;
         store!(u64, &self.blue_score, writer)?;
         store!(BlockHash, &self.pruning_point, writer)?;
+        // kaspa-pq EVM Lane v0.4 (serializer v3): the two EVM commitments.
+        store!(Hash64, &self.evm_payload_hash, writer)?;
+        store!(Hash64, &self.evm_commitment_root, writer)?;
 
         Ok(())
     }
@@ -339,7 +389,7 @@ impl Serializer for RpcRawHeader {
 
 impl Deserializer for RpcRawHeader {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let version = load!(u16, reader)?;
+        let serializer_version = load!(u16, reader)?;
 
         let version = load!(u16, reader)?;
         let parents_by_level = load!(Vec<Vec<BlockHash>>, reader)?;
@@ -351,12 +401,20 @@ impl Deserializer for RpcRawHeader {
         let bits = load!(u32, reader)?;
         let nonce = load!(u64, reader)?;
         // kaspa-pq Phase 2 (ADR-0007): pow_algo_id added in serializer v2; v1 → default kHeavyHash.
+        // (Fixed: this previously tested the SHADOWED header version (0/1), never the
+        // serializer version — any v2 stream with a written algo id would desync.)
         let pow_algo_id =
-            if version >= 2 { load!(u8, reader)? } else { kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH };
+            if serializer_version >= 2 { load!(u8, reader)? } else { kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH };
         let daa_score = load!(u64, reader)?;
         let blue_work = load!(BlueWorkType, reader)?;
         let blue_score = load!(u64, reader)?;
         let pruning_point = load!(BlockHash, reader)?;
+        // kaspa-pq EVM Lane v0.4: added in serializer v3; older peers ⇒ zero.
+        let (evm_payload_hash, evm_commitment_root) = if serializer_version >= 3 {
+            (load!(Hash64, reader)?, load!(Hash64, reader)?)
+        } else {
+            (Default::default(), Default::default())
+        };
 
         Ok(Self {
             version,
@@ -372,6 +430,8 @@ impl Deserializer for RpcRawHeader {
             blue_work,
             blue_score,
             pruning_point,
+            evm_payload_hash,
+            evm_commitment_root,
         })
     }
 }

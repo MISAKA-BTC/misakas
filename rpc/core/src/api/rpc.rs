@@ -7,7 +7,7 @@
 //!
 
 use crate::api::connection::DynRpcConnection;
-use crate::{RpcResult, model::*, notify::connection::ChannelConnection};
+use crate::{RpcError, RpcResult, model::*, notify::connection::ChannelConnection};
 use async_trait::async_trait;
 use downcast::{AnySync, downcast_sync};
 use kaspa_notify::{listener::ListenerId, scope::Scope, subscription::Command};
@@ -386,6 +386,63 @@ pub trait RpcApi: Sync + Send + AnySync {
     ) -> RpcResult<GetDnsConfirmationResponse> {
         let _ = (connection, request);
         Ok(GetDnsConfirmationResponse::default())
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): submit a raw EIP-2718 EVM transaction
+    /// (hex) to the EVM mempool. Returns the Ethereum tx hash.
+    async fn submit_evm_transaction(&self, transaction_hex: String) -> RpcResult<SubmitEvmTransactionResponse> {
+        self.submit_evm_transaction_call(None, SubmitEvmTransactionRequest { transaction: transaction_hex }).await
+    }
+    /// Default rejects, so non-server `RpcApi` impls inherit a refusal; the
+    /// node's core service overrides it.
+    async fn submit_evm_transaction_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: SubmitEvmTransactionRequest,
+    ) -> RpcResult<SubmitEvmTransactionResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved EVM receipt.
+    async fn get_evm_transaction_receipt(&self, transaction_hash: String) -> RpcResult<GetEvmTransactionReceiptResponse> {
+        self.get_evm_transaction_receipt_call(None, GetEvmTransactionReceiptRequest { transaction_hash }).await
+    }
+    async fn get_evm_transaction_receipt_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetEvmTransactionReceiptRequest,
+    ) -> RpcResult<GetEvmTransactionReceiptResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): DA-inclusion / acceptance / skip status.
+    async fn get_evm_tx_inclusion_status(&self, transaction_hash: String) -> RpcResult<GetEvmTxInclusionStatusResponse> {
+        self.get_evm_tx_inclusion_status_call(None, GetEvmTxInclusionStatusRequest { transaction_hash }).await
+    }
+    async fn get_evm_tx_inclusion_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetEvmTxInclusionStatusRequest,
+    ) -> RpcResult<GetEvmTxInclusionStatusResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§9.2): submit an EVM_DEPOSIT_LOCK outpoint to be
+    /// claimed (bridge deposit). The node resolves + validates it and queues a
+    /// `DepositClaim` for its own template.
+    async fn submit_evm_deposit_claim(&self, transaction_id: String, index: u32) -> RpcResult<SubmitEvmDepositClaimResponse> {
+        self.submit_evm_deposit_claim_call(None, SubmitEvmDepositClaimRequest { transaction_id, index }).await
+    }
+    async fn submit_evm_deposit_claim_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: SubmitEvmDepositClaimRequest,
+    ) -> RpcResult<SubmitEvmDepositClaimResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
     }
 
     /// kaspa-pq Phase 11 (ADR-0010): the in-process validator service's status.

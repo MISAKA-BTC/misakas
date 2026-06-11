@@ -64,7 +64,7 @@ impl TransactionValidator {
                 // This renders such a UTXO unspendable, complementing the
                 // creation-side output-class rule so non-PQ value can never move.
                 if self.resolved_script_policy(pov_daa_score).pq_only {
-                    self.check_input_script_classes(tx)?;
+                    self.check_input_script_classes(tx, pov_daa_score)?;
                 }
                 self.check_scripts_with_policy(tx, pov_daa_score)?;
             }
@@ -199,9 +199,25 @@ impl TransactionValidator {
     /// together they guarantee no UTXO can be spent without an ML-DSA signature,
     /// even one that reached the set via a coinbase / overlay path or an unknown
     /// script version (which the engine would otherwise treat as anyone-can-spend).
-    fn check_input_script_classes(&self, tx: &impl VerifiableTransaction) -> TxResult<()> {
+    /// kaspa-pq EVM Lane v0.4 §9.2: an `EVM_DEPOSIT_LOCK` input is additionally
+    /// admitted, but ONLY once its refund window opens (`pov_daa ≥ timeout` —
+    /// the AC-2 exclusivity rule: while `pov_daa < timeout` the lock is
+    /// claimable by a `DepositClaim` system op and NOT spendable; the two
+    /// windows never overlap). The spend itself then satisfies the embedded
+    /// ML-DSA P2PKH refund script (PQ-safe — the lock-data prefix is a script
+    /// no-op push-and-drop).
+    fn check_input_script_classes(&self, tx: &impl VerifiableTransaction, pov_daa_score: u64) -> TxResult<()> {
         for (i, (_, entry)) in tx.populated_inputs().enumerate() {
-            if !ScriptClass::from_script(&entry.script_public_key).is_pq_standard() {
+            let class = ScriptClass::from_script(&entry.script_public_key);
+            if class == ScriptClass::EvmDepositLock {
+                let fields = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key)
+                    .expect("class detection implies the lock parses");
+                if pov_daa_score < fields.timeout_daa_score {
+                    return Err(TxRuleError::EvmDepositLockNotRefundableYet(i, pov_daa_score, fields.timeout_daa_score));
+                }
+                continue;
+            }
+            if !class.is_pq_standard() {
                 return Err(TxRuleError::NonPqStandardInputClass(i));
             }
         }

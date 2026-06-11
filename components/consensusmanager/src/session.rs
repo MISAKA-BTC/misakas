@@ -328,6 +328,12 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.get_virtual_utxos(from_outpoint, chunk_size, skip_first)).await
     }
 
+    /// kaspa-pq EVM Lane §9.2: point lookup of one outpoint in the virtual UTXO
+    /// set (resolve a submitted deposit-lock outpoint to its entry).
+    pub async fn async_get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
+        self.clone().spawn_blocking(move |c| c.get_virtual_utxo_entry(outpoint)).await
+    }
+
     pub async fn async_get_tips(&self) -> Vec<BlockHash> {
         self.clone().spawn_blocking(|c| c.get_tips()).await
     }
@@ -435,6 +441,33 @@ impl ConsensusSessionOwned {
 
     pub async fn async_get_block_body(&self, hash: BlockHash) -> ConsensusResult<Arc<Vec<Transaction>>> {
         self.clone().spawn_blocking(move |c| c.get_block_body(hash)).await
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own EVM payload (absent row =
+    /// the empty payload). Served with body-only IBD responses so a v2 block
+    /// reassembles with a matching `evm_payload_hash` on the requester.
+    /// kaspa-pq EVM Lane v0.4 (§16): raw tx-lookup row (DA visibility + skips).
+    pub async fn async_get_evm_tx_locations(
+        &self,
+        tx_hash: kaspa_consensus_core::EvmH256,
+    ) -> ConsensusResult<kaspa_consensus_core::evm::EvmTxLocations> {
+        self.clone().spawn_blocking(move |c| c.get_evm_tx_locations(tx_hash)).await
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved receipt (None = not
+    /// accepted under the current chain).
+    pub async fn async_get_evm_tx_receipt(
+        &self,
+        tx_hash: kaspa_consensus_core::EvmH256,
+    ) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmTxReceiptView>> {
+        self.clone().spawn_blocking(move |c| c.get_evm_tx_receipt(tx_hash)).await
+    }
+
+    pub async fn async_get_block_evm_payload(
+        &self,
+        hash: BlockHash,
+    ) -> ConsensusResult<kaspa_consensus_core::evm::EvmExecutionPayload> {
+        self.clone().spawn_blocking(move |c| c.get_block_evm_payload(hash)).await
     }
 
     pub async fn async_get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {

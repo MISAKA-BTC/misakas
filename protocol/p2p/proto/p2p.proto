@@ -61,10 +61,20 @@ message TransactionOutput{
 message BlockMessage{
   BlockHeader header = 1;
   repeated TransactionMessage transactions = 2;
+  // kaspa-pq EVM Lane v0.4 (ADR-0020 §3.1): the block's own EvmExecutionPayload
+  // as its canonical borsh encoding (the exact bytes `evmPayloadHash` commits
+  // to). Empty bytes = the empty payload (every pre-activation block).
+  bytes evmPayload = 3;
 }
 
 message BlockBodyMessage{
   repeated TransactionMessage transactions = 1;
+  // kaspa-pq EVM Lane v0.4 (ADR-0020 §3.1): the block's own EvmExecutionPayload
+  // as its canonical borsh bytes — the body-only IBD path reassembles the block
+  // from (stored header + this message), and on a v2 block a missing payload
+  // would fail the evm_payload_hash body rule and reject a VALID block. Empty
+  // bytes = the empty payload (every pre-activation block).
+  bytes evmPayload = 2;
 }
 
 message BlockHeader{
@@ -84,6 +94,11 @@ message BlockHeader{
   // Part of the block hash, so it MUST survive P2P relay/IBD serialization or
   // peers compute mismatching hashes ("requested X but got Y").
   uint32 powAlgoId = 15;
+  // kaspa-pq EVM Lane v0.4 (ADR-0020 §4): the two EVM commitments. Part of the
+  // v2+ header-hash preimage, so they MUST survive P2P relay/IBD (the
+  // powAlgoId split-brain precedent). Absent/zero on v0/v1 headers.
+  Hash evmPayloadHash = 16;
+  Hash evmCommitmentRoot = 17;
 }
 
 message BlockLevelParents {
@@ -194,6 +209,25 @@ message RequestIBDBlocksMessage{
 
 message RequestBlockBodiesMessage{
   repeated Hash hashes = 1;
+}
+
+// kaspa-pq EVM Lane v0.4 (§14.2): pending EVM tx gossip (protocol ≥ 101 only).
+// Hashes are 32-byte keccak256 tx hashes; raw is the EIP-2718 envelope a
+// payload carries. Relay happens only AFTER the class-1 admission precheck.
+message InvEvmTransactionsMessage{
+  repeated bytes hashes = 1;
+}
+
+message RequestEvmTransactionsMessage{
+  repeated bytes hashes = 1;
+}
+
+message EvmTransactionMessage{
+  bytes raw = 1;
+}
+
+message EvmTransactionNotFoundMessage{
+  bytes hash = 1;
 }
 
 message UnexpectedPruningPointMessage{

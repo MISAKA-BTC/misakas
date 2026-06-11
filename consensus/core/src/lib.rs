@@ -17,6 +17,9 @@ pub use kaspa_hashes::Hash;
 // kaspa-hashes can name the 64-byte type as `kaspa_consensus_core::Hash64`,
 // mirroring the long-standing `kaspa_consensus_core::Hash` path.
 pub use kaspa_hashes::Hash64;
+// kaspa-pq Selected-Parent EVM Lane (ADR-0020): the 32-byte Ethereum-compatible
+// hash used by the EVM execution lane (state/tx/receipts roots, EVM block hash).
+pub use kaspa_hashes::EvmH256;
 
 // ---------------------------------------------------------------------
 // kaspa-pq Phase 9 (PR-9.5b): consensus-identity semantic aliases.
@@ -119,6 +122,10 @@ pub mod daa_score_timestamp;
 /// onward once Phases 1–9 stabilise.
 pub mod dns_finality;
 pub mod errors;
+/// kaspa-pq Selected-Parent EVM Lane (ADR-0020): EVM execution-lane consensus
+/// types (block-body payload, executor-output header, EVM-domain newtypes).
+/// Types only; the revm executor lives behind the `evm` cargo feature (P2).
+pub mod evm;
 pub mod hashing;
 pub mod header;
 pub mod mass;

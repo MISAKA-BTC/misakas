@@ -6,6 +6,9 @@ use itertools::Itertools;
 // identity. `Hash` (= `Hash32`) is retained only for the legacy 32-byte
 // kHeavyHash PoW path; every block-hash field/parent below uses `BlockHash`
 // (= `Hash64`); the pruning point uses `PruningPoint` (also `Hash64`).
+// kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.2 §3.2): the L1 header
+// carries a single 64-byte `evm_commitment_root` (`Hash64`); the 32-byte
+// Ethereum trie roots live in the block body's `EvmExecutionHeader`.
 use kaspa_hashes::Hash64;
 use kaspa_utils::{
     iter::{IterExtensions, IterExtensionsRle},
@@ -171,6 +174,26 @@ pub struct Header {
     pub blue_work: BlueWorkType,
     pub blue_score: u64,
     pub pruning_point: PruningPoint,
+
+    // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §4). Two EVM
+    // commitments are present in every `Header` but only enter the header-hash
+    // preimage when `version >= EVM_HEADER_VERSION` (see
+    // `hashing::header::write_header_preimage`), so for all existing v0/v1
+    // headers they are zero and hash-invisible — every current genesis hash and
+    // block identity is unchanged. Under mergeset delayed acceptance (design
+    // v0.4 §3) a block commits separately to (a) its OWN payload data — which
+    // its selected child accepts/executes — and (b) the execution result of
+    // accepting its mergeset's payloads. Hard-fork fields: the v2+ preimage
+    // byte order (`evm_payload_hash` then `evm_commitment_root`, appended after
+    // `pruning_point`) is frozen once testnet activates.
+    /// Keyed BLAKE2b-512 (`MISAKA_EVM_PAYLOAD_HASH_CONTEXT`) over the borsh
+    /// encoding of this block's own `EvmExecutionPayload` (design v0.4 §4.1) —
+    /// the data commitment. Zero for pre-activation (v0/v1) headers.
+    pub evm_payload_hash: Hash64,
+    /// Keyed BLAKE2b-512 (`MISAKA_EVM_COMMITMENT_CONTEXT`) over the block body's
+    /// `EvmExecutionHeader` — the mergeset-acceptance execution commitment
+    /// (design v0.4 §4.1). Zero for pre-activation (v0/v1) headers.
+    pub evm_commitment_root: Hash64,
 }
 
 impl Header {
@@ -207,9 +230,35 @@ impl Header {
             blue_work,
             blue_score,
             pruning_point,
+            // ADR-0020: the EVM commitments default to zero. v0/v1 headers never
+            // hash them; the EVM-version (v2+) mining/template path sets them via
+            // `with_evm_payload_hash` / `with_evm_commitment` before the PoW finalize.
+            evm_payload_hash: Hash64::default(),
+            evm_commitment_root: Hash64::default(),
         };
         header.finalize();
         header
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §4.1): set the
+    /// EVM execution commitment root and re-finalize the header hash. Consuming
+    /// builder used by the EVM-version (v2+) mining/template path and by tests.
+    /// For v0/v1 headers the commitment stays hash-invisible regardless of
+    /// value, but callers that set it are expected to also have bumped `version`
+    /// to `EVM_HEADER_VERSION`.
+    pub fn with_evm_commitment(mut self, evm_commitment_root: Hash64) -> Self {
+        self.evm_commitment_root = evm_commitment_root;
+        self.finalize();
+        self
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §4.1): set the
+    /// block's own EVM payload data commitment and re-finalize the header hash.
+    /// Same version-gating semantics as [`Header::with_evm_commitment`].
+    pub fn with_evm_payload_hash(mut self, evm_payload_hash: Hash64) -> Self {
+        self.evm_payload_hash = evm_payload_hash;
+        self.finalize();
+        self
     }
 
     /// Finalizes the header and recomputes the header hash
@@ -242,6 +291,10 @@ impl Header {
             blue_work: 0.into(),
             blue_score: 0,
             pruning_point: Default::default(),
+            // ADR-0020: this test ctor pins `version = BLOCK_VERSION` (= 1), so
+            // the EVM commitments are hash-invisible; default them to zero.
+            evm_payload_hash: Default::default(),
+            evm_commitment_root: Default::default(),
         }
     }
 }

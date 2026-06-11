@@ -387,6 +387,53 @@ from!(item: RpcResult<&kaspa_rpc_core::GetDnsConfirmationResponse>, protowire::G
     }
 });
 
+from!(item: &kaspa_rpc_core::SubmitEvmTransactionRequest, protowire::SubmitEvmTransactionRequestMessage, {
+    Self { transaction: item.transaction.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::SubmitEvmTransactionResponse>, protowire::SubmitEvmTransactionResponseMessage, {
+    Self { transaction_hash: item.transaction_hash.clone(), error: None }
+});
+from!(item: &kaspa_rpc_core::SubmitEvmDepositClaimRequest, protowire::SubmitEvmDepositClaimRequestMessage, {
+    Self { transaction_id: item.transaction_id.clone(), index: item.index }
+});
+from!(item: RpcResult<&kaspa_rpc_core::SubmitEvmDepositClaimResponse>, protowire::SubmitEvmDepositClaimResponseMessage, {
+    Self { evm_address: item.evm_address.clone(), amount_sompi: item.amount_sompi, claim_tip_sompi: item.claim_tip_sompi, error: None }
+});
+
+from!(item: &kaspa_rpc_core::GetEvmTransactionReceiptRequest, protowire::GetEvmTransactionReceiptRequestMessage, {
+    Self { transaction_hash: item.transaction_hash.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetEvmTransactionReceiptResponse>, protowire::GetEvmTransactionReceiptResponseMessage, {
+    Self {
+        found: item.found,
+        accepting_block: item.accepting_block.clone(),
+        evm_number: item.evm_number,
+        receipt_index: item.receipt_index,
+        succeeded: item.succeeded,
+        gas_used: item.gas_used,
+        cumulative_gas_used: item.cumulative_gas_used,
+        logs: item
+            .logs
+            .iter()
+            .map(|l| protowire::RpcEvmLogMessage { address: l.address.clone(), topics: l.topics.clone(), data: l.data.clone() })
+            .collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetEvmTxInclusionStatusRequest, protowire::GetEvmTxInclusionStatusRequestMessage, {
+    Self { transaction_hash: item.transaction_hash.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetEvmTxInclusionStatusResponse>, protowire::GetEvmTxInclusionStatusResponseMessage, {
+    Self {
+        pending: item.pending,
+        included_in: item.included_in.clone(),
+        accepted_in: item.accepted_in.clone(),
+        receipt_index: item.receipt_index,
+        last_skip_class: item.last_skip_class,
+        error: None,
+    }
+});
+
 from!(&kaspa_rpc_core::GetValidatorStatusRequest, protowire::GetValidatorStatusRequestMessage);
 from!(item: RpcResult<&kaspa_rpc_core::GetValidatorStatusResponse>, protowire::GetValidatorStatusResponseMessage, {
     Self {
@@ -952,6 +999,51 @@ try_from!(item: &protowire::GetDnsConfirmationResponseMessage, RpcResult<kaspa_r
         block_is_dns_final: item.block_is_dns_final,
         block_is_confirmed_anchor: item.block_is_confirmed_anchor,
         block_daa_score: item.block_daa_score,
+    }
+});
+
+try_from!(item: &protowire::SubmitEvmTransactionRequestMessage, kaspa_rpc_core::SubmitEvmTransactionRequest, {
+    Self { transaction: item.transaction.clone() }
+});
+try_from!(item: &protowire::SubmitEvmTransactionResponseMessage, RpcResult<kaspa_rpc_core::SubmitEvmTransactionResponse>, {
+    Self { transaction_hash: item.transaction_hash.clone() }
+});
+try_from!(item: &protowire::SubmitEvmDepositClaimRequestMessage, kaspa_rpc_core::SubmitEvmDepositClaimRequest, {
+    Self { transaction_id: item.transaction_id.clone(), index: item.index }
+});
+try_from!(item: &protowire::SubmitEvmDepositClaimResponseMessage, RpcResult<kaspa_rpc_core::SubmitEvmDepositClaimResponse>, {
+    Self { evm_address: item.evm_address.clone(), amount_sompi: item.amount_sompi, claim_tip_sompi: item.claim_tip_sompi }
+});
+
+try_from!(item: &protowire::GetEvmTransactionReceiptRequestMessage, kaspa_rpc_core::GetEvmTransactionReceiptRequest, {
+    Self { transaction_hash: item.transaction_hash.clone() }
+});
+try_from!(item: &protowire::GetEvmTransactionReceiptResponseMessage, RpcResult<kaspa_rpc_core::GetEvmTransactionReceiptResponse>, {
+    Self {
+        found: item.found,
+        accepting_block: item.accepting_block.clone(),
+        evm_number: item.evm_number,
+        receipt_index: item.receipt_index,
+        succeeded: item.succeeded,
+        gas_used: item.gas_used,
+        cumulative_gas_used: item.cumulative_gas_used,
+        logs: item
+            .logs
+            .iter()
+            .map(|l| kaspa_rpc_core::RpcEvmLog { address: l.address.clone(), topics: l.topics.clone(), data: l.data.clone() })
+            .collect(),
+    }
+});
+try_from!(item: &protowire::GetEvmTxInclusionStatusRequestMessage, kaspa_rpc_core::GetEvmTxInclusionStatusRequest, {
+    Self { transaction_hash: item.transaction_hash.clone() }
+});
+try_from!(item: &protowire::GetEvmTxInclusionStatusResponseMessage, RpcResult<kaspa_rpc_core::GetEvmTxInclusionStatusResponse>, {
+    Self {
+        pending: item.pending,
+        included_in: item.included_in.clone(),
+        accepted_in: item.accepted_in.clone(),
+        receipt_index: item.receipt_index,
+        last_skip_class: item.last_skip_class,
     }
 });
 

@@ -83,7 +83,11 @@ impl From<KaspadMessagePayloadType> for IncomingRouteOverflowPolicy {
     fn from(msg_type: KaspadMessagePayloadType) -> Self {
         match msg_type {
             // Inv messages are unique in the sense that no harm is done if some of them are dropped
-            KaspadMessagePayloadType::InvTransactions | KaspadMessagePayloadType::InvRelayBlock => IncomingRouteOverflowPolicy::Drop,
+            // (EVM tx invs included — §14.2 makes their gossip strictly lower priority, so
+            // shedding them under pressure is the designed behavior, never a disconnect)
+            KaspadMessagePayloadType::InvTransactions
+            | KaspadMessagePayloadType::InvRelayBlock
+            | KaspadMessagePayloadType::InvEvmTransactions => IncomingRouteOverflowPolicy::Drop,
             _ => IncomingRouteOverflowPolicy::Disconnect,
         }
     }

@@ -8,6 +8,7 @@ use crate::{
         daa::DbDaaStore,
         depth::DbDepthStore,
         dns_state::DbDnsStateStore,
+        evm::{DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmReceiptsStore, DbEvmStateStore, DbEvmTxIndexStore},
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
@@ -56,6 +57,19 @@ pub struct ConsensusStorage {
     // kaspa-pq DNS finality overlay stores (ADR-0009, Phase 10)
     pub dns_state_store: Arc<RwLock<DbDnsStateStore>>,
     pub stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
+
+    // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §11). All four
+    // are inert (never read or written) until `evm_activation_daa_score` is
+    // finite; the singleton heads store takes the lock pattern of
+    // `dns_state_store`, the per-block stores are append-only.
+    pub evm_header_store: Arc<DbEvmHeaderStore>,
+    pub evm_state_store: Arc<DbEvmStateStore>,
+    pub evm_payload_store: Arc<DbEvmPayloadStore>,
+    pub evm_heads_store: Arc<RwLock<DbEvmCanonicalHeadsStore>>,
+    /// §16: receipts of each ACCEPTING chain block (prefix 203).
+    pub evm_receipts_store: Arc<DbEvmReceiptsStore>,
+    /// §16: tx-hash → locations lookup (prefix 204).
+    pub evm_tx_index_store: Arc<DbEvmTxIndexStore>,
 
     // Append-only stores
     pub ghostdag_store: Arc<DbGhostdagStore>,
@@ -270,6 +284,30 @@ impl ConsensusStorage {
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
 
+        // kaspa-pq Selected-Parent EVM Lane (ADR-0020, v0.4). All values carry
+        // real byte estimators, but mirror the per-block stores above with an
+        // untracked item cap (the state snapshot is O(state) — keep the cache
+        // small; the DB row is the source of truth).
+        let evm_header_store = Arc::new(DbEvmHeaderStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_state_store =
+            Arc::new(DbEvmStateStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
+        let evm_payload_store = Arc::new(DbEvmPayloadStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_heads_store = Arc::new(RwLock::new(DbEvmCanonicalHeadsStore::new(db.clone())));
+        let evm_receipts_store = Arc::new(DbEvmReceiptsStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_tx_index_store = Arc::new(DbEvmTxIndexStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+
         // Block windows
         let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));
         let block_window_cache_for_past_median_time = Arc::new(BlockWindowCacheStore::new(median_window_builder.build()));
@@ -300,6 +338,12 @@ impl ConsensusStorage {
             selected_chain_store,
             dns_state_store,
             stake_bonds_store,
+            evm_header_store,
+            evm_state_store,
+            evm_payload_store,
+            evm_heads_store,
+            evm_receipts_store,
+            evm_tx_index_store,
             acceptance_data_store,
             past_pruning_points_store,
             daa_excluded_store,

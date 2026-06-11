@@ -91,7 +91,14 @@ impl ConsensusConverter {
             vec![]
         };
 
-        Ok(RpcBlock { header: block.header.as_ref().into(), transactions, verbose_data })
+        Ok(RpcBlock {
+            header: block.header.as_ref().into(),
+            transactions,
+            verbose_data,
+            // kaspa-pq EVM Lane v0.4 (§3.1): the block's own payload as its
+            // canonical borsh bytes (what `evm_payload_hash` commits to).
+            evm_payload: if block.evm_payload.is_empty() { Vec::new() } else { block.evm_payload.payload_bytes() },
+        })
     }
 
     pub fn get_mempool_entry(&self, consensus: &ConsensusProxy, transaction: &MutableTransaction) -> RpcMempoolEntry {

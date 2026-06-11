@@ -114,6 +114,43 @@ pub enum DatabaseStorePrefixes {
     /// with fence `0`); deleted on prune alongside `RewardedEpochs`.
     ReserveBalance = 200,
 
+    // ---- kaspa-pq Selected-Parent EVM Lane (ADR-0020) ----
+    // Defined in P1 (consensus types); the stores themselves are wired in the
+    // EVM stores phase (P3). All keyed by the L1 `BlockHash` unless noted, so an
+    // EVM result is append-only per block (no re-execution on virtual reorg).
+    /// Keyed by `BlockHash`: the per-block `EvmExecutionHeader`.
+    EvmHeader = 201,
+    /// Keyed by `BlockHash`: the post-execution EVM state-trie root (fast path
+    /// for fetching a selected parent's root).
+    EvmStateRoots = 202,
+    /// Keyed by `BlockHash`: the per-block EVM transaction receipts.
+    EvmReceipts = 203,
+    /// Keyed by EVM tx hash: `(BlockHash, index)` locations (side branches
+    /// allowed; canonical query resolved via the head tag).
+    EvmTxLookup = 204,
+    /// Logs index for `eth_getLogs` acceleration.
+    EvmLogs = 205,
+    /// Keyed by `BlockHash`: the per-block EVM state change set (flat-state /
+    /// pruning / debug).
+    EvmStateDiff = 206,
+    /// Keyed by `BlockHash`: EVM → UTXO withdrawal records materialized by the
+    /// block (audit + RPC + UTXO outpoint correspondence).
+    EvmWithdrawals = 207,
+    /// Keyed by `BlockHash`: UTXO → EVM deposit records reflected by the block
+    /// (`system_ops_root` verification + audit + RPC).
+    EvmDeposits = 208,
+    /// Singleton: the canonical EVM heads (`latest_unsafe` / `safe` /
+    /// `finalized`) used to resolve Ethereum block tags.
+    EvmCanonicalHeads = 209,
+    /// Keyed by EVM block hash: the L1 `BlockHash` (for `eth_getBlockByHash`).
+    EvmBlockHashMap = 210,
+    /// Keyed by `BlockHash`: the block's own `EvmExecutionPayload` (v0.4 §3.1),
+    /// persisted at body validation. The virtual processor reads MERGESET
+    /// blocks' payloads from here to assemble `AcceptedEvmTxs(B)` — a chain
+    /// block's acceptance executes OTHER blocks' payloads, which the chain
+    /// block's own body cannot supply.
+    EvmPayload = 211,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

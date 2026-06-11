@@ -13,7 +13,12 @@ use crate::v7::{
     txrelay::flow::{RelayTransactionsFlow, RequestTransactionsFlow},
 };
 pub(crate) mod request_block_bodies;
-use crate::{flow_context::FlowContext, flow_trait::Flow};
+pub(crate) mod txrelay_evm;
+use crate::{
+    flow_context::{FlowContext, PROTOCOL_VERSION_EVM_RELAY},
+    flow_trait::Flow,
+};
+use txrelay_evm::{RelayEvmTransactionsFlow, RequestedEvmTransactionsFlow};
 
 use crate::ibd::IbdFlow;
 use kaspa_p2p_lib::{KaspadMessagePayloadType, Router, SharedIncomingRoute, convert::header::HeaderFormat};
@@ -138,6 +143,30 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             router.subscribe(vec![KaspadMessagePayloadType::RequestBlockLocator]),
         )),
     ];
+
+    // kaspa-pq EVM Lane §14.2: pending-EVM-tx relay — only for peers whose
+    // negotiated protocol knows the EVM message types (an unroutable payload
+    // type disconnects the peer, so older peers must not get these routes
+    // registered either: they can never legally send them).
+    if protocol_version >= PROTOCOL_VERSION_EVM_RELAY {
+        flows.push(Box::new(RelayEvmTransactionsFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe_with_capacity(
+                vec![KaspadMessagePayloadType::InvEvmTransactions],
+                RelayEvmTransactionsFlow::invs_channel_size(),
+            ),
+            router.subscribe_with_capacity(
+                vec![KaspadMessagePayloadType::EvmTransaction, KaspadMessagePayloadType::EvmTransactionNotFound],
+                RelayEvmTransactionsFlow::txs_channel_size(),
+            ),
+        )));
+        flows.push(Box::new(RequestedEvmTransactionsFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe(vec![KaspadMessagePayloadType::RequestEvmTransactions]),
+        )));
+    }
 
     let invs_route = router.subscribe_with_capacity(vec![KaspadMessagePayloadType::InvRelayBlock], ctx.block_invs_channel_size());
     let shared_invs_route = SharedIncomingRoute::new(invs_route);

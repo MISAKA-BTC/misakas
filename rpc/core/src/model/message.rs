@@ -1602,6 +1602,288 @@ impl Deserializer for GetDnsConfirmationResponse {
 // kaspa-pq Phase 11 (ADR-0010): getValidatorStatus. Reports the in-process
 // validator service's operational status. `enabled` is false when the node was
 // started without `--enable-validator`, in which case the other fields are defaults.
+/// kaspa-pq EVM Lane v0.4 (§16): one EVM log entry (RPC view).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcEvmLog {
+    /// 20-byte address, hex.
+    pub address: String,
+    /// 32-byte topics, hex.
+    pub topics: Vec<String>,
+    /// Log data, hex.
+    pub data: String,
+}
+
+impl Serializer for RpcEvmLog {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.address, writer)?;
+        store!(Vec<String>, &self.topics, writer)?;
+        store!(String, &self.data, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcEvmLog {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let address = load!(String, reader)?;
+        let topics = load!(Vec<String>, reader)?;
+        let data = load!(String, reader)?;
+        Ok(Self { address, topics, data })
+    }
+}
+
+/// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved EVM receipt
+/// (`eth_getTransactionReceipt` semantics — `found: false` when the tx is not
+/// accepted under the current selected chain).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetEvmTransactionReceiptRequest {
+    /// 32-byte Ethereum tx hash, hex (optional 0x).
+    pub transaction_hash: String,
+}
+
+impl Serializer for GetEvmTransactionReceiptRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.transaction_hash, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetEvmTransactionReceiptRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let transaction_hash = load!(String, reader)?;
+        Ok(Self { transaction_hash })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetEvmTransactionReceiptResponse {
+    pub found: bool,
+    /// Accepting chain block (64-byte hash, hex; empty when not found).
+    pub accepting_block: String,
+    /// The EVM block number formed by the accepting chain block.
+    pub evm_number: u64,
+    pub receipt_index: u32,
+    /// Receipt status (true = success, false = reverted/OOG — §6.1 class 4).
+    pub succeeded: bool,
+    pub gas_used: u64,
+    pub cumulative_gas_used: u64,
+    pub logs: Vec<RpcEvmLog>,
+}
+
+impl Serializer for GetEvmTransactionReceiptResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(String, &self.accepting_block, writer)?;
+        store!(u64, &self.evm_number, writer)?;
+        store!(u32, &self.receipt_index, writer)?;
+        store!(bool, &self.succeeded, writer)?;
+        store!(u64, &self.gas_used, writer)?;
+        store!(u64, &self.cumulative_gas_used, writer)?;
+        serialize!(Vec<RpcEvmLog>, &self.logs, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetEvmTransactionReceiptResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let found = load!(bool, reader)?;
+        let accepting_block = load!(String, reader)?;
+        let evm_number = load!(u64, reader)?;
+        let receipt_index = load!(u32, reader)?;
+        let succeeded = load!(bool, reader)?;
+        let gas_used = load!(u64, reader)?;
+        let cumulative_gas_used = load!(u64, reader)?;
+        let logs = deserialize!(Vec<RpcEvmLog>, reader)?;
+        Ok(Self { found, accepting_block, evm_number, receipt_index, succeeded, gas_used, cumulative_gas_used, logs })
+    }
+}
+
+/// kaspa-pq EVM Lane v0.4 (§16): `misaka_getTxInclusionStatus` — DA inclusion
+/// vs acceptance vs skip, the §18.1 latency-layer surface.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetEvmTxInclusionStatusRequest {
+    /// 32-byte Ethereum tx hash, hex (optional 0x).
+    pub transaction_hash: String,
+}
+
+impl Serializer for GetEvmTxInclusionStatusRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.transaction_hash, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetEvmTxInclusionStatusRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let transaction_hash = load!(String, reader)?;
+        Ok(Self { transaction_hash })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetEvmTxInclusionStatusResponse {
+    /// Pending in this node's EVM mempool (§14/§18.1: the pre-inclusion tier).
+    pub pending: bool,
+    /// Payload blocks carrying the raw tx (DA visibility ≠ execution).
+    pub included_in: Vec<String>,
+    /// The CANONICAL accepting chain block (empty = not accepted at `latest`).
+    pub accepted_in: String,
+    /// Valid only when `accepted_in` is non-empty.
+    pub receipt_index: u32,
+    /// §6.1 class of the most recent skip while never accepted (0 = none).
+    pub last_skip_class: u32,
+}
+
+impl Serializer for GetEvmTxInclusionStatusResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.pending, writer)?;
+        store!(Vec<String>, &self.included_in, writer)?;
+        store!(String, &self.accepted_in, writer)?;
+        store!(u32, &self.receipt_index, writer)?;
+        store!(u32, &self.last_skip_class, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetEvmTxInclusionStatusResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let pending = load!(bool, reader)?;
+        let included_in = load!(Vec<String>, reader)?;
+        let accepted_in = load!(String, reader)?;
+        let receipt_index = load!(u32, reader)?;
+        let last_skip_class = load!(u32, reader)?;
+        Ok(Self { pending, included_in, accepted_in, receipt_index, last_skip_class })
+    }
+}
+
+/// kaspa-pq EVM Lane v0.4 (§16): submit a raw EIP-2718 EVM transaction (hex,
+/// optional 0x prefix) to the node's EVM mempool. Admission applies the
+/// body-validation class-1 rule; the tx is data-only until a chain block
+/// ACCEPTS the payload block that includes it (mergeset delayed acceptance).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitEvmTransactionRequest {
+    /// Raw EIP-2718 transaction bytes, hex-encoded (eth_sendRawTransaction convention).
+    pub transaction: String,
+}
+
+impl Serializer for SubmitEvmTransactionRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.transaction, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for SubmitEvmTransactionRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let transaction = load!(String, reader)?;
+        Ok(Self { transaction })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitEvmTransactionResponse {
+    /// Ethereum transaction hash (keccak256 of the raw bytes), hex.
+    pub transaction_hash: String,
+}
+
+impl Serializer for SubmitEvmTransactionResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.transaction_hash, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for SubmitEvmTransactionResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let transaction_hash = load!(String, reader)?;
+        Ok(Self { transaction_hash })
+    }
+}
+
+/// kaspa-pq EVM Lane v0.4 (§9.2): submit an `EVM_DEPOSIT_LOCK` UTXO outpoint to
+/// be claimed as a bridge deposit. The depositor knows their own lock outpoint;
+/// the node resolves it in the virtual UTXO set, reads the locked address /
+/// amount / claim-tip, builds + validates a `DepositClaim`, and queues it for
+/// this node's own template `system_ops` (the claim then executes — crediting
+/// the EVM account — in a chain block that accepts the payload).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitEvmDepositClaimRequest {
+    /// The `EVM_DEPOSIT_LOCK` transaction id, hex (64 bytes / 128 hex chars).
+    pub transaction_id: String,
+    /// The output index of the lock within that transaction.
+    pub index: u32,
+}
+
+impl Serializer for SubmitEvmDepositClaimRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.transaction_id, writer)?;
+        store!(u32, &self.index, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for SubmitEvmDepositClaimRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let transaction_id = load!(String, reader)?;
+        let index = load!(u32, reader)?;
+        Ok(Self { transaction_id, index })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitEvmDepositClaimResponse {
+    /// The EVM address (hex, 20 bytes) that will be credited on acceptance.
+    pub evm_address: String,
+    /// The sompi amount credited (amount − tip to the address; tip to the coinbase).
+    pub amount_sompi: u64,
+    /// The claim-inclusion tip (sompi) routed to the accepting block's coinbase.
+    pub claim_tip_sompi: u64,
+}
+
+impl Serializer for SubmitEvmDepositClaimResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.evm_address, writer)?;
+        store!(u64, &self.amount_sompi, writer)?;
+        store!(u64, &self.claim_tip_sompi, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for SubmitEvmDepositClaimResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let evm_address = load!(String, reader)?;
+        let amount_sompi = load!(u64, reader)?;
+        let claim_tip_sompi = load!(u64, reader)?;
+        Ok(Self { evm_address, amount_sompi, claim_tip_sompi })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetValidatorStatusRequest {}

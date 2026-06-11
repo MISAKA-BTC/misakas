@@ -59,7 +59,11 @@ pub struct MultiConsensusMetadata {
     version: u32,
 }
 
-pub const LATEST_DB_VERSION: u32 = 6;
+// kaspa-pq Selected-Parent EVM Lane (ADR-0020): bumped 6 → 7. The consensus
+// header is bincode-serialized on disk (`database::access`), so the four new
+// EVM header fields change the stored header layout; per ADR-0001 we reject an
+// old-shape DB at open time (clean resync) rather than migrate it.
+pub const LATEST_DB_VERSION: u32 = 7;
 impl Default for MultiConsensusMetadata {
     fn default() -> Self {
         Self {

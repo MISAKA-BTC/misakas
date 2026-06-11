@@ -4,6 +4,8 @@ use super::BlockBodyProcessor;
 use crate::errors::{BlockProcessResult, RuleError};
 use kaspa_consensus_core::{
     block::Block,
+    constants::EVM_HEADER_VERSION,
+    evm::{MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK},
     mass::{ContextualMasses, Mass, NonContextualMasses},
     merkle::calc_hash_merkle_root,
     tx::TransactionOutpoint,
@@ -14,6 +16,7 @@ impl BlockBodyProcessor {
         Self::check_has_transactions(block)?;
         Self::check_hash_merkle_root(block)?;
         Self::check_only_one_coinbase(block)?;
+        Self::check_evm_payload(block)?;
         self.check_transactions_in_isolation(block)?;
         let mass = self.check_block_mass(block)?;
         self.check_duplicate_transactions(block)?;
@@ -36,6 +39,43 @@ impl BlockBodyProcessor {
         if calculated != block.header.hash_merkle_root {
             return Err(RuleError::BadMerkleRoot(block.header.hash_merkle_root, calculated));
         }
+        Ok(())
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §4.1/§6/§7).
+    /// Isolation rules, all context-free (no DAA/params; the header version is
+    /// itself gated against activation by header validation, so on a net where
+    /// the EVM lane is inactive no v2 header is ever admitted):
+    ///
+    /// - pre-EVM header (`version < EVM_HEADER_VERSION`) ⇒ empty `evm_payload`;
+    /// - v2+ header ⇒ `evm_payload_hash` matches the body payload (the DATA
+    ///   commitment, §4.1 — pure keyed BLAKE2b, verified on every build);
+    /// - the D4 inclusion-side cap: serialized payload bytes ≤
+    ///   `MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK` (§7);
+    /// - bounded producer-selected system ops (§9.2);
+    /// - class-1 tx admission (§6.1): a syntactically inadmissible payload tx
+    ///   invalidates the PAYLOAD block itself (the producer chose its own
+    ///   payload). Tx decoding needs the `evm` build; the non-evm seam admits
+    ///   everything (the lane is `u64::MAX`-inert on every default net).
+    fn check_evm_payload(block: &Block) -> BlockProcessResult<()> {
+        if block.header.version < EVM_HEADER_VERSION {
+            if !block.evm_payload.is_empty() {
+                return Err(RuleError::NonEmptyEvmPayloadBeforeActivation);
+            }
+            return Ok(());
+        }
+        let bytes = block.evm_payload.payload_bytes();
+        if bytes.len() > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
+            return Err(RuleError::EvmPayloadTooLarge(bytes.len(), MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK));
+        }
+        if block.header.evm_payload_hash != kaspa_consensus_core::evm::payload_hash_of_bytes(&bytes) {
+            return Err(RuleError::EvmPayloadHashMismatch);
+        }
+        if block.evm_payload.system_ops.len() > MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK {
+            return Err(RuleError::TooManyEvmSystemOps(block.evm_payload.system_ops.len(), MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK));
+        }
+        crate::processes::evm::admit_evm_payload_txs(&block.evm_payload)
+            .map_err(|(i, reason)| RuleError::EvmPayloadTxInadmissible(i, reason))?;
         Ok(())
     }
 
@@ -529,6 +569,194 @@ mod tests {
         assert_match!(
             consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await,
             Err(RuleError::MissingParents(_))
+        );
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): a non-empty `evm_payload` on
+    /// a pre-EVM (v0/v1) header is rejected by body validation.
+    #[test]
+    fn evm_payload_rejected_before_activation() {
+        use kaspa_consensus_core::evm::EvmExecutionPayload;
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        let consensus = TestConsensus::new(&Config::new(params));
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+
+        // Minimal block reaching `check_evm_payload`: one coinbase tx + correct merkle root.
+        let coinbase = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_COINBASE, 0, vec![0u8; 19]);
+        let txs = vec![coinbase];
+        let hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        let header = Header::new_finalized(
+            0, // pre-EVM header version (< EVM_HEADER_VERSION)
+            vec![vec![1.into()]].try_into().unwrap(),
+            hash_merkle_root,
+            Default::default(),
+            Default::default(),
+            1,
+            0x207fffff,
+            1,
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+            0,
+            0.into(),
+            0,
+            Default::default(),
+        );
+        let mut block = MutableBlock::new(header, txs);
+        block.evm_payload = EvmExecutionPayload { transactions: vec![vec![1, 2, 3]], ..Default::default() };
+        assert_match!(
+            body_processor.validate_body_in_isolation(&block.to_immutable()),
+            Err(RuleError::NonEmptyEvmPayloadBeforeActivation)
+        );
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// kaspa-pq EVM Lane v0.4 §4.1/§6.1: on a v2+ header the body payload must
+    /// match `evm_payload_hash` (the DATA commitment — checked on every build),
+    /// and (`evm` builds) a syntactically inadmissible payload tx is a class-1
+    /// fault of the payload block itself.
+    #[test]
+    fn evm_payload_hash_and_class1_admission_enforced_on_v2() {
+        use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+        use kaspa_consensus_core::evm::{DepositClaim, EvmAddress, EvmExecutionPayload, EvmSystemOp};
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        let consensus = TestConsensus::new(&Config::new(params));
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+
+        let coinbase = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_COINBASE, 0, vec![0u8; 19]);
+        let txs = vec![coinbase];
+        let hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        let mk_header = || {
+            Header::new_finalized(
+                EVM_HEADER_VERSION,
+                vec![vec![1.into()]].try_into().unwrap(),
+                hash_merkle_root,
+                Default::default(),
+                Default::default(),
+                1,
+                0x207fffff,
+                1,
+                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+                0,
+                0.into(),
+                0,
+                Default::default(),
+            )
+        };
+        // A tx-free payload, so the check below is feature-independent (class-1
+        // tx admission only decodes under the `evm` build).
+        let payload = EvmExecutionPayload {
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: Default::default(),
+                evm_address: EvmAddress::from_bytes([0xCC; 20]),
+                amount_sompi: 1,
+                claim_tip_sompi: 0,
+            })],
+            ..Default::default()
+        };
+
+        // Header commits to the zero payload hash but the body carries data ⇒ mismatch.
+        let mut block = MutableBlock::new(mk_header(), txs.clone());
+        block.evm_payload = payload.clone();
+        assert_match!(body_processor.validate_body_in_isolation(&block.to_immutable()), Err(RuleError::EvmPayloadHashMismatch));
+
+        // Correct data commitment ⇒ the payload rules pass.
+        let mut block = MutableBlock::new(mk_header().with_evm_payload_hash(payload.payload_hash()), txs.clone());
+        block.evm_payload = payload;
+        body_processor.validate_body_in_isolation(&block.to_immutable()).unwrap();
+
+        // Class-1 admission (evm builds): an undecodable payload tx invalidates
+        // the payload block itself (v0.4 §6.1 class 1).
+        #[cfg(feature = "evm")]
+        {
+            let bad_payload = EvmExecutionPayload { transactions: vec![vec![0xde, 0xad]], ..Default::default() };
+            let mut block = MutableBlock::new(mk_header().with_evm_payload_hash(bad_payload.payload_hash()), txs.clone());
+            block.evm_payload = bad_payload;
+            assert_match!(
+                body_processor.validate_body_in_isolation(&block.to_immutable()),
+                Err(RuleError::EvmPayloadTxInadmissible(0, _))
+            );
+        }
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// kaspa-pq EVM Lane v0.4 §14.1 — Y9 budget independence (audit K-10): the
+    /// EVM payload byte budget never enters the UTXO mass budget. A payload
+    /// filled to just under `MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK` contributes
+    /// ZERO block mass (the in-isolation mass result is identical with and
+    /// without it), and the byte cap trips on payload bytes alone, regardless
+    /// of how much mass headroom the block has.
+    #[test]
+    #[cfg(feature = "evm")]
+    fn evm_y9_payload_byte_budget_independent_of_utxo_mass_budget() {
+        use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+        use kaspa_consensus_core::evm::{EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        let consensus = TestConsensus::new(&Config::new(params));
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+
+        // The §16 e2e fixture: a class-1-VALID signed EIP-1559 transfer.
+        // Class-1 admission is per-tx and duplication is an ACCEPTANCE-side
+        // skip (never a body fault), so repeating it legally fills the payload
+        // to the byte cap.
+        const FIXTURE_TX_NONCE0: &str = "02f86b834d534b8080843b9aca008252089400000000000000000000000000000000000000228201f480c001a03244f5d74a96a52bd1c42fa1b9c336f4d3ae5509190ed9a526f17971c7fd743ca07f58e09399b50636b84f0ae4a7634c60a11c6f32427b613ebf6f4a638d6c68c1";
+        let mut raw = vec![0u8; FIXTURE_TX_NONCE0.len() / 2];
+        faster_hex::hex_decode(FIXTURE_TX_NONCE0.as_bytes(), &mut raw).unwrap();
+
+        let base = EvmExecutionPayload::default().payload_bytes().len();
+        let per_tx = 4 + raw.len(); // borsh: 4-byte length prefix + raw bytes
+        let n = (MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK - base) / per_tx;
+        let full_payload = EvmExecutionPayload { transactions: vec![raw.clone(); n], ..Default::default() };
+        let full_len = full_payload.payload_bytes().len();
+        assert!(full_len <= MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, "filled payload is within the cap");
+        assert!(full_len > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK - per_tx, "filled payload is NEAR the cap");
+
+        let coinbase = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_COINBASE, 0, vec![0u8; 19]);
+        let txs = vec![coinbase];
+        let hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        let mk_header = || {
+            Header::new_finalized(
+                EVM_HEADER_VERSION,
+                vec![vec![1.into()]].try_into().unwrap(),
+                hash_merkle_root,
+                Default::default(),
+                Default::default(),
+                1,
+                0x207fffff,
+                1,
+                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+                0,
+                0.into(),
+                0,
+                Default::default(),
+            )
+        };
+
+        // Identical UTXO content, empty vs near-cap payload: bit-identical mass.
+        let empty_payload = EvmExecutionPayload::default();
+        let block_empty = MutableBlock::new(mk_header().with_evm_payload_hash(empty_payload.payload_hash()), txs.clone());
+        let mass_empty = body_processor.validate_body_in_isolation(&block_empty.to_immutable()).unwrap();
+        let mut block_full = MutableBlock::new(mk_header().with_evm_payload_hash(full_payload.payload_hash()), txs.clone());
+        block_full.evm_payload = full_payload;
+        let mass_full = body_processor.validate_body_in_isolation(&block_full.to_immutable()).unwrap();
+        assert_eq!(mass_empty, mass_full, "a near-cap EVM payload contributes ZERO mass to the UTXO budget (§14.1)");
+
+        // One tx over the cap: the BYTE budget trips on its own — the block's
+        // huge remaining mass headroom is irrelevant.
+        let over_payload = EvmExecutionPayload { transactions: vec![raw; n + 1], ..Default::default() };
+        let mut block_over = MutableBlock::new(mk_header().with_evm_payload_hash(over_payload.payload_hash()), txs.clone());
+        block_over.evm_payload = over_payload;
+        assert_match!(
+            body_processor.validate_body_in_isolation(&block_over.to_immutable()),
+            Err(RuleError::EvmPayloadTooLarge(_, _))
         );
 
         consensus.shutdown(wait_handles);

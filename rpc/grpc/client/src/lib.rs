@@ -284,6 +284,16 @@ impl RpcApi for GrpcClient {
     route!(get_current_block_color_call, GetCurrentBlockColor);
     route!(get_utxo_return_address_call, GetUtxoReturnAddress);
     route!(get_virtual_chain_from_block_v2_call, GetVirtualChainFromBlockV2);
+    // kaspa-pq: overlay/validator + EVM Lane (§16) ops. The gRPC SERVER routed
+    // these from day one (factory.rs); the client trait impl silently fell
+    // through to the default `NotImplemented` body — found live when the
+    // activation-prep tool drove submitEvmTransaction over gRPC.
+    route!(get_dns_confirmation_call, GetDnsConfirmation);
+    route!(get_validator_status_call, GetValidatorStatus);
+    route!(submit_evm_transaction_call, SubmitEvmTransaction);
+    route!(get_evm_transaction_receipt_call, GetEvmTransactionReceipt);
+    route!(get_evm_tx_inclusion_status_call, GetEvmTxInclusionStatus);
+    route!(submit_evm_deposit_claim_call, SubmitEvmDepositClaim);
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     // Notification API
