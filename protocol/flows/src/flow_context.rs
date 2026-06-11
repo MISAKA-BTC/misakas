@@ -596,6 +596,12 @@ impl FlowContext {
         // TODO: Throttle these transactions as well if needed
         self.broadcast_transactions(transactions_to_broadcast, false).await;
 
+        // §14.2: pump the EVM-tx relay spread on the same per-block cadence as
+        // the UTXO spread. The EVM spread is otherwise submit-driven, so a
+        // low-rate submitter's burst tail would linger unsent until its next
+        // submit; this flushes anything whose batch interval has elapsed.
+        self.evm_transactions_spread.write().await.flush_due().await;
+
         if self.should_run_mempool_scanning_task().await {
             // Spawn a task executing the removal of expired low priority transactions and, if time has come too,
             // the revalidation of high priority transactions.
