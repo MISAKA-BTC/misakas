@@ -430,6 +430,21 @@ pub trait RpcApi: Sync + Send + AnySync {
         Err(RpcError::NotImplemented)
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§9.2): submit an EVM_DEPOSIT_LOCK outpoint to be
+    /// claimed (bridge deposit). The node resolves + validates it and queues a
+    /// `DepositClaim` for its own template.
+    async fn submit_evm_deposit_claim(&self, transaction_id: String, index: u32) -> RpcResult<SubmitEvmDepositClaimResponse> {
+        self.submit_evm_deposit_claim_call(None, SubmitEvmDepositClaimRequest { transaction_id, index }).await
+    }
+    async fn submit_evm_deposit_claim_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: SubmitEvmDepositClaimRequest,
+    ) -> RpcResult<SubmitEvmDepositClaimResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
+    }
+
     /// kaspa-pq Phase 11 (ADR-0010): the in-process validator service's status.
     async fn get_validator_status(&self) -> RpcResult<GetValidatorStatusResponse> {
         self.get_validator_status_call(None, GetValidatorStatusRequest {}).await

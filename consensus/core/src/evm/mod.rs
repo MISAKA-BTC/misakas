@@ -514,6 +514,11 @@ pub struct EvmExecutionPayload {
 pub struct EvmTemplateData {
     pub evm_coinbase: EvmAddress,
     pub transactions: Vec<Vec<u8>>,
+    /// §9.2 producer-selected deposit claims (resolved + pre-validated by the
+    /// node from submitted lock outpoints). The VSP template path re-validates
+    /// each against the live selected-parent claim view before committing, so a
+    /// stale claim is dropped rather than invalidating the node's own block.
+    pub system_ops: Vec<DepositClaim>,
 }
 
 impl EvmExecutionPayload {

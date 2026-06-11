@@ -74,6 +74,7 @@ impl Router {
                 SubmitEvmTransaction,
                 GetEvmTransactionReceipt,
                 GetEvmTxInclusionStatus,
+                SubmitEvmDepositClaim,
                 GetValidatorStatus,
                 GetValidatorAttestationTarget,
                 GetStakeBond,

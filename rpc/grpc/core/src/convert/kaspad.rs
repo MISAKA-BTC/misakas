@@ -70,6 +70,7 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(SubmitEvmTransaction);
     impl_into_kaspad_request!(GetEvmTransactionReceipt);
     impl_into_kaspad_request!(GetEvmTxInclusionStatus);
+    impl_into_kaspad_request!(SubmitEvmDepositClaim);
 
     impl_into_kaspad_request!(NotifyBlockAdded);
     impl_into_kaspad_request!(NotifyNewBlockTemplate);
@@ -214,6 +215,7 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(SubmitEvmTransaction);
     impl_into_kaspad_response!(GetEvmTransactionReceipt);
     impl_into_kaspad_response!(GetEvmTxInclusionStatus);
+    impl_into_kaspad_response!(SubmitEvmDepositClaim);
 
     impl_into_kaspad_notify_response!(NotifyBlockAdded);
     impl_into_kaspad_notify_response!(NotifyNewBlockTemplate);

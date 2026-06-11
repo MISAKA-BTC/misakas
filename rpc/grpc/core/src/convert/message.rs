@@ -393,6 +393,12 @@ from!(item: &kaspa_rpc_core::SubmitEvmTransactionRequest, protowire::SubmitEvmTr
 from!(item: RpcResult<&kaspa_rpc_core::SubmitEvmTransactionResponse>, protowire::SubmitEvmTransactionResponseMessage, {
     Self { transaction_hash: item.transaction_hash.clone(), error: None }
 });
+from!(item: &kaspa_rpc_core::SubmitEvmDepositClaimRequest, protowire::SubmitEvmDepositClaimRequestMessage, {
+    Self { transaction_id: item.transaction_id.clone(), index: item.index }
+});
+from!(item: RpcResult<&kaspa_rpc_core::SubmitEvmDepositClaimResponse>, protowire::SubmitEvmDepositClaimResponseMessage, {
+    Self { evm_address: item.evm_address.clone(), amount_sompi: item.amount_sompi, claim_tip_sompi: item.claim_tip_sompi, error: None }
+});
 
 from!(item: &kaspa_rpc_core::GetEvmTransactionReceiptRequest, protowire::GetEvmTransactionReceiptRequestMessage, {
     Self { transaction_hash: item.transaction_hash.clone() }
@@ -1001,6 +1007,12 @@ try_from!(item: &protowire::SubmitEvmTransactionRequestMessage, kaspa_rpc_core::
 });
 try_from!(item: &protowire::SubmitEvmTransactionResponseMessage, RpcResult<kaspa_rpc_core::SubmitEvmTransactionResponse>, {
     Self { transaction_hash: item.transaction_hash.clone() }
+});
+try_from!(item: &protowire::SubmitEvmDepositClaimRequestMessage, kaspa_rpc_core::SubmitEvmDepositClaimRequest, {
+    Self { transaction_id: item.transaction_id.clone(), index: item.index }
+});
+try_from!(item: &protowire::SubmitEvmDepositClaimResponseMessage, RpcResult<kaspa_rpc_core::SubmitEvmDepositClaimResponse>, {
+    Self { evm_address: item.evm_address.clone(), amount_sompi: item.amount_sompi, claim_tip_sompi: item.claim_tip_sompi }
 });
 
 try_from!(item: &protowire::GetEvmTransactionReceiptRequestMessage, kaspa_rpc_core::GetEvmTransactionReceiptRequest, {

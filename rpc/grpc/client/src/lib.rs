@@ -293,6 +293,7 @@ impl RpcApi for GrpcClient {
     route!(submit_evm_transaction_call, SubmitEvmTransaction);
     route!(get_evm_transaction_receipt_call, GetEvmTransactionReceipt);
     route!(get_evm_tx_inclusion_status_call, GetEvmTxInclusionStatus);
+    route!(submit_evm_deposit_claim_call, SubmitEvmDepositClaim);
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     // Notification API

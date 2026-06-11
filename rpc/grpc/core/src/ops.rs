@@ -95,6 +95,8 @@ pub enum KaspadPayloadOps {
     SubmitEvmTransaction,
     GetEvmTransactionReceipt,
     GetEvmTxInclusionStatus,
+    // kaspa-pq EVM Lane v0.4 (§9.2)
+    SubmitEvmDepositClaim,
     // kaspa-pq Phase 11 (ADR-0010)
     GetValidatorStatus,
 

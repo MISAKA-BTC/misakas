@@ -328,6 +328,12 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.get_virtual_utxos(from_outpoint, chunk_size, skip_first)).await
     }
 
+    /// kaspa-pq EVM Lane §9.2: point lookup of one outpoint in the virtual UTXO
+    /// set (resolve a submitted deposit-lock outpoint to its entry).
+    pub async fn async_get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
+        self.clone().spawn_blocking(move |c| c.get_virtual_utxo_entry(outpoint)).await
+    }
+
     pub async fn async_get_tips(&self) -> Vec<BlockHash> {
         self.clone().spawn_blocking(|c| c.get_tips()).await
     }

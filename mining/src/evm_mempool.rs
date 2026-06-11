@@ -19,7 +19,8 @@
 //! mempool-admitted tx can never make the node's own template
 //! payload-block-invalid.
 
-use kaspa_consensus_core::evm::{EvmAddress, EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+use kaspa_consensus_core::evm::{DepositClaim, EvmAddress, EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::EvmH256;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
 
@@ -32,6 +33,9 @@ pub const EVM_MEMPOOL_TX_TTL_SECS: u64 = 3_600;
 /// Replacement (same sender + nonce) requires `max_fee_per_gas` to grow by
 /// at least this percentage — the standard anti-churn fee-bump rule.
 pub const EVM_MEMPOOL_REPLACEMENT_BUMP_PCT: u128 = 10;
+/// Maximum pending deposit claims queued for own-payload `system_ops` (§9.2).
+/// Several blocks' worth of the per-block cap so a backlog can drain.
+pub const EVM_MEMPOOL_MAX_CLAIMS: usize = 4_096;
 
 /// A pending EVM transaction with the metadata selection needs. Field values
 /// come from admission ([`kaspa_evm::tx::admit_tx_info`] under the `evm`
@@ -86,6 +90,14 @@ pub struct EvmMempool {
     by_sender_nonce: BTreeMap<(EvmAddress, u64), EvmH256>,
     /// Sum of raw byte lengths (pool budget accounting).
     total_bytes: usize,
+    /// §9.2 producer-side deposit claims, keyed by the claimed lock outpoint
+    /// (the natural dedup key — one claim per lock). The claim values come
+    /// pre-resolved + pre-validated from the RPC layer (which has the UTXO
+    /// view); the VSP template path re-validates against the live
+    /// selected-parent view and drops any that went stale, so a queued claim
+    /// can never make the node's own block invalid. (`TransactionOutpoint` is
+    /// not `Ord`, so this is a `HashMap`; selection sorts for determinism.)
+    claims: HashMap<TransactionOutpoint, DepositClaim>,
 }
 
 impl EvmMempool {
@@ -112,6 +124,45 @@ impl EvmMempool {
     /// Raw EIP-2718 bytes of a pending tx (§14.2: served to requesting peers).
     pub fn get_raw(&self, hash: &EvmH256) -> Option<Vec<u8>> {
         self.txs.get(hash).map(|t| t.raw.clone())
+    }
+
+    /// Number of queued deposit claims.
+    pub fn claims_len(&self) -> usize {
+        self.claims.len()
+    }
+
+    /// Whether a claim for this lock outpoint is already queued.
+    pub fn contains_claim(&self, outpoint: &TransactionOutpoint) -> bool {
+        self.claims.contains_key(outpoint)
+    }
+
+    /// Queue a pre-resolved + pre-validated deposit claim (§9.2). Dedup is by
+    /// the claimed lock outpoint (one claim per lock); a re-submit replaces the
+    /// queued claim (idempotent — the fields are derived from the same lock).
+    /// Returns `false` (no insert) only when the queue is full of OTHER claims.
+    pub fn insert_claim(&mut self, claim: DepositClaim) -> bool {
+        if self.claims.len() >= EVM_MEMPOOL_MAX_CLAIMS && !self.claims.contains_key(&claim.deposit_outpoint) {
+            return false;
+        }
+        self.claims.insert(claim.deposit_outpoint, claim);
+        true
+    }
+
+    /// Drop a queued claim (e.g. once its lock has been consumed). No-op if absent.
+    pub fn remove_claim(&mut self, outpoint: &TransactionOutpoint) -> Option<DepositClaim> {
+        self.claims.remove(outpoint)
+    }
+
+    /// Select up to `max` queued claims for the own-payload `system_ops`,
+    /// sorted by `(txid, index)` for a deterministic order. The VSP template
+    /// path re-validates each against the live selected-parent claim view and
+    /// drops any that went stale, so this is an over-approximation — selecting
+    /// a since-spent lock is harmless (it is filtered before the payload is built).
+    pub fn select_claims(&self, max: usize) -> Vec<DepositClaim> {
+        let mut claims: Vec<DepositClaim> = self.claims.values().cloned().collect();
+        claims.sort_by_key(|c| (c.deposit_outpoint.transaction_id, c.deposit_outpoint.index));
+        claims.truncate(max);
+        claims
     }
 
     /// Insert a pre-admitted pending tx (admission itself happens in
@@ -287,6 +338,41 @@ mod tests {
             pool.insert(tx(0xB, 0, 999, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, 4)),
             Err(EvmMempoolError::TooLarge(_))
         ));
+    }
+
+    /// §9.2 producer-side claim queue: dedup by lock outpoint, deterministic
+    /// sorted selection, capacity bound, idempotent re-submit.
+    #[test]
+    fn claim_queue_dedups_orders_and_bounds() {
+        use kaspa_consensus_core::tx::TransactionOutpoint;
+        let mk = |txid_byte: u8, idx: u32, amount: u64| DepositClaim {
+            deposit_outpoint: TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([txid_byte; 64]), idx),
+            evm_address: EvmAddress::from_bytes([txid_byte; 20]),
+            amount_sompi: amount,
+            claim_tip_sompi: 0,
+        };
+        let mut pool = EvmMempool::new();
+        assert!(pool.insert_claim(mk(0xC, 1, 100)));
+        assert!(pool.insert_claim(mk(0xA, 0, 200)));
+        assert!(pool.insert_claim(mk(0xA, 5, 300)));
+        assert_eq!(pool.claims_len(), 3);
+        // Re-submit of the same outpoint is idempotent (replace, not grow).
+        assert!(pool.insert_claim(mk(0xA, 0, 999)));
+        assert_eq!(pool.claims_len(), 3);
+        assert!(pool.contains_claim(&TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xA; 64]), 0)));
+
+        // Selection is sorted by (txid, index): A:0, A:5, then C:1.
+        let sel = pool.select_claims(10);
+        assert_eq!(sel.len(), 3);
+        assert_eq!(sel[0].deposit_outpoint.index, 0);
+        assert_eq!(sel[0].amount_sompi, 999, "the re-submit replaced the value");
+        assert_eq!(sel[1].deposit_outpoint.index, 5);
+        assert_eq!(sel[2].deposit_outpoint.transaction_id, kaspa_hashes::Hash64::from_bytes([0xC; 64]));
+        // Cap honored.
+        assert_eq!(pool.select_claims(2).len(), 2);
+        // Removal.
+        pool.remove_claim(&TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xC; 64]), 1));
+        assert_eq!(pool.claims_len(), 2);
     }
 
     /// Audit L2: near u128::MAX the old `existing * 110 / 100` reverse-overflowed

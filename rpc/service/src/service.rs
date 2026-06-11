@@ -825,6 +825,64 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn submit_evm_deposit_claim_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: SubmitEvmDepositClaimRequest,
+    ) -> RpcResult<SubmitEvmDepositClaimResponse> {
+        // kaspa-pq EVM Lane v0.4 (§9.2): resolve the submitted EVM_DEPOSIT_LOCK
+        // outpoint in the virtual UTXO set, read the locked fields, build +
+        // validate a DepositClaim, and queue it for this node's own template.
+        // The depositor knows their own outpoint, so this is a point lookup —
+        // no scan, no index. The VSP template path re-validates against the
+        // live selected-parent view before committing.
+        let transaction_id: kaspa_hashes::Hash64 = request
+            .transaction_id
+            .strip_prefix("0x")
+            .unwrap_or(&request.transaction_id)
+            .parse()
+            .map_err(|_| RpcError::RpcSubsystem("transaction_id must be a 64-byte hex hash".to_string()))?;
+        let outpoint = kaspa_consensus_core::tx::TransactionOutpoint::new(transaction_id, request.index);
+
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let entry = session
+            .async_get_virtual_utxo_entry(outpoint)
+            .await
+            .ok_or_else(|| RpcError::RpcSubsystem(format!("outpoint {outpoint} is absent/spent in the virtual UTXO set")))?;
+        let lock = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key)
+            .ok_or_else(|| RpcError::RpcSubsystem(format!("outpoint {outpoint} is not an EVM_DEPOSIT_LOCK output")))?;
+
+        // The claim mirrors the lock exactly (the consensus rule binds them).
+        let claim = kaspa_consensus_core::evm::DepositClaim {
+            deposit_outpoint: outpoint,
+            evm_address: kaspa_consensus_core::evm::EvmAddress::from_bytes(lock.evm_address),
+            amount_sompi: entry.amount,
+            claim_tip_sompi: lock.claim_tip_sompi,
+        };
+
+        // Reject early if already in the refund window (AC-2 exclusivity): a
+        // claim at/after the lock timeout is invalid, so do not queue it.
+        let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
+        if sink_daa >= lock.timeout_daa_score {
+            return Err(RpcError::RpcSubsystem(format!(
+                "deposit lock {outpoint} is at/past its refund timeout {} (sink daa {sink_daa})",
+                lock.timeout_daa_score
+            )));
+        }
+
+        if !self.mining_manager.submit_evm_deposit_claim(claim.clone()) {
+            return Err(RpcError::RpcSubsystem("the deposit-claim queue is full".to_string()));
+        }
+        let mut evm_address_hex = vec![0u8; 40];
+        faster_hex::hex_encode(&lock.evm_address, &mut evm_address_hex)
+            .map_err(|e| RpcError::RpcSubsystem(format!("hex encode: {e}")))?;
+        Ok(SubmitEvmDepositClaimResponse {
+            evm_address: format!("0x{}", String::from_utf8(evm_address_hex).unwrap()),
+            amount_sompi: claim.amount_sompi.saturating_sub(claim.claim_tip_sompi),
+            claim_tip_sompi: claim.claim_tip_sompi,
+        })
+    }
+
     async fn get_validator_status_call(
         &self,
         _connection: Option<&DynRpcConnection>,

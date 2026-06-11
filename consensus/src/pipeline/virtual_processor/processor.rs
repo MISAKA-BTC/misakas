@@ -786,10 +786,39 @@ impl VirtualStateProcessor {
                     }
                 }
             }
+            // §9.2: own-payload deposit claims. These EXECUTE in this block, so
+            // an invalid claim makes our block invalid — re-validate each against
+            // the live claim view and drop the stale ones (the queue may hold a
+            // lock that was spent or aged into its refund window since submit).
+            // The claim view for a block B extending the virtual tip is
+            // `selected_parent(B)_view ∘ B.mergeset_diff`; for a fresh template
+            // B's parent is the virtual selected parent and B's mergeset is the
+            // virtual mergeset, so the virtual UTXO set IS that composed view —
+            // exactly what the acceptance path will re-check.
+            if !evm_template_data.system_ops.is_empty() {
+                use kaspa_consensus_core::evm::{EvmSystemOp, MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK};
+                let virtual_read = self.virtual_stores.read();
+                let claim_view = &virtual_read.utxo_set;
+                for claim in evm_template_data.system_ops {
+                    if payload.system_ops.len() >= MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK {
+                        break;
+                    }
+                    let one = EvmExecutionPayload {
+                        system_ops: vec![EvmSystemOp::DepositClaim(claim.clone())],
+                        ..Default::default()
+                    };
+                    match crate::processes::evm::validate_evm_deposit_claims(&one, claim_view, header.daa_score) {
+                        Ok(_) => payload.system_ops.push(EvmSystemOp::DepositClaim(claim)),
+                        Err(reason) => warn!("EVM template: dropping stale/invalid deposit claim ({reason})"),
+                    }
+                }
+            }
             // §8.2: the declared coinbase claims this payload's priority fees —
-            // only meaningful when the payload carries txs (and keeping it zero
-            // otherwise preserves the empty payload / empty store-row form).
-            if !payload.transactions.is_empty() {
+            // meaningful only when the payload actually carries content (and
+            // keeping it zero otherwise preserves the empty payload / empty
+            // store-row form). A claim-only payload also declares the coinbase
+            // (the claim tip routes to it, §9.2).
+            if !payload.transactions.is_empty() || !payload.system_ops.is_empty() {
                 payload.evm_coinbase = evm_template_data.evm_coinbase;
             }
             payload

@@ -722,6 +722,21 @@ message GetEvmTxInclusionStatusResponseMessage {
   RPCError error = 1000;
 }
 
+// kaspa-pq EVM Lane v0.4 (§9.2): submit an EVM_DEPOSIT_LOCK outpoint to be
+// claimed as a bridge deposit. The node resolves + validates it and queues a
+// DepositClaim for its own template.
+message SubmitEvmDepositClaimRequestMessage {
+  string transactionId = 1;
+  uint32 index = 2;
+}
+
+message SubmitEvmDepositClaimResponseMessage {
+  string evmAddress = 1;
+  uint64 amountSompi = 2;
+  uint64 claimTipSompi = 3;
+  RPCError error = 1000;
+}
+
 message GetValidatorStatusRequestMessage {}
 
 message GetValidatorStatusResponseMessage {

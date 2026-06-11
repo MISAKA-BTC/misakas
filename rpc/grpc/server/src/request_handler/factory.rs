@@ -87,6 +87,7 @@ impl Factory {
                 SubmitEvmTransaction,
                 GetEvmTransactionReceipt,
                 GetEvmTxInclusionStatus,
+                SubmitEvmDepositClaim,
                 GetValidatorStatus,
                 NotifyBlockAdded,
                 NotifyNewBlockTemplate,

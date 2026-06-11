@@ -154,6 +154,8 @@ pub enum RpcApiOps {
     GetEvmTransactionReceipt = 157,
     /// kaspa-pq EVM Lane v0.4 (§16): DA-inclusion / acceptance / skip status of an EVM tx
     GetEvmTxInclusionStatus = 158,
+    /// kaspa-pq EVM Lane v0.4 (§9.2): submit an EVM_DEPOSIT_LOCK outpoint to be claimed (bridge deposit)
+    SubmitEvmDepositClaim = 159,
 }
 
 impl RpcApiOps {

@@ -290,6 +290,14 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Point lookup of a single outpoint in the virtual UTXO set (kaspa-pq EVM
+    /// Lane §9.2: a depositor submits a lock outpoint; the node resolves the
+    /// `EVM_DEPOSIT_LOCK` entry to build + validate a `DepositClaim`). `None` if
+    /// the outpoint is unspent-absent (never existed or already spent).
+    fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
+        unimplemented!()
+    }
+
     fn get_tips(&self) -> Vec<BlockHash> {
         unimplemented!()
     }

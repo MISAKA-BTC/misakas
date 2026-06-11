@@ -1820,6 +1820,70 @@ impl Deserializer for SubmitEvmTransactionResponse {
     }
 }
 
+/// kaspa-pq EVM Lane v0.4 (§9.2): submit an `EVM_DEPOSIT_LOCK` UTXO outpoint to
+/// be claimed as a bridge deposit. The depositor knows their own lock outpoint;
+/// the node resolves it in the virtual UTXO set, reads the locked address /
+/// amount / claim-tip, builds + validates a `DepositClaim`, and queues it for
+/// this node's own template `system_ops` (the claim then executes — crediting
+/// the EVM account — in a chain block that accepts the payload).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitEvmDepositClaimRequest {
+    /// The `EVM_DEPOSIT_LOCK` transaction id, hex (64 bytes / 128 hex chars).
+    pub transaction_id: String,
+    /// The output index of the lock within that transaction.
+    pub index: u32,
+}
+
+impl Serializer for SubmitEvmDepositClaimRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.transaction_id, writer)?;
+        store!(u32, &self.index, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for SubmitEvmDepositClaimRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let transaction_id = load!(String, reader)?;
+        let index = load!(u32, reader)?;
+        Ok(Self { transaction_id, index })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitEvmDepositClaimResponse {
+    /// The EVM address (hex, 20 bytes) that will be credited on acceptance.
+    pub evm_address: String,
+    /// The sompi amount credited (amount − tip to the address; tip to the coinbase).
+    pub amount_sompi: u64,
+    /// The claim-inclusion tip (sompi) routed to the accepting block's coinbase.
+    pub claim_tip_sompi: u64,
+}
+
+impl Serializer for SubmitEvmDepositClaimResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.evm_address, writer)?;
+        store!(u64, &self.amount_sompi, writer)?;
+        store!(u64, &self.claim_tip_sompi, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for SubmitEvmDepositClaimResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let evm_address = load!(String, reader)?;
+        let amount_sompi = load!(u64, reader)?;
+        let claim_tip_sompi = load!(u64, reader)?;
+        Ok(Self { evm_address, amount_sompi, claim_tip_sompi })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetValidatorStatusRequest {}

@@ -3404,6 +3404,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
             kaspa_consensus_core::evm::EvmTemplateData {
                 evm_coinbase: kaspa_consensus_core::evm::EvmAddress::from_bytes([0xCB; 20]),
                 transactions: vec![raw_n0.clone()],
+                system_ops: vec![],
             },
         )
         .unwrap();
@@ -3459,6 +3460,97 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     consensus.shutdown(wait_handles);
 }
 
+/// kaspa-pq EVM Lane v0.4 §9.2 — producer-side deposit-claim path: a queued
+/// `DepositClaim` (resolved from a real EVM_DEPOSIT_LOCK UTXO, the work the
+/// `submitEvmDepositClaim` RPC does) lands in the node's OWN template
+/// `system_ops` after the template path re-validates it against the live claim
+/// view; a claim for a non-existent/stale lock is dropped — so a queued claim
+/// can never make the producer's own block invalid. This closes the production
+/// half of the bridge: deposits are now both validatable (P4) AND producible.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_producer_deposit_claim_fills_and_filters_template_system_ops() {
+    use kaspa_consensus_core::evm::{DepositClaim, EvmAddress, EvmSystemOp, EvmTemplateData};
+    use kaspa_consensus_core::header::Header;
+    use kaspa_consensus_core::muhash::MuHashExtensions;
+    use kaspa_consensus_core::tx::UtxoEntry;
+    use kaspa_muhash::MuHash;
+    use kaspa_txscript::script_class::evm_deposit_lock_script;
+
+    kaspa_core::log::try_init_logger("info");
+
+    // A real EVM_DEPOSIT_LOCK output: 1000 sompi locked to an EVM address, claim
+    // tip 7, timeout far in the future; refund = a standard ML-DSA P2PKH.
+    let evm_addr = [0xAB; 20];
+    let refund_spk = p2pkh_mldsa87_spk(&[0x42; 64]);
+    let lock_spk = evm_deposit_lock_script(evm_addr, 1_000_000, 7, refund_spk.script());
+    let lock_outpoint = TransactionOutpoint::new(99u64.into(), 0);
+    let initial_utxos = [(
+        lock_outpoint,
+        UtxoEntry { amount: 1000, script_public_key: lock_spk, block_daa_score: 0, is_coinbase: false },
+    )];
+
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .apply_args(|cfg| {
+            let mut ms = MuHash::new();
+            initial_utxos.iter().for_each(|(op, u)| ms.add_utxo(op, u));
+            cfg.params.genesis.utxo_commitment = ms.finalize();
+            let genesis_header: Header = (&cfg.params.genesis).into();
+            cfg.params.genesis.hash = genesis_header.hash;
+        })
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let mut genesis_ms = MuHash::new();
+    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms);
+    consensus.import_pruning_point_utxo_set(config.genesis.hash, genesis_ms).unwrap();
+
+    // (1) the valid claim for the real lock; (2) a claim for a non-existent
+    // outpoint that re-validation must drop.
+    let good_claim = DepositClaim {
+        deposit_outpoint: lock_outpoint,
+        evm_address: EvmAddress::from_bytes(evm_addr),
+        amount_sompi: 1000,
+        claim_tip_sompi: 7,
+    };
+    let bogus_claim = DepositClaim {
+        deposit_outpoint: TransactionOutpoint::new(123u64.into(), 0),
+        evm_address: EvmAddress::from_bytes([0xCD; 20]),
+        amount_sompi: 500,
+        claim_tip_sompi: 0,
+    };
+
+    let template = consensus
+        .build_block_template_with_evm(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+            EvmTemplateData {
+                evm_coinbase: EvmAddress::from_bytes([0xCB; 20]),
+                transactions: vec![],
+                system_ops: vec![good_claim.clone(), bogus_claim],
+            },
+        )
+        .unwrap();
+
+    assert_eq!(template.block.evm_payload.system_ops.len(), 1, "only the valid claim survives template re-validation");
+    assert_eq!(
+        template.block.evm_payload.system_ops[0],
+        EvmSystemOp::DepositClaim(good_claim),
+        "the resolved lock's claim is in the own payload"
+    );
+    assert_eq!(
+        template.block.evm_payload.evm_coinbase,
+        EvmAddress::from_bytes([0xCB; 20]),
+        "a claim-bearing payload declares the coinbase (the tip routes to it)"
+    );
+    assert_eq!(template.block.header.evm_payload_hash, template.block.evm_payload.payload_hash(), "header commits the claim payload");
+
+    consensus.shutdown(wait_handles);
+}
+
 /// kaspa-pq EVM Lane v0.4 §14.1/§14.3 — Y9 budget independence, pipeline e2e:
 /// a template assembled from an OVERSUPPLIED candidate list fills the payload
 /// to the byte cap (and no further), the resulting full-cap block keeps its
@@ -3500,6 +3592,7 @@ async fn evm_y9_full_cap_payload_block_validates_and_executes() {
             EvmTemplateData {
                 evm_coinbase: EvmAddress::from_bytes([0xCB; 20]),
                 transactions: vec![raw.clone(); n + 32], // 32 candidates beyond the cap
+                system_ops: vec![],
             },
         )
         .unwrap();

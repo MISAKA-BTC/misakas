@@ -1167,6 +1167,19 @@ impl ConsensusApi for Consensus {
         iter.map(|item| item.unwrap()).collect()
     }
 
+    fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
+        // Seek to the first entry at-or-after `outpoint`; it is the requested
+        // entry iff the key matches exactly (the outpoint is unspent).
+        let virtual_stores = self.virtual_stores.read();
+        virtual_stores
+            .utxo_set
+            .seek_iterator(Some(outpoint), 1, false)
+            .next()
+            .and_then(|item| item.ok())
+            .filter(|(op, _)| *op == outpoint)
+            .map(|(_, entry)| entry)
+    }
+
     fn get_tips(&self) -> Vec<BlockHash> {
         self.body_tips_store.read().get().unwrap().read().iter().copied().collect_vec()
     }
