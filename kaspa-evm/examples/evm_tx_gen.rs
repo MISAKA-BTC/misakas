@@ -175,6 +175,28 @@ async fn main() {
             let b = client.get_balance_by_address(addr).await.expect("balance call");
             println!("balance_sompi={b}");
         }
+        Some("dns") => {
+            // The node-wide DNS confirmation view over gRPC — the operator's
+            // dnsConfirmed signal (also wired into `kaspa-pq-validator status`
+            // over wRPC; this is the gRPC differential).
+            let url = args[2].clone();
+            let client = GrpcClient::connect(url).await.expect("gRPC connect");
+            let d = client.get_dns_confirmation().await.expect("dns call");
+            println!(
+                "available={} dns_confirmed={} pow_confirmed={} work={}/{} stake={}/{} health={} anchor={} anchor_daa={} note={:?}",
+                d.available,
+                d.dns_confirmed,
+                d.pow_confirmed,
+                d.work_depth,
+                d.required_work_depth,
+                d.stake_depth,
+                d.required_stake_depth,
+                d.health,
+                d.last_dns_confirmed_anchor,
+                d.last_dns_confirmed_anchor_daa_score,
+                d.note
+            );
+        }
         Some("payload") => {
             // The 64-byte address payload (hex) of a bech32 kaspa address — the
             // `dest_payload` input of the `withdraw` mode.

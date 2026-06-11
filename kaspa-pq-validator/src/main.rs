@@ -353,6 +353,25 @@ async fn status(args: StatusArgs) -> Result<(), String> {
             Err(e) => println!("bond:         query failed: {e} (does the node configure the overlay?)"),
         }
     }
+    match client.get_dns_confirmation().await {
+        Ok(d) if d.available => {
+            let health = match d.health {
+                0 => "DisabledBeforeActivation",
+                1 => "Active",
+                2 => "DegradedStakeQualityLow",
+                3 => "DegradedCertificateCensored",
+                _ => "Unknown",
+            };
+            println!("dns_confirmed: {}", d.dns_confirmed);
+            println!("pow_confirmed: {}", d.pow_confirmed);
+            println!("work_depth:    {}/{}", d.work_depth, d.required_work_depth);
+            println!("stake_depth:   {}/{}", d.stake_depth, d.required_stake_depth);
+            println!("dns_health:    {health}");
+            println!("dns_anchor:    {} (daa {})", d.last_dns_confirmed_anchor, d.last_dns_confirmed_anchor_daa_score);
+        }
+        Ok(_) => println!("dns:          overlay not active on this node"),
+        Err(e) => println!("dns:          query failed: {e}"),
+    }
     let _ = client.disconnect().await;
     Ok(())
 }
