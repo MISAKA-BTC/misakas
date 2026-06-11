@@ -188,7 +188,7 @@ on-disk consensus header は bincode 直列化のため、フィールド追加�
 | Withdraw precompile | `0x…F002`(`MISAKA_WITHDRAW`) | §9.3 |
 | WMISAKA predeploy | `0x…F001` | §19.1 |
 | Subnetwork ids | `0x20` deposit / `0x21` withdraw-claim(予約) / `0x22` admin(予約) | |
-| 活性化 | `Params::evm_activation_daa_score` | `u64::MAX` = inert(全ネット現状)。Stage 1 fork の activation 経路は O9 |
+| 活性化 | `Params::evm_activation_daa_score` | **testnet = 0(2026-06-11 genesis-active 化、re-genesis cutover・genesis hash 不変)**、devnet = 0。mainnet/simnet = `u64::MAX`(inert)。activation 以降の header は v2(`EVM_HEADER_VERSION`) |
 
 ### 5.2 evm_number
 

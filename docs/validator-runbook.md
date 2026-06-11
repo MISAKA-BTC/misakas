@@ -138,7 +138,11 @@ network-independent (same relay rate + bond shape), so it works unchanged on tes
 ```
 kaspa-pq-validator status --node-rpc 127.0.0.1:27610 --stake-bond <txid>:0
 ```
-Expect `bond_status: active`, `bond_amount: 50000000`.
+Expect `bond_status: active`, `bond_amount: 50000000`. `status` also reports the network's DNS
+finality state — `dns_confirmed`/`pow_confirmed`, the work/stake depths vs their required floors,
+`dns_health` (Active / Degraded…), and `dns_anchor` (the last DNS-confirmed canonical lagged
+anchor + its DAA score). Once your validator (plus the rest of the active stake) attests,
+`dns_confirmed: true` with a recent `dns_anchor` is the end-to-end health signal.
 
 ### 5. Run the validator (attests every epoch)
 ```

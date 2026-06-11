@@ -1,16 +1,24 @@
 # ADR-0020: Selected-Parent EVM Execution Lane on L1
 
 ## Status
-Proposed; updated 2026-06-10 to design **v0.2 (audit-revised) + v0.3 (DEX addendum)**. **P0 (spec
-freeze) + P1 (consensus types) implemented**; **P2 (revm executor) in progress**; P3–P7 pending.
+Accepted & implemented through design **v0.4 (mergeset delayed acceptance)**; **ACTIVATED ON
+TESTNET 2026-06-11**. All build phases are on `pr-19-s5f-…`: P0–P3 (types/executor/state), M10
+(acceptance executor + hot path), P4 (UTXO↔EVM bridge: deposit-lock → claim → credit → F002
+withdraw → synthetic UTXO), §15 (template + wire), §16 (EVM mempool + RPC + indexes), §14 (EVM-tx
+P2P relay, protocol 100→101 back-compat), plus the N0 optimization pass (O1 sender cache, O2
+parallel admission, O3 Evm reuse, O9 lane KPIs). Proven live first on a 3-node devnet-EVM mesh,
+then on testnet: `TESTNET_PARAMS.evm_activation_daa_score = 0` (genesis-active) via a 3-host
+re-genesis cutover — the testnet genesis hash is unchanged (`cf4c48fe…`), and post-activation
+headers carry `EVM_HEADER_VERSION` (v2), so pre-EVM nodes and the old chain are version-isolated
+in both directions. Devnet is likewise genesis-active; **mainnet/simnet stay inert (`u64::MAX`)**.
 
 > **Design superseded by v0.4** — the unified design doc
 > [`docs/misaka-evm-design-v0.4.md`](../misaka-evm-design-v0.4.md) replaces the v0.3 immediate-execution
 > model with **mergeset delayed acceptance** (B's own payload is executed by its selected child), adds
 > `evm_payload_hash` as a second header commitment, 5-class skip semantics, payload-miner fee routing,
-> two-stage caps, and a non-decreasing timestamp clamp. The code in tree still implements v0.2/v0.3
-> (inert on every net, `evm_activation_daa_score = u64::MAX`); the v0.4 migration deltas are listed in
-> design §21. This ADR will be re-frozen against v0.4 when that rework starts.
+> two-stage caps, and a non-decreasing timestamp clamp. The v0.4 migration deltas are listed in
+> design §21; the sections below are the v0.2/v0.3 freeze, kept as the historical record of the
+> consensus-safety analysis.
 
 Source design: `MISAKA_Kaspa_L1_Selected_Parent_EVM_Design_v0.2_Audit_Revised.docx` +
 `..._v0.3_DEX_Uniswap_Addendum.docx`. This ADR is the code-grounded freeze of that design against the
@@ -72,7 +80,7 @@ Trade-off (accepted): EVM throughput tracks the single selected-parent chain, **
 | Subnetwork ids | `0x20` deposit, `0x21` withdraw-claim (reserved), `0x22` admin (reserved) | `subnets.rs`. |
 | DB store prefixes | `201`–`210` | `database/registry.rs` (`EvmHeader`…`EvmBlockHashMap`). |
 | Withdraw precompile | `0x…F002` (`MISAKA_WITHDRAW`) | `evm/mod.rs`. |
-| Activation | `Params::evm_activation_daa_score` | `u64::MAX` = inert (all nets in P1). Target net = **testnet**; finite value set when the executor lands (P2+). |
+| Activation | `Params::evm_activation_daa_score` | **testnet = 0 (genesis-active since 2026-06-11)**, devnet = 0; mainnet/simnet = `u64::MAX` (inert). Activation gates header v2 (`EVM_HEADER_VERSION`) — see Status. |
 
 **Circular-dependency rule (design §4.2):** the current L1 block hash and current EVM block hash are
 **not** inputs to the EVM execution environment (the header hash already commits to the EVM result).
