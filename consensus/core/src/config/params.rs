@@ -997,17 +997,26 @@ pub const TESTNET_PARAMS: Params = Params {
 
     // 18:30 UTC, March 6, 2025
     crescendo_activation: ForkActivation::new(88_657_000),
-    // kaspa-pq: TESTNET mirrors mainnet's production overlay params — 20M-KAS min active stake +
-    // 14-day unbonding/evidence window (slashable through the whole exit) — but with a lowered
-    // `required_work_depth` (see TESTNET_DNS_PARAMS) so the 2-D DNS gate confirms at Argon2id's
-    // floored CPU difficulty. Not a genesis-block input, so the genesis hash is unchanged.
+    // kaspa-pq: TESTNET inherits mainnet's production overlay economics (14-day
+    // unbonding/evidence window, PoS-v2 active, 2-D dominance reorg gate) but with
+    // testnet-friendly thresholds (see TESTNET_DNS_PARAMS): a lowered
+    // `required_work_depth` (100) so the 2-D DNS gate confirms at Argon2id's floored
+    // CPU difficulty, and 10-KAS `min_bond`/`min_active_stake` so a single
+    // premine-backed validator can drive finality. Not a genesis-block input, so the
+    // genesis hash is unchanged.
     dns_params: Some(TESTNET_DNS_PARAMS),
     pow_argon2id_activation: ForkActivation::always(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
-    // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
-    // a finite activation score when the revm executor lands (P2+). u64::MAX = never.
-    evm_activation_daa_score: u64::MAX,
+    // ADR-0020 (O13 activation): EVM lane GENESIS-ACTIVE on testnet — every
+    // post-genesis header is v2 carrying the two EVM commitments, so the public
+    // testnet exercises the full lane (relay / deposit-claim / withdraw bridge /
+    // receipts) alongside Argon2id PoW + the PoS-finality overlay. NOT a
+    // genesis-block input (genesis hash unchanged), but the version fork-gate
+    // invalidates every v1 block => a barrier re-genesis of the testnet mesh, and
+    // testnet kaspad MUST be built `--features evm` (a non-evm build refuses
+    // evm-active blocks by design). Mainnet/simnet stay u64::MAX-inert.
+    evm_activation_daa_score: 0,
 };
 
 pub const SIMNET_PARAMS: Params = Params {

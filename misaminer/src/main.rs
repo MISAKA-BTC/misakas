@@ -7,7 +7,7 @@
 //!   2. grind a Layer-0 nonce with `kaspa_pow::StateLayer0` (multi-threaded),
 //!   3. submit the solved block (`submit_block`).
 //!
-//! `--network-id` MUST match the node's `NetworkId::to_string()` (e.g. `devnet`)
+//! `--network-id` MUST match the node's `NetworkId::to_string()` (e.g. `testnet-10`)
 //! so the Layer-0 finalizer domain separation agrees with consensus validation.
 
 use clap::Parser;
@@ -28,11 +28,11 @@ struct Args {
     /// Mining endpoint as host:port — a MISAKA gateway/pool or a node's gRPC.
     #[arg(long, visible_alias = "rpc", default_value = "127.0.0.1:26610")]
     pool: String,
-    /// Your payout wallet (bech32, e.g. `misakadev:...`); mined coinbase rewards go here.
+    /// Your payout wallet (bech32, e.g. `misakatest:...`); mined coinbase rewards go here.
     #[arg(long, visible_alias = "pay-address")]
     wallet: Option<String>,
-    /// Network id string — must equal the node's NetworkId::to_string() (e.g. `devnet`, `mainnet`).
-    #[arg(long, default_value = "devnet")]
+    /// Network id string — must equal the node's NetworkId::to_string() (e.g. `testnet-10`, `mainnet`).
+    #[arg(long, default_value = "testnet-10")]
     network_id: String,
     /// Worker / rig name shown in logs (handy when running several rigs).
     #[arg(long, default_value = "rig0")]
