@@ -49,6 +49,12 @@ alloy-eips = "0.8"
 # secp-free guard checks the default node tree, not kaspa-evm's dev-deps).
 alloy-signer = "0.8"
 alloy-signer-local = "0.8"
+# Activation-prep tooling (examples/evm_tx_gen): submit signed txs to a live
+# node + poll inclusion status. Dev-only — never in the production tree.
+kaspa-grpc-client.workspace = true
+kaspa-rpc-core.workspace = true
+faster-hex.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

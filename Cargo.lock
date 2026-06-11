@@ -3753,11 +3753,15 @@ dependencies = [
  "alloy-trie",
  "borsh",
  "derive_more 1.0.0",
+ "faster-hex 0.9.0",
  "kaspa-consensus-core",
+ "kaspa-grpc-client",
  "kaspa-hashes",
+ "kaspa-rpc-core",
  "kaspa-txscript",
  "kaspa-utils",
  "revm",
+ "tokio",
 ]
 
 [[package]]

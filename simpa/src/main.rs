@@ -203,6 +203,10 @@ fn main_impl(mut args: Args) {
     params.crescendo_activation = ForkActivation::always();
     params.coinbase_maturity = 200;
     params.storage_mass_parameter = 10_000;
+    // simpa simulates the PoW/DAG layer with v1 headers; devnet is now
+    // EVM-genesis-active (every header v2 + commitments), so pin the lane
+    // inert here — the simulation is not an EVM workload.
+    params.evm_activation_daa_score = u64::MAX;
     let mut builder = ConfigBuilder::new(params)
         .apply_args(|config| apply_args_to_consensus_params(&args, &mut config.params))
         .apply_args(|config| apply_args_to_perf_params(&args, &mut config.perf))

@@ -1075,8 +1075,15 @@ pub const DEVNET_PARAMS: Params = Params {
     // kaspa-pq: PQ-only enforcement from genesis (ADR-0019).
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
-    // ADR-0020: EVM lane inert in P1 (no executor yet). u64::MAX = never active.
-    evm_activation_daa_score: u64::MAX,
+    // ADR-0020 activation prep (O13 sandbox stage): EVM lane GENESIS-ACTIVE on
+    // devnet — every post-genesis header is v2 with the two EVM commitments,
+    // so the live mesh exercises the full lane (relay e2e / C4 / C5 / Y10).
+    // NOT a genesis-block input (genesis hash unchanged), but the version
+    // fork-gate invalidates every v1 block => barrier re-genesis of the mesh,
+    // and devnet kaspad MUST be built `--features evm` (a non-evm build
+    // refuses evm-active blocks by design). Mainnet/testnet/simnet stay
+    // u64::MAX-inert until the O13/O9 decision.
+    evm_activation_daa_score: 0,
     // kaspa-pq: devnet now uses the same MISAKA DNS seeders as mainnet/testnet for automatic
     // peer discovery (devnet default P2P port is 26611, matching the live mesh — see
     // NetworkId::default_p2p_port). Nodes launched WITHOUT `--nodnsseed` resolve these to find
