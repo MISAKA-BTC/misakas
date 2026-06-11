@@ -790,11 +790,12 @@ impl VirtualStateProcessor {
         header: Header,
         virtual_state: &VirtualState,
         evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
-    ) -> (Header, kaspa_consensus_core::evm::EvmExecutionPayload) {
+    ) -> (Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<kaspa_consensus_core::tx::TransactionOutpoint>) {
         use crate::processes::evm::evm_execute_acceptance;
         if header.daa_score < self.evm_activation_daa_score {
-            return (header, Default::default());
+            return (header, Default::default(), vec![]);
         }
+        let mut stale_claims: Vec<kaspa_consensus_core::tx::TransactionOutpoint> = Vec::new();
         // §15 step 6: assemble the own payload from the mempool candidates.
         // Defense-in-depth re-admission (the body class-1 rule): an inadmissible
         // tx here would make our OWN block payload-block-invalid, so hard-filter
@@ -853,7 +854,13 @@ impl VirtualStateProcessor {
                             payload.system_ops.push(EvmSystemOp::DepositClaim(claim));
                             consumed_locks = consumed;
                         }
-                        Err(reason) => warn!("EVM template: dropping stale/invalid deposit claim ({reason})"),
+                        Err(reason) => {
+                            // Stale vs the LIVE view is terminal (the lock is spent or
+                            // refund-aged; a reorg resurrection can simply re-submit) —
+                            // report it so the manager evicts the queue entry.
+                            warn!("EVM template: dropping stale/invalid deposit claim ({reason})");
+                            stale_claims.push(claim.deposit_outpoint);
+                        }
                     }
                 }
             }
@@ -900,7 +907,7 @@ impl VirtualStateProcessor {
             header.utxo_commitment = multiset.finalize();
             header.finalize();
         }
-        (header, own_payload)
+        (header, own_payload, stale_claims)
     }
 
     /// Non-`evm` builds cannot produce evm-active templates (same refusal as
@@ -911,14 +918,14 @@ impl VirtualStateProcessor {
         header: Header,
         _virtual_state: &VirtualState,
         _evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
-    ) -> (Header, kaspa_consensus_core::evm::EvmExecutionPayload) {
+    ) -> (Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<kaspa_consensus_core::tx::TransactionOutpoint>) {
         if header.daa_score >= self.evm_activation_daa_score {
             panic!(
                 "the EVM lane is active at DAA {} but this kaspad was built without the `evm` feature — cannot build a valid template (rebuild with --features evm)",
                 header.daa_score
             );
         }
-        (header, Default::default())
+        (header, Default::default(), vec![])
     }
 
     fn commit_utxo_state(
@@ -2379,7 +2386,7 @@ impl VirtualStateProcessor {
         // code) and commit both EVM header fields. The own payload is empty
         // until the EVM mempool lands (§16 phase) — its (non-zero) hash is
         // still committed. Inert (returns the header unchanged) pre-activation.
-        let (header, evm_payload) = self.evm_template_fields(header, &virtual_state, evm_template_data);
+        let (header, evm_payload, stale_evm_claims) = self.evm_template_fields(header, &virtual_state, evm_template_data);
         let selected_parent_hash = virtual_state.ghostdag_data.selected_parent;
         let selected_parent_timestamp = self.headers_store.get_timestamp(selected_parent_hash).unwrap();
         let selected_parent_daa_score = self.headers_store.get_daa_score(selected_parent_hash).unwrap();
@@ -2393,6 +2400,7 @@ impl VirtualStateProcessor {
             selected_parent_daa_score,
             selected_parent_hash,
             calculated_fees,
+            stale_evm_claims,
         ))
     }
 

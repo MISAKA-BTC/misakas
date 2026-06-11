@@ -3,7 +3,7 @@ use crate::{
     coinbase::MinerData,
     evm::EvmExecutionPayload,
     header::Header,
-    tx::{Transaction, TransactionId},
+    tx::{Transaction, TransactionId, TransactionOutpoint},
 };
 // PR-9.5e: all block-hash surfaces here (`Block::hash`, selected
 // parent, sink, precomputed-hash test ctor) use `BlockHash` (= `Hash64`).
@@ -154,6 +154,11 @@ pub struct BlockTemplate {
     pub selected_parent_hash: BlockHash,
     /// Expected length is one less than txs length due to lack of coinbase transaction
     pub calculated_fees: Vec<u64>,
+    /// kaspa-pq EVM Lane (§9.2): deposit-claim outpoints the template path judged
+    /// stale against the live claim view (lock absent/spent or aged into its refund
+    /// window) — terminal for the queued claim, so the mining manager evicts them
+    /// from the claim queue instead of re-validating (and re-warning) every template.
+    pub stale_evm_claims: Vec<TransactionOutpoint>,
 }
 
 impl BlockTemplate {
@@ -165,6 +170,7 @@ impl BlockTemplate {
         selected_parent_daa_score: u64,
         selected_parent_hash: BlockHash,
         calculated_fees: Vec<u64>,
+        stale_evm_claims: Vec<TransactionOutpoint>,
     ) -> Self {
         Self {
             block,
@@ -174,6 +180,7 @@ impl BlockTemplate {
             selected_parent_daa_score,
             selected_parent_hash,
             calculated_fees,
+            stale_evm_claims,
         }
     }
 

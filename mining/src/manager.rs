@@ -237,6 +237,15 @@ impl MiningManager {
             };
             match block_template_builder.build_block_template(consensus, miner_data, selector, build_mode, evm_template_data.clone()) {
                 Ok(block_template) => {
+                    // §9.2: claims the template path proved stale against the live
+                    // claim view can never execute — evict them so future templates
+                    // stop re-validating (and re-warning) on them.
+                    if !block_template.stale_evm_claims.is_empty() {
+                        let mut pool = self.evm_mempool.write();
+                        for outpoint in &block_template.stale_evm_claims {
+                            pool.remove_claim(outpoint);
+                        }
+                    }
                     let block_template = cache_lock.set_immutable_cached_template(block_template);
                     match attempts {
                         1 => {
