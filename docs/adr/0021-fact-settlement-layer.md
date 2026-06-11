@@ -5,6 +5,10 @@ Proposed (2026-06-10). Design **v0.3 (consolidated)** — `docs/misaka-fsl-desig
 source design; this ADR is its code-grounded freeze against the kaspa-pq tree. Nothing is implemented
 yet (the only consensus change is the F003 precompile, scheduled F-M0).
 
+The **economic design** (funding, correction-warranty economics, collateral policy, bootstrap) is
+frozen separately in [ADR-0022](0022-fsl-economic-design.md) /
+`docs/misaka-fsl-design-v0.5-economics.md` (§31–§43); it changes nothing in this ADR.
+
 Builds on, and changes nothing in, the existing consensus except one EVM precompile:
 - [ADR-0020](0020-selected-parent-evm-lane.md) — the Selected-Parent EVM lane (`docs/misaka-evm-design-v0.4.md`); FSL is an EVM-contract subsystem on this lane and adds one precompile to its set (`0xF001` WMISAKA, `0xF002` withdraw, **`0xF003` ML-DSA-87 verify**).
 - [ADR-0009](0009-dns-probabilistic-finality.md)/[0012](0012-mainnet-validator-sortition-commit-reveal.md) — the DNS finality overlay (attestor set, stake, slashing, commit-reveal sortition) is **reused** for the adjudicator panel + beacon.
@@ -96,9 +100,9 @@ change beyond F003.**
 | Attestor / source / verdict signatures | ML-DSA-87 | PQ-safe attribution (§4.2). |
 | Bond / fee / reward settlement | EVM native / ERC-20 (secp256k1 tx) | "secp for moving money now; ML-DSA-87 for facts verified later" (§4.2). |
 | Escalation ladder | L0 auto-source · L1 optimistic · L2 attestor panel (7) · L3 appeal court (jurors ×2+1, commit-reveal Schelling) · L4 void | Vote exists at L3-final **only**; `void` always available. |
-| `risk_tier` β (attack-cost multiplier) | A 1.5 / B 3.0 / C 5.0 | `attack_cost_lower_bound ≥ β × downstream_exposure` (K9b). |
-| `risk_tier` γ (bond+stake multiplier) | A 0.05 / B 0.15 / C 0.30 | `posted_bond + slashable_panel_stake ≥ γ × downstream_exposure` (K9c). |
-| `α` (min bond ratio) | 0.5% | **tier-A L1 only**; tier-B/C are governed by K9b/K9c (FD10). |
+| `risk_tier` β (attack-cost multiplier) | A 1.5 / B 3.0 / C 5.0 | `attack_cost_lower_bound ≥ β × downstream_exposure` (K9b; renumbered **K9d** in ADR-0022/v0.5 §35.1). |
+| `risk_tier` γ (bond+stake multiplier) | A 0.05 / B 0.15 / C 0.30 | `posted_bond + slashable_panel_stake ≥ γ × downstream_exposure` (K9c; renumbered **K9e** in ADR-0022/v0.5 §35.1). |
+| `α` (min bond ratio) | 0.5% | **tier-A L1 only**; tier-B/C are governed by K9b/K9c (FD10) — K9d/K9e under the ADR-0022 numbering. |
 | KPIs (public, recomputable) | K1 overturn ≤ 0.1%/yr · K2 void ≤ 2% · K3 L3-vote-reach ≤ 0.5% · K4 evidence-recompute = 100% · K6 single-entity panel power < 1/3 | `misaka_getFslMetrics` (§18). |
 
 EVM-state stores (`FactStore`, registries, commitments) **persist** (no pruning); evidence/verdict
