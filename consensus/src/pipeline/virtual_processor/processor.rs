@@ -683,7 +683,6 @@ impl VirtualStateProcessor {
         apply_evm_bridge_effects(
             &mut ctx.mergeset_diff,
             &mut ctx.multiset_hash,
-            current,
             header.daa_score,
             &consumed_locks,
             &staged.result.withdrawals,
@@ -764,6 +763,8 @@ impl VirtualStateProcessor {
         // tx here would make our OWN block payload-block-invalid, so hard-filter
         // rather than trust the pool; independently re-enforce the byte cap.
         // The candidates execute in a LATER accepting chain block, never here.
+        let mut consumed_locks: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)> =
+            Vec::new();
         let own_payload = {
             use kaspa_consensus_core::evm::{EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
             let mut payload = EvmExecutionPayload::default();
@@ -794,7 +795,9 @@ impl VirtualStateProcessor {
             // `selected_parent(B)_view ∘ B.mergeset_diff`; for a fresh template
             // B's parent is the virtual selected parent and B's mergeset is the
             // virtual mergeset, so the virtual UTXO set IS that composed view —
-            // exactly what the acceptance path will re-check.
+            // exactly what the acceptance path will re-check. The consumed lock
+            // entries are collected HERE (one read of the live view — no second
+            // racy read) for the commitment fold below.
             if !evm_template_data.system_ops.is_empty() {
                 use kaspa_consensus_core::evm::{EvmSystemOp, MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK};
                 let virtual_read = self.virtual_stores.read();
@@ -803,12 +806,16 @@ impl VirtualStateProcessor {
                     if payload.system_ops.len() >= MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK {
                         break;
                     }
-                    let one = EvmExecutionPayload {
-                        system_ops: vec![EvmSystemOp::DepositClaim(claim.clone())],
-                        ..Default::default()
-                    };
-                    match crate::processes::evm::validate_evm_deposit_claims(&one, claim_view, header.daa_score) {
-                        Ok(_) => payload.system_ops.push(EvmSystemOp::DepositClaim(claim)),
+                    // Validate the WHOLE accumulated claim set + the candidate so
+                    // cross-claim rules (duplicate outpoints) also filter here.
+                    let mut probe_ops = payload.system_ops.clone();
+                    probe_ops.push(EvmSystemOp::DepositClaim(claim.clone()));
+                    let probe = EvmExecutionPayload { system_ops: probe_ops, ..Default::default() };
+                    match crate::processes::evm::validate_evm_deposit_claims(&probe, claim_view, header.daa_score) {
+                        Ok(consumed) => {
+                            payload.system_ops.push(EvmSystemOp::DepositClaim(claim));
+                            consumed_locks = consumed;
+                        }
                         Err(reason) => warn!("EVM template: dropping stale/invalid deposit claim ({reason})"),
                     }
                 }
@@ -835,7 +842,27 @@ impl VirtualStateProcessor {
             &own_payload,
         )
         .expect("template acceptance execution reads committed stores; failure is store corruption");
-        let header = header.with_evm_payload_hash(own_payload.payload_hash()).with_evm_commitment(result.header.commitment_root());
+        let mut header = header.with_evm_payload_hash(own_payload.payload_hash()).with_evm_commitment(result.header.commitment_root());
+        // §9: the validator folds the bridge's UTXO side-effects (consumed
+        // deposit locks + materialized withdrawals) into THIS block's diff and
+        // checks them against `header.utxo_commitment` — so the PRODUCER must
+        // fold the identical effects into the template's commitment (the
+        // template inherited the virtual multiset, which has none of them).
+        // Found live: the first claim-bearing template self-disqualified.
+        if !consumed_locks.is_empty() || !result.withdrawals.is_empty() {
+            let mut multiset = virtual_state.multiset.clone();
+            let mut scratch_diff = kaspa_consensus_core::utxo::utxo_diff::UtxoDiff::default();
+            crate::processes::evm::apply_evm_bridge_effects(
+                &mut scratch_diff,
+                &mut multiset,
+                header.daa_score,
+                &consumed_locks,
+                &result.withdrawals,
+            )
+            .expect("template bridge effects mirror validation on already-validated inputs");
+            header.utxo_commitment = multiset.finalize();
+            header.finalize();
+        }
         (header, own_payload)
     }
 

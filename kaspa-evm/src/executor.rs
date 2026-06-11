@@ -246,6 +246,7 @@ pub fn execute_block_evm(
                 // value leaves the EVM lane here; consensus re-creates it as a
                 // synthetic UTXO output in this block's diff.
                 let evm_tx_index = receipts.len() as u32;
+                let evm_tx_hash = crate::tx::tx_hash(&cand.raw);
                 let mut op_index = 0u32;
                 let mut withdrawn_wei: u128 = 0;
                 for log in result.logs() {
@@ -253,6 +254,7 @@ pub fn execute_block_evm(
                         withdrawals.push(WithdrawOp {
                             evm_tx_index,
                             op_index,
+                            evm_tx_hash,
                             from: EvmAddress::from_bytes(w.from),
                             script_public_key: w.script_public_key,
                             amount_sompi: (w.amount_wei / EVM_NATIVE_SCALE as u128) as u64,

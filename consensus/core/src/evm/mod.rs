@@ -165,13 +165,22 @@ pub const MAX_WITHDRAW_SCRIPT_BYTES: usize = 128;
 /// [`MISAKA_EVM_SYNTHETIC_OUTPOINT_CONTEXT`] domain — deliberately separate
 /// from the real transaction-id domain so a synthetic outpoint can never
 /// collide with a real txid. Preimage (fixed-width, frozen byte order):
-/// `block_hash(64) ‖ evm_tx_index(4 LE) ‖ op_index(4 LE)`. Stable across reorg
-/// (the EVM result is append-only per block).
-pub fn synthetic_withdrawal_txid(block: Hash64, evm_tx_index: u32, op_index: u32) -> Hash64 {
-    let mut preimage = [0u8; 64 + 4 + 4];
-    preimage[..64].copy_from_slice(&block.as_bytes());
-    preimage[64..68].copy_from_slice(&evm_tx_index.to_le_bytes());
-    preimage[68..72].copy_from_slice(&op_index.to_le_bytes());
+/// `evm_tx_hash(32) ‖ op_index(4 LE)`.
+///
+/// Keyed by the WITHDRAWING EVM TX's keccak256 hash — NOT the accepting block
+/// hash. The block hash includes the nonce and `utxo_commitment`, and the
+/// synthetic output is itself part of `utxo_commitment`: a block-hash key is
+/// CIRCULAR — the producer could never compute its own commitment before
+/// mining (found live: the first real withdraw-bearing template self-
+/// disqualified). The tx-hash key is pre-mining-stable and sound: a given EVM
+/// tx executes at most once per chain history (the nonce/class-3 rule), and
+/// its withdraw `(from, script, amount)` is fixed by the SIGNED tx itself, so
+/// even cross-branch re-executions materialize the identical output under the
+/// identical outpoint — exactly like a real txid.
+pub fn synthetic_withdrawal_txid(evm_tx_hash: EvmH256, op_index: u32) -> Hash64 {
+    let mut preimage = [0u8; 32 + 4];
+    preimage[..32].copy_from_slice(&evm_tx_hash.as_bytes());
+    preimage[32..36].copy_from_slice(&op_index.to_le_bytes());
     blake2b_512_keyed(MISAKA_EVM_SYNTHETIC_OUTPOINT_CONTEXT, &preimage)
 }
 
@@ -446,6 +455,9 @@ pub struct WithdrawOp {
     pub evm_tx_index: u32,
     /// Index of this op within that tx (a tx may withdraw more than once).
     pub op_index: u32,
+    /// keccak256 hash of the withdrawing EVM tx — the [`synthetic_withdrawal_txid`]
+    /// key (pre-mining-stable, unlike the accepting block hash; see that fn).
+    pub evm_tx_hash: EvmH256,
     /// EVM account debited.
     pub from: EvmAddress,
     /// Destination UTXO script (consensus script-rule validated; failure ⇒ revert).

@@ -25,7 +25,8 @@ use kaspa_consensus_core::tx::{
 };
 use kaspa_hashes::{Hash64, blake2b_512_address_payload};
 use kaspa_txscript::{
-    MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder, verify_mldsa87_with_context,
+    MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder,
+    script_class::evm_deposit_lock_script, verify_mldsa87_with_context,
 };
 use libcrux_ml_dsa::ml_dsa_87;
 use rand::RngCore;
@@ -362,6 +363,100 @@ impl ValidatorKey {
             tx.inputs[i].signature_script = script;
         }
         Ok(tx)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§7.2 / §9.2): build a funded, signed NATIVE
+    /// transaction creating an `EVM_DEPOSIT_LOCK` output — the UTXO side of a
+    /// bridge deposit. output-0 is the lock (value == `amount`, script =
+    /// [`evm_deposit_lock_script`] binding the EVM credit address, the refund
+    /// timeout and the claim tip); change goes back to the funding script. The
+    /// lock's refund script is this key's own funding P2PKH, so the depositor
+    /// can reclaim after `timeout_daa_score` if no producer claims it. Once
+    /// accepted, claim it via `submitEvmDepositClaim(txid, 0)` on a mining
+    /// node — the claim executes in an accepting chain block and credits
+    /// `(amount − claim_tip) × EVM_NATIVE_SCALE` wei to `evm_address`.
+    pub fn build_funded_deposit_lock_tx_multi(
+        &self,
+        amount: u64,
+        evm_address: [u8; 20],
+        timeout_daa_score: u64,
+        claim_tip_sompi: u64,
+        fundings: &[(TransactionOutpoint, UtxoEntry)],
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        if amount == 0 {
+            return Err("deposit amount must be > 0".to_string());
+        }
+        if claim_tip_sompi > amount {
+            return Err(format!("claim tip {claim_tip_sompi} exceeds the deposit amount {amount}"));
+        }
+        if fundings.is_empty() {
+            return Err("deposit-lock needs at least one funding UTXO".to_string());
+        }
+        let needed = amount.checked_add(fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
+        let mut total: u64 = 0;
+        for (_, e) in fundings {
+            total = total.checked_add(e.amount).ok_or_else(|| "funding total overflows u64".to_string())?;
+        }
+        if total < needed {
+            return Err(format!("funding UTXOs total {total} does not cover amount {amount} + fee {fee}"));
+        }
+
+        // All fundings are at this key's own funding script (a standard 69-byte
+        // ML-DSA P2PKH — exactly what the lock's refund slot requires).
+        let funding_spk = fundings[0].1.script_public_key.clone();
+        let lock_spk = evm_deposit_lock_script(evm_address, timeout_daa_score, claim_tip_sompi, funding_spk.script());
+        let inputs: Vec<TransactionInput> =
+            fundings.iter().map(|(op, _)| TransactionInput::new(*op, vec![], MAX_TX_IN_SEQUENCE_NUM, 1)).collect();
+        let mut outputs = vec![TransactionOutput::new(amount, lock_spk)];
+        let change = total - needed;
+        if change > 0 {
+            outputs.push(TransactionOutput::new(change, funding_spk));
+        }
+        let tx = Transaction::new(TX_VERSION, inputs, outputs, 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+
+        // Sign each self-spend input over the canonical sighash (same loop as the bond builder).
+        let entries: Vec<UtxoEntry> = fundings.iter().map(|(_, e)| e.clone()).collect();
+        let mtx = MutableTransaction::with_entries(tx, entries);
+        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
+        let mut sig_scripts = Vec::with_capacity(fundings.len());
+        for i in 0..fundings.len() {
+            let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), i, SIG_HASH_ALL, &reused_mldsa);
+            let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+            sig_data.push(SIG_HASH_ALL.to_u8());
+            let signature_script = ScriptBuilder::new()
+                .add_data(&sig_data)
+                .map_err(|e| format!("deposit-lock funding sig push failed: {e}"))?
+                .add_data(self.keypair.verification_key.as_ref())
+                .map_err(|e| format!("deposit-lock funding pubkey push failed: {e}"))?
+                .drain();
+            sig_scripts.push(signature_script);
+        }
+        let mut tx = mtx.tx;
+        for (i, script) in sig_scripts.into_iter().enumerate() {
+            tx.inputs[i].signature_script = script;
+        }
+        Ok(tx)
+    }
+
+    /// Mass-based fee (sompi) for an `n_inputs`-funded deposit-lock tx — the
+    /// same dummy-shape approach as [`Self::estimate_bond_fee_for_inputs`].
+    pub fn estimate_deposit_lock_fee_for_inputs(&self, mass_calculator: &MassCalculator, prefix: Prefix, n_inputs: usize) -> u64 {
+        let funding_spk = pay_to_address_script(&self.funding_address(prefix));
+        let n = n_inputs.max(1);
+        let per = u64::MAX / (2 * n as u64);
+        let fundings: Vec<(TransactionOutpoint, UtxoEntry)> = (0..n)
+            .map(|i| {
+                let mut id = [0u8; 64];
+                id[0] = i as u8;
+                id[1] = (i >> 8) as u8;
+                (TransactionOutpoint::new(Hash64::from_bytes(id), 0), UtxoEntry::new(per, funding_spk.clone(), 0, false))
+            })
+            .collect();
+        match self.build_funded_deposit_lock_tx_multi(1, [0u8; 20], u64::MAX, 0, &fundings, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
+            Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
+            Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
+        }
     }
 
     /// Build a fee-funded, signed `StakeUnbondRequest` transaction (subnetwork

@@ -65,6 +65,10 @@ enum Command {
     /// Load generator: continuously spend mature UTXOs at the funding address into fan-out
     /// NATIVE transfers, flooding the node's mempool with valid ML-DSA transactions.
     Spam(SpamArgs),
+    /// kaspa-pq EVM Lane (§7.2): create an EVM_DEPOSIT_LOCK output funding an EVM address —
+    /// the UTXO side of a bridge deposit. Claim it on a mining node afterwards via
+    /// submitEvmDepositClaim(txid, 0).
+    DepositLock(DepositLockArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -234,6 +238,37 @@ struct SpamArgs {
     network: Option<String>,
 }
 
+#[derive(Parser, Debug)]
+struct DepositLockArgs {
+    /// Local node wRPC (borsh) endpoint, host:port. The node must run --utxoindex.
+    #[arg(long, default_value = "127.0.0.1:17110", env = "KASPA_PQ_NODE_RPC")]
+    node_rpc: String,
+    /// ML-DSA key (32-byte seed, hex) whose funding address pays the deposit. Its own
+    /// funding P2PKH becomes the lock's refund script (reclaimable after the timeout).
+    #[arg(long, env = "KASPA_PQ_VALIDATOR_KEY")]
+    validator_key: String,
+    /// The EVM address to credit, 20-byte hex (optional 0x prefix).
+    #[arg(long)]
+    evm_address: String,
+    /// Deposit amount in sompi (locked into the EVM_DEPOSIT_LOCK output-0).
+    #[arg(long)]
+    amount: u64,
+    /// Claim-inclusion tip (sompi, ≤ amount) paid to the accepting block's EVM coinbase —
+    /// the §9.2 incentive for a producer to include the claim.
+    #[arg(long, default_value_t = 0)]
+    claim_tip: u64,
+    /// Refund timeout as a DAA-score DELTA from the current sink (the lock is claimable
+    /// strictly before sink_daa + delta; refundable to the funding key after).
+    #[arg(long, default_value_t = 1_000_000)]
+    timeout_daa_delta: u64,
+    /// Fee in sompi. Default: a mass-based estimate (each ML-DSA input is ~7 KB).
+    #[arg(long)]
+    fee: Option<u64>,
+    /// Expected node network id; refuse on mismatch.
+    #[arg(long, env = "KASPA_PQ_NETWORK")]
+    network: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -255,6 +290,10 @@ async fn main() -> ExitCode {
         Command::Spam(args) => {
             kaspa_core::log::init_logger(None, "info");
             spam(args).await
+        }
+        Command::DepositLock(args) => {
+            kaspa_core::log::init_logger(None, "info");
+            deposit_lock(args).await
         }
     };
     match result {
@@ -411,6 +450,102 @@ async fn bond(args: BondArgs) -> Result<(), String> {
     // The bond outpoint is always output-0 of the bond tx.
     println!("bond_outpoint: {txid}:0");
     println!("(once accepted + activation_daa_score reached, run: {VALIDATOR} run --validator-key <key> --stake-bond {txid}:0 --signed-epoch-db <db>)");
+    let _ = client.disconnect().await;
+    Ok(())
+}
+
+/// kaspa-pq EVM Lane (§7.2): create an EVM_DEPOSIT_LOCK output — the UTXO side of a bridge
+/// deposit. Mirrors `bond`'s mature-UTXO aggregation; output-0 is the lock binding the EVM
+/// credit address / refund timeout / claim tip, refund script = this key's own funding P2PKH.
+async fn deposit_lock(args: DepositLockArgs) -> Result<(), String> {
+    let key = ValidatorKey::from_seed(load_validator_seed(&args.validator_key)?);
+    let client = connect(&args.node_rpc).await?;
+    let server = client.get_server_info().await.map_err(|e| format!("getServerInfo failed: {e}"))?;
+    let node_network = server.network_id.to_string();
+    if let Some(expected) = args.network.as_deref() {
+        if node_network != expected {
+            return Err(format!("network mismatch: node is '{node_network}' but --network is '{expected}'"));
+        }
+    }
+    let prefix = prefix_for(server.network_id.network_type);
+    let funding_addr = key.funding_address(prefix);
+    let params = Params::from(server.network_id);
+    let mass_calc = MassCalculator::new(
+        params.mass_per_tx_byte,
+        params.mass_per_script_pub_key_byte,
+        params.mass_per_sig_op,
+        params.storage_mass_parameter,
+    );
+
+    // 20-byte EVM address (optional 0x).
+    let evm_hex = args.evm_address.strip_prefix("0x").or_else(|| args.evm_address.strip_prefix("0X")).unwrap_or(&args.evm_address);
+    if evm_hex.len() != 40 {
+        return Err(format!("--evm-address must be 40 hex chars (20 bytes), got {}", evm_hex.len()));
+    }
+    let mut evm_address = [0u8; 20];
+    faster_hex::hex_decode(evm_hex.as_bytes(), &mut evm_address).map_err(|e| format!("malformed --evm-address: {e}"))?;
+
+    let timeout_daa_score = server.virtual_daa_score.saturating_add(args.timeout_daa_delta);
+    info!(
+        "[{VALIDATOR}] depositing {} sompi to EVM 0x{evm_hex} (tip {}, refund timeout daa {timeout_daa_score}, funding {funding_addr})",
+        args.amount, args.claim_tip
+    );
+
+    // Same mature-UTXO aggregation as `bond`.
+    let coinbase_maturity = params.coinbase_maturity();
+    let virtual_daa = server.virtual_daa_score;
+    let utxos = client
+        .get_utxos_by_addresses(vec![funding_addr.clone()])
+        .await
+        .map_err(|e| format!("getUtxosByAddresses failed (does the node run --utxoindex?): {e}"))?;
+    let mut mature: Vec<_> = utxos
+        .into_iter()
+        .filter(|e| is_spendable(e.utxo_entry.is_coinbase, e.utxo_entry.block_daa_score, virtual_daa, coinbase_maturity))
+        .collect();
+    mature.sort_by(|a, b| b.utxo_entry.amount.cmp(&a.utxo_entry.amount));
+    const MAX_DEPOSIT_INPUTS: usize = 20;
+    let mut selected = Vec::new();
+    let mut sum: u64 = 0;
+    let mut fee = match args.fee {
+        Some(f) => f,
+        None => key.estimate_deposit_lock_fee_for_inputs(&mass_calc, prefix, 1),
+    };
+    for e in mature.into_iter() {
+        if selected.len() >= MAX_DEPOSIT_INPUTS {
+            break;
+        }
+        sum = sum.saturating_add(e.utxo_entry.amount);
+        selected.push(e);
+        if args.fee.is_none() {
+            fee = key.estimate_deposit_lock_fee_for_inputs(&mass_calc, prefix, selected.len());
+        }
+        if sum >= args.amount.saturating_add(fee) {
+            break;
+        }
+    }
+    let needed = args.amount.checked_add(fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
+    if selected.is_empty() || sum < needed {
+        return Err(format!(
+            "not enough MATURE funding at {funding_addr}: have {sum} sompi across {} mature UTXO(s) (cap {MAX_DEPOSIT_INPUTS}), \
+             need {needed} sompi (amount {} + fee {fee}).",
+            selected.len(),
+            args.amount
+        ));
+    }
+    info!(
+        "[{VALIDATOR}] funding deposit from {} mature UTXO(s) totalling {sum} sompi (fee {fee} sompi{})",
+        selected.len(),
+        if args.fee.is_some() { "" } else { ", mass-based" }
+    );
+    let fundings: Vec<(TransactionOutpoint, UtxoEntry)> =
+        selected.into_iter().map(|e| (e.outpoint.into(), e.utxo_entry.into())).collect();
+
+    let tx = key.build_funded_deposit_lock_tx_multi(args.amount, evm_address, timeout_daa_score, args.claim_tip, &fundings, fee)?;
+    let txid =
+        client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
+    info!("[{VALIDATOR}] submitted deposit-lock tx (txid={txid})");
+    println!("deposit_lock_outpoint: {txid}:0");
+    println!("(once accepted, claim on a MINING node: submitEvmDepositClaim {txid} 0 — the claim then executes in an accepting chain block and credits the EVM address)");
     let _ = client.disconnect().await;
     Ok(())
 }

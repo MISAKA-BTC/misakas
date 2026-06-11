@@ -10,13 +10,24 @@
 //! index (`included_in` + `last_skip_class=2`), without touching EVM state.
 //!
 //! Usage:
-//!   gen:    cargo run -p kaspa-evm --example evm_tx_gen -- gen <count> <nonce_start> [calldata_len] [key_byte]
-//!   submit: cargo run -p kaspa-evm --example evm_tx_gen -- submit <grpc_url> <count> <nonce_start> [calldata_len] [key_byte]
-//!   status: cargo run -p kaspa-evm --example evm_tx_gen -- status <grpc_url> <tx_hash_hex>
+//!   gen:      cargo run -p kaspa-evm --example evm_tx_gen -- gen <count> <nonce_start> [calldata_len] [key_byte]
+//!   submit:   cargo run -p kaspa-evm --example evm_tx_gen -- submit <grpc_url> <count> <nonce_start> [calldata_len] [key_byte]
+//!   status:   cargo run -p kaspa-evm --example evm_tx_gen -- status <grpc_url> <tx_hash_hex>
+//!   addr:     cargo run -p kaspa-evm --example evm_tx_gen -- addr [key_byte]            (print the key's EVM address)
+//!   claim:    cargo run -p kaspa-evm --example evm_tx_gen -- claim <grpc_url> <lock_txid_hex> <index>
+//!   withdraw: cargo run -p kaspa-evm --example evm_tx_gen -- withdraw <grpc_url> <nonce> <amount_sompi> <dest_payload_64B_hex> [key_byte]
+//!   receipt:  cargo run -p kaspa-evm --example evm_tx_gen -- receipt <grpc_url> <tx_hash_hex>
+//!   balance:  cargo run -p kaspa-evm --example evm_tx_gen -- balance <grpc_url> <kaspa_address>
 //!
 //! `calldata_len` (default 0) pads the tx with zero calldata to fatten payload
 //! bytes (Y10: fill blocks toward the 128 KiB cap); gas_limit covers the
 //! calldata intrinsic so admission's gas band passes.
+//!
+//! The bridge e2e cycle: validator `deposit-lock` (UTXO side) → `claim` (queue
+//! the DepositClaim on a MINING node) → the claim executes in an accepting
+//! chain block crediting the EVM address → `withdraw` (EVM tx calling F002
+//! with value + [spk ver BE ‖ script] calldata) → a synthetic UTXO
+//! materializes at the destination — checked with `balance`.
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
 use alloy_eips::eip2718::Encodable2718;
@@ -97,6 +108,78 @@ async fn main() {
                 "pending={} included_in={:?} accepted_in={:?} receipt_index={} last_skip_class={}",
                 s.pending, s.included_in, s.accepted_in, s.receipt_index, s.last_skip_class
             );
+        }
+        Some("addr") => {
+            let key_byte: u8 = args.get(2).map(|s| s.parse().expect("key_byte")).unwrap_or(0x11);
+            let signer = PrivateKeySigner::from_bytes(&B256::from([key_byte; 32])).unwrap();
+            println!("{}", signer.address());
+        }
+        Some("claim") => {
+            let url = args[2].clone();
+            let txid = args[3].clone();
+            let index: u32 = args[4].parse().expect("index");
+            let client = GrpcClient::connect(url).await.expect("gRPC connect");
+            let r = client.submit_evm_deposit_claim(txid, index).await.expect("claim call");
+            println!("queued: evm_address={} credit={} sompi (tip {} to the accepting coinbase)", r.evm_address, r.amount_sompi, r.claim_tip_sompi);
+        }
+        Some("withdraw") => {
+            // F002 withdraw: a payable call carrying value = amount_sompi × SCALE
+            // wei and calldata [spk version u16 BE ‖ 69-byte ML-DSA P2PKH script
+            // for dest_payload]. On success the executor burns the escrow and
+            // consensus materializes a synthetic UTXO at the destination.
+            let url = args[2].clone();
+            let nonce: u64 = args[3].parse().expect("nonce");
+            let amount_sompi: u64 = args[4].parse().expect("amount_sompi");
+            let dest_hex = args[5].clone();
+            let key_byte: u8 = args.get(6).map(|s| s.parse().expect("key_byte")).unwrap_or(0x11);
+
+            let mut dest_payload = [0u8; 64];
+            faster_hex::hex_decode(dest_hex.as_bytes(), &mut dest_payload).expect("dest payload must be 128 hex chars (64 bytes)");
+            let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&dest_payload);
+            let mut calldata = spk.version().to_be_bytes().to_vec();
+            calldata.extend_from_slice(spk.script());
+
+            let value_wei = amount_sompi as u128 * kaspa_consensus_core::evm::EVM_NATIVE_SCALE as u128;
+            let signer = PrivateKeySigner::from_bytes(&B256::from([key_byte; 32])).unwrap();
+            let tx = TxEip1559 {
+                chain_id: EVM_CHAIN_ID,
+                nonce,
+                gas_limit: 100_000,
+                max_fee_per_gas: EVM_INITIAL_BASE_FEE as u128,
+                max_priority_fee_per_gas: 0,
+                to: revm::primitives::TxKind::Call(kaspa_evm::withdraw::f002_address()),
+                value: U256::from(value_wei),
+                access_list: Default::default(),
+                input: calldata.into(),
+            };
+            let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+            let raw = TxEnvelope::from(tx.into_signed(sig)).encoded_2718();
+            let client = GrpcClient::connect(url).await.expect("gRPC connect");
+            let resp = client.submit_evm_transaction(hex_of(&raw)).await.expect("withdraw submit");
+            println!("withdraw tx from {} (nonce {nonce}, {amount_sompi} sompi) -> {}", signer.address(), resp.transaction_hash);
+        }
+        Some("receipt") => {
+            let url = args[2].clone();
+            let hash = args[3].clone();
+            let client = GrpcClient::connect(url).await.expect("gRPC connect");
+            let r = client.get_evm_transaction_receipt(hash).await.expect("receipt call");
+            println!(
+                "found={} succeeded={} accepting_block={} evm_number={} gas_used={} logs={}",
+                r.found, r.succeeded, r.accepting_block, r.evm_number, r.gas_used, r.logs.len()
+            );
+        }
+        Some("balance") => {
+            let url = args[2].clone();
+            let addr = kaspa_rpc_core::RpcAddress::try_from(args[3].as_str()).expect("kaspa address");
+            let client = GrpcClient::connect(url).await.expect("gRPC connect");
+            let b = client.get_balance_by_address(addr).await.expect("balance call");
+            println!("balance_sompi={b}");
+        }
+        Some("payload") => {
+            // The 64-byte address payload (hex) of a bech32 kaspa address — the
+            // `dest_payload` input of the `withdraw` mode.
+            let addr = kaspa_rpc_core::RpcAddress::try_from(args[2].as_str()).expect("kaspa address");
+            println!("{}", hex_of(&addr.payload));
         }
         _ => eprintln!("{usage}"),
     }

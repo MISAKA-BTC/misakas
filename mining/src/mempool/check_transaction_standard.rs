@@ -109,9 +109,19 @@ impl Mempool {
             // consensus rule `check_transaction_pq_output_classes`), so the mempool never relays a
             // transaction that consensus will reject. The legacy-permissive "reject only
             // NonStandard" rule is kept for the (legacy-fixture) unit tests via `pq_only = false`.
+            //
+            // kaspa-pq EVM Lane v0.4 (§7.2/§9.2): an EVM_DEPOSIT_LOCK output is the
+            // consensus-legal bridge-deposit creation (`check_transaction_pq_output_classes`
+            // has the identical carve-out). The mempool must relay it or deposits become
+            // miner-direct-only — the same reasoning as the lock's refund INPUT carve-out
+            // below. The lock parses strictly (108-byte fixed form with an embedded standard
+            // ML-DSA-87 refund P2PKH), so this admits no free-form script.
             let output_class = ScriptClass::from_script(&output.script_public_key);
-            let output_rejected =
-                if self.config.pq_only { !output_class.is_pq_standard() } else { output_class == ScriptClass::NonStandard };
+            let output_rejected = if self.config.pq_only {
+                !output_class.is_pq_standard() && output_class != ScriptClass::EvmDepositLock
+            } else {
+                output_class == ScriptClass::NonStandard
+            };
             if output_rejected {
                 return Err(NonStandardError::RejectOutputScriptClass(transaction_id, i));
             }

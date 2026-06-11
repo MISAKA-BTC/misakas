@@ -96,14 +96,13 @@ pub fn validate_evm_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::Utx
 /// OWN per-block diff + multiset (the slashing-side-effect mechanism,
 /// verbatim): consumed deposit locks leave the UTXO set; each `WithdrawOp`
 /// materializes as a synthetic output at
-/// `(synthetic_withdrawal_txid(block, tx, op), 0)`. Because they ride the
+/// `(synthetic_withdrawal_txid(evm_tx_hash, op), 0)`. Because they ride the
 /// persisted per-block diff, reorg apply/revert is the existing UTXO
 /// machinery — the EVM side never reverts (pointer-switch only), so combined
 /// supply is conserved across any reorg with zero bespoke code (invariant I7).
 pub fn apply_evm_bridge_effects(
     diff: &mut kaspa_consensus_core::utxo::utxo_diff::UtxoDiff,
     multiset: &mut kaspa_muhash::MuHash,
-    block: kaspa_consensus_core::BlockHash,
     pov_daa_score: u64,
     consumed_locks: &[(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)],
     withdrawals: &[kaspa_consensus_core::evm::WithdrawOp],
@@ -114,7 +113,10 @@ pub fn apply_evm_bridge_effects(
         multiset.remove_utxo(outpoint, entry);
     }
     for w in withdrawals {
-        let txid = kaspa_consensus_core::evm::synthetic_withdrawal_txid(block, w.evm_tx_index, w.op_index);
+        // Keyed by the withdrawing EVM tx's hash (pre-mining-stable) — a
+        // block-hash key would be circular for the PRODUCER, whose own
+        // utxo_commitment must already contain this output before mining.
+        let txid = kaspa_consensus_core::evm::synthetic_withdrawal_txid(w.evm_tx_hash, w.op_index);
         let outpoint = kaspa_consensus_core::tx::TransactionOutpoint::new(txid, 0);
         let entry = kaspa_consensus_core::tx::UtxoEntry::new(w.amount_sompi, w.script_public_key.clone(), pov_daa_score, false);
         diff.add_utxo(outpoint, entry.clone()).map_err(|e| format!("materialize withdrawal {outpoint}: {e}"))?;
@@ -458,19 +460,29 @@ mod bridge_tests {
     /// multiset mirrors both (so `utxo_commitment` covers the bridge).
     #[test]
     fn bridge_effects_enter_diff_and_multiset() {
-        let block = Hash64::from_bytes([7; 64]);
+        let evm_tx_hash = kaspa_hashes::EvmH256::from_bytes([7; 32]);
         let op = outpoint(1);
         let lock_entry = UtxoEntry::new(500, lock_spk([0xCC; 20], 1_000, 0), 10, false);
         let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
-        let w = WithdrawOp { evm_tx_index: 3, op_index: 1, from: EvmAddress::from_bytes([0xAA; 20]), script_public_key: spk.clone(), amount_sompi: 5 };
+        let w = WithdrawOp {
+            evm_tx_index: 3,
+            op_index: 1,
+            evm_tx_hash,
+            from: EvmAddress::from_bytes([0xAA; 20]),
+            script_public_key: spk.clone(),
+            amount_sompi: 5,
+        };
 
         let mut diff = UtxoDiff::default();
         let mut multiset = MuHash::new();
         let baseline = multiset.clone();
-        apply_evm_bridge_effects(&mut diff, &mut multiset, block, 42, &[(op, lock_entry.clone())], &[w.clone()]).unwrap();
+        apply_evm_bridge_effects(&mut diff, &mut multiset, 42, &[(op, lock_entry.clone())], &[w.clone()]).unwrap();
 
         assert!(diff.remove.contains_key(&op), "the consumed lock leaves the UTXO set via this block's diff");
-        let expected_txid = kaspa_consensus_core::evm::synthetic_withdrawal_txid(block, 3, 1);
+        // Keyed by the WITHDRAWING TX's hash — pre-mining-stable (a block-hash
+        // key was circular: the producer's own utxo_commitment must contain
+        // this output BEFORE the block hash exists).
+        let expected_txid = kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 1);
         let synthetic = TransactionOutpoint::new(expected_txid, 0);
         let entry = diff.add.get(&synthetic).expect("the withdrawal materialized at the frozen-domain outpoint");
         assert_eq!(entry.amount, 5);
@@ -480,9 +492,12 @@ mod bridge_tests {
         assert_ne!(multiset.finalize(), baseline.clone().finalize(), "the multiset covers the bridge");
 
         // Determinism + uniqueness of the synthetic txid.
-        assert_eq!(expected_txid, kaspa_consensus_core::evm::synthetic_withdrawal_txid(block, 3, 1));
-        assert_ne!(expected_txid, kaspa_consensus_core::evm::synthetic_withdrawal_txid(block, 3, 2));
-        assert_ne!(expected_txid, kaspa_consensus_core::evm::synthetic_withdrawal_txid(Hash64::from_bytes([8; 64]), 3, 1));
+        assert_eq!(expected_txid, kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 1));
+        assert_ne!(expected_txid, kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 2));
+        assert_ne!(
+            expected_txid,
+            kaspa_consensus_core::evm::synthetic_withdrawal_txid(kaspa_hashes::EvmH256::from_bytes([8; 32]), 1)
+        );
     }
 }
 
