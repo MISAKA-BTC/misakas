@@ -189,9 +189,34 @@ pub fn execute_block_evm(
     // offset the first receipt — eth tooling derives per-tx gas from deltas
     // (audit L4).
     let mut tx_cumulative_gas: u64 = 0;
+    // O3 (optimization design v0.1): the cfg/block env and the F002 handler are
+    // identical for every tx of the block — build the Evm ONCE and swap only
+    // the tx env per iteration (the old per-tx builder paid allocation +
+    // handler registration ≤1,428×/block). Post-commit balance edits
+    // (tip reroute / F002 burn) go through `evm.db_mut()` instead of dropping
+    // and re-borrowing the CacheDB.
+    let basefee = derived.base_fee_per_gas;
+    let mut evm = Evm::builder()
+        .with_db(&mut state_db)
+        .with_spec_id(crate::EVM_SPEC_ID)
+        .modify_cfg_env(|c| c.chain_id = derived.chain_id)
+        .modify_block_env(|b| {
+            b.number = U256::from(derived.evm_number);
+            b.timestamp = U256::from(derived.evm_timestamp_sec);
+            // §8.2 (audit AM-3): COINBASE is the ACCEPTING block's declared
+            // coinbase — one coinbase per EVM block. revm also pays the tip
+            // here; rerouted to the payload coinbase right after commit.
+            b.coinbase = accepting_coinbase;
+            b.gas_limit = U256::from(derived.gas_limit);
+            b.basefee = U256::from(basefee);
+            b.difficulty = U256::ZERO;
+            b.prevrandao = Some(derived.prev_randao);
+        })
+        // F002 withdraw (design §9.3): intercept calls targeting the
+        // MISAKA_WITHDRAW address (see crate::withdraw).
+        .append_handler_register(crate::withdraw::register_f002_withdraw)
+        .build();
     for (txenv, cand, cand_idx) in planned {
-        let derived = derived.clone();
-        let basefee = derived.base_fee_per_gas;
         // Effective gas price (EIP-1559): legacy txs carry no priority field —
         // their tip is gas_price − basefee; typed txs tip min(max_fee, basefee
         // + max_priority) − basefee. Needed below to reroute the tip.
@@ -201,32 +226,10 @@ pub fn execute_block_evm(
             None => max_fee,
         };
         let tip_per_gas = effective_gas_price.saturating_sub(U256::from(basefee));
-        let tx_for_env = txenv.clone();
-        let mut evm = Evm::builder()
-            .with_db(&mut state_db)
-            .with_spec_id(crate::EVM_SPEC_ID)
-            .modify_cfg_env(|c| c.chain_id = derived.chain_id)
-            .modify_block_env(|b| {
-                b.number = U256::from(derived.evm_number);
-                b.timestamp = U256::from(derived.evm_timestamp_sec);
-                // §8.2 (audit AM-3): COINBASE is the ACCEPTING block's declared
-                // coinbase — one coinbase per EVM block. revm also pays the tip
-                // here; rerouted to the payload coinbase right after commit.
-                b.coinbase = accepting_coinbase;
-                b.gas_limit = U256::from(derived.gas_limit);
-                b.basefee = U256::from(basefee);
-                b.difficulty = U256::ZERO;
-                b.prevrandao = Some(derived.prev_randao);
-            })
-            .modify_tx_env(move |t| *t = tx_for_env)
-            // F002 withdraw (design §9.3): intercept calls targeting the
-            // MISAKA_WITHDRAW address (see crate::withdraw).
-            .append_handler_register(crate::withdraw::register_f002_withdraw)
-            .build();
+        evm.context.evm.env.tx = txenv;
 
         match evm.transact_commit() {
             Ok(result) => {
-                drop(evm);
                 let tx_gas = result.gas_used();
                 gas_used = gas_used.saturating_add(tx_gas);
                 tx_cumulative_gas = tx_cumulative_gas.saturating_add(tx_gas);
@@ -238,7 +241,7 @@ pub fn execute_block_evm(
                 let tip = tip_per_gas.saturating_mul(U256::from(tx_gas));
                 let payload_cb = to_revm_address(&cand.payload_coinbase);
                 if !tip.is_zero() && payload_cb != accepting_coinbase {
-                    reroute_balance(&mut state_db, accepting_coinbase, payload_cb, tip)?;
+                    reroute_balance(evm.db_mut(), accepting_coinbase, payload_cb, tip)?;
                 }
                 // F002 withdrawals (design §9.3): the COMMITTED logs are exactly
                 // the effective (non-reverted) withdraw calls. Materialize each
@@ -264,7 +267,7 @@ pub fn execute_block_evm(
                     }
                 }
                 if withdrawn_wei > 0 {
-                    burn_balance(&mut state_db, crate::withdraw::f002_address(), U256::from(withdrawn_wei))?;
+                    burn_balance(evm.db_mut(), crate::withdraw::f002_address(), U256::from(withdrawn_wei))?;
                 }
                 outcomes[cand_idx] =
                     Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Accepted { receipt_index: receipts.len() as u32 });
@@ -275,13 +278,13 @@ pub fn execute_block_evm(
             // (nonce / upfront funds / max_fee < basefee) ⇒ deterministic skip —
             // no receipt, no gas, no nonce change, no trace beyond the counter.
             Err(EVMError::Transaction(_)) => {
-                drop(evm);
                 skipped_tx_count += 1;
                 outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
             }
             Err(other) => return Err(EvmExecError::InvalidTx(format!("{other:?}"))),
         }
     }
+    drop(evm);
 
     // 4. Roots + bloom + accumulators.
     let logs_bloom = EvmBloom::from_bytes(roots::logs_bloom(&receipts));

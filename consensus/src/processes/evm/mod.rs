@@ -26,10 +26,19 @@ pub use kaspa_evm::{execute_block_evm, AcceptedTxCandidate, EvmBlockInput};
 /// `--features evm` node (the executor seam below enforces the same).
 #[cfg(feature = "evm")]
 pub fn admit_evm_payload_txs(payload: &kaspa_consensus_core::evm::EvmExecutionPayload) -> Result<(), (usize, String)> {
-    for (i, raw) in payload.transactions.iter().enumerate() {
-        kaspa_evm::tx::admit_tx(raw).map_err(|reason| (i, reason))?;
-    }
-    Ok(())
+    use rayon::prelude::*;
+    // O2 (optimization design v0.1): per-tx admission is pure and independent,
+    // and a full 128 KiB payload holds ~1,150 txs at ~80µs of k256 recovery
+    // each (~92ms sequential — material at 10 BPS). Parallelize across the
+    // body processor's rayon pool; determinism is preserved by reporting the
+    // MINIMUM failing index (identical to the sequential first-failure).
+    payload
+        .transactions
+        .par_iter()
+        .enumerate()
+        .filter_map(|(i, raw)| kaspa_evm::tx::admit_tx(raw).err().map(|reason| (i, reason)))
+        .min_by_key(|(i, _)| *i)
+        .map_or(Ok(()), Err)
 }
 
 #[cfg(not(feature = "evm"))]

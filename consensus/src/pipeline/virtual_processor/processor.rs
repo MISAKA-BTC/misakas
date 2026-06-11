@@ -114,6 +114,34 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
+/// O9 (optimization design v0.1): rolling EVM-lane throughput counters.
+#[derive(Default)]
+pub(super) struct EvmLaneKpi {
+    chain_blocks: std::sync::atomic::AtomicU64,
+    mergeset_blocks: std::sync::atomic::AtomicU64,
+    accepted_gas: std::sync::atomic::AtomicU64,
+}
+
+impl EvmLaneKpi {
+    /// Record one validated EVM chain block; periodically logs the rolling
+    /// averages (every 256 chain blocks).
+    pub(super) fn record(&self, mergeset_size: usize, gas_used: u64) {
+        use std::sync::atomic::Ordering;
+        let n = self.chain_blocks.fetch_add(1, Ordering::Relaxed) + 1;
+        let ms = self.mergeset_blocks.fetch_add(mergeset_size as u64, Ordering::Relaxed) + mergeset_size as u64;
+        let gas = self.accepted_gas.fetch_add(gas_used, Ordering::Relaxed) + gas_used;
+        if n.is_multiple_of(256) {
+            let cap = kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK as f64;
+            info!(
+                "EVM lane KPI (O9): {} chain blocks, avg mergeset {:.2}, avg accepted-gas utilization {:.2}%",
+                n,
+                ms as f64 / n as f64,
+                (gas as f64 / n as f64) / cap * 100.0
+            );
+        }
+    }
+}
+
 pub struct VirtualStateProcessor {
     // Channels
     receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -165,6 +193,12 @@ pub struct VirtualStateProcessor {
     pub(super) evm_receipts_store: Arc<crate::model::stores::evm::DbEvmReceiptsStore>,
     pub(super) evm_tx_index_store: Arc<crate::model::stores::evm::DbEvmTxIndexStore>,
     pub(super) evm_activation_daa_score: u64,
+    // O9 (optimization design v0.1): node-local EVM-lane KPIs — chain-block
+    // count / mergeset-size sum / accepted-gas sum. The gas supply is
+    // 30M × chain-block rate (NOT DAG width), and the adversarial degradation
+    // mode is a widening mergeset (design §2/B7) — these counters make that
+    // observable. Logged every 256 chain blocks; never consensus-relevant.
+    pub(super) evm_lane_kpi: EvmLaneKpi,
 
     // Utxo-related stores
     pub(super) utxo_diffs_store: Arc<DbUtxoDiffsStore>,
@@ -263,6 +297,7 @@ impl VirtualStateProcessor {
             evm_receipts_store: storage.evm_receipts_store.clone(),
             evm_tx_index_store: storage.evm_tx_index_store.clone(),
             evm_activation_daa_score: params.evm_activation_daa_score,
+            evm_lane_kpi: EvmLaneKpi::default(),
             dns_params: params.dns_params.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
@@ -687,6 +722,8 @@ impl VirtualStateProcessor {
             &consumed_locks,
             &staged.result.withdrawals,
         )?;
+        // O9: chain-rate / mergeset / gas-utilization observability.
+        self.evm_lane_kpi.record(sorted_mergeset.len(), staged.result.header.gas_used);
         Ok(Some(staged))
     }
 

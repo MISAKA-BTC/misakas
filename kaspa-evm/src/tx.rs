@@ -10,7 +10,62 @@
 
 use alloy_consensus::{Transaction as _, TxEnvelope};
 use alloy_eips::eip2718::Decodable2718;
-use revm::primitives::{TxEnv, U256};
+use revm::primitives::{Address, TxEnv, U256};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
+// ---------------------------------------------------------------------------
+// O1 (optimization design v0.1): bounded sender-recovery cache.
+//
+// `keccak256(raw tx bytes) → recovered signer` is a PURE function, yet the
+// same tx's signer is recovered ≥2× on every verifying node (body-validation
+// class-1 admission + acceptance execution) and ≥5× on the submitting node
+// (mempool admission, template re-admission, template execution, body,
+// acceptance) at ~80µs per k256 recovery. Memoizing it is consensus-neutral
+// by construction: the value is derived from the key's own preimage, and a
+// wrong insert is impossible through this API (insert happens only with the
+// result of an actual recovery over the hashed bytes).
+//
+// Two-generation swap keeps the structure O(1) amortized and bounded at
+// 2 × GENERATION_CAP entries with zero eviction bookkeeping.
+// ---------------------------------------------------------------------------
+
+const SENDER_CACHE_GENERATION_CAP: usize = 8_192;
+
+struct SenderCache {
+    current: HashMap<kaspa_hashes::EvmH256, Address>,
+    previous: HashMap<kaspa_hashes::EvmH256, Address>,
+}
+
+impl SenderCache {
+    fn get(&self, hash: &kaspa_hashes::EvmH256) -> Option<Address> {
+        self.current.get(hash).or_else(|| self.previous.get(hash)).copied()
+    }
+
+    fn insert(&mut self, hash: kaspa_hashes::EvmH256, sender: Address) {
+        if self.current.len() >= SENDER_CACHE_GENERATION_CAP {
+            self.previous = std::mem::take(&mut self.current);
+        }
+        self.current.insert(hash, sender);
+    }
+}
+
+fn sender_cache() -> &'static Mutex<SenderCache> {
+    static CACHE: OnceLock<Mutex<SenderCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(SenderCache { current: HashMap::new(), previous: HashMap::new() }))
+}
+
+/// Recover (or recall) the signer of `envelope`, memoized under the tx's
+/// keccak256 hash. The closure-free split keeps the lock window tiny: lookup,
+/// recover OUTSIDE the lock, insert.
+fn recover_signer_cached(envelope: &TxEnvelope, hash: kaspa_hashes::EvmH256) -> Result<Address, String> {
+    if let Some(sender) = sender_cache().lock().expect("sender cache lock").get(&hash) {
+        return Ok(sender);
+    }
+    let sender = envelope.recover_signer().map_err(|e| format!("signer recovery: {e}"))?;
+    sender_cache().lock().expect("sender cache lock").insert(hash, sender);
+    Ok(sender)
+}
 
 /// Why a raw EVM transaction could not be turned into an executable `TxEnv`.
 #[derive(Debug, Clone)]
@@ -77,7 +132,8 @@ pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
     use kaspa_consensus_core::evm::{EvmAddress, EVM_CHAIN_ID, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK};
 
     let envelope = TxEnvelope::decode_2718(&mut &raw[..]).map_err(|e| format!("decode: {e}"))?;
-    let sender = envelope.recover_signer().map_err(|e| format!("signer recovery: {e}"))?;
+    let hash = tx_hash(raw);
+    let sender = recover_signer_cached(&envelope, hash)?; // O1 memo
     match envelope.chain_id() {
         Some(EVM_CHAIN_ID) => {}
         other => return Err(format!("chain_id {other:?} != EVM_CHAIN_ID {EVM_CHAIN_ID}")),
@@ -93,7 +149,7 @@ pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
         ));
     }
     Ok(AdmittedEvmTx {
-        hash: kaspa_hashes::EvmH256::from_bytes(revm::primitives::keccak256(raw).0),
+        hash,
         sender: EvmAddress::from_bytes(sender.into_array()),
         nonce: envelope.nonce(),
         gas_limit: envelope.gas_limit(),
@@ -104,6 +160,37 @@ pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// O1: the memoized recovery returns the identical sender as a direct
+    /// recovery, and the two-generation eviction keeps the cache bounded
+    /// without ever serving a wrong value (the value is key-derived).
+    #[test]
+    fn sender_cache_is_transparent_and_bounded() {
+        let raw = fixture_raw(0);
+        let envelope = TxEnvelope::decode_2718(&mut &raw[..]).unwrap();
+        let direct = envelope.recover_signer().unwrap();
+        let h = tx_hash(&raw);
+        // Twice: miss-then-recover, then pure cache hit — identical result.
+        assert_eq!(recover_signer_cached(&envelope, h).unwrap(), direct);
+        assert_eq!(recover_signer_cached(&envelope, h).unwrap(), direct);
+        assert_eq!(sender_cache().lock().unwrap().get(&h), Some(direct));
+
+        // Generation swap: flood 2×CAP synthetic entries; the structure stays
+        // bounded at ≤ 2×CAP and old entries fall out after two swaps.
+        {
+            let mut cache = sender_cache().lock().unwrap();
+            for i in 0..(2 * SENDER_CACHE_GENERATION_CAP) {
+                let mut k = [0u8; 32];
+                k[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                k[31] = 0xEE;
+                cache.insert(kaspa_hashes::EvmH256::from_bytes(k), Address::ZERO);
+            }
+            assert!(cache.current.len() + cache.previous.len() <= 2 * SENDER_CACHE_GENERATION_CAP);
+            assert!(cache.get(&h).is_none(), "the fixture's entry aged out after two generation swaps");
+        }
+        // And a re-lookup after eviction simply re-recovers — still identical.
+        assert_eq!(recover_signer_cached(&envelope, h).unwrap(), direct);
+    }
 
     fn fixture_raw(nonce: u64) -> Vec<u8> {
         use alloy_consensus::{SignableTransaction, TxEip1559};
@@ -161,7 +248,9 @@ mod tests {
 /// the same caller + env.
 pub fn decode_tx_to_env(raw: &[u8]) -> Result<TxEnv, TxDecodeError> {
     let envelope = TxEnvelope::decode_2718(&mut &raw[..]).map_err(|e| TxDecodeError::Decode(e.to_string()))?;
-    let caller = envelope.recover_signer().map_err(|e| TxDecodeError::Recover(e.to_string()))?;
+    // O1 memo: the acceptance-execution path re-recovers the same signer body
+    // validation already recovered — the keccak (sub-µs) buys back ~80µs.
+    let caller = recover_signer_cached(&envelope, tx_hash(raw)).map_err(TxDecodeError::Recover)?;
 
     let mut tx = TxEnv::default();
     tx.caller = caller;
