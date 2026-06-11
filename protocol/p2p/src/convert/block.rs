@@ -9,9 +9,19 @@ type BlockBody = Vec<Transaction>;
 /// = the empty payload (every pre-activation block). Body validation re-derives
 /// `evm_payload_hash` from the decoded payload, so a tampered payload cannot
 /// pass (the header field is in the v2 hash preimage).
+///
+/// §14.2 DoS gate (audit L1): the consensus byte cap is enforced BEFORE the
+/// borsh decode. Borsh is canonical for these types (one encoding per value;
+/// trailing bytes error), so wire length == the length `check_evm_payload`
+/// measures — the early gate rejects exactly the payloads body validation
+/// would reject, just without first paying a transient up-to-message-cap
+/// allocation for a peer-supplied blob.
 fn decode_evm_payload(bytes: &[u8]) -> Result<EvmExecutionPayload, ConversionError> {
     if bytes.is_empty() {
         return Ok(Default::default());
+    }
+    if bytes.len() > kaspa_consensus_core::evm::MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
+        return Err(ConversionError::NoneValue);
     }
     borsh::from_slice::<EvmExecutionPayload>(bytes).map_err(|_| ConversionError::NoneValue)
 }
@@ -127,5 +137,13 @@ mod tests {
         // Malformed payload bytes are a conversion error, not a panic.
         let bad = protowire::BlockBodyMessage { transactions: vec![], evm_payload: vec![0xFF, 0x01] };
         assert!(<(BlockBody, EvmExecutionPayload)>::try_from(bad).is_err());
+
+        // §14.2 DoS gate: over-cap wire bytes are rejected BEFORE the borsh
+        // decode (no transient allocation for a peer-supplied oversized blob).
+        let oversized = protowire::BlockBodyMessage {
+            transactions: vec![],
+            evm_payload: vec![0u8; kaspa_consensus_core::evm::MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK + 1],
+        };
+        assert!(<(BlockBody, EvmExecutionPayload)>::try_from(oversized).is_err());
     }
 }

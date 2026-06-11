@@ -18,7 +18,17 @@
 //! are **deterministic skips**: no receipt, no gas, no nonce change; only
 //! `skipped_tx_count` records them. Executed failures (revert / OOG — class 4)
 //! are status-0 receipts. Only producer faults (commitment mismatch, checked by
-//! the caller) invalidate a block (§6.2).
+//! the caller) invalidate a block (§6.2). (A defensive class-1 label also
+//! exists for undecodable material — unreachable for body-validated payloads.)
+//!
+//! F002 residual balance (audit L3, documented behavior): under SHANGHAI
+//! (pre-EIP-6780) a contract may SELFDESTRUCT with F002 as beneficiary,
+//! force-crediting it OUTSIDE the call-frame intercept — no withdraw log, no
+//! burn, the wei stays locked in F002 forever. This is supply-NEUTRAL (the
+//! stranded wei remains inside `evm_total_native_balance`); F002's balance is
+//! therefore NOT invariantly zero. Deliberately not swept: an end-of-block
+//! sweep would be a consensus rule. Re-evaluate at any spec bump (EIP-6780
+//! changes SELFDESTRUCT semantics — see the EVM_SPEC_ID pin in lib.rs).
 
 use crate::{env, roots, state, EvmExecError};
 use kaspa_consensus_core::evm::{
@@ -147,8 +157,13 @@ pub fn execute_block_evm(
         let txenv = match crate::tx::decode_tx_to_env(&cand.raw) {
             Ok(t) => t,
             Err(_) => {
-                skipped_tx_count += 1; // defensive: class-1 material that slipped past admission
-                outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
+                // Defensive: class-1 material (syntactically inadmissible) that
+                // slipped past admission — unreachable for a body-validated
+                // payload, but recorded under its DESIGN class (1) so the
+                // tx-lookup index stays truthful. The label is store/RPC data
+                // only, never part of the commitment (audit L5).
+                skipped_tx_count += 1;
+                outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 1 });
                 continue;
             }
         };
@@ -168,6 +183,12 @@ pub fn execute_block_evm(
     let mut executed_raws: Vec<Vec<u8>> = Vec::with_capacity(planned.len());
     let mut burn_this_block: u128 = 0;
     let mut withdrawals: Vec<WithdrawOp> = Vec::new();
+    // Receipt-side cumulative gas counts USER txs only (eth semantics:
+    // cumulativeGasUsed = gas of txs up to and including this one). System-op
+    // gas stays in the header's `gas_used` (the block budget) but must not
+    // offset the first receipt — eth tooling derives per-tx gas from deltas
+    // (audit L4).
+    let mut tx_cumulative_gas: u64 = 0;
     for (txenv, cand, cand_idx) in planned {
         let derived = derived.clone();
         let basefee = derived.base_fee_per_gas;
@@ -208,6 +229,7 @@ pub fn execute_block_evm(
                 drop(evm);
                 let tx_gas = result.gas_used();
                 gas_used = gas_used.saturating_add(tx_gas);
+                tx_cumulative_gas = tx_cumulative_gas.saturating_add(tx_gas);
                 burn_this_block = burn_this_block.saturating_add(basefee.saturating_mul(tx_gas as u128));
                 // §8.1 (D3): the priority fee belongs to the PAYLOAD block's
                 // declared coinbase. revm credited the accepting coinbase
@@ -244,7 +266,7 @@ pub fn execute_block_evm(
                 }
                 outcomes[cand_idx] =
                     Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Accepted { receipt_index: receipts.len() as u32 });
-                receipts.push(make_receipt(&result, gas_used));
+                receipts.push(make_receipt(&result, tx_cumulative_gas));
                 executed_raws.push(cand.raw.clone());
             }
             // §6.1 class 2 (and 3 via the nonce rule): acceptance-time invalid
@@ -460,6 +482,9 @@ mod tests {
         assert_eq!(db.basic(to).unwrap().unwrap().balance, U256::from(500u64));
         // gas = 25k (claim) + 21k (transfer); burn = 21k x basefee.
         assert_eq!(result.header.gas_used, 46_000);
+        // Receipt cumulative gas counts USER txs only (audit L4): the claim's
+        // 25k system gas lives in header.gas_used, never in receipts.
+        assert_eq!(result.receipts[0].cumulative_gas_used, 21_000);
         assert_eq!(result.header.evm_burn_accumulator, EvmU256::from(21_000u128 * basefee));
         // v0.4 counters + the accepting coinbase (audit AM-3).
         assert_eq!(result.header.accepted_tx_count, 1);
@@ -659,7 +684,9 @@ mod tests {
         assert_eq!(w.script_public_key, spk);
         // The withdraw log is part of the committed receipt (RPC-visible).
         assert!(result.receipts[0].logs.iter().any(|l| l.address.as_bytes() == f002.into_array()));
-        // The escrow was burned: F002 holds nothing.
+        // The escrow was burned: F002 holds nothing in THIS scenario. (NOT an
+        // invariant — SELFDESTRUCT force-sends can strand supply-neutral wei in
+        // F002; see `selfdestruct_to_f002_strands_value_supply_neutrally`.)
         assert_eq!(db.basic(f002).unwrap().map(|a| a.balance).unwrap_or_default(), U256::ZERO);
         // Supply: total = deposit − withdrawal − basefee burn, and matches the
         // actual state sum (gas: 21k intrinsic + calldata + 9k F002).
@@ -697,7 +724,81 @@ mod tests {
         assert!(result.receipts.iter().all(|r| !r.succeeded), "every fault reverted");
         assert!(result.receipts.iter().all(|r| r.gas_used > 0), "reverts are charged");
         assert!(result.withdrawals.is_empty(), "no withdrawal escaped");
+        // Reverts return the value — F002 nets zero HERE (scenario-specific;
+        // see the SELFDESTRUCT residual test for the documented exception).
         assert_eq!(db.basic(f002).unwrap().map(|a| a.balance).unwrap_or_default(), U256::ZERO, "no value stuck in F002");
+    }
+
+    /// Audit L3 (documented behavior, pinned): under SHANGHAI (pre-EIP-6780) a
+    /// contract that SELFDESTRUCTs with F002 as beneficiary force-credits it
+    /// OUTSIDE the call-frame intercept — no withdraw log, no WithdrawOp, no
+    /// burn. The wei is stranded in F002 forever, and that is SUPPLY-NEUTRAL:
+    /// the O(1) accumulator still equals the actual state sum (the residual
+    /// stays inside `evm_total_native_balance`). If this test breaks on an
+    /// EVM_SPEC_ID bump (EIP-6780 changes SELFDESTRUCT), re-decide the F002
+    /// residual policy BEFORE freezing the new spec.
+    #[test]
+    fn selfdestruct_to_f002_strands_value_supply_neutrally() {
+        use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
+        use alloy_eips::eip2718::Encodable2718;
+        use alloy_signer::SignerSync;
+        use alloy_signer_local::PrivateKeySigner;
+
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let f002 = crate::withdraw::f002_address();
+        let strand_wei = 5u128 * EVM_NATIVE_SCALE as u128;
+
+        // Init code: PUSH20 <f002> SELFDESTRUCT — the deploying contract
+        // self-destructs during creation, force-sending its endowment to F002.
+        let mut init_code = vec![0x73u8];
+        init_code.extend_from_slice(f002.as_slice());
+        init_code.push(0xFF);
+
+        let signer = PrivateKeySigner::from_bytes(&B256::from([0x11u8; 32])).unwrap();
+        let tx = TxEip1559 {
+            chain_id: EVM_CHAIN_ID,
+            nonce: 0,
+            gas_limit: 200_000,
+            max_fee_per_gas: basefee,
+            max_priority_fee_per_gas: 0,
+            to: revm::primitives::TxKind::Create,
+            value: U256::from(strand_wei),
+            access_list: Default::default(),
+            input: init_code.into(),
+        };
+        let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        let sender = signer.address();
+        let raw = TxEnvelope::from(tx.into_signed(sig)).encoded_2718();
+
+        // Fund the sender ONLY via a same-block deposit (exact supply math).
+        // Upfront cost = gas_limit (200k) x max_fee (1 gwei) = 2e14 wei + the
+        // 5e10 endowment, so deposit 30_000 sompi = 3e14 wei.
+        let payload = EvmExecutionPayload {
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: Default::default(),
+                evm_address: EvmAddress::from_bytes(sender.into_array()),
+                amount_sompi: 30_000, // 3e14 wei
+                claim_tip_sompi: 0,
+            })],
+            evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
+            ..Default::default()
+        };
+        let accepted = [cand(raw, 0xFE)];
+        let (result, mut db) = execute_block_evm(CacheDB::new(EmptyDB::default()), &input_with(&payload, &accepted)).unwrap();
+
+        assert_eq!(result.header.accepted_tx_count, 1, "the create tx executed (not skipped)");
+        assert!(result.receipts[0].succeeded, "create + selfdestruct executed");
+        assert!(result.withdrawals.is_empty(), "force-send bypasses the F002 intercept: NO WithdrawOp");
+        // The endowment is stranded in F002 (not burned, not withdrawable).
+        assert_eq!(db.basic(f002).unwrap().unwrap().balance, U256::from(strand_wei), "residual locked in F002");
+        // Supply stays EXACT: total = deposit − basefee burn (nothing left the
+        // lane), and the accumulator equals the actual state sum residual-included.
+        let gas_burn = result.receipts[0].gas_used as u128 * basefee;
+        let expected_total = 30_000u128 * EVM_NATIVE_SCALE as u128 - gas_burn;
+        assert_eq!(result.header.evm_total_native_balance, EvmU256::from(expected_total));
+        let snapshot = crate::snapshot::snapshot_from_cachedb(&db);
+        let actual: u128 = snapshot.accounts.iter().map(|a| a.balance.try_to_u128().unwrap()).sum();
+        assert_eq!(actual, expected_total, "supply invariant exact WITH the stranded F002 residual");
     }
 
     /// AH-1 (v0.4 §9.2): the claim tip splits the deposited amount between the

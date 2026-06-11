@@ -591,7 +591,10 @@ mod tests {
         let row = tx_index_store.get_or_default(tx_h).unwrap();
         assert_eq!(row.included_in, vec![merged]);
         assert!(row.accepted_in.is_empty());
-        assert_eq!(row.last_skip_class, Some(2), "undecodable candidate = deterministic class-2 skip");
+        // Audit L5: undecodable material carries its DESIGN class (1, syntactic)
+        // in the index — a defensive label; body validation rejects such
+        // payloads outright, so the path is unreachable for relayed blocks.
+        assert_eq!(row.last_skip_class, Some(1), "undecodable candidate = defensive class-1 skip label");
         use crate::model::stores::evm::EvmReceiptsStoreReader;
         assert!(!receipts_store.has(l1.hash).unwrap(), "no receipts row for a block with zero accepted txs");
 

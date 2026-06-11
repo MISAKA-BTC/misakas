@@ -871,6 +871,55 @@ mod tests {
         assert!(!p3.is_empty());
     }
 
+    /// EVM audit C3: the per-block deposit-claim BYTE and SYSTEM-GAS bounds are
+    /// enforced via the COUNT cap (`check_evm_payload` rejects >
+    /// `MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK` ops) — that implication only holds
+    /// while a claim's serialized size is fixed and the products stay under the
+    /// byte/gas consts. This test pins the implication: if `DepositClaim` ever
+    /// grows (or goes variable-length), or the caps drift, it fails and the
+    /// byte/gas bounds must become EXPLICIT body-validation rules.
+    #[test]
+    fn claim_count_cap_subsumes_byte_and_system_gas_bounds() {
+        let max_claim = EvmSystemOp::DepositClaim(DepositClaim {
+            deposit_outpoint: TransactionOutpoint::new(Hash64::from_bytes([0xFF; 64]), u32::MAX),
+            evm_address: EvmAddress::from_bytes([0xFF; 20]),
+            amount_sompi: u64::MAX,
+            claim_tip_sompi: u64::MAX,
+        });
+        let min_claim = EvmSystemOp::DepositClaim(DepositClaim {
+            deposit_outpoint: TransactionOutpoint::default(),
+            evm_address: EvmAddress::default(),
+            amount_sompi: 0,
+            claim_tip_sompi: 0,
+        });
+        let max_size = borsh::to_vec(&max_claim).unwrap().len();
+        // Fixed-width: extreme and default claims serialize to the same length,
+        // so `count cap × size` is exact, not an estimate.
+        assert_eq!(
+            max_size,
+            borsh::to_vec(&min_claim).unwrap().len(),
+            "DepositClaim went variable-length: make the byte bound an explicit rule"
+        );
+
+        // Count cap ⇒ byte bound.
+        assert!(
+            MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK * max_size <= MAX_DEPOSIT_CLAIM_BYTES_PER_EVM_BLOCK,
+            "256 maximal claims ({} B each) exceed MAX_DEPOSIT_CLAIM_BYTES_PER_EVM_BLOCK: enforce the byte bound explicitly",
+            max_size
+        );
+        // Count cap ⇒ system-gas bound.
+        assert!(
+            (MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK as u64) * SYSTEM_DEPOSIT_GAS_PER_CLAIM <= MAX_SYSTEM_GAS_PER_EVM_BLOCK,
+            "256 claims exceed MAX_SYSTEM_GAS_PER_EVM_BLOCK: enforce the gas bound explicitly"
+        );
+        // And a count-cap-maximal payload still fits the §7 payload byte cap.
+        let payload = EvmExecutionPayload {
+            system_ops: (0..MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK).map(|_| max_claim.clone()).collect(),
+            ..Default::default()
+        };
+        assert!(payload.payload_bytes().len() <= MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK);
+    }
+
     #[test]
     fn payload_hash_is_deterministic_domain_separated_and_field_sensitive() {
         // v0.4 §4.1: the payload DATA commitment carried in `Header::evm_payload_hash`.

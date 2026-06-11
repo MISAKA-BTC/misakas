@@ -131,7 +131,13 @@ impl EvmMempool {
         // Same (sender, nonce): replacement requires the standard fee bump.
         if let Some(existing_hash) = self.by_sender_nonce.get(&(tx.sender, tx.nonce)).copied() {
             let existing = &self.txs[&existing_hash];
-            let required = existing.max_fee_per_gas.saturating_mul(100 + EVM_MEMPOOL_REPLACEMENT_BUMP_PCT) / 100;
+            // Saturate the BUMP, then the add — `required >= existing` always.
+            // (`existing * 110 / 100` reverse-overflows near u128::MAX: the mul
+            // saturates and the division then yields LESS than `existing`,
+            // letting a cheaper replacement through. Audit L2.)
+            let required = existing
+                .max_fee_per_gas
+                .saturating_add(existing.max_fee_per_gas.saturating_mul(EVM_MEMPOOL_REPLACEMENT_BUMP_PCT) / 100);
             if tx.max_fee_per_gas < required {
                 return Err(EvmMempoolError::ReplacementUnderpriced { pending_fee: existing.max_fee_per_gas, required_fee: required });
             }
@@ -281,6 +287,21 @@ mod tests {
             pool.insert(tx(0xB, 0, 999, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, 4)),
             Err(EvmMempoolError::TooLarge(_))
         ));
+    }
+
+    /// Audit L2: near u128::MAX the old `existing * 110 / 100` reverse-overflowed
+    /// (saturating mul, then division) into a threshold BELOW the pending fee —
+    /// a strictly cheaper replacement was admitted. The bump must saturate so
+    /// `required >= existing` always holds.
+    #[test]
+    fn replacement_bump_is_monotone_at_u128_max() {
+        let mut pool = EvmMempool::new();
+        let near_max = u128::MAX - 5;
+        pool.insert(tx(0xA, 0, near_max, 10, 1)).unwrap();
+        // A CHEAPER tx must never replace, no matter how the threshold math saturates.
+        assert!(matches!(pool.insert(tx(0xA, 0, near_max - 1, 10, 2)), Err(EvmMempoolError::ReplacementUnderpriced { .. })));
+        // Equal fee is also under the (saturated) required threshold.
+        assert!(matches!(pool.insert(tx(0xA, 0, near_max, 10, 3)), Err(EvmMempoolError::Duplicate(_) | EvmMempoolError::ReplacementUnderpriced { .. })));
     }
 
     #[test]

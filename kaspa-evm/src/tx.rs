@@ -57,6 +57,15 @@ pub struct AdmittedEvmTx {
 /// validation, where a violation invalidates the PAYLOAD block itself — the
 /// producer chose its own payload (design v0.4 §6.2). Deterministic and
 /// context-free (no state, no basefee: those are class-2 acceptance skips).
+///
+/// Audit L6 — the floor is deliberately the FIXED intrinsic (21k/53k), NOT the
+/// calldata-inclusive EIP-2028/3860 intrinsic: re-implementing revm's exact
+/// intrinsic-gas formula here would risk a consensus split if the two ever
+/// diverged. A tx with `fixed_floor <= gas_limit < true_intrinsic` therefore
+/// passes admission and is rejected by revm at acceptance
+/// (`CallGasCostMoreThanGasLimit`) — a DETERMINISTIC class-2 skip, erring on
+/// the safe side (a marginal tx skips instead of invalidating the payload
+/// block). Design §6.1's class-1 row states this boundary.
 pub fn admit_tx(raw: &[u8]) -> Result<(), String> {
     admit_tx_info(raw).map(|_| ())
 }

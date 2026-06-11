@@ -232,13 +232,15 @@ delayed acceptance では accepting block の producer は payload の内容を�
 
 | クラス | 条件 | 扱い | 帰責 |
 | --- | --- | --- | --- |
-| 1. Payload admission 違反 | RLP/typed encoding 不正、signature 形式不正、chain_id 不一致、tx gas_limit < intrinsic gas、tx サイズ超過 | **payload block が body validation で invalid**(syntactic check、安価) | payload block producer(自分の payload は自分の責任) |
-| 2. Acceptance-time skip | nonce 不一致、balance < upfront cost(gas_limit×max_fee + value)、max_fee < basefee(B) | **deterministic skip**: 実行なし、receipt なし、nonce 不変、gas 課金なし | 誰の fault でもない(basefee(B) は payload 作成時に未知) |
+| 1. Payload admission 違反 | RLP/typed encoding 不正、signature 形式不正、chain_id 不一致、tx gas_limit < intrinsic **固定床**(transfer 21k / create 53k)、tx サイズ超過 | **payload block が body validation で invalid**(syntactic check、安価) | payload block producer(自分の payload は自分の責任) |
+| 2. Acceptance-time skip | nonce 不一致、balance < upfront cost(gas_limit×max_fee + value)、max_fee < basefee(B)、gas_limit < calldata 込み真 intrinsic(下注) | **deterministic skip**: 実行なし、receipt なし、nonce 不変、gas 課金なし | 誰の fault でもない(basefee(B) は payload 作成時に未知) |
 | 3. Duplicate | 同一 tx hash が既に accept 済み | クラス 2 の nonce 規則で自動的に skip。receipt は最初の accepted occurrence を指す | — |
 | 4. 実行時失敗 | EVM revert、OOG、precompile validation 失敗(F002 user-input fault 含む §9.3)、slippage、hook revert | **実行済み**: receipt status = 0、gas 課金あり(v0.3 §6.3 から不変) | user |
 | 5. Accepted gas cap 超過 | §7 の cap を超えた canonical order 末尾 | **deterministic prefix skip**(D4)。nonce 不変、後続 block で再 accept 可能 | — |
 
 クラス 2/3/5 の skip は EvmResult に不可視である(state、receipts、gas_used のいずれにも影響しない)。`skipped_tx_count` のみが統計として commit される。クラス 2 の skip は nonce を変えないため、同一 tx は後続の accepting block で条件が満たされれば accept される — duplicate 排除はこの nonce 規則から自然に導かれ、専用の seen-set を必要としない。
+
+注(クラス 1/2 境界の正準化、監査 L6): body admission が強制する intrinsic 下限は**固定床**(transfer 21,000 / create 53,000)であり、calldata・initcode 依存の EIP-2028/3860 真 intrinsic ではない — 真 intrinsic の再実装は revm との計算乖離 = consensus split リスクを生むため意図的に避ける。`固定床 ≤ gas_limit < 真 intrinsic` の tx は admission を通過し、acceptance で revm が決定的に拒否してクラス 2 skip となる(全ノード同一 revm のため決定的・安全側: 境界 tx は payload block を invalid にせず無害に skip)。
 
 ### 6.2 Block invalid / 失格の到達条件
 

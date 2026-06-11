@@ -35,6 +35,16 @@ use revm::{
 /// fork). Frozen at activation — a bump is a hard fork.
 pub const EVM_SPEC_ID: SpecId = SpecId::SHANGHAI;
 
+// Audit C1 — spec-bump guard. EVM_SPEC_ID is load-bearing BEYOND opcode gating:
+// the F002 SELFDESTRUCT force-send analysis (pre-EIP-6780 — see executor.rs
+// module docs + `selfdestruct_to_f002_strands_value_supply_neutrally`) and the
+// class-4 revert/class-2 skip boundary were audited AT SHANGHAI. Bumping the
+// spec is a hard fork AND requires re-running the supply-conservation and
+// skip-class suites (kaspa-evm executor tests + consensus `--features evm`
+// integration tests) and re-deciding the F002 residual policy before the new
+// id is frozen. This assert (and pq-ci-guard) makes a silent bump impossible.
+const _: () = assert!(matches!(EVM_SPEC_ID, SpecId::SHANGHAI), "EVM spec bump: re-run supply/skip-class suites and re-decide the F002 residual policy (see comment)");
+
 /// The Ethereum empty-trie root `keccak256(rlp(()))` — the EVM genesis state root
 /// (no predeploys). Must equal `kaspa_consensus_core::evm::EVM_GENESIS_STATE_ROOT`.
 pub fn empty_state_root() -> [u8; 32] {
