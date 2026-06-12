@@ -98,6 +98,12 @@ pub enum EvmExecError {
     /// helper surfaces it directly.
     #[display("evm tx invalid for inclusion: {_0}")]
     InvalidTx(String),
+    /// A consensus arithmetic invariant was violated (balance/supply over- or
+    /// underflow). Spec-impossible on a correct chain, so it signals store
+    /// corruption or a bug — fail closed (deterministic error) rather than
+    /// silently saturate and hide the broken invariant (audit #5).
+    #[display("evm consensus invariant violated: {_0}")]
+    InvariantViolation(String),
 }
 
 /// P2 block-execution helper: seed a fresh in-memory state, run the raw EIP-2718

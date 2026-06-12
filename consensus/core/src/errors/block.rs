@@ -41,6 +41,12 @@ pub enum RuleError {
     #[error("block carries a non-empty EVM payload but its header version is below EVM_HEADER_VERSION (EVM lane not active)")]
     NonEmptyEvmPayloadBeforeActivation,
 
+    // audit #6: a pre-v2 header's EVM commitment fields are hash-invisible (the
+    // preimage only includes them from EVM_HEADER_VERSION up), so non-zero values
+    // there would be block-id malleability + a migration hazard. Force them zero.
+    #[error("pre-activation (v1) header carries non-zero EVM commitment fields (must be zero while hash-invisible)")]
+    NonZeroEvmHeaderFieldsBeforeActivation,
+
     // v0.4 §4.1 / §6.2: the header's payload DATA commitment must match the body.
     #[error("header evm_payload_hash does not match the block body's EVM payload")]
     EvmPayloadHashMismatch,

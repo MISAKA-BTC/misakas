@@ -852,6 +852,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let lock = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key)
             .ok_or_else(|| RpcError::RpcSubsystem(format!("outpoint {outpoint} is not an EVM_DEPOSIT_LOCK output")))?;
 
+        // audit #9: mirror the consensus rule (validate_evm_deposit_claims) so the
+        // RPC rejects an unclaimable lock up front instead of "successfully" queueing
+        // a claim the template path will silently drop. tip > amount is consensus-invalid.
+        if lock.claim_tip_sompi > entry.amount {
+            return Err(RpcError::RpcSubsystem(format!(
+                "deposit lock {outpoint} is unclaimable: claim_tip {} exceeds locked amount {}",
+                lock.claim_tip_sompi, entry.amount
+            )));
+        }
+
         // The claim mirrors the lock exactly (the consensus rule binds them).
         let claim = kaspa_consensus_core::evm::DepositClaim {
             deposit_outpoint: outpoint,

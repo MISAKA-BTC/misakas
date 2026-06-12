@@ -864,6 +864,16 @@ impl VirtualStateProcessor {
                     }
                 }
             }
+            // audit #3: the tx loop above budgets ONLY the txs against the byte
+            // cap; the deposit-claim system ops are appended afterwards and each
+            // is ~105 bytes, so a near-full tx payload + ≥1 claim can exceed
+            // MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK — which body validation rejects,
+            // making the node's OWN template invalid. Claims must execute (they
+            // are this block's bridge credits), so keep every selected claim and
+            // drop trailing (lowest-priority) txs until the WHOLE payload fits.
+            while !payload.transactions.is_empty() && payload.payload_bytes().len() > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
+                payload.transactions.pop();
+            }
             // §8.2: the declared coinbase claims this payload's priority fees —
             // meaningful only when the payload actually carries content (and
             // keeping it zero otherwise preserves the empty payload / empty

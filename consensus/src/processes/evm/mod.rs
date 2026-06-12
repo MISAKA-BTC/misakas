@@ -219,7 +219,7 @@ mod driver {
         DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore, EvmHeaderStore, EvmHeaderStoreReader, EvmPayloadStoreReader,
         EvmStateStore, EvmStateStoreReader,
     };
-    use kaspa_consensus_core::evm::{EvmExecutionPayload, EvmStateSnapshot, EVM_GENESIS_STATE_ROOT};
+    use kaspa_consensus_core::evm::{EvmExecutionPayload, EvmStateSnapshot};
     use kaspa_consensus_core::header::Header;
     use kaspa_consensus_core::BlockHash;
     use kaspa_database::prelude::StoreError;
@@ -328,21 +328,33 @@ mod driver {
             }
         }
 
-        // Selected-parent EVM header + state (absent ⇒ first EVM block on genesis).
+        // Selected-parent EVM header + state. An EVM-active parent ALWAYS persists
+        // both rows together (every v2 chain block forms an EVM block; see the
+        // commit batch in the virtual processor). So:
+        //   - parent has an EVM header  ⇒ its state snapshot MUST be present;
+        //     a missing snapshot is store corruption / a pruning or migration bug,
+        //     NOT an implicit genesis. Fail closed (audit #4) — a producer must
+        //     not build, nor a verifier accept, on a fabricated empty parent state.
+        //   - parent has NO EVM header  ⇒ it is pre-activation: the first EVM
+        //     block's implicit genesis parent ⇒ the empty default state is correct.
         let parent_header = match header_store.get(selected_parent) {
             Ok(h) => Some(h),
             Err(StoreError::KeyNotFound(_)) => None,
             Err(e) => return Err(EvmValidateError::Store(e)),
         };
-        let parent_snapshot = match state_store.get(selected_parent) {
-            Ok(s) => s,
-            Err(StoreError::KeyNotFound(_)) => EvmStateSnapshot::default(),
-            Err(e) => return Err(EvmValidateError::Store(e)),
+        let parent_snapshot = if parent_header.is_some() {
+            match state_store.get(selected_parent) {
+                Ok(s) => s,
+                Err(StoreError::KeyNotFound(_)) => {
+                    return Err(EvmValidateError::Exec(format!(
+                        "EVM-active selected parent {selected_parent} has an EVM header but no persisted state snapshot (store corruption / pruning bug)"
+                    )))
+                }
+                Err(e) => return Err(EvmValidateError::Store(e)),
+            }
+        } else {
+            EvmStateSnapshot::default()
         };
-        debug_assert!(
-            parent_header.as_ref().map(|h| h.state_root).unwrap_or(EVM_GENESIS_STATE_ROOT) == EVM_GENESIS_STATE_ROOT || !parent_snapshot.is_empty(),
-            "a non-genesis EVM parent must have a persisted state snapshot"
-        );
 
         let input = super::EvmBlockInput {
             parent: parent_header.as_ref(),
@@ -474,7 +486,7 @@ mod bridge_tests {
         let lock_entry = UtxoEntry::new(500, lock_spk([0xCC; 20], 1_000, 0), 10, false);
         let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
         let w = WithdrawOp {
-            evm_tx_index: 3,
+            receipt_index: 3,
             op_index: 1,
             evm_tx_hash,
             from: EvmAddress::from_bytes([0xAA; 20]),

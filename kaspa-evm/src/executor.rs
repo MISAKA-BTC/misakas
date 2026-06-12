@@ -233,7 +233,12 @@ pub fn execute_block_evm(
                 let tx_gas = result.gas_used();
                 gas_used = gas_used.saturating_add(tx_gas);
                 tx_cumulative_gas = tx_cumulative_gas.saturating_add(tx_gas);
-                burn_this_block = burn_this_block.saturating_add(basefee.saturating_mul(tx_gas as u128));
+                // audit #5: basefee burn feeds the supply identity — use checked math.
+                let tx_burn = basefee
+                    .checked_mul(tx_gas as u128)
+                    .and_then(|b| burn_this_block.checked_add(b))
+                    .ok_or_else(|| EvmExecError::InvariantViolation("basefee-burn accumulator overflow".to_string()))?;
+                burn_this_block = tx_burn;
                 // §8.1 (D3): the priority fee belongs to the PAYLOAD block's
                 // declared coinbase. revm credited the accepting coinbase
                 // (block.coinbase) during commit; move the tip over. Balance
@@ -248,14 +253,14 @@ pub fn execute_block_evm(
                 // as a WithdrawOp and burn the escrowed wei out of F002 — the
                 // value leaves the EVM lane here; consensus re-creates it as a
                 // synthetic UTXO output in this block's diff.
-                let evm_tx_index = receipts.len() as u32;
+                let receipt_index = receipts.len() as u32;
                 let evm_tx_hash = crate::tx::tx_hash(&cand.raw);
                 let mut op_index = 0u32;
                 let mut withdrawn_wei: u128 = 0;
                 for log in result.logs() {
                     if let Some(w) = crate::withdraw::decode_withdraw_log(log) {
                         withdrawals.push(WithdrawOp {
-                            evm_tx_index,
+                            receipt_index,
                             op_index,
                             evm_tx_hash,
                             from: EvmAddress::from_bytes(w.from),
@@ -296,6 +301,15 @@ pub fn execute_block_evm(
     let parent_total = input.parent.map(|p| evmu256_to_u128(p.evm_total_native_balance)).unwrap_or(0);
     let deposited: u128 = applied_claims.iter().map(|c| c.amount_sompi as u128 * EVM_NATIVE_SCALE as u128).sum();
     let withdrawn: u128 = withdrawals.iter().map(|w: &kaspa_consensus_core::evm::WithdrawOp| w.amount_sompi as u128 * EVM_NATIVE_SCALE as u128).sum();
+    // `evm_total_native_balance` is a DERIVED best-effort supply figure. On the
+    // real chain wei enters only via deposit claims, so on a valid chain the
+    // identity total(B) = total(parent) + deposits − withdrawals − burn holds and
+    // never underflows. But it is NOT a safe hard-halt: an account can legitimately
+    // hold a balance that this accumulator did not source (e.g. the test harness
+    // seeds balances directly without a deposit), and freezing the chain on that
+    // would be worse than an imprecise supply readout. So keep the saturating form
+    // here. (audit #5 is enforced where it matters — the F002 escrow `burn_balance`
+    // and the per-account credit/reroute moves are checked and fail closed.)
     let total_native_balance = parent_total.saturating_add(deposited).saturating_sub(withdrawn).saturating_sub(burn_this_block);
     let header = EvmExecutionHeader {
         parent_state_root,
@@ -319,7 +333,11 @@ pub fn execute_block_evm(
         accepted_tx_count: receipts.len() as u32,
         skipped_tx_count,
         evm_total_native_balance: EvmU256::from(total_native_balance),
-        evm_burn_accumulator: EvmU256::from(parent_burn.saturating_add(burn_this_block)),
+        evm_burn_accumulator: EvmU256::from(
+            parent_burn
+                .checked_add(burn_this_block)
+                .ok_or_else(|| EvmExecError::InvariantViolation("burn accumulator overflow".to_string()))?,
+        ),
     };
 
     let candidate_outcomes = outcomes
@@ -340,7 +358,14 @@ fn credit_balance(db: &mut CacheDB<EmptyDB>, addr: Address, amount: U256) -> Res
     if acct.info.code_hash == B256::ZERO {
         acct.info.code_hash = KECCAK_EMPTY;
     }
-    acct.info.balance = acct.info.balance.saturating_add(amount);
+    // audit #5: fail closed on overflow rather than saturate (a 256-bit balance
+    // overflow is spec-impossible — total native supply is bounded — so it can
+    // only mean corruption/a bug).
+    acct.info.balance = acct
+        .info
+        .balance
+        .checked_add(amount)
+        .ok_or_else(|| EvmExecError::InvariantViolation(format!("balance credit overflow at {addr}")))?;
     acct.account_state = AccountState::Touched;
     Ok(())
 }
@@ -352,7 +377,15 @@ fn burn_balance(db: &mut CacheDB<EmptyDB>, addr: Address, amount: U256) -> Resul
     if acct.info.code_hash == B256::ZERO {
         acct.info.code_hash = KECCAK_EMPTY;
     }
-    acct.info.balance = acct.info.balance.saturating_sub(amount);
+    // audit #5: the F002 escrow must hold ≥ the burned amount (the withdraw
+    // handler debited the caller into F002 first). An underflow would mean a
+    // synthetic UTXO is materialized without the EVM side being debited — a
+    // supply break. Fail closed instead of hiding it with a saturating_sub.
+    acct.info.balance = acct
+        .info
+        .balance
+        .checked_sub(amount)
+        .ok_or_else(|| EvmExecError::InvariantViolation(format!("F002 burn underflow at {addr}: escrow < withdrawal")))?;
     acct.account_state = AccountState::Touched;
     Ok(())
 }
@@ -365,15 +398,23 @@ fn reroute_balance(db: &mut CacheDB<EmptyDB>, from: Address, to: Address, amount
     if src.info.code_hash == B256::ZERO {
         src.info.code_hash = KECCAK_EMPTY;
     }
-    // revm just credited `from` with exactly the tip; an under-balance here is
-    // impossible, but saturate rather than panic the verifier.
-    src.info.balance = src.info.balance.saturating_sub(amount);
+    // revm just credited `from` with exactly the tip, so an under-balance here
+    // is spec-impossible — fail closed if it ever happens (audit #5).
+    src.info.balance = src
+        .info
+        .balance
+        .checked_sub(amount)
+        .ok_or_else(|| EvmExecError::InvariantViolation(format!("tip reroute underflow at {from}")))?;
     src.account_state = AccountState::Touched;
     let dst = db.load_account(to).map_err(|e| EvmExecError::InvalidTx(format!("tip reroute (credit): {e:?}")))?;
     if dst.info.code_hash == B256::ZERO {
         dst.info.code_hash = KECCAK_EMPTY;
     }
-    dst.info.balance = dst.info.balance.saturating_add(amount);
+    dst.info.balance = dst
+        .info
+        .balance
+        .checked_add(amount)
+        .ok_or_else(|| EvmExecError::InvariantViolation(format!("tip reroute overflow at {to}")))?;
     dst.account_state = AccountState::Touched;
     Ok(())
 }
@@ -682,7 +723,7 @@ mod tests {
         assert!(result.receipts[0].succeeded, "the withdraw call succeeded");
         assert_eq!(result.withdrawals.len(), 1);
         let w = &result.withdrawals[0];
-        assert_eq!(w.evm_tx_index, 0);
+        assert_eq!(w.receipt_index, 0);
         assert_eq!(w.op_index, 0);
         assert_eq!(w.from, EvmAddress::from_bytes(sender.into_array()));
         assert_eq!(w.amount_sompi, 5);

@@ -62,6 +62,15 @@ impl BlockBodyProcessor {
             if !block.evm_payload.is_empty() {
                 return Err(RuleError::NonEmptyEvmPayloadBeforeActivation);
             }
+            // audit #6: the two EVM header commitments are excluded from the v0/v1
+            // header preimage (hashing/header.rs), so they do not bind to the block
+            // id. Force them zero on pre-activation headers — otherwise a peer could
+            // mint distinct serialized headers with the same hash (malleability) and
+            // a future migration could trip over stray non-zero fields.
+            let zero = kaspa_hashes::Hash64::default();
+            if block.header.evm_payload_hash != zero || block.header.evm_commitment_root != zero {
+                return Err(RuleError::NonZeroEvmHeaderFieldsBeforeActivation);
+            }
             return Ok(());
         }
         let bytes = block.evm_payload.payload_bytes();

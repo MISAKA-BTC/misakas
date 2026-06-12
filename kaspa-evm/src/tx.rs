@@ -11,6 +11,14 @@
 use alloy_consensus::{Transaction as _, TxEnvelope};
 use alloy_eips::eip2718::Decodable2718;
 use revm::primitives::{Address, TxEnv, U256};
+
+/// audit #1/#2: the SHANGHAI tx-type allowlist. Only Legacy, EIP-2930 and
+/// EIP-1559 are modelled; newer typed envelopes (EIP-4844, EIP-7702) carry
+/// variant-specific semantics this lane does not implement, so they are
+/// rejected at admission rather than executed through the shared accessors.
+fn is_supported_tx_type(envelope: &TxEnvelope) -> bool {
+    matches!(envelope, TxEnvelope::Legacy(_) | TxEnvelope::Eip2930(_) | TxEnvelope::Eip1559(_))
+}
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -132,6 +140,15 @@ pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
     use kaspa_consensus_core::evm::{EvmAddress, EVM_CHAIN_ID, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK};
 
     let envelope = TxEnvelope::decode_2718(&mut &raw[..]).map_err(|e| format!("decode: {e}"))?;
+    // audit #1/#2: explicit tx-type allowlist. The pinned spec is SHANGHAI, which
+    // supports only Legacy / EIP-2930 / EIP-1559. alloy_consensus can decode newer
+    // typed envelopes (EIP-4844 blobs, EIP-7702 auth-lists) whose variant-specific
+    // semantics we do NOT model — admitting one and executing it via the common
+    // accessors would silently drop those semantics. Reject anything outside the
+    // allowlist at admission so it can never enter a payload block.
+    if !is_supported_tx_type(&envelope) {
+        return Err(format!("unsupported EVM tx type {:#04x} under SHANGHAI (allowed: legacy/EIP-2930/EIP-1559)", envelope.tx_type() as u8));
+    }
     let hash = tx_hash(raw);
     let sender = recover_signer_cached(&envelope, hash)?; // O1 memo
     match envelope.chain_id() {
@@ -215,6 +232,39 @@ mod tests {
         TxEnvelope::from(tx.into_signed(sig)).encoded_2718()
     }
 
+    /// audit #1: a non-empty EIP-2930/1559 access list is carried into the
+    /// `TxEnv` (so revm charges the exact access-list intrinsic gas and warms
+    /// the listed slots), and an empty list maps to an empty `TxEnv` list.
+    #[test]
+    fn access_list_is_carried_into_txenv() {
+        use alloy_consensus::{SignableTransaction, TxEip1559};
+        use alloy_eips::eip2718::Encodable2718;
+        use alloy_eips::eip2930::{AccessList, AccessListItem};
+        use alloy_signer::SignerSync;
+        use alloy_signer_local::PrivateKeySigner;
+        use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE};
+        use revm::primitives::{Address, TxKind, B256, U256};
+        let signer = PrivateKeySigner::from_bytes(&B256::from([0x11u8; 32])).unwrap();
+        let al = AccessList(vec![AccessListItem {
+            address: Address::with_last_byte(0xAB),
+            storage_keys: vec![B256::from([0x01u8; 32]), B256::from([0x02u8; 32])],
+        }]);
+        let tx = TxEip1559 {
+            chain_id: EVM_CHAIN_ID, nonce: 0, gas_limit: 60_000,
+            max_fee_per_gas: EVM_INITIAL_BASE_FEE as u128, max_priority_fee_per_gas: 0,
+            to: TxKind::Call(Address::with_last_byte(0x22)), value: U256::from(1u64),
+            access_list: al, input: Default::default(),
+        };
+        let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        let raw = TxEnvelope::from(tx.into_signed(sig)).encoded_2718();
+        let env = decode_tx_to_env(&raw).unwrap();
+        assert_eq!(env.access_list.len(), 1, "the access list must reach the TxEnv");
+        assert_eq!(env.access_list[0].storage_keys.len(), 2);
+        // An empty-access-list tx maps to an empty TxEnv list (the common case).
+        let env0 = decode_tx_to_env(&fixture_raw(0)).unwrap();
+        assert!(env0.access_list.is_empty());
+    }
+
     #[test]
     fn admit_tx_info_extracts_the_mempool_metadata() {
         let raw = fixture_raw(7);
@@ -248,6 +298,12 @@ mod tests {
 /// the same caller + env.
 pub fn decode_tx_to_env(raw: &[u8]) -> Result<TxEnv, TxDecodeError> {
     let envelope = TxEnvelope::decode_2718(&mut &raw[..]).map_err(|e| TxDecodeError::Decode(e.to_string()))?;
+    // audit #1/#2: defense-in-depth allowlist (admission already enforced it).
+    // A body-valid payload can only contain admitted txs, but the executor must
+    // never run an out-of-allowlist envelope through the common accessors.
+    if !is_supported_tx_type(&envelope) {
+        return Err(TxDecodeError::Decode(format!("unsupported EVM tx type {:#04x} under SHANGHAI", envelope.tx_type() as u8)));
+    }
     // O1 memo: the acceptance-execution path re-recovers the same signer body
     // validation already recovered — the keccak (sub-µs) buys back ~80µs.
     let caller = recover_signer_cached(&envelope, tx_hash(raw)).map_err(TxDecodeError::Recover)?;
@@ -265,8 +321,12 @@ pub fn decode_tx_to_env(raw: &[u8]) -> Result<TxEnv, TxDecodeError> {
     tx.data = envelope.input().clone();
     tx.nonce = Some(envelope.nonce());
     tx.chain_id = envelope.chain_id();
-    // TODO(P5): carry the EIP-2930/1559 access list so `gas_used` is exact for
-    // access-list txs. Pre-activation refinement; current test/standard transfers
-    // and calls carry none.
+    // audit #1: carry the EIP-2930/1559 access list so revm charges the exact
+    // access-list intrinsic gas and warms the listed addresses/slots. revm
+    // re-exports alloy's `AccessListItem`, so the envelope's list maps directly.
+    // Empty for legacy and for the common transfers/calls — a no-op there.
+    if let Some(access_list) = envelope.access_list() {
+        tx.access_list = access_list.0.clone();
+    }
     Ok(tx)
 }
