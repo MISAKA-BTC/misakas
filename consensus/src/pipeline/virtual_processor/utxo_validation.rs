@@ -52,7 +52,7 @@ use kaspa_consensus_core::{
 };
 use kaspa_core::{info, trace};
 use kaspa_muhash::MuHash;
-use kaspa_txscript::verify_mldsa87_with_context;
+use kaspa_txscript::{script_class::parse_evm_deposit_lock, verify_mldsa87_with_context};
 use kaspa_utils::refs::Refs;
 
 use rayon::prelude::*;
@@ -195,11 +195,34 @@ impl VirtualStateProcessor {
 
             ctx.multiset_hash.combine(&inner_multiset);
 
+            // kaspa-pq ADR-0018 §F bridge wiring: classify each accepted tx's fee. A tx creating
+            // ≥1 EVM_DEPOSIT_LOCK output (recognised by the SAME `parse_evm_deposit_lock` the
+            // claim path uses at processes/evm — so the lock-shape definition can never diverge)
+            // is a bridge tx: its whole fee is finality-class, split at the validator-primary §F
+            // finality ratios instead of the 90/10 normal ratios. DOUBLY gated at THIS
+            // accumulation site — shared by coinbase construction and validation (both call
+            // `calculate_utxo_state`), so c==v holds structurally:
+            //   1. `finality_fee_activation_daa_score` — the §F wiring fence;
+            //   2. `evm_activation_daa_score` — lock OUTPUTS are consensus-legal on every net
+            //      (the output-class exemption is unconditional), but the BRIDGE only exists on
+            //      an EVM-active net; without this gate a miner on an EVM-inert net (mainnet
+            //      today) could self-include a never-claimable lock tx and reroute its fee
+            //      75/25 to the §E pool. Both scores are consensus-fixed per net and
+            //      `pov_daa_score` is path-identical, so the conjunction preserves c==v.
+            // Below either fence `finality_fee` stays 0 ⇒ byte-identical splits.
+            let finality_fee_active = pov_daa_score >= self.evm_activation_daa_score
+                && self.dns_params.as_ref().is_some_and(|p| pov_daa_score >= p.finality_fee_activation_daa_score);
             let mut block_fee = 0u64;
+            let mut finality_fee = 0u64;
             for (validated_tx, _) in validated_transactions.iter() {
                 ctx.mergeset_diff.add_transaction(validated_tx, pov_daa_score).unwrap();
                 ctx.accepted_tx_ids.push(validated_tx.id());
                 block_fee += validated_tx.calculated_fee;
+                if finality_fee_active
+                    && validated_tx.tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some())
+                {
+                    finality_fee += validated_tx.calculated_fee;
+                }
             }
 
             ctx.mergeset_acceptance_data.push(MergesetBlockAcceptanceData {
@@ -219,7 +242,7 @@ impl VirtualStateProcessor {
             let coinbase_data = self.coinbase_manager.deserialize_coinbase_payload(&txs[0].payload).unwrap();
             ctx.mergeset_rewards.insert(
                 merged_block,
-                BlockRewardData::new(coinbase_data.subsidy, block_fee, coinbase_data.miner_data.script_public_key),
+                BlockRewardData::new(coinbase_data.subsidy, block_fee, finality_fee, coinbase_data.miner_data.script_public_key),
             );
         }
 
