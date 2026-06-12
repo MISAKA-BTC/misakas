@@ -125,12 +125,13 @@ impl TestConsensus {
         let daa_window = self.consensus.services.window_manager.block_daa_window(&ghostdag_data).unwrap();
         header.bits = self.consensus.services.window_manager.calculate_difficulty_bits(&ghostdag_data, &daa_window);
         header.daa_score = daa_window.daa_score;
-        // kaspa-pq ADR-0007 Phase 2: declare the algo the network mandates at
+        // kaspa-pq ADR-0007 Phase 3: declare the algo the network mandates at
         // this DAA score (`header_from_precomputed_hash` defaults to the
         // Phase-1 kHeavyHash id, which `check_pow_algo_id` rejects on the
-        // Argon2id-active mainnet/testnet params).
-        header.pow_algo_id =
-            kaspa_consensus_core::pow_layer0::required_algo_id(self.params.pow_argon2id_activation.is_active(daa_window.daa_score));
+        // BLAKE2b-SHA3-active mainnet/testnet params).
+        header.pow_algo_id = kaspa_consensus_core::pow_layer0::required_algo_id(
+            self.params.pow_blake2b_sha3_activation.is_active(daa_window.daa_score),
+        );
         header.timestamp = self.consensus.services.window_manager.calc_past_median_time(&ghostdag_data).unwrap().0 + 1;
         header.blue_score = ghostdag_data.blue_score;
         header.blue_work = ghostdag_data.blue_work;

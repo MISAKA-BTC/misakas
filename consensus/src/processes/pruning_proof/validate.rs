@@ -187,11 +187,12 @@ impl ProofContext {
                 proof[level as usize].first().map(|header| header.hash).ok_or(PruningImportError::PruningProofNotEnoughHeaders)?;
             for (i, header) in proof[level as usize].iter().enumerate() {
                 let (header_level, pow_passes) = calc_block_level_check_pow_layer0(header, &ppm.network_id, ppm.max_block_level);
-                // audit H-02(b) / ADR-0007 Phase 2: reject a proof header carrying an UNKNOWN
-                // pow_algo_id. Both kHeavyHash (1) and Argon2id (2) are accepted here because the
-                // header's PoW is independently verified above (`calc_block_level_check_pow_layer0`
-                // runs the declared algo); the exact per-network/per-DAA algo rule is enforced by
-                // the main header pipeline (`check_pow_algo_id`).
+                // audit H-02(b) / ADR-0007 Phase 3: reject a proof header carrying an UNKNOWN
+                // pow_algo_id. kHeavyHash (1), Argon2id (2) and BLAKE2b-SHA3 (3) are all accepted here
+                // because the header's PoW is independently verified above
+                // (`calc_block_level_check_pow_layer0` runs the declared algo); the exact
+                // per-network/per-DAA algo rule is enforced by the main header pipeline
+                // (`check_pow_algo_id`).
                 if kaspa_consensus_core::pow_layer0::check_algo_id_known(header.pow_algo_id).is_err() {
                     return Err(PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id));
                 }

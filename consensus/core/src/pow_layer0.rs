@@ -22,16 +22,23 @@
 //! `verify_pow` path and consumes `header.pow_algo_id`
 //! (introduced in PR-8.4).
 //!
-//! `algo_id` semantics: at Phase 1 only
-//! [`POW_ALGO_ID_KHEAVYHASH`] (`= 1`) is consensus-valid. A
-//! future hard-fork ADR will introduce `algo_id = 2, …` for
-//! ASIC-hard Layer 1 variants. There is **no** mixed-`algo_id`
-//! difficulty arithmetic; transitions are hard cut-offs at a
-//! specific DAA score.
+//! `algo_id` semantics: the Layer-1 tag is selected by
+//! `header.pow_algo_id`. Defined ids:
+//!   - `1` [`POW_ALGO_ID_KHEAVYHASH`] — Phase 1 kHeavyHash matrix.
+//!   - `2` [`POW_ALGO_ID_ARGON2ID`] — Phase 2 memory-hard Argon2id
+//!     (superseded; still *verifiable* for historical pruning
+//!     proofs, but no live network selects it).
+//!   - `3` [`POW_ALGO_ID_BLAKE2B_SHA3`] — Phase 3 compute-only
+//!     BLAKE2b-512 ∥ SHA3-512 (the active testnet/mainnet algo).
+//! There is **no** mixed-`algo_id` difficulty arithmetic;
+//! transitions are hard cut-offs at a specific DAA score, and a
+//! header must declare exactly the id its network mandates
+//! ([`required_algo_id`] / [`check_algo_id`]).
 
 use blake2b_simd::Params;
 use kaspa_hashes::{Hash, Hash64};
 use kaspa_math::{Uint256, Uint512, Uint576};
+use sha3::{Digest, Sha3_512};
 
 /// BLAKE2b key for the Layer 0 PoW finalizer. Matches the
 /// existing `crypto/hashes/src/hashers.rs` pattern of using a
@@ -87,12 +94,29 @@ pub const POW_L1_ARGON2ID_OUT_BYTES: usize = 32;
 /// Domain separator (BLAKE2b key) for the algo_id = 2 Argon2id password + salt derivation.
 pub const POW_L1_ARGON2ID_V1_DOMAIN: &[u8] = b"kaspa-pq-l1-argon2id-v1";
 
+/// kaspa-pq Phase 3 Layer 1 algorithm id: **compute-only BLAKE2b-512 ∥ SHA3-512** (ADR-0007 §"Phase 3").
+///
+/// Replaces Argon2id (`algo_id = 2`) on the networks where it is activated (testnet/mainnet) to make
+/// header verification ~10^4× cheaper, which is the IBD/catch-up bottleneck under a memory-hard PoW
+/// (a verifier runs the Layer-1 tag once per header). The trade-off is explicit and accepted: the PoW
+/// is no longer memory-hard, so GPU/FPGA/ASIC acceleration is possible — the chain's safety leans on
+/// the two-dimensional (PoW × stake) DNS finality overlay (ADR-0009) rather than PoW egalitarianism.
+/// The Layer-0 BLAKE2b-512 finalizer is unchanged; only the Layer-1 tag differs.
+pub const POW_ALGO_ID_BLAKE2B_SHA3: u8 = 3;
+
+/// Output width of the algo_id = 3 Layer-1 tag: BLAKE2b-512 (64) ∥ SHA3-512 (64) = 128 bytes. Within
+/// [`POW_L1_TAG_MAX_BYTES`] (256), so the Layer-0 finalizer accepts it.
+pub const POW_L1_BLAKE2B_SHA3_OUT_BYTES: usize = 128;
+/// Domain separator for the algo_id = 3 BLAKE2b-512 ∥ SHA3-512 Layer-1 tag. Used as the BLAKE2b key
+/// for the first half and as an explicit prefix for the (un-keyed) SHA3-512 second half.
+pub const POW_L1_BLAKE2B_SHA3_V1_DOMAIN: &[u8] = b"kaspa-pq-l1-blake2b-sha3-v1";
+
 /// Errors returned by Layer 0 helpers.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PowLayer0Error {
     #[error("kaspa-pq Layer 0: L1 tag length {0} exceeds POW_L1_TAG_MAX_BYTES = {POW_L1_TAG_MAX_BYTES}")]
     L1TagTooLong(usize),
-    #[error("kaspa-pq Layer 0: unknown pow_algo_id = {0}; Phase 1 admits only POW_ALGO_ID_KHEAVYHASH = 1")]
+    #[error("kaspa-pq Layer 0: pow_algo_id = {0} is unrecognised or wrong for this network's active PoW phase")]
     UnknownAlgoId(u8),
 }
 
@@ -103,29 +127,32 @@ pub fn check_algo_id_phase1(algo_id: u8) -> Result<(), PowLayer0Error> {
     if algo_id == POW_ALGO_ID_KHEAVYHASH { Ok(()) } else { Err(PowLayer0Error::UnknownAlgoId(algo_id)) }
 }
 
-/// The Layer-1 algorithm a header MUST declare, given whether the Argon2id fork is active at the
-/// header's DAA score. A network that has activated Argon2id requires `algo_id = 2`; otherwise the
-/// Phase-1 `algo_id = 1` (kHeavyHash). This is a hard cut-off — there is no mixed-algo arithmetic.
+/// The Layer-1 algorithm a header MUST declare, given whether the Phase-3 BLAKE2b-512 ∥ SHA3-512 fork
+/// is active at the header's DAA score. A network that has activated it requires `algo_id = 3`;
+/// otherwise the Phase-1 `algo_id = 1` (kHeavyHash). This is a hard cut-off — there is no mixed-algo
+/// arithmetic. (Argon2id, `algo_id = 2`, is the superseded Phase-2 algorithm: still *verifiable*
+/// via [`check_algo_id_known`] for historical pruning proofs, but no live network selects it.)
 #[inline]
-pub fn required_algo_id(argon2id_active: bool) -> u8 {
-    if argon2id_active { POW_ALGO_ID_ARGON2ID } else { POW_ALGO_ID_KHEAVYHASH }
+pub fn required_algo_id(blake2b_sha3_active: bool) -> u8 {
+    if blake2b_sha3_active { POW_ALGO_ID_BLAKE2B_SHA3 } else { POW_ALGO_ID_KHEAVYHASH }
 }
 
 /// Validate a header's `algo_id` against the network's PoW state: it must equal
 /// [`required_algo_id`]. Rejects both unknown ids and the *wrong-but-known* id (e.g. a miner trying
-/// the cheap kHeavyHash on an Argon2id network, or vice-versa).
+/// the cheap kHeavyHash on a BLAKE2b-SHA3 network, or vice-versa).
 #[inline]
-pub fn check_algo_id(algo_id: u8, argon2id_active: bool) -> Result<(), PowLayer0Error> {
-    if algo_id == required_algo_id(argon2id_active) { Ok(()) } else { Err(PowLayer0Error::UnknownAlgoId(algo_id)) }
+pub fn check_algo_id(algo_id: u8, blake2b_sha3_active: bool) -> Result<(), PowLayer0Error> {
+    if algo_id == required_algo_id(blake2b_sha3_active) { Ok(()) } else { Err(PowLayer0Error::UnknownAlgoId(algo_id)) }
 }
 
-/// Accept any algo_id this binary knows how to verify ({kHeavyHash, Argon2id}). Used where the
-/// PoW itself is independently verified and only an unknown/garbage id must be rejected (e.g. the
-/// pruning-proof path); the exact per-network/per-DAA rule is enforced by [`check_algo_id`] in the
-/// main header pipeline.
+/// Accept any algo_id this binary knows how to verify ({kHeavyHash, Argon2id, BLAKE2b-SHA3}). Used
+/// where the PoW itself is independently verified and only an unknown/garbage id must be rejected
+/// (e.g. the pruning-proof path); the exact per-network/per-DAA rule is enforced by [`check_algo_id`]
+/// in the main header pipeline. Argon2id (2) stays accepted so historical proofs spanning the
+/// Phase-2 era still validate.
 #[inline]
 pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
-    if algo_id == POW_ALGO_ID_KHEAVYHASH || algo_id == POW_ALGO_ID_ARGON2ID {
+    if algo_id == POW_ALGO_ID_KHEAVYHASH || algo_id == POW_ALGO_ID_ARGON2ID || algo_id == POW_ALGO_ID_BLAKE2B_SHA3 {
         Ok(())
     } else {
         Err(PowLayer0Error::UnknownAlgoId(algo_id))
@@ -261,11 +288,58 @@ pub fn argon2id_l1_tag_v1(pre_pow_hash: Hash64, nonce: u64, network_id: &[u8]) -
         o.copy_from_slice(digest.as_bytes());
         o
     };
-    let params = argon2::Params::new(POW_L1_ARGON2ID_M_COST_KIB, POW_L1_ARGON2ID_T_COST, POW_L1_ARGON2ID_P_COST, Some(POW_L1_ARGON2ID_OUT_BYTES))
-        .expect("static Argon2id params are valid");
+    let params = argon2::Params::new(
+        POW_L1_ARGON2ID_M_COST_KIB,
+        POW_L1_ARGON2ID_T_COST,
+        POW_L1_ARGON2ID_P_COST,
+        Some(POW_L1_ARGON2ID_OUT_BYTES),
+    )
+    .expect("static Argon2id params are valid");
     let a2 = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     let mut out = [0u8; POW_L1_ARGON2ID_OUT_BYTES];
     a2.hash_password_into(&password, &salt, &mut out).expect("Argon2id hash into fixed-size buffer");
+    out
+}
+
+/// kaspa-pq Phase 3 (`algo_id = 3`): the compute-only BLAKE2b-512 ∥ SHA3-512 Layer-1 tag.
+///
+/// ```text
+/// half_b = BLAKE2b-512(key = DOMAIN, netid_len_le16 || network_id || pre_pow_hash64 || nonce_le)
+/// half_s = SHA3-512(DOMAIN || netid_len_le16 || network_id || pre_pow_hash64 || nonce_le)
+/// l1_tag = half_b || half_s                                          // 64 + 64 = 128 bytes
+/// ```
+///
+/// Both halves bind the block (`pre_pow_hash`), the search (`nonce`), and the network (length-prefixed
+/// `network_id`), and are domain-separated on `DOMAIN` — the BLAKE2b half uses it as the key, the
+/// (un-keyed) SHA3 half prepends it. The 128-byte tag is fed to the unchanged Layer-0
+/// `pow_finalizer_blake2b_512` with `algo_id = 3`, which mixes a *second* BLAKE2b-512 over the whole
+/// preimage (including `half_s`) — so a miner cannot skip the SHA3 half: the accepted digest depends
+/// on every tag byte. Per-nonce work is therefore 2×BLAKE2b-512 + 1×SHA3-512, all compute-only.
+pub fn blake2b_sha3_l1_tag_v1(pre_pow_hash: Hash64, nonce: u64, network_id: &[u8]) -> [u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES] {
+    // BLAKE2b-512 half (keyed on DOMAIN). Length-prefixed network id => self-delimiting preimage.
+    let half_b = Params::new()
+        .hash_length(64)
+        .key(POW_L1_BLAKE2B_SHA3_V1_DOMAIN)
+        .to_state()
+        .update(&(network_id.len() as u16).to_le_bytes())
+        .update(network_id)
+        .update(pre_pow_hash.as_byte_slice())
+        .update(&nonce.to_le_bytes())
+        .finalize();
+
+    // SHA3-512 half. `sha3` has no keying, so DOMAIN is prepended explicitly; the same
+    // length-prefixed (network_id, pre_pow_hash, nonce) follow.
+    let mut s = Sha3_512::new();
+    s.update(POW_L1_BLAKE2B_SHA3_V1_DOMAIN);
+    s.update((network_id.len() as u16).to_le_bytes());
+    s.update(network_id);
+    s.update(pre_pow_hash.as_byte_slice());
+    s.update(nonce.to_le_bytes());
+    let half_s = s.finalize();
+
+    let mut out = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
+    out[..64].copy_from_slice(half_b.as_bytes());
+    out[64..].copy_from_slice(&half_s);
     out
 }
 
@@ -329,14 +403,51 @@ mod tests {
 
     #[test]
     fn check_algo_id_enforces_exact_network_algo() {
-        // Argon2id-active network: must be 2, kHeavyHash (1) is now WRONG (not just unknown).
-        assert!(check_algo_id(POW_ALGO_ID_ARGON2ID, true).is_ok());
+        // BLAKE2b-SHA3-active network: must be 3; kHeavyHash (1) and the superseded Argon2id (2) are
+        // both WRONG (not just unknown) on the active path.
+        assert!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, true).is_ok());
         assert_eq!(check_algo_id(POW_ALGO_ID_KHEAVYHASH, true), Err(PowLayer0Error::UnknownAlgoId(1)));
-        // kHeavyHash network: must be 1, 2 is rejected.
+        assert_eq!(check_algo_id(POW_ALGO_ID_ARGON2ID, true), Err(PowLayer0Error::UnknownAlgoId(2)));
+        // kHeavyHash network: must be 1, 3 is rejected.
         assert!(check_algo_id(POW_ALGO_ID_KHEAVYHASH, false).is_ok());
-        assert_eq!(check_algo_id(POW_ALGO_ID_ARGON2ID, false), Err(PowLayer0Error::UnknownAlgoId(2)));
-        assert_eq!(required_algo_id(true), 2);
+        assert_eq!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, false), Err(PowLayer0Error::UnknownAlgoId(3)));
+        assert_eq!(required_algo_id(true), 3);
         assert_eq!(required_algo_id(false), 1);
+    }
+
+    /// `check_algo_id_known` (pruning-proof path) accepts every algo this binary can verify —
+    /// kHeavyHash (1), the superseded Argon2id (2), and BLAKE2b-SHA3 (3) — and rejects the rest.
+    #[test]
+    fn check_algo_id_known_accepts_all_verifiable_algos() {
+        for ok in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3] {
+            assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
+        }
+        for bad in [0u8, 4, 7, 0xff] {
+            assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
+        }
+    }
+
+    /// BLAKE2b-SHA3 Layer-1 (algo_id = 3) must be DETERMINISTIC (miner and every verifier agree on
+    /// the tag for a given header+nonce), 128 bytes wide, and sensitive to block, nonce and network.
+    /// It must also differ from the kHeavyHash-seed and Argon2id derivations on the same inputs.
+    #[test]
+    fn blake2b_sha3_l1_tag_deterministic_and_sensitive() {
+        let net = b"testnet-10";
+        let a = blake2b_sha3_l1_tag_v1(h(0x11), 42, net);
+        let b = blake2b_sha3_l1_tag_v1(h(0x11), 42, net);
+        assert_eq!(a, b, "BLAKE2b-SHA3 L1 must be deterministic");
+        assert_eq!(a.len(), POW_L1_BLAKE2B_SHA3_OUT_BYTES);
+        assert_eq!(a.len(), 128);
+        assert!(a.len() <= POW_L1_TAG_MAX_BYTES, "tag must fit the finalizer's max");
+        assert_ne!(a, [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES]);
+        // The two halves are distinct hash families over the same preimage — they must not coincide.
+        assert_ne!(&a[..64], &a[64..], "BLAKE2b half must differ from SHA3 half");
+        assert_ne!(a, blake2b_sha3_l1_tag_v1(h(0x12), 42, net), "pre_pow_hash must change the tag");
+        assert_ne!(a, blake2b_sha3_l1_tag_v1(h(0x11), 43, net), "nonce must change the tag");
+        assert_ne!(a, blake2b_sha3_l1_tag_v1(h(0x11), 42, b"mainnet"), "network must change the tag");
+        // Distinct from the other algos' derivations on the same input (different algo).
+        assert_ne!(&a[..32], argon2id_l1_tag_v1(h(0x11), 42, net).as_slice());
+        assert_ne!(&a[..32], l1_seed32_for_kheavyhash_v1(h(0x11)).as_bytes().as_slice());
     }
 
     /// Argon2id Layer-1 (algo_id = 2) must be DETERMINISTIC (miner and every verifier must agree on
