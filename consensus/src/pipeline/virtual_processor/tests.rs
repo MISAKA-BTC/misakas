@@ -408,6 +408,180 @@ async fn pos_v2_funded_bond_chain_validates() {
     ctx.assert_valid_utxo_tip();
 }
 
+/// ADR-0018 §F bridge wiring — one scenario of the finality-fee e2e: fund a key,
+/// spend its matured coinbase into a deposit-lock tx (fee 100_000), mine it, then
+/// harvest the next block's coinbase. Returns `(worker_output_value,
+/// lock_block_subsidy)` — the worker payout for the block that carried the bridge tx,
+/// and that block's subsidy (parsed from its coinbase payload: blue_score u64 LE ‖
+/// subsidy u64 LE ‖ …).
+///
+/// `evm_active` toggles `evm_activation_daa_score` (0 vs u64::MAX). evm-active
+/// templates COMMIT to the header timestamp (the EVM execution env derives from it),
+/// so in that mode blocks are inserted exactly as templated — no
+/// `TestContext::mine_block` timestamp/nonce mutation (the same insertion pattern the
+/// EVM lane e2e tests use); the inert mode exercises the ordinary v1 mine path.
+async fn finality_fee_bridge_scenario(finality_fence: u64, evm_active: bool) -> (u64, u64) {
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            // Shrink coinbase maturity so the funding coinbase is spendable quickly.
+            p.coinbase_maturity = 2;
+            // The classification is doubly gated: the §F fence AND EVM-lane activation
+            // (the bridge only exists on an EVM-active net). MAINNET_PARAMS is EVM-inert
+            // (u64::MAX) by default.
+            p.evm_activation_daa_score = if evm_active { 0 } else { u64::MAX };
+            let mut dns = p.dns_params.clone().unwrap();
+            dns.finality_fee_activation_daa_score = finality_fence;
+            p.dns_params = Some(dns);
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // Insert one block: template-as-is when evm-active (timestamp is commitment-bound),
+    // else the ordinary simulated-time mine path.
+    async fn mine(ctx: &mut TestContext, evm_active: bool, miner: MinerData, txs: Vec<Transaction>) -> Block {
+        if evm_active {
+            let t = ctx
+                .consensus
+                .build_block_template(miner, Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
+                .unwrap();
+            let block = t.block.to_immutable();
+            ctx.validate_and_insert_block(block.clone()).await;
+            block
+        } else {
+            ctx.mine_block(miner, txs).await
+        }
+    }
+
+    // Fund: harvest a coinbase paying the known key K (a block's coinbase rewards
+    // the blocks it MERGES, so K's reward for b1 appears in the harvest block).
+    let seed = [0x5Au8; 32];
+    let v = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    let _b1 = mine(&mut ctx, evm_active, k_miner.clone(), vec![]).await;
+    let harvest = mine(&mut ctx, evm_active, k_miner.clone(), vec![]).await;
+    let coinbase = &harvest.transactions[0];
+    let (idx, out) = coinbase
+        .outputs
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.script_public_key == k_spk)
+        .expect("the harvest coinbase must pay the known key");
+    let coinbase_outpoint = TransactionOutpoint::new(coinbase.id(), idx as u32);
+    let (coinbase_value, coinbase_daa) = (out.value, harvest.header.daa_score);
+    assert!(coinbase_value > 200_000, "coinbase must cover the lock + fee");
+
+    // Mature the coinbase (coinbase_maturity = 2).
+    for _ in 0..5 {
+        mine(&mut ctx, evm_active, new_miner_data(), vec![]).await;
+    }
+
+    // The bridge tx: matured coinbase → one EVM_DEPOSIT_LOCK output, fee 100_000.
+    let lock_tx = dns_harness::funded_signed_deposit_lock_tx(
+        seed,
+        coinbase_outpoint,
+        coinbase_value,
+        coinbase_daa,
+        ctx.consensus.params().storage_mass_parameter,
+    );
+    let lock_tx_id = lock_tx.id();
+
+    // Mine it under a distinct miner spk so its worker payout is findable.
+    let lock_miner_spk = p2pkh_mldsa87_spk(&[0x33u8; 64]);
+    let lock_block = mine(&mut ctx, evm_active, MinerData::new(lock_miner_spk.clone(), vec![]), vec![lock_tx]).await;
+    assert!(lock_block.transactions.iter().any(|t| t.id() == lock_tx_id), "the bridge tx must be included");
+    assert_eq!(
+        ctx.consensus.block_status(lock_block.header.hash),
+        BlockStatus::StatusUTXOValid,
+        "the block carrying the deposit-lock tx must be UTXO-valid (construction == validation)"
+    );
+    // The lock block's subsidy, from its coinbase payload (blue_score ‖ subsidy ‖ …).
+    let payload = &lock_block.transactions[0].payload;
+    let subsidy = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+
+    // Harvest: the next block's coinbase pays the lock block's worker share.
+    let harvest2 = mine(&mut ctx, evm_active, new_miner_data(), vec![]).await;
+    ctx.assert_valid_utxo_tip();
+    let worker_out = harvest2.transactions[0]
+        .outputs
+        .iter()
+        .find(|o| o.script_public_key == lock_miner_spk)
+        .expect("the next coinbase must pay the lock block's miner")
+        .value;
+    (worker_out, subsidy)
+}
+
+/// kaspa-pq ADR-0018 §F bridge wiring e2e (EVM-active net): an accepted L1 tx that
+/// CREATES an `EVM_DEPOSIT_LOCK` output (ADR-0020 §9.2 bridge deposit) is
+/// **finality-class** — its fee is split at the validator-primary finality ratios
+/// (Worker 25%) instead of the normal-tx ratios (Worker 90%) — through the REAL
+/// template→validate coinbase path over a chain (classification at
+/// `calculate_utxo_state`, payout via `expected_coinbase_transaction`; every mined
+/// block reaching `StatusUTXOValid` proves construction == validation). The fenced
+/// twin (`finality_fee_activation_daa_score = u64::MAX`) runs the identical chain
+/// shape and pays the Worker the normal 90% — the exact pre-wiring math — proving the
+/// §F fence isolates the change. evm-feature-gated: an evm-active template requires
+/// the executor (a non-evm build refuses evm-active blocks by design).
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn finality_fee_bridge_tx_pays_validator_primary_split() {
+    use kaspa_consensus_core::dns_finality::{split_block_subsidy, split_finality_fees, split_normal_tx_fees};
+    kaspa_core::log::try_init_logger("info");
+
+    // Active fence (0, the PRODUCTION preset value): the 100_000 bridge fee splits at
+    // the finality ratios — the Worker gets 25%, the Validator share (75%) funds the
+    // §E pool (don't-mint burned here: no bonded validators).
+    let (worker_active, subsidy_a) = finality_fee_bridge_scenario(0, true).await;
+    // Inert §F fence: the same chain shape pays the normal-tx 90% — the pre-wiring math.
+    let (worker_inert, subsidy_b) = finality_fee_bridge_scenario(u64::MAX, true).await;
+    assert_eq!(subsidy_a, subsidy_b, "identical chain shape ⇒ identical lock-block subsidy");
+
+    let dns = MAINNET_PARAMS.dns_params.clone().unwrap();
+    let fs = &dns.reward_params.fee_split;
+    let worker_base = split_block_subsidy(subsidy_a, fs).worker_base_sompi;
+    assert_eq!(
+        worker_active,
+        worker_base + split_finality_fees(100_000, fs).worker_sompi,
+        "bridge-tx fee pays the Worker the FINALITY share (25%)"
+    );
+    assert_eq!(
+        worker_inert,
+        worker_base + split_normal_tx_fees(100_000, fs).worker_sompi,
+        "below the §F fence the same fee pays the Worker the NORMAL share (90%) — byte-identical to pre-wiring"
+    );
+    assert_eq!(
+        worker_inert - worker_active,
+        split_normal_tx_fees(100_000, fs).worker_sompi - split_finality_fees(100_000, fs).worker_sompi,
+        "the Worker delta is exactly the normal→finality reclassification (the Validator gains it)"
+    );
+}
+
+/// kaspa-pq ADR-0018 §F bridge wiring — the EVM-activation gate: deposit-lock OUTPUTS
+/// are consensus-legal on every net (the output-class exemption is unconditional),
+/// but on an EVM-INERT net (`evm_activation_daa_score = u64::MAX` — mainnet today)
+/// the classification must NOT fire even with the §F fence at 0: the lock-bearing
+/// tx's fee stays normal-class (Worker 90%), byte-identical to the pre-wiring math.
+/// Without this gate a miner on an EVM-inert net could self-include a never-claimable
+/// lock tx and reroute fees into the §E pool. Runs on the default (non-evm) build —
+/// inert nets produce ordinary v1 blocks.
+#[tokio::test]
+async fn finality_fee_inert_on_evm_inert_net() {
+    use kaspa_consensus_core::dns_finality::{split_block_subsidy, split_normal_tx_fees};
+    kaspa_core::log::try_init_logger("info");
+
+    // §F fence ACTIVE (0, the production value) but the EVM lane INERT.
+    let (worker_out, subsidy) = finality_fee_bridge_scenario(0, false).await;
+    let dns = MAINNET_PARAMS.dns_params.clone().unwrap();
+    let fs = &dns.reward_params.fee_split;
+    assert_eq!(
+        worker_out,
+        split_block_subsidy(subsidy, fs).worker_base_sompi + split_normal_tx_fees(100_000, fs).worker_sompi,
+        "on an EVM-inert net a lock-bearing tx's fee stays NORMAL-class (Worker 90%) — the EVM gate holds"
+    );
+}
+
 /// kaspa-pq ADR-0018 §G DAG-2 (reward-bearing e2e): the full overlay + v2 reward
 /// path over a real BlockDAG. A funded ML-DSA-87 bond is created (as in the funding
 /// milestone), then the validator ML-DSA-signs a recent attestation; the block that
@@ -3042,6 +3216,60 @@ mod dns_harness {
             calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
         };
         let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0xacu8; 32])
+            .expect("ML-DSA-87 sign on the 64-byte sighash");
+        let mut sig_item = sig.as_ref().to_vec();
+        sig_item.push(SIG_HASH_ALL.to_u8());
+        let sig_script = ScriptBuilder::new()
+            .add_data(&sig_item)
+            .expect("ML-DSA-87 signature push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .add_data(&pubkey)
+            .expect("ML-DSA-87 public-key push fits MAX_SCRIPT_ELEMENT_SIZE")
+            .drain();
+        tx.inputs[0].signature_script = sig_script;
+        tx
+    }
+
+    /// ADR-0018 §F bridge wiring: a fully ML-DSA-87-signed BRIDGE tx — spends `seed`'s
+    /// P2PKH `outpoint` into a single `EVM_DEPOSIT_LOCK` output (`value − 100_000`; fee
+    /// 100_000), whose refund path is the same key's P2PKH. Mirrors
+    /// [`funded_signed_p2pkh_spend`]; the lock output makes the tx **finality-class**
+    /// past `finality_fee_activation_daa_score`.
+    pub(super) fn funded_signed_deposit_lock_tx(
+        seed: [u8; 32],
+        outpoint: TransactionOutpoint,
+        value: u64,
+        daa_score: u64,
+        storage_mass_parameter: u64,
+    ) -> Transaction {
+        use kaspa_txscript::script_class::evm_deposit_lock_script;
+        let kp = mldsa::generate_key_pair(seed);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let reward_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes();
+        let spk = p2pkh_mldsa87_spk(&reward_payload);
+        // The deposit lock: 20-byte EVM address, far-future timeout (refund path never taken
+        // here), small claim tip; refund = the spender's own ML-DSA P2PKH.
+        let lock_spk = evm_deposit_lock_script([0xABu8; 20], 100_000_000, 7, spk.script());
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(outpoint, vec![], 0, 1)],
+            vec![TransactionOutput::new(value - 100_000, lock_spk)],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        let utxo = UtxoEntry::new(value, spk, daa_score, false);
+        let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
+            .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![utxo.clone()]))
+            .expect("contextual mass is computable for the deposit-lock spend")
+            .storage_mass;
+        tx.set_mass(storage_mass);
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        let sig_hash = {
+            let populated = PopulatedTransaction::new(&tx, vec![utxo]);
+            calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
+        };
+        let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0xadu8; 32])
             .expect("ML-DSA-87 sign on the 64-byte sighash");
         let mut sig_item = sig.as_ref().to_vec();
         sig_item.push(SIG_HASH_ALL.to_u8());

@@ -163,8 +163,23 @@ pub struct DbVirtualStateStore {
 impl DbVirtualStateStore {
     pub fn new(db: Arc<DB>, lkg_virtual_state: LkgVirtualState) -> Self {
         let access = CachedDbItem::new(db.clone(), DatabaseStorePrefixes::VirtualState.into());
-        // Init the LKG cache from DB store data
-        lkg_virtual_state.store(access.read().optional().unwrap().unwrap_or_default());
+        // Init the LKG cache from DB store data. A DESERIALIZATION failure here means the data
+        // directory holds a VirtualState written by an incompatible store layout (e.g. the
+        // pre-§F-wiring `BlockRewardData` without `finality_fees` — kaspa-pq ADR-0018 §F) —
+        // surface an actionable message instead of a raw bincode unwrap. This runs at storage
+        // construction, BEFORE the `Consensus::new` genesis-pin guard, and also covers nets
+        // whose genesis did NOT change (devnet/simnet), which that guard cannot catch.
+        lkg_virtual_state.store(
+            access
+                .read()
+                .optional()
+                .expect(
+                    "consensus DB VirtualState failed to decode — the store format changed \
+                     (incompatible data directory from an older binary); wipe the data directory \
+                     to re-genesis onto the current chain",
+                )
+                .unwrap_or_default(),
+        );
         Self { db, access, lkg_virtual_state }
     }
 

@@ -705,6 +705,11 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     attestation_lag_blue_score: 40,
     attestation_anchor_backoff_blue_score: 10,
     stake_score_window_blue_score: 1500,
+    // ADR-0018 §F bridge wiring: deposit-lock txs' fees are finality-class (validator-primary
+    // split) from genesis — doubly gated on the net's EVM activation, so it is LIVE on devnet
+    // (EVM-active) and enforced-inert on simnet (EVM u64::MAX ⇒ identical splits even if a
+    // lock output appears). NOT a genesis-block input.
+    finality_fee_activation_daa_score: 0,
 };
 
 /// Number of blocks in 14 days at the production 10 BPS block rate
@@ -829,6 +834,13 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     attestation_lag_blue_score: 100,
     attestation_anchor_backoff_blue_score: 20,
     stake_score_window_blue_score: 1500,
+    // ADR-0018 §F bridge wiring: deposit-lock txs' fees are finality-class (validator-primary
+    // 75/25 split — bridge txs are where EVM-lane value depends on the validators' finalized
+    // head) from genesis — doubly gated on the net's EVM activation, so it is LIVE on testnet
+    // (EVM-active) and enforced-inert on mainnet until its EVM lane activates (a lock output
+    // alone cannot reroute fees there). NOT a genesis-block input; the classification change
+    // rides the ADR-0007 Phase-3 re-genesis (BlockRewardData/VirtualState store-format change).
+    finality_fee_activation_daa_score: 0,
 };
 
 /// kaspa-pq Phase 2 (ADR-0007): testnet DNS params = [`PRODUCTION_DNS_PARAMS`] with a lowered

@@ -751,6 +751,23 @@ pub struct DnsParams {
     /// cover `required_stake_depth` epochs + lag + grace (replaces reusing
     /// `max_reorg_horizon_blocks` for the stake walk).
     pub stake_score_window_blue_score: u64,
+
+    /// kaspa-pq ADR-0018 §F bridge wiring: DAA score at/after which an accepted L1 tx that
+    /// CREATES ≥1 `EVM_DEPOSIT_LOCK` output (ADR-0020 §9.2 — recognised by the same
+    /// `parse_evm_deposit_lock` check the claim path uses) has its whole fee classified as a
+    /// **DNS-finality fee** (validator-primary [`split_finality_fees`], 75/25) instead of a
+    /// normal-tx fee (90/10). Bridge txs are the L1 point where EVM-lane value most depends on
+    /// the validators' `finalized` head, so they fund the §E pool at the finality ratio. The
+    /// classification is DOUBLY gated at fee ACCUMULATION (`calculate_utxo_state` — shared by
+    /// the coinbase construction and validation paths, so c==v holds structurally): this fence
+    /// AND the net's `evm_activation_daa_score` (lock OUTPUTS are consensus-legal everywhere,
+    /// but the bridge only exists on an EVM-active net — without the second gate a miner on an
+    /// EVM-inert net could self-include a never-claimable lock tx to reroute fees). Below
+    /// either fence, `BlockRewardData::finality_fees` stays 0 and every split is byte-identical
+    /// to the pre-wiring math. `0` on every current preset (live wherever the EVM lane is —
+    /// testnet/devnet today; mainnet/simnet stay inert via their EVM gate). Appended last to
+    /// keep the borsh layout change localized.
+    pub finality_fee_activation_daa_score: u64,
 }
 
 /// kaspa-pq DNS v3 — the canonical, lagged, blue_score-coordinated epoch anchor that the
@@ -2027,8 +2044,12 @@ pub struct FeeSplitParams {
     pub normal_fee_validator_bps: u16,
     pub normal_fee_service_bps: u16,
     /// DNS-finality-fee split (validators directly provide finality). Validator
-    /// (75%, primary) / Worker (25%) / Service (0, retained). NOTE: unwired — no
-    /// distinct finality-fee class exists yet, so these ratios have no live effect.
+    /// (75%, primary) / Worker (25%) / Service (0, retained). WIRED (ADR-0018 §F
+    /// bridge wiring): an accepted tx creating ≥1 `EVM_DEPOSIT_LOCK` output is
+    /// finality-class — classified at fee accumulation in `calculate_utxo_state`,
+    /// doubly gated on [`DnsParams::finality_fee_activation_daa_score`] AND the
+    /// net's EVM activation; split via [`split_finality_fees`] inside
+    /// [`split_block_reward`].
     pub finality_fee_validator_bps: u16,
     pub finality_fee_worker_bps: u16,
     pub finality_fee_service_bps: u16,
@@ -2066,48 +2087,82 @@ fn bps_share(amount: u64, bps: u16) -> u64 {
 /// ADR-0018 §F — split a block subsidy four ways (Worker base + inclusion,
 /// Validator, Service). `worker_base` is the primary recipient and takes the
 /// remainder, so the four parts sum to `subsidy_sompi` exactly.
+///
+/// Conservation holds for ANY bps configuration (defensive): each non-primary
+/// share is capped at the amount still unassigned, so a (mis)configured group
+/// summing past 10_000 bps cannot over-mint — for every well-formed config
+/// (group sum ≤ 10_000, all current presets) the caps are exact no-ops
+/// (Σ floor(amount·bpsᵢ/10⁴) ≤ amount), keeping the math byte-identical.
 pub fn split_block_subsidy(subsidy_sompi: u64, p: &FeeSplitParams) -> SubsidySplit {
-    let worker_inclusion_sompi = bps_share(subsidy_sompi, p.subsidy_worker_inclusion_bps);
-    let validator_sompi = bps_share(subsidy_sompi, p.subsidy_validator_bps);
-    let service_sompi = bps_share(subsidy_sompi, p.subsidy_service_bps);
-    let worker_base_sompi =
-        subsidy_sompi.saturating_sub(worker_inclusion_sompi).saturating_sub(validator_sompi).saturating_sub(service_sompi);
+    let mut remaining = subsidy_sompi;
+    let worker_inclusion_sompi = bps_share(subsidy_sompi, p.subsidy_worker_inclusion_bps).min(remaining);
+    remaining -= worker_inclusion_sompi;
+    let validator_sompi = bps_share(subsidy_sompi, p.subsidy_validator_bps).min(remaining);
+    remaining -= validator_sompi;
+    let service_sompi = bps_share(subsidy_sompi, p.subsidy_service_bps).min(remaining);
+    let worker_base_sompi = remaining - service_sompi;
     SubsidySplit { worker_base_sompi, worker_inclusion_sompi, validator_sompi, service_sompi }
 }
 
 /// ADR-0018 §F — split normal-tx fees three ways. Worker is primary and takes the
-/// remainder, so the three parts sum to `fees_sompi` exactly.
+/// remainder, so the three parts sum to `fees_sompi` exactly. Conservation holds
+/// for ANY bps configuration (see [`split_block_subsidy`] — same defensive caps,
+/// no-ops for every well-formed config).
 pub fn split_normal_tx_fees(fees_sompi: u64, p: &FeeSplitParams) -> FeeSplit {
-    let validator_sompi = bps_share(fees_sompi, p.normal_fee_validator_bps);
-    let service_sompi = bps_share(fees_sompi, p.normal_fee_service_bps);
-    let worker_sompi = fees_sompi.saturating_sub(validator_sompi).saturating_sub(service_sompi);
+    let mut remaining = fees_sompi;
+    let validator_sompi = bps_share(fees_sompi, p.normal_fee_validator_bps).min(remaining);
+    remaining -= validator_sompi;
+    let service_sompi = bps_share(fees_sompi, p.normal_fee_service_bps).min(remaining);
+    let worker_sompi = remaining - service_sompi;
     FeeSplit { worker_sompi, validator_sompi, service_sompi }
 }
 
 /// ADR-0018 §F — split DNS-finality fees three ways. Validator is primary and
 /// takes the remainder, so the three parts sum to `fees_sompi` exactly.
+/// Conservation holds for ANY bps configuration (see [`split_block_subsidy`] —
+/// same defensive caps, no-ops for every well-formed config).
 pub fn split_finality_fees(fees_sompi: u64, p: &FeeSplitParams) -> FeeSplit {
-    let worker_sompi = bps_share(fees_sompi, p.finality_fee_worker_bps);
-    let service_sompi = bps_share(fees_sompi, p.finality_fee_service_bps);
-    let validator_sompi = fees_sompi.saturating_sub(worker_sompi).saturating_sub(service_sompi);
+    let mut remaining = fees_sompi;
+    let worker_sompi = bps_share(fees_sompi, p.finality_fee_worker_bps).min(remaining);
+    remaining -= worker_sompi;
+    let service_sompi = bps_share(fees_sompi, p.finality_fee_service_bps).min(remaining);
+    let validator_sompi = remaining - service_sompi;
     FeeSplit { worker_sompi, validator_sompi, service_sompi }
 }
 
 /// ADR-0018 §F — the combined Worker / Validator / Service split of ONE block's coinbase
-/// reward: its `subsidy` under the subsidy ratios ([`split_block_subsidy`]) plus its `fees`
-/// under the normal-tx ratios ([`split_normal_tx_fees`]). The Worker total goes to that
-/// block's miner; the Validator total funds the §E pool; the Service total is the reserve
-/// (don't-mint in the first coinbase slice). Sums to `subsidy + fees` exactly (each
-/// sub-split is dust-free). The §D worker-inclusion sub-pool stays inside the Worker total
-/// here — its conditional bounty is a later slice; the §F DNS-finality fee class is not yet
-/// a distinct on-chain fee type, so only subsidy + normal fees are split.
-pub fn split_block_reward(subsidy_sompi: u64, fees_sompi: u64, fee_split: &FeeSplitParams) -> FeeSplit {
+/// reward: its `subsidy` under the subsidy ratios ([`split_block_subsidy`]), its normal-tx
+/// fees under the normal ratios ([`split_normal_tx_fees`]), and its DNS-finality fees under
+/// the finality ratios ([`split_finality_fees`], validator-primary). The fee arguments mirror
+/// [`crate::coinbase::BlockRewardData`] directly: `total_fees_sompi` is the block's WHOLE fee
+/// take and `finality_fees_sompi` is its finality-class subset (bridge txs creating
+/// `EVM_DEPOSIT_LOCK` outputs, gated on `finality_fee_activation_daa_score`); the normal-class
+/// part is derived as `total − finality` HERE so callers cannot mis-pair the two. The Worker
+/// total goes to that block's miner; the Validator total funds the §E pool; the Service total
+/// is the reserve (don't-mint in the first coinbase slice). Sums to `subsidy + total_fees`
+/// exactly (each sub-split is dust-free). The §D worker-inclusion sub-pool stays inside the
+/// Worker total here — its conditional bounty is a later slice. `finality_fees_sompi = 0`
+/// (every pre-wiring caller / below the fence) reproduces the historical math byte-identically.
+pub fn split_block_reward(
+    subsidy_sompi: u64,
+    total_fees_sompi: u64,
+    finality_fees_sompi: u64,
+    fee_split: &FeeSplitParams,
+) -> FeeSplit {
+    // Defensive clamp: finality fees are a subset of the total by construction
+    // (`calculate_utxo_state` accumulates them from the same accepted-tx walk).
+    let finality = finality_fees_sompi.min(total_fees_sompi);
     let s = split_block_subsidy(subsidy_sompi, fee_split);
-    let f = split_normal_tx_fees(fees_sompi, fee_split);
+    let f = split_normal_tx_fees(total_fees_sompi - finality, fee_split);
+    let d = split_finality_fees(finality, fee_split);
     FeeSplit {
-        worker_sompi: s.worker_base_sompi.saturating_add(s.worker_inclusion_sompi).saturating_add(f.worker_sompi),
-        validator_sompi: s.validator_sompi.saturating_add(f.validator_sompi),
-        service_sompi: s.service_sompi.saturating_add(f.service_sompi),
+        worker_sompi: s
+            .worker_base_sompi
+            .saturating_add(s.worker_inclusion_sompi)
+            .saturating_add(f.worker_sompi)
+            .saturating_add(d.worker_sompi),
+        validator_sompi: s.validator_sompi.saturating_add(f.validator_sompi).saturating_add(d.validator_sompi),
+        service_sompi: s.service_sompi.saturating_add(f.service_sompi).saturating_add(d.service_sompi),
     }
 }
 
@@ -5473,6 +5528,7 @@ mod tests {
             attestation_lag_blue_score: 5_000_000,
             attestation_anchor_backoff_blue_score: 6_000_000,
             stake_score_window_blue_score: 7_000_000,
+            finality_fee_activation_daa_score: 8_000_000,
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();
@@ -6076,15 +6132,83 @@ mod tests {
     #[test]
     fn split_block_reward_combines_subsidy_and_fee_splits() {
         let p = fixture_fee_split();
-        // 1_000_000 subsidy (67+8/25/0) + 1_000_000 fees (90/10/0):
+        // 1_000_000 subsidy (67+8/25/0) + 1_000_000 all-normal fees (90/10/0):
         // worker 670k+80k+900k = 1_650_000; validator 250k+100k = 350_000; service 0.
-        let r = split_block_reward(1_000_000, 1_000_000, &p);
+        let r = split_block_reward(1_000_000, 1_000_000, 0, &p);
         assert_eq!((r.worker_sompi, r.validator_sompi, r.service_sompi), (1_650_000, 350_000, 0));
         // Value-conserving: the three sum to subsidy + fees exactly.
         assert_eq!(r.worker_sompi + r.validator_sompi + r.service_sompi, 2_000_000);
         // No fees → just the subsidy split (75/25/0 of 1_000_000).
-        let r = split_block_reward(1_000_000, 0, &p);
+        let r = split_block_reward(1_000_000, 0, 0, &p);
         assert_eq!((r.worker_sompi, r.validator_sompi, r.service_sompi), (750_000, 250_000, 0));
+    }
+
+    /// ADR-0018 §F bridge wiring: the finality-class subset of a block's fees is split at the
+    /// validator-primary finality ratios (25/75/0) while the normal-class remainder keeps the
+    /// 90/10/0 normal ratios; `finality = 0` is byte-identical to the pre-wiring math; the
+    /// split conserves value and clamps a (construction-impossible) finality > total.
+    #[test]
+    fn split_block_reward_finality_class_pays_validator_primary() {
+        let p = fixture_fee_split();
+        // 1_000_000 subsidy + 1_000_000 total fees of which 400_000 finality-class:
+        //   subsidy:   worker 670k+80k / validator 250k
+        //   normal 600k (90/10): worker 540k / validator 60k
+        //   finality 400k (25/75): worker 100k / validator 300k
+        // ⇒ worker 1_390_000; validator 610_000; service 0.
+        let r = split_block_reward(1_000_000, 1_000_000, 400_000, &p);
+        assert_eq!((r.worker_sompi, r.validator_sompi, r.service_sompi), (1_390_000, 610_000, 0));
+        assert_eq!(r.worker_sompi + r.validator_sompi + r.service_sompi, 2_000_000, "value-conserving");
+
+        // ALL fees finality-class: worker 670k+80k+250k = 1_000_000; validator 250k+750k = 1_000_000.
+        let r = split_block_reward(1_000_000, 1_000_000, 1_000_000, &p);
+        assert_eq!((r.worker_sompi, r.validator_sompi, r.service_sompi), (1_000_000, 1_000_000, 0));
+
+        // Fence-off equivalence: finality 0 == the historical two-class math (the pre-wiring shape).
+        assert_eq!(split_block_reward(123_456, 789_012, 0, &p), {
+            let s = split_block_subsidy(123_456, &p);
+            let f = split_normal_tx_fees(789_012, &p);
+            FeeSplit {
+                worker_sompi: s.worker_base_sompi + s.worker_inclusion_sompi + f.worker_sompi,
+                validator_sompi: s.validator_sompi + f.validator_sompi,
+                service_sompi: s.service_sompi + f.service_sompi,
+            }
+        });
+
+        // Defensive clamp: finality > total behaves as finality == total (cannot over-split).
+        assert_eq!(split_block_reward(0, 1_000, 5_000, &p), split_block_reward(0, 1_000, 1_000, &p));
+    }
+
+    /// Defensive conservation: a (mis)configured bps group summing past 10_000 cannot
+    /// over-mint — every split still sums EXACTLY to its input (the sequential caps floor
+    /// the over-shares; the primary floors at 0). All current presets sum to exactly
+    /// 10_000, where the caps are no-ops (the exact-ratio tests above cover that).
+    #[test]
+    fn splits_conserve_value_under_malformed_bps() {
+        let mut p = fixture_fee_split();
+        p.finality_fee_worker_bps = 9_000;
+        p.finality_fee_service_bps = 9_000; // worker+service "180%" — must cap, never over-mint
+        let f = split_finality_fees(1_000_000, &p);
+        assert_eq!(f.worker_sompi + f.validator_sompi + f.service_sompi, 1_000_000, "finality split conserves");
+        assert_eq!((f.worker_sompi, f.service_sompi, f.validator_sompi), (900_000, 100_000, 0));
+
+        p.subsidy_worker_inclusion_bps = 8_000;
+        p.subsidy_validator_bps = 8_000;
+        p.subsidy_service_bps = 8_000; // "240%"
+        let s = split_block_subsidy(1_000_000, &p);
+        assert_eq!(
+            s.worker_base_sompi + s.worker_inclusion_sompi + s.validator_sompi + s.service_sompi,
+            1_000_000,
+            "subsidy split conserves"
+        );
+
+        p.normal_fee_validator_bps = 7_000;
+        p.normal_fee_service_bps = 7_000; // "140%"
+        let n = split_normal_tx_fees(1_000_000, &p);
+        assert_eq!(n.worker_sompi + n.validator_sompi + n.service_sompi, 1_000_000, "normal split conserves");
+
+        // And the combined per-block split conserves under the same malformed config.
+        let r = split_block_reward(1_000_000, 1_000_000, 400_000, &p);
+        assert_eq!(r.worker_sompi + r.validator_sompi + r.service_sompi, 2_000_000, "combined split conserves");
     }
 
     #[test]

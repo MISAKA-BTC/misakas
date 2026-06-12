@@ -224,6 +224,35 @@ overlay economics):
   `85/10/5` is acceptable; the ramp is recommended.)
 - **DNS-finality fee:** Validator `60%` / Worker `25%` / Service `15%`
   (validators directly provide finality; Workers still carry inclusion).
+  Live params: Validator `75%` / Worker `25%` / Service `0%`
+  (`finality_fee_*_bps`; the validator takes the dust-free remainder).
+
+**Finality-fee class — WIRED (bridge txs).** The finality-fee class is an
+on-chain fee type: an accepted L1 tx that **creates ≥1 `EVM_DEPOSIT_LOCK`
+output** (ADR-0020 §9.2 — the bridge deposit, the L1 action whose value most
+depends on the validators' `finalized` head) has its whole fee classified as
+finality-class. Classification happens at fee accumulation in
+`calculate_utxo_state` (the single site shared by coinbase construction AND
+validation ⇒ c==v structurally), recognised by the same
+`parse_evm_deposit_lock` check the claim path uses (so "finality-class" and
+"claimable lock" can never diverge), and recorded as
+`BlockRewardData::finality_fees` (a subset of `total_fees`; the normal-class
+part is `total − finality`, derived inside `split_block_reward` so callers
+cannot mis-pair the two). DOUBLY gated on
+`DnsParams::finality_fee_activation_daa_score` (`0` on every preset) AND the
+net's `evm_activation_daa_score` — lock outputs are consensus-legal on every
+net, but the bridge only exists on an EVM-active net, so EVM-inert nets
+(mainnet/simnet today) are enforced-inert: below either fence the field stays
+0 and every split is byte-identical to the pre-wiring math. Note the
+deliberate incentive: a tx carrying a lock output pays its miner 25% instead
+of 90% of the fee — a sender attaching a dust lock to an ordinary tx only
+shifts its own fee from the miner to the §E pool (pure self-griefing of
+inclusion priority; mempool ranks by total fee). The withdraw side is NOT
+classified:
+a withdraw's synthetic UTXO carries a user-chosen script (no recognizable
+marker on a later spend), and the F002 cost is paid in EVM gas — the
+deposit-lock tx is the L1-side bridge action. e2e:
+`finality_fee_bridge_tx_pays_validator_primary_split`.
 
 ### §G — Attestation lane (non-mandatory)
 
