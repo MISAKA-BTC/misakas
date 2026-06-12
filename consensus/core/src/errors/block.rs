@@ -47,6 +47,12 @@ pub enum RuleError {
     #[error("pre-activation (v1) header carries non-zero EVM commitment fields (must be zero while hash-invisible)")]
     NonZeroEvmHeaderFieldsBeforeActivation,
 
+    // audit R2-#4: the producer-side EVM acceptance run failed while building a
+    // template (e.g. a local EVM store-integrity error). A template build failure,
+    // NOT a panic — the node skips producing rather than crashing.
+    #[error("EVM template acceptance execution failed: {0}")]
+    EvmTemplateExecutionFailed(String),
+
     // v0.4 §4.1 / §6.2: the header's payload DATA commitment must match the body.
     #[error("header evm_payload_hash does not match the block body's EVM payload")]
     EvmPayloadHashMismatch,

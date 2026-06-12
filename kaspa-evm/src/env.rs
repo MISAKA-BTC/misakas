@@ -87,8 +87,17 @@ pub fn next_base_fee(parent_base_fee: u128, parent_gas_used: u64) -> u128 {
     }
 }
 
-/// The committed base fee fits a `u128` (1 gwei seed × bounded EIP-1559 drift);
-/// a (spec-impossible) overflow saturates rather than panicking the verifier.
+/// The committed base fee is a `U256` field but is computed and carried internally
+/// as `u128` (audit R2-#5). This is DETERMINISTIC — every node runs the identical
+/// `u128` saturating update, so it can never cause a consensus split — and the
+/// `u128` ceiling is economically UNREACHABLE: the seed is 1 gwei (1e9) and the
+/// EIP-1559 step is capped at +1/8 (+12.5%) per block, so reaching `u128::MAX`
+/// (~3.4e38) would take ~580 *consecutive maximally-full* blocks (see
+/// `base_fee_stays_within_u128_over_a_long_full_run`). Long before that the base
+/// fee would exceed the entire native supply (bounded by bridged deposits, far
+/// below u128), so no tx could pay it → blocks empty → the fee decreases. The
+/// parent value below therefore always fits u128 (we only ever produce u128
+/// fees); the saturating fallback is pure defense, never reached on a valid chain.
 fn evmu256_to_u128(v: kaspa_consensus_core::evm::EvmU256) -> u128 {
     v.try_to_u128().unwrap_or(u128::MAX)
 }
@@ -120,5 +129,30 @@ mod tests {
         // First EVM block: parent clock is 0.
         let e = derive_env(None, 5_000, &[0u8; 64], &[], 0, cb);
         assert_eq!(e.evm_timestamp_sec, 5);
+    }
+
+    /// audit R2-#5: the base fee is carried as u128. Drive the EIP-1559 update
+    /// through 500 consecutive MAXIMALLY-FULL blocks (each forces the maximum
+    /// +12.5% step) and assert it stays comfortably below u128::MAX — i.e. the
+    /// ceiling is unreachable within any realistic horizon, and the update never
+    /// overflows/saturates on a valid chain. (At the +1/8 cap it takes ~580 such
+    /// blocks even to approach u128::MAX, by which point the fee would dwarf the
+    /// whole native supply.) Also a pure determinism check: same inputs → same fee.
+    #[test]
+    fn base_fee_stays_within_u128_over_a_long_full_run() {
+        let full_gas = EVM_GAS_LIMIT; // every block 100% full ⇒ max increase
+        let mut fee = EVM_INITIAL_BASE_FEE as u128;
+        for _ in 0..500 {
+            let next = next_base_fee(fee, full_gas);
+            assert!(next > fee, "a full block must raise the base fee");
+            assert!(next < u128::MAX / 2, "base fee must stay far below the u128 ceiling");
+            // determinism: recomputing the same step yields the same value.
+            assert_eq!(next, next_base_fee(fee, full_gas));
+            fee = next;
+        }
+        // An empty block lowers it; an at-target block holds it.
+        assert!(next_base_fee(fee, 0) < fee);
+        let target = EVM_GAS_LIMIT / kaspa_consensus_core::evm::EVM_ELASTICITY_MULTIPLIER;
+        assert_eq!(next_base_fee(fee, target), fee);
     }
 }

@@ -132,11 +132,22 @@ pub fn execute_block_evm(
         }
     }
 
+    // audit R2-#1: the deposit claims above already consumed `gas_used` worth of
+    // SYSTEM gas (≤ 256 × 25k = 6.4M). The user-tx prefix-take must take that out
+    // of the block's gas budget, otherwise system_gas + up-to-30M user gas could
+    // commit `gas_used > gas_limit` and feed an out-of-band value into the next
+    // block's base-fee update. Cap the USER cumulative at (block cap − system gas)
+    // so total committed gas_used ≤ gas_limit always holds.
+    let system_gas = gas_used;
+    let user_gas_budget = MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK.checked_sub(system_gas).ok_or_else(|| {
+        EvmExecError::InvariantViolation(format!("system gas {system_gas} exceeds block gas cap {MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK}"))
+    })?;
+
     // 2. Class-5 prefix-take (design §7, D4): walk `AcceptedEvmTxs(B)` in
     //    canonical order accumulating DECLARED gas limits; the first tx whose
-    //    addition exceeds `MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK` and every tx
-    //    after it are deterministically skipped (nonce unchanged — they remain
-    //    re-acceptable later). Judging by gas_limit (not gas_used) fixes the
+    //    addition exceeds `user_gas_budget` (the block cap minus system gas) and
+    //    every tx after it are deterministically skipped (nonce unchanged — they
+    //    remain re-acceptable later). Judging by gas_limit (not gas_used) fixes the
     //    accept set BEFORE execution, so a parallel scheduler's input is
     //    deterministic. An undecodable tx cannot appear in a body-valid payload
     //    (class-1 admission); defense-in-depth maps it to a deterministic skip
@@ -168,7 +179,7 @@ pub fn execute_block_evm(
             }
         };
         cumulative_gas_limit = cumulative_gas_limit.saturating_add(txenv.gas_limit);
-        if cumulative_gas_limit > MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK {
+        if cumulative_gas_limit > user_gas_budget {
             over_cap = true;
             skipped_tx_count += 1; // class 5
             outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 5 });

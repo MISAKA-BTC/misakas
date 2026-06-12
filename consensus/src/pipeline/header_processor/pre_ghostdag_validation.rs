@@ -45,6 +45,19 @@ impl HeaderProcessor {
         if header.version != expected {
             return Err(RuleError::WrongBlockVersion(header.version, expected));
         }
+        // audit R2-#2: the two EVM commitment fields are excluded from the v0/v1
+        // header preimage (hashing/header.rs), so on a pre-activation header they
+        // are hash-invisible — non-zero values there would let a peer mint
+        // distinct serialized headers sharing one block id (malleability in the
+        // header store / relay / IBD / orphan paths, before the body ever
+        // arrives). Enforce zero in HEADER-ONLY validation (body validation keeps
+        // the same check as defense-in-depth).
+        if expected < kaspa_consensus_core::constants::EVM_HEADER_VERSION {
+            let zero = kaspa_hashes::Hash64::default();
+            if header.evm_payload_hash != zero || header.evm_commitment_root != zero {
+                return Err(RuleError::NonZeroEvmHeaderFieldsBeforeActivation);
+            }
+        }
         Ok(())
     }
 

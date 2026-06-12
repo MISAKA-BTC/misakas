@@ -178,13 +178,19 @@ impl RelayEvmTransactionsFlow {
                     // verdicts are deterministic — an inadmissible relay is misbehavior.
                     return Err(ProtocolError::MisbehavingPeer(format!("relayed a class-1-invalid evm tx: {reason}")));
                 }
+                // audit R2-#3: TooLarge is NOT a transient pool-state condition — a tx
+                // that can never fit a payload is deterministically invalid (and is now
+                // caught pre-decode in admission too), so a peer relaying it is
+                // misbehaving, same class as Inadmissible.
+                Err(EvmMempoolError::TooLarge { size, .. }) => {
+                    return Err(ProtocolError::MisbehavingPeer(format!("relayed an oversize evm tx ({size} bytes, can never fit a payload)")));
+                }
                 // Benign: the tx is valid, our pool just will not take it now (already
-                // pending, replacement pricing, capacity, or oversize). Each carries
-                // the recomputed hash for the verification below.
+                // pending, replacement pricing, or capacity). Each carries the
+                // recomputed hash for the verification below.
                 Err(EvmMempoolError::Duplicate(tx_hash))
                 | Err(EvmMempoolError::ReplacementUnderpriced { hash: tx_hash, .. })
-                | Err(EvmMempoolError::Full { hash: tx_hash })
-                | Err(EvmMempoolError::TooLarge { hash: tx_hash, .. }) => (tx_hash, false),
+                | Err(EvmMempoolError::Full { hash: tx_hash }) => (tx_hash, false),
             };
             if tx_hash != request.req {
                 return Err(ProtocolError::OtherOwned(format!(

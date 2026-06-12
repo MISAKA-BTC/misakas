@@ -137,7 +137,17 @@ pub fn admit_tx(raw: &[u8]) -> Result<(), String> {
 /// SAME rule the body-validation class-1 check applies, so a mempool-admitted
 /// tx can never make the node's own template payload-block-invalid).
 pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
-    use kaspa_consensus_core::evm::{EvmAddress, EVM_CHAIN_ID, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK};
+    use kaspa_consensus_core::evm::{EvmAddress, EvmExecutionPayload, EVM_CHAIN_ID, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+
+    // audit R2-#3: reject a tx that can never fit a payload BEFORE paying the
+    // EIP-2718 decode + ECDSA signer-recovery cost (a cheap raw-length gate
+    // against RPC/P2P resource exhaustion). Same threshold the mempool's
+    // pool-insert uses (empty-payload base + the 4-byte per-tx length prefix).
+    // A relay peer announcing such a tx is misbehaving (deterministic class-1).
+    let empty_payload_base = EvmExecutionPayload::default().payload_bytes().len();
+    if empty_payload_base + 4 + raw.len() > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
+        return Err(format!("tx of {} bytes can never fit a payload (cap {MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK})", raw.len()));
+    }
 
     let envelope = TxEnvelope::decode_2718(&mut &raw[..]).map_err(|e| format!("decode: {e}"))?;
     // audit #1/#2: explicit tx-type allowlist. The pinned spec is SHANGHAI, which

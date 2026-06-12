@@ -790,10 +790,10 @@ impl VirtualStateProcessor {
         header: Header,
         virtual_state: &VirtualState,
         evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
-    ) -> (Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<kaspa_consensus_core::tx::TransactionOutpoint>) {
+    ) -> Result<(Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<kaspa_consensus_core::tx::TransactionOutpoint>), RuleError> {
         use crate::processes::evm::evm_execute_acceptance;
         if header.daa_score < self.evm_activation_daa_score {
-            return (header, Default::default(), vec![]);
+            return Ok((header, Default::default(), vec![]));
         }
         let mut stale_claims: Vec<kaspa_consensus_core::tx::TransactionOutpoint> = Vec::new();
         // §15 step 6: assemble the own payload from the mempool candidates.
@@ -895,7 +895,9 @@ impl VirtualStateProcessor {
             &header,
             &own_payload,
         )
-        .expect("template acceptance execution reads committed stores; failure is store corruption");
+        // audit R2-#4: a producer-side acceptance failure (e.g. a local EVM
+        // store-integrity error) is a template-build failure, not a panic.
+        .map_err(|e| RuleError::EvmTemplateExecutionFailed(format!("{e:?}")))?;
         let mut header = header.with_evm_payload_hash(own_payload.payload_hash()).with_evm_commitment(result.header.commitment_root());
         // §9: the validator folds the bridge's UTXO side-effects (consumed
         // deposit locks + materialized withdrawals) into THIS block's diff and
@@ -917,7 +919,7 @@ impl VirtualStateProcessor {
             header.utxo_commitment = multiset.finalize();
             header.finalize();
         }
-        (header, own_payload, stale_claims)
+        Ok((header, own_payload, stale_claims))
     }
 
     /// Non-`evm` builds cannot produce evm-active templates (same refusal as
@@ -928,14 +930,14 @@ impl VirtualStateProcessor {
         header: Header,
         _virtual_state: &VirtualState,
         _evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
-    ) -> (Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<kaspa_consensus_core::tx::TransactionOutpoint>) {
+    ) -> Result<(Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<kaspa_consensus_core::tx::TransactionOutpoint>), RuleError> {
         if header.daa_score >= self.evm_activation_daa_score {
             panic!(
                 "the EVM lane is active at DAA {} but this kaspad was built without the `evm` feature — cannot build a valid template (rebuild with --features evm)",
                 header.daa_score
             );
         }
-        (header, Default::default(), vec![])
+        Ok((header, Default::default(), vec![]))
     }
 
     fn commit_utxo_state(
@@ -2396,7 +2398,7 @@ impl VirtualStateProcessor {
         // code) and commit both EVM header fields. The own payload is empty
         // until the EVM mempool lands (§16 phase) — its (non-zero) hash is
         // still committed. Inert (returns the header unchanged) pre-activation.
-        let (header, evm_payload, stale_evm_claims) = self.evm_template_fields(header, &virtual_state, evm_template_data);
+        let (header, evm_payload, stale_evm_claims) = self.evm_template_fields(header, &virtual_state, evm_template_data)?;
         let selected_parent_hash = virtual_state.ghostdag_data.selected_parent;
         let selected_parent_timestamp = self.headers_store.get_timestamp(selected_parent_hash).unwrap();
         let selected_parent_daa_score = self.headers_store.get_daa_score(selected_parent_hash).unwrap();

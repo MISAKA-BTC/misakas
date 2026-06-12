@@ -169,12 +169,32 @@ pub fn stage_evm_index_rows(
 ) -> Result<(), kaspa_database::prelude::StoreError> {
     use kaspa_consensus_core::evm::{EvmCandidateOutcome, MAX_TX_LOCATION_ACCEPTANCES, MAX_TX_LOCATION_INCLUSIONS};
 
+    // audit R2-#6: candidate_meta and candidate_outcomes are produced in lockstep
+    // by the executor, and every receipt_index it emits is < receipts.len(). These
+    // indexes are staged into the consensus commit batch, so rather than trust that
+    // invariant with raw `[i]` / `[receipt_index]` indexing (an out-of-bounds would
+    // panic the node mid-commit), verify it once and fail closed as a store error.
+    if staged.candidate_meta.len() != staged.result.candidate_outcomes.len() {
+        return Err(kaspa_database::prelude::StoreError::DataInconsistency(format!(
+            "EVM index staging: candidate_meta ({}) != candidate_outcomes ({})",
+            staged.candidate_meta.len(),
+            staged.result.candidate_outcomes.len()
+        )));
+    }
+
     if !staged.result.receipts.is_empty() {
         // tx_hashes parallel to the receipts: the accepted candidates in order.
         let mut tx_hashes = vec![Default::default(); staged.result.receipts.len()];
         for (i, (hash, _src)) in staged.candidate_meta.iter().enumerate() {
             if let EvmCandidateOutcome::Accepted { receipt_index } = staged.result.candidate_outcomes[i] {
-                tx_hashes[receipt_index as usize] = *hash;
+                let ri = receipt_index as usize;
+                if ri >= tx_hashes.len() {
+                    return Err(kaspa_database::prelude::StoreError::DataInconsistency(format!(
+                        "EVM index staging: receipt_index {ri} >= receipts {}",
+                        tx_hashes.len()
+                    )));
+                }
+                tx_hashes[ri] = *hash;
             }
         }
         receipts_store.insert_batch(
