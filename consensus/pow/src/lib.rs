@@ -16,8 +16,8 @@ use kaspa_consensus_core::{
     // PR-9.5d: POW_ALGO_ID_KHEAVYHASH no longer imported here — the
     // finalizer now reads `header.pow_algo_id` via `State::pow_algo_id`.
     pow_layer0::{
-        POW_ALGO_ID_ARGON2ID, POW_FINALIZER_BYTES, PowLayer0Error, argon2id_l1_tag_v1, l1_seed32_for_kheavyhash_v1,
-        pow_finalizer_blake2b_512,
+        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES, PowLayer0Error,
+        argon2id_l1_tag_v1, blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
     },
 };
 use kaspa_hashes::{Hash64, PowHash};
@@ -208,19 +208,29 @@ impl StateLayer0 {
         }
     }
 
-    /// Run the Phase 1 `algo_id = 1` Layer 1 tag computation:
-    /// finalize the cached PowHash with `nonce`, then run the
-    /// kHeavyHash matrix step. Returns the 32-byte L1 tag bytes.
+    /// Compute the Layer-1 tag for `nonce` into `buf`, returning its length. The tag width varies by
+    /// `pow_algo_id` (kHeavyHash/Argon2id = 32 bytes, BLAKE2b-SHA3 = 128), so the caller passes a
+    /// max-width stack buffer and reads back `&buf[..len]` — this keeps the miner grind hot loop
+    /// allocation-free (no per-nonce heap `Vec`).
     #[inline]
-    fn calculate_l1_tag(&self, nonce: u64) -> [u8; 32] {
+    fn calculate_l1_tag(&self, nonce: u64, buf: &mut [u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES]) -> usize {
         match self.pow_algo_id {
-            // Phase 2 (algo_id = 2): memory-hard Argon2id over (pre_pow_hash, nonce).
-            POW_ALGO_ID_ARGON2ID => argon2id_l1_tag_v1(self.pre_pow_hash_64, nonce, &self.network_id),
+            // Phase 3 (algo_id = 3): compute-only BLAKE2b-512 ∥ SHA3-512 over (pre_pow_hash, nonce). 128 bytes.
+            POW_ALGO_ID_BLAKE2B_SHA3 => {
+                buf.copy_from_slice(&blake2b_sha3_l1_tag_v1(self.pre_pow_hash_64, nonce, &self.network_id));
+                POW_L1_BLAKE2B_SHA3_OUT_BYTES
+            }
+            // Phase 2 (algo_id = 2): memory-hard Argon2id over (pre_pow_hash, nonce). 32 bytes.
+            POW_ALGO_ID_ARGON2ID => {
+                buf[..32].copy_from_slice(&argon2id_l1_tag_v1(self.pre_pow_hash_64, nonce, &self.network_id));
+                32
+            }
             // Phase 1 (algo_id = 1, kHeavyHash) and the default. Any other id is rejected up-stack
             // by header validation (`check_algo_id`) before PoW is ever computed.
             _ => {
                 let hash = self.hasher.clone().finalize_with_nonce(nonce);
-                self.matrix.heavy_hash(hash).as_bytes()
+                buf[..32].copy_from_slice(&self.matrix.heavy_hash(hash).as_bytes());
+                32
             }
         }
     }
@@ -229,7 +239,8 @@ impl StateLayer0 {
     /// 64 bytes (BLAKE2b-512 output).
     #[inline]
     pub fn calculate_pow_layer0(&self, nonce: u64) -> Result<[u8; POW_FINALIZER_BYTES], PowLayer0Error> {
-        let l1_tag = self.calculate_l1_tag(nonce);
+        let mut tag_buf = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
+        let tag_len = self.calculate_l1_tag(nonce, &mut tag_buf);
         pow_finalizer_blake2b_512(
             &self.network_id,
             // PR-9.5d: bind the digest to the header's declared
@@ -239,7 +250,7 @@ impl StateLayer0 {
             self.timestamp,
             self.bits,
             nonce,
-            &l1_tag,
+            &tag_buf[..tag_len],
         )
     }
 
@@ -350,24 +361,58 @@ mod tests_pq {
     /// chain's blocks validate end-to-end.
     #[test]
     fn layer0_dispatches_argon2id_for_algo_id_2() {
-        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_ARGON2ID, argon2id_l1_tag_v1};
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_ARGON2ID, POW_L1_BLAKE2B_SHA3_OUT_BYTES, argon2id_l1_tag_v1};
         let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_ARGON2ID);
         let s = StateLayer0::new(&h, b"testnet-10");
 
         // Dispatch: the verifier's internal L1 tag must equal the
         // standalone Argon2id tag for the same (pre_pow_hash, nonce).
-        let tag = s.calculate_l1_tag(7);
+        let mut buf = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
+        let n = s.calculate_l1_tag(7, &mut buf);
         let expect = argon2id_l1_tag_v1(s.pre_pow_hash_64, 7, b"testnet-10");
-        assert_eq!(tag, expect, "algo_id=2 must compute the Argon2id L1 tag");
+        assert_eq!(&buf[..n], expect.as_slice(), "algo_id=2 must compute the Argon2id L1 tag");
 
         // ...and differ from the kHeavyHash path for the same input.
         let kh = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_KHEAVYHASH);
         let s_kh = StateLayer0::new(&kh, b"testnet-10");
-        assert_ne!(s_kh.calculate_l1_tag(7), tag, "kHeavyHash and Argon2id tags must differ");
+        let mut buf_kh = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
+        let n_kh = s_kh.calculate_l1_tag(7, &mut buf_kh);
+        assert_ne!(&buf_kh[..n_kh], &buf[..n], "kHeavyHash and Argon2id tags must differ");
 
         // Acceptance: the easiest target accepts at least one Argon2id
         // nonce in a small scan (P(all 64 reject) ≈ 2^-64).
         let any_pass = (0u64..64).any(|n| s.check_pow_layer0(n).unwrap().0);
         assert!(any_pass, "easiest target must accept an Argon2id nonce");
+    }
+
+    /// kaspa-pq Phase 3 (ADR-0007): the Layer-0 verifier dispatches its swappable Layer-1 tag on
+    /// `header.pow_algo_id`. An `algo_id = 3` header is validated with the compute-only BLAKE2b-512 ∥
+    /// SHA3-512 tag: the verifier's internal 128-byte tag matches the standalone
+    /// `blake2b_sha3_l1_tag_v1`, differs from the kHeavyHash path, and a nonce at the easiest target
+    /// is accepted by `check_pow_layer0`. This is the consensus-side proof that a re-genesised
+    /// BLAKE2b-SHA3 chain's blocks validate end-to-end.
+    #[test]
+    fn layer0_dispatches_blake2b_sha3_for_algo_id_3() {
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_BLAKE2B_SHA3, POW_L1_BLAKE2B_SHA3_OUT_BYTES, blake2b_sha3_l1_tag_v1};
+        let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_BLAKE2B_SHA3);
+        let s = StateLayer0::new(&h, b"testnet-10");
+
+        // Dispatch: the verifier's internal L1 tag must equal the standalone BLAKE2b-SHA3 tag (128 bytes).
+        let mut buf = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
+        let n = s.calculate_l1_tag(11, &mut buf);
+        assert_eq!(n, POW_L1_BLAKE2B_SHA3_OUT_BYTES, "BLAKE2b-SHA3 tag is 128 bytes");
+        let expect = blake2b_sha3_l1_tag_v1(s.pre_pow_hash_64, 11, b"testnet-10");
+        assert_eq!(&buf[..n], expect.as_slice(), "algo_id=3 must compute the BLAKE2b-SHA3 L1 tag");
+
+        // ...and differ from the kHeavyHash path for the same input.
+        let kh = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_KHEAVYHASH);
+        let s_kh = StateLayer0::new(&kh, b"testnet-10");
+        let mut buf_kh = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
+        let n_kh = s_kh.calculate_l1_tag(11, &mut buf_kh);
+        assert_ne!(&buf_kh[..n_kh], &buf[..n], "kHeavyHash and BLAKE2b-SHA3 tags must differ");
+
+        // Acceptance: the easiest target accepts at least one BLAKE2b-SHA3 nonce in a small scan.
+        let any_pass = (0u64..64).any(|n| s.check_pow_layer0(n).unwrap().0);
+        assert!(any_pass, "easiest target must accept a BLAKE2b-SHA3 nonce");
     }
 }

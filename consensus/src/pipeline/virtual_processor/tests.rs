@@ -2658,11 +2658,11 @@ async fn dns_v3_many_validators_agree_on_anchor_under_fast_wide_dag() {
     );
 }
 
-/// kaspa-pq Layer-0 (audit M-3, updated for ADR-0007 Phase 2): a header whose
+/// kaspa-pq Layer-0 (audit M-3, updated for ADR-0007 Phase 3): a header whose
 /// `pow_algo_id` is not the algo the network mandates at its DAA score is
-/// rejected by header-in-isolation validation. On the Argon2id-active mainnet
-/// params the mandated id is `2`, so both the wrong-but-known Phase-1 id (`1` —
-/// a miner trying the cheap kHeavyHash on an Argon2id network) and a garbage id
+/// rejected by header-in-isolation validation. On the BLAKE2b-SHA3-active mainnet
+/// params the mandated id is `3`, so both the wrong-but-known Phase-1 id (`1` —
+/// a miner trying the cheap kHeavyHash on a BLAKE2b-SHA3 network) and a garbage id
 /// (`99`) must be rejected, before the PoW seed — which consumes algo_id — is
 /// even derived.
 #[tokio::test]

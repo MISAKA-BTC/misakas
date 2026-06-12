@@ -52,9 +52,9 @@ struct Args {
     /// interval is far below the inter-node propagation delay.
     #[arg(long, default_value_t = 0)]
     min_block_interval_ms: u64,
-    /// Benchmark mode: measure the raw Argon2id-16MiB Layer-1 hash-rate (H/s) across all cores
-    /// for this many seconds, print it, and exit (no node connection). Used to calibrate the
-    /// difficulty — at equilibrium the DAA settles difficulty ≈ aggregate-H/s ÷ target-BPS.
+    /// Benchmark mode: measure the raw BLAKE2b-512 ∥ SHA3-512 Layer-1 hash-rate (H/s) across all
+    /// cores for this many seconds, print it, and exit (no node connection). Used to calibrate the
+    /// genesis difficulty — at equilibrium the DAA settles difficulty ≈ aggregate-H/s ÷ target-BPS.
     #[arg(long)]
     bench_secs: Option<u64>,
 }
@@ -64,9 +64,10 @@ async fn main() {
     kaspa_core::log::try_init_logger("INFO");
     let args = Args::parse();
 
-    // --bench-secs N: measure the raw Argon2id-16MiB Layer-1 hash-rate across all cores (no RPC),
-    // print it, and exit. The DAA settles difficulty ≈ aggregate-H/s ÷ target-BPS, so this predicts
-    // the difficulty the network will reach once the throttle no longer caps block production.
+    // --bench-secs N: measure the raw BLAKE2b-512 ∥ SHA3-512 Layer-1 hash-rate across all cores (no
+    // RPC), print it, and exit. The DAA settles difficulty ≈ aggregate-H/s ÷ target-BPS, so this
+    // predicts the equilibrium difficulty the network reaches under un-throttled mining — set the
+    // genesis `bits` near it to skip the initial instamine ramp.
     if let Some(secs) = args.bench_secs {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -77,7 +78,7 @@ async fn main() {
         let counter = Arc::new(AtomicU64::new(0));
         let start = Instant::now();
         let deadline = start + Duration::from_secs(secs.max(1));
-        log::info!("benchmarking Argon2id 16 MiB hash-rate for {}s across {} threads…", secs.max(1), nthreads);
+        log::info!("benchmarking BLAKE2b-512 ∥ SHA3-512 hash-rate for {}s across {} threads…", secs.max(1), nthreads);
         let handles: Vec<_> = (0..nthreads)
             .map(|tid| {
                 let c = counter.clone();
@@ -86,8 +87,21 @@ async fn main() {
                     let mut n = tid as u64;
                     let mut local = 0u64;
                     while Instant::now() < deadline {
-                        for _ in 0..8 {
-                            let _ = kaspa_consensus_core::pow_layer0::argon2id_l1_tag_v1(pre, n, net.as_slice());
+                        for _ in 0..64 {
+                            // Measure the TRUE per-nonce grind cost: the BLAKE2b-SHA3 L1 tag PLUS the
+                            // Layer-0 finalizer (a second BLAKE2b-512 over the full preimage). Omitting
+                            // the finalizer overstates H/s by ~1/3, biasing the calibrated difficulty
+                            // too HARD; including it makes the reported rate match real mining.
+                            let tag = kaspa_consensus_core::pow_layer0::blake2b_sha3_l1_tag_v1(pre, n, net.as_slice());
+                            let _ = kaspa_consensus_core::pow_layer0::pow_finalizer_blake2b_512(
+                                net.as_slice(),
+                                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_BLAKE2B_SHA3,
+                                pre,
+                                0,
+                                0x20018618,
+                                n,
+                                &tag,
+                            );
                             n = n.wrapping_add(nthreads as u64);
                             local += 1;
                         }
@@ -101,7 +115,13 @@ async fn main() {
         }
         let elapsed = start.elapsed().as_secs_f64();
         let total = counter.load(Ordering::Relaxed);
-        println!("ARGON2ID_HASHRATE {:.1} H/s  ({} hashes / {:.2}s, {} threads, 16 MiB m_cost)", total as f64 / elapsed, total, elapsed, nthreads);
+        println!(
+            "BLAKE2B_SHA3_HASHRATE {:.1} H/s  ({} hashes / {:.2}s, {} threads)",
+            total as f64 / elapsed,
+            total,
+            elapsed,
+            nthreads
+        );
         return;
     }
 

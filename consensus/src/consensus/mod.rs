@@ -301,6 +301,21 @@ impl Consensus {
             header_processor.process_genesis();
             body_processor.process_genesis();
             virtual_processor.process_genesis();
+        } else if let Ok(stored_genesis) = storage.past_pruning_points_store.get(0) {
+            // kaspa-pq Phase 3 re-genesis guard (ADR-0007): an existing consensus DB permanently
+            // records the genesis it was built from at past_pruning_points[0] (written by
+            // `process_genesis`, never pruned — it is the pruning-proof anchor). If it does not match
+            // the configured genesis, this data directory belongs to a DIFFERENT chain — e.g. the
+            // pre-Phase-3 Argon2id chain, whose genesis hash differs after the relaunch-marker bump.
+            // Refuse to silently resume it (which would graft algo_id=3 blocks onto an algo_id=2
+            // history and split from freshly-genesised nodes). The operator must wipe the data
+            // directory to re-genesis. Mirrors the invariant the pruning processor asserts at runtime.
+            assert_eq!(
+                stored_genesis, config.genesis.hash,
+                "consensus DB genesis {stored_genesis} does not match the configured genesis {} — this \
+                 data directory belongs to a different chain; wipe it to re-genesis onto the new chain",
+                config.genesis.hash
+            );
         }
 
         let this = Self {

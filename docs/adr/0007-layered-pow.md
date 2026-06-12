@@ -285,6 +285,79 @@ land all of the following together, gated on a new `pow_algo_id_phase2_activatio
 Until this lands, `pow_algo_id` MUST remain `1` everywhere and the `check_algo_id_phase1`
 gate MUST stay enforced.
 
+## Phase 2 — Argon2id (`algo_id = 2`): LANDED, then SUPERSEDED
+
+Phase 2 shipped the memory-hard **Argon2id 16 MiB** Layer-1 (`POW_ALGO_ID_ARGON2ID = 2`,
+`pow_layer0::argon2id_l1_tag_v1`) on testnet/mainnet to compress the GPU↔ASIC gap. It worked,
+but exposed a structural cost: a memory-hard PoW is **symmetric** — the verifier pays (a large
+fraction of) the miner's per-hash cost. Measured on the weakest mesh host, one Argon2id-16 MiB
+header verification is ~48 ms (~20 H/s/core), which makes **PoW verification the IBD / catch-up
+bottleneck**: a node syncing the header chain spends the majority of its CPU re-running Argon2id.
+
+The `algo_id = 2` code (constant, `argon2id_l1_tag_v1`, the `StateLayer0` dispatch arm) is kept
+present-but-dormant so historical pruning proofs spanning the Phase-2 era still verify
+(`check_algo_id_known` admits `{1, 2, 3}`); no live network selects it.
+
+## Phase 3 — compute-only BLAKE2b-512 ∥ SHA3-512 (`algo_id = 3`): ACTIVE
+
+To remove the catch-up bottleneck, Phase 3 replaces Argon2id with a **compute-only** Layer-1 tag
+(`POW_ALGO_ID_BLAKE2B_SHA3 = 3`, `pow_layer0::blake2b_sha3_l1_tag_v1`):
+
+```text
+half_b = BLAKE2b-512(key = "kaspa-pq-l1-blake2b-sha3-v1", netid_len||netid || pre_pow_hash64 || nonce_le)   // 64 B
+half_s = SHA3-512(        "kaspa-pq-l1-blake2b-sha3-v1" || netid_len||netid || pre_pow_hash64 || nonce_le)   // 64 B
+l1_tag = half_b || half_s                                                                                    // 128 B
+```
+
+The 128-byte tag (≤ `POW_L1_TAG_MAX_BYTES = 256`) feeds the **unchanged** Layer-0 BLAKE2b-512
+finalizer with `algo_id = 3`, which mixes a second BLAKE2b-512 over the whole preimage — so the
+accepted digest depends on every tag byte and a miner cannot skip the SHA3 half. Per-nonce work is
+`2×BLAKE2b-512 + 1×SHA3-512` (all compute-only), giving ~10^4× faster verification (~µs/header).
+
+### The trade-off (explicit and accepted)
+
+A compute-only PoW is **not** memory-hard: GPU/FPGA/ASIC acceleration is possible — Phase 3 gives up
+the kHeavyHash/Argon2id-era ASIC-resistance goal. This is acceptable in this fork because PoW is no
+longer the sole security pillar: the **two-dimensional (PoW × stake) DNS finality overlay**
+(ADR-0009) gates reorgs on stake-confirmed anchors, so a pure-PoW majority cannot rewrite confirmed
+history. The decision optimizes for sync/verification cost (a real operational pain) over PoW
+egalitarianism (already softened by the overlay). The two hash families are concatenated as a
+cryptographic hedge: a break in one of BLAKE2b-512 / SHA3-512 still leaves the Layer-0 finalizer's
+comparison intact.
+
+### Activation & re-genesis
+
+- Gated on `Params::pow_blake2b_sha3_activation` (renamed from `pow_argon2id_activation`):
+  `always()` on testnet/mainnet (`algo_id = 3` from genesis), `never()` on devnet/simnet (stay
+  kHeavyHash). `required_algo_id(active)` → `3` when active, else `1`; `check_algo_id` enforces the
+  exact id per header DAA score (single-algo invariant, no mixed-`algo_id` DAG).
+- **Re-genesis with a clean genesis-hash break.** Genesis is PoW-exempt and still declares
+  `algo_id = 1`, so the algo switch *alone* would leave the genesis hash byte-identical and only
+  invalidate *post-genesis* Argon2id blocks. That is unsafe: a node restarted **without wiping its
+  DB** would silently resume the old Argon2id chain (`factory.rs` reopens an existing consensus with
+  `process_genesis=false`) and graft `algo_id = 3` blocks onto an `algo_id = 2` history, splitting
+  from freshly-genesised nodes. So the re-genesis bumps each live net's coinbase with a Phase-3
+  relaunch marker (`"-bs3"`, mirroring TN11's `11,1`), which **changes the genesis hash** of
+  `GENESIS` (mainnet) and `TESTNET_GENESIS` (testnet-10). Devnet/simnet stay kHeavyHash and are
+  untouched; `TESTNET11_GENESIS` is vestigial (no active params) and untouched.
+- **Startup genesis-mismatch guard.** `Consensus::new` now asserts, when opening an existing DB
+  (`process_genesis=false`), that the DB's recorded genesis (`past_pruning_points_store[0]` — written
+  at genesis processing, never pruned, the proof anchor) equals the configured `genesis.hash`. With
+  the marker bump an un-wiped node's stored genesis ≠ the new configured genesis, so it **refuses to
+  start** with a "wipe to re-genesis" message instead of silently resuming the old chain. (This
+  mirrors the invariant the pruning processor already asserts at runtime.)
+- **Operational re-genesis runbook.** Stop ALL nodes; delete every consensus data dir AND the
+  explorer DB; rebuild from this commit; relaunch. The guard makes a forgotten wipe a loud refusal,
+  not a silent split.
+- **Difficulty**: the inherited genesis `bits` are Argon2id-era and ~10^4× too easy for the fast
+  hash; they are kept as the easy launch floor (self-correcting — the DAA ramps difficulty to the
+  hash-rate equilibrium `D ≈ aggregate-H/s ÷ BPS` within the first `MIN_DIFFICULTY_WINDOW_SIZE`
+  blocks under **un-throttled** mining, and never stalls). Re-bench with `pq-miner --bench-secs`
+  (now measures BLAKE2b-SHA3) on launch hardware and pre-set `bits` near equilibrium to skip the
+  initial instamine ramp (re-genesises the `hash` constant — recompute via `gen_kaspa_pq_genesis_hashes`).
+- The P2P/RPC wire already carries `pow_algo_id` as a generic `u8`/`u32` (Phase-2 wire support
+  landed), so `algo_id = 3` round-trips with no transport change.
+
 ## References
 
 - [ADR-0001 — Network isolation](0001-network-isolation.md)

@@ -158,9 +158,9 @@ pub struct VirtualStateProcessor {
     pub(super) genesis: GenesisBlock,
     pub(super) max_block_parents: u8,
     pub(super) mergeset_size_limit: u64,
-    /// kaspa-pq Phase 2 PoW (ADR-0007): Argon2id (`algo_id = 2`) activation — sets the block
-    /// template's `pow_algo_id` so miners produce the network-correct Layer-1 algorithm.
-    pub(super) pow_argon2id_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// kaspa-pq Phase 3 PoW (ADR-0007): BLAKE2b-512 ∥ SHA3-512 (`algo_id = 3`) activation — sets the
+    /// block template's `pow_algo_id` so miners produce the network-correct Layer-1 algorithm.
+    pub(super) pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
 
     // Stores
     pub(super) statuses_store: Arc<RwLock<DbStatusesStore>>,
@@ -272,7 +272,7 @@ impl VirtualStateProcessor {
             thread_pool,
 
             genesis: params.genesis.clone(),
-            pow_argon2id_activation: params.pow_argon2id_activation,
+            pow_blake2b_sha3_activation: params.pow_blake2b_sha3_activation,
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
 
@@ -2383,10 +2383,10 @@ impl VirtualStateProcessor {
             u64::max(min_block_time, unix_now()),
             virtual_state.bits,
             0,
-            // kaspa-pq Phase 2 (ADR-0007): the template declares the network-correct Layer-1 algo
-            // for this DAA score — Argon2id (algo_id = 2) once activated, else kHeavyHash (1).
+            // kaspa-pq Phase 3 (ADR-0007): the template declares the network-correct Layer-1 algo
+            // for this DAA score — BLAKE2b-512 ∥ SHA3-512 (algo_id = 3) once activated, else kHeavyHash (1).
             kaspa_consensus_core::pow_layer0::required_algo_id(
-                self.pow_argon2id_activation.is_active(virtual_state.daa_score),
+                self.pow_blake2b_sha3_activation.is_active(virtual_state.daa_score),
             ),
             virtual_state.daa_score,
             virtual_state.ghostdag_data.blue_work,
