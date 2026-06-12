@@ -22,10 +22,25 @@ fn from_u256(v: U256) -> EvmU256 {
 }
 
 /// Seed a fresh `CacheDB` from a persisted parent state snapshot.
+///
+/// audit #10: when an account carries bytecode, assert `code_hash == keccak256(code)`.
+/// The state root commits to `code_hash`, not the code bytes, so a corrupt/migrated
+/// store with mismatched code would otherwise execute against the wrong code while
+/// still reproducing the committed root for callers that don't touch it. Seeding is
+/// local (no attacker input), so a mismatch is store corruption — fail closed.
 pub fn seed_cachedb(snapshot: &EvmStateSnapshot) -> CacheDB<EmptyDB> {
     let mut db = CacheDB::new(EmptyDB::default());
     for acc in &snapshot.accounts {
         let addr = Address::from(acc.address.as_bytes());
+        if !acc.code.is_empty() {
+            let computed = revm::primitives::keccak256(&acc.code);
+            assert!(
+                computed.0 == acc.code_hash.as_bytes(),
+                "EVM snapshot corruption: account {addr} code_hash {:?} != keccak256(code) {:?}",
+                acc.code_hash,
+                computed
+            );
+        }
         let code = if acc.code.is_empty() { None } else { Some(Bytecode::new_raw(Bytes::from(acc.code.clone()))) };
         db.insert_account_info(
             addr,

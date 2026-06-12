@@ -451,8 +451,13 @@ impl MemSizeEstimator for DepositClaim {}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WithdrawOp {
-    /// Index of the user EVM tx (within `transactions`) that emitted this op.
-    pub evm_tx_index: u32,
+    /// Receipt index of the accepted/executed EVM tx that emitted this op (its
+    /// position among the block's RECEIPTS, i.e. accepted txs only — NOT the
+    /// index within the source payload `transactions`, which differs whenever a
+    /// tx ahead of it was skipped, classes 2/3/5). audit #7. The synthetic-UTXO
+    /// key is `evm_tx_hash + op_index`, so this field is metadata for
+    /// RPC/index/explorer, never a consensus key.
+    pub receipt_index: u32,
     /// Index of this op within that tx (a tx may withdraw more than once).
     pub op_index: u32,
     /// keccak256 hash of the withdrawing EVM tx — the [`synthetic_withdrawal_txid`]

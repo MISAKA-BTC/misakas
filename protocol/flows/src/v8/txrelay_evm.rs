@@ -165,37 +165,36 @@ impl RelayEvmTransactionsFlow {
                     continue;
                 }
             };
-            request.report_obtained();
-            // Admission recomputes the keccak256 hash from the raw bytes — the
-            // peer's announced hash is verified, never trusted.
-            match self.ctx.mining_manager().clone().submit_evm_transaction(raw) {
-                Ok(tx_hash) => {
-                    if tx_hash != request.req {
-                        return Err(ProtocolError::OtherOwned(format!(
-                            "requested evm tx {} but got a tx hashing to {}",
-                            request.req, tx_hash
-                        )));
-                    }
-                    admitted.push(tx_hash);
-                }
+            // Admission recomputes the keccak256 hash from the raw bytes — the peer's
+            // announced hash is verified, never trusted. EVERY outcome (admitted,
+            // duplicate, or a benign pool-state rejection) yields that recomputed hash
+            // so we can compare it to the request BEFORE crediting the request as
+            // obtained (audit #8): otherwise a peer could "fulfill" request X by
+            // returning a different valid tx Y that our pool happens to reject.
+            let (tx_hash, was_admitted) = match self.ctx.mining_manager().clone().submit_evm_transaction(raw) {
+                Ok(tx_hash) => (tx_hash, true),
                 Err(EvmMempoolError::Inadmissible(reason)) => {
                     // §14.2: peers must precheck class-1 BEFORE relaying, and class-1
                     // verdicts are deterministic — an inadmissible relay is misbehavior.
                     return Err(ProtocolError::MisbehavingPeer(format!("relayed a class-1-invalid evm tx: {reason}")));
                 }
-                Err(EvmMempoolError::Duplicate(tx_hash)) => {
-                    // Lost a benign race (another peer delivered it first), but still
-                    // verify the bytes actually hash to what we requested.
-                    if tx_hash != request.req {
-                        return Err(ProtocolError::OtherOwned(format!(
-                            "requested evm tx {} but got a tx hashing to {}",
-                            request.req, tx_hash
-                        )));
-                    }
-                }
-                // Pool-state-dependent rejections (fee floor, replacement pricing,
-                // capacity): the tx is valid, our pool just will not take it now.
-                Err(EvmMempoolError::ReplacementUnderpriced { .. } | EvmMempoolError::Full | EvmMempoolError::TooLarge(_)) => {}
+                // Benign: the tx is valid, our pool just will not take it now (already
+                // pending, replacement pricing, capacity, or oversize). Each carries
+                // the recomputed hash for the verification below.
+                Err(EvmMempoolError::Duplicate(tx_hash))
+                | Err(EvmMempoolError::ReplacementUnderpriced { hash: tx_hash, .. })
+                | Err(EvmMempoolError::Full { hash: tx_hash })
+                | Err(EvmMempoolError::TooLarge { hash: tx_hash, .. }) => (tx_hash, false),
+            };
+            if tx_hash != request.req {
+                return Err(ProtocolError::OtherOwned(format!(
+                    "requested evm tx {} but got a tx hashing to {}",
+                    request.req, tx_hash
+                )));
+            }
+            request.report_obtained();
+            if was_admitted {
+                admitted.push(tx_hash);
             }
         }
 

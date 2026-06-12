@@ -60,11 +60,13 @@ pub enum EvmMempoolError {
     /// Identical tx hash already pending.
     Duplicate(EvmH256),
     /// Same (sender, nonce) pending and the fee bump is below the threshold.
-    ReplacementUnderpriced { pending_fee: u128, required_fee: u128 },
+    /// Carries the admitted tx hash (audit #8: lets the relay flow verify the
+    /// peer's bytes hash to the requested id even on this benign rejection).
+    ReplacementUnderpriced { pending_fee: u128, required_fee: u128, hash: EvmH256 },
     /// The tx alone can never fit a payload (exceeds the per-block byte cap).
-    TooLarge(usize),
+    TooLarge { size: usize, hash: EvmH256 },
     /// Pool is full and the fee does not beat the cheapest pending tx.
-    Full,
+    Full { hash: EvmH256 },
 }
 
 impl std::fmt::Display for EvmMempoolError {
@@ -72,11 +74,11 @@ impl std::fmt::Display for EvmMempoolError {
         match self {
             EvmMempoolError::Inadmissible(e) => write!(f, "inadmissible evm tx: {e}"),
             EvmMempoolError::Duplicate(h) => write!(f, "evm tx {h} already pending"),
-            EvmMempoolError::ReplacementUnderpriced { pending_fee, required_fee } => {
+            EvmMempoolError::ReplacementUnderpriced { pending_fee, required_fee, .. } => {
                 write!(f, "replacement underpriced: pending max_fee {pending_fee}, required ≥ {required_fee}")
             }
-            EvmMempoolError::TooLarge(s) => write!(f, "evm tx of {s} bytes can never fit a payload"),
-            EvmMempoolError::Full => write!(f, "evm mempool full and fee below the eviction floor"),
+            EvmMempoolError::TooLarge { size, .. } => write!(f, "evm tx of {size} bytes can never fit a payload"),
+            EvmMempoolError::Full { .. } => write!(f, "evm mempool full and fee below the eviction floor"),
         }
     }
 }
@@ -173,7 +175,7 @@ impl EvmMempool {
         // overhead is the empty-payload base + a 4-byte length per tx.
         let base = EvmExecutionPayload::default().payload_bytes().len();
         if base + 4 + tx.raw.len() > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
-            return Err(EvmMempoolError::TooLarge(tx.raw.len()));
+            return Err(EvmMempoolError::TooLarge { size: tx.raw.len(), hash: tx.hash });
         }
         if self.txs.contains_key(&tx.hash) {
             return Err(EvmMempoolError::Duplicate(tx.hash));
@@ -190,7 +192,7 @@ impl EvmMempool {
                 .max_fee_per_gas
                 .saturating_add(existing.max_fee_per_gas.saturating_mul(EVM_MEMPOOL_REPLACEMENT_BUMP_PCT) / 100);
             if tx.max_fee_per_gas < required {
-                return Err(EvmMempoolError::ReplacementUnderpriced { pending_fee: existing.max_fee_per_gas, required_fee: required });
+                return Err(EvmMempoolError::ReplacementUnderpriced { pending_fee: existing.max_fee_per_gas, required_fee: required, hash: tx.hash });
             }
             self.remove(&existing_hash);
         }
@@ -203,10 +205,10 @@ impl EvmMempool {
             else {
                 // Pool is empty yet the budget still does not fit: unreachable
                 // given the TooLarge gate above, but fail closed.
-                return Err(EvmMempoolError::Full);
+                return Err(EvmMempoolError::Full { hash: tx.hash });
             };
             if tx.max_fee_per_gas <= cheapest_fee {
-                return Err(EvmMempoolError::Full);
+                return Err(EvmMempoolError::Full { hash: tx.hash });
             }
             self.remove(&cheapest_hash);
         }
@@ -336,7 +338,7 @@ mod tests {
         // A tx that can never fit a payload is rejected outright.
         assert!(matches!(
             pool.insert(tx(0xB, 0, 999, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, 4)),
-            Err(EvmMempoolError::TooLarge(_))
+            Err(EvmMempoolError::TooLarge { .. })
         ));
     }
 
