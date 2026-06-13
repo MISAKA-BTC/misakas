@@ -30,7 +30,7 @@ use kaspa_txscript::{
 };
 use libcrux_ml_dsa::ml_dsa_87;
 use rand::RngCore;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -727,10 +727,146 @@ impl SignedEpochStore {
     }
 }
 
+/// Whether a funding UTXO can be spent right now. A coinbase output is locked until
+/// `coinbase_maturity` blocks have passed since it was mined (consensus rule); a non-coinbase
+/// output is always spendable. `virtual_daa` is the node's current virtual DAA score. Saturating
+/// so a (transient) `block_daa_score > virtual_daa` reads as "not yet mature". Takes raw fields
+/// (not a typed entry) so it works for both `UtxoEntry` and the RPC `RpcUtxoEntry` (same fields).
+pub fn is_spendable(is_coinbase: bool, block_daa_score: u64, virtual_daa: u64, coinbase_maturity: u64) -> bool {
+    if !is_coinbase {
+        return true;
+    }
+    virtual_daa.saturating_sub(block_daa_score) >= coinbase_maturity
+}
+
+/// Choose the funding input for the next attestation tx. Prefers the local funding-chain head (our
+/// previous change output, still unconfirmed in the node's utxoindex view) so we never re-select a
+/// UTXO our own in-flight tx already spent — the cause of "output … already spent … in the mempool".
+/// Falls back to the largest MATURE node UTXO not already spent in flight. Pure (no I/O); the caller
+/// resyncs a mined chain head (`pending_change`) and prunes `inflight_spent` against the node's
+/// current set before calling. Shared by the standalone `kaspa-pq-validator` daemon and the
+/// in-process `--enable-validator` service so both funding paths behave identically.
+pub fn select_funding(
+    pending_change: &Option<(TransactionOutpoint, UtxoEntry)>,
+    inflight_spent: &HashSet<TransactionOutpoint>,
+    node_utxos: Vec<(TransactionOutpoint, UtxoEntry)>,
+    fee: u64,
+    virtual_daa: u64,
+    coinbase_maturity: u64,
+) -> Result<(TransactionOutpoint, UtxoEntry), String> {
+    // Chain off our own unconfirmed change while it still covers the fee (the mempool accepts a
+    // chained spend of an unconfirmed parent output).
+    if let Some((head, entry)) = pending_change {
+        if entry.amount > fee {
+            return Ok((*head, entry.clone()));
+        }
+    }
+    // Otherwise pick the largest mature node UTXO we have not already spent in flight. Skipping
+    // immature coinbase UTXOs avoids the consensus "spends an immature UTXO" rejection.
+    node_utxos
+        .into_iter()
+        .filter(|(op, en)| {
+            en.amount > fee
+                && is_spendable(en.is_coinbase, en.block_daa_score, virtual_daa, coinbase_maturity)
+                && !inflight_spent.contains(op)
+        })
+        .max_by_key(|(_, en)| en.amount)
+        .ok_or_else(|| {
+            format!(
+                "no MATURE funding UTXO > {fee} sompi at the validator funding address; \
+                 send funds there and wait for coinbase maturity ({coinbase_maturity} blocks)"
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kaspa_consensus_core::tx::ScriptPublicKey;
     use std::io::Write;
+
+    // ---- funding selection (shared by the daemon + the in-process service) ----
+
+    fn fop(seed: u8, idx: u32) -> TransactionOutpoint {
+        TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), idx)
+    }
+    fn fentry(amount: u64, daa: u64, coinbase: bool) -> UtxoEntry {
+        UtxoEntry::new(amount, ScriptPublicKey::default(), daa, coinbase)
+    }
+    const SF_FEE: u64 = 250_000;
+    const SF_MATURITY: u64 = 100;
+    const SF_VDAA: u64 = 10_000;
+
+    #[test]
+    fn is_spendable_respects_coinbase_maturity() {
+        let maturity = 1000;
+        assert!(!is_spendable(true, 5000, 5500, maturity), "depth 500 < 1000 → immature");
+        assert!(!is_spendable(true, 5000, 5999, maturity), "depth 999 < 1000 → immature");
+        assert!(is_spendable(true, 5000, 6000, maturity), "depth exactly 1000 → mature");
+        assert!(is_spendable(true, 5000, 9000, maturity), "depth 4000 → mature");
+        assert!(!is_spendable(true, 6000, 5000, maturity), "future coinbase reads as not-yet-mature");
+        assert!(is_spendable(false, 5999, 6000, maturity), "non-coinbase always spendable");
+        assert!(is_spendable(false, 6000, 6000, maturity));
+    }
+
+    #[test]
+    fn select_funding_chains_off_unconfirmed_change() {
+        // The chain head (our previous change) is preferred over node UTXOs, so we never re-pick a
+        // funding UTXO the node still lists but our in-flight tx already spent.
+        let head = fop(0x11, 0);
+        let pending = Some((head, fentry(1_000_000, SF_VDAA, false)));
+        let node = vec![(fop(0x22, 0), fentry(5_000_000, 0, false))]; // bigger, but a node UTXO
+        let (sel_op, sel_en) = select_funding(&pending, &HashSet::new(), node, SF_FEE, SF_VDAA, SF_MATURITY).unwrap();
+        assert_eq!(sel_op, head, "must spend the unconfirmed change head, not the node UTXO");
+        assert_eq!(sel_en.amount, 1_000_000);
+    }
+
+    #[test]
+    fn select_funding_skips_depleted_chain_head() {
+        // A chain head that can no longer cover the fee falls back to the node view.
+        let pending = Some((fop(0x11, 0), fentry(SF_FEE, SF_VDAA, false))); // amount == fee → not > fee
+        let node = vec![(fop(0x22, 0), fentry(3_000_000, 0, false))];
+        let (sel_op, _) = select_funding(&pending, &HashSet::new(), node, SF_FEE, SF_VDAA, SF_MATURITY).unwrap();
+        assert_eq!(sel_op, fop(0x22, 0), "depleted head → use the node UTXO");
+    }
+
+    #[test]
+    fn select_funding_excludes_inflight_and_picks_largest() {
+        // The fallback excludes outpoints we already spent in flight and picks the largest survivor.
+        let spent = fop(0x33, 0);
+        let big = fop(0x44, 0);
+        let small = fop(0x55, 0);
+        let node = vec![
+            (spent, fentry(9_000_000, 0, false)), // largest, but in-flight-spent → excluded
+            (big, fentry(4_000_000, 0, false)),
+            (small, fentry(1_000_000, 0, false)),
+        ];
+        let inflight: HashSet<TransactionOutpoint> = [spent].into_iter().collect();
+        let (sel_op, sel_en) = select_funding(&None, &inflight, node, SF_FEE, SF_VDAA, SF_MATURITY).unwrap();
+        assert_eq!(sel_op, big, "largest non-excluded UTXO");
+        assert_eq!(sel_en.amount, 4_000_000);
+    }
+
+    #[test]
+    fn select_funding_skips_immature_coinbase_and_underfunded() {
+        // Immature coinbase (depth < maturity) and amount <= fee are both filtered out.
+        let immature = (fop(0x66, 0), fentry(8_000_000, SF_VDAA, true)); // depth 0 < 100 → immature
+        let underfunded = (fop(0x77, 0), fentry(SF_FEE, 0, false)); // amount == fee → not > fee
+        let good = (fop(0x88, 0), fentry(2_000_000, 0, false));
+        let node = vec![immature, underfunded, good];
+        let (sel_op, _) = select_funding(&None, &HashSet::new(), node, SF_FEE, SF_VDAA, SF_MATURITY).unwrap();
+        assert_eq!(sel_op, fop(0x88, 0), "only the mature, sufficiently-funded UTXO qualifies");
+    }
+
+    #[test]
+    fn select_funding_errors_when_no_candidate() {
+        // No chain head and every node UTXO excluded/ineligible → a descriptive error, no panic.
+        let spent = fop(0x99, 0);
+        let node = vec![(spent, fentry(5_000_000, 0, false))];
+        let inflight: HashSet<TransactionOutpoint> = [spent].into_iter().collect();
+        let err = select_funding(&None, &inflight, node, SF_FEE, SF_VDAA, SF_MATURITY).unwrap_err();
+        assert!(err.contains("no MATURE funding UTXO"), "got: {err}");
+    }
 
     #[test]
     fn load_validator_seed_accepts_32_byte_hex() {

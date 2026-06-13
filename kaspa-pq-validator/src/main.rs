@@ -25,7 +25,7 @@ use kaspa_consensus_core::network::NetworkType;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_core::{info, warn};
 use kaspa_pq_validator_core::{
-    SignedEpochStore, VALIDATOR_SEED_LEN, ValidatorKey, load_validator_seed, parse_stake_bond_ref,
+    SignedEpochStore, VALIDATOR_SEED_LEN, ValidatorKey, is_spendable, load_validator_seed, parse_stake_bond_ref, select_funding,
 };
 use kaspa_rpc_core::{
     GetStakeBondRequest, GetValidatorAttestationTargetRequest, GetValidatorAttestationTargetResponse, RpcTransaction, api::rpc::RpcApi,
@@ -35,6 +35,7 @@ use kaspa_wrpc_client::{
     client::{ConnectOptions, ConnectStrategy},
 };
 use rand::RngCore;
+use std::collections::HashSet;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Duration;
@@ -784,6 +785,18 @@ struct Attestor {
     /// rebroadcasting (which would burn a funding UTXO each poll). Reset on restart, so the
     /// persistent `SignedEpochStore` still drives a single crash-recovery rebroadcast.
     last_attested_epoch: Option<u64>,
+    /// Head of the local funding chain: the change output (index 0, change back to self) of the
+    /// most recently submitted attestation tx. The node's utxoindex keeps listing a just-spent
+    /// funding UTXO as available until our tx is mined, so re-querying it each epoch re-selects an
+    /// outpoint our own in-flight tx already spent → "output … already spent … in the mempool"
+    /// rejection. Spending this change directly chains one funded hop per epoch across the
+    /// unconfirmed window instead. In-memory only (reset on restart, which simply reselects a
+    /// confirmed UTXO and starts a fresh chain).
+    pending_change: Option<(TransactionOutpoint, UtxoEntry)>,
+    /// Funding outpoints we have already spent in submitted (not-yet-mined) txs, so the node-query
+    /// fallback never re-selects one. Pruned each tick to those the node still lists (mined-spent
+    /// ones drop out), so it self-heals and stays tiny (≈ the few epochs still in the mempool).
+    inflight_spent: HashSet<TransactionOutpoint>,
 }
 
 impl Attestor {
@@ -800,7 +813,17 @@ impl Attestor {
         // Mass-based fee unless overridden (mirrors `bond`/`unbond`): an explicit `--fee` wins, else
         // size it from the network mass params (≈ 290 000 sompi for the shard's 4627-byte signature).
         let attestation_fee = args.fee.unwrap_or_else(|| key.estimate_attestation_fee(mass_calc, prefix));
-        Ok(Some(Self { key, bond_outpoint, signed_store, prefix, coinbase_maturity, attestation_fee, last_attested_epoch: None }))
+        Ok(Some(Self {
+            key,
+            bond_outpoint,
+            signed_store,
+            prefix,
+            coinbase_maturity,
+            attestation_fee,
+            last_attested_epoch: None,
+            pending_change: None,
+            inflight_spent: HashSet::new(),
+        }))
     }
 
     /// Sign the attestation `target` under the equivocation guard and (unless `dry_run`)
@@ -868,17 +891,27 @@ impl Attestor {
             .get_utxos_by_addresses(vec![funding_addr])
             .await
             .map_err(|e| format!("getUtxosByAddresses failed (does the node run --utxoindex?): {e}"))?;
-        // Skip immature coinbase UTXOs (consensus coinbase-maturity rule): a funding miner mints a
-        // fresh coinbase each block, so an unfiltered pick keeps grabbing the newest=immature one
-        // and the shard tx is rejected ("spends an immature UTXO"). Prefer a mature one.
-        let funding = utxos
-            .into_iter()
-            .filter(|e| e.utxo_entry.amount > fee)
-            .find(|e| is_spendable(e.utxo_entry.is_coinbase, e.utxo_entry.block_daa_score, virtual_daa, self.coinbase_maturity))
-            .ok_or_else(|| format!("no MATURE funding UTXO > {fee} sompi at the validator funding address; \
-                send funds there and wait for coinbase maturity ({} blocks)", self.coinbase_maturity))?;
-        let funding_outpoint: TransactionOutpoint = funding.outpoint.into();
-        let funding_entry: UtxoEntry = funding.utxo_entry.into();
+
+        // The node's utxoindex reflects the ACCEPTED (mined) UTXO set, not the mempool: it keeps
+        // listing a funding UTXO our own still-unconfirmed attestation tx has already spent, so re-
+        // selecting it is rejected ("output … already spent … in the mempool"). Drive a local
+        // funding chain instead — spend the change output of the previous tx, which the mempool
+        // accepts as a chained spend of an unconfirmed parent. One attestation per epoch ⇒ one
+        // funded hop per epoch across the unconfirmed window.
+        let node_utxos: Vec<(TransactionOutpoint, UtxoEntry)> =
+            utxos.into_iter().map(|e| (TransactionOutpoint::from(e.outpoint), UtxoEntry::from(e.utxo_entry))).collect();
+        let node_outpoints: HashSet<TransactionOutpoint> = node_utxos.iter().map(|(op, _)| *op).collect();
+        // Forget in-flight exclusions the node no longer lists (those txs were mined ⇒ no risk of
+        // re-selecting them): self-heals and keeps the set tiny (≈ the few epochs still in mempool).
+        self.inflight_spent.retain(|op| node_outpoints.contains(op));
+        // If our chain head has been mined (now appears in the node set), resync to the node view.
+        if let Some((head, _)) = &self.pending_change {
+            if node_outpoints.contains(head) {
+                self.pending_change = None;
+            }
+        }
+        let (funding_outpoint, funding_entry) =
+            select_funding(&self.pending_change, &self.inflight_spent, node_utxos, fee, virtual_daa, self.coinbase_maturity)?;
 
         let tx = self.key.build_funded_shard_tx(&shard, funding_outpoint, &funding_entry, fee)?;
 
@@ -888,10 +921,26 @@ impl Attestor {
             self.signed_store.record_and_flush(record)?;
         }
 
-        let txid =
-            client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
-        info!("[{VALIDATOR}] submitted attestation shard for epoch {} (txid={txid})", target.epoch);
-        Ok(())
+        match client.submit_transaction(RpcTransaction::from(&tx), false).await {
+            Ok(txid) => {
+                info!("[{VALIDATOR}] submitted attestation shard for epoch {} (txid={txid})", target.epoch);
+                // Advance the funding chain: this tx's change output (index 0, back to self) funds the
+                // next epoch. The tx id excludes signature scripts, so it is stable post-sign and
+                // matches the id the node assigns.
+                self.inflight_spent.insert(funding_outpoint);
+                let change =
+                    UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
+                self.pending_change = Some((TransactionOutpoint::new(tx.id(), 0), change));
+                Ok(())
+            }
+            Err(e) => {
+                // Submit failed ⇒ no new change output exists. Drop the chain head so the next tick
+                // reselects from the node; the in-flight set still excludes UTXOs our earlier
+                // (accepted) txs spent, so the fallback won't re-pick a mempool-spent outpoint.
+                self.pending_change = None;
+                Err(format!("submitTransaction failed: {e}"))
+            }
+        }
     }
 }
 
@@ -981,19 +1030,6 @@ async fn run_loop(client: &KaspaRpcClient, args: &RunArgs, mut attestor: Option<
     }
 }
 
-/// Whether a funding UTXO can be spent right now. A coinbase output is locked until
-/// `coinbase_maturity` blocks have passed since it was mined (consensus rule); a non-coinbase
-/// output is always spendable. `virtual_daa` is the node's current virtual DAA score.
-/// Saturating so a (transient) `block_daa_score > virtual_daa` reads as "not yet mature".
-/// Takes the two raw fields (not a typed entry) so it works for both `UtxoEntry` and the
-/// RPC `RpcUtxoEntry` returned by `get_utxos_by_addresses` (same fields, different type).
-fn is_spendable(is_coinbase: bool, block_daa_score: u64, virtual_daa: u64, coinbase_maturity: u64) -> bool {
-    if !is_coinbase {
-        return true;
-    }
-    virtual_daa.saturating_sub(block_daa_score) >= coinbase_maturity
-}
-
 /// Map the node's `NetworkType` to the bech32 address `Prefix` (for the funding address).
 fn prefix_for(network_type: NetworkType) -> Prefix {
     match network_type {
@@ -1048,21 +1084,6 @@ mod tests {
         assert_eq!(prefix_for(NetworkType::Testnet), Prefix::Testnet);
         assert_eq!(prefix_for(NetworkType::Devnet), Prefix::Devnet);
         assert_eq!(prefix_for(NetworkType::Simnet), Prefix::Simnet);
-    }
-
-    #[test]
-    fn is_spendable_respects_coinbase_maturity() {
-        let maturity = 1000;
-        // coinbase mined at daa 5000: needs virtual_daa - 5000 >= 1000
-        assert!(!is_spendable(true, 5000, 5500, maturity), "depth 500 < 1000 → immature");
-        assert!(!is_spendable(true, 5000, 5999, maturity), "depth 999 < 1000 → immature");
-        assert!(is_spendable(true, 5000, 6000, maturity), "depth exactly 1000 → mature");
-        assert!(is_spendable(true, 5000, 9000, maturity), "depth 4000 → mature");
-        // a coinbase from the future (transient reorg view) reads as not-yet-mature, never panics
-        assert!(!is_spendable(true, 6000, 5000, maturity));
-        // non-coinbase outputs are always spendable regardless of age
-        assert!(is_spendable(false, 5999, 6000, maturity));
-        assert!(is_spendable(false, 6000, 6000, maturity));
     }
 
     #[test]
