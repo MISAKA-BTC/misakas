@@ -700,6 +700,7 @@ Do you confirm? (y/n)";
             flow_context.clone(),
             validator_mass_calculator,
             index_service.as_ref().map(|x| x.utxoindex().unwrap()),
+            config.params.coinbase_maturity(),
         )))
     } else {
         None

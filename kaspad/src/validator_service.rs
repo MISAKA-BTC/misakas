@@ -33,13 +33,14 @@ use kaspa_hashes::Hash64;
 use kaspa_mining::mempool::tx::Orphan;
 use kaspa_p2p_flows::flow_context::FlowContext;
 use kaspa_pq_validator_core::{
-    ATTESTATION_TX_FEE_FLOOR_SOMPI, SignedEpochStore, ValidatorKey, load_validator_seed, parse_stake_bond_ref,
+    ATTESTATION_TX_FEE_FLOOR_SOMPI, SignedEpochStore, ValidatorKey, load_validator_seed, parse_stake_bond_ref, select_funding,
 };
 use kaspa_rpc_core::model::GetValidatorStatusResponse;
 use kaspa_rpc_service::service::ValidatorStatusProvider;
 use kaspa_txscript::pay_to_address_script;
 use kaspa_utxoindex::api::UtxoIndexProxy;
 use std::{
+    collections::HashSet,
     fmt,
     path::PathBuf,
     str::FromStr,
@@ -167,6 +168,18 @@ fn derive_validator_status(
 }
 
 /// In-process validator node service (skeleton).
+/// In-memory funding-chain state for attestation submission. The node's utxoindex keeps listing a
+/// just-spent funding UTXO as available until our tx is mined, so re-querying it re-selects an
+/// outpoint our own in-flight tx already spent → "output … already spent … in the mempool". We
+/// instead chain off the previous tx's change output (`pending_change`) and exclude outpoints we
+/// have already spent in flight (`inflight_spent`, self-pruned to what the node still lists). See
+/// [`kaspa_pq_validator_core::select_funding`]. Reset on restart (a fresh chain is reselected).
+#[derive(Default)]
+struct FundingChain {
+    pending_change: Option<(TransactionOutpoint, UtxoEntry)>,
+    inflight_spent: HashSet<TransactionOutpoint>,
+}
+
 pub struct ValidatorService {
     config: ValidatorConfig,
     consensus_manager: Arc<ConsensusManager>,
@@ -185,6 +198,12 @@ pub struct ValidatorService {
     utxoindex: Option<UtxoIndexProxy>,
     /// Mass-based fee (sompi) for the attestation-shard tx, computed once at startup.
     attestation_fee_sompi: u64,
+    /// Network coinbase-maturity (blocks): a coinbase funding UTXO younger than this cannot be
+    /// spent. Captured once at startup from the consensus params.
+    coinbase_maturity: u64,
+    /// Local funding chain so consecutive attestations (within a heartbeat's catch-up loop and
+    /// across heartbeats) don't re-select a UTXO an in-flight tx already spent.
+    funding_chain: Mutex<FundingChain>,
 }
 
 impl ValidatorService {
@@ -195,6 +214,7 @@ impl ValidatorService {
         flow_context: Arc<FlowContext>,
         mass_calculator: MassCalculator,
         utxoindex: Option<UtxoIndexProxy>,
+        coinbase_maturity: u64,
     ) -> Self {
         // Validate configuration eagerly so misconfiguration surfaces at startup, not at first use.
         let key = match &config.key_path {
@@ -255,6 +275,8 @@ impl ValidatorService {
             signed_epochs: Mutex::new(signed_epochs),
             utxoindex,
             attestation_fee_sompi,
+            coinbase_maturity,
+            funding_chain: Mutex::new(FundingChain::default()),
         }
     }
 
@@ -412,8 +434,29 @@ impl ValidatorService {
     async fn try_attest(&self, target: &ValidatorAttestationTarget, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
         let funding_spk = pay_to_address_script(&key.funding_address(self.config.address_prefix));
         let fee = self.attestation_fee_sompi;
-        let funding = self.find_funding_utxo(&funding_spk, fee).await;
-        let Some(tx) = self.guarded_build_funded(target, key, bond_outpoint, funding, fee) else {
+        let candidates = self.find_funding_candidates(&funding_spk).await;
+        let virtual_daa = self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score();
+
+        // Select funding under the chain lock (NOT held across the await below). Prefer chaining off
+        // our own unconfirmed change so we never re-select a UTXO the node's utxoindex still lists as
+        // available but which an in-flight attestation tx of ours already spent ("already spent in
+        // the mempool"). This matters most in the per-heartbeat catch-up loop, where several ready
+        // epochs are attested before any of their txs are mined.
+        let funding = {
+            let mut chain = self.funding_chain.lock().unwrap();
+            let node_outpoints: HashSet<TransactionOutpoint> = candidates.iter().map(|(op, _)| *op).collect();
+            // Forget in-flight exclusions the node no longer lists (mined ⇒ safe to forget): self-heals.
+            chain.inflight_spent.retain(|op| node_outpoints.contains(op));
+            // If our chain head has been mined (now in the node set), resync to the node view.
+            if let Some((head, _)) = &chain.pending_change {
+                if node_outpoints.contains(head) {
+                    chain.pending_change = None;
+                }
+            }
+            select_funding(&chain.pending_change, &chain.inflight_spent, candidates, fee, virtual_daa, self.coinbase_maturity).ok()
+        };
+
+        let Some(tx) = self.guarded_build_funded(target, key, bond_outpoint, funding.clone(), fee) else {
             return;
         };
         let tx_id = tx.id();
@@ -421,8 +464,27 @@ impl ValidatorService {
             // Same path the RPC `submitTransaction` uses: validate + insert to mempool, then broadcast.
             let session = self.consensus_manager.consensus().unguarded_session();
             match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
-                Ok(()) => info!("[{VALIDATOR}] submitted attestation shard tx {tx_id} for epoch {}", target.epoch),
-                Err(e) => warn!("[{VALIDATOR}] submit of attestation shard tx {tx_id} (epoch {}) failed: {e}", target.epoch),
+                Ok(()) => {
+                    info!("[{VALIDATOR}] submitted attestation shard tx {tx_id} for epoch {}", target.epoch);
+                    // Advance the funding chain: this tx's change output (index 0, back to self) funds
+                    // the next ready epoch. The tx id excludes signature scripts, so it is stable.
+                    if let Some((funding_outpoint, funding_entry)) = funding {
+                        let mut chain = self.funding_chain.lock().unwrap();
+                        chain.inflight_spent.insert(funding_outpoint);
+                        let change = UtxoEntry::new(
+                            funding_entry.amount - fee,
+                            funding_entry.script_public_key.clone(),
+                            virtual_daa,
+                            false,
+                        );
+                        chain.pending_change = Some((TransactionOutpoint::new(tx_id, 0), change));
+                    }
+                }
+                Err(e) => {
+                    warn!("[{VALIDATOR}] submit of attestation shard tx {tx_id} (epoch {}) failed: {e}", target.epoch);
+                    // Drop the chain head so the next attempt reselects from the node view.
+                    self.funding_chain.lock().unwrap().pending_change = None;
+                }
             }
         } else {
             info!(
@@ -432,34 +494,38 @@ impl ValidatorService {
         }
     }
 
-    /// Find a UTXO locked to `funding_spk` (the validator's own P2PKH-ML-DSA address) that
-    /// covers `fee`. Prefers the address-indexed utxoindex lookup; falls back to a bounded
-    /// virtual-UTXO-set scan when `--utxoindex` is not enabled.
-    async fn find_funding_utxo(&self, funding_spk: &ScriptPublicKey, fee: u64) -> Option<(TransactionOutpoint, UtxoEntry)> {
+    /// List the UTXOs locked to `funding_spk` (the validator's own P2PKH-ML-DSA address). Prefers the
+    /// address-indexed utxoindex lookup; falls back to a bounded virtual-UTXO-set scan when
+    /// `--utxoindex` is not enabled. Returns them UNFILTERED — fee/maturity/in-flight filtering and
+    /// the chain-head-vs-node choice are [`select_funding`]'s job.
+    async fn find_funding_candidates(&self, funding_spk: &ScriptPublicKey) -> Vec<(TransactionOutpoint, UtxoEntry)> {
         if let Some(utxoindex) = &self.utxoindex {
             // Address-indexed: O(matches) instead of O(utxo-set). The utxoindex stores a
             // compact entry (no spk — it's the lookup key), so rebuild the full UtxoEntry.
-            let set = utxoindex.clone().get_utxos_by_script_public_keys([funding_spk.clone()].into_iter().collect()).await.ok()?;
+            let Ok(set) =
+                utxoindex.clone().get_utxos_by_script_public_keys([funding_spk.clone()].into_iter().collect()).await
+            else {
+                return Vec::new();
+            };
             return set
                 .into_values()
                 .flatten()
-                .find(|(_, c)| c.amount > fee)
-                .map(|(outpoint, c)| (outpoint, UtxoEntry::new(c.amount, funding_spk.clone(), c.block_daa_score, c.is_coinbase)));
+                .map(|(outpoint, c)| (outpoint, UtxoEntry::new(c.amount, funding_spk.clone(), c.block_daa_score, c.is_coinbase)))
+                .collect();
         }
-        // Fallback: bounded paginated scan of the virtual UTXO set.
+        // Fallback: bounded paginated scan of the virtual UTXO set, collecting all of OUR outputs.
         let session = self.consensus_manager.consensus().session().await;
         let mut from: Option<TransactionOutpoint> = None;
+        let mut candidates = Vec::new();
         for _ in 0..MAX_FUNDING_SCAN_CHUNKS {
             let chunk = session.async_get_virtual_utxos(from, FUNDING_SCAN_CHUNK_SIZE, from.is_some()).await;
             if chunk.is_empty() {
                 break;
             }
             from = chunk.last().map(|(outpoint, _)| *outpoint);
-            if let Some(found) = chunk.into_iter().find(|(_, entry)| &entry.script_public_key == funding_spk && entry.amount > fee) {
-                return Some(found);
-            }
+            candidates.extend(chunk.into_iter().filter(|(_, entry)| &entry.script_public_key == funding_spk));
         }
-        None
+        candidates
     }
 
     /// Equivocation-guarded build of the funded attestation shard tx (ADR-0011). Only on
