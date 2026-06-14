@@ -31,11 +31,21 @@ build an auth system into an operator tool, exposure is controlled by binding an
   ports, share/diff settings) — never secrets, tokens, or mnemonics. If a secret-like field is ever
   added to the config it MUST be excluded from this response.
 - **Config write is off by default and CSRF-guarded.** `POST /api/config` returns 403 unless
-  `RKSTRATUM_ALLOW_CONFIG_WRITE=1`, rejects cross-origin requests, and bounds the request body.
+  `RKSTRATUM_ALLOW_CONFIG_WRITE=1`, rejects cross-origin requests (allowing loopback and same-origin
+  from the server's own concrete bind host), and bounds the request body.
 
-**Accepted condition:** the dashboard is safe on a loopback bind or behind an authenticating proxy.
-Do **not** expose it directly to the public internet. The startup guard enforces this unless the
-operator explicitly opts in.
+**Accepted conditions** (record these as the design contract):
+
+- Dashboard / Prometheus default to **loopback only**.
+- A **public bind requires `RKSTRATUM_ALLOW_PUBLIC_DASHBOARD=1`** (otherwise the server refuses to
+  start) — and should still sit behind an authenticating reverse proxy.
+- `/api/config` responses are limited to a **public-safe DTO** (no secrets/tokens/private paths).
+- **No wildcard CORS.**
+- **Config write always requires CSRF + (for public access) reverse-proxy auth.** The CSRF guard
+  accepts loopback and same-origin from a concrete bind host; a wildcard (`0.0.0.0`) bind has no
+  single canonical host, so **public config-write must be performed through an authenticating reverse
+  proxy that presents a same-origin request** — direct cross-origin/public writes are rejected by
+  design. Do **not** expose the dashboard directly to the public internet.
 
 ### 2. Remote signer (`kaspa-pq-signer`) — node-local trust model (accepted-by-design)
 

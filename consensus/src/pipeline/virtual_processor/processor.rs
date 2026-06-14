@@ -1278,6 +1278,20 @@ impl VirtualStateProcessor {
         let Some(dns_params) = self.dns_params.as_ref() else {
             return;
         };
+        // The StakeScore recompute below walks the selected chain reading each chain block's
+        // acceptance data (`collect_stake_contributions_v2` -> `accepted_txs_of_chain_block`). During
+        // pruning-point UTXO import (IBD), the sink IS the imported pruning point, whose acceptance
+        // data is deliberately never written — `import_pruning_point_utxo_set` writes only the
+        // multiset + UTXO status ("acceptance data and utxo-diff are irrelevant"). There is no chain
+        // history to aggregate at that moment, so skip the recompute; `DnsState` is recompute-derived
+        // and is rebuilt normally from the first fully-processed block after import. Without this
+        // guard the walk panics with `KeyNotFound(AcceptanceData/<pruning point>)`, which surfaces as
+        // a tokio runtime panic in the `spawn_blocking` import worker and crashes startup.
+        match self.acceptance_data_store.get(sink) {
+            Ok(_) => {}
+            Err(StoreError::KeyNotFound(_)) => return,
+            Err(e) => panic!("update_dns_state: acceptance_data_store.get({sink}) failed: {e}"),
+        }
         let sink_daa = self.headers_store.get_header(sink).unwrap().daa_score;
         // ADR-0009 Addendum A.3 network_id discriminator := the per-network genesis hash.
         let net_id = self.genesis.hash;

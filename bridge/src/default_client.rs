@@ -333,7 +333,7 @@ fn process_canxium_address(address: &str) -> String {
 /// representable and are rejected here with a clear message instead of being silently coerced (the
 /// old behavior prepended `kaspa:` and matched a lax regex, producing addresses the node would later
 /// reject at block-template time anyway).
-fn clean_wallet(input: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub fn clean_wallet(input: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // The address library is the single source of truth: it accepts only valid misaka* addresses.
     if Address::try_from(input).is_ok() {
         return Ok(input.to_string());

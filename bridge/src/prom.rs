@@ -472,9 +472,15 @@ async fn handle_http_request(
         // CSRF guard: a browser form/fetch from another origin can still SEND a POST even with no
         // permissive CORS header. Reject any request carrying a cross-origin Origin/Referer so a
         // malicious page in the operator's browser cannot silently rewrite the config (e.g.
-        // kaspad_address). Same-origin dashboard requests (loopback) and non-browser clients (curl,
-        // no Origin header) are allowed through.
-        if request_has_cross_origin_header(request) {
+        // kaspad_address). Allowed through: loopback origins, a SAME-ORIGIN request from the server's
+        // own concrete bind host (so a LAN-IP-bound dashboard's own writes work), and non-browser
+        // clients (curl — no Origin header). A 0.0.0.0 bind has no single canonical host, so it stays
+        // loopback-only: front public config-write with a reverse proxy (see SECURITY.md).
+        let self_bind = match mode {
+            HttpMode::Aggregated { web_bind } => web_bind.as_str(),
+            HttpMode::Instance { web_bind, .. } => web_bind.as_str(),
+        };
+        if request_has_cross_origin_header(request, self_bind) {
             let json_response = r#"{"success": false, "message": "Cross-origin config write rejected."}"#;
             let response = format!(
                 "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -485,11 +491,13 @@ async fn handle_http_request(
             return Ok(());
         }
 
-        // Bound the accepted body. The request was read into a single fixed buffer, so an oversized or
-        // segmented body would otherwise be silently truncated and applied as a partial config; reject
-        // anything that declares more than we will read.
-        const MAX_CONFIG_BODY: usize = 64 * 1024;
-        if parse_content_length(request).is_some_and(|declared| declared > MAX_CONFIG_BODY) {
+        // Bound the accepted body. The whole request (headers + body) is read once into a single
+        // fixed 8 KiB buffer (see serve_http_loop), so the cap MUST leave room for the headers —
+        // otherwise a body between the cap and the buffer size would be silently truncated and applied
+        // as a partial config. A real config payload is a few hundred bytes; 4 KiB is ample headroom.
+        const MAX_CONFIG_BODY: usize = 4 * 1024;
+        let declared_len = parse_content_length(request);
+        if declared_len.is_some_and(|declared| declared > MAX_CONFIG_BODY) {
             let json_response = r#"{"success": false, "message": "Config body too large."}"#;
             let response = format!(
                 "HTTP/1.1 413 Payload Too Large\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -502,6 +510,18 @@ async fn handle_http_request(
 
         let body_start = request.find("\r\n\r\n").unwrap_or(request.len());
         let body = &request[body_start + 4..];
+        // If the declared length exceeds what we actually received, the single read truncated the
+        // body — reject rather than applying a partial config.
+        if declared_len.is_some_and(|declared| body.len() < declared) {
+            let json_response = r#"{"success": false, "message": "Incomplete config body (truncated read)."}"#;
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                json_response.len(),
+                json_response
+            );
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
         let result = update_config_from_json(body).await;
         let json_response = if result.is_ok() {
             r#"{"success": true, "message": "Config updated successfully. Bridge restart required for changes to take effect."}"#
@@ -578,6 +598,14 @@ pub fn prom_worker_id(ctx: &crate::stratum_context::StratumContext) -> String {
     ctx.effective_worker_name()
 }
 
+/// Bound a client-supplied string to a safe, low-cardinality Prometheus label value: cap the length
+/// and restrict the charset so an attacker cannot explode metric series by varying it. Empty stays
+/// empty (a single bucket).
+fn sanitize_metric_label(raw: &str) -> String {
+    const MAX_LABEL_LEN: usize = 32;
+    raw.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).take(MAX_LABEL_LEN).collect()
+}
+
 /// Worker context for metrics
 pub struct WorkerContext {
     pub instance_id: String,
@@ -607,9 +635,12 @@ impl WorkerContext {
         Self {
             instance_id: instance_id.to_string(),
             worker_name: worker_name.to_string(),
-            miner: miner.to_string(),
+            // `miner` is the client-supplied app string (remote_app): sanitize it like the worker name.
+            miner: sanitize_metric_label(miner),
             wallet: ctx.wallet_addr.lock().clone(),
-            ip: format!("{}:{}", ctx.remote_addr(), ctx.remote_port()),
+            // Bare IP only — including the ephemeral source port would mint a new metric series on
+            // every reconnect (unbounded cardinality from a single host).
+            ip: ctx.remote_addr().to_string(),
         }
     }
 }
@@ -619,9 +650,9 @@ pub fn worker_context(instance_id: &str, ctx: &crate::stratum_context::StratumCo
     WorkerContext {
         instance_id: instance_id.to_string(),
         worker_name: ctx.effective_worker_name(),
-        miner: miner.into(),
+        miner: sanitize_metric_label(&miner.into()),
         wallet: ctx.wallet_addr.lock().clone(),
-        ip: format!("{}:{}", ctx.remote_addr(), ctx.remote_port()),
+        ip: ctx.remote_addr().to_string(),
     }
 }
 
@@ -824,16 +855,25 @@ fn parse_content_length(request: &str) -> Option<usize> {
         .and_then(|(_, value)| value.trim().parse::<usize>().ok())
 }
 
-/// Return `true` if the request carries an `Origin` or `Referer` header pointing at a host that is
-/// not loopback. Such a request originates from a web page on another site (CSRF). Requests with no
-/// `Origin`/`Referer` (e.g. curl, the local dashboard's same-origin fetch) return `false`.
-fn request_has_cross_origin_header(request: &str) -> bool {
-    fn host_is_local(url: &str) -> bool {
-        // Strip scheme and any path, leaving authority ("host:port").
+/// Return `true` if the request carries an `Origin` or `Referer` header whose host is neither
+/// loopback nor the server's own concrete bind host. Such a request originates from a web page on
+/// another site (CSRF). Requests with no `Origin`/`Referer` (e.g. curl, the dashboard's same-origin
+/// fetch) return `false`. `bind_addr` is the server's bind address ("host:port"); a same-origin
+/// request from a concrete LAN-IP bind is allowed, but a wildcard bind (`0.0.0.0`/`::`) has no single
+/// canonical host so only loopback origins are accepted there.
+fn request_has_cross_origin_header(request: &str, bind_addr: &str) -> bool {
+    fn host_of(url: &str) -> &str {
+        // Strip scheme and any path, leaving the authority host (drop ":port").
         let authority = url.split("://").nth(1).unwrap_or(url);
-        let host = authority.split(['/', ':']).next().unwrap_or("");
-        matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]" | "")
+        authority.split(['/', ':']).next().unwrap_or("")
     }
+    // The server's own host, if it is a concrete (non-wildcard) address.
+    let bind_host = host_of(bind_addr);
+    let self_host = (!bind_host.is_empty() && bind_host != "0.0.0.0" && bind_host != "::").then_some(bind_host);
+    let host_is_trusted = |url: &str| {
+        let host = host_of(url.trim());
+        matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]" | "") || self_host == Some(host)
+    };
     request
         .lines()
         .take_while(|l| !l.is_empty())
@@ -842,7 +882,7 @@ fn request_has_cross_origin_header(request: &str) -> bool {
             let n = name.trim();
             n.eq_ignore_ascii_case("origin") || n.eq_ignore_ascii_case("referer")
         })
-        .any(|(_, value)| !host_is_local(value.trim()))
+        .any(|(_, value)| !host_is_trusted(value.trim()))
 }
 
 /// Set best-effort status fields used by `/api/status`.

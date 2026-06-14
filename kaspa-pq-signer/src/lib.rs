@@ -294,14 +294,60 @@ pub mod transport {
         SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
     }
 
-    /// Peer-credential (uid) of a connected client, via `getpeereid(2)`. `None` if it cannot be
-    /// determined (the caller then falls back to the socket file-mode boundary only).
+    /// Peer-credential (uid) of a connected client. `None` if it cannot be determined (the caller
+    /// then falls back to the socket file-mode boundary only). The mechanism is OS-specific:
+    /// Linux/Android use `SO_PEERCRED` (`getpeereid` is not declared for Linux in `libc`); the BSDs
+    /// and macOS use `getpeereid(2)`; other Unixes fall back to file-mode only.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn peer_uid(stream: &UnixStream) -> Option<u32> {
+        use std::os::unix::io::AsRawFd;
+        let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+        let mut len = core::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                core::ptr::addr_of_mut!(cred).cast::<libc::c_void>(),
+                &mut len,
+            )
+        };
+        if rc == 0 { Some(cred.uid) } else { None }
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
     fn peer_uid(stream: &UnixStream) -> Option<u32> {
         use std::os::unix::io::AsRawFd;
         let mut uid: libc::uid_t = 0;
         let mut gid: libc::gid_t = 0;
         let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
         if rc == 0 { Some(uid) } else { None }
+    }
+
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )))]
+    fn peer_uid(_stream: &UnixStream) -> Option<u32> {
+        // No portable peer-credential API on this platform: rely on the 0700 socket perms.
+        None
     }
 
     /// Serve one client connection: handshake (version-check + ack), then a request/response loop
