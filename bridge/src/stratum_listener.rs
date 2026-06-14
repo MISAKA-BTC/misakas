@@ -905,13 +905,16 @@ impl StratumListener {
                     break;
                 }
                 Err(_) => {
-                    // Read timeout. Reap clients that connect but never complete the handshake, so a
-                    // pre-auth client cannot hold a connection (and its slot) open indefinitely.
+                    // Read timeout. Reap clients that connect but never AUTHORIZE, so an unauthorized
+                    // client cannot hold a connection (and its slot) open indefinitely. We gate on
+                    // authorization (a non-empty wallet address, set only by mining.authorize) rather
+                    // than on remote_app: a client can set remote_app via mining.subscribe and then go
+                    // idle, which would otherwise escape a subscribe-only "pre_handshake" check.
                     idle_strikes = idle_strikes.saturating_add(1);
-                    let is_pre_handshake = ctx.worker_name.lock().is_empty() && ctx.remote_app.lock().is_empty();
-                    if is_pre_handshake && idle_strikes >= PRE_AUTH_IDLE_STRIKES {
+                    let is_unauthorized = ctx.wallet_addr.lock().is_empty();
+                    if is_unauthorized && idle_strikes >= PRE_AUTH_IDLE_STRIKES {
                         warn!(
-                            "[CONNECTION] {}:{} idle without completing handshake (~{}s); disconnecting",
+                            "[CONNECTION] {}:{} idle without authorizing (~{}s); disconnecting",
                             ctx.remote_addr,
                             ctx.remote_port,
                             idle_strikes * 5

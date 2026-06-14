@@ -2459,6 +2459,30 @@ mod comprehensive_tests {
     // handle_authorize, which calls clean_wallet internally.
     // ========================================================================
 
+    #[test]
+    fn test_clean_wallet_accepts_misaka_rejects_kaspa() {
+        // Re-audit #5: pin the runtime behavior — only misaka* addresses are accepted; legacy kaspa*
+        // and unprefixed/garbage are rejected (the bridge no longer coerces an unprefixed input to
+        // kaspa:). Mining payout addresses must be locked down by tests.
+        use kaspa_addresses::{Address, Prefix, Version};
+        use kaspa_stratum_bridge::clean_wallet;
+
+        // Positive: a valid misaka* address (per network) passes through unchanged.
+        for prefix in [Prefix::Mainnet, Prefix::Testnet, Prefix::Simnet, Prefix::Devnet] {
+            let addr = Address::new(prefix, Version::PubKeyHashMlDsa87, &[0u8; 64]).to_string();
+            assert_eq!(clean_wallet(&addr).unwrap(), addr, "valid misaka* address must be accepted as-is");
+        }
+
+        // Negative: legacy kaspa* prefixes are rejected.
+        for bad in ["kaspa:qqexampleaddress", "kaspatest:qqexampleaddress", "kaspadev:qqexampleaddress"] {
+            assert!(clean_wallet(bad).is_err(), "legacy address '{bad}' must be rejected");
+        }
+        // Negative: unprefixed / malformed / empty are rejected (no kaspa: coercion).
+        assert!(clean_wallet("qqexampleaddress").is_err(), "unprefixed address must be rejected");
+        assert!(clean_wallet("not an address").is_err());
+        assert!(clean_wallet("").is_err());
+    }
+
     #[tokio::test]
     async fn test_wallet_address_cleaning_with_prefix() {
         // Test: Wallet addresses with kaspa:/kaspatest:/kaspadev: prefixes

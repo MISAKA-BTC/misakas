@@ -342,7 +342,7 @@ jobs:
           node-version: 20
 
       - name: Install NodeJS dependencies
-        run: npm install --global typedoc typescript
+        run: npm install --global typedoc@0.28.19 typescript@6.0.3
 
       # append here any new crates that contains wasm test suites (and aren't already covered)
       - name: Run wasm tests for consensus/core
@@ -411,7 +411,7 @@ jobs:
           node-version: '20'
 
       - name: Install NodeJS dependencies
-        run: npm install --global typedoc typescript
+        run: npm install --global typedoc@0.28.19 typescript@6.0.3
 
       - name: Set up cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
