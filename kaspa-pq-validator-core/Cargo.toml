@@ -20,6 +20,7 @@ blake2b_simd.workspace = true
 borsh.workspace = true
 faster-hex.workspace = true
 libcrux-ml-dsa.workspace = true
+log.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true

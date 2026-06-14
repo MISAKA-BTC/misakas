@@ -7,7 +7,7 @@ use crate::result::Result;
 use argon2::Argon2;
 use chacha20poly1305::{
     Key, XChaCha20Poly1305,
-    aead::{AeadCore, AeadInPlace, KeyInit, OsRng},
+    aead::{AeadCore, AeadInPlace, KeyInit, OsRng, rand_core::RngCore},
 };
 use sha2::{Digest, Sha256};
 use std::ops::{Deref, DerefMut};
@@ -219,36 +219,87 @@ pub fn sha256d_hash(data: &[u8]) -> Secret {
     sha256_hash(sha256.finalize().as_slice())
 }
 
-/// Produces `argon2sha256iv` hash of the given data.
+/// Produces an `argon2sha256iv` hash of the given data, using a **deterministic** salt derived from
+/// the data itself (`SHA256(data)`).
+///
+/// NOTE: the deterministic salt is a legacy property — the same password always yields the same KDF
+/// key, which weakens offline-cracking resistance. New encryptions use a random per-message salt (see
+/// [`encrypt_xchacha20poly1305`]); this function is retained for decrypting pre-existing (v0) wallet
+/// blobs and is otherwise not used.
 pub fn argon2_sha256iv_hash(data: &[u8], byte_length: usize) -> Result<Secret> {
     let salt = sha256_hash(data);
+    argon2_hash_with_salt(data, salt.as_ref(), byte_length)
+}
+
+/// Derive a key from `data` and an explicit `salt` via Argon2.
+fn argon2_hash_with_salt(data: &[u8], salt: &[u8], byte_length: usize) -> Result<Secret> {
     let mut key = vec![0u8; byte_length];
-    Argon2::default().hash_password_into(data, salt.as_ref(), &mut key)?;
+    Argon2::default().hash_password_into(data, salt, &mut key)?;
     Ok(key.into())
 }
 
-/// Encrypts the given data using `XChaCha20Poly1305` algorithm.
+/// Versioned-envelope constants for [`encrypt_xchacha20poly1305`]. Layout:
+/// `MAGIC(4) || salt(16) || nonce(24) || ciphertext+tag`. The magic is also bound as AEAD associated
+/// data so the version cannot be stripped/forged. Blobs without the magic are treated as legacy v0
+/// (deterministic salt, `nonce(24) || ciphertext`), so existing wallets keep decrypting.
+const ENC_ENVELOPE_MAGIC: &[u8; 4] = b"KWE1";
+const ENC_SALT_LEN: usize = 16;
+const ENC_NONCE_LEN: usize = 24; // XChaCha20Poly1305 nonce
+
+/// Encrypts the given data using the `XChaCha20Poly1305` algorithm with a random per-message Argon2
+/// salt, wrapped in a versioned envelope (`MAGIC || salt || nonce || ciphertext`).
 pub fn encrypt_xchacha20poly1305(data: &[u8], secret: &Secret) -> Result<Vec<u8>> {
-    let private_key_bytes = argon2_sha256iv_hash(secret.as_ref(), 32)?;
+    let mut salt = [0u8; ENC_SALT_LEN];
+    OsRng.fill_bytes(&mut salt); // random per-message salt
+    let private_key_bytes = argon2_hash_with_salt(secret.as_ref(), &salt, 32)?;
     let key = Key::from_slice(private_key_bytes.as_ref());
     let cipher = XChaCha20Poly1305::new(key);
-    let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng); // 96-bits; unique per message
+    let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng); // 192-bit; unique per message
     let mut buffer = data.to_vec();
     buffer.reserve(16);
-    cipher.encrypt_in_place(&nonce, &[], &mut buffer)?;
-    buffer.splice(0..0, nonce.iter().cloned());
-    Ok(buffer)
+    // Bind the version magic as AEAD associated data.
+    cipher.encrypt_in_place(&nonce, ENC_ENVELOPE_MAGIC, &mut buffer)?;
+    let mut out = Vec::with_capacity(ENC_ENVELOPE_MAGIC.len() + ENC_SALT_LEN + ENC_NONCE_LEN + buffer.len());
+    out.extend_from_slice(ENC_ENVELOPE_MAGIC);
+    out.extend_from_slice(&salt);
+    out.extend_from_slice(nonce.as_slice());
+    out.extend_from_slice(&buffer);
+    Ok(out)
 }
 
-/// Decrypts the given data using `XChaCha20Poly1305` algorithm.
+/// Decrypts data produced by [`encrypt_xchacha20poly1305`]. Auto-detects the versioned envelope
+/// (random salt) and falls back to the legacy v0 format (deterministic salt) for older blobs. Returns
+/// an error (never panics) on a truncated payload.
 pub fn decrypt_xchacha20poly1305(data: &[u8], secret: &Secret) -> Result<Secret> {
-    let private_key_bytes = argon2_sha256iv_hash(secret.as_ref(), 32)?;
-    let key = Key::from_slice(private_key_bytes.as_ref());
-    let cipher = XChaCha20Poly1305::new(key);
-    let nonce = &data[0..24];
-    let mut buffer = data[24..].to_vec();
-    cipher.decrypt_in_place(nonce.into(), &[], &mut buffer)?;
-    Ok(Secret::new(buffer))
+    if data.starts_with(ENC_ENVELOPE_MAGIC) {
+        // Versioned envelope: MAGIC || salt(16) || nonce(24) || ciphertext+tag.
+        let header = ENC_ENVELOPE_MAGIC.len();
+        let salt_end = header + ENC_SALT_LEN;
+        let nonce_end = salt_end + ENC_NONCE_LEN;
+        if data.len() < nonce_end {
+            return Err(Error::Custom("encrypted payload is truncated".to_string()));
+        }
+        let salt = &data[header..salt_end];
+        let nonce = &data[salt_end..nonce_end];
+        let private_key_bytes = argon2_hash_with_salt(secret.as_ref(), salt, 32)?;
+        let key = Key::from_slice(private_key_bytes.as_ref());
+        let cipher = XChaCha20Poly1305::new(key);
+        let mut buffer = data[nonce_end..].to_vec();
+        cipher.decrypt_in_place(nonce.into(), ENC_ENVELOPE_MAGIC, &mut buffer)?;
+        Ok(Secret::new(buffer))
+    } else {
+        // Legacy v0: deterministic salt (SHA256(password)), layout nonce(24) || ciphertext+tag.
+        if data.len() < ENC_NONCE_LEN {
+            return Err(Error::Custom("encrypted payload is truncated".to_string()));
+        }
+        let private_key_bytes = argon2_sha256iv_hash(secret.as_ref(), 32)?;
+        let key = Key::from_slice(private_key_bytes.as_ref());
+        let cipher = XChaCha20Poly1305::new(key);
+        let nonce = &data[0..ENC_NONCE_LEN];
+        let mut buffer = data[ENC_NONCE_LEN..].to_vec();
+        cipher.decrypt_in_place(nonce.into(), &[], &mut buffer)?;
+        Ok(Secret::new(buffer))
+    }
 }
 
 #[cfg(test)]
@@ -279,6 +330,41 @@ mod tests {
         // println!("decrypted: {}", decrypted.to_hex());
         assert_eq!(decrypted.as_ref(), original);
 
+        // The new envelope carries the version magic and a 16-byte random salt before the nonce.
+        assert!(encrypted.starts_with(ENC_ENVELOPE_MAGIC), "new format is a versioned envelope");
+
         Ok(())
+    }
+
+    #[test]
+    fn test_wallet_decrypt_legacy_v0_blob() -> Result<()> {
+        // A blob written by the pre-fix code (deterministic salt, layout nonce(24) || ciphertext)
+        // must still decrypt via the legacy fallback path (backward compatibility).
+        let password = Secret::new(b"password".to_vec());
+        let original = b"legacy payload".to_vec();
+
+        let private_key_bytes = argon2_sha256iv_hash(password.as_ref(), 32)?;
+        let key = Key::from_slice(private_key_bytes.as_ref());
+        let cipher = XChaCha20Poly1305::new(key);
+        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let mut buffer = original.clone();
+        buffer.reserve(16);
+        cipher.encrypt_in_place(&nonce, &[], &mut buffer)?;
+        let mut legacy_blob = nonce.to_vec();
+        legacy_blob.extend_from_slice(&buffer);
+
+        let decrypted = decrypt_xchacha20poly1305(&legacy_blob, &password)?;
+        assert_eq!(decrypted.as_ref(), original);
+        Ok(())
+    }
+
+    #[test]
+    fn test_wallet_decrypt_short_payload_errors_without_panicking() {
+        // audit F10: a truncated ciphertext must return an error, not panic on an out-of-bounds slice.
+        let password = Secret::new(b"password".to_vec());
+        assert!(decrypt_xchacha20poly1305(&[], &password).is_err());
+        assert!(decrypt_xchacha20poly1305(&[0u8; 4], &password).is_err());
+        assert!(decrypt_xchacha20poly1305(&[0u8; 23], &password).is_err()); // < nonce length
+        assert!(decrypt_xchacha20poly1305(ENC_ENVELOPE_MAGIC, &password).is_err()); // magic, no salt/nonce
     }
 }

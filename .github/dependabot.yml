@@ -1,0 +1,23 @@
+# Dependabot keeps third-party GitHub Actions and Cargo dependencies up to date, and — paired with
+# SHA-pinned `uses:` refs — raises automated PRs that bump the pin to the next vetted commit. This is
+# the maintainable half of the supply-chain hardening: pin actions to a full commit SHA, then let
+# Dependabot propose the upgrades (GitHub's recommended pattern).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: "/docker"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

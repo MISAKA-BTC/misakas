@@ -44,6 +44,11 @@ struct Args {
     /// network. Lets mined coins be staked as a validator bond.
     #[arg(long)]
     pay_address: Option<String>,
+    /// Allow mining to an UNSPENDABLE placeholder address when neither `--pay-address` nor
+    /// `--pay-mnemonic` is set (rewards are permanently lost). For PoW smoke tests only; without it
+    /// the miner refuses to start rather than silently burning coinbase rewards.
+    #[arg(long, default_value_t = false)]
+    allow_burn: bool,
     /// Minimum wall-clock interval between submitted blocks, in milliseconds
     /// (0 = no throttle). At trivial difficulty, set this to pace block
     /// production so a multi-datacenter mesh does not outrun cross-DC
@@ -155,7 +160,19 @@ async fn main() {
         // kaspa-pq PQ-only: the no-wallet placeholder must itself be the standard
         // ML-DSA-87 P2PKH class (all-zero hash → unspendable but class-valid), so a
         // placeholder-mined coinbase passes the consensus output-class rule.
-        (None, None) => Address::new(prefix, Version::PubKeyHashMlDsa87, &[0u8; 64]),
+        (None, None) => {
+            // Fail closed: silently mining to an unspendable address permanently loses every reward.
+            if !args.allow_burn {
+                eprintln!(
+                    "refusing to start: no --pay-address or --pay-mnemonic set, so coinbase rewards would be mined to \
+                     an UNSPENDABLE placeholder and permanently lost. Set --pay-address/--pay-mnemonic, or pass \
+                     --allow-burn for a PoW smoke test."
+                );
+                std::process::exit(1);
+            }
+            log::warn!("--allow-burn: mining to an UNSPENDABLE placeholder (rewards are lost) — PoW smoke test only.");
+            Address::new(prefix, Version::PubKeyHashMlDsa87, &[0u8; 64])
+        }
     };
     let network_id = args.network_id.clone().into_bytes();
 

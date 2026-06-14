@@ -343,8 +343,15 @@ impl ShareHandler {
             let submitted_address = parts[0];
 
             // Check if submitted address matches authorized address (case-insensitive, ignore prefix)
-            let submitted_clean = submitted_address.trim_start_matches("kaspa:").trim_start_matches("kaspatest:");
-            let authorized_clean = wallet_addr.trim_start_matches("kaspa:").trim_start_matches("kaspatest:");
+            let strip_prefix = |a: &str| -> String {
+                a.trim_start_matches("misaka:")
+                    .trim_start_matches("misakatest:")
+                    .trim_start_matches("misakasim:")
+                    .trim_start_matches("misakadev:")
+                    .to_string()
+            };
+            let submitted_clean = strip_prefix(submitted_address);
+            let authorized_clean = strip_prefix(&wallet_addr);
 
             if submitted_clean.to_lowercase() != authorized_clean.to_lowercase() {
                 debug!(
@@ -431,7 +438,9 @@ impl ShareHandler {
             let extranonce = ctx.extranonce.lock();
             if !extranonce.is_empty() {
                 let extranonce_val = extranonce.clone();
-                let extranonce2_len = 16 - extranonce_val.len();
+                // saturating_sub guards against an over-long extranonce underflowing the width,
+                // which would otherwise drive a huge format!-padding allocation.
+                let extranonce2_len = 16usize.saturating_sub(extranonce_val.len());
 
                 // Only prepend extranonce if nonce is shorter than expected
                 if nonce_str.len() <= extranonce2_len {
@@ -1000,9 +1009,9 @@ impl ShareHandler {
                     // Exhausted all previous blocks (wrapped around or reached job 1)
                     debug!("Job ID loop exhausted: current_job_id={}, job_id={}, max_jobs={}", current_job_id, job_id, max_jobs);
                     break;
-                } else {
-                    // Try previous job ID
-                    let prev_job_id = current_job_id - 1;
+                } else if let Some(prev_job_id) = current_job_id.checked_sub(1) {
+                    // Try previous job ID (checked_sub guards against current_job_id == 0, reachable
+                    // when a miner submits job_id 0 once slot 0 has been populated).
                     if let Some(prev_job) = state.get_job(prev_job_id) {
                         current_job_id = prev_job_id;
                         current_job = prev_job;
@@ -1014,6 +1023,10 @@ impl ShareHandler {
                         debug!("Previous job ID {} doesn't exist, exiting loop", prev_job_id);
                         break;
                     }
+                } else {
+                    // current_job_id == 0: there is no earlier job to try.
+                    debug!("Job ID 0 has no previous job, exiting loop");
+                    break;
                 }
             } else {
                 // Valid share (pow_value < pool_target) - moved to debug to keep terminal clean

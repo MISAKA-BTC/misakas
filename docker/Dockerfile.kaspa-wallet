@@ -1,5 +1,6 @@
 # ---------------------------------------- Chef image -------------------------------------------
-FROM rust:1.90-alpine AS chef
+# Pinned to the multi-arch manifest digest (resolved 2026-06-14). Dependabot keeps it current.
+FROM rust:1.90-alpine@sha256:b4b54b176a74db7e5c68fdfe6029be39a02ccbcfe72b6e5a3e18e2c61b57ae26 AS chef
 RUN apk --no-cache add \
   musl-dev \
   protobuf-dev \
@@ -35,7 +36,8 @@ RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry,sharin
 
 
 # ---------------------------------------- Runtime image ----------------------------------------
-FROM alpine AS runtime
+# Pinned to the multi-arch manifest digest (resolved 2026-06-14) — was untagged (floated to :latest).
+FROM alpine:latest@sha256:a2d49ea686c2adfe3c992e47dc3b5e7fa6e6b5055609400dc2acaeb241c829f4 AS runtime
 WORKDIR /app
 
 RUN apk --no-cache add \

@@ -10,8 +10,9 @@ use std::sync::{Arc, LazyLock};
 /// Matches: BzMiner, IceRiverMiner (from client_handler.go bigJobRegex)
 static BIG_JOB_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r".*(BzMiner|IceRiverMiner).*").unwrap());
 
-/// Regex for matching wallet addresses
-static WALLET_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"kaspa(test|dev)?:([a-z0-9]{61}|[a-z0-9]{63})").unwrap());
+/// Maximum length of a miner-supplied worker name accepted as a metrics label. Bounds Prometheus
+/// label cardinality (attacker-controlled `worker` values would otherwise grow series without limit).
+const MAX_WORKER_NAME_LEN: usize = 32;
 
 /// Default logger configuration
 pub fn default_logger() {
@@ -122,7 +123,8 @@ pub async fn handle_subscribe(
 
     let response = if is_bitmain {
         // Bitmain format - extranonce in subscribe response
-        let extranonce2_size = 8 - (extranonce.len() / 2);
+        // saturating_sub guards against an over-long extranonce (would otherwise underflow).
+        let extranonce2_size = 8usize.saturating_sub(extranonce.len() / 2);
         tracing::debug!("[SUBSCRIBE] ===== USING BITMAIN SUBSCRIBE FORMAT FOR {} =====", ctx.remote_addr);
         tracing::debug!("[SUBSCRIBE] Bitmain extranonce: '{}', extranonce2_size: {}", extranonce, extranonce2_size);
         tracing::debug!("[SUBSCRIBE] Bitmain response: [null, '{}', {}]", extranonce, extranonce2_size);
@@ -208,7 +210,9 @@ pub async fn handle_authorize(
     let mut canxium_address = String::new();
 
     if parts.len() >= 2 {
-        worker_name = parts[1].to_string();
+        // Sanitize: the worker name becomes a Prometheus label, so it must be length- and
+        // charset-bounded to prevent metric-cardinality blowup from attacker-controlled values.
+        worker_name = sanitize_worker_label(parts[1]);
         tracing::debug!("[AUTHORIZE] Extracted worker name: '{}'", worker_name);
         if parts.len() >= 3 {
             canxium_address = process_canxium_address(parts[2]);
@@ -322,24 +326,30 @@ fn process_canxium_address(address: &str) -> String {
     addr
 }
 
-/// Clean and validate wallet address
+/// Validate the miner-supplied payout address.
+///
+/// This chain is post-quantum (PQ-only): the address library accepts only the `misaka*` HRP family
+/// (`misaka:`, `misakatest:`, `misakasim:`, `misakadev:`). Legacy `kaspa*` addresses are not
+/// representable and are rejected here with a clear message instead of being silently coerced (the
+/// old behavior prepended `kaspa:` and matched a lax regex, producing addresses the node would later
+/// reject at block-template time anyway).
 fn clean_wallet(input: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Try to decode as Kaspa address (supports kaspa:, kaspatest:, kaspadev:)
+    // The address library is the single source of truth: it accepts only valid misaka* addresses.
     if Address::try_from(input).is_ok() {
         return Ok(input.to_string());
     }
 
-    // Try with kaspa: prefix if no recognized prefix
-    if !input.starts_with("kaspa:") && !input.starts_with("kaspatest:") && !input.starts_with("kaspadev:") {
-        return clean_wallet(&format!("kaspa:{}", input));
+    if input.starts_with("kaspa:") || input.starts_with("kaspatest:") || input.starts_with("kaspadev:") {
+        return Err("legacy kaspa* addresses are not valid on this network; use a misaka:/misakatest:/misakasim:/misakadev: address".into());
     }
 
-    // Try regex match
-    if let Some(captures) = WALLET_REGEX.find(input) {
-        return Ok(captures.as_str().to_string());
-    }
+    Err("payout address must be a valid misaka* address including its network prefix (e.g. misaka:...)".into())
+}
 
-    Err("unable to coerce wallet to valid kaspa address".into())
+/// Bound a miner-supplied worker name to a safe, low-cardinality Prometheus label: cap the length and
+/// restrict the charset so an attacker cannot explode metric series by varying the worker name.
+fn sanitize_worker_label(raw: &str) -> String {
+    raw.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).take(MAX_WORKER_NAME_LEN).collect()
 }
 
 /// Send extranonce to client
@@ -359,7 +369,7 @@ async fn send_extranonce(ctx: Arc<StratumContext>) -> Result<(), Box<dyn std::er
     tracing::debug!("[EXTRANONCE] Detected miner type - Remote app: '{}', Is Bitmain: {}", remote_app, is_bitmain);
 
     let params = if is_bitmain {
-        let extranonce2_size = 8 - (extranonce.len() / 2);
+        let extranonce2_size = 8usize.saturating_sub(extranonce.len() / 2);
         tracing::debug!("[EXTRANONCE] ===== USING BITMAIN EXTRANONCE FORMAT FOR {} =====", ctx.remote_addr);
         tracing::debug!(
             "[EXTRANONCE] Bitmain extranonce: '{}' ({} bytes), extranonce2_size: {} (calculated: 8 - {} / 2)",

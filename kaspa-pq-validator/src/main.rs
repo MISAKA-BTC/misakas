@@ -319,13 +319,36 @@ fn keygen(args: KeygenArgs) -> Result<(), String> {
     faster_hex::hex_encode(&seed, &mut hex_buf).map_err(|e| format!("hex encode failed: {e}"))?;
     let hex = std::str::from_utf8(&hex_buf).expect("hex is valid utf-8");
 
-    std::fs::write(&args.out, hex).map_err(|e| format!("cannot write key to '{}': {e}", args.out))?;
+    // Create the key file atomically and refuse to clobber an existing one. `create_new`
+    // (O_CREAT|O_EXCL) both prevents silently destroying a funded validator's key on a mistyped path
+    // and rejects following a pre-planted symlink; `.mode(0600)` sets owner-only perms at creation, so
+    // there is never the group/world-readable window a write-then-chmod sequence leaves open.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&args.out, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("cannot chmod 600 '{}': {e}", args.out))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&args.out)
+            .map_err(|e| format!("cannot create key file '{}' (it must not already exist): {e}", args.out))?;
+        f.write_all(hex.as_bytes()).map_err(|e| format!("cannot write key to '{}': {e}", args.out))?;
+        f.sync_all().map_err(|e| format!("cannot fsync key file '{}': {e}", args.out))?;
     }
+    #[cfg(not(unix))]
+    {
+        if std::path::Path::new(&args.out).exists() {
+            return Err(format!("refusing to overwrite existing key file '{}'", args.out));
+        }
+        std::fs::write(&args.out, hex).map_err(|e| format!("cannot write key to '{}': {e}", args.out))?;
+    }
+
+    // Best-effort scrub of the in-memory seed/hex material (black_box discourages dead-store removal).
+    seed.fill(0);
+    hex_buf.fill(0);
+    std::hint::black_box(&seed);
+    std::hint::black_box(&hex_buf);
 
     println!("validator key written to {} (keep it secret; back it up; do NOT run it on a second host)", args.out);
     println!("validator_id:    {}", key.validator_id);

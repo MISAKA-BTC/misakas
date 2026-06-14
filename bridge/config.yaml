@@ -12,6 +12,11 @@ block_wait_time: 1000
 print_stats: true
 log_to_file: true
 health_check_port: ""
+# Management endpoints (web dashboard + per-instance prom_port) bind LOOPBACK (127.0.0.1) when given a
+# bare port like ":3030". They expose config/stats (/api/config, /api/stats) and, when
+# RKSTRATUM_ALLOW_CONFIG_WRITE=1, a config-write endpoint, so they must not be world-reachable by
+# accident. To expose on a LAN, set an explicit address (e.g. "0.0.0.0:3030") behind a firewall /
+# reverse proxy. The Stratum ports (stratum_port) still bind 0.0.0.0 so miners can connect.
 web_dashboard_port: ":3030"
 var_diff: true
 shares_per_min: 30
@@ -19,6 +24,9 @@ var_diff_stats: true
 pow2_clamp: true
 extranonce_size: 2
 coinbase_tag_suffix: ""
+# Connection-rate limits for the (public) Stratum listener. Defaults are generous; 0 disables a cap.
+max_connections: 8192
+max_connections_per_ip: 1024
 
 instances:
   - stratum_port: ":5559"

@@ -309,7 +309,7 @@ async fn main() -> Result<(), anyhow::Error> {
             let mining_address = cli
                 .internal_cpu_miner_address
                 .clone()
-                .ok_or_else(|| anyhow::anyhow!("--internal-cpu-miner requires --internal-cpu-miner-address <kaspa:...>"))?;
+                .ok_or_else(|| anyhow::anyhow!("--internal-cpu-miner requires --internal-cpu-miner-address <misaka:...>"))?;
 
             let threads = cli.internal_cpu_miner_threads.unwrap_or(1);
             let throttle = cli.internal_cpu_miner_throttle_ms.map(Duration::from_millis);
@@ -428,6 +428,8 @@ async fn main() -> Result<(), anyhow::Error> {
                 extranonce_size: instance.extranonce_size.unwrap_or(global.extranonce_size),
                 pow2_clamp: instance.pow2_clamp.unwrap_or(global.pow2_clamp),
                 coinbase_tag_suffix: global.coinbase_tag_suffix.clone(),
+                max_connections: global.max_connections,
+                max_connections_per_ip: global.max_connections_per_ip,
             };
 
             listen_and_serve_with_shutdown(

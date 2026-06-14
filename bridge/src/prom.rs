@@ -3,24 +3,25 @@ use prometheus::proto::MetricFamily;
 use prometheus::{Counter, register_counter};
 use prometheus::{CounterVec, Gauge, GaugeVec, register_counter_vec, register_gauge, register_gauge_vec};
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "rkstratum_cpu_miner")]
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::app_config::BridgeConfig;
-use crate::net_utils::bind_addr_from_port;
+use crate::net_utils::bind_addr_from_port_local;
 use std::path::PathBuf;
 
 /// Worker labels for Prometheus metrics
 const WORKER_LABELS: &[&str] = &["instance", "worker", "miner", "wallet", "ip"];
+/// Labels for the mined-blocks gauge. Deliberately the same low-cardinality worker labels as
+/// [`WORKER_LABELS`]: per-block fields (nonce/hash/timestamp) are NOT labels — they are kept in the
+/// bounded [`RECENT_BLOCKS`] ring buffer instead, so the Prometheus series count cannot grow
+/// without bound (one new series per mined block would otherwise leak forever).
+const BLOCK_GAUGE_LABELS: &[&str] = WORKER_LABELS;
 
 /// Invalid share type labels
 const INVALID_LABELS: &[&str] = &["instance", "worker", "miner", "wallet", "ip", "type"];
-
-/// Block labels
-const BLOCK_LABELS: &[&str] = &["instance", "worker", "miner", "wallet", "ip", "nonce", "bluescore", "timestamp", "hash"];
 
 /// Error labels
 const ERROR_LABELS: &[&str] = &["instance", "wallet", "error"];
@@ -137,7 +138,8 @@ pub fn init_metrics() {
     });
 
     BLOCK_GAUGE.get_or_init(|| {
-        register_gauge_vec!("ks_mined_blocks_gauge", "Gauge containing 1 unique instance per block mined", BLOCK_LABELS).unwrap()
+        register_gauge_vec!("ks_mined_blocks_gauge", "1 per worker that has mined a block (low-cardinality)", BLOCK_GAUGE_LABELS)
+            .unwrap()
     });
 
     DISCONNECT_COUNTER.get_or_init(|| {
@@ -253,6 +255,38 @@ struct InternalCpuBlock {
     bluescore: u64,
     nonce: u64,
     hash: String,
+}
+
+/// A recently mined (Stratum) block, kept for the dashboard's recent-blocks table WITHOUT using
+/// high-cardinality Prometheus labels. Bounded by [`RECENT_BLOCKS_LIMIT`].
+#[derive(Clone, Debug)]
+struct RecentBlock {
+    instance: String,
+    worker: String,
+    wallet: String,
+    timestamp_unix: u64,
+    bluescore: u64,
+    nonce: u64,
+    hash: String,
+}
+
+static RECENT_BLOCKS: OnceLock<parking_lot::Mutex<VecDeque<RecentBlock>>> = OnceLock::new();
+const RECENT_BLOCKS_LIMIT: usize = 100;
+
+/// Record a recently mined Stratum block in the bounded ring buffer (de-duped by hash). This replaces
+/// the previous high-cardinality `nonce/timestamp/hash` Prometheus labels on `ks_mined_blocks_gauge`.
+fn record_recent_block(block: RecentBlock) {
+    if block.hash.trim().is_empty() {
+        return;
+    }
+    let mut q = RECENT_BLOCKS.get_or_init(|| parking_lot::Mutex::new(VecDeque::with_capacity(RECENT_BLOCKS_LIMIT))).lock();
+    if q.iter().any(|b| b.hash == block.hash) {
+        return;
+    }
+    q.push_front(block);
+    if q.len() > RECENT_BLOCKS_LIMIT {
+        q.truncate(RECENT_BLOCKS_LIMIT);
+    }
 }
 
 /// Record a recently submitted internal CPU miner block so the dashboard can display it
@@ -388,7 +422,7 @@ async fn handle_http_request(
             WebStatusResponse { kaspad_address: status_cfg.kaspad_address, kaspad_version, instances: status_cfg.instances, web_bind };
         let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             json.len(),
             json
         );
@@ -403,7 +437,7 @@ async fn handle_http_request(
         };
         let json = serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string());
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             json.len(),
             json
         );
@@ -414,7 +448,7 @@ async fn handle_http_request(
     if matches!(mode, HttpMode::Instance { .. }) && request.starts_with("GET /api/config") {
         let config_json = get_config_json().await;
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             config_json.len(),
             config_json
         );
@@ -427,7 +461,38 @@ async fn handle_http_request(
             let json_response =
                 r#"{"success": false, "message": "Config write disabled. Set RKSTRATUM_ALLOW_CONFIG_WRITE=1 to enable."}"#;
             let response = format!(
-                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                json_response.len(),
+                json_response
+            );
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+
+        // CSRF guard: a browser form/fetch from another origin can still SEND a POST even with no
+        // permissive CORS header. Reject any request carrying a cross-origin Origin/Referer so a
+        // malicious page in the operator's browser cannot silently rewrite the config (e.g.
+        // kaspad_address). Same-origin dashboard requests (loopback) and non-browser clients (curl,
+        // no Origin header) are allowed through.
+        if request_has_cross_origin_header(request) {
+            let json_response = r#"{"success": false, "message": "Cross-origin config write rejected."}"#;
+            let response = format!(
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                json_response.len(),
+                json_response
+            );
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+
+        // Bound the accepted body. The request was read into a single fixed buffer, so an oversized or
+        // segmented body would otherwise be silently truncated and applied as a partial config; reject
+        // anything that declares more than we will read.
+        const MAX_CONFIG_BODY: usize = 64 * 1024;
+        if parse_content_length(request).is_some_and(|declared| declared > MAX_CONFIG_BODY) {
+            let json_response = r#"{"success": false, "message": "Config body too large."}"#;
+            let response = format!(
+                "HTTP/1.1 413 Payload Too Large\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                 json_response.len(),
                 json_response
             );
@@ -444,7 +509,7 @@ async fn handle_http_request(
             r#"{"success": false, "message": "Failed to update config"}"#
         };
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             json_response.len(),
             json_response
         );
@@ -468,16 +533,25 @@ async fn handle_http_request(
 }
 
 async fn serve_http_loop(listener: tokio::net::TcpListener, mode: HttpMode) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use tokio::io::AsyncReadExt;
-
     loop {
-        let (mut stream, _) = listener.accept().await?;
-        let mut buffer = [0; 8192];
-
-        if let Ok(n) = stream.read(&mut buffer).await {
-            let request = String::from_utf8_lossy(&buffer[..n]);
-            let _ = handle_http_request(stream, &request, &mode).await;
-        }
+        let (stream, _) = listener.accept().await?;
+        let mode = mode.clone();
+        // Handle each connection on its own task with a bounded read timeout, so a single client that
+        // connects but sends nothing (Slowloris-style) cannot block the accept loop or hold the
+        // server's request path indefinitely.
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut stream = stream;
+            let mut buffer = [0u8; 8192];
+            match tokio::time::timeout(std::time::Duration::from_secs(10), stream.read(&mut buffer)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    let request = String::from_utf8_lossy(&buffer[..n]).into_owned();
+                    let _ = handle_http_request(stream, &request, &mode).await;
+                }
+                // Timeout, read error, or empty read: drop the connection.
+                _ => {}
+            }
+        });
     }
 }
 
@@ -487,8 +561,11 @@ pub async fn start_web_server_all(port: &str) -> Result<(), Box<dyn std::error::
 
     init_metrics();
 
-    let addr_str = bind_addr_from_port(port);
+    // Bare port defaults to loopback: the dashboard exposes /api/config, /api/stats etc. and must not
+    // be world-reachable unless the operator writes an explicit 0.0.0.0/host address in the config.
+    let addr_str = bind_addr_from_port_local(port);
     let addr: SocketAddr = addr_str.parse()?;
+    ensure_public_bind_allowed(&addr, "web dashboard")?;
     let listener = TcpListener::bind(addr).await?;
     let web_bind_for_status = addr_str.clone();
 
@@ -628,18 +705,23 @@ pub fn record_block_found(worker: &WorkerContext, nonce: u64, bluescore: u64, ha
     if let Some(counter) = BLOCK_COUNTER.get() {
         counter.with_label_values(&worker.labels()).inc();
     }
+    // Low-cardinality gauge: just mark that this worker has mined a block. The per-block detail
+    // (nonce/bluescore/timestamp/hash) goes into the bounded RECENT_BLOCKS ring buffer below, NOT
+    // into Prometheus labels — otherwise every mined block leaks a new, never-evicted series.
     if let Some(gauge) = BLOCK_GAUGE.get() {
-        let mut labels = worker.labels();
-        let nonce_str = nonce.to_string();
-        let bluescore_str = bluescore.to_string();
-        let timestamp_str =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().to_string();
-        labels.push(&nonce_str);
-        labels.push(&bluescore_str);
-        labels.push(&timestamp_str);
-        labels.push(&hash);
-        gauge.with_label_values(&labels).set(1.0);
+        gauge.with_label_values(&worker.labels()).set(1.0);
     }
+    let timestamp_unix =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    record_recent_block(RecentBlock {
+        instance: worker.instance_id.clone(),
+        worker: worker.worker_name.clone(),
+        wallet: worker.wallet.clone(),
+        timestamp_unix,
+        bluescore,
+        nonce,
+        hash,
+    });
 }
 
 /// Record a disconnect
@@ -707,6 +789,60 @@ fn config_write_allowed() -> bool {
         std::env::var("RKSTRATUM_ALLOW_CONFIG_WRITE").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES") | Ok("on") | Ok("ON")
     )
+}
+
+/// Whether the operator has explicitly acknowledged exposing the (unauthenticated) management
+/// endpoints on a public address. See SECURITY.md ("Dashboard / metrics exposure").
+fn public_dashboard_allowed() -> bool {
+    matches!(
+        std::env::var("RKSTRATUM_ALLOW_PUBLIC_DASHBOARD").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES") | Ok("on") | Ok("ON")
+    )
+}
+
+/// Fail-closed guard for the management endpoints (web dashboard + Prometheus). They are
+/// unauthenticated and disclose config/topology, so binding them to a non-loopback address must be a
+/// deliberate, acknowledged choice — otherwise the server refuses to start (WARN is not enough).
+fn ensure_public_bind_allowed(addr: &std::net::SocketAddr, what: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if !addr.ip().is_loopback() && !public_dashboard_allowed() {
+        return Err(format!(
+            "refusing to bind {what} to non-loopback address {addr}: the dashboard/metrics endpoints are \
+             unauthenticated and leak config/topology. Bind 127.0.0.1, front it with an authenticating reverse \
+             proxy, or set RKSTRATUM_ALLOW_PUBLIC_DASHBOARD=1 to acknowledge the risk."
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Parse the `Content-Length` header (case-insensitive) from a raw HTTP request, if present.
+fn parse_content_length(request: &str) -> Option<usize> {
+    request
+        .lines()
+        .take_while(|l| !l.is_empty())
+        .find_map(|line| line.split_once(':').filter(|(name, _)| name.trim().eq_ignore_ascii_case("content-length")))
+        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+}
+
+/// Return `true` if the request carries an `Origin` or `Referer` header pointing at a host that is
+/// not loopback. Such a request originates from a web page on another site (CSRF). Requests with no
+/// `Origin`/`Referer` (e.g. curl, the local dashboard's same-origin fetch) return `false`.
+fn request_has_cross_origin_header(request: &str) -> bool {
+    fn host_is_local(url: &str) -> bool {
+        // Strip scheme and any path, leaving authority ("host:port").
+        let authority = url.split("://").nth(1).unwrap_or(url);
+        let host = authority.split(['/', ':']).next().unwrap_or("");
+        matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]" | "")
+    }
+    request
+        .lines()
+        .take_while(|l| !l.is_empty())
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(name, _)| {
+            let n = name.trim();
+            n.eq_ignore_ascii_case("origin") || n.eq_ignore_ascii_case("referer")
+        })
+        .any(|(_, value)| !host_is_local(value.trim()))
 }
 
 /// Set best-effort status fields used by `/api/status`.
@@ -1060,48 +1196,10 @@ async fn get_stats_json_filtered(instance_id: Option<&str>) -> StatsResponse {
     for family in families_for_workers_and_blocks {
         let name = family.name();
 
-        // Parse block gauge
-        if name == "ks_mined_blocks_gauge" {
-            for metric in family.get_metric() {
-                if metric.get_gauge().value() > 0.0 {
-                    let labels = metric.get_label();
-                    let mut instance = String::new();
-                    let mut worker = String::new();
-                    let mut wallet = String::new();
-                    let mut timestamp = String::new();
-                    let mut hash = String::new();
-                    let mut nonce = String::new();
-                    let mut bluescore = String::new();
-
-                    for label in labels {
-                        match label.name() {
-                            "instance" => instance = label.value().to_string(),
-                            "worker" => worker = label.value().to_string(),
-                            "wallet" => wallet = label.value().to_string(),
-                            "timestamp" => timestamp = label.value().to_string(),
-                            "hash" => hash = label.value().to_string(),
-                            "nonce" => nonce = label.value().to_string(),
-                            "bluescore" => bluescore = label.value().to_string(),
-                            _ => {}
-                        }
-                    }
-
-                    if !hash.is_empty() && !block_set.contains(&hash) {
-                        block_set.insert(hash.clone());
-                        stats.blocks.push(BlockInfo {
-                            instance,
-                            worker: worker.clone(),
-                            wallet: wallet.clone(),
-                            timestamp,
-                            hash,
-                            nonce,
-                            bluescore,
-                        });
-                        stats.totalBlocks += 1;
-                    }
-                }
-            }
-        }
+        // The recent-blocks LIST is now built from the bounded RECENT_BLOCKS ring buffer (below),
+        // not from `ks_mined_blocks_gauge` labels (which are now low-cardinality). `stats.totalBlocks`
+        // is taken from the `ks_blocks_mined` counter so the all-time total is not capped by the ring
+        // buffer.
 
         // Parse block counter
         if name == "ks_blocks_mined" {
@@ -1114,6 +1212,8 @@ async fn get_stats_json_filtered(instance_id: Option<&str>) -> StatsResponse {
                     let entry = worker_stats.entry(key.clone()).or_insert_with(|| new_worker_info(instance, worker_key, wallet));
                     // Aggregate across multiple time series for the same (instance,worker,wallet)
                     entry.blocks = entry.blocks.saturating_add(count);
+                    // All-time total (counter sum), independent of the bounded recent-blocks list.
+                    stats.totalBlocks = stats.totalBlocks.saturating_add(count);
                 }
             }
         }
@@ -1343,6 +1443,30 @@ async fn get_stats_json_filtered(instance_id: Option<&str>) -> StatsResponse {
         stats.totalShares = stats.totalShares.saturating_add(icpu.blocksAccepted);
     }
 
+    // Build the recent-blocks list from the bounded RECENT_BLOCKS ring buffer (replacing the old
+    // high-cardinality gauge labels). Filter to this instance when reporting a single instance.
+    if let Some(q) = RECENT_BLOCKS.get() {
+        let guard = q.lock();
+        for b in guard.iter() {
+            if instance_id.is_some_and(|id| b.instance != id) {
+                continue;
+            }
+            if b.hash.is_empty() || block_set.contains(&b.hash) {
+                continue;
+            }
+            block_set.insert(b.hash.clone());
+            stats.blocks.push(BlockInfo {
+                instance: b.instance.clone(),
+                worker: b.worker.clone(),
+                wallet: b.wallet.clone(),
+                timestamp: b.timestamp_unix.to_string(),
+                hash: b.hash.clone(),
+                nonce: b.nonce.to_string(),
+                bluescore: b.bluescore.to_string(),
+            });
+        }
+    }
+
     // Add internal CPU recent blocks into the unified blocks list so the donut chart and
     // recent blocks table populate even in CPU-only runs.
     #[cfg(feature = "rkstratum_cpu_miner")]
@@ -1397,6 +1521,10 @@ async fn get_stats_json_all() -> StatsResponse {
 }
 
 /// Get current config as JSON
+// INVARIANT: the object returned here is a PUBLIC-SAFE DTO. It exposes only operational config
+// (kaspad_address, ports, share/diff settings) — never secrets, tokens, mnemonics, or private paths.
+// `config.yaml` holds no secrets today; if a secret-like field is ever added to the config, it MUST be
+// excluded from this response (the dashboard reads this over an unauthenticated endpoint).
 async fn get_config_json() -> String {
     use std::fs;
 
@@ -1447,7 +1575,10 @@ async fn update_config_from_json(json_body: &str) -> Result<(), Box<dyn std::err
     let mut config = if content.is_empty() {
         BridgeConfig::default()
     } else {
-        BridgeConfig::from_yaml(&content).unwrap_or_else(|_| BridgeConfig::default())
+        // Do NOT fall back to defaults on a parse error: that would silently wipe the operator's
+        // existing config (ports, kaspad_address, instances) on the next write. Surface the error.
+        BridgeConfig::from_yaml(&content)
+            .map_err(|e| format!("refusing to overwrite unparseable existing config {}: {}", config_path.display(), e))?
     };
 
     // Update global fields if provided
@@ -1519,8 +1650,11 @@ async fn update_config_from_json(json_body: &str) -> Result<(), Box<dyn std::err
     // Convert back to YAML with flattened global fields
     let yaml_content = config.to_yaml().map_err(|e| format!("Failed to serialize config to YAML: {}", e))?;
 
-    // Write to file
-    fs::write(config_path, yaml_content)?;
+    // Atomic write: stage to a temp file in the same directory, then rename over the target so a
+    // crash mid-write can never leave a truncated/corrupt config.yaml.
+    let tmp_path = config_path.with_extension("yaml.tmp");
+    fs::write(&tmp_path, yaml_content.as_bytes())?;
+    fs::rename(&tmp_path, &config_path)?;
 
     Ok(())
 }
@@ -1534,9 +1668,12 @@ pub async fn start_prom_server(port: &str, instance_id: &str) -> Result<(), Box<
 
     let instance_id = instance_id.to_string();
 
-    let addr_str = bind_addr_from_port(port);
+    // Bare port defaults to loopback (see start_web_server_all): the per-instance server also exposes
+    // /api/config and accepts POST /api/config writes, so it must not bind all interfaces by default.
+    let addr_str = bind_addr_from_port_local(port);
 
     let addr: SocketAddr = addr_str.parse()?;
+    ensure_public_bind_allowed(&addr, "prometheus server")?;
     let listener = TcpListener::bind(addr).await?;
 
     tracing::debug!("Hosting prom stats on {}/metrics", addr);
