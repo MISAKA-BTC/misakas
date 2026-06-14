@@ -1077,6 +1077,8 @@ mod integration {
             extranonce_size: 4,
             pow2_clamp: false,
             coinbase_tag_suffix: None,
+            max_connections: 8192,
+            max_connections_per_ip: 1024,
         };
 
         // Start the bridge server (with a timeout to prevent hanging)

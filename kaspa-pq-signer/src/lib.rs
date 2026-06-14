@@ -67,7 +67,14 @@ impl AuditLog {
         let body = borsh::to_vec(rec)?;
         let mut frame = (body.len() as u32).to_be_bytes().to_vec();
         frame.extend_from_slice(&body);
-        let mut f = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let mut opts = OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600); // owner-only audit log
+        }
+        let mut f = opts.open(&self.path)?;
         f.write_all(&frame)?;
         f.sync_all()?;
         self.chain_hash = next;
@@ -90,6 +97,10 @@ pub struct SignerState {
     epoch_stores: HashMap<Hash64, SignedEpochStore>,
     audit: AuditLog,
     server_identity: HostId,
+    /// Optional policy hook: purposes this signer refuses to sign (e.g. a validator-only signer can
+    /// deny `Transaction` so it only ever produces attestation/unbond/takeover signatures). Empty by
+    /// default — no behavior change unless the operator opts in.
+    denied_purposes: Vec<SigningPurpose>,
 }
 
 impl SignerState {
@@ -98,10 +109,23 @@ impl SignerState {
     /// any existing log.
     pub fn new(keys: Vec<ValidatorKey>, policy: SignerPolicy, state_dir: PathBuf, server_identity: HostId) -> Result<Self, String> {
         fs::create_dir_all(&state_dir).map_err(|e| format!("cannot create signer state dir {}: {e}", state_dir.display()))?;
+        // The state dir holds the equivocation logs and the audit log — owner-only (0700).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700))
+                .map_err(|e| format!("cannot chmod 700 signer state dir {}: {e}", state_dir.display()))?;
+        }
         let audit = AuditLog::load_or_new(state_dir.join("audit.log"))
             .map_err(|e| format!("cannot open signer audit log: {e}"))?;
         let keys = keys.into_iter().map(|k| (k.validator_id, k)).collect();
-        Ok(Self { keys, policy, state_dir, epoch_stores: HashMap::new(), audit, server_identity })
+        Ok(Self { keys, policy, state_dir, epoch_stores: HashMap::new(), audit, server_identity, denied_purposes: Vec::new() })
+    }
+
+    /// Set the optional purpose denylist (see [`SignerState::denied_purposes`]). A request whose
+    /// purpose is denied is refused with a policy violation before any signing.
+    pub fn set_denied_purposes(&mut self, purposes: Vec<SigningPurpose>) {
+        self.denied_purposes = purposes;
     }
 
     /// The signer's own host identity (echoed in the handshake ack).
@@ -162,6 +186,17 @@ impl SignerState {
         // (1) Wellformedness: the purpose tag MUST match the typed digest variant (audit H-03).
         if !req.purpose_matches_digest() {
             return Err(SignerError::PolicyViolation("purpose tag does not match message_digest variant".into()));
+        }
+        // (1a) Optional purpose denylist (e.g. a validator-only signer that refuses Transaction).
+        if self.denied_purposes.contains(&req.purpose) {
+            return Err(SignerError::PolicyViolation(format!("signing purpose {:?} is denied by policy", req.purpose)));
+        }
+        // (1b) The ML-DSA-87 signing context is bounded to 255 bytes (FIPS 204). Reject an over-long
+        //      context in-band here rather than letting it reach the `assert!` in
+        //      `ValidatorKey::sign_with_context`, which would panic — and, under the shared state
+        //      mutex, poison it and wedge every subsequent request (remote DoS).
+        if req.context.len() > 255 {
+            return Err(SignerError::PolicyViolation(format!("signing context exceeds 255 bytes (got {})", req.context.len())));
         }
         // (2) The signer must hold this validator's key.
         if !self.keys.contains_key(&req.validator_id) {
@@ -259,9 +294,32 @@ pub mod transport {
         SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
     }
 
+    /// Peer-credential (uid) of a connected client, via `getpeereid(2)`. `None` if it cannot be
+    /// determined (the caller then falls back to the socket file-mode boundary only).
+    fn peer_uid(stream: &UnixStream) -> Option<u32> {
+        use std::os::unix::io::AsRawFd;
+        let mut uid: libc::uid_t = 0;
+        let mut gid: libc::gid_t = 0;
+        let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
+        if rc == 0 { Some(uid) } else { None }
+    }
+
     /// Serve one client connection: handshake (version-check + ack), then a request/response loop
     /// until the peer closes. Each request is signed (or refused) through the shared [`SignerState`].
-    pub fn serve_connection(mut stream: UnixStream, state: &Arc<Mutex<SignerState>>, server_identity: HostId) {
+    pub fn serve_connection(mut stream: UnixStream, state: &Arc<Mutex<SignerState>>, server_identity: HostId, allowed_uids: &[u32]) {
+        // Peer-credential check: only the signer's own uid (or, if configured, an explicit allowlist)
+        // may obtain signatures. The socket's 0700 perms already enforce this, but getpeereid() is
+        // defense-in-depth against a mis-set mode or a residual bind/chmod race — without it, file-mode
+        // is the *only* gate (audit E/F7).
+        if let Some(peer) = peer_uid(&stream) {
+            let me = unsafe { libc::geteuid() };
+            let allowed = if allowed_uids.is_empty() { peer == me } else { allowed_uids.contains(&peer) };
+            if !allowed {
+                log::warn!("[signer] rejecting connection from uid {peer} (signer uid {me}, allowlist {allowed_uids:?})");
+                return;
+            }
+        }
+
         let hello: SignerHello = match read_frame(&mut stream).and_then(|b| borsh::from_slice(&b).map_err(io::Error::other)) {
             Ok(h) => h,
             Err(e) => {
@@ -300,7 +358,14 @@ pub mod transport {
                     return;
                 }
             };
-            let resp = state.lock().expect("signer state mutex").handle_request(&req, client, now_unix_secs());
+            // Recover from a poisoned mutex rather than re-panicking: a panic while handling an earlier
+            // request must not permanently wedge the signer for all future connections.
+            let mut guard = match state.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let resp = guard.handle_request(&req, client, now_unix_secs());
+            drop(guard);
             if write_frame(&mut stream, &borsh::to_vec(&resp).expect("response borsh")).is_err() {
                 return;
             }
@@ -414,6 +479,54 @@ mod tests {
     }
 
     #[test]
+    fn rejects_oversized_context_without_panicking() {
+        // audit F8: a >255-byte ML-DSA context must be refused in-band, not panic the signer (which
+        // would poison the shared state mutex and wedge every subsequent request).
+        let k = key(0x91);
+        let vid = k.validator_id;
+        let mut s = SignerState::new(vec![k], SignerPolicy::Permissive, tmp_dir("ctx-len"), Hash::default()).unwrap();
+        let req = SignerRequest {
+            request_id: 1,
+            validator_id: vid,
+            purpose: SigningPurpose::Transaction,
+            context: vec![0u8; 256], // one over the FIPS-204 limit
+            message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0xcd; 64])),
+            metadata: SignerMetadata::None,
+        };
+        assert!(matches!(s.handle_request(&req, Hash::default(), 1).result, Err(SignerError::PolicyViolation(_))));
+        // The engine still signs a subsequent well-formed request (no poisoning / lasting damage).
+        let ok = SignerRequest {
+            request_id: 2,
+            validator_id: vid,
+            purpose: SigningPurpose::Transaction,
+            context: MLDSA87_TX_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0xce; 64])),
+            metadata: SignerMetadata::None,
+        };
+        assert!(s.handle_request(&ok, Hash::default(), 2).result.is_ok(), "signer still works after refusing an oversized context");
+    }
+
+    #[test]
+    fn denied_purpose_is_refused() {
+        // F7 optional policy hook: a validator-only signer can deny Transaction signing.
+        let k = key(0x95);
+        let vid = k.validator_id;
+        let mut s = SignerState::new(vec![k], SignerPolicy::Permissive, tmp_dir("deny-purpose"), Hash::default()).unwrap();
+        s.set_denied_purposes(vec![SigningPurpose::Transaction]);
+        let tx = SignerRequest {
+            request_id: 1,
+            validator_id: vid,
+            purpose: SigningPurpose::Transaction,
+            context: MLDSA87_TX_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0xab; 64])),
+            metadata: SignerMetadata::None,
+        };
+        assert!(matches!(s.handle_request(&tx, Hash::default(), 1).result, Err(SignerError::PolicyViolation(_))));
+        // A non-denied purpose (Attestation) still signs.
+        assert!(s.handle_request(&att_request(2, vid, 5, Hash64::from_bytes([0x01; 64]), 50), Hash::default(), 2).result.is_ok());
+    }
+
+    #[test]
     fn rejects_unknown_validator_key() {
         let mut s = SignerState::new(vec![key(0x33)], SignerPolicy::Permissive, tmp_dir("unknown"), Hash::default()).unwrap();
         let req = att_request(1, Hash64::from_bytes([0x99; 64]), 5, Hash64::from_bytes([0x01; 64]), 50);
@@ -497,7 +610,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             for conn in listener.incoming().take(1) {
                 if let Ok(stream) = conn {
-                    serve_connection(stream, &srv_state, server_id);
+                    serve_connection(stream, &srv_state, server_id, &[]);
                 }
             }
         });

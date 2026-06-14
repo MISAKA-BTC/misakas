@@ -4253,6 +4253,7 @@ dependencies = [
  "kaspa-core",
  "kaspa-hashes",
  "kaspa-pq-validator-core",
+ "libc",
  "log",
 ]
 
@@ -4285,6 +4286,7 @@ dependencies = [
  "kaspa-hashes",
  "kaspa-txscript",
  "libcrux-ml-dsa",
+ "log",
  "rand 0.8.6",
  "serde",
  "serde_json",

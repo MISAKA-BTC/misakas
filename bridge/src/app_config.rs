@@ -42,6 +42,12 @@ pub struct GlobalConfig {
     pub pow2_clamp: bool,
     #[serde(deserialize_with = "deserialize_coinbase_tag_suffix")]
     pub coinbase_tag_suffix: Option<String>,
+    /// Max concurrent Stratum connections accepted across all clients (resource-exhaustion guard).
+    /// Generous default; large farms can raise it.
+    pub max_connections: usize,
+    /// Max concurrent Stratum connections from a single source IP. Defaults high so NAT'd farms are
+    /// not affected; operators can tighten it to limit a single abusive host.
+    pub max_connections_per_ip: usize,
 }
 
 /// Bridge configuration (supports both single and multi-instance modes)
@@ -199,6 +205,8 @@ impl Default for GlobalConfig {
             extranonce_size: 0,
             pow2_clamp: false,
             coinbase_tag_suffix: None,
+            max_connections: 8192,
+            max_connections_per_ip: 1024,
         }
     }
 }

@@ -1,0 +1,18 @@
+# cargo-deny configuration — dependency advisory gate.
+#
+# Consumed by `cargo deny check advisories` in scripts/pq-ci-guard.sh [1/6] (run in CI via the
+# `Lints` job). A known RustSec vulnerability or a yanked crate FAILS CI. To accept a triaged but
+# currently-unfixable advisory, add its ID to `ignore` below WITH a comment and a tracking link —
+# never soften the gate globally.
+#
+# Context: this workspace pins post-quantum crypto (libcrux-ml-dsa = "=0.0.9"); the 2026 libcrux-ml-dsa
+# advisories (RUSTSEC-2026-0077 / -0125 / -0126) are fixed at >= 0.0.8/0.0.9, so the current pin is
+# clean. This gate exists to catch the next one before release.
+
+[advisories]
+# A yanked crate version in the lockfile is a hard failure.
+yanked = "deny"
+# Triaged-but-unfixable advisory IDs go here, each with a justification + tracking issue.
+ignore = [
+  # "RUSTSEC-XXXX-NNNN", # why it is safe to ignore + link to the tracking issue
+]

@@ -84,6 +84,18 @@ const SIGNED_EPOCH_FILE_VERSION: u16 = 1;
 /// contain exactly [`VALIDATOR_SEED_LEN`] bytes as hex, which seeds the deterministic
 /// ML-DSA-87 keypair via [`ValidatorKey::from_seed`].
 pub fn load_validator_seed(path: &str) -> Result<[u8; VALIDATOR_SEED_LEN], String> {
+    // Warn (don't silently accept) if the secret seed file is group/world-accessible. A validator seed
+    // should be 0600; looser perms mean any local user could read the signing key.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(path) {
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                log::warn!("validator key file '{path}' is group/world-accessible (mode {mode:o}); restrict it to 0600");
+            }
+        }
+    }
     let raw = fs::read_to_string(path).map_err(|e| format!("cannot read validator key file '{path}': {e}"))?;
     let hex = raw.trim();
     let mut seed = [0u8; VALIDATOR_SEED_LEN];

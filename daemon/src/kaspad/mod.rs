@@ -120,10 +120,10 @@ impl TryFrom<KaspadConfig> for Vec<String> {
         // ---
 
         if args.enable_json_rpc {
-            if args.is_borsh_rpc_public {
-                argv.push("--rpclisten-borsh=public");
+            if args.is_json_rpc_public {
+                argv.push("--rpclisten-json=public");
             } else {
-                argv.push("--rpclisten-borsh=default");
+                argv.push("--rpclisten-json=default");
             }
         }
 

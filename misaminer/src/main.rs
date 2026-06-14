@@ -46,6 +46,11 @@ struct Args {
     /// Derive the payout address from this BIP39 mnemonic (path m/0/0/0) instead of `--wallet`.
     #[arg(long)]
     pay_mnemonic: Option<String>,
+    /// Allow mining to an UNSPENDABLE placeholder address when neither `--wallet` nor
+    /// `--pay-mnemonic` is set (rewards are permanently lost). For PoW smoke tests only; without it
+    /// the miner refuses to start rather than silently burning coinbase rewards.
+    #[arg(long, default_value_t = false)]
+    allow_burn: bool,
     /// Minimum wall-clock ms between submitted blocks (0 = no throttle). 1000-2000 keeps a
     /// multi-datacenter mesh from out-running propagation (GHOSTDAG split-brain) at low difficulty.
     #[arg(long, default_value_t = 1000)]
@@ -96,7 +101,17 @@ async fn main() {
             addr
         }
         (None, None) => {
-            log::warn!("no --wallet set: mining to an UNSPENDABLE placeholder (rewards are lost). Set --wallet to keep your coins.");
+            // Fail closed: silently mining to an unspendable address permanently loses every reward.
+            // Require an explicit opt-in (--allow-burn) for the PoW-smoke-test use case.
+            if !args.allow_burn {
+                eprintln!(
+                    "refusing to start: no --wallet or --pay-mnemonic set, so coinbase rewards would be mined to an \
+                     UNSPENDABLE placeholder and permanently lost. Set --wallet/--pay-mnemonic, or pass --allow-burn \
+                     for a PoW smoke test."
+                );
+                std::process::exit(1);
+            }
+            log::warn!("--allow-burn: mining to an UNSPENDABLE placeholder (rewards are lost) — PoW smoke test only.");
             // PQ-only: the placeholder must be the standard ML-DSA-87 P2PKH class
             // (all-zero hash → unspendable but class-valid) so the coinbase it funds
             // passes the consensus output-class rule.

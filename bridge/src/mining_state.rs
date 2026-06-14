@@ -72,15 +72,20 @@ impl MiningState {
         idx
     }
 
-    /// Get a job by ID
-    /// Return job at slot (id % maxJobs) without verifying ID matches
-    ///          return job, exists
-    /// Does NOT verify that the stored job ID matches - it just returns whatever is at that slot
+    /// Get a job by ID.
+    ///
+    /// Returns the job at slot `id % MAX_JOBS` only if that slot still holds *this* exact job id.
+    /// The ring buffer recycles each slot every `MAX_JOBS` jobs, so without the id check a submit for
+    /// an evicted job (`id - MAX_JOBS*k`) would be validated against a *different* block sharing the
+    /// slot. Treating that as stale (returning `None`) is the correct behavior.
     pub fn get_job(&self, id: u64) -> Option<Job> {
         let jobs = self.jobs.lock();
+        let job_ids = self.job_ids.lock();
         let slot = id % MAX_JOBS;
 
-        // Return job at slot, don't verify ID matches
+        if job_ids.get(&slot).copied() != Some(id) {
+            return None;
+        }
         jobs.get(&slot).cloned()
     }
 

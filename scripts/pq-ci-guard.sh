@@ -18,13 +18,23 @@ cd "$(dirname "$0")/.."
 fail=0
 
 echo "== [1/6] dependency advisory audit =="
+# HARD by default: a missing advisory tool must NOT silently pass the gate (the whole point is to
+# catch a libcrux-ml-dsa / dependency advisory before release). Export HARD_ADVISORY_GATE=0 to soften
+# the missing-tool case to a warning (e.g. local runs without the tool installed).
+HARD_ADVISORY_GATE="${HARD_ADVISORY_GATE:-1}"
 if command -v cargo-deny >/dev/null 2>&1; then
   cargo deny check advisories || fail=1
 elif command -v cargo-audit >/dev/null 2>&1; then
   cargo audit || fail=1
 else
-  echo "WARN: neither cargo-deny nor cargo-audit installed; skipping advisory audit."
-  echo "      install: cargo install cargo-deny  (or cargo-audit)"
+  echo "neither cargo-deny nor cargo-audit installed; cannot run the advisory audit."
+  echo "  install: cargo install cargo-deny  (or cargo-audit)"
+  if [ "$HARD_ADVISORY_GATE" = "1" ]; then
+    echo "  -> FAIL (set HARD_ADVISORY_GATE=0 to soften to a warning)."
+    fail=1
+  else
+    echo "  -> WARN: skipping advisory audit (HARD_ADVISORY_GATE=0)."
+  fi
 fi
 
 echo "== [2/6] secp256k1 must be absent from the consensus + node + wallet trees (Phase-8/S9/QL-1 gate) =="

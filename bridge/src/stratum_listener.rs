@@ -43,6 +43,36 @@ pub struct StratumListenerConfig {
     pub on_connect: Arc<dyn Fn(Arc<StratumContext>) + Send + Sync>,
     pub on_disconnect: Arc<dyn Fn(Arc<StratumContext>) + Send + Sync>,
     pub port: String,
+    /// Max concurrent connections accepted (global resource-exhaustion guard). 0 = unlimited.
+    pub max_connections: usize,
+    /// Max concurrent connections from a single source IP. 0 = unlimited.
+    pub max_connections_per_ip: usize,
+}
+
+/// Maximum bytes buffered for a single (newline-terminated) Stratum JSON-RPC message. A valid line is
+/// far smaller; this caps memory for a client that never sends a newline.
+const MAX_LINE_BYTES: usize = 16 * 1024;
+
+/// Number of consecutive read timeouts (~5s each) a not-yet-handshaked client may accrue before it is
+/// disconnected. Bounds pre-auth connection-holding without affecting authenticated miners.
+const PRE_AUTH_IDLE_STRIKES: u32 = 6;
+
+/// Decrements a per-IP connection counter when dropped (held for the lifetime of a client task).
+struct PerIpGuard {
+    ip: std::net::IpAddr,
+    counts: Arc<parking_lot::Mutex<HashMap<std::net::IpAddr, u32>>>,
+}
+
+impl Drop for PerIpGuard {
+    fn drop(&mut self) {
+        let mut map = self.counts.lock();
+        if let Some(c) = map.get_mut(&self.ip) {
+            *c = c.saturating_sub(1);
+            if *c == 0 {
+                map.remove(&self.ip);
+            }
+        }
+    }
 }
 
 /// Stratum TCP listener
@@ -125,6 +155,13 @@ impl StratumListener {
             }
         });
 
+        // Connection-rate limits. A bare port binds 0.0.0.0 (miners connect from the network), so the
+        // accept path is unauthenticated and remote-reachable: cap concurrent connections globally and
+        // per source IP to bound socket/task/memory exhaustion. 0 disables a cap.
+        let global_cap = if self.config.max_connections == 0 { tokio::sync::Semaphore::MAX_PERMITS } else { self.config.max_connections };
+        let conn_sem = Arc::new(tokio::sync::Semaphore::new(global_cap));
+        let per_ip: Arc<parking_lot::Mutex<HashMap<std::net::IpAddr, u32>>> = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+
         loop {
             if let Some(ref mut rx) = shutdown_rx {
                 tokio::select! {
@@ -137,49 +174,8 @@ impl StratumListener {
                     result = listener.accept() => {
                         match result {
                             Ok((stream, addr)) => {
-                            let remote_addr = addr.ip().to_string();
-                            let remote_port = addr.port();
-
-                            debug!("[CONNECTION] new client connecting - {}:{}", remote_addr, remote_port);
-                            debug!("[CONNECTION] ===== TCP CONNECTION ESTABLISHED =====");
-                            debug!("[CONNECTION] Remote address: {}:{}", remote_addr, remote_port);
-                            debug!("[CONNECTION] Local address: {:?}", stream.local_addr());
-                            debug!("[CONNECTION] Connection accepted successfully");
-
-                            // Create new MiningState for each client
-                            // Each client gets its own isolated state, just like in Go
-                            use crate::mining_state::MiningState;
-                            let state = Arc::new(MiningState::new());
-
-                            // Clone for logging after move
-                            let remote_addr_for_log = remote_addr.clone();
-                            let remote_port_for_log = remote_port;
-
-                            debug!("[CONNECTION] Creating StratumContext for {}:{}", remote_addr_for_log, remote_port_for_log);
-                            let ctx = StratumContext::new(
-                                remote_addr,
-                                remote_port,
-                                stream,
-                                state,
-                                disconnect_tx_clone.clone(),
-                            );
-                            debug!("[CONNECTION] StratumContext created successfully");
-
-                            debug!("[CONNECTION] Calling on_connect handler");
-                            (self.config.on_connect)(ctx.clone());
-                            debug!("[CONNECTION] on_connect handler completed");
-
-                            // Spawn client handler
-                            debug!("[CONNECTION] Spawning client listener task for {}:{}", remote_addr_for_log, remote_port_for_log);
-                            let ctx_clone = ctx.clone();
-                            let handler_map = self.config.handler_map.clone();
-                            tokio::spawn(async move {
-                                debug!("[CONNECTION] Client listener task started for {}:{}", ctx_clone.remote_addr, ctx_clone.remote_port);
-                                Self::spawn_client_listener(ctx_clone, &handler_map).await;
-                                debug!("[CONNECTION] Client listener task ended");
-                            });
-                            debug!("[CONNECTION] ===== CONNECTION SETUP COMPLETE FOR {}:{} =====", remote_addr_for_log, remote_port_for_log);
-                        }
+                                self.handle_new_connection(stream, addr, &conn_sem, &per_ip, &disconnect_tx_clone);
+                            }
                             Err(e) => {
                             if self.shutting_down.load(std::sync::atomic::Ordering::Acquire) {
                                 info!("stopping listening due to server shutdown");
@@ -196,44 +192,7 @@ impl StratumListener {
             } else {
                 match listener.accept().await {
                     Ok((stream, addr)) => {
-                        let remote_addr = addr.ip().to_string();
-                        let remote_port = addr.port();
-
-                        debug!("[CONNECTION] new client connecting - {}:{}", remote_addr, remote_port);
-                        debug!("[CONNECTION] ===== TCP CONNECTION ESTABLISHED =====");
-                        debug!("[CONNECTION] Remote address: {}:{}", remote_addr, remote_port);
-                        debug!("[CONNECTION] Local address: {:?}", stream.local_addr());
-                        debug!("[CONNECTION] Connection accepted successfully");
-
-                        use crate::mining_state::MiningState;
-                        let state = Arc::new(MiningState::new());
-
-                        let remote_addr_for_log = remote_addr.clone();
-                        let remote_port_for_log = remote_port;
-
-                        debug!("[CONNECTION] Creating StratumContext for {}:{}", remote_addr_for_log, remote_port_for_log);
-                        let ctx = StratumContext::new(remote_addr, remote_port, stream, state, disconnect_tx_clone.clone());
-                        debug!("[CONNECTION] StratumContext created successfully");
-
-                        debug!("[CONNECTION] Calling on_connect handler");
-                        (self.config.on_connect)(ctx.clone());
-                        debug!("[CONNECTION] on_connect handler completed");
-
-                        debug!("[CONNECTION] Spawning client listener task for {}:{}", remote_addr_for_log, remote_port_for_log);
-                        let ctx_clone = ctx.clone();
-                        let handler_map = self.config.handler_map.clone();
-                        tokio::spawn(async move {
-                            debug!(
-                                "[CONNECTION] Client listener task started for {}:{}",
-                                ctx_clone.remote_addr, ctx_clone.remote_port
-                            );
-                            Self::spawn_client_listener(ctx_clone, &handler_map).await;
-                            debug!("[CONNECTION] Client listener task ended");
-                        });
-                        debug!(
-                            "[CONNECTION] ===== CONNECTION SETUP COMPLETE FOR {}:{} =====",
-                            remote_addr_for_log, remote_port_for_log
-                        );
+                        self.handle_new_connection(stream, addr, &conn_sem, &per_ip, &disconnect_tx_clone);
                     }
                     Err(e) => {
                         if self.shutting_down.load(std::sync::atomic::Ordering::Acquire) {
@@ -252,12 +211,69 @@ impl StratumListener {
         Ok(())
     }
 
+    /// Set up a freshly-accepted connection, enforcing the global and per-IP connection caps. On
+    /// success spawns the per-client listener task (which owns the semaphore permit and per-IP guard
+    /// for its lifetime, releasing both on disconnect). On cap exhaustion the stream is dropped, which
+    /// closes the connection.
+    fn handle_new_connection(
+        &self,
+        stream: tokio::net::TcpStream,
+        addr: std::net::SocketAddr,
+        conn_sem: &Arc<tokio::sync::Semaphore>,
+        per_ip: &Arc<parking_lot::Mutex<HashMap<std::net::IpAddr, u32>>>,
+        disconnect_tx: &mpsc::UnboundedSender<Arc<StratumContext>>,
+    ) {
+        let ip = addr.ip();
+
+        // Global cap: owned permit, released when the client task ends.
+        let permit = match Arc::clone(conn_sem).try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                warn!("[CONNECTION] global connection limit reached; rejecting {}", addr);
+                return; // stream dropped -> connection closed
+            }
+        };
+
+        // Per-IP cap.
+        let ip_guard = {
+            let mut map = per_ip.lock();
+            let count = map.entry(ip).or_insert(0);
+            if self.config.max_connections_per_ip != 0 && *count >= self.config.max_connections_per_ip as u32 {
+                warn!("[CONNECTION] per-IP connection limit ({}) reached for {}; rejecting", self.config.max_connections_per_ip, ip);
+                return; // permit + stream dropped -> released / closed
+            }
+            *count += 1;
+            PerIpGuard { ip, counts: Arc::clone(per_ip) }
+        };
+
+        let remote_addr = ip.to_string();
+        let remote_port = addr.port();
+        debug!("[CONNECTION] new client connecting - {}:{}", remote_addr, remote_port);
+
+        let state = Arc::new(crate::mining_state::MiningState::new());
+        let ctx = StratumContext::new(remote_addr, remote_port, stream, state, disconnect_tx.clone());
+        (self.config.on_connect)(ctx.clone());
+
+        let ctx_clone = ctx.clone();
+        let handler_map = self.config.handler_map.clone();
+        tokio::spawn(async move {
+            // Hold the permit and per-IP guard for the lifetime of the connection.
+            let _permit = permit;
+            let _ip_guard = ip_guard;
+            debug!("[CONNECTION] Client listener task started for {}:{}", ctx_clone.remote_addr, ctx_clone.remote_port);
+            Self::spawn_client_listener(ctx_clone, &handler_map).await;
+            debug!("[CONNECTION] Client listener task ended");
+        });
+    }
+
     /// Spawn a client listener task
     async fn spawn_client_listener(ctx: Arc<StratumContext>, handler_map: &Arc<HashMap<String, EventHandler>>) {
         debug!("[CLIENT_LISTENER] Starting client listener for {}:{}", ctx.remote_addr, ctx.remote_port);
         let mut buffer = [0u8; 1024];
         let mut line_buffer = String::new();
         let mut first_message = true;
+        // Consecutive read-timeout counter, used to reap idle pre-handshake clients (F3).
+        let mut idle_strikes = 0u32;
 
         loop {
             // Check if disconnected
@@ -313,6 +329,7 @@ impl StratumListener {
                 }
                 Ok(Ok(n)) => {
                     debug!("[CLIENT_LISTENER] Read {} bytes from {}:{}", n, ctx.remote_addr, ctx.remote_port);
+                    idle_strikes = 0; // client is active
 
                     // Remove null bytes and process
                     let data: Vec<u8> = buffer[..n].iter().copied().filter(|&b| b != 0).collect();
@@ -468,6 +485,20 @@ impl StratumListener {
                     }
 
                     line_buffer.push_str(&String::from_utf8_lossy(&data));
+
+                    // Cap the pending buffer: if it has grown past the limit without yet containing a
+                    // complete line, the client is sending data with no newline (memory-DoS). Drop it.
+                    if line_buffer.len() > MAX_LINE_BYTES && !line_buffer.contains('\n') {
+                        warn!(
+                            "[CONNECTION] {}:{} exceeded max line length ({} > {} bytes) with no newline; disconnecting",
+                            ctx.remote_addr,
+                            ctx.remote_port,
+                            line_buffer.len(),
+                            MAX_LINE_BYTES
+                        );
+                        ctx.disconnect();
+                        break;
+                    }
 
                     // Process complete lines
                     while let Some(newline_pos) = line_buffer.find('\n') {
@@ -874,7 +905,20 @@ impl StratumListener {
                     break;
                 }
                 Err(_) => {
-                    // Timeout - continue
+                    // Read timeout. Reap clients that connect but never complete the handshake, so a
+                    // pre-auth client cannot hold a connection (and its slot) open indefinitely.
+                    idle_strikes = idle_strikes.saturating_add(1);
+                    let is_pre_handshake = ctx.worker_name.lock().is_empty() && ctx.remote_app.lock().is_empty();
+                    if is_pre_handshake && idle_strikes >= PRE_AUTH_IDLE_STRIKES {
+                        warn!(
+                            "[CONNECTION] {}:{} idle without completing handshake (~{}s); disconnecting",
+                            ctx.remote_addr,
+                            ctx.remote_port,
+                            idle_strikes * 5
+                        );
+                        ctx.disconnect();
+                        break;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                     continue;
                 }

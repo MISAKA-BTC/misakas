@@ -28,6 +28,8 @@ pub struct BridgeConfig {
     pub extranonce_size: u8,
     pub pow2_clamp: bool,
     pub coinbase_tag_suffix: Option<String>,
+    pub max_connections: usize,
+    pub max_connections_per_ip: usize,
 }
 
 /// Start block template listener with concrete KaspaApi
@@ -171,6 +173,8 @@ async fn listen_and_serve_impl<T: KaspaApiTrait + Send + Sync + 'static>(
     // Each client gets its own isolated state
     let listener_config = StratumListenerConfig {
         port: config.stratum_port.clone(),
+        max_connections: config.max_connections,
+        max_connections_per_ip: config.max_connections_per_ip,
         handler_map: Arc::new(handlers),
         on_connect: Arc::new({
             let client_handler = Arc::clone(&client_handler);
