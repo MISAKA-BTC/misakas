@@ -508,7 +508,19 @@ async fn handle_http_request(
             return Ok(());
         }
 
-        let body_start = request.find("\r\n\r\n").unwrap_or(request.len());
+        // A well-formed HTTP request always terminates its headers with CRLFCRLF. If it's absent
+        // (malformed request), reject with 400 — do NOT slice past the end (`request.len() + 4` would
+        // panic the spawned task on out-of-bounds).
+        let Some(body_start) = request.find("\r\n\r\n") else {
+            let json_response = r#"{"success": false, "message": "Malformed request (missing header terminator)."}"#;
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                json_response.len(),
+                json_response
+            );
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        };
         let body = &request[body_start + 4..];
         // If the declared length exceeds what we actually received, the single read truncated the
         // body — reject rather than applying a partial config.

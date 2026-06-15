@@ -57,6 +57,11 @@ const MAX_LINE_BYTES: usize = 16 * 1024;
 /// disconnected. Bounds pre-auth connection-holding without affecting authenticated miners.
 const PRE_AUTH_IDLE_STRIKES: u32 = 6;
 
+/// Absolute wall-clock deadline by which a connection must authorize, regardless of activity. Closes
+/// the slow-trickle slot-hold (a client dripping bytes resets the idle-strike counter but cannot beat
+/// this hard deadline). Generous enough for any real miner handshake.
+const PRE_AUTH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Decrements a per-IP connection counter when dropped (held for the lifetime of a client task).
 struct PerIpGuard {
     ip: std::net::IpAddr,
@@ -274,11 +279,28 @@ impl StratumListener {
         let mut first_message = true;
         // Consecutive read-timeout counter, used to reap idle pre-handshake clients (F3).
         let mut idle_strikes = 0u32;
+        // Absolute wall-clock deadline by which a connection must AUTHORIZE. The idle-strike counter
+        // resets on any byte, so a slow-trickle client (1 byte every few seconds) could otherwise
+        // hold a connection slot indefinitely without authorizing; this hard deadline closes that.
+        let connected_at = tokio::time::Instant::now();
 
         loop {
             // Check if disconnected
             if !ctx.connected() {
                 debug!("[CLIENT_LISTENER] Client {}:{} disconnected", ctx.remote_addr, ctx.remote_port);
+                break;
+            }
+
+            // Hard pre-auth deadline: drop any connection that has not authorized within the window,
+            // regardless of how much it has trickled (closes the slow-trickle slot-hold).
+            if ctx.wallet_addr.lock().is_empty() && connected_at.elapsed() > PRE_AUTH_DEADLINE {
+                warn!(
+                    "[CONNECTION] {}:{} did not authorize within {}s; disconnecting (pre-auth deadline)",
+                    ctx.remote_addr,
+                    ctx.remote_port,
+                    PRE_AUTH_DEADLINE.as_secs()
+                );
+                ctx.disconnect();
                 break;
             }
 

@@ -47,14 +47,32 @@ impl AuditLog {
         if path.exists() {
             let bytes = fs::read(&path)?;
             let mut cur = &bytes[..];
+            // Byte offset of the end of the last FULLY-written frame.
+            let mut good_len: usize = 0;
             while cur.len() >= 4 {
                 let len = u32::from_be_bytes(cur[0..4].try_into().expect("4 bytes")) as usize;
                 if cur.len() < 4 + len {
-                    break; // a torn trailing frame (crash mid-append) — ignore it.
+                    break; // a torn trailing frame (crash mid-append).
                 }
                 let rec: SignerAuditRecord = borsh::from_slice(&cur[4..4 + len])?;
                 chain_hash = compute_signer_audit_chain_entry(chain_hash, &rec);
                 cur = &cur[4 + len..];
+                good_len += 4 + len;
+            }
+            // If a torn/partial trailing frame remains, TRUNCATE the log to the last good record and
+            // fsync. Otherwise the torn bytes would shadow every record appended after them on the
+            // next load (the append is `O_APPEND`, so new records land *after* the torn frame and are
+            // never replayed) — an audit-trail gap. The torn frame was a never-completed record, so
+            // dropping it loses nothing durable.
+            if good_len < bytes.len() {
+                let f = OpenOptions::new().write(true).open(&path)?;
+                f.set_len(good_len as u64)?;
+                f.sync_all()?;
+                log::warn!(
+                    "[signer] repaired audit log {}: truncated {} torn trailing byte(s) to the last good record",
+                    path.display(),
+                    bytes.len() - good_len
+                );
             }
         }
         Ok(Self { path, chain_hash })
@@ -366,6 +384,11 @@ pub mod transport {
             }
         }
 
+        // Read timeout: each connection holds a dedicated OS thread, so a client that connects and
+        // then never sends a frame would otherwise pin that thread forever. A per-read deadline reaps
+        // such idle connections (local DoS hardening; the peer is already same-uid).
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+
         let hello: SignerHello = match read_frame(&mut stream).and_then(|b| borsh::from_slice(&b).map_err(io::Error::other)) {
             Ok(h) => h,
             Err(e) => {
@@ -384,6 +407,10 @@ pub mod transport {
         if write_frame(&mut stream, &borsh::to_vec(&ack).expect("ack borsh")).is_err() {
             return;
         }
+        // Handshake done: clear the read deadline so a legitimate long-lived client (e.g. a validator
+        // that idles between attestations) is not disconnected mid-session. The pre-handshake timeout
+        // above already reaps connect-and-hold attempts.
+        let _ = stream.set_read_timeout(None);
 
         loop {
             let body = match read_frame(&mut stream) {
