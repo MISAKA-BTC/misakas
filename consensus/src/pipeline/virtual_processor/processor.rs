@@ -1230,9 +1230,26 @@ impl VirtualStateProcessor {
 
     /// Resolves a chain block's accepted transactions from its acceptance data
     /// (`acceptance_data_store` → `block_transactions_store[index_within_block]`).
-    /// Shared by the bond-population (A.4) and StakeScore-aggregation (A.5) passes.
+    /// Shared by the bond-population (A.4) and StakeScore-aggregation (A.5) passes,
+    /// AND (with `--features evm`) the EVM lane.
+    ///
+    /// Tolerates missing acceptance data → no accepted transactions. A chain block has no committed
+    /// acceptance data only when it is the imported pruning point (UTXO-set IBD writes the multiset
+    /// but never acceptance data) or a pruned ancestor that a bounded backward overlay walk reaches.
+    /// Every overlay reader funnels through here, so guarding the shared helper covers them all (the
+    /// per-caller sink guard in `update_dns_state` was not enough: a NORMAL recompute walk legitimately
+    /// reaches the pruning point). Returning empty is semantically correct — a block with no
+    /// accountable acceptance data contributes no txs; a genuine inconsistency on a non-pruned block
+    /// surfaces in the trace log instead of crashing the virtual processor.
     fn accepted_txs_of_chain_block(&self, chain_block: BlockHash) -> Vec<Transaction> {
-        self.accepted_txs_from_acceptance_data(&self.acceptance_data_store.get(chain_block).unwrap())
+        match self.acceptance_data_store.get(chain_block) {
+            Ok(ad) => self.accepted_txs_from_acceptance_data(&ad),
+            Err(StoreError::KeyNotFound(_)) => {
+                trace!("accepted_txs_of_chain_block: no acceptance data for {chain_block} (pruning point / pruned) — treating as no accepted txs");
+                Vec::new()
+            }
+            Err(e) => panic!("accepted_txs_of_chain_block: acceptance_data_store.get({chain_block}) failed: {e}"),
+        }
     }
 
     /// Resolves accepted transactions from already-loaded acceptance data
@@ -1289,7 +1306,21 @@ impl VirtualStateProcessor {
         // a tokio runtime panic in the `spawn_blocking` import worker and crashes startup.
         match self.acceptance_data_store.get(sink) {
             Ok(_) => {}
-            Err(StoreError::KeyNotFound(_)) => return,
+            Err(StoreError::KeyNotFound(_)) => {
+                // Missing acceptance data for the sink is EXPECTED only during pruning-point import,
+                // where the sink IS the imported pruning point. Anywhere else it signals a store
+                // inconsistency, so surface it loudly (still skip rather than panic, but never
+                // silently): a genuine bug must be visible in the logs, not swallowed.
+                let pp = self.pruning_point_store.read().pruning_point().optional().ok().flatten();
+                if pp == Some(sink) {
+                    trace!("update_dns_state: skipping recompute during pruning-point import (sink == pruning point {sink})");
+                } else {
+                    warn!(
+                        "update_dns_state: acceptance data missing for sink {sink} (pruning point {pp:?}) — skipping DNS recompute; this is UNEXPECTED outside pruning-point import"
+                    );
+                }
+                return;
+            }
             Err(e) => panic!("update_dns_state: acceptance_data_store.get({sink}) failed: {e}"),
         }
         let sink_daa = self.headers_store.get_header(sink).unwrap().daa_score;

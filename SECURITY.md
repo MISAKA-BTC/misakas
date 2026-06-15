@@ -57,7 +57,9 @@ Its authentication boundary is **node-local**:
 - Socket lives in a `0700` directory (`$XDG_RUNTIME_DIR` by default), created with a tightened umask
   before bind (no bind-then-chmod race); a permission failure is fail-closed.
 - State dir is `0700`, the audit log `0600`.
-- Every connection is checked with `getpeereid(2)`: only the signer's own UID may connect by default.
+- Every connection's peer credentials are checked (Linux/Android via `SO_PEERCRED`, the BSDs/macOS via
+  `getpeereid(2)`): only the signer's own UID (or an explicit `--allowed-uid`) may connect by default.
+  A handshake read timeout reaps connect-and-hold attempts.
 - An over-long (>255-byte) signing context is refused in-band (never panics), and the request lock is
   poison-tolerant, so one bad request cannot wedge the daemon.
 
@@ -75,7 +77,13 @@ strict purpose→context policy can be layered on via the hooks above without ch
 ### 3. Other operator notes
 
 - **Stratum listener** enforces global and per-IP connection caps (`max_connections`,
-  `max_connections_per_ip`), a pre-auth idle disconnect, and a per-message length cap.
+  `max_connections_per_ip`), a pre-auth idle disconnect, a hard pre-auth authorize deadline (closes
+  slow-trickle slot-holds), and a per-message length cap.
+- **Prometheus metrics cardinality:** the mined-block gauge is low-cardinality, and the `worker`/`miner`
+  labels are sanitized and `ip` carries no port. The `wallet` label is still per-(valid)-address, so on
+  a **public** Stratum a client could grow series by authorizing many distinct addresses. This is an
+  operational (not consensus/fund) concern — run a public pool's metrics endpoint behind monitoring
+  that bounds/aggregates series, or drop the `wallet`/`ip` labels if you do not need per-wallet metrics.
 - **Validator keys** are written with `O_CREAT|O_EXCL` at mode `0600` (no clobber, no symlink follow);
   loading a group/world-readable seed file logs a warning.
 - **Miners** refuse to start when no payout address is configured (they will not silently mine to an
