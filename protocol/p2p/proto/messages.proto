@@ -58,6 +58,11 @@ message KaspadMessage {
     RequestEvmTransactionsMessage requestEvmTransactions = 60;
     EvmTransactionMessage evmTransaction = 61;
     EvmTransactionNotFoundMessage evmTransactionNotFound = 62;
+    // kaspa-pq ADR-0022: pruned-IBD EVM + DNS/PoS-v2 overlay snapshot transfer.
+    RequestPruningPointEvmStateMessage requestPruningPointEvmState = 63;
+    PruningPointEvmStateMessage pruningPointEvmState = 64;
+    RequestPruningPointOverlaySnapshotMessage requestPruningPointOverlaySnapshot = 65;
+    PruningPointOverlaySnapshotMessage pruningPointOverlaySnapshot = 66;
   }
 }
 

@@ -90,6 +90,14 @@ pub fn execute_block_from_snapshot(
     parent_snapshot: &EvmStateSnapshot,
     input: &crate::EvmBlockInput,
 ) -> Result<(EvmExecutionResult, EvmStateSnapshot), crate::EvmExecError> {
+    // O12 (IBD catch-up): empty-acceptance fast path — no accepted txs and no
+    // system ops means the state transition is the identity, so skip revm, the
+    // keccak-MPT root recompute and the snapshot extraction entirely. The header
+    // is produced by the same derivation functions as the full path (byte-equal
+    // commitment; see executor::empty_acceptance_result + its equivalence test).
+    if input.accepted_txs.is_empty() && input.payload.system_ops.is_empty() {
+        return Ok((crate::executor::empty_acceptance_result(input), parent_snapshot.clone()));
+    }
     let db = seed_cachedb(parent_snapshot)?;
     let (result, post_db) = crate::execute_block_evm(db, input)?;
     Ok((result, snapshot_from_cachedb(&post_db)))

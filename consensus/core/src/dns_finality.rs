@@ -54,7 +54,7 @@ use std::fmt::{self, Display, Formatter};
 
 use blake2b_simd::Params as Blake2bParams;
 use borsh::{BorshDeserialize, BorshSerialize};
-use kaspa_hashes::{Hash, Hash64};
+use kaspa_hashes::{blake2b_512_keyed, Hash, Hash64};
 use kaspa_utils::mem_size::MemSizeEstimator;
 
 /// serde for the 64-byte ML-DSA P2PKH reward payload (ADR-0019 §8).
@@ -123,7 +123,7 @@ use crate::subnets::{
     SubnetworkId,
 };
 use crate::{
-    BlueWorkType, TransactionId,
+    BlockHash, BlueWorkType, TransactionId,
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
 };
 
@@ -517,6 +517,12 @@ pub struct StakeBondRecord {
 
     pub amount: u64,
     pub activation_daa_score: u64,
+    /// kaspa-pq ADR-0022: the DAA score at which the bond's creating tx was
+    /// accepted on the selected chain. Unlike `activation_daa_score` (which is
+    /// `max(declared, accepted)` and may be future-dated), this is the exact
+    /// creation point, so a pruned node can reconstruct the bond set "as-of the
+    /// pruning point" (`created_daa_score ≤ pp_daa`) without a per-block revert.
+    pub created_daa_score: u64,
     pub unbonding_period_blocks: u64,
 
     /// Copied verbatim from [`StakeBondPayload::owner_reward_spk_payload`]:
@@ -3331,6 +3337,9 @@ pub fn stake_bond_record_from_payload(payload: &StakeBondPayload, bond_outpoint:
         validator_pubkey: payload.validator_pubkey.clone(),
         amount: payload.amount,
         activation_daa_score: payload.activation_daa_score,
+        // ADR-0022: set by `bond_mutations_from_accepted_txs` to the acceptance DAA
+        // (the bond's true creation point); 0 here as a placeholder.
+        created_daa_score: 0,
         unbonding_period_blocks: payload.unbonding_period_blocks,
         owner_reward_spk_payload: payload.owner_reward_spk_payload,
         unbond_request_daa_score: None,
@@ -3436,6 +3445,9 @@ pub fn bond_mutations_from_accepted_txs(
                     // Clamp activation up to the bond's acceptance DAA so it can only affect future
                     // epochs. Deterministic, so coinbase construction and validation agree.
                     record.activation_daa_score = record.activation_daa_score.max(accepted_daa_score);
+                    // ADR-0022: the bond's exact creation point (acceptance DAA) — used to
+                    // reconstruct the as-of-pruning-point bond set on a serving node.
+                    record.created_daa_score = accepted_daa_score;
                     // Clamp the operator-declared unbonding window up to the network floor, so a
                     // validator cannot shorten its exit-lock (and thus its slashable window) by
                     // declaring a tiny `unbonding_period_blocks`.
@@ -3810,6 +3822,130 @@ pub struct EpochTally {
 // consulted for eviction — an empty impl mirrors [`StakeBondRecord`] / `UtxoEntry`.
 impl MemSizeEstimator for EpochTally {}
 
+/// kaspa-pq ADR-0022 — the keyed BLAKE2b-512 domain for the L1 header
+/// `overlay_commitment_root` (distinct from `EvmCommitment64` / `EvmPayload64`).
+pub const MISAKA_OVERLAY_COMMITMENT_CONTEXT: &[u8] = b"OverlayCommit64";
+
+/// kaspa-pq ADR-0022 — the complete DNS/PoS-v2 **overlay** state as-of a block
+/// `B`, i.e. the minimal set of overlay rows required to validate `B`'s
+/// selected-chain descendants during pruned-IBD **without** access to `past(B)`.
+/// Its keyed BLAKE2b-512 digest is committed in `Header::overlay_commitment_root`
+/// (under [`MISAKA_OVERLAY_COMMITMENT_CONTEXT`]); the block-template builder fills
+/// the header field from the virtual overlay state and the virtual processor
+/// re-derives + checks it (`c == v`). A pruning-point import verifies the
+/// peer-supplied snapshot against the committed root before persisting it.
+///
+/// The snapshot commits **raw inputs**, not derived tallies: every overlay store a
+/// pruned-IBD node needs (`stake_bonds_store`, `reserve_balance_store`,
+/// `rewarded_epochs_store`, `block_quality_pool_store`) is reconstructable from
+/// these, and the per-epoch [`EpochTally`] accumulator is then *derived* via
+/// [`recompute_epoch_tallies`] — so there is no stale-store / recompute-anchor
+/// ambiguity in the commitment (template and verify both gather the same per-block
+/// rows for the same `selected_parent`).
+///
+/// Components (the snapshot is taken **as-of `B`'s selected parent** — exactly the
+/// inputs `verify_expected_utxo_state` and the template builder already hold):
+///
+/// * `bonds` — the live bond set (cumulative; from the walked `ActiveBondView`,
+///   seed for `initial_active_bond_view`).
+/// * `reserve_balance` — `reserve_balance_store[selected_parent]` (cumulative
+///   security-reserve balance; drives the §F drip of the finalizing child).
+/// * `window` — every selected-chain block in
+///   `(selected_parent − walk_bound, selected_parent]` with its per-block overlay
+///   contribution (rewarded `(outpoint, epoch)` keys + validator quality sub-pool),
+///   where `walk_bound = reward_uniqueness_window + max_reorg_horizon + 2·epoch_length`
+///   covers both the reward-uniqueness dedup and the epoch-accumulator recompute.
+///
+/// **FROZEN canonical encoding (hard fork to change):** [`Self::canonicalize`]
+/// sorts every component into the order below, then [`Self::commitment_preimage`]
+/// is the borsh encoding of the sorted struct. The empty snapshot (genesis / a
+/// pre-bond chain) hashes to a fixed value reachable as
+/// `OverlaySnapshot::default().commitment_root()`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct OverlaySnapshot {
+    /// Live bond set; canonical order = ascending by `(bond_outpoint.transaction_id, index)`.
+    pub bonds: Vec<StakeBondRecord>,
+    /// Cumulative security-reserve balance after the selected parent.
+    pub reserve_balance: u64,
+    /// Per-block overlay contributions for the window; canonical order = ascending by block hash.
+    pub window: Vec<BlockOverlayContribution>,
+}
+
+/// kaspa-pq ADR-0022 — one selected-chain block's overlay contribution carried in
+/// an [`OverlaySnapshot::window`]. Mirrors [`BlockEpochContribution`] (the input to
+/// [`recompute_epoch_tallies`]) plus the `block_hash` so a pruned-IBD import can
+/// rebuild the per-block `rewarded_epochs_store` / `block_quality_pool_store` rows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct BlockOverlayContribution {
+    pub block_hash: BlockHash,
+    pub block_daa_score: u64,
+    /// The `(bond_outpoint, epoch)` keys this block's coinbase rewarded.
+    pub rewarded_keys: Vec<(TransactionOutpoint, u64)>,
+    /// The block's validator quality sub-pool (`block_quality_pool_store`).
+    pub quality_subpool: u64,
+}
+
+impl OverlaySnapshot {
+    /// Sorts every component into the FROZEN canonical order, in place. Idempotent.
+    /// All sort keys use `Hash64`'s derived `Ord` (`TransactionId`/`BlockHash` are
+    /// `Hash64`) so the order is byte-deterministic across nodes.
+    pub fn canonicalize(&mut self) {
+        self.bonds.sort_by(|a, b| {
+            (a.bond_outpoint.transaction_id, a.bond_outpoint.index)
+                .cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+        });
+        for c in self.window.iter_mut() {
+            c.rewarded_keys.sort_by(|a, b| (a.0.transaction_id, a.0.index, a.1).cmp(&(b.0.transaction_id, b.0.index, b.1)));
+        }
+        self.window.sort_by(|a, b| a.block_hash.cmp(&b.block_hash));
+    }
+
+    /// The canonical commitment preimage = borsh of the canonicalized snapshot.
+    /// Canonicalizes a clone so the caller's ordering is irrelevant.
+    pub fn commitment_preimage(&self) -> Vec<u8> {
+        let mut canonical = self.clone();
+        canonical.canonicalize();
+        borsh::to_vec(&canonical).expect("OverlaySnapshot borsh serialization is infallible")
+    }
+
+    /// `overlay_commitment_root(B)` (ADR-0022) — keyed BLAKE2b-512 over the
+    /// canonical preimage under [`MISAKA_OVERLAY_COMMITMENT_CONTEXT`], producing
+    /// the 64-byte digest carried in `Header::overlay_commitment_root`.
+    pub fn commitment_root(&self) -> Hash64 {
+        blake2b_512_keyed(MISAKA_OVERLAY_COMMITMENT_CONTEXT, &self.commitment_preimage())
+    }
+
+    /// Reconstruct the per-block epoch-accumulator inputs (oldest → newest by
+    /// `block_daa_score`) from the window, for [`recompute_epoch_tallies`].
+    pub fn epoch_contributions(&self) -> Vec<BlockEpochContribution> {
+        let mut v: Vec<BlockEpochContribution> = self
+            .window
+            .iter()
+            .map(|c| BlockEpochContribution {
+                block_daa_score: c.block_daa_score,
+                rewarded_keys: c.rewarded_keys.clone(),
+                quality_subpool: c.quality_subpool,
+            })
+            .collect();
+        v.sort_by_key(|c| c.block_daa_score);
+        v
+    }
+}
+
+impl MemSizeEstimator for OverlaySnapshot {}
+
+/// kaspa-pq ADR-0022 — an [`OverlaySnapshot`] tagged with the pruning point it is
+/// taken as-of. Persisted (singleton, `PruningPointOverlaySnapshot` prefix) at
+/// pruning-advance, served to peers during their headers-proof IBD, and consulted
+/// by `compute_overlay_snapshot` when its walk reaches the pruning point.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PruningPointOverlaySnapshot {
+    pub pruning_point: BlockHash,
+    pub snapshot: OverlaySnapshot,
+}
+
+impl MemSizeEstimator for PruningPointOverlaySnapshot {}
+
 /// kaspa-pq ADR-0018 "本格版" (PoS-v2) — one selected-chain block's contribution to the epoch
 /// accumulator recompute (Phase 1): its DAA score (→ its block-epoch), the `(bond_outpoint, epoch)`
 /// keys its coinbase rewarded (from the per-block `rewarded_epochs_store`), and the per-block
@@ -4014,6 +4150,85 @@ pub fn dns_confirmation_from_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- ADR-0022: OverlaySnapshot commitment ----
+
+    fn mk_bond(seed: u64, amount: u64) -> StakeBondRecord {
+        StakeBondRecord {
+            version: 2,
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(seed), (seed % 7) as u32),
+            owner_pubkey_hash: Hash64::from_u64_word(seed + 1),
+            validator_pubkey_hash: Hash64::from_u64_word(seed + 2),
+            validator_pubkey: vec![(seed % 251) as u8; 8],
+            amount,
+            activation_daa_score: seed,
+            created_daa_score: seed,
+            unbonding_period_blocks: 700,
+            owner_reward_spk_payload: [(seed % 256) as u8; 64],
+            unbond_request_daa_score: None,
+            slashed_at_daa_score: None,
+            status: BondStatus::Active,
+        }
+    }
+
+    fn mk_contrib(seed: u64) -> BlockOverlayContribution {
+        let op = |s: u64| TransactionOutpoint::new(Hash64::from_u64_word(s), 0);
+        BlockOverlayContribution {
+            block_hash: Hash64::from_u64_word(seed),
+            block_daa_score: seed * 100,
+            rewarded_keys: vec![(op(seed + 11), 3u64), (op(seed + 10), 2u64)],
+            quality_subpool: seed,
+        }
+    }
+
+    /// ADR-0022: the overlay commitment is order-independent (canonicalized) and
+    /// sensitive to every component — the load-bearing property for verifying a
+    /// peer-supplied snapshot against `header.overlay_commitment_root`.
+    #[test]
+    fn overlay_commitment_is_canonical_and_sensitive() {
+        let bonds = vec![mk_bond(9, 100), mk_bond(2, 200), mk_bond(5, 300)];
+        let window = vec![mk_contrib(40), mk_contrib(20), mk_contrib(31)];
+        let a = OverlaySnapshot { bonds: bonds.clone(), reserve_balance: 12345, window: window.clone() };
+        // Same content, every vector reversed → same commitment after canonicalization.
+        let b = OverlaySnapshot {
+            bonds: bonds.iter().rev().cloned().collect(),
+            reserve_balance: 12345,
+            window: window
+                .iter()
+                .rev()
+                .map(|c| {
+                    let mut c = c.clone();
+                    c.rewarded_keys.reverse();
+                    c
+                })
+                .collect(),
+        };
+        assert_eq!(a.commitment_root(), b.commitment_root(), "commitment must be order-independent");
+
+        // Every component is committed: changing any one flips the digest.
+        let mut c = a.clone();
+        c.reserve_balance += 1;
+        assert_ne!(a.commitment_root(), c.commitment_root(), "reserve_balance must be committed");
+        let mut d = a.clone();
+        d.bonds[0].amount += 1;
+        assert_ne!(a.commitment_root(), d.commitment_root(), "bond amount must be committed");
+        let mut e = a.clone();
+        e.window[0].quality_subpool += 1;
+        assert_ne!(a.commitment_root(), e.commitment_root(), "quality sub-pool must be committed");
+        let mut f = a.clone();
+        f.window[0].rewarded_keys[0].1 += 1;
+        assert_ne!(a.commitment_root(), f.commitment_root(), "rewarded keys must be committed");
+        let mut g = a.clone();
+        g.window[0].block_daa_score += 1;
+        assert_ne!(a.commitment_root(), g.commitment_root(), "block daa score must be committed");
+
+        // epoch_contributions is daa-ordered regardless of window order.
+        let contribs = a.epoch_contributions();
+        assert!(contribs.windows(2).all(|w| w[0].block_daa_score <= w[1].block_daa_score));
+
+        // The empty snapshot has a stable, non-zero digest (the genesis/pre-bond value).
+        assert_ne!(OverlaySnapshot::default().commitment_root(), Hash64::default());
+    }
 
     // ---- PR-10.5: StakeScore + DNS reorg gate ----
 
@@ -4753,6 +4968,8 @@ mod tests {
         // so a bond cannot back-date itself into a past epoch's active set / StakeScore denominator.
         let mut expected_record = stake_bond_record_from_payload(&bond_payload, expected_outpoint);
         expected_record.activation_daa_score = expected_record.activation_daa_score.max(12_345);
+        // ADR-0022: `created_daa_score` is stamped with the acceptance DAA (the bond's creation point).
+        expected_record.created_daa_score = 12_345;
         assert_eq!(muts[0], BondMutation::Insert(expected_outpoint, expected_record));
         assert_eq!(muts[1], BondMutation::Slash(evidence.bond_outpoint, 12_345));
     }
@@ -5594,6 +5811,7 @@ mod tests {
             validator_pubkey: vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN],
             amount: 100_000_000_000,
             activation_daa_score: 5_000,
+            created_daa_score: 4_900,
             unbonding_period_blocks: 100_000,
             owner_reward_spk_payload: [0xddu8; 64],
             unbond_request_daa_score: Some(123_456),

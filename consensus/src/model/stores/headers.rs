@@ -98,6 +98,9 @@ impl From<HeaderWithBlockLevel2> for HeaderWithBlockLevel {
                 // (old DBs are rejected) but must type-check.
                 evm_payload_hash: Default::default(),
                 evm_commitment_root: Default::default(),
+                // ADR-0022: pre-overlay-commitment back-compat shim; default to zero.
+                // Dead under ADR-0001 (old DBs are rejected) but must type-check.
+                overlay_commitment_root: Default::default(),
             }
             .into(),
             block_level: value.block_level,

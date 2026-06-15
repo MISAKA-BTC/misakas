@@ -168,6 +168,7 @@ mod tests {
             validator_pubkey: vec![0xcc; 2592],
             amount,
             activation_daa_score: 100,
+            created_daa_score: 100,
             unbonding_period_blocks: 1000,
             owner_reward_spk_payload: [0xdd; 64],
             unbond_request_daa_score: None,

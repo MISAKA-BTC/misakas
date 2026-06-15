@@ -194,6 +194,16 @@ pub struct Header {
     /// `EvmExecutionHeader` — the mergeset-acceptance execution commitment
     /// (design v0.4 §4.1). Zero for pre-activation (v0/v1) headers.
     pub evm_commitment_root: Hash64,
+
+    /// kaspa-pq ADR-0022: keyed BLAKE2b-512 (`MISAKA_OVERLAY_COMMITMENT_CONTEXT`)
+    /// over the canonical `OverlaySnapshot` as-of this block — the DNS/PoS-v2
+    /// overlay-state commitment that makes the overlay verifiable at a pruning
+    /// point during pruned-IBD. The DNS overlay is genesis-active on every
+    /// network (`dns_params.is_some()`), so unlike the two EVM commitments this
+    /// field enters the header-hash preimage **unconditionally** (all versions);
+    /// see `hashing::header::write_header_preimage`. Added to the preimage is a
+    /// hard fork — every genesis hash is recomputed (ADR-0022 §8).
+    pub overlay_commitment_root: Hash64,
 }
 
 impl Header {
@@ -235,6 +245,11 @@ impl Header {
             // `with_evm_payload_hash` / `with_evm_commitment` before the PoW finalize.
             evm_payload_hash: Hash64::default(),
             evm_commitment_root: Hash64::default(),
+            // ADR-0022: defaults to zero; the block-template/genesis path sets the
+            // real overlay commitment via `with_overlay_commitment`. Unlike the EVM
+            // commitments it is hashed unconditionally, so this default participates
+            // in the header hash (genesis recompute, ADR-0022 §8).
+            overlay_commitment_root: Hash64::default(),
         };
         header.finalize();
         header
@@ -257,6 +272,16 @@ impl Header {
     /// Same version-gating semantics as [`Header::with_evm_commitment`].
     pub fn with_evm_payload_hash(mut self, evm_payload_hash: Hash64) -> Self {
         self.evm_payload_hash = evm_payload_hash;
+        self.finalize();
+        self
+    }
+
+    /// kaspa-pq ADR-0022: set the DNS/PoS-v2 overlay-state commitment and
+    /// re-finalize the header hash. Consuming builder used by the block-template
+    /// path (and genesis construction) to carry the `OverlaySnapshot` digest.
+    /// The field is hashed on every version, so this always changes the hash.
+    pub fn with_overlay_commitment(mut self, overlay_commitment_root: Hash64) -> Self {
+        self.overlay_commitment_root = overlay_commitment_root;
         self.finalize();
         self
     }
@@ -295,6 +320,8 @@ impl Header {
             // the EVM commitments are hash-invisible; default them to zero.
             evm_payload_hash: Default::default(),
             evm_commitment_root: Default::default(),
+            // ADR-0022: hashed unconditionally; default to zero for this test ctor.
+            overlay_commitment_root: Default::default(),
         }
     }
 }

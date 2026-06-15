@@ -13,6 +13,7 @@ use crate::v7::{
     txrelay::flow::{RelayTransactionsFlow, RequestTransactionsFlow},
 };
 pub(crate) mod request_block_bodies;
+pub(crate) mod request_pruning_point_snapshots;
 pub(crate) mod txrelay_evm;
 use crate::{
     flow_context::{FlowContext, PROTOCOL_VERSION_EVM_RELAY},
@@ -24,6 +25,7 @@ use crate::ibd::IbdFlow;
 use kaspa_p2p_lib::{KaspadMessagePayloadType, Router, SharedIncomingRoute, convert::header::HeaderFormat};
 use kaspa_utils::channel;
 use request_block_bodies::HandleBlockBodyRequests;
+use request_pruning_point_snapshots::{RequestPruningPointEvmStateFlow, RequestPruningPointOverlaySnapshotFlow};
 use std::sync::Arc;
 
 pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) -> Vec<Box<dyn Flow>> {
@@ -52,6 +54,9 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
                 KaspadMessagePayloadType::UnexpectedPruningPoint,
                 KaspadMessagePayloadType::PruningPointUtxoSetChunk,
                 KaspadMessagePayloadType::DonePruningPointUtxoSetChunks,
+                // kaspa-pq ADR-0022: pruned-IBD EVM + overlay snapshot responses.
+                KaspadMessagePayloadType::PruningPointEvmState,
+                KaspadMessagePayloadType::PruningPointOverlaySnapshot,
             ]),
             relay_receiver,
             body_only_ibd_permitted,
@@ -98,6 +103,17 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
                 KaspadMessagePayloadType::RequestPruningPointUtxoSet,
                 KaspadMessagePayloadType::RequestNextPruningPointUtxoSetChunk,
             ]),
+        )),
+        // kaspa-pq ADR-0022: serve the pruning point's EVM + overlay snapshots for pruned-IBD.
+        Box::new(RequestPruningPointEvmStateFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe(vec![KaspadMessagePayloadType::RequestPruningPointEvmState]),
+        )),
+        Box::new(RequestPruningPointOverlaySnapshotFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe(vec![KaspadMessagePayloadType::RequestPruningPointOverlaySnapshot]),
         )),
         Box::new(HandleIbdBlockRequests::new(
             ctx.clone(),

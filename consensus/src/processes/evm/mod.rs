@@ -155,6 +155,43 @@ pub struct EvmStaged {
     pub candidate_meta: Vec<(kaspa_hashes::EvmH256, kaspa_consensus_core::BlockHash)>,
 }
 
+/// O12 (IBD catch-up pipeline): a worker thread that pre-executes the EVM
+/// acceptance of a RUN of consecutive pending chain blocks, overlapping the
+/// virtual thread's serial UTXO validation. Pure speculation: the worker
+/// chains parent state IN MEMORY (block N+1 executes from N's just-computed
+/// snapshot), performs the exact `evm_validate` logic (including the
+/// commitment compare), and ships each result over a bounded channel. ALL
+/// commits stay on the virtual thread in canonical order — the pipeline only
+/// changes WHEN the pure execution happens, never its inputs or outputs, so
+/// the committed bytes are identical to the inline path (any divergence would
+/// surface as a CommitmentMismatch disqualification, the built-in oracle).
+///
+/// Disqualification safety: if the virtual thread disqualifies a block without
+/// consuming its result (UTXO fault cascade), [`EvmPipeline::recv`] discards
+/// the stale results that precede the next consumed block — stale entries are
+/// always for earlier chain positions. When the walk ends, dropping the
+/// pipeline closes the channel and the worker exits on its next send.
+pub struct EvmPipeline {
+    rx: std::sync::mpsc::Receiver<(kaspa_consensus_core::BlockHash, Result<EvmStaged, String>)>,
+    _handle: std::thread::JoinHandle<()>,
+}
+
+impl EvmPipeline {
+    /// Receive the pipelined result for `expected`, discarding stale results of
+    /// blocks the walk disqualified before consuming theirs. `None` ⇒ the
+    /// pipeline ended (worker error already delivered, or channel closed) — the
+    /// caller falls back to inline validation.
+    pub fn recv(&self, expected: kaspa_consensus_core::BlockHash) -> Option<Result<EvmStaged, String>> {
+        while let Ok((block, res)) = self.rx.recv() {
+            if block == expected {
+                return Some(res);
+            }
+            // A result for an earlier, disqualified-and-skipped block — discard.
+        }
+        None
+    }
+}
+
 /// §16: stage the receipt + tx-lookup index rows of one validated ACCEPTING
 /// chain block into `batch` (called inside the same `commit_utxo_state` batch
 /// as the EVM header/state rows). Index data only — never consensus-committed.
@@ -311,6 +348,41 @@ mod driver {
         Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta }))
     }
 
+    /// O12 (IBD pipeline): [`evm_validate`] with an in-memory parent override —
+    /// the worker-side step for one block of a pipelined run. Identical logic
+    /// (no-replay check, execution, commitment compare); only the SOURCE of the
+    /// parent rows differs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn evm_validate_chained(
+        header_store: &DbEvmHeaderStore,
+        state_store: &DbEvmStateStore,
+        payload_store: &DbEvmPayloadStore,
+        block: BlockHash,
+        selected_parent: BlockHash,
+        sorted_mergeset: &[BlockHash],
+        l1_header: &Header,
+        payload: &EvmExecutionPayload,
+        parent_override: Option<(kaspa_consensus_core::evm::EvmExecutionHeader, EvmStateSnapshot)>,
+    ) -> Result<Option<super::EvmStaged>, EvmValidateError> {
+        if header_store.has(block).map_err(EvmValidateError::Store)? {
+            return Ok(None);
+        }
+        let (result, child_snapshot, candidate_meta) = evm_execute_acceptance_with_parent(
+            header_store,
+            state_store,
+            payload_store,
+            selected_parent,
+            sorted_mergeset,
+            l1_header,
+            payload,
+            parent_override,
+        )?;
+        if result.header.commitment_root() != l1_header.evm_commitment_root {
+            return Err(EvmValidateError::CommitmentMismatch { block });
+        }
+        Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta }))
+    }
+
     /// The shared execution core: run one block's mergeset acceptance from the
     /// stores. Used by the verifier ([`evm_validate`]) AND by the template
     /// builder (§15 — the producer computes the commitment it will declare,
@@ -326,6 +398,28 @@ mod driver {
         sorted_mergeset: &[BlockHash],
         l1_header: &Header,
         payload: &EvmExecutionPayload,
+    ) -> Result<(kaspa_consensus_core::evm::EvmExecutionResult, EvmStateSnapshot, Vec<(kaspa_hashes::EvmH256, BlockHash)>), EvmValidateError>
+    {
+        evm_execute_acceptance_with_parent(header_store, state_store, payload_store, selected_parent, sorted_mergeset, l1_header, payload, None)
+    }
+
+    /// [`evm_execute_acceptance`] with an optional IN-MEMORY parent override
+    /// (O12 IBD pipeline): when a worker validates a run of consecutive chain
+    /// blocks ahead of the committing thread, block N+1's parent rows are N's
+    /// just-computed result — not yet in the store. The override supplies them
+    /// directly; `None` keeps the store-read path (identical inputs either way,
+    /// so the result is identical — the pipeline only changes WHERE the parent
+    /// bytes come from, never their value).
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    pub(super) fn evm_execute_acceptance_with_parent(
+        header_store: &DbEvmHeaderStore,
+        state_store: &DbEvmStateStore,
+        payload_store: &DbEvmPayloadStore,
+        selected_parent: BlockHash,
+        sorted_mergeset: &[BlockHash],
+        l1_header: &Header,
+        payload: &EvmExecutionPayload,
+        parent_override: Option<(kaspa_consensus_core::evm::EvmExecutionHeader, EvmStateSnapshot)>,
     ) -> Result<(kaspa_consensus_core::evm::EvmExecutionResult, EvmStateSnapshot, Vec<(kaspa_hashes::EvmH256, BlockHash)>), EvmValidateError>
     {
         // AcceptedEvmTxs(B): the mergeset's payload txs in canonical order
@@ -357,23 +451,31 @@ mod driver {
         //     not build, nor a verifier accept, on a fabricated empty parent state.
         //   - parent has NO EVM header  ⇒ it is pre-activation: the first EVM
         //     block's implicit genesis parent ⇒ the empty default state is correct.
-        let parent_header = match header_store.get(selected_parent) {
-            Ok(h) => Some(h),
-            Err(StoreError::KeyNotFound(_)) => None,
-            Err(e) => return Err(EvmValidateError::Store(e)),
-        };
-        let parent_snapshot = if parent_header.is_some() {
-            match state_store.get(selected_parent) {
-                Ok(s) => s,
-                Err(StoreError::KeyNotFound(_)) => {
-                    return Err(EvmValidateError::Exec(format!(
-                        "EVM-active selected parent {selected_parent} has an EVM header but no persisted state snapshot (store corruption / pruning bug)"
-                    )))
-                }
-                Err(e) => return Err(EvmValidateError::Store(e)),
+        // O12: a pipelined run supplies the parent IN MEMORY (the predecessor's
+        // just-computed result) instead of the store rows.
+        let (parent_header, parent_snapshot) = match parent_override {
+            Some((h, s)) => (Some(h), s),
+            None => {
+                let parent_header = match header_store.get(selected_parent) {
+                    Ok(h) => Some(h),
+                    Err(StoreError::KeyNotFound(_)) => None,
+                    Err(e) => return Err(EvmValidateError::Store(e)),
+                };
+                let parent_snapshot = if parent_header.is_some() {
+                    match state_store.get(selected_parent) {
+                        Ok(s) => s,
+                        Err(StoreError::KeyNotFound(_)) => {
+                            return Err(EvmValidateError::Exec(format!(
+                                "EVM-active selected parent {selected_parent} has an EVM header but no persisted state snapshot (store corruption / pruning bug)"
+                            )))
+                        }
+                        Err(e) => return Err(EvmValidateError::Store(e)),
+                    }
+                } else {
+                    EvmStateSnapshot::default()
+                };
+                (parent_header, parent_snapshot)
             }
-        } else {
-            EvmStateSnapshot::default()
         };
 
         let input = super::EvmBlockInput {
@@ -422,6 +524,105 @@ mod driver {
 
 #[cfg(feature = "evm")]
 pub use driver::{evm_execute_acceptance, evm_validate, evm_validate_and_persist, EvmValidateError};
+
+/// O12: one pending chain block for the pipeline worker, in chain order.
+pub struct EvmPipelineItem {
+    pub block: kaspa_consensus_core::BlockHash,
+    pub selected_parent: kaspa_consensus_core::BlockHash,
+    /// True when `selected_parent` is the PREVIOUS item in this run — the worker
+    /// then chains the in-memory parent state. False at a gap (the predecessor
+    /// was already validated/committed earlier), where the worker reads the
+    /// parent rows from the store like the inline path.
+    pub chain_from_prev: bool,
+}
+
+#[cfg(feature = "evm")]
+impl EvmPipeline {
+    /// Spawn the pipeline worker over `pending` (consecutive chain order). Store
+    /// handles are cheap `Arc` clones; the worker reads ONLY committed rows plus
+    /// its own in-memory chain, and writes nothing.
+    pub fn spawn(
+        evm_header_store: std::sync::Arc<crate::model::stores::evm::DbEvmHeaderStore>,
+        evm_state_store: std::sync::Arc<crate::model::stores::evm::DbEvmStateStore>,
+        evm_payload_store: std::sync::Arc<crate::model::stores::evm::DbEvmPayloadStore>,
+        headers_store: std::sync::Arc<crate::model::stores::headers::DbHeadersStore>,
+        ghostdag_store: std::sync::Arc<crate::model::stores::ghostdag::DbGhostdagStore>,
+        pending: Vec<EvmPipelineItem>,
+    ) -> EvmPipeline {
+        use crate::model::stores::evm::EvmPayloadStoreReader;
+        use crate::model::stores::ghostdag::GhostdagStoreReader;
+        use crate::model::stores::headers::HeaderStoreReader;
+        use kaspa_database::prelude::StoreError;
+
+        // Bounded: at most 2 undelivered results (+1 in flight) — keeps the
+        // worker a few blocks ahead without holding many snapshots in memory.
+        let (tx, rx) = std::sync::mpsc::sync_channel(2);
+        let handle = std::thread::Builder::new()
+            .name("evm-pipeline".to_string())
+            .spawn(move || {
+                // The in-memory parent chain: the previous item's (header, snapshot).
+                let mut chained: Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)> =
+                    None;
+                for item in pending {
+                    if !item.chain_from_prev {
+                        chained = None; // gap: predecessor already committed — store reads.
+                    }
+                    let step = (|| -> Result<EvmStaged, driver::EvmValidateError> {
+                        let header = headers_store.get_header(item.block).map_err(driver::EvmValidateError::Store)?;
+                        let ghostdag = ghostdag_store.get_data(item.block).map_err(driver::EvmValidateError::Store)?;
+                        let sorted_mergeset: Vec<kaspa_consensus_core::BlockHash> =
+                            ghostdag.consensus_ordered_mergeset(ghostdag_store.as_ref()).collect();
+                        let payload = match evm_payload_store.get(item.block) {
+                            Ok(p) => p,
+                            Err(StoreError::KeyNotFound(_)) => Default::default(),
+                            Err(e) => return Err(driver::EvmValidateError::Store(e)),
+                        };
+                        let staged = driver::evm_validate_chained(
+                            &evm_header_store,
+                            &evm_state_store,
+                            &evm_payload_store,
+                            item.block,
+                            item.selected_parent,
+                            &sorted_mergeset,
+                            &header,
+                            &payload,
+                            chained.take(),
+                        )?;
+                        // The pipeline only runs over blocks WITHOUT committed EVM rows
+                        // (filtered by the caller), so a None (no-replay hit) is a race
+                        // that cannot happen on the single-writer virtual thread; treat
+                        // it as an internal error rather than panicking a worker.
+                        staged.ok_or_else(|| {
+                            driver::EvmValidateError::Exec(format!("pipeline raced an existing EVM row for {}", item.block))
+                        })
+                    })();
+                    match step {
+                        Ok(staged) => {
+                            chained = Some((staged.result.header.clone(), staged.snapshot.clone()));
+                            if tx.send((item.block, Ok(staged))).is_err() {
+                                return; // walk ended / pipeline dropped
+                            }
+                        }
+                        Err(e) => {
+                            // Map to the EXACT strings the inline path produces, so a
+                            // pipelined disqualification reads identically in logs.
+                            let msg = match e {
+                                driver::EvmValidateError::CommitmentMismatch { .. } => {
+                                    "evm_commitment_root mismatch (mergeset acceptance re-execution)".to_string()
+                                }
+                                driver::EvmValidateError::Exec(e) => format!("evm execution: {e}"),
+                                driver::EvmValidateError::Store(e) => format!("evm store: {e}"),
+                            };
+                            let _ = tx.send((item.block, Err(msg)));
+                            return; // the chain past an invalid block is dead on this path
+                        }
+                    }
+                }
+            })
+            .expect("spawn evm-pipeline thread");
+        EvmPipeline { rx, _handle: handle }
+    }
+}
 
 #[cfg(test)]
 mod bridge_tests {

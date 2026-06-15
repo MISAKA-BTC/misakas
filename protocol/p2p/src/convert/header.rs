@@ -59,6 +59,10 @@ impl From<(HeaderFormat, &Header)> for protowire::BlockHeader {
             // IBD (the powAlgoId split-brain precedent). Zero on v0/v1 headers.
             evm_payload_hash: Some(item.evm_payload_hash.into()),
             evm_commitment_root: Some(item.evm_commitment_root.into()),
+            // kaspa-pq ADR-0022: the overlay-state commitment is part of the
+            // header-hash preimage on every version, so it MUST survive relay/IBD
+            // (the powAlgoId / EVM-commitment split-brain precedent).
+            overlay_commitment_root: Some(item.overlay_commitment_root.into()),
         }
     }
 }
@@ -127,7 +131,11 @@ impl TryFrom<Versioned<protowire::BlockHeader>> for Header {
         // hash-invisible anyway; on a v2 header a zero would simply fail the
         // header-hash check, never silently fork).
         .with_evm_payload_hash(item.evm_payload_hash.map(BlockHash::try_from).transpose()?.unwrap_or_default())
-        .with_evm_commitment(item.evm_commitment_root.map(BlockHash::try_from).transpose()?.unwrap_or_default()))
+        .with_evm_commitment(item.evm_commitment_root.map(BlockHash::try_from).transpose()?.unwrap_or_default())
+        // kaspa-pq ADR-0022: restore the overlay-state commitment (absent from an
+        // old peer ⇒ zero; on a re-genesis chain a zero would simply fail the
+        // header-hash check, never silently fork).
+        .with_overlay_commitment(item.overlay_commitment_root.map(BlockHash::try_from).transpose()?.unwrap_or_default()))
     }
 }
 

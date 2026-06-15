@@ -336,6 +336,42 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    // kaspa-pq ADR-0022: pruned-IBD EVM + DNS/PoS-v2 overlay snapshot transfer.
+    /// Serve: the pruning point's EVM execution header + state snapshot, or `None` if absent.
+    fn pruning_point_evm_state(
+        &self,
+        pruning_point: BlockHash,
+    ) -> Option<(crate::evm::EvmExecutionHeader, crate::evm::EvmStateSnapshot)> {
+        let _ = pruning_point;
+        unimplemented!()
+    }
+
+    /// Import: verify + persist the pruning point's EVM execution state.
+    fn import_pruning_point_evm_state(
+        &self,
+        pruning_point: BlockHash,
+        evm_header: crate::evm::EvmExecutionHeader,
+        snapshot: crate::evm::EvmStateSnapshot,
+    ) -> PruningImportResult<()> {
+        let _ = (pruning_point, evm_header, snapshot);
+        unimplemented!()
+    }
+
+    /// Serve: the persisted overlay snapshot as-of the current pruning point, or `None`.
+    fn pruning_point_overlay_snapshot(&self) -> Option<crate::dns_finality::PruningPointOverlaySnapshot> {
+        unimplemented!()
+    }
+
+    /// Import: persist the pruning point's DNS/PoS-v2 overlay snapshot.
+    fn import_pruning_point_overlay_snapshot(
+        &self,
+        pruning_point: BlockHash,
+        snapshot: crate::dns_finality::OverlaySnapshot,
+    ) -> PruningImportResult<()> {
+        let _ = (pruning_point, snapshot);
+        unimplemented!()
+    }
+
     fn is_chain_ancestor_of(&self, low: BlockHash, high: BlockHash) -> ConsensusResult<bool> {
         unimplemented!()
     }

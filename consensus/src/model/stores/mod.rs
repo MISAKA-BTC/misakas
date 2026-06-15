@@ -15,6 +15,7 @@ pub mod headers_selected_tip;
 pub mod past_pruning_points;
 pub mod pruning;
 pub mod pruning_meta;
+pub mod pruning_overlay_snapshot;
 pub mod pruning_samples;
 pub mod reachability;
 pub mod relations;

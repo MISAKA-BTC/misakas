@@ -280,8 +280,15 @@ impl HeaderProcessor {
         // Validate the header depending on task type
         match task {
             BlockTask::Ordinary { .. } => {
+                // [ibd-perf §7-1] split-time Phase-A (parallelizable compute) vs the serial committer.
+                let hp_t0 = std::time::Instant::now();
                 let ctx = self.validate_header(header)?;
+                let hp_t1 = std::time::Instant::now();
                 self.commit_header(ctx, header);
+                let hp_t2 = std::time::Instant::now();
+                self.counters.hdr_validate_ns.fetch_add((hp_t1 - hp_t0).as_nanos() as u64, Ordering::Relaxed);
+                self.counters.hdr_commit_ns.fetch_add((hp_t2 - hp_t1).as_nanos() as u64, Ordering::Relaxed);
+                self.counters.hdr_timed_counts.fetch_add(1, Ordering::Relaxed);
             }
             BlockTask::Trusted { .. } => {
                 let ctx = self.validate_trusted_header(header)?;
@@ -386,10 +393,14 @@ impl HeaderProcessor {
         // staging reachability operations. PERF: we assume that reachability processing time << header processing
         // time, and thus serializing this part will do no harm. However this should be benchmarked. The
         // alternative is to create a separate ReachabilityProcessor and to manage things more tightly.
+        // [ibd-perf §7-1] held-lock window starts at the upgradable_read acquisition.
+        let hp_lock_t0 = std::time::Instant::now();
         let mut staging = StagingReachabilityStore::new(self.reachability_store.upgradable_read());
         let selected_parent = ghostdag_data.selected_parent;
         let mut reachability_mergeset = ghostdag_data.unordered_mergeset_without_selected_parent();
+        let hp_add_t0 = std::time::Instant::now();
         reachability::add_block(&mut staging, ctx.hash, selected_parent, &mut reachability_mergeset).unwrap();
+        self.counters.hdr_addblock_ns.fetch_add(hp_add_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
         // Non-append only stores need to use write locks.
         // Note we need to keep the lock write guards until the batch is written.
@@ -422,7 +433,10 @@ impl HeaderProcessor {
         let reachability_write = staging.commit(&mut batch).unwrap();
 
         // Flush the batch to the DB
+        let hp_write_t0 = std::time::Instant::now();
         self.db.write(batch).unwrap();
+        self.counters.hdr_dbwrite_ns.fetch_add(hp_write_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        self.counters.hdr_heldlock_ns.fetch_add(hp_lock_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
         // Calling the drops explicitly after the batch is written in order to avoid possible errors.
         drop(reachability_write);

@@ -177,6 +177,7 @@ mod mockery {
                 pow_algo_id: mock(),
                 evm_payload_hash: mock(),
                 evm_commitment_root: mock(),
+                overlay_commitment_root: mock(),
             }
         }
     }
@@ -200,6 +201,7 @@ mod mockery {
                 pow_algo_id: mock(),
                 evm_payload_hash: mock(),
                 evm_commitment_root: mock(),
+                overlay_commitment_root: mock(),
             }
         }
     }

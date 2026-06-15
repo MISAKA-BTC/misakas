@@ -660,9 +660,13 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
         quality_gate_bonus_sompi: 0,
         worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
         fee_split: FeeSplitParams {
-            subsidy_worker_base_bps: 6700,
+            // kaspa-pq: validator subsidy share raised 25% → 30% (re-genesis 同便).
+            // worker_base absorbs the 5pt; inclusion 8% kept. miner stays majority
+            // (70% worker = 62% base + 8% inclusion), validator 30%. Strengthens the
+            // stake-finality incentive (2-D DNS reorg defense) without inflating supply.
+            subsidy_worker_base_bps: 6200,
             subsidy_worker_inclusion_bps: 800,
-            subsidy_validator_bps: 2500,
+            subsidy_validator_bps: 3000,
             subsidy_service_bps: 0,
             normal_fee_worker_bps: 9000,
             normal_fee_validator_bps: 1000,
@@ -783,9 +787,13 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
         quality_gate_bonus_sompi: 0,
         worker_urgency_multiplier_scaled: STAKE_SCORE_SCALE as u64,
         fee_split: FeeSplitParams {
-            subsidy_worker_base_bps: 6700,
+            // kaspa-pq: validator subsidy share raised 25% → 30% (re-genesis 同便).
+            // worker_base absorbs the 5pt; inclusion 8% kept. miner stays majority
+            // (70% worker = 62% base + 8% inclusion), validator 30%. Strengthens the
+            // stake-finality incentive (2-D DNS reorg defense) without inflating supply.
+            subsidy_worker_base_bps: 6200,
             subsidy_worker_inclusion_bps: 800,
-            subsidy_validator_bps: 2500,
+            subsidy_validator_bps: 3000,
             subsidy_service_bps: 0,
             normal_fee_worker_bps: 9000,
             normal_fee_validator_bps: 1000,
