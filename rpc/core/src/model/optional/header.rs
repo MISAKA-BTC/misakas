@@ -137,6 +137,8 @@ impl TryFrom<RpcOptionalHeader> for Header {
             // ADR-0020: RpcOptionalHeader has no EVM fields yet (P1); default to zero.
             evm_payload_hash: Default::default(),
             evm_commitment_root: Default::default(),
+            // ADR-0022: RpcOptionalHeader has no overlay field yet (cosmetic view); default to zero.
+            overlay_commitment_root: Default::default(),
         })
     }
 }
@@ -176,6 +178,8 @@ impl TryFrom<&RpcOptionalHeader> for Header {
             // ADR-0020: RpcOptionalHeader has no EVM fields yet (P1); default to zero.
             evm_payload_hash: Default::default(),
             evm_commitment_root: Default::default(),
+            // ADR-0022: RpcOptionalHeader has no overlay field yet (cosmetic view); default to zero.
+            overlay_commitment_root: Default::default(),
         })
     }
 }

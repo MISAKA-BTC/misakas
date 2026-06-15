@@ -21,13 +21,17 @@ use crate::{
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
             dns_state::{DbDnsStateStore, DnsStateStoreReader},
-            evm::{DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore, EvmHeaderStore, EvmStateStore},
+            evm::{
+                DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore, EvmCanonicalHeadsStoreReader,
+                EvmHeaderStore, EvmHeaderStoreReader, EvmStateStore, EvmStateStoreReader,
+            },
             epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
             past_pruning_points::DbPastPruningPointsStore,
             pruning::{DbPruningStore, PruningStoreReader},
             pruning_meta::PruningMetaStores,
+            pruning_overlay_snapshot::{DbPruningPointOverlaySnapshotStore, PruningPointOverlaySnapshotStoreReader},
             pruning_samples::DbPruningSamplesStore,
             reachability::DbReachabilityStore,
             relations::{DbRelationsStore, RelationsStoreReader},
@@ -66,8 +70,9 @@ use kaspa_consensus_core::{
         CanonicalLaggedEpochAnchor, DnsParams, DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore,
         advance_dns_confirmation, aggregate_epoch_tallies, anchor_cutoff_blue_score, attestations_from_accepted_txs,
         bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, check_dns_reorg_rule, compute_stake_score,
-        derive_dns_health, is_bond_active_at, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
-        reorg_inputs_since_common_ancestor, stake_attestation_message, total_active_stake_by_epoch,
+        derive_dns_health, effective_bond_status, is_bond_active_at, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
+        reorg_inputs_since_common_ancestor, stake_attestation_message, total_active_stake_by_epoch, BlockOverlayContribution,
+        OverlaySnapshot, PruningPointOverlaySnapshot,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -180,6 +185,8 @@ pub struct VirtualStateProcessor {
     // pass below is a single `Option` check and a return.
     pub(super) stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
     pub(super) dns_state_store: Arc<RwLock<DbDnsStateStore>>,
+    // kaspa-pq ADR-0022: overlay snapshot as-of the pruning point (serve + below-pp window consult).
+    pub(super) pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub(super) dns_params: Option<DnsParams>,
 
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4). The lazy
@@ -290,6 +297,7 @@ impl VirtualStateProcessor {
             pruning_samples_store: storage.pruning_samples_store.clone(),
             stake_bonds_store: storage.stake_bonds_store.clone(),
             dns_state_store: storage.dns_state_store.clone(),
+            pruning_overlay_snapshot_store: storage.pruning_overlay_snapshot_store.clone(),
             evm_header_store: storage.evm_header_store.clone(),
             evm_state_store: storage.evm_state_store.clone(),
             evm_payload_store: storage.evm_payload_store.clone(),
@@ -534,6 +542,13 @@ impl VirtualStateProcessor {
         let split_point = split_point.expect("chain iterator was expected to reach the reorg split point");
         debug!("VIRTUAL PROCESSOR, found split point: {split_point}");
 
+        // O12 (IBD catch-up): when the walk ahead contains a long run of
+        // pending chain blocks, pre-execute their EVM acceptance on a pipeline
+        // worker overlapped with this thread's serial UTXO validation. Inert
+        // when the lane is inactive, on short walks (steady state: 1 block),
+        // and on non-evm builds. Commits stay HERE, in canonical order.
+        let evm_pipeline = self.maybe_spawn_evm_pipeline(split_point, to);
+
         // A variable holding the most recent UTXO-valid block on `chain(to)` (note that it's maintained such
         // that 'diff' is always its UTXO diff from virtual)
         let mut diff_point = split_point;
@@ -594,16 +609,22 @@ impl VirtualStateProcessor {
                     // disqualifies the block from the chain exactly like a UTXO
                     // fault (no poison; the block stays in the DAG). A single
                     // u64 compare while the lane is inert.
-                    let evm_staged =
-                        match self.evm_chain_context_step(current, selected_parent, &header, &mut ctx, &selected_parent_utxo_view) {
-                            Ok(staged) => staged,
-                            Err(evm_error) => {
-                                info!("Block {} is disqualified from virtual chain (EVM): {}", current, evm_error);
-                                self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
-                                chain_disqualified_counter += 1;
-                                continue;
-                            }
-                        };
+                    let evm_staged = match self.evm_chain_context_step(
+                        current,
+                        selected_parent,
+                        &header,
+                        &mut ctx,
+                        &selected_parent_utxo_view,
+                        evm_pipeline.as_ref(),
+                    ) {
+                        Ok(staged) => staged,
+                        Err(evm_error) => {
+                            info!("Block {} is disqualified from virtual chain (EVM): {}", current, evm_error);
+                            self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                            chain_disqualified_counter += 1;
+                            continue;
+                        }
+                    };
 
                     let res = self.verify_expected_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, &header);
 
@@ -666,6 +687,7 @@ impl VirtualStateProcessor {
         header: &Header,
         ctx: &mut UtxoProcessingContext<'_>,
         selected_parent_utxo_view: &V,
+        pipeline: Option<&crate::processes::evm::EvmPipeline>,
     ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
         use crate::model::stores::evm::EvmPayloadStoreReader;
         use crate::processes::evm::{apply_evm_bridge_effects, evm_validate, validate_evm_deposit_claims, EvmValidateError};
@@ -689,24 +711,37 @@ impl VirtualStateProcessor {
             let claim_view = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
             validate_evm_deposit_claims(&own_payload, &claim_view, header.daa_score)?
         };
-        // AcceptedEvmTxs(B) source: the consensus-ordered mergeset (selected
-        // parent first, then ascending blue work — §3.1 canonical order).
-        let sorted_mergeset: Vec<BlockHash> = ctx.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
-        let staged = evm_validate(
-            &self.evm_header_store,
-            &self.evm_state_store,
-            &self.evm_payload_store,
-            current,
-            selected_parent,
-            &sorted_mergeset,
-            header,
-            &own_payload,
-        )
-        .map_err(|e| match e {
-            EvmValidateError::CommitmentMismatch { .. } => "evm_commitment_root mismatch (mergeset acceptance re-execution)".to_string(),
-            EvmValidateError::Exec(e) => format!("evm execution: {e}"),
-            EvmValidateError::Store(e) => format!("evm store: {e}"),
-        })?;
+        // O12: a pipelined run pre-executed this block's acceptance on the
+        // worker (same pure function, same inputs — see EvmPipeline). Consume
+        // its result; fall back to inline execution when the pipeline ended.
+        let pipelined = pipeline.and_then(|p| p.recv(current));
+        let staged = match pipelined {
+            Some(Ok(staged)) => Some(staged),
+            Some(Err(msg)) => return Err(msg),
+            None => {
+                // AcceptedEvmTxs(B) source: the consensus-ordered mergeset (selected
+                // parent first, then ascending blue work — §3.1 canonical order).
+                let sorted_mergeset: Vec<BlockHash> =
+                    ctx.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
+                evm_validate(
+                    &self.evm_header_store,
+                    &self.evm_state_store,
+                    &self.evm_payload_store,
+                    current,
+                    selected_parent,
+                    &sorted_mergeset,
+                    header,
+                    &own_payload,
+                )
+                .map_err(|e| match e {
+                    EvmValidateError::CommitmentMismatch { .. } => {
+                        "evm_commitment_root mismatch (mergeset acceptance re-execution)".to_string()
+                    }
+                    EvmValidateError::Exec(e) => format!("evm execution: {e}"),
+                    EvmValidateError::Store(e) => format!("evm store: {e}"),
+                })?
+            }
+        };
         let Some(staged) = staged else {
             // The EVM rows commit in the SAME batch as the UTXO diff, so a
             // present result with an absent diff (this KeyNotFound arm) is
@@ -723,7 +758,7 @@ impl VirtualStateProcessor {
             &staged.result.withdrawals,
         )?;
         // O9: chain-rate / mergeset / gas-utilization observability.
-        self.evm_lane_kpi.record(sorted_mergeset.len(), staged.result.header.gas_used);
+        self.evm_lane_kpi.record(ctx.ghostdag_data.mergeset_size(), staged.result.header.gas_used);
         Ok(Some(staged))
     }
 
@@ -739,6 +774,7 @@ impl VirtualStateProcessor {
         header: &Header,
         _ctx: &mut UtxoProcessingContext<'_>,
         _selected_parent_utxo_view: &V,
+        _pipeline: Option<&crate::processes::evm::EvmPipeline>,
     ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
         if header.daa_score >= self.evm_activation_daa_score {
             panic!(
@@ -747,6 +783,56 @@ impl VirtualStateProcessor {
             );
         }
         Ok(None)
+    }
+
+    /// O12: spawn the EVM pipeline worker for the upcoming forward walk when it
+    /// contains a long run of pending EVM-active chain blocks (IBD catch-up).
+    /// Steady-state walks (a handful of blocks) skip the pipeline — the thread
+    /// + channel overhead outweighs overlapping a single block.
+    #[cfg(feature = "evm")]
+    fn maybe_spawn_evm_pipeline(&self, split_point: BlockHash, to: BlockHash) -> Option<crate::processes::evm::EvmPipeline> {
+        use crate::processes::evm::{EvmPipeline, EvmPipelineItem};
+        const MIN_PIPELINE_RUN: usize = 8;
+        if self.evm_activation_daa_score == u64::MAX {
+            return None;
+        }
+        let statuses = self.statuses_store.read();
+        let mut pending: Vec<EvmPipelineItem> = Vec::new();
+        let mut prev_pending: Option<BlockHash> = None;
+        for (selected_parent, current) in self.reachability_service.forward_chain_iterator(split_point, to, true).tuple_windows() {
+            // Mirror the walk's KeyNotFound arm: only blocks without a committed
+            // UTXO diff and not already disqualified will be validated.
+            if self.utxo_diffs_store.get(current).is_ok() {
+                continue;
+            }
+            if statuses.get(current).unwrap() == StatusDisqualifiedFromChain {
+                continue;
+            }
+            if self.headers_store.get_daa_score(current).unwrap() < self.evm_activation_daa_score {
+                continue; // pre-activation block: the step is inert for it
+            }
+            let chain_from_prev = prev_pending == Some(selected_parent);
+            pending.push(EvmPipelineItem { block: current, selected_parent, chain_from_prev });
+            prev_pending = Some(current);
+        }
+        drop(statuses);
+        if pending.len() < MIN_PIPELINE_RUN {
+            return None;
+        }
+        Some(EvmPipeline::spawn(
+            self.evm_header_store.clone(),
+            self.evm_state_store.clone(),
+            self.evm_payload_store.clone(),
+            self.headers_store.clone(),
+            self.ghostdag_store.clone(),
+            pending,
+        ))
+    }
+
+    /// Non-`evm` builds never pipeline (the step itself is a panic-guard there).
+    #[cfg(not(feature = "evm"))]
+    fn maybe_spawn_evm_pipeline(&self, _split_point: BlockHash, _to: BlockHash) -> Option<crate::processes::evm::EvmPipeline> {
+        None
     }
 
     /// kaspa-pq EVM Lane v0.4 (§10 / invariant I3): a virtual change only moves
@@ -1490,22 +1576,18 @@ impl VirtualStateProcessor {
 
         let epoch_len = dns_params.epoch_length_blocks.max(1);
         let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
-        let walk_bound = finalization_depth.saturating_add(epoch_len.saturating_mul(2));
+        let walk_bound = self.overlay_window_walk_bound(dns_params);
 
-        // Gather this selected chain's per-block contributions within the window
-        // (sink first, then ancestors), stopping at the window edge or the fence.
-        let mut contributions: Vec<BlockEpochContribution> = Vec::new();
-        for ancestor in std::iter::once(sink).chain(self.reachability_service.default_backward_chain_iterator(sink)) {
-            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
-            if sink_daa.saturating_sub(ancestor_daa) > walk_bound || ancestor_daa < dns_params.pos_v2_activation_daa_score {
-                break;
-            }
-            let rewarded_keys = self.rewarded_epochs_store.get(ancestor).map(|k| (*k).clone()).unwrap_or_default();
-            let quality_subpool = self.block_quality_pool_store.get(ancestor).unwrap_or(0);
-            contributions.push(BlockEpochContribution { block_daa_score: ancestor_daa, rewarded_keys, quality_subpool });
-        }
-        // Selected-chain order (oldest → newest) so the `included` ordering is chain-deterministic.
-        contributions.reverse();
+        // Gather this selected chain's per-block contributions within the window, oldest →
+        // newest (so the `included` ordering is chain-deterministic). ADR-0022: this goes
+        // through `selected_chain_overlay_window`, which merges the persisted below-pruning-
+        // point window — so a pruned-IBD node recomputes epochs straddling the pruning point
+        // correctly (its walk cannot reach below it). On a from-genesis node the merge is inert.
+        let contributions: Vec<BlockEpochContribution> = self
+            .selected_chain_overlay_window(sink, sink_daa, walk_bound)
+            .into_iter()
+            .map(|c| BlockEpochContribution { block_daa_score: c.block_daa_score, rewarded_keys: c.rewarded_keys, quality_subpool: c.quality_subpool })
+            .collect();
 
         // Snapshot the bond set (bounded by the active validator count), as update_dns_state does.
         let bonds: Vec<StakeBondRecord> =
@@ -1519,6 +1601,108 @@ impl VirtualStateProcessor {
             }
             self.epoch_accumulator_store.set_batch(batch, epoch, tally).unwrap();
         }
+    }
+
+    /// kaspa-pq ADR-0022: build the [`OverlaySnapshot`] **as-of `selected_parent`** —
+    /// the exact set of overlay rows a pruned-IBD node needs to validate
+    /// `selected_parent`'s descendants. Committed in `Header::overlay_commitment_root`
+    /// (template fills it, `verify_expected_utxo_state` re-derives + checks it, c==v).
+    ///
+    /// Deterministic across the template path (`selected_parent` = sink) and the
+    /// validation path (`selected_parent` = the block's selected parent): it reads
+    /// only the walked bond view + per-block stores (`reserve_balance_store`,
+    /// `rewarded_epochs_store`, `block_quality_pool_store`), never the per-sink
+    /// epoch accumulator. Empty (⇒ `OverlaySnapshot::default()`) when the overlay
+    /// is dormant; the window walk mirrors `update_epoch_accumulator` (same
+    /// `walk_bound`, same pos_v2 fence) but is anchored at `selected_parent` and
+    /// keeps only blocks that actually contributed (rewarded keys or quality pool),
+    /// so the snapshot stays small on a validator-sparse chain.
+    pub(super) fn compute_overlay_snapshot(&self, selected_parent: BlockHash, selected_parent_bond_view: &ActiveBondView) -> OverlaySnapshot {
+        let Some(dns_params) = self.dns_params.as_ref() else {
+            return OverlaySnapshot::default();
+        };
+
+        let anchor_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
+
+        // Normalize the (non-canonical) stored `status` to the EFFECTIVE status at the
+        // anchor. The raw `status` field diverges across reorg paths — `ActiveBondView::revert`
+        // restores a reverted-slash bond to `Active` even if it was originally `Pending`, so a
+        // never-slashed vs slashed-then-reverted bond can carry different `status` for byte-equal
+        // history. `effective_bond_status` is a pure function of the canonical timing fields
+        // (`activation_daa_score`/`slashed_at`/`unbond_request`), which the reward path already
+        // uses; normalizing here makes the committed bond set deterministic across reorgs without
+        // touching consensus-state mutation (the raw field is otherwise vestigial).
+        let mut bonds = selected_parent_bond_view.records();
+        for b in bonds.iter_mut() {
+            b.status = effective_bond_status(b, anchor_daa);
+        }
+        let reserve_balance = self.reserve_balance_store.get(selected_parent).unwrap_or(0);
+
+        let walk_bound = self.overlay_window_walk_bound(dns_params);
+        let window = self.selected_chain_overlay_window(selected_parent, anchor_daa, walk_bound);
+
+        OverlaySnapshot { bonds, reserve_balance, window }
+    }
+
+    /// ADR-0022: `reward_uniqueness_window + max_reorg_horizon + 2·epoch_length` — the
+    /// selected-chain window that covers BOTH the reward-uniqueness dedup and the
+    /// epoch-accumulator recompute. Shared by the overlay snapshot, the epoch
+    /// accumulator, and the reward dedup so all three see the same span.
+    pub(super) fn overlay_window_walk_bound(&self, dns_params: &DnsParams) -> u64 {
+        let epoch_len = dns_params.epoch_length_blocks.max(1);
+        let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
+        finalization_depth.saturating_add(epoch_len.saturating_mul(2))
+    }
+
+    /// kaspa-pq ADR-0022: the per-block overlay contributions on `anchor`'s selected
+    /// chain within `walk_bound` (rewarded keys + quality sub-pool), oldest → newest,
+    /// MERGING the persisted pruning-point snapshot's below-pruning-point window.
+    ///
+    /// The selected-chain walk cannot traverse below the pruning point (no reachability
+    /// there after a prune or a pruned-IBD import), so it stops at the persisted pruning
+    /// point and the persisted snapshot supplies everything at/below it. On a node whose
+    /// pruning point is far below `anchor` (normal operation) the walk never reaches it
+    /// and every persisted entry is outside `walk_bound`, so the merge is a no-op
+    /// (byte-identical to a from-genesis node). Empty-contribution blocks are skipped.
+    /// The single seam through which all three below-pp consumers (overlay commitment,
+    /// epoch accumulator, reward dedup) read the historical window.
+    pub(super) fn selected_chain_overlay_window(&self, anchor: BlockHash, anchor_daa: u64, walk_bound: u64) -> Vec<BlockOverlayContribution> {
+        let persisted = self.pruning_overlay_snapshot_store.read().get().ok();
+        let stop_at = persisted.as_ref().map(|p| p.pruning_point);
+
+        // Above-pruning-point part, collected newest → oldest by the chain walk.
+        let mut above: Vec<BlockOverlayContribution> = Vec::new();
+        for ancestor in std::iter::once(anchor).chain(self.reachability_service.default_backward_chain_iterator(anchor)) {
+            if Some(ancestor) == stop_at {
+                break;
+            }
+            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
+            if anchor_daa.saturating_sub(ancestor_daa) > walk_bound {
+                break;
+            }
+            let rewarded_keys = self.rewarded_epochs_store.get(ancestor).map(|k| (*k).clone()).unwrap_or_default();
+            let quality_subpool = self.block_quality_pool_store.get(ancestor).unwrap_or(0);
+            if rewarded_keys.is_empty() && quality_subpool == 0 {
+                continue;
+            }
+            above.push(BlockOverlayContribution { block_hash: ancestor, block_daa_score: ancestor_daa, rewarded_keys, quality_subpool });
+        }
+        above.reverse(); // → oldest → newest
+
+        // Below-pruning-point part: the persisted window (stored oldest → newest), kept
+        // to entries still within `walk_bound` of the anchor. These never overlap `above`
+        // (the walk stopped AT the pruning point), so prepending yields a single
+        // oldest → newest selected-chain ordering.
+        let mut window: Vec<BlockOverlayContribution> = Vec::new();
+        if let Some(p) = persisted {
+            for c in p.snapshot.window {
+                if anchor_daa.saturating_sub(c.block_daa_score) <= walk_bound {
+                    window.push(c);
+                }
+            }
+        }
+        window.extend(above);
+        window
     }
 
     /// kaspa-pq Phase 13 (ADR-0018 §H) + DNS v3 (PR6): the StakeScore a branch accumulated
@@ -2444,6 +2628,19 @@ impl VirtualStateProcessor {
         // until the EVM mempool lands (§16 phase) — its (non-zero) hash is
         // still committed. Inert (returns the header unchanged) pre-activation.
         let (header, evm_payload, stale_evm_claims) = self.evm_template_fields(header, &virtual_state, evm_template_data)?;
+        // kaspa-pq ADR-0022: commit the DNS/PoS-v2 overlay snapshot as-of the template's
+        // selected parent (the sink) — the SAME `compute_overlay_snapshot` the validation
+        // path re-derives, so a block mined from this template reproduces the
+        // `overlay_commitment_root` byte-for-byte (construction == validation). Inert
+        // (header unchanged) when the overlay is dormant. Appended after the EVM fields;
+        // `with_overlay_commitment` re-finalizes over the full preimage.
+        let header = if self.dns_params.is_some() {
+            let overlay_root =
+                self.compute_overlay_snapshot(virtual_state.ghostdag_data.selected_parent, &template_bond_view).commitment_root();
+            header.with_overlay_commitment(overlay_root)
+        } else {
+            header
+        };
         let selected_parent_hash = virtual_state.ghostdag_data.selected_parent;
         let selected_parent_timestamp = self.headers_store.get_timestamp(selected_parent_hash).unwrap();
         let selected_parent_daa_score = self.headers_store.get_daa_score(selected_parent_hash).unwrap();
@@ -2591,6 +2788,171 @@ impl VirtualStateProcessor {
         )?;
 
         Ok(())
+    }
+
+    /// kaspa-pq ADR-0022: import the pruning point's EVM execution state during
+    /// headers-proof IBD. Without this, the first post-pruning block re-executes the
+    /// EVM lane against an empty genesis state (the pruning point has no
+    /// `evm_header_store` row on a fresh node), so its recomputed `evm_commitment_root`
+    /// mismatches the header and the whole chain is disqualified.
+    ///
+    /// Verification (trustless): the supplied [`EvmExecutionHeader`] must reproduce
+    /// the L1 header's `evm_commitment_root` (a pure, secp-free keyed-BLAKE2b check),
+    /// and — on an `evm` build — the supplied [`EvmStateSnapshot`] must reproduce that
+    /// EVM header's `state_root` (the keccak-MPT root over the account set). Then the
+    /// two rows are persisted and the canonical **finalized** EVM head is set to the
+    /// pruning point, so `evm_execute_acceptance_with_parent` finds the real parent
+    /// state for `pp`'s children.
+    pub fn import_pruning_point_evm_state(
+        &self,
+        pruning_point: BlockHash,
+        evm_header: kaspa_consensus_core::evm::EvmExecutionHeader,
+        snapshot: kaspa_consensus_core::evm::EvmStateSnapshot,
+    ) -> PruningImportResult<()> {
+        info!("Importing the EVM state of the pruning point {}", pruning_point);
+        let l1_header = self.headers_store.get_header(pruning_point).unwrap();
+
+        // (1) The EVM header must reproduce the L1 commitment (pure; works on any build).
+        let got = evm_header.commitment_root();
+        if got != l1_header.evm_commitment_root {
+            return Err(PruningImportError::ImportedEvmCommitmentMismatch(pruning_point, got, l1_header.evm_commitment_root));
+        }
+
+        // (2) The state snapshot must reproduce the EVM header's keccak-MPT state root.
+        // Requires the EVM executor; an `evm`-active network can only be synced by an
+        // `--features evm` build (a default build rejects its v2 headers earlier), so
+        // skipping this on a non-evm build never weakens a chain it actually follows.
+        #[cfg(feature = "evm")]
+        {
+            let db = kaspa_evm::snapshot::seed_cachedb(&snapshot)
+                .map_err(|e| PruningImportError::ImportedEvmSnapshotInvalid(pruning_point, e.to_string()))?;
+            let computed = kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&db).0);
+            if computed != evm_header.state_root {
+                return Err(PruningImportError::ImportedEvmStateRootMismatch(pruning_point, computed, evm_header.state_root));
+            }
+        }
+
+        // (3) Persist the rows and pin the finalized EVM head to the pruning point.
+        let mut batch = WriteBatch::default();
+        self.evm_header_store.insert_batch(&mut batch, pruning_point, evm_header).unwrap();
+        self.evm_state_store.insert_batch(&mut batch, pruning_point, snapshot).unwrap();
+        {
+            let mut heads_write = self.evm_heads_store.write();
+            let prev = heads_write.get().ok();
+            let latest = prev.as_ref().map(|h| h.latest).unwrap_or(pruning_point);
+            let safe = prev.as_ref().map(|h| h.safe).unwrap_or(pruning_point);
+            let heads = kaspa_consensus_core::evm::CanonicalEvmHeads { latest, safe, finalized: pruning_point };
+            heads_write.set_batch(&mut batch, heads).unwrap();
+        }
+        self.db.write(batch).unwrap();
+        Ok(())
+    }
+
+    /// kaspa-pq ADR-0022 (serving side): the pruning point's EVM execution header +
+    /// state snapshot, for a peer to stream during another node's headers-proof IBD.
+    /// `None` if the overlay/EVM rows are absent (pre-activation or not yet computed).
+    pub fn pruning_point_evm_state(
+        &self,
+        pruning_point: BlockHash,
+    ) -> Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)> {
+        let header = self.evm_header_store.get(pruning_point).ok()?;
+        let snapshot = self.evm_state_store.get(pruning_point).ok()?;
+        Some((header, snapshot))
+    }
+
+    /// kaspa-pq ADR-0022: import the pruning point's DNS/PoS-v2 overlay snapshot during
+    /// headers-proof IBD. Persists the bond set (so `initial_active_bond_view` and the
+    /// reward path read it), the pruning point's cumulative reserve balance (read by the
+    /// first post-pruning finalizing block's §F drip), and the whole snapshot in the
+    /// `pruning_overlay_snapshot_store` — which `selected_chain_overlay_window` consults
+    /// for the below-pruning-point window (the selected-chain walk cannot traverse below
+    /// the pruning point). Verification is trustless and automatic: the first post-pruning
+    /// block's existing coinbase/overlay `c == v` re-derives this state and checks it
+    /// against the committed `overlay_commitment_root`; a wrong snapshot disqualifies that
+    /// block and the (staging) IBD is discarded.
+    pub fn import_pruning_point_overlay_snapshot(
+        &self,
+        pruning_point: BlockHash,
+        snapshot: OverlaySnapshot,
+    ) -> PruningImportResult<()> {
+        if self.dns_params.is_none() {
+            return Ok(()); // overlay dormant — the snapshot is empty and nothing reads it
+        }
+        info!(
+            "Importing the overlay snapshot of the pruning point {} ({} bonds, {} window blocks, reserve {})",
+            pruning_point,
+            snapshot.bonds.len(),
+            snapshot.window.len(),
+            snapshot.reserve_balance
+        );
+        let mut batch = WriteBatch::default();
+        {
+            let mut bonds_write = self.stake_bonds_store.write();
+            for rec in &snapshot.bonds {
+                bonds_write.insert_batch(&mut batch, rec.bond_outpoint, std::sync::Arc::new(rec.clone())).unwrap();
+            }
+        }
+        if snapshot.reserve_balance > 0 {
+            self.reserve_balance_store.insert_batch(&mut batch, pruning_point, snapshot.reserve_balance).unwrap();
+        }
+        self.pruning_overlay_snapshot_store
+            .write()
+            .set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot })
+            .unwrap();
+        self.db.write(batch).unwrap();
+        Ok(())
+    }
+
+    /// kaspa-pq ADR-0022 (serving side): the persisted pruning-point overlay snapshot, for
+    /// a peer to stream during another node's headers-proof IBD. `None` if the overlay is
+    /// dormant or no snapshot has been captured yet (captured at pruning-advance).
+    pub fn pruning_point_overlay_snapshot(&self) -> Option<PruningPointOverlaySnapshot> {
+        self.pruning_overlay_snapshot_store.read().get().ok()
+    }
+
+    /// kaspa-pq ADR-0022: reconstruct the bond set as-of `pp_daa` from the never-pruned
+    /// `stake_bonds_store`. A bond belongs to the as-of-pp set iff it was created
+    /// (`created_daa_score`) at/below `pp_daa`; mutations stamped after `pp_daa`
+    /// (slash / unbond) did not apply yet, so they are nulled. The `status` field is
+    /// left as-is — `compute_overlay_snapshot` normalizes it via `effective_bond_status`
+    /// at the anchor. Exact (records are never deleted, only revert-of-Insert), O(bondset).
+    fn bonds_as_of(&self, pp_daa: u64) -> Vec<StakeBondRecord> {
+        self.stake_bonds_store
+            .read()
+            .iterator()
+            .filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone()))
+            .filter(|rec| rec.created_daa_score <= pp_daa)
+            .map(|mut rec| {
+                if rec.slashed_at_daa_score.is_some_and(|d| d > pp_daa) {
+                    rec.slashed_at_daa_score = None;
+                }
+                if rec.unbond_request_daa_score.is_some_and(|d| d > pp_daa) {
+                    rec.unbond_request_daa_score = None;
+                }
+                rec
+            })
+            .collect()
+    }
+
+    /// kaspa-pq ADR-0022: capture the overlay snapshot as-of `pruning_point` into the
+    /// persisted store, for serving + the below-pruning-point window consult. MUST be
+    /// called BEFORE pruning deletes the below-pruning-point overlay rows (the window walk
+    /// reads them). The reconstructed as-of-pp bond view + the still-present per-block
+    /// rows reproduce exactly what a node computed when it validated the pruning point's
+    /// child (so the first post-pruning block's `c == v` on an importer matches).
+    pub fn capture_pruning_point_overlay_snapshot(&self, pruning_point: BlockHash) {
+        if self.dns_params.is_none() {
+            return;
+        }
+        let pp_daa = self.headers_store.get_daa_score(pruning_point).unwrap();
+        let view = ActiveBondView::from_records(self.bonds_as_of(pp_daa).into_iter().map(|r| (r.bond_outpoint, r)));
+        let snapshot = self.compute_overlay_snapshot(pruning_point, &view);
+        let mut batch = WriteBatch::default();
+        self.pruning_overlay_snapshot_store
+            .write()
+            .set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot })
+            .unwrap();
+        self.db.write(batch).unwrap();
     }
 
     pub fn are_pruning_points_violating_finality(&self, pp_list: PruningPointsList) -> bool {

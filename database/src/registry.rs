@@ -150,6 +150,13 @@ pub enum DatabaseStorePrefixes {
     /// block's acceptance executes OTHER blocks' payloads, which the chain
     /// block's own body cannot supply.
     EvmPayload = 211,
+    /// kaspa-pq ADR-0022: singleton holding the DNS/PoS-v2 `OverlaySnapshot`
+    /// as-of the current pruning point (`PruningPointOverlaySnapshot`), captured
+    /// at pruning-advance before the below-pp overlay rows are deleted. Served to
+    /// peers during their headers-proof IBD and consulted by `compute_overlay_snapshot`
+    /// when its selected-chain walk reaches the pruning point (the below-pp window
+    /// is otherwise unreachable post-prune / post-import).
+    PruningPointOverlaySnapshot = 212,
 
     // ---- Separator ----
     /// Reserved as a separator

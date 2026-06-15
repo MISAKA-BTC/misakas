@@ -44,6 +44,11 @@ pub struct RpcRawHeader {
     /// pow_algo_id precedent. Zero on v0/v1 headers (hash-invisible there).
     pub evm_payload_hash: Hash64,
     pub evm_commitment_root: Hash64,
+    /// kaspa-pq ADR-0022: the DNS/PoS-v2 overlay-state commitment. Part of the
+    /// header-hash preimage on every version, so it MUST round-trip through the
+    /// mining (get_block_template → submit_block) and block RPCs — the
+    /// pow_algo_id / EVM-commitment precedent.
+    pub overlay_commitment_root: Hash64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -72,6 +77,11 @@ pub struct RpcHeader {
     /// pow_algo_id precedent. Zero on v0/v1 headers (hash-invisible there).
     pub evm_payload_hash: Hash64,
     pub evm_commitment_root: Hash64,
+    /// kaspa-pq ADR-0022: the DNS/PoS-v2 overlay-state commitment. Part of the
+    /// header-hash preimage on every version, so it MUST round-trip through the
+    /// mining (get_block_template → submit_block) and block RPCs — the
+    /// pow_algo_id / EVM-commitment precedent.
+    pub overlay_commitment_root: Hash64,
 }
 
 impl RpcHeader {
@@ -105,6 +115,7 @@ impl From<Header> for RpcHeader {
             pruning_point: header.pruning_point,
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
+            overlay_commitment_root: header.overlay_commitment_root,
         }
     }
 }
@@ -128,6 +139,7 @@ impl From<&Header> for RpcHeader {
             pruning_point: header.pruning_point,
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
+            overlay_commitment_root: header.overlay_commitment_root,
         }
     }
 }
@@ -155,6 +167,7 @@ impl TryFrom<RpcHeader> for Header {
             // (part of the v2+ hash preimage — the pow_algo_id precedent).
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
+            overlay_commitment_root: header.overlay_commitment_root,
         })
     }
 }
@@ -183,13 +196,14 @@ impl TryFrom<&RpcHeader> for Header {
             // (part of the v2+ hash preimage — the pow_algo_id precedent).
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
+            overlay_commitment_root: header.overlay_commitment_root,
         })
     }
 }
 
 impl Serializer for RpcHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &3, writer)?;
+        store!(u16, &4, writer)?;
 
         store!(BlockHash, &self.hash, writer)?;
         store!(u16, &self.version, writer)?;
@@ -209,6 +223,8 @@ impl Serializer for RpcHeader {
         // kaspa-pq EVM Lane v0.4 (serializer v3): the two EVM commitments.
         store!(Hash64, &self.evm_payload_hash, writer)?;
         store!(Hash64, &self.evm_commitment_root, writer)?;
+        // kaspa-pq ADR-0022 (serializer v4): the overlay-state commitment.
+        store!(Hash64, &self.overlay_commitment_root, writer)?;
 
         Ok(())
     }
@@ -243,6 +259,8 @@ impl Deserializer for RpcHeader {
         } else {
             (Default::default(), Default::default())
         };
+        // kaspa-pq ADR-0022: overlay commitment added in serializer v4; older ⇒ zero.
+        let overlay_commitment_root = if serializer_version >= 4 { load!(Hash64, reader)? } else { Default::default() };
 
         Ok(Self {
             hash,
@@ -261,6 +279,7 @@ impl Deserializer for RpcHeader {
             pruning_point,
             evm_payload_hash,
             evm_commitment_root,
+            overlay_commitment_root,
         })
     }
 }
@@ -287,7 +306,9 @@ impl TryFrom<RpcRawHeader> for Header {
         )
         // kaspa-pq EVM Lane v0.4: restore both EVM commitments (v2+ preimage).
         .with_evm_payload_hash(header.evm_payload_hash)
-        .with_evm_commitment(header.evm_commitment_root))
+        .with_evm_commitment(header.evm_commitment_root)
+        // kaspa-pq ADR-0022: restore the overlay-state commitment (re-genesis preimage).
+        .with_overlay_commitment(header.overlay_commitment_root))
     }
 }
 
@@ -313,7 +334,9 @@ impl TryFrom<&RpcRawHeader> for Header {
         )
         // kaspa-pq EVM Lane v0.4: restore both EVM commitments (v2+ preimage).
         .with_evm_payload_hash(header.evm_payload_hash)
-        .with_evm_commitment(header.evm_commitment_root))
+        .with_evm_commitment(header.evm_commitment_root)
+        // kaspa-pq ADR-0022: restore the overlay-state commitment (re-genesis preimage).
+        .with_overlay_commitment(header.overlay_commitment_root))
     }
 }
 
@@ -335,6 +358,7 @@ impl From<&Header> for RpcRawHeader {
             pruning_point: header.pruning_point,
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
+            overlay_commitment_root: header.overlay_commitment_root,
         }
     }
 }
@@ -357,13 +381,14 @@ impl From<Header> for RpcRawHeader {
             pruning_point: header.pruning_point,
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
+            overlay_commitment_root: header.overlay_commitment_root,
         }
     }
 }
 
 impl Serializer for RpcRawHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &3, writer)?;
+        store!(u16, &4, writer)?;
 
         store!(u16, &self.version, writer)?;
         store!(Vec<Vec<BlockHash>>, &self.parents_by_level, writer)?;
@@ -382,6 +407,8 @@ impl Serializer for RpcRawHeader {
         // kaspa-pq EVM Lane v0.4 (serializer v3): the two EVM commitments.
         store!(Hash64, &self.evm_payload_hash, writer)?;
         store!(Hash64, &self.evm_commitment_root, writer)?;
+        // kaspa-pq ADR-0022 (serializer v4): the overlay-state commitment.
+        store!(Hash64, &self.overlay_commitment_root, writer)?;
 
         Ok(())
     }
@@ -415,6 +442,8 @@ impl Deserializer for RpcRawHeader {
         } else {
             (Default::default(), Default::default())
         };
+        // kaspa-pq ADR-0022: overlay commitment added in serializer v4; older ⇒ zero.
+        let overlay_commitment_root = if serializer_version >= 4 { load!(Hash64, reader)? } else { Default::default() };
 
         Ok(Self {
             version,
@@ -432,6 +461,7 @@ impl Deserializer for RpcRawHeader {
             pruning_point,
             evm_payload_hash,
             evm_commitment_root,
+            overlay_commitment_root,
         })
     }
 }

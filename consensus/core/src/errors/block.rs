@@ -187,6 +187,11 @@ pub enum RuleError {
     // kaspa-pq (ADR-0004 / design §12): the two commitment positions are 64-byte Hash64.
     BadUTXOCommitment(BlockHash, Hash64, Hash64),
 
+    #[error("block {0} overlay commitment is invalid - block header indicates {1}, but calculated value is {2}")]
+    // kaspa-pq ADR-0022: the DNS/PoS-v2 OverlaySnapshot commitment (as-of selected parent).
+    // Positions 1/2 are 64-byte Hash64. Surfaces as StatusDisqualifiedFromChain like any c==v fault.
+    BadOverlayCommitment(BlockHash, Hash64, Hash64),
+
     #[error("block {0} accepted ID merkle root is invalid - block header indicates {1}, but calculated value is {2}")]
     // PR-9.5c: positions 1 and 2 carry `AcceptedIdMerkleRoot`
     // (= `Hash64`). The block-identifier (position 0) is still

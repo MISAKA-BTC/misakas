@@ -62,6 +62,25 @@ impl ConsensusMonitor {
                 if delta.body_counts != 0 { delta.mass_counts as f64 / delta.body_counts as f64 } else { 0f64 },
             );
 
+            // [ibd-perf §7-1] Per-header serial-fraction breakdown to decide whether the
+            // compute-parallel/commit-serial lane is worthwhile or Phase-B is the ceiling.
+            if delta.hdr_timed_counts != 0 {
+                let n = delta.hdr_timed_counts as f64;
+                let validate_us = delta.hdr_validate_ns as f64 / n / 1000.0;
+                let commit_us = delta.hdr_commit_ns as f64 / n / 1000.0;
+                let addblock_us = delta.hdr_addblock_ns as f64 / n / 1000.0;
+                let dbwrite_us = delta.hdr_dbwrite_ns as f64 / n / 1000.0;
+                let heldlock_us = delta.hdr_heldlock_ns as f64 / n / 1000.0;
+                let total_us = validate_us + commit_us;
+                let f_serial = if total_us > 0.0 { commit_us / total_us } else { 0.0 };
+                let f_reach = if total_us > 0.0 { addblock_us / total_us } else { 0.0 };
+                let ceiling = if f_serial > 0.0 { 1.0 / f_serial } else { 0.0 };
+                info!(
+                    "[ibd-perf] {} hdrs avg: validate(A,parallelizable) {:.1}us | commit(serial) {:.1}us [add_block {:.1} + db.write {:.1}; held-lock {:.1}] | f_serial={:.3} f_reach={:.3} | parallelize-ceiling {:.2}x",
+                    delta.hdr_timed_counts, validate_us, commit_us, addblock_us, dbwrite_us, heldlock_us, f_serial, f_reach, ceiling,
+                );
+            }
+
             if delta.chain_disqualified_counts > 0 {
                 warn!(
                     "Consensus detected UTXO-invalid blocks which are disqualified from the virtual selected chain (possibly due to inheritance): {} disqualified vs. {} valid chain blocks",

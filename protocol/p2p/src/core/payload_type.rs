@@ -52,6 +52,11 @@ pub enum KaspadMessagePayloadType {
     RequestEvmTransactions,
     EvmTransaction,
     EvmTransactionNotFound,
+    // kaspa-pq ADR-0022: pruned-IBD EVM + overlay snapshot transfer.
+    RequestPruningPointEvmState,
+    PruningPointEvmState,
+    RequestPruningPointOverlaySnapshot,
+    PruningPointOverlaySnapshot,
 }
 
 impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
@@ -112,6 +117,12 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             KaspadMessagePayload::RequestEvmTransactions(_) => KaspadMessagePayloadType::RequestEvmTransactions,
             KaspadMessagePayload::EvmTransaction(_) => KaspadMessagePayloadType::EvmTransaction,
             KaspadMessagePayload::EvmTransactionNotFound(_) => KaspadMessagePayloadType::EvmTransactionNotFound,
+            KaspadMessagePayload::RequestPruningPointEvmState(_) => KaspadMessagePayloadType::RequestPruningPointEvmState,
+            KaspadMessagePayload::PruningPointEvmState(_) => KaspadMessagePayloadType::PruningPointEvmState,
+            KaspadMessagePayload::RequestPruningPointOverlaySnapshot(_) => {
+                KaspadMessagePayloadType::RequestPruningPointOverlaySnapshot
+            }
+            KaspadMessagePayload::PruningPointOverlaySnapshot(_) => KaspadMessagePayloadType::PruningPointOverlaySnapshot,
         }
     }
 }

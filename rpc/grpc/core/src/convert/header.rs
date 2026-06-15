@@ -27,6 +27,8 @@ from!(item: &kaspa_rpc_core::RpcHeader, protowire::RpcBlockHeader, {
         // kaspa-pq EVM Lane v0.4: both EVM commitments (v2+ hash preimage).
         evm_payload_hash: item.evm_payload_hash.to_string(),
         evm_commitment_root: item.evm_commitment_root.to_string(),
+        // kaspa-pq ADR-0022: the overlay-state commitment (every-version preimage).
+        overlay_commitment_root: item.overlay_commitment_root.to_string(),
     }
 });
 
@@ -49,6 +51,8 @@ from!(item: &kaspa_rpc_core::RpcRawHeader, protowire::RpcBlockHeader, {
         // kaspa-pq EVM Lane v0.4: both EVM commitments (v2+ hash preimage).
         evm_payload_hash: item.evm_payload_hash.to_string(),
         evm_commitment_root: item.evm_commitment_root.to_string(),
+        // kaspa-pq ADR-0022: the overlay-state commitment (every-version preimage).
+        overlay_commitment_root: item.overlay_commitment_root.to_string(),
     }
 });
 
@@ -87,7 +91,9 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcHeader, {
     // kaspa-pq EVM Lane v0.4: restore the EVM commitments BEFORE the trustless
     // re-hash — on a v2 header they are part of the preimage.
     .with_evm_payload_hash(hash64_or_zero(&item.evm_payload_hash)?)
-    .with_evm_commitment(hash64_or_zero(&item.evm_commitment_root)?);
+    .with_evm_commitment(hash64_or_zero(&item.evm_commitment_root)?)
+    // kaspa-pq ADR-0022: include the overlay commitment in the trustless re-hash.
+    .with_overlay_commitment(hash64_or_zero(&item.overlay_commitment_root)?);
 
     header.into()
 });
@@ -110,6 +116,8 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcRawHeader, {
         pow_algo_id: item.pow_algo_id as u8,
         evm_payload_hash: hash64_or_zero(&item.evm_payload_hash)?,
         evm_commitment_root: hash64_or_zero(&item.evm_commitment_root)?,
+        // kaspa-pq ADR-0022: the overlay-state commitment (every-version preimage).
+        overlay_commitment_root: hash64_or_zero(&item.overlay_commitment_root)?,
     }
 });
 
@@ -134,7 +142,9 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcOptionalHeader, {
     )
     // kaspa-pq EVM Lane v0.4: include the commitments in the trustless re-hash.
     .with_evm_payload_hash(hash64_or_zero(&item.evm_payload_hash)?)
-    .with_evm_commitment(hash64_or_zero(&item.evm_commitment_root)?);
+    .with_evm_commitment(hash64_or_zero(&item.evm_commitment_root)?)
+    // kaspa-pq ADR-0022: include the overlay commitment in the trustless re-hash.
+    .with_overlay_commitment(hash64_or_zero(&item.overlay_commitment_root)?);
 
     kaspa_rpc_core::RpcOptionalHeader::from(header)
 });

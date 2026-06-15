@@ -360,6 +360,65 @@ pub fn execute_block_evm(
     Ok((result, state_db))
 }
 
+/// O12 (IBD catch-up): the EMPTY-ACCEPTANCE fast path. When a block accepts NO
+/// user txs and carries NO system ops — the common case on a young chain, and
+/// frequent forever (empty mergesets) — the EVM transition is fully determined
+/// without touching revm or the state: the state is UNCHANGED (state_root =
+/// parent's), every collection root is the fixed empty-input digest, gas_used
+/// is 0, and only the env-derived header fields advance (evm_number, the
+/// timestamp clamp, the EIP-1559 base-fee update from the parent's gas_used).
+///
+/// CONSENSUS-NEUTRAL BY CONSTRUCTION: every field is produced by the SAME
+/// functions the full path uses (`env::derive_env`, the `roots::*` fns over
+/// empty inputs, the parent-accumulator copies), so the resulting header — and
+/// therefore `commitment_root()` — is byte-identical to a full execution over
+/// the same input. Pinned by `empty_fast_path_equals_full_execution` below; a
+/// mixed network of fast-path and full-path nodes cannot diverge.
+///
+/// What this skips per empty block: `seed_cachedb` over the whole parent state,
+/// the revm `Evm` build, the keccak-MPT `state_root` recompute over the ENTIRE
+/// state, and the full `snapshot_from_cachedb` extraction — the dominant
+/// serial-thread EVM cost during weak-host IBD catch-up (and it stays O(1) as
+/// the state grows, instead of O(state)).
+pub fn empty_acceptance_result(input: &EvmBlockInput) -> EvmExecutionResult {
+    debug_assert!(input.accepted_txs.is_empty() && input.payload.system_ops.is_empty());
+    let parent_state_root = input.parent.map(|p| p.state_root).unwrap_or(EVM_GENESIS_STATE_ROOT);
+    let coinbase = to_revm_address(&input.payload.evm_coinbase);
+    let derived = env::derive_env(
+        input.parent,
+        input.header_timestamp_ms,
+        &input.selected_parent_hash,
+        &input.blue_work_be,
+        input.daa_score,
+        coinbase,
+    );
+    let parent_burn = input.parent.map(|p| evmu256_to_u128(p.evm_burn_accumulator)).unwrap_or(0);
+    let parent_total = input.parent.map(|p| evmu256_to_u128(p.evm_total_native_balance)).unwrap_or(0);
+    let header = EvmExecutionHeader {
+        parent_state_root,
+        // No account was touched: the post-state trie is the parent's.
+        state_root: parent_state_root,
+        transactions_root: roots::transactions_root(&[]),
+        receipts_root: roots::receipts_root(&[]),
+        system_ops_root: roots::system_ops_root(&[]),
+        withdrawals_root: roots::withdrawals_root(&[]),
+        deposit_claim_queue_root: roots::deposit_claim_root(&[]),
+        logs_bloom: EvmBloom::from_bytes(roots::logs_bloom(&[])),
+        gas_used: 0,
+        gas_limit: derived.gas_limit,
+        base_fee_per_gas: EvmU256::from(derived.base_fee_per_gas),
+        evm_number: derived.evm_number,
+        evm_timestamp_sec: derived.evm_timestamp_sec,
+        evm_chain_id: derived.chain_id,
+        coinbase: input.payload.evm_coinbase,
+        accepted_tx_count: 0,
+        skipped_tx_count: 0,
+        evm_total_native_balance: EvmU256::from(parent_total),
+        evm_burn_accumulator: EvmU256::from(parent_burn),
+    };
+    EvmExecutionResult { header, receipts: vec![], withdrawals: vec![], applied_deposit_claims: vec![], candidate_outcomes: vec![] }
+}
+
 /// Credit `amount` wei directly in the working state. `load_account`
 /// materializes the entry (a new address starts as `NotExisting`, which
 /// `basic()` reports as absent); give it a real (EOA) code hash and mark it
@@ -502,6 +561,60 @@ mod tests {
 
     fn cand(raw: Vec<u8>, cb: u8) -> AcceptedTxCandidate {
         AcceptedTxCandidate { raw, payload_coinbase: EvmAddress::from_bytes([cb; 20]) }
+    }
+
+    /// O12: the empty-acceptance fast path must be BYTE-IDENTICAL to a full
+    /// execution over the same (empty) input — the consensus-neutrality proof.
+    /// Covers (a) the implicit-genesis parent and (b) a non-trivial parent
+    /// state built by a real transfer block, including the post-state snapshot
+    /// identity (unchanged state ⇒ child snapshot == parent snapshot).
+    #[test]
+    fn empty_fast_path_equals_full_execution() {
+        use crate::snapshot::{seed_cachedb, snapshot_from_cachedb};
+        let empty_payload = EvmExecutionPayload::default();
+
+        // (a) implicit-genesis parent, empty state.
+        let input = input_with(&empty_payload, &[]);
+        let (full, full_db) = execute_block_evm(CacheDB::new(EmptyDB::default()), &input).unwrap();
+        let fast = empty_acceptance_result(&input);
+        assert_eq!(full.header, fast.header, "fast-path header must equal full execution (genesis parent)");
+        assert_eq!(full.header.commitment_root(), fast.header.commitment_root());
+        assert!(fast.receipts.is_empty() && fast.withdrawals.is_empty() && fast.candidate_outcomes.is_empty());
+        assert_eq!(snapshot_from_cachedb(&full_db).accounts.len(), 0);
+
+        // (b) parent with real state: run a funded transfer block first.
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let to = Address::with_last_byte(0x22);
+        let (from, raw) = signed_transfer(0, to, 500, basefee);
+        let cands = vec![cand(raw, 0xAB)];
+        let parent_input = input_with(&empty_payload, &cands);
+        let (parent_result, parent_db) = execute_block_evm(funded_seed(from, 10u128.pow(18)), &parent_input).unwrap();
+        let parent_snapshot = snapshot_from_cachedb(&parent_db);
+        assert!(!parent_snapshot.accounts.is_empty(), "the transfer must leave real state");
+
+        // Child block with EMPTY acceptance on top of that state.
+        let child_input = EvmBlockInput {
+            parent: Some(&parent_result.header),
+            header_timestamp_ms: 6_000,
+            selected_parent_hash: [7u8; 64],
+            blue_work_be: vec![4, 5, 6],
+            daa_score: 43,
+            payload: &empty_payload,
+            accepted_txs: &[],
+        };
+        // FULL path: seed the parent state, execute, extract.
+        let (full_child, full_child_db) = execute_block_evm(seed_cachedb(&parent_snapshot).unwrap(), &child_input).unwrap();
+        let full_child_snapshot = snapshot_from_cachedb(&full_child_db);
+        // FAST path.
+        let fast_child = empty_acceptance_result(&child_input);
+        assert_eq!(full_child.header, fast_child.header, "fast-path header must equal full execution (stateful parent)");
+        assert_eq!(full_child.header.commitment_root(), fast_child.header.commitment_root());
+        assert_eq!(full_child.header.state_root, parent_result.header.state_root, "unchanged state keeps the parent root");
+        assert_eq!(full_child_snapshot, parent_snapshot, "unchanged state round-trips to the identical snapshot");
+        // And the snapshot-level entry point takes the fast path with the same outputs.
+        let (via_snapshot, child_snapshot) = crate::snapshot::execute_block_from_snapshot(&parent_snapshot, &child_input).unwrap();
+        assert_eq!(via_snapshot.header, fast_child.header);
+        assert_eq!(child_snapshot, parent_snapshot);
     }
 
     #[test]

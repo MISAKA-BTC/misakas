@@ -3,7 +3,7 @@ use crate::{
     errors::{
         BlockProcessResult,
         RuleError::{
-            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadUTXOCommitment, IneligibleAttestationInBlock,
+            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadUTXOCommitment, IneligibleAttestationInBlock,
             InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock, UnauthorizedUnbondRequestInBlock,
             UnverifiableSlashingEvidenceInBlock,
             WrongHeaderPruningPoint,
@@ -485,6 +485,18 @@ impl VirtualStateProcessor {
             return Err(BadAcceptedIDMerkleRoot(header.hash, header.accepted_id_merkle_root, expected_accepted_id_merkle_root));
         }
 
+        // kaspa-pq ADR-0022: verify the DNS/PoS-v2 overlay-state commitment (as-of the
+        // selected parent). The block-template builder committed the identical snapshot
+        // (construction == validation); a pruned-IBD node imports the overlay stores at
+        // the pruning point and this same check on the first post-pruning block verifies
+        // them against its header. Gated on the overlay being active (`dns_params`).
+        if self.dns_params.is_some() {
+            let expected_overlay = self.compute_overlay_snapshot(ctx.selected_parent(), selected_parent_bond_view).commitment_root();
+            if expected_overlay != header.overlay_commitment_root {
+                return Err(BadOverlayCommitment(header.hash, header.overlay_commitment_root, expected_overlay));
+            }
+        }
+
         let txs = self.block_transactions_store.get(header.hash).unwrap();
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): Model-B
@@ -725,19 +737,17 @@ impl VirtualStateProcessor {
             }
         }
 
-        // Build the already-rewarded prefix set: walk the selected parent and
-        // its selected-chain ancestors within `window` DAA, unioning each
-        // block's persisted rewarded `(bond, epoch)` keys (§B.3(c)).
+        // Build the already-rewarded prefix set: the selected parent and its
+        // selected-chain ancestors within `window` DAA, unioning each block's
+        // rewarded `(bond, epoch)` keys (§B.3(c)). ADR-0022: routed through
+        // `selected_chain_overlay_window`, which merges the persisted below-pruning-
+        // point window — so a pruned-IBD node dedups post-pruning blocks against the
+        // pre-pruning rewards too (its walk cannot reach below the pruning point).
+        // Inert merge on a from-genesis node.
         let mut already_rewarded = RewardedEpochSet::new();
-        for ancestor in once(selected_parent).chain(self.reachability_service.default_backward_chain_iterator(selected_parent)) {
-            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
-            if daa_score.saturating_sub(ancestor_daa) > window {
-                break;
-            }
-            if let Ok(keys) = self.rewarded_epochs_store.get(ancestor) {
-                for (bond_outpoint, epoch) in keys.iter() {
-                    already_rewarded.insert(*bond_outpoint, *epoch);
-                }
+        for c in self.selected_chain_overlay_window(selected_parent, daa_score, window) {
+            for (bond_outpoint, epoch) in c.rewarded_keys.iter() {
+                already_rewarded.insert(*bond_outpoint, *epoch);
             }
         }
 
@@ -1529,6 +1539,7 @@ mod tests {
                 validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
                 amount: 1_000,
                 activation_daa_score: 0, // Active from genesis.
+                created_daa_score: 0,
                 unbonding_period_blocks: 100,
                 owner_reward_spk_payload: [0xdd; 64],
                 unbond_request_daa_score: None,
@@ -1613,6 +1624,7 @@ mod tests {
                 validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
                 amount: 1_000,
                 activation_daa_score: 0,
+                created_daa_score: 0,
                 unbonding_period_blocks: 100,
                 owner_reward_spk_payload: [0xdd; 64],
                 unbond_request_daa_score: None,
@@ -1732,6 +1744,7 @@ mod tests {
                 validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
                 amount: 1_000,
                 activation_daa_score: 0,
+                created_daa_score: 0,
                 unbonding_period_blocks: 100,
                 owner_reward_spk_payload: [0xdd; 64],
                 unbond_request_daa_score: None,
@@ -1847,6 +1860,7 @@ mod tests {
                 validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
                 amount: 1_000,
                 activation_daa_score: 0,
+                created_daa_score: 0,
                 unbonding_period_blocks: 5_000,
                 owner_reward_spk_payload: [0xdd; 64],
                 unbond_request_daa_score: None,

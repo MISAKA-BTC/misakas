@@ -92,6 +92,22 @@ pub enum PruningImportError {
 
     #[error("got trusted block {0} in the future of the pruning point {1}")]
     TrustedBlockInPruningPointFuture(BlockHash, BlockHash),
+
+    // kaspa-pq ADR-0022: pruned-IBD EVM/overlay snapshot import verification.
+    #[error("imported EVM execution header for pruning point {0} has commitment {1} but the L1 header commits {2}")]
+    ImportedEvmCommitmentMismatch(BlockHash, Hash64, Hash64),
+
+    #[error("imported EVM state snapshot for pruning point {0} has state root {1:?} but the EVM header commits {2:?}")]
+    ImportedEvmStateRootMismatch(BlockHash, kaspa_hashes::EvmH256, kaspa_hashes::EvmH256),
+
+    #[error("imported EVM state snapshot for pruning point {0} is invalid: {1}")]
+    ImportedEvmSnapshotInvalid(BlockHash, String),
+
+    #[error("imported overlay snapshot for pruning point {0} has commitment {1} but the L1 header commits {2}")]
+    ImportedOverlayCommitmentMismatch(BlockHash, Hash64, Hash64),
+
+    #[error("imported overlay bond {0} references an outpoint absent from the imported UTXO set")]
+    ImportedOverlayBondMissingUtxo(BlockHash),
 }
 
 #[derive(Error, Debug, Clone)]

@@ -1163,6 +1163,8 @@ async fn difficulty_test() {
             // ADR-0020: pre-EVM (v0) fake genesis; EVM commitments default to zero.
             evm_payload_hash: Default::default(),
             evm_commitment_root: Default::default(),
+            // ADR-0022: overlay commitment defaults to zero in this fake genesis.
+            overlay_commitment_root: Default::default(),
         };
 
         // Stage 0

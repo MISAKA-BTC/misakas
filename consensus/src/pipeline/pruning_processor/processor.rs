@@ -22,6 +22,7 @@ use crate::{
             virtual_state::VirtualStateStoreReader,
         },
     },
+    pipeline::virtual_processor::VirtualStateProcessor,
     processes::{pruning_proof::PruningProofManager, reachability::inquirer as reachability, relations},
 };
 use crossbeam_channel::Receiver as CrossbeamReceiver;
@@ -75,6 +76,10 @@ pub struct PruningProcessor {
     pruning_proof_manager: Arc<PruningProofManager>,
     parents_manager: DbParentsManager,
 
+    // kaspa-pq ADR-0022: used to capture the as-of-pruning-point overlay snapshot via the
+    // same compute path the virtual processor validates with (before below-pp rows are pruned).
+    virtual_processor: Arc<VirtualStateProcessor>,
+
     // Pruning lock
     pruning_lock: SessionLock,
 
@@ -99,6 +104,7 @@ impl PruningProcessor {
         db: Arc<DB>,
         storage: &Arc<ConsensusStorage>,
         services: &Arc<ConsensusServices>,
+        virtual_processor: Arc<VirtualStateProcessor>,
         pruning_lock: SessionLock,
         config: Arc<Config>,
         is_consensus_exiting: Arc<AtomicBool>,
@@ -111,6 +117,7 @@ impl PruningProcessor {
             pruning_point_manager: services.pruning_point_manager.clone(),
             pruning_proof_manager: services.pruning_proof_manager.clone(),
             parents_manager: services.parents_manager.clone(),
+            virtual_processor,
             pruning_lock,
             config,
             is_consensus_exiting,
@@ -238,6 +245,13 @@ impl PruningProcessor {
             info!("Updated the pruning point UTXO set");
 
             // Finally, prune data in the new pruning point past
+            // kaspa-pq ADR-0022: capture the overlay snapshot as-of the new pruning point
+            // BEFORE `prune` deletes the below-pruning-point overlay rows the snapshot's
+            // window reads. Same compute path the virtual processor validates with, so a
+            // node serving this snapshot matches a pruned-IBD importer's first post-pruning
+            // block `c == v`. No-op when the overlay is dormant.
+            self.virtual_processor.capture_pruning_point_overlay_snapshot(new_pruning_point);
+
             self.prune(new_pruning_point, adjusted_retention_period_root);
         }
     }

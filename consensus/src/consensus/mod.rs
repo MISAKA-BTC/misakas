@@ -286,6 +286,10 @@ impl Consensus {
             db.clone(),
             &storage,
             &services,
+            // kaspa-pq ADR-0022: the pruning processor captures the overlay snapshot as-of the
+            // advancing pruning point (before deleting below-pp rows) via the SAME compute path
+            // the virtual processor validates with, so a served snapshot matches a verifier's c==v.
+            virtual_processor.clone(),
             pruning_lock.clone(),
             config.clone(),
             is_consensus_exiting.clone(),
@@ -1269,6 +1273,35 @@ impl ConsensusApi for Consensus {
 
     fn import_pruning_point_utxo_set(&self, new_pruning_point: BlockHash, imported_utxo_multiset: MuHash) -> PruningImportResult<()> {
         self.virtual_processor.import_pruning_point_utxo_set(new_pruning_point, imported_utxo_multiset)
+    }
+
+    // kaspa-pq ADR-0022: pruned-IBD EVM + overlay snapshot transfer.
+    fn pruning_point_evm_state(
+        &self,
+        pruning_point: BlockHash,
+    ) -> Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)> {
+        self.virtual_processor.pruning_point_evm_state(pruning_point)
+    }
+
+    fn import_pruning_point_evm_state(
+        &self,
+        pruning_point: BlockHash,
+        evm_header: kaspa_consensus_core::evm::EvmExecutionHeader,
+        snapshot: kaspa_consensus_core::evm::EvmStateSnapshot,
+    ) -> PruningImportResult<()> {
+        self.virtual_processor.import_pruning_point_evm_state(pruning_point, evm_header, snapshot)
+    }
+
+    fn pruning_point_overlay_snapshot(&self) -> Option<kaspa_consensus_core::dns_finality::PruningPointOverlaySnapshot> {
+        self.virtual_processor.pruning_point_overlay_snapshot()
+    }
+
+    fn import_pruning_point_overlay_snapshot(
+        &self,
+        pruning_point: BlockHash,
+        snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot,
+    ) -> PruningImportResult<()> {
+        self.virtual_processor.import_pruning_point_overlay_snapshot(pruning_point, snapshot)
     }
 
     fn validate_pruning_points(&self, syncer_virtual_selected_parent: BlockHash) -> ConsensusResult<()> {

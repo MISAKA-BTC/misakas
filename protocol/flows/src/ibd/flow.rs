@@ -28,8 +28,8 @@ use kaspa_p2p_lib::{
     dequeue_with_timeout, make_message, make_request,
     pb::{
         RequestAntipastMessage, RequestBlockBodiesMessage, RequestHeadersMessage, RequestIbdBlocksMessage,
-        RequestPruningPointAndItsAnticoneMessage, RequestPruningPointProofMessage, RequestPruningPointUtxoSetMessage,
-        kaspad_message::Payload,
+        RequestPruningPointAndItsAnticoneMessage, RequestPruningPointEvmStateMessage, RequestPruningPointOverlaySnapshotMessage,
+        RequestPruningPointProofMessage, RequestPruningPointUtxoSetMessage, kaspad_message::Payload,
     },
 };
 use kaspa_utils::channel::JobReceiver;
@@ -172,6 +172,12 @@ impl IbdFlow {
                         // Note that the new pruning point's anticone need not be downloaded separately as in other IBD types
                         // as it was just downloaded as part of the headers proof.
                         self.sync_new_utxo_set(&session, negotiation_output.syncer_pruning_point).await?;
+                        // kaspa-pq ADR-0022: import the pruning point's EVM execution state and DNS/PoS-v2
+                        // overlay snapshot BEFORE block bodies are processed. Without these the first
+                        // post-pruning block re-executes EVM from an empty genesis state / recomputes
+                        // overlay rewards from empty state and is disqualified (and all descendants with it).
+                        self.sync_pruning_point_evm_state(&session, negotiation_output.syncer_pruning_point).await?;
+                        self.sync_pruning_point_overlay_snapshot(&session, negotiation_output.syncer_pruning_point).await?;
                     }
                     Err(e) => {
                         warn!("IBD with headers proof from {} was unsuccessful ({})", self.router, e);
@@ -694,6 +700,67 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         consensus.clone().spawn_blocking(move |c| c.import_pruning_point_utxo_set(pruning_point, multiset)).await?;
         Ok(())
     }
+
+    /// kaspa-pq ADR-0022: request + import the pruning point's EVM execution state. Required on an
+    /// EVM-active network so the first post-pruning block re-executes against the real parent state.
+    async fn sync_pruning_point_evm_state(&mut self, consensus: &ConsensusProxy, pruning_point: BlockHash) -> Result<(), ProtocolError> {
+        let evm_active = {
+            let pp = pruning_point;
+            let pp_daa = consensus.clone().spawn_blocking(move |c| c.get_header(pp)).await.map(|h| h.daa_score).unwrap_or(0);
+            self.ctx.config.is_evm_active(pp_daa)
+        };
+        self.router
+            .enqueue(make_message!(
+                Payload::RequestPruningPointEvmState,
+                RequestPruningPointEvmStateMessage { pruning_point_hash: Some(pruning_point.into()) }
+            ))
+            .await?;
+        let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointEvmState, Duration::from_secs(600))?;
+        if !msg.found {
+            if evm_active {
+                return Err(ProtocolError::Other("peer cannot serve the pruning point EVM state required for pruned IBD on this network"));
+            }
+            return Ok(()); // EVM-inactive network — no EVM state to import.
+        }
+        let header: kaspa_consensus_core::evm::EvmExecutionHeader =
+            borsh::from_slice(&msg.evm_header).map_err(|_| ProtocolError::Other("invalid EVM execution header in PruningPointEvmState"))?;
+        let snapshot: kaspa_consensus_core::evm::EvmStateSnapshot =
+            borsh::from_slice(&msg.evm_state_snapshot).map_err(|_| ProtocolError::Other("invalid EVM state snapshot in PruningPointEvmState"))?;
+        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_evm_state(pruning_point, header, snapshot)).await?;
+        info!("imported the EVM state of the pruning point {}", pruning_point);
+        Ok(())
+    }
+
+    /// kaspa-pq ADR-0022: request + import the pruning point's DNS/PoS-v2 overlay snapshot. Required
+    /// on an overlay-active network so the first post-pruning block's coinbase `c == v` reproduces.
+    async fn sync_pruning_point_overlay_snapshot(
+        &mut self,
+        consensus: &ConsensusProxy,
+        pruning_point: BlockHash,
+    ) -> Result<(), ProtocolError> {
+        let overlay_active = self.ctx.config.dns_params.is_some();
+        self.router
+            .enqueue(make_message!(
+                Payload::RequestPruningPointOverlaySnapshot,
+                RequestPruningPointOverlaySnapshotMessage { pruning_point_hash: Some(pruning_point.into()) }
+            ))
+            .await?;
+        let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointOverlaySnapshot, Duration::from_secs(600))?;
+        if !msg.found {
+            if overlay_active {
+                return Err(ProtocolError::Other(
+                    "peer cannot serve the pruning point overlay snapshot required for pruned IBD on this network",
+                ));
+            }
+            return Ok(()); // overlay dormant — nothing to import.
+        }
+        let snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot =
+            borsh::from_slice(&msg.overlay_snapshot).map_err(|_| ProtocolError::Other("invalid overlay snapshot in PruningPointOverlaySnapshot"))?;
+        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_overlay_snapshot(pruning_point, snapshot)).await?;
+        info!("imported the overlay snapshot of the pruning point {}", pruning_point);
+        Ok(())
+    }
+
     async fn sync_missing_trusted_bodies(&mut self, consensus: &ConsensusProxy) -> Result<(), ProtocolError> {
         info!("downloading pruning point anticone missing block data");
         let diesembodied_hashes = consensus.async_get_body_missing_anticone().await;

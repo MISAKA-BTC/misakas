@@ -61,6 +61,15 @@ fn write_header_preimage<H: HasherBase>(hasher: &mut H, header: &Header, nonce: 
         hasher.update(header.evm_payload_hash);
         hasher.update(header.evm_commitment_root);
     }
+
+    // kaspa-pq ADR-0022: the DNS/PoS-v2 overlay-state commitment. The overlay is
+    // genesis-active on every network (`dns_params.is_some()`), so — unlike the
+    // two EVM commitments above, which are gated by the EVM activation fence via
+    // the header version — `overlay_commitment_root` enters the preimage
+    // UNCONDITIONALLY (all versions), appended last. There is no pre-overlay era
+    // to gate against. Adding it is a hard fork: every genesis hash and block
+    // identity is recomputed (ADR-0022 §8). Frozen byte position (last).
+    hasher.update(header.overlay_commitment_root);
 }
 
 /// Returns the **legacy 32-byte** header hash using the provided

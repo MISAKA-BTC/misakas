@@ -329,6 +329,9 @@ impl TryCastFromJs for Header {
                     // mirroring the pow_algo_id note above).
                     evm_payload_hash: Default::default(),
                     evm_commitment_root: Default::default(),
+                    // ADR-0022: optional JS overlay-commitment field; default to zero
+                    // (a WASM getter/setter is a later follow-on, like the EVM fields).
+                    overlay_commitment_root: Default::default(),
                 };
 
                 Ok(header.into())

@@ -99,6 +99,11 @@ message BlockHeader{
   // powAlgoId split-brain precedent). Absent/zero on v0/v1 headers.
   Hash evmPayloadHash = 16;
   Hash evmCommitmentRoot = 17;
+  // kaspa-pq ADR-0022: the DNS/PoS-v2 overlay-state commitment. Part of the
+  // header-hash preimage on EVERY version (overlay is genesis-active on all
+  // nets), so it MUST survive P2P relay/IBD or peers compute mismatching block
+  // hashes (the powAlgoId / EVM-commitment split-brain precedent).
+  Hash overlayCommitmentRoot = 18;
 }
 
 message BlockLevelParents {
@@ -340,4 +345,29 @@ message BlockWithTrustedDataV4Message {
 message TrustedDataMessage {
   repeated DaaBlockV4 daaWindow = 1; // TODO: rename to `trustedSubDag` once v5 is obsolete
   repeated BlockGhostdagDataHashPair ghostdagData = 2; // TODO: remove once v5 is obsolete
+}
+
+// kaspa-pq ADR-0022: pruned-IBD EVM + DNS/PoS-v2 overlay snapshot transfer. The
+// snapshots are carried as borsh blobs (the consensus types are already Borsh) to
+// avoid mirroring every field in proto. Single message each (not chunked): EVM state
+// is empty on EVM-inert nets and modest on testnet/devnet; the overlay snapshot is
+// small. `found = false` ⇒ the serving node has no snapshot (overlay dormant / not yet
+// captured), and the requester treats the peer as unable to serve pruned-IBD here.
+message RequestPruningPointEvmStateMessage{
+  Hash pruningPointHash = 1;
+}
+
+message PruningPointEvmStateMessage{
+  bool found = 1;
+  bytes evmHeader = 2;        // borsh(EvmExecutionHeader)
+  bytes evmStateSnapshot = 3; // borsh(EvmStateSnapshot)
+}
+
+message RequestPruningPointOverlaySnapshotMessage{
+  Hash pruningPointHash = 1;
+}
+
+message PruningPointOverlaySnapshotMessage{
+  bool found = 1;
+  bytes overlaySnapshot = 2; // borsh(OverlaySnapshot)
 }

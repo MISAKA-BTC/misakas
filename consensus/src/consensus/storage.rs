@@ -14,6 +14,7 @@ use crate::{
         headers::{CompactHeaderData, DbHeadersStore},
         headers_selected_tip::DbHeadersSelectedTipStore,
         past_pruning_points::DbPastPruningPointsStore,
+        pruning_overlay_snapshot::DbPruningPointOverlaySnapshotStore,
         pruning::DbPruningStore,
         pruning_meta::PruningMetaStores,
         pruning_samples::DbPruningSamplesStore,
@@ -56,6 +57,8 @@ pub struct ConsensusStorage {
 
     // kaspa-pq DNS finality overlay stores (ADR-0009, Phase 10)
     pub dns_state_store: Arc<RwLock<DbDnsStateStore>>,
+    // kaspa-pq ADR-0022: singleton overlay snapshot as-of the current pruning point.
+    pub pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
 
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §11). All four
@@ -252,6 +255,7 @@ impl ConsensusStorage {
         // bond set is small (bounded by the active validator count), so a
         // modest item-capped cache suffices.
         let dns_state_store = Arc::new(RwLock::new(DbDnsStateStore::new(db.clone())));
+        let pruning_overlay_snapshot_store = Arc::new(RwLock::new(DbPruningPointOverlaySnapshotStore::new(db.clone())));
         let stake_bonds_store =
             Arc::new(RwLock::new(DbStakeBondsStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build())));
         // Per-block rewarded `(bond, epoch)` keys (Addendum B §B.3(c)), keyed by
@@ -337,6 +341,7 @@ impl ConsensusStorage {
             virtual_stores,
             selected_chain_store,
             dns_state_store,
+            pruning_overlay_snapshot_store,
             stake_bonds_store,
             evm_header_store,
             evm_state_store,

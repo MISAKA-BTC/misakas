@@ -66,6 +66,10 @@ message RpcBlockHeader {
   // (the powAlgoId precedent). Empty/zero on v0/v1 headers.
   string evmPayloadHash = 17;
   string evmCommitmentRoot = 18;
+  // kaspa-pq ADR-0022: the DNS/PoS-v2 overlay-state commitment (128-char hex).
+  // Part of the header-hash preimage on every version — MUST survive the mining
+  // round-trip (the powAlgoId / EVM-commitment precedent).
+  string overlayCommitmentRoot = 19;
 }
 
 message RpcBlockLevelParents {

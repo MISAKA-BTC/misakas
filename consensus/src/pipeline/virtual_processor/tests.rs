@@ -1667,12 +1667,13 @@ async fn pos_v2_slashing_survives_reorg_via_evidence_merge() {
 /// kaspa-pq ADR-0018 §F (DAG-3) — STAGED reward-split rollout across the `full_reward_split_daa_score`
 /// boundary. The §F carve selects the fee/subsidy split deterministically from the block's DAA score:
 /// below `full_reward_split_daa_score` the BOOTSTRAP split (smaller validator carve — worker base
-/// 8200bps), at/above it the FULL split (worker base 6700bps). This mines a constant-miner chain
-/// straight across the boundary and asserts (a) EVERY block stays UTXO-valid — the coinbase carve the
-/// template builds equals the one validation recomputes, on BOTH sides AND at the crossing block
-/// (construction == validation across a staged consensus parameter), and (b) the miner's per-block
-/// subsidy share visibly DROPS at the boundary (bootstrap 82% → full 67% of subsidy), proving the
-/// split actually changed rather than the stage being inert.
+/// 8200bps), at/above it the FULL split (worker base 6200bps; validator 30% — re-genesis raised it
+/// from 25%). This mines a constant-miner chain straight across the boundary and asserts (a) EVERY
+/// block stays UTXO-valid — the coinbase carve the template builds equals the one validation
+/// recomputes, on BOTH sides AND at the crossing block (construction == validation across a staged
+/// consensus parameter), and (b) the miner's per-block subsidy share visibly DROPS at the boundary
+/// (bootstrap 82% → full 62% of subsidy), proving the split actually changed rather than the stage
+/// being inert.
 #[tokio::test]
 async fn pos_v2_staged_full_reward_split_across_boundary() {
     kaspa_core::log::try_init_logger("info");
@@ -1715,11 +1716,11 @@ async fn pos_v2_staged_full_reward_split_across_boundary() {
     // (full); both adjacent enough that subsidy decay is negligible, so the ratio isolates the carve.
     let stage2 = rewards.iter().rev().find(|(d, r)| *d < H && *r > 0).map(|(_, r)| *r).expect("a Stage-2 reward");
     let stage3 = rewards.iter().find(|(d, r)| *d >= H && *r > 0).map(|(_, r)| *r).expect("a Stage-3 reward");
-    // Worker base share drops 8200bps → 6700bps ⇒ ratio ≈ 0.8170. Tolerance absorbs the tiny per-block decay.
+    // Worker base share drops 8200bps → 6200bps ⇒ ratio ≈ 0.7561. Tolerance absorbs the tiny per-block decay.
     let ratio = stage3 as f64 / stage2 as f64;
     assert!(
-        (0.80..=0.83).contains(&ratio),
-        "the miner's subsidy share drops at the boundary by the bootstrap→full worker-base carve (8200→6700bps ≈ 0.817); got stage2={stage2} stage3={stage3} ratio={ratio:.4}"
+        (0.74..=0.77).contains(&ratio),
+        "the miner's subsidy share drops at the boundary by the bootstrap→full worker-base carve (8200→6200bps ≈ 0.756); got stage2={stage2} stage3={stage3} ratio={ratio:.4}"
     );
 }
 
