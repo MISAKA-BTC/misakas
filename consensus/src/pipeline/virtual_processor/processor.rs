@@ -1702,6 +1702,19 @@ impl VirtualStateProcessor {
             }
         }
         window.extend(above);
+        // kaspa-pq ADR-0022 fix: the persisted below-pruning-point window includes the pruning-point
+        // boundary block (it is the newest entry of the captured `compute_overlay_snapshot(pp)` walk),
+        // and across pruning advances that boundary block can also be re-captured into a later
+        // snapshot's window — so a pruned-IBD node's recomputed window carried ONE EXTRA (duplicate)
+        // entry at the pruning-point block vs a from-genesis node's clean live walk. That single extra
+        // contribution changed the canonicalized overlay snapshot → the first post-pruning block's
+        // `overlay_commitment_root` recompute (and the epoch/reward recompute that share this seam)
+        // diverged (c != v) and the pruned-IBD node got stuck at "0 valid chain blocks". Dedup by block
+        // hash: a from-genesis live walk visits each selected-chain block exactly once, so this is a
+        // no-op there and only removes the spurious merge-path duplicate — restoring construction ==
+        // validation for pruned-IBD joiners.
+        let mut seen = std::collections::HashSet::new();
+        window.retain(|c| seen.insert(c.block_hash));
         window
     }
 
