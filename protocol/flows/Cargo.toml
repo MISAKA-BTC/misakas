@@ -13,6 +13,9 @@ repository.workspace = true
 kaspa-core.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-consensus-notify.workspace = true
+# EVM Lane §14.2 deposit-claim relay: re-validate a relayed claim's lock via
+# script_class::parse_evm_deposit_lock (PQ-only, secp-free — already in kaspad's tree via consensus).
+kaspa-txscript.workspace = true
 kaspa-p2p-lib.workspace = true
 kaspa-p2p-mining.workspace = true
 kaspa-utils.workspace = true

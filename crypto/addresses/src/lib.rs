@@ -270,6 +270,20 @@ impl Address {
         Self { prefix, payload: PayloadVec::from_slice(payload), version }
     }
 
+    /// Fallible constructor (audit IDENT-01): validate the payload length against
+    /// the version (test prefixes excepted) and return an error instead of the
+    /// `assert!` panic in [`Address::new`]. UNTRUSTED inputs — bech32 decode and
+    /// Borsh deserialize — go through this so a malformed-but-checksum-valid (or
+    /// malformed serialized) address fails closed rather than panicking a parser
+    /// on an RPC / wallet / explorer surface (a remote DoS). [`Address::new`]
+    /// stays the asserting constructor for internal, programmer-controlled inputs.
+    pub fn try_new(prefix: Prefix, version: Version, payload: &[u8]) -> Result<Self, AddressError> {
+        if !prefix.is_test() && version.public_key_len() != payload.len() {
+            return Err(AddressError::BadPayload);
+        }
+        Ok(Self { prefix, payload: PayloadVec::from_slice(payload), version })
+    }
+
     pub fn short(&self, n: usize) -> String {
         let payload = self.encode_payload();
         let n = cmp::min(n, payload.len() / 4);
@@ -303,7 +317,10 @@ impl BorshDeserialize for Address {
         let prefix: Prefix = borsh::BorshDeserialize::deserialize_reader(reader)?;
         let version: Version = borsh::BorshDeserialize::deserialize_reader(reader)?;
         let payload: Vec<u8> = borsh::BorshDeserialize::deserialize_reader(reader)?;
-        Ok(Self::new(prefix, version, &payload))
+        // audit IDENT-01: a malformed serialized address (wrong payload length for
+        // the version) must be an InvalidData error, never an `assert!` panic.
+        Self::try_new(prefix, version, &payload)
+            .map_err(|e| borsh::io::Error::new(borsh::io::ErrorKind::InvalidData, e.to_string()))
     }
 }
 
@@ -570,6 +587,43 @@ mod tests {
         let kaspa_mainline = "kaspa:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkx9awp4e".to_string();
         let parsed: Result<Address, AddressError> = kaspa_mainline.try_into();
         assert_eq!(parsed, Err(AddressError::InvalidPrefix("kaspa".into())));
+    }
+
+    /// audit IDENT-01: the fallible constructor validates the payload length
+    /// against the version for non-test prefixes (instead of `Address::new`'s
+    /// `assert!`), so untrusted decode/deserialize paths fail closed.
+    #[test]
+    fn try_new_validates_payload_length() {
+        // Correct length for PubKey (32) is accepted.
+        assert!(Address::try_new(Prefix::Mainnet, Version::PubKey, &[0u8; 32]).is_ok());
+        // Wrong lengths (empty, version-only-ish, too long) are BadPayload, not a panic.
+        assert_eq!(Address::try_new(Prefix::Mainnet, Version::PubKey, &[]), Err(AddressError::BadPayload));
+        assert_eq!(Address::try_new(Prefix::Mainnet, Version::PubKey, &[0u8; 31]), Err(AddressError::BadPayload));
+        assert_eq!(Address::try_new(Prefix::Mainnet, Version::PubKeyHashMlDsa87, &[0u8; 32]), Err(AddressError::BadPayload));
+        // The 64-byte ML-DSA P2PKH payload is accepted at its version.
+        assert!(Address::try_new(Prefix::Mainnet, Version::PubKeyHashMlDsa87, &[0u8; 64]).is_ok());
+        // Test prefixes intentionally skip the length check (synthetic bech32 vectors).
+        assert!(Address::try_new(Prefix::A, Version::PubKey, &[]).is_ok());
+    }
+
+    /// audit IDENT-01: a malformed address string (incl. a checksum-valid one with
+    /// an empty / version-only / wrong-length payload) must return `Err`, NEVER
+    /// panic the parser — the test ABORTS on any panic, so reaching the asserts at
+    /// all proves the decode path is panic-free on attacker-controlled input.
+    #[test]
+    fn decode_never_panics_on_malformed_input() {
+        for s in [
+            "misaka:s2rylsqy",    // (auditor) empty payload + checksum
+            "misaka:qgfqjuq9rq",  // (auditor) version byte only
+            "misaka:",            // empty body
+            "misaka:q",           // body shorter than the 8-char checksum
+            "misakatest:qqqqqqqq",
+            "misaka:zzzzzzzzzz",  // invalid bech32 chars
+            "misaka:qqqqqqqqqqqqqqqqqqqqqqqq", // valid charset, wrong length/checksum
+        ] {
+            let parsed: Result<Address, AddressError> = s.to_string().try_into();
+            assert!(parsed.is_err(), "malformed address {s:?} must be Err (got {parsed:?})");
+        }
     }
 
     #[test]

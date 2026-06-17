@@ -9,7 +9,7 @@
 use kaspa_consensus_core::evm::{EvmAccountSnapshot, EvmAddress, EvmExecutionResult, EvmStateSnapshot, EvmU256};
 use kaspa_hashes::EvmH256;
 use revm::db::{CacheDB, EmptyDB};
-use revm::primitives::{AccountInfo, Address, Bytecode, Bytes, B256, U256};
+use revm::primitives::{AccountInfo, Address, Bytecode, Bytes, KECCAK_EMPTY, B256, U256};
 
 #[inline]
 fn to_u256(v: EvmU256) -> U256 {
@@ -21,29 +21,99 @@ fn from_u256(v: U256) -> EvmU256 {
     EvmU256::from_be_bytes(v.to_be_bytes::<32>())
 }
 
-/// Seed a fresh `CacheDB` from a persisted parent state snapshot.
-///
-/// audit #10 / R2-#4: when an account carries bytecode, verify
-/// `code_hash == keccak256(code)`. The state root commits to `code_hash`, not the
-/// code bytes, so a corrupt/migrated store with mismatched code would otherwise
-/// execute against the wrong code while still reproducing the committed root for
-/// callers that don't touch it. Seeding is local (no attacker input), so a
-/// mismatch is store corruption — fail closed with a deterministic ERROR (R2-#4:
-/// a consensus/template path must not `panic!`; the error propagates up to a
-/// block-validity / template-build failure).
-pub fn seed_cachedb(snapshot: &EvmStateSnapshot) -> Result<CacheDB<EmptyDB>, crate::EvmExecError> {
-    let mut db = CacheDB::new(EmptyDB::default());
+/// Validate that a snapshot is in the EXACT canonical form [`snapshot_from_cachedb`]
+/// produces, BEFORE seeding (audit EVM-01 / EVM-03). The state root commits to
+/// `code_hash` (not the code bytes) and collapses duplicates/ordering, so without
+/// this an attacker-supplied pruning-point snapshot could reproduce the committed
+/// `state_root` while smuggling in: missing bytecode (`code_hash != KECCAK_EMPTY`
+/// with empty `code` — later execution would lack the code), mismatched code,
+/// unsorted/duplicate accounts or storage slots, zero-valued slots, or EIP-161
+/// empty accounts (DB bloat / ambiguity / future-trie migration hazard). All are
+/// rejected here with a deterministic ERROR (never `panic!` — a consensus/import
+/// path; the error propagates to a block-validity / IBD failure).
+fn validate_snapshot_canonical(snapshot: &EvmStateSnapshot) -> Result<(), crate::EvmExecError> {
+    let empty_code_hash = EvmH256::from_bytes(KECCAK_EMPTY.0);
+    let mut prev_addr: Option<[u8; 20]> = None;
     for acc in &snapshot.accounts {
-        let addr = Address::from(acc.address.as_bytes());
-        if !acc.code.is_empty() {
-            let computed = revm::primitives::keccak256(&acc.code);
-            if computed.0 != acc.code_hash.as_bytes() {
+        let addr = acc.address.as_bytes();
+        // Strictly ascending by address (== the snapshot_from_cachedb sort) ⇒ sorted + unique.
+        if let Some(prev) = prev_addr {
+            if prev >= addr {
+                return Err(crate::EvmExecError::InvariantViolation(
+                    "EVM snapshot corruption: accounts are not strictly sorted/unique by address".into(),
+                ));
+            }
+        }
+        prev_addr = Some(addr);
+
+        // EVM-01: code ⇔ code_hash must be consistent in BOTH directions.
+        if acc.code.is_empty() {
+            if acc.code_hash != empty_code_hash {
                 return Err(crate::EvmExecError::InvariantViolation(format!(
-                    "EVM snapshot corruption: account {addr} code_hash {:?} != keccak256(code) {:?}",
-                    acc.code_hash, computed
+                    "EVM snapshot corruption: account 0x{} has non-empty code_hash {:?} but empty code bytes",
+                    hex(&addr),
+                    acc.code_hash
+                )));
+            }
+        } else {
+            let computed = EvmH256::from_bytes(revm::primitives::keccak256(&acc.code).0);
+            if computed != acc.code_hash {
+                return Err(crate::EvmExecError::InvariantViolation(format!(
+                    "EVM snapshot corruption: account 0x{} code_hash {:?} != keccak256(code) {:?}",
+                    hex(&addr),
+                    acc.code_hash,
+                    computed
                 )));
             }
         }
+
+        // EIP-161 empty accounts are excluded by snapshot_from_cachedb ⇒ reject them on import.
+        if acc.nonce == 0 && acc.balance.is_zero() && acc.code.is_empty() && acc.storage.is_empty() && acc.code_hash == empty_code_hash {
+            return Err(crate::EvmExecError::InvariantViolation(format!(
+                "EVM snapshot corruption: account 0x{} is empty (EIP-161) — must not be persisted",
+                hex(&addr)
+            )));
+        }
+
+        // Storage: strictly ascending by slot (== the sort), unique, no zero values
+        // (zero slots are excluded by snapshot_from_cachedb).
+        let mut prev_slot: Option<[u8; 32]> = None;
+        for (slot, val) in &acc.storage {
+            if val.is_zero() {
+                return Err(crate::EvmExecError::InvariantViolation(format!(
+                    "EVM snapshot corruption: account 0x{} has a zero-valued storage slot",
+                    hex(&addr)
+                )));
+            }
+            let slot_be = slot.to_be_bytes();
+            if let Some(prev) = prev_slot {
+                if prev >= slot_be {
+                    return Err(crate::EvmExecError::InvariantViolation(format!(
+                        "EVM snapshot corruption: account 0x{} storage is not strictly sorted/unique by slot",
+                        hex(&addr)
+                    )));
+                }
+            }
+            prev_slot = Some(slot_be);
+        }
+    }
+    Ok(())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Seed a fresh `CacheDB` from a persisted parent state snapshot, after a strict
+/// canonicality + code/code_hash check ([`validate_snapshot_canonical`]). Seeding
+/// of a locally-produced snapshot always passes (it came from
+/// [`snapshot_from_cachedb`]); the check fails closed only on a corrupt store or a
+/// malicious pruning-point import snapshot (audit EVM-01 / EVM-03).
+pub fn seed_cachedb(snapshot: &EvmStateSnapshot) -> Result<CacheDB<EmptyDB>, crate::EvmExecError> {
+    validate_snapshot_canonical(snapshot)?;
+    let mut db = CacheDB::new(EmptyDB::default());
+    for acc in &snapshot.accounts {
+        let addr = Address::from(acc.address.as_bytes());
         let code = if acc.code.is_empty() { None } else { Some(Bytecode::new_raw(Bytes::from(acc.code.clone()))) };
         db.insert_account_info(
             addr,
@@ -188,6 +258,62 @@ mod tests {
         let (r2, _snap2) = execute_block_from_snapshot(&snap1, &input(&p, &a2, Some(&r1.header))).unwrap();
         assert_eq!(r2.header.parent_state_root, r1.header.state_root);
         assert_eq!(r2.header.evm_number, 2);
+    }
+
+    fn acc(addr: u8, nonce: u64, balance: u128, code: Vec<u8>, code_hash: EvmH256, storage: Vec<(EvmU256, EvmU256)>) -> EvmAccountSnapshot {
+        EvmAccountSnapshot { address: EvmAddress::from_bytes([addr; 20]), nonce, balance: EvmU256::from(balance), code_hash, code, storage }
+    }
+    fn snap(accounts: Vec<EvmAccountSnapshot>) -> EvmStateSnapshot {
+        EvmStateSnapshot { accounts }
+    }
+
+    /// audit EVM-01: a snapshot account with a real `code_hash` but EMPTY `code`
+    /// bytes reproduces the committed state root (root commits to `code_hash`) yet
+    /// would leave the contract uncallable. `seed_cachedb` must reject it.
+    #[test]
+    fn seed_rejects_empty_code_with_non_empty_code_hash() {
+        let real_code = vec![0x60u8, 0x00, 0x60, 0x00, 0xf3]; // some non-empty runtime
+        let real_hash = EvmH256::from_bytes(revm::primitives::keccak256(&real_code).0);
+        // code_hash of real code, but code bytes dropped.
+        let bad = snap(vec![acc(0x11, 1, 0, vec![], real_hash, vec![])]);
+        assert!(seed_cachedb(&bad).is_err(), "empty code with non-empty code_hash must be rejected");
+        // The honest forms both pass: empty code + empty hash, and matching code + hash.
+        let empty_hash = EvmH256::from_bytes(KECCAK_EMPTY.0);
+        assert!(seed_cachedb(&snap(vec![acc(0x11, 1, 0, vec![], empty_hash, vec![])])).is_ok());
+        assert!(seed_cachedb(&snap(vec![acc(0x11, 1, 0, real_code.clone(), real_hash, vec![])])).is_ok());
+        // A code/code_hash MISMATCH (non-empty code, wrong hash) is also rejected.
+        assert!(seed_cachedb(&snap(vec![acc(0x11, 1, 0, real_code, empty_hash, vec![])])).is_err());
+    }
+
+    /// audit EVM-03: a non-canonical snapshot (unsorted/duplicate accounts, zero
+    /// storage slots, unsorted storage, or EIP-161 empty accounts) can collapse to
+    /// the committed root in the CacheDB but is rejected on import.
+    #[test]
+    fn seed_rejects_non_canonical_snapshot() {
+        let empty_hash = EvmH256::from_bytes(KECCAK_EMPTY.0);
+        let one = EvmU256::from(1u128);
+        let two = EvmU256::from(2u128);
+        let zero = EvmU256::from(0u128);
+        // Unsorted / non-unique accounts (0x22 then 0x11).
+        assert!(seed_cachedb(&snap(vec![
+            acc(0x22, 1, 5, vec![], empty_hash, vec![]),
+            acc(0x11, 1, 5, vec![], empty_hash, vec![]),
+        ]))
+        .is_err());
+        // Duplicate account address.
+        assert!(seed_cachedb(&snap(vec![
+            acc(0x11, 1, 5, vec![], empty_hash, vec![]),
+            acc(0x11, 2, 6, vec![], empty_hash, vec![]),
+        ]))
+        .is_err());
+        // Zero-valued storage slot.
+        assert!(seed_cachedb(&snap(vec![acc(0x11, 1, 5, vec![], empty_hash, vec![(one, zero)])])).is_err());
+        // Unsorted storage slots (slot 2 before slot 1).
+        assert!(seed_cachedb(&snap(vec![acc(0x11, 1, 5, vec![], empty_hash, vec![(two, one), (one, one)])])).is_err());
+        // EIP-161 empty account.
+        assert!(seed_cachedb(&snap(vec![acc(0x11, 0, 0, vec![], empty_hash, vec![])])).is_err());
+        // The canonical form passes.
+        assert!(seed_cachedb(&snap(vec![acc(0x11, 1, 5, vec![], empty_hash, vec![(one, one), (two, one)])])).is_ok());
     }
 }
 

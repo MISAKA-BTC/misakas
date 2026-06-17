@@ -14,7 +14,7 @@ use crate::{
         daa::DaaStoreReader,
         ghostdag::{CompactGhostdagData, GhostdagData},
         headers::HeaderStoreReader,
-        rewarded_epochs::{RewardedEpochKeys, RewardedEpochsStoreReader},
+        rewarded_epochs::RewardedEpochKeys,
     },
     processes::{
         pruning::PruningPointReply,
@@ -32,7 +32,7 @@ use kaspa_consensus_core::{
     coinbase::*,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondStatus, DnsParams, FeeSplitParams,
-        RewardedEpochSet, SlashingSideEffect, attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status,
+        OverlaySnapshot, RewardedEpochSet, SlashingSideEffect, attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status,
         epoch_meets_quality_floor, epochs_finalized_at, recompute_epoch_tallies, resolve_slashing_side_effects,
         UNBOND_REQUEST_CONTEXT, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
         unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
@@ -336,6 +336,25 @@ impl VirtualStateProcessor {
         apply_slashing_effects_to_state(&effects, selected_parent_utxo_view, &mut ctx.mergeset_diff, &mut ctx.multiset_hash, pov_daa_score);
     }
 
+    /// kaspa-pq ADR-0022: the selected-parent window's per-block epoch contributions (oldest →
+    /// newest by DAA), drawn from [`Self::selected_chain_overlay_window`] so a pruned-IBD node's
+    /// below-pruning-point history is supplied by the imported pruning-point snapshot (the raw
+    /// selected-chain walk cannot traverse below the pruning point). The single seam every coinbase
+    /// reward recompute (victim compensation / reserve drip / deferred quality bonus) reads, so they
+    /// match a from-genesis node's accumulator after a prune. Byte-equivalent to the former raw chain
+    /// walk wherever the walk never reaches the pruning point — `selected_chain_overlay_window` skips
+    /// empty-contribution blocks, which are tally-neutral in `recompute_epoch_tallies` — so this is a
+    /// no-op on a non-pruned node (the only path on every net while the pruning point is genesis).
+    fn selected_chain_epoch_contributions(&self, selected_parent: BlockHash, parent_daa: u64, walk_bound: u64) -> Vec<BlockEpochContribution> {
+        let mut v: Vec<BlockEpochContribution> = self
+            .selected_chain_overlay_window(selected_parent, parent_daa, walk_bound)
+            .into_iter()
+            .map(|c| BlockEpochContribution { block_daa_score: c.block_daa_score, rewarded_keys: c.rewarded_keys, quality_subpool: c.quality_subpool })
+            .collect();
+        v.sort_by_key(|c| c.block_daa_score);
+        v
+    }
+
     /// kaspa-pq ADR-0018 "本格版" (PoS-v2) §slashing — the victim-compensation outputs for one
     /// slashed bond: the `victim_pool` distributed stake-proportionally among the **honest**
     /// validators of the slashed validator's epoch. Recomputes `slashed_epoch`'s accumulator
@@ -363,17 +382,7 @@ impl VirtualStateProcessor {
 
         // Gather the selected-parent window's per-block contributions (sink-parent first, then
         // ancestors), stopping at the window edge or the v2 fence.
-        let mut contributions: Vec<BlockEpochContribution> = Vec::new();
-        for ancestor in once(selected_parent).chain(self.reachability_service.default_backward_chain_iterator(selected_parent)) {
-            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
-            if parent_daa.saturating_sub(ancestor_daa) > walk_bound || ancestor_daa < dns_params.pos_v2_activation_daa_score {
-                break;
-            }
-            let rewarded_keys = self.rewarded_epochs_store.get(ancestor).map(|k| (*k).clone()).unwrap_or_default();
-            let quality_subpool = self.block_quality_pool_store.get(ancestor).unwrap_or(0);
-            contributions.push(BlockEpochContribution { block_daa_score: ancestor_daa, rewarded_keys, quality_subpool });
-        }
-        contributions.reverse();
+        let contributions = self.selected_chain_epoch_contributions(selected_parent, parent_daa, walk_bound);
 
         let bonds = bond_view.records();
         let tallies = recompute_epoch_tallies(parent_daa, epoch_len, finalization_depth, &contributions, &bonds);
@@ -418,17 +427,7 @@ impl VirtualStateProcessor {
         };
 
         let walk_bound = finalization_depth.saturating_add(epoch_len.saturating_mul(2));
-        let mut contributions: Vec<BlockEpochContribution> = Vec::new();
-        for ancestor in once(selected_parent).chain(self.reachability_service.default_backward_chain_iterator(selected_parent)) {
-            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
-            if parent_daa.saturating_sub(ancestor_daa) > walk_bound || ancestor_daa < dns_params.pos_v2_activation_daa_score {
-                break;
-            }
-            let rewarded_keys = self.rewarded_epochs_store.get(ancestor).map(|k| (*k).clone()).unwrap_or_default();
-            let quality_subpool = self.block_quality_pool_store.get(ancestor).unwrap_or(0);
-            contributions.push(BlockEpochContribution { block_daa_score: ancestor_daa, rewarded_keys, quality_subpool });
-        }
-        contributions.reverse();
+        let contributions = self.selected_chain_epoch_contributions(selected_parent, parent_daa, walk_bound);
         let bonds = bond_view.records();
         let tallies = recompute_epoch_tallies(daa_score, epoch_len, finalization_depth, &contributions, &bonds);
 
@@ -491,8 +490,25 @@ impl VirtualStateProcessor {
         // the pruning point and this same check on the first post-pruning block verifies
         // them against its header. Gated on the overlay being active (`dns_params`).
         if self.dns_params.is_some() {
-            let expected_overlay = self.compute_overlay_snapshot(ctx.selected_parent(), selected_parent_bond_view).commitment_root();
+            let snap = self.compute_overlay_snapshot(ctx.selected_parent(), selected_parent_bond_view);
+            let expected_overlay = snap.commitment_root();
             if expected_overlay != header.overlay_commitment_root {
+                kaspa_core::warn!(
+                    "[overlay-diag] block {} sp={} sp_daa={} bonds={} reserve={} window={} empty_root={} header_root={} computed_root={} window_detail={:?}",
+                    header.hash,
+                    ctx.selected_parent(),
+                    self.headers_store.get_daa_score(ctx.selected_parent()).unwrap_or(u64::MAX),
+                    snap.bonds.len(),
+                    snap.reserve_balance,
+                    snap.window.len(),
+                    OverlaySnapshot::default().commitment_root(),
+                    header.overlay_commitment_root,
+                    expected_overlay,
+                    snap.window
+                        .iter()
+                        .map(|c| (c.block_hash, c.block_daa_score, c.rewarded_keys.len(), c.quality_subpool))
+                        .collect::<Vec<_>>()
+                );
                 return Err(BadOverlayCommitment(header.hash, header.overlay_commitment_root, expected_overlay));
             }
         }
@@ -849,17 +865,7 @@ impl VirtualStateProcessor {
         // walk + pure core the Phase-1 accumulator uses), anchored at the selected parent so
         // construction and validation read the identical buried history.
         let walk_bound = finalization_depth.saturating_add(epoch_len.saturating_mul(2));
-        let mut contributions: Vec<BlockEpochContribution> = Vec::new();
-        for ancestor in once(selected_parent).chain(self.reachability_service.default_backward_chain_iterator(selected_parent)) {
-            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap();
-            if parent_daa.saturating_sub(ancestor_daa) > walk_bound || ancestor_daa < dns_params.pos_v2_activation_daa_score {
-                break;
-            }
-            let rewarded_keys = self.rewarded_epochs_store.get(ancestor).map(|k| (*k).clone()).unwrap_or_default();
-            let quality_subpool = self.block_quality_pool_store.get(ancestor).unwrap_or(0);
-            contributions.push(BlockEpochContribution { block_daa_score: ancestor_daa, rewarded_keys, quality_subpool });
-        }
-        contributions.reverse();
+        let contributions = self.selected_chain_epoch_contributions(selected_parent, parent_daa, walk_bound);
         let bonds = bond_view.records();
         let tallies = recompute_epoch_tallies(daa_score, epoch_len, finalization_depth, &contributions, &bonds);
 

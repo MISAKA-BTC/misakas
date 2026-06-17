@@ -144,6 +144,8 @@ impl IbdFlow {
                         self.router
                     );
 
+                    // Imports the pruning point's utxoset AND (ADR-0022) its EVM + overlay sidecars
+                    // atomically before marking the utxoset stable — see sync_new_utxo_set.
                     self.sync_new_utxo_set(&session, pruning_point).await?;
                 }
                 // Once utxo is valid, simply sync missing headers
@@ -171,13 +173,11 @@ impl IbdFlow {
                         // Next, sync a utxoset corresponding to the new pruning point from the syncer.
                         // Note that the new pruning point's anticone need not be downloaded separately as in other IBD types
                         // as it was just downloaded as part of the headers proof.
+                        // Imports the new pruning point's utxoset AND (ADR-0022) its EVM + overlay sidecars
+                        // atomically before marking the utxoset stable — see sync_new_utxo_set. Without the
+                        // sidecars the first post-pruning block re-executes EVM from an empty genesis state /
+                        // recomputes overlay rewards from empty state and is disqualified (with all descendants).
                         self.sync_new_utxo_set(&session, negotiation_output.syncer_pruning_point).await?;
-                        // kaspa-pq ADR-0022: import the pruning point's EVM execution state and DNS/PoS-v2
-                        // overlay snapshot BEFORE block bodies are processed. Without these the first
-                        // post-pruning block re-executes EVM from an empty genesis state / recomputes
-                        // overlay rewards from empty state and is disqualified (and all descendants with it).
-                        self.sync_pruning_point_evm_state(&session, negotiation_output.syncer_pruning_point).await?;
-                        self.sync_pruning_point_overlay_snapshot(&session, negotiation_output.syncer_pruning_point).await?;
                     }
                     Err(e) => {
                         warn!("IBD with headers proof from {} was unsuccessful ({})", self.router, e);
@@ -192,6 +192,8 @@ impl IbdFlow {
                     Ok(()) => {
                         info!("header stage of pruning catchup from peer {} completed", self.router);
                         self.sync_missing_trusted_bodies(&session).await?;
+                        // Imports the new pruning point's utxoset AND (ADR-0022) its EVM + overlay sidecars
+                        // atomically before marking the utxoset stable — see sync_new_utxo_set.
                         self.sync_new_utxo_set(&session, negotiation_output.syncer_pruning_point).await?;
                         // Note that pruning of old data will only occur once virtual has caught up sufficiently far
                     }
@@ -605,7 +607,21 @@ impl IbdFlow {
         // A better solution could be to create a copy of the old utxo state for some sort of fallback rather than delete it.
         consensus.async_clear_pruning_utxo_set().await; // this deletes the old pruning utxoset and also sets the pruning utxo as invalidated
         self.sync_pruning_point_utxoset(consensus, pruning_point).await?;
-        // Only if the function has reached here, will the utxo be considered "final"
+        // kaspa-pq ADR-0022: import the pruning point's EVM execution state + DNS/PoS-v2 overlay snapshot
+        // as part of the SAME "make the pruning point usable" step — BEFORE marking the utxoset stable.
+        // Atomicity matters: async_set_pruning_utxoset_stable() below latches is_utxo_stable=true, and a
+        // later IbdType::Sync SKIPS re-import while that flag is true. If a sidecar import failed (the
+        // peer can answer not-found) or the node crashed AFTER the utxoset was marked stable but BEFORE
+        // the sidecars landed, the node would be permanently missing the EVM/overlay state and would
+        // disqualify every post-pruning block with no path to recover. Importing the sidecars first keeps
+        // "utxoset + EVM + overlay" all-or-nothing w.r.t. the stable flag (a failure leaves the utxoset
+        // unstable, so the next IBD re-runs the whole import). Skipped at genesis: there is no
+        // below-genesis state and the peer has captured no snapshot (it would answer not-found and abort).
+        if pruning_point != self.ctx.config.genesis.hash {
+            self.sync_pruning_point_evm_state(consensus, pruning_point).await?;
+            self.sync_pruning_point_overlay_snapshot(consensus, pruning_point).await?;
+        }
+        // Only if the function has reached here (utxoset + EVM + overlay all imported), is the utxo "final"
         consensus.async_set_pruning_utxoset_stable().await;
         // Once a new utxoset is stored, the utxoindex needs to be resynced as well. This happens through the reset handler mechanism.
         let consensus_manager = self.ctx.consensus_manager.clone();

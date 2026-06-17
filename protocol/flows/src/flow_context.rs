@@ -1,4 +1,5 @@
 use crate::flowcontext::{
+    evm_deposit_claims::EvmDepositClaimsSpread,
     evm_transactions::EvmTransactionsSpread,
     orphans::{OrphanBlocksPool, OrphanOutput},
     process_queue::ProcessQueue,
@@ -14,7 +15,8 @@ use kaspa_consensus_core::api::{BlockValidationFuture, BlockValidationFutures};
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::errors::block::RuleError;
-use kaspa_consensus_core::tx::{Transaction, TransactionId};
+use kaspa_consensus_core::evm::DepositClaim;
+use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint};
 use kaspa_consensus_notify::{
     notification::{Notification, PruningPointUtxoSetOverrideNotification},
     root::ConsensusNotificationRoot,
@@ -67,15 +69,21 @@ use uuid::Uuid;
 // so that any handshake with a mainline Kaspa peer fails the version check
 // immediately. See docs/adr/0001-network-isolation.md.
 //
-// 101 (EVM Lane §14.2) adds the pending-EVM-tx relay messages. 100 peers are
-// still fully served (they negotiate the same flow set minus the EVM relay
-// flows), but must never be sent an EVM message: routing an unknown payload
-// type disconnects the peer, so all EVM gossip is version-filtered.
-const PROTOCOL_VERSION: u32 = 101;
+// 101 (EVM Lane §14.2) adds the pending-EVM-tx relay messages; 102 adds the EVM
+// deposit-claim relay messages (oneof 67-70). Lower-version peers are still fully
+// served (they negotiate the same flow set minus the newer relay flows), but must
+// never be sent a message they have no route for — routing an unknown payload type
+// disconnects the peer, so all EVM gossip is version-filtered to the exact peer set
+// that understands it (EVM-tx ≥101, deposit-claim ≥102).
+const PROTOCOL_VERSION: u32 = 102;
 /// The last protocol version WITHOUT the EVM relay messages (still accepted).
 const PROTOCOL_VERSION_NO_EVM_RELAY: u32 = 100;
-/// The minimum protocol version that understands the EVM relay messages.
+/// The minimum protocol version that understands the EVM-tx relay messages.
 pub(crate) const PROTOCOL_VERSION_EVM_RELAY: u32 = 101;
+/// The minimum protocol version that understands the EVM deposit-claim relay
+/// messages. 101 peers (EVM-tx relay only) and older must NEVER be sent a claim
+/// message (unroutable → disconnect), so claim gossip is filtered to >= this.
+pub(crate) const PROTOCOL_VERSION_CLAIM_RELAY: u32 = 102;
 
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
@@ -234,6 +242,11 @@ pub struct FlowContextInner {
     // the UTXO tx spread (independent queue, longer batching interval).
     evm_transactions_spread: AsyncRwLock<EvmTransactionsSpread>,
     shared_evm_transaction_requests: Arc<Mutex<HashMap<EvmH256, RequestScopeMetadata>>>,
+    // kaspa-pq EVM Lane §14.2 / §9.2: pending EVM deposit-claim gossip state.
+    // Identity is the deposit-lock outpoint (one claim per lock); same low-priority
+    // profile as the EVM-tx spread.
+    evm_deposit_claims_spread: AsyncRwLock<EvmDepositClaimsSpread>,
+    shared_evm_deposit_claim_requests: Arc<Mutex<HashMap<TransactionOutpoint, RequestScopeMetadata>>>,
     is_ibd_running: Arc<AtomicBool>,
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
     pub address_manager: Arc<Mutex<AddressManager>>,
@@ -344,6 +357,8 @@ impl FlowContext {
                 shared_transaction_requests: Arc::new(Mutex::new(HashMap::new())),
                 evm_transactions_spread: AsyncRwLock::new(EvmTransactionsSpread::new(hub.clone())),
                 shared_evm_transaction_requests: Arc::new(Mutex::new(HashMap::new())),
+                evm_deposit_claims_spread: AsyncRwLock::new(EvmDepositClaimsSpread::new(hub.clone())),
+                shared_evm_deposit_claim_requests: Arc::new(Mutex::new(HashMap::new())),
                 is_ibd_running: Default::default(),
                 ibd_metadata: Default::default(),
                 hub,
@@ -469,6 +484,12 @@ impl FlowContext {
     /// as UTXO tx requests; `EvmH256` is `Hash + Eq + Copy` like the other keys).
     pub fn try_adding_evm_transaction_request(&self, req: EvmH256) -> Option<RequestScope<EvmH256>> {
         Self::try_adding_request_impl(req, &self.shared_evm_transaction_requests)
+    }
+
+    /// §14.2: cross-peer dedup for pending EVM deposit-claim requests. The claim's
+    /// identity is its deposit-lock `TransactionOutpoint` (`Hash + Eq + Copy`).
+    pub fn try_adding_evm_deposit_claim_request(&self, req: TransactionOutpoint) -> Option<RequestScope<TransactionOutpoint>> {
+        Self::try_adding_request_impl(req, &self.shared_evm_deposit_claim_requests)
     }
 
     pub async fn add_orphan(&self, consensus: &ConsensusProxy, orphan_block: Block) -> Option<OrphanOutput> {
@@ -601,6 +622,8 @@ impl FlowContext {
         // low-rate submitter's burst tail would linger unsent until its next
         // submit; this flushes anything whose batch interval has elapsed.
         self.evm_transactions_spread.write().await.flush_due().await;
+        // §14.2: pump the deposit-claim relay spread on the same cadence.
+        self.evm_deposit_claims_spread.write().await.flush_due().await;
 
         if self.should_run_mempool_scanning_task().await {
             // Spawn a task executing the removal of expired low priority transactions and, if time has come too,
@@ -751,6 +774,26 @@ impl FlowContext {
         self.broadcast_evm_transactions(once(hash)).await;
         Ok(hash)
     }
+
+    /// §14.2 / §9.2: queue deposit-lock outpoints for claim-inv broadcast to
+    /// EVM-relay-capable (protocol ≥ 101) peers. Same low-priority profile as the
+    /// EVM-tx spread.
+    pub async fn broadcast_evm_deposit_claims<I: IntoIterator<Item = TransactionOutpoint>>(&self, outpoints: I) {
+        self.evm_deposit_claims_spread.write().await.broadcast_evm_deposit_claims(outpoints).await
+    }
+
+    /// Queues an rpc-submitted (pre-validated) deposit claim into the local claim
+    /// queue and, on success, gossips its lock outpoint for P2P relay (§14.2) so
+    /// it reaches the dominant selected-chain producer regardless of which node
+    /// the depositor submitted to. Returns `false` only when the queue is full.
+    pub async fn submit_rpc_evm_deposit_claim(&self, claim: DepositClaim) -> bool {
+        let outpoint = claim.deposit_outpoint;
+        let queued = self.mining_manager().clone().submit_evm_deposit_claim(claim);
+        if queued {
+            self.broadcast_evm_deposit_claims(once(outpoint)).await;
+        }
+        queued
+    }
 }
 
 #[async_trait]
@@ -798,6 +841,13 @@ impl ConnectionInitializer for FlowContext {
         // Register all flows according to version
         let (flows, applied_protocol_version) = match peer_version.protocol_version {
             v if v >= PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            // §14.2 back-compat: an EVM-tx-relay (101) peer that predates the
+            // deposit-claim relay. Register the 101 flow set (EVM-tx relay, NO
+            // claim relay) — claim messages (oneof 67-70) are version-filtered to
+            // >= 102, so we never send one to a 101 peer (unroutable → disconnect).
+            PROTOCOL_VERSION_EVM_RELAY => {
+                (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_EVM_RELAY), PROTOCOL_VERSION_EVM_RELAY)
+            }
             // §14.2 back-compat: pre-EVM-relay kaspa-pq binaries. Same flow set
             // minus the EVM relay flows; all EVM gossip towards such peers is
             // version-filtered (an unroutable payload type disconnects them).

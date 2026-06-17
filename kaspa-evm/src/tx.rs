@@ -9,8 +9,29 @@
 //! block-invalid (§8.2).
 
 use alloy_consensus::{Transaction as _, TxEnvelope};
-use alloy_eips::eip2718::Decodable2718;
+use alloy_eips::eip2718::{Decodable2718, Encodable2718};
 use revm::primitives::{Address, TxEnv, U256};
+
+/// audit EVM-02: decode exactly ONE EIP-2718 typed-transaction envelope and require
+/// the input to be its CANONICAL encoding — the WHOLE buffer consumed AND
+/// `encoded_2718() == raw`. `tx_hash` is keccak256 over the raw bytes and keys the
+/// `transactions_root`, the receipt/inclusion lookup, the EVM mempool/relay identity,
+/// and (for an F002 withdraw) the synthetic withdrawal UTXO outpoint
+/// (`synthetic_withdrawal_txid(evm_tx_hash, op_index)`). Without this, `signed‖garbage`
+/// (trailing bytes) or a non-canonical RLP would decode to the SAME execution under a
+/// DIFFERENT hash — a malleable alias. Closed deterministically at the consensus
+/// boundary (admission + execution decode), independent of the decoder's leniency.
+fn decode_canonical_2718(raw: &[u8]) -> Result<TxEnvelope, String> {
+    let mut buf = raw;
+    let envelope = TxEnvelope::decode_2718(&mut buf).map_err(|e| format!("decode: {e}"))?;
+    if !buf.is_empty() {
+        return Err(format!("non-canonical EVM tx: {} trailing byte(s) after the envelope", buf.len()));
+    }
+    if envelope.encoded_2718().as_slice() != raw {
+        return Err("non-canonical EVM tx encoding (re-encode != raw)".to_string());
+    }
+    Ok(envelope)
+}
 
 /// audit #1/#2: the SHANGHAI tx-type allowlist. Only Legacy, EIP-2930 and
 /// EIP-1559 are modelled; newer typed envelopes (EIP-4844, EIP-7702) carry
@@ -149,7 +170,7 @@ pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
         return Err(format!("tx of {} bytes can never fit a payload (cap {MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK})", raw.len()));
     }
 
-    let envelope = TxEnvelope::decode_2718(&mut &raw[..]).map_err(|e| format!("decode: {e}"))?;
+    let envelope = decode_canonical_2718(raw)?;
     // audit #1/#2: explicit tx-type allowlist. The pinned spec is SHANGHAI, which
     // supports only Legacy / EIP-2930 / EIP-1559. alloy_consensus can decode newer
     // typed envelopes (EIP-4844 blobs, EIP-7702 auth-lists) whose variant-specific
@@ -289,6 +310,27 @@ mod tests {
         assert!(admit_tx_info(&raw[..raw.len() - 5]).is_err());
     }
 
+    /// audit EVM-02: a canonical signed tx admits and decodes; the same envelope
+    /// with TRAILING bytes is a hash-malleable alias of the same execution, so both
+    /// the admission gate and the execution decode must reject it (not silently
+    /// decode the envelope and ignore the suffix).
+    #[test]
+    fn rejects_trailing_bytes_canonical_only() {
+        let raw = fixture_raw(3);
+        assert!(admit_tx_info(&raw).is_ok());
+        assert!(decode_tx_to_env(&raw).is_ok());
+
+        let mut with_suffix = raw.clone();
+        with_suffix.push(0x00);
+        // keccak(raw‖0x00) != keccak(raw): a different hash for the same execution.
+        assert_ne!(tx_hash(&with_suffix), tx_hash(&raw));
+        assert!(admit_tx_info(&with_suffix).is_err(), "trailing bytes must be inadmissible");
+        assert!(decode_tx_to_env(&with_suffix).is_err(), "trailing bytes must fail the execution decode too");
+        // The pure helper rejects it directly.
+        assert!(decode_canonical_2718(&with_suffix).is_err());
+        assert!(decode_canonical_2718(&raw).is_ok());
+    }
+
     /// Prints the canonical signed-tx fixture used by the consensus §16 e2e
     /// test (consensus has no signing deps, so it embeds these bytes as hex).
     /// Regenerate with:
@@ -307,7 +349,9 @@ mod tests {
 /// `TxEnv` (recovering the sender). Deterministic: the same bytes always yield
 /// the same caller + env.
 pub fn decode_tx_to_env(raw: &[u8]) -> Result<TxEnv, TxDecodeError> {
-    let envelope = TxEnvelope::decode_2718(&mut &raw[..]).map_err(|e| TxDecodeError::Decode(e.to_string()))?;
+    // audit EVM-02: same canonical-encoding gate as admission (defense-in-depth on
+    // the execution path; a body-valid payload already only contains admitted txs).
+    let envelope = decode_canonical_2718(raw).map_err(TxDecodeError::Decode)?;
     // audit #1/#2: defense-in-depth allowlist (admission already enforced it).
     // A body-valid payload can only contain admitted txs, but the executor must
     // never run an out-of-allowlist envelope through the common accessors.

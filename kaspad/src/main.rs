@@ -25,11 +25,11 @@ pub fn main() {
     let args = parse_args();
 
     // audit H-01: refuse to launch a MAINNET node while the premine custody ceremony is pending.
-    // MAINNET_PREMINE_OWNER_PAYLOAD is the all-zero UNSPENDABLE placeholder, so a mainnet started now
-    // would run a chain whose 15B premine is permanently locked. The operator must first complete the
-    // offline ML-DSA-87 key-generation ceremony, re-genesis (re-pin GENESIS.hash + utxo_commitment via
-    // the ceremony tool), and flip MAINNET_PREMINE_CEREMONY_PENDING to false. Test/devnet/simnet are
-    // unaffected (public test key); consensus unit/integration harnesses never reach this binary entry.
+    // The ceremony is COMPLETE as of the 2026-06-17 re-genesis (the 13B premine is locked to the
+    // operator custody addresses, MAINNET_PREMINE_CEREMONY_PENDING = false), so this guard is now a
+    // dormant safety net: if the flag is ever flipped back to true (placeholder payload), a mainnet
+    // node refuses to start rather than run a chain with an unspendable premine. Test/devnet/simnet
+    // are unaffected (Claude-managed test key); consensus harnesses never reach this binary entry.
     if args.network().network_type == kaspa_consensus_core::network::NetworkType::Mainnet
         && kaspa_consensus_core::config::premine::MAINNET_PREMINE_CEREMONY_PENDING
     {

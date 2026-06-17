@@ -235,6 +235,28 @@ message EvmTransactionNotFoundMessage{
   bytes hash = 1;
 }
 
+// kaspa-pq EVM Lane v0.4 (§14.2 / §9.2): pending EVM deposit-claim gossip
+// (protocol ≥ 101 only). A claim's identity is its deposit lock Outpoint (NOT a
+// hash); the body is borsh(DepositClaim). On receipt a node RE-RESOLVES the
+// outpoint against its own live UTXO view and re-validates the claim's fields
+// against the EVM_DEPOSIT_LOCK output before queueing — a relayed claim is
+// never trusted on its asserted fields.
+message InvEvmDepositClaimsMessage{
+  repeated Outpoint outpoints = 1;
+}
+
+message RequestEvmDepositClaimsMessage{
+  repeated Outpoint outpoints = 1;
+}
+
+message EvmDepositClaimMessage{
+  bytes claim = 1; // borsh(DepositClaim)
+}
+
+message EvmDepositClaimNotFoundMessage{
+  Outpoint outpoint = 1;
+}
+
 message UnexpectedPruningPointMessage{
 }
 
