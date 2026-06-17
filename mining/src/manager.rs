@@ -156,6 +156,25 @@ impl MiningManager {
         self.evm_mempool.read().contains_claim(outpoint)
     }
 
+    /// §14.2 relay: of `outpoints`, the ones NOT already queued (the request
+    /// filter for incoming deposit-claim invs). Always available — a claim is a
+    /// plain consensus type (no revm), so a non-`evm` build can still queue/serve.
+    pub fn evm_unknown_deposit_claims(
+        &self,
+        outpoints: Vec<kaspa_consensus_core::tx::TransactionOutpoint>,
+    ) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
+        let pool = self.evm_mempool.read();
+        outpoints.into_iter().filter(|o| !pool.contains_claim(o)).collect()
+    }
+
+    /// §14.2 relay: serve a queued deposit claim (typed) to a requesting peer.
+    pub fn get_evm_deposit_claim(
+        &self,
+        outpoint: &kaspa_consensus_core::tx::TransactionOutpoint,
+    ) -> Option<kaspa_consensus_core::evm::DepositClaim> {
+        self.evm_mempool.read().get_claim(outpoint)
+    }
+
     /// §14.2 relay: whether this build can run the class-1 admission precheck.
     /// A non-`evm` build must never REQUEST pending EVM txs (it could neither
     /// admit them nor fairly judge the sending peer), so the relay flow checks
@@ -1022,6 +1041,22 @@ impl MiningManagerProxy {
     /// §9.2: whether a deposit claim for this lock outpoint is already queued.
     pub fn has_pending_evm_deposit_claim(&self, outpoint: &kaspa_consensus_core::tx::TransactionOutpoint) -> bool {
         self.inner.has_pending_evm_deposit_claim(outpoint)
+    }
+
+    /// §14.2 relay: of `outpoints`, the ones NOT already queued (claim-inv request filter).
+    pub fn evm_unknown_deposit_claims(
+        &self,
+        outpoints: Vec<kaspa_consensus_core::tx::TransactionOutpoint>,
+    ) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
+        self.inner.evm_unknown_deposit_claims(outpoints)
+    }
+
+    /// §14.2 relay: serve a queued deposit claim (typed) to a requesting peer.
+    pub fn get_evm_deposit_claim(
+        &self,
+        outpoint: &kaspa_consensus_core::tx::TransactionOutpoint,
+    ) -> Option<kaspa_consensus_core::evm::DepositClaim> {
+        self.inner.get_evm_deposit_claim(outpoint)
     }
 
     pub async fn get_realtime_feerate_estimations(self) -> FeerateEstimations {

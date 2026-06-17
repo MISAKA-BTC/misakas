@@ -87,7 +87,8 @@ impl From<KaspadMessagePayloadType> for IncomingRouteOverflowPolicy {
             // shedding them under pressure is the designed behavior, never a disconnect)
             KaspadMessagePayloadType::InvTransactions
             | KaspadMessagePayloadType::InvRelayBlock
-            | KaspadMessagePayloadType::InvEvmTransactions => IncomingRouteOverflowPolicy::Drop,
+            | KaspadMessagePayloadType::InvEvmTransactions
+            | KaspadMessagePayloadType::InvEvmDepositClaims => IncomingRouteOverflowPolicy::Drop,
             _ => IncomingRouteOverflowPolicy::Disconnect,
         }
     }

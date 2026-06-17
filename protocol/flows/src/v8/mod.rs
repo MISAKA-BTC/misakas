@@ -14,11 +14,13 @@ use crate::v7::{
 };
 pub(crate) mod request_block_bodies;
 pub(crate) mod request_pruning_point_snapshots;
+pub(crate) mod claimrelay_evm;
 pub(crate) mod txrelay_evm;
 use crate::{
     flow_context::{FlowContext, PROTOCOL_VERSION_EVM_RELAY},
     flow_trait::Flow,
 };
+use claimrelay_evm::{RelayEvmDepositClaimsFlow, RequestedEvmDepositClaimsFlow};
 use txrelay_evm::{RelayEvmTransactionsFlow, RequestedEvmTransactionsFlow};
 
 use crate::ibd::IbdFlow;
@@ -181,6 +183,25 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             ctx.clone(),
             router.clone(),
             router.subscribe(vec![KaspadMessagePayloadType::RequestEvmTransactions]),
+        )));
+        // kaspa-pq EVM Lane §14.2 / §9.2: deposit-claim relay rides the same
+        // EVM-relay-capable (≥101) peer set as the EVM-tx relay above.
+        flows.push(Box::new(RelayEvmDepositClaimsFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe_with_capacity(
+                vec![KaspadMessagePayloadType::InvEvmDepositClaims],
+                RelayEvmDepositClaimsFlow::invs_channel_size(),
+            ),
+            router.subscribe_with_capacity(
+                vec![KaspadMessagePayloadType::EvmDepositClaim, KaspadMessagePayloadType::EvmDepositClaimNotFound],
+                RelayEvmDepositClaimsFlow::claims_channel_size(),
+            ),
+        )));
+        flows.push(Box::new(RequestedEvmDepositClaimsFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe(vec![KaspadMessagePayloadType::RequestEvmDepositClaims]),
         )));
     }
 

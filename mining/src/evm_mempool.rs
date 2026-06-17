@@ -133,6 +133,13 @@ impl EvmMempool {
         self.claims.len()
     }
 
+    /// The queued claim for this lock outpoint (§14.2: served to requesting peers).
+    /// Returns the typed claim; the relay flow borsh-encodes it (the mining crate
+    /// has no borsh dependency).
+    pub fn get_claim(&self, outpoint: &TransactionOutpoint) -> Option<DepositClaim> {
+        self.claims.get(outpoint).cloned()
+    }
+
     /// Whether a claim for this lock outpoint is already queued.
     pub fn contains_claim(&self, outpoint: &TransactionOutpoint) -> bool {
         self.claims.contains_key(outpoint)
@@ -375,6 +382,32 @@ mod tests {
         // Removal.
         pool.remove_claim(&TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xC; 64]), 1));
         assert_eq!(pool.claims_len(), 2);
+    }
+
+    /// §14.2 relay serve/filter primitives: `get_claim` returns the queued claim
+    /// (the responder side) and `None` for an unknown outpoint (the request filter
+    /// keys on `contains_claim`, which `get_claim` agrees with).
+    #[test]
+    fn claim_relay_get_and_contains() {
+        use kaspa_consensus_core::tx::TransactionOutpoint;
+        let op = |b: u8, idx: u32| TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([b; 64]), idx);
+        let claim = DepositClaim {
+            deposit_outpoint: op(0xD, 2),
+            evm_address: EvmAddress::from_bytes([0xD; 20]),
+            amount_sompi: 4242,
+            claim_tip_sompi: 7,
+        };
+        let mut pool = EvmMempool::new();
+        // Unknown before insert.
+        assert!(pool.get_claim(&op(0xD, 2)).is_none());
+        assert!(!pool.contains_claim(&op(0xD, 2)));
+        // Served verbatim after insert.
+        assert!(pool.insert_claim(claim.clone()));
+        assert_eq!(pool.get_claim(&op(0xD, 2)).as_ref(), Some(&claim));
+        assert!(pool.contains_claim(&op(0xD, 2)));
+        // A different outpoint is still unknown (the relay request-filter must keep requesting it).
+        assert!(pool.get_claim(&op(0xD, 3)).is_none());
+        assert!(!pool.contains_claim(&op(0xD, 3)));
     }
 
     /// Audit L2: near u128::MAX the old `existing * 110 / 100` reverse-overflowed

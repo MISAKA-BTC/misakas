@@ -880,7 +880,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             )));
         }
 
-        if !self.mining_manager.submit_evm_deposit_claim(claim.clone()) {
+        // §14.2: queue locally AND gossip the lock outpoint for P2P relay, so the
+        // claim reaches the dominant selected-chain producer regardless of which
+        // node the depositor submitted to (mirrors submit_evm_transaction_call).
+        if !self.flow_context.submit_rpc_evm_deposit_claim(claim.clone()).await {
             return Err(RpcError::RpcSubsystem("the deposit-claim queue is full".to_string()));
         }
         let mut evm_address_hex = vec![0u8; 40];

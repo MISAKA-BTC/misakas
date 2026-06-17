@@ -1,4 +1,5 @@
 use crate::flowcontext::{
+    evm_deposit_claims::EvmDepositClaimsSpread,
     evm_transactions::EvmTransactionsSpread,
     orphans::{OrphanBlocksPool, OrphanOutput},
     process_queue::ProcessQueue,
@@ -14,7 +15,8 @@ use kaspa_consensus_core::api::{BlockValidationFuture, BlockValidationFutures};
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::errors::block::RuleError;
-use kaspa_consensus_core::tx::{Transaction, TransactionId};
+use kaspa_consensus_core::evm::DepositClaim;
+use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint};
 use kaspa_consensus_notify::{
     notification::{Notification, PruningPointUtxoSetOverrideNotification},
     root::ConsensusNotificationRoot,
@@ -234,6 +236,11 @@ pub struct FlowContextInner {
     // the UTXO tx spread (independent queue, longer batching interval).
     evm_transactions_spread: AsyncRwLock<EvmTransactionsSpread>,
     shared_evm_transaction_requests: Arc<Mutex<HashMap<EvmH256, RequestScopeMetadata>>>,
+    // kaspa-pq EVM Lane §14.2 / §9.2: pending EVM deposit-claim gossip state.
+    // Identity is the deposit-lock outpoint (one claim per lock); same low-priority
+    // profile as the EVM-tx spread.
+    evm_deposit_claims_spread: AsyncRwLock<EvmDepositClaimsSpread>,
+    shared_evm_deposit_claim_requests: Arc<Mutex<HashMap<TransactionOutpoint, RequestScopeMetadata>>>,
     is_ibd_running: Arc<AtomicBool>,
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
     pub address_manager: Arc<Mutex<AddressManager>>,
@@ -344,6 +351,8 @@ impl FlowContext {
                 shared_transaction_requests: Arc::new(Mutex::new(HashMap::new())),
                 evm_transactions_spread: AsyncRwLock::new(EvmTransactionsSpread::new(hub.clone())),
                 shared_evm_transaction_requests: Arc::new(Mutex::new(HashMap::new())),
+                evm_deposit_claims_spread: AsyncRwLock::new(EvmDepositClaimsSpread::new(hub.clone())),
+                shared_evm_deposit_claim_requests: Arc::new(Mutex::new(HashMap::new())),
                 is_ibd_running: Default::default(),
                 ibd_metadata: Default::default(),
                 hub,
@@ -469,6 +478,12 @@ impl FlowContext {
     /// as UTXO tx requests; `EvmH256` is `Hash + Eq + Copy` like the other keys).
     pub fn try_adding_evm_transaction_request(&self, req: EvmH256) -> Option<RequestScope<EvmH256>> {
         Self::try_adding_request_impl(req, &self.shared_evm_transaction_requests)
+    }
+
+    /// §14.2: cross-peer dedup for pending EVM deposit-claim requests. The claim's
+    /// identity is its deposit-lock `TransactionOutpoint` (`Hash + Eq + Copy`).
+    pub fn try_adding_evm_deposit_claim_request(&self, req: TransactionOutpoint) -> Option<RequestScope<TransactionOutpoint>> {
+        Self::try_adding_request_impl(req, &self.shared_evm_deposit_claim_requests)
     }
 
     pub async fn add_orphan(&self, consensus: &ConsensusProxy, orphan_block: Block) -> Option<OrphanOutput> {
@@ -601,6 +616,8 @@ impl FlowContext {
         // low-rate submitter's burst tail would linger unsent until its next
         // submit; this flushes anything whose batch interval has elapsed.
         self.evm_transactions_spread.write().await.flush_due().await;
+        // §14.2: pump the deposit-claim relay spread on the same cadence.
+        self.evm_deposit_claims_spread.write().await.flush_due().await;
 
         if self.should_run_mempool_scanning_task().await {
             // Spawn a task executing the removal of expired low priority transactions and, if time has come too,
@@ -750,6 +767,26 @@ impl FlowContext {
         let hash = self.mining_manager().clone().submit_evm_transaction(raw)?;
         self.broadcast_evm_transactions(once(hash)).await;
         Ok(hash)
+    }
+
+    /// §14.2 / §9.2: queue deposit-lock outpoints for claim-inv broadcast to
+    /// EVM-relay-capable (protocol ≥ 101) peers. Same low-priority profile as the
+    /// EVM-tx spread.
+    pub async fn broadcast_evm_deposit_claims<I: IntoIterator<Item = TransactionOutpoint>>(&self, outpoints: I) {
+        self.evm_deposit_claims_spread.write().await.broadcast_evm_deposit_claims(outpoints).await
+    }
+
+    /// Queues an rpc-submitted (pre-validated) deposit claim into the local claim
+    /// queue and, on success, gossips its lock outpoint for P2P relay (§14.2) so
+    /// it reaches the dominant selected-chain producer regardless of which node
+    /// the depositor submitted to. Returns `false` only when the queue is full.
+    pub async fn submit_rpc_evm_deposit_claim(&self, claim: DepositClaim) -> bool {
+        let outpoint = claim.deposit_outpoint;
+        let queued = self.mining_manager().clone().submit_evm_deposit_claim(claim);
+        if queued {
+            self.broadcast_evm_deposit_claims(once(outpoint)).await;
+        }
+        queued
     }
 }
 

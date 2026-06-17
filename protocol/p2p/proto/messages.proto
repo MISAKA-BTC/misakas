@@ -63,6 +63,11 @@ message KaspadMessage {
     PruningPointEvmStateMessage pruningPointEvmState = 64;
     RequestPruningPointOverlaySnapshotMessage requestPruningPointOverlaySnapshot = 65;
     PruningPointOverlaySnapshotMessage pruningPointOverlaySnapshot = 66;
+    // kaspa-pq EVM Lane v0.4 (§14.2): pending EVM deposit-claim relay (protocol ≥ 101).
+    InvEvmDepositClaimsMessage invEvmDepositClaims = 67;
+    RequestEvmDepositClaimsMessage requestEvmDepositClaims = 68;
+    EvmDepositClaimMessage evmDepositClaim = 69;
+    EvmDepositClaimNotFoundMessage evmDepositClaimNotFound = 70;
   }
 }
 
