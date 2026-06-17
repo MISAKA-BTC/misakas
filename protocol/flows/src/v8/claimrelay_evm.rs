@@ -1,5 +1,5 @@
 //! kaspa-pq EVM Lane v0.4 (§14.2 / §9.2): pending EVM deposit-claim relay flows
-//! (protocol ≥ 101). Sibling of [`super::txrelay_evm`] (inv → request → claim/
+//! (protocol ≥ 102). Sibling of [`super::txrelay_evm`] (inv → request → claim/
 //! not-found), with the claim-specific rules:
 //!
 //! - A claim's identity is its deposit-lock [`TransactionOutpoint`], NOT a hash.

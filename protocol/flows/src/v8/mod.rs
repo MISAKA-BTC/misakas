@@ -17,7 +17,7 @@ pub(crate) mod request_pruning_point_snapshots;
 pub(crate) mod claimrelay_evm;
 pub(crate) mod txrelay_evm;
 use crate::{
-    flow_context::{FlowContext, PROTOCOL_VERSION_EVM_RELAY},
+    flow_context::{FlowContext, PROTOCOL_VERSION_CLAIM_RELAY, PROTOCOL_VERSION_EVM_RELAY},
     flow_trait::Flow,
 };
 use claimrelay_evm::{RelayEvmDepositClaimsFlow, RequestedEvmDepositClaimsFlow};
@@ -184,8 +184,15 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             router.clone(),
             router.subscribe(vec![KaspadMessagePayloadType::RequestEvmTransactions]),
         )));
-        // kaspa-pq EVM Lane §14.2 / §9.2: deposit-claim relay rides the same
-        // EVM-relay-capable (≥101) peer set as the EVM-tx relay above.
+    }
+
+    // kaspa-pq EVM Lane §14.2 / §9.2: deposit-claim relay (oneof 67-70) is a
+    // SEPARATE, HIGHER protocol gate (≥102) than the EVM-tx relay (≥101). A 101
+    // peer (EVM-tx relay only) has no route for the claim message types, so we
+    // must NOT register claim routes for it nor send it a claim inv (the spread
+    // also filters claim gossip to ≥102) — otherwise an unroutable payload type
+    // would disconnect it.
+    if protocol_version >= PROTOCOL_VERSION_CLAIM_RELAY {
         flows.push(Box::new(RelayEvmDepositClaimsFlow::new(
             ctx.clone(),
             router.clone(),

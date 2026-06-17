@@ -69,15 +69,21 @@ use uuid::Uuid;
 // so that any handshake with a mainline Kaspa peer fails the version check
 // immediately. See docs/adr/0001-network-isolation.md.
 //
-// 101 (EVM Lane §14.2) adds the pending-EVM-tx relay messages. 100 peers are
-// still fully served (they negotiate the same flow set minus the EVM relay
-// flows), but must never be sent an EVM message: routing an unknown payload
-// type disconnects the peer, so all EVM gossip is version-filtered.
-const PROTOCOL_VERSION: u32 = 101;
+// 101 (EVM Lane §14.2) adds the pending-EVM-tx relay messages; 102 adds the EVM
+// deposit-claim relay messages (oneof 67-70). Lower-version peers are still fully
+// served (they negotiate the same flow set minus the newer relay flows), but must
+// never be sent a message they have no route for — routing an unknown payload type
+// disconnects the peer, so all EVM gossip is version-filtered to the exact peer set
+// that understands it (EVM-tx ≥101, deposit-claim ≥102).
+const PROTOCOL_VERSION: u32 = 102;
 /// The last protocol version WITHOUT the EVM relay messages (still accepted).
 const PROTOCOL_VERSION_NO_EVM_RELAY: u32 = 100;
-/// The minimum protocol version that understands the EVM relay messages.
+/// The minimum protocol version that understands the EVM-tx relay messages.
 pub(crate) const PROTOCOL_VERSION_EVM_RELAY: u32 = 101;
+/// The minimum protocol version that understands the EVM deposit-claim relay
+/// messages. 101 peers (EVM-tx relay only) and older must NEVER be sent a claim
+/// message (unroutable → disconnect), so claim gossip is filtered to >= this.
+pub(crate) const PROTOCOL_VERSION_CLAIM_RELAY: u32 = 102;
 
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
@@ -835,6 +841,13 @@ impl ConnectionInitializer for FlowContext {
         // Register all flows according to version
         let (flows, applied_protocol_version) = match peer_version.protocol_version {
             v if v >= PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            // §14.2 back-compat: an EVM-tx-relay (101) peer that predates the
+            // deposit-claim relay. Register the 101 flow set (EVM-tx relay, NO
+            // claim relay) — claim messages (oneof 67-70) are version-filtered to
+            // >= 102, so we never send one to a 101 peer (unroutable → disconnect).
+            PROTOCOL_VERSION_EVM_RELAY => {
+                (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_EVM_RELAY), PROTOCOL_VERSION_EVM_RELAY)
+            }
             // §14.2 back-compat: pre-EVM-relay kaspa-pq binaries. Same flow set
             // minus the EVM relay flows; all EVM gossip towards such peers is
             // version-filtered (an unroutable payload type disconnects them).

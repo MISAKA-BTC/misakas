@@ -6,11 +6,12 @@
 //!
 //! A claim's identity is its deposit-lock [`TransactionOutpoint`] (NOT a hash),
 //! so the inv carries `Outpoint`s. Invs are only sent to peers that negotiated
-//! protocol ≥ 101 (the EVM-relay-capable peer set); older peers have no route
+//! protocol ≥ 102 (the deposit-claim-relay-capable peer set); older peers (incl.
+//! 101 EVM-tx-relay-only) have no route
 //! for the claim message types and routing an unknown type disconnects them.
 
 use super::process_queue::ProcessQueue;
-use crate::flow_context::PROTOCOL_VERSION_EVM_RELAY;
+use crate::flow_context::PROTOCOL_VERSION_CLAIM_RELAY;
 use itertools::Itertools;
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_core::debug;
@@ -68,7 +69,7 @@ impl EvmDepositClaimsSpread {
                 self.claim_outpoints.dequeue_chunk(MAX_INV_PER_EVM_DEPOSIT_CLAIM_INV_MSG).map(|o| (&o).into()).collect_vec();
             debug!("EVM deposit-claim propagation: broadcasting {} claims", outpoints.len());
             let msg = make_message!(Payload::InvEvmDepositClaims, InvEvmDepositClaimsMessage { outpoints });
-            self.hub.broadcast_to_peers_with_min_version(msg, PROTOCOL_VERSION_EVM_RELAY).await;
+            self.hub.broadcast_to_peers_with_min_version(msg, PROTOCOL_VERSION_CLAIM_RELAY).await;
         }
         self.last_broadcast_time = Instant::now();
     }
