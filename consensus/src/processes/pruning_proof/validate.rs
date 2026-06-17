@@ -187,14 +187,17 @@ impl ProofContext {
                 proof[level as usize].first().map(|header| header.hash).ok_or(PruningImportError::PruningProofNotEnoughHeaders)?;
             for (i, header) in proof[level as usize].iter().enumerate() {
                 let (header_level, pow_passes) = calc_block_level_check_pow_layer0(header, &ppm.network_id, ppm.max_block_level);
-                // audit H-02(b) / ADR-0007 Phase 3: reject a proof header carrying an UNKNOWN
-                // pow_algo_id. kHeavyHash (1), Argon2id (2) and BLAKE2b-SHA3 (3) are all accepted here
-                // because the header's PoW is independently verified above
-                // (`calc_block_level_check_pow_layer0` runs the declared algo); the exact
-                // per-network/per-DAA algo rule is enforced by the main header pipeline
-                // (`check_pow_algo_id`).
-                if kaspa_consensus_core::pow_layer0::check_algo_id_known(header.pow_algo_id).is_err() {
-                    return Err(PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id));
+                // audit POW-01 / ADR-0007 Phase 3: enforce the SAME per-DAA required-algo rule the
+                // main header pipeline applies (`check_pow_algo_id`), not merely "any known algo".
+                // Proof-only headers below the pruning point are NOT re-processed by the main
+                // pipeline, so the looser `check_algo_id_known` would let an algo the network does
+                // not mandate at that DAA into the proof. Genesis is exempt (parentless trusted
+                // root; its PoW is never validated and it may carry any id) — mirrors the pipeline.
+                if !header.direct_parents().is_empty() {
+                    let blake2b_sha3_active = ppm.pow_blake2b_sha3_activation.is_active(header.daa_score);
+                    if kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, blake2b_sha3_active).is_err() {
+                        return Err(PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id));
+                    }
                 }
                 if header_level < level {
                     return Err(PruningImportError::PruningProofWrongBlockLevel(header.hash, header_level, level));

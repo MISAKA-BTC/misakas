@@ -140,6 +140,12 @@ impl Address {
         }
 
         let payload_u8 = conv5to8(payload_u5);
-        Ok(Self::new(prefix, payload_u8[0].try_into()?, payload_u8[1..].into()))
+        // audit IDENT-01: the checksum is a public algorithm, so an attacker can
+        // craft a checksum-valid string whose decoded payload is EMPTY (version
+        // byte absent) or the wrong length for the version. Validate before
+        // constructing — `first()` guards the empty case, `try_new` the length —
+        // so a malformed address is `Err`, never an index/assert panic.
+        let version_byte = *payload_u8.first().ok_or(AddressError::BadPayload)?;
+        Self::try_new(prefix, version_byte.try_into()?, &payload_u8[1..])
     }
 }

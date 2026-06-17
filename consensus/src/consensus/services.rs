@@ -186,6 +186,7 @@ impl ConsensusServices {
             params.anticone_finalization_depth(),
             params.ghostdag_k(),
             params.skip_proof_of_work,
+            params.pow_blake2b_sha3_activation,
             is_consensus_exiting,
         ));
 

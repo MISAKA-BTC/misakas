@@ -120,6 +120,10 @@ pub struct PruningProofManager {
     anticone_finalization_depth: u64,
     ghostdag_k: KType,
     skip_proof_of_work: bool,
+    /// audit POW-01: BLAKE2b-SHA3 (ADR-0007 Phase 3) activation, so the
+    /// pruning-proof path enforces the SAME per-DAA required-algo rule as the main
+    /// header pipeline (`check_pow_algo_id`) — not merely "any known algo id".
+    pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -141,6 +145,7 @@ impl PruningProofManager {
         anticone_finalization_depth: u64,
         ghostdag_k: KType,
         skip_proof_of_work: bool,
+        pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -176,6 +181,7 @@ impl PruningProofManager {
             anticone_finalization_depth,
             ghostdag_k,
             skip_proof_of_work,
+            pow_blake2b_sha3_activation,
 
             is_consensus_exiting,
         }
