@@ -302,7 +302,7 @@ UTXO_balances + EVM_deposit_locks + EVM_native_balances + burned == issued
 ### 9.2 Deposit(2 段階、v0.2 から不変)
 
 1. **Lock:** user が UTXO レーンで `EVM_DEPOSIT_LOCK` output(subnet `0x20`、`ScriptClass::EvmDepositLock`)を作る。lock は宛先 `EvmAddress`・`timeout_daa_score`・`claim_tip_sompi`(claim 包含インセンティブ、AH-1)を持つ。
-2. **Claim:** producer が `DepositClaim` system op を自 block B の payload に入れる。claim は **selected_parent(B) の UTXO view** で検証される(同一 block 内の lock は claim 不可)。成功時 `amount_sompi × EVM_NATIVE_SCALE` を宛先に credit し、lock UTXO を B の per-block UTXO diff で消込む。
+2. **Claim:** producer が `DepositClaim` system op を自 block B の payload に入れる。claim は **selected_parent(B) の UTXO view** で検証される(同一 block 内の lock は claim 不可)。成功時、宛先 `evm_address` に `(amount_sompi − claim_tip_sompi) × EVM_NATIVE_SCALE` を credit し、`claim_tip_sompi × EVM_NATIVE_SCALE` を accepting block B の `evm_coinbase` に credit する(AH-1 の包含インセンティブ分割、供給中立)。lock UTXO は B の per-block UTXO diff で消込む。consensus は作成時に `claim_tip_sompi ≤ value` を強制する(監査 F3: claim 不能な lock の発行を拒否)。
 3. **Refund:** timeout 経過後は user が lock を通常 spend で回収できる。**排他ウィンドウ(監査 AC-2): claim valid iff accepting_block_daa_score < timeout_daa_score**。claim と refund が同時有効になる DAA 領域は存在しない。
 
 有界性: claim 数 ≤ `MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK`(256)、bytes ≤ 64 KiB、system gas ≤ `MAX_SYSTEM_GAS_PER_EVM_BLOCK`(10M、@25,000 gas/claim)。違反は §6.2-(2) の失格。

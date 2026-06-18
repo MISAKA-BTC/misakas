@@ -5,7 +5,7 @@
 //! block-body [`EvmExecutionPayload`] (bounded system ops + EIP-2718 user txs),
 //! the executor-output [`EvmExecutionHeader`] (whose keyed BLAKE2b-512 digest
 //! becomes `Header::evm_commitment_root`), the UTXO↔EVM op types
-//! ([`EvmSystemOp`]/[`DepositClaim`]/[`WithdrawOp`]/[`EvmDepositLockOutput`]),
+//! ([`EvmSystemOp`]/[`DepositClaim`]/[`WithdrawOp`]),
 //! and the small EVM-domain newtypes ([`EvmAddress`], [`EvmBloom`],
 //! [`EvmU256`]). The executor itself (revm) lands in the `kaspa-evm` crate
 //! behind the `evm` cargo feature; nothing here pulls revm or secp256k1.
@@ -164,23 +164,47 @@ pub const MAX_WITHDRAW_SCRIPT_BYTES: usize = 128;
 /// B's own UTXO diff. Keyed under the FROZEN
 /// [`MISAKA_EVM_SYNTHETIC_OUTPOINT_CONTEXT`] domain — deliberately separate
 /// from the real transaction-id domain so a synthetic outpoint can never
-/// collide with a real txid. Preimage (fixed-width, frozen byte order):
-/// `evm_tx_hash(32) ‖ op_index(4 LE)`.
+/// collide with a real txid. Preimage (frozen byte order):
+/// `evm_tx_hash(32) ‖ op_index(4 LE) ‖ from(20) ‖ amount_sompi(8 LE)
+///  ‖ spk_version(2 LE) ‖ script_len(4 LE) ‖ script(script_len)`.
 ///
 /// Keyed by the WITHDRAWING EVM TX's keccak256 hash — NOT the accepting block
 /// hash. The block hash includes the nonce and `utxo_commitment`, and the
 /// synthetic output is itself part of `utxo_commitment`: a block-hash key is
 /// CIRCULAR — the producer could never compute its own commitment before
 /// mining (found live: the first real withdraw-bearing template self-
-/// disqualified). The tx-hash key is pre-mining-stable and sound: a given EVM
-/// tx executes at most once per chain history (the nonce/class-3 rule), and
-/// its withdraw `(from, script, amount)` is fixed by the SIGNED tx itself, so
-/// even cross-branch re-executions materialize the identical output under the
-/// identical outpoint — exactly like a real txid.
-pub fn synthetic_withdrawal_txid(evm_tx_hash: EvmH256, op_index: u32) -> Hash64 {
-    let mut preimage = [0u8; 32 + 4];
-    preimage[..32].copy_from_slice(&evm_tx_hash.as_bytes());
-    preimage[32..36].copy_from_slice(&op_index.to_le_bytes());
+/// disqualified). The tx-hash key is pre-mining-stable.
+///
+/// The preimage ALSO binds the full materialized content `(from, amount_sompi,
+/// destination script)` — not just `evm_tx_hash ‖ op_index`. The earlier
+/// "withdraw content is fixed by the SIGNED tx itself" assumption holds only
+/// for a top-level `EOA → F002` call; F002 is also reachable via an INNER
+/// contract `CALL` (the intercept matches any frame targeting F002), so a
+/// single signed tx routed through a contract can withdraw a branch-dependent
+/// `(amount, script)` (the contract may read `NUMBER`/`TIMESTAMP`/`COINBASE`/
+/// `PREVRANDAO`/`BASEFEE` or selected-parent state, all of which differ per
+/// accepting block). The same tx can be accepted in more than one chain block
+/// (`EvmTxLocations.accepted_in` allows side branches), so without binding the
+/// content two acceptances would share an outpoint but carry DIFFERENT UTXO
+/// content — corrupting reorg / mempool / indexer / descendant-spend semantics.
+/// Content-addressing makes identical withdraws share an outpoint (as a real
+/// txid would) while divergent ones can never collide. (Audit F1.)
+pub fn synthetic_withdrawal_txid(
+    evm_tx_hash: EvmH256,
+    op_index: u32,
+    from: EvmAddress,
+    amount_sompi: u64,
+    script_public_key: &ScriptPublicKey,
+) -> Hash64 {
+    let script = script_public_key.script();
+    let mut preimage = Vec::with_capacity(32 + 4 + EVM_ADDRESS_SIZE + 8 + 2 + 4 + script.len());
+    preimage.extend_from_slice(&evm_tx_hash.as_bytes());
+    preimage.extend_from_slice(&op_index.to_le_bytes());
+    preimage.extend_from_slice(&from.as_bytes()); // bind the debited EVM account
+    preimage.extend_from_slice(&amount_sompi.to_le_bytes()); // bind the paid-out amount
+    preimage.extend_from_slice(&script_public_key.version().to_le_bytes()); // bind the destination spk version
+    preimage.extend_from_slice(&(script.len() as u32).to_le_bytes()); // length-prefix the variable-length script (no ambiguity)
+    preimage.extend_from_slice(script); // bind the destination script bytes
     blake2b_512_keyed(MISAKA_EVM_SYNTHETIC_OUTPOINT_CONTEXT, &preimage)
 }
 
@@ -473,22 +497,11 @@ pub struct WithdrawOp {
 
 impl MemSizeEstimator for WithdrawOp {}
 
-/// The `EVM_DEPOSIT_LOCK` UTXO output payload (design §7.2). Created by a
-/// `DepositLockTx` on the UTXO layer; later claimed via [`DepositClaim`] or, if
-/// `timeout_daa_score` elapses unclaimed, refunded to `refund_script_public_key`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EvmDepositLockOutput {
-    pub value_sompi: u64,
-    pub evm_address: EvmAddress,
-    pub refund_script_public_key: ScriptPublicKey,
-    pub timeout_daa_score: Option<u64>,
-    /// The claim-inclusion incentive the depositor offers (audit AH-1): paid to
-    /// the accepting block's `evm_coinbase` when the lock is claimed.
-    pub claim_tip_sompi: u64,
-}
-
-impl MemSizeEstimator for EvmDepositLockOutput {}
+// The `EVM_DEPOSIT_LOCK` UTXO output is represented on the wire by the raw-`u64`
+// script encoding parsed into `kaspa_txscript::script_class::EvmDepositLockFields`
+// (timeout uses `u64::MAX` = never refundable). A separate in-memory mirror struct
+// here previously diverged (an `Option<u64>` timeout) and was never constructed,
+// serialized, or read — removed (audit INFO-a) to keep one representation.
 
 // ---------------------------------------------------------------------------
 // EvmExecutionPayload — the block-body EVM unit (design §3.1).

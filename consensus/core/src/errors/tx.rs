@@ -130,6 +130,15 @@ pub enum TxRuleError {
     /// lock is exclusively claimable by a `DepositClaim` system op.
     #[error("transaction input #{0} refunds an EVM deposit lock too early (pov daa {1} < timeout {2})")]
     EvmDepositLockNotRefundableYet(usize, u64, u64),
+
+    /// kaspa-pq EVM Lane v0.4 §9.2 (audit F3): an `EVM_DEPOSIT_LOCK` output
+    /// declared a `claim_tip` greater than its own value. The claim path rejects
+    /// `claim_tip > amount`, so such a lock could never be claimed — it would
+    /// only strand value until the refund window (permanent if `timeout =
+    /// u64::MAX`). Rejected at creation so consensus never mints an unclaimable
+    /// "bridge deposit".
+    #[error("transaction output #{0} is an unclaimable EVM deposit lock (claim_tip {1} > value {2})")]
+    EvmDepositLockTipExceedsValue(usize, u64, u64),
 }
 
 pub type TxResult<T> = std::result::Result<T, TxRuleError>;

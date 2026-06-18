@@ -513,6 +513,17 @@ async fn deposit_lock(args: DepositLockArgs) -> Result<(), String> {
     let prefix = prefix_for(server.network_id.network_type);
     let funding_addr = key.funding_address(prefix);
     let params = Params::from(server.network_id);
+    // Audit F4: refuse to create a deposit-lock on a network where the EVM lane is inert
+    // (mainnet/simnet, or before activation). The claim path can never run there, so such a lock
+    // could only be REFUNDED after its timeout (and a near-u64::MAX timeout would strand the funds
+    // effectively forever). This is a CLI-side guard only — non-consensus, and the refund path
+    // itself stays open so any lock that does exist remains recoverable.
+    if !params.is_evm_active(server.virtual_daa_score) {
+        return Err(format!(
+            "EVM lane is not active on '{node_network}' (evm_activation_daa_score not reached; mainnet/simnet are inert) — \
+             a deposit-lock here could only be refunded after the timeout, never claimed. Refusing to create it."
+        ));
+    }
     let mass_calc = MassCalculator::new(
         params.mass_per_tx_byte,
         params.mass_per_script_pub_key_byte,
@@ -820,6 +831,16 @@ struct Attestor {
     /// fallback never re-selects one. Pruned each tick to those the node still lists (mined-spent
     /// ones drop out), so it self-heals and stays tiny (≈ the few epochs still in the mempool).
     inflight_spent: HashSet<TransactionOutpoint>,
+    /// kaspa-pq DNS-v3 hardening (Fix B): the epoch whose attestation produced the current
+    /// `pending_change` chain head. `None` when there is no in-flight chain. Used to count
+    /// distinct epochs the head has gone unconfirmed.
+    chain_head_epoch: Option<u64>,
+    /// kaspa-pq DNS-v3 hardening (Fix B): consecutive served epochs the funding-chain head has
+    /// failed to confirm. Reset to 0 whenever the head confirms (node-set resync clears
+    /// `pending_change`) or we abandon the chain and re-fund from a confirmed node UTXO. When it
+    /// reaches `N_STALL_EPOCHS` the chain is abandoned, breaking a stuck cascade that would
+    /// otherwise never self-recover (the live-testnet dnsConfirmed-stall root cause).
+    stalled_epochs: u64,
 }
 
 impl Attestor {
@@ -846,6 +867,8 @@ impl Attestor {
             last_attested_epoch: None,
             pending_change: None,
             inflight_spent: HashSet::new(),
+            chain_head_epoch: None,
+            stalled_epochs: 0,
         }))
     }
 
@@ -933,6 +956,41 @@ impl Attestor {
                 self.pending_change = None;
             }
         }
+        // kaspa-pq DNS-v3 hardening (Fix B — stuck-chain recovery): if the head did NOT just confirm
+        // (pending_change still set), count distinct served epochs it has stalled. After
+        // N_STALL_EPOCHS, abandon the unconfirmed chain so select_funding falls back to a CONFIRMED
+        // node UTXO — breaking a cascade that otherwise never self-recovers (before this, only a
+        // process restart cleared it; that was the live-testnet dnsConfirmed-stall root cause).
+        // Catches every stall mode: §B.4 ineligibility, a reorg-dropped parent, mempool eviction, a
+        // too-low fee under congestion. The Fix-A start-gate prevents the §B.4 mode up front; this
+        // is the belt-and-suspenders that recovers from the rest.
+        const N_STALL_EPOCHS: u64 = 3;
+        if self.pending_change.is_some() {
+            // attest() runs at most once per distinct epoch (the run loop short-circuits repeats via
+            // last_attested_epoch), so a changed target.epoch means another whole epoch elapsed
+            // without the head confirming.
+            if self.chain_head_epoch != Some(target.epoch) {
+                self.stalled_epochs = self.stalled_epochs.saturating_add(1);
+            }
+            if self.stalled_epochs >= N_STALL_EPOCHS {
+                warn!(
+                    "[{VALIDATOR}] funding-chain head unmined for {} epochs (now epoch {}); abandoning the unconfirmed chain and re-funding from a confirmed UTXO",
+                    self.stalled_epochs, target.epoch
+                );
+                // Drop ONLY the chain head. Do NOT clear inflight_spent: the stalled tx still holds
+                // its funding outpoint spent-in-mempool, but the node's utxoindex (accepted set, no
+                // mempool subtraction — see the comment above) keeps LISTING that outpoint, so
+                // re-picking it would just RejectDoubleSpendInMempool and stall again. Keeping the
+                // exclusion forces select_funding onto a DIFFERENT mature node UTXO = real recovery;
+                // the retain above self-heals inflight_spent once the stalled tx mines or expires.
+                self.pending_change = None;
+                self.stalled_epochs = 0;
+                self.chain_head_epoch = None;
+            }
+        } else {
+            // Head confirmed (resync cleared it) or no chain yet → healthy.
+            self.stalled_epochs = 0;
+        }
         let (funding_outpoint, funding_entry) =
             select_funding(&self.pending_change, &self.inflight_spent, node_utxos, fee, virtual_daa, self.coinbase_maturity)?;
 
@@ -954,6 +1012,9 @@ impl Attestor {
                 let change =
                     UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
                 self.pending_change = Some((TransactionOutpoint::new(tx.id(), 0), change));
+                // kaspa-pq DNS-v3 hardening (Fix B): record which epoch produced this chain head so
+                // the stall counter advances once per unconfirmed epoch.
+                self.chain_head_epoch = Some(target.epoch);
                 Ok(())
             }
             Err(e) => {
@@ -1026,6 +1087,20 @@ async fn run_loop(client: &KaspaRpcClient, args: &RunArgs, mut attestor: Option<
                     .get_validator_attestation_target(GetValidatorAttestationTargetRequest { bond_outpoint: bond.to_owned() })
                     .await
                 {
+                    // kaspa-pq DNS-v3 hardening (Fix A — anchor-deep start-gate): never attest an
+                    // epoch whose canonical lagged anchor predates the bond's activation. The
+                    // consensus §B.4 rule (attestation_reward_eligibility → active_bond_at(..,
+                    // target_daa_score)) makes ANY block that includes such a shard INVALID, so the
+                    // shard would submit-OK but never be mined. On a young chain (e.g. right after a
+                    // re-genesis) the lagged anchor can sit below the bond's activation_daa_score for
+                    // the first epochs; attesting then would stall the whole funding chain (see Fix B).
+                    // Gate until the served target is at/after activation — the exact §B.4 condition.
+                    Ok(t) if t.available && t.target_daa_score < bond_resp.activation_daa_score => {
+                        info!(
+                            "[{VALIDATOR}] status=ActiveBelowActivation epoch={} target_daa={} < activation_daa={} (gating until bond is anchor-deep)",
+                            t.epoch, t.target_daa_score, bond_resp.activation_daa_score
+                        );
+                    }
                     Ok(t) if t.available => match &mut attestor {
                         // Already attested this epoch this run: a short --attest-poll-secs revisits the
                         // same canonical-ready epoch until it advances; skip cheaply (no re-sign / no

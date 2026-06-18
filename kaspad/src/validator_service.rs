@@ -373,7 +373,24 @@ impl ValidatorService {
                     // Eligible: fund + sign + (in Active mode) submit each ready epoch's
                     // attestation shard tx, under the per-epoch equivocation guard.
                     if let (Some(key), Some(outpoint)) = (&self.key, self.bond_outpoint) {
+                        // kaspa-pq DNS-v3 hardening (Fix A — anchor-deep start-gate): skip any epoch
+                        // whose canonical lagged anchor predates the bond's activation. The consensus
+                        // §B.4 rule (attestation_reward_eligibility → active_bond_at(.., target_daa_score))
+                        // makes ANY block including such a shard INVALID, so it would submit-OK but never
+                        // mine and would stall the funding chain on a young chain (e.g. just after a
+                        // re-genesis). Gate on the exact §B.4 condition. (The standalone validator also
+                        // carries an epoch-counted stuck-chain recovery; that detector is not portable
+                        // here because the catch-up loop legitimately chains many epochs per heartbeat —
+                        // this start-gate removes the §B.4 stall mode that was the observed root cause.)
+                        let activation = bond.as_ref().map(|b| b.activation_daa_score).unwrap_or(u64::MAX);
                         for target in &attestation_targets {
+                            if target.target_daa_score < activation {
+                                trace!(
+                                    "[{VALIDATOR}] gating epoch {} target_daa={} < activation_daa={} (bond not anchor-deep yet)",
+                                    target.epoch, target.target_daa_score, activation
+                                );
+                                continue;
+                            }
                             self.try_attest(target, key, outpoint).await;
                         }
                     }

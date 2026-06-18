@@ -148,10 +148,36 @@ impl EvmMempool {
     /// Queue a pre-resolved + pre-validated deposit claim (§9.2). Dedup is by
     /// the claimed lock outpoint (one claim per lock); a re-submit replaces the
     /// queued claim (idempotent — the fields are derived from the same lock).
-    /// Returns `false` (no insert) only when the queue is full of OTHER claims.
+    /// Audit F6: when the queue is full of OTHER claims, a strictly higher-paying
+    /// newcomer DISPLACES the lowest-`claim_tip` queued claim (no churn on ties),
+    /// rather than being rejected — so a high-tip claim is never crowded out by
+    /// low-tip claims that merely arrived first. Returns `false` only when the
+    /// queue is full and the newcomer does not out-pay the cheapest queued claim.
     pub fn insert_claim(&mut self, claim: DepositClaim) -> bool {
-        if self.claims.len() >= EVM_MEMPOOL_MAX_CLAIMS && !self.claims.contains_key(&claim.deposit_outpoint) {
-            return false;
+        // Idempotent re-submit / dedup by lock outpoint (never counts against the cap).
+        if self.claims.contains_key(&claim.deposit_outpoint) {
+            self.claims.insert(claim.deposit_outpoint, claim);
+            return true;
+        }
+        if self.claims.len() >= EVM_MEMPOOL_MAX_CLAIMS {
+            // Find the lowest-priority queued claim (tip asc, then deterministic outpoint).
+            let victim = self
+                .claims
+                .values()
+                .min_by(|a, b| {
+                    a.claim_tip_sompi
+                        .cmp(&b.claim_tip_sompi)
+                        .then_with(|| a.deposit_outpoint.transaction_id.cmp(&b.deposit_outpoint.transaction_id))
+                        .then_with(|| a.deposit_outpoint.index.cmp(&b.deposit_outpoint.index))
+                })
+                .map(|c| (c.deposit_outpoint, c.claim_tip_sompi));
+            match victim {
+                // Only displace for a strictly higher-paying newcomer (avoids ping-pong on ties).
+                Some((victim_op, victim_tip)) if claim.claim_tip_sompi > victim_tip => {
+                    self.claims.remove(&victim_op);
+                }
+                _ => return false,
+            }
         }
         self.claims.insert(claim.deposit_outpoint, claim);
         true
@@ -162,14 +188,22 @@ impl EvmMempool {
         self.claims.remove(outpoint)
     }
 
-    /// Select up to `max` queued claims for the own-payload `system_ops`,
-    /// sorted by `(txid, index)` for a deterministic order. The VSP template
-    /// path re-validates each against the live selected-parent claim view and
-    /// drops any that went stale, so this is an over-approximation — selecting
-    /// a since-spent lock is harmless (it is filtered before the payload is built).
+    /// Select up to `max` queued claims for the own-payload `system_ops`. Audit F6:
+    /// ordered by `claim_tip_sompi` DESCENDING (the inclusion incentive — credited to
+    /// the accepting block's `evm_coinbase`), with a deterministic `(txid, index)`
+    /// tiebreak so all producers agree. The VSP template path re-validates each against
+    /// the live selected-parent claim view and drops any that went stale, so this is an
+    /// over-approximation AND pure local template policy — selecting a since-spent lock
+    /// is harmless (filtered before the payload is built) and the order can never make
+    /// the node's own block invalid; it only maximizes bridge revenue + claim latency.
     pub fn select_claims(&self, max: usize) -> Vec<DepositClaim> {
         let mut claims: Vec<DepositClaim> = self.claims.values().cloned().collect();
-        claims.sort_by_key(|c| (c.deposit_outpoint.transaction_id, c.deposit_outpoint.index));
+        claims.sort_by(|a, b| {
+            b.claim_tip_sompi
+                .cmp(&a.claim_tip_sompi)
+                .then_with(|| a.deposit_outpoint.transaction_id.cmp(&b.deposit_outpoint.transaction_id))
+                .then_with(|| a.deposit_outpoint.index.cmp(&b.deposit_outpoint.index))
+        });
         claims.truncate(max);
         claims
     }

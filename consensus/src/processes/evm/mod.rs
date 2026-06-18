@@ -122,10 +122,34 @@ pub fn apply_evm_bridge_effects(
         multiset.remove_utxo(outpoint, entry);
     }
     for w in withdrawals {
-        // Keyed by the withdrawing EVM tx's hash (pre-mining-stable) — a
-        // block-hash key would be circular for the PRODUCER, whose own
-        // utxo_commitment must already contain this output before mining.
-        let txid = kaspa_consensus_core::evm::synthetic_withdrawal_txid(w.evm_tx_hash, w.op_index);
+        // Defensive re-assertion (audit F2 — defense in depth): the producer's F002 handler already
+        // ran validate_withdraw before emitting, and the verifier re-executes the EVM, so a valid
+        // WithdrawOp always satisfies these (they can never false-reject). Re-asserting at the
+        // materialization chokepoint means a regression in the executor→WithdrawOp path can never
+        // mint a zero-value or oversized-script synthetic UTXO into the committed set.
+        if w.amount_sompi == 0 {
+            return Err(format!("withdrawal op (evm_tx {:?}, op {}) has zero amount", w.evm_tx_hash, w.op_index));
+        }
+        if w.script_public_key.script().len() > kaspa_consensus_core::evm::MAX_WITHDRAW_SCRIPT_BYTES {
+            return Err(format!(
+                "withdrawal op (evm_tx {:?}, op {}) destination script {} bytes exceeds MAX_WITHDRAW_SCRIPT_BYTES {}",
+                w.evm_tx_hash,
+                w.op_index,
+                w.script_public_key.script().len(),
+                kaspa_consensus_core::evm::MAX_WITHDRAW_SCRIPT_BYTES
+            ));
+        }
+        // Keyed by the withdrawing EVM tx's hash (pre-mining-stable) — a block-hash key would be
+        // circular for the PRODUCER, whose own utxo_commitment must already contain this output
+        // before mining — AND by the full materialized content (from/amount/script) so a
+        // contract-mediated, branch-dependent withdraw can never collide on the outpoint (audit F1).
+        let txid = kaspa_consensus_core::evm::synthetic_withdrawal_txid(
+            w.evm_tx_hash,
+            w.op_index,
+            w.from,
+            w.amount_sompi,
+            &w.script_public_key,
+        );
         let outpoint = kaspa_consensus_core::tx::TransactionOutpoint::new(txid, 0);
         let entry = kaspa_consensus_core::tx::UtxoEntry::new(w.amount_sompi, w.script_public_key.clone(), pov_daa_score, false);
         diff.add_utxo(outpoint, entry.clone()).map_err(|e| format!("materialize withdrawal {outpoint}: {e}"))?;
@@ -724,7 +748,8 @@ mod bridge_tests {
         // Keyed by the WITHDRAWING TX's hash — pre-mining-stable (a block-hash
         // key was circular: the producer's own utxo_commitment must contain
         // this output BEFORE the block hash exists).
-        let expected_txid = kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 1);
+        let expected_txid =
+            kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 1, w.from, w.amount_sompi, &w.script_public_key);
         let synthetic = TransactionOutpoint::new(expected_txid, 0);
         let entry = diff.add.get(&synthetic).expect("the withdrawal materialized at the frozen-domain outpoint");
         assert_eq!(entry.amount, 5);
@@ -733,12 +758,49 @@ mod bridge_tests {
         assert!(!entry.is_coinbase, "synthetic outputs are NOT coinbase (no maturity wait)");
         assert_ne!(multiset.finalize(), baseline.clone().finalize(), "the multiset covers the bridge");
 
-        // Determinism + uniqueness of the synthetic txid.
-        assert_eq!(expected_txid, kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 1));
-        assert_ne!(expected_txid, kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 2));
+        // Determinism: identical content ⇒ identical txid.
+        assert_eq!(
+            expected_txid,
+            kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 1, w.from, w.amount_sompi, &w.script_public_key)
+        );
+        // Uniqueness across op_index and evm tx hash (unchanged from before).
         assert_ne!(
             expected_txid,
-            kaspa_consensus_core::evm::synthetic_withdrawal_txid(kaspa_hashes::EvmH256::from_bytes([8; 32]), 1)
+            kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 2, w.from, w.amount_sompi, &w.script_public_key)
+        );
+        assert_ne!(
+            expected_txid,
+            kaspa_consensus_core::evm::synthetic_withdrawal_txid(
+                kaspa_hashes::EvmH256::from_bytes([8; 32]),
+                1,
+                w.from,
+                w.amount_sompi,
+                &w.script_public_key
+            )
+        );
+        // Audit F1: the SAME (evm_tx_hash, op_index) with DIFFERENT materialized content must yield a
+        // DIFFERENT outpoint — a contract-mediated, branch-dependent withdraw can never collide.
+        assert_ne!(
+            expected_txid,
+            kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 1, w.from, w.amount_sompi + 1, &w.script_public_key),
+            "amount_sompi must bind the outpoint"
+        );
+        assert_ne!(
+            expected_txid,
+            kaspa_consensus_core::evm::synthetic_withdrawal_txid(
+                evm_tx_hash,
+                1,
+                EvmAddress::from_bytes([0xBB; 20]),
+                w.amount_sompi,
+                &w.script_public_key
+            ),
+            "from must bind the outpoint"
+        );
+        let other_spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x43u8; 64]);
+        assert_ne!(
+            expected_txid,
+            kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 1, w.from, w.amount_sompi, &other_spk),
+            "destination script must bind the outpoint"
         );
     }
 }
