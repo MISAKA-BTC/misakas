@@ -13,11 +13,10 @@ use kaspa_consensus_core::{
     BlockLevel,
     hashing,
     header::Header,
-    // PR-9.5d: POW_ALGO_ID_KHEAVYHASH no longer imported here — the
-    // finalizer now reads `header.pow_algo_id` via `State::pow_algo_id`.
     pow_layer0::{
-        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES, PowLayer0Error,
-        argon2id_l1_tag_v1, blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
+        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_FINALIZER_BYTES,
+        POW_L1_BLAKE2B_SHA3_OUT_BYTES, PowLayer0Error, argon2id_l1_tag_v1, blake2b_sha3_l1_tag_v1,
+        l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
     },
 };
 use kaspa_hashes::{Hash64, PowHash};
@@ -159,7 +158,11 @@ pub fn calc_block_level_layer0(header: &Header, network_id: &[u8], max_block_lev
 ///   3. Compare `Uint512::from_le_bytes(pow_512)` against the
 ///      512-bit target.
 pub struct StateLayer0 {
-    pub(crate) matrix: Matrix,
+    /// `Some` ONLY for `POW_ALGO_ID_KHEAVYHASH` — the kHeavyHash L1 tag is the
+    /// sole consumer. algo_id 2 (Argon2id) / 3 (BLAKE2b-SHA3) ignore it, so the
+    /// expensive `Matrix::generate` (a 64×64 rank-64 search) is skipped for them
+    /// (perf: it was being paid per header on the SHA3 chain — IBD/proof bug).
+    pub(crate) matrix: Option<Matrix>,
     pub(crate) target_512: Uint512,
     /// Cached so each `check_pow_layer0` call doesn't re-hash the
     /// header — the only varying input across nonce trials is the
@@ -177,8 +180,9 @@ pub struct StateLayer0 {
     pub(crate) pow_algo_id: u8,
     /// PRE_POW_HASH || TIME || 32 zero byte padding; without NONCE.
     /// Seeded with the derived `l1_seed32` (not the 64-byte pre-PoW
-    /// hash) so the kHeavyHash interface stays 32-byte-input.
-    pub(crate) hasher: PowHash,
+    /// hash) so the kHeavyHash interface stays 32-byte-input. `Some` only for
+    /// `POW_ALGO_ID_KHEAVYHASH` (see `matrix`).
+    pub(crate) hasher: Option<PowHash>,
 }
 
 impl StateLayer0 {
@@ -191,10 +195,19 @@ impl StateLayer0 {
     #[inline]
     pub fn new(header: &Header, network_id: &[u8]) -> Self {
         let pre_pow_hash_64 = hashing::header::pre_pow_hash_64(header);
-        let l1_seed32 = l1_seed32_for_kheavyhash_v1(pre_pow_hash_64);
         let target_512 = Uint512::from_compact_target_bits_512(header.bits);
-        let hasher = PowHash::new(l1_seed32, header.timestamp);
-        let matrix = Matrix::generate(l1_seed32);
+        // Only the kHeavyHash L1 tag (algo_id = 1) consumes the PowHash + Matrix.
+        // algo_id 2 (Argon2id) / 3 (BLAKE2b-SHA3) compute their tag directly from
+        // (pre_pow_hash, nonce), so skip the expensive `Matrix::generate` for them
+        // — it was wrongly paid for every header on the SHA3 chain, slowing IBD
+        // header validation and pruning-proof checks. Consensus output unchanged
+        // (calculate_l1_tag never reads matrix/hasher off the non-kHeavyHash arms).
+        let (hasher, matrix) = if header.pow_algo_id == POW_ALGO_ID_KHEAVYHASH {
+            let l1_seed32 = l1_seed32_for_kheavyhash_v1(pre_pow_hash_64);
+            (Some(PowHash::new(l1_seed32, header.timestamp)), Some(Matrix::generate(l1_seed32)))
+        } else {
+            (None, None)
+        };
 
         Self {
             matrix,
@@ -228,8 +241,12 @@ impl StateLayer0 {
             // Phase 1 (algo_id = 1, kHeavyHash) and the default. Any other id is rejected up-stack
             // by header validation (`check_algo_id`) before PoW is ever computed.
             _ => {
-                let hash = self.hasher.clone().finalize_with_nonce(nonce);
-                buf[..32].copy_from_slice(&self.matrix.heavy_hash(hash).as_bytes());
+                // kHeavyHash (algo_id = 1). new() populates hasher+matrix exactly for this id;
+                // any other id is rejected up-stack by header validation before PoW runs.
+                let hasher = self.hasher.as_ref().expect("kHeavyHash StateLayer0 carries a PowHash");
+                let matrix = self.matrix.as_ref().expect("kHeavyHash StateLayer0 carries a Matrix");
+                let hash = hasher.clone().finalize_with_nonce(nonce);
+                buf[..32].copy_from_slice(&matrix.heavy_hash(hash).as_bytes());
                 32
             }
         }
