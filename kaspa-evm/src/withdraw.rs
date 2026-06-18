@@ -81,35 +81,53 @@ pub fn decode_withdraw_log(log: &revm::primitives::Log) -> Option<DecodedWithdra
     let amount_wei = u128::try_from(amount).ok()?;
     let version = u16::from_be_bytes([data[52], data[53]]);
     let script = data[54..].to_vec();
-    Some(DecodedWithdraw { from, amount_wei, script_public_key: ScriptPublicKey::from_vec(version, script) })
+    let script_public_key = ScriptPublicKey::from_vec(version, script);
+    // Audit F2 (defense in depth): re-assert the withdraw invariants even though the F002 intercept
+    // already validate_withdraw'd before emitting — so a malformed log can NEVER feed the bridge if
+    // a future executor/spec change regresses the emission gate. In-spec logs always pass, so this
+    // never changes behavior on valid data (commitments are byte-identical).
+    withdraw_invariants_hold(amount_wei, &script_public_key).ok()?;
+    Some(DecodedWithdraw { from, amount_wei, script_public_key })
+}
+
+/// The withdraw payout invariants, shared by the emission-time gate
+/// ([`validate_withdraw`]) and the decode-time re-check ([`decode_withdraw_log`]):
+/// the amount is a positive exact sompi multiple that fits `u64`, and the
+/// destination script is within the byte cap AND is the PQ-standard ML-DSA P2PKH
+/// class (so the materialized synthetic UTXO is spendable). Audit F2 — making both
+/// the producer and the verifier re-assert these means a malformed log can never
+/// feed the bridge even if a future executor/spec change regresses the emission gate.
+fn withdraw_invariants_hold(amount_wei: u128, spk: &ScriptPublicKey) -> Result<(), &'static str> {
+    if amount_wei == 0 {
+        return Err("withdraw amount is zero");
+    }
+    if amount_wei % EVM_NATIVE_SCALE as u128 != 0 {
+        return Err("withdraw amount is not an exact sompi multiple");
+    }
+    if amount_wei / EVM_NATIVE_SCALE as u128 > u64::MAX as u128 {
+        return Err("withdraw amount exceeds u64 sompi");
+    }
+    if spk.script().len() > MAX_WITHDRAW_SCRIPT_BYTES {
+        return Err("destination script exceeds the byte cap");
+    }
+    if !ScriptClass::from_script(spk).is_pq_standard() {
+        return Err("destination script is not the PQ-standard ML-DSA P2PKH class");
+    }
+    Ok(())
 }
 
 /// Validate the withdraw user inputs. `Err` = user fault ⇒ the call reverts.
 fn validate_withdraw(input: &[u8], value: U256) -> Result<(u16, Vec<u8>), &'static str> {
-    if value.is_zero() {
-        return Err("withdraw amount is zero");
-    }
     let Ok(wei) = u128::try_from(value) else {
         return Err("withdraw amount exceeds u128");
     };
-    if wei % EVM_NATIVE_SCALE as u128 != 0 {
-        return Err("withdraw amount is not an exact sompi multiple");
-    }
-    if wei / EVM_NATIVE_SCALE as u128 > u64::MAX as u128 {
-        return Err("withdraw amount exceeds u64 sompi");
-    }
     if input.len() < 2 {
         return Err("calldata shorter than the spk version prefix");
     }
-    let script = &input[2..];
-    if script.len() > MAX_WITHDRAW_SCRIPT_BYTES {
-        return Err("destination script exceeds the byte cap");
-    }
     let version = u16::from_be_bytes([input[0], input[1]]);
+    let script = &input[2..];
     let spk = ScriptPublicKey::from_vec(version, script.to_vec());
-    if !ScriptClass::from_script(&spk).is_pq_standard() {
-        return Err("destination script is not the PQ-standard ML-DSA P2PKH class");
-    }
+    withdraw_invariants_hold(wei, &spk)?;
     Ok((version, script.to_vec()))
 }
 

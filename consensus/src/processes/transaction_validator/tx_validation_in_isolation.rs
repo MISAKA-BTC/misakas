@@ -5,7 +5,7 @@ use kaspa_consensus_core::dns_finality::{
     validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::tx::Transaction;
-use kaspa_txscript::script_class::ScriptClass;
+use kaspa_txscript::script_class::{ScriptClass, parse_evm_deposit_lock};
 use std::collections::HashSet;
 
 use super::{
@@ -72,6 +72,17 @@ impl TransactionValidator {
             // script run). It is NOT a standard send class: wallets/mempool
             // standardness still treat it as deliberate-construction-only.
             if class == ScriptClass::EvmDepositLock {
+                // Audit F3: reject an EVM_DEPOSIT_LOCK whose embedded claim_tip exceeds its own
+                // value. The claim path rejects claim_tip > amount (consensus/.../evm/mod.rs), so
+                // such a lock can NEVER be claimed — it would only strand value until the refund
+                // window (permanent if timeout == u64::MAX). RPC + validator builders already reject
+                // it; this closes the raw-tx hole so consensus never mints an unclaimable deposit.
+                // (Context-free, so it belongs in isolation; class detection implies it parses.)
+                let lock = parse_evm_deposit_lock(&output.script_public_key)
+                    .expect("EvmDepositLock class detection implies the lock script parses");
+                if lock.claim_tip_sompi > output.value {
+                    return Err(TxRuleError::EvmDepositLockTipExceedsValue(i, lock.claim_tip_sompi, output.value));
+                }
                 continue;
             }
             if !class.is_pq_standard() {

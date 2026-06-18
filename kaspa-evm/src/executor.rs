@@ -322,6 +322,15 @@ pub fn execute_block_evm(
     // here. (audit #5 is enforced where it matters — the F002 escrow `burn_balance`
     // and the per-account credit/reroute moves are checked and fail closed.)
     let total_native_balance = parent_total.saturating_add(deposited).saturating_sub(withdrawn).saturating_sub(burn_this_block);
+    // audit INFO-b: the saturating form is intentional (see comment above — never a hard-halt), but
+    // on a valid chain it must equal the exact identity. Assert that in debug/test builds so a
+    // genuine divergence (an unexpected underflow/overflow in the supply accumulator) surfaces in CI
+    // rather than silently saturating; compiled out in release, so the committed value is unchanged.
+    debug_assert_eq!(
+        parent_total.checked_add(deposited).and_then(|t| t.checked_sub(withdrawn)).and_then(|t| t.checked_sub(burn_this_block)),
+        Some(total_native_balance),
+        "evm_total_native_balance saturated — supply accumulator diverged from total(parent)+deposits-withdrawals-burn"
+    );
     let header = EvmExecutionHeader {
         parent_state_root,
         state_root: b256_to_evmh256(state::state_root(&state_db)),
