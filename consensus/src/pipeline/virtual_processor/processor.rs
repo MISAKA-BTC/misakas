@@ -2708,6 +2708,7 @@ impl VirtualStateProcessor {
             template_block,
             miner_data,
             coinbase.has_red_reward,
+            coinbase.miner_script_output_indices,
             selected_parent_timestamp,
             selected_parent_daa_score,
             selected_parent_hash,

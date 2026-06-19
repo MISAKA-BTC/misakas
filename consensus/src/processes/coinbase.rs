@@ -136,6 +136,7 @@ impl CoinbaseManager {
         // mergeset blue(∩DAA)+red iteration the Worker carve uses (paid to the includer below).
         let mut worker_inclusion_pool = 0u64;
         let mut outputs = Vec::with_capacity(ghostdag_data.mergeset_blues.len() + 1); // + 1 for possible red reward
+        let mut miner_script_output_indices = Vec::with_capacity(2); // red reward + optional inclusion bounty
 
         // Add an output for each mergeset blue block (∩ DAA window), paying to the script reported by the block.
         // Note that combinatorically it is nearly impossible for a blue block to be non-DAA
@@ -188,6 +189,7 @@ impl CoinbaseManager {
         }
 
         if red_reward > 0 {
+            miner_script_output_indices.push(outputs.len());
             outputs.push(TransactionOutput::new(red_reward, miner_data.script_public_key.clone()));
         }
 
@@ -211,6 +213,7 @@ impl CoinbaseManager {
             let bounty = worker_inclusion_bounty(worker_inclusion_pool as u128, newly_included_stake, expected_stake, STAKE_SCORE_SCALE, false, 0)
                 .min(worker_inclusion_pool as u128) as u64;
             if bounty > 0 {
+                miner_script_output_indices.push(outputs.len());
                 outputs.push(TransactionOutput::new(bounty, miner_data.script_public_key.clone()));
             }
         }
@@ -222,6 +225,7 @@ impl CoinbaseManager {
         Ok(CoinbaseTransactionTemplate {
             tx: Transaction::new(constants::TX_VERSION, vec![], outputs, 0, subnets::SUBNETWORK_ID_COINBASE, 0, payload),
             has_red_reward: red_reward > 0,
+            miner_script_output_indices,
         })
     }
 

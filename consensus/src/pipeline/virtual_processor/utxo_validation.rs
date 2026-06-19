@@ -666,7 +666,38 @@ impl VirtualStateProcessor {
             )
             .unwrap()
             .tx;
-        if hashing::tx::hash(coinbase) != hashing::tx::hash(&expected_coinbase) { Err(BadCoinbaseTransaction) } else { Ok(()) }
+        if hashing::tx::hash(coinbase) != hashing::tx::hash(&expected_coinbase) {
+            // kaspa-pq diagnostic (coinbase mismatch): dump the mismatch SHAPE so the
+            // cache-retarget class (equal output count, payload already retargeted, a
+            // single SCRIPT-only diff at a miner-script output index — old miner's spk
+            // left behind) is distinguishable in-field from a reward-generation skew
+            // (differing output count, or an AMOUNT diff, or a validator/bond-owner
+            // script diff). Emitted only on the already-failing branch → consensus-neutral.
+            let (n_act, n_exp) = (coinbase.outputs.len(), expected_coinbase.outputs.len());
+            let first_diff = (0..n_act.min(n_exp)).find(|&i| coinbase.outputs[i] != expected_coinbase.outputs[i]);
+            match first_diff {
+                Some(i) => {
+                    let (a, e) = (&coinbase.outputs[i], &expected_coinbase.outputs[i]);
+                    kaspa_core::warn!(
+                        "[coinbase-mismatch] outputs act={n_act} exp={n_exp}; first diff @{i}: value_eq={} script_eq={} payload_eq={} (act_value={} exp_value={})",
+                        a.value == e.value,
+                        a.script_public_key == e.script_public_key,
+                        coinbase.payload == expected_coinbase.payload,
+                        a.value,
+                        e.value,
+                    );
+                }
+                None => {
+                    kaspa_core::warn!(
+                        "[coinbase-mismatch] outputs act={n_act} exp={n_exp}; no in-range output diff (count or payload mismatch) payload_eq={}",
+                        coinbase.payload == expected_coinbase.payload,
+                    );
+                }
+            }
+            Err(BadCoinbaseTransaction)
+        } else {
+            Ok(())
+        }
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5 / ADR-0013): the

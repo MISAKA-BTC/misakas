@@ -24,6 +24,7 @@ impl CoinbaseManagerMock {
         CoinbaseTransactionTemplate {
             tx: Transaction::new(TX_VERSION, vec![], vec![output], 0, SUBNETWORK_ID_COINBASE, 0, payload),
             has_red_reward: false,
+            miner_script_output_indices: vec![0],
         }
     }
 
