@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
-use kaspa_eth_rpc::{EthCallRequest, EthLog, EthProvider, EthReceipt, EthResult, EthRpcError};
+use kaspa_eth_rpc::{EthBlock, EthCallRequest, EthLog, EthProvider, EthReceipt, EthResult, EthRpcError};
 use kaspa_hashes::EvmH256;
 use kaspa_mining::manager::MiningManagerProxy;
 
@@ -151,6 +151,40 @@ impl EthProvider for NodeEthProvider {
             }
         }))
     }
+
+    async fn block_by_number(&self, number: u64) -> EthResult<Option<EthBlock>> {
+        let session = self.consensus_manager.consensus().session().await;
+        let resp = session
+            .spawn_blocking(move |c| c.get_evm_block_by_number(number))
+            .await
+            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        Ok(resp.map(to_eth_block))
+    }
+
+    async fn block_by_tag(&self, tag: &str) -> EthResult<Option<EthBlock>> {
+        let session = self.consensus_manager.consensus().session().await;
+        let tag = tag.to_string();
+        // latest/pending/safe/finalized all map to the current sink (the DAG's
+        // fast finality makes them equivalent for the MVP); earliest = number 0.
+        let resp = session
+            .spawn_blocking(move |c| match tag.as_str() {
+                "earliest" => c.get_evm_block_by_number(0),
+                _ => c.get_evm_block_by_l1_hash(c.get_sink()),
+            })
+            .await
+            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        Ok(resp.map(to_eth_block))
+    }
+
+    async fn block_by_hash(&self, hash: [u8; 32]) -> EthResult<Option<EthBlock>> {
+        let session = self.consensus_manager.consensus().session().await;
+        let h = EvmH256::from_bytes(hash);
+        let resp = session
+            .spawn_blocking(move |c| c.get_evm_block_by_rpc_hash(h))
+            .await
+            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        Ok(resp.map(to_eth_block))
+    }
 }
 
 impl NodeEthProvider {
@@ -175,6 +209,32 @@ impl NodeEthProvider {
             gas_limit: header.as_ref().map(|h| h.gas_limit).unwrap_or(30_000_000),
         };
         Ok((snap, env))
+    }
+}
+
+/// Map a consensus `EvmBlockResponse` to the adapter's primitive [`EthBlock`].
+/// The 32-byte `hash` is the first 32 bytes of the 64-byte L1 hash (the same id
+/// the receipt exposes as `blockHash`). `parent_hash` is left zero for now — a
+/// correct parentHash (the `evm_number − 1` block id) lands with the full-tx /
+/// `eth_getTransactionByHash` increment.
+fn to_eth_block(resp: kaspa_consensus_core::evm::EvmBlockResponse) -> EthBlock {
+    let h = &resp.header;
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&resp.l1_hash.as_bytes()[..32]);
+    EthBlock {
+        number: h.evm_number,
+        hash,
+        parent_hash: [0u8; 32],
+        state_root: h.state_root.as_bytes(),
+        transactions_root: h.transactions_root.as_bytes(),
+        receipts_root: h.receipts_root.as_bytes(),
+        logs_bloom: h.logs_bloom.as_bytes().to_vec(),
+        timestamp: h.evm_timestamp_sec,
+        gas_used: h.gas_used,
+        gas_limit: h.gas_limit,
+        base_fee_per_gas: h.base_fee_per_gas.to_be_bytes(),
+        miner: h.coinbase.as_bytes(),
+        tx_hashes: resp.tx_hashes.iter().map(|t| t.as_bytes()).collect(),
     }
 }
 

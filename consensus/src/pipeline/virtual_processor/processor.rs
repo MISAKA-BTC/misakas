@@ -212,6 +212,8 @@ pub struct VirtualStateProcessor {
     pub(super) evm_heads_store: Arc<RwLock<DbEvmCanonicalHeadsStore>>,
     pub(super) evm_receipts_store: Arc<crate::model::stores::evm::DbEvmReceiptsStore>,
     pub(super) evm_tx_index_store: Arc<crate::model::stores::evm::DbEvmTxIndexStore>,
+    pub(super) evm_block_hash_map_store: Arc<crate::model::stores::evm::DbEvmBlockHashMapStore>,
+    pub(super) evm_number_store: Arc<crate::model::stores::evm::DbEvmNumberStore>,
     pub(super) evm_activation_daa_score: u64,
     // O9 (optimization design v0.1): node-local EVM-lane KPIs — chain-block
     // count / mergeset-size sum / accepted-gas sum. The gas supply is
@@ -318,6 +320,8 @@ impl VirtualStateProcessor {
             evm_heads_store: storage.evm_heads_store.clone(),
             evm_receipts_store: storage.evm_receipts_store.clone(),
             evm_tx_index_store: storage.evm_tx_index_store.clone(),
+            evm_block_hash_map_store: storage.evm_block_hash_map_store.clone(),
+            evm_number_store: storage.evm_number_store.clone(),
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_lane_kpi: EvmLaneKpi::default(),
             dns_params: params.dns_params.clone(),
@@ -1082,6 +1086,17 @@ impl VirtualStateProcessor {
             )
             .unwrap();
             self.evm_state_store.insert_batch(&mut batch, current, staged.snapshot).unwrap();
+            // §16 eth-rpc: map the 32-byte eth block id (first 32 bytes of the
+            // 64-byte L1 hash — the truncation `eth_getTransactionReceipt`
+            // already exposes as `blockHash`) → this L1 block, so
+            // `eth_getBlockByHash` can reverse a client-held 32-byte hash. Upsert
+            // (a given L1 block's first-32 is stable). RPC index only.
+            let mut rpc_block_id = [0u8; 32];
+            rpc_block_id.copy_from_slice(&current.as_bytes()[..32]);
+            self.evm_block_hash_map_store.write_batch(&mut batch, kaspa_hashes::EvmH256::from_bytes(rpc_block_id), current).unwrap();
+            // §16 eth-rpc: evm_number → this L1 block (upsert; the reader re-validates
+            // canonicality so a reorg-orphaned number reads as absent).
+            self.evm_number_store.write_batch(&mut batch, staged.result.header.evm_number, current).unwrap();
         }
         self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
         self.utxo_multisets_store.insert_batch(&mut batch, current, multiset).unwrap();

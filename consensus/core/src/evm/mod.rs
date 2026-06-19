@@ -811,6 +811,18 @@ pub struct EvmTxReceiptView {
     pub receipt: EvmReceipt,
 }
 
+/// A canonical-resolved EVM "block" for the eth-rpc adapter (§16
+/// `eth_getBlockByNumber` / `eth_getBlockByHash`): the executed header, the
+/// accepting L1 block hash (its first 32 bytes are the eth-rpc `blockHash`), and
+/// the block's accepted tx hashes (in accepted order). Store/RPC data only —
+/// never part of a commitment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvmBlockResponse {
+    pub header: EvmExecutionHeader,
+    pub l1_hash: Hash64,
+    pub tx_hashes: Vec<EvmH256>,
+}
+
 // ---------------------------------------------------------------------------
 // EvmStateSnapshot — persisted full EVM account state (design §11, P3).
 // ---------------------------------------------------------------------------

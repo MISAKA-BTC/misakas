@@ -104,6 +104,32 @@ pub struct EthReceipt {
     pub logs: Vec<EthLog>,
 }
 
+/// An EVM block for `eth_getBlockByNumber` / `eth_getBlockByHash`. Primitive
+/// fields only; the node-side impl maps its consensus `EvmBlockResponse` here
+/// and the adapter renders the standard Ethereum block JSON. `tx_hashes` are the
+/// accepted txs in order (the adapter returns hashes; full-tx objects are a later
+/// increment alongside `eth_getTransactionByHash`).
+#[derive(Clone, Debug)]
+pub struct EthBlock {
+    pub number: u64,
+    /// 32-byte block id (the accepting L1 hash truncated to 32 — the same id
+    /// `eth_getTransactionReceipt` returns as `blockHash`).
+    pub hash: [u8; 32],
+    pub parent_hash: [u8; 32],
+    pub state_root: [u8; 32],
+    pub transactions_root: [u8; 32],
+    pub receipts_root: [u8; 32],
+    /// 256-byte logs bloom.
+    pub logs_bloom: Vec<u8>,
+    pub timestamp: u64,
+    pub gas_used: u64,
+    pub gas_limit: u64,
+    /// EIP-1559 base fee, big-endian 32 bytes.
+    pub base_fee_per_gas: [u8; 32],
+    pub miner: [u8; 20],
+    pub tx_hashes: Vec<[u8; 32]>,
+}
+
 /// The node-side data + action surface the adapter needs. Implemented by kaspad
 /// over its `ConsensusManager` + `FlowContext` (and, for simulation, kaspa-evm).
 /// Methods are added here as the MVP grows (state / call / receipt / block).
@@ -144,6 +170,16 @@ pub trait EthProvider: Send + Sync + 'static {
     /// `eth_getTransactionReceipt`: the receipt of a mined EVM tx, or `None` if
     /// it is unknown / still pending (not yet accepted on the selected chain).
     async fn transaction_receipt(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthReceipt>>;
+
+    /// `eth_getBlockByNumber` for a numeric block (canonical EVM block at that number).
+    async fn block_by_number(&self, number: u64) -> EthResult<Option<EthBlock>>;
+
+    /// `eth_getBlockByNumber` for a tag: `latest`/`pending` (the sink), `safe`,
+    /// `finalized`, or `earliest`. Unknown tags ⇒ `invalid_params` by the caller.
+    async fn block_by_tag(&self, tag: &str) -> EthResult<Option<EthBlock>>;
+
+    /// `eth_getBlockByHash` for a 32-byte eth-rpc block id.
+    async fn block_by_hash(&self, hash: [u8; 32]) -> EthResult<Option<EthBlock>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +247,10 @@ async fn dispatch(provider: &Arc<dyn EthProvider>, req: RpcRequest) -> RpcRespon
         "eth_estimateGas" => eth_estimate_gas_handler(provider, &req.params).await,
         "eth_sendRawTransaction" => eth_send_raw_transaction(provider, &req.params).await,
         "eth_getTransactionReceipt" => eth_get_transaction_receipt(provider, &req.params).await,
+        "eth_getBlockByNumber" => eth_get_block_by_number(provider, &req.params).await,
+        "eth_getBlockByHash" => eth_get_block_by_hash(provider, &req.params).await,
+        "eth_getBlockTransactionCountByNumber" => eth_get_block_tx_count_by_number(provider, &req.params).await,
+        "eth_getBlockTransactionCountByHash" => eth_get_block_tx_count_by_hash(provider, &req.params).await,
         // Wallets poll this; we do not index pending txs by hash, so report
         // "unknown" (null) — the receipt is the source of truth for inclusion.
         "eth_getTransactionByHash" => Ok(Value::Null),
@@ -382,6 +422,101 @@ fn format_receipt(r: &EthReceipt) -> Value {
         "logsBloom": format!("0x{}", "00".repeat(256)),
         "status": if r.status { "0x1" } else { "0x0" },
         "type": "0x0",
+    })
+}
+
+// --- eth_getBlockBy* / block tx count (Increment 6: block index) ---
+
+enum BlockId {
+    Number(u64),
+    Tag(String),
+}
+
+/// Parse a block selector (`"latest"`/`"safe"`/`"finalized"`/`"earliest"`/`"pending"`
+/// or a hex QUANTITY block number) from `params[idx]`.
+fn parse_block_param(params: &Value, idx: usize) -> EthResult<BlockId> {
+    let s = params
+        .as_array()
+        .and_then(|a| a.get(idx))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| EthRpcError::invalid_params(format!("expected a block number or tag at param #{idx}")))?;
+    Ok(match s {
+        "latest" | "pending" | "safe" | "finalized" | "earliest" => BlockId::Tag(s.to_string()),
+        hex => BlockId::Number(u64_from_hex(hex)?),
+    })
+}
+
+/// Parse a 32-byte hash from `params[idx]` (a `0x`-hex string).
+fn parse_hash32_param(params: &Value, idx: usize) -> EthResult<[u8; 32]> {
+    let s = params
+        .as_array()
+        .and_then(|a| a.get(idx))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| EthRpcError::invalid_params(format!("expected a 32-byte hash at param #{idx}")))?;
+    let b = decode_hex(s)?;
+    if b.len() != 32 {
+        return Err(EthRpcError::invalid_params("hash must be 32 bytes"));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&b);
+    Ok(out)
+}
+
+async fn resolve_block(provider: &Arc<dyn EthProvider>, id: BlockId) -> EthResult<Option<EthBlock>> {
+    match id {
+        BlockId::Number(n) => provider.block_by_number(n).await,
+        BlockId::Tag(t) => provider.block_by_tag(&t).await,
+    }
+}
+
+async fn eth_get_block_by_number(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let id = parse_block_param(params, 0)?;
+    Ok(resolve_block(provider, id).await?.map(|b| render_block(&b)).unwrap_or(Value::Null))
+}
+
+async fn eth_get_block_by_hash(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let hash = parse_hash32_param(params, 0)?;
+    Ok(provider.block_by_hash(hash).await?.map(|b| render_block(&b)).unwrap_or(Value::Null))
+}
+
+async fn eth_get_block_tx_count_by_number(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let id = parse_block_param(params, 0)?;
+    Ok(resolve_block(provider, id).await?.map(|b| quantity(b.tx_hashes.len() as u128)).unwrap_or(Value::Null))
+}
+
+async fn eth_get_block_tx_count_by_hash(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let hash = parse_hash32_param(params, 0)?;
+    Ok(provider.block_by_hash(hash).await?.map(|b| quantity(b.tx_hashes.len() as u128)).unwrap_or(Value::Null))
+}
+
+/// Render an [`EthBlock`] as the standard `eth_getBlockBy*` JSON. Transactions
+/// are returned as hashes (full-tx objects land with `eth_getTransactionByHash`).
+/// Uncle/PoW fields are the canonical empty-chain constants Ethereum tooling expects.
+fn render_block(b: &EthBlock) -> Value {
+    let hx = |bytes: &[u8]| format!("0x{}", faster_hex::hex_string(bytes));
+    let txs: Vec<Value> = b.tx_hashes.iter().map(|h| json!(hx(h))).collect();
+    json!({
+        "number": quantity(b.number as u128),
+        "hash": hx(&b.hash),
+        "parentHash": hx(&b.parent_hash),
+        "nonce": "0x0000000000000000",
+        "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+        "logsBloom": hx(&b.logs_bloom),
+        "transactionsRoot": hx(&b.transactions_root),
+        "stateRoot": hx(&b.state_root),
+        "receiptsRoot": hx(&b.receipts_root),
+        "miner": hx(&b.miner),
+        "difficulty": "0x0",
+        "totalDifficulty": "0x0",
+        "extraData": "0x",
+        "size": "0x0",
+        "gasLimit": quantity(b.gas_limit as u128),
+        "gasUsed": quantity(b.gas_used as u128),
+        "timestamp": quantity(b.timestamp as u128),
+        "baseFeePerGas": quantity_from_be32(&b.base_fee_per_gas),
+        "transactions": txs,
+        "uncles": [],
     })
 }
 

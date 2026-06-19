@@ -250,6 +250,96 @@ impl EvmTxIndexStoreReader for DbEvmTxIndexStore {
 }
 
 // ---------------------------------------------------------------------------
+// EvmBlockHashMap store (prefix 210) — eth-rpc 32-byte block id → L1 BlockHash.
+// The 32-byte id is the first 32 bytes of the 64-byte L1 hash (matches the
+// truncation `eth_getTransactionReceipt` already exposes as `blockHash`), so
+// `eth_getBlockByHash` can reverse a client-held 32-byte hash to the L1 block.
+// Upsert (a given L1 block's first-32 is stable → effectively write-once, but
+// tolerant of re-processing). RPC index only — never part of any commitment.
+// ---------------------------------------------------------------------------
+
+pub trait EvmBlockHashMapStoreReader {
+    fn get(&self, rpc_hash: EvmH256) -> Result<Option<BlockHash>, StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmBlockHashMapStore {
+    access: CachedDbAccess<EvmH256, BlockHash>,
+}
+
+impl DbEvmBlockHashMapStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmBlockHashMap.into()) }
+    }
+
+    /// Unguarded upsert into the caller's batch.
+    pub fn write_batch(&self, batch: &mut WriteBatch, rpc_hash: EvmH256, l1_hash: BlockHash) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), rpc_hash, l1_hash)
+    }
+}
+
+impl EvmBlockHashMapStoreReader for DbEvmBlockHashMapStore {
+    fn get(&self, rpc_hash: EvmH256) -> Result<Option<BlockHash>, StoreError> {
+        match self.access.read(rpc_hash) {
+            Ok(h) => Ok(Some(h)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EvmNumberIndex store (prefix 213) — evm_number → L1 BlockHash (for
+// `eth_getBlockByNumber` + `eth_getLogs` ranges). Keyed by the number encoded
+// into a 32-byte key (right-aligned BE) so it reuses the proven `EvmH256` key
+// type. Upsert: on a reorg the new canonical block at a number overwrites the
+// old; the READER must re-validate `is_chain_block(hash) && header.evm_number == n`
+// so a stale row reads as absent (the `get_evm_tx_receipt` canonical pattern).
+// RPC index only — never part of any commitment.
+// ---------------------------------------------------------------------------
+
+/// Encode an `evm_number` as the 32-byte key of the number index (right-aligned BE).
+#[inline]
+fn evm_number_key(evm_number: u64) -> EvmH256 {
+    let mut k = [0u8; 32];
+    k[24..].copy_from_slice(&evm_number.to_be_bytes());
+    EvmH256::from_bytes(k)
+}
+
+pub trait EvmNumberStoreReader {
+    /// The (most-recently-written) L1 block hash for an `evm_number`. The caller
+    /// MUST re-validate canonicality (`is_chain_block` + `header.evm_number`).
+    fn get(&self, evm_number: u64) -> Result<Option<BlockHash>, StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmNumberStore {
+    access: CachedDbAccess<EvmH256, BlockHash>,
+}
+
+impl DbEvmNumberStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmNumberIndex.into()) }
+    }
+
+    /// Unguarded upsert into the caller's batch (the new canonical block at a
+    /// number overwrites the prior one on a reorg).
+    pub fn write_batch(&self, batch: &mut WriteBatch, evm_number: u64, l1_hash: BlockHash) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), evm_number_key(evm_number), l1_hash)
+    }
+}
+
+impl EvmNumberStoreReader for DbEvmNumberStore {
+    fn get(&self, evm_number: u64) -> Result<Option<BlockHash>, StoreError> {
+        match self.access.read(evm_number_key(evm_number)) {
+            Ok(h) => Ok(Some(h)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CanonicalEvmHeads singleton (prefix 209) — latest / safe / finalized pointers,
 // updated on each virtual-state commit (mirrors `DbDnsStateStore`).
 // ---------------------------------------------------------------------------
