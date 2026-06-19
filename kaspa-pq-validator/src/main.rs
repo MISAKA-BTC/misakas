@@ -13,7 +13,7 @@
 //! under systemd (ADR-0011); the node must run `--utxoindex` for the funding lookup.
 
 use clap::{Parser, Subcommand};
-use kaspa_addresses::Prefix;
+use kaspa_addresses::{Address, Prefix};
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::dns_finality::{
     DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation, signature_fingerprint,
@@ -74,6 +74,10 @@ enum Command {
     /// EVM_DEPOSIT_LOCK outpoint (`txid:index`). Run against a MINING node so the claim
     /// is included in an accepting chain block, which executes it and credits the EVM address.
     Claim(ClaimArgs),
+    /// One-shot headless balance: query the node's `getBalancesByAddresses` for one or more
+    /// `misaka:`/`misakatest:` addresses over wRPC and print each balance, then exit (no
+    /// interactive wallet needed). The node must run --utxoindex.
+    Balance(BalanceArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -254,6 +258,19 @@ struct ClaimArgs {
 }
 
 #[derive(Parser, Debug)]
+struct BalanceArgs {
+    /// Node wRPC (borsh) endpoint, host:port. The node must run --utxoindex.
+    #[arg(long, default_value = "127.0.0.1:27610", env = "KASPA_PQ_NODE_RPC")]
+    node_rpc: String,
+    /// Address to query, e.g. `misakatest:q...`. Repeat --address for several (one RPC call).
+    #[arg(long, required = true)]
+    address: Vec<String>,
+    /// Expected node network id (e.g. `testnet-10`); refuse on mismatch.
+    #[arg(long, env = "KASPA_PQ_NETWORK")]
+    network: Option<String>,
+}
+
+#[derive(Parser, Debug)]
 struct DepositLockArgs {
     /// Local node wRPC (borsh) endpoint, host:port. The node must run --utxoindex.
     #[arg(long, default_value = "127.0.0.1:17110", env = "KASPA_PQ_NODE_RPC")]
@@ -313,6 +330,10 @@ async fn main() -> ExitCode {
         Command::Claim(args) => {
             kaspa_core::log::init_logger(None, "info");
             claim(args).await
+        }
+        Command::Balance(args) => {
+            kaspa_core::log::init_logger(None, "info");
+            balance(args).await
         }
     };
     match result {
@@ -811,6 +832,57 @@ async fn claim(args: ClaimArgs) -> Result<(), String> {
     info!("[{VALIDATOR}] submitted deposit-claim for {txid}:{index} -> {resp:?}");
     let _ = client.disconnect().await;
     Ok(())
+}
+
+/// kaspa-pq: one-shot headless balance. Resolves each address, queries the node's
+/// `getBalancesByAddresses` (requires --utxoindex), and prints `address <sompi> <MSK> MSK` to
+/// STDOUT — one tab-separated line per address (plus a TOTAL line for several) — then exits.
+/// Connection / sync notes go to the log so STDOUT stays clean for scripting
+/// (e.g. `kaspa-pq-validator balance --address misakatest:q... | awk '{print $2}'`).
+async fn balance(args: BalanceArgs) -> Result<(), String> {
+    let mut addrs = Vec::with_capacity(args.address.len());
+    for a in &args.address {
+        addrs.push(Address::try_from(a.as_str()).map_err(|e| format!("invalid address '{a}': {e}"))?);
+    }
+    let client = connect(&args.node_rpc).await?;
+    let server = client.get_server_info().await.map_err(|e| format!("getServerInfo failed: {e}"))?;
+    let node_network = server.network_id.to_string();
+    if let Some(expected) = args.network.as_deref() {
+        if node_network != expected {
+            let _ = client.disconnect().await;
+            return Err(format!("network mismatch: node is '{node_network}' but --network is '{expected}'"));
+        }
+    }
+    if !server.has_utxo_index {
+        let _ = client.disconnect().await;
+        return Err(format!("node '{node_network}' has no UTXO index — restart kaspad with --utxoindex"));
+    }
+    if !server.is_synced {
+        info!("[{VALIDATOR}] WARNING: node '{node_network}' is NOT fully synced — balance may be stale");
+    }
+    let entries = client
+        .get_balances_by_addresses(addrs.clone())
+        .await
+        .map_err(|e| format!("getBalancesByAddresses failed: {e}"))?;
+    // Map the response back by address string (response order is not guaranteed).
+    let found: std::collections::HashMap<String, u64> =
+        entries.into_iter().map(|e| (e.address.to_string(), e.balance.unwrap_or(0))).collect();
+    let mut total = 0u64;
+    for a in &addrs {
+        let bal = found.get(&a.to_string()).copied().unwrap_or(0);
+        total = total.saturating_add(bal);
+        println!("{a}\t{bal}\t{} MSK", format_msk(bal));
+    }
+    if addrs.len() > 1 {
+        println!("TOTAL\t{total}\t{} MSK", format_msk(total));
+    }
+    let _ = client.disconnect().await;
+    Ok(())
+}
+
+/// Format a sompi amount as MSK for display (L1 = 8 decimals; 1 MSK = 100_000_000 sompi).
+fn format_msk(sompi: u64) -> String {
+    format!("{}.{:08}", sompi / 100_000_000, sompi % 100_000_000)
 }
 
 async fn connect(node_rpc: &str) -> Result<KaspaRpcClient, String> {

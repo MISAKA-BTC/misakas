@@ -164,9 +164,15 @@ cargo run --release --bin kaspad -- --testnet --utxoindex \
   endpoints (example values above): **gRPC** `26610` (protobuf over TCP), **wRPC Borsh** `27610`
   (the default CLI wallet & validator transport, WebSocket), **wRPC JSON** `28610` (WebSocket).
   The `kaspa-pq` CLI wallet connects over **wRPC Borsh** — point it at `27610`, **not** the gRPC
-  port `26610` (a wallet pointed at gRPC fails with `WebSocket protocol error: httparse err`,
-  because gRPC is not a WebSocket). In the wallet REPL: `server 127.0.0.1:27610` → `connect`.
-  (P2P is a separate, non-RPC port: `26211`.)
+  port `26610` (a wallet pointed at gRPC fails with `WebSocket protocol error: httparse err`
+  or `WebSocket is not connected`, because gRPC is not a WebSocket). In the wallet REPL:
+  `server 127.0.0.1:27610` → `connect`. (P2P is a separate, non-RPC port: `26211`.)
+- **Headless balance (no interactive wallet).** For scripting / monitoring, query a balance in one
+  shot over wRPC:
+  `kaspa-pq-validator balance --node-rpc 127.0.0.1:27610 --address misakatest:q… [--address …] [--network testnet-10]`.
+  It prints `address <sompi> <MSK> MSK` per line (plus `TOTAL` for several) to stdout — connection /
+  sync notes go to stderr, so `… balance --address misakatest:q… | awk '{print $2}'` yields just the
+  sompi. The node must run `--utxoindex`.
 - Add `--enable-unsynced-mining` **only** when bootstrapping a brand-new isolated network with no peers (mining before you have synced to the public testnet would fork from genesis).
 
 Mine to a **64-byte** ML-DSA-87 (`misakatest:`) address — legacy 32-byte addresses are rejected:
