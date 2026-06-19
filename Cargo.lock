@@ -3742,6 +3742,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaspa-eth-rpc"
+version = "1.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-rpc-types-eth",
+ "async-trait",
+ "faster-hex 0.9.0",
+ "kaspa-consensus-core",
+ "kaspa-core",
+ "kaspa-hashes",
+ "kaspa-utils",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "kaspa-evm"
 version = "1.1.0"
 dependencies = [
@@ -4997,6 +5015,8 @@ dependencies = [
  "kaspa-consensusmanager",
  "kaspa-core",
  "kaspa-database",
+ "kaspa-eth-rpc",
+ "kaspa-evm",
  "kaspa-grpc-server",
  "kaspa-hashes",
  "kaspa-index-processor",

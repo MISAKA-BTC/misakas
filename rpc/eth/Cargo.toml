@@ -1,0 +1,41 @@
+[package]
+name = "kaspa-eth-rpc"
+description = "Ethereum JSON-RPC compatibility adapter for the kaspa-pq EVM lane (ADR-0020 §16)"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# This crate is the thin Ethereum JSON-RPC front-end: it does the JSON-RPC 2.0
+# framing, Ethereum quantity/type encoding, and method dispatch against the
+# `EthProvider` trait. The trait IMPLEMENTATION (consensus store reads + revm
+# read-only simulation via kaspa-evm) lives node-side, so this crate links NO
+# revm/secp — kaspad pulls it only under its `evm` feature, keeping the default
+# node's secp-free guarantee (scripts/pq-ci-guard.sh) intact.
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-core.workspace = true
+kaspa-utils.workspace = true
+
+async-trait.workspace = true
+log.workspace = true
+# Hand-rolled minimal HTTP/1.1 server over tokio (no axum/hyper — avoids axum
+# 0.8's tokio >=1.44 requirement vs the workspace's pinned 1.42.1, and keeps the
+# adapter's audit surface tiny).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util"] }
+serde.workspace = true
+serde_json.workspace = true
+faster-hex.workspace = true
+
+# Ethereum JSON-RPC response shapes + primitives. Pinned to the EVM lane's alloy
+# 0.8 / alloy-primitives 0.8.26 line (no version skew with kaspa-evm / revm).
+alloy-primitives = { version = "0.8" }
+alloy-rpc-types-eth = { version = "0.8", default-features = false, features = ["serde"] }
+
+[lints]
+workspace = true

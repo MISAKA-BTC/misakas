@@ -1492,6 +1492,21 @@ impl ConsensusApi for Consensus {
         Ok(None)
     }
 
+    fn get_evm_head_header(&self) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmExecutionHeader>> {
+        use crate::model::stores::evm::EvmHeaderStoreReader;
+        Ok(self.storage.evm_header_store.get(self.get_sink()).optional().unwrap())
+    }
+
+    fn get_evm_header_of(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmExecutionHeader>> {
+        use crate::model::stores::evm::EvmHeaderStoreReader;
+        Ok(self.storage.evm_header_store.get(block).optional().unwrap())
+    }
+
+    fn get_evm_state_snapshot_of(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmStateSnapshot>> {
+        use crate::model::stores::evm::EvmStateStoreReader;
+        Ok(self.storage.evm_state_store.get(block).optional().unwrap())
+    }
+
     fn get_block_evm_payload(&self, hash: BlockHash) -> ConsensusResult<kaspa_consensus_core::evm::EvmExecutionPayload> {
         // kaspa-pq EVM Lane v0.4 (§3.1): the payload store only holds rows for
         // non-empty payloads (commit_body persists them), so absence is the

@@ -46,6 +46,75 @@ pub fn admit_evm_payload_txs(_payload: &kaspa_consensus_core::evm::EvmExecutionP
     Ok(())
 }
 
+/// v0.4 §9.2: typed reason a `DepositClaim` cannot execute against its lock.
+/// Shared by the consensus acceptance path ([`validate_evm_deposit_claims`]) and
+/// the producer template path ([`prepare_deposit_claims`]) so construction ==
+/// validation, and so the producer can distinguish a TRANSIENT miss (retain +
+/// retry the queued claim) from a TERMINAL one (evict it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepositClaimValidationError {
+    /// The lock outpoint is absent from the claim view — not yet on this node's
+    /// selected chain (a lagging miner / forky DAG), or already consumed.
+    /// TRANSIENT: the view alone cannot tell it apart from a soon-claimable lock,
+    /// so it must NOT be evicted on sight — retain + retry.
+    AbsentOrSpent,
+    /// The outpoint exists but is not an `EVM_DEPOSIT_LOCK` output. Terminal.
+    NotDepositLock,
+    /// The lock's bound EVM address does not match the claim. Terminal.
+    AddressMismatch,
+    /// The lock value does not match the claimed amount. Terminal.
+    AmountMismatch,
+    /// The lock's committed claim tip does not match the claim. Terminal.
+    TipMismatch,
+    /// The claim tip exceeds the locked amount. Terminal.
+    TipExceedsAmount,
+    /// `pov_daa ≥ refund_timeout` — the lock now belongs to the refund path
+    /// (AC-2 exclusivity). Terminal (it only ages further out of the claim window).
+    RefundWindowOpen,
+}
+
+impl DepositClaimValidationError {
+    /// Only the absent/spent miss is transient (retain + retry the queued claim);
+    /// every other reason is terminal — the claim can never execute, so evict it.
+    pub fn is_retryable(self) -> bool {
+        matches!(self, DepositClaimValidationError::AbsentOrSpent)
+    }
+}
+
+/// v0.4 §9.2: validate ONE deposit claim against its already-resolved lock entry
+/// (`entry == None` ⇔ the lock is absent/spent in the view). The SINGLE source of
+/// truth for claim validity — used by both the consensus acceptance path and the
+/// producer template path so they agree byte-for-byte. Returns the consumed lock
+/// entry on success. Pure + always compiled (the lock parses via kaspa-txscript;
+/// no revm).
+pub fn validate_one_deposit_claim(
+    claim: &kaspa_consensus_core::evm::DepositClaim,
+    entry: Option<kaspa_consensus_core::tx::UtxoEntry>,
+    pov_daa_score: u64,
+) -> Result<kaspa_consensus_core::tx::UtxoEntry, DepositClaimValidationError> {
+    use DepositClaimValidationError as E;
+    let entry = entry.ok_or(E::AbsentOrSpent)?;
+    let lock = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key).ok_or(E::NotDepositLock)?;
+    if lock.evm_address != claim.evm_address.as_bytes() {
+        return Err(E::AddressMismatch);
+    }
+    if entry.amount != claim.amount_sompi {
+        return Err(E::AmountMismatch);
+    }
+    if lock.claim_tip_sompi != claim.claim_tip_sompi {
+        return Err(E::TipMismatch);
+    }
+    if claim.claim_tip_sompi > claim.amount_sompi {
+        return Err(E::TipExceedsAmount);
+    }
+    // AC-2 exclusivity: claim valid iff accepting daa < timeout (at/after the
+    // timeout the lock belongs to the refund path).
+    if pov_daa_score >= lock.timeout_daa_score {
+        return Err(E::RefundWindowOpen);
+    }
+    Ok(entry)
+}
+
 /// v0.4 §9.2: validate a chain block's own `DepositClaim` system ops against
 /// the claim view (the selected-parent UTXO set composed with the mergeset
 /// diff so far — a lock spent by a mergeset tx is no longer claimable, and a
@@ -53,10 +122,8 @@ pub fn admit_evm_payload_txs(_payload: &kaspa_consensus_core::evm::EvmExecutionP
 /// Returns the consumed `(outpoint, entry)` pairs in payload order.
 ///
 /// Every violation is a fault of the ACCEPTING producer (it selected its own
-/// system ops, §6.2): missing/spent lock, a non-lock outpoint, field mismatch
-/// (address / amount / tip), tip > amount, a claim at/after the refund
-/// timeout (AC-2 exclusivity), or a duplicate outpoint within the block.
-/// Pure + always compiled (the lock parses via kaspa-txscript; no revm).
+/// system ops, §6.2): the per-claim rules of [`validate_one_deposit_claim`] plus
+/// a duplicate outpoint within the block. Pure + always compiled.
 pub fn validate_evm_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::UtxoView>(
     payload: &kaspa_consensus_core::evm::EvmExecutionPayload,
     claim_view: &V,
@@ -70,35 +137,67 @@ pub fn validate_evm_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::Utx
         if !seen.insert(claim.deposit_outpoint) {
             return Err(format!("system op #{i}: duplicate deposit-lock outpoint {}", claim.deposit_outpoint));
         }
-        let Some(entry) = claim_view.get(&claim.deposit_outpoint) else {
-            return Err(format!("system op #{i}: deposit lock {} is absent/spent in the claim view", claim.deposit_outpoint));
-        };
-        let Some(lock) = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key) else {
-            return Err(format!("system op #{i}: outpoint {} is not an EVM_DEPOSIT_LOCK output", claim.deposit_outpoint));
-        };
-        if lock.evm_address != claim.evm_address.as_bytes() {
-            return Err(format!("system op #{i}: claim address does not match the lock"));
+        match validate_one_deposit_claim(claim, claim_view.get(&claim.deposit_outpoint), pov_daa_score) {
+            Ok(entry) => consumed.push((claim.deposit_outpoint, entry)),
+            Err(e) => return Err(format!("system op #{i}: deposit lock {} {e:?}", claim.deposit_outpoint)),
         }
-        if entry.amount != claim.amount_sompi {
-            return Err(format!("system op #{i}: claim amount {} != lock value {}", claim.amount_sompi, entry.amount));
-        }
-        if lock.claim_tip_sompi != claim.claim_tip_sompi {
-            return Err(format!("system op #{i}: claim tip {} != lock tip {}", claim.claim_tip_sompi, lock.claim_tip_sompi));
-        }
-        if claim.claim_tip_sompi > claim.amount_sompi {
-            return Err(format!("system op #{i}: tip exceeds the locked amount"));
-        }
-        // AC-2 exclusivity: claim valid iff accepting daa < timeout (at/after
-        // the timeout the lock belongs to the refund path).
-        if pov_daa_score >= lock.timeout_daa_score {
-            return Err(format!(
-                "system op #{i}: claim at daa {pov_daa_score} ≥ refund timeout {} (refund window open)",
-                lock.timeout_daa_score
-            ));
-        }
-        consumed.push((claim.deposit_outpoint, entry));
     }
     Ok(consumed)
+}
+
+/// v0.4 §9.2 (narrow P0-1): the PRODUCER's snapshot of the deposit claims it puts
+/// in a template, prepared in ONE virtual generation — the lock entries are
+/// materialized from the SAME UTXO view the template's selected parent is taken
+/// from, eliminating the mixed-generation TOCTOU (template built on generation A,
+/// claims re-validated against a later generation B).
+#[derive(Default)]
+pub struct PreparedDepositClaims {
+    /// Claims that validated against the captured view — go into `payload.system_ops`.
+    pub accepted: Vec<kaspa_consensus_core::evm::DepositClaim>,
+    /// The lock entries the accepted claims consume — folded into the template's
+    /// `utxo_commitment` so the mined block reproduces the validator's recompute.
+    pub consumed_locks: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>,
+    /// Claims that could not be included, tagged so the mining manager reconciles
+    /// its queue: `Absent` ⇒ retain + retry, `Invalid` ⇒ evict.
+    pub stale: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::block::EvmClaimStaleKind)>,
+}
+
+/// v0.4 §9.2 (narrow P0-1): classify the queued claims against a single captured
+/// claim view (generation A), materializing the consumed lock entries while the
+/// caller still holds the virtual read lock. Caps at
+/// `MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK` accepted claims; a within-batch duplicate is
+/// dropped from THIS template only (the queue entry is kept). Uses the SAME
+/// per-claim rule as the acceptance path ([`validate_one_deposit_claim`]) so a
+/// block built from this snapshot reproduces the validator's verdict. Pure +
+/// always compiled (no revm, no store re-read).
+pub fn prepare_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::UtxoView>(
+    system_ops: &[kaspa_consensus_core::evm::DepositClaim],
+    claim_view: &V,
+    pov_daa_score: u64,
+) -> PreparedDepositClaims {
+    use kaspa_consensus_core::block::EvmClaimStaleKind;
+    let cap = kaspa_consensus_core::evm::MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK;
+    let mut prepared = PreparedDepositClaims::default();
+    let mut seen = std::collections::HashSet::new();
+    for claim in system_ops {
+        if prepared.accepted.len() >= cap {
+            // Beyond the per-block cap — not included AND not stale (still queued, retried next template).
+            break;
+        }
+        if !seen.insert(claim.deposit_outpoint) {
+            // Duplicate within this selection — drop from this template only; keep the queue entry.
+            continue;
+        }
+        match validate_one_deposit_claim(claim, claim_view.get(&claim.deposit_outpoint), pov_daa_score) {
+            Ok(entry) => {
+                prepared.accepted.push(claim.clone());
+                prepared.consumed_locks.push((claim.deposit_outpoint, entry));
+            }
+            Err(e) if e.is_retryable() => prepared.stale.push((claim.deposit_outpoint, EvmClaimStaleKind::Absent)),
+            Err(_) => prepared.stale.push((claim.deposit_outpoint, EvmClaimStaleKind::Invalid)),
+        }
+    }
+    prepared
 }
 
 /// v0.4 §9 — fold the bridge's UTXO side-effects into the accepting block's

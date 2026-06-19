@@ -26,7 +26,7 @@ use kaspa_consensus_core::{
         ConsensusApi,
         args::{TransactionValidationArgs, TransactionValidationBatchArgs},
     },
-    block::{BlockTemplate, TemplateBuildMode, TemplateTransactionSelector},
+    block::{BlockTemplate, EvmClaimStaleKind, TemplateBuildMode, TemplateTransactionSelector},
     coinbase::MinerData,
     errors::{block::RuleError as BlockRuleError, tx::TxRuleError},
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutput},
@@ -256,13 +256,42 @@ impl MiningManager {
             };
             match block_template_builder.build_block_template(consensus, miner_data, selector, build_mode, evm_template_data.clone()) {
                 Ok(block_template) => {
-                    // §9.2: claims the template path proved stale against the live
-                    // claim view can never execute — evict them so future templates
-                    // stop re-validating (and re-warning) on them.
-                    if !block_template.stale_evm_claims.is_empty() {
+                    // §9.2: reconcile the claim queue with what the template path found
+                    // when it re-validated each SELECTED claim against the LIVE claim view.
+                    //  - Invalid (lock present but unclaimable: refund-aged / field
+                    //    mismatch) → terminal, evict the queue entry at once.
+                    //  - Absent (lock not yet on this node's selected chain — a lagging
+                    //    miner or a forky DAG — or just consumed) → usually transient, so
+                    //    KEEP + retry; evict only after it stays absent for
+                    //    MAX_CLAIM_ABSENT_STRIKES consecutive templates (≈ blocks), which
+                    //    reaps a consumed / never-confirmed lock without dropping a claim
+                    //    whose deposit-lock is merely still being buried.
+                    //  - Claims that DID make it into the template have their lock present
+                    //    again → reset their consecutive-absent run.
+                    if !evm_template_data.system_ops.is_empty() {
+                        let stale: std::collections::HashSet<_> =
+                            block_template.stale_evm_claims.iter().map(|(op, _)| *op).collect();
                         let mut pool = self.evm_mempool.write();
-                        for outpoint in &block_template.stale_evm_claims {
-                            pool.remove_claim(outpoint);
+                        for claim in &evm_template_data.system_ops {
+                            if !stale.contains(&claim.deposit_outpoint) {
+                                pool.note_claim_present(&claim.deposit_outpoint);
+                            }
+                        }
+                        for (outpoint, kind) in &block_template.stale_evm_claims {
+                            match kind {
+                                EvmClaimStaleKind::Invalid => {
+                                    pool.remove_claim(outpoint);
+                                }
+                                EvmClaimStaleKind::Absent => {
+                                    if pool.note_claim_absent(outpoint) {
+                                        warn!(
+                                            "EVM: evicting deposit claim {outpoint} — its lock stayed absent from the selected chain for {} consecutive templates; re-submit submitEvmDepositClaim once the deposit-lock tx is confirmed on the selected chain",
+                                            crate::evm_mempool::MAX_CLAIM_ABSENT_STRIKES
+                                        );
+                                        pool.remove_claim(outpoint);
+                                    }
+                                }
+                            }
                         }
                     }
                     let block_template = cache_lock.set_immutable_cached_template(block_template);

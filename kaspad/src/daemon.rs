@@ -777,6 +777,14 @@ Do you confirm? (y/n)";
     if let Some(validator_service) = validator_service {
         async_runtime.register(validator_service)
     };
+    // kaspa-pq EVM Lane (ADR-0020 §16): the Ethereum JSON-RPC adapter, enabled by
+    // `--evm-rpc-listen` (evm builds only; the default node never links it).
+    #[cfg(feature = "evm")]
+    if let Some(evm_rpc_listen) = &args.evm_rpc_listen {
+        let addr: std::net::SocketAddr = evm_rpc_listen.normalize(8545).into();
+        kaspa_core::info!("Ethereum JSON-RPC adapter enabled on http://{addr}");
+        async_runtime.register(Arc::new(crate::eth_rpc::EthRpcService::new(addr, consensus_manager.clone())));
+    }
     async_runtime.register(mining_monitor);
     async_runtime.register(perf_monitor);
     async_runtime.register(mining_rule_engine);

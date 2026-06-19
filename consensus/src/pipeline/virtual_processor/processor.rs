@@ -61,7 +61,7 @@ use kaspa_consensus_core::{
     BlockHash, BlockHashSet, BlueWorkType, ChainPath,
     acceptance_data::AcceptanceData,
     api::args::{TransactionValidationArgs, TransactionValidationBatchArgs},
-    block::{BlockTemplate, MutableBlock, TemplateBuildMode, TemplateTransactionSelector},
+    block::{BlockTemplate, EvmClaimStaleKind, MutableBlock, TemplateBuildMode, TemplateTransactionSelector},
     blockstatus::BlockStatus::{StatusDisqualifiedFromChain, StatusUTXOValid},
     coinbase::MinerData,
     config::genesis::GenesisBlock,
@@ -120,28 +120,41 @@ use std::{
 };
 
 /// O9 (optimization design v0.1): rolling EVM-lane throughput counters.
+/// Recorded only on the `evm` chain-context step, so it is dead on the default
+/// (secp-free, non-`evm`) node — silence the dead-code lint there.
+#[cfg_attr(not(feature = "evm"), allow(dead_code))]
 #[derive(Default)]
 pub(super) struct EvmLaneKpi {
     chain_blocks: std::sync::atomic::AtomicU64,
     mergeset_blocks: std::sync::atomic::AtomicU64,
     accepted_gas: std::sync::atomic::AtomicU64,
+    // kaspa-pq EVM bridge observability: cumulative deposit-claims APPLIED in
+    // accepted chain blocks. Surfaced in the KPI line because accepted-gas
+    // utilization rounds to 0.00% even for several successful claims (one claim
+    // ≈ 25k gas of the 30M cap ≈ 0.00065%), so "0.00%" must NOT be read as "zero
+    // claims succeeded" — this counter is the direct success signal.
+    applied_claims: std::sync::atomic::AtomicU64,
 }
 
+#[cfg_attr(not(feature = "evm"), allow(dead_code))]
 impl EvmLaneKpi {
-    /// Record one validated EVM chain block; periodically logs the rolling
-    /// averages (every 256 chain blocks).
-    pub(super) fn record(&self, mergeset_size: usize, gas_used: u64) {
+    /// Record one validated EVM chain block (and the deposit claims it applied);
+    /// periodically logs the rolling averages + cumulative applied claims (every
+    /// 256 chain blocks).
+    pub(super) fn record(&self, mergeset_size: usize, gas_used: u64, claims_applied: usize) {
         use std::sync::atomic::Ordering;
         let n = self.chain_blocks.fetch_add(1, Ordering::Relaxed) + 1;
         let ms = self.mergeset_blocks.fetch_add(mergeset_size as u64, Ordering::Relaxed) + mergeset_size as u64;
         let gas = self.accepted_gas.fetch_add(gas_used, Ordering::Relaxed) + gas_used;
+        let claims = self.applied_claims.fetch_add(claims_applied as u64, Ordering::Relaxed) + claims_applied as u64;
         if n.is_multiple_of(256) {
             let cap = kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK as f64;
             info!(
-                "EVM lane KPI (O9): {} chain blocks, avg mergeset {:.2}, avg accepted-gas utilization {:.2}%",
+                "EVM lane KPI (O9): {} chain blocks, avg mergeset {:.2}, avg accepted-gas utilization {:.2}%, {} deposit-claims applied (cumulative)",
                 n,
                 ms as f64 / n as f64,
-                (gas as f64 / n as f64) / cap * 100.0
+                (gas as f64 / n as f64) / cap * 100.0,
+                claims
             );
         }
     }
@@ -205,6 +218,7 @@ pub struct VirtualStateProcessor {
     // 30M × chain-block rate (NOT DAG width), and the adversarial degradation
     // mode is a widening mergeset (design §2/B7) — these counters make that
     // observable. Logged every 256 chain blocks; never consensus-relevant.
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))] // recorded only on the cfg(evm) chain-context step
     pub(super) evm_lane_kpi: EvmLaneKpi,
 
     // Utxo-related stores
@@ -757,8 +771,18 @@ impl VirtualStateProcessor {
             &consumed_locks,
             &staged.result.withdrawals,
         )?;
-        // O9: chain-rate / mergeset / gas-utilization observability.
-        self.evm_lane_kpi.record(ctx.ghostdag_data.mergeset_size(), staged.result.header.gas_used);
+        // kaspa-pq EVM bridge observability (P0-4): a deposit lock that reaches
+        // this point is being APPLIED into this accepted chain block's committed
+        // UTXO diff (consumed). Log each so a successful claim is directly visible
+        // — the accepted-gas KPI rounds to 0.00% even for several real claims.
+        for (outpoint, entry) in &consumed_locks {
+            info!(
+                "[evm-claim-applied] accepting_block={current} deposit_outpoint={outpoint} amount_sompi={} pov_daa={}",
+                entry.amount, header.daa_score
+            );
+        }
+        // O9: chain-rate / mergeset / gas-utilization observability + applied-claim count.
+        self.evm_lane_kpi.record(ctx.ghostdag_data.mergeset_size(), staged.result.header.gas_used, consumed_locks.len());
         Ok(Some(staged))
     }
 
@@ -876,19 +900,29 @@ impl VirtualStateProcessor {
         header: Header,
         virtual_state: &VirtualState,
         evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
-    ) -> Result<(Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<kaspa_consensus_core::tx::TransactionOutpoint>), RuleError> {
+        // kaspa-pq narrow P0-1: deposit claims already validated + their lock
+        // entries materialized against the template's virtual generation (no
+        // re-read of a possibly-advanced view here).
+        prepared_claims: crate::processes::evm::PreparedDepositClaims,
+    ) -> Result<
+        (Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<(kaspa_consensus_core::tx::TransactionOutpoint, EvmClaimStaleKind)>),
+        RuleError,
+    > {
         use crate::processes::evm::evm_execute_acceptance;
         if header.daa_score < self.evm_activation_daa_score {
             return Ok((header, Default::default(), vec![]));
         }
-        let mut stale_claims: Vec<kaspa_consensus_core::tx::TransactionOutpoint> = Vec::new();
+        // narrow P0-1: split the deposit-claim snapshot prepared against the
+        // template's virtual generation — `accepted` claims go into the payload,
+        // their `consumed_locks` fold into the commitment, the `stale` set flows
+        // back to the mining manager.
+        let crate::processes::evm::PreparedDepositClaims { accepted: accepted_claims, consumed_locks, stale: stale_claims } =
+            prepared_claims;
         // §15 step 6: assemble the own payload from the mempool candidates.
         // Defense-in-depth re-admission (the body class-1 rule): an inadmissible
         // tx here would make our OWN block payload-block-invalid, so hard-filter
         // rather than trust the pool; independently re-enforce the byte cap.
         // The candidates execute in a LATER accepting chain block, never here.
-        let mut consumed_locks: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)> =
-            Vec::new();
         let own_payload = {
             use kaspa_consensus_core::evm::{EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
             let mut payload = EvmExecutionPayload::default();
@@ -911,44 +945,21 @@ impl VirtualStateProcessor {
                     }
                 }
             }
-            // §9.2: own-payload deposit claims. These EXECUTE in this block, so
-            // an invalid claim makes our block invalid — re-validate each against
-            // the live claim view and drop the stale ones (the queue may hold a
-            // lock that was spent or aged into its refund window since submit).
-            // The claim view for a block B extending the virtual tip is
-            // `selected_parent(B)_view ∘ B.mergeset_diff`; for a fresh template
-            // B's parent is the virtual selected parent and B's mergeset is the
-            // virtual mergeset, so the virtual UTXO set IS that composed view —
-            // exactly what the acceptance path will re-check. The consumed lock
-            // entries are collected HERE (one read of the live view — no second
-            // racy read) for the commitment fold below.
-            if !evm_template_data.system_ops.is_empty() {
-                use kaspa_consensus_core::evm::{EvmSystemOp, MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK};
-                let virtual_read = self.virtual_stores.read();
-                let claim_view = &virtual_read.utxo_set;
-                for claim in evm_template_data.system_ops {
-                    if payload.system_ops.len() >= MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK {
-                        break;
-                    }
-                    // Validate the WHOLE accumulated claim set + the candidate so
-                    // cross-claim rules (duplicate outpoints) also filter here.
-                    let mut probe_ops = payload.system_ops.clone();
-                    probe_ops.push(EvmSystemOp::DepositClaim(claim.clone()));
-                    let probe = EvmExecutionPayload { system_ops: probe_ops, ..Default::default() };
-                    match crate::processes::evm::validate_evm_deposit_claims(&probe, claim_view, header.daa_score) {
-                        Ok(consumed) => {
-                            payload.system_ops.push(EvmSystemOp::DepositClaim(claim));
-                            consumed_locks = consumed;
-                        }
-                        Err(reason) => {
-                            // Stale vs the LIVE view is terminal (the lock is spent or
-                            // refund-aged; a reorg resurrection can simply re-submit) —
-                            // report it so the manager evicts the queue entry.
-                            warn!("EVM template: dropping stale/invalid deposit claim ({reason})");
-                            stale_claims.push(claim.deposit_outpoint);
-                        }
-                    }
-                }
+            // §9.2 (narrow P0-1): own-payload deposit claims. These EXECUTE in the
+            // accepting chain block, so an invalid claim would make our block invalid.
+            // The claims were ALREADY validated, and their consumed lock entries
+            // materialized, by `prepare_deposit_claims` against the SAME virtual
+            // generation this template's selected parent is taken from — NOT a
+            // re-read of a possibly-advanced view here (that second read was the
+            // mixed-generation TOCTOU that could self-disqualify the block or wrongly
+            // drop a still-valid claim). The claim view for a block B extending the
+            // virtual tip is `selected_parent(B)_view ∘ B.mergeset_diff`, which for a
+            // fresh template IS the captured virtual UTXO set — exactly what the
+            // acceptance path re-checks. Emit the accepted claims; the consumed locks
+            // fold into the commitment below; the tagged stale set flows back to the
+            // mining manager (`Absent` ⇒ retain + retry, `Invalid` ⇒ evict).
+            for claim in accepted_claims {
+                payload.system_ops.push(kaspa_consensus_core::evm::EvmSystemOp::DepositClaim(claim));
             }
             // audit #3: the tx loop above budgets ONLY the txs against the byte
             // cap; the deposit-claim system ops are appended afterwards and each
@@ -1016,7 +1027,11 @@ impl VirtualStateProcessor {
         header: Header,
         _virtual_state: &VirtualState,
         _evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
-    ) -> Result<(Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<kaspa_consensus_core::tx::TransactionOutpoint>), RuleError> {
+        _prepared_claims: crate::processes::evm::PreparedDepositClaims,
+    ) -> Result<
+        (Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<(kaspa_consensus_core::tx::TransactionOutpoint, EvmClaimStaleKind)>),
+        RuleError,
+    > {
         if header.daa_score >= self.evm_activation_daa_score {
             panic!(
                 "the EVM lane is active at DAA {} but this kaspad was built without the `evm` feature — cannot build a valid template (rebuild with --features evm)",
@@ -2500,11 +2515,33 @@ impl VirtualStateProcessor {
             (TemplateBuildMode::Standard, true) | (TemplateBuildMode::Infallible, _) => {}
         }
 
+        // kaspa-pq narrow P0-1: capture the bond view AND materialize the
+        // deposit-claim lock entries in the SAME virtual generation as
+        // `virtual_state` (= the template's selected parent), BEFORE releasing the
+        // read lock. The overlay commitment and claim validation then use one
+        // coherent generation, never a later re-read of a possibly-advanced view
+        // (the mixed-generation TOCTOU). `virtual_state.daa_score` is exactly the
+        // template header's daa_score (see `Header::new_finalized` below).
+        let template_bond_view = self.initial_active_bond_view();
+        let prepared_claims = crate::processes::evm::prepare_deposit_claims(
+            &evm_template_data.system_ops,
+            virtual_utxo_view,
+            virtual_state.daa_score,
+        );
+
         // At this point we can safely drop the read lock
         drop(virtual_read);
 
         // Build the template
-        self.build_block_template_from_virtual_state(virtual_state, miner_data, txs, calculated_fees, evm_template_data)
+        self.build_block_template_from_virtual_state(
+            virtual_state,
+            template_bond_view,
+            prepared_claims,
+            miner_data,
+            txs,
+            calculated_fees,
+            evm_template_data,
+        )
     }
 
     pub(crate) fn validate_block_template_transactions(
@@ -2526,6 +2563,12 @@ impl VirtualStateProcessor {
     pub(crate) fn build_block_template_from_virtual_state(
         &self,
         virtual_state: Arc<VirtualState>,
+        // kaspa-pq narrow P0-1: the bond view + deposit-claim snapshot, both
+        // captured in the SAME virtual generation as `virtual_state` by the caller
+        // (under one read lock) — so the reward fan-out, the overlay commitment and
+        // the EVM claim payload all reference one coherent generation.
+        template_bond_view: ActiveBondView,
+        prepared_claims: crate::processes::evm::PreparedDepositClaims,
         miner_data: MinerData,
         mut txs: Vec<Transaction>,
         calculated_fees: Vec<u64>,
@@ -2546,8 +2589,9 @@ impl VirtualStateProcessor {
         // the §B.4 rule; then compute the reward outputs with the SAME
         // `validator_reward_outputs_for_block` the validation path uses, so a
         // block mined from this template reproduces the coinbase byte-for-byte.
-        // Both are no-ops on every current network (overlay dormant).
-        let template_bond_view = self.initial_active_bond_view();
+        // Both are no-ops on every current network (overlay dormant). The bond
+        // view is now captured by the caller in the template's virtual generation
+        // (narrow P0-1) and passed in, not re-read here.
         self.retain_reward_eligible_attestation_shards(&mut txs, &template_bond_view, virtual_state.daa_score);
         // kaspa-pq Phase 13 (ADR-0018 §F+§E): the §F carve + §E validator pool for
         // this template, computed identically to the validation path so a block
@@ -2640,7 +2684,8 @@ impl VirtualStateProcessor {
         // code) and commit both EVM header fields. The own payload is empty
         // until the EVM mempool lands (§16 phase) — its (non-zero) hash is
         // still committed. Inert (returns the header unchanged) pre-activation.
-        let (header, evm_payload, stale_evm_claims) = self.evm_template_fields(header, &virtual_state, evm_template_data)?;
+        let (header, evm_payload, stale_evm_claims) =
+            self.evm_template_fields(header, &virtual_state, evm_template_data, prepared_claims)?;
         // kaspa-pq ADR-0022: commit the DNS/PoS-v2 overlay snapshot as-of the template's
         // selected parent (the sink) — the SAME `compute_overlay_snapshot` the validation
         // path re-derives, so a block mined from this template reproduces the

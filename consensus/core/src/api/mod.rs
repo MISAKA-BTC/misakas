@@ -460,6 +460,26 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§16): the canonical EVM head execution header —
+    /// the EVM header committed by the current sink (drives `eth_blockNumber`
+    /// and the "latest" block tag). `None` on a non-EVM node / before activation.
+    fn get_evm_head_header(&self) -> ConsensusResult<Option<crate::evm::EvmExecutionHeader>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the EVM execution header committed by the
+    /// L1 chain block `block`, if any.
+    fn get_evm_header_of(&self, _block: BlockHash) -> ConsensusResult<Option<crate::evm::EvmExecutionHeader>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the full EVM state snapshot committed after
+    /// the L1 chain block `block`, for read-only `eth_*` state queries and
+    /// `eth_call` simulation.
+    fn get_evm_state_snapshot_of(&self, _block: BlockHash) -> ConsensusResult<Option<crate::evm::EvmStateSnapshot>> {
+        Ok(None)
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own `EvmExecutionPayload`
     /// (the bytes `evm_payload_hash` commits to). The payload store only holds
     /// rows for non-empty payloads, so absence maps to the empty payload —

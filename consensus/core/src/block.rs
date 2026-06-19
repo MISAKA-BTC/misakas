@@ -143,6 +143,25 @@ pub enum TemplateBuildMode {
     Infallible,
 }
 
+/// kaspa-pq EVM Lane (§9.2): why the template path could not include a queued
+/// deposit claim when it re-validated the claim against the live selected-parent
+/// claim view. Drives the mining manager's claim-queue reconciliation so that a
+/// merely-not-yet-visible lock is retried instead of being evicted on sight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvmClaimStaleKind {
+    /// The lock outpoint is PRESENT in the live view but the claim can never
+    /// execute against it (the refund window has opened, or a lock field no
+    /// longer matches the claim). Terminal — the queue entry is evicted at once.
+    Invalid,
+    /// The lock outpoint is ABSENT from the live view. Usually transient: the
+    /// deposit-lock's block is not yet on this node's selected chain (a lagging
+    /// miner or a forky DAG), or the lock was just consumed by an accepted block.
+    /// The queue entry is RETAINED and retried, and evicted only after it stays
+    /// absent for many consecutive templates (so a consumed / never-confirmed
+    /// lock is still reaped, but a transient lag resolves long before).
+    Absent,
+}
+
 /// A block template for miners.
 #[derive(Debug, Clone)]
 pub struct BlockTemplate {
@@ -154,11 +173,12 @@ pub struct BlockTemplate {
     pub selected_parent_hash: BlockHash,
     /// Expected length is one less than txs length due to lack of coinbase transaction
     pub calculated_fees: Vec<u64>,
-    /// kaspa-pq EVM Lane (§9.2): deposit-claim outpoints the template path judged
-    /// stale against the live claim view (lock absent/spent or aged into its refund
-    /// window) — terminal for the queued claim, so the mining manager evicts them
-    /// from the claim queue instead of re-validating (and re-warning) every template.
-    pub stale_evm_claims: Vec<TransactionOutpoint>,
+    /// kaspa-pq EVM Lane (§9.2): deposit claims the template path could not
+    /// include when re-validated against the live claim view, each tagged with
+    /// [`EvmClaimStaleKind`] so the mining manager reconciles its claim queue
+    /// correctly — `Invalid` claims are evicted at once, while `Absent` (lock not
+    /// yet on this node's selected chain) ones are retained and retried.
+    pub stale_evm_claims: Vec<(TransactionOutpoint, EvmClaimStaleKind)>,
 }
 
 impl BlockTemplate {
@@ -170,7 +190,7 @@ impl BlockTemplate {
         selected_parent_daa_score: u64,
         selected_parent_hash: BlockHash,
         calculated_fees: Vec<u64>,
-        stale_evm_claims: Vec<TransactionOutpoint>,
+        stale_evm_claims: Vec<(TransactionOutpoint, EvmClaimStaleKind)>,
     ) -> Self {
         Self {
             block,
