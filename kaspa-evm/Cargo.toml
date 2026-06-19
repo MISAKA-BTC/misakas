@@ -32,7 +32,7 @@ derive_more = { version = "1", features = ["display"] }
 
 # EVM execution. Shanghai baseline (no c-kzg/blob precompile); ecrecover uses the
 # pure-Rust k256 path (secp256k1 C feature left off).
-revm = { version = "14", default-features = false, features = ["std"] }
+revm = { version = "19", default-features = false, features = ["std"] }
 # Ethereum keccak256 MPT roots (state / storage / tx / receipts) and RLP. Share
 # revm's alloy-primitives 0.8.26 (no duplicate primitive types / version skew);
 # the `rlp` feature gives `U256`/`B256: Encodable` for account/storage encoding.
