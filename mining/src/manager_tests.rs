@@ -1137,6 +1137,51 @@ mod tests {
         // TODO: extend the test according to the golang scenario
     }
 
+    /// Regression: validator/reserve outputs may follow the red reward, and the
+    /// worker-inclusion bounty may follow those. Retarget every output explicitly
+    /// marked as belonging to the current miner, without touching interleaved
+    /// validator outputs.
+    #[test]
+    fn test_modify_block_template_updates_all_miner_script_outputs() {
+        let consensus = ConsensusMock::new();
+        let counters = Arc::new(MiningCounters::default());
+        let mining_manager = MiningManager::new(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS, None, counters);
+        let old_miner_data = generate_new_coinbase(Prefix::Testnet, OpType::Usual);
+        let new_miner_data = generate_new_coinbase(Prefix::Testnet, OpType::Usual);
+        let validator_data = generate_new_coinbase(Prefix::Testnet, OpType::True);
+
+        let builder = mining_manager.block_template_builder();
+        let mut template = builder
+            .build_block_template(
+                &consensus,
+                &old_miner_data,
+                Box::new(TakeAllSelector::new(Vec::<Arc<Transaction>>::new())),
+                TemplateBuildMode::Standard,
+                Default::default(),
+            )
+            .unwrap();
+
+        // Model the production order: red miner reward, validator output, then
+        // current-miner inclusion bounty.
+        {
+            let coinbase_tx = &mut template.block.transactions[0];
+            let red_output = coinbase_tx.outputs[0].clone();
+            let validator_output = TransactionOutput::new(7, validator_data.script_public_key.clone());
+            let bounty_output = TransactionOutput::new(11, old_miner_data.script_public_key.clone());
+            coinbase_tx.outputs = vec![red_output, validator_output, bounty_output];
+        }
+        template.coinbase_has_red_reward = true;
+        template.coinbase_miner_script_output_indices = vec![0, 2];
+        template.block.header.hash_merkle_root = consensus.calc_transaction_hash_merkle_root(&template.block.transactions);
+        template.block.header.finalize();
+
+        let modified = BlockTemplateBuilder::modify_block_template(&consensus, &new_miner_data, &template).unwrap();
+        let outputs = &modified.block.transactions[0].outputs;
+        assert_eq!(outputs[0].script_public_key, new_miner_data.script_public_key);
+        assert_eq!(outputs[1].script_public_key, validator_data.script_public_key);
+        assert_eq!(outputs[2].script_public_key, new_miner_data.script_public_key);
+    }
+
     // This is a sanity test for the mempool eviction policy. We check that if the mempool reached to its maximum
     // (in bytes) a high paying transaction will evict as much transactions as needed so it can enter the
     // mempool.

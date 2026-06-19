@@ -50,5 +50,10 @@ impl BlockRewardData {
 /// Holds a coinbase transaction along with meta-data obtained during creation
 pub struct CoinbaseTransactionTemplate {
     pub tx: Transaction,
-    pub has_red_reward: bool, // Does the last output contain reward for red blocks
+    pub has_red_reward: bool,
+    /// Coinbase output indices whose script belongs to the current block miner
+    /// and must be rewritten when `MinerData::script_public_key` changes.
+    /// Currently this includes the aggregate red reward and the worker-inclusion
+    /// bounty; validator/reserve outputs can be interleaved between them.
+    pub miner_script_output_indices: Vec<usize>,
 }

@@ -103,9 +103,12 @@ impl BlockTemplateBuilder {
         let coinbase_tx = &mut block_template.block.transactions[COINBASE_TRANSACTION_INDEX];
         let new_payload = consensus.modify_coinbase_payload(coinbase_tx.payload.clone(), new_miner_data)?;
         coinbase_tx.payload = new_payload;
-        if block_template.coinbase_has_red_reward {
-            // The last output is always the coinbase red blocks reward
-            coinbase_tx.outputs.last_mut().unwrap().script_public_key = new_miner_data.script_public_key.clone();
+        for &output_index in &block_template.coinbase_miner_script_output_indices {
+            coinbase_tx
+                .outputs
+                .get_mut(output_index)
+                .expect("coinbase miner-script output index must be in range")
+                .script_public_key = new_miner_data.script_public_key.clone();
         }
         // Update the hash merkle root according to the modified transactions
         block_template.block.header.hash_merkle_root = consensus.calc_transaction_hash_merkle_root(&block_template.block.transactions);
