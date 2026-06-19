@@ -70,6 +70,10 @@ enum Command {
     /// the UTXO side of a bridge deposit. Claim it on a mining node afterwards via
     /// submitEvmDepositClaim(txid, 0).
     DepositLock(DepositLockArgs),
+    /// kaspa-pq EVM Lane (§9.2): submit a deposit-claim for a previously-created
+    /// EVM_DEPOSIT_LOCK outpoint (`txid:index`). Run against a MINING node so the claim
+    /// is included in an accepting chain block, which executes it and credits the EVM address.
+    Claim(ClaimArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -240,6 +244,16 @@ struct SpamArgs {
 }
 
 #[derive(Parser, Debug)]
+struct ClaimArgs {
+    /// Local node wRPC (borsh) endpoint, host:port. Run against a MINING node.
+    #[arg(long, default_value = "127.0.0.1:27610", env = "KASPA_PQ_NODE_RPC")]
+    node_rpc: String,
+    /// The EVM_DEPOSIT_LOCK outpoint to claim, `txid_hex:index` (the deposit-lock command printed it).
+    #[arg(long)]
+    outpoint: String,
+}
+
+#[derive(Parser, Debug)]
 struct DepositLockArgs {
     /// Local node wRPC (borsh) endpoint, host:port. The node must run --utxoindex.
     #[arg(long, default_value = "127.0.0.1:17110", env = "KASPA_PQ_NODE_RPC")]
@@ -295,6 +309,10 @@ async fn main() -> ExitCode {
         Command::DepositLock(args) => {
             kaspa_core::log::init_logger(None, "info");
             deposit_lock(args).await
+        }
+        Command::Claim(args) => {
+            kaspa_core::log::init_logger(None, "info");
+            claim(args).await
         }
     };
     match result {
@@ -531,17 +549,44 @@ async fn deposit_lock(args: DepositLockArgs) -> Result<(), String> {
         params.storage_mass_parameter,
     );
 
-    // 20-byte EVM address (optional 0x).
+    // 20-byte EVM address (optional 0x). The deposit CREDITS this address on claim and a typo is
+    // UNRECOVERABLE (the lock is consumed, no refund), so enforce EIP-55 + dangerous-target guards
+    // here — the CLI boundary of MISAKA EVM Wallet Profile v1 (docs/misaka-evm-wallet-profile-v1.md).
+    // Consensus serialization of `EvmAddress` is unchanged.
     let evm_hex = args.evm_address.strip_prefix("0x").or_else(|| args.evm_address.strip_prefix("0X")).unwrap_or(&args.evm_address);
-    if evm_hex.len() != 40 {
-        return Err(format!("--evm-address must be 40 hex chars (20 bytes), got {}", evm_hex.len()));
+    if evm_hex.len() != 40 || !evm_hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!("--evm-address must be 40 hex chars (20 bytes), got '{}'", args.evm_address));
     }
     let mut evm_address = [0u8; 20];
-    faster_hex::hex_decode(evm_hex.as_bytes(), &mut evm_address).map_err(|e| format!("malformed --evm-address: {e}"))?;
+    faster_hex::hex_decode(evm_hex.to_ascii_lowercase().as_bytes(), &mut evm_address).map_err(|e| format!("malformed --evm-address: {e}"))?;
+    let checksummed = eip55_checksum(&evm_address);
+    let has_upper = evm_hex.bytes().any(|b| b.is_ascii_uppercase());
+    let has_lower = evm_hex.bytes().any(|b| b.is_ascii_lowercase());
+    if has_upper && has_lower {
+        // Mixed-case ⇒ an EIP-55 checksummed address: verify it (typo guard).
+        if checksummed != format!("0x{evm_hex}") {
+            return Err(format!(
+                "--evm-address EIP-55 checksum INVALID — likely a typo. You entered 0x{evm_hex}; the checksum for those bytes is {checksummed}. Re-check the address (a wrong address is unrecoverable after the claim)."
+            ));
+        }
+    } else {
+        warn!("[{VALIDATOR}] --evm-address has no EIP-55 checksum (single-case), so typos can't be detected — its checksummed form is {checksummed}. Prefer pasting the EIP-55 address.");
+    }
+    // A deposit credits a BALANCE (it does NOT call the contract), so these are almost always a
+    // mistake: zero ⇒ refuse; system (F001/F002/F003) + EVM precompiles (0x01..0x09) ⇒ strong warn.
+    if evm_address == [0u8; 20] {
+        return Err("--evm-address is the ZERO address (0x000…000) — refusing (the credit would be unrecoverable).".to_string());
+    }
+    if evm_address[..16].iter().all(|&b| b == 0) {
+        let tail = u32::from_be_bytes([evm_address[16], evm_address[17], evm_address[18], evm_address[19]]);
+        if tail == 0xF001 || tail == 0xF002 || tail == 0xF003 || (1..=9).contains(&tail) {
+            warn!("[{VALIDATOR}] --evm-address {checksummed} is a SYSTEM/precompile address — depositing there is almost certainly a mistake (no normal account holds a balance there).");
+        }
+    }
 
     let timeout_daa_score = server.virtual_daa_score.saturating_add(args.timeout_daa_delta);
     info!(
-        "[{VALIDATOR}] depositing {} sompi to EVM 0x{evm_hex} (tip {}, refund timeout daa {timeout_daa_score}, funding {funding_addr})",
+        "[{VALIDATOR}] depositing {} sompi to EVM {checksummed} (tip {}, refund timeout daa {timeout_daa_score}, funding {funding_addr})",
         args.amount, args.claim_tip
     );
 
@@ -729,6 +774,43 @@ async fn spam(args: SpamArgs) -> Result<(), String> {
         }
         tokio::time::sleep(Duration::from_millis(args.interval_ms)).await;
     }
+}
+
+/// EIP-55 mixed-case checksum of a 20-byte address → `0x` + 40 case-encoded hex chars
+/// (typo guard for deposit destinations; see docs/misaka-evm-wallet-profile-v1.md).
+fn eip55_checksum(addr: &[u8; 20]) -> String {
+    use sha3::{Digest, Keccak256};
+    let lower: String = addr.iter().map(|b| format!("{b:02x}")).collect();
+    let hash = Keccak256::digest(lower.as_bytes());
+    let mut out = String::with_capacity(42);
+    out.push_str("0x");
+    for (i, c) in lower.chars().enumerate() {
+        // Uppercase a hex letter iff the corresponding Keccak-256 nibble is ≥ 8 (EIP-55).
+        if c.is_ascii_alphabetic() && ((hash[i / 2] >> (if i % 2 == 0 { 4 } else { 0 })) & 0x0f) >= 8 {
+            out.push(c.to_ascii_uppercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// kaspa-pq EVM Lane (§9.2): submit a deposit-claim for an EVM_DEPOSIT_LOCK outpoint via
+/// the node's `submitEvmDepositClaim` RPC (queues it for inclusion on this mining node).
+async fn claim(args: ClaimArgs) -> Result<(), String> {
+    let (txid, index_str) = args
+        .outpoint
+        .split_once(':')
+        .ok_or_else(|| format!("--outpoint must be 'txid_hex:index', got '{}'", args.outpoint))?;
+    let index: u32 = index_str.parse().map_err(|e| format!("bad outpoint index '{index_str}': {e}"))?;
+    let client = connect(&args.node_rpc).await?;
+    let resp = client
+        .submit_evm_deposit_claim(txid.to_string(), index)
+        .await
+        .map_err(|e| format!("submitEvmDepositClaim failed: {e}"))?;
+    info!("[{VALIDATOR}] submitted deposit-claim for {txid}:{index} -> {resp:?}");
+    let _ = client.disconnect().await;
+    Ok(())
 }
 
 async fn connect(node_rpc: &str) -> Result<KaspaRpcClient, String> {
@@ -1192,5 +1274,23 @@ mod tests {
         let decoded = decode_message(std::str::from_utf8(&hex).unwrap()).unwrap();
         assert_eq!(decoded, bytes);
         assert!(decode_message("zz").is_err());
+    }
+}
+
+#[cfg(test)]
+mod eip55_tests {
+    use super::eip55_checksum;
+    fn bytes(s: &str) -> [u8; 20] {
+        let mut a = [0u8; 20];
+        faster_hex::hex_decode(s.as_bytes(), &mut a).unwrap();
+        a
+    }
+    #[test]
+    fn matches_eip55_spec_vectors() {
+        // Canonical vectors from EIP-55.
+        assert_eq!(eip55_checksum(&bytes("5aaeb6053f3e94c9b9a09f33669435e7ef1beaed")), "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed");
+        assert_eq!(eip55_checksum(&bytes("fb6916095ca1df60bb79ce92ce3ea74c37c5d359")), "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359");
+        assert_eq!(eip55_checksum(&bytes("dbf03b407c01e7cd3cbea99509d93f8dddc8c6fb")), "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB");
+        assert_eq!(eip55_checksum(&bytes("d1220a0cf47c7b9be7a2e6ba89f429762e7b9adb")), "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb");
     }
 }
