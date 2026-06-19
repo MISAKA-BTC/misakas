@@ -25,6 +25,7 @@ kaspa-wrpc-client.workspace = true
 faster-hex.workspace = true
 log.workspace = true
 rand.workspace = true
+sha3.workspace = true # Keccak-256 for the EIP-55 deposit-address checksum (Wallet Profile v1)
 
 clap = { workspace = true, features = ["env"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal"] }

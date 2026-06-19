@@ -4291,6 +4291,7 @@ dependencies = [
  "kaspa-wrpc-client",
  "log",
  "rand 0.8.6",
+ "sha3",
  "tokio",
 ]
 
