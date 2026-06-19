@@ -480,6 +480,26 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§16): the EVM "block" (header + L1 hash + tx
+    /// hashes) of the L1 chain block `l1_hash`, for `eth_getBlockBy*`. `None`
+    /// if that block has no EVM header.
+    fn get_evm_block_by_l1_hash(&self, _l1_hash: BlockHash) -> ConsensusResult<Option<crate::evm::EvmBlockResponse>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16, `eth_getBlockByNumber`): the canonical EVM
+    /// block at `evm_number` (reorg-validated — `None` if no canonical chain
+    /// block currently holds that number).
+    fn get_evm_block_by_number(&self, _evm_number: u64) -> ConsensusResult<Option<crate::evm::EvmBlockResponse>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16, `eth_getBlockByHash`): the EVM block whose
+    /// eth-rpc 32-byte id (first 32 bytes of the 64-byte L1 hash) is `rpc_hash`.
+    fn get_evm_block_by_rpc_hash(&self, _rpc_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<crate::evm::EvmBlockResponse>> {
+        Ok(None)
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own `EvmExecutionPayload`
     /// (the bytes `evm_payload_hash` commits to). The payload store only holds
     /// rows for non-empty payloads, so absence maps to the empty payload —

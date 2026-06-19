@@ -157,6 +157,14 @@ pub enum DatabaseStorePrefixes {
     /// when its selected-chain walk reaches the pruning point (the below-pp window
     /// is otherwise unreachable post-prune / post-import).
     PruningPointOverlaySnapshot = 212,
+    /// kaspa-pq EVM Lane (§16, eth-rpc): keyed by `evm_number` (u64 BE) → the L1
+    /// `BlockHash` of the chain block with that EVM number (for `eth_getBlockByNumber`
+    /// + `eth_getLogs` ranges). Upserted per chain block at commit; on a reorg the new
+    /// canonical block at a number overwrites the old, and the reader validates
+    /// `is_chain_block(hash) && header(hash).evm_number == n` so a stale row reads as
+    /// absent (same canonical-resolution pattern as `get_evm_tx_receipt`). RPC index
+    /// only — never part of any commitment.
+    EvmNumberIndex = 213,
 
     // ---- Separator ----
     /// Reserved as a separator

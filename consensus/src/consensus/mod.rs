@@ -1507,6 +1507,35 @@ impl ConsensusApi for Consensus {
         Ok(self.storage.evm_state_store.get(block).optional().unwrap())
     }
 
+    fn get_evm_block_by_l1_hash(&self, l1_hash: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
+        let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().unwrap() else { return Ok(None) };
+        let tx_hashes = self.storage.evm_receipts_store.get(l1_hash).optional().unwrap().map(|r| r.tx_hashes).unwrap_or_default();
+        Ok(Some(kaspa_consensus_core::evm::EvmBlockResponse { header, l1_hash, tx_hashes }))
+    }
+
+    fn get_evm_block_by_number(&self, evm_number: u64) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmNumberStoreReader};
+        // Resolve the (upsert) number index, then re-validate canonicality: the
+        // candidate must still be a selected-chain block AND its header's
+        // evm_number must match (a reorg-orphaned row reads as absent — the same
+        // canonical-resolution guard as `get_evm_tx_receipt`).
+        let Some(l1_hash) = self.storage.evm_number_store.get(evm_number).unwrap() else { return Ok(None) };
+        if !self.is_chain_block(l1_hash).unwrap_or(false) {
+            return Ok(None);
+        }
+        match self.storage.evm_header_store.get(l1_hash).optional().unwrap() {
+            Some(h) if h.evm_number == evm_number => self.get_evm_block_by_l1_hash(l1_hash),
+            _ => Ok(None),
+        }
+    }
+
+    fn get_evm_block_by_rpc_hash(&self, rpc_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
+        use crate::model::stores::evm::EvmBlockHashMapStoreReader;
+        let Some(l1_hash) = self.storage.evm_block_hash_map_store.get(rpc_hash).unwrap() else { return Ok(None) };
+        self.get_evm_block_by_l1_hash(l1_hash)
+    }
+
     fn get_block_evm_payload(&self, hash: BlockHash) -> ConsensusResult<kaspa_consensus_core::evm::EvmExecutionPayload> {
         // kaspa-pq EVM Lane v0.4 (§3.1): the payload store only holds rows for
         // non-empty payloads (commit_body persists them), so absence is the
