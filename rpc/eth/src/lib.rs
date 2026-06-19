@@ -78,6 +78,32 @@ pub struct EthCallRequest {
     pub gas: u64,
 }
 
+/// One log entry of an [`EthReceipt`] (the node-side impl fills it from the
+/// committed EVM receipt; the adapter renders the standard JSON shape).
+#[derive(Clone, Debug)]
+pub struct EthLog {
+    pub address: [u8; 20],
+    pub topics: Vec<[u8; 32]>,
+    pub data: Vec<u8>,
+}
+
+/// A mined EVM transaction's receipt (`eth_getTransactionReceipt`). Primitive
+/// fields only, so this crate stays free of the consensus receipt types — the
+/// node-side impl maps its `EvmTxReceiptView` onto this.
+#[derive(Clone, Debug)]
+pub struct EthReceipt {
+    pub tx_hash: [u8; 32],
+    /// `true` ⇒ status `0x1`; `false` ⇒ `0x0` (reverted/failed, still mined).
+    pub status: bool,
+    pub block_number: u64,
+    /// A 32-byte block identifier (the accepting L1 block hash truncated to 32).
+    pub block_hash: [u8; 32],
+    pub tx_index: u32,
+    pub gas_used: u64,
+    pub cumulative_gas_used: u64,
+    pub logs: Vec<EthLog>,
+}
+
 /// The node-side data + action surface the adapter needs. Implemented by kaspad
 /// over its `ConsensusManager` + `FlowContext` (and, for simulation, kaspa-evm).
 /// Methods are added here as the MVP grows (state / call / receipt / block).
@@ -110,6 +136,14 @@ pub trait EthProvider: Send + Sync + 'static {
 
     /// `eth_estimateGas`: the minimal gas limit that lets the call succeed.
     async fn estimate_gas(&self, req: EthCallRequest) -> EthResult<u64>;
+
+    /// `eth_sendRawTransaction`: admit a signed raw EIP-2718 transaction into the
+    /// EVM mempool. Returns the Ethereum tx hash (keccak256 of the raw bytes).
+    async fn send_raw_transaction(&self, raw: Vec<u8>) -> EthResult<[u8; 32]>;
+
+    /// `eth_getTransactionReceipt`: the receipt of a mined EVM tx, or `None` if
+    /// it is unknown / still pending (not yet accepted on the selected chain).
+    async fn transaction_receipt(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthReceipt>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +209,11 @@ async fn dispatch(provider: &Arc<dyn EthProvider>, req: RpcRequest) -> RpcRespon
         "eth_getStorageAt" => eth_get_storage_at(provider, &req.params).await,
         "eth_call" => eth_call_handler(provider, &req.params).await,
         "eth_estimateGas" => eth_estimate_gas_handler(provider, &req.params).await,
+        "eth_sendRawTransaction" => eth_send_raw_transaction(provider, &req.params).await,
+        "eth_getTransactionReceipt" => eth_get_transaction_receipt(provider, &req.params).await,
+        // Wallets poll this; we do not index pending txs by hash, so report
+        // "unknown" (null) — the receipt is the source of truth for inclusion.
+        "eth_getTransactionByHash" => Ok(Value::Null),
         other => Err(EthRpcError::new(codes::METHOD_NOT_FOUND, format!("the method {other} does not exist / is not available"))),
     };
     match result {
@@ -268,6 +307,82 @@ async fn eth_call_handler(provider: &Arc<dyn EthProvider>, params: &Value) -> Et
 async fn eth_estimate_gas_handler(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let req = parse_call_request(params)?;
     Ok(quantity(provider.estimate_gas(req).await? as u128))
+}
+
+// --- eth_sendRawTransaction / eth_getTransactionReceipt (Increment 5) ---
+
+async fn eth_send_raw_transaction(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let hex = params
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| EthRpcError::invalid_params("eth_sendRawTransaction expects [rawTx]"))?;
+    let raw = decode_hex(hex)?;
+    if raw.is_empty() {
+        return Err(EthRpcError::invalid_params("empty raw transaction"));
+    }
+    let hash = provider.send_raw_transaction(raw).await?;
+    Ok(json!(format!("0x{}", faster_hex::hex_string(&hash))))
+}
+
+async fn eth_get_transaction_receipt(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let s = params
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| EthRpcError::invalid_params("eth_getTransactionReceipt expects [txHash]"))?;
+    let bytes = decode_hex(s)?;
+    if bytes.len() != 32 {
+        return Err(EthRpcError::invalid_params("transaction hash must be 32 bytes"));
+    }
+    let mut tx_hash = [0u8; 32];
+    tx_hash.copy_from_slice(&bytes);
+    match provider.transaction_receipt(tx_hash).await? {
+        None => Ok(Value::Null),
+        Some(r) => Ok(format_receipt(&r)),
+    }
+}
+
+/// Render an [`EthReceipt`] as the standard `eth_getTransactionReceipt` JSON.
+fn format_receipt(r: &EthReceipt) -> Value {
+    let tx_hash = format!("0x{}", faster_hex::hex_string(&r.tx_hash));
+    let block_hash = format!("0x{}", faster_hex::hex_string(&r.block_hash));
+    let block_number = quantity(r.block_number as u128);
+    let tx_index = quantity(r.tx_index as u128);
+    let logs: Vec<Value> = r
+        .logs
+        .iter()
+        .enumerate()
+        .map(|(i, lg)| {
+            let topics: Vec<Value> = lg.topics.iter().map(|t| json!(format!("0x{}", faster_hex::hex_string(t)))).collect();
+            json!({
+                "address": format!("0x{}", faster_hex::hex_string(&lg.address)),
+                "topics": topics,
+                "data": format!("0x{}", faster_hex::hex_string(&lg.data)),
+                "blockNumber": block_number.clone(),
+                "blockHash": block_hash.clone(),
+                "transactionHash": tx_hash.clone(),
+                "transactionIndex": tx_index.clone(),
+                "logIndex": quantity(i as u128),
+                "removed": false,
+            })
+        })
+        .collect();
+    json!({
+        "transactionHash": tx_hash,
+        "transactionIndex": tx_index,
+        "blockNumber": block_number,
+        "blockHash": block_hash,
+        "from": Value::Null,
+        "to": Value::Null,
+        "cumulativeGasUsed": quantity(r.cumulative_gas_used as u128),
+        "gasUsed": quantity(r.gas_used as u128),
+        "contractAddress": Value::Null,
+        "logs": logs,
+        "logsBloom": format!("0x{}", "00".repeat(256)),
+        "status": if r.status { "0x1" } else { "0x0" },
+        "type": "0x0",
+    })
 }
 
 /// Parse the `eth_call` / `eth_estimateGas` call object from `params[0]`.
