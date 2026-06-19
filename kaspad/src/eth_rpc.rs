@@ -11,19 +11,23 @@ use async_trait::async_trait;
 use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
-use kaspa_eth_rpc::{EthCallRequest, EthProvider, EthResult, EthRpcError};
+use kaspa_eth_rpc::{EthCallRequest, EthLog, EthProvider, EthReceipt, EthResult, EthRpcError};
+use kaspa_hashes::EvmH256;
+use kaspa_mining::manager::MiningManagerProxy;
 
 const ETH_RPC: &str = "eth-rpc";
 
-/// [`EthProvider`] over the node's consensus stores + (later) the EVM mempool.
+/// [`EthProvider`] over the node's consensus stores + the EVM mempool (the
+/// mempool seam powers `eth_sendRawTransaction`).
 pub struct NodeEthProvider {
     consensus_manager: Arc<ConsensusManager>,
+    mining_manager: MiningManagerProxy,
     client_version: String,
 }
 
 impl NodeEthProvider {
-    pub fn new(consensus_manager: Arc<ConsensusManager>) -> Self {
-        Self { consensus_manager, client_version: format!("misaka-kaspad/v{}", env!("CARGO_PKG_VERSION")) }
+    pub fn new(consensus_manager: Arc<ConsensusManager>, mining_manager: MiningManagerProxy) -> Self {
+        Self { consensus_manager, mining_manager, client_version: format!("misaka-kaspad/v{}", env!("CARGO_PKG_VERSION")) }
     }
 }
 
@@ -97,6 +101,56 @@ impl EthProvider for NodeEthProvider {
             .map_err(|e| EthRpcError::server(format!("estimate_gas task: {e}")))?
             .map_err(|e| EthRpcError::server(format!("estimate_gas: {e}")))
     }
+
+    async fn send_raw_transaction(&self, raw: Vec<u8>) -> EthResult<[u8; 32]> {
+        use kaspa_mining::evm_mempool::EvmMempoolError;
+        // The class-1 admission rule (decode / signer / chain-id / gas band)
+        // runs inside the mempool insert; an `--features evm` node is required
+        // (a non-evm build refuses here, mirroring the consensus seam).
+        match self.mining_manager.submit_evm_transaction(raw) {
+            Ok(h) => Ok(h.as_bytes()),
+            // Idempotent: a duplicate submit returns the already-pending hash,
+            // so a retrying wallet still gets its tx id back.
+            Err(EvmMempoolError::Duplicate(h)) => Ok(h.as_bytes()),
+            Err(e) => Err(EthRpcError::new(-32000, format!("evm tx rejected: {e:?}"))),
+        }
+    }
+
+    async fn transaction_receipt(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthReceipt>> {
+        let session = self.consensus_manager.consensus().session().await;
+        let h = EvmH256::from_bytes(tx_hash);
+        // ConsensusApi store read → spawn_blocking (RocksDB).
+        let view = session
+            .spawn_blocking(move |c| c.get_evm_tx_receipt(h))
+            .await
+            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        Ok(view.map(|v| {
+            // The accepting L1 block hash is 64 bytes (BLAKE2b-512); expose the
+            // leading 32 as a standard-shaped, client-opaque `blockHash`.
+            let bh = v.accepting_block.as_bytes();
+            let mut block_hash = [0u8; 32];
+            block_hash.copy_from_slice(&bh[..32]);
+            EthReceipt {
+                tx_hash,
+                status: v.receipt.succeeded,
+                block_number: v.evm_number,
+                block_hash,
+                tx_index: v.receipt_index,
+                gas_used: v.receipt.gas_used,
+                cumulative_gas_used: v.receipt.cumulative_gas_used,
+                logs: v
+                    .receipt
+                    .logs
+                    .iter()
+                    .map(|lg| EthLog {
+                        address: lg.address.as_bytes(),
+                        topics: lg.topics.iter().map(|t| t.as_bytes()).collect(),
+                        data: lg.data.clone(),
+                    })
+                    .collect(),
+            }
+        }))
+    }
 }
 
 impl NodeEthProvider {
@@ -143,8 +197,8 @@ pub struct EthRpcService {
 }
 
 impl EthRpcService {
-    pub fn new(addr: SocketAddr, consensus_manager: Arc<ConsensusManager>) -> Self {
-        Self { addr, provider: Arc::new(NodeEthProvider::new(consensus_manager)) }
+    pub fn new(addr: SocketAddr, consensus_manager: Arc<ConsensusManager>, mining_manager: MiningManagerProxy) -> Self {
+        Self { addr, provider: Arc::new(NodeEthProvider::new(consensus_manager, mining_manager)) }
     }
 }
 
