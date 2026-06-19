@@ -75,8 +75,8 @@ Trade-off (accepted): EVM throughput tracks the single selected-parent chain, **
 | EVM fork | revm `SpecId::SHANGHAI` (pinned P2) | London+ baseline runs Uniswap v2/v3 + current-solc contracts (design §19.2); Cancun/EIP-1153 (v4) is a deliberate later fork. Never auto-follows upstream; bump = hard fork. |
 | `EVM_NATIVE_SCALE` | `10^10` | sompi (8 dec) → wei (18 dec). Withdrawals must be exact multiples. |
 | `EVM_GENESIS_STATE_ROOT` | `keccak256(rlp(()))` empty-trie root (`56e81f17…b421`) | The P2 executor asserts an empty block reproduces it. |
-| Header preimage suffix (v2+ only) | `evm_commitment_root(64)` | Single keyed BLAKE2b-512 root, appended after `pruning_point` (design v0.2 §3.2). Frozen byte order. |
-| EVM commitment domain | `b"MISAKA_EVM_COMMITMENT_V2"` | keyed BLAKE2b-512 over the body-side `EvmExecutionHeader` (state/tx/receipts/system-ops/withdrawals/deposit-claim roots, gas, basefee, logs bloom, evm_number, evm_timestamp_sec, burn accumulator). |
+| Header preimage suffix (v2+ only) | `evm_payload_hash(64)` then `evm_commitment_root(64)` | **TWO** keyed BLAKE2b-512 roots, appended in that order after `pruning_point` (design v0.4 §4.1/§4.3 — superseded the v0.2 single-root layout). Frozen byte order. |
+| EVM commitment domains | `b"EvmPayload64"` · `b"EvmCommitment64"` | `EvmPayload64` keys the block's raw `EvmExecutionPayload` (→ `evm_payload_hash`); `EvmCommitment64` keys the body-side `EvmExecutionHeader` (state/tx/receipts/system-ops/withdrawals/deposit-claim roots, gas, basefee, logs bloom, evm_number, evm_timestamp_sec, burn accumulator → `evm_commitment_root`). The earlier `MISAKA_EVM_COMMITMENT_V2` domain is retired. |
 | Subnetwork ids | `0x20` deposit, `0x21` withdraw-claim (reserved), `0x22` admin (reserved) | `subnets.rs`. |
 | DB store prefixes | `201`–`210` | `database/registry.rs` (`EvmHeader`…`EvmBlockHashMap`). |
 | Withdraw precompile | `0x…F002` (`MISAKA_WITHDRAW`) | `evm/mod.rs`. |
@@ -120,12 +120,12 @@ explicitly out of scope.
 |---|---|---|
 | **P0** | Spec freeze (this ADR) | **Done** |
 | **P1** | Consensus types: `EvmH256`/`EvmExecutionHeader`/`EvmExecutionPayload` + deposit/withdraw ops; single `evm_commitment_root` + version-gated preimage; block `evm_payload`; subnets; store prefixes; `evm_activation_daa_score`; body rule; `evm` feature declared | **Done** |
-| P2 | revm `SpecId::SHANGHAI` executor behind `evm` (parent state root → keccak state/tx/receipts roots); deterministic env (number/ts-clamp/prevrandao/EIP-1559 basefee); deposit-claim credit; F002 withdraw precompile; commitment matches `EvmExecutionHeader.commitment_root()`; differential tests | In progress |
-| P3 | EVM stores (201–210), multi-root state backend, canonical heads (no-replay on virtual change), pruning/GC | Pending |
-| P4 | Deposit (subnet 0x20) extraction from acceptance data; withdraw precompile; UTXO-diff materialization; combined supply-invariant tests | Pending |
-| P5 | EVM txpool, template builder (EVM roots + withdrawals in utxo_commitment), EIP-1559 basefee | Pending |
-| P6 | `eth_*` JSON-RPC, logs, subscriptions, `safe`/`finalized` tags; wire EVM data through gRPC/p2p/RPC | Pending |
-| P7 | Security/audit: DoS, state bloat, supply, reorg, RPC consistency | Pending |
+| P2 | revm `SpecId::SHANGHAI` executor behind `evm` (parent state root → keccak state/tx/receipts roots); deterministic env (number/ts-clamp/prevrandao/EIP-1559 basefee); deposit-claim credit; F002 withdraw precompile; commitment matches `EvmExecutionHeader.commitment_root()`; differential tests | **Done** (live on testnet-10) |
+| P3 | EVM stores (201–210), multi-root state backend, canonical heads (no-replay on virtual change), pruning/GC | **Done** (store-side; standalone GC/pruning of EVM rows still pending) |
+| P4 | Deposit (subnet 0x20) extraction from acceptance data; withdraw precompile; UTXO-diff materialization; combined supply-invariant tests | **Done** — deposit-lock → `submitEvmDepositClaim` → refund + F002 withdraw all live (incl. the claim-retry + same-generation TOCTOU fix, commit `51ece4d`) |
+| P5 | EVM txpool, template builder (EVM roots + withdrawals in utxo_commitment), EIP-1559 basefee | **Done** — own-payload EVM mempool + claim queue + template fold |
+| P6 | `eth_*` JSON-RPC, logs, subscriptions, `safe`/`finalized` tags; wire EVM data through gRPC/p2p/RPC | **In progress** — feature-gated Ethereum JSON-RPC adapter (`rpc/eth`, `--features evm`): identity/chain/state/`eth_call`/`estimateGas` done; `eth_sendRawTransaction`/receipts/blocks + logs/subscriptions WIP |
+| P7 | Security/audit: DoS, state bloat, supply, reorg, RPC consistency | **Done** — external EVM-bridge audit (F1–F6) remediated (commit `74d5442`); state-bloat GC remains the open item |
 
 ### P1 surface (implemented)
 - `crypto/hashes`: `EvmH256` (32-byte Ethereum H256, mirrors `Hash`).

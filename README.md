@@ -160,6 +160,13 @@ cargo run --release --bin kaspad -- --testnet --utxoindex \
   Block explorer: **[misakascan.com](https://misakascan.com)**.
 - `--utxoindex` is required for wallet/validator funding lookups.
 - `--rpclisten-borsh` is required by the miner and the `kaspa-pq-validator` sidecar.
+- **Connecting a wallet / RPC client — pick the right port.** This node exposes three RPC
+  endpoints (example values above): **gRPC** `26610` (protobuf over TCP), **wRPC Borsh** `27610`
+  (the default CLI wallet & validator transport, WebSocket), **wRPC JSON** `28610` (WebSocket).
+  The `kaspa-pq` CLI wallet connects over **wRPC Borsh** — point it at `27610`, **not** the gRPC
+  port `26610` (a wallet pointed at gRPC fails with `WebSocket protocol error: httparse err`,
+  because gRPC is not a WebSocket). In the wallet REPL: `server 127.0.0.1:27610` → `connect`.
+  (P2P is a separate, non-RPC port: `26211`.)
 - Add `--enable-unsynced-mining` **only** when bootstrapping a brand-new isolated network with no peers (mining before you have synced to the public testnet would fork from genesis).
 
 Mine to a **64-byte** ML-DSA-87 (`misakatest:`) address — legacy 32-byte addresses are rejected:

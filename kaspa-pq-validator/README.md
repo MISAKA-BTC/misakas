@@ -34,7 +34,7 @@ key separation, the owner / withdrawal key is created separately (`kaspa-pq` wal
 
 ```bash
 kaspa-pq-validator run \
-    --node-rpc 127.0.0.1:17110 \
+    --node-rpc 127.0.0.1:27610 \
     --validator-key /etc/kaspa-pq/validator.mldsa \
     --stake-bond <txid_hex>:<index> \
     --signed-epoch-db /var/lib/kaspa-pq/validator-state.json
@@ -48,7 +48,7 @@ signs + self-verifies locally but never submits. `Slashed` is a fatal, non-zero 
 ### `status` — one-shot health check
 
 ```bash
-kaspa-pq-validator status --node-rpc 127.0.0.1:17110 --stake-bond <txid_hex>:<index>
+kaspa-pq-validator status --node-rpc 127.0.0.1:27610 --stake-bond <txid_hex>:<index>
 ```
 
 ## Requirements & safety (ADR-0011)
@@ -72,16 +72,16 @@ node and query it:
 
 ```bash
 # 1. node (separate terminal); --utxoindex enables the funding lookup
-kaspad --simnet --utxoindex --rpclisten-borsh=127.0.0.1:17610 --appdir=/tmp/kpq-smoke
+kaspad --simnet --utxoindex --rpclisten-borsh=127.0.0.1:27510 --appdir=/tmp/kpq-smoke
 
 # 2. one-shot status (exercises getServerInfo + getStakeBond)
-kaspa-pq-validator status --node-rpc 127.0.0.1:17610 --stake-bond "$(printf 'ab%.0s' {1..64}):0"
+kaspa-pq-validator status --node-rpc 127.0.0.1:27510 --stake-bond "$(printf 'ab%.0s' {1..64}):0"
 #   node_network: simnet
 #   node_synced:  false
 #   bond:         abab…ab:0 (not found in the registry)   # simnet has no overlay → correct
 
 # 3. observe-only daemon (state machine against the live node)
-kaspa-pq-validator run --node-rpc 127.0.0.1:17610 --network simnet
+kaspa-pq-validator run --node-rpc 127.0.0.1:27510 --network simnet
 #   [kaspa-pq-validator] connected: network=simnet synced=false version=1.1.0
 #   [kaspa-pq-validator] status=NodeNotSynced (virtual_daa=0)
 ```
