@@ -25,6 +25,11 @@ kaspa-consensus.workspace = true
 kaspa-consensusmanager.workspace = true
 kaspa-core.workspace = true
 kaspa-database.workspace = true
+# Ethereum JSON-RPC adapter — only linked under the `evm` feature (keeps the
+# default node secp-free; the adapter itself pulls no revm). kaspa-evm provides
+# the read-only eth_call/estimateGas simulation behind the adapter.
+kaspa-eth-rpc = { workspace = true, optional = true }
+kaspa-evm = { workspace = true, optional = true }
 kaspa-grpc-server.workspace = true
 kaspa-hashes.workspace = true
 kaspa-index-processor.workspace = true
@@ -76,7 +81,7 @@ devnet-prealloc = ["kaspa-consensus/devnet-prealloc"]
 semaphore-trace = ["kaspa-utils/semaphore-trace"]
 # kaspa-pq Selected-Parent EVM Lane (ADR-0020). Empty in P1; opt-in EVM build
 # (revm executor + EVM lane lands in P2). The default build stays secp-free.
-evm = ["kaspa-consensus/evm", "kaspa-mining/evm"]
+evm = ["kaspa-consensus/evm", "kaspa-mining/evm", "dep:kaspa-eth-rpc", "dep:kaspa-evm"]
 
 [lints]
 workspace = true

@@ -32,6 +32,10 @@ pub struct Args {
     pub no_log_files: bool,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub rpclisten: Option<ContextualNetAddress>,
+    /// kaspa-pq EVM Lane (ADR-0020 §16): interface:port for the Ethereum JSON-RPC
+    /// adapter (effective only in an `--features evm` build).
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub evm_rpc_listen: Option<ContextualNetAddress>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub rpclisten_borsh: Option<WrpcNetAddress>,
     #[serde_as(as = "Option<DisplayFromStr>")]
@@ -139,6 +143,7 @@ impl Default for Args {
             sanity: false,
             logdir: None,
             rpclisten: None,
+            evm_rpc_listen: None,
             wrpc_verbose: false,
             log_level: "INFO".into(),
             connect_peers: vec![],
@@ -259,6 +264,16 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(ContextualNetAddress))
                 .help("Interface:port to listen for gRPC connections (default port: 26110, testnet: 26210)."),
+        )
+        .arg(
+            Arg::new("evm-rpc-listen")
+                .long("evm-rpc-listen")
+                .env("KASPAD_EVM_RPC_LISTEN")
+                .value_name("IP[:PORT]")
+                .num_args(0..=1)
+                .require_equals(true)
+                .value_parser(clap::value_parser!(ContextualNetAddress))
+                .help("Interface:port for the Ethereum JSON-RPC adapter (EVM lane; default port: 8545). Effective only in an --features evm build."),
         )
         .arg(
             Arg::new("rpclisten-borsh")
@@ -534,6 +549,7 @@ impl Args {
             logdir: m.get_one::<String>("logdir").cloned().or(defaults.logdir),
             no_log_files: arg_match_unwrap_or::<bool>(&m, "nologfiles", defaults.no_log_files),
             rpclisten: m.get_one::<ContextualNetAddress>("rpclisten").cloned().or(defaults.rpclisten),
+            evm_rpc_listen: m.get_one::<ContextualNetAddress>("evm-rpc-listen").cloned().or(defaults.evm_rpc_listen),
             rpclisten_borsh: m.get_one::<WrpcNetAddress>("rpclisten-borsh").cloned().or(defaults.rpclisten_borsh),
             rpclisten_json: m.get_one::<WrpcNetAddress>("rpclisten-json").cloned().or(defaults.rpclisten_json),
             unsafe_rpc: arg_match_unwrap_or::<bool>(&m, "unsaferpc", defaults.unsafe_rpc),

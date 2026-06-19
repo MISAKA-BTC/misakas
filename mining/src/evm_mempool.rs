@@ -36,6 +36,13 @@ pub const EVM_MEMPOOL_REPLACEMENT_BUMP_PCT: u128 = 10;
 /// Maximum pending deposit claims queued for own-payload `system_ops` (§9.2).
 /// Several blocks' worth of the per-block cap so a backlog can drain.
 pub const EVM_MEMPOOL_MAX_CLAIMS: usize = 4_096;
+/// §9.2: evict a queued deposit claim once its lock has been ABSENT from the live
+/// claim view for this many CONSECUTIVE templates. Templates rebuild per new
+/// virtual state (≈ per block), so this is a chain-progress budget: a deposit-lock
+/// that is genuinely being buried on the selected chain reappears within a handful
+/// of blocks, so this is set generously (a slow miner / forky DAG has ample room),
+/// yet it still reaps a consumed or never-confirmed lock instead of retrying forever.
+pub const MAX_CLAIM_ABSENT_STRIKES: u32 = 600;
 
 /// A pending EVM transaction with the metadata selection needs. Field values
 /// come from admission ([`kaspa_evm::tx::admit_tx_info`] under the `evm`
@@ -100,6 +107,13 @@ pub struct EvmMempool {
     /// can never make the node's own block invalid. (`TransactionOutpoint` is
     /// not `Ord`, so this is a `HashMap`; selection sorts for determinism.)
     claims: HashMap<TransactionOutpoint, DepositClaim>,
+    /// §9.2: per-lock count of CONSECUTIVE templates in which the claim's lock was
+    /// ABSENT from the live claim view. Incremented by [`Self::note_claim_absent`]
+    /// (≈ once per block, see [`MAX_CLAIM_ABSENT_STRIKES`]) and reset by
+    /// [`Self::note_claim_present`] when the lock reappears, so a deposit-lock that
+    /// flickers in and out of a forky selected chain is not evicted prematurely.
+    /// Only holds entries for currently-absent claims; cleared on removal/insert.
+    stale_strikes: HashMap<TransactionOutpoint, u32>,
 }
 
 impl EvmMempool {
@@ -155,7 +169,11 @@ impl EvmMempool {
     /// queue is full and the newcomer does not out-pay the cheapest queued claim.
     pub fn insert_claim(&mut self, claim: DepositClaim) -> bool {
         // Idempotent re-submit / dedup by lock outpoint (never counts against the cap).
+        // A deliberate re-submit also restarts the absent-strike run (a fresh retry
+        // window — the operator may be re-submitting precisely because the lock has
+        // now confirmed on the selected chain).
         if self.claims.contains_key(&claim.deposit_outpoint) {
+            self.stale_strikes.remove(&claim.deposit_outpoint);
             self.claims.insert(claim.deposit_outpoint, claim);
             return true;
         }
@@ -174,7 +192,7 @@ impl EvmMempool {
             match victim {
                 // Only displace for a strictly higher-paying newcomer (avoids ping-pong on ties).
                 Some((victim_op, victim_tip)) if claim.claim_tip_sompi > victim_tip => {
-                    self.claims.remove(&victim_op);
+                    self.remove_claim(&victim_op);
                 }
                 _ => return false,
             }
@@ -185,7 +203,31 @@ impl EvmMempool {
 
     /// Drop a queued claim (e.g. once its lock has been consumed). No-op if absent.
     pub fn remove_claim(&mut self, outpoint: &TransactionOutpoint) -> Option<DepositClaim> {
+        self.stale_strikes.remove(outpoint);
         self.claims.remove(outpoint)
+    }
+
+    /// §9.2: the template path found this claim's lock ABSENT from the live claim
+    /// view (usually transient — the deposit-lock's block is not yet on this node's
+    /// selected chain, or it was just consumed). Record one consecutive-absent
+    /// strike and return `true` iff the claim has now been absent for
+    /// [`MAX_CLAIM_ABSENT_STRIKES`] consecutive templates and should be evicted.
+    /// No-op returning `false` if the claim is no longer queued.
+    pub fn note_claim_absent(&mut self, outpoint: &TransactionOutpoint) -> bool {
+        if !self.claims.contains_key(outpoint) {
+            return false;
+        }
+        let strikes = self.stale_strikes.entry(*outpoint).or_insert(0);
+        *strikes += 1;
+        *strikes >= MAX_CLAIM_ABSENT_STRIKES
+    }
+
+    /// §9.2: the claim's lock is present in the live view again (it was selected
+    /// into the latest template) — reset its consecutive-absent run so only an
+    /// uninterrupted absence counts toward eviction. Cheap no-op if the claim has
+    /// no recorded strikes.
+    pub fn note_claim_present(&mut self, outpoint: &TransactionOutpoint) {
+        self.stale_strikes.remove(outpoint);
     }
 
     /// Select up to `max` queued claims for the own-payload `system_ops`. Audit F6:
@@ -416,6 +458,52 @@ mod tests {
         // Removal.
         pool.remove_claim(&TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xC; 64]), 1));
         assert_eq!(pool.claims_len(), 2);
+    }
+
+    /// §9.2 (claim-retry): a queued claim whose lock is ABSENT from the live view
+    /// is RETAINED and retried — evicted only after `MAX_CLAIM_ABSENT_STRIKES`
+    /// CONSECUTIVE absent templates. A template in which the lock reappears
+    /// (`note_claim_present`) resets the run, so a forky DAG that flickers the lock
+    /// in/out never evicts a claim whose deposit-lock is still being buried. This is
+    /// the fix for "deposit claim dropped on the first stale view and never retried".
+    #[test]
+    fn claim_absent_strikes_retain_then_evict() {
+        use kaspa_consensus_core::tx::TransactionOutpoint;
+        let op = TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0x7; 64]), 0);
+        let claim = DepositClaim {
+            deposit_outpoint: op,
+            evm_address: EvmAddress::from_bytes([0x7; 20]),
+            amount_sompi: 1_000,
+            claim_tip_sompi: 0,
+        };
+        let mut pool = EvmMempool::new();
+        assert!(pool.insert_claim(claim.clone()));
+
+        // A strike on a claim that is not queued is a no-op (never panics, never evicts).
+        let ghost = TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0x9; 64]), 0);
+        assert!(!pool.note_claim_absent(&ghost));
+
+        // Absent for MAX-1 consecutive templates → still RETAINED (no eviction signal).
+        for _ in 0..(MAX_CLAIM_ABSENT_STRIKES - 1) {
+            assert!(!pool.note_claim_absent(&op), "claim must be retained while under the strike cap");
+        }
+        assert!(pool.contains_claim(&op));
+
+        // The lock reappears in a template → reset the consecutive-absent run.
+        pool.note_claim_present(&op);
+
+        // A full uninterrupted run of MAX absent templates is now required again: the
+        // MAX-th consecutive strike is the one that signals eviction.
+        for _ in 0..(MAX_CLAIM_ABSENT_STRIKES - 1) {
+            assert!(!pool.note_claim_absent(&op));
+        }
+        assert!(pool.note_claim_absent(&op), "the MAX-th consecutive absent template signals eviction");
+        pool.remove_claim(&op);
+        assert!(!pool.contains_claim(&op));
+
+        // Removal cleared the strike state: a re-submit gets a fresh retry window.
+        assert!(pool.insert_claim(claim));
+        assert!(!pool.note_claim_absent(&op));
     }
 
     /// §14.2 relay serve/filter primitives: `get_claim` returns the queued claim
