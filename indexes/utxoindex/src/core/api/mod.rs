@@ -1,7 +1,7 @@
 use kaspa_consensus_core::{
     BlockHash, // PR-9.5e: DAG tips are block hashes (Hash64)
     BlockHashSet,
-    tx::{ScriptPublicKeys, TransactionOutpoint},
+    tx::{ScriptPublicKey, ScriptPublicKeys, TransactionOutpoint},
     utxo::utxo_diff::UtxoDiff,
 };
 use kaspa_consensusmanager::spawn_blocking;
@@ -26,6 +26,16 @@ pub trait UtxoIndexApi: Send + Sync + Debug {
     ///
     /// Note: Use a read lock when accessing this method
     fn get_utxos_by_script_public_keys(&self, script_public_keys: ScriptPublicKeys) -> StoreResult<UtxoSetByScriptPublicKey>;
+
+    /// Retrieve a bounded page of utxos for a single script public key (cursor = the opaque resume
+    /// token from the previous page; `None` starts at the beginning). Returns the page plus the next
+    /// cursor (`None` = no further pages).
+    fn get_utxos_by_script_public_key_chunk(
+        &self,
+        script_public_key: &ScriptPublicKey,
+        cursor: Option<&[u8]>,
+        chunk_size: usize,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, Option<Vec<u8>>)>;
 
     fn get_balance_by_script_public_keys(&self, script_public_keys: ScriptPublicKeys) -> StoreResult<BalanceByScriptPublicKey>;
 
@@ -72,6 +82,17 @@ impl UtxoIndexProxy {
 
     pub async fn get_utxos_by_script_public_keys(self, script_public_keys: ScriptPublicKeys) -> StoreResult<UtxoSetByScriptPublicKey> {
         spawn_blocking(move || self.inner.read().get_utxos_by_script_public_keys(script_public_keys)).await.unwrap()
+    }
+
+    pub async fn get_utxos_by_script_public_key_chunk(
+        self,
+        script_public_key: ScriptPublicKey,
+        cursor: Option<Vec<u8>>,
+        chunk_size: usize,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, Option<Vec<u8>>)> {
+        spawn_blocking(move || self.inner.read().get_utxos_by_script_public_key_chunk(&script_public_key, cursor.as_deref(), chunk_size))
+            .await
+            .unwrap()
     }
 
     pub async fn get_balance_by_script_public_keys(

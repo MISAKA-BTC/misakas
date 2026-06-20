@@ -2,7 +2,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use kaspa_consensus_core::{
     BlockHashSet,
-    tx::{ScriptPublicKeys, TransactionOutpoint},
+    tx::{ScriptPublicKey, ScriptPublicKeys, TransactionOutpoint},
 };
 use kaspa_core::trace;
 use kaspa_database::prelude::{CachePolicy, DB, StoreResult};
@@ -36,6 +36,15 @@ impl Store {
 
     pub fn get_utxos_by_script_public_key(&self, script_public_keys: ScriptPublicKeys) -> StoreResult<UtxoSetByScriptPublicKey> {
         self.utxos_by_script_public_key_store.get_utxos_from_script_public_keys(script_public_keys)
+    }
+
+    pub fn get_utxos_by_script_public_key_chunk(
+        &self,
+        script_public_key: &ScriptPublicKey,
+        cursor: Option<&[u8]>,
+        chunk_size: usize,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, Option<Vec<u8>>)> {
+        self.utxos_by_script_public_key_store.get_utxos_from_script_public_key_chunk(script_public_key, cursor, chunk_size)
     }
 
     pub fn get_balance_by_script_public_key(&self, script_public_keys: ScriptPublicKeys) -> StoreResult<BalanceByScriptPublicKey> {

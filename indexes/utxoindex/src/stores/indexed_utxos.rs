@@ -127,6 +127,17 @@ impl AsRef<[u8]> for UtxoEntryFullAccessKey {
 pub trait UtxoSetByScriptPublicKeyStoreReader {
     /// Get [UtxoSetByScriptPublicKey] set by queried [ScriptPublicKeys],
     fn get_utxos_from_script_public_keys(&self, script_public_keys: ScriptPublicKeys) -> StoreResult<UtxoSetByScriptPublicKey>;
+    /// Paginated single-script variant of [Self::get_utxos_from_script_public_keys]: returns up to
+    /// `chunk_size` UTXOs for `script_public_key` starting after the opaque `cursor` (the raw outpoint
+    /// key of the previous page's last entry), plus the cursor to resume from when more entries remain
+    /// (`None` = no further pages). Bounds the per-call memory/response footprint for addresses with a
+    /// very large UTXO set (e.g. an unconsolidated mining payout).
+    fn get_utxos_from_script_public_key_chunk(
+        &self,
+        script_public_key: &ScriptPublicKey,
+        cursor: Option<&[u8]>,
+        chunk_size: usize,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, Option<Vec<u8>>)>;
     fn get_balance_from_script_public_keys(&self, script_public_keys: ScriptPublicKeys) -> StoreResult<BalanceByScriptPublicKey>;
     fn get_all_outpoints(&self) -> StoreResult<HashSet<TransactionOutpoint>>; // This can have a big memory footprint, so it should be used only for tests.
 }
@@ -177,6 +188,40 @@ impl UtxoSetByScriptPublicKeyStoreReader for DbUtxoSetByScriptPublicKeyStore {
         }
         debug!("IDXPRC, Executed a query for the utxo set of {} script public keys yielding {} entries", script_count, entries_count);
         Ok(utxos_by_script_public_keys)
+    }
+
+    fn get_utxos_from_script_public_key_chunk(
+        &self,
+        script_public_key: &ScriptPublicKey,
+        cursor: Option<&[u8]>,
+        chunk_size: usize,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, Option<Vec<u8>>)> {
+        let script_public_key_bucket = ScriptPublicKeyBucket::from(script_public_key);
+        // The opaque cursor is the bucket-relative outpoint key of the previous page's last entry; we
+        // resume from the full DB key (bucket + outpoint) and skip that entry. A malformed cursor
+        // (wrong length) is treated leniently as "start from the beginning" rather than erroring.
+        let seek_from = cursor
+            .and_then(|c| <[u8; TRANSACTION_OUTPOINT_KEY_SIZE]>::try_from(c).ok())
+            .map(|key| UtxoEntryFullAccessKey::new(script_public_key_bucket.clone(), TransactionOutpointKey(key)));
+        let skip_first = seek_from.is_some();
+        // Fetch one extra entry to detect (and produce the cursor for) a following page.
+        // (Per-item unwrap mirrors get_utxos_from_script_public_keys above — a DB read error here is
+        // unrecoverable.)
+        let mut items: Vec<(Vec<u8>, CompactUtxoEntry)> = self
+            .access
+            .seek_iterator(Some(script_public_key_bucket.as_ref()), seek_from, chunk_size.saturating_add(1), skip_first)
+            .map(|res| {
+                let (key, entry) = res.unwrap();
+                (key[..].to_vec(), entry)
+            })
+            .collect();
+        let next_cursor = if items.len() > chunk_size { items.pop().map(|(key, _)| key) } else { None };
+        let collection = CompactUtxoCollection::from_iter(items.into_iter().map(|(key, entry)| {
+            (TransactionOutpointKey(<[u8; TRANSACTION_OUTPOINT_KEY_SIZE]>::try_from(&key[..]).unwrap()).into(), entry)
+        }));
+        let mut result = UtxoSetByScriptPublicKey::new();
+        result.insert(script_public_key.clone(), collection);
+        Ok((result, next_cursor))
     }
 
     fn get_balance_from_script_public_keys(&self, script_public_keys: ScriptPublicKeys) -> StoreResult<BalanceByScriptPublicKey> {

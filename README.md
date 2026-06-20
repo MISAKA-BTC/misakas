@@ -148,9 +148,12 @@ Linux x86_64 binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-validator`, `kaspa-
 Start a misakas testnet node (network id `testnet-10`; the overlay + PQ rules are active from genesis):
 
 ```bash
-cargo run --release --bin kaspad -- --testnet --utxoindex \
-  --rpclisten=127.0.0.1:26610 --rpclisten-borsh=127.0.0.1:27610 --rpclisten-json=127.0.0.1:28610
+cargo run --release --bin kaspad -- --testnet --utxoindex --rpclisten-borsh=default
 ```
+
+`=default` resolves to the network's standard loopback port, so you never have to memorize the
+numbers. Add `--rpclisten-json=default` too if a JSON WebSocket client (e.g. a browser app or an
+explorer backend) needs to connect locally.
 
 - To **join the public testnet**, the node discovers peers via the misakas DNS seeders
   (`seeder1.misakascan.com` / `seeder2.misakascan.com`) automatically. **testnet-10's P2P port is
@@ -159,17 +162,22 @@ cargo run --release --bin kaspad -- --testnet --utxoindex \
   `--addpeer=95.111.236.186:26211` (or `--connect=95.111.236.186:26211` to use only that peer).
   Block explorer: **[misakascan.com](https://misakascan.com)**.
 - `--utxoindex` is required for wallet/validator funding lookups.
-- `--rpclisten-borsh` is required by the miner and the `kaspa-pq-validator` sidecar.
-- **Connecting a wallet / RPC client — pick the right port.** This node exposes three RPC
-  endpoints (example values above): **gRPC** `26610` (protobuf over TCP), **wRPC Borsh** `27610`
-  (the default CLI wallet & validator transport, WebSocket), **wRPC JSON** `28610` (WebSocket).
-  The `kaspa-pq` CLI wallet connects over **wRPC Borsh** — point it at `27610`, **not** the gRPC
-  port `26610` (a wallet pointed at gRPC fails with `WebSocket protocol error: httparse err`
+- **gRPC is always on by default** (loopback, `127.0.0.1:26210` on testnet) even with no RPC flag,
+  so the **miner needs no extra flag** — it connects over gRPC. **wRPC (Borsh / JSON) is off by
+  default** and must be enabled with `--rpclisten-borsh` / `--rpclisten-json`; it is required by the
+  CLI wallet and the `kaspa-pq-validator` sidecar (which speak wRPC, **not** gRPC).
+- **Connecting a wallet / RPC client — pick the right port.** Default **testnet-10** ports:
+  **gRPC** `26210` (protobuf over TCP, default-on at loopback), **wRPC Borsh** `27210`
+  (the CLI wallet & validator transport, WebSocket — enable with `--rpclisten-borsh=default`),
+  **wRPC JSON** `28210` (WebSocket — enable with `--rpclisten-json=default`). Mainnet uses
+  `26110/27110/28110`; devnet `26610/27610/28610`.
+  The `kaspa-pq` CLI wallet connects over **wRPC Borsh** — point it at `27210`, **not** the gRPC
+  port `26210` (a wallet pointed at gRPC fails with `WebSocket protocol error: httparse err`
   or `WebSocket is not connected`, because gRPC is not a WebSocket). In the wallet REPL:
-  `server 127.0.0.1:27610` → `connect`. (P2P is a separate, non-RPC port: `26211`.)
+  `server 127.0.0.1:27210` → `connect`. (P2P is a separate, non-RPC port: `26211`.)
 - **Headless balance (no interactive wallet).** For scripting / monitoring, query a balance in one
   shot over wRPC:
-  `kaspa-pq-validator balance --node-rpc 127.0.0.1:27610 --address misakatest:q… [--address …] [--network testnet-10]`.
+  `kaspa-pq-validator balance --node-rpc 127.0.0.1:27210 --address misakatest:q… [--address …] [--network testnet-10]`.
   It prints `address <sompi> <MSK> MSK` per line (plus `TOTAL` for several) to stdout — connection /
   sync notes go to stderr, so `… balance --address misakatest:q… | awk '{print $2}'` yields just the
   sompi. The node must run `--utxoindex`.
@@ -178,7 +186,7 @@ cargo run --release --bin kaspad -- --testnet --utxoindex \
 Mine to a **64-byte** ML-DSA-87 (`misakatest:`) address — legacy 32-byte addresses are rejected:
 
 ```bash
-cargo run --release --bin kaspa-pq-miner -- --rpc 127.0.0.1:26610 --network-id testnet-10 \
+cargo run --release --bin kaspa-pq-miner -- --rpc 127.0.0.1:26210 --network-id testnet-10 \
   --blocks 0 --min-block-interval-ms 250 --pay-address <misakatest:...>
 ```
 
@@ -192,10 +200,10 @@ kaspa-pq-validator keygen --out val.seed --network testnet
 # 2. send funds to the printed funding address (mine to it, or transfer from another wallet)
 # 3. stake a bond. testnet enforces the PRODUCTION minimum: 20,000,000 MSK = 2e15 sompi.
 #    Omit --fee to auto-size it (mass-based; the flat floor is too low for the 2592-byte pubkey).
-kaspa-pq-validator bond --node-rpc 127.0.0.1:27610 --validator-key val.seed \
+kaspa-pq-validator bond --node-rpc 127.0.0.1:27210 --validator-key val.seed \
   --amount 2000000000000000 --network testnet-10
 # 4. run the validator daemon (attests every epoch while the bond is active)
-kaspa-pq-validator run --node-rpc 127.0.0.1:27610 --validator-key val.seed \
+kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
   --stake-bond <txid:index> --signed-epoch-db val.state --network testnet-10 --attest-poll-secs 3
 ```
 

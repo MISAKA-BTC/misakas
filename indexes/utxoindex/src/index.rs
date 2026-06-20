@@ -7,7 +7,11 @@ use crate::{
     update_container::UtxoIndexChanges,
 };
 use kaspa_consensus_core::BlockHash; // PR-9.5e: DAG tips are block hashes (Hash64)
-use kaspa_consensus_core::{BlockHashSet, tx::ScriptPublicKeys, utxo::utxo_diff::UtxoDiff};
+use kaspa_consensus_core::{
+    BlockHashSet,
+    tx::{ScriptPublicKey, ScriptPublicKeys},
+    utxo::utxo_diff::UtxoDiff,
+};
 use kaspa_consensusmanager::{ConsensusManager, ConsensusResetHandler};
 use kaspa_core::{info, trace};
 use kaspa_database::prelude::{DB, StoreError, StoreResult};
@@ -62,6 +66,18 @@ impl UtxoIndexApi for UtxoIndex {
         trace!("[{0}] retrieving utxos from {1} script public keys", IDENT, script_public_keys.len());
 
         self.store.get_utxos_by_script_public_key(script_public_keys)
+    }
+
+    /// Retrieve a bounded page of utxos for a single script public key from the utxoindex db.
+    fn get_utxos_by_script_public_key_chunk(
+        &self,
+        script_public_key: &ScriptPublicKey,
+        cursor: Option<&[u8]>,
+        chunk_size: usize,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, Option<Vec<u8>>)> {
+        trace!("[{0}] retrieving a utxo page for a script public key (chunk_size {1})", IDENT, chunk_size);
+
+        self.store.get_utxos_by_script_public_key_chunk(script_public_key, cursor, chunk_size)
     }
 
     /// Retrieve utxos by script public keys from the utxoindex db.

@@ -72,7 +72,7 @@ use kaspa_utils::sysinfo::SystemInfo;
 use kaspa_utils::{channel::Channel, triggers::SingleTrigger};
 use kaspa_utils_tower::counters::TowerConnectionCounters;
 use kaspa_utxoindex::api::UtxoIndexProxy;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{
     collections::HashMap,
     iter::once,
@@ -1043,8 +1043,103 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
 
         // TODO: discuss if the entry order is part of the method requirements
         //       (the current impl does not retain an entry order matching the request addresses order)
+        //
+        // NOTE (large-UTXO availability): this method is unbounded — it loads and serializes *every*
+        // UTXO of the requested addresses (see the pagination TODO in
+        // indexes/utxoindex/src/stores/indexed_utxos.rs). A heavily-fragmented address (e.g. a mining
+        // payout that is never consolidated) can hold hundreds of thousands of UTXOs, producing a
+        // response that exceeds the wRPC frame cap (MAX_WRPC_MESSAGE_SIZE = 128 MiB) or the client's
+        // own message-size / request timeout, which surfaces to the caller as "connection closed".
+        // The measurement below lets operators pinpoint such cases (entry count + scan/convert time +
+        // an estimated serialized size) instead of guessing at the disconnect cause.
+        let started = Instant::now();
+        let num_addresses = request.addresses.len();
         let entry_map = self.get_utxo_set_by_script_public_key(request.addresses.iter()).await;
-        Ok(GetUtxosByAddressesResponse::new(self.index_converter.get_utxos_by_addresses_entries(&entry_map)))
+        let entries = self.index_converter.get_utxos_by_addresses_entries(&entry_map);
+        let num_entries = entries.len();
+        let elapsed = started.elapsed();
+        // ~200 bytes/entry is a conservative borsh estimate (outpoint 36 + compact utxo entry +
+        // 64-byte PubKeyHashMlDsa87 script + repeated address); JSON is ~2.5x larger.
+        let est_borsh_mib = (num_entries.saturating_mul(200)) as f64 / (1024.0 * 1024.0);
+        const LARGE_UTXO_RESPONSE_THRESHOLD: usize = 50_000;
+        if num_entries >= LARGE_UTXO_RESPONSE_THRESHOLD {
+            let msg = format!(
+                "get_utxos_by_addresses: large response — {} UTXOs across {} address(es) in {:.0}ms (~{:.0} MiB borsh est, ~{:.0} MiB JSON est); \
+may exceed the client's message-size/timeout limit, or the 128 MiB wRPC frame cap for very large sets (\"connection closed\"). \
+Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
+                num_entries, num_addresses, elapsed.as_secs_f64() * 1000.0, est_borsh_mib, est_borsh_mib * 2.5,
+            );
+            // Rate-limit the WARN: explorers/wallets poll on a cadence, so a persistently-fragmented
+            // address would otherwise log on every call. Emit at WARN at most once per 60s
+            // (process-wide); in between, the same detail stays available at debug level.
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static LAST_WARN_UNIX_SECS: AtomicU64 = AtomicU64::new(0);
+            let now_secs = unix_now() / 1000;
+            let last = LAST_WARN_UNIX_SECS.load(Ordering::Relaxed);
+            let do_warn = now_secs.saturating_sub(last) >= 60
+                && LAST_WARN_UNIX_SECS.compare_exchange(last, now_secs, Ordering::Relaxed, Ordering::Relaxed).is_ok();
+            if do_warn {
+                warn!("{msg}");
+            } else {
+                debug!("{msg} (warn rate-limited)");
+            }
+        } else {
+            debug!(
+                "get_utxos_by_addresses: {} UTXOs across {} address(es) in {:.0}ms (~{:.1} MiB borsh est)",
+                num_entries, num_addresses, elapsed.as_secs_f64() * 1000.0, est_borsh_mib,
+            );
+        }
+        Ok(GetUtxosByAddressesResponse::new(entries))
+    }
+
+    async fn get_utxos_by_address_page_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetUtxosByAddressPageRequest,
+    ) -> RpcResult<GetUtxosByAddressPageResponse> {
+        if !self.config.utxoindex {
+            return Err(RpcError::NoUtxoIndex);
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        if session.async_is_consensus_in_transitional_ibd_state().await {
+            return Err(RpcError::ConsensusInTransitionalIbdState);
+        }
+        // Bound the page so a single call can never reproduce the unbounded getUtxosByAddresses blow-up.
+        const DEFAULT_PAGE_LIMIT: u64 = 1_000;
+        const MAX_PAGE_LIMIT: u64 = 1_000;
+        let limit = if request.limit == 0 { DEFAULT_PAGE_LIMIT } else { request.limit.min(MAX_PAGE_LIMIT) } as usize;
+        // The cursor is an opaque hex token (the previous page's resume key). A malformed token is
+        // treated leniently as "no cursor" (restart from the beginning) rather than an error.
+        let cursor = if request.cursor.is_empty() {
+            None
+        } else {
+            let c = request.cursor.as_str();
+            if c.len() % 2 == 0 {
+                (0..c.len()).step_by(2).map(|i| u8::from_str_radix(&c[i..i + 2], 16).ok()).collect::<Option<Vec<u8>>>()
+            } else {
+                None
+            }
+        };
+        let script_public_key = pay_to_address_script(&request.address);
+        let (entry_map, next) = self
+            .utxoindex
+            .clone()
+            .ok_or(RpcError::NoUtxoIndex)?
+            .get_utxos_by_script_public_key_chunk(script_public_key, cursor, limit)
+            .await
+            .map_err(|err| RpcError::General(err.to_string()))?;
+        let entries = self.index_converter.get_utxos_by_addresses_entries(&entry_map);
+        let next_cursor = next
+            .map(|bytes| {
+                use std::fmt::Write;
+                let mut s = String::with_capacity(bytes.len() * 2);
+                for b in &bytes {
+                    let _ = write!(s, "{b:02x}");
+                }
+                s
+            })
+            .unwrap_or_default();
+        Ok(GetUtxosByAddressPageResponse::new(entries, next_cursor))
     }
 
     async fn get_balance_by_address_call(

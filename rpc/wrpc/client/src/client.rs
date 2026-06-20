@@ -658,6 +658,7 @@ impl RpcApi for KaspaRpcClient {
             GetSystemInfo,
             GetUtxoReturnAddress,
             GetUtxosByAddresses,
+            GetUtxosByAddressPage,
             GetVirtualChainFromBlock,
             GetVirtualChainFromBlockV2,
             GetValidatorAttestationTarget,

@@ -11,7 +11,9 @@ action.
 > **Live network = `testnet-10`** (explorer: [misakascan.com](https://misakascan.com)). The
 > command examples below were written for the earlier `devnet`; for the live testnet substitute
 > **`--network testnet-10`** (or `--network-id testnet-10` for the miner), **`misakatest:`**
-> addresses, and the testnet stake-bond minimum **10 MSK = `--amount 1000000000`** (lowered from
+> addresses, the **testnet RPC ports** (gRPC `26210`, wRPC Borsh `27210`, wRPC JSON `28210` — the
+> `26610/27610/28610` below are devnet defaults; on either network you can just pass
+> `--rpclisten-borsh=default`), and the testnet stake-bond minimum **10 MSK = `--amount 1000000000`** (lowered from
 > mainnet's 20,000,000 MSK so a tester can mine a bondable amount in seconds — see Step 3;
 > **mainnet keeps 20M**). `bond` aggregates several mature coinbase UTXOs, so the
 > ~3.7-MSK-per-block mining fragments no longer need manual consolidation. testnet also enforces

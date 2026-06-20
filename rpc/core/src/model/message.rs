@@ -2178,6 +2178,81 @@ impl Deserializer for GetUtxosByAddressesResponse {
     }
 }
 
+/// Cursor-paginated single-address UTXO query. Use this instead of `GetUtxosByAddresses` for
+/// addresses with very large UTXO sets (e.g. an unconsolidated mining payout), whose full response
+/// can exceed client message-size / timeout limits.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUtxosByAddressPageRequest {
+    pub address: RpcAddress,
+    /// Opaque resume token returned as `next_cursor` by the previous page; empty = start at the beginning.
+    pub cursor: String,
+    /// Maximum entries to return; 0 selects the server default. The server caps the effective value.
+    pub limit: u64,
+}
+
+impl GetUtxosByAddressPageRequest {
+    pub fn new(address: RpcAddress, cursor: String, limit: u64) -> Self {
+        Self { address, cursor, limit }
+    }
+}
+
+impl Serializer for GetUtxosByAddressPageRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(RpcAddress, &self.address, writer)?;
+        store!(String, &self.cursor, writer)?;
+        store!(u64, &self.limit, writer)?;
+
+        Ok(())
+    }
+}
+
+impl Deserializer for GetUtxosByAddressPageRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let address = load!(RpcAddress, reader)?;
+        let cursor = load!(String, reader)?;
+        let limit = load!(u64, reader)?;
+
+        Ok(Self { address, cursor, limit })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUtxosByAddressPageResponse {
+    pub entries: Vec<RpcUtxosByAddressesEntry>,
+    /// Opaque resume token for the next page; empty = no further pages.
+    pub next_cursor: String,
+}
+
+impl GetUtxosByAddressPageResponse {
+    pub fn new(entries: Vec<RpcUtxosByAddressesEntry>, next_cursor: String) -> Self {
+        Self { entries, next_cursor }
+    }
+}
+
+impl Serializer for GetUtxosByAddressPageResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        serialize!(Vec<RpcUtxosByAddressesEntry>, &self.entries, writer)?;
+        store!(String, &self.next_cursor, writer)?;
+
+        Ok(())
+    }
+}
+
+impl Deserializer for GetUtxosByAddressPageResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let entries = deserialize!(Vec<RpcUtxosByAddressesEntry>, reader)?;
+        let next_cursor = load!(String, reader)?;
+
+        Ok(Self { entries, next_cursor })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BanRequest {

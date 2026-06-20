@@ -21,9 +21,36 @@ use std::sync::atomic::Ordering;
 use workflow_core::runtime::is_web;
 use workflow_store::fs;
 
+/// Strip a single trailing `.wallet` extension (if present) from a user-supplied
+/// wallet name. The storage layer always appends exactly one `.wallet` to the base
+/// name, so without this normalization `open foo.wallet` would resolve to the file
+/// `foo.wallet.wallet` (and fail with `No wallet named 'foo.wallet.wallet' found`).
+/// Trimming here makes `open foo` and `open foo.wallet` refer to the same wallet.
+///
+/// The match is case-insensitive (`foo.WALLET` collapses too) because the default
+/// macOS/Windows filesystems are case-insensitive, where `foo.WALLET.wallet` and
+/// `foo.wallet.wallet` are the same file. A bare `.wallet` (empty stem) is kept as-is
+/// rather than collapsing to an empty name. NOTE: this is a name-normalization helper,
+/// not a path-safety boundary — it does not reject path separators or `..`.
+pub fn normalize_wallet_name(name: &str) -> String {
+    const SUFFIX: &str = ".wallet";
+    let trimmed = name.trim();
+    // `to_ascii_lowercase` preserves byte length, and a matched `.wallet` suffix is 7 ASCII
+    // bytes, so slicing at `len - 7` always lands on a char boundary (safe).
+    if trimmed.len() > SUFFIX.len() && trimmed.to_ascii_lowercase().ends_with(SUFFIX) {
+        trimmed[..trimmed.len() - SUFFIX.len()].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 pub fn make_filename(title: &Option<String>, filename: &Option<String>) -> String {
-    if let Some(filename) = filename {
-        filename.to_string()
+    // An explicit filename wins, but an empty/whitespace-only one (or one that is just
+    // `.wallet`) must not collapse to an empty base (which would yield a bare `.wallet` file) —
+    // fall through to the title/default instead.
+    let normalized = filename.as_deref().map(normalize_wallet_name).filter(|s| !s.is_empty());
+    if let Some(filename) = normalized {
+        filename
     } else if let Some(title) = title {
         slugify!(title)
     } else {
@@ -88,8 +115,22 @@ impl LocalStoreInner {
     }
 
     async fn try_load(wallet_secret: &Secret, folder: &str, args: OpenArgs) -> Result<Self> {
-        let filename = make_filename(&None, &args.filename);
-        let storage = Storage::try_new_with_folder(folder, &format!("{filename}.wallet"))?;
+        let mut filename = make_filename(&None, &args.filename);
+        let mut storage = Storage::try_new_with_folder(folder, &format!("{filename}.wallet"))?;
+
+        // Legacy fallback: before wallet-name normalization, `create foo.wallet` produced the
+        // on-disk file `foo.wallet.wallet`. If the normalized name does not resolve but the raw
+        // (un-normalized) name does, open the legacy file so older wallets are not orphaned by
+        // the normalization. Costs one extra `exists()` stat only when the normalized name misses.
+        if !storage.exists().await? {
+            if let Some(raw) = args.filename.as_deref().map(str::trim).filter(|raw| !raw.is_empty() && *raw != filename.as_str()) {
+                let legacy = Storage::try_new_with_folder(folder, &format!("{raw}.wallet"))?;
+                if legacy.exists().await? {
+                    storage = legacy;
+                    filename = raw.to_string();
+                }
+            }
+        }
 
         let wallet = WalletStorage::try_load(&storage).await?;
         let cache = Arc::new(RwLock::new(Cache::from_wallet(wallet, wallet_secret)?));
@@ -144,7 +185,16 @@ impl LocalStoreInner {
         match store {
             Store::Resident => Err(Error::ResidentWallet),
             Store::Storage(mut storage) => {
-                storage.rename_sync(filename.as_str())?;
+                // rename_sync takes a full target path and does NOT append `.wallet`, so build the
+                // target as a sibling of the current wallet file with the `.wallet` extension
+                // re-applied — otherwise the file would be moved to the CWD without its extension.
+                let target = storage
+                    .filename()
+                    .parent()
+                    .map(|dir| dir.join(format!("{filename}.wallet")))
+                    .unwrap_or_else(|| std::path::PathBuf::from(format!("{filename}.wallet")));
+                let target = target.to_str().ok_or_else(|| Error::InvalidFilename(format!("{filename}.wallet")))?;
+                storage.rename_sync(target)?;
                 *self.store.write().unwrap() = Arc::new(Store::Storage(storage));
                 Ok(())
             }
@@ -368,8 +418,10 @@ impl Interface for LocalStore {
 
     async fn exists(&self, name: Option<&str>) -> Result<bool> {
         let location = self.location.lock().unwrap().clone().unwrap();
-        let store =
-            Storage::try_new_with_folder(&location.folder, &format!("{}.wallet", name.unwrap_or(super::default_wallet_file())))?;
+        // Route through make_filename so exists() agrees with open()/create() on the same
+        // user-supplied name (e.g. both `foo` and `foo.wallet` resolve to the file `foo.wallet`).
+        let filename = make_filename(&None, &name.map(str::to_string));
+        let store = Storage::try_new_with_folder(&location.folder, &format!("{filename}.wallet"))?;
         store.exists().await
     }
 
@@ -405,7 +457,10 @@ impl Interface for LocalStore {
             .iter()
             .filter_map(|de| {
                 let file_name = de.file_name();
-                file_name.ends_with(".wallet").then(|| file_name.trim_end_matches(".wallet").to_string())
+                // strip exactly one `.wallet` (not the greedy trim_end_matches) so a legacy
+                // `foo.wallet.wallet` lists as base `foo.wallet`, which round-trips back to the
+                // same file via the open() raw-name fallback (see try_load).
+                file_name.strip_suffix(".wallet").map(str::to_string)
             })
             .collect::<Vec<_>>();
 
@@ -624,5 +679,62 @@ impl AddressBookStore for LocalStoreInner {
             .collect();
 
         Ok(matches)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{make_filename, normalize_wallet_name};
+
+    #[test]
+    fn normalize_strips_single_wallet_suffix() {
+        // `open foo` and `open foo.wallet` must resolve to the same base name so that
+        // the storage layer's `{base}.wallet` append never produces `foo.wallet.wallet`.
+        assert_eq!(normalize_wallet_name("kaspa"), "kaspa");
+        assert_eq!(normalize_wallet_name("kaspa.wallet"), "kaspa");
+        assert_eq!(normalize_wallet_name("  kaspa.wallet  "), "kaspa");
+        assert_eq!(normalize_wallet_name("  kaspa  "), "kaspa");
+        // only one extension is stripped (the explicit doubled form is preserved minus one)
+        assert_eq!(normalize_wallet_name("my.wallet.wallet"), "my.wallet");
+        // names that merely contain "wallet" are untouched
+        assert_eq!(normalize_wallet_name("my-wallet"), "my-wallet");
+        assert_eq!(normalize_wallet_name("wallet.json"), "wallet.json");
+        // a bare ".wallet" is kept rather than collapsing to an empty name
+        assert_eq!(normalize_wallet_name(".wallet"), ".wallet");
+        // empty / whitespace-only normalize to empty (make_filename then falls back — see below)
+        assert_eq!(normalize_wallet_name(""), "");
+        assert_eq!(normalize_wallet_name("   "), "");
+    }
+
+    #[test]
+    fn normalize_is_case_insensitive() {
+        // default macOS (APFS) / Windows (NTFS) filesystems are case-insensitive, where
+        // `foo.WALLET.wallet` and `foo.wallet.wallet` are the same file — so the suffix
+        // match must be case-insensitive too.
+        assert_eq!(normalize_wallet_name("kaspa.WALLET"), "kaspa");
+        assert_eq!(normalize_wallet_name("kaspa.Wallet"), "kaspa");
+        assert_eq!(normalize_wallet_name("KASPA.wallet"), "KASPA");
+    }
+
+    #[test]
+    fn make_filename_normalizes_explicit_filename() {
+        // every spelling produces the same base filename → the same `{base}.wallet` file
+        let a = make_filename(&None, &Some("kaspa".to_string()));
+        let b = make_filename(&None, &Some("kaspa.wallet".to_string()));
+        let c = make_filename(&None, &Some("kaspa.WALLET".to_string()));
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_eq!(a, "kaspa");
+    }
+
+    #[test]
+    fn make_filename_empty_falls_back_to_title_or_default() {
+        // an empty / whitespace-only explicit filename must not produce a bare `.wallet` file —
+        // it falls through to the title (or the default) exactly as if no filename was given.
+        assert_eq!(
+            make_filename(&Some("Title".to_string()), &Some("   ".to_string())),
+            make_filename(&Some("Title".to_string()), &None)
+        );
+        assert_eq!(make_filename(&None, &Some(String::new())), make_filename(&None, &None));
     }
 }

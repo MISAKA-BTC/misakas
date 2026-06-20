@@ -356,6 +356,25 @@ pub trait RpcApi: Sync + Send + AnySync {
         request: GetUtxosByAddressesRequest,
     ) -> RpcResult<GetUtxosByAddressesResponse>;
 
+    /// Requests a bounded, cursor-paginated page of UTXOs for a single address.
+    ///
+    /// This call is only available when this node was started with `--utxoindex`. Prefer it over
+    /// [Self::get_utxos_by_addresses] for addresses with very large UTXO sets, whose full response
+    /// can exceed client message-size / timeout limits.
+    async fn get_utxos_by_address_page(
+        &self,
+        address: RpcAddress,
+        cursor: String,
+        limit: u64,
+    ) -> RpcResult<GetUtxosByAddressPageResponse> {
+        self.get_utxos_by_address_page_call(None, GetUtxosByAddressPageRequest::new(address, cursor, limit)).await
+    }
+    async fn get_utxos_by_address_page_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetUtxosByAddressPageRequest,
+    ) -> RpcResult<GetUtxosByAddressPageResponse>;
+
     /// Requests the blue score of the current selected parent of the virtual block.
     async fn get_sink_blue_score(&self) -> RpcResult<u64> {
         Ok(self.get_sink_blue_score_call(None, GetSinkBlueScoreRequest {}).await?.blue_score)
