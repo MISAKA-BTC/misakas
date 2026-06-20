@@ -64,6 +64,25 @@ fn hex_of(bytes: &[u8]) -> String {
     String::from_utf8(s).unwrap()
 }
 
+/// Sign a contract-CREATE tx (eth-rpc e2e: exercises `eth_getTransactionReceipt`
+/// `contractAddress` + `eth_getLogs`). Returns `(sender, contract_address, raw)`.
+fn sign_deploy(key_byte: u8, nonce: u64, init_code: Vec<u8>) -> (Address, Address, Vec<u8>) {
+    let signer = PrivateKeySigner::from_bytes(&B256::from([key_byte; 32])).unwrap();
+    let tx = TxEip1559 {
+        chain_id: EVM_CHAIN_ID,
+        nonce,
+        gas_limit: 200_000,
+        max_fee_per_gas: EVM_INITIAL_BASE_FEE as u128,
+        max_priority_fee_per_gas: 0,
+        to: revm::primitives::TxKind::Create,
+        value: U256::ZERO,
+        access_list: Default::default(),
+        input: init_code.into(),
+    };
+    let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+    (signer.address(), signer.address().create(nonce), TxEnvelope::from(tx.into_signed(sig)).encoded_2718())
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -78,6 +97,17 @@ async fn main() {
                 let (sender, raw) = sign_tx(key_byte, nonce, calldata_len);
                 println!("{} {} {}", nonce, sender, hex_of(&raw));
             }
+        }
+        Some("gendeploy") => {
+            // eth-rpc e2e: a contract whose constructor emits LOG0 then deploys
+            // empty runtime code. Init: PUSH1 0,PUSH1 0,LOG0, PUSH1 0,PUSH1 0,RETURN.
+            let nonce: u64 = args[2].parse().expect("nonce");
+            let key_byte: u8 = args.get(3).map(|s| s.parse().expect("key_byte")).unwrap_or(0x11);
+            let init_code = vec![0x60, 0x00, 0x60, 0x00, 0xa0, 0x60, 0x00, 0x60, 0x00, 0xf3];
+            let (sender, contract, raw) = sign_deploy(key_byte, nonce, init_code);
+            println!("sender {sender}");
+            println!("contract {contract}");
+            println!("raw 0x{}", hex_of(&raw));
         }
         Some("submit") => {
             let url = args[2].clone();

@@ -78,6 +78,26 @@ pub struct EthCallRequest {
     pub gas: u64,
 }
 
+/// A decoded EVM transaction for `eth_getTransactionByHash`. Block context is
+/// `None` when the tx is known but not yet on the selected chain (pending).
+#[derive(Clone, Debug)]
+pub struct EthTx {
+    pub hash: [u8; 32],
+    pub from: [u8; 20],
+    pub to: Option<[u8; 20]>,
+    pub nonce: u64,
+    pub value: [u8; 32],
+    pub gas: u64,
+    pub gas_price: u128,
+    pub max_priority_fee_per_gas: Option<u128>,
+    pub input: Vec<u8>,
+    pub tx_type: u8,
+    pub chain_id: Option<u64>,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<[u8; 32]>,
+    pub tx_index: Option<u32>,
+}
+
 /// One log entry of an [`EthReceipt`] (the node-side impl fills it from the
 /// committed EVM receipt; the adapter renders the standard JSON shape).
 #[derive(Clone, Debug)]
@@ -102,6 +122,16 @@ pub struct EthReceipt {
     pub gas_used: u64,
     pub cumulative_gas_used: u64,
     pub logs: Vec<EthLog>,
+    /// Sender / recipient, recovered/decoded from the raw tx (`None` if the raw
+    /// tx could not be located — degrades to a base receipt).
+    pub from: Option<[u8; 20]>,
+    pub to: Option<[u8; 20]>,
+    /// `CREATE(from, nonce)` for a contract-creation tx (what `forge create` reads).
+    pub contract_address: Option<[u8; 20]>,
+    /// 0 = legacy, 1 = EIP-2930, 2 = EIP-1559.
+    pub tx_type: u8,
+    /// Gas price paid (wei); the adapter renders it as `effectiveGasPrice`.
+    pub effective_gas_price: u128,
 }
 
 /// An EVM block for `eth_getBlockByNumber` / `eth_getBlockByHash`. Primitive
@@ -184,6 +214,10 @@ pub trait EthProvider: Send + Sync + 'static {
     /// `eth_getTransactionReceipt`: the receipt of a mined EVM tx, or `None` if
     /// it is unknown / still pending (not yet accepted on the selected chain).
     async fn transaction_receipt(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthReceipt>>;
+
+    /// `eth_getTransactionByHash`: the decoded tx (with block context if mined),
+    /// or `None` if the raw tx is unknown to this node.
+    async fn transaction_by_hash(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthTx>>;
 
     /// `eth_getBlockByNumber` for a numeric block (canonical EVM block at that number).
     async fn block_by_number(&self, number: u64) -> EthResult<Option<EthBlock>>;
@@ -277,9 +311,7 @@ async fn dispatch(provider: &Arc<dyn EthProvider>, req: RpcRequest) -> RpcRespon
         "eth_getBlockTransactionCountByNumber" => eth_get_block_tx_count_by_number(provider, &req.params).await,
         "eth_getBlockTransactionCountByHash" => eth_get_block_tx_count_by_hash(provider, &req.params).await,
         "eth_getLogs" => eth_get_logs(provider, &req.params).await,
-        // Wallets poll this; we do not index pending txs by hash, so report
-        // "unknown" (null) — the receipt is the source of truth for inclusion.
-        "eth_getTransactionByHash" => Ok(Value::Null),
+        "eth_getTransactionByHash" => eth_get_transaction_by_hash(provider, &req.params).await,
         other => Err(EthRpcError::new(codes::METHOD_NOT_FOUND, format!("the method {other} does not exist / is not available"))),
     };
     match result {
@@ -439,15 +471,16 @@ fn format_receipt(r: &EthReceipt) -> Value {
         "transactionIndex": tx_index,
         "blockNumber": block_number,
         "blockHash": block_hash,
-        "from": Value::Null,
-        "to": Value::Null,
+        "from": r.from.map(|a| json!(format!("0x{}", faster_hex::hex_string(&a)))).unwrap_or(Value::Null),
+        "to": r.to.map(|a| json!(format!("0x{}", faster_hex::hex_string(&a)))).unwrap_or(Value::Null),
         "cumulativeGasUsed": quantity(r.cumulative_gas_used as u128),
         "gasUsed": quantity(r.gas_used as u128),
-        "contractAddress": Value::Null,
+        "contractAddress": r.contract_address.map(|a| json!(format!("0x{}", faster_hex::hex_string(&a)))).unwrap_or(Value::Null),
         "logs": logs,
         "logsBloom": format!("0x{}", "00".repeat(256)),
         "status": if r.status { "0x1" } else { "0x0" },
-        "type": "0x0",
+        "type": quantity(r.tx_type as u128),
+        "effectiveGasPrice": quantity(r.effective_gas_price),
     })
 }
 
@@ -638,6 +671,39 @@ fn render_log(e: &EthLogEntry) -> Value {
         "transactionIndex": quantity(e.tx_index as u128),
         "logIndex": quantity(e.log_index as u128),
         "removed": false,
+    })
+}
+
+// --- eth_getTransactionByHash (Increment 6: tx index) ---
+
+async fn eth_get_transaction_by_hash(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let hash = parse_hash32_param(params, 0)?;
+    Ok(provider.transaction_by_hash(hash).await?.map(|t| render_tx(&t)).unwrap_or(Value::Null))
+}
+
+/// Render an [`EthTx`] as the standard `eth_getTransactionByHash` JSON. `v/r/s`
+/// are not surfaced yet (reads rarely need them); block context is null when pending.
+fn render_tx(t: &EthTx) -> Value {
+    let hx = |b: &[u8]| format!("0x{}", faster_hex::hex_string(b));
+    json!({
+        "hash": hx(&t.hash),
+        "from": hx(&t.from),
+        "to": t.to.map(|a| json!(hx(&a))).unwrap_or(Value::Null),
+        "nonce": quantity(t.nonce as u128),
+        "value": quantity_from_be32(&t.value),
+        "gas": quantity(t.gas as u128),
+        "gasPrice": quantity(t.gas_price),
+        "maxFeePerGas": quantity(t.gas_price),
+        "maxPriorityFeePerGas": t.max_priority_fee_per_gas.map(quantity).unwrap_or(Value::Null),
+        "input": hx(&t.input),
+        "type": quantity(t.tx_type as u128),
+        "chainId": t.chain_id.map(|c| quantity(c as u128)).unwrap_or(Value::Null),
+        "blockNumber": t.block_number.map(|n| quantity(n as u128)).unwrap_or(Value::Null),
+        "blockHash": t.block_hash.map(|h| json!(hx(&h))).unwrap_or(Value::Null),
+        "transactionIndex": t.tx_index.map(|i| quantity(i as u128)).unwrap_or(Value::Null),
+        "v": "0x0",
+        "r": "0x0",
+        "s": "0x0",
     })
 }
 
