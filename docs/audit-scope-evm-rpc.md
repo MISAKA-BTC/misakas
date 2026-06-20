@@ -62,10 +62,13 @@ receipts / tx‑lookup / logs / payload / canonical‑heads + the eth‑rpc inde
   follow‑up), `parentHash`=0, full‑tx blocks + `v/r/s` not surfaced.
 
 ## Known open items (disclose to auditors; tracked as follow‑ups)
-- **EVM‑tx P2P relay** is not implemented: `eth_sendRawTransaction` on a non‑mining node leaves the
-  tx in that node's mempool (only deposit‑claims relay). Run the adapter on a mining node, or add
-  the relay. Not a consensus issue.
 - No WebSocket subscriptions / filter objects; `eth_getLogs` (HTTP) only.
+- `eth_getLogs` index is forward‑populated (historical backfill is a follow‑up); receipt `logsBloom`
+  is zero‑filled; block `parentHash`/full‑tx objects + tx `v/r/s` are not surfaced.
+
+(Resolved: `eth_sendRawTransaction` now P2P‑broadcasts via `flow_context.submit_rpc_evm_transaction`,
+so a tx submitted to a non‑mining node relays to mining peers — the adapter no longer requires a
+mining node.)
 
 ## Out of scope
 Upstream Ethereum consensus/networking (none ported), `personal_*`/`admin_*`/`engine_*` (absent),

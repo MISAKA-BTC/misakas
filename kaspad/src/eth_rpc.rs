@@ -13,7 +13,7 @@ use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
 use kaspa_eth_rpc::{EthBlock, EthCallRequest, EthFeeHistory, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx};
 use kaspa_hashes::EvmH256;
-use kaspa_mining::manager::MiningManagerProxy;
+use kaspa_p2p_flows::flow_context::FlowContext;
 
 const ETH_RPC: &str = "eth-rpc";
 
@@ -21,13 +21,13 @@ const ETH_RPC: &str = "eth-rpc";
 /// mempool seam powers `eth_sendRawTransaction`).
 pub struct NodeEthProvider {
     consensus_manager: Arc<ConsensusManager>,
-    mining_manager: MiningManagerProxy,
+    flow_context: Arc<FlowContext>,
     client_version: String,
 }
 
 impl NodeEthProvider {
-    pub fn new(consensus_manager: Arc<ConsensusManager>, mining_manager: MiningManagerProxy) -> Self {
-        Self { consensus_manager, mining_manager, client_version: format!("misaka-kaspad/v{}", env!("CARGO_PKG_VERSION")) }
+    pub fn new(consensus_manager: Arc<ConsensusManager>, flow_context: Arc<FlowContext>) -> Self {
+        Self { consensus_manager, flow_context, client_version: format!("misaka-kaspad/v{}", env!("CARGO_PKG_VERSION")) }
     }
 }
 
@@ -104,10 +104,12 @@ impl EthProvider for NodeEthProvider {
 
     async fn send_raw_transaction(&self, raw: Vec<u8>) -> EthResult<[u8; 32]> {
         use kaspa_mining::evm_mempool::EvmMempoolError;
-        // The class-1 admission rule (decode / signer / chain-id / gas band)
-        // runs inside the mempool insert; an `--features evm` node is required
-        // (a non-evm build refuses here, mirroring the consensus seam).
-        match self.mining_manager.submit_evm_transaction(raw) {
+        // Route through the flow_context so the tx is BOTH admitted to this node's
+        // EVM mempool AND P2P-broadcast to EVM-relay peers (§14.2) — the same path
+        // the UTXO RPC submit uses. Without the broadcast, a tx sent to a
+        // non-mining node would never reach a miner. The class-1 admission rule
+        // (decode / signer / chain-id / gas band) runs inside; a non-evm node refuses.
+        match self.flow_context.submit_rpc_evm_transaction(raw).await {
             Ok(h) => Ok(h.as_bytes()),
             // Idempotent: a duplicate submit returns the already-pending hash,
             // so a retrying wallet still gets its tx id back.
@@ -391,8 +393,8 @@ pub struct EthRpcService {
 }
 
 impl EthRpcService {
-    pub fn new(addr: SocketAddr, consensus_manager: Arc<ConsensusManager>, mining_manager: MiningManagerProxy) -> Self {
-        Self { addr, provider: Arc::new(NodeEthProvider::new(consensus_manager, mining_manager)) }
+    pub fn new(addr: SocketAddr, consensus_manager: Arc<ConsensusManager>, flow_context: Arc<FlowContext>) -> Self {
+        Self { addr, provider: Arc::new(NodeEthProvider::new(consensus_manager, flow_context)) }
     }
 }
 
