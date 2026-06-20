@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
-use kaspa_eth_rpc::{EthBlock, EthCallRequest, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError};
+use kaspa_eth_rpc::{EthBlock, EthCallRequest, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx};
 use kaspa_hashes::EvmH256;
 use kaspa_mining::manager::MiningManagerProxy;
 
@@ -119,11 +119,27 @@ impl EthProvider for NodeEthProvider {
     async fn transaction_receipt(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthReceipt>> {
         let session = self.consensus_manager.consensus().session().await;
         let h = EvmH256::from_bytes(tx_hash);
-        // ConsensusApi store read → spawn_blocking (RocksDB).
-        let view = session
-            .spawn_blocking(move |c| c.get_evm_tx_receipt(h))
-            .await
-            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        // One spawn_blocking: the receipt view + (locate + decode) the raw tx for
+        // from/to/contractAddress/type (RocksDB reads + k256 recovery are blocking).
+        let (view, decoded) = session
+            .spawn_blocking(move |c| {
+                let view = c.get_evm_tx_receipt(h).ok().flatten();
+                let decoded = (|| {
+                    let locs = c.get_evm_tx_locations(h).ok()?;
+                    for block in locs.included_in {
+                        if let Ok(payload) = c.get_block_evm_payload(block) {
+                            for raw in &payload.transactions {
+                                if kaspa_evm::tx::tx_hash(raw) == h {
+                                    return kaspa_evm::tx::decode_eth_tx(raw).ok();
+                                }
+                            }
+                        }
+                    }
+                    None
+                })();
+                (view, decoded)
+            })
+            .await;
         Ok(view.map(|v| {
             // The accepting L1 block hash is 64 bytes (BLAKE2b-512); expose the
             // leading 32 as a standard-shaped, client-opaque `blockHash`.
@@ -148,7 +164,58 @@ impl EthProvider for NodeEthProvider {
                         data: lg.data.clone(),
                     })
                     .collect(),
+                from: decoded.as_ref().map(|d| d.from),
+                to: decoded.as_ref().and_then(|d| d.to),
+                contract_address: decoded.as_ref().and_then(|d| d.contract_address),
+                tx_type: decoded.as_ref().map(|d| d.tx_type).unwrap_or(0),
+                effective_gas_price: decoded.as_ref().map(|d| d.max_fee_per_gas).unwrap_or(0),
             }
+        }))
+    }
+
+    async fn transaction_by_hash(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthTx>> {
+        let session = self.consensus_manager.consensus().session().await;
+        let h = EvmH256::from_bytes(tx_hash);
+        let (decoded, ctx) = session
+            .spawn_blocking(move |c| {
+                let decoded = (|| {
+                    let locs = c.get_evm_tx_locations(h).ok()?;
+                    for block in locs.included_in {
+                        if let Ok(payload) = c.get_block_evm_payload(block) {
+                            for raw in &payload.transactions {
+                                if kaspa_evm::tx::tx_hash(raw) == h {
+                                    return kaspa_evm::tx::decode_eth_tx(raw).ok();
+                                }
+                            }
+                        }
+                    }
+                    None
+                })();
+                // Canonical block context (None ⇒ pending / not on the selected chain).
+                let ctx = c.get_evm_tx_receipt(h).ok().flatten().map(|v| {
+                    let bh = v.accepting_block.as_bytes();
+                    let mut block_hash = [0u8; 32];
+                    block_hash.copy_from_slice(&bh[..32]);
+                    (v.evm_number, block_hash, v.receipt_index)
+                });
+                (decoded, ctx)
+            })
+            .await;
+        Ok(decoded.map(|d| EthTx {
+            hash: tx_hash,
+            from: d.from,
+            to: d.to,
+            nonce: d.nonce,
+            value: d.value,
+            gas: d.gas_limit,
+            gas_price: d.max_fee_per_gas,
+            max_priority_fee_per_gas: d.max_priority_fee_per_gas,
+            input: d.input,
+            tx_type: d.tx_type,
+            chain_id: d.chain_id,
+            block_number: ctx.map(|(n, _, _)| n),
+            block_hash: ctx.map(|(_, b, _)| b),
+            tx_index: ctx.map(|(_, _, i)| i),
         }))
     }
 

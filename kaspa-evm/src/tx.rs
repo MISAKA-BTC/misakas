@@ -384,3 +384,58 @@ pub fn decode_tx_to_env(raw: &[u8]) -> Result<TxEnv, TxDecodeError> {
     }
     Ok(tx)
 }
+
+/// Decoded fields of an EVM tx for the eth-rpc adapter (`eth_getTransactionByHash`
+/// + `eth_getTransactionReceipt` `from`/`to`/`contractAddress`). Primitive output
+/// (no revm/alloy types) so the thin `rpc/eth` crate stays secp/revm-free; the
+/// node-side provider calls this under kaspad's `evm` feature.
+#[derive(Clone, Debug)]
+pub struct DecodedEthTx {
+    pub hash: kaspa_hashes::EvmH256,
+    pub from: [u8; 20],
+    /// `None` ⇒ contract creation.
+    pub to: Option<[u8; 20]>,
+    pub nonce: u64,
+    /// Call value in wei, big-endian 32 bytes.
+    pub value: [u8; 32],
+    pub gas_limit: u64,
+    /// EIP-1559 max fee (legacy/2930: the gas price).
+    pub max_fee_per_gas: u128,
+    pub max_priority_fee_per_gas: Option<u128>,
+    pub input: Vec<u8>,
+    /// 0 = legacy, 1 = EIP-2930, 2 = EIP-1559.
+    pub tx_type: u8,
+    pub chain_id: Option<u64>,
+    /// `CREATE(from, nonce)` for a creation, else `None`.
+    pub contract_address: Option<[u8; 20]>,
+}
+
+/// Decode + recover a raw EIP-2718 tx into [`DecodedEthTx`] for the eth-rpc adapter.
+pub fn decode_eth_tx(raw: &[u8]) -> Result<DecodedEthTx, TxDecodeError> {
+    let envelope = decode_canonical_2718(raw).map_err(TxDecodeError::Decode)?;
+    if !is_supported_tx_type(&envelope) {
+        return Err(TxDecodeError::Decode(format!("unsupported EVM tx type {:#04x}", envelope.tx_type() as u8)));
+    }
+    let hash = tx_hash(raw);
+    let from_addr = recover_signer_cached(&envelope, hash).map_err(TxDecodeError::Recover)?;
+    let nonce = envelope.nonce();
+    let to = match envelope.kind() {
+        revm::primitives::TxKind::Call(a) => Some(a.into_array()),
+        revm::primitives::TxKind::Create => None,
+    };
+    let contract_address = if to.is_none() { Some(from_addr.create(nonce).into_array()) } else { None };
+    Ok(DecodedEthTx {
+        hash,
+        from: from_addr.into_array(),
+        to,
+        nonce,
+        value: envelope.value().to_be_bytes::<32>(),
+        gas_limit: envelope.gas_limit(),
+        max_fee_per_gas: envelope.max_fee_per_gas(),
+        max_priority_fee_per_gas: envelope.max_priority_fee_per_gas(),
+        input: envelope.input().to_vec(),
+        tx_type: envelope.tx_type() as u8,
+        chain_id: envelope.chain_id(),
+        contract_address,
+    })
+}
