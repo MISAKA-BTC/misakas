@@ -35,9 +35,10 @@ Legend: **✓** full · **◑** works with a documented limitation · **·** stu
 | `eth_getBlockTransactionCountByNumber` | ✓ | |
 | `eth_getBlockTransactionCountByHash` | ✓ | |
 | `eth_getLogs` | ◑ | `address` + `topics` (OR/wildcard) + `blockHash`/`fromBlock`/`toBlock`; **10 000‑block range cap** + 10 000‑result cap; **forward‑populated index** (blocks committed after the node ran this binary; a historical backfill is a follow‑up) |
+| `eth_feeHistory` | ◑ | real base fees + `gasUsedRatio` over the range (+1 projection); reward percentiles are `0x0` (no priority‑fee market). Enables default EIP‑1559 tooling (Foundry/ethers/viem/MetaMask) |
 
 **Not implemented** (return `-32601`, by design for the MVP): `eth_subscribe`/`eth_unsubscribe`
-(WebSocket), `eth_newFilter`/`eth_getFilterChanges`/`eth_uninstallFilter`, `eth_feeHistory`,
+(WebSocket), `eth_newFilter`/`eth_getFilterChanges`/`eth_uninstallFilter`,
 `eth_getProof`, `eth_getBlockReceipts`, `eth_getTransactionByBlock*AndIndex`, and all
 `personal_*` / `admin_*` / `engine_*` / `debug_*` / `trace_*` / `txpool_*` namespaces.
 

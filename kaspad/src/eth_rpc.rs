@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
-use kaspa_eth_rpc::{EthBlock, EthCallRequest, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx};
+use kaspa_eth_rpc::{EthBlock, EthCallRequest, EthFeeHistory, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx};
 use kaspa_hashes::EvmH256;
 use kaspa_mining::manager::MiningManagerProxy;
 
@@ -268,6 +268,40 @@ impl EthProvider for NodeEthProvider {
             .await
             .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
         Ok(entries.into_iter().map(to_eth_log_entry).collect())
+    }
+
+    async fn fee_history(&self, block_count: u64, newest: u64, reward_percentiles: Vec<f64>) -> EthResult<EthFeeHistory> {
+        let session = self.consensus_manager.consensus().session().await;
+        let np = reward_percentiles.len();
+        let (base_fees, ratios, oldest) = session
+            .spawn_blocking(move |c| {
+                let oldest = newest.saturating_sub(block_count.saturating_sub(1));
+                let head_base =
+                    c.get_evm_head_header().ok().flatten().map(|h| h.base_fee_per_gas.to_be_bytes()).unwrap_or([0u8; 32]);
+                let mut base_fees: Vec<[u8; 32]> = Vec::new();
+                let mut ratios: Vec<f64> = Vec::new();
+                for n in oldest..=newest {
+                    match c.get_evm_block_by_number(n).ok().flatten() {
+                        Some(b) => {
+                            let gl = b.header.gas_limit.max(1);
+                            base_fees.push(b.header.base_fee_per_gas.to_be_bytes());
+                            ratios.push(b.header.gas_used as f64 / gl as f64);
+                        }
+                        None => {
+                            base_fees.push(head_base);
+                            ratios.push(0.0);
+                        }
+                    }
+                }
+                // The trailing +1 entry is the next block's projected base fee (flat).
+                let projection = *base_fees.last().unwrap_or(&head_base);
+                base_fees.push(projection);
+                (base_fees, ratios, oldest)
+            })
+            .await;
+        // No separate priority-fee market yet → zero reward at every requested percentile.
+        let reward = if np > 0 { Some(ratios.iter().map(|_| vec![[0u8; 32]; np]).collect()) } else { None };
+        Ok(EthFeeHistory { oldest_block: oldest, base_fee_per_gas: base_fees, gas_used_ratio: ratios, reward })
     }
 }
 
