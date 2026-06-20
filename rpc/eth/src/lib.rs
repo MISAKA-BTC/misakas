@@ -174,6 +174,17 @@ pub struct EthLogEntry {
     pub log_index: u32,
 }
 
+/// `eth_feeHistory` result. `base_fee_per_gas` has `block_count + 1` entries (the
+/// trailing one is the next block's projected base fee); `gas_used_ratio` has
+/// `block_count`; `reward` (if percentiles were requested) is `block_count` rows.
+#[derive(Clone, Debug)]
+pub struct EthFeeHistory {
+    pub oldest_block: u64,
+    pub base_fee_per_gas: Vec<[u8; 32]>,
+    pub gas_used_ratio: Vec<f64>,
+    pub reward: Option<Vec<Vec<[u8; 32]>>>,
+}
+
 /// The node-side data + action surface the adapter needs. Implemented by kaspad
 /// over its `ConsensusManager` + `FlowContext` (and, for simulation, kaspa-evm).
 /// Methods are added here as the MVP grows (state / call / receipt / block).
@@ -239,6 +250,10 @@ pub trait EthProvider: Send + Sync + 'static {
         addresses: Vec<[u8; 20]>,
         topics: Vec<Vec<[u8; 32]>>,
     ) -> EthResult<Vec<EthLogEntry>>;
+
+    /// `eth_feeHistory`: base fees + gas-used ratios over the last `block_count`
+    /// blocks ending at `newest` (used by EIP-1559 tooling — Foundry/ethers/MetaMask).
+    async fn fee_history(&self, block_count: u64, newest: u64, reward_percentiles: Vec<f64>) -> EthResult<EthFeeHistory>;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +326,7 @@ async fn dispatch(provider: &Arc<dyn EthProvider>, req: RpcRequest) -> RpcRespon
         "eth_getBlockTransactionCountByNumber" => eth_get_block_tx_count_by_number(provider, &req.params).await,
         "eth_getBlockTransactionCountByHash" => eth_get_block_tx_count_by_hash(provider, &req.params).await,
         "eth_getLogs" => eth_get_logs(provider, &req.params).await,
+        "eth_feeHistory" => eth_fee_history(provider, &req.params).await,
         "eth_getTransactionByHash" => eth_get_transaction_by_hash(provider, &req.params).await,
         other => Err(EthRpcError::new(codes::METHOD_NOT_FOUND, format!("the method {other} does not exist / is not available"))),
     };
@@ -672,6 +688,34 @@ fn render_log(e: &EthLogEntry) -> Value {
         "logIndex": quantity(e.log_index as u128),
         "removed": false,
     })
+}
+
+// --- eth_feeHistory (EIP-1559 fee estimation for Foundry/ethers/viem/MetaMask) ---
+
+async fn eth_fee_history(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let arr = params
+        .as_array()
+        .ok_or_else(|| EthRpcError::invalid_params("eth_feeHistory expects [blockCount, newestBlock, rewardPercentiles?]"))?;
+    let block_count = match arr.first() {
+        Some(Value::String(s)) => u64_from_hex(s)?,
+        Some(Value::Number(n)) => n.as_u64().ok_or_else(|| EthRpcError::invalid_params("blockCount"))?,
+        _ => return Err(EthRpcError::invalid_params("blockCount required")),
+    };
+    let newest = resolve_block_number(provider, arr.get(1)).await?;
+    let percentiles: Vec<f64> =
+        arr.get(2).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+    let fh = provider.fee_history(block_count.clamp(1, 1024), newest, percentiles).await?;
+    let mut obj = serde_json::Map::new();
+    obj.insert("oldestBlock".to_string(), quantity(fh.oldest_block as u128));
+    obj.insert("baseFeePerGas".to_string(), Value::Array(fh.base_fee_per_gas.iter().map(|b| quantity_from_be32(b)).collect()));
+    obj.insert("gasUsedRatio".to_string(), json!(fh.gas_used_ratio));
+    if let Some(reward) = fh.reward {
+        obj.insert(
+            "reward".to_string(),
+            Value::Array(reward.iter().map(|row| Value::Array(row.iter().map(|b| quantity_from_be32(b)).collect())).collect()),
+        );
+    }
+    Ok(Value::Object(obj))
 }
 
 // --- eth_getTransactionByHash (Increment 6: tx index) ---
