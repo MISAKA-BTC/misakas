@@ -823,6 +823,23 @@ pub struct EvmBlockResponse {
     pub tx_hashes: Vec<EvmH256>,
 }
 
+/// One resolved EVM log for `eth_getLogs` (§16): the log plus its canonical
+/// block/tx context. `block_l1_hash`'s first 32 bytes are the eth-rpc `blockHash`.
+/// Store/RPC data only — never part of a commitment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvmLogEntry {
+    pub address: EvmAddress,
+    pub topics: Vec<EvmH256>,
+    pub data: Vec<u8>,
+    pub block_number: u64,
+    pub block_l1_hash: Hash64,
+    pub tx_hash: EvmH256,
+    /// Receipt index = transaction index within the accepting block.
+    pub tx_index: u32,
+    /// Log index within the accepting block (across all its receipts).
+    pub log_index: u32,
+}
+
 // ---------------------------------------------------------------------------
 // EvmStateSnapshot — persisted full EVM account state (design §11, P3).
 // ---------------------------------------------------------------------------

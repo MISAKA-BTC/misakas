@@ -500,6 +500,20 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§16, `eth_getLogs`): logs over the canonical
+    /// `evm_number` range `[from_number, to_number]`, filtered by `addresses`
+    /// (empty = any) and per-position `topics` (an empty inner vec = wildcard at
+    /// that position). Bounded; only canonical chain blocks contribute.
+    fn get_evm_logs(
+        &self,
+        _from_number: u64,
+        _to_number: u64,
+        _addresses: Vec<crate::evm::EvmAddress>,
+        _topics: Vec<Vec<kaspa_hashes::EvmH256>>,
+    ) -> ConsensusResult<Vec<crate::evm::EvmLogEntry>> {
+        Ok(Vec::new())
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own `EvmExecutionPayload`
     /// (the bytes `evm_payload_hash` commits to). The payload store only holds
     /// rows for non-empty payloads, so absence maps to the empty payload —
