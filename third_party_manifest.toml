@@ -1,0 +1,107 @@
+# Third-party dependency manifest — MISAKA EVM lane + eth-rpc adapter
+#
+# Declares the UNMODIFIED upstream crates the EVM lane + the Ethereum JSON-RPC
+# adapter pull in, so an audit can treat them as a dependency review (version
+# pin + call-site) rather than custom code. The MISAKA-custom surface (the audit
+# target) is enumerated in docs/audit-scope-evm-rpc.md. Project license: ISC.
+#
+# Status 2026-06-20.
+
+[meta]
+project_license = "ISC"
+evm_spec = "shanghai"
+generated = "2026-06-20"
+notes = "Versions reflect the workspace lock at this date; alloy is pinned to revm 14's alloy-primitives 0.8.26 line to avoid duplicate-type / version skew."
+
+# --- EVM execution (kaspa-evm) — links secp/k256 via revm; node `evm` feature only ---
+
+[[dependency]]
+name = "revm"
+version = "14"
+license = "MIT"
+modified = false
+features = ["std"]                 # default-features = false
+role = "EVM interpreter + state transition (the executor + read-only eth_call/estimateGas sim)"
+audit = "dependency review (version pin + integration), not upstream code"
+
+[[dependency]]
+name = "alloy-primitives"
+version = "0.8"                     # 0.8.26 line (revm's)
+license = "Apache-2.0 OR MIT"
+modified = false
+features = ["rlp"]
+role = "Ethereum primitive types (Address/U256/B256/Bytes), keccak256, RLP"
+
+[[dependency]]
+name = "alloy-consensus"
+version = "0.8"
+license = "Apache-2.0 OR MIT"
+modified = false
+role = "EIP-2718 TxEnvelope (Legacy/2930/1559) decode + ECDSA signer recovery (kaspa-evm/src/tx.rs)"
+
+[[dependency]]
+name = "alloy-eips"
+version = "0.8"
+license = "Apache-2.0 OR MIT"
+modified = false
+role = "EIP-2718 Decodable2718/Encodable2718, EIP-2930 access lists"
+
+[[dependency]]
+name = "alloy-trie"
+version = "0.7"
+license = "Apache-2.0 OR MIT"
+modified = false
+role = "keccak-MPT roots (state/transactions/receipts roots)"
+
+[[dependency]]
+name = "alloy-rlp"
+version = "0.3"
+license = "Apache-2.0 OR MIT"
+modified = false
+role = "RLP encoding helpers"
+
+# --- eth-rpc adapter (rpc/eth) — NO revm/secp; alloy types only (secp-free crate) ---
+
+[[dependency]]
+name = "alloy-rpc-types-eth"
+version = "0.8"
+license = "Apache-2.0 OR MIT"
+modified = false
+features = ["serde"]               # default-features = false
+role = "Ethereum JSON-RPC response shapes / primitives for the adapter"
+
+[[dependency]]
+name = "tokio"
+version = "1.42"
+license = "MIT"
+modified = false
+features = ["rt-multi-thread", "macros", "net", "io-util"]
+role = "async runtime + the hand-rolled HTTP/1.1 JSON-RPC server (no axum/hyper, by design)"
+
+[[dependency]]
+name = "serde_json"
+version = "1"
+license = "Apache-2.0 OR MIT"
+modified = false
+role = "JSON-RPC 2.0 framing"
+
+[[dependency]]
+name = "faster-hex"
+version = "0.x"
+license = "MIT"
+modified = false
+role = "hex encode/decode for QUANTITY/DATA"
+
+# --- Application layer (Solidity) — kept unmodified to stay out of custom scope ---
+
+[[dependency]]
+name = "openzeppelin-contracts"
+version = "(per-project pin)"
+license = "MIT"
+modified = false
+role = "ERC-20/721/1155, AccessControl, Pausable, etc. — used unmodified by app contracts"
+audit = "dependency review only; custom contracts that USE them are in Scope D"
+
+# Misaka-custom (the audit target — NOT third-party): kaspa-evm/src, rpc/eth/src,
+# kaspad/src/eth_rpc.rs, consensus/src/processes/evm, crypto/txscript deposit-lock,
+# the EVM DB stores (database/src/registry.rs 201-213). See docs/audit-scope-evm-rpc.md.
