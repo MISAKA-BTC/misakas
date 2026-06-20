@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
-use kaspa_eth_rpc::{EthBlock, EthCallRequest, EthLog, EthProvider, EthReceipt, EthResult, EthRpcError};
+use kaspa_eth_rpc::{EthBlock, EthCallRequest, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError};
 use kaspa_hashes::EvmH256;
 use kaspa_mining::manager::MiningManagerProxy;
 
@@ -185,6 +185,23 @@ impl EthProvider for NodeEthProvider {
             .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
         Ok(resp.map(to_eth_block))
     }
+
+    async fn get_logs(
+        &self,
+        from: u64,
+        to: u64,
+        addresses: Vec<[u8; 20]>,
+        topics: Vec<Vec<[u8; 32]>>,
+    ) -> EthResult<Vec<EthLogEntry>> {
+        let session = self.consensus_manager.consensus().session().await;
+        let addrs: Vec<_> = addresses.into_iter().map(kaspa_consensus_core::evm::EvmAddress::from_bytes).collect();
+        let tpcs: Vec<Vec<_>> = topics.into_iter().map(|p| p.into_iter().map(EvmH256::from_bytes).collect()).collect();
+        let entries = session
+            .spawn_blocking(move |c| c.get_evm_logs(from, to, addrs, tpcs))
+            .await
+            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        Ok(entries.into_iter().map(to_eth_log_entry).collect())
+    }
 }
 
 impl NodeEthProvider {
@@ -235,6 +252,22 @@ fn to_eth_block(resp: kaspa_consensus_core::evm::EvmBlockResponse) -> EthBlock {
         base_fee_per_gas: h.base_fee_per_gas.to_be_bytes(),
         miner: h.coinbase.as_bytes(),
         tx_hashes: resp.tx_hashes.iter().map(|t| t.as_bytes()).collect(),
+    }
+}
+
+/// Map a consensus `EvmLogEntry` to the adapter's primitive [`EthLogEntry`].
+fn to_eth_log_entry(e: kaspa_consensus_core::evm::EvmLogEntry) -> EthLogEntry {
+    let mut block_hash = [0u8; 32];
+    block_hash.copy_from_slice(&e.block_l1_hash.as_bytes()[..32]);
+    EthLogEntry {
+        address: e.address.as_bytes(),
+        topics: e.topics.iter().map(|t| t.as_bytes()).collect(),
+        data: e.data,
+        block_number: e.block_number,
+        block_hash,
+        tx_hash: e.tx_hash.as_bytes(),
+        tx_index: e.tx_index,
+        log_index: e.log_index,
     }
 }
 

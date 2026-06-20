@@ -130,6 +130,20 @@ pub struct EthBlock {
     pub tx_hashes: Vec<[u8; 32]>,
 }
 
+/// One resolved log for `eth_getLogs`. Primitive fields; the node-side impl maps
+/// its consensus `EvmLogEntry` here and the adapter renders the standard JSON.
+#[derive(Clone, Debug)]
+pub struct EthLogEntry {
+    pub address: [u8; 20],
+    pub topics: Vec<[u8; 32]>,
+    pub data: Vec<u8>,
+    pub block_number: u64,
+    pub block_hash: [u8; 32],
+    pub tx_hash: [u8; 32],
+    pub tx_index: u32,
+    pub log_index: u32,
+}
+
 /// The node-side data + action surface the adapter needs. Implemented by kaspad
 /// over its `ConsensusManager` + `FlowContext` (and, for simulation, kaspa-evm).
 /// Methods are added here as the MVP grows (state / call / receipt / block).
@@ -180,6 +194,17 @@ pub trait EthProvider: Send + Sync + 'static {
 
     /// `eth_getBlockByHash` for a 32-byte eth-rpc block id.
     async fn block_by_hash(&self, hash: [u8; 32]) -> EthResult<Option<EthBlock>>;
+
+    /// `eth_getLogs`: canonical logs over the `evm_number` range `[from, to]`,
+    /// filtered by `addresses` (empty = any) and per-position `topics` (an empty
+    /// inner vec = wildcard). The caller bounds the block range.
+    async fn get_logs(
+        &self,
+        from: u64,
+        to: u64,
+        addresses: Vec<[u8; 20]>,
+        topics: Vec<Vec<[u8; 32]>>,
+    ) -> EthResult<Vec<EthLogEntry>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +276,7 @@ async fn dispatch(provider: &Arc<dyn EthProvider>, req: RpcRequest) -> RpcRespon
         "eth_getBlockByHash" => eth_get_block_by_hash(provider, &req.params).await,
         "eth_getBlockTransactionCountByNumber" => eth_get_block_tx_count_by_number(provider, &req.params).await,
         "eth_getBlockTransactionCountByHash" => eth_get_block_tx_count_by_hash(provider, &req.params).await,
+        "eth_getLogs" => eth_get_logs(provider, &req.params).await,
         // Wallets poll this; we do not index pending txs by hash, so report
         // "unknown" (null) — the receipt is the source of truth for inclusion.
         "eth_getTransactionByHash" => Ok(Value::Null),
@@ -517,6 +543,101 @@ fn render_block(b: &EthBlock) -> Value {
         "baseFeePerGas": quantity_from_be32(&b.base_fee_per_gas),
         "transactions": txs,
         "uncles": [],
+    })
+}
+
+// --- eth_getLogs (Increment 6: log index) ---
+
+/// Resolve a `fromBlock`/`toBlock` filter value (tag or hex number) to an
+/// `evm_number`. Absent / `latest` / `pending` / `safe` / `finalized` ⇒ the head.
+async fn resolve_block_number(provider: &Arc<dyn EthProvider>, v: Option<&Value>) -> EthResult<u64> {
+    match v.and_then(|x| x.as_str()) {
+        None | Some("latest") | Some("pending") | Some("safe") | Some("finalized") => provider.block_number().await,
+        Some("earliest") => Ok(0),
+        Some(hex) => u64_from_hex(hex),
+    }
+}
+
+/// Parse the `address` filter: absent/null ⇒ any; a single `0x`-hex string or an
+/// array of them.
+fn parse_address_list(v: Option<&Value>) -> EthResult<Vec<[u8; 20]>> {
+    match v {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::String(s)) => Ok(vec![parse_addr20(s)?]),
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .map(|x| x.as_str().ok_or_else(|| EthRpcError::invalid_params("address array entries must be strings")).and_then(parse_addr20))
+            .collect(),
+        _ => Err(EthRpcError::invalid_params("address must be a string or an array")),
+    }
+}
+
+fn parse_topic32(s: &str) -> EthResult<[u8; 32]> {
+    let b = decode_hex(s)?;
+    if b.len() != 32 {
+        return Err(EthRpcError::invalid_params("topic must be 32 bytes"));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&b);
+    Ok(out)
+}
+
+/// Parse the `topics` filter into per-position option sets (empty = wildcard):
+/// each entry is `null` (wildcard), a single topic, or an array (OR).
+fn parse_topic_filter(v: Option<&Value>) -> EthResult<Vec<Vec<[u8; 32]>>> {
+    let Some(Value::Array(arr)) = v else { return Ok(Vec::new()) };
+    arr.iter()
+        .map(|pos| match pos {
+            Value::Null => Ok(Vec::new()),
+            Value::String(s) => Ok(vec![parse_topic32(s)?]),
+            Value::Array(opts) => opts
+                .iter()
+                .map(|o| o.as_str().ok_or_else(|| EthRpcError::invalid_params("topic options must be strings")).and_then(parse_topic32))
+                .collect(),
+            _ => Err(EthRpcError::invalid_params("each topic must be null, a string, or an array")),
+        })
+        .collect()
+}
+
+async fn eth_get_logs(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let f = params
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| EthRpcError::invalid_params("eth_getLogs expects a filter object"))?;
+    let addresses = parse_address_list(f.get("address"))?;
+    let topics = parse_topic_filter(f.get("topics"))?;
+    let (from, to) = if let Some(bh) = f.get("blockHash").and_then(|v| v.as_str()) {
+        let h = parse_hash32_param(&json!([bh]), 0)?;
+        let blk = provider.block_by_hash(h).await?.ok_or_else(|| EthRpcError::invalid_params("unknown blockHash"))?;
+        (blk.number, blk.number)
+    } else {
+        let from = resolve_block_number(provider, f.get("fromBlock")).await?;
+        let to = resolve_block_number(provider, f.get("toBlock")).await?;
+        (from, to)
+    };
+    // DoS bound: cap the scanned range (matches the node-side per-result cap).
+    const MAX_RANGE: u64 = 10_000;
+    if to >= from && to - from >= MAX_RANGE {
+        return Err(EthRpcError::new(codes::SERVER_ERROR, "eth_getLogs block range too large (max 10000 blocks)"));
+    }
+    let logs = provider.get_logs(from, to, addresses, topics).await?;
+    Ok(Value::Array(logs.iter().map(render_log).collect()))
+}
+
+fn render_log(e: &EthLogEntry) -> Value {
+    let hx = |b: &[u8]| format!("0x{}", faster_hex::hex_string(b));
+    let topics: Vec<Value> = e.topics.iter().map(|t| json!(hx(t))).collect();
+    json!({
+        "address": hx(&e.address),
+        "topics": topics,
+        "data": hx(&e.data),
+        "blockNumber": quantity(e.block_number as u128),
+        "blockHash": hx(&e.block_hash),
+        "transactionHash": hx(&e.tx_hash),
+        "transactionIndex": quantity(e.tx_index as u128),
+        "logIndex": quantity(e.log_index as u128),
+        "removed": false,
     })
 }
 

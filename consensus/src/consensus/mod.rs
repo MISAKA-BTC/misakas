@@ -1536,6 +1536,75 @@ impl ConsensusApi for Consensus {
         self.get_evm_block_by_l1_hash(l1_hash)
     }
 
+    fn get_evm_logs(
+        &self,
+        from_number: u64,
+        to_number: u64,
+        addresses: Vec<kaspa_consensus_core::evm::EvmAddress>,
+        topics: Vec<Vec<kaspa_hashes::EvmH256>>,
+    ) -> ConsensusResult<Vec<kaspa_consensus_core::evm::EvmLogEntry>> {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmNumberStoreReader, EvmReceiptsStoreReader};
+        // DoS bound: cap the result set (the crate caps the block range upstream).
+        const MAX_LOGS: usize = 10_000;
+        let mut out = Vec::new();
+        if to_number < from_number {
+            return Ok(out);
+        }
+        // `topics[i]` non-empty ⇒ the log's i-th topic must be one of them; empty ⇒ wildcard.
+        let topic_match = |log_topics: &[kaspa_hashes::EvmH256]| -> bool {
+            for (i, allowed) in topics.iter().enumerate() {
+                if allowed.is_empty() {
+                    continue;
+                }
+                match log_topics.get(i) {
+                    Some(t) if allowed.contains(t) => {}
+                    _ => return false,
+                }
+            }
+            true
+        };
+        for n in from_number..=to_number {
+            let Some(l1_hash) = self.storage.evm_number_store.get(n).unwrap() else { continue };
+            // Reorg-validate the (upsert) number index before trusting the row.
+            if !self.is_chain_block(l1_hash).unwrap_or(false) {
+                continue;
+            }
+            let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().unwrap() else { continue };
+            if header.evm_number != n {
+                continue;
+            }
+            let receipts = self.storage.evm_receipts_store.get(l1_hash).optional().unwrap().unwrap_or_default();
+            let mut log_index: u32 = 0;
+            for (rcpt_idx, receipt) in receipts.receipts.iter().enumerate() {
+                let tx_hash = receipts.tx_hashes.get(rcpt_idx).cloned().unwrap_or_default();
+                for log in &receipt.logs {
+                    let li = log_index;
+                    log_index += 1;
+                    if !addresses.is_empty() && !addresses.contains(&log.address) {
+                        continue;
+                    }
+                    if !topic_match(&log.topics) {
+                        continue;
+                    }
+                    out.push(kaspa_consensus_core::evm::EvmLogEntry {
+                        address: log.address,
+                        topics: log.topics.clone(),
+                        data: log.data.clone(),
+                        block_number: n,
+                        block_l1_hash: l1_hash,
+                        tx_hash,
+                        tx_index: rcpt_idx as u32,
+                        log_index: li,
+                    });
+                    if out.len() >= MAX_LOGS {
+                        return Ok(out);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn get_block_evm_payload(&self, hash: BlockHash) -> ConsensusResult<kaspa_consensus_core::evm::EvmExecutionPayload> {
         // kaspa-pq EVM Lane v0.4 (§3.1): the payload store only holds rows for
         // non-empty payloads (commit_body persists them), so absence is the
