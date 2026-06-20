@@ -78,6 +78,7 @@ message KaspadRequest {
     GetEvmTransactionReceiptRequestMessage getEvmTransactionReceiptRequest = 1122;
     GetEvmTxInclusionStatusRequestMessage getEvmTxInclusionStatusRequest = 1124;
     SubmitEvmDepositClaimRequestMessage submitEvmDepositClaimRequest = 1126;
+    GetUtxosByAddressPageRequestMessage getUtxosByAddressPageRequest = 1128;
   }
 }
 
@@ -151,6 +152,7 @@ message KaspadResponse {
     GetEvmTransactionReceiptResponseMessage getEvmTransactionReceiptResponse = 1123;
     GetEvmTxInclusionStatusResponseMessage getEvmTxInclusionStatusResponse = 1125;
     SubmitEvmDepositClaimResponseMessage submitEvmDepositClaimResponse = 1127;
+    GetUtxosByAddressPageResponseMessage getUtxosByAddressPageResponse = 1129;
   }
 }
 

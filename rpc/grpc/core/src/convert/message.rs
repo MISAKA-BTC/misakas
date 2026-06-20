@@ -338,6 +338,14 @@ from!(item: RpcResult<&kaspa_rpc_core::GetUtxosByAddressesResponse>, protowire::
     Self { entries: item.entries.iter().map(|x| x.into()).collect(), error: None }
 });
 
+from!(item: &kaspa_rpc_core::GetUtxosByAddressPageRequest, protowire::GetUtxosByAddressPageRequestMessage, {
+    Self { address: (&item.address).into(), cursor: item.cursor.clone(), limit: item.limit }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetUtxosByAddressPageResponse>, protowire::GetUtxosByAddressPageResponseMessage, {
+    debug!("GRPC, Creating GetUtxosByAddressPage message with {} entries", item.entries.len());
+    Self { entries: item.entries.iter().map(|x| x.into()).collect(), next_cursor: item.next_cursor.clone(), error: None }
+});
+
 from!(item: &kaspa_rpc_core::GetBalanceByAddressRequest, protowire::GetBalanceByAddressRequestMessage, {
     Self { address: (&item.address).into() }
 });
@@ -954,6 +962,16 @@ try_from!(item: &protowire::GetUtxosByAddressesRequestMessage, kaspa_rpc_core::G
 });
 try_from!(item: &protowire::GetUtxosByAddressesResponseMessage, RpcResult<kaspa_rpc_core::GetUtxosByAddressesResponse>, {
     Self { entries: item.entries.iter().map(|x| x.try_into()).collect::<Result<Vec<_>, _>>()? }
+});
+
+try_from!(item: &protowire::GetUtxosByAddressPageRequestMessage, kaspa_rpc_core::GetUtxosByAddressPageRequest, {
+    Self { address: item.address.as_str().try_into()?, cursor: item.cursor.clone(), limit: item.limit }
+});
+try_from!(item: &protowire::GetUtxosByAddressPageResponseMessage, RpcResult<kaspa_rpc_core::GetUtxosByAddressPageResponse>, {
+    Self {
+        entries: item.entries.iter().map(|x| x.try_into()).collect::<Result<Vec<_>, _>>()?,
+        next_cursor: item.next_cursor.clone(),
+    }
 });
 
 try_from!(item: &protowire::GetBalanceByAddressRequestMessage, kaspa_rpc_core::GetBalanceByAddressRequest, {

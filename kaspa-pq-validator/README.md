@@ -34,7 +34,7 @@ key separation, the owner / withdrawal key is created separately (`kaspa-pq` wal
 
 ```bash
 kaspa-pq-validator run \
-    --node-rpc 127.0.0.1:27610 \
+    --node-rpc 127.0.0.1:27110 \
     --validator-key /etc/kaspa-pq/validator.mldsa \
     --stake-bond <txid_hex>:<index> \
     --signed-epoch-db /var/lib/kaspa-pq/validator-state.json
@@ -45,10 +45,16 @@ and attests while the bond is active. Without all three of `--validator-key`,
 `--stake-bond`, `--signed-epoch-db`, it runs **observe-only** (no signing). `--dry-run`
 signs + self-verifies locally but never submits. `Slashed` is a fatal, non-zero exit.
 
+> **`--node-rpc` port is network-dependent** — it must match the node's **wRPC Borsh** port:
+> mainnet `27110` (used above, matching the `mainnet` keygen), **testnet `27210`** (the live
+> network — use this for testnet-10), devnet `27610`. If you start the node with
+> `--rpclisten-borsh=default`, the port is chosen automatically for that network — point
+> `--node-rpc` at the same value.
+
 ### `status` — one-shot health check
 
 ```bash
-kaspa-pq-validator status --node-rpc 127.0.0.1:27610 --stake-bond <txid_hex>:<index>
+kaspa-pq-validator status --node-rpc 127.0.0.1:27110 --stake-bond <txid_hex>:<index>
 ```
 
 ## Requirements & safety (ADR-0011)

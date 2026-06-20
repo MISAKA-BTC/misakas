@@ -97,6 +97,8 @@ pub enum KaspadPayloadOps {
     GetEvmTxInclusionStatus,
     // kaspa-pq EVM Lane v0.4 (§9.2)
     SubmitEvmDepositClaim,
+    // kaspa-pq large-UTXO pagination
+    GetUtxosByAddressPage,
     // kaspa-pq Phase 11 (ADR-0010)
     GetValidatorStatus,
 

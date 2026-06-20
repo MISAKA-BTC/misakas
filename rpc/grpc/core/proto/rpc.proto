@@ -597,6 +597,26 @@ message GetUtxosByAddressesResponseMessage {
   RPCError error = 1000;
 }
 
+// GetUtxosByAddressPageRequestMessage requests a bounded, cursor-paginated page of UTXOs for a
+// single address. Use it instead of GetUtxosByAddressesRequestMessage for addresses with very large
+// UTXO sets. cursor is the opaque token from the previous page's nextCursor (empty = start); limit
+// 0 selects the server default and the server caps the effective value.
+//
+// This call is only available when this kaspad was started with `--utxoindex`
+message GetUtxosByAddressPageRequestMessage {
+  string address = 1;
+  string cursor = 2;
+  uint64 limit = 3;
+}
+
+message GetUtxosByAddressPageResponseMessage {
+  repeated RpcUtxosByAddressesEntry entries = 1;
+  // Opaque resume token for the next page; empty = no further pages.
+  string nextCursor = 2;
+
+  RPCError error = 1000;
+}
+
 // GetBalanceByAddressRequest returns the total balance in unspent transactions towards a given address
 //
 // This call is only available when this kaspad was started with `--utxoindex`
