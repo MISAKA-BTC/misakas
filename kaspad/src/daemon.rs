@@ -725,11 +725,12 @@ Do you confirm? (y/n)";
         None => None,
     };
     // kaspa-pq EVM Lane (ADR-0020 §16): keep a mining-manager handle for the
-    // Ethereum JSON-RPC adapter (`eth_sendRawTransaction` admits into the EVM
-    // mempool). Cloned here because `mining_manager` is moved into the RPC core
+    // Ethereum JSON-RPC adapter (`eth_sendRawTransaction`). Routed through the
+    // `flow_context` (admit + P2P-broadcast to EVM-relay peers, like the UTXO RPC
+    // submit), cloned here because `flow_context` is moved into the RPC core
     // service just below.
     #[cfg(feature = "evm")]
-    let mining_manager_for_eth = mining_manager.clone();
+    let flow_context_for_eth = flow_context.clone();
     let rpc_core_service = Arc::new(RpcCoreService::new(
         consensus_manager.clone(),
         notify_service.notifier(),
@@ -789,7 +790,7 @@ Do you confirm? (y/n)";
     if let Some(evm_rpc_listen) = &args.evm_rpc_listen {
         let addr: std::net::SocketAddr = evm_rpc_listen.normalize(8545).into();
         kaspa_core::info!("Ethereum JSON-RPC adapter enabled on http://{addr}");
-        async_runtime.register(Arc::new(crate::eth_rpc::EthRpcService::new(addr, consensus_manager.clone(), mining_manager_for_eth)));
+        async_runtime.register(Arc::new(crate::eth_rpc::EthRpcService::new(addr, consensus_manager.clone(), flow_context_for_eth)));
     }
     async_runtime.register(mining_monitor);
     async_runtime.register(perf_monitor);

@@ -27,7 +27,7 @@ Legend: **✓** full · **◑** works with a documented limitation · **·** stu
 | `eth_getStorageAt` | ✓ | at the latest head |
 | `eth_call` | ◑ | revm read‑only at the **head** (no historical block tag yet) |
 | `eth_estimateGas` | ✓ | binary search over revm simulation |
-| `eth_sendRawTransaction` | ◑ | admits to the EVM mempool; **only mines if that node mines — no general EVM‑tx P2P relay yet** (run the adapter on a mining node) |
+| `eth_sendRawTransaction` | ✓ | admits to the EVM mempool **and P2P‑broadcasts** to relay peers, so it mines even if the node you connected to does not mine |
 | `eth_getTransactionReceipt` | ✓ | status / from / to / contractAddress / type / effectiveGasPrice / gasUsed / cumulativeGasUsed / logs / blockHash / blockNumber. `logsBloom` is zero‑filled (not recomputed per‑receipt) |
 | `eth_getTransactionByHash` | ◑ | full decoded tx + block context; `v/r/s` are `0x0` (not surfaced) |
 | `eth_getBlockByNumber` | ◑ | tags (`latest`/`safe`/`finalized`/`earliest`/`pending`) + hex N; `transactions` are **hashes** (full‑tx objects pending); `parentHash` is zero |

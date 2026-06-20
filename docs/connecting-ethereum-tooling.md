@@ -12,10 +12,9 @@ Native unit  : 18 decimals, symbol MSK
 RPC URL      : http://<node-host>:8545   (HTTP JSON-RPC; no WebSocket yet)
 ```
 
-> **Send‑transaction requirement.** `eth_sendRawTransaction` admits the tx to the *receiving node's*
-> EVM mempool; there is no general EVM‑tx P2P relay yet, so the tx only mines if **that node mines**.
-> Point your tooling's RPC URL at a **mining** MISAKA node (one running a miner against its own
-> gRPC), or run the adapter on a mining node. Read‑only calls (state/call/getLogs) work against any node.
+> `eth_sendRawTransaction` admits the tx to the receiving node's EVM mempool **and broadcasts it
+> over P2P** to EVM‑relay peers (§14.2), so it reaches mining nodes and is included even if the node
+> you're connected to does not mine. You can point your tooling at any synced MISAKA node.
 
 ## MetaMask — add a custom network
 
