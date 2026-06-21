@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
-use kaspa_eth_rpc::{EthBlock, EthCallRequest, EthFeeHistory, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx};
+use kaspa_eth_rpc::{
+    EthBlock, EthCallRequest, EthEvmTxStatus, EthFeeHistory, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx,
+};
 use kaspa_hashes::EvmH256;
 use kaspa_p2p_flows::flow_context::FlowContext;
 
@@ -173,6 +175,55 @@ impl EthProvider for NodeEthProvider {
                 effective_gas_price: decoded.as_ref().map(|d| d.max_fee_per_gas).unwrap_or(0),
             }
         }))
+    }
+
+    /// `misaka_getEvmTxStatus`: the full EVM-lane lifecycle of a tx by hash —
+    /// the visibility the §6.1 gas-pool work needs (`pending`/`included`/
+    /// `accepted`/`skipped`), since a tx skipped (class 2/5) in one chain
+    /// block's canonical order is retried and accepted once the order shifts.
+    async fn evm_tx_status(&self, tx_hash: [u8; 32]) -> EthResult<EthEvmTxStatus> {
+        let h = EvmH256::from_bytes(tx_hash);
+        // Mempool view (in-memory, no DB): is the tx still active on this node,
+        // plus its decoded metadata while pending.
+        let pending_raw = self.flow_context.mining_manager().get_evm_transaction_raw(&h);
+        let in_mempool = pending_raw.is_some();
+        let (sender, nonce, gas_limit) = match pending_raw.as_ref().and_then(|raw| kaspa_evm::tx::admit_tx_info(raw).ok()) {
+            Some(info) => (Some(info.sender.as_bytes()), Some(info.nonce), Some(info.gas_limit)),
+            None => (None, None, None),
+        };
+        // Acceptance/inclusion view (RocksDB read): the §6.1 location index.
+        let session = self.consensus_manager.consensus().session().await;
+        let locs = session.spawn_blocking(move |c| c.get_evm_tx_locations(h).ok()).await;
+        let (included_in, accepted_in, last_skip_class) = match locs {
+            Some(l) => {
+                // The L1 block ids are 64-byte (BLAKE2b-512); expose the leading
+                // 32 as standard-shaped, client-opaque ids (as elsewhere here).
+                let to32 = |b: &kaspa_hashes::Hash64| {
+                    let mut x = [0u8; 32];
+                    x.copy_from_slice(&b.as_bytes()[..32]);
+                    x
+                };
+                let included = l.included_in.iter().map(to32).collect();
+                let accepted = l.accepted_in.first().map(|(b, idx)| (to32(b), *idx));
+                (included, accepted, l.last_skip_class)
+            }
+            None => (Vec::new(), None, None),
+        };
+        // Priority: accepted (mined) ▸ pending (in pool, will retry) ▸ included
+        // (in a payload, acceptance pending) ▸ skipped (last seen skipped, gone
+        // from the pool) ▸ unknown.
+        let state = if accepted_in.is_some() {
+            "accepted"
+        } else if in_mempool {
+            "pending"
+        } else if !included_in.is_empty() {
+            "included"
+        } else if last_skip_class.is_some() {
+            "skipped"
+        } else {
+            "unknown"
+        };
+        Ok(EthEvmTxStatus { tx_hash, state, included_in, accepted_in, last_skip_class, in_mempool, sender, nonce, gas_limit })
     }
 
     async fn transaction_by_hash(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthTx>> {

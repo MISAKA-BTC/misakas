@@ -230,6 +230,14 @@ pub trait EthProvider: Send + Sync + 'static {
     /// or `None` if the raw tx is unknown to this node.
     async fn transaction_by_hash(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthTx>>;
 
+    /// `misaka_getEvmTxStatus`: the full EVM-lane lifecycle of a tx by hash. Beyond
+    /// `eth_getTransactionReceipt`'s accepted-or-null, this distinguishes `pending`
+    /// (still in the EVM mempool), `included` (in a payload block but acceptance
+    /// pending under mergeset delayed acceptance), `accepted` (mined on the selected
+    /// chain), `skipped` (last seen deterministically skipped — class 2/3/5,
+    /// re-includable), or `unknown` — the visibility a bare receipt cannot give.
+    async fn evm_tx_status(&self, tx_hash: [u8; 32]) -> EthResult<EthEvmTxStatus>;
+
     /// `eth_getBlockByNumber` for a numeric block (canonical EVM block at that number).
     async fn block_by_number(&self, number: u64) -> EthResult<Option<EthBlock>>;
 
@@ -254,6 +262,29 @@ pub trait EthProvider: Send + Sync + 'static {
     /// `eth_feeHistory`: base fees + gas-used ratios over the last `block_count`
     /// blocks ending at `newest` (used by EIP-1559 tooling — Foundry/ethers/MetaMask).
     async fn fee_history(&self, block_count: u64, newest: u64, reward_percentiles: Vec<f64>) -> EthResult<EthFeeHistory>;
+}
+
+/// The EVM-lane lifecycle of a tx (`misaka_getEvmTxStatus`). `state` is a best-effort
+/// summary derived from the fields below: `accepted` (mined) ▸ `pending` (in the
+/// mempool, will be retried) ▸ `included` (in a payload, acceptance pending) ▸
+/// `skipped` (last seen skipped, no longer pending) ▸ `unknown`.
+#[derive(Debug, Clone)]
+pub struct EthEvmTxStatus {
+    pub tx_hash: [u8; 32],
+    pub state: &'static str,
+    /// Payload (DAG) blocks whose payload carries this tx, as eth-rpc 32-byte ids.
+    pub included_in: Vec<[u8; 32]>,
+    /// The accepting selected-chain block (eth-rpc 32-byte id) + the receipt index, if mined.
+    pub accepted_in: Option<([u8; 32], u32)>,
+    /// The most recent §6.1 skip class (2 = acceptance-invalid, 3 = duplicate, 5 = over-cap),
+    /// set while the tx has been included but not yet accepted.
+    pub last_skip_class: Option<u8>,
+    /// Whether the tx is currently in this node's EVM mempool (active, re-includable).
+    pub in_mempool: bool,
+    /// Decoded metadata (from the pooled raw tx, when pending).
+    pub sender: Option<[u8; 20]>,
+    pub nonce: Option<u64>,
+    pub gas_limit: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +352,7 @@ async fn dispatch(provider: &Arc<dyn EthProvider>, req: RpcRequest) -> RpcRespon
         "eth_estimateGas" => eth_estimate_gas_handler(provider, &req.params).await,
         "eth_sendRawTransaction" => eth_send_raw_transaction(provider, &req.params).await,
         "eth_getTransactionReceipt" => eth_get_transaction_receipt(provider, &req.params).await,
+        "misaka_getEvmTxStatus" => misaka_get_evm_tx_status(provider, &req.params).await,
         "eth_getBlockByNumber" => eth_get_block_by_number(provider, &req.params).await,
         "eth_getBlockByHash" => eth_get_block_by_hash(provider, &req.params).await,
         "eth_getBlockTransactionCountByNumber" => eth_get_block_tx_count_by_number(provider, &req.params).await,
@@ -455,6 +487,28 @@ async fn eth_get_transaction_receipt(provider: &Arc<dyn EthProvider>, params: &V
         None => Ok(Value::Null),
         Some(r) => Ok(format_receipt(&r)),
     }
+}
+
+async fn misaka_get_evm_tx_status(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let tx_hash = parse_hash32_param(params, 0)?;
+    Ok(format_evm_tx_status(&provider.evm_tx_status(tx_hash).await?))
+}
+
+fn format_evm_tx_status(s: &EthEvmTxStatus) -> Value {
+    json!({
+        "transactionHash": format!("0x{}", faster_hex::hex_string(&s.tx_hash)),
+        "state": s.state,
+        "inMempool": s.in_mempool,
+        "includedIn": s.included_in.iter().map(|h| json!(format!("0x{}", faster_hex::hex_string(h)))).collect::<Vec<_>>(),
+        "acceptedIn": s
+            .accepted_in
+            .map(|(h, idx)| json!({ "block": format!("0x{}", faster_hex::hex_string(&h)), "receiptIndex": idx }))
+            .unwrap_or(Value::Null),
+        "lastSkipClass": s.last_skip_class.map(|c| json!(c)).unwrap_or(Value::Null),
+        "sender": s.sender.map(|a| json!(format!("0x{}", faster_hex::hex_string(&a)))).unwrap_or(Value::Null),
+        "nonce": s.nonce.map(|n| quantity(n as u128)).unwrap_or(Value::Null),
+        "gasLimit": s.gas_limit.map(|g| quantity(g as u128)).unwrap_or(Value::Null),
+    })
 }
 
 /// Render an [`EthReceipt`] as the standard `eth_getTransactionReceipt` JSON.
