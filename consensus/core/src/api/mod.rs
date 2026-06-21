@@ -14,7 +14,7 @@ use crate::{
     errors::{
         block::{BlockProcessResult, RuleError},
         coinbase::CoinbaseResult,
-        consensus::ConsensusResult,
+        consensus::{ConsensusError, ConsensusResult},
         pruning::PruningImportResult,
         tx::TxResult,
     },
@@ -485,8 +485,18 @@ pub trait ConsensusApi: Send + Sync {
     /// omitted; the caller treats absence as nonce 0. Used by the mining template
     /// path to prune already-accepted txs (nonce < state nonce) and to select
     /// contiguous per-sender nonce runs. Pure local template policy — never part of
-    /// consensus. Default impl reuses the head state snapshot; non-evm builds (and
-    /// pre-EVM-head chains) return an empty map.
+    /// consensus. Default impl reuses the head state snapshot.
+    ///
+    /// When the sink has NO committed EVM state snapshot (pre-first-EVM-commit, or a
+    /// transient sink view) this returns `Err` — distinct from `Ok(empty)`. The two
+    /// must not be conflated: `Ok(`absent account`)` legitimately means nonce 0, but
+    /// "no snapshot at all" means there is no canonical nonce view, and resolving
+    /// every sender to 0 in that case would start each sender's run at nonce 0, find
+    /// nothing for a higher-nonce sender, and strand it at
+    /// `included_in=[] / last_skip_class=0` (payload starvation). The mining template
+    /// path treats the `Err` as "skip the EVM payload this template" (empty payload +
+    /// WARN). On an EVM-active chain past the first commit the sink always has a
+    /// snapshot, so the `Err` only fires in the early / no-EVM-state window.
     fn get_evm_account_nonces(
         &self,
         addresses: &[crate::evm::EvmAddress],
@@ -495,13 +505,13 @@ pub trait ConsensusApi: Send + Sync {
             return Ok(std::collections::HashMap::new());
         }
         let wanted: std::collections::HashSet<crate::evm::EvmAddress> = addresses.iter().copied().collect();
-        let snapshot = self.get_evm_state_snapshot_of(self.get_sink())?;
+        let Some(s) = self.get_evm_state_snapshot_of(self.get_sink())? else {
+            return Err(ConsensusError::General("no committed EVM state snapshot at the sink"));
+        };
         let mut out = std::collections::HashMap::with_capacity(addresses.len());
-        if let Some(s) = snapshot {
-            for acct in s.accounts {
-                if wanted.contains(&acct.address) {
-                    out.insert(acct.address, acct.nonce);
-                }
+        for acct in s.accounts {
+            if wanted.contains(&acct.address) {
+                out.insert(acct.address, acct.nonce);
             }
         }
         Ok(out)

@@ -550,6 +550,37 @@ mod tests {
         pool.select_candidates(max_payload_bytes, u64::MAX, 0, &HashMap::new())
     }
 
+    /// Build a pool DIRECTLY (bypassing the admission path) with one sender's
+    /// CONTIGUOUS nonce range — used to exercise select/prune over a range larger
+    /// than the per-sender admission caps (`EVM_MEMPOOL_MAX_TXS_PER_SENDER` AND, for
+    /// large ranges at 21k gas each, `EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER`).
+    /// `select_candidates` has no admission gate, so selecting against such a pool
+    /// is valid. Each tx's `raw` encodes its nonce in the first 8 bytes so a
+    /// selection can be mapped back to exact nonces (and overlap/dup detected).
+    fn pool_with_sender_range(sender_byte: u8, nonces: std::ops::Range<u64>, raw_size: usize) -> EvmMempool {
+        let mut pool = EvmMempool::new();
+        let sender = EvmAddress::from_bytes([sender_byte; 20]);
+        for nonce in nonces {
+            let mut hash = [0u8; 32];
+            hash[0] = sender_byte;
+            hash[1..9].copy_from_slice(&nonce.to_le_bytes());
+            let h = EvmH256::from_bytes(hash);
+            let mut raw = vec![0u8; raw_size.max(8)];
+            raw[..8].copy_from_slice(&nonce.to_le_bytes());
+            pool.total_bytes += raw.len();
+            pool.by_sender_nonce.insert((sender, nonce), h);
+            pool.txs.insert(
+                h,
+                PendingEvmTx { hash: h, sender, nonce, gas_limit: 21_000, max_fee_per_gas: 1, max_priority_fee_per_gas: 0, raw, added_at: 1_000 },
+            );
+        }
+        pool
+    }
+
+    fn nonce_of(raw: &[u8]) -> u64 {
+        u64::from_le_bytes(raw[..8].try_into().unwrap())
+    }
+
     #[test]
     fn insert_duplicate_replace_and_evict() {
         let mut pool = EvmMempool::new();
@@ -776,6 +807,89 @@ mod tests {
         assert_eq!(sel.len(), 2, "A's contiguous run from state nonce 2; B parked on the gap");
         assert_eq!(sel[0], vec![3u8; 10], "A nonce 2 (tag 3) first");
         assert_eq!(sel[1], vec![4u8; 10], "then A nonce 3 (tag 4)");
+    }
+
+    /// REGRESSION (user's 2000-tx single-sender burst): when one sender's run
+    /// exceeds the 128 KiB payload cap, the FIRST payload takes the contiguous
+    /// head; once that head is canonically accepted (state nonce advances) and
+    /// pruned, the SECOND payload must carry the TAIL forward — with no gap and
+    /// no duplication. On the old `cb136a4` selector (no state-nonce reference,
+    /// no prune-on-inclusion) the accepted head re-occupied each payload, so the
+    /// tail was stranded at `included_in=[] / last_skip_class=0`. This pins the
+    /// fixed behavior.
+    #[test]
+    fn accepted_prefix_does_not_starve_payload_tail() {
+        const START: u64 = 2702;
+        const END: u64 = 4702; // exclusive => 2000 txs
+        const RAW: usize = 110; // ≈ a 1559 transfer envelope
+        let sender = EvmAddress::from_bytes([0x71; 20]);
+        let cap = MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK;
+
+        let mut pool = pool_with_sender_range(0x71, START..END, RAW);
+        assert_eq!(pool.len(), (END - START) as usize);
+
+        // Payload #1: state nonce at START. The byte cap binds (2000×114 B ≫ 128 KiB),
+        // so the selector takes the contiguous head [START, START+n1).
+        let state1 = HashMap::from([(sender, START)]);
+        let first = pool.select_candidates(cap, u64::MAX, 0, &state1);
+        let n1 = first.len();
+        assert!(n1 > 0 && n1 < (END - START) as usize, "the run is byte-capped into a prefix, not all-or-nothing (got {n1})");
+        let first_nonces: Vec<u64> = first.iter().map(|r| nonce_of(r)).collect();
+        assert_eq!(first_nonces, (START..START + n1 as u64).collect::<Vec<_>>(), "payload #1 = the contiguous head");
+
+        // Payload #1 is accepted => state nonce advances; prune the accepted prefix.
+        let state2 = HashMap::from([(sender, START + n1 as u64)]);
+        pool.prune_below_state_nonce(&state2);
+        assert_eq!(pool.len(), (END - START) as usize - n1, "accepted prefix pruned from the active pool");
+
+        // Payload #2: the TAIL carries forward (no re-packing of the accepted
+        // head, no gap, no duplicate) — exactly what cb136a4 stranded.
+        let second = pool.select_candidates(cap, u64::MAX, 0, &state2);
+        let second_nonces: Vec<u64> = second.iter().map(|r| nonce_of(r)).collect();
+        let n2 = second.len();
+        assert_eq!(
+            second_nonces,
+            (START + n1 as u64..START + n1 as u64 + n2 as u64).collect::<Vec<_>>(),
+            "payload #2 = the contiguous tail starting exactly where #1 ended"
+        );
+
+        // No starvation: the two payload generations cover EVERY tx exactly once.
+        assert_eq!(n1 + n2, (END - START) as usize, "all 2000 txs selected across two payload generations, none stranded");
+        let mut all: Vec<u64> = first_nonces.into_iter().chain(second_nonces).collect();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), (END - START) as usize, "no duplicate tx across the two payloads");
+    }
+
+    /// The declared-gas budget binds before the byte cap: uniform 21k-gas txs with
+    /// a gas cap of 10×21k truncate the run at 10, regardless of how many would fit
+    /// by bytes. (Every other selector test passes u64::MAX gas, so this is the only
+    /// coverage of the `gas_limit <= gas_left` / `gas_left -=` budget branch.)
+    #[test]
+    fn selection_is_truncated_by_the_declared_gas_cap() {
+        let sender = EvmAddress::from_bytes([0x33; 20]);
+        let pool = pool_with_sender_range(0x33, 0..100, 50); // 100×54 B ≪ 128 KiB ⇒ bytes don't bind
+        let state = HashMap::from([(sender, 0u64)]);
+        let sel = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, 10 * 21_000, 0, &state);
+        assert_eq!(sel.len(), 10, "run truncated by the declared-gas cap (10×21k), not the byte cap");
+        let nonces: Vec<u64> = sel.iter().map(|r| nonce_of(r)).collect();
+        assert_eq!(nonces, (0..10).collect::<Vec<_>>(), "contiguous head up to the gas budget");
+    }
+
+    /// While the canonical state nonce does NOT advance (the head is included in
+    /// a DAG payload but not yet accepted), re-selecting must return the SAME
+    /// contiguous head — the tx stays re-includable, never dropped on inclusion
+    /// alone (inclusion ≠ acceptance).
+    #[test]
+    fn unaccepted_prefix_is_re_includable_across_templates() {
+        const START: u64 = 100;
+        let sender = EvmAddress::from_bytes([0x55; 20]);
+        let pool = pool_with_sender_range(0x55, START..START + 300, 110);
+        let state = HashMap::from([(sender, START)]);
+        let a = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &state);
+        let b = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &state);
+        assert_eq!(a, b, "the same head re-selects identically while the state nonce is static");
+        assert_eq!(a.first().map(|r| nonce_of(r)), Some(START), "head starts at the state nonce");
     }
 
     /// P1 (one-sender DoS bound): a single sender cannot exceed the per-sender pending-tx cap;
