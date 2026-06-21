@@ -21,7 +21,7 @@ use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND,
 };
 use kaspa_consensus_core::tx::{
-    MutableTransaction, PopulatedTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
+    MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
 };
 use kaspa_hashes::{Hash64, blake2b_512_address_payload};
 use kaspa_txscript::{
@@ -72,10 +72,19 @@ pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 250_000;
 /// sig) need a fee far above the flat [`ATTESTATION_TX_FEE_FLOOR_SOMPI`]. We mirror that rate here
 /// rather than depend on the heavy `kaspa-mining` crate. A 25% margin absorbs a few bytes of size
 /// variance (or a node configured with a higher rate); the result is clamped up to the floor.
-pub(crate) fn relay_fee_for_compute_mass(compute_mass: u64) -> u64 {
+pub fn relay_fee_for_compute_mass(compute_mass: u64) -> u64 {
     const MEMPOOL_RELAY_FEE_SOMPI_PER_KG: u64 = 10_000; // == kaspa_mining ... PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE
     let min_fee = compute_mass.saturating_mul(MEMPOOL_RELAY_FEE_SOMPI_PER_KG) / 1000;
     (min_fee + min_fee / 4).max(ATTESTATION_TX_FEE_FLOOR_SOMPI)
+}
+
+/// Sum of the funding UTXO amounts (overflow-checked).
+fn sum_funding(fundings: &[(TransactionOutpoint, UtxoEntry)]) -> Result<u64, String> {
+    let mut total: u64 = 0;
+    for (_, e) in fundings {
+        total = total.checked_add(e.amount).ok_or_else(|| "funding total overflows u64".to_string())?;
+    }
+    Ok(total)
 }
 
 const SIGNED_EPOCH_FILE_VERSION: u16 = 1;
@@ -367,6 +376,103 @@ impl ValidatorKey {
                 .map_err(|e| format!("stake-bond funding sig push failed: {e}"))?
                 .add_data(self.keypair.verification_key.as_ref())
                 .map_err(|e| format!("stake-bond funding pubkey push failed: {e}"))?
+                .drain();
+            sig_scripts.push(signature_script);
+        }
+        let mut tx = mtx.tx;
+        for (i, script) in sig_scripts.into_iter().enumerate() {
+            tx.inputs[i].signature_script = script;
+        }
+        Ok(tx)
+    }
+
+    /// Build a fee-funded, signed NATIVE SEND: spend `fundings` (all at this key's
+    /// own funding script — a self-spend) into output-0 = `amount` to
+    /// `recipient_spk`, output-1 = change back to self (emitted only when > 0).
+    /// Plain native subnetwork, no payload, KIP-9 storage mass committed. Each
+    /// input is signed independently under [`MLDSA87_TX_CONTEXT`] — the SAME proven
+    /// path as [`Self::build_funded_stake_bond_tx_multi`] (only the outputs +
+    /// subnetwork differ), so signature validity is inherited from the bond path.
+    pub fn build_funded_send_tx(
+        &self,
+        recipient_spk: ScriptPublicKey,
+        amount: u64,
+        fundings: &[(TransactionOutpoint, UtxoEntry)],
+        fee: u64,
+        storage_mass_parameter: u64,
+    ) -> Result<Transaction, String> {
+        if amount == 0 {
+            return Err("send amount must be > 0".to_string());
+        }
+        if fundings.is_empty() {
+            return Err("send needs at least one funding UTXO".to_string());
+        }
+        let needed = amount.checked_add(fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
+        let total = sum_funding(fundings)?;
+        if total < needed {
+            return Err(format!("funding UTXOs total {total} does not cover amount {amount} + fee {fee}"));
+        }
+        let self_spk = fundings[0].1.script_public_key.clone();
+        let mut outputs = vec![TransactionOutput::new(amount, recipient_spk)];
+        let change = total - needed;
+        if change > 0 {
+            outputs.push(TransactionOutput::new(change, self_spk));
+        }
+        self.sign_native_multi(fundings, outputs, storage_mass_parameter)
+    }
+
+    /// Build a fee-funded, signed NATIVE CONSOLIDATE: spend `fundings` (all at this
+    /// key's own funding script) into a SINGLE self-output of `Σ inputs − fee`.
+    /// Merges many small UTXOs into one — the large-UTXO remedy. Same proven
+    /// per-input signing as the send/bond path.
+    pub fn build_funded_consolidate_tx(
+        &self,
+        fundings: &[(TransactionOutpoint, UtxoEntry)],
+        fee: u64,
+        storage_mass_parameter: u64,
+    ) -> Result<Transaction, String> {
+        if fundings.is_empty() {
+            return Err("consolidate needs at least one funding UTXO".to_string());
+        }
+        let total = sum_funding(fundings)?;
+        if total <= fee {
+            return Err(format!("funding total {total} does not cover fee {fee}"));
+        }
+        let self_spk = fundings[0].1.script_public_key.clone();
+        let outputs = vec![TransactionOutput::new(total - fee, self_spk)];
+        self.sign_native_multi(fundings, outputs, storage_mass_parameter)
+    }
+
+    /// Shared tail for native, self-funded multi-input txs: assemble the inputs,
+    /// commit the KIP-9 value-based storage mass, then sign EACH input under
+    /// [`MLDSA87_TX_CONTEXT`] (all inputs spend the same self funding script).
+    fn sign_native_multi(
+        &self,
+        fundings: &[(TransactionOutpoint, UtxoEntry)],
+        outputs: Vec<TransactionOutput>,
+        storage_mass_parameter: u64,
+    ) -> Result<Transaction, String> {
+        let inputs: Vec<TransactionInput> =
+            fundings.iter().map(|(op, _)| TransactionInput::new(*op, vec![], MAX_TX_IN_SEQUENCE_NUM, 1)).collect();
+        let entries: Vec<UtxoEntry> = fundings.iter().map(|(_, e)| e.clone()).collect();
+        let tx = Transaction::new(TX_VERSION, inputs, outputs, 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+        let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
+            .calc_contextual_masses(&PopulatedTransaction::new(&tx, entries.clone()))
+            .ok_or_else(|| "contextual mass not computable for the native tx".to_string())?
+            .storage_mass;
+        tx.set_mass(storage_mass);
+        let mtx = MutableTransaction::with_entries(tx, entries);
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        let mut sig_scripts = Vec::with_capacity(fundings.len());
+        for i in 0..fundings.len() {
+            let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), i, SIG_HASH_ALL, &reused);
+            let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+            sig_data.push(SIG_HASH_ALL.to_u8());
+            let signature_script = ScriptBuilder::new()
+                .add_data(&sig_data)
+                .map_err(|e| format!("native funding sig push failed: {e}"))?
+                .add_data(self.keypair.verification_key.as_ref())
+                .map_err(|e| format!("native funding pubkey push failed: {e}"))?
                 .drain();
             sig_scripts.push(signature_script);
         }
