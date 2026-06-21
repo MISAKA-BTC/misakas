@@ -18,7 +18,7 @@ use std::str::FromStr;
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
 use alloy_eips::eip2718::Encodable2718;
-use alloy_primitives::{Address, TxKind, B256, U256};
+use alloy_primitives::{Address, Bytes, TxKind, B256, U256};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use kaspa_bip32::{secp256k1::SecretKey, DerivationPath, ExtendedPrivateKey, Language, Mnemonic, WordCount};
@@ -204,7 +204,7 @@ pub fn send(
         }
     };
 
-    let raw = sign_eip1559(&ks.resolve()?, nonce, gas, max_fee, to_addr, U256::from(amount_wei))?;
+    let raw = sign_eip1559(&ks.resolve()?, nonce, gas, max_fee, TxKind::Call(to_addr), U256::from(amount_wei), Bytes::new())?;
     let raw_hex = format!("0x{}", faster_hex::hex_string(&raw));
 
     let submit = yes;
@@ -244,7 +244,208 @@ pub fn send(
     Ok(())
 }
 
-fn sign_eip1559(key32: &[u8; 32], nonce: u64, gas_limit: u64, max_fee: u128, to: Address, value: U256) -> Result<Vec<u8>, CliError> {
+// ---------------------------------------------------------------------------
+// evm deploy / evm call  — raw contract-creation and raw calldata. The CLI is
+// deliberately ABI-agnostic: produce the init code / calldata with `forge` /
+// `cast` (or the misaka-nft helper) and submit it here. Keeps the CLI free of a
+// Solidity ABI encoder while still giving operators a keyed deploy/mint path.
+// ---------------------------------------------------------------------------
+
+/// Deploy a contract: an EIP-1559 contract-creation tx whose input is `init_code`
+/// (creation bytecode with the ABI-encoded constructor args already appended).
+/// Prints the deterministic CREATE address (keccak(rlp[sender, nonce])[12:]).
+#[allow(clippy::too_many_arguments)]
+pub fn deploy(
+    ctx: &Ctx,
+    ks: &EvmKeySource,
+    init_code: Vec<u8>,
+    value_wei: u128,
+    gas_limit: Option<u64>,
+    max_fee: Option<u128>,
+    nonce_override: Option<u64>,
+    yes: bool,
+    wait: bool,
+) -> CliResult {
+    if init_code.is_empty() {
+        return Err(CliError::new(exit::GENERIC, "empty init code — nothing to deploy".to_string()));
+    }
+    let from = ks.address()?;
+    let from_s = from.to_string();
+    guard_chain_id(ctx)?;
+
+    let nonce = resolve_nonce(ctx, &from_s, nonce_override)?;
+    let max_fee = resolve_fee(ctx, max_fee)?;
+    let input = Bytes::from(init_code);
+    let gas = match gas_limit {
+        Some(g) => g,
+        None => {
+            let call = json!({ "from": from_s, "data": format!("0x{}", faster_hex::hex_string(&input)), "value": format!("0x{value_wei:x}") });
+            crate::eth::parse_hex_u128(&crate::eth::rpc_call(ctx, "eth_estimateGas", json!([call]))?)? as u64
+        }
+    };
+    // Deterministic contract address from sender + this nonce.
+    let contract = from.create(nonce);
+
+    let raw = sign_eip1559(&ks.resolve()?, nonce, gas, max_fee, TxKind::Create, U256::from(value_wei), input.clone())?;
+    let raw_hex = format!("0x{}", faster_hex::hex_string(&raw));
+
+    let txid = submit_if(ctx, yes, &raw_hex)?;
+
+    match ctx.output {
+        OutputFormat::Json => println!(
+            "{}",
+            json!({ "ok": true, "dryRun": !yes, "from": from_s, "contractAddress": contract.to_string(),
+                    "initCodeLen": input.len(), "nonce": nonce, "gas": gas, "maxFeePerGas": max_fee.to_string(),
+                    "valueWei": value_wei.to_string(), "txid": txid })
+        ),
+        OutputFormat::Human => {
+            println!("From     : {from_s}");
+            println!("Contract : {contract}   (deterministic from sender+nonce)");
+            println!("InitCode : {} bytes", input.len());
+            println!("Nonce    : {nonce}   Gas: {gas}   MaxFee: {max_fee} wei/gas");
+            println!("Mode     : {}", if yes { "SUBMIT" } else { "dry-run (no broadcast; pass --yes)" });
+            if let Some(t) = &txid {
+                println!("Txid     : {t}");
+            }
+        }
+    }
+    if yes && wait {
+        if let Some(t) = &txid {
+            return crate::eth::tx_wait(ctx, t, 600, 2);
+        }
+    }
+    Ok(())
+}
+
+/// Call a contract with raw `data` (selector + ABI-encoded args). Optional value.
+#[allow(clippy::too_many_arguments)]
+pub fn call(
+    ctx: &Ctx,
+    ks: &EvmKeySource,
+    to: &str,
+    data: Vec<u8>,
+    value_wei: u128,
+    gas_limit: Option<u64>,
+    max_fee: Option<u128>,
+    nonce_override: Option<u64>,
+    yes: bool,
+    wait: bool,
+) -> CliResult {
+    let from = ks.address()?;
+    let from_s = from.to_string();
+    let to_addr = parse_dest(to)?;
+    guard_chain_id(ctx)?;
+
+    let nonce = resolve_nonce(ctx, &from_s, nonce_override)?;
+    let max_fee = resolve_fee(ctx, max_fee)?;
+    let input = Bytes::from(data);
+    let data_hex = format!("0x{}", faster_hex::hex_string(&input));
+    let gas = match gas_limit {
+        Some(g) => g,
+        None => {
+            let call = json!({ "from": from_s, "to": to_addr.to_string(), "data": data_hex, "value": format!("0x{value_wei:x}") });
+            crate::eth::parse_hex_u128(&crate::eth::rpc_call(ctx, "eth_estimateGas", json!([call]))?)? as u64
+        }
+    };
+
+    let raw = sign_eip1559(&ks.resolve()?, nonce, gas, max_fee, TxKind::Call(to_addr), U256::from(value_wei), input.clone())?;
+    let raw_hex = format!("0x{}", faster_hex::hex_string(&raw));
+
+    let txid = submit_if(ctx, yes, &raw_hex)?;
+
+    match ctx.output {
+        OutputFormat::Json => println!(
+            "{}",
+            json!({ "ok": true, "dryRun": !yes, "from": from_s, "to": to_addr.to_string(),
+                    "dataLen": input.len(), "nonce": nonce, "gas": gas, "maxFeePerGas": max_fee.to_string(),
+                    "valueWei": value_wei.to_string(), "txid": txid })
+        ),
+        OutputFormat::Human => {
+            println!("From   : {from_s}");
+            println!("To     : {to_addr}");
+            println!("Data   : {} bytes", input.len());
+            println!("Value  : {} MSK  ({value_wei} wei)", format_msk(value_wei));
+            println!("Nonce  : {nonce}   Gas: {gas}   MaxFee: {max_fee} wei/gas");
+            println!("Mode   : {}", if yes { "SUBMIT" } else { "dry-run (no broadcast; pass --yes)" });
+            if let Some(t) = &txid {
+                println!("Txid   : {t}");
+            }
+        }
+    }
+    if yes && wait {
+        if let Some(t) = &txid {
+            return crate::eth::tx_wait(ctx, t, 600, 2);
+        }
+    }
+    Ok(())
+}
+
+fn guard_chain_id(ctx: &Ctx) -> Result<(), CliError> {
+    let cid = crate::eth::parse_hex_u128(&crate::eth::rpc_call(ctx, "eth_chainId", json!([]))?)? as u64;
+    if cid != EVM_CHAIN_ID {
+        return Err(CliError::new(exit::NETWORK_MISMATCH, format!("node chainId 0x{cid:x} != expected 0x{EVM_CHAIN_ID:x}")));
+    }
+    Ok(())
+}
+
+fn resolve_nonce(ctx: &Ctx, from_s: &str, nonce_override: Option<u64>) -> Result<u64, CliError> {
+    match nonce_override {
+        Some(n) => Ok(n),
+        None => Ok(crate::eth::parse_hex_u128(&crate::eth::rpc_call(ctx, "eth_getTransactionCount", json!([from_s, "pending"]))?)? as u64),
+    }
+}
+
+fn resolve_fee(ctx: &Ctx, max_fee: Option<u128>) -> Result<u128, CliError> {
+    match max_fee {
+        Some(f) => Ok(f),
+        None => crate::eth::parse_hex_u128(&crate::eth::rpc_call(ctx, "eth_gasPrice", json!([]))?),
+    }
+}
+
+fn submit_if(ctx: &Ctx, yes: bool, raw_hex: &str) -> Result<Option<String>, CliError> {
+    if !yes {
+        return Ok(None);
+    }
+    Ok(Some(
+        crate::eth::rpc_call(ctx, "eth_sendRawTransaction", json!([raw_hex]))?
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| CliError::new(exit::TX_REJECTED, "eth_sendRawTransaction: no tx hash".to_string()))?,
+    ))
+}
+
+/// Resolve a hex blob (init code or calldata) from an inline `--…` hex string or
+/// a `--…-file` path. Tolerates `0x`, whitespace, and newlines.
+pub fn read_hex_blob(inline: &Option<String>, file: &Option<String>) -> Result<Vec<u8>, CliError> {
+    let raw = match (inline, file) {
+        (Some(s), None) => s.clone(),
+        (None, Some(p)) => std::fs::read_to_string(p).map_err(|e| CliError::new(exit::GENERIC, format!("read {p}: {e}")))?,
+        (Some(_), Some(_)) => return Err(CliError::new(exit::GENERIC, "pass either the inline hex OR the --…-file, not both".to_string())),
+        (None, None) => return Err(CliError::new(exit::GENERIC, "no hex blob — pass the inline hex or a --…-file".to_string())),
+    };
+    let cleaned: String = raw.split_whitespace().collect();
+    let h = cleaned.strip_prefix("0x").or_else(|| cleaned.strip_prefix("0X")).unwrap_or(&cleaned);
+    if h.is_empty() {
+        return Ok(Vec::new());
+    }
+    if h.len() % 2 != 0 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(CliError::new(exit::GENERIC, "blob is not valid even-length hex".to_string()));
+    }
+    let mut out = vec![0u8; h.len() / 2];
+    faster_hex::hex_decode(h.as_bytes(), &mut out).map_err(|e| CliError::new(exit::GENERIC, format!("bad hex: {e}")))?;
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_eip1559(
+    key32: &[u8; 32],
+    nonce: u64,
+    gas_limit: u64,
+    max_fee: u128,
+    kind: TxKind,
+    value: U256,
+    input: Bytes,
+) -> Result<Vec<u8>, CliError> {
     let signer = PrivateKeySigner::from_bytes(&B256::from(*key32)).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("signer: {e}")))?;
     let tx = TxEip1559 {
         chain_id: EVM_CHAIN_ID,
@@ -252,10 +453,10 @@ fn sign_eip1559(key32: &[u8; 32], nonce: u64, gas_limit: u64, max_fee: u128, to:
         gas_limit,
         max_fee_per_gas: max_fee,
         max_priority_fee_per_gas: 0,
-        to: TxKind::Call(to),
+        to: kind,
         value,
         access_list: Default::default(),
-        input: Default::default(),
+        input,
     };
     let sig = signer.sign_hash_sync(&tx.signature_hash()).map_err(|e| CliError::new(exit::GENERIC, format!("sign: {e}")))?;
     Ok(TxEnvelope::from(tx.into_signed(sig)).encoded_2718())

@@ -304,6 +304,59 @@ enum EvmCmd {
         #[command(flatten)]
         key: EvmKeyArgs,
     },
+    /// Deploy a contract (raw init code; dry-run unless --yes). [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    Deploy {
+        /// Init code as inline 0x hex (creation bytecode + ABI-encoded ctor args).
+        #[arg(long)]
+        bytecode: Option<String>,
+        /// Init code from a file (hex). Use this for large blobs.
+        #[arg(long)]
+        bytecode_file: Option<String>,
+        /// Value to endow, MSK (decimal; usually 0).
+        #[arg(long, default_value = "0")]
+        value: String,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+        #[command(flatten)]
+        key: EvmKeyArgs,
+    },
+    /// Call a contract with raw calldata (dry-run unless --yes). [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    Call {
+        /// Contract 0x address.
+        #[arg(long)]
+        to: String,
+        /// Calldata as inline 0x hex (selector + ABI-encoded args).
+        #[arg(long)]
+        data: Option<String>,
+        /// Calldata from a file (hex).
+        #[arg(long)]
+        data_file: Option<String>,
+        /// Value to send, MSK (decimal; usually 0).
+        #[arg(long, default_value = "0")]
+        value: String,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+        #[command(flatten)]
+        key: EvmKeyArgs,
+    },
 }
 
 #[cfg(feature = "evm-send")]
@@ -412,6 +465,20 @@ async fn main() -> std::process::ExitCode {
             Ok(wei) => evm_send::send(&ctx, &key.source(), &to, wei, gas_limit, max_fee, nonce, yes, wait),
             Err(e) => Err(e),
         },
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Deploy { bytecode, bytecode_file, value, gas_limit, max_fee, nonce, yes, wait, key }) => {
+            match (evm_send::read_hex_blob(&bytecode, &bytecode_file), evm_send::parse_msk_to_wei(&value)) {
+                (Ok(code), Ok(wei)) => evm_send::deploy(&ctx, &key.source(), code, wei, gas_limit, max_fee, nonce, yes, wait),
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            }
+        }
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Call { to, data, data_file, value, gas_limit, max_fee, nonce, yes, wait, key }) => {
+            match (evm_send::read_hex_blob(&data, &data_file), evm_send::parse_msk_to_wei(&value)) {
+                (Ok(cd), Ok(wei)) => evm_send::call(&ctx, &key.source(), &to, cd, wei, gas_limit, max_fee, nonce, yes, wait),
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            }
+        }
     };
 
     match result {
