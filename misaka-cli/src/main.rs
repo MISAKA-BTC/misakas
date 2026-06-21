@@ -19,6 +19,8 @@
 //! `exit`) so systemd / shell / monitors can branch on them.
 
 mod eth;
+#[cfg(feature = "evm-send")]
+mod evm_send;
 mod keys;
 mod node;
 mod wallet;
@@ -271,6 +273,80 @@ enum EvmCmd {
     /// EVM transaction lifecycle (`misaka_getEvmTxStatus`).
     #[command(subcommand)]
     Tx(EvmTxCmd),
+    /// EVM HD wallet — create / import / address. [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    #[command(subcommand)]
+    Wallet(EvmWalletCmd),
+    /// Sign + broadcast an EIP-1559 transfer (dry-run unless --yes). [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    Send {
+        /// Recipient 0x address.
+        #[arg(long)]
+        to: String,
+        /// Amount in MSK (decimal; 1 MSK = 1e18 wei).
+        #[arg(long)]
+        amount: String,
+        /// Gas limit (default: eth_estimateGas).
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        /// Max fee per gas, wei (default: eth_gasPrice).
+        #[arg(long)]
+        max_fee: Option<u128>,
+        /// Nonce (default: eth_getTransactionCount pending).
+        #[arg(long)]
+        nonce: Option<u64>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        /// After broadcast, poll until accepted.
+        #[arg(long)]
+        wait: bool,
+        #[command(flatten)]
+        key: EvmKeyArgs,
+    },
+}
+
+#[cfg(feature = "evm-send")]
+#[derive(Subcommand, Debug)]
+enum EvmWalletCmd {
+    /// Generate a new 24-word BIP-39 mnemonic to a 0600 file + print the address.
+    Create {
+        #[arg(long)]
+        out: String,
+    },
+    /// Import a mnemonic (read from stdin) to a 0600 file.
+    Import {
+        #[arg(long)]
+        out: String,
+    },
+    /// Print the EVM address for a key.
+    Address {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+    },
+}
+
+/// EVM key-source flags (BIP-39 mnemonic file / raw secp key file / stdin). The
+/// secret is never a CLI value.
+#[cfg(feature = "evm-send")]
+#[derive(Args, Debug, Clone)]
+struct EvmKeyArgs {
+    /// Path to a BIP-39 mnemonic file (derives m/44'/60'/0'/0/0).
+    #[arg(long, env = "MISAKA_EVM_MNEMONIC_FILE")]
+    mnemonic_file: Option<String>,
+    /// Path to a hex 32-byte secp256k1 private key file.
+    #[arg(long, env = "MISAKA_EVM_KEY_FILE")]
+    key_file: Option<String>,
+    /// Read the mnemonic or hex key from stdin.
+    #[arg(long)]
+    key_stdin: bool,
+}
+
+#[cfg(feature = "evm-send")]
+impl EvmKeyArgs {
+    fn source(&self) -> evm_send::EvmKeySource {
+        evm_send::EvmKeySource { mnemonic_file: self.mnemonic_file.clone(), key_file: self.key_file.clone(), key_stdin: self.key_stdin }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -325,6 +401,17 @@ async fn main() -> std::process::ExitCode {
         },
         Command::Key(KeyCmd::Gen { out }) => key_gen(&ctx, &out),
         Command::Key(KeyCmd::Address { key }) => key_address(&ctx, &key.source()),
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Wallet(EvmWalletCmd::Create { out })) => evm_send::wallet_create(&ctx, &out),
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Wallet(EvmWalletCmd::Import { out })) => evm_send::wallet_import(&ctx, &out),
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Wallet(EvmWalletCmd::Address { key })) => evm_send::wallet_address(&ctx, &key.source()),
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Send { to, amount, gas_limit, max_fee, nonce, yes, wait, key }) => match evm_send::parse_msk_to_wei(&amount) {
+            Ok(wei) => evm_send::send(&ctx, &key.source(), &to, wei, gas_limit, max_fee, nonce, yes, wait),
+            Err(e) => Err(e),
+        },
     };
 
     match result {

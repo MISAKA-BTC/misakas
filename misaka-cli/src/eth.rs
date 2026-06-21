@@ -56,7 +56,7 @@ fn http_post_json(url: &str, body: &str, timeout: Duration) -> Result<String, Cl
     Ok(body)
 }
 
-fn rpc_call(ctx: &Ctx, method: &str, params: Value) -> Result<Value, CliError> {
+pub(crate) fn rpc_call(ctx: &Ctx, method: &str, params: Value) -> Result<Value, CliError> {
     let req = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
     let body = http_post_json(&ctx.evm_rpc, &req, Duration::from_secs(ctx.timeout_secs))?;
     let v: Value = serde_json::from_str(&body)
@@ -96,7 +96,7 @@ fn normalize_hex_data(s: &str) -> Result<String, CliError> {
     Ok(format!("0x{}", h.to_ascii_lowercase()))
 }
 
-fn parse_hex_u128(v: &Value) -> Result<u128, CliError> {
+pub(crate) fn parse_hex_u128(v: &Value) -> Result<u128, CliError> {
     let s = v.as_str().ok_or_else(|| CliError::generic(format!("expected a 0x quantity string, got {v}")))?;
     let h = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
     let h = if h.is_empty() { "0" } else { h };
