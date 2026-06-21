@@ -132,6 +132,13 @@ pub struct AdmittedEvmTx {
     /// EIP-1559 `max_fee_per_gas` (legacy/2930: the gas price) — the mempool's
     /// fee-ordering key.
     pub max_fee_per_gas: u128,
+    /// EIP-1559 `max_priority_fee_per_gas`. Legacy / EIP-2930 carry no tip field; we
+    /// store the gas price (== `max_fee_per_gas`), the geth representation, so the
+    /// EFFECTIVE tip `min(priority, max_fee − basefee)` correctly yields their
+    /// `gas_price − basefee` (a 0 here would wrongly sink every legacy tx). The
+    /// mempool orders by effective tip so a high-`max_fee` zero-tip 1559 tx cannot
+    /// outrank a paying one (the miner's revenue is the tip, not the fee ceiling).
+    pub max_priority_fee_per_gas: u128,
 }
 
 /// v0.4 §6.1 class-1 payload admission (syntactic, per tx): EIP-2718 decode +
@@ -202,6 +209,10 @@ pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
         nonce: envelope.nonce(),
         gas_limit: envelope.gas_limit(),
         max_fee_per_gas: envelope.max_fee_per_gas(),
+        // Legacy / EIP-2930 carry no priority field → tip is `gas_price − basefee`.
+        // The geth representation sets tipCap = feeCap = gas_price so the effective-tip
+        // formula `min(priority, max_fee − basefee)` reduces to `gas_price − basefee`.
+        max_priority_fee_per_gas: envelope.max_priority_fee_per_gas().unwrap_or_else(|| envelope.max_fee_per_gas()),
     })
 }
 

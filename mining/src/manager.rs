@@ -119,7 +119,9 @@ impl MiningManager {
             hash: info.hash,
             sender: info.sender,
             nonce: info.nonce,
+            gas_limit: info.gas_limit,
             max_fee_per_gas: info.max_fee_per_gas,
+            max_priority_fee_per_gas: info.max_priority_fee_per_gas,
             raw,
             added_at: now_secs,
         })
@@ -233,9 +235,34 @@ impl MiningManager {
         let evm_template_data = {
             let mut pool = self.evm_mempool.write();
             pool.expire(unix_now() / 1000);
+            // §15 step 6 + liveness hotfix: prune already-accepted txs (nonce below the
+            // sender's canonical state nonce) and select per-sender CONTIGUOUS,
+            // gas-capped, effective-tip-ordered runs. The account-nonce + base-fee
+            // consensus reads are skipped entirely when the pool holds no txs (the
+            // common case, and always so in a non-evm build).
+            let transactions = if pool.is_empty() {
+                Vec::new()
+            } else {
+                let senders = pool.pending_senders();
+                let state_nonces = consensus.get_evm_account_nonces(&senders).unwrap_or_default();
+                pool.prune_below_state_nonce(&state_nonces);
+                let base_fee = consensus
+                    .get_evm_head_header()
+                    .ok()
+                    .flatten()
+                    .and_then(|h| h.base_fee_per_gas.try_to_u128())
+                    .unwrap_or(0);
+                pool.select_candidates(
+                    kaspa_consensus_core::evm::MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK,
+                    // A payload may not declare more gas than a chain block can accept.
+                    kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
+                    base_fee,
+                    &state_nonces,
+                )
+            };
             kaspa_consensus_core::evm::EvmTemplateData {
                 evm_coinbase: self.evm_fee_recipient.unwrap_or_default(),
-                transactions: pool.select_candidates(kaspa_consensus_core::evm::MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK),
+                transactions,
                 // §9.2: queued deposit claims for the own-payload system ops. The
                 // VSP re-validates each against the live selected-parent view and
                 // drops stale ones, so this over-approximates (cap matches the

@@ -214,6 +214,7 @@ mod tests {
             daa_score: 1,
             payload,
             accepted_txs: accepted,
+            gas_pool_v2_activation_daa_score: u64::MAX,
         }
     }
 

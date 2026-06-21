@@ -480,6 +480,33 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// kaspa-pq EVM Lane: the canonical account nonces at the EVM head (the sink's
+    /// committed EVM state) for `addresses`. An account that does not exist yet is
+    /// omitted; the caller treats absence as nonce 0. Used by the mining template
+    /// path to prune already-accepted txs (nonce < state nonce) and to select
+    /// contiguous per-sender nonce runs. Pure local template policy — never part of
+    /// consensus. Default impl reuses the head state snapshot; non-evm builds (and
+    /// pre-EVM-head chains) return an empty map.
+    fn get_evm_account_nonces(
+        &self,
+        addresses: &[crate::evm::EvmAddress],
+    ) -> ConsensusResult<std::collections::HashMap<crate::evm::EvmAddress, u64>> {
+        if addresses.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let wanted: std::collections::HashSet<crate::evm::EvmAddress> = addresses.iter().copied().collect();
+        let snapshot = self.get_evm_state_snapshot_of(self.get_sink())?;
+        let mut out = std::collections::HashMap::with_capacity(addresses.len());
+        if let Some(s) = snapshot {
+            for acct in s.accounts {
+                if wanted.contains(&acct.address) {
+                    out.insert(acct.address, acct.nonce);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§16): the EVM "block" (header + L1 hash + tx
     /// hashes) of the L1 chain block `l1_hash`, for `eth_getBlockBy*`. `None`
     /// if that block has no EVM header.

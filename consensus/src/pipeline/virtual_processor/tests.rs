@@ -3507,6 +3507,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
         daa_score: b1.header.daa_score,
         payload: &payload1,
         accepted_txs: &[],
+        gas_pool_v2_activation_daa_score: u64::MAX,
     };
     let (exp1, snap1) = kaspa_evm::snapshot::execute_block_from_snapshot(&EvmStateSnapshot::default(), &input1).unwrap();
     b1.header.evm_commitment_root = exp1.header.commitment_root();
@@ -3538,6 +3539,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
         daa_score: b2.header.daa_score,
         payload: &payload2,
         accepted_txs: &[], // b1's payload was empty ⇒ nothing to accept
+        gas_pool_v2_activation_daa_score: u64::MAX,
     };
     let (exp2, _snap2) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap1, &input2).unwrap();
     b2.header.evm_commitment_root = exp2.header.commitment_root();
@@ -3581,6 +3583,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
         daa_score: b4.header.daa_score,
         payload: &payload4,
         accepted_txs: &[], // b2's payload txs are empty (system ops are not delayed-accepted)
+        gas_pool_v2_activation_daa_score: u64::MAX,
     };
     let snap2 = {
         // Recompute b2's child snapshot the same way the node stored it.

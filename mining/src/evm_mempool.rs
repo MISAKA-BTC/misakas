@@ -19,7 +19,9 @@
 //! mempool-admitted tx can never make the node's own template
 //! payload-block-invalid.
 
-use kaspa_consensus_core::evm::{DepositClaim, EvmAddress, EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+use kaspa_consensus_core::evm::{
+    DepositClaim, EvmAddress, EvmExecutionPayload, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK,
+};
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::EvmH256;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
@@ -30,9 +32,16 @@ pub const EVM_MEMPOOL_MAX_TXS: usize = 4_096;
 pub const EVM_MEMPOOL_MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 /// Seconds a pending tx is retained before TTL expiry.
 pub const EVM_MEMPOOL_TX_TTL_SECS: u64 = 3_600;
-/// Replacement (same sender + nonce) requires `max_fee_per_gas` to grow by
-/// at least this percentage — the standard anti-churn fee-bump rule.
+/// Replacement (same sender + nonce) requires BOTH `max_fee_per_gas` and
+/// `max_priority_fee_per_gas` to grow by at least this percentage — the standard
+/// anti-churn fee-bump rule (priority too, so a tip-less churn can't replace).
 pub const EVM_MEMPOOL_REPLACEMENT_BUMP_PCT: u128 = 10;
+/// Per-sender pending-tx cap (one-sender DoS bound — the global cap alone lets one
+/// sender monopolize the whole pool). A legitimate sender rarely needs a deep queue.
+pub const EVM_MEMPOOL_MAX_TXS_PER_SENDER: usize = 256;
+/// Per-sender declared-gas cap (a few blocks' worth, so one sender can never reserve
+/// more template gas than several blocks can accept).
+pub const EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER: u64 = 4 * MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK;
 /// Maximum pending deposit claims queued for own-payload `system_ops` (§9.2).
 /// Several blocks' worth of the per-block cap so a backlog can drain.
 pub const EVM_MEMPOOL_MAX_CLAIMS: usize = 4_096;
@@ -52,11 +61,25 @@ pub struct PendingEvmTx {
     pub hash: EvmH256,
     pub sender: EvmAddress,
     pub nonce: u64,
+    /// Declared gas limit — needed to gas-cap the template (a payload may not declare
+    /// more gas than a chain block can accept) and to bound per-sender reservations.
+    pub gas_limit: u64,
     pub max_fee_per_gas: u128,
+    /// EIP-1559 priority tip (legacy/2930: 0). Drives the EFFECTIVE-tip ordering.
+    pub max_priority_fee_per_gas: u128,
     /// Raw EIP-2718 bytes (what the payload carries).
     pub raw: Vec<u8>,
     /// Unix seconds at insertion (TTL anchor).
     pub added_at: u64,
+}
+
+impl PendingEvmTx {
+    /// The miner's effective per-gas tip at `base_fee` (EIP-1559): `min(priority,
+    /// max_fee − base_fee)`. A high-`max_fee` zero-tip tx scores 0 here, so it can
+    /// never outrank a paying tx in template selection.
+    pub fn effective_tip(&self, base_fee: u128) -> u128 {
+        self.max_priority_fee_per_gas.min(self.max_fee_per_gas.saturating_sub(base_fee))
+    }
 }
 
 /// Why an insertion was rejected.
@@ -74,6 +97,11 @@ pub enum EvmMempoolError {
     TooLarge { size: usize, hash: EvmH256 },
     /// Pool is full and the fee does not beat the cheapest pending tx.
     Full { hash: EvmH256 },
+    /// The sender already has [`EVM_MEMPOOL_MAX_TXS_PER_SENDER`] pending txs (one-sender DoS bound).
+    SenderTxLimit { sender: EvmAddress, limit: usize, hash: EvmH256 },
+    /// Admitting this tx would push the sender's pending DECLARED gas over
+    /// [`EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER`].
+    SenderGasLimit { sender: EvmAddress, limit: u64, hash: EvmH256 },
 }
 
 impl std::fmt::Display for EvmMempoolError {
@@ -86,6 +114,12 @@ impl std::fmt::Display for EvmMempoolError {
             }
             EvmMempoolError::TooLarge { size, .. } => write!(f, "evm tx of {size} bytes can never fit a payload"),
             EvmMempoolError::Full { .. } => write!(f, "evm mempool full and fee below the eviction floor"),
+            EvmMempoolError::SenderTxLimit { sender, limit, .. } => {
+                write!(f, "sender {sender} already has the maximum {limit} pending evm txs")
+            }
+            EvmMempoolError::SenderGasLimit { sender, limit, .. } => {
+                write!(f, "sender {sender} would exceed the {limit} pending declared-gas budget")
+            }
         }
     }
 }
@@ -250,6 +284,52 @@ impl EvmMempool {
         claims
     }
 
+    /// The distinct senders with pending txs (for the template path to batch-fetch
+    /// their canonical state nonces). BTreeMap keys are sorted, so equal senders are
+    /// contiguous — one push per sender.
+    pub fn pending_senders(&self) -> Vec<EvmAddress> {
+        let mut senders: Vec<EvmAddress> = Vec::new();
+        let mut last: Option<EvmAddress> = None;
+        for (sender, _nonce) in self.by_sender_nonce.keys() {
+            if last != Some(*sender) {
+                senders.push(*sender);
+                last = Some(*sender);
+            }
+        }
+        senders
+    }
+
+    /// Count of this sender's pending txs (BTreeMap range over the sender's nonces).
+    fn sender_tx_count(&self, sender: &EvmAddress) -> usize {
+        self.by_sender_nonce.range((*sender, 0)..=(*sender, u64::MAX)).count()
+    }
+
+    /// Sum of this sender's pending DECLARED gas limits (saturating).
+    fn sender_declared_gas(&self, sender: &EvmAddress) -> u64 {
+        self.by_sender_nonce
+            .range((*sender, 0)..=(*sender, u64::MAX))
+            .fold(0u64, |acc, (_, h)| acc.saturating_add(self.txs[h].gas_limit))
+    }
+
+    /// Remove every pending tx whose nonce is BELOW the sender's canonical state
+    /// nonce — i.e. already accepted on the selected chain (or otherwise spent), so
+    /// it can only ever be a class-2/3 skip. This is the state-nonce form of the §15
+    /// "remove accepted" cleanup (the module note: refine TTL-only retention once the
+    /// receipt index lands). Called by the template path each build with the live
+    /// account nonces. Senders absent from `state_nonces` (no account yet) are left
+    /// untouched (their state nonce is 0 — nothing to prune).
+    pub fn prune_below_state_nonce(&mut self, state_nonces: &HashMap<EvmAddress, u64>) {
+        let stale: Vec<EvmH256> = self
+            .txs
+            .values()
+            .filter(|t| state_nonces.get(&t.sender).is_some_and(|&n| t.nonce < n))
+            .map(|t| t.hash)
+            .collect();
+        for h in stale {
+            self.remove(&h);
+        }
+    }
+
     /// Insert a pre-admitted pending tx (admission itself happens in
     /// [`crate::manager::MiningManager::submit_evm_transaction`], which is the
     /// only production caller; tests construct `PendingEvmTx` directly).
@@ -264,20 +344,41 @@ impl EvmMempool {
             return Err(EvmMempoolError::Duplicate(tx.hash));
         }
 
-        // Same (sender, nonce): replacement requires the standard fee bump.
+        // Same (sender, nonce): replacement requires BOTH the fee cap and the
+        // priority tip to bump (geth's rule). Without the tip requirement a churn of
+        // zero-tip replacements could thrash the slot at no cost to the miner.
+        let mut is_replacement = false;
         if let Some(existing_hash) = self.by_sender_nonce.get(&(tx.sender, tx.nonce)).copied() {
             let existing = &self.txs[&existing_hash];
             // Saturate the BUMP, then the add — `required >= existing` always.
             // (`existing * 110 / 100` reverse-overflows near u128::MAX: the mul
             // saturates and the division then yields LESS than `existing`,
             // letting a cheaper replacement through. Audit L2.)
-            let required = existing
+            let required_fee = existing
                 .max_fee_per_gas
                 .saturating_add(existing.max_fee_per_gas.saturating_mul(EVM_MEMPOOL_REPLACEMENT_BUMP_PCT) / 100);
-            if tx.max_fee_per_gas < required {
-                return Err(EvmMempoolError::ReplacementUnderpriced { pending_fee: existing.max_fee_per_gas, required_fee: required, hash: tx.hash });
+            let required_tip = existing
+                .max_priority_fee_per_gas
+                .saturating_add(existing.max_priority_fee_per_gas.saturating_mul(EVM_MEMPOOL_REPLACEMENT_BUMP_PCT) / 100);
+            if tx.max_fee_per_gas < required_fee || tx.max_priority_fee_per_gas < required_tip {
+                return Err(EvmMempoolError::ReplacementUnderpriced { pending_fee: existing.max_fee_per_gas, required_fee, hash: tx.hash });
             }
             self.remove(&existing_hash);
+            is_replacement = true;
+        }
+
+        // Per-sender DoS bounds (only for a NEW nonce — a replacement removed its
+        // predecessor above, so the count/gas already exclude it). One sender must
+        // not be able to monopolize the global pool or reserve unbounded template gas.
+        if !is_replacement {
+            let sender_count = self.sender_tx_count(&tx.sender);
+            if sender_count >= EVM_MEMPOOL_MAX_TXS_PER_SENDER {
+                return Err(EvmMempoolError::SenderTxLimit { sender: tx.sender, limit: EVM_MEMPOOL_MAX_TXS_PER_SENDER, hash: tx.hash });
+            }
+        }
+        let sender_gas_after = self.sender_declared_gas(&tx.sender).saturating_add(tx.gas_limit);
+        if sender_gas_after > EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER {
+            return Err(EvmMempoolError::SenderGasLimit { sender: tx.sender, limit: EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER, hash: tx.hash });
         }
 
         // Pool budget: evict the cheapest pending tx while full, but only for a
@@ -320,29 +421,66 @@ impl EvmMempool {
         }
     }
 
-    /// Select the node's own template payload txs (design §15 step 6):
-    /// per-sender strictly ascending nonces (acceptance executes payload txs in
-    /// order — an out-of-order nonce is a guaranteed class-2 skip), globally
-    /// highest-`max_fee_per_gas`-first across the current head of each sender's
-    /// run, greedily byte-capped so the assembled payload stays within
-    /// `max_payload_bytes` (the §4.1 borsh size the body rule enforces).
-    pub fn select_candidates(&self, max_payload_bytes: usize) -> Vec<Vec<u8>> {
-        // Per-sender ascending-nonce runs (BTreeMap iteration order).
-        let mut runs: HashMap<EvmAddress, Vec<&PendingEvmTx>> = HashMap::new();
-        for ((sender, _nonce), hash) in self.by_sender_nonce.iter() {
-            runs.entry(*sender).or_default().push(&self.txs[hash]);
+    /// Select the node's own template payload txs (design §15 step 6).
+    ///
+    /// Per sender we take the CONTIGUOUS run starting at the sender's canonical
+    /// `state_nonce` (acceptance executes payload txs in nonce order — a tx after a
+    /// missing nonce is a guaranteed class-2 skip, and a tx below the state nonce is
+    /// already accepted, so it is parked/pruned). Across senders we greedily pick the
+    /// head with the highest EFFECTIVE tip at `base_fee` (so a high-`max_fee` zero-tip
+    /// tx cannot crowd out a paying one), capped by BOTH the payload byte budget
+    /// (`max_payload_bytes`, the §4.1 borsh size the body rule enforces) AND the
+    /// declared-gas budget (`max_declared_gas`, normally the per-chain-block accepted
+    /// gas cap — so the assembled payload never declares more gas than a block can
+    /// accept, the local complement of the executor's gas accounting).
+    ///
+    /// `state_nonces` is the live account-nonce view (absent sender ⇒ nonce 0). It is
+    /// a pure local template policy: a stale or gapped pick only wastes a slot, never
+    /// invalidates the node's own block.
+    pub fn select_candidates(
+        &self,
+        max_payload_bytes: usize,
+        max_declared_gas: u64,
+        base_fee: u128,
+        state_nonces: &HashMap<EvmAddress, u64>,
+    ) -> Vec<Vec<u8>> {
+        // Distinct senders (BTreeMap keys are sorted, so a run of equal senders is contiguous).
+        let mut senders: Vec<EvmAddress> = Vec::new();
+        let mut last: Option<EvmAddress> = None;
+        for (sender, _nonce) in self.by_sender_nonce.keys() {
+            if last != Some(*sender) {
+                senders.push(*sender);
+                last = Some(*sender);
+            }
         }
 
-        // Greedy head-of-run max-heap by fee (deterministic tie-break by hash).
+        // Per-sender CONTIGUOUS run from the canonical state nonce (park on a gap).
+        let mut runs: HashMap<EvmAddress, Vec<&PendingEvmTx>> = HashMap::new();
+        for sender in senders {
+            let mut expected = state_nonces.get(&sender).copied().unwrap_or(0);
+            let mut run: Vec<&PendingEvmTx> = Vec::new();
+            while let Some(hash) = self.by_sender_nonce.get(&(sender, expected)) {
+                run.push(&self.txs[hash]);
+                expected = match expected.checked_add(1) {
+                    Some(n) => n,
+                    None => break,
+                };
+            }
+            if !run.is_empty() {
+                runs.insert(sender, run);
+            }
+        }
+
+        // Greedy head-of-run max-heap by EFFECTIVE tip (deterministic tie-break by hash).
         #[derive(PartialEq, Eq)]
         struct Head {
-            fee: u128,
+            tip: u128,
             hash: EvmH256,
             sender: EvmAddress,
         }
         impl Ord for Head {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                self.fee.cmp(&other.fee).then_with(|| self.hash.cmp(&other.hash))
+                self.tip.cmp(&other.tip).then_with(|| self.hash.cmp(&other.hash))
             }
         }
         impl PartialOrd for Head {
@@ -353,31 +491,31 @@ impl EvmMempool {
 
         let mut heap: BinaryHeap<Head> = runs
             .iter()
-            .map(|(sender, run)| Head { fee: run[0].max_fee_per_gas, hash: run[0].hash, sender: *sender })
+            .map(|(sender, run)| Head { tip: run[0].effective_tip(base_fee), hash: run[0].hash, sender: *sender })
             .collect();
         let mut next_idx: HashMap<EvmAddress, usize> = runs.keys().map(|s| (*s, 0)).collect();
 
         let base = EvmExecutionPayload::default().payload_bytes().len();
-        let mut budget = max_payload_bytes.saturating_sub(base);
+        let mut bytes_left = max_payload_bytes.saturating_sub(base);
+        let mut gas_left = max_declared_gas;
         let mut selected = Vec::new();
         while let Some(head) = heap.pop() {
             let run = &runs[&head.sender];
             let idx = next_idx[&head.sender];
             let tx = run[idx];
             let cost = 4 + tx.raw.len();
-            if cost <= budget {
-                budget -= cost;
+            // Must fit BOTH budgets. A head that does not fit drops the rest of its
+            // run (its successors must not jump the nonce order).
+            if cost <= bytes_left && tx.gas_limit <= gas_left {
+                bytes_left -= cost;
+                gas_left -= tx.gas_limit;
                 selected.push(tx.raw.clone());
-                // Advance this sender's run; a higher nonce must never precede a
-                // lower one, so the run's NEXT tx only enters the heap now.
                 if idx + 1 < run.len() {
                     next_idx.insert(head.sender, idx + 1);
                     let nxt = run[idx + 1];
-                    heap.push(Head { fee: nxt.max_fee_per_gas, hash: nxt.hash, sender: head.sender });
+                    heap.push(Head { tip: nxt.effective_tip(base_fee), hash: nxt.hash, sender: head.sender });
                 }
             }
-            // A head that does not fit is dropped together with the rest of its
-            // run (its successors must not jump the nonce order).
         }
         selected
     }
@@ -396,10 +534,20 @@ mod tests {
             hash: EvmH256::from_bytes(hash),
             sender: EvmAddress::from_bytes([sender_byte; 20]),
             nonce,
+            gas_limit: 21_000,
             max_fee_per_gas: fee,
+            // priority == max_fee so effective_tip at base_fee 0 equals `fee` — keeps
+            // the existing fee-ordering assertions meaningful under the new selector.
+            max_priority_fee_per_gas: fee,
             raw: vec![tag; size],
             added_at: 1_000,
         }
+    }
+
+    /// Convenience: the no-gas-cap, base-fee-0, no-state-nonce selection the
+    /// pre-pagination tests exercised (all senders start at nonce 0).
+    fn select(pool: &EvmMempool, max_payload_bytes: usize) -> Vec<Vec<u8>> {
+        pool.select_candidates(max_payload_bytes, u64::MAX, 0, &HashMap::new())
     }
 
     #[test]
@@ -556,7 +704,7 @@ mod tests {
         // Sender B: nonce 0 (fee 100).
         pool.insert(tx(0xB, 0, 100, 10, 3)).unwrap();
 
-        let selected = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK);
+        let selected = select(&pool, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK);
         assert_eq!(selected.len(), 3);
         // B0 (100) first; A0 (50) before A1 despite A1's higher fee; once A0 is
         // in, A1 (500) outbids nothing remaining.
@@ -576,7 +724,7 @@ mod tests {
         pool.insert(tx(0xA, 0, 100, 100, 1)).unwrap();
         pool.insert(tx(0xB, 0, 90, 100, 2)).unwrap();
         // Budget for exactly one tx.
-        let selected = pool.select_candidates(base + 104);
+        let selected = select(&pool, base + 104);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0], vec![1u8; 100], "the higher-fee tx wins the slot");
         // Assembled payload actually fits the cap it was selected under.

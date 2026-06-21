@@ -77,6 +77,13 @@ pub struct EvmBlockInput<'a> {
     /// `AcceptedEvmTxs(B)` pre-prefix-take: the mergeset's payload txs in
     /// canonical order (`sorted_mergeset`, then payload order — design §3.1).
     pub accepted_txs: &'a [AcceptedTxCandidate],
+    /// EVM gas-pool v2 fence (`Params::evm_gas_pool_v2_activation_daa_score`). When
+    /// `daa_score >= gas_pool_v2_activation_daa_score` the executor uses the
+    /// sequential gas-pool (actual-gas accounting, class-2 consumes nothing,
+    /// non-fitting txs do not block later ones); below it, the v1 strict
+    /// declared-gas prefix-take. The construction site copies it from the network
+    /// params so production execution, snapshot replay and IBD all agree.
+    pub gas_pool_v2_activation_daa_score: u64,
 }
 
 #[inline]
@@ -152,40 +159,50 @@ pub fn execute_block_evm(
     //    deterministic. An undecodable tx cannot appear in a body-valid payload
     //    (class-1 admission); defense-in-depth maps it to a deterministic skip
     //    so every implementation that reaches it stays consensus-consistent.
+    // EVM-lane liveness fix: the gas-pool v2 fence. Below it, the v1 strict
+    // declared-gas prefix-take runs (BELOW byte-for-byte unchanged). At/above it the
+    // sequential gas pool runs (the `else` branch of the execution loop further down):
+    // declared gas only gates pool admission, the pool is debited by ACTUAL gas used,
+    // class-2 acceptance skips consume nothing, and a non-fitting tx does NOT block
+    // later (smaller) txs. CHANGES execution results ⇒ activation-gated (consensus fork).
+    let gas_pool_v2 = input.daa_score >= input.gas_pool_v2_activation_daa_score;
+
     let mut skipped_tx_count: u32 = 0;
     // §16: per-candidate outcomes (parallel to input order) — store/RPC data
     // feeding the tx-lookup index, never part of the commitment.
     let mut outcomes: Vec<Option<kaspa_consensus_core::evm::EvmCandidateOutcome>> = vec![None; input.accepted_txs.len()];
     let mut planned: Vec<(revm::primitives::TxEnv, &AcceptedTxCandidate, usize)> = Vec::with_capacity(input.accepted_txs.len());
-    let mut cumulative_gas_limit: u64 = 0;
-    let mut over_cap = false;
-    for (cand_idx, cand) in input.accepted_txs.iter().enumerate() {
-        if over_cap {
-            skipped_tx_count += 1; // class 5 (strict prefix: everything after the first over-cap tx)
-            outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 5 });
-            continue;
-        }
-        let txenv = match crate::tx::decode_tx_to_env(&cand.raw) {
-            Ok(t) => t,
-            Err(_) => {
-                // Defensive: class-1 material (syntactically inadmissible) that
-                // slipped past admission — unreachable for a body-validated
-                // payload, but recorded under its DESIGN class (1) so the
-                // tx-lookup index stays truthful. The label is store/RPC data
-                // only, never part of the commitment (audit L5).
-                skipped_tx_count += 1;
-                outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 1 });
+    if !gas_pool_v2 {
+        let mut cumulative_gas_limit: u64 = 0;
+        let mut over_cap = false;
+        for (cand_idx, cand) in input.accepted_txs.iter().enumerate() {
+            if over_cap {
+                skipped_tx_count += 1; // class 5 (strict prefix: everything after the first over-cap tx)
+                outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 5 });
                 continue;
             }
-        };
-        cumulative_gas_limit = cumulative_gas_limit.saturating_add(txenv.gas_limit);
-        if cumulative_gas_limit > user_gas_budget {
-            over_cap = true;
-            skipped_tx_count += 1; // class 5
-            outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 5 });
-            continue;
+            let txenv = match crate::tx::decode_tx_to_env(&cand.raw) {
+                Ok(t) => t,
+                Err(_) => {
+                    // Defensive: class-1 material (syntactically inadmissible) that
+                    // slipped past admission — unreachable for a body-validated
+                    // payload, but recorded under its DESIGN class (1) so the
+                    // tx-lookup index stays truthful. The label is store/RPC data
+                    // only, never part of the commitment (audit L5).
+                    skipped_tx_count += 1;
+                    outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 1 });
+                    continue;
+                }
+            };
+            cumulative_gas_limit = cumulative_gas_limit.saturating_add(txenv.gas_limit);
+            if cumulative_gas_limit > user_gas_budget {
+                over_cap = true;
+                skipped_tx_count += 1; // class 5
+                outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 5 });
+                continue;
+            }
+            planned.push((txenv, cand, cand_idx));
         }
-        planned.push((txenv, cand, cand_idx));
     }
 
     // 3. Accepted user txs in canonical order.
@@ -227,6 +244,8 @@ pub fn execute_block_evm(
         // MISAKA_WITHDRAW address (see crate::withdraw).
         .append_handler_register(crate::withdraw::register_f002_withdraw)
         .build();
+    if !gas_pool_v2 {
+    // === v1: execute the prefix-take-selected `planned` set (UNCHANGED) ===
     for (txenv, cand, cand_idx) in planned {
         // Effective gas price (EIP-1559): legacy txs carry no priority field —
         // their tip is gas_price − basefee; typed txs tip min(max_fee, basefee
@@ -298,6 +317,106 @@ pub fn execute_block_evm(
                 outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
             }
             Err(other) => return Err(EvmExecError::InvalidTx(format!("{other:?}"))),
+        }
+    }
+    } else {
+        // === v2: sequential gas pool (Ethereum semantics) ===
+        // Walk `AcceptedEvmTxs(B)` in canonical order with a running gas pool seeded
+        // at `user_gas_budget`. Declared gas only GATES admission (a tx whose declared
+        // `gas_limit` exceeds the remaining pool is class-5 but does NOT block later,
+        // smaller txs); the pool is debited by ACTUAL `gas_used`; an acceptance-time
+        // invalid tx (class-2: nonce / funds / basefee) consumes nothing; a full
+        // duplicate already executed in THIS block is class-3. The per-tx post-commit
+        // accounting (tip reroute / F002 withdraw burn / receipt / basefee burn) is
+        // identical to the v1 Ok-arm above.
+        let mut remaining_user_gas = user_gas_budget;
+        let mut accepted_hashes: std::collections::HashSet<kaspa_hashes::EvmH256> = std::collections::HashSet::new();
+        for (cand_idx, cand) in input.accepted_txs.iter().enumerate() {
+            let evm_tx_hash = crate::tx::tx_hash(&cand.raw);
+            if accepted_hashes.contains(&evm_tx_hash) {
+                skipped_tx_count += 1; // class 3 (duplicate already executed in this block)
+                outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 3 });
+                continue;
+            }
+            let txenv = match crate::tx::decode_tx_to_env(&cand.raw) {
+                Ok(t) => t,
+                Err(_) => {
+                    skipped_tx_count += 1; // class 1 (defensive; unreachable for a body-valid payload)
+                    outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 1 });
+                    continue;
+                }
+            };
+            if txenv.gas_limit > remaining_user_gas {
+                // Does not fit the remaining pool — skip WITHOUT consuming the pool and
+                // WITHOUT blocking later (smaller) txs (the liveness fix vs v1's strict prefix).
+                skipped_tx_count += 1; // class 5
+                outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 5 });
+                continue;
+            }
+            let max_fee = txenv.gas_price;
+            let effective_gas_price = match txenv.gas_priority_fee {
+                Some(priority) => max_fee.min(U256::from(basefee).saturating_add(priority)),
+                None => max_fee,
+            };
+            let tip_per_gas = effective_gas_price.saturating_sub(U256::from(basefee));
+            evm.context.evm.env.tx = txenv;
+
+            match evm.transact_commit() {
+                Ok(result) => {
+                    let tx_gas = result.gas_used();
+                    // Debit the pool by ACTUAL gas. `tx_gas ≤ gas_limit ≤ remaining` holds
+                    // (revm never charges above the tx's own gas_limit), so this never
+                    // underflows; checked as a consensus invariant.
+                    remaining_user_gas = remaining_user_gas
+                        .checked_sub(tx_gas)
+                        .ok_or_else(|| EvmExecError::InvariantViolation("v2 gas pool debited below zero".to_string()))?;
+                    gas_used = gas_used.saturating_add(tx_gas);
+                    tx_cumulative_gas = tx_cumulative_gas.saturating_add(tx_gas);
+                    let tx_burn = basefee
+                        .checked_mul(tx_gas as u128)
+                        .and_then(|b| burn_this_block.checked_add(b))
+                        .ok_or_else(|| EvmExecError::InvariantViolation("basefee-burn accumulator overflow".to_string()))?;
+                    burn_this_block = tx_burn;
+                    let tip = tip_per_gas.saturating_mul(U256::from(tx_gas));
+                    let payload_cb = to_revm_address(&cand.payload_coinbase);
+                    if !tip.is_zero() && payload_cb != accepting_coinbase {
+                        reroute_balance(evm.db_mut(), accepting_coinbase, payload_cb, tip)?;
+                    }
+                    let receipt_index = receipts.len() as u32;
+                    let mut op_index = 0u32;
+                    let mut withdrawn_wei: u128 = 0;
+                    for log in result.logs() {
+                        if let Some(w) = crate::withdraw::decode_withdraw_log(log) {
+                            withdrawals.push(WithdrawOp {
+                                receipt_index,
+                                op_index,
+                                evm_tx_hash,
+                                from: EvmAddress::from_bytes(w.from),
+                                script_public_key: w.script_public_key,
+                                amount_sompi: (w.amount_wei / EVM_NATIVE_SCALE as u128) as u64,
+                            });
+                            op_index += 1;
+                            withdrawn_wei = withdrawn_wei.saturating_add(w.amount_wei);
+                        }
+                    }
+                    if withdrawn_wei > 0 {
+                        burn_balance(evm.db_mut(), crate::withdraw::f002_address(), U256::from(withdrawn_wei))?;
+                    }
+                    outcomes[cand_idx] =
+                        Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Accepted { receipt_index: receipts.len() as u32 });
+                    receipts.push(make_receipt(&result, tx_cumulative_gas));
+                    executed_raws.push(cand.raw.clone());
+                    accepted_hashes.insert(evm_tx_hash);
+                }
+                Err(EVMError::Transaction(_)) => {
+                    // class-2: consumes no gas, no receipt, no nonce change — and crucially
+                    // does NOT debit the pool, so a re-included already-accepted tx can no
+                    // longer starve the block's later txs.
+                    skipped_tx_count += 1;
+                    outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
+                }
+                Err(other) => return Err(EvmExecError::InvalidTx(format!("{other:?}"))),
+            }
         }
     }
     drop(evm);
@@ -565,6 +684,7 @@ mod tests {
             daa_score: 42,
             payload,
             accepted_txs: accepted,
+            gas_pool_v2_activation_daa_score: u64::MAX,
         }
     }
 
@@ -610,6 +730,7 @@ mod tests {
             daa_score: 43,
             payload: &empty_payload,
             accepted_txs: &[],
+            gas_pool_v2_activation_daa_score: u64::MAX,
         };
         // FULL path: seed the parent state, execute, extract.
         let (full_child, full_child_db) = execute_block_evm(seed_cachedb(&parent_snapshot).unwrap(), &child_input).unwrap();
