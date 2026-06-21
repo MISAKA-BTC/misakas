@@ -361,6 +361,17 @@ pub struct Params {
     /// `0` for genesis-active) ⇒ active. Mirrors the `pos_v2_activation_daa_score`
     /// / `pq_activation_daa_score` fence precedent.
     pub evm_activation_daa_score: u64,
+    /// kaspa-pq EVM Lane gas-pool v2 fence. Below this DAA score the executor uses
+    /// the v1 strict declared-gas prefix-take (one over-cap declared gas_limit, or a
+    /// re-included already-accepted tx, blocks every later tx in the block). At/above
+    /// it the executor switches to the Ethereum-style sequential gas pool: declared
+    /// gas only gates admission to the pool, the pool is debited by ACTUAL gas used,
+    /// acceptance-skipped (class-2) txs consume nothing, and a non-fitting tx is
+    /// skipped WITHOUT blocking later (smaller) txs — the EVM-lane liveness fix.
+    /// CHANGES execution results ⇒ activation-gated (consensus fork). `u64::MAX` ⇒
+    /// inert (every net until a deploy sets a finite score). Mirrors the
+    /// `evm_activation_daa_score` fence precedent.
+    pub evm_gas_pool_v2_activation_daa_score: u64,
 }
 
 impl Params {
@@ -381,6 +392,15 @@ impl Params {
     #[must_use]
     pub fn is_evm_active(&self, daa_score: u64) -> bool {
         daa_score >= self.evm_activation_daa_score
+    }
+
+    /// kaspa-pq EVM Lane: `true` when the gas-pool v2 executor (the liveness fix) is
+    /// active at `daa_score`. Below the fence (the default `u64::MAX`) the v1 strict
+    /// declared-gas prefix-take executes. See `evm_gas_pool_v2_activation_daa_score`.
+    #[inline]
+    #[must_use]
+    pub fn is_evm_gas_pool_v2_active(&self, daa_score: u64) -> bool {
+        daa_score >= self.evm_gas_pool_v2_activation_daa_score
     }
     /// Returns the past median time sample rate
     #[inline]
@@ -557,6 +577,7 @@ impl Params {
             pq_activation_daa_score: self.pq_activation_daa_score,
             // kaspa-pq EVM lane activation is consensus-fixed, never runtime-overridable.
             evm_activation_daa_score: self.evm_activation_daa_score,
+            evm_gas_pool_v2_activation_daa_score: self.evm_gas_pool_v2_activation_daa_score,
         }
     }
 }
@@ -952,6 +973,8 @@ pub const MAINNET_PARAMS: Params = Params {
     // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
     // a finite activation score when the revm executor lands (P2+). u64::MAX = never.
     evm_activation_daa_score: u64::MAX,
+    // gas-pool v2 ships inert on every network — a deploy sets a finite testnet score.
+    evm_gas_pool_v2_activation_daa_score: u64::MAX,
 };
 
 pub const TESTNET_PARAMS: Params = Params {
@@ -1038,6 +1061,9 @@ pub const TESTNET_PARAMS: Params = Params {
     // testnet kaspad MUST be built `--features evm` (a non-evm build refuses
     // evm-active blocks by design). Mainnet/simnet stay u64::MAX-inert.
     evm_activation_daa_score: 0,
+    // EVM is genesis-active here, but the gas-pool v2 executor stays inert until a
+    // deploy sets a finite activation score (consensus fork — see params docs).
+    evm_gas_pool_v2_activation_daa_score: u64::MAX,
 };
 
 pub const SIMNET_PARAMS: Params = Params {
@@ -1099,6 +1125,8 @@ pub const SIMNET_PARAMS: Params = Params {
     // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
     // a finite activation score when the revm executor lands (P2+). u64::MAX = never.
     evm_activation_daa_score: u64::MAX,
+    // gas-pool v2 ships inert on every network — a deploy sets a finite testnet score.
+    evm_gas_pool_v2_activation_daa_score: u64::MAX,
 };
 
 pub const DEVNET_PARAMS: Params = Params {
@@ -1114,6 +1142,9 @@ pub const DEVNET_PARAMS: Params = Params {
     // refuses evm-active blocks by design). Mainnet/testnet/simnet stay
     // u64::MAX-inert until the O13/O9 decision.
     evm_activation_daa_score: 0,
+    // EVM is genesis-active here, but the gas-pool v2 executor stays inert until a
+    // deploy sets a finite activation score (consensus fork — see params docs).
+    evm_gas_pool_v2_activation_daa_score: u64::MAX,
     // kaspa-pq: devnet now uses the same MISAKA DNS seeders as mainnet/testnet for automatic
     // peer discovery (devnet default P2P port is 26611, matching the live mesh — see
     // NetworkId::default_p2p_port). Nodes launched WITHOUT `--nodnsseed` resolve these to find
