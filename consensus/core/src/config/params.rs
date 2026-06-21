@@ -1061,9 +1061,13 @@ pub const TESTNET_PARAMS: Params = Params {
     // testnet kaspad MUST be built `--features evm` (a non-evm build refuses
     // evm-active blocks by design). Mainnet/simnet stay u64::MAX-inert.
     evm_activation_daa_score: 0,
-    // EVM is genesis-active here, but the gas-pool v2 executor stays inert until a
-    // deploy sets a finite activation score (consensus fork — see params docs).
-    evm_gas_pool_v2_activation_daa_score: u64::MAX,
+    // EVM is genesis-active here; the gas-pool v2 executor (Ethereum/geth-style
+    // sequential gas pool — a tx skipped over-cap no longer starves later/smaller
+    // txs) activates at this testnet DAA. This is a consensus fork: every mesh node
+    // MUST run a v2-capable `--features evm` binary BEFORE this score, or the EVM
+    // state commitment splits. Set 2026-06-21 to ~90 min ahead of the live virtual
+    // DAA (~2.102M) to cover the rolling mesh swap. Mainnet/simnet/devnet stay inert.
+    evm_gas_pool_v2_activation_daa_score: 2_125_000,
 };
 
 pub const SIMNET_PARAMS: Params = Params {

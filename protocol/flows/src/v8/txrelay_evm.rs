@@ -190,7 +190,9 @@ impl RelayEvmTransactionsFlow {
                 // recomputed hash for the verification below.
                 Err(EvmMempoolError::Duplicate(tx_hash))
                 | Err(EvmMempoolError::ReplacementUnderpriced { hash: tx_hash, .. })
-                | Err(EvmMempoolError::Full { hash: tx_hash }) => (tx_hash, false),
+                | Err(EvmMempoolError::Full { hash: tx_hash })
+                | Err(EvmMempoolError::SenderTxLimit { hash: tx_hash, .. })
+                | Err(EvmMempoolError::SenderGasLimit { hash: tx_hash, .. }) => (tx_hash, false),
             };
             if tx_hash != request.req {
                 return Err(ProtocolError::OtherOwned(format!(
