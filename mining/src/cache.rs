@@ -54,7 +54,9 @@ impl BlockTemplateCache {
         Self { inner: Mutex::new(Inner::new(cache_lifetime)) }
     }
 
-    #[cfg(test)]
+    // Used by tests and by the EVM submit path (invalidate the cached template so
+    // a freshly admitted EVM tx is included on the next get_block_template).
+    #[cfg(any(test, feature = "evm"))]
     pub(crate) fn clear(&self) {
         self.inner.lock().clear();
     }

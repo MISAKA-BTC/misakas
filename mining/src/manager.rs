@@ -113,18 +113,29 @@ impl MiningManager {
     pub fn submit_evm_transaction(&self, raw: Vec<u8>) -> Result<kaspa_hashes::EvmH256, crate::evm_mempool::EvmMempoolError> {
         let info = kaspa_evm::tx::admit_tx_info(&raw).map_err(crate::evm_mempool::EvmMempoolError::Inadmissible)?;
         let now_secs = unix_now() / 1000;
-        let mut pool = self.evm_mempool.write();
-        pool.expire(now_secs);
-        pool.insert(crate::evm_mempool::PendingEvmTx {
-            hash: info.hash,
-            sender: info.sender,
-            nonce: info.nonce,
-            gas_limit: info.gas_limit,
-            max_fee_per_gas: info.max_fee_per_gas,
-            max_priority_fee_per_gas: info.max_priority_fee_per_gas,
-            raw,
-            added_at: now_secs,
-        })
+        let result = {
+            let mut pool = self.evm_mempool.write();
+            pool.expire(now_secs);
+            pool.insert(crate::evm_mempool::PendingEvmTx {
+                hash: info.hash,
+                sender: info.sender,
+                nonce: info.nonce,
+                gas_limit: info.gas_limit,
+                max_fee_per_gas: info.max_fee_per_gas,
+                max_priority_fee_per_gas: info.max_priority_fee_per_gas,
+                raw,
+                added_at: now_secs,
+            })
+        };
+        // A newly admitted EVM tx changes the next template's payload even when the
+        // virtual state (the template-cache key) is unchanged. Drop the cached
+        // template so the next get_block_template rebuilds and includes it, instead
+        // of serving a stale (payload-less) template for up to the cache lifetime —
+        // which would delay first inclusion of a freshly submitted tx / burst.
+        if result.is_ok() {
+            self.block_template_cache.clear();
+        }
+        result
     }
 
     /// Non-`evm` builds cannot decode/admit EVM transactions (the lane is
@@ -203,6 +214,69 @@ impl MiningManager {
         self.evm_mempool.read().contains(tx_hash)
     }
 
+    /// Build this template's own EVM payload candidates: expire by TTL, prune
+    /// already-accepted txs (nonce below the sender's canonical state nonce),
+    /// then select per-sender CONTIGUOUS, byte- and declared-gas-capped,
+    /// effective-tip-ordered runs (inclusion only — acceptance is a later block).
+    ///
+    /// On a hard consensus-read failure for the canonical state nonces, this
+    /// emits an EMPTY EVM payload this template (+WARN) rather than selecting
+    /// against a zeroed view. A zeroed view (the previous `unwrap_or_default()`)
+    /// makes the selector hunt for nonce 0 and silently DROP every sender whose
+    /// real nonce is higher — stranding every pending tx at
+    /// `included_in=[] / last_skip_class=0` (payload starvation) until the read
+    /// recovers, instead of harmlessly skipping the EVM payload for one block.
+    /// The account-nonce + base-fee reads are skipped entirely while the pool is
+    /// empty (the common case, and always so in a non-evm build).
+    fn build_evm_template_data(&self, consensus: &dyn ConsensusApi) -> kaspa_consensus_core::evm::EvmTemplateData {
+        use kaspa_consensus_core::evm::{
+            EVM_INITIAL_BASE_FEE, MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
+            MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK,
+        };
+        let mut pool = self.evm_mempool.write();
+        pool.expire(unix_now() / 1000);
+        let transactions = if pool.is_empty() {
+            Vec::new()
+        } else {
+            let senders = pool.pending_senders();
+            match consensus.get_evm_account_nonces(&senders) {
+                Ok(state_nonces) => {
+                    pool.prune_below_state_nonce(&state_nonces);
+                    // base fee from the SAME EVM head; absent head (early chain) or a
+                    // read error => the genesis initial base fee (effective-tip ordering
+                    // only — never a silent zero-by-error that would mis-rank tips).
+                    let base_fee = match consensus.get_evm_head_header() {
+                        Ok(Some(h)) => h.base_fee_per_gas.try_to_u128().unwrap_or(EVM_INITIAL_BASE_FEE as u128),
+                        _ => EVM_INITIAL_BASE_FEE as u128,
+                    };
+                    pool.select_candidates(
+                        MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK,
+                        // A payload may not declare more gas than a chain block can accept.
+                        MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
+                        base_fee,
+                        &state_nonces,
+                    )
+                }
+                Err(e) => {
+                    warn!(
+                        "EVM template: canonical state-nonce view unavailable ({e}); emitting an empty EVM payload this template (pending senders={}). \
+                         Selecting against a zeroed nonce view would strand every higher-nonce sender at included_in=[]/last_skip_class=0.",
+                        senders.len()
+                    );
+                    Vec::new()
+                }
+            }
+        };
+        kaspa_consensus_core::evm::EvmTemplateData {
+            evm_coinbase: self.evm_fee_recipient.unwrap_or_default(),
+            transactions,
+            // §9.2: queued deposit claims for the own-payload system ops. The VSP
+            // re-validates each against the live selected-parent view and drops
+            // stale ones, so this over-approximates (cap = per-block consensus limit).
+            system_ops: pool.select_claims(MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK),
+        }
+    }
+
     pub fn get_block_template(&self, consensus: &dyn ConsensusApi, miner_data: &MinerData) -> MiningManagerResult<BlockTemplate> {
         let virtual_state_approx_id = consensus.get_virtual_state_approx_id();
         let mut cache_lock = self.block_template_cache.lock(virtual_state_approx_id);
@@ -229,50 +303,14 @@ impl MiningManager {
         // We remove recursion seen in blockTemplateBuilder.BuildBlockTemplate here.
         debug!("Building a new block template...");
         let _swo = Stopwatch::<22>::with_threshold("build_block_template full loop");
-        // kaspa-pq EVM Lane v0.4 (§15 step 6): the node's own payload candidates,
-        // fee-ordered + nonce-ascending + byte-capped. Selected once per template
-        // (inclusion only — acceptance/execution happens in a later chain block).
-        let evm_template_data = {
-            let mut pool = self.evm_mempool.write();
-            pool.expire(unix_now() / 1000);
-            // §15 step 6 + liveness hotfix: prune already-accepted txs (nonce below the
-            // sender's canonical state nonce) and select per-sender CONTIGUOUS,
-            // gas-capped, effective-tip-ordered runs. The account-nonce + base-fee
-            // consensus reads are skipped entirely when the pool holds no txs (the
-            // common case, and always so in a non-evm build).
-            let transactions = if pool.is_empty() {
-                Vec::new()
-            } else {
-                let senders = pool.pending_senders();
-                let state_nonces = consensus.get_evm_account_nonces(&senders).unwrap_or_default();
-                pool.prune_below_state_nonce(&state_nonces);
-                let base_fee = consensus
-                    .get_evm_head_header()
-                    .ok()
-                    .flatten()
-                    .and_then(|h| h.base_fee_per_gas.try_to_u128())
-                    .unwrap_or(0);
-                pool.select_candidates(
-                    kaspa_consensus_core::evm::MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK,
-                    // A payload may not declare more gas than a chain block can accept.
-                    kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
-                    base_fee,
-                    &state_nonces,
-                )
-            };
-            kaspa_consensus_core::evm::EvmTemplateData {
-                evm_coinbase: self.evm_fee_recipient.unwrap_or_default(),
-                transactions,
-                // §9.2: queued deposit claims for the own-payload system ops. The
-                // VSP re-validates each against the live selected-parent view and
-                // drops stale ones, so this over-approximates (cap matches the
-                // per-block consensus limit).
-                system_ops: pool.select_claims(kaspa_consensus_core::evm::MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK),
-            }
-        };
         let mut attempts: u64 = 0;
         loop {
             attempts += 1;
+            // kaspa-pq EVM Lane v0.4 (§15 step 6): the node's own EVM payload
+            // candidates, RE-selected per build attempt (P0-2) — a retry after the
+            // virtual state advanced re-reads the live canonical nonces instead of
+            // reusing stale candidates. Inclusion only (acceptance is a later block).
+            let evm_template_data = self.build_evm_template_data(consensus);
 
             let selector = self.build_selector();
             let block_template_builder = BlockTemplateBuilder::new();
