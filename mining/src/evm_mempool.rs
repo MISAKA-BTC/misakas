@@ -750,4 +750,80 @@ mod tests {
         assert!(pool.is_empty());
         assert_eq!(pool.total_bytes(), 0);
     }
+
+    /// P1 (the acute liveness fix): the template prunes already-accepted txs (nonce below the
+    /// canonical state nonce) and selects the per-sender CONTIGUOUS run from the state nonce,
+    /// parking a sender that has a nonce gap at its state nonce.
+    #[test]
+    fn select_is_contiguous_from_state_nonce_and_prunes_accepted() {
+        let mut pool = EvmMempool::new();
+        // Sender A: pool has nonces 0,1,2,3; state nonce 2 ⇒ 0,1 are already accepted.
+        for n in 0..4u64 {
+            pool.insert(tx(0xA, n, 100, 10, n as u8 + 1)).unwrap();
+        }
+        // Sender B: pool has 5,6; state nonce 4 ⇒ a GAP at 4 ⇒ the whole sender parks.
+        pool.insert(tx(0xB, 5, 200, 10, 50)).unwrap();
+        pool.insert(tx(0xB, 6, 200, 10, 51)).unwrap();
+
+        let state: HashMap<EvmAddress, u64> =
+            HashMap::from([(EvmAddress::from_bytes([0xA; 20]), 2u64), (EvmAddress::from_bytes([0xB; 20]), 4u64)]);
+
+        pool.prune_below_state_nonce(&state);
+        assert_eq!(pool.len(), 4, "A:0 and A:1 (below state nonce 2) are pruned");
+
+        let sel = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &state);
+        // Only A's contiguous run 2,3 is selectable; B parks on its nonce-4 gap.
+        assert_eq!(sel.len(), 2, "A's contiguous run from state nonce 2; B parked on the gap");
+        assert_eq!(sel[0], vec![3u8; 10], "A nonce 2 (tag 3) first");
+        assert_eq!(sel[1], vec![4u8; 10], "then A nonce 3 (tag 4)");
+    }
+
+    /// P1 (one-sender DoS bound): a single sender cannot exceed the per-sender pending-tx cap;
+    /// a different sender is unaffected.
+    #[test]
+    fn per_sender_cap_bounds_one_sender() {
+        let mut pool = EvmMempool::new();
+        for n in 0..EVM_MEMPOOL_MAX_TXS_PER_SENDER as u64 {
+            pool.insert(tx(0xA, n, 100, 10, 0)).unwrap();
+        }
+        assert_eq!(pool.len(), EVM_MEMPOOL_MAX_TXS_PER_SENDER);
+        assert!(
+            matches!(pool.insert(tx(0xA, 9_999, 100, 10, 0xFF)), Err(EvmMempoolError::SenderTxLimit { .. })),
+            "one sender cannot exceed the per-sender cap"
+        );
+        assert!(pool.insert(tx(0xB, 0, 100, 10, 0xFE)).is_ok(), "a different sender is unaffected");
+    }
+
+    /// P1 (effective-tip ordering): a high-`max_fee` but ZERO-tip 1559 tx must NOT outrank a
+    /// lower-`max_fee` tx that actually pays a tip — the miner's revenue is the tip.
+    #[test]
+    fn selection_orders_by_effective_tip_not_max_fee() {
+        let mut pool = EvmMempool::new();
+        let zero_tip = PendingEvmTx {
+            hash: EvmH256::from_bytes([0xA, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            sender: EvmAddress::from_bytes([0xA; 20]),
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 1_000, // high ceiling …
+            max_priority_fee_per_gas: 0, // … but no tip
+            raw: vec![0xA1; 10],
+            added_at: 1_000,
+        };
+        let real_tip = PendingEvmTx {
+            hash: EvmH256::from_bytes([0xB, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            sender: EvmAddress::from_bytes([0xB; 20]),
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 500, // lower ceiling …
+            max_priority_fee_per_gas: 100, // … but a real tip
+            raw: vec![0xB2; 10],
+            added_at: 1_000,
+        };
+        pool.insert(zero_tip).unwrap();
+        pool.insert(real_tip).unwrap();
+        // base_fee 400: zero_tip effective tip = min(0, 1000-400) = 0; real_tip = min(100, 500-400) = 100.
+        let sel = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 400, &HashMap::new());
+        assert_eq!(sel.len(), 2);
+        assert_eq!(sel[0], vec![0xB2; 10], "the paying tx (real tip) is selected before the zero-tip high-max-fee tx");
+    }
 }
