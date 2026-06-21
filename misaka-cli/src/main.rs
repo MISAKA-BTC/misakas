@@ -19,9 +19,11 @@
 //! `exit`) so systemd / shell / monitors can branch on them.
 
 mod eth;
+mod keys;
 mod node;
+mod wallet;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 /// Stable process exit codes (shared with the wider `misaka` CLI design).
 pub mod exit {
@@ -33,6 +35,8 @@ pub mod exit {
     pub const NODE_NOT_SYNCED: i32 = 5;
     pub const TX_REJECTED: i32 = 6;
     pub const TIMEOUT_PENDING: i32 = 7;
+    pub const WALLET_LOCKED: i32 = 8;
+    pub const UNSAFE_REFUSED: i32 = 10;
 }
 
 /// A CLI error that carries the process exit code to surface.
@@ -100,6 +104,135 @@ enum Command {
     /// EVM-lane operations (read-only in this slice).
     #[command(subcommand)]
     Evm(EvmCmd),
+    /// PQ wallet operations (UTXO list / consolidate / send).
+    #[command(subcommand)]
+    Wallet(WalletCmd),
+    /// Key management (generate / show address). The secret is never a CLI arg.
+    #[command(subcommand)]
+    Key(KeyCmd),
+}
+
+/// Key-source flags shared by keyed commands. The secret is loaded only from a
+/// permission-checked file or stdin — NEVER as a command-line value.
+#[derive(Args, Debug, Clone)]
+struct KeyArgs {
+    /// Path to a hex 32-byte ML-DSA-87 seed file (perms-checked).
+    #[arg(long, env = "MISAKA_KEY_FILE")]
+    key_file: Option<String>,
+    /// Read the hex seed from stdin instead of a file.
+    #[arg(long)]
+    key_stdin: bool,
+}
+impl KeyArgs {
+    fn source(&self) -> keys::KeySource {
+        keys::KeySource { key_file: self.key_file.clone(), key_stdin: self.key_stdin }
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum WalletCmd {
+    /// UTXO-set operations (list / consolidate).
+    #[command(subcommand)]
+    Utxo(UtxoCmd),
+    /// Send MSK to a recipient (dry-run unless --yes).
+    Send {
+        /// Recipient address (must match --network).
+        #[arg(long)]
+        to: String,
+        /// Amount in MSK (decimal, e.g. 10.5).
+        #[arg(long)]
+        amount: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum UtxoCmd {
+    /// Paged UTXO summary of an address (read-only; safe on huge addresses).
+    List {
+        /// Address to inspect; defaults to the key's funding address.
+        #[arg(long)]
+        address: Option<String>,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+    /// Merge many small self-UTXOs into fewer (chunked; dry-run unless --yes).
+    Consolidate {
+        /// Max inputs per consolidation tx (each ML-DSA input ≈7 KB; capped at 20).
+        #[arg(long, default_value_t = 20)]
+        max_inputs: usize,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum KeyCmd {
+    /// Generate a fresh ML-DSA-87 seed to a 0600 file and print its address.
+    Gen {
+        /// Output seed file path (refuses to overwrite).
+        #[arg(long)]
+        out: String,
+    },
+    /// Print the funding (P2PKH-ML-DSA) address for a key.
+    Address {
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+}
+
+/// Parse a decimal MSK string (e.g. "10.5") into sompi (1 MSK = 1e8 sompi).
+fn parse_msk_to_sompi(s: &str) -> Result<u64, CliError> {
+    let (whole, frac) = match s.split_once('.') {
+        Some((w, f)) => (w, f),
+        None => (s, ""),
+    };
+    if whole.is_empty() && frac.is_empty() {
+        return Err(CliError::new(exit::GENERIC, format!("invalid amount '{s}'")));
+    }
+    let whole: u64 = if whole.is_empty() { 0 } else { whole.parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))? };
+    if frac.len() > 8 || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(CliError::new(exit::GENERIC, format!("amount '{s}' has >8 fractional digits (1 MSK = 1e8 sompi)")));
+    }
+    let frac_sompi: u64 = format!("{frac:0<8}").parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))?;
+    whole.checked_mul(100_000_000).and_then(|w| w.checked_add(frac_sompi)).ok_or_else(|| CliError::new(exit::GENERIC, "amount overflow".to_string()))
+}
+
+fn prefix_of(network: &str) -> Result<kaspa_addresses::Prefix, CliError> {
+    use std::str::FromStr;
+    let net = kaspa_consensus_core::network::NetworkId::from_str(network)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("bad --network '{network}': {e}")))?;
+    Ok(net.network_type().into())
+}
+
+fn key_gen(ctx: &node::Ctx, out: &str) -> CliResult {
+    let prefix = prefix_of(&ctx.network)?;
+    let (addr, _seed) = keys::generate(out, prefix)?;
+    match ctx.output {
+        OutputFormat::Human => {
+            println!("Wrote a new ML-DSA-87 seed to {out} (mode 0600). BACK IT UP — it cannot be recovered.");
+            println!("Address: {addr}");
+        }
+        OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "file": out, "address": addr.to_string() })),
+    }
+    Ok(())
+}
+
+fn key_address(ctx: &node::Ctx, ks: &keys::KeySource) -> CliResult {
+    let prefix = prefix_of(&ctx.network)?;
+    let addr = ks.load_key()?.funding_address(prefix);
+    match ctx.output {
+        OutputFormat::Human => println!("{addr}"),
+        OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "address": addr.to_string() })),
+    }
+    Ok(())
 }
 
 #[derive(Subcommand, Debug)]
@@ -182,6 +315,16 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => eth::tx_status(&ctx, &hash),
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => eth::tx_wait(&ctx, &hash, timeout, poll),
+        Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await,
+        Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, yes, key })) => {
+            wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes).await
+        }
+        Command::Wallet(WalletCmd::Send { to, amount, yes, key }) => match parse_msk_to_sompi(&amount) {
+            Ok(sompi) => wallet::send(&ctx, &key.source(), &to, sompi, !yes, yes).await,
+            Err(e) => Err(e),
+        },
+        Command::Key(KeyCmd::Gen { out }) => key_gen(&ctx, &out),
+        Command::Key(KeyCmd::Address { key }) => key_address(&ctx, &key.source()),
     };
 
     match result {
