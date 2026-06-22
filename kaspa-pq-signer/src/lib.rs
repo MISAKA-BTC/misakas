@@ -25,7 +25,7 @@ use kaspa_consensus_core::{
     dns_finality::{
         HostId, SignedEpochRecord, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata, SignerOutcome,
         SignerPolicy, SignerRequest, SignerResponse, SignedEpochCheckOutcome, SigningPurpose, compute_signer_audit_chain_entry,
-        signature_fingerprint,
+        signature_fingerprint, ATTESTATION_MLDSA87_CONTEXT, TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
     },
     tx::TransactionOutpoint,
 };
@@ -204,6 +204,39 @@ impl SignerState {
         // (1) Wellformedness: the purpose tag MUST match the typed digest variant (audit H-03).
         if !req.purpose_matches_digest() {
             return Err(SignerError::PolicyViolation("purpose tag does not match message_digest variant".into()));
+        }
+        // (1-C02) Bind the ML-DSA-87 signing CONTEXT to the purpose (audit C-02, Critical).
+        // The context is the cryptographic domain separator that makes a signature
+        // verify as a SPECIFIC operation. Without this binding a caller could submit
+        // purpose=Unbond with the Unbond(attestation_digest) variant AND
+        // context=ATTESTATION_MLDSA87_CONTEXT: purpose_matches_digest passes (Unbond
+        // tag == Unbond digest), the Attestation-only equivocation guard below is
+        // SKIPPED (purpose != Attestation), and the produced signature nonetheless
+        // verifies as a canonical attestation — a double-sign from an isolated key
+        // that defeats the whole point of the strict signer. So the three overlay
+        // contexts are RESERVED to their matching purpose, and a Transaction may not
+        // borrow any of them (it carries its own tx-domain context).
+        const OVERLAY_CONTEXTS: [&[u8]; 3] =
+            [ATTESTATION_MLDSA87_CONTEXT, UNBOND_REQUEST_CONTEXT, TAKEOVER_TOKEN_CONTEXT];
+        let required_ctx: Option<&[u8]> = match req.purpose {
+            SigningPurpose::Attestation => Some(ATTESTATION_MLDSA87_CONTEXT),
+            SigningPurpose::Unbond => Some(UNBOND_REQUEST_CONTEXT),
+            SigningPurpose::TakeoverToken => Some(TAKEOVER_TOKEN_CONTEXT),
+            SigningPurpose::Transaction => None,
+        };
+        match required_ctx {
+            Some(ctx) if req.context.as_slice() != ctx => {
+                return Err(SignerError::PolicyViolation(format!(
+                    "signing context does not match purpose {:?} (audit C-02)",
+                    req.purpose
+                )));
+            }
+            None if OVERLAY_CONTEXTS.iter().any(|c| *c == req.context.as_slice()) => {
+                return Err(SignerError::PolicyViolation(
+                    "Transaction purpose may not borrow an overlay signing context (audit C-02)".into(),
+                ));
+            }
+            _ => {}
         }
         // (1a) Optional purpose denylist (e.g. a validator-only signer that refuses Transaction).
         if self.denied_purposes.contains(&req.purpose) {
@@ -532,6 +565,53 @@ mod tests {
         let resp = s.handle_request(&req, Hash::default(), 1000);
         let sig = resp.result.expect("permissive signs a well-formed tx request");
         assert_eq!(sig.len(), 4627, "ML-DSA-87 signature length");
+    }
+
+    /// Audit C-02 (Critical): a request must not be able to sign under another
+    /// operation's cryptographic context. The cross-purpose forgery —
+    /// purpose=Unbond + Unbond(attestation_digest) + context=ATTESTATION — would
+    /// otherwise yield a valid attestation signature while SKIPPING the
+    /// attestation equivocation guard. Even a STRICT signer must refuse it.
+    #[test]
+    fn rejects_cross_purpose_context_borrowing_c02() {
+        use kaspa_consensus_core::dns_finality::UNBOND_REQUEST_CONTEXT;
+        let k = key(0x42);
+        let vid = k.validator_id;
+        let mut s = SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("c02"), Hash::default()).unwrap();
+        let att_msg = stake_attestation_message(b"test-net", 7, Hash64::from_bytes([0x55; 64]), 100, Hash64::default(), TransactionOutpoint::default());
+
+        // Attack A: Unbond purpose borrowing the ATTESTATION context.
+        let forged = SignerRequest {
+            request_id: 1,
+            validator_id: vid,
+            purpose: SigningPurpose::Unbond,
+            context: ATTESTATION_MLDSA87_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::Unbond(att_msg),
+            metadata: SignerMetadata::None,
+        };
+        assert!(s.handle_request(&forged, Hash::default(), 1000).result.is_err(), "C-02: Unbond may not sign under the attestation context");
+
+        // Attack B (reverse): Transaction borrowing an overlay context.
+        let forged2 = SignerRequest {
+            request_id: 2,
+            validator_id: vid,
+            purpose: SigningPurpose::Transaction,
+            context: UNBOND_REQUEST_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0x66; 64])),
+            metadata: SignerMetadata::None,
+        };
+        assert!(s.handle_request(&forged2, Hash::default(), 1000).result.is_err(), "C-02: Transaction may not borrow an overlay context");
+
+        // A well-formed Unbond under ITS OWN context still signs.
+        let legit = SignerRequest {
+            request_id: 3,
+            validator_id: vid,
+            purpose: SigningPurpose::Unbond,
+            context: UNBOND_REQUEST_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::Unbond(Hash::from_bytes([0x77; 32])),
+            metadata: SignerMetadata::None,
+        };
+        assert!(s.handle_request(&legit, Hash::default(), 1000).result.is_ok(), "a well-formed Unbond under its own context still signs");
     }
 
     #[test]
