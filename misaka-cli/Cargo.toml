@@ -28,5 +28,18 @@ serde_json.workspace = true
 clap = { workspace = true, features = ["env"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
+# EVM-send track (Tier B). Gated behind a feature so the DEFAULT `misaka` build
+# stays secp-free (observability + PQ wallet only); `--features evm-send` pulls
+# the secp256k1 stack for EVM key derivation + EIP-1559 signing.
+alloy-consensus = { version = "0.8", features = ["k256"], optional = true }
+alloy-signer = { version = "0.8", optional = true }
+alloy-signer-local = { version = "0.8", optional = true }
+alloy-eips = { version = "0.8", optional = true }
+alloy-primitives = { version = "0.8", features = ["rlp"], optional = true }
+kaspa-bip32 = { workspace = true, features = ["legacy-secp256k1"], optional = true }
+
+[features]
+evm-send = ["dep:alloy-consensus", "dep:alloy-signer", "dep:alloy-signer-local", "dep:alloy-eips", "dep:alloy-primitives", "dep:kaspa-bip32"]
+
 [lints]
 workspace = true
