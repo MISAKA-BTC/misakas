@@ -442,4 +442,51 @@ mod tests {
         heads_store.set(heads).unwrap();
         assert_eq!(heads_store.get().unwrap(), heads);
     }
+
+    /// Audit H-01: the pruning processor reclaims per-block EVM state via
+    /// `delete_batch`. Deleting a pruned block's rows must remove exactly that
+    /// block's header/state/payload while a kept block (e.g. the pruning-point
+    /// anchor) is untouched.
+    #[test]
+    fn evm_stores_delete_batch_reclaims_only_the_pruned_block() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let hdr = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
+        let state = DbEvmStateStore::new(db.clone(), CachePolicy::Empty);
+        let payload = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty);
+
+        let header = EvmExecutionHeader { evm_number: 7, gas_used: 21_000, ..Default::default() };
+        let snap = EvmStateSnapshot { accounts: vec![] };
+        let pl = EvmExecutionPayload { transactions: vec![vec![9, 9]], ..Default::default() };
+
+        // Write two blocks: bh(1) will be "pruned", bh(2) is "kept".
+        let mut batch = WriteBatch::default();
+        for b in [bh(1), bh(2)] {
+            hdr.insert_batch(&mut batch, b, header.clone()).unwrap();
+            state.insert_batch(&mut batch, b, snap.clone()).unwrap();
+            payload.insert_batch(&mut batch, b, pl.clone()).unwrap();
+        }
+        db.write(batch).unwrap();
+
+        // Prune bh(1) (the exact set of deletes the pruning processor issues).
+        let mut batch = WriteBatch::default();
+        hdr.delete_batch(&mut batch, bh(1)).unwrap();
+        state.delete_batch(&mut batch, bh(1)).unwrap();
+        payload.delete_batch(&mut batch, bh(1)).unwrap();
+        db.write(batch).unwrap();
+
+        // bh(1) reclaimed across all three stores...
+        assert!(hdr.get(bh(1)).is_err());
+        assert!(state.get(bh(1)).is_err());
+        assert!(matches!(payload.get(bh(1)), Err(StoreError::KeyNotFound(_))));
+        // ...and bh(2) (the kept anchor) untouched.
+        assert_eq!(hdr.get(bh(2)).unwrap(), header);
+        assert_eq!(state.get(bh(2)).unwrap(), snap);
+        assert_eq!(payload.get(bh(2)).unwrap(), pl);
+
+        // Deleting an absent key is an idempotent no-op (inert on no-EVM blocks).
+        let mut batch = WriteBatch::default();
+        assert!(hdr.delete_batch(&mut batch, bh(9)).is_ok());
+        assert!(state.delete_batch(&mut batch, bh(9)).is_ok());
+        assert!(payload.delete_batch(&mut batch, bh(9)).is_ok());
+    }
 }

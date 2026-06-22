@@ -8,6 +8,7 @@ use crate::{
     model::{
         services::reachability::{MTReachabilityService, ReachabilityService},
         stores::{
+            evm::{EvmHeaderStore, EvmPayloadStore, EvmStateStore},
             ghostdag::{CompactGhostdagData, GhostdagStoreReader},
             headers::HeaderStoreReader,
             past_pruning_points::PastPruningPointsStoreReader,
@@ -516,6 +517,19 @@ impl PruningProcessor {
                 // (recent) selected parent, so pruning deep blocks never breaks it.
                 self.reserve_balance_store.delete_batch(&mut batch, current).unwrap();
                 self.block_transactions_store.delete_batch(&mut batch, current).unwrap();
+                // kaspa-pq ADR-0020 (EVM lane): prune this pruned block's per-block
+                // EVM data (audit H-01 — without this the EVM stores grew O(state ×
+                // blocks) and were never reclaimed). All keyed by the L1 block hash;
+                // a no-op (delete-of-absent) on nets/blocks with no EVM rows, so it
+                // is inert on mainnet/simnet and on pre-activation blocks. The
+                // executor only ever seeds from the selected-parent snapshot (a
+                // recent, kept block) and the pruning-point anchor snapshot is in
+                // keep_blocks, so deleting buried blocks' EVM state is safe; archival
+                // nodes skip pruning entirely and retain full EVM history.
+                self.evm_state_store.delete_batch(&mut batch, current).unwrap();
+                self.evm_header_store.delete_batch(&mut batch, current).unwrap();
+                self.evm_payload_store.delete_batch(&mut batch, current).unwrap();
+                self.evm_receipts_store.delete_batch(&mut batch, current).unwrap();
 
                 if let Some(&affiliated_proof_level) = keep_relations.get(&current) {
                     if statuses_write.get(current).optional().unwrap().is_some_and(|s| s.is_valid()) {
