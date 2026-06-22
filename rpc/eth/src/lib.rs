@@ -498,13 +498,27 @@ fn parse_slot_param(params: &Value, idx: usize) -> EthResult<EvmU256> {
 
 // --- eth_call / eth_estimateGas (Increment 4) ---
 
+/// eth_call / eth_estimateGas execute only against the latest head. Reject a
+/// historical block selector with a clear error instead of silently returning a
+/// head result for a historical query (audit H-03). `latest`/`pending`/absent OK.
+fn require_latest_exec_block(params: &Value, idx: usize) -> EthResult<()> {
+    match params.as_array().and_then(|a| a.get(idx)).and_then(|v| v.as_str()) {
+        None | Some("latest") | Some("pending") => Ok(()),
+        Some(other) => Err(EthRpcError::invalid_params(format!(
+            "eth_call/eth_estimateGas execute only at \"latest\"; historical execution at \"{other}\" is not supported"
+        ))),
+    }
+}
+
 async fn eth_call_handler(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    require_latest_exec_block(params, 1)?;
     let req = parse_call_request(params)?;
     let out = provider.eth_call(req).await?;
     Ok(json!(format!("0x{}", faster_hex::hex_string(&out))))
 }
 
 async fn eth_estimate_gas_handler(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    require_latest_exec_block(params, 1)?;
     let req = parse_call_request(params)?;
     Ok(quantity(provider.estimate_gas(req).await? as u128))
 }
