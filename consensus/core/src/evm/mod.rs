@@ -154,6 +154,16 @@ pub const MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK: u64 = EVM_GAS_LIMIT;
 /// Fixed gas charged by a successful (or user-fault-reverted) `F002` withdraw
 /// call, on top of the carrying tx's intrinsic gas. Frozen at activation.
 pub const F002_WITHDRAW_GAS: u64 = 9_000;
+/// Max `WithdrawOp`s an accepting chain block may MATERIALIZE (audit M-03): each
+/// withdraw adds a synthetic UTXO output + MuHash/index/script work that the flat
+/// F002 EVM gas under-prices, so the count of L1-materialized withdrawals must be
+/// independently bounded (mirrors the deposit-claim per-block cap). ENFORCEMENT IS
+/// FENCED + NOT YET WIRED — see `evm_f002_withdraw_cap_activation_daa_score` and
+/// `docs/adr/0020-…` / the executor note: the safe enforcement is a per-tx class-2
+/// skip once the block's withdraw count would exceed this cap (transact-without-
+/// commit so the skipped tx's state never commits), implemented + supply-invariant-
+/// tested as a dedicated activation, NOT a rushed change. Inert until activated.
+pub const MAX_WITHDRAWALS_PER_EVM_BLOCK: usize = 256;
 /// Max byte length of the destination `ScriptPublicKey` SCRIPT a withdraw may
 /// name (the standard ML-DSA P2PKH script is 69 bytes; this is a sanity bound,
 /// the class check is the real gate).
