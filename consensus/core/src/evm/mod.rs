@@ -808,6 +808,11 @@ pub struct EvmTxReceiptView {
     pub accepting_block: Hash64,
     pub evm_number: u64,
     pub receipt_index: u32,
+    /// Block-global index of this receipt's FIRST log = the sum of log counts of
+    /// all receipts before it in the accepting block. The eth-rpc adapter renders
+    /// each log's `logIndex` as `log_index_offset + i` so a receipt's `logIndex`
+    /// matches `eth_getLogs` (audit H-05 — both must be block-global).
+    pub log_index_offset: u32,
     pub receipt: EvmReceipt,
 }
 

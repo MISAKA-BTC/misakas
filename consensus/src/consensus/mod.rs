@@ -1482,10 +1482,14 @@ impl ConsensusApi for Consensus {
                 continue; // defensive: index row out of sync with the receipts row
             }
             let evm_number = self.storage.evm_header_store.get(*accepting).optional().unwrap().map(|h| h.evm_number).unwrap_or_default();
+            // Block-global offset of this receipt's first log (audit H-05): the
+            // count of all logs in the receipts before this one in the block.
+            let log_index_offset: u32 = receipts.receipts[..idx].iter().map(|r| r.logs.len() as u32).sum();
             return Ok(Some(kaspa_consensus_core::evm::EvmTxReceiptView {
                 accepting_block: *accepting,
                 evm_number,
                 receipt_index: *receipt_index,
+                log_index_offset,
                 receipt: receipts.receipts[idx].clone(),
             }));
         }

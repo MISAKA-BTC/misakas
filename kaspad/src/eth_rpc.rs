@@ -158,6 +158,8 @@ impl EthProvider for NodeEthProvider {
                 tx_index: v.receipt_index,
                 gas_used: v.receipt.gas_used,
                 cumulative_gas_used: v.receipt.cumulative_gas_used,
+                log_index_offset: v.log_index_offset,
+                logs_bloom: kaspa_evm::roots::receipt_logs_bloom(&v.receipt),
                 logs: v
                     .receipt
                     .logs

@@ -64,12 +64,24 @@ fn bloom_accrue(bloom: &mut [u8; EVM_BLOOM_SIZE], data: &[u8]) {
 pub fn logs_bloom(receipts: &[EvmReceipt]) -> [u8; EVM_BLOOM_SIZE] {
     let mut bloom = [0u8; EVM_BLOOM_SIZE];
     for r in receipts {
-        for log in &r.logs {
-            bloom_accrue(&mut bloom, log.address.as_ref());
-            for topic in &log.topics {
-                bloom_accrue(&mut bloom, topic.as_bytes().as_slice());
-            }
-        }
+        accrue_receipt(&mut bloom, r);
     }
     bloom
+}
+
+/// The logs bloom for a SINGLE receipt (the standard per-tx `logsBloom` the
+/// eth-rpc adapter renders; audit H-05 — was a zero constant).
+pub fn receipt_logs_bloom(receipt: &EvmReceipt) -> [u8; EVM_BLOOM_SIZE] {
+    let mut bloom = [0u8; EVM_BLOOM_SIZE];
+    accrue_receipt(&mut bloom, receipt);
+    bloom
+}
+
+fn accrue_receipt(bloom: &mut [u8; EVM_BLOOM_SIZE], r: &EvmReceipt) {
+    for log in &r.logs {
+        bloom_accrue(bloom, log.address.as_ref());
+        for topic in &log.topics {
+            bloom_accrue(bloom, topic.as_bytes().as_slice());
+        }
+    }
 }

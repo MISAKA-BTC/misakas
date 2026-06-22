@@ -123,6 +123,12 @@ pub struct EthReceipt {
     pub tx_index: u32,
     pub gas_used: u64,
     pub cumulative_gas_used: u64,
+    /// Block-global index of this receipt's first log (audit H-05): each log's
+    /// `logIndex` is rendered as `log_index_offset + i` so it matches eth_getLogs.
+    pub log_index_offset: u32,
+    /// The standard EIP-234 logs bloom over this receipt's logs (audit H-05 —
+    /// was a zero constant).
+    pub logs_bloom: [u8; 256],
     pub logs: Vec<EthLog>,
     /// Sender / recipient, recovered/decoded from the raw tx (`None` if the raw
     /// tx could not be located — degrades to a base receipt).
@@ -546,7 +552,7 @@ fn format_receipt(r: &EthReceipt) -> Value {
                 "blockHash": block_hash.clone(),
                 "transactionHash": tx_hash.clone(),
                 "transactionIndex": tx_index.clone(),
-                "logIndex": quantity(i as u128),
+                "logIndex": quantity((r.log_index_offset as u128) + i as u128),
                 "removed": false,
             })
         })
@@ -562,7 +568,7 @@ fn format_receipt(r: &EthReceipt) -> Value {
         "gasUsed": quantity(r.gas_used as u128),
         "contractAddress": r.contract_address.map(|a| json!(format!("0x{}", faster_hex::hex_string(&a)))).unwrap_or(Value::Null),
         "logs": logs,
-        "logsBloom": format!("0x{}", "00".repeat(256)),
+        "logsBloom": format!("0x{}", faster_hex::hex_string(&r.logs_bloom)),
         "status": if r.status { "0x1" } else { "0x0" },
         "type": quantity(r.tx_type as u128),
         "effectiveGasPrice": quantity(r.effective_gas_price),
