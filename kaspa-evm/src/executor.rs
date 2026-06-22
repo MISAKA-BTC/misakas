@@ -34,13 +34,13 @@ use crate::{env, roots, state, EvmExecError};
 use kaspa_consensus_core::evm::{
     DepositClaim, EvmAddress, EvmBloom, EvmExecutionHeader, EvmExecutionPayload, EvmExecutionResult, EvmLog, EvmReceipt,
     EvmSystemOp, EvmU256, WithdrawOp, EVM_GENESIS_STATE_ROOT, EVM_NATIVE_SCALE, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
-    SYSTEM_DEPOSIT_GAS_PER_CLAIM,
+    MAX_WITHDRAWALS_PER_EVM_BLOCK, SYSTEM_DEPOSIT_GAS_PER_CLAIM,
 };
 use kaspa_hashes::EvmH256;
 use revm::primitives::{Address, EVMError, ExecutionResult, B256, KECCAK_EMPTY, U256};
 use revm::{
     db::{AccountState, CacheDB, EmptyDB},
-    Evm,
+    DatabaseCommit, Evm,
 };
 
 /// One element of `AcceptedEvmTxs(B)`: a user tx drawn from a mergeset payload
@@ -84,6 +84,14 @@ pub struct EvmBlockInput<'a> {
     /// declared-gas prefix-take. The construction site copies it from the network
     /// params so production execution, snapshot replay and IBD all agree.
     pub gas_pool_v2_activation_daa_score: u64,
+    /// F002 withdrawal-cap fence (`Params::evm_f002_withdraw_cap_activation_daa_score`,
+    /// audit M-03). When `daa_score >= this`, a tx whose F002 withdrawals would push
+    /// the accepting block's running `WithdrawOp` count over
+    /// `MAX_WITHDRAWALS_PER_EVM_BLOCK` is a deterministic class-2 SKIP (its state is
+    /// NOT committed — no nonce/burn/withdrawal), so the per-block count of
+    /// L1-materialized withdrawals is bounded. Below the fence (inert), withdrawals
+    /// are uncapped and execution is byte-identical to before this change.
+    pub f002_withdraw_cap_activation_daa_score: u64,
 }
 
 #[inline]
@@ -94,6 +102,17 @@ fn b256_to_evmh256(b: B256) -> EvmH256 {
 #[inline]
 fn to_revm_address(a: &kaspa_consensus_core::evm::EvmAddress) -> Address {
     Address::from(a.as_bytes())
+}
+
+/// Number of F002 WithdrawOps a tx's logs would materialize (audit M-03 cap check).
+fn count_withdraws(result: &ExecutionResult) -> usize {
+    let mut n = 0;
+    for log in result.logs() {
+        if crate::withdraw::decode_withdraw_log(log).is_some() {
+            n += 1;
+        }
+    }
+    n
 }
 
 /// Run a block's EVM lane. Returns the committed result and the post-execution
@@ -166,6 +185,11 @@ pub fn execute_block_evm(
     // class-2 acceptance skips consume nothing, and a non-fitting tx does NOT block
     // later (smaller) txs. CHANGES execution results ⇒ activation-gated (consensus fork).
     let gas_pool_v2 = input.daa_score >= input.gas_pool_v2_activation_daa_score;
+    // Audit M-03: when active, cap the WithdrawOps an accepting block materializes
+    // at MAX_WITHDRAWALS_PER_EVM_BLOCK via a per-tx class-2 skip (see the
+    // commit-points below). Inert below the fence ⇒ withdrawals uncapped and
+    // execution byte-identical to before this change.
+    let withdraw_cap_active = input.daa_score >= input.f002_withdraw_cap_activation_daa_score;
 
     let mut skipped_tx_count: u32 = 0;
     // §16: per-candidate outcomes (parallel to input order) — store/RPC data
@@ -258,7 +282,27 @@ pub fn execute_block_evm(
         let tip_per_gas = effective_gas_price.saturating_sub(U256::from(basefee));
         evm.context.evm.env.tx = txenv;
 
-        match evm.transact_commit() {
+        // Audit M-03: when the withdrawal cap is active, execute WITHOUT committing,
+        // and skip (class-2, dropping the state) if this tx's withdrawals would push
+        // the block over MAX_WITHDRAWALS_PER_EVM_BLOCK. Inert ⇒ exactly
+        // `transact_commit()` (transact + commit), byte-identical to before.
+        let exec = if withdraw_cap_active {
+            match evm.transact() {
+                Ok(rs) => {
+                    if withdrawals.len() + count_withdraws(&rs.result) > MAX_WITHDRAWALS_PER_EVM_BLOCK {
+                        skipped_tx_count += 1; // class 2: state dropped — no nonce/burn/withdrawal/gas/receipt
+                        outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
+                        continue;
+                    }
+                    evm.db_mut().commit(rs.state);
+                    Ok(rs.result)
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            evm.transact_commit()
+        };
+        match exec {
             Ok(result) => {
                 let tx_gas = result.gas_used();
                 gas_used = gas_used.saturating_add(tx_gas);
@@ -361,7 +405,28 @@ pub fn execute_block_evm(
             let tip_per_gas = effective_gas_price.saturating_sub(U256::from(basefee));
             evm.context.evm.env.tx = txenv;
 
-            match evm.transact_commit() {
+            // Audit M-03: same withdrawal-cap gate as the v1 path. When active,
+            // a tx whose withdrawals would breach the per-block cap is a class-2
+            // skip with its state DROPPED (no commit ⇒ no gas-pool debit, no
+            // nonce/burn/withdrawal, not added to accepted_hashes). Inert ⇒
+            // exactly `transact_commit()`, byte-identical.
+            let exec = if withdraw_cap_active {
+                match evm.transact() {
+                    Ok(rs) => {
+                        if withdrawals.len() + count_withdraws(&rs.result) > MAX_WITHDRAWALS_PER_EVM_BLOCK {
+                            skipped_tx_count += 1; // class 2
+                            outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
+                            continue;
+                        }
+                        evm.db_mut().commit(rs.state);
+                        Ok(rs.result)
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                evm.transact_commit()
+            };
+            match exec {
                 Ok(result) => {
                     let tx_gas = result.gas_used();
                     // Debit the pool by ACTUAL gas. `tx_gas ≤ gas_limit ≤ remaining` holds
@@ -699,6 +764,9 @@ mod tests {
             payload,
             accepted_txs: accepted,
             gas_pool_v2_activation_daa_score: u64::MAX,
+            // Cap inert by default (daa_score 42 < u64::MAX) — existing tests keep
+            // byte-identical behavior; the cap test below overrides it.
+            f002_withdraw_cap_activation_daa_score: u64::MAX,
         }
     }
 
@@ -838,6 +906,7 @@ mod tests {
             payload: &empty_payload,
             accepted_txs: &[],
             gas_pool_v2_activation_daa_score: u64::MAX,
+            f002_withdraw_cap_activation_daa_score: u64::MAX,
         };
         // FULL path: seed the parent state, execute, extract.
         let (full_child, full_child_db) = execute_block_evm(seed_cachedb(&parent_snapshot).unwrap(), &child_input).unwrap();
@@ -1103,6 +1172,63 @@ mod tests {
         let snapshot = crate::snapshot::snapshot_from_cachedb(&db);
         let actual: u128 = snapshot.accounts.iter().map(|a| a.balance.try_to_u128().unwrap()).sum();
         assert_eq!(actual, expected_total);
+    }
+
+    /// Audit M-03: with the withdrawal cap ACTIVE, a block carrying MAX+1
+    /// withdraw txs accepts exactly MAX (one WithdrawOp each), class-2 SKIPS the
+    /// overflow tx, and the skipped tx's state never commits (sender nonce
+    /// advances by only MAX) — supply-neutral. INERT ⇒ all MAX+1 materialize.
+    /// Exercised on BOTH the v1 (strict-prefix) and v2 (gas-pool) paths.
+    #[test]
+    fn withdraw_cap_skips_overflow_and_preserves_state() {
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        let f002 = crate::withdraw::f002_address();
+        let n = MAX_WITHDRAWALS_PER_EVM_BLOCK + 1; // one past the cap
+
+        // MAX+1 withdraw txs from one sender (nonces 0..=MAX), 1 sompi each.
+        let mut sender = None;
+        let mut raws = Vec::with_capacity(n);
+        for i in 0..n {
+            let (s, raw) = signed_call(0x11, i as u64, f002, EVM_NATIVE_SCALE as u128, 60_000, basefee, withdraw_calldata(&spk));
+            sender = Some(s);
+            raws.push(raw);
+        }
+        let sender = sender.unwrap();
+        let cands: Vec<AcceptedTxCandidate> = raws.into_iter().map(|r| cand(r, 0xFE)).collect();
+        // Fund generously via a same-block deposit (covers MAX+1 txs' gas + withdraws).
+        let payload = EvmExecutionPayload {
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: Default::default(),
+                evm_address: EvmAddress::from_bytes(sender.into_array()),
+                amount_sompi: 1_000_000_000, // 1e19 wei — ample
+                claim_tip_sompi: 0,
+            })],
+            evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
+            ..Default::default()
+        };
+        // Helper: sender nonce after a run (proves the overflow tx did NOT commit).
+        let nonce_of = |db: &mut CacheDB<EmptyDB>| db.basic(sender).unwrap().map(|a| a.nonce).unwrap_or(0);
+
+        for (label, gas_pool_v2_fence) in [("v2", 0u64), ("v1", u64::MAX)] {
+            // --- cap ACTIVE (fence 0 ≤ daa 42) ---
+            let input = EvmBlockInput {
+                gas_pool_v2_activation_daa_score: gas_pool_v2_fence,
+                f002_withdraw_cap_activation_daa_score: 0,
+                ..input_with(&payload, &cands)
+            };
+            let (res, mut db) = execute_block_evm(CacheDB::new(EmptyDB::default()), &input).unwrap();
+            assert_eq!(res.withdrawals.len(), MAX_WITHDRAWALS_PER_EVM_BLOCK, "{label}: cap bounds materialized withdrawals");
+            assert_eq!(res.header.accepted_tx_count, MAX_WITHDRAWALS_PER_EVM_BLOCK as u32, "{label}: MAX accepted");
+            assert_eq!(res.header.skipped_tx_count, 1, "{label}: exactly the overflow tx skipped");
+            assert_eq!(nonce_of(&mut db), MAX_WITHDRAWALS_PER_EVM_BLOCK as u64, "{label}: overflow tx state NOT committed (nonce advanced only MAX)");
+
+            // --- cap INERT (fence u64::MAX) ⇒ uncapped, all MAX+1 materialize ---
+            let inert = EvmBlockInput { f002_withdraw_cap_activation_daa_score: u64::MAX, ..input };
+            let (res2, _db2) = execute_block_evm(CacheDB::new(EmptyDB::default()), &inert).unwrap();
+            assert_eq!(res2.withdrawals.len(), n, "{label}: inert ⇒ uncapped (all {n} withdrawals)");
+            assert_eq!(res2.header.skipped_tx_count, 0, "{label}: inert ⇒ no cap skip");
+        }
     }
 
     /// v0.4 §9.3 / §6.1 class 4: user-input faults at F002 (non-multiple

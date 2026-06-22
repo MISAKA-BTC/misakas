@@ -372,6 +372,14 @@ pub struct Params {
     /// inert (every net until a deploy sets a finite score). Mirrors the
     /// `evm_activation_daa_score` fence precedent.
     pub evm_gas_pool_v2_activation_daa_score: u64,
+
+    /// Audit M-03: DAA score at/after which the F002 withdrawal cap is enforced —
+    /// a tx whose withdrawals would push an accepting block over
+    /// `MAX_WITHDRAWALS_PER_EVM_BLOCK` is a class-2 skip. `u64::MAX` ⇒ inert
+    /// (withdrawals uncapped, execution byte-identical). A consensus rule, so it
+    /// is activation-fenced like the gas-pool-v2 / evm-activation precedents;
+    /// activating it is a coordinated deploy.
+    pub evm_f002_withdraw_cap_activation_daa_score: u64,
 }
 
 impl Params {
@@ -578,6 +586,7 @@ impl Params {
             // kaspa-pq EVM lane activation is consensus-fixed, never runtime-overridable.
             evm_activation_daa_score: self.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: self.evm_gas_pool_v2_activation_daa_score,
+            evm_f002_withdraw_cap_activation_daa_score: self.evm_f002_withdraw_cap_activation_daa_score,
         }
     }
 }
@@ -975,6 +984,7 @@ pub const MAINNET_PARAMS: Params = Params {
     evm_activation_daa_score: u64::MAX,
     // gas-pool v2 ships inert on every network — a deploy sets a finite testnet score.
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
+    evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
 };
 
 pub const TESTNET_PARAMS: Params = Params {
@@ -1068,6 +1078,8 @@ pub const TESTNET_PARAMS: Params = Params {
     // state commitment splits. Set 2026-06-21 to ~90 min ahead of the live virtual
     // DAA (~2.102M) to cover the rolling mesh swap. Mainnet/simnet/devnet stay inert.
     evm_gas_pool_v2_activation_daa_score: 2_125_000,
+    // M-03 withdrawal cap: inert (u64::MAX) — its activation is a separate coordinated deploy.
+    evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
 };
 
 pub const SIMNET_PARAMS: Params = Params {
@@ -1131,6 +1143,7 @@ pub const SIMNET_PARAMS: Params = Params {
     evm_activation_daa_score: u64::MAX,
     // gas-pool v2 ships inert on every network — a deploy sets a finite testnet score.
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
+    evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
 };
 
 pub const DEVNET_PARAMS: Params = Params {
@@ -1149,6 +1162,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // EVM is genesis-active here, but the gas-pool v2 executor stays inert until a
     // deploy sets a finite activation score (consensus fork — see params docs).
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
+    evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
     // kaspa-pq: devnet now uses the same MISAKA DNS seeders as mainnet/testnet for automatic
     // peer discovery (devnet default P2P port is 26611, matching the live mesh — see
     // NetworkId::default_p2p_port). Nodes launched WITHOUT `--nodnsseed` resolve these to find

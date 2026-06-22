@@ -215,6 +215,7 @@ mod tests {
             payload,
             accepted_txs: accepted,
             gas_pool_v2_activation_daa_score: u64::MAX,
+            f002_withdraw_cap_activation_daa_score: u64::MAX,
         }
     }
 
