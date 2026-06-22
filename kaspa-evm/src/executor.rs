@@ -447,19 +447,11 @@ pub fn execute_block_evm(
                     if !tip.is_zero() && payload_cb != accepting_coinbase {
                         reroute_balance(evm.db_mut(), accepting_coinbase, payload_cb, tip)?;
                     }
-                    // AUDIT M-03 (FENCED, NOT YET ENFORCED): cap the WithdrawOps an
-                    // accepting block materializes at MAX_WITHDRAWALS_PER_EVM_BLOCK.
-                    // The ONLY safe enforcement is a per-tx class-2 SKIP once this
-                    // tx's withdrawals would push the block total over the cap —
-                    // because (a) transact_commit already applied the state, so the
-                    // skip must use transact()+conditional commit (and gate on the
-                    // activation fence so the inert path stays byte-identical to
-                    // today), and (b) a "block invalid if > cap" rule is unsafe:
-                    // acceptance is mergeset-determined, so a withdraw flood across
-                    // merged blocks could force an honest merging block invalid
-                    // (liveness DoS). MUST be a dedicated, supply-invariant-tested
-                    // change (mirror the gas-pool-v2 activation), across BOTH the v1
-                    // and v2 paths. Until then withdrawals are uncapped (inert).
+                    // AUDIT M-03: the WithdrawOp cap is ENFORCED at the commit point
+                    // above (the `withdraw_cap_active` branch class-2-skips a tx whose
+                    // withdrawals would breach MAX_WITHDRAWALS_PER_EVM_BLOCK, dropping
+                    // its state). By the time control reaches here the tx is committed
+                    // and within the cap, so this loop just materializes its withdraws.
                     let receipt_index = receipts.len() as u32;
                     let mut op_index = 0u32;
                     let mut withdrawn_wei: u128 = 0;
