@@ -525,6 +525,37 @@ pub trait ConsensusApi: Send + Sync {
         Ok(out)
     }
 
+    /// kaspa-pq EVM Lane (audit H-10): the canonical `(nonce, balance)` at the EVM head
+    /// for `addresses`. Same source + same `Err` (no snapshot) semantics as
+    /// [`Self::get_evm_account_nonces`]; an account absent from the snapshot is omitted
+    /// (caller treats it as nonce 0 / balance 0). `balance` is the
+    /// [`crate::evm::EvmU256`] wei balance saturated into a `u128` (a balance above
+    /// `u128::MAX` saturates UP, so it is never mistaken for "cannot pay"). Used by the
+    /// mining template path to skip selecting a sender's transaction when its committed
+    /// balance cannot cover the EIP-1559 up-front gas reservation — a guaranteed
+    /// class-2 skip at execution that would otherwise waste a payload slot. Pure local
+    /// template policy; never part of consensus, and a tx is never evicted by it (only
+    /// passed over for THIS template, so a later credit lets a future template pick it).
+    fn get_evm_account_states(
+        &self,
+        addresses: &[crate::evm::EvmAddress],
+    ) -> ConsensusResult<std::collections::HashMap<crate::evm::EvmAddress, (u64, u128)>> {
+        if addresses.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let wanted: std::collections::HashSet<crate::evm::EvmAddress> = addresses.iter().copied().collect();
+        let Some(s) = self.get_evm_state_snapshot_of(self.get_sink())? else {
+            return Err(ConsensusError::General("no committed EVM state snapshot at the sink"));
+        };
+        let mut out = std::collections::HashMap::with_capacity(addresses.len());
+        for acct in s.accounts {
+            if wanted.contains(&acct.address) {
+                out.insert(acct.address, (acct.nonce, acct.balance.try_to_u128().unwrap_or(u128::MAX)));
+            }
+        }
+        Ok(out)
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§16): the EVM "block" (header + L1 hash + tx
     /// hashes) of the L1 chain block `l1_hash`, for `eth_getBlockBy*`. `None`
     /// if that block has no EVM header.

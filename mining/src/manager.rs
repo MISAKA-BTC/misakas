@@ -35,6 +35,7 @@ use kaspa_consensusmanager::{ConsensusProxy, spawn_blocking};
 use kaspa_core::{debug, error, info, time::{unix_now, Stopwatch}, warn};
 use kaspa_mining_errors::{manager::MiningManagerError, mempool::RuleError};
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -247,8 +248,13 @@ impl MiningManager {
             Vec::new()
         } else {
             let senders = pool.pending_senders();
-            match consensus.get_evm_account_nonces(&senders) {
-                Ok(state_nonces) => {
+            // Audit H-10: fetch the committed (nonce, balance) view in one snapshot read.
+            // Balances let `select_candidates` skip senders that cannot pay a tx's
+            // up-front gas reservation (a guaranteed class-2 skip — wasted payload slot).
+            match consensus.get_evm_account_states(&senders) {
+                Ok(states) => {
+                    let state_nonces: HashMap<_, _> = states.iter().map(|(a, (n, _))| (*a, *n)).collect();
+                    let state_balances: HashMap<_, _> = states.iter().map(|(a, (_, b))| (*a, *b)).collect();
                     pool.prune_below_state_nonce(&state_nonces);
                     // base fee from the SAME EVM head; absent head (early chain) or a
                     // read error => the genesis initial base fee (effective-tip ordering
@@ -265,6 +271,7 @@ impl MiningManager {
                         MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
                         base_fee,
                         &state_nonces,
+                        Some(&state_balances),
                     )
                 }
                 Err(e) => {

@@ -495,12 +495,24 @@ impl EvmMempool {
     /// `state_nonces` is the live account-nonce view (absent sender ⇒ nonce 0). It is
     /// a pure local template policy: a stale or gapped pick only wastes a slot, never
     /// invalidates the node's own block.
+    ///
+    /// `state_balances` (audit H-10) is the matching committed-balance view, in wei
+    /// saturated to `u128` (absent sender ⇒ balance 0). When `Some`, a sender whose
+    /// running balance cannot cover a transaction's EIP-1559 up-front gas reservation
+    /// (`gas_limit × max_fee_per_gas`) is passed over for the rest of its run — that tx
+    /// would be a guaranteed class-2 skip at execution, so selecting it only wastes a
+    /// payload slot (the high-`max_fee` unfundable-Sybil squat). The deduction ignores
+    /// value transfers (so the check is LENIENT — it never drops a tx execution would
+    /// accept), and nothing is evicted: the tx stays pending and a later template
+    /// selects it once the sender's committed balance covers it. `None` disables the
+    /// filter (unchanged selection — used where no balance view is threaded).
     pub fn select_candidates(
         &self,
         max_payload_bytes: usize,
         max_declared_gas: u64,
         base_fee: u128,
         state_nonces: &HashMap<EvmAddress, u64>,
+        state_balances: Option<&HashMap<EvmAddress, u128>>,
     ) -> Vec<Vec<u8>> {
         // Distinct senders (BTreeMap keys are sorted, so a run of equal senders is contiguous).
         let mut senders: Vec<EvmAddress> = Vec::new();
@@ -556,17 +568,36 @@ impl EvmMempool {
         let base = EvmExecutionPayload::default().payload_bytes().len();
         let mut bytes_left = max_payload_bytes.saturating_sub(base);
         let mut gas_left = max_declared_gas;
+        // Audit H-10: per-sender running balance (lazily seeded from the committed view).
+        // Only consulted when `state_balances` is Some.
+        let mut balance_left: HashMap<EvmAddress, u128> = HashMap::new();
         let mut selected = Vec::new();
         while let Some(head) = heap.pop() {
             let run = &runs[&head.sender];
             let idx = next_idx[&head.sender];
             let tx = run[idx];
             let cost = 4 + tx.raw.len();
-            // Must fit BOTH budgets. A head that does not fit drops the rest of its
-            // run (its successors must not jump the nonce order).
-            if cost <= bytes_left && tx.gas_limit <= gas_left {
+            // Audit H-10: the EIP-1559 up-front gas reservation revm deducts before
+            // execution. value transfers are ignored (lenient — see the doc comment).
+            let gas_reservation = (tx.gas_limit as u128).saturating_mul(tx.max_fee_per_gas);
+            let affordable = match state_balances {
+                Some(bals) => {
+                    let remaining = *balance_left.entry(head.sender).or_insert_with(|| bals.get(&head.sender).copied().unwrap_or(0));
+                    remaining >= gas_reservation
+                }
+                None => true,
+            };
+            // Must be affordable AND fit BOTH budgets. A head that does not qualify drops
+            // the rest of its run (its successors must not jump the nonce order, and a
+            // higher nonce needs at least as much balance as this one).
+            if affordable && cost <= bytes_left && tx.gas_limit <= gas_left {
                 bytes_left -= cost;
                 gas_left -= tx.gas_limit;
+                if state_balances.is_some() {
+                    if let Some(remaining) = balance_left.get_mut(&head.sender) {
+                        *remaining = remaining.saturating_sub(gas_reservation);
+                    }
+                }
                 selected.push(tx.raw.clone());
                 if idx + 1 < run.len() {
                     next_idx.insert(head.sender, idx + 1);
@@ -605,7 +636,7 @@ mod tests {
     /// Convenience: the no-gas-cap, base-fee-0, no-state-nonce selection the
     /// pre-pagination tests exercised (all senders start at nonce 0).
     fn select(pool: &EvmMempool, max_payload_bytes: usize) -> Vec<Vec<u8>> {
-        pool.select_candidates(max_payload_bytes, u64::MAX, 0, &HashMap::new())
+        pool.select_candidates(max_payload_bytes, u64::MAX, 0, &HashMap::new(), None)
     }
 
     /// Build a pool DIRECTLY (bypassing the admission path) with one sender's
@@ -944,7 +975,7 @@ mod tests {
         pool.prune_below_state_nonce(&state);
         assert_eq!(pool.len(), 4, "A:0 and A:1 (below state nonce 2) are pruned");
 
-        let sel = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &state);
+        let sel = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &state, None);
         // Only A's contiguous run 2,3 is selectable; B parks on its nonce-4 gap.
         assert_eq!(sel.len(), 2, "A's contiguous run from state nonce 2; B parked on the gap");
         assert_eq!(sel[0], vec![3u8; 10], "A nonce 2 (tag 3) first");
@@ -973,7 +1004,7 @@ mod tests {
         // Payload #1: state nonce at START. The byte cap binds (2000×114 B ≫ 128 KiB),
         // so the selector takes the contiguous head [START, START+n1).
         let state1 = HashMap::from([(sender, START)]);
-        let first = pool.select_candidates(cap, u64::MAX, 0, &state1);
+        let first = pool.select_candidates(cap, u64::MAX, 0, &state1, None);
         let n1 = first.len();
         assert!(n1 > 0 && n1 < (END - START) as usize, "the run is byte-capped into a prefix, not all-or-nothing (got {n1})");
         let first_nonces: Vec<u64> = first.iter().map(|r| nonce_of(r)).collect();
@@ -986,7 +1017,7 @@ mod tests {
 
         // Payload #2: the TAIL carries forward (no re-packing of the accepted
         // head, no gap, no duplicate) — exactly what cb136a4 stranded.
-        let second = pool.select_candidates(cap, u64::MAX, 0, &state2);
+        let second = pool.select_candidates(cap, u64::MAX, 0, &state2, None);
         let second_nonces: Vec<u64> = second.iter().map(|r| nonce_of(r)).collect();
         let n2 = second.len();
         assert_eq!(
@@ -1012,7 +1043,7 @@ mod tests {
         let sender = EvmAddress::from_bytes([0x33; 20]);
         let pool = pool_with_sender_range(0x33, 0..100, 50); // 100×54 B ≪ 128 KiB ⇒ bytes don't bind
         let state = HashMap::from([(sender, 0u64)]);
-        let sel = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, 10 * 21_000, 0, &state);
+        let sel = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, 10 * 21_000, 0, &state, None);
         assert_eq!(sel.len(), 10, "run truncated by the declared-gas cap (10×21k), not the byte cap");
         let nonces: Vec<u64> = sel.iter().map(|r| nonce_of(r)).collect();
         assert_eq!(nonces, (0..10).collect::<Vec<_>>(), "contiguous head up to the gas budget");
@@ -1028,8 +1059,8 @@ mod tests {
         let sender = EvmAddress::from_bytes([0x55; 20]);
         let pool = pool_with_sender_range(0x55, START..START + 300, 110);
         let state = HashMap::from([(sender, START)]);
-        let a = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &state);
-        let b = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &state);
+        let a = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &state, None);
+        let b = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &state, None);
         assert_eq!(a, b, "the same head re-selects identically while the state nonce is static");
         assert_eq!(a.first().map(|r| nonce_of(r)), Some(START), "head starts at the state nonce");
     }
@@ -1078,8 +1109,43 @@ mod tests {
         pool.insert(zero_tip).unwrap();
         pool.insert(real_tip).unwrap();
         // base_fee 400: zero_tip effective tip = min(0, 1000-400) = 0; real_tip = min(100, 500-400) = 100.
-        let sel = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 400, &HashMap::new());
+        let sel = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 400, &HashMap::new(), None);
         assert_eq!(sel.len(), 2);
         assert_eq!(sel[0], vec![0xB2; 10], "the paying tx (real tip) is selected before the zero-tip high-max-fee tx");
+    }
+
+    /// Audit H-10: with a balance view, `select_candidates` skips a sender that cannot
+    /// cover a tx's up-front gas reservation (gas_limit × max_fee_per_gas). The tx is
+    /// not evicted — it is simply passed over for this template. Absent ⇒ balance 0.
+    #[test]
+    fn selection_skips_unfundable_senders_h10() {
+        // gas reservation per tx = 21_000 (tx() gas_limit) × max_fee.
+        let mut pool = EvmMempool::new();
+        pool.insert(tx(0xA, 0, 100, 10, 0xAA)).unwrap(); // tip 100, reservation 2_100_000
+        pool.insert(tx(0xB, 0, 50, 10, 0xBB)).unwrap(); // tip 50,  reservation 1_050_000
+        let addr_a = EvmAddress::from_bytes([0xA; 20]);
+        let nonces: HashMap<EvmAddress, u64> = HashMap::new();
+
+        // No balance view: both selected (A first — higher effective tip).
+        let all = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &nonces, None);
+        assert_eq!(all.len(), 2, "without a balance view, selection is unchanged");
+
+        // A funded, B absent (⇒ balance 0): only A is selected.
+        let mut bals: HashMap<EvmAddress, u128> = HashMap::new();
+        bals.insert(addr_a, 10_000_000);
+        let sel = pool.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &nonces, Some(&bals));
+        assert_eq!(sel.len(), 1, "the unfunded sender is skipped");
+        assert_eq!(sel[0], vec![0xAA; 10], "the funded sender's tx is the one selected");
+
+        // Running balance within ONE sender's run: balance covers 2 of 3 contiguous txs.
+        let mut pool2 = EvmMempool::new();
+        pool2.insert(tx(0xC, 0, 100, 10, 0xC0)).unwrap();
+        pool2.insert(tx(0xC, 1, 100, 10, 0xC1)).unwrap();
+        pool2.insert(tx(0xC, 2, 100, 10, 0xC2)).unwrap();
+        let addr_c = EvmAddress::from_bytes([0xC; 20]);
+        let mut bals2: HashMap<EvmAddress, u128> = HashMap::new();
+        bals2.insert(addr_c, 5_000_000); // covers 2 × 2_100_000 = 4_200_000, not the 3rd
+        let sel2 = pool2.select_candidates(MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, u64::MAX, 0, &HashMap::new(), Some(&bals2));
+        assert_eq!(sel2.len(), 2, "the running balance funds 2 of the sender's 3 contiguous txs");
     }
 }
