@@ -24,6 +24,7 @@ use alloy_signer_local::PrivateKeySigner;
 use kaspa_bip32::{secp256k1::SecretKey, DerivationPath, ExtendedPrivateKey, Language, Mnemonic, WordCount};
 use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use serde_json::json;
+use zeroize::Zeroizing;
 
 use crate::node::Ctx;
 use crate::{exit, CliError, CliResult, OutputFormat};
@@ -39,14 +40,16 @@ pub struct EvmKeySource {
 }
 
 impl EvmKeySource {
-    pub fn resolve(&self) -> Result<[u8; 32], CliError> {
+    /// Resolve the 32-byte secp256k1 secret. Returned in a `Zeroizing` wrapper so
+    /// the buffer is wiped on drop (audit M-07); it `Deref`s to `[u8; 32]`.
+    pub fn resolve(&self) -> Result<Zeroizing<[u8; 32]>, CliError> {
         match (&self.mnemonic_file, &self.key_file, self.key_stdin) {
             (Some(p), None, false) => derive_from_mnemonic(read_trimmed(p)?.trim()),
             (None, Some(p), false) => decode_key_hex(read_trimmed(p)?.trim()),
             (None, None, true) => {
-                let mut s = String::new();
+                // stdin may carry a mnemonic OR a hex key; wipe it on drop.
+                let mut s = Zeroizing::new(String::new());
                 std::io::stdin().read_to_string(&mut s).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("stdin: {e}")))?;
-                // stdin may carry a mnemonic OR a hex key.
                 let t = s.trim();
                 if t.split_whitespace().count() >= 12 {
                     derive_from_mnemonic(t)
@@ -64,7 +67,7 @@ impl EvmKeySource {
 
     pub fn signer(&self) -> Result<PrivateKeySigner, CliError> {
         let k = self.resolve()?;
-        PrivateKeySigner::from_bytes(&B256::from(k)).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("bad EVM key: {e}")))
+        PrivateKeySigner::from_bytes(&B256::from(*k)).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("bad EVM key: {e}")))
     }
 
     pub fn address(&self) -> Result<Address, CliError> {
@@ -72,26 +75,47 @@ impl EvmKeySource {
     }
 }
 
-fn read_trimmed(path: &str) -> Result<String, CliError> {
-    std::fs::read_to_string(path).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("read {path}: {e}")))
+/// Read a key/mnemonic file, wiping the buffer on drop. Before reading, refuse a
+/// non-regular file (symlink/device/fifo — `symlink_metadata` does NOT follow the
+/// link) and warn on group/world-readable perms (audit M-07; stricter than, and
+/// consistent with, validator-core `load_validator_seed`).
+fn read_trimmed(path: &str) -> Result<Zeroizing<String>, CliError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::symlink_metadata(path)
+            .map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("stat {path}: {e}")))?;
+        if !meta.file_type().is_file() {
+            return Err(CliError::new(
+                exit::WALLET_LOCKED,
+                format!("key file {path} is not a regular file (symlink/device/fifo refused)"),
+            ));
+        }
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            eprintln!("warning: key file {path} is group/world-accessible (mode {mode:o}); restrict it to 0600");
+        }
+    }
+    std::fs::read_to_string(path).map(Zeroizing::new).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("read {path}: {e}")))
 }
 
-fn derive_from_mnemonic(phrase: &str) -> Result<[u8; 32], CliError> {
+fn derive_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; 32]>, CliError> {
     let m = Mnemonic::new(phrase, Language::English).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("invalid mnemonic: {e}")))?;
+    // bip32 `Seed` already zeroizes on drop; the derived secret is wrapped below.
     let seed = m.to_seed("");
     let xprv = ExtendedPrivateKey::<SecretKey>::new(seed).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("xprv: {e}")))?;
     let path = DerivationPath::from_str(HD_PATH).map_err(|e| CliError::new(exit::GENERIC, format!("path: {e}")))?;
     let child = xprv.derive_path(&path).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("derive {HD_PATH}: {e}")))?;
-    Ok(child.private_key().secret_bytes())
+    Ok(Zeroizing::new(child.private_key().secret_bytes()))
 }
 
-fn decode_key_hex(s: &str) -> Result<[u8; 32], CliError> {
+fn decode_key_hex(s: &str) -> Result<Zeroizing<[u8; 32]>, CliError> {
     let h = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
     if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(CliError::new(exit::WALLET_LOCKED, "EVM key must be 64 hex chars (32-byte secp256k1)".to_string()));
     }
-    let mut k = [0u8; 32];
-    faster_hex::hex_decode(h.as_bytes(), &mut k).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("bad key hex: {e}")))?;
+    let mut k = Zeroizing::new([0u8; 32]);
+    faster_hex::hex_decode(h.as_bytes(), &mut *k).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("bad key hex: {e}")))?;
     Ok(k)
 }
 
@@ -105,7 +129,7 @@ pub fn wallet_create(ctx: &Ctx, out: &str) -> CliResult {
     let phrase = m.phrase();
     write_secret_file(out, phrase.as_bytes())?;
     let addr = derive_from_mnemonic(phrase).and_then(|k| {
-        PrivateKeySigner::from_bytes(&B256::from(k)).map(|s| s.address()).map_err(|e| CliError::new(exit::GENERIC, e.to_string()))
+        PrivateKeySigner::from_bytes(&B256::from(*k)).map(|s| s.address()).map_err(|e| CliError::new(exit::GENERIC, e.to_string()))
     })?;
     match ctx.output {
         OutputFormat::Human => {
@@ -123,7 +147,7 @@ pub fn wallet_import(ctx: &Ctx, out: &str) -> CliResult {
     let phrase = s.trim();
     // validate before writing
     let addr = derive_from_mnemonic(phrase).and_then(|k| {
-        PrivateKeySigner::from_bytes(&B256::from(k)).map(|s| s.address()).map_err(|e| CliError::new(exit::GENERIC, e.to_string()))
+        PrivateKeySigner::from_bytes(&B256::from(*k)).map(|s| s.address()).map_err(|e| CliError::new(exit::GENERIC, e.to_string()))
     })?;
     write_secret_file(out, phrase.as_bytes())?;
     match ctx.output {
@@ -204,7 +228,7 @@ pub fn send(
         }
     };
 
-    let raw = sign_eip1559(&ks.resolve()?, nonce, gas, max_fee, TxKind::Call(to_addr), U256::from(amount_wei), Bytes::new())?;
+    let raw = sign_eip1559(&*ks.resolve()?, nonce, gas, max_fee, TxKind::Call(to_addr), U256::from(amount_wei), Bytes::new())?;
     let raw_hex = format!("0x{}", faster_hex::hex_string(&raw));
 
     let submit = yes;
@@ -286,7 +310,7 @@ pub fn deploy(
     // Deterministic contract address from sender + this nonce.
     let contract = from.create(nonce);
 
-    let raw = sign_eip1559(&ks.resolve()?, nonce, gas, max_fee, TxKind::Create, U256::from(value_wei), input.clone())?;
+    let raw = sign_eip1559(&*ks.resolve()?, nonce, gas, max_fee, TxKind::Create, U256::from(value_wei), input.clone())?;
     let raw_hex = format!("0x{}", faster_hex::hex_string(&raw));
 
     let txid = submit_if(ctx, yes, &raw_hex)?;
@@ -348,7 +372,7 @@ pub fn call(
         }
     };
 
-    let raw = sign_eip1559(&ks.resolve()?, nonce, gas, max_fee, TxKind::Call(to_addr), U256::from(value_wei), input.clone())?;
+    let raw = sign_eip1559(&*ks.resolve()?, nonce, gas, max_fee, TxKind::Call(to_addr), U256::from(value_wei), input.clone())?;
     let raw_hex = format!("0x{}", faster_hex::hex_string(&raw));
 
     let txid = submit_if(ctx, yes, &raw_hex)?;

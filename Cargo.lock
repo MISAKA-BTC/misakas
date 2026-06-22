@@ -5612,6 +5612,7 @@ dependencies = [
  "kaspa-wrpc-client",
  "serde_json",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
