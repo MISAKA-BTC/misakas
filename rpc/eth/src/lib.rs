@@ -16,8 +16,10 @@ use async_trait::async_trait;
 use kaspa_consensus_core::evm::{EvmAccountSnapshot, EvmU256};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Semaphore;
 
 /// JSON-RPC 2.0 error codes used by the adapter (the standard subset).
 pub mod codes {
@@ -274,8 +276,16 @@ pub struct EthEvmTxStatus {
     pub state: &'static str,
     /// Payload (DAG) blocks whose payload carries this tx, as eth-rpc 32-byte ids.
     pub included_in: Vec<[u8; 32]>,
-    /// The accepting selected-chain block (eth-rpc 32-byte id) + the receipt index, if mined.
+    /// The CANONICAL (selected-chain) accepting block (eth-rpc 32-byte id) + the
+    /// receipt index, resolved via the canonical receipt lookup — `Some` ONLY when
+    /// the tx is accepted on the current selected chain. `state == "accepted"`
+    /// tracks this field, so a side-branch (orphaned) acceptance is never reported
+    /// as accepted (audit H-06: off-chain key release / sale finalization must not
+    /// trust a reorg-able acceptance).
     pub accepted_in: Option<([u8; 32], u32)>,
+    /// Non-canonical acceptances seen in the location index (side branches not on
+    /// the selected chain). Diagnostic only — never drives `accepted`.
+    pub orphaned_acceptances: Vec<([u8; 32], u32)>,
     /// The most recent §6.1 skip class (2 = acceptance-invalid, 3 = duplicate, 5 = over-cap),
     /// set while the tx has been included but not yet accepted.
     pub last_skip_class: Option<u8>,
@@ -504,6 +514,11 @@ fn format_evm_tx_status(s: &EthEvmTxStatus) -> Value {
             .accepted_in
             .map(|(h, idx)| json!({ "block": format!("0x{}", faster_hex::hex_string(&h)), "receiptIndex": idx }))
             .unwrap_or(Value::Null),
+        "orphanedAcceptances": s
+            .orphaned_acceptances
+            .iter()
+            .map(|(h, idx)| json!({ "block": format!("0x{}", faster_hex::hex_string(h)), "receiptIndex": idx }))
+            .collect::<Vec<_>>(),
         "lastSkipClass": s.last_skip_class.map(|c| json!(c)).unwrap_or(Value::Null),
         "sender": s.sender.map(|a| json!(format!("0x{}", faster_hex::hex_string(&a)))).unwrap_or(Value::Null),
         "nonce": s.nonce.map(|n| quantity(n as u128)).unwrap_or(Value::Null),
@@ -881,6 +896,15 @@ pub fn decode_hex(s: &str) -> EthResult<Vec<u8>> {
 async fn process(provider: &Arc<dyn EthProvider>, body: Value) -> Value {
     match body {
         Value::Array(items) => {
+            // Audit H-02: bound the batch so one request cannot fan out into
+            // tens of thousands of dispatched calls (a 4 MiB body of tiny calls).
+            if items.len() > MAX_BATCH_ITEMS {
+                return serde_json::to_value(RpcResponse::err(
+                    Value::Null,
+                    EthRpcError::new(codes::INVALID_REQUEST, format!("batch too large: {} items > {MAX_BATCH_ITEMS} max", items.len())),
+                ))
+                .unwrap_or(Value::Null);
+            }
             let mut out = Vec::with_capacity(items.len());
             for item in items {
                 out.push(serde_json::to_value(handle_one(provider, item).await).unwrap_or(Value::Null));
@@ -905,17 +929,38 @@ async fn handle_one(provider: &Arc<dyn EthProvider>, item: Value) -> RpcResponse
 
 /// Defensive cap on a single JSON-RPC request body.
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+/// Max JSON-RPC batch items per request (audit H-02).
+const MAX_BATCH_ITEMS: usize = 100;
+/// Max concurrent connections served at once (audit H-02). Excess connections
+/// are dropped immediately (backpressure) rather than queued, so a connection
+/// flood cannot accumulate unbounded tasks/sockets.
+const MAX_CONNECTIONS: usize = 512;
+/// Whole-connection deadline (audit H-02): read + dispatch + write. A slowloris
+/// that never finishes its headers/body, or stalls mid-write, is dropped here.
+const CONN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Max serialized response bytes (audit H-02): refuse to allocate/emit an
+/// unbounded response (a 10k-log page can still be large but is now finite).
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Serve the Ethereum JSON-RPC endpoint on `addr` until the process exits.
 pub async fn serve(addr: SocketAddr, provider: Arc<dyn EthProvider>) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr).await?;
     kaspa_core::info!("[eth-rpc] Ethereum JSON-RPC listening on http://{addr}");
+    let conn_sem = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
         let (stream, _peer) = listener.accept().await?;
+        // At capacity: drop the new connection immediately (no unbounded spawn).
+        let Ok(permit) = conn_sem.clone().try_acquire_owned() else {
+            drop(stream);
+            continue;
+        };
         let provider = provider.clone();
         tokio::spawn(async move {
-            if let Err(e) = serve_conn(stream, provider).await {
-                kaspa_core::trace!("[eth-rpc] connection error: {e}");
+            let _permit = permit; // released on task end
+            match tokio::time::timeout(CONN_TIMEOUT, serve_conn(stream, provider)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => kaspa_core::trace!("[eth-rpc] connection error: {e}"),
+                Err(_) => kaspa_core::trace!("[eth-rpc] connection timed out after {CONN_TIMEOUT:?}"),
             }
         });
     }
@@ -994,6 +1039,15 @@ async fn serve_conn(mut stream: TcpStream, provider: Arc<dyn EthProvider>) -> st
             .unwrap_or(Value::Null),
     };
     let payload = serde_json::to_string(&response_json).unwrap_or_else(|_| "null".to_string());
+    // Audit H-02: cap the response so a single request cannot emit an unbounded body.
+    if payload.len() > MAX_RESPONSE_BYTES {
+        let err = serde_json::to_string(&RpcResponse::err(
+            Value::Null,
+            EthRpcError::new(codes::SERVER_ERROR, format!("response too large ({} bytes); narrow the query", payload.len())),
+        ))
+        .unwrap_or_else(|_| "null".to_string());
+        return write_response(&mut stream, 200, "OK", &err).await;
+    }
     write_response(&mut stream, 200, "OK", &payload).await
 }
 

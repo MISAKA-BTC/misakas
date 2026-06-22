@@ -790,6 +790,16 @@ Do you confirm? (y/n)";
     if let Some(evm_rpc_listen) = &args.evm_rpc_listen {
         let addr: std::net::SocketAddr = evm_rpc_listen.normalize(8545).into();
         kaspa_core::info!("Ethereum JSON-RPC adapter enabled on http://{addr}");
+        // Audit H-02: the adapter is unauthenticated. It applies its own per-conn
+        // caps/timeouts, but a publicly-routable bind still needs a TLS/auth/rate-
+        // limiting reverse proxy in front. Warn loudly so a 0.0.0.0 bind is never
+        // an accident.
+        if !addr.ip().is_loopback() {
+            kaspa_core::warn!(
+                "Ethereum JSON-RPC is bound to a NON-LOOPBACK address ({addr}); it is UNAUTHENTICATED. \
+                 Front it with a TLS + auth + rate-limiting reverse proxy, or bind it to 127.0.0.1."
+            );
+        }
         async_runtime.register(Arc::new(crate::eth_rpc::EthRpcService::new(addr, consensus_manager.clone(), flow_context_for_eth)));
     }
     async_runtime.register(mining_monitor);

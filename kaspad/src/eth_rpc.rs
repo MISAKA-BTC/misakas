@@ -191,39 +191,58 @@ impl EthProvider for NodeEthProvider {
             Some(info) => (Some(info.sender.as_bytes()), Some(info.nonce), Some(info.gas_limit)),
             None => (None, None, None),
         };
-        // Acceptance/inclusion view (RocksDB read): the §6.1 location index.
+        // Acceptance/inclusion view (RocksDB read): the §6.1 location index PLUS
+        // the CANONICAL receipt. The location index's `accepted_in` may include
+        // side branches (per its type contract); `get_evm_tx_receipt` resolves the
+        // selected-chain acceptance and is the ONLY source of truth for "accepted"
+        // (audit H-06 — a reorged-out acceptance must never read as accepted).
         let session = self.consensus_manager.consensus().session().await;
-        let locs = session.spawn_blocking(move |c| c.get_evm_tx_locations(h).ok()).await;
-        let (included_in, accepted_in, last_skip_class) = match locs {
-            Some(l) => {
-                // The L1 block ids are 64-byte (BLAKE2b-512); expose the leading
-                // 32 as standard-shaped, client-opaque ids (as elsewhere here).
-                let to32 = |b: &kaspa_hashes::Hash64| {
-                    let mut x = [0u8; 32];
-                    x.copy_from_slice(&b.as_bytes()[..32]);
-                    x
-                };
-                let included = l.included_in.iter().map(to32).collect();
-                let accepted = l.accepted_in.first().map(|(b, idx)| (to32(b), *idx));
-                (included, accepted, l.last_skip_class)
-            }
-            None => (Vec::new(), None, None),
+        let (locs, canon) = session
+            .spawn_blocking(move |c| (c.get_evm_tx_locations(h).ok(), c.get_evm_tx_receipt(h).ok().flatten()))
+            .await;
+        // The L1 block ids are 64-byte (BLAKE2b-512); expose the leading 32 as
+        // standard-shaped, client-opaque ids (as elsewhere here).
+        let to32 = |b: &kaspa_hashes::Hash64| {
+            let mut x = [0u8; 32];
+            x.copy_from_slice(&b.as_bytes()[..32]);
+            x
         };
-        // Priority: accepted (mined) ▸ pending (in pool, will retry) ▸ included
-        // (in a payload, acceptance pending) ▸ skipped (last seen skipped, gone
-        // from the pool) ▸ unknown.
-        let state = if accepted_in.is_some() {
+        let canonical_accepted = canon.as_ref().map(|v| (to32(&v.accepting_block), v.receipt_index));
+        let (included_in, all_accepted, last_skip_class) = match &locs {
+            Some(l) => (l.included_in.iter().map(to32).collect::<Vec<_>>(), l.accepted_in.iter().map(|(b, idx)| (to32(b), *idx)).collect::<Vec<_>>(), l.last_skip_class),
+            None => (Vec::new(), Vec::new(), None),
+        };
+        // Acceptances in the index that are NOT the canonical one = orphaned (side
+        // branch). Diagnostic only; never drives `accepted`.
+        let orphaned_acceptances: Vec<_> = all_accepted.iter().copied().filter(|a| Some(*a) != canonical_accepted).collect();
+        // Priority: canonical-accepted (mined on the selected chain) ▸ pending (in
+        // pool, will retry) ▸ included (in a payload, acceptance pending) ▸
+        // orphaned (accepted only on a since-reorged branch) ▸ skipped ▸ unknown.
+        let state = if canonical_accepted.is_some() {
             "accepted"
         } else if in_mempool {
             "pending"
         } else if !included_in.is_empty() {
             "included"
+        } else if !orphaned_acceptances.is_empty() {
+            "orphaned"
         } else if last_skip_class.is_some() {
             "skipped"
         } else {
             "unknown"
         };
-        Ok(EthEvmTxStatus { tx_hash, state, included_in, accepted_in, last_skip_class, in_mempool, sender, nonce, gas_limit })
+        Ok(EthEvmTxStatus {
+            tx_hash,
+            state,
+            included_in,
+            accepted_in: canonical_accepted,
+            orphaned_acceptances,
+            last_skip_class,
+            in_mempool,
+            sender,
+            nonce,
+            gas_limit,
+        })
     }
 
     async fn transaction_by_hash(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthTx>> {
@@ -274,36 +293,48 @@ impl EthProvider for NodeEthProvider {
 
     async fn block_by_number(&self, number: u64) -> EthResult<Option<EthBlock>> {
         let session = self.consensus_manager.consensus().session().await;
-        let resp = session
-            .spawn_blocking(move |c| c.get_evm_block_by_number(number))
-            .await
-            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
-        Ok(resp.map(to_eth_block))
+        let (resp, parent) = session
+            .spawn_blocking(move |c| {
+                let resp = c.get_evm_block_by_number(number);
+                let parent = parent_l1_hash32(c, &resp);
+                (resp, parent)
+            })
+            .await;
+        let resp = resp.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        Ok(resp.map(|r| to_eth_block(r, parent)))
     }
 
     async fn block_by_tag(&self, tag: &str) -> EthResult<Option<EthBlock>> {
         let session = self.consensus_manager.consensus().session().await;
         let tag = tag.to_string();
-        // latest/pending/safe/finalized all map to the current sink (the DAG's
-        // fast finality makes them equivalent for the MVP); earliest = number 0.
-        let resp = session
-            .spawn_blocking(move |c| match tag.as_str() {
-                "earliest" => c.get_evm_block_by_number(0),
-                _ => c.get_evm_block_by_l1_hash(c.get_sink()),
+        // latest/pending/safe/finalized currently map to the current sink (a real
+        // safe/finalized resolver is the H-04 follow-up); earliest = number 0.
+        let (resp, parent) = session
+            .spawn_blocking(move |c| {
+                let resp = match tag.as_str() {
+                    "earliest" => c.get_evm_block_by_number(0),
+                    _ => c.get_evm_block_by_l1_hash(c.get_sink()),
+                };
+                let parent = parent_l1_hash32(c, &resp);
+                (resp, parent)
             })
-            .await
-            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
-        Ok(resp.map(to_eth_block))
+            .await;
+        let resp = resp.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        Ok(resp.map(|r| to_eth_block(r, parent)))
     }
 
     async fn block_by_hash(&self, hash: [u8; 32]) -> EthResult<Option<EthBlock>> {
         let session = self.consensus_manager.consensus().session().await;
         let h = EvmH256::from_bytes(hash);
-        let resp = session
-            .spawn_blocking(move |c| c.get_evm_block_by_rpc_hash(h))
-            .await
-            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
-        Ok(resp.map(to_eth_block))
+        let (resp, parent) = session
+            .spawn_blocking(move |c| {
+                let resp = c.get_evm_block_by_rpc_hash(h);
+                let parent = parent_l1_hash32(c, &resp);
+                (resp, parent)
+            })
+            .await;
+        let resp = resp.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        Ok(resp.map(|r| to_eth_block(r, parent)))
     }
 
     async fn get_logs(
@@ -370,8 +401,22 @@ impl NodeEthProvider {
                 (c.get_evm_state_snapshot_of(sink), c.get_evm_head_header())
             })
             .await;
-        let snap = snap.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?.unwrap_or_default();
+        let snap = snap.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
         let header = header.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        // Fail CLOSED on a missing snapshot (audit H-03): only a true pre-activation
+        // genesis (no head header at all) may legitimately have empty state. A head
+        // that exists but whose snapshot is absent means the state is unavailable —
+        // simulating against an empty (default) snapshot would return a bogus
+        // "success on empty chain" for eth_call / eth_estimateGas.
+        let snap = match (snap, header.as_ref()) {
+            (Some(s), _) => s,
+            (None, None) => Default::default(),
+            (None, Some(_)) => {
+                return Err(EthRpcError::server(
+                    "EVM state snapshot unavailable for head; refusing to simulate against empty state",
+                ))
+            }
+        };
         let env = kaspa_evm::sim::EthCallEnv {
             chain_id: EVM_CHAIN_ID,
             number: header.as_ref().map(|h| h.evm_number).unwrap_or(0),
@@ -383,19 +428,39 @@ impl NodeEthProvider {
     }
 }
 
+/// The eth-rpc 32-byte parentHash of an EVM block: the first 32 bytes of the
+/// `evm_number − 1` block's L1 hash (audit H-04). Zero for EVM block 0 or when
+/// the parent cannot be read (a non-fatal best-effort field).
+fn parent_l1_hash32(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    resp: &kaspa_consensus_core::errors::consensus::ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>>,
+) -> [u8; 32] {
+    let Ok(Some(r)) = resp else { return [0u8; 32] };
+    if r.header.evm_number == 0 {
+        return [0u8; 32];
+    }
+    match c.get_evm_block_by_number(r.header.evm_number - 1) {
+        Ok(Some(p)) => {
+            let mut h = [0u8; 32];
+            h.copy_from_slice(&p.l1_hash.as_bytes()[..32]);
+            h
+        }
+        _ => [0u8; 32],
+    }
+}
+
 /// Map a consensus `EvmBlockResponse` to the adapter's primitive [`EthBlock`].
 /// The 32-byte `hash` is the first 32 bytes of the 64-byte L1 hash (the same id
-/// the receipt exposes as `blockHash`). `parent_hash` is left zero for now — a
-/// correct parentHash (the `evm_number − 1` block id) lands with the full-tx /
-/// `eth_getTransactionByHash` increment.
-fn to_eth_block(resp: kaspa_consensus_core::evm::EvmBlockResponse) -> EthBlock {
+/// the receipt exposes as `blockHash`); `parent_hash` is the `evm_number − 1`
+/// block's id (audit H-04), computed by [`parent_l1_hash32`].
+fn to_eth_block(resp: kaspa_consensus_core::evm::EvmBlockResponse, parent_hash: [u8; 32]) -> EthBlock {
     let h = &resp.header;
     let mut hash = [0u8; 32];
     hash.copy_from_slice(&resp.l1_hash.as_bytes()[..32]);
     EthBlock {
         number: h.evm_number,
         hash,
-        parent_hash: [0u8; 32],
+        parent_hash,
         state_root: h.state_root.as_bytes(),
         transactions_root: h.transactions_root.as_bytes(),
         receipts_root: h.receipts_root.as_bytes(),

@@ -122,7 +122,10 @@ pub fn estimate_gas(snapshot: &EvmStateSnapshot, env: &EthCallEnv, call: &EthCal
     let mut hi = cap;
     while lo + 1 < hi {
         let mid = lo + (hi - lo) / 2;
-        let ok = simulate_call(snapshot, env, &EthCall { gas_limit: mid, ..call.clone() }).map(|r| r.success).unwrap_or(false);
+        // A hard execution/setup fault (DB miss, invalid env) is NOT "needs more
+        // gas" — propagate it rather than silently returning an inflated estimate
+        // (audit H-03). Only a genuine revert/OOG (`Ok(false)`) bumps `lo`.
+        let ok = simulate_call(snapshot, env, &EthCall { gas_limit: mid, ..call.clone() })?.success;
         if ok {
             hi = mid;
         } else {

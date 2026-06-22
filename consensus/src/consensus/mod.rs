@@ -1545,6 +1545,10 @@ impl ConsensusApi for Consensus {
     ) -> ConsensusResult<Vec<kaspa_consensus_core::evm::EvmLogEntry>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmNumberStoreReader, EvmReceiptsStoreReader};
         // DoS bound: cap the result set (the crate caps the block range upstream).
+        // Exceeding the cap is an ERROR, not a silent truncation (audit H-05): a
+        // truncated array indistinguishable from a complete one makes indexers
+        // drop Transfer/Mint logs and misreport ownership/supply. Callers must
+        // narrow the range or filters (EIP-1474 "query returned more than N").
         const MAX_LOGS: usize = 10_000;
         let mut out = Vec::new();
         if to_number < from_number {
@@ -1596,8 +1600,10 @@ impl ConsensusApi for Consensus {
                         tx_index: rcpt_idx as u32,
                         log_index: li,
                     });
-                    if out.len() >= MAX_LOGS {
-                        return Ok(out);
+                    if out.len() > MAX_LOGS {
+                        return Err(ConsensusError::GeneralOwned(format!(
+                            "eth_getLogs: query matched more than {MAX_LOGS} logs in block range [{from_number},{to_number}]; narrow the range or filters"
+                        )));
                     }
                 }
             }
