@@ -93,16 +93,23 @@ const SIGNED_EPOCH_FILE_VERSION: u16 = 1;
 /// contain exactly [`VALIDATOR_SEED_LEN`] bytes as hex, which seeds the deterministic
 /// ML-DSA-87 keypair via [`ValidatorKey::from_seed`].
 pub fn load_validator_seed(path: &str) -> Result<[u8; VALIDATOR_SEED_LEN], String> {
-    // Warn (don't silently accept) if the secret seed file is group/world-accessible. A validator seed
-    // should be 0600; looser perms mean any local user could read the signing key.
+    // Audit M-02: fail CLOSED on an unsafe seed file (was: warn-only, and followed
+    // symlinks). The seed is the validator's ML-DSA-87 signing key — refuse a
+    // non-regular file (symlink/device/fifo — `symlink_metadata` does NOT follow
+    // the link) and a group/world-readable mode, rather than silently signing with
+    // a key any local user could read. Mirrors the misaka-cli EVM key-file guard.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(path) {
-            let mode = meta.permissions().mode() & 0o777;
-            if mode & 0o077 != 0 {
-                log::warn!("validator key file '{path}' is group/world-accessible (mode {mode:o}); restrict it to 0600");
-            }
+        let meta = fs::symlink_metadata(path).map_err(|e| format!("cannot stat validator key file '{path}': {e}"))?;
+        if !meta.file_type().is_file() {
+            return Err(format!("validator key file '{path}' is not a regular file (symlink/device/fifo refused)"));
+        }
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "validator key file '{path}' is group/world-accessible (mode {mode:o}); restrict it to 0600 (chmod 600)"
+            ));
         }
     }
     let raw = fs::read_to_string(path).map_err(|e| format!("cannot read validator key file '{path}': {e}"))?;
