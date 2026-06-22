@@ -148,11 +148,24 @@ pub struct EvmMempool {
     /// flickers in and out of a forky selected chain is not evicted prematurely.
     /// Only holds entries for currently-absent claims; cleared on removal/insert.
     stale_strikes: HashMap<TransactionOutpoint, u32>,
+    /// Last-known head base fee, used to score evictions by the SAME effective
+    /// tip the template selection uses (audit H-07). Updated by the template path
+    /// via [`Self::set_base_fee`]; defaults to 0 (⇒ effective tip == priority tip),
+    /// which is already a safe lower bound — never `max_fee`. Pure local policy:
+    /// a stale value only mis-ranks an eviction, never affects block validity.
+    base_fee: u128,
 }
 
 impl EvmMempool {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Update the base fee used for eviction scoring (audit H-07). Called by the
+    /// template path with the same head base fee it selects against, so a tx that
+    /// cannot be SELECTED (zero effective tip) is also the first to be EVICTED.
+    pub fn set_base_fee(&mut self, base_fee: u128) {
+        self.base_fee = base_fee;
     }
 
     pub fn len(&self) -> usize {
@@ -347,8 +360,13 @@ impl EvmMempool {
         // Same (sender, nonce): replacement requires BOTH the fee cap and the
         // priority tip to bump (geth's rule). Without the tip requirement a churn of
         // zero-tip replacements could thrash the slot at no cost to the miner.
-        let mut is_replacement = false;
-        if let Some(existing_hash) = self.by_sender_nonce.get(&(tx.sender, tx.nonce)).copied() {
+        //
+        // Audit M-01: every remaining check is computed against a PROJECTED pool
+        // that already discounts the tx being replaced — but NOTHING is mutated
+        // until all checks pass, so a rejected replacement can never strand its
+        // predecessor (which would open a permanent nonce gap).
+        let existing_hash = self.by_sender_nonce.get(&(tx.sender, tx.nonce)).copied();
+        if let Some(existing_hash) = existing_hash {
             let existing = &self.txs[&existing_hash];
             // Saturate the BUMP, then the add — `required >= existing` always.
             // (`existing * 110 / 100` reverse-overflows near u128::MAX: the mul
@@ -363,40 +381,67 @@ impl EvmMempool {
             if tx.max_fee_per_gas < required_fee || tx.max_priority_fee_per_gas < required_tip {
                 return Err(EvmMempoolError::ReplacementUnderpriced { pending_fee: existing.max_fee_per_gas, required_fee, hash: tx.hash });
             }
-            self.remove(&existing_hash);
-            is_replacement = true;
         }
+        let is_replacement = existing_hash.is_some();
+        let (replaced_gas, replaced_bytes) =
+            existing_hash.map(|h| (self.txs[&h].gas_limit, self.txs[&h].raw.len())).unwrap_or((0, 0));
 
-        // Per-sender DoS bounds (only for a NEW nonce — a replacement removed its
-        // predecessor above, so the count/gas already exclude it). One sender must
-        // not be able to monopolize the global pool or reserve unbounded template gas.
+        // Per-sender DoS bounds. A replacement reuses its predecessor's slot, so
+        // it is not a NEW tx (count) and its gas discounts the predecessor's.
         if !is_replacement {
             let sender_count = self.sender_tx_count(&tx.sender);
             if sender_count >= EVM_MEMPOOL_MAX_TXS_PER_SENDER {
                 return Err(EvmMempoolError::SenderTxLimit { sender: tx.sender, limit: EVM_MEMPOOL_MAX_TXS_PER_SENDER, hash: tx.hash });
             }
         }
-        let sender_gas_after = self.sender_declared_gas(&tx.sender).saturating_add(tx.gas_limit);
+        let sender_gas_after = self.sender_declared_gas(&tx.sender).saturating_sub(replaced_gas).saturating_add(tx.gas_limit);
         if sender_gas_after > EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER {
             return Err(EvmMempoolError::SenderGasLimit { sender: tx.sender, limit: EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER, hash: tx.hash });
         }
 
-        // Pool budget: evict the cheapest pending tx while full, but only for a
-        // strictly better-paying newcomer (no fee-neutral churn).
-        while self.txs.len() >= EVM_MEMPOOL_MAX_TXS || self.total_bytes + tx.raw.len() > EVM_MEMPOOL_MAX_TOTAL_BYTES {
-            let Some((cheapest_hash, cheapest_fee)) =
-                self.txs.values().map(|t| (t.hash, t.max_fee_per_gas)).min_by_key(|(_, fee)| *fee)
-            else {
-                // Pool is empty yet the budget still does not fit: unreachable
-                // given the TooLarge gate above, but fail closed.
-                return Err(EvmMempoolError::Full { hash: tx.hash });
-            };
-            if tx.max_fee_per_gas <= cheapest_fee {
-                return Err(EvmMempoolError::Full { hash: tx.hash });
+        // Pool budget: PLAN the evictions (do not mutate) against a pool that
+        // already excludes the replaced tx. Evict the lowest EFFECTIVE-tip txs
+        // (audit H-07: the SAME score template selection uses, so a high-`max_fee`
+        // zero-tip tx cannot squat a slot it could never be selected from), and
+        // only for a strictly higher-tip newcomer (no fee-neutral churn).
+        let new_tip = tx.effective_tip(self.base_fee);
+        let mut proj_len = self.txs.len() - usize::from(is_replacement);
+        let mut proj_bytes = self.total_bytes - replaced_bytes;
+        let mut planned_evictions: Vec<EvmH256> = Vec::new();
+        if proj_len >= EVM_MEMPOOL_MAX_TXS || proj_bytes + tx.raw.len() > EVM_MEMPOOL_MAX_TOTAL_BYTES {
+            // Candidate victims by ascending effective tip (deterministic hash
+            // tiebreak), excluding the tx being replaced.
+            let mut victims: Vec<(EvmH256, u128, usize)> = self
+                .txs
+                .values()
+                .filter(|t| Some(t.hash) != existing_hash)
+                .map(|t| (t.hash, t.effective_tip(self.base_fee), t.raw.len()))
+                .collect();
+            victims.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            let mut vi = 0;
+            while proj_len >= EVM_MEMPOOL_MAX_TXS || proj_bytes + tx.raw.len() > EVM_MEMPOOL_MAX_TOTAL_BYTES {
+                let Some(&(vh, vtip, vbytes)) = victims.get(vi) else {
+                    // Ran out of victims without fitting: reject, pool untouched.
+                    return Err(EvmMempoolError::Full { hash: tx.hash });
+                };
+                if new_tip <= vtip {
+                    return Err(EvmMempoolError::Full { hash: tx.hash });
+                }
+                planned_evictions.push(vh);
+                proj_len -= 1;
+                proj_bytes -= vbytes;
+                vi += 1;
             }
-            self.remove(&cheapest_hash);
         }
 
+        // All checks passed — commit. From here nothing can fail, so the
+        // replaced tx is only ever removed when its successor will be inserted.
+        if let Some(existing_hash) = existing_hash {
+            self.remove(&existing_hash);
+        }
+        for vh in planned_evictions {
+            self.remove(&vh);
+        }
         let hash = tx.hash;
         self.total_bytes += tx.raw.len();
         self.by_sender_nonce.insert((tx.sender, tx.nonce), hash);
@@ -602,6 +647,71 @@ mod tests {
             pool.insert(tx(0xB, 0, 999, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, 4)),
             Err(EvmMempoolError::TooLarge { .. })
         ));
+    }
+
+    /// Audit M-01: a replacement that passes the fee/tip bump but fails a later
+    /// bound (here the per-sender declared-gas cap) must NOT remove the tx it was
+    /// replacing — otherwise that (sender, nonce) slot vanishes and every higher
+    /// nonce parks behind a permanent gap.
+    #[test]
+    fn failed_replacement_preserves_the_old_tx() {
+        let mut pool = EvmMempool::new();
+        let a0 = tx(0xA, 0, 100, 10, 1);
+        let a0_hash = pool.insert(a0).unwrap();
+
+        // Bump passes (fee/tip 200 ≥ 110% of 100), but the replacement declares
+        // more gas than the per-sender cap → SenderGasLimit.
+        let mut huge = tx(0xA, 0, 200, 10, 2);
+        huge.gas_limit = EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER + 1;
+        assert!(matches!(pool.insert(huge), Err(EvmMempoolError::SenderGasLimit { .. })));
+
+        // The original tx is intact — no nonce gap.
+        assert_eq!(pool.len(), 1);
+        assert!(pool.contains(&a0_hash));
+        assert_eq!(pool.total_bytes(), 10);
+    }
+
+    /// Audit H-07: eviction is scored by the SAME effective tip template
+    /// selection uses, so a Sybil flood of high-`max_fee` ZERO-tip txs (strong
+    /// under the old `max_fee` score, worthless under the tip score) cannot evict
+    /// or crowd out a paying tx. base_fee defaults to 0 ⇒ effective_tip == tip.
+    #[test]
+    fn zero_tip_flood_cannot_evict_a_paying_tx() {
+        let mut pool = EvmMempool::new();
+        // Fill to the count cap with high-max_fee, ZERO-tip txs (direct insert to
+        // skip the admission path — we are testing eviction, not admission).
+        for i in 0..EVM_MEMPOOL_MAX_TXS {
+            let mut hb = [0u8; 32];
+            hb[..8].copy_from_slice(&(i as u64).to_le_bytes());
+            let h = EvmH256::from_bytes(hb);
+            let sender = EvmAddress::from_bytes([(i % 251) as u8; 20]);
+            let nonce = (i / 251) as u64;
+            let t = PendingEvmTx {
+                hash: h, sender, nonce, gas_limit: 21_000,
+                max_fee_per_gas: 1_000_000, max_priority_fee_per_gas: 0, raw: vec![0u8; 16], added_at: 1_000,
+            };
+            pool.total_bytes += t.raw.len();
+            pool.by_sender_nonce.insert((sender, nonce), h);
+            pool.txs.insert(h, t);
+        }
+        assert_eq!(pool.len(), EVM_MEMPOOL_MAX_TXS);
+
+        // Another zero-tip squatter — even with an astronomically higher max_fee —
+        // cannot evict, because it could never be SELECTED (effective tip 0).
+        let squatter = PendingEvmTx {
+            hash: EvmH256::from_bytes([0xFE; 32]), sender: EvmAddress::from_bytes([0xFE; 20]), nonce: 0,
+            gas_limit: 21_000, max_fee_per_gas: u128::MAX, max_priority_fee_per_gas: 0, raw: vec![0u8; 16], added_at: 1_000,
+        };
+        assert!(matches!(pool.insert(squatter), Err(EvmMempoolError::Full { .. })));
+
+        // A paying tx (positive effective tip) DOES evict a zero-tip slot and is admitted.
+        let payer = PendingEvmTx {
+            hash: EvmH256::from_bytes([0xAB; 32]), sender: EvmAddress::from_bytes([0xFF; 20]), nonce: 0,
+            gas_limit: 21_000, max_fee_per_gas: 1_000_000, max_priority_fee_per_gas: 5, raw: vec![0u8; 16], added_at: 1_000,
+        };
+        let ph = pool.insert(payer).unwrap();
+        assert!(pool.contains(&ph));
+        assert_eq!(pool.len(), EVM_MEMPOOL_MAX_TXS, "evicted exactly one zero-tip squatter");
     }
 
     /// §9.2 producer-side claim queue: dedup by lock outpoint, deterministic

@@ -249,6 +249,8 @@ impl MiningManager {
                         Ok(Some(h)) => h.base_fee_per_gas.try_to_u128().unwrap_or(EVM_INITIAL_BASE_FEE as u128),
                         _ => EVM_INITIAL_BASE_FEE as u128,
                     };
+                    // Keep the pool's eviction score aligned with this base fee (audit H-07).
+                    pool.set_base_fee(base_fee);
                     pool.select_candidates(
                         MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK,
                         // A payload may not declare more gas than a chain block can accept.
