@@ -12,7 +12,8 @@ use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
 use kaspa_eth_rpc::{
-    EthBlock, EthCallRequest, EthEvmTxStatus, EthFeeHistory, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx,
+    BlockId, EthBlock, EthCallRequest, EthEvmTxStatus, EthFeeHistory, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError,
+    EthTx,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_p2p_flows::flow_context::FlowContext;
@@ -54,9 +55,12 @@ impl EthProvider for NodeEthProvider {
     }
 
     async fn is_syncing(&self) -> bool {
-        // The endpoint only serves once the node is up; report ready (Ethereum
-        // tooling treats `false` as "synced"). Refined later if needed.
-        false
+        // Honest sync state (audit M-08): true while the node is still catching up
+        // (so tooling doesn't treat a not-yet-synced node as ready), false once
+        // nearly synced. (The full Ethereum object form {startingBlock,…} is a
+        // later refinement; a truthy value already signals "not ready".)
+        let session = self.consensus_manager.consensus().session().await;
+        !self.flow_context.is_nearly_synced(&session).await
     }
 
     async fn gas_price(&self) -> EthResult<u128> {
@@ -91,6 +95,37 @@ impl EthProvider for NodeEthProvider {
         let state_nonce = self.latest_account(address).await?.map(|a| a.nonce).unwrap_or(0);
         let sender = kaspa_consensus_core::evm::EvmAddress::from_bytes(address);
         Ok(self.flow_context.mining_manager().evm_next_pending_nonce(sender, state_nonce))
+    }
+
+    async fn account_at(&self, address: [u8; 20], block: BlockId) -> EthResult<Option<kaspa_consensus_core::evm::EvmAccountSnapshot>> {
+        // Resolve the selector → L1 block hash → that block's EVM snapshot (H-04).
+        // safe/finalized read the canonical heads (a non-reorgable height); a
+        // numeric/earliest tag reads the historical block. Fail CLOSED if the
+        // resolved block has no snapshot (pruned / pre-activation) so a caller
+        // never silently gets latest state for a historical query.
+        let session = self.consensus_manager.consensus().session().await;
+        let resolved = session
+            .spawn_blocking(move |c| {
+                let l1: Option<kaspa_consensus_core::BlockHash> = match &block {
+                    BlockId::Number(n) => c.get_evm_block_by_number(*n).ok().flatten().map(|b| b.l1_hash),
+                    BlockId::Tag(t) => match t.as_str() {
+                        "earliest" => c.get_evm_block_by_number(0).ok().flatten().map(|b| b.l1_hash),
+                        "safe" => c.get_evm_canonical_heads().ok().flatten().map(|h| h.safe),
+                        "finalized" => c.get_evm_canonical_heads().ok().flatten().map(|h| h.finalized),
+                        _ => Some(c.get_sink()), // latest / pending
+                    },
+                };
+                l1.map(|h| c.get_evm_state_snapshot_of(h))
+            })
+            .await;
+        let target = kaspa_consensus_core::evm::EvmAddress::from_bytes(address);
+        match resolved {
+            // Selector did not resolve to a known block (e.g. a future number) ⇒ no account.
+            None => Ok(None),
+            Some(Ok(Some(snap))) => Ok(snap.accounts.into_iter().find(|a| a.address == target)),
+            Some(Ok(None)) => Err(EthRpcError::server("EVM state snapshot unavailable at the requested block (pruned or pre-activation)")),
+            Some(Err(e)) => Err(EthRpcError::server(format!("consensus: {e:?}"))),
+        }
     }
 
     async fn eth_call(&self, req: EthCallRequest) -> EthResult<Vec<u8>> {
@@ -139,9 +174,14 @@ impl EthProvider for NodeEthProvider {
         let h = EvmH256::from_bytes(tx_hash);
         // One spawn_blocking: the receipt view + (locate + decode) the raw tx for
         // from/to/contractAddress/type (RocksDB reads + k256 recovery are blocking).
-        let (view, decoded) = session
+        let (view, decoded, accepting_base_fee) = session
             .spawn_blocking(move |c| {
                 let view = c.get_evm_tx_receipt(h).ok().flatten();
+                // The accepting block's base fee, for the real effectiveGasPrice (M-08).
+                let base_fee = view
+                    .as_ref()
+                    .and_then(|v| c.get_evm_header_of(v.accepting_block).ok().flatten())
+                    .and_then(|hdr| hdr.base_fee_per_gas.try_to_u128());
                 let decoded = (|| {
                     let locs = c.get_evm_tx_locations(h).ok()?;
                     for block in locs.included_in {
@@ -155,7 +195,7 @@ impl EthProvider for NodeEthProvider {
                     }
                     None
                 })();
-                (view, decoded)
+                (view, decoded, base_fee)
             })
             .await;
         Ok(view.map(|v| {
@@ -188,7 +228,17 @@ impl EthProvider for NodeEthProvider {
                 to: decoded.as_ref().and_then(|d| d.to),
                 contract_address: decoded.as_ref().and_then(|d| d.contract_address),
                 tx_type: decoded.as_ref().map(|d| d.tx_type).unwrap_or(0),
-                effective_gas_price: decoded.as_ref().map(|d| d.max_fee_per_gas).unwrap_or(0),
+                // Real EIP-1559 effective price (M-08): base_fee + min(tip, max_fee −
+                // base_fee), where the accepting block supplies base_fee. Falls back
+                // to max_fee if the base fee is unavailable (legacy/unknown).
+                effective_gas_price: {
+                    let max_fee = decoded.as_ref().map(|d| d.max_fee_per_gas).unwrap_or(0);
+                    let tip = decoded.as_ref().and_then(|d| d.max_priority_fee_per_gas).unwrap_or(max_fee);
+                    match accepting_base_fee {
+                        Some(bf) => bf.saturating_add(tip.min(max_fee.saturating_sub(bf))),
+                        None => max_fee,
+                    }
+                },
             }
         }))
     }
@@ -333,13 +383,24 @@ impl EthProvider for NodeEthProvider {
     async fn block_by_tag(&self, tag: &str) -> EthResult<Option<EthBlock>> {
         let session = self.consensus_manager.consensus().session().await;
         let tag = tag.to_string();
-        // latest/pending/safe/finalized currently map to the current sink (a real
-        // safe/finalized resolver is the H-04 follow-up); earliest = number 0.
+        // Resolve each tag to its real L1 block (audit H-04): latest/pending = the
+        // sink; safe/finalized = the canonical heads (finalized lags = the pruning
+        // point, NOT the sink, so a "finalized" query is non-reorgable); earliest =
+        // number 0. safe/finalized fall back to the sink only if heads are unset.
         let (resp, parent) = session
             .spawn_blocking(move |c| {
+                let heads = c.get_evm_canonical_heads().ok().flatten();
                 let resp = match tag.as_str() {
                     "earliest" => c.get_evm_block_by_number(0),
-                    _ => c.get_evm_block_by_l1_hash(c.get_sink()),
+                    "safe" => match heads {
+                        Some(hd) => c.get_evm_block_by_l1_hash(hd.safe),
+                        None => c.get_evm_block_by_l1_hash(c.get_sink()),
+                    },
+                    "finalized" => match heads {
+                        Some(hd) => c.get_evm_block_by_l1_hash(hd.finalized),
+                        None => c.get_evm_block_by_l1_hash(c.get_sink()),
+                    },
+                    _ => c.get_evm_block_by_l1_hash(c.get_sink()), // latest / pending
                 };
                 let parent = parent_l1_hash32(c, &resp);
                 (resp, parent)

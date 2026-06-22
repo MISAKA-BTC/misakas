@@ -219,6 +219,16 @@ pub trait EthProvider: Send + Sync + 'static {
     /// index (Increment 6).
     async fn latest_account(&self, address: [u8; 20]) -> EthResult<Option<EvmAccountSnapshot>>;
 
+    /// Account state at a specific block selector (audit H-04): honors
+    /// `latest`/`pending` (sink), `safe`/`finalized` (canonical heads — a
+    /// non-reorgable read), `earliest`, and a numeric block. The default ignores
+    /// the selector and serves latest (providers without historical state);
+    /// kaspad resolves the selector and fails closed if that block's snapshot is
+    /// unavailable (pruned / pre-activation).
+    async fn account_at(&self, address: [u8; 20], _block: BlockId) -> EthResult<Option<EvmAccountSnapshot>> {
+        self.latest_account(address).await
+    }
+
     /// The "pending" nonce for `eth_getTransactionCount(…,"pending")` (audit M-08):
     /// the chain nonce plus this node's contiguous pending EVM txs for the account,
     /// so back-to-back wallet sends increment instead of colliding. Default = the
@@ -404,34 +414,48 @@ fn web3_sha3(params: &Value) -> EthResult<Value> {
     Ok(json!(format!("0x{}", faster_hex::hex_string(digest.as_slice()))))
 }
 
-// --- eth_* state queries (Increment 3) — served at the "latest" head snapshot ---
+// --- eth_* state queries (Increment 3) — honor the block selector (audit H-04) ---
+
+/// Resolve the account at the optional block param `idx` (default: latest).
+async fn account_at_param(
+    provider: &Arc<dyn EthProvider>,
+    addr: [u8; 20],
+    params: &Value,
+    idx: usize,
+) -> EthResult<Option<EvmAccountSnapshot>> {
+    match params.as_array().and_then(|a| a.get(idx)) {
+        Some(_) => provider.account_at(addr, parse_block_param(params, idx)?).await,
+        None => provider.latest_account(addr).await,
+    }
+}
 
 async fn eth_get_balance(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let addr = parse_address_param(params, 0)?;
-    Ok(provider.latest_account(addr).await?.map(|a| quantity_from_be32(&a.balance.to_be_bytes())).unwrap_or_else(|| json!("0x0")))
+    Ok(account_at_param(provider, addr, params, 1).await?.map(|a| quantity_from_be32(&a.balance.to_be_bytes())).unwrap_or_else(|| json!("0x0")))
 }
 
 async fn eth_get_transaction_count(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let addr = parse_address_param(params, 0)?;
-    // Honor the block tag: "pending" includes this node's mempool overlay (M-08);
-    // any other tag (or none) is the latest accepted nonce.
+    // "pending" includes this node's mempool overlay (M-08); other tags resolve
+    // historical/finalized state (H-04); absent ⇒ latest.
     let nonce = match params.get(1).and_then(|v| v.as_str()) {
         Some("pending") => provider.pending_nonce(addr).await?,
-        _ => provider.latest_account(addr).await?.map(|a| a.nonce).unwrap_or(0),
+        _ => account_at_param(provider, addr, params, 1).await?.map(|a| a.nonce).unwrap_or(0),
     };
     Ok(quantity(nonce as u128))
 }
 
 async fn eth_get_code(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let addr = parse_address_param(params, 0)?;
-    let code = provider.latest_account(addr).await?.map(|a| a.code).unwrap_or_default();
+    let code = account_at_param(provider, addr, params, 1).await?.map(|a| a.code).unwrap_or_default();
     Ok(json!(format!("0x{}", faster_hex::hex_string(&code))))
 }
 
 async fn eth_get_storage_at(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let addr = parse_address_param(params, 0)?;
     let slot = parse_slot_param(params, 1)?;
-    let value = provider.latest_account(addr).await?.and_then(|a| a.storage.into_iter().find(|(k, _)| *k == slot).map(|(_, v)| v));
+    // The block selector for storageAt is param #2.
+    let value = account_at_param(provider, addr, params, 2).await?.and_then(|a| a.storage.into_iter().find(|(k, _)| *k == slot).map(|(_, v)| v));
     // getStorageAt returns a full 32-byte DATA value (zero-padded).
     let bytes = value.map(|v| v.to_be_bytes()).unwrap_or([0u8; 32]);
     Ok(json!(format!("0x{}", faster_hex::hex_string(&bytes))))
@@ -591,7 +615,8 @@ fn format_receipt(r: &EthReceipt) -> Value {
 
 // --- eth_getBlockBy* / block tx count (Increment 6: block index) ---
 
-enum BlockId {
+#[derive(Clone)]
+pub enum BlockId {
     Number(u64),
     Tag(String),
 }
@@ -633,14 +658,43 @@ async fn resolve_block(provider: &Arc<dyn EthProvider>, id: BlockId) -> EthResul
     }
 }
 
+/// Fetch full tx objects for a block iff `full` (the `fullTransactionObjects`
+/// boolean param), else `None` so [`render_block`] emits hashes (audit H-04).
+async fn full_txs_for(provider: &Arc<dyn EthProvider>, b: &EthBlock, full: bool) -> EthResult<Option<Vec<EthTx>>> {
+    if !full {
+        return Ok(None);
+    }
+    let mut out = Vec::with_capacity(b.tx_hashes.len());
+    for h in &b.tx_hashes {
+        if let Some(tx) = provider.transaction_by_hash(*h).await? {
+            out.push(tx);
+        }
+    }
+    Ok(Some(out))
+}
+
 async fn eth_get_block_by_number(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let id = parse_block_param(params, 0)?;
-    Ok(resolve_block(provider, id).await?.map(|b| render_block(&b)).unwrap_or(Value::Null))
+    let full = params.get(1).and_then(|v| v.as_bool()).unwrap_or(false);
+    match resolve_block(provider, id).await? {
+        Some(b) => {
+            let txs = full_txs_for(provider, &b, full).await?;
+            Ok(render_block(&b, txs.as_deref()))
+        }
+        None => Ok(Value::Null),
+    }
 }
 
 async fn eth_get_block_by_hash(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let hash = parse_hash32_param(params, 0)?;
-    Ok(provider.block_by_hash(hash).await?.map(|b| render_block(&b)).unwrap_or(Value::Null))
+    let full = params.get(1).and_then(|v| v.as_bool()).unwrap_or(false);
+    match provider.block_by_hash(hash).await? {
+        Some(b) => {
+            let txs = full_txs_for(provider, &b, full).await?;
+            Ok(render_block(&b, txs.as_deref()))
+        }
+        None => Ok(Value::Null),
+    }
 }
 
 async fn eth_get_block_tx_count_by_number(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
@@ -653,12 +707,16 @@ async fn eth_get_block_tx_count_by_hash(provider: &Arc<dyn EthProvider>, params:
     Ok(provider.block_by_hash(hash).await?.map(|b| quantity(b.tx_hashes.len() as u128)).unwrap_or(Value::Null))
 }
 
-/// Render an [`EthBlock`] as the standard `eth_getBlockBy*` JSON. Transactions
-/// are returned as hashes (full-tx objects land with `eth_getTransactionByHash`).
+/// Render an [`EthBlock`] as the standard `eth_getBlockBy*` JSON. When
+/// `full_txs` is `Some`, the `transactions` array holds full tx objects (the
+/// `fullTransactionObjects=true` form, audit H-04); otherwise it holds hashes.
 /// Uncle/PoW fields are the canonical empty-chain constants Ethereum tooling expects.
-fn render_block(b: &EthBlock) -> Value {
+fn render_block(b: &EthBlock, full_txs: Option<&[EthTx]>) -> Value {
     let hx = |bytes: &[u8]| format!("0x{}", faster_hex::hex_string(bytes));
-    let txs: Vec<Value> = b.tx_hashes.iter().map(|h| json!(hx(h))).collect();
+    let txs: Vec<Value> = match full_txs {
+        Some(objs) => objs.iter().map(render_tx).collect(),
+        None => b.tx_hashes.iter().map(|h| json!(hx(h))).collect(),
+    };
     json!({
         "number": quantity(b.number as u128),
         "hash": hx(&b.hash),

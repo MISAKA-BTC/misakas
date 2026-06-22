@@ -1506,6 +1506,12 @@ impl ConsensusApi for Consensus {
         Ok(self.storage.evm_header_store.get(block).optional().unwrap())
     }
 
+    fn get_evm_canonical_heads(&self) -> ConsensusResult<Option<kaspa_consensus_core::evm::CanonicalEvmHeads>> {
+        use crate::model::stores::evm::EvmCanonicalHeadsStoreReader;
+        // Absent (pre-activation / non-EVM) reads as None rather than an error.
+        Ok(self.storage.evm_heads_store.read().get().optional().unwrap())
+    }
+
     fn get_evm_state_snapshot_of(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmStateSnapshot>> {
         use crate::model::stores::evm::EvmStateStoreReader;
         Ok(self.storage.evm_state_store.get(block).optional().unwrap())

@@ -473,6 +473,14 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§16, audit H-04): the canonical EVM heads —
+    /// `latest` / `safe` / `finalized` L1 block hashes — used to resolve the
+    /// `safe`/`finalized` block tags and to read account state at a non-reorgable
+    /// height (holder-gated access). `None` on a non-EVM node / before activation.
+    fn get_evm_canonical_heads(&self) -> ConsensusResult<Option<crate::evm::CanonicalEvmHeads>> {
+        Ok(None)
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§16): the full EVM state snapshot committed after
     /// the L1 chain block `block`, for read-only `eth_*` state queries and
     /// `eth_call` simulation.
