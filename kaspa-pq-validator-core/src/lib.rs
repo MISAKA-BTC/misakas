@@ -742,6 +742,14 @@ impl ValidatorKey {
             Ok(true)
         )
     }
+
+    /// Verify a signature this key produced under an explicit `context`
+    /// domain separator (audit M-04: used by the signer to self-check
+    /// its own audit-log checkpoint signatures at startup). Returns
+    /// `false` on any verification failure or malformed signature.
+    pub fn verify_with_context(&self, message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+        matches!(verify_mldsa87_with_context(self.keypair.verification_key.as_ref(), message, signature, context), Ok(true))
+    }
 }
 
 /// Parse a `"txid:index"` stake-bond reference into a [`TransactionOutpoint`]. `txid` is

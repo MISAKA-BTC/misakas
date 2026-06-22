@@ -223,6 +223,21 @@ pub const SIGNER_PROTOCOL_VERSION: u16 = 1;
 /// is detectable by a verifier walking from a known-good entry.
 pub const AUDIT_LOG_CHAIN_KEY: &[u8] = b"kaspa-pq-signer-audit-v1";
 
+/// kaspa-pq audit M-04 — ML-DSA-87 `ctx` domain separator for a
+/// signer's *audit-log checkpoint* signature. The hash chain in
+/// [`AUDIT_LOG_CHAIN_KEY`] is keyed with a PUBLIC key, so a host
+/// with write access to `audit.log` can rewrite history and
+/// recompute a consistent chain — the chain alone is not
+/// tamper-EVIDENT against the host itself. A checkpoint periodically
+/// SIGNS the current chain head with the validator's ML-DSA-87 key
+/// (held in-process / HSM, NOT on disk); an attacker who rewrites the
+/// log to a different head cannot forge a checkpoint signature over
+/// that head, so the divergence is detectable by anyone holding the
+/// validator public key (from the on-chain bond). Domain-separated
+/// from att/unbond/takeover/tx so a checkpoint signature can never be
+/// replayed as any overlay or transaction signature, and vice versa.
+pub const AUDIT_CHECKPOINT_MLDSA87_CONTEXT: &[u8] = b"kaspa-pq-v1/audit-ckpt/mldsa87";
+
 /// Capability bitflags for the [`SignerHello`] / [`SignerHelloAck`]
 /// handshake (ADR-0015 §"Protocol versioning + handshake").
 /// Additive — new flags can land without bumping
@@ -1841,6 +1856,38 @@ pub struct SignerAuditRecord {
     /// signed.
     pub signature_fingerprint: Hash64,
     pub outcome: SignerOutcome,
+}
+
+/// kaspa-pq audit M-04 — a signed checkpoint of the signer's
+/// append-only audit log. Periodically the signer signs the current
+/// hash-chain head ([`compute_signer_audit_chain_entry`]) with a held
+/// validator ML-DSA-87 key under [`AUDIT_CHECKPOINT_MLDSA87_CONTEXT`],
+/// and appends one of these to `audit.checkpoints`. Because the chain
+/// key is public, a host that can rewrite `audit.log` can produce a
+/// self-consistent chain — but it cannot forge `signature` over a
+/// rewritten `chain_head`. Exporting these records off-box (syslog /
+/// transparency log / second host) gives unforgeable tamper-evidence:
+/// anyone holding the validator public key (derivable from the
+/// on-chain bond as `BLAKE2b-512(pubkey) == validator_id`) can verify
+/// `signature` against `chain_head`, and recompute the chain head at
+/// `record_index` from a copy of the log to confirm they match.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignerAuditCheckpoint {
+    /// Number of audit records that had been appended when this
+    /// checkpoint was taken (`chain_head` is the head AFTER that many
+    /// records). Lets a verifier locate the exact prefix to recompute.
+    pub record_index: u64,
+    pub timestamp_unix_secs: u64,
+    /// The validator key that signed this checkpoint; its public key
+    /// (hence `validator_id == BLAKE2b-512(pubkey)`) is the verifier's
+    /// anchor.
+    pub validator_id: Hash64,
+    /// The audit-log chain head being attested.
+    pub chain_head: Hash64,
+    /// ML-DSA-87 signature over `chain_head.as_byte_slice()` under
+    /// [`AUDIT_CHECKPOINT_MLDSA87_CONTEXT`]. Full signature (not a
+    /// fingerprint) so it is externally verifiable without the signer.
+    pub signature: Vec<u8>,
 }
 
 /// Compute the next entry in the signer's audit-log chain
@@ -4437,6 +4484,8 @@ mod tests {
         // ADR-0015 — node-local remote-signer audit chain key
         // and protocol-version pin.
         assert_eq!(AUDIT_LOG_CHAIN_KEY, b"kaspa-pq-signer-audit-v1");
+        // ADR-0015 / audit M-04 — audit-checkpoint signing context.
+        assert_eq!(AUDIT_CHECKPOINT_MLDSA87_CONTEXT, b"kaspa-pq-v1/audit-ckpt/mldsa87");
         assert_eq!(SIGNER_PROTOCOL_VERSION, 1);
         // ADR-0015 capability bitflags must be single-bit and
         // pairwise distinct so they compose correctly under
@@ -4458,6 +4507,12 @@ mod tests {
         assert_ne!(ATTESTATION_MLDSA87_CONTEXT, b"kaspa-pq-v1/tx/mldsa87");
         assert_ne!(TAKEOVER_TOKEN_CONTEXT, b"kaspa-pq-v1/tx/mldsa87");
         assert_ne!(TAKEOVER_TOKEN_CONTEXT, ATTESTATION_MLDSA87_CONTEXT);
+        // audit M-04 — a checkpoint signature must not collide with
+        // any overlay/tx domain, else it could be replayed as one.
+        assert_ne!(AUDIT_CHECKPOINT_MLDSA87_CONTEXT, b"kaspa-pq-v1/tx/mldsa87");
+        assert_ne!(AUDIT_CHECKPOINT_MLDSA87_CONTEXT, ATTESTATION_MLDSA87_CONTEXT);
+        assert_ne!(AUDIT_CHECKPOINT_MLDSA87_CONTEXT, UNBOND_REQUEST_CONTEXT);
+        assert_ne!(AUDIT_CHECKPOINT_MLDSA87_CONTEXT, TAKEOVER_TOKEN_CONTEXT);
     }
 
     #[test]

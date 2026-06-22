@@ -15,17 +15,18 @@
 //! * the pure equivocation decision [`check_signed_epoch_record`].
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs::{self, OpenOptions},
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use kaspa_consensus_core::{
     dns_finality::{
-        HostId, SignedEpochRecord, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata, SignerOutcome,
-        SignerPolicy, SignerRequest, SignerResponse, SignedEpochCheckOutcome, SigningPurpose, compute_signer_audit_chain_entry,
-        signature_fingerprint, ATTESTATION_MLDSA87_CONTEXT, TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
+        HostId, SignedEpochRecord, SignerAuditCheckpoint, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata,
+        SignerOutcome, SignerPolicy, SignerRequest, SignerResponse, SignedEpochCheckOutcome, SigningPurpose,
+        compute_signer_audit_chain_entry, signature_fingerprint, AUDIT_CHECKPOINT_MLDSA87_CONTEXT, ATTESTATION_MLDSA87_CONTEXT,
+        TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
     },
     tx::TransactionOutpoint,
 };
@@ -39,11 +40,16 @@ use kaspa_pq_validator_core::{SignedEpochStore, ValidatorKey};
 struct AuditLog {
     path: PathBuf,
     chain_hash: Hash64,
+    /// Number of records currently in the log (recovered on load,
+    /// incremented on append). Stamped into each checkpoint's
+    /// `record_index` so a verifier can locate the exact prefix.
+    record_count: u64,
 }
 
 impl AuditLog {
     fn load_or_new(path: PathBuf) -> io::Result<Self> {
         let mut chain_hash = Hash64::default();
+        let mut record_count: u64 = 0;
         if path.exists() {
             let bytes = fs::read(&path)?;
             let mut cur = &bytes[..];
@@ -56,6 +62,7 @@ impl AuditLog {
                 }
                 let rec: SignerAuditRecord = borsh::from_slice(&cur[4..4 + len])?;
                 chain_hash = compute_signer_audit_chain_entry(chain_hash, &rec);
+                record_count += 1;
                 cur = &cur[4 + len..];
                 good_len += 4 + len;
             }
@@ -75,7 +82,7 @@ impl AuditLog {
                 );
             }
         }
-        Ok(Self { path, chain_hash })
+        Ok(Self { path, chain_hash, record_count })
     }
 
     /// Append `rec`, advance + return the new chain head, and fsync (fail-closed: the caller treats
@@ -96,13 +103,140 @@ impl AuditLog {
         f.write_all(&frame)?;
         f.sync_all()?;
         self.chain_hash = next;
+        self.record_count += 1;
         Ok(self.chain_hash)
     }
 
     fn chain_head(&self) -> Hash64 {
         self.chain_hash
     }
+
+    fn record_count(&self) -> u64 {
+        self.record_count
+    }
+
+    /// Audit M-04: re-replay the on-disk log, capturing the chain head AFTER exactly `k` records for
+    /// every `k` in `wanted`. Returns the captured heads keyed by record count plus the total record
+    /// count, so the checkpoint verifier can confirm each signed `chain_head` matches the recomputed
+    /// prefix (a tampered/truncated log shifts the head and is caught). Walks only good frames — a
+    /// torn trailing frame is ignored exactly as `load_or_new` would truncate it.
+    fn replay_heads_at(path: &Path, wanted: &BTreeSet<u64>) -> io::Result<(HashMap<u64, Hash64>, u64)> {
+        let mut heads = HashMap::new();
+        let mut count: u64 = 0;
+        let mut chain = Hash64::default();
+        if !path.exists() {
+            return Ok((heads, 0));
+        }
+        let bytes = fs::read(path)?;
+        let mut cur = &bytes[..];
+        while cur.len() >= 4 {
+            let len = u32::from_be_bytes(cur[0..4].try_into().expect("4 bytes")) as usize;
+            if cur.len() < 4 + len {
+                break;
+            }
+            let rec: SignerAuditRecord = borsh::from_slice(&cur[4..4 + len])?;
+            chain = compute_signer_audit_chain_entry(chain, &rec);
+            count += 1;
+            if wanted.contains(&count) {
+                heads.insert(count, chain);
+            }
+            cur = &cur[4 + len..];
+        }
+        Ok((heads, count))
+    }
 }
+
+/// Audit M-04: read the framed [`SignerAuditCheckpoint`] records from `path` (4-byte big-endian
+/// length prefix + Borsh body), tolerating a torn trailing frame exactly as the audit log does.
+fn read_audit_checkpoints(path: &Path) -> io::Result<Vec<SignerAuditCheckpoint>> {
+    let mut out = Vec::new();
+    if !path.exists() {
+        return Ok(out);
+    }
+    let bytes = fs::read(path)?;
+    let mut cur = &bytes[..];
+    while cur.len() >= 4 {
+        let len = u32::from_be_bytes(cur[0..4].try_into().expect("4 bytes")) as usize;
+        if cur.len() < 4 + len {
+            break; // torn trailing frame
+        }
+        out.push(borsh::from_slice(&cur[4..4 + len])?);
+        cur = &cur[4 + len..];
+    }
+    Ok(out)
+}
+
+/// Audit M-04: summary of the startup checkpoint verification.
+struct CheckpointReport {
+    total: usize,
+    anomalies: usize,
+    latest_index: u64,
+    latest_head: Hash64,
+}
+
+/// Audit M-04: verify every signed checkpoint against the recomputed audit chain. A checkpoint is an
+/// anomaly if (a) its ML-DSA-87 signature does not verify against the held key for its `validator_id`
+/// (forged/corrupt, or a key the signer no longer holds), or (b) the chain head recomputed from
+/// `audit.log` at its `record_index` differs from the signed `chain_head` — i.e. the log was
+/// rewritten or truncated below the checkpoint. Detection only; the caller logs and never refuses to
+/// start.
+fn verify_audit_checkpoints(
+    audit_log_path: &Path,
+    checkpoint_path: &Path,
+    keys: &HashMap<Hash64, ValidatorKey>,
+) -> io::Result<CheckpointReport> {
+    let ckpts = read_audit_checkpoints(checkpoint_path)?;
+    if ckpts.is_empty() {
+        return Ok(CheckpointReport { total: 0, anomalies: 0, latest_index: 0, latest_head: Hash64::default() });
+    }
+    let wanted: BTreeSet<u64> = ckpts.iter().map(|c| c.record_index).collect();
+    let (heads_at, total_records) = AuditLog::replay_heads_at(audit_log_path, &wanted)?;
+
+    let mut anomalies = 0usize;
+    for c in &ckpts {
+        // (a) signature: must verify under the held key for this validator_id.
+        let sig_ok = keys.get(&c.validator_id).is_some_and(|k| {
+            k.verify_with_context(c.chain_head.as_byte_slice(), &c.signature, AUDIT_CHECKPOINT_MLDSA87_CONTEXT)
+        });
+        if !sig_ok {
+            anomalies += 1;
+            log::error!(
+                "[signer] audit checkpoint #{} (M-04): SIGNATURE INVALID for validator {} — forged/corrupt checkpoint or unknown key",
+                c.record_index,
+                c.validator_id
+            );
+            continue;
+        }
+        // (b) head consistency: the chain head recomputed from the current log at record_index must
+        //     equal the signed head.
+        match heads_at.get(&c.record_index) {
+            Some(h) if *h == c.chain_head => {}
+            Some(_) => {
+                anomalies += 1;
+                log::error!(
+                    "[signer] audit checkpoint #{} (M-04): chain head MISMATCH — audit.log was rewritten at or before record {}",
+                    c.record_index,
+                    c.record_index
+                );
+            }
+            None => {
+                anomalies += 1;
+                log::error!(
+                    "[signer] audit checkpoint #{} (M-04): audit.log holds only {} record(s) — records were DELETED below this checkpoint",
+                    c.record_index,
+                    total_records
+                );
+            }
+        }
+    }
+    let latest = ckpts.iter().max_by_key(|c| c.record_index).expect("non-empty");
+    Ok(CheckpointReport { total: ckpts.len(), anomalies, latest_index: latest.record_index, latest_head: latest.chain_head })
+}
+
+/// Audit M-04: take a signed audit-log checkpoint at least this often (every N appended records).
+/// Small enough that the unprotected tail of the log is short; large enough that the extra ML-DSA-87
+/// signature is negligible against the signing the signer is already doing.
+const AUDIT_CHECKPOINT_INTERVAL: u64 = 32;
 
 /// The signing engine: keys, policy, per-validator equivocation guard, and the audit log.
 pub struct SignerState {
@@ -114,6 +248,11 @@ pub struct SignerState {
     /// fixed default `bond_outpoint` keys the reused [`SignedEpochStore`] purely by epoch.
     epoch_stores: HashMap<Hash64, SignedEpochStore>,
     audit: AuditLog,
+    /// Audit M-04: append-only log of [`SignerAuditCheckpoint`]s anchoring the audit chain head with
+    /// an ML-DSA-87 signature. Lives beside `audit.log`; meant to be exported off-box.
+    checkpoint_path: PathBuf,
+    /// Records appended since the last checkpoint (triggers the next at [`AUDIT_CHECKPOINT_INTERVAL`]).
+    appends_since_checkpoint: u64,
     server_identity: HostId,
     /// Optional policy hook: purposes this signer refuses to sign (e.g. a validator-only signer can
     /// deny `Transaction` so it only ever produces attestation/unbond/takeover signatures). Empty by
@@ -136,8 +275,44 @@ impl SignerState {
         }
         let audit = AuditLog::load_or_new(state_dir.join("audit.log"))
             .map_err(|e| format!("cannot open signer audit log: {e}"))?;
-        let keys = keys.into_iter().map(|k| (k.validator_id, k)).collect();
-        Ok(Self { keys, policy, state_dir, epoch_stores: HashMap::new(), audit, server_identity, denied_purposes: Vec::new() })
+        let keys: HashMap<Hash64, ValidatorKey> = keys.into_iter().map(|k| (k.validator_id, k)).collect();
+        let checkpoint_path = state_dir.join("audit.checkpoints");
+        // Audit M-04: at startup, verify any existing signed checkpoints against the recomputed audit
+        // chain. Detection only — anomalies are logged loudly, never a refusal-to-start (a tampered
+        // log must not be able to DoS the signer; the operator acts on the alert + the off-box copy).
+        let audit_log_path = state_dir.join("audit.log");
+        match verify_audit_checkpoints(&audit_log_path, &checkpoint_path, &keys) {
+            Ok(report) => {
+                if report.total == 0 {
+                    log::info!("[signer] no audit checkpoints yet (M-04); first will be signed after {AUDIT_CHECKPOINT_INTERVAL} records");
+                } else if report.anomalies == 0 {
+                    log::info!(
+                        "[signer] verified {} audit checkpoint(s) (M-04): latest #{} head {} — 0 anomalies",
+                        report.total,
+                        report.latest_index,
+                        report.latest_head
+                    );
+                } else {
+                    log::error!(
+                        "[signer] AUDIT TAMPER ALERT (M-04): {} of {} checkpoint(s) FAILED verification — audit.log may have been rewritten. Compare against the off-box checkpoint copy.",
+                        report.anomalies,
+                        report.total
+                    );
+                }
+            }
+            Err(e) => log::warn!("[signer] could not verify audit checkpoints (M-04): {e}"),
+        }
+        Ok(Self {
+            keys,
+            policy,
+            state_dir,
+            epoch_stores: HashMap::new(),
+            audit,
+            checkpoint_path,
+            appends_since_checkpoint: 0,
+            server_identity,
+            denied_purposes: Vec::new(),
+        })
     }
 
     /// Set the optional purpose denylist (see [`SignerState::denied_purposes`]). A request whose
@@ -196,7 +371,56 @@ impl SignerState {
             // Fail-closed: never return a signature we could not durably audit.
             return SignerResponse { request_id: req.request_id, result: Err(SignerError::InternalError(format!("audit write failed: {e}"))) };
         }
+        // Audit M-04: anchor the audit chain head with a signed checkpoint every
+        // AUDIT_CHECKPOINT_INTERVAL records. Best-effort — a checkpoint-write failure is logged but
+        // does NOT fail the request (the fail-closed audit append above is the durability gate; the
+        // checkpoint is supplementary tamper-evidence, and a full disk must not be able to DoS
+        // signing through this path).
+        self.appends_since_checkpoint += 1;
+        if self.appends_since_checkpoint >= AUDIT_CHECKPOINT_INTERVAL {
+            self.appends_since_checkpoint = 0;
+            if let Err(e) = self.write_audit_checkpoint(now_unix_secs) {
+                log::warn!("[signer] audit checkpoint write failed (M-04, non-fatal): {e}");
+            }
+        }
         SignerResponse { request_id: req.request_id, result }
+    }
+
+    /// Audit M-04: sign the current audit-log chain head with a held validator ML-DSA-87 key (under
+    /// [`AUDIT_CHECKPOINT_MLDSA87_CONTEXT`]) and append a [`SignerAuditCheckpoint`] to
+    /// `audit.checkpoints`. The signing key is chosen deterministically (smallest `validator_id`) so
+    /// reloads and tests are reproducible. The chain key is public, so this signature — which an
+    /// on-host attacker cannot forge — is what makes the audit log tamper-EVIDENT once a copy of the
+    /// checkpoint file is held off-box.
+    fn write_audit_checkpoint(&mut self, now_unix_secs: u64) -> io::Result<()> {
+        // Deterministic signer: the smallest known validator_id.
+        let Some(vid) = self.keys.keys().copied().min() else {
+            return Ok(()); // no keys loaded — nothing to anchor with (cannot happen for a live signer)
+        };
+        let key = self.keys.get(&vid).expect("validator_id from this map");
+        let head = self.audit.chain_head();
+        let record_index = self.audit.record_count();
+        let signature = key.sign_with_context(head.as_byte_slice(), AUDIT_CHECKPOINT_MLDSA87_CONTEXT).to_vec();
+        let ckpt = SignerAuditCheckpoint { record_index, timestamp_unix_secs: now_unix_secs, validator_id: vid, chain_head: head, signature };
+
+        let body = borsh::to_vec(&ckpt)?;
+        let mut frame = (body.len() as u32).to_be_bytes().to_vec();
+        frame.extend_from_slice(&body);
+        let mut opts = OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&self.checkpoint_path)?;
+        f.write_all(&frame)?;
+        f.sync_all()?;
+        log::info!(
+            "[signer] audit checkpoint #{record_index} taken (M-04): head {head} signed by validator {vid} @ {now_unix_secs}s — export {} off-box for tamper-evidence",
+            self.checkpoint_path.display()
+        );
+        Ok(())
     }
 
     /// Policy-gated signing. Returns the raw ML-DSA-87 signature bytes or a structured error.
@@ -565,6 +789,65 @@ mod tests {
         let resp = s.handle_request(&req, Hash::default(), 1000);
         let sig = resp.result.expect("permissive signs a well-formed tx request");
         assert_eq!(sig.len(), 4627, "ML-DSA-87 signature length");
+    }
+
+    /// Audit M-04: a signed audit-log checkpoint verifies against the recomputed chain, and
+    /// verification flags (a) an unknown/forged signature key and (b) a rewritten/truncated log.
+    #[test]
+    fn audit_checkpoint_roundtrip_and_tamper_detection_m04() {
+        let dir = tmp_dir("m04-ckpt");
+        let k = key(0x33);
+        let vid = k.validator_id;
+        let mut s = SignerState::new(vec![k], SignerPolicy::Permissive, dir.clone(), Hash::default()).unwrap();
+
+        // Append three audit records (well-formed tx signs), then take a checkpoint at record_index 3.
+        for i in 0u8..3 {
+            let req = SignerRequest {
+                request_id: i as u64 + 1,
+                validator_id: vid,
+                purpose: SigningPurpose::Transaction,
+                context: MLDSA87_TX_CONTEXT.to_vec(),
+                message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0xa0 + i; 64])),
+                metadata: SignerMetadata::None,
+            };
+            assert!(s.handle_request(&req, Hash::default(), 1000 + i as u64).result.is_ok());
+        }
+        let head_before = s.audit_chain_head();
+        s.write_audit_checkpoint(5000).expect("checkpoint write");
+
+        let audit_log = dir.join("audit.log");
+        let ckpt_path = dir.join("audit.checkpoints");
+        assert!(ckpt_path.exists(), "checkpoint file written");
+
+        // The persisted checkpoint records record_index 3 and the current head.
+        let ckpts = read_audit_checkpoints(&ckpt_path).unwrap();
+        assert_eq!(ckpts.len(), 1);
+        assert_eq!(ckpts[0].record_index, 3);
+        assert_eq!(ckpts[0].chain_head, head_before);
+        assert_eq!(ckpts[0].validator_id, vid);
+        assert_eq!(ckpts[0].signature.len(), 4627, "full ML-DSA-87 checkpoint signature");
+
+        // (clean) verifies with zero anomalies against the known key.
+        let keys_full: HashMap<Hash64, ValidatorKey> = HashMap::from([(vid, key(0x33))]);
+        let clean = verify_audit_checkpoints(&audit_log, &ckpt_path, &keys_full).unwrap();
+        assert_eq!((clean.total, clean.anomalies), (1, 0), "clean checkpoint verifies");
+        assert_eq!(clean.latest_head, head_before);
+
+        // (a) signature/unknown-key anomaly: no key for this validator_id.
+        let no_key: HashMap<Hash64, ValidatorKey> = HashMap::new();
+        let unknown = verify_audit_checkpoints(&audit_log, &ckpt_path, &no_key).unwrap();
+        assert_eq!(unknown.anomalies, 1, "checkpoint signed by an unheld key is flagged");
+
+        // Reloading the signer over the same dir runs verification without panicking and recovers the
+        // head (the checkpoint chain is intact).
+        let s2 = SignerState::new(vec![key(0x33)], SignerPolicy::Permissive, dir.clone(), Hash::default()).unwrap();
+        assert_eq!(s2.audit_chain_head(), head_before, "reload recovers the audit chain head");
+        drop(s2);
+
+        // (b) head-consistency anomaly: truncate the audit log below the checkpoint's record_index.
+        fs::write(&audit_log, b"").unwrap();
+        let tampered = verify_audit_checkpoints(&audit_log, &ckpt_path, &keys_full).unwrap();
+        assert_eq!((tampered.total, tampered.anomalies), (1, 1), "deleting records below a checkpoint is detected");
     }
 
     /// Audit C-02 (Critical): a request must not be able to sign under another
