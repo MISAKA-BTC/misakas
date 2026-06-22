@@ -204,12 +204,30 @@ mod unix_daemon {
         if !allowed_uids.is_empty() {
             log::info!("[signer] restricting client UIDs to {allowed_uids:?}");
         }
+        // Audit M-03: bound concurrent connections. Each connection holds a dedicated
+        // OS thread (and serve_connection may idle a long-lived client post-handshake),
+        // so without a cap a same-uid client could open many sockets and exhaust
+        // threads. The cap bounds both the thread count and the number of idle holders
+        // (the peer is already same-uid/allowlisted; this is local-DoS hardening).
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const MAX_CONCURRENT_CONNECTIONS: usize = 64;
+        let active_conns = Arc::new(AtomicUsize::new(0));
         for conn in listener.incoming() {
             match conn {
                 Ok(stream) => {
+                    if active_conns.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_CONNECTIONS {
+                        active_conns.fetch_sub(1, Ordering::AcqRel);
+                        log::warn!("[signer] at the {MAX_CONCURRENT_CONNECTIONS}-connection cap; dropping a new connection");
+                        drop(stream);
+                        continue;
+                    }
                     let state = Arc::clone(&state);
                     let allowed_uids = allowed_uids.clone();
-                    std::thread::spawn(move || serve_connection(stream, &state, server_identity, &allowed_uids));
+                    let active = Arc::clone(&active_conns);
+                    std::thread::spawn(move || {
+                        serve_connection(stream, &state, server_identity, &allowed_uids);
+                        active.fetch_sub(1, Ordering::AcqRel);
+                    });
                 }
                 Err(e) => log::warn!("[signer] accept failed: {e}"),
             }
