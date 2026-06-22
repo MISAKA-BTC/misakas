@@ -55,6 +55,30 @@ fn parse_anchors(s: &str) -> Vec<Ipv4Addr> {
     s.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).filter_map(|x| x.parse().ok()).collect()
 }
 
+/// Audit H-01: a public seeder must serve only publicly-ROUTABLE peer IPs. Drop
+/// private/loopback/link-local/CGNAT/documentation/multicast/reserved addresses so
+/// an attacker who poisons the node's address store with bogon Sybil entries cannot
+/// have them advertised to fresh nodes. (The operator-supplied anchors are trusted
+/// and served regardless.) A stable-Rust composition of the non-global ranges.
+fn is_routable_v4(ip: &Ipv4Addr) -> bool {
+    let o = ip.octets();
+    let cgnat = o[0] == 100 && (o[1] & 0xC0) == 64; // 100.64.0.0/10
+    let ietf_protocol = o[0] == 192 && o[1] == 0 && o[2] == 0; // 192.0.0.0/24
+    let reserved = o[0] >= 240; // 240.0.0.0/4 (incl. 255.255.255.255)
+    let this_network = o[0] == 0; // 0.0.0.0/8
+    !(ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || cgnat
+        || ietf_protocol
+        || reserved
+        || this_network)
+}
+
 /// Best-effort refresh: query the co-located node's address manager and merge IPv4 peers with the
 /// anchors. Errors are non-fatal (the caller keeps the last good set / anchors).
 async fn refresh_peers(node_rpc: &str, anchors: &[Ipv4Addr]) -> Result<Vec<Ipv4Addr>, String> {
@@ -75,7 +99,10 @@ async fn refresh_peers(node_rpc: &str, anchors: &[Ipv4Addr]) -> Result<Vec<Ipv4A
     let _ = client.disconnect().await;
     for a in resp?.known_addresses {
         if let IpAddr::V4(v4) = a.ip.0 {
-            set.insert(v4);
+            // Audit H-01: only advertise publicly-routable peers (drop bogon Sybil).
+            if is_routable_v4(&v4) {
+                set.insert(v4);
+            }
         }
     }
     Ok(set.into_iter().collect())
