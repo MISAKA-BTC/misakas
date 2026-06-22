@@ -19,4 +19,9 @@ interface IMisakaCollection {
     function totalMinted() external view returns (uint256);
     function metadataFrozen() external view returns (bool);
     function collectionManifestURI() external view returns (string memory);
+
+    /// keccak256 of the canonical collection manifest bytes — the content hash
+    /// indexers are told to trust. Declared here so it is reachable through the
+    /// documented IMisakaCollection ABI, not just the concrete contract.
+    function manifestHash() external view returns (bytes32);
 }

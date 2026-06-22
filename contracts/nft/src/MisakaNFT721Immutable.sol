@@ -15,6 +15,13 @@ import {IMisakaCollection} from "./interfaces/IMisakaCollection.sol";
 ///         metadata setter, NO proxy, NO pause, NO admin rescue/burn of user
 ///         tokens. Royalty via ERC-2981 (informational; marketplaces enforce).
 ///
+///         Minting can be sealed forever with `finishMinting()`: after the seal
+///         NO further token can be created even if the admin re-grants
+///         MINTER_ROLE — so a 1/1 or fixed edition is provable on-chain, not
+///         just a promise. The constructor rejects an empty `baseURI`, empty
+///         `collectionURI`, or zero `manifestHash`, so an immutable collection
+///         cannot be deployed permanently broken / contentless.
+///
 /// @dev SECURITY: settlement is the MISAKA BlockDAG, but owner authorization on
 ///      the EVM lane is secp256k1/ECDSA — this is NOT post-quantum account
 ///      security. Do not market tokens minted here as "post-quantum".
@@ -24,6 +31,7 @@ contract MisakaNFT721Immutable is ERC721, ERC721Royalty, AccessControl, IMisakaC
     uint256 private immutable _maxSupplyValue;
     bytes32 private immutable _manifestHashValue;
     uint256 private _totalMintedValue;
+    bool private _mintingFinished;
     string private _baseTokenURI;
     string private _collectionURIValue;
 
@@ -31,6 +39,14 @@ contract MisakaNFT721Immutable is ERC721, ERC721Royalty, AccessControl, IMisakaC
     error MintToZero();
     error ZeroAdmin();
     error ZeroMaxSupply();
+    error EmptyBaseURI();
+    error EmptyCollectionURI();
+    error ZeroManifestHash();
+    error MintingIsFinished();
+    error MintingAlreadyFinished();
+
+    /// Emitted once when minting is irreversibly sealed.
+    event MintingFinished(uint256 totalMinted);
 
     constructor(
         string memory name_,
@@ -46,6 +62,11 @@ contract MisakaNFT721Immutable is ERC721, ERC721Royalty, AccessControl, IMisakaC
     ) ERC721(name_, symbol_) {
         if (maxSupply_ == 0) revert ZeroMaxSupply(); // 0 is NOT "unlimited"
         if (admin_ == address(0)) revert ZeroAdmin();
+        // An immutable profile has no metadata setter: an empty/zero pointer
+        // would brick the whole collection forever, so reject it at birth.
+        if (bytes(baseURI_).length == 0) revert EmptyBaseURI();
+        if (bytes(collectionURI_).length == 0) revert EmptyCollectionURI();
+        if (manifestHash_ == bytes32(0)) revert ZeroManifestHash();
         _maxSupplyValue = maxSupply_;
         _baseTokenURI = baseURI_;
         _manifestHashValue = manifestHash_;
@@ -62,12 +83,27 @@ contract MisakaNFT721Immutable is ERC721, ERC721Royalty, AccessControl, IMisakaC
     /// Mint the next token to `to`. Token IDs are 1-based, monotonic, never
     /// reused; capped at `maxSupply`. Emits the standard ERC-721 Transfer.
     function safeMint(address to) external onlyRole(MINTER_ROLE) returns (uint256 tokenId) {
+        if (_mintingFinished) revert MintingIsFinished();
         if (to == address(0)) revert MintToZero();
         if (_totalMintedValue >= _maxSupplyValue) revert MaxSupplyReached();
         unchecked {
             tokenId = ++_totalMintedValue;
         }
         _safeMint(to, tokenId);
+    }
+
+    /// Irreversibly seal minting. After this, `safeMint` reverts forever — even
+    /// if the admin re-grants MINTER_ROLE — making a closed edition provable
+    /// on-chain. There is no un-finish; the seal is one-way by design.
+    function finishMinting() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (_mintingFinished) revert MintingAlreadyFinished();
+        _mintingFinished = true;
+        emit MintingFinished(_totalMintedValue);
+    }
+
+    /// True once minting has been irreversibly sealed.
+    function mintingFinished() external view returns (bool) {
+        return _mintingFinished;
     }
 
     // --- IMisakaCollection ---
