@@ -770,12 +770,14 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     dns_activation_daa_score: 0,
     // Production: the overlay reaches the Active stage once >= 20M KAS of stake is bonded.
     min_active_stake_sompi: 20_000_000 * SOMPI_PER_KASPA,
-    // audit H-05 (policy, user decision 2026-06-01): `min_active_validators = 1` means a SINGLE
-    // validator bonding >= 20M KAS suffices to drive the DNS Active stage — finality then depends on
-    // one operator's key/availability/honesty. This is a deliberate bootstrap-phase relaxation; the
-    // safety floor is the 20M KAS `min_active_stake_sompi`, not validator COUNT. Raise this to N (e.g.
-    // 3-5) before relying on DNS finality as a multi-operator security claim (revisit post-launch).
-    min_active_validators: 1,
+    // audit H-11 (Kaspa-diff): the DNS Active stage must NOT be drivable by a single key. A
+    // multi-operator floor (3) is the mainnet default so finality does not hinge on one operator's
+    // key/availability/honesty (the safety floor is BOTH the 20M-KAS `min_active_stake_sompi` AND
+    // this validator COUNT). The FINAL value (3-5+), stake-concentration caps, and the
+    // `required_work_depth` calibration to live difficulty are a mainnet-launch governance gate —
+    // see the mainnet launch checklist; mainnet is not yet launched. (Testnet pins this back to 1
+    // in TESTNET_DNS_PARAMS for the single-operator experimental mesh.)
+    min_active_validators: 3,
     // Production: every individual validator must bond >= 20M KAS; a smaller StakeBond is
     // rejected at acceptance and can never attest (user decision 2026-06-01).
     min_bond_amount_sompi: 20_000_000 * SOMPI_PER_KASPA,
@@ -902,6 +904,10 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
     min_bond_amount_sompi: 10 * SOMPI_PER_KASPA,
     min_active_stake_sompi: 10 * SOMPI_PER_KASPA,
+    // Experimental single-operator testnet mesh: pin the validator-count floor to 1 (mainnet's
+    // PRODUCTION floor is 3, audit H-11). This is the live testnet's intended config; do NOT raise
+    // it here without re-provisioning multiple testnet validators.
+    min_active_validators: 1,
     ..PRODUCTION_DNS_PARAMS
 };
 
