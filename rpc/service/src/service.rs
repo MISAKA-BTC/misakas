@@ -1061,6 +1061,19 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // ~200 bytes/entry is a conservative borsh estimate (outpoint 36 + compact utxo entry +
         // 64-byte PubKeyHashMlDsa87 script + repeated address); JSON is ~2.5x larger.
         let est_borsh_mib = (num_entries.saturating_mul(200)) as f64 / (1024.0 * 1024.0);
+        // Audit H-02: HARD CAP the legacy unbounded method. Past this the borsh
+        // response (~200 B/entry) approaches/exceeds the 128 MiB wRPC frame cap and
+        // the serialize+write would exhaust node memory/CPU/socket (the remote DoS
+        // the auditor describes). Return an explicit error BEFORE serializing and
+        // steer the caller to the paginated getUtxosByAddressPage or the
+        // balance-only getBalancesByAddresses, instead of silently continuing.
+        const LARGE_UTXO_HARD_CAP: usize = 250_000;
+        if num_entries > LARGE_UTXO_HARD_CAP {
+            return Err(RpcError::General(format!(
+                "getUtxosByAddresses: {num_entries} UTXOs across {num_addresses} address(es) exceeds the {LARGE_UTXO_HARD_CAP} hard cap \
+(~{est_borsh_mib:.0} MiB); use getUtxosByAddressPage (cursor-paginated) or getBalancesByAddresses (balance only)."
+            )));
+        }
         const LARGE_UTXO_RESPONSE_THRESHOLD: usize = 50_000;
         if num_entries >= LARGE_UTXO_RESPONSE_THRESHOLD {
             let msg = format!(

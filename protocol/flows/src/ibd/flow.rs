@@ -738,6 +738,19 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             }
             return Ok(()); // EVM-inactive network — no EVM state to import.
         }
+        // Audit H-03: bound the accepted bytes BEFORE deserializing so a malicious
+        // IBD peer cannot send a near-1-GiB (P2P decode ceiling) or gzip-bomb-
+        // decompressed payload that borsh expands into a huge nested allocation.
+        // These are generous ceilings for the real pruning-point state (the current
+        // nets are far smaller); a chunked/streamed manifest is the deeper follow-up.
+        const MAX_EVM_HEADER_BYTES: usize = 1 << 20; // 1 MiB (the header is tiny)
+        const MAX_EVM_STATE_SNAPSHOT_BYTES: usize = 256 << 20; // 256 MiB
+        if msg.evm_header.len() > MAX_EVM_HEADER_BYTES {
+            return Err(ProtocolError::Other("PruningPointEvmState header exceeds the accepted size cap"));
+        }
+        if msg.evm_state_snapshot.len() > MAX_EVM_STATE_SNAPSHOT_BYTES {
+            return Err(ProtocolError::Other("PruningPointEvmState snapshot exceeds the accepted size cap"));
+        }
         let header: kaspa_consensus_core::evm::EvmExecutionHeader =
             borsh::from_slice(&msg.evm_header).map_err(|_| ProtocolError::Other("invalid EVM execution header in PruningPointEvmState"))?;
         let snapshot: kaspa_consensus_core::evm::EvmStateSnapshot =
@@ -769,6 +782,12 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
                 ));
             }
             return Ok(()); // overlay dormant — nothing to import.
+        }
+        // Audit H-03: bound the accepted overlay snapshot bytes before deserializing
+        // (bonds + reward windows are far smaller than the EVM state).
+        const MAX_OVERLAY_SNAPSHOT_BYTES: usize = 64 << 20; // 64 MiB
+        if msg.overlay_snapshot.len() > MAX_OVERLAY_SNAPSHOT_BYTES {
+            return Err(ProtocolError::Other("PruningPointOverlaySnapshot exceeds the accepted size cap"));
         }
         let snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot =
             borsh::from_slice(&msg.overlay_snapshot).map_err(|_| ProtocolError::Other("invalid overlay snapshot in PruningPointOverlaySnapshot"))?;
