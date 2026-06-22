@@ -915,9 +915,16 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             return Ok(());
         }
 
+        // The total gives the operator the denominator for the "Processed M block bodies (P%)"
+        // progress lines below — without it, a percentage that resets to a low value right after
+        // the header phase reached 100% reads like a rollback when it is just a new phase. The
+        // header phase and this body phase each have their OWN ProgressReporter (each starting at
+        // 0% over its own DAA-score window), so a body percent below the header percent is normal.
+        info!("IBD: {} missing block bodies to sync from peer {} (header sync is already complete; this is the body phase)", hashes.len(), self.router);
+
         let low_header = consensus.async_get_header(*hashes.first().expect("hashes was non empty")).await?;
         let high_header = consensus.async_get_header(*hashes.last().expect("hashes was non empty")).await?;
-        let mut progress_reporter = ProgressReporter::new(low_header.daa_score, high_header.daa_score, "blocks");
+        let mut progress_reporter = ProgressReporter::new(low_header.daa_score, high_header.daa_score, "block bodies");
 
         let mut iter = hashes.chunks(IBD_BATCH_SIZE);
         let QueueChunkOutput { jobs: mut prev_jobs, daa_score: mut prev_daa_score, timestamp: mut prev_timestamp } =
