@@ -17,7 +17,7 @@ use kaspa_addresses::{Address, Prefix};
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::dns_finality::{
     DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation, signature_fingerprint,
-    single_attestation_shard,
+    single_attestation_shard, stake_attestation_message,
 };
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::mass::MassCalculator;
@@ -165,8 +165,9 @@ struct BondArgs {
     #[arg(long, env = "KASPA_PQ_VALIDATOR_KEY")]
     validator_key: String,
 
-    /// Amount to stake, in sompi. Becomes the bond's locked output-0; must be covered by a
-    /// single funding UTXO together with the fee.
+    /// Amount to stake, in sompi. Becomes the bond's locked output-0. Covered by aggregating up
+    /// to 20 of the LARGEST mature funding UTXOs at this key's address (amount + fee); no manual
+    /// consolidation needed unless the 20 largest still fall short. (1 KAS/MSK = 100_000_000 sompi.)
     #[arg(long)]
     amount: u64,
 
@@ -928,7 +929,9 @@ async fn run_daemon(args: RunArgs) -> Result<(), String> {
     info!("[{VALIDATOR}] connected: network={node_network} synced={} version={}", server.is_synced, server.server_version);
 
     // Load the signing identity if fully configured (key + bond + state DB); else observe.
-    let attestor = Attestor::load(&args, prefix, coinbase_maturity, &mass_calc)?;
+    // Pin this network's genesis hash (C-01): the sidecar recomputes the canonical
+    // attestation digest from it rather than trusting the RPC-supplied message.
+    let attestor = Attestor::load(&args, prefix, coinbase_maturity, &mass_calc, params.genesis.hash.as_byte_slice().to_vec())?;
     match &attestor {
         Some(a) => info!(
             "[{VALIDATOR}] attesting as validator_id={} (funding {}, fee {} sompi{})",
@@ -960,6 +963,12 @@ struct Attestor {
     bond_outpoint: TransactionOutpoint,
     signed_store: SignedEpochStore,
     prefix: Prefix,
+    /// This network's genesis hash bytes — the attestation network discriminator
+    /// (`stake_attestation_message` Addendum A.3). Pinned at load from the node's
+    /// network id; audit C-01: the sidecar recomputes the canonical signing digest
+    /// from this (never the RPC-supplied digest), so a malicious/desynced node
+    /// cannot make it sign a non-canonical message.
+    genesis_hash: Vec<u8>,
     /// Network coinbase-maturity (blocks); a coinbase funding UTXO younger than this cannot be
     /// spent for the attestation tx. Captured once at load from the node's network id.
     coinbase_maturity: u64,
@@ -1001,7 +1010,13 @@ impl Attestor {
     /// Load the signing identity iff `--validator-key`, `--stake-bond` and
     /// `--signed-epoch-db` are all provided. The state file is rejected if it belongs to a
     /// different validator/bond (cross-key equivocation guard).
-    fn load(args: &RunArgs, prefix: Prefix, coinbase_maturity: u64, mass_calc: &MassCalculator) -> Result<Option<Self>, String> {
+    fn load(
+        args: &RunArgs,
+        prefix: Prefix,
+        coinbase_maturity: u64,
+        mass_calc: &MassCalculator,
+        genesis_hash: Vec<u8>,
+    ) -> Result<Option<Self>, String> {
         let (Some(key_path), Some(bond_ref), Some(db)) = (&args.validator_key, &args.stake_bond, &args.signed_epoch_db) else {
             return Ok(None);
         };
@@ -1016,6 +1031,7 @@ impl Attestor {
             bond_outpoint,
             signed_store,
             prefix,
+            genesis_hash,
             coinbase_maturity,
             attestation_fee,
             last_attested_epoch: None,
@@ -1037,23 +1053,41 @@ impl Attestor {
         dry_run: bool,
         virtual_daa: u64,
     ) -> Result<(), String> {
-        let message = decode_message(&target.message)?;
         let target_hash = parse_hash64(&target.target_hash)?;
         let vsc = parse_hash64(&target.validator_set_commitment)?;
 
-        // Sign + local self-verify (the same check the consensus aggregator runs).
-        let signature = self.key.sign_attestation(&message);
-        if !self.key.verify_attestation(&message, &signature) {
-            return Err("local attestation self-verify failed".to_string());
+        // C-01: recompute the canonical attestation digest LOCALLY from the
+        // structured target + the pinned genesis hash + this validator's bond —
+        // never trust the RPC-supplied digest. The RPC `message` is advisory: it
+        // MUST equal the local recompute, else a malicious/desynced node is trying
+        // to make us sign a non-canonical message → fail closed (no signature).
+        let expected = stake_attestation_message(
+            &self.genesis_hash,
+            target.epoch,
+            target_hash,
+            target.target_daa_score,
+            vsc,
+            self.bond_outpoint,
+        );
+        let digest = expected.as_bytes();
+        let rpc_message = decode_message(&target.message)?;
+        if rpc_message != digest {
+            return Err(format!(
+                "[{VALIDATOR}] attestation digest mismatch for epoch {}: the node's `message` does not equal the locally recomputed canonical digest; refusing to sign (possible malicious or desynced node)",
+                target.epoch
+            ));
         }
-        let record = SignedEpochRecord {
+
+        // ADR-0011 equivocation guard + dry-run BEFORE signing (C-01: never sign
+        // before the guard, never sign in a dry run). `check` is read-only and keys
+        // on (epoch, target_hash, target_daa_score), so a placeholder fingerprint is
+        // fine for the decision; the real fingerprint is stamped after signing.
+        let mut record = SignedEpochRecord {
             epoch: target.epoch,
             target_hash,
             target_daa_score: target.target_daa_score,
-            signature_fingerprint: signature_fingerprint(&signature),
+            signature_fingerprint: Hash64::default(),
         };
-
-        // ADR-0011 equivocation guard.
         let outcome = self.signed_store.check(&record);
         match outcome {
             SignedEpochCheckOutcome::Block => {
@@ -1066,9 +1100,16 @@ impl Attestor {
         }
 
         if dry_run {
-            info!("[{VALIDATOR}] DRY-RUN signed epoch {} target={} (not submitting)", target.epoch, target.target_hash);
+            info!("[{VALIDATOR}] DRY-RUN epoch {} target={} (recomputed digest verified; not signing/submitting)", target.epoch, target.target_hash);
             return Ok(());
         }
+
+        // Sign the LOCALLY-RECOMPUTED canonical digest (never the RPC bytes) + self-verify.
+        let signature = self.key.sign_attestation(&digest);
+        if !self.key.verify_attestation(&digest, &signature) {
+            return Err("local attestation self-verify failed".to_string());
+        }
+        record.signature_fingerprint = signature_fingerprint(&signature);
 
         // Build the attestation shard.
         let att = StakeAttestation {
