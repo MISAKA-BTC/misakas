@@ -60,9 +60,16 @@ impl EthProvider for NodeEthProvider {
     }
 
     async fn gas_price(&self) -> EthResult<u128> {
-        // MVP: a fixed suggested price (1 gwei). Refined to the head base-fee
-        // once the U256→u128 read is wired (Increment 3+).
-        Ok(1_000_000_000)
+        // Suggest the live head base fee (audit M-08) — a wallet that pays this as
+        // maxFeePerGas is accepted at the current 1559 floor. Falls back to the
+        // genesis initial base fee if the head header is briefly unavailable.
+        use kaspa_consensus_core::evm::EVM_INITIAL_BASE_FEE;
+        let session = self.consensus_manager.consensus().session().await;
+        let header = session
+            .spawn_blocking(|c| c.get_evm_head_header())
+            .await
+            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        Ok(header.and_then(|h| h.base_fee_per_gas.try_to_u128()).unwrap_or(EVM_INITIAL_BASE_FEE as u128))
     }
 
     async fn latest_account(&self, address: [u8; 20]) -> EthResult<Option<kaspa_consensus_core::evm::EvmAccountSnapshot>> {
@@ -77,6 +84,13 @@ impl EthProvider for NodeEthProvider {
             .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
         let target = kaspa_consensus_core::evm::EvmAddress::from_bytes(address);
         Ok(snapshot.and_then(|s| s.accounts.into_iter().find(|a| a.address == target)))
+    }
+
+    async fn pending_nonce(&self, address: [u8; 20]) -> EthResult<u64> {
+        // Chain (accepted) nonce + this node's contiguous pending EVM txs (M-08).
+        let state_nonce = self.latest_account(address).await?.map(|a| a.nonce).unwrap_or(0);
+        let sender = kaspa_consensus_core::evm::EvmAddress::from_bytes(address);
+        Ok(self.flow_context.mining_manager().evm_next_pending_nonce(sender, state_nonce))
     }
 
     async fn eth_call(&self, req: EthCallRequest) -> EthResult<Vec<u8>> {
@@ -275,6 +289,16 @@ impl EthProvider for NodeEthProvider {
                 (decoded, ctx)
             })
             .await;
+        // Pending fallback (audit M-08): a tx that is in this node's mempool but
+        // not yet in any payload is decoded from the pool, with null block context.
+        let decoded = match decoded {
+            Some(d) => Some(d),
+            None => self
+                .flow_context
+                .mining_manager()
+                .get_evm_transaction_raw(&h)
+                .and_then(|raw| kaspa_evm::tx::decode_eth_tx(&raw).ok()),
+        };
         Ok(decoded.map(|d| EthTx {
             hash: tx_hash,
             from: d.from,
@@ -464,6 +488,11 @@ fn to_eth_block(resp: kaspa_consensus_core::evm::EvmBlockResponse, parent_hash: 
         hash,
         parent_hash,
         state_root: h.state_root.as_bytes(),
+        // `transactionsRoot` is a standard Ethereum keccak256 ordered trie.
+        // `receiptsRoot` is a MISAKA-CUSTOM commitment (Borsh EvmReceipt root),
+        // NOT the standard typed-receipt RLP trie — standard receipt-trie proofs
+        // will NOT verify against it. See docs/evm-differences-from-ethereum.md
+        // (audit M-02). Switching to standard RLP is a fenced consensus change.
         transactions_root: h.transactions_root.as_bytes(),
         receipts_root: h.receipts_root.as_bytes(),
         logs_bloom: h.logs_bloom.as_bytes().to_vec(),

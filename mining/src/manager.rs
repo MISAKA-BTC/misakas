@@ -153,6 +153,14 @@ impl MiningManager {
         self.evm_mempool.read().len()
     }
 
+    /// The next nonce for `sender` accounting for this node's pending EVM txs
+    /// (audit M-08, `eth_getTransactionCount(…,"pending")`). `state_nonce` is the
+    /// chain (accepted) nonce; the result is `state_nonce` plus the contiguous
+    /// pending run, so a wallet's back-to-back sends do not collide.
+    pub fn evm_next_pending_nonce(&self, sender: kaspa_consensus_core::evm::EvmAddress, state_nonce: u64) -> u64 {
+        self.evm_mempool.read().next_pending_nonce(&sender, state_nonce)
+    }
+
     /// §9.2: queue a pre-resolved + pre-validated deposit claim for inclusion in
     /// this node's own template `system_ops`. The RPC layer (which holds the
     /// UTXO view) resolves the lock outpoint into the `DepositClaim` and checks
@@ -1122,6 +1130,12 @@ impl MiningManagerProxy {
     /// §14.2 relay: serve a pending EVM tx's raw bytes to a requesting peer.
     pub fn get_evm_transaction_raw(&self, tx_hash: &kaspa_hashes::EvmH256) -> Option<Vec<u8>> {
         self.inner.get_evm_transaction_raw(tx_hash)
+    }
+
+    /// Audit M-08: the next nonce for `eth_getTransactionCount(…,"pending")` —
+    /// chain nonce + this node's contiguous pending EVM txs for the account.
+    pub fn evm_next_pending_nonce(&self, sender: kaspa_consensus_core::evm::EvmAddress, state_nonce: u64) -> u64 {
+        self.inner.evm_next_pending_nonce(sender, state_nonce)
     }
 
     /// §18.1: whether the given EVM tx is pending in this node's EVM mempool.

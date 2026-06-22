@@ -219,6 +219,14 @@ pub trait EthProvider: Send + Sync + 'static {
     /// index (Increment 6).
     async fn latest_account(&self, address: [u8; 20]) -> EthResult<Option<EvmAccountSnapshot>>;
 
+    /// The "pending" nonce for `eth_getTransactionCount(…,"pending")` (audit M-08):
+    /// the chain nonce plus this node's contiguous pending EVM txs for the account,
+    /// so back-to-back wallet sends increment instead of colliding. Default = the
+    /// latest (accepted) nonce, for providers without a mempool overlay.
+    async fn pending_nonce(&self, address: [u8; 20]) -> EthResult<u64> {
+        Ok(self.latest_account(address).await?.map(|a| a.nonce).unwrap_or(0))
+    }
+
     /// `eth_call`: read-only execution at the canonical head; returns the call's
     /// output bytes (revert data on a revert, surfaced as an error by the caller).
     async fn eth_call(&self, req: EthCallRequest) -> EthResult<Vec<u8>>;
@@ -405,7 +413,13 @@ async fn eth_get_balance(provider: &Arc<dyn EthProvider>, params: &Value) -> Eth
 
 async fn eth_get_transaction_count(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let addr = parse_address_param(params, 0)?;
-    Ok(quantity(provider.latest_account(addr).await?.map(|a| a.nonce as u128).unwrap_or(0)))
+    // Honor the block tag: "pending" includes this node's mempool overlay (M-08);
+    // any other tag (or none) is the latest accepted nonce.
+    let nonce = match params.get(1).and_then(|v| v.as_str()) {
+        Some("pending") => provider.pending_nonce(addr).await?,
+        _ => provider.latest_account(addr).await?.map(|a| a.nonce).unwrap_or(0),
+    };
+    Ok(quantity(nonce as u128))
 }
 
 async fn eth_get_code(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
@@ -898,35 +912,47 @@ pub fn decode_hex(s: &str) -> EthResult<Vec<u8>> {
     Ok(out)
 }
 
-/// Dispatch a single request OR a batch array, returning the matching JSON shape.
-async fn process(provider: &Arc<dyn EthProvider>, body: Value) -> Value {
+/// Dispatch a single request OR a batch array. Returns `None` when there is no
+/// response to send (a notification, or an all-notification batch — audit L-03).
+async fn process(provider: &Arc<dyn EthProvider>, body: Value) -> Option<Value> {
     match body {
         Value::Array(items) => {
+            // JSON-RPC: an empty batch is itself an invalid request (audit L-03).
+            if items.is_empty() {
+                return Some(err_value(codes::INVALID_REQUEST, "empty batch"));
+            }
             // Audit H-02: bound the batch so one request cannot fan out into
             // tens of thousands of dispatched calls (a 4 MiB body of tiny calls).
             if items.len() > MAX_BATCH_ITEMS {
-                return serde_json::to_value(RpcResponse::err(
-                    Value::Null,
-                    EthRpcError::new(codes::INVALID_REQUEST, format!("batch too large: {} items > {MAX_BATCH_ITEMS} max", items.len())),
-                ))
-                .unwrap_or(Value::Null);
+                return Some(err_value(codes::INVALID_REQUEST, &format!("batch too large: {} items > {MAX_BATCH_ITEMS} max", items.len())));
             }
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                out.push(serde_json::to_value(handle_one(provider, item).await).unwrap_or(Value::Null));
+                if let Some(resp) = handle_one(provider, item).await {
+                    out.push(serde_json::to_value(resp).unwrap_or(Value::Null));
+                }
             }
-            Value::Array(out)
+            // All-notification batch ⇒ no response body.
+            (!out.is_empty()).then_some(Value::Array(out))
         }
-        single => serde_json::to_value(handle_one(provider, single).await).unwrap_or(Value::Null),
+        single => handle_one(provider, single).await.map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
     }
 }
 
-async fn handle_one(provider: &Arc<dyn EthProvider>, item: Value) -> RpcResponse {
+fn err_value(code: i64, msg: &str) -> Value {
+    serde_json::to_value(RpcResponse::err(Value::Null, EthRpcError::new(code, msg.to_string()))).unwrap_or(Value::Null)
+}
+
+/// Dispatch one request. Returns `None` for a NOTIFICATION (a request with no
+/// `id` member — `id:null` is a normal request and still gets a response).
+async fn handle_one(provider: &Arc<dyn EthProvider>, item: Value) -> Option<RpcResponse> {
+    let is_notification = item.is_object() && item.get("id").is_none();
     let id = item.get("id").cloned().unwrap_or(Value::Null);
-    match serde_json::from_value::<RpcRequest>(item) {
+    let resp = match serde_json::from_value::<RpcRequest>(item) {
         Ok(req) => dispatch(provider, req).await,
         Err(e) => RpcResponse::err(id, EthRpcError::new(codes::INVALID_REQUEST, format!("invalid request: {e}"))),
-    }
+    };
+    (!is_notification).then_some(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,10 +1065,13 @@ async fn serve_conn(mut stream: TcpStream, provider: Arc<dyn EthProvider>) -> st
     }
     body.truncate(content_length);
 
-    let response_json = match serde_json::from_slice::<Value>(&body) {
+    let response_json: Option<Value> = match serde_json::from_slice::<Value>(&body) {
         Ok(v) => process(&provider, v).await,
-        Err(e) => serde_json::to_value(RpcResponse::err(Value::Null, EthRpcError::new(codes::PARSE_ERROR, format!("parse error: {e}"))))
-            .unwrap_or(Value::Null),
+        Err(e) => Some(err_value(codes::PARSE_ERROR, &format!("parse error: {e}"))),
+    };
+    // Notification(s): no response body (audit L-03).
+    let Some(response_json) = response_json else {
+        return write_response(&mut stream, 204, "No Content", "").await;
     };
     let payload = serde_json::to_string(&response_json).unwrap_or_else(|_| "null".to_string());
     // Audit H-02: cap the response so a single request cannot emit an unbounded body.

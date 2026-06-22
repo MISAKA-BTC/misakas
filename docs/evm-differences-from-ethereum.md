@@ -56,3 +56,18 @@ application‑design rule, not an EVM difference, but it is audit‑relevant for
 - **System precompiles**: `0x…F001/F002/F003` (deposit/withdraw/ML‑DSA‑verify) — non‑Ethereum.
 - **Acceptance model**: EVM execution is the *acceptance* of merged blocks' payloads on the
   selected‑parent chain, not a single linear block — see `misaka-evm-design-v0.4.md` §6.
+
+## Commitment roots in `eth_getBlockBy*` (audit M-02)
+
+- **`transactionsRoot`** is a standard Ethereum keccak256 ordered (index-keyed) trie over the
+  raw EIP-2718 transaction bytes — standard tooling can verify inclusion proofs against it.
+- **`receiptsRoot`** is a **MISAKA-custom commitment**: the root over the canonical Borsh
+  `EvmReceipt` encoding, **not** the standard typed-receipt RLP trie. It is the value the L1
+  header commits to and re-execution checks, so it is correct and deterministic — but standard
+  Ethereum *receipt-trie* proofs (light clients, receipt Merkle proofs) will **not** verify
+  against it. Do not advertise standard receipt-proof compatibility. Per-receipt fields
+  (`status`, `logs`, block-global `logIndex`, `logsBloom`) are standard and correct via
+  `eth_getTransactionReceipt` / `eth_getLogs`.
+- Moving `receiptsRoot` to the standard typed-receipt RLP trie is possible but is an
+  activation-fenced **consensus change** (the root is committed), so it is deferred to a future
+  fork/re-genesis rather than shipped as an RPC tweak.

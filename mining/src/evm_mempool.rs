@@ -312,6 +312,19 @@ impl EvmMempool {
         senders
     }
 
+    /// The next nonce a wallet should use for `sender` given the chain `state_nonce`
+    /// (audit M-08, `eth_getTransactionCount(…,"pending")`): walk the CONTIGUOUS run
+    /// of pending nonces starting at `state_nonce` and return the first gap. With no
+    /// pending txs this is just `state_nonce`, so back-to-back sends increment
+    /// correctly instead of colliding on the latest (accepted) nonce.
+    pub fn next_pending_nonce(&self, sender: &EvmAddress, state_nonce: u64) -> u64 {
+        let mut n = state_nonce;
+        while self.by_sender_nonce.contains_key(&(*sender, n)) {
+            n += 1;
+        }
+        n
+    }
+
     /// Count of this sender's pending txs (BTreeMap range over the sender's nonces).
     fn sender_tx_count(&self, sender: &EvmAddress) -> usize {
         self.by_sender_nonce.range((*sender, 0)..=(*sender, u64::MAX)).count()
@@ -647,6 +660,25 @@ mod tests {
             pool.insert(tx(0xB, 0, 999, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, 4)),
             Err(EvmMempoolError::TooLarge { .. })
         ));
+    }
+
+    /// Audit M-08: pending nonce = state nonce + the contiguous pending run.
+    #[test]
+    fn next_pending_nonce_walks_the_contiguous_run() {
+        let mut pool = EvmMempool::new();
+        let s = EvmAddress::from_bytes([0xA; 20]);
+        // No pending txs ⇒ just the state nonce.
+        assert_eq!(pool.next_pending_nonce(&s, 5), 5);
+        // Pending 5,6,7 (contiguous from state 5) ⇒ next is 8.
+        for n in [5u64, 6, 7] {
+            pool.insert(tx(0xA, n, 100, 10, n as u8)).unwrap();
+        }
+        assert_eq!(pool.next_pending_nonce(&s, 5), 8);
+        // A gap (9 present, 8 missing) does not count past the gap.
+        pool.insert(tx(0xA, 9, 100, 10, 9)).unwrap();
+        assert_eq!(pool.next_pending_nonce(&s, 5), 8);
+        // A different sender is unaffected.
+        assert_eq!(pool.next_pending_nonce(&EvmAddress::from_bytes([0xB; 20]), 3), 3);
     }
 
     /// Audit M-01: a replacement that passes the fee/tip bump but fails a later
