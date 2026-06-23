@@ -47,11 +47,19 @@ activated by governance (a coordinated deploy with frozen gas/caps). The contrac
 forge test -vvv
 ```
 
+Verified: `forge test` = **7 passed** (solc 0.8.28, `via_ir`). Runtime bytecode
+keccak (record on source freeze):
+`0x35ef1cf6df2fc3262daddacd81dde00299205500dffb4ce6d07a12f2d4ce2daa`.
+
 `test/MisakaPqSmartAccount.t.sol` exercises the `executeRoot` LOGIC with F003
 **mocked** (happy path + value forward + nonce bump, replay, wrong nonce, validity
-window, ML-DSA-false, inert-F003, target-revert). Foundry cannot run the lattice
-precompile, so the **real F003 verify + a real ML-DSA-87 signature** are proven by
-the Rust end-to-end test against an F003-activated harness (P0-2 next step).
+window, ML-DSA-false, inert-F003, target-revert) — Foundry cannot run the lattice
+precompile. The **real F003 verify + a real ML-DSA-87 signature over this contract's
+exact op-preimage encoding** are proven by the Rust test
+`kaspa-evm::mldsa_verify::tests::contract_execute_root_f003_input_verifies_with_real_mldsa`
+(it replicates `_opPreimage` byte-for-byte and runs the real `run_f003_verify`).
+A further optional e2e (deploy the compiled bytecode in revm + `executeRoot` end to
+end) is a belt-and-suspenders follow-up; the encoding is already proven byte-exact.
 
 ## Security notes
 

@@ -244,6 +244,69 @@ mod tests {
         assert!(!run_f003_verify(&prea_input(&payload, &pubkey, &wrong_sig, &preimage)));
     }
 
+    /// PREA P0-2 e2e: replicate `MisakaPqSmartAccount.executeRoot`'s EXACT on-chain
+    /// construction — the `_opPreimage` packing (OP_DOMAIN ‖ chainId ‖ account ‖
+    /// version ‖ nonce ‖ window ‖ target ‖ value ‖ callData, fixed widths) and the
+    /// F003 v0x02 input — then verify it through the REAL F003 logic with a REAL
+    /// ML-DSA-87 root signature. This proves the contract's F003 integration works
+    /// end-to-end with a real lattice signature (the Foundry tests cover the contract
+    /// LOGIC with F003 mocked; this covers the real F003 + real sig + the exact
+    /// Solidity encoding). Regression guard: if `_opPreimage`'s layout changes, this
+    /// must change in lock-step or on-chain auth breaks.
+    #[test]
+    fn contract_execute_root_f003_input_verifies_with_real_mldsa() {
+        let kp = mldsa::generate_key_pair([0x77u8; 32]);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let root_payload = blake2b_512_address_payload(&pubkey); // the account's stored 64-byte payload
+
+        // op fields a real executeRoot(...) call would carry.
+        let account = [0xACu8; 20];
+        let version: u64 = 1;
+        let nonce: u64 = 0;
+        let valid_after: u64 = 0;
+        let valid_until: u64 = u64::MAX;
+        let target = [0x7Au8; 20];
+        let value = [0u8; 32]; // uint256 0
+        let call_data = [0x12u8, 0x34];
+        // uint256(block.chainid) = EVM_CHAIN_ID (0x4D534B), big-endian in 32 bytes.
+        let mut chain_id32 = [0u8; 32];
+        chain_id32[24..32].copy_from_slice(&(kaspa_consensus_core::evm::EVM_CHAIN_ID).to_be_bytes());
+
+        // _opPreimage = abi.encodePacked(OP_DOMAIN, chainId, account, version, nonce,
+        //                                validAfter, validUntil, target, value, callData)
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(b"MISAKA_PQ_EXECUTE_ROOT_V1");
+        preimage.extend_from_slice(&chain_id32);
+        preimage.extend_from_slice(&account);
+        preimage.extend_from_slice(&version.to_be_bytes());
+        preimage.extend_from_slice(&nonce.to_be_bytes());
+        preimage.extend_from_slice(&valid_after.to_be_bytes());
+        preimage.extend_from_slice(&valid_until.to_be_bytes());
+        preimage.extend_from_slice(&target);
+        preimage.extend_from_slice(&value);
+        preimage.extend_from_slice(&call_data);
+
+        // The signer commits to keyed_blake2b_512(OP_CONTEXT, preimage) under ROOT_CONTEXT.
+        let digest = blake2b_512_keyed(F003_PREA_OP_MLDSA87_CONTEXT, &preimage);
+        let sig = mldsa::sign(&kp.signing_key, digest.as_byte_slice(), F003_PREA_ROOT_MLDSA87_CONTEXT, [0x01u8; 32]).expect("sign");
+
+        // The exact F003 v0x02 input the contract builds: version ‖ payload ‖ pubkey ‖ sig ‖ preimage.
+        let mut input = vec![F003_VERSION_PREA_ROOT];
+        input.extend_from_slice(root_payload.as_byte_slice());
+        input.extend_from_slice(&pubkey);
+        input.extend_from_slice(sig.as_ref());
+        input.extend_from_slice(&preimage);
+
+        assert!(run_f003_verify(&input), "the contract's F003 v0x02 input with a real ML-DSA root signature verifies");
+
+        // A DIFFERENT operation (one flipped byte in the op preimage, e.g. the target)
+        // would produce a different on-chain preimage and must NOT verify.
+        let mut tampered = input.clone();
+        let off = F003_PREA_PREFIX_LEN + 25 /*OP_DOMAIN*/ + 32 /*chainId*/; // first byte of `account`
+        tampered[off] ^= 0x01;
+        assert!(!run_f003_verify(&tampered), "a different operation (tampered preimage) does not verify");
+    }
+
     #[test]
     fn version_0x01_fsl_roundtrip_and_context_separation() {
         let msg = [0x77u8; 64];
