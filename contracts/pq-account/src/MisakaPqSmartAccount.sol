@@ -1,54 +1,91 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-/// @title MISAKA PQ-Rooted EVM Smart Account — root path (PREA design v1.1 §13, P0-2)
+/// @title MISAKA PQ-Rooted EVM Smart Account (PREA design v1.1 §13/§14/§15, P0-2)
 /// @notice An EVM account whose UNRESTRICTED authority is a post-quantum ML-DSA-87
-///         key (NOT secp256k1). A root operation is authorized by an ML-DSA-87
-///         signature verified on-chain by the MISAKA F003 `MLDSA87_VERIFY`
-///         precompile (`0x…F003`, version 0x02). The account stores only the
-///         64-byte ADDRESS PAYLOAD of its root key; the full public key is supplied
-///         per call and F003 binds it to that payload before verifying.
+///         key (NOT secp256k1), with a RESTRICTED secp256k1 "session" key for
+///         frequent low-risk operations. Root authorization is verified on-chain by
+///         the MISAKA F003 `MLDSA87_VERIFY` precompile (`0x…F003`, version 0x02);
+///         session authorization is a normal secp256k1 signature gated by a grant.
 ///
-///         This MVP implements ONLY the root path (`executeRoot`). Operational-root
-///         rotation, the offline Vault Owner, freeze/recovery, the restricted
-///         secp256k1 session path, ERC-1271, the Factory and the EntryPoint are
-///         deferred to later P0-2 / P1 slices (design v1.1 §7/§12/§13.5/§14/§15/§16).
+///         Implemented (P0-2): the ML-DSA root path (`executeRoot`), root-authorized
+///         session grant/revoke, the restricted session path (`executeSession`), and
+///         ERC-1271 (root-only). Deferred (P1): the offline Vault Owner, operational-
+///         root rotation/freeze/recovery, Merkle target allowlists, full ERC-721/1155
+///         amount policy + Permit2, ERC-1271 session-purpose recompute, the
+///         deterministic Factory and the relayed EntryPoint
+///         (design v1.1 §7/§12/§13.6/§14.5-6/§15.2/§16).
 ///
-///         IMPORTANT: F003 is consensus-FENCED INERT (activation = u64::MAX) on every
-///         MISAKA network today. While inert a call to `0x…F003` returns empty data,
-///         so `executeRoot` REVERTS ("ml-dsa root auth unavailable"). This account is
-///         only operable once F003 is activated by governance. The contract + its
-///         tests exist now so the consumer is ready; the live e2e (real F003 + a real
-///         ML-DSA signature) runs against an F003-activated test harness.
-///
-///         SECURITY NOTE: ownership/authority here is post-quantum (ML-DSA-87). This
-///         account intentionally does NOT accept any secp256k1/ECDSA transaction as
-///         an authority — on a PQ-active network the consensus rule (PREA I-6) also
-///         skips a direct ECDSA tx whose sender is a registered PQ account.
+///         ⚠️ F003 is consensus-FENCED INERT (activation = u64::MAX) on every MISAKA
+///         network today, so a call to `0x…F003` returns empty data and `executeRoot`
+///         REVERTS until F003 is governance-activated (`executeSession` does not touch
+///         F003 and works whenever a grant exists). The contract + tests exist now so
+///         the consumer is ready.
 contract MisakaPqSmartAccount {
-    /// The MISAKA F003 ML-DSA-87 verify precompile.
+    // --- F003 (ML-DSA-87 verify precompile) ---
     address internal constant F003 = address(0x0000000000000000000000000000000000F003);
-    /// F003 input version tag for a PREA key-bound root authorization (option B:
-    /// F003 hashes the op preimage itself).
     uint8 internal constant F003_VERSION_PREA_ROOT = 0x02;
-    /// Domain tag prepended to the canonical op preimage. The off-chain ML-DSA
-    /// signer MUST construct the identical preimage (see `_opPreimage`).
     bytes internal constant OP_DOMAIN = "MISAKA_PQ_EXECUTE_ROOT_V1";
 
-    /// The root key's 64-byte ML-DSA-87 address payload (keyed-BLAKE2b-512 of the
-    /// public key under the MISAKA address context), split into two words. F003
-    /// checks the per-call public key hashes to exactly this.
+    // --- secp256k1 (session) constants ---
+    /// EIP-2 low-`s` bound (secp256k1n/2); reject the malleable high-`s` half.
+    uint256 internal constant SECP256K1N_HALF = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
+    /// Session domain tag for the op hash an off-chain session key signs.
+    bytes32 internal constant SESSION_OP_DOMAIN = keccak256("MISAKA_PQ_EXECUTE_SESSION_V1");
+    /// ERC-1271 magic value for a valid signature.
+    bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e;
+    /// Selectors a session may NEVER call (approval-as-delegation drains every value
+    /// cap by handing withdrawal rights to an external spender): ERC-20/721 `approve`,
+    /// ERC-721/1155 `setApprovalForAll`. DELEGATECALL is structurally impossible (the
+    /// account only ever `CALL`s). Permit/Permit2 are a documented P1 follow-up.
+    bytes4 internal constant SEL_APPROVE = 0x095ea7b3; // approve(address,uint256)
+    bytes4 internal constant SEL_SET_APPROVAL_FOR_ALL = 0xa22cb465; // setApprovalForAll(address,bool)
+    // ERC-20 transfer selectors whose amount IS decoded + capped when a token cap is set.
+    bytes4 internal constant SEL_TRANSFER = 0xa9059cbb; // transfer(address,uint256)
+    bytes4 internal constant SEL_TRANSFER_FROM = 0x23b872dd; // transferFrom(address,address,uint256)
+
+    // --- root identity (immutable) ---
+    /// The root key's 64-byte ML-DSA-87 address payload (F003 binds the per-call
+    /// public key to exactly this).
     bytes32 public immutable rootPayloadHi;
     bytes32 public immutable rootPayloadLo;
-    /// Account version (bound into every op preimage so a signature for one
-    /// account version can never authorize another).
+    /// Account version (bound into every op preimage / session op hash).
     uint64 public immutable accountVersion;
 
-    /// Strictly-increasing root operation counter (replay + intra-call reentrancy
-    /// guard: a reentrant call would need a signature over the NEXT nonce).
+    // --- mutable ---
+    /// Strictly-increasing root operation counter (replay + reentrancy guard).
     uint64 public rootNonce;
+    /// Bumped by a (deferred) root rotation; sessions bind to their grant epoch so a
+    /// rotation invalidates ALL outstanding sessions at once. 0 for the MVP.
+    uint64 public rootEpoch;
+
+    struct SessionGrant {
+        bool active;
+        uint64 validUntilBlock;
+        uint64 maxCalls;
+        uint64 callsUsed;
+        uint128 maxNativeTotal;
+        uint128 nativeUsed;
+        uint64 rootEpoch;
+    }
+
+    struct Allow {
+        bool allowed;
+        /// Per-call ERC-20 amount cap for `transfer`/`transferFrom` (0 = no token-amount
+        /// semantics — the (target,selector) allowlist + native cap are the gate; a
+        /// non-zero cap on a non-transfer selector is rejected as unverifiable).
+        uint256 maxAmount;
+    }
+
+    /// session key (secp256k1 address) → grant.
+    mapping(address => SessionGrant) public sessions;
+    /// session key → keccak256(target ‖ selector) → allowance.
+    mapping(address => mapping(bytes32 => Allow)) public allows;
 
     event RootExecuted(uint64 indexed nonce, address indexed target, uint256 value, bool success);
+    event SessionGranted(address indexed sessionKey, uint64 validUntilBlock, uint64 maxCalls, uint128 maxNativeTotal);
+    event SessionRevoked(address indexed sessionKey);
+    event SessionExecuted(address indexed sessionKey, uint64 callIndex, address indexed target, uint256 value);
 
     constructor(bytes32 rootPayloadHi_, bytes32 rootPayloadLo_, uint64 accountVersion_) {
         rootPayloadHi = rootPayloadHi_;
@@ -58,12 +95,12 @@ contract MisakaPqSmartAccount {
 
     receive() external payable {}
 
+    // ------------------------------------------------------------------ root path
+
     /// The exact bytes the ML-DSA root signature commits to (via F003's internal
-    /// keyed-BLAKE2b-512). Packed with FIXED widths so an off-chain signer can
-    /// reproduce it byte-for-byte: domain ‖ chainId(32) ‖ account(20) ‖
-    /// version(8) ‖ nonce(8) ‖ validAfter(8) ‖ validUntil(8) ‖ target(20) ‖
-    /// value(32) ‖ callData. chainId + account bind the op to THIS chain and
-    /// account (anti cross-chain / cross-account replay).
+    /// keyed-BLAKE2b-512). Fixed widths so an off-chain signer reproduces it
+    /// byte-for-byte: domain ‖ chainId(32) ‖ account(20) ‖ version(8) ‖ nonce(8) ‖
+    /// validAfter(8) ‖ validUntil(8) ‖ target(20) ‖ value(32) ‖ callData.
     function _opPreimage(
         address target,
         uint256 value,
@@ -86,11 +123,10 @@ contract MisakaPqSmartAccount {
         );
     }
 
-    /// Execute one root operation authorized by an ML-DSA-87 signature.
-    /// @param publicKey the 2592-byte ML-DSA-87 public key (F003 binds it to the
-    ///        stored root payload — a wrong key fails the binding, not just the sig).
-    /// @param signature the 4627-byte ML-DSA-87 signature over the op preimage's
-    ///        keyed-BLAKE2b-512 digest under the PREA root context.
+    /// Execute one root operation authorized by an ML-DSA-87 signature (F003 v0x02).
+    /// Self-admin ops (grantSession/revokeSession) are performed by passing
+    /// `target = address(this)` and the corresponding calldata — the ML-DSA root
+    /// signature then authorizes exactly that self-call.
     function executeRoot(
         address target,
         uint256 value,
@@ -103,27 +139,193 @@ contract MisakaPqSmartAccount {
     ) external returns (bytes memory) {
         require(nonce == rootNonce, "PQ: bad nonce");
         require(block.number >= validAfterBlock && block.number <= validUntilBlock, "PQ: outside validity window");
-        // Fail-closed already (a wrong length shifts the F003 offsets and F003 returns
-        // false), but check explicitly for a clear error + tight input.
         require(publicKey.length == 2592 && signature.length == 4627, "PQ: bad key/sig length");
 
         bytes memory preimage = _opPreimage(target, value, callData, validAfterBlock, validUntilBlock, nonce);
-
-        // F003 v0x02 input: version ‖ expected_payload64 ‖ pubkey ‖ sig ‖ preimage.
         bytes memory input =
             abi.encodePacked(F003_VERSION_PREA_ROOT, rootPayloadHi, rootPayloadLo, publicKey, signature, preimage);
 
         (bool verified, bytes memory ret) = F003.staticcall(input);
-        // Inert F003 ⇒ empty return ⇒ this require fails ("…unavailable" semantics).
         require(verified && ret.length == 32 && uint8(ret[31]) == 1, "PQ: ml-dsa root auth failed");
 
-        // Effects before interaction: bump the nonce FIRST so a reentrant call from
-        // the target cannot replay this op (it would need a signature over nonce+1).
-        rootNonce = nonce + 1;
+        rootNonce = nonce + 1; // effects before interaction (replay + reentrancy guard)
 
         (bool success, bytes memory result) = target.call{value: value}(callData);
         require(success, "PQ: target call reverted");
         emit RootExecuted(nonce, target, value, success);
         return result;
+    }
+
+    // -------------------------------------------------------------- session admin
+    // Only callable by the account itself (i.e. via executeRoot's authorized
+    // self-call), so the ML-DSA root is the sole grantor/revoker of sessions.
+
+    function grantSession(
+        address sessionKey,
+        uint64 validUntilBlock,
+        uint64 maxCalls,
+        uint128 maxNativeTotal,
+        bytes32[] calldata targetSelectorKeys,
+        uint256[] calldata maxAmounts
+    ) external {
+        require(msg.sender == address(this), "PQ: only root (via executeRoot)");
+        require(sessionKey != address(0), "PQ: zero session key");
+        require(targetSelectorKeys.length == maxAmounts.length, "PQ: policy length mismatch");
+
+        SessionGrant storage g = sessions[sessionKey];
+        g.active = true;
+        g.validUntilBlock = validUntilBlock;
+        g.maxCalls = maxCalls;
+        g.callsUsed = 0;
+        g.maxNativeTotal = maxNativeTotal;
+        g.nativeUsed = 0;
+        g.rootEpoch = rootEpoch;
+        for (uint256 i; i < targetSelectorKeys.length; i++) {
+            allows[sessionKey][targetSelectorKeys[i]] = Allow({allowed: true, maxAmount: maxAmounts[i]});
+        }
+        emit SessionGranted(sessionKey, validUntilBlock, maxCalls, maxNativeTotal);
+    }
+
+    function revokeSession(address sessionKey) external {
+        require(msg.sender == address(this), "PQ: only root (via executeRoot)");
+        sessions[sessionKey].active = false;
+        emit SessionRevoked(sessionKey);
+    }
+
+    /// The allowlist key for a (target, selector) pair.
+    function allowKey(address target, bytes4 selector) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(target, selector));
+    }
+
+    // ----------------------------------------------------------------- session path
+
+    /// The op hash a session key signs (domain-bound to this chain + account; the
+    /// session "nonce" is the grant's monotonic call index). The signer (session key)
+    /// is RECOVERED from the signature over this hash — it is intentionally NOT a
+    /// field here.
+    function _sessionOpHash(
+        address target,
+        uint256 value,
+        bytes calldata callData,
+        uint64 callIndex
+    ) internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                SESSION_OP_DOMAIN,
+                block.chainid,
+                address(this),
+                accountVersion,
+                target,
+                value,
+                keccak256(callData),
+                callIndex
+            )
+        );
+    }
+
+    /// Execute one session operation. `ecdsaSig` is a 65-byte secp256k1 signature by
+    /// the granted session key over `_sessionOpHash(...)`. Enforces: grant active +
+    /// epoch + expiry, monotonic call index, max-calls, native value cap, the
+    /// (target,selector) allowlist, the forbidden-selector blocklist, and (for
+    /// `transfer`/`transferFrom`) the ERC-20 amount cap. CALL only — never delegatecall.
+    function executeSession(
+        address target,
+        uint256 value,
+        bytes calldata callData,
+        uint64 callIndex,
+        bytes calldata ecdsaSig
+    ) external returns (bytes memory) {
+        // A session must NEVER call the account itself: grantSession/revokeSession
+        // gate only on `msg.sender == address(this)`, so a self-call would let a
+        // session allowlisted for (address(this), grantSession) escalate to granting
+        // itself unlimited sessions. Fail closed regardless of the allowlist.
+        require(target != address(this), "PQ: session cannot target self");
+        require(callData.length >= 4, "PQ: calldata too short");
+        bytes4 sel = bytes4(callData[:4]);
+        require(sel != SEL_APPROVE && sel != SEL_SET_APPROVAL_FOR_ALL, "PQ: forbidden selector");
+
+        address sessionKey = _recover(_sessionOpHash(target, value, callData, callIndex), ecdsaSig);
+        require(sessionKey != address(0), "PQ: bad session signature");
+
+        SessionGrant storage g = sessions[sessionKey];
+        require(g.active && g.rootEpoch == rootEpoch, "PQ: session inactive");
+        require(block.number <= g.validUntilBlock, "PQ: session expired");
+        require(callIndex == g.callsUsed, "PQ: bad session call index");
+        require(g.callsUsed < g.maxCalls, "PQ: session call cap");
+        require(uint256(value) + uint256(g.nativeUsed) <= uint256(g.maxNativeTotal), "PQ: session native cap");
+
+        Allow storage a = allows[sessionKey][allowKey(target, sel)];
+        require(a.allowed, "PQ: target/selector not allowed");
+        if (a.maxAmount != 0) {
+            require(_erc20Amount(sel, callData) <= a.maxAmount, "PQ: token amount cap");
+        }
+
+        g.callsUsed += 1;
+        g.nativeUsed += uint128(value);
+
+        (bool success, bytes memory result) = target.call{value: value}(callData);
+        require(success, "PQ: session call reverted");
+        emit SessionExecuted(sessionKey, callIndex, target, value);
+        return result;
+    }
+
+    /// Decode the capped ERC-20 amount for `transfer`/`transferFrom`. A non-zero
+    /// amount cap on any other selector is unverifiable → reject (fail-closed).
+    function _erc20Amount(bytes4 sel, bytes calldata callData) internal pure returns (uint256) {
+        if (sel == SEL_TRANSFER) {
+            require(callData.length >= 4 + 64, "PQ: bad transfer calldata");
+            return uint256(bytes32(callData[36:68]));
+        }
+        if (sel == SEL_TRANSFER_FROM) {
+            require(callData.length >= 4 + 96, "PQ: bad transferFrom calldata");
+            // selector(4) ‖ from(32) ‖ to(32) ‖ amount(32) ⇒ amount at [68:100].
+            return uint256(bytes32(callData[68:100]));
+        }
+        revert("PQ: amount cap unsupported for selector");
+    }
+
+    // --------------------------------------------------------------------- ERC-1271
+
+    /// ERC-1271: ONLY an ML-DSA root signature (verified via F003 v0x02 over the
+    /// 1271 `hash` wrapped in a session/root op preimage) is a generally-valid
+    /// account signature. Session (secp256k1) signatures are NOT accepted here by
+    /// default — accepting them unconditionally would let an off-chain order/permit
+    /// hash be passed off under a benign purpose (the purpose-confusion vector); a
+    /// purpose-recomputing session 1271 path is a P1 follow-up (design §15.2).
+    /// `signature` layout: `pubKey(2592) ‖ sig(4627)`. The signed op preimage wraps
+    /// `hash` with the ERC-1271 domain so a 1271 attestation can never be replayed as
+    /// an `executeRoot` operation (distinct domain tag).
+    function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4) {
+        if (signature.length != 2592 + 4627) {
+            return 0xffffffff;
+        }
+        bytes calldata publicKey = signature[:2592];
+        bytes calldata sig = signature[2592:];
+        bytes memory preimage = abi.encodePacked("MISAKA_PQ_ERC1271_V1", uint256(block.chainid), address(this), hash);
+        bytes memory input =
+            abi.encodePacked(F003_VERSION_PREA_ROOT, rootPayloadHi, rootPayloadLo, publicKey, sig, preimage);
+        (bool verified, bytes memory ret) = F003.staticcall(input);
+        if (verified && ret.length == 32 && uint8(ret[31]) == 1) {
+            return ERC1271_MAGIC;
+        }
+        return 0xffffffff;
+    }
+
+    // ------------------------------------------------------------------- secp256k1
+
+    /// Recover a secp256k1 signer from a 65-byte `r ‖ s ‖ v` signature, rejecting the
+    /// malleable high-`s` half (EIP-2) and `v ∉ {27,28}`. Returns address(0) on a bad
+    /// signature (so the grant lookup then fails "session inactive").
+    function _recover(bytes32 hash, bytes calldata ecdsaSig) internal pure returns (address) {
+        if (ecdsaSig.length != 65) {
+            return address(0);
+        }
+        bytes32 r = bytes32(ecdsaSig[0:32]);
+        bytes32 s = bytes32(ecdsaSig[32:64]);
+        uint8 v = uint8(ecdsaSig[64]);
+        if (uint256(s) > SECP256K1N_HALF || (v != 27 && v != 28)) {
+            return address(0);
+        }
+        return ecrecover(hash, v, r, s);
     }
 }

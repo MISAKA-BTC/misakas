@@ -6,10 +6,17 @@ ML-DSA-87 signature verified **on-chain** by the MISAKA **F003 `MLDSA87_VERIFY`
 precompile** (`0x…F003`, version `0x02`). See `docs/misaka-prea-design-v1.1.md`
 §13 for the full design.
 
-This is the **P0-2 MVP**: only the root path (`executeRoot`). Deferred to later
-slices: operational-root rotation, the offline Vault Owner, freeze/recovery, the
-restricted secp256k1 session path, ERC-1271, the deterministic Factory, and the
-relayed EntryPoint (design §7 / §12 / §13.5 / §14 / §15 / §16).
+**P0-2 implemented:** the ML-DSA root path (`executeRoot`), root-authorized session
+grant/revoke, the **restricted secp256k1 session path** (`executeSession`), and
+**ERC-1271** (root-only). The session path enforces: deny-by-default of `approve`
+/ `setApprovalForAll` (approval-as-delegation drains every cap), a (target,selector)
+allowlist, native value caps (per-total) + ERC-20 `transfer`/`transferFrom` amount
+caps, expiry / max-calls / monotonic call-index / root-epoch binding, and CALL-only
+(never delegatecall). Deferred to later slices: the offline Vault Owner,
+operational-root rotation / freeze / recovery, Merkle target allowlists, full
+ERC-721/1155 amount policy + Permit2, ERC-1271 session-purpose recompute, the
+deterministic Factory, and the relayed EntryPoint
+(design §7 / §12 / §13.6 / §14.5-6 / §15.2 / §16).
 
 ## How authorization works (option B — full PQ, no BLAKE2b-in-EVM)
 
@@ -47,14 +54,17 @@ activated by governance (a coordinated deploy with frozen gas/caps). The contrac
 forge test -vvv
 ```
 
-Verified: `forge test` = **7 passed** (solc 0.8.28, `via_ir`). Runtime bytecode
+Verified: `forge test` = **20 passed** (solc 0.8.28, `via_ir`). Runtime bytecode
 keccak (record on source freeze):
-`0x35ef1cf6df2fc3262daddacd81dde00299205500dffb4ce6d07a12f2d4ce2daa`.
+`0xd8e758fb3d1f87bfec2426d1d44e2fada537d57acb70faf4ffd33e47acd68c77`.
 
-`test/MisakaPqSmartAccount.t.sol` exercises the `executeRoot` LOGIC with F003
-**mocked** (happy path + value forward + nonce bump, replay, wrong nonce, validity
-window, ML-DSA-false, inert-F003, target-revert) — Foundry cannot run the lattice
-precompile. The **real F003 verify + a real ML-DSA-87 signature over this contract's
+`test/MisakaPqSmartAccount.t.sol` exercises `executeRoot` with F003 **mocked**
+(happy/replay/nonce/window/ML-DSA-false/inert-F003/target-revert) and the full
+session path (happy + value forward + counters, forbidden-selector, unlisted
+target, native cap, call cap, bad call-index, expiry, ERC-20 amount cap, revoke,
+ungranted key, only-root grant) + ERC-1271 (root-valid / F003-false / bad-length).
+Foundry cannot run the lattice precompile, so the root path's real ML-DSA verify is
+the Rust e2e; the session path is pure secp256k1/EVM and fully forge-tested. The **real F003 verify + a real ML-DSA-87 signature over this contract's
 exact op-preimage encoding** are proven by the Rust test
 `kaspa-evm::mldsa_verify::tests::contract_execute_root_f003_input_verifies_with_real_mldsa`
 (it replicates `_opPreimage` byte-for-byte and runs the real `run_f003_verify`).
@@ -69,5 +79,15 @@ end) is a belt-and-suspenders follow-up; the encoding is already proven byte-exa
 - Cross-chain / cross-account replay is prevented by binding `chainId` +
   `address(this)` + `accountVersion` into the op preimage.
 - Ownership is ML-DSA-87 (post-quantum). The account accepts no secp256k1/ECDSA
-  authority; on a PQ-active network the consensus rule (PREA I-6) additionally
+  ROOT authority; on a PQ-active network the consensus rule (PREA I-6) additionally
   class-2-skips a direct ECDSA tx whose sender is a registered PQ account.
+- A session can NEVER target the account itself (`executeSession` rejects
+  `target == address(this)`) — otherwise a session allowlisted for
+  `(address(this), grantSession)` could self-escalate via the
+  `msg.sender == address(this)` self-call. Sessions also cannot `approve` /
+  `setApprovalForAll` (approval-as-delegation), use delegatecall (CALL-only), or
+  exceed their native + ERC-20-transfer amount + call-count + expiry caps.
+- ⚠️ Allowlisting a router / multicall / aggregator / non-standard-token selector
+  for a session grants UNCAPPED token movement through that call (the amount cap
+  only decodes `transfer`/`transferFrom`). The root must allowlist only specific,
+  trusted (target, selector) pairs. Per-token/collection Merkle policy is P1.
