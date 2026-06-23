@@ -72,6 +72,22 @@ pub const MISAKA_WITHDRAW_PRECOMPILE: EvmAddress = EvmAddress::from_bytes([
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x02,
 ]);
 
+/// Reserved precompile address for `MLDSA87_VERIFY` (PREA design v1.1 §9 / FSL
+/// §4.3). A pure post-quantum signature-verify precompile (ML-DSA-87, FIPS 204):
+/// it changes no state and moves no value, so it is reachable from any frame
+/// (incl. `STATICCALL`). The call is **version-discriminated** (`input[0]`):
+/// `0x01` = FSL generic Hash64 verify; `0x02` = PREA key-bound root authorization
+/// (additionally binds the pubkey to its UTXO address payload). Any malformed
+/// input, wrong length, unknown version, key-payload mismatch, or invalid
+/// signature returns the 32-byte ABI `false` (never panics, never reverts).
+/// ACTIVATION-FENCED + INERT until `evm_f003_mldsa_verify_activation_daa_score`
+/// (u64::MAX on every network); below the fence the handler is not registered, so
+/// a call to this address behaves exactly as a call to an empty account today
+/// (byte-identical execution, genesis/state-root unchanged).
+pub const MISAKA_MLDSA_VERIFY_PRECOMPILE: EvmAddress = EvmAddress::from_bytes([
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x03,
+]);
+
 /// The EVM genesis state root — the `parent_state_root` of the first EVM block.
 /// With no system predeploys this is the canonical empty Merkle-Patricia-Trie
 /// root `keccak256(rlp(()))` (= `alloy_trie::EMPTY_ROOT_HASH`); the P2 executor
@@ -168,6 +184,59 @@ pub const MAX_WITHDRAWALS_PER_EVM_BLOCK: usize = 256;
 /// name (the standard ML-DSA P2PKH script is 69 bytes; this is a sanity bound,
 /// the class check is the real gate).
 pub const MAX_WITHDRAW_SCRIPT_BYTES: usize = 128;
+
+// --- F003 MLDSA87_VERIFY precompile (PREA design v1.1 §9 / FSL §4.3). ---
+//
+// P0-0 FROZEN VALUES (proposed; benchmark-confirm on a low-end no-SIMD reference
+// image before activation — these are inert under u64::MAX and so freely tunable
+// until the activation DAA is set; changing them AFTER activation is a hard fork).
+// The gas charge is the PRIMARY deterministic bound: one ML-DSA-87 portable
+// verify is ~tens of µs, so a flat per-call gas calibrated so that
+// `block_gas / F003_VERIFY_GAS ≈ MAX_MLDSA_VERIFY_PER_EVM_BLOCK` bounds the
+// per-block verify CPU even though the precompile is reachable from inner frames
+// (the named count caps below DOCUMENT that gas-implied ceiling).
+
+/// F003 input version tags (`input[0]`). 0x01 = FSL generic Hash64 verify;
+/// 0x02 = PREA key-bound root authorization.
+pub const F003_VERSION_FSL_GENERIC: u8 = 0x01;
+pub const F003_VERSION_PREA_ROOT: u8 = 0x02;
+
+/// F003 fixed input lengths (exact-match; any other length ⇒ ABI `false`).
+/// 0x01: `version(1) ‖ pubkey(2592) ‖ message_hash64(64) ‖ signature(4627)`.
+pub const F003_INPUT_LEN_FSL: usize = 1 + 2592 + 64 + 4627; // 7284
+/// 0x02: `version(1) ‖ expected_key_payload64(64) ‖ message_hash64(64) ‖ pubkey(2592) ‖ signature(4627)`.
+pub const F003_INPUT_LEN_PREA: usize = 1 + 64 + 64 + 2592 + 4627; // 7348
+
+/// Fixed gas charged by an F003 call (any version, success OR fail-closed-false),
+/// on top of the carrying tx's calldata + intrinsic gas. Set so the gas-implied
+/// per-block verify count (`EVM_GAS_LIMIT / F003_VERIFY_GAS` = 60) stays at or
+/// under `MAX_MLDSA_VERIFY_PER_EVM_BLOCK`; ~conservative vs the ~tens-of-µs
+/// portable verify (deliberately over-priced — root operations are infrequent and
+/// under-pricing is the real risk). Charged BEFORE dispatch so a malformed flood
+/// pays the same. Frozen at activation.
+pub const F003_VERIFY_GAS: u64 = 500_000;
+
+/// Documented gas-implied per-block ceiling on F003 verifies (the gas charge is
+/// the enforcing mechanism: `EVM_GAS_LIMIT / F003_VERIFY_GAS = 60 ≤ 64`, and the
+/// ~7.3 KB calldata cost lowers it further). Named so monitoring + a future
+/// explicit counter (if benchmarks demand a sub-gas bound) have a single source.
+pub const MAX_MLDSA_VERIFY_PER_EVM_BLOCK: usize = 64;
+/// Documented gas-implied per-tx ceiling on F003 verifies (a tx doing this many
+/// verifies costs ~`8 × F003_VERIFY_GAS` = 4M gas; tx/block gas bounds it).
+pub const MAX_MLDSA_VERIFY_PER_TX: usize = 8;
+/// Documented per-block ceiling on total F003 auth input bytes
+/// (`64 × F003_INPUT_LEN_PREA ≈ 470 KiB < 512 KiB`; also bounded by calldata gas).
+pub const MAX_MLDSA_AUTH_BYTES_PER_EVM_BLOCK: usize = 512 * 1024;
+
+/// F003 version-0x02 (PREA root) ML-DSA-87 signing context — the `ctx` domain
+/// separator. Distinct from every other ML-DSA-87 context (att/unbond/takeover/
+/// audit-ckpt/tx/address) so a UTXO/attestation/tx signature can never be
+/// cross-protocol-replayed as an EVM root authorization, and vice versa.
+pub const F003_PREA_ROOT_MLDSA87_CONTEXT: &[u8] = b"misaka-pq-evm-v1/root/mldsa87";
+/// F003 version-0x01 (FSL generic) ML-DSA-87 signing context. Reserved for the
+/// Fact Settlement Layer (FSL v0.3 §4.3) generic Hash64 verification; the FSL
+/// spec adopts THIS context as the canonical one for `0xF003` version 0x01.
+pub const F003_FSL_VERIFY_MLDSA87_CONTEXT: &[u8] = b"misaka-pq-fsl-v1/verify/mldsa87";
 
 /// `synthetic_withdrawal_txid` (design §9.3): the deterministic txid of the
 /// synthetic UTXO output materializing one `WithdrawOp` in the accepting block
@@ -929,6 +998,30 @@ impl MemSizeEstimator for CanonicalEvmHeads {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PREA P0-1: the F003 ML-DSA-87 signing contexts must be domain-separated from
+    /// the UTXO address-payload key and every other ML-DSA-87 context, or a
+    /// UTXO/attestation/tx signature could be cross-protocol-replayed as an EVM root
+    /// authorization (the C-02 class). Also pins the frozen byte values + layout.
+    #[test]
+    fn f003_contexts_are_domain_separated_and_layout_frozen() {
+        assert_eq!(F003_PREA_ROOT_MLDSA87_CONTEXT, b"misaka-pq-evm-v1/root/mldsa87");
+        assert_eq!(F003_FSL_VERIFY_MLDSA87_CONTEXT, b"misaka-pq-fsl-v1/verify/mldsa87");
+        // distinct from each other …
+        assert_ne!(F003_PREA_ROOT_MLDSA87_CONTEXT, F003_FSL_VERIFY_MLDSA87_CONTEXT);
+        // … and from the UTXO address-payload key + the tx/attestation contexts.
+        assert_ne!(F003_PREA_ROOT_MLDSA87_CONTEXT, kaspa_hashes::MLDSA87_ADDRESS_CONTEXT);
+        assert_ne!(F003_FSL_VERIFY_MLDSA87_CONTEXT, kaspa_hashes::MLDSA87_ADDRESS_CONTEXT);
+        assert_ne!(F003_PREA_ROOT_MLDSA87_CONTEXT, &b"kaspa-pq-v2/tx/mldsa87"[..]);
+        assert_ne!(F003_PREA_ROOT_MLDSA87_CONTEXT, &b"kaspa-pq-v1/att/mldsa87"[..]);
+        // frozen input layout (version-discriminated).
+        assert_eq!(F003_INPUT_LEN_FSL, 1 + 2592 + 64 + 4627);
+        assert_eq!(F003_INPUT_LEN_PREA, 1 + 64 + 64 + 2592 + 4627);
+        assert_ne!(F003_VERSION_FSL_GENERIC, F003_VERSION_PREA_ROOT);
+        // the precompile address is 0x…F003 (distinct from F001 WMISAKA / F002 withdraw).
+        assert_eq!(MISAKA_MLDSA_VERIFY_PRECOMPILE.as_bytes()[19], 0x03);
+        assert_eq!(MISAKA_MLDSA_VERIFY_PRECOMPILE.as_bytes()[18], 0xF0);
+    }
 
     #[test]
     fn empty_payload_is_empty_and_default() {

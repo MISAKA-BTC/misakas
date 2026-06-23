@@ -55,6 +55,9 @@ kaspa-grpc-client.workspace = true
 kaspa-rpc-core.workspace = true
 faster-hex.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# F003 (mldsa_verify) round-trip tests: generate ML-DSA-87 keypairs + sign under
+# the F003 contexts. Same portable verifier kaspa-txscript already depends on.
+libcrux-ml-dsa.workspace = true
 
 [lints]
 workspace = true

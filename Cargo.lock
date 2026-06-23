@@ -3779,6 +3779,7 @@ dependencies = [
  "kaspa-rpc-core",
  "kaspa-txscript",
  "kaspa-utils",
+ "libcrux-ml-dsa",
  "revm",
  "tokio",
 ]

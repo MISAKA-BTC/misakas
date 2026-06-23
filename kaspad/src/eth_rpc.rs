@@ -510,6 +510,10 @@ impl NodeEthProvider {
             timestamp: header.as_ref().map(|h| h.evm_timestamp_sec).unwrap_or(0),
             coinbase: header.as_ref().map(|h| h.coinbase).unwrap_or_default(),
             gas_limit: header.as_ref().map(|h| h.gas_limit).unwrap_or(30_000_000),
+            // PREA P0-1: F003 is fence-inert (u64::MAX) on every network, so the
+            // simulator registers no F003 handler — identical to the executor below
+            // the fence. Wire to (head_daa_score >= activation) when F003 ships.
+            f003_active: false,
         };
         Ok((snap, env))
     }

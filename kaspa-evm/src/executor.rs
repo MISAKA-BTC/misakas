@@ -92,6 +92,12 @@ pub struct EvmBlockInput<'a> {
     /// L1-materialized withdrawals is bounded. Below the fence (inert), withdrawals
     /// are uncapped and execution is byte-identical to before this change.
     pub f002_withdraw_cap_activation_daa_score: u64,
+    /// F003 `MLDSA87_VERIFY` precompile fence (`Params::evm_f003_mldsa_verify_activation_daa_score`,
+    /// PREA v1.1 §9 / P0-1). When `daa_score >= this`, the F003 verify handler is
+    /// registered (`crate::precompiles::register_all_misaka_precompiles`); below it
+    /// the handler is absent so a call to `0x…F003` behaves as a call to an empty
+    /// account — byte-identical execution, genesis/state-root unchanged.
+    pub f003_mldsa_verify_activation_daa_score: u64,
 }
 
 #[inline]
@@ -190,6 +196,9 @@ pub fn execute_block_evm(
     // commit-points below). Inert below the fence ⇒ withdrawals uncapped and
     // execution byte-identical to before this change.
     let withdraw_cap_active = input.daa_score >= input.f002_withdraw_cap_activation_daa_score;
+    // PREA P0-1: register the F003 verify precompile only at/after its fence. Inert
+    // (u64::MAX) ⇒ false ⇒ F003 handler not registered ⇒ byte-identical execution.
+    let f003_active = input.daa_score >= input.f003_mldsa_verify_activation_daa_score;
 
     let mut skipped_tx_count: u32 = 0;
     // §16: per-candidate outcomes (parallel to input order) — store/RPC data
@@ -264,9 +273,10 @@ pub fn execute_block_evm(
             b.difficulty = U256::ZERO;
             b.prevrandao = Some(derived.prev_randao);
         })
-        // F002 withdraw (design §9.3): intercept calls targeting the
-        // MISAKA_WITHDRAW address (see crate::withdraw).
-        .append_handler_register(crate::withdraw::register_f002_withdraw)
+        // MISAKA precompiles via the single shared seam (PREA §9.5): F002 always,
+        // F003 iff its fence is active. Both executor and the eth_call simulator
+        // register through this one fn so they can never diverge (parity).
+        .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active)))
         .build();
     if !gas_pool_v2 {
     // === v1: execute the prefix-take-selected `planned` set (UNCHANGED) ===
@@ -759,6 +769,7 @@ mod tests {
             // Cap inert by default (daa_score 42 < u64::MAX) — existing tests keep
             // byte-identical behavior; the cap test below overrides it.
             f002_withdraw_cap_activation_daa_score: u64::MAX,
+            f003_mldsa_verify_activation_daa_score: u64::MAX,
         }
     }
 
@@ -899,6 +910,7 @@ mod tests {
             accepted_txs: &[],
             gas_pool_v2_activation_daa_score: u64::MAX,
             f002_withdraw_cap_activation_daa_score: u64::MAX,
+            f003_mldsa_verify_activation_daa_score: u64::MAX,
         };
         // FULL path: seed the parent state, execute, extract.
         let (full_child, full_child_db) = execute_block_evm(seed_cachedb(&parent_snapshot).unwrap(), &child_input).unwrap();

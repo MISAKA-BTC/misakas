@@ -16,6 +16,8 @@
 
 pub mod env;
 pub mod executor;
+pub mod mldsa_verify;
+pub mod precompiles;
 pub mod roots;
 pub mod sim;
 pub mod snapshot;

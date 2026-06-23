@@ -454,6 +454,7 @@ mod driver {
         payload: &EvmExecutionPayload,
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
+        f003_mldsa_verify_activation_daa_score: u64,
     ) -> Result<Option<super::EvmStaged>, EvmValidateError> {
         // No-replay: this block's EVM result was computed when it first joined the
         // selected chain; never recompute it.
@@ -472,6 +473,7 @@ mod driver {
             payload,
             gas_pool_v2_activation_daa_score,
             f002_withdraw_cap_activation_daa_score,
+            f003_mldsa_verify_activation_daa_score,
         )?;
 
         // The only block-invalidating EVM condition: producer commitment mismatch
@@ -500,6 +502,7 @@ mod driver {
         parent_override: Option<(kaspa_consensus_core::evm::EvmExecutionHeader, EvmStateSnapshot)>,
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
+        f003_mldsa_verify_activation_daa_score: u64,
     ) -> Result<Option<super::EvmStaged>, EvmValidateError> {
         if header_store.has(block).map_err(EvmValidateError::Store)? {
             return Ok(None);
@@ -515,6 +518,7 @@ mod driver {
             parent_override,
             gas_pool_v2_activation_daa_score,
             f002_withdraw_cap_activation_daa_score,
+            f003_mldsa_verify_activation_daa_score,
         )?;
         if result.header.commitment_root() != l1_header.evm_commitment_root {
             return Err(EvmValidateError::CommitmentMismatch { block });
@@ -539,6 +543,7 @@ mod driver {
         payload: &EvmExecutionPayload,
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
+        f003_mldsa_verify_activation_daa_score: u64,
     ) -> Result<(kaspa_consensus_core::evm::EvmExecutionResult, EvmStateSnapshot, Vec<(kaspa_hashes::EvmH256, BlockHash)>), EvmValidateError>
     {
         evm_execute_acceptance_with_parent(
@@ -552,6 +557,7 @@ mod driver {
             None,
             gas_pool_v2_activation_daa_score,
             f002_withdraw_cap_activation_daa_score,
+            f003_mldsa_verify_activation_daa_score,
         )
     }
 
@@ -574,6 +580,7 @@ mod driver {
         parent_override: Option<(kaspa_consensus_core::evm::EvmExecutionHeader, EvmStateSnapshot)>,
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
+        f003_mldsa_verify_activation_daa_score: u64,
     ) -> Result<(kaspa_consensus_core::evm::EvmExecutionResult, EvmStateSnapshot, Vec<(kaspa_hashes::EvmH256, BlockHash)>), EvmValidateError>
     {
         // AcceptedEvmTxs(B): the mergeset's payload txs in canonical order
@@ -642,6 +649,7 @@ mod driver {
             accepted_txs: &accepted_txs,
             gas_pool_v2_activation_daa_score,
             f002_withdraw_cap_activation_daa_score,
+            f003_mldsa_verify_activation_daa_score,
         };
 
         let (result, snapshot) =
@@ -667,6 +675,7 @@ mod driver {
         payload: &EvmExecutionPayload,
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
+        f003_mldsa_verify_activation_daa_score: u64,
     ) -> Result<(), EvmValidateError> {
         let Some(staged) = evm_validate(
             header_store,
@@ -679,6 +688,7 @@ mod driver {
             payload,
             gas_pool_v2_activation_daa_score,
             f002_withdraw_cap_activation_daa_score,
+            f003_mldsa_verify_activation_daa_score,
         )?
         else {
             return Ok(());
@@ -718,6 +728,7 @@ impl EvmPipeline {
         pending: Vec<EvmPipelineItem>,
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
+        f003_mldsa_verify_activation_daa_score: u64,
     ) -> EvmPipeline {
         use crate::model::stores::evm::EvmPayloadStoreReader;
         use crate::model::stores::ghostdag::GhostdagStoreReader;
@@ -759,6 +770,7 @@ impl EvmPipeline {
                             chained.take(),
                             gas_pool_v2_activation_daa_score,
                             f002_withdraw_cap_activation_daa_score,
+                            f003_mldsa_verify_activation_daa_score,
                         )?;
                         // The pipeline only runs over blocks WITHOUT committed EVM rows
                         // (filtered by the caller), so a None (no-replay hit) is a race
@@ -1040,6 +1052,7 @@ mod tests {
             accepted_txs: &candidates,
             gas_pool_v2_activation_daa_score: u64::MAX,
             f002_withdraw_cap_activation_daa_score: u64::MAX,
+            f003_mldsa_verify_activation_daa_score: u64::MAX,
         };
         let (expected, _) = kaspa_evm::snapshot::execute_block_from_snapshot(&EvmStateSnapshot::default(), &input).unwrap();
         assert_eq!(expected.header.skipped_tx_count, 1, "the gathered mergeset tx was deterministically skipped");
@@ -1049,8 +1062,23 @@ mod tests {
         // Drive: gathers the mergeset payloads, validates the commitment and
         // persists header + child state.
         let mut b1 = WriteBatch::default();
-        evm_validate_and_persist(&header_store, &state_store, &payload_store, &receipts_store, &tx_index_store, &mut b1, l1.hash, selected_parent, &mergeset, &l1, &payload, u64::MAX)
-            .unwrap();
+        evm_validate_and_persist(
+            &header_store,
+            &state_store,
+            &payload_store,
+            &receipts_store,
+            &tx_index_store,
+            &mut b1,
+            l1.hash,
+            selected_parent,
+            &mergeset,
+            &l1,
+            &payload,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+        )
+        .unwrap();
         db.write(b1).unwrap();
         assert_eq!(header_store.get(l1.hash).unwrap(), expected.header);
         assert_eq!(expected.applied_deposit_claims.len(), 1, "the deposit claim was applied");
@@ -1069,8 +1097,23 @@ mod tests {
 
         // No-replay: re-driving is a no-op (the already-stored result is reused).
         let mut b2 = WriteBatch::default();
-        evm_validate_and_persist(&header_store, &state_store, &payload_store, &receipts_store, &tx_index_store, &mut b2, l1.hash, selected_parent, &mergeset, &l1, &payload, u64::MAX)
-            .unwrap();
+        evm_validate_and_persist(
+            &header_store,
+            &state_store,
+            &payload_store,
+            &receipts_store,
+            &tx_index_store,
+            &mut b2,
+            l1.hash,
+            selected_parent,
+            &mergeset,
+            &l1,
+            &payload,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+        )
+        .unwrap();
 
         // A wrong commitment for a fresh block => block-invalid. The same holds
         // for a producer that committed WITHOUT the mergeset txs: gathering is
@@ -1089,6 +1132,8 @@ mod tests {
             &mergeset,
             &bad,
             &payload,
+            u64::MAX,
+            u64::MAX,
             u64::MAX,
         );
         assert!(matches!(err, Err(EvmValidateError::CommitmentMismatch { .. })));
@@ -1110,6 +1155,8 @@ mod tests {
             &mergeset,
             &bad2,
             &payload,
+            u64::MAX,
+            u64::MAX,
             u64::MAX,
         );
         assert!(matches!(err, Err(EvmValidateError::CommitmentMismatch { .. })), "omitting the mergeset acceptance is a commitment fault");

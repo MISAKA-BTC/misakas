@@ -29,6 +29,12 @@ pub struct EthCallEnv {
     pub timestamp: u64,
     pub coinbase: EvmAddress,
     pub gas_limit: u64,
+    /// PREA P0-1: whether the F003 verify precompile is active at the simulated
+    /// head (`head_daa_score >= evm_f003_mldsa_verify_activation_daa_score`). The
+    /// RPC layer sets it so `eth_call`/`eth_estimateGas` register the SAME handler
+    /// set the executor uses (parity). `false` (inert) ⇒ no F003 in simulation,
+    /// matching the executor below the fence.
+    pub f003_active: bool,
 }
 
 /// Outcome of a simulated call.
@@ -94,8 +100,12 @@ pub fn simulate_call(snapshot: &EvmStateSnapshot, env: &EthCallEnv, call: &EthCa
             b.difficulty = U256::ZERO;
             b.prevrandao = Some(B256::ZERO);
         })
-        // Honour the F002 withdraw intercept so a call targeting it simulates faithfully.
-        .append_handler_register(crate::withdraw::register_f002_withdraw)
+        // Register the MISAKA precompiles through the SAME shared seam the executor
+        // uses (parity): F002 always, F003 iff active at this head.
+        .append_handler_register_box({
+            let f003_active = env.f003_active;
+            Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active))
+        })
         .build();
     evm.context.evm.env.tx = txenv;
 
@@ -133,4 +143,61 @@ pub fn estimate_gas(snapshot: &EvmStateSnapshot, env: &EthCallEnv, call: &EthCal
         }
     }
     Ok(hi)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::evm::{
+        EVM_CHAIN_ID, F003_PREA_ROOT_MLDSA87_CONTEXT, F003_VERSION_PREA_ROOT, MISAKA_MLDSA_VERIFY_PRECOMPILE,
+    };
+    use kaspa_hashes::blake2b_512_address_payload;
+    use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+
+    /// PREA P0-1: a CALL to F003 with a valid version-0x02 input through the REAL
+    /// simulation seam returns the 32-byte ABI `true` WHEN the fence is active, and
+    /// behaves as a call to an empty account (success, empty output) when inert.
+    /// This exercises the actual handler registration + gas charge + ABI encoding +
+    /// the fence gate — the same `register_all_misaka_precompiles` the executor uses
+    /// (executor↔simulation parity).
+    #[test]
+    fn f003_call_through_simulation_active_vs_inert() {
+        let msg = [0x5cu8; 64];
+        let kp = mldsa::generate_key_pair([0x91u8; 32]);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let sig = mldsa::sign(&kp.signing_key, &msg, F003_PREA_ROOT_MLDSA87_CONTEXT, [0x42u8; 32]).expect("sign").as_ref().to_vec();
+        let payload = blake2b_512_address_payload(&pubkey).as_bytes().to_vec();
+
+        let mut input = vec![F003_VERSION_PREA_ROOT];
+        input.extend_from_slice(&payload);
+        input.extend_from_slice(&msg);
+        input.extend_from_slice(&pubkey);
+        input.extend_from_slice(&sig);
+
+        let call = EthCall { to: Some(MISAKA_MLDSA_VERIFY_PRECOMPILE), data: input, ..Default::default() };
+        let snapshot = EvmStateSnapshot::default();
+
+        // ACTIVE: the handler is registered → 32-byte ABI true.
+        let env_on = EthCallEnv { chain_id: EVM_CHAIN_ID, gas_limit: 30_000_000, f003_active: true, ..Default::default() };
+        let out = simulate_call(&snapshot, &env_on, &call).expect("sim");
+        assert!(out.success, "F003 call succeeds when active");
+        assert_eq!(out.output.len(), 32, "32-byte ABI bool");
+        assert_eq!(out.output[31], 1, "valid signature ⇒ ABI true");
+        assert!(out.output[..31].iter().all(|&b| b == 0), "high 31 bytes are zero");
+
+        // INERT: no handler → a call to an empty account (success, EMPTY output).
+        let env_off = EthCallEnv { f003_active: false, ..env_on.clone() };
+        let out_inert = simulate_call(&snapshot, &env_off, &call).expect("sim");
+        assert!(out_inert.success);
+        assert!(out_inert.output.is_empty(), "inert ⇒ F003 is an empty account, no ABI bool");
+
+        // ACTIVE but a flipped signature ⇒ ABI false (still a successful call).
+        let mut bad = call.clone();
+        let n = bad.data.len();
+        bad.data[n - 1] ^= 0x01;
+        let out_bad = simulate_call(&snapshot, &env_on, &bad).expect("sim");
+        assert!(out_bad.success);
+        assert_eq!(out_bad.output.len(), 32);
+        assert_eq!(out_bad.output[31], 0, "invalid signature ⇒ ABI false");
+    }
 }
