@@ -729,4 +729,30 @@ contract SessionPolicyTest is Test {
         vm.expectRevert("PQ: forbidden selector");
         account.executeSession(address(erc20), 0, cd, 0, _sessionSig(address(erc20), 0, cd, 0));
     }
+
+    /// Cross-generation replay guard: the monotonic per-key sessionNonce survives a
+    /// same-key re-grant, so a stale signature for an already-consumed call index can
+    /// NOT be replayed under the new generation.
+    function test_session_regrant_blocks_stale_nonce_replay() public {
+        MisakaPqSmartAccount.PolicyEntry[] memory e = new MisakaPqSmartAccount.PolicyEntry[](1);
+        e[0] = _entry(account.allowKey(address(nft), SEL_TRANSFER_FROM), TS_ERC721, 1, 0, 0);
+        _grantV2(e, 0, 5); // gen 1
+
+        bytes memory cd = abi.encodeWithSelector(SEL_TRANSFER_FROM, address(account), address(0xBEEF), uint256(1));
+        account.executeSession(address(nft), 0, cd, 0, _sessionSig(address(nft), 0, cd, 0)); // consume index 0
+        assertEq(account.sessionNonce(_sk()), 1, "nonce advanced");
+        bytes memory staleSig = _sessionSig(address(nft), 0, cd, 0); // a stale index-0 signature
+
+        _grantV2(e, 0, 5); // gen 2 — callsUsed resets, sessionNonce persists
+        assertEq(account.sessionNonce(_sk()), 1, "nonce survives re-grant");
+
+        // Replaying the stale index-0 signature under gen 2 fails (nonce is now 1).
+        vm.expectRevert("PQ: bad session call index");
+        account.executeSession(address(nft), 0, cd, 0, staleSig);
+
+        // The legitimate next op uses index 1 and succeeds.
+        bytes memory cd1 = abi.encodeWithSelector(SEL_TRANSFER_FROM, address(account), address(0xBEEF), uint256(2));
+        account.executeSession(address(nft), 0, cd1, 1, _sessionSig(address(nft), 0, cd1, 1));
+        assertEq(nft.last721Id(), 2, "next op executed at index 1");
+    }
 }

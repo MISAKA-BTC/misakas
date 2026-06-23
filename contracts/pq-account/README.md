@@ -79,9 +79,9 @@ contract + tests exist now so the consumer is ready and reviewed.
 forge test -vvv
 ```
 
-Verified: `forge test` = **68 passed** (solc 0.8.28, `via_ir`). Runtime bytecode
+Verified: `forge test` = **69 passed** (solc 0.8.28, `via_ir`). Runtime bytecode
 keccak (record on source freeze):
-`0xd688568a3a51e41cf84fa976256f7ab2731db700ebe7e32c48bd67af7dd3b5a6`.
+`0xb239b282c94049ad954219f524315d90b31246853f4ff36bd102dff42e6d504f`.
 
 `test/MisakaPqSmartAccount.t.sol` exercises `executeRoot` with F003 **mocked**
 (happy/replay/nonce/window/ML-DSA-false/inert-F003/target-revert), the full

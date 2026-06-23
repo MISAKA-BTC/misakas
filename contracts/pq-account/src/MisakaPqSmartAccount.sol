@@ -257,6 +257,13 @@ contract MisakaPqSmartAccount {
     /// allowlist can never leave stale (broader) entries live (mappings aren't
     /// enumerable to clear, so all gen-scoped lookups are generation-scoped instead).
     mapping(address => uint64) public sessionGrantGen;
+    /// session key → strictly-monotonic call nonce. The session op hash binds the
+    /// `callIndex`, and this counter is the value `callIndex` must equal. Crucially it
+    /// is NOT reset by `_newGrant` (unlike the per-grant `callsUsed` budget), so after a
+    /// same-key RE-GRANT a stale signature for an already-consumed index can never be
+    /// replayed under the new generation (the new generation continues from the same
+    /// nonce). `callsUsed`/`maxCalls` remain the per-generation spend budget.
+    mapping(address => uint64) public sessionNonce;
     /// session key → grantGen → keccak256(target ‖ selector) → explicit allowance.
     mapping(address => mapping(uint64 => mapping(bytes32 => Allow))) public allows;
     /// session key → grantGen → committed Merkle root of `PolicyLeaf`s (proof path).
@@ -676,13 +683,17 @@ contract MisakaPqSmartAccount {
     ) internal returns (bytes memory) {
         SessionGrant storage g = sessions[sessionKey];
         require(block.number <= g.validUntilBlock, "PQ: session expired");
-        require(callIndex == g.callsUsed, "PQ: bad session call index");
+        // Replay nonce is the per-key MONOTONIC `sessionNonce` (survives re-grants), not
+        // the per-grant `callsUsed` (which resets) — so a stale signature for an
+        // already-consumed index cannot be replayed under a new generation.
+        require(callIndex == sessionNonce[sessionKey], "PQ: bad session call index");
         require(g.callsUsed < g.maxCalls, "PQ: session call cap");
         require(uint256(value) + uint256(g.nativeUsed) <= uint256(g.maxNativeTotal), "PQ: session native cap");
 
         _checkAndConsumeTokenPolicy(sessionKey, sessionGrantGen[sessionKey], pol, bytes4(callData[:4]), callData);
 
-        g.callsUsed += 1;
+        sessionNonce[sessionKey] += 1; // monotonic replay guard (effects before interaction)
+        g.callsUsed += 1; // per-generation spend budget
         g.nativeUsed += uint128(value);
 
         (bool success, bytes memory result) = target.call{value: value}(callData);
