@@ -149,9 +149,10 @@ pub fn estimate_gas(snapshot: &EvmStateSnapshot, env: &EthCallEnv, call: &EthCal
 mod tests {
     use super::*;
     use kaspa_consensus_core::evm::{
-        EVM_CHAIN_ID, F003_PREA_ROOT_MLDSA87_CONTEXT, F003_VERSION_PREA_ROOT, MISAKA_MLDSA_VERIFY_PRECOMPILE,
+        EVM_CHAIN_ID, F003_PREA_OP_MLDSA87_CONTEXT, F003_PREA_ROOT_MLDSA87_CONTEXT, F003_VERSION_PREA_ROOT,
+        MISAKA_MLDSA_VERIFY_PRECOMPILE,
     };
-    use kaspa_hashes::blake2b_512_address_payload;
+    use kaspa_hashes::{blake2b_512_address_payload, blake2b_512_keyed};
     use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
     /// PREA P0-1: a CALL to F003 with a valid version-0x02 input through the REAL
@@ -162,17 +163,20 @@ mod tests {
     /// (executor↔simulation parity).
     #[test]
     fn f003_call_through_simulation_active_vs_inert() {
-        let msg = [0x5cu8; 64];
+        // The op preimage the smart account's executeRoot would pass (canonical op
+        // bytes); F003 hashes it with the OP context and verifies the sig over that.
+        let preimage = b"misaka-pq-account/executeRoot|to=0x..|value=0|epoch=0|nonce=0".to_vec();
         let kp = mldsa::generate_key_pair([0x91u8; 32]);
         let pubkey = kp.verification_key.as_ref().to_vec();
-        let sig = mldsa::sign(&kp.signing_key, &msg, F003_PREA_ROOT_MLDSA87_CONTEXT, [0x42u8; 32]).expect("sign").as_ref().to_vec();
+        let digest = blake2b_512_keyed(F003_PREA_OP_MLDSA87_CONTEXT, &preimage);
+        let sig = mldsa::sign(&kp.signing_key, digest.as_byte_slice(), F003_PREA_ROOT_MLDSA87_CONTEXT, [0x42u8; 32]).expect("sign").as_ref().to_vec();
         let payload = blake2b_512_address_payload(&pubkey).as_bytes().to_vec();
 
         let mut input = vec![F003_VERSION_PREA_ROOT];
         input.extend_from_slice(&payload);
-        input.extend_from_slice(&msg);
         input.extend_from_slice(&pubkey);
         input.extend_from_slice(&sig);
+        input.extend_from_slice(&preimage);
 
         let call = EthCall { to: Some(MISAKA_MLDSA_VERIFY_PRECOMPILE), data: input, ..Default::default() };
         let snapshot = EvmStateSnapshot::default();
@@ -191,7 +195,9 @@ mod tests {
         assert!(out_inert.success);
         assert!(out_inert.output.is_empty(), "inert ⇒ F003 is an empty account, no ABI bool");
 
-        // ACTIVE but a flipped signature ⇒ ABI false (still a successful call).
+        // ACTIVE but a tampered op preimage (last byte) ⇒ the digest changes, the sig
+        // no longer verifies ⇒ ABI false (still a successful call). This is the
+        // signature↔operation binding the smart account relies on.
         let mut bad = call.clone();
         let n = bad.data.len();
         bad.data[n - 1] ^= 0x01;

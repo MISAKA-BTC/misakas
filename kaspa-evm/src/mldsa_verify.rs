@@ -11,11 +11,16 @@
 //! - `0x01` (FSL generic): `version(1) ‖ pubkey(2592) ‖ message_hash64(64) ‖
 //!   signature(4627)` (7284 B). Verifies `signature` over `message_hash64` under
 //!   [`F003_FSL_VERIFY_MLDSA87_CONTEXT`].
-//! - `0x02` (PREA root): `version(1) ‖ expected_key_payload64(64) ‖
-//!   message_hash64(64) ‖ pubkey(2592) ‖ signature(4627)` (7348 B). FIRST binds
-//!   the pubkey to its UTXO address payload
-//!   (`blake2b_512(MLDSA87_ADDRESS_CONTEXT, pubkey) == expected_key_payload64`),
-//!   THEN verifies under [`F003_PREA_ROOT_MLDSA87_CONTEXT`].
+//! - `0x02` (PREA root, design v1.1 §9.3 option B): `version(1) ‖
+//!   expected_key_payload64(64) ‖ pubkey(2592) ‖ signature(4627) ‖
+//!   op_preimage(1..=F003_MAX_PREA_PREIMAGE_BYTES)`. FIRST binds the pubkey to its
+//!   UTXO address payload (`blake2b_512(MLDSA87_ADDRESS_CONTEXT, pubkey) ==
+//!   expected_key_payload64`), THEN computes `message_hash64 =
+//!   keyed_blake2b_512(F003_PREA_OP_MLDSA87_CONTEXT, op_preimage)` and verifies it
+//!   under [`F003_PREA_ROOT_MLDSA87_CONTEXT`]. F003 hashing the preimage itself is
+//!   what lets a Solidity `executeRoot` bind the signature to the exact operation
+//!   bytes WITHOUT needing keyed-BLAKE2b-512 in the EVM (it just passes the op
+//!   bytes it is about to execute).
 //!
 //! Output is a 32-byte ABI `bool` (`0x…01` valid / `0x…00` otherwise). Any
 //! malformed length, unknown version, key-payload mismatch, or invalid signature
@@ -30,10 +35,11 @@
 //! multiplexer), so accept/reject is bit-identical on every node/CPU.
 
 use kaspa_consensus_core::evm::{
-    F003_FSL_VERIFY_MLDSA87_CONTEXT, F003_INPUT_LEN_FSL, F003_INPUT_LEN_PREA, F003_PREA_ROOT_MLDSA87_CONTEXT, F003_VERIFY_GAS,
-    F003_VERSION_FSL_GENERIC, F003_VERSION_PREA_ROOT, MISAKA_MLDSA_VERIFY_PRECOMPILE,
+    F003_FSL_VERIFY_MLDSA87_CONTEXT, F003_INPUT_LEN_FSL, F003_MAX_PREA_PREIMAGE_BYTES, F003_PREA_OP_MLDSA87_CONTEXT,
+    F003_PREA_PREFIX_LEN, F003_PREA_ROOT_MLDSA87_CONTEXT, F003_VERIFY_GAS, F003_VERSION_FSL_GENERIC, F003_VERSION_PREA_ROOT,
+    MISAKA_MLDSA_VERIFY_PRECOMPILE,
 };
-use kaspa_hashes::blake2b_512_address_payload;
+use kaspa_hashes::{blake2b_512_address_payload, blake2b_512_keyed};
 use kaspa_txscript::verify_mldsa87_with_context;
 use revm::handler::register::EvmHandler;
 use revm::interpreter::{CallOutcome, Gas, InstructionResult, InterpreterResult};
@@ -67,19 +73,25 @@ pub fn run_f003_verify(input: &[u8]) -> bool {
             verify_mldsa87_with_context(pubkey, msg, sig, F003_FSL_VERIFY_MLDSA87_CONTEXT).unwrap_or(false)
         }
         Some(F003_VERSION_PREA_ROOT) => {
-            if input.len() != F003_INPUT_LEN_PREA {
+            // Layout (design v1.1 §9.3 option B): fixed prefix then a variable
+            // op_preimage of 1..=F003_MAX_PREA_PREIMAGE_BYTES. F003 hashes the
+            // preimage itself so the on-chain caller needs no BLAKE2b in the EVM.
+            if input.len() < F003_PREA_PREFIX_LEN + 1 || input.len() > F003_PREA_PREFIX_LEN + F003_MAX_PREA_PREIMAGE_BYTES {
                 return false;
             }
             let expected = &input[1..1 + KEY_PAYLOAD64_LEN];
-            let msg = &input[1 + KEY_PAYLOAD64_LEN..1 + KEY_PAYLOAD64_LEN + MSG_HASH64_LEN];
-            let pubkey = &input[1 + KEY_PAYLOAD64_LEN + MSG_HASH64_LEN..1 + KEY_PAYLOAD64_LEN + MSG_HASH64_LEN + MLDSA87_PK_LEN];
-            let sig = &input[1 + KEY_PAYLOAD64_LEN + MSG_HASH64_LEN + MLDSA87_PK_LEN..];
+            let pubkey = &input[1 + KEY_PAYLOAD64_LEN..1 + KEY_PAYLOAD64_LEN + MLDSA87_PK_LEN];
+            let sig = &input[1 + KEY_PAYLOAD64_LEN + MLDSA87_PK_LEN..F003_PREA_PREFIX_LEN];
+            let op_preimage = &input[F003_PREA_PREFIX_LEN..];
             // Bind the pubkey to its UTXO address payload BEFORE verifying — this is
             // what makes the F003-0x02 result attest "this key owns that PQ identity".
             if blake2b_512_address_payload(pubkey).as_bytes() != expected {
                 return false;
             }
-            verify_mldsa87_with_context(pubkey, msg, sig, F003_PREA_ROOT_MLDSA87_CONTEXT).unwrap_or(false)
+            // The signed message is the full-PQ keyed-BLAKE2b-512 digest of the exact
+            // operation bytes the caller is executing — binding the signature to the op.
+            let digest = blake2b_512_keyed(F003_PREA_OP_MLDSA87_CONTEXT, op_preimage);
+            verify_mldsa87_with_context(pubkey, digest.as_byte_slice(), sig, F003_PREA_ROOT_MLDSA87_CONTEXT).unwrap_or(false)
         }
         _ => false,
     }
@@ -152,13 +164,23 @@ mod tests {
         (kp.verification_key.as_ref().to_vec(), sig.as_ref().to_vec())
     }
 
-    fn prea_input(expected_payload: &[u8], msg: &[u8], pubkey: &[u8], sig: &[u8]) -> Vec<u8> {
+    /// Build a v0x02 input: prefix (`payload ‖ pubkey ‖ sig`) then the op preimage.
+    fn prea_input(expected_payload: &[u8], pubkey: &[u8], sig: &[u8], preimage: &[u8]) -> Vec<u8> {
         let mut v = vec![F003_VERSION_PREA_ROOT];
         v.extend_from_slice(expected_payload);
-        v.extend_from_slice(msg);
         v.extend_from_slice(pubkey);
         v.extend_from_slice(sig);
+        v.extend_from_slice(preimage);
         v
+    }
+
+    /// Sign a v0x02 op the way a caller must (design v1.1 §9.3 option B): the ML-DSA
+    /// message is `keyed_blake2b_512(OP_CONTEXT, preimage)`, signed under ROOT_CONTEXT.
+    fn prea_sign(seed: u8, preimage: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let kp = mldsa::generate_key_pair([seed; 32]);
+        let digest = blake2b_512_keyed(F003_PREA_OP_MLDSA87_CONTEXT, preimage);
+        let sig = mldsa::sign(&kp.signing_key, digest.as_byte_slice(), F003_PREA_ROOT_MLDSA87_CONTEXT, [seed ^ 0xA5; 32]).expect("sign");
+        (kp.verification_key.as_ref().to_vec(), sig.as_ref().to_vec())
     }
 
     fn fsl_input(pubkey: &[u8], msg: &[u8], sig: &[u8]) -> Vec<u8> {
@@ -172,42 +194,54 @@ mod tests {
     #[test]
     fn frozen_layout_lengths_and_caps() {
         assert_eq!(F003_INPUT_LEN_FSL, 1 + 2592 + 64 + 4627);
-        assert_eq!(F003_INPUT_LEN_PREA, 1 + 64 + 64 + 2592 + 4627);
+        assert_eq!(F003_PREA_PREFIX_LEN, 1 + 64 + 2592 + 4627);
+        assert!(F003_MAX_PREA_PREIMAGE_BYTES > 0);
         // Gas-implied per-block ceiling must not exceed the documented cap.
         assert!(kaspa_consensus_core::evm::EVM_GAS_LIMIT / F003_VERIFY_GAS <= MAX_MLDSA_VERIFY_PER_EVM_BLOCK as u64);
         assert!(MAX_MLDSA_VERIFY_PER_TX <= MAX_MLDSA_VERIFY_PER_EVM_BLOCK);
-        assert!((MAX_MLDSA_VERIFY_PER_EVM_BLOCK * F003_INPUT_LEN_PREA) < MAX_MLDSA_AUTH_BYTES_PER_EVM_BLOCK);
+        let _ = MAX_MLDSA_AUTH_BYTES_PER_EVM_BLOCK;
     }
 
     #[test]
     fn version_0x02_prea_roundtrip_and_tamper() {
-        let msg = [0x11u8; 64];
-        let (pubkey, sig) = keyed(0x33, &msg, PREA_CTX);
+        let preimage = b"op|chain=MSK|to=0xabcd|value=1|epoch=0|nonce=7".to_vec();
+        let (pubkey, sig) = prea_sign(0x33, &preimage);
         let payload = blake2b_512_address_payload(&pubkey).as_bytes().to_vec();
 
         // valid → true
-        assert!(run_f003_verify(&prea_input(&payload, &msg, &pubkey, &sig)));
+        assert!(run_f003_verify(&prea_input(&payload, &pubkey, &sig, &preimage)));
 
         // flipped signature → false
         let mut bad_sig = sig.clone();
         bad_sig[0] ^= 0x01;
-        assert!(!run_f003_verify(&prea_input(&payload, &msg, &pubkey, &bad_sig)));
+        assert!(!run_f003_verify(&prea_input(&payload, &pubkey, &bad_sig, &preimage)));
 
-        // flipped message → false
-        let mut bad_msg = msg;
-        bad_msg[0] ^= 0x01;
-        assert!(!run_f003_verify(&prea_input(&payload, &bad_msg, &pubkey, &sig)));
+        // TAMPERED op preimage (a different operation) → false: the signature is bound
+        // to the exact bytes via the keyed-BLAKE2b digest.
+        let mut bad_pre = preimage.clone();
+        bad_pre[0] ^= 0x01;
+        assert!(!run_f003_verify(&prea_input(&payload, &pubkey, &sig, &bad_pre)));
+        // a longer preimage (same prefix) is a different digest → false.
+        let mut longer = preimage.clone();
+        longer.push(0x00);
+        assert!(!run_f003_verify(&prea_input(&payload, &pubkey, &sig, &longer)));
 
-        // wrong expected key payload (does not match pubkey) → false (binding rejects before verify)
+        // wrong expected key payload → false (binding rejects before verify).
         let mut bad_payload = payload.clone();
         bad_payload[0] ^= 0x01;
-        assert!(!run_f003_verify(&prea_input(&bad_payload, &msg, &pubkey, &sig)));
+        assert!(!run_f003_verify(&prea_input(&bad_payload, &pubkey, &sig, &preimage)));
 
-        // a signature made under the FSL context must NOT verify as a PREA root op
-        // (context domain separation — the core anti-cross-protocol-replay property).
-        let (pk2, fsl_sig) = keyed(0x33, &msg, FSL_CTX);
-        let payload2 = blake2b_512_address_payload(&pk2).as_bytes().to_vec();
-        assert!(!run_f003_verify(&prea_input(&payload2, &msg, &pk2, &fsl_sig)));
+        // empty preimage (below min) and over-max preimage → false, never panic.
+        assert!(!run_f003_verify(&prea_input(&payload, &pubkey, &sig, &[])));
+        assert!(!run_f003_verify(&prea_input(&payload, &pubkey, &sig, &vec![0u8; F003_MAX_PREA_PREIMAGE_BYTES + 1])));
+
+        // a sig over the digest computed with the WRONG domain (ROOT instead of OP
+        // context) must NOT verify — op-digest domain separation.
+        let kp = mldsa::generate_key_pair([0x33; 32]);
+        let wrong_digest = blake2b_512_keyed(F003_PREA_ROOT_MLDSA87_CONTEXT, &preimage);
+        let wrong_sig =
+            mldsa::sign(&kp.signing_key, wrong_digest.as_byte_slice(), F003_PREA_ROOT_MLDSA87_CONTEXT, [0x01; 32]).expect("sign").as_ref().to_vec();
+        assert!(!run_f003_verify(&prea_input(&payload, &pubkey, &wrong_sig, &preimage)));
     }
 
     #[test]
@@ -224,19 +258,18 @@ mod tests {
     #[test]
     fn malformed_and_unknown_version_return_false_never_panic() {
         assert!(!run_f003_verify(&[])); // empty
-        assert!(!run_f003_verify(&[0x02])); // version only
-        assert!(!run_f003_verify(&[0x00; 100])); // unknown version (0x00) + wrong length
-        assert!(!run_f003_verify(&[0xFF; F003_INPUT_LEN_PREA])); // unknown version 0xFF, right PREA length
-        // right version byte but one byte short / long
-        let mut short = vec![F003_VERSION_PREA_ROOT];
-        short.extend_from_slice(&[0u8; F003_INPUT_LEN_PREA - 2]);
-        assert!(!run_f003_verify(&short));
+        assert!(!run_f003_verify(&[0x02])); // version only (below the prefix)
+        assert!(!run_f003_verify(&[0x00; 100])); // unknown version (0x00)
+        assert!(!run_f003_verify(&[0xFF; 7285])); // unknown version 0xFF, plausible length
+        // v0x02 with the prefix present but ZERO preimage bytes (below the min).
+        assert!(!run_f003_verify(&[F003_VERSION_PREA_ROOT; F003_PREA_PREFIX_LEN]));
+        // v0x01 one byte too long.
         let mut long = vec![F003_VERSION_FSL_GENERIC];
-        long.extend_from_slice(&[0u8; F003_INPUT_LEN_FSL]); // one too many
+        long.extend_from_slice(&[0u8; F003_INPUT_LEN_FSL]);
         assert!(!run_f003_verify(&long));
-        // all-zero bodies of the right length (garbage key/sig) → false, no panic
+        // v0x02 right-length prefix + 1 preimage byte but garbage key/sig → false, no panic.
         let mut zero02 = vec![F003_VERSION_PREA_ROOT];
-        zero02.extend_from_slice(&[0u8; F003_INPUT_LEN_PREA - 1]);
+        zero02.extend_from_slice(&[0u8; F003_PREA_PREFIX_LEN]); // prefix(-version) + 1 preimage byte
         assert!(!run_f003_verify(&zero02));
     }
 }

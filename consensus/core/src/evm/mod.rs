@@ -201,11 +201,24 @@ pub const MAX_WITHDRAW_SCRIPT_BYTES: usize = 128;
 pub const F003_VERSION_FSL_GENERIC: u8 = 0x01;
 pub const F003_VERSION_PREA_ROOT: u8 = 0x02;
 
-/// F003 fixed input lengths (exact-match; any other length ⇒ ABI `false`).
-/// 0x01: `version(1) ‖ pubkey(2592) ‖ message_hash64(64) ‖ signature(4627)`.
+/// F003 version-0x01 (FSL generic) fixed input length (exact-match; any other ⇒
+/// ABI `false`): `version(1) ‖ pubkey(2592) ‖ message_hash64(64) ‖ signature(4627)`.
+/// The caller supplies the 64-byte digest (FSL computes its own fact digest).
 pub const F003_INPUT_LEN_FSL: usize = 1 + 2592 + 64 + 4627; // 7284
-/// 0x02: `version(1) ‖ expected_key_payload64(64) ‖ message_hash64(64) ‖ pubkey(2592) ‖ signature(4627)`.
-pub const F003_INPUT_LEN_PREA: usize = 1 + 64 + 64 + 2592 + 4627; // 7348
+
+/// F003 version-0x02 (PREA root) FIXED-PREFIX length (design v1.1 §9.3 option B):
+/// `version(1) ‖ expected_key_payload64(64) ‖ pubkey(2592) ‖ signature(4627)`,
+/// FOLLOWED by a variable `op_preimage` (1..=`F003_MAX_PREA_PREIMAGE_BYTES`). F003
+/// itself computes `message_hash64 = keyed_blake2b_512(F003_PREA_OP_MLDSA87_CONTEXT,
+/// op_preimage)` so an on-chain caller (the PQ smart account `executeRoot`) does NOT
+/// need keyed-BLAKE2b-512 in the EVM: it just passes the canonical operation bytes
+/// it is about to execute, and the ML-DSA signature is verified over the full-PQ
+/// Hash64 digest of exactly those bytes — binding the signature to the operation.
+pub const F003_PREA_PREFIX_LEN: usize = 1 + 64 + 2592 + 4627; // 7284
+/// Max `op_preimage` bytes for an F003 version-0x02 call. Bounds the keyed-BLAKE2b
+/// work + the input size (with the prefix, ≤ ~23.6 KiB/call); generous for an op's
+/// target/value/calldata. Frozen at activation.
+pub const F003_MAX_PREA_PREIMAGE_BYTES: usize = 16 * 1024;
 
 /// Fixed gas charged by an F003 call (any version, success OR fail-closed-false),
 /// on top of the carrying tx's calldata + intrinsic gas. Set so the gas-implied
@@ -224,8 +237,9 @@ pub const MAX_MLDSA_VERIFY_PER_EVM_BLOCK: usize = 64;
 /// Documented gas-implied per-tx ceiling on F003 verifies (a tx doing this many
 /// verifies costs ~`8 × F003_VERIFY_GAS` = 4M gas; tx/block gas bounds it).
 pub const MAX_MLDSA_VERIFY_PER_TX: usize = 8;
-/// Documented per-block ceiling on total F003 auth input bytes
-/// (`64 × F003_INPUT_LEN_PREA ≈ 470 KiB < 512 KiB`; also bounded by calldata gas).
+/// Documented per-block ceiling on total F003 auth input bytes (a v0x02 call is
+/// `F003_PREA_PREFIX_LEN + op_preimage`; this bounds the aggregate across a block
+/// independently of the per-verify count cap, and is also bounded by calldata gas).
 pub const MAX_MLDSA_AUTH_BYTES_PER_EVM_BLOCK: usize = 512 * 1024;
 
 /// F003 version-0x02 (PREA root) ML-DSA-87 signing context — the `ctx` domain
@@ -233,6 +247,12 @@ pub const MAX_MLDSA_AUTH_BYTES_PER_EVM_BLOCK: usize = 512 * 1024;
 /// audit-ckpt/tx/address) so a UTXO/attestation/tx signature can never be
 /// cross-protocol-replayed as an EVM root authorization, and vice versa.
 pub const F003_PREA_ROOT_MLDSA87_CONTEXT: &[u8] = b"misaka-pq-evm-v1/root/mldsa87";
+/// F003 version-0x02 keyed-BLAKE2b-512 domain key for the OP-PREIMAGE digest
+/// (design v1.1 §9.3 option B): `message_hash64 = keyed_blake2b_512(this,
+/// op_preimage)`, then ML-DSA-87-verified under `F003_PREA_ROOT_MLDSA87_CONTEXT`.
+/// A distinct domain from the address-payload key and the ML-DSA contexts so an
+/// op digest can never collide with an address payload or be reinterpreted.
+pub const F003_PREA_OP_MLDSA87_CONTEXT: &[u8] = b"misaka-pq-evm-v1/op/mldsa87";
 /// F003 version-0x01 (FSL generic) ML-DSA-87 signing context. Reserved for the
 /// Fact Settlement Layer (FSL v0.3 §4.3) generic Hash64 verification; the FSL
 /// spec adopts THIS context as the canonical one for `0xF003` version 0x01.
@@ -1014,9 +1034,13 @@ mod tests {
         assert_ne!(F003_FSL_VERIFY_MLDSA87_CONTEXT, kaspa_hashes::MLDSA87_ADDRESS_CONTEXT);
         assert_ne!(F003_PREA_ROOT_MLDSA87_CONTEXT, &b"kaspa-pq-v2/tx/mldsa87"[..]);
         assert_ne!(F003_PREA_ROOT_MLDSA87_CONTEXT, &b"kaspa-pq-v1/att/mldsa87"[..]);
+        // the op-preimage digest domain is distinct from the root + address contexts.
+        assert_eq!(F003_PREA_OP_MLDSA87_CONTEXT, b"misaka-pq-evm-v1/op/mldsa87");
+        assert_ne!(F003_PREA_OP_MLDSA87_CONTEXT, F003_PREA_ROOT_MLDSA87_CONTEXT);
+        assert_ne!(F003_PREA_OP_MLDSA87_CONTEXT, kaspa_hashes::MLDSA87_ADDRESS_CONTEXT);
         // frozen input layout (version-discriminated).
         assert_eq!(F003_INPUT_LEN_FSL, 1 + 2592 + 64 + 4627);
-        assert_eq!(F003_INPUT_LEN_PREA, 1 + 64 + 64 + 2592 + 4627);
+        assert_eq!(F003_PREA_PREFIX_LEN, 1 + 64 + 2592 + 4627);
         assert_ne!(F003_VERSION_FSL_GENERIC, F003_VERSION_PREA_ROOT);
         // the precompile address is 0x…F003 (distinct from F001 WMISAKA / F002 withdraw).
         assert_eq!(MISAKA_MLDSA_VERIFY_PRECOMPILE.as_bytes()[19], 0x03);
