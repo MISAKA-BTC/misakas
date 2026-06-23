@@ -71,6 +71,10 @@ pub struct BlockBodyProcessor {
     /// (possible only on v2+ headers, i.e. post-activation), so this is inert
     /// on every current network.
     pub(super) evm_payload_store: Arc<crate::model::stores::evm::DbEvmPayloadStore>,
+    /// §16 (audit R-2): raw EVM tx bytes by hash, written at body commit. Gated
+    /// on the evm feature (its only writer needs `kaspa_evm::tx::tx_hash`).
+    #[cfg(feature = "evm")]
+    pub(super) evm_raw_tx_store: Arc<crate::model::stores::evm::DbEvmRawTxStore>,
     pub(super) body_tips_store: Arc<RwLock<DbTipsStore>>,
 
     // Managers and services
@@ -123,6 +127,8 @@ impl BlockBodyProcessor {
             _headers_store: storage.headers_store.clone(),
             block_transactions_store: storage.block_transactions_store.clone(),
             evm_payload_store: storage.evm_payload_store.clone(),
+            #[cfg(feature = "evm")]
+            evm_raw_tx_store: storage.evm_raw_tx_store.clone(),
             body_tips_store: storage.body_tips_store.clone(),
 
             _reachability_service: services.reachability_service.clone(),
@@ -251,6 +257,16 @@ impl BlockBodyProcessor {
         // insert is idempotent under body revalidation.
         if !evm_payload.is_empty() {
             self.evm_payload_store.insert_batch(&mut batch, hash, evm_payload.clone()).unwrap();
+            // §16 (audit R-2): index each raw EVM tx by its hash so
+            // eth_getTransactionByHash/receipt resolve it directly, surviving the
+            // bounded EvmTxLocations.included_in cap (16). RPC index only; tx_hash
+            // needs kaspa-evm (the evm feature). Empty payloads (every non-evm
+            // build / pre-activation block) never reach here.
+            #[cfg(feature = "evm")]
+            for raw in &evm_payload.transactions {
+                let txh = kaspa_evm::tx::tx_hash(raw);
+                self.evm_raw_tx_store.write_batch(&mut batch, txh, raw.clone(), hash).unwrap();
+            }
         }
 
         let mut body_tips_write_guard = self.body_tips_store.write();

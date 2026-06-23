@@ -9,8 +9,8 @@ use crate::{
         depth::DbDepthStore,
         dns_state::DbDnsStateStore,
         evm::{
-            DbEvmBlockHashMapStore, DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmNumberStore, DbEvmPayloadStore, DbEvmReceiptsStore,
-            DbEvmStateStore, DbEvmTxIndexStore,
+            DbEvmBlockHashMapStore, DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmNumberStore, DbEvmPayloadStore, DbEvmRawTxStore,
+            DbEvmReceiptsStore, DbEvmStateStore, DbEvmTxIndexStore,
         },
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
@@ -80,6 +80,7 @@ pub struct ConsensusStorage {
     pub evm_block_hash_map_store: Arc<DbEvmBlockHashMapStore>,
     /// §16: evm_number → L1 BlockHash (prefix 213, `eth_getBlockByNumber` / `eth_getLogs`).
     pub evm_number_store: Arc<DbEvmNumberStore>,
+    pub evm_raw_tx_store: Arc<DbEvmRawTxStore>,
 
     // Append-only stores
     pub ghostdag_store: Arc<DbGhostdagStore>,
@@ -326,6 +327,10 @@ impl ConsensusStorage {
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
+        let evm_raw_tx_store = Arc::new(DbEvmRawTxStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
 
         // Block windows
         let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));
@@ -366,6 +371,7 @@ impl ConsensusStorage {
             evm_tx_index_store,
             evm_block_hash_map_store,
             evm_number_store,
+            evm_raw_tx_store,
             acceptance_data_store,
             past_pruning_points_store,
             daa_excluded_store,

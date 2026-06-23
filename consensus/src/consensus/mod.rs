@@ -1518,10 +1518,21 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_evm_block_by_l1_hash(&self, l1_hash: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
-        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmRawTxStoreReader, EvmReceiptsStoreReader};
         let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().unwrap() else { return Ok(None) };
         let tx_hashes = self.storage.evm_receipts_store.get(l1_hash).optional().unwrap().map(|r| r.tx_hashes).unwrap_or_default();
-        Ok(Some(kaspa_consensus_core::evm::EvmBlockResponse { header, l1_hash, tx_hashes }))
+        // RPC §7.3 `size`: byte length of the block's accepted tx data (sum of raw
+        // EIP-2718 bytes via the R-2 raw-tx store; an absent row contributes 0).
+        let encoded_size = tx_hashes
+            .iter()
+            .map(|h| self.storage.evm_raw_tx_store.get(*h).unwrap().map(|r| r.raw.len() as u64).unwrap_or(0))
+            .sum();
+        Ok(Some(kaspa_consensus_core::evm::EvmBlockResponse { header, l1_hash, tx_hashes, encoded_size }))
+    }
+
+    fn get_evm_raw_tx(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<Vec<u8>>> {
+        use crate::model::stores::evm::EvmRawTxStoreReader;
+        Ok(self.storage.evm_raw_tx_store.get(tx_hash).unwrap().map(|r| r.raw))
     }
 
     fn get_evm_block_by_number(&self, evm_number: u64) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {

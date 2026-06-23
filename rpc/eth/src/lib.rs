@@ -166,6 +166,8 @@ pub struct EthBlock {
     pub base_fee_per_gas: [u8; 32],
     pub miner: [u8; 20],
     pub tx_hashes: Vec<[u8; 32]>,
+    /// RPC §7.3 `size`: byte length of the block's accepted tx data (was `0x0`).
+    pub size: u64,
 }
 
 /// One resolved log for `eth_getLogs`. Primitive fields; the node-side impl maps
@@ -746,7 +748,7 @@ fn render_block(b: &EthBlock, full_txs: Option<&[EthTx]>) -> Value {
         "difficulty": "0x0",
         "totalDifficulty": "0x0",
         "extraData": "0x",
-        "size": "0x0",
+        "size": quantity(b.size as u128),
         "gasLimit": quantity(b.gas_limit as u128),
         "gasUsed": quantity(b.gas_used as u128),
         "timestamp": quantity(b.timestamp as u128),

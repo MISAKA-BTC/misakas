@@ -897,6 +897,26 @@ impl MemSizeEstimator for EvmTxLocations {
 pub const MAX_TX_LOCATION_INCLUSIONS: usize = 16;
 pub const MAX_TX_LOCATION_ACCEPTANCES: usize = 8;
 
+/// RPC raw-tx record (prefix 217, audit R-2): the raw EIP-2718 bytes of an EVM
+/// tx keyed by its hash, plus the payload block that carried it. Lets
+/// `eth_getTransactionByHash`/`getTransactionReceipt` resolve the tx WITHOUT the
+/// bounded `EvmTxLocations.included_in` scan (which evicts past 16 inclusions).
+/// Store/RPC data only — never part of a commitment.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmRawTx {
+    /// The canonical EIP-2718 transaction bytes (`keccak256` ⇒ the tx-hash key).
+    pub raw: Vec<u8>,
+    /// The payload block that carried the tx (DA visibility / §7.1 origin).
+    pub payload_block: Hash64,
+}
+
+impl MemSizeEstimator for EvmRawTx {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>() + self.raw.capacity()
+    }
+}
+
 /// A canonical-resolved receipt view (§16 `eth_getTransactionReceipt`
 /// semantics): the ACCEPTING chain block currently on the selected chain, its
 /// EVM number, and the executed receipt. `None` upstream = the tx is not
@@ -925,6 +945,9 @@ pub struct EvmBlockResponse {
     pub header: EvmExecutionHeader,
     pub l1_hash: Hash64,
     pub tx_hashes: Vec<EvmH256>,
+    /// RPC §7.3 `size`: the byte length of the block's accepted transaction data
+    /// (sum of raw EIP-2718 tx bytes; was hardcoded `0x0`). 0 for an empty block.
+    pub encoded_size: u64,
 }
 
 /// One resolved EVM log for `eth_getLogs` (§16): the log plus its canonical

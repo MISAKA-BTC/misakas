@@ -12,7 +12,7 @@
 //! so any policy is safe.
 
 use kaspa_consensus_core::evm::{
-    CanonicalEvmHeads, EvmBlockReceipts, EvmExecutionHeader, EvmExecutionPayload, EvmStateSnapshot, EvmTxLocations,
+    CanonicalEvmHeads, EvmBlockReceipts, EvmExecutionHeader, EvmExecutionPayload, EvmRawTx, EvmStateSnapshot, EvmTxLocations,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
@@ -361,6 +361,51 @@ impl EvmNumberStoreReader for DbEvmNumberStore {
 }
 
 // ---------------------------------------------------------------------------
+// EvmRawTransaction store (prefix 217, audit R-2) — tx_hash → raw EIP-2718 bytes
+// (+ the payload block that carried it). Populated at body commit for every tx
+// in a block's payload, so `eth_getTransactionByHash`/receipt resolve the raw tx
+// by hash WITHOUT the bounded `EvmTxLocations.included_in` scan (which evicts
+// past 16 inclusions). RPC index only — never part of any commitment.
+// ---------------------------------------------------------------------------
+
+pub trait EvmRawTxStoreReader {
+    /// The raw-tx record for an EVM tx hash (absent = never seen in a payload).
+    fn get(&self, tx_hash: EvmH256) -> Result<Option<EvmRawTx>, StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmRawTxStore {
+    access: CachedDbAccess<EvmH256, EvmRawTx>,
+}
+
+impl DbEvmRawTxStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmRawTransaction.into()) }
+    }
+
+    /// Upsert the raw bytes of a tx into the caller's batch (a tx's bytes are
+    /// immutable under re-processing, so a re-write is a harmless no-op-equivalent).
+    pub fn write_batch(&self, batch: &mut WriteBatch, tx_hash: EvmH256, raw: Vec<u8>, payload_block: BlockHash) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), tx_hash, EvmRawTx { raw, payload_block })
+    }
+
+    /// Reclaim a tx's row (used by pruning of the carrying payload block).
+    pub fn delete_batch(&self, batch: &mut WriteBatch, tx_hash: EvmH256) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), tx_hash)
+    }
+}
+
+impl EvmRawTxStoreReader for DbEvmRawTxStore {
+    fn get(&self, tx_hash: EvmH256) -> Result<Option<EvmRawTx>, StoreError> {
+        match self.access.read(tx_hash) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CanonicalEvmHeads singleton (prefix 209) — latest / safe / finalized pointers,
 // updated on each virtual-state commit (mirrors `DbDnsStateStore`).
 // ---------------------------------------------------------------------------
@@ -547,5 +592,32 @@ mod tests {
         assert!(hdr.delete_batch(&mut batch, bh(9)).is_ok());
         assert!(state.delete_batch(&mut batch, bh(9)).is_ok());
         assert!(payload.delete_batch(&mut batch, bh(9)).is_ok());
+    }
+
+    /// audit R-2: the raw-tx store maps `tx_hash → raw bytes (+ payload block)`
+    /// so getTransactionByHash/receipt resolve by hash (no bounded included_in
+    /// scan). Round-trips, reads absent, and reclaims on delete (pruning path).
+    #[test]
+    fn evm_raw_tx_store_roundtrip_and_delete() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbEvmRawTxStore::new(db.clone(), CachePolicy::Empty);
+        let th = EvmH256::from_bytes([0x7Au8; 32]);
+        let raw = vec![0x02u8, 0xDE, 0xAD, 0xBE, 0xEF];
+
+        let mut batch = WriteBatch::default();
+        store.write_batch(&mut batch, th, raw.clone(), bh(3)).unwrap();
+        db.write(batch).unwrap();
+        let got = store.get(th).unwrap().expect("present");
+        assert_eq!(got.raw, raw, "raw bytes round-trip by hash");
+        assert_eq!(got.payload_block, bh(3), "carrying payload block recorded");
+
+        // An unknown hash reads as absent (KeyNotFound → None).
+        assert!(store.get(EvmH256::from_bytes([0x01u8; 32])).unwrap().is_none());
+
+        // delete_batch reclaims the row (the pruning path).
+        let mut batch = WriteBatch::default();
+        store.delete_batch(&mut batch, th).unwrap();
+        db.write(batch).unwrap();
+        assert!(store.get(th).unwrap().is_none(), "deleted row reads as absent");
     }
 }

@@ -182,19 +182,8 @@ impl EthProvider for NodeEthProvider {
                     .as_ref()
                     .and_then(|v| c.get_evm_header_of(v.accepting_block).ok().flatten())
                     .and_then(|hdr| hdr.base_fee_per_gas.try_to_u128());
-                let decoded = (|| {
-                    let locs = c.get_evm_tx_locations(h).ok()?;
-                    for block in locs.included_in {
-                        if let Ok(payload) = c.get_block_evm_payload(block) {
-                            for raw in &payload.transactions {
-                                if kaspa_evm::tx::tx_hash(raw) == h {
-                                    return kaspa_evm::tx::decode_eth_tx(raw).ok();
-                                }
-                            }
-                        }
-                    }
-                    None
-                })();
+                // audit R-2: resolve the raw tx directly by hash (no included_in scan).
+                let decoded = c.get_evm_raw_tx(h).ok().flatten().and_then(|raw| kaspa_evm::tx::decode_eth_tx(&raw).ok());
                 (view, decoded, base_fee)
             })
             .await;
@@ -316,19 +305,9 @@ impl EthProvider for NodeEthProvider {
         let h = EvmH256::from_bytes(tx_hash);
         let (decoded, ctx) = session
             .spawn_blocking(move |c| {
-                let decoded = (|| {
-                    let locs = c.get_evm_tx_locations(h).ok()?;
-                    for block in locs.included_in {
-                        if let Ok(payload) = c.get_block_evm_payload(block) {
-                            for raw in &payload.transactions {
-                                if kaspa_evm::tx::tx_hash(raw) == h {
-                                    return kaspa_evm::tx::decode_eth_tx(raw).ok();
-                                }
-                            }
-                        }
-                    }
-                    None
-                })();
+                // audit R-2: resolve the raw tx directly by hash (survives the
+                // bounded included_in cap + pruning of the payload's location row).
+                let decoded = c.get_evm_raw_tx(h).ok().flatten().and_then(|raw| kaspa_evm::tx::decode_eth_tx(&raw).ok());
                 // Canonical block context (None ⇒ pending / not on the selected chain).
                 let ctx = c.get_evm_tx_receipt(h).ok().flatten().map(|v| {
                     let bh = v.accepting_block.as_bytes();
@@ -567,6 +546,7 @@ fn to_eth_block(resp: kaspa_consensus_core::evm::EvmBlockResponse, parent_hash: 
         base_fee_per_gas: h.base_fee_per_gas.to_be_bytes(),
         miner: h.coinbase.as_bytes(),
         tx_hashes: resp.tx_hashes.iter().map(|t| t.as_bytes()).collect(),
+        size: resp.encoded_size,
     }
 }
 

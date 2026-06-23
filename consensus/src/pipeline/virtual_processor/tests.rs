@@ -3473,7 +3473,7 @@ fn new_miner_data() -> MinerData {
 #[tokio::test]
 #[cfg(feature = "evm")]
 async fn evm_active_chain_executes_persists_and_moves_heads() {
-    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader, EvmPayloadStoreReader};
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader, EvmPayloadStoreReader, EvmRawTxStoreReader};
     use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
     use kaspa_consensus_core::evm::{EvmAddress, EvmExecutionPayload, EvmStateSnapshot};
     use kaspa_evm::EvmBlockInput;
@@ -3646,7 +3646,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
             },
         )
         .unwrap();
-    assert_eq!(template.block.evm_payload.transactions, vec![raw_n0], "the candidate landed in the own payload");
+    assert_eq!(template.block.evm_payload.transactions, vec![raw_n0.clone()], "the candidate landed in the own payload");
     assert_eq!(
         template.block.evm_payload.evm_coinbase,
         kaspa_consensus_core::evm::EvmAddress::from_bytes([0xCB; 20]),
@@ -3694,6 +3694,180 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     assert_eq!(row.included_in, vec![BlockHash::from(6u64)], "DA visibility: the payload block carrying the tx");
     assert!(row.accepted_in.is_empty(), "never executed (unfunded)");
     assert_eq!(row.last_skip_class, Some(2));
+
+    // audit R-2: the raw tx is resolvable DIRECTLY by hash (no included_in scan),
+    // recorded at body commit of its carrying payload block (b6) — the path the
+    // eth_getTransactionByHash/receipt adapter now uses.
+    let stored = storage.evm_raw_tx_store.get(fixture_hash).unwrap().expect("raw tx indexed by hash");
+    assert_eq!(stored.raw, raw_n0, "raw EIP-2718 bytes round-trip by hash");
+    assert_eq!(stored.payload_block, BlockHash::from(6u64), "carrying payload block recorded");
+    assert_eq!(
+        consensus.consensus_clone().get_evm_raw_tx(fixture_hash).unwrap(),
+        Some(raw_n0.clone()),
+        "get_evm_raw_tx resolves the tx without the bounded included_in scan"
+    );
+
+    consensus.shutdown(wait_handles);
+}
+
+/// kaspa-pq EVM Lane v0.4 (§16 RPC / canonical-index fix, R-1): the
+/// `evm_number → L1 hash` map is driven by the SELECTED chain at virtual commit,
+/// NOT per-block result-commit. A reorg must detach the old canonical block's
+/// number and attach the new chain's block at that number; the detached block
+/// stays queryable by L1 hash (immutable rows are kept). This exercises
+/// `update_evm_canonical_number_map` end-to-end. The conditional-release branch
+/// is unit-tested in `model::stores::evm` (`evm_number_store_canonical_*`). The
+/// precise sink-search-loser shadow that motivated the fix needs the DNS
+/// reorg-gate (overlay-Active); the structural fix prevents it by construction —
+/// a non-selected block never writes the map.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_active_canonical_number_map_follows_reorg() {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader, EvmNumberStoreReader};
+    use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+    use kaspa_consensus_core::evm::{EvmExecutionPayload, EvmStateSnapshot};
+    use kaspa_evm::EvmBlockInput;
+
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let storage = consensus.consensus_clone().storage.clone();
+
+    let genesis = consensus.params().genesis.hash;
+    let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
+    let inert = u64::MAX;
+
+    // ---- b1 (#1): empty payload on genesis (mirrors the EVM-active test).
+    let payload1 = EvmExecutionPayload::default();
+    let mut b1 = consensus.build_utxo_valid_block_with_parents(1.into(), vec![genesis], miner_data.clone(), vec![]);
+    b1.header.version = EVM_HEADER_VERSION;
+    b1.header.evm_payload_hash = payload1.payload_hash();
+    let input1 = EvmBlockInput {
+        parent: None,
+        header_timestamp_ms: b1.header.timestamp,
+        selected_parent_hash: genesis.as_bytes(),
+        blue_work_be: b1.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: b1.header.daa_score,
+        payload: &payload1,
+        accepted_txs: &[],
+        gas_pool_v2_activation_daa_score: inert,
+        f002_withdraw_cap_activation_daa_score: inert,
+        f003_mldsa_verify_activation_daa_score: inert,
+    };
+    let (exp1, snap1) = kaspa_evm::snapshot::execute_block_from_snapshot(&EvmStateSnapshot::default(), &input1).unwrap();
+    b1.header.evm_commitment_root = exp1.header.commitment_root();
+    b1.evm_payload = payload1;
+    consensus.validate_and_insert_block(b1.to_immutable()).virtual_state_task.await.unwrap();
+
+    // ---- b2 (#2): on b1.
+    let payload2 = EvmExecutionPayload::default();
+    let mut b2 = consensus.build_utxo_valid_block_with_parents(2.into(), vec![1.into()], miner_data.clone(), vec![]);
+    b2.header.version = EVM_HEADER_VERSION;
+    b2.header.evm_payload_hash = payload2.payload_hash();
+    let input2 = EvmBlockInput {
+        parent: Some(&exp1.header),
+        header_timestamp_ms: b2.header.timestamp,
+        selected_parent_hash: BlockHash::from(1u64).as_bytes(),
+        blue_work_be: b2.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: b2.header.daa_score,
+        payload: &payload2,
+        accepted_txs: &[],
+        gas_pool_v2_activation_daa_score: inert,
+        f002_withdraw_cap_activation_daa_score: inert,
+        f003_mldsa_verify_activation_daa_score: inert,
+    };
+    let (exp2, snap2) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap1, &input2).unwrap();
+    b2.header.evm_commitment_root = exp2.header.commitment_root();
+    b2.evm_payload = payload2;
+    consensus.validate_and_insert_block(b2.to_immutable()).virtual_state_task.await.unwrap();
+    assert_eq!(storage.evm_number_store.get(2).unwrap(), Some(BlockHash::from(2u64)), "b2 claims #2");
+
+    // ---- x3 (#3) on b2 — the initial sink. Hash 9 wins the equal-blue-work
+    // tiebreak vs y3 (hash 5), so x3 stays canonical at #3 until y4 reorgs.
+    let payloadx = EvmExecutionPayload::default();
+    let mut x3 = consensus.build_utxo_valid_block_with_parents(9.into(), vec![2.into()], miner_data.clone(), vec![]);
+    x3.header.version = EVM_HEADER_VERSION;
+    x3.header.evm_payload_hash = payloadx.payload_hash();
+    let inputx = EvmBlockInput {
+        parent: Some(&exp2.header),
+        header_timestamp_ms: x3.header.timestamp,
+        selected_parent_hash: BlockHash::from(2u64).as_bytes(),
+        blue_work_be: x3.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: x3.header.daa_score,
+        payload: &payloadx,
+        accepted_txs: &[],
+        gas_pool_v2_activation_daa_score: inert,
+        f002_withdraw_cap_activation_daa_score: inert,
+        f003_mldsa_verify_activation_daa_score: inert,
+    };
+    let (expx, _snapx) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap2, &inputx).unwrap();
+    assert_eq!(expx.header.evm_number, 3);
+    x3.header.evm_commitment_root = expx.header.commitment_root();
+    x3.evm_payload = payloadx;
+    consensus.validate_and_insert_block(x3.to_immutable()).virtual_state_task.await.unwrap();
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(9u64), "x3 is the sink");
+    assert_eq!(storage.evm_number_store.get(3).unwrap(), Some(BlockHash::from(9u64)), "x3 canonical at #3 before the reorg");
+
+    // ---- y3 (#3) on b2 — a sibling of x3. Equal blue work, lower hash (5 < 9)
+    // ⇒ x3 keeps the sink; y3 is inserted but not yet selected/validated.
+    let payloady3 = EvmExecutionPayload::default();
+    let mut y3 = consensus.build_utxo_valid_block_with_parents(5.into(), vec![2.into()], miner_data.clone(), vec![]);
+    y3.header.version = EVM_HEADER_VERSION;
+    y3.header.evm_payload_hash = payloady3.payload_hash();
+    let inputy3 = EvmBlockInput {
+        parent: Some(&exp2.header),
+        header_timestamp_ms: y3.header.timestamp,
+        selected_parent_hash: BlockHash::from(2u64).as_bytes(),
+        blue_work_be: y3.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: y3.header.daa_score,
+        payload: &payloady3,
+        accepted_txs: &[],
+        gas_pool_v2_activation_daa_score: inert,
+        f002_withdraw_cap_activation_daa_score: inert,
+        f003_mldsa_verify_activation_daa_score: inert,
+    };
+    let (expy3, snapy3) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap2, &inputy3).unwrap();
+    y3.header.evm_commitment_root = expy3.header.commitment_root();
+    y3.evm_payload = payloady3;
+    consensus.validate_and_insert_block(y3.to_immutable()).virtual_state_task.await.unwrap();
+    assert_eq!(storage.evm_number_store.get(3).unwrap(), Some(BlockHash::from(9u64)), "x3 still canonical at #3 (y3 not selected)");
+
+    // ---- y4 (#4) on y3 — the heavier branch (2 blocks past b2) reorgs the sink
+    // from x3 to y4. The selected chain is now ...b2, y3(#3), y4(#4).
+    let payloady4 = EvmExecutionPayload::default();
+    let mut y4 = consensus.build_utxo_valid_block_with_parents(6.into(), vec![5.into()], miner_data, vec![]);
+    y4.header.version = EVM_HEADER_VERSION;
+    y4.header.evm_payload_hash = payloady4.payload_hash();
+    let inputy4 = EvmBlockInput {
+        parent: Some(&expy3.header),
+        header_timestamp_ms: y4.header.timestamp,
+        selected_parent_hash: BlockHash::from(5u64).as_bytes(),
+        blue_work_be: y4.header.blue_work.to_be_bytes().to_vec(),
+        daa_score: y4.header.daa_score,
+        payload: &payloady4,
+        accepted_txs: &[],
+        gas_pool_v2_activation_daa_score: inert,
+        f002_withdraw_cap_activation_daa_score: inert,
+        f003_mldsa_verify_activation_daa_score: inert,
+    };
+    let (expy4, _snapy4) = kaspa_evm::snapshot::execute_block_from_snapshot(&snapy3, &inputy4).unwrap();
+    assert_eq!(expy4.header.evm_number, 4);
+    y4.header.evm_commitment_root = expy4.header.commitment_root();
+    y4.evm_payload = payloady4;
+    consensus.validate_and_insert_block(y4.to_immutable()).virtual_state_task.await.unwrap();
+
+    // The reorg detached x3 and attached y3(#3) + y4(#4):
+    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(6u64), "sink reorged to y4");
+    assert_eq!(storage.evm_number_store.get(3).unwrap(), Some(BlockHash::from(5u64)), "#3 now resolves to y3 (canonical), not the detached x3");
+    assert_eq!(storage.evm_number_store.get(4).unwrap(), Some(BlockHash::from(6u64)), "y4 claimed #4");
+    assert_eq!(storage.evm_number_store.get(2).unwrap(), Some(BlockHash::from(2u64)), "#2 (below the fork) is unchanged");
+    assert_ne!(storage.evm_number_store.get(3).unwrap(), Some(BlockHash::from(9u64)), "the detached x3 no longer owns #3");
+    // The detached x3 stays queryable by L1 hash (immutable rows survive).
+    assert!(storage.evm_header_store.has(9.into()).unwrap(), "x3's immutable EVM rows survive the reorg (hash-queryable)");
 
     consensus.shutdown(wait_handles);
 }

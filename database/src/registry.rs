@@ -166,6 +166,14 @@ pub enum DatabaseStorePrefixes {
     /// only — never part of any commitment.
     EvmNumberIndex = 213,
 
+    /// kaspa-pq EVM Lane (§16, audit R-2): keyed by EVM `tx_hash` → the raw
+    /// EIP-2718 bytes (+ originating payload block), so
+    /// `eth_getTransactionByHash`/receipt resolve a tx by hash without the
+    /// bounded `EvmTxLookup.included_in` scan. RPC index only — never part of any
+    /// commitment. (214–216 are reserved for the RPC canonical-v2 block-meta /
+    /// journal stores, not yet built.)
+    EvmRawTransaction = 217,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

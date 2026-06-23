@@ -563,6 +563,13 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§16, audit R-2): the raw EIP-2718 bytes of an EVM
+    /// tx by hash (absent = never seen in a stored payload). Resolves
+    /// `eth_getTransactionByHash`/receipt without the bounded included_in scan.
+    fn get_evm_raw_tx(&self, _tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§16, `eth_getBlockByNumber`): the canonical EVM
     /// block at `evm_number` (reorg-validated — `None` if no canonical chain
     /// block currently holds that number).
