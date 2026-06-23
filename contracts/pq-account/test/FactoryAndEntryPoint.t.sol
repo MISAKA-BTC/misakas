@@ -28,7 +28,9 @@ contract FactoryAndEntryPointTest is Test {
     MisakaPqEntryPoint internal entryPoint;
     CallTarget internal target;
 
-    bytes32 internal constant RP_HI = bytes32(uint256(0xAAAA));
+    bytes32 internal constant VAULT_HI = bytes32(uint256(0xCCCC));
+    bytes32 internal constant VAULT_LO = bytes32(uint256(0xDDDD));
+    bytes32 internal constant RP_HI = bytes32(uint256(0xAAAA)); // operational root
     bytes32 internal constant RP_LO = bytes32(uint256(0xBBBB));
     uint64 internal constant VERSION = 1;
 
@@ -42,29 +44,40 @@ contract FactoryAndEntryPointTest is Test {
         vm.etch(F003, address(new MockF003True()).code);
     }
 
+    function _cfg(uint256 index) internal pure returns (MisakaPqAccountFactory.AccountConfig memory) {
+        return MisakaPqAccountFactory.AccountConfig({
+            vaultOwnerPayloadHi: VAULT_HI,
+            vaultOwnerPayloadLo: VAULT_LO,
+            operationalRootPayloadHi: RP_HI,
+            operationalRootPayloadLo: RP_LO,
+            accountVersion: VERSION,
+            accountIndex: index
+        });
+    }
+
     // --- Factory ---
 
     function test_getAddress_matches_deployment() public {
-        address predicted = factory.getAddress(RP_HI, RP_LO, VERSION, 0);
-        address deployed = factory.createAccount(RP_HI, RP_LO, VERSION, 0);
+        address predicted = factory.getAddress(_cfg(0));
+        address deployed = factory.createAccount(_cfg(0));
         assertEq(deployed, predicted, "deployed at predicted CREATE2 address");
         assertTrue(predicted.code.length > 0, "code present");
         // the account carries the root identity it was salted with.
         MisakaPqSmartAccount a = MisakaPqSmartAccount(payable(deployed));
-        assertEq(a.rootPayloadHi(), RP_HI);
-        assertEq(a.rootPayloadLo(), RP_LO);
+        assertEq(a.operationalRootPayloadHi(), RP_HI);
+        assertEq(a.operationalRootPayloadLo(), RP_LO);
         assertEq(a.accountVersion(), VERSION);
     }
 
     function test_createAccount_is_idempotent() public {
-        address a1 = factory.createAccount(RP_HI, RP_LO, VERSION, 0);
-        address a2 = factory.createAccount(RP_HI, RP_LO, VERSION, 0);
+        address a1 = factory.createAccount(_cfg(0));
+        address a2 = factory.createAccount(_cfg(0));
         assertEq(a1, a2, "second create returns the same address (no revert)");
     }
 
-    function test_distinct_index_distinct_address() public {
-        address a0 = factory.getAddress(RP_HI, RP_LO, VERSION, 0);
-        address a1 = factory.getAddress(RP_HI, RP_LO, VERSION, 1);
+    function test_distinct_index_distinct_address() public view {
+        address a0 = factory.getAddress(_cfg(0));
+        address a1 = factory.getAddress(_cfg(1));
         assertTrue(a0 != a1, "account_index changes the address");
     }
 
@@ -85,11 +98,11 @@ contract FactoryAndEntryPointTest is Test {
     }
 
     function test_entrypoint_deploy_then_execute() public {
-        address acct = factory.getAddress(RP_HI, RP_LO, VERSION, 7);
+        address acct = factory.getAddress(_cfg(7));
         assertEq(acct.code.length, 0, "not yet deployed");
 
         bytes memory initCode = abi.encodePacked(
-            address(factory), abi.encodeWithSelector(factory.createAccount.selector, RP_HI, RP_LO, VERSION, uint256(7))
+            address(factory), abi.encodeWithSelector(factory.createAccount.selector, _cfg(7))
         );
         MisakaPqEntryPoint.UserOp[] memory ops = new MisakaPqEntryPoint.UserOp[](1);
         ops[0] = MisakaPqEntryPoint.UserOp({account: acct, initCode: initCode, callData: _executeRootCall()});
@@ -103,7 +116,7 @@ contract FactoryAndEntryPointTest is Test {
     }
 
     function test_entrypoint_forward_to_deployed() public {
-        address acct = factory.createAccount(RP_HI, RP_LO, VERSION, 0); // pre-deployed
+        address acct = factory.createAccount(_cfg(0)); // pre-deployed
         MisakaPqEntryPoint.UserOp[] memory ops = new MisakaPqEntryPoint.UserOp[](1);
         ops[0] = MisakaPqEntryPoint.UserOp({account: acct, initCode: "", callData: _executeRootCall()});
         entryPoint.handleOps(ops);
@@ -111,7 +124,7 @@ contract FactoryAndEntryPointTest is Test {
     }
 
     function test_entrypoint_undeployed_no_initcode_reverts() public {
-        address acct = factory.getAddress(RP_HI, RP_LO, VERSION, 9); // not deployed
+        address acct = factory.getAddress(_cfg(9)); // not deployed
         MisakaPqEntryPoint.UserOp[] memory ops = new MisakaPqEntryPoint.UserOp[](1);
         ops[0] = MisakaPqEntryPoint.UserOp({account: acct, initCode: "", callData: _executeRootCall()});
         vm.expectRevert("EP: account not deployed, no initCode");
@@ -119,7 +132,7 @@ contract FactoryAndEntryPointTest is Test {
     }
 
     function test_entrypoint_rejects_non_execute_selector() public {
-        address acct = factory.createAccount(RP_HI, RP_LO, VERSION, 0);
+        address acct = factory.createAccount(_cfg(0));
         // A non-execute selector (e.g. grantSession, or anything else) is refused by the
         // EntryPoint — it relays only the two self-validating ops.
         bytes memory cd =

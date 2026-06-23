@@ -18,51 +18,64 @@ contract MisakaPqAccountFactory {
     bytes internal constant SALT_DOMAIN = "MISAKA_PQ_ACCOUNT_V1";
 
     event AccountCreated(
-        address indexed account, bytes32 rootPayloadHi, bytes32 rootPayloadLo, uint64 accountVersion, uint256 accountIndex
+        address indexed account, bytes32 vaultOwnerPayloadHi, bytes32 operationalRootPayloadHi, uint64 accountVersion, uint256 accountIndex
     );
 
-    /// Deploy (or return the existing) PQ account for the given root identity.
-    function createAccount(bytes32 rootPayloadHi, bytes32 rootPayloadLo, uint64 accountVersion, uint256 accountIndex)
-        external
-        returns (address account)
-    {
-        bytes32 salt = _salt(rootPayloadHi, rootPayloadLo, accountVersion, accountIndex);
-        account = _computeAddress(salt, rootPayloadHi, rootPayloadLo, accountVersion);
+    /// A PQ account's root identity (the account constructor args) + sub-account index.
+    struct AccountConfig {
+        bytes32 vaultOwnerPayloadHi;
+        bytes32 vaultOwnerPayloadLo;
+        bytes32 operationalRootPayloadHi;
+        bytes32 operationalRootPayloadLo;
+        uint64 accountVersion;
+        uint256 accountIndex;
+    }
+
+    /// Deploy (or return the existing) PQ account for the given identity.
+    function createAccount(AccountConfig calldata cfg) external returns (address account) {
+        bytes32 salt = _salt(cfg);
+        account = _computeAddress(salt, cfg);
         if (account.code.length > 0) {
             return account; // already deployed — idempotent
         }
-        MisakaPqSmartAccount deployed =
-            new MisakaPqSmartAccount{salt: salt}(rootPayloadHi, rootPayloadLo, accountVersion);
+        MisakaPqSmartAccount deployed = new MisakaPqSmartAccount{salt: salt}(
+            cfg.vaultOwnerPayloadHi, cfg.vaultOwnerPayloadLo, cfg.operationalRootPayloadHi, cfg.operationalRootPayloadLo, cfg.accountVersion
+        );
         require(address(deployed) == account, "Factory: address mismatch");
-        emit AccountCreated(account, rootPayloadHi, rootPayloadLo, accountVersion, accountIndex);
+        emit AccountCreated(account, cfg.vaultOwnerPayloadHi, cfg.operationalRootPayloadHi, cfg.accountVersion, cfg.accountIndex);
     }
 
     /// The deterministic address an account WOULD have (deployed or not).
-    function getAddress(bytes32 rootPayloadHi, bytes32 rootPayloadLo, uint64 accountVersion, uint256 accountIndex)
-        external
-        view
-        returns (address)
-    {
-        return _computeAddress(
-            _salt(rootPayloadHi, rootPayloadLo, accountVersion, accountIndex), rootPayloadHi, rootPayloadLo, accountVersion
+    function getAddress(AccountConfig calldata cfg) external view returns (address) {
+        return _computeAddress(_salt(cfg), cfg);
+    }
+
+    function _salt(AccountConfig calldata cfg) internal pure returns (bytes32) {
+        return keccak256(
+            abi.encodePacked(
+                SALT_DOMAIN,
+                cfg.vaultOwnerPayloadHi,
+                cfg.vaultOwnerPayloadLo,
+                cfg.operationalRootPayloadHi,
+                cfg.operationalRootPayloadLo,
+                cfg.accountVersion,
+                cfg.accountIndex
+            )
         );
     }
 
-    function _salt(bytes32 rootPayloadHi, bytes32 rootPayloadLo, uint64 accountVersion, uint256 accountIndex)
-        internal
-        pure
-        returns (bytes32)
-    {
-        return keccak256(abi.encodePacked(SALT_DOMAIN, rootPayloadHi, rootPayloadLo, accountVersion, accountIndex));
-    }
-
-    function _computeAddress(bytes32 salt, bytes32 rootPayloadHi, bytes32 rootPayloadLo, uint64 accountVersion)
-        internal
-        view
-        returns (address)
-    {
+    function _computeAddress(bytes32 salt, AccountConfig calldata cfg) internal view returns (address) {
         bytes32 initCodeHash = keccak256(
-            abi.encodePacked(type(MisakaPqSmartAccount).creationCode, abi.encode(rootPayloadHi, rootPayloadLo, accountVersion))
+            abi.encodePacked(
+                type(MisakaPqSmartAccount).creationCode,
+                abi.encode(
+                    cfg.vaultOwnerPayloadHi,
+                    cfg.vaultOwnerPayloadLo,
+                    cfg.operationalRootPayloadHi,
+                    cfg.operationalRootPayloadLo,
+                    cfg.accountVersion
+                )
+            )
         );
         return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, initCodeHash)))));
     }

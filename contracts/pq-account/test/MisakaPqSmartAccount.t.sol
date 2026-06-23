@@ -47,7 +47,9 @@ contract MisakaPqSmartAccountTest is Test {
     MisakaPqSmartAccount internal account;
     CallTarget internal target;
 
-    bytes32 internal constant RP_HI = bytes32(uint256(0x1111));
+    bytes32 internal constant VAULT_HI = bytes32(uint256(0x7777));
+    bytes32 internal constant VAULT_LO = bytes32(uint256(0x8888));
+    bytes32 internal constant RP_HI = bytes32(uint256(0x1111)); // operational root
     bytes32 internal constant RP_LO = bytes32(uint256(0x2222));
     uint64 internal constant VERSION = 1;
 
@@ -56,7 +58,7 @@ contract MisakaPqSmartAccountTest is Test {
     bytes internal sig = new bytes(4627);
 
     function setUp() public {
-        account = new MisakaPqSmartAccount(RP_HI, RP_LO, VERSION);
+        account = new MisakaPqSmartAccount(VAULT_HI, VAULT_LO, RP_HI, RP_LO, VERSION);
         target = new CallTarget();
         vm.deal(address(account), 100 ether);
     }
@@ -299,6 +301,90 @@ contract MisakaPqSmartAccountTest is Test {
         assertEq(account.isValidSignature(keccak256("hello"), s), bytes4(0xffffffff), "F003 false -> invalid");
         // wrong length -> invalid (and a 65-byte secp256k1 session sig is never 1271-valid).
         assertEq(account.isValidSignature(keccak256("hello"), hex"1234"), bytes4(0xffffffff), "bad length -> invalid");
+    }
+
+    // ------------------------------------------------- vault owner: rotation/freeze
+
+    function _vault(uint8 opType, bytes32 hi, bytes32 lo, uint64 vNonce) internal {
+        account.vaultExecute(opType, hi, lo, vNonce, pubkey, sig); // mock F003 ignores key/sig
+    }
+
+    function test_vault_freeze_blocks_root_and_session_then_unfreeze() public {
+        _etchTrue();
+        _grantPing(5 ether, 3); // grant a session BEFORE freeze
+        _vault(1, bytes32(0), bytes32(0), 0); // FREEZE
+        assertTrue(account.frozen());
+
+        vm.expectRevert("PQ: account frozen");
+        _exec(0); // executeRoot blocked
+
+        bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
+        vm.expectRevert("PQ: account frozen");
+        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0)); // session blocked
+
+        _vault(2, bytes32(0), bytes32(0), 1); // UNFREEZE
+        assertFalse(account.frozen());
+        _exec(0); // works again
+        assertEq(account.rootNonce(), 1);
+    }
+
+    function test_vault_rotate_invalidates_sessions_and_changes_root() public {
+        _etchTrue();
+        _grantPing(5 ether, 3); // session granted at epoch 0
+        _vault(0, bytes32(uint256(0x9999)), bytes32(uint256(0xAAAA)), 0); // ROTATE
+        assertEq(account.rootEpoch(), 1, "epoch bumped");
+        assertEq(account.operationalRootPayloadHi(), bytes32(uint256(0x9999)), "operational root rotated");
+        // the session (granted at epoch 0) is now invalid.
+        bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
+        vm.expectRevert("PQ: session inactive");
+        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0));
+    }
+
+    function test_vault_bad_nonce_reverts() public {
+        _etchTrue();
+        vm.expectRevert("PQ: bad vault nonce");
+        _vault(1, bytes32(0), bytes32(0), 5);
+    }
+
+    function test_vault_auth_false_reverts() public {
+        _etchFalse();
+        vm.expectRevert("PQ: ml-dsa vault auth failed");
+        _vault(1, bytes32(0), bytes32(0), 0);
+    }
+
+    function test_vault_rotate_zero_root_reverts() public {
+        _etchTrue();
+        vm.expectRevert("PQ: zero operational root");
+        _vault(0, bytes32(0), bytes32(0), 0);
+    }
+
+    function test_vault_unknown_op_reverts() public {
+        _etchTrue();
+        vm.expectRevert("PQ: unknown vault op");
+        _vault(9, bytes32(0), bytes32(0), 0);
+    }
+
+    function test_vault_can_rotate_while_frozen() public {
+        _etchTrue();
+        _vault(1, bytes32(0), bytes32(0), 0); // FREEZE
+        assertTrue(account.frozen());
+        // Anti-lockout: the Vault Owner can still ROTATE (and UNFREEZE) while frozen.
+        _vault(0, bytes32(uint256(0x9999)), bytes32(uint256(0xAAAA)), 1); // ROTATE
+        assertEq(account.rootEpoch(), 1, "rotated while frozen");
+        assertTrue(account.frozen(), "still frozen after rotate");
+    }
+
+    function test_session_regrant_narrows_allowlist() public {
+        _etchTrue();
+        address sk = _grantPing(5 ether, 3); // gen 1: (target, ping) allowed
+        // Re-grant the SAME key with an EMPTY allowlist (narrowing).
+        bytes32[] memory empty = new bytes32[](0);
+        uint256[] memory emptyAmts = new uint256[](0);
+        _grant(sk, empty, emptyAmts, 5 ether, 3); // gen 2: nothing allowed
+        // The prior (target, ping) allowance MUST NOT survive the re-grant.
+        bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
+        vm.expectRevert("PQ: target/selector not allowed");
+        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0));
     }
 }
 

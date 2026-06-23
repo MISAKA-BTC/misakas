@@ -26,6 +26,12 @@ contract MisakaPqSmartAccount {
     address internal constant F003 = address(0x0000000000000000000000000000000000F003);
     uint8 internal constant F003_VERSION_PREA_ROOT = 0x02;
     bytes internal constant OP_DOMAIN = "MISAKA_PQ_EXECUTE_ROOT_V1";
+    /// Vault-Owner op preimage domain (distinct from OP_DOMAIN so a vault signature can
+    /// never be replayed as an executeRoot op, and vice versa).
+    bytes internal constant VAULT_DOMAIN = "MISAKA_PQ_VAULT_ADMIN_V1";
+    uint8 internal constant VAULT_OP_ROTATE = 0;
+    uint8 internal constant VAULT_OP_FREEZE = 1;
+    uint8 internal constant VAULT_OP_UNFREEZE = 2;
 
     // --- secp256k1 (session) constants ---
     /// EIP-2 low-`s` bound (secp256k1n/2); reject the malleable high-`s` half.
@@ -44,20 +50,31 @@ contract MisakaPqSmartAccount {
     bytes4 internal constant SEL_TRANSFER = 0xa9059cbb; // transfer(address,uint256)
     bytes4 internal constant SEL_TRANSFER_FROM = 0x23b872dd; // transferFrom(address,address,uint256)
 
-    // --- root identity (immutable) ---
-    /// The root key's 64-byte ML-DSA-87 address payload (F003 binds the per-call
-    /// public key to exactly this).
-    bytes32 public immutable rootPayloadHi;
-    bytes32 public immutable rootPayloadLo;
-    /// Account version (bound into every op preimage / session op hash).
+    // --- root identity ---
+    /// Vault Owner: the IMMUTABLE, offline COLD recovery anchor (64-byte ML-DSA-87
+    /// address payload). Authorizes operational-root ROTATION, FREEZE and UNFREEZE
+    /// via `vaultExecute` — NOT day-to-day ops. Set once at deploy.
+    bytes32 public immutable vaultOwnerPayloadHi;
+    bytes32 public immutable vaultOwnerPayloadLo;
+    /// Account version (bound into every preimage / session op hash).
     uint64 public immutable accountVersion;
 
     // --- mutable ---
+    /// Operational Root: the day-to-day high-authority ML-DSA-87 key (`executeRoot` +
+    /// session grant/revoke). F003 binds each call's public key to this 64-byte
+    /// payload. ROTATABLE by the Vault Owner (a rotation bumps `rootEpoch`).
+    bytes32 public operationalRootPayloadHi;
+    bytes32 public operationalRootPayloadLo;
     /// Strictly-increasing root operation counter (replay + reentrancy guard).
     uint64 public rootNonce;
-    /// Bumped by a (deferred) root rotation; sessions bind to their grant epoch so a
-    /// rotation invalidates ALL outstanding sessions at once. 0 for the MVP.
+    /// Strictly-increasing Vault-Owner operation counter (rotate/freeze/unfreeze).
+    uint64 public vaultNonce;
+    /// Bumped by a Vault-Owner root rotation; sessions bind to their grant epoch, so a
+    /// rotation invalidates ALL outstanding sessions at once.
     uint64 public rootEpoch;
+    /// Emergency stop (Vault-Owner only). Blocks BOTH `executeRoot` and
+    /// `executeSession`; only the Vault Owner can `vaultExecute(UNFREEZE)`.
+    bool public frozen;
 
     struct SessionGrant {
         bool active;
@@ -79,17 +96,32 @@ contract MisakaPqSmartAccount {
 
     /// session key (secp256k1 address) → grant.
     mapping(address => SessionGrant) public sessions;
-    /// session key → keccak256(target ‖ selector) → allowance.
-    mapping(address => mapping(bytes32 => Allow)) public allows;
+    /// session key → grant generation. Bumped on every (re-)grant so a re-grant of the
+    /// SAME key starts a fresh allowlist generation — re-granting with a narrower
+    /// allowlist can never leave stale (broader) entries live (mappings aren't
+    /// enumerable to clear, so the lookup is generation-scoped instead).
+    mapping(address => uint64) public sessionGrantGen;
+    /// session key → grantGen → keccak256(target ‖ selector) → allowance.
+    mapping(address => mapping(uint64 => mapping(bytes32 => Allow))) public allows;
 
     event RootExecuted(uint64 indexed nonce, address indexed target, uint256 value, bool success);
     event SessionGranted(address indexed sessionKey, uint64 validUntilBlock, uint64 maxCalls, uint128 maxNativeTotal);
     event SessionRevoked(address indexed sessionKey);
     event SessionExecuted(address indexed sessionKey, uint64 callIndex, address indexed target, uint256 value);
+    event OperationalRootRotated(uint64 indexed newRootEpoch);
+    event FrozenSet(bool frozen);
 
-    constructor(bytes32 rootPayloadHi_, bytes32 rootPayloadLo_, uint64 accountVersion_) {
-        rootPayloadHi = rootPayloadHi_;
-        rootPayloadLo = rootPayloadLo_;
+    constructor(
+        bytes32 vaultOwnerPayloadHi_,
+        bytes32 vaultOwnerPayloadLo_,
+        bytes32 operationalRootPayloadHi_,
+        bytes32 operationalRootPayloadLo_,
+        uint64 accountVersion_
+    ) {
+        vaultOwnerPayloadHi = vaultOwnerPayloadHi_;
+        vaultOwnerPayloadLo = vaultOwnerPayloadLo_;
+        operationalRootPayloadHi = operationalRootPayloadHi_;
+        operationalRootPayloadLo = operationalRootPayloadLo_;
         accountVersion = accountVersion_;
     }
 
@@ -137,13 +169,14 @@ contract MisakaPqSmartAccount {
         bytes calldata publicKey,
         bytes calldata signature
     ) external returns (bytes memory) {
+        require(!frozen, "PQ: account frozen");
         require(nonce == rootNonce, "PQ: bad nonce");
         require(block.number >= validAfterBlock && block.number <= validUntilBlock, "PQ: outside validity window");
         require(publicKey.length == 2592 && signature.length == 4627, "PQ: bad key/sig length");
 
         bytes memory preimage = _opPreimage(target, value, callData, validAfterBlock, validUntilBlock, nonce);
         bytes memory input =
-            abi.encodePacked(F003_VERSION_PREA_ROOT, rootPayloadHi, rootPayloadLo, publicKey, signature, preimage);
+            abi.encodePacked(F003_VERSION_PREA_ROOT, operationalRootPayloadHi, operationalRootPayloadLo, publicKey, signature, preimage);
 
         (bool verified, bytes memory ret) = F003.staticcall(input);
         require(verified && ret.length == 32 && uint8(ret[31]) == 1, "PQ: ml-dsa root auth failed");
@@ -154,6 +187,66 @@ contract MisakaPqSmartAccount {
         require(success, "PQ: target call reverted");
         emit RootExecuted(nonce, target, value, success);
         return result;
+    }
+
+    // ---------------------------------------------------------------- vault owner
+
+    /// The bytes the Vault-Owner ML-DSA signature commits to (via F003's keyed
+    /// BLAKE2b). Distinct VAULT_DOMAIN ⇒ a vault signature can never be replayed as
+    /// an executeRoot op. Fixed widths so an off-chain signer reproduces it exactly.
+    function _vaultPreimage(uint8 opType, bytes32 newRootHi, bytes32 newRootLo, uint64 vNonce)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return abi.encodePacked(
+            VAULT_DOMAIN, uint256(block.chainid), address(this), accountVersion, vNonce, opType, newRootHi, newRootLo
+        );
+    }
+
+    /// A Vault-Owner (cold recovery anchor) operation, authorized by an ML-DSA-87
+    /// signature verified via F003 v0x02 against `vaultOwnerPayload`:
+    /// - `VAULT_OP_ROTATE`  : set the Operational Root to (newRootHi,newRootLo) and bump
+    ///   `rootEpoch` — instantly invalidating EVERY outstanding session (compromised
+    ///   operational-root recovery).
+    /// - `VAULT_OP_FREEZE`  : emergency stop — blocks executeRoot + executeSession.
+    /// - `VAULT_OP_UNFREEZE`: lift the freeze.
+    /// NOT gated by `frozen` (the Vault Owner must be able to rotate/unfreeze a frozen
+    /// account). `newRootHi/Lo` are ignored for freeze/unfreeze.
+    function vaultExecute(
+        uint8 opType,
+        bytes32 newRootHi,
+        bytes32 newRootLo,
+        uint64 vNonce,
+        bytes calldata publicKey,
+        bytes calldata signature
+    ) external {
+        require(vNonce == vaultNonce, "PQ: bad vault nonce");
+        require(publicKey.length == 2592 && signature.length == 4627, "PQ: bad key/sig length");
+
+        bytes memory preimage = _vaultPreimage(opType, newRootHi, newRootLo, vNonce);
+        bytes memory input =
+            abi.encodePacked(F003_VERSION_PREA_ROOT, vaultOwnerPayloadHi, vaultOwnerPayloadLo, publicKey, signature, preimage);
+        (bool verified, bytes memory ret) = F003.staticcall(input);
+        require(verified && ret.length == 32 && uint8(ret[31]) == 1, "PQ: ml-dsa vault auth failed");
+
+        vaultNonce = vNonce + 1; // effects before any state change
+
+        if (opType == VAULT_OP_ROTATE) {
+            require(newRootHi != bytes32(0) || newRootLo != bytes32(0), "PQ: zero operational root");
+            operationalRootPayloadHi = newRootHi;
+            operationalRootPayloadLo = newRootLo;
+            rootEpoch += 1; // invalidates ALL sessions (they bind their grant epoch)
+            emit OperationalRootRotated(rootEpoch);
+        } else if (opType == VAULT_OP_FREEZE) {
+            frozen = true;
+            emit FrozenSet(true);
+        } else if (opType == VAULT_OP_UNFREEZE) {
+            frozen = false;
+            emit FrozenSet(false);
+        } else {
+            revert("PQ: unknown vault op");
+        }
     }
 
     // -------------------------------------------------------------- session admin
@@ -172,6 +265,11 @@ contract MisakaPqSmartAccount {
         require(sessionKey != address(0), "PQ: zero session key");
         require(targetSelectorKeys.length == maxAmounts.length, "PQ: policy length mismatch");
 
+        // New grant generation: orphans any prior allowlist entries for this key, so a
+        // re-grant with a narrower allowlist can never inherit stale (broader) entries.
+        uint64 gen = sessionGrantGen[sessionKey] + 1;
+        sessionGrantGen[sessionKey] = gen;
+
         SessionGrant storage g = sessions[sessionKey];
         g.active = true;
         g.validUntilBlock = validUntilBlock;
@@ -181,7 +279,7 @@ contract MisakaPqSmartAccount {
         g.nativeUsed = 0;
         g.rootEpoch = rootEpoch;
         for (uint256 i; i < targetSelectorKeys.length; i++) {
-            allows[sessionKey][targetSelectorKeys[i]] = Allow({allowed: true, maxAmount: maxAmounts[i]});
+            allows[sessionKey][gen][targetSelectorKeys[i]] = Allow({allowed: true, maxAmount: maxAmounts[i]});
         }
         emit SessionGranted(sessionKey, validUntilBlock, maxCalls, maxNativeTotal);
     }
@@ -239,6 +337,7 @@ contract MisakaPqSmartAccount {
         // gate only on `msg.sender == address(this)`, so a self-call would let a
         // session allowlisted for (address(this), grantSession) escalate to granting
         // itself unlimited sessions. Fail closed regardless of the allowlist.
+        require(!frozen, "PQ: account frozen");
         require(target != address(this), "PQ: session cannot target self");
         require(callData.length >= 4, "PQ: calldata too short");
         bytes4 sel = bytes4(callData[:4]);
@@ -254,7 +353,7 @@ contract MisakaPqSmartAccount {
         require(g.callsUsed < g.maxCalls, "PQ: session call cap");
         require(uint256(value) + uint256(g.nativeUsed) <= uint256(g.maxNativeTotal), "PQ: session native cap");
 
-        Allow storage a = allows[sessionKey][allowKey(target, sel)];
+        Allow storage a = allows[sessionKey][sessionGrantGen[sessionKey]][allowKey(target, sel)];
         require(a.allowed, "PQ: target/selector not allowed");
         if (a.maxAmount != 0) {
             require(_erc20Amount(sel, callData) <= a.maxAmount, "PQ: token amount cap");
@@ -303,7 +402,7 @@ contract MisakaPqSmartAccount {
         bytes calldata sig = signature[2592:];
         bytes memory preimage = abi.encodePacked("MISAKA_PQ_ERC1271_V1", uint256(block.chainid), address(this), hash);
         bytes memory input =
-            abi.encodePacked(F003_VERSION_PREA_ROOT, rootPayloadHi, rootPayloadLo, publicKey, sig, preimage);
+            abi.encodePacked(F003_VERSION_PREA_ROOT, operationalRootPayloadHi, operationalRootPayloadLo, publicKey, sig, preimage);
         (bool verified, bytes memory ret) = F003.staticcall(input);
         if (verified && ret.length == 32 && uint8(ret[31]) == 1) {
             return ERC1271_MAGIC;

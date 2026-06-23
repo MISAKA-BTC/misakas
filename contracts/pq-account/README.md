@@ -48,24 +48,25 @@ activated by governance (a coordinated deploy with frozen gas/caps). The contrac
 
 ## Build & test
 
-> NOTE: this repository snapshot was authored without a local Foundry toolchain,
-> so the Solidity here is **reviewed but not compiled in-tree**. Run:
-
 ```bash
 ./build.sh          # installs forge-std v1.9.4, builds (solc 0.8.28), runs tests
 # or
 forge test -vvv
 ```
 
-Verified: `forge test` = **20 passed** (solc 0.8.28, `via_ir`). Runtime bytecode
+Verified: `forge test` = **35 passed** (solc 0.8.28, `via_ir`). Runtime bytecode
 keccak (record on source freeze):
-`0xd8e758fb3d1f87bfec2426d1d44e2fada537d57acb70faf4ffd33e47acd68c77`.
+`0x6cecd34e7c6c28fd44b83fc4b9c959e7aee18dec82c6a4cde8dd07fcdbfab1b2`.
 
 `test/MisakaPqSmartAccount.t.sol` exercises `executeRoot` with F003 **mocked**
-(happy/replay/nonce/window/ML-DSA-false/inert-F003/target-revert) and the full
+(happy/replay/nonce/window/ML-DSA-false/inert-F003/target-revert), the full
 session path (happy + value forward + counters, forbidden-selector, unlisted
 target, native cap, call cap, bad call-index, expiry, ERC-20 amount cap, revoke,
-ungranted key, only-root grant) + ERC-1271 (root-valid / F003-false / bad-length).
+ungranted key, only-root grant, no-self-target, re-grant narrows the allowlist)
++ ERC-1271 (root-valid / F003-false / bad-length) + the **Vault Owner** path
+(`vaultExecute`: ROTATE invalidates all sessions + changes the operational root,
+FREEZE blocks root & session then UNFREEZE re-enables, rotate-while-frozen for
+anti-lockout, bad-nonce / auth-false / zero-root / unknown-op rejects).
 Foundry cannot run the lattice precompile, so the root path's real ML-DSA verify is
 the Rust e2e; the session path is pure secp256k1/EVM and fully forge-tested. The **real F003 verify + a real ML-DSA-87 signature over this contract's
 exact op-preimage encoding** are proven by the Rust test
