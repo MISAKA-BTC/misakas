@@ -12,8 +12,8 @@ use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
 use kaspa_eth_rpc::{
-    BlockId, EthBlock, EthCallRequest, EthEvmTxStatus, EthFeeHistory, EthLog, EthLogEntry, EthProvider, EthReceipt, EthResult, EthRpcError,
-    EthTx,
+    BlockId, EthAccessListItem, EthBlock, EthCallRequest, EthEvmTxStatus, EthFeeHistory, EthLog, EthLogEntry, EthProvider, EthReceipt,
+    EthResult, EthRpcError, EthTx,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_p2p_flows::flow_context::FlowContext;
@@ -343,6 +343,15 @@ impl EthProvider for NodeEthProvider {
             block_number: ctx.map(|(n, _, _)| n),
             block_hash: ctx.map(|(_, b, _)| b),
             tx_index: ctx.map(|(_, _, i)| i),
+            v: d.v,
+            r: d.r,
+            s: d.s,
+            y_parity: d.y_parity,
+            access_list: d
+                .access_list
+                .into_iter()
+                .map(|(address, storage_keys)| EthAccessListItem { address, storage_keys })
+                .collect(),
         }))
     }
 

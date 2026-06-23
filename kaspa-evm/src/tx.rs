@@ -307,6 +307,42 @@ mod tests {
         assert!(env0.access_list.is_empty());
     }
 
+    /// audit R-3 / RPC §7.1: `decode_eth_tx` surfaces the signature components
+    /// (`r`/`s`/`y_parity`/`v`) and the access list for the full tx object — real
+    /// values, not the `0x0` placeholders the tx renderer used before.
+    #[test]
+    fn decode_eth_tx_surfaces_signature_and_access_list() {
+        use alloy_consensus::{SignableTransaction, TxEip1559};
+        use alloy_eips::eip2718::Encodable2718;
+        use alloy_eips::eip2930::{AccessList, AccessListItem};
+        use alloy_signer::SignerSync;
+        use alloy_signer_local::PrivateKeySigner;
+        use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE};
+        use revm::primitives::{Address, TxKind, B256, U256};
+        let signer = PrivateKeySigner::from_bytes(&B256::from([0x11u8; 32])).unwrap();
+        let al = AccessList(vec![AccessListItem {
+            address: Address::with_last_byte(0xAB),
+            storage_keys: vec![B256::from([0x01u8; 32]), B256::from([0x02u8; 32])],
+        }]);
+        let tx = TxEip1559 {
+            chain_id: EVM_CHAIN_ID, nonce: 0, gas_limit: 60_000,
+            max_fee_per_gas: EVM_INITIAL_BASE_FEE as u128, max_priority_fee_per_gas: 0,
+            to: TxKind::Call(Address::with_last_byte(0x22)), value: U256::from(1u64),
+            access_list: al, input: Default::default(),
+        };
+        let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+        let raw = TxEnvelope::from(tx.into_signed(sig)).encoded_2718();
+        let d = decode_eth_tx(&raw).unwrap();
+        assert_eq!(d.tx_type, 2);
+        assert_eq!(d.v, d.y_parity as u64, "typed tx: v is the y-parity bit");
+        assert!(d.v <= 1);
+        assert_ne!(d.r, [0u8; 32], "r is the real signature, not the old 0x0 placeholder");
+        assert_ne!(d.s, [0u8; 32], "s is the real signature, not the old 0x0 placeholder");
+        assert_eq!(d.access_list.len(), 1);
+        assert_eq!(d.access_list[0].0[19], 0xAB, "access-list address surfaced");
+        assert_eq!(d.access_list[0].1.len(), 2, "two storage keys surfaced");
+    }
+
     #[test]
     fn admit_tx_info_extracts_the_mempool_metadata() {
         let raw = fixture_raw(7);
@@ -419,6 +455,16 @@ pub struct DecodedEthTx {
     pub chain_id: Option<u64>,
     /// `CREATE(from, nonce)` for a creation, else `None`.
     pub contract_address: Option<[u8; 20]>,
+    /// ECDSA signature components for the full `eth_getTransactionByHash` object
+    /// (audit R-3 / RPC §7.1): `r`/`s` big-endian 32 bytes, `y_parity` the
+    /// EIP-2718 parity bit, `v` the JSON value (EIP-155 for legacy, the parity
+    /// for typed txs).
+    pub r: [u8; 32],
+    pub s: [u8; 32],
+    pub y_parity: bool,
+    pub v: u64,
+    /// EIP-2930/1559 access list: `(address, storage_keys)` per entry.
+    pub access_list: Vec<([u8; 20], Vec<[u8; 32]>)>,
 }
 
 /// Decode + recover a raw EIP-2718 tx into [`DecodedEthTx`] for the eth-rpc adapter.
@@ -435,6 +481,29 @@ pub fn decode_eth_tx(raw: &[u8]) -> Result<DecodedEthTx, TxDecodeError> {
         revm::primitives::TxKind::Create => None,
     };
     let contract_address = if to.is_none() { Some(from_addr.create(nonce).into_array()) } else { None };
+    // Signature + access list for the full tx object (audit R-3 / RPC §7.1).
+    let sig = match &envelope {
+        TxEnvelope::Legacy(t) => t.signature(),
+        TxEnvelope::Eip2930(t) => t.signature(),
+        TxEnvelope::Eip1559(t) => t.signature(),
+        _ => return Err(TxDecodeError::Decode("unsupported tx type for signature extraction".to_string())),
+    };
+    let y_parity = sig.v();
+    let tx_type = envelope.tx_type() as u8;
+    let chain_id = envelope.chain_id();
+    // JSON `v`: EIP-155 for legacy (27/28 pre-155), the y-parity bit for typed txs.
+    let v = if tx_type == 0 {
+        match chain_id {
+            Some(c) => c.saturating_mul(2).saturating_add(35).saturating_add(y_parity as u64),
+            None => 27 + y_parity as u64,
+        }
+    } else {
+        y_parity as u64
+    };
+    let access_list = envelope
+        .access_list()
+        .map(|al| al.0.iter().map(|item| (item.address.into_array(), item.storage_keys.iter().map(|k| k.0).collect())).collect())
+        .unwrap_or_default();
     Ok(DecodedEthTx {
         hash,
         from: from_addr.into_array(),
@@ -445,8 +514,13 @@ pub fn decode_eth_tx(raw: &[u8]) -> Result<DecodedEthTx, TxDecodeError> {
         max_fee_per_gas: envelope.max_fee_per_gas(),
         max_priority_fee_per_gas: envelope.max_priority_fee_per_gas(),
         input: envelope.input().to_vec(),
-        tx_type: envelope.tx_type() as u8,
-        chain_id: envelope.chain_id(),
+        tx_type,
+        chain_id,
         contract_address,
+        r: sig.r().to_be_bytes::<32>(),
+        s: sig.s().to_be_bytes::<32>(),
+        y_parity,
+        v,
+        access_list,
     })
 }

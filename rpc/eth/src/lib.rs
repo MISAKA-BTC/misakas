@@ -98,6 +98,21 @@ pub struct EthTx {
     pub block_number: Option<u64>,
     pub block_hash: Option<[u8; 32]>,
     pub tx_index: Option<u32>,
+    /// ECDSA signature for the full tx object (audit R-3). `v` is the EIP-155 /
+    /// y-parity value, `r`/`s` are big-endian 32 bytes, `y_parity` the EIP-2718 bit.
+    pub v: u64,
+    pub r: [u8; 32],
+    pub s: [u8; 32],
+    pub y_parity: bool,
+    /// EIP-2930/1559 access list (empty for legacy txs).
+    pub access_list: Vec<EthAccessListItem>,
+}
+
+/// One EIP-2930/1559 access-list entry of an [`EthTx`].
+#[derive(Clone, Debug)]
+pub struct EthAccessListItem {
+    pub address: [u8; 20],
+    pub storage_keys: Vec<[u8; 32]>,
 }
 
 /// One log entry of an [`EthReceipt`] (the node-side impl fills it from the
@@ -892,26 +907,40 @@ async fn eth_get_transaction_by_hash(provider: &Arc<dyn EthProvider>, params: &V
 /// are not surfaced yet (reads rarely need them); block context is null when pending.
 fn render_tx(t: &EthTx) -> Value {
     let hx = |b: &[u8]| format!("0x{}", faster_hex::hex_string(b));
-    json!({
-        "hash": hx(&t.hash),
-        "from": hx(&t.from),
-        "to": t.to.map(|a| json!(hx(&a))).unwrap_or(Value::Null),
-        "nonce": quantity(t.nonce as u128),
-        "value": quantity_from_be32(&t.value),
-        "gas": quantity(t.gas as u128),
-        "gasPrice": quantity(t.gas_price),
-        "maxFeePerGas": quantity(t.gas_price),
-        "maxPriorityFeePerGas": t.max_priority_fee_per_gas.map(quantity).unwrap_or(Value::Null),
-        "input": hx(&t.input),
-        "type": quantity(t.tx_type as u128),
-        "chainId": t.chain_id.map(|c| quantity(c as u128)).unwrap_or(Value::Null),
-        "blockNumber": t.block_number.map(|n| quantity(n as u128)).unwrap_or(Value::Null),
-        "blockHash": t.block_hash.map(|h| json!(hx(&h))).unwrap_or(Value::Null),
-        "transactionIndex": t.tx_index.map(|i| quantity(i as u128)).unwrap_or(Value::Null),
-        "v": "0x0",
-        "r": "0x0",
-        "s": "0x0",
-    })
+    let mut obj = serde_json::Map::new();
+    obj.insert("hash".to_string(), json!(hx(&t.hash)));
+    obj.insert("from".to_string(), json!(hx(&t.from)));
+    obj.insert("to".to_string(), t.to.map(|a| json!(hx(&a))).unwrap_or(Value::Null));
+    obj.insert("nonce".to_string(), quantity(t.nonce as u128));
+    obj.insert("value".to_string(), quantity_from_be32(&t.value));
+    obj.insert("gas".to_string(), quantity(t.gas as u128));
+    obj.insert("gasPrice".to_string(), quantity(t.gas_price));
+    obj.insert("maxFeePerGas".to_string(), quantity(t.gas_price));
+    obj.insert("maxPriorityFeePerGas".to_string(), t.max_priority_fee_per_gas.map(quantity).unwrap_or(Value::Null));
+    obj.insert("input".to_string(), json!(hx(&t.input)));
+    obj.insert("type".to_string(), quantity(t.tx_type as u128));
+    obj.insert("chainId".to_string(), t.chain_id.map(|c| quantity(c as u128)).unwrap_or(Value::Null));
+    obj.insert("blockNumber".to_string(), t.block_number.map(|n| quantity(n as u128)).unwrap_or(Value::Null));
+    obj.insert("blockHash".to_string(), t.block_hash.map(|h| json!(hx(&h))).unwrap_or(Value::Null));
+    obj.insert("transactionIndex".to_string(), t.tx_index.map(|i| quantity(i as u128)).unwrap_or(Value::Null));
+    // Signature components (audit R-3): real values, no longer 0x0 placeholders.
+    obj.insert("v".to_string(), quantity(t.v as u128));
+    obj.insert("r".to_string(), quantity_from_be32(&t.r));
+    obj.insert("s".to_string(), quantity_from_be32(&t.s));
+    // Typed (EIP-2930/1559) txs surface yParity + accessList; legacy omits them.
+    if t.tx_type >= 1 {
+        obj.insert("yParity".to_string(), quantity(t.y_parity as u128));
+        let al: Vec<Value> = t
+            .access_list
+            .iter()
+            .map(|e| {
+                let keys: Vec<Value> = e.storage_keys.iter().map(|k| json!(hx(k))).collect();
+                json!({ "address": hx(&e.address), "storageKeys": keys })
+            })
+            .collect();
+        obj.insert("accessList".to_string(), Value::Array(al));
+    }
+    Value::Object(obj)
 }
 
 /// Parse the `eth_call` / `eth_estimateGas` call object from `params[0]`.
