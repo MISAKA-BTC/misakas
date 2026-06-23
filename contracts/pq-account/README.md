@@ -7,8 +7,11 @@ precompile** (`0x…F003`, version `0x02`). See `docs/misaka-prea-design-v1.1.md
 §13 for the full design.
 
 **P0-2 implemented:** the ML-DSA root path (`executeRoot`), root-authorized session
-grant/revoke, the **restricted secp256k1 session path** (`executeSession`), and
-**ERC-1271** (root-only). The session path enforces: deny-by-default of `approve`
+grant/revoke, the **restricted secp256k1 session path** (`executeSession`),
+**ERC-1271** (root-only), the deterministic **`MisakaPqAccountFactory`** (CREATE2 +
+`getAddress` predictor + idempotent), and a permissionless **`MisakaPqEntryPoint`**
+relayer (`handleOps`: deploy-if-needed via `initCode` + forward `executeRoot`/
+`executeSession`; the relayer holds no authority — the account self-validates). The session path enforces: deny-by-default of `approve`
 / `setApprovalForAll` (approval-as-delegation drains every cap), a (target,selector)
 allowlist, native value caps (per-total) + ERC-20 `transfer`/`transferFrom` amount
 caps, expiry / max-calls / monotonic call-index / root-epoch binding, and CALL-only
