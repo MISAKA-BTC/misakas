@@ -23,6 +23,8 @@ mod eth;
 mod evm_send;
 mod keys;
 mod node;
+#[cfg(feature = "evm-send")]
+mod prea;
 mod wallet;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -112,6 +114,75 @@ enum Command {
     /// Key management (generate / show address). The secret is never a CLI arg.
     #[command(subcommand)]
     Key(KeyCmd),
+    /// PREA PQ smart-account signing (executeRoot / executeSession). [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    #[command(subcommand)]
+    Prea(PreaCmd),
+}
+
+/// PREA signer subcommands. `sign-root` uses the ML-DSA-87 Operational Root key;
+/// `sign-session` uses a restricted secp256k1 session key. The secret is never a CLI value.
+#[cfg(feature = "evm-send")]
+#[derive(Subcommand, Debug)]
+enum PreaCmd {
+    /// Sign an executeRoot op (ML-DSA-87, F003 v0x02) → F003 input + calldata.
+    SignRoot {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// PQ account (smart-account) address (0x…20 bytes).
+        #[arg(long)]
+        account: String,
+        /// Account version (immutable, bound into the op).
+        #[arg(long, default_value_t = 1)]
+        version: u64,
+        /// Root nonce (must equal the account's current rootNonce).
+        #[arg(long)]
+        nonce: u64,
+        /// validAfter block (inclusive).
+        #[arg(long, default_value_t = 0)]
+        valid_after: u64,
+        /// validUntil block (inclusive).
+        #[arg(long)]
+        valid_until: u64,
+        /// Max relayer fee in wei the op authorizes (0 = none / self-submit).
+        #[arg(long, default_value = "0")]
+        max_relayer_fee: String,
+        /// Target address the account will CALL.
+        #[arg(long)]
+        to: String,
+        /// Native value forwarded to the target, in wei.
+        #[arg(long, default_value = "0")]
+        value: String,
+        /// 0x-hex calldata for the target call.
+        #[arg(long, default_value = "0x")]
+        calldata: String,
+    },
+    /// Sign an executeSession op (secp256k1) → r‖s‖v + calldata.
+    SignSession {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        /// PQ account (smart-account) address (0x…20 bytes).
+        #[arg(long)]
+        account: String,
+        /// Account version (immutable, bound into the op).
+        #[arg(long, default_value_t = 1)]
+        version: u64,
+        /// Session call index (must equal the account's current sessionNonce for the key).
+        #[arg(long)]
+        call_index: u64,
+        /// Max relayer fee in wei the op authorizes (0 = none / self-submit).
+        #[arg(long, default_value = "0")]
+        max_relayer_fee: String,
+        /// Target address the session will CALL.
+        #[arg(long)]
+        to: String,
+        /// Native value forwarded to the target, in wei.
+        #[arg(long, default_value = "0")]
+        value: String,
+        /// 0x-hex calldata for the target call.
+        #[arg(long, default_value = "0x")]
+        calldata: String,
+    },
 }
 
 /// Key-source flags shared by keyed commands. The secret is loaded only from a
@@ -478,6 +549,26 @@ async fn main() -> std::process::ExitCode {
                 (Ok(cd), Ok(wei)) => evm_send::call(&ctx, &key.source(), &to, cd, wei, gas_limit, max_fee, nonce, yes, wait),
                 (Err(e), _) | (_, Err(e)) => Err(e),
             }
+        }
+        #[cfg(feature = "evm-send")]
+        Command::Prea(PreaCmd::SignRoot {
+            key,
+            account,
+            version,
+            nonce,
+            valid_after,
+            valid_until,
+            max_relayer_fee,
+            to,
+            value,
+            calldata,
+        }) => prea::run_sign_root(
+            ctx.output, &key.source(), &account, version, nonce, valid_after, valid_until, &max_relayer_fee, &to, &value,
+            &calldata,
+        ),
+        #[cfg(feature = "evm-send")]
+        Command::Prea(PreaCmd::SignSession { key, account, version, call_index, max_relayer_fee, to, value, calldata }) => {
+            prea::run_sign_session(ctx.output, &key.source(), &account, version, call_index, &max_relayer_fee, &to, &value, &calldata)
         }
     };
 

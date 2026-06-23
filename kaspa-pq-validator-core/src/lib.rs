@@ -137,6 +137,13 @@ impl ValidatorKey {
         Self { keypair, validator_id }
     }
 
+    /// The raw `MLDSA87_PK_LEN`-byte ML-DSA-87 verification (public) key. Exposed for
+    /// the PREA CLI signer, which carries the pubkey verbatim in the F003 v0x02
+    /// precompile input (the account binds it to its stored address payload).
+    pub fn public_key(&self) -> &[u8] {
+        self.keypair.verification_key.as_ref()
+    }
+
     /// The validator's own P2PKH-ML-DSA address — `(prefix, PubKeyHashMlDsa87,
     /// keyed_BLAKE2b-512("kaspa-pq-v2/address/mldsa87", public_key))`. This is the
     /// **spend** address (64-byte keyed BLAKE2b-512 payload — md2 §4.2 / ADR-0019

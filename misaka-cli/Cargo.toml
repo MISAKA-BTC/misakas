@@ -36,12 +36,20 @@ alloy-signer = { version = "0.8", optional = true }
 alloy-signer-local = { version = "0.8", optional = true }
 alloy-eips = { version = "0.8", optional = true }
 alloy-primitives = { version = "0.8", features = ["rlp"], optional = true }
+# ABI-encode the executeRoot/executeSession calldata the PREA signer emits.
+alloy-sol-types = { version = "0.8", optional = true }
 kaspa-bip32 = { workspace = true, features = ["legacy-secp256k1"], optional = true }
+# BLAKE2b helpers for the PREA F003 v0x02 root preimage (signer only).
+kaspa-hashes = { workspace = true, optional = true }
 # Wipe in-memory key/mnemonic buffers on drop (audit M-07).
 zeroize = { workspace = true, optional = true }
 
 [features]
-evm-send = ["dep:alloy-consensus", "dep:alloy-signer", "dep:alloy-signer-local", "dep:alloy-eips", "dep:alloy-primitives", "dep:kaspa-bip32", "dep:zeroize"]
+evm-send = ["dep:alloy-consensus", "dep:alloy-signer", "dep:alloy-signer-local", "dep:alloy-eips", "dep:alloy-primitives", "dep:alloy-sol-types", "dep:kaspa-bip32", "dep:kaspa-hashes", "dep:zeroize"]
+
+[dev-dependencies]
+# Round-trip the PREA signer's F003 v0x02 output through the REAL precompile logic.
+kaspa-evm.workspace = true
 
 [lints]
 workspace = true

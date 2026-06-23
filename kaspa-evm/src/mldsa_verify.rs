@@ -265,6 +265,7 @@ mod tests {
         let nonce: u64 = 0;
         let valid_after: u64 = 0;
         let valid_until: u64 = u64::MAX;
+        let max_relayer_fee = [0u8; 32]; // uint256 0 (no relayer reimbursement)
         let target = [0x7Au8; 20];
         let value = [0u8; 32]; // uint256 0
         let call_data = [0x12u8, 0x34];
@@ -273,7 +274,7 @@ mod tests {
         chain_id32[24..32].copy_from_slice(&(kaspa_consensus_core::evm::EVM_CHAIN_ID).to_be_bytes());
 
         // _opPreimage = abi.encodePacked(OP_DOMAIN, chainId, account, version, nonce,
-        //                                validAfter, validUntil, target, value, callData)
+        //                                validAfter, validUntil, maxRelayerFee, target, value, callData)
         let mut preimage = Vec::new();
         preimage.extend_from_slice(b"MISAKA_PQ_EXECUTE_ROOT_V1");
         preimage.extend_from_slice(&chain_id32);
@@ -282,6 +283,7 @@ mod tests {
         preimage.extend_from_slice(&nonce.to_be_bytes());
         preimage.extend_from_slice(&valid_after.to_be_bytes());
         preimage.extend_from_slice(&valid_until.to_be_bytes());
+        preimage.extend_from_slice(&max_relayer_fee);
         preimage.extend_from_slice(&target);
         preimage.extend_from_slice(&value);
         preimage.extend_from_slice(&call_data);
