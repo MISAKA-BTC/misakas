@@ -22,20 +22,21 @@ use kaspa_consensus_core::dns_finality::{
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::network::NetworkType;
-use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
+use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, UtxoEntry};
 use kaspa_core::{info, warn};
 use kaspa_pq_validator_core::{
     SignedEpochStore, VALIDATOR_SEED_LEN, ValidatorKey, is_spendable, load_validator_seed, parse_stake_bond_ref, select_funding,
 };
 use kaspa_rpc_core::{
-    GetStakeBondRequest, GetValidatorAttestationTargetRequest, GetValidatorAttestationTargetResponse, RpcTransaction, api::rpc::RpcApi,
+    GetStakeBondRequest, GetValidatorAttestationTargetRequest, GetValidatorAttestationTargetResponse, RpcError, RpcTransaction,
+    api::rpc::RpcApi,
 };
 use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
 };
 use rand::RngCore;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Duration;
@@ -990,10 +991,18 @@ struct Attestor {
     /// unconfirmed window instead. In-memory only (reset on restart, which simply reselects a
     /// confirmed UTXO and starts a fresh chain).
     pending_change: Option<(TransactionOutpoint, UtxoEntry)>,
-    /// Funding outpoints we have already spent in submitted (not-yet-mined) txs, so the node-query
-    /// fallback never re-selects one. Pruned each tick to those the node still lists (mined-spent
-    /// ones drop out), so it self-heals and stays tiny (≈ the few epochs still in the mempool).
-    inflight_spent: HashSet<TransactionOutpoint>,
+    /// Funding outpoints we have already spent in submitted (not-yet-mined) txs, mapped to the id of
+    /// the tx that spent them, so the paginated fallback never re-selects one. Pruned (no
+    /// full-UTXO-set scan) only once the spending tx has DEFINITIVELY left the mempool — a cheap
+    /// per-txid `get_mempool_entry` lookup. NOT a fixed-age TTL: RPC-submitted txs are high-priority
+    /// and never expire from the mempool, so a stuck spend must keep its exclusion until it actually
+    /// mines or is dropped, else the fallback could re-pick a still-spent outpoint
+    /// (RejectDoubleSpendInMempool → repeated failed attestations).
+    inflight_spent: HashMap<TransactionOutpoint, TransactionId>,
+    /// The tx id of the attestation that produced the current `pending_change` chain head. `None`
+    /// when there is no in-flight chain. Used to detect head confirmation with a cheap per-txid
+    /// `get_mempool_entry` lookup instead of fetching the whole funding address's UTXO set.
+    chain_head_txid: Option<TransactionId>,
     /// kaspa-pq DNS-v3 hardening (Fix B): the epoch whose attestation produced the current
     /// `pending_change` chain head. `None` when there is no in-flight chain. Used to count
     /// distinct epochs the head has gone unconfirmed.
@@ -1036,7 +1045,8 @@ impl Attestor {
             attestation_fee,
             last_attested_epoch: None,
             pending_change: None,
-            inflight_spent: HashSet::new(),
+            inflight_spent: HashMap::new(),
+            chain_head_txid: None,
             chain_head_epoch: None,
             stalled_epochs: 0,
         }))
@@ -1124,70 +1134,90 @@ impl Attestor {
         };
         let shard = single_attestation_shard(att);
 
-        // Find a funding UTXO at the validator's own P2PKH-ML-DSA address (needs node
+        // Fund the attestation at the validator's own P2PKH-ML-DSA address (needs node
         // --utxoindex). Funding model A: a small input pays the fee, change returns to self.
         let fee = self.attestation_fee;
         let funding_addr = self.key.funding_address(self.prefix);
-        let utxos = client
-            .get_utxos_by_addresses(vec![funding_addr])
-            .await
-            .map_err(|e| format!("getUtxosByAddresses failed (does the node run --utxoindex?): {e}"))?;
 
-        // The node's utxoindex reflects the ACCEPTED (mined) UTXO set, not the mempool: it keeps
-        // listing a funding UTXO our own still-unconfirmed attestation tx has already spent, so re-
-        // selecting it is rejected ("output … already spent … in the mempool"). Drive a local
-        // funding chain instead — spend the change output of the previous tx, which the mempool
-        // accepts as a chained spend of an unconfirmed parent. One attestation per epoch ⇒ one
-        // funded hop per epoch across the unconfirmed window.
-        let node_utxos: Vec<(TransactionOutpoint, UtxoEntry)> =
-            utxos.into_iter().map(|e| (TransactionOutpoint::from(e.outpoint), UtxoEntry::from(e.utxo_entry))).collect();
-        let node_outpoints: HashSet<TransactionOutpoint> = node_utxos.iter().map(|(op, _)| *op).collect();
-        // Forget in-flight exclusions the node no longer lists (those txs were mined ⇒ no risk of
-        // re-selecting them): self-heals and keeps the set tiny (≈ the few epochs still in mempool).
-        self.inflight_spent.retain(|op| node_outpoints.contains(op));
-        // If our chain head has been mined (now appears in the node set), resync to the node view.
-        if let Some((head, _)) = &self.pending_change {
-            if node_outpoints.contains(head) {
-                self.pending_change = None;
+        // kaspa-pq DNS-v3 + large-UTXO hardening: NEVER fetch the funding address's FULL UTXO set
+        // per epoch. A miner that paid this address can pile up tens of thousands of coinbase UTXOs
+        // (live-observed ~88k), turning the legacy `getUtxosByAddresses` into a multi-MiB response
+        // every epoch that delays the attestation and starves the funding-chain tip. Instead: chain
+        // off our own change output with NO node fetch in steady state; detect head confirmation
+        // with a cheap per-txid mempool lookup; and only fall back to a BOUNDED, paginated
+        // confirmed-UTXO search when the chain must be re-seeded.
+        const N_STALL_EPOCHS: u64 = 3;
+
+        // Self-heal the in-flight exclusion set WITHOUT a full-set scan: drop an outpoint only once
+        // the tx that spent it has DEFINITIVELY left the mempool (mined ⇒ the outpoint is consumed
+        // on-chain; dropped ⇒ the outpoint is freed and may be reused). Keep it on Present (still
+        // spent) or Unknown (transient RPC error) — never free a still-spent outpoint for the
+        // fallback to re-pick. NB RPC-submitted txs are high-priority and never expire, so a
+        // time-based prune would be wrong; this is keyed off the spending tx's actual mempool state.
+        let inflight_snapshot: Vec<(TransactionOutpoint, TransactionId)> =
+            self.inflight_spent.iter().map(|(op, txid)| (*op, *txid)).collect();
+        for (op, spender) in inflight_snapshot {
+            if let MempoolStatus::Gone = mempool_status(client, spender).await {
+                self.inflight_spent.remove(&op);
             }
         }
-        // kaspa-pq DNS-v3 hardening (Fix B — stuck-chain recovery): if the head did NOT just confirm
-        // (pending_change still set), count distinct served epochs it has stalled. After
-        // N_STALL_EPOCHS, abandon the unconfirmed chain so select_funding falls back to a CONFIRMED
-        // node UTXO — breaking a cascade that otherwise never self-recovers (before this, only a
-        // process restart cleared it; that was the live-testnet dnsConfirmed-stall root cause).
-        // Catches every stall mode: §B.4 ineligibility, a reorg-dropped parent, mempool eviction, a
-        // too-low fee under congestion. The Fix-A start-gate prevents the §B.4 mode up front; this
-        // is the belt-and-suspenders that recovers from the rest.
-        const N_STALL_EPOCHS: u64 = 3;
+
+        // Did the funding-chain head confirm? Ask the mempool for the head tx by id (one cheap
+        // lookup) instead of scanning the whole address. Present ⇒ unconfirmed (count the stall, the
+        // Fix-B recovery). Gone ⇒ mined (its change is now a confirmed, chainable UTXO) OR dropped
+        // (the next chained spend fails to submit → the submit handler clears the head and re-funds)
+        // — either way no longer stalled. Unknown (transient RPC error) ⇒ make NO change to the
+        // counter, so a flaky lookup can neither falsely advance nor falsely reset the stall.
         if self.pending_change.is_some() {
-            // attest() runs at most once per distinct epoch (the run loop short-circuits repeats via
-            // last_attested_epoch), so a changed target.epoch means another whole epoch elapsed
-            // without the head confirming.
-            if self.chain_head_epoch != Some(target.epoch) {
-                self.stalled_epochs = self.stalled_epochs.saturating_add(1);
-            }
-            if self.stalled_epochs >= N_STALL_EPOCHS {
-                warn!(
-                    "[{VALIDATOR}] funding-chain head unmined for {} epochs (now epoch {}); abandoning the unconfirmed chain and re-funding from a confirmed UTXO",
-                    self.stalled_epochs, target.epoch
-                );
-                // Drop ONLY the chain head. Do NOT clear inflight_spent: the stalled tx still holds
-                // its funding outpoint spent-in-mempool, but the node's utxoindex (accepted set, no
-                // mempool subtraction — see the comment above) keeps LISTING that outpoint, so
-                // re-picking it would just RejectDoubleSpendInMempool and stall again. Keeping the
-                // exclusion forces select_funding onto a DIFFERENT mature node UTXO = real recovery;
-                // the retain above self-heals inflight_spent once the stalled tx mines or expires.
-                self.pending_change = None;
-                self.stalled_epochs = 0;
-                self.chain_head_epoch = None;
+            let status = match self.chain_head_txid {
+                Some(txid) => mempool_status(client, txid).await,
+                None => MempoolStatus::Gone,
+            };
+            match status {
+                MempoolStatus::Present => {
+                    // attest() runs at most once per distinct epoch (the run loop short-circuits
+                    // repeats via last_attested_epoch), so a changed target.epoch means a whole epoch
+                    // elapsed without the head confirming.
+                    if self.chain_head_epoch != Some(target.epoch) {
+                        self.stalled_epochs = self.stalled_epochs.saturating_add(1);
+                        self.chain_head_epoch = Some(target.epoch);
+                    }
+                    if self.stalled_epochs >= N_STALL_EPOCHS {
+                        warn!(
+                            "[{VALIDATOR}] funding-chain head unmined for {} epochs (now epoch {}); abandoning the unconfirmed chain and re-funding from a confirmed UTXO",
+                            self.stalled_epochs, target.epoch
+                        );
+                        // Drop the chain head but KEEP inflight_spent: the stalled tx still spends its
+                        // funding outpoint in the mempool, so the paginated fallback must not re-pick
+                        // it (would RejectDoubleSpendInMempool). The mempool-keyed prune above frees
+                        // it once that tx actually mines or is dropped.
+                        self.pending_change = None;
+                        self.chain_head_txid = None;
+                        self.stalled_epochs = 0;
+                        self.chain_head_epoch = None;
+                    }
+                }
+                MempoolStatus::Gone => {
+                    self.stalled_epochs = 0;
+                    self.chain_head_epoch = None;
+                }
+                MempoolStatus::Unknown => {}
             }
         } else {
-            // Head confirmed (resync cleared it) or no chain yet → healthy.
             self.stalled_epochs = 0;
         }
-        let (funding_outpoint, funding_entry) =
-            select_funding(&self.pending_change, &self.inflight_spent, node_utxos, fee, virtual_daa, self.coinbase_maturity)?;
+
+        // Chain off our own change while it covers the fee (the mempool accepts a chained spend of an
+        // unconfirmed parent) — NO node fetch. Otherwise page the funding address for a mature
+        // confirmed UTXO (bounded scan; never the full 88k set).
+        let (funding_outpoint, funding_entry) = match &self.pending_change {
+            Some((op, en)) if en.amount > fee && !self.inflight_spent.contains_key(op) => (*op, en.clone()),
+            _ => {
+                self.pending_change = None;
+                self.chain_head_txid = None;
+                select_funding_paged(client, &funding_addr, &self.inflight_spent, fee, virtual_daa, self.coinbase_maturity).await?
+            }
+        };
 
         let tx = self.key.build_funded_shard_tx(&shard, funding_outpoint, &funding_entry, fee)?;
 
@@ -1203,24 +1233,100 @@ impl Attestor {
                 // Advance the funding chain: this tx's change output (index 0, back to self) funds the
                 // next epoch. The tx id excludes signature scripts, so it is stable post-sign and
                 // matches the id the node assigns.
-                self.inflight_spent.insert(funding_outpoint);
+                self.inflight_spent.insert(funding_outpoint, tx.id());
                 let change =
                     UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
                 self.pending_change = Some((TransactionOutpoint::new(tx.id(), 0), change));
-                // kaspa-pq DNS-v3 hardening (Fix B): record which epoch produced this chain head so
-                // the stall counter advances once per unconfirmed epoch.
+                // Record the head tx id (for the per-txid mempool confirmation lookup) and which
+                // epoch produced it (so the stall counter advances once per unconfirmed epoch).
+                self.chain_head_txid = Some(tx.id());
                 self.chain_head_epoch = Some(target.epoch);
                 Ok(())
             }
             Err(e) => {
                 // Submit failed ⇒ no new change output exists. Drop the chain head so the next tick
-                // reselects from the node; the in-flight set still excludes UTXOs our earlier
-                // (accepted) txs spent, so the fallback won't re-pick a mempool-spent outpoint.
+                // re-funds (paginated); the in-flight set still excludes UTXOs our earlier (accepted)
+                // txs spent, so the fallback won't re-pick a mempool-spent outpoint.
                 self.pending_change = None;
+                self.chain_head_txid = None;
                 Err(format!("submitTransaction failed: {e}"))
             }
         }
     }
+}
+
+/// Residency of a tx in the node's normal (non-orphan) mempool, as a tri-state so a transient RPC
+/// error is never confused with a definitive "not in the pool".
+enum MempoolStatus {
+    /// Still in the transaction pool (unconfirmed; its spends are live).
+    Present,
+    /// Definitively not in the pool — mined or dropped (`TransactionNotFound`).
+    Gone,
+    /// Could not be determined (transient RPC error); callers should make no state change.
+    Unknown,
+}
+
+/// Query whether `txid` is still resident in the node's normal mempool. Args
+/// (include_orphan_pool=false, filter_transaction_pool=false) ⇒ the node queries TransactionsOnly;
+/// NB it REJECTS (filter=true, orphan=false) as an inconsistent query, so `filter_transaction_pool`
+/// MUST be false. One cheap per-txid lookup — never the whole funding address's UTXO set.
+async fn mempool_status(client: &KaspaRpcClient, txid: TransactionId) -> MempoolStatus {
+    match client.get_mempool_entry(txid, false, false).await {
+        Ok(_) => MempoolStatus::Present,
+        Err(RpcError::TransactionNotFound(_)) => MempoolStatus::Gone,
+        Err(_) => MempoolStatus::Unknown,
+    }
+}
+
+/// kaspa-pq large-UTXO hardening: find a mature CONFIRMED funding UTXO at the validator address via
+/// the PAGINATED utxo index (op 160) instead of the legacy all-UTXO fetch — bounded to a few pages,
+/// so a funding address contaminated with tens of thousands of coinbase UTXOs (a miner that paid
+/// it) never forces a multi-MiB per-epoch response. Pages until it has seen a comfortably large
+/// seed (one that funds a long change-chain) or hits a bounded page budget, then defers to the
+/// shared, unit-tested `select_funding` to pick the largest qualifying UTXO from what it gathered.
+async fn select_funding_paged(
+    client: &KaspaRpcClient,
+    funding_addr: &Address,
+    inflight: &HashMap<TransactionOutpoint, TransactionId>,
+    fee: u64,
+    virtual_daa: u64,
+    coinbase_maturity: u64,
+) -> Result<(TransactionOutpoint, UtxoEntry), String> {
+    const PAGE_LIMIT: u64 = 1000;
+    const MAX_PAGES: usize = 16; // ≤16k UTXOs scanned even on a heavily-contaminated address
+    // A seed > fee * this multiple funds a long change-chain, so once we see one we stop paging.
+    const GOOD_ENOUGH_FEE_MULT: u64 = 64;
+    let good_enough = fee.saturating_mul(GOOD_ENOUGH_FEE_MULT);
+
+    let inflight_set: HashSet<TransactionOutpoint> = inflight.keys().copied().collect();
+    let mut gathered: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::new();
+    let mut cursor = String::new();
+    for _ in 0..MAX_PAGES {
+        let page = client
+            .get_utxos_by_address_page(funding_addr.clone(), cursor, PAGE_LIMIT)
+            .await
+            .map_err(|e| format!("getUtxosByAddressPage failed (does the node run --utxoindex?): {e}"))?;
+        let next_cursor = page.next_cursor;
+        let mut seen_good = false;
+        for e in page.entries {
+            let op = TransactionOutpoint::from(e.outpoint);
+            let en = UtxoEntry::from(e.utxo_entry);
+            if en.amount > good_enough
+                && is_spendable(en.is_coinbase, en.block_daa_score, virtual_daa, coinbase_maturity)
+                && !inflight_set.contains(&op)
+            {
+                seen_good = true;
+            }
+            gathered.push((op, en));
+        }
+        if seen_good || next_cursor.is_empty() {
+            break;
+        }
+        cursor = next_cursor;
+    }
+    // Reuse the shared, unit-tested selector: pending=None ⇒ it picks the largest mature, > fee,
+    // not-in-flight UTXO from what we gathered (and errors with the same guidance if none qualify).
+    select_funding(&None, &inflight_set, gathered, fee, virtual_daa, coinbase_maturity)
 }
 
 /// The ADR-0011 validator runtime loop. Returns `Err` only on the fatal `Slashed` state;
