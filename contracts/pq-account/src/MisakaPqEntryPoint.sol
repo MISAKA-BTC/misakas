@@ -15,11 +15,12 @@ import {MisakaPqSmartAccount} from "./MisakaPqSmartAccount.sol";
 ///         account), so a malicious relayer can neither alter nor replay an op, and
 ///         submitting to the wrong account simply fails the account's own checks.
 ///
-///         DEFERRED (P1, design §16.3): fee reimbursement (the account paying the
-///         relayer back up to a signed `maxRelayerFee`) requires the account op to
-///         commit to that cap — an account-side change. This MVP relays for free
-///         (the relayer chooses to pay gas); add reimbursement with the EntryPoint's
-///         ERC-4337 alignment.
+///         FEE REIMBURSEMENT (design §16.3): each op commits to a signed
+///         `maxRelayerFee`; the account pays `min(measured cost, maxRelayerFee)` to
+///         `tx.origin` (the relayer EOA) as the last step of execution — capped, signed,
+///         and trusting no relayer-supplied value. The EntryPoint forwards the op
+///         verbatim (the fee is account-side); it relays all three self-validating
+///         entrypoints (executeRoot / executeSession / executeSessionWithProof).
 contract MisakaPqEntryPoint {
     struct UserOp {
         /// The target PQ account (its deterministic Factory address).
@@ -62,7 +63,8 @@ contract MisakaPqEntryPoint {
             require(op.callData.length >= 4, "EP: calldata too short");
             bytes4 sel = bytes4(op.callData[:4]);
             require(
-                sel == MisakaPqSmartAccount.executeRoot.selector || sel == MisakaPqSmartAccount.executeSession.selector,
+                sel == MisakaPqSmartAccount.executeRoot.selector || sel == MisakaPqSmartAccount.executeSession.selector
+                    || sel == MisakaPqSmartAccount.executeSessionWithProof.selector,
                 "EP: only execute ops"
             );
 

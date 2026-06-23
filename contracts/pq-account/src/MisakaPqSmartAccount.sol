@@ -58,6 +58,11 @@ contract MisakaPqSmartAccount {
     /// First byte of an ERC-1271 SESSION envelope ('S'); distinguishes it from the
     /// fixed-length ML-DSA root signature (length 2592+4627) without ambiguity.
     bytes1 internal constant ERC1271_ENVELOPE_TAG = 0x53;
+    /// Fixed gas added to the account-measured execution gas when reimbursing a relayer
+    /// (§16.3), approximating the unmeasured intrinsic + calldata + EntryPoint-dispatch
+    /// + the reimbursement transfer itself. The signed `maxRelayerFee` is the HARD cap,
+    /// so this approximation can never cause an overpayment beyond what the op authorized.
+    uint256 internal constant FEE_OVERHEAD_GAS = 40_000;
 
     // Selectors a session may NEVER call (approval-as-delegation drains every value cap
     // by handing withdrawal rights to an external spender): ERC-20/721 `approve`,
@@ -308,14 +313,17 @@ contract MisakaPqSmartAccount {
     /// The exact bytes the ML-DSA root signature commits to (via F003's internal
     /// keyed-BLAKE2b-512). Fixed widths so an off-chain signer reproduces it
     /// byte-for-byte: domain ‖ chainId(32) ‖ account(20) ‖ version(8) ‖ nonce(8) ‖
-    /// validAfter(8) ‖ validUntil(8) ‖ target(20) ‖ value(32) ‖ callData.
+    /// validAfter(8) ‖ validUntil(8) ‖ maxRelayerFee(32) ‖ target(20) ‖ value(32) ‖
+    /// callData. `maxRelayerFee` is signed so a relayer can never claim a fee the user
+    /// did not authorize for THIS op.
     function _opPreimage(
         address target,
         uint256 value,
         bytes calldata callData,
         uint64 validAfterBlock,
         uint64 validUntilBlock,
-        uint64 nonce
+        uint64 nonce,
+        uint256 maxRelayerFee
     ) internal view returns (bytes memory) {
         return abi.encodePacked(
             OP_DOMAIN,
@@ -325,6 +333,7 @@ contract MisakaPqSmartAccount {
             nonce,
             validAfterBlock,
             validUntilBlock,
+            maxRelayerFee,
             target,
             value,
             callData
@@ -343,14 +352,16 @@ contract MisakaPqSmartAccount {
         uint64 validUntilBlock,
         uint64 nonce,
         bytes calldata publicKey,
-        bytes calldata signature
+        bytes calldata signature,
+        uint256 maxRelayerFee
     ) external returns (bytes memory) {
+        uint256 gasStart = gasleft();
         require(!frozen, "PQ: account frozen");
         require(nonce == rootNonce, "PQ: bad nonce");
         require(block.number >= validAfterBlock && block.number <= validUntilBlock, "PQ: outside validity window");
         require(publicKey.length == 2592 && signature.length == 4627, "PQ: bad key/sig length");
 
-        bytes memory preimage = _opPreimage(target, value, callData, validAfterBlock, validUntilBlock, nonce);
+        bytes memory preimage = _opPreimage(target, value, callData, validAfterBlock, validUntilBlock, nonce, maxRelayerFee);
         bytes memory input =
             abi.encodePacked(F003_VERSION_PREA_ROOT, operationalRootPayloadHi, operationalRootPayloadLo, publicKey, signature, preimage);
 
@@ -362,6 +373,7 @@ contract MisakaPqSmartAccount {
         (bool success, bytes memory result) = target.call{value: value}(callData);
         require(success, "PQ: target call reverted");
         emit RootExecuted(nonce, target, value, success);
+        _reimburseRelayer(gasStart, maxRelayerFee);
         return result;
     }
 
@@ -564,14 +576,24 @@ contract MisakaPqSmartAccount {
     /// session "nonce" is the grant's monotonic call index). The signer (session key)
     /// is RECOVERED from the signature over this hash — it is intentionally NOT a
     /// field here.
-    function _sessionOpHash(address target, uint256 value, bytes calldata callData, uint64 callIndex)
-        internal
-        view
-        returns (bytes32)
-    {
+    function _sessionOpHash(
+        address target,
+        uint256 value,
+        bytes calldata callData,
+        uint64 callIndex,
+        uint256 maxRelayerFee
+    ) internal view returns (bytes32) {
         return keccak256(
             abi.encode(
-                SESSION_OP_DOMAIN, block.chainid, address(this), accountVersion, target, value, keccak256(callData), callIndex
+                SESSION_OP_DOMAIN,
+                block.chainid,
+                address(this),
+                accountVersion,
+                target,
+                value,
+                keccak256(callData),
+                callIndex,
+                maxRelayerFee
             )
         );
     }
@@ -608,12 +630,15 @@ contract MisakaPqSmartAccount {
             || sel == SEL_P2_PERMIT_TRANSFER_FROM_BATCH || sel == SEL_P2_LOCKDOWN;
     }
 
-    function _recoverSessionKey(address target, uint256 value, bytes calldata callData, uint64 callIndex, bytes calldata ecdsaSig)
-        internal
-        view
-        returns (address sk)
-    {
-        sk = _recover(_sessionOpHash(target, value, callData, callIndex), ecdsaSig);
+    function _recoverSessionKey(
+        address target,
+        uint256 value,
+        bytes calldata callData,
+        uint64 callIndex,
+        uint256 maxRelayerFee,
+        bytes calldata ecdsaSig
+    ) internal view returns (address sk) {
+        sk = _recover(_sessionOpHash(target, value, callData, callIndex, maxRelayerFee), ecdsaSig);
         require(sk != address(0), "PQ: bad session signature");
     }
 
@@ -625,10 +650,12 @@ contract MisakaPqSmartAccount {
         uint256 value,
         bytes calldata callData,
         uint64 callIndex,
-        bytes calldata ecdsaSig
+        bytes calldata ecdsaSig,
+        uint256 maxRelayerFee
     ) external returns (bytes memory) {
+        uint256 gasStart = gasleft();
         bytes4 sel = _frontGuards(target, callData);
-        address sk = _recoverSessionKey(target, value, callData, callIndex, ecdsaSig);
+        address sk = _recoverSessionKey(target, value, callData, callIndex, maxRelayerFee, ecdsaSig);
         // Grant active/epoch FIRST (so an ungranted/revoked/rotated key reports
         // "session inactive", not "target/selector not allowed").
         require(sessions[sk].active && sessions[sk].rootEpoch == rootEpoch, "PQ: session inactive");
@@ -636,7 +663,9 @@ contract MisakaPqSmartAccount {
         bytes32 pk = allowKey(target, sel);
         Allow storage a = allows[sk][sessionGrantGen[sk]][pk];
         require(a.allowed, "PQ: target/selector not allowed");
-        return _runSession(target, value, callData, callIndex, sk, _resolveFromAllow(a, pk));
+        bytes memory result = _runSession(target, value, callData, callIndex, sk, _resolveFromAllow(a, pk));
+        _reimburseRelayer(gasStart, maxRelayerFee);
+        return result;
     }
 
     /// Execute one session operation authorized by a Merkle proof against the grant's
@@ -650,11 +679,13 @@ contract MisakaPqSmartAccount {
         uint64 callIndex,
         bytes calldata ecdsaSig,
         PolicyLeaf calldata leaf,
-        bytes32[] calldata proof
+        bytes32[] calldata proof,
+        uint256 maxRelayerFee
     ) external returns (bytes memory) {
+        uint256 gasStart = gasleft();
         bytes4 sel = _frontGuards(target, callData);
         require(leaf.target == target && leaf.selector == sel, "PQ: leaf/call mismatch");
-        address sk = _recoverSessionKey(target, value, callData, callIndex, ecdsaSig);
+        address sk = _recoverSessionKey(target, value, callData, callIndex, maxRelayerFee, ecdsaSig);
         require(sessions[sk].active && sessions[sk].rootEpoch == rootEpoch, "PQ: session inactive");
 
         bytes32 root = sessionPolicyRoot[sk][sessionGrantGen[sk]];
@@ -665,7 +696,10 @@ contract MisakaPqSmartAccount {
         if (leaf.codeHashPin != bytes32(0)) {
             require(target.codehash == leaf.codeHashPin, "PQ: code-hash mismatch");
         }
-        return _runSession(target, value, callData, callIndex, sk, _resolveFromLeaf(leaf, _proofPolicyKey(target, sel)));
+        bytes memory result =
+            _runSession(target, value, callData, callIndex, sk, _resolveFromLeaf(leaf, _proofPolicyKey(target, sel)));
+        _reimburseRelayer(gasStart, maxRelayerFee);
+        return result;
     }
 
     /// Shared post-authorization core (BOTH session entrypoints). The caller has
@@ -1008,6 +1042,43 @@ contract MisakaPqSmartAccount {
             }
         }
         return true;
+    }
+
+    // --------------------------------------------------------------- relayer fee
+
+    /// Reimburse the relayer (design §16.3) up to the SIGNED `maxRelayerFee` — never
+    /// more. Pays `min(measuredCost, maxRelayerFee)` to `tx.origin` (the EOA that
+    /// submitted the tx, i.e. the relayer when routed via the EntryPoint, or the user
+    /// on a direct call). `measuredCost = (gasUsed + FEE_OVERHEAD_GAS) * tx.gasprice`,
+    /// where `gasUsed` is this op's account-side gas. The signed cap is the hard bound,
+    /// so the approximation never overpays beyond what the op authorized; no relayer-
+    /// supplied value is trusted.
+    ///
+    /// LIMITATION (documented): `tx.origin` is the originating EOA, so a relayer routed
+    /// through its OWN contract (a bundler contract) is reimbursed at its operator EOA,
+    /// not the bundler contract. Acceptable for the EOA-relayer MVP; a relayer-address
+    /// parameter or ERC-4337 prefund accounting is the path to contract-relayer support.
+    function _reimburseRelayer(uint256 gasStart, uint256 maxRelayerFee) internal {
+        if (maxRelayerFee == 0) {
+            return;
+        }
+        uint256 cost = (gasStart - gasleft() + FEE_OVERHEAD_GAS) * tx.gasprice;
+        uint256 fee = cost < maxRelayerFee ? cost : maxRelayerFee;
+        // Best-effort: cap at the remaining balance so an op that legitimately spends
+        // the account down to < fee (its own signed value-forward) is NOT bricked at the
+        // fee step. Never exceeds the signed cap; underpays only when funds ran out.
+        uint256 bal = address(this).balance;
+        if (fee > bal) {
+            fee = bal;
+        }
+        if (fee == 0) {
+            return;
+        }
+        // tx.origin is always an EOA (no code) → it can always receive value, so this
+        // transfer cannot be made to revert by a malicious recipient, and an EOA cannot
+        // reenter. Effects (nonce/counters) are already committed above; `fee <= balance`.
+        (bool ok,) = tx.origin.call{value: fee}("");
+        require(ok, "PQ: relayer reimbursement failed");
     }
 
     // ------------------------------------------------------------------- secp256k1

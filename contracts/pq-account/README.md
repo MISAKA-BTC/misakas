@@ -11,12 +11,15 @@ precompile** (`0x…F003`, version `0x02`). See `docs/misaka-prea-design-v1.1.md
 grant/revoke, the **restricted secp256k1 session path** (`executeSession`), the
 deterministic **`MisakaPqAccountFactory`** (CREATE2 + `getAddress` predictor +
 idempotent), and a permissionless **`MisakaPqEntryPoint`** relayer (`handleOps`:
-deploy-if-needed via `initCode` + forward `executeRoot`/`executeSession`; the relayer
-holds no authority — the account self-validates). The session path enforces:
-deny-by-default of `approve` / `setApprovalForAll` (approval-as-delegation drains
-every cap), a (target,selector) allowlist, native value caps (per-total), expiry /
-max-calls / monotonic call-index / root-epoch binding, and CALL-only (never
-delegatecall).
+deploy-if-needed via `initCode` + forward any of the three self-validating
+entrypoints; the relayer holds no authority — the account self-validates) with
+**signed fee reimbursement** (§16.3): each op commits to a `maxRelayerFee` and the
+account pays `min(measured cost, maxRelayerFee)` to `tx.origin` as its last step —
+capped, signed, trusting no relayer value. The session path enforces:
+deny-by-default of `approve` / `setApprovalForAll` / `increaseAllowance` (approval-
+as-delegation drains every cap), a (target,selector) allowlist, native value caps
+(per-total), expiry / max-calls / per-key monotonic replay nonce / root-epoch
+binding, and CALL-only (never delegatecall).
 
 **P1 session policy** (design §14 / §15):
 - **Merkle allowlist** — `grantSessionWithRoot` commits one `policyMerkleRoot`;
@@ -79,9 +82,9 @@ contract + tests exist now so the consumer is ready and reviewed.
 forge test -vvv
 ```
 
-Verified: `forge test` = **69 passed** (solc 0.8.28, `via_ir`). Runtime bytecode
+Verified: `forge test` = **76 passed** (solc 0.8.28, `via_ir`). Runtime bytecode
 keccak (record on source freeze):
-`0xb239b282c94049ad954219f524315d90b31246853f4ff36bd102dff42e6d504f`.
+`0xaf90b303911b0b50802362e824d375b5b3fe3945078879c11282b76d2fc64386`.
 
 `test/MisakaPqSmartAccount.t.sol` exercises `executeRoot` with F003 **mocked**
 (happy/replay/nonce/window/ML-DSA-false/inert-F003/target-revert), the full

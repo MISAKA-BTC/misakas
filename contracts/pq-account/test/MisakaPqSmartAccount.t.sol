@@ -80,7 +80,8 @@ contract MisakaPqSmartAccountTest is Test {
             type(uint64).max,
             nonce,
             pubkey,
-            sig
+            sig,
+            0
         );
     }
 
@@ -110,7 +111,7 @@ contract MisakaPqSmartAccountTest is Test {
         _etchTrue();
         vm.roll(1000);
         vm.expectRevert("PQ: outside validity window");
-        account.executeRoot(address(target), 0, "", 0, 10, 0, pubkey, sig);
+        account.executeRoot(address(target), 0, "", 0, 10, 0, pubkey, sig, 0);
     }
 
     function test_ml_dsa_false_reverts() public {
@@ -153,7 +154,7 @@ contract MisakaPqSmartAccountTest is Test {
     {
         bytes32 domain = keccak256("MISAKA_PQ_EXECUTE_SESSION_V1");
         bytes32 opHash =
-            keccak256(abi.encode(domain, block.chainid, address(account), VERSION, tgt, value, keccak256(callData), callIndex));
+            keccak256(abi.encode(domain, block.chainid, address(account), VERSION, tgt, value, keccak256(callData), callIndex, uint256(0)));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(sk, opHash);
         return abi.encodePacked(r, s, v);
     }
@@ -172,7 +173,7 @@ contract MisakaPqSmartAccountTest is Test {
         address sk = _grantPing(5 ether, 3);
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(7));
         bytes memory s = _sessionSig(SK, address(target), 1 ether, cd, 0);
-        bytes memory ret = account.executeSession(address(target), 1 ether, cd, 0, s);
+        bytes memory ret = account.executeSession(address(target), 1 ether, cd, 0, s, 0);
         assertEq(abi.decode(ret, (uint256)), 8);
         assertEq(target.lastValue(), 1 ether, "native value forwarded");
         (,,, uint64 used,,,) = account.sessions(sk);
@@ -184,7 +185,7 @@ contract MisakaPqSmartAccountTest is Test {
         bytes memory cd = abi.encodeWithSelector(SEL_APPROVE, address(0xBEEF), uint256(1));
         bytes memory s = _sessionSig(SK, address(target), 0, cd, 0);
         vm.expectRevert("PQ: forbidden selector");
-        account.executeSession(address(target), 0, cd, 0, s);
+        account.executeSession(address(target), 0, cd, 0, s, 0);
     }
 
     function test_session_unlisted_target_reverts() public {
@@ -195,7 +196,7 @@ contract MisakaPqSmartAccountTest is Test {
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
         bytes memory s = _sessionSig(SK, address(target), 0, cd, 0);
         vm.expectRevert("PQ: target/selector not allowed");
-        account.executeSession(address(target), 0, cd, 0, s);
+        account.executeSession(address(target), 0, cd, 0, s, 0);
     }
 
     function test_session_native_cap_reverts() public {
@@ -203,15 +204,15 @@ contract MisakaPqSmartAccountTest is Test {
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
         bytes memory s = _sessionSig(SK, address(target), 2 ether, cd, 0);
         vm.expectRevert("PQ: session native cap");
-        account.executeSession(address(target), 2 ether, cd, 0, s);
+        account.executeSession(address(target), 2 ether, cd, 0, s, 0);
     }
 
     function test_session_call_cap_reverts() public {
         _grantPing(10 ether, 1); // maxCalls = 1
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
-        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0));
+        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0), 0);
         vm.expectRevert("PQ: session call cap");
-        account.executeSession(address(target), 0, cd, 1, _sessionSig(SK, address(target), 0, cd, 1));
+        account.executeSession(address(target), 0, cd, 1, _sessionSig(SK, address(target), 0, cd, 1), 0);
     }
 
     function test_session_bad_call_index_reverts() public {
@@ -219,7 +220,7 @@ contract MisakaPqSmartAccountTest is Test {
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
         bytes memory s = _sessionSig(SK, address(target), 0, cd, 5);
         vm.expectRevert("PQ: bad session call index");
-        account.executeSession(address(target), 0, cd, 5, s);
+        account.executeSession(address(target), 0, cd, 5, s, 0);
     }
 
     function test_session_expired_reverts() public {
@@ -233,7 +234,7 @@ contract MisakaPqSmartAccountTest is Test {
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
         bytes memory s = _sessionSig(SK, address(target), 0, cd, 0);
         vm.expectRevert("PQ: session expired");
-        account.executeSession(address(target), 0, cd, 0, s);
+        account.executeSession(address(target), 0, cd, 0, s, 0);
     }
 
     function test_session_erc20_amount_cap() public {
@@ -247,10 +248,10 @@ contract MisakaPqSmartAccountTest is Test {
 
         bytes memory cdBad = abi.encodeWithSelector(SEL_TRANSFER, address(0xBEEF), uint256(200));
         vm.expectRevert("PQ: token amount cap");
-        account.executeSession(address(token), 0, cdBad, 0, _sessionSig(SK, address(token), 0, cdBad, 0));
+        account.executeSession(address(token), 0, cdBad, 0, _sessionSig(SK, address(token), 0, cdBad, 0), 0);
 
         bytes memory cdOk = abi.encodeWithSelector(SEL_TRANSFER, address(0xBEEF), uint256(50));
-        account.executeSession(address(token), 0, cdOk, 0, _sessionSig(SK, address(token), 0, cdOk, 0));
+        account.executeSession(address(token), 0, cdOk, 0, _sessionSig(SK, address(token), 0, cdOk, 0), 0);
         assertEq(token.sent(address(0xBEEF)), 50, "capped transfer executed");
     }
 
@@ -261,14 +262,14 @@ contract MisakaPqSmartAccountTest is Test {
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
         bytes memory s = _sessionSig(SK, address(target), 0, cd, 0);
         vm.expectRevert("PQ: session inactive");
-        account.executeSession(address(target), 0, cd, 0, s);
+        account.executeSession(address(target), 0, cd, 0, s, 0);
     }
 
     function test_session_ungranted_key_reverts() public {
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
         bytes memory s = _sessionSig(0xBADBAD, address(target), 0, cd, 0); // key with no grant
         vm.expectRevert("PQ: session inactive");
-        account.executeSession(address(target), 0, cd, 0, s);
+        account.executeSession(address(target), 0, cd, 0, s, 0);
     }
 
     function test_session_cannot_target_self() public {
@@ -283,7 +284,7 @@ contract MisakaPqSmartAccountTest is Test {
         bytes memory cd = abi.encodeWithSelector(bytes4(0x12345678)); // any 4-byte calldata
         bytes memory s = _sessionSig(SK, address(account), 0, cd, 0);
         vm.expectRevert("PQ: session cannot target self");
-        account.executeSession(address(account), 0, cd, 0, s);
+        account.executeSession(address(account), 0, cd, 0, s, 0);
     }
 
     function test_grantSession_only_root() public {
@@ -320,7 +321,7 @@ contract MisakaPqSmartAccountTest is Test {
 
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
         vm.expectRevert("PQ: account frozen");
-        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0)); // session blocked
+        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0), 0); // session blocked
 
         _vault(2, bytes32(0), bytes32(0), 1); // UNFREEZE
         assertFalse(account.frozen());
@@ -337,7 +338,7 @@ contract MisakaPqSmartAccountTest is Test {
         // the session (granted at epoch 0) is now invalid.
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
         vm.expectRevert("PQ: session inactive");
-        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0));
+        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0), 0);
     }
 
     function test_vault_bad_nonce_reverts() public {
@@ -384,7 +385,47 @@ contract MisakaPqSmartAccountTest is Test {
         // The prior (target, ping) allowance MUST NOT survive the re-grant.
         bytes memory cd = abi.encodeWithSelector(SEL_PING, uint256(1));
         vm.expectRevert("PQ: target/selector not allowed");
-        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0));
+        account.executeSession(address(target), 0, cd, 0, _sessionSig(SK, address(target), 0, cd, 0), 0);
+    }
+
+    // ----------------------------------------------- relayer fee reimbursement (§16.3)
+
+    function test_executeRoot_reimburses_relayer_capped() public {
+        _etchTrue();
+        address relayer = address(0xCAFE);
+        uint256 maxFee = 1000; // wei
+        vm.txGasPrice(1e12); // true cost exceeds the cap
+        bytes memory cd = abi.encodeWithSelector(CallTarget.ping.selector, uint256(1));
+        uint256 before = relayer.balance;
+        vm.prank(relayer, relayer); // msg.sender == tx.origin == relayer
+        account.executeRoot(address(target), 0, cd, 0, type(uint64).max, 0, pubkey, sig, maxFee);
+        assertEq(relayer.balance - before, maxFee, "root op reimburses relayer, capped at maxRelayerFee");
+        assertEq(account.rootNonce(), 1, "op still executed");
+    }
+
+    function test_executeRoot_zero_fee_no_payment() public {
+        _etchTrue();
+        address relayer = address(0xCAFE);
+        vm.txGasPrice(1e12);
+        bytes memory cd = abi.encodeWithSelector(CallTarget.ping.selector, uint256(1));
+        uint256 before = relayer.balance;
+        vm.prank(relayer, relayer);
+        account.executeRoot(address(target), 0, cd, 0, type(uint64).max, 0, pubkey, sig, 0);
+        assertEq(relayer.balance, before, "no fee when maxRelayerFee == 0");
+    }
+
+    /// An op whose own value-forward drains the account below the fee is NOT bricked at
+    /// the fee step — reimbursement is best-effort (capped at the remaining balance).
+    function test_executeRoot_self_draining_op_not_bricked_by_fee() public {
+        _etchTrue();
+        address relayer = address(0xCAFE);
+        vm.txGasPrice(1e12); // a fee would be due, but the op forwards the whole balance
+        bytes memory cd = abi.encodeWithSelector(CallTarget.ping.selector, uint256(1));
+        vm.prank(relayer, relayer);
+        // forward the full 100 ether to the (payable) target, leaving nothing for the fee
+        account.executeRoot(address(target), 100 ether, cd, 0, type(uint64).max, 0, pubkey, sig, 1 ether);
+        assertEq(account.rootNonce(), 1, "op executed despite no balance left for the fee");
+        assertEq(target.lastValue(), 100 ether, "value forwarded");
     }
 }
 
