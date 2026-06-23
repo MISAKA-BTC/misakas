@@ -292,10 +292,16 @@ impl EvmBlockHashMapStoreReader for DbEvmBlockHashMapStore {
 // EvmNumberIndex store (prefix 213) — evm_number → L1 BlockHash (for
 // `eth_getBlockByNumber` + `eth_getLogs` ranges). Keyed by the number encoded
 // into a 32-byte key (right-aligned BE) so it reuses the proven `EvmH256` key
-// type. Upsert: on a reorg the new canonical block at a number overwrites the
-// old; the READER must re-validate `is_chain_block(hash) && header.evm_number == n`
-// so a stale row reads as absent (the `get_evm_tx_receipt` canonical pattern).
-// RPC index only — never part of any commitment.
+// type. CANONICAL-DRIVEN: the map is written ONLY from the selected chain at
+// virtual commit (`update_evm_canonical_number_map`) — attached blocks claim
+// their number via `write_batch`, detached blocks release it via
+// `delete_if_matches_batch`. It is NEVER written at per-block result-commit,
+// because a UTXO-valid sink-search loser (validated by
+// `calculate_utxo_state_relatively` but not selected) would otherwise overwrite
+// the canonical row and shadow that number until the next commit. The READER
+// still re-validates `is_chain_block(hash) && header.evm_number == n` as a
+// backstop, so any stale row reads as absent (the `get_evm_tx_receipt`
+// canonical pattern). RPC index only — never part of any commitment.
 // ---------------------------------------------------------------------------
 
 /// Encode an `evm_number` as the 32-byte key of the number index (right-aligned BE).
@@ -322,10 +328,25 @@ impl DbEvmNumberStore {
         Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmNumberIndex.into()) }
     }
 
-    /// Unguarded upsert into the caller's batch (the new canonical block at a
-    /// number overwrites the prior one on a reorg).
+    /// Attach pass: the canonical (selected-chain) block claims `evm_number`.
+    /// An upsert — a reorg's new canonical block at a number overwrites the
+    /// prior one; only ever called from the virtual-commit canonical pass.
     pub fn write_batch(&self, batch: &mut WriteBatch, evm_number: u64, l1_hash: BlockHash) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), evm_number_key(evm_number), l1_hash)
+    }
+
+    /// Detach pass: release the row for `evm_number` ONLY if it still points to
+    /// `expected` (the detached chain block). A number already re-claimed by a
+    /// newer canonical block is left intact. Reads the current row first — safe
+    /// because detach runs before attach within the same virtual-commit batch.
+    pub fn delete_if_matches_batch(&self, batch: &mut WriteBatch, evm_number: u64, expected: BlockHash) -> Result<(), StoreError> {
+        let key = evm_number_key(evm_number);
+        match self.access.read(key) {
+            Ok(h) if h == expected => self.access.delete(BatchDbWriter::new(batch), key),
+            Ok(_) => Ok(()),
+            Err(StoreError::KeyNotFound(_)) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -441,6 +462,44 @@ mod tests {
         let heads = CanonicalEvmHeads { latest: bh(3), safe: bh(2), finalized: bh(1) };
         heads_store.set(heads).unwrap();
         assert_eq!(heads_store.get().unwrap(), heads);
+    }
+
+    /// Canonical-index fix: the `evm_number → L1 hash` map is canonical-driven
+    /// at virtual commit. `write_batch` claims a number for the attached chain
+    /// block; `delete_if_matches_batch` releases it on detach ONLY if the row is
+    /// still the detached block's (a number re-claimed by a newer canonical
+    /// block survives), so a sink-search loser can never shadow the canonical row.
+    #[test]
+    fn evm_number_store_canonical_claim_and_conditional_release() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbEvmNumberStore::new(db.clone(), CachePolicy::Empty);
+
+        // Attach: number 5 → block A.
+        let mut batch = WriteBatch::default();
+        store.write_batch(&mut batch, 5, bh(0xAA)).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.get(5).unwrap(), Some(bh(0xAA)));
+
+        // Detach a block that does NOT own the row (number 5 still points to A):
+        // releasing B is a no-op — guards against deleting a re-claimed number.
+        let mut batch = WriteBatch::default();
+        store.delete_if_matches_batch(&mut batch, 5, bh(0xBB)).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.get(5).unwrap(), Some(bh(0xAA)), "mismatched detach must not delete");
+
+        // Reorg A→B at number 5: detach A (matches → released) and attach B in
+        // the same batch — the batch applies delete then put, so the claim wins.
+        let mut batch = WriteBatch::default();
+        store.delete_if_matches_batch(&mut batch, 5, bh(0xAA)).unwrap();
+        store.write_batch(&mut batch, 5, bh(0xBB)).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.get(5).unwrap(), Some(bh(0xBB)), "attach re-claims the number after detach");
+
+        // Detach with no re-attach (the chain shrank at this number): fully released.
+        let mut batch = WriteBatch::default();
+        store.delete_if_matches_batch(&mut batch, 5, bh(0xBB)).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.get(5).unwrap(), None, "released number reads as absent");
     }
 
     /// Audit H-01: the pruning processor reclaims per-block EVM state via

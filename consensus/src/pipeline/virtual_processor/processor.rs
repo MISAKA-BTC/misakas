@@ -903,6 +903,37 @@ impl VirtualStateProcessor {
         self.evm_heads_store.write().set_batch(batch, heads).unwrap();
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§16 RPC / canonical-index fix): drive the
+    /// `evm_number → L1 hash` map from the CANONICAL selected chain. Detached
+    /// chain blocks release their number (only if still theirs); attached chain
+    /// blocks claim it. Companion to dropping the per-block write in
+    /// `commit_utxo_state`: a sink-search loser (UTXO-validated by
+    /// `calculate_utxo_state_relatively` but not selected) never touches the
+    /// map, so `get_evm_block_by_number` / `get_evm_logs` can't be shadowed by a
+    /// non-canonical row. Detach-before-attach mirrors `stage_dns_bond_mutations`
+    /// (a number both removed and re-added in one reorg ends at the attached
+    /// block: the batch applies the delete, then the put). Inert (one u64
+    /// compare) on every current network.
+    fn update_evm_canonical_number_map(&self, batch: &mut WriteBatch, chain_path: &ChainPath) {
+        use crate::model::stores::evm::EvmHeaderStoreReader;
+        if self.evm_activation_daa_score == u64::MAX {
+            return;
+        }
+        // Detach first (most-recent first): release each removed chain block's
+        // number iff the row still points to it.
+        for removed in chain_path.removed.iter().rev().copied() {
+            if let Some(h) = self.evm_header_store.get(removed).optional().unwrap() {
+                self.evm_number_store.delete_if_matches_batch(batch, h.evm_number, removed).unwrap();
+            }
+        }
+        // Attach: each added chain block claims its number (canonical-only write).
+        for added in chain_path.added.iter().copied() {
+            if let Some(h) = self.evm_header_store.get(added).optional().unwrap() {
+                self.evm_number_store.write_batch(batch, h.evm_number, added).unwrap();
+            }
+        }
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§15): producer-side EVM fields for a template
     /// built from the current virtual state. Runs the SAME acceptance-execution
     /// core the verifier uses, so a block mined from this template reproduces
@@ -1109,9 +1140,15 @@ impl VirtualStateProcessor {
             let mut rpc_block_id = [0u8; 32];
             rpc_block_id.copy_from_slice(&current.as_bytes()[..32]);
             self.evm_block_hash_map_store.write_batch(&mut batch, kaspa_hashes::EvmH256::from_bytes(rpc_block_id), current).unwrap();
-            // §16 eth-rpc: evm_number → this L1 block (upsert; the reader re-validates
-            // canonicality so a reorg-orphaned number reads as absent).
-            self.evm_number_store.write_batch(&mut batch, staged.result.header.evm_number, current).unwrap();
+            // NOTE (canonical-index fix): the `evm_number → L1 hash` map is NOT
+            // written here. It is the only EVM RPC row keyed by a value shared
+            // across DAG side branches, so a UTXO-valid sink-search loser (a
+            // candidate `calculate_utxo_state_relatively` validates here but the
+            // DNS reorg gate / sink selection then rejects) would overwrite the
+            // canonical row and make that number read as absent. It is instead
+            // driven by the selected chain in `update_evm_canonical_number_map`
+            // at virtual commit. The immutable rows above stay L1-hash-keyed, so
+            // detached side branches remain queryable by hash.
         }
         self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
         self.utxo_multisets_store.insert_batch(&mut batch, current, multiset).unwrap();
@@ -1234,6 +1271,11 @@ impl VirtualStateProcessor {
         // kaspa-pq EVM Lane v0.4 (§10 / invariant I3): a virtual change only
         // MOVES the canonical EVM head pointers — no execution happens here.
         self.update_evm_canonical_heads(&mut batch, dns_sink);
+
+        // kaspa-pq EVM Lane v0.4 (§16 RPC / canonical-index fix): the canonical
+        // `evm_number → L1 hash` map follows the selected chain (detach/attach),
+        // not per-block result-commit — so a sink-search loser can't shadow it.
+        self.update_evm_canonical_number_map(&mut batch, chain_path);
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): recompute the per-epoch
         // accumulator over the bounded selected-chain window ending at the new
