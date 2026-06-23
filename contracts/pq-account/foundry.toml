@@ -7,6 +7,10 @@ test = "test"
 evm_version = "shanghai"
 optimizer = true
 optimizer_runs = 200
+# executeRoot has 8 params + several locals → the legacy codegen hits "stack too
+# deep"; the IR pipeline (with the optimizer) resolves it and is the standard
+# choice for account-abstraction-style entrypoints.
+via_ir = true
 # Pin the EXACT compiler so the deployed bytecode is reproducible from this
 # snapshot (forge-std v1.9.4 is fetched at that tag by build.sh). No OpenZeppelin
 # dependency — the PQ smart account is self-contained.
