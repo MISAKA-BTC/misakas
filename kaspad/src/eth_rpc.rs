@@ -230,8 +230,9 @@ impl EthProvider for NodeEthProvider {
         // resolved block has no snapshot (pruned / pre-activation) so a caller
         // never silently gets latest state for a historical query.
         let session = self.consensus_manager.consensus().session().await;
-        let resolved = session
-            .spawn_blocking(move |c| {
+        session
+            .spawn_blocking(move |c| -> EthResult<Option<kaspa_consensus_core::evm::EvmAccountSnapshot>> {
+                let target = kaspa_consensus_core::evm::EvmAddress::from_bytes(address);
                 let l1: Option<kaspa_consensus_core::BlockHash> = match &block {
                     BlockId::Number(n) => c.get_evm_block_by_number(*n).ok().flatten().map(|b| b.l1_hash),
                     BlockId::Tag(t) => match t.as_str() {
@@ -240,18 +241,35 @@ impl EthProvider for NodeEthProvider {
                         "finalized" => c.get_evm_canonical_heads().ok().flatten().map(|h| h.finalized),
                         _ => Some(c.get_sink()), // latest / pending
                     },
+                    // EIP-1898 by hash: resolve the 32-byte eth id → its L1 block. With
+                    // requireCanonical, a side-branch (non-chain) block is an explicit
+                    // error rather than silently reading its state (§12.5).
+                    BlockId::Hash { hash, require_canonical } => {
+                        let rpc_hash = kaspa_hashes::EvmH256::from_bytes(*hash);
+                        match c.get_evm_block_by_rpc_hash(rpc_hash).ok().flatten() {
+                            Some(b) => {
+                                if *require_canonical && !c.is_chain_block(b.l1_hash).unwrap_or(false) {
+                                    return Err(EthRpcError::invalid_params(
+                                        "requireCanonical: the requested block is not on the canonical chain",
+                                    ));
+                                }
+                                Some(b.l1_hash)
+                            }
+                            None => None,
+                        }
+                    }
                 };
-                l1.map(|h| c.get_evm_state_snapshot_of(h))
+                // Selector did not resolve to a known block (e.g. a future number) ⇒ no account.
+                let Some(l1) = l1 else { return Ok(None) };
+                // Fail CLOSED if the resolved block has no snapshot (pruned/pre-activation)
+                // so a caller never silently gets latest state for a historical query.
+                match c.get_evm_state_snapshot_of(l1) {
+                    Ok(Some(snap)) => Ok(snap.accounts.into_iter().find(|a| a.address == target)),
+                    Ok(None) => Err(EthRpcError::server("EVM state snapshot unavailable at the requested block (pruned or pre-activation)")),
+                    Err(e) => Err(EthRpcError::server(format!("consensus: {e:?}"))),
+                }
             })
-            .await;
-        let target = kaspa_consensus_core::evm::EvmAddress::from_bytes(address);
-        match resolved {
-            // Selector did not resolve to a known block (e.g. a future number) ⇒ no account.
-            None => Ok(None),
-            Some(Ok(Some(snap))) => Ok(snap.accounts.into_iter().find(|a| a.address == target)),
-            Some(Ok(None)) => Err(EthRpcError::server("EVM state snapshot unavailable at the requested block (pruned or pre-activation)")),
-            Some(Err(e)) => Err(EthRpcError::server(format!("consensus: {e:?}"))),
-        }
+            .await
     }
 
     async fn eth_call(&self, req: EthCallRequest) -> EthResult<Vec<u8>> {

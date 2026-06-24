@@ -821,24 +821,65 @@ fn format_receipt(r: &EthReceipt) -> Value {
 
 // --- eth_getBlockBy* / block tx count (Increment 6: block index) ---
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BlockId {
     Number(u64),
     Tag(String),
+    /// EIP-1898 `{ blockHash, requireCanonical }`: a 32-byte eth block id (the first
+    /// 32 bytes of the L1 hash) and whether a non-canonical (side-branch) block must
+    /// be rejected.
+    Hash { hash: [u8; 32], require_canonical: bool },
 }
 
-/// Parse a block selector (`"latest"`/`"safe"`/`"finalized"`/`"earliest"`/`"pending"`
-/// or a hex QUANTITY block number) from `params[idx]`.
-fn parse_block_param(params: &Value, idx: usize) -> EthResult<BlockId> {
-    let s = params
-        .as_array()
-        .and_then(|a| a.get(idx))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| EthRpcError::invalid_params(format!("expected a block number or tag at param #{idx}")))?;
+/// A block-selector tag string (`latest`/`pending`/`safe`/`finalized`/`earliest`) vs
+/// a hex QUANTITY number.
+fn block_id_from_str(s: &str) -> EthResult<BlockId> {
     Ok(match s {
         "latest" | "pending" | "safe" | "finalized" | "earliest" => BlockId::Tag(s.to_string()),
         hex => BlockId::Number(u64_from_hex(hex)?),
     })
+}
+
+/// Parse a 32-byte `0x`-hex hash from a JSON string value.
+fn hash32_from_str(s: &str) -> EthResult<[u8; 32]> {
+    let b = decode_hex(s)?;
+    if b.len() != 32 {
+        return Err(EthRpcError::invalid_params("blockHash must be 32 bytes"));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&b);
+    Ok(out)
+}
+
+/// Parse an EIP-1898 block parameter: a tag/number string, OR an object
+/// `{ "blockNumber": "0x.." }` / `{ "blockHash": "0x..", "requireCanonical": bool }`.
+fn parse_block_id_value(v: &Value) -> EthResult<BlockId> {
+    if let Some(s) = v.as_str() {
+        return block_id_from_str(s);
+    }
+    if let Some(obj) = v.as_object() {
+        // EIP-1898: blockHash takes precedence; else blockNumber.
+        if let Some(bh) = obj.get("blockHash") {
+            let s = bh.as_str().ok_or_else(|| EthRpcError::invalid_params("blockHash must be a 0x-hex string"))?;
+            let hash = hash32_from_str(s)?;
+            let require_canonical = obj.get("requireCanonical").and_then(|x| x.as_bool()).unwrap_or(false);
+            return Ok(BlockId::Hash { hash, require_canonical });
+        }
+        if let Some(bn) = obj.get("blockNumber").and_then(|x| x.as_str()) {
+            return block_id_from_str(bn);
+        }
+        return Err(EthRpcError::invalid_params("EIP-1898 block object requires \"blockNumber\" or \"blockHash\""));
+    }
+    Err(EthRpcError::invalid_params("expected a block number/tag or an EIP-1898 { blockNumber | blockHash } object"))
+}
+
+/// Parse a block selector from `params[idx]` (tag / number / EIP-1898 object).
+fn parse_block_param(params: &Value, idx: usize) -> EthResult<BlockId> {
+    let v = params
+        .as_array()
+        .and_then(|a| a.get(idx))
+        .ok_or_else(|| EthRpcError::invalid_params(format!("expected a block number, tag, or EIP-1898 object at param #{idx}")))?;
+    parse_block_id_value(v)
 }
 
 /// Parse a 32-byte hash from `params[idx]` (a `0x`-hex string).
@@ -861,6 +902,9 @@ async fn resolve_block(provider: &Arc<dyn EthProvider>, id: BlockId) -> EthResul
     match id {
         BlockId::Number(n) => provider.block_by_number(n).await,
         BlockId::Tag(t) => provider.block_by_tag(&t).await,
+        // EIP-1898 by hash: the provider resolves the 32-byte eth id; requireCanonical
+        // is enforced by the state path (account_at), not the block lookup.
+        BlockId::Hash { hash, .. } => provider.block_by_hash(hash).await,
     }
 }
 
@@ -1712,5 +1756,46 @@ mod trace_flatten_tests {
         flatten_call_frame(&create, Vec::new(), &mut out2);
         assert_eq!(out2[0]["error"], json!("execution reverted"));
         assert_eq!(out2[0]["result"], Value::Null);
+    }
+}
+
+#[cfg(test)]
+mod block_id_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_tag_and_number_strings() {
+        assert_eq!(parse_block_id_value(&json!("latest")).unwrap(), BlockId::Tag("latest".into()));
+        assert_eq!(parse_block_id_value(&json!("finalized")).unwrap(), BlockId::Tag("finalized".into()));
+        assert_eq!(parse_block_id_value(&json!("0x10")).unwrap(), BlockId::Number(16));
+    }
+
+    #[test]
+    fn parses_eip1898_block_number_object() {
+        assert_eq!(parse_block_id_value(&json!({"blockNumber": "0x2a"})).unwrap(), BlockId::Number(42));
+        assert_eq!(parse_block_id_value(&json!({"blockNumber": "latest"})).unwrap(), BlockId::Tag("latest".into()));
+    }
+
+    #[test]
+    fn parses_eip1898_block_hash_object() {
+        let h = format!("0x{}", "11".repeat(32));
+        assert_eq!(
+            parse_block_id_value(&json!({"blockHash": h, "requireCanonical": true})).unwrap(),
+            BlockId::Hash { hash: [0x11; 32], require_canonical: true }
+        );
+        // requireCanonical defaults to false when omitted.
+        let h2 = format!("0x{}", "22".repeat(32));
+        assert_eq!(
+            parse_block_id_value(&json!({"blockHash": h2})).unwrap(),
+            BlockId::Hash { hash: [0x22; 32], require_canonical: false }
+        );
+    }
+
+    #[test]
+    fn rejects_bad_eip1898() {
+        assert!(parse_block_id_value(&json!({"requireCanonical": true})).is_err(), "object without blockNumber/blockHash");
+        assert!(parse_block_id_value(&json!({"blockHash": "0xdead"})).is_err(), "short blockHash");
+        assert!(parse_block_id_value(&json!(42)).is_err(), "bare number (not a string)");
     }
 }
