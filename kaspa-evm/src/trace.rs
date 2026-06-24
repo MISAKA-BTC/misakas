@@ -24,8 +24,9 @@ use crate::{execute_block_evm, AcceptedTxCandidate, EvmBlockInput, EvmExecError,
 use kaspa_consensus_core::evm::{
     EvmCandidateOutcome, EvmExecutionHeader, EvmExecutionPayload, EvmReceipt, EvmStateSnapshot, EvmTraceReplayBodyV1,
 };
+use crate::sim::EthCallEnv;
 use revm::interpreter::{CallInputs, CallOutcome, CallScheme, CreateInputs, CreateOutcome, InstructionResult};
-use revm::primitives::{Address, Bytes, U256};
+use revm::primitives::{Address, Bytes, B256, U256};
 use revm::{inspector_handle_register, Database, DatabaseRef, Evm, EvmContext, Inspector};
 
 /// The kind of an EVM call frame, rendered as Geth's `callTracer` `type` field.
@@ -381,6 +382,99 @@ fn compute_prestate(pre_state: &revm::db::CacheDB<revm::db::EmptyDB>, post: &rev
 
 fn tracer_output_cap(limits: &TraceLimits) -> usize {
     limits.max_output_bytes
+}
+
+/// The diagnosis of a candidate (typically skipped / not-yet-accepted) tx traced
+/// against a given head state (§11.6 `misaka_traceEvmCandidate`).
+#[derive(Clone, Debug)]
+pub struct CandidateTrace {
+    /// `false` ⇒ the tx failed pre-execution validation (nonce / funds / gas /
+    /// basefee) and never entered the EVM — the §6.1 class-2 family. `reason` holds
+    /// the validation error and `frame` is `None`.
+    pub executed: bool,
+    /// Meaningful only when `executed`: did the top-level call succeed (vs revert/halt).
+    pub succeeded: bool,
+    pub gas_used: u64,
+    pub output: Bytes,
+    /// The pre-validation error (not executed) or the decoded revert reason (executed
+    /// + reverted) — the human-readable "why this candidate did not yield a receipt".
+    pub reason: Option<String>,
+    /// The call tree, when the tx executed.
+    pub frame: Option<CallFrame>,
+}
+
+/// Trace a RAW signed EIP-2718 tx against `snapshot` (a head/committed state) with
+/// the call-frame inspector — the §11.6 candidate diagnosis for a tx that has no
+/// receipt (skipped class 2/3/5, or still pending). Fee-free env (basefee 0, like
+/// `eth_call`), but the tx's OWN nonce/gas/value are kept, so a class-2 nonce/funds
+/// failure surfaces as a pre-validation error (`executed = false`). A tx that runs
+/// returns its call tree + status; a successful run means the tx is currently
+/// executable (it was likely skipped for block packing — class 5 — or is pending).
+pub fn trace_candidate_tx(
+    snapshot: &EvmStateSnapshot,
+    env: &EthCallEnv,
+    raw: &[u8],
+    limits: TraceLimits,
+) -> Result<CandidateTrace, TraceError> {
+    let mut db = seed_cachedb(snapshot).map_err(TraceError::Exec)?;
+    let txenv = decode_tx_to_env(raw).map_err(|e| TraceError::Exec(EvmExecError::TxDecode(e)))?;
+    let target_gas_limit = txenv.gas_limit;
+    let block_gas = if env.gas_limit == 0 { 30_000_000 } else { env.gas_limit };
+    let f003_active = env.f003_active;
+    let mut tracer = CallTracer::new(limits);
+    let exec = {
+        let mut evm = Evm::builder()
+            .with_db(&mut db)
+            .with_external_context(&mut tracer)
+            .with_spec_id(EVM_SPEC_ID)
+            .modify_cfg_env(|c| c.chain_id = env.chain_id)
+            .modify_block_env(|b| {
+                b.number = U256::from(env.number);
+                b.timestamp = U256::from(env.timestamp);
+                b.coinbase = to_revm_address(&env.coinbase);
+                b.gas_limit = U256::from(block_gas);
+                // Candidate diagnosis is fee-free (matches the eth_call simulator), so
+                // a real signed gas price is admissible against a zero basefee.
+                b.basefee = U256::ZERO;
+                b.difficulty = U256::ZERO;
+                b.prevrandao = Some(B256::ZERO);
+            })
+            .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active)))
+            .append_handler_register(inspector_handle_register)
+            .build();
+        evm.context.evm.env.tx = txenv;
+        evm.transact()
+    };
+    if let Some(reason) = tracer.exceeded.take() {
+        return Err(TraceError::ResourceExceeded(reason));
+    }
+    match exec {
+        Ok(result) => {
+            let mut frame = tracer.root.take().ok_or_else(|| TraceError::Internal("inspector produced no root frame".into()))?;
+            frame.gas = target_gas_limit;
+            frame.gas_used = result.result.gas_used();
+            let output = result.result.output().cloned().unwrap_or_default();
+            let reason = if result.result.is_success() { None } else { decode_revert_reason(&output) };
+            Ok(CandidateTrace {
+                executed: true,
+                succeeded: result.result.is_success(),
+                gas_used: result.result.gas_used(),
+                output,
+                reason,
+                frame: Some(frame),
+            })
+        }
+        // Pre-execution validation failure (nonce / funds / gas / basefee) — the
+        // class-2 family. Report it as the skip reason; there is no call tree.
+        Err(e) => Ok(CandidateTrace {
+            executed: false,
+            succeeded: false,
+            gas_used: 0,
+            output: Bytes::new(),
+            reason: Some(format!("{e:?}")),
+            frame: None,
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -903,5 +997,59 @@ mod tests {
         let s = traced.prestate.iter().find(|a| a.address == sender).expect("sender in prestate diff");
         assert_eq!(s.pre.as_ref().unwrap().nonce, 0);
         assert_eq!(s.post.as_ref().unwrap().nonce, 1, "sender nonce bumped");
+    }
+
+    fn head_env() -> EthCallEnv {
+        EthCallEnv {
+            chain_id: EVM_CHAIN_ID,
+            number: 1,
+            timestamp: 1_000,
+            coinbase: EvmAddress::from_bytes(COINBASE),
+            gas_limit: 30_000_000,
+            f003_active: false,
+        }
+    }
+
+    /// §11.6 candidate diagnosis: an executable tx runs (with a call frame); a tx
+    /// whose nonce is ahead of the account fails pre-validation (`executed = false`,
+    /// a reason, no frame) — exactly the class-2 skip family.
+    #[test]
+    fn trace_candidate_executable_and_nonce_fail() {
+        let recipient = Address::from([0x88u8; 20]);
+        let (sender, raw_ok) = signed_tx(0, revm::primitives::TxKind::Call(recipient), 5, 21_000, Bytes::new());
+        let snap = fund(sender);
+        let env = head_env();
+
+        let ct = trace_candidate_tx(&snap, &env, &raw_ok, TraceLimits::default()).unwrap();
+        assert!(ct.executed && ct.succeeded, "nonce-0 tx is executable at head");
+        assert_eq!(ct.frame.as_ref().unwrap().from, sender);
+
+        // Same sender (fixed key), nonce 5 ≠ account nonce 0 ⇒ pre-validation failure.
+        let (_s, raw_bad) = signed_tx(5, revm::primitives::TxKind::Call(recipient), 5, 21_000, Bytes::new());
+        let ct2 = trace_candidate_tx(&snap, &env, &raw_bad, TraceLimits::default()).unwrap();
+        assert!(!ct2.executed, "nonce-too-high fails pre-validation");
+        assert!(ct2.reason.is_some() && ct2.frame.is_none());
+    }
+
+    /// A candidate that executes but reverts: `executed = true`, `succeeded = false`,
+    /// with a call frame (the revert is an execution outcome, not a skip).
+    #[test]
+    fn trace_candidate_revert_executes() {
+        let code = Bytes::from(vec![0x60, 0x00, 0x60, 0x00, 0xfd]); // PUSH1 0 PUSH1 0 REVERT
+        let contract = Address::from([0xBEu8; 20]);
+        let (sender, raw) = signed_tx(0, revm::primitives::TxKind::Call(contract), 0, 100_000, Bytes::new());
+        let mut db = CacheDB::new(EmptyDB::default());
+        db.insert_account_info(
+            sender,
+            AccountInfo { balance: U256::from(10u128).pow(U256::from(22)), nonce: 0, code_hash: KECCAK_EMPTY, code: None },
+        );
+        db.insert_account_info(
+            contract,
+            AccountInfo { balance: U256::ZERO, nonce: 1, code_hash: keccak256(&code), code: Some(Bytecode::new_raw(code)) },
+        );
+        let snap = snapshot_from_cachedb(&db);
+        let ct = trace_candidate_tx(&snap, &head_env(), &raw, TraceLimits::default()).unwrap();
+        assert!(ct.executed && !ct.succeeded, "reverts but executed");
+        assert_eq!(ct.frame.as_ref().unwrap().error.as_deref(), Some("execution reverted"));
     }
 }

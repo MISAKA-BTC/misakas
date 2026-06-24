@@ -273,6 +273,28 @@ pub struct EthPrestateAccount {
     pub post: Option<EthAccountState>,
 }
 
+/// The `misaka_traceEvmCandidate` diagnosis of a tx with no receipt (§11.6): the
+/// result of replaying it against the current head, plus its recorded historical
+/// skip class and whether it is in fact accepted now.
+#[derive(Clone, Debug)]
+pub struct EthCandidateTrace {
+    /// `false` ⇒ failed pre-execution validation (nonce/funds/gas) — the class-2 family.
+    pub executed: bool,
+    /// Top-level success when `executed`.
+    pub succeeded: bool,
+    pub gas_used: u64,
+    pub output: Vec<u8>,
+    /// Pre-validation error or decoded revert reason.
+    pub reason: Option<String>,
+    /// The §6.1 class of the most recent recorded skip (2/3/5), when never accepted.
+    pub recorded_skip_class: Option<u8>,
+    /// Whether the tx is currently accepted on the selected chain (⇒ use
+    /// `debug_traceTransaction` for the canonical trace instead).
+    pub accepted: bool,
+    /// The call tree when the candidate executed.
+    pub frame: Option<EthCallFrame>,
+}
+
 #[async_trait]
 pub trait EthProvider: Send + Sync + 'static {
     /// The EVM chain id (`EVM_CHAIN_ID`).
@@ -417,6 +439,13 @@ pub trait EthProvider: Send + Sync + 'static {
     async fn trace_prestate(&self, _tx_hash: [u8; 32]) -> EthResult<Option<Vec<EthPrestateAccount>>> {
         Err(EthRpcError::new(codes::METHOD_NOT_FOUND, "debug_traceTransaction is not available on this node"))
     }
+
+    /// `misaka_traceEvmCandidate` (§11.6): diagnose a tx that has no receipt
+    /// (skipped class 2/3/5 or still pending) by replaying it against the current
+    /// head. `None` ⇒ the raw tx is unknown to this node. Default: unsupported.
+    async fn trace_evm_candidate(&self, _tx_hash: [u8; 32]) -> EthResult<Option<EthCandidateTrace>> {
+        Err(EthRpcError::new(codes::METHOD_NOT_FOUND, "misaka_traceEvmCandidate is not available on this node"))
+    }
 }
 
 /// The EVM-lane lifecycle of a tx (`misaka_getEvmTxStatus`). `state` is a best-effort
@@ -525,6 +554,7 @@ async fn dispatch(provider: &Arc<dyn EthProvider>, req: RpcRequest) -> RpcRespon
         "eth_getTransactionByHash" => eth_get_transaction_by_hash(provider, &req.params).await,
         "debug_traceTransaction" => debug_trace_transaction(provider, &req.params).await,
         "trace_transaction" => trace_transaction_flat(provider, &req.params).await,
+        "misaka_traceEvmCandidate" => misaka_trace_evm_candidate(provider, &req.params).await,
         other => Err(EthRpcError::new(codes::METHOD_NOT_FOUND, format!("the method {other} does not exist / is not available"))),
     };
     match result {
@@ -1061,6 +1091,29 @@ async fn debug_trace_transaction(provider: &Arc<dyn EthProvider>, params: &Value
             "unsupported tracer {other:?}; supported: \"callTracer\", \"prestateTracer\""
         ))),
     }
+}
+
+/// `misaka_traceEvmCandidate(txHash)` (§11.6): diagnose a tx with no receipt.
+async fn misaka_trace_evm_candidate(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let hash = parse_hash32_param(params, 0)?;
+    Ok(provider.trace_evm_candidate(hash).await?.map(|c| render_candidate_trace(&c)).unwrap_or(Value::Null))
+}
+
+/// Render a [`EthCandidateTrace`] (§11.6). `status`/`trace` are present only when
+/// the candidate executed; `reason` carries the pre-validation error or the revert
+/// reason; `recordedSkipClass` is the historical §6.1 skip class (2/3/5) if any.
+fn render_candidate_trace(c: &EthCandidateTrace) -> Value {
+    let hx = |b: &[u8]| format!("0x{}", faster_hex::hex_string(b));
+    let mut obj = serde_json::Map::new();
+    obj.insert("executed".to_string(), json!(c.executed));
+    obj.insert("accepted".to_string(), json!(c.accepted));
+    obj.insert("status".to_string(), if c.executed { quantity(c.succeeded as u128) } else { Value::Null });
+    obj.insert("gasUsed".to_string(), quantity(c.gas_used as u128));
+    obj.insert("output".to_string(), json!(hx(&c.output)));
+    obj.insert("reason".to_string(), c.reason.as_ref().map(|r| json!(r)).unwrap_or(Value::Null));
+    obj.insert("recordedSkipClass".to_string(), c.recorded_skip_class.map(|n| json!(n)).unwrap_or(Value::Null));
+    obj.insert("trace".to_string(), c.frame.as_ref().map(render_call_frame).unwrap_or(Value::Null));
+    Value::Object(obj)
 }
 
 /// Render the `prestateTracer` diffMode result as `{ "pre": {addr: state}, "post":

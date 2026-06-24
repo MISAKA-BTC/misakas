@@ -12,8 +12,8 @@ use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
 use kaspa_eth_rpc::{
-    BlockId, EthAccessListItem, EthAccountState, EthBlock, EthCallFrame, EthCallRequest, EthEvmTxStatus, EthFeeHistory, EthLog, EthLogEntry,
-    EthLogEvent, EthPrestateAccount, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx,
+    BlockId, EthAccessListItem, EthAccountState, EthBlock, EthCallFrame, EthCallRequest, EthCandidateTrace, EthEvmTxStatus, EthFeeHistory,
+    EthLog, EthLogEntry, EthLogEvent, EthPrestateAccount, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_p2p_flows::flow_context::FlowContext;
@@ -374,6 +374,53 @@ impl EthProvider for NodeEthProvider {
         Ok(self.replay_trace(tx_hash).await?.map(|(traced, _accepting, _originating)| {
             traced.prestate.iter().map(convert_prestate_account).collect()
         }))
+    }
+
+    /// `misaka_traceEvmCandidate` (§11.6): diagnose a tx with no receipt by replaying
+    /// it against the current head. The raw tx comes from the mempool (pending) or
+    /// the raw-tx store (was carried in a payload). Reports the head replay outcome
+    /// plus the recorded historical skip class and whether it is now accepted.
+    async fn trace_evm_candidate(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthCandidateTrace>> {
+        let h = EvmH256::from_bytes(tx_hash);
+        // Mempool raw (pending) — in-memory, no consensus session.
+        let pending_raw = self.flow_context.mining_manager().get_evm_transaction_raw(&h);
+        // Head pre-state + env (reuses the eth_call head context; fee-free, F003 per
+        // the eth_call convention).
+        let (snapshot, env) = self.head_snapshot_and_env().await?;
+        // §11.5: cap concurrent replays; the permit is held across the blocking work.
+        let permit = self
+            .trace_semaphore
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| EthRpcError::server("too many concurrent traces in flight; retry shortly"))?;
+        let session = self.consensus_manager.consensus().session().await;
+        session
+            .spawn_blocking(move |c| {
+                let _permit = permit;
+                // Raw tx: mempool (pending) first, else the raw-tx store. Unknown ⇒ None.
+                let raw = match pending_raw {
+                    Some(r) => r,
+                    None => match c.get_evm_raw_tx(h).ok().flatten() {
+                        Some(r) => r,
+                        None => return Ok(None),
+                    },
+                };
+                let recorded_skip_class = c.get_evm_tx_locations(h).ok().and_then(|l| l.last_skip_class);
+                let accepted = c.get_evm_tx_receipt(h).ok().flatten().is_some();
+                let ct = kaspa_evm::trace::trace_candidate_tx(&snapshot, &env, &raw, kaspa_evm::trace::TraceLimits::default())
+                    .map_err(|e| EthRpcError::server(format!("{e}")))?;
+                Ok(Some(EthCandidateTrace {
+                    executed: ct.executed,
+                    succeeded: ct.succeeded,
+                    gas_used: ct.gas_used,
+                    output: ct.output.to_vec(),
+                    reason: ct.reason,
+                    recorded_skip_class,
+                    accepted,
+                    frame: ct.frame.as_ref().map(convert_call_frame),
+                }))
+            })
+            .await
     }
 
     /// `misaka_getEvmTxStatus`: the full EVM-lane lifecycle of a tx by hash —
