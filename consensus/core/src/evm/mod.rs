@@ -1029,6 +1029,142 @@ impl MemSizeEstimator for EvmTraceReplayBodyV1 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// §12 Archive / Historical state — checkpoint + diff v2 (design §12.3). The
+// per-block full snapshot (`EvmStateSnapshot`, prefix 206) is the hot/reorg-window
+// representation; for long-term retention an archive node stores compact forward
+// DIFFS between consecutive canonical blocks plus periodic full CHECKPOINTS, and
+// reconstructs any historical state by seeding the nearest ancestor checkpoint and
+// replaying diffs forward (design §12.4). Code bytes are content-addressed
+// (`code_hash → code`) so a diff/checkpoint carries only the hash. All RPC/archive
+// data — never part of any commitment.
+// ---------------------------------------------------------------------------
+
+/// The non-storage core of an EVM account (the fields outside the storage trie).
+/// `code_hash == KECCAK_EMPTY` ⇒ no code; the code bytes live in the
+/// content-addressed code store keyed by this hash (design §12.3).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountCore {
+    pub nonce: u64,
+    pub balance: EvmU256,
+    pub code_hash: EvmH256,
+}
+
+impl MemSizeEstimator for AccountCore {}
+
+/// A single storage-slot transition within a block (design §12.3). `before`/`after`
+/// are the slot values; a freshly-set slot has `before == 0`, a cleared slot has
+/// `after == 0`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageChange {
+    pub slot: EvmU256,
+    pub before: EvmU256,
+    pub after: EvmU256,
+}
+
+impl MemSizeEstimator for StorageChange {}
+
+/// One account's change across a block (design §12.3). `before = None` ⇒ the account
+/// did not exist before (created); `after = None` ⇒ it was destroyed (self-destruct);
+/// `storage_changes` lists only the slots whose value changed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountChange {
+    pub address: EvmAddress,
+    pub before: Option<AccountCore>,
+    pub after: Option<AccountCore>,
+    pub storage_changes: Vec<StorageChange>,
+}
+
+impl MemSizeEstimator for AccountChange {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>() + self.storage_changes.capacity() * size_of::<StorageChange>()
+    }
+}
+
+/// The forward state DIFF of one canonical block over its parent (design §12.3,
+/// store prefix 220). Applying a block's diff to its parent's reconstructed state
+/// yields the block's state; an archive node stores one per canonical block and a
+/// `recent` node GCs them past its retention window. RPC/archive data only — never
+/// part of any commitment.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmStateDiffV2 {
+    /// The canonical L1 block this diff is for.
+    pub block: Hash64,
+    /// `selected_parent(block)` — the diff is relative to this parent's state.
+    pub parent: Hash64,
+    pub account_changes: Vec<AccountChange>,
+}
+
+impl MemSizeEstimator for EvmStateDiffV2 {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.account_changes.capacity() * size_of::<AccountChange>()
+            + self.account_changes.iter().map(|c| c.storage_changes.capacity() * size_of::<StorageChange>()).sum::<usize>()
+    }
+}
+
+/// A periodic full-state CHECKPOINT (design §12.3, store prefix 221) — the anchor a
+/// historical reconstruction seeds from before replaying forward diffs. Written
+/// every N canonical blocks (initial 2,048) and at each pruning-point advance. The
+/// `compressed_snapshot` is an opaque compressed encoding of the full state at
+/// `block`; `checksum` guards it; `state_root` must match the block's committed EVM
+/// state root (a mismatch is data corruption, design §12.4). RPC/archive data only.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmStateCheckpointV1 {
+    pub block: Hash64,
+    pub evm_number: u64,
+    pub state_root: EvmH256,
+    pub compressed_snapshot: Vec<u8>,
+    pub checksum: [u8; 32],
+}
+
+impl MemSizeEstimator for EvmStateCheckpointV1 {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>() + self.compressed_snapshot.capacity()
+    }
+}
+
+/// A node's EVM state-history retention mode (design §12.2, `--evm-history-mode`).
+/// Controls how far back historical state queries / traces can serve; RPC block,
+/// tx, receipt and log history are kept independently (design §12.1). Default
+/// [`Self::Recent`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EvmHistoryMode {
+    /// Latest state plus only the reorg/trace minimum window.
+    Head,
+    /// Latest plus a configurable recent canonical history (the recommended default).
+    #[default]
+    Recent,
+    /// All canonical state history since EVM activation (full diff/checkpoint retention).
+    Archive,
+}
+
+impl EvmHistoryMode {
+    /// Parse the `--evm-history-mode` value; `None` for an unknown string.
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "head" => Some(Self::Head),
+            "recent" => Some(Self::Recent),
+            "archive" => Some(Self::Archive),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Head => "head",
+            Self::Recent => "recent",
+            Self::Archive => "archive",
+        }
+    }
+}
+
 /// A canonical-resolved receipt view (§16 `eth_getTransactionReceipt`
 /// semantics): the ACCEPTING chain block currently on the selected chain, its
 /// EVM number, and the executed receipt. `None` upstream = the tx is not
@@ -1375,5 +1511,58 @@ mod tests {
         let est = body.estimate_mem_bytes();
         // At least the struct itself plus the two txs' raw payloads + blue_work.
         assert!(est >= size_of::<EvmTraceReplayBodyV1>() + 5 + 3 + 4, "estimate too small: {est}");
+    }
+
+    /// §12 state-history: the diff/checkpoint records must borsh-roundtrip byte-stably
+    /// (they are DB store values at prefixes 220/221) and serde-roundtrip (RPC).
+    #[test]
+    fn state_diff_v2_roundtrips() {
+        let diff = EvmStateDiffV2 {
+            block: Hash64::from_bytes([1u8; 64]),
+            parent: Hash64::from_bytes([2u8; 64]),
+            account_changes: vec![AccountChange {
+                address: EvmAddress::from_bytes([0xAA; EVM_ADDRESS_SIZE]),
+                before: None, // created
+                after: Some(AccountCore { nonce: 1, balance: EvmU256::from(1000u64), code_hash: EvmH256::from_bytes([3u8; 32]) }),
+                storage_changes: vec![StorageChange { slot: EvmU256::from(0u64), before: EvmU256::from(0u64), after: EvmU256::from(42u64) }],
+            }],
+        };
+        let bytes = borsh::to_vec(&diff).unwrap();
+        assert_eq!(diff, borsh::from_slice::<EvmStateDiffV2>(&bytes).unwrap());
+        assert_eq!(bytes, borsh::to_vec(&borsh::from_slice::<EvmStateDiffV2>(&bytes).unwrap()).unwrap());
+        let json = serde_json::to_string(&diff).unwrap();
+        assert_eq!(diff, serde_json::from_str::<EvmStateDiffV2>(&json).unwrap());
+        // The mem estimate accounts for the nested storage_changes.
+        assert!(diff.estimate_mem_bytes() >= size_of::<EvmStateDiffV2>());
+    }
+
+    #[test]
+    fn state_checkpoint_v1_roundtrips() {
+        let cp = EvmStateCheckpointV1 {
+            block: Hash64::from_bytes([7u8; 64]),
+            evm_number: 2_048,
+            state_root: EvmH256::from_bytes([9u8; 32]),
+            compressed_snapshot: vec![0xde, 0xad, 0xbe, 0xef],
+            checksum: [0x11; 32],
+        };
+        let bytes = borsh::to_vec(&cp).unwrap();
+        assert_eq!(cp, borsh::from_slice::<EvmStateCheckpointV1>(&bytes).unwrap());
+        let json = serde_json::to_string(&cp).unwrap();
+        assert_eq!(cp, serde_json::from_str::<EvmStateCheckpointV1>(&json).unwrap());
+    }
+
+    /// §12.2 history mode parses case-insensitively, defaults to `recent`, and
+    /// rejects unknown values.
+    #[test]
+    fn history_mode_parse_and_default() {
+        assert_eq!(EvmHistoryMode::default(), EvmHistoryMode::Recent);
+        assert_eq!(EvmHistoryMode::from_str_opt("HEAD"), Some(EvmHistoryMode::Head));
+        assert_eq!(EvmHistoryMode::from_str_opt("Archive"), Some(EvmHistoryMode::Archive));
+        assert_eq!(EvmHistoryMode::from_str_opt("recent"), Some(EvmHistoryMode::Recent));
+        assert_eq!(EvmHistoryMode::from_str_opt("bogus"), None);
+        assert_eq!(EvmHistoryMode::Archive.as_str(), "archive");
+        // borsh-stable (it may be persisted in node config / future state-meta).
+        let b = borsh::to_vec(&EvmHistoryMode::Archive).unwrap();
+        assert_eq!(EvmHistoryMode::Archive, borsh::from_slice::<EvmHistoryMode>(&b).unwrap());
     }
 }
