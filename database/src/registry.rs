@@ -181,6 +181,16 @@ pub enum DatabaseStorePrefixes {
     /// silently drops logs. RPC index only — never part of any commitment.
     EvmLogIndexMeta = 218,
 
+    /// kaspa-pq EVM Lane (§16, design §11) — keyed by the accepting L1 `BlockHash`:
+    /// the per-block [`EvmTraceReplayBodyV1`] (env inputs + system ops + the full
+    /// ordered acceptance-candidate list), the deterministic replay plan that lets
+    /// `debug_traceTransaction` re-execute a tx with a revm inspector against the
+    /// selected parent's committed post-state. Written in the same commit batch as
+    /// the EVM result (atomic, inert pre-activation); deleted on prune alongside the
+    /// per-block state/header/receipts. RPC/replay data only — never part of any
+    /// commitment.
+    EvmTraceReplay = 219,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

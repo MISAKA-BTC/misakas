@@ -13,7 +13,7 @@
 
 use kaspa_consensus_core::evm::{
     decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket, CanonicalEvmHeads, EvmBlockReceipts, EvmExecutionHeader,
-    EvmExecutionPayload, EvmRawTx, EvmStateSnapshot, EvmTxLocations, LogPostingKind, LogPostingLoc,
+    EvmExecutionPayload, EvmRawTx, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, LogPostingKind, LogPostingLoc,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
@@ -403,6 +403,59 @@ impl EvmRawTxStoreReader for DbEvmRawTxStore {
             Err(StoreError::KeyNotFound(_)) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EvmTraceReplay store (prefix 219, design §11) — the per-accepting-block replay
+// plan for `debug_traceTransaction`, keyed by the accepting L1 `BlockHash`.
+// Mirrors the receipts store (no-overwrite, prunable). RPC/replay data only —
+// never part of any commitment.
+// ---------------------------------------------------------------------------
+
+pub trait EvmTraceReplayStoreReader {
+    /// The replay body for an accepting block, or `None` if no trace was recorded
+    /// (pre-activation, non-EVM, or pruned).
+    fn get(&self, hash: BlockHash) -> Result<Option<EvmTraceReplayBodyV1>, StoreError>;
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmTraceReplayStore {
+    access: CachedDbAccess<BlockHash, EvmTraceReplayBodyV1, BlockHasher>,
+}
+
+impl DbEvmTraceReplayStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmTraceReplay.into()) }
+    }
+
+    /// Insert the replay body for an accepting block. Refuses to overwrite (the
+    /// no-replay backstop: a block's EVM result — and thus its replay plan — is
+    /// computed exactly once, never re-executed).
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, body: EvmTraceReplayBodyV1) -> Result<(), StoreError> {
+        if self.access.has(hash)? {
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
+        }
+        self.access.write(BatchDbWriter::new(batch), hash, body)
+    }
+
+    /// Reclaim an accepting block's replay body (pruning of the buried block).
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), hash)
+    }
+}
+
+impl EvmTraceReplayStoreReader for DbEvmTraceReplayStore {
+    fn get(&self, hash: BlockHash) -> Result<Option<EvmTraceReplayBodyV1>, StoreError> {
+        match self.access.read(hash) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
+        self.access.has(hash)
     }
 }
 

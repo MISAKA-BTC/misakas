@@ -10,7 +10,7 @@ use crate::{
         dns_state::DbDnsStateStore,
         evm::{
             DbEvmBlockHashMapStore, DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore,
-            DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateStore, DbEvmTxIndexStore,
+            DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateStore, DbEvmTraceReplayStore, DbEvmTxIndexStore,
         },
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
@@ -82,6 +82,8 @@ pub struct ConsensusStorage {
     pub evm_number_store: Arc<DbEvmNumberStore>,
     pub evm_raw_tx_store: Arc<DbEvmRawTxStore>,
     pub evm_log_index_store: Arc<DbEvmLogIndexStore>,
+    /// §11: per-accepting-block `debug_traceTransaction` replay plan (prefix 219).
+    pub evm_trace_store: Arc<DbEvmTraceReplayStore>,
 
     // Append-only stores
     pub ghostdag_store: Arc<DbGhostdagStore>,
@@ -334,6 +336,10 @@ impl ConsensusStorage {
         ));
         // §8 log posting index: a set store (no value cache).
         let evm_log_index_store = Arc::new(DbEvmLogIndexStore::new(db.clone()));
+        // §11 trace replay plan: large per-block value (raw tx bytes), so a small
+        // untracked cache like the state store.
+        let evm_trace_store =
+            Arc::new(DbEvmTraceReplayStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
 
         // Block windows
         let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));
@@ -376,6 +382,7 @@ impl ConsensusStorage {
             evm_number_store,
             evm_raw_tx_store,
             evm_log_index_store,
+            evm_trace_store,
             acceptance_data_store,
             past_pruning_points_store,
             daa_excluded_store,
