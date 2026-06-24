@@ -1448,6 +1448,38 @@ mod tests {
         assert_ne!(c1, h.commitment_root());
     }
 
+    /// §22 / §12-Phase-7 guard: the consensus `EvmReceipt` borsh encoding is
+    /// CONSENSUS-CRITICAL — the v1 `receipts_root` (pre-typed-receipt fence) is a
+    /// keccak-MPT over `borsh(EvmReceipt)`, so any field add/remove/reorder would
+    /// silently change every below-fence block's `receipts_root` (a hard fork
+    /// disguised as a refactor; design §22 forbids adding a per-receipt bloom to
+    /// the consensus receipt). This pins the exact bytes + byte-stable roundtrip.
+    /// If it fails you are about to fork: re-pin ONLY with explicit intent.
+    #[test]
+    fn evm_receipt_borsh_byte_stable() {
+        let r = EvmReceipt {
+            succeeded: true,
+            cumulative_gas_used: 0x1234,
+            gas_used: 0x0fff,
+            logs: vec![EvmLog {
+                address: EvmAddress::from_bytes([0xAB; 20]),
+                topics: vec![EvmH256::from_bytes([0x11; 32]), EvmH256::from_bytes([0x22; 32])],
+                data: vec![0xde, 0xad, 0xbe, 0xef],
+            }],
+        };
+        let bytes = borsh::to_vec(&r).unwrap();
+        // byte-stable roundtrip (a layout change breaks re-encode identity).
+        assert_eq!(r, borsh::from_slice::<EvmReceipt>(&bytes).unwrap());
+        assert_eq!(bytes, borsh::to_vec(&borsh::from_slice::<EvmReceipt>(&bytes).unwrap()).unwrap());
+        // Pinned encoding: succeeded(1) | cumulative_gas_used(8 LE) | gas_used(8 LE)
+        // | logs len(4 LE)=1 | [ address(20) | topics len(4)=2 | 0x11*32 | 0x22*32
+        // | data len(4)=4 | deadbeef ].
+        // borsh: succeeded(1) | cumulative_gas_used(8 LE) | gas_used(8 LE) | logs len(4 LE) |
+        // [ address(20) | topics len(4) | 0x11*32 | 0x22*32 | data len(4) | deadbeef ].
+        let expect = "013412000000000000ff0f00000000000001000000abababababababababababababababababababab020000001111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222204000000deadbeef";
+        assert_eq!(faster_hex::hex_string(&bytes), expect, "EvmReceipt borsh layout changed — this is a CONSENSUS FORK");
+    }
+
     #[test]
     fn bloom_serde_roundtrip() {
         let mut bytes = [0u8; EVM_BLOOM_SIZE];
