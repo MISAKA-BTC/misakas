@@ -65,6 +65,11 @@ pub trait TransferStore {
     /// A block by its rpc hash.
     fn block(&self, block_hash: &[u8; 32]) -> Result<Option<IndexedBlock>, Self::Error>;
 
+    /// The canonical block at a height, if any (§10.6 `getBlockByNumber`; the
+    /// reconcile planner's `local_at(n)`). At most one block per height is
+    /// canonical — a reorg detaches the old one before attaching the new.
+    fn canonical_block_at(&self, number: u64) -> Result<Option<IndexedBlock>, Self::Error>;
+
     fn erc20_balance(&self, token: [u8; 20], owner: [u8; 20]) -> Result<U256, Self::Error>;
     fn erc721_owner(&self, collection: [u8; 20], token_id: U256) -> Result<Option<[u8; 20]>, Self::Error>;
     fn erc1155_balance(&self, collection: [u8; 20], token_id: U256, owner: [u8; 20]) -> Result<U256, Self::Error>;
@@ -171,6 +176,14 @@ impl TransferStore for MemStore {
         Ok(self.blocks.get(block_hash).cloned())
     }
 
+    fn canonical_block_at(&self, number: u64) -> Result<Option<IndexedBlock>, Self::Error> {
+        Ok(self
+            .by_number
+            .get(&number)
+            .and_then(|hashes| hashes.iter().filter_map(|h| self.blocks.get(h)).find(|b| b.canonical))
+            .cloned())
+    }
+
     fn erc20_balance(&self, token: [u8; 20], owner: [u8; 20]) -> Result<U256, Self::Error> {
         Ok(self.balances.erc20_balance(token, owner))
     }
@@ -261,6 +274,21 @@ mod tests {
         s.apply_block(&block(2, 0x02, 0x01), &[]).unwrap();
         assert!(s.block(&[0x02; 32]).unwrap().unwrap().canonical);
         assert_eq!(s.erc20_balance(TOK, B).unwrap(), U256::from(50u64), "10 (2') + 40 (re-attached 2)");
+    }
+
+    #[test]
+    fn canonical_block_at_tracks_reorg() {
+        let mut s = MemStore::new();
+        s.apply_block(&block(1, 0x01, 0x00), &[]).unwrap();
+        s.apply_block(&block(2, 0x02, 0x01), &[]).unwrap();
+        assert_eq!(s.canonical_block_at(2).unwrap().unwrap().rpc_hash, [0x02; 32]);
+        assert!(s.canonical_block_at(3).unwrap().is_none(), "no block at unindexed height");
+
+        // Reorg height 2 to a competing block: only the new one is canonical-at(2).
+        s.revert_block(&[0x02; 32]).unwrap();
+        assert!(s.canonical_block_at(2).unwrap().is_none(), "detached block not returned");
+        s.apply_block(&block(2, 0x12, 0x01), &[]).unwrap();
+        assert_eq!(s.canonical_block_at(2).unwrap().unwrap().rpc_hash, [0x12; 32]);
     }
 
     #[test]

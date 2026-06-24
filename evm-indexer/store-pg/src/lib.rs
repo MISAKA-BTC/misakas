@@ -208,6 +208,20 @@ impl PgStore {
         row.map(row_to_block).transpose()
     }
 
+    /// The canonical block at a height (§10.6 `getBlockByNumber`; the reconcile
+    /// planner's `local_at(n)`). At most one block per height is canonical.
+    pub async fn canonical_block_at(&self, number: u64) -> Result<Option<IndexedBlock>> {
+        let row = self
+            .client
+            .query_opt(
+                "SELECT rpc_hash, l1_hash, number, parent_hash, canonical, finalized \
+                 FROM blocks WHERE number = $1 AND canonical = true LIMIT 1",
+                &[&(number as i64)],
+            )
+            .await?;
+        row.map(row_to_block).transpose()
+    }
+
     pub async fn erc20_balance(&self, token: [u8; 20], owner: [u8; 20]) -> Result<U256> {
         let t: &[u8] = &token;
         let o: &[u8] = &owner;

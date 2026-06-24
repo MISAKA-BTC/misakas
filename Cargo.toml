@@ -21,6 +21,7 @@ members = [
     "kaspa-evm",
     "evm-indexer/core",
     "evm-indexer/store-pg",
+    "evm-indexer/service",
     "kaspad",
     "kaspa-pq-validator",
     "kaspa-pq-validator-core",
