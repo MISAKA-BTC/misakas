@@ -261,19 +261,30 @@ impl EthProvider for NodeEthProvider {
                 };
                 // Selector did not resolve to a known block (e.g. a future number) ⇒ no account.
                 let Some(l1) = l1 else { return Ok(None) };
-                // Fail CLOSED if the resolved block has no snapshot (pruned/pre-activation)
-                // so a caller never silently gets latest state for a historical query.
-                match c.get_evm_state_snapshot_of(l1) {
-                    Ok(Some(snap)) => Ok(snap.accounts.into_iter().find(|a| a.address == target)),
-                    Ok(None) => Err(EthRpcError::server("EVM state snapshot unavailable at the requested block (pruned or pre-activation)")),
-                    Err(e) => Err(EthRpcError::server(format!("consensus: {e:?}"))),
-                }
+                // Hot path: the full snapshot is still in the reorg window (prefix 206).
+                // §12: past the window the snapshot is pruned but the state is
+                // reconstructable from the checkpoint/diff history — fall back to that.
+                // Fail CLOSED throughout so a historical query never silently reads
+                // latest (or empty) state.
+                let snapshot = match c.get_evm_state_snapshot_of(l1) {
+                    Ok(Some(snap)) => Some(snap),
+                    Ok(None) | Err(_) => match c.reconstruct_evm_state_at(l1) {
+                        // Reconstructed + state-root-verified historical state (§12.4).
+                        Ok(Some(snap)) => Some(snap),
+                        // `l1` is not an EVM block (pre-activation): all accounts are the
+                        // empty genesis state ⇒ no entry for this address.
+                        Ok(None) => None,
+                        // EVM block but its history is not retained here, or is corrupt.
+                        Err(e) => return Err(EthRpcError::server(format!("EVM state unavailable at the requested block: {e}"))),
+                    },
+                };
+                Ok(snapshot.and_then(|snap| snap.accounts.into_iter().find(|a| a.address == target)))
             })
             .await
     }
 
-    async fn eth_call(&self, req: EthCallRequest) -> EthResult<Vec<u8>> {
-        let (snapshot, env) = self.head_snapshot_and_env().await?;
+    async fn eth_call(&self, req: EthCallRequest, block: BlockId) -> EthResult<Vec<u8>> {
+        let (snapshot, env) = self.snapshot_and_env_at(block).await?;
         let call = to_sim_call(&req);
         // revm execution is CPU-bound → spawn_blocking.
         let outcome = tokio::task::spawn_blocking(move || kaspa_evm::sim::simulate_call(&snapshot, &env, &call))
@@ -288,8 +299,8 @@ impl EthProvider for NodeEthProvider {
         }
     }
 
-    async fn estimate_gas(&self, req: EthCallRequest) -> EthResult<u64> {
-        let (snapshot, env) = self.head_snapshot_and_env().await?;
+    async fn estimate_gas(&self, req: EthCallRequest, block: BlockId) -> EthResult<u64> {
+        let (snapshot, env) = self.snapshot_and_env_at(block).await?;
         let call = to_sim_call(&req);
         tokio::task::spawn_blocking(move || kaspa_evm::sim::estimate_gas(&snapshot, &env, &call))
             .await
@@ -839,6 +850,77 @@ impl NodeEthProvider {
             f003_active: false,
         };
         Ok((snap, env))
+    }
+
+    /// The EVM state snapshot + call env at `block` (§12.5/§12.6). `latest`/`pending`
+    /// use the head fast path; any historical selector resolves the block, builds
+    /// the env from THAT block's header (number/timestamp/coinbase/gas limit/chain
+    /// id), and supplies its state — the hot snapshot (prefix 206) if still in the
+    /// reorg window, else the §12 checkpoint/diff reconstruction. Fails CLOSED: a
+    /// historical call never silently runs against head or empty state.
+    async fn snapshot_and_env_at(
+        &self,
+        block: BlockId,
+    ) -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
+        if matches!(&block, BlockId::Tag(t) if matches!(t.as_str(), "latest" | "pending")) {
+            return self.head_snapshot_and_env().await;
+        }
+        let session = self.consensus_manager.consensus().session().await;
+        session
+            .spawn_blocking(move |c| -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
+                // Resolve the selector → L1 block (same resolution as account_at).
+                let l1: Option<kaspa_consensus_core::BlockHash> = match &block {
+                    BlockId::Number(n) => c.get_evm_block_by_number(*n).ok().flatten().map(|b| b.l1_hash),
+                    BlockId::Tag(t) => match t.as_str() {
+                        "earliest" => c.get_evm_block_by_number(0).ok().flatten().map(|b| b.l1_hash),
+                        "safe" => c.get_evm_canonical_heads().ok().flatten().map(|h| h.safe),
+                        "finalized" => c.get_evm_canonical_heads().ok().flatten().map(|h| h.finalized),
+                        _ => Some(c.get_sink()),
+                    },
+                    BlockId::Hash { hash, require_canonical } => {
+                        let rpc_hash = kaspa_hashes::EvmH256::from_bytes(*hash);
+                        match c.get_evm_block_by_rpc_hash(rpc_hash).ok().flatten() {
+                            Some(b) => {
+                                if *require_canonical && !c.is_chain_block(b.l1_hash).unwrap_or(false) {
+                                    return Err(EthRpcError::invalid_params(
+                                        "requireCanonical: the requested block is not on the canonical chain",
+                                    ));
+                                }
+                                Some(b.l1_hash)
+                            }
+                            None => None,
+                        }
+                    }
+                };
+                let Some(l1) = l1 else {
+                    return Err(EthRpcError::invalid_params("eth_call/eth_estimateGas: the requested block is unknown"));
+                };
+                // §12.6 env from the TARGET block's committed header.
+                let header = match c.get_evm_header_of(l1) {
+                    Ok(Some(h)) => h,
+                    Ok(None) => return Err(EthRpcError::server("eth_call/eth_estimateGas: the requested block is not an EVM block")),
+                    Err(e) => return Err(EthRpcError::server(format!("consensus: {e:?}"))),
+                };
+                // State: hot snapshot, else §12 reconstruction past the window.
+                let snapshot = match c.get_evm_state_snapshot_of(l1) {
+                    Ok(Some(s)) => s,
+                    Ok(None) | Err(_) => match c.reconstruct_evm_state_at(l1) {
+                        Ok(Some(s)) => s,
+                        Ok(None) => return Err(EthRpcError::server("eth_call/eth_estimateGas: state unavailable (not an EVM block)")),
+                        Err(e) => return Err(EthRpcError::server(format!("EVM state unavailable at the requested block: {e}"))),
+                    },
+                };
+                let env = kaspa_evm::sim::EthCallEnv {
+                    chain_id: EVM_CHAIN_ID,
+                    number: header.evm_number,
+                    timestamp: header.evm_timestamp_sec,
+                    coinbase: header.coinbase,
+                    gas_limit: header.gas_limit,
+                    f003_active: false,
+                };
+                Ok((snapshot, env))
+            })
+            .await
     }
 }
 

@@ -360,12 +360,14 @@ pub trait EthProvider: Send + Sync + 'static {
         Ok(self.latest_account(address).await?.map(|a| a.nonce).unwrap_or(0))
     }
 
-    /// `eth_call`: read-only execution at the canonical head; returns the call's
-    /// output bytes (revert data on a revert, surfaced as an error by the caller).
-    async fn eth_call(&self, req: EthCallRequest) -> EthResult<Vec<u8>>;
+    /// `eth_call`: read-only execution at `block` (default `latest`); returns the
+    /// call's output bytes (revert data on a revert, surfaced as an error by the
+    /// caller). §12.5/§12.6: a historical block reconstructs that block's state and
+    /// uses that block's env (number/timestamp/coinbase/gas limit/chain id).
+    async fn eth_call(&self, req: EthCallRequest, block: BlockId) -> EthResult<Vec<u8>>;
 
-    /// `eth_estimateGas`: the minimal gas limit that lets the call succeed.
-    async fn estimate_gas(&self, req: EthCallRequest) -> EthResult<u64>;
+    /// `eth_estimateGas`: the minimal gas limit that lets the call succeed at `block`.
+    async fn estimate_gas(&self, req: EthCallRequest, block: BlockId) -> EthResult<u64>;
 
     /// `eth_sendRawTransaction`: admit a signed raw EIP-2718 transaction into the
     /// EVM mempool. Returns the Ethereum tx hash (keccak256 of the raw bytes).
@@ -690,29 +692,26 @@ fn parse_slot_param(params: &Value, idx: usize) -> EthResult<EvmU256> {
 
 // --- eth_call / eth_estimateGas (Increment 4) ---
 
-/// eth_call / eth_estimateGas execute only against the latest head. Reject a
-/// historical block selector with a clear error instead of silently returning a
-/// head result for a historical query (audit H-03). `latest`/`pending`/absent OK.
-fn require_latest_exec_block(params: &Value, idx: usize) -> EthResult<()> {
-    match params.as_array().and_then(|a| a.get(idx)).and_then(|v| v.as_str()) {
-        None | Some("latest") | Some("pending") => Ok(()),
-        Some(other) => Err(EthRpcError::invalid_params(format!(
-            "eth_call/eth_estimateGas execute only at \"latest\"; historical execution at \"{other}\" is not supported"
-        ))),
+/// The optional block parameter of `eth_call` / `eth_estimateGas` at `params[idx]`
+/// (§12.5): a tag/quantity string or an EIP-1898 object; absent ⇒ `latest`.
+fn exec_block_param(params: &Value, idx: usize) -> EthResult<BlockId> {
+    match params.as_array().and_then(|a| a.get(idx)) {
+        None | Some(Value::Null) => Ok(BlockId::Tag("latest".to_string())),
+        Some(v) => parse_block_id_value(v),
     }
 }
 
 async fn eth_call_handler(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
-    require_latest_exec_block(params, 1)?;
+    let block = exec_block_param(params, 1)?;
     let req = parse_call_request(params)?;
-    let out = provider.eth_call(req).await?;
+    let out = provider.eth_call(req, block).await?;
     Ok(json!(format!("0x{}", faster_hex::hex_string(&out))))
 }
 
 async fn eth_estimate_gas_handler(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
-    require_latest_exec_block(params, 1)?;
+    let block = exec_block_param(params, 1)?;
     let req = parse_call_request(params)?;
-    Ok(quantity(provider.estimate_gas(req).await? as u128))
+    Ok(quantity(provider.estimate_gas(req, block).await? as u128))
 }
 
 // --- eth_sendRawTransaction / eth_getTransactionReceipt (Increment 5) ---
@@ -1797,5 +1796,19 @@ mod block_id_tests {
         assert!(parse_block_id_value(&json!({"requireCanonical": true})).is_err(), "object without blockNumber/blockHash");
         assert!(parse_block_id_value(&json!({"blockHash": "0xdead"})).is_err(), "short blockHash");
         assert!(parse_block_id_value(&json!(42)).is_err(), "bare number (not a string)");
+    }
+
+    /// §12.5: the eth_call/eth_estimateGas block param at params[1] defaults to
+    /// `latest` when absent/null and otherwise parses tags / numbers / EIP-1898.
+    #[test]
+    fn exec_block_param_defaults_and_parses() {
+        // params with no [1] → latest.
+        assert_eq!(exec_block_param(&json!([{"to": "0x00"}]), 1).unwrap(), BlockId::Tag("latest".into()));
+        // explicit null → latest.
+        assert_eq!(exec_block_param(&json!([{"to": "0x00"}, null]), 1).unwrap(), BlockId::Tag("latest".into()));
+        // a historical number is honored (no longer rejected).
+        assert_eq!(exec_block_param(&json!([{"to": "0x00"}, "0x10"]), 1).unwrap(), BlockId::Number(16));
+        // EIP-1898 object form.
+        assert_eq!(exec_block_param(&json!([{"to": "0x00"}, {"blockNumber": "0x2a"}]), 1).unwrap(), BlockId::Number(42));
     }
 }

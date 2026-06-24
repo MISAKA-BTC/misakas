@@ -686,10 +686,10 @@ mod tests {
         async fn latest_account(&self, _a: [u8; 20]) -> EthResult<Option<EvmAccountSnapshot>> {
             Ok(None)
         }
-        async fn eth_call(&self, _r: EthCallRequest) -> EthResult<Vec<u8>> {
+        async fn eth_call(&self, _r: EthCallRequest, _block: crate::BlockId) -> EthResult<Vec<u8>> {
             Err(EthRpcError::server("unused"))
         }
-        async fn estimate_gas(&self, _r: EthCallRequest) -> EthResult<u64> {
+        async fn estimate_gas(&self, _r: EthCallRequest, _block: crate::BlockId) -> EthResult<u64> {
             Err(EthRpcError::server("unused"))
         }
         async fn send_raw_transaction(&self, _raw: Vec<u8>) -> EthResult<[u8; 32]> {
