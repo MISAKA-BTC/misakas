@@ -26,6 +26,12 @@ legacy-secp256k1 = ["dep:secp256k1", "kaspa-bip32/legacy-secp256k1"]
 wasm32-sdk = ["legacy-secp256k1", "kaspa-consensus-client/wasm32-sdk"]
 wasm32-types = ["kaspa-consensus-client/wasm32-types"]
 
+# PSKT is classical (secp256k1/Schnorr) only; the example is skipped under the
+# pq-only default and built only when the legacy-secp256k1 crate is enabled.
+[[example]]
+name = "multisig"
+required-features = ["legacy-secp256k1"]
+
 [dependencies]
 kaspa-addresses.workspace = true
 kaspa-bip32.workspace = true

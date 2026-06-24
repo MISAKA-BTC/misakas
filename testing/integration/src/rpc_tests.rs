@@ -428,6 +428,22 @@ async fn sanity_test() {
                 })
             }
 
+            KaspadPayloadOps::GetUtxosByAddressPage => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let address = Address::new(Prefix::Simnet, Version::PubKey, &[0u8; 32]);
+                    let response = rpc_client
+                        .get_utxos_by_address_page_call(
+                            None,
+                            GetUtxosByAddressPageRequest { address, cursor: String::new(), limit: 0 },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(response.entries.is_empty());
+                    assert!(response.next_cursor.is_empty());
+                })
+            }
+
             KaspadPayloadOps::GetBalanceByAddress => {
                 let rpc_client = client.clone();
                 tst!(op, {
@@ -810,6 +826,9 @@ async fn sanity_test() {
             }
             KaspadPayloadOps::GetEvmTxInclusionStatus => {
                 tst!(op, "EVM inclusion-status RPC — needs an evm-active chain (covered by the evm e2e suite)")
+            }
+            KaspadPayloadOps::SubmitEvmDepositClaim => {
+                tst!(op, "EVM deposit-claim submit RPC — lane inert + non-evm build refuses (covered by the evm e2e suite)")
             }
         };
         tasks.push(task);

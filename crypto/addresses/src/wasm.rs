@@ -117,7 +117,7 @@ impl TryFrom<AddressOrStringArrayT> for Vec<Address> {
 mod tests {
     extern crate std;
 
-    use crate::Address;
+    use crate::{Address, Prefix, Version};
     use js_sys::Object;
     use wasm_bindgen::{__rt::IntoJsResult, JsValue, convert::IntoWasmAbi};
     use wasm_bindgen_test::wasm_bindgen_test;

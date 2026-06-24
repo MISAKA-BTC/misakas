@@ -459,6 +459,7 @@ mod tests {
             passphrase: String::new(),
             network: NetworkFlag::Simnet,
             encrypted: true,
+            plaintext: false,
             password_env,
             cmd: Command::Address { account: 0, change: 0, index: 0 },
         }
