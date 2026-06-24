@@ -174,6 +174,13 @@ pub enum DatabaseStorePrefixes {
     /// journal stores, not yet built.)
     EvmRawTransaction = 217,
 
+    /// kaspa-pq EVM Lane (§16, design §8/§14): singleton — the lowest `evm_number`
+    /// from which the `EvmLogs` posting index is complete (the writer's floor). The
+    /// `eth_getLogs` index fast path is used only for `from >= floor`; below it the
+    /// query falls back to the canonical scan, so a chain indexed mid-life never
+    /// silently drops logs. RPC index only — never part of any commitment.
+    EvmLogIndexMeta = 218,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

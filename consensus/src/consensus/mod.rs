@@ -1571,9 +1571,8 @@ impl ConsensusApi for Consensus {
         // drop Transfer/Mint logs and misreport ownership/supply. Callers must
         // narrow the range or filters (EIP-1474 "query returned more than N").
         const MAX_LOGS: usize = 10_000;
-        let mut out = Vec::new();
         if to_number < from_number {
-            return Ok(out);
+            return Ok(Vec::new());
         }
         // `topics[i]` non-empty ⇒ the log's i-th topic must be one of them; empty ⇒ wildcard.
         let topic_match = |log_topics: &[kaspa_hashes::EvmH256]| -> bool {
@@ -1588,6 +1587,70 @@ impl ConsensusApi for Consensus {
             }
             true
         };
+
+        // §8 fast path: when the query filters by address AND the posting index is
+        // known complete for the range (`from_number >= indexed_floor`), seed from
+        // the address posting index instead of scanning every block. The floor gate
+        // prevents silently missing logs from blocks indexed before the writer was
+        // deployed (a backfill lowers the floor — design §14).
+        if !addresses.is_empty() && self.storage.evm_log_index_store.indexed_floor().map_or(false, |f| from_number >= f) {
+            let mut out: Vec<kaspa_consensus_core::evm::EvmLogEntry> = Vec::new();
+            let mut seen: std::collections::HashSet<[u8; 20]> = std::collections::HashSet::new();
+            for addr in addresses.iter().copied() {
+                if !seen.insert(addr.as_bytes()) {
+                    continue; // a log has one address — dedup duplicate seeds
+                }
+                // Collect this address's in-range postings (ascending block order),
+                // then resolve each (the iterator borrows the store).
+                let locs: Vec<_> = self
+                    .storage
+                    .evm_log_index_store
+                    .bucket_locs(kaspa_consensus_core::evm::LogPostingKind::Address, &addr.as_bytes())
+                    .skip_while(|loc| loc.evm_number < from_number)
+                    .take_while(|loc| loc.evm_number <= to_number)
+                    .collect();
+                for loc in locs {
+                    // Canonical-resolve the posting (drop side-branch entries) — the
+                    // same backstop get_evm_block_by_number uses.
+                    if !self.is_chain_block(loc.l1_hash).unwrap_or(false) {
+                        continue;
+                    }
+                    let Some(header) = self.storage.evm_header_store.get(loc.l1_hash).optional().unwrap() else { continue };
+                    if header.evm_number != loc.evm_number {
+                        continue;
+                    }
+                    let receipts = self.storage.evm_receipts_store.get(loc.l1_hash).optional().unwrap().unwrap_or_default();
+                    let Some(receipt) = receipts.receipts.get(loc.tx_index as usize) else { continue };
+                    let Some(log) = receipt.logs.get(loc.in_receipt_log_index as usize) else { continue };
+                    if !topic_match(&log.topics) {
+                        continue;
+                    }
+                    // Block-global logIndex = logs in earlier receipts + in-receipt index.
+                    let prior: u32 = receipts.receipts[..loc.tx_index as usize].iter().map(|r| r.logs.len() as u32).sum();
+                    let tx_hash = receipts.tx_hashes.get(loc.tx_index as usize).copied().unwrap_or_default();
+                    out.push(kaspa_consensus_core::evm::EvmLogEntry {
+                        address: log.address,
+                        topics: log.topics.clone(),
+                        data: log.data.clone(),
+                        block_number: loc.evm_number,
+                        block_l1_hash: loc.l1_hash,
+                        tx_hash,
+                        tx_index: loc.tx_index,
+                        log_index: prior + loc.in_receipt_log_index,
+                    });
+                    if out.len() > MAX_LOGS {
+                        return Err(ConsensusError::GeneralOwned(format!(
+                            "eth_getLogs: query matched more than {MAX_LOGS} logs in block range [{from_number},{to_number}]; narrow the range or filters"
+                        )));
+                    }
+                }
+            }
+            // Address buckets interleave by block → sort to canonical order.
+            out.sort_by_key(|e| (e.block_number, e.tx_index, e.log_index));
+            return Ok(out);
+        }
+
+        let mut out = Vec::new();
         for n in from_number..=to_number {
             let Some(l1_hash) = self.storage.evm_number_store.get(n).unwrap() else { continue };
             // Reorg-validate the (upsert) number index before trusting the row.

@@ -343,6 +343,10 @@ pub fn stage_evm_index_rows(
         )));
     }
 
+    // §8: record that this block is now indexed (the floor the get_evm_logs index
+    // fast path may trust). Runs for every EVM block, including those with no logs.
+    log_index_store.set_floor_batch(batch, staged.result.header.evm_number)?;
+
     if !staged.result.receipts.is_empty() {
         // tx_hashes parallel to the receipts: the accepted candidates in order.
         let mut tx_hashes = vec![Default::default(); staged.result.receipts.len()];

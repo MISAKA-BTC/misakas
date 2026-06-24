@@ -418,11 +418,39 @@ impl EvmRawTxStoreReader for DbEvmRawTxStore {
 #[derive(Clone)]
 pub struct DbEvmLogIndexStore {
     access: DbSetAccess<Vec<u8>, Vec<u8>>,
+    /// Singleton (fixed zero key) — the index completeness floor.
+    floor: CachedDbAccess<EvmH256, u64>,
 }
 
 impl DbEvmLogIndexStore {
     pub fn new(db: Arc<DB>) -> Self {
-        Self { access: DbSetAccess::new(db, DatabaseStorePrefixes::EvmLogs.into()) }
+        Self {
+            access: DbSetAccess::new(db.clone(), DatabaseStorePrefixes::EvmLogs.into()),
+            floor: CachedDbAccess::new(db, CachePolicy::Empty, DatabaseStorePrefixes::EvmLogIndexMeta.into()),
+        }
+    }
+
+    /// The lowest `evm_number` from which the posting index is complete (`None`
+    /// until the writer has indexed any block). The query may trust the index
+    /// only for `from_number >= floor`; below it, fall back to the canonical scan.
+    pub fn indexed_floor(&self) -> Option<u64> {
+        match self.floor.read(EvmH256::from_bytes([0u8; 32])) {
+            Ok(v) => Some(v),
+            Err(StoreError::KeyNotFound(_)) => None,
+            Err(_) => None,
+        }
+    }
+
+    /// Lower the floor to `n` if the index now covers a lower block (set-once for
+    /// forward processing; a backfill lowers it). Idempotent. NOTE: the floor store
+    /// uses `CachePolicy::Empty`, so this guard's `indexed_floor()` reads only
+    /// COMMITTED state — a caching policy here would instead surface this same
+    /// batch's uncommitted write (benign for the monotone min, but a real change).
+    pub fn set_floor_batch(&self, batch: &mut WriteBatch, n: u64) -> Result<(), StoreError> {
+        if self.indexed_floor().map_or(true, |cur| n < cur) {
+            self.floor.write(BatchDbWriter::new(batch), EvmH256::from_bytes([0u8; 32]), n)?;
+        }
+        Ok(())
     }
 
     /// Add one posting (`kind`+`selector` bucket → `loc`) to the caller's batch.
@@ -694,5 +722,29 @@ mod tests {
         assert_eq!(store.bucket_locs(LogPostingKind::Topic0, &topic).count(), 3);
         // an unseen selector is empty.
         assert_eq!(store.bucket_locs(LogPostingKind::Address, &[0x00u8; 20]).count(), 0);
+    }
+
+    /// §8: the index completeness floor — unset until the writer runs, set-once
+    /// for forward processing (later blocks don't raise it), lowered by a backfill.
+    #[test]
+    fn evm_log_index_floor_set_once_and_lowered_by_backfill() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbEvmLogIndexStore::new(db.clone());
+        assert_eq!(store.indexed_floor(), None, "unset until the writer indexes a block");
+
+        let mut b = WriteBatch::default();
+        store.set_floor_batch(&mut b, 10).unwrap();
+        db.write(b).unwrap();
+        assert_eq!(store.indexed_floor(), Some(10));
+
+        let mut b = WriteBatch::default();
+        store.set_floor_batch(&mut b, 11).unwrap();
+        db.write(b).unwrap();
+        assert_eq!(store.indexed_floor(), Some(10), "a later (higher) block must not raise the floor");
+
+        let mut b = WriteBatch::default();
+        store.set_floor_batch(&mut b, 3).unwrap();
+        db.write(b).unwrap();
+        assert_eq!(store.indexed_floor(), Some(3), "a backfill of an older block lowers the floor");
     }
 }
