@@ -920,6 +920,115 @@ impl MemSizeEstimator for EvmRawTx {
     }
 }
 
+// ---------------------------------------------------------------------------
+// EvmTraceReplayBodyV1 (design §11.2, store prefix 219) — the per-accepting-block
+// deterministic REPLAY PLAN for `debug_traceTransaction`. Store/RPC/replay data
+// ONLY; never part of any commitment (the committed surface is
+// `EvmExecutionHeader`), so it can evolve without a fork.
+// ---------------------------------------------------------------------------
+
+/// The L1-header-derived inputs to the EVM env derivation (`kaspa_evm::env::derive_env`)
+/// that the trace store must carry. The other two `derive_env` inputs — the
+/// `selected_parent`'s committed `EvmExecutionHeader` (prefix 201) and the
+/// `selected_parent` hash — are fetched/held separately, so a replay re-derives the
+/// env through the *identical* production code path (EIP-1559 base fee from the
+/// parent header, keyed-BLAKE2b prevrandao). Holding the raw inputs rather than a
+/// materialized env means a trace can never diverge from the committed execution by
+/// an env-reconstruction bug. Design §11.2 `EvmReplayEnv`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmReplayEnv {
+    /// `B.header.timestamp` in milliseconds (the EVM logical-clock input).
+    pub header_timestamp_ms: u64,
+    /// `B.header.blue_work` big-endian bytes (prevrandao input, frozen order).
+    pub blue_work_be: Vec<u8>,
+    /// `B.header.daa_score` (prevrandao input + the activation-fence selector).
+    pub daa_score: u64,
+    /// The accepting block's declared `evm_coinbase` — the `COINBASE` opcode value
+    /// and the deposit-claim tip recipient (design §8.2). NOT the per-tx priority
+    /// fee recipient, which is [`EvmReplayTx::payload_coinbase`].
+    pub coinbase: EvmAddress,
+}
+
+impl MemSizeEstimator for EvmReplayEnv {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>() + self.blue_work_be.capacity()
+    }
+}
+
+/// One acceptance candidate of an accepting block, in the exact order the executor
+/// saw it (`AcceptedEvmTxs(B)` pre-prefix-take). A replay feeds the FULL candidate
+/// list — accepted AND deterministically-skipped — to `execute_block_evm` so the
+/// gas pool (v1 strict prefix-take / v2 sequential) reproduces the identical
+/// accept/skip/gas decisions, and therefore the identical pre-state for the traced
+/// tx. Storing only the accepted txs would be fragile against the gas-pool
+/// semantics (e.g. v1 class-2 budget consumption). Design §11.2 `EvmExecutedTxReplay`,
+/// extended to carry the recorded outcome and the skipped candidates.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmReplayTx {
+    /// keccak256 of `raw` — the `debug_traceTransaction` lookup key.
+    pub tx_hash: EvmH256,
+    /// The canonical EIP-2718 transaction bytes (self-contained, so a trace does
+    /// not depend on the raw-tx index at prefix 217, which is keyed by tx hash and
+    /// not pruned with this block).
+    pub raw: Vec<u8>,
+    /// `evm_coinbase` of the payload block that carried this tx — the recipient of
+    /// this tx's priority fee (design §8.1, D3).
+    pub payload_coinbase: EvmAddress,
+    /// The payload (DAG) block that carried the tx (§7.1 origin; returned to
+    /// callers as the `misakaOriginatingPayloadBlock` trace extension, §11.4).
+    pub originating_payload_block: Hash64,
+    /// The deterministic outcome the accepting block recorded for this candidate
+    /// (`Accepted{receipt_index}` / `Skipped{class}`). The replay reproduces this
+    /// from scratch and cross-checks it; a divergence is a `replay mismatch`.
+    pub outcome: EvmCandidateOutcome,
+}
+
+impl MemSizeEstimator for EvmReplayTx {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>() + self.raw.capacity()
+    }
+}
+
+/// The per-accepting-block deterministic REPLAY PLAN for `debug_traceTransaction`
+/// (design §11.2), keyed in the store by the accepting L1 `BlockHash` (so the
+/// accepting block is NOT duplicated in the value). The committed receipt-hash list
+/// alone cannot reproduce an exact re-execution; this captures the precise ordered
+/// acceptance the chain block performed — its env inputs, its own `system_ops`, and
+/// the full acceptance-candidate list — so the RPC layer can replay it against the
+/// selected parent's committed post-state WITHOUT re-deriving the mergeset (a
+/// consensus-sensitive operation). Store/RPC/replay data ONLY — never part of any
+/// commitment. The `V1` suffix is the format version: a later format is a new type
+/// read alongside this one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmTraceReplayBodyV1 {
+    /// `selected_parent(B)` block hash — the block whose committed EVM post-state
+    /// is the replay PRE-state (loaded from `EvmStateDiff`/prefix 206) and whose
+    /// committed `EvmExecutionHeader` (prefix 201) is the `derive_env` parent. Also
+    /// the frozen prevrandao preimage input.
+    pub selected_parent: Hash64,
+    /// The L1-header-derived env inputs (§11.2).
+    pub env: EvmReplayEnv,
+    /// The accepting block's own `system_ops` (deposit claims), applied before the
+    /// user txs in payload order — exactly `EvmExecutionPayload::system_ops`.
+    pub system_ops: Vec<EvmSystemOp>,
+    /// The full ordered acceptance-candidate list (accepted + skipped), parallel to
+    /// the executor's acceptance input.
+    pub txs: Vec<EvmReplayTx>,
+}
+
+impl MemSizeEstimator for EvmTraceReplayBodyV1 {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.env.blue_work_be.capacity()
+            + self.system_ops.capacity() * size_of::<EvmSystemOp>()
+            + self.txs.capacity() * size_of::<EvmReplayTx>()
+            + self.txs.iter().map(|t| t.raw.capacity()).sum::<usize>()
+    }
+}
+
 /// A canonical-resolved receipt view (§16 `eth_getTransactionReceipt`
 /// semantics): the ACCEPTING chain block currently on the selected chain, its
 /// EVM number, and the executed receipt. `None` upstream = the tx is not
@@ -1194,5 +1303,77 @@ mod tests {
         let b = borsh::to_vec(&bloom).unwrap();
         assert_eq!(b.len(), EVM_BLOOM_SIZE);
         assert_eq!(bloom, borsh::from_slice::<EvmBloom>(&b).unwrap());
+    }
+
+    fn sample_trace_body() -> EvmTraceReplayBodyV1 {
+        EvmTraceReplayBodyV1 {
+            selected_parent: Hash64::from_bytes([7u8; 64]),
+            env: EvmReplayEnv {
+                header_timestamp_ms: 1_700_000_000_123,
+                blue_work_be: vec![0x01, 0x02, 0x03, 0x04],
+                daa_score: 4_242_424,
+                coinbase: EvmAddress::from_bytes([0xAB; EVM_ADDRESS_SIZE]),
+            },
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: TransactionOutpoint::new(Hash64::from_bytes([9u8; 64]), 3),
+                evm_address: EvmAddress::from_bytes([0xCD; EVM_ADDRESS_SIZE]),
+                amount_sompi: 1_000_000,
+                claim_tip_sompi: 1_000,
+            })],
+            txs: vec![
+                EvmReplayTx {
+                    tx_hash: EvmH256::from_bytes([0x11; 32]),
+                    raw: vec![0x02, 0xde, 0xad, 0xbe, 0xef],
+                    payload_coinbase: EvmAddress::from_bytes([0x01; EVM_ADDRESS_SIZE]),
+                    originating_payload_block: Hash64::from_bytes([0x22; 64]),
+                    outcome: EvmCandidateOutcome::Accepted { receipt_index: 0 },
+                },
+                // A skipped candidate is retained so the replay reproduces the exact
+                // gas-pool accept/skip decisions (NOT just the accepted prefix).
+                EvmReplayTx {
+                    tx_hash: EvmH256::from_bytes([0x33; 32]),
+                    raw: vec![0x02, 0xca, 0xfe],
+                    payload_coinbase: EvmAddress::from_bytes([0x02; EVM_ADDRESS_SIZE]),
+                    originating_payload_block: Hash64::from_bytes([0x44; 64]),
+                    outcome: EvmCandidateOutcome::Skipped { class: 2 },
+                },
+            ],
+        }
+    }
+
+    /// The replay body must borsh-roundtrip byte-stably (it is a DB store value at
+    /// prefix 219) and serde-roundtrip (RPC introspection).
+    #[test]
+    fn trace_replay_body_roundtrips() {
+        let body = sample_trace_body();
+        let bytes = borsh::to_vec(&body).unwrap();
+        assert_eq!(body, borsh::from_slice::<EvmTraceReplayBodyV1>(&bytes).unwrap());
+        // Byte-stability: re-encoding the decoded value yields the same bytes.
+        assert_eq!(bytes, borsh::to_vec(&borsh::from_slice::<EvmTraceReplayBodyV1>(&bytes).unwrap()).unwrap());
+        let json = serde_json::to_string(&body).unwrap();
+        assert_eq!(body, serde_json::from_str::<EvmTraceReplayBodyV1>(&json).unwrap());
+    }
+
+    /// The body preserves the FULL ordered candidate list (accepted + skipped) and
+    /// the receipt-index mapping, which the trace lookup relies on.
+    #[test]
+    fn trace_replay_body_preserves_candidate_order_and_outcomes() {
+        let body = sample_trace_body();
+        assert_eq!(body.txs.len(), 2);
+        assert_eq!(body.txs[0].outcome, EvmCandidateOutcome::Accepted { receipt_index: 0 });
+        assert_eq!(body.txs[1].outcome, EvmCandidateOutcome::Skipped { class: 2 });
+        // The accepted candidate is locatable by its recorded receipt_index.
+        let target = body.txs.iter().find(|t| matches!(t.outcome, EvmCandidateOutcome::Accepted { receipt_index: 0 }));
+        assert_eq!(target.unwrap().tx_hash, EvmH256::from_bytes([0x11; 32]));
+    }
+
+    /// `MemSizeEstimator` must be a real implementation (a panicking default crashes
+    /// a validator under a cache policy — see the EvmStateSnapshot note).
+    #[test]
+    fn trace_replay_body_mem_size_is_real() {
+        let body = sample_trace_body();
+        let est = body.estimate_mem_bytes();
+        // At least the struct itself plus the two txs' raw payloads + blue_work.
+        assert!(est >= size_of::<EvmTraceReplayBodyV1>() + 5 + 3 + 4, "estimate too small: {est}");
     }
 }
