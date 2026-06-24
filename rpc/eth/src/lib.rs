@@ -498,6 +498,7 @@ async fn dispatch(provider: &Arc<dyn EthProvider>, req: RpcRequest) -> RpcRespon
         "eth_feeHistory" => eth_fee_history(provider, &req.params).await,
         "eth_getTransactionByHash" => eth_get_transaction_by_hash(provider, &req.params).await,
         "debug_traceTransaction" => debug_trace_transaction(provider, &req.params).await,
+        "trace_transaction" => trace_transaction_flat(provider, &req.params).await,
         other => Err(EthRpcError::new(codes::METHOD_NOT_FOUND, format!("the method {other} does not exist / is not available"))),
     };
     match result {
@@ -1036,6 +1037,78 @@ async fn debug_trace_transaction(provider: &Arc<dyn EthProvider>, params: &Value
     Ok(provider.trace_transaction(hash).await?.map(|f| render_call_frame(&f)).unwrap_or(Value::Null))
 }
 
+/// `trace_transaction` (Parity/OpenEthereum flat-call format, design §11.1): the
+/// SAME replay as `debug_traceTransaction`'s callTracer, flattened into the flat
+/// trace list `[{action, result|error, subtraces, traceAddress, type}]`. Reuses
+/// `EthProvider::trace_transaction` so it inherits the fence/reconciliation safety.
+async fn trace_transaction_flat(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let hash = parse_hash32_param(params, 0)?;
+    match provider.trace_transaction(hash).await? {
+        Some(frame) => {
+            let mut out = Vec::new();
+            flatten_call_frame(&frame, Vec::new(), &mut out);
+            Ok(Value::Array(out))
+        }
+        None => Ok(Value::Null),
+    }
+}
+
+/// Depth-first flatten of a [`EthCallFrame`] tree into Parity flat-trace objects.
+/// `trace_address` is the path of child indices from the root (`[]` = root).
+fn flatten_call_frame(f: &EthCallFrame, trace_address: Vec<u64>, out: &mut Vec<Value>) {
+    let hx = |b: &[u8]| format!("0x{}", faster_hex::hex_string(b));
+    let is_create = f.call_type == "CREATE" || f.call_type == "CREATE2";
+    let mut obj = serde_json::Map::new();
+
+    let mut action = serde_json::Map::new();
+    action.insert("from".to_string(), json!(hx(&f.from)));
+    action.insert("gas".to_string(), quantity(f.gas as u128));
+    action.insert("value".to_string(), quantity_from_be32(&f.value));
+    if is_create {
+        action.insert("init".to_string(), json!(hx(&f.input)));
+        obj.insert("type".to_string(), json!("create"));
+    } else {
+        action.insert("callType".to_string(), json!(f.call_type.to_lowercase()));
+        action.insert("to".to_string(), f.to.map(|a| json!(hx(&a))).unwrap_or(Value::Null));
+        action.insert("input".to_string(), json!(hx(&f.input)));
+        obj.insert("type".to_string(), json!("call"));
+    }
+    obj.insert("action".to_string(), Value::Object(action));
+
+    // A failed frame carries `error` and a null `result` (Parity convention).
+    if let Some(err) = &f.error {
+        obj.insert("error".to_string(), json!(err));
+        obj.insert("result".to_string(), Value::Null);
+    } else {
+        let mut result = serde_json::Map::new();
+        result.insert("gasUsed".to_string(), quantity(f.gas_used as u128));
+        if is_create {
+            result.insert("address".to_string(), f.to.map(|a| json!(hx(&a))).unwrap_or(Value::Null));
+            result.insert("code".to_string(), json!(hx(&f.output)));
+        } else {
+            result.insert("output".to_string(), json!(hx(&f.output)));
+        }
+        obj.insert("result".to_string(), Value::Object(result));
+    }
+
+    obj.insert("subtraces".to_string(), json!(f.calls.len()));
+    obj.insert("traceAddress".to_string(), json!(trace_address));
+    // MISAKA extensions ride the root object only (set by the provider on root).
+    if let Some(b) = &f.misaka_originating_payload_block {
+        obj.insert("misakaOriginatingPayloadBlock".to_string(), json!(hx(b)));
+    }
+    if let Some(b) = &f.misaka_accepting_block {
+        obj.insert("misakaAcceptingBlock".to_string(), json!(hx(b)));
+    }
+    out.push(Value::Object(obj));
+
+    for (i, child) in f.calls.iter().enumerate() {
+        let mut child_addr = trace_address.clone();
+        child_addr.push(i as u64);
+        flatten_call_frame(child, child_addr, out);
+    }
+}
+
 /// Render a [`EthCallFrame`] tree as Geth `callTracer` JSON (§11.4).
 fn render_call_frame(f: &EthCallFrame) -> Value {
     let hx = |b: &[u8]| format!("0x{}", faster_hex::hex_string(b));
@@ -1408,4 +1481,66 @@ async fn write_cors_preflight(stream: &mut TcpStream) -> std::io::Result<()> {
     let resp = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     stream.write_all(resp.as_bytes()).await?;
     stream.flush().await
+}
+
+#[cfg(test)]
+mod trace_flatten_tests {
+    use super::*;
+
+    fn frame(call_type: &str, calls: Vec<EthCallFrame>) -> EthCallFrame {
+        EthCallFrame {
+            call_type: call_type.to_string(),
+            from: [0x11; 20],
+            to: Some([0x22; 20]),
+            value: [0u8; 32],
+            gas: 0x100,
+            gas_used: 0x40,
+            input: vec![0xab],
+            output: vec![0xcd],
+            error: None,
+            revert_reason: None,
+            calls,
+            misaka_originating_payload_block: None,
+            misaka_accepting_block: None,
+        }
+    }
+
+    /// The flat adapter assigns traceAddress paths + subtraces over a DFS of the tree.
+    #[test]
+    fn flatten_assigns_trace_address_and_subtraces() {
+        // root -> [child0, child1]; child0 -> [grandchild]
+        let tree = frame("CALL", vec![frame("STATICCALL", vec![frame("CALL", vec![])]), frame("DELEGATECALL", vec![])]);
+        let mut out = Vec::new();
+        flatten_call_frame(&tree, Vec::new(), &mut out);
+        assert_eq!(out.len(), 4, "root + 2 children + 1 grandchild");
+        // DFS order: root, child0, grandchild, child1.
+        assert_eq!(out[0]["traceAddress"], json!([] as [u64; 0]));
+        assert_eq!(out[0]["subtraces"], json!(2));
+        assert_eq!(out[0]["type"], json!("call"));
+        assert_eq!(out[1]["traceAddress"], json!([0]));
+        assert_eq!(out[1]["action"]["callType"], json!("staticcall"));
+        assert_eq!(out[1]["subtraces"], json!(1));
+        assert_eq!(out[2]["traceAddress"], json!([0, 0]));
+        assert_eq!(out[3]["traceAddress"], json!([1]));
+        assert_eq!(out[3]["action"]["callType"], json!("delegatecall"));
+        assert_eq!(out[3]["subtraces"], json!(0));
+    }
+
+    /// CREATE frames use the create action/result shape; failed frames carry `error`.
+    #[test]
+    fn flatten_create_and_error_shapes() {
+        let mut create = frame("CREATE2", vec![]);
+        let mut out = Vec::new();
+        flatten_call_frame(&create, Vec::new(), &mut out);
+        assert_eq!(out[0]["type"], json!("create"));
+        assert!(out[0]["action"].get("init").is_some());
+        assert!(out[0]["result"].get("address").is_some());
+        assert!(out[0]["action"].get("callType").is_none(), "create has no callType");
+
+        create.error = Some("execution reverted".to_string());
+        let mut out2 = Vec::new();
+        flatten_call_frame(&create, Vec::new(), &mut out2);
+        assert_eq!(out2[0]["error"], json!("execution reverted"));
+        assert_eq!(out2[0]["result"], Value::Null);
+    }
 }
