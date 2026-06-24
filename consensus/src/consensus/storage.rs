@@ -97,7 +97,10 @@ pub struct ConsensusStorage {
     // slices; defining them now keeps the prefixes reserved and offline-testable.
     pub evm_flat_account_store: Arc<DbEvmFlatAccountStore>,
     pub evm_block_state_root_store: Arc<DbEvmBlockStateRootStore>,
-    pub evm_latest_state_ptr_store: Arc<DbEvmLatestStatePtrStore>,
+    // RwLock-wrapped: the singleton pointer's `set_batch` takes `&mut self`
+    // (CachedDbItem write), so the shadow dual-write (slice S4) advances it under
+    // a write lock — taken only when `--evm-shadow-state-backend` is on.
+    pub evm_latest_state_ptr_store: Arc<RwLock<DbEvmLatestStatePtrStore>>,
 
     // Append-only stores
     pub ghostdag_store: Arc<DbGhostdagStore>,
@@ -371,7 +374,7 @@ impl ConsensusStorage {
         ));
         let evm_block_state_root_store =
             Arc::new(DbEvmBlockStateRootStore::new(db.clone(), PolicyBuilder::new().max_items(256).untracked().build()));
-        let evm_latest_state_ptr_store = Arc::new(DbEvmLatestStatePtrStore::new(db.clone()));
+        let evm_latest_state_ptr_store = Arc::new(RwLock::new(DbEvmLatestStatePtrStore::new(db.clone())));
 
         // Block windows
         let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));

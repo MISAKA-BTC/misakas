@@ -80,6 +80,14 @@ pub struct Config {
     /// or any commitment. `head` writes no diffs; `recent` keeps them to the
     /// pruning boundary; `archive` preserves EVM state history past pruning.
     pub evm_history_mode: crate::evm::EvmHistoryMode,
+
+    /// C-01 state-backend (design v0.1, Stage 1, slice S4): node-local SHADOW
+    /// dual-write of the flat latest-canonical state backend, with a per-block
+    /// live differential against the committed snapshot. `false` by default and
+    /// on every current network. A divergence HALTS the node (never serve a wrong
+    /// root); the committed bytes never depend on the flat store, so toggling this
+    /// is consensus-neutral — it only validates the backend before cutover.
+    pub evm_shadow_state_backend: bool,
 }
 
 impl Config {
@@ -109,6 +117,7 @@ impl Config {
             ram_scale: 1.0,
             retention_period_days: None,
             evm_history_mode: crate::evm::EvmHistoryMode::Recent,
+            evm_shadow_state_backend: false,
         }
     }
 

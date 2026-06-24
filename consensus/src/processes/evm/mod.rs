@@ -600,10 +600,145 @@ pub fn materialize_snapshot(
     Ok(EvmStateSnapshot { accounts })
 }
 
+/// C-01 Stage 1: build a [`ReconState`] directly from the flat store (prefix 234)
+/// — the cores + storage the keccak-MPT state root commits to. Code bytes are NOT
+/// resolved (the reconstruction comparison is over `code_hash`, not code), so this
+/// cannot fail on a content-addressed-store gap and is cheaper than
+/// [`materialize_snapshot`]. Address order is the store's key order.
+pub fn flat_to_recon(
+    flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
+) -> Result<kaspa_consensus_core::evm::ReconState, kaspa_database::prelude::StoreError> {
+    let mut state = kaspa_consensus_core::evm::ReconState::new();
+    for entry in flat.iter() {
+        let (addr, fa) = entry?;
+        let storage = fa.storage.iter().map(|(s, v)| (s.to_be_bytes(), v.to_be_bytes())).collect();
+        state.insert(addr.as_bytes(), kaspa_consensus_core::evm::ReconAccount { core: fa.core, storage });
+    }
+    Ok(state)
+}
+
+/// C-01 Stage 1 (slice S4) outcome of one shadow dual-write — for the caller's log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShadowOutcome {
+    /// Clean head extension: the differential passed and the diff applied incrementally (O(changed)).
+    Extended,
+    /// Bootstrap (no pointer) or reorg (pointer ≠ parent): the flat store was reseeded from the committed snapshot.
+    Reseeded,
+    /// `head` history mode dropped the diff — no state history to maintain.
+    SkippedNoDiff,
+}
+
+/// C-01 Stage 1 (slice S4) error. A [`Self::Divergence`] is a backend bug the
+/// caller turns into a node HALT (never serve a wrong root).
+#[derive(Debug)]
+pub enum ShadowError {
+    /// The flat backend disagrees with the committed post-state — halt the node.
+    Divergence { block: kaspa_consensus_core::BlockHash, committed_root: kaspa_hashes::EvmH256, detail: String },
+    /// A store read/write failed (treated like any other commit-path store error).
+    Store(kaspa_database::prelude::StoreError),
+}
+
+impl std::fmt::Display for ShadowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShadowError::Divergence { block, committed_root, detail } => write!(
+                f,
+                "C-01 shadow state-backend DIVERGENCE at block {block} (committed EVM state_root {committed_root}): {detail}. \
+                 The flat backend disagrees with the committed snapshot — HALTING this node. The committed bytes come from the \
+                 206 snapshot, not the flat store, so chain integrity is intact; fix the backend and re-shadow."
+            ),
+            ShadowError::Store(e) => write!(f, "C-01 shadow state-backend store error: {e}"),
+        }
+    }
+}
+impl std::error::Error for ShadowError {}
+
+/// C-01 Stage 1 (slice S4) — node-local SHADOW dual-write + live differential.
+/// OFF by default; enabled per node by `--evm-shadow-state-backend`.
+///
+/// On every canonical-head-extending block this maintains the flat latest-
+/// canonical store (234) + block→root index (232) + latest pointer (231)
+/// ALONGSIDE the existing 206 snapshot, and verifies that applying the block's
+/// §12 diff to the persisted flat state reproduces the committed post-state
+/// (`staged.snapshot`, whose keccak-MPT root IS the committed `state_root`). The
+/// check is structural over the reconstructed state (nonce/balance/code_hash/
+/// storage) — root-equivalent and secp-free (no keccak). A divergence is a
+/// BACKEND bug ⇒ [`ShadowError::Divergence`] so the caller HALTS the node; the
+/// committed 206 bytes never depended on the flat store, so a halt costs only
+/// this node's availability — chain integrity is untouched (design §7 failure
+/// mode). 206 is still written by the caller.
+///
+/// Bootstrap (no pointer) / reorg (pointer ≠ parent) RESEED the flat store from
+/// the committed snapshot (the 206 source of truth); incremental reorg rebase is
+/// slice S5. All writes go into the caller's `batch`, so the flat state advances
+/// atomically with the block (risk R3). secp-free; never invoked on a non-evm
+/// build (`staged` is always `None` there) nor on a default network (lane inert).
+#[allow(clippy::too_many_arguments)]
+pub fn shadow_dual_write_flat(
+    flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
+    block_root: &crate::model::stores::evm::DbEvmBlockStateRootStore,
+    latest_ptr: &mut crate::model::stores::evm::DbEvmLatestStatePtrStore,
+    code: &crate::model::stores::evm::DbEvmCodeStore,
+    batch: &mut rocksdb::WriteBatch,
+    current: kaspa_consensus_core::BlockHash,
+    staged: &EvmStaged,
+) -> Result<ShadowOutcome, ShadowError> {
+    use kaspa_consensus_core::evm::{apply_state_diff, compute_state_diff, recon_from_snapshot, EvmLatestStatePtr};
+    let Some(diff) = &staged.state_diff else {
+        // `head` mode dropped the diff (no state history kept) ⇒ nothing to maintain.
+        return Ok(ShadowOutcome::SkippedNoDiff);
+    };
+    let committed_root = staged.result.header.state_root;
+    let parent = diff.parent; // selected_parent(current) — the EVM parent
+    let ptr = latest_ptr.get().map_err(ShadowError::Store)?;
+    let clean_extend = ptr.map(|p| p.canonical_head == parent).unwrap_or(false);
+
+    if clean_extend {
+        // The flat store represents `parent`. Apply this block's diff to a
+        // reconstruction of it and require the result to equal the committed
+        // post-state. `apply_state_diff` also tripwires a `before`-core mismatch
+        // (i.e. a flat store that drifted off `parent`).
+        let mut got = flat_to_recon(flat).map_err(ShadowError::Store)?;
+        apply_state_diff(&mut got, diff).map_err(|e| ShadowError::Divergence {
+            block: current,
+            committed_root,
+            detail: format!("§12 diff is inconsistent with the persisted flat parent state: {e}"),
+        })?;
+        let expected = recon_from_snapshot(&staged.snapshot);
+        if got != expected {
+            return Err(ShadowError::Divergence {
+                block: current,
+                committed_root,
+                detail: format!("flat-derived post-state ({} accounts) != committed snapshot ({} accounts)", got.len(), expected.len()),
+            });
+        }
+        // Differential passed — advance the flat store incrementally (O(changed)).
+        apply_diff_to_flat(flat, batch, diff).map_err(ShadowError::Store)?;
+        block_root.write_batch(batch, current, committed_root).map_err(ShadowError::Store)?;
+        latest_ptr.set_batch(batch, EvmLatestStatePtr { canonical_head: current, state_root: committed_root }).map_err(ShadowError::Store)?;
+        Ok(ShadowOutcome::Extended)
+    } else {
+        // Bootstrap (no pointer) or reorg (pointer ≠ parent): resync the flat
+        // store to the committed post-state. The committed snapshot (206) is the
+        // source of truth; the single diff from the current flat content to it
+        // deletes any stale rows. Incremental reorg rebase is slice S5.
+        let flat_now = materialize_snapshot(flat, code).map_err(ShadowError::Store)?;
+        let reseed = compute_state_diff(&flat_now, &staged.snapshot, current, parent);
+        apply_diff_to_flat(flat, batch, &reseed).map_err(ShadowError::Store)?;
+        block_root.write_batch(batch, current, committed_root).map_err(ShadowError::Store)?;
+        latest_ptr.set_batch(batch, EvmLatestStatePtr { canonical_head: current, state_root: committed_root }).map_err(ShadowError::Store)?;
+        Ok(ShadowOutcome::Reseeded)
+    }
+}
+
 #[cfg(test)]
 mod flat_state_tests {
-    use crate::model::stores::evm::{DbEvmCodeStore, DbEvmFlatAccountStore};
-    use kaspa_consensus_core::evm::{compute_state_diff, EvmAccountSnapshot, EvmAddress, EvmStateSnapshot, EvmU256, EVM_EMPTY_CODE_HASH};
+    use super::{shadow_dual_write_flat, EvmStaged, ShadowError, ShadowOutcome};
+    use crate::model::stores::evm::{DbEvmBlockStateRootStore, DbEvmCodeStore, DbEvmFlatAccountStore, DbEvmLatestStatePtrStore};
+    use kaspa_consensus_core::evm::{
+        compute_state_diff, EvmAccountSnapshot, EvmAddress, EvmExecutionResult, EvmStateDiffV2, EvmStateSnapshot, EvmU256, EVM_EMPTY_CODE_HASH,
+    };
+    use kaspa_consensus_core::BlockHash;
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::{CachePolicy, ConnBuilder};
     use kaspa_hashes::{EvmH256, Hash64};
@@ -635,7 +770,7 @@ mod flat_state_tests {
         code.write_batch(&mut cb, ca, blob.to_vec()).unwrap();
         db.write(cb).unwrap();
 
-        let chain = vec![
+        let chain = [
             EvmStateSnapshot::default(),
             snap(vec![acc(0x01, 1, 1000, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x02, 0, 500, EVM_EMPTY_CODE_HASH, &[], &[])]),
             snap(vec![acc(0x01, 2, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x03, 1, 0, ca, blob, &[(1, 7), (2, 9)])]), // 0x02 self-destructed; contract deployed
@@ -649,6 +784,123 @@ mod flat_state_tests {
             let got = super::materialize_snapshot(&flat, &code).unwrap();
             assert_eq!(got, chain[i], "flat materialize at block {i} must equal the canonical snapshot");
         }
+    }
+
+    // ---- slice S4: shadow dual-write + live differential ----
+
+    fn h(b: u8) -> BlockHash {
+        BlockHash::from_bytes([b; 64])
+    }
+
+    /// A minimal [`EvmStaged`] carrying the three fields the dual-write reads:
+    /// the committed `state_root` (recorded in 232/231; not re-derived here — the
+    /// differential is over reconstructed state, not roots), the post-state
+    /// snapshot, and the §12 diff.
+    fn mk_staged(state_root: EvmH256, snapshot: EvmStateSnapshot, diff: Option<EvmStateDiffV2>) -> EvmStaged {
+        let mut result = EvmExecutionResult::default();
+        result.header.state_root = state_root;
+        EvmStaged { result, snapshot, candidate_meta: vec![], trace_body: None, state_diff: diff }
+    }
+
+    struct Stores {
+        // Fields drop in declaration order; the DbLifetime guard asserts zero
+        // strong DB refs on drop, so it MUST be declared last (after every store
+        // and the db handle that hold an `Arc<DB>`).
+        db: std::sync::Arc<kaspa_database::prelude::DB>,
+        flat: DbEvmFlatAccountStore,
+        block_root: DbEvmBlockStateRootStore,
+        ptr: DbEvmLatestStatePtrStore,
+        code: DbEvmCodeStore,
+        _lt: kaspa_database::utils::DbLifetime,
+    }
+    fn stores() -> Stores {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
+        let block_root = DbEvmBlockStateRootStore::new(db.clone(), CachePolicy::Empty);
+        let ptr = DbEvmLatestStatePtrStore::new(db.clone());
+        let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
+        Stores { db, flat, block_root, ptr, code, _lt }
+    }
+
+    /// Shadow dual-write over a synthetic chain: block 1 BOOTSTRAPS (no pointer →
+    /// reseed), 2 and 3 cleanly EXTEND; the persisted flat store materializes to
+    /// the canonical snapshot at every block, the pointer advances, and 232 holds
+    /// each committed root.
+    #[test]
+    fn shadow_dual_write_maintains_flat_and_matches_committed() {
+        let s = stores();
+        let blob: &[u8] = &[0x60, 0x00, 0xfd];
+        let ca = EvmH256::from_bytes([0xAA; 32]);
+        // The §12 writer seeds the content-addressed code; mirror that for materialize.
+        let mut cb = WriteBatch::default();
+        s.code.write_batch(&mut cb, ca, blob.to_vec()).unwrap();
+        s.db.write(cb).unwrap();
+
+        let chain = [
+            EvmStateSnapshot::default(),                                                                          // 0 (genesis)
+            snap(vec![acc(0x01, 1, 1000, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x02, 0, 500, EVM_EMPTY_CODE_HASH, &[], &[])]), // 1
+            snap(vec![acc(0x01, 2, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x03, 1, 0, ca, blob, &[(1, 7), (2, 9)])]),      // 2 (0x02 gone, contract deployed)
+            snap(vec![acc(0x01, 2, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x03, 1, 0, ca, blob, &[(1, 7), (3, 4)])]),      // 3 (slot 2→0, slot 3 set)
+        ];
+        let mut ptr = s.ptr;
+        for n in 1..=3u8 {
+            let i = n as usize;
+            let diff = compute_state_diff(&chain[i - 1], &chain[i], h(n), h(n - 1));
+            let staged = mk_staged(EvmH256::from_bytes([n; 32]), chain[i].clone(), Some(diff));
+            let mut batch = WriteBatch::default();
+            let outcome = shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(n), &staged).unwrap();
+            s.db.write(batch).unwrap();
+
+            assert_eq!(outcome, if n == 1 { ShadowOutcome::Reseeded } else { ShadowOutcome::Extended }, "block {n} outcome");
+            assert_eq!(super::materialize_snapshot(&s.flat, &s.code).unwrap(), chain[i], "flat materializes to canonical at block {n}");
+            assert_eq!(ptr.get().unwrap().unwrap().canonical_head, h(n), "pointer advanced to block {n}");
+            assert_eq!(s.block_root.get(h(n)).unwrap(), Some(EvmH256::from_bytes([n; 32])), "232 holds committed root for block {n}");
+        }
+    }
+
+    /// A flat backend that disagrees with the committed snapshot HALTS: feeding a
+    /// correct diff but a wrong post-state snapshot yields `Divergence`, and the
+    /// flat store is left untouched (the check is pre-commit).
+    #[test]
+    fn shadow_dual_write_halts_on_divergence() {
+        let s = stores();
+        let b1 = snap(vec![acc(0x01, 1, 1000, EVM_EMPTY_CODE_HASH, &[], &[])]);
+        let b2 = snap(vec![acc(0x01, 2, 900, EVM_EMPTY_CODE_HASH, &[], &[])]);
+        let b3 = snap(vec![acc(0x01, 3, 700, EVM_EMPTY_CODE_HASH, &[], &[])]);
+        let mut ptr = s.ptr;
+
+        // Bootstrap to b1.
+        let d1 = compute_state_diff(&EvmStateSnapshot::default(), &b1, h(1), h(0));
+        let mut batch = WriteBatch::default();
+        shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(1), &mk_staged(EvmH256::from_bytes([1; 32]), b1.clone(), Some(d1))).unwrap();
+        s.db.write(batch).unwrap();
+
+        // Clean-extend block 2 with the CORRECT diff (b1→b2) but a WRONG committed
+        // snapshot (b3). got = apply(diff, flat@b1) = b2 ≠ expected = b3 → Divergence.
+        let d2 = compute_state_diff(&b1, &b2, h(2), h(1));
+        let staged_bad = mk_staged(EvmH256::from_bytes([2; 32]), b3.clone(), Some(d2));
+        let mut batch = WriteBatch::default();
+        let res = shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(2), &staged_bad);
+        assert!(matches!(res, Err(ShadowError::Divergence { .. })), "wrong committed snapshot must diverge, got {res:?}");
+        // Pre-commit halt: the flat store is still at b1.
+        assert_eq!(super::materialize_snapshot(&s.flat, &s.code).unwrap(), b1, "flat store untouched on divergence");
+        assert_eq!(ptr.get().unwrap().unwrap().canonical_head, h(1), "pointer not advanced on divergence");
+    }
+
+    /// `head` history mode drops the §12 diff, so there is no flat state to
+    /// maintain — the dual-write is a no-op (no flat rows, no pointer).
+    #[test]
+    fn shadow_dual_write_skips_without_a_diff() {
+        let s = stores();
+        let b1 = snap(vec![acc(0x01, 1, 1000, EVM_EMPTY_CODE_HASH, &[], &[])]);
+        let mut ptr = s.ptr;
+        let staged = mk_staged(EvmH256::from_bytes([1; 32]), b1, None);
+        let mut batch = WriteBatch::default();
+        let outcome = shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(1), &staged).unwrap();
+        s.db.write(batch).unwrap();
+        assert_eq!(outcome, ShadowOutcome::SkippedNoDiff);
+        assert_eq!(s.flat.iter().count(), 0, "no flat rows written in head mode");
+        assert!(ptr.get().unwrap().is_none(), "pointer not set in head mode");
     }
 }
 

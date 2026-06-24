@@ -846,7 +846,7 @@ mod tests {
 
         // delete an account (self-destruct) reclaims exactly it.
         let mut b2 = WriteBatch::default();
-        flat.delete_batch(&mut b2, addr(0x02));
+        flat.delete_batch(&mut b2, addr(0x02)).unwrap();
         db.write(b2).unwrap();
         assert_eq!(flat.get(addr(0x02)).unwrap(), None);
         assert_eq!(flat.iter().count(), 2);

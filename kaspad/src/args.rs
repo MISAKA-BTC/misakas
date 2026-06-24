@@ -43,6 +43,11 @@ pub struct Args {
     /// the §12 archive writer.
     #[serde(default)]
     pub evm_history_mode: EvmHistoryMode,
+    /// C-01 slice S4: node-local SHADOW dual-write of the flat state backend +
+    /// per-block live differential vs the committed snapshot. Off by default;
+    /// consensus-neutral (a divergence only halts this node, never forks).
+    #[serde(default)]
+    pub evm_shadow_state_backend: bool,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub rpclisten_borsh: Option<WrpcNetAddress>,
     #[serde_as(as = "Option<DisplayFromStr>")]
@@ -152,6 +157,7 @@ impl Default for Args {
             rpclisten: None,
             evm_rpc_listen: None,
             evm_history_mode: EvmHistoryMode::Recent,
+            evm_shadow_state_backend: false,
             wrpc_verbose: false,
             log_level: "INFO".into(),
             connect_peers: vec![],
@@ -201,6 +207,7 @@ impl Args {
         config.ram_scale = self.ram_scale;
         config.retention_period_days = self.retention_period_days;
         config.evm_history_mode = self.evm_history_mode; // §12: EVM state-history retention
+        config.evm_shadow_state_backend = self.evm_shadow_state_backend; // C-01 S4: shadow dual-write
 
         #[cfg(feature = "devnet-prealloc")]
         if let Some(num_prealloc_utxos) = self.num_prealloc_utxos {
@@ -291,6 +298,13 @@ pub fn cli() -> Command {
                 .value_name("MODE")
                 .value_parser(["head", "recent", "archive"])
                 .help("EVM state-history retention: head | recent | archive (default: recent). Effective only in an --features evm build."),
+        )
+        .arg(
+            Arg::new("evm-shadow-state-backend")
+                .long("evm-shadow-state-backend")
+                .env("KASPAD_EVM_SHADOW_STATE_BACKEND")
+                .action(clap::ArgAction::SetTrue)
+                .help("C-01: shadow the flat EVM state backend and check it against the committed snapshot every block (HALTS this node on divergence). Node-local, consensus-neutral; off by default. Effective only in an --features evm build."),
         )
         .arg(
             Arg::new("rpclisten-borsh")
@@ -571,6 +585,7 @@ impl Args {
                 .get_one::<String>("evm-history-mode")
                 .and_then(|s| EvmHistoryMode::from_str_opt(s))
                 .unwrap_or(defaults.evm_history_mode),
+            evm_shadow_state_backend: arg_match_unwrap_or::<bool>(&m, "evm-shadow-state-backend", defaults.evm_shadow_state_backend),
             rpclisten_borsh: m.get_one::<WrpcNetAddress>("rpclisten-borsh").cloned().or(defaults.rpclisten_borsh),
             rpclisten_json: m.get_one::<WrpcNetAddress>("rpclisten-json").cloned().or(defaults.rpclisten_json),
             unsafe_rpc: arg_match_unwrap_or::<bool>(&m, "unsaferpc", defaults.unsafe_rpc),

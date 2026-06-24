@@ -222,6 +222,18 @@ pub struct VirtualStateProcessor {
     pub(super) evm_state_diff_store: Arc<crate::model::stores::evm::DbEvmStateDiffStore>,
     pub(super) evm_state_checkpoint_store: Arc<crate::model::stores::evm::DbEvmStateCheckpointStore>,
     pub(super) evm_code_store: Arc<crate::model::stores::evm::DbEvmCodeStore>,
+    // C-01 state-backend (design v0.1, Stage 1, slice S4): the flat latest-canonical
+    // state (234) + block→root index (232) + canonical pointer (231). Written ONLY
+    // by the shadow dual-write below, gated on `evm_shadow_state_backend` (off by
+    // default). Inert otherwise. The pointer is RwLock-wrapped (its `set_batch` is
+    // `&mut self`); the lock is taken only while shadow is on.
+    pub(super) evm_flat_account_store: Arc<crate::model::stores::evm::DbEvmFlatAccountStore>,
+    pub(super) evm_block_state_root_store: Arc<crate::model::stores::evm::DbEvmBlockStateRootStore>,
+    pub(super) evm_latest_state_ptr_store: Arc<RwLock<crate::model::stores::evm::DbEvmLatestStatePtrStore>>,
+    // C-01 slice S4: node-local shadow dual-write of the flat state backend +
+    // per-block live differential vs the committed snapshot. `false` on every
+    // current network and by default — purely a pre-cutover validation aid.
+    pub(super) evm_shadow_state_backend: bool,
     // §12: this node's EVM state-history retention mode (`--evm-history-mode`). In
     // `head` mode the per-block archive diff/checkpoint (220/221) are not written at
     // all; `recent`/`archive` write them (the pruning processor decides how long
@@ -305,6 +317,7 @@ impl VirtualStateProcessor {
         counters: Arc<ProcessingCounters>,
         mining_rules: Arc<MiningRules>,
         evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
+        evm_shadow_state_backend: bool,
     ) -> Self {
         Self {
             receiver,
@@ -345,6 +358,10 @@ impl VirtualStateProcessor {
             evm_state_diff_store: storage.evm_state_diff_store.clone(),
             evm_state_checkpoint_store: storage.evm_state_checkpoint_store.clone(),
             evm_code_store: storage.evm_code_store.clone(),
+            evm_flat_account_store: storage.evm_flat_account_store.clone(),
+            evm_block_state_root_store: storage.evm_block_state_root_store.clone(),
+            evm_latest_state_ptr_store: storage.evm_latest_state_ptr_store.clone(),
+            evm_shadow_state_backend,
             evm_history_mode,
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
@@ -1168,6 +1185,32 @@ impl VirtualStateProcessor {
                 &staged,
             )
             .unwrap();
+            // C-01 (slice S4) shadow dual-write + live differential, node-local,
+            // OFF by default. Maintains the flat latest-state store (234/232/231)
+            // in THIS batch and HALTS this node if applying the §12 diff to the
+            // flat state disagrees with the committed post-state. The 206 snapshot
+            // (written just below) stays the source of truth, so the committed
+            // bytes are unchanged whether shadow is on or off (consensus-neutral).
+            if self.evm_shadow_state_backend {
+                let mut ptr = self.evm_latest_state_ptr_store.write();
+                match crate::processes::evm::shadow_dual_write_flat(
+                    &self.evm_flat_account_store,
+                    &self.evm_block_state_root_store,
+                    &mut ptr,
+                    &self.evm_code_store,
+                    &mut batch,
+                    current,
+                    &staged,
+                ) {
+                    Ok(crate::processes::evm::ShadowOutcome::Reseeded) => {
+                        info!("[evm-shadow] flat state backend (re)seeded to block {current}");
+                    }
+                    Ok(_) => {}
+                    // A divergence (or store error) is fatal: never let a node that
+                    // would serve a wrong flat-backend root keep running (design §7).
+                    Err(e) => panic!("{e}"),
+                }
+            }
             self.evm_state_store.insert_batch(&mut batch, current, staged.snapshot).unwrap();
             // §16 eth-rpc: map the 32-byte eth block id (first 32 bytes of the
             // 64-byte L1 hash — the truncation `eth_getTransactionReceipt`
