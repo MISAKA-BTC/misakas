@@ -242,6 +242,11 @@ pub fn trace_accepted_tx(
         gas_pool_v2_activation_daa_score,
         f002_withdraw_cap_activation_daa_score,
         f003_mldsa_verify_activation_daa_score,
+        // §12 Phase-7: the typed-receipt-root fence affects ONLY the committed
+        // receipts_root, which the trace neither emits nor reconciles (the DiD check
+        // above compares candidate OUTCOMES only). So replay with the v1 root (inert)
+        // — the call tree + pre/post state are identical either way.
+        typed_receipt_root_activation_daa_score: u64::MAX,
     };
     let seed = seed_cachedb(parent_snapshot).map_err(TraceError::Exec)?;
     let (prefix_result, mut pre_state) = execute_block_evm(seed, &input_prefix).map_err(TraceError::Exec)?;
@@ -816,6 +821,7 @@ mod tests {
             gas_pool_v2_activation_daa_score: u64::MAX,
             f002_withdraw_cap_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
+            typed_receipt_root_activation_daa_score: u64::MAX,
         };
         let (result, _state) = execute_block_evm(seed_cachedb(parent_snapshot).unwrap(), &input).unwrap();
         assert_eq!(result.candidate_outcomes[0], EvmCandidateOutcome::Accepted { receipt_index: 0 }, "the tx must be accepted");
@@ -998,6 +1004,7 @@ mod tests {
             gas_pool_v2_activation_daa_score: 0,
             f002_withdraw_cap_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
+            typed_receipt_root_activation_daa_score: u64::MAX,
         };
         let (result, _) = execute_block_evm(seed_cachedb(&snap).unwrap(), &input).unwrap();
         assert_eq!(result.candidate_outcomes[0], EvmCandidateOutcome::Accepted { receipt_index: 0 });

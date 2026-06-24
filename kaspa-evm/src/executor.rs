@@ -98,6 +98,13 @@ pub struct EvmBlockInput<'a> {
     /// the handler is absent so a call to `0x…F003` behaves as a call to an empty
     /// account — byte-identical execution, genesis/state-root unchanged.
     pub f003_mldsa_verify_activation_daa_score: u64,
+    /// §12 Phase-7 typed-receipt-root fence (`Params::evm_typed_receipt_root_activation_daa_score`).
+    /// When `daa_score >= this`, `receipts_root` commits the exact Ethereum EIP-2718
+    /// typed receipt root (`roots::receipts_root_v2`); below it, the v1 borsh-MPT root
+    /// (`roots::receipts_root`), byte-for-byte unchanged. Affects ONLY the committed
+    /// `receipts_root` encoding — never which txs are accepted/executed, the receipts'
+    /// contents, gas, or the aggregate `logs_bloom`.
+    pub typed_receipt_root_activation_daa_score: u64,
 }
 
 #[inline]
@@ -199,6 +206,9 @@ pub fn execute_block_evm(
     // PREA P0-1: register the F003 verify precompile only at/after its fence. Inert
     // (u64::MAX) ⇒ false ⇒ F003 handler not registered ⇒ byte-identical execution.
     let f003_active = input.daa_score >= input.f003_mldsa_verify_activation_daa_score;
+    // §12 Phase-7: at/above the fence, commit the Ethereum EIP-2718 typed receipt
+    // root; below it, the v1 borsh-MPT root (byte-unchanged). Root encoding only.
+    let typed_receipt_root_v2 = input.daa_score >= input.typed_receipt_root_activation_daa_score;
 
     let mut skipped_tx_count: u32 = 0;
     // §16: per-candidate outcomes (parallel to input order) — store/RPC data
@@ -531,13 +541,18 @@ pub fn execute_block_evm(
     // with `checked` math that fails closed: the F002 escrow `burn_balance` and the per-account
     // credit / tip-reroute moves (audit #5). The aggregate debug-only assert added no reliable signal
     // and is removed; release behaviour is unchanged (it was compiled out there anyway).
+    // §12 Phase-7: the receipts root — v2 (Ethereum EIP-2718 typed) at/above the
+    // fence, else v1 (borsh-MPT). `executed_raws` is parallel to `receipts` (the
+    // accepted txs in order); v2 reads each tx's EIP-2718 type from it.
+    let receipts_root =
+        if typed_receipt_root_v2 { roots::receipts_root_v2(&receipts, &executed_raws) } else { roots::receipts_root(&receipts) };
     let header = EvmExecutionHeader {
         parent_state_root,
         state_root: b256_to_evmh256(state::state_root(&state_db)),
         // §4.2: the ordered root over ACCEPTED-AND-EXECUTED txs only — skips
         // (classes 2/3/5) leave no trace in the execution result.
         transactions_root: roots::transactions_root(&executed_raws),
-        receipts_root: roots::receipts_root(&receipts),
+        receipts_root,
         system_ops_root: roots::system_ops_root(&input.payload.system_ops),
         withdrawals_root: roots::withdrawals_root(&withdrawals),
         deposit_claim_queue_root: roots::deposit_claim_root(&applied_claims),
@@ -770,6 +785,7 @@ mod tests {
             // byte-identical behavior; the cap test below overrides it.
             f002_withdraw_cap_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
+            typed_receipt_root_activation_daa_score: u64::MAX,
         }
     }
 
@@ -810,6 +826,44 @@ mod tests {
         assert_eq!(v2.header.skipped_tx_count, 0);
         assert_eq!(db.basic(to).unwrap().unwrap().balance, U256::from(111u64 + 222 + 333), "all three transfers landed under v2");
         assert_eq!(db.basic(from).unwrap().unwrap().nonce, 3);
+    }
+
+    /// §12 Phase-7: the typed-receipt-root fence switches `receipts_root` between
+    /// v1 (borsh-MPT) below the fence and the Ethereum EIP-2718 typed root at/above
+    /// it — and NOTHING ELSE changes (same accepted txs, receipts, gas, state root,
+    /// aggregate bloom). Below the fence it is byte-identical (the inert proof);
+    /// above it the committed root differs only via `receipts_root`.
+    #[test]
+    fn typed_receipt_root_fence_switches_receipts_root_only() {
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let to = Address::with_last_byte(0x22);
+        let (from, r1) = signed_transfer(0, to, 111, basefee);
+        let (_, r2) = signed_transfer(1, to, 222, basefee);
+        let payload = EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes([0xFE; 20]), ..Default::default() };
+        let accepted = [cand(r1.clone(), 0xAA), cand(r2.clone(), 0xAA)];
+        let raws = vec![r1, r2];
+
+        // Inert (fence u64::MAX > daa 42): the v1 borsh-MPT root.
+        let (inert, _) = execute_block_evm(funded_seed(from, HUGE_SEED), &input_with(&payload, &accepted)).unwrap();
+        assert_eq!(inert.header.accepted_tx_count, 2, "both transfers accepted");
+        assert_eq!(inert.header.receipts_root, roots::receipts_root(&inert.receipts), "inert ⇒ v1 borsh root");
+
+        // Active (fence 0 ≤ daa 42): the Ethereum EIP-2718 typed root.
+        let input_active = EvmBlockInput { typed_receipt_root_activation_daa_score: 0, ..input_with(&payload, &accepted) };
+        let (active, _) = execute_block_evm(funded_seed(from, HUGE_SEED), &input_active).unwrap();
+        assert_eq!(active.header.receipts_root, roots::receipts_root_v2(&active.receipts, &raws), "active ⇒ v2 typed root");
+
+        // The fork actually changes the committed root (non-empty 1559 receipts).
+        assert_ne!(active.header.receipts_root, inert.header.receipts_root, "v2 root differs from v1");
+        // Everything else is byte-identical — ONLY receipts_root differs.
+        assert_eq!(active.receipts, inert.receipts, "receipts unchanged");
+        assert_eq!(active.header.logs_bloom, inert.header.logs_bloom, "aggregate bloom unchanged");
+        assert_eq!(active.header.gas_used, inert.header.gas_used, "gas unchanged");
+        assert_eq!(active.header.state_root, inert.header.state_root, "state root unchanged");
+        // ⇒ the commitment differs SOLELY through receipts_root.
+        let mut h = active.header.clone();
+        h.receipts_root = inert.header.receipts_root;
+        assert_eq!(h.commitment_root(), inert.header.commitment_root(), "commitment differs only via receipts_root");
     }
 
     /// P2-T2 (class-2 does not starve later txs): a nonce-too-low (class-2) tx that DECLARES
@@ -911,6 +965,7 @@ mod tests {
             gas_pool_v2_activation_daa_score: u64::MAX,
             f002_withdraw_cap_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
+            typed_receipt_root_activation_daa_score: u64::MAX,
         };
         // FULL path: seed the parent state, execute, extract.
         let (full_child, full_child_db) = execute_block_evm(seed_cachedb(&parent_snapshot).unwrap(), &child_input).unwrap();

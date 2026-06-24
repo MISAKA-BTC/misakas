@@ -231,6 +231,7 @@ pub struct VirtualStateProcessor {
     pub(super) evm_gas_pool_v2_activation_daa_score: u64,
     pub(super) evm_f002_withdraw_cap_activation_daa_score: u64,
     pub(super) evm_f003_mldsa_verify_activation_daa_score: u64,
+    pub(super) evm_typed_receipt_root_activation_daa_score: u64,
     // O9 (optimization design v0.1): node-local EVM-lane KPIs — chain-block
     // count / mergeset-size sum / accepted-gas sum. The gas supply is
     // 30M × chain-block rate (NOT DAG width), and the adversarial degradation
@@ -349,6 +350,7 @@ impl VirtualStateProcessor {
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: params.evm_f002_withdraw_cap_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score: params.evm_f003_mldsa_verify_activation_daa_score,
+            evm_typed_receipt_root_activation_daa_score: params.evm_typed_receipt_root_activation_daa_score,
             evm_lane_kpi: EvmLaneKpi::default(),
             dns_params: params.dns_params.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
@@ -779,6 +781,7 @@ impl VirtualStateProcessor {
                     self.evm_gas_pool_v2_activation_daa_score,
                     self.evm_f002_withdraw_cap_activation_daa_score,
                     self.evm_f003_mldsa_verify_activation_daa_score,
+                    self.evm_typed_receipt_root_activation_daa_score,
                 )
                 .map_err(|e| match e {
                     EvmValidateError::CommitmentMismatch { .. } => {
@@ -886,6 +889,7 @@ impl VirtualStateProcessor {
             self.evm_gas_pool_v2_activation_daa_score,
             self.evm_f002_withdraw_cap_activation_daa_score,
             self.evm_f003_mldsa_verify_activation_daa_score,
+            self.evm_typed_receipt_root_activation_daa_score,
         ))
     }
 
@@ -1061,6 +1065,7 @@ impl VirtualStateProcessor {
             self.evm_gas_pool_v2_activation_daa_score,
             self.evm_f002_withdraw_cap_activation_daa_score,
             self.evm_f003_mldsa_verify_activation_daa_score,
+            self.evm_typed_receipt_root_activation_daa_score,
         )
         // audit R2-#4: a producer-side acceptance failure (e.g. a local EVM
         // store-integrity error) is a template-build failure, not a panic.

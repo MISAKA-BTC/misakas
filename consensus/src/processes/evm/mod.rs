@@ -700,6 +700,7 @@ mod driver {
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
+        typed_receipt_root_activation_daa_score: u64,
     ) -> Result<Option<super::EvmStaged>, EvmValidateError> {
         // No-replay: this block's EVM result was computed when it first joined the
         // selected chain; never recompute it.
@@ -719,6 +720,7 @@ mod driver {
             gas_pool_v2_activation_daa_score,
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
+            typed_receipt_root_activation_daa_score,
         )?;
 
         // The only block-invalidating EVM condition: producer commitment mismatch
@@ -751,6 +753,7 @@ mod driver {
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
+        typed_receipt_root_activation_daa_score: u64,
     ) -> Result<Option<super::EvmStaged>, EvmValidateError> {
         if header_store.has(block).map_err(EvmValidateError::Store)? {
             return Ok(None);
@@ -767,6 +770,7 @@ mod driver {
             gas_pool_v2_activation_daa_score,
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
+            typed_receipt_root_activation_daa_score,
         )?;
         if result.header.commitment_root() != l1_header.evm_commitment_root {
             return Err(EvmValidateError::CommitmentMismatch { block });
@@ -795,6 +799,7 @@ mod driver {
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
+        typed_receipt_root_activation_daa_score: u64,
     ) -> Result<
         (
             kaspa_consensus_core::evm::EvmExecutionResult,
@@ -820,6 +825,7 @@ mod driver {
             gas_pool_v2_activation_daa_score,
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
+            typed_receipt_root_activation_daa_score,
         )
     }
 
@@ -843,6 +849,7 @@ mod driver {
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
+        typed_receipt_root_activation_daa_score: u64,
     ) -> Result<
         (
             kaspa_consensus_core::evm::EvmExecutionResult,
@@ -921,6 +928,7 @@ mod driver {
             gas_pool_v2_activation_daa_score,
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
+            typed_receipt_root_activation_daa_score,
         };
 
         let (result, snapshot) =
@@ -993,6 +1001,7 @@ mod driver {
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
+        typed_receipt_root_activation_daa_score: u64,
     ) -> Result<(), EvmValidateError> {
         let Some(staged) = evm_validate(
             header_store,
@@ -1006,6 +1015,7 @@ mod driver {
             gas_pool_v2_activation_daa_score,
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
+            typed_receipt_root_activation_daa_score,
         )?
         else {
             return Ok(());
@@ -1058,6 +1068,7 @@ impl EvmPipeline {
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
+        typed_receipt_root_activation_daa_score: u64,
     ) -> EvmPipeline {
         use crate::model::stores::evm::EvmPayloadStoreReader;
         use crate::model::stores::ghostdag::GhostdagStoreReader;
@@ -1100,6 +1111,7 @@ impl EvmPipeline {
                             gas_pool_v2_activation_daa_score,
                             f002_withdraw_cap_activation_daa_score,
                             f003_mldsa_verify_activation_daa_score,
+                            typed_receipt_root_activation_daa_score,
                         )?;
                         // The pipeline only runs over blocks WITHOUT committed EVM rows
                         // (filtered by the caller), so a None (no-replay hit) is a race
@@ -1387,6 +1399,7 @@ mod tests {
             gas_pool_v2_activation_daa_score: u64::MAX,
             f002_withdraw_cap_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
+            typed_receipt_root_activation_daa_score: u64::MAX,
         };
         let (expected, _) = kaspa_evm::snapshot::execute_block_from_snapshot(&EvmStateSnapshot::default(), &input).unwrap();
         assert_eq!(expected.header.skipped_tx_count, 1, "the gathered mergeset tx was deterministically skipped");
@@ -1413,6 +1426,7 @@ mod tests {
             &mergeset,
             &l1,
             &payload,
+            u64::MAX,
             u64::MAX,
             u64::MAX,
             u64::MAX,
@@ -1495,6 +1509,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            u64::MAX,
         )
         .unwrap();
 
@@ -1523,6 +1538,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            u64::MAX,
         );
         assert!(matches!(err, Err(EvmValidateError::CommitmentMismatch { .. })));
 
@@ -1548,6 +1564,7 @@ mod tests {
             &mergeset,
             &bad2,
             &payload,
+            u64::MAX,
             u64::MAX,
             u64::MAX,
             u64::MAX,

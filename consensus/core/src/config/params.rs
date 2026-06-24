@@ -389,6 +389,16 @@ pub struct Params {
     /// fenced like the gas-pool-v2 / f002-withdraw-cap / evm-activation precedents;
     /// activating it is a coordinated deploy with a frozen `F003_VERIFY_GAS` + caps.
     pub evm_f003_mldsa_verify_activation_daa_score: u64,
+
+    /// §12 Phase-7: DAA score at/after which the EVM lane commits the exact
+    /// Ethereum EIP-2718 TYPED receipt root (`roots::receipts_root_v2`) in
+    /// `EvmExecutionHeader.receipts_root`. `u64::MAX` ⇒ inert: the v1 borsh-MPT
+    /// receipts root (`roots::receipts_root`) is committed, byte-for-byte
+    /// unchanged. The committed `receipts_root` feeds the EVM commitment, so the
+    /// switch is a CONSENSUS FORK — activation-fenced like the gas-pool-v2 /
+    /// f002-withdraw-cap / f003 precedents and frozen at activation. Receipt logs
+    /// and the aggregate `logs_bloom` are unaffected; only the root ENCODING changes.
+    pub evm_typed_receipt_root_activation_daa_score: u64,
 }
 
 impl Params {
@@ -597,6 +607,8 @@ impl Params {
             evm_gas_pool_v2_activation_daa_score: self.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: self.evm_f002_withdraw_cap_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score: self.evm_f003_mldsa_verify_activation_daa_score,
+            // §12 Phase-7: consensus-fixed (the receipts-root encoding is consensus), never overridable.
+            evm_typed_receipt_root_activation_daa_score: self.evm_typed_receipt_root_activation_daa_score,
         }
     }
 }
@@ -1002,6 +1014,7 @@ pub const MAINNET_PARAMS: Params = Params {
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
+    evm_typed_receipt_root_activation_daa_score: u64::MAX,
 };
 
 pub const TESTNET_PARAMS: Params = Params {
@@ -1098,6 +1111,7 @@ pub const TESTNET_PARAMS: Params = Params {
     // M-03 withdrawal cap: inert (u64::MAX) — its activation is a separate coordinated deploy.
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
+    evm_typed_receipt_root_activation_daa_score: u64::MAX,
 };
 
 pub const SIMNET_PARAMS: Params = Params {
@@ -1163,6 +1177,7 @@ pub const SIMNET_PARAMS: Params = Params {
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
+    evm_typed_receipt_root_activation_daa_score: u64::MAX,
 };
 
 pub const DEVNET_PARAMS: Params = Params {
@@ -1183,6 +1198,7 @@ pub const DEVNET_PARAMS: Params = Params {
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
+    evm_typed_receipt_root_activation_daa_score: u64::MAX,
     // kaspa-pq: devnet now uses the same MISAKA DNS seeders as mainnet/testnet for automatic
     // peer discovery (devnet default P2P port is 26611, matching the live mesh — see
     // NetworkId::default_p2p_port). Nodes launched WITHOUT `--nodnsseed` resolve these to find
