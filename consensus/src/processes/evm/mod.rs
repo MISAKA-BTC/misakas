@@ -534,6 +534,124 @@ pub fn gather_reconstruction_inputs<E: std::fmt::Display>(
     Ok((seed, pending))
 }
 
+/// C-01 Stage 1: apply a forward [`EvmStateDiffV2`] to the flat latest-canonical
+/// store (prefix 234) — the persistent analog of the §12 in-memory `apply_state_diff`.
+/// Writes changed accounts and deletes destroyed / EIP-161-empty ones into `batch`,
+/// reusing the §12 diff (220) as the change set (no new format). The caller commits
+/// `batch` atomically with the block so the flat state advances with the canonical head.
+pub fn apply_diff_to_flat(
+    flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
+    batch: &mut rocksdb::WriteBatch,
+    diff: &kaspa_consensus_core::evm::EvmStateDiffV2,
+) -> Result<(), kaspa_database::prelude::StoreError> {
+    use kaspa_consensus_core::evm::{EvmU256, FlatAccount, EVM_EMPTY_CODE_HASH};
+    use std::collections::BTreeMap;
+    for ch in &diff.account_changes {
+        let addr = ch.address;
+        let Some(after) = &ch.after else {
+            flat.delete_batch(batch, addr)?; // destroyed
+            continue;
+        };
+        // Read current storage (or empty for a new account), apply the slot changes.
+        let cur = flat.get(addr)?.unwrap_or_default();
+        let mut storage: BTreeMap<[u8; 32], [u8; 32]> = cur.storage.iter().map(|(s, v)| (s.to_be_bytes(), v.to_be_bytes())).collect();
+        for sc in &ch.storage_changes {
+            let slot = sc.slot.to_be_bytes();
+            if sc.after.is_zero() {
+                storage.remove(&slot);
+            } else {
+                storage.insert(slot, sc.after.to_be_bytes());
+            }
+        }
+        // An account left EIP-161-empty is not in canonical form ⇒ delete it.
+        if after.nonce == 0 && after.balance.is_zero() && after.code_hash == EVM_EMPTY_CODE_HASH && storage.is_empty() {
+            flat.delete_batch(batch, addr)?;
+        } else {
+            let storage = storage.into_iter().map(|(s, v)| (EvmU256::from_be_bytes(s), EvmU256::from_be_bytes(v))).collect();
+            flat.write_batch(batch, addr, FlatAccount { core: after.clone(), storage })?;
+        }
+    }
+    Ok(())
+}
+
+/// C-01 Stage 1: materialize the full canonical [`EvmStateSnapshot`] from the flat
+/// store — the input to the keccak-MPT `state_root` recompute and to the IBD
+/// pruning-point snapshot. Code is resolved from the content-addressed store (222);
+/// a missing code (`code_hash != empty`, absent) is store corruption — fail closed.
+/// `flat.iter()` yields address order, so the snapshot is already canonical-sorted.
+pub fn materialize_snapshot(
+    flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
+    code: &crate::model::stores::evm::DbEvmCodeStore,
+) -> Result<kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_database::prelude::StoreError> {
+    use crate::model::stores::evm::EvmCodeStoreReader;
+    use kaspa_consensus_core::evm::{EvmStateSnapshot, EVM_EMPTY_CODE_HASH};
+    let mut accounts = Vec::new();
+    for entry in flat.iter() {
+        let (addr, fa) = entry?;
+        let code_bytes = if fa.core.code_hash == EVM_EMPTY_CODE_HASH {
+            Vec::new()
+        } else {
+            code.get(fa.core.code_hash)?.ok_or_else(|| {
+                kaspa_database::prelude::StoreError::DataInconsistency(format!("flat materialize: missing code for {addr}"))
+            })?
+        };
+        accounts.push(fa.to_snapshot(addr, code_bytes));
+    }
+    Ok(EvmStateSnapshot { accounts })
+}
+
+#[cfg(test)]
+mod flat_state_tests {
+    use crate::model::stores::evm::{DbEvmCodeStore, DbEvmFlatAccountStore};
+    use kaspa_consensus_core::evm::{compute_state_diff, EvmAccountSnapshot, EvmAddress, EvmStateSnapshot, EvmU256, EVM_EMPTY_CODE_HASH};
+    use kaspa_database::create_temp_db;
+    use kaspa_database::prelude::{CachePolicy, ConnBuilder};
+    use kaspa_hashes::{EvmH256, Hash64};
+    use rocksdb::WriteBatch;
+
+    fn acc(a: u8, nonce: u64, bal: u64, ch: EvmH256, code: &[u8], storage: &[(u64, u64)]) -> EvmAccountSnapshot {
+        let mut st: Vec<(EvmU256, EvmU256)> = storage.iter().map(|(s, v)| (EvmU256::from_u128(*s as u128), EvmU256::from_u128(*v as u128))).collect();
+        st.sort_unstable_by(|x, y| x.0.to_be_bytes().cmp(&y.0.to_be_bytes()));
+        EvmAccountSnapshot { address: EvmAddress::from_bytes([a; 20]), nonce, balance: EvmU256::from_u128(bal as u128), code_hash: ch, code: code.to_vec(), storage: st }
+    }
+    fn snap(accs: Vec<EvmAccountSnapshot>) -> EvmStateSnapshot {
+        let mut a = accs;
+        a.sort_unstable_by(|x, y| x.address.as_bytes().cmp(&y.address.as_bytes()));
+        EvmStateSnapshot { accounts: a }
+    }
+
+    /// Applying the §12 diff chain to the FLAT store, then materializing, reproduces
+    /// the canonical snapshot at each block (the persistent equivalence the writer relies on).
+    #[test]
+    fn flat_apply_then_materialize_round_trips_a_chain() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
+        let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
+
+        let ca = EvmH256::from_bytes([0xAA; 32]);
+        let blob: &[u8] = &[0x60, 0x00, 0xfd];
+        // seed the content-addressed code (the writer does this from diff_code_entries).
+        let mut cb = WriteBatch::default();
+        code.write_batch(&mut cb, ca, blob.to_vec()).unwrap();
+        db.write(cb).unwrap();
+
+        let chain = vec![
+            EvmStateSnapshot::default(),
+            snap(vec![acc(0x01, 1, 1000, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x02, 0, 500, EVM_EMPTY_CODE_HASH, &[], &[])]),
+            snap(vec![acc(0x01, 2, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x03, 1, 0, ca, blob, &[(1, 7), (2, 9)])]), // 0x02 self-destructed; contract deployed
+            snap(vec![acc(0x01, 2, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x03, 1, 0, ca, blob, &[(1, 7), (3, 4)])]), // slot 2 cleared, slot 3 set
+        ];
+        for i in 1..chain.len() {
+            let diff = compute_state_diff(&chain[i - 1], &chain[i], Hash64::from_bytes([i as u8; 64]), Hash64::from_bytes([(i - 1) as u8; 64]));
+            let mut b = WriteBatch::default();
+            super::apply_diff_to_flat(&flat, &mut b, &diff).unwrap();
+            db.write(b).unwrap();
+            let got = super::materialize_snapshot(&flat, &code).unwrap();
+            assert_eq!(got, chain[i], "flat materialize at block {i} must equal the canonical snapshot");
+        }
+    }
+}
+
 #[cfg(test)]
 mod gather_tests {
     use super::*;
