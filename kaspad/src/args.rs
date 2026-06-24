@@ -1,6 +1,7 @@
 use clap::{Arg, ArgAction, Command, arg};
 use kaspa_consensus_core::{
     config::Config,
+    evm::EvmHistoryMode,
     network::{NetworkId, NetworkType},
 };
 use kaspa_core::kaspad_env::version;
@@ -36,6 +37,12 @@ pub struct Args {
     /// adapter (effective only in an `--features evm` build).
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub evm_rpc_listen: Option<ContextualNetAddress>,
+    /// kaspa-pq EVM Lane (§12 archive): EVM state-history retention mode
+    /// (`head`/`recent`/`archive`). Default `recent`. Effective only in an
+    /// `--features evm` build; the diff/checkpoint retention enforcement lands with
+    /// the §12 archive writer.
+    #[serde(default)]
+    pub evm_history_mode: EvmHistoryMode,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub rpclisten_borsh: Option<WrpcNetAddress>,
     #[serde_as(as = "Option<DisplayFromStr>")]
@@ -144,6 +151,7 @@ impl Default for Args {
             logdir: None,
             rpclisten: None,
             evm_rpc_listen: None,
+            evm_history_mode: EvmHistoryMode::Recent,
             wrpc_verbose: false,
             log_level: "INFO".into(),
             connect_peers: vec![],
@@ -274,6 +282,14 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(ContextualNetAddress))
                 .help("Interface:port for the Ethereum JSON-RPC adapter (EVM lane; default port: 8545). Effective only in an --features evm build."),
+        )
+        .arg(
+            Arg::new("evm-history-mode")
+                .long("evm-history-mode")
+                .env("KASPAD_EVM_HISTORY_MODE")
+                .value_name("MODE")
+                .value_parser(["head", "recent", "archive"])
+                .help("EVM state-history retention: head | recent | archive (default: recent). Effective only in an --features evm build."),
         )
         .arg(
             Arg::new("rpclisten-borsh")
@@ -550,6 +566,10 @@ impl Args {
             no_log_files: arg_match_unwrap_or::<bool>(&m, "nologfiles", defaults.no_log_files),
             rpclisten: m.get_one::<ContextualNetAddress>("rpclisten").cloned().or(defaults.rpclisten),
             evm_rpc_listen: m.get_one::<ContextualNetAddress>("evm-rpc-listen").cloned().or(defaults.evm_rpc_listen),
+            evm_history_mode: m
+                .get_one::<String>("evm-history-mode")
+                .and_then(|s| EvmHistoryMode::from_str_opt(s))
+                .unwrap_or(defaults.evm_history_mode),
             rpclisten_borsh: m.get_one::<WrpcNetAddress>("rpclisten-borsh").cloned().or(defaults.rpclisten_borsh),
             rpclisten_json: m.get_one::<WrpcNetAddress>("rpclisten-json").cloned().or(defaults.rpclisten_json),
             unsafe_rpc: arg_match_unwrap_or::<bool>(&m, "unsaferpc", defaults.unsafe_rpc),

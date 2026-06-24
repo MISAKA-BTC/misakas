@@ -191,6 +191,20 @@ pub enum DatabaseStorePrefixes {
     /// commitment.
     EvmTraceReplay = 219,
 
+    /// kaspa-pq EVM Lane (§12 archive) — keyed by canonical `BlockHash`: the forward
+    /// state DIFF ([`EvmStateDiffV2`]) of the block over its selected parent. The
+    /// long-term retention form (the per-block full snapshot at prefix 206 is the
+    /// hot/reorg-window form); reconstructed historical state replays these from the
+    /// nearest checkpoint. RPC/archive data only — never part of any commitment.
+    EvmStateDiffV2 = 220,
+    /// kaspa-pq EVM Lane (§12 archive) — keyed by `BlockHash`: a periodic full-state
+    /// [`EvmStateCheckpointV1`] (≈ every 2048 canonical blocks + at pruning advance),
+    /// the seed a historical reconstruction starts from. RPC/archive data only.
+    EvmStateCheckpoint = 221,
+    /// kaspa-pq EVM Lane (§12 archive) — content-addressed `code_hash → code` store so
+    /// diffs/checkpoints carry only the code hash. RPC/archive data only.
+    EvmCode = 222,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

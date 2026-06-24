@@ -13,7 +13,8 @@
 
 use kaspa_consensus_core::evm::{
     decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket, CanonicalEvmHeads, EvmBlockReceipts, EvmExecutionHeader,
-    EvmExecutionPayload, EvmRawTx, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, LogPostingKind, LogPostingLoc,
+    EvmExecutionPayload, EvmRawTx, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations,
+    LogPostingKind, LogPostingLoc,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
@@ -456,6 +457,130 @@ impl EvmTraceReplayStoreReader for DbEvmTraceReplayStore {
     }
     fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         self.access.has(hash)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §12 archive — state diff (prefix 220), checkpoint (prefix 221), and the
+// content-addressed code store (prefix 222). All RPC/archive data only; keyed by
+// the canonical `BlockHash` (diff/checkpoint) or `code_hash` (code). The diff and
+// checkpoint stores refuse overwrite (a block's archive form is computed once); the
+// code store is content-addressed so a re-write is the identical bytes (upsert).
+// ---------------------------------------------------------------------------
+
+pub trait EvmStateDiffStoreReader {
+    fn get(&self, hash: BlockHash) -> Result<Option<EvmStateDiffV2>, StoreError>;
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmStateDiffStore {
+    access: CachedDbAccess<BlockHash, EvmStateDiffV2, BlockHasher>,
+}
+
+impl DbEvmStateDiffStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmStateDiffV2.into()) }
+    }
+
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, diff: EvmStateDiffV2) -> Result<(), StoreError> {
+        if self.access.has(hash)? {
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
+        }
+        self.access.write(BatchDbWriter::new(batch), hash, diff)
+    }
+
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), hash)
+    }
+}
+
+impl EvmStateDiffStoreReader for DbEvmStateDiffStore {
+    fn get(&self, hash: BlockHash) -> Result<Option<EvmStateDiffV2>, StoreError> {
+        match self.access.read(hash) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
+        self.access.has(hash)
+    }
+}
+
+pub trait EvmStateCheckpointStoreReader {
+    fn get(&self, hash: BlockHash) -> Result<Option<EvmStateCheckpointV1>, StoreError>;
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmStateCheckpointStore {
+    access: CachedDbAccess<BlockHash, EvmStateCheckpointV1, BlockHasher>,
+}
+
+impl DbEvmStateCheckpointStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmStateCheckpoint.into()) }
+    }
+
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, checkpoint: EvmStateCheckpointV1) -> Result<(), StoreError> {
+        if self.access.has(hash)? {
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
+        }
+        self.access.write(BatchDbWriter::new(batch), hash, checkpoint)
+    }
+
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), hash)
+    }
+}
+
+impl EvmStateCheckpointStoreReader for DbEvmStateCheckpointStore {
+    fn get(&self, hash: BlockHash) -> Result<Option<EvmStateCheckpointV1>, StoreError> {
+        match self.access.read(hash) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
+        self.access.has(hash)
+    }
+}
+
+pub trait EvmCodeStoreReader {
+    /// The code bytes for a `code_hash` (absent = never stored).
+    fn get(&self, code_hash: EvmH256) -> Result<Option<Vec<u8>>, StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmCodeStore {
+    access: CachedDbAccess<EvmH256, Vec<u8>>,
+}
+
+impl DbEvmCodeStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmCode.into()) }
+    }
+
+    /// Content-addressed upsert: `code_hash = keccak256(code)`, so a re-write is the
+    /// identical bytes (idempotent, no overwrite guard needed).
+    pub fn write_batch(&self, batch: &mut WriteBatch, code_hash: EvmH256, code: Vec<u8>) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), code_hash, code)
+    }
+
+    pub fn delete_batch(&self, batch: &mut WriteBatch, code_hash: EvmH256) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), code_hash)
+    }
+}
+
+impl EvmCodeStoreReader for DbEvmCodeStore {
+    fn get(&self, code_hash: EvmH256) -> Result<Option<Vec<u8>>, StoreError> {
+        match self.access.read(code_hash) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
