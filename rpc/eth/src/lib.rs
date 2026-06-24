@@ -254,6 +254,25 @@ pub struct EthCallFrame {
     pub misaka_accepting_block: Option<Vec<u8>>,
 }
 
+/// One account's `prestateTracer` (diffMode) state view (§11.1). `code` empty ⇒ no
+/// code; `storage` holds the diff-relevant `(slot, value)` big-endian pairs.
+#[derive(Clone, Debug)]
+pub struct EthAccountState {
+    pub balance: [u8; 32],
+    pub nonce: u64,
+    pub code: Vec<u8>,
+    pub storage: Vec<([u8; 32], [u8; 32])>,
+}
+
+/// One account's `prestateTracer` diffMode entry. `pre = None` ⇒ created by the tx;
+/// `post = None` ⇒ self-destructed.
+#[derive(Clone, Debug)]
+pub struct EthPrestateAccount {
+    pub address: [u8; 20],
+    pub pre: Option<EthAccountState>,
+    pub post: Option<EthAccountState>,
+}
+
 #[async_trait]
 pub trait EthProvider: Send + Sync + 'static {
     /// The EVM chain id (`EVM_CHAIN_ID`).
@@ -389,6 +408,13 @@ pub trait EthProvider: Send + Sync + 'static {
     /// (§11.6 — skipped txs report a reason via `misaka_getEvmTxStatus`). Default:
     /// unsupported (providers without the EVM executor).
     async fn trace_transaction(&self, _tx_hash: [u8; 32]) -> EthResult<Option<EthCallFrame>> {
+        Err(EthRpcError::new(codes::METHOD_NOT_FOUND, "debug_traceTransaction is not available on this node"))
+    }
+
+    /// `debug_traceTransaction` with the `prestateTracer` (diffMode, §11.1): the
+    /// per-account pre/post state diff of the accepted tx (same replay as the
+    /// callTracer). `None` = unknown / not accepted. Default: unsupported.
+    async fn trace_prestate(&self, _tx_hash: [u8; 32]) -> EthResult<Option<Vec<EthPrestateAccount>>> {
         Err(EthRpcError::new(codes::METHOD_NOT_FOUND, "debug_traceTransaction is not available on this node"))
     }
 }
@@ -1019,22 +1045,57 @@ async fn eth_get_transaction_by_hash(provider: &Arc<dyn EthProvider>, params: &V
     Ok(provider.transaction_by_hash(hash).await?.map(|t| render_tx(&t)).unwrap_or(Value::Null))
 }
 
-/// `debug_traceTransaction(txHash, { tracer: "callTracer" })` (§11.1). Only the
-/// Geth `callTracer` is supported in this increment; any other named tracer is an
-/// explicit `invalid_params` (no silent fallback to a different shape).
+/// `debug_traceTransaction(txHash, { tracer })` (§11.1). Supports the Geth
+/// `callTracer` (default) and `prestateTracer` (diffMode); any other named tracer
+/// is an explicit `invalid_params` (no silent fallback to a different shape).
 async fn debug_trace_transaction(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let hash = parse_hash32_param(params, 0)?;
     // Optional second arg: the tracer config object. Accept an absent/empty config
-    // (defaults to callTracer) or an explicit `"callTracer"`; reject others.
+    // (defaults to callTracer) or an explicit supported tracer name; reject others.
     let requested_tracer =
         params.as_array().and_then(|a| a.get(1)).filter(|cfg| !cfg.is_null()).and_then(|cfg| cfg.get("tracer")).and_then(|t| t.as_str());
     match requested_tracer {
-        None | Some("callTracer") => {}
-        Some(other) => {
-            return Err(EthRpcError::invalid_params(format!("unsupported tracer {other:?}; only \"callTracer\" is available")))
+        None | Some("callTracer") => Ok(provider.trace_transaction(hash).await?.map(|f| render_call_frame(&f)).unwrap_or(Value::Null)),
+        Some("prestateTracer") => Ok(provider.trace_prestate(hash).await?.map(|a| render_prestate(&a)).unwrap_or(Value::Null)),
+        Some(other) => Err(EthRpcError::invalid_params(format!(
+            "unsupported tracer {other:?}; supported: \"callTracer\", \"prestateTracer\""
+        ))),
+    }
+}
+
+/// Render the `prestateTracer` diffMode result as `{ "pre": {addr: state}, "post":
+/// {addr: state} }` (§11.1). An account appears under `pre` unless it was created,
+/// and under `post` unless it was self-destructed.
+fn render_prestate(accounts: &[EthPrestateAccount]) -> Value {
+    let hx = |b: &[u8]| format!("0x{}", faster_hex::hex_string(b));
+    let render_state = |s: &EthAccountState| {
+        let mut m = serde_json::Map::new();
+        m.insert("balance".to_string(), quantity_from_be32(&s.balance));
+        m.insert("nonce".to_string(), quantity(s.nonce as u128));
+        if !s.code.is_empty() {
+            m.insert("code".to_string(), json!(hx(&s.code)));
+        }
+        if !s.storage.is_empty() {
+            let mut st = serde_json::Map::new();
+            for (k, v) in &s.storage {
+                st.insert(hx(k), json!(hx(v)));
+            }
+            m.insert("storage".to_string(), Value::Object(st));
+        }
+        Value::Object(m)
+    };
+    let mut pre = serde_json::Map::new();
+    let mut post = serde_json::Map::new();
+    for a in accounts {
+        let addr = hx(&a.address);
+        if let Some(s) = &a.pre {
+            pre.insert(addr.clone(), render_state(s));
+        }
+        if let Some(s) = &a.post {
+            post.insert(addr, render_state(s));
         }
     }
-    Ok(provider.trace_transaction(hash).await?.map(|f| render_call_frame(&f)).unwrap_or(Value::Null))
+    json!({ "pre": Value::Object(pre), "post": Value::Object(post) })
 }
 
 /// `trace_transaction` (Parity/OpenEthereum flat-call format, design §11.1): the

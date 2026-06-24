@@ -26,7 +26,7 @@ use kaspa_consensus_core::evm::{
 };
 use revm::interpreter::{CallInputs, CallOutcome, CallScheme, CreateInputs, CreateOutcome, InstructionResult};
 use revm::primitives::{Address, Bytes, U256};
-use revm::{inspector_handle_register, Database, Evm, EvmContext, Inspector};
+use revm::{inspector_handle_register, Database, DatabaseRef, Evm, EvmContext, Inspector};
 
 /// The kind of an EVM call frame, rendered as Geth's `callTracer` `type` field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,13 +130,38 @@ impl std::fmt::Display for TraceError {
     }
 }
 
-/// The result of a successful trace.
+/// A per-account state view for the `prestateTracer` diff (the balance/nonce/code
+/// plus the storage slots relevant to the diff).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AccountStateView {
+    pub balance: U256,
+    pub nonce: u64,
+    /// Empty when the account has no code.
+    pub code: Bytes,
+    /// `(slot, value)` for the slots included in the diff.
+    pub storage: Vec<(U256, U256)>,
+}
+
+/// One account's `prestateTracer` (diffMode) entry. `pre = None` ⇒ the account did
+/// not exist before (created by the tx); `post = None` ⇒ it was self-destructed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrestateAccount {
+    pub address: Address,
+    pub pre: Option<AccountStateView>,
+    pub post: Option<AccountStateView>,
+}
+
+/// The result of a successful trace. A single replay yields BOTH the callTracer
+/// call tree and the prestateTracer diff, so the RPC layer can serve either tracer
+/// from one execution.
 #[derive(Clone, Debug)]
 pub struct TracedTx {
     pub frame: CallFrame,
     pub gas_used: u64,
     pub succeeded: bool,
     pub output: Bytes,
+    /// `prestateTracer` diffMode: every account the tx changed, pre vs post.
+    pub prestate: Vec<PrestateAccount>,
 }
 
 /// Resolve the acceptance-candidate index whose recorded outcome is
@@ -293,7 +318,65 @@ pub fn trace_accepted_tx(
     if output.len() > tracer_output_cap(&limits) {
         return Err(TraceError::ResourceExceeded(format!("output {} bytes exceeds cap", output.len())));
     }
-    Ok(TracedTx { frame, gas_used: result.result.gas_used(), succeeded: result.result.is_success(), output })
+
+    // prestateTracer (diffMode): every account the tx changed, pre vs post, computed
+    // from the pre-target state (pre) and revm's post-execution state set (post). The
+    // same single replay above feeds it — no extra execution.
+    let prestate = compute_prestate(&pre_state, &result.state);
+
+    Ok(TracedTx { frame, gas_used: result.result.gas_used(), succeeded: result.result.is_success(), output, prestate })
+}
+
+/// Compute the `prestateTracer` diffMode entries from the replay's pre-target state
+/// and revm's post-execution `EvmState` (the touched-account set). An account is
+/// included iff its balance/nonce/code changed, it gained/lost storage values, it
+/// was created, or it self-destructed. Storage entries are the slots whose value
+/// actually changed (`original_value != present_value`).
+fn compute_prestate(pre_state: &revm::db::CacheDB<revm::db::EmptyDB>, post: &revm::primitives::EvmState) -> Vec<PrestateAccount> {
+    let mut out = Vec::new();
+    for (addr, acc) in post.iter() {
+        let changed_slots: Vec<(U256, U256, U256)> = acc
+            .storage
+            .iter()
+            .filter(|(_, s)| s.original_value != s.present_value)
+            .map(|(k, s)| (*k, s.original_value, s.present_value))
+            .collect();
+        let pre_info = pre_state.basic_ref(*addr).ok().flatten();
+        let created = acc.is_created() || pre_info.is_none();
+        let selfdestructed = acc.is_selfdestructed();
+        let info_changed = match &pre_info {
+            Some(p) => p.balance != acc.info.balance || p.nonce != acc.info.nonce || p.code_hash != acc.info.code_hash,
+            None => !acc.info.is_empty(),
+        };
+        if !info_changed && changed_slots.is_empty() && !created && !selfdestructed {
+            continue; // touched but unchanged — omit from a diff
+        }
+        let pre = if created {
+            None
+        } else {
+            let p = pre_info.as_ref();
+            Some(AccountStateView {
+                balance: p.map(|i| i.balance).unwrap_or_default(),
+                nonce: p.map(|i| i.nonce).unwrap_or_default(),
+                code: p.and_then(|i| i.code.clone()).map(|c| c.original_bytes()).unwrap_or_default(),
+                storage: changed_slots.iter().map(|(k, orig, _)| (*k, *orig)).collect(),
+            })
+        };
+        let post_view = if selfdestructed {
+            None
+        } else {
+            Some(AccountStateView {
+                balance: acc.info.balance,
+                nonce: acc.info.nonce,
+                code: acc.info.code.clone().map(|c| c.original_bytes()).unwrap_or_default(),
+                storage: changed_slots.iter().map(|(k, _, pres)| (*k, *pres)).collect(),
+            })
+        };
+        out.push(PrestateAccount { address: *addr, pre, post: post_view });
+    }
+    // Deterministic order (HashMap iteration is unordered) for stable output.
+    out.sort_by(|a, b| a.address.cmp(&b.address));
+    out
 }
 
 fn tracer_output_cap(limits: &TraceLimits) -> usize {
@@ -787,5 +870,38 @@ mod tests {
         // from the recorded v2 outcome ⇒ fail closed, never a wrong trace.
         let err = trace_accepted_tx(&snap, None, &body, 2, &receipt_c, u64::MAX, u64::MAX, u64::MAX, TraceLimits::default());
         assert!(matches!(err, Err(TraceError::ReplayMismatch(_))), "wrong fence must fail closed, got {err:?}");
+    }
+
+    /// prestateTracer (diffMode): a tx that SSTOREs slot 0 = 0x2a yields a storage
+    /// diff (pre 0 → post 0x2a) on the contract and a nonce bump on the sender.
+    #[test]
+    fn trace_prestate_captures_storage_diff() {
+        // Runtime code `PUSH1 0x2a PUSH1 0x00 SSTORE STOP` writes slot 0 = 0x2a.
+        let code = Bytes::from(vec![0x60, 0x2a, 0x60, 0x00, 0x55, 0x00]);
+        let contract = Address::from([0xDDu8; 20]);
+        let (sender, raw) = signed_tx(0, revm::primitives::TxKind::Call(contract), 0, 100_000, Bytes::new());
+        let mut db = CacheDB::new(EmptyDB::default());
+        db.insert_account_info(
+            sender,
+            AccountInfo { balance: U256::from(10u128).pow(U256::from(22)), nonce: 0, code_hash: KECCAK_EMPTY, code: None },
+        );
+        db.insert_account_info(
+            contract,
+            AccountInfo { balance: U256::ZERO, nonce: 1, code_hash: keccak256(&code), code: Some(Bytecode::new_raw(code)) },
+        );
+        let snap = snapshot_from_cachedb(&db);
+        let (receipt, body) = run_and_body(&snap, raw);
+        assert!(receipt.succeeded);
+
+        let traced =
+            trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, TraceLimits::default()).unwrap();
+
+        let c = traced.prestate.iter().find(|a| a.address == contract).expect("contract in prestate diff");
+        assert_eq!(c.pre.as_ref().unwrap().storage, vec![(U256::ZERO, U256::ZERO)], "slot 0 pre = 0");
+        assert_eq!(c.post.as_ref().unwrap().storage, vec![(U256::ZERO, U256::from(0x2a))], "slot 0 post = 0x2a");
+
+        let s = traced.prestate.iter().find(|a| a.address == sender).expect("sender in prestate diff");
+        assert_eq!(s.pre.as_ref().unwrap().nonce, 0);
+        assert_eq!(s.post.as_ref().unwrap().nonce, 1, "sender nonce bumped");
     }
 }

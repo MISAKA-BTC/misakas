@@ -12,8 +12,8 @@ use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
 use kaspa_eth_rpc::{
-    BlockId, EthAccessListItem, EthBlock, EthCallFrame, EthCallRequest, EthEvmTxStatus, EthFeeHistory, EthLog, EthLogEntry, EthLogEvent,
-    EthProvider, EthReceipt, EthResult, EthRpcError, EthTx,
+    BlockId, EthAccessListItem, EthAccountState, EthBlock, EthCallFrame, EthCallRequest, EthEvmTxStatus, EthFeeHistory, EthLog, EthLogEntry,
+    EthLogEvent, EthPrestateAccount, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_p2p_flows::flow_context::FlowContext;
@@ -357,83 +357,23 @@ impl EthProvider for NodeEthProvider {
         }))
     }
 
-    /// `debug_traceTransaction` with the Geth `callTracer` (design §11). Resolves
-    /// the accepted tx → its accepting block's replay plan → the selected parent's
-    /// committed pre-state, replays it with a call-frame inspector, reconciles
-    /// against the committed receipt, and returns the call tree with the §11.4
-    /// MISAKA extensions on the root frame.
+    /// `debug_traceTransaction` with the Geth `callTracer` (design §11): the call
+    /// tree of the replay, with the §11.4 MISAKA extensions on the root frame.
     async fn trace_transaction(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthCallFrame>> {
-        // §11.5: bound concurrent replays (each is a full CPU-bound re-execution).
-        // The permit is MOVED INTO the blocking closure so it is released only when
-        // the (uncancellable) replay actually finishes — not when the awaiting
-        // connection times out and drops this future. Otherwise a client could time
-        // out + reconnect to pile up more than MAX_CONCURRENT_TRACES live replays.
-        let permit = self
-            .trace_semaphore
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| EthRpcError::server("too many concurrent traces in flight; retry shortly"))?;
-        let session = self.consensus_manager.consensus().session().await;
-        let h = EvmH256::from_bytes(tx_hash);
-        // One spawn_blocking: store resolution + the revm replay are all blocking.
-        session
-            .spawn_blocking(move |c| {
-                let _permit = permit; // held until the blocking replay completes
-                // 1. Resolve the tx to its canonical accepting block + receipt. `None`
-                //    ⇒ unknown / not accepted on the selected chain (skipped txs are
-                //    reported by misaka_getEvmTxStatus, §11.6).
-                let Some(view) = c.get_evm_tx_receipt(h).ok().flatten() else { return Ok(None) };
-                let accepting = view.accepting_block;
-                // 2. The accepting block's replay plan (prefix 219).
-                let Some(body) = c.get_evm_trace_replay_body(accepting).ok().flatten() else {
-                    return Err(EthRpcError::server(
-                        "trace data unavailable for this transaction's block (pruned or recorded before trace support)",
-                    ));
-                };
-                // 3. Selected-parent committed post-state = the replay PRE-state. The
-                //    parent's EVM header gates snapshot-vs-genesis-default (mirrors the
-                //    consensus acceptance path; a header-present-but-snapshot-absent
-                //    parent is pruned ⇒ historical state unavailable, §11.5).
-                let parent_header = c.get_evm_header_of(body.selected_parent).ok().flatten();
-                let parent_snapshot = if parent_header.is_some() {
-                    match c.get_evm_state_snapshot_of(body.selected_parent).ok().flatten() {
-                        Some(s) => s,
-                        None => {
-                            return Err(EthRpcError::server(
-                                "historical state unavailable for trace (selected-parent state snapshot pruned)",
-                            ))
-                        }
-                    }
-                } else {
-                    Default::default()
-                };
-                // 4. Replay with the call-frame inspector, under the SAME activation
-                //    fences the accepting block executed with (gas-pool v1/v2,
-                //    withdraw-cap, F003) — read from the network Params, not assumed
-                //    inert (testnet runs a finite gas-pool-v2 fence). The engine also
-                //    fail-closes if the re-derived prefix outcomes diverge.
-                let (gas_pool_v2, f002_withdraw_cap, f003_mldsa_verify) = c.evm_activation_fences();
-                let traced = kaspa_evm::trace::trace_accepted_tx(
-                    &parent_snapshot,
-                    parent_header.as_ref(),
-                    &body,
-                    view.receipt_index,
-                    &view.receipt,
-                    gas_pool_v2,
-                    f002_withdraw_cap,
-                    f003_mldsa_verify,
-                    kaspa_evm::trace::TraceLimits::default(),
-                )
-                .map_err(|e| EthRpcError::server(format!("{e}")))?;
-                // 5. Convert to the wire frame + attach §11.4 root extensions.
-                let originating = kaspa_evm::trace::candidate_index_for_receipt(&body, view.receipt_index)
-                    .map(|i| body.txs[i].originating_payload_block.as_bytes().to_vec());
-                let mut root = convert_call_frame(&traced.frame);
-                root.misaka_originating_payload_block = originating;
-                root.misaka_accepting_block = Some(accepting.as_bytes().to_vec());
-                Ok(Some(root))
-            })
-            .await
+        Ok(self.replay_trace(tx_hash).await?.map(|(traced, accepting, originating)| {
+            let mut root = convert_call_frame(&traced.frame);
+            root.misaka_originating_payload_block = originating.map(|h| h.as_bytes().to_vec());
+            root.misaka_accepting_block = Some(accepting.as_bytes().to_vec());
+            root
+        }))
+    }
+
+    /// `debug_traceTransaction` with the `prestateTracer` (diffMode, §11.1): the
+    /// per-account pre/post state diff — the SAME replay as the callTracer.
+    async fn trace_prestate(&self, tx_hash: [u8; 32]) -> EthResult<Option<Vec<EthPrestateAccount>>> {
+        Ok(self.replay_trace(tx_hash).await?.map(|(traced, _accepting, _originating)| {
+            traced.prestate.iter().map(convert_prestate_account).collect()
+        }))
     }
 
     /// `misaka_getEvmTxStatus`: the full EVM-lane lifecycle of a tx by hash —
@@ -708,6 +648,79 @@ impl EthProvider for NodeEthProvider {
 }
 
 impl NodeEthProvider {
+    /// §11 shared replay: resolve the accepted tx → its accepting block's replay
+    /// plan → the selected-parent committed pre-state, replay it once with the
+    /// call-frame inspector under the network's real activation fences, and return
+    /// the [`kaspa_evm::trace::TracedTx`] (callTracer frame + prestateTracer diff)
+    /// plus the accepting block and originating payload block. Both `trace_*`
+    /// methods drive off this so a single replay serves either tracer.
+    #[allow(clippy::type_complexity)]
+    async fn replay_trace(
+        &self,
+        tx_hash: [u8; 32],
+    ) -> EthResult<Option<(kaspa_evm::trace::TracedTx, kaspa_consensus_core::BlockHash, Option<kaspa_consensus_core::BlockHash>)>> {
+        // §11.5: bound concurrent replays. The permit is MOVED INTO the blocking
+        // closure so it is released only when the (uncancellable) replay finishes —
+        // not when the awaiting connection times out and drops this future.
+        let permit = self
+            .trace_semaphore
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| EthRpcError::server("too many concurrent traces in flight; retry shortly"))?;
+        let session = self.consensus_manager.consensus().session().await;
+        let h = EvmH256::from_bytes(tx_hash);
+        session
+            .spawn_blocking(move |c| {
+                let _permit = permit; // held until the blocking replay completes
+                // Resolve the tx to its canonical accepting block + receipt. `None` ⇒
+                // unknown / not accepted on the selected chain (skipped txs report a
+                // reason via misaka_getEvmTxStatus, §11.6).
+                let Some(view) = c.get_evm_tx_receipt(h).ok().flatten() else { return Ok(None) };
+                let accepting = view.accepting_block;
+                let Some(body) = c.get_evm_trace_replay_body(accepting).ok().flatten() else {
+                    return Err(EthRpcError::server(
+                        "trace data unavailable for this transaction's block (pruned or recorded before trace support)",
+                    ));
+                };
+                // Selected-parent committed post-state = the replay PRE-state. The
+                // parent's EVM header gates snapshot-vs-genesis-default; a header-
+                // present-but-snapshot-absent parent is pruned ⇒ unavailable (§11.5).
+                let parent_header = c.get_evm_header_of(body.selected_parent).ok().flatten();
+                let parent_snapshot = if parent_header.is_some() {
+                    match c.get_evm_state_snapshot_of(body.selected_parent).ok().flatten() {
+                        Some(s) => s,
+                        None => {
+                            return Err(EthRpcError::server(
+                                "historical state unavailable for trace (selected-parent state snapshot pruned)",
+                            ))
+                        }
+                    }
+                } else {
+                    Default::default()
+                };
+                // Replay under the SAME activation fences the accepting block executed
+                // with (gas-pool v1/v2, withdraw-cap, F003) — read from the network
+                // Params, not assumed inert (testnet runs a finite gas-pool-v2 fence).
+                let (gas_pool_v2, f002_withdraw_cap, f003_mldsa_verify) = c.evm_activation_fences();
+                let traced = kaspa_evm::trace::trace_accepted_tx(
+                    &parent_snapshot,
+                    parent_header.as_ref(),
+                    &body,
+                    view.receipt_index,
+                    &view.receipt,
+                    gas_pool_v2,
+                    f002_withdraw_cap,
+                    f003_mldsa_verify,
+                    kaspa_evm::trace::TraceLimits::default(),
+                )
+                .map_err(|e| EthRpcError::server(format!("{e}")))?;
+                let originating =
+                    kaspa_evm::trace::candidate_index_for_receipt(&body, view.receipt_index).map(|i| body.txs[i].originating_payload_block);
+                Ok(Some((traced, accepting, originating)))
+            })
+            .await
+    }
+
     /// Fetch the canonical-head EVM state snapshot + the call env (one spawn_blocking).
     async fn head_snapshot_and_env(
         &self,
@@ -769,6 +782,18 @@ fn convert_call_frame(f: &kaspa_evm::trace::CallFrame) -> EthCallFrame {
         misaka_originating_payload_block: None,
         misaka_accepting_block: None,
     }
+}
+
+/// Convert a [`kaspa_evm::trace::PrestateAccount`] into the adapter's primitive
+/// [`EthPrestateAccount`] (prestateTracer diffMode wire shape).
+fn convert_prestate_account(a: &kaspa_evm::trace::PrestateAccount) -> EthPrestateAccount {
+    let conv = |s: &kaspa_evm::trace::AccountStateView| EthAccountState {
+        balance: s.balance.to_be_bytes::<32>(),
+        nonce: s.nonce,
+        code: s.code.to_vec(),
+        storage: s.storage.iter().map(|(k, v)| (k.to_be_bytes::<32>(), v.to_be_bytes::<32>())).collect(),
+    };
+    EthPrestateAccount { address: a.address.into_array(), pre: a.pre.as_ref().map(conv), post: a.post.as_ref().map(conv) }
 }
 
 /// The eth-rpc 32-byte parentHash of an EVM block: the first 32 bytes of the
