@@ -164,6 +164,14 @@ mod tests {
     }
 
     #[test]
+    fn evm_empty_code_hash_matches_revm() {
+        // §12: the secp-free EVM_EMPTY_CODE_HASH the archive diff engine uses to
+        // recognize code-less accounts must equal revm's KECCAK_EMPTY, or the code
+        // store / reconstruction would mis-classify EOAs vs contracts.
+        assert_eq!(kaspa_consensus_core::evm::EVM_EMPTY_CODE_HASH.as_bytes(), KECCAK_EMPTY.0);
+    }
+
+    #[test]
     fn smoke_transfer_credits_recipient() {
         assert_eq!(smoke_transfer(1_000), 1_000);
     }

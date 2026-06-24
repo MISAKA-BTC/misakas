@@ -27,6 +27,9 @@ pub use u256::*;
 mod log_index;
 pub use log_index::*;
 
+mod state_diff;
+pub use state_diff::*;
+
 use crate::tx::{ScriptPublicKey, TransactionOutpoint};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{EvmH256, Hash64, blake2b_512_keyed};
