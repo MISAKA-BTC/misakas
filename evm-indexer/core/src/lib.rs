@@ -8,10 +8,13 @@
 //! links no consensus / revm / secp / database — so it builds and unit-tests in
 //! isolation, and never enters the node's secp-free default build.
 //!
-//! Slice 1 (this commit): the event decoder + transfer model. Storage backends
-//! (PostgreSQL / RocksDB), the WS consumer service, reorg reconciliation, the
-//! query API, and the metadata worker land in later slices.
+//! So far: the event decoder + transfer model ([`event`], slice 1) and the
+//! materialized balances + reorg inverse-delta ([`balance`], slice 2). Storage
+//! backends (PostgreSQL / RocksDB), the WS consumer service, the query API, and
+//! the metadata worker land in later slices.
 
+pub mod balance;
 pub mod event;
 
+pub use balance::Balances;
 pub use event::{DecodedEvent, DecodeError, TokenStandard, TokenTransfer};
