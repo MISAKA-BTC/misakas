@@ -203,6 +203,15 @@ pub struct EthLogEntry {
     pub log_index: u32,
 }
 
+/// One §9 `eth_subscribe("logs")` event: a log plus its reorg disposition. On a
+/// reorg the node emits detached logs with `removed = true` (oldest-first) before
+/// the new canonical logs with `removed = false` (Ethereum log-stream semantics).
+#[derive(Clone, Debug)]
+pub struct EthLogEvent {
+    pub log: EthLogEntry,
+    pub removed: bool,
+}
+
 /// `eth_feeHistory` result. `base_fee_per_gas` has `block_count + 1` entries (the
 /// trailing one is the next block's projected base fee); `gas_used_ratio` has
 /// `block_count`; `reward` (if percentiles were requested) is `block_count` rows.
@@ -330,6 +339,17 @@ pub trait EthProvider: Send + Sync + 'static {
     /// once. kaspad overrides this with a pump off the consensus
     /// `VirtualChainChanged` notification.
     fn subscribe_new_heads(&self) -> tokio::sync::broadcast::Receiver<EthBlock> {
+        let (_tx, rx) = tokio::sync::broadcast::channel(1);
+        rx
+    }
+
+    /// §9 (`eth_subscribe("logs")`): a broadcast receiver yielding every canonical
+    /// log event in reorg order — detached logs (`removed = true`, oldest-first)
+    /// then attached logs (`removed = false`). The per-subscription address/topic
+    /// FILTER is applied by the WebSocket layer (shared with `eth_getLogs`), so
+    /// this stream is unfiltered. Default: a closed channel; kaspad overrides it
+    /// with a pump off the consensus `VirtualChainChanged` notification.
+    fn subscribe_logs(&self) -> tokio::sync::broadcast::Receiver<EthLogEvent> {
         let (_tx, rx) = tokio::sync::broadcast::channel(1);
         rx
     }
@@ -903,10 +923,12 @@ async fn eth_get_logs(provider: &Arc<dyn EthProvider>, params: &Value) -> EthRes
         return Err(EthRpcError::new(codes::SERVER_ERROR, "eth_getLogs block range too large (max 10000 blocks)"));
     }
     let logs = provider.get_logs(from, to, addresses, topics).await?;
-    Ok(Value::Array(logs.iter().map(render_log).collect()))
+    Ok(Value::Array(logs.iter().map(|l| render_log(l, false)).collect()))
 }
 
-fn render_log(e: &EthLogEntry) -> Value {
+/// Render one log object. `removed` is `false` for `eth_getLogs` (canonical) and
+/// per-event for the §9 `eth_subscribe("logs")` stream (true for detached logs).
+fn render_log(e: &EthLogEntry, removed: bool) -> Value {
     let hx = |b: &[u8]| format!("0x{}", faster_hex::hex_string(b));
     let topics: Vec<Value> = e.topics.iter().map(|t| json!(hx(t))).collect();
     json!({
@@ -918,7 +940,7 @@ fn render_log(e: &EthLogEntry) -> Value {
         "transactionHash": hx(&e.tx_hash),
         "transactionIndex": quantity(e.tx_index as u128),
         "logIndex": quantity(e.log_index as u128),
-        "removed": false,
+        "removed": removed,
     })
 }
 

@@ -57,6 +57,10 @@ const OUTBOUND_QUEUE: usize = 2048;
 /// WebSocket keepalive ping period. Long-lived WS connections have no blanket
 /// `CONN_TIMEOUT`; periodic pings (plus the peer's TCP state) detect dead links.
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+/// Max concurrent subscriptions per connection (design §9.4) — bounds the
+/// forwarding tasks a single connection can spawn (a DoS guard); excess
+/// `eth_subscribe`s are refused until the client unsubscribes.
+const MAX_SUBS_PER_CONN: usize = 64;
 
 /// If the request head is a WebSocket upgrade (a `GET` carrying
 /// `Upgrade: websocket` and a `Sec-WebSocket-Key`), return that key. Otherwise
@@ -392,13 +396,18 @@ impl WsConn {
     /// subscription id on success, or an error object).
     fn subscribe(&self, provider: &Arc<dyn EthProvider>, req: &Value) -> Value {
         let id = req.get("id").cloned().unwrap_or(Value::Null);
+        // Per-connection subscription cap (design §9.4): bound the forwarding tasks
+        // one connection can spawn. Checked before allocating an id or spawning.
+        if self.subs.lock().unwrap().len() >= MAX_SUBS_PER_CONN {
+            return err_with_id(id, codes::SERVER_ERROR, "too many subscriptions on this connection (max 64); unsubscribe first");
+        }
         let kind = req.get("params").and_then(|p| p.get(0)).and_then(|k| k.as_str());
         match kind {
             Some("newPendingTransactions") => {
                 let (num, sub_id) = self.alloc_id();
                 let rx = provider.subscribe_pending_txs();
                 let handle = spawn_forward(sub_id.clone(), rx, self.out.clone(), |hash: &[u8; 32]| {
-                    json!(format!("0x{}", faster_hex::hex_string(hash)))
+                    Some(json!(format!("0x{}", faster_hex::hex_string(hash))))
                 });
                 self.subs.lock().unwrap().insert(num, handle);
                 json!({ "jsonrpc": "2.0", "id": id, "result": sub_id })
@@ -406,15 +415,38 @@ impl WsConn {
             Some("newHeads") => {
                 let (num, sub_id) = self.alloc_id();
                 let rx = provider.subscribe_new_heads();
-                let handle = spawn_forward(sub_id.clone(), rx, self.out.clone(), |head: &crate::EthBlock| crate::render_head(head));
+                let handle =
+                    spawn_forward(sub_id.clone(), rx, self.out.clone(), |head: &crate::EthBlock| Some(crate::render_head(head)));
                 self.subs.lock().unwrap().insert(num, handle);
                 json!({ "jsonrpc": "2.0", "id": id, "result": sub_id })
             }
-            // logs (slice 5) plugs in here on this same seam.
+            Some("logs") => {
+                // The optional second param is an eth_getLogs-style filter object —
+                // {address, topics}. Reuse the HTTP parsers so a logs subscription
+                // and eth_getLogs accept exactly the same filter shape.
+                let filter = req.get("params").and_then(|p| p.get(1));
+                let addresses = match crate::parse_address_list(filter.and_then(|f| f.get("address"))) {
+                    Ok(a) => a,
+                    Err(e) => return err_with_id(id, e.code, &e.message),
+                };
+                let topics = match crate::parse_topic_filter(filter.and_then(|f| f.get("topics"))) {
+                    Ok(t) => t,
+                    Err(e) => return err_with_id(id, e.code, &e.message),
+                };
+                let (num, sub_id) = self.alloc_id();
+                let rx = provider.subscribe_logs();
+                let handle = spawn_forward(sub_id.clone(), rx, self.out.clone(), move |ev: &crate::EthLogEvent| {
+                    // Per-subscription filter applied here (the stream is unfiltered);
+                    // a detached log (removed=true) is delivered only if it matches.
+                    log_matches(&ev.log, &addresses, &topics).then(|| crate::render_log(&ev.log, ev.removed))
+                });
+                self.subs.lock().unwrap().insert(num, handle);
+                json!({ "jsonrpc": "2.0", "id": id, "result": sub_id })
+            }
             Some(other) => err_with_id(
                 id,
                 codes::INVALID_PARAMS,
-                &format!("unsupported subscription '{other}' (newPendingTransactions, newHeads supported; logs pending)"),
+                &format!("unsupported subscription '{other}' (newPendingTransactions, newHeads, logs supported)"),
             ),
             None => err_with_id(id, codes::INVALID_PARAMS, "eth_subscribe: missing subscription kind"),
         }
@@ -471,21 +503,43 @@ fn err_with_id(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
+/// `eth_getLogs`-style filter match: a log passes if (no address filter OR its
+/// address is listed) AND every topic position matches — an empty position is a
+/// wildcard, otherwise the log's topic there must be one of the options. A log
+/// with fewer topics than the filter has positions fails (unless wildcard).
+fn log_matches(e: &crate::EthLogEntry, addresses: &[[u8; 20]], topics: &[Vec<[u8; 32]>]) -> bool {
+    if !addresses.is_empty() && !addresses.contains(&e.address) {
+        return false;
+    }
+    for (i, options) in topics.iter().enumerate() {
+        if options.is_empty() {
+            continue; // wildcard at this position
+        }
+        match e.topics.get(i) {
+            Some(t) if options.contains(t) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 /// Forward a subscription's broadcast stream into the outbound queue: each item
-/// is `render`ed to a JSON payload and wrapped in an `eth_subscription`
-/// notification. Ends when the source closes, or when the outbound queue is
+/// is passed to `render`, and a `Some(payload)` is wrapped in an `eth_subscription`
+/// notification (a `None` is filtered out — used by `logs` to drop non-matching
+/// entries). Ends when the source closes, or when the outbound queue is
 /// closed/full (slow consumer / connection gone). A `Lagged` is logged and
 /// skipped — the client reconnects + backfills per the §9.5 protocol.
 fn spawn_forward<T, F>(sub_id: String, mut rx: broadcast::Receiver<T>, out: mpsc::Sender<WsOut>, render: F) -> JoinHandle<()>
 where
     T: Clone + Send + 'static,
-    F: Fn(&T) -> Value + Send + 'static,
+    F: Fn(&T) -> Option<Value> + Send + 'static,
 {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(item) => {
-                    let note = subscription_note(&sub_id, render(&item));
+                    let Some(payload) = render(&item) else { continue }; // filtered out
+                    let note = subscription_note(&sub_id, payload);
                     if out.try_send(WsOut::Text(note)).is_err() {
                         break; // slow consumer / outbound closed
                     }
@@ -584,10 +638,11 @@ mod tests {
     struct MockProvider {
         pending: broadcast::Sender<[u8; 32]>,
         heads: broadcast::Sender<crate::EthBlock>,
+        logs: broadcast::Sender<crate::EthLogEvent>,
     }
     impl MockProvider {
         fn new() -> Self {
-            Self { pending: broadcast::channel(16).0, heads: broadcast::channel(16).0 }
+            Self { pending: broadcast::channel(16).0, heads: broadcast::channel(16).0, logs: broadcast::channel(16).0 }
         }
     }
     #[async_trait::async_trait]
@@ -600,6 +655,9 @@ mod tests {
         }
         fn subscribe_new_heads(&self) -> broadcast::Receiver<crate::EthBlock> {
             self.heads.subscribe()
+        }
+        fn subscribe_logs(&self) -> broadcast::Receiver<crate::EthLogEvent> {
+            self.logs.subscribe()
         }
         fn client_version(&self) -> String {
             "mock".to_string()
@@ -803,6 +861,83 @@ mod tests {
         cwr.write_all(&client_frame(OP_CLOSE, b"")).await.unwrap();
         let r = tokio::time::timeout(std::time::Duration::from_secs(5), srv).await.expect("serve_ws should return").unwrap();
         assert!(r.is_ok());
+    }
+
+    /// §9 slice 5: `eth_subscribe("logs", filter)` delivers matching log events
+    /// with the correct `removed` flag and drops non-matching ones (address filter).
+    #[tokio::test]
+    async fn ws_logs_subscription_filtered() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let mock = Arc::new(MockProvider::new());
+        let logs = mock.logs.clone();
+        let provider: Arc<dyn EthProvider> = mock;
+        let srv = tokio::spawn(async move { serve_ws(server, provider, "dGhlIHNhbXBsZSBub25jZQ==", Vec::new()).await });
+
+        let (mut crd, mut cwr) = tokio::io::split(client);
+        read_handshake(&mut crd).await;
+
+        let addr_hex = format!("0x{}", "ab".repeat(20));
+        let sub_req = format!(r#"{{"jsonrpc":"2.0","id":9,"method":"eth_subscribe","params":["logs",{{"address":"{addr_hex}"}}]}}"#);
+        cwr.write_all(&client_frame(OP_TEXT, sub_req.as_bytes())).await.unwrap();
+        let resp: Value = serde_json::from_str(&read_server_text(&mut crd).await).unwrap();
+        let sub_id = resp["result"].as_str().expect("subscription id").to_string();
+
+        let mk = |addr: [u8; 20], removed: bool| crate::EthLogEvent {
+            log: crate::EthLogEntry {
+                address: addr,
+                topics: vec![],
+                data: vec![],
+                block_number: 5,
+                block_hash: [0x01; 32],
+                tx_hash: [0x02; 32],
+                tx_index: 0,
+                log_index: 0,
+            },
+            removed,
+        };
+        // A non-matching address is filtered out; the matching one (removed=true)
+        // is delivered — proving both the address filter and the removed flag.
+        logs.send(mk([0x11; 20], false)).unwrap();
+        logs.send(mk([0xAB; 20], true)).unwrap();
+        let note: Value = serde_json::from_str(&read_server_text(&mut crd).await).unwrap();
+        assert_eq!(note["method"], "eth_subscription");
+        assert_eq!(note["params"]["subscription"], sub_id);
+        let log = &note["params"]["result"];
+        assert_eq!(log["address"], addr_hex, "only the matching-address log is delivered");
+        assert_eq!(log["removed"], true, "detached log carries removed=true");
+        assert_eq!(log["blockNumber"], "0x5");
+
+        cwr.write_all(&client_frame(OP_CLOSE, b"")).await.unwrap();
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), srv).await.expect("serve_ws should return").unwrap();
+        assert!(r.is_ok());
+    }
+
+    /// The per-connection subscription cap (design §9.4) refuses the 65th sub.
+    #[tokio::test]
+    async fn ws_subscription_cap_enforced() {
+        let (client, server) = tokio::io::duplex(256 * 1024);
+        let provider: Arc<dyn EthProvider> = Arc::new(MockProvider::new());
+        let srv = tokio::spawn(async move { serve_ws(server, provider, "dGhlIHNhbXBsZSBub25jZQ==", Vec::new()).await });
+
+        let (mut crd, mut cwr) = tokio::io::split(client);
+        read_handshake(&mut crd).await;
+
+        // MAX_SUBS_PER_CONN subscriptions succeed.
+        for i in 0..MAX_SUBS_PER_CONN {
+            let req = format!(r#"{{"jsonrpc":"2.0","id":{i},"method":"eth_subscribe","params":["newHeads"]}}"#);
+            cwr.write_all(&client_frame(OP_TEXT, req.as_bytes())).await.unwrap();
+            let resp: Value = serde_json::from_str(&read_server_text(&mut crd).await).unwrap();
+            assert!(resp.get("result").is_some(), "subscription {i} should succeed: {resp}");
+        }
+        // One more is refused with an error.
+        cwr.write_all(&client_frame(OP_TEXT, br#"{"jsonrpc":"2.0","id":99,"method":"eth_subscribe","params":["newHeads"]}"#))
+            .await
+            .unwrap();
+        let resp: Value = serde_json::from_str(&read_server_text(&mut crd).await).unwrap();
+        assert!(resp.get("error").is_some(), "the over-cap subscription must be refused: {resp}");
+
+        cwr.write_all(&client_frame(OP_CLOSE, b"")).await.unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), srv).await.expect("serve_ws should return").unwrap();
     }
 
     /// A connection that drops with a LIVE subscription must abort its forwarding

@@ -1530,6 +1530,35 @@ impl ConsensusApi for Consensus {
         Ok(Some(kaspa_consensus_core::evm::EvmBlockResponse { header, l1_hash, tx_hashes, encoded_size }))
     }
 
+    fn get_evm_block_logs(&self, l1_hash: BlockHash) -> ConsensusResult<Vec<kaspa_consensus_core::evm::EvmLogEntry>> {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
+        // Read by L1 hash from the IMMUTABLE header + receipts stores (never the
+        // reorg-mutable number map): the §9 logs reorg pump emits detached blocks,
+        // which are no longer canonical but whose receipts are still stored. No
+        // canonical filter here — the pump tags removed=true/false itself.
+        let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().unwrap() else { return Ok(Vec::new()) };
+        let receipts = self.storage.evm_receipts_store.get(l1_hash).optional().unwrap().unwrap_or_default();
+        let mut out = Vec::new();
+        let mut log_index: u32 = 0;
+        for (rcpt_idx, receipt) in receipts.receipts.iter().enumerate() {
+            let tx_hash = receipts.tx_hashes.get(rcpt_idx).copied().unwrap_or_default();
+            for log in &receipt.logs {
+                out.push(kaspa_consensus_core::evm::EvmLogEntry {
+                    address: log.address,
+                    topics: log.topics.clone(),
+                    data: log.data.clone(),
+                    block_number: header.evm_number,
+                    block_l1_hash: l1_hash,
+                    tx_hash,
+                    tx_index: rcpt_idx as u32,
+                    log_index,
+                });
+                log_index += 1;
+            }
+        }
+        Ok(out)
+    }
+
     fn get_evm_raw_tx(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<Vec<u8>>> {
         use crate::model::stores::evm::EvmRawTxStoreReader;
         Ok(self.storage.evm_raw_tx_store.get(tx_hash).unwrap().map(|r| r.raw))

@@ -563,6 +563,15 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// kaspa-pq EVM Lane v0.4 (§9, `eth_subscribe("logs")`): ALL logs of the block
+    /// at `l1_hash`, in block-global `logIndex` order, read straight from the
+    /// immutable receipts store by hash WITHOUT canonical filtering — the WebSocket
+    /// reorg pump must emit DETACHED blocks too (which the number map no longer
+    /// points to). Empty for a non-EVM / unknown block.
+    fn get_evm_block_logs(&self, _l1_hash: BlockHash) -> ConsensusResult<Vec<crate::evm::EvmLogEntry>> {
+        Ok(Vec::new())
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§16, audit R-2): the raw EIP-2718 bytes of an EVM
     /// tx by hash (absent = never seen in a stored payload). Resolves
     /// `eth_getTransactionByHash`/receipt without the bounded included_in scan.

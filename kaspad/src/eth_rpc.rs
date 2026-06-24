@@ -12,8 +12,8 @@ use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
 use kaspa_eth_rpc::{
-    BlockId, EthAccessListItem, EthBlock, EthCallRequest, EthEvmTxStatus, EthFeeHistory, EthLog, EthLogEntry, EthProvider, EthReceipt,
-    EthResult, EthRpcError, EthTx,
+    BlockId, EthAccessListItem, EthBlock, EthCallRequest, EthEvmTxStatus, EthFeeHistory, EthLog, EthLogEntry, EthLogEvent, EthProvider,
+    EthReceipt, EthResult, EthRpcError, EthTx,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_p2p_flows::flow_context::FlowContext;
@@ -33,6 +33,10 @@ const ETH_RPC: &str = "eth-rpc";
 /// this far behind gets `Lagged` (drop-oldest) and reconnects + backfills.
 const EVM_HEADS_CHANNEL_CAP: usize = 256;
 
+/// §9 logs: bound on each subscriber's log backlog (higher than heads — a block
+/// can carry many logs). Over-lag is `Lagged` (drop-oldest) → reconnect + backfill.
+const EVM_LOGS_CHANNEL_CAP: usize = 4096;
+
 /// [`EthProvider`] over the node's consensus stores + the EVM mempool (the
 /// mempool seam powers `eth_sendRawTransaction`).
 pub struct NodeEthProvider {
@@ -44,6 +48,10 @@ pub struct NodeEthProvider {
     /// §9 newHeads: fan-out of canonical EVM block headers to WS subscribers
     /// (fed by [`Self::spawn_head_pump`]); `subscribe_new_heads` clones a receiver.
     heads_tx: broadcast::Sender<EthBlock>,
+    /// §9 logs: fan-out of reorg-ordered log events to WS subscribers (detached
+    /// removed=true oldest-first, then attached removed=false). Unfiltered — the
+    /// WS layer applies each subscription's address/topic filter.
+    logs_tx: broadcast::Sender<EthLogEvent>,
     client_version: String,
 }
 
@@ -54,11 +62,13 @@ impl NodeEthProvider {
         consensus_notifier: Arc<ConsensusNotifier>,
     ) -> Self {
         let (heads_tx, _) = broadcast::channel(EVM_HEADS_CHANNEL_CAP);
+        let (logs_tx, _) = broadcast::channel(EVM_LOGS_CHANNEL_CAP);
         Self {
             consensus_manager,
             flow_context,
             consensus_notifier,
             heads_tx,
+            logs_tx,
             client_version: format!("misaka-kaspad/v{}", env!("CARGO_PKG_VERSION")),
         }
     }
@@ -82,35 +92,59 @@ impl NodeEthProvider {
         tokio::spawn(async move {
             while let Ok(notification) = rx.recv().await {
                 let Notification::VirtualChainChanged(vcc) = notification else { continue };
-                // No subscribers → skip all store work for this resolve.
-                if self.heads_tx.receiver_count() == 0 {
+                // Gate each event independently — skip all store work when nobody
+                // is subscribed to it.
+                let want_heads = self.heads_tx.receiver_count() > 0;
+                let want_logs = self.logs_tx.receiver_count() > 0;
+                if !want_heads && !want_logs {
                     continue;
                 }
-                // Build every added EVM block's header under ONE consensus session,
-                // in commit order (oldest first); non-EVM blocks read as None and
-                // are dropped. Each added hash is the L1 BlockHash, read by hash
-                // (immutable once committed) — never by the reorg-mutable number map.
+                // Each hash is an L1 BlockHash; everything below reads by HASH
+                // (immutable once committed) — never the reorg-mutable number map.
                 let added: Vec<_> = vcc.added_chain_block_hashes.iter().copied().collect();
+                let removed: Vec<_> = vcc.removed_chain_block_hashes.iter().copied().collect();
                 let session = self.consensus_manager.consensus().session().await;
-                let heads: Vec<EthBlock> = session
+                let (heads, log_events): (Vec<EthBlock>, Vec<EthLogEvent>) = session
                     .spawn_blocking(move |c| {
-                        added
-                            .into_iter()
-                            .filter_map(|l1| {
-                                let resp = c.get_evm_block_by_l1_hash(l1);
-                                let parent = parent_l1_hash32(c, &resp);
-                                match resp {
-                                    Ok(Some(r)) => Some(to_eth_block(r, parent)),
-                                    _ => None,
-                                }
-                            })
-                            .collect()
+                        // newHeads: each added EVM block's header, in commit order
+                        // (added is oldest-first); non-EVM blocks read as None.
+                        let heads: Vec<EthBlock> = if want_heads {
+                            added
+                                .iter()
+                                .copied()
+                                .filter_map(|l1| {
+                                    let resp = c.get_evm_block_by_l1_hash(l1);
+                                    let parent = parent_l1_hash32(c, &resp);
+                                    match resp {
+                                        Ok(Some(r)) => Some(to_eth_block(r, parent)),
+                                        _ => None,
+                                    }
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        // logs: detached (removed=true, oldest-first) then attached
+                        // (removed=false, oldest-first) — the reorg contract lives in
+                        // the unit-tested `reorg_ordered`.
+                        let log_events: Vec<EthLogEvent> = if want_logs {
+                            reorg_ordered(&removed, &added, |l1| c.get_evm_block_logs(l1).unwrap_or_default())
+                                .into_iter()
+                                .map(|(e, removed)| EthLogEvent { log: to_eth_log_entry(e), removed })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        (heads, log_events)
                     })
                     .await;
-                // Lossy under lag — a slow WS subscriber drops heads and reconnects
-                // + backfills (design R-5); the send never blocks the pump.
+                // Lossy under lag — a slow WS subscriber drops events and reconnects
+                // + backfills (design R-5); the sends never block the pump.
                 for head in heads {
                     let _ = self.heads_tx.send(head);
+                }
+                for ev in log_events {
+                    let _ = self.logs_tx.send(ev);
                 }
             }
         });
@@ -578,6 +612,12 @@ impl EthProvider for NodeEthProvider {
     fn subscribe_new_heads(&self) -> broadcast::Receiver<EthBlock> {
         self.heads_tx.subscribe()
     }
+
+    /// §9 (`eth_subscribe("logs")`): hand out a receiver on the reorg-ordered log
+    /// fan-out fed by [`Self::spawn_head_pump`] (unfiltered; the WS layer filters).
+    fn subscribe_logs(&self) -> broadcast::Receiver<EthLogEvent> {
+        self.logs_tx.subscribe()
+    }
 }
 
 impl NodeEthProvider {
@@ -675,6 +715,24 @@ fn to_eth_block(resp: kaspa_consensus_core::evm::EvmBlockResponse, parent_hash: 
     }
 }
 
+/// §9 logs reorg ordering — the one semantic that MUST be exact. Emits
+/// `(item, removed)` pairs as DETACHED blocks first (`removed = true`) oldest-first
+/// (`removed_chain_block_hashes` is newest-first — chain_path walks backward from
+/// the old sink — so it is REVERSED here), THEN ATTACHED blocks (`removed = false`)
+/// oldest-first (`added_chain_block_hashes` is already oldest-first). Items within
+/// a block keep their order (logIndex). Generic + side-effect-free so the ordering
+/// contract is unit-tested in isolation from the consensus stores.
+fn reorg_ordered<H: Copy, T>(removed: &[H], added: &[H], mut read: impl FnMut(H) -> Vec<T>) -> Vec<(T, bool)> {
+    let mut out = Vec::new();
+    for h in removed.iter().rev().copied() {
+        out.extend(read(h).into_iter().map(|t| (t, true)));
+    }
+    for h in added.iter().copied() {
+        out.extend(read(h).into_iter().map(|t| (t, false)));
+    }
+    out
+}
+
 /// Map a consensus `EvmLogEntry` to the adapter's primitive [`EthLogEntry`].
 fn to_eth_log_entry(e: kaspa_consensus_core::evm::EvmLogEntry) -> EthLogEntry {
     let mut block_hash = [0u8; 32];
@@ -750,5 +808,46 @@ impl AsyncService for EthRpcService {
             kaspa_core::trace!("{} stopped", ETH_RPC);
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// §9 slice 5 GATE — the reorg emission contract, isolated from the stores:
+    /// detached blocks first (`removed = true`) OLDEST-first (the removed list is
+    /// newest-first → reversed), then attached blocks (`removed = false`)
+    /// oldest-first; items within a block keep their order. This pins the one hard
+    /// semantic — a silent inversion here breaks every downstream log indexer.
+    #[test]
+    fn reorg_ordered_emits_detached_then_attached_oldest_first() {
+        // removed is newest-first: 'C' detached most recently, then 'B' (older).
+        let removed = [b'C', b'B'];
+        // added is oldest-first: 'D' then 'E'.
+        let added = [b'D', b'E'];
+        // Each block yields two items (logIndex 0,1) to check intra-block order.
+        let pairs = reorg_ordered(&removed, &added, |h| vec![(h, 0u8), (h, 1u8)]);
+        let seq: Vec<(char, u8, bool)> = pairs.into_iter().map(|((h, i), removed)| (h as char, i, removed)).collect();
+        assert_eq!(
+            seq,
+            vec![
+                ('B', 0, true),  // detached, OLDEST (B) before the more-recent (C)
+                ('B', 1, true),
+                ('C', 0, true),
+                ('C', 1, true),
+                ('D', 0, false), // attached, oldest (D) first
+                ('D', 1, false),
+                ('E', 0, false),
+                ('E', 1, false),
+            ]
+        );
+    }
+
+    /// A linear extension (no reorg) emits only attached events, removed=false.
+    #[test]
+    fn reorg_ordered_linear_extension() {
+        let pairs = reorg_ordered::<u8, u8>(&[], &[b'A'], |_| vec![1, 2]);
+        assert_eq!(pairs, vec![(1, false), (2, false)]);
     }
 }
