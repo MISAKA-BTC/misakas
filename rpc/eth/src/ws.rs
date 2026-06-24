@@ -433,6 +433,18 @@ impl WsConn {
                     Ok(t) => t,
                     Err(e) => return err_with_id(id, e.code, &e.message),
                 };
+                // Design §9.4: refuse an UNFILTERED logs subscription — an all-logs
+                // firehose on this unauthenticated endpoint. "Unfiltered" means no
+                // address AND every topic position is a wildcard (covers no filter,
+                // `{}`, `topics:[]`, and `topics:[null,…]`); clients that truly want
+                // everything use the bounded `eth_getLogs` instead.
+                if addresses.is_empty() && topics.iter().all(|pos| pos.is_empty()) {
+                    return err_with_id(
+                        id,
+                        codes::INVALID_PARAMS,
+                        "eth_subscribe logs requires at least one filter (address or a non-wildcard topic); an unfiltered all-logs subscription is refused",
+                    );
+                }
                 let (num, sub_id) = self.alloc_id();
                 let rx = provider.subscribe_logs();
                 let handle = spawn_forward(sub_id.clone(), rx, self.out.clone(), move |ev: &crate::EthLogEvent| {
@@ -875,6 +887,14 @@ mod tests {
 
         let (mut crd, mut cwr) = tokio::io::split(client);
         read_handshake(&mut crd).await;
+
+        // An UNFILTERED logs subscription is refused (design §9.4 — no all-logs
+        // firehose on this unauthenticated endpoint).
+        cwr.write_all(&client_frame(OP_TEXT, br#"{"jsonrpc":"2.0","id":8,"method":"eth_subscribe","params":["logs"]}"#))
+            .await
+            .unwrap();
+        let refused: Value = serde_json::from_str(&read_server_text(&mut crd).await).unwrap();
+        assert!(refused.get("error").is_some(), "unfiltered logs subscription must be refused: {refused}");
 
         let addr_hex = format!("0x{}", "ab".repeat(20));
         let sub_req = format!(r#"{{"jsonrpc":"2.0","id":9,"method":"eth_subscribe","params":["logs",{{"address":"{addr_hex}"}}]}}"#);
