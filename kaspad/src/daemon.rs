@@ -606,6 +606,11 @@ Do you confirm? (y/n)";
     let system_info = SystemInfo::default();
 
     let notify_service = Arc::new(NotifyService::new(notification_root.clone(), notification_recv, subscription_context.clone()));
+    // §9 (evm builds): the Ethereum RPC newHeads pump registers a
+    // VirtualChainChanged listener on the consensus notifier — capture a handle now,
+    // before notify_service is moved into the async runtime below.
+    #[cfg(feature = "evm")]
+    let eth_consensus_notifier = notify_service.notifier();
     let index_service: Option<Arc<IndexService>> = if args.utxoindex {
         // Use only a single thread for none-consensus databases
         let utxoindex_db = kaspa_database::prelude::ConnBuilder::default()
@@ -800,7 +805,12 @@ Do you confirm? (y/n)";
                  Front it with a TLS + auth + rate-limiting reverse proxy, or bind it to 127.0.0.1."
             );
         }
-        async_runtime.register(Arc::new(crate::eth_rpc::EthRpcService::new(addr, consensus_manager.clone(), flow_context_for_eth)));
+        async_runtime.register(Arc::new(crate::eth_rpc::EthRpcService::new(
+            addr,
+            consensus_manager.clone(),
+            flow_context_for_eth,
+            eth_consensus_notifier,
+        )));
     }
     async_runtime.register(mining_monitor);
     async_runtime.register(perf_monitor);

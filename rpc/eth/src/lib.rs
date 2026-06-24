@@ -322,6 +322,17 @@ pub trait EthProvider: Send + Sync + 'static {
         let (_tx, rx) = tokio::sync::broadcast::channel(1);
         rx
     }
+
+    /// §9 (`eth_subscribe("newHeads")`): a broadcast receiver yielding one
+    /// [`EthBlock`] header per EVM-active block newly ADDED to the selected chain,
+    /// in commit order (so a reorg re-announces a head at the same number with a
+    /// new hash). Default: a closed channel — the WebSocket forwarder ends at
+    /// once. kaspad overrides this with a pump off the consensus
+    /// `VirtualChainChanged` notification.
+    fn subscribe_new_heads(&self) -> tokio::sync::broadcast::Receiver<EthBlock> {
+        let (_tx, rx) = tokio::sync::broadcast::channel(1);
+        rx
+    }
 }
 
 /// The EVM-lane lifecycle of a tx (`misaka_getEvmTxStatus`). `state` is a best-effort
@@ -787,6 +798,32 @@ fn render_block(b: &EthBlock, full_txs: Option<&[EthTx]>) -> Value {
         "baseFeePerGas": quantity_from_be32(&b.base_fee_per_gas),
         "transactions": txs,
         "uncles": [],
+    })
+}
+
+/// Render the §9 `newHeads` notification payload for `b`. geth's `newHeads`
+/// carries the block HEADER only — no `transactions`/`uncles` arrays — so this is
+/// [`render_block`]'s header subset, with the same placeholder fields.
+fn render_head(b: &EthBlock) -> Value {
+    let hx = |bytes: &[u8]| format!("0x{}", faster_hex::hex_string(bytes));
+    json!({
+        "number": quantity(b.number as u128),
+        "hash": hx(&b.hash),
+        "parentHash": hx(&b.parent_hash),
+        "nonce": "0x0000000000000000",
+        "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+        "logsBloom": hx(&b.logs_bloom),
+        "transactionsRoot": hx(&b.transactions_root),
+        "stateRoot": hx(&b.state_root),
+        "receiptsRoot": hx(&b.receipts_root),
+        "miner": hx(&b.miner),
+        "difficulty": "0x0",
+        "extraData": "0x",
+        "gasLimit": quantity(b.gas_limit as u128),
+        "gasUsed": quantity(b.gas_used as u128),
+        "timestamp": quantity(b.timestamp as u128),
+        "baseFeePerGas": quantity_from_be32(&b.base_fee_per_gas),
     })
 }
 

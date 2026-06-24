@@ -381,6 +381,13 @@ impl WsConn {
         Self { out, next_id: AtomicU64::new(1), subs: Mutex::new(HashMap::new()) }
     }
 
+    /// Allocate a fresh subscription id as a `(numeric key, hex string)` pair —
+    /// the key indexes the registry; the hex string is the client-facing id.
+    fn alloc_id(&self) -> (u64, String) {
+        let num = self.next_id.fetch_add(1, Ordering::Relaxed);
+        (num, format!("0x{num:x}"))
+    }
+
     /// Handle `eth_subscribe`. Returns the JSON-RPC response value (the new
     /// subscription id on success, or an error object).
     fn subscribe(&self, provider: &Arc<dyn EthProvider>, req: &Value) -> Value {
@@ -388,18 +395,26 @@ impl WsConn {
         let kind = req.get("params").and_then(|p| p.get(0)).and_then(|k| k.as_str());
         match kind {
             Some("newPendingTransactions") => {
-                let num = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let sub_id = format!("0x{num:x}");
+                let (num, sub_id) = self.alloc_id();
                 let rx = provider.subscribe_pending_txs();
-                let handle = spawn_pending_forward(sub_id.clone(), rx, self.out.clone());
+                let handle = spawn_forward(sub_id.clone(), rx, self.out.clone(), |hash: &[u8; 32]| {
+                    json!(format!("0x{}", faster_hex::hex_string(hash)))
+                });
                 self.subs.lock().unwrap().insert(num, handle);
                 json!({ "jsonrpc": "2.0", "id": id, "result": sub_id })
             }
-            // newHeads (slice 4) and logs (slice 5) plug in here on this same seam.
+            Some("newHeads") => {
+                let (num, sub_id) = self.alloc_id();
+                let rx = provider.subscribe_new_heads();
+                let handle = spawn_forward(sub_id.clone(), rx, self.out.clone(), |head: &crate::EthBlock| crate::render_head(head));
+                self.subs.lock().unwrap().insert(num, handle);
+                json!({ "jsonrpc": "2.0", "id": id, "result": sub_id })
+            }
+            // logs (slice 5) plugs in here on this same seam.
             Some(other) => err_with_id(
                 id,
                 codes::INVALID_PARAMS,
-                &format!("unsupported subscription '{other}' (newPendingTransactions supported; newHeads/logs pending)"),
+                &format!("unsupported subscription '{other}' (newPendingTransactions, newHeads supported; logs pending)"),
             ),
             None => err_with_id(id, codes::INVALID_PARAMS, "eth_subscribe: missing subscription kind"),
         }
@@ -456,16 +471,21 @@ fn err_with_id(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// Forward `newPendingTransactions`: each admitted hash → an `eth_subscription`
+/// Forward a subscription's broadcast stream into the outbound queue: each item
+/// is `render`ed to a JSON payload and wrapped in an `eth_subscription`
 /// notification. Ends when the source closes, or when the outbound queue is
 /// closed/full (slow consumer / connection gone). A `Lagged` is logged and
 /// skipped — the client reconnects + backfills per the §9.5 protocol.
-fn spawn_pending_forward(sub_id: String, mut rx: broadcast::Receiver<[u8; 32]>, out: mpsc::Sender<WsOut>) -> JoinHandle<()> {
+fn spawn_forward<T, F>(sub_id: String, mut rx: broadcast::Receiver<T>, out: mpsc::Sender<WsOut>, render: F) -> JoinHandle<()>
+where
+    T: Clone + Send + 'static,
+    F: Fn(&T) -> Value + Send + 'static,
+{
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(hash) => {
-                    let note = subscription_note(&sub_id, json!(format!("0x{}", faster_hex::hex_string(&hash))));
+                Ok(item) => {
+                    let note = subscription_note(&sub_id, render(&item));
                     if out.try_send(WsOut::Text(note)).is_err() {
                         break; // slow consumer / outbound closed
                     }
@@ -563,10 +583,11 @@ mod tests {
     /// for the `newPendingTransactions` subscription. Everything else is unused.
     struct MockProvider {
         pending: broadcast::Sender<[u8; 32]>,
+        heads: broadcast::Sender<crate::EthBlock>,
     }
     impl MockProvider {
         fn new() -> Self {
-            Self { pending: broadcast::channel(16).0 }
+            Self { pending: broadcast::channel(16).0, heads: broadcast::channel(16).0 }
         }
     }
     #[async_trait::async_trait]
@@ -576,6 +597,9 @@ mod tests {
         }
         fn subscribe_pending_txs(&self) -> broadcast::Receiver<[u8; 32]> {
             self.pending.subscribe()
+        }
+        fn subscribe_new_heads(&self) -> broadcast::Receiver<crate::EthBlock> {
+            self.heads.subscribe()
         }
         fn client_version(&self) -> String {
             "mock".to_string()
@@ -719,6 +743,62 @@ mod tests {
         let _ = pending.send([0x11; 32]);
         let quiet = tokio::time::timeout(std::time::Duration::from_millis(200), read_server_frame(&mut crd)).await;
         assert!(quiet.is_err(), "unsubscribe must halt the stream");
+
+        cwr.write_all(&client_frame(OP_CLOSE, b"")).await.unwrap();
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), srv).await.expect("serve_ws should return").unwrap();
+        assert!(r.is_ok());
+    }
+
+    /// §9 slice 4: `eth_subscribe("newHeads")` delivers each emitted block as an
+    /// `eth_subscription` carrying the header-only payload (no `transactions`).
+    #[tokio::test]
+    async fn ws_new_heads_subscription() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let mock = Arc::new(MockProvider::new());
+        let heads = mock.heads.clone();
+        let provider: Arc<dyn EthProvider> = mock;
+        let srv = tokio::spawn(async move { serve_ws(server, provider, "dGhlIHNhbXBsZSBub25jZQ==", Vec::new()).await });
+
+        let (mut crd, mut cwr) = tokio::io::split(client);
+        read_handshake(&mut crd).await;
+
+        cwr.write_all(&client_frame(OP_TEXT, br#"{"jsonrpc":"2.0","id":3,"method":"eth_subscribe","params":["newHeads"]}"#))
+            .await
+            .unwrap();
+        let resp: Value = serde_json::from_str(&read_server_text(&mut crd).await).unwrap();
+        let sub_id = resp["result"].as_str().expect("subscription id").to_string();
+
+        // Emit a head → it arrives as a header-only eth_subscription notification.
+        let mut base_fee = [0u8; 32];
+        base_fee[31] = 7;
+        let block = crate::EthBlock {
+            number: 0x2a,
+            hash: [0x11; 32],
+            parent_hash: [0x22; 32],
+            state_root: [0x33; 32],
+            transactions_root: [0x44; 32],
+            receipts_root: [0x55; 32],
+            logs_bloom: vec![0u8; 256],
+            timestamp: 0x66,
+            gas_used: 21_000,
+            gas_limit: 30_000_000,
+            base_fee_per_gas: base_fee,
+            miner: [0x77; 20],
+            tx_hashes: vec![[0xAA; 32]],
+            size: 100,
+        };
+        heads.send(block).unwrap();
+        let note: Value = serde_json::from_str(&read_server_text(&mut crd).await).unwrap();
+        assert_eq!(note["method"], "eth_subscription");
+        assert_eq!(note["params"]["subscription"], sub_id);
+        let head = &note["params"]["result"];
+        assert_eq!(head["number"], "0x2a");
+        assert_eq!(head["hash"], format!("0x{}", "11".repeat(32)));
+        assert_eq!(head["parentHash"], format!("0x{}", "22".repeat(32)));
+        assert_eq!(head["gasLimit"], "0x1c9c380"); // 30_000_000
+        assert_eq!(head["baseFeePerGas"], "0x7");
+        assert_eq!(head["miner"], format!("0x{}", "77".repeat(20)));
+        assert!(head.get("transactions").is_none(), "newHeads is header-only");
 
         cwr.write_all(&client_frame(OP_CLOSE, b"")).await.unwrap();
         let r = tokio::time::timeout(std::time::Duration::from_secs(5), srv).await.expect("serve_ws should return").unwrap();

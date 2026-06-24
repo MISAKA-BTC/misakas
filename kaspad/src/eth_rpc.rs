@@ -17,20 +17,103 @@ use kaspa_eth_rpc::{
 };
 use kaspa_hashes::EvmH256;
 use kaspa_p2p_flows::flow_context::FlowContext;
+// §9 newHeads: tap the consensus VirtualChainChanged notification.
+use kaspa_consensus_notify::{notification::Notification, notifier::ConsensusNotifier};
+use kaspa_notify::{
+    connection::{ChannelConnection, ChannelType},
+    listener::ListenerLifespan,
+    scope::{Scope, VirtualChainChangedScope},
+};
+use tokio::sync::broadcast;
 
 const ETH_RPC: &str = "eth-rpc";
+
+/// §9 newHeads: bound on each subscriber's head backlog. Heads are infrequent
+/// (one per virtual resolve) so a small cap suffices; a subscriber that falls
+/// this far behind gets `Lagged` (drop-oldest) and reconnects + backfills.
+const EVM_HEADS_CHANNEL_CAP: usize = 256;
 
 /// [`EthProvider`] over the node's consensus stores + the EVM mempool (the
 /// mempool seam powers `eth_sendRawTransaction`).
 pub struct NodeEthProvider {
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
+    /// §9 newHeads: the consensus notifier the head pump registers a
+    /// VirtualChainChanged listener on.
+    consensus_notifier: Arc<ConsensusNotifier>,
+    /// §9 newHeads: fan-out of canonical EVM block headers to WS subscribers
+    /// (fed by [`Self::spawn_head_pump`]); `subscribe_new_heads` clones a receiver.
+    heads_tx: broadcast::Sender<EthBlock>,
     client_version: String,
 }
 
 impl NodeEthProvider {
-    pub fn new(consensus_manager: Arc<ConsensusManager>, flow_context: Arc<FlowContext>) -> Self {
-        Self { consensus_manager, flow_context, client_version: format!("misaka-kaspad/v{}", env!("CARGO_PKG_VERSION")) }
+    pub fn new(
+        consensus_manager: Arc<ConsensusManager>,
+        flow_context: Arc<FlowContext>,
+        consensus_notifier: Arc<ConsensusNotifier>,
+    ) -> Self {
+        let (heads_tx, _) = broadcast::channel(EVM_HEADS_CHANNEL_CAP);
+        Self {
+            consensus_manager,
+            flow_context,
+            consensus_notifier,
+            heads_tx,
+            client_version: format!("misaka-kaspad/v{}", env!("CARGO_PKG_VERSION")),
+        }
+    }
+
+    /// §9 (`eth_subscribe("newHeads")`): register a consensus VirtualChainChanged
+    /// listener and pump each newly ADDED selected-chain block that has an EVM
+    /// header out to `heads_tx` as a header (non-EVM blocks are skipped), in commit
+    /// order. Spawned once at service start. All store work is skipped while no
+    /// client is subscribed (`receiver_count == 0`).
+    pub fn spawn_head_pump(self: Arc<Self>) {
+        let (tx, rx) = async_channel::unbounded();
+        let listener_id = self
+            .consensus_notifier
+            .register_new_listener(ChannelConnection::new(ETH_RPC, tx, ChannelType::Closable), ListenerLifespan::Dynamic);
+        if let Err(e) =
+            self.consensus_notifier.try_start_notify(listener_id, Scope::VirtualChainChanged(VirtualChainChangedScope::new(false)))
+        {
+            kaspa_core::warn!("[{ETH_RPC}] newHeads: failed to subscribe to VirtualChainChanged: {e:?}");
+            return;
+        }
+        tokio::spawn(async move {
+            while let Ok(notification) = rx.recv().await {
+                let Notification::VirtualChainChanged(vcc) = notification else { continue };
+                // No subscribers → skip all store work for this resolve.
+                if self.heads_tx.receiver_count() == 0 {
+                    continue;
+                }
+                // Build every added EVM block's header under ONE consensus session,
+                // in commit order (oldest first); non-EVM blocks read as None and
+                // are dropped. Each added hash is the L1 BlockHash, read by hash
+                // (immutable once committed) — never by the reorg-mutable number map.
+                let added: Vec<_> = vcc.added_chain_block_hashes.iter().copied().collect();
+                let session = self.consensus_manager.consensus().session().await;
+                let heads: Vec<EthBlock> = session
+                    .spawn_blocking(move |c| {
+                        added
+                            .into_iter()
+                            .filter_map(|l1| {
+                                let resp = c.get_evm_block_by_l1_hash(l1);
+                                let parent = parent_l1_hash32(c, &resp);
+                                match resp {
+                                    Ok(Some(r)) => Some(to_eth_block(r, parent)),
+                                    _ => None,
+                                }
+                            })
+                            .collect()
+                    })
+                    .await;
+                // Lossy under lag — a slow WS subscriber drops heads and reconnects
+                // + backfills (design R-5); the send never blocks the pump.
+                for head in heads {
+                    let _ = self.heads_tx.send(head);
+                }
+            }
+        });
     }
 }
 
@@ -471,8 +554,7 @@ impl EthProvider for NodeEthProvider {
     /// a parked task until then, never a leak). No global pump and no node startup
     /// hook — the task is spawned lazily inside the RPC runtime when a client
     /// subscribes, the same runtime that serves the socket.
-    fn subscribe_pending_txs(&self) -> tokio::sync::broadcast::Receiver<[u8; 32]> {
-        use tokio::sync::broadcast;
+    fn subscribe_pending_txs(&self) -> broadcast::Receiver<[u8; 32]> {
         let mut admit_rx = self.flow_context.mining_manager().evm_tx_admission_receiver();
         let (tx, rx) = broadcast::channel::<[u8; 32]>(4096);
         tokio::spawn(async move {
@@ -489,6 +571,12 @@ impl EthProvider for NodeEthProvider {
             }
         });
         rx
+    }
+
+    /// §9 (`eth_subscribe("newHeads")`): hand out a receiver on the head fan-out
+    /// fed by [`Self::spawn_head_pump`] (registered once at service start).
+    fn subscribe_new_heads(&self) -> broadcast::Receiver<EthBlock> {
+        self.heads_tx.subscribe()
     }
 }
 
@@ -618,12 +706,19 @@ fn to_sim_call(req: &EthCallRequest) -> kaspa_evm::sim::EthCall {
 /// async runtime (registered beside the other services in `daemon.rs`).
 pub struct EthRpcService {
     addr: SocketAddr,
-    provider: Arc<dyn EthProvider>,
+    // Concrete (not `dyn`) so `start` can spawn the §9 newHeads pump on it before
+    // handing it to `serve` as the `EthProvider`.
+    provider: Arc<NodeEthProvider>,
 }
 
 impl EthRpcService {
-    pub fn new(addr: SocketAddr, consensus_manager: Arc<ConsensusManager>, flow_context: Arc<FlowContext>) -> Self {
-        Self { addr, provider: Arc::new(NodeEthProvider::new(consensus_manager, flow_context)) }
+    pub fn new(
+        addr: SocketAddr,
+        consensus_manager: Arc<ConsensusManager>,
+        flow_context: Arc<FlowContext>,
+        consensus_notifier: Arc<ConsensusNotifier>,
+    ) -> Self {
+        Self { addr, provider: Arc::new(NodeEthProvider::new(consensus_manager, flow_context, consensus_notifier)) }
     }
 }
 
@@ -634,7 +729,12 @@ impl AsyncService for EthRpcService {
 
     fn start(self: Arc<Self>) -> AsyncServiceFuture {
         Box::pin(async move {
-            if let Err(e) = kaspa_eth_rpc::serve(self.addr, self.provider.clone()).await {
+            // §9: register the newHeads pump (VirtualChainChanged → EthBlock fan-out)
+            // before serving, so a client that subscribes right after connect sees
+            // live heads.
+            self.provider.clone().spawn_head_pump();
+            let provider: Arc<dyn EthProvider> = self.provider.clone();
+            if let Err(e) = kaspa_eth_rpc::serve(self.addr, provider).await {
                 kaspa_core::warn!("[{ETH_RPC}] server on {} exited: {e}", self.addr);
             }
             Ok(())
