@@ -488,6 +488,22 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// kaspa-pq EVM Lane (§11): the per-accepting-block `debug_traceTransaction`
+    /// replay plan (store prefix 219). `None` on a non-EVM node, before activation,
+    /// after pruning, or for an accepting block with no traceable candidate txs.
+    fn get_evm_trace_replay_body(&self, _block: BlockHash) -> ConsensusResult<Option<crate::evm::EvmTraceReplayBodyV1>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane (§11): the network's three EVM-execution activation fences
+    /// — `(evm_gas_pool_v2, evm_f002_withdraw_cap, evm_f003_mldsa_verify)` activation
+    /// DAA scores. The trace replay MUST run the same gas-pool / withdraw-cap / F003
+    /// regime the accepting block executed under, so it reads these instead of
+    /// assuming inert. Default = all inert (`u64::MAX`).
+    fn evm_activation_fences(&self) -> (u64, u64, u64) {
+        (u64::MAX, u64::MAX, u64::MAX)
+    }
+
     /// kaspa-pq EVM Lane: the canonical account nonces at the EVM head (the sink's
     /// committed EVM state) for `addresses`. An account that does not exist yet is
     /// omitted; the caller treats absence as nonce 0. Used by the mining template

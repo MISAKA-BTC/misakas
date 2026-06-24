@@ -226,6 +226,34 @@ pub struct EthFeeHistory {
 /// The node-side data + action surface the adapter needs. Implemented by kaspad
 /// over its `ConsensusManager` + `FlowContext` (and, for simulation, kaspa-evm).
 /// Methods are added here as the MVP grows (state / call / receipt / block).
+/// One node of a `debug_traceTransaction` `callTracer` result (§11.4). A primitive
+/// (no revm) wire type: kaspad's provider converts the executor's call-frame tree
+/// into this, and [`render_call_frame`] emits the Geth JSON. The MISAKA extensions
+/// are set on the ROOT frame only.
+#[derive(Clone, Debug)]
+pub struct EthCallFrame {
+    /// `CALL` / `CALLCODE` / `DELEGATECALL` / `STATICCALL` / `CREATE` / `CREATE2`.
+    pub call_type: String,
+    pub from: [u8; 20],
+    /// `None` for a CREATE whose address is unknown (creation failed).
+    pub to: Option<[u8; 20]>,
+    /// Big-endian U256 call value.
+    pub value: [u8; 32],
+    pub gas: u64,
+    pub gas_used: u64,
+    pub input: Vec<u8>,
+    pub output: Vec<u8>,
+    /// `Some` for a failed frame (e.g. "execution reverted", "out of gas").
+    pub error: Option<String>,
+    /// Decoded Solidity revert reason, when present.
+    pub revert_reason: Option<String>,
+    pub calls: Vec<EthCallFrame>,
+    /// §11.4 root-only extension: the payload (DAG) block that carried the tx.
+    pub misaka_originating_payload_block: Option<Vec<u8>>,
+    /// §11.4 root-only extension: the accepting block whose context the trace used.
+    pub misaka_accepting_block: Option<Vec<u8>>,
+}
+
 #[async_trait]
 pub trait EthProvider: Send + Sync + 'static {
     /// The EVM chain id (`EVM_CHAIN_ID`).
@@ -353,6 +381,16 @@ pub trait EthProvider: Send + Sync + 'static {
         let (_tx, rx) = tokio::sync::broadcast::channel(1);
         rx
     }
+
+    /// `debug_traceTransaction` with the Geth `callTracer` (design §11): re-execute
+    /// the accepted tx with a call-frame inspector against the exact pre-state and
+    /// return its call tree, reconciled against the committed receipt. `None` = the
+    /// tx is unknown / not an accepted (traceable) tx on the selected chain
+    /// (§11.6 — skipped txs report a reason via `misaka_getEvmTxStatus`). Default:
+    /// unsupported (providers without the EVM executor).
+    async fn trace_transaction(&self, _tx_hash: [u8; 32]) -> EthResult<Option<EthCallFrame>> {
+        Err(EthRpcError::new(codes::METHOD_NOT_FOUND, "debug_traceTransaction is not available on this node"))
+    }
 }
 
 /// The EVM-lane lifecycle of a tx (`misaka_getEvmTxStatus`). `state` is a best-effort
@@ -459,6 +497,7 @@ async fn dispatch(provider: &Arc<dyn EthProvider>, req: RpcRequest) -> RpcRespon
         "eth_getLogs" => eth_get_logs(provider, &req.params).await,
         "eth_feeHistory" => eth_fee_history(provider, &req.params).await,
         "eth_getTransactionByHash" => eth_get_transaction_by_hash(provider, &req.params).await,
+        "debug_traceTransaction" => debug_trace_transaction(provider, &req.params).await,
         other => Err(EthRpcError::new(codes::METHOD_NOT_FOUND, format!("the method {other} does not exist / is not available"))),
     };
     match result {
@@ -977,6 +1016,49 @@ async fn eth_fee_history(provider: &Arc<dyn EthProvider>, params: &Value) -> Eth
 async fn eth_get_transaction_by_hash(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let hash = parse_hash32_param(params, 0)?;
     Ok(provider.transaction_by_hash(hash).await?.map(|t| render_tx(&t)).unwrap_or(Value::Null))
+}
+
+/// `debug_traceTransaction(txHash, { tracer: "callTracer" })` (§11.1). Only the
+/// Geth `callTracer` is supported in this increment; any other named tracer is an
+/// explicit `invalid_params` (no silent fallback to a different shape).
+async fn debug_trace_transaction(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
+    let hash = parse_hash32_param(params, 0)?;
+    // Optional second arg: the tracer config object. Accept an absent/empty config
+    // (defaults to callTracer) or an explicit `"callTracer"`; reject others.
+    let requested_tracer =
+        params.as_array().and_then(|a| a.get(1)).filter(|cfg| !cfg.is_null()).and_then(|cfg| cfg.get("tracer")).and_then(|t| t.as_str());
+    match requested_tracer {
+        None | Some("callTracer") => {}
+        Some(other) => {
+            return Err(EthRpcError::invalid_params(format!("unsupported tracer {other:?}; only \"callTracer\" is available")))
+        }
+    }
+    Ok(provider.trace_transaction(hash).await?.map(|f| render_call_frame(&f)).unwrap_or(Value::Null))
+}
+
+/// Render a [`EthCallFrame`] tree as Geth `callTracer` JSON (§11.4).
+fn render_call_frame(f: &EthCallFrame) -> Value {
+    let hx = |b: &[u8]| format!("0x{}", faster_hex::hex_string(b));
+    let mut obj = serde_json::Map::new();
+    obj.insert("type".to_string(), json!(f.call_type));
+    obj.insert("from".to_string(), json!(hx(&f.from)));
+    obj.insert("to".to_string(), f.to.map(|a| json!(hx(&a))).unwrap_or(Value::Null));
+    obj.insert("value".to_string(), quantity_from_be32(&f.value));
+    obj.insert("gas".to_string(), quantity(f.gas as u128));
+    obj.insert("gasUsed".to_string(), quantity(f.gas_used as u128));
+    obj.insert("input".to_string(), json!(hx(&f.input)));
+    obj.insert("output".to_string(), json!(hx(&f.output)));
+    obj.insert("error".to_string(), f.error.as_ref().map(|e| json!(e)).unwrap_or(Value::Null));
+    obj.insert("revertReason".to_string(), f.revert_reason.as_ref().map(|r| json!(r)).unwrap_or(Value::Null));
+    let calls: Vec<Value> = f.calls.iter().map(render_call_frame).collect();
+    obj.insert("calls".to_string(), Value::Array(calls));
+    if let Some(b) = &f.misaka_originating_payload_block {
+        obj.insert("misakaOriginatingPayloadBlock".to_string(), json!(hx(b)));
+    }
+    if let Some(b) = &f.misaka_accepting_block {
+        obj.insert("misakaAcceptingBlock".to_string(), json!(hx(b)));
+    }
+    Value::Object(obj)
 }
 
 /// Render an [`EthTx`] as the standard `eth_getTransactionByHash` JSON. `v/r/s`

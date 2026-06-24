@@ -1517,6 +1517,25 @@ impl ConsensusApi for Consensus {
         Ok(self.storage.evm_state_store.get(block).optional().unwrap())
     }
 
+    fn get_evm_trace_replay_body(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmTraceReplayBodyV1>> {
+        use crate::model::stores::evm::EvmTraceReplayStoreReader;
+        // The store's `get` already maps an absent key to `Ok(None)`. A real store
+        // fault (RocksDB I/O / borsh corruption) surfaces as a clean consensus error
+        // the RPC layer turns into a JSON-RPC error — never a serving-task panic.
+        self.storage
+            .evm_trace_store
+            .get(block)
+            .map_err(|e| kaspa_consensus_core::errors::consensus::ConsensusError::GeneralOwned(e.to_string()))
+    }
+
+    fn evm_activation_fences(&self) -> (u64, u64, u64) {
+        (
+            self.config.params.evm_gas_pool_v2_activation_daa_score,
+            self.config.params.evm_f002_withdraw_cap_activation_daa_score,
+            self.config.params.evm_f003_mldsa_verify_activation_daa_score,
+        )
+    }
+
     fn get_evm_block_by_l1_hash(&self, l1_hash: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmRawTxStoreReader, EvmReceiptsStoreReader};
         let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().unwrap() else { return Ok(None) };
