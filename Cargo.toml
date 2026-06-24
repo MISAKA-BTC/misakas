@@ -19,6 +19,7 @@ members = [
     "consensus/pow",
     "consensus/wasm",
     "kaspa-evm",
+    "evm-indexer/core",
     "kaspad",
     "kaspa-pq-validator",
     "kaspa-pq-validator-core",

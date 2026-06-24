@@ -1,0 +1,27 @@
+[package]
+name = "misaka-evm-indexer-core"
+description = "MISAKA EVM token-transfer indexer core (§10): standalone, decodes ERC-20/721/1155 events from RPC logs into normalized transfer rows. No consensus/revm/PostgreSQL deps in this crate — pure decode + models + reorg-delta logic."
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# This is the OFF-CHAIN indexer's pure core. It consumes the node only through
+# the public Ethereum JSON-RPC shapes (§9 WS logs + §8 eth_getLogs backfill), so
+# it links NO consensus / revm / secp — keeping it buildable and testable in
+# isolation (and outside the node's secp-free default build entirely). The
+# storage backends (PostgreSQL / RocksDB) live in later slices / the bin crate.
+[dependencies]
+# U256 (numeric(78,0) amounts/ids), Address, and keccak256 for the event topic0
+# constants. Pinned to the EVM lane's alloy 0.8 line (no version skew).
+alloy-primitives = { version = "0.8" }
+thiserror.workspace = true
+
+[dev-dependencies]
+faster-hex.workspace = true
+
+[lints]
+workspace = true
