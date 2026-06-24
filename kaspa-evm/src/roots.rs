@@ -195,6 +195,12 @@ mod tests {
             faster_hex::hex_string(&root.as_bytes()),
             "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
         );
+        // v1 ALSO yields Ethereum's empty-trie root for empty receipts — so the
+        // executor's empty-block fast path (which may emit either, depending on the
+        // fence) is byte-identical across the fence. This pins that equivalence so a
+        // future alloy_trie / encoder change cannot silently fork empty blocks.
+        assert_eq!(receipts_root(&[]).as_bytes(), alloy_trie::EMPTY_ROOT_HASH.0);
+        assert_eq!(receipts_root(&[]), receipts_root_v2(&[], &[]), "v1(empty) == v2(empty)");
     }
 
     /// The per-receipt bloom MISAKA computes (receipt_logs_bloom, the eth-rpc

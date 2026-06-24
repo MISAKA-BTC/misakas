@@ -543,7 +543,10 @@ pub fn execute_block_evm(
     // and is removed; release behaviour is unchanged (it was compiled out there anyway).
     // §12 Phase-7: the receipts root — v2 (Ethereum EIP-2718 typed) at/above the
     // fence, else v1 (borsh-MPT). `executed_raws` is parallel to `receipts` (the
-    // accepted txs in order); v2 reads each tx's EIP-2718 type from it.
+    // accepted txs in order — every accepted tx pushes BOTH in lockstep, skips push
+    // neither); v2 reads each tx's EIP-2718 type from it. The invariant is what makes
+    // the index zip in receipts_root_v2 sound.
+    debug_assert_eq!(receipts.len(), executed_raws.len(), "receipts and executed_raws must be parallel for the typed receipt root");
     let receipts_root =
         if typed_receipt_root_v2 { roots::receipts_root_v2(&receipts, &executed_raws) } else { roots::receipts_root(&receipts) };
     let header = EvmExecutionHeader {
@@ -623,7 +626,15 @@ pub fn empty_acceptance_result(input: &EvmBlockInput) -> EvmExecutionResult {
         // No account was touched: the post-state trie is the parent's.
         state_root: parent_state_root,
         transactions_root: roots::transactions_root(&[]),
-        receipts_root: roots::receipts_root(&[]),
+        // §12 Phase-7: mirror the full path's fence-conditional receipts root so this
+        // fast path stays byte-identical to it for BOTH fence states. (For empty
+        // receipts v1 and v2 both yield Ethereum's empty-trie root, so this does not
+        // change any committed bytes — it keeps the two paths provably in lockstep.)
+        receipts_root: if input.daa_score >= input.typed_receipt_root_activation_daa_score {
+            roots::receipts_root_v2(&[], &[])
+        } else {
+            roots::receipts_root(&[])
+        },
         system_ops_root: roots::system_ops_root(&[]),
         withdrawals_root: roots::withdrawals_root(&[]),
         deposit_claim_queue_root: roots::deposit_claim_root(&[]),
@@ -980,6 +991,18 @@ mod tests {
         let (via_snapshot, child_snapshot) = crate::snapshot::execute_block_from_snapshot(&parent_snapshot, &child_input).unwrap();
         assert_eq!(via_snapshot.header, fast_child.header);
         assert_eq!(child_snapshot, parent_snapshot);
+
+        // (c) §12 Phase-7: with the typed-receipt fence ACTIVE, the fast path's
+        // fence-conditional receipts_root must STILL equal the full path's (both emit
+        // v2(empty) == Ethereum's empty root). This closes the review gap where the
+        // fast-path↔full-path equivalence was only proven for the inert fence.
+        let active_input = EvmBlockInput { typed_receipt_root_activation_daa_score: 0, ..child_input };
+        let (full_active, _) = execute_block_evm(seed_cachedb(&parent_snapshot).unwrap(), &active_input).unwrap();
+        let fast_active = empty_acceptance_result(&active_input);
+        assert_eq!(full_active.header, fast_active.header, "fence-active: fast path == full path");
+        assert_eq!(full_active.header.commitment_root(), fast_active.header.commitment_root());
+        // Empty receipts ⇒ the active root equals the inert root (both the empty trie).
+        assert_eq!(full_active.header.receipts_root, fast_child.header.receipts_root, "empty receipts_root is fence-invariant");
     }
 
     #[test]
