@@ -1166,6 +1166,23 @@ impl EvmHistoryMode {
             Self::Archive => "archive",
         }
     }
+
+    /// §12 retention policy — whether this mode WRITES the per-block archive
+    /// diff/checkpoint (prefixes 220/221). `head` keeps no long-term state history
+    /// (its reorg/trace window is served by the hot snapshot + trace stores), so
+    /// it writes none; `recent` and `archive` write them.
+    pub fn writes_state_history(self) -> bool {
+        !matches!(self, Self::Head)
+    }
+
+    /// §12 retention policy — whether a pruned block's EVM header + diff +
+    /// checkpoint are PRESERVED past pruning so its state stays reconstructable
+    /// ([`crate::api::ConsensusApi::reconstruct_evm_state_at`]). Only `archive`;
+    /// `head`/`recent` reclaim them with the block. (The content-addressed code
+    /// store is never per-block pruned in any mode — its entries are shared.)
+    pub fn retains_state_history_past_pruning(self) -> bool {
+        matches!(self, Self::Archive)
+    }
 }
 
 /// A canonical-resolved receipt view (§16 `eth_getTransactionReceipt`
@@ -1567,5 +1584,17 @@ mod tests {
         // borsh-stable (it may be persisted in node config / future state-meta).
         let b = borsh::to_vec(&EvmHistoryMode::Archive).unwrap();
         assert_eq!(EvmHistoryMode::Archive, borsh::from_slice::<EvmHistoryMode>(&b).unwrap());
+    }
+
+    #[test]
+    fn history_mode_retention_policy() {
+        // §12 writer gate: head writes no diffs; recent/archive do.
+        assert!(!EvmHistoryMode::Head.writes_state_history());
+        assert!(EvmHistoryMode::Recent.writes_state_history());
+        assert!(EvmHistoryMode::Archive.writes_state_history());
+        // §12 prune gate: only archive preserves header+diff+checkpoint past pruning.
+        assert!(EvmHistoryMode::Archive.retains_state_history_past_pruning());
+        assert!(!EvmHistoryMode::Recent.retains_state_history_past_pruning());
+        assert!(!EvmHistoryMode::Head.retains_state_history_past_pruning());
     }
 }

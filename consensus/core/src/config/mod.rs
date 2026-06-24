@@ -72,6 +72,14 @@ pub struct Config {
 
     /// The number of days to keep data for
     pub retention_period_days: Option<f64>,
+
+    /// kaspa-pq EVM Lane (§12): this node's EVM state-history retention mode
+    /// (`--evm-history-mode`). Node-local, NOT consensus-sensitive — it only
+    /// controls whether the archive diff/checkpoint rows (prefixes 220/221) are
+    /// written and how long they survive pruning; it never affects block validity
+    /// or any commitment. `head` writes no diffs; `recent` keeps them to the
+    /// pruning boundary; `archive` preserves EVM state history past pruning.
+    pub evm_history_mode: crate::evm::EvmHistoryMode,
 }
 
 impl Config {
@@ -100,6 +108,7 @@ impl Config {
             disable_upnp: false,
             ram_scale: 1.0,
             retention_period_days: None,
+            evm_history_mode: crate::evm::EvmHistoryMode::Recent,
         }
     }
 

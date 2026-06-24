@@ -525,14 +525,34 @@ impl PruningProcessor {
                 // executor only ever seeds from the selected-parent snapshot (a
                 // recent, kept block) and the pruning-point anchor snapshot is in
                 // keep_blocks, so deleting buried blocks' EVM state is safe; archival
-                // nodes skip pruning entirely and retain full EVM history.
+                // (`is_archival`) nodes skip pruning entirely and retain everything.
+                //
+                // The full snapshot (206), payload, receipts and trace are ALWAYS
+                // reclaimed here. §12: whether this block's EVM STATE remains
+                // queryable past pruning depends on `--evm-history-mode`:
+                //   - `archive`: keep the header + archive diff (220) + checkpoint
+                //     (221) so `reconstruct_evm_state_at` can rebuild this pruned
+                //     block's state (the dropped snapshot is replaced by replaying
+                //     the checkpoint forward through the diffs).
+                //   - `head`/`recent`: reclaim the header + diff + checkpoint too
+                //     (a no-op in `head`, which writes no diffs) — state history is
+                //     kept only for unpruned blocks.
+                // The content-addressed code store (222) is NEVER per-block pruned:
+                // a `code_hash` is shared by every block that references that code,
+                // so deleting it on one block's pruning would corrupt others.
                 self.evm_state_store.delete_batch(&mut batch, current).unwrap();
-                self.evm_header_store.delete_batch(&mut batch, current).unwrap();
                 self.evm_payload_store.delete_batch(&mut batch, current).unwrap();
                 self.evm_receipts_store.delete_batch(&mut batch, current).unwrap();
                 // §11: the per-block trace replay plan is reclaimed with the rest of
                 // the block's EVM rows (a trace cannot outlive its pre-state snapshot).
                 self.evm_trace_store.delete_batch(&mut batch, current).unwrap();
+                if self.config.evm_history_mode.retains_state_history_past_pruning() {
+                    // Archive: keep header + diff + checkpoint for historical reconstruction.
+                } else {
+                    self.evm_header_store.delete_batch(&mut batch, current).unwrap();
+                    self.evm_state_diff_store.delete_batch(&mut batch, current).unwrap();
+                    self.evm_state_checkpoint_store.delete_batch(&mut batch, current).unwrap();
+                }
 
                 if let Some(&affiliated_proof_level) = keep_relations.get(&current) {
                     if statuses_write.get(current).optional().unwrap().is_some_and(|s| s.is_valid()) {

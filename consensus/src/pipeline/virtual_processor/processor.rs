@@ -222,6 +222,11 @@ pub struct VirtualStateProcessor {
     pub(super) evm_state_diff_store: Arc<crate::model::stores::evm::DbEvmStateDiffStore>,
     pub(super) evm_state_checkpoint_store: Arc<crate::model::stores::evm::DbEvmStateCheckpointStore>,
     pub(super) evm_code_store: Arc<crate::model::stores::evm::DbEvmCodeStore>,
+    // §12: this node's EVM state-history retention mode (`--evm-history-mode`). In
+    // `head` mode the per-block archive diff/checkpoint (220/221) are not written at
+    // all; `recent`/`archive` write them (the pruning processor decides how long
+    // they survive). Node-local — never affects block validity or any commitment.
+    pub(super) evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
     pub(super) evm_activation_daa_score: u64,
     pub(super) evm_gas_pool_v2_activation_daa_score: u64,
     pub(super) evm_f002_withdraw_cap_activation_daa_score: u64,
@@ -298,6 +303,7 @@ impl VirtualStateProcessor {
         notification_root: Arc<ConsensusNotificationRoot>,
         counters: Arc<ProcessingCounters>,
         mining_rules: Arc<MiningRules>,
+        evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
     ) -> Self {
         Self {
             receiver,
@@ -338,6 +344,7 @@ impl VirtualStateProcessor {
             evm_state_diff_store: storage.evm_state_diff_store.clone(),
             evm_state_checkpoint_store: storage.evm_state_checkpoint_store.clone(),
             evm_code_store: storage.evm_code_store.clone(),
+            evm_history_mode,
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: params.evm_f002_withdraw_cap_activation_daa_score,
@@ -1132,7 +1139,14 @@ impl VirtualStateProcessor {
         evm_staged: Option<crate::processes::evm::EvmStaged>,
     ) {
         let mut batch = WriteBatch::default();
-        if let Some(staged) = evm_staged {
+        if let Some(mut staged) = evm_staged {
+            // §12: in a mode that keeps no long-term EVM state history (`head`), drop
+            // the archive diff so staging writes no diff/code/checkpoint rows
+            // (220/221/222). The hot snapshot (206) + trace body (219) still cover its
+            // reorg/trace window.
+            if !self.evm_history_mode.writes_state_history() {
+                staged.state_diff = None;
+            }
             self.evm_header_store.insert_batch(&mut batch, current, staged.result.header.clone()).unwrap();
             // §16: receipts + tx-lookup index rows (store/RPC data only) commit
             // in the SAME batch — atomic with the result and the UTXO diff.

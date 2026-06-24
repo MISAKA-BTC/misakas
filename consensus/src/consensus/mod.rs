@@ -279,6 +279,7 @@ impl Consensus {
             notification_root.clone(),
             counters.clone(),
             mining_rules,
+            config.evm_history_mode, // §12: gate the archive diff/checkpoint writer
         ));
 
         let pruning_processor = Arc::new(PruningProcessor::new(
