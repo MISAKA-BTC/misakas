@@ -495,6 +495,20 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// kaspa-pq EVM Lane (§12): reconstruct + verify the full EVM state AT a
+    /// historical block by seeding from the nearest checkpoint (or genesis) and
+    /// replaying the forward diffs along the block's selected-parent chain
+    /// (design §12.4). The reconstructed state's keccak-MPT root is checked
+    /// against the block's committed `state_root` — a mismatch is a hard error
+    /// (data corruption; never an empty-state fallback). `Ok(None)` ⇒ `block` is
+    /// not an EVM block (no header). An `Err` ⇒ the block IS an EVM block but its
+    /// state history is unavailable on this node (GC'd past `--evm-history-mode`
+    /// retention) or corrupt — the RPC layer maps it to a JSON-RPC error, never a
+    /// silent empty state. Requires an `evm`-feature node (revm for the root).
+    fn reconstruct_evm_state_at(&self, _block: BlockHash) -> ConsensusResult<Option<crate::evm::EvmStateSnapshot>> {
+        Ok(None)
+    }
+
     /// kaspa-pq EVM Lane (§11): the network's three EVM-execution activation fences
     /// — `(evm_gas_pool_v2, evm_f002_withdraw_cap, evm_f003_mldsa_verify)` activation
     /// DAA scores. The trace replay MUST run the same gas-pool / withdraw-cap / F003

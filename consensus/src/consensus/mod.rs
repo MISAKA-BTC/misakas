@@ -1536,6 +1536,52 @@ impl ConsensusApi for Consensus {
         )
     }
 
+    fn reconstruct_evm_state_at(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmStateSnapshot>> {
+        use crate::model::stores::evm::EvmHeaderStoreReader;
+        use kaspa_consensus_core::errors::consensus::ConsensusError;
+
+        // Not an EVM block (no committed header) ⇒ None — distinct from "EVM block
+        // whose state history this node doesn't retain", which is an Err below.
+        let Some(target_header) = self.storage.evm_header_store.get(block).optional().unwrap() else {
+            return Ok(None);
+        };
+
+        #[cfg(feature = "evm")]
+        {
+            use crate::model::stores::evm::{EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
+            let oops = |m: String| ConsensusError::GeneralOwned(m);
+
+            // Walk `block`'s selected-parent chain backward (design §12.4) to the
+            // nearest checkpoint (its full state) or the pre-activation genesis,
+            // collecting the forward diffs to replay. Pure store-walk.
+            let (seed, forward_diffs) = crate::processes::evm::gather_reconstruction_inputs(
+                block,
+                |b| self.storage.evm_state_checkpoint_store.get(b),
+                |b| self.storage.evm_state_diff_store.get(b),
+                |b| self.storage.evm_header_store.get(b).optional().unwrap().is_some(),
+            )
+            .map_err(|e| oops(e.to_string()))?;
+
+            // Reconstruct + verify the keccak-MPT root against the committed state root.
+            let snapshot = kaspa_evm::reconstruct::reconstruct_evm_state(
+                &seed,
+                &forward_diffs,
+                |h| {
+                    use crate::model::stores::evm::EvmCodeStoreReader;
+                    self.storage.evm_code_store.get(*h).ok().flatten()
+                },
+                target_header.state_root,
+            )
+            .map_err(|e| oops(format!("EVM reconstruction of {block}: {e}")))?;
+            Ok(Some(snapshot))
+        }
+        #[cfg(not(feature = "evm"))]
+        {
+            let _ = target_header;
+            Err(ConsensusError::GeneralOwned("EVM historical state reconstruction requires an evm-feature node (revm)".into()))
+        }
+    }
+
     fn get_evm_block_by_l1_hash(&self, l1_hash: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmRawTxStoreReader, EvmReceiptsStoreReader};
         let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().unwrap() else { return Ok(None) };

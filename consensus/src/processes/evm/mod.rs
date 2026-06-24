@@ -465,6 +465,179 @@ pub fn stage_evm_index_rows(
     Ok(())
 }
 
+/// A §12 reconstruction-gather failure (design §12.4) — fail closed; the caller
+/// maps it to an RPC error, never a silent empty state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReconstructGatherError {
+    /// A store read failed (RocksDB / decode).
+    Store(String),
+    /// A checkpoint's snapshot could not be decoded (bad checksum / encoding).
+    Checkpoint(String),
+    /// The block IS an EVM block but a diff/checkpoint on its parent chain is not
+    /// retained on this node (GC'd past `--evm-history-mode` retention).
+    Unavailable(String),
+    /// The backward walk exceeded its bound — the checkpoint/diff chain is broken.
+    TooDeep(String),
+}
+
+impl std::fmt::Display for ReconstructGatherError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReconstructGatherError::Store(m) => write!(f, "EVM reconstruction store read: {m}"),
+            ReconstructGatherError::Checkpoint(m) => write!(f, "EVM reconstruction checkpoint: {m}"),
+            ReconstructGatherError::Unavailable(m) => write!(f, "EVM state history unavailable: {m}"),
+            ReconstructGatherError::TooDeep(m) => write!(f, "EVM reconstruction walk too deep: {m}"),
+        }
+    }
+}
+
+/// §12 reconstruction GATHER (design §12.4): walk `block`'s selected-parent chain
+/// backward, collecting forward diffs until anchoring on a checkpoint (its full
+/// state — that block's own diff is then unneeded) or reaching the pre-activation
+/// genesis (the empty state). Returns `(seed_snapshot, forward_diffs)` ordered
+/// anchor-child..target for `kaspa_evm::reconstruct::reconstruct_evm_state` to
+/// replay + verify. Following the BLOCK'S OWN parent links (not the canonical
+/// number map) serves canonical and side-branch blocks uniformly. Pure store-walk
+/// (no revm); the three reads are closures so it is unit-testable offline.
+#[allow(clippy::type_complexity)]
+pub fn gather_reconstruction_inputs<E: std::fmt::Display>(
+    block: kaspa_consensus_core::BlockHash,
+    get_checkpoint: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateCheckpointV1>, E>,
+    get_diff: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, E>,
+    has_header: impl Fn(kaspa_consensus_core::BlockHash) -> bool,
+) -> Result<(kaspa_consensus_core::evm::EvmStateSnapshot, Vec<kaspa_consensus_core::evm::EvmStateDiffV2>), ReconstructGatherError> {
+    // A healthy chain anchors on a checkpoint within EVM_CHECKPOINT_INTERVAL steps
+    // (or reaches genesis for an early block). Far beyond ⇒ broken chain — fail closed.
+    const MAX_RECONSTRUCTION_DIFFS: usize = 8 * kaspa_consensus_core::evm::EVM_CHECKPOINT_INTERVAL as usize;
+
+    let mut pending: Vec<kaspa_consensus_core::evm::EvmStateDiffV2> = Vec::new();
+    let mut cur = block;
+    let seed = loop {
+        if let Some(cp) = get_checkpoint(cur).map_err(|e| ReconstructGatherError::Store(e.to_string()))? {
+            break cp.decode_snapshot().map_err(|e| ReconstructGatherError::Checkpoint(format!("{cur}: {e}")))?;
+        }
+        let diff = get_diff(cur)
+            .map_err(|e| ReconstructGatherError::Store(e.to_string()))?
+            .ok_or_else(|| ReconstructGatherError::Unavailable(format!("no diff for {cur} (older than retention)")))?;
+        let parent = diff.parent;
+        pending.push(diff);
+        if pending.len() > MAX_RECONSTRUCTION_DIFFS {
+            return Err(ReconstructGatherError::TooDeep(format!("{block}: exceeded {MAX_RECONSTRUCTION_DIFFS} diffs")));
+        }
+        // A parent with no EVM header is pre-activation ⇒ anchor = empty genesis.
+        if !has_header(parent) {
+            break kaspa_consensus_core::evm::EvmStateSnapshot::default();
+        }
+        cur = parent;
+    };
+    pending.reverse();
+    Ok((seed, pending))
+}
+
+#[cfg(test)]
+mod gather_tests {
+    use super::*;
+    use kaspa_consensus_core::evm::{
+        compute_state_diff, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EVM_EMPTY_CODE_HASH,
+    };
+    use kaspa_consensus_core::BlockHash;
+    use std::collections::HashMap;
+    use std::convert::Infallible;
+
+    fn h(b: u8) -> BlockHash {
+        BlockHash::from_bytes([b; 64])
+    }
+
+    /// Build a tiny EOA-only snapshot for block `n` (balance encodes the block).
+    fn snap_at(n: u8) -> EvmStateSnapshot {
+        use kaspa_consensus_core::evm::{EvmAccountSnapshot, EvmAddress, EvmU256};
+        EvmStateSnapshot {
+            accounts: vec![EvmAccountSnapshot {
+                address: EvmAddress::from_bytes([0x01; 20]),
+                nonce: n as u64,
+                balance: EvmU256::from_u128(1000 - n as u128),
+                code_hash: EVM_EMPTY_CODE_HASH,
+                code: vec![],
+                storage: vec![],
+            }],
+        }
+    }
+
+    /// A 3-block chain blocks 1,2,3 (genesis = block 0 = empty). Diffs keyed by block,
+    /// each diff.parent points to the previous block; block 0 has no header.
+    struct Chain {
+        diffs: HashMap<BlockHash, EvmStateDiffV2>,
+        checkpoints: HashMap<BlockHash, EvmStateCheckpointV1>,
+        snaps: Vec<EvmStateSnapshot>, // index = block number
+    }
+
+    fn chain() -> Chain {
+        let snaps = vec![EvmStateSnapshot::default(), snap_at(1), snap_at(2), snap_at(3)];
+        let mut diffs = HashMap::new();
+        for n in 1..=3u8 {
+            diffs.insert(h(n), compute_state_diff(&snaps[(n - 1) as usize], &snaps[n as usize], h(n), h(n - 1)));
+        }
+        Chain { diffs, checkpoints: HashMap::new(), snaps }
+    }
+
+    fn gather(c: &Chain, block: BlockHash) -> Result<(EvmStateSnapshot, Vec<EvmStateDiffV2>), ReconstructGatherError> {
+        gather_reconstruction_inputs::<Infallible>(
+            block,
+            |b| Ok(c.checkpoints.get(&b).cloned()),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            // Blocks 1..3 have headers; block 0 (genesis) does not.
+            |b| (1..=3u8).any(|n| h(n) == b),
+        )
+    }
+
+    /// With no checkpoints, the walk reaches genesis and returns the empty seed
+    /// plus all diffs 1..target in forward order.
+    #[test]
+    fn walks_to_genesis_collecting_all_diffs() {
+        let c = chain();
+        let (seed, diffs) = gather(&c, h(3)).unwrap();
+        assert!(seed.is_empty(), "no checkpoint ⇒ genesis seed");
+        assert_eq!(diffs.len(), 3);
+        assert_eq!(diffs[0], c.diffs[&h(1)]);
+        assert_eq!(diffs[1], c.diffs[&h(2)]);
+        assert_eq!(diffs[2], c.diffs[&h(3)]);
+    }
+
+    /// A checkpoint at block 2 anchors the walk: seed = state@2, diffs = [diff@3].
+    #[test]
+    fn anchors_on_checkpoint() {
+        let mut c = chain();
+        c.checkpoints.insert(
+            h(2),
+            EvmStateCheckpointV1::build(h(2), 2, kaspa_hashes::EvmH256::from_bytes([0; 32]), &c.snaps[2]),
+        );
+        let (seed, diffs) = gather(&c, h(3)).unwrap();
+        assert_eq!(seed, c.snaps[2], "seed = checkpoint's full state at block 2");
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0], c.diffs[&h(3)]);
+    }
+
+    /// A checkpoint AT the target returns it directly (no diffs to apply).
+    #[test]
+    fn checkpoint_at_target_needs_no_diffs() {
+        let mut c = chain();
+        c.checkpoints
+            .insert(h(3), EvmStateCheckpointV1::build(h(3), 3, kaspa_hashes::EvmH256::from_bytes([0; 32]), &c.snaps[3]));
+        let (seed, diffs) = gather(&c, h(3)).unwrap();
+        assert_eq!(seed, c.snaps[3]);
+        assert!(diffs.is_empty());
+    }
+
+    /// A missing diff mid-walk (GC'd) fails closed as Unavailable — never a partial state.
+    #[test]
+    fn missing_diff_fails_closed() {
+        let mut c = chain();
+        c.diffs.remove(&h(2)); // GC block 2's diff, no checkpoint to anchor on
+        let err = gather(&c, h(3)).unwrap_err();
+        assert!(matches!(err, ReconstructGatherError::Unavailable(_)));
+    }
+}
+
 #[cfg(feature = "evm")]
 mod driver {
     use crate::model::stores::evm::{
