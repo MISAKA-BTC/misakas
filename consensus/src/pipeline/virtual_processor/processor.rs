@@ -216,6 +216,12 @@ pub struct VirtualStateProcessor {
     pub(super) evm_number_store: Arc<crate::model::stores::evm::DbEvmNumberStore>,
     pub(super) evm_log_index_store: Arc<crate::model::stores::evm::DbEvmLogIndexStore>,
     pub(super) evm_trace_store: Arc<crate::model::stores::evm::DbEvmTraceReplayStore>,
+    // §12 archive: forward state diff (220) / full checkpoint (221) / content-addressed
+    // code (222) — written alongside the per-block result so an archive/recent node can
+    // reconstruct any canonical block's state. RPC/archive data only, never committed.
+    pub(super) evm_state_diff_store: Arc<crate::model::stores::evm::DbEvmStateDiffStore>,
+    pub(super) evm_state_checkpoint_store: Arc<crate::model::stores::evm::DbEvmStateCheckpointStore>,
+    pub(super) evm_code_store: Arc<crate::model::stores::evm::DbEvmCodeStore>,
     pub(super) evm_activation_daa_score: u64,
     pub(super) evm_gas_pool_v2_activation_daa_score: u64,
     pub(super) evm_f002_withdraw_cap_activation_daa_score: u64,
@@ -329,6 +335,9 @@ impl VirtualStateProcessor {
             evm_number_store: storage.evm_number_store.clone(),
             evm_log_index_store: storage.evm_log_index_store.clone(),
             evm_trace_store: storage.evm_trace_store.clone(),
+            evm_state_diff_store: storage.evm_state_diff_store.clone(),
+            evm_state_checkpoint_store: storage.evm_state_checkpoint_store.clone(),
+            evm_code_store: storage.evm_code_store.clone(),
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: params.evm_f002_withdraw_cap_activation_daa_score,
@@ -1034,7 +1043,7 @@ impl VirtualStateProcessor {
         };
         let sorted_mergeset: Vec<BlockHash> =
             virtual_state.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
-        let (result, _snapshot, _candidate_meta, _trace_body) = evm_execute_acceptance(
+        let (result, _snapshot, _candidate_meta, _trace_body, _parent_snapshot) = evm_execute_acceptance(
             &self.evm_header_store,
             &self.evm_state_store,
             &self.evm_payload_store,
@@ -1132,6 +1141,9 @@ impl VirtualStateProcessor {
                 &self.evm_tx_index_store,
                 &self.evm_log_index_store,
                 &self.evm_trace_store,
+                &self.evm_state_diff_store,
+                &self.evm_code_store,
+                &self.evm_state_checkpoint_store,
                 &mut batch,
                 current,
                 &staged,

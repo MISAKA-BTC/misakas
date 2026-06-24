@@ -280,6 +280,12 @@ pub struct EvmStaged {
     /// alongside execution. `None` for an acceptance with no candidate txs (nothing
     /// to trace). RPC/replay data only — never consensus-committed.
     pub trace_body: Option<kaspa_consensus_core::evm::EvmTraceReplayBodyV1>,
+    /// §12 archive: this block's forward state DIFF over its selected parent
+    /// (prefix 220) — `compute_state_diff(parent_snapshot, child_snapshot)`. Always
+    /// `Some` on the validate path (even an empty diff is recorded so every
+    /// canonical block N has a diff over N-1 and reconstruction has an unbroken
+    /// parent chain). RPC/archive data only — never consensus-committed.
+    pub state_diff: Option<kaspa_consensus_core::evm::EvmStateDiffV2>,
 }
 
 /// O12 (IBD catch-up pipeline): a worker thread that pre-executes the EVM
@@ -329,6 +335,9 @@ pub fn stage_evm_index_rows(
     tx_index_store: &crate::model::stores::evm::DbEvmTxIndexStore,
     log_index_store: &crate::model::stores::evm::DbEvmLogIndexStore,
     trace_store: &crate::model::stores::evm::DbEvmTraceReplayStore,
+    diff_store: &crate::model::stores::evm::DbEvmStateDiffStore,
+    code_store: &crate::model::stores::evm::DbEvmCodeStore,
+    checkpoint_store: &crate::model::stores::evm::DbEvmStateCheckpointStore,
     batch: &mut rocksdb::WriteBatch,
     accepting: kaspa_consensus_core::BlockHash,
     staged: &EvmStaged,
@@ -339,6 +348,30 @@ pub fn stage_evm_index_rows(
     // the accepting block. Present only when the block accepted candidate txs.
     if let Some(body) = &staged.trace_body {
         trace_store.insert_batch(batch, accepting, body.clone())?;
+    }
+
+    // §12 archive state history: the block's forward state DIFF over its selected
+    // parent (prefix 220) + any bytecode it newly deployed (prefix 222, content-
+    // addressed) + a full CHECKPOINT every EVM_CHECKPOINT_INTERVAL canonical blocks
+    // (prefix 221) — the anchors a historical reconstruction seeds from. Always
+    // written when the lane is active (the diff is smaller than the full snapshot
+    // already persisted to prefix 206); a later retention slice GCs them per the
+    // node's `--evm-history-mode`. RPC/archive data only — never consensus-committed.
+    if let Some(diff) = &staged.state_diff {
+        diff_store.insert_batch(batch, accepting, diff.clone())?;
+        for (code_hash, code) in kaspa_consensus_core::evm::diff_code_entries(diff, &staged.snapshot) {
+            code_store.write_batch(batch, code_hash, code.to_vec())?;
+        }
+        let evm_number = staged.result.header.evm_number;
+        if evm_number % kaspa_consensus_core::evm::EVM_CHECKPOINT_INTERVAL == 0 {
+            let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(
+                accepting,
+                evm_number,
+                staged.result.header.state_root,
+                &staged.snapshot,
+            );
+            checkpoint_store.insert_batch(batch, accepting, checkpoint)?;
+        }
     }
 
     // audit R2-#6: candidate_meta and candidate_outcomes are produced in lockstep
@@ -502,7 +535,7 @@ mod driver {
         }
         debug_assert!(!sorted_mergeset.contains(&block), "a block is never in its own mergeset (off-by-one, §3.1)");
 
-        let (result, child_snapshot, candidate_meta, trace_body) = evm_execute_acceptance(
+        let (result, child_snapshot, candidate_meta, trace_body, parent_snapshot) = evm_execute_acceptance(
             header_store,
             state_store,
             payload_store,
@@ -521,7 +554,10 @@ mod driver {
             return Err(EvmValidateError::CommitmentMismatch { block });
         }
 
-        Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta, trace_body }))
+        // §12: this block's forward state diff over its selected parent (prefix 220).
+        let state_diff = Some(kaspa_consensus_core::evm::compute_state_diff(&parent_snapshot, &child_snapshot, block, selected_parent));
+
+        Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta, trace_body, state_diff }))
     }
 
     /// O12 (IBD pipeline): [`evm_validate`] with an in-memory parent override —
@@ -546,7 +582,7 @@ mod driver {
         if header_store.has(block).map_err(EvmValidateError::Store)? {
             return Ok(None);
         }
-        let (result, child_snapshot, candidate_meta, trace_body) = evm_execute_acceptance_with_parent(
+        let (result, child_snapshot, candidate_meta, trace_body, parent_snapshot) = evm_execute_acceptance_with_parent(
             header_store,
             state_store,
             payload_store,
@@ -562,7 +598,9 @@ mod driver {
         if result.header.commitment_root() != l1_header.evm_commitment_root {
             return Err(EvmValidateError::CommitmentMismatch { block });
         }
-        Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta, trace_body }))
+        // §12: forward state diff over the selected parent (prefix 220), same as `evm_validate`.
+        let state_diff = Some(kaspa_consensus_core::evm::compute_state_diff(&parent_snapshot, &child_snapshot, block, selected_parent));
+        Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta, trace_body, state_diff }))
     }
 
     /// The shared execution core: run one block's mergeset acceptance from the
@@ -572,6 +610,7 @@ mod driver {
     /// reproduces the commitment byte-for-byte). `l1_header` supplies only the
     /// env inputs (timestamp / blue_work / daa_score) — its EVM fields are not
     /// read here.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub fn evm_execute_acceptance(
         header_store: &DbEvmHeaderStore,
         state_store: &DbEvmStateStore,
@@ -589,6 +628,10 @@ mod driver {
             EvmStateSnapshot,
             Vec<(kaspa_hashes::EvmH256, BlockHash)>,
             Option<EvmTraceReplayBodyV1>,
+            // §12: the SELECTED-PARENT snapshot, returned (a free move — it is read
+            // by ref to seed execution and would otherwise be dropped). The validate
+            // path diffs `(parent, child)` from it; the template path ignores it.
+            EvmStateSnapshot,
         ),
         EvmValidateError,
     > {
@@ -633,6 +676,8 @@ mod driver {
             EvmStateSnapshot,
             Vec<(kaspa_hashes::EvmH256, BlockHash)>,
             Option<EvmTraceReplayBodyV1>,
+            // §12: the selected-parent snapshot (free move — see `evm_execute_acceptance`).
+            EvmStateSnapshot,
         ),
         EvmValidateError,
     > {
@@ -748,7 +793,7 @@ mod driver {
             })
         };
 
-        Ok((result, snapshot, candidate_meta, trace_body))
+        Ok((result, snapshot, candidate_meta, trace_body, parent_snapshot))
     }
 
     /// Validate + stage into `batch` in one call (the unit-test surface; the
@@ -763,6 +808,9 @@ mod driver {
         tx_index_store: &crate::model::stores::evm::DbEvmTxIndexStore,
         log_index_store: &crate::model::stores::evm::DbEvmLogIndexStore,
         trace_store: &crate::model::stores::evm::DbEvmTraceReplayStore,
+        diff_store: &crate::model::stores::evm::DbEvmStateDiffStore,
+        code_store: &crate::model::stores::evm::DbEvmCodeStore,
+        checkpoint_store: &crate::model::stores::evm::DbEvmStateCheckpointStore,
         batch: &mut WriteBatch,
         block: BlockHash,
         selected_parent: BlockHash,
@@ -790,8 +838,19 @@ mod driver {
             return Ok(());
         };
         header_store.insert_batch(batch, block, staged.result.header.clone()).map_err(EvmValidateError::Store)?;
-        super::stage_evm_index_rows(receipts_store, tx_index_store, log_index_store, trace_store, batch, block, &staged)
-            .map_err(EvmValidateError::Store)?;
+        super::stage_evm_index_rows(
+            receipts_store,
+            tx_index_store,
+            log_index_store,
+            trace_store,
+            diff_store,
+            code_store,
+            checkpoint_store,
+            batch,
+            block,
+            &staged,
+        )
+        .map_err(EvmValidateError::Store)?;
         state_store.insert_batch(batch, block, staged.snapshot).map_err(EvmValidateError::Store)?;
         Ok(())
     }
@@ -1109,6 +1168,9 @@ mod tests {
         let tx_index_store = crate::model::stores::evm::DbEvmTxIndexStore::new(db.clone(), CachePolicy::Empty);
         let log_index_store = crate::model::stores::evm::DbEvmLogIndexStore::new(db.clone());
         let trace_store = crate::model::stores::evm::DbEvmTraceReplayStore::new(db.clone(), CachePolicy::Empty);
+        let diff_store = crate::model::stores::evm::DbEvmStateDiffStore::new(db.clone(), CachePolicy::Empty);
+        let code_store = crate::model::stores::evm::DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
+        let checkpoint_store = crate::model::stores::evm::DbEvmStateCheckpointStore::new(db.clone(), CachePolicy::Empty);
 
         // First EVM block on genesis: the driver reads the parent's state as
         // absent => the empty (genesis) snapshot — no seeding needed.
@@ -1169,6 +1231,9 @@ mod tests {
             &tx_index_store,
             &log_index_store,
             &trace_store,
+            &diff_store,
+            &code_store,
+            &checkpoint_store,
             &mut b1,
             l1.hash,
             selected_parent,
@@ -1209,6 +1274,32 @@ mod tests {
             "the undecodable candidate is recorded as skipped"
         );
 
+        // §12 archive: the block's forward state DIFF (prefix 220) landed in the same
+        // batch and equals the diff recomputed from (genesis parent, committed child).
+        use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader, EvmStateStoreReader};
+        let stored_diff = diff_store.get(l1.hash).unwrap().expect("a §12 state diff was persisted");
+        let child_snap = state_store.get(l1.hash).unwrap();
+        assert!(!child_snap.is_empty(), "the deposit claim credited an account, so the diff is non-trivial");
+        let recomputed = kaspa_consensus_core::evm::compute_state_diff(&EvmStateSnapshot::default(), &child_snap, l1.hash, selected_parent);
+        assert_eq!(stored_diff, recomputed, "stored diff == diff over the selected parent");
+        assert_eq!(stored_diff.parent, selected_parent);
+        // Reconstruct from the genesis seed + the stored diff, resolving code from the
+        // content-addressed store (prefix 222) — it reproduces the committed snapshot.
+        let mut recon = kaspa_consensus_core::evm::recon_from_snapshot(&EvmStateSnapshot::default());
+        kaspa_consensus_core::evm::apply_state_diff(&mut recon, &stored_diff).unwrap();
+        let rebuilt = kaspa_consensus_core::evm::recon_to_snapshot(&recon, |h| code_store.get(*h).ok().flatten()).unwrap();
+        assert_eq!(rebuilt, child_snap, "reconstruction from genesis + stored diff == the committed state");
+        // Checkpoint presence follows the interval rule; when present it decodes back
+        // to the committed state and carries the committed state root.
+        let evm_number = expected.header.evm_number;
+        let has_cp = checkpoint_store.has(l1.hash).unwrap();
+        assert_eq!(has_cp, evm_number % kaspa_consensus_core::evm::EVM_CHECKPOINT_INTERVAL == 0);
+        if has_cp {
+            let cp = checkpoint_store.get(l1.hash).unwrap().unwrap();
+            assert_eq!(cp.state_root, expected.header.state_root);
+            assert_eq!(cp.decode_snapshot().unwrap(), child_snap, "checkpoint decodes to the committed state");
+        }
+
         // No-replay: re-driving is a no-op (the already-stored result is reused).
         let mut b2 = WriteBatch::default();
         evm_validate_and_persist(
@@ -1219,6 +1310,9 @@ mod tests {
             &tx_index_store,
             &log_index_store,
             &trace_store,
+            &diff_store,
+            &code_store,
+            &checkpoint_store,
             &mut b2,
             l1.hash,
             selected_parent,
@@ -1244,6 +1338,9 @@ mod tests {
             &tx_index_store,
             &log_index_store,
             &trace_store,
+            &diff_store,
+            &code_store,
+            &checkpoint_store,
             &mut b3,
             bad.hash,
             selected_parent,
@@ -1269,6 +1366,9 @@ mod tests {
             &tx_index_store,
             &log_index_store,
             &trace_store,
+            &diff_store,
+            &code_store,
+            &checkpoint_store,
             &mut b4,
             bad2.hash,
             selected_parent,
