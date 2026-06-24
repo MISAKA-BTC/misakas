@@ -622,7 +622,11 @@ pub fn flat_to_recon(
 pub enum ShadowOutcome {
     /// Clean head extension: the differential passed and the diff applied incrementally (O(changed)).
     Extended,
-    /// Bootstrap (no pointer) or reorg (pointer ≠ parent): the flat store was reseeded from the committed snapshot.
+    /// Reorg (slice S5): the flat store was re-based to the new head by reverting/applying §12
+    /// diffs along the divergence (O(reorg-depth × changed)), differential-checked.
+    Rebased,
+    /// Bootstrap (no pointer) or a retention gap that blocks the incremental re-base: the flat
+    /// store was reseeded from the committed snapshot (the 206 source of truth).
     Reseeded,
     /// `head` history mode dropped the diff — no state history to maintain.
     SkippedNoDiff,
@@ -653,7 +657,92 @@ impl std::fmt::Display for ShadowError {
 }
 impl std::error::Error for ShadowError {}
 
-/// C-01 Stage 1 (slice S4) — node-local SHADOW dual-write + live differential.
+/// Cap on the §12-diff divergence the incremental re-base will walk before
+/// giving up and falling back to a full reseed (a deeper move is past any
+/// realistic finality-bounded reorg; the reseed is correct, just O(state)).
+const MAX_REBASE_STEPS: usize = 8192;
+
+/// The `(revert, forward)` diff paths of a re-base: diffs to apply in REVERSE off
+/// the old head down to the common ancestor, and diffs to apply FORWARD from the
+/// ancestor up to the new parent.
+type RebasePaths = (Vec<kaspa_consensus_core::evm::EvmStateDiffV2>, Vec<kaspa_consensus_core::evm::EvmStateDiffV2>);
+
+/// C-01 Stage 1 (slice S5) — walk the §12 diff chain from `from` and `to` (via
+/// `diff.parent` + the sequential `evm_number`) to their common ancestor. Returns
+/// `(revert, forward)`: the diffs to apply IN REVERSE off `from` (down to the
+/// ancestor) and the diffs to apply FORWARD from the ancestor up to `to`. `None`
+/// ⇒ a diff or number was unavailable (retention gap / pre-activation) or the
+/// divergence exceeded [`MAX_REBASE_STEPS`] ⇒ the caller falls back to a reseed.
+fn rebase_diff_paths(
+    from: kaspa_consensus_core::BlockHash,
+    to: kaspa_consensus_core::BlockHash,
+    get_diff: &impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, kaspa_database::prelude::StoreError>,
+    get_number: &impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<u64>, kaspa_database::prelude::StoreError>,
+) -> Result<Option<RebasePaths>, kaspa_database::prelude::StoreError> {
+    let (mut a, mut b) = (from, to);
+    let (mut na, mut nb) = match (get_number(a)?, get_number(b)?) {
+        (Some(x), Some(y)) => (x, y),
+        _ => return Ok(None),
+    };
+    let mut revert = Vec::new();
+    let mut forward = Vec::new();
+    // Align the deeper side down to the shallower side's evm_number (sequential
+    // along the selected-parent chain, so each step decrements by exactly one).
+    while na > nb {
+        let Some(d) = get_diff(a)? else { return Ok(None) };
+        a = d.parent;
+        revert.push(d);
+        na -= 1;
+        if revert.len() + forward.len() > MAX_REBASE_STEPS {
+            return Ok(None);
+        }
+    }
+    while nb > na {
+        let Some(d) = get_diff(b)? else { return Ok(None) };
+        b = d.parent;
+        forward.push(d);
+        nb -= 1;
+        if revert.len() + forward.len() > MAX_REBASE_STEPS {
+            return Ok(None);
+        }
+    }
+    // Now at equal depth — step both back in lockstep until they meet.
+    while a != b {
+        let Some(da) = get_diff(a)? else { return Ok(None) };
+        let Some(db) = get_diff(b)? else { return Ok(None) };
+        a = da.parent;
+        b = db.parent;
+        revert.push(da);
+        forward.push(db);
+        if revert.len() + forward.len() > MAX_REBASE_STEPS {
+            return Ok(None);
+        }
+    }
+    forward.reverse(); // ancestor → … → `to`
+    Ok(Some((revert, forward)))
+}
+
+/// Whether a reconstructed account equals a committed-snapshot account (cores +
+/// non-zero storage; code is committed by `code_hash`). Both `None` = absent in
+/// both.
+fn recon_account_matches(
+    got: Option<&kaspa_consensus_core::evm::ReconAccount>,
+    want: Option<&kaspa_consensus_core::evm::EvmAccountSnapshot>,
+) -> bool {
+    match (got, want) {
+        (None, None) => true,
+        (Some(g), Some(w)) => {
+            g.core.nonce == w.nonce
+                && g.core.balance == w.balance
+                && g.core.code_hash == w.code_hash
+                && g.storage.len() == w.storage.len()
+                && w.storage.iter().all(|(s, v)| g.storage.get(&s.to_be_bytes()) == Some(&v.to_be_bytes()))
+        }
+        _ => false,
+    }
+}
+
+/// C-01 Stage 1 (slice S4 + S5) — node-local SHADOW dual-write + live differential.
 /// OFF by default; enabled per node by `--evm-shadow-state-backend`.
 ///
 /// On every canonical-head-extending block this maintains the flat latest-
@@ -668,11 +757,13 @@ impl std::error::Error for ShadowError {}
 /// this node's availability — chain integrity is untouched (design §7 failure
 /// mode). 206 is still written by the caller.
 ///
-/// Bootstrap (no pointer) / reorg (pointer ≠ parent) RESEED the flat store from
-/// the committed snapshot (the 206 source of truth); incremental reorg rebase is
-/// slice S5. All writes go into the caller's `batch`, so the flat state advances
-/// atomically with the block (risk R3). secp-free; never invoked on a non-evm
-/// build (`staged` is always `None` there) nor on a default network (lane inert).
+/// Reorg (pointer ≠ parent, slice S5): re-base the flat store to the new head by
+/// reverting/applying §12 diffs along the divergence (`get_diff`/`get_number`
+/// walk the chain), differential-checked over the touched accounts. A retention
+/// gap falls back to a full reseed; bootstrap (no pointer) always reseeds. All
+/// writes go into the caller's `batch`, so the flat state advances atomically
+/// with the block (risk R3). secp-free; never invoked on a non-evm build
+/// (`staged` is always `None` there) nor on a default network (lane inert).
 #[allow(clippy::too_many_arguments)]
 pub fn shadow_dual_write_flat(
     flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
@@ -682,8 +773,15 @@ pub fn shadow_dual_write_flat(
     batch: &mut rocksdb::WriteBatch,
     current: kaspa_consensus_core::BlockHash,
     staged: &EvmStaged,
+    get_diff: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, kaspa_database::prelude::StoreError>,
+    get_number: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<u64>, kaspa_database::prelude::StoreError>,
 ) -> Result<ShadowOutcome, ShadowError> {
-    use kaspa_consensus_core::evm::{apply_state_diff, compute_state_diff, recon_from_snapshot, EvmLatestStatePtr};
+    use kaspa_consensus_core::evm::{
+        apply_inverse_state_diff, apply_state_diff, compute_state_diff, recon_from_snapshot, EvmAddress, EvmLatestStatePtr, EvmU256, FlatAccount,
+        ReconAccount, ReconState,
+    };
+    use std::collections::BTreeSet;
+
     let Some(diff) = &staged.state_diff else {
         // `head` mode dropped the diff (no state history kept) ⇒ nothing to maintain.
         return Ok(ShadowOutcome::SkippedNoDiff);
@@ -691,44 +789,90 @@ pub fn shadow_dual_write_flat(
     let committed_root = staged.result.header.state_root;
     let parent = diff.parent; // selected_parent(current) — the EVM parent
     let ptr = latest_ptr.get().map_err(ShadowError::Store)?;
-    let clean_extend = ptr.map(|p| p.canonical_head == parent).unwrap_or(false);
 
-    if clean_extend {
-        // The flat store represents `parent`. Apply this block's diff to a
-        // reconstruction of it and require the result to equal the committed
-        // post-state. `apply_state_diff` also tripwires a `before`-core mismatch
-        // (i.e. a flat store that drifted off `parent`).
+    let advance = |batch: &mut rocksdb::WriteBatch, latest_ptr: &mut crate::model::stores::evm::DbEvmLatestStatePtrStore| -> Result<(), ShadowError> {
+        block_root.write_batch(batch, current, committed_root).map_err(ShadowError::Store)?;
+        latest_ptr.set_batch(batch, EvmLatestStatePtr { canonical_head: current, state_root: committed_root }).map_err(ShadowError::Store)?;
+        Ok(())
+    };
+    let divergence = |detail: String| ShadowError::Divergence { block: current, committed_root, detail };
+
+    // (1) Clean head extension: the flat store represents `parent`.
+    if ptr.map(|p| p.canonical_head == parent).unwrap_or(false) {
         let mut got = flat_to_recon(flat).map_err(ShadowError::Store)?;
-        apply_state_diff(&mut got, diff).map_err(|e| ShadowError::Divergence {
-            block: current,
-            committed_root,
-            detail: format!("§12 diff is inconsistent with the persisted flat parent state: {e}"),
-        })?;
+        apply_state_diff(&mut got, diff).map_err(|e| divergence(format!("§12 diff is inconsistent with the persisted flat parent state: {e}")))?;
         let expected = recon_from_snapshot(&staged.snapshot);
         if got != expected {
-            return Err(ShadowError::Divergence {
-                block: current,
-                committed_root,
-                detail: format!("flat-derived post-state ({} accounts) != committed snapshot ({} accounts)", got.len(), expected.len()),
-            });
+            return Err(divergence(format!("flat-derived post-state ({} accounts) != committed snapshot ({} accounts)", got.len(), expected.len())));
         }
-        // Differential passed — advance the flat store incrementally (O(changed)).
         apply_diff_to_flat(flat, batch, diff).map_err(ShadowError::Store)?;
-        block_root.write_batch(batch, current, committed_root).map_err(ShadowError::Store)?;
-        latest_ptr.set_batch(batch, EvmLatestStatePtr { canonical_head: current, state_root: committed_root }).map_err(ShadowError::Store)?;
-        Ok(ShadowOutcome::Extended)
-    } else {
-        // Bootstrap (no pointer) or reorg (pointer ≠ parent): resync the flat
-        // store to the committed post-state. The committed snapshot (206) is the
-        // source of truth; the single diff from the current flat content to it
-        // deletes any stale rows. Incremental reorg rebase is slice S5.
-        let flat_now = materialize_snapshot(flat, code).map_err(ShadowError::Store)?;
-        let reseed = compute_state_diff(&flat_now, &staged.snapshot, current, parent);
-        apply_diff_to_flat(flat, batch, &reseed).map_err(ShadowError::Store)?;
-        block_root.write_batch(batch, current, committed_root).map_err(ShadowError::Store)?;
-        latest_ptr.set_batch(batch, EvmLatestStatePtr { canonical_head: current, state_root: committed_root }).map_err(ShadowError::Store)?;
-        Ok(ShadowOutcome::Reseeded)
+        advance(batch, latest_ptr)?;
+        return Ok(ShadowOutcome::Extended);
     }
+
+    // (2) Reorg: the pointer is at some other head. Re-base incrementally by
+    // reverting the flat state back to the common ancestor of `old_head` and
+    // `parent`, then applying forward to `parent`, then applying this block. A
+    // retention gap (`None`) drops to the reseed below.
+    let rebase = match ptr {
+        Some(p) => rebase_diff_paths(p.canonical_head, parent, &get_diff, &get_number).map_err(ShadowError::Store)?,
+        None => None,
+    };
+    if let Some((revert, forward)) = rebase {
+        // Touched accounts = every account named by a path diff or this block's diff.
+        let mut touched: BTreeSet<[u8; 20]> = BTreeSet::new();
+        for d in revert.iter().chain(forward.iter()).chain(std::iter::once(diff)) {
+            for ch in &d.account_changes {
+                touched.insert(ch.address.as_bytes());
+            }
+        }
+        // Load only the touched accounts from the flat store (= old-head state).
+        let mut recon: ReconState = ReconState::new();
+        for &a in &touched {
+            if let Some(fa) = flat.get(EvmAddress::from_bytes(a)).map_err(ShadowError::Store)? {
+                let storage = fa.storage.iter().map(|(s, v)| (s.to_be_bytes(), v.to_be_bytes())).collect();
+                recon.insert(a, ReconAccount { core: fa.core, storage });
+            }
+        }
+        // Revert off the old head, replay forward to the new parent, then this block.
+        for d in &revert {
+            apply_inverse_state_diff(&mut recon, d).map_err(|e| divergence(format!("reorg revert inconsistent with flat state: {e}")))?;
+        }
+        for d in &forward {
+            apply_state_diff(&mut recon, d).map_err(|e| divergence(format!("reorg forward inconsistent with flat state: {e}")))?;
+        }
+        apply_state_diff(&mut recon, diff).map_err(|e| divergence(format!("§12 diff inconsistent after re-base: {e}")))?;
+
+        // Differential: every touched account must now equal the committed snapshot.
+        for &a in &touched {
+            let want = staged.snapshot.accounts.binary_search_by(|acc| acc.address.as_bytes().cmp(&a)).ok().map(|i| &staged.snapshot.accounts[i]);
+            if !recon_account_matches(recon.get(&a), want) {
+                return Err(divergence(format!("re-based account 0x{} != committed snapshot", a.iter().map(|b| format!("{b:02x}")).collect::<String>())));
+            }
+        }
+        // Persist only the touched accounts (O(touched)).
+        for &a in &touched {
+            let addr = EvmAddress::from_bytes(a);
+            match recon.get(&a) {
+                Some(acc) => {
+                    let storage = acc.storage.iter().map(|(s, v)| (EvmU256::from_be_bytes(*s), EvmU256::from_be_bytes(*v))).collect();
+                    flat.write_batch(batch, addr, FlatAccount { core: acc.core.clone(), storage }).map_err(ShadowError::Store)?;
+                }
+                None => flat.delete_batch(batch, addr).map_err(ShadowError::Store)?,
+            }
+        }
+        advance(batch, latest_ptr)?;
+        return Ok(ShadowOutcome::Rebased);
+    }
+
+    // (3) Bootstrap (no pointer) or a retention gap: reseed the flat store to the
+    // committed post-state. The committed snapshot (206) is the source of truth;
+    // the single diff from the current flat content to it deletes any stale rows.
+    let flat_now = materialize_snapshot(flat, code).map_err(ShadowError::Store)?;
+    let reseed = compute_state_diff(&flat_now, &staged.snapshot, current, parent);
+    apply_diff_to_flat(flat, batch, &reseed).map_err(ShadowError::Store)?;
+    advance(batch, latest_ptr)?;
+    Ok(ShadowOutcome::Reseeded)
 }
 
 #[cfg(test)]
@@ -740,9 +884,25 @@ mod flat_state_tests {
     };
     use kaspa_consensus_core::BlockHash;
     use kaspa_database::create_temp_db;
-    use kaspa_database::prelude::{CachePolicy, ConnBuilder};
+    use kaspa_database::prelude::{CachePolicy, ConnBuilder, StoreError};
     use kaspa_hashes::{EvmH256, Hash64};
     use rocksdb::WriteBatch;
+    use std::collections::HashMap;
+
+    /// Chain readers (S5) backed by in-memory maps; empty maps force the reseed
+    /// fallback (the S4 paths never walk the chain).
+    fn diff_reader(map: &HashMap<BlockHash, EvmStateDiffV2>) -> impl Fn(BlockHash) -> Result<Option<EvmStateDiffV2>, StoreError> + '_ {
+        move |b| Ok(map.get(&b).cloned())
+    }
+    fn number_reader(map: &HashMap<BlockHash, u64>) -> impl Fn(BlockHash) -> Result<Option<u64>, StoreError> + '_ {
+        move |b| Ok(map.get(&b).copied())
+    }
+    fn no_diffs() -> HashMap<BlockHash, EvmStateDiffV2> {
+        HashMap::new()
+    }
+    fn no_numbers() -> HashMap<BlockHash, u64> {
+        HashMap::new()
+    }
 
     fn acc(a: u8, nonce: u64, bal: u64, ch: EvmH256, code: &[u8], storage: &[(u64, u64)]) -> EvmAccountSnapshot {
         let mut st: Vec<(EvmU256, EvmU256)> = storage.iter().map(|(s, v)| (EvmU256::from_u128(*s as u128), EvmU256::from_u128(*v as u128))).collect();
@@ -848,7 +1008,9 @@ mod flat_state_tests {
             let diff = compute_state_diff(&chain[i - 1], &chain[i], h(n), h(n - 1));
             let staged = mk_staged(EvmH256::from_bytes([n; 32]), chain[i].clone(), Some(diff));
             let mut batch = WriteBatch::default();
-            let outcome = shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(n), &staged).unwrap();
+            let (dr, nr) = (no_diffs(), no_numbers());
+            let outcome =
+                shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(n), &staged, diff_reader(&dr), number_reader(&nr)).unwrap();
             s.db.write(batch).unwrap();
 
             assert_eq!(outcome, if n == 1 { ShadowOutcome::Reseeded } else { ShadowOutcome::Extended }, "block {n} outcome");
@@ -872,7 +1034,8 @@ mod flat_state_tests {
         // Bootstrap to b1.
         let d1 = compute_state_diff(&EvmStateSnapshot::default(), &b1, h(1), h(0));
         let mut batch = WriteBatch::default();
-        shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(1), &mk_staged(EvmH256::from_bytes([1; 32]), b1.clone(), Some(d1))).unwrap();
+        let (dr, nr) = (no_diffs(), no_numbers());
+        shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(1), &mk_staged(EvmH256::from_bytes([1; 32]), b1.clone(), Some(d1)), diff_reader(&dr), number_reader(&nr)).unwrap();
         s.db.write(batch).unwrap();
 
         // Clean-extend block 2 with the CORRECT diff (b1→b2) but a WRONG committed
@@ -880,7 +1043,7 @@ mod flat_state_tests {
         let d2 = compute_state_diff(&b1, &b2, h(2), h(1));
         let staged_bad = mk_staged(EvmH256::from_bytes([2; 32]), b3.clone(), Some(d2));
         let mut batch = WriteBatch::default();
-        let res = shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(2), &staged_bad);
+        let res = shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(2), &staged_bad, diff_reader(&dr), number_reader(&nr));
         assert!(matches!(res, Err(ShadowError::Divergence { .. })), "wrong committed snapshot must diverge, got {res:?}");
         // Pre-commit halt: the flat store is still at b1.
         assert_eq!(super::materialize_snapshot(&s.flat, &s.code).unwrap(), b1, "flat store untouched on divergence");
@@ -896,11 +1059,76 @@ mod flat_state_tests {
         let mut ptr = s.ptr;
         let staged = mk_staged(EvmH256::from_bytes([1; 32]), b1, None);
         let mut batch = WriteBatch::default();
-        let outcome = shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(1), &staged).unwrap();
+        let (dr, nr) = (no_diffs(), no_numbers());
+        let outcome =
+            shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(1), &staged, diff_reader(&dr), number_reader(&nr)).unwrap();
         s.db.write(batch).unwrap();
         assert_eq!(outcome, ShadowOutcome::SkippedNoDiff);
         assert_eq!(s.flat.iter().count(), 0, "no flat rows written in head mode");
         assert!(ptr.get().unwrap().is_none(), "pointer not set in head mode");
+    }
+
+    /// Slice S5: a sibling reorg. The flat store advances along branch A
+    /// (A1→A2a→A3a), then a block on branch B (parent A1) triggers an INCREMENTAL
+    /// re-base — revert A3a,A2a back to the common ancestor A1, then apply A2b —
+    /// landing the flat store exactly on branch B's state. A follow-on B block
+    /// then cleanly extends.
+    #[test]
+    fn shadow_dual_write_rebases_across_a_sibling_reorg() {
+        let s = stores();
+        // Common ancestor A1, branch A (A2a,A3a), branch B (A2b,A3b). Branch B
+        // touches 0x02 (untouched by branch A's revert path) and creates 0x03, so
+        // the touched-set persist must cover both branches' changes.
+        let s_a1 = snap(vec![acc(0x01, 1, 1000, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x02, 0, 500, EVM_EMPTY_CODE_HASH, &[], &[])]);
+        let s_a2a = snap(vec![acc(0x01, 2, 900, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x02, 0, 500, EVM_EMPTY_CODE_HASH, &[], &[])]);
+        let s_a3a = snap(vec![acc(0x01, 3, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x02, 0, 500, EVM_EMPTY_CODE_HASH, &[], &[])]);
+        let s_a2b = snap(vec![
+            acc(0x01, 2, 600, EVM_EMPTY_CODE_HASH, &[], &[]),
+            acc(0x02, 0, 400, EVM_EMPTY_CODE_HASH, &[], &[]),
+            acc(0x03, 1, 300, EVM_EMPTY_CODE_HASH, &[], &[]),
+        ]);
+        let s_a3b = snap(vec![
+            acc(0x01, 2, 600, EVM_EMPTY_CODE_HASH, &[], &[]),
+            acc(0x02, 0, 300, EVM_EMPTY_CODE_HASH, &[], &[]),
+            acc(0x03, 2, 100, EVM_EMPTY_CODE_HASH, &[], &[]),
+        ]);
+        let (a0, a1, a2a, a3a, a2b, a3b) = (h(0x00), h(0x10), h(0x21), h(0x31), h(0x22), h(0x32));
+        let empty = EvmStateSnapshot::default();
+        let d_a1 = compute_state_diff(&empty, &s_a1, a1, a0);
+        let d_a2a = compute_state_diff(&s_a1, &s_a2a, a2a, a1);
+        let d_a3a = compute_state_diff(&s_a2a, &s_a3a, a3a, a2a);
+        let d_a2b = compute_state_diff(&s_a1, &s_a2b, a2b, a1);
+        let d_a3b = compute_state_diff(&s_a2b, &s_a3b, a3b, a2b);
+
+        // Chain readers (the persistent §12 diff store + EVM-header evm_numbers).
+        let diffs: HashMap<BlockHash, EvmStateDiffV2> =
+            [(a1, d_a1.clone()), (a2a, d_a2a.clone()), (a3a, d_a3a.clone()), (a2b, d_a2b.clone()), (a3b, d_a3b.clone())].into_iter().collect();
+        let numbers: HashMap<BlockHash, u64> = [(a1, 1u64), (a2a, 2), (a3a, 3), (a2b, 2), (a3b, 3)].into_iter().collect();
+
+        let mut ptr = s.ptr;
+        let commit = |ptr: &mut DbEvmLatestStatePtrStore, blk: BlockHash, snapshot: &EvmStateSnapshot, diff: EvmStateDiffV2| {
+            let staged = mk_staged(EvmH256::from_bytes([blk.as_bytes()[0]; 32]), snapshot.clone(), Some(diff));
+            let mut batch = WriteBatch::default();
+            let outcome =
+                shadow_dual_write_flat(&s.flat, &s.block_root, ptr, &s.code, &mut batch, blk, &staged, diff_reader(&diffs), number_reader(&numbers)).unwrap();
+            s.db.write(batch).unwrap();
+            outcome
+        };
+
+        // Advance along branch A.
+        assert_eq!(commit(&mut ptr, a1, &s_a1, d_a1.clone()), ShadowOutcome::Reseeded);
+        assert_eq!(commit(&mut ptr, a2a, &s_a2a, d_a2a), ShadowOutcome::Extended);
+        assert_eq!(commit(&mut ptr, a3a, &s_a3a, d_a3a), ShadowOutcome::Extended);
+        assert_eq!(super::materialize_snapshot(&s.flat, &s.code).unwrap(), s_a3a, "flat at branch-A tip");
+
+        // Reorg to branch B: A2b's parent is A1, but the flat store is at A3a.
+        assert_eq!(commit(&mut ptr, a2b, &s_a2b, d_a2b), ShadowOutcome::Rebased, "sibling reorg re-bases");
+        assert_eq!(super::materialize_snapshot(&s.flat, &s.code).unwrap(), s_a2b, "flat re-based to branch B");
+        assert_eq!(ptr.get().unwrap().unwrap().canonical_head, a2b);
+
+        // Branch B then cleanly extends.
+        assert_eq!(commit(&mut ptr, a3b, &s_a3b, d_a3b), ShadowOutcome::Extended);
+        assert_eq!(super::materialize_snapshot(&s.flat, &s.code).unwrap(), s_a3b, "flat at branch-B tip");
     }
 }
 

@@ -247,6 +247,67 @@ pub fn apply_state_diff(state: &mut ReconState, diff: &EvmStateDiffV2) -> Result
     Ok(())
 }
 
+/// Apply one forward diff in REVERSE (C-01 Stage 1, slice S5 — the inverse-delta
+/// engine used to re-base the flat state when the canonical head moves). Given a
+/// reconstruction AT the diff's block (the child), this reverts it to the diff's
+/// parent: each account's core goes `after → before` (removed if `before` is
+/// `None`, i.e. the block created it) and each storage slot goes `after → before`.
+/// Checked: the diff's `after` view must agree with the accumulated state (the
+/// corruption tripwire, symmetric to [`apply_state_diff`]). Exact inverse:
+/// `apply_state_diff` then `apply_inverse_state_diff` with the same diff is the
+/// identity (for canonical diffs, where an account never has an EIP-161-empty
+/// `after` — such an account is absent in the child snapshot, so the change is a
+/// destroy `after = None`, not an empty core).
+pub fn apply_inverse_state_diff(state: &mut ReconState, diff: &EvmStateDiffV2) -> Result<(), StateDiffError> {
+    for ch in &diff.account_changes {
+        let addr = ch.address.as_bytes();
+
+        // Verify `after` against the accumulated state (we are at the child).
+        let current_core = state.get(&addr).map(|a| a.core.clone());
+        if ch.after != current_core {
+            return Err(StateDiffError::Inconsistent(format!(
+                "inverse: account 0x{} after-core mismatch (diff expected {:?}, have {:?})",
+                hex20(&addr),
+                ch.after,
+                current_core
+            )));
+        }
+
+        match &ch.before {
+            None => {
+                // The block created this account ⇒ undo the creation (drop it).
+                state.remove(&addr);
+            }
+            Some(core) => {
+                let entry = state.entry(addr).or_default();
+                entry.core = core.clone();
+                for sc in &ch.storage_changes {
+                    let slot = sc.slot.to_be_bytes();
+                    let have = entry.storage.get(&slot).copied().map(EvmU256::from_be_bytes).unwrap_or(EvmU256::ZERO);
+                    if sc.after != have {
+                        return Err(StateDiffError::Inconsistent(format!(
+                            "inverse: account 0x{} slot after mismatch (diff expected {:?}, have {:?})",
+                            hex20(&addr),
+                            sc.after,
+                            have
+                        )));
+                    }
+                    if sc.before.is_zero() {
+                        entry.storage.remove(&slot);
+                    } else {
+                        entry.storage.insert(slot, sc.before.to_be_bytes());
+                    }
+                }
+                // Symmetric defensive: a reverted account left EIP-161 empty is not canonical.
+                if is_eip161_empty(&entry.core, &entry.storage) {
+                    state.remove(&addr);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Serialize a reconstructed state back to a canonical [`EvmStateSnapshot`]
 /// (design §12.4, step 4 input). Bytecode is resolved from the content-addressed
 /// code store via `code_resolver`; a missing code hash is a hard error (no empty
@@ -405,6 +466,48 @@ mod tests {
             let rebuilt = recon_to_snapshot(&recon, |h| code_store.get(&h.as_bytes()).cloned()).expect("code resolves");
             assert_eq!(rebuilt, chain[i], "reconstruction of S{i} must equal the canonical snapshot");
         }
+    }
+
+    /// The inverse engine (S5) walks a chain back DOWN: forward to the tip, then
+    /// `apply_inverse_state_diff` each diff in reverse reproduces every ancestor
+    /// state exactly, ending at empty genesis. (Exercises self-destruct undo,
+    /// contract-deploy undo, and slot set/clear undo.)
+    #[test]
+    fn inverse_diff_walks_a_chain_back_down() {
+        let code_a: &[u8] = &[0x60, 0x00, 0x60, 0x00, 0xfd];
+        let ch_a = code_hash(0xAA);
+        let chain = [
+            EvmStateSnapshot::default(),
+            snap(&[eoa(0x01, 1, 1000), eoa(0x02, 0, 500)]),
+            snap(&[eoa(0x01, 2, 800), eoa(0x02, 0, 500), (0x03, 1, 0, ch_a, code_a, &[(1, 7), (2, 9)])]),
+            snap(&[eoa(0x01, 2, 800), (0x03, 1, 0, ch_a, code_a, &[(1, 7), (3, 4)])]),
+        ];
+        let diffs: Vec<_> = (1..chain.len())
+            .map(|i| compute_state_diff(&chain[i - 1], &chain[i], Hash64::from_bytes([i as u8; 64]), Hash64::from_bytes([(i - 1) as u8; 64])))
+            .collect();
+
+        let mut recon = recon_from_snapshot(&chain[0]);
+        for d in &diffs {
+            apply_state_diff(&mut recon, d).unwrap();
+        }
+        assert_eq!(recon, recon_from_snapshot(&chain[3]), "forward reaches the tip");
+
+        for i in (1..chain.len()).rev() {
+            apply_inverse_state_diff(&mut recon, &diffs[i - 1]).expect("inverse applies");
+            assert_eq!(recon, recon_from_snapshot(&chain[i - 1]), "inverse to S{} matches canonical", i - 1);
+        }
+        assert!(recon.is_empty(), "fully reverted back to empty genesis");
+    }
+
+    /// The inverse tripwire fires when applied to the wrong (non-child) state.
+    #[test]
+    fn inverse_diff_rejects_wrong_after_view() {
+        let s0 = snap(&[eoa(0x01, 1, 1000)]);
+        let s1 = snap(&[eoa(0x01, 2, 900)]);
+        let diff = compute_state_diff(&s0, &s1, Hash64::from_bytes([1; 64]), Hash64::from_bytes([0; 64]));
+        // Reverting must be applied to the child (s1); applying it to s0 mismatches `after`.
+        let mut recon = recon_from_snapshot(&s0);
+        assert!(matches!(apply_inverse_state_diff(&mut recon, &diff), Err(StateDiffError::Inconsistent(_))));
     }
 
     /// An empty (genesis→genesis) transition produces an empty diff.

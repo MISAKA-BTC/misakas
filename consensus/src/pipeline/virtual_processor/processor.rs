@@ -1192,6 +1192,17 @@ impl VirtualStateProcessor {
             // (written just below) stays the source of truth, so the committed
             // bytes are unchanged whether shadow is on or off (consensus-neutral).
             if self.evm_shadow_state_backend {
+                use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateDiffStoreReader};
+                // Chain readers for the S5 reorg re-base: a block's §12 diff (220)
+                // and its sequential evm_number (from the EVM header, 201).
+                let diff_store = &self.evm_state_diff_store;
+                let header_store = &self.evm_header_store;
+                let get_diff = |b: BlockHash| diff_store.get(b);
+                let get_number = |b: BlockHash| match header_store.get(b) {
+                    Ok(h) => Ok(Some(h.evm_number)),
+                    Err(StoreError::KeyNotFound(_)) => Ok(None),
+                    Err(e) => Err(e),
+                };
                 let mut ptr = self.evm_latest_state_ptr_store.write();
                 match crate::processes::evm::shadow_dual_write_flat(
                     &self.evm_flat_account_store,
@@ -1201,9 +1212,14 @@ impl VirtualStateProcessor {
                     &mut batch,
                     current,
                     &staged,
+                    get_diff,
+                    get_number,
                 ) {
                     Ok(crate::processes::evm::ShadowOutcome::Reseeded) => {
                         info!("[evm-shadow] flat state backend (re)seeded to block {current}");
+                    }
+                    Ok(crate::processes::evm::ShadowOutcome::Rebased) => {
+                        info!("[evm-shadow] flat state backend re-based across a reorg to block {current}");
                     }
                     Ok(_) => {}
                     // A divergence (or store error) is fatal: never let a node that
