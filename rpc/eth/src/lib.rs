@@ -32,6 +32,10 @@ pub mod codes {
     pub const SERVER_ERROR: i64 = -32000;
 }
 
+/// §9: the RFC 6455 WebSocket transport (`eth_subscribe`). A `serve_conn` that
+/// sees an `Upgrade: websocket` request hands the socket to [`ws::serve_ws`].
+mod ws;
+
 /// An error surfaced through the JSON-RPC `error` member.
 #[derive(Debug, Clone)]
 pub struct EthRpcError {
@@ -1091,11 +1095,14 @@ pub async fn serve(addr: SocketAddr, provider: Arc<dyn EthProvider>) -> std::io:
         };
         let provider = provider.clone();
         tokio::spawn(async move {
+            // The permit is held for the WHOLE connection (HTTP one-shot OR a
+            // long-lived WebSocket) so WS conns still count against MAX_CONNECTIONS.
+            // The CONN_TIMEOUT is applied per-phase INSIDE serve_conn (header read,
+            // then the HTTP exchange) rather than as a blanket deadline here — a
+            // blanket deadline would kill every WebSocket at CONN_TIMEOUT (§9).
             let _permit = permit; // released on task end
-            match tokio::time::timeout(CONN_TIMEOUT, serve_conn(stream, provider)).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => kaspa_core::trace!("[eth-rpc] connection error: {e}"),
-                Err(_) => kaspa_core::trace!("[eth-rpc] connection timed out after {CONN_TIMEOUT:?}"),
+            if let Err(e) = serve_conn(stream, provider).await {
+                kaspa_core::trace!("[eth-rpc] connection error: {e}");
             }
         });
     }
@@ -1111,82 +1118,123 @@ pub fn spawn(addr: SocketAddr, provider: Arc<dyn EthProvider>) {
     });
 }
 
-/// Handle ONE HTTP/1.1 connection: read the request, dispatch, write the
-/// response, close (`Connection: close` — no keep-alive; clients reconnect).
+/// Handle ONE connection. Reads the request head (slowloris-bounded by
+/// `CONN_TIMEOUT`), then either upgrades to a long-lived §9 WebSocket
+/// ([`ws::serve_ws`], NOT under a blanket deadline) or serves a single HTTP/1.1
+/// JSON-RPC exchange (`Connection: close` — no keep-alive; clients reconnect).
 async fn serve_conn(mut stream: TcpStream, provider: Arc<dyn EthProvider>) -> std::io::Result<()> {
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut tmp = [0u8; 8192];
-    // Read until the full header block (CRLFCRLF) is present.
-    let header_end = loop {
-        if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
-            break pos + 4;
-        }
-        if buf.len() > MAX_BODY_BYTES {
-            return write_response(&mut stream, 431, "Request Header Fields Too Large", "").await;
-        }
-        let n = stream.read(&mut tmp).await?;
-        if n == 0 {
-            return Ok(()); // client closed before sending headers
-        }
-        buf.extend_from_slice(&tmp[..n]);
-    };
-    let head = String::from_utf8_lossy(&buf[..header_end]);
-    let mut lines = head.split("\r\n");
-    let request_line = lines.next().unwrap_or("");
-    let http_method = request_line.split_whitespace().next().unwrap_or("");
 
-    // CORS preflight for browser dApps (MetaMask in-page, etc.).
-    if http_method.eq_ignore_ascii_case("OPTIONS") {
-        return write_cors_preflight(&mut stream).await;
-    }
-    if !http_method.eq_ignore_ascii_case("POST") {
-        return write_response(&mut stream, 405, "Method Not Allowed", "").await;
-    }
-
-    let content_length = lines
-        .find_map(|l| {
-            let (k, v) = l.split_once(':')?;
-            if k.trim().eq_ignore_ascii_case("content-length") {
-                v.trim().parse::<usize>().ok()
-            } else {
-                None
+    // Phase 1 — read the request head (up to CRLFCRLF), bounded by CONN_TIMEOUT so
+    // a slowloris that never finishes its headers is dropped here, not WS-upgraded.
+    let header_end = {
+        let read_head = async {
+            loop {
+                if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
+                    return Ok::<HeaderRead, std::io::Error>(HeaderRead::Done(pos + 4));
+                }
+                if buf.len() > MAX_BODY_BYTES {
+                    return Ok(HeaderRead::TooLarge);
+                }
+                let n = stream.read(&mut tmp).await?;
+                if n == 0 {
+                    return Ok(HeaderRead::Eof); // client closed before sending headers
+                }
+                buf.extend_from_slice(&tmp[..n]);
             }
-        })
-        .unwrap_or(0);
-    if content_length > MAX_BODY_BYTES {
-        return write_response(&mut stream, 413, "Payload Too Large", "").await;
-    }
-
-    // Body: whatever followed the headers, then read up to content_length.
-    let mut body = buf[header_end..].to_vec();
-    while body.len() < content_length {
-        let n = stream.read(&mut tmp).await?;
-        if n == 0 {
-            break;
+        };
+        match tokio::time::timeout(CONN_TIMEOUT, read_head).await {
+            Ok(Ok(HeaderRead::Done(pos))) => pos,
+            Ok(Ok(HeaderRead::TooLarge)) => return write_response(&mut stream, 431, "Request Header Fields Too Large", "").await,
+            Ok(Ok(HeaderRead::Eof)) => return Ok(()),
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Ok(()), // header-phase timeout → drop
         }
-        body.extend_from_slice(&tmp[..n]);
-    }
-    body.truncate(content_length);
+    };
+    let head = String::from_utf8_lossy(&buf[..header_end]).into_owned();
 
-    let response_json: Option<Value> = match serde_json::from_slice::<Value>(&body) {
-        Ok(v) => process(&provider, v).await,
-        Err(e) => Some(err_value(codes::PARSE_ERROR, &format!("parse error: {e}"))),
-    };
-    // Notification(s): no response body (audit L-03).
-    let Some(response_json) = response_json else {
-        return write_response(&mut stream, 204, "No Content", "").await;
-    };
-    let payload = serde_json::to_string(&response_json).unwrap_or_else(|_| "null".to_string());
-    // Audit H-02: cap the response so a single request cannot emit an unbounded body.
-    if payload.len() > MAX_RESPONSE_BYTES {
-        let err = serde_json::to_string(&RpcResponse::err(
-            Value::Null,
-            EthRpcError::new(codes::SERVER_ERROR, format!("response too large ({} bytes); narrow the query", payload.len())),
-        ))
-        .unwrap_or_else(|_| "null".to_string());
-        return write_response(&mut stream, 200, "OK", &err).await;
+    // §9 WebSocket upgrade: a `GET` with `Upgrade: websocket` + a key. Long-lived
+    // — runs without a blanket deadline (its own ping keepalive provides liveness),
+    // and the connection permit (held by the caller) stays held for its lifetime.
+    if let Some(ws_key) = ws::upgrade_key(&head) {
+        let leftover = buf[header_end..].to_vec();
+        return ws::serve_ws(stream, provider, &ws_key, leftover).await;
     }
-    write_response(&mut stream, 200, "OK", &payload).await
+
+    // Phase 2 — a single HTTP JSON-RPC exchange, bounded by CONN_TIMEOUT.
+    let exchange = async move {
+        let mut lines = head.split("\r\n");
+        let request_line = lines.next().unwrap_or("");
+        let http_method = request_line.split_whitespace().next().unwrap_or("");
+
+        // CORS preflight for browser dApps (MetaMask in-page, etc.).
+        if http_method.eq_ignore_ascii_case("OPTIONS") {
+            return write_cors_preflight(&mut stream).await;
+        }
+        if !http_method.eq_ignore_ascii_case("POST") {
+            return write_response(&mut stream, 405, "Method Not Allowed", "").await;
+        }
+
+        let content_length = lines
+            .find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                if k.trim().eq_ignore_ascii_case("content-length") {
+                    v.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        if content_length > MAX_BODY_BYTES {
+            return write_response(&mut stream, 413, "Payload Too Large", "").await;
+        }
+
+        // Body: whatever followed the headers, then read up to content_length.
+        let mut body = buf[header_end..].to_vec();
+        while body.len() < content_length {
+            let n = stream.read(&mut tmp).await?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&tmp[..n]);
+        }
+        body.truncate(content_length);
+
+        let response_json: Option<Value> = match serde_json::from_slice::<Value>(&body) {
+            Ok(v) => process(&provider, v).await,
+            Err(e) => Some(err_value(codes::PARSE_ERROR, &format!("parse error: {e}"))),
+        };
+        // Notification(s): no response body (audit L-03).
+        let Some(response_json) = response_json else {
+            return write_response(&mut stream, 204, "No Content", "").await;
+        };
+        let payload = serde_json::to_string(&response_json).unwrap_or_else(|_| "null".to_string());
+        // Audit H-02: cap the response so a single request cannot emit an unbounded body.
+        if payload.len() > MAX_RESPONSE_BYTES {
+            let err = serde_json::to_string(&RpcResponse::err(
+                Value::Null,
+                EthRpcError::new(codes::SERVER_ERROR, format!("response too large ({} bytes); narrow the query", payload.len())),
+            ))
+            .unwrap_or_else(|_| "null".to_string());
+            return write_response(&mut stream, 200, "OK", &err).await;
+        }
+        write_response(&mut stream, 200, "OK", &payload).await
+    };
+    match tokio::time::timeout(CONN_TIMEOUT, exchange).await {
+        Ok(r) => r,
+        Err(_) => Ok(()), // HTTP exchange (body read / dispatch / write) timed out → drop
+    }
+}
+
+/// Outcome of the [`serve_conn`] header-read phase.
+enum HeaderRead {
+    /// Header block complete; the value is the byte offset just past CRLFCRLF.
+    Done(usize),
+    /// Header block exceeded `MAX_BODY_BYTES` before completing.
+    TooLarge,
+    /// Peer closed before sending a complete header block.
+    Eof,
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {

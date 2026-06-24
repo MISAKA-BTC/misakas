@@ -3772,6 +3772,7 @@ dependencies = [
  "alloy-primitives",
  "alloy-rpc-types-eth",
  "async-trait",
+ "base64",
  "faster-hex 0.9.0",
  "kaspa-consensus-core",
  "kaspa-core",
@@ -3780,6 +3781,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "sha1",
  "tokio",
 ]
 

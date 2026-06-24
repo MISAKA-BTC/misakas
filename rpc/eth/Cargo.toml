@@ -24,13 +24,20 @@ kaspa-utils.workspace = true
 
 async-trait.workspace = true
 log.workspace = true
-# Hand-rolled minimal HTTP/1.1 server over tokio (no axum/hyper — avoids axum
-# 0.8's tokio >=1.44 requirement vs the workspace's pinned 1.42.1, and keeps the
-# adapter's audit surface tiny).
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util"] }
+# Hand-rolled minimal HTTP/1.1 + RFC 6455 WebSocket server over tokio (no
+# axum/hyper/jsonrpsee — avoids those crates' tokio >=1.44 requirement vs the
+# workspace's pinned 1.42.1, and keeps the adapter's audit surface tiny). `sync`
+# (mpsc/broadcast outbound queue) + `time` (WS ping keepalive) are needed by §9.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
 serde.workspace = true
 serde_json.workspace = true
 faster-hex.workspace = true
+# §9 WebSocket (eth_subscribe): the RFC 6455 handshake's Sec-WebSocket-Accept
+# digest. Both are tiny, audited RustCrypto/standard leaf crates already in the
+# workspace lock (no tokio/hyper), so using them keeps the transport's audit
+# surface SMALLER than a hand-rolled SHA-1 while honoring the no-framework pin.
+sha1.workspace = true
+base64.workspace = true
 
 # Ethereum JSON-RPC response shapes + primitives. Pinned to the EVM lane's alloy
 # 0.8 / alloy-primitives 0.8.26 line (no version skew with kaspa-evm / revm).
