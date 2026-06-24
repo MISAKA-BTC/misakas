@@ -276,6 +276,10 @@ pub struct EvmStaged {
     pub snapshot: kaspa_consensus_core::evm::EvmStateSnapshot,
     /// Parallel to `result.candidate_outcomes` (the acceptance input order).
     pub candidate_meta: Vec<(kaspa_hashes::EvmH256, kaspa_consensus_core::BlockHash)>,
+    /// §11: the per-accepting-block `debug_traceTransaction` replay plan, assembled
+    /// alongside execution. `None` for an acceptance with no candidate txs (nothing
+    /// to trace). RPC/replay data only — never consensus-committed.
+    pub trace_body: Option<kaspa_consensus_core::evm::EvmTraceReplayBodyV1>,
 }
 
 /// O12 (IBD catch-up pipeline): a worker thread that pre-executes the EVM
@@ -324,11 +328,18 @@ pub fn stage_evm_index_rows(
     receipts_store: &crate::model::stores::evm::DbEvmReceiptsStore,
     tx_index_store: &crate::model::stores::evm::DbEvmTxIndexStore,
     log_index_store: &crate::model::stores::evm::DbEvmLogIndexStore,
+    trace_store: &crate::model::stores::evm::DbEvmTraceReplayStore,
     batch: &mut rocksdb::WriteBatch,
     accepting: kaspa_consensus_core::BlockHash,
     staged: &EvmStaged,
 ) -> Result<(), kaspa_database::prelude::StoreError> {
     use kaspa_consensus_core::evm::{EvmCandidateOutcome, MAX_TX_LOCATION_ACCEPTANCES, MAX_TX_LOCATION_INCLUSIONS};
+
+    // §11: the per-block `debug_traceTransaction` replay plan (prefix 219), keyed by
+    // the accepting block. Present only when the block accepted candidate txs.
+    if let Some(body) = &staged.trace_body {
+        trace_store.insert_batch(batch, accepting, body.clone())?;
+    }
 
     // audit R2-#6: candidate_meta and candidate_outcomes are produced in lockstep
     // by the executor, and every receipt_index it emits is < receipts.len(). These
@@ -427,7 +438,7 @@ mod driver {
         DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore, EvmHeaderStore, EvmHeaderStoreReader, EvmPayloadStoreReader,
         EvmStateStore, EvmStateStoreReader,
     };
-    use kaspa_consensus_core::evm::{EvmExecutionPayload, EvmStateSnapshot};
+    use kaspa_consensus_core::evm::{EvmExecutionPayload, EvmReplayEnv, EvmReplayTx, EvmStateSnapshot, EvmTraceReplayBodyV1};
     use kaspa_consensus_core::header::Header;
     use kaspa_consensus_core::BlockHash;
     use kaspa_database::prelude::StoreError;
@@ -491,7 +502,7 @@ mod driver {
         }
         debug_assert!(!sorted_mergeset.contains(&block), "a block is never in its own mergeset (off-by-one, §3.1)");
 
-        let (result, child_snapshot, candidate_meta) = evm_execute_acceptance(
+        let (result, child_snapshot, candidate_meta, trace_body) = evm_execute_acceptance(
             header_store,
             state_store,
             payload_store,
@@ -510,7 +521,7 @@ mod driver {
             return Err(EvmValidateError::CommitmentMismatch { block });
         }
 
-        Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta }))
+        Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta, trace_body }))
     }
 
     /// O12 (IBD pipeline): [`evm_validate`] with an in-memory parent override —
@@ -535,7 +546,7 @@ mod driver {
         if header_store.has(block).map_err(EvmValidateError::Store)? {
             return Ok(None);
         }
-        let (result, child_snapshot, candidate_meta) = evm_execute_acceptance_with_parent(
+        let (result, child_snapshot, candidate_meta, trace_body) = evm_execute_acceptance_with_parent(
             header_store,
             state_store,
             payload_store,
@@ -551,7 +562,7 @@ mod driver {
         if result.header.commitment_root() != l1_header.evm_commitment_root {
             return Err(EvmValidateError::CommitmentMismatch { block });
         }
-        Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta }))
+        Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta, trace_body }))
     }
 
     /// The shared execution core: run one block's mergeset acceptance from the
@@ -572,8 +583,15 @@ mod driver {
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
-    ) -> Result<(kaspa_consensus_core::evm::EvmExecutionResult, EvmStateSnapshot, Vec<(kaspa_hashes::EvmH256, BlockHash)>), EvmValidateError>
-    {
+    ) -> Result<
+        (
+            kaspa_consensus_core::evm::EvmExecutionResult,
+            EvmStateSnapshot,
+            Vec<(kaspa_hashes::EvmH256, BlockHash)>,
+            Option<EvmTraceReplayBodyV1>,
+        ),
+        EvmValidateError,
+    > {
         evm_execute_acceptance_with_parent(
             header_store,
             state_store,
@@ -609,8 +627,15 @@ mod driver {
         gas_pool_v2_activation_daa_score: u64,
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
-    ) -> Result<(kaspa_consensus_core::evm::EvmExecutionResult, EvmStateSnapshot, Vec<(kaspa_hashes::EvmH256, BlockHash)>), EvmValidateError>
-    {
+    ) -> Result<
+        (
+            kaspa_consensus_core::evm::EvmExecutionResult,
+            EvmStateSnapshot,
+            Vec<(kaspa_hashes::EvmH256, BlockHash)>,
+            Option<EvmTraceReplayBodyV1>,
+        ),
+        EvmValidateError,
+    > {
         // AcceptedEvmTxs(B): the mergeset's payload txs in canonical order
         // (sorted_mergeset, then payload order — design §3.1). The class-5
         // prefix-take and class-2/3 skips are applied inside the executor.
@@ -682,7 +707,48 @@ mod driver {
 
         let (result, snapshot) =
             kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).map_err(|e| EvmValidateError::Exec(e.to_string()))?;
-        Ok((result, snapshot, candidate_meta))
+
+        // §11: assemble the `debug_traceTransaction` replay plan from the exact
+        // acceptance this block performed — the env inputs, B's own system ops, and
+        // the FULL ordered candidate list (accepted + skipped) with each candidate's
+        // recorded outcome. A replay feeds the identical candidate list to the same
+        // executor, so it reproduces the same accept/skip/gas decisions and the same
+        // pre-state for any traced tx. RPC/replay data only; it MUST NOT influence
+        // acceptance, so it is built defensively (never an error) and is `None` when
+        // there is nothing to trace (no candidate txs). The three parallel vectors
+        // (`accepted_txs` / `candidate_meta` / `result.candidate_outcomes`) are
+        // produced in lockstep by the executor (asserted again at staging).
+        let trace_body = if accepted_txs.is_empty() {
+            None
+        } else {
+            debug_assert_eq!(accepted_txs.len(), candidate_meta.len());
+            debug_assert_eq!(accepted_txs.len(), result.candidate_outcomes.len());
+            let txs = accepted_txs
+                .iter()
+                .zip(candidate_meta.iter())
+                .zip(result.candidate_outcomes.iter())
+                .map(|((cand, (tx_hash, src)), outcome)| EvmReplayTx {
+                    tx_hash: *tx_hash,
+                    raw: cand.raw.clone(),
+                    payload_coinbase: cand.payload_coinbase,
+                    originating_payload_block: *src,
+                    outcome: *outcome,
+                })
+                .collect();
+            Some(EvmTraceReplayBodyV1 {
+                selected_parent,
+                env: EvmReplayEnv {
+                    header_timestamp_ms: l1_header.timestamp,
+                    blue_work_be: l1_header.blue_work.to_be_bytes().to_vec(),
+                    daa_score: l1_header.daa_score,
+                    coinbase: payload.evm_coinbase,
+                },
+                system_ops: payload.system_ops.clone(),
+                txs,
+            })
+        };
+
+        Ok((result, snapshot, candidate_meta, trace_body))
     }
 
     /// Validate + stage into `batch` in one call (the unit-test surface; the
@@ -696,6 +762,7 @@ mod driver {
         receipts_store: &crate::model::stores::evm::DbEvmReceiptsStore,
         tx_index_store: &crate::model::stores::evm::DbEvmTxIndexStore,
         log_index_store: &crate::model::stores::evm::DbEvmLogIndexStore,
+        trace_store: &crate::model::stores::evm::DbEvmTraceReplayStore,
         batch: &mut WriteBatch,
         block: BlockHash,
         selected_parent: BlockHash,
@@ -723,7 +790,8 @@ mod driver {
             return Ok(());
         };
         header_store.insert_batch(batch, block, staged.result.header.clone()).map_err(EvmValidateError::Store)?;
-        super::stage_evm_index_rows(receipts_store, tx_index_store, log_index_store, batch, block, &staged).map_err(EvmValidateError::Store)?;
+        super::stage_evm_index_rows(receipts_store, tx_index_store, log_index_store, trace_store, batch, block, &staged)
+            .map_err(EvmValidateError::Store)?;
         state_store.insert_batch(batch, block, staged.snapshot).map_err(EvmValidateError::Store)?;
         Ok(())
     }
@@ -1040,6 +1108,7 @@ mod tests {
         let receipts_store = crate::model::stores::evm::DbEvmReceiptsStore::new(db.clone(), CachePolicy::Empty);
         let tx_index_store = crate::model::stores::evm::DbEvmTxIndexStore::new(db.clone(), CachePolicy::Empty);
         let log_index_store = crate::model::stores::evm::DbEvmLogIndexStore::new(db.clone());
+        let trace_store = crate::model::stores::evm::DbEvmTraceReplayStore::new(db.clone(), CachePolicy::Empty);
 
         // First EVM block on genesis: the driver reads the parent's state as
         // absent => the empty (genesis) snapshot — no seeding needed.
@@ -1099,6 +1168,7 @@ mod tests {
             &receipts_store,
             &tx_index_store,
             &log_index_store,
+            &trace_store,
             &mut b1,
             l1.hash,
             selected_parent,
@@ -1125,6 +1195,19 @@ mod tests {
         assert_eq!(row.last_skip_class, Some(1), "undecodable candidate = defensive class-1 skip label");
         use crate::model::stores::evm::EvmReceiptsStoreReader;
         assert!(!receipts_store.has(l1.hash).unwrap(), "no receipts row for a block with zero accepted txs");
+        // §11: the trace replay plan WAS persisted (the block had a candidate tx,
+        // even though it was skipped) — its full ordered candidate list is recorded
+        // so a replay reproduces the skip. The body is keyed by the accepting block.
+        use crate::model::stores::evm::EvmTraceReplayStoreReader;
+        let trace_body = trace_store.get(l1.hash).unwrap().expect("a trace replay body was persisted");
+        assert_eq!(trace_body.selected_parent, selected_parent);
+        assert_eq!(trace_body.txs.len(), 1, "the one mergeset candidate is recorded");
+        assert_eq!(trace_body.txs[0].tx_hash, tx_h);
+        assert_eq!(trace_body.txs[0].originating_payload_block, merged);
+        assert!(
+            matches!(trace_body.txs[0].outcome, kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { .. }),
+            "the undecodable candidate is recorded as skipped"
+        );
 
         // No-replay: re-driving is a no-op (the already-stored result is reused).
         let mut b2 = WriteBatch::default();
@@ -1135,6 +1218,7 @@ mod tests {
             &receipts_store,
             &tx_index_store,
             &log_index_store,
+            &trace_store,
             &mut b2,
             l1.hash,
             selected_parent,
@@ -1159,6 +1243,7 @@ mod tests {
             &receipts_store,
             &tx_index_store,
             &log_index_store,
+            &trace_store,
             &mut b3,
             bad.hash,
             selected_parent,
@@ -1183,6 +1268,7 @@ mod tests {
             &receipts_store,
             &tx_index_store,
             &log_index_store,
+            &trace_store,
             &mut b4,
             bad2.hash,
             selected_parent,

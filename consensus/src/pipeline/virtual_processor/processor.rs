@@ -215,6 +215,7 @@ pub struct VirtualStateProcessor {
     pub(super) evm_block_hash_map_store: Arc<crate::model::stores::evm::DbEvmBlockHashMapStore>,
     pub(super) evm_number_store: Arc<crate::model::stores::evm::DbEvmNumberStore>,
     pub(super) evm_log_index_store: Arc<crate::model::stores::evm::DbEvmLogIndexStore>,
+    pub(super) evm_trace_store: Arc<crate::model::stores::evm::DbEvmTraceReplayStore>,
     pub(super) evm_activation_daa_score: u64,
     pub(super) evm_gas_pool_v2_activation_daa_score: u64,
     pub(super) evm_f002_withdraw_cap_activation_daa_score: u64,
@@ -327,6 +328,7 @@ impl VirtualStateProcessor {
             evm_block_hash_map_store: storage.evm_block_hash_map_store.clone(),
             evm_number_store: storage.evm_number_store.clone(),
             evm_log_index_store: storage.evm_log_index_store.clone(),
+            evm_trace_store: storage.evm_trace_store.clone(),
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: params.evm_f002_withdraw_cap_activation_daa_score,
@@ -1032,7 +1034,7 @@ impl VirtualStateProcessor {
         };
         let sorted_mergeset: Vec<BlockHash> =
             virtual_state.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
-        let (result, _snapshot, _candidate_meta) = evm_execute_acceptance(
+        let (result, _snapshot, _candidate_meta, _trace_body) = evm_execute_acceptance(
             &self.evm_header_store,
             &self.evm_state_store,
             &self.evm_payload_store,
@@ -1129,6 +1131,7 @@ impl VirtualStateProcessor {
                 &self.evm_receipts_store,
                 &self.evm_tx_index_store,
                 &self.evm_log_index_store,
+                &self.evm_trace_store,
                 &mut batch,
                 current,
                 &staged,

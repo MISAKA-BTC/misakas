@@ -530,6 +530,9 @@ impl PruningProcessor {
                 self.evm_header_store.delete_batch(&mut batch, current).unwrap();
                 self.evm_payload_store.delete_batch(&mut batch, current).unwrap();
                 self.evm_receipts_store.delete_batch(&mut batch, current).unwrap();
+                // §11: the per-block trace replay plan is reclaimed with the rest of
+                // the block's EVM rows (a trace cannot outlive its pre-state snapshot).
+                self.evm_trace_store.delete_batch(&mut batch, current).unwrap();
 
                 if let Some(&affiliated_proof_level) = keep_relations.get(&current) {
                     if statuses_write.get(current).optional().unwrap().is_some_and(|s| s.is_valid()) {
