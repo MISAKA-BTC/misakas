@@ -22,6 +22,7 @@ pub mod roots;
 pub mod sim;
 pub mod snapshot;
 pub mod state;
+pub mod trace;
 pub mod tx;
 pub mod withdraw;
 

@@ -106,7 +106,7 @@ fn b256_to_evmh256(b: B256) -> EvmH256 {
 }
 
 #[inline]
-fn to_revm_address(a: &kaspa_consensus_core::evm::EvmAddress) -> Address {
+pub(crate) fn to_revm_address(a: &kaspa_consensus_core::evm::EvmAddress) -> Address {
     Address::from(a.as_bytes())
 }
 
@@ -698,7 +698,7 @@ fn reroute_balance(db: &mut CacheDB<EmptyDB>, from: Address, to: Address, amount
     Ok(())
 }
 
-fn make_receipt(result: &ExecutionResult, cumulative_gas_used: u64) -> EvmReceipt {
+pub(crate) fn make_receipt(result: &ExecutionResult, cumulative_gas_used: u64) -> EvmReceipt {
     let logs = result
         .logs()
         .iter()
