@@ -13,7 +13,8 @@ use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
 use kaspa_eth_rpc::{
     BlockId, EthAccessListItem, EthAccountState, EthBlock, EthCallFrame, EthCallRequest, EthCandidateTrace, EthEvmTxStatus, EthFeeHistory,
-    EthLog, EthLogEntry, EthLogEvent, EthPrestateAccount, EthProvider, EthReceipt, EthResult, EthRpcError, EthTx,
+    EthLog, EthLogEntry, EthLogEvent, EthPrestateAccount, EthProvider, EthReceipt, EthResult, EthRpcError, EthStructLog, EthStructLogTrace,
+    EthTx,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_p2p_flows::flow_context::FlowContext;
@@ -360,7 +361,7 @@ impl EthProvider for NodeEthProvider {
     /// `debug_traceTransaction` with the Geth `callTracer` (design §11): the call
     /// tree of the replay, with the §11.4 MISAKA extensions on the root frame.
     async fn trace_transaction(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthCallFrame>> {
-        Ok(self.replay_trace(tx_hash).await?.map(|(traced, accepting, originating)| {
+        Ok(self.replay_trace(tx_hash, false).await?.map(|(traced, accepting, originating)| {
             let mut root = convert_call_frame(&traced.frame);
             root.misaka_originating_payload_block = originating.map(|h| h.as_bytes().to_vec());
             root.misaka_accepting_block = Some(accepting.as_bytes().to_vec());
@@ -371,8 +372,19 @@ impl EthProvider for NodeEthProvider {
     /// `debug_traceTransaction` with the `prestateTracer` (diffMode, §11.1): the
     /// per-account pre/post state diff — the SAME replay as the callTracer.
     async fn trace_prestate(&self, tx_hash: [u8; 32]) -> EthResult<Option<Vec<EthPrestateAccount>>> {
-        Ok(self.replay_trace(tx_hash).await?.map(|(traced, _accepting, _originating)| {
+        Ok(self.replay_trace(tx_hash, false).await?.map(|(traced, _accepting, _originating)| {
             traced.prestate.iter().map(convert_prestate_account).collect()
+        }))
+    }
+
+    /// `debug_traceTransaction` with no tracer = the Geth opcode/struct logger
+    /// (§11.1): the SAME replay as the callTracer, with per-opcode logs captured.
+    async fn trace_struct_log(&self, tx_hash: [u8; 32]) -> EthResult<Option<EthStructLogTrace>> {
+        Ok(self.replay_trace(tx_hash, true).await?.map(|(traced, _accepting, _originating)| EthStructLogTrace {
+            gas: traced.gas_used,
+            failed: !traced.succeeded,
+            return_value: traced.output.to_vec(),
+            struct_logs: traced.struct_logs.unwrap_or_default().iter().map(convert_struct_log).collect(),
         }))
     }
 
@@ -705,6 +717,7 @@ impl NodeEthProvider {
     async fn replay_trace(
         &self,
         tx_hash: [u8; 32],
+        capture_struct_logs: bool,
     ) -> EthResult<Option<(kaspa_evm::trace::TracedTx, kaspa_consensus_core::BlockHash, Option<kaspa_consensus_core::BlockHash>)>> {
         // §11.5: bound concurrent replays. The permit is MOVED INTO the blocking
         // closure so it is released only when the (uncancellable) replay finishes —
@@ -758,6 +771,7 @@ impl NodeEthProvider {
                     gas_pool_v2,
                     f002_withdraw_cap,
                     f003_mldsa_verify,
+                    capture_struct_logs,
                     kaspa_evm::trace::TraceLimits::default(),
                 )
                 .map_err(|e| EthRpcError::server(format!("{e}")))?;
@@ -841,6 +855,19 @@ fn convert_prestate_account(a: &kaspa_evm::trace::PrestateAccount) -> EthPrestat
         storage: s.storage.iter().map(|(k, v)| (k.to_be_bytes::<32>(), v.to_be_bytes::<32>())).collect(),
     };
     EthPrestateAccount { address: a.address.into_array(), pre: a.pre.as_ref().map(conv), post: a.post.as_ref().map(conv) }
+}
+
+/// Convert a [`kaspa_evm::trace::StructLog`] into the adapter's primitive [`EthStructLog`].
+fn convert_struct_log(l: &kaspa_evm::trace::StructLog) -> EthStructLog {
+    EthStructLog {
+        pc: l.pc,
+        op: l.op_name.to_string(),
+        gas: l.gas,
+        gas_cost: l.gas_cost,
+        depth: l.depth,
+        stack: l.stack.clone(),
+        error: l.error.clone(),
+    }
 }
 
 /// The eth-rpc 32-byte parentHash of an EVM block: the first 32 bytes of the

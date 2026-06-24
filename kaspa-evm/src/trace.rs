@@ -152,9 +152,28 @@ pub struct PrestateAccount {
     pub post: Option<AccountStateView>,
 }
 
-/// The result of a successful trace. A single replay yields BOTH the callTracer
-/// call tree and the prestateTracer diff, so the RPC layer can serve either tracer
-/// from one execution.
+/// One opcode step of the Geth default (struct/opcode) logger. Memory and storage
+/// are intentionally NOT captured (design §11.5 — off by default; the heavy fields).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructLog {
+    pub pc: u64,
+    pub op: u8,
+    pub op_name: &'static str,
+    /// Gas remaining BEFORE the op executed.
+    pub gas: u64,
+    /// Gas the op consumed (`gas_before − gas_after`).
+    pub gas_cost: u64,
+    /// 1-based call depth.
+    pub depth: u32,
+    /// Stack (bottom→top) as big-endian 32-byte words.
+    pub stack: Vec<[u8; 32]>,
+    /// Set when this op produced a non-OK result (revert / halt).
+    pub error: Option<String>,
+}
+
+/// The result of a successful trace. A single replay yields the callTracer call
+/// tree, the prestateTracer diff, and (when requested) the opcode struct logs, so
+/// the RPC layer can serve any tracer from one execution.
 #[derive(Clone, Debug)]
 pub struct TracedTx {
     pub frame: CallFrame,
@@ -163,6 +182,9 @@ pub struct TracedTx {
     pub output: Bytes,
     /// `prestateTracer` diffMode: every account the tx changed, pre vs post.
     pub prestate: Vec<PrestateAccount>,
+    /// Geth default struct/opcode logs — `Some` only when capture was requested
+    /// (it is expensive: one entry per executed opcode).
+    pub struct_logs: Option<Vec<StructLog>>,
 }
 
 /// Resolve the acceptance-candidate index whose recorded outcome is
@@ -187,6 +209,7 @@ pub fn trace_accepted_tx(
     gas_pool_v2_activation_daa_score: u64,
     f002_withdraw_cap_activation_daa_score: u64,
     f003_mldsa_verify_activation_daa_score: u64,
+    capture_struct_logs: bool,
     limits: TraceLimits,
 ) -> Result<TracedTx, TraceError> {
     let target_idx = candidate_index_for_receipt(body, receipt_index).ok_or(TraceError::TargetNotAccepted)?;
@@ -255,7 +278,7 @@ pub fn trace_accepted_tx(
     let txenv = decode_tx_to_env(&body.txs[target_idx].raw).map_err(|e| TraceError::Exec(EvmExecError::TxDecode(e)))?;
     let target_gas_limit = txenv.gas_limit;
     let basefee = derived.base_fee_per_gas;
-    let mut tracer = CallTracer::new(limits);
+    let mut tracer = CallTracer::new(limits, capture_struct_logs);
     let result = {
         let mut evm = Evm::builder()
             .with_db(&mut pre_state)
@@ -324,8 +347,9 @@ pub fn trace_accepted_tx(
     // from the pre-target state (pre) and revm's post-execution state set (post). The
     // same single replay above feeds it — no extra execution.
     let prestate = compute_prestate(&pre_state, &result.state);
+    let struct_logs = if capture_struct_logs { Some(std::mem::take(&mut tracer.struct_logs)) } else { None };
 
-    Ok(TracedTx { frame, gas_used: result.result.gas_used(), succeeded: result.result.is_success(), output, prestate })
+    Ok(TracedTx { frame, gas_used: result.result.gas_used(), succeeded: result.result.is_success(), output, prestate, struct_logs })
 }
 
 /// Compute the `prestateTracer` diffMode entries from the replay's pre-target state
@@ -421,7 +445,7 @@ pub fn trace_candidate_tx(
     let target_gas_limit = txenv.gas_limit;
     let block_gas = if env.gas_limit == 0 { 30_000_000 } else { env.gas_limit };
     let f003_active = env.f003_active;
-    let mut tracer = CallTracer::new(limits);
+    let mut tracer = CallTracer::new(limits, false);
     let exec = {
         let mut evm = Evm::builder()
             .with_db(&mut db)
@@ -490,11 +514,24 @@ struct CallTracer {
     /// Set when a cap is breached; checked after `transact()` (gas already bounds
     /// total work, so there is no need to abort mid-execution).
     exceeded: Option<String>,
+    /// When true, the `step`/`step_end` hooks also accumulate `struct_logs` (the
+    /// Geth default opcode logger). Off for callTracer/prestate to avoid the cost.
+    capture_struct_logs: bool,
+    struct_logs: Vec<StructLog>,
 }
 
 impl CallTracer {
-    fn new(limits: TraceLimits) -> Self {
-        Self { root: None, stack: Vec::new(), steps: 0, frame_count: 0, limits, exceeded: None }
+    fn new(limits: TraceLimits, capture_struct_logs: bool) -> Self {
+        Self {
+            root: None,
+            stack: Vec::new(),
+            steps: 0,
+            frame_count: 0,
+            limits,
+            exceeded: None,
+            capture_struct_logs,
+            struct_logs: Vec::new(),
+        }
     }
 
     fn push_frame(&mut self, frame: CallFrame) {
@@ -524,10 +561,40 @@ impl CallTracer {
 }
 
 impl<DB: Database> Inspector<DB> for CallTracer {
-    fn step(&mut self, _interp: &mut revm::interpreter::Interpreter, _context: &mut EvmContext<DB>) {
+    fn step(&mut self, interp: &mut revm::interpreter::Interpreter, _context: &mut EvmContext<DB>) {
         self.steps += 1;
         if self.steps > self.limits.max_steps && self.exceeded.is_none() {
             self.exceeded = Some(format!("max steps {} exceeded", self.limits.max_steps));
+        }
+        if self.capture_struct_logs && self.exceeded.is_none() {
+            let op = interp.current_opcode();
+            let depth = self.stack.len() as u32; // open call frames = current call depth
+            let pc = interp.program_counter() as u64;
+            let gas = interp.gas.remaining();
+            let stack: Vec<[u8; 32]> = interp.stack.data().iter().map(|u| u.to_be_bytes::<32>()).collect();
+            self.struct_logs.push(StructLog {
+                pc,
+                op,
+                op_name: revm::interpreter::OpCode::new(op).map(|o| o.as_str()).unwrap_or("INVALID"),
+                gas,
+                gas_cost: 0, // patched in step_end (gas_before − gas_after)
+                depth,
+                stack,
+                error: None,
+            });
+        }
+    }
+
+    fn step_end(&mut self, interp: &mut revm::interpreter::Interpreter, _context: &mut EvmContext<DB>) {
+        if self.capture_struct_logs {
+            let gas_after = interp.gas.remaining();
+            let ir = interp.instruction_result;
+            if let Some(last) = self.struct_logs.last_mut() {
+                last.gas_cost = last.gas.saturating_sub(gas_after);
+                if !ir.is_ok() {
+                    last.error = Some(instruction_error_string(ir));
+                }
+            }
         }
     }
 
@@ -792,7 +859,7 @@ mod tests {
         let (receipt, body) = run_and_body(&snap, raw);
 
         let traced =
-            trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, TraceLimits::default()).unwrap();
+            trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, false, TraceLimits::default()).unwrap();
         assert_eq!(traced.frame.kind, TraceCallKind::Call);
         assert_eq!(traced.frame.from, sender);
         assert_eq!(traced.frame.to, Some(recipient));
@@ -814,7 +881,7 @@ mod tests {
         let snap = fund(sender);
         let (mut receipt, body) = run_and_body(&snap, raw);
         receipt.gas_used += 1; // diverge from the replay
-        let err = trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, TraceLimits::default());
+        let err = trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, false, TraceLimits::default());
         assert!(matches!(err, Err(TraceError::ReplayMismatch(_))), "got {err:?}");
     }
 
@@ -825,7 +892,7 @@ mod tests {
         let (sender, raw) = signed_tx(0, revm::primitives::TxKind::Call(recipient), 5, 21_000, Bytes::new());
         let snap = fund(sender);
         let (receipt, body) = run_and_body(&snap, raw);
-        let err = trace_accepted_tx(&snap, None, &body, 7, &receipt, u64::MAX, u64::MAX, u64::MAX, TraceLimits::default());
+        let err = trace_accepted_tx(&snap, None, &body, 7, &receipt, u64::MAX, u64::MAX, u64::MAX, false, TraceLimits::default());
         assert!(matches!(err, Err(TraceError::TargetNotAccepted)), "got {err:?}");
     }
 
@@ -852,7 +919,7 @@ mod tests {
         assert!(!receipt.succeeded, "the call reverted");
 
         let traced =
-            trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, TraceLimits::default()).unwrap();
+            trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, false, TraceLimits::default()).unwrap();
         assert_eq!(traced.frame.kind, TraceCallKind::Call);
         assert_eq!(traced.frame.to, Some(contract));
         assert_eq!(traced.frame.input, Bytes::from(vec![0x01, 0x02, 0x03]));
@@ -881,7 +948,7 @@ mod tests {
         let snap = snapshot_from_cachedb(&db);
         let (receipt, body) = run_and_body(&snap, raw);
         let limits = TraceLimits { max_steps: 1, max_frames: 100, max_output_bytes: 1024 };
-        let err = trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, limits);
+        let err = trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, false, limits);
         assert!(matches!(err, Err(TraceError::ResourceExceeded(_))), "got {err:?}");
     }
 
@@ -956,13 +1023,13 @@ mod tests {
         };
 
         // Correct fence (v2): the prefix [A,B] reproduces, C traces successfully.
-        let ok = trace_accepted_tx(&snap, None, &body, 2, &receipt_c, 0, u64::MAX, u64::MAX, TraceLimits::default()).unwrap();
+        let ok = trace_accepted_tx(&snap, None, &body, 2, &receipt_c, 0, u64::MAX, u64::MAX, false, TraceLimits::default()).unwrap();
         assert_eq!(ok.frame.from, sc);
         assert_eq!(ok.frame.to, Some(recipient));
 
         // Wrong fence (inert/v1): B is over-capped in the rebuilt prefix, diverging
         // from the recorded v2 outcome ⇒ fail closed, never a wrong trace.
-        let err = trace_accepted_tx(&snap, None, &body, 2, &receipt_c, u64::MAX, u64::MAX, u64::MAX, TraceLimits::default());
+        let err = trace_accepted_tx(&snap, None, &body, 2, &receipt_c, u64::MAX, u64::MAX, u64::MAX, false, TraceLimits::default());
         assert!(matches!(err, Err(TraceError::ReplayMismatch(_))), "wrong fence must fail closed, got {err:?}");
     }
 
@@ -988,7 +1055,7 @@ mod tests {
         assert!(receipt.succeeded);
 
         let traced =
-            trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, TraceLimits::default()).unwrap();
+            trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, false, TraceLimits::default()).unwrap();
 
         let c = traced.prestate.iter().find(|a| a.address == contract).expect("contract in prestate diff");
         assert_eq!(c.pre.as_ref().unwrap().storage, vec![(U256::ZERO, U256::ZERO)], "slot 0 pre = 0");
@@ -1051,5 +1118,39 @@ mod tests {
         let ct = trace_candidate_tx(&snap, &head_env(), &raw, TraceLimits::default()).unwrap();
         assert!(ct.executed && !ct.succeeded, "reverts but executed");
         assert_eq!(ct.frame.as_ref().unwrap().error.as_deref(), Some("execution reverted"));
+    }
+
+    /// Struct/opcode logger: capture=true yields one entry per executed opcode
+    /// (PUSH1/SSTORE/STOP…) with pc/op/gas/depth; capture=false yields no logs.
+    #[test]
+    fn trace_struct_logs_capture_opcodes() {
+        let code = Bytes::from(vec![0x60, 0x2a, 0x60, 0x00, 0x55, 0x00]); // PUSH1 0x2a PUSH1 0x00 SSTORE STOP
+        let contract = Address::from([0xC5u8; 20]);
+        let (sender, raw) = signed_tx(0, revm::primitives::TxKind::Call(contract), 0, 100_000, Bytes::new());
+        let mut db = CacheDB::new(EmptyDB::default());
+        db.insert_account_info(
+            sender,
+            AccountInfo { balance: U256::from(10u128).pow(U256::from(22)), nonce: 0, code_hash: KECCAK_EMPTY, code: None },
+        );
+        db.insert_account_info(
+            contract,
+            AccountInfo { balance: U256::ZERO, nonce: 1, code_hash: keccak256(&code), code: Some(Bytecode::new_raw(code)) },
+        );
+        let snap = snapshot_from_cachedb(&db);
+        let (receipt, body) = run_and_body(&snap, raw);
+
+        let traced =
+            trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, true, TraceLimits::default()).unwrap();
+        let logs = traced.struct_logs.expect("struct logs captured when requested");
+        let ops: Vec<&str> = logs.iter().map(|l| l.op_name).collect();
+        assert!(ops.contains(&"SSTORE"), "expected SSTORE in {ops:?}");
+        assert!(ops.contains(&"PUSH1"), "expected PUSH1 in {ops:?}");
+        assert!(logs.iter().all(|l| l.depth >= 1), "depth is 1-based");
+        assert!(logs.iter().any(|l| l.gas_cost > 0), "at least one op has a gas cost");
+
+        // callTracer/default replay (capture=false) carries no struct logs.
+        let plain =
+            trace_accepted_tx(&snap, None, &body, 0, &receipt, u64::MAX, u64::MAX, u64::MAX, false, TraceLimits::default()).unwrap();
+        assert!(plain.struct_logs.is_none());
     }
 }

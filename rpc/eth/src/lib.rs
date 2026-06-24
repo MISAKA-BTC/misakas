@@ -295,6 +295,30 @@ pub struct EthCandidateTrace {
     pub frame: Option<EthCallFrame>,
 }
 
+/// One opcode step of the Geth default (struct) logger (§11.1). Memory/storage are
+/// omitted (§11.5 — off by default).
+#[derive(Clone, Debug)]
+pub struct EthStructLog {
+    pub pc: u64,
+    pub op: String,
+    pub gas: u64,
+    pub gas_cost: u64,
+    pub depth: u32,
+    /// Stack (bottom→top) as big-endian 32-byte words.
+    pub stack: Vec<[u8; 32]>,
+    pub error: Option<String>,
+}
+
+/// The Geth default struct-logger result: total gas, failure flag, return data, and
+/// the per-opcode log.
+#[derive(Clone, Debug)]
+pub struct EthStructLogTrace {
+    pub gas: u64,
+    pub failed: bool,
+    pub return_value: Vec<u8>,
+    pub struct_logs: Vec<EthStructLog>,
+}
+
 #[async_trait]
 pub trait EthProvider: Send + Sync + 'static {
     /// The EVM chain id (`EVM_CHAIN_ID`).
@@ -445,6 +469,13 @@ pub trait EthProvider: Send + Sync + 'static {
     /// head. `None` ⇒ the raw tx is unknown to this node. Default: unsupported.
     async fn trace_evm_candidate(&self, _tx_hash: [u8; 32]) -> EthResult<Option<EthCandidateTrace>> {
         Err(EthRpcError::new(codes::METHOD_NOT_FOUND, "misaka_traceEvmCandidate is not available on this node"))
+    }
+
+    /// `debug_traceTransaction` with the Geth default opcode/struct logger (§11.1) —
+    /// the SAME replay as the callTracer, capturing per-opcode logs. `None` =
+    /// unknown / not accepted. Default: unsupported.
+    async fn trace_struct_log(&self, _tx_hash: [u8; 32]) -> EthResult<Option<EthStructLogTrace>> {
+        Err(EthRpcError::new(codes::METHOD_NOT_FOUND, "debug_traceTransaction is not available on this node"))
     }
 }
 
@@ -1075,22 +1106,47 @@ async fn eth_get_transaction_by_hash(provider: &Arc<dyn EthProvider>, params: &V
     Ok(provider.transaction_by_hash(hash).await?.map(|t| render_tx(&t)).unwrap_or(Value::Null))
 }
 
-/// `debug_traceTransaction(txHash, { tracer })` (§11.1). Supports the Geth
-/// `callTracer` (default) and `prestateTracer` (diffMode); any other named tracer
-/// is an explicit `invalid_params` (no silent fallback to a different shape).
+/// `debug_traceTransaction(txHash, { tracer })` (§11.1). With no tracer it returns
+/// the Geth default opcode/struct logs; `callTracer` returns the call tree and
+/// `prestateTracer` the state diff. Any other named tracer is `invalid_params`.
 async fn debug_trace_transaction(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let hash = parse_hash32_param(params, 0)?;
-    // Optional second arg: the tracer config object. Accept an absent/empty config
-    // (defaults to callTracer) or an explicit supported tracer name; reject others.
     let requested_tracer =
         params.as_array().and_then(|a| a.get(1)).filter(|cfg| !cfg.is_null()).and_then(|cfg| cfg.get("tracer")).and_then(|t| t.as_str());
     match requested_tracer {
-        None | Some("callTracer") => Ok(provider.trace_transaction(hash).await?.map(|f| render_call_frame(&f)).unwrap_or(Value::Null)),
+        // Geth-faithful: omitting the tracer yields the opcode/struct logger.
+        None => Ok(provider.trace_struct_log(hash).await?.map(|t| render_struct_log(&t)).unwrap_or(Value::Null)),
+        Some("callTracer") => Ok(provider.trace_transaction(hash).await?.map(|f| render_call_frame(&f)).unwrap_or(Value::Null)),
         Some("prestateTracer") => Ok(provider.trace_prestate(hash).await?.map(|a| render_prestate(&a)).unwrap_or(Value::Null)),
         Some(other) => Err(EthRpcError::invalid_params(format!(
-            "unsupported tracer {other:?}; supported: \"callTracer\", \"prestateTracer\""
+            "unsupported tracer {other:?}; supported: \"callTracer\", \"prestateTracer\", or omit for the opcode logger"
         ))),
     }
+}
+
+/// Render the Geth default struct-logger result (§11.1). `pc/gas/gasCost/depth` are
+/// JSON numbers; `stack` entries and `returnValue` are hex WITHOUT a `0x` prefix
+/// (Geth convention). Memory/storage are omitted (§11.5 off by default).
+fn render_struct_log(t: &EthStructLogTrace) -> Value {
+    let hexn = |b: &[u8]| faster_hex::hex_string(b);
+    let logs: Vec<Value> = t
+        .struct_logs
+        .iter()
+        .map(|l| {
+            let mut m = serde_json::Map::new();
+            m.insert("pc".to_string(), json!(l.pc));
+            m.insert("op".to_string(), json!(l.op));
+            m.insert("gas".to_string(), json!(l.gas));
+            m.insert("gasCost".to_string(), json!(l.gas_cost));
+            m.insert("depth".to_string(), json!(l.depth));
+            m.insert("stack".to_string(), Value::Array(l.stack.iter().map(|w| json!(hexn(w))).collect()));
+            if let Some(e) = &l.error {
+                m.insert("error".to_string(), json!(e));
+            }
+            Value::Object(m)
+        })
+        .collect();
+    json!({ "gas": t.gas, "failed": t.failed, "returnValue": hexn(&t.return_value), "structLogs": logs })
 }
 
 /// `misaka_traceEvmCandidate(txHash)` (§11.6): diagnose a tx with no receipt.
