@@ -16,7 +16,9 @@
 pub mod balance;
 pub mod event;
 pub mod store;
+pub mod sync;
 
 pub use balance::Balances;
 pub use event::{DecodedEvent, DecodeError, TokenStandard, TokenTransfer};
 pub use store::{IndexedBlock, LocatedTransfer, MemStore, TransferStore};
+pub use sync::{plan_reconcile, BlockId, SyncPlan};
