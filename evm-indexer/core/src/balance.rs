@@ -156,6 +156,40 @@ impl Balances {
     pub fn entry_count(&self) -> usize {
         self.erc20.len() + self.erc721.len() + self.erc1155.len()
     }
+
+    // --- seed setters (a persistent backend seeds these from storage before
+    //     folding a block's transfers, then reads the results back to write) ---
+
+    /// Seed/overwrite an ERC-20 balance (a zero value clears the entry, keeping
+    /// the "no entry == zero" invariant).
+    pub fn set_erc20(&mut self, token: [u8; 20], owner: [u8; 20], balance: U256) {
+        if balance.is_zero() {
+            self.erc20.remove(&(token, owner));
+        } else {
+            self.erc20.insert((token, owner), balance);
+        }
+    }
+
+    /// Seed/overwrite ERC-721 ownership (`None` clears it).
+    pub fn set_erc721(&mut self, collection: [u8; 20], token_id: U256, owner: Option<[u8; 20]>) {
+        match owner {
+            Some(o) => {
+                self.erc721.insert((collection, token_id), o);
+            }
+            None => {
+                self.erc721.remove(&(collection, token_id));
+            }
+        }
+    }
+
+    /// Seed/overwrite an ERC-1155 balance (a zero value clears the entry).
+    pub fn set_erc1155(&mut self, collection: [u8; 20], token_id: U256, owner: [u8; 20], balance: U256) {
+        if balance.is_zero() {
+            self.erc1155.remove(&(collection, token_id, owner));
+        } else {
+            self.erc1155.insert((collection, token_id, owner), balance);
+        }
+    }
 }
 
 #[cfg(test)]
