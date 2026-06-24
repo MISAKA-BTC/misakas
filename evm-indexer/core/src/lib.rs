@@ -15,6 +15,8 @@
 
 pub mod balance;
 pub mod event;
+pub mod store;
 
 pub use balance::Balances;
 pub use event::{DecodedEvent, DecodeError, TokenStandard, TokenTransfer};
+pub use store::{IndexedBlock, LocatedTransfer, MemStore, TransferStore};
