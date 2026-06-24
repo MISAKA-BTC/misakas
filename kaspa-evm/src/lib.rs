@@ -16,6 +16,7 @@
 
 pub mod env;
 pub mod executor;
+pub mod flat_backend;
 pub mod mldsa_verify;
 pub mod precompiles;
 pub mod reconstruct;
