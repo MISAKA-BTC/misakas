@@ -323,6 +323,7 @@ impl EvmPipeline {
 pub fn stage_evm_index_rows(
     receipts_store: &crate::model::stores::evm::DbEvmReceiptsStore,
     tx_index_store: &crate::model::stores::evm::DbEvmTxIndexStore,
+    log_index_store: &crate::model::stores::evm::DbEvmLogIndexStore,
     batch: &mut rocksdb::WriteBatch,
     accepting: kaspa_consensus_core::BlockHash,
     staged: &EvmStaged,
@@ -362,6 +363,29 @@ pub fn stage_evm_index_rows(
             accepting,
             kaspa_consensus_core::evm::EvmBlockReceipts { receipts: staged.result.receipts.clone(), tx_hashes },
         )?;
+
+        // §8: secondary log postings (address + topic0..3) for each log, so a
+        // long-range eth_getLogs can range-scan a contract/topic instead of
+        // re-walking every block's receipts. Keyed by block-global position;
+        // written for every UTXO-valid block (side branches included) — the query
+        // canonical-filters each posting's l1_hash. RPC index only.
+        let evm_number = staged.result.header.evm_number;
+        for (rcpt_idx, receipt) in staged.result.receipts.iter().enumerate() {
+            for (in_rcpt_idx, log) in receipt.logs.iter().enumerate() {
+                let loc = kaspa_consensus_core::evm::LogPostingLoc {
+                    evm_number,
+                    l1_hash: accepting,
+                    tx_index: rcpt_idx as u32,
+                    in_receipt_log_index: in_rcpt_idx as u32,
+                };
+                log_index_store.write_posting_batch(batch, kaspa_consensus_core::evm::LogPostingKind::Address, &log.address.as_bytes(), &loc)?;
+                for (ti, topic) in log.topics.iter().take(4).enumerate() {
+                    if let Some(kind) = kaspa_consensus_core::evm::LogPostingKind::topic(ti) {
+                        log_index_store.write_posting_batch(batch, kind, &topic.as_bytes(), &loc)?;
+                    }
+                }
+            }
+        }
     }
 
     for (i, (hash, src)) in staged.candidate_meta.iter().enumerate() {
@@ -667,6 +691,7 @@ mod driver {
         payload_store: &DbEvmPayloadStore,
         receipts_store: &crate::model::stores::evm::DbEvmReceiptsStore,
         tx_index_store: &crate::model::stores::evm::DbEvmTxIndexStore,
+        log_index_store: &crate::model::stores::evm::DbEvmLogIndexStore,
         batch: &mut WriteBatch,
         block: BlockHash,
         selected_parent: BlockHash,
@@ -694,7 +719,7 @@ mod driver {
             return Ok(());
         };
         header_store.insert_batch(batch, block, staged.result.header.clone()).map_err(EvmValidateError::Store)?;
-        super::stage_evm_index_rows(receipts_store, tx_index_store, batch, block, &staged).map_err(EvmValidateError::Store)?;
+        super::stage_evm_index_rows(receipts_store, tx_index_store, log_index_store, batch, block, &staged).map_err(EvmValidateError::Store)?;
         state_store.insert_batch(batch, block, staged.snapshot).map_err(EvmValidateError::Store)?;
         Ok(())
     }
@@ -1010,6 +1035,7 @@ mod tests {
         let payload_store = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty);
         let receipts_store = crate::model::stores::evm::DbEvmReceiptsStore::new(db.clone(), CachePolicy::Empty);
         let tx_index_store = crate::model::stores::evm::DbEvmTxIndexStore::new(db.clone(), CachePolicy::Empty);
+        let log_index_store = crate::model::stores::evm::DbEvmLogIndexStore::new(db.clone());
 
         // First EVM block on genesis: the driver reads the parent's state as
         // absent => the empty (genesis) snapshot — no seeding needed.
@@ -1068,6 +1094,7 @@ mod tests {
             &payload_store,
             &receipts_store,
             &tx_index_store,
+            &log_index_store,
             &mut b1,
             l1.hash,
             selected_parent,
@@ -1103,6 +1130,7 @@ mod tests {
             &payload_store,
             &receipts_store,
             &tx_index_store,
+            &log_index_store,
             &mut b2,
             l1.hash,
             selected_parent,
@@ -1126,6 +1154,7 @@ mod tests {
             &payload_store,
             &receipts_store,
             &tx_index_store,
+            &log_index_store,
             &mut b3,
             bad.hash,
             selected_parent,
@@ -1149,6 +1178,7 @@ mod tests {
             &payload_store,
             &receipts_store,
             &tx_index_store,
+            &log_index_store,
             &mut b4,
             bad2.hash,
             selected_parent,

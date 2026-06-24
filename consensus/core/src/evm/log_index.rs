@@ -130,6 +130,38 @@ pub fn decode_log_posting_key(key: &[u8]) -> Option<(LogPostingKind, Vec<u8>, Lo
     Some((kind, selector, LogPostingLoc { evm_number, l1_hash, tx_index, in_receipt_log_index }))
 }
 
+/// Encode just the posting MEMBER — the bytes stored per set entry under a
+/// `(kind, selector)` bucket: `number-be || l1_hash || tx-be || log-be`
+/// (a fixed `LOC_LEN` bytes, so a bucket scan orders members by block ascending,
+/// then by `(tx_index, in_receipt_log_index)` = block-global `logIndex`).
+pub fn encode_log_posting_loc(loc: &LogPostingLoc) -> Vec<u8> {
+    let mut v = Vec::with_capacity(LOC_LEN);
+    v.extend_from_slice(&loc.evm_number.to_be_bytes());
+    v.extend_from_slice(&loc.l1_hash.as_bytes());
+    v.extend_from_slice(&loc.tx_index.to_be_bytes());
+    v.extend_from_slice(&loc.in_receipt_log_index.to_be_bytes());
+    v
+}
+
+/// Decode a posting member produced by [`encode_log_posting_loc`]. `None` on a
+/// length mismatch.
+pub fn decode_log_posting_loc(bytes: &[u8]) -> Option<LogPostingLoc> {
+    if bytes.len() != LOC_LEN {
+        return None;
+    }
+    let mut off = 0;
+    let evm_number = u64::from_be_bytes(bytes[off..off + 8].try_into().ok()?);
+    off += 8;
+    let mut hb = [0u8; 64];
+    hb.copy_from_slice(&bytes[off..off + 64]);
+    off += 64;
+    let l1_hash = Hash64::from_bytes(hb);
+    let tx_index = u32::from_be_bytes(bytes[off..off + 4].try_into().ok()?);
+    off += 4;
+    let in_receipt_log_index = u32::from_be_bytes(bytes[off..off + 4].try_into().ok()?);
+    Some(LogPostingLoc { evm_number, l1_hash, tx_index, in_receipt_log_index })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +186,20 @@ mod tests {
         assert_eq!(kind, LogPostingKind::Topic1);
         assert_eq!(sel, topic.to_vec());
         assert_eq!(got, loc);
+    }
+
+    #[test]
+    fn loc_member_roundtrip_and_orders_by_number() {
+        let loc = LogPostingLoc { evm_number: 9, l1_hash: h(4), tx_index: 2, in_receipt_log_index: 1 };
+        let m = encode_log_posting_loc(&loc);
+        assert_eq!(m.len(), 8 + 64 + 4 + 4, "fixed-length member");
+        assert_eq!(decode_log_posting_loc(&m), Some(loc));
+        assert!(decode_log_posting_loc(&m[..m.len() - 1]).is_none(), "short member rejected");
+        // Fixed length ⇒ byte order == (number, hash, tx, log) order — the
+        // property that makes a bucket scan walk blocks ascending.
+        let lo = encode_log_posting_loc(&LogPostingLoc { evm_number: 5, l1_hash: h(0xFF), tx_index: u32::MAX, in_receipt_log_index: u32::MAX });
+        let hi = encode_log_posting_loc(&LogPostingLoc { evm_number: 6, l1_hash: h(0), tx_index: 0, in_receipt_log_index: 0 });
+        assert!(lo < hi, "lower block number sorts first regardless of within-block position");
     }
 
     #[test]

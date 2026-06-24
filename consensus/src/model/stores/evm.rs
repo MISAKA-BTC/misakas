@@ -12,12 +12,13 @@
 //! so any policy is safe.
 
 use kaspa_consensus_core::evm::{
-    CanonicalEvmHeads, EvmBlockReceipts, EvmExecutionHeader, EvmExecutionPayload, EvmRawTx, EvmStateSnapshot, EvmTxLocations,
+    decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket, CanonicalEvmHeads, EvmBlockReceipts, EvmExecutionHeader,
+    EvmExecutionPayload, EvmRawTx, EvmStateSnapshot, EvmTxLocations, LogPostingKind, LogPostingLoc,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
-    BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DirectDbWriter, StoreError, StoreResult, DB,
+    BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DbSetAccess, DirectDbWriter, StoreError, StoreResult, DB,
 };
 use kaspa_database::registry::DatabaseStorePrefixes;
 use rocksdb::WriteBatch;
@@ -406,6 +407,44 @@ impl EvmRawTxStoreReader for DbEvmRawTxStore {
 }
 
 // ---------------------------------------------------------------------------
+// EvmLogs posting index (prefix 205, design §8) — a secondary log index for
+// fast long-range `eth_getLogs`. A `DbSetAccess` set: bucket = `kind || selector`
+// (address / topicN), member = `LogPostingLoc` bytes (number-be || l1_hash || tx
+// || log). Written for every UTXO-valid block (side branches included), so the
+// query MUST canonical-filter each member's `l1_hash` against the `evm_number`
+// map. RPC index only — never part of any commitment.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub struct DbEvmLogIndexStore {
+    access: DbSetAccess<Vec<u8>, Vec<u8>>,
+}
+
+impl DbEvmLogIndexStore {
+    pub fn new(db: Arc<DB>) -> Self {
+        Self { access: DbSetAccess::new(db, DatabaseStorePrefixes::EvmLogs.into()) }
+    }
+
+    /// Add one posting (`kind`+`selector` bucket → `loc`) to the caller's batch.
+    pub fn write_posting_batch(
+        &self,
+        batch: &mut WriteBatch,
+        kind: LogPostingKind,
+        selector: &[u8],
+        loc: &LogPostingLoc,
+    ) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), log_posting_bucket(kind, selector), encode_log_posting_loc(loc))
+    }
+
+    /// Iterate the postings of a `(kind, selector)` bucket in ascending block
+    /// order (block-global `logIndex` order within a block). Malformed members —
+    /// never written by us — are skipped.
+    pub fn bucket_locs(&self, kind: LogPostingKind, selector: &[u8]) -> impl Iterator<Item = LogPostingLoc> + '_ {
+        self.access.bucket_iterator(log_posting_bucket(kind, selector)).filter_map(|r| r.ok().and_then(|m| decode_log_posting_loc(&m)))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CanonicalEvmHeads singleton (prefix 209) — latest / safe / finalized pointers,
 // updated on each virtual-state commit (mirrors `DbDnsStateStore`).
 // ---------------------------------------------------------------------------
@@ -619,5 +658,41 @@ mod tests {
         store.delete_batch(&mut batch, th).unwrap();
         db.write(batch).unwrap();
         assert!(store.get(th).unwrap().is_none(), "deleted row reads as absent");
+    }
+
+    /// §8: the log posting index — postings written under address/topic buckets
+    /// are range-scanned in ascending block order; distinct selectors are isolated.
+    #[test]
+    fn evm_log_index_postings_scan_in_block_order() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbEvmLogIndexStore::new(db.clone());
+        let addr_a = [0xAAu8; 20];
+        let addr_b = [0xBBu8; 20];
+        let topic = [0xCCu8; 32];
+
+        let mut batch = WriteBatch::default();
+        // address A: logs in blocks 7, 5, 6 — written OUT of order, same selector.
+        for (n, tx, li) in [(7u64, 0u32, 0u32), (5, 1, 0), (6, 0, 2)] {
+            let loc = LogPostingLoc { evm_number: n, l1_hash: bh(n as u8), tx_index: tx, in_receipt_log_index: li };
+            store.write_posting_batch(&mut batch, LogPostingKind::Address, &addr_a, &loc).unwrap();
+            store.write_posting_batch(&mut batch, LogPostingKind::Topic0, &topic, &loc).unwrap();
+        }
+        // address B: one log in block 5.
+        store
+            .write_posting_batch(&mut batch, LogPostingKind::Address, &addr_b, &LogPostingLoc { evm_number: 5, l1_hash: bh(5), tx_index: 0, in_receipt_log_index: 0 })
+            .unwrap();
+        db.write(batch).unwrap();
+
+        // A bucket scan returns address A's postings sorted by block (5,6,7),
+        // regardless of write order.
+        let a: Vec<u64> = store.bucket_locs(LogPostingKind::Address, &addr_a).map(|l| l.evm_number).collect();
+        assert_eq!(a, vec![5, 6, 7]);
+        // address B is isolated in its own bucket.
+        let b: Vec<u64> = store.bucket_locs(LogPostingKind::Address, &addr_b).map(|l| l.evm_number).collect();
+        assert_eq!(b, vec![5]);
+        // the topic0 bucket carries the same three postings.
+        assert_eq!(store.bucket_locs(LogPostingKind::Topic0, &topic).count(), 3);
+        // an unseen selector is empty.
+        assert_eq!(store.bucket_locs(LogPostingKind::Address, &[0x00u8; 20]).count(), 0);
     }
 }
