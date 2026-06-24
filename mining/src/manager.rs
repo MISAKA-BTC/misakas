@@ -37,7 +37,14 @@ use kaspa_mining_errors::{manager::MiningManagerError, mempool::RuleError};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedSender;
+
+/// §9 (eth_subscribe newPendingTransactions): bound on the EVM admission
+/// broadcast's per-subscriber backlog. A WS consumer that falls this far behind
+/// gets `RecvError::Lagged` (drop-oldest) rather than unbounded buffering —
+/// admission is never blocked by a slow subscriber (design R-4/R-5, R-10).
+const EVM_TX_ADMISSION_CHANNEL_CAP: usize = 4096;
 
 pub struct MiningManager {
     config: Arc<Config>,
@@ -51,6 +58,12 @@ pub struct MiningManager {
     // Zero (None) burns nothing but credits the zero address; set it on miners.
     evm_fee_recipient: Option<kaspa_consensus_core::evm::EvmAddress>,
     counters: Arc<MiningCounters>,
+    // §9 (eth_subscribe newPendingTransactions): broadcasts the hash of every EVM
+    // tx admitted to this node's mempool. Fed from the single admission chokepoint
+    // (`submit_evm_transaction`), which BOTH the RPC-submit and P2P-relay ingress
+    // paths funnel through, so one fire covers both. Lossy under lag (drop-oldest)
+    // so a slow WS subscriber can never block admission.
+    evm_tx_admission_tx: broadcast::Sender<kaspa_hashes::EvmH256>,
 }
 
 impl MiningManager {
@@ -102,7 +115,11 @@ impl MiningManager {
         let mempool = RwLock::new(Mempool::new(config.clone(), counters.clone()));
         let block_template_cache = BlockTemplateCache::new(cache_lifetime);
         let evm_mempool = RwLock::new(crate::evm_mempool::EvmMempool::new());
-        Self { config, block_template_cache, mempool, evm_mempool, evm_fee_recipient, counters }
+        // §9: the sole sender lives in the manager; receivers are minted on demand
+        // by `evm_tx_admission_receiver()`. Dropping the initial receiver is fine —
+        // `send` with no receivers is a harmless `Err` we ignore at the fire site.
+        let (evm_tx_admission_tx, _) = broadcast::channel(EVM_TX_ADMISSION_CHANNEL_CAP);
+        Self { config, block_template_cache, mempool, evm_mempool, evm_fee_recipient, counters, evm_tx_admission_tx }
     }
 
     /// kaspa-pq EVM Lane v0.4 (§16): admit a raw EIP-2718 EVM transaction into
@@ -133,8 +150,14 @@ impl MiningManager {
         // template so the next get_block_template rebuilds and includes it, instead
         // of serving a stale (payload-less) template for up to the cache lifetime —
         // which would delay first inclusion of a freshly submitted tx / burst.
-        if result.is_ok() {
+        if let Ok(hash) = result.as_ref() {
             self.block_template_cache.clear();
+            // §9 (eth_subscribe newPendingTransactions): notify subscribers of the
+            // freshly admitted tx. Inside the same logical admit (the write lock was
+            // just released above) and only on success, so a hash is broadcast at
+            // most once per admission. `Err` here means no WS subscriber is attached
+            // — ignore it (fire-and-forget; never blocks or fails admission).
+            let _ = self.evm_tx_admission_tx.send(*hash);
         }
         result
     }
@@ -152,6 +175,15 @@ impl MiningManager {
     /// Snapshot of the pending EVM tx count (RPC/diagnostics).
     pub fn evm_mempool_len(&self) -> usize {
         self.evm_mempool.read().len()
+    }
+
+    /// §9 (eth_subscribe newPendingTransactions): a broadcast receiver yielding
+    /// the hash of every EVM tx admitted to this node's mempool (both ingress
+    /// paths funnel through `submit_evm_transaction`). Lossy under lag
+    /// (drop-oldest) so a slow subscriber never blocks admission; the WS layer
+    /// treats `Lagged` as "reconnect + backfill via eth_getLogs" (design R-5).
+    pub fn evm_tx_admission_receiver(&self) -> broadcast::Receiver<kaspa_hashes::EvmH256> {
+        self.evm_tx_admission_tx.subscribe()
     }
 
     /// The next nonce for `sender` accounting for this node's pending EVM txs
@@ -1150,6 +1182,12 @@ impl MiningManagerProxy {
         self.inner.has_pending_evm_transaction(tx_hash)
     }
 
+    /// §9 (eth_subscribe newPendingTransactions): subscribe to this node's EVM
+    /// mempool admissions — yields each admitted tx hash exactly once.
+    pub fn evm_tx_admission_receiver(&self) -> broadcast::Receiver<kaspa_hashes::EvmH256> {
+        self.inner.evm_tx_admission_receiver()
+    }
+
     /// §9.2: queue a pre-validated deposit claim for the own-payload system ops.
     pub fn submit_evm_deposit_claim(&self, claim: kaspa_consensus_core::evm::DepositClaim) -> bool {
         self.inner.submit_evm_deposit_claim(claim)
@@ -1431,5 +1469,41 @@ mod tests {
         let calculated_fees = vec![100u64, 200, 300, 400];
         let txs = transactions(calculated_fees.len());
         assert!(feerate_stats(txs, calculated_fees).is_none());
+    }
+}
+
+/// §9 slice 1 (eth_subscribe newPendingTransactions): the EVM mempool admission
+/// broadcast. Gated on `feature = "evm"` because `submit_evm_transaction` (the
+/// fire chokepoint) only decodes/admits under that feature.
+#[cfg(all(test, feature = "evm"))]
+mod evm_admission_broadcast_tests {
+    use super::*;
+    use crate::MiningCounters;
+
+    /// Canonical signed EIP-1559 fixture (nonce 0), byte-identical to the one the
+    /// consensus §16 e2e test embeds — admits cleanly through `admit_tx_info`, and
+    /// `keccak256(raw)` is its Ethereum tx hash.
+    const FIXTURE_TX_NONCE0: &str = "02f86b834d534b8080843b9aca008252089400000000000000000000000000000000000000228201f480c001a03244f5d74a96a52bd1c42fa1b9c336f4d3ae5509190ed9a526f17971c7fd743ca07f58e09399b50636b84f0ae4a7634c60a11c6f32427b613ebf6f4a638d6c68c1";
+
+    fn hex_to_bytes(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    /// A successful admit broadcasts exactly the returned tx hash, once; a rejected
+    /// (garbage) tx broadcasts nothing. This pins the slice-1 wiring contract that
+    /// slice 3's `newPendingTransactions` subscription depends on.
+    #[test]
+    fn admit_fires_hash_reject_fires_nothing() {
+        let counters = Arc::new(MiningCounters::default());
+        let mgr = MiningManager::new(1000, false, 500_000, None, counters);
+        // Subscribe BEFORE submitting — a broadcast receiver only sees later sends.
+        let mut rx = mgr.evm_tx_admission_receiver();
+
+        let hash = mgr.submit_evm_transaction(hex_to_bytes(FIXTURE_TX_NONCE0)).expect("fixture admits");
+        assert_eq!(rx.try_recv().expect("admit broadcast"), hash, "the admitted hash is broadcast");
+        assert!(matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)), "exactly one notification per admit");
+
+        assert!(mgr.submit_evm_transaction(vec![0xffu8; 8]).is_err(), "garbage is inadmissible");
+        assert!(matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)), "a rejected tx fires nothing");
     }
 }
