@@ -12,9 +12,9 @@
 //! so any policy is safe.
 
 use kaspa_consensus_core::evm::{
-    decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket, CanonicalEvmHeads, EvmBlockReceipts, EvmExecutionHeader,
-    EvmExecutionPayload, EvmRawTx, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations,
-    LogPostingKind, LogPostingLoc,
+    decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket, CanonicalEvmHeads, EvmAddress, EvmBlockReceipts,
+    EvmExecutionHeader, EvmExecutionPayload, EvmLatestStatePtr, EvmRawTx, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot,
+    EvmTraceReplayBodyV1, EvmTxLocations, FlatAccount, LogPostingKind, LogPostingLoc,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
@@ -585,6 +585,112 @@ impl EvmCodeStoreReader for DbEvmCodeStore {
 }
 
 // ---------------------------------------------------------------------------
+// C-01 state backend (design v0.1, Stage 1) — the flat LATEST-canonical state.
+// `EvmFlatAccount` (234) holds one row per account in the current canonical state
+// (point lookup O(1), full enumeration for the state-root recompute); the per-block
+// `state_root` is indexed by `EvmBlockStateRoot` (232); `EvmLatestStatePtr` (231) is
+// the canonical pointer the flat rows currently materialize. State data only — the
+// committed `state_root` recomputed from these is byte-identical to the snapshot
+// path (consensus-NEUTRAL). INERT until the writer/seed switch (later slices).
+// ---------------------------------------------------------------------------
+
+/// `EvmAddress → FlatAccount` (prefix 234): the flat latest-canonical EVM state.
+#[derive(Clone)]
+pub struct DbEvmFlatAccountStore {
+    access: CachedDbAccess<EvmAddress, FlatAccount>,
+}
+
+impl DbEvmFlatAccountStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmFlatAccount.into()) }
+    }
+
+    /// The account at `address` in the current canonical state (`None` = absent).
+    pub fn get(&self, address: EvmAddress) -> Result<Option<FlatAccount>, StoreError> {
+        match self.access.read(address) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Upsert one account (latest canonical — a re-write replaces the prior value).
+    pub fn write_batch(&self, batch: &mut WriteBatch, address: EvmAddress, account: FlatAccount) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), address, account)
+    }
+
+    pub fn delete_batch(&self, batch: &mut WriteBatch, address: EvmAddress) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), address)
+    }
+
+    /// Enumerate every `(address, account)` in the current canonical state — the
+    /// input to the keccak-MPT `state_root` recompute and to full materialization
+    /// (IBD pruning-point snapshot). Address order is the RocksDB key order.
+    pub fn iter(&self) -> impl Iterator<Item = Result<(EvmAddress, FlatAccount), StoreError>> + '_ {
+        self.access.iterator().map(|res| match res {
+            Ok((k, v)) => <[u8; 20]>::try_from(k.as_ref())
+                .map(|b| (EvmAddress::from_bytes(b), v))
+                .map_err(|_| StoreError::DataInconsistency("EvmFlatAccount key is not 20 bytes".into())),
+            Err(e) => Err(StoreError::DataInconsistency(format!("EvmFlatAccount iterator: {e}"))),
+        })
+    }
+}
+
+/// `BlockHash → state_root[32]` (prefix 232): O(1) committed-block state root.
+#[derive(Clone)]
+pub struct DbEvmBlockStateRootStore {
+    access: CachedDbAccess<BlockHash, EvmH256, BlockHasher>,
+}
+
+impl DbEvmBlockStateRootStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmBlockStateRoot.into()) }
+    }
+
+    pub fn get(&self, block: BlockHash) -> Result<Option<EvmH256>, StoreError> {
+        match self.access.read(block) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Upsert (a block's committed state root is stable; a re-write is identical bytes).
+    pub fn write_batch(&self, batch: &mut WriteBatch, block: BlockHash, state_root: EvmH256) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), block, state_root)
+    }
+
+    pub fn delete_batch(&self, batch: &mut WriteBatch, block: BlockHash) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), block)
+    }
+}
+
+/// Singleton `EvmLatestStatePtr` (prefix 231): the canonical pointer the flat state
+/// currently materializes.
+pub struct DbEvmLatestStatePtrStore {
+    access: CachedDbItem<EvmLatestStatePtr>,
+}
+
+impl DbEvmLatestStatePtrStore {
+    pub fn new(db: Arc<DB>) -> Self {
+        Self { access: CachedDbItem::new(db, DatabaseStorePrefixes::EvmLatestStatePtr.into()) }
+    }
+
+    /// The current pointer (`None` = the flat state has not been initialized yet).
+    pub fn get(&self) -> Result<Option<EvmLatestStatePtr>, StoreError> {
+        match self.access.read() {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_batch(&mut self, batch: &mut WriteBatch, ptr: EvmLatestStatePtr) -> StoreResult<()> {
+        self.access.write(BatchDbWriter::new(batch), &ptr)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // EvmLogs posting index (prefix 205, design §8) — a secondary log index for
 // fast long-range `eth_getLogs`. A `DbSetAccess` set: bucket = `kind || selector`
 // (address / topicN), member = `LogPostingLoc` bytes (number-be || l1_hash || tx
@@ -701,6 +807,49 @@ mod tests {
 
     fn bh(b: u8) -> BlockHash {
         Hash64::from_bytes([b; 64])
+    }
+
+    /// C-01 Stage 1: the flat-account store points-lookup + enumerates + deletes;
+    /// the block→root index and the latest-state pointer round-trip.
+    #[test]
+    fn c01_flat_state_stores_roundtrip() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
+        let roots = DbEvmBlockStateRootStore::new(db.clone(), CachePolicy::Empty);
+        let mut ptr = DbEvmLatestStatePtrStore::new(db.clone());
+
+        let addr = |b: u8| EvmAddress::from_bytes([b; 20]);
+        let acct = |bal: u128| FlatAccount {
+            core: kaspa_consensus_core::evm::AccountCore { nonce: 1, balance: EvmU256::from_u128(bal), code_hash: EvmH256::from_bytes([0; 32]) },
+            storage: vec![(EvmU256::from_u128(1), EvmU256::from_u128(bal))],
+        };
+
+        let mut b = WriteBatch::default();
+        flat.write_batch(&mut b, addr(0x01), acct(100)).unwrap();
+        flat.write_batch(&mut b, addr(0x02), acct(200)).unwrap();
+        flat.write_batch(&mut b, addr(0x03), acct(300)).unwrap();
+        roots.write_batch(&mut b, bh(0x07), EvmH256::from_bytes([0x55; 32])).unwrap();
+        ptr.set_batch(&mut b, EvmLatestStatePtr { canonical_head: bh(0x07), state_root: EvmH256::from_bytes([0x55; 32]) }).unwrap();
+        db.write(b).unwrap();
+
+        // point lookups
+        assert_eq!(flat.get(addr(0x02)).unwrap(), Some(acct(200)));
+        assert_eq!(flat.get(addr(0x09)).unwrap(), None);
+        assert_eq!(roots.get(bh(0x07)).unwrap(), Some(EvmH256::from_bytes([0x55; 32])));
+        assert_eq!(ptr.get().unwrap().unwrap().canonical_head, bh(0x07));
+
+        // full enumeration (the state-root recompute input) sees every account.
+        let mut all: Vec<_> = flat.iter().map(|r| r.unwrap()).collect();
+        all.sort_by_key(|(a, _)| a.as_bytes());
+        assert_eq!(all.len(), 3);
+        assert_eq!(all.iter().map(|(a, _)| a.as_bytes()[0]).collect::<Vec<_>>(), vec![0x01, 0x02, 0x03]);
+
+        // delete an account (self-destruct) reclaims exactly it.
+        let mut b2 = WriteBatch::default();
+        flat.delete_batch(&mut b2, addr(0x02));
+        db.write(b2).unwrap();
+        assert_eq!(flat.get(addr(0x02)).unwrap(), None);
+        assert_eq!(flat.iter().count(), 2);
     }
 
     #[test]

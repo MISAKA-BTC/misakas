@@ -1258,6 +1258,64 @@ pub struct EvmAccountSnapshot {
 
 impl MemSizeEstimator for EvmAccountSnapshot {}
 
+// ---------------------------------------------------------------------------
+// C-01 state backend (design v0.1, Stage 1): the flat latest-canonical state.
+// One row per account in the CURRENT canonical state (NOT per block), so storage
+// is O(state) instead of the per-block snapshot's O(state × blocks). Code is
+// content-addressed (prefix 222, by `code_hash`) — NOT inlined here. RPC/state
+// data only; the committed `state_root` is recomputed from these rows and must be
+// byte-identical to the snapshot path (consensus-NEUTRAL — never a fork).
+// ---------------------------------------------------------------------------
+
+/// One account in the flat latest-canonical state (C-01 Stage 1). Mirrors an
+/// [`EvmAccountSnapshot`] minus the inlined `code` (resolved via the
+/// content-addressed code store by `core.code_hash`). `storage` is the account's
+/// non-zero slots, sorted by slot (deterministic borsh).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlatAccount {
+    pub core: AccountCore,
+    pub storage: Vec<(EvmU256, EvmU256)>,
+}
+
+impl MemSizeEstimator for FlatAccount {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>() + self.storage.capacity() * size_of::<(EvmU256, EvmU256)>()
+    }
+}
+
+impl FlatAccount {
+    /// Build from a canonical [`EvmAccountSnapshot`] (drops the inlined code; the
+    /// `code_hash` already identifies it in the content-addressed store).
+    pub fn from_snapshot(a: &EvmAccountSnapshot) -> Self {
+        Self { core: AccountCore { nonce: a.nonce, balance: a.balance, code_hash: a.code_hash }, storage: a.storage.clone() }
+    }
+
+    /// Materialize a canonical [`EvmAccountSnapshot`] at `address`, resolving the
+    /// code bytes via `code_resolver` (empty for an EOA). Used to rebuild a full
+    /// snapshot / seed the executor.
+    pub fn to_snapshot(&self, address: EvmAddress, code: Vec<u8>) -> EvmAccountSnapshot {
+        EvmAccountSnapshot { address, nonce: self.core.nonce, balance: self.core.balance, code_hash: self.core.code_hash, code, storage: self.storage.clone() }
+    }
+}
+
+/// The flat state's current canonical pointer (C-01 Stage 1, prefix 231): the
+/// block whose committed `state_root` the flat rows currently materialize. Updated
+/// atomically with the flat-store writes; a reorg re-bases the flat store and this
+/// pointer together. Store/state data only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmLatestStatePtr {
+    pub canonical_head: Hash64,
+    pub state_root: EvmH256,
+}
+
+impl MemSizeEstimator for EvmLatestStatePtr {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>()
+    }
+}
+
 /// A full EVM account-state snapshot after a block (design §11.1). P3 stores one
 /// per block hash to seed the executor for the block's selected children; a later
 /// phase replaces this O(state) form with an incremental persistent trie.
@@ -1540,6 +1598,35 @@ mod tests {
         assert_eq!(bytes, borsh::to_vec(&borsh::from_slice::<EvmTraceReplayBodyV1>(&bytes).unwrap()).unwrap());
         let json = serde_json::to_string(&body).unwrap();
         assert_eq!(body, serde_json::from_str::<EvmTraceReplayBodyV1>(&json).unwrap());
+    }
+
+    /// C-01 Stage 1: FlatAccount / EvmLatestStatePtr borsh+serde roundtrip + the
+    /// snapshot⇄flat conversion (drop code on the way in, restore on the way out).
+    #[test]
+    fn flat_account_roundtrips_and_converts() {
+        let snap = EvmAccountSnapshot {
+            address: EvmAddress::from_bytes([0xAB; 20]),
+            nonce: 7,
+            balance: EvmU256::from_u128(123),
+            code_hash: EvmH256::from_bytes([0x22; 32]),
+            code: vec![0xde, 0xad],
+            storage: vec![(EvmU256::from_u128(1), EvmU256::from_u128(9))],
+        };
+        let flat = FlatAccount::from_snapshot(&snap);
+        assert_eq!(flat.core.code_hash, snap.code_hash);
+        assert_eq!(flat.storage, snap.storage);
+        // borsh byte-stable + serde roundtrip.
+        let bytes = borsh::to_vec(&flat).unwrap();
+        assert_eq!(flat, borsh::from_slice::<FlatAccount>(&bytes).unwrap());
+        assert_eq!(bytes, borsh::to_vec(&borsh::from_slice::<FlatAccount>(&bytes).unwrap()).unwrap());
+        assert_eq!(flat, serde_json::from_str::<FlatAccount>(&serde_json::to_string(&flat).unwrap()).unwrap());
+        // Restore the canonical snapshot (code resolved externally by code_hash).
+        assert_eq!(flat.to_snapshot(snap.address, snap.code.clone()), snap);
+
+        let ptr = EvmLatestStatePtr { canonical_head: Hash64::from_bytes([5; 64]), state_root: EvmH256::from_bytes([6; 32]) };
+        let pb = borsh::to_vec(&ptr).unwrap();
+        assert_eq!(ptr, borsh::from_slice::<EvmLatestStatePtr>(&pb).unwrap());
+        assert!(flat.estimate_mem_bytes() >= size_of::<FlatAccount>());
     }
 
     /// The body preserves the FULL ordered candidate list (accepted + skipped) and

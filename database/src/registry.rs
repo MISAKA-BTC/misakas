@@ -204,6 +204,16 @@ pub enum DatabaseStorePrefixes {
     /// kaspa-pq EVM Lane (§12 archive) — content-addressed `code_hash → code` store so
     /// diffs/checkpoints carry only the code hash. RPC/archive data only.
     EvmCode = 222,
+    /// kaspa-pq EVM Lane (C-01 state backend, Stage 1) — singleton `EvmLatestStatePtr`:
+    /// the block whose `state_root` the flat state currently materializes. State data.
+    EvmLatestStatePtr = 231,
+    /// kaspa-pq EVM Lane (C-01 state backend, Stage 1) — `BlockHash → state_root[32]`:
+    /// O(1) lookup of any committed block's EVM state root. State/RPC data.
+    EvmBlockStateRoot = 232,
+    /// kaspa-pq EVM Lane (C-01 state backend, Stage 1) — `EvmAddress → FlatAccount`: the
+    /// flat LATEST-canonical state (one row per account, NOT per block), replacing the
+    /// per-block O(state × blocks) snapshot. Code is content-addressed (222). State data.
+    EvmFlatAccount = 234,
 
     // ---- Separator ----
     /// Reserved as a separator

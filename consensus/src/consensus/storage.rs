@@ -10,7 +10,8 @@ use crate::{
         dns_state::DbDnsStateStore,
         evm::{
             DbEvmBlockHashMapStore, DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore,
-            DbEvmCodeStore, DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, DbEvmStateStore,
+            DbEvmBlockStateRootStore, DbEvmCodeStore, DbEvmFlatAccountStore, DbEvmLatestStatePtrStore, DbEvmRawTxStore,
+            DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, DbEvmStateStore,
             DbEvmTraceReplayStore, DbEvmTxIndexStore,
         },
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
@@ -91,6 +92,12 @@ pub struct ConsensusStorage {
     pub evm_state_checkpoint_store: Arc<DbEvmStateCheckpointStore>,
     /// §12 archive: content-addressed `code_hash → code` (prefix 222).
     pub evm_code_store: Arc<DbEvmCodeStore>,
+    // C-01 state backend (Stage 1) — flat latest-canonical state (234) + per-block
+    // state-root index (232) + canonical pointer (231). INERT until the writer/seed
+    // slices; defining them now keeps the prefixes reserved and offline-testable.
+    pub evm_flat_account_store: Arc<DbEvmFlatAccountStore>,
+    pub evm_block_state_root_store: Arc<DbEvmBlockStateRootStore>,
+    pub evm_latest_state_ptr_store: Arc<DbEvmLatestStatePtrStore>,
 
     // Append-only stores
     pub ghostdag_store: Arc<DbGhostdagStore>,
@@ -357,6 +364,14 @@ impl ConsensusStorage {
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
+        // C-01 Stage 1 flat-state stores (inert until the writer slice).
+        let evm_flat_account_store = Arc::new(DbEvmFlatAccountStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_block_state_root_store =
+            Arc::new(DbEvmBlockStateRootStore::new(db.clone(), PolicyBuilder::new().max_items(256).untracked().build()));
+        let evm_latest_state_ptr_store = Arc::new(DbEvmLatestStatePtrStore::new(db.clone()));
 
         // Block windows
         let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));
@@ -403,6 +418,9 @@ impl ConsensusStorage {
             evm_state_diff_store,
             evm_state_checkpoint_store,
             evm_code_store,
+            evm_flat_account_store,
+            evm_block_state_root_store,
+            evm_latest_state_ptr_store,
             acceptance_data_store,
             past_pruning_points_store,
             daa_excluded_store,
