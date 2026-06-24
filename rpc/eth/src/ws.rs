@@ -22,13 +22,16 @@
 //! BOUNDED. A consumer that lets it fill is a slow consumer and the connection
 //! is closed — there is no unbounded buffering anywhere.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use base64::Engine;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinHandle;
 
 use crate::{EthProvider, codes, err_value, process};
 
@@ -271,6 +274,9 @@ where
         }
     });
 
+    // Per-connection subscription registry (§9). Dropped at teardown → aborts all
+    // forwarding tasks (each holds an outbound sender), letting the writer exit.
+    let conn = WsConn::new(out_tx.clone());
     let mut reader = FrameReader::new(rd, leftover);
     // (first opcode, accumulated payload) while reassembling a fragmented message.
     let mut assembling: Option<(u8, Vec<u8>)> = None;
@@ -313,7 +319,7 @@ where
                     Ok(t) => t,
                     Err(_) => break Err(proto("ws: non-utf8 message")),
                 };
-                if handle_message(&provider, &out_tx, text).await.is_err() {
+                if handle_message(&provider, &conn, &out_tx, text).await.is_err() {
                     // Outbound closed or full (slow consumer) → end the connection.
                     break Ok(());
                 }
@@ -322,27 +328,155 @@ where
         }
     };
 
-    // Teardown: drop all senders so the writer drains+exits, stop the pinger,
-    // then join the writer so the socket is flushed/closed before we return.
+    // Teardown: drop the reader's sender + the registry (which aborts every
+    // forwarding task, releasing their outbound-sender clones) + stop the pinger,
+    // so the writer observes all senders gone, drains, and exits — then join it so
+    // the socket is flushed/closed before we return.
     drop(out_tx);
+    drop(conn);
     pinger.abort();
     let _ = writer.await;
     result
 }
 
 /// Decode one JSON-RPC message and route it. `eth_subscribe`/`eth_unsubscribe`
-/// are connection-stateful and land here in slice 3; for now every method goes
-/// through the shared HTTP dispatch ([`crate::process`]). Returns `Err(())` if
-/// the outbound queue is closed/full (slow consumer) so the caller tears down.
-async fn handle_message(provider: &Arc<dyn EthProvider>, out: &mpsc::Sender<WsOut>, text: String) -> Result<(), ()> {
+/// are connection-stateful — they create/drop entries in this connection's [`WsConn`]
+/// registry — so they are handled here rather than in the shared HTTP dispatch;
+/// every other method goes through [`crate::process`] exactly as over HTTP.
+/// Returns `Err(())` if the outbound queue is closed/full (slow consumer) so the
+/// caller tears down.
+async fn handle_message(provider: &Arc<dyn EthProvider>, conn: &WsConn, out: &mpsc::Sender<WsOut>, text: String) -> Result<(), ()> {
     let val: Value = match serde_json::from_str(&text) {
         Ok(v) => v,
         Err(e) => return send_value(out, err_value(codes::PARSE_ERROR, &format!("parse error: {e}"))),
     };
+    match val.get("method").and_then(|m| m.as_str()) {
+        Some("eth_subscribe") => return send_value(out, conn.subscribe(provider, &val)),
+        Some("eth_unsubscribe") => return send_value(out, conn.unsubscribe(&val)),
+        _ => {}
+    }
     match process(provider, val).await {
         Some(resp) => send_value(out, resp),
         None => Ok(()), // notification — no reply
     }
+}
+
+/// Per-connection subscription registry (§9). `eth_subscribe` allocates a fresh
+/// id, spawns a task that forwards the requested event stream into this
+/// connection's outbound queue as `eth_subscription` notifications, and records
+/// its [`JoinHandle`]; `eth_unsubscribe` (and connection teardown via [`Drop`])
+/// aborts that task. Ids are per-connection (the Ethereum contract: a
+/// subscription id is only meaningful on the connection that created it).
+struct WsConn {
+    /// The connection's outbound queue (the writer task owns the socket).
+    out: mpsc::Sender<WsOut>,
+    /// Monotonic per-connection id source.
+    next_id: AtomicU64,
+    /// Active subscriptions: numeric id → its forwarding task.
+    subs: Mutex<HashMap<u64, JoinHandle<()>>>,
+}
+
+impl WsConn {
+    fn new(out: mpsc::Sender<WsOut>) -> Self {
+        Self { out, next_id: AtomicU64::new(1), subs: Mutex::new(HashMap::new()) }
+    }
+
+    /// Handle `eth_subscribe`. Returns the JSON-RPC response value (the new
+    /// subscription id on success, or an error object).
+    fn subscribe(&self, provider: &Arc<dyn EthProvider>, req: &Value) -> Value {
+        let id = req.get("id").cloned().unwrap_or(Value::Null);
+        let kind = req.get("params").and_then(|p| p.get(0)).and_then(|k| k.as_str());
+        match kind {
+            Some("newPendingTransactions") => {
+                let num = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let sub_id = format!("0x{num:x}");
+                let rx = provider.subscribe_pending_txs();
+                let handle = spawn_pending_forward(sub_id.clone(), rx, self.out.clone());
+                self.subs.lock().unwrap().insert(num, handle);
+                json!({ "jsonrpc": "2.0", "id": id, "result": sub_id })
+            }
+            // newHeads (slice 4) and logs (slice 5) plug in here on this same seam.
+            Some(other) => err_with_id(
+                id,
+                codes::INVALID_PARAMS,
+                &format!("unsupported subscription '{other}' (newPendingTransactions supported; newHeads/logs pending)"),
+            ),
+            None => err_with_id(id, codes::INVALID_PARAMS, "eth_subscribe: missing subscription kind"),
+        }
+    }
+
+    /// Handle `eth_unsubscribe`. Aborts the forwarding task; result is whether the
+    /// id named a live subscription on THIS connection (the Ethereum contract).
+    fn unsubscribe(&self, req: &Value) -> Value {
+        let id = req.get("id").cloned().unwrap_or(Value::Null);
+        let parsed = req
+            .get("params")
+            .and_then(|p| p.get(0))
+            .and_then(|s| s.as_str())
+            .and_then(|s| s.strip_prefix("0x"))
+            .and_then(|h| u64::from_str_radix(h, 16).ok());
+        let removed = match parsed {
+            Some(num) => match self.subs.lock().unwrap().remove(&num) {
+                Some(handle) => {
+                    handle.abort();
+                    true
+                }
+                None => false,
+            },
+            None => false,
+        };
+        json!({ "jsonrpc": "2.0", "id": id, "result": removed })
+    }
+}
+
+impl Drop for WsConn {
+    fn drop(&mut self) {
+        // Connection gone → stop every forwarding task (each holds an outbound
+        // sender clone; aborting them lets the writer task observe all senders
+        // dropped and exit, so serve_ws's `writer.await` completes).
+        for (_, handle) in self.subs.lock().unwrap().drain() {
+            handle.abort();
+        }
+    }
+}
+
+/// Build an `eth_subscription` notification frame body for subscription `sub_id`.
+fn subscription_note(sub_id: &str, result: Value) -> String {
+    serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "method": "eth_subscription",
+        "params": { "subscription": sub_id, "result": result },
+    }))
+    .unwrap_or_else(|_| "null".to_string())
+}
+
+/// A JSON-RPC error object that echoes the request id (the shared `err_value`
+/// always uses a null id; `eth_subscribe`/`eth_unsubscribe` must reply on theirs).
+fn err_with_id(id: Value, code: i64, message: &str) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+}
+
+/// Forward `newPendingTransactions`: each admitted hash → an `eth_subscription`
+/// notification. Ends when the source closes, or when the outbound queue is
+/// closed/full (slow consumer / connection gone). A `Lagged` is logged and
+/// skipped — the client reconnects + backfills per the §9.5 protocol.
+fn spawn_pending_forward(sub_id: String, mut rx: broadcast::Receiver<[u8; 32]>, out: mpsc::Sender<WsOut>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(hash) => {
+                    let note = subscription_note(&sub_id, json!(format!("0x{}", faster_hex::hex_string(&hash))));
+                    if out.try_send(WsOut::Text(note)).is_err() {
+                        break; // slow consumer / outbound closed
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    kaspa_core::trace!("[eth-rpc] ws subscription {sub_id} lagged {n} (client should reconnect + backfill)");
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
 }
 
 /// Queue a JSON value as a text frame. `try_send` enforces the bounded-queue
@@ -424,13 +558,24 @@ mod tests {
         assert!(r2.next().await.is_err());
     }
 
-    /// Minimal [`EthProvider`] for the transport test — only `chain_id` is used
-    /// (the request under test is `eth_chainId`); everything else is unreachable.
-    struct MockProvider;
+    /// Minimal [`EthProvider`] for the transport tests. `chain_id` backs the
+    /// `eth_chainId` round-trip; `pending` lets a test inject mempool admissions
+    /// for the `newPendingTransactions` subscription. Everything else is unused.
+    struct MockProvider {
+        pending: broadcast::Sender<[u8; 32]>,
+    }
+    impl MockProvider {
+        fn new() -> Self {
+            Self { pending: broadcast::channel(16).0 }
+        }
+    }
     #[async_trait::async_trait]
     impl EthProvider for MockProvider {
         fn chain_id(&self) -> u64 {
             0x4d534b
+        }
+        fn subscribe_pending_txs(&self) -> broadcast::Receiver<[u8; 32]> {
+            self.pending.subscribe()
         }
         fn client_version(&self) -> String {
             "mock".to_string()
@@ -485,19 +630,12 @@ mod tests {
     /// End-to-end over an in-memory duplex: handshake → a real JSON-RPC request
     /// (`eth_chainId`) round-trips as a framed text reply → ping is answered with
     /// a pong → close ends the connection.
-    #[tokio::test]
-    async fn ws_request_response_ping_close() {
-        let (client, server) = tokio::io::duplex(64 * 1024);
-        let provider: Arc<dyn EthProvider> = Arc::new(MockProvider);
-        let srv = tokio::spawn(async move { serve_ws(server, provider, "dGhlIHNhbXBsZSBub25jZQ==", Vec::new()).await });
-
-        let (mut crd, mut cwr) = tokio::io::split(client);
-
-        // Read the 101 handshake response (ends at CRLFCRLF).
+    /// Drain + assert the 101 handshake response (ends at CRLFCRLF).
+    async fn read_handshake<R: AsyncReadExt + Unpin>(r: &mut R) {
         let mut head = Vec::new();
         let mut one = [0u8; 1];
         loop {
-            let n = crd.read(&mut one).await.unwrap();
+            let n = r.read(&mut one).await.unwrap();
             assert_ne!(n, 0, "server closed before handshake");
             head.push(one[0]);
             if head.ends_with(b"\r\n\r\n") {
@@ -507,6 +645,16 @@ mod tests {
         let head = String::from_utf8(head).unwrap();
         assert!(head.starts_with("HTTP/1.1 101 "), "got: {head:?}");
         assert!(head.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
+    }
+
+    #[tokio::test]
+    async fn ws_request_response_ping_close() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let provider: Arc<dyn EthProvider> = Arc::new(MockProvider::new());
+        let srv = tokio::spawn(async move { serve_ws(server, provider, "dGhlIHNhbXBsZSBub25jZQ==", Vec::new()).await });
+
+        let (mut crd, mut cwr) = tokio::io::split(client);
+        read_handshake(&mut crd).await;
 
         // Send a real request as a masked client text frame.
         cwr.write_all(&client_frame(OP_TEXT, br#"{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}"#)).await.unwrap();
@@ -525,6 +673,81 @@ mod tests {
         // A close frame ends the connection cleanly.
         cwr.write_all(&client_frame(OP_CLOSE, b"")).await.unwrap();
         let r = tokio::time::timeout(std::time::Duration::from_secs(5), srv).await.expect("serve_ws should return").unwrap();
+        assert!(r.is_ok());
+    }
+
+    /// §9 slice 3: `eth_subscribe("newPendingTransactions")` returns an id, each
+    /// mempool admission arrives as an `eth_subscription` notification, and
+    /// `eth_unsubscribe` halts the stream.
+    #[tokio::test]
+    async fn ws_pending_tx_subscription() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let mock = Arc::new(MockProvider::new());
+        let pending = mock.pending.clone(); // clone the sender before moving the Arc
+        let provider: Arc<dyn EthProvider> = mock;
+        let srv = tokio::spawn(async move { serve_ws(server, provider, "dGhlIHNhbXBsZSBub25jZQ==", Vec::new()).await });
+
+        let (mut crd, mut cwr) = tokio::io::split(client);
+        read_handshake(&mut crd).await;
+
+        // Subscribe → a fresh id.
+        cwr.write_all(&client_frame(OP_TEXT, br#"{"jsonrpc":"2.0","id":7,"method":"eth_subscribe","params":["newPendingTransactions"]}"#))
+            .await
+            .unwrap();
+        let resp: Value = serde_json::from_str(&read_server_text(&mut crd).await).unwrap();
+        assert_eq!(resp["id"], 7);
+        let sub_id = resp["result"].as_str().expect("subscription id").to_string();
+        assert!(sub_id.starts_with("0x"));
+
+        // An admission arrives as an eth_subscription notification carrying the hash.
+        // (subscribe() registered the receiver synchronously, before this send.)
+        pending.send([0xAB; 32]).unwrap();
+        let note: Value = serde_json::from_str(&read_server_text(&mut crd).await).unwrap();
+        assert_eq!(note["method"], "eth_subscription");
+        assert_eq!(note["params"]["subscription"], sub_id);
+        assert_eq!(note["params"]["result"], format!("0x{}", "ab".repeat(32)));
+
+        // Unsubscribe → true, and the stream halts.
+        let unsub_req = format!(r#"{{"jsonrpc":"2.0","id":8,"method":"eth_unsubscribe","params":["{sub_id}"]}}"#);
+        cwr.write_all(&client_frame(OP_TEXT, unsub_req.as_bytes())).await.unwrap();
+        let unsub: Value = serde_json::from_str(&read_server_text(&mut crd).await).unwrap();
+        assert_eq!(unsub["result"], true);
+
+        // A post-unsubscribe admission produces NO further notification. (The send
+        // itself may report "no receivers" — the forwarder dropped its receiver
+        // when the subscription was aborted — which is exactly the halt we want.)
+        let _ = pending.send([0x11; 32]);
+        let quiet = tokio::time::timeout(std::time::Duration::from_millis(200), read_server_frame(&mut crd)).await;
+        assert!(quiet.is_err(), "unsubscribe must halt the stream");
+
+        cwr.write_all(&client_frame(OP_CLOSE, b"")).await.unwrap();
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), srv).await.expect("serve_ws should return").unwrap();
+        assert!(r.is_ok());
+    }
+
+    /// A connection that drops with a LIVE subscription must abort its forwarding
+    /// task (no leak): serve_ws returns promptly after the client closes, even
+    /// though the subscription was never explicitly unsubscribed.
+    #[tokio::test]
+    async fn ws_close_with_active_subscription() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let provider: Arc<dyn EthProvider> = Arc::new(MockProvider::new());
+        let srv = tokio::spawn(async move { serve_ws(server, provider, "dGhlIHNhbXBsZSBub25jZQ==", Vec::new()).await });
+
+        let (mut crd, mut cwr) = tokio::io::split(client);
+        read_handshake(&mut crd).await;
+        cwr.write_all(&client_frame(OP_TEXT, br#"{"jsonrpc":"2.0","id":1,"method":"eth_subscribe","params":["newPendingTransactions"]}"#))
+            .await
+            .unwrap();
+        let _ = read_server_text(&mut crd).await; // the subscription id
+
+        // Close WITHOUT unsubscribing — teardown (WsConn::drop) must abort the
+        // still-live forwarder so the writer can exit and serve_ws can return.
+        cwr.write_all(&client_frame(OP_CLOSE, b"")).await.unwrap();
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), srv)
+            .await
+            .expect("serve_ws must return promptly despite a live subscription")
+            .unwrap();
         assert!(r.is_ok());
     }
 

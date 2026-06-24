@@ -462,6 +462,34 @@ impl EthProvider for NodeEthProvider {
         let reward = if np > 0 { Some(ratios.iter().map(|_| vec![[0u8; 32]; np]).collect()) } else { None };
         Ok(EthFeeHistory { oldest_block: oldest, base_fee_per_gas: base_fees, gas_used_ratio: ratios, reward })
     }
+
+    /// §9 (`eth_subscribe("newPendingTransactions")`): bridge the mining manager's
+    /// EVM admission broadcast (native `EvmH256`, §9 slice 1) into the adapter's
+    /// `[u8;32]` hash stream. One bridge task per subscription, scoped to the
+    /// subscriber: when the WebSocket forwarder drops its receiver, our `send`
+    /// finds no receivers and the bridge ends (it flushes on the next admission —
+    /// a parked task until then, never a leak). No global pump and no node startup
+    /// hook — the task is spawned lazily inside the RPC runtime when a client
+    /// subscribes, the same runtime that serves the socket.
+    fn subscribe_pending_txs(&self) -> tokio::sync::broadcast::Receiver<[u8; 32]> {
+        use tokio::sync::broadcast;
+        let mut admit_rx = self.flow_context.mining_manager().evm_tx_admission_receiver();
+        let (tx, rx) = broadcast::channel::<[u8; 32]>(4096);
+        tokio::spawn(async move {
+            loop {
+                match admit_rx.recv().await {
+                    Ok(hash) => {
+                        if tx.send(hash.as_bytes()).is_err() {
+                            break; // no subscribers left → stop bridging
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        rx
+    }
 }
 
 impl NodeEthProvider {

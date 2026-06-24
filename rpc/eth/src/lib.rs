@@ -309,6 +309,19 @@ pub trait EthProvider: Send + Sync + 'static {
     /// `eth_feeHistory`: base fees + gas-used ratios over the last `block_count`
     /// blocks ending at `newest` (used by EIP-1559 tooling — Foundry/ethers/MetaMask).
     async fn fee_history(&self, block_count: u64, newest: u64, reward_percentiles: Vec<f64>) -> EthResult<EthFeeHistory>;
+
+    /// §9 (`eth_subscribe("newPendingTransactions")`): a broadcast receiver
+    /// yielding the keccak256 hash of each EVM transaction newly admitted to this
+    /// node's mempool. Lossy under lag (drop-oldest) so a slow WebSocket consumer
+    /// never blocks admission — the §9.5 reconnect protocol covers any gap.
+    ///
+    /// Default: a closed channel (no mempool overlay) — the WebSocket forwarder
+    /// ends at once and the subscription emits nothing. kaspad overrides this with
+    /// a live bridge off the mining manager's admission broadcast (§9 slice 1).
+    fn subscribe_pending_txs(&self) -> tokio::sync::broadcast::Receiver<[u8; 32]> {
+        let (_tx, rx) = tokio::sync::broadcast::channel(1);
+        rx
+    }
 }
 
 /// The EVM-lane lifecycle of a tx (`misaka_getEvmTxStatus`). `state` is a best-effort
