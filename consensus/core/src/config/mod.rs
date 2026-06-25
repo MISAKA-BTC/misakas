@@ -112,6 +112,19 @@ pub struct Config {
     /// than fork); wait until the chain has advanced past them (they get pruned) before disabling
     /// `evm_flat_authoritative`.
     pub evm_retire_206: bool,
+
+    /// kaspa-pq C-01 (slice S9b-prune): ONE-SHOT, IRREVERSIBLE bulk reclamation of the LEGACY per-block
+    /// 206 state snapshot store that accumulated BEFORE `evm_retire_206` stopped writing it. The existing
+    /// per-block pruner already reclaims 206 for blocks as they fall below the pruning point, so this only
+    /// brings forward the reclamation of the rows still in the keep-window (and on archival nodes, all of
+    /// them) instead of waiting for the pruning point to slide. Runs once at node startup, then is a no-op
+    /// (the store is empty). EFFECTIVE ONLY when `evm_retire_206` is itself effective (i.e. together with
+    /// `evm_flat_authoritative` + `evm_shadow_state_backend`) — otherwise refused with a warning, because
+    /// deleting 206 while it is still the executor seed source would HALT the node. With those prerequisites
+    /// the executor seeds from the flat/reconstruct parent and a present 206 is only a redundant byte-compare
+    /// oracle, so the bulk delete leaves the seed itself unchanged (consensus-neutral, node-local). `false`
+    /// by default and on every current network.
+    pub evm_prune_legacy_206: bool,
 }
 
 impl Config {
@@ -144,6 +157,7 @@ impl Config {
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,
             evm_retire_206: false,
+            evm_prune_legacy_206: false,
         }
     }
 

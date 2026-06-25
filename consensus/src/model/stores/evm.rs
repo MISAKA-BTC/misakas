@@ -118,6 +118,25 @@ impl EvmStateStore for DbEvmStateStore {
     }
 }
 
+impl DbEvmStateStore {
+    /// `true` if any 206 snapshot row exists (peeks a single row). C-01 S9b-prune: used to skip the
+    /// one-shot legacy bulk reclamation when the store is already empty.
+    pub fn has_any(&self) -> Result<bool, StoreError> {
+        Ok(!self.access.is_empty()?)
+    }
+
+    /// C-01 S9b-prune: ONE-SHOT bulk reclamation of the ENTIRE legacy 206 snapshot store (a
+    /// `delete_range` over the prefix + a synchronous prefix-bounded `compact_range`). IRREVERSIBLE.
+    /// Only sound when `--evm-retire-206` is effective (flat backend authoritative + shadow check on):
+    /// the executor then seeds from the flat/reconstruct parent and a present 206 is merely a redundant
+    /// byte-compare oracle, so dropping all 206 rows leaves the seed itself unchanged. The caller
+    /// (`Consensus::evm_legacy_206_bulk_prune`) enforces that gate. Synchronous compaction of a large
+    /// store can take a while.
+    pub fn bulk_delete_all_and_compact(&self) -> Result<(), StoreError> {
+        self.access.delete_all_and_compact()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // EvmExecutionPayload store (prefix 211) — each block's OWN payload, persisted
 // at body validation (v0.4 §3.1). The virtual processor assembles
@@ -1060,6 +1079,44 @@ mod tests {
         assert!(hdr.delete_batch(&mut batch, bh(9)).is_ok());
         assert!(state.delete_batch(&mut batch, bh(9)).is_ok());
         assert!(payload.delete_batch(&mut batch, bh(9)).is_ok());
+    }
+
+    /// C-01 S9b-prune: the 206 store peeks emptiness (`has_any`) and bulk-reclaims the WHOLE store
+    /// (`bulk_delete_all_and_compact`) in one shot, while a NEIGHBORING EVM store sharing the single
+    /// column family by prefix (here the header store, prefix 201) is left completely untouched — the
+    /// safety property the legacy-206 reclamation relies on (it must not collaterally delete other state).
+    #[test]
+    fn evm_state_store_bulk_reclaim_leaves_neighbors_intact() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let state = DbEvmStateStore::new(db.clone(), CachePolicy::Empty);
+        let hdr = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
+
+        // Empty store ⇒ has_any is false (the one-shot would skip).
+        assert!(!state.has_any().unwrap());
+
+        // Populate a few 206 snapshots AND a neighboring header row.
+        let snap = EvmStateSnapshot { accounts: vec![] };
+        let header = EvmExecutionHeader { evm_number: 7, gas_used: 21_000, ..Default::default() };
+        let mut batch = WriteBatch::default();
+        for b in [bh(1), bh(2), bh(3)] {
+            state.insert_batch(&mut batch, b, snap.clone()).unwrap();
+        }
+        hdr.insert_batch(&mut batch, bh(1), header.clone()).unwrap();
+        db.write(batch).unwrap();
+        assert!(state.has_any().unwrap());
+
+        // One-shot bulk reclaim of the entire 206 store.
+        state.bulk_delete_all_and_compact().unwrap();
+        assert!(!state.has_any().unwrap());
+        for b in [bh(1), bh(2), bh(3)] {
+            assert!(matches!(state.get(b), Err(StoreError::KeyNotFound(_))), "every 206 row reclaimed");
+        }
+        // The neighboring header store (prefix 201) is untouched.
+        assert_eq!(hdr.get(bh(1)).unwrap(), header, "bulk 206 reclaim must not touch other EVM stores");
+
+        // Idempotent: a second run on the now-empty store is a clean no-op.
+        state.bulk_delete_all_and_compact().unwrap();
+        assert!(!state.has_any().unwrap());
     }
 
     /// audit R-2: the raw-tx store maps `tx_hash → raw bytes (+ payload block)`

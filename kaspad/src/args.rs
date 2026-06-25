@@ -61,6 +61,12 @@ pub struct Args {
     /// which keeps no §12 history for the pruning-point export / historical reads).
     #[serde(default)]
     pub evm_retire_206: bool,
+    /// C-01 S9b-prune: ONE-SHOT, IRREVERSIBLE bulk reclamation of the legacy per-block 206 EVM state
+    /// snapshot store that accumulated before `--evm-retire-206`. Runs once at startup, then a no-op.
+    /// Effective only when `--evm-retire-206` is itself effective (requires `--evm-flat-authoritative`
+    /// + `--evm-shadow-state-backend`); otherwise refused with a warning. Off by default; node-local.
+    #[serde(default)]
+    pub evm_prune_legacy_206: bool,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub rpclisten_borsh: Option<WrpcNetAddress>,
     #[serde_as(as = "Option<DisplayFromStr>")]
@@ -173,6 +179,7 @@ impl Default for Args {
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,
             evm_retire_206: false,
+            evm_prune_legacy_206: false,
             wrpc_verbose: false,
             log_level: "INFO".into(),
             connect_peers: vec![],
@@ -225,6 +232,7 @@ impl Args {
         config.evm_shadow_state_backend = self.evm_shadow_state_backend; // C-01 S4: shadow dual-write
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
         config.evm_retire_206 = self.evm_retire_206; // C-01 S9b: stop persisting the per-block 206 snapshot
+        config.evm_prune_legacy_206 = self.evm_prune_legacy_206; // C-01 S9b-prune: one-shot bulk reclamation of legacy 206
 
         #[cfg(feature = "devnet-prealloc")]
         if let Some(num_prealloc_utxos) = self.num_prealloc_utxos {
@@ -336,6 +344,13 @@ pub fn cli() -> Command {
                 .env("KASPAD_EVM_RETIRE_206")
                 .action(clap::ArgAction::SetTrue)
                 .help("C-01 S9b: STOP persisting the per-block 206 EVM state snapshot (the storage win). The flat backend — already checked against the executor's post-state every block — becomes the sole persisted state; RPC and the IBD pruning-point export fall back to flat-materialize / §12-reconstruct. Requires --evm-flat-authoritative; use recent/archive history (not head). Node-local; off by default. Effective only in an --features evm build."),
+        )
+        .arg(
+            Arg::new("evm-prune-legacy-206")
+                .long("evm-prune-legacy-206")
+                .env("KASPAD_EVM_PRUNE_LEGACY_206")
+                .action(clap::ArgAction::SetTrue)
+                .help("C-01 S9b-prune: ONE-SHOT, IRREVERSIBLE bulk reclamation at startup of the legacy per-block 206 EVM state snapshots that accumulated before --evm-retire-206 (delete_range + prefix-bounded compaction). Then a no-op. Refused unless --evm-retire-206 is effective (requires --evm-flat-authoritative + --evm-shadow-state-backend). Node-local, consensus-neutral; off by default. Effective only in an --features evm build."),
         )
         .arg(
             Arg::new("rpclisten-borsh")
@@ -619,6 +634,7 @@ impl Args {
             evm_shadow_state_backend: arg_match_unwrap_or::<bool>(&m, "evm-shadow-state-backend", defaults.evm_shadow_state_backend),
             evm_flat_authoritative: arg_match_unwrap_or::<bool>(&m, "evm-flat-authoritative", defaults.evm_flat_authoritative),
             evm_retire_206: arg_match_unwrap_or::<bool>(&m, "evm-retire-206", defaults.evm_retire_206),
+            evm_prune_legacy_206: arg_match_unwrap_or::<bool>(&m, "evm-prune-legacy-206", defaults.evm_prune_legacy_206),
             rpclisten_borsh: m.get_one::<WrpcNetAddress>("rpclisten-borsh").cloned().or(defaults.rpclisten_borsh),
             rpclisten_json: m.get_one::<WrpcNetAddress>("rpclisten-json").cloned().or(defaults.rpclisten_json),
             unsafe_rpc: arg_match_unwrap_or::<bool>(&m, "unsaferpc", defaults.unsafe_rpc),

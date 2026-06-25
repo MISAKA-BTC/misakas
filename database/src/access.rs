@@ -212,6 +212,43 @@ where
         Ok(())
     }
 
+    /// Deletes all entries in the store (as [`Self::delete_all`], committed directly) and then
+    /// forces a synchronous `compact_range` bounded to exactly this store's prefix, so the space
+    /// behind the `delete_range` tombstone is reclaimed immediately instead of at the next
+    /// background compaction. Because the range is the prefix's bounds, it does not rewrite
+    /// unrelated stores' data beyond any SST files they happen to share with this prefix.
+    /// One-shot maintenance use — a synchronous compaction of a large prefix can take a while.
+    pub fn delete_all_and_compact(&self) -> Result<(), StoreError>
+    where
+        TKey: Clone + AsRef<[u8]>,
+    {
+        // Commit the tombstone before compacting — a still-batched delete would not be visible
+        // to `compact_range` and would leave the data behind.
+        self.delete_all(crate::prelude::DirectDbWriter::new(&self.db))?;
+        let db_key = DbKey::prefix_only(&self.prefix);
+        let (from, to) = rocksdb::PrefixRange(db_key.as_ref()).into_bounds();
+        self.db.compact_range(from, to);
+        Ok(())
+    }
+
+    /// `true` if the store has at least one entry on disk. Peeks a single key via the raw rocksdb
+    /// prefix iterator — it does NOT deserialize the value (the row's `TData` may be large), so there
+    /// is no `DeserializeOwned` bound. Used to skip one-shot maintenance when there is nothing to do.
+    pub fn is_empty(&self) -> Result<bool, StoreError>
+    where
+        TKey: Clone + AsRef<[u8]>,
+    {
+        let prefix_key = DbKey::prefix_only(&self.prefix);
+        let mut read_opts = ReadOptions::default();
+        read_opts.set_iterate_range(rocksdb::PrefixRange(prefix_key.as_ref()));
+        let mut it = self.db.iterator_opt(IteratorMode::From(prefix_key.as_ref(), Direction::Forward), read_opts);
+        match it.next() {
+            None => Ok(true),
+            Some(Ok(_)) => Ok(false),
+            Some(Err(e)) => Err(e.into()),
+        }
+    }
+
     /// A dynamic iterator that can iterate through a specific prefix / bucket, or from a certain start point.
     //TODO: loop and chain iterators for multi-prefix / bucket iterator.
     pub fn seek_iterator(
@@ -289,6 +326,31 @@ mod tests {
         assert_eq!(16, access.iterator().count());
         db.write(batch).unwrap();
         assert_eq!(0, access.iterator().count());
+    }
+
+    #[test]
+    fn test_is_empty_and_delete_all_and_compact() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        // Two stores sharing the single CF by prefix — deleting one must not touch the other.
+        let target = CachedDbAccess::<Hash, u64>::new(db.clone(), CachePolicy::Count(2), vec![7]);
+        let neighbor = CachedDbAccess::<Hash, u64>::new(db.clone(), CachePolicy::Count(2), vec![8]);
+
+        // Empty store reads as empty; a populated one does not.
+        assert!(target.is_empty().unwrap());
+        target.write_many(DirectDbWriter::new(&db), &mut (0..16).map(|i| (i.into(), 2))).unwrap();
+        neighbor.write_many(DirectDbWriter::new(&db), &mut (0..4).map(|i| (i.into(), 9))).unwrap();
+        assert!(!target.is_empty().unwrap());
+
+        // Bulk delete + compact reclaims exactly the target prefix.
+        target.delete_all_and_compact().unwrap();
+        assert!(target.is_empty().unwrap());
+        assert_eq!(0, target.iterator().count());
+        // The neighboring prefix is untouched.
+        assert_eq!(4, neighbor.iterator().count());
+
+        // Idempotent: a second run on the now-empty store is a clean no-op.
+        target.delete_all_and_compact().unwrap();
+        assert!(target.is_empty().unwrap());
     }
 
     #[test]

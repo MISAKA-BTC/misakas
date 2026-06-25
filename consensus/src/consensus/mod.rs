@@ -91,7 +91,7 @@ use itertools::Itertools;
 use kaspa_consensusmanager::{SessionLock, SessionReadGuard};
 
 use kaspa_consensus_core::BlockHash;
-use kaspa_core::info;
+use kaspa_core::{info, warn};
 use kaspa_database::prelude::StoreResultExt;
 use kaspa_muhash::MuHash;
 use kaspa_txscript::caches::TxScriptCacheCounters;
@@ -354,6 +354,159 @@ impl Consensus {
         // Upgrade to initialize the new retention root field correctly
         self.retention_root_database_upgrade();
         self.consensus_transitional_flags_upgrade();
+        // C-01 S9b-prune: one-shot bulk reclamation of the legacy 206 snapshot store (opt-in, gated).
+        self.evm_legacy_206_bulk_prune();
+    }
+
+    /// C-01 (slice S9b-prune): a ONE-SHOT, IRREVERSIBLE bulk reclamation of the legacy per-block 206
+    /// EVM state-snapshot store, run at startup when `--evm-prune-legacy-206` is set. The per-block
+    /// pruner (`pruning_processor`) already reclaims 206 for blocks as they fall below the pruning
+    /// point; this brings forward the reclamation of the rows still above it (and, on archival nodes
+    /// that never prune, all of them) rather than waiting for the pruning point to slide.
+    ///
+    /// SAFETY GATE: refused (warn + no-op) unless `--evm-retire-206` is EFFECTIVE — i.e. paired with
+    /// `--evm-flat-authoritative` + `--evm-shadow-state-backend` (the exact condition under which the
+    /// virtual processor does not demote retire-206). Under that gate the executor seeds from the
+    /// validated flat/reconstruct parent (`validated_flat_parent_seed`) and a present 206 is only a
+    /// redundant byte-compare oracle, so deleting every 206 row leaves the seed itself unchanged; the
+    /// read paths (`get_evm_state_snapshot_of`, the IBD pruning-point export) already fall back
+    /// 206 → flat-materialize → §12-reconstruct. Deleting 206 WITHOUT that gate would remove the
+    /// executor's only seed source and HALT the node — hence the refusal. Node-local, consensus-neutral.
+    /// After the one run the store is empty, so subsequent startups are a fast no-op.
+    fn evm_legacy_206_bulk_prune(&self) {
+        if !self.config.evm_prune_legacy_206 {
+            return;
+        }
+        // Same prerequisite chain the virtual processor uses to keep `evm_retire_206` effective.
+        let retire_effective =
+            self.config.evm_retire_206 && self.config.evm_flat_authoritative && self.config.evm_shadow_state_backend;
+        if !retire_effective {
+            warn!(
+                "[C-01 S9b-prune] --evm-prune-legacy-206 is set but --evm-retire-206 is not effective \
+                 (it also needs --evm-flat-authoritative + --evm-shadow-state-backend). The 206 store may \
+                 still be the executor seed source, so refusing the IRREVERSIBLE bulk delete. No data was touched."
+            );
+            return;
+        }
+        #[cfg(not(feature = "evm"))]
+        {
+            warn!("[C-01 S9b-prune] --evm-prune-legacy-206 requires a kaspad built with --features evm; skipping (no EVM state on this build).");
+        }
+        #[cfg(feature = "evm")]
+        {
+            use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
+
+            let store = &self.storage.evm_state_store;
+            // Nothing to do if the store is already empty (the steady state after the one-shot run, or a
+            // node that only ever ran retired). Probe before any destructive action.
+            match store.has_any() {
+                Ok(false) => {
+                    info!("[C-01 S9b-prune] no legacy 206 snapshot rows present; nothing to reclaim.");
+                    return;
+                }
+                Ok(true) => {}
+                Err(e) => {
+                    warn!("[C-01 S9b-prune] could not probe the legacy 206 store ({e}); skipping the bulk reclamation this startup.");
+                    return;
+                }
+            }
+
+            // History-mode refusal: `head` keeps no §12 state history (no diff/checkpoint), so a node
+            // there cannot reconstruct a non-head parent. Under effective retire-206 such a reorg already
+            // HALTs (no 206 fallback), and keeping the legacy 206 rows is the ONLY way to roll retire-206
+            // back to a working 206 seed. Deleting them on a `head` node removes that last recovery — refuse.
+            if !self.config.evm_history_mode.writes_state_history() {
+                warn!(
+                    "[C-01 S9b-prune] --evm-history-mode=head keeps no §12 state history, so the legacy 206 rows are the only \
+                     remaining way to recover the executor seed if retire-206 must be rolled back. Refusing the IRREVERSIBLE \
+                     bulk delete on a head-mode node; switch to --evm-history-mode=recent/archive to prune 206. 206 left in place."
+                );
+                return;
+            }
+
+            // CRITICAL pre-flight: removing 206 removes the recovery net. Under EFFECTIVE retire-206 an
+            // unavailable flat parent seed HALTs the node (it does NOT fall back to 206), so deleting 206
+            // before the flat backend is genuinely current + faithful would brick the node IRREVERSIBLY.
+            // Verify, from reliably-persisted stores only (NOT the lkg virtual-state cache, which is
+            // `default()` until the worker runs), that the flat store materializes the canonical EVM head
+            // and — the gold-standard check before an irreversible delete — that the on-disk flat ACCOUNT
+            // ROWS actually keccak-MPT-hash to that head's committed `state_root` (not merely that the
+            // stored pointer claims so). This fails (⇒ refuse) when the flat store was never warmed up
+            // (pointer absent), is stale (head mismatch), or is corrupt/incomplete (recomputed root
+            // mismatch) — exactly the cases where 206 must be kept as the seed source.
+            let flat_ptr = match self.storage.evm_latest_state_ptr_store.read().get() {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    warn!("[C-01 S9b-prune] the flat state pointer is absent — the flat backend was never initialized on this node. Refusing the IRREVERSIBLE 206 delete; 206 stays as the executor seed. Warm up --evm-shadow-state-backend + --evm-flat-authoritative first.");
+                    return;
+                }
+                Err(e) => {
+                    warn!("[C-01 S9b-prune] flat state pointer read failed ({e}); refusing the bulk delete (cannot prove the flat backend is current). 206 left in place.");
+                    return;
+                }
+            };
+            let evm_head = match self.storage.evm_heads_store.read().get() {
+                Ok(h) => h.latest,
+                Err(e) => {
+                    warn!("[C-01 S9b-prune] canonical EVM head read failed ({e}) while 206 rows exist; refusing the bulk delete. 206 left in place.");
+                    return;
+                }
+            };
+            if flat_ptr.canonical_head != evm_head {
+                warn!(
+                    "[C-01 S9b-prune] the flat backend is stale — it materializes block {} but the canonical EVM head is {}. \
+                     Refusing the IRREVERSIBLE 206 delete so the seed source is preserved. Run with --evm-shadow-state-backend \
+                     + --evm-flat-authoritative until the flat store converges to the head, then restart with --evm-prune-legacy-206.",
+                    flat_ptr.canonical_head, evm_head
+                );
+                return;
+            }
+            let committed_root = match self.storage.evm_header_store.get(evm_head) {
+                Ok(h) => h.state_root,
+                Err(e) => {
+                    warn!(
+                        "[C-01 S9b-prune] could not read the committed EVM header for the canonical head {evm_head} ({e}); refusing the bulk delete (cannot verify the flat backend). 206 left in place."
+                    );
+                    return;
+                }
+            };
+            // Re-derive the flat state root from the actual on-disk account rows (materialize 234 + code,
+            // then keccak-MPT) and require it to equal the committed head root. Catches silent flat-store
+            // corruption that a trusted pointer field would miss. O(state) — one-shot, on the startup path.
+            let recomputed_root = match crate::processes::evm::materialize_snapshot(&self.storage.evm_flat_account_store, &self.storage.evm_code_store)
+                .map_err(|e| e.to_string())
+                .and_then(|snap| kaspa_evm::snapshot::seed_cachedb(&snap).map_err(|e| e.to_string()))
+                .map(|cdb| kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&cdb).0))
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("[C-01 S9b-prune] could not recompute the flat state root ({e}); refusing the bulk delete (cannot verify the flat backend is faithful). 206 left in place.");
+                    return;
+                }
+            };
+            if recomputed_root != committed_root {
+                warn!(
+                    "[C-01 S9b-prune] the flat backend is NOT faithful at the EVM head {evm_head}: its account rows hash to {recomputed_root:?} \
+                     but the committed state_root is {committed_root:?}. Refusing the IRREVERSIBLE 206 delete (206 is the last faithful copy). \
+                     Restore/re-shadow the flat backend before pruning. 206 left in place."
+                );
+                return;
+            }
+
+            // Verified: the flat store is the authoritative, current, faithful post-state at the EVM head, so
+            // every 206 row is now pure redundancy (its only remaining use was a byte-compare oracle).
+            warn!(
+                "[C-01 S9b-prune] --evm-prune-legacy-206: flat backend verified current at EVM head {evm_head}; IRREVERSIBLY \
+                 bulk-deleting the legacy per-block 206 EVM state-snapshot store and compacting the reclaimed range. This may \
+                 take a while on a large store; the flat backend remains the authoritative post-state (seed + reads unaffected)."
+            );
+            match store.bulk_delete_all_and_compact() {
+                Ok(()) => info!("[C-01 S9b-prune] legacy 206 snapshot store reclaimed; space returned to the OS after compaction."),
+                // A failure here leaves 206 present (delete_range is a single direct write); the node keeps
+                // running on the flat seed regardless. Surface it loudly; do not abort startup.
+                Err(e) => warn!("[C-01 S9b-prune] bulk reclamation of the legacy 206 store FAILED: {e}; 206 left in place (harmless — flat backend is authoritative). Retry later."),
+            }
+        }
     }
 
     fn retention_root_database_upgrade(&self) {
