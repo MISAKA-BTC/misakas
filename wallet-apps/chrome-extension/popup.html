@@ -79,6 +79,7 @@
       <button class="ghost" data-act="go-receive">Receive</button>
     </div>
     <div class="row sub"><span class="muted">UTXOs</span><span id="utxo-n">—</span></div>
+    <div class="row sub" id="locked-row" style="display:none"><span class="muted" title="StakeBond output-0 you recorded in Settings — locked by the consensus spend-gate, not spendable">Locked in bond</span><span id="locked-bal">—</span></div>
     <div class="foot">
       <button class="link" data-act="go-settings">Settings</button>
       <button class="link" data-act="lock">Lock</button>
@@ -93,6 +94,9 @@
     <p class="muted">Share this address to receive <span class="sym2"></span>. It is valid only on the selected network.</p>
     <div class="addr-box mono" id="rx-addr"></div>
     <button class="primary" data-act="copy-addr2">Copy address</button>
+    <p class="muted" style="margin-top:14px">EVM address (0x) — same recovery phrase; for EVM-lane funds:</p>
+    <div class="addr-box mono" id="rx-evm-addr"></div>
+    <button class="ghost sm" data-act="copy-evm">Copy EVM address</button>
     <button class="ghost sm" data-act="go-home">Back</button>
   </div>
 </template>
@@ -101,7 +105,7 @@
   <div class="pad">
     <h2>Send</h2>
     <label>Recipient</label>
-    <input id="snd-to" placeholder="misaka… address" spellcheck="false" />
+    <input id="snd-to" placeholder="misaka:… or 0x… address" spellcheck="false" />
     <label>Amount (<span class="sym2"></span>)</label>
     <input id="snd-amt" inputmode="decimal" placeholder="0.0" />
     <div class="row sub"><span class="muted">Available</span><span id="snd-avail">—</span></div>
@@ -119,6 +123,8 @@
     <input id="set-lock" type="number" min="1" max="60" />
     <label>Custom node RPC (wss/ws URL — optional)</label>
     <input id="set-rpc" placeholder="wss://host/path" spellcheck="false" />
+    <label title="Outpoints printed by the validator `bond` command, one per line (txid:0). These UTXOs are stake-locked — excluded from spendable balance and never spent.">Bond outpoints (one per line, txid:0)</label>
+    <textarea id="set-bonds" rows="3" placeholder="&lt;txid&gt;:0" spellcheck="false" style="width:100%;font-family:monospace;font-size:11px"></textarea>
     <button class="ghost sm" data-act="save-settings">Save</button>
     <hr/>
     <button class="ghost sm" data-act="reveal-seed">Reveal recovery phrase</button>
