@@ -836,7 +836,98 @@ impl VirtualStateProcessor {
         }
         // O9: chain-rate / mergeset / gas-utilization observability + applied-claim count.
         self.evm_lane_kpi.record(ctx.ghostdag_data.mergeset_size(), staged.result.header.gas_used, consumed_locks.len());
+        // C-01 (slice S6) shadow seed validation: confirm the flat/reconstruct
+        // PARENT seed source — the one the cutover (S9) switches the executor to —
+        // reproduces the committed 206 parent snapshot byte-for-byte. 206 stays
+        // authoritative HERE (the result above came from it), so this can only
+        // HALT on a backend divergence; it never returns Err / disqualifies a
+        // valid block. Node-local, off by default.
+        if self.evm_shadow_state_backend {
+            self.shadow_validate_parent_seed(selected_parent);
+        }
         Ok(Some(staged))
+    }
+
+    /// C-01 (slice S6) — validate the flat/reconstruct PARENT seed source against
+    /// the authoritative per-block 206 snapshot. For `selected_parent` this builds
+    /// the snapshot the cutover (S9) would seed the executor from — materialized
+    /// from the flat store if it is the canonical head, else §12-reconstructed —
+    /// and asserts it is byte-identical to `state_store.get(selected_parent)`. A
+    /// mismatch (or a corrupt §12 chain / failed root verify) means the flat
+    /// backend would feed a wrong parent state and falsely disqualify valid blocks,
+    /// so it HALTS the node (design §7); it NEVER disqualifies — 206 is still the
+    /// seed used above, so chain integrity is intact. A retention gap for a
+    /// non-head parent is skipped (not a divergence). Node-local; only invoked
+    /// when `--evm-shadow-state-backend` is on (which also maintains the flat store).
+    #[cfg(feature = "evm")]
+    fn shadow_validate_parent_seed(&self, selected_parent: BlockHash) {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateStoreReader};
+        use crate::processes::evm::{flat_or_reconstruct_parent_snapshot, ParentSeedError};
+
+        // The committed (authoritative) parent snapshot from prefix 206. An
+        // EVM-active parent always has one (committed with its header); a
+        // pre-activation parent has none ⇒ the empty genesis state.
+        let parent_has_header = match self.evm_header_store.has(selected_parent) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("[evm-shadow-seed] header read failed for {selected_parent}: {e}; skipping seed check");
+                return;
+            }
+        };
+        let snapshot_206 = if parent_has_header {
+            match self.evm_state_store.get(selected_parent) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("[evm-shadow-seed] 206 read failed for {selected_parent}: {e}; skipping seed check");
+                    return;
+                }
+            }
+        } else {
+            kaspa_consensus_core::evm::EvmStateSnapshot::default()
+        };
+        // Surface a flat-pointer read failure as a skip — never silently treat it
+        // as "no head" (None), which would misroute the canonical head into the
+        // reconstruct path and hide the store error.
+        let flat_head = match self.evm_latest_state_ptr_store.read().get() {
+            Ok(opt) => opt.map(|p| p.canonical_head),
+            Err(e) => {
+                warn!("[evm-shadow-seed] flat pointer read failed for {selected_parent}: {e}; skipping seed check");
+                return;
+            }
+        };
+
+        match flat_or_reconstruct_parent_snapshot(
+            selected_parent,
+            flat_head,
+            &self.evm_flat_account_store,
+            &self.evm_code_store,
+            &self.evm_header_store,
+            &self.evm_state_checkpoint_store,
+            &self.evm_state_diff_store,
+        ) {
+            Ok((snapshot_flat, source)) => {
+                if snapshot_flat != snapshot_206 {
+                    panic!(
+                        "C-01 S6 shadow seed DIVERGENCE: the {source:?} parent seed for {selected_parent} ({} accounts) does not match \
+                         the committed 206 snapshot ({} accounts). The flat/reconstruct seed source would feed the executor a wrong parent \
+                         state and FALSELY disqualify valid blocks — HALTING this node. 206 stays authoritative (chain integrity intact); \
+                         fix the backend and re-shadow.",
+                        snapshot_flat.accounts.len(),
+                        snapshot_206.accounts.len()
+                    );
+                }
+            }
+            // Could not READ the data to validate (transient store I/O, or a non-head
+            // parent's §12 history GC'd past retention): NOT a divergence — skip.
+            Err(ParentSeedError::Unavailable(m)) => {
+                debug!("[evm-shadow-seed] seed unavailable for {selected_parent}: {m}; skipping seed check");
+            }
+            // A broken §12 reconstruction (root mismatch / diff inconsistency / bad
+            // checkpoint / absent code) is a real backend fault ⇒ HALT.
+            Err(ParentSeedError::Corrupt(m)) => {
+                panic!("C-01 S6 shadow seed CORRUPT for {selected_parent}: {m}. The flat/reconstruct backend is broken — HALTING (206 stays authoritative).");
+            }
+        }
     }
 
     /// Non-`evm` builds cannot validate the lane. On every default network the

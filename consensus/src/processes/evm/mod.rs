@@ -1640,6 +1640,303 @@ mod driver {
 #[cfg(feature = "evm")]
 pub use driver::{evm_execute_acceptance, evm_validate, evm_validate_and_persist, EvmValidateError};
 
+// ---------------------------------------------------------------------------
+// C-01 state-backend (design v0.1, Stage 1, slice S6) — the executor's PARENT
+// SEED, sourced from the flat state backend instead of the per-block 206
+// snapshot. This is the source the cutover (slice S9) switches the executor to;
+// until then it runs only as the per-block shadow check
+// (`VirtualStateProcessor::shadow_validate_parent_seed`) that asserts it is
+// byte-identical to the still-authoritative 206 source. `cfg(feature="evm")`
+// because the non-head path keccak-MPT-verifies the reconstruction (kaspa-evm).
+// ---------------------------------------------------------------------------
+
+/// Which source produced a parent seed (for the shadow log / outcome).
+#[cfg(feature = "evm")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentSeedSource {
+    /// The parent precedes EVM activation — the empty genesis state.
+    PreActivation,
+    /// The parent IS the flat store's canonical head — materialized from prefix 234 (+222).
+    FlatHead,
+    /// A non-head parent (post-reorg first block / bootstrap) — §12-reconstructed and root-verified.
+    Reconstructed,
+}
+
+/// Failure obtaining a parent seed from the flat backend (slice S6). Two classes,
+/// with deliberately different caller actions (the shadow check HALTS on a real
+/// divergence but only SKIPS when it simply cannot read the data to compare):
+#[cfg(feature = "evm")]
+#[derive(Debug)]
+pub enum ParentSeedError {
+    /// A real backend/data fault — the §12 reconstruction's keccak-MPT root did not
+    /// verify, a diff's `before` view was inconsistent, a checkpoint failed to
+    /// decode, or the flat store referenced code absent from the content store
+    /// (`StoreError::DataInconsistency`). The caller HALTS.
+    Corrupt(String),
+    /// The seed cannot be validated HERE — a transient store read failed
+    /// (`DbError`/decode) or a non-head parent's §12 history is GC'd past
+    /// `--evm-history-mode` retention. NOT a divergence: the caller SKIPS (and
+    /// warns); the authoritative 206 seed is unaffected.
+    Unavailable(String),
+}
+
+#[cfg(feature = "evm")]
+impl std::fmt::Display for ParentSeedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParentSeedError::Corrupt(m) => write!(f, "parent-seed reconstruction corrupt: {m}"),
+            ParentSeedError::Unavailable(m) => write!(f, "parent-seed unavailable: {m}"),
+        }
+    }
+}
+
+/// Classify a store read failure for the parent-seed path: a `DataInconsistency`
+/// is real corruption (the seed would be wrong ⇒ HALT); any other store error
+/// (RocksDB I/O, decode) is transient ⇒ the seed cannot be validated here ⇒ SKIP.
+#[cfg(feature = "evm")]
+fn classify_seed_store_error(e: kaspa_database::prelude::StoreError) -> ParentSeedError {
+    match e {
+        kaspa_database::prelude::StoreError::DataInconsistency(m) => ParentSeedError::Corrupt(format!("store data inconsistency: {m}")),
+        other => ParentSeedError::Unavailable(format!("store read: {other}")),
+    }
+}
+
+/// C-01 Stage 1 (slice S6) — obtain `selected_parent`'s full EVM state snapshot
+/// from the flat state backend: materialize the flat store (prefix 234 + 222)
+/// when `selected_parent` IS the flat store's canonical head (`flat_head`), else
+/// §12-reconstruct it (root-verified, the same path RPC `reconstruct_evm_state_at`
+/// uses) for a non-head parent. A pre-activation parent (no EVM header) is the
+/// empty genesis state. This MUST reproduce the per-block 206 snapshot the
+/// executor reads today — the shadow check halts the node on any divergence.
+#[cfg(feature = "evm")]
+#[allow(clippy::too_many_arguments)]
+pub fn flat_or_reconstruct_parent_snapshot(
+    selected_parent: kaspa_consensus_core::BlockHash,
+    flat_head: Option<kaspa_consensus_core::BlockHash>,
+    flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
+    code: &crate::model::stores::evm::DbEvmCodeStore,
+    header_store: &crate::model::stores::evm::DbEvmHeaderStore,
+    checkpoint_store: &crate::model::stores::evm::DbEvmStateCheckpointStore,
+    diff_store: &crate::model::stores::evm::DbEvmStateDiffStore,
+) -> Result<(kaspa_consensus_core::evm::EvmStateSnapshot, ParentSeedSource), ParentSeedError> {
+    use crate::model::stores::evm::{EvmCodeStoreReader, EvmHeaderStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
+    use kaspa_consensus_core::evm::EvmStateSnapshot;
+
+    // Pre-activation parent (no EVM header) ⇒ the empty genesis state.
+    let parent_header = match header_store.get(selected_parent) {
+        Ok(h) => h,
+        Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => return Ok((EvmStateSnapshot::default(), ParentSeedSource::PreActivation)),
+        Err(e) => return Err(classify_seed_store_error(e)),
+    };
+
+    // Canonical head ⇒ materialize the flat store directly (the head fast path).
+    // A `DataInconsistency` here (e.g. a head account referencing absent code) is a
+    // real backend fault ⇒ Corrupt; a transient read failure ⇒ Unavailable (skip).
+    if flat_head == Some(selected_parent) {
+        let snap = materialize_snapshot(flat, code).map_err(classify_seed_store_error)?;
+        return Ok((snap, ParentSeedSource::FlatHead));
+    }
+
+    // Non-head parent ⇒ §12 reconstruct + keccak-MPT root verify against the
+    // parent's committed state root (fail-closed on a broken chain / bad root).
+    // `gather_reconstruction_inputs`'s `has_header` is bool-valued, so a store read
+    // failure there would otherwise be swallowed as "no header" and anchor the walk
+    // at the wrong seed — capture it so it surfaces as Unavailable (a skip), never
+    // a silently-wrong reconstruction. The same applies to the code resolver.
+    let store_errored = std::cell::Cell::new(false);
+    let (seed, forward_diffs) = gather_reconstruction_inputs(
+        selected_parent,
+        |b| checkpoint_store.get(b),
+        |b| diff_store.get(b),
+        |b| match header_store.has(b) {
+            Ok(v) => v,
+            Err(_) => {
+                store_errored.set(true);
+                false
+            }
+        },
+    )
+    .map_err(|e| match e {
+        // Retention gap / depth bound / a store read inside the walk ⇒ cannot
+        // validate here (skip). A bad checkpoint ENCODING is real corruption (halt).
+        ReconstructGatherError::Unavailable(m) | ReconstructGatherError::TooDeep(m) | ReconstructGatherError::Store(m) => ParentSeedError::Unavailable(m),
+        ReconstructGatherError::Checkpoint(m) => ParentSeedError::Corrupt(m),
+    })?;
+    if store_errored.get() {
+        return Err(ParentSeedError::Unavailable(format!("header store read failed while gathering reconstruction inputs for {selected_parent}")));
+    }
+    let snap = kaspa_evm::reconstruct::reconstruct_evm_state(
+        &seed,
+        &forward_diffs,
+        |h| match code.get(*h) {
+            Ok(v) => v,
+            Err(_) => {
+                store_errored.set(true);
+                None
+            }
+        },
+        parent_header.state_root,
+    )
+    .map_err(|e| ParentSeedError::Corrupt(e.to_string()))?;
+    // A swallowed code-store read failure could have surfaced as MissingCode inside
+    // the engine; reclassify it as a skip (transient I/O), not a Corrupt halt.
+    if store_errored.get() {
+        return Err(ParentSeedError::Unavailable(format!("code store read failed while reconstructing {selected_parent}")));
+    }
+    Ok((snap, ParentSeedSource::Reconstructed))
+}
+
+#[cfg(all(test, feature = "evm"))]
+mod s6_seed_tests {
+    use super::{flat_or_reconstruct_parent_snapshot, ParentSeedSource};
+    use crate::model::stores::evm::{
+        DbEvmCodeStore, DbEvmFlatAccountStore, DbEvmHeaderStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, EvmHeaderStore,
+    };
+    use kaspa_consensus_core::evm::{
+        compute_state_diff, EvmAccountSnapshot, EvmAddress, EvmExecutionHeader, EvmStateSnapshot, EvmU256, EVM_EMPTY_CODE_HASH,
+    };
+    use kaspa_consensus_core::BlockHash;
+    use kaspa_database::create_temp_db;
+    use kaspa_database::prelude::{CachePolicy, ConnBuilder};
+    use kaspa_hashes::EvmH256;
+    use rocksdb::WriteBatch;
+
+    fn h(b: u8) -> BlockHash {
+        BlockHash::from_bytes([b; 64])
+    }
+
+    /// A canonical EOA-only snapshot (sorted, no code/storage).
+    fn eoa_snap(accounts: &[(u8, u64, u64)]) -> EvmStateSnapshot {
+        let mut accs: Vec<EvmAccountSnapshot> = accounts
+            .iter()
+            .map(|(a, n, bal)| EvmAccountSnapshot {
+                address: EvmAddress::from_bytes([*a; 20]),
+                nonce: *n,
+                balance: EvmU256::from_u128(*bal as u128),
+                code_hash: EVM_EMPTY_CODE_HASH,
+                code: vec![],
+                storage: vec![],
+            })
+            .collect();
+        accs.sort_by(|x, y| x.address.as_bytes().cmp(&y.address.as_bytes()));
+        EvmStateSnapshot { accounts: accs }
+    }
+
+    /// The real keccak-MPT state root of a snapshot (what a committed header holds),
+    /// via the kaspa-evm trie — so reconstruction's root-verify passes.
+    fn root_of(snap: &EvmStateSnapshot) -> EvmH256 {
+        let db = kaspa_evm::snapshot::seed_cachedb(snap).expect("canonical snapshot seeds");
+        EvmH256::from_bytes(kaspa_evm::state::state_root(&db).0)
+    }
+
+    fn header_with_root(root: EvmH256, number: u64) -> EvmExecutionHeader {
+        EvmExecutionHeader { state_root: root, evm_number: number, ..Default::default() }
+    }
+
+    /// The flat/reconstruct parent seed reproduces the committed 206 snapshot for
+    /// all three sources: canonical head (materialize 234), non-head (§12
+    /// reconstruct + root-verify), and a pre-activation parent (empty genesis).
+    #[test]
+    fn parent_seed_matches_206_for_head_reconstruct_and_pre_activation() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
+        let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
+        let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
+        let checkpoint_store = DbEvmStateCheckpointStore::new(db.clone(), CachePolicy::Empty);
+        let diff_store = DbEvmStateDiffStore::new(db.clone(), CachePolicy::Empty);
+
+        // Genesis (block 0) has NO header (pre-activation boundary). Branch the flat
+        // store onto block H = state s_h; an independent block 1 = state s_1 is only
+        // present as a §12 diff + header (the reconstruct case).
+        let (genesis, block_h, block_1, pre) = (h(0), h(0x11), h(0x21), h(0x99));
+        let s_h = eoa_snap(&[(0x01, 3, 800), (0x02, 0, 500)]);
+        let s_1 = eoa_snap(&[(0x01, 1, 1000), (0x03, 2, 250)]);
+
+        // Persist headers (committed state roots) for the EVM blocks.
+        let mut batch = WriteBatch::default();
+        header_store.insert_batch(&mut batch, block_h, header_with_root(root_of(&s_h), 5)).unwrap();
+        header_store.insert_batch(&mut batch, block_1, header_with_root(root_of(&s_1), 1)).unwrap();
+        // §12 diff for block 1 over the empty genesis (genesis has no header ⇒ gather anchors empty).
+        diff_store.insert_batch(&mut batch, block_1, compute_state_diff(&EvmStateSnapshot::default(), &s_1, block_1, genesis)).unwrap();
+        // Flat store at block H (apply its diff over empty genesis).
+        super::apply_diff_to_flat(&flat, &mut batch, &compute_state_diff(&EvmStateSnapshot::default(), &s_h, block_h, genesis)).unwrap();
+        db.write(batch).unwrap();
+
+        let seed = |parent: BlockHash, flat_head: Option<BlockHash>| {
+            flat_or_reconstruct_parent_snapshot(parent, flat_head, &flat, &code, &header_store, &checkpoint_store, &diff_store)
+        };
+
+        // (1) Canonical head ⇒ materialize the flat store == s_h.
+        let (got_h, src_h) = seed(block_h, Some(block_h)).unwrap();
+        assert_eq!(src_h, ParentSeedSource::FlatHead);
+        assert_eq!(got_h, s_h, "flat-head materialize must equal the committed state");
+
+        // (2) Non-head parent ⇒ §12 reconstruct (root-verified) == s_1.
+        let (got_1, src_1) = seed(block_1, Some(block_h)).unwrap();
+        assert_eq!(src_1, ParentSeedSource::Reconstructed);
+        assert_eq!(got_1, s_1, "reconstructed non-head parent must equal the committed state");
+
+        // (3) Pre-activation parent (no header) ⇒ empty genesis state.
+        let (got_pre, src_pre) = seed(pre, None).unwrap();
+        assert_eq!(src_pre, ParentSeedSource::PreActivation);
+        assert_eq!(got_pre, EvmStateSnapshot::default(), "pre-activation parent is empty");
+    }
+
+    /// A non-head parent whose §12 diff was GC'd surfaces as `Unavailable` (the
+    /// shadow check skips it), not a divergence/halt.
+    #[test]
+    fn non_head_parent_missing_history_is_unavailable() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
+        let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
+        let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
+        let checkpoint_store = DbEvmStateCheckpointStore::new(db.clone(), CachePolicy::Empty);
+        let diff_store = DbEvmStateDiffStore::new(db.clone(), CachePolicy::Empty);
+
+        let block_1 = h(0x21);
+        let s_1 = eoa_snap(&[(0x01, 1, 1000)]);
+        // Header present (EVM block), but NO diff/checkpoint ⇒ gather can't anchor.
+        let mut batch = WriteBatch::default();
+        header_store.insert_batch(&mut batch, block_1, header_with_root(root_of(&s_1), 1)).unwrap();
+        db.write(batch).unwrap();
+
+        let res =
+            flat_or_reconstruct_parent_snapshot(block_1, Some(h(0x11)), &flat, &code, &header_store, &checkpoint_store, &diff_store);
+        assert!(matches!(res, Err(super::ParentSeedError::Unavailable(_))), "missing §12 history ⇒ Unavailable, got {res:?}");
+    }
+
+    /// A flat HEAD whose account references code absent from the content store (222)
+    /// is a real backend inconsistency ⇒ `Corrupt` (a HALT), not a silent skip.
+    #[test]
+    fn flat_head_missing_code_is_corrupt() {
+        use crate::model::stores::evm::EvmHeaderStore;
+        use kaspa_consensus_core::evm::{AccountCore, FlatAccount};
+
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
+        let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
+        let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
+        let checkpoint_store = DbEvmStateCheckpointStore::new(db.clone(), CachePolicy::Empty);
+        let diff_store = DbEvmStateDiffStore::new(db.clone(), CachePolicy::Empty);
+
+        let block_h = h(0x11);
+        // Header present (so not pre-activation); flat head account references a
+        // code_hash with NO entry in the code store ⇒ materialize hits DataInconsistency.
+        let mut batch = WriteBatch::default();
+        header_store.insert_batch(&mut batch, block_h, header_with_root(EvmH256::from_bytes([0; 32]), 1)).unwrap();
+        flat.write_batch(
+            &mut batch,
+            EvmAddress::from_bytes([0x07; 20]),
+            FlatAccount { core: AccountCore { nonce: 1, balance: EvmU256::from_u128(1), code_hash: EvmH256::from_bytes([0xAB; 32]) }, storage: vec![] },
+        )
+        .unwrap();
+        db.write(batch).unwrap();
+
+        let res = flat_or_reconstruct_parent_snapshot(block_h, Some(block_h), &flat, &code, &header_store, &checkpoint_store, &diff_store);
+        assert!(matches!(res, Err(super::ParentSeedError::Corrupt(_))), "flat-head missing code ⇒ Corrupt (halt), got {res:?}");
+    }
+}
+
 /// O12: one pending chain block for the pipeline worker, in chain order.
 pub struct EvmPipelineItem {
     pub block: kaspa_consensus_core::BlockHash,
