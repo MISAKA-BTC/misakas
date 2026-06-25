@@ -600,6 +600,47 @@ pub fn materialize_snapshot(
     Ok(EvmStateSnapshot { accounts })
 }
 
+/// C-01 Stage 1 (S8, audit M-01): seed the flat latest-canonical state from a full
+/// snapshot — the pruned-IBD pruning-point import path. The caller has already verified
+/// `snapshot` against the committed EVM state root, so this is a trusted seed. Writes into
+/// the caller's `batch` (atomic with the 206 import): the flat accounts (234), each
+/// contract's bytecode into the content-addressed code store (222, keyed by `code_hash` —
+/// the joining node's code store is otherwise empty, and the flat rows reference code only
+/// by hash), the block→root index (232), and the latest pointer (231) pinned to
+/// `pruning_point`. Any pre-existing flat row is cleared first so the store ends EXACTLY
+/// equal to `snapshot` (a fresh-IBD node has none; the clear is defensive). Flat / code /
+/// root / pointer are state data only — never part of any commitment — so seeding here is
+/// consensus-neutral. INERT unless the shadow state backend is enabled (the caller gates it).
+#[allow(clippy::too_many_arguments)]
+pub fn seed_flat_from_snapshot(
+    flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
+    code_store: &crate::model::stores::evm::DbEvmCodeStore,
+    root_store: &crate::model::stores::evm::DbEvmBlockStateRootStore,
+    ptr_store: &mut crate::model::stores::evm::DbEvmLatestStatePtrStore,
+    batch: &mut rocksdb::WriteBatch,
+    pruning_point: kaspa_consensus_core::BlockHash,
+    state_root: kaspa_hashes::EvmH256,
+    snapshot: &kaspa_consensus_core::evm::EvmStateSnapshot,
+) -> Result<(), kaspa_database::prelude::StoreError> {
+    use kaspa_consensus_core::evm::{EvmLatestStatePtr, FlatAccount};
+    // Defensive clear: drop any stale flat rows so a re-import (or a previously-shadowed node)
+    // ends with exactly the imported snapshot. Empty (no-op) on a fresh-IBD node. Batched deletes
+    // precede the writes below, so an address present in both is correctly overwritten.
+    let stale: Vec<_> = flat.iter().filter_map(|r| r.ok().map(|(addr, _)| addr)).collect();
+    for addr in stale {
+        flat.delete_batch(batch, addr)?;
+    }
+    for account in &snapshot.accounts {
+        if !account.code.is_empty() {
+            code_store.write_batch(batch, account.code_hash, account.code.clone())?;
+        }
+        flat.write_batch(batch, account.address, FlatAccount::from_snapshot(account))?;
+    }
+    root_store.write_batch(batch, pruning_point, state_root)?;
+    ptr_store.set_batch(batch, EvmLatestStatePtr { canonical_head: pruning_point, state_root })?;
+    Ok(())
+}
+
 /// C-01 Stage 1: build a [`ReconState`] directly from the flat store (prefix 234)
 /// — the cores + storage the keccak-MPT state root commits to. Code bytes are NOT
 /// resolved (the reconstruction comparison is over `code_hash`, not code), so this
@@ -913,6 +954,57 @@ mod flat_state_tests {
         let mut a = accs;
         a.sort_unstable_by(|x, y| x.address.as_bytes().cmp(&y.address.as_bytes()));
         EvmStateSnapshot { accounts: a }
+    }
+
+    /// C-01 S8 (audit M-01): `seed_flat_from_snapshot` (the pruned-IBD import path) makes the flat
+    /// store + content-addressed code materialize back to EXACTLY the imported pruning-point
+    /// snapshot, pins the latest pointer + block→root index to the pruning point, and clears any
+    /// pre-existing stale flat row.
+    #[test]
+    fn s8_seed_flat_from_snapshot_round_trips_and_clears_stale() {
+        use super::{materialize_snapshot, seed_flat_from_snapshot};
+        use crate::model::stores::evm::EvmCodeStoreReader;
+        use kaspa_consensus_core::evm::FlatAccount;
+
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
+        let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
+        let roots = DbEvmBlockStateRootStore::new(db.clone(), CachePolicy::Empty);
+        let mut ptr = DbEvmLatestStatePtrStore::new(db.clone());
+
+        // A stale row (address NOT in the snapshot) that the defensive clear must remove.
+        let stale_addr = EvmAddress::from_bytes([0x99; 20]);
+        let mut pre = WriteBatch::default();
+        flat.write_batch(&mut pre, stale_addr, FlatAccount::default()).unwrap();
+        db.write(pre).unwrap();
+        assert!(flat.get(stale_addr).unwrap().is_some());
+
+        // EOA (empty code, no storage) + contract (code + storage).
+        let contract_code: &[u8] = &[0x60, 0x80, 0x60, 0x40, 0x52];
+        let code_hash = EvmH256::from_bytes([0xcd; 32]);
+        let pp = Hash64::from_bytes([0x07; 64]);
+        let state_root = EvmH256::from_bytes([0x55; 32]);
+        let snapshot = snap(vec![
+            acc(0x11, 7, 1_000, EVM_EMPTY_CODE_HASH, &[], &[]),
+            acc(0x22, 1, 0, code_hash, contract_code, &[(3, 9), (1, 4)]),
+        ]);
+
+        let mut b = WriteBatch::default();
+        seed_flat_from_snapshot(&flat, &code, &roots, &mut ptr, &mut b, pp, state_root, &snapshot).unwrap();
+        db.write(b).unwrap();
+
+        // Flat store + code store materialize back to EXACTLY the imported snapshot.
+        assert_eq!(materialize_snapshot(&flat, &code).unwrap(), snapshot);
+        // Stale row is gone.
+        assert_eq!(flat.get(stale_addr).unwrap(), None);
+        // Pointer + block→root index pinned to the pruning point.
+        let p = ptr.get().unwrap().unwrap();
+        assert_eq!(p.canonical_head, pp);
+        assert_eq!(p.state_root, state_root);
+        assert_eq!(roots.get(pp).unwrap(), Some(state_root));
+        // Contract bytecode is content-addressed in the code store (222); EOA wrote none.
+        assert_eq!(code.get(code_hash).unwrap().as_deref(), Some(contract_code));
+        assert_eq!(code.get(EVM_EMPTY_CODE_HASH).unwrap(), None);
     }
 
     /// Applying the §12 diff chain to the FLAT store, then materializing, reproduces

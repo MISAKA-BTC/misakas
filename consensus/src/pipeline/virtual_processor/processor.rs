@@ -3152,7 +3152,28 @@ impl VirtualStateProcessor {
         }
 
         // (3) Persist the rows and pin the finalized EVM head to the pruning point.
+        let state_root = evm_header.state_root; // captured before `evm_header` is moved below
         let mut batch = WriteBatch::default();
+        // C-01 S8 (audit M-01): also seed the flat latest-canonical state from the verified
+        // snapshot, so a pruned-IBD node starts with a flat store materialized at the pruning point
+        // (the basis the S7 flat fast-path and the S9 cutover read). Gated on the shadow backend,
+        // matching the per-block dual-write (S4) — the flat store is a node-local shadow until
+        // cutover. Same atomic batch as the 206 write; flat/code/root/pointer are state data only
+        // (never a commitment) ⇒ consensus-neutral. Done before `snapshot`/`evm_header` are moved.
+        if self.evm_shadow_state_backend {
+            let mut ptr = self.evm_latest_state_ptr_store.write();
+            crate::processes::evm::seed_flat_from_snapshot(
+                &self.evm_flat_account_store,
+                &self.evm_code_store,
+                &self.evm_block_state_root_store,
+                &mut ptr,
+                &mut batch,
+                pruning_point,
+                state_root,
+                &snapshot,
+            )
+            .map_err(|e| PruningImportError::ImportedEvmSnapshotInvalid(pruning_point, format!("flat seed: {e}")))?;
+        }
         self.evm_header_store.insert_batch(&mut batch, pruning_point, evm_header).unwrap();
         self.evm_state_store.insert_batch(&mut batch, pruning_point, snapshot).unwrap();
         {
