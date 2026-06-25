@@ -154,14 +154,39 @@ off (root-CPU + proofs), after the headline storage fix is shipped and proven.
    (already wired). Fixes H-03. *Offline + live.*
 8. **S8 — IBD pruning-point flat snapshot.** Ship the flat store at the current PP (current-PP
    only, fixes M-01); import path seeds the flat store. *Live.*
-9. **S9 — cutover (stop writing 206).** Once a node's shadow differential has run clean for a
-   configured window, stop writing prefix 206 and delete legacy 206 rows on prune. Node-local,
-   reversible. *Operational.*
-10. **S10 — docs + operator runbook** (shadow → cutover → rollback; metrics: flat-hit rate,
-    reconstruct latency, root-divergence counter).
+9. **S9 — cutover (stop writing 206).** Shipped in three node-local, gated, reversible-by-design
+   sub-slices:
+   - **S9a — flat-authoritative executor seed** (`--evm-flat-authoritative`): seed the executor from
+     the flat/reconstruct parent **after** asserting it byte-identical to 206 (HALT on divergence;
+     206 still written ⇒ reversible). NOTE: S9a seeds by **eagerly materializing** the full parent
+     snapshot (`materialize_snapshot` → `seed_cachedb`), not via the lazy `FlatBackedCacheDB` of S3
+     — the lazy seed is S9c.
+   - **S9b — retire 206 writes** (`--evm-retire-206`, requires S9a + shadow): stop persisting the
+     per-block 206 snapshot; the flat store is the sole persisted post-state. The seed path falls to
+     a committed-root check when 206 is absent; reads fall back 206 → flat-materialize → §12.
+   - **S9b-prune — one-shot legacy-206 bulk reclamation** (`--evm-prune-legacy-206`): at startup,
+     `delete_range` + prefix-bounded compaction of the legacy 206 store, gated on retire-206 being
+     effective, recent/archive history, and the flat backend verified current+faithful at the EVM
+     head (recomputed root == committed root). IRREVERSIBLE ⇒ refuses unless all hold.
+10. **S9c — lazy `FlatBackedCacheDB` seam (production wiring; live cutover DEFERRED to Stage 2).**
+    `StoreFlatReader` (consensus) implements S3's `FlatStateReader` over the real stores (234 + 222),
+    so `flat_backed_cachedb(StoreFlatReader)` is the drop-in lazy seed Stage 2 plugs into; an offline
+    test proves its reads reproduce the eager `materialize_snapshot`. **The live cutover (seeding
+    `execute_block_evm` from the lazy backend) is intentionally NOT done in Stage 1**, for two
+    reasons: (a) the committed `state_root` is a keccak-MPT over the FULL post-state, but a lazy
+    `CacheDB` holds only the **touched** accounts — so a correct root after lazy execution still
+    needs a full O(state) flat enumeration, which **negates the lazy-seed win until Stage 2's
+    incremental MPT** (this is R4 made concrete); and (b) generalizing `execute_block_evm` from its
+    `EmptyDB` (`Infallible` DB errors) to a fallible backend is consensus-critical churn that belongs
+    with that Stage-2 work. So Stage 1 keeps the eager-materialize seed (S9a), which is correct and
+    whose O(state) seed cost is the same order as the unavoidable O(state) root recompute.
+11. **S10 — docs + operator runbook** (`docs/misaka-evm-flat-backend-runbook-v0.1.md`):
+    shadow → cutover → retire → prune → rollback; metrics: flat-hit rate, reconstruct latency,
+    root-divergence / Unavailable counters.
 
-Stage 2 (S11+): persistent MPT node store, incremental root, `eth_getProof` — separate design
-revision once Stage 1 is live.
+Stage 2 (S11+): persistent MPT node store (prefix 230), incremental O(changed) root, the live lazy
+seed cutover (S9c), and `eth_getProof` — separate design revision once Stage 1 is live and per-block
+root-CPU is measured to matter (R4).
 
 ## 7. Consensus-neutrality proof plan
 

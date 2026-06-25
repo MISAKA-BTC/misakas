@@ -600,6 +600,54 @@ pub fn materialize_snapshot(
     Ok(EvmStateSnapshot { accounts })
 }
 
+/// C-01 Stage 1 (slice S9c) — the production [`FlatStateReader`] seam.
+///
+/// A thin O(1) point-lookup adapter that wires the inert kaspa-evm flat backend
+/// ([`kaspa_evm::flat_backend::FlatStateBackend`] / [`kaspa_evm::flat_backend::flat_backed_cachedb`],
+/// slice S3) to the real consensus stores: account rows from [`DbEvmFlatAccountStore`] (prefix 234)
+/// and contract code from the content-addressed [`DbEvmCodeStore`] (prefix 222). It holds borrows,
+/// so it is cheap to construct per seed and never enumerates (the full-state walk uses the store's
+/// own `iter()` directly).
+///
+/// **INERT — not yet on any live execution path.** Wrapping this in `flat_backed_cachedb` gives a
+/// `CacheDB` the executor could seed LAZILY (reading only the accounts a block touches) instead of
+/// eagerly materializing the full parent snapshot ([`materialize_snapshot`] → `seed_cachedb`). That
+/// live cutover is **deferred to Stage 2** for a concrete reason: the committed `state_root` is a
+/// keccak-MPT over the FULL post-state, but a lazy `CacheDB` holds only the TOUCHED accounts, so a
+/// correct root after lazy execution still requires a full O(state) flat enumeration — which negates
+/// the lazy-seed win until Stage 2 supplies a persistent incremental-MPT root. Generalizing
+/// `execute_block_evm` from its `EmptyDB` (`Infallible` errors) to a fallible backend is the same
+/// Stage-2 work. This adapter is the stable interface that work plugs into; today it only proves the
+/// production reads reproduce the eager materialization (see the test).
+#[cfg(feature = "evm")]
+#[derive(Clone, Copy)]
+pub struct StoreFlatReader<'a> {
+    flat: &'a crate::model::stores::evm::DbEvmFlatAccountStore,
+    code: &'a crate::model::stores::evm::DbEvmCodeStore,
+}
+
+#[cfg(feature = "evm")]
+impl<'a> StoreFlatReader<'a> {
+    pub fn new(flat: &'a crate::model::stores::evm::DbEvmFlatAccountStore, code: &'a crate::model::stores::evm::DbEvmCodeStore) -> Self {
+        Self { flat, code }
+    }
+}
+
+#[cfg(feature = "evm")]
+impl kaspa_evm::flat_backend::FlatStateReader for StoreFlatReader<'_> {
+    fn flat_account(
+        &self,
+        address: kaspa_consensus_core::evm::EvmAddress,
+    ) -> Result<Option<kaspa_consensus_core::evm::FlatAccount>, kaspa_evm::flat_backend::FlatBackendError> {
+        self.flat.get(address).map_err(|e| kaspa_evm::flat_backend::FlatBackendError::Store(e.to_string()))
+    }
+
+    fn flat_code(&self, code_hash: kaspa_hashes::EvmH256) -> Result<Option<Vec<u8>>, kaspa_evm::flat_backend::FlatBackendError> {
+        use crate::model::stores::evm::EvmCodeStoreReader;
+        self.code.get(code_hash).map_err(|e| kaspa_evm::flat_backend::FlatBackendError::Store(e.to_string()))
+    }
+}
+
 /// C-01 Stage 1 (S8, audit M-01): seed the flat latest-canonical state from a full
 /// snapshot — the pruned-IBD pruning-point import path. The caller has already verified
 /// `snapshot` against the committed EVM state root, so this is a trusted seed. Writes into
@@ -1005,6 +1053,55 @@ mod flat_state_tests {
         // Contract bytecode is content-addressed in the code store (222); EOA wrote none.
         assert_eq!(code.get(code_hash).unwrap().as_deref(), Some(contract_code));
         assert_eq!(code.get(EVM_EMPTY_CODE_HASH).unwrap(), None);
+    }
+
+    /// C-01 S9c: the production `StoreFlatReader` seam reproduces EXACTLY the eager
+    /// `materialize_snapshot` output it would replace — for every account the reader returns the
+    /// `FlatAccount` form of the snapshot, contract code resolves by hash, and an absent address /
+    /// the empty code-hash read as `None`. Composed with the kaspa-evm flat_backend proof
+    /// (`FlatStateBackend` reads == `seed_cachedb` for any reader returning this data), the lazy
+    /// store-backed seed is byte-identical to the eager snapshot seed. The live executor cutover
+    /// (generalizing `execute_block_evm` + an incremental-MPT root) is deferred to Stage 2.
+    #[cfg(feature = "evm")]
+    #[test]
+    fn s9c_store_flat_reader_reproduces_materialized_snapshot() {
+        use super::{materialize_snapshot, seed_flat_from_snapshot, StoreFlatReader};
+        use kaspa_consensus_core::evm::FlatAccount;
+        use kaspa_evm::flat_backend::FlatStateReader;
+
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
+        let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
+        let roots = DbEvmBlockStateRootStore::new(db.clone(), CachePolicy::Empty);
+        let mut ptr = DbEvmLatestStatePtrStore::new(db.clone());
+
+        // EOA (no code) + a contract (code + storage), so the code resolution path is exercised.
+        let contract_code: &[u8] = &[0x60, 0x80, 0x60, 0x40, 0x52];
+        let code_hash = EvmH256::from_bytes([0xcd; 32]);
+        let snapshot = snap(vec![
+            acc(0x11, 7, 1_000, EVM_EMPTY_CODE_HASH, &[], &[]),
+            acc(0x22, 1, 0, code_hash, contract_code, &[(1, 4), (3, 9)]),
+        ]);
+        let mut b = WriteBatch::default();
+        seed_flat_from_snapshot(&flat, &code, &roots, &mut ptr, &mut b, Hash64::from_bytes([0x07; 64]), EvmH256::from_bytes([0x55; 32]), &snapshot).unwrap();
+        db.write(b).unwrap();
+
+        // The eager path materializes back to the snapshot (the reference seed source).
+        let materialized = materialize_snapshot(&flat, &code).unwrap();
+        assert_eq!(materialized, snapshot);
+
+        // The production lazy reader returns, for each materialized account, exactly the FlatAccount
+        // form of it and resolves contract code by hash — the same data `seed_cachedb` consumes.
+        let reader = StoreFlatReader::new(&flat, &code);
+        for a in &materialized.accounts {
+            assert_eq!(reader.flat_account(a.address).unwrap().expect("present"), FlatAccount::from_snapshot(a), "reader account != materialized");
+            if a.code_hash != EVM_EMPTY_CODE_HASH {
+                assert_eq!(reader.flat_code(a.code_hash).unwrap().as_deref(), Some(a.code.as_slice()), "reader code != snapshot code");
+            }
+        }
+        // Absent address ⇒ None; the empty code-hash is never stored ⇒ None (the EOA-no-code path).
+        assert_eq!(reader.flat_account(EvmAddress::from_bytes([0xAB; 20])).unwrap(), None);
+        assert_eq!(reader.flat_code(EVM_EMPTY_CODE_HASH).unwrap(), None);
     }
 
     /// Applying the §12 diff chain to the FLAT store, then materializing, reproduces
