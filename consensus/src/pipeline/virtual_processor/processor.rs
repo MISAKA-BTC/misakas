@@ -234,6 +234,11 @@ pub struct VirtualStateProcessor {
     // per-block live differential vs the committed snapshot. `false` on every
     // current network and by default — purely a pre-cutover validation aid.
     pub(super) evm_shadow_state_backend: bool,
+    // C-01 slice S9: when set (together with `evm_shadow_state_backend`), the EVM executor seeds
+    // the parent state from the validated flat/reconstruct source instead of the 206 snapshot. The
+    // seed is asserted byte-identical to 206 BEFORE use (HALT on divergence), and 206 is still
+    // written — consensus-neutral + reversible. `false` on every current network and by default.
+    pub(super) evm_flat_authoritative: bool,
     // §12: this node's EVM state-history retention mode (`--evm-history-mode`). In
     // `head` mode the per-block archive diff/checkpoint (220/221) are not written at
     // all; `recent`/`archive` write them (the pruning processor decides how long
@@ -318,7 +323,14 @@ impl VirtualStateProcessor {
         mining_rules: Arc<MiningRules>,
         evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
         evm_shadow_state_backend: bool,
+        evm_flat_authoritative: bool,
     ) -> Self {
+        // C-01 S9: flat-authoritative seeding needs the shadow backend (which maintains + validates
+        // the flat store); without it the flag is a silent no-op (the executor keeps seeding from
+        // 206). Warn so the prerequisite isn't missed during a cutover rollout. Fail-safe either way.
+        if evm_flat_authoritative && !evm_shadow_state_backend {
+            warn!("[C-01] --evm-flat-authoritative is set WITHOUT --evm-shadow-state-backend; it is a no-op (the EVM executor keeps seeding from the 206 snapshot). Enable --evm-shadow-state-backend to use the flat-authoritative seed.");
+        }
         Self {
             receiver,
             pruning_sender,
@@ -362,6 +374,7 @@ impl VirtualStateProcessor {
             evm_block_state_root_store: storage.evm_block_state_root_store.clone(),
             evm_latest_state_ptr_store: storage.evm_latest_state_ptr_store.clone(),
             evm_shadow_state_backend,
+            evm_flat_authoritative,
             evm_history_mode,
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
@@ -753,7 +766,7 @@ impl VirtualStateProcessor {
         pipeline: Option<&crate::processes::evm::EvmPipeline>,
     ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
         use crate::model::stores::evm::EvmPayloadStoreReader;
-        use crate::processes::evm::{apply_evm_bridge_effects, evm_validate, validate_evm_deposit_claims, EvmValidateError};
+        use crate::processes::evm::{apply_evm_bridge_effects, evm_validate, evm_validate_chained, validate_evm_deposit_claims, EvmValidateError};
         if header.daa_score < self.evm_activation_daa_score {
             return Ok(None);
         }
@@ -774,6 +787,16 @@ impl VirtualStateProcessor {
             let claim_view = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
             validate_evm_deposit_claims(&own_payload, &claim_view, header.daa_score)?
         };
+        // C-01 S9 cutover: when flat-authoritative (and the shadow backend that maintains the flat
+        // store is on), seed the executor from the flat/reconstruct parent state instead of 206 —
+        // but ONLY after asserting it byte-identical to 206 (inside `validated_flat_parent_seed`,
+        // which HALTs on divergence BEFORE the seed is used, so a backend bug can never falsely
+        // disqualify a valid block). A pre-activation / Unavailable parent ⇒ `None` ⇒ the 206 path.
+        // 206 is still written, so this is reversible; the result is identical (validated == 206).
+        let flat_auth = self.evm_flat_authoritative && self.evm_shadow_state_backend;
+        // Whether the inline path pre-validated the flat seed (so the post-execution S6 check below
+        // is not run twice). The pipeline path (206-seeded) leaves this false and is checked below.
+        let mut seed_prevalidated = false;
         // O12: a pipelined run pre-executed this block's acceptance on the
         // worker (same pure function, same inputs — see EvmPipeline). Consume
         // its result; fall back to inline execution when the pipeline ended.
@@ -786,27 +809,51 @@ impl VirtualStateProcessor {
                 // parent first, then ascending blue work — §3.1 canonical order).
                 let sorted_mergeset: Vec<BlockHash> =
                     ctx.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
-                evm_validate(
-                    &self.evm_header_store,
-                    &self.evm_state_store,
-                    &self.evm_payload_store,
-                    current,
-                    selected_parent,
-                    &sorted_mergeset,
-                    header,
-                    &own_payload,
-                    self.evm_gas_pool_v2_activation_daa_score,
-                    self.evm_f002_withdraw_cap_activation_daa_score,
-                    self.evm_f003_mldsa_verify_activation_daa_score,
-                    self.evm_typed_receipt_root_activation_daa_score,
-                )
-                .map_err(|e| match e {
+                let map_err = |e| match e {
                     EvmValidateError::CommitmentMismatch { .. } => {
                         "evm_commitment_root mismatch (mergeset acceptance re-execution)".to_string()
                     }
                     EvmValidateError::Exec(e) => format!("evm execution: {e}"),
                     EvmValidateError::Store(e) => format!("evm store: {e}"),
-                })?
+                };
+                // The validated flat/reconstruct seed (S9), or None ⇒ seed from 206 (the default,
+                // and the fallback for pre-activation / Unavailable parents).
+                match flat_auth.then(|| self.validated_flat_parent_seed(selected_parent)).flatten() {
+                    Some(seed) => {
+                        seed_prevalidated = true;
+                        evm_validate_chained(
+                            &self.evm_header_store,
+                            &self.evm_state_store,
+                            &self.evm_payload_store,
+                            current,
+                            selected_parent,
+                            &sorted_mergeset,
+                            header,
+                            &own_payload,
+                            Some(seed),
+                            self.evm_gas_pool_v2_activation_daa_score,
+                            self.evm_f002_withdraw_cap_activation_daa_score,
+                            self.evm_f003_mldsa_verify_activation_daa_score,
+                            self.evm_typed_receipt_root_activation_daa_score,
+                        )
+                        .map_err(map_err)?
+                    }
+                    None => evm_validate(
+                        &self.evm_header_store,
+                        &self.evm_state_store,
+                        &self.evm_payload_store,
+                        current,
+                        selected_parent,
+                        &sorted_mergeset,
+                        header,
+                        &own_payload,
+                        self.evm_gas_pool_v2_activation_daa_score,
+                        self.evm_f002_withdraw_cap_activation_daa_score,
+                        self.evm_f003_mldsa_verify_activation_daa_score,
+                        self.evm_typed_receipt_root_activation_daa_score,
+                    )
+                    .map_err(map_err)?,
+                }
             }
         };
         let Some(staged) = staged else {
@@ -836,63 +883,71 @@ impl VirtualStateProcessor {
         }
         // O9: chain-rate / mergeset / gas-utilization observability + applied-claim count.
         self.evm_lane_kpi.record(ctx.ghostdag_data.mergeset_size(), staged.result.header.gas_used, consumed_locks.len());
-        // C-01 (slice S6) shadow seed validation: confirm the flat/reconstruct
-        // PARENT seed source — the one the cutover (S9) switches the executor to —
-        // reproduces the committed 206 parent snapshot byte-for-byte. 206 stays
-        // authoritative HERE (the result above came from it), so this can only
-        // HALT on a backend divergence; it never returns Err / disqualifies a
-        // valid block. Node-local, off by default.
-        if self.evm_shadow_state_backend {
+        // C-01 (slice S6/S9) shadow seed validation: confirm the flat/reconstruct PARENT seed source
+        // reproduces the committed 206 parent snapshot byte-for-byte (HALT on divergence; never
+        // disqualifies — 206 is still written). Skipped when the flat-authoritative inline path
+        // already validated the seed BEFORE executing from it (`seed_prevalidated`), so the check
+        // runs exactly once: here for 206-seeded blocks (non-flat-auth inline, or the O12 pipeline),
+        // pre-execution for flat-authoritative blocks. Node-local, off by default.
+        if self.evm_shadow_state_backend && !seed_prevalidated {
             self.shadow_validate_parent_seed(selected_parent);
         }
         Ok(Some(staged))
     }
 
-    /// C-01 (slice S6) — validate the flat/reconstruct PARENT seed source against
-    /// the authoritative per-block 206 snapshot. For `selected_parent` this builds
-    /// the snapshot the cutover (S9) would seed the executor from — materialized
-    /// from the flat store if it is the canonical head, else §12-reconstructed —
-    /// and asserts it is byte-identical to `state_store.get(selected_parent)`. A
-    /// mismatch (or a corrupt §12 chain / failed root verify) means the flat
-    /// backend would feed a wrong parent state and falsely disqualify valid blocks,
-    /// so it HALTS the node (design §7); it NEVER disqualifies — 206 is still the
-    /// seed used above, so chain integrity is intact. A retention gap for a
-    /// non-head parent is skipped (not a divergence). Node-local; only invoked
-    /// when `--evm-shadow-state-backend` is on (which also maintains the flat store).
+    /// C-01 (slice S6/S9) — compute the flat/reconstruct PARENT seed for
+    /// `selected_parent` and assert it is byte-identical to the authoritative
+    /// per-block 206 snapshot. This is the single place the flat backend is checked
+    /// against the committed state. The snapshot is materialized from the flat store
+    /// when `selected_parent` is the canonical head, else §12-reconstructed (root-
+    /// verified).
+    ///
+    /// HALTS the node (design §7) on a DEFINITIVE divergence — the flat/reconstruct
+    /// snapshot differs from 206, or a §12 reconstruction is corrupt — because
+    /// feeding the executor a wrong parent state would falsely disqualify valid
+    /// blocks. It NEVER returns an unvalidated seed and NEVER disqualifies.
+    ///
+    /// Returns `Some((parent_header, snapshot))` when the seed exists, is EVM-active,
+    /// and equals 206 — the S9 flat-authoritative path may seed the executor from it
+    /// (consensus-neutral: it equals what 206 would give). Returns `None` when the
+    /// parent is pre-activation (no EVM header ⇒ the executor's own store path yields
+    /// the empty genesis parent) OR the seed is Unavailable (transient store I/O, or
+    /// a non-head parent's §12 history GC'd past retention) — the caller falls back
+    /// to the 206 store path. Node-local; only meaningful when the shadow backend is on.
     #[cfg(feature = "evm")]
-    fn shadow_validate_parent_seed(&self, selected_parent: BlockHash) {
+    fn validated_flat_parent_seed(
+        &self,
+        selected_parent: BlockHash,
+    ) -> Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateStoreReader};
         use crate::processes::evm::{flat_or_reconstruct_parent_snapshot, ParentSeedError};
 
-        // The committed (authoritative) parent snapshot from prefix 206. An
-        // EVM-active parent always has one (committed with its header); a
-        // pre-activation parent has none ⇒ the empty genesis state.
-        let parent_has_header = match self.evm_header_store.has(selected_parent) {
-            Ok(b) => b,
+        // An EVM-active parent always persists its header AND its 206 snapshot together;
+        // a parent with no EVM header is pre-activation (empty genesis state) — nothing to
+        // validate, and the executor's store path supplies the empty parent, so return None.
+        let parent_header = match self.evm_header_store.get(selected_parent) {
+            Ok(h) => h,
+            Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => return None,
             Err(e) => {
-                warn!("[evm-shadow-seed] header read failed for {selected_parent}: {e}; skipping seed check");
-                return;
+                warn!("[evm-shadow-seed] header read failed for {selected_parent}: {e}; falling back to 206");
+                return None;
             }
         };
-        let snapshot_206 = if parent_has_header {
-            match self.evm_state_store.get(selected_parent) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("[evm-shadow-seed] 206 read failed for {selected_parent}: {e}; skipping seed check");
-                    return;
-                }
+        let snapshot_206 = match self.evm_state_store.get(selected_parent) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("[evm-shadow-seed] 206 read failed for {selected_parent}: {e}; falling back to 206");
+                return None;
             }
-        } else {
-            kaspa_consensus_core::evm::EvmStateSnapshot::default()
         };
-        // Surface a flat-pointer read failure as a skip — never silently treat it
+        // Surface a flat-pointer read failure as a fallback — never silently treat it
         // as "no head" (None), which would misroute the canonical head into the
         // reconstruct path and hide the store error.
         let flat_head = match self.evm_latest_state_ptr_store.read().get() {
             Ok(opt) => opt.map(|p| p.canonical_head),
             Err(e) => {
-                warn!("[evm-shadow-seed] flat pointer read failed for {selected_parent}: {e}; skipping seed check");
-                return;
+                warn!("[evm-shadow-seed] flat pointer read failed for {selected_parent}: {e}; falling back to 206");
+                return None;
             }
         };
 
@@ -908,7 +963,7 @@ impl VirtualStateProcessor {
             Ok((snapshot_flat, source)) => {
                 if snapshot_flat != snapshot_206 {
                     panic!(
-                        "C-01 S6 shadow seed DIVERGENCE: the {source:?} parent seed for {selected_parent} ({} accounts) does not match \
+                        "C-01 shadow seed DIVERGENCE: the {source:?} parent seed for {selected_parent} ({} accounts) does not match \
                          the committed 206 snapshot ({} accounts). The flat/reconstruct seed source would feed the executor a wrong parent \
                          state and FALSELY disqualify valid blocks — HALTING this node. 206 stays authoritative (chain integrity intact); \
                          fix the backend and re-shadow.",
@@ -916,18 +971,30 @@ impl VirtualStateProcessor {
                         snapshot_206.accounts.len()
                     );
                 }
+                Some((parent_header, snapshot_flat))
             }
             // Could not READ the data to validate (transient store I/O, or a non-head
-            // parent's §12 history GC'd past retention): NOT a divergence — skip.
+            // parent's §12 history GC'd past retention): NOT a divergence — fall back to 206.
             Err(ParentSeedError::Unavailable(m)) => {
-                debug!("[evm-shadow-seed] seed unavailable for {selected_parent}: {m}; skipping seed check");
+                debug!("[evm-shadow-seed] seed unavailable for {selected_parent}: {m}; falling back to 206");
+                None
             }
             // A broken §12 reconstruction (root mismatch / diff inconsistency / bad
             // checkpoint / absent code) is a real backend fault ⇒ HALT.
             Err(ParentSeedError::Corrupt(m)) => {
-                panic!("C-01 S6 shadow seed CORRUPT for {selected_parent}: {m}. The flat/reconstruct backend is broken — HALTING (206 stays authoritative).");
+                panic!("C-01 shadow seed CORRUPT for {selected_parent}: {m}. The flat/reconstruct backend is broken — HALTING (206 stays authoritative).");
             }
         }
+    }
+
+    /// C-01 (slice S6) post-execution shadow check: validate the flat/reconstruct seed
+    /// source against 206 (HALT on divergence), discarding the seed. Used when the
+    /// executor was seeded from 206 (every block while the flat-authoritative cutover
+    /// is off) — 206 stays authoritative, so this can only HALT on a backend divergence,
+    /// never disqualify a valid block.
+    #[cfg(feature = "evm")]
+    fn shadow_validate_parent_seed(&self, selected_parent: BlockHash) {
+        let _ = self.validated_flat_parent_seed(selected_parent);
     }
 
     /// Non-`evm` builds cannot validate the lane. On every default network the

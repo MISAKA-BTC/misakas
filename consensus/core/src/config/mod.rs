@@ -88,6 +88,14 @@ pub struct Config {
     /// root); the committed bytes never depend on the flat store, so toggling this
     /// is consensus-neutral — it only validates the backend before cutover.
     pub evm_shadow_state_backend: bool,
+
+    /// kaspa-pq C-01 (slice S9): seed the EVM executor from the validated flat/reconstruct parent
+    /// state (the cutover seed) instead of the per-block 206 snapshot. Effective only together with
+    /// `evm_shadow_state_backend` (which maintains + validates the flat store). `false` by default
+    /// and on every current network. The flat seed is asserted byte-identical to 206 BEFORE the
+    /// executor uses it (HALT on divergence — never a false disqualification), and 206 is still
+    /// written, so toggling this is consensus-neutral and reversible.
+    pub evm_flat_authoritative: bool,
 }
 
 impl Config {
@@ -118,6 +126,7 @@ impl Config {
             retention_period_days: None,
             evm_history_mode: crate::evm::EvmHistoryMode::Recent,
             evm_shadow_state_backend: false,
+            evm_flat_authoritative: false,
         }
     }
 

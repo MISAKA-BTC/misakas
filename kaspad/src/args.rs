@@ -48,6 +48,11 @@ pub struct Args {
     /// consensus-neutral (a divergence only halts this node, never forks).
     #[serde(default)]
     pub evm_shadow_state_backend: bool,
+    /// C-01 S9: seed the EVM executor from the validated flat/reconstruct parent state instead of
+    /// the 206 snapshot (the cutover seed). Requires `evm_shadow_state_backend`. Off by default;
+    /// node-local + consensus-neutral (the seed is validated == 206 before use; 206 is still written).
+    #[serde(default)]
+    pub evm_flat_authoritative: bool,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub rpclisten_borsh: Option<WrpcNetAddress>,
     #[serde_as(as = "Option<DisplayFromStr>")]
@@ -158,6 +163,7 @@ impl Default for Args {
             evm_rpc_listen: None,
             evm_history_mode: EvmHistoryMode::Recent,
             evm_shadow_state_backend: false,
+            evm_flat_authoritative: false,
             wrpc_verbose: false,
             log_level: "INFO".into(),
             connect_peers: vec![],
@@ -208,6 +214,7 @@ impl Args {
         config.retention_period_days = self.retention_period_days;
         config.evm_history_mode = self.evm_history_mode; // §12: EVM state-history retention
         config.evm_shadow_state_backend = self.evm_shadow_state_backend; // C-01 S4: shadow dual-write
+        config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
 
         #[cfg(feature = "devnet-prealloc")]
         if let Some(num_prealloc_utxos) = self.num_prealloc_utxos {
@@ -305,6 +312,13 @@ pub fn cli() -> Command {
                 .env("KASPAD_EVM_SHADOW_STATE_BACKEND")
                 .action(clap::ArgAction::SetTrue)
                 .help("C-01: shadow the flat EVM state backend and check it against the committed snapshot every block (HALTS this node on divergence). Node-local, consensus-neutral; off by default. Effective only in an --features evm build."),
+        )
+        .arg(
+            Arg::new("evm-flat-authoritative")
+                .long("evm-flat-authoritative")
+                .env("KASPAD_EVM_FLAT_AUTHORITATIVE")
+                .action(clap::ArgAction::SetTrue)
+                .help("C-01 S9: seed the EVM executor from the flat/reconstruct parent state (the cutover seed) instead of the per-block 206 snapshot, after validating it byte-identical to 206 each block (HALTS on divergence; 206 is still written, so it is reversible). Requires --evm-shadow-state-backend. Node-local, consensus-neutral; off by default. Effective only in an --features evm build."),
         )
         .arg(
             Arg::new("rpclisten-borsh")
@@ -586,6 +600,7 @@ impl Args {
                 .and_then(|s| EvmHistoryMode::from_str_opt(s))
                 .unwrap_or(defaults.evm_history_mode),
             evm_shadow_state_backend: arg_match_unwrap_or::<bool>(&m, "evm-shadow-state-backend", defaults.evm_shadow_state_backend),
+            evm_flat_authoritative: arg_match_unwrap_or::<bool>(&m, "evm-flat-authoritative", defaults.evm_flat_authoritative),
             rpclisten_borsh: m.get_one::<WrpcNetAddress>("rpclisten-borsh").cloned().or(defaults.rpclisten_borsh),
             rpclisten_json: m.get_one::<WrpcNetAddress>("rpclisten-json").cloned().or(defaults.rpclisten_json),
             unsafe_rpc: arg_match_unwrap_or::<bool>(&m, "unsaferpc", defaults.unsafe_rpc),

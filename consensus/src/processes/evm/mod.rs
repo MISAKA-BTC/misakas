@@ -1730,7 +1730,7 @@ mod driver {
 }
 
 #[cfg(feature = "evm")]
-pub use driver::{evm_execute_acceptance, evm_validate, evm_validate_and_persist, EvmValidateError};
+pub use driver::{evm_execute_acceptance, evm_validate, evm_validate_and_persist, evm_validate_chained, EvmValidateError};
 
 // ---------------------------------------------------------------------------
 // C-01 state-backend (design v0.1, Stage 1, slice S6) — the executor's PARENT
