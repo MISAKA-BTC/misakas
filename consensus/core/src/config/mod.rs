@@ -96,6 +96,22 @@ pub struct Config {
     /// executor uses it (HALT on divergence — never a false disqualification), and 206 is still
     /// written, so toggling this is consensus-neutral and reversible.
     pub evm_flat_authoritative: bool,
+
+    /// kaspa-pq C-01 (slice S9b): STOP persisting the per-block 206 state snapshot. The flat backend
+    /// — validated against the executor's in-memory post-state every block by the S4 write-side check
+    /// (no dependency on 206) — becomes the sole persisted post-state; the executor seeds from it (S9)
+    /// and reads (RPC / IBD pruning-point export) fall back to flat-materialize / §12-reconstruct.
+    /// Effective only together with `evm_flat_authoritative`. `false` by default and on every current
+    /// network. Node-local; toggling it changes only what THIS node persists/serves, never a
+    /// commitment, so it is consensus-neutral. Requires `recent`/`archive` history (not `head`, which
+    /// keeps no §12 history for the pruning-point export). REVERSIBILITY: to turn it back off, keep
+    /// `evm_flat_authoritative` ON across the revert — blocks committed while retired have no 206, so
+    /// the executor still seeds them from the flat store (their flat seed is reconstructed +
+    /// root-validated). Disabling BOTH flags at once while retire-committed blocks are still unpruned
+    /// would leave those parents with neither a 206 snapshot nor a flat seed (the verifier HALTs rather
+    /// than fork); wait until the chain has advanced past them (they get pruned) before disabling
+    /// `evm_flat_authoritative`.
+    pub evm_retire_206: bool,
 }
 
 impl Config {
@@ -127,6 +143,7 @@ impl Config {
             evm_history_mode: crate::evm::EvmHistoryMode::Recent,
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,
+            evm_retire_206: false,
         }
     }
 

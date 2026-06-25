@@ -282,6 +282,7 @@ impl Consensus {
             config.evm_history_mode, // §12: gate the archive diff/checkpoint writer
             config.evm_shadow_state_backend, // C-01 S4: node-local shadow dual-write + differential
             config.evm_flat_authoritative, // C-01 S9: flat-authoritative executor seed
+            config.evm_retire_206, // C-01 S9b: stop persisting the per-block 206 snapshot
         ));
 
         let pruning_processor = Arc::new(PruningProcessor::new(
@@ -1517,7 +1518,24 @@ impl ConsensusApi for Consensus {
 
     fn get_evm_state_snapshot_of(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmStateSnapshot>> {
         use crate::model::stores::evm::EvmStateStoreReader;
-        Ok(self.storage.evm_state_store.get(block).optional().unwrap())
+        // Hot path: the per-block 206 snapshot (present on every node that persists it — the default).
+        if let Some(snapshot) = self.storage.evm_state_store.get(block).optional().unwrap() {
+            return Ok(Some(snapshot));
+        }
+        // C-01 S9b: 206 was retired (--evm-retire-206) or this block was committed while retired. Serve
+        // the state from the flat backend instead — materialize it directly when `block` is the flat
+        // canonical head (exact, O(state)), else §12-reconstruct (root-verified). This keeps eth_call /
+        // trace / account reads working without the 206 store. Read-path only; behavior-preserving when
+        // 206 is present (returned above) and on inert/non-EVM nets (no flat head ⇒ reconstruct ⇒ None).
+        #[cfg(feature = "evm")]
+        if let Ok(Some(ptr)) = self.storage.evm_latest_state_ptr_store.read().get()
+            && ptr.canonical_head == block
+        {
+            let snap = crate::processes::evm::materialize_snapshot(&self.storage.evm_flat_account_store, &self.storage.evm_code_store)
+                .map_err(|e| kaspa_consensus_core::errors::consensus::ConsensusError::GeneralOwned(e.to_string()))?;
+            return Ok(Some(snap));
+        }
+        self.reconstruct_evm_state_at(block)
     }
 
     fn get_evm_trace_replay_body(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmTraceReplayBodyV1>> {

@@ -239,6 +239,12 @@ pub struct VirtualStateProcessor {
     // seed is asserted byte-identical to 206 BEFORE use (HALT on divergence), and 206 is still
     // written — consensus-neutral + reversible. `false` on every current network and by default.
     pub(super) evm_flat_authoritative: bool,
+    // C-01 slice S9b: when set (together with `evm_flat_authoritative`), STOP persisting the per-block
+    // 206 snapshot. The flat backend — already checked == the executor's in-memory post-state every
+    // block by the S4 write-side differential — is the sole persisted post-state; the O12 pipeline is
+    // disabled (its gap items 206-seed) and reads fall back to flat-materialize / §12-reconstruct.
+    // Node-local, consensus-neutral. `false` on every current network and by default.
+    pub(super) evm_retire_206: bool,
     // §12: this node's EVM state-history retention mode (`--evm-history-mode`). In
     // `head` mode the per-block archive diff/checkpoint (220/221) are not written at
     // all; `recent`/`archive` write them (the pruning processor decides how long
@@ -324,12 +330,30 @@ impl VirtualStateProcessor {
         evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
         evm_shadow_state_backend: bool,
         evm_flat_authoritative: bool,
+        evm_retire_206: bool,
     ) -> Self {
         // C-01 S9: flat-authoritative seeding needs the shadow backend (which maintains + validates
         // the flat store); without it the flag is a silent no-op (the executor keeps seeding from
         // 206). Warn so the prerequisite isn't missed during a cutover rollout. Fail-safe either way.
         if evm_flat_authoritative && !evm_shadow_state_backend {
             warn!("[C-01] --evm-flat-authoritative is set WITHOUT --evm-shadow-state-backend; it is a no-op (the EVM executor keeps seeding from the 206 snapshot). Enable --evm-shadow-state-backend to use the flat-authoritative seed.");
+        }
+        // C-01 S9b: retiring the 206 persist requires the flat-authoritative seed (so the executor no
+        // longer reads 206). Without it, dropping 206 would leave the executor's selected-parent read
+        // (and the O12 pipeline) with no seed → a stall. Demote to a no-op + warn rather than enable a
+        // half-configured retirement: keep writing 206 so the node stays correct.
+        let evm_retire_206 = if evm_retire_206 && !(evm_flat_authoritative && evm_shadow_state_backend) {
+            warn!("[C-01] --evm-retire-206 is set WITHOUT --evm-flat-authoritative (+ --evm-shadow-state-backend); it is a no-op (the per-block 206 snapshot keeps being written). Enable the flat-authoritative seed first.");
+            false
+        } else {
+            evm_retire_206
+        };
+        // C-01 S9b: `head` history keeps no §12 diff/checkpoint, so a retired-206 node cannot serve the
+        // IBD pruning-point snapshot to peers nor answer historical state RPC (both fall back to
+        // §12-reconstruct). Block validation is unaffected (it seeds from the flat HEAD), so this is a
+        // loud warning, not a demotion — an operator may knowingly run a non-serving retired node.
+        if evm_retire_206 && !evm_history_mode.writes_state_history() {
+            warn!("[C-01] --evm-retire-206 with --evm-history-mode=head: the IBD pruning-point export and historical state RPC will be UNAVAILABLE on this node (no §12 history to reconstruct 206 from). Use recent/archive history if this node serves IBD or state queries.");
         }
         Self {
             receiver,
@@ -375,6 +399,7 @@ impl VirtualStateProcessor {
             evm_latest_state_ptr_store: storage.evm_latest_state_ptr_store.clone(),
             evm_shadow_state_backend,
             evm_flat_authoritative,
+            evm_retire_206,
             evm_history_mode,
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
@@ -765,7 +790,7 @@ impl VirtualStateProcessor {
         selected_parent_utxo_view: &V,
         pipeline: Option<&crate::processes::evm::EvmPipeline>,
     ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
-        use crate::model::stores::evm::EvmPayloadStoreReader;
+        use crate::model::stores::evm::EvmPayloadStoreReader; // EvmHeaderStoreReader is in module scope
         use crate::processes::evm::{apply_evm_bridge_effects, evm_validate, evm_validate_chained, validate_evm_deposit_claims, EvmValidateError};
         if header.daa_score < self.evm_activation_daa_score {
             return Ok(None);
@@ -838,7 +863,37 @@ impl VirtualStateProcessor {
                         )
                         .map_err(map_err)?
                     }
-                    None => evm_validate(
+                    None => {
+                        // C-01 S9b: with 206 retired there is NO 206 fallback for an EVM-ACTIVE
+                        // parent — the `evm_validate` (206) path below would read an absent snapshot
+                        // and disqualify a VALID block (a fork). A flat backend that cannot yield an
+                        // EVM-active parent's seed is a NODE fault, not a chain fault: HALT (design §7),
+                        // never disqualify. A header-store read error is treated the same way (we cannot
+                        // prove the parent is pre-activation, so we must not risk the 206 path) — a
+                        // swallowed error here (`unwrap_or(false)`) would let an EVM-active parent fall
+                        // through and false-disqualify. A PRE-ACTIVATION parent (no EVM header) needs no
+                        // 206 — `evm_validate` seeds the empty genesis parent — so it stays correct.
+                        // (The Unavailable-seed case for an EVM-active parent — e.g. a non-head parent
+                        // whose §12 history is unreconstructable — also HALTs here; that is the safe
+                        // fail-stop, never a fork. It should not arise in recent/archive mode, where
+                        // §12 is retained for every unpruned block; if it recurs, retention is
+                        // insufficient for the reorg depth — use archive — or the flat backend is faulty.)
+                        if self.evm_retire_206 {
+                            match self.evm_header_store.has(selected_parent) {
+                                Ok(false) => {} // pre-activation: the 206 path seeds the empty parent (no 206 read)
+                                Ok(true) => panic!(
+                                    "C-01 S9b: --evm-retire-206 is on but no flat/reconstruct seed could be obtained for EVM-active \
+                                     selected parent {selected_parent} (the 206 snapshot is retired). HALTING this node — chain integrity \
+                                     is intact; restore the flat backend (or use --evm-history-mode=archive), or disable --evm-retire-206."
+                                ),
+                                Err(e) => panic!(
+                                    "C-01 S9b: --evm-retire-206 is on and the EVM header store could not be read for selected parent \
+                                     {selected_parent} ({e}); cannot prove it is pre-activation, and there is no 206 fallback. HALTING \
+                                     this node (chain integrity intact) rather than risk false-disqualifying a valid block."
+                                ),
+                            }
+                        }
+                        evm_validate(
                         &self.evm_header_store,
                         &self.evm_state_store,
                         &self.evm_payload_store,
@@ -852,7 +907,8 @@ impl VirtualStateProcessor {
                         self.evm_f003_mldsa_verify_activation_daa_score,
                         self.evm_typed_receipt_root_activation_daa_score,
                     )
-                    .map_err(map_err)?,
+                    .map_err(map_err)?
+                    }
                 }
             }
         };
@@ -895,36 +951,48 @@ impl VirtualStateProcessor {
         Ok(Some(staged))
     }
 
-    /// C-01 (slice S6/S9) — compute the flat/reconstruct PARENT seed for
-    /// `selected_parent` and assert it is byte-identical to the authoritative
-    /// per-block 206 snapshot. This is the single place the flat backend is checked
-    /// against the committed state. The snapshot is materialized from the flat store
-    /// when `selected_parent` is the canonical head, else §12-reconstructed (root-
-    /// verified).
+    /// C-01 (slice S6/S9/S9b) — compute the flat/reconstruct PARENT seed for
+    /// `selected_parent` and validate it against the committed state before the
+    /// executor uses it. The snapshot is materialized from the flat store when
+    /// `selected_parent` is the canonical head, else §12-reconstructed (root-verified).
     ///
-    /// HALTS the node (design §7) on a DEFINITIVE divergence — the flat/reconstruct
-    /// snapshot differs from 206, or a §12 reconstruction is corrupt — because
-    /// feeding the executor a wrong parent state would falsely disqualify valid
-    /// blocks. It NEVER returns an unvalidated seed and NEVER disqualifies.
+    /// Validation has two equivalent modes, chosen by whether the 206 snapshot is
+    /// PRESENT (it is until slice S9b's `--evm-retire-206` stops persisting it):
+    ///   - **206 present** (S6/S9): assert the flat/reconstruct seed is BYTE-IDENTICAL
+    ///     to 206. This is belt-and-suspenders on top of the S4 write-side check.
+    ///   - **206 absent** (S9b retired, or a parent committed while retired): there is
+    ///     nothing to byte-compare against, so anchor to the consensus-committed root —
+    ///     a FlatHead seed's flat pointer `state_root` must equal `parent_header.state_root`;
+    ///     a Reconstructed seed is ALREADY keccak-MPT root-verified against it inside
+    ///     `flat_or_reconstruct_parent_snapshot`. Either way the flat CONTENTS were
+    ///     already proven == the executor's in-memory post-state when the parent was
+    ///     committed (the S4 `shadow_dual_write_flat` differential, which never read 206),
+    ///     so the per-block oracle is intact — retiring 206 drops only the redundant copy.
     ///
-    /// Returns `Some((parent_header, snapshot))` when the seed exists, is EVM-active,
-    /// and equals 206 — the S9 flat-authoritative path may seed the executor from it
-    /// (consensus-neutral: it equals what 206 would give). Returns `None` when the
-    /// parent is pre-activation (no EVM header ⇒ the executor's own store path yields
-    /// the empty genesis parent) OR the seed is Unavailable (transient store I/O, or
-    /// a non-head parent's §12 history GC'd past retention) — the caller falls back
-    /// to the 206 store path. Node-local; only meaningful when the shadow backend is on.
+    /// HALTS the node (design §7) on a DEFINITIVE divergence — the seed differs from a
+    /// present 206, a flat-head pointer root disagrees with the committed parent root, or
+    /// a §12 reconstruction is corrupt — because feeding the executor a wrong parent state
+    /// would falsely disqualify valid blocks. It NEVER returns an unvalidated seed and
+    /// NEVER disqualifies.
+    ///
+    /// Returns `Some((parent_header, snapshot))` for a validated EVM-active parent seed.
+    /// Returns `None` when the parent is pre-activation (no EVM header ⇒ the executor's
+    /// own store path yields the empty genesis parent) OR the seed is Unavailable
+    /// (transient store I/O, or a non-head parent's §12 history GC'd past retention).
+    /// In retire-206 mode the caller turns a `None` for an EVM-ACTIVE parent into a HALT
+    /// (no 206 fallback); otherwise it falls back to the 206 store path. Node-local; only
+    /// meaningful when the shadow backend is on.
     #[cfg(feature = "evm")]
     fn validated_flat_parent_seed(
         &self,
         selected_parent: BlockHash,
     ) -> Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateStoreReader};
-        use crate::processes::evm::{flat_or_reconstruct_parent_snapshot, ParentSeedError};
+        use crate::processes::evm::{flat_or_reconstruct_parent_snapshot, ParentSeedError, ParentSeedSource};
 
-        // An EVM-active parent always persists its header AND its 206 snapshot together;
-        // a parent with no EVM header is pre-activation (empty genesis state) — nothing to
-        // validate, and the executor's store path supplies the empty parent, so return None.
+        // An EVM-active parent always persists its header; a parent with no EVM header is
+        // pre-activation (empty genesis state) — nothing to validate, and the executor's
+        // store path supplies the empty parent, so return None.
         let parent_header = match self.evm_header_store.get(selected_parent) {
             Ok(h) => h,
             Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => return None,
@@ -933,8 +1001,12 @@ impl VirtualStateProcessor {
                 return None;
             }
         };
+        // The 206 snapshot — the byte-compare oracle WHEN PRESENT. `KeyNotFound` is not an
+        // error here: it means 206 was retired (S9b) or this parent was committed while
+        // retired. We then validate the seed against the committed root instead (below).
         let snapshot_206 = match self.evm_state_store.get(selected_parent) {
-            Ok(s) => s,
+            Ok(s) => Some(s),
+            Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => None,
             Err(e) => {
                 warn!("[evm-shadow-seed] 206 read failed for {selected_parent}: {e}; falling back to 206");
                 return None;
@@ -942,9 +1014,10 @@ impl VirtualStateProcessor {
         };
         // Surface a flat-pointer read failure as a fallback — never silently treat it
         // as "no head" (None), which would misroute the canonical head into the
-        // reconstruct path and hide the store error.
-        let flat_head = match self.evm_latest_state_ptr_store.read().get() {
-            Ok(opt) => opt.map(|p| p.canonical_head),
+        // reconstruct path and hide the store error. Carry the pointer's committed
+        // `state_root` for the 206-absent FlatHead anchor check.
+        let (flat_head, flat_head_root) = match self.evm_latest_state_ptr_store.read().get() {
+            Ok(opt) => (opt.map(|p| p.canonical_head), opt.map(|p| p.state_root)),
             Err(e) => {
                 warn!("[evm-shadow-seed] flat pointer read failed for {selected_parent}: {e}; falling back to 206");
                 return None;
@@ -961,20 +1034,41 @@ impl VirtualStateProcessor {
             &self.evm_state_diff_store,
         ) {
             Ok((snapshot_flat, source)) => {
-                if snapshot_flat != snapshot_206 {
-                    panic!(
-                        "C-01 shadow seed DIVERGENCE: the {source:?} parent seed for {selected_parent} ({} accounts) does not match \
-                         the committed 206 snapshot ({} accounts). The flat/reconstruct seed source would feed the executor a wrong parent \
-                         state and FALSELY disqualify valid blocks — HALTING this node. 206 stays authoritative (chain integrity intact); \
-                         fix the backend and re-shadow.",
-                        snapshot_flat.accounts.len(),
-                        snapshot_206.accounts.len()
-                    );
+                match &snapshot_206 {
+                    // 206 present (S6/S9): the seed must be byte-identical to it.
+                    Some(s206) => {
+                        if &snapshot_flat != s206 {
+                            panic!(
+                                "C-01 shadow seed DIVERGENCE: the {source:?} parent seed for {selected_parent} ({} accounts) does not match \
+                                 the committed 206 snapshot ({} accounts). The flat/reconstruct seed source would feed the executor a wrong parent \
+                                 state and FALSELY disqualify valid blocks — HALTING this node. 206 stays authoritative (chain integrity intact); \
+                                 fix the backend and re-shadow.",
+                                snapshot_flat.accounts.len(),
+                                s206.accounts.len()
+                            );
+                        }
+                    }
+                    // 206 absent (S9b retired): anchor to the consensus-committed root. A
+                    // Reconstructed seed is already root-verified inside the helper; a FlatHead
+                    // seed's pointer root must equal the committed parent root (guards a stale/
+                    // wrong pointer — the flat CONTENTS were already proven == the executor's
+                    // post-state at the parent's commit by the S4 write-side differential).
+                    None => {
+                        if source == ParentSeedSource::FlatHead && flat_head_root != Some(parent_header.state_root) {
+                            panic!(
+                                "C-01 S9b retired-206 seed DIVERGENCE: the flat head pointer root ({flat_head_root:?}) for {selected_parent} \
+                                 does not equal the committed parent state_root ({:?}). The flat pointer is stale/wrong and would seed the \
+                                 executor from the wrong head — HALTING this node (chain integrity intact); restore the flat backend.",
+                                parent_header.state_root
+                            );
+                        }
+                    }
                 }
                 Some((parent_header, snapshot_flat))
             }
             // Could not READ the data to validate (transient store I/O, or a non-head
-            // parent's §12 history GC'd past retention): NOT a divergence — fall back to 206.
+            // parent's §12 history GC'd past retention): NOT a divergence — the caller
+            // falls back to 206 (S9) or HALTs for an EVM-active parent (S9b retired).
             Err(ParentSeedError::Unavailable(m)) => {
                 debug!("[evm-shadow-seed] seed unavailable for {selected_parent}: {m}; falling back to 206");
                 None
@@ -1029,6 +1123,13 @@ impl VirtualStateProcessor {
         use crate::processes::evm::{EvmPipeline, EvmPipelineItem};
         const MIN_PIPELINE_RUN: usize = 8;
         if self.evm_activation_daa_score == u64::MAX {
+            return None;
+        }
+        // C-01 S9b: the pipeline worker seeds a run's FIRST/gap item from the 206 store (its other
+        // items chain in-memory). With 206 retired there is no such seed, so disable the pipeline
+        // and let the inline path (which seeds every block from the validated flat store) handle the
+        // run. Pure perf/throughput trade — correctness is identical either way (I-3 invariant).
+        if self.evm_retire_206 {
             return None;
         }
         let statuses = self.statuses_store.read();
@@ -1154,7 +1255,7 @@ impl VirtualStateProcessor {
         (Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<(kaspa_consensus_core::tx::TransactionOutpoint, EvmClaimStaleKind)>),
         RuleError,
     > {
-        use crate::processes::evm::evm_execute_acceptance;
+        use crate::processes::evm::{evm_execute_acceptance, evm_execute_acceptance_with_parent}; // EvmHeaderStoreReader in module scope
         if header.daa_score < self.evm_activation_daa_score {
             return Ok((header, Default::default(), vec![]));
         }
@@ -1229,22 +1330,78 @@ impl VirtualStateProcessor {
         };
         let sorted_mergeset: Vec<BlockHash> =
             virtual_state.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
-        let (result, _snapshot, _candidate_meta, _trace_body, _parent_snapshot) = evm_execute_acceptance(
-            &self.evm_header_store,
-            &self.evm_state_store,
-            &self.evm_payload_store,
-            virtual_state.ghostdag_data.selected_parent,
-            &sorted_mergeset,
-            &header,
-            &own_payload,
-            self.evm_gas_pool_v2_activation_daa_score,
-            self.evm_f002_withdraw_cap_activation_daa_score,
-            self.evm_f003_mldsa_verify_activation_daa_score,
-            self.evm_typed_receipt_root_activation_daa_score,
-        )
-        // audit R2-#4: a producer-side acceptance failure (e.g. a local EVM
-        // store-integrity error) is a template-build failure, not a panic.
-        .map_err(|e| RuleError::EvmTemplateExecutionFailed(format!("{e:?}")))?;
+        let selected_parent = virtual_state.ghostdag_data.selected_parent;
+        // C-01 S9/S9b: the producer must seed the SAME parent state the verifier later seeds from
+        // (so the mined block reproduces evm_commitment_root). When flat-authoritative, seed from the
+        // validated flat/reconstruct parent (HALT on divergence, inside `validated_flat_parent_seed`),
+        // exactly like the inline verifier — otherwise the 206 store path. With 206 retired there is no
+        // 206 to read for an EVM-active parent, so a missing flat seed fails the template build (a
+        // transient producer failure — never a panic / never a wrong commitment), not a 206 read error.
+        let parent_override = (self.evm_flat_authoritative && self.evm_shadow_state_backend)
+            .then(|| self.validated_flat_parent_seed(selected_parent))
+            .flatten();
+        let mapper = |e| RuleError::EvmTemplateExecutionFailed(format!("{e:?}"));
+        let result = match parent_override {
+            Some(seed) => {
+                evm_execute_acceptance_with_parent(
+                    &self.evm_header_store,
+                    &self.evm_state_store,
+                    &self.evm_payload_store,
+                    selected_parent,
+                    &sorted_mergeset,
+                    &header,
+                    &own_payload,
+                    Some(seed),
+                    self.evm_gas_pool_v2_activation_daa_score,
+                    self.evm_f002_withdraw_cap_activation_daa_score,
+                    self.evm_f003_mldsa_verify_activation_daa_score,
+                    self.evm_typed_receipt_root_activation_daa_score,
+                )
+                .map_err(mapper)?
+                .0
+            }
+            None => {
+                // C-01 S9b: with 206 retired there is no 206 seed for an EVM-active parent. Unlike the
+                // verifier (which HALTs to avoid a fork), a PRODUCER failure must never crash the node —
+                // fail THIS template build and let the miner retry. A header-store read error is treated
+                // the same (we cannot prove pre-activation, and `unwrap_or(false)` would wrongly let an
+                // EVM-active parent fall through to the absent-206 path). Pre-activation (Ok(false)) needs
+                // no 206 and proceeds via `evm_execute_acceptance` (empty parent).
+                if self.evm_retire_206 {
+                    match self.evm_header_store.has(selected_parent) {
+                        Ok(false) => {} // pre-activation: empty parent, no 206 read
+                        Ok(true) => {
+                            return Err(RuleError::EvmTemplateExecutionFailed(format!(
+                                "--evm-retire-206: no flat/reconstruct seed for EVM-active selected parent {selected_parent} (206 retired); \
+                                 cannot build a template this round — retrying"
+                            )))
+                        }
+                        Err(e) => {
+                            return Err(RuleError::EvmTemplateExecutionFailed(format!(
+                                "--evm-retire-206: EVM header store read failed for selected parent {selected_parent} ({e}); cannot build a template this round"
+                            )))
+                        }
+                    }
+                }
+                // audit R2-#4: a producer-side acceptance failure (e.g. a local EVM
+                // store-integrity error) is a template-build failure, not a panic.
+                evm_execute_acceptance(
+                    &self.evm_header_store,
+                    &self.evm_state_store,
+                    &self.evm_payload_store,
+                    selected_parent,
+                    &sorted_mergeset,
+                    &header,
+                    &own_payload,
+                    self.evm_gas_pool_v2_activation_daa_score,
+                    self.evm_f002_withdraw_cap_activation_daa_score,
+                    self.evm_f003_mldsa_verify_activation_daa_score,
+                    self.evm_typed_receipt_root_activation_daa_score,
+                )
+                .map_err(mapper)?
+                .0
+            }
+        };
         let mut header = header.with_evm_payload_hash(own_payload.payload_hash()).with_evm_commitment(result.header.commitment_root());
         // §9: the validator folds the bridge's UTXO side-effects (consumed
         // deposit locks + materialized withdrawals) into THIS block's diff and
@@ -1385,7 +1542,18 @@ impl VirtualStateProcessor {
                     Err(e) => panic!("{e}"),
                 }
             }
-            self.evm_state_store.insert_batch(&mut batch, current, staged.snapshot).unwrap();
+            // C-01 S9b: persist the per-block 206 snapshot UNLESS it is retired. The flat backend
+            // (advanced + checked against `staged.snapshot` by the shadow dual-write just above) is
+            // then the sole persisted post-state; the executor seeds from it (S9) and reads fall back
+            // to flat-materialize / §12-reconstruct. `evm_retire_206` is only ever true together with
+            // the shadow backend (the demotion in `new`), so the flat store IS maintained here before
+            // the snapshot is dropped — the next block's seed reads a current flat head. Skipping the
+            // write changes only what THIS node persists, never a commitment: consensus-neutral.
+            if self.evm_retire_206 {
+                drop(staged.snapshot);
+            } else {
+                self.evm_state_store.insert_batch(&mut batch, current, staged.snapshot).unwrap();
+            }
             // §16 eth-rpc: map the 32-byte eth block id (first 32 bytes of the
             // 64-byte L1 hash — the truncation `eth_getTransactionReceipt`
             // already exposes as `blockHash`) → this L1 block, so
@@ -3262,9 +3430,63 @@ impl VirtualStateProcessor {
         &self,
         pruning_point: BlockHash,
     ) -> Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)> {
+        // EvmHeaderStoreReader / EvmStateStoreReader are in module scope.
         let header = self.evm_header_store.get(pruning_point).ok()?;
-        let snapshot = self.evm_state_store.get(pruning_point).ok()?;
-        Some((header, snapshot))
+        // Hot path: the persisted 206[pp] snapshot.
+        match self.evm_state_store.get(pruning_point) {
+            Ok(snapshot) => return Some((header, snapshot)),
+            Err(StoreError::KeyNotFound(_)) => {} // retired (S9b) ⇒ serve from the flat backend below
+            Err(e) => {
+                warn!("[evm] pruning-point 206 read failed for {pruning_point}: {e}");
+                return None;
+            }
+        }
+        // C-01 S9b: 206[pp] retired. Serve the pruning-point state from the flat backend so peers can
+        // still IBD from this node — materialize it when the pp IS the flat head (a freshly pruned-IBD
+        // -imported node pins the flat pointer to the pp), else §12-reconstruct (a full-sync serving
+        // node whose head is far ahead of the buried pp; needs recent/archive history — `head` keeps
+        // none, hence the startup warning). `None` if neither yields it (the peer tries another server).
+        #[cfg(feature = "evm")]
+        {
+            use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
+            if let Ok(Some(ptr)) = self.evm_latest_state_ptr_store.read().get()
+                && ptr.canonical_head == pruning_point
+            {
+                return match crate::processes::evm::materialize_snapshot(&self.evm_flat_account_store, &self.evm_code_store) {
+                    Ok(snapshot) => Some((header, snapshot)),
+                    Err(e) => {
+                        warn!("[evm] pruning-point flat materialize failed for {pruning_point}: {e}");
+                        None
+                    }
+                };
+            }
+            let (seed, forward_diffs) = match crate::processes::evm::gather_reconstruction_inputs(
+                pruning_point,
+                |b| self.evm_state_checkpoint_store.get(b),
+                |b| self.evm_state_diff_store.get(b),
+                |b| self.evm_header_store.get(b).optional().unwrap().is_some(),
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("[evm] pruning-point §12 reconstruct gather failed for {pruning_point}: {e}");
+                    return None;
+                }
+            };
+            match kaspa_evm::reconstruct::reconstruct_evm_state(
+                &seed,
+                &forward_diffs,
+                |h| self.evm_code_store.get(*h).ok().flatten(),
+                header.state_root,
+            ) {
+                Ok(snapshot) => Some((header, snapshot)),
+                Err(e) => {
+                    warn!("[evm] pruning-point §12 reconstruct failed for {pruning_point}: {e}");
+                    None
+                }
+            }
+        }
+        #[cfg(not(feature = "evm"))]
+        None
     }
 
     /// kaspa-pq ADR-0022: import the pruning point's DNS/PoS-v2 overlay snapshot during

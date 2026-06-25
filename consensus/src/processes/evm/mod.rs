@@ -1527,7 +1527,7 @@ mod driver {
     /// so the result is identical — the pipeline only changes WHERE the parent
     /// bytes come from, never their value).
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-    pub(super) fn evm_execute_acceptance_with_parent(
+    pub fn evm_execute_acceptance_with_parent(
         header_store: &DbEvmHeaderStore,
         state_store: &DbEvmStateStore,
         payload_store: &DbEvmPayloadStore,
@@ -1730,7 +1730,9 @@ mod driver {
 }
 
 #[cfg(feature = "evm")]
-pub use driver::{evm_execute_acceptance, evm_validate, evm_validate_and_persist, evm_validate_chained, EvmValidateError};
+pub use driver::{
+    evm_execute_acceptance, evm_execute_acceptance_with_parent, evm_validate, evm_validate_and_persist, evm_validate_chained, EvmValidateError,
+};
 
 // ---------------------------------------------------------------------------
 // C-01 state-backend (design v0.1, Stage 1, slice S6) — the executor's PARENT
@@ -1972,6 +1974,37 @@ mod s6_seed_tests {
         let (got_pre, src_pre) = seed(pre, None).unwrap();
         assert_eq!(src_pre, ParentSeedSource::PreActivation);
         assert_eq!(got_pre, EvmStateSnapshot::default(), "pre-activation parent is empty");
+    }
+
+    /// C-01 S9b: with 206 retired, the executor seeds the head parent from the flat-materialized
+    /// snapshot, validated against the committed root (NOT against 206). This locks in the property
+    /// the retire-206 FlatHead check anchors to: `materialize_snapshot(flat_head)` both reproduces
+    /// the committed snapshot bytes AND keccak-MPT-hashes to the committed header `state_root` — so
+    /// seeding from flat is byte-equivalent to seeding from the (now-absent) 206 snapshot.
+    #[test]
+    fn flat_head_seed_reproduces_committed_root_without_206() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
+        let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
+
+        // A committed head state s_h, its committed keccak-MPT root, and the flat store built by
+        // applying s_h's §12 diff over the empty genesis (exactly the shadow dual-write head path).
+        let (genesis, block_h) = (h(0), h(0x11));
+        let s_h = eoa_snap(&[(0x01, 7, 4242), (0x05, 1, 9), (0x09, 0, 1_000_000)]);
+        let committed_root = root_of(&s_h);
+
+        let mut batch = WriteBatch::default();
+        super::apply_diff_to_flat(&flat, &mut batch, &compute_state_diff(&EvmStateSnapshot::default(), &s_h, block_h, genesis)).unwrap();
+        db.write(batch).unwrap();
+
+        // The retire-206 seed = materialize the flat store directly (no 206 read).
+        let seed = super::materialize_snapshot(&flat, &code).unwrap();
+        assert_eq!(seed, s_h, "flat-materialized head seed must equal the committed snapshot (206-free)");
+        assert_eq!(
+            root_of(&seed),
+            committed_root,
+            "the flat-materialized head seed must keccak-MPT-hash to the committed header state_root"
+        );
     }
 
     /// A non-head parent whose §12 diff was GC'd surfaces as `Unavailable` (the
