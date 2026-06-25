@@ -1316,6 +1316,24 @@ impl MemSizeEstimator for EvmLatestStatePtr {
     }
 }
 
+/// C-01 Stage 1 (S7, audit H-03): the result of an O(1) flat point-lookup of one
+/// account at the canonical head, the fast path for `eth_getBalance` /
+/// `getTransactionCount` / `getCode` / `getStorageAt` that avoids materializing the
+/// whole state (the full-state RPC read H-03 flags).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FlatHeadAccount {
+    /// The flat store is NOT materialized at the current canonical head (the latest
+    /// pointer is absent or stale — e.g. the shadow state backend is disabled, or a
+    /// re-base is mid-flight, or a flat-store read hiccupped). The caller must fall
+    /// back to the authoritative full-snapshot path; the flat fast path is never
+    /// authoritative on its own.
+    Stale,
+    /// The flat store IS at the current head; the account at the queried address
+    /// (`None` = the account does not exist at head). Byte-identical to what the
+    /// authoritative snapshot path returns (the shadow differential guarantees it).
+    AtHead(Option<EvmAccountSnapshot>),
+}
+
 /// A full EVM account-state snapshot after a block (design §11.1). P3 stores one
 /// per block hash to seed the executor for the block's selected children; a later
 /// phase replaces this O(state) form with an incremental persistent trie.

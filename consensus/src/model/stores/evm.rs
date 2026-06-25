@@ -852,6 +852,80 @@ mod tests {
         assert_eq!(flat.iter().count(), 2);
     }
 
+    /// C-01 Stage 1 (S7, audit H-03): the flat point-lookup → `EvmAccountSnapshot`
+    /// assembly that backs `get_evm_flat_account_at_head` — exercising the EOA
+    /// empty-code branch (no code-store read) and the contract branch (code resolved
+    /// by `code_hash` from the content-addressed store), plus the absent-account case.
+    #[test]
+    fn c01_flat_account_assembles_snapshot_with_code() {
+        use kaspa_consensus_core::evm::{AccountCore, EVM_EMPTY_CODE_HASH};
+
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
+        let codes = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
+
+        // The exact assembly `get_evm_flat_account_at_head` performs (sans the ptr==sink gate):
+        // flat row + code-by-hash (EOA ⇒ empty, no lookup) → snapshot.
+        let assemble = |addr: EvmAddress| -> Option<EvmAccountSnapshot> {
+            let flat_acct = flat.get(addr).unwrap()?;
+            let code = if flat_acct.core.code_hash == EVM_EMPTY_CODE_HASH {
+                Vec::new()
+            } else {
+                codes.get(flat_acct.core.code_hash).unwrap().unwrap_or_default()
+            };
+            Some(flat_acct.to_snapshot(addr, code))
+        };
+
+        let eoa = EvmAddress::from_bytes([0x11; 20]);
+        let contract = EvmAddress::from_bytes([0x22; 20]);
+        let code = vec![0x60u8, 0x80, 0x60, 0x40, 0x52]; // a few opcodes
+        let code_hash = EvmH256::from_bytes([0xcd; 32]); // content-addressed key (not recomputed here)
+
+        let eoa_flat = FlatAccount {
+            core: AccountCore { nonce: 7, balance: EvmU256::from_u128(1_000), code_hash: EVM_EMPTY_CODE_HASH },
+            storage: vec![],
+        };
+        let contract_flat = FlatAccount {
+            core: AccountCore { nonce: 1, balance: EvmU256::from_u128(0), code_hash },
+            storage: vec![(EvmU256::from_u128(3), EvmU256::from_u128(9))],
+        };
+
+        let mut b = WriteBatch::default();
+        flat.write_batch(&mut b, eoa, eoa_flat.clone()).unwrap();
+        flat.write_batch(&mut b, contract, contract_flat.clone()).unwrap();
+        codes.write_batch(&mut b, code_hash, code.clone()).unwrap();
+        db.write(b).unwrap();
+
+        // EOA: empty code, no storage; the code store is NOT consulted for KECCAK_EMPTY.
+        assert_eq!(
+            assemble(eoa),
+            Some(EvmAccountSnapshot {
+                address: eoa,
+                nonce: 7,
+                balance: EvmU256::from_u128(1_000),
+                code_hash: EVM_EMPTY_CODE_HASH,
+                code: vec![],
+                storage: vec![],
+            })
+        );
+        // Contract: code resolved by hash, storage carried through.
+        assert_eq!(
+            assemble(contract),
+            Some(EvmAccountSnapshot {
+                address: contract,
+                nonce: 1,
+                balance: EvmU256::from_u128(0),
+                code_hash,
+                code,
+                storage: vec![(EvmU256::from_u128(3), EvmU256::from_u128(9))],
+            })
+        );
+        // Absent account ⇒ None (the AtHead(None) case).
+        assert_eq!(assemble(EvmAddress::from_bytes([0x99; 20])), None);
+        // Round-trip: re-deriving the flat row from the assembled snapshot is lossless.
+        assert_eq!(FlatAccount::from_snapshot(&assemble(contract).unwrap()), contract_flat);
+    }
+
     #[test]
     fn evm_stores_roundtrip_and_no_replay_guard() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));

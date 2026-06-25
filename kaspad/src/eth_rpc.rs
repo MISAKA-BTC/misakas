@@ -203,17 +203,22 @@ impl EthProvider for NodeEthProvider {
     }
 
     async fn latest_account(&self, address: [u8; 20]) -> EthResult<Option<kaspa_consensus_core::evm::EvmAccountSnapshot>> {
+        use kaspa_consensus_core::evm::FlatHeadAccount;
         let session = self.consensus_manager.consensus().session().await;
-        // Read the canonical head's EVM state snapshot (spawn_blocking — RocksDB).
-        let snapshot = session
-            .spawn_blocking(|c| {
-                let sink = c.get_sink();
-                c.get_evm_state_snapshot_of(sink)
+        session
+            .spawn_blocking(move |c| -> EthResult<Option<kaspa_consensus_core::evm::EvmAccountSnapshot>> {
+                let target = kaspa_consensus_core::evm::EvmAddress::from_bytes(address);
+                // C-01 S7 (audit H-03): O(1) flat point-lookup at the head. Falls back to the
+                // authoritative full-snapshot scan when the flat store is not at the head
+                // (shadow backend off / mid-rebase). Both paths return the identical account.
+                if let Ok(FlatHeadAccount::AtHead(acct)) = c.get_evm_flat_account_at_head(target) {
+                    return Ok(acct);
+                }
+                let snapshot =
+                    c.get_evm_state_snapshot_of(c.get_sink()).map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+                Ok(snapshot.and_then(|s| s.accounts.into_iter().find(|a| a.address == target)))
             })
             .await
-            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
-        let target = kaspa_consensus_core::evm::EvmAddress::from_bytes(address);
-        Ok(snapshot.and_then(|s| s.accounts.into_iter().find(|a| a.address == target)))
     }
 
     async fn pending_nonce(&self, address: [u8; 20]) -> EthResult<u64> {
@@ -261,6 +266,14 @@ impl EthProvider for NodeEthProvider {
                 };
                 // Selector did not resolve to a known block (e.g. a future number) ⇒ no account.
                 let Some(l1) = l1 else { return Ok(None) };
+                // C-01 S7 (audit H-03): when the resolved block IS the canonical head, answer from
+                // the O(1) flat point-lookup instead of materializing the full state. `Stale` (flat
+                // store not at the head) falls through to the authoritative path below.
+                if l1 == c.get_sink()
+                    && let Ok(kaspa_consensus_core::evm::FlatHeadAccount::AtHead(acct)) = c.get_evm_flat_account_at_head(target)
+                {
+                    return Ok(acct);
+                }
                 // Hot path: the full snapshot is still in the reorg window (prefix 206).
                 // §12: past the window the snapshot is pruned but the state is
                 // reconstructable from the checkpoint/diff history — fall back to that.

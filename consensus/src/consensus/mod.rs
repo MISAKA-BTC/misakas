@@ -1584,6 +1584,46 @@ impl ConsensusApi for Consensus {
         }
     }
 
+    fn get_evm_flat_account_at_head(
+        &self,
+        address: kaspa_consensus_core::evm::EvmAddress,
+    ) -> ConsensusResult<kaspa_consensus_core::evm::FlatHeadAccount> {
+        use crate::model::stores::evm::EvmCodeStoreReader;
+        use kaspa_consensus_core::evm::{EVM_EMPTY_CODE_HASH, FlatHeadAccount};
+        // Trust the flat rows ONLY when the latest pointer (231) is the current sink:
+        // the shadow dual-write advances the flat rows + pointer atomically per commit
+        // (S4) and re-bases both together on reorg (S5), so `ptr.canonical_head == sink`
+        // ⇔ the flat rows materialize the head. An absent pointer (shadow backend never
+        // wrote it), a stale pointer (shadow disabled, or a re-base mid-flight), or any
+        // flat-store read hiccup ⇒ `Stale` ⇒ the caller falls back to the authoritative
+        // full-snapshot path. The flat fast path is never authoritative on its own.
+        let Ok(Some(ptr)) = self.storage.evm_latest_state_ptr_store.read().get() else {
+            return Ok(FlatHeadAccount::Stale);
+        };
+        if ptr.canonical_head != self.get_sink() {
+            return Ok(FlatHeadAccount::Stale);
+        }
+        let flat = match self.storage.evm_flat_account_store.get(address) {
+            Ok(Some(flat)) => flat,
+            // Flat store is at the head and has no row for this address ⇒ the account
+            // does not exist at head (authoritative for this query).
+            Ok(None) => return Ok(FlatHeadAccount::AtHead(None)),
+            Err(_) => return Ok(FlatHeadAccount::Stale),
+        };
+        // Resolve code via the content-addressed code store (222); an EOA's
+        // `KECCAK_EMPTY` needs no lookup. A referenced-but-missing code row ⇒ fall back
+        // (the authoritative snapshot inlines code) rather than report empty code.
+        let code = if flat.core.code_hash == EVM_EMPTY_CODE_HASH {
+            Vec::new()
+        } else {
+            match self.storage.evm_code_store.get(flat.core.code_hash) {
+                Ok(Some(code)) => code,
+                Ok(None) | Err(_) => return Ok(FlatHeadAccount::Stale),
+            }
+        };
+        Ok(FlatHeadAccount::AtHead(Some(flat.to_snapshot(address, code))))
+    }
+
     fn get_evm_block_by_l1_hash(&self, l1_hash: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmRawTxStoreReader, EvmReceiptsStoreReader};
         let Some(header) = self.storage.evm_header_store.get(l1_hash).optional().unwrap() else { return Ok(None) };

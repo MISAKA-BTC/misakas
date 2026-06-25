@@ -509,6 +509,19 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// kaspa-pq C-01 Stage 1 (S7, audit H-03): an O(1) flat point-lookup of one
+    /// account at the CURRENT canonical head. A point query (`eth_getBalance` etc.)
+    /// must not materialize the entire EVM state (H-03 = unbounded RPC full-state
+    /// reads); when the flat state backend is at the head this answers from a single
+    /// keyed row. Returns [`crate::evm::FlatHeadAccount::Stale`] when the flat store
+    /// is not at the head (shadow backend disabled / mid-rebase / read error), so the
+    /// caller transparently falls back to the authoritative full-snapshot path. Pure
+    /// store reads — no revm — so it is available (and simply `Stale`) on a non-evm
+    /// node. RPC read-only ⇒ consensus-neutral. Default = always `Stale`.
+    fn get_evm_flat_account_at_head(&self, _address: crate::evm::EvmAddress) -> ConsensusResult<crate::evm::FlatHeadAccount> {
+        Ok(crate::evm::FlatHeadAccount::Stale)
+    }
+
     /// kaspa-pq EVM Lane (§11): the network's three EVM-execution activation fences
     /// — `(evm_gas_pool_v2, evm_f002_withdraw_cap, evm_f003_mldsa_verify)` activation
     /// DAA scores. The trace replay MUST run the same gas-pool / withdraw-cap / F003
