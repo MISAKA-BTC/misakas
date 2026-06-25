@@ -766,6 +766,9 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // (EVM-active) and enforced-inert on simnet (EVM u64::MAX ⇒ identical splits even if a
     // lock output appears). NOT a genesis-block input.
     finality_fee_activation_daa_score: 0,
+    // kaspa-pq bond spend-gate mergeset hardening: inert (u64::MAX) — the legacy own-body
+    // spend-gate is the active protection; activation is a coordinated hard fork (see the field doc).
+    bond_spend_gate_mergeset_activation_daa_score: u64::MAX,
 };
 
 /// Number of blocks in 14 days at the production 10 BPS block rate
@@ -903,6 +906,9 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // alone cannot reroute fees there). NOT a genesis-block input; the classification change
     // rides the ADR-0007 Phase-3 re-genesis (BlockRewardData/VirtualState store-format change).
     finality_fee_activation_daa_score: 0,
+    // kaspa-pq bond spend-gate mergeset hardening: inert (u64::MAX) on mainnet+testnet — the legacy
+    // own-body spend-gate stays the active protection until a coordinated activation (see field doc).
+    bond_spend_gate_mergeset_activation_daa_score: u64::MAX,
 };
 
 /// kaspa-pq Phase 2 (ADR-0007): testnet DNS params = [`PRODUCTION_DNS_PARAMS`] with a lowered

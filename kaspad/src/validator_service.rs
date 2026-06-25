@@ -513,9 +513,19 @@ impl ValidatorService {
 
     /// List the UTXOs locked to `funding_spk` (the validator's own P2PKH-ML-DSA address). Prefers the
     /// address-indexed utxoindex lookup; falls back to a bounded virtual-UTXO-set scan when
-    /// `--utxoindex` is not enabled. Returns them UNFILTERED — fee/maturity/in-flight filtering and
-    /// the chain-head-vs-node choice are [`select_funding`]'s job.
+    /// `--utxoindex` is not enabled. Returns them filtered ONLY by our own bond outpoint (see below);
+    /// fee/maturity/in-flight filtering and the chain-head-vs-node choice are [`select_funding`]'s job.
+    ///
+    /// kaspa-pq (bond spend-gate hardening): EXCLUDE our own `bond_outpoint` from funding candidates.
+    /// A StakeBond's output-0 is a normal owner-controlled UTXO whose stake-lock is enforced solely by
+    /// the consensus bond spend-gate (ADR-0016 §D.2) — it is typically the LARGEST mature non-coinbase
+    /// UTXO at the funding address, so `select_funding` (which picks max-by-amount) would otherwise
+    /// select it. Building an attestation tx that spends a non-releasable bond gets the carrying block
+    /// disqualified (`NonReleasableBondSpendInBlock`), so the tx is mempool-accepted but never mines —
+    /// a validator self-wedge. The explicit unbond CLI path already excludes it
+    /// (kaspa-pq-validator/src/main.rs); this mirrors that onto the attestation funding path.
     async fn find_funding_candidates(&self, funding_spk: &ScriptPublicKey) -> Vec<(TransactionOutpoint, UtxoEntry)> {
+        let bond_outpoint = self.bond_outpoint;
         if let Some(utxoindex) = &self.utxoindex {
             // Address-indexed: O(matches) instead of O(utxo-set). The utxoindex stores a
             // compact entry (no spk — it's the lookup key), so rebuild the full UtxoEntry.
@@ -527,6 +537,7 @@ impl ValidatorService {
             return set
                 .into_values()
                 .flatten()
+                .filter(|(outpoint, _)| Some(*outpoint) != bond_outpoint)
                 .map(|(outpoint, c)| (outpoint, UtxoEntry::new(c.amount, funding_spk.clone(), c.block_daa_score, c.is_coinbase)))
                 .collect();
         }
@@ -540,7 +551,11 @@ impl ValidatorService {
                 break;
             }
             from = chunk.last().map(|(outpoint, _)| *outpoint);
-            candidates.extend(chunk.into_iter().filter(|(_, entry)| &entry.script_public_key == funding_spk));
+            candidates.extend(
+                chunk
+                    .into_iter()
+                    .filter(|(outpoint, entry)| &entry.script_public_key == funding_spk && Some(*outpoint) != bond_outpoint),
+            );
         }
         candidates
     }

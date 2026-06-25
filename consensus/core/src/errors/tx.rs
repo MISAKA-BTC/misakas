@@ -139,6 +139,16 @@ pub enum TxRuleError {
     /// "bridge deposit".
     #[error("transaction output #{0} is an unclaimable EVM deposit lock (claim_tip {1} > value {2})")]
     EvmDepositLockTipExceedsValue(usize, u64, u64),
+
+    /// kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): a transaction spends a known
+    /// non-releasable bond's locked output-0 ({0}). Above the
+    /// `bond_spend_gate_mergeset_activation_daa_score` fence the per-tx UTXO validation rejects such a
+    /// spend, so it is NOT accepted (skipped like any invalid mergeset tx — the carrying block stays
+    /// valid, the bond UTXO stays locked). This closes the merge-blue mergeset hole the legacy
+    /// own-body spend-gate (`bond_spend_gate`) cannot see. Inert below the fence (the per-tx check is
+    /// only wired when the fence is reached), so it never fires on a current network.
+    #[error("transaction input spends a non-releasable bond's locked output-0 (outpoint {0})")]
+    SpendsNonReleasableBond(TransactionOutpoint),
 }
 
 pub type TxResult<T> = std::result::Result<T, TxRuleError>;

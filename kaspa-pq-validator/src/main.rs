@@ -1215,7 +1215,16 @@ impl Attestor {
             _ => {
                 self.pending_change = None;
                 self.chain_head_txid = None;
-                select_funding_paged(client, &funding_addr, &self.inflight_spent, fee, virtual_daa, self.coinbase_maturity).await?
+                select_funding_paged(
+                    client,
+                    &funding_addr,
+                    &self.inflight_spent,
+                    self.bond_outpoint,
+                    fee,
+                    virtual_daa,
+                    self.coinbase_maturity,
+                )
+                .await?
             }
         };
 
@@ -1288,6 +1297,10 @@ async fn select_funding_paged(
     client: &KaspaRpcClient,
     funding_addr: &Address,
     inflight: &HashMap<TransactionOutpoint, TransactionId>,
+    // kaspa-pq bond spend-gate hardening: the validator's own bond output-0, excluded from funding
+    // candidates below. Its stake-lock is enforced solely by the consensus spend-gate, so spending it
+    // gets the carrying block disqualified (a self-wedge). Mirrors the unbond path's exclusion.
+    bond_outpoint: TransactionOutpoint,
     fee: u64,
     virtual_daa: u64,
     coinbase_maturity: u64,
@@ -1310,6 +1323,9 @@ async fn select_funding_paged(
         let mut seen_good = false;
         for e in page.entries {
             let op = TransactionOutpoint::from(e.outpoint);
+            if op == bond_outpoint {
+                continue; // never fund from our own locked bond output-0 (see signature note)
+            }
             let en = UtxoEntry::from(e.utxo_entry);
             if en.amount > good_enough
                 && is_spendable(en.is_coinbase, en.block_daa_score, virtual_daa, coinbase_maturity)

@@ -789,6 +789,24 @@ pub struct DnsParams {
     /// testnet/devnet today; mainnet/simnet stay inert via their EVM gate). Appended last to
     /// keep the borsh layout change localized.
     pub finality_fee_activation_daa_score: u64,
+
+    /// kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): DAA score at which the bond
+    /// spend-gate moves from the legacy own-body REJECT check to the acceptance-time SKIP check.
+    ///
+    /// The legacy [`crate::...bond_spend_gate`] scans only a chain block's OWN body against the
+    /// selected-parent bond view, so it misses a spend of a Pending/Active bond's locked output-0
+    /// that rides in a MERGE-BLUE block of the chain block's mergeset (those txs are accepted by
+    /// `calculate_utxo_state` with no bond check). Below this fence that legacy gate runs unchanged.
+    /// At/above it, per-tx UTXO validation rejects (so the acceptance loop SKIPS, not rejects-the-
+    /// block — avoiding a liveness wedge) any accepted mergeset tx that spends a non-releasable bond,
+    /// evaluated against the post-acceptance bond view (selected parent + this mergeset's fresh bond
+    /// inserts). Construction == validation because `calculate_utxo_state` is the single shared site.
+    ///
+    /// `u64::MAX` (inert) on every current preset, so today's behavior is byte-identical (the legacy
+    /// own-body gate). Activation is a coordinated, hard-forking tightening (it makes some currently-
+    /// valid blocks' merge-blue bond-spends un-accepted) and must be deployed in lockstep across the
+    /// mesh. NOT a genesis-block input; appended last to keep the borsh layout change append-only.
+    pub bond_spend_gate_mergeset_activation_daa_score: u64,
 }
 
 /// kaspa-pq DNS v3 — the canonical, lagged, blue_score-coordinated epoch anchor that the
@@ -5801,6 +5819,7 @@ mod tests {
             attestation_anchor_backoff_blue_score: 6_000_000,
             stake_score_window_blue_score: 7_000_000,
             finality_fee_activation_daa_score: 8_000_000,
+            bond_spend_gate_mergeset_activation_daa_score: 9_000_000,
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();

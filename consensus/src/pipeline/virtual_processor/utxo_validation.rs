@@ -31,8 +31,9 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondStatus, DnsParams, FeeSplitParams,
-        OverlaySnapshot, RewardedEpochSet, SlashingSideEffect, attestations_from_accepted_txs, bond_release_daa_score, effective_bond_status,
+        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, FeeSplitParams,
+        OverlaySnapshot, RewardedEpochSet, SlashingSideEffect, attestations_from_accepted_txs, bond_mutations_from_accepted_txs,
+        bond_release_daa_score, effective_bond_status,
         epoch_meets_quality_floor, epochs_finalized_at, recompute_epoch_tallies, resolve_slashing_side_effects,
         UNBOND_REQUEST_CONTEXT, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
         unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
@@ -144,6 +145,34 @@ impl<'a> UtxoProcessingContext<'a> {
     }
 }
 
+/// kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): the per-tx bond-spend SKIP filter
+/// threaded into mergeset acceptance validation. When `Some`, a transaction that spends a **known
+/// non-releasable** bond's locked output-0 (resolved in `bond_view` at `daa_score`) fails UTXO
+/// validation — so the acceptance loop SKIPS it (treats it like an invalid tx), keeping the carrying
+/// block valid and the bond UTXO locked. `None` ⇒ the check is inert (every spend allowed by it), so
+/// below the activation fence behavior is byte-identical to the legacy own-body-only gate.
+///
+/// `bond_view` is the **post-acceptance** view (selected-parent bonds + every bond freshly inserted
+/// anywhere in this block's mergeset), a deterministic function of the shared inputs, so the rule is
+/// construction == validation. Cheap to `Copy` (a shared ref + a u64); `Sync` for the parallel walk.
+#[derive(Clone, Copy)]
+pub(crate) struct BondSpendFilter<'a> {
+    bond_view: &'a ActiveBondView,
+    daa_score: u64,
+}
+
+impl BondSpendFilter<'_> {
+    /// `true` iff `outpoint` is a known bond that is NOT releasable at `self.daa_score` (i.e. its
+    /// locked output-0 must not be spent). Mirrors the legacy [`bond_spend_gate`] releasable test.
+    fn locks(&self, outpoint: &TransactionOutpoint) -> bool {
+        self.bond_view.get(outpoint).is_some_and(|bond| {
+            let releasable = effective_bond_status(bond, self.daa_score) == BondStatus::Unbonding
+                && bond_release_daa_score(bond).is_some_and(|release| self.daa_score >= release);
+            !releasable
+        })
+    }
+}
+
 impl VirtualStateProcessor {
     /// Calculates UTXO state and transaction acceptance data relative to the selected parent state
     ///
@@ -173,6 +202,48 @@ impl VirtualStateProcessor {
         let validated_coinbase_id = validated_coinbase.id();
         ctx.accepted_tx_ids.push(validated_coinbase_id);
 
+        // kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): above the fence, build the
+        // POST-ACCEPTANCE bond view the per-tx spend-skip is evaluated against = the selected-parent
+        // bonds PLUS every bond freshly DECLARED by a StakeBond tx anywhere in this mergeset. Only
+        // `Insert` mutations are applied (a fresh bond is always Pending/Active ⇒ non-releasable);
+        // `Slash`/`Unbond` are deliberately omitted so an unaccepted or within-mergeset unbond can
+        // never make a bond look releasable here (within-mergeset unbonds can't reach release — the
+        // window is days). Including a bond declared by a StakeBond tx that turns out UTXO-invalid is
+        // a harmless SAFE SUPERSET: its output-0 does not exist, so nothing can spend it. A
+        // deterministic function of the shared (selected_parent_bond_view, mergeset) inputs, so it is
+        // construction == validation. `None` (inert) below the fence ⇒ the legacy own-body gate is the
+        // sole protection and acceptance is byte-identical to today.
+        let bond_gate_view: Option<ActiveBondView> = self
+            .dns_params
+            .as_ref()
+            // Active only at/above the mergeset fence AND at/above dns_activation (matching the legacy
+            // gate's `dns_activation_daa_score` semantics). The dns_activation conjunct is defensive:
+            // every sane config sets the mergeset fence ≥ dns_activation (and below dns_activation the
+            // bond set is empty anyway), but pinning it makes the invariant explicit rather than implied.
+            .filter(|p| {
+                pov_daa_score >= p.bond_spend_gate_mergeset_activation_daa_score && pov_daa_score >= p.dns_activation_daa_score
+            })
+            .map(|_| {
+                let mut view = selected_parent_bond_view.clone();
+                let (min_bond, unbonding_floor) = self.dns_bond_floors();
+                // The SAME raw block-tx set the acceptance loop below iterates (incl. each block's
+                // coinbase, which is inert here: `bond_mutations_from_accepted_txs` only emits Inserts
+                // for DNS-subnetwork StakeBond txs). This is a deliberately distinct, never-persisted
+                // view used ONLY for the gate decision; the authoritative committed bond mutations are
+                // derived from ACCEPTED txs (`dns_bond_mutations_from_acceptance`, processor.rs). The
+                // two must stay superset-consistent (this raw view ⊇ the accepted-tx bond set).
+                let mergeset_txs: Vec<Transaction> = once(ctx.selected_parent())
+                    .chain(ctx.ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref()))
+                    .flat_map(|b| (*self.block_transactions_store.get(b).unwrap()).clone())
+                    .collect();
+                let inserts: Vec<BondMutation> = bond_mutations_from_accepted_txs(&mergeset_txs, pov_daa_score, min_bond, unbonding_floor)
+                    .into_iter()
+                    .filter(|m| matches!(m, BondMutation::Insert(..)))
+                    .collect();
+                view.apply(&inserts);
+                view
+            });
+
         for (i, (merged_block, txs)) in once((ctx.selected_parent(), selected_parent_transactions))
             .chain(
                 ctx.ghostdag_data
@@ -190,8 +261,13 @@ impl VirtualStateProcessor {
             // No need to fully validate selected parent transactions since selected parent txs were already validated
             // as part of selected parent UTXO state verification with the exact same UTXO context.
             let validation_flags = if is_selected_parent { TxValidationFlags::SkipScriptChecks } else { TxValidationFlags::Full };
+            // kaspa-pq bond spend-gate (mergeset hardening): gate every accepted mergeset tx (incl.
+            // the selected parent's body, also accepted here) against the post-acceptance view, so a
+            // merge-blue spend of a non-releasable bond's output-0 is skipped. `None` (inert) below
+            // the fence. The spend-skip is independent of `SkipScriptChecks`.
+            let bond_filter = bond_gate_view.as_ref().map(|view| BondSpendFilter { bond_view: view, daa_score: pov_daa_score });
             let (validated_transactions, inner_multiset) =
-                self.validate_transactions_with_muhash_in_parallel(&txs, &composed_view, pov_daa_score, validation_flags);
+                self.validate_transactions_with_muhash_in_parallel(&txs, &composed_view, pov_daa_score, validation_flags, bond_filter);
 
             ctx.multiset_hash.combine(&inner_multiset);
 
@@ -527,11 +603,23 @@ impl VirtualStateProcessor {
         // can never mutate a bond to `Slashed`. Inert below activation.
         self.check_slashing_evidence_genuine(&txs, selected_parent_bond_view, header.daa_score)?;
 
-        // kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate. Reject
-        // a block whose transactions spend a known bond outpoint whose bond is
-        // not releasable, so a bond's staked output-0 is locked while the bond
-        // is `Pending`/`Active`/mid-unbonding/`Slashed`. Inert below activation.
-        self.check_bond_spend_gate(&txs, selected_parent_bond_view, header.daa_score)?;
+        // kaspa-pq Phase 10/11 (ADR-0016 §D.2): the legacy bond-UTXO spend-gate. Rejects a block
+        // whose OWN BODY spends a known non-releasable bond outpoint, against the selected-parent bond
+        // view. Inert below `dns_activation_daa_score`.
+        //
+        // kaspa-pq bond spend-gate mergeset hardening: this own-body REJECT gate misses a spend that
+        // rides in a MERGE-BLUE block of this chain block's mergeset (those txs are accepted by
+        // `calculate_utxo_state`, never presented here). At/above the
+        // `bond_spend_gate_mergeset_activation_daa_score` fence, protection moves to the acceptance-
+        // time SKIP in `calculate_utxo_state` (which covers BOTH the mergeset and — when this block is
+        // later merged — its own body), so this legacy gate is disabled to avoid an honest miner
+        // self-rejecting an own-body bond-spend the skip would simply not accept. The fence is
+        // `u64::MAX` on every current preset, so this gate runs unchanged (byte-identical) today.
+        let mergeset_bond_gate_active =
+            self.dns_params.as_ref().is_some_and(|p| header.daa_score >= p.bond_spend_gate_mergeset_activation_daa_score);
+        if !mergeset_bond_gate_active {
+            self.check_bond_spend_gate(&txs, selected_parent_bond_view, header.daa_score)?;
+        }
 
         // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): reject a block whose
         // StakeUnbondRequest is not owner-authorized (unknown/ineligible bond, or a
@@ -1057,7 +1145,9 @@ impl VirtualStateProcessor {
                             // that all txs within each block are independent
                 .enumerate()
                 .skip(1) // Skip the coinbase tx.
-                .filter_map(|(i, tx)| self.validate_transaction_in_utxo_context(tx, &utxo_view, pov_daa_score, flags).ok().map(|vtx| (vtx, i as u32)))
+                // `None`: the own-body / template path is not mergeset acceptance; the legacy
+                // own-body bond gate (below the fence) covers it, see `verify_expected_utxo_state`.
+                .filter_map(|(i, tx)| self.validate_transaction_in_utxo_context(tx, &utxo_view, pov_daa_score, flags, None).ok().map(|vtx| (vtx, i as u32)))
                 .collect()
         })
     }
@@ -1070,6 +1160,9 @@ impl VirtualStateProcessor {
         utxo_view: &V,
         pov_daa_score: u64,
         flags: TxValidationFlags,
+        // kaspa-pq bond spend-gate (mergeset hardening): forwarded to the per-tx check so a mergeset
+        // tx spending a non-releasable bond is SKIPPED (not accepted, not muhashed). `None` ⇒ inert.
+        bond_filter: Option<BondSpendFilter>,
     ) -> (SmallVec<[(ValidatedTransaction<'a>, u32); 2]>, MuHash) {
         self.thread_pool.install(|| {
             txs
@@ -1077,7 +1170,7 @@ impl VirtualStateProcessor {
                             // that all txs within each block are independent
                 .enumerate()
                 .skip(1) // Skip the coinbase tx.
-                .filter_map(|(i, tx)| self.validate_transaction_in_utxo_context(tx, &utxo_view, pov_daa_score, flags).ok().map(|vtx| {
+                .filter_map(|(i, tx)| self.validate_transaction_in_utxo_context(tx, &utxo_view, pov_daa_score, flags, bond_filter).ok().map(|vtx| {
                     let mh = MuHash::from_transaction(&vtx, pov_daa_score);
                     (smallvec![(vtx, i as u32)], mh)
                 }
@@ -1100,6 +1193,12 @@ impl VirtualStateProcessor {
         utxo_view: &impl UtxoView,
         pov_daa_score: u64,
         flags: TxValidationFlags,
+        // kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): when `Some`, a tx that spends
+        // a known non-releasable bond's locked output-0 fails validation, so the caller's `filter_map`
+        // SKIPS it (it is not accepted, its muhash/diff contribution is never produced, the bond stays
+        // locked). `None` on every path that is not mergeset-acceptance, and on every net below the
+        // fence ⇒ byte-identical to the legacy own-body-only gate.
+        bond_filter: Option<BondSpendFilter>,
     ) -> TxResult<ValidatedTransaction<'a>> {
         let mut entries = Vec::with_capacity(transaction.inputs.len());
         for input in transaction.inputs.iter() {
@@ -1108,6 +1207,14 @@ impl VirtualStateProcessor {
             } else {
                 // Missing at least one input. For perf considerations, we report once a single miss is detected and avoid collecting all possible misses.
                 return Err(TxRuleError::MissingTxOutpoints);
+            }
+        }
+        // kaspa-pq bond spend-gate (mergeset hardening): reject — so the caller skips, NOT rejecting
+        // the whole block — any tx whose input spends a known non-releasable bond's locked output-0.
+        // Inert when `bond_filter` is `None` (every path except fence-active mergeset acceptance).
+        if let Some(filter) = bond_filter {
+            if let Some(input) = transaction.inputs.iter().find(|input| filter.locks(&input.previous_outpoint)) {
+                return Err(TxRuleError::SpendsNonReleasableBond(input.previous_outpoint));
             }
         }
         let populated_tx = PopulatedTransaction::new(transaction, entries);
@@ -1975,6 +2082,65 @@ mod tests {
         fn ok_when_no_inputs() {
             let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
             assert_eq!(gate(&[tx], &ActiveBondView::new(), DAA, true), Ok(()));
+        }
+    }
+
+    // kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): the `BondSpendFilter::locks`
+    // predicate that drives the acceptance-time SKIP (the merge-blue-aware complement to the legacy
+    // own-body `bond_spend_gate`). Same releasability semantics, exercised per-outpoint.
+    mod bond_spend_filter {
+        use super::super::BondSpendFilter;
+        use kaspa_consensus_core::{
+            dns_finality::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
+            tx::TransactionOutpoint,
+        };
+        use kaspa_hashes::Hash64;
+
+        const DAA: u64 = 10_000;
+
+        fn outpoint(b: u8) -> TransactionOutpoint {
+            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+        }
+
+        fn bond(op: TransactionOutpoint) -> StakeBondRecord {
+            StakeBondRecord {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
+                validator_pubkey_hash: Hash64::from_bytes([0xbb; 64]),
+                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
+                amount: 1_000,
+                activation_daa_score: 0,
+                created_daa_score: 0,
+                unbonding_period_blocks: 5_000,
+                owner_reward_spk_payload: [0xdd; 64],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: BondStatus::Active,
+            }
+        }
+
+        #[test]
+        fn locks_active_and_pending_unlocks_releasable_and_non_bond() {
+            let active = outpoint(1);
+            let pending_op = outpoint(2);
+            let mut pending = bond(pending_op);
+            pending.activation_daa_score = DAA + 1; // Pending (not yet active).
+            let releasable_op = outpoint(3);
+            let mut releasable = bond(releasable_op);
+            releasable.unbond_request_daa_score = Some(1_000); // release = 1_000 + 5_000 = 6_000 ≤ DAA.
+
+            let view = ActiveBondView::from_records([
+                (active, bond(active)),
+                (pending_op, pending),
+                (releasable_op, releasable),
+            ]);
+            let filter = BondSpendFilter { bond_view: &view, daa_score: DAA };
+
+            assert!(filter.locks(&active), "Active bond's output-0 must be locked (skip the spend)");
+            assert!(filter.locks(&pending_op), "Pending bond's output-0 must be locked");
+            assert!(!filter.locks(&releasable_op), "a releasable (Unbonding past release) bond is spendable");
+            assert!(!filter.locks(&outpoint(9)), "a non-bond outpoint is never locked");
         }
     }
 

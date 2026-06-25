@@ -1581,7 +1581,7 @@ impl VirtualStateProcessor {
     /// The per-bond acceptance floors (min stake amount, min unbonding window) from the network's
     /// `DnsParams`, or `(0, 0)` where the overlay is off — so the bond-acceptance filter is a no-op
     /// on networks without `dns_params`.
-    fn dns_bond_floors(&self) -> (u64, u64) {
+    pub(super) fn dns_bond_floors(&self) -> (u64, u64) {
         self.dns_params
             .as_ref()
             .map(|p| (p.min_bond_amount_sompi, p.unbonding_period_blocks))
@@ -2700,7 +2700,8 @@ impl VirtualStateProcessor {
             virtual_state.past_median_time,
         )?;
         let ValidatedTransaction { calculated_fee, .. } =
-            self.validate_transaction_in_utxo_context(tx, utxo_view, virtual_state.daa_score, TxValidationFlags::Full)?;
+            // `None`: mempool/template single-tx context, not mergeset acceptance (bond spend-gate inert here).
+            self.validate_transaction_in_utxo_context(tx, utxo_view, virtual_state.daa_score, TxValidationFlags::Full, None)?;
         Ok(calculated_fee)
     }
 
