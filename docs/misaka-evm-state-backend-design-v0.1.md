@@ -229,6 +229,32 @@ cutover, and a bug can only ever cost that node availability, never chain integr
 - **R4 (P1) — root-CPU unchanged in Stage 1.** Per-block O(state) HashBuilder remains; on a very
   large state this is a throughput ceiling. *Mitigation:* it is not a regression (today's cost);
   Stage 2 addresses it; measure before committing to Stage 2.
+  - **MEASURED (2026-06-25, `kaspa-evm/benches/state_cost.rs`, macOS arm64 dev machine; Linux x86
+    likely the same order).** Per NON-EMPTY block (empty mergesets skip all three passes via the
+    executor's O(1) fast path), as a function of account count N:
+
+    | N | `state_root` (R4) | `seed_cachedb` | `snapshot_from_cachedb` |
+    |---|---|---|---|
+    | 1k | 1.15 ms | 97 µs | 49 µs |
+    | 10k (≈ current state) | 11.8 ms | 0.97 ms | 0.72 ms |
+    | 100k | 128 ms | 17.5 ms | 14.2 ms |
+    | 1M | 1.33 s | 252 ms | 166 ms |
+
+    `state_root` is ~1.2–1.3 µs/account (≈ linear; mild super-linearity from the O(N log N) leaf
+    sort) and **dominates the three passes ~7–9×**. Against the 10 BPS **~100 ms per-selected-block
+    budget**, `state_root` alone reaches 100 ms at **≈ 77k accounts**, and the full per-block state
+    cost (root + seed + snapshot) crosses 100 ms at **≈ 60k accounts**. At the current ~10k state it
+    is ~12 % of the slot (root) / ~13 % (all three) — fine, but with only **~6–8× account-count
+    headroom**, NOT the ~100× the earlier Fermi estimate assumed. IBD catch-up (many blocks/sec) is
+    stricter still, and a mining node pays it twice (produce + verify).
+  - **R4 trigger, sharpened:** start the Stage-2 incremental MPT when the canonical account count
+    approaches **~50k with sustained non-empty blocks** (or sooner if IBD-of-such-a-chain throughput
+    is the binding constraint). The incremental root removes ~73 % of the per-block state cost (the
+    `state_root` pass); the lazy-seed cutover removes only the ~12 % `seed_cachedb` CPU pass — so for
+    CPU, **incremental root ≫ lazy cutover** (the measurement confirms the priority). NOTE the
+    `seed_cachedb` figure here is only the CPU half; the eager seed's RocksDB read of all 234 rows
+    (consensus-side, unmeasured) makes the real eager-seed cost — and thus the lazy cutover's full
+    win — larger than the CPU column shows.
 - **R5 (P1) — non-head seed latency.** Seeding a side-branch/historical parent via reconstruct
   is O(window). *Mitigation:* bounded by checkpoint interval (2048); LRU cache; canonical head
   uses the O(1) flat fast path.
