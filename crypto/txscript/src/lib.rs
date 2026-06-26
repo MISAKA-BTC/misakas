@@ -120,7 +120,7 @@ pub const fn is_legacy_signature_opcode(tag: u8) -> bool {
             | crate::opcodes::codes::OpCheckSig               // 0xac
             | crate::opcodes::codes::OpCheckSigVerify         // 0xad
             | crate::opcodes::codes::OpCheckMultiSig          // 0xae
-            | crate::opcodes::codes::OpCheckMultiSigVerify    // 0xaf
+            | crate::opcodes::codes::OpCheckMultiSigVerify // 0xaf
     )
 }
 
@@ -924,8 +924,7 @@ impl<'a, T: VerifiableTransaction, Reused: SigHashReusedValues> TxScriptEngine<'
                 // caching; that is acceptable for now.
                 // TODO(perf): thread a 64-byte reuse cache through the engine.
                 let reused_mldsa = kaspa_consensus_core::hashing::sighash::Mldsa87SigHashReusedValuesUnsync::new();
-                let sig_hash =
-                    kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(tx, idx, hash_type, &reused_mldsa);
+                let sig_hash = kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(tx, idx, hash_type, &reused_mldsa);
                 let msg_bytes = sig_hash.as_bytes(); // 64 bytes
 
                 // Secp-free cache key (ADR-0019 §10): 64-byte BLAKE2b-512 digests of
@@ -992,11 +991,11 @@ mod tests {
     use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
     #[cfg(feature = "legacy-secp256k1")]
     use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+    #[cfg(feature = "legacy-secp256k1")]
+    use kaspa_consensus_core::tx::MutableTransaction;
     use kaspa_consensus_core::tx::{
         PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, TransactionOutput,
     };
-    #[cfg(feature = "legacy-secp256k1")]
-    use kaspa_consensus_core::tx::MutableTransaction;
     use kaspa_utils::hex::FromHex;
     use smallvec::SmallVec;
 
@@ -1761,12 +1760,8 @@ mod bitcoind_tests {
         let utxo_entry = UtxoEntry::new(0, script_pub_key.clone(), 0, true);
         let populated_unsigned = PopulatedTransaction::new(&unsigned_tx, vec![utxo_entry.clone()]);
         let reused_mldsa = kaspa_consensus_core::hashing::sighash::Mldsa87SigHashReusedValuesUnsync::new();
-        let sig_hash = kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(
-            &populated_unsigned,
-            0,
-            SIG_HASH_ALL,
-            &reused_mldsa,
-        );
+        let sig_hash =
+            kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(&populated_unsigned, 0, SIG_HASH_ALL, &reused_mldsa);
 
         // 5. Sign the sighash with the kaspa-pq context.
         let signing_randomness = [0xb2u8; 32];
@@ -1856,10 +1851,9 @@ mod bitcoind_tests {
 
         // (portable.is_ok(), multiplexed.is_ok()) for one (key, msg, ctx, sig) case.
         let both = |vkb: [u8; MLDSA87_PK_LEN], m: &[u8], c: &[u8], sgb: [u8; MLDSA87_SIG_LEN]| -> (bool, bool) {
-            let p = mldsa::portable::verify(&mldsa::MLDSA87VerificationKey::new(vkb), m, c, &mldsa::MLDSA87Signature::new(sgb))
-                .is_ok();
-            let x =
-                mldsa::verify(&mldsa::MLDSA87VerificationKey::new(vkb), m, c, &mldsa::MLDSA87Signature::new(sgb)).is_ok();
+            let p =
+                mldsa::portable::verify(&mldsa::MLDSA87VerificationKey::new(vkb), m, c, &mldsa::MLDSA87Signature::new(sgb)).is_ok();
+            let x = mldsa::verify(&mldsa::MLDSA87VerificationKey::new(vkb), m, c, &mldsa::MLDSA87Signature::new(sgb)).is_ok();
             (p, x)
         };
 
@@ -1877,14 +1871,14 @@ mod bitcoind_tests {
         wrong_vk[0] ^= 0xff;
         #[allow(clippy::type_complexity)]
         let invalid: Vec<([u8; MLDSA87_PK_LEN], Vec<u8>, Vec<u8>, [u8; MLDSA87_SIG_LEN])> = vec![
-            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), head),                      // tampered head byte
-            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), mid),                       // tampered middle byte
-            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), tail),                      // tampered tail byte
-            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), [0u8; MLDSA87_SIG_LEN]),    // all-zero
+            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), head), // tampered head byte
+            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), mid),  // tampered middle byte
+            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), tail), // tampered tail byte
+            (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), [0u8; MLDSA87_SIG_LEN]), // all-zero
             (vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), [0xffu8; MLDSA87_SIG_LEN]), // all-ones
-            (vk, b"different-message".to_vec(), MLDSA87_TX_CONTEXT.to_vec(), good),    // wrong message
-            (vk, msg.clone(), b"kaspa-pq-v2/tx/WRONG".to_vec(), good),                 // wrong context
-            (wrong_vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), good),                // wrong key
+            (vk, b"different-message".to_vec(), MLDSA87_TX_CONTEXT.to_vec(), good), // wrong message
+            (vk, msg.clone(), b"kaspa-pq-v2/tx/WRONG".to_vec(), good), // wrong context
+            (wrong_vk, msg.clone(), MLDSA87_TX_CONTEXT.to_vec(), good), // wrong key
         ];
         for (i, (k, m, c, s)) in invalid.into_iter().enumerate() {
             let (p, x) = both(k, &m, &c, s);
@@ -1965,8 +1959,7 @@ mod bitcoind_tests {
         fn unhex(s: &str) -> Vec<u8> {
             (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex digit")).collect()
         }
-        let v: serde_json::Value =
-            serde_json::from_str(include_str!("mldsa87_acvp_vectors.json")).expect("ACVP vectors parse");
+        let v: serde_json::Value = serde_json::from_str(include_str!("mldsa87_acvp_vectors.json")).expect("ACVP vectors parse");
 
         // keyGen — deterministic key derivation matches NIST exactly.
         let kg = v["keyGen"].as_array().expect("keyGen array");
@@ -1995,8 +1988,11 @@ mod bitcoind_tests {
         let (mut saw_accept, mut saw_reject) = (false, false);
         for (i, t) in sv.iter().enumerate() {
             let pk = unhex(t["pk"].as_str().unwrap());
-            let (msg, ctx, sig) =
-                (unhex(t["message"].as_str().unwrap()), unhex(t["context"].as_str().unwrap()), unhex(t["signature"].as_str().unwrap()));
+            let (msg, ctx, sig) = (
+                unhex(t["message"].as_str().unwrap()),
+                unhex(t["context"].as_str().unwrap()),
+                unhex(t["signature"].as_str().unwrap()),
+            );
             let expected = t["testPassed"].as_bool().expect("testPassed");
             let got = verify_mldsa87_with_context(&pk, &msg, &sig, &ctx).expect("verify returns Ok");
             assert_eq!(got, expected, "ACVP sigVer case {i} ({}): expected {expected} got {got}", t["reason"].as_str().unwrap_or(""));

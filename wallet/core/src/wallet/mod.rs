@@ -31,9 +31,9 @@ use crate::wallet::keydata::PrvKeyDataVariantKind;
 use crate::wallet::maps::ActiveAccountMap;
 #[cfg(feature = "legacy-secp256k1")]
 use kaspa_bip32::ExtendedKey;
+use kaspa_bip32::{Language, Mnemonic};
 #[cfg(feature = "legacy-secp256k1")]
 use kaspa_bip32::{Prefix as KeyPrefix, WordCount};
-use kaspa_bip32::{Language, Mnemonic};
 use kaspa_notify::{
     listener::ListenerId,
     scope::{Scope, VirtualDaaScoreChangedScope},

@@ -557,8 +557,8 @@ mod pq_output_class_enforcement_tests {
     use kaspa_consensus_core::errors::tx::TxRuleError;
     use kaspa_consensus_core::subnets::{SUBNETWORK_ID_COINBASE, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_BOND};
     use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput};
-    use kaspa_txscript::opcodes::codes;
     use kaspa_txscript::caches::TxScriptCacheCounters;
+    use kaspa_txscript::opcodes::codes;
     use smallvec::smallvec;
     use std::sync::Arc;
 

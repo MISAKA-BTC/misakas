@@ -7,10 +7,10 @@ use crate::{
     data_stack::{DataStack, OpcodeData},
 };
 use blake2b_simd::Params;
-use kaspa_hashes::blake2b_512_address_payload;
 use kaspa_consensus_core::hashing::sighash::SigHashReusedValues;
 use kaspa_consensus_core::hashing::sighash_type::SigHashType;
 use kaspa_consensus_core::tx::VerifiableTransaction;
+use kaspa_hashes::blake2b_512_address_payload;
 use kaspa_utils::hex::FromHex;
 use sha2::{Digest, Sha256};
 use std::{

@@ -209,7 +209,9 @@ async fn main() {
     }
 
     // UDP server (the primary DNS transport).
-    let sock = UdpSocket::bind(&args.listen).await.unwrap_or_else(|e| panic!("bind DNS UDP {} failed: {e} (port 53 needs root / cap_net_bind_service)", args.listen));
+    let sock = UdpSocket::bind(&args.listen)
+        .await
+        .unwrap_or_else(|e| panic!("bind DNS UDP {} failed: {e} (port 53 needs root / cap_net_bind_service)", args.listen));
     {
         let peers = peers.clone();
         let (max, ttl) = (args.max_answers, args.ttl);
@@ -233,8 +235,13 @@ async fn main() {
 
     // TCP server (RFC 1035 §4.2.2: 2-byte length-prefixed messages). Standard DNS fallback —
     // and the transport reachable when only TCP 53 is allowed through the firewall.
-    let tcp = TcpListener::bind(&args.listen).await.unwrap_or_else(|e| panic!("bind DNS TCP {} failed: {e} (port 53 needs root / cap_net_bind_service)", args.listen));
-    info!("[dnsseeder] authoritative A-record server on udp+tcp://{} (anchors={:?}, ttl={}s, max_answers={})", args.listen, anchors, args.ttl, args.max_answers);
+    let tcp = TcpListener::bind(&args.listen)
+        .await
+        .unwrap_or_else(|e| panic!("bind DNS TCP {} failed: {e} (port 53 needs root / cap_net_bind_service)", args.listen));
+    info!(
+        "[dnsseeder] authoritative A-record server on udp+tcp://{} (anchors={:?}, ttl={}s, max_answers={})",
+        args.listen, anchors, args.ttl, args.max_answers
+    );
     loop {
         let (mut stream, _) = match tcp.accept().await {
             Ok(x) => x,

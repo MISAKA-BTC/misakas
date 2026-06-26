@@ -379,13 +379,13 @@ mod tests {
         // kaspa-pq PQ-only (ADR-0019 §13): a transaction signed by the native
         // ML-DSA-87 signer must verify under the kaspa_txscript engine — i.e. the
         // native signer is byte-for-byte compatible with the consensus verifier.
+        use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
         use kaspa_consensus_core::tx::{
             PopulatedTransaction, ScriptPublicKey, SignableTransaction, Transaction, TransactionId, TransactionInput,
             TransactionOutpoint, TransactionOutput, UtxoEntry,
         };
         use kaspa_txscript::caches::Cache;
         use kaspa_txscript::{TxScriptEngine, pay_to_address_script};
-        use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
 
         let kp = derive_keypair("mainnet", 0, 0, 0, &TEST_MASTER_SEED);
         let spk = pay_to_address_script(&kp.address(Prefix::Mainnet));
@@ -413,22 +413,16 @@ mod tests {
         let populated = PopulatedTransaction::new(&signable.tx, vec![entry]);
         let reused = SigHashReusedValuesUnsync::new();
         let cache = Cache::new(10_000);
-        let mut vm = TxScriptEngine::from_transaction_input(
-            &populated,
-            &populated.tx.inputs[0],
-            0,
-            &populated.entries[0],
-            &reused,
-            &cache,
-        );
+        let mut vm =
+            TxScriptEngine::from_transaction_input(&populated, &populated.tx.inputs[0], 0, &populated.entries[0], &reused, &cache);
         vm.execute().expect("native ML-DSA-87 signature must verify in the script engine");
     }
 
     #[test]
     fn native_signer_skips_foreign_and_prefilled_inputs() {
         use kaspa_consensus_core::tx::{
-            ScriptPublicKey, SignableTransaction, Transaction, TransactionId, TransactionInput, TransactionOutpoint, TransactionOutput,
-            UtxoEntry,
+            ScriptPublicKey, SignableTransaction, Transaction, TransactionId, TransactionInput, TransactionOutpoint,
+            TransactionOutput, UtxoEntry,
         };
         use kaspa_txscript::pay_to_address_script;
 
@@ -456,7 +450,7 @@ mod tests {
         let entries = vec![
             UtxoEntry { amount: 10, script_public_key: mine.clone(), block_daa_score: 0, is_coinbase: false }, // signable
             UtxoEntry { amount: 10, script_public_key: mine.clone(), block_daa_score: 0, is_coinbase: false }, // pre-filled -> skip
-            UtxoEntry { amount: 10, script_public_key: foreign, block_daa_score: 0, is_coinbase: false },       // foreign -> skip
+            UtxoEntry { amount: 10, script_public_key: foreign, block_daa_score: 0, is_coinbase: false },      // foreign -> skip
         ];
         let mut signable: SignableTransaction = SignableTransaction::with_entries(tx, entries);
         let n = sign_transaction_inputs_mldsa87(&kp, &mut signable, |_, _sig_hash| [0x77u8; 32]);

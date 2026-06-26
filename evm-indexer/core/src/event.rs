@@ -301,9 +301,8 @@ mod tests {
         let mut data = Vec::new();
         data.extend_from_slice(&word_of(7)); // id
         data.extend_from_slice(&word_of(3)); // value
-        let log = decode_log([0x33; 20], &[TRANSFER_SINGLE, topic_addr(0x0E), topic_addr(0xAA), topic_addr(0xBB)], &data)
-            .unwrap()
-            .unwrap();
+        let log =
+            decode_log([0x33; 20], &[TRANSFER_SINGLE, topic_addr(0x0E), topic_addr(0xAA), topic_addr(0xBB)], &data).unwrap().unwrap();
         let DecodedEvent::Transfers(ts) = log else { panic!("expected transfers") };
         assert_eq!(ts[0].standard, TokenStandard::Erc1155);
         assert_eq!(ts[0].operator, Some([0x0E; 20]));

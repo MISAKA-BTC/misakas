@@ -33,7 +33,7 @@ pub mod http;
 pub mod node;
 pub mod store;
 
-pub use engine::{sync_once, EngineError, SyncOutcome};
+pub use engine::{EngineError, SyncOutcome, sync_once};
 pub use http::HttpNodeRpc;
 pub use node::{NodeBlock, NodeLog, NodeRpc, RpcError};
 pub use store::{IndexStore, MemIndexStore};

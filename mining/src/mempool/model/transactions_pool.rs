@@ -262,8 +262,7 @@ impl TransactionsPool {
         let priority_mass: u64 = priority.iter().map(|t| t.mass).sum();
         let exclude: std::collections::HashSet<TransactionId> = priority.iter().map(|t| t.tx.id()).collect();
         let remaining_mass = self.config.maximum_mass_per_block.saturating_sub(priority_mass);
-        let inner_policy =
-            Policy::new(remaining_mass).with_max_attestation_shard_txs(policy.max_attestation_shard_txs_per_block);
+        let inner_policy = Policy::new(remaining_mass).with_max_attestation_shard_txs(policy.max_attestation_shard_txs_per_block);
         let inner = self.ready_transactions.build_selector_excluding(&inner_policy, &exclude);
         Box::new(crate::mempool::model::frontier::selectors::AttestationPrioritySelector::new(priority, inner, base_policy))
     }
@@ -305,13 +304,7 @@ impl TransactionsPool {
                 let in_recent_window = epoch >= recent_window_start && epoch <= latest_ready_epoch;
                 let reward_fresh = latest_ready_epoch.saturating_sub(epoch) <= reward_window_epochs;
                 if in_recent_window || reward_fresh {
-                    candidates.push(Cand {
-                        tx: key.tx.clone(),
-                        mass: key.mass,
-                        epoch,
-                        feerate: key.feerate(),
-                        in_recent_window,
-                    });
+                    candidates.push(Cand { tx: key.tx.clone(), mass: key.mass, epoch, feerate: key.feerate(), in_recent_window });
                 }
             }
         }

@@ -197,7 +197,12 @@ mod tests {
         assert!(decode_log_posting_loc(&m[..m.len() - 1]).is_none(), "short member rejected");
         // Fixed length ⇒ byte order == (number, hash, tx, log) order — the
         // property that makes a bucket scan walk blocks ascending.
-        let lo = encode_log_posting_loc(&LogPostingLoc { evm_number: 5, l1_hash: h(0xFF), tx_index: u32::MAX, in_receipt_log_index: u32::MAX });
+        let lo = encode_log_posting_loc(&LogPostingLoc {
+            evm_number: 5,
+            l1_hash: h(0xFF),
+            tx_index: u32::MAX,
+            in_receipt_log_index: u32::MAX,
+        });
         let hi = encode_log_posting_loc(&LogPostingLoc { evm_number: 6, l1_hash: h(0), tx_index: 0, in_receipt_log_index: 0 });
         assert!(lo < hi, "lower block number sorts first regardless of within-block position");
     }
@@ -206,7 +211,11 @@ mod tests {
     fn keys_sort_by_number_then_position_within_a_bucket() {
         let addr = [0x11u8; 20];
         let mk = |n: u64, tx: u32, li: u32| {
-            encode_log_posting_key(LogPostingKind::Address, &addr, &LogPostingLoc { evm_number: n, l1_hash: h(1), tx_index: tx, in_receipt_log_index: li })
+            encode_log_posting_key(
+                LogPostingKind::Address,
+                &addr,
+                &LogPostingLoc { evm_number: n, l1_hash: h(1), tx_index: tx, in_receipt_log_index: li },
+            )
         };
         // Ascending evm_number sorts first; within a block, (tx_index, log_index).
         assert!(mk(5, 9, 9) < mk(6, 0, 0), "lower block number sorts before higher");
@@ -222,7 +231,11 @@ mod tests {
     fn bucket_is_the_shared_prefix() {
         let addr = [0x22u8; 20];
         let bucket = log_posting_bucket(LogPostingKind::Address, &addr);
-        let key = encode_log_posting_key(LogPostingKind::Address, &addr, &LogPostingLoc { evm_number: 1, l1_hash: h(2), tx_index: 0, in_receipt_log_index: 0 });
+        let key = encode_log_posting_key(
+            LogPostingKind::Address,
+            &addr,
+            &LogPostingLoc { evm_number: 1, l1_hash: h(2), tx_index: 0, in_receipt_log_index: 0 },
+        );
         assert!(key.starts_with(&bucket), "every posting begins with its (kind, selector) bucket");
         assert_eq!(bucket.len(), 1 + 20);
         assert_eq!(bucket[0], LogPostingKind::Address as u8);

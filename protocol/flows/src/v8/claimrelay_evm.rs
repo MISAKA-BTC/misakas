@@ -143,7 +143,9 @@ impl RelayEvmDepositClaimsFlow {
                                 .map_err(|_| ProtocolError::Other("invalid borsh DepositClaim in relay message"))?;
                             Ok(Response::Claim(claim))
                         }
-                        Some(Payload::EvmDepositClaimNotFound(payload)) => Ok(Response::NotFound(opt_outpoint_from_wire(payload.outpoint)?)),
+                        Some(Payload::EvmDepositClaimNotFound(payload)) => {
+                            Ok(Response::NotFound(opt_outpoint_from_wire(payload.outpoint)?))
+                        }
                         _ => Err(ProtocolError::UnexpectedMessage(
                             stringify!(Payload::EvmDepositClaim | Payload::EvmDepositClaimNotFound),
                             msg.payload.as_ref().map(|v| v.into()),

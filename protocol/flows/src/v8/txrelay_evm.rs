@@ -183,7 +183,9 @@ impl RelayEvmTransactionsFlow {
                 // caught pre-decode in admission too), so a peer relaying it is
                 // misbehaving, same class as Inadmissible.
                 Err(EvmMempoolError::TooLarge { size, .. }) => {
-                    return Err(ProtocolError::MisbehavingPeer(format!("relayed an oversize evm tx ({size} bytes, can never fit a payload)")));
+                    return Err(ProtocolError::MisbehavingPeer(format!(
+                        "relayed an oversize evm tx ({size} bytes, can never fit a payload)"
+                    )));
                 }
                 // Benign: the tx is valid, our pool just will not take it now (already
                 // pending, replacement pricing, or capacity). Each carries the
@@ -254,10 +256,7 @@ impl RequestedEvmTransactionsFlow {
                     self.router.enqueue(make_message!(Payload::EvmTransaction, EvmTransactionMessage { raw })).await?;
                 } else {
                     self.router
-                        .enqueue(make_message!(
-                            Payload::EvmTransactionNotFound,
-                            EvmTransactionNotFoundMessage { hash: hash_bytes }
-                        ))
+                        .enqueue(make_message!(Payload::EvmTransactionNotFound, EvmTransactionNotFoundMessage { hash: hash_bytes }))
                         .await?;
                 }
             }

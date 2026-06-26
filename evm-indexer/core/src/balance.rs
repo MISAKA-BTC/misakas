@@ -202,7 +202,15 @@ mod tests {
     const TOK: [u8; 20] = [0x11; 20];
 
     fn erc20(from: [u8; 20], to: [u8; 20], amount: u64) -> TokenTransfer {
-        TokenTransfer { standard: TokenStandard::Erc20, token: TOK, operator: None, from, to, token_id: None, amount: U256::from(amount) }
+        TokenTransfer {
+            standard: TokenStandard::Erc20,
+            token: TOK,
+            operator: None,
+            from,
+            to,
+            token_id: None,
+            amount: U256::from(amount),
+        }
     }
     fn erc721(from: [u8; 20], to: [u8; 20], id: u64) -> TokenTransfer {
         TokenTransfer {

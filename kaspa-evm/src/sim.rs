@@ -169,7 +169,10 @@ mod tests {
         let kp = mldsa::generate_key_pair([0x91u8; 32]);
         let pubkey = kp.verification_key.as_ref().to_vec();
         let digest = blake2b_512_keyed(F003_PREA_OP_MLDSA87_CONTEXT, &preimage);
-        let sig = mldsa::sign(&kp.signing_key, digest.as_byte_slice(), F003_PREA_ROOT_MLDSA87_CONTEXT, [0x42u8; 32]).expect("sign").as_ref().to_vec();
+        let sig = mldsa::sign(&kp.signing_key, digest.as_byte_slice(), F003_PREA_ROOT_MLDSA87_CONTEXT, [0x42u8; 32])
+            .expect("sign")
+            .as_ref()
+            .to_vec();
         let payload = blake2b_512_address_payload(&pubkey).as_bytes().to_vec();
 
         let mut input = vec![F003_VERSION_PREA_ROOT];

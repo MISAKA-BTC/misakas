@@ -13,8 +13,8 @@
 //!   sides (`daa_score >= evm_f003_mldsa_verify_activation_daa_score`), keeping
 //!   executor↔simulation parity.
 
-use revm::handler::register::EvmHandler;
 use revm::Database;
+use revm::handler::register::EvmHandler;
 
 /// Register every MISAKA precompile/intercept on `handler`. F002 unconditionally;
 /// F003 iff `f003_active`. Order: F002 then F003 (each wraps `execution.call`, so

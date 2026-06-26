@@ -90,9 +90,11 @@ impl UtxoIndexProxy {
         cursor: Option<Vec<u8>>,
         chunk_size: usize,
     ) -> StoreResult<(UtxoSetByScriptPublicKey, Option<Vec<u8>>)> {
-        spawn_blocking(move || self.inner.read().get_utxos_by_script_public_key_chunk(&script_public_key, cursor.as_deref(), chunk_size))
-            .await
-            .unwrap()
+        spawn_blocking(move || {
+            self.inner.read().get_utxos_by_script_public_key_chunk(&script_public_key, cursor.as_deref(), chunk_size)
+        })
+        .await
+        .unwrap()
     }
 
     pub async fn get_balance_by_script_public_keys(

@@ -234,11 +234,7 @@ impl Account for MlDsa {
         Ok(vec![])
     }
 
-    fn try_pq_keypair(
-        &self,
-        keydata: &PrvKeyData,
-        payment_secret: &Option<Secret>,
-    ) -> Result<Option<KaspaPqMlDsa87KeyPair>> {
+    fn try_pq_keypair(&self, keydata: &PrvKeyData, payment_secret: &Option<Secret>) -> Result<Option<KaspaPqMlDsa87KeyPair>> {
         // Re-derive the ML-DSA-87 keypair from the wallet's BIP39 master seed,
         // matching the derivation used when the account's verification key was
         // first generated (network id + account index, change=0, index=0).

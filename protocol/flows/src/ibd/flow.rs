@@ -719,7 +719,11 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
 
     /// kaspa-pq ADR-0022: request + import the pruning point's EVM execution state. Required on an
     /// EVM-active network so the first post-pruning block re-executes against the real parent state.
-    async fn sync_pruning_point_evm_state(&mut self, consensus: &ConsensusProxy, pruning_point: BlockHash) -> Result<(), ProtocolError> {
+    async fn sync_pruning_point_evm_state(
+        &mut self,
+        consensus: &ConsensusProxy,
+        pruning_point: BlockHash,
+    ) -> Result<(), ProtocolError> {
         let evm_active = {
             let pp = pruning_point;
             let pp_daa = consensus.clone().spawn_blocking(move |c| c.get_header(pp)).await.map(|h| h.daa_score).unwrap_or(0);
@@ -734,7 +738,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointEvmState, Duration::from_secs(600))?;
         if !msg.found {
             if evm_active {
-                return Err(ProtocolError::Other("peer cannot serve the pruning point EVM state required for pruned IBD on this network"));
+                return Err(ProtocolError::Other(
+                    "peer cannot serve the pruning point EVM state required for pruned IBD on this network",
+                ));
             }
             return Ok(()); // EVM-inactive network — no EVM state to import.
         }
@@ -751,10 +757,10 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         if msg.evm_state_snapshot.len() > MAX_EVM_STATE_SNAPSHOT_BYTES {
             return Err(ProtocolError::Other("PruningPointEvmState snapshot exceeds the accepted size cap"));
         }
-        let header: kaspa_consensus_core::evm::EvmExecutionHeader =
-            borsh::from_slice(&msg.evm_header).map_err(|_| ProtocolError::Other("invalid EVM execution header in PruningPointEvmState"))?;
-        let snapshot: kaspa_consensus_core::evm::EvmStateSnapshot =
-            borsh::from_slice(&msg.evm_state_snapshot).map_err(|_| ProtocolError::Other("invalid EVM state snapshot in PruningPointEvmState"))?;
+        let header: kaspa_consensus_core::evm::EvmExecutionHeader = borsh::from_slice(&msg.evm_header)
+            .map_err(|_| ProtocolError::Other("invalid EVM execution header in PruningPointEvmState"))?;
+        let snapshot: kaspa_consensus_core::evm::EvmStateSnapshot = borsh::from_slice(&msg.evm_state_snapshot)
+            .map_err(|_| ProtocolError::Other("invalid EVM state snapshot in PruningPointEvmState"))?;
         consensus.clone().spawn_blocking(move |c| c.import_pruning_point_evm_state(pruning_point, header, snapshot)).await?;
         info!("imported the EVM state of the pruning point {}", pruning_point);
         Ok(())
@@ -789,8 +795,8 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         if msg.overlay_snapshot.len() > MAX_OVERLAY_SNAPSHOT_BYTES {
             return Err(ProtocolError::Other("PruningPointOverlaySnapshot exceeds the accepted size cap"));
         }
-        let snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot =
-            borsh::from_slice(&msg.overlay_snapshot).map_err(|_| ProtocolError::Other("invalid overlay snapshot in PruningPointOverlaySnapshot"))?;
+        let snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot = borsh::from_slice(&msg.overlay_snapshot)
+            .map_err(|_| ProtocolError::Other("invalid overlay snapshot in PruningPointOverlaySnapshot"))?;
         consensus.clone().spawn_blocking(move |c| c.import_pruning_point_overlay_snapshot(pruning_point, snapshot)).await?;
         info!("imported the overlay snapshot of the pruning point {}", pruning_point);
         Ok(())
@@ -920,7 +926,11 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         // the header phase reached 100% reads like a rollback when it is just a new phase. The
         // header phase and this body phase each have their OWN ProgressReporter (each starting at
         // 0% over its own DAA-score window), so a body percent below the header percent is normal.
-        info!("IBD: {} missing block bodies to sync from peer {} (header sync is already complete; this is the body phase)", hashes.len(), self.router);
+        info!(
+            "IBD: {} missing block bodies to sync from peer {} (header sync is already complete; this is the body phase)",
+            hashes.len(),
+            self.router
+        );
 
         let low_header = consensus.async_get_header(*hashes.first().expect("hashes was non empty")).await?;
         let high_header = consensus.async_get_header(*hashes.last().expect("hashes was non empty")).await?;

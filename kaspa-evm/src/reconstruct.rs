@@ -14,7 +14,9 @@
 //! genesis state). The consensus driver gathers the seed + diffs by walking the
 //! canonical number map and calls this; everything here is offline-testable.
 
-use kaspa_consensus_core::evm::{apply_state_diff, recon_from_snapshot, recon_to_snapshot, EvmStateDiffV2, EvmStateSnapshot, StateDiffError};
+use kaspa_consensus_core::evm::{
+    EvmStateDiffV2, EvmStateSnapshot, StateDiffError, apply_state_diff, recon_from_snapshot, recon_to_snapshot,
+};
 use kaspa_hashes::EvmH256;
 
 /// A historical-reconstruction failure (design §12.4) — fail closed.
@@ -82,7 +84,7 @@ pub fn reconstruct_evm_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::evm::{compute_state_diff, EVM_EMPTY_CODE_HASH};
+    use kaspa_consensus_core::evm::{EVM_EMPTY_CODE_HASH, compute_state_diff};
     use revm::primitives::{Address, KECCAK_EMPTY, U256};
     use std::collections::BTreeMap;
 
@@ -152,8 +154,9 @@ mod tests {
 
         // Reconstruct the last block from the genesis seed + all diffs.
         let target = snaps.len() - 1;
-        let got = reconstruct_evm_state(&EvmStateSnapshot::default(), &diffs, |h| code_store.get(&h.as_bytes()).cloned(), roots[target])
-            .expect("reconstruction verifies");
+        let got =
+            reconstruct_evm_state(&EvmStateSnapshot::default(), &diffs, |h| code_store.get(&h.as_bytes()).cloned(), roots[target])
+                .expect("reconstruction verifies");
         assert_eq!(got, snaps[target]);
     }
 
@@ -161,11 +164,8 @@ mod tests {
     /// same verified state (checkpoint anchor path).
     #[test]
     fn reconstructs_from_midchain_checkpoint() {
-        let specs: Vec<Vec<(u8, u64, u64, &[u8], &[(u64, u64)])>> = vec![
-            vec![(0x0A, 1, 500, &[], &[])],
-            vec![(0x0A, 2, 400, &[], &[(2, 2)])],
-            vec![(0x0A, 3, 300, &[], &[(2, 2), (3, 3)])],
-        ];
+        let specs: Vec<Vec<(u8, u64, u64, &[u8], &[(u64, u64)])>> =
+            vec![vec![(0x0A, 1, 500, &[], &[])], vec![(0x0A, 2, 400, &[], &[(2, 2)])], vec![(0x0A, 3, 300, &[], &[(2, 2), (3, 3)])]];
         let mut snaps = vec![EvmStateSnapshot::default()];
         let mut roots = vec![EvmH256::from_bytes(kaspa_consensus_core::evm::EVM_GENESIS_STATE_ROOT.as_bytes())];
         for s in &specs {

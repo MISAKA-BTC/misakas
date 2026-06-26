@@ -4,7 +4,7 @@ use crate::{
     subnets::SUBNETWORK_ID_SIZE,
     tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry, VerifiableTransaction},
 };
-use kaspa_hashes::{HASH64_SIZE, HASH_SIZE};
+use kaspa_hashes::{HASH_SIZE, HASH64_SIZE};
 
 // transaction_estimated_serialized_size is the estimated size of a transaction in some
 // serialization. This has to be deterministic, but not necessarily accurate, since

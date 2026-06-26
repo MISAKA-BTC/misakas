@@ -10,13 +10,11 @@ use std::cmp::max;
 
 use crate::matrix::Matrix;
 use kaspa_consensus_core::{
-    BlockLevel,
-    hashing,
+    BlockLevel, hashing,
     header::Header,
     pow_layer0::{
-        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_FINALIZER_BYTES,
-        POW_L1_BLAKE2B_SHA3_OUT_BYTES, PowLayer0Error, argon2id_l1_tag_v1, blake2b_sha3_l1_tag_v1,
-        l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
+        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES,
+        PowLayer0Error, argon2id_l1_tag_v1, blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
     },
 };
 use kaspa_hashes::{Hash64, PowHash};

@@ -15,11 +15,11 @@
 use clap::{Parser, Subcommand};
 use kaspa_addresses::{Address, Prefix};
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::dns_finality::{
     DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation, signature_fingerprint,
     single_attestation_shard, stake_attestation_message,
 };
-use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::network::NetworkType;
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, UtxoEntry};
@@ -457,8 +457,12 @@ async fn bond(args: BondArgs) -> Result<(), String> {
     let prefix = prefix_for(server.network_id.network_type);
     let funding_addr = key.funding_address(prefix);
     let params = Params::from(server.network_id);
-    let mass_calc =
-        MassCalculator::new(params.mass_per_tx_byte, params.mass_per_script_pub_key_byte, params.mass_per_sig_op, params.storage_mass_parameter);
+    let mass_calc = MassCalculator::new(
+        params.mass_per_tx_byte,
+        params.mass_per_script_pub_key_byte,
+        params.mass_per_sig_op,
+        params.storage_mass_parameter,
+    );
     info!("[{VALIDATOR}] staking {} sompi as validator_id={} (funding {})", args.amount, key.validator_id, funding_addr);
 
     // Aggregate enough MATURE funding UTXOs to cover amount + fee. Mining pays the funding address
@@ -529,11 +533,14 @@ async fn bond(args: BondArgs) -> Result<(), String> {
         fee,
     )?;
 
-    let txid = client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
+    let txid =
+        client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
     info!("[{VALIDATOR}] submitted stake-bond tx (txid={txid})");
     // The bond outpoint is always output-0 of the bond tx.
     println!("bond_outpoint: {txid}:0");
-    println!("(once accepted + activation_daa_score reached, run: {VALIDATOR} run --validator-key <key> --stake-bond {txid}:0 --signed-epoch-db <db>)");
+    println!(
+        "(once accepted + activation_daa_score reached, run: {VALIDATOR} run --validator-key <key> --stake-bond {txid}:0 --signed-epoch-db <db>)"
+    );
     let _ = client.disconnect().await;
     Ok(())
 }
@@ -581,7 +588,8 @@ async fn deposit_lock(args: DepositLockArgs) -> Result<(), String> {
         return Err(format!("--evm-address must be 40 hex chars (20 bytes), got '{}'", args.evm_address));
     }
     let mut evm_address = [0u8; 20];
-    faster_hex::hex_decode(evm_hex.to_ascii_lowercase().as_bytes(), &mut evm_address).map_err(|e| format!("malformed --evm-address: {e}"))?;
+    faster_hex::hex_decode(evm_hex.to_ascii_lowercase().as_bytes(), &mut evm_address)
+        .map_err(|e| format!("malformed --evm-address: {e}"))?;
     let checksummed = eip55_checksum(&evm_address);
     let has_upper = evm_hex.bytes().any(|b| b.is_ascii_uppercase());
     let has_lower = evm_hex.bytes().any(|b| b.is_ascii_lowercase());
@@ -593,7 +601,9 @@ async fn deposit_lock(args: DepositLockArgs) -> Result<(), String> {
             ));
         }
     } else {
-        warn!("[{VALIDATOR}] --evm-address has no EIP-55 checksum (single-case), so typos can't be detected — its checksummed form is {checksummed}. Prefer pasting the EIP-55 address.");
+        warn!(
+            "[{VALIDATOR}] --evm-address has no EIP-55 checksum (single-case), so typos can't be detected — its checksummed form is {checksummed}. Prefer pasting the EIP-55 address."
+        );
     }
     // A deposit credits a BALANCE (it does NOT call the contract), so these are almost always a
     // mistake: zero ⇒ refuse; system (F001/F002/F003) + EVM precompiles (0x01..0x09) ⇒ strong warn.
@@ -603,7 +613,9 @@ async fn deposit_lock(args: DepositLockArgs) -> Result<(), String> {
     if evm_address[..16].iter().all(|&b| b == 0) {
         let tail = u32::from_be_bytes([evm_address[16], evm_address[17], evm_address[18], evm_address[19]]);
         if tail == 0xF001 || tail == 0xF002 || tail == 0xF003 || (1..=9).contains(&tail) {
-            warn!("[{VALIDATOR}] --evm-address {checksummed} is a SYSTEM/precompile address — depositing there is almost certainly a mistake (no normal account holds a balance there).");
+            warn!(
+                "[{VALIDATOR}] --evm-address {checksummed} is a SYSTEM/precompile address — depositing there is almost certainly a mistake (no normal account holds a balance there)."
+            );
         }
     }
 
@@ -667,7 +679,9 @@ async fn deposit_lock(args: DepositLockArgs) -> Result<(), String> {
         client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
     info!("[{VALIDATOR}] submitted deposit-lock tx (txid={txid})");
     println!("deposit_lock_outpoint: {txid}:0");
-    println!("(once accepted, claim on a MINING node: submitEvmDepositClaim {txid} 0 — the claim then executes in an accepting chain block and credits the EVM address)");
+    println!(
+        "(once accepted, claim on a MINING node: submitEvmDepositClaim {txid} 0 — the claim then executes in an accepting chain block and credits the EVM address)"
+    );
     let _ = client.disconnect().await;
     Ok(())
 }
@@ -690,8 +704,12 @@ async fn unbond(args: UnbondArgs) -> Result<(), String> {
     let prefix = prefix_for(server.network_id.network_type);
     let funding_addr = key.funding_address(prefix);
     let params = Params::from(server.network_id);
-    let mass_calc =
-        MassCalculator::new(params.mass_per_tx_byte, params.mass_per_script_pub_key_byte, params.mass_per_sig_op, params.storage_mass_parameter);
+    let mass_calc = MassCalculator::new(
+        params.mass_per_tx_byte,
+        params.mass_per_script_pub_key_byte,
+        params.mass_per_sig_op,
+        params.storage_mass_parameter,
+    );
     // Mass-based fee unless overridden (the unbond payload carries the 2592-byte pubkey + 4627-byte sig).
     let fee = match args.fee {
         Some(f) => f,
@@ -719,8 +737,13 @@ async fn unbond(args: UnbondArgs) -> Result<(), String> {
         .filter(|e| e.utxo_entry.amount > fee)
         .filter(|e| is_spendable(e.utxo_entry.is_coinbase, e.utxo_entry.block_daa_score, virtual_daa, coinbase_maturity))
         .max_by_key(|e| e.utxo_entry.amount)
-        .ok_or_else(|| format!("no single MATURE funding UTXO > {} sompi (fee) at {funding_addr} other than the bond itself; \
-            send funds there and wait for coinbase maturity ({coinbase_maturity} blocks)", fee))?;
+        .ok_or_else(|| {
+            format!(
+                "no single MATURE funding UTXO > {} sompi (fee) at {funding_addr} other than the bond itself; \
+            send funds there and wait for coinbase maturity ({coinbase_maturity} blocks)",
+                fee
+            )
+        })?;
     let funding_outpoint: TransactionOutpoint = funding.outpoint.into();
     let funding_entry: UtxoEntry = funding.utxo_entry.into();
 
@@ -728,7 +751,8 @@ async fn unbond(args: UnbondArgs) -> Result<(), String> {
     // of the signed authorization on another network).
     let tx = key.build_funded_unbond_tx(params.genesis.hash.as_byte_slice(), bond_outpoint, funding_outpoint, &funding_entry, fee)?;
 
-    let txid = client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
+    let txid =
+        client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| format!("submitTransaction failed: {e}"))?;
     info!("[{VALIDATOR}] submitted unbond request (txid={txid}) for bond {bond_outpoint}");
     println!("unbond_request_txid: {txid}");
     println!("(once accepted the bond enters Unbonding; its locked stake is spendable after unbonding_period_blocks more blocks)");
@@ -821,16 +845,12 @@ fn eip55_checksum(addr: &[u8; 20]) -> String {
 /// kaspa-pq EVM Lane (§9.2): submit a deposit-claim for an EVM_DEPOSIT_LOCK outpoint via
 /// the node's `submitEvmDepositClaim` RPC (queues it for inclusion on this mining node).
 async fn claim(args: ClaimArgs) -> Result<(), String> {
-    let (txid, index_str) = args
-        .outpoint
-        .split_once(':')
-        .ok_or_else(|| format!("--outpoint must be 'txid_hex:index', got '{}'", args.outpoint))?;
+    let (txid, index_str) =
+        args.outpoint.split_once(':').ok_or_else(|| format!("--outpoint must be 'txid_hex:index', got '{}'", args.outpoint))?;
     let index: u32 = index_str.parse().map_err(|e| format!("bad outpoint index '{index_str}': {e}"))?;
     let client = connect(&args.node_rpc).await?;
-    let resp = client
-        .submit_evm_deposit_claim(txid.to_string(), index)
-        .await
-        .map_err(|e| format!("submitEvmDepositClaim failed: {e}"))?;
+    let resp =
+        client.submit_evm_deposit_claim(txid.to_string(), index).await.map_err(|e| format!("submitEvmDepositClaim failed: {e}"))?;
     info!("[{VALIDATOR}] submitted deposit-claim for {txid}:{index} -> {resp:?}");
     let _ = client.disconnect().await;
     Ok(())
@@ -862,10 +882,7 @@ async fn balance(args: BalanceArgs) -> Result<(), String> {
     if !server.is_synced {
         info!("[{VALIDATOR}] WARNING: node '{node_network}' is NOT fully synced — balance may be stale");
     }
-    let entries = client
-        .get_balances_by_addresses(addrs.clone())
-        .await
-        .map_err(|e| format!("getBalancesByAddresses failed: {e}"))?;
+    let entries = client.get_balances_by_addresses(addrs.clone()).await.map_err(|e| format!("getBalancesByAddresses failed: {e}"))?;
     // Map the response back by address string (response order is not guaranteed).
     let found: std::collections::HashMap<String, u64> =
         entries.into_iter().map(|e| (e.address.to_string(), e.balance.unwrap_or(0))).collect();
@@ -925,8 +942,12 @@ async fn run_daemon(args: RunArgs) -> Result<(), String> {
     let prefix = prefix_for(server.network_id.network_type);
     let params = Params::from(server.network_id);
     let coinbase_maturity = params.coinbase_maturity();
-    let mass_calc =
-        MassCalculator::new(params.mass_per_tx_byte, params.mass_per_script_pub_key_byte, params.mass_per_sig_op, params.storage_mass_parameter);
+    let mass_calc = MassCalculator::new(
+        params.mass_per_tx_byte,
+        params.mass_per_script_pub_key_byte,
+        params.mass_per_sig_op,
+        params.storage_mass_parameter,
+    );
     info!("[{VALIDATOR}] connected: network={node_network} synced={} version={}", server.is_synced, server.server_version);
 
     // Load the signing identity if fully configured (key + bond + state DB); else observe.
@@ -1071,14 +1092,8 @@ impl Attestor {
         // never trust the RPC-supplied digest. The RPC `message` is advisory: it
         // MUST equal the local recompute, else a malicious/desynced node is trying
         // to make us sign a non-canonical message → fail closed (no signature).
-        let expected = stake_attestation_message(
-            &self.genesis_hash,
-            target.epoch,
-            target_hash,
-            target.target_daa_score,
-            vsc,
-            self.bond_outpoint,
-        );
+        let expected =
+            stake_attestation_message(&self.genesis_hash, target.epoch, target_hash, target.target_daa_score, vsc, self.bond_outpoint);
         let digest = expected.as_bytes();
         let rpc_message = decode_message(&target.message)?;
         if rpc_message != digest {
@@ -1110,7 +1125,10 @@ impl Attestor {
         }
 
         if dry_run {
-            info!("[{VALIDATOR}] DRY-RUN epoch {} target={} (recomputed digest verified; not signing/submitting)", target.epoch, target.target_hash);
+            info!(
+                "[{VALIDATOR}] DRY-RUN epoch {} target={} (recomputed digest verified; not signing/submitting)",
+                target.epoch, target.target_hash
+            );
             return Ok(());
         }
 
@@ -1243,8 +1261,7 @@ impl Attestor {
                 // next epoch. The tx id excludes signature scripts, so it is stable post-sign and
                 // matches the id the node assigns.
                 self.inflight_spent.insert(funding_outpoint, tx.id());
-                let change =
-                    UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
+                let change = UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
                 self.pending_change = Some((TransactionOutpoint::new(tx.id(), 0), change));
                 // Record the head tx id (for the per-txid mempool confirmation lookup) and which
                 // epoch produced it (so the stall counter advances once per unconfirmed epoch).

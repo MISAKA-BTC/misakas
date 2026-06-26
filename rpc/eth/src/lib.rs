@@ -402,13 +402,7 @@ pub trait EthProvider: Send + Sync + 'static {
     /// `eth_getLogs`: canonical logs over the `evm_number` range `[from, to]`,
     /// filtered by `addresses` (empty = any) and per-position `topics` (an empty
     /// inner vec = wildcard). The caller bounds the block range.
-    async fn get_logs(
-        &self,
-        from: u64,
-        to: u64,
-        addresses: Vec<[u8; 20]>,
-        topics: Vec<Vec<[u8; 32]>>,
-    ) -> EthResult<Vec<EthLogEntry>>;
+    async fn get_logs(&self, from: u64, to: u64, addresses: Vec<[u8; 20]>, topics: Vec<Vec<[u8; 32]>>) -> EthResult<Vec<EthLogEntry>>;
 
     /// `eth_feeHistory`: base fees + gas-used ratios over the last `block_count`
     /// blocks ending at `newest` (used by EIP-1559 tooling — Foundry/ethers/MetaMask).
@@ -625,7 +619,10 @@ async fn account_at_param(
 
 async fn eth_get_balance(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let addr = parse_address_param(params, 0)?;
-    Ok(account_at_param(provider, addr, params, 1).await?.map(|a| quantity_from_be32(&a.balance.to_be_bytes())).unwrap_or_else(|| json!("0x0")))
+    Ok(account_at_param(provider, addr, params, 1)
+        .await?
+        .map(|a| quantity_from_be32(&a.balance.to_be_bytes()))
+        .unwrap_or_else(|| json!("0x0")))
 }
 
 async fn eth_get_transaction_count(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
@@ -649,7 +646,9 @@ async fn eth_get_storage_at(provider: &Arc<dyn EthProvider>, params: &Value) -> 
     let addr = parse_address_param(params, 0)?;
     let slot = parse_slot_param(params, 1)?;
     // The block selector for storageAt is param #2.
-    let value = account_at_param(provider, addr, params, 2).await?.and_then(|a| a.storage.into_iter().find(|(k, _)| *k == slot).map(|(_, v)| v));
+    let value = account_at_param(provider, addr, params, 2)
+        .await?
+        .and_then(|a| a.storage.into_iter().find(|(k, _)| *k == slot).map(|(_, v)| v));
     // getStorageAt returns a full 32-byte DATA value (zero-padded).
     let bytes = value.map(|v| v.to_be_bytes()).unwrap_or([0u8; 32]);
     Ok(json!(format!("0x{}", faster_hex::hex_string(&bytes))))
@@ -827,7 +826,10 @@ pub enum BlockId {
     /// EIP-1898 `{ blockHash, requireCanonical }`: a 32-byte eth block id (the first
     /// 32 bytes of the L1 hash) and whether a non-canonical (side-branch) block must
     /// be rejected.
-    Hash { hash: [u8; 32], require_canonical: bool },
+    Hash {
+        hash: [u8; 32],
+        require_canonical: bool,
+    },
 }
 
 /// A block-selector tag string (`latest`/`pending`/`safe`/`finalized`/`earliest`) vs
@@ -1037,7 +1039,9 @@ fn parse_address_list(v: Option<&Value>) -> EthResult<Vec<[u8; 20]>> {
         Some(Value::String(s)) => Ok(vec![parse_addr20(s)?]),
         Some(Value::Array(arr)) => arr
             .iter()
-            .map(|x| x.as_str().ok_or_else(|| EthRpcError::invalid_params("address array entries must be strings")).and_then(parse_addr20))
+            .map(|x| {
+                x.as_str().ok_or_else(|| EthRpcError::invalid_params("address array entries must be strings")).and_then(parse_addr20)
+            })
             .collect(),
         _ => Err(EthRpcError::invalid_params("address must be a string or an array")),
     }
@@ -1063,7 +1067,9 @@ fn parse_topic_filter(v: Option<&Value>) -> EthResult<Vec<Vec<[u8; 32]>>> {
             Value::String(s) => Ok(vec![parse_topic32(s)?]),
             Value::Array(opts) => opts
                 .iter()
-                .map(|o| o.as_str().ok_or_else(|| EthRpcError::invalid_params("topic options must be strings")).and_then(parse_topic32))
+                .map(|o| {
+                    o.as_str().ok_or_else(|| EthRpcError::invalid_params("topic options must be strings")).and_then(parse_topic32)
+                })
                 .collect(),
             _ => Err(EthRpcError::invalid_params("each topic must be null, a string, or an array")),
         })
@@ -1154,8 +1160,12 @@ async fn eth_get_transaction_by_hash(provider: &Arc<dyn EthProvider>, params: &V
 /// `prestateTracer` the state diff. Any other named tracer is `invalid_params`.
 async fn debug_trace_transaction(provider: &Arc<dyn EthProvider>, params: &Value) -> EthResult<Value> {
     let hash = parse_hash32_param(params, 0)?;
-    let requested_tracer =
-        params.as_array().and_then(|a| a.get(1)).filter(|cfg| !cfg.is_null()).and_then(|cfg| cfg.get("tracer")).and_then(|t| t.as_str());
+    let requested_tracer = params
+        .as_array()
+        .and_then(|a| a.get(1))
+        .filter(|cfg| !cfg.is_null())
+        .and_then(|cfg| cfg.get("tracer"))
+        .and_then(|t| t.as_str());
     match requested_tracer {
         // Geth-faithful: omitting the tracer yields the opcode/struct logger.
         None => Ok(provider.trace_struct_log(hash).await?.map(|t| render_struct_log(&t)).unwrap_or(Value::Null)),
@@ -1471,7 +1481,10 @@ async fn process(provider: &Arc<dyn EthProvider>, body: Value) -> Option<Value> 
             // Audit H-02: bound the batch so one request cannot fan out into
             // tens of thousands of dispatched calls (a 4 MiB body of tiny calls).
             if items.len() > MAX_BATCH_ITEMS {
-                return Some(err_value(codes::INVALID_REQUEST, &format!("batch too large: {} items > {MAX_BATCH_ITEMS} max", items.len())));
+                return Some(err_value(
+                    codes::INVALID_REQUEST,
+                    &format!("batch too large: {} items > {MAX_BATCH_ITEMS} max", items.len()),
+                ));
             }
             let mut out = Vec::with_capacity(items.len());
             for item in items {
@@ -1619,11 +1632,7 @@ async fn serve_conn(mut stream: TcpStream, provider: Arc<dyn EthProvider>) -> st
         let content_length = lines
             .find_map(|l| {
                 let (k, v) = l.split_once(':')?;
-                if k.trim().eq_ignore_ascii_case("content-length") {
-                    v.trim().parse::<usize>().ok()
-                } else {
-                    None
-                }
+                if k.trim().eq_ignore_ascii_case("content-length") { v.trim().parse::<usize>().ok() } else { None }
             })
             .unwrap_or(0);
         if content_length > MAX_BODY_BYTES {

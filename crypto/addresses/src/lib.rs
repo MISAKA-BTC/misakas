@@ -319,8 +319,7 @@ impl BorshDeserialize for Address {
         let payload: Vec<u8> = borsh::BorshDeserialize::deserialize_reader(reader)?;
         // audit IDENT-01: a malformed serialized address (wrong payload length for
         // the version) must be an InvalidData error, never an `assert!` panic.
-        Self::try_new(prefix, version, &payload)
-            .map_err(|e| borsh::io::Error::new(borsh::io::ErrorKind::InvalidData, e.to_string()))
+        Self::try_new(prefix, version, &payload).map_err(|e| borsh::io::Error::new(borsh::io::ErrorKind::InvalidData, e.to_string()))
     }
 }
 
@@ -613,12 +612,12 @@ mod tests {
     #[test]
     fn decode_never_panics_on_malformed_input() {
         for s in [
-            "misaka:s2rylsqy",    // (auditor) empty payload + checksum
-            "misaka:qgfqjuq9rq",  // (auditor) version byte only
-            "misaka:",            // empty body
-            "misaka:q",           // body shorter than the 8-char checksum
+            "misaka:s2rylsqy",   // (auditor) empty payload + checksum
+            "misaka:qgfqjuq9rq", // (auditor) version byte only
+            "misaka:",           // empty body
+            "misaka:q",          // body shorter than the 8-char checksum
             "misakatest:qqqqqqqq",
-            "misaka:zzzzzzzzzz",  // invalid bech32 chars
+            "misaka:zzzzzzzzzz",               // invalid bech32 chars
             "misaka:qqqqqqqqqqqqqqqqqqqqqqqq", // valid charset, wrong length/checksum
         ] {
             let parsed: Result<Address, AddressError> = s.to_string().try_into();

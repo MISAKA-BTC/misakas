@@ -16,12 +16,12 @@ use kaspa_txscript::{ScriptPolicy, is_legacy_signature_opcode, opcodes::codes};
 fn pq_only_disables_exactly_the_legacy_secp256k1_signature_opcodes() {
     // Legacy secp256k1 signature opcodes — MUST be rejected in PQ-only mode.
     let legacy = [
-        ("OpCheckSig", codes::OpCheckSig),                     // 0xac
-        ("OpCheckSigVerify", codes::OpCheckSigVerify),         // 0xad
-        ("OpCheckSigECDSA", codes::OpCheckSigECDSA),           // 0xab
-        ("OpCheckMultiSig", codes::OpCheckMultiSig),           // 0xae
+        ("OpCheckSig", codes::OpCheckSig),                       // 0xac
+        ("OpCheckSigVerify", codes::OpCheckSigVerify),           // 0xad
+        ("OpCheckSigECDSA", codes::OpCheckSigECDSA),             // 0xab
+        ("OpCheckMultiSig", codes::OpCheckMultiSig),             // 0xae
         ("OpCheckMultiSigVerify", codes::OpCheckMultiSigVerify), // 0xaf
-        ("OpCheckMultiSigECDSA", codes::OpCheckMultiSigECDSA), // 0xa9
+        ("OpCheckMultiSigECDSA", codes::OpCheckMultiSigECDSA),   // 0xa9
     ];
     for (name, tag) in legacy {
         assert!(is_legacy_signature_opcode(tag), "{name} ({tag:#04x}) must be a disabled legacy signature opcode");
@@ -31,14 +31,8 @@ fn pq_only_disables_exactly_the_legacy_secp256k1_signature_opcodes() {
 #[test]
 fn pq_only_keeps_the_mldsa_signature_opcodes() {
     // The ML-DSA-87 signature opcodes are the WHOLE point — they must survive.
-    assert!(
-        !is_legacy_signature_opcode(codes::OpCheckSigMlDsa87),
-        "OpCheckSigMlDsa87 (0xa6) must NOT be treated as legacy"
-    );
-    assert!(
-        !is_legacy_signature_opcode(codes::OpCheckMultiSigMlDsa87),
-        "OpCheckMultiSigMlDsa87 (0xa7) must NOT be treated as legacy"
-    );
+    assert!(!is_legacy_signature_opcode(codes::OpCheckSigMlDsa87), "OpCheckSigMlDsa87 (0xa6) must NOT be treated as legacy");
+    assert!(!is_legacy_signature_opcode(codes::OpCheckMultiSigMlDsa87), "OpCheckMultiSigMlDsa87 (0xa7) must NOT be treated as legacy");
 }
 
 #[test]
@@ -46,9 +40,12 @@ fn pq_only_keeps_the_p2pkh_template_opcodes() {
     // The non-signature opcodes that compose the ML-DSA P2PKH scriptPubKey
     // (OP_DUP OP_BLAKE2B OP_DATA32 <hash> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87)
     // must never be classified as legacy signature opcodes.
-    for (name, tag) in
-        [("OpDup", codes::OpDup), ("OpBlake2b", codes::OpBlake2b), ("OpData32", codes::OpData32), ("OpEqualVerify", codes::OpEqualVerify)]
-    {
+    for (name, tag) in [
+        ("OpDup", codes::OpDup),
+        ("OpBlake2b", codes::OpBlake2b),
+        ("OpData32", codes::OpData32),
+        ("OpEqualVerify", codes::OpEqualVerify),
+    ] {
         assert!(!is_legacy_signature_opcode(tag), "{name} ({tag:#04x}) is not a signature opcode and must survive");
     }
 }

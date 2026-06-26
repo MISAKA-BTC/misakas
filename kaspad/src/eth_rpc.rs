@@ -12,9 +12,9 @@ use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
 use kaspa_eth_rpc::{
-    BlockId, EthAccessListItem, EthAccountState, EthBlock, EthCallFrame, EthCallRequest, EthCandidateTrace, EthEvmTxStatus, EthFeeHistory,
-    EthLog, EthLogEntry, EthLogEvent, EthPrestateAccount, EthProvider, EthReceipt, EthResult, EthRpcError, EthStructLog, EthStructLogTrace,
-    EthTx,
+    BlockId, EthAccessListItem, EthAccountState, EthBlock, EthCallFrame, EthCallRequest, EthCandidateTrace, EthEvmTxStatus,
+    EthFeeHistory, EthLog, EthLogEntry, EthLogEvent, EthPrestateAccount, EthProvider, EthReceipt, EthResult, EthRpcError,
+    EthStructLog, EthStructLogTrace, EthTx,
 };
 use kaspa_hashes::EvmH256;
 use kaspa_p2p_flows::flow_context::FlowContext;
@@ -173,10 +173,8 @@ impl EthProvider for NodeEthProvider {
     async fn block_number(&self) -> EthResult<u64> {
         let session = self.consensus_manager.consensus().session().await;
         // Store read → spawn_blocking (do not block the async executor on RocksDB).
-        let header = session
-            .spawn_blocking(|c| c.get_evm_head_header())
-            .await
-            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        let header =
+            session.spawn_blocking(|c| c.get_evm_head_header()).await.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
         Ok(header.map(|h| h.evm_number).unwrap_or(0))
     }
 
@@ -195,10 +193,8 @@ impl EthProvider for NodeEthProvider {
         // genesis initial base fee if the head header is briefly unavailable.
         use kaspa_consensus_core::evm::EVM_INITIAL_BASE_FEE;
         let session = self.consensus_manager.consensus().session().await;
-        let header = session
-            .spawn_blocking(|c| c.get_evm_head_header())
-            .await
-            .map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
+        let header =
+            session.spawn_blocking(|c| c.get_evm_head_header()).await.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
         Ok(header.and_then(|h| h.base_fee_per_gas.try_to_u128()).unwrap_or(EVM_INITIAL_BASE_FEE as u128))
     }
 
@@ -414,9 +410,10 @@ impl EthProvider for NodeEthProvider {
     /// `debug_traceTransaction` with the `prestateTracer` (diffMode, §11.1): the
     /// per-account pre/post state diff — the SAME replay as the callTracer.
     async fn trace_prestate(&self, tx_hash: [u8; 32]) -> EthResult<Option<Vec<EthPrestateAccount>>> {
-        Ok(self.replay_trace(tx_hash, false).await?.map(|(traced, _accepting, _originating)| {
-            traced.prestate.iter().map(convert_prestate_account).collect()
-        }))
+        Ok(self
+            .replay_trace(tx_hash, false)
+            .await?
+            .map(|(traced, _accepting, _originating)| traced.prestate.iter().map(convert_prestate_account).collect()))
     }
 
     /// `debug_traceTransaction` with no tracer = the Geth opcode/struct logger
@@ -497,9 +494,8 @@ impl EthProvider for NodeEthProvider {
         // selected-chain acceptance and is the ONLY source of truth for "accepted"
         // (audit H-06 — a reorged-out acceptance must never read as accepted).
         let session = self.consensus_manager.consensus().session().await;
-        let (locs, canon) = session
-            .spawn_blocking(move |c| (c.get_evm_tx_locations(h).ok(), c.get_evm_tx_receipt(h).ok().flatten()))
-            .await;
+        let (locs, canon) =
+            session.spawn_blocking(move |c| (c.get_evm_tx_locations(h).ok(), c.get_evm_tx_receipt(h).ok().flatten())).await;
         // The L1 block ids are 64-byte (BLAKE2b-512); expose the leading 32 as
         // standard-shaped, client-opaque ids (as elsewhere here).
         let to32 = |b: &kaspa_hashes::Hash64| {
@@ -509,7 +505,11 @@ impl EthProvider for NodeEthProvider {
         };
         let canonical_accepted = canon.as_ref().map(|v| (to32(&v.accepting_block), v.receipt_index));
         let (included_in, all_accepted, last_skip_class) = match &locs {
-            Some(l) => (l.included_in.iter().map(to32).collect::<Vec<_>>(), l.accepted_in.iter().map(|(b, idx)| (to32(b), *idx)).collect::<Vec<_>>(), l.last_skip_class),
+            Some(l) => (
+                l.included_in.iter().map(to32).collect::<Vec<_>>(),
+                l.accepted_in.iter().map(|(b, idx)| (to32(b), *idx)).collect::<Vec<_>>(),
+                l.last_skip_class,
+            ),
             None => (Vec::new(), Vec::new(), None),
         };
         // Acceptances in the index that are NOT the canonical one = orphaned (side
@@ -567,11 +567,9 @@ impl EthProvider for NodeEthProvider {
         // not yet in any payload is decoded from the pool, with null block context.
         let decoded = match decoded {
             Some(d) => Some(d),
-            None => self
-                .flow_context
-                .mining_manager()
-                .get_evm_transaction_raw(&h)
-                .and_then(|raw| kaspa_evm::tx::decode_eth_tx(&raw).ok()),
+            None => {
+                self.flow_context.mining_manager().get_evm_transaction_raw(&h).and_then(|raw| kaspa_evm::tx::decode_eth_tx(&raw).ok())
+            }
         };
         Ok(decoded.map(|d| EthTx {
             hash: tx_hash,
@@ -657,13 +655,7 @@ impl EthProvider for NodeEthProvider {
         Ok(resp.map(|r| to_eth_block(r, parent)))
     }
 
-    async fn get_logs(
-        &self,
-        from: u64,
-        to: u64,
-        addresses: Vec<[u8; 20]>,
-        topics: Vec<Vec<[u8; 32]>>,
-    ) -> EthResult<Vec<EthLogEntry>> {
+    async fn get_logs(&self, from: u64, to: u64, addresses: Vec<[u8; 20]>, topics: Vec<Vec<[u8; 32]>>) -> EthResult<Vec<EthLogEntry>> {
         let session = self.consensus_manager.consensus().session().await;
         let addrs: Vec<_> = addresses.into_iter().map(kaspa_consensus_core::evm::EvmAddress::from_bytes).collect();
         let tpcs: Vec<Vec<_>> = topics.into_iter().map(|p| p.into_iter().map(EvmH256::from_bytes).collect()).collect();
@@ -680,8 +672,7 @@ impl EthProvider for NodeEthProvider {
         let (base_fees, ratios, oldest) = session
             .spawn_blocking(move |c| {
                 let oldest = newest.saturating_sub(block_count.saturating_sub(1));
-                let head_base =
-                    c.get_evm_head_header().ok().flatten().map(|h| h.base_fee_per_gas.to_be_bytes()).unwrap_or([0u8; 32]);
+                let head_base = c.get_evm_head_header().ok().flatten().map(|h| h.base_fee_per_gas.to_be_bytes()).unwrap_or([0u8; 32]);
                 let mut base_fees: Vec<[u8; 32]> = Vec::new();
                 let mut ratios: Vec<f64> = Vec::new();
                 for n in oldest..=newest {
@@ -760,7 +751,8 @@ impl NodeEthProvider {
         &self,
         tx_hash: [u8; 32],
         capture_struct_logs: bool,
-    ) -> EthResult<Option<(kaspa_evm::trace::TracedTx, kaspa_consensus_core::BlockHash, Option<kaspa_consensus_core::BlockHash>)>> {
+    ) -> EthResult<Option<(kaspa_evm::trace::TracedTx, kaspa_consensus_core::BlockHash, Option<kaspa_consensus_core::BlockHash>)>>
+    {
         // §11.5: bound concurrent replays. The permit is MOVED INTO the blocking
         // closure so it is released only when the (uncancellable) replay finishes —
         // not when the awaiting connection times out and drops this future.
@@ -794,7 +786,7 @@ impl NodeEthProvider {
                         None => {
                             return Err(EthRpcError::server(
                                 "historical state unavailable for trace (selected-parent state snapshot pruned)",
-                            ))
+                            ));
                         }
                     }
                 } else {
@@ -817,17 +809,15 @@ impl NodeEthProvider {
                     kaspa_evm::trace::TraceLimits::default(),
                 )
                 .map_err(|e| EthRpcError::server(format!("{e}")))?;
-                let originating =
-                    kaspa_evm::trace::candidate_index_for_receipt(&body, view.receipt_index).map(|i| body.txs[i].originating_payload_block);
+                let originating = kaspa_evm::trace::candidate_index_for_receipt(&body, view.receipt_index)
+                    .map(|i| body.txs[i].originating_payload_block);
                 Ok(Some((traced, accepting, originating)))
             })
             .await
     }
 
     /// Fetch the canonical-head EVM state snapshot + the call env (one spawn_blocking).
-    async fn head_snapshot_and_env(
-        &self,
-    ) -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
+    async fn head_snapshot_and_env(&self) -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
         let session = self.consensus_manager.consensus().session().await;
         let (snap, header) = session
             .spawn_blocking(|c| {
@@ -846,9 +836,7 @@ impl NodeEthProvider {
             (Some(s), _) => s,
             (None, None) => Default::default(),
             (None, Some(_)) => {
-                return Err(EthRpcError::server(
-                    "EVM state snapshot unavailable for head; refusing to simulate against empty state",
-                ))
+                return Err(EthRpcError::server("EVM state snapshot unavailable for head; refusing to simulate against empty state"));
             }
         };
         let env = kaspa_evm::sim::EthCallEnv {
@@ -1152,7 +1140,7 @@ mod tests {
         assert_eq!(
             seq,
             vec![
-                ('B', 0, true),  // detached, OLDEST (B) before the more-recent (C)
+                ('B', 0, true), // detached, OLDEST (B) before the more-recent (C)
                 ('B', 1, true),
                 ('C', 0, true),
                 ('C', 1, true),

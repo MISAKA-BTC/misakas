@@ -222,14 +222,9 @@ impl Frontier {
     /// (bounded by the per-block attestation-shard budget), so the filtered total mass is computed
     /// directly. Correct over clever: we never use the in-place sampler here since it would require
     /// excluding ids mid-sample.
-    pub fn build_selector_excluding(
-        &self,
-        policy: &Policy,
-        exclude: &HashSet<TransactionId>,
-    ) -> Box<dyn TemplateTransactionSelector> {
+    pub fn build_selector_excluding(&self, policy: &Policy, exclude: &HashSet<TransactionId>) -> Box<dyn TemplateTransactionSelector> {
         // Filtered total mass (frontier minus excluded txs).
-        let filtered_mass: u64 =
-            self.search_tree.ascending_iter().filter(|k| !exclude.contains(&k.tx.id())).map(|k| k.mass).sum();
+        let filtered_mass: u64 = self.search_tree.ascending_iter().filter(|k| !exclude.contains(&k.tx.id())).map(|k| k.mass).sum();
 
         if filtered_mass <= policy.max_block_mass {
             Box::new(TakeAllSelector::new(
@@ -316,9 +311,7 @@ impl Frontier {
 
     /// kaspa-pq DNS-finality (P1): returns the frontier keys (tx + mass + fee) in ascending feerate
     /// order. Used to build the attestation priority set without losing per-tx mass/fee.
-    pub fn keys_ascending_iter(
-        &self,
-    ) -> impl DoubleEndedIterator<Item = &FeerateTransactionKey> + ExactSizeIterator + FusedIterator {
+    pub fn keys_ascending_iter(&self) -> impl DoubleEndedIterator<Item = &FeerateTransactionKey> + ExactSizeIterator + FusedIterator {
         self.search_tree.ascending_iter()
     }
 }

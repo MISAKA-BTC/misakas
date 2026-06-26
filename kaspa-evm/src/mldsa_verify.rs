@@ -179,7 +179,8 @@ mod tests {
     fn prea_sign(seed: u8, preimage: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let kp = mldsa::generate_key_pair([seed; 32]);
         let digest = blake2b_512_keyed(F003_PREA_OP_MLDSA87_CONTEXT, preimage);
-        let sig = mldsa::sign(&kp.signing_key, digest.as_byte_slice(), F003_PREA_ROOT_MLDSA87_CONTEXT, [seed ^ 0xA5; 32]).expect("sign");
+        let sig =
+            mldsa::sign(&kp.signing_key, digest.as_byte_slice(), F003_PREA_ROOT_MLDSA87_CONTEXT, [seed ^ 0xA5; 32]).expect("sign");
         (kp.verification_key.as_ref().to_vec(), sig.as_ref().to_vec())
     }
 
@@ -239,8 +240,10 @@ mod tests {
         // context) must NOT verify — op-digest domain separation.
         let kp = mldsa::generate_key_pair([0x33; 32]);
         let wrong_digest = blake2b_512_keyed(F003_PREA_ROOT_MLDSA87_CONTEXT, &preimage);
-        let wrong_sig =
-            mldsa::sign(&kp.signing_key, wrong_digest.as_byte_slice(), F003_PREA_ROOT_MLDSA87_CONTEXT, [0x01; 32]).expect("sign").as_ref().to_vec();
+        let wrong_sig = mldsa::sign(&kp.signing_key, wrong_digest.as_byte_slice(), F003_PREA_ROOT_MLDSA87_CONTEXT, [0x01; 32])
+            .expect("sign")
+            .as_ref()
+            .to_vec();
         assert!(!run_f003_verify(&prea_input(&payload, &pubkey, &wrong_sig, &preimage)));
     }
 

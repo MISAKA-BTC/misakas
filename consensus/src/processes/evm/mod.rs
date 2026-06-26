@@ -10,7 +10,7 @@
 //! `evm_activation_daa_score`.
 
 #[cfg(feature = "evm")]
-pub use kaspa_evm::{execute_block_evm, AcceptedTxCandidate, EvmBlockInput};
+pub use kaspa_evm::{AcceptedTxCandidate, EvmBlockInput, execute_block_evm};
 
 /// v0.4 §6.1 class-1 payload admission (syntactic, per tx): EIP-2718 decode +
 /// ECDSA signer recovery + chain-id binding + a declared gas-limit sanity band
@@ -426,7 +426,12 @@ pub fn stage_evm_index_rows(
                     tx_index: rcpt_idx as u32,
                     in_receipt_log_index: in_rcpt_idx as u32,
                 };
-                log_index_store.write_posting_batch(batch, kaspa_consensus_core::evm::LogPostingKind::Address, &log.address.as_bytes(), &loc)?;
+                log_index_store.write_posting_batch(
+                    batch,
+                    kaspa_consensus_core::evm::LogPostingKind::Address,
+                    &log.address.as_bytes(),
+                    &loc,
+                )?;
                 for (ti, topic) in log.topics.iter().take(4).enumerate() {
                     if let Some(kind) = kaspa_consensus_core::evm::LogPostingKind::topic(ti) {
                         log_index_store.write_posting_batch(batch, kind, &topic.as_bytes(), &loc)?;
@@ -544,7 +549,7 @@ pub fn apply_diff_to_flat(
     batch: &mut rocksdb::WriteBatch,
     diff: &kaspa_consensus_core::evm::EvmStateDiffV2,
 ) -> Result<(), kaspa_database::prelude::StoreError> {
-    use kaspa_consensus_core::evm::{EvmU256, FlatAccount, EVM_EMPTY_CODE_HASH};
+    use kaspa_consensus_core::evm::{EVM_EMPTY_CODE_HASH, EvmU256, FlatAccount};
     use std::collections::BTreeMap;
     for ch in &diff.account_changes {
         let addr = ch.address;
@@ -584,7 +589,7 @@ pub fn materialize_snapshot(
     code: &crate::model::stores::evm::DbEvmCodeStore,
 ) -> Result<kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_database::prelude::StoreError> {
     use crate::model::stores::evm::EvmCodeStoreReader;
-    use kaspa_consensus_core::evm::{EvmStateSnapshot, EVM_EMPTY_CODE_HASH};
+    use kaspa_consensus_core::evm::{EVM_EMPTY_CODE_HASH, EvmStateSnapshot};
     let mut accounts = Vec::new();
     for entry in flat.iter() {
         let (addr, fa) = entry?;
@@ -628,7 +633,10 @@ pub struct StoreFlatReader<'a> {
 
 #[cfg(feature = "evm")]
 impl<'a> StoreFlatReader<'a> {
-    pub fn new(flat: &'a crate::model::stores::evm::DbEvmFlatAccountStore, code: &'a crate::model::stores::evm::DbEvmCodeStore) -> Self {
+    pub fn new(
+        flat: &'a crate::model::stores::evm::DbEvmFlatAccountStore,
+        code: &'a crate::model::stores::evm::DbEvmCodeStore,
+    ) -> Self {
         Self { flat, code }
     }
 }
@@ -765,7 +773,9 @@ type RebasePaths = (Vec<kaspa_consensus_core::evm::EvmStateDiffV2>, Vec<kaspa_co
 fn rebase_diff_paths(
     from: kaspa_consensus_core::BlockHash,
     to: kaspa_consensus_core::BlockHash,
-    get_diff: &impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, kaspa_database::prelude::StoreError>,
+    get_diff: &impl Fn(
+        kaspa_consensus_core::BlockHash,
+    ) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, kaspa_database::prelude::StoreError>,
     get_number: &impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<u64>, kaspa_database::prelude::StoreError>,
 ) -> Result<Option<RebasePaths>, kaspa_database::prelude::StoreError> {
     let (mut a, mut b) = (from, to);
@@ -862,12 +872,14 @@ pub fn shadow_dual_write_flat(
     batch: &mut rocksdb::WriteBatch,
     current: kaspa_consensus_core::BlockHash,
     staged: &EvmStaged,
-    get_diff: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, kaspa_database::prelude::StoreError>,
+    get_diff: impl Fn(
+        kaspa_consensus_core::BlockHash,
+    ) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, kaspa_database::prelude::StoreError>,
     get_number: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<u64>, kaspa_database::prelude::StoreError>,
 ) -> Result<ShadowOutcome, ShadowError> {
     use kaspa_consensus_core::evm::{
-        apply_inverse_state_diff, apply_state_diff, compute_state_diff, recon_from_snapshot, EvmAddress, EvmLatestStatePtr, EvmU256, FlatAccount,
-        ReconAccount, ReconState,
+        EvmAddress, EvmLatestStatePtr, EvmU256, FlatAccount, ReconAccount, ReconState, apply_inverse_state_diff, apply_state_diff,
+        compute_state_diff, recon_from_snapshot,
     };
     use std::collections::BTreeSet;
 
@@ -879,9 +891,13 @@ pub fn shadow_dual_write_flat(
     let parent = diff.parent; // selected_parent(current) — the EVM parent
     let ptr = latest_ptr.get().map_err(ShadowError::Store)?;
 
-    let advance = |batch: &mut rocksdb::WriteBatch, latest_ptr: &mut crate::model::stores::evm::DbEvmLatestStatePtrStore| -> Result<(), ShadowError> {
+    let advance = |batch: &mut rocksdb::WriteBatch,
+                   latest_ptr: &mut crate::model::stores::evm::DbEvmLatestStatePtrStore|
+     -> Result<(), ShadowError> {
         block_root.write_batch(batch, current, committed_root).map_err(ShadowError::Store)?;
-        latest_ptr.set_batch(batch, EvmLatestStatePtr { canonical_head: current, state_root: committed_root }).map_err(ShadowError::Store)?;
+        latest_ptr
+            .set_batch(batch, EvmLatestStatePtr { canonical_head: current, state_root: committed_root })
+            .map_err(ShadowError::Store)?;
         Ok(())
     };
     let divergence = |detail: String| ShadowError::Divergence { block: current, committed_root, detail };
@@ -889,10 +905,15 @@ pub fn shadow_dual_write_flat(
     // (1) Clean head extension: the flat store represents `parent`.
     if ptr.map(|p| p.canonical_head == parent).unwrap_or(false) {
         let mut got = flat_to_recon(flat).map_err(ShadowError::Store)?;
-        apply_state_diff(&mut got, diff).map_err(|e| divergence(format!("§12 diff is inconsistent with the persisted flat parent state: {e}")))?;
+        apply_state_diff(&mut got, diff)
+            .map_err(|e| divergence(format!("§12 diff is inconsistent with the persisted flat parent state: {e}")))?;
         let expected = recon_from_snapshot(&staged.snapshot);
         if got != expected {
-            return Err(divergence(format!("flat-derived post-state ({} accounts) != committed snapshot ({} accounts)", got.len(), expected.len())));
+            return Err(divergence(format!(
+                "flat-derived post-state ({} accounts) != committed snapshot ({} accounts)",
+                got.len(),
+                expected.len()
+            )));
         }
         apply_diff_to_flat(flat, batch, diff).map_err(ShadowError::Store)?;
         advance(batch, latest_ptr)?;
@@ -925,7 +946,8 @@ pub fn shadow_dual_write_flat(
         }
         // Revert off the old head, replay forward to the new parent, then this block.
         for d in &revert {
-            apply_inverse_state_diff(&mut recon, d).map_err(|e| divergence(format!("reorg revert inconsistent with flat state: {e}")))?;
+            apply_inverse_state_diff(&mut recon, d)
+                .map_err(|e| divergence(format!("reorg revert inconsistent with flat state: {e}")))?;
         }
         for d in &forward {
             apply_state_diff(&mut recon, d).map_err(|e| divergence(format!("reorg forward inconsistent with flat state: {e}")))?;
@@ -934,9 +956,17 @@ pub fn shadow_dual_write_flat(
 
         // Differential: every touched account must now equal the committed snapshot.
         for &a in &touched {
-            let want = staged.snapshot.accounts.binary_search_by(|acc| acc.address.as_bytes().cmp(&a)).ok().map(|i| &staged.snapshot.accounts[i]);
+            let want = staged
+                .snapshot
+                .accounts
+                .binary_search_by(|acc| acc.address.as_bytes().cmp(&a))
+                .ok()
+                .map(|i| &staged.snapshot.accounts[i]);
             if !recon_account_matches(recon.get(&a), want) {
-                return Err(divergence(format!("re-based account 0x{} != committed snapshot", a.iter().map(|b| format!("{b:02x}")).collect::<String>())));
+                return Err(divergence(format!(
+                    "re-based account 0x{} != committed snapshot",
+                    a.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                )));
             }
         }
         // Persist only the touched accounts (O(touched)).
@@ -966,12 +996,13 @@ pub fn shadow_dual_write_flat(
 
 #[cfg(test)]
 mod flat_state_tests {
-    use super::{shadow_dual_write_flat, EvmStaged, ShadowError, ShadowOutcome};
+    use super::{EvmStaged, ShadowError, ShadowOutcome, shadow_dual_write_flat};
     use crate::model::stores::evm::{DbEvmBlockStateRootStore, DbEvmCodeStore, DbEvmFlatAccountStore, DbEvmLatestStatePtrStore};
-    use kaspa_consensus_core::evm::{
-        compute_state_diff, EvmAccountSnapshot, EvmAddress, EvmExecutionResult, EvmStateDiffV2, EvmStateSnapshot, EvmU256, EVM_EMPTY_CODE_HASH,
-    };
     use kaspa_consensus_core::BlockHash;
+    use kaspa_consensus_core::evm::{
+        EVM_EMPTY_CODE_HASH, EvmAccountSnapshot, EvmAddress, EvmExecutionResult, EvmStateDiffV2, EvmStateSnapshot, EvmU256,
+        compute_state_diff,
+    };
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::{CachePolicy, ConnBuilder, StoreError};
     use kaspa_hashes::{EvmH256, Hash64};
@@ -994,9 +1025,17 @@ mod flat_state_tests {
     }
 
     fn acc(a: u8, nonce: u64, bal: u64, ch: EvmH256, code: &[u8], storage: &[(u64, u64)]) -> EvmAccountSnapshot {
-        let mut st: Vec<(EvmU256, EvmU256)> = storage.iter().map(|(s, v)| (EvmU256::from_u128(*s as u128), EvmU256::from_u128(*v as u128))).collect();
+        let mut st: Vec<(EvmU256, EvmU256)> =
+            storage.iter().map(|(s, v)| (EvmU256::from_u128(*s as u128), EvmU256::from_u128(*v as u128))).collect();
         st.sort_unstable_by(|x, y| x.0.to_be_bytes().cmp(&y.0.to_be_bytes()));
-        EvmAccountSnapshot { address: EvmAddress::from_bytes([a; 20]), nonce, balance: EvmU256::from_u128(bal as u128), code_hash: ch, code: code.to_vec(), storage: st }
+        EvmAccountSnapshot {
+            address: EvmAddress::from_bytes([a; 20]),
+            nonce,
+            balance: EvmU256::from_u128(bal as u128),
+            code_hash: ch,
+            code: code.to_vec(),
+            storage: st,
+        }
     }
     fn snap(accs: Vec<EvmAccountSnapshot>) -> EvmStateSnapshot {
         let mut a = accs;
@@ -1065,7 +1104,7 @@ mod flat_state_tests {
     #[cfg(feature = "evm")]
     #[test]
     fn s9c_store_flat_reader_reproduces_materialized_snapshot() {
-        use super::{materialize_snapshot, seed_flat_from_snapshot, StoreFlatReader};
+        use super::{StoreFlatReader, materialize_snapshot, seed_flat_from_snapshot};
         use kaspa_consensus_core::evm::FlatAccount;
         use kaspa_evm::flat_backend::FlatStateReader;
 
@@ -1083,7 +1122,17 @@ mod flat_state_tests {
             acc(0x22, 1, 0, code_hash, contract_code, &[(1, 4), (3, 9)]),
         ]);
         let mut b = WriteBatch::default();
-        seed_flat_from_snapshot(&flat, &code, &roots, &mut ptr, &mut b, Hash64::from_bytes([0x07; 64]), EvmH256::from_bytes([0x55; 32]), &snapshot).unwrap();
+        seed_flat_from_snapshot(
+            &flat,
+            &code,
+            &roots,
+            &mut ptr,
+            &mut b,
+            Hash64::from_bytes([0x07; 64]),
+            EvmH256::from_bytes([0x55; 32]),
+            &snapshot,
+        )
+        .unwrap();
         db.write(b).unwrap();
 
         // The eager path materializes back to the snapshot (the reference seed source).
@@ -1094,7 +1143,11 @@ mod flat_state_tests {
         // form of it and resolves contract code by hash — the same data `seed_cachedb` consumes.
         let reader = StoreFlatReader::new(&flat, &code);
         for a in &materialized.accounts {
-            assert_eq!(reader.flat_account(a.address).unwrap().expect("present"), FlatAccount::from_snapshot(a), "reader account != materialized");
+            assert_eq!(
+                reader.flat_account(a.address).unwrap().expect("present"),
+                FlatAccount::from_snapshot(a),
+                "reader account != materialized"
+            );
             if a.code_hash != EVM_EMPTY_CODE_HASH {
                 assert_eq!(reader.flat_code(a.code_hash).unwrap().as_deref(), Some(a.code.as_slice()), "reader code != snapshot code");
             }
@@ -1126,7 +1179,12 @@ mod flat_state_tests {
             snap(vec![acc(0x01, 2, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x03, 1, 0, ca, blob, &[(1, 7), (3, 4)])]), // slot 2 cleared, slot 3 set
         ];
         for i in 1..chain.len() {
-            let diff = compute_state_diff(&chain[i - 1], &chain[i], Hash64::from_bytes([i as u8; 64]), Hash64::from_bytes([(i - 1) as u8; 64]));
+            let diff = compute_state_diff(
+                &chain[i - 1],
+                &chain[i],
+                Hash64::from_bytes([i as u8; 64]),
+                Hash64::from_bytes([(i - 1) as u8; 64]),
+            );
             let mut b = WriteBatch::default();
             super::apply_diff_to_flat(&flat, &mut b, &diff).unwrap();
             db.write(b).unwrap();
@@ -1186,10 +1244,10 @@ mod flat_state_tests {
         s.db.write(cb).unwrap();
 
         let chain = [
-            EvmStateSnapshot::default(),                                                                          // 0 (genesis)
+            EvmStateSnapshot::default(), // 0 (genesis)
             snap(vec![acc(0x01, 1, 1000, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x02, 0, 500, EVM_EMPTY_CODE_HASH, &[], &[])]), // 1
-            snap(vec![acc(0x01, 2, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x03, 1, 0, ca, blob, &[(1, 7), (2, 9)])]),      // 2 (0x02 gone, contract deployed)
-            snap(vec![acc(0x01, 2, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x03, 1, 0, ca, blob, &[(1, 7), (3, 4)])]),      // 3 (slot 2→0, slot 3 set)
+            snap(vec![acc(0x01, 2, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x03, 1, 0, ca, blob, &[(1, 7), (2, 9)])]), // 2 (0x02 gone, contract deployed)
+            snap(vec![acc(0x01, 2, 800, EVM_EMPTY_CODE_HASH, &[], &[]), acc(0x03, 1, 0, ca, blob, &[(1, 7), (3, 4)])]), // 3 (slot 2→0, slot 3 set)
         ];
         let mut ptr = s.ptr;
         for n in 1..=3u8 {
@@ -1198,12 +1256,26 @@ mod flat_state_tests {
             let staged = mk_staged(EvmH256::from_bytes([n; 32]), chain[i].clone(), Some(diff));
             let mut batch = WriteBatch::default();
             let (dr, nr) = (no_diffs(), no_numbers());
-            let outcome =
-                shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(n), &staged, diff_reader(&dr), number_reader(&nr)).unwrap();
+            let outcome = shadow_dual_write_flat(
+                &s.flat,
+                &s.block_root,
+                &mut ptr,
+                &s.code,
+                &mut batch,
+                h(n),
+                &staged,
+                diff_reader(&dr),
+                number_reader(&nr),
+            )
+            .unwrap();
             s.db.write(batch).unwrap();
 
             assert_eq!(outcome, if n == 1 { ShadowOutcome::Reseeded } else { ShadowOutcome::Extended }, "block {n} outcome");
-            assert_eq!(super::materialize_snapshot(&s.flat, &s.code).unwrap(), chain[i], "flat materializes to canonical at block {n}");
+            assert_eq!(
+                super::materialize_snapshot(&s.flat, &s.code).unwrap(),
+                chain[i],
+                "flat materializes to canonical at block {n}"
+            );
             assert_eq!(ptr.get().unwrap().unwrap().canonical_head, h(n), "pointer advanced to block {n}");
             assert_eq!(s.block_root.get(h(n)).unwrap(), Some(EvmH256::from_bytes([n; 32])), "232 holds committed root for block {n}");
         }
@@ -1224,7 +1296,18 @@ mod flat_state_tests {
         let d1 = compute_state_diff(&EvmStateSnapshot::default(), &b1, h(1), h(0));
         let mut batch = WriteBatch::default();
         let (dr, nr) = (no_diffs(), no_numbers());
-        shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(1), &mk_staged(EvmH256::from_bytes([1; 32]), b1.clone(), Some(d1)), diff_reader(&dr), number_reader(&nr)).unwrap();
+        shadow_dual_write_flat(
+            &s.flat,
+            &s.block_root,
+            &mut ptr,
+            &s.code,
+            &mut batch,
+            h(1),
+            &mk_staged(EvmH256::from_bytes([1; 32]), b1.clone(), Some(d1)),
+            diff_reader(&dr),
+            number_reader(&nr),
+        )
+        .unwrap();
         s.db.write(batch).unwrap();
 
         // Clean-extend block 2 with the CORRECT diff (b1→b2) but a WRONG committed
@@ -1232,7 +1315,17 @@ mod flat_state_tests {
         let d2 = compute_state_diff(&b1, &b2, h(2), h(1));
         let staged_bad = mk_staged(EvmH256::from_bytes([2; 32]), b3.clone(), Some(d2));
         let mut batch = WriteBatch::default();
-        let res = shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(2), &staged_bad, diff_reader(&dr), number_reader(&nr));
+        let res = shadow_dual_write_flat(
+            &s.flat,
+            &s.block_root,
+            &mut ptr,
+            &s.code,
+            &mut batch,
+            h(2),
+            &staged_bad,
+            diff_reader(&dr),
+            number_reader(&nr),
+        );
         assert!(matches!(res, Err(ShadowError::Divergence { .. })), "wrong committed snapshot must diverge, got {res:?}");
         // Pre-commit halt: the flat store is still at b1.
         assert_eq!(super::materialize_snapshot(&s.flat, &s.code).unwrap(), b1, "flat store untouched on divergence");
@@ -1249,8 +1342,18 @@ mod flat_state_tests {
         let staged = mk_staged(EvmH256::from_bytes([1; 32]), b1, None);
         let mut batch = WriteBatch::default();
         let (dr, nr) = (no_diffs(), no_numbers());
-        let outcome =
-            shadow_dual_write_flat(&s.flat, &s.block_root, &mut ptr, &s.code, &mut batch, h(1), &staged, diff_reader(&dr), number_reader(&nr)).unwrap();
+        let outcome = shadow_dual_write_flat(
+            &s.flat,
+            &s.block_root,
+            &mut ptr,
+            &s.code,
+            &mut batch,
+            h(1),
+            &staged,
+            diff_reader(&dr),
+            number_reader(&nr),
+        )
+        .unwrap();
         s.db.write(batch).unwrap();
         assert_eq!(outcome, ShadowOutcome::SkippedNoDiff);
         assert_eq!(s.flat.iter().count(), 0, "no flat rows written in head mode");
@@ -1291,15 +1394,27 @@ mod flat_state_tests {
 
         // Chain readers (the persistent §12 diff store + EVM-header evm_numbers).
         let diffs: HashMap<BlockHash, EvmStateDiffV2> =
-            [(a1, d_a1.clone()), (a2a, d_a2a.clone()), (a3a, d_a3a.clone()), (a2b, d_a2b.clone()), (a3b, d_a3b.clone())].into_iter().collect();
+            [(a1, d_a1.clone()), (a2a, d_a2a.clone()), (a3a, d_a3a.clone()), (a2b, d_a2b.clone()), (a3b, d_a3b.clone())]
+                .into_iter()
+                .collect();
         let numbers: HashMap<BlockHash, u64> = [(a1, 1u64), (a2a, 2), (a3a, 3), (a2b, 2), (a3b, 3)].into_iter().collect();
 
         let mut ptr = s.ptr;
         let commit = |ptr: &mut DbEvmLatestStatePtrStore, blk: BlockHash, snapshot: &EvmStateSnapshot, diff: EvmStateDiffV2| {
             let staged = mk_staged(EvmH256::from_bytes([blk.as_bytes()[0]; 32]), snapshot.clone(), Some(diff));
             let mut batch = WriteBatch::default();
-            let outcome =
-                shadow_dual_write_flat(&s.flat, &s.block_root, ptr, &s.code, &mut batch, blk, &staged, diff_reader(&diffs), number_reader(&numbers)).unwrap();
+            let outcome = shadow_dual_write_flat(
+                &s.flat,
+                &s.block_root,
+                ptr,
+                &s.code,
+                &mut batch,
+                blk,
+                &staged,
+                diff_reader(&diffs),
+                number_reader(&numbers),
+            )
+            .unwrap();
             s.db.write(batch).unwrap();
             outcome
         };
@@ -1324,10 +1439,8 @@ mod flat_state_tests {
 #[cfg(test)]
 mod gather_tests {
     use super::*;
-    use kaspa_consensus_core::evm::{
-        compute_state_diff, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EVM_EMPTY_CODE_HASH,
-    };
     use kaspa_consensus_core::BlockHash;
+    use kaspa_consensus_core::evm::{EVM_EMPTY_CODE_HASH, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, compute_state_diff};
     use std::collections::HashMap;
     use std::convert::Infallible;
 
@@ -1394,10 +1507,7 @@ mod gather_tests {
     #[test]
     fn anchors_on_checkpoint() {
         let mut c = chain();
-        c.checkpoints.insert(
-            h(2),
-            EvmStateCheckpointV1::build(h(2), 2, kaspa_hashes::EvmH256::from_bytes([0; 32]), &c.snaps[2]),
-        );
+        c.checkpoints.insert(h(2), EvmStateCheckpointV1::build(h(2), 2, kaspa_hashes::EvmH256::from_bytes([0; 32]), &c.snaps[2]));
         let (seed, diffs) = gather(&c, h(3)).unwrap();
         assert_eq!(seed, c.snaps[2], "seed = checkpoint's full state at block 2");
         assert_eq!(diffs.len(), 1);
@@ -1408,8 +1518,7 @@ mod gather_tests {
     #[test]
     fn checkpoint_at_target_needs_no_diffs() {
         let mut c = chain();
-        c.checkpoints
-            .insert(h(3), EvmStateCheckpointV1::build(h(3), 3, kaspa_hashes::EvmH256::from_bytes([0; 32]), &c.snaps[3]));
+        c.checkpoints.insert(h(3), EvmStateCheckpointV1::build(h(3), 3, kaspa_hashes::EvmH256::from_bytes([0; 32]), &c.snaps[3]));
         let (seed, diffs) = gather(&c, h(3)).unwrap();
         assert_eq!(seed, c.snaps[3]);
         assert!(diffs.is_empty());
@@ -1431,9 +1540,9 @@ mod driver {
         DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore, EvmHeaderStore, EvmHeaderStoreReader, EvmPayloadStoreReader,
         EvmStateStore, EvmStateStoreReader,
     };
+    use kaspa_consensus_core::BlockHash;
     use kaspa_consensus_core::evm::{EvmExecutionPayload, EvmReplayEnv, EvmReplayTx, EvmStateSnapshot, EvmTraceReplayBodyV1};
     use kaspa_consensus_core::header::Header;
-    use kaspa_consensus_core::BlockHash;
     use kaspa_database::prelude::StoreError;
     use kaspa_evm::AcceptedTxCandidate;
     use rocksdb::WriteBatch;
@@ -1449,7 +1558,6 @@ mod driver {
         /// A store read/write failed.
         Store(StoreError),
     }
-
 
     /// The lazy chain-context EVM step (design v0.4 §2.3/§3): execute a
     /// selected-chain block's **mergeset acceptance** against its
@@ -1517,7 +1625,8 @@ mod driver {
         }
 
         // §12: this block's forward state diff over its selected parent (prefix 220).
-        let state_diff = Some(kaspa_consensus_core::evm::compute_state_diff(&parent_snapshot, &child_snapshot, block, selected_parent));
+        let state_diff =
+            Some(kaspa_consensus_core::evm::compute_state_diff(&parent_snapshot, &child_snapshot, block, selected_parent));
 
         Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta, trace_body, state_diff }))
     }
@@ -1563,7 +1672,8 @@ mod driver {
             return Err(EvmValidateError::CommitmentMismatch { block });
         }
         // §12: forward state diff over the selected parent (prefix 220), same as `evm_validate`.
-        let state_diff = Some(kaspa_consensus_core::evm::compute_state_diff(&parent_snapshot, &child_snapshot, block, selected_parent));
+        let state_diff =
+            Some(kaspa_consensus_core::evm::compute_state_diff(&parent_snapshot, &child_snapshot, block, selected_parent));
         Ok(Some(super::EvmStaged { result, snapshot: child_snapshot, candidate_meta, trace_body, state_diff }))
     }
 
@@ -1693,7 +1803,7 @@ mod driver {
                         Err(StoreError::KeyNotFound(_)) => {
                             return Err(EvmValidateError::Exec(format!(
                                 "EVM-active selected parent {selected_parent} has an EVM header but no persisted state snapshot (store corruption / pruning bug)"
-                            )))
+                            )));
                         }
                         Err(e) => return Err(EvmValidateError::Store(e)),
                     }
@@ -1718,8 +1828,8 @@ mod driver {
             typed_receipt_root_activation_daa_score,
         };
 
-        let (result, snapshot) =
-            kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).map_err(|e| EvmValidateError::Exec(e.to_string()))?;
+        let (result, snapshot) = kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input)
+            .map_err(|e| EvmValidateError::Exec(e.to_string()))?;
 
         // §11: assemble the `debug_traceTransaction` replay plan from the exact
         // acceptance this block performed — the env inputs, B's own system ops, and
@@ -1828,7 +1938,8 @@ mod driver {
 
 #[cfg(feature = "evm")]
 pub use driver::{
-    evm_execute_acceptance, evm_execute_acceptance_with_parent, evm_validate, evm_validate_and_persist, evm_validate_chained, EvmValidateError,
+    EvmValidateError, evm_execute_acceptance, evm_execute_acceptance_with_parent, evm_validate, evm_validate_and_persist,
+    evm_validate_chained,
 };
 
 // ---------------------------------------------------------------------------
@@ -1887,7 +1998,9 @@ impl std::fmt::Display for ParentSeedError {
 #[cfg(feature = "evm")]
 fn classify_seed_store_error(e: kaspa_database::prelude::StoreError) -> ParentSeedError {
     match e {
-        kaspa_database::prelude::StoreError::DataInconsistency(m) => ParentSeedError::Corrupt(format!("store data inconsistency: {m}")),
+        kaspa_database::prelude::StoreError::DataInconsistency(m) => {
+            ParentSeedError::Corrupt(format!("store data inconsistency: {m}"))
+        }
         other => ParentSeedError::Unavailable(format!("store read: {other}")),
     }
 }
@@ -1910,13 +2023,17 @@ pub fn flat_or_reconstruct_parent_snapshot(
     checkpoint_store: &crate::model::stores::evm::DbEvmStateCheckpointStore,
     diff_store: &crate::model::stores::evm::DbEvmStateDiffStore,
 ) -> Result<(kaspa_consensus_core::evm::EvmStateSnapshot, ParentSeedSource), ParentSeedError> {
-    use crate::model::stores::evm::{EvmCodeStoreReader, EvmHeaderStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
+    use crate::model::stores::evm::{
+        EvmCodeStoreReader, EvmHeaderStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader,
+    };
     use kaspa_consensus_core::evm::EvmStateSnapshot;
 
     // Pre-activation parent (no EVM header) ⇒ the empty genesis state.
     let parent_header = match header_store.get(selected_parent) {
         Ok(h) => h,
-        Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => return Ok((EvmStateSnapshot::default(), ParentSeedSource::PreActivation)),
+        Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
+            return Ok((EvmStateSnapshot::default(), ParentSeedSource::PreActivation));
+        }
         Err(e) => return Err(classify_seed_store_error(e)),
     };
 
@@ -1950,11 +2067,15 @@ pub fn flat_or_reconstruct_parent_snapshot(
     .map_err(|e| match e {
         // Retention gap / depth bound / a store read inside the walk ⇒ cannot
         // validate here (skip). A bad checkpoint ENCODING is real corruption (halt).
-        ReconstructGatherError::Unavailable(m) | ReconstructGatherError::TooDeep(m) | ReconstructGatherError::Store(m) => ParentSeedError::Unavailable(m),
+        ReconstructGatherError::Unavailable(m) | ReconstructGatherError::TooDeep(m) | ReconstructGatherError::Store(m) => {
+            ParentSeedError::Unavailable(m)
+        }
         ReconstructGatherError::Checkpoint(m) => ParentSeedError::Corrupt(m),
     })?;
     if store_errored.get() {
-        return Err(ParentSeedError::Unavailable(format!("header store read failed while gathering reconstruction inputs for {selected_parent}")));
+        return Err(ParentSeedError::Unavailable(format!(
+            "header store read failed while gathering reconstruction inputs for {selected_parent}"
+        )));
     }
     let snap = kaspa_evm::reconstruct::reconstruct_evm_state(
         &seed,
@@ -1979,14 +2100,14 @@ pub fn flat_or_reconstruct_parent_snapshot(
 
 #[cfg(all(test, feature = "evm"))]
 mod s6_seed_tests {
-    use super::{flat_or_reconstruct_parent_snapshot, ParentSeedSource};
+    use super::{ParentSeedSource, flat_or_reconstruct_parent_snapshot};
     use crate::model::stores::evm::{
         DbEvmCodeStore, DbEvmFlatAccountStore, DbEvmHeaderStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, EvmHeaderStore,
     };
-    use kaspa_consensus_core::evm::{
-        compute_state_diff, EvmAccountSnapshot, EvmAddress, EvmExecutionHeader, EvmStateSnapshot, EvmU256, EVM_EMPTY_CODE_HASH,
-    };
     use kaspa_consensus_core::BlockHash;
+    use kaspa_consensus_core::evm::{
+        EVM_EMPTY_CODE_HASH, EvmAccountSnapshot, EvmAddress, EvmExecutionHeader, EvmStateSnapshot, EvmU256, compute_state_diff,
+    };
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::{CachePolicy, ConnBuilder};
     use kaspa_hashes::EvmH256;
@@ -2048,9 +2169,12 @@ mod s6_seed_tests {
         header_store.insert_batch(&mut batch, block_h, header_with_root(root_of(&s_h), 5)).unwrap();
         header_store.insert_batch(&mut batch, block_1, header_with_root(root_of(&s_1), 1)).unwrap();
         // §12 diff for block 1 over the empty genesis (genesis has no header ⇒ gather anchors empty).
-        diff_store.insert_batch(&mut batch, block_1, compute_state_diff(&EvmStateSnapshot::default(), &s_1, block_1, genesis)).unwrap();
+        diff_store
+            .insert_batch(&mut batch, block_1, compute_state_diff(&EvmStateSnapshot::default(), &s_1, block_1, genesis))
+            .unwrap();
         // Flat store at block H (apply its diff over empty genesis).
-        super::apply_diff_to_flat(&flat, &mut batch, &compute_state_diff(&EvmStateSnapshot::default(), &s_h, block_h, genesis)).unwrap();
+        super::apply_diff_to_flat(&flat, &mut batch, &compute_state_diff(&EvmStateSnapshot::default(), &s_h, block_h, genesis))
+            .unwrap();
         db.write(batch).unwrap();
 
         let seed = |parent: BlockHash, flat_head: Option<BlockHash>| {
@@ -2091,7 +2215,8 @@ mod s6_seed_tests {
         let committed_root = root_of(&s_h);
 
         let mut batch = WriteBatch::default();
-        super::apply_diff_to_flat(&flat, &mut batch, &compute_state_diff(&EvmStateSnapshot::default(), &s_h, block_h, genesis)).unwrap();
+        super::apply_diff_to_flat(&flat, &mut batch, &compute_state_diff(&EvmStateSnapshot::default(), &s_h, block_h, genesis))
+            .unwrap();
         db.write(batch).unwrap();
 
         // The retire-206 seed = materialize the flat store directly (no 206 read).
@@ -2149,12 +2274,16 @@ mod s6_seed_tests {
         flat.write_batch(
             &mut batch,
             EvmAddress::from_bytes([0x07; 20]),
-            FlatAccount { core: AccountCore { nonce: 1, balance: EvmU256::from_u128(1), code_hash: EvmH256::from_bytes([0xAB; 32]) }, storage: vec![] },
+            FlatAccount {
+                core: AccountCore { nonce: 1, balance: EvmU256::from_u128(1), code_hash: EvmH256::from_bytes([0xAB; 32]) },
+                storage: vec![],
+            },
         )
         .unwrap();
         db.write(batch).unwrap();
 
-        let res = flat_or_reconstruct_parent_snapshot(block_h, Some(block_h), &flat, &code, &header_store, &checkpoint_store, &diff_store);
+        let res =
+            flat_or_reconstruct_parent_snapshot(block_h, Some(block_h), &flat, &code, &header_store, &checkpoint_store, &diff_store);
         assert!(matches!(res, Err(super::ParentSeedError::Corrupt(_))), "flat-head missing code ⇒ Corrupt (halt), got {res:?}");
     }
 }
@@ -2328,14 +2457,20 @@ mod bridge_tests {
         assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 400, 7)]), &view, 999).is_err());
         assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 8)]), &view, 999).is_err());
         assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, [0xDD; 20], 500, 7)]), &view, 999).is_err());
-        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &view, 1_000).is_err(), "refund window open");
+        assert!(
+            validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &view, 1_000).is_err(),
+            "refund window open"
+        );
         assert!(
             validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7), claim(op, addr, 500, 7)]), &view, 999).is_err(),
             "duplicate outpoint"
         );
         let mut plain = UtxoCollection::default();
         plain.insert(op, UtxoEntry::new(500, kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[1u8; 64]), 10, false));
-        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &MapView(plain), 999).is_err(), "not a lock");
+        assert!(
+            validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &MapView(plain), 999).is_err(),
+            "not a lock"
+        );
     }
 
     /// v0.4 §9 / I7: the bridge effects ride the block's own diff + multiset —
@@ -2580,11 +2715,14 @@ mod tests {
 
         // §12 archive: the block's forward state DIFF (prefix 220) landed in the same
         // batch and equals the diff recomputed from (genesis parent, committed child).
-        use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader, EvmStateStoreReader};
+        use crate::model::stores::evm::{
+            EvmCodeStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader, EvmStateStoreReader,
+        };
         let stored_diff = diff_store.get(l1.hash).unwrap().expect("a §12 state diff was persisted");
         let child_snap = state_store.get(l1.hash).unwrap();
         assert!(!child_snap.is_empty(), "the deposit claim credited an account, so the diff is non-trivial");
-        let recomputed = kaspa_consensus_core::evm::compute_state_diff(&EvmStateSnapshot::default(), &child_snap, l1.hash, selected_parent);
+        let recomputed =
+            kaspa_consensus_core::evm::compute_state_diff(&EvmStateSnapshot::default(), &child_snap, l1.hash, selected_parent);
         assert_eq!(stored_diff, recomputed, "stored diff == diff over the selected parent");
         assert_eq!(stored_diff.parent, selected_parent);
         // Reconstruct from the genesis seed + the stored diff, resolving code from the
@@ -2686,6 +2824,9 @@ mod tests {
             u64::MAX,
             u64::MAX,
         );
-        assert!(matches!(err, Err(EvmValidateError::CommitmentMismatch { .. })), "omitting the mergeset acceptance is a commitment fault");
+        assert!(
+            matches!(err, Err(EvmValidateError::CommitmentMismatch { .. })),
+            "omitting the mergeset acceptance is a commitment fault"
+        );
     }
 }

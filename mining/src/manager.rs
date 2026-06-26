@@ -33,7 +33,11 @@ use kaspa_consensus_core::{
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutput},
 };
 use kaspa_consensusmanager::{ConsensusProxy, spawn_blocking};
-use kaspa_core::{debug, error, info, time::{unix_now, Stopwatch}, warn};
+use kaspa_core::{
+    debug, error, info,
+    time::{Stopwatch, unix_now},
+    warn,
+};
 use kaspa_mining_errors::{manager::MiningManagerError, mempool::RuleError};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -431,8 +435,7 @@ impl MiningManager {
                     //  - Claims that DID make it into the template have their lock present
                     //    again → reset their consecutive-absent run.
                     if !evm_template_data.system_ops.is_empty() {
-                        let stale: std::collections::HashSet<_> =
-                            block_template.stale_evm_claims.iter().map(|(op, _)| *op).collect();
+                        let stale: std::collections::HashSet<_> = block_template.stale_evm_claims.iter().map(|(op, _)| *op).collect();
                         let mut pool = self.evm_mempool.write();
                         for claim in &evm_template_data.system_ops {
                             if !stale.contains(&claim.deposit_outpoint) {
@@ -877,10 +880,7 @@ impl MiningManager {
         // kaspa-pq DNS-finality (E4/§6.2): drop the cached template if any accepted tx in
         // this batch was a `StakeAttestationShard`, so the next template includes the fresh
         // shard instead of serving a stale near-empty one. No-op otherwise.
-        if insert_results
-            .iter()
-            .any(|r| r.as_ref().is_ok_and(|tx| tx.subnetwork_id == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD))
-        {
+        if insert_results.iter().any(|r| r.as_ref().is_ok_and(|tx| tx.subnetwork_id == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD)) {
             self.block_template_cache.clear();
         }
 

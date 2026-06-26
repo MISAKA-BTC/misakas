@@ -256,10 +256,7 @@ mod tests {
             MinerData::new(non_pq_spk, vec![]),
             vec![],
         );
-        assert_match!(
-            body_processor.validate_body_in_context(&bad.to_immutable()),
-            Err(RuleError::NonPqCoinbasePayloadScript)
-        );
+        assert_match!(body_processor.validate_body_in_context(&bad.to_immutable()), Err(RuleError::NonPqCoinbasePayloadScript));
 
         consensus.shutdown(wait_handles);
     }

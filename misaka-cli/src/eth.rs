@@ -10,10 +10,10 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 use kaspa_consensus_core::evm::EVM_NATIVE_SCALE;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::node::Ctx;
-use crate::{exit, CliError, CliResult, OutputFormat};
+use crate::{CliError, CliResult, OutputFormat, exit};
 
 const WEI_PER_MSK: u128 = 1_000_000_000_000_000_000; // 1 MSK = 1e18 wei
 
@@ -22,8 +22,7 @@ const WEI_PER_MSK: u128 = 1_000_000_000_000_000_000; // 1 MSK = 1e18 wei
 // ---------------------------------------------------------------------------
 
 fn http_post_json(url: &str, body: &str, timeout: Duration) -> Result<String, CliError> {
-    let rest =
-        url.strip_prefix("http://").ok_or_else(|| CliError::generic(format!("EVM RPC must be http:// (got {url})")))?;
+    let rest = url.strip_prefix("http://").ok_or_else(|| CliError::generic(format!("EVM RPC must be http:// (got {url})")))?;
     let (hostport, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),
@@ -59,8 +58,9 @@ fn http_post_json(url: &str, body: &str, timeout: Duration) -> Result<String, Cl
 pub(crate) fn rpc_call(ctx: &Ctx, method: &str, params: Value) -> Result<Value, CliError> {
     let req = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
     let body = http_post_json(&ctx.evm_rpc, &req, Duration::from_secs(ctx.timeout_secs))?;
-    let v: Value = serde_json::from_str(&body)
-        .map_err(|e| CliError::generic(format!("EVM RPC bad JSON ({e}); body starts: {}", body.chars().take(160).collect::<String>())))?;
+    let v: Value = serde_json::from_str(&body).map_err(|e| {
+        CliError::generic(format!("EVM RPC bad JSON ({e}); body starts: {}", body.chars().take(160).collect::<String>()))
+    })?;
     if let Some(err) = v.get("error") {
         let msg = err.get("message").and_then(Value::as_str).unwrap_or("unknown");
         return Err(CliError::new(exit::GENERIC, format!("EVM RPC error ({method}): {msg}")));
@@ -180,7 +180,10 @@ pub fn tx_wait(ctx: &Ctx, hash: &str, timeout_secs: u64, poll_secs: u64) -> CliR
         let state = status.get("state").and_then(Value::as_str).unwrap_or("unknown").to_string();
         // progress to STDERR (keeps stdout clean for the final result / JSON)
         if state != last_state && ctx.output == OutputFormat::Human && !ctx.quiet {
-            eprintln!("[{:>4}s] state={state}", (timeout_secs as i64 - deadline.saturating_duration_since(Instant::now()).as_secs() as i64).max(0));
+            eprintln!(
+                "[{:>4}s] state={state}",
+                (timeout_secs as i64 - deadline.saturating_duration_since(Instant::now()).as_secs() as i64).max(0)
+            );
             last_state = state;
         }
         let st = status.get("state").and_then(Value::as_str).unwrap_or("unknown");
@@ -190,7 +193,10 @@ pub fn tx_wait(ctx: &Ctx, hash: &str, timeout_secs: u64, poll_secs: u64) -> CliR
         }
         if Instant::now() >= deadline {
             print_tx_status(ctx, &status);
-            return Err(CliError::new(exit::TIMEOUT_PENDING, format!("tx {h} not accepted within {timeout_secs}s (last state: {st})")));
+            return Err(CliError::new(
+                exit::TIMEOUT_PENDING,
+                format!("tx {h} not accepted within {timeout_secs}s (last state: {st})"),
+            ));
         }
         std::thread::sleep(poll);
     }

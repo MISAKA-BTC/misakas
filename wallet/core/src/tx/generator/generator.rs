@@ -65,9 +65,9 @@ use crate::tx::{
 };
 use crate::utxo::{NetworkParams, UtxoContext, UtxoEntryReference};
 use kaspa_consensus_client::UtxoEntry;
+use kaspa_consensus_core::config::params::{Params, PqEnforcementMode};
 use kaspa_consensus_core::constants::UNACCEPTED_DAA_SCORE;
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
-use kaspa_consensus_core::config::params::{Params, PqEnforcementMode};
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
 use kaspa_txscript::{pay_to_address_script, pay_to_address_script_pq};
 use std::collections::VecDeque;

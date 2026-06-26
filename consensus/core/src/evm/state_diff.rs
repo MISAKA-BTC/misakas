@@ -24,9 +24,10 @@
 //! needs revm and so lives in `kaspa-evm`; everything here is offline-testable.
 
 use super::{
-    AccountChange, AccountCore, EvmAccountSnapshot, EvmAddress, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EvmU256, StorageChange,
+    AccountChange, AccountCore, EvmAccountSnapshot, EvmAddress, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EvmU256,
+    StorageChange,
 };
-use kaspa_hashes::{blake2b_256_keyed, EvmH256, Hash64};
+use kaspa_hashes::{EvmH256, Hash64, blake2b_256_keyed};
 use std::collections::BTreeMap;
 
 /// `keccak256("")` — the `code_hash` of an account with no bytecode (an EOA). A
@@ -34,8 +35,8 @@ use std::collections::BTreeMap;
 /// stay equal (`evm_empty_code_hash_matches_revm`). An [`AccountCore`] with this
 /// hash has no entry in the content-addressed code store.
 pub const EVM_EMPTY_CODE_HASH: EvmH256 = EvmH256::from_bytes([
-    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0, 0xe5, 0x00, 0xb6, 0x53,
-    0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
+    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0, 0xe5, 0x00, 0xb6, 0x53, 0xca,
+    0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
 ]);
 
 /// Default canonical-block interval between full checkpoints (design §12.3). A
@@ -130,8 +131,10 @@ pub fn compute_state_diff(parent: &EvmStateSnapshot, child: &EvmStateSnapshot, b
 /// Diff two accounts' storage. Each snapshot stores only non-zero slots sorted by
 /// slot, so a slot present in one and absent in the other changed to/from zero.
 fn diff_storage(pa: Option<&EvmAccountSnapshot>, ca: Option<&EvmAccountSnapshot>) -> Vec<StorageChange> {
-    let ps: BTreeMap<[u8; 32], EvmU256> = pa.map(|a| a.storage.iter().map(|(s, v)| (s.to_be_bytes(), *v)).collect()).unwrap_or_default();
-    let cs: BTreeMap<[u8; 32], EvmU256> = ca.map(|a| a.storage.iter().map(|(s, v)| (s.to_be_bytes(), *v)).collect()).unwrap_or_default();
+    let ps: BTreeMap<[u8; 32], EvmU256> =
+        pa.map(|a| a.storage.iter().map(|(s, v)| (s.to_be_bytes(), *v)).collect()).unwrap_or_default();
+    let cs: BTreeMap<[u8; 32], EvmU256> =
+        ca.map(|a| a.storage.iter().map(|(s, v)| (s.to_be_bytes(), *v)).collect()).unwrap_or_default();
 
     let mut slots: Vec<[u8; 32]> = Vec::with_capacity(ps.len() + cs.len());
     slots.extend(ps.keys().copied());
@@ -434,7 +437,7 @@ mod tests {
         let ch_a = code_hash(0xAA);
 
         let chain = vec![
-            EvmStateSnapshot::default(), // S0: genesis
+            EvmStateSnapshot::default(),                    // S0: genesis
             snap(&[eoa(0x01, 1, 1000), eoa(0x02, 0, 500)]), // S1
             snap(&[
                 eoa(0x01, 2, 800),
@@ -483,7 +486,14 @@ mod tests {
             snap(&[eoa(0x01, 2, 800), (0x03, 1, 0, ch_a, code_a, &[(1, 7), (3, 4)])]),
         ];
         let diffs: Vec<_> = (1..chain.len())
-            .map(|i| compute_state_diff(&chain[i - 1], &chain[i], Hash64::from_bytes([i as u8; 64]), Hash64::from_bytes([(i - 1) as u8; 64])))
+            .map(|i| {
+                compute_state_diff(
+                    &chain[i - 1],
+                    &chain[i],
+                    Hash64::from_bytes([i as u8; 64]),
+                    Hash64::from_bytes([(i - 1) as u8; 64]),
+                )
+            })
             .collect();
 
         let mut recon = recon_from_snapshot(&chain[0]);

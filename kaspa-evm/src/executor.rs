@@ -30,17 +30,17 @@
 //! sweep would be a consensus rule. Re-evaluate at any spec bump (EIP-6780
 //! changes SELFDESTRUCT semantics — see the EVM_SPEC_ID pin in lib.rs).
 
-use crate::{env, roots, state, EvmExecError};
+use crate::{EvmExecError, env, roots, state};
 use kaspa_consensus_core::evm::{
-    DepositClaim, EvmAddress, EvmBloom, EvmExecutionHeader, EvmExecutionPayload, EvmExecutionResult, EvmLog, EvmReceipt,
-    EvmSystemOp, EvmU256, WithdrawOp, EVM_GENESIS_STATE_ROOT, EVM_NATIVE_SCALE, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
-    MAX_WITHDRAWALS_PER_EVM_BLOCK, SYSTEM_DEPOSIT_GAS_PER_CLAIM,
+    DepositClaim, EVM_GENESIS_STATE_ROOT, EVM_NATIVE_SCALE, EvmAddress, EvmBloom, EvmExecutionHeader, EvmExecutionPayload,
+    EvmExecutionResult, EvmLog, EvmReceipt, EvmSystemOp, EvmU256, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, MAX_WITHDRAWALS_PER_EVM_BLOCK,
+    SYSTEM_DEPOSIT_GAS_PER_CLAIM, WithdrawOp,
 };
 use kaspa_hashes::EvmH256;
-use revm::primitives::{Address, EVMError, ExecutionResult, B256, KECCAK_EMPTY, U256};
+use revm::primitives::{Address, B256, EVMError, ExecutionResult, KECCAK_EMPTY, U256};
 use revm::{
-    db::{AccountState, CacheDB, EmptyDB},
     DatabaseCommit, Evm,
+    db::{AccountState, CacheDB, EmptyDB},
 };
 
 /// One element of `AcceptedEvmTxs(B)`: a user tx drawn from a mergeset payload
@@ -179,7 +179,9 @@ pub fn execute_block_evm(
     // so total committed gas_used ≤ gas_limit always holds.
     let system_gas = gas_used;
     let user_gas_budget = MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK.checked_sub(system_gas).ok_or_else(|| {
-        EvmExecError::InvariantViolation(format!("system gas {system_gas} exceeds block gas cap {MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK}"))
+        EvmExecError::InvariantViolation(format!(
+            "system gas {system_gas} exceeds block gas cap {MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK}"
+        ))
     })?;
 
     // 2. Class-5 prefix-take (design §7, D4): walk `AcceptedEvmTxs(B)` in
@@ -289,100 +291,100 @@ pub fn execute_block_evm(
         .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active)))
         .build();
     if !gas_pool_v2 {
-    // === v1: execute the prefix-take-selected `planned` set (UNCHANGED) ===
-    for (txenv, cand, cand_idx) in planned {
-        // Effective gas price (EIP-1559): legacy txs carry no priority field —
-        // their tip is gas_price − basefee; typed txs tip min(max_fee, basefee
-        // + max_priority) − basefee. Needed below to reroute the tip.
-        let max_fee = txenv.gas_price;
-        let effective_gas_price = match txenv.gas_priority_fee {
-            Some(priority) => max_fee.min(U256::from(basefee).saturating_add(priority)),
-            None => max_fee,
-        };
-        let tip_per_gas = effective_gas_price.saturating_sub(U256::from(basefee));
-        evm.context.evm.env.tx = txenv;
+        // === v1: execute the prefix-take-selected `planned` set (UNCHANGED) ===
+        for (txenv, cand, cand_idx) in planned {
+            // Effective gas price (EIP-1559): legacy txs carry no priority field —
+            // their tip is gas_price − basefee; typed txs tip min(max_fee, basefee
+            // + max_priority) − basefee. Needed below to reroute the tip.
+            let max_fee = txenv.gas_price;
+            let effective_gas_price = match txenv.gas_priority_fee {
+                Some(priority) => max_fee.min(U256::from(basefee).saturating_add(priority)),
+                None => max_fee,
+            };
+            let tip_per_gas = effective_gas_price.saturating_sub(U256::from(basefee));
+            evm.context.evm.env.tx = txenv;
 
-        // Audit M-03: when the withdrawal cap is active, execute WITHOUT committing,
-        // and skip (class-2, dropping the state) if this tx's withdrawals would push
-        // the block over MAX_WITHDRAWALS_PER_EVM_BLOCK. Inert ⇒ exactly
-        // `transact_commit()` (transact + commit), byte-identical to before.
-        let exec = if withdraw_cap_active {
-            match evm.transact() {
-                Ok(rs) => {
-                    if withdrawals.len() + count_withdraws(&rs.result) > MAX_WITHDRAWALS_PER_EVM_BLOCK {
-                        skipped_tx_count += 1; // class 2: state dropped — no nonce/burn/withdrawal/gas/receipt
-                        outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
-                        continue;
+            // Audit M-03: when the withdrawal cap is active, execute WITHOUT committing,
+            // and skip (class-2, dropping the state) if this tx's withdrawals would push
+            // the block over MAX_WITHDRAWALS_PER_EVM_BLOCK. Inert ⇒ exactly
+            // `transact_commit()` (transact + commit), byte-identical to before.
+            let exec = if withdraw_cap_active {
+                match evm.transact() {
+                    Ok(rs) => {
+                        if withdrawals.len() + count_withdraws(&rs.result) > MAX_WITHDRAWALS_PER_EVM_BLOCK {
+                            skipped_tx_count += 1; // class 2: state dropped — no nonce/burn/withdrawal/gas/receipt
+                            outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
+                            continue;
+                        }
+                        evm.db_mut().commit(rs.state);
+                        Ok(rs.result)
                     }
-                    evm.db_mut().commit(rs.state);
-                    Ok(rs.result)
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
-            }
-        } else {
-            evm.transact_commit()
-        };
-        match exec {
-            Ok(result) => {
-                let tx_gas = result.gas_used();
-                gas_used = gas_used.saturating_add(tx_gas);
-                tx_cumulative_gas = tx_cumulative_gas.saturating_add(tx_gas);
-                // audit #5: basefee burn feeds the supply identity — use checked math.
-                let tx_burn = basefee
-                    .checked_mul(tx_gas as u128)
-                    .and_then(|b| burn_this_block.checked_add(b))
-                    .ok_or_else(|| EvmExecError::InvariantViolation("basefee-burn accumulator overflow".to_string()))?;
-                burn_this_block = tx_burn;
-                // §8.1 (D3): the priority fee belongs to the PAYLOAD block's
-                // declared coinbase. revm credited the accepting coinbase
-                // (block.coinbase) during commit; move the tip over. Balance
-                // moves WITHIN the EVM lane — supply-neutral.
-                let tip = tip_per_gas.saturating_mul(U256::from(tx_gas));
-                let payload_cb = to_revm_address(&cand.payload_coinbase);
-                if !tip.is_zero() && payload_cb != accepting_coinbase {
-                    reroute_balance(evm.db_mut(), accepting_coinbase, payload_cb, tip)?;
-                }
-                // F002 withdrawals (design §9.3): the COMMITTED logs are exactly
-                // the effective (non-reverted) withdraw calls. Materialize each
-                // as a WithdrawOp and burn the escrowed wei out of F002 — the
-                // value leaves the EVM lane here; consensus re-creates it as a
-                // synthetic UTXO output in this block's diff.
-                let receipt_index = receipts.len() as u32;
-                let evm_tx_hash = crate::tx::tx_hash(&cand.raw);
-                let mut op_index = 0u32;
-                let mut withdrawn_wei: u128 = 0;
-                for log in result.logs() {
-                    if let Some(w) = crate::withdraw::decode_withdraw_log(log) {
-                        withdrawals.push(WithdrawOp {
-                            receipt_index,
-                            op_index,
-                            evm_tx_hash,
-                            from: EvmAddress::from_bytes(w.from),
-                            script_public_key: w.script_public_key,
-                            amount_sompi: (w.amount_wei / EVM_NATIVE_SCALE as u128) as u64,
-                        });
-                        op_index += 1;
-                        withdrawn_wei = withdrawn_wei.saturating_add(w.amount_wei);
+            } else {
+                evm.transact_commit()
+            };
+            match exec {
+                Ok(result) => {
+                    let tx_gas = result.gas_used();
+                    gas_used = gas_used.saturating_add(tx_gas);
+                    tx_cumulative_gas = tx_cumulative_gas.saturating_add(tx_gas);
+                    // audit #5: basefee burn feeds the supply identity — use checked math.
+                    let tx_burn = basefee
+                        .checked_mul(tx_gas as u128)
+                        .and_then(|b| burn_this_block.checked_add(b))
+                        .ok_or_else(|| EvmExecError::InvariantViolation("basefee-burn accumulator overflow".to_string()))?;
+                    burn_this_block = tx_burn;
+                    // §8.1 (D3): the priority fee belongs to the PAYLOAD block's
+                    // declared coinbase. revm credited the accepting coinbase
+                    // (block.coinbase) during commit; move the tip over. Balance
+                    // moves WITHIN the EVM lane — supply-neutral.
+                    let tip = tip_per_gas.saturating_mul(U256::from(tx_gas));
+                    let payload_cb = to_revm_address(&cand.payload_coinbase);
+                    if !tip.is_zero() && payload_cb != accepting_coinbase {
+                        reroute_balance(evm.db_mut(), accepting_coinbase, payload_cb, tip)?;
                     }
+                    // F002 withdrawals (design §9.3): the COMMITTED logs are exactly
+                    // the effective (non-reverted) withdraw calls. Materialize each
+                    // as a WithdrawOp and burn the escrowed wei out of F002 — the
+                    // value leaves the EVM lane here; consensus re-creates it as a
+                    // synthetic UTXO output in this block's diff.
+                    let receipt_index = receipts.len() as u32;
+                    let evm_tx_hash = crate::tx::tx_hash(&cand.raw);
+                    let mut op_index = 0u32;
+                    let mut withdrawn_wei: u128 = 0;
+                    for log in result.logs() {
+                        if let Some(w) = crate::withdraw::decode_withdraw_log(log) {
+                            withdrawals.push(WithdrawOp {
+                                receipt_index,
+                                op_index,
+                                evm_tx_hash,
+                                from: EvmAddress::from_bytes(w.from),
+                                script_public_key: w.script_public_key,
+                                amount_sompi: (w.amount_wei / EVM_NATIVE_SCALE as u128) as u64,
+                            });
+                            op_index += 1;
+                            withdrawn_wei = withdrawn_wei.saturating_add(w.amount_wei);
+                        }
+                    }
+                    if withdrawn_wei > 0 {
+                        burn_balance(evm.db_mut(), crate::withdraw::f002_address(), U256::from(withdrawn_wei))?;
+                    }
+                    outcomes[cand_idx] =
+                        Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Accepted { receipt_index: receipts.len() as u32 });
+                    receipts.push(make_receipt(&result, tx_cumulative_gas));
+                    executed_raws.push(cand.raw.clone());
                 }
-                if withdrawn_wei > 0 {
-                    burn_balance(evm.db_mut(), crate::withdraw::f002_address(), U256::from(withdrawn_wei))?;
+                // §6.1 class 2 (and 3 via the nonce rule): acceptance-time invalid
+                // (nonce / upfront funds / max_fee < basefee) ⇒ deterministic skip —
+                // no receipt, no gas, no nonce change, no trace beyond the counter.
+                Err(EVMError::Transaction(_)) => {
+                    skipped_tx_count += 1;
+                    outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
                 }
-                outcomes[cand_idx] =
-                    Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Accepted { receipt_index: receipts.len() as u32 });
-                receipts.push(make_receipt(&result, tx_cumulative_gas));
-                executed_raws.push(cand.raw.clone());
+                Err(other) => return Err(EvmExecError::InvalidTx(format!("{other:?}"))),
             }
-            // §6.1 class 2 (and 3 via the nonce rule): acceptance-time invalid
-            // (nonce / upfront funds / max_fee < basefee) ⇒ deterministic skip —
-            // no receipt, no gas, no nonce change, no trace beyond the counter.
-            Err(EVMError::Transaction(_)) => {
-                skipped_tx_count += 1;
-                outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
-            }
-            Err(other) => return Err(EvmExecError::InvalidTx(format!("{other:?}"))),
         }
-    }
     } else {
         // === v2: sequential gas pool (Ethereum semantics) ===
         // Walk `AcceptedEvmTxs(B)` in canonical order with a running gas pool seeded
@@ -520,7 +522,8 @@ pub fn execute_block_evm(
     // zero); only deposits add, and withdrawals/basefee-burn remove.
     let parent_total = input.parent.map(|p| evmu256_to_u128(p.evm_total_native_balance)).unwrap_or(0);
     let deposited: u128 = applied_claims.iter().map(|c| c.amount_sompi as u128 * EVM_NATIVE_SCALE as u128).sum();
-    let withdrawn: u128 = withdrawals.iter().map(|w: &kaspa_consensus_core::evm::WithdrawOp| w.amount_sompi as u128 * EVM_NATIVE_SCALE as u128).sum();
+    let withdrawn: u128 =
+        withdrawals.iter().map(|w: &kaspa_consensus_core::evm::WithdrawOp| w.amount_sompi as u128 * EVM_NATIVE_SCALE as u128).sum();
     // `evm_total_native_balance` is a DERIVED best-effort supply figure. On the
     // real chain wei enters only via deposit claims, so on a valid chain the
     // identity total(B) = total(parent) + deposits − withdrawals − burn holds and
@@ -578,12 +581,9 @@ pub fn execute_block_evm(
         ),
     };
 
-    let candidate_outcomes = outcomes
-        .into_iter()
-        .map(|o| o.expect("every candidate received an outcome in the planning or execution loop"))
-        .collect();
-    let result =
-        EvmExecutionResult { header, receipts, withdrawals, applied_deposit_claims: applied_claims, candidate_outcomes };
+    let candidate_outcomes =
+        outcomes.into_iter().map(|o| o.expect("every candidate received an outcome in the planning or execution loop")).collect();
+    let result = EvmExecutionResult { header, receipts, withdrawals, applied_deposit_claims: applied_claims, candidate_outcomes };
     Ok((result, state_db))
 }
 
@@ -744,9 +744,9 @@ fn evmu256_to_u128(v: EvmU256) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::evm::{EvmAddress, EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE};
-    use revm::primitives::{AccountInfo, KECCAK_EMPTY};
+    use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE, EvmAddress};
     use revm::Database;
+    use revm::primitives::{AccountInfo, KECCAK_EMPTY};
 
     /// Build + sign a 1559 transfer; returns (sender, raw EIP-2718 bytes).
     #[allow(clippy::too_many_arguments)]
@@ -1177,7 +1177,15 @@ mod tests {
     }
     /// Build + sign an arbitrary call (value + calldata) from a test key.
     #[allow(clippy::too_many_arguments)]
-    fn signed_call(key: u8, nonce: u64, to: Address, value: u128, gas_limit: u64, max_fee: u128, input: Vec<u8>) -> (Address, Vec<u8>) {
+    fn signed_call(
+        key: u8,
+        nonce: u64,
+        to: Address,
+        value: u128,
+        gas_limit: u64,
+        max_fee: u128,
+        input: Vec<u8>,
+    ) -> (Address, Vec<u8>) {
         use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
         use alloy_eips::eip2718::Encodable2718;
         use alloy_signer::SignerSync;
@@ -1303,7 +1311,11 @@ mod tests {
             assert_eq!(res.withdrawals.len(), MAX_WITHDRAWALS_PER_EVM_BLOCK, "{label}: cap bounds materialized withdrawals");
             assert_eq!(res.header.accepted_tx_count, MAX_WITHDRAWALS_PER_EVM_BLOCK as u32, "{label}: MAX accepted");
             assert_eq!(res.header.skipped_tx_count, 1, "{label}: exactly the overflow tx skipped");
-            assert_eq!(nonce_of(&mut db), MAX_WITHDRAWALS_PER_EVM_BLOCK as u64, "{label}: overflow tx state NOT committed (nonce advanced only MAX)");
+            assert_eq!(
+                nonce_of(&mut db),
+                MAX_WITHDRAWALS_PER_EVM_BLOCK as u64,
+                "{label}: overflow tx state NOT committed (nonce advanced only MAX)"
+            );
 
             // --- cap INERT (fence u64::MAX) ⇒ uncapped, all MAX+1 materialize ---
             let inert = EvmBlockInput { f002_withdraw_cap_activation_daa_score: u64::MAX, ..input };
@@ -1327,8 +1339,7 @@ mod tests {
         // (c) destination not the PQ-standard class.
         let (_s1, raw_frac) = signed_call(0x11, 0, f002, EVM_NATIVE_SCALE as u128 + 1, 60_000, basefee, withdraw_calldata(&spk));
         let (_s2, raw_zero) = signed_call(0x11, 1, f002, 0, 60_000, basefee, withdraw_calldata(&spk));
-        let (sender, raw_badspk) =
-            signed_call(0x11, 2, f002, 5 * EVM_NATIVE_SCALE as u128, 60_000, basefee, vec![0, 0, 0xAA, 0xBB]);
+        let (sender, raw_badspk) = signed_call(0x11, 2, f002, 5 * EVM_NATIVE_SCALE as u128, 60_000, basefee, vec![0, 0, 0xAA, 0xBB]);
 
         let seed = funded_seed(sender, 1_000_000_000_000_000_000);
         let payload = EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes([0xFE; 20]), ..Default::default() };
@@ -1436,5 +1447,4 @@ mod tests {
         assert_eq!(db.basic(Address::from([0xFE; 20])).unwrap().unwrap().balance, U256::from(7 * scale));
         assert_eq!(result.header.evm_total_native_balance, EvmU256::from(100 * scale), "the split is supply-neutral");
     }
-
 }

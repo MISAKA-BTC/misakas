@@ -72,9 +72,7 @@ pub fn blake2b_512_address_payload(data: &[u8]) -> Hash64 {
 #[inline]
 pub fn blake2b_512_keyed(context: &[u8], data: &[u8]) -> Hash64 {
     let mut out = [0u8; HASH64_SIZE];
-    out.copy_from_slice(
-        Blake2bParams::new().hash_length(HASH64_SIZE).key(context).to_state().update(data).finalize().as_bytes(),
-    );
+    out.copy_from_slice(Blake2bParams::new().hash_length(HASH64_SIZE).key(context).to_state().update(data).finalize().as_bytes());
     Hash64::from_bytes(out)
 }
 
@@ -89,9 +87,7 @@ pub fn blake2b_512_keyed(context: &[u8], data: &[u8]) -> Hash64 {
 #[inline]
 pub fn blake2b_256_keyed(context: &[u8], data: &[u8]) -> [u8; HASH_SIZE] {
     let mut out = [0u8; HASH_SIZE];
-    out.copy_from_slice(
-        Blake2bParams::new().hash_length(HASH_SIZE).key(context).to_state().update(data).finalize().as_bytes(),
-    );
+    out.copy_from_slice(Blake2bParams::new().hash_length(HASH_SIZE).key(context).to_state().update(data).finalize().as_bytes());
     out
 }
 

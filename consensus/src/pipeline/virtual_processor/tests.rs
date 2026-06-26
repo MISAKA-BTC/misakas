@@ -383,23 +383,13 @@ async fn pos_v2_funded_bond_chain_validates() {
     // 3) Spend the matured coinbase into a funded, ML-DSA-87-signed stake-bond tx.
     let amount = coinbase_value - 100_000; // small fee; bond almost the whole coinbase
     let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
-    let (bond_tx, _validator_id, _reward_payload) = dns_harness::funded_signed_bond_tx(
-        seed,
-        coinbase_outpoint,
-        coinbase_value,
-        coinbase_daa,
-        amount,
-        0,
-        storage_mass_parameter,
-    );
+    let (bond_tx, _validator_id, _reward_payload) =
+        dns_harness::funded_signed_bond_tx(seed, coinbase_outpoint, coinbase_value, coinbase_daa, amount, 0, storage_mass_parameter);
     let bond_tx_id = bond_tx.id();
 
     // 4) Mine the block carrying the bond tx; it must reach a valid UTXO tip.
     let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
-    assert!(
-        bond_block.transactions.iter().any(|t| t.id() == bond_tx_id),
-        "the funded stake-bond tx must be included in the block"
-    );
+    assert!(bond_block.transactions.iter().any(|t| t.id() == bond_tx_id), "the funded stake-bond tx must be included in the block");
     assert_eq!(
         ctx.consensus.block_status(bond_block.header.hash),
         BlockStatus::StatusUTXOValid,
@@ -441,10 +431,8 @@ async fn finality_fee_bridge_scenario(finality_fence: u64, evm_active: bool) -> 
     // else the ordinary simulated-time mine path.
     async fn mine(ctx: &mut TestContext, evm_active: bool, miner: MinerData, txs: Vec<Transaction>) -> Block {
         if evm_active {
-            let t = ctx
-                .consensus
-                .build_block_template(miner, Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
-                .unwrap();
+            let t =
+                ctx.consensus.build_block_template(miner, Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard).unwrap();
             let block = t.block.to_immutable();
             ctx.validate_and_insert_block(block.clone()).await;
             block
@@ -645,11 +633,7 @@ async fn pos_v2_reward_bearing_attestation_validates() {
         dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, value_a - 100_000, 0, storage_mass_parameter);
     let bond_tx_id = bond_tx.id();
     let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
-    assert_eq!(
-        ctx.consensus.block_status(bond_block.header.hash),
-        BlockStatus::StatusUTXOValid,
-        "the bond block must be UTXO-valid"
-    );
+    assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid, "the bond block must be UTXO-valid");
     assert_eq!(reward_payload, k_payload, "rewards pay back to K");
 
     // Bury several blue_score epochs past the bond so a ready, bond-active canonical anchor
@@ -762,11 +746,7 @@ async fn pos_v2_slashing_evidence_removes_bond_and_pays_reporter() {
         dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, bond_amount, 0, storage_mass_parameter);
     let bond_tx_id = bond_tx.id();
     let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
-    assert_eq!(
-        ctx.consensus.block_status(bond_block.header.hash),
-        BlockStatus::StatusUTXOValid,
-        "the bond block must be UTXO-valid"
-    );
+    assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid, "the bond block must be UTXO-valid");
     let bond_outpoint = TransactionOutpoint::new(bond_tx_id, 0);
     assert!(
         ctx.consensus.get_virtual_utxos(None, 100_000, false).iter().any(|(o, _)| *o == bond_outpoint),
@@ -787,10 +767,22 @@ async fn pos_v2_slashing_evidence_removes_bond_and_pays_reporter() {
     // Active at the target, and well within `evidence_window_blocks` of the including block.
     let target_daa = buried[1].header.daa_score;
     let att_a = dns_harness::build_signed_attestation(
-        &v, net_id.as_byte_slice(), bond_outpoint, epoch, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+        &v,
+        net_id.as_byte_slice(),
+        bond_outpoint,
+        epoch,
+        Hash64::from_bytes([0xa1u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let att_b = dns_harness::build_signed_attestation(
-        &v, net_id.as_byte_slice(), bond_outpoint, epoch, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+        &v,
+        net_id.as_byte_slice(),
+        bond_outpoint,
+        epoch,
+        Hash64::from_bytes([0xb2u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     // Sanity (localizes a signature/net_id mismatch vs a freshness/status rejection): both
     // attestations must verify under the net_id (genesis hash) the consensus slashing
@@ -822,8 +814,7 @@ async fn pos_v2_slashing_evidence_removes_bond_and_pays_reporter() {
         attestation_b: att_b,
         reporter_reward_spk_payload: k_payload,
     };
-    let slash_tx =
-        dns_harness::funded_signed_slashing_evidence_tx(seed, coinbase_b, value_b, daa_b, evidence, storage_mass_parameter);
+    let slash_tx = dns_harness::funded_signed_slashing_evidence_tx(seed, coinbase_b, value_b, daa_b, evidence, storage_mass_parameter);
     let slash_tx_id = slash_tx.id();
 
     // The block including the slashing evidence must validate AND apply the side-effects.
@@ -883,7 +874,9 @@ async fn pos_v2_slashing_victim_compensates_honest_peer() {
     use crate::model::stores::headers::HeaderStoreReader;
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload, compute_slashing_distribution, ready_epoch_from_tip_blue_score},
+        dns_finality::{
+            DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload, compute_slashing_distribution, ready_epoch_from_tip_blue_score,
+        },
     };
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -976,7 +969,13 @@ async fn pos_v2_slashing_victim_compensates_honest_peer() {
     // B HONESTLY attests the canonical anchor for epoch E → B is rewarded ⇒ joins epoch E's
     // accumulator `included` set (keyed by the attestation epoch).
     let att_b = dns_harness::build_signed_attestation(
-        &vb, genesis_hash.as_byte_slice(), bond_b_outpoint, epoch_e, anchor.anchor_hash, anchor.anchor_daa_score, Hash64::default(),
+        &vb,
+        genesis_hash.as_byte_slice(),
+        bond_b_outpoint,
+        epoch_e,
+        anchor.anchor_hash,
+        anchor.anchor_daa_score,
+        Hash64::default(),
     );
     let shard_b = dns_harness::funded_signed_shard_tx([0x43u8; 32], cb_b2, vb2, db2, att_b, storage);
     let reward_block = ctx.mine_block(new_miner_data(), vec![shard_b]).await;
@@ -994,10 +993,22 @@ async fn pos_v2_slashing_victim_compensates_honest_peer() {
     // A EQUIVOCATES the SAME epoch E: two conflicting attestations (different anchors).
     let target_daa = buried[1].header.daa_score;
     let att_a1 = dns_harness::build_signed_attestation(
-        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, epoch_e, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+        &va,
+        genesis_hash.as_byte_slice(),
+        bond_a_outpoint,
+        epoch_e,
+        Hash64::from_bytes([0xa1u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let att_a2 = dns_harness::build_signed_attestation(
-        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, epoch_e, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+        &va,
+        genesis_hash.as_byte_slice(),
+        bond_a_outpoint,
+        epoch_e,
+        Hash64::from_bytes([0xb2u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let evidence = SlashingEvidencePayload {
         version: DNS_PAYLOAD_VERSION_V1,
@@ -1128,16 +1139,40 @@ async fn pos_v2_multi_slashing_in_one_block() {
     let epoch = 1u64;
     let target_daa = buried[1].header.daa_score; // past each bond's activation, within evidence_window of the slash block
     let att_a1 = dns_harness::build_signed_attestation(
-        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, epoch, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+        &va,
+        genesis_hash.as_byte_slice(),
+        bond_a_outpoint,
+        epoch,
+        Hash64::from_bytes([0xa1u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let att_a2 = dns_harness::build_signed_attestation(
-        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, epoch, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+        &va,
+        genesis_hash.as_byte_slice(),
+        bond_a_outpoint,
+        epoch,
+        Hash64::from_bytes([0xb2u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let att_b1 = dns_harness::build_signed_attestation(
-        &vb, genesis_hash.as_byte_slice(), bond_b_outpoint, epoch, Hash64::from_bytes([0xc3u8; 64]), target_daa, Hash64::default(),
+        &vb,
+        genesis_hash.as_byte_slice(),
+        bond_b_outpoint,
+        epoch,
+        Hash64::from_bytes([0xc3u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let att_b2 = dns_harness::build_signed_attestation(
-        &vb, genesis_hash.as_byte_slice(), bond_b_outpoint, epoch, Hash64::from_bytes([0xd4u8; 64]), target_daa, Hash64::default(),
+        &vb,
+        genesis_hash.as_byte_slice(),
+        bond_b_outpoint,
+        epoch,
+        Hash64::from_bytes([0xd4u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let ev_a = SlashingEvidencePayload {
         version: DNS_PAYLOAD_VERSION_V1,
@@ -1176,8 +1211,18 @@ async fn pos_v2_multi_slashing_in_one_block() {
     assert!(!utxos.contains_key(&bond_b_outpoint), "B's slashed locked stake is removed");
 
     let rp = ctx.consensus.params().dns_params.clone().unwrap().reward_params;
-    let dist_a = compute_slashing_distribution(bond_a_amount, rp.slashing_reporter_reward_bps, rp.security_reserve_bps, rp.victim_epoch_pool_bps);
-    let dist_b = compute_slashing_distribution(bond_b_amount, rp.slashing_reporter_reward_bps, rp.security_reserve_bps, rp.victim_epoch_pool_bps);
+    let dist_a = compute_slashing_distribution(
+        bond_a_amount,
+        rp.slashing_reporter_reward_bps,
+        rp.security_reserve_bps,
+        rp.victim_epoch_pool_bps,
+    );
+    let dist_b = compute_slashing_distribution(
+        bond_b_amount,
+        rp.slashing_reporter_reward_bps,
+        rp.security_reserve_bps,
+        rp.victim_epoch_pool_bps,
+    );
     // Each reporter reward minted independently at its own (slash_tx, 0).
     let ra = utxos.get(&TransactionOutpoint::new(slash_a_id, 0)).expect("A's reporter reward minted at (slash_a, 0)");
     let rb = utxos.get(&TransactionOutpoint::new(slash_b_id, 0)).expect("B's reporter reward minted at (slash_b, 0)");
@@ -1329,7 +1374,13 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     };
     let epoch_e = anchor.epoch;
     let att_b = dns_harness::build_signed_attestation(
-        &vb, genesis_hash.as_byte_slice(), bond_b_outpoint, epoch_e, anchor.anchor_hash, anchor.anchor_daa_score, Hash64::default(),
+        &vb,
+        genesis_hash.as_byte_slice(),
+        bond_b_outpoint,
+        epoch_e,
+        anchor.anchor_hash,
+        anchor.anchor_daa_score,
+        Hash64::default(),
     );
     let shard_b = dns_harness::funded_signed_shard_tx([0x43u8; 32], cb_b2, vb2, db2, att_b, storage);
     let reward_block = ctx.mine_block(new_miner_data(), vec![shard_b]).await;
@@ -1353,10 +1404,22 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     // output (epoch 1 has no honest included peer) — only the reserve accrues.
     let target_daa = buried[1].header.daa_score;
     let att_a1 = dns_harness::build_signed_attestation(
-        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, 1, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+        &va,
+        genesis_hash.as_byte_slice(),
+        bond_a_outpoint,
+        1,
+        Hash64::from_bytes([0xa1u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let att_a2 = dns_harness::build_signed_attestation(
-        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, 1, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+        &va,
+        genesis_hash.as_byte_slice(),
+        bond_a_outpoint,
+        1,
+        Hash64::from_bytes([0xb2u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let evidence = SlashingEvidencePayload {
         version: DNS_PAYLOAD_VERSION_V1,
@@ -1381,7 +1444,8 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     assert!(reserve_accrued > 0, "the reserve must be non-zero to drip");
 
     // ── Mine until epoch E's DAA-finalization; the drip pays B in that block's coinbase ─────────
-    let target_final_daa = (epoch_e + 1) * dns.epoch_length_blocks + dns.reward_uniqueness_window_blocks + dns.max_reorg_horizon_blocks;
+    let target_final_daa =
+        (epoch_e + 1) * dns.epoch_length_blocks + dns.reward_uniqueness_window_blocks + dns.max_reorg_horizon_blocks;
     let mut drip_block = None;
     for _ in 0..80 {
         let blk = ctx.mine_block(new_miner_data(), vec![]).await;
@@ -1479,10 +1543,22 @@ async fn pos_v2_spend_gate_rejects_locked_bond_racing_slash() {
     let genesis_hash = ctx.consensus.params().genesis.hash;
     let target_daa = buried[1].header.daa_score;
     let att_a = dns_harness::build_signed_attestation(
-        &v, genesis_hash.as_byte_slice(), bond_outpoint, 1, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+        &v,
+        genesis_hash.as_byte_slice(),
+        bond_outpoint,
+        1,
+        Hash64::from_bytes([0xa1u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let att_b = dns_harness::build_signed_attestation(
-        &v, genesis_hash.as_byte_slice(), bond_outpoint, 1, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+        &v,
+        genesis_hash.as_byte_slice(),
+        bond_outpoint,
+        1,
+        Hash64::from_bytes([0xb2u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let evidence = SlashingEvidencePayload {
         version: DNS_PAYLOAD_VERSION_V1,
@@ -1611,10 +1687,22 @@ async fn pos_v2_slashing_survives_reorg_via_evidence_merge() {
     let genesis_hash = ctx.consensus.params().genesis.hash;
     let target_daa = buried[1].header.daa_score;
     let att_a = dns_harness::build_signed_attestation(
-        &v, genesis_hash.as_byte_slice(), bond_outpoint, 1, Hash64::from_bytes([0xa1u8; 64]), target_daa, Hash64::default(),
+        &v,
+        genesis_hash.as_byte_slice(),
+        bond_outpoint,
+        1,
+        Hash64::from_bytes([0xa1u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let att_b = dns_harness::build_signed_attestation(
-        &v, genesis_hash.as_byte_slice(), bond_outpoint, 1, Hash64::from_bytes([0xb2u8; 64]), target_daa, Hash64::default(),
+        &v,
+        genesis_hash.as_byte_slice(),
+        bond_outpoint,
+        1,
+        Hash64::from_bytes([0xb2u8; 64]),
+        target_daa,
+        Hash64::default(),
     );
     let evidence = SlashingEvidencePayload {
         version: DNS_PAYLOAD_VERSION_V1,
@@ -1883,10 +1971,22 @@ async fn dag5_selective_censorship_does_not_redistribute_reward() {
     let e1 = ready_epoch(&ctx);
     let anchor_e1 = anchor_at(&ctx, e1);
     let att_a1 = dns_harness::build_signed_attestation(
-        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, e1, anchor_e1.anchor_hash, anchor_e1.anchor_daa_score, Hash64::default(),
+        &va,
+        genesis_hash.as_byte_slice(),
+        bond_a_outpoint,
+        e1,
+        anchor_e1.anchor_hash,
+        anchor_e1.anchor_daa_score,
+        Hash64::default(),
     );
     let att_b1 = dns_harness::build_signed_attestation(
-        &vb, genesis_hash.as_byte_slice(), bond_b_outpoint, e1, anchor_e1.anchor_hash, anchor_e1.anchor_daa_score, Hash64::default(),
+        &vb,
+        genesis_hash.as_byte_slice(),
+        bond_b_outpoint,
+        e1,
+        anchor_e1.anchor_hash,
+        anchor_e1.anchor_daa_score,
+        Hash64::default(),
     );
     let shard_a1 = dns_harness::funded_signed_shard_tx([0x42u8; 32], cb_a_e1, va_e1, da_a_e1, att_a1, storage);
     let shard_b1 = dns_harness::funded_signed_shard_tx([0x43u8; 32], cb_b_e1, vb_e1, db_b_e1, att_b1, storage);
@@ -1910,7 +2010,13 @@ async fn dag5_selective_censorship_does_not_redistribute_reward() {
     //    the §E denominator stays A+B and A earns the SAME pool/2 — B's share is NOT redistributed. ──
     let anchor_e2 = anchor_at(&ctx, e2);
     let att_a2 = dns_harness::build_signed_attestation(
-        &va, genesis_hash.as_byte_slice(), bond_a_outpoint, e2, anchor_e2.anchor_hash, anchor_e2.anchor_daa_score, Hash64::default(),
+        &va,
+        genesis_hash.as_byte_slice(),
+        bond_a_outpoint,
+        e2,
+        anchor_e2.anchor_hash,
+        anchor_e2.anchor_daa_score,
+        Hash64::default(),
     );
     let shard_a2 = dns_harness::funded_signed_shard_tx([0x42u8; 32], cb_a_e2, va_e2, da_a_e2, att_a2, storage);
     let block_censor = ctx.mine_block(new_miner_data(), vec![shard_a2]).await; // B's E2 attestation is omitted
@@ -1988,11 +2094,7 @@ async fn pos_v2_funded_unbond_request_validates() {
         dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, bond_amount, 0, storage_mass_parameter);
     let bond_tx_id = bond_tx.id();
     let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
-    assert_eq!(
-        ctx.consensus.block_status(bond_block.header.hash),
-        BlockStatus::StatusUTXOValid,
-        "the bond block must be UTXO-valid"
-    );
+    assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid, "the bond block must be UTXO-valid");
     let bond_outpoint = TransactionOutpoint::new(bond_tx_id, 0);
     // Bury the bond so its record is committed into the active bond view the unbond rule reads.
     for _ in 0..5 {
@@ -2002,8 +2104,15 @@ async fn pos_v2_funded_unbond_request_validates() {
     // The owner submits a funded, ML-DSA-87-signed unbond request; the block must validate.
     // audit M-04: the authorization binds the network id (genesis hash), as the consensus rule reconstructs it.
     let net_id = ctx.consensus.params().genesis.hash;
-    let unbond_tx =
-        dns_harness::funded_signed_unbond_tx(seed, net_id.as_byte_slice(), coinbase_b, value_b, daa_b, bond_outpoint, storage_mass_parameter);
+    let unbond_tx = dns_harness::funded_signed_unbond_tx(
+        seed,
+        net_id.as_byte_slice(),
+        coinbase_b,
+        value_b,
+        daa_b,
+        bond_outpoint,
+        storage_mass_parameter,
+    );
     let unbond_block = ctx.mine_block(new_miner_data(), vec![unbond_tx]).await;
     assert_eq!(
         ctx.consensus.block_status(unbond_block.header.hash),
@@ -2186,16 +2295,14 @@ async fn dns_v3_canonical_attestation_credited() {
     let new_sink = ctx.consensus.get_sink();
     let (contributions, denom, bond_amount) = {
         let vp = ctx.consensus.virtual_processor();
-        let bonds: Vec<_> =
-            vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+        let bonds: Vec<_> = vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
         let bond_amount = bonds.iter().find(|b| b.bond_outpoint == bond_outpoint).expect("the funded bond is persisted").amount;
         let (c, d) = vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns);
         (c, d, bond_amount)
     };
 
     // The canonical attestation is credited with the bond's full stake at its epoch.
-    let credited =
-        contributions.iter().find(|c| c.bond_outpoint == bond_outpoint).expect("the canonical attestation is credited");
+    let credited = contributions.iter().find(|c| c.bond_outpoint == bond_outpoint).expect("the canonical attestation is credited");
     assert_eq!(credited.epoch, anchor.epoch, "credited at the canonical epoch");
     assert_eq!(credited.signed_stake_sompi, bond_amount, "credited with the bond's full stake");
     // The denominator is keyed by the CANONICAL anchor DAA for that epoch.
@@ -2313,16 +2420,12 @@ async fn dns_v3_noncanonical_attestation_rejected() {
     let new_sink = ctx.consensus.get_sink();
     let (contributions, denom) = {
         let vp = ctx.consensus.virtual_processor();
-        let bonds: Vec<_> =
-            vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+        let bonds: Vec<_> = vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
         vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns)
     };
 
     // The non-canonical attestation also earns NO StakeScore credit (PR4)...
-    assert!(
-        contributions.iter().all(|c| c.bond_outpoint != bond_outpoint),
-        "a non-canonical-target attestation must not be credited"
-    );
+    assert!(contributions.iter().all(|c| c.bond_outpoint != bond_outpoint), "a non-canonical-target attestation must not be credited");
     // ...even though its epoch IS a ready, creditable epoch (present in the denominator).
     assert!(denom.contains_key(&anchor.epoch), "the epoch is ready/creditable; only the non-canonical target is rejected");
 }
@@ -2624,10 +2727,10 @@ impl TemplateTransactionSelector for RefillTxSelector {
 async fn template_adoption_setup() -> (
     TestContext,
     dns_harness::HarnessValidator,
-    TransactionOutpoint,            // bond outpoint
+    TransactionOutpoint,                                            // bond outpoint
     kaspa_consensus_core::dns_finality::CanonicalLaggedEpochAnchor, // canonical anchor for latest ready epoch
-    (TransactionOutpoint, u64, u64), // shard-funding coinbase #1 (outpoint, value, daa)
-    (TransactionOutpoint, u64, u64), // shard-funding coinbase #2 (outpoint, value, daa)
+    (TransactionOutpoint, u64, u64),                                // shard-funding coinbase #1 (outpoint, value, daa)
+    (TransactionOutpoint, u64, u64),                                // shard-funding coinbase #2 (outpoint, value, daa)
     kaspa_consensus_core::dns_finality::DnsParams,
     BlockHash, // genesis hash (net id)
     u64,       // storage_mass_parameter
@@ -2840,8 +2943,7 @@ async fn duplicate_epoch_attestation_credited_once() {
     let (contributions, denom) = vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns);
 
     // The (bond, epoch) pair is credited at most once even though two shards carry it.
-    let credited_for_epoch =
-        contributions.iter().filter(|c| c.bond_outpoint == bond_outpoint && c.epoch == anchor.epoch).count();
+    let credited_for_epoch = contributions.iter().filter(|c| c.bond_outpoint == bond_outpoint && c.epoch == anchor.epoch).count();
     assert!(credited_for_epoch >= 1, "the canonical attestation is credited at least once");
     // After the per-(bond,epoch) aggregation, the signed stake for this epoch equals the bond's
     // stake exactly ONCE (no double-count from the duplicate shard).
@@ -3082,7 +3184,9 @@ async fn dns_v3_many_validators_agree_on_anchor_under_fast_wide_dag() {
             .unwrap();
         let anchors: HashSet<BlockHash> = views
             .iter()
-            .map(|t| vp.canonical_anchor_by_blue_score(buried_epoch, *t, &dns).expect("every view resolves the buried epoch").anchor_hash)
+            .map(|t| {
+                vp.canonical_anchor_by_blue_score(buried_epoch, *t, &dns).expect("every view resolves the buried epoch").anchor_hash
+            })
             .collect();
         let blue_scores: HashSet<u64> = views.iter().map(|t| vp.headers_store.get_blue_score(*t).unwrap()).collect();
         (anchors, blue_scores, buried_epoch)
@@ -3186,7 +3290,12 @@ mod dns_harness {
     /// borsh `StakeBondPayload`). The funded variant (output-0 = `amount` locked
     /// stake spent from a coinbase UTXO) is the next step; here the tx is
     /// payload-first for shape / borsh checks.
-    pub(super) fn build_stake_bond_tx(v: &HarnessValidator, amount: u64, activation_daa_score: u64, reward_payload: [u8; 64]) -> Transaction {
+    pub(super) fn build_stake_bond_tx(
+        v: &HarnessValidator,
+        amount: u64,
+        activation_daa_score: u64,
+        reward_payload: [u8; 64],
+    ) -> Transaction {
         let payload = StakeBondPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             owner_pubkey_hash: v.validator_id,
@@ -3197,7 +3306,15 @@ mod dns_harness {
             unbonding_period_blocks: 700,
             owner_reward_spk_payload: reward_payload,
         };
-        Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_BOND, 0, borsh::to_vec(&payload).unwrap())
+        Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![],
+            vec![],
+            0,
+            SUBNETWORK_ID_STAKE_BOND,
+            0,
+            borsh::to_vec(&payload).unwrap(),
+        )
     }
 
     /// kaspa-pq ADR-0018 §G (DAG-2): build a FUNDED, ML-DSA-87-signed stake-bond tx.
@@ -3602,7 +3719,14 @@ mod dns_harness {
         let target_hash = Hash64::from_bytes([0x44u8; 64]);
         let vsc = Hash64::from_bytes([0x22u8; 64]);
         let att = build_signed_attestation(&v, &net_id, bond_outpoint, 7, target_hash, 700, vsc);
-        let msg = stake_attestation_message(&net_id, att.epoch, att.target_hash, att.target_daa_score, att.validator_set_commitment, att.bond_outpoint);
+        let msg = stake_attestation_message(
+            &net_id,
+            att.epoch,
+            att.target_hash,
+            att.target_daa_score,
+            att.validator_set_commitment,
+            att.bond_outpoint,
+        );
         let mb = msg.as_bytes();
         assert!(
             kaspa_txscript::verify_mldsa87_with_context(&v.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA87_CONTEXT).unwrap(),
@@ -3610,7 +3734,9 @@ mod dns_harness {
         );
         // A different key must NOT verify (sanity).
         let v2 = harness_validator([0x99u8; 32]);
-        assert!(!kaspa_txscript::verify_mldsa87_with_context(&v2.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA87_CONTEXT).unwrap());
+        assert!(
+            !kaspa_txscript::verify_mldsa87_with_context(&v2.pubkey, &mb[..], &att.signature, ATTESTATION_MLDSA87_CONTEXT).unwrap()
+        );
 
         // Shard tx wraps exactly one extractable attestation.
         let shard_tx = stake_attestation_shard_tx(&single_attestation_shard(att));
@@ -3731,7 +3857,6 @@ fn new_miner_data() -> MinerData {
     MinerData::new(p2pkh_mldsa87_spk(&payload), vec![])
 }
 
-
 /// kaspa-pq EVM Lane v0.4 (ADR-0020) — first EVM-ACTIVE pipeline integration
 /// test: with `evm_activation_daa_score = 0`, real blocks inserted through the
 /// full pipeline (header → body → virtual) drive the lazy chain-context step:
@@ -3750,10 +3875,8 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     use kaspa_hashes::Hash64;
 
     kaspa_core::log::try_init_logger("info");
-    let config = ConfigBuilder::new(MAINNET_PARAMS)
-        .skip_proof_of_work()
-        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
-        .build();
+    let config =
+        ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().edit_consensus_params(|p| p.evm_activation_daa_score = 0).build();
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
     let storage = consensus.consensus_clone().storage.clone();
@@ -3875,7 +3998,11 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     consensus.validate_and_insert_block(b4.to_immutable()).virtual_state_task.await.unwrap();
 
     assert_eq!(storage.evm_header_store.get(4.into()).unwrap().evm_number, 3, "b4 is EVM block 3 on the selected chain");
-    assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(4u64), "heads recovered past the disqualified block");
+    assert_eq!(
+        storage.evm_heads_store.read().get().unwrap().latest,
+        BlockHash::from(4u64),
+        "heads recovered past the disqualified block"
+    );
 
     // ---- b5: the node's OWN template (§15 producer path) — the builder must
     // declare v2, commit the (empty) payload hash and the REAL acceptance
@@ -4002,10 +4129,8 @@ async fn evm_active_canonical_number_map_follows_reorg() {
     use kaspa_evm::EvmBlockInput;
 
     kaspa_core::log::try_init_logger("info");
-    let config = ConfigBuilder::new(MAINNET_PARAMS)
-        .skip_proof_of_work()
-        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
-        .build();
+    let config =
+        ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().edit_consensus_params(|p| p.evm_activation_daa_score = 0).build();
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
     let storage = consensus.consensus_clone().storage.clone();
@@ -4140,7 +4265,11 @@ async fn evm_active_canonical_number_map_follows_reorg() {
 
     // The reorg detached x3 and attached y3(#3) + y4(#4):
     assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(6u64), "sink reorged to y4");
-    assert_eq!(storage.evm_number_store.get(3).unwrap(), Some(BlockHash::from(5u64)), "#3 now resolves to y3 (canonical), not the detached x3");
+    assert_eq!(
+        storage.evm_number_store.get(3).unwrap(),
+        Some(BlockHash::from(5u64)),
+        "#3 now resolves to y3 (canonical), not the detached x3"
+    );
     assert_eq!(storage.evm_number_store.get(4).unwrap(), Some(BlockHash::from(6u64)), "y4 claimed #4");
     assert_eq!(storage.evm_number_store.get(2).unwrap(), Some(BlockHash::from(2u64)), "#2 (below the fork) is unchanged");
     assert_ne!(storage.evm_number_store.get(3).unwrap(), Some(BlockHash::from(9u64)), "the detached x3 no longer owns #3");
@@ -4175,10 +4304,8 @@ async fn evm_producer_deposit_claim_fills_and_filters_template_system_ops() {
     let refund_spk = p2pkh_mldsa87_spk(&[0x42; 64]);
     let lock_spk = evm_deposit_lock_script(evm_addr, 1_000_000, 7, refund_spk.script());
     let lock_outpoint = TransactionOutpoint::new(99u64.into(), 0);
-    let initial_utxos = [(
-        lock_outpoint,
-        UtxoEntry { amount: 1000, script_public_key: lock_spk, block_daa_score: 0, is_coinbase: false },
-    )];
+    let initial_utxos =
+        [(lock_outpoint, UtxoEntry { amount: 1000, script_public_key: lock_spk, block_daa_score: 0, is_coinbase: false })];
 
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
@@ -4257,10 +4384,8 @@ async fn evm_y9_full_cap_payload_block_validates_and_executes() {
     use kaspa_consensus_core::evm::{EvmAddress, EvmExecutionPayload, EvmTemplateData, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
 
     kaspa_core::log::try_init_logger("info");
-    let config = ConfigBuilder::new(MAINNET_PARAMS)
-        .skip_proof_of_work()
-        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
-        .build();
+    let config =
+        ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().edit_consensus_params(|p| p.evm_activation_daa_score = 0).build();
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
     let storage = consensus.consensus_clone().storage.clone();

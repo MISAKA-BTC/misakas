@@ -90,9 +90,10 @@ impl RequestPruningPointOverlaySnapshotFlow {
             // it matches the requested pruning point (otherwise the requester's c==v would fail).
             let snap = session.spawn_blocking(move |c| c.pruning_point_overlay_snapshot()).await;
             let reply = match snap {
-                Some(s) if s.pruning_point == pp => {
-                    PruningPointOverlaySnapshotMessage { found: true, overlay_snapshot: borsh::to_vec(&s.snapshot).expect("OverlaySnapshot borsh is infallible") }
-                }
+                Some(s) if s.pruning_point == pp => PruningPointOverlaySnapshotMessage {
+                    found: true,
+                    overlay_snapshot: borsh::to_vec(&s.snapshot).expect("OverlaySnapshot borsh is infallible"),
+                },
                 _ => PruningPointOverlaySnapshotMessage { found: false, overlay_snapshot: vec![] },
             };
             self.router.enqueue(make_message!(Payload::PruningPointOverlaySnapshot, reply)).await?;

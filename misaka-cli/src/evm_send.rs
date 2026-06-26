@@ -18,16 +18,16 @@ use std::str::FromStr;
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
 use alloy_eips::eip2718::Encodable2718;
-use alloy_primitives::{Address, Bytes, TxKind, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
-use kaspa_bip32::{secp256k1::SecretKey, DerivationPath, ExtendedPrivateKey, Language, Mnemonic, WordCount};
+use kaspa_bip32::{DerivationPath, ExtendedPrivateKey, Language, Mnemonic, WordCount, secp256k1::SecretKey};
 use kaspa_consensus_core::evm::EVM_CHAIN_ID;
 use serde_json::json;
 use zeroize::Zeroizing;
 
 use crate::node::Ctx;
-use crate::{exit, CliError, CliResult, OutputFormat};
+use crate::{CliError, CliResult, OutputFormat, exit};
 
 const WEI_PER_MSK: u128 = 1_000_000_000_000_000_000;
 const HD_PATH: &str = "m/44'/60'/0'/0/0";
@@ -51,11 +51,7 @@ impl EvmKeySource {
                 let mut s = Zeroizing::new(String::new());
                 std::io::stdin().read_to_string(&mut s).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("stdin: {e}")))?;
                 let t = s.trim();
-                if t.split_whitespace().count() >= 12 {
-                    derive_from_mnemonic(t)
-                } else {
-                    decode_key_hex(t)
-                }
+                if t.split_whitespace().count() >= 12 { derive_from_mnemonic(t) } else { decode_key_hex(t) }
             }
             (None, None, false) => Err(CliError::new(
                 exit::WALLET_LOCKED,
@@ -83,8 +79,7 @@ fn read_trimmed(path: &str) -> Result<Zeroizing<String>, CliError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let meta = std::fs::symlink_metadata(path)
-            .map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("stat {path}: {e}")))?;
+        let meta = std::fs::symlink_metadata(path).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("stat {path}: {e}")))?;
         if !meta.file_type().is_file() {
             return Err(CliError::new(
                 exit::WALLET_LOCKED,
@@ -100,7 +95,8 @@ fn read_trimmed(path: &str) -> Result<Zeroizing<String>, CliError> {
 }
 
 fn derive_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; 32]>, CliError> {
-    let m = Mnemonic::new(phrase, Language::English).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("invalid mnemonic: {e}")))?;
+    let m =
+        Mnemonic::new(phrase, Language::English).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("invalid mnemonic: {e}")))?;
     // bip32 `Seed` already zeroizes on drop; the derived secret is wrapped below.
     let seed = m.to_seed("");
     let xprv = ExtendedPrivateKey::<SecretKey>::new(seed).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("xprv: {e}")))?;
@@ -415,7 +411,9 @@ fn guard_chain_id(ctx: &Ctx) -> Result<(), CliError> {
 fn resolve_nonce(ctx: &Ctx, from_s: &str, nonce_override: Option<u64>) -> Result<u64, CliError> {
     match nonce_override {
         Some(n) => Ok(n),
-        None => Ok(crate::eth::parse_hex_u128(&crate::eth::rpc_call(ctx, "eth_getTransactionCount", json!([from_s, "pending"]))?)? as u64),
+        None => {
+            Ok(crate::eth::parse_hex_u128(&crate::eth::rpc_call(ctx, "eth_getTransactionCount", json!([from_s, "pending"]))?)? as u64)
+        }
     }
 }
 
@@ -444,7 +442,9 @@ pub fn read_hex_blob(inline: &Option<String>, file: &Option<String>) -> Result<V
     let raw = match (inline, file) {
         (Some(s), None) => s.clone(),
         (None, Some(p)) => std::fs::read_to_string(p).map_err(|e| CliError::new(exit::GENERIC, format!("read {p}: {e}")))?,
-        (Some(_), Some(_)) => return Err(CliError::new(exit::GENERIC, "pass either the inline hex OR the --…-file, not both".to_string())),
+        (Some(_), Some(_)) => {
+            return Err(CliError::new(exit::GENERIC, "pass either the inline hex OR the --…-file, not both".to_string()));
+        }
         (None, None) => return Err(CliError::new(exit::GENERIC, "no hex blob — pass the inline hex or a --…-file".to_string())),
     };
     let cleaned: String = raw.split_whitespace().collect();
@@ -470,7 +470,8 @@ fn sign_eip1559(
     value: U256,
     input: Bytes,
 ) -> Result<Vec<u8>, CliError> {
-    let signer = PrivateKeySigner::from_bytes(&B256::from(*key32)).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("signer: {e}")))?;
+    let signer =
+        PrivateKeySigner::from_bytes(&B256::from(*key32)).map_err(|e| CliError::new(exit::WALLET_LOCKED, format!("signer: {e}")))?;
     let tx = TxEip1559 {
         chain_id: EVM_CHAIN_ID,
         nonce,
@@ -504,11 +505,7 @@ fn parse_dest(s: &str) -> Result<Address, CliError> {
 fn format_msk(wei: u128) -> String {
     let whole = wei / WEI_PER_MSK;
     let frac = wei % WEI_PER_MSK;
-    if frac == 0 {
-        whole.to_string()
-    } else {
-        format!("{whole}.{}", format!("{frac:018}").trim_end_matches('0'))
-    }
+    if frac == 0 { whole.to_string() } else { format!("{whole}.{}", format!("{frac:018}").trim_end_matches('0')) }
 }
 
 /// Parse a decimal MSK string into wei (1 MSK = 1e18 wei).
@@ -517,7 +514,11 @@ pub fn parse_msk_to_wei(s: &str) -> Result<u128, CliError> {
     if frac.len() > 18 || !frac.bytes().all(|b| b.is_ascii_digit()) || !whole.bytes().all(|b| b.is_ascii_digit()) {
         return Err(CliError::new(exit::GENERIC, format!("invalid amount '{s}' (MSK, max 18 decimals)")));
     }
-    let whole: u128 = if whole.is_empty() { 0 } else { whole.parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))? };
+    let whole: u128 =
+        if whole.is_empty() { 0 } else { whole.parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))? };
     let frac_wei: u128 = format!("{frac:0<18}").parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))?;
-    whole.checked_mul(WEI_PER_MSK).and_then(|w| w.checked_add(frac_wei)).ok_or_else(|| CliError::new(exit::GENERIC, "amount overflow".to_string()))
+    whole
+        .checked_mul(WEI_PER_MSK)
+        .and_then(|w| w.checked_add(frac_wei))
+        .ok_or_else(|| CliError::new(exit::GENERIC, "amount overflow".to_string()))
 }

@@ -150,7 +150,10 @@ async fn main() {
             let index: u32 = args[4].parse().expect("index");
             let client = GrpcClient::connect(url).await.expect("gRPC connect");
             let r = client.submit_evm_deposit_claim(txid, index).await.expect("claim call");
-            println!("queued: evm_address={} credit={} sompi (tip {} to the accepting coinbase)", r.evm_address, r.amount_sompi, r.claim_tip_sompi);
+            println!(
+                "queued: evm_address={} credit={} sompi (tip {} to the accepting coinbase)",
+                r.evm_address, r.amount_sompi, r.claim_tip_sompi
+            );
         }
         Some("withdraw") => {
             // F002 withdraw: a payable call carrying value = amount_sompi × SCALE
@@ -195,7 +198,12 @@ async fn main() {
             let r = client.get_evm_transaction_receipt(hash).await.expect("receipt call");
             println!(
                 "found={} succeeded={} accepting_block={} evm_number={} gas_used={} logs={}",
-                r.found, r.succeeded, r.accepting_block, r.evm_number, r.gas_used, r.logs.len()
+                r.found,
+                r.succeeded,
+                r.accepting_block,
+                r.evm_number,
+                r.gas_used,
+                r.logs.len()
             );
         }
         Some("balance") => {

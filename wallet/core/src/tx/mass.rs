@@ -9,7 +9,7 @@ use kaspa_consensus_client::UtxoEntryReference;
 use kaspa_consensus_core::mass::calc_storage_mass as consensus_calc_storage_mass;
 use kaspa_consensus_core::tx::{SCRIPT_VECTOR_SIZE, Transaction, TransactionInput, TransactionOutput};
 use kaspa_consensus_core::{config::params::Params, constants::*, subnets::SUBNETWORK_ID_SIZE};
-use kaspa_hashes::{HASH64_SIZE, HASH_SIZE};
+use kaspa_hashes::{HASH_SIZE, HASH64_SIZE};
 
 // pub const ECDSA_SIGNATURE_SIZE: u64 = 64;
 // pub const SCHNORR_SIGNATURE_SIZE: u64 = 64;

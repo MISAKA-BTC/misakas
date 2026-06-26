@@ -12,9 +12,9 @@ use crate::v7::{
     request_pruning_point_utxo_set::RequestPruningPointUtxoSetFlow,
     txrelay::flow::{RelayTransactionsFlow, RequestTransactionsFlow},
 };
+pub(crate) mod claimrelay_evm;
 pub(crate) mod request_block_bodies;
 pub(crate) mod request_pruning_point_snapshots;
-pub(crate) mod claimrelay_evm;
 pub(crate) mod txrelay_evm;
 use crate::{
     flow_context::{FlowContext, PROTOCOL_VERSION_CLAIM_RELAY, PROTOCOL_VERSION_EVM_RELAY},

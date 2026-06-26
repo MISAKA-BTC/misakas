@@ -21,8 +21,8 @@
 //!
 //! Run: `cargo bench -p kaspa-evm --bench state_cost`
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use kaspa_consensus_core::evm::{EvmAccountSnapshot, EvmAddress, EvmStateSnapshot, EvmU256, EVM_EMPTY_CODE_HASH};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use kaspa_consensus_core::evm::{EVM_EMPTY_CODE_HASH, EvmAccountSnapshot, EvmAddress, EvmStateSnapshot, EvmU256};
 use kaspa_evm::snapshot::{seed_cachedb, snapshot_from_cachedb};
 use kaspa_evm::state::state_root;
 use std::time::Duration;

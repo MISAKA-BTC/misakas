@@ -6,9 +6,9 @@
 //! genesis.
 
 use alloy_rlp::Encodable;
-use alloy_trie::{HashBuilder, Nibbles, EMPTY_ROOT_HASH};
+use alloy_trie::{EMPTY_ROOT_HASH, HashBuilder, Nibbles};
 use revm::db::{CacheDB, EmptyDB};
-use revm::primitives::{keccak256, HashMap, B256, U256};
+use revm::primitives::{B256, HashMap, U256, keccak256};
 
 /// Ethereum account leaf RLP = `rlp([nonce, balance, storage_root, code_hash])`.
 #[derive(alloy_rlp::RlpEncodable)]

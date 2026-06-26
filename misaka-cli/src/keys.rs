@@ -9,9 +9,9 @@
 use std::io::{Read, Write};
 
 use kaspa_addresses::{Address, Prefix};
-use kaspa_pq_validator_core::{load_validator_seed, ValidatorKey, VALIDATOR_SEED_LEN};
+use kaspa_pq_validator_core::{VALIDATOR_SEED_LEN, ValidatorKey, load_validator_seed};
 
-use crate::{exit, CliError};
+use crate::{CliError, exit};
 
 /// Where the 32-byte ML-DSA-87 seed comes from. Exactly one source must be set.
 pub struct KeySource {

@@ -999,7 +999,10 @@ mod mldsa87_sighash_tests {
     use super::*;
     use crate::hashing::sighash_type::{SIG_HASH_ALL, SIG_HASH_NONE, SIG_HASH_SINGLE};
     use crate::subnets::SUBNETWORK_ID_NATIVE;
-    use crate::tx::{PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
+    use crate::tx::{
+        PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint, TransactionOutput,
+        UtxoEntry,
+    };
     use smallvec::smallvec;
 
     fn sample_tx() -> Transaction {
@@ -1032,8 +1035,18 @@ mod mldsa87_sighash_tests {
 
     fn entries() -> Vec<UtxoEntry> {
         vec![
-            UtxoEntry { amount: 1000, script_public_key: ScriptPublicKey::new(0, smallvec![0x76, 0xaa, 0x20]), block_daa_score: 0, is_coinbase: false },
-            UtxoEntry { amount: 2000, script_public_key: ScriptPublicKey::new(0, smallvec![0x51]), block_daa_score: 0, is_coinbase: false },
+            UtxoEntry {
+                amount: 1000,
+                script_public_key: ScriptPublicKey::new(0, smallvec![0x76, 0xaa, 0x20]),
+                block_daa_score: 0,
+                is_coinbase: false,
+            },
+            UtxoEntry {
+                amount: 2000,
+                script_public_key: ScriptPublicKey::new(0, smallvec![0x51]),
+                block_daa_score: 0,
+                is_coinbase: false,
+            },
         ]
     }
 

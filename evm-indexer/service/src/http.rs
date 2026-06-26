@@ -14,13 +14,11 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::node::{
-    parse_block, parse_logs, parse_quantity, unwrap_envelope, NodeBlock, NodeLog, NodeRpc, RpcError,
-};
+use crate::node::{NodeBlock, NodeLog, NodeRpc, RpcError, parse_block, parse_logs, parse_quantity, unwrap_envelope};
 
 /// Cap on a response body (mirrors the server's `MAX_BODY_BYTES`): a node that
 /// streams more than this is treated as a transport fault rather than buffered

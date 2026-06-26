@@ -21,11 +21,11 @@ use crate::{
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
             dns_state::{DbDnsStateStore, DnsStateStoreReader},
+            epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             evm::{
                 DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore, EvmCanonicalHeadsStoreReader,
                 EvmHeaderStore, EvmHeaderStoreReader, EvmStateStore, EvmStateStoreReader,
             },
-            epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
             past_pruning_points::DbPastPruningPointsStore,
@@ -66,13 +66,13 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     config::genesis::GenesisBlock,
     dns_finality::{
-        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BondMutation, BondStatus,
-        CanonicalLaggedEpochAnchor, DnsParams, DnsReorgMode, DnsRolloutStage, StakeBondRecord, StakeScore,
-        advance_dns_confirmation, aggregate_epoch_tallies, anchor_cutoff_blue_score, attestations_from_accepted_txs,
-        bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, check_dns_reorg_rule, compute_stake_score,
-        derive_dns_health, effective_bond_status, is_bond_active_at, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
-        reorg_inputs_since_common_ancestor, stake_attestation_message, total_active_stake_by_epoch, BlockOverlayContribution,
-        OverlaySnapshot, PruningPointOverlaySnapshot,
+        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
+        BondMutation, BondStatus, CanonicalLaggedEpochAnchor, DnsParams, DnsReorgMode, DnsRolloutStage, OverlaySnapshot,
+        PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
+        anchor_cutoff_blue_score, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor,
+        check_dns_reorg_rule, compute_stake_score, derive_dns_health, effective_bond_status, is_bond_active_at,
+        ready_epoch_from_tip_blue_score, recompute_epoch_tallies, reorg_inputs_since_common_ancestor, stake_attestation_message,
+        total_active_stake_by_epoch,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -336,14 +336,18 @@ impl VirtualStateProcessor {
         // the flat store); without it the flag is a silent no-op (the executor keeps seeding from
         // 206). Warn so the prerequisite isn't missed during a cutover rollout. Fail-safe either way.
         if evm_flat_authoritative && !evm_shadow_state_backend {
-            warn!("[C-01] --evm-flat-authoritative is set WITHOUT --evm-shadow-state-backend; it is a no-op (the EVM executor keeps seeding from the 206 snapshot). Enable --evm-shadow-state-backend to use the flat-authoritative seed.");
+            warn!(
+                "[C-01] --evm-flat-authoritative is set WITHOUT --evm-shadow-state-backend; it is a no-op (the EVM executor keeps seeding from the 206 snapshot). Enable --evm-shadow-state-backend to use the flat-authoritative seed."
+            );
         }
         // C-01 S9b: retiring the 206 persist requires the flat-authoritative seed (so the executor no
         // longer reads 206). Without it, dropping 206 would leave the executor's selected-parent read
         // (and the O12 pipeline) with no seed → a stall. Demote to a no-op + warn rather than enable a
         // half-configured retirement: keep writing 206 so the node stays correct.
         let evm_retire_206 = if evm_retire_206 && !(evm_flat_authoritative && evm_shadow_state_backend) {
-            warn!("[C-01] --evm-retire-206 is set WITHOUT --evm-flat-authoritative (+ --evm-shadow-state-backend); it is a no-op (the per-block 206 snapshot keeps being written). Enable the flat-authoritative seed first.");
+            warn!(
+                "[C-01] --evm-retire-206 is set WITHOUT --evm-flat-authoritative (+ --evm-shadow-state-backend); it is a no-op (the per-block 206 snapshot keeps being written). Enable the flat-authoritative seed first."
+            );
             false
         } else {
             evm_retire_206
@@ -353,7 +357,9 @@ impl VirtualStateProcessor {
         // §12-reconstruct). Block validation is unaffected (it seeds from the flat HEAD), so this is a
         // loud warning, not a demotion — an operator may knowingly run a non-serving retired node.
         if evm_retire_206 && !evm_history_mode.writes_state_history() {
-            warn!("[C-01] --evm-retire-206 with --evm-history-mode=head: the IBD pruning-point export and historical state RPC will be UNAVAILABLE on this node (no §12 history to reconstruct 206 from). Use recent/archive history if this node serves IBD or state queries.");
+            warn!(
+                "[C-01] --evm-retire-206 with --evm-history-mode=head: the IBD pruning-point export and historical state RPC will be UNAVAILABLE on this node (no §12 history to reconstruct 206 from). Use recent/archive history if this node serves IBD or state queries."
+            );
         }
         Self {
             receiver,
@@ -601,7 +607,9 @@ impl VirtualStateProcessor {
         let fp_reachable = match self.reachability_service.try_is_chain_ancestor_of(pruning_point, finality_point) {
             Ok(v) => v,
             Err(_) => {
-                debug!("virtual_finality_point: finality point {finality_point} has no reachability (half-pruned?); falling back to pruning point {pruning_point}");
+                debug!(
+                    "virtual_finality_point: finality point {finality_point} has no reachability (half-pruned?); falling back to pruning point {pruning_point}"
+                );
                 false
             }
         };
@@ -809,7 +817,9 @@ impl VirtualStateProcessor {
         pipeline: Option<&crate::processes::evm::EvmPipeline>,
     ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
         use crate::model::stores::evm::EvmPayloadStoreReader; // EvmHeaderStoreReader is in module scope
-        use crate::processes::evm::{apply_evm_bridge_effects, evm_validate, evm_validate_chained, validate_evm_deposit_claims, EvmValidateError};
+        use crate::processes::evm::{
+            EvmValidateError, apply_evm_bridge_effects, evm_validate, evm_validate_chained, validate_evm_deposit_claims,
+        };
         if header.daa_score < self.evm_activation_daa_score {
             return Ok(None);
         }
@@ -912,20 +922,20 @@ impl VirtualStateProcessor {
                             }
                         }
                         evm_validate(
-                        &self.evm_header_store,
-                        &self.evm_state_store,
-                        &self.evm_payload_store,
-                        current,
-                        selected_parent,
-                        &sorted_mergeset,
-                        header,
-                        &own_payload,
-                        self.evm_gas_pool_v2_activation_daa_score,
-                        self.evm_f002_withdraw_cap_activation_daa_score,
-                        self.evm_f003_mldsa_verify_activation_daa_score,
-                        self.evm_typed_receipt_root_activation_daa_score,
-                    )
-                    .map_err(map_err)?
+                            &self.evm_header_store,
+                            &self.evm_state_store,
+                            &self.evm_payload_store,
+                            current,
+                            selected_parent,
+                            &sorted_mergeset,
+                            header,
+                            &own_payload,
+                            self.evm_gas_pool_v2_activation_daa_score,
+                            self.evm_f002_withdraw_cap_activation_daa_score,
+                            self.evm_f003_mldsa_verify_activation_daa_score,
+                            self.evm_typed_receipt_root_activation_daa_score,
+                        )
+                        .map_err(map_err)?
                     }
                 }
             }
@@ -1006,7 +1016,7 @@ impl VirtualStateProcessor {
         selected_parent: BlockHash,
     ) -> Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateStoreReader};
-        use crate::processes::evm::{flat_or_reconstruct_parent_snapshot, ParentSeedError, ParentSeedSource};
+        use crate::processes::evm::{ParentSeedError, ParentSeedSource, flat_or_reconstruct_parent_snapshot};
 
         // An EVM-active parent always persists its header; a parent with no EVM header is
         // pre-activation (empty genesis state) — nothing to validate, and the executor's
@@ -1094,7 +1104,9 @@ impl VirtualStateProcessor {
             // A broken §12 reconstruction (root mismatch / diff inconsistency / bad
             // checkpoint / absent code) is a real backend fault ⇒ HALT.
             Err(ParentSeedError::Corrupt(m)) => {
-                panic!("C-01 shadow seed CORRUPT for {selected_parent}: {m}. The flat/reconstruct backend is broken — HALTING (206 stays authoritative).");
+                panic!(
+                    "C-01 shadow seed CORRUPT for {selected_parent}: {m}. The flat/reconstruct backend is broken — HALTING (206 stays authoritative)."
+                );
             }
         }
     }
@@ -1212,11 +1224,8 @@ impl VirtualStateProcessor {
         }
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let prev_finalized = self.evm_heads_store.read().get().ok().map(|h| h.finalized);
-        let finalized = if self.evm_header_store.has(pruning_point).unwrap_or(false) {
-            pruning_point
-        } else {
-            prev_finalized.unwrap_or(sink)
-        };
+        let finalized =
+            if self.evm_header_store.has(pruning_point).unwrap_or(false) { pruning_point } else { prev_finalized.unwrap_or(sink) };
         let heads = kaspa_consensus_core::evm::CanonicalEvmHeads { latest: sink, safe: sink, finalized };
         self.evm_heads_store.write().set_batch(batch, heads).unwrap();
     }
@@ -1270,7 +1279,11 @@ impl VirtualStateProcessor {
         // re-read of a possibly-advanced view here).
         prepared_claims: crate::processes::evm::PreparedDepositClaims,
     ) -> Result<
-        (Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<(kaspa_consensus_core::tx::TransactionOutpoint, EvmClaimStaleKind)>),
+        (
+            Header,
+            kaspa_consensus_core::evm::EvmExecutionPayload,
+            Vec<(kaspa_consensus_core::tx::TransactionOutpoint, EvmClaimStaleKind)>,
+        ),
         RuleError,
     > {
         use crate::processes::evm::{evm_execute_acceptance, evm_execute_acceptance_with_parent}; // EvmHeaderStoreReader in module scope
@@ -1392,12 +1405,12 @@ impl VirtualStateProcessor {
                             return Err(RuleError::EvmTemplateExecutionFailed(format!(
                                 "--evm-retire-206: no flat/reconstruct seed for EVM-active selected parent {selected_parent} (206 retired); \
                                  cannot build a template this round — retrying"
-                            )))
+                            )));
                         }
                         Err(e) => {
                             return Err(RuleError::EvmTemplateExecutionFailed(format!(
                                 "--evm-retire-206: EVM header store read failed for selected parent {selected_parent} ({e}); cannot build a template this round"
-                            )))
+                            )));
                         }
                     }
                 }
@@ -1454,7 +1467,11 @@ impl VirtualStateProcessor {
         _evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
         _prepared_claims: crate::processes::evm::PreparedDepositClaims,
     ) -> Result<
-        (Header, kaspa_consensus_core::evm::EvmExecutionPayload, Vec<(kaspa_consensus_core::tx::TransactionOutpoint, EvmClaimStaleKind)>),
+        (
+            Header,
+            kaspa_consensus_core::evm::EvmExecutionPayload,
+            Vec<(kaspa_consensus_core::tx::TransactionOutpoint, EvmClaimStaleKind)>,
+        ),
         RuleError,
     > {
         if header.daa_score >= self.evm_activation_daa_score {
@@ -1835,10 +1852,7 @@ impl VirtualStateProcessor {
     /// `DnsParams`, or `(0, 0)` where the overlay is off — so the bond-acceptance filter is a no-op
     /// on networks without `dns_params`.
     pub(super) fn dns_bond_floors(&self) -> (u64, u64) {
-        self.dns_params
-            .as_ref()
-            .map(|p| (p.min_bond_amount_sompi, p.unbonding_period_blocks))
-            .unwrap_or((0, 0))
+        self.dns_params.as_ref().map(|p| (p.min_bond_amount_sompi, p.unbonding_period_blocks)).unwrap_or((0, 0))
     }
 
     /// Resolves a chain block's accepted transactions from its acceptance data
@@ -1858,7 +1872,9 @@ impl VirtualStateProcessor {
         match self.acceptance_data_store.get(chain_block) {
             Ok(ad) => self.accepted_txs_from_acceptance_data(&ad),
             Err(StoreError::KeyNotFound(_)) => {
-                trace!("accepted_txs_of_chain_block: no acceptance data for {chain_block} (pruning point / pruned) — treating as no accepted txs");
+                trace!(
+                    "accepted_txs_of_chain_block: no acceptance data for {chain_block} (pruning point / pruned) — treating as no accepted txs"
+                );
                 Vec::new()
             }
             Err(e) => panic!("accepted_txs_of_chain_block: acceptance_data_store.get({chain_block}) failed: {e}"),
@@ -1890,7 +1906,12 @@ impl VirtualStateProcessor {
     /// txs from the provided acceptance data instead of the store.
     fn dns_bond_mutations_from_acceptance(&self, acceptance_data: &AcceptanceData, accepted_daa_score: u64) -> Vec<BondMutation> {
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
-        bond_mutations_from_accepted_txs(&self.accepted_txs_from_acceptance_data(acceptance_data), accepted_daa_score, min_bond, unbonding_floor)
+        bond_mutations_from_accepted_txs(
+            &self.accepted_txs_from_acceptance_data(acceptance_data),
+            accepted_daa_score,
+            min_bond,
+            unbonding_floor,
+        )
     }
 
     /// kaspa-pq Phase 10 (ADR-0009 Addendum A.5): recompute the DNS StakeScore
@@ -2136,7 +2157,11 @@ impl VirtualStateProcessor {
         let contributions: Vec<BlockEpochContribution> = self
             .selected_chain_overlay_window(sink, sink_daa, walk_bound)
             .into_iter()
-            .map(|c| BlockEpochContribution { block_daa_score: c.block_daa_score, rewarded_keys: c.rewarded_keys, quality_subpool: c.quality_subpool })
+            .map(|c| BlockEpochContribution {
+                block_daa_score: c.block_daa_score,
+                rewarded_keys: c.rewarded_keys,
+                quality_subpool: c.quality_subpool,
+            })
             .collect();
 
         // Snapshot the bond set (bounded by the active validator count), as update_dns_state does.
@@ -2167,7 +2192,11 @@ impl VirtualStateProcessor {
     /// `walk_bound`, same pos_v2 fence) but is anchored at `selected_parent` and
     /// keeps only blocks that actually contributed (rewarded keys or quality pool),
     /// so the snapshot stays small on a validator-sparse chain.
-    pub(super) fn compute_overlay_snapshot(&self, selected_parent: BlockHash, selected_parent_bond_view: &ActiveBondView) -> OverlaySnapshot {
+    pub(super) fn compute_overlay_snapshot(
+        &self,
+        selected_parent: BlockHash,
+        selected_parent_bond_view: &ActiveBondView,
+    ) -> OverlaySnapshot {
         let Some(dns_params) = self.dns_params.as_ref() else {
             return OverlaySnapshot::default();
         };
@@ -2216,7 +2245,12 @@ impl VirtualStateProcessor {
     /// (byte-identical to a from-genesis node). Empty-contribution blocks are skipped.
     /// The single seam through which all three below-pp consumers (overlay commitment,
     /// epoch accumulator, reward dedup) read the historical window.
-    pub(super) fn selected_chain_overlay_window(&self, anchor: BlockHash, anchor_daa: u64, walk_bound: u64) -> Vec<BlockOverlayContribution> {
+    pub(super) fn selected_chain_overlay_window(
+        &self,
+        anchor: BlockHash,
+        anchor_daa: u64,
+        walk_bound: u64,
+    ) -> Vec<BlockOverlayContribution> {
         let persisted = self.pruning_overlay_snapshot_store.read().get().ok();
         let stop_at = persisted.as_ref().map(|p| p.pruning_point);
 
@@ -2235,7 +2269,12 @@ impl VirtualStateProcessor {
             if rewarded_keys.is_empty() && quality_subpool == 0 {
                 continue;
             }
-            above.push(BlockOverlayContribution { block_hash: ancestor, block_daa_score: ancestor_daa, rewarded_keys, quality_subpool });
+            above.push(BlockOverlayContribution {
+                block_hash: ancestor,
+                block_daa_score: ancestor_daa,
+                rewarded_keys,
+                quality_subpool,
+            });
         }
         above.reverse(); // → oldest → newest
 
@@ -2284,8 +2323,7 @@ impl VirtualStateProcessor {
         dns_params: &DnsParams,
         net_id: &[u8],
     ) -> StakeScore {
-        let (contributions, epoch_anchor_daa) =
-            self.collect_stake_contributions_v2(tip, Some(ancestor), bonds, net_id, dns_params);
+        let (contributions, epoch_anchor_daa) = self.collect_stake_contributions_v2(tip, Some(ancestor), bonds, net_id, dns_params);
         let totals = total_active_stake_by_epoch(bonds, &epoch_anchor_daa);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         compute_stake_score(&per_epoch, dns_params.stake_event_quality_floor_bps)
@@ -2376,7 +2414,11 @@ impl VirtualStateProcessor {
     /// fall inside the collected window (so the duplicate flag is reliable). Older / unready
     /// / duplicate epochs are simply absent. Position comes from header-committed
     /// `blue_score`, never the store index, so archival and IBD-synced nodes agree.
-    pub(super) fn canonical_anchors_in_window(&self, tip: BlockHash, dns_params: &DnsParams) -> BTreeMap<u64, CanonicalLaggedEpochAnchor> {
+    pub(super) fn canonical_anchors_in_window(
+        &self,
+        tip: BlockHash,
+        dns_params: &DnsParams,
+    ) -> BTreeMap<u64, CanonicalLaggedEpochAnchor> {
         let epoch_len = dns_params.attestation_epoch_length_blue_score.max(1);
         let backoff = dns_params.attestation_anchor_backoff_blue_score;
         let lag = dns_params.attestation_lag_blue_score;
@@ -2568,7 +2610,9 @@ impl VirtualStateProcessor {
         let includes = match self.reachability_service.try_is_chain_ancestor_of(confirmed, candidate) {
             Ok(v) => v,
             Err(_) => {
-                debug!("DNS reorg gate: confirmed anchor {confirmed} has no reachability (behind the pruning point - attestation stalled?); gate is a no-op, subsumed by pruning-point finality");
+                debug!(
+                    "DNS reorg gate: confirmed anchor {confirmed} has no reachability (behind the pruning point - attestation stalled?); gate is a no-op, subsumed by pruning-point finality"
+                );
                 true
             }
         };
@@ -2580,8 +2624,7 @@ impl VirtualStateProcessor {
         let inputs = if dns_params.reorg_mode == DnsReorgMode::TwoDimensionalDominance && !includes {
             // Selected-chain common ancestor I. Beyond the reorg horizon → not gate-eligible;
             // reject (a reorg deeper than the horizon cannot rewrite confirmed history).
-            let Some(ancestor) = self.selected_chain_common_ancestor(candidate, prev_sink, dns_params.max_reorg_horizon_blocks)
-            else {
+            let Some(ancestor) = self.selected_chain_common_ancestor(candidate, prev_sink, dns_params.max_reorg_horizon_blocks) else {
                 return false;
             };
             let net_id_hash = self.genesis.hash;
@@ -2692,7 +2735,9 @@ impl VirtualStateProcessor {
             let candidate_at_or_above_finality = match self.reachability_service.try_is_chain_ancestor_of(finality_point, candidate) {
                 Ok(v) => v,
                 Err(_) => {
-                    debug!("sink_search: candidate {candidate} has no reachability vs finality {finality_point} (half-pruned?); skipping");
+                    debug!(
+                        "sink_search: candidate {candidate} has no reachability vs finality {finality_point} (half-pruned?); skipping"
+                    );
                     false
                 }
             };
@@ -3042,13 +3087,13 @@ impl VirtualStateProcessor {
         // refill from the next candidate) and DO NOT push, so `txs` and `calculated_fees`
         // stay 1:1. A `Drop` is counted by reason. A `KeepNonShard`/`KeepEligible` is kept.
         let classify_keep = |this: &Self,
-                                 tx: &Transaction,
-                                 shards_seen: &mut usize,
-                                 shards_kept: &mut usize,
-                                 dropped_bond_inactive: &mut usize,
-                                 dropped_id_mismatch: &mut usize,
-                                 dropped_bad_sig: &mut usize,
-                                 dropped_malformed: &mut usize|
+                             tx: &Transaction,
+                             shards_seen: &mut usize,
+                             shards_kept: &mut usize,
+                             dropped_bond_inactive: &mut usize,
+                             dropped_id_mismatch: &mut usize,
+                             dropped_bad_sig: &mut usize,
+                             dropped_malformed: &mut usize|
          -> bool {
             use crate::pipeline::virtual_processor::utxo_validation::{AttestationDropReason, AttestationShardDecision};
             match this.classify_attestation_shard_for_template(tx, &template_bond_view, virtual_state.daa_score) {
@@ -3176,11 +3221,8 @@ impl VirtualStateProcessor {
         // payload all reference one coherent generation — never a later re-read of a
         // possibly-advanced view (the mixed-generation TOCTOU). `virtual_state.daa_score`
         // is exactly the template header's daa_score (see `Header::new_finalized` below).
-        let prepared_claims = crate::processes::evm::prepare_deposit_claims(
-            &evm_template_data.system_ops,
-            virtual_utxo_view,
-            virtual_state.daa_score,
-        );
+        let prepared_claims =
+            crate::processes::evm::prepare_deposit_claims(&evm_template_data.system_ops, virtual_utxo_view, virtual_state.daa_score);
 
         // At this point we can safely drop the read lock
         drop(virtual_read);
@@ -3279,13 +3321,14 @@ impl VirtualStateProcessor {
                 fs,
             )
         });
-        let (validator_reward_outputs, _rewarded_keys, newly_included_stake, expected_stake) = self.validator_reward_outputs_for_block(
-            &txs,
-            &template_bond_view,
-            virtual_state.daa_score,
-            virtual_state.ghostdag_data.selected_parent,
-            validator_pool,
-        );
+        let (validator_reward_outputs, _rewarded_keys, newly_included_stake, expected_stake) = self
+            .validator_reward_outputs_for_block(
+                &txs,
+                &template_bond_view,
+                virtual_state.daa_score,
+                virtual_state.ghostdag_data.selected_parent,
+                validator_pool,
+            );
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): append the reserve-drip outputs so a block
         // mined from this template reproduces the validated coinbase byte-for-byte. Reads the sink's
         // committed reserve balance (= the template's selected parent). Inert below the v2 fence.
@@ -3342,9 +3385,7 @@ impl VirtualStateProcessor {
             0,
             // kaspa-pq Phase 3 (ADR-0007): the template declares the network-correct Layer-1 algo
             // for this DAA score — BLAKE2b-512 ∥ SHA3-512 (algo_id = 3) once activated, else kHeavyHash (1).
-            kaspa_consensus_core::pow_layer0::required_algo_id(
-                self.pow_blake2b_sha3_activation.is_active(virtual_state.daa_score),
-            ),
+            kaspa_consensus_core::pow_layer0::required_algo_id(self.pow_blake2b_sha3_activation.is_active(virtual_state.daa_score)),
             virtual_state.daa_score,
             virtual_state.ghostdag_data.blue_work,
             virtual_state.ghostdag_data.blue_score,
@@ -3417,8 +3458,8 @@ impl VirtualStateProcessor {
             AcceptanceData::default(),
             ZERO_HASH64,
             Vec::new(),
-            0, // kaspa-pq ADR-0018 "本格版": genesis has no validator quality sub-pool.
-            0, // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
+            0,    // kaspa-pq ADR-0018 "本格版": genesis has no validator quality sub-pool.
+            0,    // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
             None, // kaspa-pq ADR-0020 v0.4: genesis is EVM-inert (v0 header).
         );
 

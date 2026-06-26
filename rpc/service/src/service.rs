@@ -1080,7 +1080,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 "get_utxos_by_addresses: large response — {} UTXOs across {} address(es) in {:.0}ms (~{:.0} MiB borsh est, ~{:.0} MiB JSON est); \
 may exceed the client's message-size/timeout limit, or the 128 MiB wRPC frame cap for very large sets (\"connection closed\"). \
 Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
-                num_entries, num_addresses, elapsed.as_secs_f64() * 1000.0, est_borsh_mib, est_borsh_mib * 2.5,
+                num_entries,
+                num_addresses,
+                elapsed.as_secs_f64() * 1000.0,
+                est_borsh_mib,
+                est_borsh_mib * 2.5,
             );
             // Rate-limit the WARN: explorers/wallets poll on a cadence, so a persistently-fragmented
             // address would otherwise log on every call. Emit at WARN at most once per 60s
@@ -1099,7 +1103,10 @@ Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
         } else {
             debug!(
                 "get_utxos_by_addresses: {} UTXOs across {} address(es) in {:.0}ms (~{:.1} MiB borsh est)",
-                num_entries, num_addresses, elapsed.as_secs_f64() * 1000.0, est_borsh_mib,
+                num_entries,
+                num_addresses,
+                elapsed.as_secs_f64() * 1000.0,
+                est_borsh_mib,
             );
         }
         Ok(GetUtxosByAddressesResponse::new(entries))

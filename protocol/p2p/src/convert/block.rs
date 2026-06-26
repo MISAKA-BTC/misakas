@@ -55,10 +55,7 @@ impl From<(HeaderFormat, &Block)> for protowire::BlockMessage {
 // its canonical borsh bytes, exactly like `BlockMessage.evmPayload`.
 impl From<(&BlockBody, &EvmExecutionPayload)> for protowire::BlockBodyMessage {
     fn from((block_body, evm_payload): (&BlockBody, &EvmExecutionPayload)) -> Self {
-        Self {
-            transactions: block_body.iter().map(|tx| tx.into()).collect(),
-            evm_payload: encode_evm_payload(evm_payload),
-        }
+        Self { transactions: block_body.iter().map(|tx| tx.into()).collect(), evm_payload: encode_evm_payload(evm_payload) }
     }
 }
 

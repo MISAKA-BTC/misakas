@@ -5,8 +5,7 @@ use crate::{
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadUTXOCommitment, IneligibleAttestationInBlock,
             InvalidTransactionsInUtxoContext, NonReleasableBondSpendInBlock, UnauthorizedUnbondRequestInBlock,
-            UnverifiableSlashingEvidenceInBlock,
-            WrongHeaderPruningPoint,
+            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -32,13 +31,12 @@ use kaspa_consensus_core::{
     coinbase::*,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, FeeSplitParams,
-        OverlaySnapshot, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
-        attestations_from_accepted_txs, bond_mutations_from_accepted_txs,
-        bond_release_daa_score, decode_attestation_shard, effective_bond_status,
-        epoch_meets_quality_floor, epochs_finalized_at, recompute_epoch_tallies, resolve_slashing_side_effects,
-        UNBOND_REQUEST_CONTEXT, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
-        unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
-        validator_participation_reward_outputs, validator_quality_bonus_outputs, victim_compensation_outputs,
+        OverlaySnapshot, RewardedEpochSet, SlashingSideEffect, StakeAttestation, UNBOND_REQUEST_CONTEXT,
+        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score, decode_attestation_shard,
+        effective_bond_status, epoch_meets_quality_floor, epochs_finalized_at, recompute_epoch_tallies, resolve_slashing_side_effects,
+        slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message, unbond_request_message,
+        unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_participation_reward_outputs,
+        validator_quality_bonus_outputs, victim_compensation_outputs,
     },
     hashing,
     header::Header,
@@ -411,7 +409,13 @@ impl VirtualStateProcessor {
         // (`commit_utxo_state` persists `parent_balance + reserve_accrual − drip`). The reserve share
         // is NOT minted (it leaves the supply with the bond removal until it later drips back out).
         ctx.reserve_accrual = effects.iter().fold(0u64, |acc, e| acc.saturating_add(e.security_reserve_sompi));
-        apply_slashing_effects_to_state(&effects, selected_parent_utxo_view, &mut ctx.mergeset_diff, &mut ctx.multiset_hash, pov_daa_score);
+        apply_slashing_effects_to_state(
+            &effects,
+            selected_parent_utxo_view,
+            &mut ctx.mergeset_diff,
+            &mut ctx.multiset_hash,
+            pov_daa_score,
+        );
     }
 
     /// kaspa-pq ADR-0022: the selected-parent window's per-block epoch contributions (oldest →
@@ -423,11 +427,20 @@ impl VirtualStateProcessor {
     /// walk wherever the walk never reaches the pruning point — `selected_chain_overlay_window` skips
     /// empty-contribution blocks, which are tally-neutral in `recompute_epoch_tallies` — so this is a
     /// no-op on a non-pruned node (the only path on every net while the pruning point is genesis).
-    fn selected_chain_epoch_contributions(&self, selected_parent: BlockHash, parent_daa: u64, walk_bound: u64) -> Vec<BlockEpochContribution> {
+    fn selected_chain_epoch_contributions(
+        &self,
+        selected_parent: BlockHash,
+        parent_daa: u64,
+        walk_bound: u64,
+    ) -> Vec<BlockEpochContribution> {
         let mut v: Vec<BlockEpochContribution> = self
             .selected_chain_overlay_window(selected_parent, parent_daa, walk_bound)
             .into_iter()
-            .map(|c| BlockEpochContribution { block_daa_score: c.block_daa_score, rewarded_keys: c.rewarded_keys, quality_subpool: c.quality_subpool })
+            .map(|c| BlockEpochContribution {
+                block_daa_score: c.block_daa_score,
+                rewarded_keys: c.rewarded_keys,
+                quality_subpool: c.quality_subpool,
+            })
             .collect();
         v.sort_by_key(|c| c.block_daa_score);
         v
@@ -464,7 +477,8 @@ impl VirtualStateProcessor {
 
         let bonds = bond_view.records();
         let tallies = recompute_epoch_tallies(parent_daa, epoch_len, finalization_depth, &contributions, &bonds);
-        let included = tallies.into_iter().find(|(epoch, _)| *epoch == slashed_epoch).map(|(_, tally)| tally.included).unwrap_or_default();
+        let included =
+            tallies.into_iter().find(|(epoch, _)| *epoch == slashed_epoch).map(|(_, tally)| tally.included).unwrap_or_default();
         // Drop the slashed (equivocating) validator — it earns no victim compensation in its own
         // misbehavior epoch. Matched by the owner reward payload carried in the accumulator.
         let honest: Vec<_> =
@@ -662,12 +676,10 @@ impl VirtualStateProcessor {
         // fence = 0) it is populated from block 1. (Below `dns_activation` the pool is
         // already 0, since `validator_pool` is.) Does NOT affect the coinbase, so
         // construction == validation is untouched.
-        ctx.validator_quality_subpool = self
-            .dns_params
-            .as_ref()
-            .filter(|p| header.daa_score >= p.pos_v2_activation_daa_score)
-            .map_or(0, |p| {
-                split_validator_pool(validator_pool as u128, p.reward_params.validator_participation_bps).1.min(u64::MAX as u128) as u64
+        ctx.validator_quality_subpool =
+            self.dns_params.as_ref().filter(|p| header.daa_score >= p.pos_v2_activation_daa_score).map_or(0, |p| {
+                split_validator_pool(validator_pool as u128, p.reward_params.validator_participation_bps).1.min(u64::MAX as u128)
+                    as u64
             });
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): append the security-reserve **drip** outputs
@@ -678,8 +690,13 @@ impl VirtualStateProcessor {
         let mut validator_reward_outputs = validator_reward_outputs;
         if let Some(dns_params) = self.dns_params.as_ref() {
             let parent_balance = self.reserve_balance_store.get(ctx.selected_parent()).unwrap_or(0);
-            let (drip_outputs, drip_total) =
-                self.reserve_drip_outputs(dns_params, header.daa_score, ctx.selected_parent(), selected_parent_bond_view, parent_balance);
+            let (drip_outputs, drip_total) = self.reserve_drip_outputs(
+                dns_params,
+                header.daa_score,
+                ctx.selected_parent(),
+                selected_parent_bond_view,
+                parent_balance,
+            );
             validator_reward_outputs.extend(drip_outputs);
             ctx.reserve_balance_after = parent_balance.saturating_add(ctx.reserve_accrual).saturating_sub(drip_total);
         }
@@ -1404,10 +1421,7 @@ fn classify_one_attestation(
         att.bond_outpoint,
     )
     .as_bytes();
-    if !matches!(
-        verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
-        Ok(true)
-    ) {
+    if !matches!(verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT), Ok(true)) {
         return Err(AttestationDropReason::BadSignature);
     }
     Ok(())
@@ -1625,10 +1639,7 @@ fn unbond_request_authorized(
         }
         // (c) the owner's signature over the network- and bond-bound digest must verify (audit M-04).
         let digest = unbond_request_message(net_id, req.bond_outpoint).as_bytes();
-        if !matches!(
-            verify_mldsa87_with_context(&req.owner_pubkey, &digest, &req.signature, UNBOND_REQUEST_CONTEXT),
-            Ok(true)
-        ) {
+        if !matches!(verify_mldsa87_with_context(&req.owner_pubkey, &digest, &req.signature, UNBOND_REQUEST_CONTEXT), Ok(true)) {
             return Err((tx_id, req.bond_outpoint));
         }
     }
@@ -1677,8 +1688,7 @@ fn apply_slashing_effects_to_state<V: UtxoView>(
         if let Some(out) = &effect.reporter_output {
             let mint_outpoint = TransactionOutpoint::new(effect.slashing_tx_id, 0);
             let mint_entry = UtxoEntry::new(out.value, out.script_public_key.clone(), mint_daa_score, false);
-            diff.add_utxo(mint_outpoint, mint_entry.clone())
-                .expect("slashing tx declares no outputs, so (slashing_tx_id, 0) is free");
+            diff.add_utxo(mint_outpoint, mint_entry.clone()).expect("slashing tx declares no outputs, so (slashing_tx_id, 0) is free");
             multiset.add_utxo(&mint_outpoint, &mint_entry);
         }
 
@@ -1851,9 +1861,7 @@ mod tests {
     // pin that the two never diverge. The KeepEligible accept path uses a real
     // ML-DSA-87 signature (libcrux), so a kept shard provably also passes §B.4.
     mod classify_attestation_shard_for_template {
-        use super::super::{
-            AttestationDropReason, AttestationShardDecision, classify_attestation_shard_for_template as classify,
-        };
+        use super::super::{AttestationDropReason, AttestationShardDecision, classify_attestation_shard_for_template as classify};
         use kaspa_consensus_core::{
             BlockHash,
             constants::TX_VERSION,
@@ -2045,8 +2053,7 @@ mod tests {
             constants::TX_VERSION,
             dns_finality::{
                 ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
-                StakeBondRecord, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, unbond_request_message,
-                validator_id_from_pubkey,
+                StakeBondRecord, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, unbond_request_message, validator_id_from_pubkey,
             },
             subnets::SUBNETWORK_ID_STAKE_UNBOND,
             tx::{Transaction, TransactionOutpoint},
@@ -2086,9 +2093,13 @@ mod tests {
         }
 
         fn unbond_tx(op: TransactionOutpoint, owner_pubkey: Vec<u8>, signature: Vec<u8>) -> Transaction {
-            let payload =
-                borsh::to_vec(&StakeUnbondRequestPayload { version: DNS_PAYLOAD_VERSION_V1, bond_outpoint: op, owner_pubkey, signature })
-                    .unwrap();
+            let payload = borsh::to_vec(&StakeUnbondRequestPayload {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                owner_pubkey,
+                signature,
+            })
+            .unwrap();
             Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_UNBOND, 0, payload)
         }
 
@@ -2438,11 +2449,7 @@ mod tests {
             let mut releasable = bond(releasable_op);
             releasable.unbond_request_daa_score = Some(1_000); // release = 1_000 + 5_000 = 6_000 ≤ DAA.
 
-            let view = ActiveBondView::from_records([
-                (active, bond(active)),
-                (pending_op, pending),
-                (releasable_op, releasable),
-            ]);
+            let view = ActiveBondView::from_records([(active, bond(active)), (pending_op, pending), (releasable_op, releasable)]);
             let filter = BondSpendFilter { bond_view: &view, daa_score: DAA };
 
             assert!(filter.locks(&active), "Active bond's output-0 must be locked (skip the spend)");
@@ -2637,13 +2644,7 @@ mod tests {
             let mut diff = UtxoDiff::new(HashMap::new(), HashMap::new());
             let mut multiset = multiset_of(&[(op_a, e_a.clone()), (op_b, e_b.clone())]);
 
-            apply(
-                &[effect(op_a, amt_a, rew_a, tx_a), effect(op_b, amt_b, 0, tx_b)],
-                &base,
-                &mut diff,
-                &mut multiset,
-                MINT_DAA,
-            );
+            apply(&[effect(op_a, amt_a, rew_a, tx_a), effect(op_b, amt_b, 0, tx_b)], &base, &mut diff, &mut multiset, MINT_DAA);
 
             let mint_a = TransactionOutpoint::new(tx_a, 0);
             let mint_a_entry = UtxoEntry::new(rew_a, spk(0xee), MINT_DAA, false);

@@ -163,7 +163,8 @@ impl StratumListener {
         // Connection-rate limits. A bare port binds 0.0.0.0 (miners connect from the network), so the
         // accept path is unauthenticated and remote-reachable: cap concurrent connections globally and
         // per source IP to bound socket/task/memory exhaustion. 0 disables a cap.
-        let global_cap = if self.config.max_connections == 0 { tokio::sync::Semaphore::MAX_PERMITS } else { self.config.max_connections };
+        let global_cap =
+            if self.config.max_connections == 0 { tokio::sync::Semaphore::MAX_PERMITS } else { self.config.max_connections };
         let conn_sem = Arc::new(tokio::sync::Semaphore::new(global_cap));
         let per_ip: Arc<parking_lot::Mutex<HashMap<std::net::IpAddr, u32>>> = Arc::new(parking_lot::Mutex::new(HashMap::new()));
 

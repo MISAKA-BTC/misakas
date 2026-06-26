@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use misaka_evm_indexer::{sync_once, HttpNodeRpc, IndexStore, NodeRpc};
+use misaka_evm_indexer::{HttpNodeRpc, IndexStore, NodeRpc, sync_once};
 
 struct Config {
     node_addr: String,

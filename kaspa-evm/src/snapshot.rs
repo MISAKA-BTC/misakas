@@ -9,7 +9,7 @@
 use kaspa_consensus_core::evm::{EvmAccountSnapshot, EvmAddress, EvmExecutionResult, EvmStateSnapshot, EvmU256};
 use kaspa_hashes::EvmH256;
 use revm::db::{CacheDB, EmptyDB};
-use revm::primitives::{AccountInfo, Address, Bytecode, Bytes, KECCAK_EMPTY, B256, U256};
+use revm::primitives::{AccountInfo, Address, B256, Bytecode, Bytes, KECCAK_EMPTY, U256};
 
 #[inline]
 fn to_u256(v: EvmU256) -> U256 {
@@ -68,7 +68,8 @@ fn validate_snapshot_canonical(snapshot: &EvmStateSnapshot) -> Result<(), crate:
         }
 
         // EIP-161 empty accounts are excluded by snapshot_from_cachedb ⇒ reject them on import.
-        if acc.nonce == 0 && acc.balance.is_zero() && acc.code.is_empty() && acc.storage.is_empty() && acc.code_hash == empty_code_hash {
+        if acc.nonce == 0 && acc.balance.is_zero() && acc.code.is_empty() && acc.storage.is_empty() && acc.code_hash == empty_code_hash
+        {
             return Err(crate::EvmExecError::InvariantViolation(format!(
                 "EVM snapshot corruption: account 0x{} is empty (EIP-161) — must not be persisted",
                 hex(&addr)
@@ -177,8 +178,8 @@ pub fn execute_block_from_snapshot(
 mod tests {
     use super::*;
     use crate::EvmBlockInput;
-    use kaspa_consensus_core::evm::{EvmExecutionHeader, EvmExecutionPayload, EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE};
-    use revm::primitives::{TxKind, KECCAK_EMPTY};
+    use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE, EvmExecutionHeader, EvmExecutionPayload};
+    use revm::primitives::{KECCAK_EMPTY, TxKind};
 
     fn signed_transfer(nonce: u64, to: Address, value: u128, max_fee: u128) -> (Address, Vec<u8>) {
         use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
@@ -249,7 +250,10 @@ mod tests {
         let a1 = [cand(raw1)];
         let (r1, snap1) = execute_block_from_snapshot(&snap0, &input(&p, &a1, None)).unwrap();
         assert_eq!(r1.header.evm_number, 1);
-        assert!(snap1.accounts.iter().any(|a| a.address.as_bytes() == to.into_array() && a.balance == EvmU256::from(500u128)), "recipient credited in child snapshot");
+        assert!(
+            snap1.accounts.iter().any(|a| a.address.as_bytes() == to.into_array() && a.balance == EvmU256::from(500u128)),
+            "recipient credited in child snapshot"
+        );
 
         // Re-running block 1 from snap0 is identical (the no-replay basis).
         let (r1b, snap1b) = execute_block_from_snapshot(&snap0, &input(&p, &a1, None)).unwrap();
@@ -264,8 +268,22 @@ mod tests {
         assert_eq!(r2.header.evm_number, 2);
     }
 
-    fn acc(addr: u8, nonce: u64, balance: u128, code: Vec<u8>, code_hash: EvmH256, storage: Vec<(EvmU256, EvmU256)>) -> EvmAccountSnapshot {
-        EvmAccountSnapshot { address: EvmAddress::from_bytes([addr; 20]), nonce, balance: EvmU256::from(balance), code_hash, code, storage }
+    fn acc(
+        addr: u8,
+        nonce: u64,
+        balance: u128,
+        code: Vec<u8>,
+        code_hash: EvmH256,
+        storage: Vec<(EvmU256, EvmU256)>,
+    ) -> EvmAccountSnapshot {
+        EvmAccountSnapshot {
+            address: EvmAddress::from_bytes([addr; 20]),
+            nonce,
+            balance: EvmU256::from(balance),
+            code_hash,
+            code,
+            storage,
+        }
     }
     fn snap(accounts: Vec<EvmAccountSnapshot>) -> EvmStateSnapshot {
         EvmStateSnapshot { accounts }
@@ -299,17 +317,15 @@ mod tests {
         let two = EvmU256::from(2u128);
         let zero = EvmU256::from(0u128);
         // Unsorted / non-unique accounts (0x22 then 0x11).
-        assert!(seed_cachedb(&snap(vec![
-            acc(0x22, 1, 5, vec![], empty_hash, vec![]),
-            acc(0x11, 1, 5, vec![], empty_hash, vec![]),
-        ]))
-        .is_err());
+        assert!(
+            seed_cachedb(&snap(vec![acc(0x22, 1, 5, vec![], empty_hash, vec![]), acc(0x11, 1, 5, vec![], empty_hash, vec![]),]))
+                .is_err()
+        );
         // Duplicate account address.
-        assert!(seed_cachedb(&snap(vec![
-            acc(0x11, 1, 5, vec![], empty_hash, vec![]),
-            acc(0x11, 2, 6, vec![], empty_hash, vec![]),
-        ]))
-        .is_err());
+        assert!(
+            seed_cachedb(&snap(vec![acc(0x11, 1, 5, vec![], empty_hash, vec![]), acc(0x11, 2, 6, vec![], empty_hash, vec![]),]))
+                .is_err()
+        );
         // Zero-valued storage slot.
         assert!(seed_cachedb(&snap(vec![acc(0x11, 1, 5, vec![], empty_hash, vec![(one, zero)])])).is_err());
         // Unsorted storage slots (slot 2 before slot 1).
@@ -320,4 +336,3 @@ mod tests {
         assert!(seed_cachedb(&snap(vec![acc(0x11, 1, 5, vec![], empty_hash, vec![(one, one), (two, one)])])).is_ok());
     }
 }
-

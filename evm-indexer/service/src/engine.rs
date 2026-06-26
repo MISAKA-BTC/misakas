@@ -14,8 +14,8 @@
 //! catch-up, finality enforcement, malformed-log tolerance — against a fake
 //! in-memory node and the in-memory store, with no live node or database.
 
-use misaka_evm_indexer_core::event::{decode_log, DecodedEvent};
-use misaka_evm_indexer_core::{plan_reconcile, BlockId, IndexedBlock, LocatedTransfer};
+use misaka_evm_indexer_core::event::{DecodedEvent, decode_log};
+use misaka_evm_indexer_core::{BlockId, IndexedBlock, LocatedTransfer, plan_reconcile};
 
 use crate::node::{NodeRpc, RpcError};
 use crate::store::IndexStore;
@@ -58,12 +58,7 @@ pub enum EngineError {
 /// Run one indexing pass. `finality_depth` blocks below the node head are treated
 /// as immutable (reverts are refused past it); `max_blocks` bounds how many
 /// blocks a single pass applies so the poll loop makes steady, bounded progress.
-pub async fn sync_once<N, S>(
-    node: &N,
-    store: &mut S,
-    finality_depth: u64,
-    max_blocks: u64,
-) -> Result<SyncOutcome, EngineError>
+pub async fn sync_once<N, S>(node: &N, store: &mut S, finality_depth: u64, max_blocks: u64) -> Result<SyncOutcome, EngineError>
 where
     N: NodeRpc + Sync,
     S: IndexStore + Send,
@@ -263,11 +258,7 @@ mod tests {
             Ok(self.chain.len() as u64 - 1)
         }
         async fn get_block(&self, number: u64) -> Result<Option<NodeBlock>, RpcError> {
-            Ok(self.chain.get(number as usize).map(|b| NodeBlock {
-                number,
-                rpc_hash: b.rpc_hash,
-                parent_hash: b.parent,
-            }))
+            Ok(self.chain.get(number as usize).map(|b| NodeBlock { number, rpc_hash: b.rpc_hash, parent_hash: b.parent }))
         }
         async fn get_logs(&self, from: u64, to: u64) -> Result<Vec<NodeLog>, RpcError> {
             let mut out = Vec::new();
@@ -340,8 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn bounded_catch_up_takes_multiple_passes() {
-        let chain: Vec<FakeBlock> =
-            (0..=5).map(|n| FakeNode::block_at(n, n as u8, n.saturating_sub(1) as u8, vec![])).collect();
+        let chain: Vec<FakeBlock> = (0..=5).map(|n| FakeNode::block_at(n, n as u8, n.saturating_sub(1) as u8, vec![])).collect();
         let node = FakeNode { chain };
         let mut store = MemIndexStore::new();
 
@@ -367,9 +357,7 @@ mod tests {
 
         // Node now disagrees all the way down at height 1 (finalized: head 5,
         // depth 2 → floor 3). The competing chain shares nothing within the window.
-        let deep = FakeNode {
-            chain: (0..=5).map(|n| FakeNode::block_at(n, (n + 100) as u8, (n + 99) as u8, vec![])).collect(),
-        };
+        let deep = FakeNode { chain: (0..=5).map(|n| FakeNode::block_at(n, (n + 100) as u8, (n + 99) as u8, vec![])).collect() };
         let err = sync_once(&deep, &mut store, 2, ALL).await.unwrap_err();
         assert!(matches!(err, EngineError::ReorgDeeperThanFinality { window_floor: 3 }), "got {err:?}");
     }
@@ -388,9 +376,8 @@ mod tests {
             tx_index: 0,
             log_index: 0,
         };
-        let node = FakeNode {
-            chain: vec![FakeNode::block_at(0, 0x00, 0x00, vec![bad, erc20_log(0, [0x00; 32], 0x00, 0xA1, 100, 1)])],
-        };
+        let node =
+            FakeNode { chain: vec![FakeNode::block_at(0, 0x00, 0x00, vec![bad, erc20_log(0, [0x00; 32], 0x00, 0xA1, 100, 1)])] };
         let mut store = MemIndexStore::new();
         let out = sync_once(&node, &mut store, 10, ALL).await.unwrap();
         assert_eq!(out.malformed, 1);
@@ -401,9 +388,7 @@ mod tests {
 
     #[tokio::test]
     async fn finality_marks_blocks_below_window() {
-        let node = FakeNode {
-            chain: (0..=5).map(|n| FakeNode::block_at(n, n as u8, n.saturating_sub(1) as u8, vec![])).collect(),
-        };
+        let node = FakeNode { chain: (0..=5).map(|n| FakeNode::block_at(n, n as u8, n.saturating_sub(1) as u8, vec![])).collect() };
         let mut store = MemIndexStore::new();
         sync_once(&node, &mut store, 2, ALL).await.unwrap();
         // head 5, depth 2 → finalized up to 3.

@@ -18,26 +18,24 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy_signer::SignerSync;
-use alloy_sol_types::{sol, SolCall};
+use alloy_sol_types::{SolCall, sol};
 use kaspa_consensus_core::config::params::Params;
-use kaspa_consensus_core::evm::{
-    EVM_CHAIN_ID, F003_PREA_OP_MLDSA87_CONTEXT, F003_PREA_ROOT_MLDSA87_CONTEXT, F003_VERSION_PREA_ROOT,
-};
+use kaspa_consensus_core::evm::{EVM_CHAIN_ID, F003_PREA_OP_MLDSA87_CONTEXT, F003_PREA_ROOT_MLDSA87_CONTEXT, F003_VERSION_PREA_ROOT};
 use kaspa_consensus_core::network::NetworkId;
 use kaspa_hashes::{blake2b_512_address_payload, blake2b_512_keyed};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_wrpc_client::{
-    client::{ConnectOptions, ConnectStrategy},
     KaspaRpcClient, WrpcEncoding,
+    client::{ConnectOptions, ConnectStrategy},
 };
 use serde_json::json;
 
 use crate::evm_send::EvmKeySource;
 use crate::keys::KeySource;
 use crate::node::Ctx;
-use crate::{exit, CliError, CliResult, OutputFormat};
+use crate::{CliError, CliResult, OutputFormat, exit};
 
 /// Audit H-3: the F003 `MLDSA87_VERIFY` precompile is activation-fenced
 /// (`evm_f003_mldsa_verify_activation_daa_score`, `u64::MAX` ⇒ inert on every
@@ -91,7 +89,10 @@ pub async fn gate_root_op(ctx: &Ctx) -> CliResult {
     let server = client.get_server_info().await.map_err(|e| CliError::new(exit::CONNECTION, format!("getServerInfo: {e}")))?;
     let _ = client.disconnect().await;
     if server.network_id.to_string() != ctx.network {
-        return Err(CliError::new(exit::NETWORK_MISMATCH, format!("node is '{}' but --network is '{}'", server.network_id, ctx.network)));
+        return Err(CliError::new(
+            exit::NETWORK_MISMATCH,
+            format!("node is '{}' but --network is '{}'", server.network_id, ctx.network),
+        ));
     }
     ensure_f003_active(server.network_id, server.virtual_daa_score)
 }
@@ -184,14 +185,7 @@ fn pad_u64(v: u64) -> [u8; 32] {
 /// commits to `keyed_blake2b_512(F003_PREA_OP_MLDSA87_CONTEXT, preimage)` under
 /// `F003_PREA_ROOT_MLDSA87_CONTEXT`; F003 binds the pubkey to its address payload.
 #[allow(clippy::too_many_arguments)]
-pub fn sign_root(
-    out: OutputFormat,
-    key: &KeySource,
-    f: &OpFields,
-    valid_after: u64,
-    valid_until: u64,
-    nonce: u64,
-) -> CliResult {
+pub fn sign_root(out: OutputFormat, key: &KeySource, f: &OpFields, valid_after: u64, valid_until: u64, nonce: u64) -> CliResult {
     let vk = key.load_key()?;
     let pubkey = vk.public_key().to_vec();
     let expected = blake2b_512_address_payload(&pubkey);
@@ -229,9 +223,7 @@ pub fn sign_root(
 pub fn sign_session(out: OutputFormat, key: &EvmKeySource, f: &OpFields, call_index: u64) -> CliResult {
     let signer = key.signer()?;
     let hash = session_op_hash(f, call_index);
-    let sig = signer
-        .sign_hash_sync(&hash)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("session sign: {e}")))?;
+    let sig = signer.sign_hash_sync(&hash).map_err(|e| CliError::new(exit::GENERIC, format!("session sign: {e}")))?;
 
     // r ‖ s ‖ v, with v as the Ethereum recovery byte 27/28. k256 yields canonical
     // low-s, which the contract requires (it rejects s > secp256k1n/2).

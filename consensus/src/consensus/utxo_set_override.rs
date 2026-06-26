@@ -21,8 +21,7 @@ use crate::consensus::Consensus;
 fn genesis_initial_utxo_set(config: &Config) -> Vec<(TransactionOutpoint, UtxoEntry)> {
     // `mut` is only exercised under `devnet-prealloc` (the extend below).
     #[cfg_attr(not(feature = "devnet-prealloc"), allow(unused_mut))]
-    let mut set: Vec<(TransactionOutpoint, UtxoEntry)> =
-        misaka_premine_utxos(config.params.net.network_type).into_iter().collect();
+    let mut set: Vec<(TransactionOutpoint, UtxoEntry)> = misaka_premine_utxos(config.params.net.network_type).into_iter().collect();
     #[cfg(feature = "devnet-prealloc")]
     set.extend(config.initial_utxo_set.iter().map(|(op, entry)| (*op, entry.clone())));
     #[cfg(not(feature = "devnet-prealloc"))]

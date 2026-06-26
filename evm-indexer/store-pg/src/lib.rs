@@ -145,8 +145,7 @@ impl PgStore {
                 let stored = load_block_transfers(&tx, &block.rpc_hash).await?;
                 update_balances(&tx, &stored, block.number, false).await?;
                 tx.execute("UPDATE blocks SET canonical = true WHERE rpc_hash = $1", &[&rpc_hash]).await?;
-                tx.execute("UPDATE token_transfers SET canonical = true, removed = false WHERE block_hash = $1", &[&rpc_hash])
-                    .await?;
+                tx.execute("UPDATE token_transfers SET canonical = true, removed = false WHERE block_hash = $1", &[&rpc_hash]).await?;
             }
             None => {
                 let l1: &[u8] = &block.l1_hash;
@@ -236,7 +235,10 @@ impl PgStore {
         let c: &[u8] = &collection;
         let row = self
             .client
-            .query_opt("SELECT owner FROM erc721_ownership WHERE collection=$1 AND token_id=$2::numeric", &[&c, &u256_to_dec(token_id)])
+            .query_opt(
+                "SELECT owner FROM erc721_ownership WHERE collection=$1 AND token_id=$2::numeric",
+                &[&c, &u256_to_dec(token_id)],
+            )
             .await?;
         match row {
             Some(r) => Ok(Some(bytes20("owner", &r.get::<_, Vec<u8>>(0))?)),
@@ -448,8 +450,9 @@ async fn write_erc20(tx: &Transaction<'_>, token: &[u8; 20], owner: &[u8; 20], b
 
 async fn read_erc721_owner(tx: &Transaction<'_>, coll: &[u8; 20], id: U256) -> Result<Option<[u8; 20]>> {
     let c: &[u8] = coll;
-    let row =
-        tx.query_opt("SELECT owner FROM erc721_ownership WHERE collection=$1 AND token_id=$2::numeric", &[&c, &u256_to_dec(id)]).await?;
+    let row = tx
+        .query_opt("SELECT owner FROM erc721_ownership WHERE collection=$1 AND token_id=$2::numeric", &[&c, &u256_to_dec(id)])
+        .await?;
     match row {
         Some(r) => Ok(Some(bytes20("owner", &r.get::<_, Vec<u8>>(0))?)),
         None => Ok(None),
@@ -479,11 +482,10 @@ async fn read_erc1155(tx: &Transaction<'_>, coll: &[u8; 20], id: U256, owner: &[
     let c: &[u8] = coll;
     let o: &[u8] = owner;
     let row = tx
-        .query_opt("SELECT balance::text FROM erc1155_balances WHERE collection=$1 AND token_id=$2::numeric AND owner=$3", &[
-            &c,
-            &u256_to_dec(id),
-            &o,
-        ])
+        .query_opt(
+            "SELECT balance::text FROM erc1155_balances WHERE collection=$1 AND token_id=$2::numeric AND owner=$3",
+            &[&c, &u256_to_dec(id), &o],
+        )
         .await?;
     match row {
         Some(r) => dec_to_u256(&r.get::<_, String>(0)),
@@ -495,8 +497,11 @@ async fn write_erc1155(tx: &Transaction<'_>, coll: &[u8; 20], id: U256, owner: &
     let c: &[u8] = coll;
     let o: &[u8] = owner;
     if balance.is_zero() {
-        tx.execute("DELETE FROM erc1155_balances WHERE collection=$1 AND token_id=$2::numeric AND owner=$3", &[&c, &u256_to_dec(id), &o])
-            .await?;
+        tx.execute(
+            "DELETE FROM erc1155_balances WHERE collection=$1 AND token_id=$2::numeric AND owner=$3",
+            &[&c, &u256_to_dec(id), &o],
+        )
+        .await?;
     } else {
         tx.execute(
             "INSERT INTO erc1155_balances(collection, token_id, owner, balance, updated_block) VALUES ($1,$2::numeric,$3,$4::numeric,$5) \

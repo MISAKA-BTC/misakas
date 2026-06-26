@@ -421,11 +421,7 @@ async fn handle_http_request(
         let status =
             WebStatusResponse { kaspad_address: status_cfg.kaspad_address, kaspad_version, instances: status_cfg.instances, web_bind };
         let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            json.len(),
-            json
-        );
+        let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", json.len(), json);
         stream.write_all(response.as_bytes()).await?;
         return Ok(());
     }
@@ -436,11 +432,7 @@ async fn handle_http_request(
             HttpMode::Instance { instance_id, .. } => get_stats_json(instance_id).await,
         };
         let json = serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string());
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            json.len(),
-            json
-        );
+        let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", json.len(), json);
         stream.write_all(response.as_bytes()).await?;
         return Ok(());
     }
@@ -816,8 +808,7 @@ pub fn record_block_found(worker: &WorkerContext, nonce: u64, bluescore: u64, ha
     if let Some(gauge) = BLOCK_GAUGE.get() {
         gauge.with_label_values(&worker.labels()).set(1.0);
     }
-    let timestamp_unix =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let timestamp_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     record_recent_block(RecentBlock {
         instance: worker.instance_id.clone(),
         worker: worker.worker_name.clone(),

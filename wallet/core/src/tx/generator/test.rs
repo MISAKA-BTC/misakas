@@ -692,18 +692,11 @@ fn test_generator_inputs_100_outputs_1_fees_include_success() -> Result<()> {
     // relay batches shrink to ~9 inputs, making this a multi-stage tree; validate()
     // drains it asserting mass-consistency (receiver-pays final folds into the single
     // payment output), and finalize() checks the aggregate summary.
-    generator(
-        test_network_id(),
-        &[1.0; 100],
-        &[],
-        None,
-        Fees::receiver(Kaspa(5.0)),
-        [(output_address, Kaspa(100.0))].as_slice(),
-    )
-    .unwrap()
-    .harness()
-    .validate()
-    .finalize();
+    generator(test_network_id(), &[1.0; 100], &[], None, Fees::receiver(Kaspa(5.0)), [(output_address, Kaspa(100.0))].as_slice())
+        .unwrap()
+        .harness()
+        .validate()
+        .finalize();
 
     Ok(())
 }

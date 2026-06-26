@@ -52,11 +52,7 @@ pub struct Block {
 
 impl Block {
     pub fn new(header: Header, txs: Vec<Transaction>) -> Self {
-        Self {
-            header: Arc::new(header),
-            transactions: Arc::new(txs),
-            evm_payload: Arc::new(EvmExecutionPayload::default()),
-        }
+        Self { header: Arc::new(header), transactions: Arc::new(txs), evm_payload: Arc::new(EvmExecutionPayload::default()) }
     }
 
     pub fn from_arcs(header: Arc<Header>, transactions: Arc<Vec<Transaction>>) -> Self {
@@ -68,11 +64,7 @@ impl Block {
     }
 
     pub fn from_header(header: Header) -> Self {
-        Self {
-            header: Arc::new(header),
-            transactions: Arc::new(Vec::new()),
-            evm_payload: Arc::new(EvmExecutionPayload::default()),
-        }
+        Self { header: Arc::new(header), transactions: Arc::new(Vec::new()), evm_payload: Arc::new(EvmExecutionPayload::default()) }
     }
 
     /// kaspa-pq ADR-0020: attach an EVM execution payload (consuming builder).

@@ -270,12 +270,16 @@ fn parse_msk_to_sompi(s: &str) -> Result<u64, CliError> {
     if whole.is_empty() && frac.is_empty() {
         return Err(CliError::new(exit::GENERIC, format!("invalid amount '{s}'")));
     }
-    let whole: u64 = if whole.is_empty() { 0 } else { whole.parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))? };
+    let whole: u64 =
+        if whole.is_empty() { 0 } else { whole.parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))? };
     if frac.len() > 8 || !frac.bytes().all(|b| b.is_ascii_digit()) {
         return Err(CliError::new(exit::GENERIC, format!("amount '{s}' has >8 fractional digits (1 MSK = 1e8 sompi)")));
     }
     let frac_sompi: u64 = format!("{frac:0<8}").parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))?;
-    whole.checked_mul(100_000_000).and_then(|w| w.checked_add(frac_sompi)).ok_or_else(|| CliError::new(exit::GENERIC, "amount overflow".to_string()))
+    whole
+        .checked_mul(100_000_000)
+        .and_then(|w| w.checked_add(frac_sompi))
+        .ok_or_else(|| CliError::new(exit::GENERIC, "amount overflow".to_string()))
 }
 
 fn prefix_of(network: &str) -> Result<kaspa_addresses::Prefix, CliError> {
@@ -469,7 +473,11 @@ struct EvmKeyArgs {
 #[cfg(feature = "evm-send")]
 impl EvmKeyArgs {
     fn source(&self) -> evm_send::EvmKeySource {
-        evm_send::EvmKeySource { mnemonic_file: self.mnemonic_file.clone(), key_file: self.key_file.clone(), key_stdin: self.key_stdin }
+        evm_send::EvmKeySource {
+            mnemonic_file: self.mnemonic_file.clone(),
+            key_file: self.key_file.clone(),
+            key_stdin: self.key_stdin,
+        }
     }
 }
 
@@ -515,7 +523,9 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => eth::tx_status(&ctx, &hash),
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => eth::tx_wait(&ctx, &hash, timeout, poll),
-        Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await,
+        Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {
+            wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await
+        }
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, yes, key })) => {
             wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes).await
         }
@@ -532,10 +542,12 @@ async fn main() -> std::process::ExitCode {
         #[cfg(feature = "evm-send")]
         Command::Evm(EvmCmd::Wallet(EvmWalletCmd::Address { key })) => evm_send::wallet_address(&ctx, &key.source()),
         #[cfg(feature = "evm-send")]
-        Command::Evm(EvmCmd::Send { to, amount, gas_limit, max_fee, nonce, yes, wait, key }) => match evm_send::parse_msk_to_wei(&amount) {
-            Ok(wei) => evm_send::send(&ctx, &key.source(), &to, wei, gas_limit, max_fee, nonce, yes, wait),
-            Err(e) => Err(e),
-        },
+        Command::Evm(EvmCmd::Send { to, amount, gas_limit, max_fee, nonce, yes, wait, key }) => {
+            match evm_send::parse_msk_to_wei(&amount) {
+                Ok(wei) => evm_send::send(&ctx, &key.source(), &to, wei, gas_limit, max_fee, nonce, yes, wait),
+                Err(e) => Err(e),
+            }
+        }
         #[cfg(feature = "evm-send")]
         Command::Evm(EvmCmd::Deploy { bytecode, bytecode_file, value, gas_limit, max_fee, nonce, yes, wait, key }) => {
             match (evm_send::read_hex_blob(&bytecode, &bytecode_file), evm_send::parse_msk_to_wei(&value)) {
@@ -568,8 +580,17 @@ async fn main() -> std::process::ExitCode {
             // while F003 is fence-inert can never verify on-chain.
             match prea::gate_root_op(&ctx).await {
                 Ok(()) => prea::run_sign_root(
-                    ctx.output, &key.source(), &account, version, nonce, valid_after, valid_until, &max_relayer_fee, &to,
-                    &value, &calldata,
+                    ctx.output,
+                    &key.source(),
+                    &account,
+                    version,
+                    nonce,
+                    valid_after,
+                    valid_until,
+                    &max_relayer_fee,
+                    &to,
+                    &value,
+                    &calldata,
                 ),
                 Err(e) => Err(e),
             }

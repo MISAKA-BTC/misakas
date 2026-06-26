@@ -5,8 +5,8 @@
 //! inputs (they already commit to the EVM result — design §4.2 circularity rule).
 
 use kaspa_consensus_core::evm::{
-    EvmExecutionHeader, EVM_BASE_FEE_MAX_CHANGE_DENOMINATOR, EVM_CHAIN_ID, EVM_ELASTICITY_MULTIPLIER, EVM_GAS_LIMIT,
-    EVM_INITIAL_BASE_FEE, MISAKA_EVM_PREVRANDAO_CONTEXT,
+    EVM_BASE_FEE_MAX_CHANGE_DENOMINATOR, EVM_CHAIN_ID, EVM_ELASTICITY_MULTIPLIER, EVM_GAS_LIMIT, EVM_INITIAL_BASE_FEE,
+    EvmExecutionHeader, MISAKA_EVM_PREVRANDAO_CONTEXT,
 };
 use kaspa_hashes::blake2b_256_keyed;
 use revm::primitives::{Address, B256};

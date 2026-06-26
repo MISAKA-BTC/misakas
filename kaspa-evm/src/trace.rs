@@ -18,16 +18,16 @@
 
 use crate::env::derive_env;
 use crate::executor::{make_receipt, to_revm_address};
+use crate::sim::EthCallEnv;
 use crate::snapshot::seed_cachedb;
 use crate::tx::decode_tx_to_env;
-use crate::{execute_block_evm, AcceptedTxCandidate, EvmBlockInput, EvmExecError, EVM_SPEC_ID};
+use crate::{AcceptedTxCandidate, EVM_SPEC_ID, EvmBlockInput, EvmExecError, execute_block_evm};
 use kaspa_consensus_core::evm::{
     EvmCandidateOutcome, EvmExecutionHeader, EvmExecutionPayload, EvmReceipt, EvmStateSnapshot, EvmTraceReplayBodyV1,
 };
-use crate::sim::EthCallEnv;
 use revm::interpreter::{CallInputs, CallOutcome, CallScheme, CreateInputs, CreateOutcome, InstructionResult};
-use revm::primitives::{Address, Bytes, B256, U256};
-use revm::{inspector_handle_register, Database, DatabaseRef, Evm, EvmContext, Inspector};
+use revm::primitives::{Address, B256, Bytes, U256};
+use revm::{Database, DatabaseRef, Evm, EvmContext, Inspector, inspector_handle_register};
 
 /// The kind of an EVM call frame, rendered as Geth's `callTracer` `type` field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -770,11 +770,11 @@ mod tests {
 
     use crate::snapshot::{seed_cachedb, snapshot_from_cachedb};
     use crate::tx::tx_hash;
-    use crate::{execute_block_evm, AcceptedTxCandidate, EvmBlockInput};
-    use kaspa_consensus_core::evm::{EvmAddress, EvmExecutionPayload, EvmReplayEnv, EvmReplayTx, EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE};
+    use crate::{AcceptedTxCandidate, EvmBlockInput, execute_block_evm};
+    use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE, EvmAddress, EvmExecutionPayload, EvmReplayEnv, EvmReplayTx};
     use kaspa_hashes::Hash64;
     use revm::db::{CacheDB, EmptyDB};
-    use revm::primitives::{keccak256, AccountInfo, Bytecode, B256, KECCAK_EMPTY};
+    use revm::primitives::{AccountInfo, B256, Bytecode, KECCAK_EMPTY, keccak256};
 
     const COINBASE: [u8; 20] = [0xC0; 20];
     const SELECTED_PARENT: [u8; 64] = [0xAA; 64];
@@ -785,7 +785,14 @@ mod tests {
     }
 
     /// Sign a 1559 tx with an explicit key byte (distinct keys ⇒ distinct senders).
-    fn signed_tx_key(key: u8, nonce: u64, to: revm::primitives::TxKind, value: u128, gas_limit: u64, input: Bytes) -> (Address, Vec<u8>) {
+    fn signed_tx_key(
+        key: u8,
+        nonce: u64,
+        to: revm::primitives::TxKind,
+        value: u128,
+        gas_limit: u64,
+        input: Bytes,
+    ) -> (Address, Vec<u8>) {
         use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
         use alloy_eips::eip2718::Encodable2718;
         use alloy_signer::SignerSync;
@@ -1014,7 +1021,12 @@ mod tests {
 
         let body = EvmTraceReplayBodyV1 {
             selected_parent: Hash64::from_bytes(SELECTED_PARENT),
-            env: EvmReplayEnv { header_timestamp_ms: 1_000, blue_work_be: Vec::new(), daa_score: 100, coinbase: EvmAddress::from_bytes(COINBASE) },
+            env: EvmReplayEnv {
+                header_timestamp_ms: 1_000,
+                blue_work_be: Vec::new(),
+                daa_score: 100,
+                coinbase: EvmAddress::from_bytes(COINBASE),
+            },
             system_ops: Vec::new(),
             txs: vec![ra, rb, rc]
                 .into_iter()

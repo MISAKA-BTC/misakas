@@ -193,9 +193,7 @@ impl TemplateTransactionSelector for AttestationPrioritySelector {
     fn reject_selection(&mut self, tx_id: TransactionId) {
         // A rejection may target either a priority tx or an inner tx. Resolve against the priority
         // set first (lazily built map), else delegate to the inner selector.
-        let map = self
-            .priority_selected_map
-            .get_or_insert_with(|| self.priority.iter().map(|t| (t.tx.id(), t.mass)).collect());
+        let map = self.priority_selected_map.get_or_insert_with(|| self.priority.iter().map(|t| (t.tx.id(), t.mass)).collect());
         if let Some(mass) = map.remove(&tx_id) {
             self.selected_priority_mass = self.selected_priority_mass.saturating_sub(mass);
             self.priority_rejections += 1;

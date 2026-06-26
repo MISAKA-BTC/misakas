@@ -23,10 +23,10 @@ use std::{
 
 use kaspa_consensus_core::{
     dns_finality::{
-        HostId, SignedEpochRecord, SignerAuditCheckpoint, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata,
-        SignerOutcome, SignerPolicy, SignerRequest, SignerResponse, SignedEpochCheckOutcome, SigningPurpose,
-        compute_signer_audit_chain_entry, signature_fingerprint, AUDIT_CHECKPOINT_MLDSA87_CONTEXT, ATTESTATION_MLDSA87_CONTEXT,
-        TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
+        ATTESTATION_MLDSA87_CONTEXT, AUDIT_CHECKPOINT_MLDSA87_CONTEXT, HostId, SignedEpochCheckOutcome, SignedEpochRecord,
+        SignerAuditCheckpoint, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata, SignerOutcome, SignerPolicy,
+        SignerRequest, SignerResponse, SigningPurpose, TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
+        compute_signer_audit_chain_entry, signature_fingerprint,
     },
     tx::TransactionOutpoint,
 };
@@ -195,9 +195,9 @@ fn verify_audit_checkpoints(
     let mut anomalies = 0usize;
     for c in &ckpts {
         // (a) signature: must verify under the held key for this validator_id.
-        let sig_ok = keys.get(&c.validator_id).is_some_and(|k| {
-            k.verify_with_context(c.chain_head.as_byte_slice(), &c.signature, AUDIT_CHECKPOINT_MLDSA87_CONTEXT)
-        });
+        let sig_ok = keys
+            .get(&c.validator_id)
+            .is_some_and(|k| k.verify_with_context(c.chain_head.as_byte_slice(), &c.signature, AUDIT_CHECKPOINT_MLDSA87_CONTEXT));
         if !sig_ok {
             anomalies += 1;
             log::error!(
@@ -273,8 +273,7 @@ impl SignerState {
             fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700))
                 .map_err(|e| format!("cannot chmod 700 signer state dir {}: {e}", state_dir.display()))?;
         }
-        let audit = AuditLog::load_or_new(state_dir.join("audit.log"))
-            .map_err(|e| format!("cannot open signer audit log: {e}"))?;
+        let audit = AuditLog::load_or_new(state_dir.join("audit.log")).map_err(|e| format!("cannot open signer audit log: {e}"))?;
         let keys: HashMap<Hash64, ValidatorKey> = keys.into_iter().map(|k| (k.validator_id, k)).collect();
         let checkpoint_path = state_dir.join("audit.checkpoints");
         // Audit M-04: at startup, verify any existing signed checkpoints against the recomputed audit
@@ -284,7 +283,9 @@ impl SignerState {
         match verify_audit_checkpoints(&audit_log_path, &checkpoint_path, &keys) {
             Ok(report) => {
                 if report.total == 0 {
-                    log::info!("[signer] no audit checkpoints yet (M-04); first will be signed after {AUDIT_CHECKPOINT_INTERVAL} records");
+                    log::info!(
+                        "[signer] no audit checkpoints yet (M-04); first will be signed after {AUDIT_CHECKPOINT_INTERVAL} records"
+                    );
                 } else if report.anomalies == 0 {
                     log::info!(
                         "[signer] verified {} audit checkpoint(s) (M-04): latest #{} head {} — 0 anomalies",
@@ -369,7 +370,10 @@ impl SignerState {
         };
         if let Err(e) = self.audit.append(&record) {
             // Fail-closed: never return a signature we could not durably audit.
-            return SignerResponse { request_id: req.request_id, result: Err(SignerError::InternalError(format!("audit write failed: {e}"))) };
+            return SignerResponse {
+                request_id: req.request_id,
+                result: Err(SignerError::InternalError(format!("audit write failed: {e}"))),
+            };
         }
         // Audit M-04: anchor the audit chain head with a signed checkpoint every
         // AUDIT_CHECKPOINT_INTERVAL records. Best-effort — a checkpoint-write failure is logged but
@@ -401,7 +405,8 @@ impl SignerState {
         let head = self.audit.chain_head();
         let record_index = self.audit.record_count();
         let signature = key.sign_with_context(head.as_byte_slice(), AUDIT_CHECKPOINT_MLDSA87_CONTEXT).to_vec();
-        let ckpt = SignerAuditCheckpoint { record_index, timestamp_unix_secs: now_unix_secs, validator_id: vid, chain_head: head, signature };
+        let ckpt =
+            SignerAuditCheckpoint { record_index, timestamp_unix_secs: now_unix_secs, validator_id: vid, chain_head: head, signature };
 
         let body = borsh::to_vec(&ckpt)?;
         let mut frame = (body.len() as u32).to_be_bytes().to_vec();
@@ -440,8 +445,7 @@ impl SignerState {
         // that defeats the whole point of the strict signer. So the three overlay
         // contexts are RESERVED to their matching purpose, and a Transaction may not
         // borrow any of them (it carries its own tx-domain context).
-        const OVERLAY_CONTEXTS: [&[u8]; 3] =
-            [ATTESTATION_MLDSA87_CONTEXT, UNBOND_REQUEST_CONTEXT, TAKEOVER_TOKEN_CONTEXT];
+        const OVERLAY_CONTEXTS: [&[u8]; 3] = [ATTESTATION_MLDSA87_CONTEXT, UNBOND_REQUEST_CONTEXT, TAKEOVER_TOKEN_CONTEXT];
         let required_ctx: Option<&[u8]> = match req.purpose {
             SigningPurpose::Attestation => Some(ATTESTATION_MLDSA87_CONTEXT),
             SigningPurpose::Unbond => Some(UNBOND_REQUEST_CONTEXT),
@@ -490,7 +494,8 @@ impl SignerState {
             let store = self.epoch_store(req.validator_id).map_err(SignerError::InternalError)?;
             match store.check(&candidate) {
                 SignedEpochCheckOutcome::Block => {
-                    let msg = format!("equivocation: epoch {epoch} already signed a different target (validator {})", req.validator_id);
+                    let msg =
+                        format!("equivocation: epoch {epoch} already signed a different target (validator {})", req.validator_id);
                     if matches!(policy, SignerPolicy::Strict) {
                         return Err(SignerError::PolicyViolation(msg));
                     }
@@ -861,7 +866,14 @@ mod tests {
         let k = key(0x42);
         let vid = k.validator_id;
         let mut s = SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("c02"), Hash::default()).unwrap();
-        let att_msg = stake_attestation_message(b"test-net", 7, Hash64::from_bytes([0x55; 64]), 100, Hash64::default(), TransactionOutpoint::default());
+        let att_msg = stake_attestation_message(
+            b"test-net",
+            7,
+            Hash64::from_bytes([0x55; 64]),
+            100,
+            Hash64::default(),
+            TransactionOutpoint::default(),
+        );
 
         // Attack A: Unbond purpose borrowing the ATTESTATION context.
         let forged = SignerRequest {
@@ -872,7 +884,10 @@ mod tests {
             message_digest: SignerMessageDigest::Unbond(att_msg),
             metadata: SignerMetadata::None,
         };
-        assert!(s.handle_request(&forged, Hash::default(), 1000).result.is_err(), "C-02: Unbond may not sign under the attestation context");
+        assert!(
+            s.handle_request(&forged, Hash::default(), 1000).result.is_err(),
+            "C-02: Unbond may not sign under the attestation context"
+        );
 
         // Attack B (reverse): Transaction borrowing an overlay context.
         let forged2 = SignerRequest {
@@ -883,7 +898,10 @@ mod tests {
             message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0x66; 64])),
             metadata: SignerMetadata::None,
         };
-        assert!(s.handle_request(&forged2, Hash::default(), 1000).result.is_err(), "C-02: Transaction may not borrow an overlay context");
+        assert!(
+            s.handle_request(&forged2, Hash::default(), 1000).result.is_err(),
+            "C-02: Transaction may not borrow an overlay context"
+        );
 
         // A well-formed Unbond under ITS OWN context still signs.
         let legit = SignerRequest {
@@ -894,7 +912,10 @@ mod tests {
             message_digest: SignerMessageDigest::Unbond(Hash::from_bytes([0x77; 32])),
             metadata: SignerMetadata::None,
         };
-        assert!(s.handle_request(&legit, Hash::default(), 1000).result.is_ok(), "a well-formed Unbond under its own context still signs");
+        assert!(
+            s.handle_request(&legit, Hash::default(), 1000).result.is_ok(),
+            "a well-formed Unbond under its own context still signs"
+        );
     }
 
     #[test]

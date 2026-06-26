@@ -591,12 +591,8 @@ impl ValidatorService {
                     if let Some((funding_outpoint, funding_entry)) = funding {
                         let mut chain = self.funding_chain.lock().unwrap();
                         chain.inflight_spent.insert(funding_outpoint);
-                        let change = UtxoEntry::new(
-                            funding_entry.amount - fee,
-                            funding_entry.script_public_key.clone(),
-                            virtual_daa,
-                            false,
-                        );
+                        let change =
+                            UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
                         chain.pending_change = Some((TransactionOutpoint::new(tx_id, 0), change));
                         // kaspa-pq DNS-v3 hardening (Fix B, audit M-2): record the head tx id (for the
                         // per-txid mempool confirmation lookup) and the epoch that produced it (so the
@@ -644,9 +640,7 @@ impl ValidatorService {
         if let Some(utxoindex) = &self.utxoindex {
             // Address-indexed: O(matches) instead of O(utxo-set). The utxoindex stores a
             // compact entry (no spk — it's the lookup key), so rebuild the full UtxoEntry.
-            let Ok(set) =
-                utxoindex.clone().get_utxos_by_script_public_keys([funding_spk.clone()].into_iter().collect()).await
-            else {
+            let Ok(set) = utxoindex.clone().get_utxos_by_script_public_keys([funding_spk.clone()].into_iter().collect()).await else {
                 return Vec::new();
             };
             return set

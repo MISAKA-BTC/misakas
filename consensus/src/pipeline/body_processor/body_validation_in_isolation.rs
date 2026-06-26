@@ -763,10 +763,7 @@ mod tests {
         let over_payload = EvmExecutionPayload { transactions: vec![raw; n + 1], ..Default::default() };
         let mut block_over = MutableBlock::new(mk_header().with_evm_payload_hash(over_payload.payload_hash()), txs.clone());
         block_over.evm_payload = over_payload;
-        assert_match!(
-            body_processor.validate_body_in_isolation(&block_over.to_immutable()),
-            Err(RuleError::EvmPayloadTooLarge(_, _))
-        );
+        assert_match!(body_processor.validate_body_in_isolation(&block_over.to_immutable()), Err(RuleError::EvmPayloadTooLarge(_, _)));
 
         consensus.shutdown(wait_handles);
     }

@@ -21,12 +21,13 @@ use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND,
 };
 use kaspa_consensus_core::tx::{
-    MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
+    MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput,
+    UtxoEntry,
 };
 use kaspa_hashes::{Hash64, blake2b_512_address_payload};
 use kaspa_txscript::{
-    MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder,
-    script_class::evm_deposit_lock_script, verify_mldsa87_with_context,
+    MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder, script_class::evm_deposit_lock_script,
+    verify_mldsa87_with_context,
 };
 use libcrux_ml_dsa::ml_dsa_87;
 use rand::RngCore;
@@ -736,7 +737,13 @@ impl ValidatorKey {
         let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
         // Dummy bond_outpoint + net_id — the payload's field sizes drive the mass (the ML-DSA-87
         // signature is fixed-length regardless of the message), not the values.
-        match self.build_funded_unbond_tx(&[0u8; 32], TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0), outpoint, &funding, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
+        match self.build_funded_unbond_tx(
+            &[0u8; 32],
+            TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0),
+            outpoint,
+            &funding,
+            ATTESTATION_TX_FEE_FLOOR_SOMPI,
+        ) {
             Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
             Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
         }
@@ -850,8 +857,7 @@ impl SignedEpochStore {
         // restart (slashable). So fsync the temp file BEFORE the rename, then fsync the parent
         // directory so the new dirent is durable too. Fail-closed on any error.
         {
-            let mut f =
-                fs::File::create(&tmp).map_err(|e| format!("cannot create validator-state tmp {}: {e}", tmp.display()))?;
+            let mut f = fs::File::create(&tmp).map_err(|e| format!("cannot create validator-state tmp {}: {e}", tmp.display()))?;
             f.write_all(json.as_bytes()).map_err(|e| format!("cannot write validator-state tmp {}: {e}", tmp.display()))?;
             f.sync_all().map_err(|e| format!("cannot fsync validator-state tmp {}: {e}", tmp.display()))?;
         }
@@ -1195,8 +1201,14 @@ mod tests {
         let mc = MassCalculator::new(1, 10, 10_000, 10_000_000_000);
         let bond_fee = key.estimate_bond_fee(&mc, Prefix::Testnet);
         let unbond_fee = key.estimate_unbond_fee(&mc, Prefix::Testnet);
-        assert!(bond_fee > ATTESTATION_TX_FEE_FLOOR_SOMPI, "mass-based bond fee {bond_fee} must exceed the flat floor {ATTESTATION_TX_FEE_FLOOR_SOMPI}");
-        assert!(unbond_fee > ATTESTATION_TX_FEE_FLOOR_SOMPI, "mass-based unbond fee {unbond_fee} must exceed the flat floor {ATTESTATION_TX_FEE_FLOOR_SOMPI}");
+        assert!(
+            bond_fee > ATTESTATION_TX_FEE_FLOOR_SOMPI,
+            "mass-based bond fee {bond_fee} must exceed the flat floor {ATTESTATION_TX_FEE_FLOOR_SOMPI}"
+        );
+        assert!(
+            unbond_fee > ATTESTATION_TX_FEE_FLOOR_SOMPI,
+            "mass-based unbond fee {unbond_fee} must exceed the flat floor {ATTESTATION_TX_FEE_FLOOR_SOMPI}"
+        );
     }
 
     #[test]

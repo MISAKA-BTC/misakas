@@ -340,7 +340,9 @@ pub fn clean_wallet(input: &str) -> Result<String, Box<dyn std::error::Error + S
     }
 
     if input.starts_with("kaspa:") || input.starts_with("kaspatest:") || input.starts_with("kaspadev:") {
-        return Err("legacy kaspa* addresses are not valid on this network; use a misaka:/misakatest:/misakasim:/misakadev: address".into());
+        return Err(
+            "legacy kaspa* addresses are not valid on this network; use a misaka:/misakatest:/misakasim:/misakadev: address".into()
+        );
     }
 
     Err("payout address must be a valid misaka* address including its network prefix (e.g. misaka:...)".into())

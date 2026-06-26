@@ -171,8 +171,11 @@ impl CoinbaseManager {
         for red in ghostdag_data.mergeset_reds.iter() {
             let reward_data = mergeset_rewards.get(red).unwrap();
             // Reds ∩ DAA earn subsidy + fees; non-DAA reds earn fees only (both fee classes kept).
-            let (eff_subsidy, eff_fees) =
-                if mergeset_non_daa.contains(red) { (0, reward_data.total_fees) } else { (reward_data.subsidy, reward_data.total_fees) };
+            let (eff_subsidy, eff_fees) = if mergeset_non_daa.contains(red) {
+                (0, reward_data.total_fees)
+            } else {
+                (reward_data.subsidy, reward_data.total_fees)
+            };
             // §F carve: accumulate the Worker share EXCLUDING the §D inclusion sub-pool; else full.
             // Per-class fee split mirrors the blues loop above (and `split_block_reward`).
             red_reward += match carve {
@@ -210,8 +213,15 @@ impl CoinbaseManager {
         // Inert when `carve` is `None` (the pool stays 0 and this is skipped).
         if carve.is_some() {
             let (newly_included_stake, expected_stake) = inclusion;
-            let bounty = worker_inclusion_bounty(worker_inclusion_pool as u128, newly_included_stake, expected_stake, STAKE_SCORE_SCALE, false, 0)
-                .min(worker_inclusion_pool as u128) as u64;
+            let bounty = worker_inclusion_bounty(
+                worker_inclusion_pool as u128,
+                newly_included_stake,
+                expected_stake,
+                STAKE_SCORE_SCALE,
+                false,
+                0,
+            )
+            .min(worker_inclusion_pool as u128) as u64;
             if bounty > 0 {
                 miner_script_output_indices.push(outputs.len());
                 outputs.push(TransactionOutput::new(bounty, miner_data.script_public_key.clone()));
@@ -256,9 +266,13 @@ impl CoinbaseManager {
         }
         for red in ghostdag_data.mergeset_reds.iter() {
             let reward_data = mergeset_rewards.get(red).unwrap();
-            let (eff_subsidy, eff_fees) =
-                if mergeset_non_daa.contains(red) { (0, reward_data.total_fees) } else { (reward_data.subsidy, reward_data.total_fees) };
-            pool = pool.saturating_add(split_block_reward(eff_subsidy, eff_fees, reward_data.finality_fees, fee_split).validator_sompi);
+            let (eff_subsidy, eff_fees) = if mergeset_non_daa.contains(red) {
+                (0, reward_data.total_fees)
+            } else {
+                (reward_data.subsidy, reward_data.total_fees)
+            };
+            pool =
+                pool.saturating_add(split_block_reward(eff_subsidy, eff_fees, reward_data.finality_fees, fee_split).validator_sompi);
         }
         pool
     }

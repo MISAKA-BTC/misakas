@@ -186,10 +186,6 @@ mod tests {
         assert_eq!(RPC_MLDSA87_SIG_LEN, kaspa_txscript::MLDSA87_SIG_LEN);
     }
 
-
-
-
-
     #[test]
     fn pubkey_hex_roundtrip() {
         let mut bytes = [0u8; RPC_MLDSA87_PK_LEN];

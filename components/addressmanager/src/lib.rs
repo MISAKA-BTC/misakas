@@ -339,10 +339,7 @@ impl AddressManager {
     /// never the raw `get_all_addresses` set which an attacker can poison with
     /// unprobed Sybil entries — so a fresh node is not steered onto attacker peers.
     pub fn get_verified_addresses(&self) -> Vec<NetAddress> {
-        self.address_store
-            .iterate_addresses()
-            .filter(|a| self.address_store.get(*a).connection_failed_count == 0)
-            .collect_vec()
+        self.address_store.iterate_addresses().filter(|a| self.address_store.get(*a).connection_failed_count == 0).collect_vec()
     }
 
     pub fn get_all_banned_addresses(&self) -> Vec<IpAddress> {

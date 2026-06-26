@@ -165,7 +165,9 @@ pub fn admit_tx(raw: &[u8]) -> Result<(), String> {
 /// SAME rule the body-validation class-1 check applies, so a mempool-admitted
 /// tx can never make the node's own template payload-block-invalid).
 pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
-    use kaspa_consensus_core::evm::{EvmAddress, EvmExecutionPayload, EVM_CHAIN_ID, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+    use kaspa_consensus_core::evm::{
+        EVM_CHAIN_ID, EvmAddress, EvmExecutionPayload, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK,
+    };
 
     // audit R2-#3: reject a tx that can never fit a payload BEFORE paying the
     // EIP-2718 decode + ECDSA signer-recovery cost (a cheap raw-length gate
@@ -185,7 +187,10 @@ pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
     // accessors would silently drop those semantics. Reject anything outside the
     // allowlist at admission so it can never enter a payload block.
     if !is_supported_tx_type(&envelope) {
-        return Err(format!("unsupported EVM tx type {:#04x} under SHANGHAI (allowed: legacy/EIP-2930/EIP-1559)", envelope.tx_type() as u8));
+        return Err(format!(
+            "unsupported EVM tx type {:#04x} under SHANGHAI (allowed: legacy/EIP-2930/EIP-1559)",
+            envelope.tx_type() as u8
+        ));
     }
     let hash = tx_hash(raw);
     let sender = recover_signer_cached(&envelope, hash)?; // O1 memo
@@ -257,7 +262,7 @@ mod tests {
         use alloy_signer::SignerSync;
         use alloy_signer_local::PrivateKeySigner;
         use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE};
-        use revm::primitives::{Address, TxKind, B256, U256};
+        use revm::primitives::{Address, B256, TxKind, U256};
         let signer = PrivateKeySigner::from_bytes(&B256::from([0x11u8; 32])).unwrap();
         let tx = TxEip1559 {
             chain_id: EVM_CHAIN_ID,
@@ -285,17 +290,22 @@ mod tests {
         use alloy_signer::SignerSync;
         use alloy_signer_local::PrivateKeySigner;
         use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE};
-        use revm::primitives::{Address, TxKind, B256, U256};
+        use revm::primitives::{Address, B256, TxKind, U256};
         let signer = PrivateKeySigner::from_bytes(&B256::from([0x11u8; 32])).unwrap();
         let al = AccessList(vec![AccessListItem {
             address: Address::with_last_byte(0xAB),
             storage_keys: vec![B256::from([0x01u8; 32]), B256::from([0x02u8; 32])],
         }]);
         let tx = TxEip1559 {
-            chain_id: EVM_CHAIN_ID, nonce: 0, gas_limit: 60_000,
-            max_fee_per_gas: EVM_INITIAL_BASE_FEE as u128, max_priority_fee_per_gas: 0,
-            to: TxKind::Call(Address::with_last_byte(0x22)), value: U256::from(1u64),
-            access_list: al, input: Default::default(),
+            chain_id: EVM_CHAIN_ID,
+            nonce: 0,
+            gas_limit: 60_000,
+            max_fee_per_gas: EVM_INITIAL_BASE_FEE as u128,
+            max_priority_fee_per_gas: 0,
+            to: TxKind::Call(Address::with_last_byte(0x22)),
+            value: U256::from(1u64),
+            access_list: al,
+            input: Default::default(),
         };
         let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
         let raw = TxEnvelope::from(tx.into_signed(sig)).encoded_2718();
@@ -318,17 +328,22 @@ mod tests {
         use alloy_signer::SignerSync;
         use alloy_signer_local::PrivateKeySigner;
         use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE};
-        use revm::primitives::{Address, TxKind, B256, U256};
+        use revm::primitives::{Address, B256, TxKind, U256};
         let signer = PrivateKeySigner::from_bytes(&B256::from([0x11u8; 32])).unwrap();
         let al = AccessList(vec![AccessListItem {
             address: Address::with_last_byte(0xAB),
             storage_keys: vec![B256::from([0x01u8; 32]), B256::from([0x02u8; 32])],
         }]);
         let tx = TxEip1559 {
-            chain_id: EVM_CHAIN_ID, nonce: 0, gas_limit: 60_000,
-            max_fee_per_gas: EVM_INITIAL_BASE_FEE as u128, max_priority_fee_per_gas: 0,
-            to: TxKind::Call(Address::with_last_byte(0x22)), value: U256::from(1u64),
-            access_list: al, input: Default::default(),
+            chain_id: EVM_CHAIN_ID,
+            nonce: 0,
+            gas_limit: 60_000,
+            max_fee_per_gas: EVM_INITIAL_BASE_FEE as u128,
+            max_priority_fee_per_gas: 0,
+            to: TxKind::Call(Address::with_last_byte(0x22)),
+            value: U256::from(1u64),
+            access_list: al,
+            input: Default::default(),
         };
         let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
         let raw = TxEnvelope::from(tx.into_signed(sig)).encoded_2718();

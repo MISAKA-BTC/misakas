@@ -248,6 +248,10 @@ mod tests {
         seed.copy_from_slice(seed_hash.as_bytes());
         let kp = ml_dsa_87::generate_key_pair(seed);
         let derived: [u8; 64] = blake2b_512_address_payload(kp.verification_key.as_ref()).as_bytes();
-        assert_eq!(derived, owner_payload(TESTNET_MAIN_ADDRESS), "TESTNET_MAIN_ADDRESS must match the key derived from TESTNET_MAIN_SEED");
+        assert_eq!(
+            derived,
+            owner_payload(TESTNET_MAIN_ADDRESS),
+            "TESTNET_MAIN_ADDRESS must match the key derived from TESTNET_MAIN_SEED"
+        );
     }
 }

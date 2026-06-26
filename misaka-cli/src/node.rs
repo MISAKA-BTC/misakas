@@ -11,11 +11,11 @@ use std::time::Duration;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_wrpc_client::{
-    client::{ConnectOptions, ConnectStrategy},
     KaspaRpcClient, WrpcEncoding,
+    client::{ConnectOptions, ConnectStrategy},
 };
 
-use crate::{exit, CliError, CliResult, OutputFormat};
+use crate::{CliError, CliResult, OutputFormat, exit};
 
 /// Shared CLI context (the resolved global flags).
 pub struct Ctx {
@@ -86,7 +86,8 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
     // defaults. Without --rpc, fall back to this network's default borsh port.
     let (probe_host, borsh_port) = match &ctx.rpc {
         Some(hp) => {
-            let (h, p) = hp.rsplit_once(':').ok_or_else(|| CliError::new(exit::GENERIC, format!("--rpc must be host:port (got {hp})")))?;
+            let (h, p) =
+                hp.rsplit_once(':').ok_or_else(|| CliError::new(exit::GENERIC, format!("--rpc must be host:port (got {hp})")))?;
             (h.to_string(), p.parse::<u16>().map_err(|_| CliError::new(exit::GENERIC, format!("bad --rpc port in {hp}")))?)
         }
         None => ("127.0.0.1".to_string(), nt.default_borsh_rpc_port()),
@@ -145,7 +146,11 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
             }
             Err(e) => {
                 exit_code = exit::CONNECTION;
-                rows.push(Row { label: format!("wRPC Borsh {borsh_hostport}"), value: format!("getServerInfo failed: {e}"), health: Health::Fail });
+                rows.push(Row {
+                    label: format!("wRPC Borsh {borsh_hostport}"),
+                    value: format!("getServerInfo failed: {e}"),
+                    health: Health::Fail,
+                });
             }
         },
         Err(e) => {
@@ -175,8 +180,16 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
 
     // --- EVM JSON-RPC ---
     match crate::eth::chain_id(ctx) {
-        Ok(cid) => rows.push(Row { label: format!("EVM RPC {}", ctx.evm_rpc), value: format!("listening (chainId 0x{cid:x})"), health: Health::Ok }),
-        Err(_) => rows.push(Row { label: format!("EVM RPC {}", ctx.evm_rpc), value: "not reachable (EVM lane / --evm-rpc-listen off?)".into(), health: Health::Info }),
+        Ok(cid) => rows.push(Row {
+            label: format!("EVM RPC {}", ctx.evm_rpc),
+            value: format!("listening (chainId 0x{cid:x})"),
+            health: Health::Ok,
+        }),
+        Err(_) => rows.push(Row {
+            label: format!("EVM RPC {}", ctx.evm_rpc),
+            value: "not reachable (EVM lane / --evm-rpc-listen off?)".into(),
+            health: Health::Info,
+        }),
     }
 
     if let Some(daa) = virtual_daa {
@@ -186,10 +199,8 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
     // --- render ---
     match ctx.output {
         OutputFormat::Json => {
-            let arr: Vec<_> = rows
-                .iter()
-                .map(|r| serde_json::json!({ "check": r.label, "value": r.value, "status": r.health.tag() }))
-                .collect();
+            let arr: Vec<_> =
+                rows.iter().map(|r| serde_json::json!({ "check": r.label, "value": r.value, "status": r.health.tag() })).collect();
             println!(
                 "{}",
                 serde_json::json!({ "ok": exit_code == exit::SUCCESS, "exitCode": exit_code, "network": ctx.network, "syncPhase": synced_phase, "checks": arr })
@@ -203,7 +214,9 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
             if !ctx.quiet {
                 println!();
                 println!("{}", if exit_code == exit::SUCCESS { "doctor: OK" } else { "doctor: issues found (see FAIL/WARN above)" });
-                println!("note: ports gRPC/json/P2P are derived from the borsh port ({borsh_port}); deployments may rebind any of them — the wRPC getServerInfo above is authoritative.");
+                println!(
+                    "note: ports gRPC/json/P2P are derived from the borsh port ({borsh_port}); deployments may rebind any of them — the wRPC getServerInfo above is authoritative."
+                );
             }
         }
     }

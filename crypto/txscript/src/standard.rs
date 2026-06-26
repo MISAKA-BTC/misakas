@@ -217,11 +217,9 @@ mod tests {
         assert_eq!(gated, pay_to_address_script(&ml));
         assert_eq!(gated.script().len(), 69);
         // Every legacy class is rejected.
-        for (ver, payload) in [
-            (Version::PubKey, vec![0u8; 32]),
-            (Version::PubKeyECDSA, vec![0u8; 33]),
-            (Version::ScriptHash, vec![0u8; 32]),
-        ] {
+        for (ver, payload) in
+            [(Version::PubKey, vec![0u8; 32]), (Version::PubKeyECDSA, vec![0u8; 33]), (Version::ScriptHash, vec![0u8; 32])]
+        {
             let addr = Address::new(Prefix::Mainnet, ver, &payload);
             assert!(
                 matches!(pay_to_address_script_pq(&addr), Err(TxScriptError::LegacyAddressDisabledInPqMode(_))),

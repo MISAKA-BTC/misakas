@@ -58,9 +58,8 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, CanonicalLaggedEpochAnchor, DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget,
-        ValidatorRecord, dns_confirmation_from_state, is_bond_active_at, ready_epoch_from_tip_blue_score,
-        stake_attestation_message,
+        ActiveValidatorSet, CanonicalLaggedEpochAnchor, DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord,
+        dns_confirmation_from_state, is_bond_active_at, ready_epoch_from_tip_blue_score, stake_attestation_message,
     },
     errors::{
         coinbase::CoinbaseResult,
@@ -279,10 +278,10 @@ impl Consensus {
             notification_root.clone(),
             counters.clone(),
             mining_rules,
-            config.evm_history_mode, // §12: gate the archive diff/checkpoint writer
+            config.evm_history_mode,         // §12: gate the archive diff/checkpoint writer
             config.evm_shadow_state_backend, // C-01 S4: node-local shadow dual-write + differential
-            config.evm_flat_authoritative, // C-01 S9: flat-authoritative executor seed
-            config.evm_retire_206, // C-01 S9b: stop persisting the per-block 206 snapshot
+            config.evm_flat_authoritative,   // C-01 S9: flat-authoritative executor seed
+            config.evm_retire_206,           // C-01 S9b: stop persisting the per-block 206 snapshot
         ));
 
         let pruning_processor = Arc::new(PruningProcessor::new(
@@ -390,7 +389,9 @@ impl Consensus {
         }
         #[cfg(not(feature = "evm"))]
         {
-            warn!("[C-01 S9b-prune] --evm-prune-legacy-206 requires a kaspad built with --features evm; skipping (no EVM state on this build).");
+            warn!(
+                "[C-01 S9b-prune] --evm-prune-legacy-206 requires a kaspad built with --features evm; skipping (no EVM state on this build)."
+            );
         }
         #[cfg(feature = "evm")]
         {
@@ -437,18 +438,24 @@ impl Consensus {
             let flat_ptr = match self.storage.evm_latest_state_ptr_store.read().get() {
                 Ok(Some(p)) => p,
                 Ok(None) => {
-                    warn!("[C-01 S9b-prune] the flat state pointer is absent — the flat backend was never initialized on this node. Refusing the IRREVERSIBLE 206 delete; 206 stays as the executor seed. Warm up --evm-shadow-state-backend + --evm-flat-authoritative first.");
+                    warn!(
+                        "[C-01 S9b-prune] the flat state pointer is absent — the flat backend was never initialized on this node. Refusing the IRREVERSIBLE 206 delete; 206 stays as the executor seed. Warm up --evm-shadow-state-backend + --evm-flat-authoritative first."
+                    );
                     return;
                 }
                 Err(e) => {
-                    warn!("[C-01 S9b-prune] flat state pointer read failed ({e}); refusing the bulk delete (cannot prove the flat backend is current). 206 left in place.");
+                    warn!(
+                        "[C-01 S9b-prune] flat state pointer read failed ({e}); refusing the bulk delete (cannot prove the flat backend is current). 206 left in place."
+                    );
                     return;
                 }
             };
             let evm_head = match self.storage.evm_heads_store.read().get() {
                 Ok(h) => h.latest,
                 Err(e) => {
-                    warn!("[C-01 S9b-prune] canonical EVM head read failed ({e}) while 206 rows exist; refusing the bulk delete. 206 left in place.");
+                    warn!(
+                        "[C-01 S9b-prune] canonical EVM head read failed ({e}) while 206 rows exist; refusing the bulk delete. 206 left in place."
+                    );
                     return;
                 }
             };
@@ -473,14 +480,19 @@ impl Consensus {
             // Re-derive the flat state root from the actual on-disk account rows (materialize 234 + code,
             // then keccak-MPT) and require it to equal the committed head root. Catches silent flat-store
             // corruption that a trusted pointer field would miss. O(state) — one-shot, on the startup path.
-            let recomputed_root = match crate::processes::evm::materialize_snapshot(&self.storage.evm_flat_account_store, &self.storage.evm_code_store)
-                .map_err(|e| e.to_string())
-                .and_then(|snap| kaspa_evm::snapshot::seed_cachedb(&snap).map_err(|e| e.to_string()))
-                .map(|cdb| kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&cdb).0))
+            let recomputed_root = match crate::processes::evm::materialize_snapshot(
+                &self.storage.evm_flat_account_store,
+                &self.storage.evm_code_store,
+            )
+            .map_err(|e| e.to_string())
+            .and_then(|snap| kaspa_evm::snapshot::seed_cachedb(&snap).map_err(|e| e.to_string()))
+            .map(|cdb| kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&cdb).0))
             {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("[C-01 S9b-prune] could not recompute the flat state root ({e}); refusing the bulk delete (cannot verify the flat backend is faithful). 206 left in place.");
+                    warn!(
+                        "[C-01 S9b-prune] could not recompute the flat state root ({e}); refusing the bulk delete (cannot verify the flat backend is faithful). 206 left in place."
+                    );
                     return;
                 }
             };
@@ -504,7 +516,9 @@ impl Consensus {
                 Ok(()) => info!("[C-01 S9b-prune] legacy 206 snapshot store reclaimed; space returned to the OS after compaction."),
                 // A failure here leaves 206 present (delete_range is a single direct write); the node keeps
                 // running on the flat seed regardless. Surface it loudly; do not abort startup.
-                Err(e) => warn!("[C-01 S9b-prune] bulk reclamation of the legacy 206 store FAILED: {e}; 206 left in place (harmless — flat backend is authoritative). Retry later."),
+                Err(e) => warn!(
+                    "[C-01 S9b-prune] bulk reclamation of the legacy 206 store FAILED: {e}; 206 left in place (harmless — flat backend is authoritative). Retry later."
+                ),
             }
         }
     }
@@ -555,7 +569,9 @@ impl Consensus {
         // processor starts, lets the node self-heal. Idempotent (the worker's own check is then a no-op)
         // and consensus-neutral (only changes WHEN the existing recovery runs).
         if !pruning_processor.recover_pruning_workflows_if_needed() {
-            info!("Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message");
+            info!(
+                "Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message"
+            );
         }
 
         vec![
@@ -806,7 +822,11 @@ impl Consensus {
     /// bond)` digest the v3 verifier reconstructs (`collect_stake_contributions_v2`). The VSC
     /// is a fixed zero (P-1D: ADR-0017 retired the committee; not a gate, kept for domain
     /// separation). The service only signs `message`. Shared by the singular + batch signers.
-    fn build_attestation_target(&self, anchor: &CanonicalLaggedEpochAnchor, bond_outpoint: TransactionOutpoint) -> ValidatorAttestationTarget {
+    fn build_attestation_target(
+        &self,
+        anchor: &CanonicalLaggedEpochAnchor,
+        bond_outpoint: TransactionOutpoint,
+    ) -> ValidatorAttestationTarget {
         let vsc = kaspa_consensus_core::Hash64::default();
         // ADR-0009 Addendum A.3: network discriminator := the per-network genesis hash.
         let message = stake_attestation_message(
@@ -1635,7 +1655,10 @@ impl ConsensusApi for Consensus {
         Ok(self.storage.evm_tx_index_store.get_or_default(tx_hash).unwrap())
     }
 
-    fn get_evm_tx_receipt(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmTxReceiptView>> {
+    fn get_evm_tx_receipt(
+        &self,
+        tx_hash: kaspa_hashes::EvmH256,
+    ) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmTxReceiptView>> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
         let row = self.storage.evm_tx_index_store.get_or_default(tx_hash).unwrap();
         for (accepting, receipt_index) in row.accepted_in.iter().rev() {
@@ -1649,7 +1672,8 @@ impl ConsensusApi for Consensus {
             if idx >= receipts.receipts.len() || receipts.tx_hashes.get(idx) != Some(&tx_hash) {
                 continue; // defensive: index row out of sync with the receipts row
             }
-            let evm_number = self.storage.evm_header_store.get(*accepting).optional().unwrap().map(|h| h.evm_number).unwrap_or_default();
+            let evm_number =
+                self.storage.evm_header_store.get(*accepting).optional().unwrap().map(|h| h.evm_number).unwrap_or_default();
             // Block-global offset of this receipt's first log (audit H-05): the
             // count of all logs in the receipts before this one in the block.
             let log_index_offset: u32 = receipts.receipts[..idx].iter().map(|r| r.logs.len() as u32).sum();
@@ -1813,10 +1837,8 @@ impl ConsensusApi for Consensus {
         let tx_hashes = self.storage.evm_receipts_store.get(l1_hash).optional().unwrap().map(|r| r.tx_hashes).unwrap_or_default();
         // RPC §7.3 `size`: byte length of the block's accepted tx data (sum of raw
         // EIP-2718 bytes via the R-2 raw-tx store; an absent row contributes 0).
-        let encoded_size = tx_hashes
-            .iter()
-            .map(|h| self.storage.evm_raw_tx_store.get(*h).unwrap().map(|r| r.raw.len() as u64).unwrap_or(0))
-            .sum();
+        let encoded_size =
+            tx_hashes.iter().map(|h| self.storage.evm_raw_tx_store.get(*h).unwrap().map(|r| r.raw.len() as u64).unwrap_or(0)).sum();
         Ok(Some(kaspa_consensus_core::evm::EvmBlockResponse { header, l1_hash, tx_hashes, encoded_size }))
     }
 
@@ -1870,7 +1892,10 @@ impl ConsensusApi for Consensus {
         }
     }
 
-    fn get_evm_block_by_rpc_hash(&self, rpc_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
+    fn get_evm_block_by_rpc_hash(
+        &self,
+        rpc_hash: kaspa_hashes::EvmH256,
+    ) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>> {
         use crate::model::stores::evm::EvmBlockHashMapStoreReader;
         let Some(l1_hash) = self.storage.evm_block_hash_map_store.get(rpc_hash).unwrap() else { return Ok(None) };
         self.get_evm_block_by_l1_hash(l1_hash)

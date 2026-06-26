@@ -5,10 +5,10 @@
 //! - The 2048-bit Ethereum logs bloom.
 
 use kaspa_consensus_core::evm::{
-    DepositClaim, EvmReceipt, EvmSystemOp, WithdrawOp, EVM_BLOOM_SIZE, MISAKA_EVM_DEPOSIT_CLAIM_CONTEXT,
-    MISAKA_EVM_SYSTEM_OPS_CONTEXT, MISAKA_EVM_WITHDRAWAL_CONTEXT,
+    DepositClaim, EVM_BLOOM_SIZE, EvmReceipt, EvmSystemOp, MISAKA_EVM_DEPOSIT_CLAIM_CONTEXT, MISAKA_EVM_SYSTEM_OPS_CONTEXT,
+    MISAKA_EVM_WITHDRAWAL_CONTEXT, WithdrawOp,
 };
-use kaspa_hashes::{blake2b_256_keyed, EvmH256};
+use kaspa_hashes::{EvmH256, blake2b_256_keyed};
 use revm::primitives::keccak256;
 
 /// keyed-BLAKE2b-256 over the borsh encoding of an ordered list under `domain`.
@@ -83,7 +83,7 @@ pub fn eip2718_tx_type(raw: &[u8]) -> u8 {
 /// effective logs. Minimal MISAKA-side logic ⇒ minimal byte-divergence surface.
 pub fn receipts_root_v2(receipts: &[EvmReceipt], executed_raws: &[Vec<u8>]) -> EvmH256 {
     use alloy_consensus::{Eip658Value, Receipt, ReceiptEnvelope};
-    use alloy_primitives::{Address, Bytes, Log, LogData, B256};
+    use alloy_primitives::{Address, B256, Bytes, Log, LogData};
 
     let envelopes: Vec<ReceiptEnvelope> = receipts
         .iter()
@@ -94,12 +94,16 @@ pub fn receipts_root_v2(receipts: &[EvmReceipt], executed_raws: &[Vec<u8>]) -> E
                 .iter()
                 .map(|l| {
                     let topics: Vec<B256> = l.topics.iter().map(|t| B256::from(t.as_bytes())).collect();
-                    Log { address: Address::from(l.address.as_bytes()), data: LogData::new_unchecked(topics, Bytes::copy_from_slice(&l.data)) }
+                    Log {
+                        address: Address::from(l.address.as_bytes()),
+                        data: LogData::new_unchecked(topics, Bytes::copy_from_slice(&l.data)),
+                    }
                 })
                 .collect();
             // alloy computes the standard Ethereum per-receipt bloom from these logs.
             let with_bloom =
-                Receipt { status: Eip658Value::Eip658(r.succeeded), cumulative_gas_used: r.cumulative_gas_used as u128, logs }.with_bloom();
+                Receipt { status: Eip658Value::Eip658(r.succeeded), cumulative_gas_used: r.cumulative_gas_used as u128, logs }
+                    .with_bloom();
             // `executed_raws` is parallel to `receipts`; a defensive missing entry is legacy.
             match executed_raws.get(i).map(|raw| eip2718_tx_type(raw)).unwrap_or(0) {
                 1 => ReceiptEnvelope::Eip2930(with_bloom),
@@ -191,10 +195,7 @@ mod tests {
         let root = receipts_root_v2(&[], &[]);
         assert_eq!(root.as_bytes(), alloy_trie::EMPTY_ROOT_HASH.0);
         // 0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421
-        assert_eq!(
-            faster_hex::hex_string(&root.as_bytes()),
-            "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
-        );
+        assert_eq!(faster_hex::hex_string(&root.as_bytes()), "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421");
         // v1 ALSO yields Ethereum's empty-trie root for empty receipts — so the
         // executor's empty-block fast path (which may emit either, depending on the
         // fence) is byte-identical across the fence. This pins that equivalence so a
@@ -210,7 +211,7 @@ mod tests {
     #[test]
     fn misaka_bloom_matches_alloy_bloom() {
         use alloy_consensus::{Eip658Value, Receipt};
-        use alloy_primitives::{Address, Bytes, Log, LogData, B256};
+        use alloy_primitives::{Address, B256, Bytes, Log, LogData};
         let r = receipt(true, 21_000, vec![log(0xAB, &[0x11, 0x22], &[0xde, 0xad, 0xbe, 0xef]), log(0xCD, &[0x33], &[])]);
         let mine = receipt_logs_bloom(&r);
         let logs: Vec<Log> = r
@@ -218,7 +219,10 @@ mod tests {
             .iter()
             .map(|l| Log {
                 address: Address::from(l.address.as_bytes()),
-                data: LogData::new_unchecked(l.topics.iter().map(|t| B256::from(t.as_bytes())).collect(), Bytes::copy_from_slice(&l.data)),
+                data: LogData::new_unchecked(
+                    l.topics.iter().map(|t| B256::from(t.as_bytes())).collect(),
+                    Bytes::copy_from_slice(&l.data),
+                ),
             })
             .collect();
         let alloy_bloom = Receipt { status: Eip658Value::Eip658(true), cumulative_gas_used: 21_000u128, logs }.with_bloom().logs_bloom;

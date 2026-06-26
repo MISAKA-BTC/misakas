@@ -6,11 +6,11 @@
 pub use crate::account::descriptor::AccountDescriptor;
 // `AccountDescriptorProperty` is consumed by the classical account variants.
 #[cfg(feature = "legacy-secp256k1")]
+pub use crate::account::DerivationCapableAccount;
+#[cfg(feature = "legacy-secp256k1")]
 pub use crate::account::descriptor::AccountDescriptorProperty;
 pub use crate::account::variants::*;
 pub use crate::account::{Account, AccountKind};
-#[cfg(feature = "legacy-secp256k1")]
-pub use crate::account::DerivationCapableAccount;
 pub use crate::deterministic::*;
 pub use crate::encryption::{Encryptable, EncryptionKind};
 pub use crate::error::Error;

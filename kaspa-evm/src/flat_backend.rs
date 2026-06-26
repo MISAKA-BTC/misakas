@@ -43,9 +43,9 @@
 
 use kaspa_consensus_core::evm::{EvmAddress, EvmU256, FlatAccount};
 use kaspa_hashes::EvmH256;
-use revm::db::{CacheDB, EmptyDB};
-use revm::primitives::{AccountInfo, Address, Bytecode, Bytes, B256, U256, KECCAK_EMPTY};
 use revm::DatabaseRef;
+use revm::db::{CacheDB, EmptyDB};
+use revm::primitives::{AccountInfo, Address, B256, Bytecode, Bytes, KECCAK_EMPTY, U256};
 
 #[inline]
 fn to_u256(v: EvmU256) -> U256 {
@@ -118,10 +118,10 @@ impl<R: FlatStateReader> DatabaseRef for FlatStateBackend<R> {
         let code = if code_hash == KECCAK_EMPTY {
             None
         } else {
-            let bytes = self
-                .reader
-                .flat_code(flat.core.code_hash)?
-                .ok_or_else(|| FlatBackendError::MissingCode { address: hex(&address.into_array()), code_hash: flat.core.code_hash })?;
+            let bytes = self.reader.flat_code(flat.core.code_hash)?.ok_or_else(|| FlatBackendError::MissingCode {
+                address: hex(&address.into_array()),
+                code_hash: flat.core.code_hash,
+            })?;
             Some(Bytecode::new_raw(Bytes::from(bytes)))
         };
         Ok(Some(AccountInfo { balance: to_u256(flat.core.balance), nonce: flat.core.nonce, code_hash, code }))
@@ -158,14 +158,14 @@ impl<R: FlatStateReader> DatabaseRef for FlatStateBackend<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snapshot::seed_cachedb;
     use crate::EVM_SPEC_ID;
+    use crate::snapshot::seed_cachedb;
     use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
     use alloy_eips::eip2718::Encodable2718;
     use alloy_signer::SignerSync;
     use alloy_signer_local::PrivateKeySigner;
-    use kaspa_consensus_core::evm::{AccountCore, EvmAccountSnapshot, EvmStateSnapshot, EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE};
-    use revm::primitives::{keccak256, ResultAndState, TxKind};
+    use kaspa_consensus_core::evm::{AccountCore, EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE, EvmAccountSnapshot, EvmStateSnapshot};
+    use revm::primitives::{ResultAndState, TxKind, keccak256};
     use revm::{Database, Evm};
     use std::collections::HashMap;
 
@@ -202,7 +202,10 @@ mod tests {
             }
             reader.accounts.insert(
                 a.address.as_bytes(),
-                FlatAccount { core: AccountCore { nonce: a.nonce, balance: a.balance, code_hash: a.code_hash }, storage: a.storage.clone() },
+                FlatAccount {
+                    core: AccountCore { nonce: a.nonce, balance: a.balance, code_hash: a.code_hash },
+                    storage: a.storage.clone(),
+                },
             );
         }
         accs.sort_unstable_by(|x, y| x.address.as_bytes().cmp(&y.address.as_bytes()));
@@ -210,7 +213,14 @@ mod tests {
     }
 
     fn eoa(addr: [u8; 20], nonce: u64, balance: u128) -> EvmAccountSnapshot {
-        EvmAccountSnapshot { address: EvmAddress::from_bytes(addr), nonce, balance: EvmU256::from(balance), code_hash: empty_hash(), code: vec![], storage: vec![] }
+        EvmAccountSnapshot {
+            address: EvmAddress::from_bytes(addr),
+            nonce,
+            balance: EvmU256::from(balance),
+            code_hash: empty_hash(),
+            code: vec![],
+            storage: vec![],
+        }
     }
 
     fn contract(addr: [u8; 20], nonce: u64, balance: u128, code: Vec<u8>, storage: Vec<(u128, u128)>) -> EvmAccountSnapshot {
@@ -251,7 +261,11 @@ mod tests {
         let cc = Address::from([0xCC; 20]);
         for slot in [1u64, 5, 9] {
             let idx = U256::from(slot);
-            assert_eq!(lazy.storage_ref(cc, idx).unwrap(), DatabaseRef::storage_ref(&eager, cc, idx).unwrap(), "storage_ref divergence at slot {slot}");
+            assert_eq!(
+                lazy.storage_ref(cc, idx).unwrap(),
+                DatabaseRef::storage_ref(&eager, cc, idx).unwrap(),
+                "storage_ref divergence at slot {slot}"
+            );
         }
         let dd = Address::from([0xDD; 20]);
         assert_eq!(lazy.storage_ref(dd, U256::from(1u64)).unwrap(), U256::ZERO);
@@ -263,7 +277,11 @@ mod tests {
 
         // block_hash_ref parity with EmptyDB.
         for n in [0u64, 1, 12_345] {
-            assert_eq!(lazy.block_hash_ref(n).unwrap(), DatabaseRef::block_hash_ref(&eager, n).unwrap(), "block_hash_ref divergence at {n}");
+            assert_eq!(
+                lazy.block_hash_ref(n).unwrap(),
+                DatabaseRef::block_hash_ref(&eager, n).unwrap(),
+                "block_hash_ref divergence at {n}"
+            );
         }
     }
 
@@ -346,7 +364,10 @@ mod tests {
         let code_hash = EvmH256::from_bytes(keccak256(&code).0);
         let mut reader = FakeFlatReader::default();
         // Account references a code_hash, but the code store is empty.
-        reader.accounts.insert([0xCC; 20], FlatAccount { core: AccountCore { nonce: 1, balance: EvmU256::from(1u128), code_hash }, storage: vec![] });
+        reader.accounts.insert(
+            [0xCC; 20],
+            FlatAccount { core: AccountCore { nonce: 1, balance: EvmU256::from(1u128), code_hash }, storage: vec![] },
+        );
         let lazy = FlatStateBackend::new(reader);
         assert!(matches!(lazy.basic_ref(Address::from([0xCC; 20])), Err(FlatBackendError::MissingCode { .. })));
     }

@@ -12,16 +12,16 @@
 //! so any policy is safe.
 
 use kaspa_consensus_core::evm::{
-    decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket, CanonicalEvmHeads, EvmAddress, EvmBlockReceipts,
-    EvmExecutionHeader, EvmExecutionPayload, EvmLatestStatePtr, EvmRawTx, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot,
-    EvmTraceReplayBodyV1, EvmTxLocations, FlatAccount, LogPostingKind, LogPostingLoc,
+    CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmExecutionHeader, EvmExecutionPayload, EvmLatestStatePtr, EvmRawTx,
+    EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, FlatAccount, LogPostingKind,
+    LogPostingLoc, decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
 };
-use kaspa_hashes::EvmH256;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
-    BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DbSetAccess, DirectDbWriter, StoreError, StoreResult, DB,
+    BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DB, DbSetAccess, DirectDbWriter, StoreError, StoreResult,
 };
 use kaspa_database::registry::DatabaseStorePrefixes;
+use kaspa_hashes::EvmH256;
 use rocksdb::WriteBatch;
 use std::sync::Arc;
 
@@ -406,7 +406,13 @@ impl DbEvmRawTxStore {
 
     /// Upsert the raw bytes of a tx into the caller's batch (a tx's bytes are
     /// immutable under re-processing, so a re-write is a harmless no-op-equivalent).
-    pub fn write_batch(&self, batch: &mut WriteBatch, tx_hash: EvmH256, raw: Vec<u8>, payload_block: BlockHash) -> Result<(), StoreError> {
+    pub fn write_batch(
+        &self,
+        batch: &mut WriteBatch,
+        tx_hash: EvmH256,
+        raw: Vec<u8>,
+        payload_block: BlockHash,
+    ) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), tx_hash, EvmRawTx { raw, payload_block })
     }
 
@@ -839,7 +845,11 @@ mod tests {
 
         let addr = |b: u8| EvmAddress::from_bytes([b; 20]);
         let acct = |bal: u128| FlatAccount {
-            core: kaspa_consensus_core::evm::AccountCore { nonce: 1, balance: EvmU256::from_u128(bal), code_hash: EvmH256::from_bytes([0; 32]) },
+            core: kaspa_consensus_core::evm::AccountCore {
+                nonce: 1,
+                balance: EvmU256::from_u128(bal),
+                code_hash: EvmH256::from_bytes([0; 32]),
+            },
             storage: vec![(EvmU256::from_u128(1), EvmU256::from_u128(bal))],
         };
 
@@ -986,7 +996,10 @@ mod tests {
         assert_eq!(payload_store.get(bh(1)).unwrap(), payload);
         let mut batch = WriteBatch::default();
         payload_store.insert_batch(&mut batch, bh(1), payload.clone()).unwrap();
-        assert!(matches!(payload_store.get(bh(2)), Err(StoreError::KeyNotFound(_))), "absent payload reads as KeyNotFound (driver maps it to empty)");
+        assert!(
+            matches!(payload_store.get(bh(2)), Err(StoreError::KeyNotFound(_))),
+            "absent payload reads as KeyNotFound (driver maps it to empty)"
+        );
 
         // Canonical heads singleton: absent → set → read.
         let mut heads_store = DbEvmCanonicalHeadsStore::new(db.clone());
@@ -1165,7 +1178,12 @@ mod tests {
         }
         // address B: one log in block 5.
         store
-            .write_posting_batch(&mut batch, LogPostingKind::Address, &addr_b, &LogPostingLoc { evm_number: 5, l1_hash: bh(5), tx_index: 0, in_receipt_log_index: 0 })
+            .write_posting_batch(
+                &mut batch,
+                LogPostingKind::Address,
+                &addr_b,
+                &LogPostingLoc { evm_number: 5, l1_hash: bh(5), tx_index: 0, in_receipt_log_index: 0 },
+            )
             .unwrap();
         db.write(batch).unwrap();
 

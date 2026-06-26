@@ -225,7 +225,11 @@ impl TransactionValidator {
     }
 }
 
-pub fn check_scripts(sig_cache: &Cache<SigCacheKey, bool>, tx: &(impl VerifiableTransaction + Sync), policy: ScriptPolicy) -> TxResult<()> {
+pub fn check_scripts(
+    sig_cache: &Cache<SigCacheKey, bool>,
+    tx: &(impl VerifiableTransaction + Sync),
+    policy: ScriptPolicy,
+) -> TxResult<()> {
     if tx.inputs().len() > CHECK_SCRIPTS_PARALLELISM_THRESHOLD {
         check_scripts_par_iter(sig_cache, tx, policy)
     } else {
@@ -233,7 +237,11 @@ pub fn check_scripts(sig_cache: &Cache<SigCacheKey, bool>, tx: &(impl Verifiable
     }
 }
 
-pub fn check_scripts_sequential(sig_cache: &Cache<SigCacheKey, bool>, tx: &impl VerifiableTransaction, policy: ScriptPolicy) -> TxResult<()> {
+pub fn check_scripts_sequential(
+    sig_cache: &Cache<SigCacheKey, bool>,
+    tx: &impl VerifiableTransaction,
+    policy: ScriptPolicy,
+) -> TxResult<()> {
     let reused_values = SigHashReusedValuesUnsync::new();
     for (i, (input, entry)) in tx.populated_inputs().enumerate() {
         TxScriptEngine::from_transaction_input(tx, input, i, entry, &reused_values, sig_cache)
@@ -244,7 +252,11 @@ pub fn check_scripts_sequential(sig_cache: &Cache<SigCacheKey, bool>, tx: &impl 
     Ok(())
 }
 
-pub fn check_scripts_par_iter(sig_cache: &Cache<SigCacheKey, bool>, tx: &(impl VerifiableTransaction + Sync), policy: ScriptPolicy) -> TxResult<()> {
+pub fn check_scripts_par_iter(
+    sig_cache: &Cache<SigCacheKey, bool>,
+    tx: &(impl VerifiableTransaction + Sync),
+    policy: ScriptPolicy,
+) -> TxResult<()> {
     let reused_values = SigHashReusedValuesSync::new();
     (0..tx.inputs().len()).into_par_iter().try_for_each(|idx| {
         let (input, utxo) = tx.populated_input(idx);
@@ -782,8 +794,7 @@ mod conservation_tests {
     /// Builds an input-less tx carrying `output_values` on `subnetwork_id`.
     fn outputs_only_tx(subnetwork_id: SubnetworkId, output_values: &[u64]) -> Transaction {
         let dummy_spk = ScriptPublicKey::new(0, ScriptVec::from_slice(&[0x51])); // OP_TRUE
-        let outputs =
-            output_values.iter().map(|&value| TransactionOutput { value, script_public_key: dummy_spk.clone() }).collect();
+        let outputs = output_values.iter().map(|&value| TransactionOutput { value, script_public_key: dummy_spk.clone() }).collect();
         Transaction::new(0, vec![], outputs, 0, subnetwork_id, 0, vec![])
     }
 

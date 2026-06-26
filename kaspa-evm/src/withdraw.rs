@@ -31,7 +31,7 @@ use kaspa_consensus_core::tx::ScriptPublicKey;
 use kaspa_txscript::script_class::ScriptClass;
 use revm::handler::register::EvmHandler;
 use revm::interpreter::{CallOutcome, Gas, InstructionResult, InterpreterResult};
-use revm::primitives::{Address, Bytes, Log, LogData, B256, U256};
+use revm::primitives::{Address, B256, Bytes, Log, LogData, U256};
 use revm::{Database, FrameOrResult, FrameResult};
 use std::sync::OnceLock;
 

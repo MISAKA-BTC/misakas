@@ -67,16 +67,13 @@ pub const EVM_CHAIN_ID: u64 = 0x4D_53_4B;
 /// wrapped-native ERC-20 used by v2/v3 DEX pools, design §19.3). A normal EVM
 /// contract (not a precompile) deployed into the activation state; carried here
 /// so the executor and RPC agree on the canonical wrapped-native address.
-pub const WMISAKA_ADDRESS: EvmAddress = EvmAddress::from_bytes([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x01,
-]);
+pub const WMISAKA_ADDRESS: EvmAddress = EvmAddress::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x01]);
 
 /// Reserved precompile address for `MISAKA_WITHDRAW` (EVM → UTXO, design §8.1).
 /// User-input failures here revert the tx (block stays valid, §8.2); only a
 /// producer commitment/diff mismatch makes a block invalid.
-pub const MISAKA_WITHDRAW_PRECOMPILE: EvmAddress = EvmAddress::from_bytes([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x02,
-]);
+pub const MISAKA_WITHDRAW_PRECOMPILE: EvmAddress =
+    EvmAddress::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x02]);
 
 /// Reserved precompile address for `MLDSA87_VERIFY` (PREA design v1.1 §9 / FSL
 /// §4.3). A pure post-quantum signature-verify precompile (ML-DSA-87, FIPS 204):
@@ -90,9 +87,8 @@ pub const MISAKA_WITHDRAW_PRECOMPILE: EvmAddress = EvmAddress::from_bytes([
 /// (u64::MAX on every network); below the fence the handler is not registered, so
 /// a call to this address behaves exactly as a call to an empty account today
 /// (byte-identical execution, genesis/state-root unchanged).
-pub const MISAKA_MLDSA_VERIFY_PRECOMPILE: EvmAddress = EvmAddress::from_bytes([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x03,
-]);
+pub const MISAKA_MLDSA_VERIFY_PRECOMPILE: EvmAddress =
+    EvmAddress::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF0, 0x03]);
 
 /// The EVM genesis state root — the `parent_state_root` of the first EVM block.
 /// With no system predeploys this is the canonical empty Merkle-Patricia-Trie
@@ -100,8 +96,8 @@ pub const MISAKA_MLDSA_VERIFY_PRECOMPILE: EvmAddress = EvmAddress::from_bytes([
 /// asserts an empty block reproduces it. When the WMISAKA predeploy lands
 /// (design §19.3, P5+) this becomes the post-predeploy state root.
 pub const EVM_GENESIS_STATE_ROOT: EvmH256 = EvmH256::from_bytes([
-    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b,
-    0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b, 0x99,
+    0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
 ]);
 
 // --- Domain separators (design v0.4 §4.1). Frozen once testnet activates. ---
@@ -422,11 +418,7 @@ pub struct EvmBloom([u8; EVM_BLOOM_SIZE]);
 // (bincode/compact). borsh is handled by the derive above (no array cap).
 impl Serialize for EvmBloom {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if serializer.is_human_readable() {
-            serializer.serialize_str(&self.to_hex())
-        } else {
-            serializer.serialize_bytes(&self.0)
-        }
+        if serializer.is_human_readable() { serializer.serialize_str(&self.to_hex()) } else { serializer.serialize_bytes(&self.0) }
     }
 }
 
@@ -873,7 +865,11 @@ impl MemSizeEstimator for EvmBlockReceipts {
         size_of::<Self>()
             + self.tx_hashes.capacity() * size_of::<EvmH256>()
             + self.receipts.capacity() * size_of::<EvmReceipt>()
-            + self.receipts.iter().map(|r| r.logs.iter().map(|l| l.data.capacity() + l.topics.capacity() * 32).sum::<usize>()).sum::<usize>()
+            + self
+                .receipts
+                .iter()
+                .map(|r| r.logs.iter().map(|l| l.data.capacity() + l.topics.capacity() * 32).sum::<usize>())
+                .sum::<usize>()
     }
 }
 
@@ -1295,7 +1291,14 @@ impl FlatAccount {
     /// code bytes via `code_resolver` (empty for an EOA). Used to rebuild a full
     /// snapshot / seed the executor.
     pub fn to_snapshot(&self, address: EvmAddress, code: Vec<u8>) -> EvmAccountSnapshot {
-        EvmAccountSnapshot { address, nonce: self.core.nonce, balance: self.core.balance, code_hash: self.core.code_hash, code, storage: self.storage.clone() }
+        EvmAccountSnapshot {
+            address,
+            nonce: self.core.nonce,
+            balance: self.core.balance,
+            code_hash: self.core.code_hash,
+            code,
+            storage: self.storage.clone(),
+        }
     }
 }
 
@@ -1681,7 +1684,11 @@ mod tests {
                 address: EvmAddress::from_bytes([0xAA; EVM_ADDRESS_SIZE]),
                 before: None, // created
                 after: Some(AccountCore { nonce: 1, balance: EvmU256::from(1000u64), code_hash: EvmH256::from_bytes([3u8; 32]) }),
-                storage_changes: vec![StorageChange { slot: EvmU256::from(0u64), before: EvmU256::from(0u64), after: EvmU256::from(42u64) }],
+                storage_changes: vec![StorageChange {
+                    slot: EvmU256::from(0u64),
+                    before: EvmU256::from(0u64),
+                    after: EvmU256::from(42u64),
+                }],
             }],
         };
         let bytes = borsh::to_vec(&diff).unwrap();

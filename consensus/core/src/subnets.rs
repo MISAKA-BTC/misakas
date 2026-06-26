@@ -89,9 +89,7 @@ impl SubnetworkId {
     /// `is_builtin()` (neither coinbase nor the zero-gas registry subnetwork).
     #[inline]
     pub fn is_evm_overlay(&self) -> bool {
-        *self == SUBNETWORK_ID_EVM_DEPOSIT
-            || *self == SUBNETWORK_ID_EVM_WITHDRAW_CLAIM
-            || *self == SUBNETWORK_ID_EVM_ADMIN
+        *self == SUBNETWORK_ID_EVM_DEPOSIT || *self == SUBNETWORK_ID_EVM_WITHDRAW_CLAIM || *self == SUBNETWORK_ID_EVM_ADMIN
     }
 }
 

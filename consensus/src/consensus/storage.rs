@@ -8,20 +8,20 @@ use crate::{
         daa::DbDaaStore,
         depth::DbDepthStore,
         dns_state::DbDnsStateStore,
-        evm::{
-            DbEvmBlockHashMapStore, DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore,
-            DbEvmBlockStateRootStore, DbEvmCodeStore, DbEvmFlatAccountStore, DbEvmLatestStatePtrStore, DbEvmRawTxStore,
-            DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, DbEvmStateStore,
-            DbEvmTraceReplayStore, DbEvmTxIndexStore,
-        },
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
+        evm::{
+            DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCodeStore, DbEvmFlatAccountStore,
+            DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore, DbEvmRawTxStore,
+            DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, DbEvmStateStore, DbEvmTraceReplayStore,
+            DbEvmTxIndexStore,
+        },
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
         headers_selected_tip::DbHeadersSelectedTipStore,
         past_pruning_points::DbPastPruningPointsStore,
-        pruning_overlay_snapshot::DbPruningPointOverlaySnapshotStore,
         pruning::DbPruningStore,
         pruning_meta::PruningMetaStores,
+        pruning_overlay_snapshot::DbPruningPointOverlaySnapshotStore,
         pruning_samples::DbPruningSamplesStore,
         reachability::{DbReachabilityStore, ReachabilityData},
         relations::DbRelationsStore,
@@ -324,8 +324,7 @@ impl ConsensusStorage {
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
-        let evm_state_store =
-            Arc::new(DbEvmStateStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
+        let evm_state_store = Arc::new(DbEvmStateStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
         let evm_payload_store = Arc::new(DbEvmPayloadStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -355,8 +354,7 @@ impl ConsensusStorage {
         let evm_log_index_store = Arc::new(DbEvmLogIndexStore::new(db.clone()));
         // §11 trace replay plan: large per-block value (raw tx bytes), so a small
         // untracked cache like the state store.
-        let evm_trace_store =
-            Arc::new(DbEvmTraceReplayStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
+        let evm_trace_store = Arc::new(DbEvmTraceReplayStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
         // §12 archive stores (inert until the diff/checkpoint writer + reconstruction
         // land): large per-block values, so small untracked caches.
         let evm_state_diff_store =

@@ -368,12 +368,8 @@ impl EvmMempool {
     /// account nonces. Senders absent from `state_nonces` (no account yet) are left
     /// untouched (their state nonce is 0 — nothing to prune).
     pub fn prune_below_state_nonce(&mut self, state_nonces: &HashMap<EvmAddress, u64>) {
-        let stale: Vec<EvmH256> = self
-            .txs
-            .values()
-            .filter(|t| state_nonces.get(&t.sender).is_some_and(|&n| t.nonce < n))
-            .map(|t| t.hash)
-            .collect();
+        let stale: Vec<EvmH256> =
+            self.txs.values().filter(|t| state_nonces.get(&t.sender).is_some_and(|&n| t.nonce < n)).map(|t| t.hash).collect();
         for h in stale {
             self.remove(&h);
         }
@@ -412,17 +408,26 @@ impl EvmMempool {
             let is_replacement = self.by_sender_nonce.contains_key(&(tx.sender, tx.nonce));
             if !is_replacement {
                 if tx.nonce < state_nonce {
-                    return Err(EvmMempoolError::Unaffordable { reason: "nonce already accepted (below the canonical state nonce)", hash: tx.hash });
+                    return Err(EvmMempoolError::Unaffordable {
+                        reason: "nonce already accepted (below the canonical state nonce)",
+                        hash: tx.hash,
+                    });
                 }
                 if tx.nonce.saturating_sub(state_nonce) >= EVM_MEMPOOL_MAX_FUTURE_NONCE_GAP {
-                    return Err(EvmMempoolError::Unaffordable { reason: "nonce too far in the future to ever enter the contiguous run", hash: tx.hash });
+                    return Err(EvmMempoolError::Unaffordable {
+                        reason: "nonce too far in the future to ever enter the contiguous run",
+                        hash: tx.hash,
+                    });
                 }
             }
             // Same EIP-1559 up-front gas reservation the selector deducts (value
             // transfers ignored ⇒ lenient: never rejects a tx execution would accept).
             let gas_reservation = (tx.gas_limit as u128).saturating_mul(tx.max_fee_per_gas);
             if balance < gas_reservation {
-                return Err(EvmMempoolError::Unaffordable { reason: "committed balance below the up-front gas reservation", hash: tx.hash });
+                return Err(EvmMempoolError::Unaffordable {
+                    reason: "committed balance below the up-front gas reservation",
+                    hash: tx.hash,
+                });
             }
         }
         self.insert(tx)
@@ -466,24 +471,35 @@ impl EvmMempool {
                 .max_priority_fee_per_gas
                 .saturating_add(existing.max_priority_fee_per_gas.saturating_mul(EVM_MEMPOOL_REPLACEMENT_BUMP_PCT) / 100);
             if tx.max_fee_per_gas < required_fee || tx.max_priority_fee_per_gas < required_tip {
-                return Err(EvmMempoolError::ReplacementUnderpriced { pending_fee: existing.max_fee_per_gas, required_fee, hash: tx.hash });
+                return Err(EvmMempoolError::ReplacementUnderpriced {
+                    pending_fee: existing.max_fee_per_gas,
+                    required_fee,
+                    hash: tx.hash,
+                });
             }
         }
         let is_replacement = existing_hash.is_some();
-        let (replaced_gas, replaced_bytes) =
-            existing_hash.map(|h| (self.txs[&h].gas_limit, self.txs[&h].raw.len())).unwrap_or((0, 0));
+        let (replaced_gas, replaced_bytes) = existing_hash.map(|h| (self.txs[&h].gas_limit, self.txs[&h].raw.len())).unwrap_or((0, 0));
 
         // Per-sender DoS bounds. A replacement reuses its predecessor's slot, so
         // it is not a NEW tx (count) and its gas discounts the predecessor's.
         if !is_replacement {
             let sender_count = self.sender_tx_count(&tx.sender);
             if sender_count >= EVM_MEMPOOL_MAX_TXS_PER_SENDER {
-                return Err(EvmMempoolError::SenderTxLimit { sender: tx.sender, limit: EVM_MEMPOOL_MAX_TXS_PER_SENDER, hash: tx.hash });
+                return Err(EvmMempoolError::SenderTxLimit {
+                    sender: tx.sender,
+                    limit: EVM_MEMPOOL_MAX_TXS_PER_SENDER,
+                    hash: tx.hash,
+                });
             }
         }
         let sender_gas_after = self.sender_declared_gas(&tx.sender).saturating_sub(replaced_gas).saturating_add(tx.gas_limit);
         if sender_gas_after > EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER {
-            return Err(EvmMempoolError::SenderGasLimit { sender: tx.sender, limit: EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER, hash: tx.hash });
+            return Err(EvmMempoolError::SenderGasLimit {
+                sender: tx.sender,
+                limit: EVM_MEMPOOL_MAX_DECLARED_GAS_PER_SENDER,
+                hash: tx.hash,
+            });
         }
 
         // Pool budget: PLAN the evictions (do not mutate) against a pool that
@@ -734,7 +750,16 @@ mod tests {
             pool.by_sender_nonce.insert((sender, nonce), h);
             pool.txs.insert(
                 h,
-                PendingEvmTx { hash: h, sender, nonce, gas_limit: 21_000, max_fee_per_gas: 1, max_priority_fee_per_gas: 0, raw, added_at: 1_000 },
+                PendingEvmTx {
+                    hash: h,
+                    sender,
+                    nonce,
+                    gas_limit: 21_000,
+                    max_fee_per_gas: 1,
+                    max_priority_fee_per_gas: 0,
+                    raw,
+                    added_at: 1_000,
+                },
             );
         }
         pool
@@ -761,10 +786,7 @@ mod tests {
         assert!(!pool.contains(&a0_hash));
 
         // A tx that can never fit a payload is rejected outright.
-        assert!(matches!(
-            pool.insert(tx(0xB, 0, 999, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, 4)),
-            Err(EvmMempoolError::TooLarge { .. })
-        ));
+        assert!(matches!(pool.insert(tx(0xB, 0, 999, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, 4)), Err(EvmMempoolError::TooLarge { .. })));
     }
 
     /// Audit M-08: pending nonce = state nonce + the contiguous pending run.
@@ -824,8 +846,14 @@ mod tests {
             let sender = EvmAddress::from_bytes([(i % 251) as u8; 20]);
             let nonce = (i / 251) as u64;
             let t = PendingEvmTx {
-                hash: h, sender, nonce, gas_limit: 21_000,
-                max_fee_per_gas: 1_000_000, max_priority_fee_per_gas: 0, raw: vec![0u8; 16], added_at: 1_000,
+                hash: h,
+                sender,
+                nonce,
+                gas_limit: 21_000,
+                max_fee_per_gas: 1_000_000,
+                max_priority_fee_per_gas: 0,
+                raw: vec![0u8; 16],
+                added_at: 1_000,
             };
             pool.total_bytes += t.raw.len();
             pool.by_sender_nonce.insert((sender, nonce), h);
@@ -836,15 +864,27 @@ mod tests {
         // Another zero-tip squatter — even with an astronomically higher max_fee —
         // cannot evict, because it could never be SELECTED (effective tip 0).
         let squatter = PendingEvmTx {
-            hash: EvmH256::from_bytes([0xFE; 32]), sender: EvmAddress::from_bytes([0xFE; 20]), nonce: 0,
-            gas_limit: 21_000, max_fee_per_gas: u128::MAX, max_priority_fee_per_gas: 0, raw: vec![0u8; 16], added_at: 1_000,
+            hash: EvmH256::from_bytes([0xFE; 32]),
+            sender: EvmAddress::from_bytes([0xFE; 20]),
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: u128::MAX,
+            max_priority_fee_per_gas: 0,
+            raw: vec![0u8; 16],
+            added_at: 1_000,
         };
         assert!(matches!(pool.insert(squatter), Err(EvmMempoolError::Full { .. })));
 
         // A paying tx (positive effective tip) DOES evict a zero-tip slot and is admitted.
         let payer = PendingEvmTx {
-            hash: EvmH256::from_bytes([0xAB; 32]), sender: EvmAddress::from_bytes([0xFF; 20]), nonce: 0,
-            gas_limit: 21_000, max_fee_per_gas: 1_000_000, max_priority_fee_per_gas: 5, raw: vec![0u8; 16], added_at: 1_000,
+            hash: EvmH256::from_bytes([0xAB; 32]),
+            sender: EvmAddress::from_bytes([0xFF; 20]),
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 1_000_000,
+            max_priority_fee_per_gas: 5,
+            raw: vec![0u8; 16],
+            added_at: 1_000,
         };
         let ph = pool.insert(payer).unwrap();
         assert!(pool.contains(&ph));
@@ -970,7 +1010,10 @@ mod tests {
         // A CHEAPER tx must never replace, no matter how the threshold math saturates.
         assert!(matches!(pool.insert(tx(0xA, 0, near_max - 1, 10, 2)), Err(EvmMempoolError::ReplacementUnderpriced { .. })));
         // Equal fee is also under the (saturated) required threshold.
-        assert!(matches!(pool.insert(tx(0xA, 0, near_max, 10, 3)), Err(EvmMempoolError::Duplicate(_) | EvmMempoolError::ReplacementUnderpriced { .. })));
+        assert!(matches!(
+            pool.insert(tx(0xA, 0, near_max, 10, 3)),
+            Err(EvmMempoolError::Duplicate(_) | EvmMempoolError::ReplacementUnderpriced { .. })
+        ));
     }
 
     #[test]
@@ -1161,21 +1204,25 @@ mod tests {
     fn selection_orders_by_effective_tip_not_max_fee() {
         let mut pool = EvmMempool::new();
         let zero_tip = PendingEvmTx {
-            hash: EvmH256::from_bytes([0xA, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            hash: EvmH256::from_bytes([
+                0xA, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ]),
             sender: EvmAddress::from_bytes([0xA; 20]),
             nonce: 0,
             gas_limit: 21_000,
-            max_fee_per_gas: 1_000, // high ceiling …
+            max_fee_per_gas: 1_000,      // high ceiling …
             max_priority_fee_per_gas: 0, // … but no tip
             raw: vec![0xA1; 10],
             added_at: 1_000,
         };
         let real_tip = PendingEvmTx {
-            hash: EvmH256::from_bytes([0xB, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            hash: EvmH256::from_bytes([
+                0xB, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ]),
             sender: EvmAddress::from_bytes([0xB; 20]),
             nonce: 0,
             gas_limit: 21_000,
-            max_fee_per_gas: 500, // lower ceiling …
+            max_fee_per_gas: 500,          // lower ceiling …
             max_priority_fee_per_gas: 100, // … but a real tip
             raw: vec![0xB2; 10],
             added_at: 1_000,

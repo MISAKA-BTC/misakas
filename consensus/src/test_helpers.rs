@@ -124,10 +124,10 @@ pub fn generate_random_header(rng: &mut SmallRng, parent_amount: usize) -> Heade
         // PR-9.5d / audit L-02: Phase-1 consensus admits only kHeavyHash, so use the
         // canonical algo id (a random byte would self-disqualify under check_algo_id_phase1).
         kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH, // pow_algo_id
-        rng.r#gen(),                 // daa_score
-        rng.r#gen::<u64>().into(),   // blue_work
-        rng.r#gen(),                 // blue_score
-        generate_random_hash64(rng), // PR-9.5e: pruning_point is a BlockHash (Hash64)
+        rng.r#gen(),                                              // daa_score
+        rng.r#gen::<u64>().into(),                                // blue_work
+        rng.r#gen(),                                              // blue_score
+        generate_random_hash64(rng),                              // PR-9.5e: pruning_point is a BlockHash (Hash64)
     )
 }
 

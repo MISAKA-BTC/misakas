@@ -16,18 +16,18 @@ use kaspa_addresses::Address;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
-use kaspa_pq_validator_core::{is_spendable, relay_fee_for_compute_mass, ValidatorKey};
-use kaspa_rpc_core::{api::rpc::RpcApi, RpcTransaction};
+use kaspa_pq_validator_core::{ValidatorKey, is_spendable, relay_fee_for_compute_mass};
+use kaspa_rpc_core::{RpcTransaction, api::rpc::RpcApi};
 use kaspa_txscript::pay_to_address_script;
 use kaspa_wrpc_client::{
-    client::{ConnectOptions, ConnectStrategy},
     KaspaRpcClient, WrpcEncoding,
+    client::{ConnectOptions, ConnectStrategy},
 };
 use serde_json::json;
 
 use crate::keys::KeySource;
 use crate::node::Ctx;
-use crate::{exit, CliError, CliResult, OutputFormat};
+use crate::{CliError, CliResult, OutputFormat, exit};
 
 /// A self funding UTXO already converted to consensus types + its maturity.
 struct Funding {
@@ -65,7 +65,10 @@ async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
         .map_err(|e| CliError::new(exit::CONNECTION, format!("connect {url}: {e} (node up with --rpclisten-borsh?)")))?;
     let server = client.get_server_info().await.map_err(|e| CliError::new(exit::CONNECTION, format!("getServerInfo: {e}")))?;
     if server.network_id.to_string() != ctx.network {
-        return Err(CliError::new(exit::NETWORK_MISMATCH, format!("node is '{}' but --network is '{}'", server.network_id, ctx.network)));
+        return Err(CliError::new(
+            exit::NETWORK_MISMATCH,
+            format!("node is '{}' but --network is '{}'", server.network_id, ctx.network),
+        ));
     }
     if !server.has_utxo_index {
         return Err(CliError::new(exit::GENERIC, "node has no UTXO index (start it with --utxoindex)".to_string()));
@@ -239,10 +242,19 @@ pub async fn consolidate(ctx: &Ctx, ks: &KeySource, max_inputs: usize, dry_run: 
             println!("Address      : {addr}");
             println!("Mode         : {}", if submit { "SUBMIT" } else { "dry-run (no submit; pass --yes to broadcast)" });
             for (i, (n, sum, fee, out, txid)) in planned.iter().enumerate() {
-                println!("  tx#{i}: {n} inputs, {} MSK in -> {} MSK out (fee {} sompi){}",
-                    sompi_to_msk(*sum), sompi_to_msk(*out), fee, txid.as_ref().map(|t| format!("  txid {t}")).unwrap_or_default());
+                println!(
+                    "  tx#{i}: {n} inputs, {} MSK in -> {} MSK out (fee {} sompi){}",
+                    sompi_to_msk(*sum),
+                    sompi_to_msk(*out),
+                    fee,
+                    txid.as_ref().map(|t| format!("  txid {t}")).unwrap_or_default()
+                );
             }
-            println!("Result       : {} tx(s){}", planned.len(), if remaining > 0 { format!(", {remaining} UTXO(s) left as a tail", ) } else { String::new() });
+            println!(
+                "Result       : {} tx(s){}",
+                planned.len(),
+                if remaining > 0 { format!(", {remaining} UTXO(s) left as a tail",) } else { String::new() }
+            );
         }
     }
     let _ = nv.client.disconnect().await;
@@ -288,8 +300,13 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
     if selected.is_empty() || sum < needed {
         return Err(CliError::new(
             exit::GENERIC,
-            format!("insufficient mature funds at {from_addr}: have {} MSK across {} UTXO(s) (cap {MAX_INPUTS_PER_TX}), need {} MSK (amount {} + fee {fee}). Consolidate or lower --amount.",
-                sompi_to_msk(sum), selected.len(), sompi_to_msk(needed), sompi_to_msk(amount_sompi)),
+            format!(
+                "insufficient mature funds at {from_addr}: have {} MSK across {} UTXO(s) (cap {MAX_INPUTS_PER_TX}), need {} MSK (amount {} + fee {fee}). Consolidate or lower --amount.",
+                sompi_to_msk(sum),
+                selected.len(),
+                sompi_to_msk(needed),
+                sompi_to_msk(amount_sompi)
+            ),
         ));
     }
     let fundings: Vec<(TransactionOutpoint, UtxoEntry)> = selected.iter().map(|u| (u.outpoint, u.entry.clone())).collect();
@@ -336,7 +353,10 @@ fn resolve_address(ctx: &Ctx, address: Option<&str>, ks: &KeySource, nv: &NodeVi
         Some(a) => Address::try_from(a).map_err(|e| CliError::new(exit::GENERIC, format!("bad --address: {e}"))),
         None => {
             if ks.key_file.is_none() && !ks.key_stdin {
-                return Err(CliError::new(exit::GENERIC, "pass --address <addr> or a key source (--key-file/--key-stdin)".to_string()));
+                return Err(CliError::new(
+                    exit::GENERIC,
+                    "pass --address <addr> or a key source (--key-file/--key-stdin)".to_string(),
+                ));
             }
             let _ = ctx;
             Ok(ks.load_key()?.funding_address(nv.params.prefix()))

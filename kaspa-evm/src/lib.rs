@@ -28,12 +28,12 @@ pub mod trace;
 pub mod tx;
 pub mod withdraw;
 
-pub use executor::{execute_block_evm, AcceptedTxCandidate, EvmBlockInput};
+pub use executor::{AcceptedTxCandidate, EvmBlockInput, execute_block_evm};
 
-use revm::primitives::{AccountInfo, Address, SpecId, TxKind, U256, KECCAK_EMPTY};
+use revm::primitives::{AccountInfo, Address, KECCAK_EMPTY, SpecId, TxKind, U256};
 use revm::{
-    db::{CacheDB, EmptyDB},
     Database, Evm,
+    db::{CacheDB, EmptyDB},
 };
 
 /// The pinned initial MISAKA EVM fork (design §19.2: London+ baseline that runs
@@ -49,7 +49,10 @@ pub const EVM_SPEC_ID: SpecId = SpecId::SHANGHAI;
 // skip-class suites (kaspa-evm executor tests + consensus `--features evm`
 // integration tests) and re-deciding the F002 residual policy before the new
 // id is frozen. This assert (and pq-ci-guard) makes a silent bump impossible.
-const _: () = assert!(matches!(EVM_SPEC_ID, SpecId::SHANGHAI), "EVM spec bump: re-run supply/skip-class suites and re-decide the F002 residual policy (see comment)");
+const _: () = assert!(
+    matches!(EVM_SPEC_ID, SpecId::SHANGHAI),
+    "EVM spec bump: re-run supply/skip-class suites and re-decide the F002 residual policy (see comment)"
+);
 
 /// The Ethereum empty-trie root `keccak256(rlp(()))` — the EVM genesis state root
 /// (no predeploys). Must equal `kaspa_consensus_core::evm::EVM_GENESIS_STATE_ROOT`.
@@ -202,7 +205,7 @@ mod tests {
         use alloy_eips::eip2718::Encodable2718;
         use alloy_signer::SignerSync;
         use alloy_signer_local::PrivateKeySigner;
-        use revm::primitives::{Bytes, B256};
+        use revm::primitives::{B256, Bytes};
 
         let chain_id = kaspa_consensus_core::evm::EVM_CHAIN_ID;
         let signer = PrivateKeySigner::from_bytes(&B256::from([0x11u8; 32])).unwrap();
