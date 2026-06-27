@@ -25,6 +25,16 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
+use tokio::sync::Semaphore;
+use tokio::time::timeout;
+
+/// Audit P0: bound the public TCP DNS face. Without these limits a slowloris client could
+/// open unbounded connections (one `tokio::spawn` + FD + buffer each) and either never send
+/// the 2-byte length prefix or dribble the body, exhausting tasks/FDs/memory.
+/// Concurrency is capped globally and over-cap connections are dropped immediately (closed)
+/// rather than queued, and every read/write is deadline-bounded.
+const MAX_TCP_CONNS: usize = 512;
+const TCP_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Parser, Debug)]
 #[command(name = "misaka-dnsseeder", version, about = "MISAKA (kaspa-pq) DNS seeder — serves live peer IPs over DNS")]
@@ -239,38 +249,146 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("bind DNS TCP {} failed: {e} (port 53 needs root / cap_net_bind_service)", args.listen));
     info!(
-        "[dnsseeder] authoritative A-record server on udp+tcp://{} (anchors={:?}, ttl={}s, max_answers={})",
-        args.listen, anchors, args.ttl, args.max_answers
+        "[dnsseeder] authoritative A-record server on udp+tcp://{} (anchors={:?}, ttl={}s, max_answers={}, max_tcp_conns={})",
+        args.listen, anchors, args.ttl, args.max_answers, MAX_TCP_CONNS
     );
+    let tcp_sem = Arc::new(Semaphore::new(MAX_TCP_CONNS));
     loop {
-        let (mut stream, _) = match tcp.accept().await {
+        let (stream, _) = match tcp.accept().await {
             Ok(x) => x,
+            Err(_) => continue,
+        };
+        // Bound concurrent TCP handlers. At capacity, drop the connection immediately
+        // (closing it) instead of queueing, so a flood cannot grow the task/FD/memory backlog.
+        let permit = match tcp_sem.clone().try_acquire_owned() {
+            Ok(p) => p,
             Err(_) => continue,
         };
         let peers = peers.clone();
         let (max, ttl) = (args.max_answers, args.ttl);
         tokio::spawn(async move {
-            let mut lenbuf = [0u8; 2];
-            if stream.read_exact(&mut lenbuf).await.is_err() {
-                return;
-            }
-            let len = u16::from_be_bytes(lenbuf) as usize;
-            if len == 0 || len > 4096 {
-                return;
-            }
-            let mut q = vec![0u8; len];
-            if stream.read_exact(&mut q).await.is_err() {
-                return;
-            }
-            let ips = {
-                let g = peers.read().unwrap();
-                pick(&g, max)
-            };
-            if let Some(resp) = build_dns_response(&q, &ips, ttl) {
-                let rlen = (resp.len() as u16).to_be_bytes();
-                let _ = stream.write_all(&rlen).await;
-                let _ = stream.write_all(&resp).await;
-            }
+            let _permit = permit; // released when the handler ends (incl. on timeout/error)
+            serve_tcp_conn(stream, &peers, max, ttl, TCP_IO_TIMEOUT).await;
         });
+    }
+}
+
+/// Serve a single length-prefixed TCP DNS query (RFC 1035 §4.2.2). Every read/write is
+/// deadline-bounded by `io_timeout` so a slow/absent peer (slowloris) cannot pin the task,
+/// FD, or buffer: an absent 2-byte length prefix, a dribbled body, or a stalled response
+/// write all abort once the deadline elapses. The body is also capped at 4096 bytes.
+async fn serve_tcp_conn(
+    mut stream: tokio::net::TcpStream,
+    peers: &Arc<RwLock<Vec<Ipv4Addr>>>,
+    max: usize,
+    ttl: u32,
+    io_timeout: Duration,
+) {
+    let mut lenbuf = [0u8; 2];
+    match timeout(io_timeout, stream.read_exact(&mut lenbuf)).await {
+        Ok(Ok(_)) => {}
+        _ => return,
+    }
+    let len = u16::from_be_bytes(lenbuf) as usize;
+    if len == 0 || len > 4096 {
+        return;
+    }
+    let mut q = vec![0u8; len];
+    match timeout(io_timeout, stream.read_exact(&mut q)).await {
+        Ok(Ok(_)) => {}
+        _ => return,
+    }
+    let ips = {
+        let g = peers.read().unwrap();
+        pick(&g, max)
+    };
+    if let Some(resp) = build_dns_response(&q, &ips, ttl) {
+        let rlen = (resp.len() as u16).to_be_bytes();
+        let _ = timeout(io_timeout, async {
+            stream.write_all(&rlen).await?;
+            stream.write_all(&resp).await
+        })
+        .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::SocketAddr;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::task::JoinHandle;
+
+    // A minimal valid DNS A query for the single label "a".
+    fn sample_a_query() -> Vec<u8> {
+        let mut q = vec![
+            0x12, 0x34, // id
+            0x01, 0x00, // flags (RD)
+            0x00, 0x01, // qdcount = 1
+            0x00, 0x00, // ancount
+            0x00, 0x00, // nscount
+            0x00, 0x00, // arcount
+        ];
+        q.extend_from_slice(&[0x01, b'a', 0x00]); // qname "a"
+        q.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]); // qtype=A, qclass=IN
+        q
+    }
+
+    // Accept exactly one connection and serve it with the given short io_timeout.
+    async fn spawn_one(io_timeout: Duration) -> (SocketAddr, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let peers = Arc::new(RwLock::new(vec![Ipv4Addr::new(1, 2, 3, 4)]));
+        let handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            serve_tcp_conn(stream, &peers, 8, 30, io_timeout).await;
+        });
+        (addr, handle)
+    }
+
+    // Audit P0 regression: a slowloris peer that connects and never sends the 2-byte length
+    // prefix must NOT pin the handler — it must abort once `io_timeout` elapses.
+    #[tokio::test]
+    async fn tcp_slowloris_absent_length_is_dropped() {
+        let (addr, handle) = spawn_one(Duration::from_millis(200)).await;
+        let _client = TcpStream::connect(addr).await.unwrap(); // send nothing, hold open
+        // If the read deadline is honored, the handler returns well within this bound.
+        let joined = timeout(Duration::from_secs(2), handle).await;
+        assert!(joined.is_ok(), "handler hung on a peer that sent no length prefix");
+    }
+
+    // A peer that announces an oversize body (> 4096) is dropped without reading it.
+    #[tokio::test]
+    async fn tcp_oversize_length_is_dropped() {
+        let (addr, handle) = spawn_one(Duration::from_millis(200)).await;
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        client.write_all(&5000u16.to_be_bytes()).await.unwrap(); // > 4096
+        let joined = timeout(Duration::from_secs(2), handle).await;
+        assert!(joined.is_ok(), "handler hung on an oversize-length announcement");
+        // Server closed without writing a response.
+        let mut buf = Vec::new();
+        let _ = client.read_to_end(&mut buf).await;
+        assert!(buf.is_empty(), "oversize query should get no response");
+    }
+
+    // A well-formed length-prefixed A query still gets a length-prefixed response.
+    #[tokio::test]
+    async fn tcp_valid_query_gets_response() {
+        let (addr, handle) = spawn_one(Duration::from_secs(5)).await;
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let q = sample_a_query();
+        client.write_all(&(q.len() as u16).to_be_bytes()).await.unwrap();
+        client.write_all(&q).await.unwrap();
+
+        let mut rlen = [0u8; 2];
+        client.read_exact(&mut rlen).await.unwrap();
+        let rlen = u16::from_be_bytes(rlen) as usize;
+        assert!(rlen >= 12, "response shorter than a DNS header");
+        let mut resp = vec![0u8; rlen];
+        client.read_exact(&mut resp).await.unwrap();
+        // ANCOUNT == 1 (one A record for 1.2.3.4) and the RDATA carries the IP.
+        assert_eq!(u16::from_be_bytes([resp[6], resp[7]]), 1, "expected one answer");
+        assert!(resp.windows(4).any(|w| w == [1, 2, 3, 4]), "answer RDATA missing the peer IP");
+        let _ = timeout(Duration::from_secs(2), handle).await;
     }
 }
