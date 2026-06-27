@@ -18,9 +18,18 @@ and `../../docs/evm-differences-from-ethereum.md` for the compat profile.
 
 ## Deploy + interact (Foundry)
 
+> **⚠️ Key-handling security.** These commands take a raw private key. A key passed as an
+> environment variable or on a command line leaks into shell history, the process
+> environment (`/proc/<pid>/environ`), and CI logs. Use a **throwaway key with no real
+> funds** for these examples. For anything holding value, prefer an encrypted keystore
+> (`cast wallet import` / `--account`), a hardware wallet, or a local signer instead of a
+> raw `--private-key`, and never paste a real key into a shared shell.
+
 ```bash
 export RPC=http://<node-host>:8545      # any synced MISAKA node (txs relay to miners)
-export PK=0x<your-private-key>
+# TEST-ONLY throwaway key — do NOT use a key that holds real funds (it leaks to shell history/env).
+# Prefer: cast wallet import deployer --interactive   # then pass --account deployer instead of --private-key
+export PK=0x<your-test-only-private-key>
 cd examples/evm
 
 # ERC-20

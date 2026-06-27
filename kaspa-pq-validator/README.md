@@ -3,7 +3,7 @@
 The **single-host validator sidecar** for kaspa-pq (ADR-0011). A standalone process that
 connects to a co-located `kaspad` over a local `127.0.0.1` wRPC (borsh) endpoint and, once
 its stake bond is active, attests to the selected-chain anchor each epoch — signing with an
-ML-DSA-65 validator key, funding a `StakeAttestationShard` transaction from a UTXO at its
+ML-DSA-87 validator key, funding a `StakeAttestationShard` transaction from a UTXO at its
 own address, and submitting it.
 
 This is the **production-recommended** deployment shape. The *integrated* alternative
@@ -25,7 +25,7 @@ cargo build --release -p kaspa-pq-validator    # target/release/kaspa-pq-validat
 kaspa-pq-validator keygen --out /etc/kaspa-pq/validator.mldsa --network mainnet
 ```
 
-Generates a fresh ML-DSA-65 key, writes the 32-byte seed (hex, mode `0600`), and prints the
+Generates a fresh ML-DSA-87 key, writes the 32-byte seed (hex, mode `0600`), and prints the
 `validator_id` + funding address. **Only the validator key is produced** — per ADR-0011
 key separation, the owner / withdrawal key is created separately (`kaspa-pq` wallet) and
 **must not** live on the validator host.

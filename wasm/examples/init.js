@@ -1,3 +1,8 @@
+// ⚠️ TEST-ONLY EXAMPLE — NOT FOR REAL FUNDS.
+// The mnemonics, seeds, private keys and xprvs generated or printed below are for
+// demonstration only. Never reuse a phrase/key shown here, and never log a real secret:
+// anything printed to a console (or saved to a file/CI log) must be treated as compromised.
+
 
 const fs = require('fs');
 const path = require('path');
