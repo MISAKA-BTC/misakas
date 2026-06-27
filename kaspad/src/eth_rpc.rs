@@ -1103,6 +1103,10 @@ pub struct EthRpcService {
     // Concrete (not `dyn`) so `start` can spawn the §9 newHeads pump on it before
     // handing it to `serve` as the `EthProvider`.
     provider: Arc<NodeEthProvider>,
+    // Shutdown plumbing: `signal_exit` fires the trigger and `start` selects on the
+    // cloned listener inside `serve_with_shutdown`, so the accept loop returns and
+    // the AsyncRuntime can join + stop the service instead of hanging.
+    shutdown: kaspa_utils::triggers::SingleTrigger,
 }
 
 impl EthRpcService {
@@ -1112,7 +1116,11 @@ impl EthRpcService {
         flow_context: Arc<FlowContext>,
         consensus_notifier: Arc<ConsensusNotifier>,
     ) -> Self {
-        Self { addr, provider: Arc::new(NodeEthProvider::new(consensus_manager, flow_context, consensus_notifier)) }
+        Self {
+            addr,
+            provider: Arc::new(NodeEthProvider::new(consensus_manager, flow_context, consensus_notifier)),
+            shutdown: kaspa_utils::triggers::SingleTrigger::default(),
+        }
     }
 }
 
@@ -1128,7 +1136,12 @@ impl AsyncService for EthRpcService {
             // live heads.
             self.provider.clone().spawn_head_pump();
             let provider: Arc<dyn EthProvider> = self.provider.clone();
-            if let Err(e) = kaspa_eth_rpc::serve(self.addr, provider).await {
+            // serve_with_shutdown returns when the accept loop is told to stop
+            // (signal_exit fires the trigger). The bare serve() loops forever, which
+            // wedged graceful shutdown (the AsyncRuntime's try_join_all over service
+            // start() futures hung on this one) and forced a halt.
+            let shutdown = self.shutdown.listener.clone();
+            if let Err(e) = kaspa_eth_rpc::serve_with_shutdown(self.addr, provider, shutdown).await {
                 kaspa_core::warn!("[{ETH_RPC}] server on {} exited: {e}", self.addr);
             }
             Ok(())
@@ -1137,6 +1150,7 @@ impl AsyncService for EthRpcService {
 
     fn signal_exit(self: Arc<Self>) {
         kaspa_core::trace!("sending an exit signal to {}", ETH_RPC);
+        self.shutdown.trigger.trigger();
     }
 
     fn stop(self: Arc<Self>) -> AsyncServiceFuture {

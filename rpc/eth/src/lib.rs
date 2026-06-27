@@ -1535,12 +1535,46 @@ const CONN_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Serve the Ethereum JSON-RPC endpoint on `addr` until the process exits.
+///
+/// Thin wrapper over [`serve_with_shutdown`] with a never-resolving shutdown, for
+/// callers (e.g. [`spawn`]) that run the server for the whole process lifetime.
 pub async fn serve(addr: SocketAddr, provider: Arc<dyn EthProvider>) -> std::io::Result<()> {
+    serve_with_shutdown(addr, provider, std::future::pending::<()>()).await
+}
+
+/// Serve the Ethereum JSON-RPC endpoint on `addr`, stopping the accept loop as
+/// soon as `shutdown` resolves.
+///
+/// This is the shutdown-aware entry point used by the node's `AsyncService` so a
+/// graceful node shutdown does NOT hang: without it the bare `listener.accept()`
+/// loop never returns (no new connection ever arrives), so the AsyncRuntime's
+/// `try_join_all` over the service `start()` futures blocks forever and the node
+/// can only be force-halted.
+///
+/// Scope: this stops the ACCEPT loop only. Connections already spawned (one-shot
+/// HTTP or long-lived WebSocket) are detached and torn down on process exit;
+/// propagating shutdown into in-flight connections (WebSocket close frames + a
+/// bounded drain) is a separate, additive follow-up and is not required to break
+/// the shutdown deadlock.
+pub async fn serve_with_shutdown<F>(addr: SocketAddr, provider: Arc<dyn EthProvider>, shutdown: F) -> std::io::Result<()>
+where
+    F: std::future::Future<Output = ()> + Send,
+{
     let listener = TcpListener::bind(addr).await?;
     kaspa_core::info!("[eth-rpc] Ethereum JSON-RPC listening on http://{addr}");
     let conn_sem = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    tokio::pin!(shutdown);
     loop {
-        let (stream, _peer) = listener.accept().await?;
+        let (stream, _peer) = tokio::select! {
+            // `biased`: when a shutdown is pending AND connections are queued, stop
+            // rather than draining the backlog — the whole point is to exit promptly.
+            biased;
+            _ = &mut shutdown => {
+                kaspa_core::info!("[eth-rpc] shutdown received, stopping accept loop on {addr}");
+                break;
+            }
+            accepted = listener.accept() => accepted?,
+        };
         // At capacity: drop the new connection immediately (no unbounded spawn).
         let Ok(permit) = conn_sem.clone().try_acquire_owned() else {
             drop(stream);
@@ -1559,6 +1593,7 @@ pub async fn serve(addr: SocketAddr, provider: Arc<dyn EthProvider>) -> std::io:
             }
         });
     }
+    Ok(())
 }
 
 /// Spawn the Ethereum JSON-RPC server on a background task. Logs and exits the

@@ -643,6 +643,25 @@ mod tests {
         assert!(r2.next().await.is_err());
     }
 
+    /// Regression for the eth-rpc shutdown deadlock: `serve_with_shutdown` must
+    /// return promptly once its shutdown future resolves, instead of awaiting
+    /// `listener.accept()` forever (the bare loop wedged the AsyncRuntime's
+    /// `try_join_all` over service `start()` futures and forced a node halt).
+    /// Against the pre-fix code this test times out.
+    #[tokio::test]
+    async fn serve_with_shutdown_returns_on_trigger() {
+        let provider: Arc<dyn EthProvider> = Arc::new(MockProvider::new());
+        let stop = kaspa_utils::triggers::SingleTrigger::default();
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server = tokio::spawn(crate::serve_with_shutdown(addr, provider, stop.listener.clone()));
+        // Let it bind + enter the accept loop, then ask it to stop.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        stop.trigger.trigger();
+        let joined = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+        let result = joined.expect("serve_with_shutdown did not return within 5s of shutdown (deadlock regression)");
+        assert!(result.expect("server task panicked").is_ok(), "serve_with_shutdown should return Ok on shutdown");
+    }
+
     /// Minimal [`EthProvider`] for the transport tests. `chain_id` backs the
     /// `eth_chainId` round-trip; `pending` lets a test inject mempool admissions
     /// for the `newPendingTransactions` subscription. Everything else is unused.
