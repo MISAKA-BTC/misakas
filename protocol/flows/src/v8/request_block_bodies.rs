@@ -31,6 +31,9 @@ impl HandleBlockBodyRequests {
         loop {
             let (msg, request_id) = dequeue_with_request_id!(self.incoming_route, Payload::RequestBlockBodies)?;
             let hashes: Vec<_> = msg.try_into()?;
+            if hashes.len() > crate::ibd::MAX_REQUEST_HASHES {
+                return Err(ProtocolError::Other("RequestBlockBodies: number of requested hashes exceeds the limit"));
+            }
             debug!("got request for {} blocks bodies", hashes.len());
             let session = self.ctx.consensus().unguarded_session();
 

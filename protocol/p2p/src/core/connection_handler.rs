@@ -41,8 +41,16 @@ pub enum ConnectionError {
     ProtocolError(#[from] ProtocolError),
 }
 
-/// Maximum P2P decoded gRPC message size to send and receive
-const P2P_MAX_MESSAGE_SIZE: usize = 1024 * 1024 * 1024; // 1GB
+/// Maximum P2P decoded gRPC message size to send and receive.
+///
+/// Audit (network DoS): the previous 1 GiB ceiling (with gzip accepted) gave a malicious
+/// peer ~700 MiB of compression-bomb amplification headroom. The largest LEGITIMATE single
+/// p2p frame is the EVM state snapshot, which the application self-caps at 256 MiB (IBD is
+/// streamed one message per item, so batches never form one giant frame). This transport
+/// cap MUST stay strictly above that 256 MiB app cap or pruned-IBD on EVM-active nets would
+/// hard-error and disconnect; 320 MiB clears it with headroom while removing most of the
+/// gzip-bomb room. Do NOT lower below the 256 MiB EVM-snapshot app cap.
+const P2P_MAX_MESSAGE_SIZE: usize = 320 * 1024 * 1024; // 320 MiB (> 256 MiB EVM-snapshot app cap)
 
 /// Handles Router creation for both server and client-side new connections
 #[derive(Clone)]
