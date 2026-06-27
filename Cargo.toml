@@ -57,6 +57,7 @@ members = [
     "rpc/wrpc/examples/kaspa_pq_send",
     "mining",
     "mining/errors",
+    "protocol/mining",
     "protocol/p2p",
     "protocol/flows",
     "components/addressmanager",

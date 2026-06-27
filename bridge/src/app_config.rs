@@ -86,7 +86,25 @@ where
     }))
 }
 
-/// Deserialize a duration from milliseconds (supports both int and float)
+/// Convert a YAML number to milliseconds, rejecting values that cannot represent a real
+/// duration. Audit P1: the old `i as u64` cast turned a negative like `-1` into `u64::MAX`
+/// (~584 million years), so a typo'd config silently became a near-infinite wait. Reject
+/// negative and non-finite inputs instead of wrapping.
+fn yaml_number_to_ms<E>(n: &serde_yaml::Number) -> Result<u64, E>
+where
+    E: serde::de::Error,
+{
+    if let Some(i) = n.as_i64() {
+        u64::try_from(i).map_err(|_| E::custom("duration must be non-negative"))
+    } else if let Some(u) = n.as_u64() {
+        Ok(u)
+    } else if let Some(f) = n.as_f64() {
+        if f.is_finite() && f >= 0.0 { Ok(f as u64) } else { Err(E::custom("duration must be a finite, non-negative number")) }
+    } else {
+        Err(E::custom("duration must be a number"))
+    }
+}
+
 fn deserialize_duration_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
 where
     D: Deserializer<'de>,
@@ -95,15 +113,7 @@ where
     let value: serde_yaml::Value = Deserialize::deserialize(deserializer)?;
 
     let ms = match value {
-        serde_yaml::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                i as u64
-            } else if let Some(f) = n.as_f64() {
-                f as u64
-            } else {
-                return Err(D::Error::custom("duration must be a number"));
-            }
-        }
+        serde_yaml::Value::Number(n) => yaml_number_to_ms::<D::Error>(&n)?,
         _ => return Err(D::Error::custom("duration must be a number")),
     };
 
@@ -120,15 +130,7 @@ where
 
     if let Some(v) = value {
         let ms = match v {
-            serde_yaml::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    i as u64
-                } else if let Some(f) = n.as_f64() {
-                    f as u64
-                } else {
-                    return Err(D::Error::custom("duration must be a number"));
-                }
-            }
+            serde_yaml::Value::Number(n) => yaml_number_to_ms::<D::Error>(&n)?,
             _ => return Err(D::Error::custom("duration must be a number")),
         };
         Ok(Some(Duration::from_millis(ms)))
@@ -286,5 +288,59 @@ impl BridgeConfig {
     pub(crate) fn to_yaml(&self) -> Result<String, serde_yaml::Error> {
         let yaml = BridgeConfigYaml { global: &self.global, instances: &self.instances };
         serde_yaml::to_string(&yaml)
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct Probe {
+        #[serde(deserialize_with = "deserialize_duration_ms")]
+        d: Duration,
+        #[serde(default, deserialize_with = "deserialize_optional_duration_ms")]
+        od: Option<Duration>,
+    }
+
+    // Audit P1 regression: a negative duration must be rejected, not wrapped to ~u64::MAX.
+    #[test]
+    fn rejects_negative_duration() {
+        assert!(serde_yaml::from_str::<Probe>("d: -1").is_err());
+        assert!(serde_yaml::from_str::<Probe>("d: -1000").is_err());
+    }
+
+    #[test]
+    fn rejects_negative_optional_duration() {
+        assert!(serde_yaml::from_str::<Probe>("d: 10\nod: -5").is_err());
+    }
+
+    #[test]
+    fn accepts_valid_durations() {
+        let v: Probe = serde_yaml::from_str("d: 250\nod: 1000").unwrap();
+        assert_eq!(v.d, Duration::from_millis(250));
+        assert_eq!(v.od, Some(Duration::from_millis(1000)));
+
+        let v0: Probe = serde_yaml::from_str("d: 0").unwrap();
+        assert_eq!(v0.d, Duration::from_millis(0));
+        assert_eq!(v0.od, None);
+    }
+
+    #[test]
+    fn accepts_positive_float_and_large_u64() {
+        // Positive float truncates toward zero (1.5ms -> 1ms), matching the prior int cast.
+        let vf: Probe = serde_yaml::from_str("d: 1.5").unwrap();
+        assert_eq!(vf.d, Duration::from_millis(1));
+        // A value above i64::MAX but within u64 is accepted exactly via the as_u64 branch
+        // (the old lossy float path would have mangled it).
+        let big: Probe = serde_yaml::from_str("d: 18446744073709551615").unwrap();
+        assert_eq!(big.d, Duration::from_millis(u64::MAX));
+    }
+
+    #[test]
+    fn rejects_negative_and_nonfinite_floats() {
+        assert!(serde_yaml::from_str::<Probe>("d: -1.5").is_err());
+        assert!(serde_yaml::from_str::<Probe>("d: .nan").is_err());
+        assert!(serde_yaml::from_str::<Probe>("d: .inf").is_err());
     }
 }

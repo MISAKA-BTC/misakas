@@ -212,6 +212,28 @@ jobs:
         # audit (cargo-deny, installed above). See scripts/pq-ci-guard.sh + deny.toml.
         run: bash scripts/pq-ci-guard.sh
 
+  contracts:
+    name: Solidity contracts (Foundry)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@c7450ba673e133f5ee30098b3b54f444d3a2ca2d # v1.8.0
+        with:
+          version: stable
+
+      # Each contract set ships a reproducible build.sh that installs its EXACT pinned deps
+      # (forge-std v1.9.4 / OpenZeppelin v5.0.2) with the pinned solc and runs `forge test`.
+      # The NFT script additionally re-checks the runtime/creation bytecode keccak against
+      # BUILD.md, so a source or toolchain drift fails CI.
+      - name: pq-account — pinned build + tests (forge-std v1.9.4, solc 0.8.28)
+        run: bash contracts/pq-account/build.sh
+
+      - name: nft — pinned build + tests + bytecode verification (OZ v5.0.2, solc 0.8.28)
+        run: bash contracts/nft/build.sh
+
   check-no-std:
     name: Check no_std
     runs-on: ubuntu-latest

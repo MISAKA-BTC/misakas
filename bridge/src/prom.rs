@@ -337,24 +337,40 @@ fn content_type_for_path(path: &str) -> &'static str {
     }
 }
 
+/// Map a dashboard URL path to a vendored static asset name, rejecting anything that
+/// could escape `bridge/static`.
+///
+/// Security (audit P0): the previous guard only checked `rel.contains("..")`, which an
+/// *absolute* path bypassed. `/static//etc/passwd` strips to `/etc/passwd` (no `..`), and
+/// `Path::join(base, "/etc/passwd")` discards `base`, so the disk fallback below would read
+/// an arbitrary local file. Validate with `Path::components()` and accept only `Normal`
+/// parts: this rejects absolute paths, `..`, `.`, and (on Windows) drive prefixes. No URL
+/// decoding is performed, so percent-encoded separators stay literal and cannot traverse.
+fn safe_static_rel(url_path: &str) -> Option<String> {
+    let rel = match url_path {
+        "/" | "/index.html" => "index.html",
+        "/raw.html" => "raw.html",
+        p => p.strip_prefix("/static/")?,
+    };
+
+    let path = std::path::Path::new(rel);
+    if rel.is_empty()
+        || rel.contains('\\')
+        || path.is_absolute()
+        || path.components().any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(rel.to_string())
+}
+
 fn try_read_static_file(url_path: &str) -> Option<(String, Vec<u8>)> {
     // Files are vendored under bridge/static.
     // URL layout expected by the dashboard:
-    // - / -> index.html
+    // - / and /index.html -> index.html
     // - /raw.html
     // - /static/... -> maps to bridge/static/... (strip leading /static/)
-    let rel = match url_path {
-        "/" => "index.html".to_string(),
-        "/index.html" => "index.html".to_string(),
-        "/raw.html" => "raw.html".to_string(),
-        p if p.starts_with("/static/") => p.trim_start_matches("/static/").to_string(),
-        _ => return None,
-    };
-
-    // Prevent path traversal
-    if rel.contains("..") || rel.contains('\\') {
-        return None;
-    }
+    let rel = safe_static_rel(url_path)?;
 
     // Prefer embedded assets for production/portable binaries.
     // Fall back to reading from disk to keep local development simple.
@@ -364,8 +380,16 @@ fn try_read_static_file(url_path: &str) -> Option<(String, Vec<u8>)> {
         return Some((rel, f.contents().to_vec()));
     }
 
-    let file_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("static").join(&rel);
-    let bytes = std::fs::read(&file_path).ok()?;
+    // Disk fallback (local dev). `rel` is already validated to contain only `Normal`
+    // components; defensively confirm the resolved path still canonicalizes to inside the
+    // static root (guards against symlinks within the static dir).
+    let static_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("static");
+    let resolved = static_root.join(&rel).canonicalize().ok()?;
+    let root = static_root.canonicalize().ok()?;
+    if !resolved.starts_with(&root) {
+        return None;
+    }
+    let bytes = std::fs::read(&resolved).ok()?;
     Some((rel, bytes))
 }
 
@@ -1870,5 +1894,63 @@ min_share_diff: 8192
         let saved = std::fs::read_to_string(&config_path).unwrap();
         assert!(!saved.contains("global:"));
         assert!(saved.contains("instances:"));
+    }
+
+    // Audit P0: static-file path-traversal regression. `safe_static_rel` is the security
+    // boundary for `try_read_static_file`; it must never return a name that escapes the
+    // vendored `bridge/static` root.
+    #[test]
+    fn static_rel_rejects_absolute_traversal() {
+        // `/static//etc/passwd` strips to the absolute `/etc/passwd` (no `..`) — the exact
+        // case the old `contains("..")` guard let through.
+        assert_eq!(safe_static_rel("/static//etc/passwd"), None);
+        assert_eq!(safe_static_rel("/static//root/.ssh/id_rsa"), None);
+    }
+
+    #[test]
+    fn static_rel_rejects_parent_traversal() {
+        assert_eq!(safe_static_rel("/static/../Cargo.toml"), None);
+        assert_eq!(safe_static_rel("/static/../../etc/passwd"), None);
+        assert_eq!(safe_static_rel("/static/sub/../../secret"), None);
+        assert_eq!(safe_static_rel("/static/..\\..\\windows"), None);
+    }
+
+    #[test]
+    fn static_rel_rejects_empty_and_unknown() {
+        assert_eq!(safe_static_rel("/static/"), None);
+        assert_eq!(safe_static_rel("/etc/passwd"), None);
+        assert_eq!(safe_static_rel("/api/config"), None);
+        assert_eq!(safe_static_rel("/../Cargo.toml"), None);
+    }
+
+    #[test]
+    fn static_rel_allows_legitimate_assets() {
+        assert_eq!(safe_static_rel("/").as_deref(), Some("index.html"));
+        assert_eq!(safe_static_rel("/index.html").as_deref(), Some("index.html"));
+        assert_eq!(safe_static_rel("/raw.html").as_deref(), Some("raw.html"));
+        assert_eq!(safe_static_rel("/static/app.js").as_deref(), Some("app.js"));
+        assert_eq!(safe_static_rel("/static/css/style.css").as_deref(), Some("css/style.css"));
+    }
+
+    #[test]
+    fn static_rel_percent_encoding_stays_relative() {
+        // No URL decoding is performed: `%2e%2e`/`%2f` stay literal, so the returned name is
+        // a harmless (nonexistent) relative path — never absolute, never a parent escape.
+        for rel in [safe_static_rel("/static/%2e%2e/secret"), safe_static_rel("/static/%2fetc/passwd")].into_iter().flatten() {
+            let p = std::path::Path::new(&rel);
+            assert!(!p.is_absolute());
+            assert!(p.components().all(|c| matches!(c, std::path::Component::Normal(_))));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_static_traversal_returns_404() {
+        let mode = HttpMode::Instance { instance_id: "0".to_string(), web_bind: "127.0.0.1:0".to_string() };
+        for path in ["/static//etc/passwd", "/static/../Cargo.toml", "/static/../../etc/passwd"] {
+            let req = format!("GET {path} HTTP/1.1\r\n\r\n");
+            let resp = send_request(mode.clone(), &req).await;
+            assert!(resp.contains("404"), "expected 404 for {path}, got: {}", resp.lines().next().unwrap_or(""));
+            assert!(!resp.contains("root:"), "leaked /etc/passwd content for {path}");
+        }
     }
 }
