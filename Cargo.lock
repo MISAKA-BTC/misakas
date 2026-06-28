@@ -1491,9 +1491,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.51"
+version = "4.5.60"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c26d721170e0295f191a69bd9a1f93efcdb0aff38684b61ab5750468972e5f5"
+checksum = "2797f34da339ce31042b27d23607e051786132987f595b02ba4f6a6dffb7030a"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1501,9 +1501,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.51"
+version = "4.5.60"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75835f0c7bf681bfd05abe44e965760fea999a5286c6eb2d59883634fd02011a"
+checksum = "24a241312cea5059b13574bb9b3861cabf758b879c15190b37b6d6fd63ab6876"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1513,9 +1513,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.49"
+version = "4.5.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a0b5487afeab2deb2ff4e03a807ad1a03ac532ff5a2cee5d86884440c7f7671"
+checksum = "a92793da1a46a5f2a02a6f4c46c6496b28c43638adea8306fcb0caa1634f24e5"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -1525,9 +1525,9 @@ dependencies = [
 
 [[package]]
 name = "clap_lex"
-version = "0.7.6"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
+checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cmov"
@@ -1707,7 +1707,7 @@ dependencies = [
  "anes",
  "cast",
  "ciborium",
- "clap 4.5.51",
+ "clap 4.5.60",
  "criterion-plot",
  "is-terminal",
  "itertools 0.10.5",
@@ -4315,7 +4315,7 @@ version = "1.1.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
- "clap 4.5.51",
+ "clap 4.5.60",
  "faster-hex 0.9.0",
  "kaspa-addresses",
  "kaspa-bip32",
@@ -4335,7 +4335,7 @@ dependencies = [
 name = "kaspa-pq-miner"
 version = "1.1.0"
 dependencies = [
- "clap 4.5.51",
+ "clap 4.5.60",
  "kaspa-addresses",
  "kaspa-bip32",
  "kaspa-consensus-core",
@@ -4373,7 +4373,7 @@ version = "1.1.0"
 dependencies = [
  "blake2b_simd",
  "borsh",
- "clap 4.5.51",
+ "clap 4.5.60",
  "kaspa-consensus-core",
  "kaspa-core",
  "kaspa-hashes",
@@ -4386,7 +4386,7 @@ dependencies = [
 name = "kaspa-pq-validator"
 version = "1.1.0"
 dependencies = [
- "clap 4.5.51",
+ "clap 4.5.60",
  "faster-hex 0.9.0",
  "kaspa-addresses",
  "kaspa-consensus-core",
@@ -4513,7 +4513,7 @@ dependencies = [
  "async-trait",
  "blake2",
  "chrono",
- "clap 4.5.51",
+ "clap 4.5.60",
  "dirs",
  "faster-hex 0.1.1",
  "futures-util",
@@ -4560,7 +4560,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "chrono",
- "clap 4.5.51",
+ "clap 4.5.60",
  "criterion",
  "crossbeam-channel",
  "dhat",
@@ -5005,7 +5005,7 @@ name = "kaspa-wrpc-proxy"
 version = "1.1.0"
 dependencies = [
  "async-trait",
- "clap 4.5.51",
+ "clap 4.5.60",
  "kaspa-consensus-core",
  "kaspa-grpc-client",
  "kaspa-rpc-core",
@@ -5107,7 +5107,7 @@ dependencies = [
  "blake2b_simd",
  "borsh",
  "cfg-if 1.0.0",
- "clap 4.5.51",
+ "clap 4.5.60",
  "dhat",
  "dirs",
  "faster-hex 0.9.0",
@@ -5720,7 +5720,7 @@ dependencies = [
  "alloy-signer",
  "alloy-signer-local",
  "alloy-sol-types",
- "clap 4.5.51",
+ "clap 4.5.60",
  "dirs",
  "faster-hex 0.9.0",
  "kaspa-addresses",
@@ -5744,7 +5744,7 @@ dependencies = [
 name = "misaka-dnsseeder"
 version = "1.1.0"
 dependencies = [
- "clap 4.5.51",
+ "clap 4.5.60",
  "kaspa-consensus-core",
  "kaspa-core",
  "kaspa-rpc-core",
@@ -5805,7 +5805,7 @@ dependencies = [
 name = "misaminer"
 version = "1.0.0"
 dependencies = [
- "clap 4.5.51",
+ "clap 4.5.60",
  "kaspa-addresses",
  "kaspa-bip32",
  "kaspa-consensus-core",
@@ -7163,7 +7163,7 @@ name = "rothschild"
 version = "1.1.0"
 dependencies = [
  "async-channel 2.3.1",
- "clap 4.5.51",
+ "clap 4.5.60",
  "criterion",
  "faster-hex 0.9.0",
  "itertools 0.13.0",
@@ -7743,7 +7743,7 @@ version = "1.1.0"
 dependencies = [
  "async-channel 2.3.1",
  "cfg-if 1.0.0",
- "clap 4.5.51",
+ "clap 4.5.60",
  "dhat",
  "faster-hex 0.9.0",
  "flate2",
