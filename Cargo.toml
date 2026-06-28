@@ -187,7 +187,7 @@ ctrlc = "3.4.1"
 crypto_box = { version = "0.9.1", features = ["chacha20"] }
 dashmap = "6.0.1"
 derive_builder = "0.20.0"
-derive_more = "0.99.17"
+derive_more = "2.1.1"
 # derive_more = { version = "1.0.0", features = ["full"] }
 dhat = "0.3.2"
 dirs = "5.0.1"

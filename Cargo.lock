@@ -1616,12 +1616,6 @@ checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "convert_case"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
-
-[[package]]
-name = "convert_case"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb4a24b1aaf0fd0ce8b45161144d6f42cd91677fd5940fd431183eb023b3a2b8"
@@ -2031,19 +2025,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4abae7035bf79b9877b779505d8cf3749285b80c43941eda66604841889451dc"
 dependencies = [
  "derive_builder_core",
- "syn 2.0.110",
-]
-
-[[package]]
-name = "derive_more"
-version = "0.99.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f33878137e4dafd7fa914ad4e259e18a4e8e532b9617a2d0150262bf53abfce"
-dependencies = [
- "convert_case 0.4.0",
- "proc-macro2",
- "quote",
- "rustc_version 0.4.1",
  "syn 2.0.110",
 ]
 
@@ -3721,7 +3702,7 @@ version = "1.1.0"
 dependencies = [
  "async-channel 2.3.1",
  "cfg-if 1.0.0",
- "derive_more 0.99.18",
+ "derive_more 2.1.1",
  "futures",
  "kaspa-consensus-core",
  "kaspa-core",
@@ -3873,7 +3854,7 @@ dependencies = [
  "alloy-trie",
  "borsh",
  "criterion",
- "derive_more 1.0.0",
+ "derive_more 2.1.1",
  "faster-hex 0.9.0",
  "kaspa-consensus-core",
  "kaspa-grpc-client",
@@ -4025,7 +4006,7 @@ version = "1.1.0"
 dependencies = [
  "async-channel 2.3.1",
  "async-trait",
- "derive_more 0.99.18",
+ "derive_more 2.1.1",
  "futures",
  "kaspa-consensus-core",
  "kaspa-hashes",
@@ -4044,7 +4025,7 @@ version = "1.1.0"
 dependencies = [
  "async-channel 2.3.1",
  "async-trait",
- "derive_more 0.99.18",
+ "derive_more 2.1.1",
  "futures",
  "kaspa-consensus",
  "kaspa-consensus-core",
@@ -4170,7 +4151,7 @@ dependencies = [
  "async-trait",
  "borsh",
  "criterion",
- "derive_more 0.99.18",
+ "derive_more 2.1.1",
  "futures",
  "futures-util",
  "indexmap 2.14.0",
@@ -4428,7 +4409,7 @@ dependencies = [
  "async-trait",
  "borsh",
  "cfg-if 1.0.0",
- "derive_more 0.99.18",
+ "derive_more 2.1.1",
  "downcast",
  "faster-hex 0.9.0",
  "hex",
