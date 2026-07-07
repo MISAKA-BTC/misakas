@@ -469,6 +469,12 @@ jobs:
         run: |
           # Run build script for musl toolchain
           source musl-toolchain/build.sh
+          # build.sh cd's into $GITHUB_WORKSPACE/musl-toolchain and does not cd back;
+          # since it is sourced, that cwd persists here. Return to the workspace root so
+          # the relative `test -x target/...` below resolves against the real target dir
+          # (mirrors deploy.yaml). Without this, the misaka bin check fails even though
+          # both cargo builds succeed.
+          cd $GITHUB_WORKSPACE
           # Build bridge with allow-multiple-definition flag to handle mimalloc conflicts with libstdc++ in musl builds
           # This flag is only needed for kaspa-stratum-bridge due to its dual mimalloc dependency structure
           export RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,--allow-multiple-definition"
