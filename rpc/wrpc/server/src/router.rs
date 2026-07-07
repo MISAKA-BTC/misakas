@@ -79,6 +79,7 @@ impl Router {
                 SubmitEvmDepositClaim,
                 GetValidatorStatus,
                 GetValidatorAttestationTarget,
+                GetValidatorAttestationTargets,
                 GetStakeBond,
                 GetStakeBonds,
                 ResolveFinalityConflict,

@@ -162,6 +162,9 @@ pub enum RpcApiOps {
     GetAttestationQualityDeficits = 161,
     /// kaspa-pq: a paged, filtered enumeration of the stake-bond registry (owner recovery of bond outpoints)
     GetStakeBonds = 162,
+    /// kaspa-pq DNS v3 (batch): every ready attestation target from an epoch so an external
+    /// validator that fell behind can catch up multiple epochs per poll
+    GetValidatorAttestationTargets = 163,
 }
 
 impl RpcApiOps {
