@@ -2220,6 +2220,154 @@ impl Deserializer for GetStakeBondResponse {
     }
 }
 
+// kaspa-pq: getStakeBonds — a paged, filtered enumeration of the StakeBonds
+// overlay store. The store is outpoint-keyed with no owner index, so the node
+// does a full scan + in-memory filter; the request is always bounded by `limit`
+// and walked with an outpoint `cursor`, so an owner can recover the outpoint(s)
+// of bonds they funded (the only key `StakeUnbondRequest` binds to) without ever
+// listing the whole set unbounded.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetStakeBondsRequest {
+    /// Restrict to bonds owned by this `owner_pubkey_hash` (Hash64 hex); `None` = any owner.
+    pub owner_pubkey_hash: Option<String>,
+    /// Restrict to bonds whose effective status is in this set. Each entry is one
+    /// of "pending" / "active" / "unbonding" / "slashed" (case-insensitive).
+    /// `None`/empty = any status.
+    pub status_in: Option<Vec<String>>,
+    /// Return only bonds ordered strictly after this outpoint ("txid_hex:index",
+    /// exclusive). Pass a previous response's `next_cursor` to page.
+    pub cursor: Option<String>,
+    /// Max entries to return; `0` selects the server default and values above the
+    /// server cap are clamped.
+    pub limit: u32,
+    /// Point-of-view DAA score for the effective-status filter/report. `None`
+    /// uses the live sink. Pin it to page 1's `pov_daa_score` when walking a
+    /// `status_in`-filtered result across pages so the effective-status set is a
+    /// consistent snapshot (otherwise a bond whose status changes mid-walk can be
+    /// skipped). Status is a read-only view, so this never affects consensus.
+    pub pov_daa_score: Option<u64>,
+}
+
+impl Serializer for GetStakeBondsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(Option<String>, &self.owner_pubkey_hash, writer)?;
+        store!(Option<Vec<String>>, &self.status_in, writer)?;
+        store!(Option<String>, &self.cursor, writer)?;
+        store!(u32, &self.limit, writer)?;
+        store!(Option<u64>, &self.pov_daa_score, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetStakeBondsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let owner_pubkey_hash = load!(Option<String>, reader)?;
+        let status_in = load!(Option<Vec<String>>, reader)?;
+        let cursor = load!(Option<String>, reader)?;
+        let limit = load!(u32, reader)?;
+        let pov_daa_score = load!(Option<u64>, reader)?;
+        Ok(Self { owner_pubkey_hash, status_in, cursor, limit, pov_daa_score })
+    }
+}
+
+/// kaspa-pq: one stake-bond entry in a [`GetStakeBondsResponse`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcStakeBondEntry {
+    /// Bond outpoint, "txid_hex:index" — the key a `StakeUnbondRequest` binds to.
+    pub bond_outpoint: String,
+    /// The bond owner (owner_pubkey_hash, Hash64 hex).
+    pub owner_pubkey_hash: String,
+    /// The bond's validator id (validator_pubkey_hash, Hash64 hex).
+    pub validator_id: String,
+    pub amount: u64,
+    pub activation_daa_score: u64,
+    /// Unbonding period (blocks). With `unbond_request_daa_score` a client can
+    /// compute the release height = `unbond_request_daa_score + unbonding_period_blocks`.
+    pub unbonding_period_blocks: u64,
+    /// DAA score at which an unbond request was accepted, or `None`.
+    pub unbond_request_daa_score: Option<u64>,
+    /// Stored bond status ("pending"/"active"/"unbonding"/"slashed").
+    pub stored_status: String,
+    /// Effective status at `pov_daa_score` (the sink), matching GetStakeBond.
+    pub effective_status: String,
+}
+
+impl Serializer for RpcStakeBondEntry {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond_outpoint, writer)?;
+        store!(String, &self.owner_pubkey_hash, writer)?;
+        store!(String, &self.validator_id, writer)?;
+        store!(u64, &self.amount, writer)?;
+        store!(u64, &self.activation_daa_score, writer)?;
+        store!(u64, &self.unbonding_period_blocks, writer)?;
+        store!(Option<u64>, &self.unbond_request_daa_score, writer)?;
+        store!(String, &self.stored_status, writer)?;
+        store!(String, &self.effective_status, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcStakeBondEntry {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let bond_outpoint = load!(String, reader)?;
+        let owner_pubkey_hash = load!(String, reader)?;
+        let validator_id = load!(String, reader)?;
+        let amount = load!(u64, reader)?;
+        let activation_daa_score = load!(u64, reader)?;
+        let unbonding_period_blocks = load!(u64, reader)?;
+        let unbond_request_daa_score = load!(Option<u64>, reader)?;
+        let stored_status = load!(String, reader)?;
+        let effective_status = load!(String, reader)?;
+        Ok(Self {
+            bond_outpoint,
+            owner_pubkey_hash,
+            validator_id,
+            amount,
+            activation_daa_score,
+            unbonding_period_blocks,
+            unbond_request_daa_score,
+            stored_status,
+            effective_status,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetStakeBondsResponse {
+    pub bonds: Vec<RpcStakeBondEntry>,
+    /// Pass as the next request's `cursor` to page; `None` on the last page.
+    pub next_cursor: Option<String>,
+    /// Sink DAA score the effective statuses were evaluated at.
+    pub pov_daa_score: u64,
+}
+
+impl Serializer for GetStakeBondsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        serialize!(Vec<RpcStakeBondEntry>, &self.bonds, writer)?;
+        store!(Option<String>, &self.next_cursor, writer)?;
+        store!(u64, &self.pov_daa_score, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetStakeBondsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let bonds = deserialize!(Vec<RpcStakeBondEntry>, reader)?;
+        let next_cursor = load!(Option<String>, reader)?;
+        let pov_daa_score = load!(u64, reader)?;
+        Ok(Self { bonds, next_cursor, pov_daa_score })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetUtxosByAddressesRequest {

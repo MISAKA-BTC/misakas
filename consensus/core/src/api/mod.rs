@@ -13,8 +13,8 @@ use crate::{
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, MandatoryAttestationDeficit, StakeBondRecord,
-        ValidatorAttestationTarget,
+        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, MandatoryAttestationDeficit, StakeBondPage, StakeBondQuery,
+        StakeBondRecord, ValidatorAttestationTarget,
     },
     errors::{
         block::{BlockProcessResult, RuleError},
@@ -207,6 +207,16 @@ pub trait ConsensusApi: Send + Sync {
     /// keeps non-overlay ConsensusApi impls (mocks/tests) trivially correct.
     fn get_stake_bond(&self, _bond_outpoint: TransactionOutpoint) -> Option<StakeBondRecord> {
         None
+    }
+
+    /// kaspa-pq: a paged, filtered enumeration of the `StakeBonds` overlay store,
+    /// backing the `GetStakeBonds` RPC. Lets a bond owner recover the outpoint(s)
+    /// of bonds they funded — the key a `StakeUnbondRequest` binds to — since the
+    /// store is outpoint-keyed with no owner index (the owner filter is a full
+    /// scan). Returns an empty page when the DNS overlay is not configured.
+    /// Default keeps non-overlay ConsensusApi impls (mocks/tests) trivially correct.
+    fn get_stake_bonds(&self, _query: StakeBondQuery) -> StakeBondPage {
+        StakeBondPage::default()
     }
 
     /// kaspa-pq Phase 11 (ADR-0010/0017): the active validator set for the current epoch

@@ -532,6 +532,23 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetStakeBondResponse::default())
     }
 
+    /// kaspa-pq: a paged, filtered enumeration of stake bonds (see
+    /// `GetStakeBondsRequest`). Lets a bond owner recover the outpoint(s) of the
+    /// bonds they funded — the key a `StakeUnbondRequest` binds to.
+    async fn get_stake_bonds(&self, request: GetStakeBondsRequest) -> RpcResult<GetStakeBondsResponse> {
+        self.get_stake_bonds_call(None, request).await
+    }
+    /// Default returns an empty page, so non-server `RpcApi` impls inherit a no-op;
+    /// the node's core service overrides it.
+    async fn get_stake_bonds_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetStakeBondsRequest,
+    ) -> RpcResult<GetStakeBondsResponse> {
+        let _ = (connection, request);
+        Ok(GetStakeBondsResponse::default())
+    }
+
     /// Bans the given ip.
     async fn ban(&self, ip: RpcIpAddress) -> RpcResult<()> {
         self.ban_call(None, BanRequest::new(ip)).await?;

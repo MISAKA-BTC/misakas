@@ -566,6 +566,46 @@ pub struct StakeBondRecord {
 /// estimate is unused for eviction — an empty impl mirrors `UtxoEntry`.
 impl MemSizeEstimator for StakeBondRecord {}
 
+/// kaspa-pq: filter for [`ConsensusApi::get_stake_bonds`](crate::api::ConsensusApi::get_stake_bonds),
+/// the paged enumeration behind the `GetStakeBonds` RPC. The `StakeBonds` store
+/// is keyed only by outpoint (no secondary owner index), so owner/status
+/// filtering is a full scan + in-memory filter; the result is always bounded by
+/// `limit` and walked with an outpoint `cursor`, so an unbounded set never
+/// crosses the RPC boundary.
+#[derive(Clone, Debug, Default)]
+pub struct StakeBondQuery {
+    /// Restrict to bonds whose `owner_pubkey_hash` equals this value; `None` = any owner.
+    pub owner_pubkey_hash: Option<Hash64>,
+    /// Restrict to bonds whose *effective* status (evaluated at the sink) is in
+    /// this set; `None`/empty = any status.
+    pub status_in: Option<Vec<BondStatus>>,
+    /// Return only bonds ordered strictly after this outpoint (exclusive).
+    /// Bonds are ordered by `(transaction_id, index)`.
+    pub cursor: Option<TransactionOutpoint>,
+    /// Maximum entries to return; `0` selects the server default and values
+    /// above the server cap are clamped.
+    pub limit: usize,
+    /// Point-of-view DAA score for effective-status evaluation; `None` uses the
+    /// live sink. Pin it across a `status_in`-filtered multi-page walk so the
+    /// effective-status set is a consistent snapshot (a mid-walk status change
+    /// would otherwise skip a bond that sorts before the cursor). Resolved in the
+    /// consensus wrapper, then passed to [`paginate_stake_bonds`].
+    pub pov_daa_score: Option<u64>,
+}
+
+/// kaspa-pq: one page of [`ConsensusApi::get_stake_bonds`](crate::api::ConsensusApi::get_stake_bonds).
+/// Records carry their own `bond_outpoint`; `pov_daa_score` is the sink DAA
+/// score the effective status was evaluated at, so the RPC layer can recompute
+/// effective status consistently with the consensus-side status filter without
+/// a second sink lookup.
+#[derive(Clone, Debug, Default)]
+pub struct StakeBondPage {
+    pub bonds: Vec<StakeBondRecord>,
+    /// Outpoint to pass as the next `cursor`, or `None` when this is the last page.
+    pub next_cursor: Option<TransactionOutpoint>,
+    pub pov_daa_score: u64,
+}
+
 /// Per-validator entry inside a [`ValidatorSetSnapshot`]. Carries the
 /// minimal fields fed into [`validator_set_commitment`]:
 /// `validator_id || stake_amount || activation_daa_score`.
@@ -3602,6 +3642,51 @@ pub fn is_bond_active_at(record: &StakeBondRecord, pov_daa_score: u64) -> bool {
     effective_bond_status(record, pov_daa_score) == BondStatus::Active
 }
 
+/// Default page size for [`paginate_stake_bonds`] when a query requests `limit == 0`.
+pub const STAKE_BONDS_DEFAULT_PAGE_LIMIT: usize = 256;
+/// Hard cap on [`paginate_stake_bonds`] page size, so an unbounded scan is never
+/// materialized on the RPC wire.
+pub const STAKE_BONDS_MAX_PAGE_LIMIT: usize = 1000;
+
+/// kaspa-pq: apply a [`StakeBondQuery`] to a full set of bond records — the pure
+/// core of [`ConsensusApi::get_stake_bonds`](crate::api::ConsensusApi::get_stake_bonds).
+/// Owner and effective-status filters, deterministic ordering by
+/// `(transaction_id, index)`, an exclusive `cursor`, and `limit` (0 → default,
+/// clamped to [`STAKE_BONDS_MAX_PAGE_LIMIT`]) are all applied here, so the
+/// store-scanning wrapper stays trivial and this logic is unit-testable.
+/// `next_cursor` is `Some` iff at least one further match exists past the page.
+pub fn paginate_stake_bonds(records: Vec<StakeBondRecord>, query: &StakeBondQuery, pov_daa_score: u64) -> StakeBondPage {
+    let limit = if query.limit == 0 { STAKE_BONDS_DEFAULT_PAGE_LIMIT } else { query.limit.min(STAKE_BONDS_MAX_PAGE_LIMIT) };
+
+    let mut matching: Vec<StakeBondRecord> = records
+        .into_iter()
+        .filter(|rec| match query.owner_pubkey_hash {
+            Some(owner) => rec.owner_pubkey_hash == owner,
+            None => true,
+        })
+        .filter(|rec| match &query.status_in {
+            Some(statuses) if !statuses.is_empty() => statuses.contains(&effective_bond_status(rec, pov_daa_score)),
+            _ => true,
+        })
+        .collect();
+    // TransactionOutpoint is not `Ord`; order by (transaction_id, index) so the
+    // cursor contract is deterministic and stable across nodes.
+    matching.sort_by(|a, b| {
+        (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+    });
+
+    let start = match query.cursor {
+        Some(cursor) => matching.partition_point(|rec| {
+            (rec.bond_outpoint.transaction_id, rec.bond_outpoint.index) <= (cursor.transaction_id, cursor.index)
+        }),
+        None => 0,
+    };
+    let remaining = &matching[start..];
+    let bonds: Vec<StakeBondRecord> = remaining.iter().take(limit).cloned().collect();
+    let next_cursor = if remaining.len() > limit { bonds.last().map(|r| r.bond_outpoint) } else { None };
+    StakeBondPage { bonds, next_cursor, pov_daa_score }
+}
+
 /// A mutation to the `StakeBonds` consensus store derived from accepted
 /// DNS-overlay transactions on the selected chain (ADR-0009 Addendum A.4).
 /// The virtual processor **applies** these for a block joining the selected
@@ -4430,6 +4515,140 @@ mod tests {
             rewarded_keys: vec![(op(seed + 11), 3u64), (op(seed + 10), 2u64)],
             quality_subpool: seed,
         }
+    }
+
+    /// kaspa-pq GetStakeBonds: owner filtering, deterministic outpoint ordering,
+    /// and cursor paging reproduce the full ordered set exactly (no gaps/dupes).
+    #[test]
+    fn paginate_filters_orders_and_pages() {
+        let owner_a = Hash64::from_u64_word(1000);
+        let owner_b = Hash64::from_u64_word(2000);
+        let mut records = Vec::new();
+        for seed in [5u64, 1, 9, 3, 7] {
+            let mut b = mk_bond(seed, seed * 10);
+            b.owner_pubkey_hash = owner_a;
+            records.push(b);
+        }
+        for seed in [2u64, 8] {
+            let mut b = mk_bond(seed, seed * 10);
+            b.owner_pubkey_hash = owner_b;
+            records.push(b);
+        }
+        let pov = 100;
+        let query =
+            |cursor, limit| StakeBondQuery { owner_pubkey_hash: Some(owner_a), status_in: None, cursor, limit, pov_daa_score: None };
+
+        // Owner filter isolates A's 5 bonds; a fits-in-one-page result has no cursor.
+        let all_a = paginate_stake_bonds(records.clone(), &query(None, 0), pov);
+        assert_eq!(all_a.bonds.len(), 5);
+        assert!(all_a.bonds.iter().all(|b| b.owner_pubkey_hash == owner_a));
+        assert!(all_a.next_cursor.is_none());
+        assert_eq!(all_a.pov_daa_score, pov);
+
+        // Deterministic ascending order by (txid, index).
+        let mut sorted = all_a.bonds.clone();
+        sorted.sort_by(|a, b| {
+            (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+        });
+        assert_eq!(all_a.bonds, sorted, "page must be ordered by outpoint");
+
+        // Paging with limit=2 walks the same sequence via next_cursor — exclusive,
+        // so no gaps and no duplicates.
+        let mut paged = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = paginate_stake_bonds(records.clone(), &query(cursor, 2), pov);
+            assert!(page.bonds.len() <= 2);
+            paged.extend(page.bonds.iter().cloned());
+            match page.next_cursor {
+                Some(c) => {
+                    assert_eq!(page.bonds.len(), 2, "a non-final page is full");
+                    cursor = Some(c);
+                }
+                None => break,
+            }
+        }
+        assert_eq!(paged, all_a.bonds, "paged walk must reproduce the full ordered set exactly");
+    }
+
+    /// kaspa-pq GetStakeBonds: the status filter uses *effective* status at the
+    /// pov DAA score (not the stored field); an empty list means "any status".
+    #[test]
+    fn paginate_filters_by_effective_status() {
+        let pov = 50;
+        let mut pending = mk_bond(200, 1); // activation 200 > pov → Pending
+        pending.status = BondStatus::Pending;
+        let active = mk_bond(10, 2); // activation 10 ≤ pov, no unbond/slash → Active
+        let mut unbonding = mk_bond(20, 3);
+        unbonding.unbond_request_daa_score = Some(30); // ≤ pov → Unbonding
+        let mut slashed = mk_bond(31, 4);
+        slashed.slashed_at_daa_score = Some(40); // ≤ pov → Slashed
+        let records = vec![pending, active.clone(), unbonding.clone(), slashed];
+
+        let q = |statuses| StakeBondQuery {
+            owner_pubkey_hash: None,
+            status_in: Some(statuses),
+            cursor: None,
+            limit: 0,
+            pov_daa_score: None,
+        };
+
+        let only_active = paginate_stake_bonds(records.clone(), &q(vec![BondStatus::Active]), pov);
+        assert_eq!(only_active.bonds.len(), 1);
+        assert_eq!(only_active.bonds[0].bond_outpoint, active.bond_outpoint);
+
+        let two = paginate_stake_bonds(records.clone(), &q(vec![BondStatus::Active, BondStatus::Unbonding]), pov);
+        assert_eq!(two.bonds.len(), 2);
+        assert!(two.bonds.iter().any(|b| b.bond_outpoint == unbonding.bond_outpoint));
+
+        // Empty status set is treated as no status filter (all four records).
+        let any = paginate_stake_bonds(records, &q(vec![]), pov);
+        assert_eq!(any.bonds.len(), 4);
+    }
+
+    /// kaspa-pq GetStakeBonds: under a FIXED pov (the pinning the request's
+    /// `pov_daa_score` provides), a `status_in`-filtered multi-page walk is
+    /// gap-free — the property that prevents the mid-walk skip when the sink
+    /// would otherwise advance between page fetches.
+    #[test]
+    fn paginate_status_filtered_walk_is_complete_under_fixed_pov() {
+        let pov = 100;
+        let owner = Hash64::from_u64_word(4242);
+        let mut records = Vec::new();
+        for seed in [5u64, 1, 9, 3, 7] {
+            // activation = seed ≤ pov → Active
+            let mut b = mk_bond(seed, seed);
+            b.owner_pubkey_hash = owner;
+            records.push(b);
+        }
+        for seed in [200u64, 150] {
+            // activation > pov → Pending (must be excluded by status=Active)
+            let mut b = mk_bond(seed, seed);
+            b.owner_pubkey_hash = owner;
+            records.push(b);
+        }
+        let q = |cursor, limit| StakeBondQuery {
+            owner_pubkey_hash: Some(owner),
+            status_in: Some(vec![BondStatus::Active]),
+            cursor,
+            limit,
+            pov_daa_score: Some(pov),
+        };
+
+        let full = paginate_stake_bonds(records.clone(), &q(None, 0), pov);
+        assert_eq!(full.bonds.len(), 5, "5 active bonds match at the fixed pov");
+
+        let mut paged = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = paginate_stake_bonds(records.clone(), &q(cursor, 2), pov);
+            paged.extend(page.bonds.iter().cloned());
+            match page.next_cursor {
+                Some(c) => cursor = Some(c),
+                None => break,
+            }
+        }
+        assert_eq!(paged, full.bonds, "fixed-pov status-filtered walk reproduces the full set with no gap");
     }
 
     /// ADR-0022: the overlay commitment is order-independent (canonicalized) and

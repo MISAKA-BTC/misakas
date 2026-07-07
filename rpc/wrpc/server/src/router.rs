@@ -80,6 +80,7 @@ impl Router {
                 GetValidatorStatus,
                 GetValidatorAttestationTarget,
                 GetStakeBond,
+                GetStakeBonds,
                 ResolveFinalityConflict,
                 Shutdown,
                 SubmitBlock,

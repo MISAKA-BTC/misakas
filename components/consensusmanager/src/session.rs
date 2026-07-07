@@ -9,7 +9,10 @@ use kaspa_consensus_core::{
     block::Block,
     blockstatus::BlockStatus,
     daa_score_timestamp::DaaScoreTimestamp,
-    dns_finality::{ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, StakeBondRecord, ValidatorAttestationTarget},
+    dns_finality::{
+        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, StakeBondPage, StakeBondQuery, StakeBondRecord,
+        ValidatorAttestationTarget,
+    },
     errors::consensus::ConsensusResult,
     header::Header,
     mass::{ContextualMasses, NonContextualMasses},
@@ -269,6 +272,12 @@ impl ConsensusSessionOwned {
     /// (`None` if the overlay is not configured / no such bond exists).
     pub async fn async_get_stake_bond(&self, bond_outpoint: TransactionOutpoint) -> Option<StakeBondRecord> {
         self.clone().spawn_blocking(move |c| c.get_stake_bond(bond_outpoint)).await
+    }
+
+    /// kaspa-pq: a paged, filtered page of stake bonds (behind the `GetStakeBonds`
+    /// RPC). Empty page if the overlay is not configured.
+    pub async fn async_get_stake_bonds(&self, query: StakeBondQuery) -> StakeBondPage {
+        self.clone().spawn_blocking(move |c| c.get_stake_bonds(query)).await
     }
 
     /// kaspa-pq Phase 11 (ADR-0010/0012): the validator committee for the current

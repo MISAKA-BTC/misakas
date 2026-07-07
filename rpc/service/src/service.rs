@@ -118,6 +118,29 @@ fn parse_bond_outpoint(s: &str) -> RpcResult<kaspa_consensus_core::tx::Transacti
     Ok(kaspa_consensus_core::tx::TransactionOutpoint::new(transaction_id, index))
 }
 
+/// kaspa-pq: the lowercase wire string for a stake-bond status, shared by the stake-bond RPCs.
+fn bond_status_str(status: kaspa_consensus_core::dns_finality::BondStatus) -> &'static str {
+    use kaspa_consensus_core::dns_finality::BondStatus;
+    match status {
+        BondStatus::Pending => "pending",
+        BondStatus::Active => "active",
+        BondStatus::Unbonding => "unbonding",
+        BondStatus::Slashed => "slashed",
+    }
+}
+
+/// kaspa-pq: parse a `GetStakeBonds` status filter token (case-insensitive). A malformed value is a client error.
+fn parse_bond_status(s: &str) -> RpcResult<kaspa_consensus_core::dns_finality::BondStatus> {
+    use kaspa_consensus_core::dns_finality::BondStatus;
+    match s.trim().to_ascii_lowercase().as_str() {
+        "pending" => Ok(BondStatus::Pending),
+        "active" => Ok(BondStatus::Active),
+        "unbonding" => Ok(BondStatus::Unbonding),
+        "slashed" => Ok(BondStatus::Slashed),
+        other => Err(RpcError::General(format!("unknown stake-bond status '{other}' (expected pending/active/unbonding/slashed)"))),
+    }
+}
+
 /// kaspa-pq EVM Lane v0.4 (§16): parse a 32-byte EVM tx hash (hex, optional 0x).
 fn parse_evm_tx_hash(s: &str) -> RpcResult<kaspa_hashes::EvmH256> {
     let h = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
@@ -1006,6 +1029,69 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             }
             None => GetStakeBondResponse::default(),
         })
+    }
+
+    async fn get_stake_bonds_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetStakeBondsRequest,
+    ) -> RpcResult<GetStakeBondsResponse> {
+        // kaspa-pq: paged, filtered enumeration of the StakeBonds overlay store.
+        // The store is outpoint-keyed with no owner index, so the owner filter is a
+        // full scan; the page is bounded by `limit` and walked with an outpoint
+        // cursor. Primary use: an owner recovering the outpoint(s) of bonds they
+        // funded (the only key a StakeUnbondRequest binds to).
+        let owner_pubkey_hash = match &request.owner_pubkey_hash {
+            Some(h) => Some(
+                h.parse::<kaspa_hashes::Hash64>()
+                    .map_err(|_| RpcError::General(format!("owner_pubkey_hash '{h}' is not a valid 64-byte Hash64")))?,
+            ),
+            None => None,
+        };
+        let status_in = match &request.status_in {
+            Some(list) => {
+                let mut statuses = Vec::with_capacity(list.len());
+                for s in list {
+                    statuses.push(parse_bond_status(s)?);
+                }
+                Some(statuses)
+            }
+            None => None,
+        };
+        let cursor = match &request.cursor {
+            Some(c) => Some(parse_bond_outpoint(c)?),
+            None => None,
+        };
+        let query = kaspa_consensus_core::dns_finality::StakeBondQuery {
+            owner_pubkey_hash,
+            status_in,
+            cursor,
+            limit: request.limit as usize,
+            pov_daa_score: request.pov_daa_score,
+        };
+
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let page = session.async_get_stake_bonds(query).await;
+        let bonds = page
+            .bonds
+            .into_iter()
+            .map(|r| {
+                let effective = kaspa_consensus_core::dns_finality::effective_bond_status(&r, page.pov_daa_score);
+                RpcStakeBondEntry {
+                    bond_outpoint: format!("{}:{}", r.bond_outpoint.transaction_id, r.bond_outpoint.index),
+                    owner_pubkey_hash: r.owner_pubkey_hash.to_string(),
+                    validator_id: r.validator_pubkey_hash.to_string(),
+                    amount: r.amount,
+                    activation_daa_score: r.activation_daa_score,
+                    unbonding_period_blocks: r.unbonding_period_blocks,
+                    unbond_request_daa_score: r.unbond_request_daa_score,
+                    stored_status: bond_status_str(r.status).to_string(),
+                    effective_status: bond_status_str(effective).to_string(),
+                }
+            })
+            .collect();
+        let next_cursor = page.next_cursor.map(|o| format!("{}:{}", o.transaction_id, o.index));
+        Ok(GetStakeBondsResponse { bonds, next_cursor, pov_daa_score: page.pov_daa_score })
     }
 
     async fn get_virtual_chain_from_block_call(

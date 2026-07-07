@@ -61,9 +61,10 @@ use kaspa_consensus_core::{
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
         ActiveValidatorSet, AttestationQualityDeficit, CanonicalLaggedEpochAnchor, DnsConfirmation,
-        MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, StakeBondRecord,
-        ValidatorAttestationTarget, ValidatorRecord, dns_confirmation_from_state, epoch_meets_quality_floor, is_bond_active_at,
-        ready_epoch_from_tip_blue_score, required_stake_for_quality_floor, stake_attestation_message,
+        MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, StakeBondPage,
+        StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord, dns_confirmation_from_state,
+        epoch_meets_quality_floor, is_bond_active_at, paginate_stake_bonds, ready_epoch_from_tip_blue_score,
+        required_stake_for_quality_floor, stake_attestation_message,
     },
     errors::{
         coinbase::CoinbaseResult,
@@ -1006,6 +1007,29 @@ impl ConsensusApi for Consensus {
         self.config.params.dns_params.as_ref()?;
         let record = self.storage.stake_bonds_store.read().get(&bond_outpoint).ok()?;
         Some((*record).clone())
+    }
+
+    fn get_stake_bonds(&self, query: StakeBondQuery) -> StakeBondPage {
+        // kaspa-pq: paged enumeration of the StakeBonds overlay store behind the
+        // GetStakeBonds RPC. The store is outpoint-keyed with no secondary owner
+        // index, so owner/status filtering is a full scan; `paginate_stake_bonds`
+        // applies the filters, ordering, cursor, and limit (unit-tested there).
+        //
+        // Cost/exposure note: like the sibling `get_mandatory_attestation_deficits`
+        // / `get_attestation_quality_deficits`, this clones the whole store per call
+        // (the page cap bounds the wire response, not the scan). The bond set is
+        // validator-order and economically bounded on mainnet; operators should not
+        // expose unauthenticated wRPC on low-`min_bond` networks, same as those ops.
+        if self.config.params.dns_params.is_none() {
+            return StakeBondPage::default();
+        }
+        // Effective status is evaluated at `pov`: the caller-pinned score if given
+        // (so a status-filtered multi-page walk stays a consistent snapshot),
+        // otherwise the live sink (matching what a validator would attest for).
+        let pov_daa_score = query.pov_daa_score.unwrap_or_else(|| self.get_sink_daa_score_timestamp().daa_score);
+        let records: Vec<StakeBondRecord> =
+            self.storage.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+        paginate_stake_bonds(records, &query, pov_daa_score)
     }
 
     fn get_active_validator_set(&self) -> Option<ActiveValidatorSet> {
