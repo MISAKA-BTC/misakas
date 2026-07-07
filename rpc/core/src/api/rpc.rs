@@ -516,6 +516,26 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetValidatorAttestationTargetResponse::default())
     }
 
+    /// kaspa-pq DNS v3 (batch): every ready attestation target for a bond from `from_epoch`
+    /// (ascending, capped at `limit`), so an external validator that fell behind can sign every
+    /// missed epoch in one poll.
+    async fn get_validator_attestation_targets(
+        &self,
+        request: GetValidatorAttestationTargetsRequest,
+    ) -> RpcResult<GetValidatorAttestationTargetsResponse> {
+        self.get_validator_attestation_targets_call(None, request).await
+    }
+    /// Default returns an empty list, so non-server `RpcApi` impls inherit a no-op; the node's
+    /// core service overrides it.
+    async fn get_validator_attestation_targets_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetValidatorAttestationTargetsRequest,
+    ) -> RpcResult<GetValidatorAttestationTargetsResponse> {
+        let _ = (connection, request);
+        Ok(GetValidatorAttestationTargetsResponse::default())
+    }
+
     /// kaspa-pq Phase 12 (ADR-0011): a stake bond's status at the node's sink, for the
     /// `kaspa-pq-validator` sidecar's bond-lifecycle state machine.
     async fn get_stake_bond(&self, request: GetStakeBondRequest) -> RpcResult<GetStakeBondResponse> {

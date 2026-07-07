@@ -975,6 +975,34 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_validator_attestation_targets_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetValidatorAttestationTargetsRequest,
+    ) -> RpcResult<GetValidatorAttestationTargetsResponse> {
+        // kaspa-pq DNS v3 (batch): every ready attestation target for `request.bond_outpoint`
+        // from `from_epoch` (ascending, capped) so an external validator that fell behind can sign
+        // every missed epoch in one poll. A malformed outpoint is a request error; empty when the
+        // overlay is off or none are ready.
+        const MAX_TARGETS: u32 = 64;
+        let bond_outpoint = parse_bond_outpoint(&request.bond_outpoint)?;
+        let limit = request.limit.min(MAX_TARGETS) as usize;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let targets = session
+            .async_get_validator_attestation_targets(bond_outpoint, request.from_epoch, limit)
+            .await
+            .into_iter()
+            .map(|t| RpcValidatorAttestationTarget {
+                epoch: t.epoch,
+                target_hash: t.target_hash.to_string(),
+                target_daa_score: t.target_daa_score,
+                validator_set_commitment: t.validator_set_commitment.to_string(),
+                message: t.message.to_string(),
+            })
+            .collect();
+        Ok(GetValidatorAttestationTargetsResponse { targets })
+    }
+
     async fn get_stake_bond_call(
         &self,
         _connection: Option<&DynRpcConnection>,

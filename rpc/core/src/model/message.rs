@@ -2155,6 +2155,102 @@ impl Deserializer for GetValidatorAttestationTargetResponse {
     }
 }
 
+// kaspa-pq DNS v3 (batch): getValidatorAttestationTargets. Returns every READY, creditable
+// attestation target for a bond in `[from_epoch, latest_ready]` (ascending, capped at `limit`),
+// so an external `kaspa-pq-validator` that fell behind can sign every missed epoch in one poll
+// instead of one epoch per poll (which lets a briefly-slow validator lag the epoch cadence).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetValidatorAttestationTargetsRequest {
+    /// Stake-bond outpoint, "txid_hex:index" (txid is a 64-byte Hash64 = 128 hex chars).
+    pub bond_outpoint: String,
+    /// Lowest epoch to return (inclusive). Pass `last_attested_epoch + 1` to fetch the backlog.
+    pub from_epoch: u64,
+    /// Max targets to return; `0` yields none. The server also caps this.
+    pub limit: u32,
+}
+
+impl Serializer for GetValidatorAttestationTargetsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond_outpoint, writer)?;
+        store!(u64, &self.from_epoch, writer)?;
+        store!(u32, &self.limit, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetValidatorAttestationTargetsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let bond_outpoint = load!(String, reader)?;
+        let from_epoch = load!(u64, reader)?;
+        let limit = load!(u32, reader)?;
+        Ok(Self { bond_outpoint, from_epoch, limit })
+    }
+}
+
+/// kaspa-pq DNS v3: one ready-to-sign attestation target in a [`GetValidatorAttestationTargetsResponse`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcValidatorAttestationTarget {
+    pub epoch: u64,
+    /// Selected-chain anchor the attestation approves (Hash64, hex).
+    pub target_hash: String,
+    pub target_daa_score: u64,
+    /// Commitment over the active validator set (Hash64, hex).
+    pub validator_set_commitment: String,
+    /// The ready-to-sign 32-byte attestation message digest (hex).
+    pub message: String,
+}
+
+impl Serializer for RpcValidatorAttestationTarget {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.epoch, writer)?;
+        store!(String, &self.target_hash, writer)?;
+        store!(u64, &self.target_daa_score, writer)?;
+        store!(String, &self.validator_set_commitment, writer)?;
+        store!(String, &self.message, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcValidatorAttestationTarget {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let epoch = load!(u64, reader)?;
+        let target_hash = load!(String, reader)?;
+        let target_daa_score = load!(u64, reader)?;
+        let validator_set_commitment = load!(String, reader)?;
+        let message = load!(String, reader)?;
+        Ok(Self { epoch, target_hash, target_daa_score, validator_set_commitment, message })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetValidatorAttestationTargetsResponse {
+    /// Ready targets in ascending epoch order (empty when the overlay is off or none are ready).
+    pub targets: Vec<RpcValidatorAttestationTarget>,
+}
+
+impl Serializer for GetValidatorAttestationTargetsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        serialize!(Vec<RpcValidatorAttestationTarget>, &self.targets, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetValidatorAttestationTargetsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let targets = deserialize!(Vec<RpcValidatorAttestationTarget>, reader)?;
+        Ok(Self { targets })
+    }
+}
+
 // kaspa-pq Phase 12 (ADR-0011): getStakeBond. The sidecar's own stake-bond status,
 // evaluated at the node's sink so it matches what the validator would attest for.
 // `available` is false when the overlay is not configured or no such bond exists.

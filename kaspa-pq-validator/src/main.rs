@@ -20,7 +20,7 @@ use kaspa_consensus_core::dns_finality::{
     DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation, signature_fingerprint,
     single_attestation_shard, stake_attestation_message,
 };
-use kaspa_consensus_core::mass::MassCalculator;
+use kaspa_consensus_core::mass::{MassCalculator, UtxoCell, calc_storage_mass};
 use kaspa_consensus_core::network::{EndpointKind, NetworkId, NetworkType};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, UtxoEntry};
 use kaspa_core::{info, warn};
@@ -28,7 +28,7 @@ use kaspa_pq_validator_core::{
     SignedEpochStore, VALIDATOR_SEED_LEN, ValidatorKey, is_spendable, load_validator_seed, parse_stake_bond_ref, select_funding,
 };
 use kaspa_rpc_core::{
-    GetStakeBondRequest, GetValidatorAttestationTargetRequest, GetValidatorAttestationTargetResponse, RpcError, RpcTransaction,
+    GetStakeBondRequest, GetValidatorAttestationTargetResponse, GetValidatorAttestationTargetsRequest, RpcError, RpcTransaction,
     api::rpc::RpcApi,
 };
 use kaspa_wrpc_client::{
@@ -987,7 +987,15 @@ async fn run_daemon(args: RunArgs) -> Result<(), String> {
     // Load the signing identity if fully configured (key + bond + state DB); else observe.
     // Pin this network's genesis hash (C-01): the sidecar recomputes the canonical
     // attestation digest from it rather than trusting the RPC-supplied message.
-    let attestor = Attestor::load(&args, prefix, coinbase_maturity, &mass_calc, params.genesis.hash.as_byte_slice().to_vec())?;
+    let attestor = Attestor::load(
+        &args,
+        prefix,
+        coinbase_maturity,
+        &mass_calc,
+        params.storage_mass_parameter,
+        params.max_block_mass,
+        params.genesis.hash.as_byte_slice().to_vec(),
+    )?;
     match &attestor {
         Some(a) => info!(
             "[{VALIDATOR}] attesting as validator_id={} (funding {}, fee {} sompi{})",
@@ -1033,6 +1041,14 @@ struct Attestor {
     /// is constant across epochs). Either way it is far above the flat floor, which is below the
     /// kaspa-pq mempool minimum for this payload-heavy tx.
     attestation_fee: u64,
+    /// KIP-0009 storage-mass parameter (`C`) for this network, used to keep the funding chain
+    /// from producing an unminable tx: each chained hop pays the fee, so the change output shrinks
+    /// every epoch, and a small output raises the tx's storage mass. Below a safe fraction of
+    /// [`Self::max_tx_mass`] we re-seed from a fresh confirmed UTXO instead of chaining.
+    storage_mass_parameter: u64,
+    /// Network `max_block_mass` — the ceiling a tx's mass must stay under to be minable. We re-seed
+    /// the funding chain well before the change shrinks enough to push storage mass past this.
+    max_tx_mass: u64,
     /// The last epoch this PROCESS has already attested (submitted a shard for). Lets a short
     /// `--attest-poll-secs` revisit the same canonical-ready epoch cheaply without re-signing or
     /// rebroadcasting (which would burn a funding UTXO each poll). Reset on restart, so the
@@ -1079,6 +1095,8 @@ impl Attestor {
         prefix: Prefix,
         coinbase_maturity: u64,
         mass_calc: &MassCalculator,
+        storage_mass_parameter: u64,
+        max_tx_mass: u64,
         genesis_hash: Vec<u8>,
     ) -> Result<Option<Self>, String> {
         let (Some(key_path), Some(bond_ref), Some(db)) = (&args.validator_key, &args.stake_bond, &args.signed_epoch_db) else {
@@ -1098,6 +1116,8 @@ impl Attestor {
             genesis_hash,
             coinbase_maturity,
             attestation_fee,
+            storage_mass_parameter,
+            max_tx_mass,
             last_attested_epoch: None,
             pending_change: None,
             inflight_spent: HashMap::new(),
@@ -1206,8 +1226,21 @@ impl Attestor {
         // spent) or Unknown (transient RPC error) — never free a still-spent outpoint for the
         // fallback to re-pick. NB RPC-submitted txs are high-priority and never expire, so a
         // time-based prune would be wrong; this is keyed off the spending tx's actual mempool state.
+        // Cost bound (defense-in-depth): with the wRPC `Gone` fix above the set tracks
+        // only the live funding chain and stays tiny, so this serial per-txid scan is
+        // cheap. Should a future regression let it grow, cap the work per attest (the
+        // remainder is revisited next round) and warn, rather than let one attest spend
+        // seconds sweeping the set and fall behind the epoch.
+        const INFLIGHT_SCAN_CAP: usize = 512;
+        if self.inflight_spent.len() > INFLIGHT_SCAN_CAP {
+            warn!(
+                "[{VALIDATOR}] in-flight exclusion set is unexpectedly large ({}); mempool cleanup may be failing — bounding this round's scan to {}",
+                self.inflight_spent.len(),
+                INFLIGHT_SCAN_CAP
+            );
+        }
         let inflight_snapshot: Vec<(TransactionOutpoint, TransactionId)> =
-            self.inflight_spent.iter().map(|(op, txid)| (*op, *txid)).collect();
+            self.inflight_spent.iter().take(INFLIGHT_SCAN_CAP).map(|(op, txid)| (*op, *txid)).collect();
         for (op, spender) in inflight_snapshot {
             if let MempoolStatus::Gone = mempool_status(client, spender).await {
                 self.inflight_spent.remove(&op);
@@ -1256,7 +1289,18 @@ impl Attestor {
         // unconfirmed parent) — NO node fetch. Otherwise page the funding address for a mature
         // confirmed UTXO (bounded scan; never the full 88k set).
         let (funding_outpoint, funding_entry) = match &self.pending_change {
-            Some((op, en)) if en.amount > fee && !self.inflight_spent.contains_key(op) => (*op, en.clone()),
+            // Chain off our own change only while it (a) covers the fee, (b) is not already
+            // in flight, and (c) would produce a tx whose KIP-0009 storage mass stays safely
+            // under the block mass ceiling. The change shrinks by `fee` every epoch, so without
+            // (c) the funding chain eventually builds a tx the mempool rejects with
+            // `storage mass … > …` (~hourly), missing that epoch until the next tick re-seeds.
+            Some((op, en))
+                if en.amount > fee
+                    && !self.inflight_spent.contains_key(op)
+                    && chained_tx_storage_mass_safe(en, fee, self.storage_mass_parameter, self.max_tx_mass) =>
+            {
+                (*op, en.clone())
+            }
             _ => {
                 self.pending_change = None;
                 self.chain_head_txid = None;
@@ -1393,9 +1437,49 @@ async fn top_mature_funding_paged(
 async fn mempool_status(client: &KaspaRpcClient, txid: TransactionId) -> MempoolStatus {
     match client.get_mempool_entry(txid, false, false).await {
         Ok(_) => MempoolStatus::Present,
+        // Structured form (in-process / gRPC): the server's `TransactionNotFound`
+        // (`#[error("Transaction {0} not found")]`, rpc/core/src/error.rs).
         Err(RpcError::TransactionNotFound(_)) => MempoolStatus::Gone,
+        // wRPC stringifies EVERY server error to `RpcSubsystem(e.to_string())`
+        // (rpc/macros/src/wrpc/client.rs), so over a wRPC connection the same
+        // "not found" arrives as `RpcSubsystem("Transaction … not found")` and the
+        // structured arm above never matches. Match the exact `TransactionNotFound`
+        // Display shape (`"Transaction {txid} not found"`, rpc/core/src/error.rs) —
+        // anchored at both ends so a generic transient error that merely contains the
+        // words (e.g. "method not found") is NOT misread as Gone, which would free a
+        // still-spent outpoint for re-selection (double-spend in the mempool). Without
+        // this, a mined funding tx is judged `Unknown`, its outpoint is never dropped
+        // from `inflight_spent`, and the exclusion set grows without bound until the
+        // per-attest cleanup scan outlasts the epoch and every attestation misses.
+        Err(RpcError::RpcSubsystem(msg)) if msg.starts_with("Transaction") && msg.ends_with("not found") => MempoolStatus::Gone,
         Err(_) => MempoolStatus::Unknown,
     }
+}
+
+/// Would a one-input/one-output funding-chain hop that spends `funding` and pays `fee` (leaving
+/// `funding.amount - fee` as the change output) keep its KIP-0009 storage mass safely under the
+/// block mass ceiling? The funding chain pays the fee from its own change every epoch, so the
+/// change output shrinks over time, and a small output raises storage mass — eventually past the
+/// limit, making the tx unminable. Re-seeding from a fresh (large) confirmed UTXO before that keeps
+/// the chain minable. Leaves 20% headroom below `max_tx_mass`.
+///
+/// The estimate MUST match the node's: KIP-0009 storage mass scales with `plurality^2`, and a UTXO's
+/// plurality is derived from its script-pubkey length (`utxo_plurality`), NOT 1. The validator's
+/// funding address is a 69-byte ML-DSA-87 P2PKH, so its plurality is 2 (`ceil((95+69)/100)`), and the
+/// change output reuses that same SPK. We take the input plurality straight from the funding
+/// [`UtxoEntry`] via the same `UtxoCell::from` the node uses, and mirror it onto the change output —
+/// hardcoding plurality 1 underestimates storage mass 4x and re-seeds far too late (the guarded tx is
+/// then the very one the mempool rejects with `storage mass > …`).
+fn chained_tx_storage_mass_safe(funding: &UtxoEntry, fee: u64, storage_mass_parameter: u64, max_tx_mass: u64) -> bool {
+    let out_amount = funding.amount.saturating_sub(fee);
+    if out_amount == 0 {
+        return false;
+    }
+    let input_cell = UtxoCell::from(funding);
+    let output_cell = UtxoCell { plurality: input_cell.plurality, amount: out_amount };
+    let storage_mass = calc_storage_mass(false, std::iter::once(input_cell), std::iter::once(output_cell), storage_mass_parameter)
+        .unwrap_or(u64::MAX);
+    storage_mass <= max_tx_mass.saturating_mul(4) / 5
 }
 
 /// kaspa-pq large-UTXO hardening: find a mature CONFIRMED funding UTXO at the validator address via
@@ -1509,42 +1593,82 @@ async fn run_loop(client: &KaspaRpcClient, args: &RunArgs, mut attestor: Option<
                 return Err(format!("status=Slashed: bond {bond} has been slashed (fatal)"));
             }
             "active" => {
-                // ADR-0017: every active-bond validator attests. Fetch the ready-to-sign
-                // target, then sign + (unless dry-run / observe-only) fund + submit.
+                // ADR-0017: every active-bond validator attests. Fetch a BATCH of ready targets
+                // from the first not-yet-attested epoch so a validator that briefly fell behind
+                // catches up multiple epochs per poll — the singular target advances only one epoch
+                // per poll, so a validator momentarily slower than the epoch cadence could never
+                // catch up (this is the residual-miss issue behind the in-flight-set bug). Mirrors
+                // the in-node ATTESTATION_CATCH_UP_LIMIT batch path.
+                const CATCH_UP_LIMIT: u32 = 16;
+                let from_epoch = attestor.as_ref().and_then(|a| a.last_attested_epoch).map(|e| e + 1).unwrap_or(0);
                 match client
-                    .get_validator_attestation_target(GetValidatorAttestationTargetRequest { bond_outpoint: bond.to_owned() })
+                    .get_validator_attestation_targets(GetValidatorAttestationTargetsRequest {
+                        bond_outpoint: bond.to_owned(),
+                        from_epoch,
+                        limit: CATCH_UP_LIMIT,
+                    })
                     .await
                 {
-                    // kaspa-pq DNS-v3 hardening (Fix A — anchor-deep start-gate): never attest an
-                    // epoch whose canonical lagged anchor predates the bond's activation. The
-                    // consensus §B.4 rule (attestation_reward_eligibility → active_bond_at(..,
-                    // target_daa_score)) makes ANY block that includes such a shard INVALID, so the
-                    // shard would submit-OK but never be mined. On a young chain (e.g. right after a
-                    // re-genesis) the lagged anchor can sit below the bond's activation_daa_score for
-                    // the first epochs; attesting then would stall the whole funding chain (see Fix B).
-                    // Gate until the served target is at/after activation — the exact §B.4 condition.
-                    Ok(t) if t.available && t.target_daa_score < bond_resp.activation_daa_score => {
-                        info!(
-                            "[{VALIDATOR}] status=ActiveBelowActivation epoch={} target_daa={} < activation_daa={} (gating until bond is anchor-deep)",
-                            t.epoch, t.target_daa_score, bond_resp.activation_daa_score
-                        );
+                    Ok(resp) if resp.targets.is_empty() => {
+                        info!("[{VALIDATOR}] status=ActiveIdle (no attestation target available this tick)")
                     }
-                    Ok(t) if t.available => match &mut attestor {
-                        // Already attested this epoch this run: a short --attest-poll-secs revisits the
-                        // same canonical-ready epoch until it advances; skip cheaply (no re-sign / no
-                        // rebroadcast) so fast polling doesn't burn a funding UTXO per round.
-                        Some(a) if a.last_attested_epoch == Some(t.epoch) => {}
-                        Some(a) => match a.attest(client, &t, args.dry_run, server.virtual_daa_score).await {
-                            Ok(()) => a.last_attested_epoch = Some(t.epoch),
-                            Err(e) => warn!("[{VALIDATOR}] attest failed for epoch {}: {e}", t.epoch),
-                        },
-                        None => info!(
-                            "[{VALIDATOR}] status=ActiveEligible epoch={} target={} (observe-only; not signing)",
-                            t.epoch, t.target_hash
-                        ),
-                    },
-                    Ok(_) => info!("[{VALIDATOR}] status=ActiveIdle (no attestation target available this tick)"),
-                    Err(e) => warn!("[{VALIDATOR}] getValidatorAttestationTarget failed: {e}"),
+                    Ok(resp) => {
+                        if let Some(a) = attestor.as_mut() {
+                            // Attest each ready target, then advance the per-process cursor to the
+                            // MAX epoch attested this batch. The transport order is NOT guaranteed
+                            // ascending — the consensus method returns the steady-state (all-
+                            // certified) fallback newest-first — so advancing to the last-processed
+                            // element would let the cursor regress and re-broadcast the whole tail
+                            // every poll (burning funding UTXOs). Skip any epoch at/below the cursor
+                            // (already attested this run or a prior run). Stop the batch on the first
+                            // funding/submit failure (the chain is broken for this round; retry next poll).
+                            let mut cursor = a.last_attested_epoch;
+                            for rt in resp.targets {
+                                // kaspa-pq DNS-v3 hardening (Fix A — anchor-deep start-gate): never
+                                // attest an epoch whose canonical lagged anchor predates the bond's
+                                // activation — such a shard is block-invalid (consensus §B.4) and
+                                // would submit-OK but never mine, stalling the funding chain. Skip
+                                // it and keep scanning other targets.
+                                if rt.target_daa_score < bond_resp.activation_daa_score {
+                                    info!(
+                                        "[{VALIDATOR}] status=ActiveBelowActivation epoch={} target_daa={} < activation_daa={} (gating until anchor-deep)",
+                                        rt.epoch, rt.target_daa_score, bond_resp.activation_daa_score
+                                    );
+                                    continue;
+                                }
+                                // Already attested this run (or earlier); skip cheaply, no re-sign /
+                                // rebroadcast (a short poll revisits the same ready window).
+                                if cursor.is_some_and(|c| rt.epoch <= c) {
+                                    continue;
+                                }
+                                let target = GetValidatorAttestationTargetResponse {
+                                    available: true,
+                                    epoch: rt.epoch,
+                                    target_hash: rt.target_hash,
+                                    target_daa_score: rt.target_daa_score,
+                                    validator_set_commitment: rt.validator_set_commitment,
+                                    message: rt.message,
+                                };
+                                match a.attest(client, &target, args.dry_run, server.virtual_daa_score).await {
+                                    Ok(()) => cursor = Some(cursor.map_or(target.epoch, |c| c.max(target.epoch))),
+                                    Err(e) => {
+                                        warn!("[{VALIDATOR}] attest failed for epoch {}: {e}; stopping this batch", target.epoch);
+                                        break;
+                                    }
+                                }
+                            }
+                            a.last_attested_epoch = cursor;
+                        } else {
+                            let newest = resp.targets.last().expect("non-empty");
+                            info!(
+                                "[{VALIDATOR}] status=ActiveEligible epoch={} target={} ({} ready; observe-only, not signing)",
+                                newest.epoch,
+                                newest.target_hash,
+                                resp.targets.len()
+                            );
+                        }
+                    }
+                    Err(e) => warn!("[{VALIDATOR}] getValidatorAttestationTargets failed: {e}"),
                 }
                 sleep_secs(args.attest_poll_secs).await;
             }
@@ -1662,6 +1786,56 @@ mod tests {
         assert_eq!(prefix_for(NetworkType::Testnet), Prefix::Testnet);
         assert_eq!(prefix_for(NetworkType::Devnet), Prefix::Devnet);
         assert_eq!(prefix_for(NetworkType::Simnet), Prefix::Simnet);
+    }
+
+    #[test]
+    fn storage_mass_guard_uses_real_spk_plurality() {
+        // The funding UTXO + its change are 69-byte ML-DSA-87 P2PKH scripts, whose KIP-0009
+        // plurality is 2 (ceil((95+69)/100)). Storage mass scales with plurality^2, so the re-seed
+        // guard MUST use the SPK's real plurality (via UtxoCell::from, exactly as the node does),
+        // NOT a hardcoded 1 — else it underestimates 4x and re-seeds too late, letting the mempool
+        // reject the very tx it approved.
+        let spk = kaspa_consensus_core::tx::ScriptPublicKey::from_vec(0, vec![0u8; 69]);
+        let entry = |amount| UtxoEntry::new(amount, spk.clone(), 0, false);
+        let storm = 1_000_000_000_000u64; // STORAGE_MASS_PARAMETER (SOMPI_PER_KASPA * 10_000)
+        let max_tx_mass = 500_000u64; // testnet max_block_mass; guard threshold = 4/5 = 400_000
+        let threshold = max_tx_mass * 4 / 5;
+        let fee = 250_000u64;
+
+        // The guard derives plurality from the entry the same way the node's calc_contextual_masses
+        // does — lock it to 2.
+        let funding = entry(1_500_000);
+        let in_cell = UtxoCell::from(&funding);
+        assert_eq!(in_cell.plurality, 2, "69-byte SPK => plurality 2 (node-identical)");
+
+        // At this change size the real (plurality-2) storage mass is over the threshold while the
+        // old buggy plurality-1 estimate is under it — so this point distinguishes the fix from the bug.
+        let out = 1_500_000 - fee;
+        let mass_p2 =
+            calc_storage_mass(false, std::iter::once(in_cell), std::iter::once(UtxoCell { plurality: 2, amount: out }), storm)
+                .unwrap();
+        let mass_p1 = calc_storage_mass(
+            false,
+            std::iter::once(UtxoCell { plurality: 1, amount: 1_500_000 }),
+            std::iter::once(UtxoCell { plurality: 1, amount: out }),
+            storm,
+        )
+        .unwrap();
+        assert!(
+            mass_p1 <= threshold && mass_p2 > threshold,
+            "test point must separate p=1 (safe) from p=2 (unsafe): p1={mass_p1} p2={mass_p2}"
+        );
+
+        // The guard must follow the node (plurality 2) and re-seed here…
+        assert!(
+            !chained_tx_storage_mass_safe(&funding, fee, storm, max_tx_mass),
+            "must re-seed before the node's plurality-2 storage mass exceeds the ceiling"
+        );
+        // …and keep chaining off a large fresh seed.
+        assert!(
+            chained_tx_storage_mass_safe(&entry(1_000_000_000), fee, storm, max_tx_mass),
+            "a large confirmed-UTXO seed is storage-mass-safe"
+        );
     }
 
     #[test]

@@ -160,6 +160,11 @@ pub enum RpcApiOps {
     GetUtxosByAddressPage = 160,
     /// kaspa-pq DNS v3: ready epochs below the StakeScore attestation quality floor
     GetAttestationQualityDeficits = 161,
+    // 162 (GetStakeBonds) is reserved for the open stake-bond list PR; skip it here to avoid a
+    // discriminant collision when both land.
+    /// kaspa-pq DNS v3 (batch): every ready attestation target from an epoch so an external
+    /// validator that fell behind can catch up multiple epochs per poll
+    GetValidatorAttestationTargets = 163,
 }
 
 impl RpcApiOps {
