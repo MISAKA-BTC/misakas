@@ -980,7 +980,14 @@ pub const MAINNET_PARAMS: Params = Params {
     // selects among them (Kaspa-style auto-discovery), connecting on the mainnet
     // default P2P port (26111). The hosts behind these records must run a reachable
     // mainnet node on 26111. `addnode` flags still augment this list.
-    dns_seeders: &["seeder1.misakascan.com", "seeder2.misakascan.com"],
+    dns_seeders: &[
+        "seeder1.misakascan.com",
+        "seeder2.misakascan.com",
+        "seeder3.misakascan.com",
+        "seeder1.misakachain.com",
+        "seeder2.misakachain.com",
+        "seeder3.misakachain.com",
+    ],
     net: NetworkId::new(NetworkType::Mainnet),
     genesis: GENESIS,
     timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
@@ -1062,7 +1069,14 @@ pub const TESTNET_PARAMS: Params = Params {
     // docs/adr/0001-network-isolation.md). Same Kaspa-style auto-discovery as mainnet,
     // but nodes connect on the testnet-10 default P2P port (26211) — so the hosts
     // behind these records must also run a reachable testnet-10 node on 26211.
-    dns_seeders: &["seeder1.misakascan.com", "seeder2.misakascan.com"],
+    dns_seeders: &[
+        "seeder1.misakascan.com",
+        "seeder2.misakascan.com",
+        "seeder3.misakascan.com",
+        "seeder1.misakachain.com",
+        "seeder2.misakachain.com",
+        "seeder3.misakachain.com",
+    ],
     net: NetworkId::with_suffix(NetworkType::Testnet, 10),
     genesis: TESTNET_GENESIS,
     timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
@@ -1244,7 +1258,14 @@ pub const DEVNET_PARAMS: Params = Params {
     // NetworkId::default_p2p_port). Nodes launched WITHOUT `--nodnsseed` resolve these to find
     // peers; the seeders' A records (160.16.131.119 / 95.111.236.186) run devnet nodes on 26611.
     // dns_seeders is NOT a genesis-block input, so the genesis hash is unchanged (no re-genesis).
-    dns_seeders: &["seeder1.misakascan.com", "seeder2.misakascan.com"],
+    dns_seeders: &[
+        "seeder1.misakascan.com",
+        "seeder2.misakascan.com",
+        "seeder3.misakascan.com",
+        "seeder1.misakachain.com",
+        "seeder2.misakachain.com",
+        "seeder3.misakachain.com",
+    ],
     net: NetworkId::new(NetworkType::Devnet),
     genesis: DEVNET_GENESIS,
     timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
