@@ -28,6 +28,7 @@ mod keys;
 mod node;
 #[cfg(feature = "evm-send")]
 mod prea;
+mod setup;
 mod validator_reader;
 mod wallet;
 
@@ -135,6 +136,9 @@ enum Command {
     /// P2P bootstrap visibility (debug): the DNS seeds and the peers they resolve to.
     #[command(subcommand)]
     Bootstrap(BootstrapCmd),
+    /// Guided VPS setup: preflight, node service, status, and Discord registration helpers.
+    #[command(subcommand)]
+    Setup(setup::SetupCmd),
     /// Validator operations — forwarded to the `kaspa-pq-validator` binary with the
     /// global --network-id and --rpc (node wRPC Borsh) injected. Run
     /// `misaka validator --help` for its keygen/bond/run/status/... subcommands.
@@ -633,6 +637,7 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Bootstrap(BootstrapCmd::Seeds) => bootstrap::seeds(ctx.output, &ctx.network),
         Command::Bootstrap(BootstrapCmd::Resolve) => bootstrap::resolve(ctx.output, &ctx.network),
+        Command::Setup(cmd) => setup::run(&ctx, cmd).await,
         Command::Evm(EvmCmd::Balance { address }) => eth::balance(&ctx, &address),
         Command::Evm(EvmCmd::Nonce { address }) => eth::nonce(&ctx, &address),
         Command::Evm(EvmCmd::EstimateGas { from, to, value, data }) => {

@@ -1,0 +1,1248 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MISAKA Setup</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f9;
+      --surface: #ffffff;
+      --surface-2: #f9fbfd;
+      --text: #172033;
+      --muted: #5e6a7e;
+      --line: #d9e0ea;
+      --blue: #1167d8;
+      --green: #147c45;
+      --amber: #aa6400;
+      --red: #b4232f;
+      --ink: #111827;
+      --terminal: #0f172a;
+      --terminal-text: #dbe7ff;
+      --shadow: 0 10px 28px rgba(17, 24, 39, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+    }
+
+    button, input {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 12px;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+      font-weight: 750;
+    }
+
+    button:disabled {
+      opacity: .48;
+      cursor: not-allowed;
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 310px minmax(0, 1fr);
+    }
+
+    .side {
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      font-size: 18px;
+    }
+
+    .mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--ink);
+      color: #fff;
+      font-weight: 900;
+    }
+
+    .lang {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .lang button {
+      border: 0;
+      border-radius: 0;
+      padding: 8px;
+    }
+
+    .lang button.active {
+      background: var(--blue);
+      color: #fff;
+      font-weight: 750;
+    }
+
+    .side-title {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      margin: 0 0 8px;
+    }
+
+    .steps {
+      display: grid;
+      gap: 8px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 26px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      min-width: 0;
+    }
+
+    .dot {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+      background: #8792a4;
+    }
+
+    .step.done .dot { background: var(--green); }
+    .step.active .dot { background: var(--blue); }
+    .step.warn .dot { background: var(--amber); }
+    .step.fail .dot { background: var(--red); }
+
+    .step-title {
+      font-weight: 750;
+      line-height: 1.25;
+    }
+
+    .step-sub {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .pill {
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 800;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: #fff;
+      white-space: nowrap;
+    }
+
+    .pill.done { color: var(--green); border-color: rgba(20, 124, 69, .25); background: #eef9f2; }
+    .pill.active { color: var(--blue); border-color: rgba(17, 103, 216, .25); background: #eef5ff; }
+    .pill.warn { color: var(--amber); border-color: rgba(170, 100, 0, .25); background: #fff6e8; }
+    .pill.fail { color: var(--red); border-color: rgba(180, 35, 47, .25); background: #fff0f1; }
+
+    .control-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .control-list button {
+      width: 100%;
+      text-align: left;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-top: 4px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 22px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+
+    .top {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .muted {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .progress-panel,
+    .status-grid,
+    .terminal-panel,
+    .details-panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .progress-panel {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .next {
+      border-left: 4px solid var(--blue);
+      padding: 10px 12px;
+      background: #f7fbff;
+      border-radius: 8px;
+      font-weight: 750;
+      line-height: 1.45;
+    }
+
+    .bar-wrap {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .bar {
+      height: 12px;
+      border-radius: 999px;
+      background: #e8edf5;
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--blue), #17a267);
+      transition: width .25s ease;
+    }
+
+    .percent {
+      color: var(--muted);
+      font-weight: 800;
+      min-width: 48px;
+      text-align: right;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      overflow: hidden;
+    }
+
+    .metric {
+      padding: 16px;
+      border-right: 1px solid var(--line);
+      min-width: 0;
+    }
+
+    .metric:last-child {
+      border-right: 0;
+    }
+
+    .metric .value {
+      margin-top: 6px;
+      font-size: 18px;
+      font-weight: 850;
+      letter-spacing: 0;
+    }
+
+    .metric-note {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      min-height: 32px;
+    }
+
+    .ok { color: var(--green); }
+    .warn { color: var(--amber); }
+    .bad { color: var(--red); }
+
+    .terminal-panel {
+      overflow: hidden;
+    }
+
+    .panel-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: var(--surface-2);
+    }
+
+    .panel-head strong {
+      font-weight: 800;
+    }
+
+    .panel-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--terminal);
+      color: var(--terminal-text);
+      padding: 14px;
+      min-height: 300px;
+      max-height: 540px;
+      overflow: auto;
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .terminal-panel.collapsed pre {
+      display: none;
+    }
+
+    details.details-panel {
+      padding: 0;
+    }
+
+    details.details-panel summary {
+      cursor: pointer;
+      padding: 12px 14px;
+      color: var(--blue);
+      font-weight: 750;
+    }
+
+    #raw {
+      min-height: 180px;
+      max-height: 360px;
+      border-top: 1px solid var(--line);
+    }
+
+    @media (max-width: 920px) {
+      .app { grid-template-columns: 1fr; }
+      .side { border-right: 0; border-bottom: 1px solid var(--line); }
+    }
+
+    @media (max-width: 680px) {
+      .main { padding: 16px; }
+      .top { display: grid; }
+      .actions { justify-content: stretch; }
+      .actions button { width: 100%; }
+      .status-grid { grid-template-columns: 1fr; }
+      .metric { border-right: 0; border-bottom: 1px solid var(--line); }
+      .metric:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand">
+        <div class="mark">M</div>
+        <div>MISAKA Setup</div>
+      </div>
+
+      <div class="lang" aria-label="Language">
+        <button id="jaBtn" class="active" type="button">日本語</button>
+        <button id="enBtn" type="button">English</button>
+      </div>
+
+      <section>
+        <p class="side-title" data-i18n="stepsTitle">進行状況</p>
+        <div id="steps" class="steps"></div>
+      </section>
+
+      <section>
+        <p class="side-title" data-i18n="actionsTitle">操作</p>
+        <div class="control-list">
+          <button id="btn-check-app" onclick="callApi('/api/bootstrap/status')" data-i18n="btnCheckApp">1. アプリ確認</button>
+          <button id="btn-auto-node" class="primary" onclick="autoNodeJoin()" data-i18n="btnAutoNode">自動でnode参加</button>
+          <button id="btn-auto-stop" onclick="stopAuto()" data-i18n="btnStopAuto">自動実行を止める</button>
+          <button id="btn-prepare" class="primary" onclick="callApi('/api/bootstrap/prepare')" data-i18n="btnPrepare">2. VPS準備</button>
+          <button id="btn-prepare-logs" onclick="startPrepareLogs()" data-i18n="btnPrepareLogs">準備ログを見る</button>
+          <button id="btn-preflight" onclick="callApi('/api/preflight')" data-i18n="btnPreflight">3. VPS確認</button>
+          <button id="btn-node-preview" onclick="callApi('/api/node/dry-run')" data-i18n="btnPreview">4. node設定を確認</button>
+          <button id="btn-node-apply" class="primary" onclick="callApi('/api/node/apply')" data-i18n="btnNodeApply">5. nodeを開始</button>
+          <button id="btn-status" onclick="callApi('/api/status')" data-i18n="btnStatus">6. 同期確認</button>
+          <button id="btn-node-restart" onclick="callApi('/api/node/restart')" data-i18n="btnNodeRestart">node再起動</button>
+          <button id="btn-node-logs" onclick="callApi('/api/logs')" data-i18n="btnNodeLogs">nodeログ</button>
+          <button id="btn-stop" onclick="callApi('/api/stop-setup')" data-i18n="btnFinish">セットアップ画面を終了</button>
+        </div>
+      </section>
+
+      <section>
+        <p class="side-title" data-i18n="validatorTitle">Validator</p>
+        <div class="control-list">
+          <button id="btn-validator-status" onclick="callApi('/api/validator/status')" data-i18n="btnValidatorStatus">7. validator確認</button>
+          <button id="btn-validator-keygen" onclick="callApi('/api/validator/keygen')" data-i18n="btnKeygen">8. キー作成</button>
+          <button id="btn-validator-balance" onclick="callApi('/api/validator/balance')" data-i18n="btnFunding">9. 入金確認</button>
+          <div class="field">
+            <label id="bondAmountLabel" class="label" for="bondAmount" data-i18n="bondAmount">Bond amount</label>
+            <input id="bondAmount" value="10MSK" autocomplete="off">
+          </div>
+          <button id="btn-bond" class="primary" onclick="createBond()" data-i18n="btnBond">10. Bond作成</button>
+          <button id="btn-validator-chain" onclick="callApi('/api/validator/chain-status')" data-i18n="btnValidatorChain">11. validator状態</button>
+          <button id="btn-validator-apply" class="primary" onclick="callApi('/api/validator/service/apply')" data-i18n="btnValidatorApply">12. validator開始</button>
+          <button id="btn-validator-logs" onclick="callApi('/api/validator/logs')" data-i18n="btnValidatorLogs">validatorログ</button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <section class="top">
+        <div>
+          <h1 data-i18n="title">ボタンでMISAKA testnetに参加</h1>
+          <div class="muted" data-i18n="subtitle">VPS準備、node起動、同期確認までをブラウザで進めます。validatorはnode同期後に必要に応じて進めます。</div>
+        </div>
+        <div class="actions">
+          <button id="btn-quick-refresh" onclick="callApi('/api/bootstrap/status')" data-i18n="quickRefresh">更新</button>
+          <button id="btn-quick-auto" class="primary" onclick="autoNodeJoin()" data-i18n="quickAuto">自動開始</button>
+        </div>
+      </section>
+
+      <section class="progress-panel">
+        <div id="hint" class="next">次: アプリ確認を押して、VPSの状態を確認してください。</div>
+        <div class="bar-wrap">
+          <div class="bar" aria-hidden="true"><div id="barFill" class="bar-fill"></div></div>
+          <div id="percent" class="percent">0%</div>
+        </div>
+      </section>
+
+      <section class="status-grid">
+        <div class="metric">
+          <div class="label">Node</div>
+          <div id="node" class="value">-</div>
+          <div id="nodeNote" class="metric-note" data-i18n="nodeNote">まだ確認前です。</div>
+        </div>
+        <div class="metric">
+          <div class="label">Sync</div>
+          <div id="sync" class="value">-</div>
+          <div id="syncNote" class="metric-note" data-i18n="syncNote">node開始後に同期します。</div>
+        </div>
+        <div class="metric">
+          <div class="label">P2P</div>
+          <div id="p2p" class="value">-</div>
+          <div id="p2pNote" class="metric-note" data-i18n="p2pNote">26211/tcp の待受を確認します。</div>
+        </div>
+        <div class="metric">
+          <div class="label">Validator</div>
+          <div id="validator" class="value">-</div>
+          <div id="validatorNote" class="metric-note" data-i18n="validatorNote">node同期後に進めます。</div>
+        </div>
+      </section>
+
+      <section id="terminalPanel" class="terminal-panel">
+        <div class="panel-head">
+          <strong data-i18n="terminalTitle">実行ログ</strong>
+          <div class="panel-actions">
+            <button id="toggleTerminal" type="button" data-i18n="hideLog">ログを閉じる</button>
+            <button id="copyLog" type="button" data-i18n="copyLog">コピー</button>
+          </div>
+        </div>
+        <pre id="log">Ready. Start with "1. Check App".</pre>
+      </section>
+
+      <details class="details-panel">
+        <summary data-i18n="details">詳細JSON</summary>
+        <pre id="raw"></pre>
+      </details>
+    </main>
+  </div>
+
+  <script>
+    const token = "__SETUP_TOKEN__";
+    const logEl = document.getElementById('log');
+    const rawEl = document.getElementById('raw');
+    const hintEl = document.getElementById('hint');
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const barFill = document.getElementById('barFill');
+    const percentEl = document.getElementById('percent');
+    const terminalPanel = document.getElementById('terminalPanel');
+    let prepareLogPoll = null;
+    let busy = false;
+    let autoRunning = false;
+    let autoStopRequested = false;
+    let autoLines = [];
+    let lang = 'ja';
+    let terminalOpen = true;
+    const gate = {
+      bootstrapReady: false,
+      prepareRunning: false,
+      prepareKnown: false,
+      prepareComplete: false,
+      prepareFailed: false,
+      preflightOk: false,
+      nodeService: false,
+      nodeReachable: false,
+      nodeSynced: false,
+      p2pListening: false,
+      validatorKey: false,
+      validatorBond: false,
+      validatorRunning: false,
+    };
+
+    const i18n = {
+      ja: {
+        title: 'ボタンでMISAKA testnetに参加',
+        subtitle: 'VPS準備、node起動、同期確認までをブラウザで進めます。validatorはnode同期後に必要に応じて進めます。',
+        stepsTitle: '進行状況',
+        actionsTitle: '操作',
+        validatorTitle: 'Validator',
+        terminalTitle: '実行ログ',
+        details: '詳細JSON',
+        hideLog: 'ログを閉じる',
+        showLog: 'ログを開く',
+        copyLog: 'コピー',
+        copied: 'コピーしました。',
+        quickRefresh: '更新',
+        quickAuto: '自動開始',
+        btnCheckApp: '1. アプリ確認',
+        btnAutoNode: '自動でnode参加',
+        btnStopAuto: '自動実行を止める',
+        btnPrepare: '2. VPS準備',
+        btnPrepareLogs: '準備ログを見る',
+        btnPreflight: '3. VPS確認',
+        btnPreview: '4. node設定を確認',
+        btnNodeApply: '5. nodeを開始',
+        btnStatus: '6. 同期確認',
+        btnNodeRestart: 'node再起動',
+        btnNodeLogs: 'nodeログ',
+        btnFinish: 'セットアップ画面を終了',
+        btnValidatorStatus: '7. validator確認',
+        btnKeygen: '8. キー作成',
+        btnFunding: '9. 入金確認',
+        btnBond: '10. Bond作成',
+        btnValidatorChain: '11. validator状態',
+        btnValidatorApply: '12. validator開始',
+        btnValidatorLogs: 'validatorログ',
+        bondAmount: 'Bond amount',
+        nodeNote: 'まだ確認前です。',
+        syncNote: 'node開始後に同期します。',
+        p2pNote: '26211/tcp の待受を確認します。',
+        validatorNote: 'node同期後に進めます。',
+        readyLog: 'Ready. Start with "1. アプリ確認".',
+        running: '実行中です...',
+        requiredBond: 'Bond amount が必要です。',
+        bondConfirm: 'Bondはtestnet資金を使います。すぐには戻せません。続けますか: ',
+        autoRunningHint: '自動実行中です。画面のログを見ながら待ってください。止める場合は Stop Auto を押します。',
+        waitPrepare: '次: VPS準備が実行中です。準備ログを見ながら完了まで待ってください。',
+        prepareFailed: 'VPS準備が止まりました。準備ログの最後のエラーを確認してください。',
+        checkAppAfterPrepare: '次: アプリ確認を押して、kaspad / validator が入ったか確認してください。',
+        needPrepare: '次: VPS準備を押して、不足しているバイナリを入れてください。',
+        needPreflight: '次: VPS確認を押して、ユーザー・ポート・IPを確認してください。',
+        needNode: '次: nodeを開始して、ネットワーク参加を始めてください。',
+        waitNode: '次: node起動中です。少し待ってから同期確認を押してください。',
+        waitSync: '次: 同期中です。SYNCED になるまで待ってください。',
+        nodeDone: 'node参加は完了です。validator参加するならキー作成に進めます。',
+        needBond: '次: Funding address に送金後、入金確認とBond作成に進んでください。',
+        needValidator: '次: validator開始を押して、validator serviceを起動してください。',
+        allDone: '完了: node と validator が動作しています。必要ならログ確認だけ行ってください。',
+        stepApp: 'アプリ',
+        stepAppSub: '必要なコマンドを確認',
+        stepPrepare: 'VPS準備',
+        stepPrepareSub: 'ビルドとインストール',
+        stepNode: 'Node',
+        stepNodeSub: 'systemdで起動',
+        stepSync: 'Sync',
+        stepSyncSub: 'testnetに追いつく',
+        stepValidator: 'Validator',
+        stepValidatorSub: '任意で参加',
+        stateWait: 'WAIT',
+        stateActive: 'ACTIVE',
+        stateDone: 'DONE',
+        stateCheck: 'CHECK',
+        stateFail: 'FAIL',
+      },
+      en: {
+        title: 'Join the MISAKA testnet with buttons',
+        subtitle: 'Prepare the VPS, start the node, and watch sync from the browser. Validator setup starts after the node is synced.',
+        stepsTitle: 'Progress',
+        actionsTitle: 'Actions',
+        validatorTitle: 'Validator',
+        terminalTitle: 'Run log',
+        details: 'Raw JSON',
+        hideLog: 'Hide log',
+        showLog: 'Show log',
+        copyLog: 'Copy',
+        copied: 'Copied.',
+        quickRefresh: 'Refresh',
+        quickAuto: 'Auto start',
+        btnCheckApp: '1. Check app',
+        btnAutoNode: 'Auto node setup',
+        btnStopAuto: 'Stop auto',
+        btnPrepare: '2. Prepare VPS',
+        btnPrepareLogs: 'View prepare logs',
+        btnPreflight: '3. Check VPS',
+        btnPreview: '4. Preview node service',
+        btnNodeApply: '5. Start node',
+        btnStatus: '6. Check sync',
+        btnNodeRestart: 'Restart node',
+        btnNodeLogs: 'Node logs',
+        btnFinish: 'Finish setup page',
+        btnValidatorStatus: '7. Check validator',
+        btnKeygen: '8. Generate key',
+        btnFunding: '9. Check funding',
+        btnBond: '10. Create bond',
+        btnValidatorChain: '11. Validator status',
+        btnValidatorApply: '12. Start validator',
+        btnValidatorLogs: 'Validator logs',
+        bondAmount: 'Bond amount',
+        nodeNote: 'Not checked yet.',
+        syncNote: 'Sync starts after the node is running.',
+        p2pNote: 'Checks the 26211/tcp listener.',
+        validatorNote: 'Available after node sync.',
+        readyLog: 'Ready. Start with "1. Check app".',
+        running: 'Running...',
+        requiredBond: 'Bond amount is required.',
+        bondConfirm: 'Bond uses your testnet funds and cannot be undone immediately. Continue with ',
+        autoRunningHint: 'Auto setup is running. Watch the log. Press Stop Auto to stop after the current step.',
+        waitPrepare: 'Next: Prepare VPS is running. Watch the prepare log until it completes.',
+        prepareFailed: 'Prepare VPS stopped. Check the last error in the prepare log.',
+        checkAppAfterPrepare: 'Next: Check app to confirm kaspad / validator were installed.',
+        needPrepare: 'Next: Prepare VPS to install missing binaries.',
+        needPreflight: 'Next: Check VPS to verify user, ports, and public IP.',
+        needNode: 'Next: Start the node and join the network.',
+        waitNode: 'Next: the node is starting. Wait a little, then check sync.',
+        waitSync: 'Next: syncing. Wait until the status becomes SYNCED.',
+        nodeDone: 'Node join is complete. Generate a validator key if you want to join as a validator.',
+        needBond: 'Next: fund the address, check funding, then create the bond.',
+        needValidator: 'Next: start the validator service.',
+        allDone: 'Done: node and validator are running. Check logs when needed.',
+        stepApp: 'App',
+        stepAppSub: 'Check required commands',
+        stepPrepare: 'Prepare',
+        stepPrepareSub: 'Build and install',
+        stepNode: 'Node',
+        stepNodeSub: 'Start with systemd',
+        stepSync: 'Sync',
+        stepSyncSub: 'Catch up to testnet',
+        stepValidator: 'Validator',
+        stepValidatorSub: 'Optional participation',
+        stateWait: 'WAIT',
+        stateActive: 'ACTIVE',
+        stateDone: 'DONE',
+        stateCheck: 'CHECK',
+        stateFail: 'FAIL',
+      }
+    };
+
+    function t(key) {
+      return (i18n[lang] && i18n[lang][key]) || i18n.ja[key] || key;
+    }
+
+    function setLanguage(next) {
+      lang = next;
+      document.documentElement.lang = lang;
+      document.getElementById('jaBtn').classList.toggle('active', lang === 'ja');
+      document.getElementById('enBtn').classList.toggle('active', lang === 'en');
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        el.textContent = t(el.dataset.i18n);
+      });
+      document.getElementById('toggleTerminal').textContent = terminalOpen ? t('hideLog') : t('showLog');
+      if (!logEl.dataset.touched) {
+        logEl.textContent = t('readyLog');
+      }
+      renderGate();
+    }
+
+    function setBusy(value) {
+      busy = value;
+      renderGate();
+    }
+
+    function setButton(id, enabled, allowBusy) {
+      const el = document.getElementById(id);
+      if (el) el.disabled = (!allowBusy && busy) || !enabled;
+    }
+
+    function stageIndex() {
+      if (gate.validatorRunning) return 4;
+      if (gate.nodeSynced) return 4;
+      if (gate.nodeService || gate.nodeReachable) return 3;
+      if (gate.bootstrapReady) return 2;
+      if (gate.prepareRunning || gate.prepareComplete || gate.prepareKnown) return 1;
+      return 0;
+    }
+
+    function stepStatus(index, current) {
+      if (index < current) return 'done';
+      if (index === current) {
+        if (gate.prepareFailed && index <= 1) return 'fail';
+        if (!gate.nodeSynced && index === 3) return 'warn';
+        return 'active';
+      }
+      return 'wait';
+    }
+
+    function renderSteps() {
+      const current = stageIndex();
+      const steps = [
+        ['stepApp', 'stepAppSub'],
+        ['stepPrepare', 'stepPrepareSub'],
+        ['stepNode', 'stepNodeSub'],
+        ['stepSync', 'stepSyncSub'],
+        ['stepValidator', 'stepValidatorSub'],
+      ];
+      document.getElementById('steps').innerHTML = steps.map(([title, sub], index) => {
+        const status = stepStatus(index, current);
+        const pill = status === 'done' ? t('stateDone')
+          : status === 'active' ? t('stateActive')
+          : status === 'warn' ? t('stateCheck')
+          : status === 'fail' ? t('stateFail')
+          : t('stateWait');
+        return `
+          <div class="step ${status}">
+            <div class="dot">${index + 1}</div>
+            <div>
+              <div class="step-title">${t(title)}</div>
+              <div class="step-sub">${t(sub)}</div>
+            </div>
+            <div class="pill ${status}">${pill}</div>
+          </div>
+        `;
+      }).join('');
+      const percent = Math.round((current / 4) * 100);
+      barFill.style.width = percent + '%';
+      percentEl.textContent = percent + '%';
+    }
+
+    function nextActionText() {
+      if (autoRunning) return t('autoRunningHint');
+      if (gate.prepareRunning) return t('waitPrepare');
+      if (gate.prepareFailed && !gate.bootstrapReady) return t('prepareFailed');
+      if (gate.prepareComplete && !gate.bootstrapReady) return t('checkAppAfterPrepare');
+      if (!gate.bootstrapReady) return t('needPrepare');
+      if (!gate.preflightOk) return t('needPreflight');
+      if (!gate.nodeService) return t('needNode');
+      if (!gate.nodeReachable) return t('waitNode');
+      if (!gate.nodeSynced) return t('waitSync');
+      if (!gate.validatorKey) return t('nodeDone');
+      if (!gate.validatorBond) return t('needBond');
+      if (!gate.validatorRunning) return t('needValidator');
+      return t('allDone');
+    }
+
+    function renderGate() {
+      setButton('btn-check-app', true);
+      setButton('btn-auto-node', !autoRunning && !gate.nodeSynced);
+      setButton('btn-quick-refresh', true);
+      setButton('btn-quick-auto', !autoRunning && !gate.nodeSynced);
+      setButton('btn-auto-stop', autoRunning, true);
+      setButton('btn-prepare', !gate.bootstrapReady && !gate.prepareRunning && !gate.prepareComplete);
+      setButton('btn-prepare-logs', gate.prepareKnown || gate.prepareRunning);
+      setButton('btn-preflight', gate.bootstrapReady);
+      setButton('btn-node-preview', gate.bootstrapReady);
+      setButton('btn-node-apply', gate.bootstrapReady && gate.preflightOk && !gate.nodeService);
+      setButton('btn-status', gate.bootstrapReady && (gate.nodeService || gate.nodeReachable));
+      setButton('btn-validator-status', gate.nodeSynced || gate.validatorKey || gate.validatorBond || gate.validatorRunning);
+      setButton('btn-validator-keygen', gate.nodeSynced && !gate.validatorKey);
+      setButton('btn-validator-balance', gate.validatorKey);
+      setButton('btn-bond', gate.validatorKey && !gate.validatorBond);
+      setButton('btn-validator-chain', gate.validatorKey || gate.validatorBond || gate.validatorRunning);
+      setButton('btn-validator-apply', gate.validatorBond && !gate.validatorRunning);
+      setButton('btn-validator-logs', gate.validatorRunning);
+      setButton('btn-node-restart', gate.nodeService);
+      setButton('btn-node-logs', gate.nodeService);
+      setButton('btn-stop', true);
+      hintEl.textContent = nextActionText();
+      renderSteps();
+    }
+
+    function updateGate(data) {
+      if (data.bootstrap) {
+        gate.bootstrapReady = !!data.bootstrap.ready;
+      }
+      if (data.job) {
+        gate.prepareRunning = !!data.job.running;
+        gate.prepareKnown = !!(data.job.running || data.job.complete || data.job.failed || data.job.logPath);
+        gate.prepareComplete = !!data.job.complete;
+        gate.prepareFailed = !!data.job.failed;
+      }
+      if (data.checks) {
+        gate.preflightOk = !data.checks.some(c => c.status === 'FAIL');
+      }
+      if (data.node) {
+        gate.nodeService = data.node.serviceState === 'active' || gate.nodeService;
+        gate.nodeReachable = !!data.node.reachable;
+        gate.nodeSynced = !!data.node.synced;
+      }
+      if (data.p2p) {
+        gate.p2pListening = !!data.p2p.listening;
+      }
+      if (data.validator) {
+        gate.validatorRunning = data.validator.serviceState === 'active' || gate.validatorRunning;
+        gate.validatorKey = !!data.validator.keyExists || !!data.validator.fundingAddress || gate.validatorKey;
+        gate.validatorBond = !!data.validator.bondOutpoint || gate.validatorBond;
+        if (data.validator.nodeSynced !== undefined) {
+          gate.nodeSynced = !!data.validator.nodeSynced;
+        }
+      }
+      renderGate();
+    }
+
+    function setText(id, text, cls) {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.className = 'value ' + (cls || '');
+    }
+
+    function setNote(id, text) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = text;
+    }
+
+    function summarize(data) {
+      if (data.bootstrap) {
+        setText('node', data.bootstrap.ready ? 'READY' : 'PREPARE', data.bootstrap.ready ? 'ok' : 'warn');
+        setNote('nodeNote', data.bootstrap.ready ? 'binaries ready' : 'prepare required');
+        return;
+      }
+      if (data.node) {
+        const running = data.node.serviceState === 'active';
+        setText('node', running ? 'RUNNING' : 'CHECK', running ? 'ok' : 'warn');
+        setText('sync', data.node.synced ? 'SYNCED' : (data.node.reachable ? 'SYNCING' : 'WAIT'), data.node.synced ? 'ok' : 'warn');
+        setNote('nodeNote', `${data.node.service || 'misaka-kaspad'}: ${data.node.serviceState || '-'}`);
+        setNote('syncNote', `DAA: ${data.node.virtualDaaScore || '-'}`);
+      }
+      if (data.validator) {
+        const active = data.validator.serviceState === 'active';
+        const bonded = !!data.validator.bondOutpoint;
+        const keyed = !!data.validator.keyExists || !!data.validator.fundingAddress;
+        setText('validator', active ? 'RUNNING' : (bonded ? 'READY' : (keyed ? 'FUND' : 'WAIT')), active ? 'ok' : (bonded ? 'ok' : 'warn'));
+        setNote('validatorNote', active ? 'service active' : (bonded ? 'bond ready' : (keyed ? 'funding needed' : 'not configured')));
+      }
+      if (data.p2p) {
+        setText('p2p', data.p2p.listening ? 'LISTENING' : 'WAIT', data.p2p.listening ? 'ok' : 'warn');
+        setNote('p2pNote', `port ${data.p2p.port || 26211}`);
+      }
+      if (data.checks) {
+        const bad = data.checks.some(c => c.status === 'FAIL');
+        setText('node', bad ? 'CHECK' : 'OK', bad ? 'bad' : 'ok');
+        setNote('nodeNote', bad ? 'preflight has failures' : 'preflight ok');
+      }
+    }
+
+    function human(data) {
+      if (data.logs) return data.logs;
+      if (data.error) return 'Error: ' + data.error;
+      if (data.bootstrap) {
+        const tools = (data.bootstrap.tools || []).map(t => `${t.name}: ${t.ok ? 'OK' : 'MISSING'}${t.path ? ' - ' + t.path : ''}`);
+        const bins = (data.bootstrap.binaries || []).map(t => `${t.name}: ${t.ok ? 'OK' : 'MISSING'}${t.path ? ' - ' + t.path : ''}`);
+        const job = data.job ? [
+          '',
+          `Prepare job: ${data.job.running ? 'RUNNING' : (data.job.complete ? 'COMPLETE' : (data.job.failed ? 'STOPPED / CHECK LOG' : 'IDLE'))}`,
+          `Log: ${data.job.logPath || '-'}`
+        ] : [];
+        return [
+          `Source: ${data.bootstrap.sourceExists ? 'OK' : 'MISSING'}`,
+          `Cargo: ${data.bootstrap.cargo || 'MISSING'}`,
+          '',
+          'Tools',
+          ...tools,
+          '',
+          'Binaries',
+          ...bins,
+          ...job,
+          '',
+          data.bootstrap.ready ? '準備は完了しています。Check VPSへ進めます。' : 'Prepare VPSを押して不足分を入れてください。'
+        ].join('\n');
+      }
+      if (data.job) {
+        return [
+          data.message || 'Prepare job updated.',
+          '',
+          `State: ${data.job.running ? 'RUNNING' : (data.job.complete ? 'COMPLETE' : 'CHECK LOG')}`,
+          `Log: ${data.job.logPath || '-'}`,
+          '',
+          data.job.logs || ''
+        ].join('\n');
+      }
+      if (data.validator) {
+        const lines = [
+          `Service: ${data.validator.serviceState || '-'}`,
+          `Key: ${data.validator.keyExists ? 'created' : 'not created'}`,
+          `Validator ID: ${data.validator.validatorId || '-'}`,
+          `Funding address: ${data.validator.fundingAddress || '-'}`,
+          `Bond: ${data.validator.bondOutpoint || '-'}`,
+          `Node synced: ${data.validator.nodeSynced === undefined ? '-' : data.validator.nodeSynced}`,
+        ];
+        if (data.validator.balanceOutput) lines.push('', data.validator.balanceOutput);
+        if (data.validator.statusOutput) lines.push('', data.validator.statusOutput);
+        if (data.message) lines.unshift(data.message, '');
+        return lines.join('\n');
+      }
+      if (data.checks) {
+        return data.checks.map(c => `${c.check}: ${c.value} ${c.status}${c.detail ? ' - ' + c.detail : ''}`).join('\n');
+      }
+      if (data.unit) {
+        return ['Node service preview', '', ...(data.commands || []).map(c => '- ' + c), '', data.unit].join('\n');
+      }
+      if (data.message) return data.message;
+      if (data.node) {
+        return [
+          `Node: ${data.node.serviceState}`,
+          `Sync: ${data.node.synced ? 'SYNCED' : 'SYNCING / WAIT'}`,
+          `P2P: ${data.p2p && data.p2p.listening ? 'LISTENING' : 'WAIT'}`,
+          `DAA: ${data.node.virtualDaaScore || '-'}`,
+          '',
+          data.node.synced ? 'Node参加が完了しました。' : '同期中です。このまま待ってください。'
+        ].join('\n');
+      }
+      return JSON.stringify(data, null, 2);
+    }
+
+    function apiUrl(path) {
+      const sep = path.includes('?') ? '&' : '?';
+      return `${path}${sep}token=${token}`;
+    }
+
+    function methodFor(path) {
+      const getPaths = [
+        '/api/bootstrap/status',
+        '/api/bootstrap/logs',
+        '/api/status',
+        '/api/validator/status',
+        '/api/validator/chain-status',
+        '/api/validator/logs',
+        '/api/logs',
+      ];
+      return getPaths.some(prefix => path.startsWith(prefix)) ? 'GET' : 'POST';
+    }
+
+    async function fetchJson(path, attempts) {
+      const maxAttempts = attempts || 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const res = await fetch(apiUrl(path), { method: methodFor(path) });
+        const text = await res.text();
+        let data;
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (parseErr) {
+          data = { ok: false, error: text || String(parseErr), httpStatus: res.status };
+        }
+        if (!res.ok && !data.error) {
+          data.error = `HTTP ${res.status}`;
+        }
+        if (data.error === 'bad request' && attempt < maxAttempts) {
+          await sleep(600);
+          continue;
+        }
+        return data;
+      }
+      return { ok: false, error: 'request failed' };
+    }
+
+    function clearPrepareLogPoll() {
+      if (prepareLogPoll) {
+        clearTimeout(prepareLogPoll);
+        prepareLogPoll = null;
+      }
+    }
+
+    function prepareLogText(data) {
+      const job = data.job || {};
+      const state = job.running ? 'RUNNING' : (job.complete ? 'COMPLETE' : (job.failed ? 'FAILED' : 'IDLE'));
+      return [
+        `State: ${state}`,
+        `Log: ${job.logPath || '-'}`,
+        '',
+        data.logs || job.logs || 'ログはまだありません。'
+      ].join('\n');
+    }
+
+    async function refreshPrepareLogs() {
+      try {
+        const data = await fetchJson('/api/bootstrap/logs');
+        rawEl.textContent = JSON.stringify(data, null, 2);
+        updateGate(data);
+        logEl.dataset.touched = 'true';
+        logEl.textContent = prepareLogText(data);
+        logEl.scrollTop = logEl.scrollHeight;
+        summarize(data);
+        const running = data.job && data.job.running;
+        if (running) {
+          prepareLogPoll = setTimeout(refreshPrepareLogs, 3000);
+        } else {
+          prepareLogPoll = null;
+        }
+      } catch (err) {
+        prepareLogPoll = null;
+        logEl.dataset.touched = 'true';
+        logEl.textContent = 'Error: ' + err;
+      }
+    }
+
+    function startPrepareLogs() {
+      clearPrepareLogPoll();
+      refreshPrepareLogs();
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function nowText() {
+      return new Date().toLocaleTimeString();
+    }
+
+    function showAutoLog(extra) {
+      logEl.dataset.touched = 'true';
+      logEl.textContent = autoLines.join('\n') + (extra ? '\n\n' + extra : '');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function appendAuto(line) {
+      autoLines.push(`[${nowText()}] ${line}`);
+      showAutoLog('');
+    }
+
+    function stopAuto() {
+      autoStopRequested = true;
+      appendAuto('停止リクエストを受け付けました。現在の処理が一区切りしたら止まります。');
+      renderGate();
+    }
+
+    function ensureAutoContinue() {
+      if (autoStopRequested) throw new Error('自動実行を停止しました。');
+    }
+
+    async function autoFetch(label, path, options) {
+      ensureAutoContinue();
+      appendAuto(`開始: ${label}`);
+      const data = await fetchJson(path);
+      updateGate(data);
+      rawEl.textContent = JSON.stringify(data, null, 2);
+      summarize(data);
+      if (data.error) throw new Error(data.error);
+      if (options && options.requireOk && data.ok === false) {
+        throw new Error(`${label} が完了しませんでした。詳細を確認してください。`);
+      }
+      appendAuto(`完了: ${label}`);
+      return data;
+    }
+
+    async function waitPrepareComplete() {
+      appendAuto('Prepare VPS のログを監視します。');
+      while (true) {
+        ensureAutoContinue();
+        const data = await fetchJson('/api/bootstrap/logs');
+        updateGate(data);
+        rawEl.textContent = JSON.stringify(data, null, 2);
+        summarize(data);
+        showAutoLog(prepareLogText(data));
+        if (data.job && data.job.complete) {
+          appendAuto('Prepare VPS が完了しました。');
+          return;
+        }
+        const logs = data.logs || (data.job && data.job.logs) || '';
+        const reachedInstallPhase = logs.includes('== 5/5 install release binaries ==');
+        if ((data.job && !data.job.running) || reachedInstallPhase) {
+          const app = await fetchJson('/api/bootstrap/status');
+          updateGate(app);
+          rawEl.textContent = JSON.stringify(app, null, 2);
+          summarize(app);
+          if (app.bootstrap && app.bootstrap.ready) {
+            appendAuto('完了マーカー待ちを省略します。必要なバイナリは揃っています。次へ進みます。');
+            return;
+          }
+        }
+        if (data.job && data.job.failed) {
+          throw new Error('Prepare VPS が失敗しました。ログの最後を確認してください。');
+        }
+        await sleep(3000);
+      }
+    }
+
+    async function waitNodeSync() {
+      appendAuto('node同期を監視します。SYNCED になるまで待ちます。');
+      while (true) {
+        ensureAutoContinue();
+        const data = await fetchJson('/api/status');
+        updateGate(data);
+        rawEl.textContent = JSON.stringify(data, null, 2);
+        summarize(data);
+        showAutoLog(human(data));
+        if (data.node && data.node.synced) {
+          appendAuto('node同期が完了しました。');
+          return;
+        }
+        await sleep(10000);
+      }
+    }
+
+    async function autoNodeJoin() {
+      clearPrepareLogPoll();
+      autoRunning = true;
+      autoStopRequested = false;
+      autoLines = [];
+      setBusy(true);
+      try {
+        appendAuto('Auto Node Setup を開始します。');
+        let app = await autoFetch('Check App', '/api/bootstrap/status');
+        if (!(app.bootstrap && app.bootstrap.ready)) {
+          await autoFetch('Prepare VPS', '/api/bootstrap/prepare');
+          await waitPrepareComplete();
+          app = await autoFetch('Check App', '/api/bootstrap/status');
+          if (!(app.bootstrap && app.bootstrap.ready)) {
+            throw new Error('Prepare VPS 後も必要なバイナリが不足しています。');
+          }
+        }
+
+        await autoFetch('Check VPS', '/api/preflight', { requireOk: true });
+        await autoFetch('Check Sync', '/api/status');
+
+        if (!gate.nodeService) {
+          await autoFetch('Preview Node Service', '/api/node/dry-run');
+          await autoFetch('Install / Start Node', '/api/node/apply', { requireOk: true });
+        } else {
+          appendAuto('node service はすでに起動済みです。');
+        }
+
+        await waitNodeSync();
+        appendAuto('Auto Node Setup は完了です。次は必要に応じて validator に進めます。');
+      } catch (err) {
+        appendAuto('停止: ' + err.message);
+      } finally {
+        autoRunning = false;
+        setBusy(false);
+      }
+    }
+
+    async function callApi(path) {
+      setBusy(true);
+      logEl.dataset.touched = 'true';
+      logEl.textContent = t('running');
+      try {
+        const data = await fetchJson(path);
+        if (path === '/api/node/apply' && data.ok) {
+          gate.nodeService = true;
+        }
+        if (path === '/api/validator/service/apply' && data.ok) {
+          gate.validatorRunning = true;
+        }
+        updateGate(data);
+        rawEl.textContent = JSON.stringify(data, null, 2);
+        summarize(data);
+        logEl.textContent = human(data);
+        if (path === '/api/bootstrap/prepare') {
+          clearPrepareLogPoll();
+          prepareLogPoll = setTimeout(refreshPrepareLogs, 1000);
+        }
+      } catch (err) {
+        logEl.textContent = 'Error: ' + err;
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function createBond() {
+      const amount = document.getElementById('bondAmount').value.trim();
+      if (!amount) {
+        logEl.textContent = t('requiredBond');
+        return;
+      }
+      const ok = confirm(t('bondConfirm') + amount + '?');
+      if (!ok) return;
+      callApi('/api/validator/bond?amount=' + encodeURIComponent(amount));
+    }
+
+    document.getElementById('jaBtn').addEventListener('click', () => setLanguage('ja'));
+    document.getElementById('enBtn').addEventListener('click', () => setLanguage('en'));
+    document.getElementById('toggleTerminal').addEventListener('click', () => {
+      terminalOpen = !terminalOpen;
+      terminalPanel.classList.toggle('collapsed', !terminalOpen);
+      document.getElementById('toggleTerminal').textContent = terminalOpen ? t('hideLog') : t('showLog');
+    });
+    document.getElementById('copyLog').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(logEl.textContent);
+        const old = document.getElementById('copyLog').textContent;
+        document.getElementById('copyLog').textContent = t('copied');
+        setTimeout(() => { document.getElementById('copyLog').textContent = old; }, 1200);
+      } catch (_) {}
+    });
+
+    setLanguage('ja');
+    callApi('/api/bootstrap/status');
+  </script>
+</body>
+</html>
