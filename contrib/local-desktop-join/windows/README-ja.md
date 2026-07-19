@@ -54,6 +54,18 @@ node状態確認
 
 初回buildはかなり時間がかかります。途中でPowerShellを閉じないでください。
 
+WSL2では到達できないUPnP gatewayの探索を避けるため、node起動時に
+`--disable-upnp` が自動で付きます。起動コマンドの完了後も `kaspad` は
+WSL内のバックグラウンドで動作を続けます。後から起動するfunding minerと
+validatorも同じ方法でWindows側の一回限りのコマンドから切り離されます。
+
+初回起動直後の `Synced false` / `IBD in progress` は異常ではありません。
+testnetの履歴を取得している途中なので、同期完了まで待ちます。状態は次で再確認できます。
+
+```text
+windows/check-status-wsl.cmd
+```
+
 ## よく使う入口
 
 | ファイル | 内容 |
@@ -165,6 +177,18 @@ powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.p
 古い版では、Web UIから `Prepare` を押した時にWSLの `sudo apt install` がパスワード待ちになり、ブラウザから入力できず止まったように見える場合がありました。
 
 最新zipでは、Web UI起動時に必要ならPowerShell window側で先にsudo確認を行います。もしブラウザ側にsudo関連のエラーが出る場合は、`windows/start-web-ui-wsl.cmd` を起動し直し、PowerShell windowに表示されるUbuntu password入力を完了してから続けてください。
+
+## `Synced false` またはdoctorの`WARN`が出る場合
+
+初回IBD中はnodeが正常に動いていてもdoctorが `Synced false` を報告します。
+これは起動失敗ではなく同期中です。`start-node-wsl.cmd` のウィンドウが処理を終えても、
+nodeはバックグラウンドで動き続けます。`windows/check-status-wsl.cmd` でDAAが増えているかを確認してください。
+
+同期完了まで待ちながら表示する場合はPowerShellから次を実行します。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.ps1 -Command wait-sync
+```
 
 ## データの保存先
 

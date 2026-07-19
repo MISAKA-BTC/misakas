@@ -100,9 +100,31 @@ def read_pid(path: Path) -> int | None:
         return None
     try:
         os.kill(value, 0)
-        return value
     except OSError:
         return None
+    expected = {
+        "kaspad.pid": "kaspad",
+        "misaminer.pid": "misaminer",
+        "validator.pid": "kaspa-pq-validator",
+    }.get(path.name)
+    if expected:
+        command = ""
+        try:
+            command = Path(f"/proc/{value}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            try:
+                command = subprocess.run(
+                    ["ps", "-p", str(value), "-o", "command="],
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                ).stdout
+            except OSError:
+                return None
+        if expected not in command:
+            return None
+    return value
 
 
 def read_state() -> dict[str, str]:

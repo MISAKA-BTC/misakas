@@ -35,6 +35,8 @@ P2P_PORT="${MISAKA_P2P_PORT:-26211}"
 GRPC_PORT="${MISAKA_GRPC_PORT:-26210}"
 WRPC_BORSH_PORT="${MISAKA_WRPC_BORSH_PORT:-27210}"
 MINER_THREADS="${MISAKA_MINER_THREADS:-1}"
+NODE_START_TIMEOUT="${MISAKA_NODE_START_TIMEOUT:-30}"
+STOP_TIMEOUT="${MISAKA_STOP_TIMEOUT:-30}"
 
 say() {
   if [ -n "${NO_COLOR:-}" ]; then
@@ -101,6 +103,8 @@ Environment:
   MISAKA_DESKTOP_HOME=$HOME/.misaka-desktop-node
   MISAKA_REPO_URL=https://github.com/MISAKA-BTC/misakas.git
   MISAKA_MINER_THREADS=1
+  MISAKA_NODE_START_TIMEOUT=30
+  MISAKA_STOP_TIMEOUT=30
   MISAKA_KEEP_AWAKE=1       # macOS only: run caffeinate while kaspad is running
 EOF
 }
@@ -428,8 +432,23 @@ pid_alive() {
   [ -f "$file" ] || return 1
   local pid
   pid="$(cat "$file" 2>/dev/null || true)"
-  [ -n "$pid" ] || return 1
-  kill -0 "$pid" >/dev/null 2>&1
+  printf '%s' "$pid" | grep -Eq '^[1-9][0-9]*$' || return 1
+  kill -0 "$pid" >/dev/null 2>&1 || return 1
+
+  # A stale PID file must never make us report or signal an unrelated process
+  # after the OS has reused its numeric PID.
+  local expected=""
+  case "$file" in
+    "$KASPAD_PID") expected="$BIN_DIR/kaspad" ;;
+    "$MINER_PID") expected="$BIN_DIR/misaminer" ;;
+    "$VALIDATOR_PID") expected="$BIN_DIR/kaspa-pq-validator" ;;
+    "$CAFFEINATE_PID") expected="caffeinate" ;;
+  esac
+  [ -z "$expected" ] && return 0
+
+  local command_line
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [ -n "$command_line" ] && printf '%s\n' "$command_line" | grep -Fq -- "$expected"
 }
 
 stop_pid() {
@@ -440,10 +459,51 @@ stop_pid() {
     pid="$(cat "$file")"
     say "stop $name pid=$pid"
     kill "$pid" >/dev/null 2>&1 || true
-    sleep 2
-    kill -9 "$pid" >/dev/null 2>&1 || true
+    local timeout="$STOP_TIMEOUT"
+    case "$timeout" in
+      ''|*[!0-9]*) timeout=30 ;;
+    esac
+    local elapsed=0
+    while pid_alive "$file" && [ "$elapsed" -lt "$timeout" ]; do
+      sleep 1
+      elapsed=$((elapsed + 1))
+    done
+    if pid_alive "$file"; then
+      warn "$name did not stop within ${timeout}s; forcing it to stop"
+      kill -9 "$pid" >/dev/null 2>&1 || true
+    else
+      printf '%s stopped cleanly\n' "$name"
+    fi
   fi
   rm -f "$file"
+}
+
+launch_background() {
+  local pid_file="$1"
+  local log_file="$2"
+  local working_dir="$3"
+  shift 3
+
+  rm -f "$pid_file"
+  (
+    cd "$working_dir"
+    if is_wsl && command -v setsid >/dev/null 2>&1; then
+      # Write the PID from inside the detached session. This remains the real
+      # program PID even on systems where setsid needs to fork first.
+      nohup setsid sh -c 'pid_file=$1; shift; printf "%s\n" "$$" > "$pid_file"; exec "$@"' \
+        sh "$pid_file" "$@" </dev/null > "$log_file" 2>&1 &
+    else
+      nohup sh -c 'pid_file=$1; shift; printf "%s\n" "$$" > "$pid_file"; exec "$@"' \
+        sh "$pid_file" "$@" </dev/null > "$log_file" 2>&1 &
+    fi
+  )
+
+  local attempts=0
+  while [ ! -s "$pid_file" ] && [ "$attempts" -lt 20 ]; do
+    sleep 0.1
+    attempts=$((attempts + 1))
+  done
+  [ -s "$pid_file" ] || die "background process did not create its PID file: $pid_file"
 }
 
 start_caffeinate_for_node() {
@@ -461,8 +521,39 @@ start_caffeinate_for_node() {
   local node_pid
   node_pid="$(cat "$KASPAD_PID")"
   say "keep Mac awake while node is running"
-  caffeinate -dimsu -w "$node_pid" >/dev/null 2>&1 &
-  echo $! > "$CAFFEINATE_PID"
+  launch_background "$CAFFEINATE_PID" /dev/null "$ROOT_DIR" caffeinate -dimsu -w "$node_pid"
+}
+
+node_rpc_listening() {
+  if port_listening "$WRPC_BORSH_PORT"; then
+    return 0
+  fi
+  local code=$?
+  if [ "$code" -ne 2 ]; then
+    return 1
+  fi
+
+  # bash provides /dev/tcp even on minimal WSL images where ss/lsof/netstat is
+  # unavailable. Opening and immediately closing the socket is enough here.
+  (exec 3<>"/dev/tcp/127.0.0.1/$WRPC_BORSH_PORT") >/dev/null 2>&1
+}
+
+wait_for_node_rpc() {
+  local timeout="$NODE_START_TIMEOUT"
+  case "$timeout" in
+    ''|*[!0-9]*) timeout=30 ;;
+  esac
+
+  local elapsed=0
+  while [ "$elapsed" -lt "$timeout" ]; do
+    pid_alive "$KASPAD_PID" || return 1
+    if node_rpc_listening; then
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  return 2
 }
 
 start_node() {
@@ -475,11 +566,11 @@ start_node() {
   fi
 
   say "start local kaspad"
-  flags=()
+  local flags=()
   while IFS= read -r flag; do
     flags+=("$flag")
   done < <(net_args)
-  args=(
+  local args=(
     "${flags[@]}"
     "--yes"
     "--appdir=$APPDIR"
@@ -496,20 +587,28 @@ start_node() {
     "--perf-metrics"
     "--perf-metrics-interval-sec=60"
   )
+  if is_wsl; then
+    # WSL2's virtual NAT does not expose a useful UPnP gateway to the Linux
+    # guest. Waiting for discovery only delays the RPC listener at startup.
+    args+=("--disable-upnp")
+  fi
   if [ -n "${MISAKA_EXTERNAL_IP:-}" ]; then
     args+=("--externalip=${MISAKA_EXTERNAL_IP}:$P2P_PORT")
   fi
 
-  (
-    cd "$ROOT_DIR"
-    env HOME="$HOME_DIR" "$BIN_DIR/kaspad" "${args[@]}" > "$KASPAD_LOG" 2>&1 &
-    echo $! > "$KASPAD_PID"
-  )
-  sleep 2
+  launch_background "$KASPAD_PID" "$KASPAD_LOG" "$ROOT_DIR" \
+    env HOME="$HOME_DIR" "$BIN_DIR/kaspad" "${args[@]}"
+  local wait_result=0
+  wait_for_node_rpc || wait_result=$?
   if pid_alive "$KASPAD_PID"; then
     save_state_value NODE_STARTED_ONCE 1
     printf 'kaspad started pid=%s\n' "$(cat "$KASPAD_PID")"
     printf 'log: %s\n' "$KASPAD_LOG"
+    if [ "$wait_result" -eq 0 ]; then
+      printf 'wRPC Borsh: listening on 127.0.0.1:%s\n' "$WRPC_BORSH_PORT"
+    else
+      warn "kaspad is still starting after ${NODE_START_TIMEOUT}s; it remains running in the background. Check status again shortly."
+    fi
     start_caffeinate_for_node
   else
     tail -n 80 "$KASPAD_LOG" || true
@@ -519,7 +618,22 @@ start_node() {
 
 node_doctor() {
   if [ -x "$BIN_DIR/misaka" ]; then
-    env HOME="$HOME_DIR" "$BIN_DIR/misaka" --network "$NETWORK" --rpc "127.0.0.1:$WRPC_BORSH_PORT" node doctor || true
+    local output=""
+    local code=0
+    output="$(env HOME="$HOME_DIR" "$BIN_DIR/misaka" --network "$NETWORK" --rpc "127.0.0.1:$WRPC_BORSH_PORT" node doctor 2>&1)" || code=$?
+    if [ "$code" -eq 5 ]; then
+      # Exit 5 is the CLI's stable NODE_NOT_SYNCED result. It is expected
+      # during initial block download and must not fail the desktop launcher.
+      printf '%s\n' "$output" | sed \
+        -e '/^doctor: issues found (see FAIL\/WARN above)$/d' \
+        -e '/^error: node doctor: node is not synced (see report)$/d'
+      printf '\nNode state: IBD is in progress (Synced false). This is normal after first start; kaspad remains running.\n'
+      return 0
+    fi
+    printf '%s\n' "$output"
+    if [ "$code" -ne 0 ]; then
+      warn "node doctor exited with code $code; kaspad was not stopped"
+    fi
   else
     warn "misaka binary missing"
   fi
@@ -536,7 +650,12 @@ status() {
     printf 'awake:   %s\n' "$(pid_alive "$CAFFEINATE_PID" && printf 'caffeinate pid=%s' "$(cat "$CAFFEINATE_PID")" || printf 'off')"
   fi
   printf '\n'
-  node_doctor
+  if pid_alive "$KASPAD_PID" && ! node_rpc_listening; then
+    printf 'Node state: kaspad is running; waiting for wRPC Borsh startup on 127.0.0.1:%s.\n' "$WRPC_BORSH_PORT"
+    printf 'Check again shortly: scripts/misaka-desktop-node.sh status\n'
+  else
+    node_doctor
+  fi
 }
 
 validator_status() {
@@ -707,7 +826,7 @@ doctor() {
   say "node doctor"
   local node_out=""
   if [ -x "$BIN_DIR/misaka" ]; then
-    node_out="$(env HOME="$HOME_DIR" "$BIN_DIR/misaka" --network "$NETWORK" --rpc "127.0.0.1:$WRPC_BORSH_PORT" node doctor 2>&1 || true)"
+    node_out="$(node_doctor 2>&1)"
     printf '%s\n' "$node_out"
   else
     warn "misaka binary missing"
@@ -804,7 +923,9 @@ EOF
 
 wait_sync() {
   say "wait for node sync"
+  [ -x "$BIN_DIR/misaka" ] || die "misaka is missing. Run prepare first."
   while true; do
+    pid_alive "$KASPAD_PID" || die "kaspad stopped while waiting for sync. Check node logs, then restart the node."
     out="$(env HOME="$HOME_DIR" "$BIN_DIR/misaka" --network "$NETWORK" --rpc "127.0.0.1:$WRPC_BORSH_PORT" node doctor 2>&1 || true)"
     printf '%s\n' "$out" | grep -E 'Synced|Virtual DAA|wRPC Borsh|P2P' || true
     if printf '%s\n' "$out" | grep -q 'Synced[[:space:]]*true'; then
@@ -841,6 +962,14 @@ Next:
 Note:
   Visible balance is not always bondable. Mined rewards need coinbase maturity first.
 EOF
+}
+
+auto_node() {
+  prepare
+  start_node
+  status
+  printf '\nInitial node setup finished. kaspad continues in the background.\n'
+  printf 'Synced false means initial block download is still running; check again with the status command.\n'
 }
 
 keygen() {
@@ -886,18 +1015,15 @@ miner_start() {
     save_state_value MINER_START_DAA "$miner_start_daa"
   fi
   say "start funding miner"
-  (
-    cd "$ROOT_DIR"
+  launch_background "$MINER_PID" "$MINER_LOG" "$ROOT_DIR" \
     env HOME="$HOME_DIR" "$BIN_DIR/misaminer" \
-      --pool "127.0.0.1:$GRPC_PORT" \
-      --network-id "$NETWORK" \
-      --wallet "$addr" \
-      --worker desktop-funding \
-      --threads "$MINER_THREADS" \
-      --blocks 0 \
-      --min-block-interval-ms 1000 > "$MINER_LOG" 2>&1 &
-    echo $! > "$MINER_PID"
-  )
+    --pool "127.0.0.1:$GRPC_PORT" \
+    --network-id "$NETWORK" \
+    --wallet "$addr" \
+    --worker desktop-funding \
+    --threads "$MINER_THREADS" \
+    --blocks 0 \
+    --min-block-interval-ms 1000
   sleep 2
   if pid_alive "$MINER_PID"; then
     printf 'miner started pid=%s\n' "$(cat "$MINER_PID")"
@@ -985,16 +1111,13 @@ validator_start() {
     return
   fi
   say "start validator sidecar"
-  (
-    cd "$ROOT_DIR"
+  launch_background "$VALIDATOR_PID" "$VALIDATOR_LOG" "$ROOT_DIR" \
     env HOME="$HOME_DIR" "$BIN_DIR/kaspa-pq-validator" run \
-      --node-wrpc-borsh "127.0.0.1:$WRPC_BORSH_PORT" \
-      --validator-key "$VALIDATOR_KEY" \
-      --stake-bond "$BOND_OUTPOINT" \
-      --signed-epoch-db "$VALIDATOR_DB" \
-      --network "$NETWORK" > "$VALIDATOR_LOG" 2>&1 &
-    echo $! > "$VALIDATOR_PID"
-  )
+    --node-wrpc-borsh "127.0.0.1:$WRPC_BORSH_PORT" \
+    --validator-key "$VALIDATOR_KEY" \
+    --stake-bond "$BOND_OUTPOINT" \
+    --signed-epoch-db "$VALIDATOR_DB" \
+    --network "$NETWORK"
   sleep 2
   if pid_alive "$VALIDATOR_PID"; then
     printf 'validator started pid=%s\n' "$(cat "$VALIDATOR_PID")"
@@ -1045,7 +1168,7 @@ shift || true
 case "$cmd" in
   help|-h|--help) usage ;;
   prepare) prepare ;;
-  auto-node) prepare; start_node; status ;;
+  auto-node) auto_node ;;
   auto-validator) auto_validator ;;
   start-node) start_node ;;
   stop-node) stop_pid "caffeinate" "$CAFFEINATE_PID"; stop_pid "kaspad" "$KASPAD_PID" ;;

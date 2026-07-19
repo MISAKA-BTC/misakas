@@ -962,6 +962,10 @@ fn build_kaspad_args(ctx: &Ctx, args: &NodeSetupArgs, p2p_port: u16, public_ip: 
     out.push("--yes".to_string());
     out.push(format!("--appdir={}", args.appdir.display()));
     out.push(format!("--listen=0.0.0.0:{p2p_port}"));
+    // VPS hosts do not use a consumer-router UPnP gateway. Avoid delaying the
+    // RPC listeners when public-IP detection is unavailable or the interface
+    // only exposes the provider's private address.
+    out.push("--disable-upnp".to_string());
     if let Some(ip) = public_ip {
         out.push(format!("--externalip={ip}:{p2p_port}"));
     }
@@ -1540,6 +1544,15 @@ fn pid_running(pid: u32) -> bool {
     run_status_quiet("kill", vec!["-0".to_string(), pid.to_string()])
 }
 
+fn job_pid_running(name: &str, pid: u32) -> bool {
+    if !pid_running(pid) {
+        return false;
+    }
+    let (script_path, _log_path, _pid_path) = job_paths(name);
+    let expected = script_path.as_os_str().as_encoded_bytes();
+    fs::read(format!("/proc/{pid}/cmdline")).ok().is_some_and(|cmdline| cmdline.split(|byte| *byte == 0).any(|arg| arg == expected))
+}
+
 fn job_pid(pid_file: &Path) -> Option<u32> {
     fs::read_to_string(pid_file).ok()?.trim().parse::<u32>().ok()
 }
@@ -1549,7 +1562,7 @@ fn job_status_value(name: &str) -> serde_json::Value {
     let pid = job_pid(&pid_path);
     let log_tail = read_tail(&log_path, 24 * 1024);
     let complete = log_tail.contains("== MISAKA VPS prepare complete ==");
-    let running = pid.map(pid_running).unwrap_or(false) && !complete;
+    let running = pid.map(|pid| job_pid_running(name, pid)).unwrap_or(false) && !complete;
     let failed = !running && log_path.exists() && !complete;
     serde_json::json!({
         "name": name,
@@ -1646,7 +1659,7 @@ fn start_prepare_job(args: &WebArgs) -> SetupResult<serde_json::Value> {
     }
     let (script_path, log_path, pid_path) = job_paths(PREPARE_JOB);
     if let Some(pid) = job_pid(&pid_path)
-        && pid_running(pid)
+        && job_pid_running(PREPARE_JOB, pid)
         && !read_tail(&log_path, 24 * 1024).contains("== MISAKA VPS prepare complete ==")
     {
         return Ok(serde_json::json!({
@@ -1665,7 +1678,14 @@ fn start_prepare_job(args: &WebArgs) -> SetupResult<serde_json::Value> {
         .open(&log_path)
         .map_err(|e| CliError::new(exit::GENERIC, format!("open {}: {e}", log_path.display())))?;
     let err_log = log.try_clone().map_err(|e| CliError::new(exit::GENERIC, format!("clone {}: {e}", log_path.display())))?;
-    let child = Command::new("sh")
+    let mut command = if let Some(setsid) = command_path("setsid") {
+        let mut command = Command::new(setsid);
+        command.arg("--wait").arg("sh");
+        command
+    } else {
+        Command::new("sh")
+    };
+    let child = command
         .arg(&script_path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
@@ -2814,12 +2834,21 @@ fn web_resume(ctx: &Ctx, args: &WebResumeArgs) -> CliResult {
     let cmd = web_resume_command(ctx, args, &token, &display_host, &allowed_ips)?;
     let shell_cmd = format!("exec {}", shell_join(&cmd));
     run_checked("tmux", vec!["new-session".to_string(), "-d".to_string(), "-s".to_string(), args.tmux_session.clone(), shell_cmd])?;
-    thread::sleep(Duration::from_secs(2));
-
-    let started = read_web_session(&args.session_file)
-        .as_ref()
-        .map(|s| tcp_listening("127.0.0.1", s.port, Duration::from_secs(1)))
-        .unwrap_or(false);
+    let start_deadline = Instant::now() + Duration::from_secs(15);
+    let mut started = false;
+    while Instant::now() < start_deadline {
+        started = read_web_session(&args.session_file)
+            .as_ref()
+            .map(|s| tcp_listening("127.0.0.1", s.port, Duration::from_millis(250)))
+            .unwrap_or(false);
+        if started {
+            break;
+        }
+        if !run_status_quiet("tmux", ["has-session", "-t", args.tmux_session.as_str()]) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
     if !started {
         return Err(CliError::new(
             exit::GENERIC,
@@ -3073,6 +3102,7 @@ mod tests {
             no_utxoindex: false,
         };
         let plan = build_node_plan(&base_ctx(), &args).unwrap();
+        assert!(plan.unit.contains("--disable-upnp"));
         assert!(plan.unit.contains("--externalip=203.0.113.10:26211"));
         assert!(plan.unit.contains("--utxoindex"));
         assert_eq!(plan.state.node.service_user.as_deref(), Some("misaka_user"));

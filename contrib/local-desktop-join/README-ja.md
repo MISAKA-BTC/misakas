@@ -86,6 +86,10 @@ kaspad起動
 node doctor表示
 ```
 
+Windows WSL2ではUPnP探索を自動的に無効化し、`kaspad` をWindows側の
+起動コマンドから切り離してバックグラウンドで継続させます。初回の
+`Synced false` はIBD（初期同期）中という意味で、nodeの起動失敗ではありません。
+
 ## Macでダブルクリック起動
 
 Finderで以下をダブルクリックします。
