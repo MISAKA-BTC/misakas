@@ -125,6 +125,19 @@ impl DbEvmStateStore {
         Ok(!self.access.is_empty()?)
     }
 
+    /// Enumerate all legacy per-block snapshots. This is intentionally exposed only for the
+    /// one-shot C-01 migration: old databases can predate the content-addressed code store, while
+    /// every 206 snapshot still contains the authoritative bytecode inline. Streaming the rows lets
+    /// startup backfill prefix 222 without retaining the (potentially very large) snapshots in RAM.
+    pub fn iter(&self) -> impl Iterator<Item = Result<(BlockHash, EvmStateSnapshot), StoreError>> + '_ {
+        self.access.iterator().map(|res| match res {
+            Ok((k, v)) => <[u8; 64]>::try_from(k.as_ref())
+                .map(|b| (BlockHash::from_bytes(b), v))
+                .map_err(|_| StoreError::DataInconsistency("EvmStateSnapshot key is not 64 bytes".into())),
+            Err(e) => Err(StoreError::DataInconsistency(format!("EvmStateSnapshot iterator: {e}"))),
+        })
+    }
+
     /// C-01 S9b-prune: ONE-SHOT bulk reclamation of the ENTIRE legacy 206 snapshot store (a
     /// `delete_range` over the prefix + a synchronous prefix-bounded `compact_range`). IRREVERSIBLE.
     /// Only sound when `--evm-retire-206` is effective (flat backend authoritative + shadow check on):
@@ -879,6 +892,37 @@ mod tests {
         db.write(b2).unwrap();
         assert_eq!(flat.get(addr(0x02)).unwrap(), None);
         assert_eq!(flat.iter().count(), 2);
+    }
+
+    /// The legacy migration must stream every 206 row without loading the store into memory and
+    /// must preserve the 64-byte block key exactly.
+    #[test]
+    fn c01_legacy_state_snapshots_iterate_for_backfill() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let states = DbEvmStateStore::new(db.clone(), CachePolicy::Empty);
+        let snapshot = |tag: u8| EvmStateSnapshot {
+            accounts: vec![EvmAccountSnapshot {
+                address: EvmAddress::from_bytes([tag; 20]),
+                nonce: tag as u64,
+                balance: EvmU256::from_u128(tag as u128),
+                code_hash: EvmH256::from_bytes([tag; 32]),
+                code: vec![tag, tag.wrapping_add(1)],
+                storage: vec![],
+            }],
+        };
+
+        let mut batch = WriteBatch::default();
+        states.insert_batch(&mut batch, bh(1), snapshot(1)).unwrap();
+        states.insert_batch(&mut batch, bh(2), snapshot(2)).unwrap();
+        db.write(batch).unwrap();
+
+        let mut rows: Vec<_> = states.iter().map(|row| row.unwrap()).collect();
+        rows.sort_by_key(|(hash, _)| hash.as_bytes()[0]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, bh(1));
+        assert_eq!(rows[0].1, snapshot(1));
+        assert_eq!(rows[1].0, bh(2));
+        assert_eq!(rows[1].1, snapshot(2));
     }
 
     /// C-01 Stage 1 (S7, audit H-03): the flat point-lookup → `EvmAccountSnapshot`

@@ -134,6 +134,13 @@ macro_rules! default_opts {
         // Apply the preset configuration (includes parallelism and compaction settings)
         $self.preset.apply_to_options(&mut opts, $self.parallelism, $self.mem_budget, $self.cache_budget);
 
+        // RocksDB's default diagnostic LOG has no size-based rotation. High-throughput nodes can
+        // therefore accumulate multiple GiB of LOG/LOG.old files even after state pruning has
+        // reclaimed the database itself. Keep diagnostics useful but bounded: at most four 32 MiB
+        // generations per database (consensus, meta, utxoindex, ...).
+        opts.set_max_log_file_size(32 * 1024 * 1024);
+        opts.set_keep_log_file_num(4);
+
         // Configure WAL directory if specified (for RAM cache / tmpfs)
         // Auto-generate unique subdirectory from database path to avoid conflicts
         if let Some(ref wal_base) = $self.wal_dir {

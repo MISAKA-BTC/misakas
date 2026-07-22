@@ -11,6 +11,14 @@ use kaspa_hashes::EvmH256;
 use revm::db::{CacheDB, EmptyDB};
 use revm::primitives::{AccountInfo, Address, B256, Bytecode, Bytes, KECCAK_EMPTY, U256};
 
+/// Ethereum bytecode content address used by the persisted EVM code store. Keeping this helper at
+/// the revm boundary lets database migrations validate legacy inline bytecode without depending on
+/// revm directly.
+#[inline]
+pub fn code_hash(code: &[u8]) -> EvmH256 {
+    EvmH256::from_bytes(revm::primitives::keccak256(code).0)
+}
+
 #[inline]
 fn to_u256(v: EvmU256) -> U256 {
     U256::from_be_bytes(v.to_be_bytes())
@@ -180,6 +188,12 @@ mod tests {
     use crate::EvmBlockInput;
     use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EVM_INITIAL_BASE_FEE, EvmExecutionHeader, EvmExecutionPayload};
     use revm::primitives::{KECCAK_EMPTY, TxKind};
+
+    #[test]
+    fn content_address_helper_matches_revm() {
+        let code = [0x60, 0x80, 0x60, 0x40, 0x52];
+        assert_eq!(code_hash(&code).as_bytes(), revm::primitives::keccak256(code).0);
+    }
 
     fn signed_transfer(nonce: u64, to: Address, value: u128, max_fee: u128) -> (Address, Vec<u8>) {
         use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};

@@ -358,8 +358,195 @@ impl Consensus {
         // Upgrade to initialize the new retention root field correctly
         self.retention_root_database_upgrade();
         self.consensus_transitional_flags_upgrade();
+        // C-01 migration: legacy databases can have authoritative full snapshots in 206 but no
+        // flat/code backend. Recover it before shadow validation or irreversible 206 reclamation.
+        self.evm_legacy_state_backend_backfill();
         // C-01 S9b-prune: one-shot bulk reclamation of the legacy 206 snapshot store (opt-in, gated).
         self.evm_legacy_206_bulk_prune();
+    }
+
+    /// Automatically migrate a legacy 206-only EVM database to the C-01 flat/code backend.
+    ///
+    /// Old snapshots contain bytecode inline, so they are the recovery source for prefix 222. The
+    /// canonical head is root-validated before it seeds flat state, and all historical bytecode is
+    /// streamed and deduplicated before an explicitly requested legacy reclamation. This method never
+    /// deletes 206; any failure leaves the old authoritative representation available.
+    fn evm_legacy_state_backend_backfill(&self) {
+        if !self.config.evm_shadow_state_backend {
+            return;
+        }
+        #[cfg(not(feature = "evm"))]
+        warn!("[evm-backfill] --evm-shadow-state-backend requires --features evm; migration skipped.");
+        #[cfg(feature = "evm")]
+        {
+            use crate::model::stores::evm::{
+                EvmCanonicalHeadsStoreReader, EvmCodeStoreReader, EvmHeaderStoreReader, EvmStateStoreReader,
+            };
+            use kaspa_consensus_core::evm::EVM_EMPTY_CODE_HASH;
+
+            let legacy = &self.storage.evm_state_store;
+            match legacy.has_any() {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(e) => {
+                    warn!("[evm-backfill] cannot probe legacy 206 snapshots ({e}); keeping 206.");
+                    return;
+                }
+            }
+
+            let evm_head = match self.storage.evm_heads_store.read().get() {
+                Ok(h) => h.latest,
+                Err(e) => {
+                    warn!("[evm-backfill] cannot read canonical EVM head ({e}); keeping 206.");
+                    return;
+                }
+            };
+            let head_snapshot = match legacy.get(evm_head) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("[evm-backfill] canonical-head 206 snapshot {evm_head} is unavailable ({e}); keeping 206.");
+                    return;
+                }
+            };
+            let committed_root = match self.storage.evm_header_store.get(evm_head) {
+                Ok(h) => h.state_root,
+                Err(e) => {
+                    warn!("[evm-backfill] canonical-head EVM header {evm_head} is unavailable ({e}); keeping 206.");
+                    return;
+                }
+            };
+            let snapshot_root = match kaspa_evm::snapshot::seed_cachedb(&head_snapshot) {
+                Ok(cdb) => kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&cdb).0),
+                Err(e) => {
+                    warn!("[evm-backfill] canonical-head 206 snapshot {evm_head} is corrupt ({e}); keeping 206.");
+                    return;
+                }
+            };
+            if snapshot_root != committed_root {
+                warn!("[evm-backfill] canonical-head 206 root {snapshot_root:?} != committed {committed_root:?}; keeping 206.");
+                return;
+            }
+
+            // If 206 is about to disappear, recover code for contracts that existed only in an old
+            // snapshot too. Chunked writes keep memory and write batches bounded; partial backfill is
+            // harmless because 222 is content-addressed and 206 remains until the later safety gate.
+            if self.config.evm_prune_legacy_206 {
+                const CODE_BATCH_ROWS: usize = 1024;
+                info!(
+                    "[evm-backfill] legacy 206 reclamation requested; streaming all snapshots to recover historical bytecode. \
+                     This one-shot startup migration may take a while on a large database."
+                );
+                let mut seen = HashSet::new();
+                let mut batch = WriteBatch::default();
+                let mut pending = 0usize;
+                let mut snapshots = 0u64;
+                let mut accounts = 0u64;
+                let mut recovered = 0u64;
+
+                for row in legacy.iter() {
+                    let (_, snapshot) = match row {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!("[evm-backfill] 206 scan failed after {snapshots} snapshots ({e}); keeping 206.");
+                            return;
+                        }
+                    };
+                    snapshots += 1;
+                    accounts += snapshot.accounts.len() as u64;
+                    if snapshots % 1_000 == 0 {
+                        info!(
+                            "[evm-backfill] progress: scanned {snapshots} legacy snapshots / {accounts} account copies; \
+                             recovered {recovered} unique bytecode entries."
+                        );
+                    }
+                    for account in snapshot.accounts {
+                        if account.code.is_empty() || account.code_hash == EVM_EMPTY_CODE_HASH || !seen.insert(account.code_hash) {
+                            continue;
+                        }
+                        let computed = kaspa_evm::snapshot::code_hash(&account.code);
+                        if computed != account.code_hash {
+                            warn!(
+                                "[evm-backfill] corrupt inline code: declared {:?}, computed {:?}; keeping 206.",
+                                account.code_hash, computed
+                            );
+                            return;
+                        }
+                        match self.storage.evm_code_store.get(account.code_hash) {
+                            Ok(Some(existing)) if existing == account.code => continue,
+                            Ok(Some(_)) => {
+                                warn!("[evm-backfill] code-store collision for {:?}; keeping 206.", account.code_hash);
+                                return;
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                warn!("[evm-backfill] code-store read failed ({e}); keeping 206.");
+                                return;
+                            }
+                        }
+                        if let Err(e) = self.storage.evm_code_store.write_batch(&mut batch, account.code_hash, account.code) {
+                            warn!("[evm-backfill] could not stage recovered code ({e}); keeping 206.");
+                            return;
+                        }
+                        pending += 1;
+                        recovered += 1;
+                        if pending >= CODE_BATCH_ROWS {
+                            if let Err(e) = self.db.write(batch) {
+                                warn!("[evm-backfill] code backfill write failed ({e}); keeping 206.");
+                                return;
+                            }
+                            batch = WriteBatch::default();
+                            pending = 0;
+                        }
+                    }
+                }
+                if pending != 0
+                    && let Err(e) = self.db.write(batch)
+                {
+                    warn!("[evm-backfill] final code backfill write failed ({e}); keeping 206.");
+                    return;
+                }
+                info!(
+                    "[evm-backfill] scanned {snapshots} legacy snapshots / {accounts} account copies; \
+                     recovered {recovered} unique bytecode entries into prefix 222."
+                );
+            }
+
+            // Seed/reseed the flat backend from the validated head. This writes all currently-live
+            // bytecode as well, so a cheap shadow-only rollout needs no full historical scan.
+            let mut batch = WriteBatch::default();
+            let mut ptr = self.storage.evm_latest_state_ptr_store.write();
+            if let Err(e) = crate::processes::evm::seed_flat_from_snapshot(
+                &self.storage.evm_flat_account_store,
+                &self.storage.evm_code_store,
+                &self.storage.evm_block_state_root_store,
+                &mut ptr,
+                &mut batch,
+                evm_head,
+                committed_root,
+                &head_snapshot,
+            ) {
+                warn!("[evm-backfill] could not stage flat-state seed ({e}); keeping 206.");
+                return;
+            }
+            if let Err(e) = self.db.write(batch) {
+                warn!("[evm-backfill] flat-state seed write failed ({e}); keeping 206.");
+                return;
+            }
+            drop(ptr);
+
+            let verified_root =
+                crate::processes::evm::materialize_snapshot(&self.storage.evm_flat_account_store, &self.storage.evm_code_store)
+                    .map_err(|e| e.to_string())
+                    .and_then(|snap| kaspa_evm::snapshot::seed_cachedb(&snap).map_err(|e| e.to_string()))
+                    .map(|cdb| kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&cdb).0));
+            match verified_root {
+                Ok(root) if root == committed_root => {
+                    info!("[evm-backfill] flat/code backend seeded and root-verified at EVM head {evm_head} ({committed_root:?}).")
+                }
+                Ok(root) => warn!("[evm-backfill] flat root {root:?} != committed {committed_root:?}; keeping 206."),
+                Err(e) => warn!("[evm-backfill] flat verification failed ({e}); keeping 206."),
+            }
+        }
     }
 
     /// C-01 (slice S9b-prune): a ONE-SHOT, IRREVERSIBLE bulk reclamation of the legacy per-block 206
