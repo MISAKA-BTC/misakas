@@ -693,7 +693,9 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // BlueWorkType is a type alias for Uint576 (9 little-endian u64 limbs); construct via the
     // real struct name (the alias is not a tuple-struct ctor). Low limb = 1_000_000.
     emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
-    emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
+    // One full-quality epoch. The previous 100-epoch margin exceeded the entire
+    // 15-epoch StakeScore window and made emergency dominance unreachable.
+    emergency_stake_margin: StakeScore(STAKE_SCORE_SCALE),
     max_reorg_horizon_blocks: 300,
     evidence_window_blocks: 300,
     unbonding_period_blocks: 700, // > max_reorg_horizon + evidence_window
@@ -831,7 +833,9 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
     required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
     emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
-    emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
+    // One full-quality epoch: reachable inside the bounded 15-epoch score window
+    // while preserving the work AND stake non-substitutability requirement.
+    emergency_stake_margin: StakeScore(STAKE_SCORE_SCALE),
     max_reorg_horizon_blocks: 300,
     // 14 days; equivocation stays slashable for the whole exit window.
     evidence_window_blocks: FOURTEEN_DAYS_BLOCKS_10BPS,
@@ -1327,3 +1331,25 @@ pub const DEVNET_PARAMS: Params = Params {
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::never(),
 };
+
+#[cfg(test)]
+mod dns_params_tests {
+    use super::*;
+
+    /// Regression for the 2026-07-19 permanent virtual-sink wedge: a 100-epoch
+    /// emergency margin cannot fit inside a 15-epoch StakeScore window.
+    #[test]
+    fn emergency_stake_margin_is_reachable_inside_the_window() {
+        for (name, dns) in [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS)] {
+            let complete_epochs = dns.stake_score_window_blue_score / dns.attestation_epoch_length_blue_score.max(1);
+            let maximum_window_score = complete_epochs as u128 * STAKE_SCORE_SCALE;
+            assert!(complete_epochs > 1, "{name}: fixture must contain multiple score epochs");
+            assert_eq!(dns.emergency_stake_margin, StakeScore(STAKE_SCORE_SCALE));
+            assert!(
+                dns.emergency_stake_margin.0 < maximum_window_score,
+                "{name}: margin {} must fit below max window score {maximum_window_score}",
+                dns.emergency_stake_margin.0
+            );
+        }
+    }
+}

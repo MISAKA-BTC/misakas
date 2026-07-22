@@ -3053,9 +3053,11 @@ async fn dns_v3_pow_majority_cannot_rewrite_confirmed_anchor() {
             dns.pos_v2_activation_daa_score = 0;
             dns.epoch_length_blocks = 2;
             dns.reward_uniqueness_window_blocks = 50;
-            // Large reorg horizon so a from-genesis fork is GATE-ELIGIBLE (the dominance test
-            // runs) instead of being auto-rejected as deeper than the horizon.
-            dns.max_reorg_horizon_blocks = 1000;
+            // Deliberately tiny horizon: the from-genesis fork is much deeper, so this
+            // exercises the bounded full-window fallback instead of the former horizon
+            // short-circuit. The stake-less branch must still fail dominance (deep-reorg
+            // recovery does not weaken two-dimensional finality).
+            dns.max_reorg_horizon_blocks = 1;
             dns.attestation_epoch_length_blue_score = 3;
             dns.attestation_lag_blue_score = 2;
             dns.attestation_anchor_backoff_blue_score = 1;

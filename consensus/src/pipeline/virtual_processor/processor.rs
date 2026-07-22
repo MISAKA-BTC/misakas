@@ -166,6 +166,30 @@ impl EvmLaneKpi {
     }
 }
 
+/// The gate can reject hundreds of candidate ancestors during one sink search. Log the
+/// first rejection and at most one aggregate warning every 30 seconds so a wedge is
+/// visible without turning the diagnostic into another source of resolve pressure.
+fn dns_reorg_rejection_warning_due() -> Option<u64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static LAST_WARNING_UNIX_SECS: AtomicU64 = AtomicU64::new(0);
+    static REJECTIONS_SINCE_WARNING: AtomicU64 = AtomicU64::new(0);
+    const WARNING_INTERVAL_SECS: u64 = 30;
+
+    REJECTIONS_SINCE_WARNING.fetch_add(1, Ordering::Relaxed);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let mut previous = LAST_WARNING_UNIX_SECS.load(Ordering::Relaxed);
+    loop {
+        if previous != 0 && now.saturating_sub(previous) < WARNING_INTERVAL_SECS {
+            return None;
+        }
+        match LAST_WARNING_UNIX_SECS.compare_exchange_weak(previous, now, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Some(REJECTIONS_SINCE_WARNING.swap(0, Ordering::Relaxed).saturating_sub(1)),
+            Err(observed) => previous = observed,
+        }
+    }
+}
+
 pub struct VirtualStateProcessor {
     // Channels
     receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -2167,6 +2191,21 @@ impl VirtualStateProcessor {
             dns_params.required_work_depth,
             dns_params.required_stake_depth,
         );
+        let previous_confirmed = prev_dns_state.as_ref().map(|s| s.last_dns_confirmed_anchor).unwrap_or_default();
+        if new_state.last_dns_confirmed_anchor != BlockHash::default() && new_state.last_dns_confirmed_anchor != previous_confirmed {
+            info!(
+                "[dns-finality] confirmed anchor updated: {} -> {} at anchor_daa={}, sink={}, sink_daa={}, work_depth={:?}, \
+                 stake_depth={}, health={:?}",
+                previous_confirmed,
+                new_state.last_dns_confirmed_anchor,
+                new_state.last_dns_confirmed_anchor_daa_score,
+                sink,
+                sink_daa,
+                work_depth,
+                stake_depth.0,
+                health,
+            );
+        }
         self.dns_state_store.write().set_batch(batch, new_state).unwrap();
     }
 
@@ -2396,17 +2435,27 @@ impl VirtualStateProcessor {
         compute_stake_score(&per_epoch, dns_params.stake_event_quality_floor_bps)
     }
 
+    /// StakeScore over the complete configured window at `tip`. If a branch's common
+    /// ancestor is older than that window, this is exactly its since-ancestor score and
+    /// avoids an unbounded selected-chain walk.
+    fn stake_score_over_window(&self, tip: BlockHash, bonds: &[StakeBondRecord], dns_params: &DnsParams, net_id: &[u8]) -> StakeScore {
+        let (contributions, epoch_anchor_daa) = self.collect_stake_contributions_v2(tip, None, bonds, net_id, dns_params);
+        let totals = total_active_stake_by_epoch(bonds, &epoch_anchor_daa);
+        let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
+        compute_stake_score(&per_epoch, dns_params.stake_event_quality_floor_bps)
+    }
+
     /// kaspa-pq Phase 13 (ADR-0018 §H): the selected-chain common ancestor of `a` and `b`
     /// — the first block on `a`'s selected chain (from `a` inclusive, walking back) that is
-    /// also a chain-ancestor of `b`. `None` if none is found within `max_walk` (a reorg
-    /// deeper than the reorg horizon is not gate-eligible — the caller rejects it).
-    fn selected_chain_common_ancestor(&self, a: BlockHash, b: BlockHash, max_walk: u64) -> Option<BlockHash> {
+    /// also a chain-ancestor of `b`. Returns the ancestor plus steps walked, or `None`
+    /// when it is older than `max_walk`.
+    fn selected_chain_common_ancestor(&self, a: BlockHash, b: BlockHash, max_walk: u64) -> Option<(BlockHash, u64)> {
         for (walked, block) in (0_u64..).zip(std::iter::once(a).chain(self.reachability_service.default_backward_chain_iterator(a))) {
             if walked > max_walk {
                 return None;
             }
             if self.reachability_service.is_chain_ancestor_of(block, b) {
-                return Some(block);
+                return Some((block, walked));
             }
         }
         None
@@ -2682,31 +2731,48 @@ impl VirtualStateProcessor {
             }
         };
 
-        // The heavy two-dimensional inputs (common ancestor + per-branch Work/Stake walks)
-        // are computed ONLY when the candidate abandons the confirmed prefix AND the
-        // network runs the mainnet dominance rule. HardCheckpoint and the includes-anchor
-        // case ignore Work/Stake, so they skip the walks entirely.
+        // The heavy two-dimensional inputs are needed only when the candidate abandons
+        // the confirmed prefix under the dominance rule.
+        let mut common_ancestor = None;
+        let mut horizon_exceeded = false;
         let inputs = if dns_params.reorg_mode == DnsReorgMode::TwoDimensionalDominance && !includes {
-            // Selected-chain common ancestor I. Beyond the reorg horizon → not gate-eligible;
-            // reject (a reorg deeper than the horizon cannot rewrite confirmed history).
-            let Some(ancestor) = self.selected_chain_common_ancestor(candidate, prev_sink, dns_params.max_reorg_horizon_blocks) else {
-                return false;
-            };
+            // Do not short-circuit at the ordinary horizon: that made a temporary local
+            // fork permanent. Search through the whole StakeScore window. If I is still
+            // older, full-window StakeScore is exactly the since-I score; cumulative tip
+            // work is equivalent because the same I cancels from both sides. The recovery
+            // path therefore remains bounded while every depth reaches emergency dominance.
+            let common_ancestor_walk = dns_params.max_reorg_horizon_blocks.max(dns_params.stake_score_window_blue_score);
+            let ancestor = self.selected_chain_common_ancestor(candidate, prev_sink, common_ancestor_walk);
+            horizon_exceeded = ancestor.is_none_or(|(_, walked)| walked > dns_params.max_reorg_horizon_blocks);
+            common_ancestor = ancestor.map(|(hash, _)| hash);
+
             let net_id_hash = self.genesis.hash;
             let net_id = net_id_hash.as_byte_slice();
             // Per-branch bond sets (safety — each branch under its OWN view; see doc comment).
             let candidate_bonds = candidate_bond_view.records();
             let canonical_bonds: Vec<StakeBondRecord> =
                 self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+            let (common_work, candidate_stake, canonical_stake) = match common_ancestor {
+                Some(ancestor) => (
+                    self.ghostdag_store.get_blue_work(ancestor).unwrap_or_default(),
+                    self.stake_score_since_ancestor(candidate, ancestor, &candidate_bonds, dns_params, net_id),
+                    self.stake_score_since_ancestor(prev_sink, ancestor, &canonical_bonds, dns_params, net_id),
+                ),
+                None => (
+                    BlueWorkType::from_u64(0),
+                    self.stake_score_over_window(candidate, &candidate_bonds, dns_params, net_id),
+                    self.stake_score_over_window(prev_sink, &canonical_bonds, dns_params, net_id),
+                ),
+            };
             reorg_inputs_since_common_ancestor(
                 state.rollout_stage,
                 dns_params.reorg_mode,
                 includes,
                 self.ghostdag_store.get_blue_work(candidate).unwrap_or_default(),
                 self.ghostdag_store.get_blue_work(prev_sink).unwrap_or_default(),
-                self.ghostdag_store.get_blue_work(ancestor).unwrap_or_default(),
-                self.stake_score_since_ancestor(candidate, ancestor, &candidate_bonds, dns_params, net_id),
-                self.stake_score_since_ancestor(prev_sink, ancestor, &canonical_bonds, dns_params, net_id),
+                common_work,
+                candidate_stake,
+                canonical_stake,
                 dns_params.emergency_work_margin,
                 dns_params.emergency_stake_margin,
             )
@@ -2725,7 +2791,25 @@ impl VirtualStateProcessor {
                 dns_params.emergency_stake_margin,
             )
         };
-        check_dns_reorg_rule(&inputs).is_accept()
+        let outcome = check_dns_reorg_rule(&inputs);
+        if !outcome.is_accept()
+            && let Some(suppressed) = dns_reorg_rejection_warning_due()
+        {
+            warn!(
+                "[dns-reorg-gate] candidate {candidate} rejected: reason={outcome:?}, confirmed_anchor={confirmed}, \
+                 previous_sink={prev_sink}, common_ancestor={common_ancestor:?}, horizon_exceeded={horizon_exceeded}, \
+                 candidate_work={:?}, canonical_work={:?}, work_margin={:?}, candidate_stake={}, canonical_stake={}, \
+                 stake_margin={}, suppressed_since_previous_warning={suppressed}. The node is intentionally holding its \
+                 current virtual sink; persistent warnings indicate a possible self-wedge.",
+                inputs.candidate_work_after,
+                inputs.canonical_work_after,
+                inputs.emergency_work_margin,
+                inputs.candidate_stake_after.0,
+                inputs.canonical_stake_after.0,
+                inputs.emergency_stake_margin.0,
+            );
+        }
+        outcome.is_accept()
     }
 
     /// Caches the DAA and Median time windows of the sink block (if needed). Following, virtual's window calculations will
