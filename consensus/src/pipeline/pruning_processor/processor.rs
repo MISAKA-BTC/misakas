@@ -551,7 +551,10 @@ impl PruningProcessor {
                 } else {
                     self.evm_header_store.delete_batch(&mut batch, current).unwrap();
                     self.evm_state_diff_store.delete_batch(&mut batch, current).unwrap();
+                    // Both anchor formats: the legacy 221 rows a pre-v2 database still
+                    // carries, and the v2 anchors (223) this node writes.
                     self.evm_state_checkpoint_store.delete_batch(&mut batch, current).unwrap();
+                    self.evm_state_checkpoint_v2_store.delete_batch(&mut batch, current).unwrap();
                 }
 
                 if let Some(&affiliated_proof_level) = keep_relations.get(&current) {

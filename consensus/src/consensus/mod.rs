@@ -284,6 +284,7 @@ impl Consensus {
             counters.clone(),
             mining_rules,
             config.evm_history_mode,         // §12: gate the archive diff/checkpoint writer
+            config.evm_checkpoint_policy,    // §12.3 v2: anchor cadence + retention bound
             config.evm_shadow_state_backend, // C-01 S4: node-local shadow dual-write + differential
             config.evm_flat_authoritative,   // C-01 S9: flat-authoritative executor seed
             config.evm_retire_206,           // C-01 S9b: stop persisting the per-block 206 snapshot
@@ -2212,7 +2213,7 @@ impl ConsensusApi for Consensus {
 
         #[cfg(feature = "evm")]
         {
-            use crate::model::stores::evm::{EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
+            use crate::model::stores::evm::EvmStateDiffStoreReader;
             let oops = |m: String| ConsensusError::GeneralOwned(m);
 
             // Walk `block`'s selected-parent chain backward (design §12.4) to the
@@ -2220,7 +2221,14 @@ impl ConsensusApi for Consensus {
             // collecting the forward diffs to replay. Pure store-walk.
             let (seed, forward_diffs) = crate::processes::evm::gather_reconstruction_inputs(
                 block,
-                |b| self.storage.evm_state_checkpoint_store.get(b),
+                |b| {
+                    crate::processes::evm::resolve_anchor_snapshot(
+                        b,
+                        &self.storage.evm_state_checkpoint_v2_store,
+                        &self.storage.evm_state_checkpoint_store,
+                        &self.storage.evm_code_store,
+                    )
+                },
                 |b| self.storage.evm_state_diff_store.get(b),
                 |b| self.storage.evm_header_store.get(b).optional().unwrap().is_some(),
             )

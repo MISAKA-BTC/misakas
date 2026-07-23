@@ -12,9 +12,9 @@
 //! so any policy is safe.
 
 use kaspa_consensus_core::evm::{
-    CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmExecutionHeader, EvmExecutionPayload, EvmLatestStatePtr, EvmRawTx,
-    EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, FlatAccount, LogPostingKind,
-    LogPostingLoc, decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
+    CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmCheckpointMeta, EvmExecutionHeader, EvmExecutionPayload, EvmLatestStatePtr,
+    EvmRawTx, EvmStateCheckpointV1, EvmStateCheckpointV2, EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations,
+    FlatAccount, LogPostingKind, LogPostingLoc, decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
 };
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
@@ -1266,5 +1266,95 @@ mod tests {
         store.set_floor_batch(&mut b, 3).unwrap();
         db.write(b).unwrap();
         assert_eq!(store.indexed_floor(), Some(3), "a backfill of an older block lowers the floor");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §12.3 v2 — sparse compressed checkpoint anchors (prefix 223) and the cadence
+// singleton (prefix 224).
+//
+// Deliberately a NEW prefix rather than a format change under 221. Borsh is not
+// self-describing, so a v1 row and a v2 row are indistinguishable in place; a
+// separate prefix lets a database written before this change stay readable —
+// reconstruction consults v2 first, then v1 — while the segment pruner reclaims
+// the v1 rows in the background. The alternative was a DB-version bump forcing
+// every operator to resync, for RPC/archive data.
+// ---------------------------------------------------------------------------
+
+pub trait EvmStateCheckpointV2StoreReader {
+    fn get(&self, hash: BlockHash) -> Result<Option<EvmStateCheckpointV2>, StoreError>;
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmStateCheckpointV2Store {
+    access: CachedDbAccess<BlockHash, EvmStateCheckpointV2, BlockHasher>,
+}
+
+impl DbEvmStateCheckpointV2Store {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmStateCheckpointV2.into()) }
+    }
+
+    /// Anchors are keyed by block, and a block is anchored at most once — an
+    /// overwrite would mean the cadence fired twice for the same block, which is
+    /// a logic error rather than something to paper over.
+    pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, checkpoint: EvmStateCheckpointV2) -> Result<(), StoreError> {
+        if self.access.has(hash)? {
+            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
+        }
+        self.access.write(BatchDbWriter::new(batch), hash, checkpoint)
+    }
+
+    pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), hash)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Result<(BlockHash, EvmStateCheckpointV2), StoreError>> + '_ {
+        self.access.iterator().map(|res| match res {
+            Ok((k, v)) => <[u8; 64]>::try_from(k.as_ref())
+                .map(|b| (BlockHash::from_bytes(b), v))
+                .map_err(|_| StoreError::DataInconsistency("EvmStateCheckpointV2 key is not 64 bytes".into())),
+            Err(e) => Err(StoreError::DataInconsistency(format!("EvmStateCheckpointV2 iterator: {e}"))),
+        })
+    }
+}
+
+impl EvmStateCheckpointV2StoreReader for DbEvmStateCheckpointV2Store {
+    fn get(&self, hash: BlockHash) -> Result<Option<EvmStateCheckpointV2>, StoreError> {
+        match self.access.read(hash) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+    fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
+        self.access.has(hash)
+    }
+}
+
+/// Singleton cadence state (prefix 224).
+#[derive(Clone)]
+pub struct DbEvmCheckpointMetaStore {
+    access: CachedDbItem<EvmCheckpointMeta>,
+}
+
+impl DbEvmCheckpointMetaStore {
+    pub fn new(db: Arc<DB>) -> Self {
+        Self { access: CachedDbItem::new(db, DatabaseStorePrefixes::EvmCheckpointMeta.into()) }
+    }
+
+    /// Absent reads as the default (no anchor yet) rather than an error: a fresh
+    /// database has simply never written one.
+    pub fn get(&self) -> Result<EvmCheckpointMeta, StoreError> {
+        match self.access.read() {
+            Ok(v) => Ok(v),
+            Err(StoreError::KeyNotFound(_)) => Ok(EvmCheckpointMeta::default()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_batch(&mut self, batch: &mut WriteBatch, meta: EvmCheckpointMeta) -> StoreResult<()> {
+        self.access.write(BatchDbWriter::new(batch), &meta)
     }
 }

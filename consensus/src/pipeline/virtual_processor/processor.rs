@@ -252,6 +252,8 @@ pub struct VirtualStateProcessor {
     // reconstruct any canonical block's state. RPC/archive data only, never committed.
     pub(super) evm_state_diff_store: Arc<crate::model::stores::evm::DbEvmStateDiffStore>,
     pub(super) evm_state_checkpoint_store: Arc<crate::model::stores::evm::DbEvmStateCheckpointStore>,
+    pub(super) evm_state_checkpoint_v2_store: Arc<crate::model::stores::evm::DbEvmStateCheckpointV2Store>,
+    pub(super) evm_checkpoint_meta_store: Arc<parking_lot::RwLock<crate::model::stores::evm::DbEvmCheckpointMetaStore>>,
     pub(super) evm_code_store: Arc<crate::model::stores::evm::DbEvmCodeStore>,
     // C-01 state-backend (design v0.1, Stage 1, slice S4): the flat latest-canonical
     // state (234) + block→root index (232) + canonical pointer (231). Written ONLY
@@ -284,6 +286,8 @@ pub struct VirtualStateProcessor {
     // all; `recent`/`archive` write them (the pruning processor decides how long
     // they survive). Node-local — never affects block validity or any commitment.
     pub(super) evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
+    /// §12.3 v2: the state-anchor cadence and retention bound.
+    pub(super) evm_checkpoint_policy: kaspa_consensus_core::evm::EvmCheckpointPolicy,
     pub(super) evm_activation_daa_score: u64,
     // These activation-score fields are only read by the `#[cfg(feature = "evm")]` chain-context
     // path; without that feature the pre-existing dead-code lint fires (allowed to unblock the gate).
@@ -368,6 +372,7 @@ impl VirtualStateProcessor {
         counters: Arc<ProcessingCounters>,
         mining_rules: Arc<MiningRules>,
         evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
+        evm_checkpoint_policy: kaspa_consensus_core::evm::EvmCheckpointPolicy,
         evm_shadow_state_backend: bool,
         evm_flat_authoritative: bool,
         evm_retire_206: bool,
@@ -440,6 +445,8 @@ impl VirtualStateProcessor {
             evm_trace_store: storage.evm_trace_store.clone(),
             evm_state_diff_store: storage.evm_state_diff_store.clone(),
             evm_state_checkpoint_store: storage.evm_state_checkpoint_store.clone(),
+            evm_state_checkpoint_v2_store: storage.evm_state_checkpoint_v2_store.clone(),
+            evm_checkpoint_meta_store: storage.evm_checkpoint_meta_store.clone(),
             evm_code_store: storage.evm_code_store.clone(),
             evm_flat_account_store: storage.evm_flat_account_store.clone(),
             evm_block_state_root_store: storage.evm_block_state_root_store.clone(),
@@ -448,6 +455,7 @@ impl VirtualStateProcessor {
             evm_flat_authoritative,
             evm_retire_206,
             evm_history_mode,
+            evm_checkpoint_policy,
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: params.evm_f002_withdraw_cap_activation_daa_score,
@@ -1120,6 +1128,7 @@ impl VirtualStateProcessor {
             &self.evm_flat_account_store,
             &self.evm_code_store,
             &self.evm_header_store,
+            &self.evm_state_checkpoint_v2_store,
             &self.evm_state_checkpoint_store,
             &self.evm_state_diff_store,
         ) {
@@ -1591,7 +1600,6 @@ impl VirtualStateProcessor {
                 &self.evm_trace_store,
                 &self.evm_state_diff_store,
                 &self.evm_code_store,
-                &self.evm_state_checkpoint_store,
                 &mut batch,
                 current,
                 &staged,
@@ -1756,6 +1764,113 @@ impl VirtualStateProcessor {
         )))
     }
 
+    /// §12.3 v2: write a sparse, compressed, code-free reconstruction ANCHOR at the
+    /// new sink when the cadence is due.
+    ///
+    /// Three deliberate differences from the v1 checkpoint this replaces:
+    ///
+    /// * **Canonical only.** Called from `commit_virtual_state` with the selected
+    ///   sink, so a UTXO-valid block that loses the sink search is never anchored.
+    /// * **Paced in time, capped in blocks.** `evm_number % 2048` is 3.4 minutes at
+    ///   10 BPS and 34 at 1 BPS; the same constant meant wildly different things as
+    ///   the BPS moved, and at 10 BPS it reproduced the whole state hundreds of
+    ///   times a day.
+    /// * **Bounded.** Old anchors are evicted, so the store plateaus instead of
+    ///   growing with the chain.
+    ///
+    /// Never fatal: an anchor is reconstruction convenience, and failing to write
+    /// one must not stop the virtual state from committing. A missed anchor only
+    /// lengthens the diff replay for a later historical query.
+    #[cfg(feature = "evm")]
+    fn stage_evm_checkpoint_anchor(&self, batch: &mut WriteBatch, sink: BlockHash) {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateCheckpointV2StoreReader, EvmStateStoreReader};
+        use kaspa_consensus_core::evm::EvmStateCheckpointV2;
+
+        if self.evm_activation_daa_score == u64::MAX || !self.evm_history_mode.writes_state_history() {
+            return;
+        }
+        let policy = self.evm_checkpoint_policy;
+        let Some(header) = self.evm_header_store.get(sink).optional().unwrap_or(None) else {
+            return; // pre-activation sink: nothing to anchor
+        };
+        let timestamp_ms = match self.headers_store.get_timestamp(sink) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!("[evm-anchor] header timestamp read failed for {sink}: {e}; skipping this anchor");
+                return;
+            }
+        };
+        let mut meta = match self.evm_checkpoint_meta_store.read().get() {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("[evm-anchor] cadence state read failed: {e}; skipping this anchor");
+                return;
+            }
+        };
+        // A pruning-point advance forces an anchor: everything below it is about to
+        // stop being reconstructable, so that is precisely when one must exist.
+        let pruning_anchor = self.pruning_point_store.read().pruning_point().map(|p| p == sink).unwrap_or(false);
+        if !policy.is_due(&meta, header.evm_number, timestamp_ms, pruning_anchor) {
+            return;
+        }
+        if EvmStateCheckpointV2StoreReader::has(&*self.evm_state_checkpoint_v2_store, sink).unwrap_or(false) {
+            return; // already anchored (a reorg returning to a previous sink)
+        }
+
+        // Where the state comes from is decided by WHICH BACKEND IS AUTHORITATIVE,
+        // not by whether the result looks empty. An EVM lane with no accounts yet has
+        // an empty state, and that is a state worth anchoring — treating "empty" as
+        // "no source" would silently skip every anchor on a quiet chain and only show
+        // up much later as an unreconstructable range.
+        let snapshot = if self.evm_flat_authoritative {
+            match crate::processes::evm::materialize_snapshot(&self.evm_flat_account_store, &self.evm_code_store) {
+                Ok(snap) => snap,
+                Err(e) => {
+                    warn!("[evm-anchor] flat materialize failed at {sink}: {e}; skipping this anchor");
+                    return;
+                }
+            }
+        } else {
+            // 206 is authoritative here. Absent means this block committed no state
+            // row (pre-activation, or already pruned), so there is nothing to anchor.
+            match self.evm_state_store.get(sink).optional() {
+                Ok(Some(snap)) => snap,
+                Ok(None) => return,
+                Err(e) => {
+                    warn!("[evm-anchor] 206 read failed at {sink}: {e}; skipping this anchor");
+                    return;
+                }
+            }
+        };
+
+        let checkpoint = EvmStateCheckpointV2::build(sink, header.evm_number, header.state_root, &snapshot, policy.codec);
+        let stored = checkpoint.stored_len();
+        let raw = checkpoint.uncompressed_len;
+        if let Err(e) = self.evm_state_checkpoint_v2_store.insert_batch(batch, sink, checkpoint) {
+            warn!("[evm-anchor] anchor write failed for {sink}: {e}");
+            return;
+        }
+        // Evicting is what makes this a bounded store rather than a slower-growing one.
+        for evicted in policy.record(&mut meta, sink, header.evm_number, timestamp_ms) {
+            if let Err(e) = self.evm_state_checkpoint_v2_store.delete_batch(batch, evicted) {
+                warn!("[evm-anchor] evicting anchor {evicted} failed: {e}");
+            }
+        }
+        if let Err(e) = self.evm_checkpoint_meta_store.write().set_batch(batch, meta) {
+            warn!("[evm-anchor] cadence state write failed: {e}");
+            return;
+        }
+        info!(
+            "[evm-anchor] state anchor at EVM #{} ({sink}): {stored} B stored / {raw} B raw, codec={}",
+            header.evm_number,
+            policy.codec.as_str()
+        );
+    }
+
+    /// Non-`evm` builds have no EVM state to anchor.
+    #[cfg(not(feature = "evm"))]
+    fn stage_evm_checkpoint_anchor(&self, _batch: &mut WriteBatch, _sink: BlockHash) {}
+
     fn commit_virtual_state(
         &self,
         virtual_read: RwLockUpgradableReadGuard<'_, VirtualStores>,
@@ -1795,6 +1910,12 @@ impl VirtualStateProcessor {
         // `evm_number → L1 hash` map follows the selected chain (detach/attach),
         // not per-block result-commit — so a sink-search loser can't shadow it.
         self.update_evm_canonical_number_map(&mut batch, chain_path);
+
+        // §12.3 v2: write a state-history ANCHOR if the cadence says one is due.
+        // Here, not in `commit_utxo_state`, for the same reason as the number map
+        // above: that path also runs for sink-search losers, so anchoring there
+        // reproduced the entire EVM state for side branches.
+        self.stage_evm_checkpoint_anchor(&mut batch, dns_sink);
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): recompute the per-epoch
         // accumulator over the bounded selected-chain window ending at the new
@@ -4050,7 +4171,7 @@ impl VirtualStateProcessor {
         // none, hence the startup warning). `None` if neither yields it (the peer tries another server).
         #[cfg(feature = "evm")]
         {
-            use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
+            use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateDiffStoreReader};
             if let Ok(Some(ptr)) = self.evm_latest_state_ptr_store.read().get()
                 && ptr.canonical_head == pruning_point
             {
@@ -4064,7 +4185,14 @@ impl VirtualStateProcessor {
             }
             let (seed, forward_diffs) = match crate::processes::evm::gather_reconstruction_inputs(
                 pruning_point,
-                |b| self.evm_state_checkpoint_store.get(b),
+                |b| {
+                    crate::processes::evm::resolve_anchor_snapshot(
+                        b,
+                        &self.evm_state_checkpoint_v2_store,
+                        &self.evm_state_checkpoint_store,
+                        &self.evm_code_store,
+                    )
+                },
                 |b| self.evm_state_diff_store.get(b),
                 |b| self.evm_header_store.get(b).optional().unwrap().is_some(),
             ) {

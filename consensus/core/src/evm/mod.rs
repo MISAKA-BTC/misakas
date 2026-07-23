@@ -30,6 +30,9 @@ pub use log_index::*;
 mod state_diff;
 pub use state_diff::*;
 
+mod checkpoint_v2;
+pub use checkpoint_v2::*;
+
 use crate::tx::{ScriptPublicKey, TransactionOutpoint};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{EvmH256, Hash64, blake2b_512_keyed};

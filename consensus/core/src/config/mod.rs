@@ -125,6 +125,13 @@ pub struct Config {
     /// oracle, so the bulk delete leaves the seed itself unchanged (consensus-neutral, node-local). `false`
     /// by default and on every current network.
     pub evm_prune_legacy_206: bool,
+    /// §12.3 v2: when to write a state-history ANCHOR and how many to keep.
+    ///
+    /// Replaces the `evm_number % EVM_CHECKPOINT_INTERVAL` rule, which reproduced the
+    /// entire EVM state every 2048 EVM blocks — minutes on a 10 BPS chain — uncompressed
+    /// and with bytecode inlined. Node-local and consensus-neutral: an anchor is
+    /// reconstruction data, never a committed value.
+    pub evm_checkpoint_policy: crate::evm::EvmCheckpointPolicy,
 }
 
 impl Config {
@@ -158,6 +165,7 @@ impl Config {
             evm_flat_authoritative: false,
             evm_retire_206: false,
             evm_prune_legacy_206: false,
+            evm_checkpoint_policy: crate::evm::EvmCheckpointPolicy::default(),
         }
     }
 

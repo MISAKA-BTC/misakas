@@ -10,10 +10,10 @@ use crate::{
         dns_state::DbDnsStateStore,
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         evm::{
-            DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCodeStore, DbEvmFlatAccountStore,
-            DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore, DbEvmRawTxStore,
-            DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, DbEvmStateStore, DbEvmTraceReplayStore,
-            DbEvmTxIndexStore,
+            DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCheckpointMetaStore, DbEvmCodeStore,
+            DbEvmFlatAccountStore, DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore,
+            DbEvmPayloadStore, DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateCheckpointV2Store,
+            DbEvmStateDiffStore, DbEvmStateStore, DbEvmTraceReplayStore, DbEvmTxIndexStore,
         },
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
@@ -88,8 +88,15 @@ pub struct ConsensusStorage {
     pub evm_trace_store: Arc<DbEvmTraceReplayStore>,
     /// §12 archive: per-block forward state diff (prefix 220).
     pub evm_state_diff_store: Arc<DbEvmStateDiffStore>,
-    /// §12 archive: periodic full-state checkpoints (prefix 221).
+    /// §12 archive: LEGACY periodic full-state checkpoints (prefix 221). Read-only
+    /// for databases written before the v2 anchors; the segment pruner reclaims it.
     pub evm_state_checkpoint_store: Arc<DbEvmStateCheckpointStore>,
+    /// §12.3 v2: sparse, compressed, code-free anchors (prefix 223) — what the node
+    /// writes now.
+    pub evm_state_checkpoint_v2_store: Arc<DbEvmStateCheckpointV2Store>,
+    /// §12.3 v2: the anchor cadence singleton (prefix 224). `RwLock` because the
+    /// singleton's `set_batch` takes `&mut self`.
+    pub evm_checkpoint_meta_store: Arc<RwLock<DbEvmCheckpointMetaStore>>,
     /// §12 archive: content-addressed `code_hash → code` (prefix 222).
     pub evm_code_store: Arc<DbEvmCodeStore>,
     // C-01 state backend (Stage 1) — flat latest-canonical state (234) + per-block
@@ -361,6 +368,11 @@ impl ConsensusStorage {
             Arc::new(DbEvmStateDiffStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
         let evm_state_checkpoint_store =
             Arc::new(DbEvmStateCheckpointStore::new(db.clone(), PolicyBuilder::new().max_items(16).untracked().build()));
+        // v2 anchors are sparse by construction, so a handful of entries covers the
+        // whole retained set.
+        let evm_state_checkpoint_v2_store =
+            Arc::new(DbEvmStateCheckpointV2Store::new(db.clone(), PolicyBuilder::new().max_items(8).untracked().build()));
+        let evm_checkpoint_meta_store = Arc::new(RwLock::new(DbEvmCheckpointMetaStore::new(db.clone())));
         let evm_code_store = Arc::new(DbEvmCodeStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -418,6 +430,8 @@ impl ConsensusStorage {
             evm_trace_store,
             evm_state_diff_store,
             evm_state_checkpoint_store,
+            evm_state_checkpoint_v2_store,
+            evm_checkpoint_meta_store,
             evm_code_store,
             evm_flat_account_store,
             evm_block_state_root_store,

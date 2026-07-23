@@ -4707,3 +4707,183 @@ async fn compact_storage_profile_writes_no_per_block_state_snapshot() {
         "the flat account rows on disk hash to the committed state root — the state is intact, not merely absent"
     );
 }
+
+/// §12.3 v2: the state-history anchor must be sparse and canonical-only.
+///
+/// V1 wrote an uncompressed full-state copy — bytecode inlined — every 2048 EVM
+/// blocks, from `commit_utxo_state`. That path also runs for sink-search losers,
+/// so side branches got anchored too, and 2048 blocks is minutes at 10 BPS. This
+/// pins both properties from one chain shape: a straight chain plus a fork rooted
+/// far enough back that it can never win the sink search.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_state_anchors_are_sparse_and_canonical_only() {
+    use crate::model::stores::evm::EvmStateCheckpointStoreReader;
+    use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+    use kaspa_consensus_core::evm::{EvmCheckpointPolicy, EvmExecutionPayload, EvmStateSnapshot, EvmStorageProfile};
+    use kaspa_evm::EvmBlockInput;
+
+    kaspa_core::log::try_init_logger("info");
+    const CHAIN: u64 = 4;
+    /// Forked off block 1 while the chain ran to 4, so it is UTXO-validated by the
+    /// sink search and loses it — the exact case that used to get anchored.
+    const LOSER: u64 = 9;
+
+    let build_config = |policy: EvmCheckpointPolicy| {
+        let (history, shadow, flat, retire) = EvmStorageProfile::Compact.expand();
+        ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+            .apply_args(move |c| {
+                c.evm_history_mode = history;
+                c.evm_shadow_state_backend = shadow;
+                c.evm_flat_authoritative = flat;
+                c.evm_retire_206 = retire;
+                c.evm_checkpoint_policy = policy;
+            })
+            .build()
+    };
+
+    async fn run(config: kaspa_consensus_core::config::Config) -> (Vec<BlockHash>, bool) {
+        let consensus = TestConsensus::new(&config);
+        let wait_handles = consensus.init();
+        let storage = consensus.consensus_clone().storage.clone();
+        set_fresh_dns_finality(&consensus);
+
+        let genesis = consensus.params().genesis.hash;
+        let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
+        let mut states: Vec<(u64, EvmStateSnapshot, Option<kaspa_consensus_core::evm::EvmExecutionHeader>)> =
+            vec![(0, EvmStateSnapshot::default(), None)];
+
+        // The straight chain first, then the loser rooted back at block 1.
+        for (id, parent_id) in (1..=CHAIN).map(|i| (i, i - 1)).chain(std::iter::once((LOSER, 1))) {
+            let hash = BlockHash::from(id);
+            let parent_hash = if parent_id == 0 { genesis } else { BlockHash::from(parent_id) };
+            let (_, parent_snapshot, parent_header) = states.iter().find(|(i, _, _)| *i == parent_id).cloned().unwrap();
+
+            let payload = EvmExecutionPayload::default();
+            let mut block = consensus.build_utxo_valid_block_with_parents(hash, vec![parent_hash], miner_data.clone(), vec![]);
+            block.header.version = EVM_HEADER_VERSION;
+            block.header.evm_payload_hash = payload.payload_hash();
+            let input = EvmBlockInput {
+                parent: parent_header.as_ref(),
+                header_timestamp_ms: block.header.timestamp,
+                selected_parent_hash: parent_hash.as_bytes(),
+                blue_work_be: block.header.blue_work.to_be_bytes().to_vec(),
+                daa_score: block.header.daa_score,
+                payload: &payload,
+                accepted_txs: &[],
+                gas_pool_v2_activation_daa_score: u64::MAX,
+                f002_withdraw_cap_activation_daa_score: u64::MAX,
+                f003_mldsa_verify_activation_daa_score: u64::MAX,
+                typed_receipt_root_activation_daa_score: u64::MAX,
+            };
+            let (executed, snapshot) = kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).unwrap();
+            block.header.evm_commitment_root = executed.header.commitment_root();
+            block.evm_payload = payload;
+            consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.unwrap();
+            states.push((id, snapshot, Some(executed.header)));
+        }
+
+        let anchors: Vec<BlockHash> = storage.evm_state_checkpoint_v2_store.iter().map(|r| r.unwrap().0).collect();
+        // The legacy uncompressed 221 row must never be written again, any cadence.
+        let legacy = (1..=CHAIN).any(|i| storage.evm_state_checkpoint_store.has(BlockHash::from(i)).unwrap());
+        drop(storage);
+        consensus.shutdown(wait_handles);
+        (anchors, legacy)
+    }
+
+    // Cadence never due: exactly the BOOTSTRAP anchor and nothing more. A chain must
+    // have one anchor or nothing is reconstructable; after that the cadence governs.
+    // V1 wrote one on a block-count rule with no such gate.
+    let never = EvmCheckpointPolicy { min_interval_ms: u64::MAX, max_block_gap: u64::MAX, ..Default::default() };
+    let (anchors, legacy) = run(build_config(never)).await;
+    assert!(!legacy, "the legacy uncompressed 221 checkpoint must no longer be written");
+    assert_eq!(anchors.len(), 1, "only the bootstrap anchor may exist while the cadence is never due: {anchors:?}");
+
+    // Cadence always due: anchors appear, and never for the sink-search loser.
+    let always = EvmCheckpointPolicy { min_interval_ms: 0, max_block_gap: 1, max_retained: Some(16), ..Default::default() };
+    let (anchors, legacy) = run(build_config(always)).await;
+    assert!(!legacy, "the legacy uncompressed 221 checkpoint must no longer be written");
+    assert!(anchors.len() > 1, "an always-due cadence must keep producing anchors: {anchors:?}");
+    assert!(
+        !anchors.contains(&BlockHash::from(LOSER)),
+        "a UTXO-valid block that lost the sink search must never be anchored: {anchors:?}"
+    );
+}
+
+/// Anchor retention must plateau: past the bound, the oldest anchor leaves.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_state_anchors_are_bounded_by_retention() {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmStateCheckpointV2StoreReader};
+    use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+    use kaspa_consensus_core::evm::{EvmCheckpointPolicy, EvmExecutionPayload, EvmStateSnapshot, EvmStorageProfile};
+    use kaspa_evm::EvmBlockInput;
+
+    kaspa_core::log::try_init_logger("info");
+    const RETAINED: usize = 2;
+    const BLOCKS: u64 = 6;
+
+    let (history, shadow, flat, retire) = EvmStorageProfile::Compact.expand();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .apply_args(move |c| {
+            c.evm_history_mode = history;
+            c.evm_shadow_state_backend = shadow;
+            c.evm_flat_authoritative = flat;
+            c.evm_retire_206 = retire;
+            c.evm_checkpoint_policy =
+                EvmCheckpointPolicy { min_interval_ms: 0, max_block_gap: 1, max_retained: Some(RETAINED), ..Default::default() };
+        })
+        .build();
+
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let storage = consensus.consensus_clone().storage.clone();
+    set_fresh_dns_finality(&consensus);
+
+    let genesis = consensus.params().genesis.hash;
+    let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
+    let mut parent_hash = genesis;
+    let mut parent_header = None;
+    let mut parent_snapshot = EvmStateSnapshot::default();
+
+    for i in 1..=BLOCKS {
+        let hash = BlockHash::from(i);
+        let payload = EvmExecutionPayload::default();
+        let mut block = consensus.build_utxo_valid_block_with_parents(hash, vec![parent_hash], miner_data.clone(), vec![]);
+        block.header.version = EVM_HEADER_VERSION;
+        block.header.evm_payload_hash = payload.payload_hash();
+        let input = EvmBlockInput {
+            parent: parent_header.as_ref(),
+            header_timestamp_ms: block.header.timestamp,
+            selected_parent_hash: parent_hash.as_bytes(),
+            blue_work_be: block.header.blue_work.to_be_bytes().to_vec(),
+            daa_score: block.header.daa_score,
+            payload: &payload,
+            accepted_txs: &[],
+            gas_pool_v2_activation_daa_score: u64::MAX,
+            f002_withdraw_cap_activation_daa_score: u64::MAX,
+            f003_mldsa_verify_activation_daa_score: u64::MAX,
+            typed_receipt_root_activation_daa_score: u64::MAX,
+        };
+        let (executed, snapshot) = kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).unwrap();
+        block.header.evm_commitment_root = executed.header.commitment_root();
+        block.evm_payload = payload;
+        consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.unwrap();
+        parent_hash = hash;
+        parent_header = Some(executed.header);
+        parent_snapshot = snapshot;
+    }
+
+    let stored = storage.evm_state_checkpoint_v2_store.iter().count();
+    let sink = storage.evm_heads_store.read().get().unwrap().latest;
+    let has_sink = storage.evm_state_checkpoint_v2_store.get(sink).unwrap().is_some();
+    drop(storage);
+    consensus.shutdown(wait_handles);
+
+    assert!(stored <= RETAINED, "anchors must plateau at the retention bound, found {stored} after {BLOCKS} blocks");
+    assert!(has_sink, "the newest anchor — the sink — is the one that must survive eviction");
+}
