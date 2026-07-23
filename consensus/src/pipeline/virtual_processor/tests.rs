@@ -4554,3 +4554,156 @@ async fn evm_y9_full_cap_payload_block_validates_and_executes() {
 
     consensus.shutdown(wait_handles);
 }
+
+/// What the storage-profile regression below needs to know about a finished chain.
+///
+/// Plain owned data, not the storage handle: `TestConsensus`'s DB lifetime asserts
+/// that no strong reference outlives it, so the inspection has to happen while the
+/// consensus is still alive.
+#[cfg(feature = "evm")]
+struct EvmStorageObservation {
+    evm_head: BlockHash,
+    /// Rows in prefix 206 — the per-block full-state snapshot. The number this whole
+    /// change exists to keep at zero.
+    snapshot_rows: usize,
+    flat_pointer: Option<kaspa_consensus_core::evm::EvmLatestStatePtr>,
+    committed_state_root: Option<kaspa_hashes::EvmH256>,
+    /// The flat account rows re-hashed from disk, rather than the pointer's own claim.
+    recomputed_flat_root: Option<kaspa_hashes::EvmH256>,
+}
+
+/// Drive a short EVM-ACTIVE chain through the full pipeline under `config` and observe
+/// what it persisted. Shared by the regression below so the legacy and compact runs
+/// differ ONLY in the four C-01 storage knobs.
+#[cfg(feature = "evm")]
+async fn observe_evm_active_chain(config: kaspa_consensus_core::config::Config, blocks: u64) -> EvmStorageObservation {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
+    use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+    use kaspa_consensus_core::evm::{EvmExecutionPayload, EvmStateSnapshot};
+    use kaspa_evm::EvmBlockInput;
+
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let storage = consensus.consensus_clone().storage.clone();
+    set_fresh_dns_finality(&consensus);
+
+    let genesis = consensus.params().genesis.hash;
+    let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
+
+    let mut parent_hash = genesis;
+    let mut parent_header = None;
+    let mut parent_snapshot = EvmStateSnapshot::default();
+
+    for i in 1..=blocks {
+        let hash = BlockHash::from(i);
+        let payload = EvmExecutionPayload::default();
+        let mut block = consensus.build_utxo_valid_block_with_parents(hash, vec![parent_hash], miner_data.clone(), vec![]);
+        block.header.version = EVM_HEADER_VERSION;
+        block.header.evm_payload_hash = payload.payload_hash();
+        let input = EvmBlockInput {
+            parent: parent_header.as_ref(),
+            header_timestamp_ms: block.header.timestamp,
+            selected_parent_hash: parent_hash.as_bytes(),
+            blue_work_be: block.header.blue_work.to_be_bytes().to_vec(),
+            daa_score: block.header.daa_score,
+            payload: &payload,
+            accepted_txs: &[],
+            gas_pool_v2_activation_daa_score: u64::MAX,
+            f002_withdraw_cap_activation_daa_score: u64::MAX,
+            f003_mldsa_verify_activation_daa_score: u64::MAX,
+            typed_receipt_root_activation_daa_score: u64::MAX,
+        };
+        let (executed, snapshot) = kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).unwrap();
+        block.header.evm_commitment_root = executed.header.commitment_root();
+        block.evm_payload = payload;
+        consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.unwrap();
+
+        parent_hash = hash;
+        parent_header = Some(executed.header);
+        parent_snapshot = snapshot;
+    }
+
+    let evm_head = storage.evm_heads_store.read().get().unwrap().latest;
+    let observation = EvmStorageObservation {
+        evm_head,
+        snapshot_rows: storage.evm_state_store.iter().count(),
+        flat_pointer: storage.evm_latest_state_ptr_store.read().get().unwrap(),
+        committed_state_root: storage.evm_header_store.get(evm_head).ok().map(|h| h.state_root),
+        // Recomputed from the account rows on disk rather than read off the pointer:
+        // a stale pointer over a corrupt flat store is exactly the failure that
+        // retiring 206 would otherwise make unrecoverable.
+        recomputed_flat_root: crate::processes::evm::materialize_snapshot(&storage.evm_flat_account_store, &storage.evm_code_store)
+            .ok()
+            .and_then(|snap| kaspa_evm::snapshot::seed_cachedb(&snap).ok())
+            .map(|cdb| kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&cdb).0)),
+    };
+
+    drop(storage);
+    consensus.shutdown(wait_handles);
+    observation
+}
+
+/// The capacity regression, at the layer where the bytes are actually written.
+///
+/// Prefix 206 is named `EvmStateDiff` but stores an `EvmStateSnapshot` — every
+/// account, balance, nonce, bytecode and non-zero storage slot — once per EVM-active
+/// block. That is O(state x kept blocks), and the node whose consensus DB reached
+/// 144 GB was running exactly that representation while its operator believed
+/// otherwise, because a half-configured knob chain is demoted to a no-op.
+///
+/// Both directions are asserted from one chain shape: legacy writes a snapshot per
+/// block, compact writes none. Asserting only the compact side would pass just as well
+/// if the test never exercised the EVM lane at all.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn compact_storage_profile_writes_no_per_block_state_snapshot() {
+    use kaspa_consensus_core::evm::EvmStorageProfile;
+
+    kaspa_core::log::try_init_logger("info");
+    const BLOCKS: u64 = 4;
+
+    // Built straight from `EvmStorageProfile::expand`, so this cannot drift from what
+    // `--evm-storage-profile` actually does.
+    let profiled = |profile: EvmStorageProfile| {
+        let (history, shadow, flat, retire) = profile.expand();
+        ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+            .apply_args(move |c| {
+                c.evm_history_mode = history;
+                c.evm_shadow_state_backend = shadow;
+                c.evm_flat_authoritative = flat;
+                c.evm_retire_206 = retire;
+            })
+            .build()
+    };
+
+    // ---- Control: the representation that filled the disk.
+    let legacy = observe_evm_active_chain(profiled(EvmStorageProfile::Legacy), BLOCKS).await;
+    assert_eq!(legacy.evm_head, BlockHash::from(BLOCKS), "the control chain really did advance the EVM lane");
+    assert_eq!(
+        legacy.snapshot_rows as u64, BLOCKS,
+        "legacy writes ONE full-state snapshot per EVM-active block — the O(state x blocks) growth. \
+         Without this the compact assertion below would prove nothing."
+    );
+
+    // ---- Compact: same chain, no snapshots.
+    let compact = observe_evm_active_chain(profiled(EvmStorageProfile::Compact), BLOCKS).await;
+    assert_eq!(compact.evm_head, BlockHash::from(BLOCKS), "compact validated the same chain");
+    assert_eq!(
+        compact.snapshot_rows, 0,
+        "prefix 206 must hold exactly zero rows under the compact profile — this IS the capacity fix"
+    );
+
+    // The flat backend is the sole persisted state once 206 is retired, so it must be
+    // present, current and faithful; otherwise "no 206" would just mean state was lost.
+    let pointer = compact.flat_pointer.expect("flat pointer exists once 206 is retired");
+    assert_eq!(pointer.canonical_head, compact.evm_head, "the flat pointer materializes the canonical EVM head");
+    let committed_root = compact.committed_state_root.expect("the EVM head has a committed header");
+    assert_eq!(pointer.state_root, committed_root, "the flat pointer carries the committed state root");
+    assert_eq!(
+        compact.recomputed_flat_root,
+        Some(committed_root),
+        "the flat account rows on disk hash to the committed state root — the state is intact, not merely absent"
+    );
+}
