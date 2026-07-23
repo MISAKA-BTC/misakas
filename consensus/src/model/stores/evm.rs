@@ -12,10 +12,10 @@
 //! so any policy is safe.
 
 use kaspa_consensus_core::evm::{
-    CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmCheckpointMeta, EvmExecutionHeader, EvmExecutionPayload, EvmLatestStatePtr,
-    EvmPruneCursor, EvmPruneSegment, EvmRawTx, EvmStateCheckpointV1, EvmStateCheckpointV2, EvmStateDiffV2, EvmStateSnapshot,
-    EvmTraceReplayBodyV1, EvmTxLocations, FlatAccount, LogPostingKind, LogPostingLoc, decode_log_posting_loc, encode_log_posting_loc,
-    log_posting_bucket,
+    AccountCore, CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmCheckpointMeta, EvmExecutionHeader, EvmExecutionPayload,
+    EvmLatestStatePtr, EvmPruneCursor, EvmPruneSegment, EvmRawTx, EvmStateCheckpointV1, EvmStateCheckpointV2, EvmStateDiffV2,
+    EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, EvmU256, FlatAccount, LogPostingKind, LogPostingLoc,
+    decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
 };
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
@@ -1613,5 +1613,155 @@ impl DbEvmCodeStore {
                 .map_err(|_| StoreError::DataInconsistency("EvmCode key is not 32 bytes".into())),
             Err(e) => Err(StoreError::DataInconsistency(format!("EvmCode iterator: {e}"))),
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// C-01 Stage 2 — the SPLIT flat state: account core (230) + storage slots (233).
+//
+// Stage 1 put an account's whole storage vector in one row (234). Correct, and
+// O(live state) rather than O(state x blocks), but every single-slot write had
+// to decode, mutate, re-encode and rewrite the account's ENTIRE storage. A
+// contract with 100k slots paid megabytes of write amplification, memtable
+// pressure and SST churn to change one word — and RocksDB's temporary space
+// during the resulting compaction is disk the node does not have while it is
+// already short of it.
+//
+// Splitting makes a one-slot write one row. Zeroing a slot becomes a delete
+// rather than a rewrite, and the slot rows of one account share an address
+// prefix, so materializing an account is still one range scan.
+// ---------------------------------------------------------------------------
+
+/// `address | slot` — the 52-byte key of one storage slot.
+///
+/// Address first so an account's slots are contiguous and materializing one
+/// account stays a single range scan. A fixed-size newtype rather than a `Vec`
+/// so it satisfies the store's key bounds without heap traffic on every lookup.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FlatSlotKey([u8; 52]);
+
+impl FlatSlotKey {
+    #[inline]
+    pub fn new(address: EvmAddress, slot: EvmU256) -> Self {
+        let mut k = [0u8; 52];
+        k[..20].copy_from_slice(&address.as_bytes());
+        k[20..].copy_from_slice(&slot.to_be_bytes());
+        Self(k)
+    }
+}
+
+impl AsRef<[u8]> for FlatSlotKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for FlatSlotKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Only ever used in store-error messages.
+        write!(f, "{}", faster_hex::hex_string(&self.0))
+    }
+}
+
+/// `address → AccountCore` (prefix 230): nonce, balance, code hash.
+#[derive(Clone)]
+pub struct DbEvmFlatAccountCoreStore {
+    access: CachedDbAccess<EvmAddress, AccountCore>,
+}
+
+impl DbEvmFlatAccountCoreStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmFlatAccountCore.into()) }
+    }
+
+    pub fn get(&self, address: EvmAddress) -> Result<Option<AccountCore>, StoreError> {
+        match self.access.read(address) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn write_batch(&self, batch: &mut WriteBatch, address: EvmAddress, core: AccountCore) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), address, core)
+    }
+
+    pub fn delete_batch(&self, batch: &mut WriteBatch, address: EvmAddress) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), address)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Result<(EvmAddress, AccountCore), StoreError>> + '_ {
+        self.access.iterator().map(|res| match res {
+            Ok((k, v)) => <[u8; 20]>::try_from(k.as_ref())
+                .map(|b| (EvmAddress::from_bytes(b), v))
+                .map_err(|_| StoreError::DataInconsistency("EvmFlatAccountCore key is not 20 bytes".into())),
+            Err(e) => Err(StoreError::DataInconsistency(format!("EvmFlatAccountCore iterator: {e}"))),
+        })
+    }
+
+    pub fn is_empty(&self) -> Result<bool, StoreError> {
+        self.access.is_empty()
+    }
+}
+
+/// `address | slot → value` (prefix 233): one row per NON-ZERO storage slot.
+///
+/// Zero is absence, exactly as in the EVM: writing zero deletes the row rather
+/// than storing it, so the store holds live storage and not its history.
+#[derive(Clone)]
+pub struct DbEvmFlatStorageStore {
+    access: CachedDbAccess<FlatSlotKey, EvmU256>,
+}
+
+impl DbEvmFlatStorageStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmFlatStorageSlot.into()) }
+    }
+
+    pub fn get(&self, address: EvmAddress, slot: EvmU256) -> Result<Option<EvmU256>, StoreError> {
+        match self.access.read(FlatSlotKey::new(address, slot)) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Write one slot. A zero value DELETES: the EVM has no distinction between
+    /// "slot set to zero" and "slot never set", and storing zeros would make the
+    /// store grow with writes instead of with live state.
+    pub fn set_batch(&self, batch: &mut WriteBatch, address: EvmAddress, slot: EvmU256, value: EvmU256) -> Result<(), StoreError> {
+        let key = FlatSlotKey::new(address, slot);
+        if value == EvmU256::ZERO {
+            self.access.delete(BatchDbWriter::new(batch), key)
+        } else {
+            self.access.write(BatchDbWriter::new(batch), key, value)
+        }
+    }
+
+    /// Every non-zero slot of one account, ascending by slot. One range scan,
+    /// which is what putting the address first in the key buys.
+    pub fn account_slots(&self, address: EvmAddress) -> Result<Vec<(EvmU256, EvmU256)>, StoreError> {
+        // `bucket` scopes the scan to this address, so the iterator yields only
+        // this account's slots and the key suffix is the slot.
+        let address_bytes = address.as_bytes();
+        let mut out = Vec::new();
+        for row in self.access.seek_iterator(Some(&address_bytes), None, usize::MAX, false) {
+            let (key, value) = row.map_err(|e| StoreError::DataInconsistency(format!("EvmFlatStorageSlot iterator: {e}")))?;
+            let Ok(slot_bytes) = <[u8; 32]>::try_from(key.as_ref()) else {
+                return Err(StoreError::DataInconsistency("EvmFlatStorageSlot key suffix is not a 32-byte slot".into()));
+            };
+            out.push((EvmU256::from_be_bytes(slot_bytes), value));
+        }
+        Ok(out)
+    }
+
+    /// Drop every slot of an account — the destroyed-account path.
+    pub fn delete_account_batch(&self, batch: &mut WriteBatch, address: EvmAddress) -> Result<u64, StoreError> {
+        let mut deleted = 0;
+        for (slot, _) in self.account_slots(address)? {
+            self.access.delete(BatchDbWriter::new(batch), FlatSlotKey::new(address, slot))?;
+            deleted += 1;
+        }
+        Ok(deleted)
     }
 }

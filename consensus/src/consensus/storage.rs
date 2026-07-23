@@ -11,10 +11,10 @@ use crate::{
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         evm::{
             DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCheckpointMetaStore,
-            DbEvmCodeQuarantineStore, DbEvmCodeStore, DbEvmFlatAccountStore, DbEvmHeaderStore, DbEvmLatestStatePtrStore,
-            DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore, DbEvmPruneCursorStore, DbEvmRawTxOwnersStore, DbEvmRawTxStore,
-            DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateCheckpointV2Store, DbEvmStateDiffStore, DbEvmStateStore,
-            DbEvmTraceReplayStore, DbEvmTxIndexStore,
+            DbEvmCodeQuarantineStore, DbEvmCodeStore, DbEvmFlatAccountCoreStore, DbEvmFlatAccountStore, DbEvmFlatStorageStore,
+            DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore,
+            DbEvmPruneCursorStore, DbEvmRawTxOwnersStore, DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateCheckpointStore,
+            DbEvmStateCheckpointV2Store, DbEvmStateDiffStore, DbEvmStateStore, DbEvmTraceReplayStore, DbEvmTxIndexStore,
         },
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
@@ -109,6 +109,10 @@ pub struct ConsensusStorage {
     // state-root index (232) + canonical pointer (231). INERT until the writer/seed
     // slices; defining them now keeps the prefixes reserved and offline-testable.
     pub evm_flat_account_store: Arc<DbEvmFlatAccountStore>,
+    /// C-01 Stage 2 — the SPLIT flat state (230 core + 233 slots), so a one-slot
+    /// write stops rewriting an account's entire storage vector.
+    pub evm_flat_account_core_store: Arc<DbEvmFlatAccountCoreStore>,
+    pub evm_flat_storage_store: Arc<DbEvmFlatStorageStore>,
     pub evm_block_state_root_store: Arc<DbEvmBlockStateRootStore>,
     // RwLock-wrapped: the singleton pointer's `set_batch` takes `&mut self`
     // (CachedDbItem write), so the shadow dual-write (slice S4) advances it under
@@ -387,6 +391,16 @@ impl ConsensusStorage {
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
+        // C-01 Stage 2 split flat state. Slot rows are small and numerous, so a
+        // larger entry cache than the whole-account rows it replaces.
+        let evm_flat_account_core_store = Arc::new(DbEvmFlatAccountCoreStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_flat_storage_store = Arc::new(DbEvmFlatStorageStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size * 8).untracked().build(),
+        ));
         // C-01 Stage 1 flat-state stores (inert until the writer slice).
         let evm_flat_account_store = Arc::new(DbEvmFlatAccountStore::new(
             db.clone(),
@@ -447,6 +461,8 @@ impl ConsensusStorage {
             evm_raw_tx_owners_store,
             evm_code_quarantine_store,
             evm_flat_account_store,
+            evm_flat_account_core_store,
+            evm_flat_storage_store,
             evm_block_state_root_store,
             evm_latest_state_ptr_store,
             acceptance_data_store,
