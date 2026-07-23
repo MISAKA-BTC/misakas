@@ -123,6 +123,18 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
     if args.min_disk_free_percent > 99 {
         return Err(ConfigError::MinDiskFreePercentTooHigh(args.min_disk_free_percent));
     }
+    // C-01 storage chain: fail closed on a partial chain instead of demoting it to a
+    // no-op deep in the virtual processor. Checked on the FINAL values, so it also
+    // covers the config-file and environment paths, not just the CLI.
+    if args.evm_retire_206 && !args.evm_flat_authoritative {
+        return Err(ConfigError::EvmStorageKnobRequires("--evm-retire-206", "--evm-flat-authoritative"));
+    }
+    if args.evm_flat_authoritative && !args.evm_shadow_state_backend {
+        return Err(ConfigError::EvmStorageKnobRequires("--evm-flat-authoritative", "--evm-shadow-state-backend"));
+    }
+    if args.evm_prune_legacy_206 && !args.evm_retire_206 {
+        return Err(ConfigError::EvmStorageKnobRequires("--evm-prune-legacy-206", "--evm-retire-206"));
+    }
     if args.node_profile.is_sync_only() {
         let profile = args.node_profile.as_str().to_string();
         if args.archival {
@@ -169,6 +181,36 @@ fn data_mount_free_percent(path: &Path) -> Option<f64> {
         }
     }
     best.and_then(|(_, available, total)| (total > 0).then(|| available as f64 / total as f64 * 100.0))
+}
+
+/// Log the EFFECTIVE EVM storage configuration as one line at startup.
+///
+/// The failure this prevents is not exotic: a node was believed to be retiring the
+/// per-block 206 state snapshot while the dependency chain had demoted that knob to a
+/// no-op, and the only evidence was a warning line among thousands. One unconditional
+/// line naming the profile and whether the per-block full-state copy is still being
+/// written makes the storage behaviour greppable in `journalctl` after the fact.
+fn log_evm_storage_profile(args: &Args) {
+    if !cfg!(feature = "evm") {
+        // Every EVM knob is inert in a non-EVM build; do not imply otherwise.
+        return;
+    }
+    let named = args.evm_storage_profile.map(|p| p.as_str()).unwrap_or("(unset — individual knobs)");
+    info!(
+        "EVM storage profile: {} — history={} shadow-state-backend={} flat-authoritative={} retire-206={}",
+        named,
+        args.evm_history_mode.as_str(),
+        args.evm_shadow_state_backend,
+        args.evm_flat_authoritative,
+        args.evm_retire_206,
+    );
+    if !args.evm_retire_206 {
+        warn!(
+            "EVM storage: the per-block 206 full-state snapshot IS being persisted — EVM state storage grows as \
+             O(state x kept blocks), and pruning is deferred while consensus is transitional or catching up, so it can \
+             outrun reclamation during IBD. Use --evm-storage-profile=compact to bound it at O(state)."
+        );
+    }
 }
 
 fn disk_free_preflight(args: &Args, app_dir: &Path) {
@@ -455,6 +497,7 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
             );
         }
     }
+    log_evm_storage_profile(args);
     disk_free_preflight(args, &app_dir);
 
     let consensus_db_dir = db_dir.join(CONSENSUS_DB);
@@ -1127,6 +1170,30 @@ mod tests {
     #[test]
     fn full_profile_allows_heavy_flags() {
         let args = parse(&["--utxoindex", "--archival", "--enable-validator", "--evm-rpc-listen=127.0.0.1:8545"]);
+        assert!(validate_args(&args).is_ok());
+    }
+
+    #[test]
+    fn partial_evm_storage_chain_is_rejected_instead_of_silently_demoted() {
+        // Each of these used to start fine and log a warning while continuing to write a
+        // full EVM state copy per block — the configuration that filled the disk.
+        let args = parse(&["--evm-retire-206"]);
+        assert!(matches!(validate_args(&args), Err(ConfigError::EvmStorageKnobRequires("--evm-retire-206", _))));
+
+        let args = parse(&["--evm-retire-206", "--evm-flat-authoritative"]);
+        assert!(matches!(validate_args(&args), Err(ConfigError::EvmStorageKnobRequires("--evm-flat-authoritative", _))));
+
+        let args = parse(&["--evm-prune-legacy-206"]);
+        assert!(matches!(validate_args(&args), Err(ConfigError::EvmStorageKnobRequires("--evm-prune-legacy-206", _))));
+    }
+
+    #[test]
+    fn compact_storage_profile_passes_validation() {
+        let args = parse(&["--evm-storage-profile=compact"]);
+        assert!(validate_args(&args).is_ok());
+        // And the irreversible reclamation is accepted on top of it (it is the only
+        // combination in which it is allowed to run).
+        let args = parse(&["--evm-storage-profile=compact", "--evm-prune-legacy-206"]);
         assert!(validate_args(&args).is_ok());
     }
 }

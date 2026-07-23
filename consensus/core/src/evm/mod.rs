@@ -1181,6 +1181,91 @@ impl EvmHistoryMode {
     }
 }
 
+/// A node's EVM STORAGE profile (`--evm-storage-profile`) — one named bundle in
+/// place of the four independent C-01 knobs (`--evm-history-mode`,
+/// `--evm-shadow-state-backend`, `--evm-flat-authoritative`, `--evm-retire-206`).
+///
+/// The knobs have a dependency chain (retire needs flat-authoritative needs
+/// shadow) and a half-configured chain is silently demoted to a no-op with a
+/// warning, so the *capacity-critical* setting — "stop writing a full EVM state
+/// copy per block into prefix 206" — was easy to believe was on while it was off.
+/// A profile is a single value that either expands to a valid combination or is
+/// rejected at startup; it can never partially apply.
+///
+/// Node-local and consensus-NEUTRAL in every variant: no expansion changes block
+/// validity, only which representation of the same state this node persists.
+/// The IRREVERSIBLE one-shot reclamation of already-written 206 rows
+/// (`--evm-prune-legacy-206`) is deliberately NOT part of any profile — it stays
+/// an explicit operator action.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvmStorageProfile {
+    /// Pre-C-01 behaviour: the per-block 206 full-state snapshot is the sole
+    /// persisted state; no flat backend. Storage is O(state × kept blocks).
+    /// The historical default, kept so an operator can pin it explicitly.
+    #[default]
+    Legacy,
+    /// Migration/validation step: the flat backend is built and checked against
+    /// the committed snapshot every block, but 206 is still written (so it is
+    /// fully reversible). Storage is O(state × kept blocks) + O(state).
+    Shadow,
+    /// The capacity-safe production profile: `recent` history + shadow + flat
+    /// authoritative + 206 retired. The flat backend is the only persisted
+    /// state, so storage is O(state) instead of O(state × kept blocks).
+    Compact,
+    /// `compact` plus `archive` history — historical state stays queryable via
+    /// the §12 checkpoint + diff chain rather than via a per-block full copy.
+    Archive,
+}
+
+impl EvmStorageProfile {
+    /// Parse the `--evm-storage-profile` value; `None` for an unknown string.
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "legacy" => Some(Self::Legacy),
+            "shadow" => Some(Self::Shadow),
+            "compact" => Some(Self::Compact),
+            "archive" => Some(Self::Archive),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Shadow => "shadow",
+            Self::Compact => "compact",
+            Self::Archive => "archive",
+        }
+    }
+
+    /// The four knob values this profile expands to:
+    /// `(history_mode, shadow_state_backend, flat_authoritative, retire_206)`.
+    pub fn expand(self) -> (EvmHistoryMode, bool, bool, bool) {
+        match self {
+            Self::Legacy => (EvmHistoryMode::Recent, false, false, false),
+            Self::Shadow => (EvmHistoryMode::Recent, true, false, false),
+            Self::Compact => (EvmHistoryMode::Recent, true, true, true),
+            Self::Archive => (EvmHistoryMode::Archive, true, true, true),
+        }
+    }
+
+    /// Whether this profile stops the per-block 206 full-state write — i.e.
+    /// whether it bounds EVM state storage at O(state) rather than
+    /// O(state × kept blocks). The one property an operator actually needs to
+    /// read off a node's startup log.
+    pub fn retires_legacy_snapshots(self) -> bool {
+        self.expand().3
+    }
+
+    /// A one-line rendering of the expansion for the startup log, so the
+    /// EFFECTIVE configuration is visible without cross-referencing four flags.
+    pub fn describe_expansion(self) -> String {
+        let (history, shadow, flat, retire) = self.expand();
+        format!("history={} shadow-state-backend={} flat-authoritative={} retire-206={}", history.as_str(), shadow, flat, retire)
+    }
+}
+
 /// A canonical-resolved receipt view (§16 `eth_getTransactionReceipt`
 /// semantics): the ACCEPTING chain block currently on the selected chain, its
 /// EVM number, and the executed receipt. `None` upstream = the tx is not
