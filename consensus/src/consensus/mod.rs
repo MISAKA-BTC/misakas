@@ -2801,17 +2801,28 @@ impl ConsensusApi for Consensus {
         }
         let policy = self.config.evm_retention_policy;
 
+        // ABSENT is not BROKEN. On a fresh database the canonical-heads singleton has
+        // simply never been written, which is the normal state of a node that has not
+        // reached the EVM lane yet — reporting that as a store fault sends an operator
+        // looking for corruption on a healthy node. Only a real read error is a fault.
+        // (This is the same conflation the idle-reason split was introduced to fix,
+        // one layer down; live-net running found it because the fault variant is
+        // correctly NOT deduplicated and so repeated every tick.)
         let head = match self.storage.evm_heads_store.read().get() {
             Ok(heads) => heads.latest,
-            // A store read failure is a FAULT, not "nothing to do". Reporting it as
-            // idle would hide a broken node behind a routine message.
+            Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
+                return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::NoEvmHeadYet, ..Default::default() };
+            }
             Err(_) => return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::StoreUnavailable, ..Default::default() },
         };
         let head_evm_number = match self.storage.evm_header_store.get(head) {
             Ok(h) => h.evm_number,
-            // The lane is active on this network but this node has not produced an
-            // EVM head yet — normal during header sync, and it resolves by itself.
-            Err(_) => return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::NoEvmHeadYet, ..Default::default() },
+            // A head with no EVM header is pre-activation: the lane is active on this
+            // network but this node has not produced an EVM block yet.
+            Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
+                return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::NoEvmHeadYet, ..Default::default() };
+            }
+            Err(_) => return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::StoreUnavailable, ..Default::default() },
         };
 
         // The EVM number of the L1 pruning point bounds the state-history segments.
