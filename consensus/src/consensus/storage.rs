@@ -10,10 +10,11 @@ use crate::{
         dns_state::DbDnsStateStore,
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         evm::{
-            DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCheckpointMetaStore, DbEvmCodeStore,
-            DbEvmFlatAccountStore, DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore,
-            DbEvmPayloadStore, DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateCheckpointV2Store,
-            DbEvmStateDiffStore, DbEvmStateStore, DbEvmTraceReplayStore, DbEvmTxIndexStore,
+            DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCheckpointMetaStore,
+            DbEvmCodeQuarantineStore, DbEvmCodeStore, DbEvmFlatAccountStore, DbEvmHeaderStore, DbEvmLatestStatePtrStore,
+            DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore, DbEvmPruneCursorStore, DbEvmRawTxOwnersStore, DbEvmRawTxStore,
+            DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateCheckpointV2Store, DbEvmStateDiffStore, DbEvmStateStore,
+            DbEvmTraceReplayStore, DbEvmTxIndexStore,
         },
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
@@ -99,6 +100,11 @@ pub struct ConsensusStorage {
     pub evm_checkpoint_meta_store: Arc<RwLock<DbEvmCheckpointMetaStore>>,
     /// §12 archive: content-addressed `code_hash → code` (prefix 222).
     pub evm_code_store: Arc<DbEvmCodeStore>,
+    /// Segment-pruner support: per-segment progress (225), raw-tx ownership (227)
+    /// and the code-GC quarantine (228).
+    pub evm_prune_cursor_store: Arc<DbEvmPruneCursorStore>,
+    pub evm_raw_tx_owners_store: Arc<DbEvmRawTxOwnersStore>,
+    pub evm_code_quarantine_store: Arc<DbEvmCodeQuarantineStore>,
     // C-01 state backend (Stage 1) — flat latest-canonical state (234) + per-block
     // state-root index (232) + canonical pointer (231). INERT until the writer/seed
     // slices; defining them now keeps the prefixes reserved and offline-testable.
@@ -373,6 +379,10 @@ impl ConsensusStorage {
         let evm_state_checkpoint_v2_store =
             Arc::new(DbEvmStateCheckpointV2Store::new(db.clone(), PolicyBuilder::new().max_items(8).untracked().build()));
         let evm_checkpoint_meta_store = Arc::new(RwLock::new(DbEvmCheckpointMetaStore::new(db.clone())));
+        let evm_prune_cursor_store = Arc::new(DbEvmPruneCursorStore::new(db.clone()));
+        let evm_raw_tx_owners_store =
+            Arc::new(DbEvmRawTxOwnersStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
+        let evm_code_quarantine_store = Arc::new(DbEvmCodeQuarantineStore::new(db.clone()));
         let evm_code_store = Arc::new(DbEvmCodeStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -433,6 +443,9 @@ impl ConsensusStorage {
             evm_state_checkpoint_v2_store,
             evm_checkpoint_meta_store,
             evm_code_store,
+            evm_prune_cursor_store,
+            evm_raw_tx_owners_store,
+            evm_code_quarantine_store,
             evm_flat_account_store,
             evm_block_state_root_store,
             evm_latest_state_ptr_store,

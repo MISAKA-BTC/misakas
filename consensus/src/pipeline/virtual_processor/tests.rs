@@ -4887,3 +4887,121 @@ async fn evm_state_anchors_are_bounded_by_retention() {
     assert!(stored <= RETAINED, "anchors must plateau at the retention bound, found {stored} after {BLOCKS} blocks");
     assert!(has_sink, "the newest anchor — the sink — is the one that must survive eviction");
 }
+
+/// Retention must run — and reclaim — while consensus is transitional.
+///
+/// EVM data used to be reclaimed only by the L1 pruning processor, which stands
+/// down while consensus is transitional or virtual has not caught up. That is
+/// correct, and it is also the whole IBD window: the node's highest-write period
+/// ran with reclamation switched off, which is how the consensus DB reached
+/// 144 GB. This drives an EVM chain, then runs the pass with the retention
+/// windows set to zero, and asserts the RPC-only segments were actually
+/// reclaimed while the state-history segments were not.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_retention_reclaims_rpc_segments_without_waiting_for_l1_pruning() {
+    use crate::model::stores::evm::{EvmNumberStoreReader, EvmReceiptsStoreReader};
+    use kaspa_consensus_core::api::ConsensusApi;
+    use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+    use kaspa_consensus_core::evm::{
+        EvmExecutionPayload, EvmNodeRole, EvmPruneSegment, EvmRetentionPolicy, EvmStateSnapshot, EvmStorageProfile, SegmentRetention,
+    };
+    use kaspa_evm::EvmBlockInput;
+
+    kaspa_core::log::try_init_logger("info");
+    const BLOCKS: u64 = 6;
+
+    let (history, shadow, flat, retire) = EvmStorageProfile::Compact.expand();
+    // Retain nothing: the point is whether the pass RUNS and reclaims, not where
+    // a particular window falls.
+    let mut retention = EvmRetentionPolicy::for_role(EvmNodeRole::RpcRecent);
+    retention.receipts = SegmentRetention::Blocks(0);
+    retention.transaction_lookup = SegmentRetention::Blocks(0);
+    retention.block_hash_map = SegmentRetention::Blocks(0);
+    retention.number_index = SegmentRetention::Blocks(0);
+    retention.raw_transactions = SegmentRetention::Blocks(0);
+    retention.trace_replay = SegmentRetention::Blocks(0);
+    retention.log_postings = SegmentRetention::Blocks(0);
+
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .apply_args(move |c| {
+            c.evm_history_mode = history;
+            c.evm_shadow_state_backend = shadow;
+            c.evm_flat_authoritative = flat;
+            c.evm_retire_206 = retire;
+            c.evm_retention_policy = retention;
+        })
+        .build();
+
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let storage = consensus.consensus_clone().storage.clone();
+    set_fresh_dns_finality(&consensus);
+
+    let genesis = consensus.params().genesis.hash;
+    let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
+    let mut parent_hash = genesis;
+    let mut parent_header = None;
+    let mut parent_snapshot = EvmStateSnapshot::default();
+
+    for i in 1..=BLOCKS {
+        let hash = BlockHash::from(i);
+        let payload = EvmExecutionPayload::default();
+        let mut block = consensus.build_utxo_valid_block_with_parents(hash, vec![parent_hash], miner_data.clone(), vec![]);
+        block.header.version = EVM_HEADER_VERSION;
+        block.header.evm_payload_hash = payload.payload_hash();
+        let input = EvmBlockInput {
+            parent: parent_header.as_ref(),
+            header_timestamp_ms: block.header.timestamp,
+            selected_parent_hash: parent_hash.as_bytes(),
+            blue_work_be: block.header.blue_work.to_be_bytes().to_vec(),
+            daa_score: block.header.daa_score,
+            payload: &payload,
+            accepted_txs: &[],
+            gas_pool_v2_activation_daa_score: u64::MAX,
+            f002_withdraw_cap_activation_daa_score: u64::MAX,
+            f003_mldsa_verify_activation_daa_score: u64::MAX,
+            typed_receipt_root_activation_daa_score: u64::MAX,
+        };
+        let (executed, snapshot) = kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).unwrap();
+        block.header.evm_commitment_root = executed.header.commitment_root();
+        block.evm_payload = payload;
+        consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.unwrap();
+        parent_hash = hash;
+        parent_header = Some(executed.header);
+        parent_snapshot = snapshot;
+    }
+
+    // The canonical number map exists before the pass and is gone after it — the
+    // clearest observable "this actually deleted rows".
+    let numbers_before = (1..=BLOCKS).filter(|n| storage.evm_number_store.get(*n).unwrap().is_some()).count();
+    assert!(numbers_before > 0, "the chain must have populated the canonical number map first");
+
+    // Several passes: each is row-bounded, and bounded passes are the design.
+    let mut report = Default::default();
+    for _ in 0..8 {
+        report = consensus.consensus_clone().run_evm_retention_pass(1_000);
+    }
+    let _ = report;
+
+    let numbers_after = (1..=BLOCKS).filter(|n| storage.evm_number_store.get(*n).unwrap().is_some()).count();
+    let receipts_after = (1..=BLOCKS).filter(|n| storage.evm_receipts_store.has(BlockHash::from(*n)).unwrap_or(false)).count();
+    let cursor = |s| storage.evm_prune_cursor_store.get(s).unwrap();
+    let numbers_cursor = cursor(EvmPruneSegment::NumberIndex);
+    let state_cursor = cursor(EvmPruneSegment::StateDiffs);
+    let log_floor = storage.evm_log_index_store.history_available_from();
+    drop(storage);
+    consensus.shutdown(wait_handles);
+
+    assert!(numbers_after < numbers_before, "the number index must actually shrink: {numbers_before} -> {numbers_after}");
+    assert_eq!(receipts_after, 0, "receipts must be reclaimed once their postings are");
+    assert!(numbers_cursor.pruned_through > 0, "an RPC segment cursor must advance");
+    // The availability floor is what lets RPC say "pruned" instead of returning
+    // an empty result that reads as "nothing was ever here".
+    assert!(log_floor.is_some_and(|f| f > 0), "the log index must publish an availability floor: {log_floor:?}");
+    // State history is NOT touched: no L1 pruning point exists in this harness, and
+    // unlike an index a deleted state diff cannot be rebuilt.
+    assert_eq!(state_cursor.pruned_through, 0, "state history must stay behind the L1 pruning point");
+}

@@ -70,6 +70,7 @@ const ONE_GIGABYTE: f64 = 1_000_000_000.0;
 
 use crate::args::{Args, NodeProfile, VPS_8GB_MIN_SYSTEM_MEMORY_BYTES};
 use crate::disk_guard::{DiskGuard, DiskGuardThresholds, DiskPressureHandle, data_mount_free_percent};
+use crate::evm_retention::EvmRetentionService;
 use crate::validator_service::{ValidatorConfig, ValidatorMode, ValidatorService};
 
 pub(crate) const DEFAULT_DATA_DIR: &str = "datadir";
@@ -705,6 +706,9 @@ Do you confirm? (y/n)";
 
     let grpc_server_addr = args.rpclisten.unwrap_or(ContextualNetAddress::loopback()).normalize(config.default_rpc_port());
 
+    // Captured before `config` is moved into the consensus factory.
+    let evm_retention_interval_ms = config.evm_retention_policy.interval_ms;
+
     let core = Arc::new(Core::new());
 
     // ---
@@ -994,6 +998,14 @@ Do you confirm? (y/n)";
     async_runtime.register(mining_monitor);
     async_runtime.register(perf_monitor);
     async_runtime.register(mining_rule_engine);
+    // EVM retention runs on its own clock, NOT behind the L1 pruning gate — that
+    // gate stands down for the whole of IBD, which is when EVM data grows fastest.
+    async_runtime.register(Arc::new(EvmRetentionService::new(
+        tick_service.clone(),
+        consensus_manager.clone(),
+        Duration::from_millis(evm_retention_interval_ms),
+        disk_pressure.clone(),
+    )));
     if let Some(thresholds) = DiskGuardThresholds::from_min_free_percent(args.min_disk_free_percent) {
         async_runtime.register(Arc::new(DiskGuard::new(
             tick_service.clone(),

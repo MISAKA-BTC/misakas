@@ -13,8 +13,9 @@
 
 use kaspa_consensus_core::evm::{
     CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmCheckpointMeta, EvmExecutionHeader, EvmExecutionPayload, EvmLatestStatePtr,
-    EvmRawTx, EvmStateCheckpointV1, EvmStateCheckpointV2, EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations,
-    FlatAccount, LogPostingKind, LogPostingLoc, decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
+    EvmPruneCursor, EvmPruneSegment, EvmRawTx, EvmStateCheckpointV1, EvmStateCheckpointV2, EvmStateDiffV2, EvmStateSnapshot,
+    EvmTraceReplayBodyV1, EvmTxLocations, FlatAccount, LogPostingKind, LogPostingLoc, decode_log_posting_loc, encode_log_posting_loc,
+    log_posting_bucket,
 };
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
@@ -275,6 +276,41 @@ impl DbEvmTxIndexStore {
     pub fn write_batch(&self, batch: &mut WriteBatch, tx_hash: EvmH256, row: EvmTxLocations) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), tx_hash, row)
     }
+
+    /// Drop the whole row. The row VECTORS are bounded, but the number of rows —
+    /// one per unique tx hash ever seen — is not, which is the growth the pruner
+    /// exists to stop.
+    pub fn delete_batch(&self, batch: &mut WriteBatch, tx_hash: EvmH256) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), tx_hash)
+    }
+
+    /// Remove every location pointing at `block`, deleting the row once it is
+    /// empty. Returns whether the row is now gone.
+    ///
+    /// An emptied row is deleted rather than kept: a row recording that a tx
+    /// exists in no retained block is indistinguishable from a tx that was never
+    /// seen, and keeping it would leave exactly the unbounded row count the
+    /// pruner is here to bound.
+    pub fn remove_block_locations_batch(
+        &self,
+        batch: &mut WriteBatch,
+        tx_hash: EvmH256,
+        block: BlockHash,
+    ) -> Result<bool, StoreError> {
+        let mut row = match self.access.read(tx_hash) {
+            Ok(row) => row,
+            Err(StoreError::KeyNotFound(_)) => return Ok(true),
+            Err(e) => return Err(e),
+        };
+        row.included_in.retain(|b| *b != block);
+        row.accepted_in.retain(|(b, _)| *b != block);
+        if row.included_in.is_empty() && row.accepted_in.is_empty() {
+            self.access.delete(BatchDbWriter::new(batch), tx_hash)?;
+            return Ok(true);
+        }
+        self.access.write(BatchDbWriter::new(batch), tx_hash, row)?;
+        Ok(false)
+    }
 }
 
 impl EvmTxIndexStoreReader for DbEvmTxIndexStore {
@@ -309,6 +345,12 @@ impl DbEvmBlockHashMapStore {
     /// Unguarded upsert into the caller's batch.
     pub fn write_batch(&self, batch: &mut WriteBatch, rpc_hash: EvmH256, l1_hash: BlockHash) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), rpc_hash, l1_hash)
+    }
+
+    /// Reclaim one mapping. Rows are small, but one per block forever is not: at
+    /// 10 BPS "small and permanent" is tens of millions of rows a year.
+    pub fn delete_batch(&self, batch: &mut WriteBatch, rpc_hash: EvmH256) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), rpc_hash)
     }
 }
 
@@ -381,6 +423,15 @@ impl DbEvmNumberStore {
             Err(StoreError::KeyNotFound(_)) => Ok(()),
             Err(e) => Err(e),
         }
+    }
+
+    /// Retention pass: drop the row for `evm_number` outright.
+    ///
+    /// Distinct from `delete_if_matches_batch`, which is the reorg detach and must
+    /// not disturb a number a newer canonical block has re-claimed. Pruning is
+    /// deleting a number the node no longer serves at all, whoever owns it.
+    pub fn delete_batch(&self, batch: &mut WriteBatch, evm_number: u64) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), evm_number_key(evm_number))
     }
 }
 
@@ -784,6 +835,42 @@ impl DbEvmLogIndexStore {
         loc: &LogPostingLoc,
     ) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), log_posting_bucket(kind, selector), encode_log_posting_loc(loc))
+    }
+
+    /// Remove one posting from its bucket.
+    ///
+    /// The key layout is `kind || selector || evm_number || ...`, so the selector
+    /// comes BEFORE the block number and "delete every posting below block N" is
+    /// not a range. Deletion therefore has to name each posting, and the caller
+    /// re-derives them from the block's receipts — the same derivation the writer
+    /// used — rather than from a journal that would double the index's write cost.
+    pub fn delete_posting_batch(
+        &self,
+        batch: &mut WriteBatch,
+        kind: LogPostingKind,
+        selector: &[u8],
+        loc: &LogPostingLoc,
+    ) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), log_posting_bucket(kind, selector), encode_log_posting_loc(loc))
+    }
+
+    /// The lowest `evm_number` this index can still ANSWER for, after pruning.
+    ///
+    /// Deliberately not `indexed_floor`. That one is a backfill watermark and
+    /// MOVES DOWN as older blocks get indexed; this one moves UP as older blocks
+    /// are reclaimed. One value cannot be both, and conflating them would let a
+    /// prune pass advertise data it had just deleted.
+    pub fn history_available_from(&self) -> Option<u64> {
+        self.floor.read(EvmH256::from_bytes([1u8; 32])).ok()
+    }
+
+    /// Raise the availability floor. Monotone upward — it is a promise about what
+    /// the node can still serve.
+    pub fn set_history_available_from_batch(&self, batch: &mut WriteBatch, n: u64) -> Result<(), StoreError> {
+        if self.history_available_from().is_none_or(|cur| n > cur) {
+            self.floor.write(BatchDbWriter::new(batch), EvmH256::from_bytes([1u8; 32]), n)?;
+        }
+        Ok(())
     }
 
     /// Iterate the postings of a `(kind, selector)` bucket in ascending block
@@ -1356,5 +1443,153 @@ impl DbEvmCheckpointMetaStore {
 
     pub fn set_batch(&mut self, batch: &mut WriteBatch, meta: EvmCheckpointMeta) -> StoreResult<()> {
         self.access.write(BatchDbWriter::new(batch), &meta)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Segment pruner support stores.
+// ---------------------------------------------------------------------------
+
+/// Per-segment prune progress (prefix 225).
+///
+/// Persisted so a pass is resumable across restarts and so RPC can report an
+/// availability floor. Keyed by the segment discriminant.
+#[derive(Clone)]
+pub struct DbEvmPruneCursorStore {
+    access: CachedDbAccess<EvmH256, EvmPruneCursor>,
+}
+
+fn segment_key(segment: EvmPruneSegment) -> EvmH256 {
+    let mut k = [0u8; 32];
+    k[31] = segment as u8;
+    EvmH256::from_bytes(k)
+}
+
+impl DbEvmPruneCursorStore {
+    pub fn new(db: Arc<DB>) -> Self {
+        Self { access: CachedDbAccess::new(db, CachePolicy::Empty, DatabaseStorePrefixes::EvmPruneCursor.into()) }
+    }
+
+    /// Absent reads as a fresh cursor: a segment that has never been pruned has
+    /// simply made no progress, which is not an error.
+    pub fn get(&self, segment: EvmPruneSegment) -> Result<EvmPruneCursor, StoreError> {
+        match self.access.read(segment_key(segment)) {
+            Ok(c) => Ok(c),
+            Err(StoreError::KeyNotFound(_)) => Ok(EvmPruneCursor::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_batch(&self, batch: &mut WriteBatch, segment: EvmPruneSegment, cursor: EvmPruneCursor) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), segment_key(segment), cursor)
+    }
+}
+
+/// How many retained payload blocks still own a raw transaction (prefix 227).
+///
+/// 217 is keyed by tx hash while payloads are keyed by block, and the same tx can
+/// appear in more than one payload. Deleting a raw tx when any single owning
+/// block is pruned would break `eth_getTransactionByHash` for the others.
+///
+/// 204's location vectors cannot serve as this ledger: they are bounded and EVICT
+/// older entries, so a tx in seventeen blocks has forgotten the first one. The
+/// count is maintained in the same batch as the payload write, so it cannot drift
+/// from what is actually stored.
+#[derive(Clone)]
+pub struct DbEvmRawTxOwnersStore {
+    access: CachedDbAccess<EvmH256, u32>,
+}
+
+impl DbEvmRawTxOwnersStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmRawTxOwners.into()) }
+    }
+
+    pub fn get(&self, tx_hash: EvmH256) -> Result<u32, StoreError> {
+        match self.access.read(tx_hash) {
+            Ok(v) => Ok(v),
+            Err(StoreError::KeyNotFound(_)) => Ok(0),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn increment_batch(&self, batch: &mut WriteBatch, tx_hash: EvmH256) -> Result<u32, StoreError> {
+        let next = self.get(tx_hash)?.saturating_add(1);
+        self.access.write(BatchDbWriter::new(batch), tx_hash, next)?;
+        Ok(next)
+    }
+
+    /// Returns the remaining owner count. At zero the row is removed and the
+    /// caller may reclaim the raw transaction.
+    ///
+    /// Saturating rather than wrapping: an underflow would produce `u32::MAX`
+    /// owners and pin a raw tx in the database forever, which is a worse failure
+    /// than double-decrementing to zero and reclaiming a row that is rebuildable
+    /// from the payload.
+    pub fn decrement_batch(&self, batch: &mut WriteBatch, tx_hash: EvmH256) -> Result<u32, StoreError> {
+        let next = self.get(tx_hash)?.saturating_sub(1);
+        if next == 0 {
+            self.access.delete(BatchDbWriter::new(batch), tx_hash)?;
+        } else {
+            self.access.write(BatchDbWriter::new(batch), tx_hash, next)?;
+        }
+        Ok(next)
+    }
+}
+
+/// Bytecode a GC pass found unreachable, with the pass number that found it
+/// (prefix 228).
+///
+/// Code entries are SHARED by every account, diff and anchor that references the
+/// hash, so an unreachable verdict from a single pass is not enough: a concurrent
+/// commit, a partially-written migration or a mark bug would delete code that
+/// other retained state still needs, and unlike an index it is not rebuildable.
+/// Quarantine turns "delete on one opinion" into "delete after several agree".
+#[derive(Clone)]
+pub struct DbEvmCodeQuarantineStore {
+    access: CachedDbAccess<EvmH256, u64>,
+}
+
+impl DbEvmCodeQuarantineStore {
+    pub fn new(db: Arc<DB>) -> Self {
+        Self { access: CachedDbAccess::new(db, CachePolicy::Empty, DatabaseStorePrefixes::EvmCodeQuarantine.into()) }
+    }
+
+    pub fn get(&self, code_hash: EvmH256) -> Result<Option<u64>, StoreError> {
+        match self.access.read(code_hash) {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_batch(&self, batch: &mut WriteBatch, code_hash: EvmH256, since_epoch: u64) -> Result<(), StoreError> {
+        self.access.write(BatchDbWriter::new(batch), code_hash, since_epoch)
+    }
+
+    pub fn delete_batch(&self, batch: &mut WriteBatch, code_hash: EvmH256) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), code_hash)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Result<(EvmH256, u64), StoreError>> + '_ {
+        self.access.iterator().map(|res| match res {
+            Ok((k, v)) => <[u8; 32]>::try_from(k.as_ref())
+                .map(|b| (EvmH256::from_bytes(b), v))
+                .map_err(|_| StoreError::DataInconsistency("EvmCodeQuarantine key is not 32 bytes".into())),
+            Err(e) => Err(StoreError::DataInconsistency(format!("EvmCodeQuarantine iterator: {e}"))),
+        })
+    }
+}
+
+impl DbEvmCodeStore {
+    /// Enumerate every stored `code_hash`. The sweep half of the GC; values are
+    /// skipped so a full pass does not pull every contract's bytecode into memory.
+    pub fn iter_hashes(&self) -> impl Iterator<Item = Result<EvmH256, StoreError>> + '_ {
+        self.access.iterator().map(|res| match res {
+            Ok((k, _)) => <[u8; 32]>::try_from(k.as_ref())
+                .map(EvmH256::from_bytes)
+                .map_err(|_| StoreError::DataInconsistency("EvmCode key is not 32 bytes".into())),
+            Err(e) => Err(StoreError::DataInconsistency(format!("EvmCode iterator: {e}"))),
+        })
     }
 }

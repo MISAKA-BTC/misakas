@@ -169,6 +169,46 @@ impl Deref for Consensus {
 }
 
 impl Consensus {
+    /// Observed EVM blocks per second on the selected chain.
+    ///
+    /// Retention windows are expressed in time and have to be converted back into
+    /// EVM-block distances. Measuring the rate instead of assuming one is the
+    /// reason the setting survives a BPS change: 2048 blocks meant 34 minutes at
+    /// 1 BPS and 3.4 at 10, and nothing in the code noticed the difference.
+    ///
+    /// Derived from the header timestamps of the EVM head and the oldest anchored
+    /// block still retained. Falls back to 1.0 when there is not enough history to
+    /// measure — a conservative rate keeps MORE data than the operator asked for,
+    /// which is the safe direction for a wrong guess.
+    fn observed_evm_blocks_per_second(&self, head_evm_number: u64) -> f64 {
+        use crate::model::stores::evm::EvmNumberStoreReader;
+        use crate::model::stores::headers::HeaderStoreReader;
+
+        const SAMPLE_BLOCKS: u64 = 4_096;
+        if head_evm_number < SAMPLE_BLOCKS {
+            return 1.0;
+        }
+        let older_number = head_evm_number - SAMPLE_BLOCKS;
+        let (Some(head_block), Some(older_block)) = (
+            self.storage.evm_number_store.get(head_evm_number).ok().flatten(),
+            self.storage.evm_number_store.get(older_number).ok().flatten(),
+        ) else {
+            return 1.0;
+        };
+        let (Ok(head_ts), Ok(older_ts)) =
+            (self.storage.headers_store.get_timestamp(head_block), self.storage.headers_store.get_timestamp(older_block))
+        else {
+            return 1.0;
+        };
+        // Guard the head timestamp being at or behind the older one: block
+        // timestamps are producer-supplied and only loosely monotone.
+        let elapsed_ms = head_ts.saturating_sub(older_ts);
+        if elapsed_ms == 0 {
+            return 1.0;
+        }
+        (SAMPLE_BLOCKS as f64) / (elapsed_ms as f64 / 1000.0)
+    }
+
     pub fn new(
         db: Arc<DB>,
         config: Arc<Config>,
@@ -285,6 +325,7 @@ impl Consensus {
             mining_rules,
             config.evm_history_mode,         // §12: gate the archive diff/checkpoint writer
             config.evm_checkpoint_policy,    // §12.3 v2: anchor cadence + retention bound
+            config.evm_retention_policy,     // segment retention (also gates the write path)
             config.evm_shadow_state_backend, // C-01 S4: node-local shadow dual-write + differential
             config.evm_flat_authoritative,   // C-01 S9: flat-authoritative executor seed
             config.evm_retire_206,           // C-01 S9b: stop persisting the per-block 206 snapshot
@@ -454,7 +495,7 @@ impl Consensus {
                     };
                     snapshots += 1;
                     accounts += snapshot.accounts.len() as u64;
-                    if snapshots % 1_000 == 0 {
+                    if snapshots.is_multiple_of(1_000) {
                         info!(
                             "[evm-backfill] progress: scanned {snapshots} legacy snapshots / {accounts} account copies; \
                              recovered {recovered} unique bytecode entries."
@@ -2697,6 +2738,94 @@ impl ConsensusApi for Consensus {
     fn is_pruning_point_anticone_fully_synced(&self) -> bool {
         let pruning_meta_read = self.pruning_meta_stores.read();
         pruning_meta_read.is_anticone_fully_synced()
+    }
+
+    fn run_evm_retention_pass(&self, now_ms: u64) -> kaspa_consensus_core::evm::EvmRetentionReport {
+        use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
+        use crate::processes::evm::pruner::{EvmPruneStores, PruneContext, evm_tx_hash_fn, plan_pass};
+        use kaspa_consensus_core::evm::EvmRetentionReport;
+
+        // Inert lane: nothing to retain, and saying so beats reporting a zero that
+        // looks like a stuck pruner.
+        if self.config.evm_activation_daa_score == u64::MAX {
+            return EvmRetentionReport { inactive: true, ..Default::default() };
+        }
+        let policy = self.config.evm_retention_policy;
+
+        let head = match self.storage.evm_heads_store.read().get() {
+            Ok(heads) => heads.latest,
+            Err(_) => return EvmRetentionReport { inactive: true, ..Default::default() },
+        };
+        let head_evm_number = match self.storage.evm_header_store.get(head) {
+            Ok(h) => h.evm_number,
+            // Pre-activation head: the lane has produced nothing yet.
+            Err(_) => return EvmRetentionReport { inactive: true, ..Default::default() },
+        };
+
+        // The EVM number of the L1 pruning point bounds the state-history segments.
+        // Absent (a block with no EVM header) means "do not touch state history",
+        // which `plan_segment` already treats as no plan.
+        let l1_pruning_evm_number = {
+            let pruning_point = self.storage.pruning_point_store.read().pruning_point().ok();
+            pruning_point.and_then(|p| self.storage.evm_header_store.get(p).ok()).map(|h| h.evm_number)
+        };
+
+        let ctx = PruneContext {
+            head_evm_number,
+            // Measured, not assumed: expressing retention in time is pointless if
+            // the conversion back to blocks hard-codes a rate.
+            blocks_per_second: self.observed_evm_blocks_per_second(head_evm_number),
+            consensus_transitional: self.is_consensus_in_transitional_ibd_state(),
+            l1_pruning_evm_number,
+            batch_rows: policy.batch_rows,
+        };
+
+        let cursors = self.storage.evm_prune_cursor_store.clone();
+        let plans = plan_pass(&policy, &ctx, |segment| cursors.get(segment).unwrap_or_default());
+        if plans.is_empty() {
+            return EvmRetentionReport::default();
+        }
+
+        let stores = EvmPruneStores {
+            db: self.db.clone(),
+            cursors,
+            numbers: self.storage.evm_number_store.clone(),
+            receipts: self.storage.evm_receipts_store.clone(),
+            log_index: self.storage.evm_log_index_store.clone(),
+            tx_index: self.storage.evm_tx_index_store.clone(),
+            raw_tx: self.storage.evm_raw_tx_store.clone(),
+            raw_tx_owners: self.storage.evm_raw_tx_owners_store.clone(),
+            payloads: self.storage.evm_payload_store.clone(),
+            block_hash_map: self.storage.evm_block_hash_map_store.clone(),
+            traces: self.storage.evm_trace_store.clone(),
+            diffs: self.storage.evm_state_diff_store.clone(),
+            anchors_v1: self.storage.evm_state_checkpoint_store.clone(),
+            anchors_v2: self.storage.evm_state_checkpoint_v2_store.clone(),
+            state_roots: self.storage.evm_block_state_root_store.clone(),
+            tx_hash: evm_tx_hash_fn(),
+        };
+
+        let mut report = EvmRetentionReport::default();
+        for plan in plans {
+            match stores.execute(plan, now_ms) {
+                Ok(outcome) => {
+                    report.rows_deleted += outcome.rows_deleted;
+                    report.segments_advanced += 1;
+                }
+                // A failing segment must not abort the pass: the others are
+                // independent, and stalling all retention on one store error is how
+                // a recoverable fault becomes a full disk.
+                Err(e) => warn!("[evm-retention] segment {} failed: {e}", plan.segment.as_str()),
+            }
+        }
+        report
+    }
+
+    fn evm_retention_availability(&self) -> Vec<(kaspa_consensus_core::evm::EvmPruneSegment, u64)> {
+        kaspa_consensus_core::evm::EvmPruneSegment::ALL
+            .iter()
+            .map(|&s| (s, self.storage.evm_prune_cursor_store.get(s).map(|c| c.available_from).unwrap_or(0)))
+            .collect()
     }
 
     fn is_consensus_in_transitional_ibd_state(&self) -> bool {

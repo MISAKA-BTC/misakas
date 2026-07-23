@@ -331,6 +331,7 @@ impl EvmPipeline {
 /// Bounded per row (`MAX_TX_LOCATION_*`); the reader resolves canonicality of
 /// `accepted_in` entries against the current selected chain.
 pub fn stage_evm_index_rows(
+    retention: &kaspa_consensus_core::evm::EvmRetentionPolicy,
     receipts_store: &crate::model::stores::evm::DbEvmReceiptsStore,
     tx_index_store: &crate::model::stores::evm::DbEvmTxIndexStore,
     log_index_store: &crate::model::stores::evm::DbEvmLogIndexStore,
@@ -341,11 +342,18 @@ pub fn stage_evm_index_rows(
     accepting: kaspa_consensus_core::BlockHash,
     staged: &EvmStaged,
 ) -> Result<(), kaspa_database::prelude::StoreError> {
-    use kaspa_consensus_core::evm::{EvmCandidateOutcome, MAX_TX_LOCATION_ACCEPTANCES, MAX_TX_LOCATION_INCLUSIONS};
+    use kaspa_consensus_core::evm::{EvmCandidateOutcome, EvmPruneSegment, MAX_TX_LOCATION_ACCEPTANCES, MAX_TX_LOCATION_INCLUSIONS};
 
     // §11: the per-block `debug_traceTransaction` replay plan (prefix 219), keyed by
     // the accepting block. Present only when the block accepted candidate txs.
-    if let Some(body) = &staged.trace_body {
+    //
+    // Skipped entirely when the node's role keeps no traces. Not writing beats
+    // writing-then-deleting: it saves the value, the WAL record, the compaction and
+    // the tombstone, and a replay plan is one of the larger per-block values in the
+    // lane. A validator with no debug RPC was paying for all of it.
+    if retention.writes(EvmPruneSegment::TraceReplay)
+        && let Some(body) = &staged.trace_body
+    {
         trace_store.insert_batch(batch, accepting, body.clone())?;
     }
 
@@ -408,33 +416,18 @@ pub fn stage_evm_index_rows(
             kaspa_consensus_core::evm::EvmBlockReceipts { receipts: staged.result.receipts.clone(), tx_hashes },
         )?;
 
-        // §8: secondary log postings (address + topic0..3) for each log, so a
-        // long-range eth_getLogs can range-scan a contract/topic instead of
-        // re-walking every block's receipts. Keyed by block-global position;
-        // written for every UTXO-valid block (side branches included) — the query
-        // canonical-filters each posting's l1_hash. RPC index only.
-        let evm_number = staged.result.header.evm_number;
-        for (rcpt_idx, receipt) in staged.result.receipts.iter().enumerate() {
-            for (in_rcpt_idx, log) in receipt.logs.iter().enumerate() {
-                let loc = kaspa_consensus_core::evm::LogPostingLoc {
-                    evm_number,
-                    l1_hash: accepting,
-                    tx_index: rcpt_idx as u32,
-                    in_receipt_log_index: in_rcpt_idx as u32,
-                };
-                log_index_store.write_posting_batch(
-                    batch,
-                    kaspa_consensus_core::evm::LogPostingKind::Address,
-                    &log.address.as_bytes(),
-                    &loc,
-                )?;
-                for (ti, topic) in log.topics.iter().take(4).enumerate() {
-                    if let Some(kind) = kaspa_consensus_core::evm::LogPostingKind::topic(ti) {
-                        log_index_store.write_posting_batch(batch, kind, &topic.as_bytes(), &loc)?;
-                    }
-                }
-            }
-        }
+        // §8 log postings are NOT written here any more. They used to be written
+        // for every UTXO-valid block, side branches included, with the query
+        // canonical-filtering each posting's `l1_hash` at read time. That made the
+        // index strictly larger than the canonical chain it serves — one log
+        // yields up to five postings, so it is the largest multiplier in the lane —
+        // and it made deletion intractable, because a side-branch posting is never
+        // reachable from the canonical number map the pruner walks.
+        //
+        // They are now written on canonical ATTACH and removed on DETACH
+        // (`update_evm_canonical_log_index`), which makes the index exactly the
+        // canonical set and makes every posting reclaimable by the block that owns
+        // it. Same reasoning as prefix 213, one store later.
     }
 
     for (i, (hash, src)) in staged.candidate_meta.iter().enumerate() {
@@ -542,6 +535,8 @@ pub fn gather_reconstruction_inputs<EA: std::fmt::Display, ED: std::fmt::Display
     pending.reverse();
     Ok((seed, pending))
 }
+
+pub mod pruner;
 
 /// Resolve a §12 reconstruction ANCHOR at `block`, whichever format it is in.
 ///
@@ -1616,7 +1611,6 @@ mod driver {
     /// Validation half of the step: computes + verifies and RETURNS the rows to
     /// stage; `None` = already stored (no-replay). The caller decides the batch.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub fn evm_validate(
         header_store: &DbEvmHeaderStore,
         state_store: &DbEvmStateStore,
@@ -1913,6 +1907,7 @@ mod driver {
     /// `commit_utxo_state` batch instead).
     #[allow(clippy::too_many_arguments)]
     pub fn evm_validate_and_persist(
+        retention: &kaspa_consensus_core::evm::EvmRetentionPolicy,
         header_store: &DbEvmHeaderStore,
         state_store: &DbEvmStateStore,
         payload_store: &DbEvmPayloadStore,
@@ -1952,6 +1947,7 @@ mod driver {
         };
         header_store.insert_batch(batch, block, staged.result.header.clone()).map_err(EvmValidateError::Store)?;
         super::stage_evm_index_rows(
+            retention,
             receipts_store,
             tx_index_store,
             log_index_store,
@@ -2722,6 +2718,7 @@ mod tests {
         // persists header + child state.
         let mut b1 = WriteBatch::default();
         evm_validate_and_persist(
+            &kaspa_consensus_core::evm::EvmRetentionPolicy::default(),
             &header_store,
             &state_store,
             &payload_store,
@@ -2804,6 +2801,7 @@ mod tests {
         // No-replay: re-driving is a no-op (the already-stored result is reused).
         let mut b2 = WriteBatch::default();
         evm_validate_and_persist(
+            &kaspa_consensus_core::evm::EvmRetentionPolicy::default(),
             &header_store,
             &state_store,
             &payload_store,
@@ -2832,6 +2830,7 @@ mod tests {
         let bad = header(8_000, 10).with_evm_commitment(Hash64::from_bytes([0xEE; 64]));
         let mut b3 = WriteBatch::default();
         let err = evm_validate_and_persist(
+            &kaspa_consensus_core::evm::EvmRetentionPolicy::default(),
             &header_store,
             &state_store,
             &payload_store,
@@ -2860,6 +2859,7 @@ mod tests {
         let bad2 = header(7_000, 9).with_evm_commitment(no_mergeset.header.commitment_root());
         let mut b4 = WriteBatch::default();
         let err = evm_validate_and_persist(
+            &kaspa_consensus_core::evm::EvmRetentionPolicy::default(),
             &header_store,
             &state_store,
             &payload_store,

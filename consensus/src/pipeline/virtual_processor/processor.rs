@@ -288,6 +288,9 @@ pub struct VirtualStateProcessor {
     pub(super) evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
     /// §12.3 v2: the state-anchor cadence and retention bound.
     pub(super) evm_checkpoint_policy: kaspa_consensus_core::evm::EvmCheckpointPolicy,
+    /// Per-segment retention. Read on the write path too: a segment the node keeps
+    /// nothing of is not written in the first place.
+    pub(super) evm_retention_policy: kaspa_consensus_core::evm::EvmRetentionPolicy,
     pub(super) evm_activation_daa_score: u64,
     // These activation-score fields are only read by the `#[cfg(feature = "evm")]` chain-context
     // path; without that feature the pre-existing dead-code lint fires (allowed to unblock the gate).
@@ -373,6 +376,7 @@ impl VirtualStateProcessor {
         mining_rules: Arc<MiningRules>,
         evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
         evm_checkpoint_policy: kaspa_consensus_core::evm::EvmCheckpointPolicy,
+        evm_retention_policy: kaspa_consensus_core::evm::EvmRetentionPolicy,
         evm_shadow_state_backend: bool,
         evm_flat_authoritative: bool,
         evm_retire_206: bool,
@@ -456,6 +460,7 @@ impl VirtualStateProcessor {
             evm_retire_206,
             evm_history_mode,
             evm_checkpoint_policy,
+            evm_retention_policy,
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: params.evm_f002_withdraw_cap_activation_daa_score,
@@ -1594,6 +1599,7 @@ impl VirtualStateProcessor {
             // §16: receipts + tx-lookup index rows (store/RPC data only) commit
             // in the SAME batch — atomic with the result and the UTXO diff.
             crate::processes::evm::stage_evm_index_rows(
+                &self.evm_retention_policy,
                 &self.evm_receipts_store,
                 &self.evm_tx_index_store,
                 &self.evm_log_index_store,
@@ -1764,6 +1770,61 @@ impl VirtualStateProcessor {
         )))
     }
 
+    /// Keep the §8 log posting index (prefix 205) equal to the CANONICAL chain.
+    ///
+    /// Postings used to be written for every UTXO-valid block, with the query
+    /// canonical-filtering each one at read time. Three costs followed: the index
+    /// was strictly larger than the chain it serves (one log yields up to five
+    /// postings, so it is the lane's biggest multiplier), every range query paid a
+    /// filter, and a side-branch posting was unreachable from the canonical number
+    /// map the pruner walks — so it could never be reclaimed at all.
+    ///
+    /// Detach before attach, mirroring the number map: a block both removed and
+    /// re-added in one reorg ends attached, because the batch applies the deletes
+    /// and then the writes.
+    ///
+    /// Postings are derived from the block's receipts, exactly as the writer used
+    /// to derive them, so attach and detach are inverses by construction rather
+    /// than by two code paths agreeing.
+    fn update_evm_canonical_log_index(&self, batch: &mut WriteBatch, chain_path: &ChainPath) {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
+        use kaspa_consensus_core::evm::EvmPruneSegment;
+
+        if self.evm_activation_daa_score == u64::MAX || !self.evm_retention_policy.writes(EvmPruneSegment::LogPostings) {
+            return;
+        }
+
+        let postings_of = |block: BlockHash| {
+            let header = self.evm_header_store.get(block).optional().ok().flatten()?;
+            let receipts = self.evm_receipts_store.get(block).ok()?;
+            Some(crate::processes::evm::pruner::derive_log_postings(&receipts, header.evm_number, block))
+        };
+
+        for removed in chain_path.removed.iter().rev().copied() {
+            let Some(postings) = postings_of(removed) else { continue };
+            for (kind, selector, loc) in &postings {
+                if let Err(e) = self.evm_log_index_store.delete_posting_batch(batch, *kind, selector, loc) {
+                    warn!("[evm-log-index] detaching postings of {removed} failed: {e}");
+                }
+            }
+        }
+        for added in chain_path.added.iter().copied() {
+            let Some(postings) = postings_of(added) else { continue };
+            for (kind, selector, loc) in &postings {
+                if let Err(e) = self.evm_log_index_store.write_posting_batch(batch, *kind, selector, loc) {
+                    warn!("[evm-log-index] attaching postings of {added} failed: {e}");
+                }
+            }
+            // The completeness floor is a property of the CANONICAL index, so it
+            // moves here rather than at per-block commit.
+            if let Ok(header) = self.evm_header_store.get(added)
+                && let Err(e) = self.evm_log_index_store.set_floor_batch(batch, header.evm_number)
+            {
+                warn!("[evm-log-index] floor update for {added} failed: {e}");
+            }
+        }
+    }
+
     /// §12.3 v2: write a sparse, compressed, code-free reconstruction ANCHOR at the
     /// new sink when the cadence is due.
     ///
@@ -1910,6 +1971,12 @@ impl VirtualStateProcessor {
         // `evm_number → L1 hash` map follows the selected chain (detach/attach),
         // not per-block result-commit — so a sink-search loser can't shadow it.
         self.update_evm_canonical_number_map(&mut batch, chain_path);
+
+        // The log posting index follows the same detach/attach discipline, for the
+        // same reason: written per-block it covered side branches too, which made
+        // it larger than the chain it indexes and left postings no pruner could
+        // reach.
+        self.update_evm_canonical_log_index(&mut batch, chain_path);
 
         // §12.3 v2: write a state-history ANCHOR if the cadence says one is due.
         // Here, not in `commit_utxo_state`, for the same reason as the number map

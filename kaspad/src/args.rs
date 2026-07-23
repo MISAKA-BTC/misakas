@@ -1,7 +1,7 @@
 use clap::{Arg, ArgAction, Command, arg};
 use kaspa_consensus_core::{
     config::Config,
-    evm::{EvmHistoryMode, EvmStorageProfile},
+    evm::{EvmHistoryMode, EvmNodeRole, EvmStorageProfile},
     network::{NetworkId, NetworkType},
 };
 use kaspa_core::kaspad_env::version;
@@ -119,6 +119,13 @@ pub struct Args {
     /// `retire-206` could be believed on while it was demoted to a no-op.
     #[serde(default)]
     pub evm_storage_profile: Option<EvmStorageProfile>,
+    /// kaspa-pq EVM Lane (segment retention): what this node's EVM data is FOR.
+    ///
+    /// Sets per-segment retention. Orthogonal to `evm_storage_profile`, which is about
+    /// how the CURRENT state is represented; this is about how much HISTORY is kept and
+    /// for how long. Node-local and consensus-neutral.
+    #[serde(default)]
+    pub evm_node_role: EvmNodeRole,
     /// kaspa-pq EVM Lane (§12 archive): EVM state-history retention mode
     /// (`head`/`recent`/`archive`). Default `recent`. Effective only in an
     /// `--features evm` build; the diff/checkpoint retention enforcement lands with
@@ -282,6 +289,7 @@ impl Default for Args {
             evm_rpc_listen: None,
             db_stats: None,
             evm_storage_profile: None,
+            evm_node_role: EvmNodeRole::default(),
             evm_history_mode: EvmHistoryMode::Recent,
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,
@@ -345,6 +353,17 @@ impl Args {
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
         config.evm_retire_206 = self.evm_retire_206; // C-01 S9b: stop persisting the per-block 206 snapshot
         config.evm_prune_legacy_206 = self.evm_prune_legacy_206; // C-01 S9b-prune: one-shot bulk reclamation of legacy 206
+        // Segment retention, plus the one cross-cutting write gate it owns: a trace
+        // replay plan is written only when something can actually ask for it.
+        config.evm_retention_policy = kaspa_consensus_core::evm::EvmRetentionPolicy::for_role(self.evm_node_role);
+        if self.evm_rpc_listen.is_none() {
+            config.evm_retention_policy.trace_replay = kaspa_consensus_core::evm::SegmentRetention::Off;
+        }
+        // Archive history and archive retention are the same decision stated twice;
+        // keep them from disagreeing.
+        if matches!(self.evm_history_mode, EvmHistoryMode::Archive) {
+            config.evm_checkpoint_policy = kaspa_consensus_core::evm::EvmCheckpointPolicy::archive();
+        }
 
         #[cfg(feature = "devnet-prealloc")]
         if let Some(num_prealloc_utxos) = self.num_prealloc_utxos {
@@ -460,6 +479,22 @@ pub fn cli() -> Command {
                        archive (compact + archive history; historical state served from checkpoints + diffs). \
                        An individual knob that contradicts the profile is a startup ERROR, never a silent override. \
                        Unset = the individual knobs govern. Node-local and consensus-neutral; effective only in an --features evm build."),
+        )
+        .arg(
+            Arg::new("evm-node-role")
+                .long("evm-node-role")
+                .env("KASPAD_EVM_NODE_ROLE")
+                .require_equals(true)
+                .value_name("ROLE")
+                .value_parser(["compact-validator", "rpc-recent", "archive-indexer"])
+                .help("What this node's EVM history is FOR, as per-segment retention: \
+                       compact-validator (validates only — no log index, no traces, short RPC windows) | \
+                       rpc-recent (DEFAULT: bounded recent history for RPC) | \
+                       archive-indexer (keep everything, forever — the posture that grows without bound, \
+                       so it must be chosen rather than inherited). \
+                       Retention runs on its own schedule and does NOT wait for L1 pruning, which stands down \
+                       for the whole of IBD. Orthogonal to --evm-storage-profile, which is about the CURRENT \
+                       state's representation rather than history. Node-local and consensus-neutral."),
         )
         .arg(
             Arg::new("evm-history-mode")
@@ -820,6 +855,10 @@ impl Args {
             rpclisten: m.get_one::<ContextualNetAddress>("rpclisten").cloned().or(defaults.rpclisten),
             evm_rpc_listen: m.get_one::<ContextualNetAddress>("evm-rpc-listen").cloned().or(defaults.evm_rpc_listen),
             db_stats: m.get_one::<String>("db-stats").cloned().or(defaults.db_stats.clone()),
+            evm_node_role: m
+                .get_one::<String>("evm-node-role")
+                .and_then(|s| EvmNodeRole::from_str_opt(s))
+                .unwrap_or(defaults.evm_node_role),
             evm_storage_profile: m
                 .get_one::<String>("evm-storage-profile")
                 .and_then(|s| EvmStorageProfile::from_str_opt(s))

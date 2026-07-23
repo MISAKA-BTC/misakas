@@ -75,6 +75,7 @@ pub struct BlockBodyProcessor {
     /// on the evm feature (its only writer needs `kaspa_evm::tx::tx_hash`).
     #[cfg(feature = "evm")]
     pub(super) evm_raw_tx_store: Arc<crate::model::stores::evm::DbEvmRawTxStore>,
+    pub(super) evm_raw_tx_owners_store: Arc<crate::model::stores::evm::DbEvmRawTxOwnersStore>,
     pub(super) body_tips_store: Arc<RwLock<DbTipsStore>>,
 
     // Managers and services
@@ -129,6 +130,7 @@ impl BlockBodyProcessor {
             evm_payload_store: storage.evm_payload_store.clone(),
             #[cfg(feature = "evm")]
             evm_raw_tx_store: storage.evm_raw_tx_store.clone(),
+            evm_raw_tx_owners_store: storage.evm_raw_tx_owners_store.clone(),
             body_tips_store: storage.body_tips_store.clone(),
 
             _reachability_service: services.reachability_service.clone(),
@@ -266,6 +268,12 @@ impl BlockBodyProcessor {
             for raw in &evm_payload.transactions {
                 let txh = kaspa_evm::tx::tx_hash(raw);
                 self.evm_raw_tx_store.write_batch(&mut batch, txh, raw.clone(), hash).unwrap();
+                // Ownership ledger for the raw-tx segment pruner: the SAME tx can
+                // appear in several payloads, and 217's own `payload_block` field
+                // is an upsert that keeps only the last writer. Counting owners
+                // here — in the same batch as the payload — is what lets the pruner
+                // reclaim the bytes when the last owning block goes, and only then.
+                self.evm_raw_tx_owners_store.increment_batch(&mut batch, txh).unwrap();
             }
         }
 

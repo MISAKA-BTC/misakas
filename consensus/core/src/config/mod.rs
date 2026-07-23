@@ -132,6 +132,13 @@ pub struct Config {
     /// and with bytecode inlined. Node-local and consensus-neutral: an anchor is
     /// reconstruction data, never a committed value.
     pub evm_checkpoint_policy: crate::evm::EvmCheckpointPolicy,
+    /// Per-segment EVM retention and the node role behind it.
+    ///
+    /// The half of the capacity story that is not about writing less: EVM data was
+    /// reclaimed only by the L1 pruning processor, which correctly stands down while
+    /// consensus is transitional — i.e. for the whole of IBD, the node's
+    /// highest-write period. RPC-only segments retain on their own schedule.
+    pub evm_retention_policy: crate::evm::EvmRetentionPolicy,
 }
 
 impl Config {
@@ -166,6 +173,7 @@ impl Config {
             evm_retire_206: false,
             evm_prune_legacy_206: false,
             evm_checkpoint_policy: crate::evm::EvmCheckpointPolicy::default(),
+            evm_retention_policy: crate::evm::EvmRetentionPolicy::default(),
         }
     }
 
