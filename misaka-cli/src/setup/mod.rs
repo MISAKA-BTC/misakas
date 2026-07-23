@@ -62,6 +62,15 @@ const DEFAULT_VALIDATOR_KEY: &str = "/var/lib/misaka/validator/validator.seed";
 const DEFAULT_VALIDATOR_DB: &str = "/var/lib/misaka/validator/validator.state";
 const DEFAULT_VALIDATOR_ENV: &str = "/etc/misaka/validator.env";
 const DEFAULT_MINER_ENV: &str = "/etc/misaka/miner.env";
+/// Setup installs the capacity-safe EVM storage profile by default.
+///
+/// The pre-C-01 representation persists a FULL EVM state copy per block into prefix
+/// 206, so EVM state storage is O(state x kept blocks); pruning reclaims it but is
+/// correctly deferred while consensus is transitional or catching up, i.e. throughout
+/// IBD. `compact` retires that write, bounding EVM state at O(state). Every node this
+/// tool installs is a fresh or migrating node, so there is no reason to hand one the
+/// unbounded representation and hope the operator finds the flag later.
+const DEFAULT_EVM_STORAGE_PROFILE: &str = "compact";
 
 #[derive(Subcommand, Debug)]
 pub enum SetupCmd {
@@ -137,6 +146,11 @@ pub struct NodeSetupArgs {
     /// Storage tuning for kaspad RocksDB. auto enables HDD tuning when the data mount is rotational.
     #[arg(long, default_value = "auto", value_parser = ["auto", "default", "hdd"])]
     storage_profile: String,
+    /// kaspad EVM storage profile. `compact` retires the per-block full-state snapshot
+    /// (prefix 206), which is what keeps the consensus DB at O(state) instead of
+    /// O(state x kept blocks). `legacy` restores the pre-C-01 behaviour.
+    #[arg(long, default_value = DEFAULT_EVM_STORAGE_PROFILE, value_parser = ["legacy", "shadow", "compact", "archive"])]
+    evm_storage_profile: String,
     /// Do not add --utxoindex. By default node setup is validator/wallet-ready.
     #[arg(long)]
     no_utxoindex: bool,
@@ -338,6 +352,10 @@ struct StateNode {
     utxoindex: Option<bool>,
     storage_profile: Option<String>,
     rocksdb_preset: Option<String>,
+    /// The `--evm-storage-profile` this unit was installed with. Recorded so
+    /// `misaka setup status` can answer "is this node still writing a full EVM state
+    /// copy per block?" without parsing the unit file or grepping the journal.
+    evm_storage_profile: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -974,6 +992,11 @@ fn build_kaspad_args(ctx: &Ctx, args: &NodeSetupArgs, p2p_port: u16, public_ip: 
     out.push(format!("--maxinpeers={}", args.maxinpeers));
     out.push("--rpcmaxclients=8".to_string());
     out.push(format!("--min-disk-free-percent={}", args.min_disk_free_percent));
+    // The single knob that decides whether EVM state storage is O(state) or
+    // O(state x kept blocks). Emitted unconditionally: it is inert on a non-EVM build
+    // and on a network where the EVM lane has not activated, and on the networks where
+    // it is NOT inert it is the difference between a bounded DB and a full disk.
+    out.push(format!("--evm-storage-profile={}", args.evm_storage_profile));
     if let Some(preset) = rocksdb_preset_for_storage(&args.storage_profile, &args.appdir) {
         out.push(format!("--rocksdb-preset={preset}"));
     }
@@ -983,19 +1006,39 @@ fn build_kaspad_args(ctx: &Ctx, args: &NodeSetupArgs, p2p_port: u16, public_ip: 
     Ok(out)
 }
 
+/// Render the kaspad unit.
+///
+/// Three deliberate departures from the stock `Restart=always` / `RestartSec=10` unit,
+/// all learned from a node that filled its disk:
+///
+/// - `Restart=on-failure` + a start-rate limit. kaspad fail-stops by design on the
+///   conditions that matter here — the disk preflight refuses to start below
+///   `--min-disk-free-percent`, and the flat EVM backend HALTs rather than risk
+///   mis-validating a block. `Restart=always` turns a deliberate fail-stop into an
+///   endless restart loop against a full or damaged disk, which both hides the fault
+///   and keeps writing. Three attempts in ten minutes, then the unit stays failed and
+///   `systemctl status` says why.
+/// - `TimeoutStopSec=300`. systemd's 90 s default can SIGKILL kaspad mid-close on a
+///   large RocksDB; the stop path needs room to close cleanly.
+/// - No `KillSignal=` override. `kaspa_core::signals` installs its handler through
+///   `ctrlc` with the `termination` feature, so the default SIGTERM already reaches
+///   the graceful-shutdown path.
 fn render_unit(service_user: &str, kaspad_args: &[String]) -> String {
     format!(
         "[Unit]\n\
 Description=MISAKA kaspad node\n\
 After=network-online.target\n\
-Wants=network-online.target\n\n\
+Wants=network-online.target\n\
+StartLimitIntervalSec=600\n\
+StartLimitBurst=3\n\n\
 [Service]\n\
 User={service_user}\n\
 Group={service_user}\n\
 EnvironmentFile=-/etc/misaka/kaspad.env\n\
 ExecStart=/usr/local/bin/kaspad {}\n\
-Restart=always\n\
-RestartSec=10\n\
+Restart=on-failure\n\
+RestartSec=15\n\
+TimeoutStopSec=300\n\
 LimitNOFILE=1048576\n\n\
 [Install]\n\
 WantedBy=multi-user.target\n",
@@ -1029,6 +1072,7 @@ fn build_node_plan(ctx: &Ctx, args: &NodeSetupArgs) -> Result<NodePlan, CliError
             utxoindex: Some(!args.no_utxoindex),
             storage_profile: Some(args.storage_profile.clone()),
             rocksdb_preset,
+            evm_storage_profile: Some(args.evm_storage_profile.clone()),
         },
         ..existing_state
     };
@@ -1315,6 +1359,16 @@ async fn status(ctx: &Ctx, args: &StatusArgs) -> CliResult {
     println!("Sync:      {}", if snapshot.reachable { if snapshot.synced { "SYNCED" } else { "SYNCING" } } else { "UNREACHABLE" });
     println!("P2P:       {}/tcp {}", p2p_port, if p2p { "LISTENING" } else { "NOT LISTENING" });
     println!("UTXO:      {}", snapshot.utxoindex.map(|v| if v { "ENABLED" } else { "DISABLED" }).unwrap_or("UNKNOWN"));
+    match state.node.evm_storage_profile.as_deref() {
+        // `legacy`/`shadow` keep persisting a full EVM state copy per block, so the
+        // consensus DB grows as O(state x kept blocks). Say so here rather than leaving
+        // the operator to discover it from `du`.
+        Some(profile @ ("legacy" | "shadow")) => {
+            println!("EVM store: {profile} — WARNING: per-block full-state snapshot (206) still written; DB grows O(state x blocks)")
+        }
+        Some(profile) => println!("EVM store: {profile} (206 retired; EVM state storage is O(state))"),
+        None => println!("EVM store: UNKNOWN (unit predates --evm-storage-profile; re-run `misaka setup node --force`)"),
+    }
     println!("Seeder:    {}", status_label(&seeder_service));
     println!("Validator: {}", status_label(&validator_service));
     println!("Miner:     {}", status_label(&miner_service));
@@ -1414,6 +1468,7 @@ fn web_node_args(args: &WebArgs, yes: bool, dry_run: bool) -> NodeSetupArgs {
         maxinpeers: 64,
         min_disk_free_percent: 15,
         storage_profile: args.storage_profile.clone(),
+        evm_storage_profile: DEFAULT_EVM_STORAGE_PROFILE.to_string(),
         no_utxoindex: false,
     }
 }
@@ -3099,6 +3154,7 @@ mod tests {
             maxinpeers: 64,
             min_disk_free_percent: 15,
             storage_profile: "auto".to_string(),
+            evm_storage_profile: DEFAULT_EVM_STORAGE_PROFILE.to_string(),
             no_utxoindex: false,
         };
         let plan = build_node_plan(&base_ctx(), &args).unwrap();
@@ -3106,6 +3162,57 @@ mod tests {
         assert!(plan.unit.contains("--externalip=203.0.113.10:26211"));
         assert!(plan.unit.contains("--utxoindex"));
         assert_eq!(plan.state.node.service_user.as_deref(), Some("misaka_user"));
+    }
+
+    fn node_args_with_evm_storage_profile(evm_storage_profile: &str) -> NodeSetupArgs {
+        NodeSetupArgs {
+            yes: false,
+            dry_run: true,
+            force: false,
+            no_ufw: true,
+            service_user: DEFAULT_SERVICE_USER.to_string(),
+            appdir: PathBuf::from(DEFAULT_APPDIR),
+            service: DEFAULT_KASPAD_SERVICE.to_string(),
+            state_file: PathBuf::from(DEFAULT_STATE_FILE),
+            public_ip: Some("203.0.113.10".to_string()),
+            profile: "local-validator".to_string(),
+            outpeers: 8,
+            maxinpeers: 64,
+            min_disk_free_percent: 15,
+            storage_profile: "auto".to_string(),
+            evm_storage_profile: evm_storage_profile.to_string(),
+            no_utxoindex: false,
+        }
+    }
+
+    #[test]
+    fn node_plan_installs_the_compact_evm_storage_profile_by_default() {
+        // The regression this guards: a unit generated WITHOUT this flag runs the
+        // pre-C-01 representation, persisting a full EVM state copy per block.
+        assert_eq!(DEFAULT_EVM_STORAGE_PROFILE, "compact");
+        let plan = build_node_plan(&base_ctx(), &node_args_with_evm_storage_profile(DEFAULT_EVM_STORAGE_PROFILE)).unwrap();
+        assert!(plan.unit.contains("--evm-storage-profile=compact"));
+        assert_eq!(plan.state.node.evm_storage_profile.as_deref(), Some("compact"));
+    }
+
+    #[test]
+    fn node_plan_honours_an_explicit_evm_storage_profile() {
+        let plan = build_node_plan(&base_ctx(), &node_args_with_evm_storage_profile("legacy")).unwrap();
+        assert!(plan.unit.contains("--evm-storage-profile=legacy"));
+        assert_eq!(plan.state.node.evm_storage_profile.as_deref(), Some("legacy"));
+    }
+
+    #[test]
+    fn node_unit_fail_stops_instead_of_restarting_into_a_full_disk() {
+        // kaspad refuses to start below --min-disk-free-percent and HALTs on a flat
+        // backend fault. `Restart=always` would loop on both.
+        let plan = build_node_plan(&base_ctx(), &node_args_with_evm_storage_profile(DEFAULT_EVM_STORAGE_PROFILE)).unwrap();
+        assert!(plan.unit.contains("Restart=on-failure"));
+        assert!(!plan.unit.contains("Restart=always"));
+        assert!(plan.unit.contains("StartLimitIntervalSec=600"));
+        assert!(plan.unit.contains("StartLimitBurst=3"));
+        // RocksDB needs room to close cleanly; systemd's 90s default can SIGKILL it.
+        assert!(plan.unit.contains("TimeoutStopSec=300"));
     }
 
     #[test]
@@ -3125,6 +3232,7 @@ mod tests {
             maxinpeers: 64,
             min_disk_free_percent: 15,
             storage_profile: "hdd".to_string(),
+            evm_storage_profile: DEFAULT_EVM_STORAGE_PROFILE.to_string(),
             no_utxoindex: false,
         };
         let plan = build_node_plan(&base_ctx(), &args).unwrap();
@@ -3152,6 +3260,7 @@ mod tests {
             maxinpeers: 64,
             min_disk_free_percent: 15,
             storage_profile: "auto".to_string(),
+            evm_storage_profile: DEFAULT_EVM_STORAGE_PROFILE.to_string(),
             no_utxoindex: false,
         };
         let plan = build_node_plan(&base_ctx(), &args).unwrap();
