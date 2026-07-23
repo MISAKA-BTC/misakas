@@ -582,6 +582,17 @@ impl DbEvmStateDiffStore {
     pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(BatchDbWriter::new(batch), hash)
     }
+
+    /// Enumerate every retained diff. A mark root for the code GC: a reorg replays
+    /// these, so the bytecode they name on BOTH sides has to survive.
+    pub fn iter(&self) -> impl Iterator<Item = Result<(BlockHash, EvmStateDiffV2), StoreError>> + '_ {
+        self.access.iterator().map(|res| match res {
+            Ok((k, v)) => <[u8; 64]>::try_from(k.as_ref())
+                .map(|b| (BlockHash::from_bytes(b), v))
+                .map_err(|_| StoreError::DataInconsistency("EvmStateDiffV2 key is not 64 bytes".into())),
+            Err(e) => Err(StoreError::DataInconsistency(format!("EvmStateDiffV2 iterator: {e}"))),
+        })
+    }
 }
 
 impl EvmStateDiffStoreReader for DbEvmStateDiffStore {
@@ -621,6 +632,17 @@ impl DbEvmStateCheckpointStore {
 
     pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(BatchDbWriter::new(batch), hash)
+    }
+
+    /// Enumerate every retained legacy anchor. A code-GC mark root while a
+    /// migrating database still has them.
+    pub fn iter(&self) -> impl Iterator<Item = Result<(BlockHash, EvmStateCheckpointV1), StoreError>> + '_ {
+        self.access.iterator().map(|res| match res {
+            Ok((k, v)) => <[u8; 64]>::try_from(k.as_ref())
+                .map(|b| (BlockHash::from_bytes(b), v))
+                .map_err(|_| StoreError::DataInconsistency("EvmStateCheckpointV1 key is not 64 bytes".into())),
+            Err(e) => Err(StoreError::DataInconsistency(format!("EvmStateCheckpointV1 iterator: {e}"))),
+        })
     }
 }
 

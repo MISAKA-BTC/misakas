@@ -169,6 +169,48 @@ impl Deref for Consensus {
 }
 
 impl Consensus {
+    /// One code-GC pass. Returns the number of bytecode entries deleted.
+    ///
+    /// The GC "epoch" is derived from wall-clock time divided by the retention
+    /// interval, so quarantine ages advance at the rate passes actually run rather
+    /// than at whatever rate a counter happens to be incremented. A restarted node
+    /// therefore resumes the same schedule instead of resetting every sentence.
+    fn run_evm_code_gc(&self, now_ms: u64) -> u64 {
+        use crate::processes::evm::code_gc::{CodeGcStores, DEFAULT_QUARANTINE_EPOCHS};
+
+        let interval_ms = self.config.evm_retention_policy.interval_ms.max(1);
+        let epoch = now_ms / interval_ms;
+        let stores = CodeGcStores {
+            db: self.db.clone(),
+            code: self.storage.evm_code_store.clone(),
+            quarantine: self.storage.evm_code_quarantine_store.clone(),
+            flat: self.storage.evm_flat_account_store.clone(),
+            diffs: self.storage.evm_state_diff_store.clone(),
+            anchors_v1: self.storage.evm_state_checkpoint_store.clone(),
+            anchors_v2: self.storage.evm_state_checkpoint_v2_store.clone(),
+            legacy_snapshots: self.storage.evm_state_store.clone(),
+        };
+        match stores.run(epoch, DEFAULT_QUARANTINE_EPOCHS) {
+            Ok(r) if r.aborted => {
+                warn!("[evm-retention] code GC skipped: a mark root could not be read completely (nothing was deleted)");
+                0
+            }
+            Ok(r) => {
+                if r.deleted > 0 || r.quarantined > 0 || r.released > 0 {
+                    info!(
+                        "[evm-retention] code GC: {} live, {} quarantined, {} released, {} deleted",
+                        r.live, r.quarantined, r.released, r.deleted
+                    );
+                }
+                r.deleted
+            }
+            Err(e) => {
+                warn!("[evm-retention] code GC failed: {e}");
+                0
+            }
+        }
+    }
+
     /// Observed EVM blocks per second on the selected chain.
     ///
     /// Retention windows are expressed in time and have to be converted back into
@@ -2805,7 +2847,14 @@ impl ConsensusApi for Consensus {
             tx_hash: evm_tx_hash_fn(),
         };
 
+        // Code GC rides the same pass. It runs only when the state segments are
+        // eligible: a mark set computed while state history is still being written
+        // behind a deferred pruning point would be a snapshot of a moving target,
+        // and the cost of being wrong here is deleted bytecode.
         let mut report = EvmRetentionReport::default();
+        if !ctx.consensus_transitional && policy.role != kaspa_consensus_core::evm::EvmNodeRole::ArchiveIndexer {
+            report.rows_deleted += self.run_evm_code_gc(now_ms);
+        }
         for plan in plans {
             match stores.execute(plan, now_ms) {
                 Ok(outcome) => {

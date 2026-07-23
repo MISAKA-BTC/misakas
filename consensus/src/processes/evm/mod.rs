@@ -536,6 +536,7 @@ pub fn gather_reconstruction_inputs<EA: std::fmt::Display, ED: std::fmt::Display
     Ok((seed, pending))
 }
 
+pub mod code_gc;
 pub mod pruner;
 
 /// Resolve a §12 reconstruction ANCHOR at `block`, whichever format it is in.
