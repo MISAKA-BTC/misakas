@@ -56,7 +56,7 @@ impl EvmRetentionService {
 
     pub async fn worker(&self) {
         info!("[{SERVICE_NAME}] EVM retention runs every {}s, independently of L1 pruning", self.interval.as_secs());
-        let mut reported_inactive = false;
+        let mut last_idle_reported = None;
         let mut total_rows = 0u64;
 
         loop {
@@ -70,16 +70,20 @@ impl EvmRetentionService {
             let session = self.consensus_manager.consensus().unguarded_session();
             let report = session.spawn_blocking(move |c| c.run_evm_retention_pass(now_ms)).await;
 
-            if report.inactive {
-                // Once, not every tick: an inert lane is a configuration, not an
-                // event.
-                if !reported_inactive {
-                    info!("[{SERVICE_NAME}] the EVM lane is inert on this network; retention has nothing to do");
-                    reported_inactive = true;
+            if report.idle_reason.is_idle() {
+                // A permanent condition is said once; anything that can change —
+                // including a store fault — is said every time it is observed.
+                // Live-net verification caught the earlier version reporting a
+                // node mid-IBD as "the EVM lane is inert on this network", which
+                // sends an operator hunting a misconfiguration that is not there.
+                let repeat = !report.idle_reason.is_permanent();
+                if repeat || last_idle_reported != Some(report.idle_reason) {
+                    info!("[{SERVICE_NAME}] {}", report.idle_reason.describe());
+                    last_idle_reported = Some(report.idle_reason);
                 }
                 continue;
             }
-            reported_inactive = false;
+            last_idle_reported = None;
             if report.rows_deleted > 0 {
                 total_rows += report.rows_deleted;
                 info!(

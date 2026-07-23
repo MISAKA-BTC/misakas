@@ -2785,23 +2785,26 @@ impl ConsensusApi for Consensus {
     fn run_evm_retention_pass(&self, now_ms: u64) -> kaspa_consensus_core::evm::EvmRetentionReport {
         use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
         use crate::processes::evm::pruner::{EvmPruneStores, PruneContext, evm_tx_hash_fn, plan_pass};
-        use kaspa_consensus_core::evm::EvmRetentionReport;
+        use kaspa_consensus_core::evm::{EvmRetentionIdleReason, EvmRetentionReport};
 
         // Inert lane: nothing to retain, and saying so beats reporting a zero that
         // looks like a stuck pruner.
         if self.config.evm_activation_daa_score == u64::MAX {
-            return EvmRetentionReport { inactive: true, ..Default::default() };
+            return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::LaneInert, ..Default::default() };
         }
         let policy = self.config.evm_retention_policy;
 
         let head = match self.storage.evm_heads_store.read().get() {
             Ok(heads) => heads.latest,
-            Err(_) => return EvmRetentionReport { inactive: true, ..Default::default() },
+            // A store read failure is a FAULT, not "nothing to do". Reporting it as
+            // idle would hide a broken node behind a routine message.
+            Err(_) => return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::StoreUnavailable, ..Default::default() },
         };
         let head_evm_number = match self.storage.evm_header_store.get(head) {
             Ok(h) => h.evm_number,
-            // Pre-activation head: the lane has produced nothing yet.
-            Err(_) => return EvmRetentionReport { inactive: true, ..Default::default() },
+            // The lane is active on this network but this node has not produced an
+            // EVM head yet — normal during header sync, and it resolves by itself.
+            Err(_) => return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::NoEvmHeadYet, ..Default::default() },
         };
 
         // The EVM number of the L1 pruning point bounds the state-history segments.

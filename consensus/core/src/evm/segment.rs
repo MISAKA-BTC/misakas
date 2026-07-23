@@ -458,6 +458,28 @@ mod tests {
     }
 
     #[test]
+    fn an_idle_pass_says_which_kind_of_idle_it_was() {
+        // Found by live-net verification: a node mid-IBD on an EVM-ACTIVE network
+        // reported "the EVM lane is inert on this network". Three operationally
+        // different causes were collapsed into one message — one is permanent, one
+        // resolves by itself, one is a fault — and only the permanent one should be
+        // said once and then go quiet.
+        assert!(!EvmRetentionIdleReason::Ran.is_idle());
+        for r in [EvmRetentionIdleReason::LaneInert, EvmRetentionIdleReason::NoEvmHeadYet, EvmRetentionIdleReason::StoreUnavailable] {
+            assert!(r.is_idle(), "{r:?}");
+        }
+        assert!(EvmRetentionIdleReason::LaneInert.is_permanent());
+        // A node without an EVM head yet WILL get one; repeating is not noise.
+        assert!(!EvmRetentionIdleReason::NoEvmHeadYet.is_permanent());
+        // A store fault must never be silenced after the first sighting.
+        assert!(!EvmRetentionIdleReason::StoreUnavailable.is_permanent());
+
+        // The message an operator on an active network must NOT see.
+        assert!(!EvmRetentionIdleReason::NoEvmHeadYet.describe().contains("never activates"));
+        assert!(EvmRetentionIdleReason::NoEvmHeadYet.describe().contains("header sync"));
+    }
+
+    #[test]
     fn role_names_round_trip_including_the_short_aliases() {
         for role in [EvmNodeRole::CompactValidator, EvmNodeRole::RpcRecent, EvmNodeRole::ArchiveIndexer] {
             assert_eq!(EvmNodeRole::from_str_opt(role.as_str()), Some(role));
@@ -467,16 +489,59 @@ mod tests {
     }
 }
 
+/// Why a pass did no work.
+///
+/// Live-net verification caught these being collapsed into one message: a node
+/// mid-IBD on an EVM-ACTIVE network logged "the EVM lane is inert on this
+/// network", which is false and would send an operator looking for a
+/// misconfiguration that does not exist. The three causes are operationally
+/// different — one is permanent, one resolves on its own, one is a fault.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvmRetentionIdleReason {
+    /// Ran normally (possibly finding nothing to reclaim, which is healthy).
+    #[default]
+    Ran,
+    /// The EVM lane never activates on this network. Permanent; say it once.
+    LaneInert,
+    /// The lane is active but this node has no EVM head yet — normal during
+    /// header sync, and it resolves without operator action.
+    NoEvmHeadYet,
+    /// A store read failed. Not "nothing to do" — a fault worth surfacing, and
+    /// the case that must never be reported as one of the benign two.
+    StoreUnavailable,
+}
+
+impl EvmRetentionIdleReason {
+    pub fn is_idle(self) -> bool {
+        !matches!(self, Self::Ran)
+    }
+
+    /// Whether repeating this every tick is noise. A permanent condition is said
+    /// once; a fault is said every time, because it may clear or worsen.
+    pub fn is_permanent(self) -> bool {
+        matches!(self, Self::LaneInert)
+    }
+
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Ran => "ran",
+            Self::LaneInert => "the EVM lane never activates on this network; retention has nothing to do",
+            Self::NoEvmHeadYet => "no EVM head yet (normal during header sync); retention will start once the lane has a head",
+            Self::StoreUnavailable => "an EVM store could not be read; retention skipped this pass",
+        }
+    }
+}
+
 /// What one retention pass did. Reported so growth and reclamation are both
 /// visible in the log, rather than only the growth.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvmRetentionReport {
     pub rows_deleted: u64,
     pub segments_advanced: u32,
-    /// Set when the pass did no work because the lane is inert or the node is
-    /// configured to keep everything — distinguishes "nothing to do" from "ran and
-    /// found nothing", which is the difference between a healthy node and a stuck
-    /// pruner.
-    pub inactive: bool,
+    /// Why the pass did nothing, when it did nothing. Distinguishes "nothing to
+    /// do" from "ran and found nothing" — the difference between a healthy node
+    /// and a stuck pruner — and distinguishes the benign causes from a fault.
+    pub idle_reason: EvmRetentionIdleReason,
 }
