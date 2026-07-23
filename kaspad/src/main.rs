@@ -24,6 +24,13 @@ pub fn main() {
 
     let args = parse_args();
 
+    // Diagnostic mode: report consensus DB size per store and exit. Handled before any
+    // other startup work so it stays usable on a node that cannot start — including the
+    // case it exists for, a machine whose disk is too full to run.
+    if let Some(mode) = args.db_stats.clone() {
+        std::process::exit(kaspad_lib::db_stats::run(&args, &mode));
+    }
+
     // audit H-01: refuse to launch a MAINNET node while the premine custody ceremony is pending.
     // The ceremony is COMPLETE as of the 2026-06-17 re-genesis (the 13B premine is locked to the
     // operator custody addresses, MAINNET_PREMINE_CEREMONY_PENDING = false), so this guard is now a

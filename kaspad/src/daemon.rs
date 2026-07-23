@@ -72,8 +72,8 @@ use crate::args::{Args, NodeProfile, VPS_8GB_MIN_SYSTEM_MEMORY_BYTES};
 use crate::disk_guard::{DiskGuard, DiskGuardThresholds, DiskPressureHandle, data_mount_free_percent};
 use crate::validator_service::{ValidatorConfig, ValidatorMode, ValidatorService};
 
-const DEFAULT_DATA_DIR: &str = "datadir";
-const CONSENSUS_DB: &str = "consensus";
+pub(crate) const DEFAULT_DATA_DIR: &str = "datadir";
+pub(crate) const CONSENSUS_DB: &str = "consensus";
 const UTXOINDEX_DB: &str = "utxoindex";
 const META_DB: &str = "meta";
 const META_DB_FILE_LIMIT: i32 = 5;

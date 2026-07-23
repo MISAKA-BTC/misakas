@@ -8,6 +8,7 @@ mod writer;
 
 pub mod registry;
 mod set_access;
+pub mod size_stats;
 pub mod utils;
 
 pub mod prelude {
@@ -19,6 +20,6 @@ pub mod prelude {
     pub use super::key::DbKey;
     pub use super::set_access::{CachedDbSetAccess, DbSetAccess, ReadLock};
     pub use super::writer::{BatchDbWriter, DbWriter, DirectDbWriter, DirectWriter, MemoryWriter};
-    pub use db::{ConnBuilder, DB, RocksDbPreset, delete_db};
+    pub use db::{ConnBuilder, DB, ReadOnlyOpenError, RocksDbPreset, delete_db};
     pub use errors::{StoreError, StoreErrorPredicates, StoreResult, StoreResultExt, StoreResultUnitExt};
 }

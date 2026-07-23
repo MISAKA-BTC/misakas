@@ -105,6 +105,11 @@ pub struct Args {
     /// adapter (effective only in an `--features evm` build).
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub evm_rpc_listen: Option<ContextualNetAddress>,
+    /// Diagnostic mode: print a per-store size report for the consensus database and exit
+    /// WITHOUT starting the node. `estimate` (default) is cheap and safe against a live
+    /// node; `count-rows` adds exact row counts via a full scan. Read-only in both cases.
+    #[serde(default)]
+    pub db_stats: Option<String>,
     /// kaspa-pq EVM Lane (C-01, storage profile): ONE named bundle in place of the four
     /// independent knobs below (`evm_history_mode`, `evm_shadow_state_backend`,
     /// `evm_flat_authoritative`, `evm_retire_206`). Unset = the individual knobs govern
@@ -275,6 +280,7 @@ impl Default for Args {
             logdir: None,
             rpclisten: None,
             evm_rpc_listen: None,
+            db_stats: None,
             evm_storage_profile: None,
             evm_history_mode: EvmHistoryMode::Recent,
             evm_shadow_state_backend: false,
@@ -423,6 +429,21 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(ContextualNetAddress))
                 .help("Interface:port for the Ethereum JSON-RPC HTTP adapter (EVM lane; default port: 8545). Effective only in an --features evm build."),
+        )
+        .arg(
+            Arg::new("db-stats")
+                .long("db-stats")
+                .env("KASPAD_DB_STATS")
+                .value_name("MODE")
+                .num_args(0..=1)
+                .require_equals(true)
+                .default_missing_value(crate::db_stats::MODE_ESTIMATE)
+                .value_parser([crate::db_stats::MODE_ESTIMATE, crate::db_stats::MODE_COUNT_ROWS])
+                .help("Print a per-store size report for the consensus database and EXIT without starting the node. \
+                       Every store shares one column family behind a one-byte key prefix, so `du` can only report the \
+                       directory total; this attributes it. Opens the database READ-ONLY, so it is safe to run against \
+                       a live node. `estimate` (default) reads SST metadata; `count-rows` adds exact row counts via a \
+                       full scan (minutes on a large database)."),
         )
         .arg(
             Arg::new("evm-storage-profile")
@@ -798,6 +819,7 @@ impl Args {
             no_log_files: arg_match_unwrap_or::<bool>(&m, "nologfiles", defaults.no_log_files),
             rpclisten: m.get_one::<ContextualNetAddress>("rpclisten").cloned().or(defaults.rpclisten),
             evm_rpc_listen: m.get_one::<ContextualNetAddress>("evm-rpc-listen").cloned().or(defaults.evm_rpc_listen),
+            db_stats: m.get_one::<String>("db-stats").cloned().or(defaults.db_stats.clone()),
             evm_storage_profile: m
                 .get_one::<String>("evm-storage-profile")
                 .and_then(|s| EvmStorageProfile::from_str_opt(s))

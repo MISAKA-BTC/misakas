@@ -2,7 +2,7 @@ use rocksdb::{DBWithThreadMode, MultiThreaded};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
-pub use conn_builder::ConnBuilder;
+pub use conn_builder::{ConnBuilder, ReadOnlyOpenError};
 use kaspa_utils::fd_budget::FDGuard;
 pub use rocksdb_preset::RocksDbPreset;
 
