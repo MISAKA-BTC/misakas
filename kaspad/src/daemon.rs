@@ -69,6 +69,7 @@ const MINIMUM_RETENTION_PERIOD_DAYS: f64 = 2.0;
 const ONE_GIGABYTE: f64 = 1_000_000_000.0;
 
 use crate::args::{Args, NodeProfile, VPS_8GB_MIN_SYSTEM_MEMORY_BYTES};
+use crate::disk_guard::{DiskGuard, DiskGuardThresholds, DiskPressureHandle, data_mount_free_percent};
 use crate::validator_service::{ValidatorConfig, ValidatorMode, ValidatorService};
 
 const DEFAULT_DATA_DIR: &str = "datadir";
@@ -157,30 +158,6 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
         return Err(ConfigError::RecoverySyncRequiresConnect);
     }
     Ok(())
-}
-
-fn data_mount_free_percent(path: &Path) -> Option<f64> {
-    let mut probe = path.to_path_buf();
-    while !probe.exists() {
-        match probe.parent() {
-            Some(parent) if parent != probe => probe = parent.to_path_buf(),
-            _ => break,
-        }
-    }
-    let probe = probe.canonicalize().unwrap_or(probe);
-
-    let disks = sysinfo::Disks::new_with_refreshed_list();
-    let mut best: Option<(usize, u64, u64)> = None;
-    for disk in disks.list() {
-        let mount = disk.mount_point();
-        if probe.starts_with(mount) {
-            let len = mount.as_os_str().len();
-            if best.map(|(best_len, _, _)| len > best_len).unwrap_or(true) {
-                best = Some((len, disk.available_space(), disk.total_space()));
-            }
-        }
-    }
-    best.and_then(|(_, available, total)| (total > 0).then(|| available as f64 / total as f64 * 100.0))
 }
 
 /// Log the EFFECTIVE EVM storage configuration as one line at startup.
@@ -733,6 +710,11 @@ Do you confirm? (y/n)";
     // ---
 
     let tick_service = Arc::new(TickService::new());
+    // Runtime disk guard. `--min-disk-free-percent` only ever gated STARTUP, so a node
+    // that filled its mount while running had no warning, no growth rate, and no clean
+    // stop. The handle stays Normal when the guard is disabled, so consumers need no
+    // conditional path.
+    let disk_pressure = DiskPressureHandle::new();
     let (notification_send, notification_recv) = unbounded();
     let max_tracked_addresses = if args.utxoindex && args.max_tracked_addresses > 0 { Some(args.max_tracked_addresses) } else { None };
     let subscription_context = SubscriptionContext::with_options(max_tracked_addresses);
@@ -891,6 +873,7 @@ Do you confirm? (y/n)";
             validator_mass_calculator,
             index_service.as_ref().map(|x| x.utxoindex().unwrap()),
             config.params.coinbase_maturity(),
+            disk_pressure.clone(),
         )))
     } else {
         None
@@ -957,7 +940,7 @@ Do you confirm? (y/n)";
 
     // Create an async runtime and register the top-level async services
     let async_runtime = Arc::new(AsyncRuntime::new(args.async_threads));
-    async_runtime.register(tick_service);
+    async_runtime.register(tick_service.clone());
     async_runtime.register(notify_service);
     if let Some(index_service) = index_service {
         async_runtime.register(index_service)
@@ -1011,6 +994,18 @@ Do you confirm? (y/n)";
     async_runtime.register(mining_monitor);
     async_runtime.register(perf_monitor);
     async_runtime.register(mining_rule_engine);
+    if let Some(thresholds) = DiskGuardThresholds::from_min_free_percent(args.min_disk_free_percent) {
+        async_runtime.register(Arc::new(DiskGuard::new(
+            tick_service.clone(),
+            app_dir.clone(),
+            db_dir.join(CONSENSUS_DB),
+            thresholds,
+            disk_pressure.clone(),
+            &core,
+        )));
+    } else {
+        info!("Runtime disk guard is DISABLED (--min-disk-free-percent=0). The node will not warn or stop as the mount fills.");
+    }
 
     let wrpc_service_tasks: usize = 2; // num_cpus::get() / 2;
     // Register wRPC servers based on command line arguments
