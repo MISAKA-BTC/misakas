@@ -503,7 +503,13 @@ pub fn gather_reconstruction_inputs<EA: std::fmt::Display, ED: std::fmt::Display
     // stores. This walk only needs "is there an anchor here, and what state is it".
     resolve_anchor: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateSnapshot>, EA>,
     get_diff: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, ED>,
-    has_header: impl Fn(kaspa_consensus_core::BlockHash) -> bool,
+    // Tri-state, NOT a bool. "No EVM header" is ambiguous between a genuinely
+    // pre-activation parent and one whose header row was PRUNED, and resolving
+    // that ambiguity wrongly is how a reconstruction silently anchors on the empty
+    // state (observed on the live testnet: a `recent`-mode node with 206 retired
+    // reconstructed the empty root for its own pruning point and could not serve
+    // IBD). Only a PROVABLY pre-activation parent may anchor the empty state.
+    classify_parent: impl Fn(kaspa_consensus_core::BlockHash) -> ParentAnchorClass,
 ) -> Result<(kaspa_consensus_core::evm::EvmStateSnapshot, Vec<kaspa_consensus_core::evm::EvmStateDiffV2>), ReconstructGatherError> {
     // The bound on how far back an anchor may be. v2 anchors are SPARSE by design
     // (paced in time, capped by `EvmCheckpointPolicy::max_block_gap`), so this is
@@ -526,14 +532,67 @@ pub fn gather_reconstruction_inputs<EA: std::fmt::Display, ED: std::fmt::Display
         if pending.len() > max_reconstruction_diffs {
             return Err(ReconstructGatherError::TooDeep(format!("{block}: exceeded {max_reconstruction_diffs} diffs")));
         }
-        // A parent with no EVM header is pre-activation ⇒ anchor = empty genesis.
-        if !has_header(parent) {
-            break kaspa_consensus_core::evm::EvmStateSnapshot::default();
+        match classify_parent(parent) {
+            ParentAnchorClass::HasEvmHeader => {}
+            // Provably below the activation score ⇒ the empty genesis state is the
+            // correct anchor.
+            ParentAnchorClass::PreActivation => break kaspa_consensus_core::evm::EvmStateSnapshot::default(),
+            // No EVM header and NOT provably pre-activation: the row was reclaimed.
+            // Fail rather than substitute the empty state — the caller's root check
+            // would reject it anyway, and reporting "unavailable" tells an operator
+            // that retention is the cause instead of leaving a root mismatch to
+            // interpret.
+            ParentAnchorClass::Unavailable => {
+                return Err(ReconstructGatherError::Unavailable(format!(
+                    "{block}: the diff chain reaches {parent}, whose EVM header has been pruned; \
+                     no anchor is retained for this range"
+                )));
+            }
         }
         cur = parent;
     };
     pending.reverse();
     Ok((seed, pending))
+}
+
+/// How a walk should treat a parent that has no committed EVM header.
+///
+/// The distinction exists because the two causes are indistinguishable from the
+/// header store alone, and they demand opposite handling. A pre-activation parent
+/// legitimately anchors the empty state; a PRUNED parent must abort the walk.
+/// Collapsing them into "no header ⇒ empty genesis" is what let a node
+/// reconstruct — and briefly believe in — an empty EVM state for a pruning point
+/// whose committed root was non-empty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParentAnchorClass {
+    /// Has a committed EVM header; keep walking back.
+    HasEvmHeader,
+    /// Provably below the EVM activation score. The empty state is correct here.
+    PreActivation,
+    /// No EVM header and not provably pre-activation — reclaimed by retention.
+    Unavailable,
+}
+
+/// Classify a parent from the EVM header store plus the L1 DAA score.
+///
+/// The DAA score is what makes "pre-activation" PROVABLE rather than inferred
+/// from an absence. A block below the activation score has no EVM header because
+/// it never had one; a block above it that has none has lost it.
+pub fn classify_parent_for_anchor(
+    parent: kaspa_consensus_core::BlockHash,
+    evm_activation_daa_score: u64,
+    has_evm_header: impl Fn(kaspa_consensus_core::BlockHash) -> bool,
+    l1_daa_score: impl Fn(kaspa_consensus_core::BlockHash) -> Option<u64>,
+) -> ParentAnchorClass {
+    if has_evm_header(parent) {
+        return ParentAnchorClass::HasEvmHeader;
+    }
+    match l1_daa_score(parent) {
+        Some(daa) if daa < evm_activation_daa_score => ParentAnchorClass::PreActivation,
+        // Above activation with no EVM header, or the L1 header is gone too:
+        // either way this is not provable pre-activation.
+        _ => ParentAnchorClass::Unavailable,
+    }
 }
 
 pub mod code_gc;
@@ -1517,9 +1576,68 @@ mod gather_tests {
             // The walk takes a DECODED anchor now; the v1/v2 choice lives in the caller.
             |b| c.checkpoints.get(&b).map(|cp| cp.decode_snapshot()).transpose().map_err(|e| e.to_string()),
             |b| Ok(c.diffs.get(&b).cloned()),
-            // Blocks 1..3 have headers; block 0 (genesis) does not.
-            |b| (1..=3u8).any(|n| h(n) == b),
+            // Blocks 1..3 have EVM headers; block 0 (genesis) is pre-activation.
+            |b| {
+                if (1..=3u8).any(|n| h(n) == b) { ParentAnchorClass::HasEvmHeader } else { ParentAnchorClass::PreActivation }
+            },
         )
+    }
+
+    /// A PRUNED parent must abort the walk, not anchor the empty state.
+    ///
+    /// Reproduces a failure observed on the live testnet. A node running
+    /// `--evm-history-mode=recent` with 206 retired prunes 201/220/221 for buried
+    /// blocks, so `has_evm_header(parent)` becomes false for a parent that was
+    /// EVM-active. The old bool sentinel read that as "pre-activation" and anchored
+    /// the EMPTY state; the walk then replayed forward from empty and produced the
+    /// empty state root (`56e81f17…`) for a pruning point whose committed root was
+    /// not empty. The committed-root check caught it — so nothing was corrupted —
+    /// but the node could not serve pruned IBD, and the log showed a bare root
+    /// mismatch rather than the actual cause.
+    #[test]
+    fn a_pruned_parent_fails_the_walk_instead_of_anchoring_the_empty_state() {
+        let c = chain();
+
+        // Genesis (block 0) is genuinely pre-activation: the empty anchor is right.
+        let (seed, diffs) = gather_reconstruction_inputs::<String, Infallible>(
+            h(3),
+            |_| Ok(None),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            |b| if (1..=3u8).any(|n| h(n) == b) { ParentAnchorClass::HasEvmHeader } else { ParentAnchorClass::PreActivation },
+        )
+        .expect("a pre-activation parent anchors the empty state");
+        assert_eq!(seed, EvmStateSnapshot::default());
+        assert_eq!(diffs.len(), 3);
+
+        // Same chain, but the parent's header was PRUNED rather than never written.
+        // The walk must refuse, and say why.
+        let err = gather_reconstruction_inputs::<String, Infallible>(
+            h(3),
+            |_| Ok(None),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            |b| if (1..=3u8).any(|n| h(n) == b) { ParentAnchorClass::HasEvmHeader } else { ParentAnchorClass::Unavailable },
+        )
+        .expect_err("a pruned parent must not anchor the empty state");
+        assert!(matches!(err, ReconstructGatherError::Unavailable(_)), "{err:?}");
+        assert!(format!("{err}").contains("pruned"), "the error must name retention as the cause: {err}");
+    }
+
+    /// The classifier is what makes "pre-activation" provable rather than inferred
+    /// from an absence.
+    #[test]
+    fn pre_activation_is_proved_by_the_daa_score_not_by_a_missing_header() {
+        let below = h(1);
+        let above = h(2);
+        let daa = |b: BlockHash| if b == below { Some(50u64) } else { Some(500u64) };
+
+        // Has a header ⇒ keep walking, regardless of score.
+        assert_eq!(classify_parent_for_anchor(below, 100, |_| true, daa), ParentAnchorClass::HasEvmHeader);
+        // No header AND below activation ⇒ provably pre-activation.
+        assert_eq!(classify_parent_for_anchor(below, 100, |_| false, daa), ParentAnchorClass::PreActivation);
+        // No header but ABOVE activation ⇒ it had one and lost it.
+        assert_eq!(classify_parent_for_anchor(above, 100, |_| false, daa), ParentAnchorClass::Unavailable);
+        // No header and no L1 header either ⇒ nothing is provable; fail closed.
+        assert_eq!(classify_parent_for_anchor(above, 100, |_| false, |_| None), ParentAnchorClass::Unavailable);
     }
 
     /// With no checkpoints, the walk reaches genesis and returns the empty seed
@@ -2051,6 +2169,10 @@ pub fn flat_or_reconstruct_parent_snapshot(
     flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
     code: &crate::model::stores::evm::DbEvmCodeStore,
     header_store: &crate::model::stores::evm::DbEvmHeaderStore,
+    // Needed to tell a PRE-ACTIVATION parent from a PRUNED one; see
+    // `classify_parent_for_anchor`.
+    l1_headers_store: &crate::model::stores::headers::DbHeadersStore,
+    evm_activation_daa_score: u64,
     checkpoint_v2_store: &crate::model::stores::evm::DbEvmStateCheckpointV2Store,
     checkpoint_store: &crate::model::stores::evm::DbEvmStateCheckpointStore,
     diff_store: &crate::model::stores::evm::DbEvmStateDiffStore,
@@ -2086,12 +2208,22 @@ pub fn flat_or_reconstruct_parent_snapshot(
         selected_parent,
         |b| resolve_anchor_snapshot(b, checkpoint_v2_store, checkpoint_store, code),
         |b| diff_store.get(b),
-        |b| match header_store.has(b) {
-            Ok(v) => v,
-            Err(_) => {
-                store_errored.set(true);
-                false
-            }
+        |b| {
+            classify_parent_for_anchor(
+                b,
+                evm_activation_daa_score,
+                |h| match header_store.has(h) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        store_errored.set(true);
+                        false
+                    }
+                },
+                |h| {
+                    use crate::model::stores::headers::HeaderStoreReader;
+                    l1_headers_store.get_daa_score(h).ok()
+                },
+            )
         },
     )
     .map_err(|e| match e {
@@ -2172,6 +2304,10 @@ mod s6_seed_tests {
         EvmH256::from_bytes(kaspa_evm::state::state_root(&db).0)
     }
 
+    /// Activation score for the seed fixtures. Non-zero so a block BELOW it is
+    /// provably pre-activation — the distinction the classifier turns on.
+    const EVM_ACTIVATION_FOR_TEST: u64 = 100;
+
     fn header_with_root(root: EvmH256, number: u64) -> EvmExecutionHeader {
         EvmExecutionHeader { state_root: root, evm_number: number, ..Default::default() }
     }
@@ -2187,6 +2323,7 @@ mod s6_seed_tests {
         let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
         let checkpoint_store = DbEvmStateCheckpointStore::new(db.clone(), CachePolicy::Empty);
         let checkpoint_v2_store = DbEvmStateCheckpointV2Store::new(db.clone(), CachePolicy::Empty);
+        let l1_headers_store = crate::model::stores::headers::DbHeadersStore::new(db.clone(), CachePolicy::Empty, CachePolicy::Empty);
         let diff_store = DbEvmStateDiffStore::new(db.clone(), CachePolicy::Empty);
 
         // Genesis (block 0) has NO header (pre-activation boundary). Branch the flat
@@ -2198,6 +2335,16 @@ mod s6_seed_tests {
 
         // Persist headers (committed state roots) for the EVM blocks.
         let mut batch = WriteBatch::default();
+        // L1 headers for the two pre-activation blocks. A real node always has these:
+        // genesis and the pruning point are never reclaimed, and "pre-activation" is
+        // proved from the DAA score rather than inferred from a missing EVM header.
+        // Without them the seed correctly refuses (it cannot prove pre-activation),
+        // which is exactly the live-net failure this fixture must not reproduce.
+        for pre_block in [genesis, pre] {
+            let mut l1 = kaspa_consensus_core::header::Header::from_precomputed_hash(pre_block, vec![]);
+            l1.daa_score = 0; // below EVM_ACTIVATION_FOR_TEST
+            l1_headers_store.insert_batch(&mut batch, pre_block, std::sync::Arc::new(l1), 0).unwrap();
+        }
         header_store.insert_batch(&mut batch, block_h, header_with_root(root_of(&s_h), 5)).unwrap();
         header_store.insert_batch(&mut batch, block_1, header_with_root(root_of(&s_1), 1)).unwrap();
         // §12 diff for block 1 over the empty genesis (genesis has no header ⇒ gather anchors empty).
@@ -2216,6 +2363,8 @@ mod s6_seed_tests {
                 &flat,
                 &code,
                 &header_store,
+                &l1_headers_store,
+                EVM_ACTIVATION_FOR_TEST,
                 &checkpoint_v2_store,
                 &checkpoint_store,
                 &diff_store,
@@ -2280,6 +2429,7 @@ mod s6_seed_tests {
         let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
         let checkpoint_store = DbEvmStateCheckpointStore::new(db.clone(), CachePolicy::Empty);
         let checkpoint_v2_store = DbEvmStateCheckpointV2Store::new(db.clone(), CachePolicy::Empty);
+        let l1_headers_store = crate::model::stores::headers::DbHeadersStore::new(db.clone(), CachePolicy::Empty, CachePolicy::Empty);
         let diff_store = DbEvmStateDiffStore::new(db.clone(), CachePolicy::Empty);
 
         let block_1 = h(0x21);
@@ -2295,6 +2445,8 @@ mod s6_seed_tests {
             &flat,
             &code,
             &header_store,
+            &l1_headers_store,
+            0,
             &checkpoint_v2_store,
             &checkpoint_store,
             &diff_store,
@@ -2315,6 +2467,7 @@ mod s6_seed_tests {
         let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
         let checkpoint_store = DbEvmStateCheckpointStore::new(db.clone(), CachePolicy::Empty);
         let checkpoint_v2_store = DbEvmStateCheckpointV2Store::new(db.clone(), CachePolicy::Empty);
+        let l1_headers_store = crate::model::stores::headers::DbHeadersStore::new(db.clone(), CachePolicy::Empty, CachePolicy::Empty);
         let diff_store = DbEvmStateDiffStore::new(db.clone(), CachePolicy::Empty);
 
         let block_h = h(0x11);
@@ -2339,6 +2492,8 @@ mod s6_seed_tests {
             &flat,
             &code,
             &header_store,
+            &l1_headers_store,
+            0,
             &checkpoint_v2_store,
             &checkpoint_store,
             &diff_store,

@@ -2313,7 +2313,14 @@ impl ConsensusApi for Consensus {
                     )
                 },
                 |b| self.storage.evm_state_diff_store.get(b),
-                |b| self.storage.evm_header_store.get(b).optional().unwrap().is_some(),
+                |b| {
+                    crate::processes::evm::classify_parent_for_anchor(
+                        b,
+                        self.config.evm_activation_daa_score,
+                        |h| self.storage.evm_header_store.get(h).optional().unwrap().is_some(),
+                        |h| self.storage.headers_store.get_daa_score(h).ok(),
+                    )
+                },
             )
             .map_err(|e| oops(e.to_string()))?;
 

@@ -1139,6 +1139,8 @@ impl VirtualStateProcessor {
             &self.evm_flat_account_store,
             &self.evm_code_store,
             &self.evm_header_store,
+            &self.headers_store,
+            self.evm_activation_daa_score,
             &self.evm_state_checkpoint_v2_store,
             &self.evm_state_checkpoint_store,
             &self.evm_state_diff_store,
@@ -4267,7 +4269,14 @@ impl VirtualStateProcessor {
                     )
                 },
                 |b| self.evm_state_diff_store.get(b),
-                |b| self.evm_header_store.get(b).optional().unwrap().is_some(),
+                |b| {
+                    crate::processes::evm::classify_parent_for_anchor(
+                        b,
+                        self.evm_activation_daa_score,
+                        |h| self.evm_header_store.get(h).optional().unwrap().is_some(),
+                        |h| self.headers_store.get_daa_score(h).ok(),
+                    )
+                },
             ) {
                 Ok(v) => v,
                 Err(e) => {
