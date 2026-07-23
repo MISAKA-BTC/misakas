@@ -75,6 +75,8 @@ pub struct BlockBodyProcessor {
     /// on the evm feature (its only writer needs `kaspa_evm::tx::tx_hash`).
     #[cfg(feature = "evm")]
     pub(super) evm_raw_tx_store: Arc<crate::model::stores::evm::DbEvmRawTxStore>,
+    // Incremented only on the `evm`-gated payload path.
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_raw_tx_owners_store: Arc<crate::model::stores::evm::DbEvmRawTxOwnersStore>,
     pub(super) body_tips_store: Arc<RwLock<DbTipsStore>>,
 

@@ -251,8 +251,13 @@ pub struct VirtualStateProcessor {
     // code (222) — written alongside the per-block result so an archive/recent node can
     // reconstruct any canonical block's state. RPC/archive data only, never committed.
     pub(super) evm_state_diff_store: Arc<crate::model::stores::evm::DbEvmStateDiffStore>,
+    // Read only by the `evm`-gated anchor and seed paths; a non-EVM build carries
+    // the fields so the struct shape does not fork on a feature.
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_state_checkpoint_store: Arc<crate::model::stores::evm::DbEvmStateCheckpointStore>,
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_state_checkpoint_v2_store: Arc<crate::model::stores::evm::DbEvmStateCheckpointV2Store>,
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_checkpoint_meta_store: Arc<parking_lot::RwLock<crate::model::stores::evm::DbEvmCheckpointMetaStore>>,
     pub(super) evm_code_store: Arc<crate::model::stores::evm::DbEvmCodeStore>,
     // C-01 state-backend (design v0.1, Stage 1, slice S4): the flat latest-canonical
@@ -287,6 +292,7 @@ pub struct VirtualStateProcessor {
     // they survive). Node-local — never affects block validity or any commitment.
     pub(super) evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
     /// §12.3 v2: the state-anchor cadence and retention bound.
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_checkpoint_policy: kaspa_consensus_core::evm::EvmCheckpointPolicy,
     /// Per-segment retention. Read on the write path too: a segment the node keeps
     /// nothing of is not written in the first place.

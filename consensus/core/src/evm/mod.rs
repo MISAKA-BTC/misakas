@@ -36,6 +36,9 @@ pub use checkpoint_v2::*;
 mod segment;
 pub use segment::*;
 
+mod cold_segment;
+pub use cold_segment::*;
+
 use crate::tx::{ScriptPublicKey, TransactionOutpoint};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{EvmH256, Hash64, blake2b_512_keyed};

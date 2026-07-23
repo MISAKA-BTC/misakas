@@ -12,9 +12,9 @@
 //! so any policy is safe.
 
 use kaspa_consensus_core::evm::{
-    AccountCore, CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmCheckpointMeta, EvmExecutionHeader, EvmExecutionPayload,
-    EvmLatestStatePtr, EvmPruneCursor, EvmPruneSegment, EvmRawTx, EvmStateCheckpointV1, EvmStateCheckpointV2, EvmStateDiffV2,
-    EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, EvmU256, FlatAccount, LogPostingKind, LogPostingLoc,
+    AccountCore, CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmCheckpointMeta, EvmColdSegmentManifest, EvmExecutionHeader,
+    EvmExecutionPayload, EvmLatestStatePtr, EvmPruneCursor, EvmPruneSegment, EvmRawTx, EvmStateCheckpointV1, EvmStateCheckpointV2,
+    EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, EvmU256, FlatAccount, LogPostingKind, LogPostingLoc,
     decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
 };
 use kaspa_consensus_core::{BlockHash, BlockHasher};
@@ -1763,5 +1763,37 @@ impl DbEvmFlatStorageStore {
             deleted += 1;
         }
         Ok(deleted)
+    }
+}
+
+/// The cold-segment manifest singleton (prefix 229).
+///
+/// In the database rather than derived by scanning a directory, so a node can
+/// say what history it can serve WITHOUT touching a volume that may be slow,
+/// remote or unmounted. A file missing from a directory the manifest lists is
+/// then a detectable inconsistency rather than a silent narrowing of what the
+/// node claims to have.
+#[derive(Clone)]
+pub struct DbEvmColdSegmentManifestStore {
+    access: CachedDbItem<EvmColdSegmentManifest>,
+}
+
+impl DbEvmColdSegmentManifestStore {
+    pub fn new(db: Arc<DB>) -> Self {
+        Self { access: CachedDbItem::new(db, DatabaseStorePrefixes::EvmColdSegmentManifest.into()) }
+    }
+
+    /// Absent reads as empty: a node that has exported nothing has an empty
+    /// manifest, which is not an error.
+    pub fn get(&self) -> Result<EvmColdSegmentManifest, StoreError> {
+        match self.access.read() {
+            Ok(v) => Ok(v),
+            Err(StoreError::KeyNotFound(_)) => Ok(EvmColdSegmentManifest::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_batch(&mut self, batch: &mut WriteBatch, manifest: EvmColdSegmentManifest) -> StoreResult<()> {
+        self.access.write(BatchDbWriter::new(batch), &manifest)
     }
 }

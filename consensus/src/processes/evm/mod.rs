@@ -537,6 +537,7 @@ pub fn gather_reconstruction_inputs<EA: std::fmt::Display, ED: std::fmt::Display
 }
 
 pub mod code_gc;
+pub mod cold_export;
 pub mod flat_split;
 pub mod pruner;
 

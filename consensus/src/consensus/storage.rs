@@ -11,10 +11,11 @@ use crate::{
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         evm::{
             DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCheckpointMetaStore,
-            DbEvmCodeQuarantineStore, DbEvmCodeStore, DbEvmFlatAccountCoreStore, DbEvmFlatAccountStore, DbEvmFlatStorageStore,
-            DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore,
-            DbEvmPruneCursorStore, DbEvmRawTxOwnersStore, DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateCheckpointStore,
-            DbEvmStateCheckpointV2Store, DbEvmStateDiffStore, DbEvmStateStore, DbEvmTraceReplayStore, DbEvmTxIndexStore,
+            DbEvmCodeQuarantineStore, DbEvmCodeStore, DbEvmColdSegmentManifestStore, DbEvmFlatAccountCoreStore, DbEvmFlatAccountStore,
+            DbEvmFlatStorageStore, DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore,
+            DbEvmPayloadStore, DbEvmPruneCursorStore, DbEvmRawTxOwnersStore, DbEvmRawTxStore, DbEvmReceiptsStore,
+            DbEvmStateCheckpointStore, DbEvmStateCheckpointV2Store, DbEvmStateDiffStore, DbEvmStateStore, DbEvmTraceReplayStore,
+            DbEvmTxIndexStore,
         },
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
@@ -105,6 +106,8 @@ pub struct ConsensusStorage {
     pub evm_prune_cursor_store: Arc<DbEvmPruneCursorStore>,
     pub evm_raw_tx_owners_store: Arc<DbEvmRawTxOwnersStore>,
     pub evm_code_quarantine_store: Arc<DbEvmCodeQuarantineStore>,
+    /// Which finalized history has been exported to immutable cold files (229).
+    pub evm_cold_segment_manifest_store: Arc<RwLock<DbEvmColdSegmentManifestStore>>,
     // C-01 state backend (Stage 1) — flat latest-canonical state (234) + per-block
     // state-root index (232) + canonical pointer (231). INERT until the writer/seed
     // slices; defining them now keeps the prefixes reserved and offline-testable.
@@ -387,6 +390,7 @@ impl ConsensusStorage {
         let evm_raw_tx_owners_store =
             Arc::new(DbEvmRawTxOwnersStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
         let evm_code_quarantine_store = Arc::new(DbEvmCodeQuarantineStore::new(db.clone()));
+        let evm_cold_segment_manifest_store = Arc::new(RwLock::new(DbEvmColdSegmentManifestStore::new(db.clone())));
         let evm_code_store = Arc::new(DbEvmCodeStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -460,6 +464,7 @@ impl ConsensusStorage {
             evm_prune_cursor_store,
             evm_raw_tx_owners_store,
             evm_code_quarantine_store,
+            evm_cold_segment_manifest_store,
             evm_flat_account_store,
             evm_flat_account_core_store,
             evm_flat_storage_store,
