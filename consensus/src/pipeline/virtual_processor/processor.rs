@@ -1876,10 +1876,13 @@ impl VirtualStateProcessor {
                 return;
             }
         };
-        // A pruning-point advance forces an anchor: everything below it is about to
-        // stop being reconstructable, so that is precisely when one must exist.
-        let pruning_anchor = self.pruning_point_store.read().pruning_point().map(|p| p == sink).unwrap_or(false);
-        if !policy.is_due(&meta, header.evm_number, timestamp_ms, pruning_anchor) {
+        // NOT a pruning-point anchor. The sink is the chain tip and the pruning point
+        // is far behind it, so comparing them here — as an earlier version did — is
+        // dead code that never fires. The pruning-point anchor is written by the
+        // pruning processor immediately before it deletes, which is the last moment
+        // the material to build one exists; this path only handles the time-paced
+        // cadence at the tip.
+        if !policy.is_due(&meta, header.evm_number, timestamp_ms, false) {
             return;
         }
         if EvmStateCheckpointV2StoreReader::has(&*self.evm_state_checkpoint_v2_store, sink).unwrap_or(false) {
@@ -1920,7 +1923,14 @@ impl VirtualStateProcessor {
             return;
         }
         // Evicting is what makes this a bounded store rather than a slower-growing one.
+        // The PRUNING POINT's anchor is exempt: it is the floor every future
+        // reconstruction and every IBD we serve starts from, and the cadence knows
+        // nothing about that role.
+        let pruning_point = self.pruning_point_store.read().pruning_point().ok();
         for evicted in policy.record(&mut meta, sink, header.evm_number, timestamp_ms) {
+            if Some(evicted) == pruning_point {
+                continue;
+            }
             if let Err(e) = self.evm_state_checkpoint_v2_store.delete_batch(batch, evicted) {
                 warn!("[evm-anchor] evicting anchor {evicted} failed: {e}");
             }

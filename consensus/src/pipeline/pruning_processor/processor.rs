@@ -308,11 +308,102 @@ impl PruningProcessor {
         info!("Pruning point UTXO commitment was verified correctly (sanity test)");
     }
 
+    /// Ensure `pruning_point` carries a §12 anchor, building one if it does not.
+    ///
+    /// Called immediately before a prune pass, which is the last instant at which
+    /// the inputs exist: the previous pruning point's anchor and the diffs above it
+    /// are about to be reclaimed. Each pass therefore hands the next one its floor.
+    ///
+    /// Never fatal. An anchor is serving/reconstruction convenience, and failing to
+    /// build one must not stop pruning — but it IS logged as a warning naming the
+    /// consequence, because the node has just lost the ability to serve pruned IBD
+    /// for the EVM lane and the operator would otherwise learn that from a peer's
+    /// root mismatch.
+    #[cfg(feature = "evm")]
+    fn ensure_evm_pruning_point_anchor(&self, pruning_point: BlockHash) {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateCheckpointV2StoreReader, EvmStateStoreReader};
+        use kaspa_consensus_core::evm::EvmStateCheckpointV2;
+
+        if self.config.evm_activation_daa_score == u64::MAX || !self.config.evm_history_mode.writes_state_history() {
+            return;
+        }
+        // Pre-activation pruning point: nothing to anchor.
+        let Ok(evm_header) = self.storage.evm_header_store.get(pruning_point) else { return };
+        if EvmStateCheckpointV2StoreReader::has(&*self.storage.evm_state_checkpoint_v2_store, pruning_point).unwrap_or(false) {
+            return;
+        }
+
+        // Resolve the state AT the pruning point. 206 first (a node that has not
+        // retired it, or a freshly imported one), then the flat/reconstruct seed —
+        // the same resolver block validation uses, so an anchor can never disagree
+        // with what the executor would have seeded.
+        let snapshot = match self.storage.evm_state_store.get(pruning_point) {
+            Ok(snapshot) => Some(snapshot),
+            Err(_) => {
+                let flat_head = self.storage.evm_latest_state_ptr_store.read().get().ok().flatten().map(|p| p.canonical_head);
+                crate::processes::evm::flat_or_reconstruct_parent_snapshot(
+                    pruning_point,
+                    flat_head,
+                    &self.storage.evm_flat_account_store,
+                    &self.storage.evm_code_store,
+                    &self.storage.evm_header_store,
+                    &self.storage.headers_store,
+                    self.config.evm_activation_daa_score,
+                    &self.storage.evm_state_checkpoint_v2_store,
+                    &self.storage.evm_state_checkpoint_store,
+                    &self.storage.evm_state_diff_store,
+                )
+                .ok()
+                .map(|(snapshot, _source)| snapshot)
+            }
+        };
+        let Some(snapshot) = snapshot else {
+            warn!(
+                "[evm-anchor] could not build a §12 anchor for pruning point {pruning_point}: this node can no longer serve \
+                 pruned IBD for the EVM lane, and historical state below the pruning point is unreconstructable. Run with \
+                 --evm-history-mode=archive, or resync, to restore it."
+            );
+            return;
+        };
+
+        let checkpoint = EvmStateCheckpointV2::build(
+            pruning_point,
+            evm_header.evm_number,
+            evm_header.state_root,
+            &snapshot,
+            self.config.evm_checkpoint_policy.codec,
+        );
+        let stored = checkpoint.stored_len();
+        let mut batch = WriteBatch::default();
+        if let Err(e) = self.storage.evm_state_checkpoint_v2_store.insert_batch(&mut batch, pruning_point, checkpoint) {
+            warn!("[evm-anchor] pruning-point anchor write failed for {pruning_point}: {e}");
+            return;
+        }
+        if let Err(e) = self.db.write(batch) {
+            warn!("[evm-anchor] pruning-point anchor commit failed for {pruning_point}: {e}");
+            return;
+        }
+        info!("[evm-anchor] pruning-point anchor at EVM #{} ({pruning_point}): {stored} B", evm_header.evm_number);
+    }
+
+    /// Non-`evm` builds have no EVM state to anchor.
+    #[cfg(not(feature = "evm"))]
+    fn ensure_evm_pruning_point_anchor(&self, _pruning_point: BlockHash) {}
+
     fn prune(&self, new_pruning_point: BlockHash, retention_period_root: BlockHash) {
         if self.config.is_archival {
             warn!("The node is configured as an archival node -- avoiding data pruning. Note this might lead to heavy disk usage.");
             return;
         }
+
+        // BEFORE deleting anything: make sure the new pruning point has a §12
+        // reconstruction anchor. This is the only moment the material to build one
+        // still exists, and without it a `recent`-history node with 206 retired
+        // becomes unable to serve pruned IBD for the EVM lane — observed on the live
+        // testnet, where the serving node reconstructed the EMPTY state root for its
+        // own pruning point. The pruning point is in `keep_blocks`, so its anchor
+        // survives this pass and becomes the floor the next one reconstructs from.
+        self.ensure_evm_pruning_point_anchor(new_pruning_point);
 
         info!("Header and Block pruning: preparing proof and anticone data...");
 
