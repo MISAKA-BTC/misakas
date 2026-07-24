@@ -315,6 +315,93 @@ impl PruningProcessor {
     #[cfg(feature = "evm")]
     const INVERSE_WALK_MAX_STEPS: usize = 4_000_000;
 
+    /// §5.8: export the finalized EVM history a prune pass is about to reclaim into
+    /// cold segments, and return the EVM-row delete FLOOR — below it rows may be
+    /// deleted, at or above it they are held.
+    ///
+    /// Inert unless `--evm-segment-export=async` with a directory: then it archives
+    /// up to `EXPORT_BATCH_BLOCKS` of the `(export_cursor, pruning_point]` range per
+    /// pass, advances the manifest cursor, and returns `min(pp_evm, new_cursor)`.
+    /// With export off it returns the pruning point, so pruning behaves exactly as
+    /// before. Fails closed: any export error leaves the cursor where it was, so the
+    /// floor holds the un-archived rows rather than letting them be deleted. L1
+    /// pruning is never delayed — only the EVM-row delete range is bounded.
+    #[cfg(feature = "evm")]
+    fn evm_export_and_delete_floor(&self, pruning_point: BlockHash) -> u64 {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmNumberStoreReader, EvmStateDiffStoreReader};
+        use kaspa_consensus_core::evm::evm_row_delete_floor;
+
+        /// Bound the work (and the segment size) a single pruning pass does. The
+        /// cursor catches up over successive passes; the floor holds the rest.
+        const EXPORT_BATCH_BLOCKS: u64 = 50_000;
+
+        let export = self.config.evm_segment_export;
+        // Off / inert / no dir ⇒ floor is the pruning point (today's behaviour).
+        if !export.is_active() || self.config.evm_activation_daa_score == u64::MAX {
+            return u64::MAX;
+        }
+        let Some(dir) = self.config.evm_segment_dir.clone() else {
+            warn!("[evm-export] --evm-segment-export=async but no --evm-segment-dir; export is inert and pruning is NOT gated");
+            return u64::MAX;
+        };
+        let Ok(pp_header) = self.storage.evm_header_store.get(pruning_point) else {
+            return u64::MAX; // pre-activation pruning point
+        };
+        let pp_evm = pp_header.evm_number;
+
+        let mut manifest = self.storage.evm_cold_segment_manifest_store.read().get().unwrap_or_default();
+        // The cursor is where the contiguous headers archive currently ends.
+        let cursor = manifest
+            .contiguous_range(kaspa_consensus_core::evm::ColdSegmentKind::Headers)
+            .map(|(_, to)| to + 1)
+            .unwrap_or(0);
+        if cursor >= pp_evm {
+            return evm_row_delete_floor(export, pp_evm, cursor); // already caught up
+        }
+
+        // Gather the next bounded batch of the finalized range in evm_number order.
+        let to = pp_evm.min(cursor + EXPORT_BATCH_BLOCKS);
+        let mut rows = Vec::new();
+        for evm_number in cursor..to {
+            let Ok(Some(block)) = self.storage.evm_number_store.get(evm_number) else {
+                continue; // number not canonical / already gone — skip, cursor still advances past it
+            };
+            let Ok(header) = self.storage.evm_header_store.get(block) else { continue };
+            let diff = self.storage.evm_state_diff_store.get(block).ok().flatten();
+            rows.push(crate::processes::evm::cold_export::StateHistoryRow { evm_number, block, header, diff });
+        }
+        if rows.is_empty() {
+            // Nothing canonical in this window (all detached/gone); advance the cursor
+            // past it so we do not loop, but persist the advance via an empty-safe path.
+            return evm_row_delete_floor(export, pp_evm, to);
+        }
+
+        match crate::processes::evm::cold_export::export_state_history_range(&dir, &rows, &mut manifest) {
+            Ok(new_cursor) => {
+                let mut batch = WriteBatch::default();
+                if self.storage.evm_cold_segment_manifest_store.write().set_batch(&mut batch, manifest).is_ok()
+                    && self.db.write(batch).is_ok()
+                {
+                    let lag = kaspa_consensus_core::evm::evm_export_lag_blocks(pp_evm, new_cursor);
+                    info!("[evm-export] archived EVM history [{cursor}, {new_cursor}) to cold segments; export_lag_blocks={lag}");
+                    return evm_row_delete_floor(export, pp_evm, new_cursor);
+                }
+                warn!("[evm-export] built segments for [{cursor}, {to}) but failed to persist the manifest; holding the rows");
+                evm_row_delete_floor(export, pp_evm, cursor)
+            }
+            Err(e) => {
+                warn!("[evm-export] export of [{cursor}, {to}) failed ({e}); holding these EVM rows (not deleting un-archived history)");
+                evm_row_delete_floor(export, pp_evm, cursor)
+            }
+        }
+    }
+
+    /// Non-`evm` builds never gate.
+    #[cfg(not(feature = "evm"))]
+    fn evm_export_and_delete_floor(&self, _pruning_point: BlockHash) -> u64 {
+        u64::MAX
+    }
+
     /// Ensure `pruning_point` carries a §12 anchor, building one if it does not.
     ///
     /// Called immediately before a prune pass, which is the last instant at which
@@ -442,6 +529,11 @@ impl PruningProcessor {
         // own pruning point. The pruning point is in `keep_blocks`, so its anchor
         // survives this pass and becomes the floor the next one reconstructs from.
         self.ensure_evm_pruning_point_anchor(new_pruning_point);
+        // §5.8 interlock: export the finalized EVM history this pass will reclaim,
+        // then compute the floor BELOW which EVM rows may be deleted. Inert (returns
+        // u64::MAX) unless --evm-segment-export=async, so the per-block deletes below
+        // are unchanged by default.
+        let evm_delete_floor = self.evm_export_and_delete_floor(new_pruning_point);
 
         info!("Header and Block pruning: preparing proof and anticone data...");
 
@@ -669,21 +761,32 @@ impl PruningProcessor {
                 // The content-addressed code store (222) is NEVER per-block pruned:
                 // a `code_hash` is shared by every block that references that code,
                 // so deleting it on one block's pruning would corrupt others.
-                self.evm_state_store.delete_batch(&mut batch, current).unwrap();
-                self.evm_payload_store.delete_batch(&mut batch, current).unwrap();
-                self.evm_receipts_store.delete_batch(&mut batch, current).unwrap();
-                // §11: the per-block trace replay plan is reclaimed with the rest of
-                // the block's EVM rows (a trace cannot outlive its pre-state snapshot).
-                self.evm_trace_store.delete_batch(&mut batch, current).unwrap();
-                if self.config.evm_history_mode.retains_state_history_past_pruning() {
-                    // Archive: keep header + diff + checkpoint for historical reconstruction.
-                } else {
-                    self.evm_header_store.delete_batch(&mut batch, current).unwrap();
-                    self.evm_state_diff_store.delete_batch(&mut batch, current).unwrap();
-                    // Both anchor formats: the legacy 221 rows a pre-v2 database still
-                    // carries, and the v2 anchors (223) this node writes.
-                    self.evm_state_checkpoint_store.delete_batch(&mut batch, current).unwrap();
-                    self.evm_state_checkpoint_v2_store.delete_batch(&mut batch, current).unwrap();
+                // §5.8 interlock: hold this block's EVM history rows if its
+                // evm_number is at or above the delete floor — i.e. the export has
+                // not yet archived it. `u64::MAX` (export off) never holds, so this
+                // is a no-op on the default path. Blocks with no EVM header read as
+                // evm_number 0 and are always below the floor (nothing to hold).
+                let evm_held = {
+                    use crate::model::stores::evm::EvmHeaderStoreReader;
+                    self.evm_header_store.get(current).map(|h| h.evm_number >= evm_delete_floor).unwrap_or(false)
+                };
+                if !evm_held {
+                    self.evm_state_store.delete_batch(&mut batch, current).unwrap();
+                    self.evm_payload_store.delete_batch(&mut batch, current).unwrap();
+                    self.evm_receipts_store.delete_batch(&mut batch, current).unwrap();
+                    // §11: the per-block trace replay plan is reclaimed with the rest of
+                    // the block's EVM rows (a trace cannot outlive its pre-state snapshot).
+                    self.evm_trace_store.delete_batch(&mut batch, current).unwrap();
+                    if self.config.evm_history_mode.retains_state_history_past_pruning() {
+                        // Archive: keep header + diff + checkpoint for historical reconstruction.
+                    } else {
+                        self.evm_header_store.delete_batch(&mut batch, current).unwrap();
+                        self.evm_state_diff_store.delete_batch(&mut batch, current).unwrap();
+                        // Both anchor formats: the legacy 221 rows a pre-v2 database still
+                        // carries, and the v2 anchors (223) this node writes.
+                        self.evm_state_checkpoint_store.delete_batch(&mut batch, current).unwrap();
+                        self.evm_state_checkpoint_v2_store.delete_batch(&mut batch, current).unwrap();
+                    }
                 }
 
                 if let Some(&affiliated_proof_level) = keep_relations.get(&current) {

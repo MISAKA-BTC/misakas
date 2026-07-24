@@ -286,3 +286,75 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+// ---------------------------------------------------------------------------
+// §5.8 — pruning-time state-history export. Archives the finalized EVM history a
+// pruning pass is about to reclaim into cold segments BEFORE the rows are
+// deleted, and returns how far the export advanced so the interlock floor can
+// hold anything not yet covered.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "evm")]
+use kaspa_consensus_core::evm::{EvmExecutionHeader, EvmStateDiffV2};
+
+/// One EVM-active block's rows, for a state-era export.
+#[cfg(feature = "evm")]
+pub struct StateHistoryRow {
+    pub evm_number: u64,
+    pub block: kaspa_hashes::Hash64,
+    pub header: EvmExecutionHeader,
+    /// The forward state diff, if this node kept one (recent/archive history).
+    pub diff: Option<EvmStateDiffV2>,
+}
+
+/// Export a contiguous EVM-number range `[from, to)` of state history to cold
+/// segments and record them in the manifest.
+///
+/// Two segments: a HEADERS segment (each `EvmExecutionHeader` carries the
+/// `transactions_root`/`receipts_root`/`state_root` that consensus committed via
+/// `evm_commitment_root`, so the segment is self-binding) and a DIFFS segment
+/// (the material to replay state forward from an anchor). Returns the new export
+/// cursor = `to`.
+///
+/// Fails closed: on any I/O or build error nothing is recorded and the cursor
+/// does not advance, so the interlock keeps holding the un-exported rows rather
+/// than letting the pruner delete them.
+#[cfg(feature = "evm")]
+pub fn export_state_history_range(
+    dir: &Path,
+    rows: &[StateHistoryRow],
+    manifest: &mut EvmColdSegmentManifest,
+) -> Result<u64, ColdExportError> {
+    if rows.is_empty() {
+        return Err(ColdSegmentError::Empty.into());
+    }
+    // Records must be sorted by evm_number (ColdSegment::build enforces it too).
+    debug_assert!(rows.windows(2).all(|w| w[0].evm_number <= w[1].evm_number));
+
+    let header_records: Vec<ColdRecord> = rows
+        .iter()
+        .map(|r| ColdRecord {
+            evm_number: r.evm_number,
+            block: r.block,
+            value: borsh::to_vec(&r.header).expect("EvmExecutionHeader is infallibly borsh-serializable"),
+        })
+        .collect();
+    export_range(dir, ColdSegmentKind::Headers, &header_records, manifest)?;
+
+    // Diffs are present only in recent/archive history; export whatever the node kept.
+    let diff_records: Vec<ColdRecord> = rows
+        .iter()
+        .filter_map(|r| {
+            r.diff.as_ref().map(|d| ColdRecord {
+                evm_number: r.evm_number,
+                block: r.block,
+                value: borsh::to_vec(d).expect("EvmStateDiffV2 is infallibly borsh-serializable"),
+            })
+        })
+        .collect();
+    if !diff_records.is_empty() {
+        export_range(dir, ColdSegmentKind::StateDiffs, &diff_records, manifest)?;
+    }
+
+    Ok(rows.last().expect("non-empty").evm_number + 1)
+}

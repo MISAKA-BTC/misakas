@@ -132,6 +132,14 @@ pub struct Config {
     /// and with bytecode inlined. Node-local and consensus-neutral: an anchor is
     /// reconstruction data, never a committed value.
     pub evm_checkpoint_policy: crate::evm::EvmCheckpointPolicy,
+    /// §5.8: whether finalized EVM history is EXPORTED to cold segments at pruning
+    /// advance, and where. When active, the pruning processor archives the range it
+    /// is about to reclaim into immutable segment files BEFORE deleting the rows,
+    /// and never deletes an EVM row the export has not yet covered (the interlock).
+    /// L1 pruning itself is never delayed. `None` dir or `Off` mode ⇒ inert (the
+    /// EVM-row delete floor stays at the pruning point, today's behaviour).
+    pub evm_segment_export: crate::evm::EvmSegmentExport,
+    pub evm_segment_dir: Option<std::path::PathBuf>,
     /// Per-segment EVM retention and the node role behind it.
     ///
     /// The half of the capacity story that is not about writing less: EVM data was
@@ -174,6 +182,8 @@ impl Config {
             evm_prune_legacy_206: false,
             evm_checkpoint_policy: crate::evm::EvmCheckpointPolicy::default(),
             evm_retention_policy: crate::evm::EvmRetentionPolicy::default(),
+            evm_segment_export: crate::evm::EvmSegmentExport::Off,
+            evm_segment_dir: None,
         }
     }
 

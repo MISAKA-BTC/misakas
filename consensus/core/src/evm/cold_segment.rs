@@ -499,6 +499,35 @@ mod tests {
     }
 
     #[test]
+    fn the_delete_floor_is_the_pruning_point_when_export_is_off() {
+        // Inert by default: pruning reclaims EVM rows up to the pruning point,
+        // exactly as before the interlock existed.
+        assert_eq!(evm_row_delete_floor(EvmSegmentExport::Off, 1_000, 200), 1_000);
+        // The export cursor is ignored when off.
+        assert_eq!(evm_row_delete_floor(EvmSegmentExport::Off, 1_000, 0), 1_000);
+    }
+
+    #[test]
+    fn the_delete_floor_holds_rows_the_export_has_not_covered() {
+        // With export on, the pruner never reclaims past what the export archived.
+        assert_eq!(evm_row_delete_floor(EvmSegmentExport::Async, 1_000, 600), 600);
+        // A caught-up export lets pruning proceed to the pruning point.
+        assert_eq!(evm_row_delete_floor(EvmSegmentExport::Async, 1_000, 1_000), 1_000);
+        // A stalled export (cursor 0) holds ALL EVM rows rather than losing them —
+        // the safe direction: history is retained, disk grows, and the lag metric
+        // fires. It never deletes an unexported row.
+        assert_eq!(evm_row_delete_floor(EvmSegmentExport::Async, 1_000, 0), 0);
+    }
+
+    #[test]
+    fn export_lag_is_the_uncovered_distance() {
+        assert_eq!(evm_export_lag_blocks(1_000, 600), 400);
+        assert_eq!(evm_export_lag_blocks(1_000, 1_000), 0);
+        // Cursor ahead of the pruning point (shouldn't happen) saturates to 0.
+        assert_eq!(evm_export_lag_blocks(1_000, 1_200), 0);
+    }
+
+    #[test]
     fn file_names_sort_numerically() {
         // Zero padding matters when the only available tool is `ls`.
         let a = segment(ColdSegmentKind::Receipts, 9, 9).header.file_name();
@@ -506,4 +535,59 @@ mod tests {
         assert!(a < b, "{a} should sort before {b}");
         assert!(a.ends_with(".mseg"));
     }
+}
+
+/// §5.8: whether finalized EVM history is exported to cold segments.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvmSegmentExport {
+    /// No export. The EVM-row delete floor is the pruning point (today's behaviour).
+    #[default]
+    Off,
+    /// Export the finalized range to cold segments at pruning advance, and hold any
+    /// EVM row the export has not yet covered.
+    Async,
+}
+
+impl EvmSegmentExport {
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            "async" => Some(Self::Async),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Async => "async",
+        }
+    }
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Async)
+    }
+}
+
+/// The EVM-row deletion floor for a pruning pass (§5.8 interlock).
+///
+/// Below the returned EVM number, a pruned block's EVM history rows may be
+/// deleted; at or above it they are HELD. With export off the floor is the
+/// pruning point, so pruning behaves exactly as before. With export on the floor
+/// is `min(pruning_point, export_cursor)` — the pruner never reclaims a row the
+/// export has not archived, so a lagging or failed export holds history rather
+/// than losing it. L1 pruning (the pruning-point advance, UTXO deletion) is NOT
+/// gated by this; only the EVM-row deletes are.
+pub fn evm_row_delete_floor(export: EvmSegmentExport, pruning_point_evm_number: u64, export_cursor: u64) -> u64 {
+    if export.is_active() {
+        pruning_point_evm_number.min(export_cursor)
+    } else {
+        pruning_point_evm_number
+    }
+}
+
+/// How far behind the pruning point the export is, in EVM blocks (§5.8 metric
+/// `export_lag_blocks`). A rising lag under an active export is the signal that
+/// the builder cannot keep up and history is being held rather than reclaimed.
+pub fn evm_export_lag_blocks(pruning_point_evm_number: u64, export_cursor: u64) -> u64 {
+    pruning_point_evm_number.saturating_sub(export_cursor)
 }

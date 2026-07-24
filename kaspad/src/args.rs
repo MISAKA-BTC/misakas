@@ -1,7 +1,7 @@
 use clap::{Arg, ArgAction, Command, arg};
 use kaspa_consensus_core::{
     config::Config,
-    evm::{EvmHistoryMode, EvmNodeRole, EvmStorageProfile},
+    evm::{EvmHistoryMode, EvmNodeRole, EvmSegmentExport, EvmStorageProfile},
     network::{NetworkId, NetworkType},
 };
 use kaspa_core::kaspad_env::version;
@@ -126,6 +126,13 @@ pub struct Args {
     /// for how long. Node-local and consensus-neutral.
     #[serde(default)]
     pub evm_node_role: EvmNodeRole,
+    /// §5.8: export finalized EVM history to cold segments at pruning advance
+    /// (off|async), and the directory for the segment files. When async with a dir,
+    /// the pruning processor archives history it is about to reclaim BEFORE deleting
+    /// it, and never deletes an EVM row the export has not covered. Node-local.
+    #[serde(default)]
+    pub evm_segment_export: EvmSegmentExport,
+    pub evm_segment_dir: Option<String>,
     /// kaspa-pq EVM Lane (§12 archive): EVM state-history retention mode
     /// (`head`/`recent`/`archive`). Default `recent`. Effective only in an
     /// `--features evm` build; the diff/checkpoint retention enforcement lands with
@@ -290,6 +297,8 @@ impl Default for Args {
             db_stats: None,
             evm_storage_profile: None,
             evm_node_role: EvmNodeRole::default(),
+            evm_segment_export: EvmSegmentExport::Off,
+            evm_segment_dir: None,
             evm_history_mode: EvmHistoryMode::Recent,
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,
@@ -495,6 +504,26 @@ pub fn cli() -> Command {
                        Retention runs on its own schedule and does NOT wait for L1 pruning, which stands down \
                        for the whole of IBD. Orthogonal to --evm-storage-profile, which is about the CURRENT \
                        state's representation rather than history. Node-local and consensus-neutral."),
+        )
+        .arg(
+            Arg::new("evm-segment-export")
+                .long("evm-segment-export")
+                .env("KASPAD_EVM_SEGMENT_EXPORT")
+                .require_equals(true)
+                .value_name("MODE")
+                .value_parser(["off", "async"])
+                .help("§5.8: export finalized EVM history to immutable cold segments at pruning advance: off (default) | \
+                       async. With async + --evm-segment-dir, the pruner archives the range it is about to reclaim into \
+                       segment files BEFORE deleting the rows, and never deletes an EVM row the export has not covered \
+                       (the interlock). L1 pruning is never delayed. Node-local; effective only in an --features evm build."),
+        )
+        .arg(
+            Arg::new("evm-segment-dir")
+                .long("evm-segment-dir")
+                .env("KASPAD_EVM_SEGMENT_DIR")
+                .require_equals(true)
+                .value_name("PATH")
+                .help("Directory for cold EVM history segment files (§5.8). Required for --evm-segment-export=async."),
         )
         .arg(
             Arg::new("evm-history-mode")
@@ -859,6 +888,11 @@ impl Args {
                 .get_one::<String>("evm-node-role")
                 .and_then(|s| EvmNodeRole::from_str_opt(s))
                 .unwrap_or(defaults.evm_node_role),
+            evm_segment_export: m
+                .get_one::<String>("evm-segment-export")
+                .and_then(|s| EvmSegmentExport::from_str_opt(s))
+                .unwrap_or(defaults.evm_segment_export),
+            evm_segment_dir: m.get_one::<String>("evm-segment-dir").cloned().or(defaults.evm_segment_dir),
             evm_storage_profile: m
                 .get_one::<String>("evm-storage-profile")
                 .and_then(|s| EvmStorageProfile::from_str_opt(s))
