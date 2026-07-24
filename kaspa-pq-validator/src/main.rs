@@ -13,6 +13,7 @@
 //! under systemd (ADR-0011); the node must run `--utxoindex` for the funding lookup.
 
 mod palw_da_auto_respond;
+mod palw_search_retrieval;
 mod palw_payload;
 mod palw_provider_unbond;
 mod palw_submit;
@@ -102,6 +103,11 @@ enum Command {
     /// Off-node automatic DA-challenge (0x3b) responder: discover open challenges on the operator's
     /// provider bonds and answer them with an owner-signed response before their deadline.
     PalwDaAutoRespond(PalwDaAutoRespondArgs),
+    /// Node-side retrieval service (measurement gate, ADR node-anchored-web-search-da): run ONE
+    /// egress-guarded provider search against the operator-local SearXNG, convert the typed
+    /// outcome into a canonical SearchSnapshotV1 bound to this node's network/genesis/DAA, and
+    /// write the exact DA object bytes + manifest for ConsensusApi::palw_admit_search_snapshot.
+    PalwSearchRetrieval(PalwSearchRetrievalArgs),
     /// One-shot: fetch a block by hash (with transactions) and print its coinbase facts —
     /// the subsidy S (from the coinbase payload) and every coinbase output's value + SPK — as
     /// parseable `key: value` lines. Used by the Phase-0 harness to record the minted block's
@@ -418,6 +424,10 @@ async fn main() -> ExitCode {
         Command::PalwDaAutoRespond(args) => {
             kaspa_core::log::init_logger(None, "info");
             palw_da_auto_respond::palw_da_auto_respond(args).await
+        }
+        Command::PalwSearchRetrieval(args) => {
+            kaspa_core::log::init_logger(None, "info");
+            palw_search_retrieval_cmd(args).await
         }
     };
     match result {
@@ -2185,6 +2195,152 @@ fn decode_message(hex: &str) -> Result<[u8; 32], String> {
     let mut out = [0u8; 32];
     faster_hex::hex_decode(hex.as_bytes(), &mut out).map_err(|e| format!("bad attestation message hex '{hex}': {e}"))?;
     Ok(out)
+}
+
+#[derive(Parser, Debug)]
+struct PalwSearchRetrievalArgs {
+    /// Local node wRPC (borsh) endpoint, host:port.
+    #[arg(long = "node-wrpc-borsh", visible_alias = "node-rpc", env = "KASPA_PQ_NODE_RPC")]
+    node_rpc: Option<String>,
+
+    /// Expected network id; also resolves the default loopback endpoint.
+    #[arg(long, visible_alias = "network-id", env = "KASPA_PQ_NETWORK")]
+    network: Option<String>,
+
+    /// Provider endpoint (operator-local SearXNG), e.g. http://127.0.0.1:8080.
+    #[arg(long, default_value = "http://127.0.0.1:8080")]
+    endpoint: String,
+
+    /// Search query exactly as assigned.
+    #[arg(long)]
+    query: String,
+
+    /// Ruleset pin recorded in the snapshot.
+    #[arg(long, default_value = "palw-search-v1")]
+    ruleset_id: String,
+
+    /// Scheduler assignment id (128-char Hash64 hex); omitted = zero (unassigned diagnostic).
+    #[arg(long)]
+    assignment_id: Option<String>,
+
+    /// Provider policy document hash (128-char Hash64 hex); omitted = zero (unpinned draft).
+    #[arg(long)]
+    provider_policy_id: Option<String>,
+
+    /// Provider language setting.
+    #[arg(long, default_value = "ja-JP")]
+    language: String,
+
+    /// Region tag recorded in the snapshot.
+    #[arg(long, default_value = "jp")]
+    region: String,
+
+    /// Safe-search level 0..=2.
+    #[arg(long, default_value_t = 1)]
+    safe_search: u8,
+
+    /// Freshness window in milliseconds granted from retrieval time.
+    #[arg(long, default_value_t = palw_search_retrieval::DEFAULT_FRESHNESS_WINDOW_MS)]
+    freshness_ms: u64,
+
+    /// Provider timeout in milliseconds.
+    #[arg(long, default_value_t = palw_search_retrieval::DEFAULT_TIMEOUT_MS)]
+    timeout_ms: u64,
+
+    /// Maximum ranked results kept.
+    #[arg(long, default_value_t = 16)]
+    max_results: usize,
+
+    /// Output directory for the canonical object bytes + manifest.
+    #[arg(long, default_value = "palw-search-snapshots")]
+    out: String,
+}
+
+/// One-shot node-side retrieval: node-anchor facts over wRPC, egress-guarded provider search,
+/// canonical snapshot bytes + manifest on disk. Admission stays a separate, explicit step
+/// (`ConsensusApi::palw_admit_search_snapshot`) so operators can inspect exactly what will be
+/// stored before the node commits to serving it.
+async fn palw_search_retrieval_cmd(args: PalwSearchRetrievalArgs) -> Result<(), String> {
+    let node_rpc = resolve_node_rpc(&args.network, &args.node_rpc);
+    let client = connect(&node_rpc).await?;
+    let server = client.get_server_info().await.map_err(|e| format!("getServerInfo failed: {e}"))?;
+    if let Some(expected) = &args.network
+        && let Ok(expected_id) = NetworkId::from_str(expected)
+        && expected_id != server.network_id
+    {
+        return Err(format!("node network {} does not match --network {expected_id}", server.network_id));
+    }
+    let params = Params::from(server.network_id);
+    let anchor = palw_search_retrieval::NodeAnchorV1 {
+        network_id: server.network_id.suffix.unwrap_or(0),
+        genesis_hash: params.genesis.hash,
+        daa_score: server.virtual_daa_score,
+        unix_millis: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("system clock before Unix epoch: {e}"))?
+            .as_millis() as u64,
+    };
+    let request = palw_search_retrieval::RetrievalRequestV1 {
+        endpoint: args.endpoint,
+        query: args.query,
+        ruleset_id: args.ruleset_id,
+        assignment_id: match &args.assignment_id {
+            Some(hex) => parse_hash64(hex)?,
+            None => Hash64::from_bytes([0; 64]),
+        },
+        provider_policy_id: match &args.provider_policy_id {
+            Some(hex) => parse_hash64(hex)?,
+            None => Hash64::from_bytes([0; 64]),
+        },
+        language: args.language,
+        region: args.region,
+        safe_search: args.safe_search,
+        freshness_window_millis: args.freshness_ms,
+    };
+    let policy = palw_search_retrieval::RetrievalPolicyV1 {
+        timeout_ms: args.timeout_ms,
+        max_results: args.max_results,
+        ..Default::default()
+    };
+    let snapshot = tokio::task::spawn_blocking(move || {
+        palw_search_retrieval::retrieve_search_snapshot(&request, &anchor, &policy)
+    })
+    .await
+    .map_err(|e| format!("retrieval task join failure: {e}"))??;
+
+    let bytes = snapshot.encode().map_err(|e| format!("snapshot encode: {e}"))?;
+    let digest = snapshot.digest().map_err(|e| format!("snapshot digest: {e}"))?;
+    let commitment = snapshot.da_commitment().map_err(|e| format!("snapshot commitment: {e}"))?;
+    std::fs::create_dir_all(&args.out).map_err(|e| format!("cannot create {}: {e}", args.out))?;
+    let root_hex = format!("{}", commitment.root);
+    let object_path = format!("{}/palw-search-snapshot-{}.bin", args.out, &root_hex[..16]);
+    let manifest_path = format!("{}/palw-search-snapshot-{}.manifest.json", args.out, &root_hex[..16]);
+    std::fs::write(&object_path, &bytes).map_err(|e| format!("cannot write {object_path}: {e}"))?;
+    let manifest = serde_json::json!({
+        "schema": "misaka.palw.search-snapshot-manifest.v1",
+        "object_root": root_hex,
+        "snapshot_digest": format!("{digest}"),
+        "object_len": commitment.object_len,
+        "chunk_count": commitment.chunk_count,
+        "network_id": snapshot.network_id,
+        "genesis_hash": format!("{}", snapshot.genesis_hash),
+        "retrieval_daa_score": snapshot.retrieval_daa_score,
+        "retrieval_unix_millis": snapshot.retrieval_unix_millis,
+        "freshness_deadline_millis": snapshot.freshness_deadline_millis,
+        "outcome": snapshot.outcome,
+        "sources": snapshot
+            .results
+            .iter()
+            .map(|r| serde_json::json!({"rank": r.rank, "title": r.title, "url": r.url}))
+            .collect::<Vec<_>>(),
+        "object_file": object_path,
+        "admission_api": "ConsensusApi::palw_admit_search_snapshot(object_bytes)",
+        "consensus_weight": "none — assignment-id resolution is a StopShip gate before P2P/mint exposure",
+    });
+    let manifest_text = serde_json::to_string_pretty(&manifest).map_err(|e| format!("manifest encode: {e}"))?;
+    std::fs::write(&manifest_path, format!("{manifest_text}\n")).map_err(|e| format!("cannot write {manifest_path}: {e}"))?;
+    println!("{manifest_text}");
+    Ok(())
 }
 
 /// Parse a 64-byte Hash64 from hex (128 chars).

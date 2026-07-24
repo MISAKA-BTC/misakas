@@ -28,6 +28,11 @@ use thiserror::Error;
 pub const PALW_RECEIPT_DA_OBJECT_VERSION_V1: u16 = 1;
 /// Public Header-v4/re-genesis object: two authenticated node-owned Receipt-v3 submissions.
 pub const PALW_RECEIPT_DA_OBJECT_VERSION_V2: u16 = 2;
+/// Node-anchored web-search snapshot (`SearchSnapshotV1`, ADR node-anchored-web-search-da).
+/// Shares the DA-01 chunk tree; the version participates in every leaf/root preimage, so
+/// snapshot roots and receipt roots live in disjoint hash domains. Receipt admission and the
+/// receipt store dispatch on explicit V1/V2 arms and can never accept this class.
+pub const PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1: u16 = 3;
 pub const PALW_RECEIPT_DA_PROOF_VERSION_V1: u16 = 1;
 pub const PALW_PROVIDER_SESSION_AUTH_VERSION_V1: u16 = 1;
 pub const PALW_DA_CHALLENGE_VERSION_V1: u16 = 1;
@@ -327,7 +332,10 @@ fn expected_chunk_count(object_len: usize) -> Result<u16, PalwDaError> {
 
 #[inline]
 fn supported_object_version(version: u16) -> bool {
-    matches!(version, PALW_RECEIPT_DA_OBJECT_VERSION_V1 | PALW_RECEIPT_DA_OBJECT_VERSION_V2)
+    matches!(
+        version,
+        PALW_RECEIPT_DA_OBJECT_VERSION_V1 | PALW_RECEIPT_DA_OBJECT_VERSION_V2 | PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1
+    )
 }
 
 /// Read the consensus DA object-version prefix shared by every canonical object schema.
@@ -1671,11 +1679,18 @@ mod tests {
         let mut proof = palw_receipt_da_chunk_proof(1, &f.bytes, 0).unwrap();
         proof.siblings.pop();
         assert_eq!(verify_palw_receipt_da_chunk(&f.commitment.root, &proof), Err(PalwDaError::ProofDepth));
+        // Cross-class swap: version 3 is a real (search-snapshot) class, but every chunk/root
+        // preimage includes the version, so a receipt proof relabeled as version 3 lands in a
+        // disjoint hash domain and cannot match the committed receipt root.
         let mut proof = palw_receipt_da_chunk_proof(1, &f.bytes, 0).unwrap();
-        proof.object_version = PALW_RECEIPT_DA_OBJECT_VERSION_V2 + 1;
+        proof.object_version = PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1;
+        assert_eq!(verify_palw_receipt_da_chunk(&f.commitment.root, &proof), Err(PalwDaError::WrongProof));
+        // A genuinely unknown version stays a version error.
+        let mut proof = palw_receipt_da_chunk_proof(1, &f.bytes, 0).unwrap();
+        proof.object_version = PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1 + 1;
         assert_eq!(
             verify_palw_receipt_da_chunk(&f.commitment.root, &proof),
-            Err(PalwDaError::UnsupportedVersion(PALW_RECEIPT_DA_OBJECT_VERSION_V2 + 1))
+            Err(PalwDaError::UnsupportedVersion(PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1 + 1))
         );
     }
 

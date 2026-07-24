@@ -23,6 +23,7 @@
 /// Kept as a child module so the new wire/state machine can evolve independently of
 /// the already-large PALW header and batch implementation.
 pub mod da;
+pub mod search_snapshot;
 
 use crate::BlueWorkType;
 use crate::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, p2pkh_mldsa87_spk, validator_id_from_pubkey};

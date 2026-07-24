@@ -1264,6 +1264,16 @@ impl ConsensusApi for Consensus {
         self.palw_admit_da_object_impl(batch_id, leaf_index, object_bytes)
     }
 
+    fn palw_admit_search_snapshot(
+        &self,
+        object_bytes: Arc<Vec<u8>>,
+    ) -> Result<
+        kaspa_consensus_core::palw::search_snapshot::PalwSearchSnapshotAdmittedV1,
+        kaspa_consensus_core::palw::da::PalwDaAdmissionError,
+    > {
+        self.palw_admit_search_snapshot_impl(object_bytes)
+    }
+
     fn palw_da_service_snapshot(
         &self,
     ) -> Result<kaspa_consensus_core::palw::da::PalwDaServiceSnapshotV1, kaspa_consensus_core::palw::da::PalwDaServiceError> {
@@ -1274,6 +1284,12 @@ impl ConsensusApi for Consensus {
         &self,
     ) -> Result<kaspa_consensus_core::palw::da::PalwDaObjectGcStatsV1, kaspa_consensus_core::palw::da::PalwDaServiceError> {
         self.palw_da_gc_objects_impl()
+    }
+
+    fn palw_search_snapshot_gc(
+        &self,
+    ) -> Result<Vec<kaspa_hashes::Hash64>, kaspa_consensus_core::palw::da::PalwDaServiceError> {
+        self.palw_search_snapshot_gc_impl()
     }
 
     fn palw_build_algo4_template(

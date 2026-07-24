@@ -173,6 +173,9 @@ misaka-mtp-collectors = { version = "1.1.0", path = "mtp/collectors" }
 aes = "0.8.3"
 ahash = "0.8.6"
 arc-swap = "1.6.0"
+# Plain-HTTP client for the operator-local PALW search-retrieval provider (SearXNG).
+# default-features = false: no TLS stack — the egress gate refuses non-local plaintext targets.
+attohttpc = { version = "0.30.1", default-features = false }
 argon2 = "0.5.2"
 async-channel = "2.0.0"
 async-lock = { version = "3.4.2" }

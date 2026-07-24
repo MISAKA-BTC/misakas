@@ -25,6 +25,7 @@ kaspa-rpc-core.workspace = true
 kaspa-wrpc-client.workspace = true
 misaka-palw-miner.workspace = true
 
+attohttpc.workspace = true
 borsh.workspace = true
 faster-hex.workspace = true
 log.workspace = true
@@ -32,6 +33,7 @@ rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha3.workspace = true # Keccak-256 for the EIP-55 deposit-address checksum (Wallet Profile v1)
+sha2.workspace = true # SHA-256 query digests inside SearchSnapshotV1
 
 clap = { workspace = true, features = ["env"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal"] }

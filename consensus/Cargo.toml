@@ -65,6 +65,8 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 [dev-dependencies]
 criterion.workspace = true
 serde_json.workspace = true
+# Search-snapshot admission/store tests build SearchSnapshotV1 fixtures with SHA-256 query digests.
+sha2.workspace = true
 # kaspa-pq ADR-0040 §5.15.12 (E2E ROUND TRIP): the REAL miner-side producers
 # (`registration::build_batch_manifest` / `build_leaf_chunk`) drive the REAL acceptance arm
 # (`processes::palw::apply_palw_overlay_effect`) in one test, so a producer/verifier drift in the

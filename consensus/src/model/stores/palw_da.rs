@@ -8,6 +8,7 @@ use borsh::BorshDeserialize;
 use kaspa_consensus_core::palw::da::{
     PalwDaPruningSnapshotV1, PalwDaStateV1, PalwReceiptDaObjectV1, palw_receipt_da_commitment, palw_receipt_da_object_bytes,
 };
+use kaspa_consensus_core::palw::search_snapshot::PalwSearchSnapshotV1;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
     BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DB, DbKey, DirectDbWriter, StoreError, StoreResult,
@@ -21,6 +22,28 @@ pub trait PalwDaStoreReader {
     fn state(&self, block: BlockHash) -> StoreResult<Arc<PalwDaStateV1>>;
     fn object(&self, root: Hash64) -> StoreResult<Arc<Vec<u8>>>;
     fn pruning_snapshot(&self) -> StoreResult<PalwDaPruningSnapshotV1>;
+    fn search_snapshot(&self, root: Hash64) -> StoreResult<Arc<PalwSearchSnapshotStoredV1>>;
+}
+
+/// One admitted node-anchored web-search snapshot with its retention metadata. The canonical
+/// snapshot bytes are the authoritative payload; the metadata exists so snapshot retention GC is
+/// independent from receipt-obligation GC.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwSearchSnapshotStoredV1 {
+    /// Sink DAA score at admission.
+    pub admitted_daa_score: u64,
+    /// DAA score after which this snapshot may be garbage-collected.
+    pub retention_until_daa_score: u64,
+    /// Keyed-BLAKE2b-512 canonical snapshot digest.
+    pub snapshot_digest: Hash64,
+    /// Canonical version-3 DA object bytes.
+    pub bytes: Vec<u8>,
+}
+
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwSearchSnapshotStoredV1 {
+    fn estimate_mem_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() + self.bytes.len()
+    }
 }
 
 pub trait PalwDaStore: PalwDaStoreReader {
@@ -34,6 +57,7 @@ pub struct DbPalwDaStore {
     states: CachedDbAccess<BlockHash, Arc<PalwDaStateV1>, BlockHasher>,
     objects: CachedDbAccess<Hash64, Arc<Vec<u8>>, BlockHasher>,
     snapshot: CachedDbItem<PalwDaPruningSnapshotV1>,
+    search_snapshots: CachedDbAccess<Hash64, Arc<PalwSearchSnapshotStoredV1>, BlockHasher>,
 }
 
 impl DbPalwDaStore {
@@ -42,7 +66,8 @@ impl DbPalwDaStore {
             db: Arc::clone(&db),
             states: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwDaStateByBlock.into()),
             objects: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwDaObject.into()),
-            snapshot: CachedDbItem::new(db, DatabaseStorePrefixes::PalwDaPruningSnapshot.into()),
+            snapshot: CachedDbItem::new(db.clone(), DatabaseStorePrefixes::PalwDaPruningSnapshot.into()),
+            search_snapshots: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::PalwSearchSnapshotObject.into()),
         }
     }
 
@@ -174,6 +199,107 @@ impl DbPalwDaStore {
         self.db.write(batch)?;
         Ok(())
     }
+
+    /// Full store-side revalidation of one admitted search snapshot: strict decode, bit-exact
+    /// canonical round-trip, version-3 commitment equal to the store key, digest equal to the
+    /// recorded digest, and a non-inverted retention window.
+    pub(crate) fn validate_search_snapshot(root: Hash64, stored: &PalwSearchSnapshotStoredV1) -> StoreResult<()> {
+        let snapshot = PalwSearchSnapshotV1::decode_strict(&stored.bytes)
+            .map_err(|error| StoreError::DataInconsistency(format!("invalid PALW search snapshot: {error}")))?;
+        let reencoded = snapshot
+            .encode()
+            .map_err(|error| StoreError::DataInconsistency(format!("invalid PALW search snapshot: {error}")))?;
+        if reencoded != stored.bytes {
+            return Err(StoreError::DataInconsistency("PALW search snapshot round-trip is non-canonical".into()));
+        }
+        let commitment = snapshot
+            .da_commitment()
+            .map_err(|error| StoreError::DataInconsistency(format!("invalid PALW search snapshot commitment: {error}")))?;
+        if commitment.root != root {
+            return Err(StoreError::DataInconsistency("PALW search snapshot does not hash to its store key".into()));
+        }
+        let digest = snapshot
+            .digest()
+            .map_err(|error| StoreError::DataInconsistency(format!("invalid PALW search snapshot digest: {error}")))?;
+        if digest != stored.snapshot_digest {
+            return Err(StoreError::DataInconsistency("PALW search snapshot digest does not match its metadata".into()));
+        }
+        if stored.retention_until_daa_score < stored.admitted_daa_score {
+            return Err(StoreError::DataInconsistency("PALW search snapshot retention window is inverted".into()));
+        }
+        Ok(())
+    }
+
+    /// Persist one snapshot that already passed selected-chain admission
+    /// ([`crate::consensus::palw_da`] is the production caller). Durable-row-first like
+    /// [`Self::insert_admitted_object`]: a failed RocksDB write can never seed the cache.
+    /// Re-admission with identical canonical bytes is idempotent and keeps the original
+    /// retention metadata; identical roots with different bytes are a hash collision and fail.
+    pub(crate) fn insert_admitted_search_snapshot(&self, root: Hash64, stored: Arc<PalwSearchSnapshotStoredV1>) -> StoreResult<()> {
+        Self::validate_search_snapshot(root, &stored)?;
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwSearchSnapshotObject.into();
+        let key = DbKey::new(&prefix, root);
+        if let Some(existing) = self.db.get_pinned(&key)? {
+            let existing: Arc<PalwSearchSnapshotStoredV1> = bincode::deserialize(&existing)?;
+            return if existing.bytes == stored.bytes {
+                Ok(())
+            } else {
+                Err(StoreError::KeyAlreadyExists(format!("PALW search snapshot root collision at {root}")))
+            };
+        }
+        let encoded = bincode::serialize(&stored)?;
+        self.db.put(&key, encoded)?;
+        Ok(())
+    }
+
+    /// Key-only sweep of the snapshot column (mirrors [`Self::object_roots`]).
+    pub(crate) fn search_snapshot_roots(&self) -> StoreResult<Vec<Hash64>> {
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwSearchSnapshotObject.into();
+        let prefix_key = DbKey::prefix_only(&prefix);
+        let mut read_options = ReadOptions::default();
+        read_options.set_iterate_range(rocksdb::PrefixRange(prefix_key.as_ref()));
+        self.db
+            .iterator_opt(IteratorMode::From(prefix_key.as_ref(), Direction::Forward), read_options)
+            .map(|row| {
+                let (key, _) =
+                    row.map_err(|error| StoreError::DataInconsistency(format!("PALW search snapshot iterator: {error}")))?;
+                let bytes: [u8; 64] = key[prefix_key.prefix_len()..]
+                    .try_into()
+                    .map_err(|_| StoreError::DataInconsistency("PALW search snapshot key is not 64 bytes".into()))?;
+                Ok(Hash64::from_bytes(bytes))
+            })
+            .collect()
+    }
+
+    /// Delete up to `max_deletions` snapshots whose retention window ended before
+    /// `current_daa_score`, in deterministic root order, as one atomic batch. Returns the
+    /// deleted roots. Receipt-obligation GC never touches this column and vice versa.
+    pub(crate) fn delete_expired_search_snapshots(
+        &mut self,
+        current_daa_score: u64,
+        max_deletions: usize,
+    ) -> StoreResult<Vec<Hash64>> {
+        let mut roots = self.search_snapshot_roots()?;
+        roots.sort_unstable();
+        let mut expired = Vec::new();
+        for root in roots {
+            if expired.len() >= max_deletions {
+                break;
+            }
+            let stored = self.search_snapshots.read(root)?;
+            if current_daa_score > stored.retention_until_daa_score {
+                expired.push(root);
+            }
+        }
+        if expired.is_empty() {
+            return Ok(expired);
+        }
+        let mut batch = WriteBatch::default();
+        let mut iter = expired.iter().copied();
+        self.search_snapshots.delete_many(BatchDbWriter::new(&mut batch), &mut iter)?;
+        self.db.write(batch)?;
+        Ok(expired)
+    }
 }
 
 impl PalwDaStoreReader for DbPalwDaStore {
@@ -187,6 +313,10 @@ impl PalwDaStoreReader for DbPalwDaStore {
 
     fn pruning_snapshot(&self) -> StoreResult<PalwDaPruningSnapshotV1> {
         self.snapshot.read()
+    }
+
+    fn search_snapshot(&self, root: Hash64) -> StoreResult<Arc<PalwSearchSnapshotStoredV1>> {
+        self.search_snapshots.read(root)
     }
 }
 
@@ -272,6 +402,90 @@ mod tests {
         assert_eq!(*restarted.object(live).unwrap(), vec![0x31]);
         assert!(matches!(restarted.object(stale_a), Err(StoreError::KeyNotFound(_))));
         assert!(matches!(restarted.object(stale_b), Err(StoreError::KeyNotFound(_))));
+    }
+
+    fn stored_search_snapshot() -> (Hash64, PalwSearchSnapshotStoredV1) {
+        use kaspa_consensus_core::palw::search_snapshot::{
+            PALW_SEARCH_SNAPSHOT_VERSION_V1, PalwSearchOutcomeV1, PalwSearchProviderPolicyV1, PalwSearchSnapshotV1, normalize_query_v1,
+        };
+        use sha2::{Digest, Sha256};
+        let original_query = "量子 コンピュータ".to_string();
+        let normalized_query = normalize_query_v1(&original_query);
+        let digest32 = |bytes: &[u8]| -> [u8; 32] {
+            let mut hasher = Sha256::new();
+            hasher.update(bytes);
+            hasher.finalize().into()
+        };
+        let snapshot = PalwSearchSnapshotV1 {
+            version: PALW_SEARCH_SNAPSHOT_VERSION_V1,
+            network_id: 111,
+            genesis_hash: h(0x77),
+            ruleset_id: "palw-search-v1".into(),
+            assignment_id: h(0),
+            original_query_sha256: digest32(original_query.as_bytes()),
+            normalized_query_sha256: digest32(normalized_query.as_bytes()),
+            original_query,
+            normalized_query,
+            provider: PalwSearchProviderPolicyV1 {
+                provider_id: "searxng".into(),
+                policy_id: h(0x88),
+                region: "jp".into(),
+                language: "ja-JP".into(),
+                safe_search: 1,
+            },
+            retrieval_unix_millis: 1_784_800_000_000,
+            retrieval_daa_score: 500,
+            freshness_deadline_millis: 1_784_800_600_000,
+            outcome: PalwSearchOutcomeV1::EmptyResults,
+            results: vec![],
+            bodies: vec![],
+        };
+        let stored = PalwSearchSnapshotStoredV1 {
+            admitted_daa_score: 600,
+            retention_until_daa_score: 700,
+            snapshot_digest: snapshot.digest().unwrap(),
+            bytes: snapshot.encode().unwrap(),
+        };
+        (snapshot.da_commitment().unwrap().root, stored)
+    }
+
+    #[test]
+    fn search_snapshot_insert_read_idempotence_and_expiry_gc() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwDaStore::new(db, CachePolicy::Count(4));
+        let (root, stored) = stored_search_snapshot();
+
+        store.insert_admitted_search_snapshot(root, Arc::new(stored.clone())).unwrap();
+        assert_eq!(*store.search_snapshot(root).unwrap(), stored);
+
+        // Same canonical bytes: idempotent, original retention metadata kept.
+        let mut readmitted = stored.clone();
+        readmitted.retention_until_daa_score += 1_000;
+        store.insert_admitted_search_snapshot(root, Arc::new(readmitted)).unwrap();
+        assert_eq!(store.search_snapshot(root).unwrap().retention_until_daa_score, stored.retention_until_daa_score);
+
+        // Wrong store key is rejected before any write.
+        let wrong_key = h(0x01);
+        assert!(matches!(
+            store.insert_admitted_search_snapshot(wrong_key, Arc::new(stored.clone())),
+            Err(StoreError::DataInconsistency(_))
+        ));
+
+        // Tampered stored digest is rejected.
+        let mut bad_digest = stored.clone();
+        bad_digest.snapshot_digest = h(0x02);
+        assert!(matches!(
+            store.insert_admitted_search_snapshot(root, Arc::new(bad_digest)),
+            Err(StoreError::DataInconsistency(_))
+        ));
+
+        // Retention GC: not expired at the boundary, expired one score later.
+        assert!(store.delete_expired_search_snapshots(stored.retention_until_daa_score, 16).unwrap().is_empty());
+        let deleted = store.delete_expired_search_snapshots(stored.retention_until_daa_score + 1, 16).unwrap();
+        assert_eq!(deleted, vec![root]);
+        assert!(matches!(store.search_snapshot(root), Err(StoreError::KeyNotFound(_))));
+        // Receipt-object GC path never sees the snapshot column.
+        assert!(store.object_roots().unwrap().is_empty());
     }
 
     #[test]

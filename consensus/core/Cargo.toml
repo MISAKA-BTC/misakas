@@ -54,6 +54,8 @@ secp256k1 = { workspace = true, optional = true }
 # kaspa-pq Phase 3 PoW (ADR-0007): the compute-only BLAKE2b-512 ∥ SHA3-512
 # Layer-1 tag (algo_id = 3) needs SHA3-512 (RustCrypto `sha3`).
 sha3.workspace = true
+# SearchSnapshotV1 body/query digests (ADR node-anchored-web-search-da).
+sha2.workspace = true
 serde_json.workspace = true
 serde-wasm-bindgen.workspace = true
 serde.workspace = true

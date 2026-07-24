@@ -168,6 +168,18 @@ pub trait ConsensusApi: Send + Sync {
         Err(crate::palw::da::PalwDaAdmissionError::Disabled)
     }
 
+    /// Admit one canonical node-anchored web-search snapshot (DA object version 3, ADR
+    /// node-anchored-web-search-da) at a single selected-chain sink snapshot. Implementations must
+    /// run the strict snapshot decoder plus network/genesis/DAA binding before durable storage.
+    /// Snapshots carry no mint weight; assignment-id resolution is a StopShip gate before any P2P
+    /// exposure. Default: unsupported.
+    fn palw_admit_search_snapshot(
+        &self,
+        _object_bytes: Arc<Vec<u8>>,
+    ) -> Result<crate::palw::search_snapshot::PalwSearchSnapshotAdmittedV1, crate::palw::da::PalwDaAdmissionError> {
+        Err(crate::palw::da::PalwDaAdmissionError::Disabled)
+    }
+
     /// Return a fixed-size, selected-chain-coherent Object-v2 availability view for the local DA
     /// service. This is an internal process API, not an unauthenticated network/RPC surface.
     fn palw_da_service_snapshot(&self) -> Result<crate::palw::da::PalwDaServiceSnapshotV1, crate::palw::da::PalwDaServiceError> {
@@ -177,6 +189,13 @@ pub trait ConsensusApi: Send + Sync {
     /// Atomically delete durable DA objects not referenced by any retained selected-chain
     /// obligation. Implementations must use an all-roots view, never the smaller serving snapshot.
     fn palw_da_gc_objects(&self) -> Result<crate::palw::da::PalwDaObjectGcStatsV1, crate::palw::da::PalwDaServiceError> {
+        Err(crate::palw::da::PalwDaServiceError::Disabled)
+    }
+
+    /// Reclaim admitted search snapshots whose retention window ended before the current sink
+    /// DAA score. Disjoint from receipt-obligation GC by store construction. Returns the deleted
+    /// roots. Default: unsupported.
+    fn palw_search_snapshot_gc(&self) -> Result<Vec<kaspa_hashes::Hash64>, crate::palw::da::PalwDaServiceError> {
         Err(crate::palw::da::PalwDaServiceError::Disabled)
     }
 

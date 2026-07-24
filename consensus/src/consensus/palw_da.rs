@@ -18,6 +18,10 @@ use kaspa_consensus_core::palw::{
         PalwDaFetchTargetV1, PalwDaObjectGcStatsV1, PalwDaObligationStatusV1, PalwDaServiceError, PalwDaServiceSnapshotV1,
         PalwDaServingObjectV1, PalwDaStateV1, PalwReceiptDaCommitmentV1, palw_receipt_da_commitment,
     },
+    search_snapshot::{
+        PALW_SEARCH_SNAPSHOT_MAX_FUTURE_DAA_SLACK, PALW_SEARCH_SNAPSHOT_RETENTION_DAA, PalwSearchSnapshotAdmittedV1,
+        PalwSearchSnapshotV1,
+    },
 };
 use kaspa_database::prelude::StoreErrorPredicates;
 use kaspa_hashes::Hash64;
@@ -127,6 +131,41 @@ pub(crate) fn verify_palw_da_object_for_admission(
     Ok(commitment)
 }
 
+/// Pure admission verifier for one canonical node-anchored search snapshot (DA object
+/// version 3). No leaf or provider bond exists for this class yet: the snapshot is an input
+/// artifact for future scheduler assignments, not a mint claim. What IS enforced, fail-closed:
+/// strict canonical decode, network and genesis binding, and a retrieval DAA score that does
+/// not lead the admitting sink by more than the pinned slack. Assignment-id resolution stays a
+/// StopShip gate before any P2P or mint exposure.
+pub(crate) fn verify_palw_search_snapshot_for_admission(
+    network_id: u32,
+    genesis_hash: Hash64,
+    sink_daa_score: u64,
+    object_bytes: &[u8],
+) -> Result<(PalwSearchSnapshotV1, PalwReceiptDaCommitmentV1, Hash64), PalwDaAdmissionError> {
+    let snapshot = PalwSearchSnapshotV1::decode_strict(object_bytes)
+        .map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
+    if snapshot.network_id != network_id {
+        return Err(PalwDaAdmissionError::InvalidObject(format!(
+            "snapshot network id {} does not match node network id {network_id}",
+            snapshot.network_id
+        )));
+    }
+    if snapshot.genesis_hash != genesis_hash {
+        return Err(PalwDaAdmissionError::InvalidObject("snapshot genesis hash does not match this network".to_string()));
+    }
+    if snapshot.retrieval_daa_score > sink_daa_score.saturating_add(PALW_SEARCH_SNAPSHOT_MAX_FUTURE_DAA_SLACK) {
+        return Err(PalwDaAdmissionError::InvalidObject(format!(
+            "snapshot retrieval DAA score {} leads the sink {sink_daa_score} beyond the pinned slack",
+            snapshot.retrieval_daa_score
+        )));
+    }
+    let commitment =
+        snapshot.da_commitment().map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
+    let digest = snapshot.digest().map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
+    Ok((snapshot, commitment, digest))
+}
+
 impl Consensus {
     pub(crate) fn palw_admit_da_object_impl(
         &self,
@@ -210,6 +249,87 @@ impl Consensus {
         drop(provider_store);
         drop(virtual_read);
         Ok(commitment.root)
+    }
+
+    /// Admit one canonical node-anchored search snapshot against a single frozen virtual sink.
+    /// Same locking discipline as receipt admission: the virtual read guard is held through the
+    /// activation gate, the semantic verifier, and the durable insert, so a snapshot cannot bind
+    /// a DAA score from one sink and be stored under another. Retention is
+    /// `sink + PALW_SEARCH_SNAPSHOT_RETENTION_DAA`; expired rows are reclaimed by the
+    /// snapshot-specific GC, never by receipt-obligation GC.
+    pub(crate) fn palw_admit_search_snapshot_impl(
+        &self,
+        object_bytes: Arc<Vec<u8>>,
+    ) -> Result<PalwSearchSnapshotAdmittedV1, PalwDaAdmissionError> {
+        let params = &self.config.params;
+        if params.palw_activation_daa_score == u64::MAX {
+            return Err(PalwDaAdmissionError::Disabled);
+        }
+        let virtual_read = self.virtual_stores.read();
+        let virtual_state =
+            virtual_read.state.get().map_err(|error| PalwDaAdmissionError::Store(format!("virtual state: {error:?}")))?;
+        let sink = virtual_state.ghostdag_data.selected_parent;
+        let sink_daa_score = self
+            .storage
+            .headers_store
+            .get_daa_score(sink)
+            .map_err(|error| PalwDaAdmissionError::Store(format!("sink header: {error:?}")))?;
+        if sink_daa_score < params.palw_activation_daa_score {
+            return Err(PalwDaAdmissionError::Disabled);
+        }
+        let (_, commitment, digest) = verify_palw_search_snapshot_for_admission(
+            params.net.suffix().unwrap_or(0),
+            self.config.genesis.hash,
+            sink_daa_score,
+            &object_bytes,
+        )?;
+        let admitted = PalwSearchSnapshotAdmittedV1 {
+            object_root: commitment.root,
+            snapshot_digest: digest,
+            object_len: commitment.object_len,
+            chunk_count: commitment.chunk_count,
+            admitted_daa_score: sink_daa_score,
+            retention_until_daa_score: sink_daa_score.saturating_add(PALW_SEARCH_SNAPSHOT_RETENTION_DAA),
+        };
+        let stored = crate::model::stores::palw_da::PalwSearchSnapshotStoredV1 {
+            admitted_daa_score: admitted.admitted_daa_score,
+            retention_until_daa_score: admitted.retention_until_daa_score,
+            snapshot_digest: digest,
+            bytes: Arc::try_unwrap(object_bytes).unwrap_or_else(|shared| (*shared).clone()),
+        };
+        self.storage
+            .palw_da_store
+            .write()
+            .insert_admitted_search_snapshot(admitted.object_root, Arc::new(stored))
+            .map_err(|error| PalwDaAdmissionError::Store(format!("search snapshot store: {error:?}")))?;
+        drop(virtual_read);
+        Ok(admitted)
+    }
+
+    /// Reclaim search snapshots whose retention window ended before the current sink DAA score.
+    /// Bounded per cycle; deterministic root order. Entirely disjoint from receipt-obligation GC:
+    /// this sweep reads only the snapshot column's own retention metadata.
+    pub(crate) fn palw_search_snapshot_gc_impl(&self) -> Result<Vec<Hash64>, PalwDaServiceError> {
+        let params = &self.config.params;
+        if params.palw_activation_daa_score == u64::MAX {
+            return Err(PalwDaServiceError::Disabled);
+        }
+        let virtual_read = self.virtual_stores.read();
+        let virtual_state =
+            virtual_read.state.get().map_err(|error| PalwDaServiceError::Store(format!("virtual state: {error:?}")))?;
+        let current_daa_score = self
+            .storage
+            .headers_store
+            .get_daa_score(virtual_state.ghostdag_data.selected_parent)
+            .map_err(|error| PalwDaServiceError::Store(format!("sink header: {error:?}")))?;
+        let deleted = self
+            .storage
+            .palw_da_store
+            .write()
+            .delete_expired_search_snapshots(current_daa_score, PALW_DA_GC_MAX_DELETIONS_PER_CYCLE)
+            .map_err(|error| PalwDaServiceError::Store(format!("search snapshot GC: {error:?}")))?;
+        drop(virtual_read);
+        Ok(deleted)
     }
 
     /// Build the bounded input to the local availability service from exactly one frozen virtual
@@ -1004,5 +1124,120 @@ mod tests {
         assert_eq!(u64::from(commitment.object_len), golden["object_len"].as_u64().unwrap());
         assert_eq!(commitment.object_len as usize, fixture.bytes.len());
         assert_eq!(format!("{}", commitment.root), golden["root"].as_str().unwrap());
+    }
+
+    mod search_snapshot_admission {
+        use super::super::verify_palw_search_snapshot_for_admission;
+        use kaspa_consensus_core::palw::da::{PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1, PalwDaAdmissionError};
+        use kaspa_consensus_core::palw::search_snapshot::{
+            PALW_SEARCH_SNAPSHOT_MAX_FUTURE_DAA_SLACK, PALW_SEARCH_SNAPSHOT_VERSION_V1, PalwSearchMediaTypeV1,
+            PalwSearchOutcomeV1, PalwSearchProviderPolicyV1, PalwSearchResultV1, PalwSearchSnapshotV1, normalize_query_v1,
+        };
+        use kaspa_hashes::Hash64;
+
+        const NETWORK_ID: u32 = 111;
+        const SINK_DAA: u64 = 10_000;
+
+        fn genesis() -> Hash64 {
+            Hash64::from_bytes([0x42; 64])
+        }
+
+        fn sha256(bytes: &[u8]) -> [u8; 32] {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(bytes);
+            hasher.finalize().into()
+        }
+
+        fn snapshot() -> PalwSearchSnapshotV1 {
+            let original_query = "自家発行 LLM 検証".to_string();
+            let normalized_query = normalize_query_v1(&original_query);
+            PalwSearchSnapshotV1 {
+                version: PALW_SEARCH_SNAPSHOT_VERSION_V1,
+                network_id: NETWORK_ID,
+                genesis_hash: genesis(),
+                ruleset_id: "palw-search-v1".into(),
+                assignment_id: Hash64::from_bytes([0; 64]),
+                original_query_sha256: sha256(original_query.as_bytes()),
+                normalized_query_sha256: sha256(normalized_query.as_bytes()),
+                original_query,
+                normalized_query,
+                provider: PalwSearchProviderPolicyV1 {
+                    provider_id: "searxng".into(),
+                    policy_id: Hash64::from_bytes([0x99; 64]),
+                    region: "jp".into(),
+                    language: "ja-JP".into(),
+                    safe_search: 1,
+                },
+                retrieval_unix_millis: 1_784_800_000_000,
+                retrieval_daa_score: SINK_DAA,
+                freshness_deadline_millis: 1_784_800_600_000,
+                outcome: PalwSearchOutcomeV1::Ok,
+                results: vec![PalwSearchResultV1 {
+                    rank: 1,
+                    media_type: PalwSearchMediaTypeV1::Web,
+                    title: "検証側リプレイ".into(),
+                    url: "https://example.org/replay".into(),
+                    snippet: "同じ結果".into(),
+                }],
+                bodies: vec![],
+            }
+        }
+
+        #[test]
+        fn valid_snapshot_is_admitted_with_version3_commitment() {
+            let snapshot = snapshot();
+            let bytes = snapshot.encode().unwrap();
+            let (decoded, commitment, digest) =
+                verify_palw_search_snapshot_for_admission(NETWORK_ID, genesis(), SINK_DAA, &bytes).unwrap();
+            assert_eq!(decoded, snapshot);
+            assert_eq!(commitment.object_version, PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1);
+            assert_eq!(commitment.object_len as usize, bytes.len());
+            assert_eq!(digest, snapshot.digest().unwrap());
+        }
+
+        #[test]
+        fn wrong_network_genesis_or_future_daa_is_rejected() {
+            let bytes = snapshot().encode().unwrap();
+            assert!(matches!(
+                verify_palw_search_snapshot_for_admission(NETWORK_ID + 1, genesis(), SINK_DAA, &bytes),
+                Err(PalwDaAdmissionError::InvalidObject(_))
+            ));
+            assert!(matches!(
+                verify_palw_search_snapshot_for_admission(NETWORK_ID, Hash64::from_bytes([0x43; 64]), SINK_DAA, &bytes),
+                Err(PalwDaAdmissionError::InvalidObject(_))
+            ));
+            let mut future = snapshot();
+            future.retrieval_daa_score = SINK_DAA + PALW_SEARCH_SNAPSHOT_MAX_FUTURE_DAA_SLACK + 1;
+            let future_bytes = future.encode().unwrap();
+            assert!(matches!(
+                verify_palw_search_snapshot_for_admission(NETWORK_ID, genesis(), SINK_DAA, &future_bytes),
+                Err(PalwDaAdmissionError::InvalidObject(_))
+            ));
+            // Exactly at the slack boundary is admitted.
+            let mut boundary = snapshot();
+            boundary.retrieval_daa_score = SINK_DAA + PALW_SEARCH_SNAPSHOT_MAX_FUTURE_DAA_SLACK;
+            let boundary_bytes = boundary.encode().unwrap();
+            assert!(verify_palw_search_snapshot_for_admission(NETWORK_ID, genesis(), SINK_DAA, &boundary_bytes).is_ok());
+        }
+
+        #[test]
+        fn tampered_or_foreign_bytes_are_rejected() {
+            let bytes = snapshot().encode().unwrap();
+            for index in [0, 2, bytes.len() / 2, bytes.len() - 1] {
+                let mut mutated = bytes.clone();
+                mutated[index] ^= 0x01;
+                let verdict = verify_palw_search_snapshot_for_admission(NETWORK_ID, genesis(), SINK_DAA, &mutated);
+                if let Ok((decoded, _, digest)) = verdict {
+                    // A mutation that still decodes must change the digest (bound to every byte).
+                    assert_ne!(digest, snapshot().digest().unwrap(), "mutation at {index} kept the digest");
+                    assert_ne!(decoded, snapshot());
+                }
+            }
+            assert!(matches!(
+                verify_palw_search_snapshot_for_admission(NETWORK_ID, genesis(), SINK_DAA, &[]),
+                Err(PalwDaAdmissionError::InvalidObject(_))
+            ));
+        }
     }
 }

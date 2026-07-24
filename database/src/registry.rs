@@ -292,6 +292,10 @@ pub enum DatabaseStorePrefixes {
     /// DA-01 singleton `PalwDaPruningSnapshotV1` captured at the pruning point before old block-state
     /// rows are reclaimed, so open obligations/challenges and dedup survive pruned IBD.
     PalwDaPruningSnapshot = 252,
+    /// Node-anchored web-search snapshots (`PalwSearchSnapshotStoredV1`), keyed by their version-3
+    /// DA object root. Separate from `PalwDaObject` so receipt-obligation GC and snapshot-retention
+    /// GC can never delete each other's rows.
+    PalwSearchSnapshotObject = 253,
 
     // ---- Separator ----
     /// Reserved as a separator
