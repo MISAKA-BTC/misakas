@@ -232,6 +232,23 @@ impl BlockEventLogger {
     }
 }
 
+/// Record an IBD failure and prune expired entries. Pure over the map so the
+/// backoff policy is testable without a `FlowContext`.
+fn record_ibd_failure_in<K: std::hash::Hash + Eq + Copy>(
+    failures: &mut HashMap<K, Instant>,
+    peer: K,
+    now: Instant,
+    backoff: Duration,
+) {
+    failures.retain(|_, at| now.saturating_duration_since(*at) < backoff);
+    failures.insert(peer, now);
+}
+
+/// Whether `peer` is still inside its IBD backoff window.
+fn peer_in_backoff<K: std::hash::Hash + Eq>(failures: &HashMap<K, Instant>, peer: &K, now: Instant, backoff: Duration) -> bool {
+    failures.get(peer).is_some_and(|at| now.saturating_duration_since(*at) < backoff)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +259,37 @@ mod tests {
 
     fn tx(subnetwork_id: kaspa_consensus_core::subnets::SubnetworkId) -> Transaction {
         Transaction::new(TX_VERSION, vec![], vec![], 0, subnetwork_id, 0, vec![])
+    }
+
+    #[test]
+    fn ibd_backoff_expires_and_lets_a_healthy_peer_win() {
+        let backoff = Duration::from_secs(30);
+        let mut failures: HashMap<u64, Instant> = HashMap::new();
+        let (bad, good) = (1u64, 2u64);
+        let t0 = Instant::now();
+
+        // Record a failure for the bad peer.
+        record_ibd_failure_in(&mut failures, bad, t0, backoff);
+        // Within the window it is skipped; a peer that never failed is not.
+        assert!(peer_in_backoff(&failures, &bad, t0 + Duration::from_secs(10), backoff));
+        assert!(!peer_in_backoff(&failures, &good, t0 + Duration::from_secs(10), backoff));
+        // Past the window the bad peer may be retried again.
+        assert!(!peer_in_backoff(&failures, &bad, t0 + Duration::from_secs(31), backoff));
+    }
+
+    #[test]
+    fn recording_a_failure_prunes_expired_entries() {
+        // The map stays bounded by the number of CURRENTLY-backed-off peers, not by
+        // every peer that ever failed.
+        let backoff = Duration::from_secs(30);
+        let mut failures: HashMap<u64, Instant> = HashMap::new();
+        let t0 = Instant::now();
+        record_ibd_failure_in(&mut failures, 1, t0, backoff);
+        record_ibd_failure_in(&mut failures, 2, t0, backoff);
+        // A much-later failure prunes the two expired entries, leaving only itself.
+        record_ibd_failure_in(&mut failures, 3, t0 + Duration::from_secs(60), backoff);
+        assert_eq!(failures.len(), 1);
+        assert!(failures.contains_key(&3));
     }
 
     #[test]
@@ -277,6 +325,13 @@ pub struct FlowContextInner {
     shared_evm_deposit_claim_requests: Arc<Mutex<HashMap<TransactionOutpoint, RequestScopeMetadata>>>,
     is_ibd_running: Arc<AtomicBool>,
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
+    // Peers whose IBD attempt recently failed, with the time it failed. A failed
+    // IBD peer is de-prioritized for a backoff window so the node does not retry
+    // the SAME peer immediately — the retry-same-peer wedge found during live-net
+    // verification, where one peer that cannot serve the pruning-point EVM state
+    // stalls sync even when other peers can. Networking-layer only; no consensus
+    // effect.
+    recent_ibd_failures: Arc<Mutex<HashMap<PeerKey, Instant>>>,
     pub address_manager: Arc<Mutex<AddressManager>>,
     connection_manager: RwLock<Option<Arc<ConnectionManager>>>,
     mining_manager: MiningManagerProxy,
@@ -397,6 +452,7 @@ impl FlowContext {
                 shared_evm_deposit_claim_requests: Arc::new(Mutex::new(HashMap::new())),
                 is_ibd_running: Default::default(),
                 ibd_metadata: Default::default(),
+                recent_ibd_failures: Arc::new(Mutex::new(HashMap::new())),
                 hub,
                 address_manager,
                 connection_manager: Default::default(),
@@ -466,6 +522,25 @@ impl FlowContext {
 
     pub fn is_ibd_running(&self) -> bool {
         self.is_ibd_running.load(Ordering::SeqCst)
+    }
+
+    /// How long a failed IBD peer is skipped before it may be retried. Modest, so
+    /// a single-peer node loses little, but long enough that another connected
+    /// peer wins the IBD lock many times over (relays arrive every block).
+    pub const IBD_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
+
+    /// Record that an IBD attempt against `peer` failed. Prunes expired entries so
+    /// the map stays bounded by the number of currently-backed-off peers.
+    pub fn record_ibd_failure(&self, peer: PeerKey, now: Instant) {
+        record_ibd_failure_in(&mut self.recent_ibd_failures.lock(), peer, now, Self::IBD_FAILURE_BACKOFF);
+    }
+
+    /// Whether `peer` is inside its IBD backoff window and should be skipped as an
+    /// IBD source right now. A skip only DELAYS a retry (paced by relay arrival);
+    /// it can never stall a single-peer node past the backoff, and it lets a
+    /// healthy peer take over immediately when one is connected.
+    pub fn ibd_peer_in_backoff(&self, peer: PeerKey, now: Instant) -> bool {
+        peer_in_backoff(&self.recent_ibd_failures.lock(), &peer, now, Self::IBD_FAILURE_BACKOFF)
     }
 
     /// If IBD is running, returns the IBD peer we are syncing from

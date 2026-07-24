@@ -92,6 +92,15 @@ impl IbdFlow {
 
     async fn start_impl(&mut self) -> Result<(), ProtocolError> {
         while let Ok(relay_block) = self.relay_receiver.recv().await {
+            // Skip triggering IBD from a peer whose recent IBD attempt failed, while
+            // it is still in its backoff window. This does NOT take the IBD lock, so
+            // a healthy peer's relay can win it instead — the fix for the
+            // retry-same-peer wedge (a peer that cannot serve the pruning-point EVM
+            // state would otherwise be re-selected immediately and stall sync). With
+            // a single peer this only delays the retry until the backoff expires.
+            if self.ctx.ibd_peer_in_backoff(self.router.key(), std::time::Instant::now()) {
+                continue;
+            }
             if let Some(_guard) = self.ctx.try_set_ibd_running(self.router.key(), relay_block.header.daa_score) {
                 info!("IBD started with peer {}", self.router);
 
@@ -99,6 +108,8 @@ impl IbdFlow {
                     Ok(_) => info!("IBD with peer {} completed successfully", self.router),
                     Err(e) => {
                         info!("IBD with peer {} completed with error: {}", self.router, e);
+                        // Back this peer off so the next round prefers another peer.
+                        self.ctx.record_ibd_failure(self.router.key(), std::time::Instant::now());
                         return Err(e);
                     }
                 }
