@@ -252,6 +252,19 @@ pub const SUBNETWORK_ID_PALW_DA_RESPONSE: SubnetworkId = SubnetworkId::from_byte
 /// DA-01 objective post-deadline timeout evidence (`PalwDaTimeoutEvidenceV1`).
 pub const SUBNETWORK_ID_PALW_DA_TIMEOUT_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x3c);
 
+// Node-anchored web-search availability overlay (ADR node-anchored-web-search-da). These claim the
+// three bytes the module comment already reserved (`0x3d-0x3f`). RESERVED, NOT YET LIVE: they are NOT
+// in the `palw_tx_kind` recognition band (`0x30..=0x3c`), so a tx on these bytes is a plain unknown
+// subnet today and contributes nothing to any commitment. Extending the recognition band to admit
+// them is a wire/consensus change that activates only behind the PALW fence together with the bonded
+// scheduler registry — the single remaining gate for search obligations.
+/// Search-availability challenge (`PalwSearchChallengeTxV1`), bond-owner signed. RESERVED.
+pub const SUBNETWORK_ID_PALW_SEARCH_CHALLENGE: SubnetworkId = SubnetworkId::from_byte(0x3d);
+/// Search-availability chunk response (`PalwSearchResponseTxV1`), proof-self-authorizing. RESERVED.
+pub const SUBNETWORK_ID_PALW_SEARCH_RESPONSE: SubnetworkId = SubnetworkId::from_byte(0x3e);
+/// Search-availability post-deadline timeout evidence (`PalwSearchTimeoutTxV1`), bond-owner signed. RESERVED.
+pub const SUBNETWORK_ID_PALW_SEARCH_TIMEOUT: SubnetworkId = SubnetworkId::from_byte(0x3f);
+
 #[cfg(test)]
 mod palw_subnet_tests {
     use super::*;

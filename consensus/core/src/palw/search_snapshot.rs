@@ -1290,6 +1290,47 @@ pub struct PalwSearchChallengeTxV1 {
 }
 
 impl PalwSearchChallengeTxV1 {
+    /// Canonical wire payload: fixed field order, LE integers, length-prefixed key/signature.
+    pub fn encode(&self) -> Result<Vec<u8>, PalwSearchSnapshotError> {
+        if self.challenger_public_key.is_empty() || self.challenger_public_key.len() > PALW_SEARCH_MAX_PUBLIC_KEY_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "challenger_public_key", bound: PALW_SEARCH_MAX_PUBLIC_KEY_BYTES });
+        }
+        if self.signature.len() > PALW_SEARCH_MAX_SIGNATURE_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "signature", bound: PALW_SEARCH_MAX_SIGNATURE_BYTES });
+        }
+        let mut out = Vec::with_capacity(96 + self.challenger_public_key.len() + self.signature.len());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&self.network_id.to_le_bytes());
+        out.extend_from_slice(self.object_root.as_byte_slice());
+        out.extend_from_slice(&self.chunk_index.to_le_bytes());
+        push_outpoint(&mut out, &self.challenger_bond);
+        push_var(&mut out, &self.challenger_public_key);
+        push_var(&mut out, &self.signature);
+        Ok(out)
+    }
+
+    /// Strict decoder: unknown version, bounds, malformed prefixes, trailing bytes all fail.
+    pub fn decode_strict(bytes: &[u8]) -> Result<Self, PalwSearchSnapshotError> {
+        let mut cursor = Cursor { bytes, offset: 0 };
+        let version = cursor.u16()?;
+        if version != PALW_SEARCH_TX_VERSION_V1 {
+            return Err(PalwSearchSnapshotError::UnsupportedVersion(version));
+        }
+        let network_id = cursor.u32()?;
+        let object_root = cursor.hash()?;
+        let chunk_index = cursor.u16()?;
+        let challenger_bond = TransactionOutpoint::new(cursor.hash()?, cursor.u32()?);
+        let challenger_public_key = cursor.var("challenger_public_key", PALW_SEARCH_MAX_PUBLIC_KEY_BYTES)?.to_vec();
+        let signature = cursor.var("signature", PALW_SEARCH_MAX_SIGNATURE_BYTES)?.to_vec();
+        if cursor.offset != bytes.len() {
+            return Err(PalwSearchSnapshotError::NonCanonical("trailing bytes"));
+        }
+        if challenger_public_key.is_empty() {
+            return Err(PalwSearchSnapshotError::Invalid("challenger public key must not be empty"));
+        }
+        Ok(Self { version, network_id, object_root, chunk_index, challenger_bond, challenger_public_key, signature })
+    }
+
     /// Domain-separated signing hash over every field except the signature.
     #[must_use]
     pub fn signing_hash(&self) -> Hash64 {
@@ -1338,6 +1379,45 @@ pub struct PalwSearchTimeoutTxV1 {
 }
 
 impl PalwSearchTimeoutTxV1 {
+    /// Canonical wire payload: fixed field order, LE integers, length-prefixed key/signature.
+    pub fn encode(&self) -> Result<Vec<u8>, PalwSearchSnapshotError> {
+        if self.reporter_public_key.is_empty() || self.reporter_public_key.len() > PALW_SEARCH_MAX_PUBLIC_KEY_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "reporter_public_key", bound: PALW_SEARCH_MAX_PUBLIC_KEY_BYTES });
+        }
+        if self.signature.len() > PALW_SEARCH_MAX_SIGNATURE_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "signature", bound: PALW_SEARCH_MAX_SIGNATURE_BYTES });
+        }
+        let mut out = Vec::with_capacity(80 + self.reporter_public_key.len() + self.signature.len());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&self.network_id.to_le_bytes());
+        out.extend_from_slice(self.object_root.as_byte_slice());
+        push_outpoint(&mut out, &self.reporter_bond);
+        push_var(&mut out, &self.reporter_public_key);
+        push_var(&mut out, &self.signature);
+        Ok(out)
+    }
+
+    /// Strict decoder: unknown version, bounds, malformed prefixes, trailing bytes all fail.
+    pub fn decode_strict(bytes: &[u8]) -> Result<Self, PalwSearchSnapshotError> {
+        let mut cursor = Cursor { bytes, offset: 0 };
+        let version = cursor.u16()?;
+        if version != PALW_SEARCH_TX_VERSION_V1 {
+            return Err(PalwSearchSnapshotError::UnsupportedVersion(version));
+        }
+        let network_id = cursor.u32()?;
+        let object_root = cursor.hash()?;
+        let reporter_bond = TransactionOutpoint::new(cursor.hash()?, cursor.u32()?);
+        let reporter_public_key = cursor.var("reporter_public_key", PALW_SEARCH_MAX_PUBLIC_KEY_BYTES)?.to_vec();
+        let signature = cursor.var("signature", PALW_SEARCH_MAX_SIGNATURE_BYTES)?.to_vec();
+        if cursor.offset != bytes.len() {
+            return Err(PalwSearchSnapshotError::NonCanonical("trailing bytes"));
+        }
+        if reporter_public_key.is_empty() {
+            return Err(PalwSearchSnapshotError::Invalid("reporter public key must not be empty"));
+        }
+        Ok(Self { version, network_id, object_root, reporter_bond, reporter_public_key, signature })
+    }
+
     /// Domain-separated signing hash over every field except the signature.
     #[must_use]
     pub fn signing_hash(&self) -> Hash64 {
@@ -1809,6 +1889,19 @@ mod tests {
         rechunked.chunk_index = 1;
         assert_ne!(challenge.signing_hash(), rechunked.signing_hash());
 
+        // Canonical wire codec round-trips and is fail-closed on truncation / trailing bytes.
+        let challenge_bytes = challenge.encode().unwrap();
+        assert_eq!(PalwSearchChallengeTxV1::decode_strict(&challenge_bytes).unwrap(), challenge);
+        for len in 0..challenge_bytes.len() {
+            assert!(PalwSearchChallengeTxV1::decode_strict(&challenge_bytes[..len]).is_err());
+        }
+        let mut trailing = challenge_bytes.clone();
+        trailing.push(0);
+        assert!(matches!(
+            PalwSearchChallengeTxV1::decode_strict(&trailing),
+            Err(PalwSearchSnapshotError::NonCanonical(_))
+        ));
+
         // Challenge applies; response with the real proof closes it; timeout gates hold.
         let challenge_undo = state.apply_challenge_tx(&challenge, 111, 10_100, bond_ok, accept).unwrap();
         let proof = palw_receipt_da_chunk_proof(PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1, &bytes, 0).unwrap();
@@ -1822,6 +1915,8 @@ mod tests {
             reporter_public_key: vec![0xAB; 32],
             signature: vec![0xEF; 64],
         };
+        let timeout_bytes = timeout.encode().unwrap();
+        assert_eq!(PalwSearchTimeoutTxV1::decode_strict(&timeout_bytes).unwrap(), timeout);
         assert!(state.apply_timeout_tx(&timeout, 111, 10_100 + 1, bond_ok, accept).is_err(), "deadline not elapsed");
         let response_undo = state.apply_response_tx(&response, 111, 10_200).unwrap();
         assert_eq!(state.obligations[&anchor.object_root].status, PalwSearchObligationStatusV1::Active);
