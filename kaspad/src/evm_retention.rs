@@ -15,6 +15,7 @@
 //!   what may be deleted. The state-history segments stay behind the L1 pruning
 //!   point at every pressure level: an index can be rebuilt, a state diff cannot.
 
+use kaspa_consensus_core::evm::EvmServeability;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
     info,
@@ -37,6 +38,11 @@ pub const SERVICE_NAME: &str = "evm-retention";
 /// tighter loop mostly buys write amplification.
 const MIN_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Run the serveability self-check every Nth retention tick. Slower than
+/// retention because the check can trigger an O(pruning-depth) derivation the
+/// first time after a pruning advance; once the state is cached it is cheap.
+const SERVEABILITY_EVERY_N: u64 = 10;
+
 pub struct EvmRetentionService {
     tick_service: Arc<TickService>,
     consensus_manager: Arc<ConsensusManager>,
@@ -58,17 +64,39 @@ impl EvmRetentionService {
         info!("[{SERVICE_NAME}] EVM retention runs every {}s, independently of L1 pruning", self.interval.as_secs());
         let mut last_idle_reported = None;
         let mut total_rows = 0u64;
+        let mut ticks: u64 = 0;
 
         loop {
             let interval = interval_for(self.interval, self.pressure.level());
             if let TickReason::Shutdown = self.tick_service.tick(interval).await {
                 break;
             }
+            ticks += 1;
             let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
             // On a blocking pool: a pass reads and deletes RocksDB rows, which is
             // exactly the work that must not run on an async executor thread.
             let session = self.consensus_manager.consensus().unguarded_session();
             let report = session.spawn_blocking(move |c| c.run_evm_retention_pass(now_ms)).await;
+
+            // Serveability self-check, every SERVEABILITY_EVERY_N ticks. Emits an
+            // immediate signal about whether this node can serve pruned IBD for the
+            // EVM lane — the failure that was silent until a fresh peer tried and
+            // failed. On the `Derived` path it also proactively heals + caches.
+            if ticks.is_multiple_of(SERVEABILITY_EVERY_N) {
+                let session = self.consensus_manager.consensus().unguarded_session();
+                let status = session.spawn_blocking(|c| c.check_evm_pruning_point_serveable()).await;
+                match status {
+                    s if s.is_alert() => kaspa_core::error!(
+                        "[{SERVICE_NAME}] evm_pp_state_serveable=false ({}) — this node cannot serve pruned IBD for the EVM \
+                         lane; a fresh peer's EVM sync will fail against it. Use --evm-history-mode=archive or resync.",
+                        s.as_str()
+                    ),
+                    EvmServeability::Derived => {
+                        info!("[{SERVICE_NAME}] evm_pp_state_serveable=true (derived+cached the pruning-point state ahead of demand)")
+                    }
+                    _ => {} // Present / NotApplicable — the healthy quiet case
+                }
+            }
 
             if report.idle_reason.is_idle() {
                 // A permanent condition is said once; anything that can change —

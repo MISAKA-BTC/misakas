@@ -5155,6 +5155,13 @@ async fn pruning_point_anchor_is_rebuildable_by_inverse_walk_after_its_material_
     got.accounts.sort_by(|a, b| a.address.as_bytes().cmp(&b.address.as_bytes()));
     assert_eq!(got, expected, "the rebuilt state must equal the committed state at the pruning point");
 
+    // The self-check reports serveability: after the derivation cached the anchor,
+    // the node reports Present (or would have reported Derived on first call). The
+    // point is it is NOT Unserveable — the silent break is now an observable state.
+    let status = vp.check_evm_pruning_point_serveable();
+    assert!(status.is_serveable(), "the self-check must report serveable after the derivation, got {status:?}");
+    assert!(!status.is_alert(), "a serveable node must not raise the alert");
+
     // The anchor the serve just cached resolves back to the same state — so the
     // fast forward path is now available for the next serve.
     let cached = crate::processes::evm::resolve_anchor_snapshot(

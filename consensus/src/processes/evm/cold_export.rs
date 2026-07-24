@@ -13,9 +13,7 @@
 //! to a volume the operator has not chosen — and then deleting the original —
 //! is not a decision a background pass should make.
 
-use kaspa_consensus_core::evm::{
-    BlockConsensusBinding, ColdRecord, ColdSegment, ColdSegmentError, ColdSegmentKind, EvmColdSegmentManifest,
-};
+use kaspa_consensus_core::evm::{ColdRecord, ColdSegment, ColdSegmentError, ColdSegmentKind, EvmColdSegmentManifest};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -116,6 +114,7 @@ pub fn export_transaction_segment(
     committed_root_of: impl Fn(kaspa_hashes::Hash64) -> Option<kaspa_hashes::EvmH256>,
     manifest: &mut EvmColdSegmentManifest,
 ) -> Result<PathBuf, ColdExportError> {
+    use kaspa_consensus_core::evm::BlockConsensusBinding;
     use std::collections::BTreeSet;
 
     // One binding per distinct block, in appearance order.
@@ -224,6 +223,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(feature = "evm")]
     fn tx_record(evm_number: u64, block: u8, raw: &[u8]) -> ColdRecord {
         ColdRecord { evm_number, block: Hash64::from_bytes([block; 64]), value: raw.to_vec() }
     }

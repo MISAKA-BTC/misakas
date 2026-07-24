@@ -545,3 +545,47 @@ pub struct EvmRetentionReport {
     /// and a stuck pruner — and distinguishes the benign causes from a fault.
     pub idle_reason: EvmRetentionIdleReason,
 }
+
+/// The pruning-point EVM state serveability self-check result.
+///
+/// The 144 GB incident's serveability break was SILENT: a node could not serve
+/// pruned IBD for the EVM lane, and nobody knew until a fresh peer tried and
+/// failed. This turns that into an immediate signal a node emits about itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvmServeability {
+    /// The lane is inert on this network, or the node has no EVM head yet. Nothing
+    /// to serve, and that is not a fault.
+    NotApplicable,
+    /// The pruning-point state is directly available (206 present, or an anchor).
+    Present,
+    /// It was not directly available but was DERIVED from the flat head and cached,
+    /// so the node is serveable now and the next check is cheap. Also the proactive
+    /// heal: the state exists before any peer asks for it.
+    Derived,
+    /// The node cannot produce its pruning-point state — the one an operator must
+    /// see immediately, because pruned IBD for the EVM lane will fail for every peer
+    /// until it is fixed (archive history, or a resync).
+    Unserveable,
+}
+
+impl EvmServeability {
+    /// Whether a peer's pruned IBD for the EVM lane would succeed against this node.
+    pub fn is_serveable(self) -> bool {
+        matches!(self, Self::Present | Self::Derived | Self::NotApplicable)
+    }
+
+    /// Whether this warrants an operator alert.
+    pub fn is_alert(self) -> bool {
+        matches!(self, Self::Unserveable)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotApplicable => "not-applicable",
+            Self::Present => "present",
+            Self::Derived => "derived",
+            Self::Unserveable => "unserveable",
+        }
+    }
+}

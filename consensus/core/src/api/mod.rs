@@ -838,6 +838,16 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// Self-check: can this node serve its own pruning-point EVM state to a peer?
+    ///
+    /// Turns the previously-silent serveability break into an immediate signal.
+    /// Also proactively heals: the `Derived` path materializes and caches the state
+    /// before any peer asks, so the pruning-processor anchor and this check together
+    /// keep the state present ahead of demand.
+    fn check_evm_pruning_point_serveable(&self) -> crate::evm::EvmServeability {
+        crate::evm::EvmServeability::NotApplicable
+    }
+
     fn intrusive_pruning_point_update(&self, new_pruning_point: BlockHash, syncer_sink: BlockHash) -> ConsensusResult<()> {
         unimplemented!()
     }

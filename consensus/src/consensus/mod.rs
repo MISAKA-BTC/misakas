@@ -2100,6 +2100,45 @@ impl ConsensusApi for Consensus {
     }
 
     // kaspa-pq ADR-0022: pruned-IBD EVM + overlay snapshot transfer.
+    fn check_evm_pruning_point_serveable(&self) -> kaspa_consensus_core::evm::EvmServeability {
+        use kaspa_consensus_core::evm::EvmServeability;
+
+        // Inert lane, or no pruning point yet: nothing to serve, not a fault.
+        if self.config.evm_activation_daa_score == u64::MAX {
+            return EvmServeability::NotApplicable;
+        }
+        let Ok(pruning_point) = self.pruning_point_store.read().pruning_point() else {
+            return EvmServeability::NotApplicable;
+        };
+
+        // Whether an anchor / 206 already covers it — the cheap "Present" answer,
+        // taken WITHOUT triggering a derivation.
+        #[cfg(feature = "evm")]
+        let present = {
+            use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateCheckpointV2StoreReader, EvmStateStoreReader};
+            // Pre-activation pruning point: nothing to serve.
+            if self.storage.evm_header_store.get(pruning_point).is_err() {
+                return EvmServeability::NotApplicable;
+            }
+            self.storage.evm_state_store.get(pruning_point).is_ok()
+                || EvmStateCheckpointV2StoreReader::has(&*self.storage.evm_state_checkpoint_v2_store, pruning_point).unwrap_or(false)
+        };
+        #[cfg(not(feature = "evm"))]
+        let present = self.virtual_processor.pruning_point_evm_state(pruning_point).is_some();
+
+        if present {
+            return EvmServeability::Present;
+        }
+
+        // Not directly present: ask the serving path, which DERIVES from the flat
+        // head and caches on success (the proactive heal). `Some` ⇒ we just made
+        // the node serveable ahead of any peer; `None` ⇒ it genuinely cannot serve.
+        match self.virtual_processor.pruning_point_evm_state(pruning_point) {
+            Some(_) => EvmServeability::Derived,
+            None => EvmServeability::Unserveable,
+        }
+    }
+
     fn pruning_point_evm_state(
         &self,
         pruning_point: BlockHash,
