@@ -5020,6 +5020,7 @@ async fn evm_retention_reclaims_rpc_segments_without_waiting_for_l1_pruning() {
 #[cfg(feature = "evm")]
 async fn pruning_point_anchor_is_rebuildable_by_inverse_walk_after_its_material_is_gone() {
     use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader, EvmStateCheckpointV2StoreReader};
+    use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
     use kaspa_consensus_core::evm::{EvmExecutionPayload, EvmStateSnapshot, EvmStorageProfile};
     use kaspa_evm::EvmBlockInput;
@@ -5115,6 +5116,26 @@ async fn pruning_point_anchor_is_rebuildable_by_inverse_walk_after_its_material_
         "the pruning point's anchor must be gone for the test to mean anything"
     );
 
+    // The SERVING path itself must now derive the state — not return nothing (the
+    // live-net break) and not the empty state. `pruning_point_evm_state` is what a
+    // peer's IBD calls; with no anchor it falls through to the inverse-walk
+    // derivation, and must serve the committed state.
+    let vp = consensus.consensus_clone();
+    let (served_header, served_state) =
+        vp.pruning_point_evm_state(pp).expect("serving must derive the pruning-point state with no anchor present");
+    assert_eq!(served_header.state_root, committed_root);
+    let mut served_via_api = served_state;
+    served_via_api.accounts.sort_by(|a, b| a.address.as_bytes().cmp(&b.address.as_bytes()));
+    let mut expected_pp = committed_state[&PP].clone();
+    expected_pp.accounts.sort_by(|a, b| a.address.as_bytes().cmp(&b.address.as_bytes()));
+    assert_eq!(served_via_api, expected_pp, "the served state must equal the committed pruning-point state");
+    // And serving must have CACHED the derived state as an anchor — the anchor is
+    // now an optimization the derivation populates, not a precondition.
+    assert!(
+        EvmStateCheckpointV2StoreReader::has(&*storage.evm_state_checkpoint_v2_store, pp).unwrap(),
+        "a successful derivation-based serve must cache the anchor for the next serve"
+    );
+
     // The repair: reconstruct the pruning point's state by inverse walk from the
     // flat head, verified against the committed root.
     let rebuilt = crate::processes::evm::reconstruct_pruning_point_snapshot_verified(
@@ -5134,29 +5155,19 @@ async fn pruning_point_anchor_is_rebuildable_by_inverse_walk_after_its_material_
     got.accounts.sort_by(|a, b| a.address.as_bytes().cmp(&b.address.as_bytes()));
     assert_eq!(got, expected, "the rebuilt state must equal the committed state at the pruning point");
 
-    // And once written, the anchor resolves — pruned IBD serving is restored.
-    let anchor = kaspa_consensus_core::evm::EvmStateCheckpointV2::build(
-        pp,
-        storage.evm_header_store.get(pp).unwrap().evm_number,
-        committed_root,
-        &rebuilt,
-        kaspa_consensus_core::evm::CheckpointCodec::Deflate,
-    );
-    let mut batch = WriteBatch::default();
-    storage.evm_state_checkpoint_v2_store.insert_batch(&mut batch, pp, anchor).unwrap();
-    db.write(batch).unwrap();
-
-    let served = crate::processes::evm::resolve_anchor_snapshot(
+    // The anchor the serve just cached resolves back to the same state — so the
+    // fast forward path is now available for the next serve.
+    let cached = crate::processes::evm::resolve_anchor_snapshot(
         pp,
         &storage.evm_state_checkpoint_v2_store,
         &storage.evm_state_checkpoint_store,
         &storage.evm_code_store,
     )
     .unwrap()
-    .expect("the rebuilt anchor must resolve");
-    let mut served_sorted = served;
-    served_sorted.accounts.sort_by(|a, b| a.address.as_bytes().cmp(&b.address.as_bytes()));
-    assert_eq!(served_sorted, expected, "the served anchor state must equal the committed state");
+    .expect("the cached anchor must resolve");
+    let mut cached_sorted = cached;
+    cached_sorted.accounts.sort_by(|a, b| a.address.as_bytes().cmp(&b.address.as_bytes()));
+    assert_eq!(cached_sorted, expected, "the cached anchor state must equal the committed state");
 
     drop(storage);
     consensus.shutdown(wait_handles);

@@ -4257,9 +4257,11 @@ impl VirtualStateProcessor {
         #[cfg(feature = "evm")]
         {
             use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateDiffStoreReader};
-            if let Ok(Some(ptr)) = self.evm_latest_state_ptr_store.read().get()
-                && ptr.canonical_head == pruning_point
-            {
+            let flat_head = self.evm_latest_state_ptr_store.read().get().ok().flatten().map(|p| p.canonical_head);
+
+            // (2) The flat head IS the pruning point (a freshly pruned-IBD-imported
+            // node pins the pointer to the pp) ⇒ materialize it directly.
+            if flat_head == Some(pruning_point) {
                 return match crate::processes::evm::materialize_snapshot(&self.evm_flat_account_store, &self.evm_code_store) {
                     Ok(snapshot) => Some((header, snapshot)),
                     Err(e) => {
@@ -4268,7 +4270,11 @@ impl VirtualStateProcessor {
                     }
                 };
             }
-            let (seed, forward_diffs) = match crate::processes::evm::gather_reconstruction_inputs(
+
+            // (3) Forward §12 reconstruct: seed from an anchor at/below pp and replay
+            // diffs upward. Cheap when an anchor is dense; yields nothing when the
+            // anchor material below pp has been reclaimed (the broken-node case).
+            let forward = crate::processes::evm::gather_reconstruction_inputs(
                 pruning_point,
                 |b| {
                     crate::processes::evm::resolve_anchor_snapshot(
@@ -4287,28 +4293,98 @@ impl VirtualStateProcessor {
                         |h| self.headers_store.get_daa_score(h).ok(),
                     )
                 },
-            ) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("[evm] pruning-point §12 reconstruct gather failed for {pruning_point}: {e}");
-                    return None;
-                }
+            )
+            .ok()
+            .and_then(|(seed, forward_diffs)| {
+                kaspa_evm::reconstruct::reconstruct_evm_state(
+                    &seed,
+                    &forward_diffs,
+                    |h| self.evm_code_store.get(*h).ok().flatten(),
+                    header.state_root,
+                )
+                .ok()
+            });
+            if let Some(snapshot) = forward {
+                return Some((header, snapshot));
+            }
+
+            // (4) DERIVATION — the path that makes serving self-healing. The forward
+            // walk needs an anchor at/below pp; this one needs none. The flat head
+            // sits at the tip, the retained (pp, tip] diffs are still on disk, and
+            // `apply_inverse_state_diff` reverts them one block at a time down to pp,
+            // root-verified against the committed header. So a node with no anchor
+            // at all still serves the correct pp state instead of returning nothing
+            // (the live-net serveability break) or, worse, the empty state. On
+            // success the derived state is CACHED as an anchor, so the next serve
+            // takes the fast forward path — the anchor is an optimization, not a
+            // precondition.
+            let Some(fh) = flat_head else {
+                warn!("[evm] pruning-point {pruning_point} cannot be served: no anchor and no flat backend to derive from");
+                return None;
             };
-            match kaspa_evm::reconstruct::reconstruct_evm_state(
-                &seed,
-                &forward_diffs,
-                |h| self.evm_code_store.get(*h).ok().flatten(),
+            match crate::processes::evm::reconstruct_pruning_point_snapshot_verified(
+                pruning_point,
                 header.state_root,
+                fh,
+                &self.evm_flat_account_store,
+                &self.evm_code_store,
+                &self.evm_state_diff_store,
+                Self::PP_DERIVE_MAX_STEPS,
             ) {
-                Ok(snapshot) => Some((header, snapshot)),
+                Ok(snapshot) => {
+                    self.cache_pruning_point_anchor(pruning_point, header.evm_number, header.state_root, &snapshot);
+                    Some((header, snapshot))
+                }
                 Err(e) => {
-                    warn!("[evm] pruning-point §12 reconstruct failed for {pruning_point}: {e}");
+                    warn!(
+                        "[evm] pruning-point {pruning_point} state could not be derived from the flat head ({e}); \
+                         this node cannot serve pruned IBD for the EVM lane"
+                    );
                     None
                 }
             }
         }
         #[cfg(not(feature = "evm"))]
         None
+    }
+
+    /// Max blocks the on-demand serving derivation reverts before giving up —
+    /// generous over the pruning depth so a legitimately deep range serves, bounded
+    /// so a broken diff chain still terminates.
+    #[cfg(feature = "evm")]
+    const PP_DERIVE_MAX_STEPS: usize = 4_000_000;
+
+    /// Cache a derived pruning-point state as a §12 v2 anchor.
+    ///
+    /// Best-effort and never on the critical path: the serve has already succeeded
+    /// with the derived state, and this only makes the NEXT serve take the fast
+    /// forward path. A write failure is logged and swallowed — a node that cannot
+    /// cache the anchor keeps serving by deriving each time, slower but correct.
+    #[cfg(feature = "evm")]
+    fn cache_pruning_point_anchor(
+        &self,
+        pruning_point: BlockHash,
+        evm_number: u64,
+        state_root: kaspa_hashes::EvmH256,
+        snapshot: &kaspa_consensus_core::evm::EvmStateSnapshot,
+    ) {
+        use crate::model::stores::evm::EvmStateCheckpointV2StoreReader;
+        if EvmStateCheckpointV2StoreReader::has(&*self.evm_state_checkpoint_v2_store, pruning_point).unwrap_or(false) {
+            return;
+        }
+        let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV2::build(
+            pruning_point,
+            evm_number,
+            state_root,
+            snapshot,
+            self.evm_checkpoint_policy.codec,
+        );
+        let mut batch = WriteBatch::default();
+        if self.evm_state_checkpoint_v2_store.insert_batch(&mut batch, pruning_point, checkpoint).is_ok()
+            && self.db.write(batch).is_ok()
+        {
+            info!("[evm] cached the derived pruning-point {pruning_point} state as an anchor (subsequent serves take the fast path)");
+        }
     }
 
     /// kaspa-pq ADR-0022: import the pruning point's DNS/PoS-v2 overlay snapshot during
