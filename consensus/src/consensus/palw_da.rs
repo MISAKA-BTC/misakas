@@ -319,6 +319,15 @@ impl Consensus {
             assignment_bytes.as_deref().map(Vec::as_slice),
             crate::processes::palw_da::consensus_mldsa_verify,
         )?;
+        if let Some(assignment) = assignment.as_ref() {
+            // Node-local governance: only allowlisted scheduler keys may anchor
+            // assignment-resolved snapshots. Empty allowlist = fail-closed.
+            kaspa_consensus_core::palw::search_snapshot::enforce_scheduler_allowlist(
+                &assignment.scheduler_public_key,
+                &self.config.palw_search_scheduler_allowlist,
+            )
+            .map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
+        }
         let admitted = PalwSearchSnapshotAdmittedV1 {
             object_root: commitment.root,
             snapshot_digest: digest,

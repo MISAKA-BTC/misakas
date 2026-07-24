@@ -17,7 +17,10 @@
 use kaspa_hashes::{Hash64, blake2b_512_keyed};
 use thiserror::Error;
 
-use super::da::{PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1, PalwDaError, PalwReceiptDaCommitmentV1, palw_receipt_da_commitment};
+use super::da::{
+    PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1, PalwDaError, PalwReceiptDaChunkProofV1, PalwReceiptDaCommitmentV1,
+    palw_receipt_da_commitment, verify_palw_receipt_da_chunk,
+};
 
 /// Inner schema version of the snapshot body (the DA object version is
 /// [`PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1`]).
@@ -964,6 +967,230 @@ pub struct PalwSearchSnapshotAdmittedV1 {
     pub scheduler_key_id: Option<Hash64>,
 }
 
+// ---------------------------------------------------------------------------
+// Scheduler governance allowlist
+// ---------------------------------------------------------------------------
+
+/// Enforces the node-local scheduler governance allowlist. EMPTY IS FAIL-CLOSED: a node with no
+/// allowlisted scheduler keys admits no assignment-resolved snapshot at all. Returns the key
+/// fingerprint on success so callers record exactly what they authorized.
+pub fn enforce_scheduler_allowlist(
+    scheduler_public_key: &[u8],
+    allowlist: &[Hash64],
+) -> Result<Hash64, PalwSearchSnapshotError> {
+    if allowlist.is_empty() {
+        return Err(PalwSearchSnapshotError::Invalid(
+            "scheduler allowlist is empty; assignment-resolved admission is disabled on this node",
+        ));
+    }
+    let key_id = scheduler_key_id(scheduler_public_key);
+    if allowlist.contains(&key_id) {
+        Ok(key_id)
+    } else {
+        Err(PalwSearchSnapshotError::Invalid("scheduler key is not on this node's governance allowlist"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Availability obligations: challenge → respond/timeout-slash → revert
+// ---------------------------------------------------------------------------
+
+/// Capacity bound for concurrently tracked search-availability obligations.
+pub const PALW_SEARCH_MAX_OBLIGATIONS: usize = 65_536;
+
+/// Lifecycle of one anchored snapshot's availability obligation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PalwSearchObligationStatusV1 {
+    /// Anchored and unchallenged (or every challenge answered).
+    Active,
+    /// A challenge is open; the node must present a chunk proof before the deadline.
+    Challenged {
+        /// DAA score by which a valid chunk proof must be presented.
+        response_deadline_daa_score: u64,
+        /// Challenged chunk index (the proof must cover exactly this chunk).
+        chunk_index: u16,
+    },
+    /// The response deadline elapsed without a valid proof.
+    Slashed {
+        /// DAA score at which the timeout was recorded.
+        at_daa_score: u64,
+    },
+}
+
+/// One registered availability obligation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwSearchObligationV1 {
+    /// The signed-anchor facts this obligation enforces.
+    pub anchor: PalwSearchSnapshotAnchorV1,
+    /// Allowlisted scheduler key fingerprint that authorized the anchor.
+    pub scheduler_key_id: Hash64,
+    /// DAA score at registration.
+    pub registered_daa_score: u64,
+    /// Current lifecycle status.
+    pub status: PalwSearchObligationStatusV1,
+}
+
+/// Reversible transition record. Applying a transition returns the undo; reverting undos in
+/// reverse order restores the exact prior state (reorg rollback).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwSearchAvailabilityUndoV1 {
+    /// A registration to remove.
+    Registered {
+        /// Object root of the registered obligation.
+        object_root: Hash64,
+    },
+    /// A status transition to reverse.
+    StatusChanged {
+        /// Object root whose status changed.
+        object_root: Hash64,
+        /// Status before the transition.
+        prior: PalwSearchObligationStatusV1,
+    },
+}
+
+/// Fork-local search-availability state (mirrors the receipt-DA state-machine pattern:
+/// typed fail-closed transitions with exact undo records).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwSearchAvailabilityStateV1 {
+    /// Obligations keyed by DA object root.
+    pub obligations: std::collections::BTreeMap<Hash64, PalwSearchObligationV1>,
+}
+
+impl PalwSearchAvailabilityStateV1 {
+    /// Registers an availability obligation for an anchored snapshot.
+    pub fn register(
+        &mut self,
+        anchor: PalwSearchSnapshotAnchorV1,
+        scheduler_key_id: Hash64,
+        current_daa_score: u64,
+    ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
+        if current_daa_score >= anchor.availability_deadline_daa_score {
+            return Err(PalwSearchSnapshotError::Invalid("anchor availability deadline has already passed"));
+        }
+        if self.obligations.len() >= PALW_SEARCH_MAX_OBLIGATIONS {
+            return Err(PalwSearchSnapshotError::Invalid("search obligation capacity is exhausted"));
+        }
+        if self.obligations.contains_key(&anchor.object_root) {
+            return Err(PalwSearchSnapshotError::Invalid("an obligation for this object root already exists"));
+        }
+        self.obligations.insert(
+            anchor.object_root,
+            PalwSearchObligationV1 {
+                anchor,
+                scheduler_key_id,
+                registered_daa_score: current_daa_score,
+                status: PalwSearchObligationStatusV1::Active,
+            },
+        );
+        Ok(PalwSearchAvailabilityUndoV1::Registered { object_root: anchor.object_root })
+    }
+
+    /// Opens an availability challenge against an active obligation.
+    pub fn challenge(
+        &mut self,
+        object_root: Hash64,
+        chunk_index: u16,
+        current_daa_score: u64,
+        response_window_daa: u64,
+    ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
+        let obligation = self
+            .obligations
+            .get_mut(&object_root)
+            .ok_or(PalwSearchSnapshotError::Invalid("no obligation for this object root"))?;
+        if current_daa_score >= obligation.anchor.availability_deadline_daa_score {
+            return Err(PalwSearchSnapshotError::Invalid("availability window is over; nothing left to challenge"));
+        }
+        if chunk_index >= obligation.anchor.chunk_count {
+            return Err(PalwSearchSnapshotError::Invalid("challenged chunk index is out of range"));
+        }
+        let prior = obligation.status;
+        if prior != PalwSearchObligationStatusV1::Active {
+            return Err(PalwSearchSnapshotError::Invalid("obligation is not in the Active state"));
+        }
+        if response_window_daa == 0 {
+            return Err(PalwSearchSnapshotError::Invalid("response window must be positive"));
+        }
+        obligation.status = PalwSearchObligationStatusV1::Challenged {
+            response_deadline_daa_score: current_daa_score.saturating_add(response_window_daa),
+            chunk_index,
+        };
+        Ok(PalwSearchAvailabilityUndoV1::StatusChanged { object_root, prior })
+    }
+
+    /// Answers an open challenge with a chunk proof verified against the anchored root
+    /// (version-3 chunk-tree domain). Wrong chunk, wrong geometry, late, or unverifiable
+    /// proofs are all rejected without a state change.
+    pub fn respond(
+        &mut self,
+        object_root: Hash64,
+        proof: &PalwReceiptDaChunkProofV1,
+        current_daa_score: u64,
+    ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
+        let obligation = self
+            .obligations
+            .get_mut(&object_root)
+            .ok_or(PalwSearchSnapshotError::Invalid("no obligation for this object root"))?;
+        let prior = obligation.status;
+        let PalwSearchObligationStatusV1::Challenged { response_deadline_daa_score, chunk_index } = prior else {
+            return Err(PalwSearchSnapshotError::Invalid("obligation has no open challenge"));
+        };
+        if current_daa_score > response_deadline_daa_score {
+            return Err(PalwSearchSnapshotError::Invalid("response is past the challenge deadline"));
+        }
+        if proof.object_version != PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1
+            || proof.chunk_index != chunk_index
+            || proof.object_len != obligation.anchor.object_len
+            || proof.chunk_count != obligation.anchor.chunk_count
+        {
+            return Err(PalwSearchSnapshotError::Invalid("chunk proof does not match the challenged anchor geometry"));
+        }
+        verify_palw_receipt_da_chunk(&obligation.anchor.object_root, proof)?;
+        obligation.status = PalwSearchObligationStatusV1::Active;
+        Ok(PalwSearchAvailabilityUndoV1::StatusChanged { object_root, prior })
+    }
+
+    /// Records the timeout slash after an unanswered challenge deadline.
+    pub fn timeout_slash(
+        &mut self,
+        object_root: Hash64,
+        current_daa_score: u64,
+    ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
+        let obligation = self
+            .obligations
+            .get_mut(&object_root)
+            .ok_or(PalwSearchSnapshotError::Invalid("no obligation for this object root"))?;
+        let prior = obligation.status;
+        let PalwSearchObligationStatusV1::Challenged { response_deadline_daa_score, .. } = prior else {
+            return Err(PalwSearchSnapshotError::Invalid("obligation has no open challenge"));
+        };
+        if current_daa_score <= response_deadline_daa_score {
+            return Err(PalwSearchSnapshotError::Invalid("challenge deadline has not elapsed yet"));
+        }
+        obligation.status = PalwSearchObligationStatusV1::Slashed { at_daa_score: current_daa_score };
+        Ok(PalwSearchAvailabilityUndoV1::StatusChanged { object_root, prior })
+    }
+
+    /// Reverts one transition. Undos MUST be applied in reverse order of their creation.
+    pub fn revert(&mut self, undo: PalwSearchAvailabilityUndoV1) -> Result<(), PalwSearchSnapshotError> {
+        match undo {
+            PalwSearchAvailabilityUndoV1::Registered { object_root } => {
+                self.obligations
+                    .remove(&object_root)
+                    .map(|_| ())
+                    .ok_or(PalwSearchSnapshotError::Invalid("revert of a registration that does not exist"))
+            }
+            PalwSearchAvailabilityUndoV1::StatusChanged { object_root, prior } => {
+                let obligation = self
+                    .obligations
+                    .get_mut(&object_root)
+                    .ok_or(PalwSearchSnapshotError::Invalid("revert of a status on a missing obligation"))?;
+                obligation.status = prior;
+                Ok(())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1295,5 +1522,83 @@ mod tests {
     fn normalization_pin_is_whitespace_collapse_and_trim() {
         assert_eq!(normalize_query_v1("  a\t\tb \n c  "), "a b c");
         assert_eq!(normalize_query_v1("量子  コンピュータ"), "量子 コンピュータ");
+    }
+
+    #[test]
+    fn scheduler_allowlist_is_fail_closed() {
+        let key = vec![0xAA_u8; 32];
+        let id = scheduler_key_id(&key);
+        assert!(enforce_scheduler_allowlist(&key, &[]).is_err(), "empty allowlist must fail closed");
+        assert!(enforce_scheduler_allowlist(&key, &[Hash64::from_bytes([1; 64])]).is_err());
+        assert_eq!(enforce_scheduler_allowlist(&key, &[Hash64::from_bytes([1; 64]), id]).unwrap(), id);
+    }
+
+    #[test]
+    fn availability_challenge_respond_slash_and_rollback_e2e() {
+        use super::super::da::palw_receipt_da_chunk_proof;
+        // Real snapshot → real version-3 commitment → anchored obligation.
+        let snapshot = snapshot();
+        let bytes = snapshot.encode().unwrap();
+        let commitment = snapshot.da_commitment().unwrap();
+        let anchor = PalwSearchSnapshotAnchorV1 {
+            assignment_id: Hash64::from_bytes([5; 64]),
+            snapshot_digest: snapshot.digest().unwrap(),
+            object_root: commitment.root,
+            object_len: commitment.object_len,
+            chunk_count: commitment.chunk_count,
+            availability_deadline_daa_score: 20_000,
+        };
+        let key_id = scheduler_key_id(&[0xAA; 32]);
+        let mut state = PalwSearchAvailabilityStateV1::default();
+        let mut undos = Vec::new();
+        let baseline_empty = state.clone();
+
+        // Register (duplicates and expired anchors refused).
+        undos.push(state.register(anchor, key_id, 10_000).unwrap());
+        assert!(state.register(anchor, key_id, 10_000).is_err());
+        let mut expired = anchor;
+        expired.object_root = Hash64::from_bytes([9; 64]);
+        expired.availability_deadline_daa_score = 9_999;
+        assert!(PalwSearchAvailabilityStateV1::default().register(expired, key_id, 10_000).is_err());
+        let registered = state.clone();
+
+        // Challenge chunk 0; premature timeout and out-of-range chunk refused.
+        assert!(state.challenge(anchor.object_root, anchor.chunk_count, 10_100, 50).is_err());
+        undos.push(state.challenge(anchor.object_root, 0, 10_100, 50).unwrap());
+        assert!(state.challenge(anchor.object_root, 0, 10_100, 50).is_err(), "already challenged");
+        assert!(state.timeout_slash(anchor.object_root, 10_150).is_err(), "deadline not elapsed");
+        let challenged = state.clone();
+
+        // Respond with the REAL chunk proof → back to Active; tampered/late/mismatched refused.
+        let proof = palw_receipt_da_chunk_proof(PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1, &bytes, 0).unwrap();
+        let mut tampered = proof.clone();
+        tampered.chunk[0] ^= 1;
+        assert!(state.respond(anchor.object_root, &tampered, 10_120).is_err());
+        let mut wrong_version = proof.clone();
+        wrong_version.object_version = 2;
+        assert!(state.respond(anchor.object_root, &wrong_version, 10_120).is_err());
+        assert!(state.respond(anchor.object_root, &proof, 10_151).is_err(), "late response");
+        undos.push(state.respond(anchor.object_root, &proof, 10_120).unwrap());
+        assert_eq!(state.obligations[&anchor.object_root].status, PalwSearchObligationStatusV1::Active);
+        let responded = state.clone();
+
+        // Second challenge goes unanswered → timeout slash.
+        undos.push(state.challenge(anchor.object_root, 0, 10_200, 50).unwrap());
+        let rechallenged = state.clone();
+        undos.push(state.timeout_slash(anchor.object_root, 10_251).unwrap());
+        assert!(matches!(
+            state.obligations[&anchor.object_root].status,
+            PalwSearchObligationStatusV1::Slashed { at_daa_score: 10_251 }
+        ));
+        assert!(state.respond(anchor.object_root, &proof, 10_252).is_err(), "slashed obligation has no open challenge");
+
+        // Rollback E2E: reverting in reverse order restores every prior state bit-exactly.
+        for (undo, expected) in
+            undos.into_iter().rev().zip([rechallenged, responded, challenged, registered, baseline_empty])
+        {
+            state.revert(undo).unwrap();
+            assert_eq!(state, expected);
+        }
+        assert!(state.obligations.is_empty());
     }
 }

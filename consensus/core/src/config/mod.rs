@@ -79,6 +79,13 @@ pub struct Config {
     /// or activate PALW on any network preset.
     pub palw_pruning_snapshot_checkpoints: Vec<PalwPruningSnapshotCheckpoint>,
 
+    /// Governance allowlist of scheduler key fingerprints
+    /// (`palw::search_snapshot::scheduler_key_id`) whose signed search assignments this node will
+    /// admit. Node-local and consensus-neutral; EMPTY IS FAIL-CLOSED: with no allowlisted keys,
+    /// assignment-resolved search snapshots are rejected and only zero-sentinel diagnostic
+    /// snapshots (no mint path, no P2P) can be admitted.
+    pub palw_search_scheduler_allowlist: Vec<kaspa_hashes::Hash64>,
+
     /// Node-local activation lever for chain-derived (permissionless) Header-v4 pruning-snapshot
     /// import. Default `false`; a shipped preset never sets it. When `false`, the
     /// `ChainDerivedHeaderBundle` provenance is not admitted regardless of what a peer advertises, so
@@ -169,6 +176,7 @@ impl Config {
             ram_scale: 1.0,
             retention_period_days: None,
             palw_pruning_snapshot_checkpoints: vec![],
+            palw_search_scheduler_allowlist: vec![],
             palw_permissionless_snapshot_auth: false,
             evm_history_mode: crate::evm::EvmHistoryMode::Recent,
             evm_shadow_state_backend: false,
