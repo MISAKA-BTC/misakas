@@ -46,6 +46,21 @@ impl kaspa_utils::mem_size::MemSizeEstimator for PalwSearchSnapshotStoredV1 {
     }
 }
 
+/// Anchor link for a chain block whose PALW DA state is bit-identical to the full row stored at
+/// `anchor`. Written instead of duplicating the full `PalwDaStateV1` per block — with an idle DA
+/// state machine this turns the dominant per-block IBD write from O(state) into 64 bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwDaStateLinkV1 {
+    /// Block whose full state row carries this block's state. Always a full row, never a link.
+    pub anchor: BlockHash,
+}
+
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwDaStateLinkV1 {
+    fn estimate_mem_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
+
 pub trait PalwDaStore: PalwDaStoreReader {
     fn set_state(&mut self, block: BlockHash, state: Arc<PalwDaStateV1>) -> StoreResult<()>;
     fn set_pruning_snapshot(&mut self, snapshot: PalwDaPruningSnapshotV1) -> StoreResult<()>;
@@ -58,6 +73,7 @@ pub struct DbPalwDaStore {
     objects: CachedDbAccess<Hash64, Arc<Vec<u8>>, BlockHasher>,
     snapshot: CachedDbItem<PalwDaPruningSnapshotV1>,
     search_snapshots: CachedDbAccess<Hash64, Arc<PalwSearchSnapshotStoredV1>, BlockHasher>,
+    state_links: CachedDbAccess<BlockHash, PalwDaStateLinkV1, BlockHasher>,
 }
 
 impl DbPalwDaStore {
@@ -67,7 +83,8 @@ impl DbPalwDaStore {
             states: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwDaStateByBlock.into()),
             objects: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwDaObject.into()),
             snapshot: CachedDbItem::new(db.clone(), DatabaseStorePrefixes::PalwDaPruningSnapshot.into()),
-            search_snapshots: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::PalwSearchSnapshotObject.into()),
+            search_snapshots: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwSearchSnapshotObject.into()),
+            state_links: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::PalwDaStateLinkByBlock.into()),
         }
     }
 
@@ -79,8 +96,44 @@ impl DbPalwDaStore {
         self.states.write(BatchDbWriter::new(batch), block, state)
     }
 
+    /// Record that `block`'s DA state is bit-identical to the full row at `anchor` (64-byte row
+    /// instead of a duplicated full state). The caller must have verified equality against the
+    /// exact stored anchor state.
+    pub fn set_state_link_batch(&mut self, batch: &mut WriteBatch, block: BlockHash, anchor: BlockHash) -> StoreResult<()> {
+        if anchor == block {
+            return Err(StoreError::DataInconsistency("PALW DA state link must not be self-referential".into()));
+        }
+        self.state_links.write(BatchDbWriter::new(batch), block, PalwDaStateLinkV1 { anchor })
+    }
+
     pub fn delete_state_batch(&mut self, batch: &mut WriteBatch, block: BlockHash) -> StoreResult<()> {
-        self.states.delete(BatchDbWriter::new(batch), block)
+        self.states.delete(BatchDbWriter::new(batch), block)?;
+        self.state_links.delete(BatchDbWriter::new(batch), block)
+    }
+
+    /// Resolve a block's DA state together with its anchor (the block owning the full row).
+    /// `full → link → full(anchor)`, at most two reads; a dangling link is a hard inconsistency,
+    /// and a plain miss keeps the original `KeyNotFound` semantics for callers.
+    pub fn state_and_anchor(&self, block: BlockHash) -> StoreResult<(Arc<PalwDaStateV1>, BlockHash)> {
+        match self.states.read(block) {
+            Ok(state) => Ok((state, block)),
+            Err(StoreError::KeyNotFound(_)) => match self.state_links.read(block) {
+                Ok(link) => match self.states.read(link.anchor) {
+                    Ok(state) => Ok((state, link.anchor)),
+                    Err(StoreError::KeyNotFound(_)) => Err(StoreError::DataInconsistency(format!(
+                        "PALW DA state link {block} -> {} is dangling",
+                        link.anchor
+                    ))),
+                    Err(error) => Err(error),
+                },
+                Err(StoreError::KeyNotFound(_)) => Err(StoreError::KeyNotFound(DbKey::new(
+                    &Vec::from(DatabaseStorePrefixes::PalwDaStateByBlock),
+                    block,
+                ))),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        }
     }
 
     pub fn set_pruning_snapshot_batch(&mut self, batch: &mut WriteBatch, snapshot: &PalwDaPruningSnapshotV1) -> StoreResult<()> {
@@ -304,7 +357,7 @@ impl DbPalwDaStore {
 
 impl PalwDaStoreReader for DbPalwDaStore {
     fn state(&self, block: BlockHash) -> StoreResult<Arc<PalwDaStateV1>> {
-        self.states.read(block)
+        self.state_and_anchor(block).map(|(state, _)| state)
     }
 
     fn object(&self, root: Hash64) -> StoreResult<Arc<Vec<u8>>> {
@@ -447,6 +500,64 @@ mod tests {
             bytes: snapshot.encode().unwrap(),
         };
         (snapshot.da_commitment().unwrap().root, stored)
+    }
+
+    #[test]
+    fn state_links_resolve_delete_and_fail_closed() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwDaStore::new(db.clone(), CachePolicy::Count(8));
+        let anchor_block = h(0x61);
+        let linked_a = h(0x62);
+        let linked_b = h(0x63);
+        let mut state_value = PalwDaStateV1::default();
+        state_value.record_block_slash(TransactionOutpoint::new(h(0x64), 0)).unwrap();
+        let state = Arc::new(state_value);
+
+        store.set_state(anchor_block, state.clone()).unwrap();
+        let mut batch = WriteBatch::default();
+        store.set_state_link_batch(&mut batch, linked_a, anchor_block).unwrap();
+        store.set_state_link_batch(&mut batch, linked_b, anchor_block).unwrap();
+        assert!(matches!(
+            store.set_state_link_batch(&mut batch, linked_a, linked_a),
+            Err(StoreError::DataInconsistency(_))
+        ));
+        db.write(batch).unwrap();
+
+        // Linked blocks resolve to the anchor's full state through the reader trait, and the
+        // anchor is reported so a child can chain its own link without a walk.
+        assert_eq!(store.state(linked_a).unwrap(), state);
+        let (resolved, anchor) = store.state_and_anchor(linked_b).unwrap();
+        assert_eq!(resolved, state);
+        assert_eq!(anchor, anchor_block);
+        assert_eq!(store.state_and_anchor(anchor_block).unwrap().1, anchor_block);
+        // A restart (fresh cache) resolves from durable rows alone.
+        let restarted = store.clone_with_new_cache(CachePolicy::Count(8));
+        assert_eq!(restarted.state(linked_a).unwrap(), state);
+        // Missing rows keep KeyNotFound; a dangling link is a hard inconsistency.
+        assert!(matches!(store.state(h(0x6f)), Err(StoreError::KeyNotFound(_))));
+        let mut batch = WriteBatch::default();
+        store.delete_state_batch(&mut batch, anchor_block).unwrap();
+        db.write(batch).unwrap();
+        assert!(matches!(store.state(linked_a), Err(StoreError::DataInconsistency(_))));
+        // delete_state_batch removes link rows too.
+        let mut batch = WriteBatch::default();
+        store.delete_state_batch(&mut batch, linked_a).unwrap();
+        db.write(batch).unwrap();
+        assert!(matches!(store.state(linked_a), Err(StoreError::KeyNotFound(_))));
+    }
+
+    #[test]
+    fn state_link_rows_are_a_fraction_of_full_rows() {
+        // The IBD claim in one number: an unchanged block persists a 64-byte anchor instead of
+        // the full obligations map.
+        let mut state = PalwDaStateV1::default();
+        for index in 0..64_u8 {
+            state.record_block_slash(TransactionOutpoint::new(h(index), 0)).unwrap();
+        }
+        let full = bincode::serialize(&Arc::new(state)).unwrap();
+        let link = bincode::serialize(&PalwDaStateLinkV1 { anchor: h(1) }).unwrap();
+        assert!(link.len() <= 72, "link row must stay pointer-sized, got {}", link.len());
+        assert!(full.len() > link.len() * 10, "full={} link={}", full.len(), link.len());
     }
 
     #[test]

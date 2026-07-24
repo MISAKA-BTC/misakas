@@ -176,6 +176,7 @@ pub trait ConsensusApi: Send + Sync {
     fn palw_admit_search_snapshot(
         &self,
         _object_bytes: Arc<Vec<u8>>,
+        _assignment_bytes: Option<Arc<Vec<u8>>>,
     ) -> Result<crate::palw::search_snapshot::PalwSearchSnapshotAdmittedV1, crate::palw::da::PalwDaAdmissionError> {
         Err(crate::palw::da::PalwDaAdmissionError::Disabled)
     }

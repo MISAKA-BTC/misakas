@@ -187,6 +187,12 @@ fn verify_signature(public_key: &[u8], message: &[u8], signature: &[u8], context
     matches!(verify_mldsa87_with_context(public_key, message, signature, context), Ok(true))
 }
 
+/// Consensus ML-DSA-87 verifier in the injection shape used by the search-snapshot artifacts
+/// (`(public_key, message, signature, context) -> bool`).
+pub(crate) fn consensus_mldsa_verify(public_key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+    verify_signature(public_key, message, signature, context)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn verify_receipt_da_object_with_consensus_crypto(
     network_id: u32,

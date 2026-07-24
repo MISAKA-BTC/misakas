@@ -310,7 +310,12 @@ fn palw_overlay_commit_fail_stop(message: String) -> ! {
 /// cannot consume a response, nor a response consume a challenge, carried by the same acceptance set.
 #[derive(Clone, Debug, Default)]
 struct PalwDaStaged {
-    certificate_state: PalwDaStateV1,
+    /// The stored selected-parent state (shared, never cloned) — both the past-relative
+    /// certificate view and the equality baseline for the unchanged-link commit fast path.
+    certificate_state: Arc<PalwDaStateV1>,
+    /// Block owning the parent's full durable row (`None` when the parent state is the
+    /// synthetic pre-activation/genesis default that has no durable row yet).
+    parent_anchor: Option<BlockHash>,
     state: PalwDaStateV1,
     slash_mutations: Vec<PalwProviderBondMutation>,
 }
@@ -2276,16 +2281,20 @@ impl VirtualStateProcessor {
     /// Load the exact selected-parent DA state. Once PALW is active, absence anywhere except the
     /// genesis/pre-activation boundary is a local consistency fault; defaulting there would let two
     /// nodes apply the same challenge against different histories.
-    pub(super) fn palw_da_parent_state(&self, selected_parent: BlockHash, current_daa_score: u64) -> PalwDaStateV1 {
+    pub(super) fn palw_da_parent_state(
+        &self,
+        selected_parent: BlockHash,
+        current_daa_score: u64,
+    ) -> (Arc<PalwDaStateV1>, Option<BlockHash>) {
         if self.palw_activation_daa_score == u64::MAX || current_daa_score < self.palw_activation_daa_score {
-            return PalwDaStateV1::default();
+            return (Arc::new(PalwDaStateV1::default()), None);
         }
-        match self.palw_da_store.read().state(selected_parent) {
-            Ok(state) if state.validate_structure() => (*state).clone(),
+        match self.palw_da_store.read().state_and_anchor(selected_parent) {
+            Ok((state, anchor)) if state.validate_structure() => (state, Some(anchor)),
             Ok(_) => {
                 palw_overlay_commit_fail_stop(format!("PALW DA selected-parent state {selected_parent} failed structural validation"))
             }
-            Err(StoreError::KeyNotFound(_)) if selected_parent == self.genesis.hash => PalwDaStateV1::default(),
+            Err(StoreError::KeyNotFound(_)) if selected_parent == self.genesis.hash => (Arc::new(PalwDaStateV1::default()), None),
             Err(StoreError::KeyNotFound(_)) => {
                 let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap_or_else(|store_error| {
                     palw_overlay_commit_fail_stop(format!(
@@ -2293,7 +2302,7 @@ impl VirtualStateProcessor {
                     ))
                 });
                 if parent_daa < self.palw_activation_daa_score {
-                    PalwDaStateV1::default()
+                    (Arc::new(PalwDaStateV1::default()), None)
                 } else {
                     palw_overlay_commit_fail_stop(format!(
                         "PALW DA state is missing for active selected parent {selected_parent} at DAA {parent_daa}"
@@ -2352,14 +2361,14 @@ impl VirtualStateProcessor {
         if self.palw_activation_daa_score == u64::MAX || current_daa_score < self.palw_activation_daa_score {
             return None;
         }
-        let parent = self.palw_da_parent_state(selected_parent, current_daa_score);
+        let (parent, parent_anchor) = self.palw_da_parent_state(selected_parent, current_daa_score);
         let parent_obligations: HashSet<Hash64> = parent.obligations.keys().copied().collect();
         let parent_open_challenges: HashSet<Hash64> = parent
             .challenges
             .iter()
             .filter_map(|(id, challenge)| matches!(challenge.status, PalwDaChallengeStatusV1::Open).then_some(*id))
             .collect();
-        let mut state = parent.clone();
+        let mut state = (*parent).clone();
         state.begin_child_block();
         let policy = PalwDaPolicyV1::STRICT_TESTNET;
         let context = crate::processes::palw_da::PalwDaApplyContext {
@@ -2405,7 +2414,7 @@ impl VirtualStateProcessor {
         if !state.validate_structure() {
             palw_overlay_commit_fail_stop("PALW DA accepted-effect staging produced invalid state".to_string());
         }
-        Some(PalwDaStaged { certificate_state: parent, state, slash_mutations })
+        Some(PalwDaStaged { certificate_state: parent, parent_anchor, state, slash_mutations })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2564,16 +2573,29 @@ impl VirtualStateProcessor {
                     current,
                     &acceptance_data,
                     selected_parent_provider_bond_view,
-                    &staged.certificate_state,
+                    staged.certificate_state.as_ref(),
                     &mut staged.state,
                 );
             }
             if !staged.state.validate_structure() {
                 palw_overlay_commit_fail_stop(format!("PALW DA state for {current} failed pre-commit validation"));
             }
-            self.palw_da_store.write().set_state_batch(&mut batch, current, Arc::new(staged.state.clone())).unwrap_or_else(
-                |store_error| palw_overlay_commit_fail_stop(format!("PALW DA state staging failed for {current}: {store_error}")),
-            );
+            // IBD/steady-state write reduction: with an idle DA state machine the child state is
+            // bit-identical to the stored parent row, so a 64-byte anchor link replaces the
+            // duplicated full-state row (and the full clone + serialize that produced it). The
+            // equality baseline is the EXACT stored parent state; `begin_child_block` clearing a
+            // non-empty per-block slash set or any accepted 0x3a-0x3c effect makes them differ and
+            // falls back to the full row.
+            let unchanged = staged.parent_anchor.is_some() && staged.state == *staged.certificate_state;
+            if let (true, Some(anchor)) = (unchanged, staged.parent_anchor) {
+                self.palw_da_store.write().set_state_link_batch(&mut batch, current, anchor).unwrap_or_else(|store_error| {
+                    palw_overlay_commit_fail_stop(format!("PALW DA state link staging failed for {current}: {store_error}"))
+                });
+            } else {
+                self.palw_da_store.write().set_state_batch(&mut batch, current, Arc::new(staged.state.clone())).unwrap_or_else(
+                    |store_error| palw_overlay_commit_fail_stop(format!("PALW DA state staging failed for {current}: {store_error}")),
+                );
+            }
         } else {
             let current_daa = self.headers_store.get_daa_score(current).unwrap_or_else(|store_error| {
                 palw_overlay_commit_fail_stop(format!("PALW DA activation check failed for {current}: {store_error}"))
@@ -4608,7 +4630,7 @@ impl VirtualStateProcessor {
             let mut paid_work_nullifiers: Vec<Hash64> =
                 self.palw_paid_work_window(selected_parent, selected_parent_daa_score).into_iter().collect();
             paid_work_nullifiers.sort_by_key(|hash| hash.as_bytes());
-            let da_state_root = self.palw_da_parent_state(selected_parent, selected_parent_daa_score).state_root();
+            let da_state_root = self.palw_da_parent_state(selected_parent, selected_parent_daa_score).0.state_root();
             let selected_parent_state = PalwSelectedParentStateV2::try_new(
                 selected_parent,
                 selected_parent_daa_score,

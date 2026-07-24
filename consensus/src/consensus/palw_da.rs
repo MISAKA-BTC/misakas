@@ -19,8 +19,8 @@ use kaspa_consensus_core::palw::{
         PalwDaServingObjectV1, PalwDaStateV1, PalwReceiptDaCommitmentV1, palw_receipt_da_commitment,
     },
     search_snapshot::{
-        PALW_SEARCH_SNAPSHOT_MAX_FUTURE_DAA_SLACK, PALW_SEARCH_SNAPSHOT_RETENTION_DAA, PalwSearchSnapshotAdmittedV1,
-        PalwSearchSnapshotV1,
+        PALW_SEARCH_SNAPSHOT_MAX_FUTURE_DAA_SLACK, PALW_SEARCH_SNAPSHOT_RETENTION_DAA, PalwSearchAssignmentV1,
+        PalwSearchSnapshotAdmittedV1, PalwSearchSnapshotV1, scheduler_key_id, snapshot_matches_assignment,
     },
 };
 use kaspa_database::prelude::StoreErrorPredicates;
@@ -137,6 +137,36 @@ pub(crate) fn verify_palw_da_object_for_admission(
 /// strict canonical decode, network and genesis binding, and a retrieval DAA score that does
 /// not lead the admitting sink by more than the pinned slack. Assignment-id resolution stays a
 /// StopShip gate before any P2P or mint exposure.
+/// Resolves the assignment side of admission. A zero `assignment_id` is the diagnostic
+/// sentinel and must come WITHOUT an assignment; a non-zero id must come WITH the signed
+/// assignment whose content-addressed id, scheduler signature, and every pinned field match.
+pub(crate) fn resolve_palw_search_assignment(
+    snapshot: &PalwSearchSnapshotV1,
+    assignment_bytes: Option<&[u8]>,
+    verify_signature: impl FnMut(&[u8], &[u8], &[u8], &[u8]) -> bool,
+) -> Result<Option<PalwSearchAssignmentV1>, PalwDaAdmissionError> {
+    let zero_assignment = snapshot.assignment_id == Hash64::from_bytes([0; 64]);
+    match (zero_assignment, assignment_bytes) {
+        (true, None) => Ok(None),
+        (true, Some(_)) => {
+            Err(PalwDaAdmissionError::InvalidObject("diagnostic snapshot (zero assignment id) must not carry an assignment".into()))
+        }
+        (false, None) => {
+            Err(PalwDaAdmissionError::InvalidObject("snapshot references an assignment but none was supplied".into()))
+        }
+        (false, Some(bytes)) => {
+            let assignment = PalwSearchAssignmentV1::decode_strict(bytes)
+                .map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
+            assignment
+                .verify_signature(verify_signature)
+                .map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
+            snapshot_matches_assignment(snapshot, &assignment)
+                .map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
+            Ok(Some(assignment))
+        }
+    }
+}
+
 pub(crate) fn verify_palw_search_snapshot_for_admission(
     network_id: u32,
     genesis_hash: Hash64,
@@ -260,6 +290,7 @@ impl Consensus {
     pub(crate) fn palw_admit_search_snapshot_impl(
         &self,
         object_bytes: Arc<Vec<u8>>,
+        assignment_bytes: Option<Arc<Vec<u8>>>,
     ) -> Result<PalwSearchSnapshotAdmittedV1, PalwDaAdmissionError> {
         let params = &self.config.params;
         if params.palw_activation_daa_score == u64::MAX {
@@ -277,11 +308,16 @@ impl Consensus {
         if sink_daa_score < params.palw_activation_daa_score {
             return Err(PalwDaAdmissionError::Disabled);
         }
-        let (_, commitment, digest) = verify_palw_search_snapshot_for_admission(
+        let (snapshot, commitment, digest) = verify_palw_search_snapshot_for_admission(
             params.net.suffix().unwrap_or(0),
             self.config.genesis.hash,
             sink_daa_score,
             &object_bytes,
+        )?;
+        let assignment = resolve_palw_search_assignment(
+            &snapshot,
+            assignment_bytes.as_deref().map(Vec::as_slice),
+            crate::processes::palw_da::consensus_mldsa_verify,
         )?;
         let admitted = PalwSearchSnapshotAdmittedV1 {
             object_root: commitment.root,
@@ -290,6 +326,8 @@ impl Consensus {
             chunk_count: commitment.chunk_count,
             admitted_daa_score: sink_daa_score,
             retention_until_daa_score: sink_daa_score.saturating_add(PALW_SEARCH_SNAPSHOT_RETENTION_DAA),
+            assignment_resolved: assignment.is_some(),
+            scheduler_key_id: assignment.as_ref().map(|assignment| scheduler_key_id(&assignment.scheduler_public_key)),
         };
         let stored = crate::model::stores::palw_da::PalwSearchSnapshotStoredV1 {
             admitted_daa_score: admitted.admitted_daa_score,
@@ -1219,6 +1257,59 @@ mod tests {
             boundary.retrieval_daa_score = SINK_DAA + PALW_SEARCH_SNAPSHOT_MAX_FUTURE_DAA_SLACK;
             let boundary_bytes = boundary.encode().unwrap();
             assert!(verify_palw_search_snapshot_for_admission(NETWORK_ID, genesis(), SINK_DAA, &boundary_bytes).is_ok());
+        }
+
+        #[test]
+        fn assignment_resolution_binds_signature_id_and_pins() {
+            use super::super::resolve_palw_search_assignment;
+            use kaspa_consensus_core::palw::search_snapshot::{
+                PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT, PALW_SEARCH_ASSIGNMENT_VERSION_V1, PalwSearchAssignmentV1,
+            };
+            use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+            let keypair = mldsa::generate_key_pair([0x21; 32]);
+            let public_key = keypair.verification_key.as_ref().to_vec();
+            let mut assignment = PalwSearchAssignmentV1 {
+                version: PALW_SEARCH_ASSIGNMENT_VERSION_V1,
+                network_id: NETWORK_ID,
+                genesis_hash: genesis(),
+                ruleset_id: "palw-search-v1".into(),
+                normalized_query: "自家発行 LLM 検証".into(),
+                provider: snapshot().provider,
+                max_results: 4,
+                freshness_window_millis: 600_000,
+                valid_from_daa_score: SINK_DAA - 100,
+                valid_until_daa_score: SINK_DAA + 100,
+                scheduler_public_key: public_key,
+                signature: vec![],
+            };
+            let signing = assignment.signing_bytes().unwrap();
+            assignment.signature =
+                mldsa::sign(&keypair.signing_key, &signing, PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT, [0; 32])
+                    .expect("deterministic assignment signing")
+                    .as_ref()
+                    .to_vec();
+            let assignment_bytes = assignment.encode().unwrap();
+
+            let mut bound = snapshot();
+            bound.assignment_id = assignment.assignment_id().unwrap();
+            bound.freshness_deadline_millis = bound.retrieval_unix_millis + assignment.freshness_window_millis;
+            let verify = crate::processes::palw_da::consensus_mldsa_verify;
+
+            // Resolves with the real consensus ML-DSA verifier.
+            let resolved = resolve_palw_search_assignment(&bound, Some(&assignment_bytes), verify).unwrap();
+            assert_eq!(resolved.unwrap().assignment_id().unwrap(), bound.assignment_id);
+
+            // Referenced-but-missing, unreferenced-but-supplied, tampered signature, broken pin.
+            assert!(resolve_palw_search_assignment(&bound, None, verify).is_err());
+            assert!(resolve_palw_search_assignment(&snapshot(), Some(&assignment_bytes), verify).is_err());
+            let mut bad_signature = assignment.clone();
+            bad_signature.signature[0] ^= 1;
+            assert!(resolve_palw_search_assignment(&bound, Some(&bad_signature.encode().unwrap()), verify).is_err());
+            let mut off_window = bound.clone();
+            off_window.retrieval_daa_score = SINK_DAA + 101;
+            assert!(resolve_palw_search_assignment(&off_window, Some(&assignment_bytes), verify).is_err());
+            // Diagnostic zero-sentinel path stays available and assignment-free.
+            assert!(resolve_palw_search_assignment(&snapshot(), None, verify).unwrap().is_none());
         }
 
         #[test]

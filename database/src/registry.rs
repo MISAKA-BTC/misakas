@@ -296,6 +296,10 @@ pub enum DatabaseStorePrefixes {
     /// DA object root. Separate from `PalwDaObject` so receipt-obligation GC and snapshot-retention
     /// GC can never delete each other's rows.
     PalwSearchSnapshotObject = 253,
+    /// Keyed by `BlockHash`: 64-byte anchor link for chain blocks whose PALW DA state is
+    /// bit-identical to an ancestor's stored full row. Written instead of duplicating the full
+    /// `PalwDaStateV1` row per block; readers resolve `full → link → full(anchor)` in two reads.
+    PalwDaStateLinkByBlock = 254,
 
     // ---- Separator ----
     /// Reserved as a separator

@@ -108,6 +108,10 @@ enum Command {
     /// outcome into a canonical SearchSnapshotV1 bound to this node's network/genesis/DAA, and
     /// write the exact DA object bytes + manifest for ConsensusApi::palw_admit_search_snapshot.
     PalwSearchRetrieval(PalwSearchRetrievalArgs),
+    /// Scheduler side of a search JobSpec: pin query/policy/bounds/validity BEFORE retrieval and
+    /// sign the canonical PalwSearchAssignmentV1 with an ML-DSA-87 scheduler key. The printed
+    /// assignment id is what the retrieval snapshot must reference.
+    PalwSearchAssign(PalwSearchAssignArgs),
     /// One-shot: fetch a block by hash (with transactions) and print its coinbase facts —
     /// the subsidy S (from the coinbase payload) and every coinbase output's value + SPK — as
     /// parseable `key: value` lines. Used by the Phase-0 harness to record the minted block's
@@ -428,6 +432,10 @@ async fn main() -> ExitCode {
         Command::PalwSearchRetrieval(args) => {
             kaspa_core::log::init_logger(None, "info");
             palw_search_retrieval_cmd(args).await
+        }
+        Command::PalwSearchAssign(args) => {
+            kaspa_core::log::init_logger(None, "info");
+            palw_search_assign_cmd(args).await
         }
     };
     match result {
@@ -2251,9 +2259,135 @@ struct PalwSearchRetrievalArgs {
     #[arg(long, default_value_t = 16)]
     max_results: usize,
 
+    /// Signed PalwSearchAssignmentV1 file (from palw-search-assign). Pins query/policy/freshness
+    /// and sets the snapshot's assignment id; CLI flags they overlap are ignored.
+    #[arg(long)]
+    assignment: Option<String>,
+
+    /// Scheduler ML-DSA-87 seed. With --assignment, signs the snapshot anchor and writes a
+    /// complete verified PalwSearchJobSpecV1 next to the snapshot.
+    #[arg(long)]
+    scheduler_seed: Option<String>,
+
+    /// Availability deadline (DAA score) promised in the signed anchor.
+    #[arg(long)]
+    availability_deadline_daa: Option<u64>,
+
     /// Output directory for the canonical object bytes + manifest.
     #[arg(long, default_value = "palw-search-snapshots")]
     out: String,
+}
+
+#[derive(Parser, Debug)]
+struct PalwSearchAssignArgs {
+    /// Local node wRPC (borsh) endpoint, host:port.
+    #[arg(long = "node-wrpc-borsh", visible_alias = "node-rpc", env = "KASPA_PQ_NODE_RPC")]
+    node_rpc: Option<String>,
+
+    /// Expected network id; also resolves the default loopback endpoint.
+    #[arg(long, visible_alias = "network-id", env = "KASPA_PQ_NETWORK")]
+    network: Option<String>,
+
+    /// Query to pin (normalized with the v1 rule before signing).
+    #[arg(long)]
+    query: String,
+
+    /// Provider language / region / safe-search pins.
+    #[arg(long, default_value = "ja-JP")]
+    language: String,
+    #[arg(long, default_value = "jp")]
+    region: String,
+    #[arg(long, default_value_t = 1)]
+    safe_search: u8,
+
+    /// Provider policy document hash (128-char Hash64 hex); omitted = zero (unpinned draft).
+    #[arg(long)]
+    provider_policy_id: Option<String>,
+
+    /// Ruleset pin.
+    #[arg(long, default_value = "palw-search-v1")]
+    ruleset_id: String,
+
+    /// Maximum ranked results the snapshot may carry.
+    #[arg(long, default_value_t = 8)]
+    max_results: u16,
+
+    /// Freshness window in milliseconds.
+    #[arg(long, default_value_t = palw_search_retrieval::DEFAULT_FRESHNESS_WINDOW_MS)]
+    freshness_ms: u64,
+
+    /// Validity window length in DAA scores, starting at the node's current virtual DAA.
+    #[arg(long, default_value_t = 600)]
+    valid_for_daa: u64,
+
+    /// Scheduler ML-DSA-87 seed path (signs the assignment).
+    #[arg(long)]
+    scheduler_seed: String,
+
+    /// Output directory.
+    #[arg(long, default_value = "palw-search-snapshots")]
+    out: String,
+}
+
+fn mldsa_verify_adapter(public_key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+    matches!(kaspa_txscript::verify_mldsa87_with_context(public_key, message, signature, context), Ok(true))
+}
+
+/// Build + sign + persist one search assignment against live node anchor facts.
+async fn palw_search_assign_cmd(args: PalwSearchAssignArgs) -> Result<(), String> {
+    use kaspa_consensus_core::palw::search_snapshot::{
+        PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT, PALW_SEARCH_ASSIGNMENT_VERSION_V1, PalwSearchAssignmentV1,
+        PalwSearchProviderPolicyV1, normalize_query_v1,
+    };
+    let node_rpc = resolve_node_rpc(&args.network, &args.node_rpc);
+    let client = connect(&node_rpc).await?;
+    let server = client.get_server_info().await.map_err(|e| format!("getServerInfo failed: {e}"))?;
+    let params = Params::from(server.network_id);
+    let key = ValidatorKey::from_seed(load_validator_seed(&args.scheduler_seed)?);
+    let mut assignment = PalwSearchAssignmentV1 {
+        version: PALW_SEARCH_ASSIGNMENT_VERSION_V1,
+        network_id: server.network_id.suffix.unwrap_or(0),
+        genesis_hash: params.genesis.hash,
+        ruleset_id: args.ruleset_id,
+        normalized_query: normalize_query_v1(&args.query),
+        provider: PalwSearchProviderPolicyV1 {
+            provider_id: "searxng".into(),
+            policy_id: match &args.provider_policy_id {
+                Some(hex) => parse_hash64(hex)?,
+                None => Hash64::from_bytes([0; 64]),
+            },
+            region: args.region,
+            language: args.language,
+            safe_search: args.safe_search.min(2),
+        },
+        max_results: args.max_results,
+        freshness_window_millis: args.freshness_ms,
+        valid_from_daa_score: server.virtual_daa_score,
+        valid_until_daa_score: server.virtual_daa_score.saturating_add(args.valid_for_daa),
+        scheduler_public_key: key.public_key().to_vec(),
+        signature: vec![],
+    };
+    let signing = assignment.signing_bytes().map_err(|e| format!("assignment signing bytes: {e}"))?;
+    assignment.signature = key.sign_with_context(&signing, PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT).to_vec();
+    assignment.verify_signature(mldsa_verify_adapter).map_err(|e| format!("self-check failed: {e}"))?;
+    let assignment_id = assignment.assignment_id().map_err(|e| format!("assignment id: {e}"))?;
+    let bytes = assignment.encode().map_err(|e| format!("assignment encode: {e}"))?;
+    std::fs::create_dir_all(&args.out).map_err(|e| format!("cannot create {}: {e}", args.out))?;
+    let id_hex = format!("{assignment_id}");
+    let path = format!("{}/palw-search-assignment-{}.bin", args.out, &id_hex[..16]);
+    std::fs::write(&path, &bytes).map_err(|e| format!("cannot write {path}: {e}"))?;
+    let manifest = serde_json::json!({
+        "schema": "misaka.palw.search-assignment-manifest.v1",
+        "assignment_id": id_hex,
+        "assignment_file": path,
+        "normalized_query": assignment.normalized_query,
+        "valid_from_daa_score": assignment.valid_from_daa_score,
+        "valid_until_daa_score": assignment.valid_until_daa_score,
+        "scheduler_key_id": format!("{}", kaspa_consensus_core::palw::search_snapshot::scheduler_key_id(key.public_key())),
+        "next": "palw-search-retrieval --assignment <file> [--scheduler-seed <seed> --availability-deadline-daa <daa>]",
+    });
+    println!("{}", serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?);
+    Ok(())
 }
 
 /// One-shot node-side retrieval: node-anchor facts over wRPC, egress-guarded provider search,
@@ -2280,22 +2414,53 @@ async fn palw_search_retrieval_cmd(args: PalwSearchRetrievalArgs) -> Result<(), 
             .map_err(|e| format!("system clock before Unix epoch: {e}"))?
             .as_millis() as u64,
     };
-    let request = palw_search_retrieval::RetrievalRequestV1 {
-        endpoint: args.endpoint,
-        query: args.query,
-        ruleset_id: args.ruleset_id,
-        assignment_id: match &args.assignment_id {
-            Some(hex) => parse_hash64(hex)?,
-            None => Hash64::from_bytes([0; 64]),
+    let assignment = match &args.assignment {
+        Some(path) => {
+            let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+            let assignment = kaspa_consensus_core::palw::search_snapshot::PalwSearchAssignmentV1::decode_strict(&bytes)
+                .map_err(|e| format!("assignment decode: {e}"))?;
+            assignment.verify_signature(mldsa_verify_adapter).map_err(|e| format!("assignment signature: {e}"))?;
+            if anchor.daa_score < assignment.valid_from_daa_score || anchor.daa_score > assignment.valid_until_daa_score {
+                return Err(format!(
+                    "node DAA {} is outside the assignment validity window {}..={}",
+                    anchor.daa_score, assignment.valid_from_daa_score, assignment.valid_until_daa_score
+                ));
+            }
+            Some(assignment)
+        }
+        None => None,
+    };
+    let request = match &assignment {
+        // The assignment pins the retrieval facts; overlapping CLI flags are ignored so the
+        // snapshot can only be built the way the scheduler signed it.
+        Some(assignment) => palw_search_retrieval::RetrievalRequestV1 {
+            endpoint: args.endpoint,
+            query: assignment.normalized_query.clone(),
+            ruleset_id: assignment.ruleset_id.clone(),
+            assignment_id: assignment.assignment_id().map_err(|e| format!("assignment id: {e}"))?,
+            provider_policy_id: assignment.provider.policy_id,
+            language: assignment.provider.language.clone(),
+            region: assignment.provider.region.clone(),
+            safe_search: assignment.provider.safe_search,
+            freshness_window_millis: assignment.freshness_window_millis,
         },
-        provider_policy_id: match &args.provider_policy_id {
-            Some(hex) => parse_hash64(hex)?,
-            None => Hash64::from_bytes([0; 64]),
+        None => palw_search_retrieval::RetrievalRequestV1 {
+            endpoint: args.endpoint,
+            query: args.query,
+            ruleset_id: args.ruleset_id,
+            assignment_id: match &args.assignment_id {
+                Some(hex) => parse_hash64(hex)?,
+                None => Hash64::from_bytes([0; 64]),
+            },
+            provider_policy_id: match &args.provider_policy_id {
+                Some(hex) => parse_hash64(hex)?,
+                None => Hash64::from_bytes([0; 64]),
+            },
+            language: args.language,
+            region: args.region,
+            safe_search: args.safe_search,
+            freshness_window_millis: args.freshness_ms,
         },
-        language: args.language,
-        region: args.region,
-        safe_search: args.safe_search,
-        freshness_window_millis: args.freshness_ms,
     };
     let policy = palw_search_retrieval::RetrievalPolicyV1 {
         timeout_ms: args.timeout_ms,
@@ -2340,6 +2505,39 @@ async fn palw_search_retrieval_cmd(args: PalwSearchRetrievalArgs) -> Result<(), 
     let manifest_text = serde_json::to_string_pretty(&manifest).map_err(|e| format!("manifest encode: {e}"))?;
     std::fs::write(&manifest_path, format!("{manifest_text}\n")).map_err(|e| format!("cannot write {manifest_path}: {e}"))?;
     println!("{manifest_text}");
+
+    // JobSpec assembly: sign the anchor over exactly the admitted-recomputable facts and
+    // self-verify the complete spec before persisting it for workers.
+    if let (Some(assignment), Some(seed)) = (assignment, &args.scheduler_seed) {
+        use kaspa_consensus_core::palw::search_snapshot::{
+            PALW_SEARCH_ANCHOR_MLDSA87_CONTEXT, PalwSearchJobSpecV1, PalwSearchSnapshotAnchorV1, PalwSignedSearchAnchorV1,
+        };
+        let deadline = args
+            .availability_deadline_daa
+            .ok_or("--availability-deadline-daa is required when signing a JobSpec")?;
+        let key = ValidatorKey::from_seed(load_validator_seed(seed)?);
+        if key.public_key() != assignment.scheduler_public_key.as_slice() {
+            return Err("scheduler seed does not match the assignment's scheduler key".to_string());
+        }
+        let anchor = PalwSearchSnapshotAnchorV1 {
+            assignment_id: assignment.assignment_id().map_err(|e| format!("assignment id: {e}"))?,
+            snapshot_digest: digest,
+            object_root: commitment.root,
+            object_len: commitment.object_len,
+            chunk_count: commitment.chunk_count,
+            availability_deadline_daa_score: deadline,
+        };
+        let signature = key.sign_with_context(anchor.signing_hash().as_byte_slice(), PALW_SEARCH_ANCHOR_MLDSA87_CONTEXT).to_vec();
+        let jobspec = PalwSearchJobSpecV1 {
+            signed_anchor: PalwSignedSearchAnchorV1 { anchor, scheduler_public_key: key.public_key().to_vec(), signature },
+            assignment,
+        };
+        jobspec.verify(mldsa_verify_adapter).map_err(|e| format!("JobSpec self-verification failed: {e}"))?;
+        let jobspec_path = format!("{}/palw-search-jobspec-{}.json", args.out, &root_hex[..16]);
+        let jobspec_text = serde_json::to_string_pretty(&jobspec).map_err(|e| format!("jobspec encode: {e}"))?;
+        std::fs::write(&jobspec_path, format!("{jobspec_text}\n")).map_err(|e| format!("cannot write {jobspec_path}: {e}"))?;
+        println!("{{\"jobspec_file\": \"{jobspec_path}\", \"verified\": true}}");
+    }
     Ok(())
 }
 

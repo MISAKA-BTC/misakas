@@ -569,7 +569,7 @@ impl VirtualStateProcessor {
         let validated_coinbase = ValidatedTransaction::new_coinbase(&selected_parent_transactions[0]);
         // DA reward and exit decisions are selected-parent-relative, just like provider collateral.
         // Missing active state is fail-stop inside the shared loader; pre-activation returns empty.
-        let selected_parent_da_state = self.palw_da_parent_state(ctx.selected_parent(), pov_daa_score);
+        let selected_parent_da_state = self.palw_da_parent_state(ctx.selected_parent(), pov_daa_score).0;
         let mut palw_da_acceptance_gate = (self.palw_activation_daa_score != u64::MAX
             && pov_daa_score >= self.palw_activation_daa_score
             && !self.palw_spam.is_inert())

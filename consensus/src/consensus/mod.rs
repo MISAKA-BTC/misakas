@@ -1267,11 +1267,12 @@ impl ConsensusApi for Consensus {
     fn palw_admit_search_snapshot(
         &self,
         object_bytes: Arc<Vec<u8>>,
+        assignment_bytes: Option<Arc<Vec<u8>>>,
     ) -> Result<
         kaspa_consensus_core::palw::search_snapshot::PalwSearchSnapshotAdmittedV1,
         kaspa_consensus_core::palw::da::PalwDaAdmissionError,
     > {
-        self.palw_admit_search_snapshot_impl(object_bytes)
+        self.palw_admit_search_snapshot_impl(object_bytes, assignment_bytes)
     }
 
     fn palw_da_service_snapshot(

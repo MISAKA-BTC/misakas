@@ -618,11 +618,13 @@ impl PalwSearchSnapshotV1 {
     }
 }
 
-/// Scheduler-side anchor binding one admitted snapshot into a future JobSpec/assignment.
+/// Scheduler-side anchor binding one admitted snapshot into a JobSpec/assignment.
 /// The scheduler signs [`Self::signing_hash`]; nothing here is inside the snapshot bytes,
 /// so the binding is non-circular.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PalwSearchSnapshotAnchorV1 {
+    /// The assignment this snapshot serves (content-addressed id).
+    pub assignment_id: Hash64,
     /// Canonical snapshot digest.
     pub snapshot_digest: Hash64,
     /// DA object root of the canonical bytes.
@@ -636,16 +638,307 @@ pub struct PalwSearchSnapshotAnchorV1 {
 }
 
 impl PalwSearchSnapshotAnchorV1 {
-    /// Domain-separated signing hash for the scheduler's assignment signature.
+    /// Domain-separated signing hash for the scheduler's anchor signature.
     #[must_use]
     pub fn signing_hash(&self) -> Hash64 {
-        let mut preimage = Vec::with_capacity(64 + 64 + 4 + 2 + 8);
+        let mut preimage = Vec::with_capacity(64 * 3 + 4 + 2 + 8);
+        preimage.extend_from_slice(self.assignment_id.as_byte_slice());
         preimage.extend_from_slice(self.snapshot_digest.as_byte_slice());
         preimage.extend_from_slice(self.object_root.as_byte_slice());
         preimage.extend_from_slice(&self.object_len.to_le_bytes());
         preimage.extend_from_slice(&self.chunk_count.to_le_bytes());
         preimage.extend_from_slice(&self.availability_deadline_daa_score.to_le_bytes());
         blake2b_512_keyed(PALW_SEARCH_SNAPSHOT_ANCHOR_DOMAIN, &preimage)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler assignment + signed anchor + JobSpec
+// ---------------------------------------------------------------------------
+
+/// Assignment schema version.
+pub const PALW_SEARCH_ASSIGNMENT_VERSION_V1: u16 = 1;
+/// Content-addressed assignment-id domain.
+pub const PALW_SEARCH_ASSIGNMENT_ID_DOMAIN: &[u8] = b"misaka-palw-search-assignment-id-v1";
+/// Scheduler-key-id domain (public key fingerprint).
+pub const PALW_SEARCH_SCHEDULER_KEY_ID_DOMAIN: &[u8] = b"misaka-palw-search-scheduler-key-id-v1";
+/// ML-DSA-87 context for assignment signatures.
+pub const PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT: &[u8] = b"PALWSearchAssignmentV1";
+/// ML-DSA-87 context for anchor signatures.
+pub const PALW_SEARCH_ANCHOR_MLDSA87_CONTEXT: &[u8] = b"PALWSearchAnchorV1";
+/// Upper bound for scheduler public keys (ML-DSA-87 keys are 2592 bytes).
+pub const PALW_SEARCH_MAX_PUBLIC_KEY_BYTES: usize = 4096;
+/// Upper bound for signatures (ML-DSA-87 signatures are 4627 bytes).
+pub const PALW_SEARCH_MAX_SIGNATURE_BYTES: usize = 8192;
+
+/// Fingerprint of a scheduler public key.
+#[must_use]
+pub fn scheduler_key_id(public_key: &[u8]) -> Hash64 {
+    blake2b_512_keyed(PALW_SEARCH_SCHEDULER_KEY_ID_DOMAIN, public_key)
+}
+
+/// Scheduler-authored search assignment: pins query, provider policy, result/freshness bounds
+/// and a DAA validity window BEFORE retrieval runs (ADR §4 step 1). Content-addressed: the
+/// assignment id is the keyed hash of the canonical signing bytes (everything except the
+/// signature), so a snapshot referencing the id transitively pins every field here.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwSearchAssignmentV1 {
+    /// Must be [`PALW_SEARCH_ASSIGNMENT_VERSION_V1`].
+    pub version: u16,
+    /// Numeric network suffix.
+    pub network_id: u32,
+    /// Genesis hash of the network.
+    pub genesis_hash: Hash64,
+    /// Ruleset pin.
+    pub ruleset_id: String,
+    /// Pinned, already-normalized query ([`normalize_query_v1`] fixed point).
+    pub normalized_query: String,
+    /// Pinned provider policy.
+    pub provider: PalwSearchProviderPolicyV1,
+    /// Maximum ranked results the snapshot may carry.
+    pub max_results: u16,
+    /// Freshness window granted from retrieval time, milliseconds.
+    pub freshness_window_millis: u64,
+    /// First DAA score at which retrieval may run.
+    pub valid_from_daa_score: u64,
+    /// Last DAA score at which retrieval may run.
+    pub valid_until_daa_score: u64,
+    /// Scheduler ML-DSA-87 public key.
+    pub scheduler_public_key: Vec<u8>,
+    /// ML-DSA-87 signature over the canonical signing bytes.
+    pub signature: Vec<u8>,
+}
+
+impl PalwSearchAssignmentV1 {
+    /// Structural validation (bounds, normalization fixed point, window ordering).
+    pub fn validate(&self) -> Result<(), PalwSearchSnapshotError> {
+        if self.version != PALW_SEARCH_ASSIGNMENT_VERSION_V1 {
+            return Err(PalwSearchSnapshotError::UnsupportedVersion(self.version));
+        }
+        check_text("ruleset_id", &self.ruleset_id, PALW_SEARCH_MAX_RULESET_BYTES)?;
+        check_text("normalized_query", &self.normalized_query, PALW_SEARCH_MAX_QUERY_BYTES)?;
+        if self.ruleset_id.is_empty() || self.normalized_query.is_empty() {
+            return Err(PalwSearchSnapshotError::Invalid("assignment ruleset/query must not be empty"));
+        }
+        if self.normalized_query != normalize_query_v1(&self.normalized_query) {
+            return Err(PalwSearchSnapshotError::Invalid("assignment query must be a v1 normalization fixed point"));
+        }
+        check_text("provider_id", &self.provider.provider_id, PALW_SEARCH_MAX_PROVIDER_ID_BYTES)?;
+        check_text("region", &self.provider.region, PALW_SEARCH_MAX_REGION_BYTES)?;
+        check_text("language", &self.provider.language, PALW_SEARCH_MAX_LANGUAGE_BYTES)?;
+        if self.provider.provider_id.is_empty() || self.provider.safe_search > 2 {
+            return Err(PalwSearchSnapshotError::Invalid("assignment provider policy is invalid"));
+        }
+        if self.max_results == 0 || usize::from(self.max_results) > PALW_SEARCH_MAX_RESULTS {
+            return Err(PalwSearchSnapshotError::Invalid("assignment max_results is outside 1..=bound"));
+        }
+        if self.freshness_window_millis == 0 {
+            return Err(PalwSearchSnapshotError::Invalid("assignment freshness window must be positive"));
+        }
+        if self.valid_from_daa_score > self.valid_until_daa_score {
+            return Err(PalwSearchSnapshotError::Invalid("assignment validity window is inverted"));
+        }
+        if self.scheduler_public_key.is_empty() || self.scheduler_public_key.len() > PALW_SEARCH_MAX_PUBLIC_KEY_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "scheduler_public_key", bound: PALW_SEARCH_MAX_PUBLIC_KEY_BYTES });
+        }
+        if self.signature.len() > PALW_SEARCH_MAX_SIGNATURE_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "signature", bound: PALW_SEARCH_MAX_SIGNATURE_BYTES });
+        }
+        Ok(())
+    }
+
+    fn encode_body(&self, include_signature: bool) -> Result<Vec<u8>, PalwSearchSnapshotError> {
+        self.validate()?;
+        let mut out = Vec::with_capacity(256 + self.scheduler_public_key.len() + self.signature.len());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&self.network_id.to_le_bytes());
+        out.extend_from_slice(self.genesis_hash.as_byte_slice());
+        push_var(&mut out, self.ruleset_id.as_bytes());
+        push_var(&mut out, self.normalized_query.as_bytes());
+        push_var(&mut out, self.provider.provider_id.as_bytes());
+        out.extend_from_slice(self.provider.policy_id.as_byte_slice());
+        push_var(&mut out, self.provider.region.as_bytes());
+        push_var(&mut out, self.provider.language.as_bytes());
+        out.push(self.provider.safe_search);
+        out.extend_from_slice(&self.max_results.to_le_bytes());
+        out.extend_from_slice(&self.freshness_window_millis.to_le_bytes());
+        out.extend_from_slice(&self.valid_from_daa_score.to_le_bytes());
+        out.extend_from_slice(&self.valid_until_daa_score.to_le_bytes());
+        push_var(&mut out, &self.scheduler_public_key);
+        if include_signature {
+            push_var(&mut out, &self.signature);
+        }
+        Ok(out)
+    }
+
+    /// Canonical wire bytes (signature included).
+    pub fn encode(&self) -> Result<Vec<u8>, PalwSearchSnapshotError> {
+        self.encode_body(true)
+    }
+
+    /// Canonical signing bytes (everything except the signature).
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, PalwSearchSnapshotError> {
+        self.encode_body(false)
+    }
+
+    /// Content-addressed assignment id: keyed hash of the signing bytes (binds the scheduler
+    /// public key, never the signature).
+    pub fn assignment_id(&self) -> Result<Hash64, PalwSearchSnapshotError> {
+        Ok(blake2b_512_keyed(PALW_SEARCH_ASSIGNMENT_ID_DOMAIN, &self.signing_bytes()?))
+    }
+
+    /// Strict decoder with the same fail-closed rules as the snapshot codec.
+    pub fn decode_strict(bytes: &[u8]) -> Result<Self, PalwSearchSnapshotError> {
+        let mut cursor = Cursor { bytes, offset: 0 };
+        let version = cursor.u16()?;
+        if version != PALW_SEARCH_ASSIGNMENT_VERSION_V1 {
+            return Err(PalwSearchSnapshotError::UnsupportedVersion(version));
+        }
+        let network_id = cursor.u32()?;
+        let genesis_hash = cursor.hash()?;
+        let ruleset_id = cursor.text("ruleset_id", PALW_SEARCH_MAX_RULESET_BYTES)?;
+        let normalized_query = cursor.text("normalized_query", PALW_SEARCH_MAX_QUERY_BYTES)?;
+        let provider_id = cursor.text("provider_id", PALW_SEARCH_MAX_PROVIDER_ID_BYTES)?;
+        let policy_id = cursor.hash()?;
+        let region = cursor.text("region", PALW_SEARCH_MAX_REGION_BYTES)?;
+        let language = cursor.text("language", PALW_SEARCH_MAX_LANGUAGE_BYTES)?;
+        let safe_search = cursor.u8()?;
+        let max_results = cursor.u16()?;
+        let freshness_window_millis = cursor.u64()?;
+        let valid_from_daa_score = cursor.u64()?;
+        let valid_until_daa_score = cursor.u64()?;
+        let scheduler_public_key = cursor.var("scheduler_public_key", PALW_SEARCH_MAX_PUBLIC_KEY_BYTES)?.to_vec();
+        let signature = cursor.var("signature", PALW_SEARCH_MAX_SIGNATURE_BYTES)?.to_vec();
+        if cursor.offset != bytes.len() {
+            return Err(PalwSearchSnapshotError::NonCanonical("trailing bytes"));
+        }
+        let assignment = Self {
+            version,
+            network_id,
+            genesis_hash,
+            ruleset_id,
+            normalized_query,
+            provider: PalwSearchProviderPolicyV1 { provider_id, policy_id, region, language, safe_search },
+            max_results,
+            freshness_window_millis,
+            valid_from_daa_score,
+            valid_until_daa_score,
+            scheduler_public_key,
+            signature,
+        };
+        assignment.validate()?;
+        Ok(assignment)
+    }
+
+    /// Verifies the scheduler signature with an injected verifier
+    /// `(public_key, message, signature, context) -> bool`.
+    pub fn verify_signature(
+        &self,
+        mut verify: impl FnMut(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    ) -> Result<(), PalwSearchSnapshotError> {
+        let message = self.signing_bytes()?;
+        if verify(&self.scheduler_public_key, &message, &self.signature, PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT) {
+            Ok(())
+        } else {
+            Err(PalwSearchSnapshotError::Invalid("assignment signature is invalid"))
+        }
+    }
+}
+
+/// Rejects a snapshot that does not satisfy every pin of its assignment.
+pub fn snapshot_matches_assignment(
+    snapshot: &PalwSearchSnapshotV1,
+    assignment: &PalwSearchAssignmentV1,
+) -> Result<(), PalwSearchSnapshotError> {
+    let expected_id = assignment.assignment_id()?;
+    if snapshot.assignment_id != expected_id {
+        return Err(PalwSearchSnapshotError::Invalid("snapshot assignment_id does not match the assignment"));
+    }
+    if snapshot.network_id != assignment.network_id || snapshot.genesis_hash != assignment.genesis_hash {
+        return Err(PalwSearchSnapshotError::Invalid("snapshot network/genesis does not match the assignment"));
+    }
+    if snapshot.ruleset_id != assignment.ruleset_id {
+        return Err(PalwSearchSnapshotError::Invalid("snapshot ruleset does not match the assignment"));
+    }
+    if snapshot.normalized_query != assignment.normalized_query {
+        return Err(PalwSearchSnapshotError::Invalid("snapshot query does not match the assignment pin"));
+    }
+    if snapshot.provider != assignment.provider {
+        return Err(PalwSearchSnapshotError::Invalid("snapshot provider policy does not match the assignment pin"));
+    }
+    if snapshot.results.len() > usize::from(assignment.max_results) {
+        return Err(PalwSearchSnapshotError::Invalid("snapshot carries more results than the assignment allows"));
+    }
+    if snapshot.freshness_deadline_millis != snapshot.retrieval_unix_millis.saturating_add(assignment.freshness_window_millis) {
+        return Err(PalwSearchSnapshotError::Invalid("snapshot freshness deadline does not equal retrieval + assignment window"));
+    }
+    if snapshot.retrieval_daa_score < assignment.valid_from_daa_score
+        || snapshot.retrieval_daa_score > assignment.valid_until_daa_score
+    {
+        return Err(PalwSearchSnapshotError::Invalid("snapshot retrieval DAA is outside the assignment validity window"));
+    }
+    Ok(())
+}
+
+/// Anchor plus the scheduler's ML-DSA-87 signature over [`PalwSearchSnapshotAnchorV1::signing_hash`].
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwSignedSearchAnchorV1 {
+    /// The anchored facts.
+    pub anchor: PalwSearchSnapshotAnchorV1,
+    /// Scheduler ML-DSA-87 public key.
+    pub scheduler_public_key: Vec<u8>,
+    /// Signature over the anchor signing hash.
+    pub signature: Vec<u8>,
+}
+
+impl PalwSignedSearchAnchorV1 {
+    /// Verifies the anchor signature with an injected verifier.
+    pub fn verify_signature(
+        &self,
+        mut verify: impl FnMut(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    ) -> Result<(), PalwSearchSnapshotError> {
+        if self.scheduler_public_key.is_empty() || self.scheduler_public_key.len() > PALW_SEARCH_MAX_PUBLIC_KEY_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "scheduler_public_key", bound: PALW_SEARCH_MAX_PUBLIC_KEY_BYTES });
+        }
+        if self.signature.len() > PALW_SEARCH_MAX_SIGNATURE_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "signature", bound: PALW_SEARCH_MAX_SIGNATURE_BYTES });
+        }
+        let message = self.anchor.signing_hash();
+        if verify(&self.scheduler_public_key, message.as_byte_slice(), &self.signature, PALW_SEARCH_ANCHOR_MLDSA87_CONTEXT) {
+            Ok(())
+        } else {
+            Err(PalwSearchSnapshotError::Invalid("anchor signature is invalid"))
+        }
+    }
+}
+
+/// The worker-facing JobSpec for one node-anchored search input: the signed assignment (what to
+/// search, under which policy, when) and the signed anchor (which exact bytes came back and how
+/// long the node guarantees their availability). A worker accepts the DA object iff both
+/// signatures verify under the SAME scheduler key and the anchor references the assignment.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwSearchJobSpecV1 {
+    /// The signed assignment.
+    pub assignment: PalwSearchAssignmentV1,
+    /// The signed snapshot anchor.
+    pub signed_anchor: PalwSignedSearchAnchorV1,
+}
+
+impl PalwSearchJobSpecV1 {
+    /// Full JobSpec verification: both signatures, one scheduler key, anchor→assignment binding.
+    pub fn verify(
+        &self,
+        mut verify: impl FnMut(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    ) -> Result<(), PalwSearchSnapshotError> {
+        self.assignment.verify_signature(&mut verify)?;
+        self.signed_anchor.verify_signature(&mut verify)?;
+        if self.signed_anchor.scheduler_public_key != self.assignment.scheduler_public_key {
+            return Err(PalwSearchSnapshotError::Invalid("assignment and anchor are signed by different scheduler keys"));
+        }
+        if self.signed_anchor.anchor.assignment_id != self.assignment.assignment_id()? {
+            return Err(PalwSearchSnapshotError::Invalid("anchor does not reference this assignment"));
+        }
+        Ok(())
     }
 }
 
@@ -664,6 +957,11 @@ pub struct PalwSearchSnapshotAdmittedV1 {
     pub admitted_daa_score: u64,
     /// DAA score after which the snapshot may be garbage-collected.
     pub retention_until_daa_score: u64,
+    /// True iff a signed assignment was resolved and every pin matched. False only for the
+    /// zero-sentinel diagnostic path, which stays mint/P2P-ineligible.
+    pub assignment_resolved: bool,
+    /// Fingerprint of the scheduler key that signed the resolved assignment.
+    pub scheduler_key_id: Option<Hash64>,
 }
 
 #[cfg(test)]
@@ -849,6 +1147,7 @@ mod tests {
         let snapshot = snapshot();
         let commitment = snapshot.da_commitment().unwrap();
         let anchor = PalwSearchSnapshotAnchorV1 {
+            assignment_id: Hash64::from_bytes([5; 64]),
             snapshot_digest: snapshot.digest().unwrap(),
             object_root: commitment.root,
             object_len: commitment.object_len,
@@ -856,10 +1155,140 @@ mod tests {
             availability_deadline_daa_score: 99_999,
         };
         let base = anchor.signing_hash();
-        let mut moved = anchor;
-        moved.availability_deadline_daa_score += 1;
-        assert_ne!(base, moved.signing_hash());
+        for mutate in [
+            |a: &mut PalwSearchSnapshotAnchorV1| a.availability_deadline_daa_score += 1,
+            |a: &mut PalwSearchSnapshotAnchorV1| a.assignment_id = Hash64::from_bytes([6; 64]),
+        ] {
+            let mut moved = anchor;
+            mutate(&mut moved);
+            assert_ne!(base, moved.signing_hash());
+        }
         assert_ne!(base.as_byte_slice(), snapshot.digest().unwrap().as_byte_slice());
+    }
+
+    fn assignment_fixture(query: &str) -> PalwSearchAssignmentV1 {
+        PalwSearchAssignmentV1 {
+            version: PALW_SEARCH_ASSIGNMENT_VERSION_V1,
+            network_id: 111,
+            genesis_hash: Hash64::from_bytes([7; 64]),
+            ruleset_id: "palw-search-v1".into(),
+            normalized_query: normalize_query_v1(query),
+            provider: PalwSearchProviderPolicyV1 {
+                provider_id: "searxng".into(),
+                policy_id: Hash64::from_bytes([9; 64]),
+                region: "jp".into(),
+                language: "ja-JP".into(),
+                safe_search: 1,
+            },
+            max_results: 8,
+            freshness_window_millis: 600_000,
+            valid_from_daa_score: 10_000,
+            valid_until_daa_score: 20_000,
+            scheduler_public_key: vec![0xAA; 32],
+            signature: vec![0xBB; 64],
+        }
+    }
+
+    #[test]
+    fn assignment_codec_round_trips_and_id_ignores_signature() {
+        let assignment = assignment_fixture("量子コンピュータ  とは");
+        let bytes = assignment.encode().unwrap();
+        let decoded = PalwSearchAssignmentV1::decode_strict(&bytes).unwrap();
+        assert_eq!(decoded, assignment);
+        for len in 0..bytes.len() {
+            assert!(PalwSearchAssignmentV1::decode_strict(&bytes[..len]).is_err());
+        }
+        let id = assignment.assignment_id().unwrap();
+        let mut resigned = assignment.clone();
+        resigned.signature = vec![0xCC; 64];
+        assert_eq!(resigned.assignment_id().unwrap(), id, "id must not depend on the signature");
+        let mut rekeyed = assignment.clone();
+        rekeyed.scheduler_public_key = vec![0xAD; 32];
+        assert_ne!(rekeyed.assignment_id().unwrap(), id, "id must bind the scheduler key");
+        let mut requeried = assignment;
+        requeried.normalized_query = "別件".into();
+        assert_ne!(requeried.assignment_id().unwrap(), id);
+    }
+
+    #[test]
+    fn assignment_rejects_unnormalized_query_and_inverted_window() {
+        let mut raw = assignment_fixture("q");
+        raw.normalized_query = "  spaced  ".into();
+        assert!(raw.encode().is_err());
+        let mut window = assignment_fixture("q");
+        window.valid_from_daa_score = 30_000;
+        assert!(window.encode().is_err());
+    }
+
+    #[test]
+    fn snapshot_assignment_matching_enforces_every_pin() {
+        let assignment = assignment_fixture("量子コンピュータ  とは");
+        let mut snapshot = snapshot();
+        snapshot.assignment_id = assignment.assignment_id().unwrap();
+        snapshot.freshness_deadline_millis = snapshot.retrieval_unix_millis + assignment.freshness_window_millis;
+        snapshot.original_query = "量子コンピュータ  とは".into();
+        snapshot.normalized_query = normalize_query_v1(&snapshot.original_query);
+        snapshot.original_query_sha256 = super::sha256(snapshot.original_query.as_bytes());
+        snapshot.normalized_query_sha256 = super::sha256(snapshot.normalized_query.as_bytes());
+        snapshot.retrieval_daa_score = 12_345;
+        assert!(snapshot_matches_assignment(&snapshot, &assignment).is_ok());
+
+        let mut wrong_id = snapshot.clone();
+        wrong_id.assignment_id = Hash64::from_bytes([1; 64]);
+        assert!(snapshot_matches_assignment(&wrong_id, &assignment).is_err());
+        let mut wrong_query = snapshot.clone();
+        wrong_query.normalized_query = "別件".into();
+        assert!(snapshot_matches_assignment(&wrong_query, &assignment).is_err());
+        let mut early = snapshot.clone();
+        early.retrieval_daa_score = 9_999;
+        assert!(snapshot_matches_assignment(&early, &assignment).is_err());
+        let mut wrong_deadline = snapshot.clone();
+        wrong_deadline.freshness_deadline_millis += 1;
+        assert!(snapshot_matches_assignment(&wrong_deadline, &assignment).is_err());
+        let mut wrong_policy = snapshot;
+        wrong_policy.provider.safe_search = 2;
+        assert!(snapshot_matches_assignment(&wrong_policy, &assignment).is_err());
+    }
+
+    #[test]
+    fn jobspec_verifies_bindings_with_injected_crypto() {
+        let assignment = assignment_fixture("q");
+        let anchor = PalwSearchSnapshotAnchorV1 {
+            assignment_id: assignment.assignment_id().unwrap(),
+            snapshot_digest: Hash64::from_bytes([1; 64]),
+            object_root: Hash64::from_bytes([2; 64]),
+            object_len: 100,
+            chunk_count: 1,
+            availability_deadline_daa_score: 50_000,
+        };
+        let jobspec = PalwSearchJobSpecV1 {
+            signed_anchor: PalwSignedSearchAnchorV1 {
+                anchor,
+                scheduler_public_key: assignment.scheduler_public_key.clone(),
+                signature: vec![0xDD; 64],
+            },
+            assignment,
+        };
+        let accept_all = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| true;
+        assert!(jobspec.verify(accept_all).is_ok());
+        // Context strings must be distinct per artifact.
+        let mut contexts = Vec::new();
+        assert!(jobspec
+            .verify(|_, _, _, context: &[u8]| {
+                contexts.push(context.to_vec());
+                true
+            })
+            .is_ok());
+        assert!(contexts.contains(&PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT.to_vec()));
+        assert!(contexts.contains(&PALW_SEARCH_ANCHOR_MLDSA87_CONTEXT.to_vec()));
+        // Rejections: wrong key pairing, dangling anchor, refused signature.
+        let mut cross_key = jobspec.clone();
+        cross_key.signed_anchor.scheduler_public_key = vec![0xEE; 32];
+        assert!(cross_key.verify(accept_all).is_err());
+        let mut dangling = jobspec.clone();
+        dangling.signed_anchor.anchor.assignment_id = Hash64::from_bytes([3; 64]);
+        assert!(dangling.verify(accept_all).is_err());
+        assert!(jobspec.verify(|_, _, _, _| false).is_err());
     }
 
     #[test]
