@@ -550,8 +550,7 @@ pub fn execute_block_evm(
     // neither); v2 reads each tx's EIP-2718 type from it. The invariant is what makes
     // the index zip in receipts_root_v2 sound.
     debug_assert_eq!(receipts.len(), executed_raws.len(), "receipts and executed_raws must be parallel for the typed receipt root");
-    let receipts_root =
-        if typed_receipt_root_v2 { roots::receipts_root_v2(&receipts, &executed_raws) } else { roots::receipts_root(&receipts) };
+    let receipts_root = roots::receipts_root_for_fence(typed_receipt_root_v2, &receipts, &executed_raws);
     let header = EvmExecutionHeader {
         parent_state_root,
         state_root: b256_to_evmh256(state::state_root(&state_db)),
@@ -630,11 +629,12 @@ pub fn empty_acceptance_result(input: &EvmBlockInput) -> EvmExecutionResult {
         // fast path stays byte-identical to it for BOTH fence states. (For empty
         // receipts v1 and v2 both yield Ethereum's empty-trie root, so this does not
         // change any committed bytes — it keeps the two paths provably in lockstep.)
-        receipts_root: if input.daa_score >= input.typed_receipt_root_activation_daa_score {
-            roots::receipts_root_v2(&[], &[])
-        } else {
-            roots::receipts_root(&[])
-        },
+        // Same selector the full path commits through (`receipts_root_for_fence`).
+        receipts_root: roots::receipts_root_for_fence(
+            input.daa_score >= input.typed_receipt_root_activation_daa_score,
+            &[],
+            &[],
+        ),
         system_ops_root: roots::system_ops_root(&[]),
         withdrawals_root: roots::withdrawals_root(&[]),
         deposit_claim_queue_root: roots::deposit_claim_root(&[]),

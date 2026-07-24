@@ -139,6 +139,115 @@ pub fn export_transaction_segment(
     Ok(path)
 }
 
+/// §5.1 verification-mode metric: receipt segments REFUSED because their records
+/// did not recompute to the committed `receipts_root`. Nonzero means a builder
+/// produced receipts consensus did not commit; that segment was NOT written (the
+/// point of verify-mode — never silently archive a divergent segment). kaspad
+/// surfaces this; a persistently climbing value is a builder bug, not an
+/// operational hiccup.
+#[cfg(feature = "evm")]
+static RECEIPT_BINDING_REJECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Read the §5.1 receipt-binding rejection counter (for the kaspad metric).
+#[cfg(feature = "evm")]
+pub fn receipt_binding_rejections() -> u64 {
+    RECEIPT_BINDING_REJECTIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Per-block data to bind a receipt segment to consensus (§5.1).
+///
+/// A receipts root is FENCE-SENSITIVE where a transactions root is not: at/above
+/// the `evm_typed_receipt_root` fence it is the Ethereum EIP-2718 typed root,
+/// which needs each receipt's tx type — read from `executed_raws`, parallel to
+/// the block's receipts in `(tx_index)` order; below the fence it is the v1
+/// borsh-MPT root over the receipts alone. So the binding carries, per block: the
+/// committed root, which side of the fence the block is on, and (only meaningful
+/// for v2) the executed raws. Build `executed_raws` in the SAME order the receipt
+/// records appear for the block, or the v2 zip binds the wrong types.
+#[cfg(feature = "evm")]
+pub struct ReceiptBlockBinding {
+    pub committed_root: kaspa_hashes::EvmH256,
+    /// `daa_score >= evm_typed_receipt_root_activation_daa_score` for this block.
+    pub typed_v2: bool,
+    /// Accepted-and-executed raw txs, tx_index-parallel to the block's receipts.
+    /// Ignored below the fence; may be empty there.
+    pub executed_raws: Vec<Vec<u8>>,
+}
+
+/// Export a RECEIPT segment, BOUND to consensus and verified at build (§5.1).
+///
+/// The records are borsh-encoded `EvmReceipt`s in `(evm_number, tx_index)` order
+/// — the exact preimage the block committed: accepted-and-executed txs only (a
+/// deterministically-skipped tx contributes no receipt, so the vector is dense),
+/// and system ops are NOT here (they commit under a separate `system_ops_root`).
+/// For each block the builder decodes its receipts, recomputes the FENCE-CORRECT
+/// `receipts_root` via [`kaspa_evm::roots::receipts_root_for_fence`] — the same
+/// selector the executor commits through — and requires it to equal the committed
+/// root. A mismatch fails the build (nothing is written) and bumps
+/// `receipt_binding_rejections`: verify-mode refuses to archive receipts that
+/// consensus did not commit, rather than silently trusting the builder.
+///
+/// `block_of` returns each block's binding (committed root, fence side, executed
+/// raws). Every block appearing in `records` must have one, or the export refuses
+/// — an unbound block is a record set nothing vouches for.
+#[cfg(feature = "evm")]
+pub fn export_receipt_segment(
+    dir: &Path,
+    records: &[ColdRecord],
+    block_of: impl Fn(kaspa_hashes::Hash64) -> Option<ReceiptBlockBinding>,
+    manifest: &mut EvmColdSegmentManifest,
+) -> Result<PathBuf, ColdExportError> {
+    use kaspa_consensus_core::evm::{BlockConsensusBinding, EvmReceipt};
+    use std::collections::{BTreeSet, HashMap};
+
+    // One binding per distinct block, in appearance order; keep the fence side +
+    // raws aside for the recompute (which only sees a block's records).
+    let mut seen = BTreeSet::new();
+    let mut bindings = Vec::new();
+    let mut aux: HashMap<kaspa_hashes::Hash64, ReceiptBlockBinding> = HashMap::new();
+    for r in records {
+        if seen.insert(r.block) {
+            let b = block_of(r.block)
+                .ok_or_else(|| ColdSegmentError::Binding(format!("no committed receipts_root for block {}", r.block)))?;
+            bindings.push(BlockConsensusBinding { evm_number: r.evm_number, block: r.block, committed_root: b.committed_root });
+            aux.insert(r.block, b);
+        }
+    }
+
+    let segment = ColdSegment::build_with_bindings(ColdSegmentKind::Receipts, records, bindings)?;
+    // Verify BEFORE writing: decode each block's receipts and recompute the
+    // fence-correct root. A rejection is counted so it is distinguishable from an
+    // I/O failure — the operator needs to know a builder diverged, not just that
+    // an export did not advance.
+    let verified = segment.verify_consensus_binding(true, |block_records| {
+        let block = block_records[0].block;
+        let a = aux.get(&block).expect("every bound block was inserted into aux");
+        let receipts: Vec<EvmReceipt> = block_records
+            .iter()
+            .map(|r| borsh::from_slice::<EvmReceipt>(&r.value))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("undecodable receipt in block {block}: {e}"))?;
+        // v2 zips receipts with executed_raws by index; a length mismatch would
+        // bind against a silently-wrong type set. Below the fence the raws are
+        // ignored, so no such requirement applies.
+        if a.typed_v2 && a.executed_raws.len() != receipts.len() {
+            return Err(format!(
+                "block {block}: {} receipts but {} executed raws — cannot bind the v2 typed receipts root",
+                receipts.len(),
+                a.executed_raws.len()
+            ));
+        }
+        Ok::<_, String>(kaspa_evm::roots::receipts_root_for_fence(a.typed_v2, &receipts, &a.executed_raws))
+    });
+    if verified.is_err() {
+        RECEIPT_BINDING_REJECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    verified?;
+    let path = write_segment(dir, &segment)?;
+    manifest.insert(segment.header)?;
+    Ok(path)
+}
+
 /// Resolve one record from cold storage.
 ///
 /// Returns `Ok(None)` when no segment covers the number — "this node does not
@@ -264,6 +373,130 @@ mod tests {
             !dir2.join("raw-transactions-000000000001-000000000002.mseg").exists(),
             "a segment failing its binding must not be written"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir2).ok();
+    }
+
+    // --- §5.1 receipts_root binding (fence-aware, verify-mode) ---
+
+    #[cfg(feature = "evm")]
+    fn receipt_record(evm_number: u64, block: u8, r: &kaspa_consensus_core::evm::EvmReceipt) -> ColdRecord {
+        ColdRecord { evm_number, block: Hash64::from_bytes([block; 64]), value: borsh::to_vec(r).unwrap() }
+    }
+
+    #[cfg(feature = "evm")]
+    fn a_receipt(succeeded: bool, gas: u64) -> kaspa_consensus_core::evm::EvmReceipt {
+        kaspa_consensus_core::evm::EvmReceipt { succeeded, cumulative_gas_used: gas, gas_used: gas, logs: vec![] }
+    }
+
+    #[test]
+    #[cfg(feature = "evm")]
+    fn a_receipt_segment_binds_the_committed_root_and_rejects_a_mismatch() {
+        use kaspa_evm::roots::receipts_root_for_fence;
+        // Two v1 (below-fence) blocks, real receipts, the roots the blocks committed.
+        let b1 = [a_receipt(true, 21_000), a_receipt(false, 42_000)];
+        let b2 = [a_receipt(true, 30_000)];
+        let records = vec![receipt_record(1, 1, &b1[0]), receipt_record(1, 1, &b1[1]), receipt_record(2, 2, &b2[0])];
+        let root1 = receipts_root_for_fence(false, &b1, &[]);
+        let root2 = receipts_root_for_fence(false, &b2, &[]);
+        let bind_ok = move |block: Hash64| {
+            let root = if block == Hash64::from_bytes([1; 64]) { root1 } else { root2 };
+            Some(ReceiptBlockBinding { committed_root: root, typed_v2: false, executed_raws: vec![] })
+        };
+
+        let dir = temp_dir("receipt-ok");
+        let mut m = EvmColdSegmentManifest::new();
+        let before = receipt_binding_rejections();
+        let path = export_receipt_segment(&dir, &records, bind_ok, &mut m).unwrap();
+        assert!(path.exists(), "a correctly-bound receipt segment is written");
+        assert_eq!(receipt_binding_rejections(), before, "no rejection on the happy path");
+
+        // A builder whose committed root the records do NOT reproduce: rejected at
+        // BUILD (nothing archived), and the §5.1 metric records it.
+        let dir2 = temp_dir("receipt-bad");
+        let wrong = |_: Hash64| {
+            Some(ReceiptBlockBinding {
+                committed_root: kaspa_hashes::EvmH256::from_bytes([0xEE; 32]),
+                typed_v2: false,
+                executed_raws: vec![],
+            })
+        };
+        let mut m2 = EvmColdSegmentManifest::new();
+        let err = export_receipt_segment(&dir2, &records, wrong, &mut m2).unwrap_err();
+        assert!(matches!(err, ColdExportError::Segment(ColdSegmentError::Binding(_))), "{err:?}");
+        assert_eq!(receipt_binding_rejections(), before + 1, "a mismatch bumps the rejection metric");
+        assert!(!dir2.join("receipts-000000000001-000000000002.mseg").exists(), "a mismatching segment is never written");
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir2).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "evm")]
+    fn the_receipt_binding_is_fence_correct() {
+        // The activation boundary is part of the canonicalization: a block above
+        // the fence must bind with its v2 root, and binding it with the v1 root
+        // (the wrong side) is rejected. A type-2 tx makes v1 != v2.
+        use kaspa_evm::roots::{receipts_root, receipts_root_for_fence};
+        let r = [a_receipt(true, 21_000)];
+        let raws = vec![vec![0x02u8, 0xde, 0xad]]; // EIP-1559 → v2 differs from v1
+        let records = vec![receipt_record(7, 7, &r[0])];
+        let v2_root = receipts_root_for_fence(true, &r, &raws);
+        assert_ne!(v2_root, receipts_root(&r), "precondition: this receipt's v2 root differs from v1");
+
+        // Bound correctly as v2 (with the executed raws): writes.
+        let dir = temp_dir("receipt-v2-ok");
+        let mut m = EvmColdSegmentManifest::new();
+        let raws_c = raws.clone();
+        let ok = move |_: Hash64| Some(ReceiptBlockBinding { committed_root: v2_root, typed_v2: true, executed_raws: raws_c.clone() });
+        assert!(export_receipt_segment(&dir, &records, ok, &mut m).unwrap().exists());
+
+        // Same block, same committed v2 root, but bound as v1 (wrong fence side):
+        // the v1 recompute cannot reproduce the v2 root ⇒ rejected.
+        let dir2 = temp_dir("receipt-v2-wrongside");
+        let mut m2 = EvmColdSegmentManifest::new();
+        let wrong_side = move |_: Hash64| Some(ReceiptBlockBinding { committed_root: v2_root, typed_v2: false, executed_raws: vec![] });
+        assert!(matches!(
+            export_receipt_segment(&dir2, &records, wrong_side, &mut m2).unwrap_err(),
+            ColdExportError::Segment(ColdSegmentError::Binding(_))
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir2).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "evm")]
+    fn system_ops_and_skips_are_outside_the_receipts_preimage() {
+        // The committed receipts_root is over the ACCEPTED-AND-EXECUTED receipts
+        // ONLY: system ops commit under a separate root, and a skipped tx leaves no
+        // receipt (the vector is dense, no placeholder). So the exact dense record
+        // set binds, and any extra record — a stand-in for a system-op receipt, or
+        // a placeholder a builder wrongly inserted for a skip — fails to reproduce
+        // the committed root.
+        use kaspa_evm::roots::receipts_root_for_fence;
+        let executed = [a_receipt(true, 21_000), a_receipt(true, 45_000)]; // txs 0 and 2 executed; tx 1 skipped
+        let committed = receipts_root_for_fence(false, &executed, &[]);
+        let bind = move |_: Hash64| Some(ReceiptBlockBinding { committed_root: committed, typed_v2: false, executed_raws: vec![] });
+
+        // Dense, correct preimage: binds.
+        let dense = vec![receipt_record(5, 5, &executed[0]), receipt_record(5, 5, &executed[1])];
+        let dir = temp_dir("receipt-dense");
+        let mut m = EvmColdSegmentManifest::new();
+        assert!(export_receipt_segment(&dir, &dense, bind, &mut m).unwrap().exists());
+
+        // One extra receipt (a phantom system-op receipt / skip placeholder):
+        // recomputes to a different root ⇒ rejected, never archived.
+        let padded =
+            vec![receipt_record(5, 5, &executed[0]), receipt_record(5, 5, &a_receipt(true, 1)), receipt_record(5, 5, &executed[1])];
+        let dir2 = temp_dir("receipt-padded");
+        let mut m2 = EvmColdSegmentManifest::new();
+        let bind2 = move |_: Hash64| Some(ReceiptBlockBinding { committed_root: committed, typed_v2: false, executed_raws: vec![] });
+        assert!(matches!(
+            export_receipt_segment(&dir2, &padded, bind2, &mut m2).unwrap_err(),
+            ColdExportError::Segment(ColdSegmentError::Binding(_))
+        ));
 
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&dir2).ok();
