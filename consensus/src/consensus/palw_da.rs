@@ -534,6 +534,33 @@ impl Consensus {
             }
         }
 
+        // P2P chunk serving for node-anchored search snapshots: admitted, retention-live rows are
+        // served under the same object/byte caps as receipt objects, in deterministic root order.
+        // Chunk proofs come from the version-parameterized DA-01 tree, so a version-3 proof built
+        // over these exact bytes verifies against the anchored root as-is.
+        if serving_objects.len() < PALW_DA_SERVICE_MAX_OBJECTS && total_bytes < PALW_DA_SERVICE_MAX_BYTES {
+            let store = self.storage.palw_da_store.read();
+            let mut roots = store
+                .search_snapshot_roots()
+                .map_err(|error| PalwDaServiceError::Store(format!("search snapshot roots: {error:?}")))?;
+            roots.sort_unstable();
+            for root in roots {
+                if serving_objects.len() >= PALW_DA_SERVICE_MAX_OBJECTS {
+                    break;
+                }
+                let stored = store
+                    .search_snapshot(root)
+                    .map_err(|error| PalwDaServiceError::Store(format!("search snapshot {root}: {error:?}")))?;
+                if current_daa_score > stored.retention_until_daa_score {
+                    continue;
+                }
+                if total_bytes.saturating_add(stored.bytes.len()) > PALW_DA_SERVICE_MAX_BYTES {
+                    break;
+                }
+                total_bytes += stored.bytes.len();
+                serving_objects.push(PalwDaServingObjectV1 { object_root: root, bytes: Arc::new(stored.bytes.clone()) });
+            }
+        }
         Ok(PalwDaServiceSnapshotV1 { selected_parent, current_daa_score, serving_objects, fetch_targets })
     }
 

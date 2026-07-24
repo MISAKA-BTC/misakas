@@ -1191,6 +1191,194 @@ impl PalwSearchAvailabilityStateV1 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// On-chain transaction wire layer (challenge / response / timeout)
+// ---------------------------------------------------------------------------
+//
+// These are the exact payloads a future accepted-tx dispatch consumes. The wire and apply
+// layers are complete and bond/proof-authorized; virtual-processor dispatch is deliberately
+// NOT wired yet: obligations become consensus state only once scheduler authorization itself
+// is on-chain (a bonded scheduler registry). Until then, per-node allowlists would make the
+// same accepted tx valid on one node and invalid on another — a consensus split, not a gate.
+
+/// Wire version of the search availability txs.
+pub const PALW_SEARCH_TX_VERSION_V1: u16 = 1;
+/// Challenge-window granted to the node for answering a search availability challenge.
+pub const PALW_SEARCH_CHALLENGE_RESPONSE_WINDOW_DAA: u64 = 600;
+/// ML-DSA-87 context for search availability challenges.
+pub const PALW_SEARCH_CHALLENGE_MLDSA87_CONTEXT: &[u8] = b"PALWSearchChallengeV1";
+/// ML-DSA-87 context for search availability timeout evidence.
+pub const PALW_SEARCH_TIMEOUT_MLDSA87_CONTEXT: &[u8] = b"PALWSearchTimeoutV1";
+
+use crate::tx::TransactionOutpoint;
+
+fn push_outpoint(out: &mut Vec<u8>, outpoint: &TransactionOutpoint) {
+    out.extend_from_slice(outpoint.transaction_id.as_byte_slice());
+    out.extend_from_slice(&outpoint.index.to_le_bytes());
+}
+
+/// Bond-owner-signed availability challenge for one anchored snapshot chunk.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwSearchChallengeTxV1 {
+    /// Must be [`PALW_SEARCH_TX_VERSION_V1`].
+    pub version: u16,
+    /// Numeric network suffix.
+    pub network_id: u32,
+    /// Challenged DA object root.
+    pub object_root: Hash64,
+    /// Challenged chunk index.
+    pub chunk_index: u16,
+    /// Challenger's active provider bond (the on-chain authorization anchor).
+    pub challenger_bond: TransactionOutpoint,
+    /// Challenger's ML-DSA-87 public key (must own the bond).
+    pub challenger_public_key: Vec<u8>,
+    /// Signature over [`Self::signing_hash`].
+    pub signature: Vec<u8>,
+}
+
+impl PalwSearchChallengeTxV1 {
+    /// Domain-separated signing hash over every field except the signature.
+    #[must_use]
+    pub fn signing_hash(&self) -> Hash64 {
+        let mut preimage = Vec::with_capacity(256);
+        preimage.extend_from_slice(&self.version.to_le_bytes());
+        preimage.extend_from_slice(&self.network_id.to_le_bytes());
+        preimage.extend_from_slice(self.object_root.as_byte_slice());
+        preimage.extend_from_slice(&self.chunk_index.to_le_bytes());
+        push_outpoint(&mut preimage, &self.challenger_bond);
+        let mut key_prefixed = (self.challenger_public_key.len() as u64).to_le_bytes().to_vec();
+        key_prefixed.extend_from_slice(&self.challenger_public_key);
+        preimage.extend_from_slice(&key_prefixed);
+        blake2b_512_keyed(PALW_SEARCH_CHALLENGE_MLDSA87_CONTEXT, &preimage)
+    }
+}
+
+/// Proof-bound availability response. Deliberately unsigned: a chunk proof that verifies
+/// against the anchored root is self-authorizing evidence of availability.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwSearchResponseTxV1 {
+    /// Must be [`PALW_SEARCH_TX_VERSION_V1`].
+    pub version: u16,
+    /// Numeric network suffix.
+    pub network_id: u32,
+    /// Responded DA object root.
+    pub object_root: Hash64,
+    /// The chunk proof answering the open challenge.
+    pub proof: PalwReceiptDaChunkProofV1,
+}
+
+/// Bond-owner-signed timeout evidence for an unanswered challenge.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwSearchTimeoutTxV1 {
+    /// Must be [`PALW_SEARCH_TX_VERSION_V1`].
+    pub version: u16,
+    /// Numeric network suffix.
+    pub network_id: u32,
+    /// Object root whose challenge deadline elapsed.
+    pub object_root: Hash64,
+    /// Reporter's active provider bond.
+    pub reporter_bond: TransactionOutpoint,
+    /// Reporter's ML-DSA-87 public key (must own the bond).
+    pub reporter_public_key: Vec<u8>,
+    /// Signature over [`Self::signing_hash`].
+    pub signature: Vec<u8>,
+}
+
+impl PalwSearchTimeoutTxV1 {
+    /// Domain-separated signing hash over every field except the signature.
+    #[must_use]
+    pub fn signing_hash(&self) -> Hash64 {
+        let mut preimage = Vec::with_capacity(256);
+        preimage.extend_from_slice(&self.version.to_le_bytes());
+        preimage.extend_from_slice(&self.network_id.to_le_bytes());
+        preimage.extend_from_slice(self.object_root.as_byte_slice());
+        push_outpoint(&mut preimage, &self.reporter_bond);
+        let mut key_prefixed = (self.reporter_public_key.len() as u64).to_le_bytes().to_vec();
+        key_prefixed.extend_from_slice(&self.reporter_public_key);
+        preimage.extend_from_slice(&key_prefixed);
+        blake2b_512_keyed(PALW_SEARCH_TIMEOUT_MLDSA87_CONTEXT, &preimage)
+    }
+}
+
+impl PalwSearchAvailabilityStateV1 {
+    /// Applies one bond-authorized challenge tx: network/version pin, signature over the
+    /// signing hash, an active-bond check binding the key to the bond, then the state
+    /// transition. Nothing mutates unless every gate passes.
+    pub fn apply_challenge_tx(
+        &mut self,
+        tx: &PalwSearchChallengeTxV1,
+        network_id: u32,
+        current_daa_score: u64,
+        mut bond_owner_is_active: impl FnMut(&TransactionOutpoint, &[u8]) -> bool,
+        mut verify: impl FnMut(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
+        if tx.version != PALW_SEARCH_TX_VERSION_V1 {
+            return Err(PalwSearchSnapshotError::UnsupportedVersion(tx.version));
+        }
+        if tx.network_id != network_id {
+            return Err(PalwSearchSnapshotError::Invalid("challenge tx is bound to another network"));
+        }
+        if tx.challenger_public_key.is_empty() || tx.challenger_public_key.len() > PALW_SEARCH_MAX_PUBLIC_KEY_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "challenger_public_key", bound: PALW_SEARCH_MAX_PUBLIC_KEY_BYTES });
+        }
+        if !verify(
+            &tx.challenger_public_key,
+            tx.signing_hash().as_byte_slice(),
+            &tx.signature,
+            PALW_SEARCH_CHALLENGE_MLDSA87_CONTEXT,
+        ) {
+            return Err(PalwSearchSnapshotError::Invalid("challenge signature is invalid"));
+        }
+        if !bond_owner_is_active(&tx.challenger_bond, &tx.challenger_public_key) {
+            return Err(PalwSearchSnapshotError::Invalid("challenger is not an active authorized bond owner"));
+        }
+        self.challenge(tx.object_root, tx.chunk_index, current_daa_score, PALW_SEARCH_CHALLENGE_RESPONSE_WINDOW_DAA)
+    }
+
+    /// Applies one proof-bound response tx.
+    pub fn apply_response_tx(
+        &mut self,
+        tx: &PalwSearchResponseTxV1,
+        network_id: u32,
+        current_daa_score: u64,
+    ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
+        if tx.version != PALW_SEARCH_TX_VERSION_V1 {
+            return Err(PalwSearchSnapshotError::UnsupportedVersion(tx.version));
+        }
+        if tx.network_id != network_id {
+            return Err(PalwSearchSnapshotError::Invalid("response tx is bound to another network"));
+        }
+        self.respond(tx.object_root, &tx.proof, current_daa_score)
+    }
+
+    /// Applies one bond-authorized timeout-evidence tx.
+    pub fn apply_timeout_tx(
+        &mut self,
+        tx: &PalwSearchTimeoutTxV1,
+        network_id: u32,
+        current_daa_score: u64,
+        mut bond_owner_is_active: impl FnMut(&TransactionOutpoint, &[u8]) -> bool,
+        mut verify: impl FnMut(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
+        if tx.version != PALW_SEARCH_TX_VERSION_V1 {
+            return Err(PalwSearchSnapshotError::UnsupportedVersion(tx.version));
+        }
+        if tx.network_id != network_id {
+            return Err(PalwSearchSnapshotError::Invalid("timeout tx is bound to another network"));
+        }
+        if tx.reporter_public_key.is_empty() || tx.reporter_public_key.len() > PALW_SEARCH_MAX_PUBLIC_KEY_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "reporter_public_key", bound: PALW_SEARCH_MAX_PUBLIC_KEY_BYTES });
+        }
+        if !verify(&tx.reporter_public_key, tx.signing_hash().as_byte_slice(), &tx.signature, PALW_SEARCH_TIMEOUT_MLDSA87_CONTEXT) {
+            return Err(PalwSearchSnapshotError::Invalid("timeout signature is invalid"));
+        }
+        if !bond_owner_is_active(&tx.reporter_bond, &tx.reporter_public_key) {
+            return Err(PalwSearchSnapshotError::Invalid("reporter is not an active authorized bond owner"));
+        }
+        self.timeout_slash(tx.object_root, current_daa_score)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1522,6 +1710,83 @@ mod tests {
     fn normalization_pin_is_whitespace_collapse_and_trim() {
         assert_eq!(normalize_query_v1("  a\t\tb \n c  "), "a b c");
         assert_eq!(normalize_query_v1("量子  コンピュータ"), "量子 コンピュータ");
+    }
+
+    #[test]
+    fn onchain_tx_apply_cycle_is_gated_and_reversible() {
+        use super::super::da::palw_receipt_da_chunk_proof;
+        let snapshot = snapshot();
+        let bytes = snapshot.encode().unwrap();
+        let commitment = snapshot.da_commitment().unwrap();
+        let anchor = PalwSearchSnapshotAnchorV1 {
+            assignment_id: Hash64::from_bytes([5; 64]),
+            snapshot_digest: snapshot.digest().unwrap(),
+            object_root: commitment.root,
+            object_len: commitment.object_len,
+            chunk_count: commitment.chunk_count,
+            availability_deadline_daa_score: 20_000,
+        };
+        let bond = TransactionOutpoint::new(Hash64::from_bytes([8; 64]), 1);
+        let challenge = PalwSearchChallengeTxV1 {
+            version: PALW_SEARCH_TX_VERSION_V1,
+            network_id: 111,
+            object_root: anchor.object_root,
+            chunk_index: 0,
+            challenger_bond: bond,
+            challenger_public_key: vec![0xAB; 32],
+            signature: vec![0xCD; 64],
+        };
+        let accept = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| true;
+        let bond_ok = |outpoint: &TransactionOutpoint, key: &[u8]| *outpoint == bond && key == [0xAB; 32];
+
+        let mut state = PalwSearchAvailabilityStateV1::default();
+        let register_undo = state.register(anchor, scheduler_key_id(&[0xAA; 32]), 10_000).unwrap();
+        let baseline = state.clone();
+
+        // Gates: wrong network, refused signature, inactive bond — no state change.
+        let mut wrong_net = challenge.clone();
+        wrong_net.network_id = 112;
+        assert!(state.apply_challenge_tx(&wrong_net, 111, 10_100, bond_ok, accept).is_err());
+        assert!(state.apply_challenge_tx(&challenge, 111, 10_100, bond_ok, |_, _, _, _| false).is_err());
+        assert!(state.apply_challenge_tx(&challenge, 111, 10_100, |_, _| false, accept).is_err());
+        assert_eq!(state, baseline);
+        // Signing hash binds every field.
+        let mut rechunked = challenge.clone();
+        rechunked.chunk_index = 1;
+        assert_ne!(challenge.signing_hash(), rechunked.signing_hash());
+
+        // Challenge applies; response with the real proof closes it; timeout gates hold.
+        let challenge_undo = state.apply_challenge_tx(&challenge, 111, 10_100, bond_ok, accept).unwrap();
+        let proof = palw_receipt_da_chunk_proof(PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1, &bytes, 0).unwrap();
+        let response =
+            PalwSearchResponseTxV1 { version: PALW_SEARCH_TX_VERSION_V1, network_id: 111, object_root: anchor.object_root, proof };
+        let timeout = PalwSearchTimeoutTxV1 {
+            version: PALW_SEARCH_TX_VERSION_V1,
+            network_id: 111,
+            object_root: anchor.object_root,
+            reporter_bond: bond,
+            reporter_public_key: vec![0xAB; 32],
+            signature: vec![0xEF; 64],
+        };
+        assert!(state.apply_timeout_tx(&timeout, 111, 10_100 + 1, bond_ok, accept).is_err(), "deadline not elapsed");
+        let response_undo = state.apply_response_tx(&response, 111, 10_200).unwrap();
+        assert_eq!(state.obligations[&anchor.object_root].status, PalwSearchObligationStatusV1::Active);
+
+        // Second cycle: challenge then bond-authorized timeout slash after the window.
+        let challenge2_undo = state.apply_challenge_tx(&challenge, 111, 11_000, bond_ok, accept).unwrap();
+        let slash_undo = state
+            .apply_timeout_tx(&timeout, 111, 11_000 + PALW_SEARCH_CHALLENGE_RESPONSE_WINDOW_DAA + 1, bond_ok, accept)
+            .unwrap();
+        assert!(matches!(
+            state.obligations[&anchor.object_root].status,
+            PalwSearchObligationStatusV1::Slashed { .. }
+        ));
+
+        // Full reorg rollback to the empty state.
+        for undo in [slash_undo, challenge2_undo, response_undo, challenge_undo, register_undo] {
+            state.revert(undo).unwrap();
+        }
+        assert!(state.obligations.is_empty());
     }
 
     #[test]
