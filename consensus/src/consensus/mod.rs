@@ -453,7 +453,7 @@ impl Consensus {
                     };
                     snapshots += 1;
                     accounts += snapshot.accounts.len() as u64;
-                    if snapshots % 1_000 == 0 {
+                    if snapshots.is_multiple_of(1_000) {
                         info!(
                             "[evm-backfill] progress: scanned {snapshots} legacy snapshots / {accounts} account copies; \
                              recovered {recovered} unique bytecode entries."
@@ -2222,7 +2222,14 @@ impl ConsensusApi for Consensus {
                 block,
                 |b| self.storage.evm_state_checkpoint_store.get(b),
                 |b| self.storage.evm_state_diff_store.get(b),
-                |b| self.storage.evm_header_store.get(b).optional().unwrap().is_some(),
+                |b| {
+                    crate::processes::evm::classify_parent_for_anchor(
+                        b,
+                        self.config.evm_activation_daa_score,
+                        |h| self.storage.evm_header_store.get(h).optional().unwrap().is_some(),
+                        |h| self.storage.headers_store.get_daa_score(h).ok(),
+                    )
+                },
             )
             .map_err(|e| oops(e.to_string()))?;
 

@@ -504,12 +504,42 @@ impl std::fmt::Display for ReconstructGatherError {
 /// replay + verify. Following the BLOCK'S OWN parent links (not the canonical
 /// number map) serves canonical and side-branch blocks uniformly. Pure store-walk
 /// (no revm); the three reads are closures so it is unit-testable offline.
+/// HOTFIX: how a walk should treat a parent with no committed EVM header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParentAnchorClass {
+    HasEvmHeader,
+    PreActivation,
+    Unavailable,
+}
+
+/// Classify a parent from the EVM header store plus the L1 DAA score. A block
+/// below the activation score has no EVM header because it never had one; a block
+/// above it that has none has lost it to retention.
+pub fn classify_parent_for_anchor(
+    parent: kaspa_consensus_core::BlockHash,
+    evm_activation_daa_score: u64,
+    has_evm_header: impl Fn(kaspa_consensus_core::BlockHash) -> bool,
+    l1_daa_score: impl Fn(kaspa_consensus_core::BlockHash) -> Option<u64>,
+) -> ParentAnchorClass {
+    if has_evm_header(parent) {
+        return ParentAnchorClass::HasEvmHeader;
+    }
+    match l1_daa_score(parent) {
+        Some(daa) if daa < evm_activation_daa_score => ParentAnchorClass::PreActivation,
+        _ => ParentAnchorClass::Unavailable,
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub fn gather_reconstruction_inputs<E: std::fmt::Display>(
     block: kaspa_consensus_core::BlockHash,
     get_checkpoint: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateCheckpointV1>, E>,
     get_diff: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, E>,
-    has_header: impl Fn(kaspa_consensus_core::BlockHash) -> bool,
+    // HOTFIX: tri-state, not a bool. "No EVM header" is ambiguous between a
+    // genuinely pre-activation parent and one whose header row was PRUNED, and
+    // resolving it wrongly is how a `recent`-mode node with 206 retired
+    // reconstructs the EMPTY state for its own pruning point and cannot serve IBD.
+    classify_parent: impl Fn(kaspa_consensus_core::BlockHash) -> ParentAnchorClass,
 ) -> Result<(kaspa_consensus_core::evm::EvmStateSnapshot, Vec<kaspa_consensus_core::evm::EvmStateDiffV2>), ReconstructGatherError> {
     // A healthy chain anchors on a checkpoint within EVM_CHECKPOINT_INTERVAL steps
     // (or reaches genesis for an early block). Far beyond ⇒ broken chain — fail closed.
@@ -529,14 +559,99 @@ pub fn gather_reconstruction_inputs<E: std::fmt::Display>(
         if pending.len() > MAX_RECONSTRUCTION_DIFFS {
             return Err(ReconstructGatherError::TooDeep(format!("{block}: exceeded {MAX_RECONSTRUCTION_DIFFS} diffs")));
         }
-        // A parent with no EVM header is pre-activation ⇒ anchor = empty genesis.
-        if !has_header(parent) {
-            break kaspa_consensus_core::evm::EvmStateSnapshot::default();
+        match classify_parent(parent) {
+            ParentAnchorClass::HasEvmHeader => {}
+            ParentAnchorClass::PreActivation => break kaspa_consensus_core::evm::EvmStateSnapshot::default(),
+            // Reclaimed, not pre-activation: fail rather than seed the empty state.
+            ParentAnchorClass::Unavailable => {
+                return Err(ReconstructGatherError::Unavailable(format!(
+                    "{block}: the diff chain reaches {parent}, whose EVM header has been pruned; no anchor is retained"
+                )));
+            }
         }
         cur = parent;
     };
     pending.reverse();
     Ok((seed, pending))
+}
+
+/// HOTFIX: reconstruct a historical state by walking the flat head DOWN.
+///
+/// The forward walk anchors on a checkpoint at or below the target; it fails for
+/// the pruning point on a `recent`-history node whose anchor material below the
+/// pruning point has been reclaimed. This walk needs no anchor below the target:
+/// the flat state IS the tip state, and `apply_inverse_state_diff` reverts the
+/// retained (target, flat_head] diffs one block at a time down to the target.
+/// Pure and secp-free; the caller root-verifies.
+pub fn reconstruct_snapshot_by_inverse_walk<ED: std::fmt::Display>(
+    flat_head: kaspa_consensus_core::BlockHash,
+    flat_head_snapshot: &kaspa_consensus_core::evm::EvmStateSnapshot,
+    target: kaspa_consensus_core::BlockHash,
+    get_diff: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, ED>,
+    mut resolve_code: impl FnMut(&kaspa_hashes::EvmH256) -> Option<Vec<u8>>,
+    max_steps: usize,
+) -> Result<kaspa_consensus_core::evm::EvmStateSnapshot, ReconstructGatherError> {
+    use kaspa_consensus_core::evm::{recon_from_snapshot, recon_to_snapshot};
+    if flat_head == target {
+        return Ok(flat_head_snapshot.clone());
+    }
+    let mut recon = recon_from_snapshot(flat_head_snapshot);
+    let mut cur = flat_head;
+    let mut steps = 0usize;
+    loop {
+        let diff = get_diff(cur)
+            .map_err(|e| ReconstructGatherError::Store(e.to_string()))?
+            .ok_or_else(|| ReconstructGatherError::Unavailable(format!("inverse walk: no diff for {cur} (retention gap)")))?;
+        kaspa_consensus_core::evm::apply_inverse_state_diff(&mut recon, &diff)
+            .map_err(|e| ReconstructGatherError::Checkpoint(format!("inverse walk at {cur}: {e}")))?;
+        cur = diff.parent;
+        steps += 1;
+        if cur == target {
+            break;
+        }
+        if steps > max_steps {
+            return Err(ReconstructGatherError::TooDeep(format!(
+                "inverse walk from {flat_head} to {target} exceeded {max_steps} steps"
+            )));
+        }
+    }
+    recon_to_snapshot(&recon, |h| resolve_code(h))
+        .map_err(|e| ReconstructGatherError::Checkpoint(format!("inverse walk to snapshot: {e}")))
+}
+
+/// HOTFIX: reconstruct the pruning point's state by the inverse walk and VERIFY
+/// it against the committed root — the decisive check that the whole walk landed
+/// on the right state. Fails closed on anything short of a byte-exact match.
+#[cfg(feature = "evm")]
+#[allow(clippy::too_many_arguments)]
+pub fn reconstruct_pruning_point_snapshot_verified(
+    pruning_point: kaspa_consensus_core::BlockHash,
+    committed_state_root: kaspa_hashes::EvmH256,
+    flat_head: kaspa_consensus_core::BlockHash,
+    flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
+    code: &crate::model::stores::evm::DbEvmCodeStore,
+    diff_store: &crate::model::stores::evm::DbEvmStateDiffStore,
+    max_steps: usize,
+) -> Result<kaspa_consensus_core::evm::EvmStateSnapshot, String> {
+    use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateDiffStoreReader};
+    let flat_head_snapshot = materialize_snapshot(flat, code).map_err(|e| format!("materialize flat head: {e}"))?;
+    let snapshot = reconstruct_snapshot_by_inverse_walk(
+        flat_head,
+        &flat_head_snapshot,
+        pruning_point,
+        |b| diff_store.get(b),
+        |h| code.get(*h).ok().flatten(),
+        max_steps,
+    )
+    .map_err(|e| e.to_string())?;
+    let cdb = kaspa_evm::snapshot::seed_cachedb(&snapshot).map_err(|e| format!("seed cachedb: {e}"))?;
+    let recomputed = kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&cdb).0);
+    if recomputed != committed_state_root {
+        return Err(format!(
+            "inverse-walk reconstruction of {pruning_point} produced root {recomputed:?}, committed {committed_state_root:?}"
+        ));
+    }
+    Ok(snapshot)
 }
 
 /// C-01 Stage 1: apply a forward [`EvmStateDiffV2`] to the flat latest-canonical
@@ -1485,9 +1600,52 @@ mod gather_tests {
             block,
             |b| Ok(c.checkpoints.get(&b).cloned()),
             |b| Ok(c.diffs.get(&b).cloned()),
-            // Blocks 1..3 have headers; block 0 (genesis) does not.
-            |b| (1..=3u8).any(|n| h(n) == b),
+            // Blocks 1..3 have EVM headers; block 0 (genesis) is pre-activation.
+            |b| if (1..=3u8).any(|n| h(n) == b) { ParentAnchorClass::HasEvmHeader } else { ParentAnchorClass::PreActivation },
         )
+    }
+
+    /// HOTFIX: a pruned parent fails the walk instead of anchoring the empty state.
+    #[test]
+    fn a_pruned_parent_fails_the_walk_instead_of_anchoring_the_empty_state() {
+        let c = chain();
+        let err = gather_reconstruction_inputs::<Infallible>(
+            h(3),
+            |_| Ok(None),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            |b| if (1..=3u8).any(|n| h(n) == b) { ParentAnchorClass::HasEvmHeader } else { ParentAnchorClass::Unavailable },
+        )
+        .expect_err("a pruned parent must not anchor the empty state");
+        assert!(matches!(err, ReconstructGatherError::Unavailable(_)), "{err:?}");
+    }
+
+    /// HOTFIX: pre-activation is proved by the DAA score, not a missing header.
+    #[test]
+    fn pre_activation_is_proved_by_the_daa_score() {
+        let below = h(1);
+        let above = h(2);
+        let daa = |b: BlockHash| if b == below { Some(50u64) } else { Some(500u64) };
+        assert_eq!(classify_parent_for_anchor(below, 100, |_| true, daa), ParentAnchorClass::HasEvmHeader);
+        assert_eq!(classify_parent_for_anchor(below, 100, |_| false, daa), ParentAnchorClass::PreActivation);
+        assert_eq!(classify_parent_for_anchor(above, 100, |_| false, daa), ParentAnchorClass::Unavailable);
+        assert_eq!(classify_parent_for_anchor(above, 100, |_| false, |_| None), ParentAnchorClass::Unavailable);
+    }
+
+    /// HOTFIX: the inverse walk reconstructs a target from the flat head with no
+    /// anchor below it.
+    #[test]
+    fn inverse_walk_reconstructs_from_the_flat_head() {
+        let c = chain();
+        let got = reconstruct_snapshot_by_inverse_walk::<Infallible>(
+            h(3),
+            &snap_at(3),
+            h(1),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            |_| None,
+            1000,
+        )
+        .expect("inverse walk reaches the target");
+        assert_eq!(got, snap_at(1));
     }
 
     /// With no checkpoints, the walk reaches genesis and returns the empty seed
@@ -1581,7 +1739,6 @@ mod driver {
     /// first EVM block.
     /// Validation half of the step: computes + verifies and RETURNS the rows to
     /// stage; `None` = already stored (no-replay). The caller decides the batch.
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     pub fn evm_validate(
         header_store: &DbEvmHeaderStore,
@@ -2020,6 +2177,8 @@ pub fn flat_or_reconstruct_parent_snapshot(
     flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
     code: &crate::model::stores::evm::DbEvmCodeStore,
     header_store: &crate::model::stores::evm::DbEvmHeaderStore,
+    l1_headers_store: &crate::model::stores::headers::DbHeadersStore,
+    evm_activation_daa_score: u64,
     checkpoint_store: &crate::model::stores::evm::DbEvmStateCheckpointStore,
     diff_store: &crate::model::stores::evm::DbEvmStateDiffStore,
 ) -> Result<(kaspa_consensus_core::evm::EvmStateSnapshot, ParentSeedSource), ParentSeedError> {
@@ -2056,12 +2215,22 @@ pub fn flat_or_reconstruct_parent_snapshot(
         selected_parent,
         |b| checkpoint_store.get(b),
         |b| diff_store.get(b),
-        |b| match header_store.has(b) {
-            Ok(v) => v,
-            Err(_) => {
-                store_errored.set(true);
-                false
-            }
+        |b| {
+            classify_parent_for_anchor(
+                b,
+                evm_activation_daa_score,
+                |h| match header_store.has(h) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        store_errored.set(true);
+                        false
+                    }
+                },
+                |h| {
+                    use crate::model::stores::headers::HeaderStoreReader;
+                    l1_headers_store.get_daa_score(h).ok()
+                },
+            )
         },
     )
     .map_err(|e| match e {
@@ -2154,6 +2323,7 @@ mod s6_seed_tests {
         let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
         let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
         let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
+        let l1_headers_store = crate::model::stores::headers::DbHeadersStore::new(db.clone(), CachePolicy::Empty, CachePolicy::Empty);
         let checkpoint_store = DbEvmStateCheckpointStore::new(db.clone(), CachePolicy::Empty);
         let diff_store = DbEvmStateDiffStore::new(db.clone(), CachePolicy::Empty);
 
@@ -2166,6 +2336,14 @@ mod s6_seed_tests {
 
         // Persist headers (committed state roots) for the EVM blocks.
         let mut batch = WriteBatch::default();
+        // HOTFIX: L1 headers for the pre-activation blocks. A real node always has
+        // these (genesis + pruning point are never reclaimed); "pre-activation" is
+        // proved from the DAA score, not inferred from a missing EVM header.
+        for pre_block in [genesis, pre] {
+            let mut l1 = kaspa_consensus_core::header::Header::from_precomputed_hash(pre_block, vec![]);
+            l1.daa_score = 0;
+            l1_headers_store.insert_batch(&mut batch, pre_block, std::sync::Arc::new(l1), 0).unwrap();
+        }
         header_store.insert_batch(&mut batch, block_h, header_with_root(root_of(&s_h), 5)).unwrap();
         header_store.insert_batch(&mut batch, block_1, header_with_root(root_of(&s_1), 1)).unwrap();
         // §12 diff for block 1 over the empty genesis (genesis has no header ⇒ gather anchors empty).
@@ -2178,7 +2356,17 @@ mod s6_seed_tests {
         db.write(batch).unwrap();
 
         let seed = |parent: BlockHash, flat_head: Option<BlockHash>| {
-            flat_or_reconstruct_parent_snapshot(parent, flat_head, &flat, &code, &header_store, &checkpoint_store, &diff_store)
+            flat_or_reconstruct_parent_snapshot(
+                parent,
+                flat_head,
+                &flat,
+                &code,
+                &header_store,
+                &l1_headers_store,
+                100,
+                &checkpoint_store,
+                &diff_store,
+            )
         };
 
         // (1) Canonical head ⇒ materialize the flat store == s_h.
@@ -2237,6 +2425,7 @@ mod s6_seed_tests {
         let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
         let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
         let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
+        let l1_headers_store = crate::model::stores::headers::DbHeadersStore::new(db.clone(), CachePolicy::Empty, CachePolicy::Empty);
         let checkpoint_store = DbEvmStateCheckpointStore::new(db.clone(), CachePolicy::Empty);
         let diff_store = DbEvmStateDiffStore::new(db.clone(), CachePolicy::Empty);
 
@@ -2247,8 +2436,17 @@ mod s6_seed_tests {
         header_store.insert_batch(&mut batch, block_1, header_with_root(root_of(&s_1), 1)).unwrap();
         db.write(batch).unwrap();
 
-        let res =
-            flat_or_reconstruct_parent_snapshot(block_1, Some(h(0x11)), &flat, &code, &header_store, &checkpoint_store, &diff_store);
+        let res = flat_or_reconstruct_parent_snapshot(
+            block_1,
+            Some(h(0x11)),
+            &flat,
+            &code,
+            &header_store,
+            &l1_headers_store,
+            0,
+            &checkpoint_store,
+            &diff_store,
+        );
         assert!(matches!(res, Err(super::ParentSeedError::Unavailable(_))), "missing §12 history ⇒ Unavailable, got {res:?}");
     }
 
@@ -2263,6 +2461,7 @@ mod s6_seed_tests {
         let flat = DbEvmFlatAccountStore::new(db.clone(), CachePolicy::Empty);
         let code = DbEvmCodeStore::new(db.clone(), CachePolicy::Empty);
         let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
+        let l1_headers_store = crate::model::stores::headers::DbHeadersStore::new(db.clone(), CachePolicy::Empty, CachePolicy::Empty);
         let checkpoint_store = DbEvmStateCheckpointStore::new(db.clone(), CachePolicy::Empty);
         let diff_store = DbEvmStateDiffStore::new(db.clone(), CachePolicy::Empty);
 
@@ -2282,8 +2481,17 @@ mod s6_seed_tests {
         .unwrap();
         db.write(batch).unwrap();
 
-        let res =
-            flat_or_reconstruct_parent_snapshot(block_h, Some(block_h), &flat, &code, &header_store, &checkpoint_store, &diff_store);
+        let res = flat_or_reconstruct_parent_snapshot(
+            block_h,
+            Some(block_h),
+            &flat,
+            &code,
+            &header_store,
+            &l1_headers_store,
+            0,
+            &checkpoint_store,
+            &diff_store,
+        );
         assert!(matches!(res, Err(super::ParentSeedError::Corrupt(_))), "flat-head missing code ⇒ Corrupt (halt), got {res:?}");
     }
 }
@@ -2599,6 +2807,7 @@ mod tests {
     fn driver_gathers_mergeset_validates_persists_and_never_replays() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
+        let _l1_headers_store = crate::model::stores::headers::DbHeadersStore::new(db.clone(), CachePolicy::Empty, CachePolicy::Empty);
         let state_store = DbEvmStateStore::new(db.clone(), CachePolicy::Empty);
         let payload_store = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty);
         let receipts_store = crate::model::stores::evm::DbEvmReceiptsStore::new(db.clone(), CachePolicy::Empty);

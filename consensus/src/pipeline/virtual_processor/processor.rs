@@ -1120,6 +1120,8 @@ impl VirtualStateProcessor {
             &self.evm_flat_account_store,
             &self.evm_code_store,
             &self.evm_header_store,
+            &self.headers_store,
+            self.evm_activation_daa_score,
             &self.evm_state_checkpoint_store,
             &self.evm_state_diff_store,
         ) {
@@ -4051,9 +4053,8 @@ impl VirtualStateProcessor {
         #[cfg(feature = "evm")]
         {
             use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
-            if let Ok(Some(ptr)) = self.evm_latest_state_ptr_store.read().get()
-                && ptr.canonical_head == pruning_point
-            {
+            let flat_head = self.evm_latest_state_ptr_store.read().get().ok().flatten().map(|p| p.canonical_head);
+            if flat_head == Some(pruning_point) {
                 return match crate::processes::evm::materialize_snapshot(&self.evm_flat_account_store, &self.evm_code_store) {
                     Ok(snapshot) => Some((header, snapshot)),
                     Err(e) => {
@@ -4062,27 +4063,76 @@ impl VirtualStateProcessor {
                     }
                 };
             }
-            let (seed, forward_diffs) = match crate::processes::evm::gather_reconstruction_inputs(
-                pruning_point,
-                |b| self.evm_state_checkpoint_store.get(b),
-                |b| self.evm_state_diff_store.get(b),
-                |b| self.evm_header_store.get(b).optional().unwrap().is_some(),
-            ) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("[evm] pruning-point §12 reconstruct gather failed for {pruning_point}: {e}");
-                    return None;
-                }
+            // HOTFIX: forward walk into an Option, so its failure FALLS THROUGH to
+            // the inverse-walk derivation instead of returning None (the break).
+            let forward = (|| {
+                let (seed, forward_diffs) = crate::processes::evm::gather_reconstruction_inputs(
+                    pruning_point,
+                    |b| self.evm_state_checkpoint_store.get(b),
+                    |b| self.evm_state_diff_store.get(b),
+                    |b| {
+                        crate::processes::evm::classify_parent_for_anchor(
+                            b,
+                            self.evm_activation_daa_score,
+                            |h| self.evm_header_store.get(h).optional().unwrap().is_some(),
+                            |h| self.headers_store.get_daa_score(h).ok(),
+                        )
+                    },
+                )
+                .ok()?;
+                kaspa_evm::reconstruct::reconstruct_evm_state(
+                    &seed,
+                    &forward_diffs,
+                    |h| self.evm_code_store.get(*h).ok().flatten(),
+                    header.state_root,
+                )
+                .ok()
+            })();
+            if let Some(snapshot) = forward {
+                return Some((header, snapshot));
+            }
+
+            // HOTFIX (derivation): the forward walk found no usable anchor. Derive
+            // the pruning-point state by walking the flat head DOWN over the retained
+            // (pp, tip] diffs, root-verified — no anchor below pp needed. This is what
+            // makes serving self-healing: a node with no anchor still serves the
+            // correct state instead of nothing (the break) or the empty state. On
+            // success, cache it as a 221 anchor so the next serve takes the fast
+            // forward path.
+            let Some(fh) = flat_head else {
+                warn!("[evm] pruning-point {pruning_point} cannot be served: no anchor and no flat backend to derive from");
+                return None;
             };
-            match kaspa_evm::reconstruct::reconstruct_evm_state(
-                &seed,
-                &forward_diffs,
-                |h| self.evm_code_store.get(*h).ok().flatten(),
+            const PP_DERIVE_MAX_STEPS: usize = 4_000_000;
+            match crate::processes::evm::reconstruct_pruning_point_snapshot_verified(
+                pruning_point,
                 header.state_root,
+                fh,
+                &self.evm_flat_account_store,
+                &self.evm_code_store,
+                &self.evm_state_diff_store,
+                PP_DERIVE_MAX_STEPS,
             ) {
-                Ok(snapshot) => Some((header, snapshot)),
+                Ok(snapshot) => {
+                    // Cache as a 221 V1 anchor (best-effort, off the serve's path).
+                    if !self.evm_state_checkpoint_store.has(pruning_point).unwrap_or(false) {
+                        let cp = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(
+                            pruning_point,
+                            header.evm_number,
+                            header.state_root,
+                            &snapshot,
+                        );
+                        let mut batch = WriteBatch::default();
+                        if self.evm_state_checkpoint_store.insert_batch(&mut batch, pruning_point, cp).is_ok()
+                            && self.db.write(batch).is_ok()
+                        {
+                            info!("[evm] cached the derived pruning-point {pruning_point} state as a 221 anchor");
+                        }
+                    }
+                    Some((header, snapshot))
+                }
                 Err(e) => {
-                    warn!("[evm] pruning-point §12 reconstruct failed for {pruning_point}: {e}");
+                    warn!("[evm] pruning-point {pruning_point} state could not be derived from the flat head ({e})");
                     None
                 }
             }
