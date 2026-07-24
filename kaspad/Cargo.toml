@@ -26,6 +26,7 @@ kaspa-consensus.workspace = true
 kaspa-consensusmanager.workspace = true
 kaspa-core.workspace = true
 kaspa-database.workspace = true
+bincode.workspace = true
 # Ethereum JSON-RPC adapter — only linked under the `evm` feature (keeps the
 # default node secp-free; the adapter itself pulls no revm). kaspa-evm provides
 # the read-only eth_call/estimateGas simulation behind the adapter.

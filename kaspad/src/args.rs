@@ -466,12 +466,21 @@ pub fn cli() -> Command {
                 .num_args(0..=1)
                 .require_equals(true)
                 .default_missing_value(crate::db_stats::MODE_ESTIMATE)
-                .value_parser([crate::db_stats::MODE_ESTIMATE, crate::db_stats::MODE_COUNT_ROWS])
+                .value_parser([
+                    crate::db_stats::MODE_ESTIMATE,
+                    crate::db_stats::MODE_COUNT_ROWS,
+                    crate::db_stats::MODE_PAYLOADS,
+                    crate::db_stats::MODE_SKIPS,
+                    crate::db_stats::MODE_CLASS2,
+                ])
                 .help("Print a per-store size report for the consensus database and EXIT without starting the node. \
                        Every store shares one column family behind a one-byte key prefix, so `du` can only report the \
                        directory total; this attributes it. Opens the database READ-ONLY, so it is safe to run against \
                        a live node. `estimate` (default) reads SST metadata; `count-rows` adds exact row counts via a \
-                       full scan (minutes on a large database)."),
+                       full scan (minutes on a large database). EVM-lane diagnostics (--features evm): `payloads` \
+                       attributes the 211 EvmPayload bytes to their fields; `skips` gives the 204 acceptance/skip-class \
+                       distribution; `class2` decodes never-accepted txs and pins the class-2 sub-cause + source-address \
+                       concentration."),
         )
         .arg(
             Arg::new("evm-storage-profile")
