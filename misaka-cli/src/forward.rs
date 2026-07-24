@@ -187,6 +187,20 @@ pub fn node(
     exec("kaspad", "MISAKA_KASPAD_BIN", &[], &injected, args)
 }
 
+/// `misaka node db-stats` → `kaspad <net-flags> --db-stats[=count-rows]`.
+///
+/// Forwarded rather than reimplemented: reading the report needs RocksDB, and
+/// linking it into `misaka` would put a C++ build into the lightweight operator
+/// CLI for one diagnostic. `kaspad` already has it, is already installed next to
+/// the database, and opens it read-only.
+pub fn node_db_stats(ctx: &Ctx, count_rows: bool, args: &[String]) -> CliResult {
+    let mut injected = node_injection(&ctx.network, None, None, false, None, args)?;
+    if !has_flag(args, &["--db-stats"]) {
+        injected.push(if count_rows { "--db-stats=count-rows".to_string() } else { "--db-stats=estimate".to_string() });
+    }
+    exec("kaspad", "MISAKA_KASPAD_BIN", &[], &injected, args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

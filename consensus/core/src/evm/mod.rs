@@ -30,6 +30,15 @@ pub use log_index::*;
 mod state_diff;
 pub use state_diff::*;
 
+mod checkpoint_v2;
+pub use checkpoint_v2::*;
+
+mod segment;
+pub use segment::*;
+
+mod cold_segment;
+pub use cold_segment::*;
+
 use crate::tx::{ScriptPublicKey, TransactionOutpoint};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{EvmH256, Hash64, blake2b_512_keyed};
@@ -693,6 +702,83 @@ impl MemSizeEstimator for EvmExecutionPayload {
     }
 }
 
+/// The `format_version` sentinel that marks a SLIM (content-addressed) EvmPayload
+/// row apart from a legacy full one under the SAME prefix 211. A legacy value is
+/// `bincode(EvmExecutionPayload)`, whose first serialized field is the
+/// `system_ops` vector length — bounded far below this sentinel
+/// ([`MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK`]), so a legacy row's leading bytes can
+/// never equal it. The reader decodes this field first and falls back to the
+/// legacy form when it does not match, making the two formats unambiguous during
+/// the ~one-window transient while old rows drain out with pruning.
+pub const SLIM_EVM_PAYLOAD_MAGIC: u16 = 0xE711;
+
+/// Content-addressed EvmPayload storage form (prefix 211): the payload envelope
+/// (system ops, coinbase, extra data) plus the ordered tx-hash references, with
+/// the raw tx bytes held ONCE in the raw-tx store (217, keyed by the same hash)
+/// rather than inline in every payload that carries them.
+///
+/// The full payload is reconstructed on read. Because
+/// [`EvmExecutionPayload::payload_bytes`] is a deterministic borsh encoding and
+/// the raws are stored verbatim, `reconstruct(from_full(p)) == p` and its
+/// `payload_bytes()` are byte-identical to `p`'s — the `evm_payload_hash`
+/// commitment is unchanged, so this is a storage-only change (no fork). It
+/// collapses the re-inclusion amplification of a repeated tx to 1 copy for every
+/// cause, structural or adversarial.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlimEvmPayload {
+    /// [`SLIM_EVM_PAYLOAD_MAGIC`] — the format discriminator, decoded first.
+    pub format_version: u16,
+    pub system_ops: Vec<EvmSystemOp>,
+    /// `keccak256(raw)` per tx, in payload order — references into the 217 raw-tx
+    /// store. Multiplicity and order are preserved, so a payload that (legally)
+    /// repeats a tx reconstructs identically.
+    pub tx_hashes: Vec<EvmH256>,
+    pub evm_coinbase: EvmAddress,
+    pub extra_data: Vec<u8>,
+}
+
+impl SlimEvmPayload {
+    /// Build the slim form from a full payload, hashing each raw tx with `hash`
+    /// (the same keccak the 217 store keys by). `hash` is injected so this stays
+    /// in consensus-core without a dependency on the EVM tx layer.
+    pub fn from_full(p: &EvmExecutionPayload, mut hash: impl FnMut(&[u8]) -> EvmH256) -> Self {
+        Self {
+            format_version: SLIM_EVM_PAYLOAD_MAGIC,
+            system_ops: p.system_ops.clone(),
+            tx_hashes: p.transactions.iter().map(|t| hash(t)).collect(),
+            evm_coinbase: p.evm_coinbase,
+            extra_data: p.extra_data.clone(),
+        }
+    }
+
+    /// Reconstruct the full payload, resolving each tx hash to its raw bytes via
+    /// `raw_of`. Returns `None` if ANY referenced raw is missing — a store fault,
+    /// never a silent partial payload: the raw must outlive every payload that
+    /// owns it, which the 227 owner refcount guarantees.
+    pub fn reconstruct(&self, mut raw_of: impl FnMut(&EvmH256) -> Option<Vec<u8>>) -> Option<EvmExecutionPayload> {
+        let mut transactions = Vec::with_capacity(self.tx_hashes.len());
+        for h in &self.tx_hashes {
+            transactions.push(raw_of(h)?);
+        }
+        Some(EvmExecutionPayload {
+            system_ops: self.system_ops.clone(),
+            transactions,
+            evm_coinbase: self.evm_coinbase,
+            extra_data: self.extra_data.clone(),
+        })
+    }
+}
+
+impl MemSizeEstimator for SlimEvmPayload {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.tx_hashes.capacity() * size_of::<EvmH256>()
+            + self.system_ops.capacity() * size_of::<EvmSystemOp>()
+            + self.extra_data.capacity()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // EvmExecutionHeader — executor output, committed via evm_commitment_root.
 // ---------------------------------------------------------------------------
@@ -1181,6 +1267,91 @@ impl EvmHistoryMode {
     }
 }
 
+/// A node's EVM STORAGE profile (`--evm-storage-profile`) — one named bundle in
+/// place of the four independent C-01 knobs (`--evm-history-mode`,
+/// `--evm-shadow-state-backend`, `--evm-flat-authoritative`, `--evm-retire-206`).
+///
+/// The knobs have a dependency chain (retire needs flat-authoritative needs
+/// shadow) and a half-configured chain is silently demoted to a no-op with a
+/// warning, so the *capacity-critical* setting — "stop writing a full EVM state
+/// copy per block into prefix 206" — was easy to believe was on while it was off.
+/// A profile is a single value that either expands to a valid combination or is
+/// rejected at startup; it can never partially apply.
+///
+/// Node-local and consensus-NEUTRAL in every variant: no expansion changes block
+/// validity, only which representation of the same state this node persists.
+/// The IRREVERSIBLE one-shot reclamation of already-written 206 rows
+/// (`--evm-prune-legacy-206`) is deliberately NOT part of any profile — it stays
+/// an explicit operator action.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvmStorageProfile {
+    /// Pre-C-01 behaviour: the per-block 206 full-state snapshot is the sole
+    /// persisted state; no flat backend. Storage is O(state × kept blocks).
+    /// The historical default, kept so an operator can pin it explicitly.
+    #[default]
+    Legacy,
+    /// Migration/validation step: the flat backend is built and checked against
+    /// the committed snapshot every block, but 206 is still written (so it is
+    /// fully reversible). Storage is O(state × kept blocks) + O(state).
+    Shadow,
+    /// The capacity-safe production profile: `recent` history + shadow + flat
+    /// authoritative + 206 retired. The flat backend is the only persisted
+    /// state, so storage is O(state) instead of O(state × kept blocks).
+    Compact,
+    /// `compact` plus `archive` history — historical state stays queryable via
+    /// the §12 checkpoint + diff chain rather than via a per-block full copy.
+    Archive,
+}
+
+impl EvmStorageProfile {
+    /// Parse the `--evm-storage-profile` value; `None` for an unknown string.
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "legacy" => Some(Self::Legacy),
+            "shadow" => Some(Self::Shadow),
+            "compact" => Some(Self::Compact),
+            "archive" => Some(Self::Archive),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Shadow => "shadow",
+            Self::Compact => "compact",
+            Self::Archive => "archive",
+        }
+    }
+
+    /// The four knob values this profile expands to:
+    /// `(history_mode, shadow_state_backend, flat_authoritative, retire_206)`.
+    pub fn expand(self) -> (EvmHistoryMode, bool, bool, bool) {
+        match self {
+            Self::Legacy => (EvmHistoryMode::Recent, false, false, false),
+            Self::Shadow => (EvmHistoryMode::Recent, true, false, false),
+            Self::Compact => (EvmHistoryMode::Recent, true, true, true),
+            Self::Archive => (EvmHistoryMode::Archive, true, true, true),
+        }
+    }
+
+    /// Whether this profile stops the per-block 206 full-state write — i.e.
+    /// whether it bounds EVM state storage at O(state) rather than
+    /// O(state × kept blocks). The one property an operator actually needs to
+    /// read off a node's startup log.
+    pub fn retires_legacy_snapshots(self) -> bool {
+        self.expand().3
+    }
+
+    /// A one-line rendering of the expansion for the startup log, so the
+    /// EFFECTIVE configuration is visible without cross-referencing four flags.
+    pub fn describe_expansion(self) -> String {
+        let (history, shadow, flat, retire) = self.expand();
+        format!("history={} shadow-state-backend={} flat-authoritative={} retire-206={}", history.as_str(), shadow, flat, retire)
+    }
+}
+
 /// A canonical-resolved receipt view (§16 `eth_getTransactionReceipt`
 /// semantics): the ACCEPTING chain block currently on the selected chain, its
 /// EVM number, and the executed receipt. `None` upstream = the tx is not
@@ -1501,6 +1672,46 @@ mod tests {
         // Domain separation from the execution commitment (b"EvmPayload64" vs
         // b"EvmCommitment64"): the two roots can never alias.
         assert_ne!(h_empty, EvmExecutionHeader::default().commitment_root());
+    }
+
+    #[test]
+    fn slim_payload_reconstructs_byte_exact() {
+        // The whole storage-only dedup rests on this: reconstructing from the slim
+        // form + the raw-tx store yields a payload whose commitment preimage is
+        // byte-identical, so `evm_payload_hash` is unchanged (no fork).
+        let raws: Vec<Vec<u8>> = vec![vec![0x02, 0xf8, 0x69, 1, 2, 3], vec![0x02, 0xaa, 0xbb], vec![0x02, 0xf8, 0x69, 1, 2, 3]];
+        let p = EvmExecutionPayload {
+            system_ops: vec![],
+            transactions: raws.clone(),
+            evm_coinbase: EvmAddress::from_bytes([0x11; 20]),
+            extra_data: vec![9, 8, 7],
+        };
+        // A stand-in injective hash (the real path uses keccak); len+first byte
+        // distinguishes our fixtures and IDENTICAL raws map to the SAME hash,
+        // exercising the repeated-tx case (index 0 and 2 are equal).
+        let h = |raw: &[u8]| {
+            let mut b = [0u8; 32];
+            b[0] = raw.len() as u8;
+            if let Some(f) = raw.first() {
+                b[1] = *f;
+            }
+            b[2] = raw.get(2).copied().unwrap_or(0);
+            EvmH256::from_bytes(b)
+        };
+        let slim = SlimEvmPayload::from_full(&p, |r| h(r));
+        assert_eq!(slim.format_version, SLIM_EVM_PAYLOAD_MAGIC);
+        assert_eq!(slim.tx_hashes.len(), 3);
+        assert_eq!(slim.tx_hashes[0], slim.tx_hashes[2], "identical raws share a hash (dedup target)");
+
+        let map: std::collections::HashMap<EvmH256, Vec<u8>> = raws.iter().map(|r| (h(r), r.clone())).collect();
+        let back = slim.reconstruct(|hash| map.get(hash).cloned()).expect("all raws present");
+        assert_eq!(back, p, "reconstructed struct equals the original (order + multiplicity)");
+        assert_eq!(back.payload_bytes(), p.payload_bytes(), "byte-exact commitment preimage");
+        assert_eq!(back.payload_hash(), p.payload_hash(), "byte-exact commitment hash");
+
+        // A missing raw is a store fault, surfaced as None — never a silent
+        // partial payload that would mis-execute or mis-serve.
+        assert!(slim.reconstruct(|_| None).is_none());
     }
 
     #[test]

@@ -204,16 +204,64 @@ pub enum DatabaseStorePrefixes {
     /// kaspa-pq EVM Lane (§12 archive) — content-addressed `code_hash → code` store so
     /// diffs/checkpoints carry only the code hash. RPC/archive data only.
     EvmCode = 222,
+    /// kaspa-pq EVM Lane (§12.3 v2) — keyed by `BlockHash`: a SPARSE
+    /// [`EvmStateCheckpointV2`] anchor. Compressed, bytecode-free (only `code_hash`;
+    /// the code is in 222) and written only at canonical anchors, replacing 221's
+    /// uncompressed full-state copy every 2048 blocks. 221 stays readable for
+    /// databases written before the change; the segment pruner reclaims it.
+    /// RPC/archive data only.
+    EvmStateCheckpointV2 = 223,
+    /// kaspa-pq EVM Lane (§12.3 v2) — singleton `EvmCheckpointMeta`: when the last
+    /// anchor was written and which anchors are retained, so the cadence is a
+    /// decision with state rather than `evm_number % N`.
+    EvmCheckpointMeta = 224,
+    /// kaspa-pq EVM Lane (segment pruner) — `EvmPruneSegment → EvmPruneCursor`: how far
+    /// each EVM data segment has been reclaimed and from where it is still available.
+    /// Lets EVM retention run while L1 pruning is deferred (transitional IBD), which is
+    /// the window in which the 144 GB incident accumulated.
+    EvmPruneCursor = 225,
+    /// kaspa-pq EVM Lane (segment pruner) — `BlockHash → EvmBlockIndexJournal`: the exact
+    /// secondary-index rows a block created (log postings, tx hashes). A reverse journal
+    /// is what makes deleting them exact instead of a range guess.
+    EvmBlockIndexJournal = 226,
+    /// kaspa-pq EVM Lane (segment pruner) — `tx_hash → EvmRawTxOwners`: which retained
+    /// payload blocks still own a raw transaction. A raw tx is reclaimed only when the
+    /// last owner is pruned; 204's bounded location vectors evict and so cannot serve as
+    /// the ownership ledger.
+    EvmRawTxOwners = 227,
+    /// kaspa-pq EVM Lane (222 GC) — `code_hash → EvmCodeQuarantine`: bytecode that a
+    /// mark-and-sweep pass found unreachable, held for a grace period before deletion so
+    /// a transient mark miss cannot destroy shared code.
+    EvmCodeQuarantine = 228,
+    /// kaspa-pq EVM Lane (cold history) — singleton `EvmColdSegmentManifest`: the
+    /// immutable, compressed history segments exported out of RocksDB and the ranges
+    /// they cover.
+    EvmColdSegmentManifest = 229,
+    /// kaspa-pq EVM Lane (C-01 state backend, Stage 2) — `EvmAddress → FlatAccountCore`:
+    /// nonce/balance/code_hash only. Splitting storage out (233) stops a one-slot write
+    /// from rewriting an account's entire storage vector.
+    EvmFlatAccountCore = 230,
     /// kaspa-pq EVM Lane (C-01 state backend, Stage 1) — singleton `EvmLatestStatePtr`:
     /// the block whose `state_root` the flat state currently materializes. State data.
     EvmLatestStatePtr = 231,
     /// kaspa-pq EVM Lane (C-01 state backend, Stage 1) — `BlockHash → state_root[32]`:
     /// O(1) lookup of any committed block's EVM state root. State/RPC data.
     EvmBlockStateRoot = 232,
+    /// kaspa-pq EVM Lane (C-01 state backend, Stage 2) — `EvmAddress|slot → EvmU256`:
+    /// one row per non-zero storage slot. The companion of 230; together they replace
+    /// 234's single row per account holding the whole storage vector.
+    EvmFlatStorageSlot = 233,
     /// kaspa-pq EVM Lane (C-01 state backend, Stage 1) — `EvmAddress → FlatAccount`: the
     /// flat LATEST-canonical state (one row per account, NOT per block), replacing the
     /// per-block O(state × blocks) snapshot. Code is content-addressed (222). State data.
     EvmFlatAccount = 234,
+    /// kaspa-pq EVM Lane — content-addressed EvmPayload (`BlockHash → SlimEvmPayload`):
+    /// the payload envelope + ordered tx-hash references, with the raw tx bytes held
+    /// ONCE in 217. Supersedes the inline `transactions` of prefix 211 (which keeps
+    /// LEGACY full rows that drain with pruning); the full payload is reconstructed on
+    /// read from 217, byte-identically, so the `evm_payload_hash` commitment is
+    /// unchanged. Storage-only dedup — a tx repeated across payloads costs one copy.
+    EvmPayloadSlim = 235,
 
     // ---- kaspa-pq ADR-0039 PALW (audited-compute lane) ----
     /// Keyed by `BlockHash`: the `PalwActiveNullifierSet` — the retention-windowed set of ticket

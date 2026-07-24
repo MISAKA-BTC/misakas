@@ -1,7 +1,10 @@
 pub mod args;
 pub mod daemon;
+pub mod db_stats;
+pub mod disk_guard;
 #[cfg(feature = "evm")]
 pub mod eth_rpc;
+pub mod evm_retention;
 pub mod palw_da_spool;
 pub mod palw_mine_service;
 pub mod validator_service;

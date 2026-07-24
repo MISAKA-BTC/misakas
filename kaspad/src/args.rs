@@ -1,7 +1,7 @@
 use clap::{Arg, ArgAction, Command, arg};
 use kaspa_consensus_core::{
     config::Config,
-    evm::EvmHistoryMode,
+    evm::{EvmHistoryMode, EvmNodeRole, EvmSegmentExport, EvmStorageProfile},
     network::{NetworkId, NetworkType},
     palw_pruned_frontier::{PalwPruningSnapshotCheckpoint, validate_palw_pruning_snapshot_checkpoints},
 };
@@ -106,6 +106,34 @@ pub struct Args {
     /// adapter (effective only in an `--features evm` build).
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub evm_rpc_listen: Option<ContextualNetAddress>,
+    /// Diagnostic mode: print a per-store size report for the consensus database and exit
+    /// WITHOUT starting the node. `estimate` (default) is cheap and safe against a live
+    /// node; `count-rows` adds exact row counts via a full scan. Read-only in both cases.
+    #[serde(default)]
+    pub db_stats: Option<String>,
+    /// kaspa-pq EVM Lane (C-01, storage profile): ONE named bundle in place of the four
+    /// independent knobs below (`evm_history_mode`, `evm_shadow_state_backend`,
+    /// `evm_flat_authoritative`, `evm_retire_206`). Unset = the individual knobs govern
+    /// (backward compatible). When set, it expands to a known-valid combination and any
+    /// explicit knob that CONTRADICTS the expansion is a startup error, not a silent
+    /// override — the four-knob chain was the config in which the capacity-critical
+    /// `retire-206` could be believed on while it was demoted to a no-op.
+    #[serde(default)]
+    pub evm_storage_profile: Option<EvmStorageProfile>,
+    /// kaspa-pq EVM Lane (segment retention): what this node's EVM data is FOR.
+    ///
+    /// Sets per-segment retention. Orthogonal to `evm_storage_profile`, which is about
+    /// how the CURRENT state is represented; this is about how much HISTORY is kept and
+    /// for how long. Node-local and consensus-neutral.
+    #[serde(default)]
+    pub evm_node_role: EvmNodeRole,
+    /// §5.8: export finalized EVM history to cold segments at pruning advance
+    /// (off|async), and the directory for the segment files. When async with a dir,
+    /// the pruning processor archives history it is about to reclaim BEFORE deleting
+    /// it, and never deletes an EVM row the export has not covered. Node-local.
+    #[serde(default)]
+    pub evm_segment_export: EvmSegmentExport,
+    pub evm_segment_dir: Option<String>,
     /// kaspa-pq EVM Lane (§12 archive): EVM state-history retention mode
     /// (`head`/`recent`/`archive`). Default `recent`. Effective only in an
     /// `--features evm` build; the diff/checkpoint retention enforcement lands with
@@ -315,6 +343,11 @@ impl Default for Args {
             logdir: None,
             rpclisten: None,
             evm_rpc_listen: None,
+            db_stats: None,
+            evm_storage_profile: None,
+            evm_node_role: EvmNodeRole::default(),
+            evm_segment_export: EvmSegmentExport::Off,
+            evm_segment_dir: None,
             evm_history_mode: EvmHistoryMode::Recent,
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,
@@ -379,6 +412,17 @@ impl Args {
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
         config.evm_retire_206 = self.evm_retire_206; // C-01 S9b: stop persisting the per-block 206 snapshot
         config.evm_prune_legacy_206 = self.evm_prune_legacy_206; // C-01 S9b-prune: one-shot bulk reclamation of legacy 206
+        // Segment retention, plus the one cross-cutting write gate it owns: a trace
+        // replay plan is written only when something can actually ask for it.
+        config.evm_retention_policy = kaspa_consensus_core::evm::EvmRetentionPolicy::for_role(self.evm_node_role);
+        if self.evm_rpc_listen.is_none() {
+            config.evm_retention_policy.trace_replay = kaspa_consensus_core::evm::SegmentRetention::Off;
+        }
+        // Archive history and archive retention are the same decision stated twice;
+        // keep them from disagreeing.
+        if matches!(self.evm_history_mode, EvmHistoryMode::Archive) {
+            config.evm_checkpoint_policy = kaspa_consensus_core::evm::EvmCheckpointPolicy::archive();
+        }
 
         // kaspa-pq ADR-0040 P0-3 — the algo-4 ACCEPTANCE lever. Shipped `false` on every preset; only an
         // explicit `--palw-enable-algo4` opens it, and only on a preset where PALW is actually active.
@@ -486,12 +530,88 @@ pub fn cli() -> Command {
                 .help("Interface:port for the Ethereum JSON-RPC HTTP adapter (EVM lane; default port: 8545). Effective only in an --features evm build."),
         )
         .arg(
+            Arg::new("db-stats")
+                .long("db-stats")
+                .env("KASPAD_DB_STATS")
+                .value_name("MODE")
+                .num_args(0..=1)
+                .require_equals(true)
+                .default_missing_value(crate::db_stats::MODE_ESTIMATE)
+                .value_parser([
+                    crate::db_stats::MODE_ESTIMATE,
+                    crate::db_stats::MODE_COUNT_ROWS,
+                    crate::db_stats::MODE_PAYLOADS,
+                    crate::db_stats::MODE_SKIPS,
+                    crate::db_stats::MODE_CLASS2,
+                ])
+                .help("Print a per-store size report for the consensus database and EXIT without starting the node. \
+                       Every store shares one column family behind a one-byte key prefix, so `du` can only report the \
+                       directory total; this attributes it. Opens the database READ-ONLY, so it is safe to run against \
+                       a live node. `estimate` (default) reads SST metadata; `count-rows` adds exact row counts via a \
+                       full scan (minutes on a large database). EVM-lane diagnostics (--features evm): `payloads` \
+                       attributes the 211 EvmPayload bytes to their fields; `skips` gives the 204 acceptance/skip-class \
+                       distribution; `class2` decodes never-accepted txs and pins the class-2 sub-cause + source-address \
+                       concentration."),
+        )
+        .arg(
+            Arg::new("evm-storage-profile")
+                .long("evm-storage-profile")
+                .env("KASPAD_EVM_STORAGE_PROFILE")
+                .require_equals(true)
+                .value_name("PROFILE")
+                .value_parser(["legacy", "shadow", "compact", "archive"])
+                .help("EVM storage profile — ONE named bundle in place of --evm-history-mode / --evm-shadow-state-backend / \
+                       --evm-flat-authoritative / --evm-retire-206: \
+                       legacy (pre-C-01; a FULL EVM state copy is persisted per block — storage is O(state x kept blocks)) | \
+                       shadow (build + verify the flat backend, 206 still written; the reversible migration step) | \
+                       compact (RECOMMENDED: recent history + flat backend authoritative + 206 retired — storage O(state)) | \
+                       archive (compact + archive history; historical state served from checkpoints + diffs). \
+                       An individual knob that contradicts the profile is a startup ERROR, never a silent override. \
+                       Unset = the individual knobs govern. Node-local and consensus-neutral; effective only in an --features evm build."),
+        )
+        .arg(
+            Arg::new("evm-node-role")
+                .long("evm-node-role")
+                .env("KASPAD_EVM_NODE_ROLE")
+                .require_equals(true)
+                .value_name("ROLE")
+                .value_parser(["compact-validator", "rpc-recent", "archive-indexer"])
+                .help("What this node's EVM history is FOR, as per-segment retention: \
+                       compact-validator (validates only — no log index, no traces, short RPC windows) | \
+                       rpc-recent (DEFAULT: bounded recent history for RPC) | \
+                       archive-indexer (keep everything, forever — the posture that grows without bound, \
+                       so it must be chosen rather than inherited). \
+                       Retention runs on its own schedule and does NOT wait for L1 pruning, which stands down \
+                       for the whole of IBD. Orthogonal to --evm-storage-profile, which is about the CURRENT \
+                       state's representation rather than history. Node-local and consensus-neutral."),
+        )
+        .arg(
+            Arg::new("evm-segment-export")
+                .long("evm-segment-export")
+                .env("KASPAD_EVM_SEGMENT_EXPORT")
+                .require_equals(true)
+                .value_name("MODE")
+                .value_parser(["off", "async"])
+                .help("§5.8: export finalized EVM history to immutable cold segments at pruning advance: off (default) | \
+                       async. With async + --evm-segment-dir, the pruner archives the range it is about to reclaim into \
+                       segment files BEFORE deleting the rows, and never deletes an EVM row the export has not covered \
+                       (the interlock). L1 pruning is never delayed. Node-local; effective only in an --features evm build."),
+        )
+        .arg(
+            Arg::new("evm-segment-dir")
+                .long("evm-segment-dir")
+                .env("KASPAD_EVM_SEGMENT_DIR")
+                .require_equals(true)
+                .value_name("PATH")
+                .help("Directory for cold EVM history segment files (§5.8). Required for --evm-segment-export=async."),
+        )
+        .arg(
             Arg::new("evm-history-mode")
                 .long("evm-history-mode")
                 .env("KASPAD_EVM_HISTORY_MODE")
                 .value_name("MODE")
                 .value_parser(["head", "recent", "archive"])
-                .help("EVM state-history retention: head | recent | archive (default: recent). Effective only in an --features evm build."),
+                .help("EVM state-history retention: head | recent | archive (default: recent). Effective only in an --features evm build. Prefer --evm-storage-profile."),
         )
         .arg(
             Arg::new("evm-shadow-state-backend")
@@ -910,6 +1030,20 @@ impl Args {
             no_log_files: arg_match_unwrap_or::<bool>(&m, "nologfiles", defaults.no_log_files),
             rpclisten: m.get_one::<ContextualNetAddress>("rpclisten").cloned().or(defaults.rpclisten),
             evm_rpc_listen: m.get_one::<ContextualNetAddress>("evm-rpc-listen").cloned().or(defaults.evm_rpc_listen),
+            db_stats: m.get_one::<String>("db-stats").cloned().or(defaults.db_stats.clone()),
+            evm_node_role: m
+                .get_one::<String>("evm-node-role")
+                .and_then(|s| EvmNodeRole::from_str_opt(s))
+                .unwrap_or(defaults.evm_node_role),
+            evm_segment_export: m
+                .get_one::<String>("evm-segment-export")
+                .and_then(|s| EvmSegmentExport::from_str_opt(s))
+                .unwrap_or(defaults.evm_segment_export),
+            evm_segment_dir: m.get_one::<String>("evm-segment-dir").cloned().or(defaults.evm_segment_dir),
+            evm_storage_profile: m
+                .get_one::<String>("evm-storage-profile")
+                .and_then(|s| EvmStorageProfile::from_str_opt(s))
+                .or(defaults.evm_storage_profile),
             evm_history_mode: m
                 .get_one::<String>("evm-history-mode")
                 .and_then(|s| EvmHistoryMode::from_str_opt(s))
@@ -1005,6 +1139,7 @@ impl Args {
         })?;
 
         apply_profile_defaults(&mut args, &m, &cfg_baseline);
+        apply_evm_storage_profile(&mut args, &m, &cfg_baseline)?;
 
         if arg_match_unwrap_or::<bool>(&m, "enable-mainnet-mining", false) {
             println!("\nNOTE: The flag --enable-mainnet-mining is deprecated and defaults to true also w/o explicit setting\n")
@@ -1055,6 +1190,70 @@ impl Args {
             _ => {}
         }
     }
+}
+
+/// Expand `--evm-storage-profile` into the four C-01 storage knobs.
+///
+/// The four knobs form a dependency chain (`retire-206` requires
+/// `flat-authoritative` requires `shadow-state-backend`) whose half-configured
+/// states are demoted to a no-op with a warning deep inside the virtual
+/// processor. That is how a node can be configured "to retire 206" and still
+/// persist a full EVM state copy per block. A profile removes the chain from the
+/// operator's hands: it either expands to a valid combination or the node
+/// refuses to start.
+///
+/// An individual knob that was set EXPLICITLY (CLI, env or config file) and
+/// CONTRADICTS the profile is an error rather than a silent override — the whole
+/// point is that the effective storage behaviour must never differ from what the
+/// operator believes they configured. Setting a knob redundantly to the value the
+/// profile already implies is accepted.
+fn apply_evm_storage_profile(args: &mut Args, m: &clap::ArgMatches, cfg: &Args) -> Result<(), clap::Error> {
+    let Some(profile) = args.evm_storage_profile else { return Ok(()) };
+    let (history, shadow, flat, retire) = profile.expand();
+
+    let stock = Args::default();
+    // Explicit = named on the CLI / in the environment, or carried by the config
+    // file with a non-stock value.
+    let explicit = |id: &str, cfg_differs: bool| m.value_source(id).map(|src| src != DefaultValue).unwrap_or(false) || cfg_differs;
+
+    let mut conflicts: Vec<String> = Vec::new();
+    if explicit("evm-history-mode", cfg.evm_history_mode != stock.evm_history_mode) && args.evm_history_mode != history {
+        conflicts.push(format!("--evm-history-mode={} (profile implies {})", args.evm_history_mode.as_str(), history.as_str()));
+    }
+    for (id, cfg_differs, actual, implied, flag) in [
+        (
+            "evm-shadow-state-backend",
+            cfg.evm_shadow_state_backend,
+            args.evm_shadow_state_backend,
+            shadow,
+            "--evm-shadow-state-backend",
+        ),
+        ("evm-flat-authoritative", cfg.evm_flat_authoritative, args.evm_flat_authoritative, flat, "--evm-flat-authoritative"),
+        ("evm-retire-206", cfg.evm_retire_206, args.evm_retire_206, retire, "--evm-retire-206"),
+    ] {
+        if explicit(id, cfg_differs) && actual != implied {
+            conflicts.push(format!("{flag}={actual} (profile implies {implied})"));
+        }
+    }
+
+    if !conflicts.is_empty() {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::ArgumentConflict,
+            format!(
+                "--evm-storage-profile={} conflicts with explicitly set EVM storage knobs: {}.\n\
+                 Drop the individual flag(s) and let the profile govern, or drop --evm-storage-profile \
+                 and configure the knobs yourself. A profile is never partially applied.\n",
+                profile.as_str(),
+                conflicts.join(", ")
+            ),
+        ));
+    }
+
+    args.evm_history_mode = history;
+    args.evm_shadow_state_backend = shadow;
+    args.evm_flat_authoritative = flat;
+    args.evm_retire_206 = retire;
+    Ok(())
 }
 
 fn apply_profile_defaults(args: &mut Args, m: &clap::ArgMatches, cfg: &Args) {
@@ -1193,6 +1392,73 @@ mod profile_tests {
         let mut argv = vec!["kaspad"];
         argv.extend_from_slice(extra);
         Args::parse(argv).expect("args parse")
+    }
+
+    fn parse_err(extra: &[&str]) -> clap::Error {
+        let mut argv = vec!["kaspad"];
+        argv.extend_from_slice(extra);
+        Args::parse(argv).expect_err("args parse should fail")
+    }
+
+    #[test]
+    fn evm_storage_profile_unset_leaves_knobs_at_legacy_defaults() {
+        // Backward compatibility: a node started without the profile behaves exactly as
+        // before — the individual knobs govern and all default off.
+        let a = parse(&[]);
+        assert!(a.evm_storage_profile.is_none());
+        assert_eq!(a.evm_history_mode, EvmHistoryMode::Recent);
+        assert!(!a.evm_shadow_state_backend);
+        assert!(!a.evm_flat_authoritative);
+        assert!(!a.evm_retire_206);
+    }
+
+    #[test]
+    fn evm_storage_profile_compact_expands_the_whole_chain() {
+        // The capacity fix: one flag turns off the per-block full-state 206 write, and
+        // it cannot land half-applied.
+        let a = parse(&["--evm-storage-profile=compact"]);
+        assert_eq!(a.evm_storage_profile, Some(EvmStorageProfile::Compact));
+        assert_eq!(a.evm_history_mode, EvmHistoryMode::Recent);
+        assert!(a.evm_shadow_state_backend);
+        assert!(a.evm_flat_authoritative);
+        assert!(a.evm_retire_206);
+        // Never implied: the irreversible bulk reclamation stays an explicit action.
+        assert!(!a.evm_prune_legacy_206);
+    }
+
+    #[test]
+    fn evm_storage_profile_archive_keeps_state_history_and_retires_206() {
+        let a = parse(&["--evm-storage-profile=archive"]);
+        assert_eq!(a.evm_history_mode, EvmHistoryMode::Archive);
+        assert!(a.evm_retire_206);
+    }
+
+    #[test]
+    fn evm_storage_profile_legacy_and_shadow_keep_writing_206() {
+        let legacy = parse(&["--evm-storage-profile=legacy"]);
+        assert!(!legacy.evm_shadow_state_backend);
+        assert!(!legacy.evm_retire_206);
+
+        let shadow = parse(&["--evm-storage-profile=shadow"]);
+        assert!(shadow.evm_shadow_state_backend);
+        assert!(!shadow.evm_flat_authoritative);
+        assert!(!shadow.evm_retire_206);
+    }
+
+    #[test]
+    fn evm_storage_profile_rejects_a_contradicting_knob() {
+        // The failure mode being closed: an operator sets `compact` AND a knob that
+        // silently cancels it. Refuse rather than pick a winner.
+        let err = parse_err(&["--evm-storage-profile=compact", "--evm-history-mode=head"]);
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+        assert!(err.to_string().contains("--evm-history-mode"));
+    }
+
+    #[test]
+    fn evm_storage_profile_accepts_a_redundant_knob() {
+        // Setting a knob to the value the profile already implies is harmless.
+        let a = parse(&["--evm-storage-profile=compact", "--evm-shadow-state-backend"]);
+        assert!(a.evm_retire_206);
     }
 
     #[test]

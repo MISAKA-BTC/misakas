@@ -40,6 +40,8 @@ use kaspa_pq_validator_core::{
 use kaspa_rpc_core::model::GetValidatorStatusResponse;
 use kaspa_rpc_service::service::ValidatorStatusProvider;
 use kaspa_txscript::pay_to_address_script;
+
+use crate::disk_guard::DiskPressureHandle;
 use kaspa_utxoindex::api::UtxoIndexProxy;
 use misaka_palw_miner::beacon::{BeaconProducer, BeaconSecret};
 use rand::RngCore;
@@ -304,6 +306,11 @@ pub struct ValidatorService {
     last_beacon_epoch: Mutex<Option<u64>>,
     /// Mass-based fee (sompi) for a beacon commit/reveal tx, computed once at startup.
     beacon_fee_sompi: u64,
+    /// Runtime disk pressure. Attestation is the node's most skippable write path — it
+    /// submits transactions the node itself then has to store — so it stands down while
+    /// the mount is critically full rather than helping to fill it. Missed attestations
+    /// cost this validator rewards; a corrupt consensus DB costs it a resync.
+    disk_pressure: DiskPressureHandle,
 }
 
 impl ValidatorService {
@@ -315,6 +322,7 @@ impl ValidatorService {
         mass_calculator: MassCalculator,
         utxoindex: Option<UtxoIndexProxy>,
         coinbase_maturity: u64,
+        disk_pressure: DiskPressureHandle,
     ) -> Self {
         // Validate configuration eagerly so misconfiguration surfaces at startup, not at first use.
         let key = match &config.key_path {
@@ -435,6 +443,7 @@ impl ValidatorService {
             beacon_secrets: Mutex::new(beacon_secrets),
             last_beacon_epoch: Mutex::new(None),
             beacon_fee_sompi,
+            disk_pressure,
         }
     }
 
@@ -488,6 +497,19 @@ impl ValidatorService {
                 // downtime / when epoch_duration < heartbeat); on the first run just take the
                 // latest ready target. `SignedEpochStore` dedups, so re-offered epochs are no-ops.
                 let attestation_targets = match (eligible, self.bond_outpoint) {
+                    // Disk CRITICAL: stand down. Attestation submits transactions that this
+                    // node then stores, and the equivocation log is append-only — the one
+                    // thing worse than missing epochs is a half-written state file. Epochs
+                    // missed here are caught up by the batch-signing path once space is
+                    // freed, because `SignedEpochStore` tracks the last signed epoch.
+                    _ if self.disk_pressure.should_pause_optional_work() => {
+                        warn!(
+                            "[{VALIDATOR}] disk pressure is {} — pausing attestation. Missed epochs are caught up \
+                             automatically once free space recovers.",
+                            self.disk_pressure.level().as_str()
+                        );
+                        Vec::new()
+                    }
                     (true, Some(outpoint)) => {
                         let last_signed = self.signed_epochs.lock().unwrap().as_ref().and_then(|s| s.last_signed_epoch());
                         match last_signed {

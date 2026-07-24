@@ -516,6 +516,21 @@ enum NodeCmd {
     /// Start a local node for --network-id (port-free; peers via the DNS seeds). Forwards to
     /// `kaspad` with the network selected and an optional --profile; extra kaspad args after `--`.
     Start(NodeStartArgs),
+    /// Which store is the consensus DB made of? Every store shares one column family behind a
+    /// one-byte key prefix, so `du` can only give the directory total. Read-only; safe on a
+    /// live node.
+    DbStats(NodeDbStatsArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct NodeDbStatsArgs {
+    /// Count rows exactly instead of estimating sizes from SST metadata. This is a full
+    /// scan of every store — minutes on a large database.
+    #[arg(long)]
+    count_rows: bool,
+    /// Extra kaspad args (e.g. --appdir=…), after `--`.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -756,6 +771,7 @@ async fn main() -> std::process::ExitCode {
         Command::Node(NodeCmd::PruningSnapshot(PruningSnapshotCmd::Verify { file, expect_pruning_point, expect_digest })) => {
             pruning_snapshot::verify(&ctx, &file, expect_pruning_point.as_deref(), expect_digest.as_deref())
         }
+        Command::Node(NodeCmd::DbStats(a)) => forward::node_db_stats(&ctx, a.count_rows, &a.args),
         Command::Node(NodeCmd::Start(a)) => {
             forward::node(&ctx, a.profile.as_deref(), a.node_profile.as_deref(), a.vps_8gb, a.min_disk_free_percent, &a.args, false)
         }

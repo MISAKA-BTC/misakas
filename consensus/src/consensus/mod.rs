@@ -257,6 +257,96 @@ impl Consensus {
         }
     }
 
+    /// The raw database handle. Test-support: used by integration tests that need
+    /// to write a batch directly to reach a store state (e.g. simulating a pruned
+    /// anchor) the public API does not otherwise produce.
+    #[cfg(test)]
+    pub fn db(&self) -> Arc<DB> {
+        self.db.clone()
+    }
+
+    /// One code-GC pass. Returns the number of bytecode entries deleted.
+    ///
+    /// The GC "epoch" is derived from wall-clock time divided by the retention
+    /// interval, so quarantine ages advance at the rate passes actually run rather
+    /// than at whatever rate a counter happens to be incremented. A restarted node
+    /// therefore resumes the same schedule instead of resetting every sentence.
+    fn run_evm_code_gc(&self, now_ms: u64) -> u64 {
+        use crate::processes::evm::code_gc::{CodeGcStores, DEFAULT_QUARANTINE_EPOCHS};
+
+        let interval_ms = self.config.evm_retention_policy.interval_ms.max(1);
+        let epoch = now_ms / interval_ms;
+        let stores = CodeGcStores {
+            db: self.db.clone(),
+            code: self.storage.evm_code_store.clone(),
+            quarantine: self.storage.evm_code_quarantine_store.clone(),
+            flat: self.storage.evm_flat_account_store.clone(),
+            diffs: self.storage.evm_state_diff_store.clone(),
+            anchors_v1: self.storage.evm_state_checkpoint_store.clone(),
+            anchors_v2: self.storage.evm_state_checkpoint_v2_store.clone(),
+            legacy_snapshots: self.storage.evm_state_store.clone(),
+        };
+        match stores.run(epoch, DEFAULT_QUARANTINE_EPOCHS) {
+            Ok(r) if r.aborted => {
+                warn!("[evm-retention] code GC skipped: a mark root could not be read completely (nothing was deleted)");
+                0
+            }
+            Ok(r) => {
+                if r.deleted > 0 || r.quarantined > 0 || r.released > 0 {
+                    info!(
+                        "[evm-retention] code GC: {} live, {} quarantined, {} released, {} deleted",
+                        r.live, r.quarantined, r.released, r.deleted
+                    );
+                }
+                r.deleted
+            }
+            Err(e) => {
+                warn!("[evm-retention] code GC failed: {e}");
+                0
+            }
+        }
+    }
+
+    /// Observed EVM blocks per second on the selected chain.
+    ///
+    /// Retention windows are expressed in time and have to be converted back into
+    /// EVM-block distances. Measuring the rate instead of assuming one is the
+    /// reason the setting survives a BPS change: 2048 blocks meant 34 minutes at
+    /// 1 BPS and 3.4 at 10, and nothing in the code noticed the difference.
+    ///
+    /// Derived from the header timestamps of the EVM head and the oldest anchored
+    /// block still retained. Falls back to 1.0 when there is not enough history to
+    /// measure — a conservative rate keeps MORE data than the operator asked for,
+    /// which is the safe direction for a wrong guess.
+    fn observed_evm_blocks_per_second(&self, head_evm_number: u64) -> f64 {
+        use crate::model::stores::evm::EvmNumberStoreReader;
+        use crate::model::stores::headers::HeaderStoreReader;
+
+        const SAMPLE_BLOCKS: u64 = 4_096;
+        if head_evm_number < SAMPLE_BLOCKS {
+            return 1.0;
+        }
+        let older_number = head_evm_number - SAMPLE_BLOCKS;
+        let (Some(head_block), Some(older_block)) = (
+            self.storage.evm_number_store.get(head_evm_number).ok().flatten(),
+            self.storage.evm_number_store.get(older_number).ok().flatten(),
+        ) else {
+            return 1.0;
+        };
+        let (Ok(head_ts), Ok(older_ts)) =
+            (self.storage.headers_store.get_timestamp(head_block), self.storage.headers_store.get_timestamp(older_block))
+        else {
+            return 1.0;
+        };
+        // Guard the head timestamp being at or behind the older one: block
+        // timestamps are producer-supplied and only loosely monotone.
+        let elapsed_ms = head_ts.saturating_sub(older_ts);
+        if elapsed_ms == 0 {
+            return 1.0;
+        }
+        (SAMPLE_BLOCKS as f64) / (elapsed_ms as f64 / 1000.0)
+    }
+
     pub fn new(
         db: Arc<DB>,
         config: Arc<Config>,
@@ -372,6 +462,8 @@ impl Consensus {
             counters.clone(),
             mining_rules,
             config.evm_history_mode,         // §12: gate the archive diff/checkpoint writer
+            config.evm_checkpoint_policy,    // §12.3 v2: anchor cadence + retention bound
+            config.evm_retention_policy,     // segment retention (also gates the write path)
             config.evm_shadow_state_backend, // C-01 S4: node-local shadow dual-write + differential
             config.evm_flat_authoritative,   // C-01 S9: flat-authoritative executor seed
             config.evm_retire_206,           // C-01 S9b: stop persisting the per-block 206 snapshot
@@ -453,6 +545,95 @@ impl Consensus {
         self.evm_legacy_state_backend_backfill();
         // C-01 S9b-prune: one-shot bulk reclamation of the legacy 206 snapshot store (opt-in, gated).
         self.evm_legacy_206_bulk_prune();
+        // Self-heal: if the pruning point lost its §12 anchor (a node that ran a
+        // pre-fix binary with 206 retired + recent history), rebuild it by the
+        // inverse walk so this node can serve pruned IBD again. No-op once present.
+        self.evm_pruning_point_anchor_backfill();
+    }
+
+    /// Rebuild the pruning point's §12 anchor if it is missing.
+    ///
+    /// A node that ran a binary predating the pruning-point anchor fix, with 206
+    /// retired and `recent` history, has no anchor at or below its pruning point.
+    /// The forward reconstruction then produces the EMPTY state root and the node
+    /// cannot serve pruned IBD — the live-net serveability break. There is nothing
+    /// wrong with the node's own state; only its ability to serve is lost, and the
+    /// material to rebuild the anchor is still on disk (the flat head plus the
+    /// retained (pp, tip] diffs), so this recovers it without a resync.
+    ///
+    /// Self-healing rather than flag-gated: it is a correctness repair, not a
+    /// feature to opt into, and an operator should not need to know the failure
+    /// exists to fix it. Runs at most once per node (the anchor persists), only
+    /// when the precise broken condition holds, and is a cheap no-op otherwise.
+    fn evm_pruning_point_anchor_backfill(&self) {
+        #[cfg(not(feature = "evm"))]
+        {}
+        #[cfg(feature = "evm")]
+        {
+            use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateCheckpointV2StoreReader, EvmStateStoreReader};
+            use kaspa_consensus_core::evm::EvmStateCheckpointV2;
+
+            if self.config.evm_activation_daa_score == u64::MAX || !self.config.evm_history_mode.writes_state_history() {
+                return;
+            }
+            let pruning_point = match self.pruning_point_store.read().pruning_point() {
+                Ok(pp) => pp,
+                Err(_) => return,
+            };
+            // Pre-activation pruning point, or an anchor already present ⇒ nothing to do.
+            let Ok(evm_header) = self.storage.evm_header_store.get(pruning_point) else { return };
+            if EvmStateCheckpointV2StoreReader::has(&*self.storage.evm_state_checkpoint_v2_store, pruning_point).unwrap_or(false) {
+                return;
+            }
+            // 206[pp] still present (not retired) ⇒ the serving path already works; no
+            // anchor is needed to bootstrap. Leave it.
+            if self.storage.evm_state_store.get(pruning_point).is_ok() {
+                return;
+            }
+            let Some(flat_head) = self.storage.evm_latest_state_ptr_store.read().get().ok().flatten().map(|p| p.canonical_head) else {
+                return; // no flat backend ⇒ no material to walk from
+            };
+
+            info!(
+                "[evm-anchor] pruning point {pruning_point} has no §12 anchor and 206 is retired — this node cannot currently                  serve pruned IBD for the EVM lane. Rebuilding the anchor by inverse walk from the flat head (bounded by the                  pruning depth; runs once)."
+            );
+            const REBUILD_MAX_STEPS: usize = 4_000_000;
+            let snapshot = match crate::processes::evm::reconstruct_pruning_point_snapshot_verified(
+                pruning_point,
+                evm_header.state_root,
+                flat_head,
+                &self.storage.evm_flat_account_store,
+                &self.storage.evm_code_store,
+                &self.storage.evm_state_diff_store,
+                REBUILD_MAX_STEPS,
+            ) {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    warn!(
+                        "[evm-anchor] could not rebuild the pruning-point anchor for {pruning_point} ({e}); this node will not                          serve pruned IBD for the EVM lane. Use --evm-history-mode=archive or resync to restore it."
+                    );
+                    return;
+                }
+            };
+            let checkpoint = EvmStateCheckpointV2::build(
+                pruning_point,
+                evm_header.evm_number,
+                evm_header.state_root,
+                &snapshot,
+                self.config.evm_checkpoint_policy.codec,
+            );
+            let mut batch = rocksdb::WriteBatch::default();
+            if self.storage.evm_state_checkpoint_v2_store.insert_batch(&mut batch, pruning_point, checkpoint).is_ok()
+                && self.db.write(batch).is_ok()
+            {
+                info!(
+                    "[evm-anchor] pruning-point anchor rebuilt at EVM #{} ({pruning_point}); pruned IBD serving restored",
+                    evm_header.evm_number
+                );
+            } else {
+                warn!("[evm-anchor] pruning-point anchor rebuild computed the state for {pruning_point} but failed to persist it");
+            }
+        }
     }
 
     /// Automatically migrate a legacy 206-only EVM database to the C-01 flat/code backend.
@@ -543,7 +724,7 @@ impl Consensus {
                     };
                     snapshots += 1;
                     accounts += snapshot.accounts.len() as u64;
-                    if snapshots % 1_000 == 0 {
+                    if snapshots.is_multiple_of(1_000) {
                         info!(
                             "[evm-backfill] progress: scanned {snapshots} legacy snapshots / {accounts} account copies; \
                              recovered {recovered} unique bytecode entries."
@@ -2137,6 +2318,45 @@ impl ConsensusApi for Consensus {
     }
 
     // kaspa-pq ADR-0022: pruned-IBD EVM + overlay snapshot transfer.
+    fn check_evm_pruning_point_serveable(&self) -> kaspa_consensus_core::evm::EvmServeability {
+        use kaspa_consensus_core::evm::EvmServeability;
+
+        // Inert lane, or no pruning point yet: nothing to serve, not a fault.
+        if self.config.evm_activation_daa_score == u64::MAX {
+            return EvmServeability::NotApplicable;
+        }
+        let Ok(pruning_point) = self.pruning_point_store.read().pruning_point() else {
+            return EvmServeability::NotApplicable;
+        };
+
+        // Whether an anchor / 206 already covers it — the cheap "Present" answer,
+        // taken WITHOUT triggering a derivation.
+        #[cfg(feature = "evm")]
+        let present = {
+            use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateCheckpointV2StoreReader, EvmStateStoreReader};
+            // Pre-activation pruning point: nothing to serve.
+            if self.storage.evm_header_store.get(pruning_point).is_err() {
+                return EvmServeability::NotApplicable;
+            }
+            self.storage.evm_state_store.get(pruning_point).is_ok()
+                || EvmStateCheckpointV2StoreReader::has(&*self.storage.evm_state_checkpoint_v2_store, pruning_point).unwrap_or(false)
+        };
+        #[cfg(not(feature = "evm"))]
+        let present = self.virtual_processor.pruning_point_evm_state(pruning_point).is_some();
+
+        if present {
+            return EvmServeability::Present;
+        }
+
+        // Not directly present: ask the serving path, which DERIVES from the flat
+        // head and caches on success (the proactive heal). `Some` ⇒ we just made
+        // the node serveable ahead of any peer; `None` ⇒ it genuinely cannot serve.
+        match self.virtual_processor.pruning_point_evm_state(pruning_point) {
+            Some(_) => EvmServeability::Derived,
+            None => EvmServeability::Unserveable,
+        }
+    }
+
     fn pruning_point_evm_state(
         &self,
         pruning_point: BlockHash,
@@ -2467,7 +2687,7 @@ impl ConsensusApi for Consensus {
 
         #[cfg(feature = "evm")]
         {
-            use crate::model::stores::evm::{EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
+            use crate::model::stores::evm::EvmStateDiffStoreReader;
             let oops = |m: String| ConsensusError::GeneralOwned(m);
 
             // Walk `block`'s selected-parent chain backward (design §12.4) to the
@@ -2475,9 +2695,23 @@ impl ConsensusApi for Consensus {
             // collecting the forward diffs to replay. Pure store-walk.
             let (seed, forward_diffs) = crate::processes::evm::gather_reconstruction_inputs(
                 block,
-                |b| self.storage.evm_state_checkpoint_store.get(b),
+                |b| {
+                    crate::processes::evm::resolve_anchor_snapshot(
+                        b,
+                        &self.storage.evm_state_checkpoint_v2_store,
+                        &self.storage.evm_state_checkpoint_store,
+                        &self.storage.evm_code_store,
+                    )
+                },
                 |b| self.storage.evm_state_diff_store.get(b),
-                |b| self.storage.evm_header_store.get(b).optional().unwrap().is_some(),
+                |b| {
+                    crate::processes::evm::classify_parent_for_anchor(
+                        b,
+                        self.config.evm_activation_daa_score,
+                        |h| self.storage.evm_header_store.get(h).optional().unwrap().is_some(),
+                        |h| self.storage.headers_store.get_daa_score(h).ok(),
+                    )
+                },
             )
             .map_err(|e| oops(e.to_string()))?;
 
@@ -2979,6 +3213,115 @@ impl ConsensusApi for Consensus {
     fn is_pruning_point_anticone_fully_synced(&self) -> bool {
         let pruning_meta_read = self.pruning_meta_stores.read();
         pruning_meta_read.is_anticone_fully_synced()
+    }
+
+    fn run_evm_retention_pass(&self, now_ms: u64) -> kaspa_consensus_core::evm::EvmRetentionReport {
+        use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
+        use crate::processes::evm::pruner::{EvmPruneStores, PruneContext, evm_tx_hash_fn, plan_pass};
+        use kaspa_consensus_core::evm::{EvmRetentionIdleReason, EvmRetentionReport};
+
+        // Inert lane: nothing to retain, and saying so beats reporting a zero that
+        // looks like a stuck pruner.
+        if self.config.evm_activation_daa_score == u64::MAX {
+            return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::LaneInert, ..Default::default() };
+        }
+        let policy = self.config.evm_retention_policy;
+
+        // ABSENT is not BROKEN. On a fresh database the canonical-heads singleton has
+        // simply never been written, which is the normal state of a node that has not
+        // reached the EVM lane yet — reporting that as a store fault sends an operator
+        // looking for corruption on a healthy node. Only a real read error is a fault.
+        // (This is the same conflation the idle-reason split was introduced to fix,
+        // one layer down; live-net running found it because the fault variant is
+        // correctly NOT deduplicated and so repeated every tick.)
+        let head = match self.storage.evm_heads_store.read().get() {
+            Ok(heads) => heads.latest,
+            Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
+                return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::NoEvmHeadYet, ..Default::default() };
+            }
+            Err(_) => return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::StoreUnavailable, ..Default::default() },
+        };
+        let head_evm_number = match self.storage.evm_header_store.get(head) {
+            Ok(h) => h.evm_number,
+            // A head with no EVM header is pre-activation: the lane is active on this
+            // network but this node has not produced an EVM block yet.
+            Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
+                return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::NoEvmHeadYet, ..Default::default() };
+            }
+            Err(_) => return EvmRetentionReport { idle_reason: EvmRetentionIdleReason::StoreUnavailable, ..Default::default() },
+        };
+
+        // The EVM number of the L1 pruning point bounds the state-history segments.
+        // Absent (a block with no EVM header) means "do not touch state history",
+        // which `plan_segment` already treats as no plan.
+        let l1_pruning_evm_number = {
+            let pruning_point = self.storage.pruning_point_store.read().pruning_point().ok();
+            pruning_point.and_then(|p| self.storage.evm_header_store.get(p).ok()).map(|h| h.evm_number)
+        };
+
+        let ctx = PruneContext {
+            head_evm_number,
+            // Measured, not assumed: expressing retention in time is pointless if
+            // the conversion back to blocks hard-codes a rate.
+            blocks_per_second: self.observed_evm_blocks_per_second(head_evm_number),
+            consensus_transitional: self.is_consensus_in_transitional_ibd_state(),
+            l1_pruning_evm_number,
+            batch_rows: policy.batch_rows,
+        };
+
+        let cursors = self.storage.evm_prune_cursor_store.clone();
+        let plans = plan_pass(&policy, &ctx, |segment| cursors.get(segment).unwrap_or_default());
+        if plans.is_empty() {
+            return EvmRetentionReport::default();
+        }
+
+        let stores = EvmPruneStores {
+            db: self.db.clone(),
+            cursors,
+            numbers: self.storage.evm_number_store.clone(),
+            receipts: self.storage.evm_receipts_store.clone(),
+            log_index: self.storage.evm_log_index_store.clone(),
+            tx_index: self.storage.evm_tx_index_store.clone(),
+            raw_tx: self.storage.evm_raw_tx_store.clone(),
+            raw_tx_owners: self.storage.evm_raw_tx_owners_store.clone(),
+            payloads: self.storage.evm_payload_store.clone(),
+            block_hash_map: self.storage.evm_block_hash_map_store.clone(),
+            traces: self.storage.evm_trace_store.clone(),
+            diffs: self.storage.evm_state_diff_store.clone(),
+            anchors_v1: self.storage.evm_state_checkpoint_store.clone(),
+            anchors_v2: self.storage.evm_state_checkpoint_v2_store.clone(),
+            state_roots: self.storage.evm_block_state_root_store.clone(),
+            tx_hash: evm_tx_hash_fn(),
+        };
+
+        // Code GC rides the same pass. It runs only when the state segments are
+        // eligible: a mark set computed while state history is still being written
+        // behind a deferred pruning point would be a snapshot of a moving target,
+        // and the cost of being wrong here is deleted bytecode.
+        let mut report = EvmRetentionReport::default();
+        if !ctx.consensus_transitional && policy.role != kaspa_consensus_core::evm::EvmNodeRole::ArchiveIndexer {
+            report.rows_deleted += self.run_evm_code_gc(now_ms);
+        }
+        for plan in plans {
+            match stores.execute(plan, now_ms) {
+                Ok(outcome) => {
+                    report.rows_deleted += outcome.rows_deleted;
+                    report.segments_advanced += 1;
+                }
+                // A failing segment must not abort the pass: the others are
+                // independent, and stalling all retention on one store error is how
+                // a recoverable fault becomes a full disk.
+                Err(e) => warn!("[evm-retention] segment {} failed: {e}", plan.segment.as_str()),
+            }
+        }
+        report
+    }
+
+    fn evm_retention_availability(&self) -> Vec<(kaspa_consensus_core::evm::EvmPruneSegment, u64)> {
+        kaspa_consensus_core::evm::EvmPruneSegment::ALL
+            .iter()
+            .map(|&s| (s, self.storage.evm_prune_cursor_store.get(s).map(|c| c.available_from).unwrap_or(0)))
+            .collect()
     }
 
     fn is_consensus_in_transitional_ibd_state(&self) -> bool {

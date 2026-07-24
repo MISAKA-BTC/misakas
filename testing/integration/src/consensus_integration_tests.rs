@@ -2045,7 +2045,6 @@ async fn sighash_type_commitment_test() {
 // its sibling `accepted_txs_of_chain_block`, which tolerates the pruned `KeyNotFound`. The panic
 // poisons the consensus DB lock and the test aborts. Ignored pending a robustness fix to that walk
 // (tolerate pruned mergeset blocks like the sibling path) — NOT a consensus-validity change.
-#[ignore = "kaspa-pq: pruning aborts via accepted_txs_from_acceptance_data unwrap on a pruned block (processor.rs:1876); needs robustness fix"]
 #[tokio::test]
 async fn pruning_test() {
     init_allocator_with_default_settings();

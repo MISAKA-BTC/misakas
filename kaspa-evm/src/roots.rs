@@ -116,6 +116,24 @@ pub fn receipts_root_v2(receipts: &[EvmReceipt], executed_raws: &[Vec<u8>]) -> E
     EvmH256::from_bytes(alloy_consensus::proofs::calculate_receipt_root(&envelopes).0)
 }
 
+/// The block's committed `receipts_root`, choosing the fence-correct encoding.
+///
+/// This is the ONE selection consensus makes when it executes a block: at/above
+/// the `evm_typed_receipt_root` fence (`typed_v2` — i.e. `daa_score >=
+/// evm_typed_receipt_root_activation_daa_score`) the Ethereum EIP-2718 typed root
+/// [`receipts_root_v2`], which needs `executed_raws` (parallel to `receipts`) for
+/// each tx's type; below it the v1 borsh-MPT root [`receipts_root`], which ignores
+/// the raws. The executor commits through this fn and a cold-segment binding
+/// recomputes through it, so the archive cannot drift from what the block
+/// committed. `executed_raws` is unused below the fence and may be empty there.
+pub fn receipts_root_for_fence(typed_v2: bool, receipts: &[EvmReceipt], executed_raws: &[Vec<u8>]) -> EvmH256 {
+    if typed_v2 {
+        receipts_root_v2(receipts, executed_raws)
+    } else {
+        receipts_root(receipts)
+    }
+}
+
 /// Accrue one item (a 20-byte address or a 32-byte topic) into a 2048-bit
 /// Ethereum logs bloom: 3 bits, taken from `keccak256(item)` (Yellow Paper §4.3.1).
 fn bloom_accrue(bloom: &mut [u8; EVM_BLOOM_SIZE], data: &[u8]) {
@@ -249,6 +267,30 @@ mod tests {
         let mut r_fail = r.clone();
         r_fail.succeeded = false;
         assert_ne!(receipts_root_v2(&[r], &raws), receipts_root_v2(&[r_fail], &raws));
+    }
+
+    /// The fence selector is the SINGLE canonicalization boundary consensus
+    /// commits through (§5.1): at/above the fence it is exactly v2 (raws-sensitive),
+    /// below it exactly v1 (raws-ignored). A cold-segment binding recomputes through
+    /// this fn, so this pins that the archive picks the same side the block did.
+    #[test]
+    fn receipts_root_for_fence_is_the_committed_selection() {
+        let r = receipt(true, 21_000, vec![log(0xAB, &[0x11], &[0x01])]);
+        let raws = vec![raw_of_type(2)];
+
+        // At/above the fence: identical to v2, and to nothing else.
+        let above = receipts_root_for_fence(true, std::slice::from_ref(&r), &raws);
+        assert_eq!(above, receipts_root_v2(std::slice::from_ref(&r), &raws), "above the fence ⇒ v2");
+        assert_ne!(above, receipts_root(std::slice::from_ref(&r)), "above the fence is NOT v1");
+
+        // Below the fence: identical to v1, and the raws are ignored — passing
+        // different raws below the fence cannot change the committed root.
+        let below = receipts_root_for_fence(false, std::slice::from_ref(&r), &raws);
+        assert_eq!(below, receipts_root(std::slice::from_ref(&r)), "below the fence ⇒ v1");
+        assert_eq!(below, receipts_root_for_fence(false, std::slice::from_ref(&r), &[raw_of_type(0)]), "v1 ignores raws");
+
+        // Empty receipts agree across the fence (the empty-block boundary).
+        assert_eq!(receipts_root_for_fence(true, &[], &[]), receipts_root_for_fence(false, &[], &[]));
     }
 
     /// Pinned regression vectors (lock the exact bytes; an alloy bump or adapter

@@ -21,6 +21,7 @@ bincode.workspace = true
 # kaspa-pq (ADR-0039 §9.3): borsh-decode PALW overlay-tx payloads in the body/utxo
 # processor. Promoted from dev-dependencies; the PALW payload types (kaspa-consensus-core)
 # derive BorshDeserialize. Inert on every shipped preset (PALW activation fence = u64::MAX).
+# prunedEVM: cold-segment files are also borsh-encoded, so the encoder stays a normal dependency.
 borsh.workspace = true
 crossbeam-channel.workspace = true
 faster-hex.workspace = true

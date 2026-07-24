@@ -147,6 +147,28 @@ pub struct Config {
     /// oracle, so the bulk delete leaves the seed itself unchanged (consensus-neutral, node-local). `false`
     /// by default and on every current network.
     pub evm_prune_legacy_206: bool,
+    /// §12.3 v2: when to write a state-history ANCHOR and how many to keep.
+    ///
+    /// Replaces the `evm_number % EVM_CHECKPOINT_INTERVAL` rule, which reproduced the
+    /// entire EVM state every 2048 EVM blocks — minutes on a 10 BPS chain — uncompressed
+    /// and with bytecode inlined. Node-local and consensus-neutral: an anchor is
+    /// reconstruction data, never a committed value.
+    pub evm_checkpoint_policy: crate::evm::EvmCheckpointPolicy,
+    /// §5.8: whether finalized EVM history is EXPORTED to cold segments at pruning
+    /// advance, and where. When active, the pruning processor archives the range it
+    /// is about to reclaim into immutable segment files BEFORE deleting the rows,
+    /// and never deletes an EVM row the export has not yet covered (the interlock).
+    /// L1 pruning itself is never delayed. `None` dir or `Off` mode ⇒ inert (the
+    /// EVM-row delete floor stays at the pruning point, today's behaviour).
+    pub evm_segment_export: crate::evm::EvmSegmentExport,
+    pub evm_segment_dir: Option<std::path::PathBuf>,
+    /// Per-segment EVM retention and the node role behind it.
+    ///
+    /// The half of the capacity story that is not about writing less: EVM data was
+    /// reclaimed only by the L1 pruning processor, which correctly stands down while
+    /// consensus is transitional — i.e. for the whole of IBD, the node's
+    /// highest-write period. RPC-only segments retain on their own schedule.
+    pub evm_retention_policy: crate::evm::EvmRetentionPolicy,
 }
 
 impl Config {
@@ -183,6 +205,10 @@ impl Config {
             evm_flat_authoritative: false,
             evm_retire_206: false,
             evm_prune_legacy_206: false,
+            evm_checkpoint_policy: crate::evm::EvmCheckpointPolicy::default(),
+            evm_retention_policy: crate::evm::EvmRetentionPolicy::default(),
+            evm_segment_export: crate::evm::EvmSegmentExport::Off,
+            evm_segment_dir: None,
         }
     }
 

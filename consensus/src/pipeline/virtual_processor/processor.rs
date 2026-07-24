@@ -666,10 +666,9 @@ impl EvmLaneKpi {
     }
 }
 
-/// Operational rate limiter for DNS reorg-gate rejection warnings. The gate can inspect
-/// hundreds of candidate ancestors during one sink search; emitting every rejection would
-/// amplify the very wedge this diagnostic is meant to expose. The first rejection and at
-/// most one aggregate warning every 30 seconds are logged.
+/// The gate can reject hundreds of candidate ancestors during one sink search. Log the
+/// first rejection and at most one aggregate warning every 30 seconds so a wedge is
+/// visible without turning the diagnostic into another source of resolve pressure.
 fn dns_reorg_rejection_warning_due() -> Option<u64> {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -757,7 +756,14 @@ pub struct VirtualStateProcessor {
     // code (222) — written alongside the per-block result so an archive/recent node can
     // reconstruct any canonical block's state. RPC/archive data only, never committed.
     pub(super) evm_state_diff_store: Arc<crate::model::stores::evm::DbEvmStateDiffStore>,
+    // Read only by the `evm`-gated anchor and seed paths; a non-EVM build carries
+    // the fields so the struct shape does not fork on a feature.
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_state_checkpoint_store: Arc<crate::model::stores::evm::DbEvmStateCheckpointStore>,
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
+    pub(super) evm_state_checkpoint_v2_store: Arc<crate::model::stores::evm::DbEvmStateCheckpointV2Store>,
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
+    pub(super) evm_checkpoint_meta_store: Arc<parking_lot::RwLock<crate::model::stores::evm::DbEvmCheckpointMetaStore>>,
     pub(super) evm_code_store: Arc<crate::model::stores::evm::DbEvmCodeStore>,
     // C-01 state-backend (design v0.1, Stage 1, slice S4): the flat latest-canonical
     // state (234) + block→root index (232) + canonical pointer (231). Written ONLY
@@ -790,6 +796,12 @@ pub struct VirtualStateProcessor {
     // all; `recent`/`archive` write them (the pruning processor decides how long
     // they survive). Node-local — never affects block validity or any commitment.
     pub(super) evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
+    /// §12.3 v2: the state-anchor cadence and retention bound.
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
+    pub(super) evm_checkpoint_policy: kaspa_consensus_core::evm::EvmCheckpointPolicy,
+    /// Per-segment retention. Read on the write path too: a segment the node keeps
+    /// nothing of is not written in the first place.
+    pub(super) evm_retention_policy: kaspa_consensus_core::evm::EvmRetentionPolicy,
     pub(super) evm_activation_daa_score: u64,
     // ADR-0039 PALW: the audited-compute lane's activation fence + overlay-state store. The four
     // ordinary presets keep it at `u64::MAX`, while the explicit testnet-110/devnet-111 PALW presets
@@ -923,6 +935,8 @@ impl VirtualStateProcessor {
         counters: Arc<ProcessingCounters>,
         mining_rules: Arc<MiningRules>,
         evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
+        evm_checkpoint_policy: kaspa_consensus_core::evm::EvmCheckpointPolicy,
+        evm_retention_policy: kaspa_consensus_core::evm::EvmRetentionPolicy,
         evm_shadow_state_backend: bool,
         evm_flat_authoritative: bool,
         evm_retire_206: bool,
@@ -998,6 +1012,8 @@ impl VirtualStateProcessor {
             evm_trace_store: storage.evm_trace_store.clone(),
             evm_state_diff_store: storage.evm_state_diff_store.clone(),
             evm_state_checkpoint_store: storage.evm_state_checkpoint_store.clone(),
+            evm_state_checkpoint_v2_store: storage.evm_state_checkpoint_v2_store.clone(),
+            evm_checkpoint_meta_store: storage.evm_checkpoint_meta_store.clone(),
             evm_code_store: storage.evm_code_store.clone(),
             evm_flat_account_store: storage.evm_flat_account_store.clone(),
             evm_block_state_root_store: storage.evm_block_state_root_store.clone(),
@@ -1006,6 +1022,8 @@ impl VirtualStateProcessor {
             evm_flat_authoritative,
             evm_retire_206,
             evm_history_mode,
+            evm_checkpoint_policy,
+            evm_retention_policy,
             evm_activation_daa_score: params.evm_activation_daa_score,
             palw_activation_daa_score: params.palw_activation_daa_score,
             palw_store: storage.palw_store.clone(),
@@ -1853,6 +1871,9 @@ impl VirtualStateProcessor {
             &self.evm_flat_account_store,
             &self.evm_code_store,
             &self.evm_header_store,
+            &self.headers_store,
+            self.evm_activation_daa_score,
+            &self.evm_state_checkpoint_v2_store,
             &self.evm_state_checkpoint_store,
             &self.evm_state_diff_store,
         ) {
@@ -2489,13 +2510,13 @@ impl VirtualStateProcessor {
             // §16: receipts + tx-lookup index rows (store/RPC data only) commit
             // in the SAME batch — atomic with the result and the UTXO diff.
             crate::processes::evm::stage_evm_index_rows(
+                &self.evm_retention_policy,
                 &self.evm_receipts_store,
                 &self.evm_tx_index_store,
                 &self.evm_log_index_store,
                 &self.evm_trace_store,
                 &self.evm_state_diff_store,
                 &self.evm_code_store,
-                &self.evm_state_checkpoint_store,
                 &mut batch,
                 current,
                 &staged,
@@ -3541,6 +3562,178 @@ impl VirtualStateProcessor {
         )))
     }
 
+    /// Keep the §8 log posting index (prefix 205) equal to the CANONICAL chain.
+    ///
+    /// Postings used to be written for every UTXO-valid block, with the query
+    /// canonical-filtering each one at read time. Three costs followed: the index
+    /// was strictly larger than the chain it serves (one log yields up to five
+    /// postings, so it is the lane's biggest multiplier), every range query paid a
+    /// filter, and a side-branch posting was unreachable from the canonical number
+    /// map the pruner walks — so it could never be reclaimed at all.
+    ///
+    /// Detach before attach, mirroring the number map: a block both removed and
+    /// re-added in one reorg ends attached, because the batch applies the deletes
+    /// and then the writes.
+    ///
+    /// Postings are derived from the block's receipts, exactly as the writer used
+    /// to derive them, so attach and detach are inverses by construction rather
+    /// than by two code paths agreeing.
+    fn update_evm_canonical_log_index(&self, batch: &mut WriteBatch, chain_path: &ChainPath) {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmReceiptsStoreReader};
+        use kaspa_consensus_core::evm::EvmPruneSegment;
+
+        if self.evm_activation_daa_score == u64::MAX || !self.evm_retention_policy.writes(EvmPruneSegment::LogPostings) {
+            return;
+        }
+
+        let postings_of = |block: BlockHash| {
+            let header = self.evm_header_store.get(block).optional().ok().flatten()?;
+            let receipts = self.evm_receipts_store.get(block).ok()?;
+            Some(crate::processes::evm::pruner::derive_log_postings(&receipts, header.evm_number, block))
+        };
+
+        for removed in chain_path.removed.iter().rev().copied() {
+            let Some(postings) = postings_of(removed) else { continue };
+            for (kind, selector, loc) in &postings {
+                if let Err(e) = self.evm_log_index_store.delete_posting_batch(batch, *kind, selector, loc) {
+                    warn!("[evm-log-index] detaching postings of {removed} failed: {e}");
+                }
+            }
+        }
+        for added in chain_path.added.iter().copied() {
+            let Some(postings) = postings_of(added) else { continue };
+            for (kind, selector, loc) in &postings {
+                if let Err(e) = self.evm_log_index_store.write_posting_batch(batch, *kind, selector, loc) {
+                    warn!("[evm-log-index] attaching postings of {added} failed: {e}");
+                }
+            }
+            // The completeness floor is a property of the CANONICAL index, so it
+            // moves here rather than at per-block commit.
+            if let Ok(header) = self.evm_header_store.get(added)
+                && let Err(e) = self.evm_log_index_store.set_floor_batch(batch, header.evm_number)
+            {
+                warn!("[evm-log-index] floor update for {added} failed: {e}");
+            }
+        }
+    }
+
+    /// §12.3 v2: write a sparse, compressed, code-free reconstruction ANCHOR at the
+    /// new sink when the cadence is due.
+    ///
+    /// Three deliberate differences from the v1 checkpoint this replaces:
+    ///
+    /// * **Canonical only.** Called from `commit_virtual_state` with the selected
+    ///   sink, so a UTXO-valid block that loses the sink search is never anchored.
+    /// * **Paced in time, capped in blocks.** `evm_number % 2048` is 3.4 minutes at
+    ///   10 BPS and 34 at 1 BPS; the same constant meant wildly different things as
+    ///   the BPS moved, and at 10 BPS it reproduced the whole state hundreds of
+    ///   times a day.
+    /// * **Bounded.** Old anchors are evicted, so the store plateaus instead of
+    ///   growing with the chain.
+    ///
+    /// Never fatal: an anchor is reconstruction convenience, and failing to write
+    /// one must not stop the virtual state from committing. A missed anchor only
+    /// lengthens the diff replay for a later historical query.
+    #[cfg(feature = "evm")]
+    fn stage_evm_checkpoint_anchor(&self, batch: &mut WriteBatch, sink: BlockHash) {
+        use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateCheckpointV2StoreReader, EvmStateStoreReader};
+        use kaspa_consensus_core::evm::EvmStateCheckpointV2;
+
+        if self.evm_activation_daa_score == u64::MAX || !self.evm_history_mode.writes_state_history() {
+            return;
+        }
+        let policy = self.evm_checkpoint_policy;
+        let Some(header) = self.evm_header_store.get(sink).optional().unwrap_or(None) else {
+            return; // pre-activation sink: nothing to anchor
+        };
+        let timestamp_ms = match self.headers_store.get_timestamp(sink) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!("[evm-anchor] header timestamp read failed for {sink}: {e}; skipping this anchor");
+                return;
+            }
+        };
+        let mut meta = match self.evm_checkpoint_meta_store.read().get() {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("[evm-anchor] cadence state read failed: {e}; skipping this anchor");
+                return;
+            }
+        };
+        // NOT a pruning-point anchor. The sink is the chain tip and the pruning point
+        // is far behind it, so comparing them here — as an earlier version did — is
+        // dead code that never fires. The pruning-point anchor is written by the
+        // pruning processor immediately before it deletes, which is the last moment
+        // the material to build one exists; this path only handles the time-paced
+        // cadence at the tip.
+        if !policy.is_due(&meta, header.evm_number, timestamp_ms, false) {
+            return;
+        }
+        if EvmStateCheckpointV2StoreReader::has(&*self.evm_state_checkpoint_v2_store, sink).unwrap_or(false) {
+            return; // already anchored (a reorg returning to a previous sink)
+        }
+
+        // Where the state comes from is decided by WHICH BACKEND IS AUTHORITATIVE,
+        // not by whether the result looks empty. An EVM lane with no accounts yet has
+        // an empty state, and that is a state worth anchoring — treating "empty" as
+        // "no source" would silently skip every anchor on a quiet chain and only show
+        // up much later as an unreconstructable range.
+        let snapshot = if self.evm_flat_authoritative {
+            match crate::processes::evm::materialize_snapshot(&self.evm_flat_account_store, &self.evm_code_store) {
+                Ok(snap) => snap,
+                Err(e) => {
+                    warn!("[evm-anchor] flat materialize failed at {sink}: {e}; skipping this anchor");
+                    return;
+                }
+            }
+        } else {
+            // 206 is authoritative here. Absent means this block committed no state
+            // row (pre-activation, or already pruned), so there is nothing to anchor.
+            match self.evm_state_store.get(sink).optional() {
+                Ok(Some(snap)) => snap,
+                Ok(None) => return,
+                Err(e) => {
+                    warn!("[evm-anchor] 206 read failed at {sink}: {e}; skipping this anchor");
+                    return;
+                }
+            }
+        };
+
+        let checkpoint = EvmStateCheckpointV2::build(sink, header.evm_number, header.state_root, &snapshot, policy.codec);
+        let stored = checkpoint.stored_len();
+        let raw = checkpoint.uncompressed_len;
+        if let Err(e) = self.evm_state_checkpoint_v2_store.insert_batch(batch, sink, checkpoint) {
+            warn!("[evm-anchor] anchor write failed for {sink}: {e}");
+            return;
+        }
+        // Evicting is what makes this a bounded store rather than a slower-growing one.
+        // The PRUNING POINT's anchor is exempt: it is the floor every future
+        // reconstruction and every IBD we serve starts from, and the cadence knows
+        // nothing about that role.
+        let pruning_point = self.pruning_point_store.read().pruning_point().ok();
+        for evicted in policy.record(&mut meta, sink, header.evm_number, timestamp_ms) {
+            if Some(evicted) == pruning_point {
+                continue;
+            }
+            if let Err(e) = self.evm_state_checkpoint_v2_store.delete_batch(batch, evicted) {
+                warn!("[evm-anchor] evicting anchor {evicted} failed: {e}");
+            }
+        }
+        if let Err(e) = self.evm_checkpoint_meta_store.write().set_batch(batch, meta) {
+            warn!("[evm-anchor] cadence state write failed: {e}");
+            return;
+        }
+        info!(
+            "[evm-anchor] state anchor at EVM #{} ({sink}): {stored} B stored / {raw} B raw, codec={}",
+            header.evm_number,
+            policy.codec.as_str()
+        );
+    }
+
+    /// Non-`evm` builds have no EVM state to anchor.
+    #[cfg(not(feature = "evm"))]
+    fn stage_evm_checkpoint_anchor(&self, _batch: &mut WriteBatch, _sink: BlockHash) {}
+
     fn commit_virtual_state(
         &self,
         virtual_read: RwLockUpgradableReadGuard<'_, VirtualStores>,
@@ -3584,6 +3777,18 @@ impl VirtualStateProcessor {
         // `evm_number → L1 hash` map follows the selected chain (detach/attach),
         // not per-block result-commit — so a sink-search loser can't shadow it.
         self.update_evm_canonical_number_map(&mut batch, chain_path);
+
+        // The log posting index follows the same detach/attach discipline, for the
+        // same reason: written per-block it covered side branches too, which made
+        // it larger than the chain it indexes and left postings no pruner could
+        // reach.
+        self.update_evm_canonical_log_index(&mut batch, chain_path);
+
+        // §12.3 v2: write a state-history ANCHOR if the cadence says one is due.
+        // Here, not in `commit_utxo_state`, for the same reason as the number map
+        // above: that path also runs for sink-search losers, so anchoring there
+        // reproduced the entire EVM state for side branches.
+        self.stage_evm_checkpoint_anchor(&mut batch, dns_sink);
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): recompute the per-epoch
         // accumulator over the bounded selected-chain window ending at the new
@@ -3895,7 +4100,14 @@ impl VirtualStateProcessor {
     /// surfaces in the trace log instead of crashing the virtual processor.
     fn accepted_txs_of_chain_block(&self, chain_block: BlockHash) -> Vec<Transaction> {
         match self.acceptance_data_store.get(chain_block) {
-            Ok(ad) => self.accepted_txs_from_acceptance_data(&ad),
+            // TOLERANT: a chain block being walked here may be at or below the
+            // pruning point, so its mergeset can reference blocks whose bodies were
+            // pruned. Skip those rather than panicking — the sibling already
+            // tolerates the acceptance data itself being absent, and this closes the
+            // same gap one level down (the block-transactions store). Pruning walks
+            // pruned blocks by construction, so a pruned body means "no accepted txs
+            // resolvable here", never a fault.
+            Ok(ad) => self.accepted_txs_from_acceptance_data_impl(&ad, true),
             Err(StoreError::KeyNotFound(_)) => {
                 trace!(
                     "accepted_txs_of_chain_block: no acceptance data for {chain_block} (pruning point / pruned) — treating as no accepted txs"
@@ -3944,14 +4156,37 @@ impl VirtualStateProcessor {
     /// committed* block's mutations from the in-memory `ctx.mergeset_acceptance_data`,
     /// whose `acceptance_data_store` entry does not exist until `commit_utxo_state`.
     pub(super) fn accepted_txs_from_acceptance_data(&self, acceptance_data: &AcceptanceData) -> Vec<Transaction> {
+        // STRICT by default: every caller except the pruning-facing chain-block walk
+        // operates on RECENT, unpruned acceptance data (a block being validated, its
+        // in-memory mergeset), where a missing body is genuine corruption to fail on.
+        self.accepted_txs_from_acceptance_data_impl(acceptance_data, false)
+    }
+
+    /// Resolve accepted transactions from acceptance data. `tolerate_pruned_bodies`
+    /// skips a mergeset block whose transactions have been pruned instead of
+    /// panicking — set only on the pruning-facing path (`accepted_txs_of_chain_block`),
+    /// where walking a pruned block is expected; strict everywhere else so a missing
+    /// RECENT body still fails fast.
+    fn accepted_txs_from_acceptance_data_impl(
+        &self,
+        acceptance_data: &AcceptanceData,
+        tolerate_pruned_bodies: bool,
+    ) -> Vec<Transaction> {
         let mut txs = Vec::new();
         for mergeset in acceptance_data.iter() {
-            let block_txs = self.block_transactions_store.get(mergeset.block_hash).unwrap_or_else(|store_error| {
-                palw_overlay_commit_fail_stop(format!(
-                    "accepted transaction block {} is unavailable while resolving acceptance data: {store_error}",
-                    mergeset.block_hash
-                ))
-            });
+            let block_txs = match self.block_transactions_store.get(mergeset.block_hash) {
+                Ok(t) => t,
+                Err(StoreError::KeyNotFound(_)) if tolerate_pruned_bodies => {
+                    trace!(
+                        "accepted_txs_from_acceptance_data: mergeset block {} bodies are pruned — contributing no accepted txs",
+                        mergeset.block_hash
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    panic!("accepted_txs_from_acceptance_data: block_transactions_store.get({}) failed: {e}", mergeset.block_hash)
+                }
+            };
             for entry in mergeset.accepted_transactions.iter() {
                 let tx = block_txs.get(entry.index_within_block as usize).unwrap_or_else(|| {
                     palw_overlay_commit_fail_stop(format!(
@@ -4881,8 +5116,8 @@ impl VirtualStateProcessor {
 
     /// kaspa-pq Phase 13 (ADR-0018 §H): the selected-chain common ancestor of `a` and `b`
     /// — the first block on `a`'s selected chain (from `a` inclusive, walking back) that is
-    /// also a chain-ancestor of `b`. Returns the ancestor and the number of selected-chain
-    /// steps walked, or `None` if it is older than `max_walk`.
+    /// also a chain-ancestor of `b`. Returns the ancestor plus steps walked, or `None`
+    /// when it is older than `max_walk`.
     fn selected_chain_common_ancestor(&self, a: BlockHash, b: BlockHash, max_walk: u64) -> Option<(BlockHash, u64)> {
         for (walked, block) in (0_u64..).zip(std::iter::once(a).chain(self.reachability_service.default_backward_chain_iterator(a))) {
             if walked > max_walk {
@@ -5177,22 +5412,16 @@ impl VirtualStateProcessor {
             }
         };
 
-        // The heavy two-dimensional inputs (common ancestor + per-branch Work/Stake walks)
-        // are computed ONLY when the candidate abandons the confirmed prefix AND the
-        // network runs the dominance rule. HardCheckpoint and the includes-anchor case
-        // ignore Work/Stake, so they skip the walks entirely.
+        // The heavy two-dimensional inputs are needed only when the candidate abandons
+        // the confirmed prefix under the dominance rule.
         let mut common_ancestor = None;
         let mut horizon_exceeded = false;
         let inputs = if dns_params.reorg_mode == DnsReorgMode::TwoDimensionalDominance && !includes {
-            // The old implementation stopped at `max_reorg_horizon_blocks` and returned
-            // `false` before evaluating emergency dominance. Once a node stayed on a local
-            // fork for ~horizon blocks, even an overwhelmingly superior honest branch had
-            // no recovery path. Search far enough to cover the entire StakeScore window:
-            // if I is found, score exactly since I; if not, I is provably older than every
-            // creditable epoch and each branch's full-window StakeScore is the exact
-            // since-I value. Work dominance is invariant under subtracting the same I, so
-            // cumulative tip work is equivalent in that fallback. This keeps the walk
-            // bounded while ensuring deep reorgs reach the emergency gate.
+            // Do not short-circuit at the ordinary horizon: that made a temporary local
+            // fork permanent. Search through the whole StakeScore window. If I is still
+            // older, full-window StakeScore is exactly the since-I score; cumulative tip
+            // work is equivalent because the same I cancels from both sides. The recovery
+            // path therefore remains bounded while every depth reaches emergency dominance.
             let common_ancestor_walk = dns_params.max_reorg_horizon_blocks.max(dns_params.stake_score_window_blue_score);
             let ancestor = self.selected_chain_common_ancestor(candidate, prev_sink, common_ancestor_walk);
             horizon_exceeded = ancestor.is_none_or(|(_, walked)| walked > dns_params.max_reorg_horizon_blocks);
@@ -6696,10 +6925,12 @@ impl VirtualStateProcessor {
         // none, hence the startup warning). `None` if neither yields it (the peer tries another server).
         #[cfg(feature = "evm")]
         {
-            use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
-            if let Ok(Some(ptr)) = self.evm_latest_state_ptr_store.read().get()
-                && ptr.canonical_head == pruning_point
-            {
+            use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateDiffStoreReader};
+            let flat_head = self.evm_latest_state_ptr_store.read().get().ok().flatten().map(|p| p.canonical_head);
+
+            // (2) The flat head IS the pruning point (a freshly pruned-IBD-imported
+            // node pins the pointer to the pp) ⇒ materialize it directly.
+            if flat_head == Some(pruning_point) {
                 return match crate::processes::evm::materialize_snapshot(&self.evm_flat_account_store, &self.evm_code_store) {
                     Ok(snapshot) => Some((header, snapshot)),
                     Err(e) => {
@@ -6708,33 +6939,121 @@ impl VirtualStateProcessor {
                     }
                 };
             }
-            let (seed, forward_diffs) = match crate::processes::evm::gather_reconstruction_inputs(
+
+            // (3) Forward §12 reconstruct: seed from an anchor at/below pp and replay
+            // diffs upward. Cheap when an anchor is dense; yields nothing when the
+            // anchor material below pp has been reclaimed (the broken-node case).
+            let forward = crate::processes::evm::gather_reconstruction_inputs(
                 pruning_point,
-                |b| self.evm_state_checkpoint_store.get(b),
+                |b| {
+                    crate::processes::evm::resolve_anchor_snapshot(
+                        b,
+                        &self.evm_state_checkpoint_v2_store,
+                        &self.evm_state_checkpoint_store,
+                        &self.evm_code_store,
+                    )
+                },
                 |b| self.evm_state_diff_store.get(b),
-                |b| self.evm_header_store.get(b).optional().unwrap().is_some(),
-            ) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("[evm] pruning-point §12 reconstruct gather failed for {pruning_point}: {e}");
-                    return None;
-                }
+                |b| {
+                    crate::processes::evm::classify_parent_for_anchor(
+                        b,
+                        self.evm_activation_daa_score,
+                        |h| self.evm_header_store.get(h).optional().unwrap().is_some(),
+                        |h| self.headers_store.get_daa_score(h).ok(),
+                    )
+                },
+            )
+            .ok()
+            .and_then(|(seed, forward_diffs)| {
+                kaspa_evm::reconstruct::reconstruct_evm_state(
+                    &seed,
+                    &forward_diffs,
+                    |h| self.evm_code_store.get(*h).ok().flatten(),
+                    header.state_root,
+                )
+                .ok()
+            });
+            if let Some(snapshot) = forward {
+                return Some((header, snapshot));
+            }
+
+            // (4) DERIVATION — the path that makes serving self-healing. The forward
+            // walk needs an anchor at/below pp; this one needs none. The flat head
+            // sits at the tip, the retained (pp, tip] diffs are still on disk, and
+            // `apply_inverse_state_diff` reverts them one block at a time down to pp,
+            // root-verified against the committed header. So a node with no anchor
+            // at all still serves the correct pp state instead of returning nothing
+            // (the live-net serveability break) or, worse, the empty state. On
+            // success the derived state is CACHED as an anchor, so the next serve
+            // takes the fast forward path — the anchor is an optimization, not a
+            // precondition.
+            let Some(fh) = flat_head else {
+                warn!("[evm] pruning-point {pruning_point} cannot be served: no anchor and no flat backend to derive from");
+                return None;
             };
-            match kaspa_evm::reconstruct::reconstruct_evm_state(
-                &seed,
-                &forward_diffs,
-                |h| self.evm_code_store.get(*h).ok().flatten(),
+            match crate::processes::evm::reconstruct_pruning_point_snapshot_verified(
+                pruning_point,
                 header.state_root,
+                fh,
+                &self.evm_flat_account_store,
+                &self.evm_code_store,
+                &self.evm_state_diff_store,
+                Self::PP_DERIVE_MAX_STEPS,
             ) {
-                Ok(snapshot) => Some((header, snapshot)),
+                Ok(snapshot) => {
+                    self.cache_pruning_point_anchor(pruning_point, header.evm_number, header.state_root, &snapshot);
+                    Some((header, snapshot))
+                }
                 Err(e) => {
-                    warn!("[evm] pruning-point §12 reconstruct failed for {pruning_point}: {e}");
+                    warn!(
+                        "[evm] pruning-point {pruning_point} state could not be derived from the flat head ({e}); \
+                         this node cannot serve pruned IBD for the EVM lane"
+                    );
                     None
                 }
             }
         }
         #[cfg(not(feature = "evm"))]
         None
+    }
+
+    /// Max blocks the on-demand serving derivation reverts before giving up —
+    /// generous over the pruning depth so a legitimately deep range serves, bounded
+    /// so a broken diff chain still terminates.
+    #[cfg(feature = "evm")]
+    const PP_DERIVE_MAX_STEPS: usize = 4_000_000;
+
+    /// Cache a derived pruning-point state as a §12 v2 anchor.
+    ///
+    /// Best-effort and never on the critical path: the serve has already succeeded
+    /// with the derived state, and this only makes the NEXT serve take the fast
+    /// forward path. A write failure is logged and swallowed — a node that cannot
+    /// cache the anchor keeps serving by deriving each time, slower but correct.
+    #[cfg(feature = "evm")]
+    fn cache_pruning_point_anchor(
+        &self,
+        pruning_point: BlockHash,
+        evm_number: u64,
+        state_root: kaspa_hashes::EvmH256,
+        snapshot: &kaspa_consensus_core::evm::EvmStateSnapshot,
+    ) {
+        use crate::model::stores::evm::EvmStateCheckpointV2StoreReader;
+        if EvmStateCheckpointV2StoreReader::has(&*self.evm_state_checkpoint_v2_store, pruning_point).unwrap_or(false) {
+            return;
+        }
+        let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV2::build(
+            pruning_point,
+            evm_number,
+            state_root,
+            snapshot,
+            self.evm_checkpoint_policy.codec,
+        );
+        let mut batch = WriteBatch::default();
+        if self.evm_state_checkpoint_v2_store.insert_batch(&mut batch, pruning_point, checkpoint).is_ok()
+            && self.db.write(batch).is_ok()
+        {
+            info!("[evm] cached the derived pruning-point {pruning_point} state as an anchor (subsequent serves take the fast path)");
+        }
     }
 
     /// kaspa-pq ADR-0022: import the pruning point's DNS/PoS-v2 overlay snapshot during

@@ -71,12 +71,14 @@ const MINIMUM_RETENTION_PERIOD_DAYS: f64 = 2.0;
 const ONE_GIGABYTE: f64 = 1_000_000_000.0;
 
 use crate::args::{Args, NodeProfile, VPS_8GB_MIN_SYSTEM_MEMORY_BYTES};
+use crate::disk_guard::{DiskGuard, DiskGuardThresholds, DiskPressureHandle, data_mount_free_percent};
+use crate::evm_retention::EvmRetentionService;
 use crate::palw_da_spool::{PalwDaSpoolConfig, PalwDaSpoolService};
 use crate::palw_mine_service::{PalwMineConfig, PalwMineService, PreparedPalwMineConfig};
 use crate::validator_service::{ValidatorConfig, ValidatorMode, ValidatorService};
 
-const DEFAULT_DATA_DIR: &str = "datadir";
-const CONSENSUS_DB: &str = "consensus";
+pub(crate) const DEFAULT_DATA_DIR: &str = "datadir";
+pub(crate) const CONSENSUS_DB: &str = "consensus";
 const UTXOINDEX_DB: &str = "utxoindex";
 const META_DB: &str = "meta";
 const META_DB_FILE_LIMIT: i32 = 5;
@@ -149,6 +151,18 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
     if args.min_disk_free_percent > 99 {
         return Err(ConfigError::MinDiskFreePercentTooHigh(args.min_disk_free_percent));
     }
+    // C-01 storage chain: fail closed on a partial chain instead of demoting it to a
+    // no-op deep in the virtual processor. Checked on the FINAL values, so it also
+    // covers the config-file and environment paths, not just the CLI.
+    if args.evm_retire_206 && !args.evm_flat_authoritative {
+        return Err(ConfigError::EvmStorageKnobRequires("--evm-retire-206", "--evm-flat-authoritative"));
+    }
+    if args.evm_flat_authoritative && !args.evm_shadow_state_backend {
+        return Err(ConfigError::EvmStorageKnobRequires("--evm-flat-authoritative", "--evm-shadow-state-backend"));
+    }
+    if args.evm_prune_legacy_206 && !args.evm_retire_206 {
+        return Err(ConfigError::EvmStorageKnobRequires("--evm-prune-legacy-206", "--evm-retire-206"));
+    }
     if args.node_profile.is_sync_only() {
         let profile = args.node_profile.as_str().to_string();
         if args.archival {
@@ -209,28 +223,34 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
     Ok(())
 }
 
-fn data_mount_free_percent(path: &Path) -> Option<f64> {
-    let mut probe = path.to_path_buf();
-    while !probe.exists() {
-        match probe.parent() {
-            Some(parent) if parent != probe => probe = parent.to_path_buf(),
-            _ => break,
-        }
+/// Log the EFFECTIVE EVM storage configuration as one line at startup.
+///
+/// The failure this prevents is not exotic: a node was believed to be retiring the
+/// per-block 206 state snapshot while the dependency chain had demoted that knob to a
+/// no-op, and the only evidence was a warning line among thousands. One unconditional
+/// line naming the profile and whether the per-block full-state copy is still being
+/// written makes the storage behaviour greppable in `journalctl` after the fact.
+fn log_evm_storage_profile(args: &Args) {
+    if !cfg!(feature = "evm") {
+        // Every EVM knob is inert in a non-EVM build; do not imply otherwise.
+        return;
     }
-    let probe = probe.canonicalize().unwrap_or(probe);
-
-    let disks = sysinfo::Disks::new_with_refreshed_list();
-    let mut best: Option<(usize, u64, u64)> = None;
-    for disk in disks.list() {
-        let mount = disk.mount_point();
-        if probe.starts_with(mount) {
-            let len = mount.as_os_str().len();
-            if best.map(|(best_len, _, _)| len > best_len).unwrap_or(true) {
-                best = Some((len, disk.available_space(), disk.total_space()));
-            }
-        }
+    let named = args.evm_storage_profile.map(|p| p.as_str()).unwrap_or("(unset — individual knobs)");
+    info!(
+        "EVM storage profile: {} — history={} shadow-state-backend={} flat-authoritative={} retire-206={}",
+        named,
+        args.evm_history_mode.as_str(),
+        args.evm_shadow_state_backend,
+        args.evm_flat_authoritative,
+        args.evm_retire_206,
+    );
+    if !args.evm_retire_206 {
+        warn!(
+            "EVM storage: the per-block 206 full-state snapshot IS being persisted — EVM state storage grows as \
+             O(state x kept blocks), and pruning is deferred while consensus is transitional or catching up, so it can \
+             outrun reclamation during IBD. Use --evm-storage-profile=compact to bound it at O(state)."
+        );
     }
-    best.and_then(|(_, available, total)| (total > 0).then(|| available as f64 / total as f64 * 100.0))
 }
 
 fn disk_free_preflight(args: &Args, app_dir: &Path) {
@@ -646,6 +666,7 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
             );
         }
     }
+    log_evm_storage_profile(args);
     disk_free_preflight(args, &app_dir);
 
     let consensus_db_dir = db_dir.join(CONSENSUS_DB);
@@ -939,11 +960,19 @@ Do you confirm? (y/n)";
 
     let grpc_server_addr = args.rpclisten.unwrap_or(ContextualNetAddress::loopback()).normalize(config.default_rpc_port());
 
+    // Captured before `config` is moved into the consensus factory.
+    let evm_retention_interval_ms = config.evm_retention_policy.interval_ms;
+
     let core = Arc::new(Core::new());
 
     // ---
 
     let tick_service = Arc::new(TickService::new());
+    // Runtime disk guard. `--min-disk-free-percent` only ever gated STARTUP, so a node
+    // that filled its mount while running had no warning, no growth rate, and no clean
+    // stop. The handle stays Normal when the guard is disabled, so consumers need no
+    // conditional path.
+    let disk_pressure = DiskPressureHandle::new();
     let (notification_send, notification_recv) = unbounded();
     let max_tracked_addresses = if args.utxoindex && args.max_tracked_addresses > 0 { Some(args.max_tracked_addresses) } else { None };
     let subscription_context = SubscriptionContext::with_options(max_tracked_addresses);
@@ -1125,6 +1154,7 @@ Do you confirm? (y/n)";
             validator_mass_calculator,
             index_service.as_ref().map(|x| x.utxoindex().unwrap()),
             config.params.coinbase_maturity(),
+            disk_pressure.clone(),
         )))
     } else {
         None
@@ -1201,7 +1231,7 @@ Do you confirm? (y/n)";
 
     // Create an async runtime and register the top-level async services
     let async_runtime = Arc::new(AsyncRuntime::new(args.async_threads));
-    async_runtime.register(tick_service);
+    async_runtime.register(tick_service.clone());
     async_runtime.register(notify_service);
     if let Some(index_service) = index_service {
         async_runtime.register(index_service)
@@ -1261,6 +1291,26 @@ Do you confirm? (y/n)";
     async_runtime.register(mining_monitor);
     async_runtime.register(perf_monitor);
     async_runtime.register(mining_rule_engine);
+    // EVM retention runs on its own clock, NOT behind the L1 pruning gate — that
+    // gate stands down for the whole of IBD, which is when EVM data grows fastest.
+    async_runtime.register(Arc::new(EvmRetentionService::new(
+        tick_service.clone(),
+        consensus_manager.clone(),
+        Duration::from_millis(evm_retention_interval_ms),
+        disk_pressure.clone(),
+    )));
+    if let Some(thresholds) = DiskGuardThresholds::from_min_free_percent(args.min_disk_free_percent) {
+        async_runtime.register(Arc::new(DiskGuard::new(
+            tick_service.clone(),
+            app_dir.clone(),
+            db_dir.join(CONSENSUS_DB),
+            thresholds,
+            disk_pressure.clone(),
+            &core,
+        )));
+    } else {
+        info!("Runtime disk guard is DISABLED (--min-disk-free-percent=0). The node will not warn or stop as the mount fills.");
+    }
 
     let wrpc_service_tasks: usize = 2; // num_cpus::get() / 2;
     // Register wRPC servers based on command line arguments
@@ -1504,5 +1554,29 @@ mod tests {
         // Operators may still deliberately make one PALW node client-only. The important invariant is
         // that `--connect` no longer forces *every* PALW node to zero inbound capacity.
         assert_eq!(explicit_peer_connection_limits(true, true, 8, 0), (0, 0));
+    }
+
+    #[test]
+    fn partial_evm_storage_chain_is_rejected_instead_of_silently_demoted() {
+        // Each of these used to start fine and log a warning while continuing to write a
+        // full EVM state copy per block — the configuration that filled the disk.
+        let args = parse(&["--evm-retire-206"]);
+        assert!(matches!(validate_args(&args), Err(ConfigError::EvmStorageKnobRequires("--evm-retire-206", _))));
+
+        let args = parse(&["--evm-retire-206", "--evm-flat-authoritative"]);
+        assert!(matches!(validate_args(&args), Err(ConfigError::EvmStorageKnobRequires("--evm-flat-authoritative", _))));
+
+        let args = parse(&["--evm-prune-legacy-206"]);
+        assert!(matches!(validate_args(&args), Err(ConfigError::EvmStorageKnobRequires("--evm-prune-legacy-206", _))));
+    }
+
+    #[test]
+    fn compact_storage_profile_passes_validation() {
+        let args = parse(&["--evm-storage-profile=compact"]);
+        assert!(validate_args(&args).is_ok());
+        // And the irreversible reclamation is accepted on top of it (it is the only
+        // combination in which it is allowed to run).
+        let args = parse(&["--evm-storage-profile=compact", "--evm-prune-legacy-206"]);
+        assert!(validate_args(&args).is_ok());
     }
 }

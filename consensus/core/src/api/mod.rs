@@ -949,6 +949,33 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Run one bounded EVM retention pass and report what it reclaimed.
+    ///
+    /// Deliberately caller-driven rather than hung off the L1 pruning worker: that
+    /// worker correctly stands down while consensus is transitional, which is the
+    /// whole of IBD and the period in which EVM data accumulates fastest. The
+    /// pass itself decides per segment whether the transitional gate applies.
+    fn run_evm_retention_pass(&self, now_ms: u64) -> crate::evm::EvmRetentionReport {
+        let _ = now_ms;
+        Default::default()
+    }
+
+    /// Per-segment availability floors, so RPC can answer "pruned" rather than
+    /// returning an empty result that reads as "nothing was ever here".
+    fn evm_retention_availability(&self) -> Vec<(crate::evm::EvmPruneSegment, u64)> {
+        Vec::new()
+    }
+
+    /// Self-check: can this node serve its own pruning-point EVM state to a peer?
+    ///
+    /// Turns the previously-silent serveability break into an immediate signal.
+    /// Also proactively heals: the `Derived` path materializes and caches the state
+    /// before any peer asks, so the pruning-processor anchor and this check together
+    /// keep the state present ahead of demand.
+    fn check_evm_pruning_point_serveable(&self) -> crate::evm::EvmServeability {
+        crate::evm::EvmServeability::NotApplicable
+    }
+
     fn intrusive_pruning_point_update(&self, new_pruning_point: BlockHash, syncer_sink: BlockHash) -> ConsensusResult<()> {
         unimplemented!()
     }

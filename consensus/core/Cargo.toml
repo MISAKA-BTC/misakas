@@ -37,6 +37,8 @@ borsh.workspace = true
 bitflags.workspace = true
 cfg-if.workspace = true
 faster-hex.workspace = true
+# §12.3 checkpoint payload compression (pure-Rust miniz backend, so wasm-safe).
+flate2.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
 itertools.workspace = true

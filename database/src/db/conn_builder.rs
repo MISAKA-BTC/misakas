@@ -168,11 +168,40 @@ macro_rules! default_opts {
     }};
 }
 
+/// Failure opening a database read-only. Distinct from [`ConnBuilder::build`], which
+/// panics: a read-only open is used by DIAGNOSTICS, and a diagnostic that aborts the
+/// process it is diagnosing is worse than no diagnostic.
+#[derive(thiserror::Error, Debug)]
+pub enum ReadOnlyOpenError {
+    #[error("file-descriptor budget: {0}")]
+    FdBudget(#[from] kaspa_utils::fd_budget::Error),
+    #[error("rocksdb: {0}")]
+    RocksDb(#[from] rocksdb::Error),
+}
+
 impl ConnBuilder<PathBuf, false, Unspecified, i32> {
     pub fn build(self) -> Result<Arc<DB>, kaspa_utils::fd_budget::Error> {
         let (opts, guard) = default_opts!(self)?;
         let db = Arc::new(DB::new(<DBWithThreadMode<MultiThreaded>>::open(&opts, self.db_path.to_str().unwrap()).unwrap(), guard));
         Ok(db)
+    }
+
+    /// Open the database READ-ONLY.
+    ///
+    /// RocksDB's read-only mode takes no LOCK file, so this runs alongside a live
+    /// node — which is the case that matters, since the question a size diagnostic
+    /// answers ("which store is growing?") is asked while the node is running. The
+    /// view is the last flushed state; that is accurate enough for sizing, where the
+    /// numbers are estimates anyway.
+    pub fn build_read_only(self) -> Result<Arc<DB>, ReadOnlyOpenError> {
+        // Pinned: the macro's internal `?` cannot infer its error type through a second
+        // `?` that converts into `ReadOnlyOpenError`.
+        let built: Result<(rocksdb::Options, kaspa_utils::fd_budget::FDGuard), kaspa_utils::fd_budget::Error> = default_opts!(self);
+        let (mut opts, guard) = built?;
+        // Never materialize a database as a side effect of inspecting one.
+        opts.create_if_missing(false);
+        let inner = <DBWithThreadMode<MultiThreaded>>::open_for_read_only(&opts, self.db_path.to_str().unwrap(), false)?;
+        Ok(Arc::new(DB::new(inner, guard)))
     }
 }
 

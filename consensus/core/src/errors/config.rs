@@ -71,6 +71,17 @@ pub enum ConfigError {
     #[error("Configuration: invalid --palw-mine setup: {0}")]
     PalwMineInvalidConfiguration(String),
 
+    /// C-01: the EVM storage knobs form a dependency chain. A half-configured chain used
+    /// to be demoted to a no-op with a warning inside the virtual processor, which is how
+    /// a node could be configured "to retire the per-block 206 state snapshot" and still
+    /// write a full EVM state copy per block until the disk filled. Refuse at startup
+    /// instead. Use `--evm-storage-profile=compact`, which cannot be half-configured.
+    #[error(
+        "Configuration: {0} requires {1}. The EVM storage knobs are a dependency chain and a partial chain is NOT applied \
+         (it silently keeps writing the per-block 206 full-state snapshot). Prefer --evm-storage-profile=compact."
+    )]
+    EvmStorageKnobRequires(&'static str, &'static str),
+
     #[cfg(feature = "devnet-prealloc")]
     #[error("Cannot preallocate UTXOs on any network except devnet")]
     PreallocUtxosOnNonDevnet,

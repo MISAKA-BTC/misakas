@@ -996,6 +996,8 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // BlueWorkType is a type alias for Uint576 (9 little-endian u64 limbs); construct via the
     // real struct name (the alias is not a tuple-struct ctor). Low limb = 1_000_000.
     emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
+    // One full-quality epoch. The previous 100-epoch margin exceeded the entire
+    // 15-epoch StakeScore window and made emergency dominance unreachable.
     emergency_stake_margin: StakeScore(STAKE_SCORE_SCALE),
     max_reorg_horizon_blocks: 300,
     evidence_window_blocks: 300,
@@ -1144,8 +1146,8 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
     required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
     emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
-    // One full-quality epoch. The previous 100-epoch margin exceeded the entire
-    // 15-epoch StakeScore window and made emergency dominance mathematically impossible.
+    // One full-quality epoch: reachable inside the bounded 15-epoch score window
+    // while preserving the work AND stake non-substitutability requirement.
     emergency_stake_margin: StakeScore(STAKE_SCORE_SCALE),
     max_reorg_horizon_blocks: 300,
     // 14 days; equivocation stays slashable for the whole exit window.
@@ -2119,5 +2121,37 @@ mod palw_network_tests {
         assert_eq!(d.palw_activation_daa_score, u64::MAX);
         assert!(!d.is_palw_active(0));
         assert_ne!(d.genesis.hash, p.genesis.hash, "devnet-palw has a distinct genesis");
+    }
+
+    /// §5.4 audit guard (follow-up to the `accepted_txs_of_chain_block` tolerance,
+    /// commit 878eb42). That helper returns an EMPTY tx set for a chain block whose
+    /// acceptance data / mergeset bodies are pruned. That is correct only where
+    /// every node agrees the data is gone — the consensus pruning point. Of its
+    /// callers, all but one walk a RECENT reorg path (`chain_path.removed/added`,
+    /// the resolve-virtual split walk), which cannot cross the pruning point and so
+    /// never sees a pruned block. The exception is the StakeScore aggregation, which
+    /// walks back by DEPTH — `stake_score_window_blue_score` in blue score from the
+    /// tip. If that window could reach past the retained region, two nodes with
+    /// slightly different pruning points would resolve DIFFERENT accepted-tx sets
+    /// (one derives the attestations, the other gets the tolerant empty) and compute
+    /// different StakeScores — a finality split. Acceptance data is retained down to
+    /// `pruning_depth`, so the window must stay strictly inside it. It does today by
+    /// a wide margin (1500 vs a pruning depth in the 10^5+ range); this pins that so
+    /// a future param change cannot silently erase it.
+    #[test]
+    fn the_stakescore_window_stays_inside_the_retained_region() {
+        for (name, params) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            let Some(dns) = params.dns_params.as_ref() else { continue };
+            let window = dns.stake_score_window_blue_score;
+            let pruning_depth = params.pruning_depth();
+            assert!(
+                window < pruning_depth,
+                "{name}: stake_score_window_blue_score {window} must be < pruning_depth {pruning_depth}, else the \
+                 tolerant accepted_txs_of_chain_block walk can reach pruned acceptance data and split the StakeScore \
+                 across nodes with different pruning points (§5.4)"
+            );
+        }
     }
 }
