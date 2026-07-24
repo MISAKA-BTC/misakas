@@ -706,6 +706,9 @@ pub struct PalwSearchAssignmentV1 {
     pub valid_from_daa_score: u64,
     /// Last DAA score at which retrieval may run.
     pub valid_until_daa_score: u64,
+    /// The scheduler's on-chain authority anchor: an active provider bond whose owner key must
+    /// equal `scheduler_public_key` (bonded scheduler registry — consensus-objective).
+    pub scheduler_bond: TransactionOutpoint,
     /// Scheduler ML-DSA-87 public key.
     pub scheduler_public_key: Vec<u8>,
     /// ML-DSA-87 signature over the canonical signing bytes.
@@ -767,6 +770,8 @@ impl PalwSearchAssignmentV1 {
         out.extend_from_slice(&self.freshness_window_millis.to_le_bytes());
         out.extend_from_slice(&self.valid_from_daa_score.to_le_bytes());
         out.extend_from_slice(&self.valid_until_daa_score.to_le_bytes());
+        out.extend_from_slice(self.scheduler_bond.transaction_id.as_byte_slice());
+        out.extend_from_slice(&self.scheduler_bond.index.to_le_bytes());
         push_var(&mut out, &self.scheduler_public_key);
         if include_signature {
             push_var(&mut out, &self.signature);
@@ -810,6 +815,7 @@ impl PalwSearchAssignmentV1 {
         let freshness_window_millis = cursor.u64()?;
         let valid_from_daa_score = cursor.u64()?;
         let valid_until_daa_score = cursor.u64()?;
+        let scheduler_bond = TransactionOutpoint::new(cursor.hash()?, cursor.u32()?);
         let scheduler_public_key = cursor.var("scheduler_public_key", PALW_SEARCH_MAX_PUBLIC_KEY_BYTES)?.to_vec();
         let signature = cursor.var("signature", PALW_SEARCH_MAX_SIGNATURE_BYTES)?.to_vec();
         if cursor.offset != bytes.len() {
@@ -826,6 +832,7 @@ impl PalwSearchAssignmentV1 {
             freshness_window_millis,
             valid_from_daa_score,
             valid_until_daa_score,
+            scheduler_bond,
             scheduler_public_key,
             signature,
         };
@@ -971,23 +978,45 @@ pub struct PalwSearchSnapshotAdmittedV1 {
 // Scheduler governance allowlist
 // ---------------------------------------------------------------------------
 
-/// Enforces the node-local scheduler governance allowlist. EMPTY IS FAIL-CLOSED: a node with no
-/// allowlisted scheduler keys admits no assignment-resolved snapshot at all. Returns the key
-/// fingerprint on success so callers record exactly what they authorized.
+/// Bonded scheduler registry (consensus-objective): the assignment's scheduler is authorized
+/// iff its referenced provider bond exists on-chain, is active at the sink (activated, not
+/// slashed, no pending unbond), and its owner key equals the assignment's scheduler key. This
+/// is the SAME authority anchor DA challengers use, so every node resolves it identically.
+pub fn scheduler_is_bonded(
+    assignment: &PalwSearchAssignmentV1,
+    bond: &super::PalwProviderBondRecord,
+    sink_daa_score: u64,
+) -> Result<(), PalwSearchSnapshotError> {
+    if bond.bond_outpoint != assignment.scheduler_bond {
+        return Err(PalwSearchSnapshotError::Invalid("resolved bond does not match the assignment's scheduler bond"));
+    }
+    if bond.owner_public_key != assignment.scheduler_public_key {
+        return Err(PalwSearchSnapshotError::Invalid("scheduler key is not the owner key of its referenced bond"));
+    }
+    if bond.activation_daa_score > sink_daa_score {
+        return Err(PalwSearchSnapshotError::Invalid("scheduler bond is not active yet at the sink"));
+    }
+    if bond.slashed_at_daa_score.is_some() {
+        return Err(PalwSearchSnapshotError::Invalid("scheduler bond is slashed"));
+    }
+    if bond.unbond_request_daa_score.is_some() {
+        return Err(PalwSearchSnapshotError::Invalid("scheduler bond has a pending unbond request"));
+    }
+    Ok(())
+}
+
+/// Optional node-local narrowing ON TOP of the bonded registry: a non-empty allowlist restricts
+/// admission to the listed scheduler-key fingerprints; EMPTY = no extra restriction (the
+/// on-chain bond is the authorization). Returns the key fingerprint.
 pub fn enforce_scheduler_allowlist(
     scheduler_public_key: &[u8],
     allowlist: &[Hash64],
 ) -> Result<Hash64, PalwSearchSnapshotError> {
-    if allowlist.is_empty() {
-        return Err(PalwSearchSnapshotError::Invalid(
-            "scheduler allowlist is empty; assignment-resolved admission is disabled on this node",
-        ));
-    }
     let key_id = scheduler_key_id(scheduler_public_key);
-    if allowlist.contains(&key_id) {
+    if allowlist.is_empty() || allowlist.contains(&key_id) {
         Ok(key_id)
     } else {
-        Err(PalwSearchSnapshotError::Invalid("scheduler key is not on this node's governance allowlist"))
+        Err(PalwSearchSnapshotError::Invalid("scheduler key is excluded by this node's allowlist"))
     }
 }
 
@@ -1599,6 +1628,7 @@ mod tests {
             freshness_window_millis: 600_000,
             valid_from_daa_score: 10_000,
             valid_until_daa_score: 20_000,
+            scheduler_bond: TransactionOutpoint::new(Hash64::from_bytes([0x44; 64]), 0),
             scheduler_public_key: vec![0xAA; 32],
             signature: vec![0xBB; 64],
         }
@@ -1793,7 +1823,7 @@ mod tests {
     fn scheduler_allowlist_is_fail_closed() {
         let key = vec![0xAA_u8; 32];
         let id = scheduler_key_id(&key);
-        assert!(enforce_scheduler_allowlist(&key, &[]).is_err(), "empty allowlist must fail closed");
+        assert_eq!(enforce_scheduler_allowlist(&key, &[]).unwrap(), id, "empty allowlist = bond-only authorization");
         assert!(enforce_scheduler_allowlist(&key, &[Hash64::from_bytes([1; 64])]).is_err());
         assert_eq!(enforce_scheduler_allowlist(&key, &[Hash64::from_bytes([1; 64]), id]).unwrap(), id);
     }

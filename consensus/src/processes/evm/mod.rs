@@ -2297,6 +2297,10 @@ pub struct EvmPipelineItem {
     /// was already validated/committed earlier), where the worker reads the
     /// parent rows from the store like the inline path.
     pub chain_from_prev: bool,
+    /// Spawn-time parent seed for gap items in the 206-retired (S9b) configuration,
+    /// resolved by the caller from the validated flat store. None for chained items,
+    /// for pre-activation parents (empty-genesis seeding), and in the 206-backed mode.
+    pub seed: Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)>,
 }
 
 #[cfg(feature = "evm")]
@@ -2330,9 +2334,11 @@ impl EvmPipeline {
                 // The in-memory parent chain: the previous item's (header, snapshot).
                 let mut chained: Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)> =
                     None;
-                for item in pending {
+                for mut item in pending {
                     if !item.chain_from_prev {
-                        chained = None; // gap: predecessor already committed — store reads.
+                        // Gap: predecessor already committed. Use the spawn-time flat seed
+                        // (S9b) when present, else fall back to store reads (206 mode).
+                        chained = item.seed.take();
                     }
                     let step = (|| -> Result<EvmStaged, driver::EvmValidateError> {
                         let header = headers_store.get_header(item.block).map_err(driver::EvmValidateError::Store)?;

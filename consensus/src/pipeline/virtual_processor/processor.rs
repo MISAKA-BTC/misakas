@@ -1951,10 +1951,15 @@ impl VirtualStateProcessor {
             return None;
         }
         // C-01 S9b: the pipeline worker seeds a run's FIRST/gap item from the 206 store (its other
-        // items chain in-memory). With 206 retired there is no such seed, so disable the pipeline
-        // and let the inline path (which seeds every block from the validated flat store) handle the
-        // run. Pure perf/throughput trade — correctness is identical either way (I-3 invariant).
-        if self.evm_retire_206 {
+        // items chain in-memory). With 206 retired the worker cannot seed from the 206 store —
+        // but instead of disabling the pipeline (which made the whole IBD run execute EVM inline
+        // and serially), gap seeds are resolved HERE at spawn time from the validated flat store —
+        // the exact seed the inline path uses — and carried inside the item. A gap whose
+        // EVM-ACTIVE parent yields no flat seed leaves the entire run to the inline path (which
+        // HALTs per design §7) by not pipelining; pre-activation parents need no seed (empty
+        // genesis). Correctness is identical either way (I-3 invariant).
+        let seeded_mode = self.evm_retire_206;
+        if seeded_mode && !(self.evm_flat_authoritative && self.evm_shadow_state_backend) {
             return None;
         }
         let statuses = self.statuses_store.read();
@@ -1973,7 +1978,18 @@ impl VirtualStateProcessor {
                 continue; // pre-activation block: the step is inert for it
             }
             let chain_from_prev = prev_pending == Some(selected_parent);
-            pending.push(EvmPipelineItem { block: current, selected_parent, chain_from_prev });
+            let seed = if seeded_mode && !chain_from_prev {
+                let seed = self.validated_flat_parent_seed(selected_parent);
+                if seed.is_none() && self.evm_header_store.has(selected_parent).unwrap_or(true) {
+                    // EVM-active (or unprovable) parent without a flat seed: never risk the
+                    // worker's 206 path — leave the whole run to the inline HALT semantics.
+                    return None;
+                }
+                seed
+            } else {
+                None
+            };
+            pending.push(EvmPipelineItem { block: current, selected_parent, chain_from_prev, seed });
             prev_pending = Some(current);
         }
         drop(statuses);

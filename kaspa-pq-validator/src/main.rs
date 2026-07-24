@@ -2320,6 +2320,11 @@ struct PalwSearchAssignArgs {
     #[arg(long, default_value_t = 600)]
     valid_for_daa: u64,
 
+    /// Scheduler's on-chain authority anchor: an active provider-bond outpoint (txid_hex:index)
+    /// whose owner key must equal the scheduler key (bonded scheduler registry).
+    #[arg(long)]
+    scheduler_bond: String,
+
     /// Scheduler ML-DSA-87 seed path (signs the assignment).
     #[arg(long)]
     scheduler_seed: String,
@@ -2364,6 +2369,7 @@ async fn palw_search_assign_cmd(args: PalwSearchAssignArgs) -> Result<(), String
         freshness_window_millis: args.freshness_ms,
         valid_from_daa_score: server.virtual_daa_score,
         valid_until_daa_score: server.virtual_daa_score.saturating_add(args.valid_for_daa),
+        scheduler_bond: parse_stake_bond_ref(&args.scheduler_bond)?,
         scheduler_public_key: key.public_key().to_vec(),
         signature: vec![],
     };

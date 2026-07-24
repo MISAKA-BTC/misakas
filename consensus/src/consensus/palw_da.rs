@@ -320,8 +320,18 @@ impl Consensus {
             crate::processes::palw_da::consensus_mldsa_verify,
         )?;
         if let Some(assignment) = assignment.as_ref() {
-            // Node-local governance: only allowlisted scheduler keys may anchor
-            // assignment-resolved snapshots. Empty allowlist = fail-closed.
+            // Bonded scheduler registry (consensus-objective): the assignment's bond must exist
+            // in the frozen sink's provider registry, be active, and be owned by the scheduler
+            // key. The node-local allowlist can only narrow further; empty = bond-only.
+            let bond = self.storage.palw_provider_bonds_store.read().get(&assignment.scheduler_bond).map_err(|error| {
+                if error.is_key_not_found() {
+                    PalwDaAdmissionError::ProviderNotFound(assignment.scheduler_bond)
+                } else {
+                    PalwDaAdmissionError::Store(format!("scheduler bond: {error:?}"))
+                }
+            })?;
+            kaspa_consensus_core::palw::search_snapshot::scheduler_is_bonded(assignment, &bond, sink_daa_score)
+                .map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
             kaspa_consensus_core::palw::search_snapshot::enforce_scheduler_allowlist(
                 &assignment.scheduler_public_key,
                 &self.config.palw_search_scheduler_allowlist,
@@ -1315,6 +1325,7 @@ mod tests {
                 freshness_window_millis: 600_000,
                 valid_from_daa_score: SINK_DAA - 100,
                 valid_until_daa_score: SINK_DAA + 100,
+                scheduler_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([0x66; 64]), 0),
                 scheduler_public_key: public_key,
                 signature: vec![],
             };
