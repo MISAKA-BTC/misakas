@@ -9,7 +9,6 @@ use crate::{
         stores::{
             DB,
             block_transactions::DbBlockTransactionsStore,
-            evm::EvmPayloadStore as _,
             ghostdag::DbGhostdagStore,
             headers::DbHeadersStore,
             reachability::DbReachabilityStore,
@@ -37,6 +36,10 @@ use kaspa_consensus_notify::{
     notification::{BlockAddedNotification, Notification},
     root::ConsensusNotificationRoot,
 };
+// The EvmPayloadStore trait is in scope only where its `insert_batch` is called
+// (the evm-gated content-addressed payload write in commit_body).
+#[cfg(feature = "evm")]
+use crate::model::stores::evm::EvmPayloadStore as _;
 use kaspa_consensusmanager::SessionLock;
 use kaspa_notify::notifier::Notify;
 use parking_lot::RwLock;
@@ -70,6 +73,7 @@ pub struct BlockBodyProcessor {
     /// from MERGESET blocks' payloads. Only non-empty payloads are written
     /// (possible only on v2+ headers, i.e. post-activation), so this is inert
     /// on every current network.
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_payload_store: Arc<crate::model::stores::evm::DbEvmPayloadStore>,
     /// §16 (audit R-2): raw EVM tx bytes by hash, written at body commit. Gated
     /// on the evm feature (its only writer needs `kaspa_evm::tx::tx_hash`).
@@ -250,6 +254,11 @@ impl BlockBodyProcessor {
         transactions: Arc<Vec<Transaction>>,
         evm_payload: &kaspa_consensus_core::evm::EvmExecutionPayload,
     ) {
+        // The EVM payload is persisted only under the evm feature (its content-
+        // addressed write needs `kaspa_evm::tx::tx_hash`); a non-evm build carries
+        // the empty payload on every block, so nothing is stored.
+        #[cfg(not(feature = "evm"))]
+        let _ = &evm_payload;
         let mut batch = WriteBatch::default();
 
         // This is an append only store so it requires no lock.
@@ -257,26 +266,26 @@ impl BlockBodyProcessor {
 
         // kaspa-pq EVM Lane v0.4 (§3.1): persist the block's own payload so the
         // virtual processor can later read it as part of some chain block's
-        // mergeset acceptance. Empty payloads are skipped (absent = empty);
-        // insert is idempotent under body revalidation.
+        // mergeset acceptance. CONTENT-ADDRESSED: the raw tx bytes go ONCE into
+        // the raw-tx store (217, keyed by hash) and the 211/235 payload stores
+        // only the envelope + those hashes (SlimEvmPayload), so a tx repeated
+        // across payloads costs one stored copy. The full payload reconstructs
+        // from 217 on read, byte-identically. Empty payloads are skipped (absent =
+        // empty); insert is idempotent under body revalidation. tx_hash needs
+        // kaspa-evm (the evm feature); every non-evm build / pre-activation block
+        // carries the empty payload and never reaches here.
+        #[cfg(feature = "evm")]
         if !evm_payload.is_empty() {
-            self.evm_payload_store.insert_batch(&mut batch, hash, evm_payload.clone()).unwrap();
-            // §16 (audit R-2): index each raw EVM tx by its hash so
-            // eth_getTransactionByHash/receipt resolve it directly, surviving the
-            // bounded EvmTxLocations.included_in cap (16). RPC index only; tx_hash
-            // needs kaspa-evm (the evm feature). Empty payloads (every non-evm
-            // build / pre-activation block) never reach here.
-            #[cfg(feature = "evm")]
-            for raw in &evm_payload.transactions {
-                let txh = kaspa_evm::tx::tx_hash(raw);
-                self.evm_raw_tx_store.write_batch(&mut batch, txh, raw.clone(), hash).unwrap();
+            let slim = kaspa_consensus_core::evm::SlimEvmPayload::from_full(evm_payload, kaspa_evm::tx::tx_hash);
+            for (raw, txh) in evm_payload.transactions.iter().zip(slim.tx_hashes.iter()) {
+                self.evm_raw_tx_store.write_batch(&mut batch, *txh, raw.clone(), hash).unwrap();
                 // Ownership ledger for the raw-tx segment pruner: the SAME tx can
-                // appear in several payloads, and 217's own `payload_block` field
-                // is an upsert that keeps only the last writer. Counting owners
-                // here — in the same batch as the payload — is what lets the pruner
-                // reclaim the bytes when the last owning block goes, and only then.
-                self.evm_raw_tx_owners_store.increment_batch(&mut batch, txh).unwrap();
+                // appear in several payloads. Counting owners here — in the same
+                // batch as the slim payload — is what lets the pruner reclaim the
+                // bytes when the LAST owning block goes, and only then.
+                self.evm_raw_tx_owners_store.increment_batch(&mut batch, *txh).unwrap();
             }
+            self.evm_payload_store.insert_batch(&mut batch, hash, slim).unwrap();
         }
 
         let mut body_tips_write_guard = self.body_tips_store.write();

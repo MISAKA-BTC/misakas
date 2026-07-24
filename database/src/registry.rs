@@ -255,6 +255,13 @@ pub enum DatabaseStorePrefixes {
     /// flat LATEST-canonical state (one row per account, NOT per block), replacing the
     /// per-block O(state × blocks) snapshot. Code is content-addressed (222). State data.
     EvmFlatAccount = 234,
+    /// kaspa-pq EVM Lane — content-addressed EvmPayload (`BlockHash → SlimEvmPayload`):
+    /// the payload envelope + ordered tx-hash references, with the raw tx bytes held
+    /// ONCE in 217. Supersedes the inline `transactions` of prefix 211 (which keeps
+    /// LEGACY full rows that drain with pruning); the full payload is reconstructed on
+    /// read from 217, byte-identically, so the `evm_payload_hash` commitment is
+    /// unchanged. Storage-only dedup — a tx repeated across payloads costs one copy.
+    EvmPayloadSlim = 235,
 
     // ---- Separator ----
     /// Reserved as a separator

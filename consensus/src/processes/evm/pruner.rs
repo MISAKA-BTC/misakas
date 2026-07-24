@@ -328,8 +328,7 @@ mod tests {
 use crate::model::stores::evm::{
     DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore, DbEvmPruneCursorStore,
     DbEvmRawTxOwnersStore, DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateCheckpointV2Store,
-    DbEvmStateDiffStore, DbEvmTraceReplayStore, DbEvmTxIndexStore, EvmNumberStoreReader, EvmPayloadStoreReader,
-    EvmReceiptsStoreReader,
+    DbEvmStateDiffStore, DbEvmTraceReplayStore, DbEvmTxIndexStore, EvmNumberStoreReader, EvmReceiptsStoreReader,
 };
 use kaspa_consensus_core::evm::{LogPostingKind, LogPostingLoc};
 use kaspa_database::prelude::{DB, StoreError};
@@ -444,28 +443,28 @@ impl EvmPruneStores {
                 Ok(1)
             }
             EvmPruneSegment::TransactionLookup => {
-                // Drive from the payload: it is the authoritative list of the
-                // transactions this block carried. 204's own vectors are bounded
-                // and evict, so they cannot enumerate what to clean up.
-                let Ok(payload) = self.payloads.get(block) else { return Ok(0) };
+                // The payload is the authoritative list of the transactions this
+                // block carried. `tx_hashes` reads the slim references directly (or
+                // re-hashes a legacy row) WITHOUT reconstructing raws from 217 — so
+                // it is robust to pruning order and does no wasted round trip.
+                let Ok(Some(hashes)) = self.payloads.tx_hashes(block, self.tx_hash) else { return Ok(0) };
                 let mut rows = 0;
-                for raw in &payload.transactions {
-                    if self.tx_index.remove_block_locations_batch(batch, (self.tx_hash)(raw), block)? {
+                for txh in hashes {
+                    if self.tx_index.remove_block_locations_batch(batch, txh, block)? {
                         rows += 1;
                     }
                 }
                 Ok(rows)
             }
             EvmPruneSegment::RawTransactions => {
-                let Ok(payload) = self.payloads.get(block) else { return Ok(0) };
+                let Ok(Some(hashes)) = self.payloads.tx_hashes(block, self.tx_hash) else { return Ok(0) };
                 let mut rows = 0;
-                for raw in &payload.transactions {
+                for txh in hashes {
                     // Only the LAST owner's departure reclaims the bytes. A tx can
                     // sit in several payloads, and deleting on the first one would
                     // break `eth_getTransactionByHash` for the rest.
-                    let tx_hash = (self.tx_hash)(raw);
-                    if self.raw_tx_owners.decrement_batch(batch, tx_hash)? == 0 {
-                        self.raw_tx.delete_batch(batch, tx_hash)?;
+                    if self.raw_tx_owners.decrement_batch(batch, txh)? == 0 {
+                        self.raw_tx.delete_batch(batch, txh)?;
                         rows += 1;
                     }
                 }

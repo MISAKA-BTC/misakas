@@ -2966,7 +2966,8 @@ mod tests {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let header_store = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
         let state_store = DbEvmStateStore::new(db.clone(), CachePolicy::Empty);
-        let payload_store = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty);
+        let raw_tx_store = std::sync::Arc::new(crate::model::stores::evm::DbEvmRawTxStore::new(db.clone(), CachePolicy::Empty));
+        let payload_store = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty, raw_tx_store.clone());
         let receipts_store = crate::model::stores::evm::DbEvmReceiptsStore::new(db.clone(), CachePolicy::Empty);
         let tx_index_store = crate::model::stores::evm::DbEvmTxIndexStore::new(db.clone(), CachePolicy::Empty);
         let log_index_store = crate::model::stores::evm::DbEvmLogIndexStore::new(db.clone());
@@ -2997,7 +2998,13 @@ mod tests {
             ..Default::default()
         };
         let mut b0 = WriteBatch::default();
-        payload_store.insert_batch(&mut b0, merged, merged_payload.clone()).unwrap();
+        // Content-addressed, exactly as commit_body persists it: raws to 217, the
+        // slim envelope to 235; the driver's get() reconstructs the full payload.
+        let merged_slim = kaspa_consensus_core::evm::SlimEvmPayload::from_full(&merged_payload, kaspa_evm::tx::tx_hash);
+        for (raw, h) in merged_payload.transactions.iter().zip(merged_slim.tx_hashes.iter()) {
+            raw_tx_store.write_batch(&mut b0, *h, raw.clone(), merged).unwrap();
+        }
+        payload_store.insert_batch(&mut b0, merged, merged_slim).unwrap();
         db.write(b0).unwrap();
 
         // Pre-compute the expected commitment with the exact candidates the

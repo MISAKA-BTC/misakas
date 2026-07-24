@@ -15,7 +15,7 @@ use kaspa_consensus_core::evm::{
     AccountCore, CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmCheckpointMeta, EvmColdSegmentManifest, EvmExecutionHeader,
     EvmExecutionPayload, EvmLatestStatePtr, EvmPruneCursor, EvmPruneSegment, EvmRawTx, EvmStateCheckpointV1, EvmStateCheckpointV2,
     EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, EvmU256, FlatAccount, LogPostingKind, LogPostingLoc,
-    decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
+    SlimEvmPayload, decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
 };
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
@@ -166,41 +166,93 @@ pub trait EvmPayloadStoreReader {
 }
 
 pub trait EvmPayloadStore: EvmPayloadStoreReader {
-    fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, payload: EvmExecutionPayload) -> Result<(), StoreError>;
+    /// Insert the content-addressed SLIM payload (prefix 235). The raw tx bytes it
+    /// references MUST be written to the raw-tx store (217) in the SAME batch — the
+    /// full payload is reconstructed from there on read.
+    fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, slim: SlimEvmPayload) -> Result<(), StoreError>;
     fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError>;
 }
 
+/// EvmPayload store (content-addressed).
+///
+/// New rows are the [`SlimEvmPayload`] (prefix 235): the payload envelope plus the
+/// ordered tx-hash references. The raw tx bytes live ONCE in the raw-tx store
+/// (217), and [`Self::get`] reconstructs the full payload from there — byte-
+/// identically, since `payload_bytes()` is deterministic borsh and the raws are
+/// verbatim, so the `evm_payload_hash` commitment is unchanged (storage-only, no
+/// fork). A tx repeated across payloads therefore costs one stored copy.
+///
+/// Reads transparently fall back to the LEGACY full form still in prefix 211 (the
+/// two are DIFFERENT prefixes, so there is no decode ambiguity). Legacy rows drain
+/// with pruning over ~one window — no migration, just this fallback.
 #[derive(Clone)]
 pub struct DbEvmPayloadStore {
-    access: CachedDbAccess<BlockHash, EvmExecutionPayload, BlockHasher>,
+    slim: CachedDbAccess<BlockHash, SlimEvmPayload, BlockHasher>,
+    legacy: CachedDbAccess<BlockHash, EvmExecutionPayload, BlockHasher>,
+    raw_tx: Arc<DbEvmRawTxStore>,
 }
 
 impl DbEvmPayloadStore {
-    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
-        Self { access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmPayload.into()) }
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy, raw_tx: Arc<DbEvmRawTxStore>) -> Self {
+        Self {
+            slim: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::EvmPayloadSlim.into()),
+            legacy: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::EvmPayload.into()),
+            raw_tx,
+        }
+    }
+
+    /// The tx hashes a block's payload references, WITHOUT reconstructing the raws.
+    /// For the raw-tx pruner's 227 decrement: a slim (235) row answers directly
+    /// (self-contained — no 217 read, so it is robust to pruning order), a legacy
+    /// (211) row re-hashes its inline raws with `tx_hash`. `Ok(None)` when the
+    /// block has no payload row at all.
+    pub fn tx_hashes(&self, hash: BlockHash, tx_hash: impl Fn(&[u8]) -> EvmH256) -> Result<Option<Vec<EvmH256>>, StoreError> {
+        match self.slim.read(hash) {
+            Ok(s) => return Ok(Some(s.tx_hashes)),
+            Err(StoreError::KeyNotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
+        match self.legacy.read(hash) {
+            Ok(p) => Ok(Some(p.transactions.iter().map(|t| tx_hash(t)).collect())),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
 impl EvmPayloadStoreReader for DbEvmPayloadStore {
     fn get(&self, hash: BlockHash) -> Result<EvmExecutionPayload, StoreError> {
-        self.access.read(hash)
+        match self.slim.read(hash) {
+            Ok(slim) => slim.reconstruct(|h| self.raw_tx.get(*h).ok().flatten().map(|r| r.raw)).ok_or_else(|| {
+                StoreError::DataInconsistency(format!(
+                    "slim EvmPayload {hash} references a raw tx absent from store 217 (227 refcount leak or premature GC)"
+                ))
+            }),
+            // No slim row: a draining legacy row, or genuinely absent (KeyNotFound,
+            // which callers rely on to mean "empty payload").
+            Err(StoreError::KeyNotFound(_)) => self.legacy.read(hash),
+            Err(e) => Err(e),
+        }
     }
     fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
-        self.access.has(hash)
+        Ok(self.slim.has(hash)? || self.legacy.has(hash)?)
     }
 }
 
 impl EvmPayloadStore for DbEvmPayloadStore {
-    fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, payload: EvmExecutionPayload) -> Result<(), StoreError> {
-        if self.access.has(hash)? {
+    fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, slim: SlimEvmPayload) -> Result<(), StoreError> {
+        if self.slim.has(hash)? || self.legacy.has(hash)? {
             // Idempotent: the payload is immutable per block (committed by
             // `evm_payload_hash`); a body revalidation must not fail here.
             return Ok(());
         }
-        self.access.write(BatchDbWriter::new(batch), hash, payload)
+        self.slim.write(BatchDbWriter::new(batch), hash, slim)
     }
     fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
-        self.access.delete(BatchDbWriter::new(batch), hash)
+        // A block carries EITHER form; delete both so L1 pruning reclaims it
+        // regardless (one is always a no-op).
+        self.slim.delete(BatchDbWriter::new(batch), hash)?;
+        self.legacy.delete(BatchDbWriter::new(batch), hash)
     }
 }
 
@@ -1139,16 +1191,32 @@ mod tests {
         db.write(batch).unwrap();
         assert_eq!(state_store.get(bh(1)).unwrap(), snap);
 
-        // Payload store: round-trips and re-insert is an idempotent no-op (the
-        // payload is immutable data committed by `evm_payload_hash`).
-        let payload_store = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty);
-        let payload = EvmExecutionPayload { transactions: vec![vec![1, 2, 3]], ..Default::default() };
+        // Payload store: content-addressed round-trip. The raws live ONCE in 217;
+        // the 235 slim row references them; get() reconstructs the full payload
+        // byte-identically. The third tx repeats the first (a dedup case): both
+        // reference the same 217 row, and reconstruction restores order + count.
+        let raw_tx_store = Arc::new(DbEvmRawTxStore::new(db.clone(), CachePolicy::Empty));
+        let payload_store = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty, raw_tx_store.clone());
+        let payload = EvmExecutionPayload { transactions: vec![vec![1, 2, 3], vec![4, 5], vec![1, 2, 3]], ..Default::default() };
+        let th = |raw: &[u8]| {
+            let mut b = [0u8; 32];
+            b[0] = raw.len() as u8;
+            if let Some(f) = raw.first() {
+                b[1] = *f;
+            }
+            EvmH256::from_bytes(b)
+        };
+        let slim = SlimEvmPayload::from_full(&payload, th);
         let mut batch = WriteBatch::default();
-        payload_store.insert_batch(&mut batch, bh(1), payload.clone()).unwrap();
+        for (raw, h) in payload.transactions.iter().zip(slim.tx_hashes.iter()) {
+            raw_tx_store.write_batch(&mut batch, *h, raw.clone(), bh(1)).unwrap();
+        }
+        payload_store.insert_batch(&mut batch, bh(1), slim.clone()).unwrap();
         db.write(batch).unwrap();
-        assert_eq!(payload_store.get(bh(1)).unwrap(), payload);
+        assert_eq!(payload_store.get(bh(1)).unwrap(), payload, "reconstructed full payload matches the original");
+        // Re-insert is an idempotent no-op (immutable per block).
         let mut batch = WriteBatch::default();
-        payload_store.insert_batch(&mut batch, bh(1), payload.clone()).unwrap();
+        payload_store.insert_batch(&mut batch, bh(1), slim).unwrap();
         assert!(
             matches!(payload_store.get(bh(2)), Err(StoreError::KeyNotFound(_))),
             "absent payload reads as KeyNotFound (driver maps it to empty)"
@@ -1209,18 +1277,34 @@ mod tests {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let hdr = DbEvmHeaderStore::new(db.clone(), CachePolicy::Empty);
         let state = DbEvmStateStore::new(db.clone(), CachePolicy::Empty);
-        let payload = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty);
+        let raw_tx = Arc::new(DbEvmRawTxStore::new(db.clone(), CachePolicy::Empty));
+        let payload = DbEvmPayloadStore::new(db.clone(), CachePolicy::Empty, raw_tx.clone());
 
         let header = EvmExecutionHeader { evm_number: 7, gas_used: 21_000, ..Default::default() };
         let snap = EvmStateSnapshot { accounts: vec![] };
         let pl = EvmExecutionPayload { transactions: vec![vec![9, 9]], ..Default::default() };
+        let th = |raw: &[u8]| {
+            let mut b = [0u8; 32];
+            b[0] = raw.len() as u8;
+            if let Some(f) = raw.first() {
+                b[1] = *f;
+            }
+            EvmH256::from_bytes(b)
+        };
+        let slim = SlimEvmPayload::from_full(&pl, th);
 
-        // Write two blocks: bh(1) will be "pruned", bh(2) is "kept".
+        // Write two blocks: bh(1) will be "pruned", bh(2) is "kept". The shared raw
+        // lives ONCE in 217 (referenced by both slim rows); payload.delete_batch
+        // removes only the 235/211 row (L1 pruning), so bh(2) still reconstructs
+        // after bh(1) is pruned.
         let mut batch = WriteBatch::default();
+        for (h, raw) in slim.tx_hashes.iter().zip(pl.transactions.iter()) {
+            raw_tx.write_batch(&mut batch, *h, raw.clone(), bh(1)).unwrap();
+        }
         for b in [bh(1), bh(2)] {
             hdr.insert_batch(&mut batch, b, header.clone()).unwrap();
             state.insert_batch(&mut batch, b, snap.clone()).unwrap();
-            payload.insert_batch(&mut batch, b, pl.clone()).unwrap();
+            payload.insert_batch(&mut batch, b, slim.clone()).unwrap();
         }
         db.write(batch).unwrap();
 

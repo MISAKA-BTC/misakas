@@ -345,9 +345,16 @@ impl ConsensusStorage {
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
         let evm_state_store = Arc::new(DbEvmStateStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
+        // The raw-tx store (217) must exist first: the payload store (211/235) is
+        // content-addressed and reconstructs full payloads from it.
+        let evm_raw_tx_store = Arc::new(DbEvmRawTxStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
         let evm_payload_store = Arc::new(DbEvmPayloadStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+            evm_raw_tx_store.clone(),
         ));
         let evm_heads_store = Arc::new(RwLock::new(DbEvmCanonicalHeadsStore::new(db.clone())));
         let evm_receipts_store = Arc::new(DbEvmReceiptsStore::new(
@@ -363,10 +370,6 @@ impl ConsensusStorage {
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
         let evm_number_store = Arc::new(DbEvmNumberStore::new(
-            db.clone(),
-            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
-        ));
-        let evm_raw_tx_store = Arc::new(DbEvmRawTxStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
