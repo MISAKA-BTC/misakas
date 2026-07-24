@@ -169,6 +169,14 @@ impl Deref for Consensus {
 }
 
 impl Consensus {
+    /// The raw database handle. Test-support: used by integration tests that need
+    /// to write a batch directly to reach a store state (e.g. simulating a pruned
+    /// anchor) the public API does not otherwise produce.
+    #[cfg(test)]
+    pub fn db(&self) -> Arc<DB> {
+        self.db.clone()
+    }
+
     /// One code-GC pass. Returns the number of bytecode entries deleted.
     ///
     /// The GC "epoch" is derived from wall-clock time divided by the retention
@@ -447,6 +455,95 @@ impl Consensus {
         self.evm_legacy_state_backend_backfill();
         // C-01 S9b-prune: one-shot bulk reclamation of the legacy 206 snapshot store (opt-in, gated).
         self.evm_legacy_206_bulk_prune();
+        // Self-heal: if the pruning point lost its §12 anchor (a node that ran a
+        // pre-fix binary with 206 retired + recent history), rebuild it by the
+        // inverse walk so this node can serve pruned IBD again. No-op once present.
+        self.evm_pruning_point_anchor_backfill();
+    }
+
+    /// Rebuild the pruning point's §12 anchor if it is missing.
+    ///
+    /// A node that ran a binary predating the pruning-point anchor fix, with 206
+    /// retired and `recent` history, has no anchor at or below its pruning point.
+    /// The forward reconstruction then produces the EMPTY state root and the node
+    /// cannot serve pruned IBD — the live-net serveability break. There is nothing
+    /// wrong with the node's own state; only its ability to serve is lost, and the
+    /// material to rebuild the anchor is still on disk (the flat head plus the
+    /// retained (pp, tip] diffs), so this recovers it without a resync.
+    ///
+    /// Self-healing rather than flag-gated: it is a correctness repair, not a
+    /// feature to opt into, and an operator should not need to know the failure
+    /// exists to fix it. Runs at most once per node (the anchor persists), only
+    /// when the precise broken condition holds, and is a cheap no-op otherwise.
+    fn evm_pruning_point_anchor_backfill(&self) {
+        #[cfg(not(feature = "evm"))]
+        {}
+        #[cfg(feature = "evm")]
+        {
+            use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateCheckpointV2StoreReader, EvmStateStoreReader};
+            use kaspa_consensus_core::evm::EvmStateCheckpointV2;
+
+            if self.config.evm_activation_daa_score == u64::MAX || !self.config.evm_history_mode.writes_state_history() {
+                return;
+            }
+            let pruning_point = match self.pruning_point_store.read().pruning_point() {
+                Ok(pp) => pp,
+                Err(_) => return,
+            };
+            // Pre-activation pruning point, or an anchor already present ⇒ nothing to do.
+            let Ok(evm_header) = self.storage.evm_header_store.get(pruning_point) else { return };
+            if EvmStateCheckpointV2StoreReader::has(&*self.storage.evm_state_checkpoint_v2_store, pruning_point).unwrap_or(false) {
+                return;
+            }
+            // 206[pp] still present (not retired) ⇒ the serving path already works; no
+            // anchor is needed to bootstrap. Leave it.
+            if self.storage.evm_state_store.get(pruning_point).is_ok() {
+                return;
+            }
+            let Some(flat_head) = self.storage.evm_latest_state_ptr_store.read().get().ok().flatten().map(|p| p.canonical_head) else {
+                return; // no flat backend ⇒ no material to walk from
+            };
+
+            info!(
+                "[evm-anchor] pruning point {pruning_point} has no §12 anchor and 206 is retired — this node cannot currently                  serve pruned IBD for the EVM lane. Rebuilding the anchor by inverse walk from the flat head (bounded by the                  pruning depth; runs once)."
+            );
+            const REBUILD_MAX_STEPS: usize = 4_000_000;
+            let snapshot = match crate::processes::evm::reconstruct_pruning_point_snapshot_verified(
+                pruning_point,
+                evm_header.state_root,
+                flat_head,
+                &self.storage.evm_flat_account_store,
+                &self.storage.evm_code_store,
+                &self.storage.evm_state_diff_store,
+                REBUILD_MAX_STEPS,
+            ) {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    warn!(
+                        "[evm-anchor] could not rebuild the pruning-point anchor for {pruning_point} ({e}); this node will not                          serve pruned IBD for the EVM lane. Use --evm-history-mode=archive or resync to restore it."
+                    );
+                    return;
+                }
+            };
+            let checkpoint = EvmStateCheckpointV2::build(
+                pruning_point,
+                evm_header.evm_number,
+                evm_header.state_root,
+                &snapshot,
+                self.config.evm_checkpoint_policy.codec,
+            );
+            let mut batch = rocksdb::WriteBatch::default();
+            if self.storage.evm_state_checkpoint_v2_store.insert_batch(&mut batch, pruning_point, checkpoint).is_ok()
+                && self.db.write(batch).is_ok()
+            {
+                info!(
+                    "[evm-anchor] pruning-point anchor rebuilt at EVM #{} ({pruning_point}); pruned IBD serving restored",
+                    evm_header.evm_number
+                );
+            } else {
+                warn!("[evm-anchor] pruning-point anchor rebuild computed the state for {pruning_point} but failed to persist it");
+            }
+        }
     }
 
     /// Automatically migrate a legacy 206-only EVM database to the C-01 flat/code backend.

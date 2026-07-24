@@ -629,6 +629,112 @@ pub fn resolve_anchor_snapshot(
     }
 }
 
+/// Reconstruct a historical state by walking the flat head DOWN, not up.
+///
+/// The forward walk ([`gather_reconstruction_inputs`]) anchors on a checkpoint at
+/// or below the target and replays diffs upward. It fails for the pruning point on
+/// a `recent`-history node whose anchor material below the pruning point has been
+/// reclaimed — the live-net serveability break.
+///
+/// This walk needs no anchor below the target. The flat state IS the tip state,
+/// exact and free; `apply_inverse_state_diff` reverts one block at a time along
+/// the retained `(target, flat_head]` diffs until the accumulated state is the
+/// target's. It is the repair path for an already-broken node and the bootstrap
+/// the pruning-processor anchor needs before it can perpetuate itself.
+///
+/// Pure and secp-free. The caller verifies the reconstructed state's committed
+/// root — the inverse tripwire catches a corrupt diff, but only a keccak-MPT root
+/// check against the committed header proves the WHOLE walk landed on the right
+/// state, and that check lives in `kaspa-evm`.
+///
+/// Code resolution during the walk is safe against the §222 mark-and-sweep GC by
+/// construction: every code hash in the target's state appears either in the tip
+/// flat state (a GC mark root) or as the `before` side of a retained diff (also a
+/// mark root), so the GC never reclaims a hash this walk will ask for.
+pub fn reconstruct_snapshot_by_inverse_walk<ED: std::fmt::Display>(
+    flat_head: kaspa_consensus_core::BlockHash,
+    flat_head_snapshot: &kaspa_consensus_core::evm::EvmStateSnapshot,
+    target: kaspa_consensus_core::BlockHash,
+    get_diff: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, ED>,
+    mut resolve_code: impl FnMut(&kaspa_hashes::EvmH256) -> Option<Vec<u8>>,
+    max_steps: usize,
+) -> Result<kaspa_consensus_core::evm::EvmStateSnapshot, ReconstructGatherError> {
+    use kaspa_consensus_core::evm::{recon_from_snapshot, recon_to_snapshot};
+
+    // The tip IS the flat state; nothing to walk.
+    if flat_head == target {
+        return Ok(flat_head_snapshot.clone());
+    }
+    let mut recon = recon_from_snapshot(flat_head_snapshot);
+    let mut cur = flat_head;
+    let mut steps = 0usize;
+    loop {
+        let diff = get_diff(cur)
+            .map_err(|e| ReconstructGatherError::Store(e.to_string()))?
+            .ok_or_else(|| ReconstructGatherError::Unavailable(format!("inverse walk: no diff for {cur} (retention gap)")))?;
+        // Revert this block. The tripwire rejects a diff whose `after` view
+        // disagrees with the accumulated state — a corrupt or mis-ordered diff
+        // fails here rather than silently producing a wrong state.
+        kaspa_consensus_core::evm::apply_inverse_state_diff(&mut recon, &diff)
+            .map_err(|e| ReconstructGatherError::Checkpoint(format!("inverse walk at {cur}: {e}")))?;
+        cur = diff.parent;
+        steps += 1;
+        if cur == target {
+            break;
+        }
+        if steps > max_steps {
+            return Err(ReconstructGatherError::TooDeep(format!(
+                "inverse walk from {flat_head} to {target} exceeded {max_steps} steps"
+            )));
+        }
+    }
+    recon_to_snapshot(&recon, |h| resolve_code(h))
+        .map_err(|e| ReconstructGatherError::Checkpoint(format!("inverse walk to snapshot: {e}")))
+}
+
+/// Reconstruct the pruning point's state by the inverse walk and VERIFY it.
+///
+/// The store-driven, root-checked wrapper around [`reconstruct_snapshot_by_inverse_walk`].
+/// Fails closed on anything short of a byte-exact match with the committed root —
+/// the walk's own tripwire catches a corrupt diff, but only the keccak-MPT root
+/// proves the whole walk landed on the right state, and a pruning-point anchor is
+/// the floor every future reconstruction trusts, so a wrong one is worse than none.
+#[cfg(feature = "evm")]
+#[allow(clippy::too_many_arguments)]
+pub fn reconstruct_pruning_point_snapshot_verified(
+    pruning_point: kaspa_consensus_core::BlockHash,
+    committed_state_root: kaspa_hashes::EvmH256,
+    flat_head: kaspa_consensus_core::BlockHash,
+    flat: &crate::model::stores::evm::DbEvmFlatAccountStore,
+    code: &crate::model::stores::evm::DbEvmCodeStore,
+    diff_store: &crate::model::stores::evm::DbEvmStateDiffStore,
+    max_steps: usize,
+) -> Result<kaspa_consensus_core::evm::EvmStateSnapshot, String> {
+    use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateDiffStoreReader};
+
+    let flat_head_snapshot = materialize_snapshot(flat, code).map_err(|e| format!("materialize flat head: {e}"))?;
+    let snapshot = reconstruct_snapshot_by_inverse_walk(
+        flat_head,
+        &flat_head_snapshot,
+        pruning_point,
+        |b| diff_store.get(b),
+        |h| code.get(*h).ok().flatten(),
+        max_steps,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // The decisive check: recompute the keccak-MPT root and require the committed
+    // value. Anything else is a reconstruction that landed on the wrong state.
+    let cdb = kaspa_evm::snapshot::seed_cachedb(&snapshot).map_err(|e| format!("seed cachedb: {e}"))?;
+    let recomputed = kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&cdb).0);
+    if recomputed != committed_state_root {
+        return Err(format!(
+            "inverse-walk reconstruction of {pruning_point} produced root {recomputed:?}, committed {committed_state_root:?}"
+        ));
+    }
+    Ok(snapshot)
+}
+
 /// C-01 Stage 1: apply a forward [`EvmStateDiffV2`] to the flat latest-canonical
 /// store (prefix 234) — the persistent analog of the §12 in-memory `apply_state_diff`.
 /// Writes changed accounts and deletes destroyed / EIP-161-empty ones into `batch`,
@@ -1581,6 +1687,52 @@ mod gather_tests {
                 if (1..=3u8).any(|n| h(n) == b) { ParentAnchorClass::HasEvmHeader } else { ParentAnchorClass::PreActivation }
             },
         )
+    }
+
+    /// The inverse walk reconstructs the pruning point's state from the TIP,
+    /// needing no anchor below it — the repair for the live-net serveability break.
+    #[test]
+    fn inverse_walk_reconstructs_a_target_from_the_flat_head() {
+        // snap_at(n) is the state at block n; chain() builds diffs 1..3.
+        let c = chain();
+        let tip_snapshot = snap_at(3);
+
+        // Walk from the tip (block 3) down to block 1 — exactly the shape of a
+        // pruning point buried below the flat head, with only the retained
+        // (target, tip] diffs available.
+        let got = reconstruct_snapshot_by_inverse_walk::<Infallible>(
+            h(3),
+            &tip_snapshot,
+            h(1),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            |_| None, // EOAs only in this fixture; no code to resolve
+            1000,
+        )
+        .expect("inverse walk reaches the target");
+        assert_eq!(got, snap_at(1), "the reconstructed state must equal the committed state at the target");
+
+        // flat_head == target is the trivial case: the tip is its own state.
+        let same =
+            reconstruct_snapshot_by_inverse_walk::<Infallible>(h(3), &tip_snapshot, h(3), |_| Ok(None), |_| None, 1000).unwrap();
+        assert_eq!(same, tip_snapshot);
+    }
+
+    /// A retention gap in the (target, tip] diffs fails the walk rather than
+    /// producing a wrong state — the same fail-closed discipline as the forward
+    /// walk.
+    #[test]
+    fn inverse_walk_fails_on_a_missing_diff_instead_of_guessing() {
+        let c = chain();
+        let err = reconstruct_snapshot_by_inverse_walk::<Infallible>(
+            h(3),
+            &snap_at(3),
+            h(0),                                                            // below every retained diff
+            |b| Ok((b != h(1)).then(|| c.diffs.get(&b).cloned()).flatten()), // drop diff[1]
+            |_| None,
+            1000,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ReconstructGatherError::Unavailable(_)), "{err:?}");
     }
 
     /// A PRUNED parent must abort the walk, not anchor the empty state.

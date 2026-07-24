@@ -308,6 +308,13 @@ impl PruningProcessor {
         info!("Pruning point UTXO commitment was verified correctly (sanity test)");
     }
 
+    /// The most blocks the inverse-walk rebuild will revert before giving up. A
+    /// bootstrap walk covers the retained (pp, tip] range, i.e. roughly the pruning
+    /// depth; the bound is generous over that so a legitimately deep range succeeds,
+    /// while a runaway (a broken diff chain) still terminates.
+    #[cfg(feature = "evm")]
+    const INVERSE_WALK_MAX_STEPS: usize = 4_000_000;
+
     /// Ensure `pruning_point` carries a §12 anchor, building one if it does not.
     ///
     /// Called immediately before a prune pass, which is the last instant at which
@@ -337,11 +344,13 @@ impl PruningProcessor {
         // retired it, or a freshly imported one), then the flat/reconstruct seed —
         // the same resolver block validation uses, so an anchor can never disagree
         // with what the executor would have seeded.
+        let flat_head = self.storage.evm_latest_state_ptr_store.read().get().ok().flatten().map(|p| p.canonical_head);
         let snapshot = match self.storage.evm_state_store.get(pruning_point) {
             Ok(snapshot) => Some(snapshot),
             Err(_) => {
-                let flat_head = self.storage.evm_latest_state_ptr_store.read().get().ok().flatten().map(|p| p.canonical_head);
-                crate::processes::evm::flat_or_reconstruct_parent_snapshot(
+                // First the cheap forward path (206 retired but the pp is the flat
+                // head, or an anchor still exists below it).
+                let forward = crate::processes::evm::flat_or_reconstruct_parent_snapshot(
                     pruning_point,
                     flat_head,
                     &self.storage.evm_flat_account_store,
@@ -354,7 +363,36 @@ impl PruningProcessor {
                     &self.storage.evm_state_diff_store,
                 )
                 .ok()
-                .map(|(snapshot, _source)| snapshot)
+                .map(|(snapshot, _source)| snapshot);
+                // Then the inverse walk from the flat head. This is what BOOTSTRAPS a
+                // node whose anchor material below the pruning point was already
+                // reclaimed — the forward path cannot, because there is no anchor to
+                // start from, which is exactly the state a node reaches once and then
+                // cannot leave without this. Bounded by the pruning depth (this walks
+                // the retained (pp, tip] diffs once), so it is a heavier fallback, not
+                // the steady-state path.
+                forward.or_else(|| {
+                    flat_head.and_then(|fh| {
+                        match crate::processes::evm::reconstruct_pruning_point_snapshot_verified(
+                            pruning_point,
+                            evm_header.state_root,
+                            fh,
+                            &self.storage.evm_flat_account_store,
+                            &self.storage.evm_code_store,
+                            &self.storage.evm_state_diff_store,
+                            Self::INVERSE_WALK_MAX_STEPS,
+                        ) {
+                            Ok(snapshot) => {
+                                info!("[evm-anchor] rebuilt pruning-point {pruning_point} state by inverse walk from the flat head");
+                                Some(snapshot)
+                            }
+                            Err(e) => {
+                                warn!("[evm-anchor] inverse-walk rebuild of {pruning_point} failed: {e}");
+                                None
+                            }
+                        }
+                    })
+                })
             }
         };
         let Some(snapshot) = snapshot else {

@@ -5005,3 +5005,159 @@ async fn evm_retention_reclaims_rpc_segments_without_waiting_for_l1_pruning() {
     // unlike an index a deleted state diff cannot be rebuilt.
     assert_eq!(state_cursor.pruned_through, 0, "state history must stay behind the L1 pruning point");
 }
+
+/// Serveability across a pruned pruning-point anchor: the defect class the live
+/// net surfaced, now reachable in CI.
+///
+/// The three faults found by running the branch — a pruned parent anchoring the
+/// empty state, no anchor written at the pruning point, and the dead-code
+/// `pruning_anchor` flag — all needed one condition no unit harness reached: the
+/// §12 anchor material below the pruning point is gone while the flat head sits at
+/// the tip. This builds a real EVM chain, forces that exact condition, and proves
+/// the inverse-walk rebuild recovers a byte-exact, root-verified anchor from the
+/// material that IS retained.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn pruning_point_anchor_is_rebuildable_by_inverse_walk_after_its_material_is_gone() {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader, EvmStateCheckpointV2StoreReader};
+    use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+    use kaspa_consensus_core::evm::{EvmExecutionPayload, EvmStateSnapshot, EvmStorageProfile};
+    use kaspa_evm::EvmBlockInput;
+    use rocksdb::WriteBatch;
+
+    kaspa_core::log::try_init_logger("info");
+    const BLOCKS: u64 = 6;
+    // The "pruning point": an early block whose anchor material we then delete,
+    // leaving the flat head at the tip and the (PP, tip] diffs retained.
+    const PP: u64 = 2;
+
+    let (history, shadow, flat, retire) = EvmStorageProfile::Compact.expand();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .apply_args(move |c| {
+            c.evm_history_mode = history;
+            c.evm_shadow_state_backend = shadow;
+            c.evm_flat_authoritative = flat;
+            c.evm_retire_206 = retire;
+            // A cadence that anchors often, so there IS anchor material to delete —
+            // the point is that deleting it does not make the state unrecoverable.
+            c.evm_checkpoint_policy =
+                kaspa_consensus_core::evm::EvmCheckpointPolicy { min_interval_ms: 0, max_block_gap: 1, ..Default::default() };
+        })
+        .build();
+
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let storage = consensus.consensus_clone().storage.clone();
+    set_fresh_dns_finality(&consensus);
+
+    let genesis = consensus.params().genesis.hash;
+    let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
+    let mut parent_hash = genesis;
+    let mut parent_header = None;
+    let mut parent_snapshot = EvmStateSnapshot::default();
+    // Committed state at each block, to check the rebuild against.
+    let mut committed_state: std::collections::HashMap<u64, EvmStateSnapshot> = std::collections::HashMap::new();
+
+    for i in 1..=BLOCKS {
+        let hash = BlockHash::from(i);
+        let payload = EvmExecutionPayload::default();
+        let mut block = consensus.build_utxo_valid_block_with_parents(hash, vec![parent_hash], miner_data.clone(), vec![]);
+        block.header.version = EVM_HEADER_VERSION;
+        block.header.evm_payload_hash = payload.payload_hash();
+        let input = EvmBlockInput {
+            parent: parent_header.as_ref(),
+            header_timestamp_ms: block.header.timestamp,
+            selected_parent_hash: parent_hash.as_bytes(),
+            blue_work_be: block.header.blue_work.to_be_bytes().to_vec(),
+            daa_score: block.header.daa_score,
+            payload: &payload,
+            accepted_txs: &[],
+            gas_pool_v2_activation_daa_score: u64::MAX,
+            f002_withdraw_cap_activation_daa_score: u64::MAX,
+            f003_mldsa_verify_activation_daa_score: u64::MAX,
+            typed_receipt_root_activation_daa_score: u64::MAX,
+        };
+        let (executed, snapshot) = kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).unwrap();
+        block.header.evm_commitment_root = executed.header.commitment_root();
+        block.evm_payload = payload;
+        consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.unwrap();
+        committed_state.insert(i, snapshot.clone());
+        parent_hash = hash;
+        parent_header = Some(executed.header);
+        parent_snapshot = snapshot;
+    }
+
+    let pp = BlockHash::from(PP);
+    let db = consensus.consensus_clone().db();
+    let flat_head = storage.evm_heads_store.read().get().unwrap().latest;
+    assert_eq!(flat_head, BlockHash::from(BLOCKS), "the flat head must be at the tip");
+    let committed_root = storage.evm_header_store.get(pp).unwrap().state_root;
+
+    // Force the broken state: delete every v2 anchor at or below the pruning point,
+    // and the diffs BELOW it. This is what a pre-fix node's pruning left behind —
+    // no anchor to forward-walk from — while the flat head and the (pp, tip] diffs
+    // survive.
+    {
+        let mut batch = WriteBatch::default();
+        for i in 0..=PP {
+            let b = BlockHash::from(i);
+            storage.evm_state_checkpoint_v2_store.delete_batch(&mut batch, b).unwrap();
+            if i < PP {
+                storage.evm_state_diff_store.delete_batch(&mut batch, b).unwrap();
+            }
+        }
+        db.write(batch).unwrap();
+    }
+    assert!(
+        !EvmStateCheckpointV2StoreReader::has(&*storage.evm_state_checkpoint_v2_store, pp).unwrap(),
+        "the pruning point's anchor must be gone for the test to mean anything"
+    );
+
+    // The repair: reconstruct the pruning point's state by inverse walk from the
+    // flat head, verified against the committed root.
+    let rebuilt = crate::processes::evm::reconstruct_pruning_point_snapshot_verified(
+        pp,
+        committed_root,
+        flat_head,
+        &storage.evm_flat_account_store,
+        &storage.evm_code_store,
+        &storage.evm_state_diff_store,
+        1_000_000,
+    )
+    .expect("the inverse walk must rebuild the pruning-point state from retained material");
+    // Byte-exact with what the chain actually committed at the pruning point.
+    let mut expected = committed_state[&PP].clone();
+    expected.accounts.sort_by(|a, b| a.address.as_bytes().cmp(&b.address.as_bytes()));
+    let mut got = rebuilt.clone();
+    got.accounts.sort_by(|a, b| a.address.as_bytes().cmp(&b.address.as_bytes()));
+    assert_eq!(got, expected, "the rebuilt state must equal the committed state at the pruning point");
+
+    // And once written, the anchor resolves — pruned IBD serving is restored.
+    let anchor = kaspa_consensus_core::evm::EvmStateCheckpointV2::build(
+        pp,
+        storage.evm_header_store.get(pp).unwrap().evm_number,
+        committed_root,
+        &rebuilt,
+        kaspa_consensus_core::evm::CheckpointCodec::Deflate,
+    );
+    let mut batch = WriteBatch::default();
+    storage.evm_state_checkpoint_v2_store.insert_batch(&mut batch, pp, anchor).unwrap();
+    db.write(batch).unwrap();
+
+    let served = crate::processes::evm::resolve_anchor_snapshot(
+        pp,
+        &storage.evm_state_checkpoint_v2_store,
+        &storage.evm_state_checkpoint_store,
+        &storage.evm_code_store,
+    )
+    .unwrap()
+    .expect("the rebuilt anchor must resolve");
+    let mut served_sorted = served;
+    served_sorted.accounts.sort_by(|a, b| a.address.as_bytes().cmp(&b.address.as_bytes()));
+    assert_eq!(served_sorted, expected, "the served anchor state must equal the committed state");
+
+    drop(storage);
+    consensus.shutdown(wait_handles);
+}
