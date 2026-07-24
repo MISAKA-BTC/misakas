@@ -1199,6 +1199,30 @@ impl PalwSearchAvailabilityStateV1 {
         Ok(PalwSearchAvailabilityUndoV1::StatusChanged { object_root, prior })
     }
 
+    /// Scheduler-slash linkage: when a scheduler's bond is slashed on-chain, every obligation
+    /// that scheduler anchored is voided in one deterministic sweep (root order). Already
+    /// slashed obligations are left untouched. Returns one undo per changed obligation, in
+    /// application order; revert them in reverse like every other transition.
+    pub fn void_by_scheduler(
+        &mut self,
+        slashed_scheduler_key_id: Hash64,
+        at_daa_score: u64,
+    ) -> Vec<PalwSearchAvailabilityUndoV1> {
+        let mut undos = Vec::new();
+        for (object_root, obligation) in &mut self.obligations {
+            if obligation.scheduler_key_id != slashed_scheduler_key_id {
+                continue;
+            }
+            if matches!(obligation.status, PalwSearchObligationStatusV1::Slashed { .. }) {
+                continue;
+            }
+            let prior = obligation.status;
+            obligation.status = PalwSearchObligationStatusV1::Slashed { at_daa_score };
+            undos.push(PalwSearchAvailabilityUndoV1::StatusChanged { object_root: *object_root, prior });
+        }
+        undos
+    }
+
     /// Reverts one transition. Undos MUST be applied in reverse order of their creation.
     pub fn revert(&mut self, undo: PalwSearchAvailabilityUndoV1) -> Result<(), PalwSearchSnapshotError> {
         match undo {
@@ -1817,6 +1841,46 @@ mod tests {
             state.revert(undo).unwrap();
         }
         assert!(state.obligations.is_empty());
+    }
+
+    #[test]
+    fn scheduler_slash_voids_every_obligation_of_that_scheduler_and_reverts() {
+        let snapshot = snapshot();
+        let commitment = snapshot.da_commitment().unwrap();
+        let mut anchor_a = PalwSearchSnapshotAnchorV1 {
+            assignment_id: Hash64::from_bytes([5; 64]),
+            snapshot_digest: snapshot.digest().unwrap(),
+            object_root: commitment.root,
+            object_len: commitment.object_len,
+            chunk_count: commitment.chunk_count,
+            availability_deadline_daa_score: 20_000,
+        };
+        let mut anchor_b = anchor_a;
+        anchor_b.object_root = Hash64::from_bytes([0x51; 64]);
+        let mut anchor_other = anchor_a;
+        anchor_other.object_root = Hash64::from_bytes([0x52; 64]);
+        let slashed_key = scheduler_key_id(&[0xAA; 32]);
+        let other_key = scheduler_key_id(&[0xBB; 32]);
+        let mut state = PalwSearchAvailabilityStateV1::default();
+        state.register(anchor_a, slashed_key, 10_000).unwrap();
+        state.register(anchor_b, slashed_key, 10_000).unwrap();
+        state.register(anchor_other, other_key, 10_000).unwrap();
+        // One anchored obligation is mid-challenge; voiding overrides it too.
+        state.challenge(anchor_b.object_root, 0, 10_100, 50).unwrap();
+        let before = state.clone();
+
+        let undos = state.void_by_scheduler(slashed_key, 10_200);
+        assert_eq!(undos.len(), 2, "exactly the slashed scheduler's obligations change");
+        for root in [anchor_a.object_root, anchor_b.object_root] {
+            assert!(matches!(state.obligations[&root].status, PalwSearchObligationStatusV1::Slashed { at_daa_score: 10_200 }));
+        }
+        assert_eq!(state.obligations[&anchor_other.object_root].status, PalwSearchObligationStatusV1::Active);
+        // Idempotent on re-slash; reorg rollback restores the pre-slash state bit-exactly.
+        assert!(state.void_by_scheduler(slashed_key, 10_300).is_empty());
+        for undo in undos.into_iter().rev() {
+            state.revert(undo).unwrap();
+        }
+        assert_eq!(state, before);
     }
 
     #[test]
