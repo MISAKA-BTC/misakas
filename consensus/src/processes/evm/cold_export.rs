@@ -13,7 +13,9 @@
 //! to a volume the operator has not chosen — and then deleting the original —
 //! is not a decision a background pass should make.
 
-use kaspa_consensus_core::evm::{ColdRecord, ColdSegment, ColdSegmentError, ColdSegmentKind, EvmColdSegmentManifest};
+use kaspa_consensus_core::evm::{
+    BlockConsensusBinding, ColdRecord, ColdSegment, ColdSegmentError, ColdSegmentKind, EvmColdSegmentManifest,
+};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -90,6 +92,49 @@ pub fn export_range(
     manifest: &mut EvmColdSegmentManifest,
 ) -> Result<PathBuf, ColdExportError> {
     let segment = ColdSegment::build(kind, records)?;
+    let path = write_segment(dir, &segment)?;
+    manifest.insert(segment.header)?;
+    Ok(path)
+}
+
+/// Export a transaction segment, BOUND to consensus and verified at build.
+///
+/// The records are raw EIP-2718 bytes in `(evm_number, tx_index)` order. For each
+/// block the builder recomputes `transactions_root` from its records and requires
+/// it to equal the committed root — so a builder bug produces a build error here,
+/// not an archived-and-trusted lie. The verification is the exact one §5.5.2
+/// specifies: `transactions_root`, which is bound to consensus via the block's
+/// `evm_commitment_root`, NOT KIP-15's `accepted_id_merkle_root` (design #3).
+///
+/// `committed_root_of` returns each block's committed `transactions_root` (from
+/// its `EvmExecutionHeader`). Every block appearing in `records` must have one, or
+/// the export refuses — an unbound block is a record set nothing vouches for.
+#[cfg(feature = "evm")]
+pub fn export_transaction_segment(
+    dir: &Path,
+    records: &[ColdRecord],
+    committed_root_of: impl Fn(kaspa_hashes::Hash64) -> Option<kaspa_hashes::EvmH256>,
+    manifest: &mut EvmColdSegmentManifest,
+) -> Result<PathBuf, ColdExportError> {
+    use std::collections::BTreeSet;
+
+    // One binding per distinct block, in appearance order.
+    let mut seen = BTreeSet::new();
+    let mut bindings = Vec::new();
+    for r in records {
+        if seen.insert(r.block) {
+            let committed = committed_root_of(r.block)
+                .ok_or_else(|| ColdSegmentError::Binding(format!("no committed transactions_root for block {}", r.block)))?;
+            bindings.push(BlockConsensusBinding { evm_number: r.evm_number, block: r.block, committed_root: committed });
+        }
+    }
+
+    let segment = ColdSegment::build_with_bindings(ColdSegmentKind::RawTransactions, records, bindings)?;
+    // Verify BEFORE writing: recompute transactions_root from each block's raw txs.
+    segment.verify_consensus_binding(true, |block_records| {
+        let raws: Vec<Vec<u8>> = block_records.iter().map(|r| r.value.clone()).collect();
+        Ok::<_, std::convert::Infallible>(kaspa_evm::roots::transactions_root(&raws))
+    })?;
     let path = write_segment(dir, &segment)?;
     manifest.insert(segment.header)?;
     Ok(path)
@@ -177,6 +222,51 @@ mod tests {
         assert!(leftovers.is_empty(), "a partial file survived a successful export: {leftovers:?}");
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn tx_record(evm_number: u64, block: u8, raw: &[u8]) -> ColdRecord {
+        ColdRecord { evm_number, block: Hash64::from_bytes([block; 64]), value: raw.to_vec() }
+    }
+
+    #[test]
+    #[cfg(feature = "evm")]
+    fn a_transaction_segment_verifies_its_transactions_root_at_build() {
+        // Two blocks, real transactions_root over their raw bytes. The committed
+        // root is what the block actually committed; export must reproduce it.
+        let dir = temp_dir("txbind-ok");
+        let b1: Vec<Vec<u8>> = vec![vec![1, 2, 3], vec![4, 5]];
+        let b2: Vec<Vec<u8>> = vec![vec![9, 9, 9, 9]];
+        let records = vec![tx_record(1, 1, &b1[0]), tx_record(1, 1, &b1[1]), tx_record(2, 2, &b2[0])];
+        let root1 = kaspa_evm::roots::transactions_root(&b1);
+        let root2 = kaspa_evm::roots::transactions_root(&b2);
+        let committed = move |block: Hash64| {
+            if block == Hash64::from_bytes([1; 64]) {
+                Some(root1)
+            } else if block == Hash64::from_bytes([2; 64]) {
+                Some(root2)
+            } else {
+                None
+            }
+        };
+
+        let mut manifest = EvmColdSegmentManifest::new();
+        let path = export_transaction_segment(&dir, &records, committed, &mut manifest).unwrap();
+        assert!(path.exists(), "a correctly-bound segment is written");
+
+        // A builder that miscommits — a committed root that the records do not
+        // reproduce — fails at BUILD, before anything is archived.
+        let dir2 = temp_dir("txbind-bad");
+        let wrong = |_: Hash64| Some(kaspa_hashes::EvmH256::from_bytes([0xEE; 32]));
+        let mut m2 = EvmColdSegmentManifest::new();
+        let err = export_transaction_segment(&dir2, &records, wrong, &mut m2).unwrap_err();
+        assert!(matches!(err, ColdExportError::Segment(ColdSegmentError::Binding(_))), "{err:?}");
+        assert!(
+            !dir2.join("raw-transactions-000000000001-000000000002.mseg").exists(),
+            "a segment failing its binding must not be written"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir2).ok();
     }
 
     #[test]

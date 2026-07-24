@@ -23,7 +23,7 @@
 //! records against its own headers.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use kaspa_hashes::{Hash64, blake2b_256_keyed};
+use kaspa_hashes::{EvmH256, Hash64, blake2b_256_keyed};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
@@ -114,12 +114,32 @@ impl ColdSegmentHeader {
     }
 }
 
-/// A complete segment: header plus compressed records.
+/// One block's CONSENSUS binding inside a segment.
+///
+/// The checksum proves the bytes are the ones the builder wrote; it proves
+/// nothing about whether the builder wrote the RIGHT bytes. A binding closes that
+/// gap: the block's records must recompute to `committed_root` (a
+/// `transactions_root` for a transaction segment), which is itself bound to
+/// consensus via the block's `evm_commitment_root` and the L1 header chain. This
+/// is what stops a builder bug from being archived as truth — the review's
+/// precondition for treating any segment as authoritative.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockConsensusBinding {
+    pub evm_number: u64,
+    pub block: Hash64,
+    pub committed_root: EvmH256,
+}
+
+/// A complete segment: header, compressed records, and per-block consensus
+/// bindings. Empty `bindings` = an unbound segment (e.g. a headers archive that
+/// carries its own roots); a transaction segment must be bound.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColdSegment {
     pub header: ColdSegmentHeader,
     pub payload: Vec<u8>,
+    pub bindings: Vec<BlockConsensusBinding>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -134,6 +154,8 @@ pub enum ColdSegmentError {
     Checksum,
     #[error("segment payload decode: {0}")]
     Decode(String),
+    #[error("consensus binding: {0}")]
+    Binding(String),
 }
 
 fn segment_checksum(bytes: &[u8]) -> [u8; 32] {
@@ -172,7 +194,62 @@ impl ColdSegment {
                 checksum: segment_checksum(&payload),
             },
             payload,
+            bindings: Vec::new(),
         })
+    }
+
+    /// Build a segment carrying per-block consensus bindings.
+    pub fn build_with_bindings(
+        kind: ColdSegmentKind,
+        records: &[ColdRecord],
+        bindings: Vec<BlockConsensusBinding>,
+    ) -> Result<Self, ColdSegmentError> {
+        let mut seg = Self::build(kind, records)?;
+        seg.bindings = bindings;
+        Ok(seg)
+    }
+
+    /// Verify every block's records recompute to its committed root.
+    ///
+    /// `recompute` receives one block's records in `(evm_number, tx_index)` order —
+    /// the order the builder concatenated them, which is the order the root is
+    /// defined over — and returns the root they produce. The check fails closed on
+    /// any mismatch, any bound block with no records, or (when `require_all`) any
+    /// record block with no binding, so a builder cannot ship a segment whose
+    /// records disagree with what consensus committed.
+    pub fn verify_consensus_binding<E: std::fmt::Display>(
+        &self,
+        require_all: bool,
+        recompute: impl Fn(&[ColdRecord]) -> Result<EvmH256, E>,
+    ) -> Result<(), ColdSegmentError> {
+        use std::collections::BTreeMap;
+        let records = self.records()?;
+        let mut by_block: BTreeMap<Hash64, Vec<ColdRecord>> = BTreeMap::new();
+        for r in records {
+            by_block.entry(r.block).or_default().push(r);
+        }
+        let bound: std::collections::HashSet<Hash64> = self.bindings.iter().map(|b| b.block).collect();
+
+        for binding in &self.bindings {
+            let Some(block_records) = by_block.get(&binding.block) else {
+                return Err(ColdSegmentError::Binding(format!("bound block {} has no records in the segment", binding.block)));
+            };
+            let got = recompute(block_records).map_err(|e| ColdSegmentError::Binding(format!("{}: {e}", binding.block)))?;
+            if got != binding.committed_root {
+                return Err(ColdSegmentError::Binding(format!(
+                    "block {} records recompute to {:?}, committed {:?}",
+                    binding.block, got, binding.committed_root
+                )));
+            }
+        }
+        if require_all {
+            for block in by_block.keys() {
+                if !bound.contains(block) {
+                    return Err(ColdSegmentError::Binding(format!("block {block} has records but no consensus binding")));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Decode the records, verifying the checksum first.
@@ -372,6 +449,53 @@ mod tests {
         // History a node can only partly serve is history it must not claim.
         assert_eq!(m.contiguous_range(ColdSegmentKind::Receipts), Some((0, 199)));
         assert_eq!(m.contiguous_range(ColdSegmentKind::Payloads), None);
+    }
+
+    fn root(b: u8) -> EvmH256 {
+        EvmH256::from_bytes([b; 32])
+    }
+
+    #[test]
+    fn a_binding_that_matches_the_recompute_passes_and_a_mismatch_fails_closed() {
+        // The recompute stand-in: a block's root is its evm_number as a byte. A
+        // real builder uses transactions_root; the grouping and compare are what
+        // this exercises.
+        let records = vec![record(1), record(1), record(2)];
+        let bindings = vec![
+            BlockConsensusBinding { evm_number: 1, block: records[0].block, committed_root: root(1) },
+            BlockConsensusBinding { evm_number: 2, block: records[2].block, committed_root: root(2) },
+        ];
+        let seg = ColdSegment::build_with_bindings(ColdSegmentKind::RawTransactions, &records, bindings).unwrap();
+
+        // Correct recompute (root = first record's evm_number) verifies.
+        seg.verify_consensus_binding::<String>(true, |recs| Ok(root(recs[0].evm_number as u8))).unwrap();
+
+        // A builder bug — records that do not produce the committed root — is
+        // caught rather than archived.
+        let err = seg.verify_consensus_binding::<String>(true, |_| Ok(root(0xFF))).unwrap_err();
+        assert!(matches!(err, ColdSegmentError::Binding(_)), "{err:?}");
+    }
+
+    #[test]
+    fn require_all_rejects_a_block_with_records_but_no_binding() {
+        // A transaction segment must bind EVERY block; an unbound block is a hole a
+        // builder could smuggle unverified records through.
+        let records = vec![record(1), record(2)];
+        let bindings = vec![BlockConsensusBinding { evm_number: 1, block: records[0].block, committed_root: root(1) }];
+        let seg = ColdSegment::build_with_bindings(ColdSegmentKind::RawTransactions, &records, bindings).unwrap();
+        let err = seg.verify_consensus_binding::<String>(true, |recs| Ok(root(recs[0].evm_number as u8))).unwrap_err();
+        assert!(matches!(err, ColdSegmentError::Binding(_)), "{err:?}");
+        // Without require_all the partially-bound segment is accepted (bound blocks
+        // still checked).
+        seg.verify_consensus_binding::<String>(false, |recs| Ok(root(recs[0].evm_number as u8))).unwrap();
+    }
+
+    #[test]
+    fn a_binding_for_a_block_with_no_records_fails() {
+        let records = vec![record(1)];
+        let bindings = vec![BlockConsensusBinding { evm_number: 9, block: Hash64::from_bytes([9; 64]), committed_root: root(9) }];
+        let seg = ColdSegment::build_with_bindings(ColdSegmentKind::RawTransactions, &records, bindings).unwrap();
+        assert!(seg.verify_consensus_binding::<String>(false, |_| Ok(root(9))).is_err());
     }
 
     #[test]
