@@ -2138,7 +2138,14 @@ impl VirtualStateProcessor {
     /// surfaces in the trace log instead of crashing the virtual processor.
     fn accepted_txs_of_chain_block(&self, chain_block: BlockHash) -> Vec<Transaction> {
         match self.acceptance_data_store.get(chain_block) {
-            Ok(ad) => self.accepted_txs_from_acceptance_data(&ad),
+            // TOLERANT: a chain block being walked here may be at or below the
+            // pruning point, so its mergeset can reference blocks whose bodies were
+            // pruned. Skip those rather than panicking — the sibling already
+            // tolerates the acceptance data itself being absent, and this closes the
+            // same gap one level down (the block-transactions store). Pruning walks
+            // pruned blocks by construction, so a pruned body means "no accepted txs
+            // resolvable here", never a fault.
+            Ok(ad) => self.accepted_txs_from_acceptance_data_impl(&ad, true),
             Err(StoreError::KeyNotFound(_)) => {
                 trace!(
                     "accepted_txs_of_chain_block: no acceptance data for {chain_block} (pruning point / pruned) — treating as no accepted txs"
@@ -2155,9 +2162,37 @@ impl VirtualStateProcessor {
     /// committed* block's mutations from the in-memory `ctx.mergeset_acceptance_data`,
     /// whose `acceptance_data_store` entry does not exist until `commit_utxo_state`.
     pub(super) fn accepted_txs_from_acceptance_data(&self, acceptance_data: &AcceptanceData) -> Vec<Transaction> {
+        // STRICT by default: every caller except the pruning-facing chain-block walk
+        // operates on RECENT, unpruned acceptance data (a block being validated, its
+        // in-memory mergeset), where a missing body is genuine corruption to fail on.
+        self.accepted_txs_from_acceptance_data_impl(acceptance_data, false)
+    }
+
+    /// Resolve accepted transactions from acceptance data. `tolerate_pruned_bodies`
+    /// skips a mergeset block whose transactions have been pruned instead of
+    /// panicking — set only on the pruning-facing path (`accepted_txs_of_chain_block`),
+    /// where walking a pruned block is expected; strict everywhere else so a missing
+    /// RECENT body still fails fast.
+    fn accepted_txs_from_acceptance_data_impl(
+        &self,
+        acceptance_data: &AcceptanceData,
+        tolerate_pruned_bodies: bool,
+    ) -> Vec<Transaction> {
         let mut txs = Vec::new();
         for mergeset in acceptance_data.iter() {
-            let block_txs = self.block_transactions_store.get(mergeset.block_hash).unwrap();
+            let block_txs = match self.block_transactions_store.get(mergeset.block_hash) {
+                Ok(t) => t,
+                Err(StoreError::KeyNotFound(_)) if tolerate_pruned_bodies => {
+                    trace!(
+                        "accepted_txs_from_acceptance_data: mergeset block {} bodies are pruned — contributing no accepted txs",
+                        mergeset.block_hash
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    panic!("accepted_txs_from_acceptance_data: block_transactions_store.get({}) failed: {e}", mergeset.block_hash)
+                }
+            };
             for entry in mergeset.accepted_transactions.iter() {
                 if let Some(tx) = block_txs.get(entry.index_within_block as usize) {
                     txs.push(tx.clone());

@@ -5179,3 +5179,128 @@ async fn pruning_point_anchor_is_rebuildable_by_inverse_walk_after_its_material_
     drop(storage);
     consensus.shutdown(wait_handles);
 }
+
+/// Step 8 CI harness: a REAL pruning advance writes the pruning-point anchor, and
+/// the served state survives it. Unlike the sibling test (which simulates the
+/// pruned state by deleting rows), this drives the actual pruning processor.
+///
+/// With a small pruning depth an EVM-active chain is grown past it, triggering a
+/// genuine pruning advance. The anchor cadence is set to NEVER fire, so the only
+/// possible source of an anchor at the pruning point is the pruning processor's
+/// pre-delete `ensure_evm_pruning_point_anchor` — exactly the path the live-net
+/// failure showed was missing. After pruning, the pruning point must carry an
+/// anchor AND the serving API must return its committed state.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn real_pruning_advance_writes_and_serves_the_pruning_point_anchor() {
+    use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateCheckpointV2StoreReader};
+    use kaspa_consensus_core::api::ConsensusApi;
+    use kaspa_consensus_core::blockstatus::BlockStatus;
+    use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+    use kaspa_consensus_core::evm::{CheckpointCodec, EvmCheckpointPolicy, EvmExecutionPayload, EvmStateSnapshot, EvmStorageProfile};
+    use kaspa_evm::EvmBlockInput;
+    use std::time::{Duration, Instant};
+
+    kaspa_core::log::try_init_logger("info");
+
+    let (history, shadow, flat, retire) = EvmStorageProfile::Compact.expand();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.evm_activation_daa_score = 0;
+            // Small depths so a modest chain triggers a real pruning advance.
+            p.finality_depth = 2;
+            p.mergeset_size_limit = 2;
+            p.ghostdag_k = 2;
+            p.merge_depth = 3;
+            p.pruning_depth = 100;
+        })
+        .apply_args(move |c| {
+            c.evm_history_mode = history;
+            c.evm_shadow_state_backend = shadow;
+            c.evm_flat_authoritative = flat;
+            c.evm_retire_206 = retire;
+            // NEVER write a tip-cadence anchor: the only anchor source we allow is the
+            // pruning processor, so an anchor at the pruning point proves it ran.
+            c.evm_checkpoint_policy = EvmCheckpointPolicy {
+                min_interval_ms: u64::MAX,
+                max_block_gap: u64::MAX,
+                codec: CheckpointCodec::Deflate,
+                max_retained: None,
+            };
+        })
+        .build();
+
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let storage = consensus.consensus_clone().storage.clone();
+    set_fresh_dns_finality(&consensus);
+
+    let genesis = consensus.params().genesis.hash;
+    let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
+    let total = config.pruning_depth() + config.finality_depth() + 100;
+
+    let mut parent_hash = genesis;
+    let mut parent_header = None;
+    let mut parent_snapshot = EvmStateSnapshot::default();
+    let early_block = BlockHash::from(2u64); // will be pruned
+
+    for i in 1..total {
+        let hash = BlockHash::from(i);
+        let payload = EvmExecutionPayload::default();
+        let mut block = consensus.build_utxo_valid_block_with_parents(hash, vec![parent_hash], miner_data.clone(), vec![]);
+        block.header.version = EVM_HEADER_VERSION;
+        block.header.evm_payload_hash = payload.payload_hash();
+        let input = EvmBlockInput {
+            parent: parent_header.as_ref(),
+            header_timestamp_ms: block.header.timestamp,
+            selected_parent_hash: parent_hash.as_bytes(),
+            blue_work_be: block.header.blue_work.to_be_bytes().to_vec(),
+            daa_score: block.header.daa_score,
+            payload: &payload,
+            accepted_txs: &[],
+            gas_pool_v2_activation_daa_score: u64::MAX,
+            f002_withdraw_cap_activation_daa_score: u64::MAX,
+            f003_mldsa_verify_activation_daa_score: u64::MAX,
+            typed_receipt_root_activation_daa_score: u64::MAX,
+        };
+        let (executed, snapshot) = kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).unwrap();
+        block.header.evm_commitment_root = executed.header.commitment_root();
+        block.evm_payload = payload;
+        consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.unwrap();
+        parent_hash = hash;
+        parent_header = Some(executed.header);
+        parent_snapshot = snapshot;
+    }
+
+    // Wait for the real pruning advance (an early block gets pruned).
+    let start = Instant::now();
+    while consensus.block_status(early_block) == BlockStatus::StatusUTXOValid {
+        if start.elapsed() > Duration::from_secs(30) {
+            panic!("timed out waiting for a real pruning advance");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // The current pruning point must now carry an anchor — and the ONLY thing that
+    // could have written it is the pruning processor, because the tip cadence never
+    // fires. This is the live-net-missing anchor-at-pruning path, exercised for real.
+    let pruning_point = consensus.consensus_clone().pruning_point();
+    assert!(
+        EvmStateCheckpointV2StoreReader::has(&*storage.evm_state_checkpoint_v2_store, pruning_point).unwrap(),
+        "a real pruning advance must have written the pruning-point anchor (cadence is off, so nothing else could)"
+    );
+
+    // And the serving API returns the pruning point's committed state.
+    let committed_root = storage.evm_header_store.get(pruning_point).unwrap().state_root;
+    let (served_header, _served) = consensus
+        .consensus_clone()
+        .pruning_point_evm_state(pruning_point)
+        .expect("the pruning-point state must be serveable after a real pruning advance");
+    assert_eq!(served_header.state_root, committed_root);
+
+    // The self-check agrees.
+    assert!(consensus.consensus_clone().check_evm_pruning_point_serveable().is_serveable());
+
+    consensus.shutdown(wait_handles);
+}
