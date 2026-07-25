@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
 kaspa-core.workspace = true
 kaspa-txscript.workspace = true
 misaka-endpoints.workspace = true

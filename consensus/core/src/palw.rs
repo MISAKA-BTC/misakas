@@ -165,6 +165,15 @@ pub const PALW_PROVIDER_UNBOND_MLDSA87_CONTEXT: &[u8] = b"PALWProviderUnbondV1";
 /// pinned by `consensus/tests/receipt_v3_domain_alignment.rs` without introducing a core → PALW crate
 /// dependency (which would invert the existing layering).
 pub const PALW_RECEIPT_V3_MLDSA87_CONTEXT: &[u8] = b"misaka-palw-v3/receipt/mldsa87";
+/// Off-chain scheduler-signed COMPUTE JobSpec transport envelope (worker wire schema
+/// `misaka.palw.testnet-jobspec.v2+scheduler-mldsa87`). Distinct from
+/// [`PALW_RECEIPT_V3_MLDSA87_CONTEXT`] so a receipt signature can never be replayed as a job-spec
+/// authorization or vice versa, and from the on-chain search assignment/anchor contexts. The
+/// signing digest is the runtime's slot-independent framed `testnet-jobspec-signing/v2`
+/// keyed-BLAKE2b — a HASH domain, which stays in its own namespace per the
+/// `signature_domains` module note. Like Receipt v3 this is an off-chain wire contract, so it
+/// follows the slash convention.
+pub const PALW_COMPUTE_JOBSPEC_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw-v3/jobspec/mldsa87";
 /// Digest of an opened reveal's secret entropy. This is deliberately distinct from
 /// [`PALW_BEACON_COMMIT_DOMAIN`]: the public commitment is known in `E-2` and therefore MUST NOT be
 /// reused as the `R_E` entropy input once the reveal arrives in `E-1`.

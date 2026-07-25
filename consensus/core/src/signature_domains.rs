@@ -88,6 +88,36 @@ pub const SIGNATURE_DOMAINS: &[SignatureDomain] = &[
         defined_in: "misaka_palw::receipt_v3::ComputeReceiptV3::signing_digest",
     },
     SignatureDomain {
+        object: "PALW off-chain compute job-spec transport",
+        context: crate::palw::PALW_COMPUTE_JOBSPEC_V2_MLDSA87_CONTEXT,
+        defined_in: "runtime testnet::job_spec_signing_digest (worker wire jobspec.v2+scheduler-mldsa87)",
+    },
+    SignatureDomain {
+        object: "PALW PCPB partner-B receipt",
+        context: crate::palw::PALW_PCPB_RECEIPT_MLDSA87_CONTEXT,
+        defined_in: "palw PCPB partner-B receipt preimage (PALW_PCPB_RECEIPT_TAG || A_commit)",
+    },
+    SignatureDomain {
+        object: "PALW search job assignment",
+        context: crate::palw::search_snapshot::PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT,
+        defined_in: "palw::search_snapshot::PalwSearchAssignmentV1::verify",
+    },
+    SignatureDomain {
+        object: "PALW search snapshot anchor",
+        context: crate::palw::search_snapshot::PALW_SEARCH_ANCHOR_MLDSA87_CONTEXT,
+        defined_in: "palw::search_snapshot::PalwSearchSignedAnchorV1::verify",
+    },
+    SignatureDomain {
+        object: "PALW search availability challenge",
+        context: crate::palw::search_snapshot::PALW_SEARCH_CHALLENGE_MLDSA87_CONTEXT,
+        defined_in: "palw::search_snapshot::PalwSearchChallengeTxV1::signing_hash",
+    },
+    SignatureDomain {
+        object: "PALW search availability timeout evidence",
+        context: crate::palw::search_snapshot::PALW_SEARCH_TIMEOUT_MLDSA87_CONTEXT,
+        defined_in: "palw::search_snapshot::PalwSearchTimeoutTxV1::signing_hash",
+    },
+    SignatureDomain {
         object: "PALW DA replica execution receipt v1",
         context: crate::palw::da::PALW_REPLICA_RECEIPT_V1_MLDSA87_CONTEXT,
         defined_in: "palw::ReplicaExecutionReceiptV1::signing_hash",
@@ -183,21 +213,65 @@ mod tests {
     #[test]
     fn palw_naming_divergence_is_pinned_not_forgotten() {
         let palw: Vec<_> = SIGNATURE_DOMAINS.iter().filter(|d| d.object.starts_with("PALW")).collect();
-        // Eight compact-context PALW objects plus Receipt v3, which is an off-chain wire contract and
-        // uses the slash convention. DA-01 deliberately keeps each role replay-incompatible.
-        assert_eq!(palw.len(), 9, "if a PALW signing object was added, decide its naming convention explicitly");
-        let receipt_v3 =
-            palw.iter().find(|d| d.object == "PALW off-chain compute receipt v3").expect("Receipt v3 signature-domain row");
-        assert_eq!(receipt_v3.context, b"misaka-palw-v3/receipt/mldsa87");
+        // Thirteen compact-context PALW objects plus the two OFF-CHAIN wire contracts (Receipt v3
+        // and the compute job-spec transport), which use the slash convention. DA-01 deliberately
+        // keeps each role replay-incompatible.
+        assert_eq!(palw.len(), 15, "if a PALW signing object was added, decide its naming convention explicitly");
+        let off_chain_slash: &[(&str, &[u8])] = &[
+            ("PALW off-chain compute receipt v3", b"misaka-palw-v3/receipt/mldsa87"),
+            ("PALW off-chain compute job-spec transport", b"misaka-palw-v3/jobspec/mldsa87"),
+        ];
+        for (object, context) in off_chain_slash {
+            let row = palw.iter().find(|d| d.object == *object).expect("off-chain slash-convention row");
+            assert_eq!(&row.context, context);
+        }
         let auditor =
             palw.iter().find(|d| d.object == "PALW batch-certificate auditor vote").expect("auditor vote signature-domain row");
         assert_eq!(auditor.context, b"PALWAuditorVoteV2");
-        for d in palw.iter().filter(|d| d.object != "PALW off-chain compute receipt v3") {
+        for d in palw.iter().filter(|d| !off_chain_slash.iter().any(|(object, _)| d.object == *object)) {
             assert!(
-                !d.context.starts_with(b"kaspa-pq-v1/"),
+                !d.context.contains(&b'/'),
                 "{} now follows the slash convention — update this test and the module note",
                 d.object
             );
+        }
+    }
+
+    /// **The table is LOCKED (2026-07-25).** This golden is an independent duplication of every
+    /// row: the registry can only change when this test is updated in the same commit, which is
+    /// exactly the review surface the lock exists to force. Removing or editing a row is a
+    /// re-genesis-scale decision; adding one requires an explicit naming decision above AND a new
+    /// golden line here.
+    #[test]
+    fn signature_domain_table_is_locked() {
+        let golden: &[(&str, &[u8])] = &[
+            ("DNS validator attestation", b"kaspa-pq-v1/att/mldsa87"),
+            ("DNS unbond request", b"kaspa-pq-v1/unbond/mldsa87"),
+            ("DNS validator takeover token", b"kaspa-pq-v1/takeover/mldsa87"),
+            ("DNS audit checkpoint", b"kaspa-pq-v1/audit-ckpt/mldsa87"),
+            ("PALW beacon commit/reveal", b"PALWBeaconV1"),
+            ("PALW batch-certificate auditor vote", b"PALWAuditorVoteV2"),
+            ("PALW per-block ticket authorization", b"PALWBlockAuthorizationV1"),
+            ("PALW provider-bond unbond request", b"PALWProviderUnbondV1"),
+            ("PALW off-chain compute receipt v3", b"misaka-palw-v3/receipt/mldsa87"),
+            ("PALW off-chain compute job-spec transport", b"misaka-palw-v3/jobspec/mldsa87"),
+            ("PALW PCPB partner-B receipt", b"PALWPcpbReceiptV1"),
+            ("PALW search job assignment", b"PALWSearchAssignmentV1"),
+            ("PALW search snapshot anchor", b"PALWSearchAnchorV1"),
+            ("PALW search availability challenge", b"PALWSearchChallengeV1"),
+            ("PALW search availability timeout evidence", b"PALWSearchTimeoutV1"),
+            ("PALW DA replica execution receipt v1", b"PALWReplicaReceiptV1"),
+            ("PALW DA provider owner-to-session authorization", b"PALWProviderSessionV1"),
+            ("PALW DA on-chain challenge", b"PALWDAChallengeV1"),
+            ("PALW DA provider response", b"PALWDAResponseV1"),
+            ("F003 PREA account root key", b"misaka-pq-evm-v1/root/mldsa87"),
+            ("F003 PREA per-operation key", b"misaka-pq-evm-v1/op/mldsa87"),
+            ("F003 FSL verify", b"misaka-pq-fsl-v1/verify/mldsa87"),
+        ];
+        assert_eq!(SIGNATURE_DOMAINS.len(), golden.len(), "signature-domain table size drifted from the LOCKED golden");
+        for (row, (object, context)) in SIGNATURE_DOMAINS.iter().zip(golden) {
+            assert_eq!(row.object, *object, "signature-domain table order/name drifted from the LOCKED golden");
+            assert_eq!(&row.context, context, "{object}: context bytes drifted from the LOCKED golden");
         }
     }
 

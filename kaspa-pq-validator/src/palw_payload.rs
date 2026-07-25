@@ -4,6 +4,7 @@
 //! lifecycle staging stay separate from producer policy. This module supplies the missing operator
 //! path for lifecycle objects while keeping private keys and audit evidence off the submission host.
 
+mod compute;
 mod da;
 mod lifecycle;
 mod search;
@@ -19,6 +20,7 @@ use kaspa_consensus_core::palw::{validate_palw_overlay_payload, validate_palw_ov
 use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed};
 use misaka_palw_miner::registration::{PROVIDER_BOND_SUBNETWORK_BYTE, build_provider_bond};
 
+use self::compute::ComputeJobspecPayloadArgs;
 use self::da::{DaChallengePayloadArgs, DaInspectArgs, DaResponsePayloadArgs, DaTimeoutPayloadArgs};
 use self::lifecycle::{
     AuditCertificatePayloadArgs, AuditFactsPayloadArgs, AuditVotePayloadArgs, BatchManifestPayloadArgs, LeafChunkPayloadArgs,
@@ -63,6 +65,9 @@ enum PalwPayloadCommand {
     SearchResponse(SearchResponsePayloadArgs),
     /// Sign search-availability timeout evidence (subnetwork 0x3f).
     SearchTimeout(SearchTimeoutPayloadArgs),
+    /// Dispatch a scheduler-signed COMPUTE job spec (worker wire
+    /// `misaka.palw.testnet-jobspec.v2+scheduler-mldsa87`; off-chain artifact, not a subnetwork tx).
+    ComputeJobspec(ComputeJobspecPayloadArgs),
 }
 
 /// The two shipped PALW-active, closed-testnet presets.
@@ -148,6 +153,7 @@ pub async fn palw_payload(args: PalwPayloadArgs) -> Result<(), String> {
         PalwPayloadCommand::SearchChallenge(args) => search::search_challenge_payload(args),
         PalwPayloadCommand::SearchResponse(args) => search::search_response_payload(args),
         PalwPayloadCommand::SearchTimeout(args) => search::search_timeout_payload(args),
+        PalwPayloadCommand::ComputeJobspec(args) => compute::compute_jobspec_payload(args),
     }
 }
 
