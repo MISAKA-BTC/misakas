@@ -159,8 +159,19 @@ register_one() {
     # selection. Harmless for an outpoint this seed does not control (it is never
     # a selection candidate anyway); REQUIRED when a single funding key backs
     # more than one bond. Values come from the live (state-overlaid) env.
+    #
+    # RETIRED bonds must be excluded too, and they are NOT in state.env: when an
+    # identity is RE-bonded (its previous bond was slashed, or unbonded and left
+    # to lapse), the operator clears PROV_*_BOND so register_one rebuilds — which
+    # also drops that outpoint from this list. Its locked output-0 is plain P2PKH
+    # at the SAME funding address, so `VAL balance` still counts it and funding
+    # selection will happily pick it, but ProviderBondSpendFilter (ADR-0040
+    # ECON-03 leg 4) locks a non-releasable bond's output-0 forever: the carrier
+    # is then SKIPPED at acceptance (not block-rejected), so it silently never
+    # confirms and palw-submit times out waiting for its change outpoint. List
+    # every such outpoint in EXTRA_EXCLUDE_OUTPOINTS (space-separated txid:index).
     EXCLUDES=()
-    for op in "${DNS_BOND:-}" "${PROV_A_BOND:-}" "${PROV_B_BOND:-}" "${AUD_C_BOND:-}"; do
+    for op in "${DNS_BOND:-}" "${PROV_A_BOND:-}" "${PROV_B_BOND:-}" "${AUD_C_BOND:-}" ${EXTRA_EXCLUDE_OUTPOINTS:-}; do
         [ -n "$op" ] || continue
         EXCLUDES[${#EXCLUDES[@]}]="--exclude-funding-outpoint"
         EXCLUDES[${#EXCLUDES[@]}]="$op"

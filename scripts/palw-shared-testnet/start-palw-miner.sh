@@ -149,6 +149,31 @@ _wait_log_marker() {
 #       log format, fall back to a MARKER-level confirmation (an algo-4 marker
 #       AND a StatusUTXOValid line both present) and say so honestly.
 #   Contract: 0 ok, non-zero + WARN on timeout. The caller MUST check the rc.
+#
+#   ACCEPTANCE EVIDENCE IS RPC-GROUNDED, NOT LOG-STRING-GROUNDED. The log-scrape
+#   above ("pow_algo_id"+"replica", "StatusUTXOValid") is retained as a fast path,
+#   but this kaspad build does NOT emit those tokens: the miner logs
+#   `[palw-mine-service] mined + submitted algo-4 block <128hex> off sink <128hex>`
+#   and acceptance shows only as `Accepted N blocks ...<hash>... via submit block`.
+#   Scraping alone therefore times out on a GENUINELY accepted block — a gate that
+#   reports failure on success. So we also (a) take the hash from the miner's own
+#   marker line and (b) confirm acceptance over RPC with `find-reward-settlement`,
+#   which parses the block's PALW ticket and walks the DAG to the first CHAIN block
+#   that merges it, reporting `classification: blue` (admitted) vs `red` (weight-0
+#   fork). That is strictly stronger than any log string: it proves the node itself
+#   considers the block merged and blue.
+
+# _algo4_accepted_rpc <a|b> <128-hex hash> — 0 iff that node's RPC reports the
+#   algo-4 block merged BLUE by a chain block. Non-zero while still unmerged
+#   (find-reward-settlement exit 2), so the caller can keep polling.
+_algo4_accepted_rpc() {
+    local n="${1:?node}" h="${2:?hash}" out
+    out="$("$VAL" find-reward-settlement \
+            --node-wrpc-borsh "$(node_wrpc "$n")" --network "$NETWORK" \
+            --source-block "$h" 2>/dev/null || true)"
+    printf '%s\n' "$out" | grep -q '^settlement.classification: blue$'
+}
+
 _wait_algo4() {
     local n="${1:?node}" base="${2:-0}" pin="${3:-}"
     local timeout="${4:-$GATE_TIMEOUT_SECS}" interval="${5:-$GATE_POLL_SECS}"
@@ -166,9 +191,18 @@ _wait_algo4() {
                     log "gate ok: node-$n accepted algo-4 block $pin (StatusUTXOValid, hash-pinned)"
                     return 0
                 fi
+                # RPC evidence (see header): this node merged the SAME block, blue.
+                if _algo4_accepted_rpc "$n" "$pin"; then
+                    log "gate ok: node-$n accepted algo-4 block $pin (RPC: find-reward-settlement classification=blue, hash-pinned)"
+                    return 0
+                fi
             else
                 # newest line carrying BOTH the pow_algo_id and replica tokens.
-                marker="$(printf '%s\n' "$stream" | awk '/pow_algo_id/ && /replica/ { ln=$0 } END { if (ln!="") print ln }')"
+                # Accept EITHER the (unemitted-by-this-build) pow_algo_id/replica
+                # marker or the miner's real one: "mined + submitted algo-4 block".
+                marker="$(printf '%s\n' "$stream" | awk '
+                    (/pow_algo_id/ && /replica/) || /mined \+ submitted algo-4 block/ { ln=$0 }
+                    END { if (ln!="") print ln }')"
                 if [ -n "$marker" ]; then
                     # Review §7 (P0-3): mock-mode mint success REQUIRES the full 128-hex
                     # Hash64 block hash — a marker line without a parseable hash keeps
@@ -180,6 +214,12 @@ _wait_algo4() {
                         if printf '%s\n' "$stream" | grep -F -- "$hash" | grep -q 'statusutxovalid'; then
                             _ALGO4_HASH="$hash"
                             log "gate ok: node-$n mined+accepted algo-4 block $hash (pow_algo_id=replica, StatusUTXOValid, 128-hex-pinned)"
+                            return 0
+                        fi
+                        # RPC evidence (see header): merged blue by a chain block.
+                        if _algo4_accepted_rpc "$n" "$hash"; then
+                            _ALGO4_HASH="$hash"
+                            log "gate ok: node-$n mined+accepted algo-4 block $hash (RPC: find-reward-settlement classification=blue, 128-hex-pinned)"
                             return 0
                         fi
                     elif printf '%s\n' "$marker" | grep -Eoq '[0-9a-f]{64}'; then

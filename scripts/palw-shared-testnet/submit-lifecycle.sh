@@ -221,16 +221,33 @@ _add_exclude "$(state_get DNS_BOND)"
 _add_exclude "$(state_get PROV_A_BOND)"
 _add_exclude "$(state_get PROV_B_BOND)"
 _add_exclude "$(state_get AUD_C_BOND)"
+# RETIRED bonds are NOT in state.env but are still permanently unspendable: a
+# slashed (or lapsed) provider bond's locked output-0 is plain P2PKH at the SAME
+# funding address, so `balance` counts it and funding selection will pick it —
+# and then ProviderBondSpendFilter makes acceptance SKIP the whole carrier, which
+# looks exactly like "submitted but never confirmed". This matters here because
+# the DA step funds carriers from the PROVIDER/AUDITOR owner keys, not only the
+# carrier key. Same env var register-providers.sh honours.
+for _x in ${EXTRA_EXCLUDE_OUTPOINTS:-}; do _add_exclude "$_x"; done
 
 # _palw_submit <kind> <payload-file> [extra flags...] — a funded carrier submit
 # against node A's loopback wRPC, funded by the carrier key, excluding every
 # known bond. Only verified palw-submit flags are used.
-_palw_submit() {
-    local kind="${1:?kind}" payload="${2:?payload}"; shift 2
+_palw_submit() { _palw_submit_as "$CARRIER_KEY" "$@"; }
+
+# _palw_submit_as <owner-key-file> <kind> <payload-file> [extra flags...] — same
+# submit, funded+signed by a SPECIFIC owner key. Required for the bonded DA
+# carriers: palw-submit refuses a 0x3a/0x3b whose payload owner differs from
+# --validator-key ("refusing to submit a bonded DA challenge for another key"),
+# so a challenge must be submitted by the CHALLENGER (auditor-c) and a response
+# by the CHALLENGED PROVIDER — never by the generic carrier key.
+_palw_submit_as() {
+    local key="${1:?owner-key}" kind="${2:?kind}" payload="${3:?payload}"; shift 3
+    [ -s "$key" ] || die "owner key file '$key' is missing/empty — cannot sign+fund a '$kind' carrier."
     "$VAL" palw-submit \
         --node-wrpc-borsh "$(node_wrpc a)" \
         --network "$NETWORK" \
-        --validator-key "$CARRIER_KEY" \
+        --validator-key "$key" \
         --kind "$kind" \
         --payload-file "$payload" \
         ${_EXCLUDE_ARGS[@]+"${_EXCLUDE_ARGS[@]}"} \
@@ -417,6 +434,13 @@ gen_cert() {
 #   (never rejected, rate-limit not consumed), so a fresh-D retry is always safe.
 #   The da-response has no exact-daa rule (just current_daa <= deadline=D+2+200).
 
+# _is_hex128 <str> — 0 iff <str> is exactly 128 hex digits (a Hash64). Local to
+# this stage (create-lifecycle.sh defines its own; common.sh has no hex helper).
+_is_hex128() {
+    case "$1" in *[!0-9a-fA-F]*) return 1 ;; esac
+    [ "${#1}" -eq 128 ]
+}
+
 # All DA obligations for the batch: "id|provider_bond|object_root|chunk|status".
 _da_obligations() {
     { palw_batch_status "${1:-a}" "$BATCH_ID" 2>/dev/null || true; } | awk '
@@ -514,20 +538,25 @@ _da_wait_obligation() {
 # Open a 0x3a challenge on a Pending obligation; sets CH_ID to the winning id.
 _da_challenge_obligation() {
     local oblig_id="${1:?}" provider_bond="${2:?}" attempt maxA="${DA_CH_MAX_ATTEMPTS:-5}"
-    local D opened epoch nonce out chid
+    local D opened epoch nonce out chid pf
     for attempt in $(seq 1 "$maxA"); do
         D="$(_da_wait_sink_stable)" || die "DA step: sink DAA not stable before challenge (rogue producer?)."
         opened=$(( D + 2 )); epoch=$(( opened / 100 )); nonce="$(rand_hex 64)"
+        # `palw-payload --out` REFUSES to overwrite, so give every obligation and
+        # every retry attempt its own staging path (also keeps each attempt's exact
+        # bytes around for post-mortem).
+        pf="$_SL_STAGING/da-challenge-${oblig_id%"${oblig_id#????????}"}-$attempt.bin"
+        rm -f "$pf"
         out="$("$VAL" palw-payload da-challenge \
             --network-id "$NETSUFFIX" --obligation-id "$oblig_id" \
             --challenge-epoch "$epoch" --opened-daa-score "$opened" --response-window-daa 200 \
             --challenger-bond "$AUD_C_BOND" --owner-key "$AUDITOR_KEY" \
-            --challenge-nonce "$nonce" --out "$_SL_STAGING/da-challenge.bin" 2>&1)" \
+            --challenge-nonce "$nonce" --out "$pf" 2>&1)" \
             || { printf '%s\n' "$out" >&2; die "'palw-payload da-challenge' build failed for obligation $oblig_id (see above)."; }
         chid="$(printf '%s\n' "$out" | _kv challenge_id)"
         _is_hex128 "$chid" || { printf '%s\n' "$out" >&2; die "da-challenge did not print a 128-hex challenge_id (see above)."; }
         log "DA challenge attempt $attempt: obligation=$oblig_id opened_daa=$opened (epoch=$epoch) challenger=$AUD_C_BOND -> inject(--no-wait)+mine 2"
-        _palw_submit da-challenge "$_SL_STAGING/da-challenge.bin" --no-wait \
+        _palw_submit_as "$AUDITOR_KEY" da-challenge "$pf" --no-wait \
             || die "'palw-submit --kind da-challenge --no-wait' failed for obligation $oblig_id. Inspect node A ($(node_log a))."
         sleep "${DA_INJECT_SETTLE_SECS:-2}"   # let the carrier settle into node A's mempool before the first block templates
         _da_mine 2
@@ -543,15 +572,18 @@ _da_challenge_obligation() {
 
 # Answer an OPEN challenge with a 0x3b chunk proof from the object bytes.
 _da_respond_obligation() {
-    local oblig_id="${1:?}" provider_bond="${2:?}" rseed="${3:?}" objf="${4:?}" chunk="${5:?}" chid="${6:?}" out
+    local oblig_id="${1:?}" provider_bond="${2:?}" rseed="${3:?}" objf="${4:?}" chunk="${5:?}" chid="${6:?}" out pf
+    # One staging path per obligation — `palw-payload --out` refuses to overwrite.
+    pf="$_SL_STAGING/da-response-${oblig_id%"${oblig_id#????????}"}.bin"
+    rm -f "$pf"
     out="$("$VAL" palw-payload da-response \
         --network-id "$NETSUFFIX" --challenge-id "$chid" \
         --provider-bond "$provider_bond" --owner-key "$rseed" \
         --object-file "$objf" --chunk-index "$chunk" \
-        --out "$_SL_STAGING/da-response.bin" 2>&1)" \
+        --out "$pf" 2>&1)" \
         || { printf '%s\n' "$out" >&2; die "'palw-payload da-response' build failed for obligation $oblig_id (see above) — check the object bytes at $objf and chunk_index=$chunk."; }
     log "DA response: obligation=$oblig_id provider_bond=$provider_bond chunk=$chunk -> inject(--no-wait)+mine 2"
-    _palw_submit da-response "$_SL_STAGING/da-response.bin" --no-wait \
+    _palw_submit_as "$rseed" da-response "$pf" --no-wait \
         || die "'palw-submit --kind da-response --no-wait' failed for obligation $oblig_id. Inspect node A ($(node_log a))."
     sleep "${DA_INJECT_SETTLE_SECS:-2}"   # settle into node A's mempool before templating
     _da_mine 2
