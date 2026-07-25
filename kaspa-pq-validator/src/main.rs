@@ -622,7 +622,7 @@ async fn get_block(args: GetBlockArgs) -> Result<(), String> {
 }
 
 /// SPK -> the human-readable hex encoding the harness compares (version big-endian 4-hex ‖ script hex).
-fn spk_to_hex(spk: &kaspa_consensus_core::tx::ScriptPublicKey) -> Result<String, String> {
+pub(crate) fn spk_to_hex(spk: &kaspa_consensus_core::tx::ScriptPublicKey) -> Result<String, String> {
     let script = spk.script();
     let mut out = vec![0u8; script.len() * 2 + 4];
     faster_hex::hex_encode(&spk.version().to_be_bytes(), &mut out[..4]).map_err(|e| format!("hex encode failed: {e}"))?;

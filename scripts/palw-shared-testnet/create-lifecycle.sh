@@ -307,10 +307,21 @@ do_create() {
     done
     [ "$LEAF_COUNT" -ge 1 ] || die "LEAF_COUNT must be >= 1 (got $LEAF_COUNT)."
 
-    # Per-leaf reward SPKs (000076c440 + <64-byte pubkey hex> + 88a6). The
-    # reward_spk helper accepts a 2-hex byte (expanded x64) or a full 128-hex key.
-    RSPK_A="$(reward_spk_p2pkh_mldsa "${PROV_A_REWARD_PK_BYTE:?PROV_A_REWARD_PK_BYTE unset}")"
-    RSPK_B="$(reward_spk_p2pkh_mldsa "${PROV_B_REWARD_PK_BYTE:?PROV_B_REWARD_PK_BYTE unset}")"
+    # Per-leaf reward SPKs. These MUST be the providers' bond-lock scripts, which
+    # register-providers.sh records as PROV_{A,B}_REWARD_SPK. `palw_work_reward_class`
+    # (CRITICAL-1) pays a leaf's providers only when
+    #   leaf.provider_x_reward_script == provider_bond_lock_spk(bond owner_public_key);
+    # anything else classifies the algo-4 source as ReplicaPalwUnbackedCollateral,
+    # which pays the providers NOTHING and leaves the merging block's coinbase with
+    # ZERO outputs (block accepted, entire subsidy paid to nobody). The old mock
+    # used a synthetic 0x71/0x72 byte pattern here, so no algo-4 block it produced
+    # could ever pay a provider. Fail closed rather than mint another unpayable leaf.
+    RSPK_A="$(state_get PROV_A_REWARD_SPK)"
+    RSPK_B="$(state_get PROV_B_REWARD_SPK)"
+    if [ -z "$RSPK_A" ] || [ -z "$RSPK_B" ]; then
+        die "PROV_A_REWARD_SPK / PROV_B_REWARD_SPK are not recorded in artifacts/state.env — run ./register-providers.sh (it derives each provider's bond-lock SPK offline from its seed, for already-registered bonds too). Refusing to build a leaf whose providers consensus would never pay."
+    fi
+    [ "$RSPK_A" != "$RSPK_B" ] || die "PROV_A_REWARD_SPK == PROV_B_REWARD_SPK — the two providers must be distinct identities."
 
     # Sentinels.
     BATCH_UNBOUND="$(zero128)"            # unbound leaf batch_id
@@ -343,17 +354,28 @@ do_create() {
     # ---- 2. idempotency / partial-state gate (no node, no miner needed) --------
     LIFECYCLE_DIR="$PALW_DATA_ROOT/artifacts/lifecycle"
 
-    if _lifecycle_built; then
-        log "lifecycle bundle already built (batch_id=$(state_get PALW_BATCH_ID), chunks=$(state_get PALW_CHUNK_COUNT), registration_epoch=$(state_get PALW_REG_EPOCH)); idempotent no-op. The miner is NOT touched — submit-lifecycle resumes it and submits within that epoch."
+    if _lifecycle_built && [ "${LIFECYCLE_FORCE:-}" != 1 ]; then
+        log "lifecycle bundle already built (batch_id=$(state_get PALW_BATCH_ID), chunks=$(state_get PALW_CHUNK_COUNT), registration_epoch=$(state_get PALW_REG_EPOCH)); idempotent no-op. The miner is NOT touched — submit-lifecycle resumes it and submits within that epoch. A batch is single-use and EXPIRES (batch.epochs expiry); to run another one, re-run with LIFECYCLE_FORCE=1 to retire this bundle and build a fresh batch."
         _LIFECYCLE_OK=1
         return 0
     fi
     if _lifecycle_any; then
         if [ "${LIFECYCLE_FORCE:-}" = 1 ]; then
-            warn "LIFECYCLE_FORCE=1: wiping the partial lifecycle bundle under $LIFECYCLE_DIR and rebuilding."
+            # FORCE covers BOTH a partial bundle and a COMPLETE one. A complete
+            # bundle is not sacred: a batch is single-use and expires, so after a
+            # mint (or after its expiry epoch passes) the only way forward is a new
+            # batch — previously there was no supported path to one and the stage
+            # no-op'd forever. Wiping is local only: the retired batch stays
+            # on-chain, and a fresh batch_id is derived on rebuild.
+            warn "LIFECYCLE_FORCE=1: retiring the lifecycle bundle under $LIFECYCLE_DIR (batch_id=$(state_get PALW_BATCH_ID)) and rebuilding a FRESH batch. The retired batch remains on-chain; only local payload artifacts are removed."
+            # Includes the submit-stage artifacts (facts/vote/cert): they are bound
+            # to the OLD batch_id, and submit-lifecycle reuses an existing file
+            # rather than overwriting it, so leaving them would attach a stale
+            # certificate to the new batch.
             rm -rf "$LIFECYCLE_DIR"/leafset.json "$LIFECYCLE_DIR"/manifest.borsh \
                    "$LIFECYCLE_DIR"/leaves.batch.json "$LIFECYCLE_DIR"/chunk-*.borsh \
-                   "$LIFECYCLE_DIR"/da
+                   "$LIFECYCLE_DIR"/da \
+                   "$LIFECYCLE_DIR"/facts.json "$LIFECYCLE_DIR"/vote.borsh "$LIFECYCLE_DIR"/cert.borsh
             # Forget stale discovered state so a fresh batch_id is recorded.
             state_set PALW_BATCH_ID ""
             state_set PALW_CHUNK_COUNT ""

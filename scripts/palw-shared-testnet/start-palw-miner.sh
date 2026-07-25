@@ -405,8 +405,18 @@ esac
 ALREADY_MINING=0
 case "$NA_CMD" in
     *--palw-mine*)
-        log "node A already running WITH --palw-mine — skipping the mining relaunch (idempotent); re-verifying the algo-4 acceptance gate only."
-        ALREADY_MINING=1
+        # --palw-mine alone is NOT enough to call this idempotent: the running node
+        # is pinned to whatever `--palw-leaf=<batch_id>:<index>` it was launched
+        # with. A batch is single-use and expires, so after LIFECYCLE_FORCE built a
+        # fresh one the node would keep mining for the RETIRED batch — producing no
+        # block at all while every gate reports "already mining". Relaunch unless
+        # the pinned leaf is exactly this batch's.
+        if [ "${NA_CMD#*--palw-leaf=${PALW_BATCH_ID}:0}" != "$NA_CMD" ]; then
+            log "node A already running WITH --palw-mine pinned to THIS batch's leaf (${PALW_BATCH_ID}:0) — skipping the mining relaunch (idempotent); re-verifying the algo-4 acceptance gate only."
+            ALREADY_MINING=1
+        else
+            log "node A is running WITH --palw-mine but pinned to a DIFFERENT (stale/retired) --palw-leaf than the current batch ${PALW_BATCH_ID}:0 — relaunching it onto this batch's leaf. Mining for a retired batch yields no block while every readiness gate still passes."
+        fi
         ;;
     *--enable-unsynced-mining*)
         die "node A is still the BOOTSTRAP node (--enable-unsynced-mining) — transition it to the synced validator first with ./restart-a-synced.sh, then re-run ./start-palw-miner.sh."

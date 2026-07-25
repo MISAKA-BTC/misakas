@@ -409,29 +409,36 @@ case "$SRC_CLASS" in
         assert_rng "inclusion (§D) payout" "$CB_INCL" "$INCL_POOL"
         assert_rng "validator (§E) payout" "$CB_VAL"  "$VAL_POOL"
 
-        # Optional: the observed provider SPKs must be the leaf's one-time reward
-        # scripts. reward_spk_p2pkh_mldsa (common.sh) rebuilds the SPK from the
-        # per-leaf reward pubkey byte configured in env (PROV_{A,B}_REWARD_PK_BYTE).
+        # The observed provider SPKs must be the leaf's reward scripts — which are
+        # the providers' BOND-LOCK scripts, recorded by register-providers.sh as
+        # PROV_{A,B}_REWARD_SPK. CRITICAL-1 pays nothing unless the leaf named
+        # exactly those, so anything else here means the payout could not have
+        # happened. (The old check rebuilt a synthetic SPK from
+        # PROV_{A,B}_REWARD_PK_BYTE, which no bond ever owns.)
         if [ -n "$CB_A_SPK" ] || [ -n "$CB_B_SPK" ]; then
             rpt ""
-            rpt "Provider reward SPK checks (leaf one-time scripts):"
-            if [ -n "${PROV_A_REWARD_PK_BYTE:-}" ] && [ -n "$CB_A_SPK" ]; then
-                _spk_a="$(reward_spk_p2pkh_mldsa "$PROV_A_REWARD_PK_BYTE")"
+            rpt "Provider reward SPK checks (must equal provider_bond_lock_spk):"
+            _spk_a="$(state_get PROV_A_REWARD_SPK)"
+            _spk_b="$(state_get PROV_B_REWARD_SPK)"
+            if [ -n "$_spk_a" ] && [ -n "$CB_A_SPK" ]; then
                 if [ "$(printf '%s' "$CB_A_SPK" | tr 'A-F' 'a-f')" = "$_spk_a" ]; then
-                    rpt "    PASS  provider A SPK matches reward_spk_p2pkh_mldsa(PROV_A_REWARD_PK_BYTE)"
+                    rpt "    PASS  provider A SPK matches PROV_A_REWARD_SPK (bond-lock script)"
                 else
                     rpt "    ----  provider A SPK observed '$CB_A_SPK' != expected '$_spk_a'"
-                    fail "provider A coinbase SPK does not match the leaf reward SPK for PROV_A_REWARD_PK_BYTE."
+                    fail "provider A coinbase SPK is not the provider's bond-lock script (PROV_A_REWARD_SPK)."
                 fi
+            elif [ -n "$CB_A_SPK" ]; then
+                rpt "    ----  PROV_A_REWARD_SPK not recorded; cannot check provider A's SPK (run ./register-providers.sh)"
             fi
-            if [ -n "${PROV_B_REWARD_PK_BYTE:-}" ] && [ -n "$CB_B_SPK" ]; then
-                _spk_b="$(reward_spk_p2pkh_mldsa "$PROV_B_REWARD_PK_BYTE")"
+            if [ -n "$_spk_b" ] && [ -n "$CB_B_SPK" ]; then
                 if [ "$(printf '%s' "$CB_B_SPK" | tr 'A-F' 'a-f')" = "$_spk_b" ]; then
-                    rpt "    PASS  provider B SPK matches reward_spk_p2pkh_mldsa(PROV_B_REWARD_PK_BYTE)"
+                    rpt "    PASS  provider B SPK matches PROV_B_REWARD_SPK (bond-lock script)"
                 else
                     rpt "    ----  provider B SPK observed '$CB_B_SPK' != expected '$_spk_b'"
-                    fail "provider B coinbase SPK does not match the leaf reward SPK for PROV_B_REWARD_PK_BYTE."
+                    fail "provider B coinbase SPK is not the provider's bond-lock script (PROV_B_REWARD_SPK)."
                 fi
+            elif [ -n "$CB_B_SPK" ]; then
+                rpt "    ----  PROV_B_REWARD_SPK not recorded; cannot check provider B's SPK (run ./register-providers.sh)"
             fi
         fi
         ;;

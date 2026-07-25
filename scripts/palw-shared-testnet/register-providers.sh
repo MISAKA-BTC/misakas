@@ -209,6 +209,59 @@ register_one() {
 }
 
 # ---------------------------------------------------------------------------
+# record_reward_spk <name> <tag> <seed> <group> <reward_root> <amount> <state_key>
+#   Record the ONE script a leaf may name as this provider's reward target.
+#
+#   WHY THIS EXISTS. `palw_work_reward_class` (utxo_validation.rs, CRITICAL-1)
+#   requires `leaf.provider_{a,b}_reward_script == provider_bond_lock_spk(bond
+#   owner_public_key)`. Name anything else and the algo-4 source classifies as
+#   ReplicaPalwUnbackedCollateral: providers are paid NOTHING and, because that is
+#   the merging block's whole mergeset, its coinbase comes out with ZERO outputs —
+#   the block is accepted and the entire subsidy is paid to nobody. The old mock
+#   named a synthetic 0x71/0x72 byte pattern (PROV_*_REWARD_PK_BYTE), so no live
+#   algo-4 block ever paid a provider.
+#
+#   It is NOT `provider.owner_pubkey_hash` (what palw-status prints): that is the
+#   unkeyed overlay credential; the lock uses blake2b_512_address_payload. Locking
+#   to the wrong one would freeze the collateral permanently (palw.rs:3160).
+#
+#   The value is a pure function of the seed, so this recomputes it offline every
+#   run (idempotent, no on-chain effect) and works for an ALREADY-registered bond.
+#   The payload is built to a throwaway path purely to read the printed SPK.
+# ---------------------------------------------------------------------------
+record_reward_spk() {
+    local name="$1" tag="$2" seed="$3" group="$4" reward="$5" amount="$6" statekey="$7"
+    local tmp out spk prev
+
+    [ -f "$seed" ] || die "$name: seed '$seed' missing — cannot derive the reward SPK consensus requires."
+    tmp="$PALW_DATA_ROOT/artifacts/.reward-spk-$tag.$$.borsh"
+    rm -f "$tmp"
+    register_cleanup "rm -f '$tmp'"
+    out="$("$VAL" palw-payload provider-bond \
+            --network "$NETWORK" --validator-key "$seed" \
+            --operator-group-id "$group" --runtime-class "$RUNTIME_CLASS" \
+            --capacity "${SHAPE_ID}=${CAPACITY_COUNT}" --reward-key-root "$reward" \
+            --amount "$amount" --unbond-delay-epochs "$UNBOND_DELAY_EPOCHS" \
+            --out "$tmp" 2>&1)" \
+        || { printf '%s\n' "$out" >&2; die "$name: could not derive the provider bond lock SPK (see above)."; }
+    rm -f "$tmp"
+    spk="$(printf '%s\n' "$out" | _kv provider_bond_lock_spk)"
+    case "$spk" in
+        0000*[!0-9a-fA-F]*|"") printf '%s\n' "$out" >&2
+            die "$name: 'palw-payload provider-bond' did not print a usable provider_bond_lock_spk (needs a build that emits it)." ;;
+    esac
+
+    # Never silently change a recorded SPK: a leaf already committed on-chain names
+    # the old one, and a mismatch is exactly the zero-payout bug this guards.
+    prev="$(state_get "$statekey")"
+    if [ -n "$prev" ] && [ "$prev" != "$spk" ]; then
+        die "$name: recorded $statekey ($prev) differs from this seed's bond lock SPK ($spk) — the identity was re-keyed. Retire the old batch before continuing."
+    fi
+    [ -n "$prev" ] || state_set "$statekey" "$spk"
+    log "$name: reward SPK (the only script consensus will pay) $statekey=$spk"
+}
+
+# ---------------------------------------------------------------------------
 # verify_all — provider.in_registry=true + status=active on BOTH nodes (STN-010).
 # ---------------------------------------------------------------------------
 verify_all() {
@@ -294,6 +347,14 @@ do_register() {
     register_one "provider-a" a "$seedA" "$grpA"   "$rewA"   "$PROVIDER_A_AMOUNT" PROV_A_BOND
     register_one "provider-b" b "$seedB" "$grpB"   "$rewB"   "$PROVIDER_B_AMOUNT" PROV_B_BOND
     register_one "auditor-c"  c "$seedC" "$grpAUD" "$rewAUD" "$AUDITOR_AMOUNT"    AUD_C_BOND
+
+    # The ONLY reward script consensus will pay (CRITICAL-1). Recorded for BOTH
+    # providers regardless of whether register_one built or skipped, because it is
+    # a pure function of the seed — and because create-lifecycle fail-closes
+    # without it (a placeholder reward script mints an algo-4 block that pays
+    # nobody and leaves the merging coinbase empty).
+    record_reward_spk "provider-a" a "$seedA" "$grpA" "$rewA" "$PROVIDER_A_AMOUNT" PROV_A_REWARD_SPK
+    record_reward_spk "provider-b" b "$seedB" "$grpB" "$rewB" "$PROVIDER_B_AMOUNT" PROV_B_REWARD_SPK
 
     verify_all
 }

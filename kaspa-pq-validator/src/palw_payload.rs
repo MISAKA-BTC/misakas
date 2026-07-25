@@ -177,6 +177,18 @@ fn provider_bond_payload(args: ProviderBondPayloadArgs) -> Result<(), String> {
     println!("owner_validator_id: {}", key.validator_id);
     println!("locked_amount_sompi: {}", args.amount);
     println!("required_output_index: 0");
+    // The bond's locked output-0 script. Printed because it is ALSO the only value
+    // a leaf's `provider_{a,b}_reward_script` may carry: `palw_work_reward_class`
+    // (CRITICAL-1) classifies the algo-4 source as ReplicaPalwUnbackedCollateral —
+    // paying the providers NOTHING, and emptying the merging block's coinbase —
+    // unless the leaf names exactly this script. Note it is the ADDRESS hash
+    // (blake2b_512_address_payload), NOT `owner_pubkey_hash` (the unkeyed overlay
+    // credential that palw-status prints); locking to that one would freeze the
+    // collateral permanently. Same encoding get-block prints (version 4-hex ‖ script).
+    match crate::spk_to_hex(&kaspa_consensus_core::palw::provider_bond_lock_spk(key.public_key())) {
+        Ok(spk) => println!("provider_bond_lock_spk: {spk}"),
+        Err(err) => eprintln!("[kaspa-pq-validator] warning: could not render provider_bond_lock_spk: {err}"),
+    }
     println!("next: kaspa-pq-validator palw-submit --kind provider-bond --payload-file {} ...", args.out.display());
     Ok(())
 }
