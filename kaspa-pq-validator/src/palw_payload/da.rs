@@ -9,8 +9,10 @@ use kaspa_consensus_core::palw::da::{
 };
 use kaspa_consensus_core::palw::{da::PalwReceiptDaObjectV1, validate_palw_overlay_payload};
 use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed, parse_stake_bond_ref};
+use kaspa_hashes::blake2b_512_keyed;
 use misaka_palw_miner::da::{
-    PalwReceiptDaObjectV2Wire, build_da_timeout_evidence, build_signed_da_challenge, build_signed_da_response,
+    PalwDaProviderSigner, PalwDaReceiptSemantics, PalwReceiptDaObjectV2Wire, build_da_timeout_evidence,
+    build_signed_da_challenge, build_signed_da_response, build_signed_receipt_da_object,
     decode_canonical_palw_receipt_da_object_v2_wire, encode_da_challenge, encode_da_response, encode_da_timeout,
 };
 use std::{
@@ -76,6 +78,60 @@ pub struct DaResponsePayloadArgs {
     #[arg(long)]
     chunk_index: u16,
     /// New file receiving the canonical 0x3b payload.
+    #[arg(long)]
+    out: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+pub struct DaObjectBuildArgs {
+    /// Consensus PALW network-domain u32.
+    #[arg(long)]
+    network_id: u32,
+    /// Batch id the object binds. Author-time leaves use the all-zero id (the manifest restamps the
+    /// leaf's batch_id later; the DA object stays at the author-time id it was committed under).
+    #[arg(long, value_parser = parse_hash64, default_value_t = Hash64::default())]
+    batch_id: Hash64,
+    #[arg(long)]
+    leaf_index: u32,
+    /// Provider A bond `txid:index` (must equal the leaf's provider_a_bond).
+    #[arg(long)]
+    provider_a_bond: String,
+    /// ML-DSA-87 owner seed for provider A (signs A's session authorization).
+    #[arg(long)]
+    provider_a_owner_key: String,
+    /// Provider B bond `txid:index` (must equal the leaf's provider_b_bond).
+    #[arg(long)]
+    provider_b_bond: String,
+    /// ML-DSA-87 owner seed for provider B.
+    #[arg(long)]
+    provider_b_owner_key: String,
+    /// Session validity window (epochs) covering `--completed-at-epoch`.
+    #[arg(long)]
+    valid_from_epoch: u64,
+    #[arg(long)]
+    valid_until_epoch: u64,
+    #[arg(long)]
+    completed_at_epoch: u64,
+    // ---- leaf semantics the object must echo (bind_leaf equality; keep in sync with the leaf) ----
+    #[arg(long, value_parser = parse_hash64)]
+    job_nullifier: Hash64,
+    #[arg(long, value_parser = parse_hash64)]
+    job_set_commitment: Hash64,
+    #[arg(long, value_parser = parse_hash64)]
+    model_profile_id: Hash64,
+    #[arg(long, value_parser = parse_hash64)]
+    runtime_class_id: Hash64,
+    #[arg(long)]
+    shape_id: u16,
+    #[arg(long)]
+    quantum_count: u16,
+    #[arg(long, value_parser = parse_hash64)]
+    output_commitment: Hash64,
+    #[arg(long, value_parser = parse_hash64)]
+    canonical_gemm_trace_root: Hash64,
+    #[arg(long, value_parser = parse_hash64)]
+    operation_schedule_commitment: Hash64,
+    /// New file receiving the canonical Borsh `PalwReceiptDaObjectV1` (the DA blob to serve).
     #[arg(long)]
     out: PathBuf,
 }
@@ -238,6 +294,74 @@ pub fn da_response_payload(args: DaResponsePayloadArgs) -> Result<(), String> {
     println!("response_id: {}", response.response_id());
     println!("chunk_index: {}", response.chunk_proof.chunk_index);
     println!("payload_file: {}", args.out.display());
+    Ok(())
+}
+
+/// Derive a deterministic per-provider session key from the owner key. The session key only signs
+/// the receipt INSIDE the DA object; DA obligation satisfaction checks the Merkle chunk proof, not
+/// the receipt signature, so a reproducible derivation (no extra key file) is sufficient and lets a
+/// later re-build reproduce byte-identical object bytes.
+fn derive_session_key(owner: &ValidatorKey) -> ValidatorKey {
+    let digest = blake2b_512_keyed(b"palw-da-mock-session-v1", owner.public_key());
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&digest.as_bytes()[..32]);
+    ValidatorKey::from_seed(seed)
+}
+
+pub fn da_object_build(args: DaObjectBuildArgs) -> Result<(), String> {
+    let owner_a = load_key(&args.provider_a_owner_key)?;
+    let owner_b = load_key(&args.provider_b_owner_key)?;
+    let session_a = derive_session_key(&owner_a);
+    let session_b = derive_session_key(&owner_b);
+    let bond_a = parse_stake_bond_ref(&args.provider_a_bond)?;
+    let bond_b = parse_stake_bond_ref(&args.provider_b_bond)?;
+
+    // The authorization nonce must be nonzero; derive one deterministically per provider+leaf.
+    let nonce = |tag: &[u8]| -> Hash64 {
+        blake2b_512_keyed(b"palw-da-mock-auth-nonce-v1", &[tag, &args.leaf_index.to_le_bytes()].concat())
+    };
+    let signer_a = PalwDaProviderSigner {
+        provider_bond: bond_a,
+        owner_key: &owner_a,
+        session_key: &session_a,
+        valid_from_epoch: args.valid_from_epoch,
+        valid_until_epoch: args.valid_until_epoch,
+        authorization_nonce: nonce(b"a"),
+    };
+    let signer_b = PalwDaProviderSigner {
+        provider_bond: bond_b,
+        owner_key: &owner_b,
+        session_key: &session_b,
+        valid_from_epoch: args.valid_from_epoch,
+        valid_until_epoch: args.valid_until_epoch,
+        authorization_nonce: nonce(b"b"),
+    };
+    let fields = PalwDaReceiptSemantics {
+        job_nullifier: args.job_nullifier,
+        job_set_commitment: args.job_set_commitment,
+        model_profile_id: args.model_profile_id,
+        runtime_class_id: args.runtime_class_id,
+        shape_id: args.shape_id,
+        quantum_count: args.quantum_count,
+        output_commitment: args.output_commitment,
+        canonical_gemm_trace_root: args.canonical_gemm_trace_root,
+        operation_schedule_commitment: args.operation_schedule_commitment,
+        completed_at_epoch: args.completed_at_epoch,
+    };
+    let artifact = build_signed_receipt_da_object(args.network_id, args.batch_id, args.leaf_index, fields, &signer_a, &signer_b)
+        .map_err(|error| format!("cannot build receipt DA object: {error}"))?;
+
+    write_new_payload(&args.out, &artifact.object_bytes)?;
+    // These are exactly the fields the leaf must carry (PalwDaProducerArtifact::bind_leaf). The
+    // harness copies them into the author-time leaf so register_leaf_obligations sees a real,
+    // provable DA commitment and a da-response chunk proof can satisfy the obligation.
+    println!("payload_kind: da-object");
+    println!("object_version: {}", artifact.commitment.object_version);
+    println!("receipt_da_root: {}", artifact.commitment.root);
+    println!("receipt_da_object_len: {}", artifact.commitment.object_len);
+    println!("receipt_da_chunk_count: {}", artifact.commitment.chunk_count);
+    println!("private_match_commitment: {}", artifact.private_match_commitment);
+    println!("object_file: {}", args.out.display());
     Ok(())
 }
 

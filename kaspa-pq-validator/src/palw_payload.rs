@@ -21,7 +21,7 @@ use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed};
 use misaka_palw_miner::registration::{PROVIDER_BOND_SUBNETWORK_BYTE, build_provider_bond};
 
 use self::compute::ComputeJobspecPayloadArgs;
-use self::da::{DaChallengePayloadArgs, DaInspectArgs, DaResponsePayloadArgs, DaTimeoutPayloadArgs};
+use self::da::{DaChallengePayloadArgs, DaInspectArgs, DaObjectBuildArgs, DaResponsePayloadArgs, DaTimeoutPayloadArgs};
 use self::lifecycle::{
     AuditCertificatePayloadArgs, AuditFactsPayloadArgs, AuditVotePayloadArgs, BatchManifestPayloadArgs, LeafChunkPayloadArgs,
 };
@@ -58,6 +58,9 @@ enum PalwPayloadCommand {
     DaResponse(DaResponsePayloadArgs),
     /// Build objective expired-challenge timeout evidence (subnetwork 0x3c).
     DaTimeout(DaTimeoutPayloadArgs),
+    /// Build a signed receipt DA object (the off-chain blob) and print the leaf DA fields that must
+    /// carry its commitment, so a leaf's sampled DA obligations can later be satisfied by da-response.
+    DaObjectBuild(DaObjectBuildArgs),
     /// Sign a search-availability challenge (subnetwork 0x3d); attach a JobSpec to register the
     /// obligation atomically against the bonded scheduler registry.
     SearchChallenge(SearchChallengePayloadArgs),
@@ -150,6 +153,7 @@ pub async fn palw_payload(args: PalwPayloadArgs) -> Result<(), String> {
         PalwPayloadCommand::DaChallenge(args) => da::da_challenge_payload(args),
         PalwPayloadCommand::DaResponse(args) => da::da_response_payload(args),
         PalwPayloadCommand::DaTimeout(args) => da::da_timeout_payload(args),
+        PalwPayloadCommand::DaObjectBuild(args) => da::da_object_build(args),
         PalwPayloadCommand::SearchChallenge(args) => search::search_challenge_payload(args),
         PalwPayloadCommand::SearchResponse(args) => search::search_response_payload(args),
         PalwPayloadCommand::SearchTimeout(args) => search::search_timeout_payload(args),
