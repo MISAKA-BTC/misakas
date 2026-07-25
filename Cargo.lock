@@ -6528,6 +6528,7 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-hashes",
  "kaspa-pq-validator-core",
+ "misaka-palw-miner",
 ]
 
 [[package]]

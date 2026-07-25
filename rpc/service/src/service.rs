@@ -1236,6 +1236,19 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 availability_deadline_daa_score: challenge.availability_deadline_daa_score,
             })
             .collect();
+        let da_obligations = probe
+            .da_obligations
+            .into_iter()
+            .map(|obligation| kaspa_rpc_core::RpcPalwDaObligation {
+                obligation_id: obligation.obligation_id.to_string(),
+                provider_bond: format!("{}:{}", obligation.provider_bond.transaction_id, obligation.provider_bond.index),
+                object_root: obligation.object_root.to_string(),
+                chunk_index: obligation.chunk_index,
+                status: obligation.status,
+                beacon_epoch: obligation.beacon_epoch,
+                retention_until_daa_score: obligation.retention_until_daa_score,
+            })
+            .collect();
         let activation = probe.activation.map(|activation| kaspa_rpc_core::RpcPalwActivationState {
             activation_open: activation.activation_open,
             newest_sample_epoch: activation.newest_sample.map(|(epoch, _)| epoch),
@@ -1266,6 +1279,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             da_challenges,
             activation,
             search_challenges,
+            da_obligations,
         })
     }
 

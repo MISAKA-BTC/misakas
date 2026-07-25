@@ -250,8 +250,8 @@ emit_leaf() {
       "private_match_commitment": "${PMC[$i]}",
       "receipt_da_object_version": 1,
       "receipt_da_root": "${DAROOT[$i]}",
-      "receipt_da_object_len": 1,
-      "receipt_da_chunk_count": 1,
+      "receipt_da_object_len": ${DALEN[$i]},
+      "receipt_da_chunk_count": ${DACHUNK[$i]},
       "receipt_v3_compute_set_id": "$COMPUTE_SET_ID_ZERO",
       "receipt_v3_job_challenge": "$COMPUTE_SET_ID_ZERO",
       "receipt_v3_issued_epoch": 0,
@@ -352,7 +352,8 @@ do_create() {
         if [ "${LIFECYCLE_FORCE:-}" = 1 ]; then
             warn "LIFECYCLE_FORCE=1: wiping the partial lifecycle bundle under $LIFECYCLE_DIR and rebuilding."
             rm -rf "$LIFECYCLE_DIR"/leafset.json "$LIFECYCLE_DIR"/manifest.borsh \
-                   "$LIFECYCLE_DIR"/leaves.batch.json "$LIFECYCLE_DIR"/chunk-*.borsh
+                   "$LIFECYCLE_DIR"/leaves.batch.json "$LIFECYCLE_DIR"/chunk-*.borsh \
+                   "$LIFECYCLE_DIR"/da
             # Forget stale discovered state so a fresh batch_id is recorded.
             state_set PALW_BATCH_ID ""
             state_set PALW_CHUNK_COUNT ""
@@ -419,16 +420,23 @@ do_create() {
     log "registration epoch E=$E pinned (frozen sink DAA=$d2; $rem DAA of headroom before the boundary). activation=$ACT expiry=$EXP."
 
     # ---- 5. per-leaf uniqueness + ticket fields --------------------------------
-    # Distinct per-leaf commitments (distinct receipt_da_root matters for audit
-    # sampling). job_nullifier / private_match_commitment / receipt_da_root /
-    # receipt_v3_job_challenge are public leaf fields (NOT the ticket secret).
+    # Distinct per-leaf commitments. job_nullifier / receipt_v3_job_challenge are
+    # public leaf fields (NOT the ticket secret). The DA object's semantic inputs
+    # (JOBSET/OUTC/GEMM/OPSCHED) are object-internal — the object's DERIVED
+    # commitment then becomes the leaf's receipt_da_root + private_match_commitment
+    # in step 6-pre below. A mock leaf with a RANDOM receipt_da_root can never
+    # satisfy the certificate DA-availability gate (no real object exists behind
+    # it to build a chunk proof from), so DAROOT/DALEN/DACHUNK/PMC are set from a
+    # real DA object, not rand_hex.
     local i
     i=0
     while [ "$i" -lt "$LEAF_COUNT" ]; do
         JOB_NF[$i]="$(rand_hex 64)"
-        PMC[$i]="$(rand_hex 64)"
-        DAROOT[$i]="$(rand_hex 64)"
         JOBCHAL[$i]="$(rand_hex 64)"
+        JOBSET[$i]="$(rand_hex 64)"
+        OUTC[$i]="$(rand_hex 64)"
+        GEMM[$i]="$(rand_hex 64)"
+        OPSCHED[$i]="$(rand_hex 64)"
         i=$(( i + 1 ))
     done
 
@@ -467,6 +475,73 @@ do_create() {
     local staging
     staging="$(mktemp -d "$LIFECYCLE_DIR/.staging.XXXXXX")" || die "mktemp -d for staging failed under $LIFECYCLE_DIR."
     register_cleanup "rm -rf '$staging'"
+
+    # 6-pre. Build a REAL DA object per leaf (author-time, batch_id=0). The object's
+    #   derived commitment root/len/chunk_count + private_match_commitment become the
+    #   leaf's receipt_da_* / private_match_commitment, so register_leaf_obligations
+    #   creates obligations whose object_root a da-response chunk proof can satisfy
+    #   (submit-lifecycle drives the challenge/response). The object stays at the
+    #   author-time all-zero batch_id: the DA obligation/response path checks only the
+    #   Merkle root of the SAME bytes we commit here (consensus/core/src/palw/da.rs
+    #   register_leaf_obligations + apply_response), NOT the object's internal batch_id
+    #   (that binding is only enforced by the optional P2P admission path, which is not
+    #   on the certificate-gate critical path). network_id = NETSUFFIX = the node's
+    #   params.net.suffix(); the object's network_id is not re-checked on this path but
+    #   is set correctly for consistency.
+    local objdir; objdir="$staging/da"
+    install -d -m 0700 "$objdir" || die "cannot create DA object dir $objdir."
+    local PROV_A_KEY_F PROV_B_KEY_F
+    PROV_A_KEY_F="${PROV_A_KEY:-$PALW_DATA_ROOT/keys/provider-a.seed}"
+    PROV_B_KEY_F="${PROV_B_KEY:-$PALW_DATA_ROOT/keys/provider-b.seed}"
+    [ -s "$PROV_A_KEY_F" ] || die "provider-a owner seed not found: $PROV_A_KEY_F — run ./register-providers.sh (it keygen's + bonds provider-a), or set PROV_A_KEY to the seed FILE. The DA object's session authorization is signed by this owner key."
+    [ -s "$PROV_B_KEY_F" ] || die "provider-b owner seed not found: $PROV_B_KEY_F — run ./register-providers.sh, or set PROV_B_KEY to the seed FILE."
+    case "$NETSUFFIX" in ''|*[!0-9]*) die "NETSUFFIX='$NETSUFFIX' is not a u32 network id (da-object-build --network-id must equal the node's params.net.suffix())." ;; esac
+    log "building $LEAF_COUNT real DA object(s) (da-object-build, batch_id=0, network_id=$NETSUFFIX, completed_at_epoch=$E) -> $objdir/<root>.palwobj"
+    i=0
+    while [ "$i" -lt "$LEAF_COUNT" ]; do
+        local obj_out da_root da_len da_chunks da_pmc
+        if ! obj_out="$("$VAL" palw-payload da-object-build \
+                --network-id "$NETSUFFIX" \
+                --leaf-index "$i" \
+                --provider-a-bond "$PROV_A_BOND" \
+                --provider-a-owner-key "$PROV_A_KEY_F" \
+                --provider-b-bond "$PROV_B_BOND" \
+                --provider-b-owner-key "$PROV_B_KEY_F" \
+                --valid-from-epoch "$E" \
+                --valid-until-epoch "$E" \
+                --completed-at-epoch "$E" \
+                --job-nullifier "${JOB_NF[$i]}" \
+                --job-set-commitment "${JOBSET[$i]}" \
+                --model-profile-id "$MODEL_PROFILE_ID" \
+                --runtime-class-id "$RUNTIME_CLASS" \
+                --shape-id "$SHAPE_ID" \
+                --quantum-count "$QUANTUM_COUNT" \
+                --output-commitment "${OUTC[$i]}" \
+                --canonical-gemm-trace-root "${GEMM[$i]}" \
+                --operation-schedule-commitment "${OPSCHED[$i]}" \
+                --out "$objdir/obj-$i.palwobj" 2>&1)"; then
+            printf '%s\n' "$obj_out" >&2
+            die "'palw-payload da-object-build' failed for leaf $i (see output above)."
+        fi
+        da_root="$(printf '%s\n'   "$obj_out" | _kv receipt_da_root)"
+        da_len="$(printf '%s\n'    "$obj_out" | _kv receipt_da_object_len)"
+        da_chunks="$(printf '%s\n' "$obj_out" | _kv receipt_da_chunk_count)"
+        da_pmc="$(printf '%s\n'    "$obj_out" | _kv private_match_commitment)"
+        _is_hex128 "$da_root" || { printf '%s\n' "$obj_out" >&2; die "da-object-build for leaf $i did not print a 128-hex receipt_da_root (see above)."; }
+        _is_hex128 "$da_pmc"  || { printf '%s\n' "$obj_out" >&2; die "da-object-build for leaf $i did not print a 128-hex private_match_commitment (see above)."; }
+        case "$da_len"    in ''|*[!0-9]*) printf '%s\n' "$obj_out" >&2; die "da-object-build leaf $i: non-integer receipt_da_object_len." ;; esac
+        case "$da_chunks" in ''|*[!0-9]*) printf '%s\n' "$obj_out" >&2; die "da-object-build leaf $i: non-integer receipt_da_chunk_count." ;; esac
+        DAROOT[$i]="$(_lc "$da_root")"
+        DALEN[$i]="$da_len"
+        DACHUNK[$i]="$da_chunks"
+        PMC[$i]="$(_lc "$da_pmc")"
+        # Name the object file by its root so submit-lifecycle can resolve an
+        # obligation's object_root -> bytes without a leaf_index side channel.
+        mv "$objdir/obj-$i.palwobj" "$objdir/${DAROOT[$i]}.palwobj" \
+            || die "failed to name DA object for leaf $i by its root."
+        log "leaf $i DA object: root=${DAROOT[$i]} len=${DALEN[$i]} chunks=${DACHUNK[$i]}"
+        i=$(( i + 1 ))
+    done
 
     # 6a. author the UNBOUND leaf-set JSON.
     local last; last=$(( LEAF_COUNT - 1 ))
@@ -561,11 +636,17 @@ do_create() {
         mv "$staging/chunk-$k.borsh" "$LIFECYCLE_DIR/chunk-$k.borsh" || die "failed to finalize chunk-$k.borsh."
         k=$(( k + 1 ))
     done
+    # DA objects (named by root) — submit-lifecycle reads these to build the
+    # da-response chunk proof that satisfies each obligation. Replace any stale dir.
+    rm -rf "$LIFECYCLE_DIR/da"
+    mv "$objdir" "$LIFECYCLE_DIR/da" || die "failed to finalize the DA object dir."
 
     state_set PALW_BATCH_ID    "$batch_id"
     state_set PALW_CHUNK_COUNT "$chunk_count"
     state_set PALW_LEAF_COUNT  "$LEAF_COUNT"
     state_set PALW_REG_EPOCH   "$E"
+    state_set PALW_DA_OBJ_DIR  "$LIFECYCLE_DIR/da"
+    state_set PALW_DA_REAL     "1"
 
     # ---- 8. honest summary -----------------------------------------------------
     _LIFECYCLE_OK=1

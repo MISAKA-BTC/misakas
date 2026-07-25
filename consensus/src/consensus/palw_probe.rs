@@ -6,7 +6,8 @@ use kaspa_consensus_core::{
         provider_bond_release_daa_score,
     },
     palw_probe::{
-        PalwActivationProbe, PalwBatchProbe, PalwDaChallengeProbe, PalwProviderBondProbe, PalwSearchChallengeProbe, PalwStateProbe,
+        PalwActivationProbe, PalwBatchProbe, PalwDaChallengeProbe, PalwDaObligationProbe, PalwProviderBondProbe,
+        PalwSearchChallengeProbe, PalwStateProbe,
         PalwStateProbeError,
     },
     tx::TransactionOutpoint,
@@ -131,6 +132,46 @@ impl Consensus {
             _ => Vec::new(),
         };
 
+        // DA obligations for the requested batch (all statuses), read under the same virtual snapshot
+        // guard. Bounded by the batch's leaf/provider sample fan-out. Reported only when a batch id was
+        // requested. These expose the obligation ids + sampled chunk indices a challenger needs to open
+        // a 0x3a — the node previously surfaced only OPEN challenges, so a mock lifecycle had no way to
+        // learn which obligation to challenge in order to satisfy `certificate_allowed`.
+        let da_obligations = match (batch_id, enabled) {
+            (Some(wanted), true) => {
+                let state = self
+                    .storage
+                    .palw_da_store
+                    .read()
+                    .state(sink)
+                    .map_err(|error| PalwStateProbeError::Store(format!("DA state: {error:?}")))?;
+                state
+                    .obligations
+                    .values()
+                    .filter(|obligation| obligation.batch_id == wanted)
+                    .map(|obligation| {
+                        use kaspa_consensus_core::palw::da::PalwDaObligationStatusV1;
+                        let status = match obligation.status {
+                            PalwDaObligationStatusV1::Pending => 0,
+                            PalwDaObligationStatusV1::Challenged(_) => 1,
+                            PalwDaObligationStatusV1::Satisfied(_) => 2,
+                            PalwDaObligationStatusV1::TimedOut(_) => 3,
+                        };
+                        PalwDaObligationProbe {
+                            obligation_id: obligation.obligation_id,
+                            provider_bond: obligation.provider_bond,
+                            object_root: obligation.object_root,
+                            chunk_index: obligation.chunk_index,
+                            status,
+                            beacon_epoch: obligation.beacon_epoch,
+                            retention_until_daa_score: obligation.retention_until_daa_score,
+                        }
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+
         // Open search-availability challenges anchored by the requested bond (as scheduler), read
         // under the same virtual snapshot guard. Same bounded contract as `da_challenges`.
         let search_challenges = match (provider_bond, enabled) {
@@ -236,6 +277,7 @@ impl Consensus {
                 batch,
                 provider_bond,
                 da_challenges,
+                da_obligations,
                 search_challenges,
                 activation,
             };

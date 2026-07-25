@@ -2696,6 +2696,52 @@ impl Deserializer for RpcPalwDaChallenge {
     }
 }
 
+/// One DA obligation for the queried batch, string-encoded for operator tooling. Unlike an open
+/// challenge, an obligation is created automatically at leaf-chunk registration and carries its own
+/// id + sampled chunk index — the exact inputs a challenger needs to open a 0x3a challenge. Exposing
+/// these lets a mock lifecycle self-issue the challenge whose 0x3b response satisfies the
+/// certificate DA-availability gate.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwDaObligation {
+    pub obligation_id: String,
+    pub provider_bond: String,
+    pub object_root: String,
+    pub chunk_index: u16,
+    /// 0 Pending / 1 Challenged / 2 Satisfied / 3 TimedOut.
+    pub status: u8,
+    pub beacon_epoch: u64,
+    pub retention_until_daa_score: u64,
+}
+
+impl Serializer for RpcPalwDaObligation {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.obligation_id, writer)?;
+        store!(String, &self.provider_bond, writer)?;
+        store!(String, &self.object_root, writer)?;
+        store!(u16, &self.chunk_index, writer)?;
+        store!(u8, &self.status, writer)?;
+        store!(u64, &self.beacon_epoch, writer)?;
+        store!(u64, &self.retention_until_daa_score, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwDaObligation {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let obligation_id = load!(String, reader)?;
+        let provider_bond = load!(String, reader)?;
+        let object_root = load!(String, reader)?;
+        let chunk_index = load!(u16, reader)?;
+        let status = load!(u8, reader)?;
+        let beacon_epoch = load!(u64, reader)?;
+        let retention_until_daa_score = load!(u64, reader)?;
+        Ok(Self { obligation_id, provider_bond, object_root, chunk_index, status, beacon_epoch, retention_until_daa_score })
+    }
+}
+
 /// One OPEN search-availability challenge whose obligation is anchored by the requested provider
 /// bond (as scheduler), at the sink. The discovery half of the 0x3e responder: an off-node tool
 /// holding the anchored snapshot bytes reads these and submits the deadline-aware chunk-proof
@@ -2835,11 +2881,15 @@ pub struct GetPalwStateResponse {
     /// (added in wire version 4; empty from older peers).
     #[serde(default)]
     pub search_challenges: Vec<RpcPalwSearchChallenge>,
+    /// DA obligations for the requested batch, all statuses (added in wire version 5; empty from older
+    /// peers). Carries the obligation ids + sampled chunk indices a challenger opens a 0x3a against.
+    #[serde(default)]
+    pub da_obligations: Vec<RpcPalwDaObligation>,
 }
 
 impl Serializer for GetPalwStateResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &4, writer)?;
+        store!(u16, &5, writer)?;
         store!(bool, &self.enabled, writer)?;
         store!(String, &self.sink, writer)?;
         store!(u64, &self.sink_daa_score, writer)?;
@@ -2849,6 +2899,7 @@ impl Serializer for GetPalwStateResponse {
         serialize!(Vec<RpcPalwDaChallenge>, &self.da_challenges, writer)?;
         serialize!(Option<RpcPalwActivationState>, &self.activation, writer)?;
         serialize!(Vec<RpcPalwSearchChallenge>, &self.search_challenges, writer)?;
+        serialize!(Vec<RpcPalwDaObligation>, &self.da_obligations, writer)?;
         Ok(())
     }
 }
@@ -2865,7 +2916,8 @@ impl Deserializer for GetPalwStateResponse {
         let da_challenges = if version >= 2 { deserialize!(Vec<RpcPalwDaChallenge>, reader)? } else { Vec::new() };
         let activation = if version >= 3 { deserialize!(Option<RpcPalwActivationState>, reader)? } else { None };
         let search_challenges = if version >= 4 { deserialize!(Vec<RpcPalwSearchChallenge>, reader)? } else { Vec::new() };
-        Ok(Self { enabled, sink, sink_daa_score, overlay_view_available, batch, provider_bond, da_challenges, activation, search_challenges })
+        let da_obligations = if version >= 5 { deserialize!(Vec<RpcPalwDaObligation>, reader)? } else { Vec::new() };
+        Ok(Self { enabled, sink, sink_daa_score, overlay_view_available, batch, provider_bond, da_challenges, activation, search_challenges, da_obligations })
     }
 }
 
@@ -3098,6 +3150,24 @@ mod palw_state_wire_tests {
                 response_deadline_daa_score: 900,
                 availability_deadline_daa_score: 20_000,
             }],
+            da_obligations: vec![RpcPalwDaObligation {
+                obligation_id: "b1".repeat(64),
+                provider_bond: format!("{}:0", "22".repeat(64)),
+                object_root: "cd".repeat(64),
+                chunk_index: 3,
+                status: 2,
+                beacon_epoch: 9,
+                retention_until_daa_score: 20_000,
+            }],
+        });
+        roundtrip(RpcPalwDaObligation {
+            obligation_id: "b2".repeat(64),
+            provider_bond: format!("{}:1", "22".repeat(64)),
+            object_root: "34".repeat(64),
+            chunk_index: 0,
+            status: 0,
+            beacon_epoch: 3,
+            retention_until_daa_score: 7,
         });
         roundtrip(RpcPalwDaChallenge {
             challenge_id: "ef".repeat(64),

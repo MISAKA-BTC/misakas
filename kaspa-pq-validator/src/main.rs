@@ -929,6 +929,29 @@ async fn palw_status(args: PalwStatusArgs) -> Result<(), String> {
             challenge.availability_deadline_daa_score
         );
     }
+    // DA obligations for the requested batch, all statuses (empty without --batch-id, or from a node
+    // older than wire v5). One key=value line per obligation so a lifecycle script can read the
+    // obligation ids + sampled chunk indices it must challenge to satisfy the certificate DA gate.
+    println!("da_obligations.count: {}", response.da_obligations.len());
+    for obligation in &response.da_obligations {
+        let status = match obligation.status {
+            0 => "pending",
+            1 => "challenged",
+            2 => "satisfied",
+            3 => "timedout",
+            _ => "unknown",
+        };
+        println!(
+            "da_obligation: id={} provider_bond={} object_root={} chunk={} status={} beacon_epoch={} retention_until_daa={}",
+            obligation.obligation_id,
+            obligation.provider_bond,
+            obligation.object_root,
+            obligation.chunk_index,
+            status,
+            obligation.beacon_epoch,
+            obligation.retention_until_daa_score
+        );
+    }
     // §6.4 — the lagged Certified→Active gate signal, derived server-side with the EXACT consensus
     // walk `advance_epoch_gated` consumes. `none` from an older node (wire < v3) or a preset
     // without PALW/dns_params.

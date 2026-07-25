@@ -57,6 +57,24 @@ pub struct PalwDaChallengeProbe {
     pub response_deadline_daa_score: u64,
 }
 
+/// One DA obligation for the requested batch, at `PalwStateProbe::sink`. Unlike an OPEN challenge,
+/// an obligation is created automatically when a leaf chunk is registered and carries its own id +
+/// sampled chunk index — the exact inputs a challenger needs to open a 0x3a challenge (the node
+/// never exposed these before, so a mock lifecycle could not self-issue the challenge that a
+/// da-response then closes to satisfy `certificate_allowed`). Reported only when the request names a
+/// batch id; bounded by the batch's leaf/provider sample fan-out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwDaObligationProbe {
+    pub obligation_id: Hash64,
+    pub provider_bond: TransactionOutpoint,
+    pub object_root: Hash64,
+    pub chunk_index: u16,
+    /// 0 Pending / 1 Challenged / 2 Satisfied / 3 TimedOut.
+    pub status: u8,
+    pub beacon_epoch: u64,
+    pub retention_until_daa_score: u64,
+}
+
 /// One OPEN search-availability challenge whose obligation is anchored by the requested provider
 /// bond (the scheduler's), at `PalwStateProbe::sink`.
 ///
@@ -129,6 +147,9 @@ pub struct PalwStateProbe {
     pub provider_bond: Option<PalwProviderBondProbe>,
     /// Open DA challenges on the requested provider bond. Empty unless a provider bond was requested.
     pub da_challenges: Vec<PalwDaChallengeProbe>,
+    /// DA obligations for the requested batch (all statuses). Empty unless a batch id was requested.
+    /// These carry the obligation ids + sampled chunk indices a challenger needs to open a 0x3a.
+    pub da_obligations: Vec<PalwDaObligationProbe>,
     /// Open search-availability challenges anchored by the requested provider bond (as scheduler).
     /// Empty unless a provider bond was requested.
     pub search_challenges: Vec<PalwSearchChallengeProbe>,
