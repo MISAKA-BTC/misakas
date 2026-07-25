@@ -22,3 +22,9 @@ path = "src/main.rs"
 kaspa-consensus-core.workspace = true      # palw::ticket_nullifier_commitment, PALW_AUTHORIZATION_DOMAIN
 kaspa-hashes.workspace = true              # Hash64, blake2b_512_keyed
 kaspa-pq-validator-core.workspace = true   # ValidatorKey, TicketSecretStore, load_validator_seed
+
+[dev-dependencies]
+# Test-only: bind this helper's output to the MINER's ticket authority — the key the
+# production algo-4 producer actually signs blocks with. If the two ever diverged, the
+# leaf would be admitted but unmineable (clause 7), so this equivalence is pinned in CI.
+misaka-palw-miner.workspace = true

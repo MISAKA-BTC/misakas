@@ -144,6 +144,16 @@ fn cmd_store_add(args: &[String]) {
     eprintln!("mock-ticket: recorded (batch_id, leaf_index={leaf_index}) into the authority-bound ticket-secret store.");
 }
 
+/// The ticket-authority pk-hash derived from an in-memory 32-byte seed, WITHOUT touching the
+/// filesystem. Byte-identical to [`authority_pk_hash`] (the file path leg): both keyed-BLAKE2b the
+/// `ValidatorKey`'s ML-DSA-87 verification key under `PALW_AUTHORIZATION_DOMAIN`. Used by the seam
+/// test to compare against the miner authority without a temp file.
+#[cfg(test)]
+fn authority_pk_hash_from_seed(seed: [u8; 32]) -> Hash64 {
+    let key = ValidatorKey::from_seed(seed);
+    blake2b_512_keyed(PALW_AUTHORIZATION_DOMAIN, key.public_key())
+}
+
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let sub = argv.get(1).map(String::as_str).unwrap_or("");
@@ -161,5 +171,74 @@ fn main() {
             );
             exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use misaka_palw_miner::authorization::{TicketAuthority, ticket_authority_pk_hash};
+
+    // A fixed seed + nullifier for the seam checks (values are arbitrary; only the cross-crate
+    // EQUALITIES matter). Not the harness's real authority key.
+    const SEED: [u8; 32] = [0x9a; 32];
+
+    /// THE seam this helper exists to keep honest: the pk-hash mock-ticket stamps into the leaf's
+    /// `ticket_authority_pk_hash` MUST equal the pk-hash of the miner authority that actually signs
+    /// the algo-4 block. If these diverge by one byte the leaf is admitted on-chain but every block
+    /// referencing it fails consensus clause 7 — a silent dead ticket. Three independent derivations
+    /// (this helper, the miner's `TicketAuthority::pk_hash`, the miner's free `ticket_authority_pk_hash`
+    /// over the same vk) must all agree.
+    #[test]
+    fn helper_authority_pk_hash_equals_the_miner_signing_authority() {
+        let helper = authority_pk_hash_from_seed(SEED);
+
+        let miner_authority = TicketAuthority::from_seed(SEED);
+        assert_eq!(helper, miner_authority.pk_hash(), "mock-ticket's authority pk-hash diverged from the miner's TicketAuthority::pk_hash — leaves would be unmineable (clause 7)");
+        assert_eq!(
+            helper,
+            ticket_authority_pk_hash(miner_authority.public_key()),
+            "mock-ticket's authority pk-hash diverged from the miner's free ticket_authority_pk_hash over the same verification key"
+        );
+    }
+
+    /// The store round trip is exactly what the running miner does: mock-ticket `store-add` writes an
+    /// authority-bound `TicketSecretStore`; the node reads it back with `secret_for(batch_id, leaf)`.
+    /// The recovered raw nullifier must open the leaf's on-chain commitment
+    /// (`ticket_nullifier_commitment`) — i.e. the disclosed value the minted block carries is the one
+    /// the leaf committed to.
+    #[test]
+    fn store_roundtrip_recovers_the_nullifier_that_opens_the_leaf_commitment() {
+        let dir = std::env::temp_dir().join(format!("mock-ticket-seam-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store_path = dir.join("ticket-secret.json");
+        let _ = std::fs::remove_file(&store_path);
+
+        let pk_hash = authority_pk_hash_from_seed(SEED);
+        let batch_id = Hash64::from_str(&"ab".repeat(64)).unwrap();
+        let nullifier = Hash64::from_str(&"42".repeat(64)).unwrap();
+        let leaf_commitment = ticket_nullifier_commitment(&nullifier);
+
+        // write exactly as `store-add` does
+        let mut store = TicketSecretStore::load_or_empty(store_path.clone(), pk_hash).unwrap();
+        store.record_and_flush(batch_id, 0, nullifier).unwrap();
+
+        // read exactly as the miner service does
+        let reader = TicketSecretStore::load_or_empty(store_path.clone(), pk_hash).unwrap();
+        let recovered = reader.secret_for(&batch_id, 0).expect("the miner must recover the stored nullifier for (batch, leaf)");
+        assert_eq!(recovered, nullifier, "the store round-tripped a different nullifier than was recorded");
+        assert_eq!(
+            ticket_nullifier_commitment(&recovered),
+            leaf_commitment,
+            "the recovered nullifier does not open the leaf's on-chain commitment — the minted block's disclosure would be rejected"
+        );
+
+        // a foreign authority cannot read this store (dead-ticket / key-mixing guard)
+        let foreign = authority_pk_hash_from_seed([0x11; 32]);
+        assert!(
+            TicketSecretStore::load_or_empty(store_path, foreign).is_err(),
+            "the store must refuse a different ticket authority"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
