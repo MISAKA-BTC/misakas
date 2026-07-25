@@ -13,6 +13,17 @@ that admission rejects with `CertAbsent`.
 > expected values were derived (A 79299440 / B 79299441 sompi) but the exact-SPK
 > assertion has not been run. See "Known gotchas" for the five defects the live
 > run exposed (all fixed in commit `a9f576d`).
+>
+> **Provider payout closed on 2026-07-26** (batch `86555e84`, commit `a3633ee`):
+> `settlement.verdict: PASS` — the merging block pays provider A 79299440 and
+> provider B 79299441 sompi to the exact expected SPKs.
+>
+> Still open: `negative-tests` reports 4 failures after a successful mint —
+> `wrong-authority`, `duplicate-submit` and `reorg-parity` are NOT IMPLEMENTED and
+> fail closed only once mint evidence exists (they had never been reachable
+> before); `restart-a` fails because `palw-node-agent.sh restart --force` demands a
+> real process restart while `start-palw-miner.sh` has no force flag and may
+> legitimately no-op. Neither is caused by the payout fix.
 
 ## Why this is now possible
 
@@ -182,6 +193,24 @@ reclaims it without touching the `release/` binaries the harness runs.
 **Bonded DA carriers must be submitted by their payload owner** — `palw-submit`
 rejects a 0x3a/0x3b whose owner differs from `--validator-key`.
 
+**A batch is single-use and the mint window is SHORT.** `activation_not_before`
+is ~8 epochs after registration and `expiry` ~6 epochs after that, so once the
+batch goes `active` you have ~6 epochs to mint. Anything that burns that window
+(a stale miner leaf-pin, a 900 s gate timeout) loses the batch — build a fresh one
+with `LIFECYCLE_FORCE=1` (which now retires a COMPLETE bundle too, not just a
+partial one). `GATE_TIMEOUT_SECS` must exceed the `certified → active` wait.
+
+**Keep the beacon ahead of the epoch clock.** The in-process validator emits one
+beacon sample per epoch at its own cadence (~110 s observed). With
+`MINER_INTERVAL_MS=1000` an epoch is only ~100 s, so the sample falls behind,
+`activation.buried_carry_run` climbs past `grace_epochs` and the lane HALTS:
+`activation.open: false`, `derived_mode: halted`, the batch sticks at `certified`,
+and an algo-4 source would classify `ReplicaPalwHalted` (pays 0). `dns-validator.sh`'s
+warm-up reports the LAGGED `dns_health=Active` and will happily say "Healthy"
+while the derived per-block mode is halted — check `derived_mode` and
+`buried_carry_run` directly. Fix by slowing the chain (`MINER_INTERVAL_MS=1500`
+makes epochs ~150 s); recovery took ~2 epochs.
+
 **Do not trust the mint gate's log scrape alone.** `_wait_algo4` historically
 grepped for `pow_algo_id` / `replica` / `StatusUTXOValid`, tokens this kaspad
 build does not emit, so it timed out on a genuinely accepted block. It now also
@@ -206,15 +235,34 @@ kaspa-pq-validator find-reward-settlement --node-wrpc-borsh 127.0.0.1:27610 \
   receipt_da_root`); the wire-v5 round-trip has a unit test. The live drive above
   turned the 32+ prior **candidate** blocks into an **accepted** one on
   2026-07-25.
-- **Provider rewards are NOT yet demonstrated.** The merging chain block
-  `ac893d54…` has `coinbase_output_count: 0`, so no provider payout was observed.
-  `find-reward-settlement` derived the expected split (inclusion 16477805,
-  validator 30895885, base 158598881 → provider A 79299440 / B 79299441 sompi)
-  but the verdict is `PARTIAL`: the exact-SPK assertion needs
-  `--provider-a-spk/--provider-b-spk` and a merging block that actually pays.
-  Whether that is the PALW-014 weight-0 lane behaving as designed, a
-  settlement-lands-later effect, or a real gap is **open** — do not cite this run
-  as evidence that provider payout works.
+- **Provider rewards ARE demonstrated (2026-07-26, batch `86555e84`).** Block
+  `3936f2fd…` merged blue by chain block `9a4f95f3…`, whose coinbase pays exactly
+  two outputs:
+
+  ```
+  settlement.output_0: value=79299440 spk=000076c440f22cd676…   (provider A)
+  settlement.output_1: value=79299441 spk=000076c44054313a55…   (provider B)
+  settlement.verdict: PASS — blue merge pays provider A 79299440 and provider B
+                      79299441 sompi to the exact expected SPKs
+  ```
+
+  This is the exact-SPK verdict (`--provider-a-spk/--provider-b-spk` supplied),
+  not `PARTIAL`. The earlier batch paid nothing — merging coinbase had ZERO
+  outputs — because its leaf named a synthetic reward script no bond owned; see
+  "the leaf must name the bond-lock script" below. PALW-014 weight-0 was NOT the
+  cause: fork-choice weight never reaches the coinbase builder.
+
+- **The leaf must name the bond-lock script.** `palw_work_reward_class`
+  (CRITICAL-1) pays a leaf's providers only when
+  `leaf.provider_x_reward_script == provider_bond_lock_spk(bond.owner_public_key)`.
+  Anything else classifies the source `ReplicaPalwUnbackedCollateral` → providers
+  get 0, and since that source is the merging block's whole mergeset its coinbase
+  comes out EMPTY (block accepted, whole subsidy paid to nobody). Get the correct
+  script from `palw-payload provider-bond`'s `provider_bond_lock_spk:` line —
+  `register-providers.sh` records it as `PROV_{A,B}_REWARD_SPK` and
+  `create-lifecycle.sh` fails closed without it. It is NOT
+  `provider.owner_pubkey_hash` (the unkeyed overlay credential palw-status
+  prints); locking to that would freeze the collateral permanently.
 - The exact-daa challenge recipe is confirmed in practice, first attempt, twice:
   freeze DAA by stopping the supporting miner (the in-process validator emits
   transactions, not blocks), set `opened_daa = D + 2`, inject with
