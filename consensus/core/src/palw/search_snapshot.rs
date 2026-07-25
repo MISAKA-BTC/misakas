@@ -18,8 +18,8 @@ use kaspa_hashes::{Hash64, blake2b_512_keyed};
 use thiserror::Error;
 
 use super::da::{
-    PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1, PalwDaError, PalwReceiptDaChunkProofV1, PalwReceiptDaCommitmentV1,
-    palw_receipt_da_commitment, verify_palw_receipt_da_chunk,
+    PALW_DA_CHUNK_BYTES, PALW_DA_MAX_PROOF_DEPTH, PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1, PalwDaError, PalwReceiptDaChunkProofV1,
+    PalwReceiptDaCommitmentV1, palw_receipt_da_commitment, verify_palw_receipt_da_chunk,
 };
 
 /// Inner schema version of the snapshot body (the DA object version is
@@ -57,6 +57,22 @@ pub const PALW_SEARCH_MAX_SNIPPET_BYTES: usize = 4096;
 pub const PALW_SEARCH_MAX_BODIES: usize = 8;
 /// Maximum content-type length per body record.
 pub const PALW_SEARCH_MAX_CONTENT_TYPE_BYTES: usize = 128;
+
+// ---------------------------------------------------------------------------
+// On-chain dispatch bounds (isolation caps for subnet bytes 0x3d-0x3f)
+// ---------------------------------------------------------------------------
+
+/// Isolation cap for a `PalwSearchChallengeTxV1` payload. Sized for the worst bound-case
+/// registration attachment: assignment (≤16 KiB) + signed anchor (anchor + ML-DSA key/sig bounds)
+/// + the challenge's own key/signature, with headroom.
+pub const PALW_SEARCH_MAX_ONCHAIN_CHALLENGE_BYTES: usize = 48 * 1024;
+/// Isolation cap for a `PalwSearchResponseTxV1` payload (one ≤16 KiB chunk + proof path), mirroring
+/// the DA-01 response cap.
+pub const PALW_SEARCH_MAX_ONCHAIN_RESPONSE_BYTES: usize = 32 * 1024;
+/// Isolation cap for a `PalwSearchTimeoutTxV1` payload (fixed fields + ML-DSA key/sig bounds).
+pub const PALW_SEARCH_MAX_ONCHAIN_TIMEOUT_BYTES: usize = 16 * 1024;
+/// Upper bound for one canonical `PalwSearchAssignmentV1` wire encoding (worst bound-case fields).
+pub const PALW_SEARCH_MAX_ASSIGNMENT_BYTES: usize = 16 * 1024;
 
 /// Snapshot-level typed outcome. Failures are first-class snapshots: "the search failed at
 /// this time under this policy" is itself the anchored fact.
@@ -624,7 +640,9 @@ impl PalwSearchSnapshotV1 {
 /// Scheduler-side anchor binding one admitted snapshot into a JobSpec/assignment.
 /// The scheduler signs [`Self::signing_hash`]; nothing here is inside the snapshot bytes,
 /// so the binding is non-circular.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize, serde::Serialize, serde::Deserialize,
+)]
 pub struct PalwSearchSnapshotAnchorV1 {
     /// The assignment this snapshot serves (content-addressed id).
     pub assignment_id: Hash64,
@@ -920,6 +938,42 @@ impl PalwSignedSearchAnchorV1 {
             Err(PalwSearchSnapshotError::Invalid("anchor signature is invalid"))
         }
     }
+
+    /// Canonical wire bytes: fixed anchor fields, then length-prefixed key/signature.
+    pub fn encode_into(&self, out: &mut Vec<u8>) -> Result<(), PalwSearchSnapshotError> {
+        if self.scheduler_public_key.is_empty() || self.scheduler_public_key.len() > PALW_SEARCH_MAX_PUBLIC_KEY_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "scheduler_public_key", bound: PALW_SEARCH_MAX_PUBLIC_KEY_BYTES });
+        }
+        if self.signature.len() > PALW_SEARCH_MAX_SIGNATURE_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "signature", bound: PALW_SEARCH_MAX_SIGNATURE_BYTES });
+        }
+        out.extend_from_slice(self.anchor.assignment_id.as_byte_slice());
+        out.extend_from_slice(self.anchor.snapshot_digest.as_byte_slice());
+        out.extend_from_slice(self.anchor.object_root.as_byte_slice());
+        out.extend_from_slice(&self.anchor.object_len.to_le_bytes());
+        out.extend_from_slice(&self.anchor.chunk_count.to_le_bytes());
+        out.extend_from_slice(&self.anchor.availability_deadline_daa_score.to_le_bytes());
+        push_var(out, &self.scheduler_public_key);
+        push_var(out, &self.signature);
+        Ok(())
+    }
+
+    fn decode_from(cursor: &mut Cursor<'_>) -> Result<Self, PalwSearchSnapshotError> {
+        let anchor = PalwSearchSnapshotAnchorV1 {
+            assignment_id: cursor.hash()?,
+            snapshot_digest: cursor.hash()?,
+            object_root: cursor.hash()?,
+            object_len: cursor.u32()?,
+            chunk_count: cursor.u16()?,
+            availability_deadline_daa_score: cursor.u64()?,
+        };
+        let scheduler_public_key = cursor.var("scheduler_public_key", PALW_SEARCH_MAX_PUBLIC_KEY_BYTES)?.to_vec();
+        let signature = cursor.var("signature", PALW_SEARCH_MAX_SIGNATURE_BYTES)?.to_vec();
+        if scheduler_public_key.is_empty() {
+            return Err(PalwSearchSnapshotError::Invalid("anchor scheduler public key must not be empty"));
+        }
+        Ok(Self { anchor, scheduler_public_key, signature })
+    }
 }
 
 /// The worker-facing JobSpec for one node-anchored search input: the signed assignment (what to
@@ -949,6 +1003,23 @@ impl PalwSearchJobSpecV1 {
             return Err(PalwSearchSnapshotError::Invalid("anchor does not reference this assignment"));
         }
         Ok(())
+    }
+
+    /// Canonical wire bytes: length-prefixed assignment encoding, then the signed anchor.
+    pub fn encode_into(&self, out: &mut Vec<u8>) -> Result<(), PalwSearchSnapshotError> {
+        let assignment = self.assignment.encode()?;
+        if assignment.len() > PALW_SEARCH_MAX_ASSIGNMENT_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "assignment", bound: PALW_SEARCH_MAX_ASSIGNMENT_BYTES });
+        }
+        push_var(out, &assignment);
+        self.signed_anchor.encode_into(out)
+    }
+
+    fn decode_from(cursor: &mut Cursor<'_>) -> Result<Self, PalwSearchSnapshotError> {
+        let assignment_bytes = cursor.var("assignment", PALW_SEARCH_MAX_ASSIGNMENT_BYTES)?;
+        let assignment = PalwSearchAssignmentV1::decode_strict(assignment_bytes)?;
+        let signed_anchor = PalwSignedSearchAnchorV1::decode_from(cursor)?;
+        Ok(Self { assignment, signed_anchor })
     }
 }
 
@@ -1026,9 +1097,21 @@ pub fn enforce_scheduler_allowlist(
 
 /// Capacity bound for concurrently tracked search-availability obligations.
 pub const PALW_SEARCH_MAX_OBLIGATIONS: usize = 65_536;
+/// State schema version of [`PalwSearchAvailabilityStateV1`].
+pub const PALW_SEARCH_STATE_VERSION_V1: u16 = 1;
+/// Pruning-snapshot schema version of [`PalwSearchPruningSnapshotV1`].
+pub const PALW_SEARCH_SNAPSHOT_STATE_VERSION_V1: u16 = 1;
+/// Canonical state-root digest domain (folded into the Header-v4 selected-parent state alongside
+/// the DA state root).
+pub const PALW_SEARCH_STATE_ROOT_DOMAIN: &[u8] = b"misaka-palw-search-availability-state-root-v1";
+/// Byte budget for the search pruning snapshot: every growing transition is bounded so the state
+/// always fits one transportable boundary snapshot (mirrors the DA-01 discipline).
+pub const PALW_SEARCH_MAX_PRUNING_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
 
 /// Lifecycle of one anchored snapshot's availability obligation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize, serde::Serialize, serde::Deserialize,
+)]
 pub enum PalwSearchObligationStatusV1 {
     /// Anchored and unchallenged (or every challenge answered).
     Active,
@@ -1047,12 +1130,17 @@ pub enum PalwSearchObligationStatusV1 {
 }
 
 /// One registered availability obligation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize, serde::Serialize, serde::Deserialize,
+)]
 pub struct PalwSearchObligationV1 {
     /// The signed-anchor facts this obligation enforces.
     pub anchor: PalwSearchSnapshotAnchorV1,
-    /// Allowlisted scheduler key fingerprint that authorized the anchor.
+    /// Bonded-registry scheduler key fingerprint that authorized the anchor.
     pub scheduler_key_id: Hash64,
+    /// The scheduler's on-chain provider bond (the slash target when the obligation times out, and
+    /// the sweep key when that bond is slashed elsewhere).
+    pub scheduler_bond: TransactionOutpoint,
     /// DAA score at registration.
     pub registered_daa_score: u64,
     /// Current lifecycle status.
@@ -1078,23 +1166,157 @@ pub enum PalwSearchAvailabilityUndoV1 {
 }
 
 /// Fork-local search-availability state (mirrors the receipt-DA state-machine pattern:
-/// typed fail-closed transitions with exact undo records).
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// typed fail-closed transitions with exact undo records). Persisted per chain block by the
+/// virtual processor; a child clones its selected parent's row, clears the per-block slash delta
+/// and applies its accepted 0x3d-0x3f transitions.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwSearchAvailabilityStateV1 {
+    /// Must be [`PALW_SEARCH_STATE_VERSION_V1`].
+    pub version: u16,
     /// Obligations keyed by DA object root.
     pub obligations: std::collections::BTreeMap<Hash64, PalwSearchObligationV1>,
+    /// Exact scheduler-bond slash delta contributed by the block whose key stores this state. A
+    /// child clears it before applying its own transactions; the provider-registry reconciler
+    /// reads it per chain block so selected-chain apply/revert stays exact (DA-01 pattern).
+    pub block_slashed_schedulers: Vec<TransactionOutpoint>,
+}
+
+impl Default for PalwSearchAvailabilityStateV1 {
+    fn default() -> Self {
+        Self {
+            version: PALW_SEARCH_STATE_VERSION_V1,
+            obligations: std::collections::BTreeMap::new(),
+            block_slashed_schedulers: Vec::new(),
+        }
+    }
+}
+
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwSearchAvailabilityStateV1 {
+    fn estimate_mem_units(&self) -> usize {
+        (self.obligations.len() + self.block_slashed_schedulers.len()).max(1)
+    }
+}
+
+/// Boundary snapshot of the search-availability state at a pruning point, mirroring
+/// [`super::da::PalwDaPruningSnapshotV1`]: open obligations and challenge deadlines must survive
+/// pruned IBD or a node could neither respond to nor prove a timeout it inherited.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwSearchPruningSnapshotV1 {
+    /// Must be [`PALW_SEARCH_SNAPSHOT_STATE_VERSION_V1`].
+    pub version: u16,
+    /// The pruning point this snapshot was captured at.
+    pub pruning_point: crate::BlockHash,
+    /// The state stored at that pruning point.
+    pub state: PalwSearchAvailabilityStateV1,
+}
+
+impl PalwSearchPruningSnapshotV1 {
+    /// Structural validity: version pin plus the embedded state's own invariants.
+    pub fn validate(&self) -> bool {
+        self.version == PALW_SEARCH_SNAPSHOT_STATE_VERSION_V1 && self.state.validate_structure()
+    }
 }
 
 impl PalwSearchAvailabilityStateV1 {
+    /// Canonical digest folded into the Header-v4 selected-parent state (alongside the DA state
+    /// root) and compared at pruning-boundary import. Excludes the containing block coordinate;
+    /// identical state always hashes identically.
+    pub fn state_root(&self) -> Hash64 {
+        blake2b_512_keyed(PALW_SEARCH_STATE_ROOT_DOMAIN, &borsh::to_vec(self).expect("borsh"))
+    }
+
+    /// Structural invariants a persisted row must satisfy: version pin, obligation capacity,
+    /// per-obligation geometry/status coherence, and a deduplicated, bounded slash delta.
+    pub fn validate_structure(&self) -> bool {
+        if self.version != PALW_SEARCH_STATE_VERSION_V1 {
+            return false;
+        }
+        if self.obligations.len() > PALW_SEARCH_MAX_OBLIGATIONS {
+            return false;
+        }
+        for (root, obligation) in &self.obligations {
+            if *root != obligation.anchor.object_root || obligation.anchor.chunk_count == 0 {
+                return false;
+            }
+            if let PalwSearchObligationStatusV1::Challenged { chunk_index, .. } = obligation.status
+                && chunk_index >= obligation.anchor.chunk_count
+            {
+                return false;
+            }
+        }
+        if self.block_slashed_schedulers.len() > PALW_SEARCH_MAX_OBLIGATIONS {
+            return false;
+        }
+        let mut seen = self.block_slashed_schedulers.clone();
+        seen.sort_unstable_by(|a, b| (a.transaction_id.as_bytes(), a.index).cmp(&(b.transaction_id.as_bytes(), b.index)));
+        seen.dedup();
+        if seen.len() != self.block_slashed_schedulers.len() {
+            return false;
+        }
+        self.canonical_snapshot_encoded_len().is_some_and(|len| len <= PALW_SEARCH_MAX_PRUNING_SNAPSHOT_BYTES)
+    }
+
+    /// Exact canonical size of `PalwSearchPruningSnapshotV1 { version: 1, pruning_point, state: self }`.
+    /// Counting through the Borsh serializer keeps this locked to the wire encoding as fields evolve.
+    pub fn canonical_snapshot_encoded_len(&self) -> Option<usize> {
+        struct LenCounter {
+            len: usize,
+        }
+        impl std::io::Write for LenCounter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.len = self.len.checked_add(buf.len()).ok_or(std::io::ErrorKind::InvalidInput)?;
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut counter = LenCounter { len: 0 };
+        borsh::BorshSerialize::serialize(&PALW_SEARCH_SNAPSHOT_STATE_VERSION_V1, &mut counter).ok()?;
+        borsh::BorshSerialize::serialize(&crate::BlockHash::default(), &mut counter).ok()?;
+        borsh::BorshSerialize::serialize(self, &mut counter).ok()?;
+        Some(counter.len)
+    }
+
+    fn snapshot_fits(&self) -> bool {
+        self.canonical_snapshot_encoded_len().is_some_and(|len| len <= PALW_SEARCH_MAX_PRUNING_SNAPSHOT_BYTES)
+    }
+
+    /// Start a child block's delta while retaining inherited obligations.
+    pub fn begin_child_block(&mut self) {
+        self.block_slashed_schedulers.clear();
+    }
+
+    /// Record one scheduler-bond slash into this block's delta (idempotent per bond).
+    pub fn record_block_slash(&mut self, scheduler_bond: TransactionOutpoint) -> Result<(), PalwSearchSnapshotError> {
+        if self.block_slashed_schedulers.contains(&scheduler_bond) {
+            return Ok(());
+        }
+        if self.block_slashed_schedulers.len() >= PALW_SEARCH_MAX_OBLIGATIONS {
+            return Err(PalwSearchSnapshotError::Invalid("search block slash delta capacity is exhausted"));
+        }
+        self.block_slashed_schedulers.push(scheduler_bond);
+        if self.snapshot_fits() {
+            Ok(())
+        } else {
+            self.block_slashed_schedulers.pop();
+            Err(PalwSearchSnapshotError::Invalid("search block slash delta exceeds the snapshot byte budget"))
+        }
+    }
+
     /// Registers an availability obligation for an anchored snapshot.
     pub fn register(
         &mut self,
         anchor: PalwSearchSnapshotAnchorV1,
         scheduler_key_id: Hash64,
+        scheduler_bond: TransactionOutpoint,
         current_daa_score: u64,
     ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
         if current_daa_score >= anchor.availability_deadline_daa_score {
             return Err(PalwSearchSnapshotError::Invalid("anchor availability deadline has already passed"));
+        }
+        if anchor.chunk_count == 0 {
+            return Err(PalwSearchSnapshotError::Invalid("anchor chunk count must be positive"));
         }
         if self.obligations.len() >= PALW_SEARCH_MAX_OBLIGATIONS {
             return Err(PalwSearchSnapshotError::Invalid("search obligation capacity is exhausted"));
@@ -1107,10 +1329,15 @@ impl PalwSearchAvailabilityStateV1 {
             PalwSearchObligationV1 {
                 anchor,
                 scheduler_key_id,
+                scheduler_bond,
                 registered_daa_score: current_daa_score,
                 status: PalwSearchObligationStatusV1::Active,
             },
         );
+        if !self.snapshot_fits() {
+            self.obligations.remove(&anchor.object_root);
+            return Err(PalwSearchSnapshotError::Invalid("search obligation set exceeds the snapshot byte budget"));
+        }
         Ok(PalwSearchAvailabilityUndoV1::Registered { object_root: anchor.object_root })
     }
 
@@ -1143,6 +1370,10 @@ impl PalwSearchAvailabilityStateV1 {
             response_deadline_daa_score: current_daa_score.saturating_add(response_window_daa),
             chunk_index,
         };
+        if !self.snapshot_fits() {
+            self.obligations.get_mut(&object_root).expect("just mutated").status = prior;
+            return Err(PalwSearchSnapshotError::Invalid("challenged state exceeds the snapshot byte budget"));
+        }
         Ok(PalwSearchAvailabilityUndoV1::StatusChanged { object_root, prior })
     }
 
@@ -1178,12 +1409,13 @@ impl PalwSearchAvailabilityStateV1 {
         Ok(PalwSearchAvailabilityUndoV1::StatusChanged { object_root, prior })
     }
 
-    /// Records the timeout slash after an unanswered challenge deadline.
+    /// Records the timeout slash after an unanswered challenge deadline. Returns the scheduler
+    /// bond the dispatcher must slash in the provider registry (the on-chain economic half).
     pub fn timeout_slash(
         &mut self,
         object_root: Hash64,
         current_daa_score: u64,
-    ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
+    ) -> Result<(TransactionOutpoint, PalwSearchAvailabilityUndoV1), PalwSearchSnapshotError> {
         let obligation = self
             .obligations
             .get_mut(&object_root)
@@ -1196,7 +1428,7 @@ impl PalwSearchAvailabilityStateV1 {
             return Err(PalwSearchSnapshotError::Invalid("challenge deadline has not elapsed yet"));
         }
         obligation.status = PalwSearchObligationStatusV1::Slashed { at_daa_score: current_daa_score };
-        Ok(PalwSearchAvailabilityUndoV1::StatusChanged { object_root, prior })
+        Ok((obligation.scheduler_bond, PalwSearchAvailabilityUndoV1::StatusChanged { object_root, prior }))
     }
 
     /// Scheduler-slash linkage: when a scheduler's bond is slashed on-chain, every obligation
@@ -1211,6 +1443,29 @@ impl PalwSearchAvailabilityStateV1 {
         let mut undos = Vec::new();
         for (object_root, obligation) in &mut self.obligations {
             if obligation.scheduler_key_id != slashed_scheduler_key_id {
+                continue;
+            }
+            if matches!(obligation.status, PalwSearchObligationStatusV1::Slashed { .. }) {
+                continue;
+            }
+            let prior = obligation.status;
+            obligation.status = PalwSearchObligationStatusV1::Slashed { at_daa_score };
+            undos.push(PalwSearchAvailabilityUndoV1::StatusChanged { object_root: *object_root, prior });
+        }
+        undos
+    }
+
+    /// Bond-keyed variant of [`Self::void_by_scheduler`]: the dispatcher sweeps by the slashed
+    /// bond outpoint it observed on-chain (DA-01 timeout slash, search timeout slash, or any other
+    /// provider-registry slash in the same block). Same deterministic root order and undo contract.
+    pub fn void_by_scheduler_bond(
+        &mut self,
+        slashed_scheduler_bond: TransactionOutpoint,
+        at_daa_score: u64,
+    ) -> Vec<PalwSearchAvailabilityUndoV1> {
+        let mut undos = Vec::new();
+        for (object_root, obligation) in &mut self.obligations {
+            if obligation.scheduler_bond != slashed_scheduler_bond {
                 continue;
             }
             if matches!(obligation.status, PalwSearchObligationStatusV1::Slashed { .. }) {
@@ -1271,6 +1526,12 @@ fn push_outpoint(out: &mut Vec<u8>, outpoint: &TransactionOutpoint) {
 }
 
 /// Bond-owner-signed availability challenge for one anchored snapshot chunk.
+///
+/// The optional `registration` attachment carries the scheduler-signed JobSpec (assignment +
+/// signed anchor) that lazily registers the challenged obligation: an obligation becomes
+/// consensus state exactly when someone first contests it, validated against the bonded
+/// scheduler registry every node resolves identically. A plain challenge (no attachment) may
+/// target only an obligation already registered in the selected parent's state.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PalwSearchChallengeTxV1 {
     /// Must be [`PALW_SEARCH_TX_VERSION_V1`].
@@ -1285,12 +1546,26 @@ pub struct PalwSearchChallengeTxV1 {
     pub challenger_bond: TransactionOutpoint,
     /// Challenger's ML-DSA-87 public key (must own the bond).
     pub challenger_public_key: Vec<u8>,
+    /// Scheduler-signed registration proof for a not-yet-registered obligation.
+    pub registration: Option<PalwSearchJobSpecV1>,
     /// Signature over [`Self::signing_hash`].
     pub signature: Vec<u8>,
 }
 
 impl PalwSearchChallengeTxV1 {
-    /// Canonical wire payload: fixed field order, LE integers, length-prefixed key/signature.
+    fn encode_registration(&self, out: &mut Vec<u8>) -> Result<(), PalwSearchSnapshotError> {
+        match &self.registration {
+            None => out.push(0),
+            Some(registration) => {
+                out.push(1);
+                registration.encode_into(out)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Canonical wire payload: fixed field order, LE integers, length-prefixed key/signature,
+    /// one-byte registration tag.
     pub fn encode(&self) -> Result<Vec<u8>, PalwSearchSnapshotError> {
         if self.challenger_public_key.is_empty() || self.challenger_public_key.len() > PALW_SEARCH_MAX_PUBLIC_KEY_BYTES {
             return Err(PalwSearchSnapshotError::Bound { field: "challenger_public_key", bound: PALW_SEARCH_MAX_PUBLIC_KEY_BYTES });
@@ -1298,18 +1573,20 @@ impl PalwSearchChallengeTxV1 {
         if self.signature.len() > PALW_SEARCH_MAX_SIGNATURE_BYTES {
             return Err(PalwSearchSnapshotError::Bound { field: "signature", bound: PALW_SEARCH_MAX_SIGNATURE_BYTES });
         }
-        let mut out = Vec::with_capacity(96 + self.challenger_public_key.len() + self.signature.len());
+        let mut out = Vec::with_capacity(256 + self.challenger_public_key.len() + self.signature.len());
         out.extend_from_slice(&self.version.to_le_bytes());
         out.extend_from_slice(&self.network_id.to_le_bytes());
         out.extend_from_slice(self.object_root.as_byte_slice());
         out.extend_from_slice(&self.chunk_index.to_le_bytes());
         push_outpoint(&mut out, &self.challenger_bond);
         push_var(&mut out, &self.challenger_public_key);
+        self.encode_registration(&mut out)?;
         push_var(&mut out, &self.signature);
         Ok(out)
     }
 
-    /// Strict decoder: unknown version, bounds, malformed prefixes, trailing bytes all fail.
+    /// Strict decoder: unknown version, bounds, malformed prefixes, unknown registration tag and
+    /// trailing bytes all fail.
     pub fn decode_strict(bytes: &[u8]) -> Result<Self, PalwSearchSnapshotError> {
         let mut cursor = Cursor { bytes, offset: 0 };
         let version = cursor.u16()?;
@@ -1321,6 +1598,11 @@ impl PalwSearchChallengeTxV1 {
         let chunk_index = cursor.u16()?;
         let challenger_bond = TransactionOutpoint::new(cursor.hash()?, cursor.u32()?);
         let challenger_public_key = cursor.var("challenger_public_key", PALW_SEARCH_MAX_PUBLIC_KEY_BYTES)?.to_vec();
+        let registration = match cursor.u8()? {
+            0 => None,
+            1 => Some(PalwSearchJobSpecV1::decode_from(&mut cursor)?),
+            _ => return Err(PalwSearchSnapshotError::NonCanonical("registration tag")),
+        };
         let signature = cursor.var("signature", PALW_SEARCH_MAX_SIGNATURE_BYTES)?.to_vec();
         if cursor.offset != bytes.len() {
             return Err(PalwSearchSnapshotError::NonCanonical("trailing bytes"));
@@ -1328,10 +1610,12 @@ impl PalwSearchChallengeTxV1 {
         if challenger_public_key.is_empty() {
             return Err(PalwSearchSnapshotError::Invalid("challenger public key must not be empty"));
         }
-        Ok(Self { version, network_id, object_root, chunk_index, challenger_bond, challenger_public_key, signature })
+        Ok(Self { version, network_id, object_root, chunk_index, challenger_bond, challenger_public_key, registration, signature })
     }
 
-    /// Domain-separated signing hash over every field except the signature.
+    /// Domain-separated signing hash over every field except the signature — including the
+    /// registration attachment, so a third party can neither strip nor graft a registration onto
+    /// a signed challenge.
     #[must_use]
     pub fn signing_hash(&self) -> Hash64 {
         let mut preimage = Vec::with_capacity(256);
@@ -1343,6 +1627,11 @@ impl PalwSearchChallengeTxV1 {
         let mut key_prefixed = (self.challenger_public_key.len() as u64).to_le_bytes().to_vec();
         key_prefixed.extend_from_slice(&self.challenger_public_key);
         preimage.extend_from_slice(&key_prefixed);
+        // Infallible-encoding fallback poisons the preimage rather than panicking: an
+        // over-bound registration can never produce a signable hash that verifies.
+        if self.encode_registration(&mut preimage).is_err() {
+            preimage.extend_from_slice(b"\xff:unencodable-registration");
+        }
         blake2b_512_keyed(PALW_SEARCH_CHALLENGE_MLDSA87_CONTEXT, &preimage)
     }
 }
@@ -1359,6 +1648,79 @@ pub struct PalwSearchResponseTxV1 {
     pub object_root: Hash64,
     /// The chunk proof answering the open challenge.
     pub proof: PalwReceiptDaChunkProofV1,
+}
+
+impl PalwSearchResponseTxV1 {
+    /// Canonical wire payload: fixed field order, LE integers, length-prefixed chunk bytes,
+    /// count-prefixed sibling path.
+    pub fn encode(&self) -> Result<Vec<u8>, PalwSearchSnapshotError> {
+        if self.proof.chunk.is_empty() || self.proof.chunk.len() > PALW_DA_CHUNK_BYTES {
+            return Err(PalwSearchSnapshotError::Bound { field: "proof_chunk", bound: PALW_DA_CHUNK_BYTES });
+        }
+        if self.proof.siblings.len() > PALW_DA_MAX_PROOF_DEPTH {
+            return Err(PalwSearchSnapshotError::Bound { field: "proof_siblings", bound: PALW_DA_MAX_PROOF_DEPTH });
+        }
+        let mut out = Vec::with_capacity(128 + self.proof.chunk.len() + self.proof.siblings.len() * 64);
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&self.network_id.to_le_bytes());
+        out.extend_from_slice(self.object_root.as_byte_slice());
+        out.extend_from_slice(&self.proof.version.to_le_bytes());
+        out.extend_from_slice(&self.proof.object_version.to_le_bytes());
+        out.extend_from_slice(&self.proof.object_len.to_le_bytes());
+        out.extend_from_slice(&self.proof.chunk_count.to_le_bytes());
+        out.extend_from_slice(&self.proof.chunk_index.to_le_bytes());
+        push_var(&mut out, &self.proof.chunk);
+        out.push(self.proof.siblings.len() as u8);
+        for sibling in &self.proof.siblings {
+            out.extend_from_slice(sibling.as_byte_slice());
+        }
+        Ok(out)
+    }
+
+    /// Strict decoder: unknown version, bounds, malformed prefixes, trailing bytes all fail.
+    pub fn decode_strict(bytes: &[u8]) -> Result<Self, PalwSearchSnapshotError> {
+        let mut cursor = Cursor { bytes, offset: 0 };
+        let version = cursor.u16()?;
+        if version != PALW_SEARCH_TX_VERSION_V1 {
+            return Err(PalwSearchSnapshotError::UnsupportedVersion(version));
+        }
+        let network_id = cursor.u32()?;
+        let object_root = cursor.hash()?;
+        let proof_version = cursor.u16()?;
+        let object_version = cursor.u16()?;
+        let object_len = cursor.u32()?;
+        let chunk_count = cursor.u16()?;
+        let chunk_index = cursor.u16()?;
+        let chunk = cursor.var("proof_chunk", PALW_DA_CHUNK_BYTES)?.to_vec();
+        let sibling_count = cursor.u8()? as usize;
+        if sibling_count > PALW_DA_MAX_PROOF_DEPTH {
+            return Err(PalwSearchSnapshotError::Bound { field: "proof_siblings", bound: PALW_DA_MAX_PROOF_DEPTH });
+        }
+        let mut siblings = Vec::with_capacity(sibling_count);
+        for _ in 0..sibling_count {
+            siblings.push(cursor.hash()?);
+        }
+        if cursor.offset != bytes.len() {
+            return Err(PalwSearchSnapshotError::NonCanonical("trailing bytes"));
+        }
+        if chunk.is_empty() {
+            return Err(PalwSearchSnapshotError::Invalid("proof chunk must not be empty"));
+        }
+        Ok(Self {
+            version,
+            network_id,
+            object_root,
+            proof: PalwReceiptDaChunkProofV1 {
+                version: proof_version,
+                object_version,
+                object_len,
+                chunk_count,
+                chunk_index,
+                chunk,
+                siblings,
+            },
+        })
+    }
 }
 
 /// Bond-owner-signed timeout evidence for an unanswered challenge.
@@ -1435,16 +1797,24 @@ impl PalwSearchTimeoutTxV1 {
 
 impl PalwSearchAvailabilityStateV1 {
     /// Applies one bond-authorized challenge tx: network/version pin, signature over the
-    /// signing hash, an active-bond check binding the key to the bond, then the state
-    /// transition. Nothing mutates unless every gate passes.
+    /// signing hash, an active-bond check binding the key to the bond, then — when a
+    /// registration proof is attached — JobSpec verification against the bonded scheduler
+    /// registry followed atomically by register + challenge. Nothing mutates unless every gate
+    /// passes; on any post-registration failure the registration is reverted before returning.
+    ///
+    /// Returns the applied undos in application order (revert in reverse): `[challenge]` for a
+    /// plain challenge, `[register, challenge]` for a registering one.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_challenge_tx(
         &mut self,
         tx: &PalwSearchChallengeTxV1,
         network_id: u32,
+        genesis_hash: &Hash64,
         current_daa_score: u64,
         mut bond_owner_is_active: impl FnMut(&TransactionOutpoint, &[u8]) -> bool,
         mut verify: impl FnMut(&[u8], &[u8], &[u8], &[u8]) -> bool,
-    ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
+        mut resolve_scheduler_bond: impl FnMut(&TransactionOutpoint) -> Option<super::PalwProviderBondRecord>,
+    ) -> Result<Vec<PalwSearchAvailabilityUndoV1>, PalwSearchSnapshotError> {
         if tx.version != PALW_SEARCH_TX_VERSION_V1 {
             return Err(PalwSearchSnapshotError::UnsupportedVersion(tx.version));
         }
@@ -1465,7 +1835,45 @@ impl PalwSearchAvailabilityStateV1 {
         if !bond_owner_is_active(&tx.challenger_bond, &tx.challenger_public_key) {
             return Err(PalwSearchSnapshotError::Invalid("challenger is not an active authorized bond owner"));
         }
-        self.challenge(tx.object_root, tx.chunk_index, current_daa_score, PALW_SEARCH_CHALLENGE_RESPONSE_WINDOW_DAA)
+        let register_undo = match &tx.registration {
+            None => None,
+            Some(registration) => {
+                if self.obligations.contains_key(&tx.object_root) {
+                    return Err(PalwSearchSnapshotError::Invalid("registration attached for an already registered obligation"));
+                }
+                if registration.signed_anchor.anchor.object_root != tx.object_root {
+                    return Err(PalwSearchSnapshotError::Invalid("registration anchor does not cover the challenged object root"));
+                }
+                if registration.assignment.network_id != network_id || registration.assignment.genesis_hash != *genesis_hash {
+                    return Err(PalwSearchSnapshotError::Invalid("registration assignment is bound to another network"));
+                }
+                registration.verify(&mut verify)?;
+                let bond = resolve_scheduler_bond(&registration.assignment.scheduler_bond)
+                    .ok_or(PalwSearchSnapshotError::Invalid("registration scheduler bond is unknown to the provider registry"))?;
+                scheduler_is_bonded(&registration.assignment, &bond, current_daa_score)?;
+                let key_id = scheduler_key_id(&registration.assignment.scheduler_public_key);
+                Some(self.register(
+                    registration.signed_anchor.anchor,
+                    key_id,
+                    registration.assignment.scheduler_bond,
+                    current_daa_score,
+                )?)
+            }
+        };
+        match self.challenge(tx.object_root, tx.chunk_index, current_daa_score, PALW_SEARCH_CHALLENGE_RESPONSE_WINDOW_DAA) {
+            Ok(challenge_undo) => {
+                let mut undos = Vec::with_capacity(2);
+                undos.extend(register_undo);
+                undos.push(challenge_undo);
+                Ok(undos)
+            }
+            Err(error) => {
+                if let Some(undo) = register_undo {
+                    self.revert(undo).expect("reverting a registration applied in this call");
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Applies one proof-bound response tx.
@@ -1484,7 +1892,8 @@ impl PalwSearchAvailabilityStateV1 {
         self.respond(tx.object_root, &tx.proof, current_daa_score)
     }
 
-    /// Applies one bond-authorized timeout-evidence tx.
+    /// Applies one bond-authorized timeout-evidence tx. Returns the slashed scheduler bond (the
+    /// dispatcher's provider-registry mutation) alongside the state undo.
     pub fn apply_timeout_tx(
         &mut self,
         tx: &PalwSearchTimeoutTxV1,
@@ -1492,7 +1901,7 @@ impl PalwSearchAvailabilityStateV1 {
         current_daa_score: u64,
         mut bond_owner_is_active: impl FnMut(&TransactionOutpoint, &[u8]) -> bool,
         mut verify: impl FnMut(&[u8], &[u8], &[u8], &[u8]) -> bool,
-    ) -> Result<PalwSearchAvailabilityUndoV1, PalwSearchSnapshotError> {
+    ) -> Result<(TransactionOutpoint, PalwSearchAvailabilityUndoV1), PalwSearchSnapshotError> {
         if tx.version != PALW_SEARCH_TX_VERSION_V1 {
             return Err(PalwSearchSnapshotError::UnsupportedVersion(tx.version));
         }
@@ -1861,6 +2270,8 @@ mod tests {
             availability_deadline_daa_score: 20_000,
         };
         let bond = TransactionOutpoint::new(Hash64::from_bytes([8; 64]), 1);
+        let scheduler_bond = TransactionOutpoint::new(Hash64::from_bytes([0xA5; 64]), 0);
+        let genesis = snapshot.genesis_hash;
         let challenge = PalwSearchChallengeTxV1 {
             version: PALW_SEARCH_TX_VERSION_V1,
             network_id: 111,
@@ -1868,23 +2279,25 @@ mod tests {
             chunk_index: 0,
             challenger_bond: bond,
             challenger_public_key: vec![0xAB; 32],
+            registration: None,
             signature: vec![0xCD; 64],
         };
         let accept = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| true;
         let bond_ok = |outpoint: &TransactionOutpoint, key: &[u8]| *outpoint == bond && key == [0xAB; 32];
+        let no_bond = |_: &TransactionOutpoint| None;
 
         let mut state = PalwSearchAvailabilityStateV1::default();
-        let register_undo = state.register(anchor, scheduler_key_id(&[0xAA; 32]), 10_000).unwrap();
+        let register_undo = state.register(anchor, scheduler_key_id(&[0xAA; 32]), scheduler_bond, 10_000).unwrap();
         let baseline = state.clone();
 
         // Gates: wrong network, refused signature, inactive bond — no state change.
         let mut wrong_net = challenge.clone();
         wrong_net.network_id = 112;
-        assert!(state.apply_challenge_tx(&wrong_net, 111, 10_100, bond_ok, accept).is_err());
-        assert!(state.apply_challenge_tx(&challenge, 111, 10_100, bond_ok, |_, _, _, _| false).is_err());
-        assert!(state.apply_challenge_tx(&challenge, 111, 10_100, |_, _| false, accept).is_err());
+        assert!(state.apply_challenge_tx(&wrong_net, 111, &genesis, 10_100, bond_ok, accept, no_bond).is_err());
+        assert!(state.apply_challenge_tx(&challenge, 111, &genesis, 10_100, bond_ok, |_, _, _, _| false, no_bond).is_err());
+        assert!(state.apply_challenge_tx(&challenge, 111, &genesis, 10_100, |_, _| false, accept, no_bond).is_err());
         assert_eq!(state, baseline);
-        // Signing hash binds every field.
+        // Signing hash binds every field — including the registration attachment.
         let mut rechunked = challenge.clone();
         rechunked.chunk_index = 1;
         assert_ne!(challenge.signing_hash(), rechunked.signing_hash());
@@ -1901,12 +2314,30 @@ mod tests {
             PalwSearchChallengeTxV1::decode_strict(&trailing),
             Err(PalwSearchSnapshotError::NonCanonical(_))
         ));
+        // Unknown registration tag is fail-closed.
+        let mut bad_tag = challenge_bytes.clone();
+        let tag_offset = challenge_bytes.len() - 8 - challenge.signature.len() - 1;
+        bad_tag[tag_offset] = 2;
+        assert!(PalwSearchChallengeTxV1::decode_strict(&bad_tag).is_err());
 
         // Challenge applies; response with the real proof closes it; timeout gates hold.
-        let challenge_undo = state.apply_challenge_tx(&challenge, 111, 10_100, bond_ok, accept).unwrap();
+        let challenge_undos = state.apply_challenge_tx(&challenge, 111, &genesis, 10_100, bond_ok, accept, no_bond).unwrap();
+        assert_eq!(challenge_undos.len(), 1, "plain challenge yields exactly the status undo");
         let proof = palw_receipt_da_chunk_proof(PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1, &bytes, 0).unwrap();
         let response =
             PalwSearchResponseTxV1 { version: PALW_SEARCH_TX_VERSION_V1, network_id: 111, object_root: anchor.object_root, proof };
+        // Response wire codec: round-trip + every-truncation + trailing-byte fail-closed.
+        let response_bytes = response.encode().unwrap();
+        assert_eq!(PalwSearchResponseTxV1::decode_strict(&response_bytes).unwrap(), response);
+        for len in 0..response_bytes.len() {
+            assert!(PalwSearchResponseTxV1::decode_strict(&response_bytes[..len]).is_err());
+        }
+        let mut response_trailing = response_bytes.clone();
+        response_trailing.push(0);
+        assert!(matches!(
+            PalwSearchResponseTxV1::decode_strict(&response_trailing),
+            Err(PalwSearchSnapshotError::NonCanonical(_))
+        ));
         let timeout = PalwSearchTimeoutTxV1 {
             version: PALW_SEARCH_TX_VERSION_V1,
             network_id: 111,
@@ -1921,18 +2352,25 @@ mod tests {
         let response_undo = state.apply_response_tx(&response, 111, 10_200).unwrap();
         assert_eq!(state.obligations[&anchor.object_root].status, PalwSearchObligationStatusV1::Active);
 
-        // Second cycle: challenge then bond-authorized timeout slash after the window.
-        let challenge2_undo = state.apply_challenge_tx(&challenge, 111, 11_000, bond_ok, accept).unwrap();
-        let slash_undo = state
+        // Second cycle: challenge then bond-authorized timeout slash after the window. The slash
+        // names the SCHEDULER bond recorded at registration, not the reporter's.
+        let challenge2_undos = state.apply_challenge_tx(&challenge, 111, &genesis, 11_000, bond_ok, accept, no_bond).unwrap();
+        let (slashed_bond, slash_undo) = state
             .apply_timeout_tx(&timeout, 111, 11_000 + PALW_SEARCH_CHALLENGE_RESPONSE_WINDOW_DAA + 1, bond_ok, accept)
             .unwrap();
+        assert_eq!(slashed_bond, scheduler_bond);
         assert!(matches!(
             state.obligations[&anchor.object_root].status,
             PalwSearchObligationStatusV1::Slashed { .. }
         ));
 
         // Full reorg rollback to the empty state.
-        for undo in [slash_undo, challenge2_undo, response_undo, challenge_undo, register_undo] {
+        let mut rollback = vec![register_undo];
+        rollback.extend(challenge_undos);
+        rollback.push(response_undo);
+        rollback.extend(challenge2_undos);
+        rollback.push(slash_undo);
+        for undo in rollback.into_iter().rev() {
             state.revert(undo).unwrap();
         }
         assert!(state.obligations.is_empty());
@@ -1942,7 +2380,7 @@ mod tests {
     fn scheduler_slash_voids_every_obligation_of_that_scheduler_and_reverts() {
         let snapshot = snapshot();
         let commitment = snapshot.da_commitment().unwrap();
-        let mut anchor_a = PalwSearchSnapshotAnchorV1 {
+        let anchor_a = PalwSearchSnapshotAnchorV1 {
             assignment_id: Hash64::from_bytes([5; 64]),
             snapshot_digest: snapshot.digest().unwrap(),
             object_root: commitment.root,
@@ -1956,10 +2394,12 @@ mod tests {
         anchor_other.object_root = Hash64::from_bytes([0x52; 64]);
         let slashed_key = scheduler_key_id(&[0xAA; 32]);
         let other_key = scheduler_key_id(&[0xBB; 32]);
+        let slashed_bond = TransactionOutpoint::new(Hash64::from_bytes([0xA5; 64]), 0);
+        let other_bond = TransactionOutpoint::new(Hash64::from_bytes([0xB5; 64]), 0);
         let mut state = PalwSearchAvailabilityStateV1::default();
-        state.register(anchor_a, slashed_key, 10_000).unwrap();
-        state.register(anchor_b, slashed_key, 10_000).unwrap();
-        state.register(anchor_other, other_key, 10_000).unwrap();
+        state.register(anchor_a, slashed_key, slashed_bond, 10_000).unwrap();
+        state.register(anchor_b, slashed_key, slashed_bond, 10_000).unwrap();
+        state.register(anchor_other, other_key, other_bond, 10_000).unwrap();
         // One anchored obligation is mid-challenge; voiding overrides it too.
         state.challenge(anchor_b.object_root, 0, 10_100, 50).unwrap();
         let before = state.clone();
@@ -1973,6 +2413,19 @@ mod tests {
         // Idempotent on re-slash; reorg rollback restores the pre-slash state bit-exactly.
         assert!(state.void_by_scheduler(slashed_key, 10_300).is_empty());
         for undo in undos.into_iter().rev() {
+            state.revert(undo).unwrap();
+        }
+        assert_eq!(state, before);
+
+        // The bond-keyed sweep (the dispatcher's entry point) is behaviorally identical.
+        let bond_undos = state.void_by_scheduler_bond(slashed_bond, 10_200);
+        assert_eq!(bond_undos.len(), 2);
+        for root in [anchor_a.object_root, anchor_b.object_root] {
+            assert!(matches!(state.obligations[&root].status, PalwSearchObligationStatusV1::Slashed { at_daa_score: 10_200 }));
+        }
+        assert_eq!(state.obligations[&anchor_other.object_root].status, PalwSearchObligationStatusV1::Active);
+        assert!(state.void_by_scheduler_bond(slashed_bond, 10_300).is_empty());
+        for undo in bond_undos.into_iter().rev() {
             state.revert(undo).unwrap();
         }
         assert_eq!(state, before);
@@ -2003,17 +2456,18 @@ mod tests {
             availability_deadline_daa_score: 20_000,
         };
         let key_id = scheduler_key_id(&[0xAA; 32]);
+        let scheduler_bond = TransactionOutpoint::new(Hash64::from_bytes([0xA5; 64]), 0);
         let mut state = PalwSearchAvailabilityStateV1::default();
         let mut undos = Vec::new();
         let baseline_empty = state.clone();
 
         // Register (duplicates and expired anchors refused).
-        undos.push(state.register(anchor, key_id, 10_000).unwrap());
-        assert!(state.register(anchor, key_id, 10_000).is_err());
+        undos.push(state.register(anchor, key_id, scheduler_bond, 10_000).unwrap());
+        assert!(state.register(anchor, key_id, scheduler_bond, 10_000).is_err());
         let mut expired = anchor;
         expired.object_root = Hash64::from_bytes([9; 64]);
         expired.availability_deadline_daa_score = 9_999;
-        assert!(PalwSearchAvailabilityStateV1::default().register(expired, key_id, 10_000).is_err());
+        assert!(PalwSearchAvailabilityStateV1::default().register(expired, key_id, scheduler_bond, 10_000).is_err());
         let registered = state.clone();
 
         // Challenge chunk 0; premature timeout and out-of-range chunk refused.
@@ -2036,10 +2490,12 @@ mod tests {
         assert_eq!(state.obligations[&anchor.object_root].status, PalwSearchObligationStatusV1::Active);
         let responded = state.clone();
 
-        // Second challenge goes unanswered → timeout slash.
+        // Second challenge goes unanswered → timeout slash (naming the scheduler bond).
         undos.push(state.challenge(anchor.object_root, 0, 10_200, 50).unwrap());
         let rechallenged = state.clone();
-        undos.push(state.timeout_slash(anchor.object_root, 10_251).unwrap());
+        let (slashed_bond, slash_undo) = state.timeout_slash(anchor.object_root, 10_251).unwrap();
+        assert_eq!(slashed_bond, scheduler_bond);
+        undos.push(slash_undo);
         assert!(matches!(
             state.obligations[&anchor.object_root].status,
             PalwSearchObligationStatusV1::Slashed { at_daa_score: 10_251 }
@@ -2054,5 +2510,166 @@ mod tests {
             assert_eq!(state, expected);
         }
         assert!(state.obligations.is_empty());
+    }
+
+    #[test]
+    fn registering_challenge_is_atomic_and_registry_gated() {
+        let snapshot = snapshot();
+        let commitment = snapshot.da_commitment().unwrap();
+        let assignment = assignment_fixture("量子コンピュータ  とは");
+        let genesis = assignment.genesis_hash;
+        let anchor = PalwSearchSnapshotAnchorV1 {
+            assignment_id: assignment.assignment_id().unwrap(),
+            snapshot_digest: snapshot.digest().unwrap(),
+            object_root: commitment.root,
+            object_len: commitment.object_len,
+            chunk_count: commitment.chunk_count,
+            availability_deadline_daa_score: 20_000,
+        };
+        let registration = PalwSearchJobSpecV1 {
+            signed_anchor: PalwSignedSearchAnchorV1 {
+                anchor,
+                scheduler_public_key: assignment.scheduler_public_key.clone(),
+                signature: vec![0xDD; 64],
+            },
+            assignment: assignment.clone(),
+        };
+        let challenger_bond = TransactionOutpoint::new(Hash64::from_bytes([8; 64]), 1);
+        let challenge = PalwSearchChallengeTxV1 {
+            version: PALW_SEARCH_TX_VERSION_V1,
+            network_id: 111,
+            object_root: anchor.object_root,
+            chunk_index: 0,
+            challenger_bond,
+            challenger_public_key: vec![0xAB; 32],
+            registration: Some(registration.clone()),
+            signature: vec![0xCD; 64],
+        };
+        let accept = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| true;
+        let bond_ok = |outpoint: &TransactionOutpoint, key: &[u8]| *outpoint == challenger_bond && key == [0xAB; 32];
+        let scheduler_record = super::super::PalwProviderBondRecord {
+            version: 1,
+            bond_outpoint: assignment.scheduler_bond,
+            owner_pubkey_hash: Hash64::default(),
+            owner_public_key: assignment.scheduler_public_key.clone(),
+            operator_group_id: Hash64::default(),
+            runtime_classes: Vec::new(),
+            capacity_by_shape: Vec::new(),
+            reward_key_root: Hash64::default(),
+            amount_sompi: 1_000_000,
+            activation_daa_score: 5_000,
+            created_daa_score: 5_000,
+            unbond_delay_epochs: 4,
+            unbond_request_daa_score: None,
+            slashed_at_daa_score: None,
+        };
+        let registry = |wanted: &TransactionOutpoint| (*wanted == scheduler_record.bond_outpoint).then(|| scheduler_record.clone());
+
+        // The registration attachment is part of the signed message: wire round-trip covers it and
+        // stripping it changes the signing hash.
+        let bytes = challenge.encode().unwrap();
+        assert_eq!(PalwSearchChallengeTxV1::decode_strict(&bytes).unwrap(), challenge);
+        let mut stripped = challenge.clone();
+        stripped.registration = None;
+        assert_ne!(challenge.signing_hash(), stripped.signing_hash());
+
+        // Atomic register + challenge in one accepted tx, with exactly two ordered undos.
+        let mut state = PalwSearchAvailabilityStateV1::default();
+        let undos = state.apply_challenge_tx(&challenge, 111, &genesis, 10_100, bond_ok, accept, registry).unwrap();
+        assert_eq!(undos.len(), 2);
+        let obligation = state.obligations[&anchor.object_root];
+        assert_eq!(obligation.scheduler_bond, assignment.scheduler_bond);
+        assert_eq!(obligation.scheduler_key_id, scheduler_key_id(&assignment.scheduler_public_key));
+        assert!(matches!(obligation.status, PalwSearchObligationStatusV1::Challenged { chunk_index: 0, .. }));
+        for undo in undos.into_iter().rev() {
+            state.revert(undo).unwrap();
+        }
+        assert_eq!(state, PalwSearchAvailabilityStateV1::default(), "atomic pair reverts to empty");
+
+        // Registry gates: unknown bond, slashed bond, pending unbond, wrong owner key, foreign
+        // network/genesis, mismatched anchor root, duplicate registration — none may mutate state.
+        let empty = PalwSearchAvailabilityStateV1::default();
+        let mut state = empty.clone();
+        assert!(state.apply_challenge_tx(&challenge, 111, &genesis, 10_100, bond_ok, accept, |_: &TransactionOutpoint| None).is_err());
+        let mut slashed = scheduler_record.clone();
+        slashed.slashed_at_daa_score = Some(9_000);
+        assert!(state.apply_challenge_tx(&challenge, 111, &genesis, 10_100, bond_ok, accept, |_| Some(slashed.clone())).is_err());
+        let mut unbonding = scheduler_record.clone();
+        unbonding.unbond_request_daa_score = Some(9_000);
+        assert!(state.apply_challenge_tx(&challenge, 111, &genesis, 10_100, bond_ok, accept, |_| Some(unbonding.clone())).is_err());
+        let mut foreign_owner = scheduler_record.clone();
+        foreign_owner.owner_public_key = vec![0xEE; 32];
+        assert!(
+            state.apply_challenge_tx(&challenge, 111, &genesis, 10_100, bond_ok, accept, |_| Some(foreign_owner.clone())).is_err()
+        );
+        let wrong_genesis = Hash64::from_bytes([0x77; 64]);
+        assert!(state.apply_challenge_tx(&challenge, 111, &wrong_genesis, 10_100, bond_ok, accept, registry).is_err());
+        let mut wrong_root = challenge.clone();
+        wrong_root.object_root = Hash64::from_bytes([0x66; 64]);
+        assert!(state.apply_challenge_tx(&wrong_root, 111, &genesis, 10_100, bond_ok, accept, registry).is_err());
+        assert_eq!(state, empty, "no failed gate may leave residue");
+
+        // A registration attached to an ALREADY registered obligation is fail-closed.
+        let mut state = PalwSearchAvailabilityStateV1::default();
+        state.register(anchor, scheduler_key_id(&assignment.scheduler_public_key), assignment.scheduler_bond, 10_000).unwrap();
+        assert!(state.apply_challenge_tx(&challenge, 111, &genesis, 10_100, bond_ok, accept, registry).is_err());
+        // While the plain (attachment-free) challenge against it applies.
+        let plain = stripped;
+        let undos = state.apply_challenge_tx(&plain, 111, &genesis, 10_100, bond_ok, accept, registry).unwrap();
+        assert_eq!(undos.len(), 1);
+    }
+
+    #[test]
+    fn availability_state_is_borsh_persistable_with_stable_root() {
+        let snapshot = snapshot();
+        let commitment = snapshot.da_commitment().unwrap();
+        let anchor = PalwSearchSnapshotAnchorV1 {
+            assignment_id: Hash64::from_bytes([5; 64]),
+            snapshot_digest: snapshot.digest().unwrap(),
+            object_root: commitment.root,
+            object_len: commitment.object_len,
+            chunk_count: commitment.chunk_count,
+            availability_deadline_daa_score: 20_000,
+        };
+        let scheduler_bond = TransactionOutpoint::new(Hash64::from_bytes([0xA5; 64]), 0);
+        let mut state = PalwSearchAvailabilityStateV1::default();
+        assert!(state.validate_structure());
+        let empty_root = state.state_root();
+
+        state.register(anchor, scheduler_key_id(&[0xAA; 32]), scheduler_bond, 10_000).unwrap();
+        state.challenge(anchor.object_root, 0, 10_100, 50).unwrap();
+        state.record_block_slash(scheduler_bond).unwrap();
+        state.record_block_slash(scheduler_bond).unwrap(); // idempotent per bond
+        assert_eq!(state.block_slashed_schedulers.len(), 1);
+        assert!(state.validate_structure());
+        assert_ne!(state.state_root(), empty_root);
+
+        // Borsh round-trip is bit-exact (the persistence encoding) and root-stable.
+        let bytes = borsh::to_vec(&state).unwrap();
+        let decoded: PalwSearchAvailabilityStateV1 = borsh::BorshDeserialize::try_from_slice(&bytes).unwrap();
+        assert_eq!(decoded, state);
+        assert_eq!(decoded.state_root(), state.state_root());
+
+        // Pruning snapshot wraps the state; version pin enforced; encoded-len accounting is exact.
+        let pruning = PalwSearchPruningSnapshotV1 {
+            version: PALW_SEARCH_SNAPSHOT_STATE_VERSION_V1,
+            pruning_point: crate::BlockHash::from_bytes([3; 64]),
+            state: state.clone(),
+        };
+        assert!(pruning.validate());
+        assert_eq!(borsh::to_vec(&pruning).unwrap().len(), state.canonical_snapshot_encoded_len().unwrap());
+        let mut wrong_version = pruning;
+        wrong_version.version = 2;
+        assert!(!wrong_version.validate());
+
+        // A child block clears the slash delta; obligations survive.
+        state.begin_child_block();
+        assert!(state.block_slashed_schedulers.is_empty());
+        assert!(state.obligations.contains_key(&anchor.object_root));
+
+        // Version pin is enforced structurally.
+        let mut wrong = state.clone();
+        wrong.version = 2;
+        assert!(!wrong.validate_structure());
     }
 }

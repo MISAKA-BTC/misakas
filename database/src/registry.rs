@@ -174,6 +174,20 @@ pub enum DatabaseStorePrefixes {
     /// journal stores, not yet built.)
     EvmRawTransaction = 217,
 
+    /// Search-availability fork-local `PalwSearchAvailabilityStateV1`, keyed by `BlockHash` —
+    /// the 0x3d-0x3f sibling of `PalwDaStateByBlock` (250). A child clones its selected parent's
+    /// state and applies accepted search challenge/response/timeout transitions; side branches
+    /// never share a mutable tip row. Placed in the 189-191 gap because the 236-254 PALW block is
+    /// full; the prefix value is DB layout only, never part of any commitment.
+    PalwSearchAvailabilityStateByBlock = 189,
+    /// Keyed by `BlockHash`: 64-byte anchor link for chain blocks whose search-availability state
+    /// is bit-identical to an ancestor's stored full row (sibling of `PalwDaStateLinkByBlock` 254).
+    PalwSearchAvailabilityStateLinkByBlock = 190,
+    /// Singleton `PalwSearchPruningSnapshotV1` captured at the pruning point (sibling of
+    /// `PalwDaPruningSnapshot` 252), so open search obligations/challenge deadlines survive
+    /// pruned IBD.
+    PalwSearchAvailabilityPruningSnapshot = 191,
+
     /// kaspa-pq EVM Lane (§16, design §8/§14): singleton — the lowest `evm_number`
     /// from which the `EvmLogs` posting index is complete (the writer's floor). The
     /// `eth_getLogs` index fast path is used only for `from >= floor`; below it the

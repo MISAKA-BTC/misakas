@@ -115,7 +115,18 @@ pub struct MultiConsensusMetadata {
 // `PalwPublicLeafV1` gains the Receipt-v3/DA-object commitment fields used by public semantic
 // admission. A v13 singleton cannot reconstruct first-post-PP tickets, and its persisted leaf rows
 // have the old positional shape, so both changes require one hard reset rather than a lenient decode.
-pub const LATEST_DB_VERSION: u32 = 14;
+//
+// SEARCH-AVAILABILITY DISPATCH, 14 -> 15: prefixes 189-191 add the fork-local
+// `PalwSearchAvailabilityStateV1` per-block rows, anchor links and pruning singleton (the 0x3d-0x3f
+// dispatch of ADR node-anchored-web-search-da). Three positional/semantic breaks in one cutover:
+// (a) every active chain block must carry a search state row/link — on a v14 datadir the
+//     selected-parent loader and the reorg registry reconciler would fail-stop on the first missing
+//     row rather than silently skip pre-upgrade obligations;
+// (b) `PalwPruningPointSnapshotPayloadV1` inserts `search_availability_snapshot` before
+//     `active_batches`, breaking the singleton's positional Borsh encoding;
+// (c) `PalwSelectedParentStateV2` inserts `search_availability_state_root`, moving every Header-v4
+//     overlay commitment (PALW activates via re-genesis, so this is part of that wire table).
+pub const LATEST_DB_VERSION: u32 = 15;
 impl Default for MultiConsensusMetadata {
     fn default() -> Self {
         Self {
@@ -529,7 +540,7 @@ mod tests {
     #[test]
     fn latest_db_version_is_pinned() {
         assert_eq!(
-            LATEST_DB_VERSION, 14,
+            LATEST_DB_VERSION, 15,
             "LATEST_DB_VERSION changed. If a persisted layout changed, this is correct - update this pin \
              AND extend the `version <= N` hard-reset arm in kaspad/src/daemon.rs to cover the version \
              you just left behind. Never bump one without the other."

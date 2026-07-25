@@ -6,7 +6,8 @@ use kaspa_consensus_core::{
         provider_bond_release_daa_score,
     },
     palw_probe::{
-        PalwActivationProbe, PalwBatchProbe, PalwDaChallengeProbe, PalwProviderBondProbe, PalwStateProbe, PalwStateProbeError,
+        PalwActivationProbe, PalwBatchProbe, PalwDaChallengeProbe, PalwProviderBondProbe, PalwSearchChallengeProbe, PalwStateProbe,
+        PalwStateProbeError,
     },
     tx::TransactionOutpoint,
 };
@@ -17,7 +18,8 @@ use super::Consensus;
 use crate::{
     model::stores::{
         headers::HeaderStoreReader, palw::PalwStoreReader, palw_da::PalwDaStoreReader,
-        palw_provider_bonds::PalwProviderBondsStoreReader, virtual_state::VirtualStateStoreReader,
+        palw_provider_bonds::PalwProviderBondsStoreReader, palw_search_availability::PalwSearchAvailabilityStoreReader,
+        virtual_state::VirtualStateStoreReader,
     },
     processes::palw::{resolve_palw_buried_epoch_seeds, resolve_palw_lagged_anchor},
 };
@@ -129,6 +131,42 @@ impl Consensus {
             _ => Vec::new(),
         };
 
+        // Open search-availability challenges anchored by the requested bond (as scheduler), read
+        // under the same virtual snapshot guard. Same bounded contract as `da_challenges`.
+        let search_challenges = match (provider_bond, enabled) {
+            (Some(wanted), true) => {
+                let state = self
+                    .storage
+                    .palw_search_availability_store
+                    .read()
+                    .state(sink)
+                    .map_err(|error| PalwStateProbeError::Store(format!("search availability state: {error:?}")))?;
+                state
+                    .obligations
+                    .iter()
+                    .filter_map(|(object_root, obligation)| {
+                        use kaspa_consensus_core::palw::search_snapshot::PalwSearchObligationStatusV1;
+                        if obligation.scheduler_bond != wanted {
+                            return None;
+                        }
+                        let PalwSearchObligationStatusV1::Challenged { response_deadline_daa_score, chunk_index } =
+                            obligation.status
+                        else {
+                            return None;
+                        };
+                        Some(PalwSearchChallengeProbe {
+                            object_root: *object_root,
+                            scheduler_bond: obligation.scheduler_bond,
+                            chunk_index,
+                            response_deadline_daa_score,
+                            availability_deadline_daa_score: obligation.anchor.availability_deadline_daa_score,
+                        })
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+
         let provider_bond = match provider_bond {
             Some(outpoint) if enabled => match self.storage.palw_provider_bonds_store.read().get(&outpoint) {
                 Ok(record) => Some(PalwProviderBondProbe {
@@ -190,7 +228,17 @@ impl Consensus {
         };
 
         let probe =
-            PalwStateProbe { enabled, sink, sink_daa_score, overlay_view_available, batch, provider_bond, da_challenges, activation };
+            PalwStateProbe {
+                enabled,
+                sink,
+                sink_daa_score,
+                overlay_view_available,
+                batch,
+                provider_bond,
+                da_challenges,
+                search_challenges,
+                activation,
+            };
         drop(virtual_read);
         Ok(probe)
     }

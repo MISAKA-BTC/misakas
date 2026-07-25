@@ -3025,6 +3025,14 @@ pub enum PalwTxKind {
     DaResponse,
     /// DA-01 objective post-deadline timeout evidence (0x3c).
     DaTimeoutEvidence,
+    /// Node-anchored web-search availability challenge (0x3d, `PalwSearchChallengeTxV1`). May carry
+    /// the scheduler-signed registration proof (assignment + signed anchor) that lazily registers
+    /// the challenged obligation against the bonded scheduler registry.
+    SearchChallenge,
+    /// Search-availability chunk response (0x3e, `PalwSearchResponseTxV1`), proof-self-authorizing.
+    SearchResponse,
+    /// Search-availability post-deadline timeout evidence (0x3f, `PalwSearchTimeoutTxV1`).
+    SearchTimeout,
 }
 
 impl PalwTxKind {
@@ -3044,6 +3052,9 @@ impl PalwTxKind {
             0x3a => Self::DaChallenge,
             0x3b => Self::DaResponse,
             0x3c => Self::DaTimeoutEvidence,
+            0x3d => Self::SearchChallenge,
+            0x3e => Self::SearchResponse,
+            0x3f => Self::SearchTimeout,
             _ => return None,
         })
     }
@@ -3749,6 +3760,52 @@ fn validate_da_timeout_evidence(payload: &[u8]) -> Result<(), PalwTxError> {
     Ok(())
 }
 
+/// Search-availability txs use the canonical length-prefixed codec (`decode_strict`) of the
+/// search-snapshot module rather than borsh: unknown version, bound violation, malformed prefix and
+/// trailing bytes are all decode failures, so isolation admission == exact wire canonicality.
+fn validate_search_challenge(payload: &[u8]) -> Result<(), PalwTxError> {
+    use search_snapshot::{PALW_SEARCH_MAX_ONCHAIN_CHALLENGE_BYTES, PalwSearchChallengeTxV1};
+    if payload.len() > PALW_SEARCH_MAX_ONCHAIN_CHALLENGE_BYTES {
+        return Err(PalwTxError::PayloadTooLarge { len: payload.len(), max: PALW_SEARCH_MAX_ONCHAIN_CHALLENGE_BYTES });
+    }
+    let challenge = PalwSearchChallengeTxV1::decode_strict(payload).map_err(|_| PalwTxError::Decode)?;
+    if challenge.object_root == Hash64::default() {
+        return Err(PalwTxError::InvalidField("search_challenge.object_root"));
+    }
+    if let Some(registration) = &challenge.registration {
+        // Shape-only here (context-free): both signatures, the same-key rule, the anchor→assignment
+        // link and the bonded-registry lookup are contextual and run at dispatch.
+        if registration.signed_anchor.anchor.object_root != challenge.object_root {
+            return Err(PalwTxError::InvalidField("search_challenge.registration_object_root"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_search_response(payload: &[u8]) -> Result<(), PalwTxError> {
+    use search_snapshot::{PALW_SEARCH_MAX_ONCHAIN_RESPONSE_BYTES, PalwSearchResponseTxV1};
+    if payload.len() > PALW_SEARCH_MAX_ONCHAIN_RESPONSE_BYTES {
+        return Err(PalwTxError::PayloadTooLarge { len: payload.len(), max: PALW_SEARCH_MAX_ONCHAIN_RESPONSE_BYTES });
+    }
+    let response = PalwSearchResponseTxV1::decode_strict(payload).map_err(|_| PalwTxError::Decode)?;
+    if response.object_root == Hash64::default() {
+        return Err(PalwTxError::InvalidField("search_response.object_root"));
+    }
+    Ok(())
+}
+
+fn validate_search_timeout(payload: &[u8]) -> Result<(), PalwTxError> {
+    use search_snapshot::{PALW_SEARCH_MAX_ONCHAIN_TIMEOUT_BYTES, PalwSearchTimeoutTxV1};
+    if payload.len() > PALW_SEARCH_MAX_ONCHAIN_TIMEOUT_BYTES {
+        return Err(PalwTxError::PayloadTooLarge { len: payload.len(), max: PALW_SEARCH_MAX_ONCHAIN_TIMEOUT_BYTES });
+    }
+    let timeout = PalwSearchTimeoutTxV1::decode_strict(payload).map_err(|_| PalwTxError::Decode)?;
+    if timeout.object_root == Hash64::default() {
+        return Err(PalwTxError::InvalidField("search_timeout.object_root"));
+    }
+    Ok(())
+}
+
 /// Strict context-free PALW payload admission by subnetwork byte. This is safe for transaction
 /// isolation because it never reads an activation score or chain state. Contextual validation must
 /// subsequently enforce the PALW activation fence, [`PalwBeaconCommitV1::is_in_phase`] /
@@ -3800,6 +3857,9 @@ pub fn validate_palw_overlay_payload(subnetwork_byte: u8, payload: &[u8]) -> Res
         PalwTxKind::DaChallenge => validate_da_challenge(payload),
         PalwTxKind::DaResponse => validate_da_response(payload),
         PalwTxKind::DaTimeoutEvidence => validate_da_timeout_evidence(payload),
+        PalwTxKind::SearchChallenge => validate_search_challenge(payload),
+        PalwTxKind::SearchResponse => validate_search_response(payload),
+        PalwTxKind::SearchTimeout => validate_search_timeout(payload),
     }
 }
 

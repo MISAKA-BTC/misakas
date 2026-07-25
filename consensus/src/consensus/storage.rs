@@ -23,6 +23,7 @@ use crate::{
         palw::DbPalwStore,
         palw_beacon::DbPalwBeaconStore,
         palw_da::DbPalwDaStore,
+        palw_search_availability::DbPalwSearchAvailabilityStore,
         palw_lane_bits::DbPalwLaneBitsStore,
         palw_nullifier::DbPalwNullifierStore,
         palw_overlay_view::DbPalwOverlayViewStore,
@@ -180,6 +181,9 @@ pub struct ConsensusStorage {
     pub palw_overlay_view_store: Arc<DbPalwOverlayViewStore>,
     /// DA-01 fork-local state, canonical object cache and pruning snapshot (prefixes 250-252).
     pub palw_da_store: Arc<RwLock<DbPalwDaStore>>,
+    /// Search-availability fork-local state, anchor links and pruning snapshot (prefixes 189-191),
+    /// the 0x3d-0x3f sibling of `palw_da_store`.
+    pub palw_search_availability_store: Arc<RwLock<DbPalwSearchAvailabilityStore>>,
     /// Header-v4 fixed-row fork-local objective anti-spam accumulator (prefix 249).
     pub palw_spam_store: Arc<DbPalwSpamAccumulatorStore>,
 
@@ -387,6 +391,10 @@ impl ConsensusStorage {
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         )));
+        let palw_search_availability_store = Arc::new(RwLock::new(DbPalwSearchAvailabilityStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        )));
         let palw_spam_store = Arc::new(DbPalwSpamAccumulatorStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -568,6 +576,7 @@ impl ConsensusStorage {
             palw_lane_bits_store,
             palw_overlay_view_store,
             palw_da_store,
+            palw_search_availability_store,
             palw_spam_store,
             epoch_accumulator_store,
             block_quality_pool_store,

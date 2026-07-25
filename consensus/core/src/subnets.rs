@@ -94,16 +94,19 @@ impl SubnetworkId {
 
     /// ADR-0039 PALW Replica-GEMM audited-compute lane: true for the PALW overlay
     /// subnetworks (provider bond, batch manifest, leaf chunk, batch certificate,
-    /// beacon, authorization, reserved slashing, and DA challenge lifecycle). Like the DNS/EVM overlays
+    /// beacon, authorization, reserved slashing, DA challenge lifecycle, and the
+    /// search-availability lifecycle). Like the DNS/EVM overlays
     /// these are full-node-routed + payload-validated but are **not** `is_builtin()`.
-    /// The band `0x30-0x37` sits above the EVM band (0x20-0x22) and the DNS band
-    /// (0x10-0x13) with no collision.
+    /// The band `0x30-0x3f` (one full nibble) sits above the EVM band (0x20-0x22) and
+    /// the DNS band (0x10-0x13) with no collision. Recognition is a pure wire property;
+    /// every byte in the band stays inert until the PALW activation fence (pre-activation
+    /// blocks reject any recognized PALW tx, and no dispatch runs below the fence).
     #[inline]
     pub fn is_palw_overlay(&self) -> bool {
-        matches!(self.0[0], 0x30..=0x3c) && self.0[1..].iter().all(|&b| b == 0)
+        matches!(self.0[0], 0x30..=0x3f) && self.0[1..].iter().all(|&b| b == 0)
     }
 
-    /// Returns the PALW overlay transaction byte (0x30-0x3c) if this is a PALW
+    /// Returns the PALW overlay transaction byte (0x30-0x3f) if this is a PALW
     /// overlay subnetwork, else `None`. Used by stateless routing to dispatch a
     /// PALW payload to the right validator without a match on the full 20-byte id.
     #[inline]
@@ -200,10 +203,10 @@ pub const SUBNETWORK_ID_EVM_WITHDRAW_CLAIM: SubnetworkId = SubnetworkId::from_by
 pub const SUBNETWORK_ID_EVM_ADMIN: SubnetworkId = SubnetworkId::from_byte(0x22);
 
 // ADR-0039/DA-01 PALW Replica-GEMM audited-compute lane subnetwork ids. The re-genesis band
-// `0x30-0x3c` sits above the EVM band (0x20-0x22), the DNS overlay band
+// `0x30-0x3f` (one full nibble) sits above the EVM band (0x20-0x22), the DNS overlay band
 // (0x10-0x13), and the upstream built-ins (0/1/2). Routed + payload-validated by
 // full nodes; all are inert until the PALW activation fence. `0x39` stays reserved for
-// cross-fork slashing; DA-01 uses only 0x3a-0x3c. Bytes 0x3d-0x3f remain reserved.
+// cross-fork slashing; DA-01 uses 0x3a-0x3c; the search-availability lifecycle uses 0x3d-0x3f.
 /// Provider bond registration (`PalwProviderBondPayloadV1`, design §24.3).
 pub const SUBNETWORK_ID_PALW_PROVIDER_BOND: SubnetworkId = SubnetworkId::from_byte(0x30);
 /// Batch manifest publication (`PalwBatchManifestV1`, design §9.3).
@@ -252,24 +255,26 @@ pub const SUBNETWORK_ID_PALW_DA_RESPONSE: SubnetworkId = SubnetworkId::from_byte
 /// DA-01 objective post-deadline timeout evidence (`PalwDaTimeoutEvidenceV1`).
 pub const SUBNETWORK_ID_PALW_DA_TIMEOUT_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x3c);
 
-// Node-anchored web-search availability overlay (ADR node-anchored-web-search-da). These claim the
-// three bytes the module comment already reserved (`0x3d-0x3f`). RESERVED, NOT YET LIVE: they are NOT
-// in the `palw_tx_kind` recognition band (`0x30..=0x3c`), so a tx on these bytes is a plain unknown
-// subnet today and contributes nothing to any commitment. Extending the recognition band to admit
-// them is a wire/consensus change that activates only behind the PALW fence together with the bonded
-// scheduler registry — the single remaining gate for search obligations.
-/// Search-availability challenge (`PalwSearchChallengeTxV1`), bond-owner signed. RESERVED.
+// Node-anchored web-search availability overlay (ADR node-anchored-web-search-da). These occupy the
+// three bytes the module comment reserved (`0x3d-0x3f`), completing the PALW nibble. LIVE IN THE
+// RECOGNITION BAND (`0x30..=0x3f`) as of the bonded-scheduler-registry activation step: the on-chain
+// provider bond is the scheduler authorization every node resolves identically, so accepted-tx
+// dispatch of these bytes is consensus-objective. Like the rest of the band they are inert until the
+// PALW activation fence — pre-activation blocks reject them and no dispatch/state write runs below
+// the fence (PALW activates only via re-genesis, so extending the band is part of that wire table).
+/// Search-availability challenge (`PalwSearchChallengeTxV1`), bond-owner signed; may carry the
+/// scheduler-signed registration proof that lazily registers the obligation it challenges.
 pub const SUBNETWORK_ID_PALW_SEARCH_CHALLENGE: SubnetworkId = SubnetworkId::from_byte(0x3d);
-/// Search-availability chunk response (`PalwSearchResponseTxV1`), proof-self-authorizing. RESERVED.
+/// Search-availability chunk response (`PalwSearchResponseTxV1`), proof-self-authorizing.
 pub const SUBNETWORK_ID_PALW_SEARCH_RESPONSE: SubnetworkId = SubnetworkId::from_byte(0x3e);
-/// Search-availability post-deadline timeout evidence (`PalwSearchTimeoutTxV1`), bond-owner signed. RESERVED.
+/// Search-availability post-deadline timeout evidence (`PalwSearchTimeoutTxV1`), bond-owner signed.
 pub const SUBNETWORK_ID_PALW_SEARCH_TIMEOUT: SubnetworkId = SubnetworkId::from_byte(0x3f);
 
 #[cfg(test)]
 mod palw_subnet_tests {
     use super::*;
 
-    const PALW_BAND: [SubnetworkId; 13] = [
+    const PALW_BAND: [SubnetworkId; 16] = [
         SUBNETWORK_ID_PALW_PROVIDER_BOND,
         SUBNETWORK_ID_PALW_BATCH_MANIFEST,
         SUBNETWORK_ID_PALW_LEAF_CHUNK,
@@ -285,10 +290,14 @@ mod palw_subnet_tests {
         SUBNETWORK_ID_PALW_DA_CHALLENGE,
         SUBNETWORK_ID_PALW_DA_RESPONSE,
         SUBNETWORK_ID_PALW_DA_TIMEOUT_EVIDENCE,
+        // Node-anchored web-search availability lifecycle (0x3d-0x3f).
+        SUBNETWORK_ID_PALW_SEARCH_CHALLENGE,
+        SUBNETWORK_ID_PALW_SEARCH_RESPONSE,
+        SUBNETWORK_ID_PALW_SEARCH_TIMEOUT,
     ];
 
     #[test]
-    fn palw_band_is_0x30_to_0x3c_and_classified() {
+    fn palw_band_is_0x30_to_0x3f_and_classified() {
         for (i, id) in PALW_BAND.iter().enumerate() {
             assert!(id.is_palw_overlay(), "{id:?} must be a PALW overlay");
             assert_eq!(id.palw_tx_kind(), Some(0x30 + i as u8));
@@ -308,7 +317,7 @@ mod palw_subnet_tests {
             SUBNETWORK_ID_STAKE_BOND,      // 0x10
             SUBNETWORK_ID_EVM_ADMIN,       // 0x22
             SubnetworkId::from_byte(0x2f), // just below band
-            SubnetworkId::from_byte(0x3d), // just above the DA-01/re-genesis band
+            SubnetworkId::from_byte(0x40), // just above the full PALW nibble
         ] {
             assert!(!id.is_palw_overlay());
             assert_eq!(id.palw_tx_kind(), None);

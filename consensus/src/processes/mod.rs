@@ -7,6 +7,7 @@ pub mod evm;
 pub mod ghostdag;
 pub mod palw;
 pub mod palw_da;
+pub mod palw_search;
 pub mod parents_builder;
 pub mod past_median_time;
 pub mod pruning;

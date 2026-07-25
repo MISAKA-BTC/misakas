@@ -2696,6 +2696,44 @@ impl Deserializer for RpcPalwDaChallenge {
     }
 }
 
+/// One OPEN search-availability challenge whose obligation is anchored by the requested provider
+/// bond (as scheduler), at the sink. The discovery half of the 0x3e responder: an off-node tool
+/// holding the anchored snapshot bytes reads these and submits the deadline-aware chunk-proof
+/// response (unsigned by design — the verifying proof is the authorization).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwSearchChallenge {
+    pub object_root: String,
+    pub scheduler_bond: String,
+    pub chunk_index: u16,
+    pub response_deadline_daa_score: u64,
+    pub availability_deadline_daa_score: u64,
+}
+
+impl Serializer for RpcPalwSearchChallenge {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.object_root, writer)?;
+        store!(String, &self.scheduler_bond, writer)?;
+        store!(u16, &self.chunk_index, writer)?;
+        store!(u64, &self.response_deadline_daa_score, writer)?;
+        store!(u64, &self.availability_deadline_daa_score, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwSearchChallenge {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let object_root = load!(String, reader)?;
+        let scheduler_bond = load!(String, reader)?;
+        let chunk_index = load!(u16, reader)?;
+        let response_deadline_daa_score = load!(u64, reader)?;
+        let availability_deadline_daa_score = load!(u64, reader)?;
+        Ok(Self { object_root, scheduler_bond, chunk_index, response_deadline_daa_score, availability_deadline_daa_score })
+    }
+}
+
 /// The lagged beacon-activation signal at the sink (review §6.4): the exact anchor walk + buried
 /// per-epoch seed sampler the virtual processor's Certified→Active gate (`advance_epoch_gated`)
 /// consumes, re-run read-only. `activation_open` is the pure beacon-signal half of the gate —
@@ -2793,11 +2831,15 @@ pub struct GetPalwStateResponse {
     /// when PALW/dns_params are absent).
     #[serde(default)]
     pub activation: Option<RpcPalwActivationState>,
+    /// Open search-availability challenges anchored by the requested provider bond as scheduler
+    /// (added in wire version 4; empty from older peers).
+    #[serde(default)]
+    pub search_challenges: Vec<RpcPalwSearchChallenge>,
 }
 
 impl Serializer for GetPalwStateResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &3, writer)?;
+        store!(u16, &4, writer)?;
         store!(bool, &self.enabled, writer)?;
         store!(String, &self.sink, writer)?;
         store!(u64, &self.sink_daa_score, writer)?;
@@ -2806,6 +2848,7 @@ impl Serializer for GetPalwStateResponse {
         serialize!(Option<RpcPalwProviderBondState>, &self.provider_bond, writer)?;
         serialize!(Vec<RpcPalwDaChallenge>, &self.da_challenges, writer)?;
         serialize!(Option<RpcPalwActivationState>, &self.activation, writer)?;
+        serialize!(Vec<RpcPalwSearchChallenge>, &self.search_challenges, writer)?;
         Ok(())
     }
 }
@@ -2821,7 +2864,8 @@ impl Deserializer for GetPalwStateResponse {
         let provider_bond = deserialize!(Option<RpcPalwProviderBondState>, reader)?;
         let da_challenges = if version >= 2 { deserialize!(Vec<RpcPalwDaChallenge>, reader)? } else { Vec::new() };
         let activation = if version >= 3 { deserialize!(Option<RpcPalwActivationState>, reader)? } else { None };
-        Ok(Self { enabled, sink, sink_daa_score, overlay_view_available, batch, provider_bond, da_challenges, activation })
+        let search_challenges = if version >= 4 { deserialize!(Vec<RpcPalwSearchChallenge>, reader)? } else { Vec::new() };
+        Ok(Self { enabled, sink, sink_daa_score, overlay_view_available, batch, provider_bond, da_challenges, activation, search_challenges })
     }
 }
 
@@ -3047,6 +3091,13 @@ mod palw_state_wire_tests {
                 derived_mode: "healthy".to_string(),
                 derived_degraded_epochs: Some(0),
             }),
+            search_challenges: vec![RpcPalwSearchChallenge {
+                object_root: "de".repeat(64),
+                scheduler_bond: format!("{}:0", "a5".repeat(64)),
+                chunk_index: 1,
+                response_deadline_daa_score: 900,
+                availability_deadline_daa_score: 20_000,
+            }],
         });
         roundtrip(RpcPalwDaChallenge {
             challenge_id: "ef".repeat(64),

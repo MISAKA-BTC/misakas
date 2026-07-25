@@ -31,6 +31,7 @@ use crate::{
             palw::{DbPalwStore, PalwStoreBatchStage, PalwStoreReader},
             palw_beacon::{DbPalwBeaconStore, PalwBeaconAccumViewV1},
             palw_da::{DbPalwDaStore, PalwDaStoreReader},
+            palw_search_availability::{DbPalwSearchAvailabilityStore, PalwSearchAvailabilityStoreReader},
             palw_lane_bits::DbPalwLaneBitsStore,
             palw_nullifier::{DbPalwNullifierStore, PalwNullifierStoreReader},
             palw_overlay_view::DbPalwOverlayViewStore,
@@ -111,6 +112,7 @@ use kaspa_consensus_core::{
             PalwReceiptDaCommitmentV1,
         },
         palw_provider_bond_mutations_from_accepted_txs, provider_bond_lock_spk, provider_bond_release_daa_score,
+        search_snapshot::{PALW_SEARCH_SNAPSHOT_STATE_VERSION_V1, PalwSearchAvailabilityStateV1, PalwSearchPruningSnapshotV1},
     },
     palw_pruned_frontier::{
         MAX_PALW_PRUNING_SPAM_SUPPORT_ROWS, PALW_PRUNING_SNAPSHOT_VERSION, PalwPrunedActiveBatchV1, PalwPrunedBeaconAccumulatorV1,
@@ -249,6 +251,10 @@ fn palw_da_boundary_matches(embedded: &PalwDaPruningSnapshotV1, standalone: Opti
     standalone == Some(embedded)
 }
 
+fn palw_search_boundary_matches(embedded: &PalwSearchPruningSnapshotV1, standalone: Option<&PalwSearchPruningSnapshotV1>) -> bool {
+    standalone == Some(embedded)
+}
+
 /// Classify a completed Header-v4 direct parent. Non-selected side parents may legitimately be
 /// disqualified by UTXO/DNS rules; they contribute no accepted lifecycle delta and must not make an
 /// otherwise valid DAG child body-invalid. The GHOSTDAG selected parent is different: body ticket and
@@ -320,6 +326,23 @@ struct PalwDaStaged {
     slash_mutations: Vec<PalwProviderBondMutation>,
 }
 
+/// Selected-parent search-availability state plus this chain block's deterministic accepted 0x3d-0x3f
+/// delta — `PalwDaStaged`'s sibling. Response/timeout effects are past-relative (they may target only
+/// challenges already open in the parent state); a registering challenge is self-contained (its
+/// JobSpec is validated against the parent-relative bonded scheduler registry inside the same tx),
+/// so no intra-mergeset ordering can change the outcome.
+#[derive(Clone, Debug, Default)]
+struct PalwSearchStaged {
+    /// The stored selected-parent state (shared, never cloned) — the equality baseline for the
+    /// unchanged-link commit fast path.
+    parent_state: Arc<PalwSearchAvailabilityStateV1>,
+    /// Block owning the parent's full durable row (`None` when the parent state is the synthetic
+    /// pre-activation/genesis default that has no durable row yet).
+    parent_anchor: Option<BlockHash>,
+    state: PalwSearchAvailabilityStateV1,
+    slash_mutations: Vec<PalwProviderBondMutation>,
+}
+
 /// Read-only preflight result for a pruning-boundary import. Constructing this value performs every
 /// snapshot/context/collision check and does not touch a cache-backed writer. Once staging begins,
 /// any store or RocksDB failure is process-fatal because the database helpers update caches before the
@@ -335,6 +358,7 @@ pub(crate) struct PreparedPalwPruningPointSnapshotImport {
     nullifier_write: Option<Arc<PalwActiveNullifierSet>>,
     spam_writes: Vec<(BlockHash, Arc<PalwSpamAccumulatorV1>)>,
     da_state_write: Option<Arc<PalwDaStateV1>>,
+    search_availability_state_write: Option<Arc<PalwSearchAvailabilityStateV1>>,
 }
 
 fn validate_palw_snapshot_import_auth_context(
@@ -814,6 +838,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_nullifier_store: Arc<DbPalwNullifierStore>,
     pub(super) palw_overlay_view_store: Arc<DbPalwOverlayViewStore>,
     pub(super) palw_da_store: Arc<RwLock<DbPalwDaStore>>,
+    /// Search-availability fork-local state rows (0x3d-0x3f), the DA store's sibling.
+    pub(super) palw_search_availability_store: Arc<RwLock<DbPalwSearchAvailabilityStore>>,
     pub(super) palw_pruned_frontier_store: Arc<RwLock<DbPalwPrunedFrontierStore>>,
     pub(super) palw_epoch_length_daa: u64,
     /// kaspa-pq ADR-0040 §5.15.13 (G16): the batch-admission windows that DERIVE the paid-work walk
@@ -1032,6 +1058,7 @@ impl VirtualStateProcessor {
             palw_nullifier_store: storage.palw_nullifier_store.clone(),
             palw_overlay_view_store: storage.palw_overlay_view_store.clone(),
             palw_da_store: storage.palw_da_store.clone(),
+            palw_search_availability_store: storage.palw_search_availability_store.clone(),
             palw_pruned_frontier_store: storage.palw_pruned_frontier_store.clone(),
             palw_epoch_length_daa: params.palw_epoch_length_daa,
             palw_batch_admission: params.palw_batch_admission,
@@ -1567,9 +1594,22 @@ impl VirtualStateProcessor {
                             &ctx.mergeset_acceptance_data,
                             &*provider_bond_view,
                         );
+                        // Search-availability dispatch runs SECOND, deterministically: it consumes
+                        // the DA delta's slash set (void sweep + fresh-registration refusal) and
+                        // contributes its own scheduler-bond slashes to the same registry walk.
+                        let palw_search_staged = self.stage_palw_search_availability_effects(
+                            selected_parent,
+                            pov_daa_score,
+                            &ctx.mergeset_acceptance_data,
+                            &*provider_bond_view,
+                            palw_da_staged.as_ref().map(|staged| staged.slash_mutations.as_slice()).unwrap_or(&[]),
+                        );
                         let mut provider_bond_muts = track_provider_bonds
                             .then(|| self.palw_provider_bond_mutations_from_acceptance(&ctx.mergeset_acceptance_data, pov_daa_score));
                         if let (Some(mutations), Some(staged)) = (provider_bond_muts.as_mut(), palw_da_staged.as_ref()) {
+                            mutations.extend(staged.slash_mutations.iter().cloned());
+                        }
+                        if let (Some(mutations), Some(staged)) = (provider_bond_muts.as_mut(), palw_search_staged.as_ref()) {
                             mutations.extend(staged.slash_mutations.iter().cloned());
                         }
                         // Commit UTXO data for current chain block
@@ -1589,6 +1629,7 @@ impl VirtualStateProcessor {
                             // snapshotted before this block's own provider mutations are applied below.
                             &*provider_bond_view,
                             palw_da_staged,
+                            palw_search_staged,
                         );
                         if let Some(bond_muts) = bond_muts {
                             // Advance the in-memory selected-chain walk only after every
@@ -2454,6 +2495,172 @@ impl VirtualStateProcessor {
         Some(PalwDaStaged { certificate_state: parent, parent_anchor, state, slash_mutations })
     }
 
+    /// Shared fork-local loader for the search-availability state at a chain block's selected
+    /// parent — `palw_da_parent_state`'s sibling, with identical fail-stop semantics: a missing row
+    /// for an ACTIVE parent is a hard inconsistency, never a silent empty default.
+    pub(super) fn palw_search_parent_state(
+        &self,
+        selected_parent: BlockHash,
+        current_daa_score: u64,
+    ) -> (Arc<PalwSearchAvailabilityStateV1>, Option<BlockHash>) {
+        if self.palw_activation_daa_score == u64::MAX || current_daa_score < self.palw_activation_daa_score {
+            return (Arc::new(PalwSearchAvailabilityStateV1::default()), None);
+        }
+        match self.palw_search_availability_store.read().state_and_anchor(selected_parent) {
+            Ok((state, anchor)) if state.validate_structure() => (state, Some(anchor)),
+            Ok(_) => palw_overlay_commit_fail_stop(format!(
+                "PALW search selected-parent state {selected_parent} failed structural validation"
+            )),
+            Err(StoreError::KeyNotFound(_)) if selected_parent == self.genesis.hash => {
+                (Arc::new(PalwSearchAvailabilityStateV1::default()), None)
+            }
+            Err(StoreError::KeyNotFound(_)) => {
+                let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap_or_else(|store_error| {
+                    palw_overlay_commit_fail_stop(format!(
+                        "PALW search could not classify missing selected-parent state {selected_parent}: {store_error}"
+                    ))
+                });
+                if parent_daa < self.palw_activation_daa_score {
+                    (Arc::new(PalwSearchAvailabilityStateV1::default()), None)
+                } else {
+                    palw_overlay_commit_fail_stop(format!(
+                        "PALW search state is missing for active selected parent {selected_parent} at DAA {parent_daa}"
+                    ))
+                }
+            }
+            Err(store_error) => palw_overlay_commit_fail_stop(format!(
+                "PALW search selected-parent state read failed for {selected_parent}: {store_error}"
+            )),
+        }
+    }
+
+    /// Apply accepted 0x3d-0x3f transactions in consensus acceptance order to a clone of the
+    /// selected-parent search-availability state (ADR node-anchored-web-search-da dispatch).
+    ///
+    /// Determinism contract, mirroring `stage_palw_da_effects`:
+    /// * Responses/timeouts may target only challenges already OPEN in the parent state (full
+    ///   carrier gap); plain challenges may target only parent obligations. A challenge carrying a
+    ///   registration proof is self-contained — its JobSpec signatures and the scheduler's bond are
+    ///   validated against the SAME parent-relative registry every node holds, so it registers and
+    ///   challenges atomically without any ordering freedom.
+    /// * Scheduler authorization is exclusively the on-chain bonded registry (`scheduler_is_bonded`);
+    ///   the node-local admission allowlist deliberately plays no role here — with it, the same
+    ///   accepted tx would be valid on one node and invalid on another (consensus split).
+    /// * Slash linkage both ways: a search timeout emits the scheduler-bond slash mutation and
+    ///   immediately voids that scheduler's remaining obligations; a bond already slashed by THIS
+    ///   block's DA effects is voided up front and refused as a fresh registration authority, and
+    ///   its slash is never double-emitted.
+    /// * Every failing effect is skipped deterministically (fee-paying no-op), never a fail-stop:
+    ///   all gates are pure functions of (parent state, registry view, tx bytes).
+    fn stage_palw_search_availability_effects(
+        &self,
+        selected_parent: BlockHash,
+        current_daa_score: u64,
+        acceptance_data: &AcceptanceData,
+        selected_parent_provider_bond_view: &ProviderBondView,
+        da_slash_mutations: &[PalwProviderBondMutation],
+    ) -> Option<PalwSearchStaged> {
+        if self.palw_activation_daa_score == u64::MAX || current_daa_score < self.palw_activation_daa_score {
+            return None;
+        }
+        let (parent, parent_anchor) = self.palw_search_parent_state(selected_parent, current_daa_score);
+        let parent_obligations: HashSet<Hash64> = parent.obligations.keys().copied().collect();
+        let parent_open_challenges: HashSet<Hash64> = parent
+            .obligations
+            .iter()
+            .filter_map(|(root, obligation)| {
+                matches!(
+                    obligation.status,
+                    kaspa_consensus_core::palw::search_snapshot::PalwSearchObligationStatusV1::Challenged { .. }
+                )
+                .then_some(*root)
+            })
+            .collect();
+        let mut state = (*parent).clone();
+        state.begin_child_block();
+        let mut slash_mutations = Vec::new();
+        // Bonds slashed by THIS block, in deterministic order: DA effects staged first (their
+        // mutation order), then search timeouts in acceptance order. Seeding the set from the DA
+        // delta voids a doubly-active scheduler's obligations and blocks it from anchoring fresh
+        // ones within the same block, without ever emitting a second Slash for the same bond.
+        let mut slashed_this_block: HashSet<TransactionOutpoint> = HashSet::new();
+        for mutation in da_slash_mutations {
+            if let PalwProviderBondMutation::Slash(bond, daa) = mutation {
+                slashed_this_block.insert(*bond);
+                state.void_by_scheduler_bond(*bond, *daa);
+            }
+        }
+        let context = crate::processes::palw_search::PalwSearchApplyContext {
+            network_id: self.palw_network_id,
+            // Same genesis binding the snapshot/assignment admission path pins
+            // (`palw_admit_search_snapshot_impl` binds `config.genesis.hash`).
+            genesis_hash: self.genesis.hash,
+            current_daa_score,
+            provider_bonds: selected_parent_provider_bond_view,
+        };
+        for tx in self.accepted_txs_from_acceptance_data(acceptance_data) {
+            let Some(kind) = tx.subnetwork_id.palw_tx_kind() else { continue };
+            if !matches!(kind, 0x3d..=0x3f) {
+                continue;
+            }
+            let Ok(effect) = crate::processes::palw_search::parse_palw_search_effect(kind, &tx.payload) else { continue };
+            let past_relative = match &effect {
+                crate::processes::palw_search::PalwSearchOverlayEffect::Challenge(challenge) => {
+                    // A registering challenge is self-contained; a plain one must hit a parent
+                    // obligation. Refuse a registration whose scheduler bond this block just
+                    // slashed — the parent registry still shows it Active, but every node derives
+                    // the same slashed set from the same accepted effects.
+                    match &challenge.registration {
+                        Some(registration) => !slashed_this_block.contains(&registration.assignment.scheduler_bond),
+                        None => parent_obligations.contains(&challenge.object_root),
+                    }
+                }
+                crate::processes::palw_search::PalwSearchOverlayEffect::Response(response) => {
+                    parent_open_challenges.contains(&response.object_root)
+                }
+                crate::processes::palw_search::PalwSearchOverlayEffect::Timeout(timeout) => {
+                    parent_open_challenges.contains(&timeout.object_root)
+                }
+            };
+            if !past_relative {
+                continue;
+            }
+            match crate::processes::palw_search::apply_palw_search_effect(&mut state, &effect, &context) {
+                Ok((Some(slashed_scheduler_bond), undos)) => {
+                    if slashed_this_block.contains(&slashed_scheduler_bond) {
+                        // The bond is already slashed this block (DA effect or an earlier search
+                        // timeout); the obligation transition stands, no second registry mutation
+                        // and no second block-delta entry.
+                        state.void_by_scheduler_bond(slashed_scheduler_bond, current_daa_score);
+                        continue;
+                    }
+                    if state.record_block_slash(slashed_scheduler_bond).is_err() {
+                        // Delta capacity/byte budget exhausted: revert the timeout transition so the
+                        // obligation state and the slash delta never diverge; the tx becomes a
+                        // deterministic no-op on every node.
+                        for undo in undos.into_iter().rev() {
+                            state.revert(undo).unwrap_or_else(|error| {
+                                palw_overlay_commit_fail_stop(format!(
+                                    "PALW search staging failed to revert its own transition: {error:?}"
+                                ))
+                            });
+                        }
+                        continue;
+                    }
+                    slashed_this_block.insert(slashed_scheduler_bond);
+                    slash_mutations.push(PalwProviderBondMutation::Slash(slashed_scheduler_bond, current_daa_score));
+                    state.void_by_scheduler_bond(slashed_scheduler_bond, current_daa_score);
+                }
+                Ok((None, _undos)) => {}
+                Err(_) => continue,
+            }
+        }
+        if !state.validate_structure() {
+            palw_overlay_commit_fail_stop("PALW search accepted-effect staging produced invalid state".to_string());
+        }
+        Some(PalwSearchStaged { parent_state: parent, parent_anchor, state, slash_mutations })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn commit_utxo_state(
         &self,
@@ -2496,6 +2703,9 @@ impl VirtualStateProcessor {
         // DA-01: selected-parent state plus this block's accepted 0x3a-0x3c delta. `None` is allowed
         // only while the PALW fence is inactive.
         mut palw_da_staged: Option<PalwDaStaged>,
+        // Search-availability: selected-parent state plus this block's accepted 0x3d-0x3f delta.
+        // Same fence contract as the DA staging above.
+        palw_search_staged: Option<PalwSearchStaged>,
     ) {
         let mut batch = WriteBatch::default();
         if let Some(mut staged) = evm_staged {
@@ -2639,6 +2849,36 @@ impl VirtualStateProcessor {
             });
             if self.palw_activation_daa_score != u64::MAX && current_daa >= self.palw_activation_daa_score {
                 palw_overlay_commit_fail_stop(format!("active PALW block {current} reached commit without staged DA state"));
+            }
+        }
+        // Search-availability rows commit in the SAME batch, with the identical link-vs-full write
+        // reduction: an idle search state machine costs 64 bytes per chain block, never a duplicated
+        // full row.
+        if let Some(staged) = palw_search_staged {
+            if !staged.state.validate_structure() {
+                palw_overlay_commit_fail_stop(format!("PALW search state for {current} failed pre-commit validation"));
+            }
+            let unchanged = staged.parent_anchor.is_some() && staged.state == *staged.parent_state;
+            if let (true, Some(anchor)) = (unchanged, staged.parent_anchor) {
+                self.palw_search_availability_store.write().set_state_link_batch(&mut batch, current, anchor).unwrap_or_else(
+                    |store_error| {
+                        palw_overlay_commit_fail_stop(format!("PALW search state link staging failed for {current}: {store_error}"))
+                    },
+                );
+            } else {
+                self.palw_search_availability_store
+                    .write()
+                    .set_state_batch(&mut batch, current, Arc::new(staged.state))
+                    .unwrap_or_else(|store_error| {
+                        palw_overlay_commit_fail_stop(format!("PALW search state staging failed for {current}: {store_error}"))
+                    });
+            }
+        } else {
+            let current_daa = self.headers_store.get_daa_score(current).unwrap_or_else(|store_error| {
+                palw_overlay_commit_fail_stop(format!("PALW search activation check failed for {current}: {store_error}"))
+            });
+            if self.palw_activation_daa_score != u64::MAX && current_daa >= self.palw_activation_daa_score {
+                palw_overlay_commit_fail_stop(format!("active PALW block {current} reached commit without staged search state"));
             }
         }
         // ADR-0039 §11.2: derive/carry this block's active beacon seed R_E (block-keyed recurrence,
@@ -3331,8 +3571,16 @@ impl VirtualStateProcessor {
                     panic!("accepted PALW transaction index {} is outside block {}", entry.index_within_block, merged.block_hash)
                 });
                 let Some(kind) = tx.subnetwork_id.palw_tx_kind() else { continue };
-                let effect = crate::processes::palw::parse_palw_overlay(kind, &tx.payload)
-                    .unwrap_or_else(|e| panic!("isolation-admitted PALW payload failed contextual decode: {e:?}"));
+                // Kinds outside this walker's jurisdiction (revocation, unbond, DA 0x3a-0x3c and
+                // search 0x3d-0x3f lifecycles) have their own dedicated acceptance walkers — they are
+                // SKIPPED here, never a decode panic: an accepted in-band tx of a foreign kind must
+                // not be able to crash the beacon accumulator. A handled kind that fails to decode is
+                // still a hard invariant violation (isolation admitted it by decoding it).
+                let effect = match crate::processes::palw::parse_palw_overlay(kind, &tx.payload) {
+                    Ok(effect) => effect,
+                    Err(crate::processes::palw::PalwOverlayError::UnhandledSubnet(_)) => continue,
+                    Err(e) => panic!("isolation-admitted PALW payload failed contextual decode: {e:?}"),
+                };
                 match effect {
                     PalwOverlayEffect::BeaconCommit(commit) => {
                         if !commit.is_in_phase(current_epoch) {
@@ -4039,6 +4287,23 @@ impl VirtualStateProcessor {
                 .iter()
                 .copied()
                 .map(|provider_bond| PalwProviderBondMutation::Slash(provider_bond, accepted_daa_score)),
+        );
+        // Search-availability timeout slashes ride the identical per-block delta contract, from the
+        // sibling store. Staging guarantees the two deltas never name the same bond in one block.
+        let search_state = self.palw_search_availability_store.read().state(chain_block).unwrap_or_else(|store_error| {
+            palw_overlay_commit_fail_stop(format!(
+                "PALW provider-registry could not read search slash delta for chain block {chain_block}: {store_error}"
+            ))
+        });
+        if !search_state.validate_structure() {
+            palw_overlay_commit_fail_stop(format!("PALW search state is invalid while deriving registry mutations for {chain_block}"));
+        }
+        mutations.extend(
+            search_state
+                .block_slashed_schedulers
+                .iter()
+                .copied()
+                .map(|scheduler_bond| PalwProviderBondMutation::Slash(scheduler_bond, accepted_daa_score)),
         );
         mutations
     }
@@ -4882,6 +5147,8 @@ impl VirtualStateProcessor {
                 self.palw_paid_work_window(selected_parent, selected_parent_daa_score).into_iter().collect();
             paid_work_nullifiers.sort_by_key(|hash| hash.as_bytes());
             let da_state_root = self.palw_da_parent_state(selected_parent, selected_parent_daa_score).0.state_root();
+            let search_availability_state_root =
+                self.palw_search_parent_state(selected_parent, selected_parent_daa_score).0.state_root();
             let selected_parent_state = PalwSelectedParentStateV2::try_new(
                 selected_parent,
                 selected_parent_daa_score,
@@ -4890,6 +5157,7 @@ impl VirtualStateProcessor {
                 selected_parent_provider_bond_view.records(),
                 paid_work_nullifiers,
                 da_state_root,
+                search_availability_state_root,
                 active_batch_ref_root,
             )
             .unwrap_or_else(|err| panic!("invalid Header-v4 selected-parent state at {selected_parent}: {err}"));
@@ -6698,6 +6966,7 @@ impl VirtualStateProcessor {
             &ActiveBondView::new(),
             &ProviderBondView::new(), // kaspa-pq ADR-0040 §5.17: genesis has no provider bonds.
             (self.palw_activation_daa_score != u64::MAX).then(PalwDaStaged::default),
+            (self.palw_activation_daa_score != u64::MAX).then(PalwSearchStaged::default),
         );
 
         // Init the virtual selected chain store
@@ -7333,6 +7602,27 @@ impl VirtualStateProcessor {
             None
         };
 
+        // Search availability rides the same rule as DA: a non-genesis PALW boundary always carries
+        // even an empty v1 state, or open search obligations/deadlines would be forgotten after IBD.
+        let search_availability_snapshot = if active && pruning_point != self.genesis.hash {
+            let state = self
+                .palw_search_availability_store
+                .read()
+                .state(pruning_point)
+                .map_err(|err| format!("search state read failed at active pruning point {pruning_point}: {err}"))?;
+            let snapshot = PalwSearchPruningSnapshotV1 {
+                version: PALW_SEARCH_SNAPSHOT_STATE_VERSION_V1,
+                pruning_point,
+                state: (*state).clone(),
+            };
+            if !snapshot.validate() {
+                return Err(format!("search state at active pruning point {pruning_point} is not a valid pruning snapshot"));
+            }
+            Some(snapshot)
+        } else {
+            None
+        };
+
         let mut paid_work = Vec::new();
         if active {
             for block in std::iter::once(pruning_point).chain(self.reachability_service.default_backward_chain_iterator(pruning_point))
@@ -7370,6 +7660,7 @@ impl VirtualStateProcessor {
             beacon_accumulator,
             spam_accumulator,
             da_snapshot,
+            search_availability_snapshot,
             active_batches,
             provider_bonds: if active { self.provider_bonds_as_of(pruning_point_daa_score)? } else { Vec::new() },
             paid_work,
@@ -7421,17 +7712,24 @@ impl VirtualStateProcessor {
                 || payload.frontier.overlay_view.is_none()
                 || payload.frontier.lane_bits.is_none()
                 || payload.beacon_accumulator.is_none()
-                || payload.da_snapshot.is_none())
+                || payload.da_snapshot.is_none()
+                || payload.search_availability_snapshot.is_none())
         {
             return Err(PruningImportError::ImportedPalwSnapshotInvalid(
                 expected_pruning_point,
-                "active snapshot is missing a required frontier or DA component".to_string(),
+                "active snapshot is missing a required frontier, DA or search-availability component".to_string(),
             ));
         }
         if !active_non_genesis && payload.da_snapshot.is_some() {
             return Err(PruningImportError::ImportedPalwSnapshotInvalid(
                 expected_pruning_point,
                 "snapshot carries DA state before PALW activation or at genesis".to_string(),
+            ));
+        }
+        if !active_non_genesis && payload.search_availability_snapshot.is_some() {
+            return Err(PruningImportError::ImportedPalwSnapshotInvalid(
+                expected_pruning_point,
+                "snapshot carries search-availability state before PALW activation or at genesis".to_string(),
             ));
         }
         let spam_required =
@@ -7485,6 +7783,12 @@ impl VirtualStateProcessor {
         if let Some(embedded_da) = snapshot.payload.da_snapshot.as_ref() {
             let standalone_da = self.palw_da_store.read().pruning_snapshot().ok();
             if !palw_da_boundary_matches(embedded_da, standalone_da.as_ref()) {
+                return None;
+            }
+        }
+        if let Some(embedded_search) = snapshot.payload.search_availability_snapshot.as_ref() {
+            let standalone_search = self.palw_search_availability_store.read().pruning_snapshot().ok();
+            if !palw_search_boundary_matches(embedded_search, standalone_search.as_ref()) {
                 return None;
             }
         }
@@ -7794,6 +8098,23 @@ impl VirtualStateProcessor {
             None
         };
 
+        let search_availability_state_write = if let Some(search) = &payload.search_availability_snapshot {
+            match self.palw_search_availability_store.read().state(pruning_point).optional().map_err(|err| {
+                PruningImportError::ImportedPalwSnapshotInvalid(pruning_point, format!("existing search-state read: {err}"))
+            })? {
+                Some(existing) if *existing != search.state => {
+                    return Err(PruningImportError::ImportedPalwSnapshotInvalid(
+                        pruning_point,
+                        "existing pruning-point search-availability state disagrees with snapshot".to_string(),
+                    ));
+                }
+                Some(_) => None,
+                None => Some(Arc::new(search.state.clone())),
+            }
+        } else {
+            None
+        };
+
         Ok(PreparedPalwPruningPointSnapshotImport {
             pruning_point,
             snapshot,
@@ -7805,6 +8126,7 @@ impl VirtualStateProcessor {
             nullifier_write,
             spam_writes,
             da_state_write,
+            search_availability_state_write,
         })
     }
 
@@ -7827,6 +8149,7 @@ impl VirtualStateProcessor {
             nullifier_write,
             spam_writes,
             da_state_write,
+            search_availability_state_write,
         } = prepared;
         let payload = &snapshot.payload;
 
@@ -7883,6 +8206,13 @@ impl VirtualStateProcessor {
                 store.set_state_batch(batch, pruning_point, state).map_err(|err| format!("DA state write staging: {err}"))?;
             }
             store.set_pruning_snapshot_batch(batch, da).map_err(|err| format!("DA snapshot write staging: {err}"))?;
+        }
+        if let Some(search) = &payload.search_availability_snapshot {
+            let mut store = self.palw_search_availability_store.write();
+            if let Some(state) = search_availability_state_write {
+                store.set_state_batch(batch, pruning_point, state).map_err(|err| format!("search state write staging: {err}"))?;
+            }
+            store.set_pruning_snapshot_batch(batch, search).map_err(|err| format!("search snapshot write staging: {err}"))?;
         }
 
         self.palw_pruned_frontier_store.write().set_batch(batch, snapshot).map_err(|err| format!("snapshot write staging: {err}"))?;
@@ -8275,6 +8605,7 @@ mod palw_pruning_spam_closure_tests {
             beacon_accumulator: None,
             spam_accumulator: Some(builder_frontier),
             da_snapshot: None,
+            search_availability_snapshot: None,
             active_batches: vec![],
             provider_bonds: vec![],
             paid_work: vec![],

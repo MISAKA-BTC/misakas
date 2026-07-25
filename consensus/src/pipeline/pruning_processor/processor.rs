@@ -254,6 +254,13 @@ impl PruningProcessor {
                         "failed to stage repaired PALW DA pruning snapshot for {pruning_point}: {err}"
                     ));
                 }
+                if let Some(search) = snapshot.payload.search_availability_snapshot.as_ref()
+                    && let Err(err) = self.palw_search_availability_store.write().set_pruning_snapshot_batch(&mut batch, search)
+                {
+                    pruning_boundary_commit_fail_stop(format!(
+                        "failed to stage repaired PALW search-availability pruning snapshot for {pruning_point}: {err}"
+                    ));
+                }
                 self.palw_pruned_frontier_store.write().set_batch(&mut batch, snapshot).unwrap_or_else(|err| {
                     pruning_boundary_commit_fail_stop(format!(
                         "failed to stage repaired PALW pruning snapshot for {pruning_point}: {err}"
@@ -369,6 +376,11 @@ impl PruningProcessor {
             if let Some(da) = palw_snapshot.payload.da_snapshot.as_ref() {
                 self.palw_da_store.write().set_pruning_snapshot_batch(&mut batch, da).unwrap_or_else(|err| {
                     pruning_boundary_commit_fail_stop(format!("failed staging periodic PALW DA boundary: {err}"))
+                });
+            }
+            if let Some(search) = palw_snapshot.payload.search_availability_snapshot.as_ref() {
+                self.palw_search_availability_store.write().set_pruning_snapshot_batch(&mut batch, search).unwrap_or_else(|err| {
+                    pruning_boundary_commit_fail_stop(format!("failed staging periodic PALW search-availability boundary: {err}"))
                 });
             }
             self.palw_pruned_frontier_store
@@ -1328,9 +1340,18 @@ mod palw_snapshot_recovery_tests {
 
     #[test]
     fn pruning_pointer_palw_da_and_dns_sidecars_are_one_db_batch() {
+        use crate::model::stores::palw_search_availability::{DbPalwSearchAvailabilityStore, PalwSearchAvailabilityStoreReader};
+        use kaspa_consensus_core::palw::search_snapshot::{
+            PALW_SEARCH_SNAPSHOT_STATE_VERSION_V1, PalwSearchAvailabilityStateV1, PalwSearchPruningSnapshotV1,
+        };
         let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let pruning_point = hash(0x31);
         let da = PalwDaPruningSnapshotV1 { version: 1, pruning_point, state: PalwDaStateV1::default() };
+        let search = PalwSearchPruningSnapshotV1 {
+            version: PALW_SEARCH_SNAPSHOT_STATE_VERSION_V1,
+            pruning_point,
+            state: PalwSearchAvailabilityStateV1::default(),
+        };
         let palw = PalwPruningPointSnapshotV1::new(PalwPruningPointSnapshotPayloadV1 {
             version: PALW_PRUNING_SNAPSHOT_VERSION,
             pruning_point,
@@ -1340,6 +1361,7 @@ mod palw_snapshot_recovery_tests {
             beacon_accumulator: None,
             spam_accumulator: None,
             da_snapshot: Some(da.clone()),
+            search_availability_snapshot: Some(search.clone()),
             active_batches: vec![],
             provider_bonds: vec![],
             paid_work: vec![],
@@ -1349,27 +1371,32 @@ mod palw_snapshot_recovery_tests {
         let mut pruning_store = DbPruningStore::new(db.clone());
         let mut palw_store = DbPalwPrunedFrontierStore::new(db.clone());
         let mut da_store = DbPalwDaStore::new(db.clone(), CachePolicy::Count(8));
+        let mut search_store = DbPalwSearchAvailabilityStore::new(db.clone(), CachePolicy::Count(8));
         let mut overlay_store = DbPruningPointOverlaySnapshotStore::new(db.clone());
         let pruning_observer = pruning_store.clone_with_new_cache();
         let palw_observer = palw_store.clone_with_new_cache();
         let da_observer = da_store.clone_with_new_cache(CachePolicy::Count(8));
+        let search_observer = search_store.clone_with_new_cache(CachePolicy::Count(8));
         let overlay_observer = overlay_store.clone_with_new_cache();
 
         let mut batch = WriteBatch::default();
         pruning_store.set_batch(&mut batch, pruning_point, 4).unwrap();
         da_store.set_pruning_snapshot_batch(&mut batch, &da).unwrap();
+        search_store.set_pruning_snapshot_batch(&mut batch, &search).unwrap();
         palw_store.set_batch(&mut batch, palw.clone()).unwrap();
         overlay_store.set_batch(&mut batch, overlay.clone()).unwrap();
 
         assert!(pruning_observer.pruning_point().is_err());
         assert!(palw_observer.get().is_err());
         assert!(da_observer.pruning_snapshot().is_err());
+        assert!(search_observer.pruning_snapshot().is_err());
         assert!(overlay_observer.get().is_err());
 
         db.write(batch).unwrap();
         assert_eq!(pruning_observer.pruning_point().unwrap(), pruning_point);
         assert_eq!(palw_observer.get().unwrap(), palw);
         assert_eq!(da_observer.pruning_snapshot().unwrap(), da);
+        assert_eq!(search_observer.pruning_snapshot().unwrap(), search);
         assert_eq!(overlay_observer.get().unwrap(), overlay);
     }
 }

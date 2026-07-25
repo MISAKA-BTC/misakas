@@ -14,6 +14,7 @@ use crate::{
         PALW_MAX_PROVIDER_CAPACITY_ENTRIES_V1, PALW_MAX_PROVIDER_RUNTIME_CLASSES_V1, PalwBatchCertificateV2, PalwBatchManifestV1,
         PalwBatchViewV1, PalwBeaconEpochAccumV1, PalwProviderBondRecord, PalwPrunedFrontierV1, PalwPublicLeafV1,
         da::PalwDaPruningSnapshotV1, palw_leaf_merkle_root,
+        search_snapshot::{PalwSearchAvailabilityStateV1, PalwSearchPruningSnapshotV1},
     },
     tx::TransactionOutpoint,
 };
@@ -276,6 +277,7 @@ pub fn reconstruct_selected_parent_state_from_pruning_payload(
     da_state_root: Hash64,
 ) -> Result<PalwSelectedParentStateV2, PalwPruningSnapshotError> {
     let active_batch_ref_root = palw_active_batch_ref_root(payload.frontier.overlay_view.as_ref());
+    let search_availability_state_root = palw_pruning_payload_search_availability_state_root(payload);
     PalwSelectedParentStateV2::try_new(
         payload.pruning_point,
         payload.pruning_point_daa_score,
@@ -284,6 +286,7 @@ pub fn reconstruct_selected_parent_state_from_pruning_payload(
         payload.provider_bonds.clone(),
         paid_work_nullifiers,
         da_state_root,
+        search_availability_state_root,
         active_batch_ref_root,
     )
 }
@@ -367,6 +370,17 @@ pub fn palw_pruning_payload_da_state_root(payload: &PalwPruningPointSnapshotPayl
     match &payload.da_snapshot {
         Some(snapshot) => snapshot.state.state_root(),
         None => crate::palw::da::PalwDaStateV1::default().state_root(),
+    }
+}
+
+/// Derive the search-availability state root the first post-pruning-point child folds into its
+/// selected-parent state, sourced from the transported payload. Same contract as
+/// [`palw_pruning_payload_da_state_root`]: absent a snapshot (pre-activation / empty), both sides
+/// are the default state's root, and a wrong transported value simply fails the fold comparison.
+pub fn palw_pruning_payload_search_availability_state_root(payload: &PalwPruningPointSnapshotPayloadV1) -> Hash64 {
+    match &payload.search_availability_snapshot {
+        Some(snapshot) => snapshot.state.state_root(),
+        None => PalwSearchAvailabilityStateV1::default().state_root(),
     }
 }
 
@@ -552,6 +566,11 @@ pub struct PalwSelectedParentStateV2 {
     pub provider_bonds: Vec<PalwProviderBondRecord>,
     pub paid_work_nullifiers: Vec<Hash64>,
     pub da_state_root: Hash64,
+    /// Canonical digest of the search-availability state at the selected parent
+    /// (`PalwSearchAvailabilityStateV1::state_root`). Bound exactly like `da_state_root`: the first
+    /// post-pruning-point Header-v4 child authenticates the transported search obligations before
+    /// any transition derived from them is accepted.
+    pub search_availability_state_root: Hash64,
     /// Canonical immutable content references from `frontier.overlay_view`. This intentionally does
     /// not hash locally available leaf bytes, so a late blob cannot mutate an accepted parent's root.
     /// Snapshot validation separately requires complete root-matching bytes for certified entries.
@@ -568,6 +587,7 @@ impl PalwSelectedParentStateV2 {
         provider_bonds: Vec<PalwProviderBondRecord>,
         paid_work_nullifiers: Vec<Hash64>,
         da_state_root: Hash64,
+        search_availability_state_root: Hash64,
         active_batch_ref_root: Hash64,
     ) -> Result<Self, PalwPruningSnapshotError> {
         let mut state = Self {
@@ -579,6 +599,7 @@ impl PalwSelectedParentStateV2 {
             provider_bonds,
             paid_work_nullifiers,
             da_state_root,
+            search_availability_state_root,
             active_batch_ref_root,
         };
         state.canonicalize();
@@ -903,6 +924,10 @@ pub struct PalwPruningPointSnapshotPayloadV1 {
     /// Fork-local data-availability obligations/challenges at the pruning boundary. The outer
     /// digest binds this component together with the execution, provider and anti-spam frontiers.
     pub da_snapshot: Option<PalwDaPruningSnapshotV1>,
+    /// Fork-local search-availability obligations at the pruning boundary (subnet bytes
+    /// 0x3d-0x3f). Same rationale as `da_snapshot`: omission would silently forget open
+    /// obligations and challenge deadlines after pruned IBD.
+    pub search_availability_snapshot: Option<PalwSearchPruningSnapshotV1>,
     /// Complete content-addressed PALW store projection for every batch retained by `frontier.overlay_view`.
     pub active_batches: Vec<PalwPrunedActiveBatchV1>,
     pub provider_bonds: Vec<PalwProviderBondRecord>,
@@ -1016,6 +1041,11 @@ impl PalwPruningPointSnapshotV1 {
             && (da.pruning_point != p.pruning_point || !da.validate())
         {
             return Err(PalwPruningSnapshotError::Incoherent("DA pruning snapshot"));
+        }
+        if let Some(search) = &p.search_availability_snapshot
+            && (search.pruning_point != p.pruning_point || !search.validate())
+        {
+            return Err(PalwPruningSnapshotError::Incoherent("search-availability pruning snapshot"));
         }
         validate_palw_active_batch_bundles(p.frontier.overlay_view.as_ref(), &p.active_batches)?;
         self.validate_provider_bonds()?;
@@ -1241,6 +1271,7 @@ mod tests {
             beacon_accumulator: Some(PalwPrunedBeaconAccumulatorV1::new()),
             spam_accumulator: None,
             da_snapshot: None,
+            search_availability_snapshot: None,
             active_batches: vec![],
             provider_bonds: vec![provider(2), provider(1)],
             paid_work: vec![
@@ -1282,6 +1313,7 @@ mod tests {
             vec![provider(1)],
             vec![h(0x41)],
             h(0x51),
+            h(0x52),
             active_batch_ref_root,
         )
         .unwrap()
@@ -1923,6 +1955,7 @@ mod tests {
             reordered.provider_bonds,
             reordered.paid_work_nullifiers,
             reordered.da_state_root,
+            reordered.search_availability_state_root,
             reordered.active_batch_ref_root,
         )
         .unwrap();
@@ -1939,6 +1972,7 @@ mod tests {
                 base.provider_bonds,
                 too_many_paid,
                 base.da_state_root,
+                base.search_availability_state_root,
                 base.active_batch_ref_root,
             ),
             Err(PalwPruningSnapshotError::TooMany("paid-work nullifiers", MAX_PALW_PRUNING_PAID_IDS + 1))

@@ -57,6 +57,22 @@ pub struct PalwDaChallengeProbe {
     pub response_deadline_daa_score: u64,
 }
 
+/// One OPEN search-availability challenge whose obligation is anchored by the requested provider
+/// bond (the scheduler's), at `PalwStateProbe::sink`.
+///
+/// Same contract as [`PalwDaChallengeProbe`]: reported only when the request names a provider bond
+/// and only for `Challenged` obligations — enough for an off-node responder holding the snapshot
+/// bytes to build and submit a deadline-aware 0x3e chunk-proof response (which is unsigned by
+/// design; the proof itself is the authorization).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwSearchChallengeProbe {
+    pub object_root: Hash64,
+    pub scheduler_bond: TransactionOutpoint,
+    pub chunk_index: u16,
+    pub response_deadline_daa_score: u64,
+    pub availability_deadline_daa_score: u64,
+}
+
 /// The lagged beacon-activation signal, derived at `PalwStateProbe::sink` with the EXACT helpers the
 /// virtual processor's `commit_palw_overlay_effects` gate uses (`resolve_palw_lagged_anchor` →
 /// `resolve_palw_buried_epoch_seeds` → `palw_lagged_activation_open`).
@@ -113,6 +129,9 @@ pub struct PalwStateProbe {
     pub provider_bond: Option<PalwProviderBondProbe>,
     /// Open DA challenges on the requested provider bond. Empty unless a provider bond was requested.
     pub da_challenges: Vec<PalwDaChallengeProbe>,
+    /// Open search-availability challenges anchored by the requested provider bond (as scheduler).
+    /// Empty unless a provider bond was requested.
+    pub search_challenges: Vec<PalwSearchChallengeProbe>,
     /// The lagged activation signal at the sink. `None` when PALW is disabled or the preset has no
     /// `dns_params` (the walk is undefined there).
     pub activation: Option<PalwActivationProbe>,

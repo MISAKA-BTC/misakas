@@ -791,8 +791,8 @@ do you confirm? (answer y/n or pass --yes to the Kaspad command line to confirm 
         // un-upgraded version would panic instead of prompting.
         //
         // CONSEQUENCE, deliberate: this subsumes the `version <= 4` and `version <= 5` soft-upgrade
-        // arms below. The loop only runs when `version != LATEST_DB_VERSION (14)`, so every older version
-        // this binary can encounter is `<= 13` and hard-resets here; those arms are now unreachable.
+        // arms below. The loop only runs when `version != LATEST_DB_VERSION (15)`, so every older version
+        // this binary can encounter is `<= 14` and hard-resets here; those arms are now unreachable.
         // They are retained unmodified as the record of the 4→5→6 migration and as the shape to
         // follow if a future version is ever soft-upgradable. A soft upgrade cannot bridge a
         // positional-encoding break, so there is no version in 4..=11 they could legitimately serve.
@@ -818,7 +818,14 @@ do you confirm? (answer y/n or pass --yes to the Kaspad command line to confirm 
         // PALW pruning blobs raise 13 -> 14 and this reset bound 12 -> 13. The v14 singleton carries
         // the active manifest/leaf/certificate projection required for fresh first-post-PP validation;
         // reusing a v13 singleton would either fail positional decode or silently lack those blobs.
-        if version <= 13 {
+        //
+        // Search-availability dispatch raises 14 -> 15 and this reset bound 13 -> 14. Prefixes
+        // 189-191 add per-block search obligation rows every active chain block must carry (a v14
+        // history fail-stops the selected-parent loader and the reorg registry reconciler on the
+        // first missing row), the pruning payload gains a positional field, and
+        // `PalwSelectedParentStateV2` gains the search state root that moves every Header-v4
+        // overlay commitment. Hard reset per ADR-0001.
+        if version <= 14 {
             is_db_reset_needed = request_database_deletion_approval(args.yes);
             continue 'db_upgrade;
         }
