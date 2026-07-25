@@ -143,7 +143,7 @@ fn decode_canonical_object(path: &Path) -> Result<(CanonicalDaObject, Vec<u8>), 
     Ok((object, bytes))
 }
 
-fn load_key(path: &str) -> Result<ValidatorKey, String> {
+pub(crate) fn load_key(path: &str) -> Result<ValidatorKey, String> {
     let mut seed = load_validator_seed(path)?;
     let key = ValidatorKey::from_seed(seed);
     seed.fill(0);
@@ -151,7 +151,7 @@ fn load_key(path: &str) -> Result<ValidatorKey, String> {
     Ok(key)
 }
 
-fn write_da_payload(path: &Path, subnetwork_byte: u8, payload: &[u8]) -> Result<(), String> {
+pub(crate) fn write_da_payload(path: &Path, subnetwork_byte: u8, payload: &[u8]) -> Result<(), String> {
     validate_palw_overlay_payload(subnetwork_byte, payload)
         .map_err(|error| format!("built 0x{subnetwork_byte:02x} payload failed consensus stateless validation: {error}"))?;
     write_new_payload(path, payload)

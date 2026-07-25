@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use clap::{Parser, ValueEnum};
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::palw::da::{PalwDaChallengeV1, PalwDaResponseV1};
+use kaspa_consensus_core::palw::search_snapshot::{PalwSearchChallengeTxV1, PalwSearchTimeoutTxV1};
 use kaspa_consensus_core::palw::{
     PalwBatchManifestV1, PalwLeafChunkV1, PalwProviderBondPayloadV1, PalwProviderUnbondRequestV1, provider_bond_lock_spk,
     ticket_nullifier_commitment, validate_palw_overlay_payload, validate_palw_overlay_tx,
@@ -21,7 +22,8 @@ use kaspa_consensus_core::palw::{
 use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_PALW_BATCH_CERT, SUBNETWORK_ID_PALW_BATCH_MANIFEST, SUBNETWORK_ID_PALW_DA_CHALLENGE, SUBNETWORK_ID_PALW_DA_RESPONSE,
     SUBNETWORK_ID_PALW_DA_TIMEOUT_EVIDENCE, SUBNETWORK_ID_PALW_LEAF_CHUNK, SUBNETWORK_ID_PALW_PROVIDER_BOND,
-    SUBNETWORK_ID_PALW_PROVIDER_UNBOND, SubnetworkId,
+    SUBNETWORK_ID_PALW_PROVIDER_UNBOND, SUBNETWORK_ID_PALW_SEARCH_CHALLENGE, SUBNETWORK_ID_PALW_SEARCH_RESPONSE,
+    SUBNETWORK_ID_PALW_SEARCH_TIMEOUT, SubnetworkId,
 };
 use kaspa_consensus_core::tx::{TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_core::{info, warn};
@@ -55,6 +57,9 @@ pub enum PalwSubmitKind {
     DaChallenge,
     DaResponse,
     DaTimeout,
+    SearchChallenge,
+    SearchResponse,
+    SearchTimeout,
 }
 
 impl PalwSubmitKind {
@@ -68,6 +73,9 @@ impl PalwSubmitKind {
             Self::DaChallenge => SUBNETWORK_ID_PALW_DA_CHALLENGE,
             Self::DaResponse => SUBNETWORK_ID_PALW_DA_RESPONSE,
             Self::DaTimeout => SUBNETWORK_ID_PALW_DA_TIMEOUT_EVIDENCE,
+            Self::SearchChallenge => SUBNETWORK_ID_PALW_SEARCH_CHALLENGE,
+            Self::SearchResponse => SUBNETWORK_ID_PALW_SEARCH_RESPONSE,
+            Self::SearchTimeout => SUBNETWORK_ID_PALW_SEARCH_TIMEOUT,
         }
     }
 
@@ -81,6 +89,9 @@ impl PalwSubmitKind {
             Self::DaChallenge => 0x3a,
             Self::DaResponse => 0x3b,
             Self::DaTimeout => 0x3c,
+            Self::SearchChallenge => 0x3d,
+            Self::SearchResponse => 0x3e,
+            Self::SearchTimeout => 0x3f,
         }
     }
 
@@ -94,6 +105,9 @@ impl PalwSubmitKind {
             Self::DaChallenge => "da-challenge",
             Self::DaResponse => "da-response",
             Self::DaTimeout => "da-timeout",
+            Self::SearchChallenge => "search-challenge",
+            Self::SearchResponse => "search-response",
+            Self::SearchTimeout => "search-timeout",
         }
     }
 }
@@ -460,6 +474,18 @@ fn verify_payload_owner(kind: PalwSubmitKind, payload: &[u8], payer_public_key: 
                 borsh::from_slice(payload).map_err(|err| format!("cannot decode da-response payload after validation: {err}"))?;
             (response.provider_owner_public_key, "submit a challenged provider response for another key")
         }
+        PalwSubmitKind::SearchChallenge => {
+            let challenge = PalwSearchChallengeTxV1::decode_strict(payload)
+                .map_err(|err| format!("cannot decode search-challenge payload after validation: {err}"))?;
+            (challenge.challenger_public_key, "submit a bonded search challenge for another key")
+        }
+        PalwSubmitKind::SearchTimeout => {
+            let timeout = PalwSearchTimeoutTxV1::decode_strict(payload)
+                .map_err(|err| format!("cannot decode search-timeout payload after validation: {err}"))?;
+            (timeout.reporter_public_key, "submit bonded search timeout evidence for another key")
+        }
+        // A search response is deliberately unsigned (the verifying chunk proof IS the
+        // authorization), so any funder may carry it.
         _ => return Ok(()),
     };
     if owner_public_key != payer_public_key {

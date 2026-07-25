@@ -285,17 +285,22 @@ palw_batch_status() {
 }
 
 # node_sink_daa <a|b>  — echo the current sink DAA score (integer) or fail.
-#   Prefers palw-status sink_daa_score (needs a known provider bond); otherwise
-#   parses the "(daa <N>)" of the validator status dns_anchor. Fail-closed.
+#   Primary source: SELECTOR-LESS `palw-status` (allowed since RPC wire v3: it reports
+#   sink_daa_score with no batch/bond argument), so this works BEFORE any provider bond is
+#   registered — the old bond-gated call left a fresh devnet reading the dns_anchor fallback.
+#   Fallback: the "(daa <N>)" of the validator status dns_anchor — but only a NON-ZERO match:
+#   on a pre-DNS-activation preset dns_anchor is the zero anchor "(daa 0)", which is an
+#   unreadable coordinate here, not a real sink score (a literal 0 made the bootstrap maturity
+#   gate fail-closed forever on a fresh devnet-111).
 node_sink_daa() {
     local n="${1:-a}" out daa=""
-    if [ -n "${PROV_A_BOND:-}" ]; then
-        out="$(palw_provider_status "$n" "$PROV_A_BOND" 2>/dev/null || true)"
+    if _endpoint_open "$(node_wrpc "$n")"; then
+        out="$("$VAL" palw-status --node-wrpc-borsh "$(node_wrpc "$n")" --network "$NETWORK" 2>/dev/null || true)"
         daa="$(printf '%s\n' "$out" | _kv sink_daa_score)"
     fi
     case "$daa" in ''|*[!0-9]*)
         out="$(node_status "$n" 2>/dev/null || true)"
-        daa="$(printf '%s\n' "$out" | grep -Eo 'daa[ \t]*[0-9]+' | head -n1 | grep -Eo '[0-9]+' | head -n1)"
+        daa="$(printf '%s\n' "$out" | grep -Eo 'daa[ \t]*[0-9]+' | grep -Ev 'daa[ \t]*0$' | head -n1 | grep -Eo '[0-9]+' | head -n1)"
     ;; esac
     case "$daa" in ''|*[!0-9]*) return 1 ;; esac
     printf '%s\n' "$daa"

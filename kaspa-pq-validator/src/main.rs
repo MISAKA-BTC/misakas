@@ -909,6 +909,26 @@ async fn palw_status(args: PalwStatusArgs) -> Result<(), String> {
     } else if args.provider_bond.is_some() {
         println!("provider.in_registry: false");
     }
+    // Open availability challenges on the requested bond (empty without --provider-bond). One
+    // line per challenge, key=value, so a soak/responder script can parse them directly.
+    println!("da_challenges.open: {}", response.da_challenges.len());
+    for challenge in &response.da_challenges {
+        println!(
+            "da_challenge: id={} object_root={} chunk={} deadline_daa={}",
+            challenge.challenge_id, challenge.object_root, challenge.chunk_index, challenge.response_deadline_daa_score
+        );
+    }
+    println!("search_challenges.open: {}", response.search_challenges.len());
+    for challenge in &response.search_challenges {
+        println!(
+            "search_challenge: object_root={} scheduler_bond={} chunk={} deadline_daa={} availability_deadline_daa={}",
+            challenge.object_root,
+            challenge.scheduler_bond,
+            challenge.chunk_index,
+            challenge.response_deadline_daa_score,
+            challenge.availability_deadline_daa_score
+        );
+    }
     // §6.4 — the lagged Certified→Active gate signal, derived server-side with the EXACT consensus
     // walk `advance_epoch_gated` consumes. `none` from an older node (wire < v3) or a preset
     // without PALW/dns_params.

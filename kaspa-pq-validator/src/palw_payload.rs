@@ -6,6 +6,7 @@
 
 mod da;
 mod lifecycle;
+mod search;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,7 @@ use self::da::{DaChallengePayloadArgs, DaInspectArgs, DaResponsePayloadArgs, DaT
 use self::lifecycle::{
     AuditCertificatePayloadArgs, AuditFactsPayloadArgs, AuditVotePayloadArgs, BatchManifestPayloadArgs, LeafChunkPayloadArgs,
 };
+use self::search::{SearchChallengePayloadArgs, SearchResponsePayloadArgs, SearchTimeoutPayloadArgs};
 
 use super::{parse_amount_sompi, parse_hash64};
 
@@ -54,6 +56,13 @@ enum PalwPayloadCommand {
     DaResponse(DaResponsePayloadArgs),
     /// Build objective expired-challenge timeout evidence (subnetwork 0x3c).
     DaTimeout(DaTimeoutPayloadArgs),
+    /// Sign a search-availability challenge (subnetwork 0x3d); attach a JobSpec to register the
+    /// obligation atomically against the bonded scheduler registry.
+    SearchChallenge(SearchChallengePayloadArgs),
+    /// Build a self-authorizing search chunk-proof response (subnetwork 0x3e).
+    SearchResponse(SearchResponsePayloadArgs),
+    /// Sign search-availability timeout evidence (subnetwork 0x3f).
+    SearchTimeout(SearchTimeoutPayloadArgs),
 }
 
 /// The two shipped PALW-active, closed-testnet presets.
@@ -136,6 +145,9 @@ pub async fn palw_payload(args: PalwPayloadArgs) -> Result<(), String> {
         PalwPayloadCommand::DaChallenge(args) => da::da_challenge_payload(args),
         PalwPayloadCommand::DaResponse(args) => da::da_response_payload(args),
         PalwPayloadCommand::DaTimeout(args) => da::da_timeout_payload(args),
+        PalwPayloadCommand::SearchChallenge(args) => search::search_challenge_payload(args),
+        PalwPayloadCommand::SearchResponse(args) => search::search_response_payload(args),
+        PalwPayloadCommand::SearchTimeout(args) => search::search_timeout_payload(args),
     }
 }
 
