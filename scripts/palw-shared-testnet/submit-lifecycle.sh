@@ -401,6 +401,219 @@ gen_cert() {
 }
 
 # =============================================================================
+# DA challenge/response (step 3.5) — satisfy every sampled DA obligation so the
+# certificate clears PalwDaStateV1::certificate_allowed and its BLOB is written
+# (algo-4 CertPresent). Only runs when create-lifecycle built REAL DA objects
+# (PALW_DA_REAL=1); the legacy random-root mock has no object to prove.
+#
+# TIMING (the exact-daa constraint): apply_challenge requires
+#   challenge.opened_daa_score == current_daa_score  (the daa of the chain block
+#   that ACCEPTS the carrier), and a block never accepts its OWN txs — a carrier
+#   in block X (daa D+1) is accepted by X's child Y (daa D+2). The in-process
+#   validator emits TRANSACTIONS, not blocks, so the external misaminer is the
+#   ONLY block producer: stopping it FREEZES DAA at a stable D. We then set
+#   opened_daa=D+2, inject the carrier WITHOUT mining (--no-wait), and mine
+#   EXACTLY 2 blocks (X includes, Y accepts). A mistimed challenge is inert
+#   (never rejected, rate-limit not consumed), so a fresh-D retry is always safe.
+#   The da-response has no exact-daa rule (just current_daa <= deadline=D+2+200).
+
+# All DA obligations for the batch: "id|provider_bond|object_root|chunk|status".
+_da_obligations() {
+    { palw_batch_status "${1:-a}" "$BATCH_ID" 2>/dev/null || true; } | awk '
+        /^da_obligation:/ {
+            id=""; pb=""; root=""; ch=""; st=""
+            for (i=1;i<=NF;i++) {
+                if ($i ~ /^id=/)                 id=substr($i,4)
+                else if ($i ~ /^provider_bond=/) pb=substr($i,15)
+                else if ($i ~ /^object_root=/)   root=substr($i,13)
+                else if ($i ~ /^chunk=/)         ch=substr($i,7)
+                else if ($i ~ /^status=/)        st=substr($i,8)
+            }
+            if (id!="" && pb!="" && root!="" && ch!="" && st!="")
+                print id "|" pb "|" root "|" ch "|" st
+        }'
+}
+_da_unsatisfied_count() { _da_obligations a | awk -F'|' '$5!="satisfied"{c++} END{print c+0}'; }
+
+# Resolve an obligation's object_root to the bytes create-lifecycle saved.
+_da_object_file() {
+    local f; f="${PALW_DA_OBJ_DIR:-$LIFECYCLE_DIR/da}/${1:?object_root}.palwobj"
+    [ -s "$f" ] || die "DA object for object_root=$1 not found at $f — create-lifecycle must have built a real DA object per leaf (PALW_DA_REAL=1). Re-run ./create-lifecycle.sh."
+    printf '%s\n' "$f"
+}
+
+# The da-response is signed by the CHALLENGED provider's OWNER key (FILE, never a value).
+_responder_seed() {
+    local bond="${1:?provider_bond}"
+    if   [ "$bond" = "$PROV_A_BOND" ]; then printf '%s\n' "${PROV_A_KEY:-$PALW_DATA_ROOT/keys/provider-a.seed}"
+    elif [ "$bond" = "$PROV_B_BOND" ]; then printf '%s\n' "${PROV_B_KEY:-$PALW_DATA_ROOT/keys/provider-b.seed}"
+    else die "obligation names provider_bond=$bond, neither PROV_A_BOND nor PROV_B_BOND — cannot pick the challenged provider owner seed to sign the da-response."
+    fi
+}
+
+# Read node A sink DAA until two consecutive samples agree (stable ⇒ no producer).
+_da_wait_sink_stable() {
+    local prev="" cur i
+    for i in $(seq 1 "${DA_SINK_STABLE_TRIES:-10}"); do
+        cur="$(node_sink_daa a 2>/dev/null || true)"
+        case "$cur" in ''|*[!0-9]*) sleep 1; continue ;; esac
+        [ "$cur" = "$prev" ] && { printf '%s\n' "$cur"; return 0; }
+        prev="$cur"; sleep 1
+    done
+    case "$prev" in ''|*[!0-9]*) return 1 ;; *) printf '%s\n' "$prev"; return 0 ;; esac
+}
+
+# Mine EXACTLY n blocks via a finite misaminer burst (devnet skip-pow ⇒ instant).
+_da_mine() {
+    local n="${1:?blocks}" addr pid deadline rc
+    addr="$(state_get SUPPORTING_ADDR)"
+    [ -n "$addr" ] || die "SUPPORTING_ADDR empty — cannot mine DA-step blocks (run the funding stage or set it)."
+    install -d -m 0755 "$PALW_DATA_ROOT/logs" 2>/dev/null || true
+    "$MINER" --pool "$(node_grpc a)" --network-id "$NETWORK" \
+        --wallet "$addr" --worker "${MINER_WORKER:-rig0}" \
+        --blocks "$n" --min-block-interval-ms 0 \
+        >> "$PALW_DATA_ROOT/logs/miner-da-step.log" 2>&1 &
+    pid=$!
+    deadline=$(( $(date +%s) + ${DA_MINE_TIMEOUT_SECS:-60} ))
+    while kill -0 "$pid" 2>/dev/null; do
+        [ "$(date +%s)" -ge "$deadline" ] && { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; die "misaminer --blocks $n burst timed out (DA step) — inspect $PALW_DATA_ROOT/logs/miner-da-step.log."; }
+        sleep 1
+    done
+    rc=0; wait "$pid" || rc=$?   # read rc without tripping set -e
+    [ "$rc" -eq 0 ] || die "misaminer --blocks $n burst exited $rc (DA step) — inspect $PALW_DATA_ROOT/logs/miner-da-step.log."
+}
+
+# Freeze DAA: stop the supporting miner (the only producer) and prove stability.
+_da_freeze_miner() {
+    log "DA step: freezing DAA — stopping the supporting miner so opened_daa=D+2 is EXACT (the in-process validator emits txs, not blocks; misaminer is the only producer)."
+    bash "$SCRIPT_DIR/supporting-miner.sh" stop || die "could not stop the supporting miner to freeze DAA for the DA step."
+    _DA_FROZEN=1
+    register_cleanup 'if [ "${_DA_FROZEN:-0}" = 1 ] && [ "${_DA_RESUMED:-0}" != 1 ]; then warn "DA step did not finish: the supporting miner was left STOPPED. Run ./supporting-miner.sh start (or re-run submit-lifecycle) to resume block production."; fi'
+    local d; d="$(_da_wait_sink_stable)" || die "sink DAA did not stabilize after stopping the miner — a ROGUE producer is running (stray misaminer or start-palw-miner.sh). Stop it and retry."
+    log "DA step: DAA frozen at sink=$d."
+}
+_da_resume_miner() { resume_supporting_miner; _DA_RESUMED=1; }
+
+# Poll an obligation until status==WANT; mine 1 extra block (off-by-one sink
+# visibility) up to a cap before declaring the effect inert. Returns non-zero on
+# inert (caller retries with a fresh D).
+_da_wait_obligation() {
+    local oblig_id="${1:?}" want="${2:?}" extra=0 max_extra="${DA_STATUS_EXTRA_BLOCKS:-2}" t0 st
+    while :; do
+        t0=$(( $(date +%s) + ${DA_STATUS_POLL_SECS:-12} ))
+        while [ "$(date +%s)" -lt "$t0" ]; do
+            st="$(_da_obligations a | awk -F'|' -v id="$oblig_id" '$1==id{print $5}')"
+            [ "$st" = "$want" ] && return 0
+            sleep "${GATE_POLL_SECS:-2}"
+        done
+        [ "$extra" -ge "$max_extra" ] && return 1
+        _da_mine 1; extra=$(( extra + 1 ))
+    done
+}
+
+# Open a 0x3a challenge on a Pending obligation; sets CH_ID to the winning id.
+_da_challenge_obligation() {
+    local oblig_id="${1:?}" provider_bond="${2:?}" attempt maxA="${DA_CH_MAX_ATTEMPTS:-5}"
+    local D opened epoch nonce out chid
+    for attempt in $(seq 1 "$maxA"); do
+        D="$(_da_wait_sink_stable)" || die "DA step: sink DAA not stable before challenge (rogue producer?)."
+        opened=$(( D + 2 )); epoch=$(( opened / 100 )); nonce="$(rand_hex 64)"
+        out="$("$VAL" palw-payload da-challenge \
+            --network-id "$NETSUFFIX" --obligation-id "$oblig_id" \
+            --challenge-epoch "$epoch" --opened-daa-score "$opened" --response-window-daa 200 \
+            --challenger-bond "$AUD_C_BOND" --owner-key "$AUDITOR_KEY" \
+            --challenge-nonce "$nonce" --out "$_SL_STAGING/da-challenge.bin" 2>&1)" \
+            || { printf '%s\n' "$out" >&2; die "'palw-payload da-challenge' build failed for obligation $oblig_id (see above)."; }
+        chid="$(printf '%s\n' "$out" | _kv challenge_id)"
+        _is_hex128 "$chid" || { printf '%s\n' "$out" >&2; die "da-challenge did not print a 128-hex challenge_id (see above)."; }
+        log "DA challenge attempt $attempt: obligation=$oblig_id opened_daa=$opened (epoch=$epoch) challenger=$AUD_C_BOND -> inject(--no-wait)+mine 2"
+        _palw_submit da-challenge "$_SL_STAGING/da-challenge.bin" --no-wait \
+            || die "'palw-submit --kind da-challenge --no-wait' failed for obligation $oblig_id. Inspect node A ($(node_log a))."
+        sleep "${DA_INJECT_SETTLE_SECS:-2}"   # let the carrier settle into node A's mempool before the first block templates
+        _da_mine 2
+        if _da_wait_obligation "$oblig_id" challenged; then
+            CH_ID="$chid"
+            log "DA challenge OK: obligation $oblig_id is 'challenged' (challenge_id=$chid)."
+            return 0
+        fi
+        warn "DA challenge attempt $attempt went INERT (opened_daa=$opened did not match the accepting block's daa) — retrying with a fresh frozen D."
+    done
+    die "obligation $oblig_id never reached 'challenged' after $maxA attempts — the frozen-D + 2-block recipe should be exact; check for a rogue block producer breaking the width-1 chain, or that AUD_C_BOND is active and != the obligation's provider_bond."
+}
+
+# Answer an OPEN challenge with a 0x3b chunk proof from the object bytes.
+_da_respond_obligation() {
+    local oblig_id="${1:?}" provider_bond="${2:?}" rseed="${3:?}" objf="${4:?}" chunk="${5:?}" chid="${6:?}" out
+    out="$("$VAL" palw-payload da-response \
+        --network-id "$NETSUFFIX" --challenge-id "$chid" \
+        --provider-bond "$provider_bond" --owner-key "$rseed" \
+        --object-file "$objf" --chunk-index "$chunk" \
+        --out "$_SL_STAGING/da-response.bin" 2>&1)" \
+        || { printf '%s\n' "$out" >&2; die "'palw-payload da-response' build failed for obligation $oblig_id (see above) — check the object bytes at $objf and chunk_index=$chunk."; }
+    log "DA response: obligation=$oblig_id provider_bond=$provider_bond chunk=$chunk -> inject(--no-wait)+mine 2"
+    _palw_submit da-response "$_SL_STAGING/da-response.bin" --no-wait \
+        || die "'palw-submit --kind da-response --no-wait' failed for obligation $oblig_id. Inspect node A ($(node_log a))."
+    sleep "${DA_INJECT_SETTLE_SECS:-2}"   # settle into node A's mempool before templating
+    _da_mine 2
+    _da_wait_obligation "$oblig_id" satisfied \
+        || die "obligation $oblig_id did not reach 'satisfied' after the da-response — the chunk proof must reconstruct to object_root and land within the response deadline (D+2+200). Verify $objf is the object whose commitment == the leaf's receipt_da_root."
+    log "DA response OK: obligation $oblig_id is 'satisfied'."
+}
+
+# Drive every sampled DA obligation to Satisfied so certificate_allowed passes.
+run_da_challenge_response() {
+    [ "$(state_get PALW_DA_REAL)" = 1 ] || {
+        warn "PALW_DA_REAL != 1: create-lifecycle did NOT build real DA objects, so the leaves carry random receipt_da_roots. The certificate DA-availability gate (empty/unsatisfiable obligation set) can never pass and the certificate BLOB will not be written (algo-4 CertAbsent). Re-run ./create-lifecycle.sh with the DA-real build to mint an ACCEPTED algo-4 block. Skipping the DA challenge/response step."
+        return 0
+    }
+    if [ "$(_batch_field a certificate_blob_present)" = "true" ]; then
+        log "certificate blob already present on node A; DA obligations were satisfied on a prior run. Skipping DA challenge/response (idempotent)."
+        return 0
+    fi
+    local total unsat
+    total="$(_da_obligations a | awk 'END{print NR+0}')"
+    [ "$total" -gt 0 ] || die "PALW_DA_REAL=1 but node A reports ZERO DA obligations for batch $BID8 — register_leaf_obligations needs a BURIED beacon at leaf-chunk time (min_beacon_burial_daa=100). Ensure the DNS beacon was warmed (dns-validator.sh step 6b) and the leaf-chunks were accepted, then re-run. An empty obligation set can never satisfy certificate_allowed."
+    unsat="$(_da_unsatisfied_count)"
+    if [ "$unsat" -eq 0 ]; then
+        log "all $total DA obligation(s) already satisfied; skipping DA challenge/response (idempotent)."
+        return 0
+    fi
+    log "DA-real: $unsat/$total DA obligation(s) need challenge/response before the certificate can clear the DA-availability gate."
+    PROV_A_BOND="$(state_get PROV_A_BOND)"; PROV_B_BOND="$(state_get PROV_B_BOND)"
+    [ -n "$AUD_C_BOND" ] || die "AUD_C_BOND unset — the DA challenger must be an independent, active bond (auditor-c). Run ./register-providers.sh."
+    _da_freeze_miner
+    # Snapshot the obligation list ONCE (ids are stable); process each to Satisfied.
+    # Process substitution (NOT a pipe) keeps the loop in THIS shell so a `die`
+    # inside it aborts the whole run instead of only a subshell.
+    local snapshot; snapshot="$(_da_obligations a)"
+    local oblig_id provider_bond object_root chunk status objf rseed
+    while IFS='|' read -r oblig_id provider_bond object_root chunk status; do
+        [ -n "$oblig_id" ] || continue
+        [ "$status" = "satisfied" ] && { log "obligation $oblig_id already satisfied; skipping."; continue; }
+        objf="$(_da_object_file "$object_root")"
+        rseed="$(_responder_seed "$provider_bond")"
+        CH_ID=""
+        if [ "$status" = "pending" ]; then
+            _da_challenge_obligation "$oblig_id" "$provider_bond"
+        else
+            # Already challenged on a prior partial run: recover the open challenge_id.
+            CH_ID="$(palw_provider_status a "$provider_bond" 2>/dev/null | awk -v r="$object_root" -v c="$chunk" '
+                /^da_challenge:/ { id=""; root=""; ch="";
+                    for (i=1;i<=NF;i++){ if($i~/^id=/)id=substr($i,4); else if($i~/^object_root=/)root=substr($i,13); else if($i~/^chunk=/)ch=substr($i,7) }
+                    if (root==r && ch==c) { print id; exit } }')"
+            _is_hex128 "$CH_ID" || die "obligation $oblig_id is 'challenged' but no matching OPEN da_challenge (object_root=$object_root chunk=$chunk) was found on node A to answer — inspect getPalwState, or wait for the challenge to reappear."
+            log "recovered open challenge_id=$CH_ID for already-challenged obligation $oblig_id."
+        fi
+        _da_respond_obligation "$oblig_id" "$provider_bond" "$rseed" "$objf" "$chunk" "$CH_ID"
+    done < <(printf '%s\n' "$snapshot")
+    # Re-check the authoritative on-chain view before releasing the freeze.
+    unsat="$(_da_unsatisfied_count)"
+    [ "$unsat" -eq 0 ] || die "DA step finished but $unsat obligation(s) are still not 'satisfied' on node A — inspect getPalwState (palw-status --batch-id $BATCH_ID). The certificate DA gate would still fail."
+    _da_resume_miner
+    log "DA step COMPLETE: all $total DA obligation(s) satisfied — certificate_allowed will now pass, so the certificate carrier's blob will be written (algo-4 CertPresent)."
+}
+
+# =============================================================================
 # Run.
 # =============================================================================
 log "STN-011 submit-lifecycle: batch $BATCH_ID (leaves=$LEAFN chunks=$CHUNK_COUNT registration_epoch=$REG_EPOCH) TICKET_MODE=$TICKET_MODE"
@@ -504,6 +717,14 @@ done
 # Full-bundle presence on BOTH nodes before auditing.
 wait_num_ge_both chunks "$CHUNK_COUNT" "all $CHUNK_COUNT chunks registered"
 wait_num_ge_both leaf_blobs "$LEAFN" "all $LEAFN leaf blobs present"
+
+# ---- 3.5 DA challenge/response (DA-real only) -------------------------------
+# Now the leaf-chunks are accepted, register_leaf_obligations has created the
+# sampled DA obligations. Drive each to Satisfied BEFORE the certificate carrier
+# is submitted, so certificate_allowed passes at the carrier's UTXO-acceptance
+# and the certificate BLOB is written (algo-4 CertPresent, not CertAbsent). No-op
+# for the legacy random-root mock (PALW_DA_REAL != 1).
+run_da_challenge_response
 
 # ---- 4. audit-facts -> vote -> certificate -> certificate carrier -----------
 if [ "$(_batch_field a certificate_blob_present)" = "true" ]; then
