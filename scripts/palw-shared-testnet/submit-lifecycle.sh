@@ -346,6 +346,17 @@ _resolve_checked_root() {
     if [ -z "$r" ] && [ -f "$FACTS_FILE" ]; then
         r="$(grep -Eio '"(checked|required|sampled|expected)_leaf_bitmap_root"[[:space:]]*:[[:space:]]*"[0-9a-f]{128}"' "$FACTS_FILE" 2>/dev/null \
              | head -n1 | grep -Eio '[0-9a-f]{128}' | head -n1 || true)"
+        # ALL-PASS fallback: an auditor that checked EVERY leaf commits to the batch's leaf_root.
+        # header-v4 admits ALL-PASS only (passed_leaf_count == leaf_count, rejected root empty), and
+        # consensus does NOT derive-verify the checked root — it is the auditor's own commitment,
+        # cross-checked only for quorum agreement (see consensus verify_batch_certificate). The
+        # manifest leaf_root is the non-fabricated, batch-bound value for "I checked all leaves", so
+        # fall back to it rather than dying. Validated live on devnet-111 (2026-07-25): this is what
+        # lets the auditor vote + certificate land without a manual CHECKED_LEAF_BITMAP_ROOT override.
+        if [ -z "$r" ]; then
+            r="$(grep -Eio '"leaf_root"[[:space:]]*:[[:space:]]*"[0-9a-f]{128}"' "$FACTS_FILE" 2>/dev/null \
+                 | head -n1 | grep -Eio '[0-9a-f]{128}' | head -n1 || true)"
+        fi
     fi
     printf '%s' "$r"
 }

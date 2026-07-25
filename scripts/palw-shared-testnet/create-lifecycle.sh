@@ -389,11 +389,20 @@ do_create() {
     # submit-lifecycle does). Remind the operator on any non-success exit.
     register_cleanup 'if [ "${_LIFECYCLE_OK:-0}" != 1 ]; then warn "create-lifecycle did not finish: the supporting miner remains PAUSED (DAA frozen). Fix the error and re-run; submit-lifecycle resumes the miner and submits within the registration epoch."; fi'
 
-    local d1 d2 rem
+    local d1 d2 rem drift
     d1="$(node_sink_daa a)" || die "could not read node A sink DAA to freeze the epoch (is node A up and synced?)."
     sleep "${FREEZE_SETTLE_SECS:-3}"
     d2="$(node_sink_daa a)" || die "could not re-sample node A sink DAA."
-    [ "$d1" = "$d2" ] || die "DAA is still advancing ($d1 -> $d2) after pausing the supporting miner — another block producer is active. Stop ALL miners and re-run; the registration epoch must be frozen before building the manifest."
+    # An ACTIVE in-process DNS validator (--validator-mode=active) self-produces beacon/attestation
+    # blocks for liveness (~1 block/s), so exact d1==d2 is unattainable once the beacon is up even
+    # with every algo-3 miner paused. A small BOUNDED forward drift is harmless: E is derived from
+    # d2 and the headroom check below guards the epoch boundary. FREEZE_DRIFT_TOLERANCE (default 40,
+    # << the 100-DAA epoch) bounds it. A large/unbounded drift still means a rogue fast producer.
+    # (Validated live on devnet-111, 2026-07-25 — the exact-equality gate could never pass against
+    # a single active validator, which is why the mock mint had never run end-to-end before.)
+    drift=$(( d2 - d1 ))
+    { [ "$drift" -ge 0 ] && [ "$drift" -le "${FREEZE_DRIFT_TOLERANCE:-40}" ]; } \
+        || die "DAA drifted $drift ($d1 -> $d2) beyond FREEZE_DRIFT_TOLERANCE=${FREEZE_DRIFT_TOLERANCE:-40} after pausing the supporting miner — a rogue fast block producer is active (a stray miner or an external mining peer via PALW_CONNECT_PEERS). Stop it and re-run."
 
     E="$(current_epoch "$d2")" || die "could not derive current epoch from sink DAA $d2."
     ACT=$(( E + 8 ))
