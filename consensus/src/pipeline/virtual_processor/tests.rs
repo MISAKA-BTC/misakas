@@ -7136,6 +7136,117 @@ async fn palw_algo4_buried_nullifier_window_recolors_reuse_e2e() {
     tc.shutdown(handles);
 }
 
+/// K5 §15.2/§15.3 across a SINK REORG — the audit-identified missing case: nullifier behavior when the
+/// virtual selected chain SWITCHES forks. The architecture is windowed-and-past-relative by design, so
+/// this test pins BOTH sides of that design honestly:
+///
+/// 1. PRE-MERGE CROSS-FORK REUSE IS ACCEPTED: the same ticket nullifier N is minted on fork A and fork
+///    B (mutual anticone). Each fork's selected chain pays the leaf's providers EXACTLY ONCE — there is
+///    no selected chain along which N is credited twice, which is the actual conservation invariant
+///    (a "global reject" would require the uncommitted global set the shipped header does not have).
+/// 2. THE REORG ITSELF CHANGES NOTHING RETROACTIVELY: per-block windows are immutable; after the sink
+///    switches from fork A to fork B, fork B's stored windows carry N via its own past only.
+/// 3. MERGE-TIME DEDUP FIRES: the first block to merge both forks recolors the losing fork's reuse red
+///    and pays the providers NOTHING — the double-credit dies exactly where the histories join.
+#[tokio::test]
+async fn palw_algo4_sink_reorg_cross_fork_nullifier_replay_e2e() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use crate::model::stores::palw_nullifier::PalwNullifierStoreReader;
+    use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction};
+    let (tc, handles, f) = palw_algo4_env(1).await;
+
+    // Mint BOTH reuses off the same pre-fork parent before inserting either: the ticket is bound to its
+    // target DAA interval (clause 5), so the fork-B reuse must sit at the SAME height as the fork-A one.
+    let x = mint_algo4(&tc, &f, 0xa0, 0, |_| {});
+    let y = mint_algo4(&tc, &f, 0xa1, 1, |_| {});
+    let (x_hash, y_hash) = (x.header.hash, y.header.hash);
+    assert_ne!(x_hash, y_hash);
+
+    // Fork A: X (mints N) + A1 (algo-3, pays the leaf's providers once — the fork-A credit).
+    assert_eq!(
+        tc.validate_and_insert_block(x.to_immutable()).virtual_state_task.await.unwrap(),
+        BlockStatus::StatusUTXOValid,
+        "X (fork A, mints N) is accepted as the sink"
+    );
+    let a1_hash = kaspa_hashes::Hash64::from_bytes([0x11; 64]);
+    let a1 = tc.build_utxo_valid_block_with_parents(a1_hash, vec![x_hash], f.miner.clone(), vec![]);
+    let a1_coinbase = a1.transactions[0].clone();
+    assert_eq!(
+        tc.validate_and_insert_block(a1.to_immutable()).virtual_state_task.await.unwrap(),
+        BlockStatus::StatusUTXOValid,
+        "A1 (fork A chain block) is accepted"
+    );
+    assert!(tc.storage.palw_nullifier_store.get(a1_hash).unwrap().contains(&f.nullifier), "fork A's window carries N");
+
+    // Fork B: Y (REUSES N, anticone of X — accepted: N is not in Y's own past) + B2 + B3. B3's larger
+    // hash wins the flat-blue-work tiebreak, so inserting fork B IS the sink reorg away from fork A.
+    let y_status = tc.validate_and_insert_block(y.to_immutable()).virtual_state_task.await.unwrap();
+    assert!(
+        matches!(y_status, BlockStatus::StatusUTXOValid | BlockStatus::StatusUTXOPendingVerification),
+        "Y (fork B, reuses N in X's anticone) is body-valid and accepted into the DAG — got {y_status:?}"
+    );
+    let b2_hash = kaspa_hashes::Hash64::from_bytes([0xf6; 64]);
+    let b2 = tc.build_utxo_valid_block_with_parents(b2_hash, vec![y_hash], f.miner.clone(), vec![]);
+    let b2_coinbase = b2.transactions[0].clone();
+    assert_eq!(
+        tc.validate_and_insert_block(b2.to_immutable()).virtual_state_task.await.unwrap(),
+        BlockStatus::StatusUTXOValid,
+        "B2 (fork B chain block over Y) is accepted"
+    );
+    let b3_hash = kaspa_hashes::Hash64::from_bytes([0xf7; 64]);
+    let b3 = tc.build_utxo_valid_block_with_parents(b3_hash, vec![b2_hash], f.miner.clone(), vec![]);
+    assert_eq!(
+        tc.validate_and_insert_block(b3.to_immutable()).virtual_state_task.await.unwrap(),
+        BlockStatus::StatusUTXOValid,
+        "B3 (fork B tip) is accepted"
+    );
+    assert_eq!(
+        tc.consensus_clone().get_sink(),
+        b3_hash,
+        "the virtual sink REORGED onto fork B (this is the chain switch under test)"
+    );
+    assert!(
+        tc.storage.palw_nullifier_store.get(b3_hash).unwrap().contains(&f.nullifier),
+        "fork B's window carries N via Y only"
+    );
+
+    // The design pin: EACH fork's selected chain credited the leaf's providers exactly once. The
+    // double-credit exists only across mutually exclusive histories, never along one selected chain.
+    let credited =
+        |cb: &Transaction, s: &ScriptPublicKey| cb.outputs.iter().filter(|o| &o.script_public_key == s).map(|o| o.value).sum::<u64>();
+    assert!(
+        credited(&a1_coinbase, &f.prov_a) > 0 && credited(&a1_coinbase, &f.prov_b) > 0,
+        "fork A credited the providers once (A1)"
+    );
+    assert!(
+        credited(&b2_coinbase, &f.prov_a) > 0 && credited(&b2_coinbase, &f.prov_b) > 0,
+        "fork B credited the providers once (B2) — pre-merge cross-fork reuse is accepted by design"
+    );
+
+    // M merges the two forks (selected parent = the fork-B tip by the same tiebreak). N is active via
+    // window(B3), so the fork-A reuse X is recolored RED where the histories join, and M's coinbase pays
+    // the providers NOTHING — no third credit, no reroute to M's (distinct) miner.
+    let m_miner = MinerData::new(p2pkh_mldsa87_spk(&[0x0d; 64]), vec![]);
+    let m_hash = kaspa_hashes::Hash64::from_bytes([0x0c; 64]);
+    let m = tc.build_utxo_valid_block_with_parents(m_hash, vec![a1_hash, b3_hash], m_miner.clone(), vec![]);
+    let m_coinbase = m.transactions[0].clone();
+    assert_eq!(
+        tc.validate_and_insert_block(m.to_immutable()).virtual_state_task.await.unwrap(),
+        BlockStatus::StatusUTXOValid,
+        "M (merges fork A into the fork-B sink) is accepted"
+    );
+    assert_eq!(tc.ghostdag_store().get_selected_parent(m_hash).unwrap(), b3_hash, "M's selected parent is the fork-B tip");
+    assert!(
+        tc.ghostdag_store().get_mergeset_reds(m_hash).unwrap().contains(&x_hash),
+        "the fork-A reuse X is recolored red at the merge (window-carried N from fork B)"
+    );
+    assert_eq!(credited(&m_coinbase, &f.prov_a), 0, "the merge pays provider A nothing (no third credit)");
+    assert_eq!(credited(&m_coinbase, &f.prov_b), 0, "the merge pays provider B nothing (no third credit)");
+    assert_eq!(credited(&m_coinbase, &m_miner.script_public_key), 0, "the red reuse's base is not rerouted to the merging miner");
+
+    tc.shutdown(handles);
+}
+
 /// K5 §11.3 (active-path halt teeth): the SAME algo-4 block, but with `grace_epochs == 0` so its
 /// epoch-0 beacon is HALTED, is DISQUALIFIED from the chain by the S2 `PalwLaneHalted` rule — while the
 /// permanent algo-3 hash lane keeps validating (a sibling on the same tip reaches a valid UTXO tip).
