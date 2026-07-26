@@ -52,6 +52,16 @@ PALW 用 staging はここで初めて定義する。
 ## Definition of done
 
 - [x] 構成・起動条件・演習項目の確定(本 ADR)
-- [ ] `STAGING_MAINNET_PALW_PARAMS` + `STAGING_PALW_GENESIS` 実装 + preset pin テスト
-- [ ] ceremony 手順書(分配・faucet・鍵)
+- [x] `STAGING_MAINNET_PALW_PARAMS` + `STAGING_PALW_GENESIS` 実装 + preset pin テスト —
+  testnet-200 identity、`version=4` genesis(canonical empty spam accumulator を genesis で finalize;
+  hash/merkle は minted+pinned)、`palw_activation_daa_score=0` / `palw_algo4_accept=false` /
+  `palw_compute_work_scale=0`、`palw_spam=PUBLIC_REGENESIS_CANDIDATE`(初の非 inert preset)、実 PoW
+  (`skip_proof_of_work=false`)、`palw_requires_archival=false` / `palw_requires_peer_allowlist=true`、
+  実物大 finality/pruning(432,000 / 1,080,000)、ADR-0043 の bound は allocation-policy 修正で
+  network 非依存に効くため preset knob 不要。pin テスト: `staging_mainnet_palw_network_selection`、
+  `palw_header_v4_antispam_is_inert_on_every_shipped_preset_except_the_staging_regenesis`、
+  `palw_activated_presets_bound_the_view`(activated = testnet-palw-110/devnet-palw-111/staging-mainnet-palw)、
+  `palw_paid_work_walk_stays_above_the_pruning_point`。consensus-core 全 570 テスト green。
+- [x] ceremony 手順書(分配・faucet・鍵)— `docs/staging-mainnet-genesis-ceremony.md`
+  (鍵 3 役分離 / testnet premine の no-value 分配 / invite-only faucet / 起動→演習列→30-day soak)
 - [ ] 起動 → 演習列の完走 → 30-day public soak(外部)

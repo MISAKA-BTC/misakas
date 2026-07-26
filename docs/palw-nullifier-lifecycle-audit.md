@@ -55,8 +55,8 @@ within and across chain blocks.
 | Set commitment in the header | v3: raw ticket only, set UNCOMMITTED — by design until the Header-v4 re-genesis (`overlay_commitment_root` path exists, inert); do not claim header-committed sets on v3 |
 | Post-retention-window ticket replay | blocked indirectly by the clause-5 target-DAA-interval binding, not by the set — a COUPLING, recorded as such |
 | Job-nullifier replay beyond `paid_work_walk_bound_daa` | **open edge**: outside the bounded walk the reward coordinate cannot see the earlier payment; bound sizing vs batch lifecycle needs an explicit parameter argument before any public/value activation |
-| Prune-then-replay integration test | **missing**: frontier import consistency is unit-tested, but no integration test moves a real pruning point and replays an in-window nullifier; needs a long-chain harness |
+| Prune-then-replay integration test | **CLOSED** (ADR-0044): `palw_full_lifecycle_prune_then_replay_e2e` (`consensus/src/pipeline/pruning_processor/palw_lifecycle_e2e.rs`) builds a real batch lifecycle through block acceptance, moves a REAL pruning point, and asserts: pruned per-block windows deleted; the retained window carries the pre-pass ticket across the frontier; a same-height reuse-merger's RED coloring survives the pass; the clause-5 target interval buried below the pp makes a windowed replay locally unreconstructable; retention-exit; and G16 paid-work carry. Building through acceptance (hand-seeding forbidden) surfaced three latent snapshot-writer version/dup defects that would have wedged the pruning point on an activated chain — fixed in the same change. |
 | Whole lane dormant on shipped presets | `palw_algo4_accept = false` everywhere; every path above executes only with the lever forced open (tests) — activation is a re-genesis-scale decision |
 
-The last three rows are the honest residue: two need engineering (a parameter argument and a
-pruning harness), one is governance. Everything else is design-working-as-intended with tests.
+The remaining residue: one needs engineering (the job-nullifier bound-sizing parameter argument), one
+is governance (lane dormancy). Everything else is design-working-as-intended with tests.

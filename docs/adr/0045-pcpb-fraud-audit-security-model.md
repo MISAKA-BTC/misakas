@@ -75,7 +75,18 @@ bond slash 経路の e2e が green であることを前提条件とする。** 
 
 ## Definition of done
 
-- [ ] SS-04: `next(FraudEvidence)` を非遡及に修正(fenced、テスト付き)
-- [ ] 本 ADR の表(D2)を `docs/security-model.md` に反映(qwen-8.0 側)
-- [ ] beacon seed 履歴 store の設計メモ(D3-a)
-- [ ] G13 withhold/reorg e2e を ADR-0044 harness に追加
+- [x] SS-04: `next(FraudEvidence)` を非遡及に修正(fenced、テスト付き)— 244deae、
+  `palw_batch_referenceable` が `revoked_from_daa` 由来 bool のみを時間座標とし `Revoked` を
+  非遡及ラベル化; test `revoked_batch_is_referenceable_non_retroactively`
+- [x] 本 ADR の表(D2)を `docs/security-model.md` に反映(qwen-8.0 側)— "Consensus 側の三本柱"
+  節を追加、Revoked 非遡及と「単一 Receipt は独立証明でない」の双方向参照を固定
+- [x] beacon seed 履歴 store の設計メモ(D3-a)— node `docs/palw-beacon-seed-history-design.md`
+  (bounded per-epoch `PalwBeaconSeedHistory`、writer=epoch 境界 commit、保持窓=lifecycle 全長、
+  pruning snapshot carry、fail-closed 読み出し;ADR-0044 の version/dup 教訓を明記)
+- [x] G13 withhold/reorg e2e を ADR-0044 harness に追加 — **withhold** 次元を実装
+  (`palw_full_lifecycle_prune_then_replay_e2e`: quorum 不足 cert(1/3 票 < 2/3 stake、withholding は
+  slate 全体を分母に算入)が acceptance の attestation gate で store に到達せず拒否される — live-devnet
+  CertAbsent 根因の再現)。**reorg** 次元は権威座標(accepted-lifecycle/reward)の cross-fork 挙動が
+  既存 `palw_algo4_sink_reorg_cross_fork_nullifier_replay_e2e` で pin 済みであり、v3 body-stage view の
+  `cert_hash` は非権威(CERT-TRUST: `apply_certificate` は検証しない)ため本 harness の surface では
+  健全に表現できない旨を test コメントに記録

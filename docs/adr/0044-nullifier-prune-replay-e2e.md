@@ -56,7 +56,39 @@ ADR-0042 の 1c fixture と本 ADR の prune-then-replay E2E の両方を載せ�
 
 ## Definition of done
 
-- [ ] long-chain harness(縮小 params、full-lifecycle、実 pruning pass)
-- [ ] prune-then-replay E2E(ticket 窓内 red 化 / 窓外仕様 / G16 不変)green
-- [ ] ADR-0042 1c fixture green(同 harness)
-- [ ] `docs/palw-nullifier-lifecycle-audit.md` の missing 項を Closed に更新
+- [x] long-chain harness(縮小 params、full-lifecycle、実 pruning pass)—
+  `consensus/src/pipeline/pruning_processor/palw_lifecycle_e2e.rs`、
+  `palw_full_lifecycle_prune_then_replay_e2e`。実 batch lifecycle を bond→manifest→beacon commit/reveal→
+  DNS 確認→leaf-chunk→DA challenge/response(Satisfied)→attested cert→algo-4 mint→支払い を
+  **全てブロック受理経路**で構築し、plain block を pruning depth 超まで積んで**実 pruning pass**を発火。
+- [x] prune-then-replay E2E(ticket 窓内 red 化 / 窓外仕様 / G16 不変)green
+  - **重要な構造的事実(実測):** pruning point は `sink − pruning_depth` を追い、初回前進は
+    ~`0.9·pruning_depth` へ一気に飛ぶ。`walk_bound < pruning_depth`(preset pin)ゆえ **batch 窓全体が
+    必ず初回 pp より下**に来る = pp 上位で mint することは原理的に不可能。よって全 mint は pruned。
+  - (1) pruned 領域の per-block nullifier 行消滅 + pp 直上行の窓が pruned 領域を跨いで両 ticket を保持。
+  - (2a) PRE-PASS baseline: reuse-merger が同高さ再利用を **red 化**(実 mint ticket 上での機構実証)。
+    (2b) POST-PASS survivor: 全 mint が pruned のため red-catch を担うのは **frontier**(= pp の
+    persisted window)。両 mint nullifier を retention 内で保持し、join ノードの再 import が再利用を
+    red 化できる。recolor コードパスは pre-pruning nullifier e2e が既に pin 済み。
+  - (3) clause-5 coupling: W の target interval が pp 以下に埋没し、SP の窓も消滅 = 窓内 replay は
+    局所的に再構成不能(再入は frontier import のみ)。
+  - (4) retention 超で nullifier は全 live 窓から退出(spec、新規 ticket 扱い)。
+  - (5) G16: bounded walk の below-boundary paid-work 行が pruning snapshot に持ち越し。
+  - **G13 withhold(ADR-0045):** quorum 不足 cert(1/3 票 < 2/3 stake)が acceptance の attestation
+    gate で store に到達せず拒否(live-devnet CertAbsent 根因の再現)。
+- [x] ADR-0042 1c fixture green(同 harness)— `palw_pruning_payload_paid_work_nullifiers ==
+  palw_paid_work_window(pp)` かつ `palw_pruning_payload_da_state_root ==
+  palw_da_parent_state(pp).state_root()` を lifecycle-coherent chain の実 pruning point 上で assert。
+- [x] `docs/palw-nullifier-lifecycle-audit.md` の missing 項を Closed に更新
+
+## harness が発見した production 欠陥(hand-seed 禁止でのみ露見)
+
+受理経路構築を強制した結果、pruning snapshot writer の coherence 契約に対する **3 件の潜在バグ**を
+検出・修正した(いずれも activated chain で pruning point を恒久停止させうる):
+
+1. body-fold の overlay view が `Default`(version 0)で seed され、snapshot writer の
+   "overlay-view version" 検査を落としていた → `PalwBatchViewV1::new()`(version 1)に修正。
+2. paid-work builder が `once(pruning_point).chain(backward_iter)` で pruning point 行を二重計上し、
+   dup-block 検査を落としていた → backward iterator は始点 inclusive なので `once` を除去。
+3. beacon accumulator 行が `Default`(version 0)で生成され、"beacon accumulator rows" 検査を
+   落としていた → `PalwBeaconEpochAccumV1::new()`(version 1)に修正。

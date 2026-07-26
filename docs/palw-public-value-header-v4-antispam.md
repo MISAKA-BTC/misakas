@@ -236,12 +236,25 @@ threshold to freeze. After 32 warmups, total batch operations were min/median/p9
 `split_exponential` consumes the complete child capacity, so the next sibling reindexes again. The
 per-header write bound is therefore O(nodes in the reindexed reachability subtree), not constant.
 Changing that bound requires a reviewed reachability/allocation redesign or a consensus-validity
-sibling bound. Public/value activation is **StopShip** until such a design is selected, independently
-reviewed, and remeasured; the G6 gate itself remains **Measurement**.
+sibling bound. (Historical: this paragraph recorded the pre-remediation state.)
 
-The report intentionally emits `gate.status = "Measurement"` and `gate.thresholds = null`. A passing
-harness proves the measured path and rejection ordering; it does not choose acceptable limits, replace
-slow-hardware and multi-node flood/soak runs, or authorize a public/value deployment.
+**2026-07-27 re-measurement with the ADR-0043 (A) bounded allocator** (`split_exponential_with_reserve`
+trailing re-tile reserve + the harmonic flood-regime insertion policy in `add_tree_block`, threshold
+64): the identical 1,000-valid-sibling flood on the same M1 Max now measures total batch operations
+min/median/p95/p99/max **16/16/16/16/79**, reachability operations **2/2/2/2/65**, distinct
+reachability-data writes **1/1/1/1/64**, non-reachability flat at 14 (15 max). Per-header cost is
+CONSTANT at p99; the single max spike (79/65/64) is the ONE re-tile event at the 64-sibling threshold
+crossing — the amortized-O(1) contract of ADR-0043 §Amendment, observed. The sibling flood no longer
+externalizes super-linear reachability writes: the attacker's stamp spend and the network's write cost
+are now a constant ratio. The G6 gate moves **Measurement → Bounded**. Threshold freeze (the stamp
+ramp values and any residual limits) still requires the multi-machine serial/concurrent flood and
+long-soak runs plus independent review — those remain external, and public/value activation remains
+gated on them.
+
+The report emits `gate.status = "Bounded"` and `gate.thresholds = null`. A passing harness proves the
+measured path, the rejection ordering, and the bounded per-header write profile; it does not choose
+acceptable limits, replace slow-hardware and multi-node flood/soak runs, or authorize a public/value
+deployment.
 
 ### 4.2 DA Object V2 boundary
 

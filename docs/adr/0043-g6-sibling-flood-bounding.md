@@ -1,7 +1,8 @@
 # ADR-0043 — G6 valid-sibling flood の bounded 化: consensus-validity sibling bound を採用する
 
-- **Status:** Accepted(設計方針の確定。閾値の凍結は多機実測後 — §Consequences)
-- **Date:** 2026-07-26
+- **Status:** Amended 2026-07-26 — **当初の (B) sibling-count validity rule は soundness 検証で棄却**し、
+  (A) per-header reindex-cost bound を正とする(§Amendment を参照)。閾値凍結は多機実測後
+- **Date:** 2026-07-26 (amended same day)
 - **Supersedes / amends:** `docs/palw-public-value-header-v4-antispam.md` §G6(measurement-only)を
   設計決定で補完。ADR-0040 §remediation の G6 記述を実装方針に落とす
 - **Consumes:** ADR-0041(public/value mainnet の StopShip 解除条件)
@@ -58,9 +59,68 @@ sampled-window ratio 方式は gameable として既に**棄却済み**(ADR-0040
 - fork-choice・GHOSTDAG の性質(k-cluster 等)は不変 — 上限は受理前のヘッダ検証で、
   受理後の色付け規則には触れない。
 
-## Definition of done
+## Amendment (2026-07-27) — (B) は unsound、(A) per-header reindex-cost bound を正とする
 
-- [ ] `MAX_DIRECT_CHILDREN_PER_PARENT` ヘッダ検証規則(v4 gated)+ RuleError + 単体テスト
-- [ ] g6_measurement harness を「規則あり」で再実行し p99 書き込みが bounded であることを確認
+### なぜ (B) sibling-count validity rule を棄却したか(soundness)
+
+ヘッダ有効性規則は「**ヘッダ自身とその committed past cone の決定的関数**」でなければならない。
+`MAX_DIRECT_CHILDREN_PER_PARENT` はこれを満たさない — 「親 P が既に k 個の受理済み direct child を
+持つ」は P の **children 集合 = H の anticone** の性質であり、H の past cone のどこにも commit
+されていない。帰結は三つ、いずれも致命的:
+
+1. **到着順分岐 → 恒久 split。** ノード X が c₁..c₆₄ を先に見て c₆₅ を拒否し、ノード Y が c₆₅ を
+   先に見て別の子を拒否すると、両者は同一ヘッダの有効性で恒久に不一致になる(ヘッダ有効性は
+   `StatusInvalid` としてキャッシュされ再評価されない)。c₆₅ の上に積まれた全ブロックが片側でのみ
+   valid になり、これは fork ではなく **view split**(合意の定義不能)である。
+2. **hash 順で決定化しても単調性が壊れる。**「hash 最小の 64 個が勝つ」等の順序無依存化は、後着の
+   low-hash sibling が**既に valid とされたヘッダを遡及的に invalid 化**することを要求する。
+   pipeline は validity の取り消しを表現できない(reachability/GHOSTDAG データは受理時に確定済み)し、
+   仮に表現できても low-hash 子を withhold して後出しする grind 攻撃に、正直ノードの中間ブロックを
+   まとめて無効化する新しい攻撃面を渡すだけである。
+3. **IBD で再導出不能。** 歴史同期ノードは 64 個超の children 集合を一括で観測する。どの部分集合が
+   「当時受理可能だったか」は元の到着順の関数だが、到着順は chain に記録されない。
+
+(ADR-0040:1325-1329 が sampled-window ratio を棄却した理由と同族 — 観測値が到着/配置順に依存する
+規則は consensus に置けない。)
+
+### (A) の実体 — consensus 規則ではなく allocation policy
+
+コスト増幅の機構は §Context の通り: (i) `split_exponential` が re-tile 時に親の子容量を**使い切り**
+trailing 余白がゼロになるため、次の sibling が**即座に**次の reindex を誘発する; (ii) 通常挿入は
+`remaining.split_half()` で余白を半減させるため、余白は log₂ 回しか挿入を吸収しない。
+
+reachability interval の layout は**ノードローカルで非合意対象**(header に commit されず、既に
+到着順依存)であるため、割当 policy の変更は **hard fork ではなく、v4 gate も不要で、全ネットに
+適用できる**。修正は二点:
+
+1. **re-tile 時の trailing reserve。** `propagate_interval`/re-tile の子割当を
+   「Σsubtree + surplus/2」までに留め、surplus の半分を trailing 余白として残す
+   (各子は自 subtree サイズ以上を保証されたまま)。現行は surplus/2 = 0 なので次 sibling が
+   即 reindex — reserve があれば次の re-tile までの挿入回数が挿入列に対して超幾何に伸びる。
+2. **flood-regime の挿入割当。** 親の children 数 n が `SIBLING_FLOOD_ALLOC_THRESHOLD`(64 —
+   正直な並行幅の数倍)を超えたら、新規子の割当を `remaining/2` から `remaining/(2n)`(最小 1)に
+   切り替える。調和級数的消費により、reserve R は ~log(R) 回ではなく実質無制限
+   (R·√(n/k) < 2k まで、R≈2^60 で天文学的)の挿入を吸収する。正直なトポロジ(n ≤ 数十)は
+   従来の split_half のまま。
+
+### 保証(honest)
+
+- happy path の per-header reachability 書き込み = O(1) 行(現行と同じ)。
+- 同一親 sibling flood に対し: 最初の re-tile 後、reserve+調和割当により追加 re-tile は実質発生せず、
+  **ネットワークの総書き込みは受理ヘッダ数に線形**(amortized O(1)/header)。攻撃者の stamp 支払いと
+  防御側コストが定数比になり、G6 の「支払いは有限・externalized コストは超線形」という非対称が消える。
+- 残る単発最悪ケース: 深い subtree flood が祖先 re-tile を誘発した場合の O(reindex される subtree)
+  1 回分 — 発生間隔が幾何級数以上に伸びるため amortize され、dynamic-array と同型の契約。
+  これは (B) でも消えなかった(bound 内 reindex は許容されていた)。
+- fork-choice/GHOSTDAG/ヘッダ有効性は**一切不変**。stamp ramp は従来どおり併存(§Decision 3)。
+
+## Definition of done(amended)
+
+- [x] 割当 policy 実装: re-tile trailing reserve + flood-regime 挿入割当(`interval.rs`/`reindex.rs`/
+  `tree.rs`)+ reachability 不変量の単体テスト(既存 property tests green、15/15)
+- [x] g6_measurement harness を「bounded allocator あり」で再実行し、1,000-sibling flood の
+  per-header 書き込みが O(1)(p99 ≈ 定数)であることを確認 — 2026-07-27 M1 Max: total ops p99
+  1,037 → **16**、reachability ops p99 1,023 → **2**、data writes p99 → **1**(max 79/65/64 は
+  64-閾値交差時の単発 re-tile)。gate: Measurement → **Bounded**
 - [ ] 多機実測(serial/concurrent flood、long-soak)→ 閾値凍結(外部)
 - [ ] 独立レビュー(外部)
