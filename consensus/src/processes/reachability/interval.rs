@@ -146,6 +146,27 @@ impl Interval {
         self.split_exact(biased_sizes.as_slice())
     }
 
+    /// ADR-0043 (A) — [`Self::split_exponential`], but distributing only HALF of the surplus and
+    /// leaving the other half as an UNALLOCATED TRAILING RESERVE of the parent's child capacity.
+    ///
+    /// `split_exponential` consumes the full capacity, so after any re-tile the parent's
+    /// `interval_remaining_after` is empty and the very next sibling insertion triggers the next
+    /// reindex — that zero-reserve behavior is the G6 flood amplifier (each of N siblings costs an
+    /// O(N) subtree rewrite). Reserving half the surplus keeps every child's allocation ≥ its
+    /// subtree size (the correctness requirement) while giving the parent trailing headroom, so
+    /// re-tiles under a flooded parent space out super-geometrically instead of firing per header.
+    ///
+    /// The returned intervals tile the PREFIX `[start, start + sum(sizes) + surplus/2)`; the
+    /// trailing gap up to `end` stays free — exactly where `interval_remaining_after` looks for it.
+    pub fn split_exponential_with_reserve(&self, sizes: &[u64]) -> Vec<Self> {
+        let interval_size = self.size();
+        let sizes_sum = sizes.iter().sum::<u64>();
+        assert!(interval_size >= sizes_sum, "interval's size must be greater than or equal to sum of sizes");
+        assert!(sizes_sum > 0, "cannot split to 0 parts");
+        let distributed = (interval_size - sizes_sum) / 2;
+        Self::new(self.start, self.start + sizes_sum + distributed - 1).split_exponential(sizes)
+    }
+
     pub fn contains(&self, other: Self) -> bool {
         self.start <= other.start && other.end <= self.end
     }
@@ -179,6 +200,30 @@ fn exponential_fractions(sizes: &[u64]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-0043 (A): the reserve split keeps every child at least its size, tiles a prefix, and
+    /// leaves ~half the surplus as a trailing gap (the anti-flood headroom).
+    #[test]
+    fn test_split_exponential_with_reserve_leaves_trailing_gap() {
+        let capacity = Interval::new(1, 100);
+        let sizes = [1u64, 1, 1];
+        let parts = capacity.split_exponential_with_reserve(&sizes);
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].start, capacity.start, "the prefix starts at capacity start");
+        for (p, s) in parts.iter().zip(sizes) {
+            assert!(p.size() >= s, "every child keeps at least its subtree size");
+            assert!(capacity.contains(*p));
+        }
+        for w in parts.windows(2) {
+            assert_eq!(w[0].end + 1, w[1].start, "children tile contiguously");
+        }
+        let surplus = capacity.size() - sizes.iter().sum::<u64>();
+        let reserve = capacity.end - parts.last().unwrap().end;
+        assert_eq!(reserve, surplus - surplus / 2, "half the surplus stays as the trailing reserve");
+        // Zero surplus degrades to the exact split with no reserve — same contract as split_exponential.
+        let exact = Interval::new(1, 3).split_exponential_with_reserve(&sizes);
+        assert_eq!(exact.last().unwrap().end, 3);
+    }
 
     #[test]
     fn test_interval_basics() {

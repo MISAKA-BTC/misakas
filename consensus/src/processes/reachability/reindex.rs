@@ -164,7 +164,9 @@ impl<'a, T: ReachabilityStore + ?Sized> ReindexOperationContext<'a, T> {
             if !children.is_empty() {
                 let sizes: Vec<u64> = children.iter().map(|c| self.subtree_sizes[c]).collect();
                 let interval = self.store.interval_children_capacity(current)?;
-                let intervals = interval.split_exponential(&sizes);
+                // ADR-0043 (A): re-tiles keep a trailing reserve, so the next sibling insertion under
+                // a flooded parent does NOT immediately re-trigger reindexing (the G6 amplifier).
+                let intervals = interval.split_exponential_with_reserve(&sizes);
                 for (c, ci) in children.iter().copied().zip(intervals) {
                     self.store.set_interval(c, ci)?;
                 }
