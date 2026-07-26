@@ -1630,8 +1630,19 @@ pub const DEVNET_PALW_PARAMS: Params = Params {
     genesis: crate::config::genesis::DEVNET_PALW_GENESIS,
     dns_seeders: &[],
     palw_activation_daa_score: 0,
-    palw_algo4_accept: false,           // ADR-0040 P0-3 — released only per §7.1.1 gate classes
-    palw_requires_archival: true,       // ADR-0040 P1-13: Header-v3 import is closed-network-only
+    palw_algo4_accept: false, // ADR-0040 P0-3 — released only per §7.1.1 gate classes
+    // ADR-0040 P1-13 originally forced --archival here because trustless PALW pruned-IBD import
+    // does not exist. But per-block PALW validation NEVER reads below the pruning point (the DA /
+    // search / beacon recurrences resolve through the selected parent, the paid-work walk is
+    // bounded above it, and the boundary state is carried by the pruning snapshots), and a fresh
+    // node trying to LATE-JOIN past the pruning point still fails closed at IBD
+    // (`palw_pruning_target_is_unsupported`) — the coordinate where that limitation belongs. On
+    // this iteration devnet the archival mandate only bought unbounded disk growth (observed
+    // ~360 MB -> 1.2 GB in 14 h at 1 BPS, dominated by never-pruned block/tx data including the
+    // validator's per-epoch ML-DSA attestation traffic). Devnet nodes may now prune; operators
+    // who need full history or pruned-IBD serving opt back in with --archival. The shared
+    // testnet-110 preset keeps the archival mandate unchanged.
+    palw_requires_archival: false,
     palw_requires_peer_allowlist: true, // ADR-0040 §T-shared: closed = unreachable, not unadvertised
     palw_lane_difficulty: DEVNET_PALW_LANE_DIFFICULTY,
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
@@ -1643,6 +1654,22 @@ pub const DEVNET_PALW_PARAMS: Params = Params {
     min_difficulty_window_size: DIFFICULTY_SAMPLED_WINDOW_SIZE as usize,
     // Small DNS anchor windows so a finality-buried v3 anchor resolves on a short chain (Stage 5).
     dns_params: Some(DEVNET_PALW_DNS_PARAMS),
+    // Devnet-scale retention. The inherited 10-BPS constants put pruning_depth at
+    // 1,080,000 blue-score units — at this devnet's REAL ~1 block/s that is ~12 days
+    // before the pruning point moves AT ALL, so "pruning enabled" would still mean
+    // unbounded growth for any realistic soak. 7,200 / 21,600 (~2 h / ~6 h at 1 BPS)
+    // bound the retained window to a few hundred MB while staying far above every
+    // PALW validation window (DA retention 2,000; challenge deadline D+202; beacon
+    // burial 100; batch admission ≈ 20 epochs = 2,000; the paid-work walk bound —
+    // `palw_admission_windows_fit_the_pruning_depth` still asserts that relation).
+    // The theoretical 10-BPS anticone lower bound does not bind a closed 1-BPS
+    // two-node mesh with width-1 chains.
+    blockrate: {
+        let mut b = BlockrateParams::new::<10>();
+        b.finality_depth = 7_200;
+        b.pruning_depth = 21_600;
+        b
+    },
     ..DEVNET_PARAMS
 };
 

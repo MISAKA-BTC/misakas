@@ -78,6 +78,15 @@ fn heartbeat_interval_secs() -> u64 {
 /// downtime. Bounds per-tick work + fees; a deeper backlog converges over several ticks.
 const ATTESTATION_CATCH_UP_LIMIT: usize = 16;
 
+/// Signed-epoch (equivocation-log) retention, in attestation epochs. Records older than
+/// this below the newest signed epoch are pruned from `validator-state.json` after each
+/// sign. Must comfortably exceed every window from which an old epoch could be re-offered
+/// for signing — the node's ready/scoring window is a few hundred epochs and the per-tick
+/// catch-up walks forward only — so 2048 (> 5x that window) keeps the equivocation
+/// guarantee intact while bounding the file (~2k records) instead of letting it grow one
+/// record per epoch forever with a full rewrite per sign.
+const SIGNED_EPOCH_RETENTION_EPOCHS: u64 = 2048;
+
 /// Bounded paginated scan of the virtual UTXO set when locating a funding UTXO at the
 /// validator's address. This is a full-set scan (NOT address-indexed); the utxoindex is
 /// the production optimization. Caps keep a large UTXO set from stalling the heartbeat.
@@ -1027,9 +1036,19 @@ impl ValidatorService {
                 // Persist BEFORE submission. If the flush fails, do not advance — retrying
                 // next tick is safe, but submitting without a durable record is not.
                 let record = SignedEpochRecord { signature_fingerprint: signature_fingerprint(&signature), ..candidate };
+                let signed_epoch = record.epoch;
                 if let Err(e) = store.record_and_flush(record) {
                     warn!("[{VALIDATOR}] failed to persist signed-epoch record (not advancing): {e}");
                     return None;
+                }
+                // Bound the equivocation log (same discipline as the beacon-secret store's
+                // prune_through). Records this far below the newest signed epoch can no
+                // longer be re-offered — the ready window the scheduler walks is a few
+                // hundred epochs — so dropping them preserves the safety property while
+                // keeping validator-state.json O(retention) instead of O(lifetime).
+                // Best-effort: a failed prune only delays compaction, never blocks signing.
+                if let Err(e) = store.prune_through(signed_epoch.saturating_sub(SIGNED_EPOCH_RETENTION_EPOCHS)) {
+                    warn!("[{VALIDATOR}] cannot prune signed-epoch records: {e}");
                 }
                 Some(tx)
             }

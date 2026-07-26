@@ -163,7 +163,15 @@ ARGS=()
 add_arg "$NET_FLAG"
 add_arg "--netsuffix=$NETSUFFIX"
 add_arg "--appdir=$(node_appdir "$NODE")"
-add_arg "--archival"
+# Archival is now OPT-IN (PALW_ARCHIVAL=1): with it, NOTHING is ever pruned and the
+# datadir grows without bound (~1.2 GB / 14 h observed at 1 BPS — mostly block/tx
+# data incl. the validator's per-epoch ML-DSA attestation traffic). devnet-palw-111
+# no longer mandates archival; per-block PALW validation never reads below the
+# pruning point, and a pruned late-join still fails closed at IBD where it should.
+# --yes: a datadir that RAN archival before asks an interactive "may delete
+# archived data, confirm?" on the first non-archival start; this harness is
+# headless and that deletion (pruning the backlog) is exactly the intent.
+if [ "${PALW_ARCHIVAL:-0}" = 1 ]; then add_arg "--archival"; else add_arg "--yes"; fi
 add_arg "--utxoindex"
 add_arg "--listen=0.0.0.0:$A_P2P_PORT"
 add_arg "--rpclisten=$RPC_BIND:$A_GRPC_PORT"

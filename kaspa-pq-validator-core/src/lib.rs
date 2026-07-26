@@ -1058,6 +1058,30 @@ impl SignedEpochStore {
     /// [`Self::check`] returned [`SignedEpochCheckOutcome::Allow`].
     pub fn record_and_flush(&mut self, record: SignedEpochRecord) -> Result<(), String> {
         self.records.insert(record.epoch, record);
+        self.flush()
+    }
+
+    /// Drop every signing record for epochs `<= through_epoch` and flush (only when
+    /// something was actually dropped). Keeps `validator-state.json` bounded — without
+    /// this the log grows one record per attestation epoch forever AND, because every
+    /// sign rewrites the whole file, write amplification is O(lifetime) too.
+    ///
+    /// SAFETY (this log exists for ADR-0011 equivocation protection): a record for epoch
+    /// E only matters while E can still be (re-)offered for signing; the attestation
+    /// scheduler walks ready epochs forward within a bounded window, so records far
+    /// enough below the newest signed epoch are unreachable. The caller must pass a
+    /// horizon comfortably below the current epoch (at least one full ready window).
+    /// The NEWEST record is never dropped regardless of the horizon: `last_signed_epoch`
+    /// is the restart-safe forward cursor and must survive any prune.
+    pub fn prune_through(&mut self, through_epoch: u64) -> Result<(), String> {
+        let Some(&newest) = self.records.keys().next_back() else { return Ok(()) };
+        let cut = through_epoch.min(newest.saturating_sub(1));
+        let before = self.records.len();
+        self.records.retain(|epoch, _| *epoch > cut);
+        if self.records.len() != before { self.flush() } else { Ok(()) }
+    }
+
+    fn flush(&self) -> Result<(), String> {
         let file = SignedEpochFile {
             version: SIGNED_EPOCH_FILE_VERSION,
             validator_id: self.validator_id,

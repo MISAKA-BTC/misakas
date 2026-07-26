@@ -736,6 +736,23 @@ impl PruningProcessor {
 
         info!("Header and Block pruning: waiting for consensus write permissions...");
 
+        // kaspa-pq (PALW DA + node-anchored search): the per-block DA and
+        // search-availability stores use a full-row + link scheme — an idle block
+        // stores a 64-byte link pointing DIRECTLY at the block owning the last full
+        // row (its "anchor"). Anchors are monotone along a selected chain, so for
+        // any LIVE block L above the pruning point, anchor(L) is either above the
+        // pruning point too, or — when the state has not changed since before the
+        // boundary — exactly the PRUNING POINT'S OWN anchor; no other below-boundary
+        // full row can be referenced from above. Deleting that one row would dangle
+        // every live link onto it, and the resolution path treats a dangling link as
+        // a commit-fail-stop. So the walk below deletes these rows for every pruned
+        // block EXCEPT each store's current boundary anchor. The skipped row is at
+        // most one per store per pass and stops being referenced after the store's
+        // next state change — a bounded remainder, not a leak.
+        let palw_da_boundary_anchor = self.palw_da_store.read().state_and_anchor(new_pruning_point).ok().map(|(_, anchor)| anchor);
+        let palw_search_boundary_anchor =
+            self.palw_search_availability_store.read().state_and_anchor(new_pruning_point).ok().map(|(_, anchor)| anchor);
+
         let mut prune_guard = self.pruning_lock.blocking_write();
 
         info!("Starting Header and Block pruning...");
@@ -929,6 +946,18 @@ impl PruningProcessor {
                 // Block-keyed like the nullifier set (view(B)=view(SP(B))⊕Δ(mergeset(B)) reads only the
                 // immediate selected parent), so pruning deep blocks never breaks it. No-op while inert.
                 self.palw_overlay_view_store.delete_batch(&mut batch, current).unwrap();
+                // kaspa-pq (PALW DA + node-anchored search): prune the per-block carried DA state and
+                // search-availability rows (full rows AND their 64-byte links). These were the last
+                // per-block PALW stores missing from this walk — on a fence-0 preset they are written
+                // for EVERY block and had no deletion path anywhere. Each store's current boundary
+                // anchor is skipped; see the anchor computation above the walk for why deleting it
+                // would dangle live links and fail-stop the overlay resolution path.
+                if palw_da_boundary_anchor != Some(current) {
+                    self.palw_da_store.write().delete_state_batch(&mut batch, current).unwrap();
+                }
+                if palw_search_boundary_anchor != Some(current) {
+                    self.palw_search_availability_store.write().delete_state_batch(&mut batch, current).unwrap();
+                }
                 // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): prune the per-block
                 // validator quality sub-pool sibling. A no-op while inert (no row).
                 // The per-epoch `epoch_accumulator_store` is keyed by epoch (not
