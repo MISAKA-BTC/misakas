@@ -2359,7 +2359,7 @@ impl VirtualStateProcessor {
     /// Load the exact selected-parent DA state. Once PALW is active, absence anywhere except the
     /// genesis/pre-activation boundary is a local consistency fault; defaulting there would let two
     /// nodes apply the same challenge against different histories.
-    pub(super) fn palw_da_parent_state(
+    pub(crate) fn palw_da_parent_state(
         &self,
         selected_parent: BlockHash,
         current_daa_score: u64,
@@ -5295,7 +5295,7 @@ impl VirtualStateProcessor {
     /// pruning point sees a short prefix. `palw_paid_work_walk_stays_above_the_pruning_point` pins the
     /// parameter relation that keeps this to the bootstrap band only; closing the band itself is an
     /// activation-blocking item, not something a comment covers.
-    pub(super) fn palw_paid_work_window(&self, anchor: BlockHash, anchor_daa: u64) -> std::collections::HashSet<Hash64> {
+    pub(crate) fn palw_paid_work_window(&self, anchor: BlockHash, anchor_daa: u64) -> std::collections::HashSet<Hash64> {
         let mut paid = std::collections::HashSet::new();
         if self.palw_activation_daa_score == u64::MAX {
             return paid; // inert fast path — no algo-4 source can be accepted, so nothing was ever paid
@@ -7625,8 +7625,11 @@ impl VirtualStateProcessor {
 
         let mut paid_work = Vec::new();
         if active {
-            for block in std::iter::once(pruning_point).chain(self.reachability_service.default_backward_chain_iterator(pruning_point))
-            {
+            // `default_backward_chain_iterator` yields its start INCLUSIVELY — a prepended
+            // `once(pruning_point)` double-counted the pruning point's own row, which the snapshot
+            // writer's dup-block coherence check then rejected on every capture (the second
+            // pruning-point-pinning defect found by the ADR-0044 long-chain harness).
+            for block in self.reachability_service.default_backward_chain_iterator(pruning_point) {
                 let block_daa_score = self
                     .headers_store
                     .get_daa_score(block)

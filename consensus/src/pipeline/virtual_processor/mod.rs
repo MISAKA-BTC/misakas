@@ -5,4 +5,4 @@ mod utxo_validation;
 pub use processor::*;
 pub mod test_block_builder;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

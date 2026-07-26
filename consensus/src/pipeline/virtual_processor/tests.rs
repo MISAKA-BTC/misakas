@@ -3494,7 +3494,7 @@ async fn header_with_unknown_pow_algo_id_is_rejected() {
 // (so a full reward-bearing chain validates) is the next harness step (DAG-2).
 // ============================================================================
 #[cfg(test)]
-mod dns_harness {
+pub(crate) mod dns_harness {
     use kaspa_consensus_core::{
         Hash64,
         dns_finality::{
@@ -3517,13 +3517,13 @@ mod dns_harness {
 
     /// A test validator: an ML-DSA-87 key (re-derived deterministically from
     /// `seed`) plus its 2592-byte pubkey and overlay `validator_id`.
-    pub(super) struct HarnessValidator {
+    pub(crate) struct HarnessValidator {
         pub seed: [u8; 32],
         pub pubkey: Vec<u8>,
         pub validator_id: Hash64,
     }
 
-    pub(super) fn harness_validator(seed: [u8; 32]) -> HarnessValidator {
+    pub(crate) fn harness_validator(seed: [u8; 32]) -> HarnessValidator {
         let kp = mldsa::generate_key_pair(seed);
         let pubkey = kp.verification_key.as_ref().to_vec();
         let validator_id = validator_id_from_pubkey(&pubkey);
@@ -3569,7 +3569,7 @@ mod dns_harness {
     /// — the exact 64-byte digest `OpCheckSigMlDsa87` recomputes — so the block
     /// validates through the full script engine (construction == validation).
     /// Returns `(signed tx, validator_id, owner_reward_spk_payload)`.
-    pub(super) fn funded_signed_bond_tx(
+    pub(crate) fn funded_signed_bond_tx(
         seed: [u8; 32],
         coinbase_outpoint: TransactionOutpoint,
         coinbase_value: u64,
@@ -3648,7 +3648,7 @@ mod dns_harness {
     /// Deliberately built from the PRODUCTION lock-target function rather than a hand-rolled script:
     /// if `provider_bond_lock_spk` ever changed, this fixture would follow it instead of silently
     /// disagreeing and turning a real regression into a test failure with a misleading cause.
-    pub(super) fn funded_signed_provider_bond_tx(
+    pub(crate) fn funded_signed_provider_bond_tx(
         seed: [u8; 32],
         coinbase_outpoint: TransactionOutpoint,
         coinbase_value: u64,
@@ -3721,7 +3721,7 @@ mod dns_harness {
     /// the same key, with the attestation carried verbatim in the payload on
     /// `SUBNETWORK_ID_STAKE_ATTESTATION_SHARD`. Input-0 is ML-DSA-signed over the v2
     /// tx sighash; the storage mass is committed.
-    pub(super) fn funded_signed_shard_tx(
+    pub(crate) fn funded_signed_shard_tx(
         seed: [u8; 32],
         coinbase_outpoint: TransactionOutpoint,
         coinbase_value: u64,
@@ -3994,7 +3994,7 @@ mod dns_harness {
 
     /// Build a fully ML-DSA-87-signed attestation for `bond_outpoint`, signing
     /// exactly the digest the §B.4 verifier reconstructs.
-    pub(super) fn build_signed_attestation(
+    pub(crate) fn build_signed_attestation(
         v: &HarnessValidator,
         network_id: &[u8],
         bond_outpoint: TransactionOutpoint,
@@ -4815,23 +4815,23 @@ async fn evm_y9_full_cap_payload_block_validates_and_executes() {
 /// chain_commit, and the two provider reward scripts. Produced once by [`palw_algo4_env`]; consumed by
 /// [`mint_algo4`], which builds as many distinct algo-4 blocks (siblings, reuses, single-field mutants)
 /// off `sp` as a test needs.
-struct PalwAlgo4Facts {
-    sp: BlockHash,
-    replica_bits: u32,
-    batch_id: kaspa_hashes::Hash64,
-    leaf_index: u32,
-    proof_type: u8,
-    nullifier: kaspa_hashes::Hash64,
-    nonce: u64,
-    cert_hash: kaspa_hashes::Hash64,
-    target_interval: u64,
-    expected_chain_commit: kaspa_hashes::Hash64,
-    prov_a: kaspa_consensus_core::tx::ScriptPublicKey,
-    prov_b: kaspa_consensus_core::tx::ScriptPublicKey,
-    miner: MinerData,
+pub(crate) struct PalwAlgo4Facts {
+    pub(crate) sp: BlockHash,
+    pub(crate) replica_bits: u32,
+    pub(crate) batch_id: kaspa_hashes::Hash64,
+    pub(crate) leaf_index: u32,
+    pub(crate) proof_type: u8,
+    pub(crate) nullifier: kaspa_hashes::Hash64,
+    pub(crate) nonce: u64,
+    pub(crate) cert_hash: kaspa_hashes::Hash64,
+    pub(crate) target_interval: u64,
+    pub(crate) expected_chain_commit: kaspa_hashes::Hash64,
+    pub(crate) prov_a: kaspa_consensus_core::tx::ScriptPublicKey,
+    pub(crate) prov_b: kaspa_consensus_core::tx::ScriptPublicKey,
+    pub(crate) miner: MinerData,
     /// ADR-0040 P1-6: the ticket authority whose ML-DSA-87 signature authorizes each algo-4 block.
     /// The leaf's `ticket_authority_pk_hash` binds to this key, so only its holder can mint.
-    authority_seed: [u8; 32],
+    pub(crate) authority_seed: [u8; 32],
 }
 
 /// Mint (but do NOT insert) a distinct algo-4 (replica-lane) block off `f.sp`, carrying the ground
@@ -4844,18 +4844,18 @@ struct PalwAlgo4Facts {
 /// template, so S2 re-derives and authenticates them exactly (construction == validation).
 /// ADR-0040 P1-6 — the test ticket authority. A single fixed seed so every algo-4 fixture in this file
 /// shares one authority; the leaf binds to its key hash and `mint_algo4` signs with it.
-const PALW_TEST_AUTHORITY_SEED: [u8; 32] = [0x9a; 32];
+pub(crate) const PALW_TEST_AUTHORITY_SEED: [u8; 32] = [0x9a; 32];
 
-fn palw_authority_keypair(seed: [u8; 32]) -> libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
+pub(crate) fn palw_authority_keypair(seed: [u8; 32]) -> libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
     libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed)
 }
 
-fn palw_authority_pk_hash(seed: [u8; 32]) -> kaspa_hashes::Hash64 {
+pub(crate) fn palw_authority_pk_hash(seed: [u8; 32]) -> kaspa_hashes::Hash64 {
     let kp = palw_authority_keypair(seed);
     kaspa_hashes::blake2b_512_keyed(kaspa_consensus_core::palw::PALW_AUTHORIZATION_DOMAIN, kp.verification_key.as_ref())
 }
 
-fn mint_algo4(
+pub(crate) fn mint_algo4(
     tc: &TestConsensus,
     f: &PalwAlgo4Facts,
     seed: u8,

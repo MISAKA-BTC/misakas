@@ -44,7 +44,11 @@ impl PalwBeaconAccumViewV1 {
 
     /// First commit for `(epoch, bond)` wins and snapshots the bond amount at that exact transition.
     pub fn record_commit(&mut self, epoch: u64, bond: TransactionOutpoint, commitment: Hash64, stake: u64) -> bool {
-        let accum = self.epochs.entry(epoch).or_default();
+        // The canonical row (version 1), not `Default` (version 0): the pruning snapshot writer's
+        // coherence contract rejects an accumulator row whose version != 1, so a `Default`-created
+        // row silently blocked every capture while a beacon target epoch was live (found by the
+        // ADR-0044 long-chain harness).
+        let accum = self.epochs.entry(epoch).or_insert_with(PalwBeaconEpochAccumV1::new);
         if accum.commitment_of(&bond).is_some() {
             return false;
         }
