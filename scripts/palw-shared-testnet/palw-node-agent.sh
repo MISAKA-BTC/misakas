@@ -217,13 +217,18 @@ verb_restart() {
 
     if [ "$mode" = "miner" ] && [ "$(_node_label "$n")" = a ]; then
         # start-palw-miner.sh OWNS node A's mine relaunch (stop live validator ->
-        # relaunch with --palw-* flags). With --force, first drop any existing
-        # --palw-mine back to a clean validator so the relaunch is guaranteed real.
-        if [ "$force" = "1" ] && is_running "$name" && case "$(_proc_cmd "$(read_pid "$name")")" in *--palw-mine*) true ;; *) false ;; esac; then
-            log "--force: node A already mining; transitioning back to validator first so the relaunch is a real restart"
-            bash "$SCRIPT_DIR/restart-a-synced.sh"
+        # relaunch with --palw-* flags). Under --force it must take the REAL
+        # stop+relaunch path even when node A already mines the current batch's
+        # leaf, so pass PALW_MINER_FORCE_RESTART=1 through. (The old detour via
+        # restart-a-synced.sh silently NO-OP'd: a mining node still carries
+        # --enable-validator and no --enable-unsynced-mining, which that script's
+        # idempotency check reads as "already a clean validator" — chaining two
+        # no-ops and failing the pid-changed proof below.)
+        if [ "$force" = "1" ]; then
+            PALW_MINER_FORCE_RESTART=1 bash "$SCRIPT_DIR/start-palw-miner.sh"
+        else
+            bash "$SCRIPT_DIR/start-palw-miner.sh"
         fi
-        bash "$SCRIPT_DIR/start-palw-miner.sh"
     else
         # bootstrap/validator (and node-b): stop then start in the target mode.
         if is_running "$name"; then

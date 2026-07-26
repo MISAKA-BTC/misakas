@@ -111,7 +111,18 @@ do_start() {
     # rely on the wait_peer_connected gate + its timeout instead.
     case "$NODE_A_HOST" in
         127.0.0.1|localhost|::1)
-            is_running node-a || die "$NODE_NAME: node A is not running on this host — start ./node-a.sh first (node B dials $connect). For a two-host run set NODE_A_HOST to node A's routable/Tailscale address."
+            # NODE_B_ALLOW_ISOLATED_START=1 (G7 reorg-parity ONLY): start node B
+            # while node A is deliberately DOWN so a divergent branch can be mined
+            # on B. The dial target is unchanged — kaspad keeps re-dialing
+            # $connect, which is what reconnects the net automatically when node A
+            # returns. The peer gate below is then EXPECTED to fail; the caller
+            # must tolerate that and verify RPC-up itself. Default stays
+            # fail-closed: without the env this is the same hard error as before.
+            if [ "${NODE_B_ALLOW_ISOLATED_START:-0}" = 1 ]; then
+                log "$NODE_NAME: NODE_B_ALLOW_ISOLATED_START=1 — starting WITHOUT node A running (fork drill); kaspad will retry the outbound dial to $connect until node A returns, and the peer gate below is expected to fail."
+            else
+                is_running node-a || die "$NODE_NAME: node A is not running on this host — start ./node-a.sh first (node B dials $connect). For a two-host run set NODE_A_HOST to node A's routable/Tailscale address."
+            fi
             ;;
         *)
             log "$NODE_NAME: node A is remote ($NODE_A_HOST); relying on wait_peer_connected to confirm the P2P dial to $connect"
@@ -138,13 +149,16 @@ do_start() {
         "$net_flag"
         --netsuffix="$NETSUFFIX"
         --appdir="$appdir"
-        --archival
         --utxoindex
         --listen="0.0.0.0:$B_P2P_PORT"
         --rpclisten="$grpc"
         --rpclisten-borsh="$wrpc"
         --connect="$connect"
     )
+    # Archival is OPT-IN (PALW_ARCHIVAL=1); see node-a.sh for the rationale —
+    # without pruning the datadir grows without bound. --yes answers the one-time
+    # "previously archival, may delete archived data" prompt (headless harness).
+    if [ "${PALW_ARCHIVAL:-0}" = 1 ]; then args[${#args[@]}]="--archival"; else args[${#args[@]}]="--yes"; fi
     # Extra P2P peers (STN-014): PALW_CONNECT_PEERS is a space-separated list of
     # host:port addresses to additionally --connect (multi-value flag). The PALW
     # preset derives its pre-handshake inbound IP allowlist FROM --connect, so a
@@ -194,7 +208,15 @@ do_start() {
     # wait_peer_connected greps this run's log for the 'Connected to ... peer'
     # line node B prints on the outbound P2P handshake to node A.
     wait_rpc_up b || die "$NODE_NAME: wRPC $wrpc did not come up in time — inspect $log_file."
-    wait_peer_connected b || die "$NODE_NAME: no P2P peer connected in time — is node A up at $connect with a matching --palw-enable-algo4 and reachable P2P port? inspect $log_file."
+    if [ "${NODE_B_ALLOW_ISOLATED_START:-0}" = 1 ]; then
+        # Fork drill: node A is deliberately DOWN, so the peer gate can never pass —
+        # and letting it fail would trip the half-start cleanup and KILL the node we
+        # just launched on purpose. kaspad keeps re-dialing $connect; the peer link
+        # (and the caller's convergence gates) come back when node A returns.
+        log "$NODE_NAME started ISOLATED (NODE_B_ALLOW_ISOLATED_START=1): peer gate skipped; kaspad keeps re-dialing $connect until node A returns."
+    else
+        wait_peer_connected b || die "$NODE_NAME: no P2P peer connected in time — is node A up at $connect with a matching --palw-enable-algo4 and reachable P2P port? inspect $log_file."
+    fi
 
     _NODE_B_STARTED_OK=1
     log "$NODE_NAME ready: pid $pid, wRPC $wrpc, gRPC $grpc, dialed $connect, appdir $appdir"

@@ -603,6 +603,15 @@ async fn get_block(args: GetBlockArgs) -> Result<(), String> {
     let _ = client.disconnect().await;
 
     println!("block_hash: {hash}");
+    println!("block_daa_score: {}", block.header.daa_score);
+    // Selected-parent-chain membership at the answering node's CURRENT virtual.
+    // This is what a reorg changes: a displaced branch's blocks remain fetchable
+    // (stored forever) but flip to is_chain_block=false. The G7 reorg-parity case
+    // asserts this on BOTH nodes for the orphaned and the winning tip.
+    match block.verbose_data.as_ref() {
+        Some(vd) => println!("block_is_chain_block: {}", vd.is_chain_block),
+        None => println!("block_is_chain_block: unavailable (node returned no verbose data)"),
+    }
     let cb = block.transactions.first().ok_or_else(|| format!("block {hash} has no coinbase transaction"))?;
     if cb.payload.len() >= 16 {
         // Coinbase payload: blue_score:u64 LE ‖ subsidy:u64 LE ‖ spk_version:u16 LE ‖ spk_len:u8 ‖ spk.

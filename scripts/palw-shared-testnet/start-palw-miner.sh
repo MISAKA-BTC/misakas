@@ -411,7 +411,14 @@ case "$NA_CMD" in
         # fresh one the node would keep mining for the RETIRED batch — producing no
         # block at all while every gate reports "already mining". Relaunch unless
         # the pinned leaf is exactly this batch's.
-        if [ "${NA_CMD#*--palw-leaf=${PALW_BATCH_ID}:0}" != "$NA_CMD" ]; then
+        #
+        # PALW_MINER_FORCE_RESTART=1 overrides even a correct pin: the node agent's
+        # `restart <a> miner --force` (G7 restart-a) PROVES a restart by pid/start-
+        # time change, so an idempotent no-op here — however correct — is a FAIL
+        # there. Force always takes the real stop+relaunch path.
+        if [ "${PALW_MINER_FORCE_RESTART:-0}" = 1 ]; then
+            log "PALW_MINER_FORCE_RESTART=1: node A already mines this batch's leaf, but a REAL restart is demanded (agent restart --force / G7 restart-a) — taking the stop+relaunch path."
+        elif [ "${NA_CMD#*--palw-leaf=${PALW_BATCH_ID}:0}" != "$NA_CMD" ]; then
             log "node A already running WITH --palw-mine pinned to THIS batch's leaf (${PALW_BATCH_ID}:0) — skipping the mining relaunch (idempotent); re-verifying the algo-4 acceptance gate only."
             ALREADY_MINING=1
         else
@@ -483,7 +490,9 @@ if [ "$ALREADY_MINING" != "1" ]; then
     add_arg "$NET_FLAG"
     add_arg "--netsuffix=$NETSUFFIX"
     add_arg "--appdir=$(node_appdir a)"
-    add_arg "--archival"
+    # Archival is OPT-IN (PALW_ARCHIVAL=1); see node-a.sh for the rationale. --yes
+    # answers the one-time "previously archival" prompt (headless harness).
+    if [ "${PALW_ARCHIVAL:-0}" = 1 ]; then add_arg "--archival"; else add_arg "--yes"; fi
     add_arg "--utxoindex"
     add_arg "--listen=0.0.0.0:$A_P2P_PORT"
     add_arg "--rpclisten=$RPC_BIND:$A_GRPC_PORT"
