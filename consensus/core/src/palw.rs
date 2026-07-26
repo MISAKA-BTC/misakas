@@ -4147,34 +4147,46 @@ pub fn palw_batch_referenceable(
     audit_window_epochs: u64,
 ) -> bool {
     use PalwBatchStatus::*;
-    if revoked || status.is_terminal() {
+    // ADR-0045 D1 (SS-04 RESOLVED): revocation is uniformly NON-RETROACTIVE, governed solely by the
+    // `revoked` argument (callers derive it from `revoked_from_daa` as `daa >= from`). `Revoked` status
+    // is a non-retroactive LABEL, never a retroactive terminal here: a batch reaches `Revoked` only from
+    // `Active`/`Certified` (it DID back blocks), so every block with `daa < effective_daa` must still
+    // resolve it (§9.5). `Slashed`/`Expired` stay retroactively unreferenceable — those never validly
+    // backed a block. `is_terminal()` (which still includes `Revoked`) is intentionally NOT used here as
+    // the drop gate, because it conflates "no outgoing transition" with "never referenceable".
+    if revoked {
         return false;
     }
     match status {
-        Active | Certified => epoch < expiry_epoch,
+        // Revoked-before-its-effective-DAA behaves like its pre-revocation state (Active/Certified).
+        Active | Certified | Revoked => epoch < expiry_epoch,
         Registering | Committed | Auditing => {
             epoch <= registration_epoch.saturating_add(registration_lead_epochs).saturating_add(audit_window_epochs)
         }
-        Missing | Slashed | Expired | Revoked => false,
+        Missing | Slashed | Expired => false,
     }
 }
 
-// ADR-0040 SS-04, recorded divergence. There are TWO representations of "this batch was revoked" and
-// they have OPPOSITE time semantics:
+// ADR-0040 SS-04 — RESOLVED by ADR-0045 D1 (non-retroactive). There is now ONE time-carrying
+// representation of "this batch was revoked": `revoked_from_daa` (the `revoked` argument above), which
+// every consumer compares NON-RETROACTIVELY (`daa < from` ⇒ still eligible/referenceable):
+//   * `PalwBatchLifecycleV1::is_block_eligible_at` — `revoked_from_daa.is_none_or(|from| daa < from)`.
+//   * `PalwBatchViewV1::retain` — passes `revoked_from_daa.is_some_and(|from| daa >= from)`.
+//   * `palw_batch_referenceable` — as of ADR-0045 D1, honors only that `revoked` bool and treats the
+//     `Revoked` STATUS as a non-retroactive label (governed by the same field), no longer as a
+//     retroactive terminal. So a block with `daa < effective_daa` still resolves the batch, matching
+//     §9.5, and there is no second door.
 //
-//   * `revoked_from_daa` (the `revoked` argument above) is NON-RETROACTIVE — the caller compares
-//     `daa < from`, so a block that was eligible before the revocation took effect stays eligible.
-//     This is the §9.5 rule and it is the representation production actually uses.
-//   * `PalwBatchStatus::Revoked`, reachable only via `next(FraudEvidence)`, is terminal and therefore
-//     RETROACTIVE: once set, every re-evaluation of every past block returns false.
+// Why non-retroactive (ADR-0045 D1): a provider reward is settled in the merging block's coinbase and
+// is immediately final in the UTXO model — it cannot be unwound after the fact. Retroactive revocation
+// would require escrow/maturity, contradicting the §17.1 immediate-distribution design. Fraud deterrence
+// therefore lives in BOND SLASH (a retroactive-on-collateral penalty), while revocation only stops
+// FUTURE credit from `effective_daa` onward.
 //
-// The divergence is LATENT, not live: `FraudEvidence` has zero production call sites in
-// `consensus/src` (it is constructed only in tests), so no batch can currently reach `Revoked`. It is
-// documented rather than "fixed" because making it non-retroactive means giving the status transition
-// an effective DAA score, and inventing that field with no producer to set it is how a half-wired
-// mechanism gets shipped. WHOEVER WIRES `FraudEvidence` MUST resolve this first: carry an effective
-// DAA on the transition and route it through the same `daa < from` comparison, or the two
-// representations will disagree about the same §9.5 concept on the same network.
+// STILL LATENT (no live change): `FraudEvidence` has zero production call sites; no batch can currently
+// reach `Revoked`. The contract for WHOEVER WIRES `FraudEvidence`: set `revoked_from_daa` to the
+// effective DAA alongside (or instead of) moving the status — the `Revoked` status alone carries NO
+// time semantics anymore, so leaving `revoked_from_daa` unset would make the batch look never-revoked.
 
 /// ADR-0039 §9.2/§9.3 — the batch-admission bounds the mergeset-delta builder enforces (the subset of
 /// `PalwParams` the fork-local batch view needs). A `const` so it lives in the `const Params` presets.
@@ -7630,6 +7642,32 @@ mod tests {
         assert_eq!(Committed.next(ActivationReached), None);
         assert_eq!(Registering.next(CertificateQuorum), None);
         assert_eq!(Active.next(CertificateQuorum), None);
+    }
+
+    /// ADR-0045 D1 (SS-04): `palw_batch_referenceable` must treat `Revoked` NON-retroactively — a block
+    /// before the revocation's effective DAA (`revoked == false`) still resolves the batch, exactly like
+    /// its pre-revocation Active/Certified state; only at/after the effective DAA (`revoked == true`) is
+    /// it dropped. `Slashed`/`Expired` stay retroactively unreferenceable regardless of the flag.
+    #[test]
+    fn revoked_batch_is_referenceable_non_retroactively() {
+        use PalwBatchStatus::*;
+        // registration_epoch=0, expiry_epoch=100, lead=2, audit=6, current epoch=10 (well inside window).
+        let refable = |status, revoked| palw_batch_referenceable(status, revoked, 0, 100, 10, 2, 6);
+
+        // Before the effective DAA (revoked=false): a revoked batch resolves like Active/Certified.
+        assert!(refable(Revoked, false), "Revoked before effective DAA must still be referenceable (§9.5)");
+        assert!(refable(Active, false));
+        assert!(refable(Certified, false));
+        // At/after the effective DAA (revoked=true): every non-terminal status is dropped.
+        assert!(!refable(Revoked, true), "Revoked at/after effective DAA must be dropped");
+        assert!(!refable(Active, true), "a future-dated revocation drops Active only once it takes effect");
+        // Slashed/Expired never validly backed a block ⇒ retroactively unreferenceable either way.
+        for st in [Slashed, Expired, Missing] {
+            assert!(!refable(st, false), "{st:?} must never be referenceable");
+            assert!(!refable(st, true));
+        }
+        // A revoked batch past its expiry epoch is dropped even before the effective DAA (window closed).
+        assert!(!palw_batch_referenceable(Revoked, false, 0, 5, 10, 2, 6), "past expiry ⇒ dropped regardless");
     }
 
     #[test]
