@@ -942,6 +942,8 @@ impl From<NetworkId> for Params {
                 Some(10) => TESTNET_PARAMS,
                 // kaspa-pq ADR-0039: the PALW audited-compute testnet (`testnet-palw-10`).
                 Some(110) => TESTNET_PALW_PARAMS,
+                // kaspa-pq ADR-0048: the Header-v4 staging-mainnet PALW rehearsal net (`staging-mainnet-palw`).
+                Some(200) => STAGING_MAINNET_PALW_PARAMS,
                 Some(x) => panic!("Testnet suffix {} is not supported", x),
                 None => panic!("Testnet suffix not provided"),
             },
@@ -1673,6 +1675,63 @@ pub const DEVNET_PALW_PARAMS: Params = Params {
     ..DEVNET_PARAMS
 };
 
+/// ADR-0048 — the activation-ready lane difficulty the staging-mainnet rehearsal net carries.
+/// Mirrors [`TESTNET_PALW_LANE_DIFFICULTY`] (INERT windows/rates + max-easy genesis bits on both
+/// lanes) as its own constant so the ADR-0046 L1/L2 staging re-measurement can recalibrate it
+/// without touching testnet-palw-110. `genesis_hash_bits` MUST equal `STAGING_PALW_GENESIS.bits`
+/// (§16.3 `is_consistent_for_activation`); the replica lane is likewise max-easy so the §14
+/// clause-9 eligibility draw is winnable from a cold start.
+pub const STAGING_PALW_LANE_DIFFICULTY: crate::palw::LaneDifficultyParams = crate::palw::LaneDifficultyParams {
+    genesis_hash_bits: 0x207fffff,
+    genesis_replica_bits: 0x207fffff,
+    ..crate::palw::LaneDifficultyParams::INERT
+};
+
+/// ADR-0048 — the Header-v4 **staging-mainnet** PALW rehearsal preset (`staging-mainnet-palw`,
+/// NetworkId `testnet-200`, `--testnet --netsuffix=200`). Header-v4 is a one-way re-genesis
+/// boundary, so the final mainnet identity (ADR-0041) is preceded by this SAME-SHAPE rehearsal
+/// network; success means its frozen params/genesis shape is copied verbatim into the future
+/// `MAINNET_PALW_*` (values only, no new design).
+///
+/// The ADR-0041 mainnet shape, on an independent identity:
+///   * **v4 genesis** ([`crate::config::genesis::STAGING_PALW_GENESIS`]) — the spam-accumulator
+///     commitment is bound into the genesis hash; PALW is genesis-active
+///     (`palw_activation_daa_score = 0`).
+///   * **NON-inert `palw_spam`** — the FIRST preset to ship it. `PUBLIC_REGENESIS_CANDIDATE` is a
+///     deliberate starting point; ADR-0046 L1 staging measurements recalibrate the magnitude.
+///     Satisfies the HeaderProcessor v4 deployment fence (structurally valid + genesis-active +
+///     `genesis.version == 4`).
+///   * **`palw_algo4_accept = false`** — the acceptance flip stays a separate change (ADR-0040
+///     §7.1.1 gate classes), and `palw_compute_work_scale = 0` (weight-0 start).
+///   * **Real PoW** (`skip_proof_of_work = false`) in the testnet-palw shape: algo-3 blocks grind
+///     the real Layer-0 hash floor from the max-easy fast-start target, algo-4 blocks are
+///     hash-floor-exempt structurally (`check_pow_and_calc_block_level`) — no devnet skip-pow.
+///   * **Full-scale depths** via `..MAINNET_PARAMS`: finality 432_000 / pruning 1_080_000 — the
+///     mainnet 想定値, deliberately NOT shrunk (縮小しない実物大), so the pruning first-pass and
+///     warm-up-window exercises measure the real thing.
+///   * `palw_requires_archival = false` (pruned operation is the default posture) and
+///     `palw_requires_peer_allowlist = true` (closed start; opened after snapshot auth — ADR-0042).
+///   * ADR-0043 note: G6 sibling flooding is bounded by the amended allocation-policy fix, which is
+///     network-independent — there is no per-preset knob here.
+///
+/// Everything not listed inherits MAINNET_PARAMS (production DNS overlay economics, 10-BPS
+/// blockrate, PALW audit/committee/epoch values — identical across mainnet/testnet presets today).
+pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
+    net: NetworkId::with_suffix(NetworkType::Testnet, 200),
+    genesis: crate::config::genesis::STAGING_PALW_GENESIS,
+    // Closed rehearsal start: no advertising; reachability is gated by the allowlist below.
+    dns_seeders: &[],
+    palw_activation_daa_score: 0,
+    palw_algo4_accept: false, // ADR-0040 P0-3 — released only per §7.1.1 gate classes
+    palw_compute_work_scale: 0,
+    palw_spam: crate::palw_antispam::PalwSpamParams::PUBLIC_REGENESIS_CANDIDATE,
+    skip_proof_of_work: false, // real PoW — explicit, because the rehearsal must not inherit a demo crutch
+    palw_requires_archival: false,
+    palw_requires_peer_allowlist: true, // ADR-0040 §T-shared: closed = unreachable, not unadvertised
+    palw_lane_difficulty: STAGING_PALW_LANE_DIFFICULTY,
+    ..MAINNET_PARAMS
+};
+
 pub const SIMNET_PARAMS: Params = Params {
     dns_seeders: &[],
     net: NetworkId::new(NetworkType::Simnet),
@@ -1919,10 +1978,15 @@ mod palw_network_tests {
         }
     }
 
-    /// Header-v4 is deliberately re-genesis-only. No shipped identity may silently acquire its
+    /// Header-v4 is deliberately re-genesis-only. No LEGACY identity may silently acquire its
     /// serialization, stamp cost, or accumulator database merely because the implementation lands.
+    /// ADR-0048 ships the ONE deliberate exception: `staging-mainnet-palw` (`testnet-200`) IS a
+    /// Header-v4 re-genesis — the same-shape rehearsal of the ADR-0041 mainnet identity — so it is
+    /// asserted on the OTHER side of the boundary: non-inert spam params that satisfy the v4
+    /// deployment fence trio the `HeaderProcessor` constructor enforces (mirrored from
+    /// `consensus/src/pipeline/header_processor/processor.rs`), not inertness.
     #[test]
-    fn palw_header_v4_antispam_is_inert_on_every_shipped_preset() {
+    fn palw_header_v4_antispam_is_inert_on_every_shipped_preset_except_the_staging_regenesis() {
         for (name, p) in [
             ("mainnet", MAINNET_PARAMS),
             ("testnet-10", TESTNET_PARAMS),
@@ -1937,6 +2001,27 @@ mod palw_network_tests {
                 "{name} must not reuse or exceed the public/value re-genesis schema"
             );
         }
+
+        // ADR-0048: the staging re-genesis is the single shipped v4 / non-inert preset, and it must
+        // satisfy the construction fence a node applies before processing any header — a non-inert
+        // `palw_spam` requires a structurally valid, PALW-genesis-active, version-4 genesis.
+        let staging = STAGING_MAINNET_PALW_PARAMS;
+        assert!(!staging.palw_spam.is_inert(), "staging-mainnet-palw must ship NON-inert v4 anti-spam params");
+        assert_eq!(
+            staging.palw_spam,
+            crate::palw_antispam::PalwSpamParams::PUBLIC_REGENESIS_CANDIDATE,
+            "staging ships the candidate calibration until the ADR-0046 L1 re-measurement"
+        );
+        assert!(staging.palw_spam.is_structurally_valid(), "v4 fence (1/3): structural validity");
+        assert!(
+            staging.palw_activation_daa_score <= staging.genesis.daa_score,
+            "v4 fence (2/3): PALW active at (or before) the genesis DAA score"
+        );
+        assert_eq!(
+            staging.genesis.version,
+            crate::constants::PALW_ANTISPAM_HEADER_VERSION,
+            "v4 fence (3/3): the genesis itself carries the Header-v4 schema"
+        );
 
         let candidate = crate::palw_antispam::PalwSpamParams::PUBLIC_REGENESIS_CANDIDATE;
         assert!(candidate.is_structurally_valid());
@@ -1976,26 +2061,74 @@ mod palw_network_tests {
         assert!(!t10.is_palw_active(0));
     }
 
+    /// ADR-0048: `--testnet --netsuffix=200` selects the Header-v4 staging-mainnet PALW rehearsal
+    /// preset — the ADR-0041 mainnet shape on an independent identity: v4 genesis (the anti-spam
+    /// accumulator commitment bound into the genesis hash), genesis-active PALW, NON-inert spam
+    /// params, algo-4 acceptance withheld, real PoW, and full-scale (un-shrunk) finality/pruning
+    /// depths so the staging exercises measure the real thing.
+    #[test]
+    fn staging_mainnet_palw_network_selection() {
+        let net = NetworkId::with_suffix(NetworkType::Testnet, 200);
+        let p: Params = net.into();
+        assert_eq!(p.net, net);
+        assert_eq!(p.net.suffix, Some(200));
+        // Its OWN v4 genesis — a ledger distinct from every legacy identity.
+        assert_eq!(p.genesis.hash, crate::config::genesis::STAGING_PALW_GENESIS.hash);
+        assert_ne!(p.genesis.hash, MAINNET_PARAMS.genesis.hash);
+        assert_ne!(p.genesis.hash, TESTNET_PARAMS.genesis.hash);
+        assert_ne!(p.genesis.hash, TESTNET_PALW_PARAMS.genesis.hash);
+        assert_eq!(p.genesis.version, crate::constants::PALW_ANTISPAM_HEADER_VERSION, "Header-v4 re-genesis");
+        // ADR-0041 shape: PALW genesis-active, acceptance withheld, weight-0 start.
+        assert!(p.is_palw_active(0), "staging-mainnet-palw is PALW-active from genesis");
+        assert_eq!(p.palw_activation_daa_score, 0);
+        assert!(!p.palw_algo4_accept, "the acceptance flip is a separate change (ADR-0040 §7.1.1)");
+        assert_eq!(p.palw_compute_work_scale, 0, "Stage-A PALW compute credit stays weight zero");
+        // The FIRST non-inert anti-spam preset (ADR-0046 recalibrates the magnitude on staging).
+        assert!(!p.palw_spam.is_inert());
+        assert!(p.palw_spam.is_structurally_valid());
+        // Real PoW in the testnet-palw shape: algo-3 grinds the real hash floor from the max-easy
+        // fast-start target; algo-4's hash-floor exemption is structural, not a param.
+        assert!(!p.skip_proof_of_work, "staging rehearses real PoW — no devnet skip-pow crutch");
+        assert!(p.pow_blake2b_sha3_activation.is_active(0), "algo-3 supporting blocks are v3 BLAKE2b-SHA3");
+        assert_eq!(p.evm_activation_daa_score, u64::MAX, "EVM off so a non-evm kaspad build runs staging");
+        assert_eq!(p.genesis.bits, STAGING_PALW_LANE_DIFFICULTY.genesis_hash_bits, "§16.3 genesis-bits invariant");
+        assert!(STAGING_PALW_LANE_DIFFICULTY.is_consistent_for_activation(p.genesis.bits));
+        // ADR-0048: full-scale depths — the mainnet 想定値, deliberately NOT shrunk.
+        assert_eq!(p.finality_depth(), 432_000, "finality depth stays at the mainnet full-scale value");
+        assert_eq!(p.pruning_depth(), 1_080_000, "pruning depth stays at the mainnet full-scale value");
+        assert_eq!(p.finality_depth(), MAINNET_PARAMS.blockrate.finality_depth);
+        assert_eq!(p.pruning_depth(), MAINNET_PARAMS.blockrate.pruning_depth);
+        assert_eq!(p.bps(), MAINNET_PARAMS.bps(), "inherits the 10-BPS mainnet profile");
+        // Closed start (allowlist-gated reachability) with pruned operation as the default posture.
+        assert!(p.palw_requires_peer_allowlist);
+        assert!(!p.palw_requires_archival);
+        assert!(p.dns_seeders.is_empty(), "closed rehearsal net must not be advertised");
+        // Inherits the mainnet-shape production DNS overlay; stays v3-consistent.
+        assert!(p.dns_params.unwrap().dns_v3_params_consistent(), "staging DNS params stay v3-consistent");
+    }
+
     /// kaspa-pq **ADR-0040 P1-5 — the view bound is ENFORCED over every activated preset.**
     ///
     /// After the P1-9 removal, `max_view_batches` is the ONLY thing bounding a persisted
     /// `PalwBatchViewV1`, and it had no validity check at all: `0` (unbounded) would have passed every
     /// test in the tree while the params doc claimed a consistency check rejected it. This is that
-    /// check. Both halves matter — the six shipped presets must pass, and a zeroed cap on an ACTIVATED
-    /// preset must fail.
+    /// check. Both halves matter — the seven shipped presets must pass, and a zeroed cap on an
+    /// ACTIVATED preset must fail.
     #[test]
     fn palw_activated_presets_bound_the_view() {
-        let presets: [(&str, Params); 6] = [
+        let presets: [(&str, Params); 7] = [
             ("mainnet", MAINNET_PARAMS),
             ("testnet-10", TESTNET_PARAMS),
             ("testnet-palw-110", TESTNET_PALW_PARAMS),
             ("devnet-palw-111", DEVNET_PALW_PARAMS),
             ("simnet", SIMNET_PARAMS),
             ("devnet", DEVNET_PARAMS),
+            ("staging-mainnet-palw", STAGING_MAINNET_PALW_PARAMS),
         ];
         for (name, p) in presets.iter() {
             // Hard invariant, re-asserted here so this test also guards it: algo-4 acceptance is
-            // withheld on ALL SIX presets (ADR-0040 P0-3).
+            // withheld on ALL SEVEN presets (ADR-0040 P0-3; ADR-0048's staging re-genesis included —
+            // its acceptance flip is a separate change).
             assert!(!p.palw_algo4_accept, "{name} must not accept algo-4 headers");
             assert!(
                 p.palw_batch_admission.is_consistent_for_activation(),
@@ -2016,10 +2149,11 @@ mod palw_network_tests {
                 assert_ne!(p.palw_audit_sample_size, 0, "{name} activates PALW with a ZERO audit sample size");
             }
         }
-        // Exactly two presets activate PALW; the other four stay inert. Pins the activation surface so
-        // a new activated preset cannot appear without passing through this test.
+        // Exactly three presets activate PALW (ADR-0048 added the staging re-genesis); the other four
+        // stay inert. Pins the activation surface so a new activated preset cannot appear without
+        // passing through this test.
         let activated: Vec<&str> = presets.iter().filter(|(_, p)| p.palw_activation_daa_score != u64::MAX).map(|(n, _)| *n).collect();
-        assert_eq!(activated, vec!["testnet-palw-110", "devnet-palw-111"]);
+        assert_eq!(activated, vec!["testnet-palw-110", "devnet-palw-111", "staging-mainnet-palw"]);
 
         // REJECT: an activated preset whose cap has been zeroed by a params edit must fail the
         // preflight. This is what makes the `max_view_batches` doc claim true rather than paper.
@@ -2097,6 +2231,7 @@ mod palw_network_tests {
             ("devnet-palw-111", DEVNET_PALW_PARAMS),
             ("simnet", SIMNET_PARAMS),
             ("devnet", DEVNET_PARAMS),
+            ("staging-mainnet-palw", STAGING_MAINNET_PALW_PARAMS),
         ] {
             let walk = p.palw_batch_admission.paid_work_walk_bound_daa(p.palw_epoch_length_daa);
             let pruning_depth = p.pruning_depth();
@@ -2167,9 +2302,13 @@ mod palw_network_tests {
     /// a future param change cannot silently erase it.
     #[test]
     fn the_stakescore_window_stays_inside_the_retained_region() {
-        for (name, params) in
-            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
-        {
+        for (name, params) in [
+            ("mainnet", MAINNET_PARAMS),
+            ("testnet", TESTNET_PARAMS),
+            ("simnet", SIMNET_PARAMS),
+            ("devnet", DEVNET_PARAMS),
+            ("staging-mainnet-palw", STAGING_MAINNET_PALW_PARAMS),
+        ] {
             let Some(dns) = params.dns_params.as_ref() else { continue };
             let window = dns.stake_score_window_blue_score;
             let pruning_depth = params.pruning_depth();

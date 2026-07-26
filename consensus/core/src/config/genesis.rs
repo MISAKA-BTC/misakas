@@ -307,6 +307,51 @@ pub const TESTNET_PALW_GENESIS: GenesisBlock = GenesisBlock {
     ..TESTNET_GENESIS
 };
 
+/// kaspa-pq ADR-0048 — genesis for the Header-v4 **staging-mainnet** PALW rehearsal network
+/// (`staging-mainnet-palw`, NetworkId `testnet-200`). The FIRST shipped v4 genesis:
+/// `version = PALW_ANTISPAM_HEADER_VERSION`, so the canonical `From<&GenesisBlock> for Header`
+/// conversion derives and binds the canonical EMPTY `palw_spam_accumulator_commitment` into the
+/// genesis identity before finalizing (the one-way re-genesis boundary ADR-0041 defines and
+/// staging rehearses; see `header_v4_regenesis_commits_the_canonical_empty_spam_accumulator`).
+/// Distinct coinbase payload tag ("misaka-staging-palw") + fresh timestamp give it its own ledger,
+/// cryptographically separate from every legacy identity. Real algo-3 PoW from block 1 at the
+/// max-easy fast-start target (same rationale as TESTNET_PALW_GENESIS — the DAA ramps difficulty
+/// to the live hash-rate; algo-4 headers are hash-floor-exempt structurally). hash /
+/// hash_merkle_root minted by `gen_kaspa_pq_genesis_hashes`.
+pub const STAGING_PALW_GENESIS: GenesisBlock = GenesisBlock {
+    hash: Hash64::from_bytes([
+        0x1b, 0xea, 0x9d, 0xb5, 0xa6, 0xee, 0xfb, 0x25, 0x16, 0x2b, 0xef, 0x11, 0xcd, 0x1e, 0xd0, 0x64, 0x22, 0xfe, 0xdd, 0x43, 0xf1,
+        0xc4, 0x4f, 0x8a, 0x20, 0xed, 0x70, 0x4c, 0x05, 0xb0, 0x78, 0x96, 0xbf, 0x7f, 0x13, 0x84, 0xff, 0xa0, 0x97, 0xac, 0x5d, 0x4c,
+        0xfa, 0x7a, 0xf8, 0x93, 0x29, 0x64, 0x93, 0x85, 0x4d, 0xb3, 0xa4, 0x08, 0x85, 0x1b, 0x31, 0x60, 0xfb, 0x65, 0x18, 0xdf, 0x30,
+        0x6e,
+    ]),
+    hash_merkle_root: Hash64::from_bytes([
+        0x6c, 0xdc, 0x75, 0x26, 0x13, 0x20, 0x1a, 0xd9, 0xaa, 0xf9, 0x81, 0x08, 0x34, 0x0b, 0x8d, 0x91, 0x23, 0x54, 0xf8, 0xec, 0xd7,
+        0x61, 0x3c, 0x5e, 0x3d, 0xfd, 0xb3, 0x65, 0x7c, 0xfc, 0x33, 0x86, 0x3e, 0x15, 0xa4, 0x19, 0x7e, 0x58, 0x92, 0xfe, 0x60, 0x2b,
+        0xa5, 0x48, 0x4f, 0x4f, 0xe6, 0x2a, 0x3d, 0xc0, 0x89, 0xf8, 0xf9, 0xa9, 0xe1, 0xd0, 0x65, 0xae, 0xa1, 0x8d, 0x2c, 0x52, 0x0f,
+        0x08,
+    ]),
+    // ADR-0048 / ADR-0041: Header-v4 re-genesis — the version at which the conversion above binds
+    // the anti-spam accumulator commitment into the genesis hash.
+    version: crate::constants::PALW_ANTISPAM_HEADER_VERSION,
+    // 2026-07-27 16:00:00 UTC (= 1785168000000 ms) — fresh staging re-genesis reference timestamp.
+    timestamp: 1785168000000,
+    #[rustfmt::skip]
+    coinbase_payload: &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Blue score
+        0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00, // Subsidy
+        0x00, 0x00, // Script version
+        0x01,       // Varint
+        0x00,       // OP-FALSE
+        // "misaka-staging-palw"
+        0x6d, 0x69, 0x73, 0x61, 0x6b, 0x61, 0x2d, 0x73, 0x74, 0x61, 0x67, 0x69, 0x6e, 0x67, 0x2d, 0x70, 0x61, 0x6c, 0x77,
+    ],
+    // ADR-0048: max-easy real-PoW fast-start target (== STAGING_PALW_LANE_DIFFICULTY genesis bits,
+    // §16.3 `is_consistent_for_activation`); erring easy is self-correcting under the DAA.
+    bits: 0x207fffff,
+    ..TESTNET_GENESIS
+};
+
 /// ADR-0039 P0 — genesis for the single-node PALW-active devnet (`devnet-palw`, `--devnet --netsuffix=111`).
 /// Carries `bits == DEVNET_PALW_GENESIS_BITS` (0x207fffff, max-easy) so §16.3's
 /// `is_consistent_for_activation` holds and Layer-0 PoW grinds instantly. Distinct coinbase payload
@@ -430,13 +475,13 @@ mod tests {
     // recomputed merkle root and block hash match the committed constants.
     #[test]
     fn test_genesis_hashes() {
-        [GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS, TESTNET_PALW_GENESIS, SIMNET_GENESIS, DEVNET_GENESIS].into_iter().for_each(
-            |genesis| {
+        [GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS, TESTNET_PALW_GENESIS, STAGING_PALW_GENESIS, SIMNET_GENESIS, DEVNET_GENESIS]
+            .into_iter()
+            .for_each(|genesis| {
                 let block: Block = (&genesis).into();
                 assert_hashes_eq(calc_hash_merkle_root(block.transactions.iter()), block.header.hash_merkle_root);
                 assert_hashes_eq(block.hash(), genesis.hash);
-            },
-        );
+            });
     }
 
     #[test]
@@ -472,6 +517,7 @@ mod tests {
             ("TESTNET_GENESIS", &TESTNET_GENESIS),
             ("TESTNET11_GENESIS", &TESTNET11_GENESIS),
             ("TESTNET_PALW_GENESIS", &TESTNET_PALW_GENESIS),
+            ("STAGING_PALW_GENESIS", &STAGING_PALW_GENESIS),
             ("SIMNET_GENESIS", &SIMNET_GENESIS),
             ("DEVNET_GENESIS", &DEVNET_GENESIS),
             ("DEVNET_PALW_GENESIS", &DEVNET_PALW_GENESIS),

@@ -277,6 +277,12 @@ impl NetworkId {
             NetworkType::Testnet => match self.suffix {
                 Some(10) => 26211,
                 Some(11) => 26311,
+                // ADR-0048: the staging-mainnet PALW rehearsal net (`testnet-200`) gets its own
+                // default P2P port so a misconfigured node on another testnet suffix fails fast
+                // instead of handshaking against staging. (The constant coincides with simnet's
+                // default below; simnet is an in-process simulation net that never listens on a
+                // shared host boundary, so the two never contend for a real socket.)
+                Some(200) => 26511,
                 None | Some(_) => 26411,
             },
             NetworkType::Simnet => 26511,
