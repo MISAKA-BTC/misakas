@@ -260,20 +260,50 @@ fn log_evm_storage_profile(args: &Args) {
     }
 }
 
-fn disk_free_preflight(args: &Args, app_dir: &Path) {
+/// `app_dir` is what the free-space check measures (it is the mount the operator named);
+/// `db_dir` is what decides which remediation to print. They must stay separate: by the time this
+/// runs the logger has already created `<app_dir>/<network>/logs`, so "is `app_dir` non-empty" is
+/// always true and would misreport a fresh sync as an existing node.
+fn disk_free_preflight(args: &Args, app_dir: &Path, db_dir: &Path) {
     if args.min_disk_free_percent == 0 {
         return;
     }
 
     match data_mount_free_percent(app_dir) {
         Some(free) if free < args.min_disk_free_percent as f64 => {
+            // A node whose OWN database filled the mount cannot start, and a node that cannot
+            // start cannot prune — pruning only advances once the node is synced (same reason
+            // the EVM note above warns that reclamation is deferred while catching up). That is
+            // a deadlock, and "free space or lower the flag" is not a way out of it: lowering
+            // the threshold lets the node start straight back into the condition that filled the
+            // disk. A shared-testnet seed node sat in exactly this loop 13,224 times before an
+            // operator looked, with only that one sentence to go on. Name the deadlock and list
+            // the paths that actually resolve it.
+            let has_existing_state = std::fs::read_dir(db_dir.join(CONSENSUS_DB)).map(|mut d| d.next().is_some()).unwrap_or(false);
             println!(
-                "Refusing to start kaspad: free disk on the data mount ({}) is {:.1}% < required {}%. \
-                 Free space or lower --min-disk-free-percent.",
+                "Refusing to start kaspad: free disk on the data mount ({}) is {:.1}% < required {}%.",
                 app_dir.display(),
                 free,
                 args.min_disk_free_percent
             );
+            if has_existing_state {
+                println!(
+                    "This path already holds node state, so this node's own database is the likely consumer.\n\
+                     Lowering --min-disk-free-percent does NOT reclaim anything: pruning advances only once the\n\
+                     node is synced, so a node that cannot catch up never prunes, and restarting just refills the\n\
+                     disk. Options that do resolve it:\n\
+                     \x20 1. Re-seed this data directory from a pruned copy taken off an already-synced node.\n\
+                     \x20 2. Enlarge the volume so the whole un-pruned catch-up backlog fits.\n\
+                     \x20 3. Delete the data directory and re-sync — but only onto a volume that can hold the\n\
+                     \x20    entire un-pruned backlog, which during IBD is far larger than the pruned steady state."
+                );
+            } else {
+                println!(
+                    "This path holds no node state yet, so this is a fresh sync. The mount must be able to hold the\n\
+                     whole un-pruned IBD backlog, which is substantially larger than the pruned steady state a synced\n\
+                     node settles at. Provision more disk before starting."
+                );
+            }
             exit(1);
         }
         Some(free) => {
@@ -715,7 +745,7 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         }
     }
     log_evm_storage_profile(args);
-    disk_free_preflight(args, &app_dir);
+    disk_free_preflight(args, &app_dir, &db_dir);
 
     let consensus_db_dir = db_dir.join(CONSENSUS_DB);
     let utxoindex_db_dir = db_dir.join(UTXOINDEX_DB);
