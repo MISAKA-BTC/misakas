@@ -9,12 +9,18 @@
 //!   keygen_seed =
 //!       BLAKE2b-256(
 //!           key   = b"kaspa-pq-wallet-v1/mldsa87/keygen",
-//!           input = network_id || account_le || change_le || index_le || master_seed,
+//!           input = len(network_id)_le_u32 || network_id || account_le || change_le || index_le
+//!                   || len(master_seed)_le_u32 || master_seed,
 //!       )
 //!   (verification_key, signing_key) = ML-DSA-87.KeyGen(keygen_seed)
 //!   address = (prefix, Version::PubKeyHashMlDsa87,
 //!             keyed_BLAKE2b-512("kaspa-pq-v2/address/mldsa87", verification_key))  // md2 §4.2 / ADR-0019 §8
 //! ```
+//!
+//! The two `len(..)` prefixes are the "audit L" domain separation. They were added AFTER the
+//! premine custody addresses were minted, so those addresses are reachable only through
+//! [`derive_keygen_seed_legacy`] — see issue #14 and `config::premine`. This doc block described
+//! the pre-fix formula until that was noticed.
 //!
 //! See docs/kaspa-pq-spec.md §8 for the normative spec. Phase 5 keeps the
 //! derivation deterministic and side-effect free; persistent storage of
@@ -161,6 +167,10 @@ impl KaspaPqMlDsa87KeyPair {
 /// length-prefixed so the concatenation is unambiguous (no field can borrow a
 /// byte from its neighbour). NOTE: this changed the derivation, so addresses
 /// derived by an older build differ — re-derive wallets after this change.
+///
+/// **The premine custody addresses were NOT re-derived** and are only reachable through
+/// [`derive_keygen_seed_legacy`]. See that function and `config::premine` for why they cannot be
+/// re-minted (they are bound into every genesis `utxo_commitment`).
 pub fn derive_keygen_seed(network_id: &str, account: u32, change: u32, index: u32, master_seed: &[u8]) -> [u8; 32] {
     let mut state = Params::new().hash_length(32).key(KASPA_PQ_WALLET_KEYGEN_DOMAIN).to_state();
     // audit L: length-prefix the variable-length fields so the concatenation is unambiguous
@@ -180,6 +190,39 @@ pub fn derive_keygen_seed(network_id: &str, account: u32, change: u32, index: u3
 /// One-shot helper: derive a keygen seed and materialise the keypair.
 pub fn derive_keypair(network_id: &str, account: u32, change: u32, index: u32, master_seed: &[u8]) -> KaspaPqMlDsa87KeyPair {
     KaspaPqMlDsa87KeyPair::from_seed(derive_keygen_seed(network_id, account, change, index, master_seed))
+}
+
+/// The derivation as it stood BEFORE the "audit L" length-prefixing above: the same keyed
+/// BLAKE2b-256, with `network_id` and `master_seed` concatenated WITHOUT their `u32` length
+/// prefixes.
+///
+/// **This is not a legacy curiosity — it is the scheme the premine custody addresses in
+/// `kaspa_consensus_core::config::premine` were minted under**, and therefore the only way to
+/// reach them from a BIP39 mnemonic. Confirmed empirically: the custody mnemonic reproduces
+/// `TESTNET_MAIN_ADDRESS` at `("testnet-10", 0, 0, 0)` under THIS function and under no
+/// coordinate of [`derive_keygen_seed`].
+///
+/// Those constants cannot be re-minted to match the current scheme: `misaka_premine_utxos()`
+/// feeds the genesis `utxo_commitment`, so the custody address is bound into every genesis hash —
+/// changing it is a re-genesis, and `testnet-10` is live.
+///
+/// **Do not derive new keys with this.** It exists so operator tooling can spend the premine;
+/// everything else must use [`derive_keygen_seed`], which is the one with the domain separation.
+pub fn derive_keygen_seed_legacy(network_id: &str, account: u32, change: u32, index: u32, master_seed: &[u8]) -> [u8; 32] {
+    let mut state = Params::new().hash_length(32).key(KASPA_PQ_WALLET_KEYGEN_DOMAIN).to_state();
+    state.update(network_id.as_bytes());
+    state.update(&account.to_le_bytes());
+    state.update(&change.to_le_bytes());
+    state.update(&index.to_le_bytes());
+    state.update(master_seed);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(state.finalize().as_bytes());
+    out
+}
+
+/// One-shot [`derive_keygen_seed_legacy`] + keypair. Premine custody only — see that function.
+pub fn derive_keypair_legacy(network_id: &str, account: u32, change: u32, index: u32, master_seed: &[u8]) -> KaspaPqMlDsa87KeyPair {
+    KaspaPqMlDsa87KeyPair::from_seed(derive_keygen_seed_legacy(network_id, account, change, index, master_seed))
 }
 
 /// kaspa-pq PQ-only (ADR-0019 §13): native (non-WASM) ML-DSA-87 transaction
@@ -281,6 +324,43 @@ mod tests {
         let mainnet = derive_keygen_seed("mainnet", 0, 0, 0, &TEST_MASTER_SEED);
         let testnet = derive_keygen_seed("testnet-10", 0, 0, 0, &TEST_MASTER_SEED);
         assert_ne!(mainnet, testnet);
+    }
+
+    /// The two schemes are NOT interchangeable, and the difference is load-bearing: the premine
+    /// custody addresses were minted under the legacy one and are bound into every genesis
+    /// `utxo_commitment`, so they can never be re-minted to match the current one.
+    ///
+    /// This pins the split so a future "cleanup" cannot quietly collapse the two functions and
+    /// strand the premine again — the failure mode that produced this test cost an operator a
+    /// wallet that looked lost.
+    #[test]
+    fn legacy_derivation_is_distinct_and_length_prefix_is_what_separates_them() {
+        for net in ["mainnet", "testnet-10", "testnet-200", "devnet"] {
+            assert_ne!(
+                derive_keygen_seed(net, 0, 0, 0, &TEST_MASTER_SEED),
+                derive_keygen_seed_legacy(net, 0, 0, 0, &TEST_MASTER_SEED),
+                "{net}: current and legacy derivations must stay distinct"
+            );
+        }
+
+        // The legacy scheme is exactly the current one minus the two u32 length prefixes, so its
+        // fields can borrow bytes from their neighbours. Demonstrate that collision rather than
+        // asserting it in prose — these two DIFFERENT inputs hash the same byte string:
+        //
+        //   ("ab", acct=0,    …, seed=[])     -> 61 62 | 00000000 | 00000000 | 00000000
+        //   ("a",  acct=0x62, …, seed=[0x00]) -> 61    | 62000000 | 00000000 | 00000000 | 00
+        //
+        // Both are `61 62 00*12`. That ambiguity is exactly what audit L's length prefixes fixed.
+        let a = derive_keygen_seed_legacy("ab", 0, 0, 0, b"");
+        let b = derive_keygen_seed_legacy("a", 0x62, 0, 0, b"\x00");
+        assert_eq!(a, b, "legacy scheme is field-ambiguous — this is the defect audit L fixed");
+
+        // The current scheme separates the same two inputs.
+        assert_ne!(
+            derive_keygen_seed("ab", 0, 0, 0, b""),
+            derive_keygen_seed("a", 0x62, 0, 0, b"\x00"),
+            "length prefixes must remove the ambiguity"
+        );
     }
 
     #[test]

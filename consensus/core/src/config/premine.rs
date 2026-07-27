@@ -43,11 +43,35 @@ pub const PREMINE_UTXO_COUNT: usize = 1;
 /// Total genesis premine = **10B KAS**.
 pub const MISAKA_PREMINE_SOMPI: u64 = MAIN_PREMINE_SOMPI;
 
+// ---------------------------------------------------------------------------------------------
+// DERIVATION NOTE (issue #14) — read before regenerating either address below.
+//
+// Both custody addresses were minted under the derivation as it stood BEFORE the "audit L"
+// domain-separation fix, i.e. `kaspa_wallet_keys::kaspa_pq::derive_keygen_seed_LEGACY`, not the
+// length-prefixed `derive_keygen_seed` shipping today. Re-deriving the custody wallet from its
+// BIP39 mnemonic with current code yields a DIFFERENT address and the premine looks lost.
+// Confirmed empirically for testnet: the mnemonic reproduces `TESTNET_MAIN_ADDRESS` at
+// ("testnet-10", 0, 0, 0) under the legacy scheme and under no coordinate of the current one.
+//
+// These constants CANNOT be corrected in place: `misaka_premine_utxos` feeds the genesis
+// `utxo_commitment`, so each address is bound into its network's genesis hash. Changing one is a
+// re-genesis, and testnet-10 is live. Operator tooling must use the legacy derivation to spend
+// the premine; every NEW key must use the current one.
+// ---------------------------------------------------------------------------------------------
+
 /// Mainnet main-wallet (10B) custody address (operator-held ML-DSA-87 key).
+///
+/// See the DERIVATION NOTE above. **Launch gate:** confirm which derivation reaches this address
+/// before mainnet launch — if it was minted the same way as the testnet one (very likely, same
+/// ceremony), rebuilding the operator wallet from current source will not reach the mainnet
+/// premine either.
 const MAINNET_MAIN_ADDRESS: &str =
     "misaka:qfckqxaaxfks4mn783zpg0cdw9v8h09rx253c0vdf5722nj6zhsyv83aqpp99hr4kfnl9fetrhegtga9jgqrzpgnvmkndg6pwmd2m2xddvq0asl7";
 
 /// Testnet/devnet/simnet main-wallet (10B) address — operator-held, value-less test coins.
+///
+/// See the DERIVATION NOTE above: reachable only via the legacy derivation, at
+/// ("testnet-10", account 0, change 0, index 0).
 const TESTNET_MAIN_ADDRESS: &str =
     "misakatest:qflkp962vgaqckl8zvf0w352hr7zkf3csrqmr4u9wf7nccdqy87x86fee0dk7tz2muc3kzrmmfy0f37cm8a2apjs0cedl5levr3l9nyv4phyke8k";
 
