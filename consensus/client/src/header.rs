@@ -332,6 +332,19 @@ impl TryCastFromJs for Header {
                     // ADR-0022: optional JS overlay-commitment field; default to zero
                     // (a WASM getter/setter is a later follow-on, like the EVM fields).
                     overlay_commitment_root: Default::default(),
+                    // ADR-0039: the client Header view carries no PALW fields yet, so they
+                    // default to the inert zero through the ONE canonical defaulting site
+                    // (`Header::palw_zero`), exactly as every other literal-construction
+                    // site does (see rpc/core/src/model/optional/header.rs). NOTE: block
+                    // SUBMISSION does not use this type — it serde-round-trips
+                    // `RpcRawHeader`, which carries all PALW fields — so zeroing here
+                    // changes no header consensus ever sees. The separate, PRE-EXISTING
+                    // gap that this does not fix: this view also drops
+                    // `overlay_commitment_root`/`pow_algo_id`/EVM commitments, which DO
+                    // enter the hash preimage, so the WASM `finalize()`/`PoW` helpers
+                    // cannot reproduce a correct hash until the full field set is read
+                    // from JS (tracked separately — do not read this line as closing it).
+                    ..native::Header::palw_zero()
                 };
 
                 Ok(header.into())

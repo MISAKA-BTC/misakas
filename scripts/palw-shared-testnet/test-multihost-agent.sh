@@ -262,7 +262,13 @@ if [ "$STARTED" = "1" ]; then
             else
                 bad "pulled bundle missing host-status.txt"
             fi
-            if find "$CTRL_BUNDLE" -type f -name '*.seed' 2>/dev/null | grep -q .; then
+            # MATERIALISE, never gate on a pipeline: under `set -o pipefail` a
+            # `find ... | grep -q .` returns 141 (SIGPIPE) precisely WHEN a match is
+            # found — grep -q exits on the first line and kills find — so this check
+            # would report "secret-safe" exactly when a *.seed WAS present. Verified
+            # on bash 3.2.57 (rc=141, 3/3 runs). Same fix as collect-artifacts.sh.
+            _seed_hits="$(find "$CTRL_BUNDLE" -type f -name '*.seed' -print 2>/dev/null || true)"
+            if [ -n "$_seed_hits" ]; then
                 bad "pulled bundle CONTAINS a *.seed (secret leak)"
             else
                 ok "pulled bundle contains NO *.seed (secret-safe)"

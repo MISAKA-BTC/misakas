@@ -23,10 +23,17 @@
 //!      is SPEC (nullifiers are epoch/batch-ground; out-of-window reuse ranks as a fresh ticket);
 //!   5. G16 paid-work: the bounded walk's below-boundary rows are carried by the pruning-point
 //!      snapshot across the pass (the job-nullifier dedup input survives pruning);
-//!   6. ADR-0042 §1c: the transported payload derivations equal the live store derivations at the
-//!      REAL pruning point of a lifecycle-coherent chain —
-//!      `palw_pruning_payload_paid_work_nullifiers == palw_paid_work_window(pp)` and
-//!      `palw_pruning_payload_da_state_root == palw_da_parent_state(pp).state_root()`.
+//!   6. ADR-0042 §1c: ALL THREE transported payload derivations equal the live store derivations at
+//!      the REAL pruning point of a lifecycle-coherent chain —
+//!      `palw_pruning_payload_paid_work_nullifiers == palw_paid_work_window(pp)`,
+//!      `palw_pruning_payload_da_state_root == palw_da_parent_state(pp).state_root()` and
+//!      `palw_pruning_payload_search_availability_state_root == palw_search_parent_state(pp).state_root()`.
+//!      These are exactly the three values `reconstruct_selected_parent_state_from_pruning_payload`
+//!      folds into the state root the first post-pruning-point child commits, so an unpinned one is a
+//!      place a transported payload could disagree with the chain and survive the durable import. The
+//!      search-availability machine is idle at this boundary, so that third assertion pins the
+//!      snapshot's PRESENCE, its binding to the pruning point and full state equality; see the note
+//!      beside it for what a populated search state would add.
 //!
 //! ## Why acceptance-path only
 //!
@@ -54,6 +61,10 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use kaspa_consensus_core::config::params::{ForkActivation, SIMNET_PARAMS};
+use kaspa_consensus_core::palw_pruned_frontier::{
+    palw_pruning_payload_da_state_root, palw_pruning_payload_paid_work_nullifiers, palw_pruning_payload_search_availability_state_root,
+};
 use kaspa_consensus_core::{
     api::ConsensusApi,
     block::MutableBlock,
@@ -68,9 +79,9 @@ use kaspa_consensus_core::{
         BeaconDnsAnchor, LaneDifficultyParams, PALW_AUDITOR_V2_MLDSA87_CONTEXT, PALW_BATCH_CERTIFICATE_VERSION_V2,
         PALW_LEAF_CHUNK_VERSION_V2, PALW_PAYLOAD_VERSION_V1, PalwAuditorVoteV2, PalwBatchCertificateV2, PalwBatchManifestV1,
         PalwLeafChunkV1, PalwProviderBondPayloadV1, PalwPublicLeafV1, ProviderBondView, chain_commit,
-        dns_finality_certificate_hash_v1, eligibility_hash, palw_audit_sample_root, palw_deterministic_sample,
-        palw_eligibility_win, palw_leaf_merkle_proof, palw_leaf_merkle_root, provider_bond_lock_spk,
-        select_weighted_auditor_committee, ticket_nullifier_commitment,
+        dns_finality_certificate_hash_v1, eligibility_hash, palw_audit_sample_root, palw_deterministic_sample, palw_eligibility_win,
+        palw_leaf_merkle_proof, palw_leaf_merkle_root, provider_bond_lock_spk, select_weighted_auditor_committee,
+        ticket_nullifier_commitment,
     },
     subnets::{
         SUBNETWORK_ID_PALW_BATCH_CERT, SUBNETWORK_ID_PALW_BATCH_MANIFEST, SUBNETWORK_ID_PALW_LEAF_CHUNK,
@@ -78,8 +89,6 @@ use kaspa_consensus_core::{
     },
     tx::{PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry},
 };
-use kaspa_consensus_core::config::params::{ForkActivation, SIMNET_PARAMS};
-use kaspa_consensus_core::palw_pruned_frontier::{palw_pruning_payload_da_state_root, palw_pruning_payload_paid_work_nullifiers};
 use kaspa_hashes::Hash64;
 use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
 use libcrux_ml_dsa::ml_dsa_87 as mldsa;
@@ -229,7 +238,6 @@ fn funded_overlay_tx(
     sign_input0(&mut tx, seed, utxo);
     tx
 }
-
 
 /// Continuous beacon driver: PALW activation (`Certified → Active`) is gated on the LAGGED beacon
 /// window looking Healthy, i.e. the epoch seed must keep ADVANCING — a single Healthy round decays
@@ -611,44 +619,44 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     // only through a challenge→response round whose chunk proof must open the leaf's declared
     // `receipt_da_root` — so the root/len/chunk_count must commit to bytes we can actually serve.
     let da_bytes: Vec<Vec<u8>> = (0..3u8).map(|i| vec![0xB0 + i; 96]).collect();
-    let da_commitments: Vec<kaspa_consensus_core::palw::da::PalwReceiptDaCommitmentV1> = da_bytes
-        .iter()
-        .map(|b| kaspa_consensus_core::palw::da::palw_receipt_da_commitment(1, b).expect("da commitment"))
-        .collect();
+    let da_commitments: Vec<kaspa_consensus_core::palw::da::PalwReceiptDaCommitmentV1> =
+        da_bytes.iter().map(|b| kaspa_consensus_core::palw::da::palw_receipt_da_commitment(1, b).expect("da commitment")).collect();
     let prov_a_pk = mldsa::generate_key_pair(seeds[0]).verification_key.as_ref().to_vec();
     let prov_b_pk = mldsa::generate_key_pair(seeds[1]).verification_key.as_ref().to_vec();
     let prov_a = provider_bond_lock_spk(&prov_a_pk);
     let prov_b = provider_bond_lock_spk(&prov_b_pk);
     let shared_job = Hash64::from_bytes([0x09; 64]); // L0 and L2 share it: the G16 dup-work pair
-    let make_leaf = |leaf_index: u32, commit: Hash64, job: Hash64, da: &kaspa_consensus_core::palw::da::PalwReceiptDaCommitmentV1| PalwPublicLeafV1 {
-        version: 1,
-        batch_id: Hash64::default(), // projected now; populated once the manifest fixes batch_id
-        leaf_index,
-        job_nullifier: job,
-        ticket_nullifier_commitment: commit,
-        model_profile_id: Hash64::from_bytes([0x01; 64]),
-        runtime_class_id: Hash64::from_bytes([0x02; 64]),
-        shape_id: 1,
-        quantum_count: 1,
-        proof_type: 1,
-        provider_a_bond: bond_outpoints[0],
-        provider_b_bond: bond_outpoints[1],
-        provider_a_reward_script: prov_a.clone(),
-        provider_b_reward_script: prov_b.clone(),
-        ticket_authority_pk_hash: palw_authority_pk_hash(PALW_TEST_AUTHORITY_SEED),
-        private_match_commitment: Hash64::default(),
-        receipt_da_object_version: da.object_version,
-        receipt_da_root: da.root,
-        receipt_da_object_len: da.object_len,
-        receipt_da_chunk_count: da.chunk_count,
-        receipt_v3_compute_set_id: Hash64::default(),
-        receipt_v3_job_challenge: Hash64::default(),
-        receipt_v3_issued_epoch: 0,
-        receipt_v3_expires_epoch: 0,
-        registered_epoch: 0,
-        activation_epoch: ACTIVATION_EPOCH,
-        expiry_epoch: EXPIRY_EPOCH,
-        leaf_bond_sompi: 0,
+    let make_leaf = |leaf_index: u32, commit: Hash64, job: Hash64, da: &kaspa_consensus_core::palw::da::PalwReceiptDaCommitmentV1| {
+        PalwPublicLeafV1 {
+            version: 1,
+            batch_id: Hash64::default(), // projected now; populated once the manifest fixes batch_id
+            leaf_index,
+            job_nullifier: job,
+            ticket_nullifier_commitment: commit,
+            model_profile_id: Hash64::from_bytes([0x01; 64]),
+            runtime_class_id: Hash64::from_bytes([0x02; 64]),
+            shape_id: 1,
+            quantum_count: 1,
+            proof_type: 1,
+            provider_a_bond: bond_outpoints[0],
+            provider_b_bond: bond_outpoints[1],
+            provider_a_reward_script: prov_a.clone(),
+            provider_b_reward_script: prov_b.clone(),
+            ticket_authority_pk_hash: palw_authority_pk_hash(PALW_TEST_AUTHORITY_SEED),
+            private_match_commitment: Hash64::default(),
+            receipt_da_object_version: da.object_version,
+            receipt_da_root: da.root,
+            receipt_da_object_len: da.object_len,
+            receipt_da_chunk_count: da.chunk_count,
+            receipt_v3_compute_set_id: Hash64::default(),
+            receipt_v3_job_challenge: Hash64::default(),
+            receipt_v3_issued_epoch: 0,
+            receipt_v3_expires_epoch: 0,
+            registered_epoch: 0,
+            activation_epoch: ACTIVATION_EPOCH,
+            expiry_epoch: EXPIRY_EPOCH,
+            leaf_bond_sompi: 0,
+        }
     };
     let projected: Vec<PalwPublicLeafV1> = vec![
         make_leaf(0, ticket_nullifier_commitment(&cand[0]), shared_job, &da_commitments[0]),
@@ -759,11 +767,6 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     };
     beacon.tick(&mut chain, net_id, storage_mass_parameter).await;
 
-
-
-
-
-
     // The DA obligation registration for an accepted leaf anchors at a beacon buried by the FIXED
     // policy (PalwDaPolicyV1::STRICT_TESTNET, min_beacon_burial_daa = 100): a chunk accepted any
     // earlier fail-stops the node. Registration stays pinned to epoch 0 via the manifest; only the
@@ -772,13 +775,8 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
         beacon.tick(&mut chain, net_id, storage_mass_parameter).await;
         chain.extend_plain().await;
     }
-    let chunk_tx = funded_overlay_tx(
-        seeds[6],
-        funding[6],
-        SUBNETWORK_ID_PALW_LEAF_CHUNK,
-        borsh::to_vec(&chunk).unwrap(),
-        storage_mass_parameter,
-    );
+    let chunk_tx =
+        funded_overlay_tx(seeds[6], funding[6], SUBNETWORK_ID_PALW_LEAF_CHUNK, borsh::to_vec(&chunk).unwrap(), storage_mass_parameter);
     chain.extend_with(vec![chunk_tx], None).await;
     chain.extend_plain().await;
     for i in 0..3u32 {
@@ -799,8 +797,7 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
         let policy_response_window: u64 = 200; // PalwDaPolicyV1::STRICT_TESTNET.response_window_daa
         let vp = chain.tc.virtual_processor();
         let da_state = vp.palw_da_parent_state(chain.tip, chain.tip_daa).0;
-        let mut obligations: Vec<_> =
-            da_state.obligations.values().filter(|o| o.batch_id == batch_id).cloned().collect();
+        let mut obligations: Vec<_> = da_state.obligations.values().filter(|o| o.batch_id == batch_id).cloned().collect();
         obligations.sort_by_key(|o| o.obligation_id);
         assert_eq!(obligations.len(), 6, "3 leaves x 2 providers x 1 sample = 6 registered obligations");
         // One funding wallet chained through change outputs carries all 12 DA txs.
@@ -990,13 +987,8 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     }
 
     // The honest, quorum-meeting certificate is accepted (store gate = verify_certificate_attestation).
-    let cert_tx = funded_overlay_tx(
-        seeds[7],
-        funding[7],
-        SUBNETWORK_ID_PALW_BATCH_CERT,
-        borsh::to_vec(&cert).unwrap(),
-        storage_mass_parameter,
-    );
+    let cert_tx =
+        funded_overlay_tx(seeds[7], funding[7], SUBNETWORK_ID_PALW_BATCH_CERT, borsh::to_vec(&cert).unwrap(), storage_mass_parameter);
     chain.extend_with(vec![cert_tx], None).await;
     chain.extend_plain().await;
     assert!(
@@ -1015,7 +1007,17 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     // Batch active from epoch 2 (daa 100): early mint W = leaf 0, then the G16 dup M2 = leaf 2.
     let w_floor = (chain.tip_daa + 2).max(ACTIVATION_EPOCH * EPOCH_LEN + 2);
     let (w_hash, w_facts) = mint_first_win(
-        &mut chain, &mut beacon, net_id, storage_mass_parameter, &leaves[0], cand[0], cert_hash, &prov_a, &prov_b, &miner, 0xA0,
+        &mut chain,
+        &mut beacon,
+        net_id,
+        storage_mass_parameter,
+        &leaves[0],
+        cand[0],
+        cert_hash,
+        &prov_a,
+        &prov_b,
+        &miner,
+        0xA0,
         w_floor,
     )
     .await;
@@ -1027,7 +1029,17 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     // G16 baseline: leaf 2 shares leaf 0's job_nullifier — its mint pays NOTHING (dup work within
     // the bounded selected-chain walk), pre-pass.
     let (_m2_hash, _m2_facts) = mint_first_win(
-        &mut chain, &mut beacon, net_id, storage_mass_parameter, &leaves[2], cand[2], cert_hash, &prov_a, &prov_b, &miner, 0xA4,
+        &mut chain,
+        &mut beacon,
+        net_id,
+        storage_mass_parameter,
+        &leaves[2],
+        cand[2],
+        cert_hash,
+        &prov_a,
+        &prov_b,
+        &miner,
+        0xA4,
         w_daa + 2,
     )
     .await;
@@ -1038,7 +1050,17 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     // Late mint M1 = leaf 1, minted at ≈ daa 950 — ABOVE the first pruning point (a finality
     // sample at 400 or 800) yet still inside the batch's active window (expiry ≈ daa 1500).
     let (m1_hash, m1_facts) = mint_first_win(
-        &mut chain, &mut beacon, net_id, storage_mass_parameter, &leaves[1], cand[1], cert_hash, &prov_a, &prov_b, &miner, 0xA8,
+        &mut chain,
+        &mut beacon,
+        net_id,
+        storage_mass_parameter,
+        &leaves[1],
+        cand[1],
+        cert_hash,
+        &prov_a,
+        &prov_b,
+        &miner,
+        0xA8,
         7 * EPOCH_LEN,
     )
     .await;
@@ -1081,17 +1103,8 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     // survivor of the reuse-catching capability is the FRONTIER's retention window (assertion 2b), the
     // exact object a joining node re-imports; the recolor code path over that window is the same one
     // the pre-pruning nullifier e2es (`palw_algo4_*_nullifier_*`) pin.
-    let (win_again, r1_facts) = draw_at(
-        &chain.tc,
-        m1_facts.sp,
-        m1_facts.target_interval,
-        &leaves[1],
-        cand[1],
-        cert_hash,
-        &prov_a,
-        &prov_b,
-        &miner,
-    );
+    let (win_again, r1_facts) =
+        draw_at(&chain.tc, m1_facts.sp, m1_facts.target_interval, &leaves[1], cand[1], cert_hash, &prov_a, &prov_b, &miner);
     assert!(win_again, "the clause-9 draw is deterministic: the same (leaf, height) must still win");
     let r1 = mint_algo4(&chain.tc, &r1_facts, 0xB0, 2, |_| {});
     let r1_hash = r1.header.hash;
@@ -1230,6 +1243,70 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     let payload_da_root = palw_pruning_payload_da_state_root(&snapshot.payload);
     let store_da_root = vp.palw_da_parent_state(pp, pp_daa).0.state_root();
     assert_eq!(payload_da_root, store_da_root, "ADR-0042 1c: payload-derived DA state root == live store derivation at the pp");
+
+    // The THIRD 1c derivation, on the same real boundary. These three — paid-work nullifiers, DA
+    // state root, search-availability state root — are exactly the values
+    // `reconstruct_selected_parent_state_from_pruning_payload` folds into the state root the first
+    // post-pruning-point child commits. Any one of them left unpinned against the live store is a
+    // place where a transported payload could disagree with what the chain actually committed, and
+    // be caught (if at all) only by the c==v BODY rule, long after the durable import.
+    //
+    // Presence first, because it is the part that is NOT free: the derivation defaults to
+    // `PalwSearchAvailabilityStateV1::default().state_root()` when the payload carries no snapshot,
+    // so a builder that silently dropped it would still satisfy a bare root comparison on an idle
+    // chain. The builder's contract is that an ACTIVE non-genesis boundary always transports the
+    // state — omitting it forgets live obligations and deadlines across IBD — so require it, and
+    // require it to be bound to this pruning point.
+    let payload_search = snapshot
+        .payload
+        .search_availability_snapshot
+        .as_ref()
+        .expect("an ACTIVE non-genesis boundary must carry the search-availability state, or IBD forgets live obligations");
+    assert_eq!(payload_search.pruning_point, pp, "the transported search-availability snapshot must be bound to this pruning point");
+    // The live counterpart is `VirtualStateProcessor::palw_search_parent_state(pp, pp_daa).0`, which
+    // is `pub(super)` to `pipeline::virtual_processor` and therefore unreachable from this module.
+    // For an ACTIVE, non-genesis, structurally valid boundary that method IS
+    // `palw_search_availability_store.state_and_anchor(pp).0` — its other arms are the
+    // pre-activation default and the fail-stops, neither of which applies here — so read the store
+    // through the same resolver (full row → link → anchor) it uses.
+    let store_search_state = chain
+        .tc
+        .storage
+        .palw_search_availability_store
+        .read()
+        .state_and_anchor(pp)
+        .expect("the pruning point's own search-availability row survives the pass (it is the boundary anchor)")
+        .0;
+    assert!(store_search_state.validate_structure(), "the live search-availability state at the pp must be structurally valid");
+    let payload_search_root = palw_pruning_payload_search_availability_state_root(&snapshot.payload);
+    assert_eq!(
+        payload_search_root,
+        store_search_state.state_root(),
+        "ADR-0042 1c: payload-derived search-availability state root == live store derivation at the pp"
+    );
+    // Strictly stronger than the roots, and the assertion that carries the weight on THIS chain:
+    // measured, the search machine is idle at the pruning point (0 obligations, 0 slashed
+    // schedulers), so the root above equals the empty state's root and would match a payload that
+    // transported nothing. Comparing the states themselves pins the full transported object, and
+    // together with the presence check above it pins the property that actually differs from the DA
+    // sibling — whose state at this boundary carries the 6 registered obligations and so already
+    // discriminates on the root alone. Driving real 0x3d-0x3f search traffic through this fixture
+    // would make the root comparison discriminate too; that is a fixture extension, not a
+    // correction, and is deliberately not smuggled into this assertion.
+    assert_eq!(
+        payload_search.state, *store_search_state,
+        "ADR-0042 1c: the transported search-availability state IS the live state at the pp, field for field"
+    );
+    // And the derivation is sensitive: a one-field tamper of the transported state must move the
+    // root. Without this the two assertions above are indistinguishable from `default == default` on
+    // an idle chain, which is the exact failure mode a bare root comparison hides.
+    let mut tampered = (*store_search_state).clone();
+    tampered.block_slashed_schedulers.push(TransactionOutpoint::new(Hash64::from_bytes([0x5e; 64]), 0));
+    assert_ne!(
+        tampered.state_root(),
+        store_search_state.state_root(),
+        "the search-availability state root must cover every field a transported snapshot can carry"
+    );
 
     chain.tc.shutdown(handles);
 }

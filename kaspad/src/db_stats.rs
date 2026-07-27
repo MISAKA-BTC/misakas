@@ -242,11 +242,7 @@ fn dump_evm_payloads(db: &kaspa_database::prelude::DB, db_path: &Path, limit: us
         println!("  no EvmPayload rows.");
         return;
     }
-    println!(
-        "\n  scanned {scanned} rows: mean value={}B  max={}B",
-        total / scanned,
-        maxv
-    );
+    println!("\n  scanned {scanned} rows: mean value={}B  max={}B", total / scanned, maxv);
     println!(
         "  mean/payload  transactions={:.2} (={}B)  system_ops={:.2} (={}B)  extra_data={}B",
         tx_count as f64 / scanned as f64,
@@ -306,7 +302,10 @@ fn dump_evm_skips(db: &kaspa_database::prelude::DB, db_path: &Path, limit: usize
     }
     println!("  scanned {scanned} distinct txs:  accepted={accepted}  never_accepted={never}");
     println!("  acceptance rate = {:.4}%", accepted as f64 * 100.0 / scanned as f64);
-    println!("  mean included_in (payload blocks/tx, capped at MAX_TX_LOCATION_INCLUSIONS) = {:.2}", inc_total as f64 / scanned as f64);
+    println!(
+        "  mean included_in (payload blocks/tx, capped at MAX_TX_LOCATION_INCLUSIONS) = {:.2}",
+        inc_total as f64 / scanned as f64
+    );
     println!(
         "  never-accepted last_skip_class:  class1(undecodable)={}  class2(nonce/funds/basefee)={}  class3(dup)={}  class5(gas-cap)={}  none={}",
         class[1], class[2], class[3], class[5], class[0]
@@ -325,7 +324,7 @@ fn dump_evm_skips(_db: &kaspa_database::prelude::DB, _db_path: &Path, _limit: us
 /// are merely blocked behind it (counted `nonce_ahead`).
 #[cfg(feature = "evm")]
 fn dump_evm_class2(db: &kaspa_database::prelude::DB, db_path: &Path) {
-    use kaspa_consensus_core::evm::{EvmRawTx, EvmTxLocations, FlatAccount, EVM_INITIAL_BASE_FEE};
+    use kaspa_consensus_core::evm::{EVM_INITIAL_BASE_FEE, EvmRawTx, EvmTxLocations, FlatAccount};
     use kaspa_database::registry::DatabaseStorePrefixes as P;
     use std::collections::HashMap;
     let it = |p: u8| db.iterator(rocksdb::IteratorMode::From(&[p], rocksdb::Direction::Forward));
@@ -365,7 +364,8 @@ fn dump_evm_class2(db: &kaspa_database::prelude::DB, db_path: &Path) {
     println!("  base_fee={base_fee}  accounts_in_flat_state={}\n", acct.len());
 
     let (mut total, mut acc, mut never, mut derr) = (0u64, 0u64, 0u64, 0u64);
-    let (mut nonce_ahead, mut nonce_behind, mut basefee, mut funds, mut would, mut sender_absent) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut nonce_ahead, mut nonce_behind, mut basefee, mut funds, mut would, mut sender_absent) =
+        (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
     let (mut na_sender_absent, mut na_balance_zero, mut na_funded, mut na_gap_max, mut na_gap_sum) = (0u64, 0u64, 0u64, 0u64, 0u64);
     let (mut shown, mut na_shown) = (0, 0);
     // Per-sender aggregation: (stuck, accepted, state_nonce, balance, min_stuck_nonce, max_stuck_nonce).
@@ -416,7 +416,8 @@ fn dump_evm_class2(db: &kaspa_database::prelude::DB, db_path: &Path) {
         }
         never += 1;
         // value [u8;32] big-endian → u128 (saturate if the high 128 bits are set).
-        let value = if d.value[..16].iter().any(|&b| b != 0) { u128::MAX } else { u128::from_be_bytes(d.value[16..32].try_into().unwrap()) };
+        let value =
+            if d.value[..16].iter().any(|&b| b != 0) { u128::MAX } else { u128::from_be_bytes(d.value[16..32].try_into().unwrap()) };
         if d.nonce > state_nonce {
             nonce_ahead += 1;
             if !has_acct {
@@ -471,7 +472,9 @@ fn dump_evm_class2(db: &kaspa_database::prelude::DB, db_path: &Path) {
         }
     }
     println!("\n  217 rows: total={total} accepted={acc} never_accepted={never} decode_err={derr}");
-    println!("  HEAD-tx reason (nonce == state nonce):  basefee_low={basefee}  insufficient_funds={funds} (sender-absent={sender_absent})  would_accept={would}");
+    println!(
+        "  HEAD-tx reason (nonce == state nonce):  basefee_low={basefee}  insufficient_funds={funds} (sender-absent={sender_absent})  would_accept={would}"
+    );
     println!("  blocked behind a stuck head:  nonce_ahead(gap)={nonce_ahead}  nonce_behind(stale)={nonce_behind}");
     if nonce_ahead > 0 {
         println!(
@@ -481,12 +484,16 @@ fn dump_evm_class2(db: &kaspa_database::prelude::DB, db_path: &Path) {
     }
     // Source concentration: top senders by stuck-tx count.
     let mut v: Vec<_> = by_sender.into_iter().collect();
-    v.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+    v.sort_by(|a, b| b.1.0.cmp(&a.1.0));
     let with_stuck = v.iter().filter(|(_, x)| x.0 > 0).count();
     println!("\n  distinct senders with >=1 stuck tx: {with_stuck}");
     println!("  top senders by stuck count (stuck / accepted / state_nonce / balance / stuck-nonce range):");
     for (addr, (stuck, acc_n, sn, bal, mn, mx)) in v.iter().take(12).filter(|(_, x)| x.0 > 0) {
-        println!("    0x{}  stuck={stuck}  accepted={acc_n}  state_nonce={sn}  balance={bal}  nonce=[{}..{mx}]", hex20(addr), if *mn == u64::MAX { 0 } else { *mn });
+        println!(
+            "    0x{}  stuck={stuck}  accepted={acc_n}  state_nonce={sn}  balance={bal}  nonce=[{}..{mx}]",
+            hex20(addr),
+            if *mn == u64::MAX { 0 } else { *mn }
+        );
     }
 }
 

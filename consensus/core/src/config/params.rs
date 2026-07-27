@@ -2320,4 +2320,48 @@ mod palw_network_tests {
             );
         }
     }
+
+    /// **ADR-0046 Decision §3 — drift alarm for `docs/econ-parameters-frozen.md`.**
+    ///
+    /// The ledger records every shipped economic constant as a (value, evidence, re-calibration
+    /// trigger) triple and labels anything without measurement evidence 未較正 rather than frozen.
+    /// That labelling is only true while the ledger's numbers and the presets' numbers agree.
+    ///
+    /// Nothing else pins the MAGNITUDES. `is_consistent_for_activation` and
+    /// `palw_activated_presets_bound_the_view` assert non-zero-ness only, so `10 MSK -> 1 MSK` or
+    /// `6 -> 1` epochs passes every existing test while silently invalidating the κ ≈ 12 derivation
+    /// the ledger publishes. This closes that one gap.
+    ///
+    /// This is an ALARM, not a new rule: it adds no constraint the protocol does not already have,
+    /// and it does not claim any of these values is calibrated. Changing a value here is fine —
+    /// changing it without updating the ledger in the same commit is not.
+    ///
+    /// Read on the staging-mainnet preset because that is the one carrying these values into a
+    /// public rehearsal, and because it reaches them by INHERITANCE (`..MAINNET_PARAMS` ->
+    /// `PalwBatchAdmissionParams::INERT`) — which is exactly how the vacuous leaf floor propagates.
+    #[test]
+    fn shipped_economic_constants_match_the_frozen_ledger() {
+        const LEDGER: &str = "changed — update docs/econ-parameters-frozen.md (ADR-0046 Decision §3: value + evidence + \
+                              re-calibration trigger) in the SAME commit";
+        let p = STAGING_MAINNET_PALW_PARAMS;
+
+        // Ledger E1 — 暫定 (NOT frozen). κ = 10 MSK / 79,299,440 sompi-per-leaf live payout ≈ 12.6.
+        // Slash is total forfeit of bond output-0, so re-pricing this re-prices the slash too.
+        assert_eq!(
+            p.palw_batch_admission.min_provider_bond_sompi,
+            10 * crate::constants::SOMPI_PER_KASPA,
+            "min_provider_bond_sompi {LEDGER}"
+        );
+
+        // Ledger E2 — 未較正 and VACUOUS. Deliberately NOT asserted non-zero by
+        // `is_consistent_for_activation` (see the DELIBERATE OMISSION note in palw.rs); staging
+        // inherits the zero through `..MAINNET_PARAMS`, so the rehearsal runs with no leaf floor.
+        assert_eq!(p.palw_batch_admission.min_leaf_bond_sompi, 0, "min_leaf_bond_sompi {LEDGER}");
+
+        // Ledger E3 — 未較正. 6 epochs matches `audit_window_epochs`; the magnitude is unmeasured.
+        assert_eq!(p.palw_batch_admission.provider_unbond_floor_epochs, 6, "provider_unbond_floor_epochs {LEDGER}");
+
+        // Ledger E4 — 未較正. L3 stays weight-0 until the ADR-0045 fraud wiring exists.
+        assert_eq!(p.palw_compute_work_scale, 0, "palw_compute_work_scale {LEDGER}");
+    }
 }

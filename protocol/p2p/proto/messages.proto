@@ -74,6 +74,11 @@ message KaspadMessage {
     // DA-01 bounded request/response. Tags 73/74 avoid the PALW pruning sidecar at 71/72.
     GetPalwDaChunkMessage getPalwDaChunk = 73;
     PalwDaChunkMessage palwDaChunk = 74;
+    // ADR-0042 chain-derived PALW snapshot authentication bundle. Tags appended, never reused.
+    RequestPalwChainDerivedBundleMessage requestPalwChainDerivedBundle = 75;
+    PalwChainDerivedBundleChunkMessage palwChainDerivedBundleChunk = 76;
+    DonePalwChainDerivedBundleMessage donePalwChainDerivedBundle = 77;
+    RequestNextPalwChainDerivedBundleChunksMessage requestNextPalwChainDerivedBundleChunks = 78;
   }
 }
 

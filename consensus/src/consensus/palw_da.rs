@@ -151,15 +151,11 @@ pub(crate) fn resolve_palw_search_assignment(
         (true, Some(_)) => {
             Err(PalwDaAdmissionError::InvalidObject("diagnostic snapshot (zero assignment id) must not carry an assignment".into()))
         }
-        (false, None) => {
-            Err(PalwDaAdmissionError::InvalidObject("snapshot references an assignment but none was supplied".into()))
-        }
+        (false, None) => Err(PalwDaAdmissionError::InvalidObject("snapshot references an assignment but none was supplied".into())),
         (false, Some(bytes)) => {
             let assignment = PalwSearchAssignmentV1::decode_strict(bytes)
                 .map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
-            assignment
-                .verify_signature(verify_signature)
-                .map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
+            assignment.verify_signature(verify_signature).map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
             snapshot_matches_assignment(snapshot, &assignment)
                 .map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
             Ok(Some(assignment))
@@ -173,8 +169,8 @@ pub(crate) fn verify_palw_search_snapshot_for_admission(
     sink_daa_score: u64,
     object_bytes: &[u8],
 ) -> Result<(PalwSearchSnapshotV1, PalwReceiptDaCommitmentV1, Hash64), PalwDaAdmissionError> {
-    let snapshot = PalwSearchSnapshotV1::decode_strict(object_bytes)
-        .map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
+    let snapshot =
+        PalwSearchSnapshotV1::decode_strict(object_bytes).map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
     if snapshot.network_id != network_id {
         return Err(PalwDaAdmissionError::InvalidObject(format!(
             "snapshot network id {} does not match node network id {network_id}",
@@ -190,8 +186,7 @@ pub(crate) fn verify_palw_search_snapshot_for_admission(
             snapshot.retrieval_daa_score
         )));
     }
-    let commitment =
-        snapshot.da_commitment().map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
+    let commitment = snapshot.da_commitment().map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
     let digest = snapshot.digest().map_err(|error| PalwDaAdmissionError::InvalidObject(error.to_string()))?;
     Ok((snapshot, commitment, digest))
 }
@@ -1214,8 +1209,8 @@ mod tests {
         use super::super::verify_palw_search_snapshot_for_admission;
         use kaspa_consensus_core::palw::da::{PALW_SEARCH_SNAPSHOT_DA_OBJECT_VERSION_V1, PalwDaAdmissionError};
         use kaspa_consensus_core::palw::search_snapshot::{
-            PALW_SEARCH_SNAPSHOT_MAX_FUTURE_DAA_SLACK, PALW_SEARCH_SNAPSHOT_VERSION_V1, PalwSearchMediaTypeV1,
-            PalwSearchOutcomeV1, PalwSearchProviderPolicyV1, PalwSearchResultV1, PalwSearchSnapshotV1, normalize_query_v1,
+            PALW_SEARCH_SNAPSHOT_MAX_FUTURE_DAA_SLACK, PALW_SEARCH_SNAPSHOT_VERSION_V1, PalwSearchMediaTypeV1, PalwSearchOutcomeV1,
+            PalwSearchProviderPolicyV1, PalwSearchResultV1, PalwSearchSnapshotV1, normalize_query_v1,
         };
         use kaspa_hashes::Hash64;
 
@@ -1330,11 +1325,10 @@ mod tests {
                 signature: vec![],
             };
             let signing = assignment.signing_bytes().unwrap();
-            assignment.signature =
-                mldsa::sign(&keypair.signing_key, &signing, PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT, [0; 32])
-                    .expect("deterministic assignment signing")
-                    .as_ref()
-                    .to_vec();
+            assignment.signature = mldsa::sign(&keypair.signing_key, &signing, PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT, [0; 32])
+                .expect("deterministic assignment signing")
+                .as_ref()
+                .to_vec();
             let assignment_bytes = assignment.encode().unwrap();
 
             let mut bound = snapshot();

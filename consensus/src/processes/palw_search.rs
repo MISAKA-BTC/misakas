@@ -100,8 +100,13 @@ pub fn apply_palw_search_effect(
             Ok((None, vec![undo]))
         }
         PalwSearchOverlayEffect::Timeout(tx) => {
-            let (slashed_scheduler_bond, undo) =
-                state.apply_timeout_tx(tx, context.network_id, context.current_daa_score, bond_owner_is_active, consensus_mldsa_verify)?;
+            let (slashed_scheduler_bond, undo) = state.apply_timeout_tx(
+                tx,
+                context.network_id,
+                context.current_daa_score,
+                bond_owner_is_active,
+                consensus_mldsa_verify,
+            )?;
             Ok((Some(slashed_scheduler_bond), vec![undo]))
         }
     }

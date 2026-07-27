@@ -158,10 +158,7 @@ pub fn compute_jobspec_payload(args: ComputeJobspecPayloadArgs) -> Result<(), St
         return Err(format!("--expires-epoch {} precedes --issued-epoch {}", args.expires_epoch, args.issued_epoch));
     }
     if args.expires_epoch - args.issued_epoch > MAX_EPOCH_WINDOW {
-        return Err(format!(
-            "epoch window {} exceeds the policy bound {MAX_EPOCH_WINDOW}",
-            args.expires_epoch - args.issued_epoch
-        ));
+        return Err(format!("epoch window {} exceeds the policy bound {MAX_EPOCH_WINDOW}", args.expires_epoch - args.issued_epoch));
     }
 
     let scheduler_key = load_key(&args.scheduler_key)?;
@@ -239,8 +236,7 @@ mod tests {
         let prompt = 4u32.to_le_bytes();
         let issued = 1u64.to_le_bytes();
         let expires = 100u64.to_le_bytes();
-        let parts: [&[u8]; 6] =
-            [network.as_byte_slice(), set.as_byte_slice(), challenge.as_byte_slice(), &prompt, &issued, &expires];
+        let parts: [&[u8]; 6] = [network.as_byte_slice(), set.as_byte_slice(), challenge.as_byte_slice(), &prompt, &issued, &expires];
         for part in parts {
             data.extend_from_slice(&(part.len() as u64).to_be_bytes());
             data.extend_from_slice(part);

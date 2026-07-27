@@ -117,7 +117,17 @@ reachability interval の layout は**ノードローカルで非合意対象**(
 ## Definition of done(amended)
 
 - [x] 割当 policy 実装: re-tile trailing reserve + flood-regime 挿入割当(`interval.rs`/`reindex.rs`/
-  `tree.rs`)+ reachability 不変量の単体テスト(既存 property tests green、15/15)
+  `tree.rs`)+ reachability 不変量の単体テスト(既存 property tests green、**13/13**)
+  — 訂正(2026-07-27 実測): 従前「15/15」と記載していたが、reachability 配下の `#[test]` 実数は **13**
+  (`interval.rs` 6 / `inquirer.rs` 3 / `tree.rs` 2 / `reindex.rs` 1 / `model/stores/reachability.rs` 1)。
+  件数のみの訂正で、green である事実と実装内容は変わらない。実装本体:
+  `processes/reachability/interval.rs:161` `split_exponential_with_reserve`(余剰の半分を末尾 headroom に温存)、
+  `reindex.rs:169` `propagate_interval` から結線、`tree.rs:12` `SIBLING_FLOOD_ALLOC_THRESHOLD = 64` +
+  `tree.rs:45-51`(n>64 で `remaining.size() / (2*n)`、以下は従来の `split_half`)。
+  主要テスト: `tree.rs:178` `sibling_flood_reindexes_are_amortized_constant`(1,000-sibling flood で
+  `reindex_events <= 2` かつ `validate_intervals(root)`)、`tree.rs:199`、`interval.rs:207`。
+  なお決定 (B) `MAX_DIRECT_CHILDREN_PER_PARENT` は本 ADR の Amendment で健全性を理由に**棄却**され、
+  コードにも存在しない(tree 全体で参照ゼロ = 不健全な consensus 規則は混入していない)。
 - [x] g6_measurement harness を「bounded allocator あり」で再実行し、1,000-sibling flood の
   per-header 書き込みが O(1)(p99 ≈ 定数)であることを確認 — 2026-07-27 M1 Max: total ops p99
   1,037 → **16**、reachability ops p99 1,023 → **2**、data writes p99 → **1**(max 79/65/64 は

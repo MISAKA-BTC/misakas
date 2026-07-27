@@ -276,6 +276,24 @@ impl ConfigBuilder {
         self
     }
 
+    /// ADR-0042 StopShip lever: admit chain-derived (permissionless) Header-v4 pruning-snapshot
+    /// import on THIS node.
+    ///
+    /// Deliberately shaped as an explicit, argument-less builder step rather than a
+    /// `set_x(bool)` setter, so it cannot be enabled by threading a variable through a call site —
+    /// turning it on is always a visible, greppable act. `Config::new` leaves the field `false` and
+    /// NO preset touches it (see `no_preset_enables_palw_permissionless_snapshot_auth`); in-tree this
+    /// is for tests only, and the sole production entry point is the fenced kaspad flag
+    /// `--palw-permissionless-snapshot-auth`, which refuses to start on anything but a non-inert,
+    /// structurally valid, archival Header-v4 network.
+    ///
+    /// The lever is node-local and consensus-neutral: it changes only which pruning boundaries this
+    /// node is willing to IMPORT, never header/block validity and never a commitment.
+    pub fn set_palw_permissionless_snapshot_auth(mut self) -> Self {
+        self.config.palw_permissionless_snapshot_auth = true;
+        self
+    }
+
     pub fn enable_sanity_checks(mut self) -> Self {
         self.config.enable_sanity_checks = true;
         self
@@ -288,5 +306,77 @@ impl ConfigBuilder {
 
     pub fn build(self) -> Config {
         self.config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::params::{
+        DEVNET_PALW_PARAMS, DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, STAGING_MAINNET_PALW_PARAMS, TESTNET_PALW_PARAMS,
+        TESTNET_PARAMS,
+    };
+
+    fn all_presets() -> [(&'static str, Params); 7] {
+        [
+            ("mainnet", MAINNET_PARAMS),
+            ("testnet-10", TESTNET_PARAMS),
+            ("testnet-palw-110", TESTNET_PALW_PARAMS),
+            ("devnet-palw-111", DEVNET_PALW_PARAMS),
+            ("staging-mainnet-palw", STAGING_MAINNET_PALW_PARAMS),
+            ("simnet", SIMNET_PARAMS),
+            ("devnet", DEVNET_PARAMS),
+        ]
+    }
+
+    /// ADR-0042 preset fence. The permissionless (chain-derived) snapshot-auth lever must be OFF on
+    /// every shipped network, including the ONE non-inert Header-v4 preset — that preset is exactly
+    /// where a default-on lever would be dangerous rather than inert, so it is asserted here and not
+    /// only in the negative cases.
+    ///
+    /// This is the property that makes the whole change landable: with the lever `false`, the
+    /// importer's AND-gate filters the chain-derived bundle to `None` and v3 / operator-pinned
+    /// behaviour is byte-identical to the pre-ADR-0042 tree.
+    #[test]
+    fn no_preset_enables_palw_permissionless_snapshot_auth() {
+        for (name, params) in all_presets() {
+            assert!(
+                !Config::new(params.clone()).palw_permissionless_snapshot_auth,
+                "{name}: Config::new must leave the ADR-0042 lever off"
+            );
+            assert!(
+                !ConfigBuilder::new(params.clone()).build().palw_permissionless_snapshot_auth,
+                "{name}: the plain ConfigBuilder path must leave the ADR-0042 lever off"
+            );
+            // The neighbouring builder steps an operator/test is most likely to combine with it.
+            assert!(
+                !ConfigBuilder::new(params.clone())
+                    .set_archival()
+                    .enable_sanity_checks()
+                    .skip_proof_of_work()
+                    .build()
+                    .palw_permissionless_snapshot_auth,
+                "{name}: no other builder step may enable the ADR-0042 lever as a side effect"
+            );
+            assert!(
+                !Config::new(params).to_builder().build().palw_permissionless_snapshot_auth,
+                "{name}: to_builder round-trip must not invent the ADR-0042 lever"
+            );
+        }
+    }
+
+    /// The lever is reachable ONLY through its own explicit builder step, and a round-trip through
+    /// `to_builder` preserves it (so a test that enabled it cannot silently lose it mid-setup).
+    #[test]
+    fn palw_permissionless_snapshot_auth_is_reachable_only_through_its_explicit_builder_step() {
+        let config = ConfigBuilder::new(STAGING_MAINNET_PALW_PARAMS).set_palw_permissionless_snapshot_auth().build();
+        assert!(config.palw_permissionless_snapshot_auth);
+        assert!(config.to_builder().build().palw_permissionless_snapshot_auth);
+        // Enabling it changes nothing else about the configuration.
+        let baseline = ConfigBuilder::new(STAGING_MAINNET_PALW_PARAMS).build();
+        assert_eq!(config.params.net, baseline.params.net);
+        assert_eq!(config.is_archival, baseline.is_archival);
+        assert_eq!(config.params.palw_algo4_accept, baseline.params.palw_algo4_accept);
+        assert_eq!(config.palw_pruning_snapshot_checkpoints, baseline.palw_pruning_snapshot_checkpoints);
     }
 }

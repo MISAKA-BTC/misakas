@@ -137,8 +137,32 @@ ADR-0041(本書: 形状の確定)
 ## Definition of done(本 ADR 自体の)
 
 - [x] 方針の文書化と番号付け(本書)
-- [ ] `MAINNET_PALW_GENESIS` / staging-mainnet 用 preset の追加(項目 8 で着地)
-- [ ] 上記 preset が v4 fence の三条件を construction 時に満たすことの test pin
-- [ ] `palw_activated_presets_bound_the_view` の期待集合更新(staging preset 追加時)
+- [~] `MAINNET_PALW_GENESIS` / staging-mainnet 用 preset の追加(項目 8 で着地)
+  — **staging 半分は着地済み(ADR-0048 / commit a861606)**: `STAGING_PALW_GENESIS`
+  (`consensus/core/src/config/genesis.rs:321`、`version: PALW_ANTISPAM_HEADER_VERSION` at `:336`)、
+  `STAGING_MAINNET_PALW_PARAMS`(`consensus/core/src/config/params.rs:1719`、`palw_activation_daa_score: 0`、
+  `palw_algo4_accept: false`、`palw_compute_work_scale: 0`、`skip_proof_of_work: false`)、
+  network 選択(`params.rs:945-946` / `network.rs:280` port 26511)。
+  — **`MAINNET_PALW_GENESIS` は未着地(外部依存)**: `MAINNET_PARAMS` は今も
+  `palw_activation_daa_score: u64::MAX`(`params.rs:1397`)+ v3 genesis。着地の前提は本 repo の外にある
+  (ADR-0046 の経済パラメータ確定 = 現在 `palw_spam` は `PUBLIC_REGENESIS_CANDIDATE` プレースホルダ、
+  ADR-0048 の 30 日 staging soak、re-genesis ceremony の統治判断)。`params.rs:1692-1694` の指示どおり
+  staging 成功後に verbatim コピーする。**先に定数を書くことは統治成果物の捏造にあたるため行わない。**
+- [~] 上記 preset が v4 fence の三条件を construction 時に満たすことの test pin
+  — **staging preset についてのみ達成。`MAINNET_PALW_*` は対象が存在しないため未達**(直上の `[~]` と同じ
+  antecedent を共有する。半分しか存在しない対象に `[x]` を付けないため `[~]`)。
+  fence 本体 `consensus/src/pipeline/header_processor/processor.rs:217-222`(assert)。staging について三重に pin 済:
+  (1) 静的ミラー test `params.rs:1989` `palw_header_v4_antispam_is_inert_on_every_shipped_preset_except_the_staging_regenesis`
+  (`:2015` "v4 fence (1/3)"、`:2017-2018` "(2/3)"、`:2021-2023` "(3/3)")、
+  (2) 実 runtime construction `virtual_processor/processor.rs:8796` `v4_fixture_params()` が
+  無改変の `STAGING_MAINNET_PALW_PARAMS` を返し、`TestConsensus::new` 経由で上記 assert を実走行(`:8979-8981`)、
+  (3) CLI/daemon matrix `kaspad/src/args.rs:1809-1853`。
+  mainnet preset 着地時に同じ三条件を pin して初めて `[x]` になる。
+- [~] `palw_activated_presets_bound_the_view` の期待集合更新(staging preset 追加時)
+  — **staging 追加分は反映済。mainnet preset 追加時に再更新が必要**(同上の理由で `[~]`)。
+  — `params.rs:2118` で `[(&str, Params); 7]` へ拡張、`:2126` に `("staging-mainnet-palw", STAGING_MAINNET_PALW_PARAMS)`、
+  期待集合は `:2156` で `vec!["testnet-palw-110", "devnet-palw-111", "staging-mainnet-palw"]`。
+  同 test は 7 preset 全てに `!p.palw_algo4_accept` を再断言(`:2133`)しており、本 ADR §4「accept は false のまま」を
+  機械的に強制している。sibling pin は `params.rs:2234` / `:2310` / `:2226`。
 
 本 ADR は「形」を確定する。それ以上のいかなるレバー(accept / weight / mint)も動かさない。

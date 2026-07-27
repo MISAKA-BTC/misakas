@@ -391,6 +391,20 @@ message TrustedDataMessage {
   repeated DaaBlockV4 daaWindow = 1; // TODO: rename to `trustedSubDag` once v5 is obsolete
   repeated BlockGhostdagDataHashPair ghostdagData = 2; // TODO: remove once v5 is obsolete
   bytes palwPruningSnapshotDigest = 3; // empty or exact 64-byte Hash64
+  // ADR-0042 permissionless (chain-derived) PALW snapshot auth: the keyed BLAKE2b-512 digest of the
+  // canonical borsh encoding of PalwChainDerivedHeaderBundleWireV1, under the dedicated domain
+  // MISAKA_PALW_CHAIN_DERIVED_BUNDLE_V1. Empty or exactly 64 bytes.
+  //
+  // The bundle itself (one descendant header plus the complete anti-spam support closure, up to
+  // 65,536 Header-v4 headers) is far too large to ride inside this single unchunked message, so only
+  // its digest travels here and the bytes arrive over the dedicated chunked pair below. The digest is
+  // what binds those separately-requested bytes back to the accumulated-work-validated headers-proof
+  // package; without it the bundle would be an unbound message from an arbitrary peer.
+  //
+  // Empty is the norm and is NOT an error: no shipped server emits it (see
+  // protocol/flows/src/v7/request_pruning_point_and_anticone.rs), so proto3's absent-decodes-to-empty
+  // rule keeps every existing peer byte-identical.
+  bytes palwChainDerivedBundleDigest = 4;
 }
 
 // kaspa-pq ADR-0022: pruned-IBD EVM + DNS/PoS-v2 overlay snapshot transfer. The
@@ -429,6 +443,31 @@ message PruningPointPalwSnapshotMessage{
   bool found = 1;
   bytes snapshot = 2; // borsh(PalwPruningPointSnapshotV1)
 }
+
+// ADR-0042 chain-derived (permissionless) Header-v4 boundary authentication. Carries the descendant
+// header whose committed `overlay_commitment_root` the boundary must fold into, the complete
+// anti-spam support-row header closure below the pruning point, and the pruning point's DNS/PoS-v2
+// overlay snapshot. Chunked because the support closure alone is span+1 full headers (32,769 at the
+// only shipped non-inert preset, 65,537 at the ceiling).
+//
+// Served ONLY by v8 nodes that actually retain the below-pruning-point support headers (in practice
+// --archival). A node that cannot serve the complete closure answers `found = false` on the first
+// chunk and sends Done; it must never serve a partial closure, since a missing support header is
+// indistinguishable to the requester from a withheld one.
+message RequestPalwChainDerivedBundleMessage{
+  Hash pruningPointHash = 1;
+}
+
+message PalwChainDerivedBundleChunkMessage{
+  bool found = 1;
+  uint32 chunkIndex = 2; // 0-based, strictly increasing, exactly chunkCount chunks in total
+  uint32 chunkCount = 3; // constant across the response
+  bytes chunk = 4;       // slice of borsh(PalwChainDerivedHeaderBundleWireV1)
+}
+
+message DonePalwChainDerivedBundleMessage{}
+
+message RequestNextPalwChainDerivedBundleChunksMessage{}
 
 // DA-01 bounded receipt-object chunk transfer. One request names exactly one chunk; a response is
 // self-describing but accepted only against an outstanding request and a valid DA Merkle proof.

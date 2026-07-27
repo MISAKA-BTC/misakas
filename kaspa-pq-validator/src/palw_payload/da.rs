@@ -8,12 +8,12 @@ use kaspa_consensus_core::palw::da::{
     palw_receipt_da_commitment, palw_receipt_da_object_bytes, palw_receipt_da_object_version,
 };
 use kaspa_consensus_core::palw::{da::PalwReceiptDaObjectV1, validate_palw_overlay_payload};
-use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed, parse_stake_bond_ref};
 use kaspa_hashes::blake2b_512_keyed;
+use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed, parse_stake_bond_ref};
 use misaka_palw_miner::da::{
-    PalwDaProviderSigner, PalwDaReceiptSemantics, PalwReceiptDaObjectV2Wire, build_da_timeout_evidence,
-    build_signed_da_challenge, build_signed_da_response, build_signed_receipt_da_object,
-    decode_canonical_palw_receipt_da_object_v2_wire, encode_da_challenge, encode_da_response, encode_da_timeout,
+    PalwDaProviderSigner, PalwDaReceiptSemantics, PalwReceiptDaObjectV2Wire, build_da_timeout_evidence, build_signed_da_challenge,
+    build_signed_da_response, build_signed_receipt_da_object, decode_canonical_palw_receipt_da_object_v2_wire, encode_da_challenge,
+    encode_da_response, encode_da_timeout,
 };
 use std::{
     fs,
@@ -317,9 +317,8 @@ pub fn da_object_build(args: DaObjectBuildArgs) -> Result<(), String> {
     let bond_b = parse_stake_bond_ref(&args.provider_b_bond)?;
 
     // The authorization nonce must be nonzero; derive one deterministically per provider+leaf.
-    let nonce = |tag: &[u8]| -> Hash64 {
-        blake2b_512_keyed(b"palw-da-mock-auth-nonce-v1", &[tag, &args.leaf_index.to_le_bytes()].concat())
-    };
+    let nonce =
+        |tag: &[u8]| -> Hash64 { blake2b_512_keyed(b"palw-da-mock-auth-nonce-v1", &[tag, &args.leaf_index.to_le_bytes()].concat()) };
     let signer_a = PalwDaProviderSigner {
         provider_bond: bond_a,
         owner_key: &owner_a,

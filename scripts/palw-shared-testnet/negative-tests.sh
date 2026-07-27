@@ -21,21 +21,42 @@
 #   reorg-parity         force a REAL fork (sever the link, mine divergent branches on
 #                        A and B, reconverge): the losing tip must be is_chain_block=false
 #                        on BOTH nodes and the provider settlement must survive the reorg
-# SKIP vs FAIL is decided from EVIDENCE, not mode: with no recorded mint evidence a
-# mint case SKIPs (structurally unreachable — honest); with mint evidence present the
-# case runs for real.
+# SKIP vs FAIL (audit STN-04 — this is the WHOLE policy, there is no other rule):
+#   * EVERY skip is CLASSIFIED justified|unjustified at the point it is recorded
+#     (via _skip), printed on the neg.case line, and written to the JSON. A skip
+#     can no longer be recorded unclassified.
+#   * JUSTIFIED is exactly ONE situation: a mint case with no recorded mint
+#     evidence while NEG_REQUIRE_MINT=0 — structurally unreachable for an evidence
+#     reason the operator deliberately opted into for this run.
+#   * EVERY other skip is UNJUSTIFIED and increments unjustified_skips: missing
+#     artifact/tool, RPC failure, unexpected chain state, or duplicate-submit
+#     finding fewer than 2 blue merges to compare. Something that should have run
+#     did not, and the report has to say so.
+#   * NEG_REQUIRE_MINT=1 makes mint evidence MANDATORY: a mint case with no
+#     PALW_ALGO4_BLOCK_HASH_A is then a FAIL (not a skip), and every mint case
+#     that ran must PASS or the run dies — with NEG_REQUIRE_MINT=0 a "green" run
+#     proves NOTHING about the PALW mint path (that was the STN-04 hole).
 #
 # RESULT CONTRACT (review §9.5):
-#   * per-case line:      `neg.case: <name> result=<PASS|FAIL|SKIP> [reason=...]`
-#   * final summary line: `neg.result: pass=<n> fail=<n> skip=<n>`
+#   * per-case line:      `neg.case: <name> result=<PASS|FAIL|SKIP> [skip=<justified|unjustified>] [reason=...]`
+#   * final summary line: `neg.result: pass=<n> fail=<n> skip=<n> unjustified_skips=<n> require_mint=<0|1>`
 #   * JSON report:        $PALW_DATA_ROOT/artifacts/negative-tests.json
-#   * exit code:          non-zero iff fail>0, OR (NEG_RELEASE=1 and an UNJUSTIFIED
-#                         skip occurred). Justified skip = mint case with no mint
-#                         evidence. `all` therefore stays exit-0 on an honest
-#                         skip-mode run while release mode still fail-closes on
-#                         anything that should have run but did not.
+#   * exit code:          non-zero iff ANY of
+#                           - fail>0
+#                           - NEG_REQUIRE_MINT=1 and a mint case that ran did not PASS
+#                           - NEG_RELEASE=1 and some case of the list did not run at
+#                             all (a single-case invocation is never a release verdict)
+#                           - NEG_RELEASE=1 and unjustified_skips>0
+#                           - NEG_RELEASE=1 and NEG_REQUIRE_MINT=1 and NOT
+#                             (pass>0 and fail=0 and skip=0)
+#                         `all` therefore still stays exit-0 on an honest
+#                         NEG_REQUIRE_MINT=0 skip-mode run, while the FULL release
+#                         gate (NEG_RELEASE=1 NEG_REQUIRE_MINT=1) demands that every
+#                         case — mint cases included — actually ran and passed.
 #
 # usage:  ./negative-tests.sh [ all | <case> | list ]
+# env:    NEG_RELEASE=1       release gate (see the exit code above)
+#         NEG_REQUIRE_MINT=1  mint evidence mandatory (default 0)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
@@ -49,23 +70,88 @@ CASES="restart-a restart-b partition-reconnect wrong-authority duplicate-submit 
 NET_CASES="restart-a restart-b partition-reconnect"          # runnable without a mint
 MINT_CASES="wrong-authority duplicate-submit reorg-parity"   # need a reproducible mint
 
-PASS_COUNT=0; FAIL_COUNT=0; SKIP_COUNT=0; UNJUSTIFIED_SKIPS=0
-RESULTS=""   # space-list of "<case>=<RESULT>" for the JSON report
+# NEG_REQUIRE_MINT=1 — "this run must actually validate PALW minting": a mint case
+# with no recorded algo-4 block becomes a FAIL instead of a skip, and every mint
+# case that ran must PASS. Default 0 keeps the honest no-mint run reporting
+# justified skips. Validated here so a typo ("true", "yes") can never silently
+# disable the gate.
+NEG_REQUIRE_MINT="${NEG_REQUIRE_MINT:-0}"
+case "$NEG_REQUIRE_MINT" in
+    0|1) : ;;
+    *) die "NEG_REQUIRE_MINT must be 0 or 1, got '$NEG_REQUIRE_MINT'" ;;
+esac
+# NEG_RELEASE needs the SAME guard, for the same reason: it is only ever tested as
+# `= "1"`, so an unvalidated "true"/"yes"/"1 " would silently DISABLE the release gate
+# instead of failing loudly. Normalised once here; use the bare "$NEG_RELEASE" below.
+NEG_RELEASE="${NEG_RELEASE:-0}"
+case "$NEG_RELEASE" in
+    0|1) : ;;
+    *) die "NEG_RELEASE must be 0 or 1, got '$NEG_RELEASE' — a fail-closed release gate does not guess" ;;
+esac
 
-# _record <case> <PASS|FAIL|SKIP> [reason]
+PASS_COUNT=0; FAIL_COUNT=0; SKIP_COUNT=0; UNJUSTIFIED_SKIPS=0
+UNJUSTIFIED_LIST=""   # " <case>" per unjustified skip, for the NO-GO message
+RESULTS=""            # space-list of "<case>=<RESULT>" for the JSON report
+NEG_TAB="$(printf '\t')"
+NEG_NL='
+'                     # literal newline (bash 3.2: no $'\n' games needed here)
+CASE_DETAILS=""       # one "<case><TAB><RESULT><TAB><skip_class><TAB><reason>" record
+                      # per line — the source of the JSON case_details array.
+
+# _record <case> <PASS|FAIL|SKIP> [reason] [skip_class]
+#   skip_class is set ONLY by _skip below, so a SKIP can never be recorded without
+#   a justified|unjustified classification (audit STN-04: the counter must be
+#   wired at the point of the skip, not decorative).
 _record() {
-    local name="$1" result="$2" reason="${3:-}"
+    local name="$1" result="$2" reason="${3:-}" cls="${4:-}"
     case "$result" in
         PASS) PASS_COUNT=$((PASS_COUNT + 1)) ;;
         FAIL) FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
-        SKIP) SKIP_COUNT=$((SKIP_COUNT + 1)) ;;
+        SKIP) SKIP_COUNT=$((SKIP_COUNT + 1))
+              [ -n "$cls" ] || die "internal: SKIP recorded for '$name' with no justified|unjustified class — use _skip, never _record, for a skip" ;;
     esac
     RESULTS="$RESULTS $name=$result"
-    if [ -n "$reason" ]; then
+    CASE_DETAILS="$CASE_DETAILS$name$NEG_TAB$result$NEG_TAB$cls$NEG_TAB$reason$NEG_NL"
+    if [ -n "$cls" ]; then
+        printf 'neg.case: %s result=%s skip=%s reason=%s\n' "$name" "$result" "$cls" "$reason"
+    elif [ -n "$reason" ]; then
         printf 'neg.case: %s result=%s reason=%s\n' "$name" "$result" "$reason"
     else
         printf 'neg.case: %s result=%s\n' "$name" "$result"
     fi
+}
+
+# _skip <case> <justified|unjustified> <reason>  — record a CLASSIFIED skip.
+#   JUSTIFIED = structurally unreachable for an evidence reason the operator
+#   cannot control in this mode; today that is exactly one thing, a mint case with
+#   no mint evidence while NEG_REQUIRE_MINT=0. ANY other skip is UNJUSTIFIED and
+#   counts (missing artifact, RPC failure, unexpected state, "<2 blue merges to
+#   compare"): it means something that should have run did not.
+_skip() {
+    local name="$1" cls="$2" reason="$3"
+    case "$cls" in
+        justified) : ;;
+        unjustified)
+            UNJUSTIFIED_SKIPS=$((UNJUSTIFIED_SKIPS + 1))
+            UNJUSTIFIED_LIST="$UNJUSTIFIED_LIST $name" ;;
+        *) die "internal: _skip class must be justified|unjustified, got '$cls'" ;;
+    esac
+    _record "$name" SKIP "$reason" "$cls"
+}
+
+# _no_mint_evidence <case>  — the one shared decision for "PALW_ALGO4_BLOCK_HASH_A
+#   is empty" in a mint-dependent case:
+#     NEG_REQUIRE_MINT=1 -> FAIL, return 1. A release that is supposed to validate
+#                           PALW minting must not go green with zero mint evidence.
+#     NEG_REQUIRE_MINT=0 -> JUSTIFIED skip, return 0. Honest, and the run stays green.
+_no_mint_evidence() {
+    local name="$1"
+    if [ "$NEG_REQUIRE_MINT" = "1" ]; then
+        _record "$name" FAIL "mint evidence required (NEG_REQUIRE_MINT=1) but no PALW_ALGO4_BLOCK_HASH_A recorded — mint an algo-4 block (./start-palw-miner.sh) before gating a release on this case"
+        return 1
+    fi
+    _skip "$name" justified "no algo-4 mint evidence recorded (mint path not exercised; set NEG_REQUIRE_MINT=1 to make this a FAIL)"
+    return 0
 }
 
 # assert_healthy <a|b> — the standard post-perturbation recovery gate for one node.
@@ -150,7 +236,8 @@ t_partition_reconnect() {
 # Mint-case helpers.
 # ---------------------------------------------------------------------------
 
-# _mint_hash — the recorded algo-4 block hash, or empty (⇒ justified SKIP).
+# _mint_hash — the recorded algo-4 block hash, or empty. Empty is decided by
+#   _no_mint_evidence: justified SKIP when NEG_REQUIRE_MINT=0, FAIL when it is 1.
 _mint_hash() { state_get PALW_ALGO4_BLOCK_HASH_A 2>/dev/null || true; }
 
 # _sink_hash <a|b> — that node's current sink block hash (128-hex).
@@ -195,7 +282,7 @@ t_wrong_authority() {
     local hA chunk store wrongkey out rc=0
     hA="$(_mint_hash)"
     if [ -z "$hA" ]; then
-        _record wrong-authority SKIP "no algo-4 mint evidence recorded (mint path not exercised)"
+        _no_mint_evidence wrong-authority || return 1
         return 0
     fi
     chunk="$PALW_DATA_ROOT/artifacts/lifecycle/chunk-0.borsh"
@@ -245,7 +332,7 @@ t_duplicate_submit() {
     local hA spk_a spk_b first bid cand out cls cbid dup="" dup_out="" scanned=0
     hA="$(_mint_hash)"
     if [ -z "$hA" ]; then
-        _record duplicate-submit SKIP "no algo-4 mint evidence recorded (mint path not exercised)"
+        _no_mint_evidence duplicate-submit || return 1
         return 0
     fi
     spk_a="$(state_get PROV_A_REWARD_SPK)"; spk_b="$(state_get PROV_B_REWARD_SPK)"
@@ -276,14 +363,32 @@ t_duplicate_submit() {
         if [ "$cls" = blue ] && [ "$cbid" = "$bid" ]; then dup="$cand"; dup_out="$out"; break; fi
     done
     if [ -z "$dup" ]; then
-        _record duplicate-submit SKIP "no SECOND blue-merged algo-4 block of batch ${bid:0:8} found within the newest ${NEG_DUP_SCAN_MAX:-30} minted blocks — the duplicate-work assertion needs >= 2"
+        # UNJUSTIFIED: the mint evidence IS here, so this case was supposed to run —
+        # we simply found nothing to compare it against. The G16 duplicate-work
+        # property is therefore UNPROVEN by this run, which is not a pass.
+        _skip duplicate-submit unjustified "no SECOND blue-merged algo-4 block of batch ${bid:0:8} found within the newest ${NEG_DUP_SCAN_MAX:-30} minted blocks — the duplicate-work assertion needs >= 2, so it did NOT run (mine another algo-4 block for the batch, or raise NEG_DUP_SCAN_MAX)"
         return 0
     fi
-    if printf '%s\n' "$dup_out" | grep -E '^settlement\.output_[0-9]+: ' | grep -qE "spk=($spk_a|$spk_b)"; then
+    # POSITIVE EVIDENCE FIRST: "paid NEITHER" is only meaningful if the coinbase list
+    # was actually enumerated. The tool prints the count immediately before the output
+    # lines; without it, an empty/short walk would masquerade as a clean PASS.
+    _nout="$(printf '%s\n' "$dup_out" | _kv settlement.merging_coinbase_outputs)"
+    case "$_nout" in
+        ''|*[!0-9]*)
+            _skip duplicate-submit unjustified "the settlement walk for ${dup:0:16} printed no settlement.merging_coinbase_outputs count — the payout list was never enumerated, so 'paid NEITHER' is UNPROVEN"
+            return 0 ;;
+    esac
+    # MATERIALISE, never gate on a pipeline: `... | grep -qE` returns 141 (SIGPIPE)
+    # precisely WHEN it matches, and `set -o pipefail` propagates that, so the `if`
+    # would be FALSE exactly when a duplicate payout WAS found — the G16 violation
+    # would be reported as a PASS. Also match case-insensitively: the Rust side
+    # compares SPKs with eq_ignore_ascii_case, this ERE would not.
+    _paid="$(printf '%s\n' "$dup_out" | grep -E '^settlement\.output_[0-9]+: ' | grep -iE "spk=($spk_a|$spk_b)" || true)"
+    if [ -n "$_paid" ]; then
         _record duplicate-submit FAIL "G16 VIOLATED: duplicate blue block ${dup:0:16} PAID a provider again for the same job_nullifier"
         return 1
     fi
-    _record duplicate-submit PASS "first merge ${hA:0:16} paid both providers (exact SPKs); duplicate blue merge ${dup:0:16} of the same batch/leaf paid NEITHER (G16 duplicate-work withheld)"
+    _record duplicate-submit PASS "first merge ${hA:0:16} paid both providers (exact SPKs); duplicate blue merge ${dup:0:16} of the same batch/leaf enumerated $_nout merging coinbase output(s) and paid NEITHER (G16 duplicate-work withheld)"
 }
 
 # reorg-parity — force a REAL fork and prove both nodes converge AND the paid
@@ -308,7 +413,7 @@ t_reorg_parity() {
     local hA spk_a spk_b n s0 tA tB icb
     hA="$(_mint_hash)"
     if [ -z "$hA" ]; then
-        _record reorg-parity SKIP "no algo-4 mint evidence recorded (mint path not exercised)"
+        _no_mint_evidence reorg-parity || return 1
         return 0
     fi
     spk_a="$(state_get PROV_A_REWARD_SPK)"; spk_b="$(state_get PROV_B_REWARD_SPK)"
@@ -388,48 +493,131 @@ run_case() {
     return "$rc"
 }
 
+# _result_of <case>  — the recorded result for a case that RAN, or empty if this
+#   invocation never ran it (single-case runs record exactly one case).
+_result_of() {
+    local pair
+    for pair in $RESULTS; do
+        [ "${pair%%=*}" = "$1" ] && { printf '%s\n' "${pair#*=}"; return 0; }
+    done
+    return 0
+}
+# _nonpass_of <case>...  — echo " <case>(<RESULT>)" for every named case that ran
+#   and did NOT pass. Empty output == all of them green. This is what makes a
+#   NO-GO message name its blockers instead of just counting them.
+_nonpass_of() {
+    local c r out=""
+    for c in "$@"; do
+        r="$(_result_of "$c")"
+        [ -n "$r" ] || continue
+        [ "$r" = PASS ] || out="$out $c($r)"
+    done
+    printf '%s' "$out"
+}
+# _notrun_of <case>...  — echo " <case>" for every named case this invocation never
+#   ran. A release verdict has to cover the FULL case list, otherwise
+#   `NEG_RELEASE=1 ./negative-tests.sh restart-a` would report green having tested
+#   one restart and nothing else.
+_notrun_of() {
+    local c out=""
+    for c in "$@"; do
+        [ -n "$(_result_of "$c")" ] || out="$out $c"
+    done
+    printf '%s' "$out"
+}
+# _json_str <text>  — minimal JSON string-body escaper (backslash, double quote,
+#   control chars -> space). Reasons can embed a tool's stderr tail, so they are
+#   never safe to splice raw. sed only — no new dependency for the report path.
+_json_str() {
+    printf '%s' "${1:-}" | LC_ALL=C sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/[[:cntrl:]]/ /g'
+}
+
 # _finish — emit the machine-readable summary + JSON report and pick the exit code.
 _finish() {
-    printf 'neg.result: pass=%s fail=%s skip=%s\n' "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT"
+    printf 'neg.result: pass=%s fail=%s skip=%s unjustified_skips=%s require_mint=%s\n' \
+        "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT" "$UNJUSTIFIED_SKIPS" "$NEG_REQUIRE_MINT"
     # JSON report (review §9.6) — written best-effort next to the other artifacts.
-    local json="$PALW_DATA_ROOT/artifacts/negative-tests.json" first=1 pair name result
+    # The schema string is UNCHANGED on purpose: every pre-existing field keeps its
+    # meaning and "cases" is still the flat <case>:<RESULT> map. The STN-04 facts
+    # are additive — require_mint, unjustified_skips, and a case_details array
+    # carrying each case's reason + skip classification.
+    local json="$PALW_DATA_ROOT/artifacts/negative-tests.json" first=1 pair name result cls reason
     {
-        printf '{"schema":"palw-negative-tests-v1","pass":%s,"fail":%s,"skip":%s,"release_mode":%s,"cases":{' \
-            "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT" "$( [ "${NEG_RELEASE:-0}" = "1" ] && printf true || printf false )"
+        printf '{"schema":"palw-negative-tests-v1","pass":%s,"fail":%s,"skip":%s,"unjustified_skips":%s,"release_mode":%s,"require_mint":%s,"cases":{' \
+            "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT" "$UNJUSTIFIED_SKIPS" \
+            "$( [ "$NEG_RELEASE" = "1" ] && printf true || printf false )" \
+            "$( [ "$NEG_REQUIRE_MINT" = "1" ] && printf true || printf false )"
         for pair in $RESULTS; do
             name="${pair%%=*}"; result="${pair#*=}"
             [ "$first" = "1" ] || printf ','
             first=0
             printf '"%s":"%s"' "$name" "$result"
         done
-        printf '}}\n'
+        printf '},"case_details":['
+        # skip_class is "justified"/"unjustified" on a SKIP row and "" otherwise.
+        first=1
+        printf '%s' "$CASE_DETAILS" | while IFS="$NEG_TAB" read -r name result cls reason; do
+            [ "$first" = "1" ] || printf ','
+            first=0
+            printf '{"case":"%s","result":"%s","skip_class":"%s","reason":"%s"}' \
+                "$(_json_str "$name")" "$(_json_str "$result")" "$(_json_str "$cls")" "$(_json_str "$reason")"
+        done
+        printf ']}\n'
     } > "$json" 2>/dev/null || warn "could not write $json"
     log "G7 report -> $json"
 
+    # ---- verdict (audit STN-04) ------------------------------------------
+    # Ordered most-specific first so the fatal message names the real blocker.
+    local mint_blockers="" all_blockers not_run
+    if [ "$NEG_REQUIRE_MINT" = "1" ]; then mint_blockers="$(_nonpass_of $MINT_CASES)"; fi
+    all_blockers="$(_nonpass_of $CASES)"
+    not_run="$(_notrun_of $CASES)"
+
+    # NEG_REQUIRE_MINT=1 means the run must carry REAL mint evidence: a mint case
+    # that skipped proves nothing, so it is fatal here even outside release mode.
+    if [ -n "$mint_blockers" ]; then
+        die "G7: NEG_REQUIRE_MINT=1 but mint case(s)$mint_blockers did not PASS — this run carries NO usable mint evidence. NO-GO. See the neg.case lines above."
+    fi
+    # Release gate (review §9.5, rewired by STN-04). With NEG_REQUIRE_MINT=1 the bar
+    # is the full one — pass>0, fail=0, skip=0 — because a skip of ANY flavour is a
+    # case that did not run, and a case that did not run is not evidence. Without it,
+    # release mode still fail-closes on every UNJUSTIFIED skip (the only justified
+    # skip being "mint case, no mint evidence, NEG_REQUIRE_MINT=0").
+    if [ "$NEG_RELEASE" = "1" ]; then
+        # A release verdict covers the FULL case list — a single-case invocation
+        # cannot be one, however green its one case looks.
+        [ -z "$not_run" ] \
+            || die "G7 release gate (NEG_RELEASE=1): case(s)$not_run did not run in this invocation — a release verdict needs the whole list, run './negative-tests.sh all'. NO-GO."
+        if [ "$NEG_REQUIRE_MINT" = "1" ]; then
+            [ "$PASS_COUNT" -gt 0 ] \
+                || die "G7 release gate (NEG_RELEASE=1 NEG_REQUIRE_MINT=1): pass=0 — no case verified anything. NO-GO."
+            [ -z "$all_blockers" ] \
+                || die "G7 release gate (NEG_RELEASE=1 NEG_REQUIRE_MINT=1) requires pass>0 fail=0 skip=0; got pass=$PASS_COUNT fail=$FAIL_COUNT skip=$SKIP_COUNT — NO-GO. Blocking case(s):$all_blockers"
+        elif [ "$UNJUSTIFIED_SKIPS" -gt 0 ]; then
+            die "G7 release gate: $UNJUSTIFIED_SKIPS unjustified skip(s)$UNJUSTIFIED_LIST — NO-GO. (Add NEG_REQUIRE_MINT=1 for the full gate: mint evidence mandatory, no skips at all.)"
+        fi
+    fi
     if [ "$FAIL_COUNT" -gt 0 ]; then
         die "G7: $FAIL_COUNT case(s) FAILED — see the neg.case lines above."
     fi
-    # Release gate (review §9.5): in release mode a skip is tolerated ONLY when it
-    # is structurally justified (mint case without mint evidence). Any other skip
-    # means something that should have run did not — NO-GO.
-    if [ "${NEG_RELEASE:-0}" = "1" ] && [ "$UNJUSTIFIED_SKIPS" -gt 0 ]; then
-        die "G7 release gate: $UNJUSTIFIED_SKIPS unjustified skip(s) — NO-GO."
-    fi
     if [ "$SKIP_COUNT" -gt 0 ]; then
-        log "G7: complete — pass=$PASS_COUNT, skip=$SKIP_COUNT (every skip is evidence-justified and reported; a skip is NOT a pass)."
+        log "G7: complete — pass=$PASS_COUNT skip=$SKIP_COUNT (unjustified=$UNJUSTIFIED_SKIPS); every skip is classified on its neg.case line, and a skip is NOT a pass."
     else
         log "G7: complete — all $PASS_COUNT case(s) passed, no skips."
+    fi
+    if [ "$NEG_REQUIRE_MINT" != "1" ]; then
+        warn "mint evidence was OPTIONAL this run (NEG_REQUIRE_MINT=0) — a green result here does NOT mean the PALW mint path was validated. Use NEG_RELEASE=1 NEG_REQUIRE_MINT=1 for a release verdict."
     fi
     exit 0
 }
 
 ACTION="${1:-all}"
 case "$ACTION" in
-    -h|--help|help) printf 'usage: ./negative-tests.sh [ all | <case> | list ]\ncases: %s\nenv: NEG_RELEASE=1 -> unjustified skips are fatal (release gate)\n' "$CASES"; exit 0 ;;
-    list|--list)    printf 'net-runnable (no mint): %s\nmint-required (evidence-gated SKIP/FAIL): %s\n' "$NET_CASES" "$MINT_CASES"; exit 0 ;;
+    -h|--help|help) printf 'usage: ./negative-tests.sh [ all | <case> | list ]\ncases: %s\nenv:\n  NEG_RELEASE=1       release gate: unjustified skips are fatal\n  NEG_REQUIRE_MINT=1  mint evidence mandatory: no mint = FAIL, every mint case must PASS\n  both=1              FULL gate: pass>0, fail=0, skip=0 (a skip is not evidence)\n' "$CASES"; exit 0 ;;
+    list|--list)    printf 'net-runnable (no mint): %s\nmint-required (no mint evidence: justified SKIP if NEG_REQUIRE_MINT=0, FAIL if 1): %s\n' "$NET_CASES" "$MINT_CASES"; exit 0 ;;
     all)
         load_env
-        log "G7: running failure/recovery cases against the running 2-node net (release_mode=${NEG_RELEASE:-0})."
+        log "G7: running failure/recovery cases against the running 2-node net (release_mode=$NEG_RELEASE, require_mint=$NEG_REQUIRE_MINT)."
         RC_ANY=0
         for c in $NET_CASES $MINT_CASES; do run_case "$c" || RC_ANY=1; done
         _finish

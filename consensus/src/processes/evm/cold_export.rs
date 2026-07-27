@@ -456,7 +456,8 @@ mod tests {
         // the v1 recompute cannot reproduce the v2 root ⇒ rejected.
         let dir2 = temp_dir("receipt-v2-wrongside");
         let mut m2 = EvmColdSegmentManifest::new();
-        let wrong_side = move |_: Hash64| Some(ReceiptBlockBinding { committed_root: v2_root, typed_v2: false, executed_raws: vec![] });
+        let wrong_side =
+            move |_: Hash64| Some(ReceiptBlockBinding { committed_root: v2_root, typed_v2: false, executed_raws: vec![] });
         assert!(matches!(
             export_receipt_segment(&dir2, &records, wrong_side, &mut m2).unwrap_err(),
             ColdExportError::Segment(ColdSegmentError::Binding(_))

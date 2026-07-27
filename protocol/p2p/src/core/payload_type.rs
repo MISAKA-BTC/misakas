@@ -68,6 +68,12 @@ pub enum KaspadMessagePayloadType {
     // DA-01 bounded receipt-object chunk request/response (protobuf tags 73/74).
     GetPalwDaChunk,
     PalwDaChunk,
+    // ADR-0042 chain-derived PALW snapshot auth bundle (protobuf tags 75-78). Registered by the v8
+    // flow set only, so a v7 peer never has these routes and can never legally send them.
+    RequestPalwChainDerivedBundle,
+    PalwChainDerivedBundleChunk,
+    DonePalwChainDerivedBundle,
+    RequestNextPalwChainDerivedBundleChunks,
 }
 
 impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
@@ -142,6 +148,12 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             KaspadMessagePayload::PruningPointPalwSnapshot(_) => KaspadMessagePayloadType::PruningPointPalwSnapshot,
             KaspadMessagePayload::GetPalwDaChunk(_) => KaspadMessagePayloadType::GetPalwDaChunk,
             KaspadMessagePayload::PalwDaChunk(_) => KaspadMessagePayloadType::PalwDaChunk,
+            KaspadMessagePayload::RequestPalwChainDerivedBundle(_) => KaspadMessagePayloadType::RequestPalwChainDerivedBundle,
+            KaspadMessagePayload::PalwChainDerivedBundleChunk(_) => KaspadMessagePayloadType::PalwChainDerivedBundleChunk,
+            KaspadMessagePayload::DonePalwChainDerivedBundle(_) => KaspadMessagePayloadType::DonePalwChainDerivedBundle,
+            KaspadMessagePayload::RequestNextPalwChainDerivedBundleChunks(_) => {
+                KaspadMessagePayloadType::RequestNextPalwChainDerivedBundleChunks
+            }
         }
     }
 }

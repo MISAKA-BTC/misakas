@@ -125,10 +125,19 @@ impl TryFrom<Versioned<protowire::TrustedDataMessage>> for TrustedDataPackage {
         } else {
             Some(Hash64::from_bytes(msg.palw_pruning_snapshot_digest.as_slice().try_into()?))
         };
+        // ADR-0042: identical empty-or-exactly-64 rule as field 3. A wrong-length digest is a
+        // conversion error rather than a silently-ignored field, so a peer cannot advertise a
+        // truncated binding and have the requester treat it as "no bundle offered".
+        let palw_chain_derived_bundle_digest = if msg.palw_chain_derived_bundle_digest.is_empty() {
+            None
+        } else {
+            Some(Hash64::from_bytes(msg.palw_chain_derived_bundle_digest.as_slice().try_into()?))
+        };
         Ok(TrustedDataPackage::new(
             msg.daa_window.into_iter().map(|x| Versioned(header_format, x).try_into()).collect::<Result<Vec<_>, ConversionError>>()?,
             msg.ghostdag_data.into_iter().map(|x| x.try_into()).collect::<Result<Vec<_>, ConversionError>>()?,
             palw_digest,
+            palw_chain_derived_bundle_digest,
         ))
     }
 }
@@ -263,12 +272,21 @@ mod palw_trusted_digest_tests {
     use super::*;
     use crate::convert::header::HeaderFormat;
 
+    fn message(digest: Vec<u8>, chain_derived: Vec<u8>) -> protowire::TrustedDataMessage {
+        protowire::TrustedDataMessage {
+            daa_window: vec![],
+            ghostdag_data: vec![],
+            palw_pruning_snapshot_digest: digest,
+            palw_chain_derived_bundle_digest: chain_derived,
+        }
+    }
+
     fn package(digest: Vec<u8>) -> Result<TrustedDataPackage, ConversionError> {
-        Versioned(
-            HeaderFormat::Compressed,
-            protowire::TrustedDataMessage { daa_window: vec![], ghostdag_data: vec![], palw_pruning_snapshot_digest: digest },
-        )
-        .try_into()
+        Versioned(HeaderFormat::Compressed, message(digest, vec![])).try_into()
+    }
+
+    fn chain_derived_package(chain_derived: Vec<u8>) -> Result<TrustedDataPackage, ConversionError> {
+        Versioned(HeaderFormat::Compressed, message(vec![], chain_derived)).try_into()
     }
 
     #[test]
@@ -277,5 +295,86 @@ mod palw_trusted_digest_tests {
         assert_eq!(package(vec![0x5a; 64]).unwrap().palw_pruning_snapshot_digest, Some(Hash64::from_bytes([0x5a; 64])));
         assert!(package(vec![0x5a; 63]).is_err());
         assert!(package(vec![0x5a; 65]).is_err());
+    }
+
+    /// ADR-0042: the chain-derived bundle digest obeys the same empty-or-exactly-64 rule, and is
+    /// decoded independently of field 3 so neither can be mistaken for the other.
+    #[test]
+    fn trusted_chain_derived_bundle_digest_is_absent_or_exactly_64_bytes() {
+        assert!(chain_derived_package(vec![]).unwrap().palw_chain_derived_bundle_digest.is_none());
+        assert_eq!(
+            chain_derived_package(vec![0xa5; 64]).unwrap().palw_chain_derived_bundle_digest,
+            Some(Hash64::from_bytes([0xa5; 64]))
+        );
+        assert!(chain_derived_package(vec![0xa5; 63]).is_err());
+        assert!(chain_derived_package(vec![0xa5; 65]).is_err());
+    }
+
+    /// A v7-era message (no field 4 on the wire) decodes to `None`, never to a zero digest: proto3
+    /// absence is indistinguishable from an empty `bytes`, and "no bundle offered" is precisely the
+    /// meaning that keeps existing peers on the unchanged operator-pin path.
+    #[test]
+    fn absent_chain_derived_digest_is_none_and_does_not_disturb_the_snapshot_digest() {
+        let pkg = package(vec![0x5a; 64]).unwrap();
+        assert_eq!(pkg.palw_pruning_snapshot_digest, Some(Hash64::from_bytes([0x5a; 64])));
+        assert!(pkg.palw_chain_derived_bundle_digest.is_none());
+
+        let both: TrustedDataPackage =
+            Versioned(HeaderFormat::Compressed, message(vec![0x5a; 64], vec![0xa5; 64])).try_into().unwrap();
+        assert_eq!(both.palw_pruning_snapshot_digest, Some(Hash64::from_bytes([0x5a; 64])));
+        assert_eq!(both.palw_chain_derived_bundle_digest, Some(Hash64::from_bytes([0xa5; 64])));
+    }
+
+    /// Pin the four ADR-0042 oneof tags (75-78) and their payload-type mapping. Tags are appended and
+    /// never reused, so a regression here is a wire-compatibility break with every deployed peer: the
+    /// same bytes would decode as a different message. Also asserts the tags do not collide with the
+    /// PALW pruning sidecar (71/72) or the DA chunk transport (73/74).
+    #[test]
+    fn adr_0042_bundle_tags_round_trip_and_do_not_collide() {
+        use crate::KaspadMessagePayloadType;
+        use crate::pb::{
+            DonePalwChainDerivedBundleMessage, KaspadMessage, PalwChainDerivedBundleChunkMessage,
+            RequestNextPalwChainDerivedBundleChunksMessage, RequestPalwChainDerivedBundleMessage, kaspad_message::Payload,
+        };
+        use prost::Message;
+
+        let messages = [
+            Payload::RequestPalwChainDerivedBundle(RequestPalwChainDerivedBundleMessage { pruning_point_hash: None }),
+            Payload::PalwChainDerivedBundleChunk(PalwChainDerivedBundleChunkMessage {
+                found: true,
+                chunk_index: 3,
+                chunk_count: 9,
+                chunk: vec![0x42; 16],
+            }),
+            Payload::DonePalwChainDerivedBundle(DonePalwChainDerivedBundleMessage {}),
+            Payload::RequestNextPalwChainDerivedBundleChunks(RequestNextPalwChainDerivedBundleChunksMessage {}),
+        ];
+        let expected = [
+            KaspadMessagePayloadType::RequestPalwChainDerivedBundle,
+            KaspadMessagePayloadType::PalwChainDerivedBundleChunk,
+            KaspadMessagePayloadType::DonePalwChainDerivedBundle,
+            KaspadMessagePayloadType::RequestNextPalwChainDerivedBundleChunks,
+        ];
+        for (payload, expected_type) in messages.into_iter().zip(expected) {
+            let message = KaspadMessage { payload: Some(payload), ..Default::default() };
+            let decoded = KaspadMessage::decode(message.encode_to_vec().as_slice()).unwrap();
+            let decoded_payload = decoded.payload.expect("payload survives the wire");
+            assert_eq!(KaspadMessagePayloadType::from(&decoded_payload), expected_type);
+        }
+
+        // The chunk body itself must survive verbatim — it is a slice of a Borsh encoding.
+        let chunk = KaspadMessage {
+            payload: Some(Payload::PalwChainDerivedBundleChunk(PalwChainDerivedBundleChunkMessage {
+                found: true,
+                chunk_index: 1,
+                chunk_count: 2,
+                chunk: (0u8..=255).collect(),
+            })),
+            ..Default::default()
+        };
+        let decoded = KaspadMessage::decode(chunk.encode_to_vec().as_slice()).unwrap();
+        let Some(Payload::PalwChainDerivedBundleChunk(body)) = decoded.payload else { panic!("wrong payload") };
+        assert_eq!(body.chunk, (0u8..=255).collect::<Vec<_>>());
+        assert_eq!((body.chunk_index, body.chunk_count, body.found), (1, 2, true));
     }
 }

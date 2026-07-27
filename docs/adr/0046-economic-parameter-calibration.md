@@ -51,7 +51,24 @@ DA challenge/response 各 ~360k sompi、mint 窓 6 epoch、provider payout 79,29
 
 ## Definition of done
 
-- [ ] `docs/econ-parameters-frozen.md`(値+evidence+再較正トリガの三つ組台帳)新設
-- [x] L2 bond 床 10 MSK の暫定凍結(κ≈12 の根拠つき — 本 ADR)
+- [x] `docs/econ-parameters-frozen.md`(値+evidence+再較正トリガの三つ組台帳)新設 —
+      2026-07-27。E1..E9 の全行が (値, コード位置, evidence, 再較正トリガ, status) を持ち、
+      status は FROZEN / 暫定 / 未較正 の 3 値のみ。drift alarm は
+      `consensus/core/src/config/params.rs` の `shipped_economic_constants_match_the_frozen_ledger`。
+- [x] L2 bond 床 10 MSK の暫定凍結(κ≈12 の根拠つき — 本 ADR)— 台帳 E1 に **暫定** として記録
 - [ ] L1 flood キャンペーン(ADR-0043 と同一)→ stamp ramp 凍結(外部)
 - [ ] L3: fraud 配線後に π/weight を較正(ADR-0045 依存)
+
+### DoD item 1 / item 2 の順序の整合(2026-07-27)
+
+item 2 は item 1 より先に tick されていた。これは論理的に逆で、Decision §3 が
+「台帳に三つ組で載って初めて凍結とみなす」と定めている以上、台帳が存在しない時点の
+「暫定凍結」は定義のない状態を主張していたことになる。台帳の新設でこれを解消する:
+
+- 10 MSK の bond 床は **`docs/econ-parameters-frozen.md` の E1 行に `status = 暫定` として記録**された。
+  **FROZEN ではない。** κ ≈ 12.6 は「攻撃利得の上界(live payout 79,299,440 sompi/leaf)からの
+  導出」であって、攻撃コストの実測ではないため。
+- 台帳の語彙上、**FROZEN は実測 evidence を持つ値だけに与える**。2026-07-27 時点で
+  FROZEN の経済パラメータは **1 つも無い**。item 2 の「暫定凍結」は「暫定」の側だけが真である。
+- 残る 3 レーン外部条件(多機 flood、ADR-0045 fraud 配線、独立レビュー)は台帳 §0 に
+  「この台帳がしていないこと」として明示した。台帳の新設はそれらを一切閉じない。

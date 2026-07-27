@@ -207,6 +207,17 @@ pub struct Args {
     /// for multiple boundaries; duplicate or conflicting claims for one pruning point are refused.
     #[serde_as(as = "Vec<DisplayFromStr>")]
     pub palw_pruning_snapshot_checkpoints: Vec<PalwPruningSnapshotCheckpoint>,
+    /// kaspa-pq ADR-0042 StopShip lever: admit a Header-v4 pruning boundary that this node
+    /// authenticates FROM THE CHAIN (a work-buried post-pruning-point descendant, plus the anti-spam
+    /// support-row header preimages) instead of from an out-of-band
+    /// `--palw-pruning-snapshot-checkpoint` digest.
+    ///
+    /// Node-local and consensus-neutral: it widens only what THIS node is willing to import — never
+    /// header/block validity, never a commitment — and it neither activates PALW nor opens the
+    /// network. Shipped `false` on every preset; every precondition is checked by
+    /// [`palw_permissionless_snapshot_auth_refusal`] at parse time AND again on the final params at
+    /// startup, and a failing one refuses the start.
+    pub palw_permissionless_snapshot_auth: bool,
     /// Explicit local filesystem ingress for canonical PALW Object-v2 artifacts. There is no public
     /// RPC equivalent; the directory is owner-only and every file still passes full consensus
     /// admission. Disabled unless a path is supplied together with `--palw-enable-algo4`.
@@ -324,6 +335,7 @@ impl Default for Args {
             validator_key: None,
             palw_enable_algo4: false,
             palw_pruning_snapshot_checkpoints: vec![],
+            palw_permissionless_snapshot_auth: false,
             palw_da_import_dir: None,
             evm_fee_recipient: None,
             stake_bond: None,
@@ -390,6 +402,96 @@ impl Default for Args {
     }
 }
 
+/// kaspa-pq **ADR-0042** — the single fail-closed predicate behind `--palw-permissionless-snapshot-auth`.
+///
+/// Returns `Some(reason)` when the lever must NOT be honoured, `None` when every precondition holds.
+/// One function, three call sites, so the CLI error, the `Args -> Config` projection and the daemon's
+/// startup refusal can never drift apart and disagree about what the lever requires.
+///
+/// What the lever does, and therefore what it needs:
+///   * It admits a pruning boundary that no operator pinned. The boundary is instead authenticated
+///     against the transported **anti-spam support rows**, each bound to a Header-v4 preimage, folded
+///     into a work-buried descendant's `overlay_commitment_root`. That construction is defined **only**
+///     on a network which actually runs the Header-v4 anti-spam accumulator — hence the non-inert,
+///     structurally valid, v4-genesis, PALW-active-at-genesis quartet (the ADR-0048 v4 fence).
+///   * Chain-derived import is Header-v4 ONLY. The Header-v3 path stays closed-network /
+///     operator-authenticated and is deliberately untouched.
+///   * The support-row headers live BELOW the pruning point, which is exactly what a pruned node
+///     deletes, so a node running this lever must retain them (`--archival`) or it can import a
+///     boundary once and never serve the same authentication onward.
+///   * A boundary is only useful to a node that will accept the algo-4 blocks above it
+///     (`--palw-enable-algo4`).
+///
+/// `params` must be the params the node will actually run: the daemon calls this AFTER
+/// `--override-params-file` has been applied, and `Args::parse` calls it on the network preset so the
+/// ordinary case is a clean CLI error instead of a mid-IBD surprise.
+pub fn palw_permissionless_snapshot_auth_refusal(
+    params: &kaspa_consensus_core::config::params::Params,
+    is_archival: bool,
+    algo4_accept: bool,
+) -> Option<String> {
+    use kaspa_consensus_core::constants::PALW_ANTISPAM_HEADER_VERSION;
+
+    let net = params.net;
+    if params.palw_spam.is_inert() {
+        return Some(format!(
+            "{net} runs the Header-v4 PALW anti-spam accumulator INERT (palw_spam.window_daa = 0). A \
+             chain-derived boundary is authenticated by binding the transported anti-spam support rows to \
+             their Header-v4 preimages, and an inert network has no such rows — there is nothing for this \
+             lever to authenticate. Use a non-inert Header-v4 preset (today: --testnet --netsuffix=200), or \
+             drop --palw-permissionless-snapshot-auth and pin the boundary with \
+             --palw-pruning-snapshot-checkpoint instead."
+        ));
+    }
+    if !params.palw_spam.is_structurally_valid() {
+        return Some(format!(
+            "{net} carries structurally invalid palw_spam params (window_daa={} replicas_per_hash={} \
+             base_stamp_bits={} max_stamp_bits={}). The checkpoint span and stamp floor are what BOUND the \
+             transported support-row set, so an out-of-range value makes the transported closure unbounded. \
+             Fix the preset in consensus/core/src/config/params.rs.",
+            params.palw_spam.window_daa,
+            params.palw_spam.replicas_per_hash,
+            params.palw_spam.base_stamp_bits,
+            params.palw_spam.max_stamp_bits
+        ));
+    }
+    if params.genesis.version != PALW_ANTISPAM_HEADER_VERSION {
+        return Some(format!(
+            "{net} genesis carries header version {}, not the Header-v4 schema ({PALW_ANTISPAM_HEADER_VERSION}). \
+             Chain-derived import is Header-v4 ONLY (ADR-0042); the Header-v3 path stays closed-network and \
+             operator-authenticated, and this lever must never be able to widen it. Use a Header-v4 re-genesis \
+             preset.",
+            params.genesis.version
+        ));
+    }
+    if params.palw_activation_daa_score > params.genesis.daa_score {
+        return Some(format!(
+            "{net} does not activate PALW at its own genesis (palw_activation_daa_score = {} > \
+             genesis.daa_score = {}). A pre-activation history segment has no anti-spam rows to bind, so the \
+             chain-derived boundary would be authenticated against a gap. Use a preset whose genesis is \
+             PALW-active (the ADR-0048 v4 fence).",
+            params.palw_activation_daa_score, params.genesis.daa_score
+        ));
+    }
+    if !algo4_accept {
+        return Some(format!(
+            "--palw-permissionless-snapshot-auth requires --palw-enable-algo4 (algo-4 acceptance is not active \
+             on {net}). A boundary authenticated from the chain is worthless to a node that rejects every \
+             algo-4 block above it — it would import the sidecar and then refuse the chain it was derived from."
+        ));
+    }
+    if !is_archival {
+        return Some(
+            "--palw-permissionless-snapshot-auth requires --archival. A chain-derived boundary is \
+             authenticated by the anti-spam support-row HEADERS below the pruning point, and a pruned node \
+             deletes exactly those headers — it could import such a boundary once and then never serve the \
+             same authentication onward, silently degrading the network to operator-pinned import."
+                .to_string(),
+        );
+    }
+    None
+}
+
 impl Args {
     pub fn apply_to_config(&self, config: &mut Config) {
         config.utxoindex = self.utxoindex;
@@ -436,6 +538,22 @@ impl Args {
                     "--palw-enable-algo4 ignored: PALW is inert on this network (palw_activation_daa_score = u64::MAX). \
                      Use a PALW preset (--devnet --netsuffix=111 or --testnet --netsuffix=110)."
                 );
+            }
+        }
+
+        // kaspa-pq ADR-0042 — the permissionless (chain-derived) snapshot-auth lever.
+        //
+        // Assigned LAST and unconditionally reset first, so this projection is the whole story for the
+        // field: nothing an earlier builder step or a programmatic `Config` set can leave behind
+        // survives here. It is applied only where chain-derived authentication is even defined, which
+        // makes this the defence-in-depth copy for embedders that build a `Config` straight from
+        // `Args` — kaspad itself REFUSES TO START on the same predicate rather than demoting (see
+        // `kaspad::daemon`), so an operator never gets a running node whose flag was quietly dropped.
+        config.palw_permissionless_snapshot_auth = false;
+        if self.palw_permissionless_snapshot_auth {
+            match palw_permissionless_snapshot_auth_refusal(&config.params, config.is_archival, config.params.palw_algo4_accept) {
+                None => config.palw_permissionless_snapshot_auth = true,
+                Some(reason) => kaspa_core::warn!("--palw-permissionless-snapshot-auth NOT applied: {reason}"),
             }
         }
 
@@ -746,6 +864,7 @@ pub fn cli() -> Command {
                 .value_parser(clap::value_parser!(PalwPruningSnapshotCheckpoint))
                 .help("Repeatable operator-authenticated Header-v4 pruned-IBD boundary. Both values are exact 128-hex Hash64 values. The node installs v4 snapshot state only when the requested pruning point and the canonical complete-payload digest (including anti-spam support rows) match this pin. Duplicate/conflicting pins are refused."),
         )
+        .arg(arg!(--"palw-permissionless-snapshot-auth" "StopShip / kaspa-pq ADR-0042. Admit chain-derived (permissionless) Header-v4 pruning-snapshot import: the boundary is authenticated from the chain — a work-buried post-pruning-point descendant plus the anti-spam support-row header preimages — instead of from an operator-pinned --palw-pruning-snapshot-checkpoint digest. Node-local and consensus-neutral: it widens only what THIS node will import; it never changes block validity, never activates PALW, and never opens the network (the peer allowlist and archival policies still apply unchanged). Header-v4 ONLY; the Header-v3 path stays closed-network. Requires a non-inert, structurally valid Header-v4 preset (v4 genesis, PALW active at genesis), --archival, and --palw-enable-algo4 — refused at startup otherwise. Default OFF on every preset. ADR-0042's Definition of Done is NOT closed (transport integration, the full-lifecycle 1c fixture, the 3 review points and the multi-node v4 soak all remain), so never set this on a public or value-bearing network.").env("KASPAD_PALW_PERMISSIONLESS_SNAPSHOT_AUTH"))
         .arg(
             Arg::new("palw-da-import-dir")
                 .long("palw-da-import-dir")
@@ -1075,6 +1194,11 @@ impl Args {
                 "palw-pruning-snapshot-checkpoint",
                 defaults.palw_pruning_snapshot_checkpoints,
             ),
+            palw_permissionless_snapshot_auth: arg_match_unwrap_or::<bool>(
+                &m,
+                "palw-permissionless-snapshot-auth",
+                defaults.palw_permissionless_snapshot_auth,
+            ),
             palw_da_import_dir: m.get_one::<String>("palw-da-import-dir").cloned().or(defaults.palw_da_import_dir),
             validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
             evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),
@@ -1137,6 +1261,24 @@ impl Args {
         validate_palw_pruning_snapshot_checkpoints(&args.palw_pruning_snapshot_checkpoints).map_err(|err| {
             clap::Error::raw(clap::error::ErrorKind::ValueValidation, format!("invalid PALW pruning snapshot checkpoints: {err}"))
         })?;
+
+        // kaspa-pq ADR-0042 StopShip fence, checked against the NETWORK PRESET the flags select.
+        //
+        // Evaluated only when the lever is actually requested, so the default path resolves no params
+        // at all. This is the early, operator-facing copy: `--override-params-file` is applied later
+        // and `Args` can also be built programmatically, so `kaspad::daemon` re-runs the same
+        // predicate on the FINAL params and refuses to start. Note that `OverrideParams` cannot reach
+        // `genesis`, `palw_spam` or `palw_activation_daa_score`, so an override can only ever make this
+        // stricter — never turn a non-v4 network into a v4 one behind this check's back.
+        if args.palw_permissionless_snapshot_auth {
+            let params: kaspa_consensus_core::config::params::Params = args.network().into();
+            if let Some(reason) = palw_permissionless_snapshot_auth_refusal(&params, args.archival, args.palw_enable_algo4) {
+                return Err(clap::Error::raw(
+                    clap::error::ErrorKind::ValueValidation,
+                    format!("invalid --palw-permissionless-snapshot-auth: {reason}\n"),
+                ));
+            }
+        }
 
         apply_profile_defaults(&mut args, &m, &cfg_baseline);
         apply_evm_storage_profile(&mut args, &m, &cfg_baseline)?;
@@ -1596,6 +1738,145 @@ mod profile_tests {
 
         let config_args: Args = from_str(&format!("palw-pruning-snapshot-checkpoints = [\"{first}\", \"{second}\"]")).unwrap();
         assert_eq!(config_args.palw_pruning_snapshot_checkpoints, vec![first, second]);
+    }
+
+    /// The staging Header-v4 re-genesis (`--testnet --netsuffix=200`) is the ONLY preset on which the
+    /// ADR-0042 lever can be honoured today; every argv below is the full, minimal accepted set.
+    const V4_NET: [&str; 2] = ["--testnet", "--netsuffix=200"];
+
+    #[test]
+    fn palw_permissionless_snapshot_auth_is_off_by_default_everywhere() {
+        assert!(!Args::default().palw_permissionless_snapshot_auth);
+        for net in
+            [vec![], vec!["--testnet"], vec!["--devnet"], vec!["--devnet", "--netsuffix=111"], vec!["--simnet"], V4_NET.to_vec()]
+        {
+            let args = parse(&net);
+            assert!(!args.palw_permissionless_snapshot_auth, "{net:?}: the ADR-0042 lever must default off");
+            let mut config = Config::new(args.network().into());
+            args.apply_to_config(&mut config);
+            assert!(!config.palw_permissionless_snapshot_auth, "{net:?}: the default must project to a disabled Config");
+        }
+    }
+
+    #[test]
+    fn palw_permissionless_snapshot_auth_parses_and_propagates_on_the_v4_staging_preset() {
+        let mut argv = V4_NET.to_vec();
+        argv.extend_from_slice(&["--archival", "--palw-enable-algo4", "--palw-permissionless-snapshot-auth"]);
+        let args = parse(&argv);
+        assert!(args.palw_permissionless_snapshot_auth);
+
+        let mut config = Config::new(args.network().into());
+        args.apply_to_config(&mut config);
+        assert!(config.palw_permissionless_snapshot_auth);
+        // The lever rides ON TOP of the existing posture; it never sets these itself.
+        assert!(config.is_archival);
+        assert!(config.params.palw_algo4_accept);
+        // ...and it does not disturb the operator-pinned path it is an alternative to.
+        assert!(config.palw_pruning_snapshot_checkpoints.is_empty());
+    }
+
+    /// Every refusal is a hard CLI error, never a warning: the flag names a consensus-import
+    /// behaviour, so "accepted but ignored" is the one outcome that must not be possible.
+    #[test]
+    fn palw_permissionless_snapshot_auth_cli_refuses_every_unsupported_combination() {
+        let mut without_archival = V4_NET.to_vec();
+        without_archival.extend_from_slice(&["--palw-enable-algo4", "--palw-permissionless-snapshot-auth"]);
+        let mut without_algo4 = V4_NET.to_vec();
+        without_algo4.extend_from_slice(&["--archival", "--palw-permissionless-snapshot-auth"]);
+
+        for (argv, needle) in [
+            // Header-v3 / inert presets: chain-derived import is Header-v4 ONLY.
+            (vec!["--palw-permissionless-snapshot-auth"], "INERT"),
+            (vec!["--testnet", "--palw-permissionless-snapshot-auth"], "INERT"),
+            (vec!["--devnet", "--netsuffix=111", "--palw-permissionless-snapshot-auth"], "INERT"),
+            (vec!["--testnet", "--netsuffix=110", "--palw-permissionless-snapshot-auth"], "INERT"),
+            (vec!["--simnet", "--palw-permissionless-snapshot-auth"], "INERT"),
+            // v4 preset, but the posture the lever depends on is missing.
+            (without_archival, "--archival"),
+            (without_algo4, "--palw-enable-algo4"),
+        ] {
+            let err = parse_err(&argv);
+            assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation, "{argv:?}");
+            let msg = err.to_string();
+            assert!(msg.contains("--palw-permissionless-snapshot-auth"), "{argv:?}: {msg}");
+            assert!(msg.contains(needle), "{argv:?}: expected {needle:?} in: {msg}");
+        }
+    }
+
+    /// The predicate is the single source of truth shared by the CLI, `apply_to_config` and the
+    /// daemon's startup refusal, so pin its two directions directly.
+    #[test]
+    fn palw_permissionless_snapshot_auth_refusal_pins_the_v4_only_matrix() {
+        use kaspa_consensus_core::config::params::{
+            DEVNET_PALW_PARAMS, DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, STAGING_MAINNET_PALW_PARAMS, TESTNET_PALW_PARAMS,
+            TESTNET_PARAMS,
+        };
+
+        // Non-v4 / inert networks are refused even with the full archival + algo-4 posture.
+        for (name, params) in [
+            ("mainnet", MAINNET_PARAMS),
+            ("testnet-10", TESTNET_PARAMS),
+            ("testnet-palw-110", TESTNET_PALW_PARAMS),
+            ("devnet-palw-111", DEVNET_PALW_PARAMS),
+            ("simnet", SIMNET_PARAMS),
+            ("devnet", DEVNET_PARAMS),
+        ] {
+            assert!(
+                palw_permissionless_snapshot_auth_refusal(&params, true, true).is_some(),
+                "{name}: chain-derived import must stay Header-v4 only"
+            );
+        }
+
+        // The one v4 preset: accepted with the full posture, refused without either half of it.
+        let v4 = STAGING_MAINNET_PALW_PARAMS;
+        assert!(palw_permissionless_snapshot_auth_refusal(&v4, true, true).is_none());
+        assert!(palw_permissionless_snapshot_auth_refusal(&v4, false, true).unwrap().contains("--archival"));
+        assert!(palw_permissionless_snapshot_auth_refusal(&v4, true, false).unwrap().contains("--palw-enable-algo4"));
+        assert!(palw_permissionless_snapshot_auth_refusal(&v4, false, false).is_some());
+
+        // A v4 preset whose anti-spam params drifted out of range is refused, not silently accepted:
+        // the checkpoint span is what bounds the transported support-row closure.
+        let mut malformed = STAGING_MAINNET_PALW_PARAMS;
+        malformed.palw_spam.max_stamp_bits = malformed.palw_spam.base_stamp_bits - 1;
+        assert!(palw_permissionless_snapshot_auth_refusal(&malformed, true, true).unwrap().contains("structurally invalid"));
+
+        // ...as is a v4 preset that does not activate PALW at its own genesis (ADR-0048 v4 fence).
+        let mut late_activation = STAGING_MAINNET_PALW_PARAMS;
+        late_activation.palw_activation_daa_score = late_activation.genesis.daa_score + 1;
+        assert!(palw_permissionless_snapshot_auth_refusal(&late_activation, true, true).unwrap().contains("does not activate PALW"));
+
+        // ...and a v3-genesis network, even with non-inert anti-spam params bolted on.
+        let mut v3_genesis = STAGING_MAINNET_PALW_PARAMS;
+        v3_genesis.genesis.version = kaspa_consensus_core::constants::PALW_HEADER_VERSION;
+        assert!(palw_permissionless_snapshot_auth_refusal(&v3_genesis, true, true).unwrap().contains("Header-v4 ONLY"));
+    }
+
+    /// Defence in depth for embedders that build a `Config` straight from a programmatic `Args`
+    /// (bypassing the CLI parser): the projection must never leave a `true` on a network where
+    /// chain-derived authentication is undefined.
+    #[test]
+    fn palw_permissionless_snapshot_auth_projection_is_fail_closed_for_programmatic_args() {
+        let mut args = Args { palw_permissionless_snapshot_auth: true, archival: true, palw_enable_algo4: true, ..Default::default() };
+
+        // Mainnet: inert v3 network — dropped.
+        let mut mainnet = Config::new(args.network().into());
+        args.apply_to_config(&mut mainnet);
+        assert!(!mainnet.palw_permissionless_snapshot_auth);
+
+        // The v4 staging preset — honoured.
+        args.testnet = true;
+        args.testnet_suffix = 200;
+        let mut staging = Config::new(args.network().into());
+        args.apply_to_config(&mut staging);
+        assert!(staging.palw_permissionless_snapshot_auth);
+
+        // Same v4 preset, archival withdrawn — dropped again, and a pre-set `true` on the Config does
+        // not survive the projection either.
+        args.archival = false;
+        let mut pruned = Config::new(args.network().into());
+        pruned.palw_permissionless_snapshot_auth = true;
+        args.apply_to_config(&mut pruned);
+        assert!(!pruned.palw_permissionless_snapshot_auth);
     }
 
     #[test]

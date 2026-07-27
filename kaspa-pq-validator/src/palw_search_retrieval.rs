@@ -22,12 +22,12 @@ use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
+use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw::search_snapshot::{
     PALW_SEARCH_MAX_RESULTS, PALW_SEARCH_MAX_SNIPPET_BYTES, PALW_SEARCH_MAX_TITLE_BYTES, PALW_SEARCH_MAX_URL_BYTES,
-    PALW_SEARCH_SNAPSHOT_VERSION_V1, PalwSearchMediaTypeV1, PalwSearchOutcomeV1, PalwSearchProviderPolicyV1,
-    PalwSearchResultV1, PalwSearchSnapshotV1, normalize_query_v1,
+    PALW_SEARCH_SNAPSHOT_VERSION_V1, PalwSearchMediaTypeV1, PalwSearchOutcomeV1, PalwSearchProviderPolicyV1, PalwSearchResultV1,
+    PalwSearchSnapshotV1, normalize_query_v1,
 };
-use kaspa_consensus_core::Hash64;
 
 /// Default provider timeout.
 pub const DEFAULT_TIMEOUT_MS: u64 = 15_000;
@@ -315,10 +315,7 @@ fn parse_searxng_results(body: &[u8], max_results: usize) -> Result<Vec<PalwSear
             media_type,
             title: bounded_text(row.get("title").and_then(|value| value.as_str()).unwrap_or(""), PALW_SEARCH_MAX_TITLE_BYTES),
             url: url.to_string(),
-            snippet: bounded_text(
-                row.get("content").and_then(|value| value.as_str()).unwrap_or(""),
-                PALW_SEARCH_MAX_SNIPPET_BYTES,
-            ),
+            snippet: bounded_text(row.get("content").and_then(|value| value.as_str()).unwrap_or(""), PALW_SEARCH_MAX_SNIPPET_BYTES),
         });
     }
     Ok(results)
@@ -443,9 +440,21 @@ mod tests {
             assert!(require_public(public.parse().unwrap()).is_ok(), "{public}");
             assert!(require_operator_local(public.parse().unwrap()).is_err(), "{public}");
         }
-        for private in
-            ["127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.1", "100.125.83.97", "169.254.1.1", "::1", "fd00::1", "fe80::1", "224.0.0.1", "240.0.0.1", "198.18.0.1", "::ffff:10.0.0.1"]
-        {
+        for private in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.9",
+            "192.168.1.1",
+            "100.125.83.97",
+            "169.254.1.1",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "198.18.0.1",
+            "::ffff:10.0.0.1",
+        ] {
             assert!(require_public(private.parse().unwrap()).is_err(), "{private}");
         }
         for local in ["127.0.0.1", "10.1.2.3", "100.125.83.97", "::1", "fd00::1", "::ffff:192.168.0.1"] {
@@ -520,12 +529,9 @@ mod tests {
         let snapshot = retrieve_search_snapshot(&request(empty), &anchor(), &RetrievalPolicyV1::default()).unwrap();
         assert_eq!(snapshot.outcome, PalwSearchOutcomeV1::EmptyResults);
 
-        let denied = retrieve_search_snapshot(
-            &request("https://searx.example.org".to_string()),
-            &anchor(),
-            &RetrievalPolicyV1::default(),
-        )
-        .unwrap();
+        let denied =
+            retrieve_search_snapshot(&request("https://searx.example.org".to_string()), &anchor(), &RetrievalPolicyV1::default())
+                .unwrap();
         assert_eq!(denied.outcome, PalwSearchOutcomeV1::EgressDenied);
 
         let refused = retrieve_search_snapshot(

@@ -127,11 +127,7 @@ pub fn receipts_root_v2(receipts: &[EvmReceipt], executed_raws: &[Vec<u8>]) -> E
 /// recomputes through it, so the archive cannot drift from what the block
 /// committed. `executed_raws` is unused below the fence and may be empty there.
 pub fn receipts_root_for_fence(typed_v2: bool, receipts: &[EvmReceipt], executed_raws: &[Vec<u8>]) -> EvmH256 {
-    if typed_v2 {
-        receipts_root_v2(receipts, executed_raws)
-    } else {
-        receipts_root(receipts)
-    }
+    if typed_v2 { receipts_root_v2(receipts, executed_raws) } else { receipts_root(receipts) }
 }
 
 /// Accrue one item (a 20-byte address or a 32-byte topic) into a 2048-bit

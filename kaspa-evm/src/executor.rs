@@ -630,11 +630,7 @@ pub fn empty_acceptance_result(input: &EvmBlockInput) -> EvmExecutionResult {
         // receipts v1 and v2 both yield Ethereum's empty-trie root, so this does not
         // change any committed bytes — it keeps the two paths provably in lockstep.)
         // Same selector the full path commits through (`receipts_root_for_fence`).
-        receipts_root: roots::receipts_root_for_fence(
-            input.daa_score >= input.typed_receipt_root_activation_daa_score,
-            &[],
-            &[],
-        ),
+        receipts_root: roots::receipts_root_for_fence(input.daa_score >= input.typed_receipt_root_activation_daa_score, &[], &[]),
         system_ops_root: roots::system_ops_root(&[]),
         withdrawals_root: roots::withdrawals_root(&[]),
         deposit_claim_queue_root: roots::deposit_claim_root(&[]),

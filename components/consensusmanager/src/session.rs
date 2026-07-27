@@ -666,6 +666,37 @@ impl ConsensusSessionOwned {
             })
             .await
     }
+
+    /// ADR-0042 permissionless catch-up variant. `chain_derived` is honoured only behind the
+    /// node-local `Config::palw_permissionless_snapshot_auth` lever AND chain-derived provenance;
+    /// passing `None` is identical to
+    /// [`Self::async_intrusive_pruning_point_update_with_palw_snapshot`].
+    pub async fn async_intrusive_pruning_point_update_with_palw_snapshot_and_chain_derived_auth(
+        &self,
+        new_pruning_point: BlockHash,
+        syncer_sink: BlockHash,
+        pruning_point_daa_score: u64,
+        pruning_point_header_version: u16,
+        expected_spam_commitment: Hash64,
+        import_auth: kaspa_consensus_core::palw_pruned_frontier::PalwPruningSnapshotImportAuth,
+        snapshot: kaspa_consensus_core::palw_pruned_frontier::PalwPruningPointSnapshotV1,
+        chain_derived: Option<kaspa_consensus_core::palw_pruned_frontier::PalwChainDerivedAuthBundleV1>,
+    ) -> ConsensusResult<()> {
+        self.clone()
+            .spawn_blocking(move |c| {
+                c.intrusive_pruning_point_update_with_palw_snapshot_and_chain_derived_auth(
+                    new_pruning_point,
+                    syncer_sink,
+                    pruning_point_daa_score,
+                    pruning_point_header_version,
+                    expected_spam_commitment,
+                    import_auth,
+                    snapshot,
+                    chain_derived,
+                )
+            })
+            .await
+    }
     pub async fn async_get_n_last_pruning_points(&self, n: usize) -> Vec<BlockHash> {
         self.clone().spawn_blocking(move |c| c.get_n_last_pruning_points(n)).await
     }

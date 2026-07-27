@@ -120,16 +120,14 @@ impl DbPalwDaStore {
             Err(StoreError::KeyNotFound(_)) => match self.state_links.read(block) {
                 Ok(link) => match self.states.read(link.anchor) {
                     Ok(state) => Ok((state, link.anchor)),
-                    Err(StoreError::KeyNotFound(_)) => Err(StoreError::DataInconsistency(format!(
-                        "PALW DA state link {block} -> {} is dangling",
-                        link.anchor
-                    ))),
+                    Err(StoreError::KeyNotFound(_)) => {
+                        Err(StoreError::DataInconsistency(format!("PALW DA state link {block} -> {} is dangling", link.anchor)))
+                    }
                     Err(error) => Err(error),
                 },
-                Err(StoreError::KeyNotFound(_)) => Err(StoreError::KeyNotFound(DbKey::new(
-                    &Vec::from(DatabaseStorePrefixes::PalwDaStateByBlock),
-                    block,
-                ))),
+                Err(StoreError::KeyNotFound(_)) => {
+                    Err(StoreError::KeyNotFound(DbKey::new(&Vec::from(DatabaseStorePrefixes::PalwDaStateByBlock), block)))
+                }
                 Err(error) => Err(error),
             },
             Err(error) => Err(error),
@@ -259,9 +257,8 @@ impl DbPalwDaStore {
     pub(crate) fn validate_search_snapshot(root: Hash64, stored: &PalwSearchSnapshotStoredV1) -> StoreResult<()> {
         let snapshot = PalwSearchSnapshotV1::decode_strict(&stored.bytes)
             .map_err(|error| StoreError::DataInconsistency(format!("invalid PALW search snapshot: {error}")))?;
-        let reencoded = snapshot
-            .encode()
-            .map_err(|error| StoreError::DataInconsistency(format!("invalid PALW search snapshot: {error}")))?;
+        let reencoded =
+            snapshot.encode().map_err(|error| StoreError::DataInconsistency(format!("invalid PALW search snapshot: {error}")))?;
         if reencoded != stored.bytes {
             return Err(StoreError::DataInconsistency("PALW search snapshot round-trip is non-canonical".into()));
         }
@@ -517,10 +514,7 @@ mod tests {
         let mut batch = WriteBatch::default();
         store.set_state_link_batch(&mut batch, linked_a, anchor_block).unwrap();
         store.set_state_link_batch(&mut batch, linked_b, anchor_block).unwrap();
-        assert!(matches!(
-            store.set_state_link_batch(&mut batch, linked_a, linked_a),
-            Err(StoreError::DataInconsistency(_))
-        ));
+        assert!(matches!(store.set_state_link_batch(&mut batch, linked_a, linked_a), Err(StoreError::DataInconsistency(_))));
         db.write(batch).unwrap();
 
         // Linked blocks resolve to the anchor's full state through the reader trait, and the
@@ -585,10 +579,7 @@ mod tests {
         // Tampered stored digest is rejected.
         let mut bad_digest = stored.clone();
         bad_digest.snapshot_digest = h(0x02);
-        assert!(matches!(
-            store.insert_admitted_search_snapshot(root, Arc::new(bad_digest)),
-            Err(StoreError::DataInconsistency(_))
-        ));
+        assert!(matches!(store.insert_admitted_search_snapshot(root, Arc::new(bad_digest)), Err(StoreError::DataInconsistency(_))));
 
         // Retention GC: not expired at the boundary, expired one score later.
         assert!(store.delete_expired_search_snapshots(stored.retention_until_daa_score, 16).unwrap().is_empty());

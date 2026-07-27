@@ -7200,24 +7200,14 @@ async fn palw_algo4_sink_reorg_cross_fork_nullifier_replay_e2e() {
         BlockStatus::StatusUTXOValid,
         "B3 (fork B tip) is accepted"
     );
-    assert_eq!(
-        tc.consensus_clone().get_sink(),
-        b3_hash,
-        "the virtual sink REORGED onto fork B (this is the chain switch under test)"
-    );
-    assert!(
-        tc.storage.palw_nullifier_store.get(b3_hash).unwrap().contains(&f.nullifier),
-        "fork B's window carries N via Y only"
-    );
+    assert_eq!(tc.consensus_clone().get_sink(), b3_hash, "the virtual sink REORGED onto fork B (this is the chain switch under test)");
+    assert!(tc.storage.palw_nullifier_store.get(b3_hash).unwrap().contains(&f.nullifier), "fork B's window carries N via Y only");
 
     // The design pin: EACH fork's selected chain credited the leaf's providers exactly once. The
     // double-credit exists only across mutually exclusive histories, never along one selected chain.
     let credited =
         |cb: &Transaction, s: &ScriptPublicKey| cb.outputs.iter().filter(|o| &o.script_public_key == s).map(|o| o.value).sum::<u64>();
-    assert!(
-        credited(&a1_coinbase, &f.prov_a) > 0 && credited(&a1_coinbase, &f.prov_b) > 0,
-        "fork A credited the providers once (A1)"
-    );
+    assert!(credited(&a1_coinbase, &f.prov_a) > 0 && credited(&a1_coinbase, &f.prov_b) > 0, "fork A credited the providers once (A1)");
     assert!(
         credited(&b2_coinbase, &f.prov_a) > 0 && credited(&b2_coinbase, &f.prov_b) > 0,
         "fork B credited the providers once (B2) — pre-merge cross-fork reuse is accepted by design"

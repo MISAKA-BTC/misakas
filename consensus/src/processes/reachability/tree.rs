@@ -188,10 +188,7 @@ mod tests {
             }
             add_tree_block(&mut store, (10 + i).into(), parent, 100, 1 << 14).unwrap();
         }
-        assert!(
-            reindex_events <= 2,
-            "a 1,000-sibling flood must amortize to O(1) reindex events, got {reindex_events}"
-        );
+        assert!(reindex_events <= 2, "a 1,000-sibling flood must amortize to O(1) reindex events, got {reindex_events}");
         // The reachability invariants survive the flood allocation policy.
         store.validate_intervals(root).unwrap();
     }

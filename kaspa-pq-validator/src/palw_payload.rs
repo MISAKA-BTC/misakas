@@ -73,13 +73,23 @@ enum PalwPayloadCommand {
     ComputeJobspec(ComputeJobspecPayloadArgs),
 }
 
-/// The two shipped PALW-active, closed-testnet presets.
+/// The three shipped PALW-active, closed-network presets.
+///
+/// Every variant must resolve through `Params::from(NetworkId)` to its OWN preset: the floors read
+/// off it (provider-bond amount, unbond delay, batch admission) are what keep an artifact from being
+/// accepted as bytes yet dropped by the registry. A missing variant is not a cosmetic gap — the
+/// operator would silently build staging artifacts against the `testnet-110` preset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum PalwArtifactNetwork {
     #[value(name = "testnet-110")]
     Testnet110,
     #[value(name = "devnet-111")]
     Devnet111,
+    /// ADR-0048 `staging-mainnet-palw` — the Header-v4 staging rehearsal net
+    /// (`STAGING_MAINNET_PALW_PARAMS`, consensus/core/src/config/params.rs:1719, selected by
+    /// params.rs:946 as testnet suffix 200).
+    #[value(name = "testnet-200")]
+    Testnet200,
 }
 
 impl PalwArtifactNetwork {
@@ -87,6 +97,7 @@ impl PalwArtifactNetwork {
         match self {
             Self::Testnet110 => NetworkId::with_suffix(NetworkType::Testnet, 110),
             Self::Devnet111 => NetworkId::with_suffix(NetworkType::Devnet, 111),
+            Self::Testnet200 => NetworkId::with_suffix(NetworkType::Testnet, 200),
         }
     }
 }
@@ -319,6 +330,108 @@ mod tests {
         below_delay.unbond_delay_epochs = params.provider_unbond_floor_epochs - 1;
         let err = build_provider_bond_artifact(&key, &below_delay).unwrap_err();
         assert!(err.contains("silently clamp"));
+    }
+
+    #[test]
+    fn artifact_networks_resolve_to_their_own_shipped_presets() {
+        use kaspa_consensus_core::config::params::{DEVNET_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, TESTNET_PALW_PARAMS};
+
+        assert_eq!(PalwArtifactNetwork::Testnet110.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 110));
+        assert_eq!(PalwArtifactNetwork::Devnet111.network_id(), NetworkId::with_suffix(NetworkType::Devnet, 111));
+        assert_eq!(PalwArtifactNetwork::Testnet200.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 200));
+
+        for (network, preset, name) in [
+            (PalwArtifactNetwork::Testnet110, TESTNET_PALW_PARAMS, "testnet-110"),
+            (PalwArtifactNetwork::Devnet111, DEVNET_PALW_PARAMS, "devnet-111"),
+            (PalwArtifactNetwork::Testnet200, STAGING_MAINNET_PALW_PARAMS, "testnet-200"),
+        ] {
+            assert_eq!(network.network_id().to_string(), name, "the clap value name must be the network id operators type");
+            let resolved = Params::from(network.network_id());
+            assert_eq!(resolved.net, preset.net);
+            // The genesis hash — not any admission number — is what actually distinguishes these
+            // presets today: all three still carry `PalwBatchAdmissionParams::INERT`, so a
+            // wrong-preset fallback would leave every floor numerically identical and invisible.
+            // Pin preset IDENTITY first, then the floors read at the artifact-build sites.
+            assert_eq!(resolved.genesis.hash, preset.genesis.hash, "{name} resolved to a different preset's genesis");
+            assert_eq!(resolved.palw_batch_admission.min_provider_bond_sompi, preset.palw_batch_admission.min_provider_bond_sompi);
+            assert_eq!(
+                resolved.palw_batch_admission.provider_unbond_floor_epochs,
+                preset.palw_batch_admission.provider_unbond_floor_epochs
+            );
+        }
+        assert_ne!(
+            STAGING_MAINNET_PALW_PARAMS.genesis.hash, TESTNET_PALW_PARAMS.genesis.hash,
+            "staging and testnet-110 must stay distinguishable for the assertions above to have teeth"
+        );
+    }
+
+    #[test]
+    fn staging_provider_bond_floor_comes_from_the_staging_preset() {
+        use kaspa_consensus_core::config::params::STAGING_MAINNET_PALW_PARAMS;
+
+        let key = ValidatorKey::from_seed([0x63; 32]);
+        let staging = Params::from(PalwArtifactNetwork::Testnet200.network_id()).palw_batch_admission;
+        assert_eq!(staging.min_provider_bond_sompi, STAGING_MAINNET_PALW_PARAMS.palw_batch_admission.min_provider_bond_sompi);
+        assert_eq!(
+            staging.provider_unbond_floor_epochs,
+            STAGING_MAINNET_PALW_PARAMS.palw_batch_admission.provider_unbond_floor_epochs
+        );
+
+        let mut at_floor = args(staging.min_provider_bond_sompi);
+        at_floor.network = PalwArtifactNetwork::Testnet200;
+        at_floor.unbond_delay_epochs = staging.provider_unbond_floor_epochs;
+        let payload = build_provider_bond_artifact(&key, &at_floor).unwrap();
+        let bond = PalwProviderBondPayloadV1::try_from_slice(&payload).unwrap();
+        assert_eq!(bond.amount_sompi, staging.min_provider_bond_sompi);
+
+        let mut below = args(staging.min_provider_bond_sompi - 1);
+        below.network = PalwArtifactNetwork::Testnet200;
+        let err = build_provider_bond_artifact(&key, &below).unwrap_err();
+        assert!(err.contains("omitted from the provider registry"));
+        assert!(err.contains("testnet-200"), "the floor rejection must name the selected staging network, got: {err}");
+    }
+
+    #[test]
+    fn network_selector_accepts_staging_without_moving_the_default() {
+        let hash = "11".repeat(64);
+        let base = [
+            "palw-payload",
+            "provider-bond",
+            "--validator-key",
+            "validator.key",
+            "--operator-group-id",
+            hash.as_str(),
+            "--runtime-class",
+            hash.as_str(),
+            "--capacity",
+            "7=4",
+            "--reward-key-root",
+            hash.as_str(),
+            "--amount",
+            "10MSK",
+            "--out",
+            "bond.borsh",
+        ];
+
+        let defaulted = PalwPayloadArgs::try_parse_from(base).unwrap();
+        let PalwPayloadCommand::ProviderBond(defaulted) = defaulted.command else { panic!("expected provider-bond") };
+        assert_eq!(defaulted.network, PalwArtifactNetwork::Testnet110, "the default network must NOT move with this change");
+
+        for (value, expected) in [
+            ("testnet-110", PalwArtifactNetwork::Testnet110),
+            ("devnet-111", PalwArtifactNetwork::Devnet111),
+            ("testnet-200", PalwArtifactNetwork::Testnet200),
+        ] {
+            let selected =
+                PalwPayloadArgs::try_parse_from(base.iter().copied().chain(["--network", value])).expect("value name must parse");
+            let PalwPayloadCommand::ProviderBond(selected) = selected.command else { panic!("expected provider-bond") };
+            assert_eq!(selected.network, expected);
+        }
+
+        assert!(
+            PalwPayloadArgs::try_parse_from(base.iter().copied().chain(["--network", "staging-mainnet-palw"])).is_err(),
+            "only the network-id spelling is accepted; no undocumented alias"
+        );
     }
 
     #[test]

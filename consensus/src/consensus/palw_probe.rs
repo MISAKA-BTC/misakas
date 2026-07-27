@@ -7,8 +7,7 @@ use kaspa_consensus_core::{
     },
     palw_probe::{
         PalwActivationProbe, PalwBatchProbe, PalwDaChallengeProbe, PalwDaObligationProbe, PalwProviderBondProbe,
-        PalwSearchChallengeProbe, PalwStateProbe,
-        PalwStateProbeError,
+        PalwSearchChallengeProbe, PalwStateProbe, PalwStateProbeError,
     },
     tx::TransactionOutpoint,
 };
@@ -190,8 +189,7 @@ impl Consensus {
                         if obligation.scheduler_bond != wanted {
                             return None;
                         }
-                        let PalwSearchObligationStatusV1::Challenged { response_deadline_daa_score, chunk_index } =
-                            obligation.status
+                        let PalwSearchObligationStatusV1::Challenged { response_deadline_daa_score, chunk_index } = obligation.status
                         else {
                             return None;
                         };
@@ -268,19 +266,18 @@ impl Consensus {
             _ => None,
         };
 
-        let probe =
-            PalwStateProbe {
-                enabled,
-                sink,
-                sink_daa_score,
-                overlay_view_available,
-                batch,
-                provider_bond,
-                da_challenges,
-                da_obligations,
-                search_challenges,
-                activation,
-            };
+        let probe = PalwStateProbe {
+            enabled,
+            sink,
+            sink_daa_score,
+            overlay_view_available,
+            batch,
+            provider_bond,
+            da_challenges,
+            da_obligations,
+            search_challenges,
+            activation,
+        };
         drop(virtual_read);
         Ok(probe)
     }

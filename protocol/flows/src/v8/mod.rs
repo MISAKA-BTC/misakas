@@ -15,6 +15,7 @@ use crate::v7::{
 pub(crate) mod claimrelay_evm;
 pub mod palw_da;
 pub(crate) mod request_block_bodies;
+pub(crate) mod request_palw_chain_derived_bundle;
 pub(crate) mod request_pruning_point_snapshots;
 pub(crate) mod txrelay_evm;
 use crate::{
@@ -29,6 +30,7 @@ use crate::ibd::IbdFlow;
 use kaspa_p2p_lib::{KaspadMessagePayloadType, Router, SharedIncomingRoute, convert::header::HeaderFormat};
 use kaspa_utils::channel;
 use request_block_bodies::HandleBlockBodyRequests;
+use request_palw_chain_derived_bundle::RequestPalwChainDerivedBundleFlow;
 use request_pruning_point_snapshots::{
     RequestPruningPointEvmStateFlow, RequestPruningPointOverlaySnapshotFlow, RequestPruningPointPalwSnapshotFlow,
 };
@@ -64,6 +66,9 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
                 KaspadMessagePayloadType::PruningPointEvmState,
                 KaspadMessagePayloadType::PruningPointOverlaySnapshot,
                 KaspadMessagePayloadType::PruningPointPalwSnapshot,
+                // ADR-0042 chain-derived (permissionless) Header-v4 boundary authentication bundle.
+                KaspadMessagePayloadType::PalwChainDerivedBundleChunk,
+                KaspadMessagePayloadType::DonePalwChainDerivedBundle,
             ]),
             relay_receiver,
             body_only_ibd_permitted,
@@ -126,6 +131,16 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             ctx.clone(),
             router.clone(),
             router.subscribe(vec![KaspadMessagePayloadType::RequestPruningPointPalwSnapshot]),
+        )),
+        // ADR-0042: serve the chain-derived Header-v4 boundary authentication bundle. v8-only, so a
+        // v7 peer has no route for these types and can never legally send them.
+        Box::new(RequestPalwChainDerivedBundleFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe(vec![
+                KaspadMessagePayloadType::RequestPalwChainDerivedBundle,
+                KaspadMessagePayloadType::RequestNextPalwChainDerivedBundleChunks,
+            ]),
         )),
         Box::new(HandleIbdBlockRequests::new(
             ctx.clone(),

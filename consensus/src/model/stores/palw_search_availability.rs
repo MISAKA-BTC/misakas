@@ -90,10 +90,9 @@ impl DbPalwSearchAvailabilityStore {
             Err(StoreError::KeyNotFound(_)) => match self.state_links.read(block) {
                 Ok(link) => match self.states.read(link.anchor) {
                     Ok(state) => Ok((state, link.anchor)),
-                    Err(StoreError::KeyNotFound(_)) => Err(StoreError::DataInconsistency(format!(
-                        "PALW search state link {block} -> {} is dangling",
-                        link.anchor
-                    ))),
+                    Err(StoreError::KeyNotFound(_)) => {
+                        Err(StoreError::DataInconsistency(format!("PALW search state link {block} -> {} is dangling", link.anchor)))
+                    }
                     Err(error) => Err(error),
                 },
                 Err(StoreError::KeyNotFound(_)) => Err(StoreError::KeyNotFound(DbKey::new(

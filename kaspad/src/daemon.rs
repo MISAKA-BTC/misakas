@@ -70,7 +70,7 @@ pub const MINIMUM_DAEMON_SOFT_FD_LIMIT: u64 = 4 * 1024;
 const MINIMUM_RETENTION_PERIOD_DAYS: f64 = 2.0;
 const ONE_GIGABYTE: f64 = 1_000_000_000.0;
 
-use crate::args::{Args, NodeProfile, VPS_8GB_MIN_SYSTEM_MEMORY_BYTES};
+use crate::args::{Args, NodeProfile, VPS_8GB_MIN_SYSTEM_MEMORY_BYTES, palw_permissionless_snapshot_auth_refusal};
 use crate::disk_guard::{DiskGuard, DiskGuardThresholds, DiskPressureHandle, data_mount_free_percent};
 use crate::evm_retention::EvmRetentionService;
 use crate::palw_da_spool::{PalwDaSpoolConfig, PalwDaSpoolService};
@@ -182,6 +182,13 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
         }
         if args.palw_da_import_dir.is_some() {
             return Err(ConfigError::NodeProfileIncompatible(profile, "--palw-da-import-dir"));
+        }
+        // ADR-0042: a sync-only profile is pruned by definition, and a chain-derived boundary is
+        // authenticated by the below-pruning-point anti-spam support-row headers that pruning deletes.
+        // Named explicitly rather than left to the `--archival` arm above, so an operator who sets the
+        // lever WITHOUT --archival is told which flag is the problem instead of neither firing.
+        if args.palw_permissionless_snapshot_auth {
+            return Err(ConfigError::NodeProfileIncompatible(profile, "--palw-permissionless-snapshot-auth"));
         }
         if args.evm_rpc_listen.is_some() {
             return Err(ConfigError::NodeProfileIncompatible(profile, "--evm-rpc-listen"));
@@ -620,6 +627,47 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
             config.params.net
         );
         exit(1);
+    }
+
+    // kaspa-pq **ADR-0042** — the permissionless (chain-derived) pruning-snapshot auth lever,
+    // re-checked on the FINAL configuration.
+    //
+    // `Args::parse` already refuses the unsupported combinations, but this is the authoritative check
+    // and the only one that sees the values the node will actually run: params after
+    // `--override-params-file`, algo-4 acceptance after `apply_to_config` resolved it, and archival
+    // after the profile defaults. It also covers a programmatically built `Args`, which never went
+    // through the CLI parser at all.
+    //
+    // It reads the operator's REQUEST (`args.palw_permissionless_snapshot_auth`) rather than the
+    // projected config field on purpose: `Args::apply_to_config` drops the flag on an unsupported
+    // network, and a node started with an explicitly requested but silently dropped consensus-import
+    // lever must refuse, not run as a no-op that looks enabled in the operator's command line.
+    if args.palw_permissionless_snapshot_auth {
+        if let Some(reason) =
+            palw_permissionless_snapshot_auth_refusal(&config.params, config.is_archival, config.params.palw_algo4_accept)
+        {
+            println!("Refusing to start: --palw-permissionless-snapshot-auth: {reason}");
+            exit(1);
+        }
+        // Enabled and honoured. Stated unconditionally and in full, because the one thing this lever
+        // must never do is quietly imply that some OTHER fence was relaxed: it widens what this node
+        // IMPORTS, and leaves the archival requirement and the peer allowlist exactly where they were
+        // (both re-asserted here from the effective configuration, not from the flags).
+        warn!(
+            "PALW chain-derived (permissionless) pruning-snapshot import is ENABLED on {} (ADR-0042, StopShip). \
+             Node-local and consensus-neutral: this node will admit a Header-v4 boundary it authenticates from \
+             the chain instead of from --palw-pruning-snapshot-checkpoint. It does NOT open the network and does \
+             NOT relax any other fence — peer-allowlist-required={}, --connect peers={}, archival={}, \
+             algo4-accept={}, operator pins={}. ADR-0042's Definition of Done is not closed (transport \
+             integration, the full-lifecycle 1c fixture, the 3 review points, the multi-node v4 soak): do not \
+             run this on a public or value-bearing network.",
+            config.params.net,
+            config.params.palw_requires_peer_allowlist,
+            args.connect_peers.len(),
+            config.is_archival,
+            config.params.palw_algo4_accept,
+            config.palw_pruning_snapshot_checkpoints.len(),
+        );
     }
 
     let app_dir = get_app_dir_from_args(args);
@@ -1489,6 +1537,92 @@ mod tests {
             validate_args(&parse(&["--node-profile=bootstrap-pruned", "--palw-enable-algo4", "--palw-da-import-dir=/tmp/palw-da",])),
             Err(ConfigError::NodeProfileIncompatible(_, "--palw-da-import-dir"))
         ));
+    }
+
+    /// ADR-0042: a sync-only profile prunes the below-pruning-point anti-spam support-row headers a
+    /// chain-derived boundary is authenticated against, so the two are refused as incompatible with a
+    /// message that names THIS flag — not the `--archival` arm the operator did not set.
+    #[test]
+    fn sync_only_profiles_reject_permissionless_snapshot_auth() {
+        for profile in [NodeProfile::BootstrapPruned, NodeProfile::RecoverySync] {
+            let args = Args {
+                node_profile: profile,
+                connect_peers: vec!["1.2.3.4:26111".parse().expect("peer")],
+                palw_permissionless_snapshot_auth: true,
+                ..Default::default()
+            };
+            assert!(
+                matches!(validate_args(&args), Err(ConfigError::NodeProfileIncompatible(_, "--palw-permissionless-snapshot-auth"))),
+                "{}",
+                profile.as_str()
+            );
+        }
+    }
+
+    /// The daemon's startup refusal runs on the FINAL params — after `--override-params-file` and
+    /// after `apply_to_config` resolved algo-4 acceptance — so a programmatic `Args` that never went
+    /// through the CLI parser is fenced by exactly the same predicate.
+    #[test]
+    fn daemon_refuses_permissionless_snapshot_auth_on_a_non_v4_or_pruned_node() {
+        let mut args = Args { palw_permissionless_snapshot_auth: true, archival: true, palw_enable_algo4: true, ..Default::default() };
+
+        // Default network (mainnet, Header-v3, inert anti-spam): refused.
+        let mut mainnet = kaspa_consensus_core::config::Config::new(args.network().into());
+        args.apply_to_config(&mut mainnet);
+        let refusal =
+            palw_permissionless_snapshot_auth_refusal(&mainnet.params, mainnet.is_archival, mainnet.params.palw_algo4_accept)
+                .expect("mainnet must be refused");
+        assert!(refusal.contains("INERT"), "{refusal}");
+        // ...and the projection did not leave the lever set behind the refusal.
+        assert!(!mainnet.palw_permissionless_snapshot_auth);
+
+        // The staging Header-v4 re-genesis with the full posture: accepted.
+        args.testnet = true;
+        args.testnet_suffix = 200;
+        let mut staging = kaspa_consensus_core::config::Config::new(args.network().into());
+        args.apply_to_config(&mut staging);
+        assert!(
+            palw_permissionless_snapshot_auth_refusal(&staging.params, staging.is_archival, staging.params.palw_algo4_accept)
+                .is_none()
+        );
+        assert!(staging.palw_permissionless_snapshot_auth);
+
+        // Same network, pruned: refused, and the request is still visible on `args` so the daemon
+        // refuses to start rather than running a silently demoted no-op.
+        args.archival = false;
+        let mut pruned = kaspa_consensus_core::config::Config::new(args.network().into());
+        args.apply_to_config(&mut pruned);
+        assert!(
+            palw_permissionless_snapshot_auth_refusal(&pruned.params, pruned.is_archival, pruned.params.palw_algo4_accept)
+                .expect("pruned must be refused")
+                .contains("--archival")
+        );
+        assert!(!pruned.palw_permissionless_snapshot_auth);
+        assert!(args.palw_permissionless_snapshot_auth);
+    }
+
+    /// The lever must never look like it relaxed a neighbouring fence: enabling it leaves the
+    /// archival policy, the peer allowlist and algo-4 acceptance exactly where they were.
+    #[test]
+    fn permissionless_snapshot_auth_does_not_relax_the_archival_or_allowlist_fences() {
+        let args =
+            parse(&["--testnet", "--netsuffix=200", "--archival", "--palw-enable-algo4", "--palw-permissionless-snapshot-auth"]);
+        let baseline = parse(&["--testnet", "--netsuffix=200", "--archival", "--palw-enable-algo4"]);
+
+        let mut with_lever = kaspa_consensus_core::config::Config::new(args.network().into());
+        args.apply_to_config(&mut with_lever);
+        let mut without_lever = kaspa_consensus_core::config::Config::new(baseline.network().into());
+        baseline.apply_to_config(&mut without_lever);
+
+        assert!(with_lever.palw_permissionless_snapshot_auth);
+        assert!(!without_lever.palw_permissionless_snapshot_auth);
+        // Everything the startup fences read is identical with and without the lever.
+        assert_eq!(with_lever.params.palw_requires_archival, without_lever.params.palw_requires_archival);
+        assert_eq!(with_lever.params.palw_requires_peer_allowlist, without_lever.params.palw_requires_peer_allowlist);
+        assert!(with_lever.params.palw_requires_peer_allowlist, "the shipped v4 preset stays allowlist-closed");
+        assert_eq!(with_lever.is_archival, without_lever.is_archival);
+        assert_eq!(with_lever.params.palw_algo4_accept, without_lever.params.palw_algo4_accept);
+        assert_eq!(args.connect_peers, baseline.connect_peers);
     }
 
     #[test]

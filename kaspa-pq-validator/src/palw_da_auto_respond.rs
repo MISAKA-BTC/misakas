@@ -108,11 +108,8 @@ pub fn plan_responses(targets: &[DaChallengeTarget], current_daa: u64, config: &
     let mut skipped: Vec<SkippedChallenge> = Vec::new();
 
     for target in targets {
-        let skip = |reason: SkipReason| SkippedChallenge {
-            challenge_id: target.challenge_id,
-            bond_key: target.bond_key.clone(),
-            reason,
-        };
+        let skip =
+            |reason: SkipReason| SkippedChallenge { challenge_id: target.challenge_id, bond_key: target.bond_key.clone(), reason };
         if !config.owned_bonds.contains(&target.bond_key) {
             skipped.push(skip(SkipReason::NotOwned));
             continue;
@@ -212,11 +209,8 @@ pub async fn palw_da_auto_respond(args: PalwDaAutoRespondArgs) -> Result<(), Str
 
     let owned_bonds: BTreeSet<String> = args.provider_bonds.iter().cloned().collect();
     let node_rpc = crate::resolve_node_rpc(&args.network, &args.node_rpc);
-    let config = AutoResponderConfig {
-        owned_bonds,
-        safety_margin_daa: args.safety_margin_daa,
-        max_responses_per_cycle: args.max_per_cycle,
-    };
+    let config =
+        AutoResponderConfig { owned_bonds, safety_margin_daa: args.safety_margin_daa, max_responses_per_cycle: args.max_per_cycle };
     if !args.enable_auto_response {
         info!("[palw-da-auto-respond] plan-only mode; pass --enable-auto-response to sign and submit");
     }

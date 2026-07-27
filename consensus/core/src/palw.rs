@@ -671,11 +671,7 @@ fn palw_pcpb_merkle_membership(levels: &[Vec<Hash64>], index: usize) -> PalwMerk
     let mut siblings = Vec::with_capacity(levels.len().saturating_sub(1));
     let mut idx = index;
     for level in &levels[..levels.len() - 1] {
-        let sib = if idx & 1 == 0 {
-            if idx + 1 < level.len() { level[idx + 1] } else { level[idx] }
-        } else {
-            level[idx - 1]
-        };
+        let sib = if idx & 1 == 0 { if idx + 1 < level.len() { level[idx + 1] } else { level[idx] } } else { level[idx - 1] };
         siblings.push(sib);
         idx >>= 1;
     }
@@ -11326,16 +11322,14 @@ mod tests {
 #[cfg(test)]
 mod pcpb_evidence_tests {
     use super::{
-        palw_assignment_interval_hash, palw_dispatch_evidence_valid, palw_pcpb_derive_b,
-        palw_pcpb_receipt_preimage, palw_provider_pk_hash, palw_snapshot_entry_hash, BeaconAssignedProof,
-        PalwAssignmentInterval, PalwDispatchEvidence, PalwMerkleMembership, PalwMlDsaVerifier,
-        PalwProviderSnapshotEntry, SelfSerialProof, SlotAssignmentWitness, PALW_ASSIGNMENT_DRAW_DOMAIN,
-        PALW_ASSIGNMENT_NODE_DOMAIN, PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, PALW_SNAPSHOT_NODE_DOMAIN,
-        palw_assignment_draw_seed, palw_audit_epoch_seed_select, palw_build_snapshot_witnesses,
-        palw_epoch_seed_at,
+        BeaconAssignedProof, PALW_ASSIGNMENT_DRAW_DOMAIN, PALW_ASSIGNMENT_NODE_DOMAIN, PALW_PCPB_RECEIPT_MLDSA87_CONTEXT,
+        PALW_SNAPSHOT_NODE_DOMAIN, PalwAssignmentInterval, PalwDispatchEvidence, PalwMerkleMembership, PalwMlDsaVerifier,
+        PalwProviderSnapshotEntry, SelfSerialProof, SlotAssignmentWitness, palw_assignment_draw_seed, palw_assignment_interval_hash,
+        palw_audit_epoch_seed_select, palw_build_snapshot_witnesses, palw_dispatch_evidence_valid, palw_epoch_seed_at,
+        palw_pcpb_derive_b, palw_pcpb_receipt_preimage, palw_provider_pk_hash, palw_snapshot_entry_hash,
     };
     use crate::constants::PALW_HEADER_VERSION;
-    use kaspa_hashes::{blake2b_512_keyed, Hash64};
+    use kaspa_hashes::{Hash64, blake2b_512_keyed};
     use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
     /// The real portable ML-DSA-87 verify, injected exactly as production will inject it.
@@ -11401,11 +11395,8 @@ mod pcpb_evidence_tests {
         let mut siblings = Vec::new();
         let mut idx = index;
         for level in &levels[..levels.len() - 1] {
-            let sib = if idx % 2 == 0 {
-                if idx + 1 < level.len() { level[idx + 1] } else { level[idx] }
-            } else {
-                level[idx - 1]
-            };
+            let sib =
+                if idx.is_multiple_of(2) { if idx + 1 < level.len() { level[idx + 1] } else { level[idx] } } else { level[idx - 1] };
             siblings.push(sib);
             idx /= 2;
         }
@@ -11488,20 +11479,48 @@ mod pcpb_evidence_tests {
 
         let good = PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof { slot_a: witness(&s, ia), slot_b: witness(&s, ib) });
         assert!(palw_dispatch_evidence_valid(
-            &good, &s.snap_root, &s.assign_root, s.total, &beacon, &s.snap_root, &s.assign_root, &a_commit, &v
+            &good,
+            &s.snap_root,
+            &s.assign_root,
+            s.total,
+            &beacon,
+            &s.snap_root,
+            &s.assign_root,
+            &a_commit,
+            &v
         ));
 
         // Tautology-killer: swap slot_a to a provider the slot-0 draw did NOT select → reject.
         let wrong = (0..4).find(|&c| c != ia).unwrap();
         let bad = PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof { slot_a: witness(&s, wrong), slot_b: witness(&s, ib) });
         assert!(
-            !palw_dispatch_evidence_valid(&bad, &s.snap_root, &s.assign_root, s.total, &beacon, &s.snap_root, &s.assign_root, &a_commit, &v),
+            !palw_dispatch_evidence_valid(
+                &bad,
+                &s.snap_root,
+                &s.assign_root,
+                s.total,
+                &beacon,
+                &s.snap_root,
+                &s.assign_root,
+                &a_commit,
+                &v
+            ),
             "external arm accepted a provider the draw did not select (tautology!)"
         );
 
         // Clause 0: a leaf snapshot root disagreeing with the resolved root → reject.
         assert!(
-            !palw_dispatch_evidence_valid(&good, &s.snap_root, &s.assign_root, s.total, &beacon, &th(0xDE), &s.assign_root, &a_commit, &v),
+            !palw_dispatch_evidence_valid(
+                &good,
+                &s.snap_root,
+                &s.assign_root,
+                s.total,
+                &beacon,
+                &th(0xDE),
+                &s.assign_root,
+                &a_commit,
+                &v
+            ),
             "clause 0 did not bind the leaf snapshot root"
         );
     }
@@ -11523,7 +11542,17 @@ mod pcpb_evidence_tests {
         let both0 = PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof { slot_a: witness(&s, 0), slot_b: witness(&s, 0) });
         let v = LibcruxVerifier;
         assert!(
-            !palw_dispatch_evidence_valid(&both0, &s.snap_root, &s.assign_root, s.total, &beacon, &s.snap_root, &s.assign_root, &th(0xAC), &v),
+            !palw_dispatch_evidence_valid(
+                &both0,
+                &s.snap_root,
+                &s.assign_root,
+                s.total,
+                &beacon,
+                &s.snap_root,
+                &s.assign_root,
+                &th(0xAC),
+                &v
+            ),
             "external arm accepted the SAME provider for both slots (distinctness not enforced)"
         );
     }
@@ -11535,7 +11564,8 @@ mod pcpb_evidence_tests {
         let beacon = th(0x5E);
         let j = drawn_index(&s, &palw_pcpb_derive_b(&beacon, &a_commit));
         let preimage = palw_pcpb_receipt_preimage(&a_commit, b"pcpb-self-tail");
-        let sig = mldsa::sign(&s.kps[j].signing_key, preimage.as_slice(), PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, [0x33u8; 32]).expect("sign");
+        let sig =
+            mldsa::sign(&s.kps[j].signing_key, preimage.as_slice(), PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, [0x33u8; 32]).expect("sign");
         let proof = PalwDispatchEvidence::SelfSerial(SelfSerialProof {
             a_commit,
             b_entry: s.entries[j].clone(),
@@ -11548,11 +11578,29 @@ mod pcpb_evidence_tests {
         });
         let v = LibcruxVerifier;
         assert!(palw_dispatch_evidence_valid(
-            &proof, &s.snap_root, &s.assign_root, s.total, &beacon, &s.snap_root, &s.assign_root, &a_commit, &v
+            &proof,
+            &s.snap_root,
+            &s.assign_root,
+            s.total,
+            &beacon,
+            &s.snap_root,
+            &s.assign_root,
+            &a_commit,
+            &v
         ));
         // Clause 0 for the self arm too.
         assert!(
-            !palw_dispatch_evidence_valid(&proof, &s.snap_root, &s.assign_root, s.total, &beacon, &s.snap_root, &th(0xEE), &a_commit, &v),
+            !palw_dispatch_evidence_valid(
+                &proof,
+                &s.snap_root,
+                &s.assign_root,
+                s.total,
+                &beacon,
+                &s.snap_root,
+                &th(0xEE),
+                &a_commit,
+                &v
+            ),
             "clause 0 did not bind the leaf assignment root on the self arm"
         );
     }
@@ -11664,10 +11712,7 @@ mod pcpb_evidence_tests {
         }
         assert_eq!(expect_lo, ws.commitment.total_bond, "intervals must cover exactly [0, total)");
         for w in ws.slots.windows(2) {
-            assert!(
-                w[0].entry.provider_id.as_byte_slice() < w[1].entry.provider_id.as_byte_slice(),
-                "providers must be sorted by id"
-            );
+            assert!(w[0].entry.provider_id.as_byte_slice() < w[1].entry.provider_id.as_byte_slice(), "providers must be sorted by id");
         }
     }
 
@@ -11683,15 +11728,16 @@ mod pcpb_evidence_tests {
             beacon = th(0x40u8.wrapping_add(k));
             ia = ws.select(&palw_assignment_draw_seed(&beacon, 0));
             ib = ws.select(&palw_assignment_draw_seed(&beacon, 1));
-            if let (Some(a), Some(b)) = (ia, ib) {
-                if a != b {
-                    break;
-                }
+            if let (Some(a), Some(b)) = (ia, ib)
+                && a != b
+            {
+                break;
             }
         }
         let (ia, ib) = (ia.unwrap(), ib.unwrap());
         assert_ne!(ia, ib, "setup: no beacon drew two distinct providers");
-        let proof = PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof { slot_a: ws.slots[ia].clone(), slot_b: ws.slots[ib].clone() });
+        let proof =
+            PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof { slot_a: ws.slots[ia].clone(), slot_b: ws.slots[ib].clone() });
         assert!(
             palw_dispatch_evidence_valid(
                 &proof,

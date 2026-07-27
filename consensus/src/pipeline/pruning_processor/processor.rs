@@ -523,10 +523,7 @@ impl PruningProcessor {
 
         let mut manifest = self.storage.evm_cold_segment_manifest_store.read().get().unwrap_or_default();
         // The cursor is where the contiguous headers archive currently ends.
-        let cursor = manifest
-            .contiguous_range(kaspa_consensus_core::evm::ColdSegmentKind::Headers)
-            .map(|(_, to)| to + 1)
-            .unwrap_or(0);
+        let cursor = manifest.contiguous_range(kaspa_consensus_core::evm::ColdSegmentKind::Headers).map(|(_, to)| to + 1).unwrap_or(0);
         if cursor >= pp_evm {
             return evm_row_delete_floor(export, pp_evm, cursor); // already caught up
         }
@@ -562,7 +559,9 @@ impl PruningProcessor {
                 evm_row_delete_floor(export, pp_evm, cursor)
             }
             Err(e) => {
-                warn!("[evm-export] export of [{cursor}, {to}) failed ({e}); holding these EVM rows (not deleting un-archived history)");
+                warn!(
+                    "[evm-export] export of [{cursor}, {to}) failed ({e}); holding these EVM rows (not deleting un-archived history)"
+                );
                 evm_row_delete_floor(export, pp_evm, cursor)
             }
         }

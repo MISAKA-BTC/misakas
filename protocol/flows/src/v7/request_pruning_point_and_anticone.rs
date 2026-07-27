@@ -76,6 +76,15 @@ impl PruningPointAndItsAnticoneRequestsFlow {
                             .palw_pruning_snapshot_digest
                             .map(|digest| digest.as_bytes().to_vec())
                             .unwrap_or_default(),
+                        // ADR-0042: deliberately empty. This flow is shared verbatim by the v7 and v8
+                        // registrations, and no node advertises a chain-derived authentication bundle
+                        // today. That keeps the headers-proof path fenced by construction: with no
+                        // advertised digest the requester's preflight has nothing to bind the bundle
+                        // to and falls back to the operator-pin path. Emitting a digest here is the
+                        // single switch that would open Phase B, and per ADR-0042 §Decision 3 it must
+                        // not be flipped before the restated ordering constraint (authentication
+                        // before `staging.commit()`, not before `db.write`) is reviewed and accepted.
+                        palw_chain_derived_bundle_digest: vec![],
                     },
                     request_id
                 ))

@@ -2917,7 +2917,18 @@ impl Deserializer for GetPalwStateResponse {
         let activation = if version >= 3 { deserialize!(Option<RpcPalwActivationState>, reader)? } else { None };
         let search_challenges = if version >= 4 { deserialize!(Vec<RpcPalwSearchChallenge>, reader)? } else { Vec::new() };
         let da_obligations = if version >= 5 { deserialize!(Vec<RpcPalwDaObligation>, reader)? } else { Vec::new() };
-        Ok(Self { enabled, sink, sink_daa_score, overlay_view_available, batch, provider_bond, da_challenges, activation, search_challenges, da_obligations })
+        Ok(Self {
+            enabled,
+            sink,
+            sink_daa_score,
+            overlay_view_available,
+            batch,
+            provider_bond,
+            da_challenges,
+            activation,
+            search_challenges,
+            da_obligations,
+        })
     }
 }
 

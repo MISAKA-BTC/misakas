@@ -546,6 +546,11 @@ pub trait ConsensusApi: Send + Sync {
 
     /// Atomically install a PALW pruning frontier after binding it to the validated PP header and a
     /// typed, version-appropriate authentication provenance.
+    ///
+    /// Operator-authority entry point: exactly
+    /// [`ConsensusApi::import_pruning_point_palw_snapshot_with_chain_derived_auth`] with no bundle.
+    /// Callers on the Header-v3 or operator-pinned Header-v4 paths have none to pass, so the `None`
+    /// below is the absence of an argument rather than a fence.
     fn import_pruning_point_palw_snapshot(
         &self,
         pruning_point: BlockHash,
@@ -555,8 +560,48 @@ pub trait ConsensusApi: Send + Sync {
         import_auth: crate::palw_pruned_frontier::PalwPruningSnapshotImportAuth,
         snapshot: crate::palw_pruned_frontier::PalwPruningPointSnapshotV1,
     ) -> PruningImportResult<()> {
-        let _ =
-            (pruning_point, pruning_point_daa_score, pruning_point_header_version, expected_spam_commitment, import_auth, snapshot);
+        self.import_pruning_point_palw_snapshot_with_chain_derived_auth(
+            pruning_point,
+            pruning_point_daa_score,
+            pruning_point_header_version,
+            expected_spam_commitment,
+            import_auth,
+            snapshot,
+            None,
+        )
+    }
+
+    /// ADR-0042 permissionless entry point: the same atomic install, additionally able to carry the
+    /// chain-derived authentication bundle the IBD flow built and authenticated.
+    ///
+    /// Division of labour. The flow owns review points (a′) and (b) — that the transported headers
+    /// belong to a work-authenticated set, and that the descendant is a buried chain child of the
+    /// pruning point. The implementation owns review point (c) and the boundary fold, and must run
+    /// both strictly before any durable write.
+    ///
+    /// Implementations MUST honour the bundle only when the node-local
+    /// `Config::palw_permissionless_snapshot_auth` lever is set AND `import_auth` claims
+    /// `ChainDerivedHeaderBundle` provenance, and MUST NOT let a supplied bundle displace the
+    /// authentication any other provenance requires.
+    fn import_pruning_point_palw_snapshot_with_chain_derived_auth(
+        &self,
+        pruning_point: BlockHash,
+        pruning_point_daa_score: u64,
+        pruning_point_header_version: u16,
+        expected_spam_commitment: crate::Hash64,
+        import_auth: crate::palw_pruned_frontier::PalwPruningSnapshotImportAuth,
+        snapshot: crate::palw_pruned_frontier::PalwPruningPointSnapshotV1,
+        chain_derived: Option<crate::palw_pruned_frontier::PalwChainDerivedAuthBundleV1>,
+    ) -> PruningImportResult<()> {
+        let _ = (
+            pruning_point,
+            pruning_point_daa_score,
+            pruning_point_header_version,
+            expected_spam_commitment,
+            import_auth,
+            snapshot,
+            chain_derived,
+        );
         unimplemented!()
     }
 
@@ -984,6 +1029,10 @@ pub trait ConsensusApi: Send + Sync {
     /// provider/DA/frontier rows in the same RocksDB batch as the intrusive pruning-point pointer,
     /// virtual/tips/selected-chain reset and unstable-UTXO flag. Implementations must complete every
     /// semantic preflight before staging the first cache-backed write.
+    ///
+    /// Operator-authority entry point: exactly
+    /// [`ConsensusApi::intrusive_pruning_point_update_with_palw_snapshot_and_chain_derived_auth`] with
+    /// no bundle.
     fn intrusive_pruning_point_update_with_palw_snapshot(
         &self,
         new_pruning_point: BlockHash,
@@ -994,6 +1043,38 @@ pub trait ConsensusApi: Send + Sync {
         import_auth: crate::palw_pruned_frontier::PalwPruningSnapshotImportAuth,
         snapshot: crate::palw_pruned_frontier::PalwPruningPointSnapshotV1,
     ) -> ConsensusResult<()> {
+        self.intrusive_pruning_point_update_with_palw_snapshot_and_chain_derived_auth(
+            new_pruning_point,
+            syncer_sink,
+            pruning_point_daa_score,
+            pruning_point_header_version,
+            expected_spam_commitment,
+            import_auth,
+            snapshot,
+            None,
+        )
+    }
+
+    /// ADR-0042 permissionless catch-up variant. Same atomicity and same ordering obligation, plus the
+    /// chain-derived authentication bundle. This is the path with the strongest available descendant
+    /// authentication: on catch-up every post-pruning-point header has already been validated by the
+    /// unmodified header pipeline into this consensus and buried under the adopted chain, so the flow
+    /// selects the descendant from local state rather than from the wire.
+    ///
+    /// Same obligations as
+    /// [`ConsensusApi::import_pruning_point_palw_snapshot_with_chain_derived_auth`]: lever-gated,
+    /// provenance-gated, verified strictly before the durable batch.
+    fn intrusive_pruning_point_update_with_palw_snapshot_and_chain_derived_auth(
+        &self,
+        new_pruning_point: BlockHash,
+        syncer_sink: BlockHash,
+        pruning_point_daa_score: u64,
+        pruning_point_header_version: u16,
+        expected_spam_commitment: crate::Hash64,
+        import_auth: crate::palw_pruned_frontier::PalwPruningSnapshotImportAuth,
+        snapshot: crate::palw_pruned_frontier::PalwPruningPointSnapshotV1,
+        chain_derived: Option<crate::palw_pruned_frontier::PalwChainDerivedAuthBundleV1>,
+    ) -> ConsensusResult<()> {
         let _ = (
             new_pruning_point,
             syncer_sink,
@@ -1002,6 +1083,7 @@ pub trait ConsensusApi: Send + Sync {
             expected_spam_commitment,
             import_auth,
             snapshot,
+            chain_derived,
         );
         unimplemented!()
     }

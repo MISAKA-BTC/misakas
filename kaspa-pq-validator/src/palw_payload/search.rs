@@ -146,7 +146,10 @@ pub fn search_challenge_payload(args: SearchChallengePayloadArgs) -> Result<(), 
     println!("chunk_index: {}", challenge.chunk_index);
     println!("registering: {}", challenge.registration.is_some());
     if let Some(registration) = &challenge.registration {
-        println!("scheduler_bond: {}:{}", registration.assignment.scheduler_bond.transaction_id, registration.assignment.scheduler_bond.index);
+        println!(
+            "scheduler_bond: {}:{}",
+            registration.assignment.scheduler_bond.transaction_id, registration.assignment.scheduler_bond.index
+        );
         println!("availability_deadline_daa_score: {}", registration.signed_anchor.anchor.availability_deadline_daa_score);
     }
     println!("payload_file: {}", args.out.display());

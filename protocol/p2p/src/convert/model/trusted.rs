@@ -18,6 +18,12 @@ pub struct TrustedDataPackage {
     pub daa_window: Vec<TrustedHeader>,
     pub ghostdag_window: Vec<TrustedGhostdagData>,
     pub palw_pruning_snapshot_digest: Option<Hash64>,
+    /// ADR-0042: digest of the chain-derived (permissionless) Header-v4 authentication bundle, whose
+    /// bytes arrive separately over the chunked `PalwChainDerivedBundleChunk` transport. `None` means
+    /// the peer advertises no such bundle, which is the shipped behaviour of every server today — the
+    /// requester then has no chain-derived option and falls back to the operator-pin path (which in
+    /// turn fails closed when no local pin exists).
+    pub palw_chain_derived_bundle_digest: Option<Hash64>,
 }
 
 impl TrustedDataPackage {
@@ -25,8 +31,9 @@ impl TrustedDataPackage {
         daa_window: Vec<TrustedHeader>,
         ghostdag_window: Vec<TrustedGhostdagData>,
         palw_pruning_snapshot_digest: Option<Hash64>,
+        palw_chain_derived_bundle_digest: Option<Hash64>,
     ) -> Self {
-        Self { daa_window, ghostdag_window, palw_pruning_snapshot_digest }
+        Self { daa_window, ghostdag_window, palw_pruning_snapshot_digest, palw_chain_derived_bundle_digest }
     }
 
     /// Returns the trusted set -- a sub-DAG in the anti-future of the pruning point which contains

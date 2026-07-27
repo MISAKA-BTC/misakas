@@ -578,11 +578,7 @@ impl EvmSegmentExport {
 /// than losing it. L1 pruning (the pruning-point advance, UTXO deletion) is NOT
 /// gated by this; only the EVM-row deletes are.
 pub fn evm_row_delete_floor(export: EvmSegmentExport, pruning_point_evm_number: u64, export_cursor: u64) -> u64 {
-    if export.is_active() {
-        pruning_point_evm_number.min(export_cursor)
-    } else {
-        pruning_point_evm_number
-    }
+    if export.is_active() { pruning_point_evm_number.min(export_cursor) } else { pruning_point_evm_number }
 }
 
 /// How far behind the pruning point the export is, in EVM blocks (§5.8 metric

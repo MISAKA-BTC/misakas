@@ -1468,9 +1468,7 @@ impl ConsensusApi for Consensus {
         self.palw_da_gc_objects_impl()
     }
 
-    fn palw_search_snapshot_gc(
-        &self,
-    ) -> Result<Vec<kaspa_hashes::Hash64>, kaspa_consensus_core::palw::da::PalwDaServiceError> {
+    fn palw_search_snapshot_gc(&self) -> Result<Vec<kaspa_hashes::Hash64>, kaspa_consensus_core::palw::da::PalwDaServiceError> {
         self.palw_search_snapshot_gc_impl()
     }
 
@@ -2389,7 +2387,7 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.pruning_point_palw_snapshot()
     }
 
-    fn import_pruning_point_palw_snapshot(
+    fn import_pruning_point_palw_snapshot_with_chain_derived_auth(
         &self,
         pruning_point: BlockHash,
         pruning_point_daa_score: u64,
@@ -2397,6 +2395,7 @@ impl ConsensusApi for Consensus {
         expected_spam_commitment: kaspa_consensus_core::Hash64,
         import_auth: kaspa_consensus_core::palw_pruned_frontier::PalwPruningSnapshotImportAuth,
         snapshot: kaspa_consensus_core::palw_pruned_frontier::PalwPruningPointSnapshotV1,
+        chain_derived: Option<kaspa_consensus_core::palw_pruned_frontier::PalwChainDerivedAuthBundleV1>,
     ) -> PruningImportResult<()> {
         self.virtual_processor.import_pruning_point_palw_snapshot(
             pruning_point,
@@ -2405,6 +2404,7 @@ impl ConsensusApi for Consensus {
             expected_spam_commitment,
             import_auth,
             snapshot,
+            chain_derived.as_ref(),
         )
     }
 
@@ -3167,7 +3167,7 @@ impl ConsensusApi for Consensus {
         self.intrusive_pruning_point_store_writes(new_pruning_point, preflight, None)
     }
 
-    fn intrusive_pruning_point_update_with_palw_snapshot(
+    fn intrusive_pruning_point_update_with_palw_snapshot_and_chain_derived_auth(
         &self,
         new_pruning_point: BlockHash,
         syncer_sink: BlockHash,
@@ -3176,9 +3176,17 @@ impl ConsensusApi for Consensus {
         expected_spam_commitment: kaspa_consensus_core::Hash64,
         import_auth: kaspa_consensus_core::palw_pruned_frontier::PalwPruningSnapshotImportAuth,
         snapshot: kaspa_consensus_core::palw_pruned_frontier::PalwPruningPointSnapshotV1,
+        chain_derived: Option<kaspa_consensus_core::palw_pruned_frontier::PalwChainDerivedAuthBundleV1>,
     ) -> ConsensusResult<()> {
         // Both snapshot/context/collision checks and path/anticone derivation are read-only. Complete
         // them before the first cache-backed batch write so a peer error cannot perturb live state.
+        //
+        // ADR-0042: `chain_derived` is the permissionless authentication bundle the IBD catch-up flow
+        // has already bound to a locally validated, buried post-pruning-point descendant. It is
+        // honoured only behind the node-local lever and only for chain-derived provenance; see
+        // `VirtualStateProcessor::prepare_pruning_point_palw_snapshot_import`. Every check it drives —
+        // including the support-row preimage binding — completes inside `prepare_…`, i.e. strictly
+        // before `intrusive_pruning_point_store_writes` opens the durable batch.
         let prepared = self
             .virtual_processor
             .prepare_pruning_point_palw_snapshot_import(
@@ -3188,8 +3196,7 @@ impl ConsensusApi for Consensus {
                 expected_spam_commitment,
                 import_auth,
                 snapshot,
-                // Fenced: no chain-derived bundle until the P2P transport + PoW authentication land (1d).
-                None,
+                chain_derived.as_ref(),
             )
             .map_err(|err| ConsensusError::GeneralOwned(format!("invalid intrusive PALW pruning snapshot: {err}")))?;
         let preflight = self.intrusive_pruning_point_preflight(new_pruning_point, syncer_sink)?;

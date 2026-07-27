@@ -13,9 +13,9 @@
 //! under systemd (ADR-0011); the node must run `--utxoindex` for the funding lookup.
 
 mod palw_da_auto_respond;
-mod palw_search_retrieval;
 mod palw_payload;
 mod palw_provider_unbond;
+mod palw_search_retrieval;
 mod palw_submit;
 
 use clap::{Parser, Subcommand};
@@ -534,7 +534,10 @@ async fn status(args: StatusArgs) -> Result<(), String> {
         Err(_) => {
             // Older node without getConsensusIdentity: the only available value is the CLI's own
             // preset derivation — label it as such (it proves the CLI's preset, not the node's).
-            println!("node_genesis_hash: {} (CLI-derived from network id; node predates getConsensusIdentity)", Params::from(server.network_id).genesis.hash);
+            println!(
+                "node_genesis_hash: {} (CLI-derived from network id; node predates getConsensusIdentity)",
+                Params::from(server.network_id).genesis.hash
+            );
         }
     }
     if let Some(bond) = &args.stake_bond {
@@ -683,8 +686,7 @@ struct FindRewardSettlementArgs {
 async fn find_reward_settlement(args: FindRewardSettlementArgs) -> Result<(), String> {
     use kaspa_consensus_core::{dns_finality::split_block_subsidy, palw_premium::premium_split, pow_layer0::POW_ALGO_ID_PALW_REPLICA};
     kaspa_core::log::init_logger(None, "warn");
-    let source =
-        RpcHash::from_str(args.source_block.trim()).map_err(|e| format!("--source-block is not a valid block hash: {e}"))?;
+    let source = RpcHash::from_str(args.source_block.trim()).map_err(|e| format!("--source-block is not a valid block hash: {e}"))?;
     let client = connect(&resolve_node_rpc(&args.network, &args.node_rpc)).await?;
     let server = client.get_server_info().await.map_err(|e| format!("getServerInfo failed: {e}"))?;
 
@@ -795,14 +797,18 @@ async fn find_reward_settlement(args: FindRewardSettlementArgs) -> Result<(), St
                 let paid_a = outputs.iter().any(|(_, spk)| spk.eq_ignore_ascii_case(spk_a));
                 let paid_b = outputs.iter().any(|(_, spk)| spk.eq_ignore_ascii_case(spk_b));
                 if paid_a || paid_b {
-                    println!("settlement.verdict: FAIL — RED merge but a provider SPK was still paid (paid_a={paid_a} paid_b={paid_b})");
+                    println!(
+                        "settlement.verdict: FAIL — RED merge but a provider SPK was still paid (paid_a={paid_a} paid_b={paid_b})"
+                    );
                     std::process::exit(1);
                 }
                 println!("settlement.verdict: PASS_RED — red merge, provider payouts correctly absent (0 by design)");
                 return Ok(());
             }
             _ => {
-                println!("settlement.verdict: PARTIAL — red merge (pays 0 by design); pass --provider-a-spk/--provider-b-spk to assert the payout absence exactly");
+                println!(
+                    "settlement.verdict: PARTIAL — red merge (pays 0 by design); pass --provider-a-spk/--provider-b-spk to assert the payout absence exactly"
+                );
                 std::process::exit(3);
             }
         }
@@ -814,7 +820,9 @@ async fn find_reward_settlement(args: FindRewardSettlementArgs) -> Result<(), St
             let hit_a = outputs.iter().any(|(value, spk)| *value == a_expected && spk.eq_ignore_ascii_case(spk_a));
             let hit_b = outputs.iter().any(|(value, spk)| *value == b_expected && spk.eq_ignore_ascii_case(spk_b));
             if hit_a && hit_b {
-                println!("settlement.verdict: PASS — blue merge pays provider A {a_expected} and provider B {b_expected} sompi to the exact expected SPKs");
+                println!(
+                    "settlement.verdict: PASS — blue merge pays provider A {a_expected} and provider B {b_expected} sompi to the exact expected SPKs"
+                );
                 Ok(())
             } else {
                 println!(
@@ -826,7 +834,9 @@ which this RPC surface cannot distinguish — inspect the node logs for the sour
             }
         }
         _ => {
-            println!("settlement.verdict: PARTIAL — blue merge located and expected values derived; pass --provider-a-spk/--provider-b-spk for the exact-SPK assertion");
+            println!(
+                "settlement.verdict: PARTIAL — blue merge located and expected values derived; pass --provider-a-spk/--provider-b-spk for the exact-SPK assertion"
+            );
             std::process::exit(3);
         }
     }
@@ -2393,8 +2403,8 @@ fn mldsa_verify_adapter(public_key: &[u8], message: &[u8], signature: &[u8], con
 /// Build + sign + persist one search assignment against live node anchor facts.
 async fn palw_search_assign_cmd(args: PalwSearchAssignArgs) -> Result<(), String> {
     use kaspa_consensus_core::palw::search_snapshot::{
-        PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT, PALW_SEARCH_ASSIGNMENT_VERSION_V1, PalwSearchAssignmentV1,
-        PalwSearchProviderPolicyV1, normalize_query_v1,
+        PALW_SEARCH_ASSIGNMENT_MLDSA87_CONTEXT, PALW_SEARCH_ASSIGNMENT_VERSION_V1, PalwSearchAssignmentV1, PalwSearchProviderPolicyV1,
+        normalize_query_v1,
     };
     let node_rpc = resolve_node_rpc(&args.network, &args.node_rpc);
     let client = connect(&node_rpc).await?;
@@ -2520,16 +2530,11 @@ async fn palw_search_retrieval_cmd(args: PalwSearchRetrievalArgs) -> Result<(), 
             freshness_window_millis: args.freshness_ms,
         },
     };
-    let policy = palw_search_retrieval::RetrievalPolicyV1 {
-        timeout_ms: args.timeout_ms,
-        max_results: args.max_results,
-        ..Default::default()
-    };
-    let snapshot = tokio::task::spawn_blocking(move || {
-        palw_search_retrieval::retrieve_search_snapshot(&request, &anchor, &policy)
-    })
-    .await
-    .map_err(|e| format!("retrieval task join failure: {e}"))??;
+    let policy =
+        palw_search_retrieval::RetrievalPolicyV1 { timeout_ms: args.timeout_ms, max_results: args.max_results, ..Default::default() };
+    let snapshot = tokio::task::spawn_blocking(move || palw_search_retrieval::retrieve_search_snapshot(&request, &anchor, &policy))
+        .await
+        .map_err(|e| format!("retrieval task join failure: {e}"))??;
 
     let bytes = snapshot.encode().map_err(|e| format!("snapshot encode: {e}"))?;
     let digest = snapshot.digest().map_err(|e| format!("snapshot digest: {e}"))?;
@@ -2570,9 +2575,7 @@ async fn palw_search_retrieval_cmd(args: PalwSearchRetrievalArgs) -> Result<(), 
         use kaspa_consensus_core::palw::search_snapshot::{
             PALW_SEARCH_ANCHOR_MLDSA87_CONTEXT, PalwSearchJobSpecV1, PalwSearchSnapshotAnchorV1, PalwSignedSearchAnchorV1,
         };
-        let deadline = args
-            .availability_deadline_daa
-            .ok_or("--availability-deadline-daa is required when signing a JobSpec")?;
+        let deadline = args.availability_deadline_daa.ok_or("--availability-deadline-daa is required when signing a JobSpec")?;
         let key = ValidatorKey::from_seed(load_validator_seed(seed)?);
         if key.public_key() != assignment.scheduler_public_key.as_slice() {
             return Err("scheduler seed does not match the assignment's scheduler key".to_string());

@@ -85,9 +85,25 @@ fn path_cstring(path: &Path) -> io::Result<CString> {
 fn atomic_rename_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
     let source = path_cstring(source)?;
     let destination = path_cstring(destination)?;
+    // Invoked as a raw syscall, not via `libc::renameat2`: that binding exists only for
+    // `target_env = "gnu"` in our pinned libc, while this `cfg` also covers the musl release
+    // target (the musl build failed with `E0425: cannot find function renameat2`). A libc bump
+    // would only turn that into a link error, since musl gained the wrapper in 1.2.6 and this
+    // repository's toolchain predates it. `SYS_renameat2`/`RENAME_NOREPLACE` exist for both
+    // envs, so this keeps the atomic no-replace semantics identical on gnu and musl.
     // SAFETY: both C strings remain live for the syscall and AT_FDCWD borrows no descriptor.
-    let result =
-        unsafe { libc::renameat2(libc::AT_FDCWD, source.as_ptr(), libc::AT_FDCWD, destination.as_ptr(), libc::RENAME_NOREPLACE) };
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    // -1 on failure (errno set); ENOSYS/EINVAL on an unsupported kernel/fs keeps the
+    // documented fail-closed behaviour.
     if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
 }
 

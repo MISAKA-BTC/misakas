@@ -13,7 +13,8 @@ use crate::{
     palw::{
         PALW_MAX_PROVIDER_CAPACITY_ENTRIES_V1, PALW_MAX_PROVIDER_RUNTIME_CLASSES_V1, PalwBatchCertificateV2, PalwBatchManifestV1,
         PalwBatchViewV1, PalwBeaconEpochAccumV1, PalwProviderBondRecord, PalwPrunedFrontierV1, PalwPublicLeafV1,
-        da::PalwDaPruningSnapshotV1, palw_leaf_merkle_root,
+        da::PalwDaPruningSnapshotV1,
+        palw_leaf_merkle_root,
         search_snapshot::{PalwSearchAvailabilityStateV1, PalwSearchPruningSnapshotV1},
     },
     tx::TransactionOutpoint,
@@ -60,6 +61,20 @@ pub const MAX_PALW_PRUNING_SNAPSHOT_BYTES: usize = 128 << 20;
 /// Header-v4 transports exactly one power-of-two selected-parent checkpoint. The active parameter
 /// ceiling fixes that checkpoint, and therefore the support-vector ceiling, at 65,536 rows.
 pub const MAX_PALW_PRUNING_SPAM_SUPPORT_ROWS: usize = 65_536;
+
+/// Domain separator for the chain-derived (permissionless) header-bundle digest.
+///
+/// Deliberately disjoint from [`PALW_PRUNING_SNAPSHOT_DIGEST_DOMAIN`]: the bundle is a *separate*,
+/// separately-chunked transport object, and the trusted-data package carries only its digest as the
+/// cryptographic binding. Sharing a domain would let a value authenticated for one object be
+/// replayed as authentication for the other.
+pub const PALW_CHAIN_DERIVED_BUNDLE_DIGEST_DOMAIN: &[u8] = b"MISAKA_PALW_CHAIN_DERIVED_BUNDLE_V1";
+/// Exact outer Borsh envelope limit for [`PalwChainDerivedHeaderBundleWireV1`], mirroring
+/// [`MAX_PALW_PRUNING_SNAPSHOT_BYTES`]. The bundle is dominated by up to
+/// [`MAX_PALW_PRUNING_SPAM_SUPPORT_ROWS`] complete Header-v4 headers; the cardinality ceiling and
+/// this byte ceiling are independent fences so that neither a wide-but-small nor a
+/// narrow-but-enormous encoding can bypass the other.
+pub const MAX_PALW_CHAIN_DERIVED_BUNDLE_BYTES: usize = 128 << 20;
 
 /// An operator-authenticated pruning boundary. The value is deliberately the digest of the complete
 /// canonical snapshot payload, rather than a root of selected fields, so it also authenticates every
@@ -141,6 +156,20 @@ pub fn validate_palw_pruning_snapshot_checkpoints(
 pub enum PalwPruningSnapshotImportProvenance {
     LegacyHeaderV3,
     OperatorPinnedCheckpoint,
+    /// ADR-0042: a Header-v4 boundary authenticated from the chain itself instead of from operator
+    /// authority. The transported payload must fold into a work-authenticated descendant's
+    /// `overlay_commitment_root`, and every anti-spam support row must be bound to a transported
+    /// header preimage (see [`verify_chain_derived_pruning_boundary_from_payload`]).
+    ///
+    /// It carries NO operator checkpoint, so it deliberately does not — and must not — satisfy the
+    /// importer's payload-digest equality branch. That branch is the operator trust anchor; the
+    /// whole point of this provenance is that no such anchor exists on a permissionless network, so
+    /// the chain-derived verification runs *instead of* it, still strictly before any durable write.
+    ///
+    /// Admitted only behind the node-local `Config::palw_permissionless_snapshot_auth` lever, which
+    /// is default-false and set by no preset. With the lever off the admission matrix below is
+    /// byte-identical to the pre-ADR-0042 matrix.
+    ChainDerivedHeaderBundle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,16 +189,49 @@ impl PalwPruningSnapshotImportAuth {
     pub fn operator_pinned(checkpoint: PalwPruningSnapshotCheckpoint) -> Self {
         Self { checkpoint, provenance: PalwPruningSnapshotImportProvenance::OperatorPinnedCheckpoint }
     }
+
+    /// ADR-0042 chain-derived provenance.
+    ///
+    /// `checkpoint.payload_digest` is the all-zero sentinel, NOT a synthesized operator claim. This
+    /// is load-bearing: `PalwPruningSnapshotImportAuth` is checkpoint-shaped, and manufacturing a
+    /// digest here would make a peer-advertised boundary indistinguishable from an operator-pinned
+    /// one at every later comparison site. The importer must therefore branch on `provenance`, run
+    /// the chain-derived verification, and never compare this sentinel against a payload digest.
+    pub fn chain_derived(pruning_point: BlockHash) -> Self {
+        Self {
+            checkpoint: PalwPruningSnapshotCheckpoint { pruning_point, payload_digest: Hash64::default() },
+            provenance: PalwPruningSnapshotImportProvenance::ChainDerivedHeaderBundle,
+        }
+    }
 }
 
 /// Exact-version admission policy for peer snapshot import. Future header versions remain closed
 /// until they receive a distinct reviewed authentication policy.
-pub fn palw_pruned_ibd_snapshot_import_allowed(header_version: u16, auth: &PalwPruningSnapshotImportAuth) -> bool {
-    matches!(
-        (header_version, auth.provenance),
-        (crate::constants::PALW_HEADER_VERSION, PalwPruningSnapshotImportProvenance::LegacyHeaderV3)
-            | (crate::constants::PALW_ANTISPAM_HEADER_VERSION, PalwPruningSnapshotImportProvenance::OperatorPinnedCheckpoint)
-    )
+///
+/// `permissionless_enabled` is the node-local `Config::palw_permissionless_snapshot_auth` lever. It
+/// gates ONLY the [`PalwPruningSnapshotImportProvenance::ChainDerivedHeaderBundle`] arm; the two
+/// shipped (version, provenance) pairs below are unconditional and unchanged, so passing `false` here
+/// reproduces the pre-ADR-0042 matrix exactly. Callers that have no lever must pass `false`.
+///
+/// Admission is necessary, never sufficient: the chain-derived arm additionally requires
+/// [`verify_chain_derived_pruning_boundary_from_payload`] to pass before any durable write.
+pub fn palw_pruned_ibd_snapshot_import_allowed(
+    header_version: u16,
+    auth: &PalwPruningSnapshotImportAuth,
+    permissionless_enabled: bool,
+) -> bool {
+    match (header_version, auth.provenance) {
+        // Unchanged: the historical closed-network Header-v3 path.
+        (crate::constants::PALW_HEADER_VERSION, PalwPruningSnapshotImportProvenance::LegacyHeaderV3) => true,
+        // Unchanged: Header-v4 under an operator-pinned whole-payload digest.
+        (crate::constants::PALW_ANTISPAM_HEADER_VERSION, PalwPruningSnapshotImportProvenance::OperatorPinnedCheckpoint) => true,
+        // New, fail-closed and Header-v4 only. Reuses the single gate helper so there is exactly one
+        // place where the lever and the version fence are expressed.
+        (version, PalwPruningSnapshotImportProvenance::ChainDerivedHeaderBundle) => {
+            palw_pruned_ibd_chain_derived_import_allowed(permissionless_enabled, version)
+        }
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -188,14 +250,20 @@ pub fn palw_pruned_ibd_snapshot_import_allowed(header_version: u16, auth: &PalwP
 //   2. every transported Header-v4 anti-spam support row must be bound to a transported
 //      header commitment, not merely shape/monotonicity/closure-checked.
 //
-// The functions below are the pure, reviewable core of (1) and (2). They deliberately
-// do NOT change any live import path, do NOT relax `palw_pruned_ibd_snapshot_import_allowed`
-// (Header-v4 peer import stays fenced), and do NOT themselves verify proof-of-work.
-// Authenticating the transported header bundle (PoW + selected-chain linkage) and moving
-// the durable write are the wiring steps specified in
-// `docs/adr-permissionless-snapshot-authentication.md`; they remain a reviewed StopShip.
-// Landing the cryptographic binding first keeps it independently testable before it is
-// trusted by consensus.
+// The functions below are the pure, reviewable core of (1) and (2). They do NOT themselves
+// verify proof-of-work, and they do NOT relax the default admission matrix: the
+// `ChainDerivedHeaderBundle` arm of `palw_pruned_ibd_snapshot_import_allowed` is closed
+// unless the node-local `Config::palw_permissionless_snapshot_auth` lever is set, which is
+// default-false and set by no preset. With the lever off, admission is byte-identical to the
+// pre-ADR-0042 matrix.
+//
+// Authenticating the descendant header by accumulated work on the post-pruning-point chain
+// (ADR-0042 review point (b)) is NOT done here and cannot be: it needs reachability, the
+// headers store and the syncer's tip. That is the wiring layer's obligation, specified in
+// `docs/adr/0042-permissionless-snapshot-auth-completion.md`. What this module *does*
+// guarantee for the wiring layer is that every transported header is self-consistent — its
+// `hash` field is recomputed from its own canonical preimage — so a peer cannot decouple a
+// block identity from the body that identity is supposed to commit to.
 // ---------------------------------------------------------------------------
 
 /// A single transported Header-v4 fact: a block hash and the anti-spam accumulator
@@ -266,11 +334,20 @@ pub fn verify_support_rows_against_transported_headers(
 ///
 /// `paid_work_nullifiers` and `da_state_root` are the two derived values the authoritative
 /// overlay-commitment path computes from the paid-work window and the DA snapshot; the
-/// caller supplies them so this stays a pure, store-free bridge. Soundness does not rely on
-/// the caller deriving them correctly: the resulting `state_root()` is compared against a
-/// proof-of-work authenticated descendant header, so any wrong field — derived or
-/// transported — fails that comparison. The returned value is canonical-validated by
-/// [`PalwSelectedParentStateV2::try_new`].
+/// caller supplies them so this stays a pure, store-free bridge. The caller need not derive them
+/// trustfully: the resulting `state_root()` is compared against a proof-of-work authenticated
+/// descendant header, so a wrong derived value fails that comparison. The returned value is
+/// canonical-validated by [`PalwSelectedParentStateV2::try_new`].
+///
+/// WHAT THE FOLD DOES **NOT** COVER. The state commits the deduplicated UNION of the paid-work
+/// nullifiers, and nothing else about `payload.paid_work`. Each [`PalwPrunedPaidWorkBlockV1`] also
+/// carries `block_hash` and `block_daa_score`, and neither enters this — or any other — commitment.
+/// Two payloads whose rows carry the same nullifier union but a different per-row attribution fold
+/// to the identical `state_root()`, yet `VirtualStateProcessor::palw_paid_work_window` filters the
+/// persisted rows against an ADVANCING anchor DAA, so they diverge for every anchor above the
+/// pruning point. The operator-pin provenance covers those bytes verbatim through its payload
+/// digest; the chain-derived provenance does not, and must therefore bind the attribution against
+/// local stores — see [`verify_chain_derived_paid_work_attribution`].
 pub fn reconstruct_selected_parent_state_from_pruning_payload(
     payload: &PalwPruningPointSnapshotPayloadV1,
     paid_work_nullifiers: Vec<Hash64>,
@@ -305,12 +382,18 @@ pub fn reconstruct_selected_parent_state_from_pruning_payload(
 /// Soundness rests on two facts the *wiring* layer must supply and authenticate independently (this
 /// pure function does neither): `descendant_overlay_commitment_root` must come from a proof-of-work
 /// authenticated first-post-pruning-point Header-v4 child, and `legacy_overlay_root` must be the
-/// `commitment_root()` of the transported, authenticated DNS/EVM `OverlaySnapshot`. Given those, any
-/// tampering of the transported payload — in any field the selected-parent `state_root` covers, or in
-/// the derived paid-work / DA values — changes the fold and fails the comparison against the honest
+/// `commitment_root()` of the transported, authenticated DNS/EVM `OverlaySnapshot`. Given those,
+/// tampering of the transported payload **in any field the selected-parent `state_root` covers**, or
+/// in the derived paid-work / DA values, changes the fold and fails the comparison against the honest
 /// child's commitment. `paid_work_nullifiers` and `da_state_root` are the two window/DA-derived values
 /// the caller supplies from the transported payload; the caller need not derive them trustfully because
 /// a wrong value simply fails the comparison.
+///
+/// THE HEDGE IS LOAD-BEARING — this is NOT "any tampering of the transported payload fails". The
+/// per-row paid-work attribution (`block_hash` / `block_daa_score`, and which row a nullifier sits in)
+/// is transported but uncommitted, so a payload tampered only there folds identically and passes here.
+/// [`verify_chain_derived_paid_work_attribution`] is the separate, store-anchored obligation that
+/// covers it, and the chain-derived importer must run BOTH.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_chain_derived_pruning_boundary(
     payload: &PalwPruningPointSnapshotPayloadV1,
@@ -330,7 +413,9 @@ pub fn verify_chain_derived_pruning_boundary(
     match &payload.spam_accumulator {
         Some(spam) => verify_support_rows_against_transported_headers(spam, payload.pruning_point, support_row_headers)?,
         None if !support_row_headers.is_empty() => {
-            return Err(PalwPruningSnapshotError::Incoherent("support-row headers supplied for a snapshot without an anti-spam frontier"));
+            return Err(PalwPruningSnapshotError::Incoherent(
+                "support-row headers supplied for a snapshot without an anti-spam frontier",
+            ));
         }
         None => {}
     }
@@ -346,6 +431,12 @@ pub fn verify_chain_derived_pruning_boundary(
 /// the transported window within `walk_bound` contributes. `walk_bound_daa` is the network's
 /// `PalwBatchAdmission::paid_work_walk_bound_daa(palw_epoch_length_daa)`. The result is deduplicated and
 /// sorted by `Hash64::as_bytes()`, matching `PalwSelectedParentStateV2`'s canonical order.
+///
+/// This is a UNION: it deliberately forgets which row each nullifier came from and at which DAA score
+/// that row sits. That is correct for the pruning anchor — where the walk bound admits every row the
+/// importer accepted — and wrong to rely on for any later anchor, because the same filter re-run
+/// against an advancing anchor DAA does depend on the per-row score. See
+/// [`verify_chain_derived_paid_work_attribution`].
 pub fn palw_pruning_payload_paid_work_nullifiers(payload: &PalwPruningPointSnapshotPayloadV1, walk_bound_daa: u64) -> Vec<Hash64> {
     let mut nullifiers: Vec<Hash64> = Vec::new();
     for row in &payload.paid_work {
@@ -353,9 +444,104 @@ pub fn palw_pruning_payload_paid_work_nullifiers(payload: &PalwPruningPointSnaps
             nullifiers.extend(row.job_nullifiers.iter().copied());
         }
     }
-    nullifiers.sort_by(|a, b| a.as_bytes().cmp(&b.as_bytes()));
+    nullifiers.sort_by_key(|a| a.as_bytes());
     nullifiers.dedup();
     nullifiers
+}
+
+/// The local, store-resolved truth about one paid-work source block, as the chain-derived importer
+/// reads it out of its own stores. Resolving it is the consensus crate's job (it owns the stores);
+/// comparing it is this module's, so the rule itself stays pure and unit-testable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwLocalPaidWorkFactV1 {
+    /// The block's own `HeaderStoreReader::get_daa_score`.
+    pub block_daa_score: u64,
+    /// The block's own `PalwPaidWorkStoreReader::get`, with a genuine `KeyNotFound` rendered as the
+    /// empty vector — a block that paid nothing writes no row, so absence and emptiness are the same
+    /// fact. Carried in store order; [`verify_chain_derived_paid_work_attribution`] sorts before
+    /// comparing, because the store appends in acceptance order while the transported row is
+    /// canonically byte-sorted.
+    pub job_nullifiers: Vec<Hash64>,
+}
+
+/// Bind the transported paid-work ATTRIBUTION to local stores. This is the chain-derived provenance's
+/// second, independent obligation, and it closes a gap the boundary fold provably cannot.
+///
+/// # The gap
+///
+/// The Header-v4 selected-parent state folds only the deduplicated UNION of the in-window paid-work
+/// nullifiers. `block_hash` and `block_daa_score` enter no commitment, and neither does the assignment
+/// of a nullifier to a row. So a peer may keep the union byte-identical and either re-date a row or
+/// move a nullifier from one row to another: the fold at the pruning point still matches EXACTLY.
+/// It diverges later, because `VirtualStateProcessor::palw_paid_work_window` re-runs
+/// `anchor_daa - row.block_daa_score <= walk_bound` against an ADVANCING anchor. A victim that
+/// installed a re-attributed window therefore drops (or keeps) nullifiers at different anchors than
+/// the network, derives a different `selected_parent_palw_state_root`, and rejects HONEST blocks with
+/// `BadOverlayCommitment` — permanent desync, at zero work to the attacker.
+///
+/// Committing the attribution instead is not available: `PalwSelectedParentStateV2::state_root` is
+/// folded into the live `overlay_commitment_root` that every Header-v4 block already carries, and the
+/// live counterpart derives its `paid_work_nullifiers` from a `HashSet<Hash64>` with no attribution in
+/// it at all. Adding attribution would move the committed value on-chain and fail every existing
+/// algo-4 block. Hence a store cross-check, not a commitment.
+///
+/// # The rule
+///
+/// `local_facts` is index-aligned with `payload.paid_work`. `None` means the local node has no header
+/// for that row's block, which is a REFUSAL, never a skip: an unverifiable row is exactly the row an
+/// attacker would fabricate. For each row:
+///
+/// 1. `block_daa_score` must equal the local header's DAA score — a row cannot be re-dated;
+/// 2. `job_nullifiers` must equal, as a sorted sequence, what the local paid-work store recorded for
+///    that block (absent ⇔ empty) — a nullifier cannot be moved between rows.
+///
+/// # Why (1) + (2) + the fold is complete
+///
+/// The importer independently pins `payload.paid_work_window_daa` to the local
+/// `paid_work_walk_bound_daa`, so EVERY transported row is inside the walk bound at the pruning point
+/// and therefore contributes to the folded union. The fold then pins the total nullifier set exactly,
+/// and `validate_paid_work` forbids a nullifier appearing in two rows. Given that:
+///
+/// * a row cannot be re-dated — (1);
+/// * a nullifier cannot be re-attributed — (2), since both the source and the destination row are
+///   compared against their own block's local record;
+/// * a non-empty row cannot be dropped or invented — either changes the total union and fails the
+///   fold (an invented row's nullifiers must be that block's real, distinct ones by (2));
+/// * an EMPTY row may be dropped or added freely, and provably never contributes to any window.
+///
+/// So the installed rows produce the network's window at the pruning point AND at every later anchor.
+///
+/// # What this costs
+///
+/// It requires the importing node to still hold the below-boundary headers and paid-work rows for the
+/// window it is being handed. That is the position the only usable chain-derived caller is in — the
+/// catch-up path has run `sync_headers` and is adopting a chain it already follows — and it is the
+/// point of the exercise: verify the peer's bytes while your own copy still exists, then keep the
+/// verified copy after pruning reclaims yours. A node that is NOT in that position cannot verify and
+/// is refused; it retains the operator-pin and Header-v3 paths, which are unaffected by this function.
+pub fn verify_chain_derived_paid_work_attribution(
+    payload: &PalwPruningPointSnapshotPayloadV1,
+    local_facts: &[Option<PalwLocalPaidWorkFactV1>],
+) -> Result<(), PalwPruningSnapshotError> {
+    if local_facts.len() != payload.paid_work.len() {
+        return Err(PalwPruningSnapshotError::Incoherent("paid-work local fact set does not cover every transported row"));
+    }
+    for (row, fact) in payload.paid_work.iter().zip(local_facts.iter()) {
+        let Some(fact) = fact else {
+            return Err(PalwPruningSnapshotError::Incoherent("paid-work row names a block with no locally available header"));
+        };
+        if fact.block_daa_score != row.block_daa_score {
+            return Err(PalwPruningSnapshotError::Incoherent("paid-work row re-dates its source block"));
+        }
+        let mut local = fact.job_nullifiers.clone();
+        local.sort_by_key(|id| id.as_bytes());
+        if local != row.job_nullifiers {
+            return Err(PalwPruningSnapshotError::Incoherent(
+                "paid-work row does not match the locally recorded nullifiers of its source block",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Derive the DA state root the first post-pruning-point child folds into its selected-parent state,
@@ -409,15 +595,20 @@ pub fn palw_pruned_ibd_chain_derived_import_allowed(permissionless_enabled: bool
     permissionless_enabled && header_version == crate::constants::PALW_ANTISPAM_HEADER_VERSION
 }
 
-/// The single chain-derived pre-install verification the importer runs before staging any durable row:
-/// derive the two window/DA values from the transported payload, then authenticate the boundary against
-/// the PoW-authenticated facts in `bundle`. `walk_bound_daa` is the receiving network's
-/// `PalwBatchAdmission::paid_work_walk_bound_daa(palw_epoch_length_daa)`.
+/// The chain-derived pre-install BOUNDARY-FOLD verification the importer runs before staging any
+/// durable row: derive the two window/DA values from the transported payload, then authenticate the
+/// boundary against the PoW-authenticated facts in `bundle`. `walk_bound_daa` is the receiving
+/// network's `PalwBatchAdmission::paid_work_walk_bound_daa(palw_epoch_length_daa)`.
 ///
 /// The caller must have already checked [`palw_pruned_ibd_chain_derived_import_allowed`] and
 /// authenticated the bundle (PoW of the descendant header, authenticity of the DNS overlay snapshot
-/// whose `commitment_root()` is `bundle.legacy_overlay_root`). This composition is fail-closed: any
-/// tampering of the transported payload changes a derived value and fails the fold comparison.
+/// whose `commitment_root()` is `bundle.legacy_overlay_root`).
+///
+/// NOT THE WHOLE CHAIN-DERIVED CHECK. This composition is fail-closed for every payload field the
+/// selected-parent `state_root` covers: tampering there changes a derived value and fails the fold.
+/// It says nothing about the per-row paid-work attribution, which the fold provably cannot see — the
+/// importer must additionally run [`verify_chain_derived_paid_work_attribution`], which is where that
+/// obligation lives.
 pub fn verify_chain_derived_pruning_boundary_from_payload(
     payload: &PalwPruningPointSnapshotPayloadV1,
     walk_bound_daa: u64,
@@ -435,11 +626,80 @@ pub fn verify_chain_derived_pruning_boundary_from_payload(
     )
 }
 
+/// Recompute a transported header's block identity from its own canonical preimage and require the
+/// carried `Header::hash` field to equal it.
+///
+/// WHY THIS EXISTS (the central trust boundary of the chain-derived scheme). [`crate::header::Header`]
+/// derives `BorshDeserialize` with `hash` as its FIRST field, so a Borsh-decoded wire header carries a
+/// block hash the *peer* chose, never re-derived from the body. (The protobuf `BlockHeader` path is
+/// safe because it rebuilds through `Header::new_finalized`/`with_*`, which re-finalize; Borsh is not.)
+/// Every binding in this module keys off `header.hash`: the support-row identities, and therefore the
+/// entire anti-spam-closure soundness argument, are vacuous if a peer can attach an arbitrary body to
+/// an arbitrary block hash. Recomputing here is what makes the projection below safe to run on
+/// attacker-supplied bytes.
+///
+/// For Header-v4 every non-cached field participates in [`crate::hashing::header::hash`]'s preimage,
+/// so hash equality is a commitment to the complete header body — in particular to
+/// `palw_spam_accumulator_commitment` and `overlay_commitment_root`, the two fields the chain-derived
+/// verification reads.
+///
+/// This checks self-consistency ONLY. It is not proof of work, not chain membership, and not burial;
+/// those remain the wiring layer's obligation (ADR-0042 review points (a′)/(b)).
+pub fn palw_bind_transported_header_identity(header: &crate::header::Header) -> Result<(), PalwPruningSnapshotError> {
+    if crate::hashing::header::hash(header) != header.hash {
+        return Err(PalwPruningSnapshotError::Incoherent("transported header hash does not match its own preimage"));
+    }
+    Ok(())
+}
+
+/// ADR-0042 review point (b), pure half: the structural conditions a chain-derived descendant header
+/// must satisfy relative to the boundary it authenticates.
+///
+/// NECESSARY, NOT SUFFICIENT — and the difference is the whole security question.
+/// `overlay_commitment_root` is validated by a *body* rule (`verify_expected_utxo_state`), so a single
+/// PoW-valid header can assert an arbitrary boundary. What actually authenticates the descendant is
+/// burial under the post-pruning-point accumulated work of the chain being adopted, which needs
+/// reachability, the headers store and the syncer's tip; none of that is available to a pure function
+/// in consensus-core. A caller that runs only this check has authenticated nothing.
+///
+/// Given that the wiring layer has established that `pruning_point` is the descendant's GHOSTDAG
+/// *selected* parent and that the descendant is buried, these three conditions are the pure residue:
+/// exactly Header-v4, a self-consistent identity (see [`palw_bind_transported_header_identity`]), and
+/// the pruning point present among the direct parents. The DAA strictness follows from the selected
+/// parent always being counted in the child's DAA window, so it can be checked without stores.
+///
+/// Uniqueness of the descendant is deliberately NOT required: the committed
+/// `overlay_commitment_root` is a function of the pruning point alone, so every sibling whose selected
+/// parent is the pruning point commits the identical root. Demanding "the unique first child" would be
+/// unenforceable and would buy nothing.
+pub fn palw_chain_derived_descendant_shape_is_valid(
+    descendant: &crate::header::Header,
+    pruning_point: BlockHash,
+    pruning_point_daa_score: u64,
+) -> Result<(), PalwPruningSnapshotError> {
+    if descendant.version != crate::constants::PALW_ANTISPAM_HEADER_VERSION {
+        return Err(PalwPruningSnapshotError::Incoherent("chain-derived descendant header is not Header-v4"));
+    }
+    palw_bind_transported_header_identity(descendant)?;
+    if !descendant.direct_parents().contains(&pruning_point) {
+        return Err(PalwPruningSnapshotError::Incoherent("chain-derived descendant does not list the pruning point as a parent"));
+    }
+    if descendant.daa_score <= pruning_point_daa_score {
+        return Err(PalwPruningSnapshotError::Incoherent("chain-derived descendant does not advance past the pruning point"));
+    }
+    Ok(())
+}
+
 /// The P2P-transported header bundle for permissionless Header-v4 snapshot import. Unlike the
 /// authenticated [`PalwChainDerivedAuthBundleV1`] (extracted roots only), this carries the full
 /// descendant Header-v4 header(s), the below-boundary support-row headers, and the DNS/EVM overlay
-/// snapshot, so the receiver can PoW/target-validate the headers and authenticate the overlay snapshot
-/// before extracting the trusted roots.
+/// snapshot, so the receiver can work-authenticate the descendant and bind the support rows before
+/// extracting the trusted roots.
+///
+/// `dns_overlay_snapshot` needs no independent authentication: its `commitment_root()` is folded into
+/// `palw_overlay_commitment_root_v2(legacy_root, state_root)` and compared against the descendant's
+/// committed root, so a substituted overlay snapshot simply fails the fold. The descendant is the only
+/// trust-critical artifact in the bundle.
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct PalwChainDerivedHeaderBundleWireV1 {
     pub descendant_header: crate::header::Header,
@@ -448,30 +708,74 @@ pub struct PalwChainDerivedHeaderBundleWireV1 {
 }
 
 impl PalwChainDerivedHeaderBundleWireV1 {
-    /// Project the already-authenticated headers + overlay snapshot into the roots the pure verifier
-    /// consumes.
+    /// Keyed BLAKE2b-512 over the canonical Borsh encoding, under
+    /// [`PALW_CHAIN_DERIVED_BUNDLE_DIGEST_DOMAIN`].
     ///
-    /// TRUST BOUNDARY: the caller MUST have PoW/target-validated `descendant_header` and every
-    /// `support_headers` entry, and authenticated `dns_overlay_snapshot`, before calling this. This
-    /// function performs NO authentication — it only enforces structural bounds and projects header
-    /// fields. The proof-of-work authentication that makes these facts trustworthy is the security
-    /// anchor and is deliberately kept out of this pure projection (task 1d, needs independent review).
+    /// The bundle is far too large to ride inside the single, unchunked trusted-data message, so the
+    /// package carries only this digest and the bytes arrive over a dedicated chunked message pair.
+    /// The digest is what binds those separately-requested bytes back to the accumulated-work-validated
+    /// package — without it the bundle would be an unbound new message from an arbitrary peer. It
+    /// commits the transported bytes verbatim, including each header's cached `hash` field; semantic
+    /// rejection of a forged `hash` is [`Self::extract_authenticated_bundle`]'s job, not the digest's.
+    pub fn digest(&self) -> Hash64 {
+        blake2b_512_keyed(
+            PALW_CHAIN_DERIVED_BUNDLE_DIGEST_DOMAIN,
+            &borsh::to_vec(self).expect("PALW chain-derived header bundle has an infallible Borsh encoding"),
+        )
+    }
+
+    /// Outer Borsh envelope fence, mirroring `PalwPruningPointSnapshotV1::validate_canonical`'s first
+    /// step. Counted without allocating, so an oversized bundle is rejected before it is hashed or
+    /// cloned.
+    pub fn validate_encoded_size(&self) -> Result<usize, PalwPruningSnapshotError> {
+        validate_borsh_encoded_size(self, MAX_PALW_CHAIN_DERIVED_BUNDLE_BYTES)
+    }
+
+    /// Project the transported headers + overlay snapshot into the roots the pure verifier consumes.
+    ///
+    /// TRUST BOUNDARY — read this before calling. This function authenticates exactly ONE thing: that
+    /// each transported header's `hash` is the hash of its own body (see
+    /// [`palw_bind_transported_header_identity`], and the reason that check is mandatory). It does NOT
+    /// verify proof of work, chain membership, selected-parent linkage, or burial for
+    /// `descendant_header`. Those are what make `descendant_overlay_commitment_root` trustworthy, and
+    /// a caller that skips them gets a scheme in which one PoW-less header forges an arbitrary
+    /// boundary. The caller MUST work-authenticate the descendant first (ADR-0042 review point (b)).
+    ///
+    /// What the caller may then rely on: the returned `support_row_headers` are canonical, duplicate
+    /// free, Header-v4, and each `(block_hash, spam_accumulator_commitment)` pair is an unforgeable
+    /// preimage relation — which is what lets
+    /// [`verify_support_rows_against_transported_headers`] bind the anti-spam closure by induction
+    /// from the pruning point's own header, with no proof membership and no PoW on the support set.
     pub fn extract_authenticated_bundle(&self) -> Result<PalwChainDerivedAuthBundleV1, PalwPruningSnapshotError> {
         if self.support_headers.len() > MAX_PALW_PRUNING_SPAM_SUPPORT_ROWS {
             return Err(PalwPruningSnapshotError::TooMany("chain-derived support headers", self.support_headers.len()));
         }
+        self.validate_encoded_size()?;
         if self.descendant_header.version != crate::constants::PALW_ANTISPAM_HEADER_VERSION {
             return Err(PalwPruningSnapshotError::Incoherent("chain-derived descendant header is not Header-v4"));
         }
-        let mut support_row_headers: Vec<TransportedSpamHeaderCommitmentV1> = self
-            .support_headers
-            .iter()
-            .map(|header| TransportedSpamHeaderCommitmentV1 {
+        palw_bind_transported_header_identity(&self.descendant_header)?;
+        let mut support_row_headers: Vec<TransportedSpamHeaderCommitmentV1> = Vec::with_capacity(self.support_headers.len());
+        for header in &self.support_headers {
+            // A support row is only bound by its header if that header is a Header-v4 header: the
+            // anti-spam accumulator commitment is hash-invisible below v4, so a v3 header would carry
+            // an unbound, freely chosen `palw_spam_accumulator_commitment`.
+            if header.version != crate::constants::PALW_ANTISPAM_HEADER_VERSION {
+                return Err(PalwPruningSnapshotError::Incoherent("chain-derived support header is not Header-v4"));
+            }
+            palw_bind_transported_header_identity(header)?;
+            support_row_headers.push(TransportedSpamHeaderCommitmentV1 {
                 block_hash: header.hash,
                 spam_accumulator_commitment: header.palw_spam_accumulator_commitment,
-            })
-            .collect();
+            });
+        }
         support_row_headers.sort_by(|a, b| a.block_hash.as_bytes().cmp(&b.block_hash.as_bytes()));
+        // Reject a repeated support header here rather than letting it surface later as a set-size
+        // mismatch: a duplicate would otherwise let a peer pad the header set to the expected
+        // cardinality while omitting a row it cannot serve.
+        if !support_row_headers.windows(2).all(|w| w[0].block_hash.as_bytes() < w[1].block_hash.as_bytes()) {
+            return Err(PalwPruningSnapshotError::Incoherent("chain-derived support headers repeat a block hash"));
+        }
         Ok(PalwChainDerivedAuthBundleV1 {
             descendant_overlay_commitment_root: self.descendant_header.overlay_commitment_root,
             legacy_overlay_root: self.dns_overlay_snapshot.commitment_root(),
@@ -1345,12 +1649,13 @@ mod tests {
             pruning_point: value.payload.pruning_point,
             payload_digest: value.payload_digest,
         });
-        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::EVM_HEADER_VERSION, &legacy));
-        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &legacy));
-        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &pinned));
-        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &legacy));
-        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &pinned));
-        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION + 1, &pinned));
+        // Threaded with the lever OFF: these are the pre-ADR-0042 assertions, unchanged.
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::EVM_HEADER_VERSION, &legacy, false));
+        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &legacy, false));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &pinned, false));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &legacy, false));
+        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &pinned, false));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION + 1, &pinned, false));
     }
 
     #[test]
@@ -1471,8 +1776,14 @@ mod tests {
                 block_hash: pruning_point,
                 spam_accumulator_commitment: spam.pruning_point_state.commitment(),
             },
-            TransportedSpamHeaderCommitmentV1 { block_hash: h(8), spam_accumulator_commitment: spam.support_rows[0].state.commitment() },
-            TransportedSpamHeaderCommitmentV1 { block_hash: h(12), spam_accumulator_commitment: spam.support_rows[1].state.commitment() },
+            TransportedSpamHeaderCommitmentV1 {
+                block_hash: h(8),
+                spam_accumulator_commitment: spam.support_rows[0].state.commitment(),
+            },
+            TransportedSpamHeaderCommitmentV1 {
+                block_hash: h(12),
+                spam_accumulator_commitment: spam.support_rows[1].state.commitment(),
+            },
         ];
         headers.sort_by(|a, b| a.block_hash.as_bytes().cmp(&b.block_hash.as_bytes()));
         assert!(verify_support_rows_against_transported_headers(&spam, pruning_point, &headers).is_ok());
@@ -1601,22 +1912,30 @@ mod tests {
         headers.sort_by(|a, b| a.block_hash.as_bytes().cmp(&b.block_hash.as_bytes()));
 
         // Honest bundle authenticates before any durable install.
-        assert!(verify_chain_derived_pruning_boundary(&payload, nullifiers.clone(), da_root, legacy_root, descendant, &headers).is_ok());
+        assert!(
+            verify_chain_derived_pruning_boundary(&payload, nullifiers.clone(), da_root, legacy_root, descendant, &headers).is_ok()
+        );
 
         // A tampered payload field (here the DA-state input) changes the folded state and is rejected.
         assert_eq!(
             verify_chain_derived_pruning_boundary(&payload, nullifiers.clone(), h(0x56), legacy_root, descendant, &headers),
-            Err(PalwPruningSnapshotError::Incoherent("descendant overlay commitment does not authenticate the transported PALW state"))
+            Err(PalwPruningSnapshotError::Incoherent(
+                "descendant overlay commitment does not authenticate the transported PALW state"
+            ))
         );
         // A peer-substituted legacy (DNS/EVM) overlay root is rejected.
         assert_eq!(
             verify_chain_derived_pruning_boundary(&payload, nullifiers.clone(), da_root, h(0x34), descendant, &headers),
-            Err(PalwPruningSnapshotError::Incoherent("descendant overlay commitment does not authenticate the transported PALW state"))
+            Err(PalwPruningSnapshotError::Incoherent(
+                "descendant overlay commitment does not authenticate the transported PALW state"
+            ))
         );
         // A wrong descendant commitment (unauthenticated header) is rejected.
         assert_eq!(
             verify_chain_derived_pruning_boundary(&payload, nullifiers.clone(), da_root, legacy_root, h(0xaa), &headers),
-            Err(PalwPruningSnapshotError::Incoherent("descendant overlay commitment does not authenticate the transported PALW state"))
+            Err(PalwPruningSnapshotError::Incoherent(
+                "descendant overlay commitment does not authenticate the transported PALW state"
+            ))
         );
         // With the state binding correct, a tampered support-row header is still caught.
         let mut bad_headers = headers.clone();
@@ -1629,20 +1948,47 @@ mod tests {
     }
 
     #[test]
-    fn header_v4_peer_import_admits_no_permissionless_provenance() {
-        // The permissionless primitives above add no admitted provenance. Peer import still admits
-        // exactly the closed-network v3 path and the operator-pinned v4 path, and nothing else.
+    fn header_v4_peer_import_is_fenced_unless_the_lever_is_set() {
+        // The theorem this test has always pinned: a peer-advertised Header-v4 boundary is refused
+        // unless the node itself supplies the authority. Before ADR-0042 that was pinned by the
+        // ABSENCE of any permissionless provenance; now it is pinned by the GATE on the one that
+        // exists. The `false` column below is byte-identical to the whole pre-ADR-0042 matrix, which
+        // is exactly the safety property that makes the new arm landable.
         let v3 = PalwPruningSnapshotImportAuth::legacy_header_v3(h(1), h(2));
         let v4 = PalwPruningSnapshotImportAuth::operator_pinned(PalwPruningSnapshotCheckpoint {
             pruning_point: h(1),
             payload_digest: h(2),
         });
-        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &v3));
-        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &v4));
+        // --- unchanged assertions, threading the default (lever off) ---
+        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &v3, false));
+        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &v4, false));
         // No cross-pairing and no future version is admitted.
-        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &v3));
-        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &v4));
-        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION + 1, &v4));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &v3, false));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &v4, false));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION + 1, &v4, false));
+
+        // The lever does not widen either shipped pair — turning it on changes nothing about v3 or
+        // about the operator-pinned v4 path, in either direction.
+        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &v3, true));
+        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &v4, true));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &v3, true));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &v4, true));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION + 1, &v4, true));
+
+        // --- the new arm ---
+        let chain_derived = PalwPruningSnapshotImportAuth::chain_derived(h(1));
+        assert_eq!(chain_derived.provenance, PalwPruningSnapshotImportProvenance::ChainDerivedHeaderBundle);
+        // It carries the all-zero sentinel, never a synthesized operator digest.
+        assert_eq!(chain_derived.checkpoint.payload_digest, Hash64::default());
+        assert_eq!(chain_derived.checkpoint.pruning_point, h(1));
+        // Lever off => still closed, on every version. This is the fence.
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &chain_derived, false));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &chain_derived, false));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION + 1, &chain_derived, false));
+        // Lever on => admitted for exactly Header-v4, and for nothing else.
+        assert!(palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION, &chain_derived, true));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_HEADER_VERSION, &chain_derived, true));
+        assert!(!palw_pruned_ibd_snapshot_import_allowed(crate::constants::PALW_ANTISPAM_HEADER_VERSION + 1, &chain_derived, true));
     }
 
     #[test]
@@ -1652,7 +1998,7 @@ mod tests {
         payload.paid_work = vec![
             PalwPrunedPaidWorkBlockV1 { block_hash: h(1), block_daa_score: 995, job_nullifiers: vec![h(0x20), h(0x21)] }, // in (5)
             PalwPrunedPaidWorkBlockV1 { block_hash: h(2), block_daa_score: 900, job_nullifiers: vec![h(0x22)] },          // out (100)
-            PalwPrunedPaidWorkBlockV1 { block_hash: h(3), block_daa_score: 990, job_nullifiers: vec![h(0x20)] },          // in (10), dup
+            PalwPrunedPaidWorkBlockV1 { block_hash: h(3), block_daa_score: 990, job_nullifiers: vec![h(0x20)] }, // in (10), dup
         ];
         // Only rows within walk_bound 10 of DAA 1000 (block_daa >= 990) contribute, deduped + byte-sorted.
         assert_eq!(palw_pruning_payload_paid_work_nullifiers(&payload, 10), vec![h(0x20), h(0x21)]);
@@ -1667,6 +2013,60 @@ mod tests {
         if let Some(snapshot) = &payload.da_snapshot {
             assert_eq!(palw_pruning_payload_da_state_root(&payload), snapshot.state.state_root());
         }
+    }
+
+    /// The paid-work attribution rule, and — first — a demonstration that the fold cannot see what it
+    /// covers. Every tamper below leaves `palw_pruning_payload_paid_work_nullifiers` byte-identical,
+    /// which is exactly why a separate, store-anchored obligation has to exist.
+    #[test]
+    fn paid_work_attribution_is_bound_to_the_local_stores() {
+        let mut payload = snapshot().payload;
+        payload.pruning_point_daa_score = 1_000;
+        payload.paid_work_window_daa = 10;
+        payload.paid_work = vec![
+            PalwPrunedPaidWorkBlockV1 { block_hash: h(1), block_daa_score: 995, job_nullifiers: vec![h(0x20), h(0x21)] },
+            PalwPrunedPaidWorkBlockV1 { block_hash: h(2), block_daa_score: 992, job_nullifiers: vec![] },
+        ];
+        let union = palw_pruning_payload_paid_work_nullifiers(&payload, 10);
+        // Store order, deliberately NOT the canonical byte order the transported row carries: the
+        // paid-work store appends in acceptance order and the verifier must normalize, not reject.
+        let local = vec![
+            Some(PalwLocalPaidWorkFactV1 { block_daa_score: 995, job_nullifiers: vec![h(0x21), h(0x20)] }),
+            Some(PalwLocalPaidWorkFactV1 { block_daa_score: 992, job_nullifiers: vec![] }),
+        ];
+        assert!(verify_chain_derived_paid_work_attribution(&payload, &local).is_ok(), "the honest window must verify");
+
+        // (1) Re-dating a row inside the admission window.
+        let mut redated = payload.clone();
+        redated.paid_work[0].block_daa_score = 1_000;
+        assert_eq!(palw_pruning_payload_paid_work_nullifiers(&redated, 10), union, "the fold cannot see a re-dated row");
+        assert_eq!(
+            verify_chain_derived_paid_work_attribution(&redated, &local),
+            Err(PalwPruningSnapshotError::Incoherent("paid-work row re-dates its source block"))
+        );
+
+        // (2) Moving a nullifier between two rows that are BOTH honestly dated. Row DAA scores are
+        // untouched here, so (1) alone would not catch this.
+        let mut moved = payload.clone();
+        moved.paid_work[0].job_nullifiers = vec![h(0x20)];
+        moved.paid_work[1].job_nullifiers = vec![h(0x21)];
+        assert_eq!(palw_pruning_payload_paid_work_nullifiers(&moved, 10), union, "the fold cannot see a re-attributed nullifier");
+        assert_eq!(
+            verify_chain_derived_paid_work_attribution(&moved, &local),
+            Err(PalwPruningSnapshotError::Incoherent(
+                "paid-work row does not match the locally recorded nullifiers of its source block"
+            ))
+        );
+
+        // (3) A row naming a block the importer has no header for is a refusal, never a skip.
+        let unknown = vec![None, local[1].clone()];
+        assert_eq!(
+            verify_chain_derived_paid_work_attribution(&payload, &unknown),
+            Err(PalwPruningSnapshotError::Incoherent("paid-work row names a block with no locally available header"))
+        );
+
+        // (4) A short fact vector must not leave the tail of the window unchecked.
+        assert!(verify_chain_derived_paid_work_attribution(&payload, &local[..1]).is_err());
     }
 
     #[test]
@@ -1700,38 +2100,50 @@ mod tests {
         assert!(verify_chain_derived_pruning_boundary_from_payload(&tampered, walk_bound, &bundle).is_err());
     }
 
+    fn v4_header(nonce: u64) -> crate::header::Header {
+        crate::header::Header::new_finalized(
+            crate::constants::PALW_ANTISPAM_HEADER_VERSION,
+            vec![vec![1.into()]].try_into().unwrap(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            234,
+            23,
+            nonce,
+            crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+            0,
+            0.into(),
+            0,
+            Default::default(),
+        )
+    }
+
+    fn chain_derived_wire() -> (PalwChainDerivedHeaderBundleWireV1, crate::dns_finality::OverlaySnapshot) {
+        let mut descendant = v4_header(1);
+        descendant.overlay_commitment_root = h(0xcc);
+        descendant.finalize();
+        let mut s1 = v4_header(2);
+        s1.palw_spam_accumulator_commitment = h(0x11);
+        s1.finalize();
+        let mut s2 = v4_header(3);
+        s2.palw_spam_accumulator_commitment = h(0x22);
+        s2.finalize();
+        let overlay = crate::dns_finality::OverlaySnapshot { bonds: vec![], reserve_balance: 0, window: vec![] };
+        (
+            PalwChainDerivedHeaderBundleWireV1 {
+                descendant_header: descendant,
+                support_headers: vec![s1, s2],
+                dns_overlay_snapshot: overlay.clone(),
+            },
+            overlay,
+        )
+    }
+
     #[test]
     fn header_bundle_extracts_authenticated_roots_and_rejects_non_v4() {
-        use crate::header::Header;
-        let mk = |nonce: u64| {
-            Header::new_finalized(
-                crate::constants::PALW_ANTISPAM_HEADER_VERSION,
-                vec![vec![1.into()]].try_into().unwrap(),
-                Default::default(),
-                Default::default(),
-                Default::default(),
-                234,
-                23,
-                nonce,
-                crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
-                0,
-                0.into(),
-                0,
-                Default::default(),
-            )
-        };
-        let mut descendant = mk(1);
-        descendant.overlay_commitment_root = h(0xcc);
-        let mut s1 = mk(2);
-        s1.palw_spam_accumulator_commitment = h(0x11);
-        let mut s2 = mk(3);
-        s2.palw_spam_accumulator_commitment = h(0x22);
-        let overlay = crate::dns_finality::OverlaySnapshot { bonds: vec![], reserve_balance: 0, window: vec![] };
-        let wire = PalwChainDerivedHeaderBundleWireV1 {
-            descendant_header: descendant,
-            support_headers: vec![s1.clone(), s2.clone()],
-            dns_overlay_snapshot: overlay.clone(),
-        };
+        let (wire, overlay) = chain_derived_wire();
+        let s1 = wire.support_headers[0].clone();
+        let s2 = wire.support_headers[1].clone();
 
         let bundle = wire.extract_authenticated_bundle().unwrap();
         assert_eq!(bundle.descendant_overlay_commitment_root, h(0xcc));
@@ -1750,6 +2162,108 @@ mod tests {
             v3.extract_authenticated_bundle(),
             Err(PalwPruningSnapshotError::Incoherent("chain-derived descendant header is not Header-v4"))
         );
+
+        // A non-v4 SUPPORT header is rejected too: below Header-v4 the anti-spam accumulator
+        // commitment is hash-invisible, so the row binding it would provide is unbound.
+        let mut v3_support = wire.clone();
+        v3_support.support_headers[0].version = crate::constants::PALW_HEADER_VERSION;
+        assert_eq!(
+            v3_support.extract_authenticated_bundle(),
+            Err(PalwPruningSnapshotError::Incoherent("chain-derived support header is not Header-v4"))
+        );
+
+        // A repeated support header cannot be used to pad the set to the expected cardinality.
+        let mut duplicated = wire.clone();
+        duplicated.support_headers = vec![s1.clone(), s1.clone()];
+        assert_eq!(
+            duplicated.extract_authenticated_bundle(),
+            Err(PalwPruningSnapshotError::Incoherent("chain-derived support headers repeat a block hash"))
+        );
+    }
+
+    #[test]
+    fn borsh_forged_header_hash_is_rejected_by_the_projection() {
+        // `Header` derives BorshDeserialize with `hash` as its first field, so a peer decides every
+        // transported block hash unless it is recomputed. Without this check a peer could bind ANY
+        // body — and therefore any `palw_spam_accumulator_commitment` — to the block hash a support
+        // row points at, and the entire anti-spam closure argument would be vacuous.
+        let (wire, _) = chain_derived_wire();
+        let honest = wire.extract_authenticated_bundle().unwrap();
+
+        // 1. A support header whose cached hash was rewritten to the hash a support row expects,
+        //    while the body (and its spam commitment) is something else entirely.
+        let mut forged_support = wire.clone();
+        forged_support.support_headers[0].hash = h(0xbe);
+        let round_tripped: PalwChainDerivedHeaderBundleWireV1 = borsh::from_slice(&borsh::to_vec(&forged_support).unwrap()).unwrap();
+        // The forgery survives a Borsh round trip verbatim — nothing in decoding re-derives it.
+        assert_eq!(round_tripped.support_headers[0].hash, h(0xbe));
+        assert_eq!(
+            round_tripped.extract_authenticated_bundle(),
+            Err(PalwPruningSnapshotError::Incoherent("transported header hash does not match its own preimage"))
+        );
+
+        // 2. Same for the descendant, whose `overlay_commitment_root` is the boundary claim itself.
+        let mut forged_descendant = wire.clone();
+        forged_descendant.descendant_header.hash = h(0xbf);
+        assert_eq!(
+            forged_descendant.extract_authenticated_bundle(),
+            Err(PalwPruningSnapshotError::Incoherent("transported header hash does not match its own preimage"))
+        );
+
+        // 3. Mutating a hashed field without re-finalizing is the same forgery seen from the other
+        //    side, and is caught identically.
+        let mut mutated_body = wire.clone();
+        mutated_body.support_headers[1].palw_spam_accumulator_commitment = h(0x99);
+        assert_eq!(
+            mutated_body.extract_authenticated_bundle(),
+            Err(PalwPruningSnapshotError::Incoherent("transported header hash does not match its own preimage"))
+        );
+
+        // 4. Re-finalizing that mutation is honest-but-different: it is accepted here (identity is
+        //    self-consistent) and moves the projected commitment, so it is the support-row binding —
+        //    not this check — that then rejects it.
+        let mut refinalized = wire.clone();
+        refinalized.support_headers[1].palw_spam_accumulator_commitment = h(0x99);
+        refinalized.support_headers[1].finalize();
+        let projected = refinalized.extract_authenticated_bundle().unwrap();
+        assert_ne!(projected.support_row_headers, honest.support_row_headers);
+    }
+
+    #[test]
+    fn chain_derived_descendant_shape_rejects_non_v4_forged_and_unlinked_headers() {
+        let pruning_point: BlockHash = 1.into();
+        let mut descendant = v4_header(7);
+        descendant.daa_score = 11;
+        descendant.finalize();
+        assert!(palw_chain_derived_descendant_shape_is_valid(&descendant, pruning_point, 10).is_ok());
+
+        // Not Header-v4.
+        let mut v3 = descendant.clone();
+        v3.version = crate::constants::PALW_HEADER_VERSION;
+        assert_eq!(
+            palw_chain_derived_descendant_shape_is_valid(&v3, pruning_point, 10),
+            Err(PalwPruningSnapshotError::Incoherent("chain-derived descendant header is not Header-v4"))
+        );
+
+        // Forged cached identity.
+        let mut forged = descendant.clone();
+        forged.hash = h(0xab);
+        assert_eq!(
+            palw_chain_derived_descendant_shape_is_valid(&forged, pruning_point, 10),
+            Err(PalwPruningSnapshotError::Incoherent("transported header hash does not match its own preimage"))
+        );
+
+        // Does not descend from the boundary it claims to authenticate.
+        assert_eq!(
+            palw_chain_derived_descendant_shape_is_valid(&descendant, h(0xf0), 10),
+            Err(PalwPruningSnapshotError::Incoherent("chain-derived descendant does not list the pruning point as a parent"))
+        );
+
+        // Does not advance past the boundary.
+        assert_eq!(
+            palw_chain_derived_descendant_shape_is_valid(&descendant, pruning_point, 11),
+            Err(PalwPruningSnapshotError::Incoherent("chain-derived descendant does not advance past the pruning point"))
+        );
     }
 
     #[test]
@@ -1762,6 +2276,23 @@ mod tests {
         assert!(!palw_pruned_ibd_chain_derived_import_allowed(true, crate::constants::PALW_ANTISPAM_HEADER_VERSION + 1));
         assert!(palw_pruned_ibd_chain_derived_import_allowed(true, crate::constants::PALW_ANTISPAM_HEADER_VERSION));
 
+        // The gate helper and the admission matrix agree on every cell for the chain-derived arm:
+        // one gate, expressed once, so the two cannot drift apart.
+        let chain_derived = PalwPruningSnapshotImportAuth::chain_derived(h(1));
+        for lever in [false, true] {
+            for version in [
+                crate::constants::PALW_HEADER_VERSION,
+                crate::constants::PALW_ANTISPAM_HEADER_VERSION,
+                crate::constants::PALW_ANTISPAM_HEADER_VERSION + 1,
+            ] {
+                assert_eq!(
+                    palw_pruned_ibd_snapshot_import_allowed(version, &chain_derived, lever),
+                    palw_pruned_ibd_chain_derived_import_allowed(lever, version),
+                    "chain-derived admission disagrees with its gate at (lever={lever}, version={version})"
+                );
+            }
+        }
+
         // The transported bundle round-trips through Borsh.
         let bundle = PalwChainDerivedAuthBundleV1 {
             descendant_overlay_commitment_root: h(1),
@@ -1770,6 +2301,45 @@ mod tests {
         };
         let bytes = borsh::to_vec(&bundle).unwrap();
         assert_eq!(borsh::from_slice::<PalwChainDerivedAuthBundleV1>(&bytes).unwrap(), bundle);
+    }
+
+    #[test]
+    fn chain_derived_bundle_digest_binds_every_transported_byte() {
+        let (wire, _) = chain_derived_wire();
+        let baseline = wire.digest();
+        // Deterministic, and within the envelope fence.
+        assert_eq!(wire.digest(), baseline);
+        assert!(wire.validate_encoded_size().unwrap() <= MAX_PALW_CHAIN_DERIVED_BUNDLE_BYTES);
+
+        // Every component moves the digest: this is what makes the 64-byte field in the
+        // accumulated-work-validated trusted-data package a binding for the separately chunked bytes.
+        let mut other_descendant = wire.clone();
+        other_descendant.descendant_header.overlay_commitment_root = h(0xcd);
+        other_descendant.descendant_header.finalize();
+        assert_ne!(other_descendant.digest(), baseline);
+
+        let mut other_support = wire.clone();
+        other_support.support_headers.pop();
+        assert_ne!(other_support.digest(), baseline);
+
+        let mut other_overlay = wire.clone();
+        other_overlay.dns_overlay_snapshot.reserve_balance = 7;
+        assert_ne!(other_overlay.digest(), baseline);
+
+        // Including the cached `hash` field, which no decoder re-derives: the digest commits the
+        // transported bytes verbatim, and `extract_authenticated_bundle` is what rejects a forgery.
+        let mut forged = wire.clone();
+        forged.support_headers[0].hash = h(0xbe);
+        assert_ne!(forged.digest(), baseline);
+
+        // The domain is disjoint from the snapshot digest's, so neither value can be replayed as the
+        // other even over identical bytes.
+        assert_ne!(PALW_CHAIN_DERIVED_BUNDLE_DIGEST_DOMAIN, PALW_PRUNING_SNAPSHOT_DIGEST_DOMAIN);
+        let payload_bytes = borsh::to_vec(&wire).unwrap();
+        assert_ne!(
+            blake2b_512_keyed(PALW_CHAIN_DERIVED_BUNDLE_DIGEST_DOMAIN, &payload_bytes),
+            blake2b_512_keyed(PALW_PRUNING_SNAPSHOT_DIGEST_DOMAIN, &payload_bytes)
+        );
     }
 
     #[test]
