@@ -194,7 +194,11 @@ mod tests {
         let helper = authority_pk_hash_from_seed(SEED);
 
         let miner_authority = TicketAuthority::from_seed(SEED);
-        assert_eq!(helper, miner_authority.pk_hash(), "mock-ticket's authority pk-hash diverged from the miner's TicketAuthority::pk_hash — leaves would be unmineable (clause 7)");
+        assert_eq!(
+            helper,
+            miner_authority.pk_hash(),
+            "mock-ticket's authority pk-hash diverged from the miner's TicketAuthority::pk_hash — leaves would be unmineable (clause 7)"
+        );
         assert_eq!(
             helper,
             ticket_authority_pk_hash(miner_authority.public_key()),
@@ -235,10 +239,7 @@ mod tests {
 
         // a foreign authority cannot read this store (dead-ticket / key-mixing guard)
         let foreign = authority_pk_hash_from_seed([0x11; 32]);
-        assert!(
-            TicketSecretStore::load_or_empty(store_path, foreign).is_err(),
-            "the store must refuse a different ticket authority"
-        );
+        assert!(TicketSecretStore::load_or_empty(store_path, foreign).is_err(), "the store must refuse a different ticket authority");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
