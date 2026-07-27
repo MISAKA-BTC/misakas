@@ -42,7 +42,7 @@ mod tests {
         EpochWindow {
             epoch: 12,
             range: ["2026-09-21T00:00:00Z".into(), "2026-09-28T00:00:00Z".into()],
-            network: "testnet-25".into(),
+            network: "testnet-10".into(),
             stage: Stage::A,
         }
     }

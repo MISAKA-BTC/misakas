@@ -356,7 +356,9 @@ mod tests {
         let good_hash = faster_hex::hex_string(&Rules::default().rules_hash().as_bytes());
         let (code, _, _, body) = route(&state, &format!("/mtp/v1/rules/{good_hash}"));
         assert_eq!(code, 200);
-        assert!(body.contains("\"version\":1"));
+        // Pinned to the constant, not a literal: a RULES_VERSION bump is a deliberate act and
+        // should not also require chasing a hard-coded number in an unrelated route test.
+        assert!(body.contains(&format!("\"version\":{}", misaka_mtp::rules::RULES_VERSION)));
         let (code, ..) = route(&state, "/mtp/v1/rules/deadbeef");
         assert_eq!(code, 404);
 

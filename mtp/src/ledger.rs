@@ -100,7 +100,7 @@ mod tests {
         EpochLedger {
             epoch: 12,
             range: ["2026-09-21T00:00:00Z".into(), "2026-09-28T00:00:00Z".into()],
-            network: "testnet-25".into(),
+            network: "testnet-10".into(),
             rules_hash: "aa".into(),
             inputs_hash: "bb".into(),
             scores: vec![ScoreRow {

@@ -137,11 +137,11 @@ mod tests {
         // = 100_000 mpts · 97/100 · 3/2 · 6/5 = 174_600 mpts (floor).
         let p = pts_node(&r, 97, 100, true, true, 0, Stage::A);
         assert_eq!(p, 174_600);
-        // second node halves; no geo/ver; stage B ×1.25:
-        // 100_000 · 100/100 · 1 · 1 · 1/2 · 5/4 = 62_500.
-        assert_eq!(pts_node(&r, 100, 100, false, false, 1, Stage::B), 62_500);
+        // second node halves; no geo/ver; stage A ×1:
+        // 100_000 · 100/100 · 1 · 1 · 1/2 · 1 = 50_000.
+        assert_eq!(pts_node(&r, 100, 100, false, false, 1, Stage::A), 50_000);
         // fourth node (rank 3) → 0.
-        assert_eq!(pts_node(&r, 100, 100, true, true, 3, Stage::C), 0);
+        assert_eq!(pts_node(&r, 100, 100, true, true, 3, Stage::A), 0);
         // zero-sample window → 0, never panics.
         assert_eq!(pts_node(&r, 0, 0, true, true, 0, Stage::A), 0);
     }
@@ -151,8 +151,8 @@ mod tests {
         let r = Rules::default();
         assert_eq!(pts_validator(&r, 1, 1, false, Stage::A), 200_000);
         assert_eq!(pts_validator(&r, 1, 1, true, Stage::A), 0, "slashed week = 0");
-        // half participation, stage C ×1.5: 200_000 · 1/2 · 3/2 = 150_000.
-        assert_eq!(pts_validator(&r, 1, 2, false, Stage::C), 150_000);
+        // half participation, stage A ×1: 200_000 · 1/2 · 1 = 100_000.
+        assert_eq!(pts_validator(&r, 1, 2, false, Stage::A), 100_000);
     }
 
     #[test]
@@ -169,11 +169,11 @@ mod tests {
     #[test]
     fn scoring_is_deterministic_and_order_independent() {
         let r = Rules::default();
-        let a = pts_node(&r, 7, 11, true, true, 0, Stage::C);
-        let b = pts_node(&r, 7, 11, true, true, 0, Stage::C);
+        let a = pts_node(&r, 7, 11, true, true, 0, Stage::A);
+        let b = pts_node(&r, 7, 11, true, true, 0, Stage::A);
         assert_eq!(a, b);
         // combined product == manual single computation (no sequential rounding drift).
-        // 100_000 · 7 · 3 · 6 · 1 · 3 / (11 · 2 · 5 · 1 · 2) = 37_800_000 / 220 = 171_818 (floor).
-        assert_eq!(a, 171_818);
+        // 100_000 · 7 · 3 · 6 · 1 · 1 / (11 · 2 · 5 · 1 · 1) = 12_600_000 / 110 = 114_545 (floor).
+        assert_eq!(a, 114_545);
     }
 }

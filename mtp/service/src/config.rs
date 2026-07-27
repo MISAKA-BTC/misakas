@@ -19,11 +19,15 @@ pub enum Role {
     Vantage,
 }
 
-/// The testnet networks in ADR-0027 D1 scope, each with its ADR-0026 BPS stage
-/// coefficient. testnet-10 (live today) and testnet-25 both score at the Stage-A
-/// floor (×1.0); the coefficient only lifts as BPS stress rises at 40/50.
-pub const NETWORKS: &[(&str, Stage)] =
-    &[("testnet-10", Stage::A), ("testnet-25", Stage::A), ("testnet-40", Stage::B), ("testnet-50", Stage::C)];
+/// The testnet networks in ADR-0027 D1 scope, with their ADR-0026 BPS stage coefficient.
+///
+/// **testnet-10 is the whole scope.** This list previously also carried `testnet-25`,
+/// `testnet-40` and `testnet-50`, the rungs of a planned BPS-escalation ladder. The block rate
+/// is now fixed at 10 BPS (2 hash + 8 PALW replica), so those rungs are not coming — and none
+/// of the three ever existed as a consensus preset, so the scorer was scoping networks that
+/// could not be run. Retired together with `Stage::B`/`Stage::C` (see `mtp::rules::Stage`);
+/// `RULES_VERSION` bumped to 2 for the change.
+pub const NETWORKS: &[(&str, Stage)] = &[("testnet-10", Stage::A)];
 
 /// The BPS stage for a scoped testnet network name, or `None` if out of scope
 /// (e.g. a mainnet name — which by D1 can never reach the scorer anyway).
@@ -92,9 +96,17 @@ mod tests {
     #[test]
     fn stage_mapping_matches_adr_0026() {
         assert_eq!(stage_for("testnet-10"), Some(Stage::A));
-        assert_eq!(stage_for("testnet-25"), Some(Stage::A));
-        assert_eq!(stage_for("testnet-40"), Some(Stage::B));
-        assert_eq!(stage_for("testnet-50"), Some(Stage::C));
         assert_eq!(stage_for("mainnet"), None, "out-of-scope names never score");
+    }
+
+    /// The BPS ladder is retired: the block rate is fixed at 10 BPS (2 hash + 8 PALW replica),
+    /// so the escalation rungs must not creep back into scope. They were also never runnable —
+    /// no consensus preset ever defined them.
+    #[test]
+    fn the_retired_bps_ladder_rungs_stay_out_of_scope() {
+        for rung in ["testnet-25", "testnet-40", "testnet-50", "testnet-palw-40"] {
+            assert_eq!(stage_for(rung), None, "{rung} is a retired ladder rung — it must not score");
+        }
+        assert_eq!(NETWORKS.len(), 1, "testnet-10 is the whole scope");
     }
 }

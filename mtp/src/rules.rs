@@ -14,26 +14,38 @@ pub type MilliPoints = u64;
 pub const POINT: MilliPoints = 1000;
 
 /// Rules schema version — bump on any change to the values below.
-pub const RULES_VERSION: u16 = 1;
+///
+/// v2: the BPS-escalation ladder was retired. See [`Stage`].
+pub const RULES_VERSION: u16 = 2;
 
-/// BPS stage coefficient (ADR-0027 §3): A ×1.0, B ×1.25, C ×1.5. As an exact rational.
+/// BPS stage coefficient (ADR-0027 §3).
+///
+/// **The ladder is retired.** ADR-0027 scored a planned BPS escalation
+/// (testnet-10 → 25 → 40 → 50) with a rising coefficient, because a higher block rate is a
+/// harsher test and was worth more points. The block rate is now **fixed at 10 BPS**, split
+/// 2 (hash lane) + 8 (PALW replica lane) — see `LaneDifficultyParams::INERT`
+/// (`hash_target_time_ms: 500` / `replica_target_time_ms: 125`). There is no second rung to
+/// climb, so `B` (×1.25) and `C` (×1.5) are gone rather than left as unreachable variants that
+/// imply a ladder that is not coming.
+///
+/// This also removes three networks that never existed: `testnet-25`, `testnet-40` and
+/// `testnet-50` had no consensus preset, and the one the PALW rationale did plan was named
+/// `testnet-palw-40`, which did not even match the name the scorer scoped.
+///
+/// `A` is kept (rather than dropping the concept) so the ledger schema keeps an explicit,
+/// signed coefficient field instead of an implicit ×1.0 — if a stressnet is ever revived it
+/// re-enters here with a new variant and another `RULES_VERSION` bump.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Stage {
-    /// testnet-25.
+    /// testnet-10 — the only scored network, at the fixed 10 BPS (2 + 8).
     A,
-    /// testnet-40.
-    B,
-    /// testnet-50.
-    C,
 }
 
 impl Stage {
-    /// The stage multiplier as `(num, den)`: A=1/1, B=5/4, C=3/2.
+    /// The stage multiplier as `(num, den)`: A=1/1.
     pub const fn factor(self) -> (u64, u64) {
         match self {
             Stage::A => (1, 1),
-            Stage::B => (5, 4),
-            Stage::C => (3, 2),
         }
     }
 }
