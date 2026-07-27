@@ -21,10 +21,16 @@ action.
 > attested epochs rather than instantly. Use a **fresh `--signed-epoch-db`** per network (the
 > anti-equivocation guard keys on epoch numbers).
 
-**Proven live on the activated testnet (15B premine + 15B emission tokenomics):** keygen → bond
-(20M MSK from the premine) → run → attests every epoch, `dnsConfirmed: true` with the
-equivocation guard firing and **0 BadCoinbaseTransaction** (the reward coinbase is
-construction==validation on the live chain). The same flow was first proven on devnet (2026-05-30).
+**Proven live on the activated testnet:** keygen → bond (20M MSK from the premine) → run →
+attests every epoch, `dnsConfirmed: true` with the equivocation guard firing and
+**0 BadCoinbaseTransaction** (the reward coinbase is construction==validation on the live chain).
+The same flow was first proven on devnet (2026-05-30).
+
+> That run predates the current tokenomics — it was performed under the earlier 15B-premine /
+> 15B-emission parameters. The shipped constants are now **~26.013224875B MSK theoretical max =
+> 10B premine + ~16.013224875B emission over 30 years** at 1.4 %/yr decay (commit `0006eb8`,
+> 2026-07-24), and the testnet bond floor is **10 MSK**, not 20M. The validator *lifecycle* the run
+> exercises is unchanged; only the amounts are.
 
 ---
 

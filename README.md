@@ -4,7 +4,39 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> Status: a public **testnet** (`testnet-10`, experimental) is the network operated today — explorer at **[misakascan.com](https://misakascan.com)**. PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`). The `testnet`/`mainnet` parameter sets additionally enforce the **production** DNS-finality policy (two-dimensional confirmation + a 20M-MSK minimum stake bond). The `mainnet` parameter set is **defined but NOT launched or endorsed for production** — do not run `--mainnet` expecting a live or supported network. (The earlier experimental `devnet` has been retired in favor of this testnet.)
+> Status: a public **testnet** (`testnet-10`, experimental) is the network operated today — explorer at **[misakascan.com](https://misakascan.com)**. PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`). The `testnet`/`mainnet` parameter sets both use **two-dimensional** DNS-finality confirmation; testnet lowers the stake-bond floor to **10 MSK** so a tester can fund a validator in seconds, while **mainnet keeps 20,000,000 MSK**. The `mainnet` parameter set is **defined but NOT launched or endorsed for production** — do not run `--mainnet` expecting a live or supported network. (The earlier experimental `devnet` has been retired in favor of this testnet.)
+
+## Join the testnet
+
+**→ [docs/testnet-participation.md](docs/testnet-participation.md) is the entry point**: which
+network to join, the hardware that is actually supported, build, node, mining, validator, and an
+explicit list of what is *not* possible yet.
+
+The short version:
+
+```bash
+git clone https://github.com/MISAKA-BTC/MisakaLLM
+cd MisakaLLM
+cargo build --release -p kaspad -p misaka-cli --bin misaka -p kaspa-pq-miner
+./target/release/misaka join -- --utxoindex --rpclisten-borsh=default   # --network defaults to testnet-10
+./target/release/misaka node doctor                                     # ports, sync, versions, RPC surface
+```
+
+`testnet-10` is the **only** network here with public DNS seeders — the PALW presets
+(`testnet-110`, `devnet-111`, `testnet-200`) ship with `dns_seeders: &[]` and are closed-mesh
+presets you run yourself, not networks you can discover and join.
+
+### Hardware — what is actually supported
+
+**The node and both miners are CPU-only.** `kaspad`, `misaminer` and `kaspa-pq-miner` contain no
+GPU code path; Layer-0 mining is BLAKE2b-512 on the CPU (rayon). There is no GPU miner to install.
+macOS (Apple Silicon and Intel), Linux (x86_64 and arm64) and Windows are all supported hosts.
+
+GPU acceleration exists **only** in the optional, off-by-default PALW inference backend of the
+`misaka-palw` crate — `qwen-metal` for Apple Silicon and `qwen-cuda` for NVIDIA. It does **not**
+accelerate mining or block validation, a default node build does not compile it, and PALW is inert
+on `testnet-10`, so it is currently a local exercise rather than participation in a live market.
+Metal and CUDA are the only GPU backends the crate exposes.
 
 ## What's different from Kaspa
 
@@ -18,7 +50,7 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 | Consensus identity | 64-byte BLAKE2b-512 (`Hash64`): block hash / txid / merkle roots / UTXO commitment / parents |
 | secp256k1 | feature-gated out of both `kaspa-consensus` and the `kaspad` node binary (default `pq-only`) |
 | Script caps | `MAX_SCRIPT_ELEMENT_SIZE` = 8192, `MAX_SCRIPTS_SIZE` / `max_signature_script_len` = 16_384 |
-| Genesis / tokenomics | new genesis; **25B MSK cap = 10B premine** (one main UTXO per network, ML-DSA-87 P2PKH) **+ 15B network emission** over 20 yr, 5%/yr exponential decay (`coinbase::SUBSIDY_BY_MONTH_TABLE`) |
+| Genesis / tokenomics | new genesis; **~26.013224875B MSK theoretical max = 10B premine** (one main UTXO per network, ML-DSA-87 P2PKH) **+ ~16.013224875B emission** over 30 yr, 1.4%/yr exponential decay (q = 0.986, `coinbase::SUBSIDY_BY_MONTH_TABLE`). `MAX_SOMPI` is a per-amount sanity cap, **not** a hard emission cap — per-block rounding puts live issuance ≈ +44 MSK above the theoretical figure at 10 BPS |
 
 Authoritative design & spec live under [`docs/`](docs/):
 
@@ -30,9 +62,9 @@ Authoritative design & spec live under [`docs/`](docs/):
 
 **Scope of PQ claims** (per the design doc): "tx authorization uses ML-DSA-87", "secp256k1 signing disabled in PQ consensus mode", "64-byte BLAKE2b-512 consensus identity". Transport-layer (network) traffic is **not** PQ unless an ML-KEM hybrid is enabled.
 
-## Prebuilt binaries
+## Releases
 
-Linux x86_64 binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-validator`, `kaspa-pq-signer`, `misaka`) are published under [Releases](https://github.com/MISAKA-BTC/misakas/releases). Each release is built from the source snapshot of the same tag; verify with the `SHA256SUMS` attached to the release.
+Tagged source snapshots are published under [Releases](https://github.com/MISAKA-BTC/MisakaLLM/releases). **No prebuilt binaries are attached** — build the tools you need from the tag using [Building from source](#building-from-source) below. If you would rather not set up a local toolchain, the Docker path (`docker/Dockerfile.kaspad`, or `./build-docker-multi-arch.sh` for `linux/amd64` + `linux/arm64`) builds the same tree.
 
 The unified operator CLI is the `misaka` binary from the `misaka-cli` package. The package name is `misaka-cli`, while the installed binary name is `misaka`; build commands should name both explicitly (`-p misaka-cli --bin misaka`) so Cargo never depends on workspace defaults.
 
@@ -75,8 +107,8 @@ DNS hard-inclusion is deliberately liveness-gated: the hard mandatory attestatio
       ```
   6. Clone the repo
       ```bash
-      git clone https://github.com/MISAKA-BTC/misakas
-      cd misakas
+      git clone https://github.com/MISAKA-BTC/MisakaLLM
+      cd MisakaLLM
       ```
   7. Build the node + tools
       ```bash
@@ -120,8 +152,8 @@ DNS hard-inclusion is deliberately liveness-gated: the hard mandatory attestatio
   5. (optional, WASM SDK only) `cargo install wasm-pack` and `rustup target add wasm32-unknown-unknown`
   6. Clone the repo
       ```bash
-      git clone https://github.com/MISAKA-BTC/misakas
-      cd misakas
+      git clone https://github.com/MISAKA-BTC/MisakaLLM
+      cd MisakaLLM
       ```
  </details>
 
@@ -151,8 +183,8 @@ DNS hard-inclusion is deliberately liveness-gated: the hard mandatory attestatio
   4. (optional, WASM SDK only) `cargo install wasm-pack` and `rustup target add wasm32-unknown-unknown`
   5. Clone the repo
       ```bash
-      git clone https://github.com/MISAKA-BTC/misakas
-      cd misakas
+      git clone https://github.com/MISAKA-BTC/MisakaLLM
+      cd MisakaLLM
       ```
  </details>
 
@@ -221,10 +253,10 @@ The `kaspa-pq-validator` sidecar connects to a local node over wRPC and attests 
 # 1. generate a validator key + print its funding address
 kaspa-pq-validator keygen --out val.seed --network testnet
 # 2. send funds to the printed funding address (mine to it, or transfer from another wallet)
-# 3. stake a bond. testnet enforces the PRODUCTION minimum: 20,000,000 MSK = 2e15 sompi.
+# 3. stake a bond. testnet lowers the floor to 10 MSK = 1e9 sompi (mainnet keeps 20,000,000 MSK).
 #    Omit --fee to auto-size it (mass-based; the flat floor is too low for the 2592-byte pubkey).
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27210 --validator-key val.seed \
-  --amount 2000000000000000 --network testnet-10
+  --amount 1000000000 --network testnet-10
 # 4. run the validator daemon (attests every epoch while the bond is active)
 kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
   --stake-bond <txid:index> --signed-epoch-db val.state --network testnet-10 --attest-poll-secs 3
@@ -234,7 +266,7 @@ kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
 
 The validator attests the one current canonical-ready epoch per round; the round cadence is `--attest-poll-secs` (default **3 s**). Every misakas network runs at **10 BPS**, so an attestation epoch (`attestation_epoch_length_blue_score = 100`) is only ~10 s of wall-clock — the 3 s default keeps a single validator caught up on every network.
 
-Once enough stake has attested across the recent epochs, `getDnsConfirmation` reports `dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat THIS as DNS-final, not the pov-dependent `blockHash` sink). On the `testnet`/`mainnet` parameter sets confirmation is **two-dimensional** — it requires `WorkDepth ≥ required_work_depth` (anchor-relative accumulated blue work) **and** `StakeDepth ≥ required_stake_depth` (so a single 20M-MSK validator confirms after ~10 attested epochs); the retired devnet/simnet sets confirm on stake alone (`required_work_depth = 0`). Per-block finality is queryable: `getDnsConfirmation` accepts an optional `blockHash` and answers whether THAT block is DNS-final (`blockIsDnsFinal` / `blockIsConfirmedAnchor`); the explorer's **DNS Finality** page lists the confirmed chain in order.
+Once enough stake has attested across the recent epochs, `getDnsConfirmation` reports `dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat THIS as DNS-final, not the pov-dependent `blockHash` sink). On the `testnet`/`mainnet` parameter sets confirmation is **two-dimensional** — it requires `WorkDepth ≥ required_work_depth` (anchor-relative accumulated blue work) **and** `StakeDepth ≥ required_stake_depth`. On **mainnet** `required_stake_depth = StakeScore(10 × STAKE_SCORE_SCALE)`, i.e. ~10 attested epochs of burial at the 20M-MSK scale; **testnet** pins it to `StakeScore(5000)` so even a 10-MSK validator clears the stake dimension in its *first* attested epoch and `required_work_depth` becomes the operative gate. The retired devnet/simnet sets confirm on stake alone (`required_work_depth = 0`). Per-block finality is queryable: `getDnsConfirmation` accepts an optional `blockHash` and answers whether THAT block is DNS-final (`blockIsDnsFinal` / `blockIsConfirmedAnchor`); the explorer's **DNS Finality** page lists the confirmed chain in order.
 
 ### Remote signer / HSM (optional, ADR-0015)
 
@@ -271,7 +303,7 @@ The wRPC subsystem is disabled by default in `kaspad` and is enabled via `--rpcl
 <summary>Tests</summary>
 
 ```bash
-cd misakas
+cd MisakaLLM
 cargo test --release
 # or, with nextest installed:
 cargo nextest run --release
@@ -282,7 +314,7 @@ cargo nextest run --release
 <summary>Lints</summary>
 
 ```bash
-cd misakas
+cd MisakaLLM
 ./check
 ```
 The CI lints job also runs `scripts/pq-ci-guard.sh`, which hard-gates that neither `kaspa-consensus` nor `kaspad` link secp256k1.
@@ -292,7 +324,7 @@ The CI lints job also runs `scripts/pq-ci-guard.sh`, which hard-gates that neith
 <summary>Benchmarks</summary>
 
 ```bash
-cd misakas
+cd MisakaLLM
 cargo bench
 ```
 </details>
