@@ -1649,7 +1649,9 @@ mod tests {
         // Everything the startup fences read is identical with and without the lever.
         assert_eq!(with_lever.params.palw_requires_archival, without_lever.params.palw_requires_archival);
         assert_eq!(with_lever.params.palw_requires_peer_allowlist, without_lever.params.palw_requires_peer_allowlist);
-        assert!(with_lever.params.palw_requires_peer_allowlist, "the shipped v4 preset stays allowlist-closed");
+        // The preset's own value is whatever policy says (ADR-0042 改訂 A1 opened testnet-200); what
+        // this test pins is that the LEVER does not move it — the equality above is the invariant.
+        assert!(!with_lever.params.palw_requires_peer_allowlist, "A1 opened the v4 staging preset");
         assert_eq!(with_lever.is_archival, without_lever.is_archival);
         assert_eq!(with_lever.params.palw_algo4_accept, without_lever.params.palw_algo4_accept);
         assert_eq!(args.connect_peers, baseline.connect_peers);

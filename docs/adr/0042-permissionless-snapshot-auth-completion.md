@@ -1,7 +1,9 @@
 # ADR-0042 — Permissionless snapshot authentication: completion contract
 
-- **Status:** Accepted(方針確定。lever は既定 `false` のまま。本 ADR は配線を有効化しない)
-- **Date:** 2026-07-26
+- **Status:** Accepted / **改訂 A1(2026-07-28)で fence 解除** — 本 ADR は **testnet で配線を有効化する**。
+  検証は外部レビュー/外部 soak を待たず testnet 実運用に一本化。mainnet preset は不変。詳細は末尾の
+  「改訂 A1」。**未了: R1**(可用性のみ、consensus 非破壊)
+- **Date:** 2026-07-26(改訂 A1: 2026-07-28)
 - **Supersedes / amends:** `docs/adr-permissionless-snapshot-authentication.md`(StopShip)を amend し、
   完成の定義(DoD)と設計上の確定事項を固定する
 - **Consumes:** ADR-0041(mainnet は pruned 運用 → permissionless late-join が hard dependency)
@@ -143,4 +145,31 @@ fold は完全一致するが、`palw_paid_work_window`(`processor.rs:5423-5427`
   (fail-closed は維持、ただし**ピアの不正ではなくローカルの欠落**であると述べ、operator-pin 経路を案内する)。
   不在が空と等価なのは行自身が空のときのみ(store は空行を省くため)。
 
-**この fence は R1-R3 の扱いを決め、独立レビュー(外部)と多ノード v4 soak(外部)が完了するまで解除してはならない。**
+~~**この fence は R1-R3 の扱いを決め、独立レビュー(外部)と多ノード v4 soak(外部)が完了するまで解除してはならない。**~~
+→ **改訂 A1(2026-07-28)により置換。下記を参照。**
+
+---
+
+## 改訂 A1(2026-07-28)— fence を解除し、検証を testnet に一本化する
+
+**決定**: 解除条件から「独立レビュー(外部)」と「多ノード v4 soak(外部)」を**前提から外す**。本 ADR は
+以後 **配線を有効化する**。検証は外部工程を待たず **testnet 上の実運用に一本化**する。
+
+**理由**: 外部レビューと外部 soak は本リポジトリ内で完了させられない工程であり、待つ限り lever は
+永久に fenced のまま、実装が正しいかを知る手段も得られない。testnet は本番価値を持たないネット
+ワークであり、そこで実際に動かすことが最も速い検証経路である。
+
+**受容するリスク(明示)**: 残余のうち **R2・R3 は 2026-07-27 に解消済**。残るのは **R1 のみ**で、その
+実害は上記のとおり **consensus 分岐ではない** — 空の `job_nullifiers` 行が chain に束縛されないため
+被害ノードの永続 snapshot が非正準化し、**そのノードが IBD 配布元として使えなくなる**(operator-pin
+を使う下流が同期を拒否する)。`palw_paid_work_window` には何も寄与しないので desync は起きない。
+**可用性の劣化であり consensus の安全性ではない**。testnet 上でこれを受容する。
+
+**R1 が不活性でなくなる点への注意**: R1 が「到達不能」とされた根拠は全 preset の
+`palw_algo4_accept = false` であった。testnet-200 は `--palw-enable-algo4` を付けて運用しており、
+**この前提はすでに成立していない**。R1 は理論上の残余ではなく、algo-4 支払いが発生した時点で実際に
+到達可能な欠陥として扱うこと。R1 の解消(行集合を selected chain に束縛する)は本 ADR の未了作業。
+
+**mainnet への非適用**: 本改訂は **testnet に限る**。mainnet preset の
+`palw_requires_peer_allowlist` と lever 既定値は変更しない。mainnet で同じ解除を行う場合は R1 の
+解消を前提とし、別途 ADR で判断すること。

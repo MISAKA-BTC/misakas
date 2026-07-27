@@ -1727,7 +1727,13 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
     palw_spam: crate::palw_antispam::PalwSpamParams::PUBLIC_REGENESIS_CANDIDATE,
     skip_proof_of_work: false, // real PoW — explicit, because the rehearsal must not inherit a demo crutch
     palw_requires_archival: false,
-    palw_requires_peer_allowlist: true, // ADR-0040 §T-shared: closed = unreachable, not unadvertised
+    // ADR-0042 改訂 A1 (2026-07-28): OPENED. The closed start existed because the ADR-0042 fence was
+    // unreleased and the safety argument rested on no unlisted third party reaching the net. A1
+    // releases that fence for testnet and moves verification onto the running network, so this
+    // rehearsal net accepts unlisted peers. Accepted residual: R1 (an unbound empty `job_nullifiers`
+    // row can non-canonicalise a node's persisted snapshot, costing it its IBD-source role) — an
+    // availability defect, NOT a consensus split. Mainnet keeps its own policy; A1 is testnet-only.
+    palw_requires_peer_allowlist: false,
     palw_lane_difficulty: STAGING_PALW_LANE_DIFFICULTY,
     ..MAINNET_PARAMS
 };
@@ -2099,10 +2105,14 @@ mod palw_network_tests {
         assert_eq!(p.finality_depth(), MAINNET_PARAMS.blockrate.finality_depth);
         assert_eq!(p.pruning_depth(), MAINNET_PARAMS.blockrate.pruning_depth);
         assert_eq!(p.bps(), MAINNET_PARAMS.bps(), "inherits the 10-BPS mainnet profile");
-        // Closed start (allowlist-gated reachability) with pruned operation as the default posture.
-        assert!(p.palw_requires_peer_allowlist);
+        // ADR-0042 改訂 A1 (2026-07-28): the allowlist gate is RELEASED for this testnet — the fence
+        // it depended on was lifted and verification moved onto the running network. Pruned
+        // operation remains the default posture.
+        assert!(!p.palw_requires_peer_allowlist, "A1 opened the staging rehearsal net to unlisted peers");
         assert!(!p.palw_requires_archival);
-        assert!(p.dns_seeders.is_empty(), "closed rehearsal net must not be advertised");
+        // Reachability and discoverability are separate: A1 removed the connect-gate, it did not add
+        // seeders. Joining still needs an explicit peer address until seeders are provisioned.
+        assert!(p.dns_seeders.is_empty(), "A1 opened reachability, not advertisement");
         // Inherits the mainnet-shape production DNS overlay; stays v3-consistent.
         assert!(p.dns_params.unwrap().dns_v3_params_consistent(), "staging DNS params stay v3-consistent");
     }
