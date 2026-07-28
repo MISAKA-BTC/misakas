@@ -304,34 +304,22 @@ not come from trusting the server.
 
 ### What earns points
 
-Four categories, and it matters which of them actually work today:
-
 | | Category | Earned by | Works today? |
 |---|---|---|---|
-| C1 | node | node uptime over the window, with a geo-diversity bonus (×1.5), a version-currency bonus (×1.2), and rank halving so a second node of the same operator counts half and a fourth counts zero | ❌ |
-| C1 | validator | attestation participation over the window; a slashed week forfeits the whole week | ❌ |
+| C1 | node | node uptime over the window, with a geo-diversity bonus (×1.5), a version-currency bonus (×1.2), and rank halving so a second node of the same operator counts half and a fourth counts zero | ✅ |
+| C1 | validator | attestation participation over the window; a slashed week forfeits the whole week | ✅ |
 | C2 | bug | a reported bug, priced by severity; a duplicate report is 10% of a first report | ✅ |
 | C3 | verify | independent verification work | ✅ |
 | C4 | infra | infrastructure contribution | ✅ |
 
-**Why the automatic ones do not work yet.** Two pieces are missing, and both are missing by
-construction rather than by oversight:
+Both C1 rows were run end-to-end against live `testnet-10` before this table was changed: a real
+peer observed from the JP vantage scored **100 points**, and a real attesting validator indexed out
+of blocks scored **200 points** over 30 epochs. Both ledgers passed `verify-epoch --facts`, which
+re-runs the scoring and byte-compares it against the signature — so these are reproduced results,
+not claims about the code.
 
-1. **There is no way to register.** Earning C1 requires binding a GitHub identity to a MISAKA
-   address with an ML-DSA-87 signature over a server-issued nonce, so facts resolve to one ledger
-   id per person. That logic is implemented (`registry.rs`), but nothing calls it — no HTTP route,
-   no CLI subcommand. The read-only API has no registration endpoint.
-2. **Nothing collects facts.** The collectors in this repository are *normalizers*: they take rows
-   that were already fetched and write them into the fact store. The service's own header says the
-   live collector I/O — p2p-crawler, chain-indexer, github-sync, campaign-forms — "is the injected
-   non-deterministic edge … wired per-deployment". No such wiring ships here.
-
-So `run-epoch` currently sees exactly one input: the operator's hand-reviewed awards file.
-
-### What you can do today
-
-Contribute something reviewable — a bug report, independent verification of a claim, infrastructure
-— and the operator awards it by hand after review:
+C2/C3/C4 are awarded by hand after review, and need no registration because the operator asserts
+the attribution directly:
 
 ```bash
 misaka mtp award --epoch <N> --network testnet-10 --id gh:<you> --category bug    --severity S1
@@ -339,9 +327,86 @@ misaka mtp award --epoch <N> --network testnet-10 --id gh:<you> --category verif
 misaka mtp award --epoch <N> --network testnet-10 --id gh:<you> --category infra  --points 500
 ```
 
-That is an operator-side command — it appends to a local awards file that the next `run-epoch`
-merges. No registration is required for it, because the operator is asserting the attribution
-directly. Running a node or a validator earns nothing until the two gaps above are closed.
+### How to start earning
+
+> **This is testnet-only.** MTP points are a testnet participation record. They are **not** a token,
+> not a balance, not tradable, and carry **no monetary value**. `testnet-10` MSK is likewise
+> valueless test currency. There is no mainnet, no sale, and no promise that points convert into
+> anything — §11-B defines a *claim* mechanism for a possible future TGE, and a mechanism existing
+> is not a commitment that it pays. Anyone offering to buy or sell MISAKA points or testnet MSK is
+> running a scam.
+
+**1 — make a key.** This key *is* your identity. Back it up; it cannot be recovered.
+
+```bash
+misaka key gen --network testnet-10 --out mtp.seed        # prints your misakatest: address
+```
+
+**2 — ask for an invitation.** Open an issue on this repository with your GitHub handle and the
+address from step 1. You get back an invitation JSON: a one-shot nonce bound to that pair.
+
+**3 — sign it offline.**
+
+```bash
+misaka mtp register --network testnet-10 \
+  --invitation invitation.json --key-file mtp.seed --out registration.json
+```
+
+Nothing is transmitted. The MTP HTTP surface is **read-only by design** (ADR-0038 D3), so there is
+no registration endpoint to post to — and therefore none that could accept a forged registration.
+
+**4 — submit `registration.json`** through the same issue or a pull request. From the next epoch
+run, facts about you resolve to `gh:<your-handle>`. Nothing before registration is retroactive.
+
+**5 — run something worth scoring.**
+
+- **A node** → C1 node. Keep it up and in sync on `testnet-10`. A peer still in IBD is reachable
+  but not usable and does not count. You run no collector: the operator's vantage hosts observe you
+  as an ordinary peer.
+- **A validator** → C1 validator. Bond, attest, stay unslashed. Attestations are read out of
+  blocks, so participation is chain-derived and needs nothing from you beyond attesting.
+- **A bug report, a verification, infrastructure** → C2/C3/C4 above.
+
+Check yourself at any time — no account, no login:
+
+```bash
+curl -s https://misakascan.com/mtp/v1/points/gh:<your-handle>
+```
+
+### How collection works, so you can audit it
+
+A points programme nobody can check is worth nothing, so the operator side is four commands:
+
+```bash
+# C1 node — observe peers from a vantage, then attribute them via an explicit roster
+misaka mtp collect --network testnet-10 --vantage jp --rpc 127.0.0.1:27210 --out probes.jsonl
+misaka-mtp-service ingest-probes --data-dir DIR --file probes.jsonl --roster roster.jsonl
+
+# C1 validator — attestations out of blocks, bond/slash state out of the registry
+misaka mtp attestations --network testnet-10 --rpc 127.0.0.1:27210 --out att.jsonl
+misaka mtp validators   --network testnet-10 --rpc 127.0.0.1:27210 --out bonds.jsonl
+misaka-mtp-service ingest-attestations --data-dir DIR --file att.jsonl \
+  --roster vroster.jsonl --bonds bonds.jsonl
+
+# publish the signed ledger for the window
+misaka-mtp-service run-epoch --data-dir DIR --operator-key op.seed \
+  --epoch 1 --start 2026-07-28T00:00:00Z --end 2026-11-01T00:00:00Z
+```
+
+Four properties of that pipeline, each guarding a place points programmes normally go wrong:
+
+- **Attribution is explicit.** A peer cannot assert ownership on the wire, so `collect` records a
+  `node_key` and stops. Only a roster line the operator wrote turns it into someone's uptime.
+  Unrostered peers are counted and skipped, never attributed to a guess.
+- **Scoring is fail-closed on registration.** `run-epoch` keeps only facts whose id is currently
+  registered and drops the rest rather than bucketing them, so an unregistered id cannot reach a
+  signed ledger even if an ingest is buggy.
+- **Duplicates are collapsed.** A DAG puts one attestation transaction in several blocks — the live
+  index returned 407 rows for 186 distinct `(validator, epoch)` pairs. Ingesting raw would push
+  participation above 100 %.
+- **Every fact carries evidence.** Uptime rows carry the vantage and user agent; attestation rows
+  carry the block and transaction they came from. `verify-epoch --facts` re-derives the scores from
+  those inputs and byte-compares against the signed ledger.
 
 ### Epochs — when points start counting
 
@@ -381,9 +446,8 @@ Stated explicitly so nobody builds on an assumption:
   `min_active_validators = 3` each bonded at 20,000,000 MSK, and only one validator is bonded today.
   Until that clears, `testnet-200` produces algo-3 blocks only — measured at ~2.6 BPS against the
   2 + 8 design (hash lane on target, PALW lane contributing nothing).
-- **Earn MTP points for running a node or validator.** Those categories need a registration surface
-  and live fact collection, and neither is deployed — see §7. Hand-reviewed `bug` / `verify` /
-  `infra` awards do work.
+- **Earn MTP points anonymously.** Every C1 point resolves to a registered ledger id, so uptime and
+  attestation from an unregistered node are dropped, not banked. Register first — see §7.
 - **Earn MTP points on `testnet-200`.** The points programme scopes `testnet-10` only.
 
   Issuing and verifying a Qwen3.6 `ComputeReceipt` locally *does* work today — that is a separate,

@@ -30,6 +30,13 @@ audited-compute side: the pinned Qwen3.6-35B-A3B model, issuing a `ComputeReceip
 a separate process, and what a receipt does and does not prove. The runtime itself lives in
 **[misaka-proof-of-llm](https://github.com/MISAKA-BTC/misaka-proof-of-llm)**.
 
+> **Everything here is a testnet. There is no mainnet.** MSK on these networks is valueless test
+> currency, and Testnet Points (MTP) are a participation record — not a token, not a balance, not
+> tradable, with no monetary value and no promise of conversion. Anyone offering to buy or sell
+> MISAKA coins or points is running a scam. Earning points is documented in
+> [§7 of the participation guide](docs/testnet-participation.md#7-testnet-points-mtp); it takes one
+> key, one invitation, and an offline signature.
+
 **`testnet-10`** — the general testnet. Peers are found automatically via the public DNS seeders:
 
 ```bash
