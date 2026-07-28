@@ -402,8 +402,6 @@ impl BlockBodyProcessor {
         let a: &PalwBatchAdmissionParams = &self.palw_batch_admission;
 
         // Seed from the selected parent's carried view (empty at genesis / a pre-activation parent).
-        #[allow(clippy::unwrap_or_default)]
-        #[allow(clippy::unwrap_or_default)]
         let mut view = self
             .palw_overlay_view_store
             .view(selected_parent)
@@ -413,17 +411,7 @@ impl BlockBodyProcessor {
                 ))
             })
             .map(|v| (*v).clone())
-            // The canonical EMPTY view (version 1), not `Default` (version 0): this seed is inherited
-            // by every descendant row, and the pruning snapshot writer's coherence contract rejects a
-            // captured overlay view whose version != 1 — a `Default` seed here silently pinned the
-            // pruning point forever on every activated pre-v4 chain (found by the ADR-0044
-            // long-chain harness, `palw_lifecycle_e2e.rs`).
-            //
-            // `clippy::unwrap_or_default` asks for `unwrap_or_default()` here and is WRONG: it assumes
-            // `new()` and `Default::default()` agree, which is exactly the assumption this call site
-            // exists to violate. Taking that suggestion reintroduces the bug above; the `allow` sits on
-            // the `let` below, because an attribute cannot be placed mid-chain.
-            .unwrap_or_else(PalwBatchViewV1::new);
+            .unwrap_or_default();
 
         // Fold in the COMPLETE blue mergeset, INCLUDING the selected parent. `view(SP)` deliberately
         // excludes SP's own body (a block is not in its own mergeset), so SP's effects are NOT already

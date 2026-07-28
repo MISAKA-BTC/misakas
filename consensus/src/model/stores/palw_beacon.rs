@@ -26,7 +26,7 @@ use super::U64Key;
 /// `stake_by_epoch` freezes the active DNS-bond amount when a commit is accepted. Quorum therefore
 /// does not change retroactively when the bond later unbonds/slashes, and no virtual-tip/global bond
 /// lookup is needed at the seed boundary.
-#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwBeaconAccumViewV1 {
     pub version: u16,
     pub epochs: BTreeMap<u64, PalwBeaconEpochAccumV1>,
@@ -44,16 +44,7 @@ impl PalwBeaconAccumViewV1 {
 
     /// First commit for `(epoch, bond)` wins and snapshots the bond amount at that exact transition.
     pub fn record_commit(&mut self, epoch: u64, bond: TransactionOutpoint, commitment: Hash64, stake: u64) -> bool {
-        // The canonical row (version 1), not `Default` (version 0): the pruning snapshot writer's
-        // coherence contract rejects an accumulator row whose version != 1, so a `Default`-created
-        // row silently blocked every capture while a beacon target epoch was live (found by the
-        // ADR-0044 long-chain harness).
-        //
-        // `clippy::unwrap_or_default` asks for `or_default()` here and is WRONG for the same reason:
-        // it assumes `new()` and `Default::default()` agree, which is the assumption this line exists
-        // to violate. Taking that suggestion reintroduces the bug above.
-        #[allow(clippy::unwrap_or_default)]
-        let accum = self.epochs.entry(epoch).or_insert_with(PalwBeaconEpochAccumV1::new);
+        let accum = self.epochs.entry(epoch).or_default();
         if accum.commitment_of(&bond).is_some() {
             return false;
         }
@@ -85,6 +76,12 @@ impl PalwBeaconAccumViewV1 {
     pub fn retain_future_of(&mut self, current_epoch: u64) {
         self.epochs.retain(|epoch, _| *epoch > current_epoch);
         self.stake_by_epoch.retain(|epoch, _| *epoch > current_epoch);
+    }
+}
+
+impl Default for PalwBeaconAccumViewV1 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -134,9 +131,7 @@ impl DbPalwBeaconStore {
     // ---- epoch accumulator (commit/reveal facts) ----
 
     fn read_accum(&self, epoch: u64) -> Result<PalwBeaconEpochAccumV1, StoreError> {
-        // Seed an absent epoch with `new()` (version = 1), not `default()` (version = 0), so persisted
-        // accumulator records carry the v1 version tag.
-        Ok(self.accum.read(epoch.into()).optional()?.map(|a| (*a).clone()).unwrap_or_else(PalwBeaconEpochAccumV1::new))
+        Ok(self.accum.read(epoch.into()).optional()?.map(|a| (*a).clone()).unwrap_or_default())
     }
 
     /// Record a beacon commit for `bond` in `epoch` (read-modify-write; idempotent per bond outpoint).
@@ -224,6 +219,11 @@ mod tests {
     }
     fn h(b: u8) -> Hash64 {
         Hash64::from_bytes([b; 64])
+    }
+
+    #[test]
+    fn default_accumulator_view_is_canonical_v1() {
+        assert_eq!(PalwBeaconAccumViewV1::default(), PalwBeaconAccumViewV1::new());
     }
 
     /// The epoch accumulator: commits accumulate, a matching reveal is recorded, epoch_inputs reflects
