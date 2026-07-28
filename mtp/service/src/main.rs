@@ -543,6 +543,9 @@ struct AttestationLine {
     network: String,
     validator_id: String,
     att_epoch: u64,
+    /// The containing block's header timestamp. The fact store windows by wall clock, so this —
+    /// not the epoch number — is what decides whether a run-epoch window sees the fact.
+    at_ms: u64,
     evidence_block: Option<String>,
     evidence_tx: Option<String>,
 }
@@ -618,7 +621,7 @@ fn cmd_ingest_attestations(args: &[String]) -> Result<(), String> {
         let slashed = slashed_ids.contains(&a.validator_id);
         store
             .append_attestation(
-                a.att_epoch,
+                a.at_ms,
                 AttestationRow {
                     validator_id: owner.clone(),
                     att_epoch: a.att_epoch,

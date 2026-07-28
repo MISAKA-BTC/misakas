@@ -794,6 +794,10 @@ pub async fn attestations(ctx: &Ctx, low_hash: Option<&str>, max_blocks: usize, 
                             "network": observed_network,
                             "validator_id": att.validator_id.to_string(),
                             "att_epoch": att.epoch,
+                            // The containing block's header time. The fact store windows facts by
+                            // wall-clock milliseconds, so an epoch NUMBER here would land the fact
+                            // in 1970 and drop it from every real window without an error.
+                            "at_ms": b.header.timestamp,
                             // Present in a block == committed. Every row this walk emits is an
                             // observed attestation; a validator that did not attest produces no
                             // row at all, which is why absence must be read against the scan range.
