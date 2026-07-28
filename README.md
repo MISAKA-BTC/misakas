@@ -34,7 +34,7 @@ a separate process, and what a receipt does and does not prove. The runtime itse
 > currency, and Testnet Points (MTP) are a participation record — not a token, not a balance, not
 > tradable, with no monetary value and no promise of conversion. Anyone offering to buy or sell
 > MISAKA coins or points is running a scam. Earning points is documented in
-> [§7 of the participation guide](docs/testnet-participation.md#7-testnet-points-mtp); it takes one
+> [§8 of the participation guide](docs/testnet-participation.md#8-testnet-points-mtp); it takes one
 > key, one invitation, and an offline signature.
 
 **`testnet-10`** — the general testnet. Peers are found automatically via the public DNS seeders:
@@ -73,9 +73,11 @@ GPU acceleration exists **only** in the optional, off-by-default PALW inference 
 `misaka-palw` crate — `qwen-metal` for Apple Silicon and `qwen-cuda` for NVIDIA. It does **not**
 accelerate mining or block validation, and a default node build does not compile it. Metal and CUDA
 are the only GPU backends the crate exposes. No network pays for it yet: PALW is inert on
-`testnet-10`, and on `testnet-200` the audited-compute lane is halted until three bonded validators
-bring the DNS overlay up, so no algo-4 block has been accepted there — see
-[docs/testnet-participation.md](docs/testnet-participation.md#8-what-you-cannot-do-yet).
+`testnet-10`, and on `testnet-200` it is genesis-active but closed — `palw_algo4_accept` ships
+`false` on every preset, so an algo-4 header is rejected before GHOSTDAG and none has been accepted
+anywhere. The LLM side, the provider bond, and how to check both gates from a node are in
+[§7 of the participation guide](docs/testnet-participation.md#7-the-llm-side-palw-audited-compute);
+the wider "not yet" list is [§9](docs/testnet-participation.md#9-what-you-cannot-do-yet).
 
 ## What's different from Kaspa
 

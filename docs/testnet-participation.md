@@ -74,11 +74,10 @@ pulled in only by `--features qwen-backend`.
 
 1. **It does not accelerate mining or block validation.** These features drive the PALW
    audited-compute provider path, not Layer-0 proof-of-work and not consensus verification.
-2. **No network is paying for it yet.** PALW is inert on `testnet-10`. `testnet-200` has it
-   genesis-active and is now reachable, but its audited-compute lane is halted until three bonded
-   validators bring the DNS overlay up (see §8), so no algo-4 block has been accepted there. Running
-   a GPU provider is still an exercise rather than participation in a live market — the difference
-   now is that the blocker is the validator set, not reachability.
+2. **No network is paying for it yet.** PALW is inert on `testnet-10`, and genesis-active but
+   closed on `testnet-200`: `palw_algo4_accept` ships `false` on **every** preset, so an algo-4
+   header is rejected before GHOSTDAG on all of them. Running a GPU provider is an exercise, not
+   participation in a live market. §7 has the three levers and how to check them from a node.
 
 ---
 
@@ -253,7 +252,120 @@ the finality point, not the point-of-view dependent `blockHash`.
 
 ---
 
-## 7. Testnet points (MTP)
+## 7. The LLM side (PALW audited compute)
+
+PALW's algo-4 lane is the audited-compute half of the system: a provider runs a **pinned** language
+model, issues a `ComputeReceipt`, and a **separate** process verifies it. None of this is needed to
+run a node or mine.
+
+Read [palw-llm-receipts.md](palw-llm-receipts.md) first for the full procedure and, more
+importantly, for what a receipt does and does not prove — it is a self-attestation checkable against
+pinned artifacts, **not** a TEE attestation, not a zero-knowledge proof, and not evidence about the
+model's output.
+
+### What runs today
+
+The receipt loop runs locally, end to end. The runtime is a **separate repository**,
+[misaka-proof-of-llm](https://github.com/MISAKA-BTC/misaka-proof-of-llm), which carries the
+authoritative quickstart; this repository is the chain that would consume its output. The two even
+use different inference backends — patched llama.cpp there, `candle` in the optional `misaka-palw`
+crate here — so do not conflate them.
+
+There is a real bridge between the two, and it works as far as the node's spool:
+
+```bash
+# in the runtime repo: export a receipt in node-context form
+palw-lifecycle export --node-context ...
+
+# in this repo: validate it and enqueue the canonical Object-v2 bytes
+misaka palw da enqueue --help
+```
+
+§2 has the feature matrix for this repository's optional backend (`qwen-metal` / `qwen-cuda`). Build
+it with eyes open: [`mil/palw`](../mil/palw) is a **library with no binary and no caller in this
+workspace**, its `qwen_backend` loads a *Qwen2/2.5* GGUF rather than the runtime's pinned
+Qwen3.6-35B-A3B, and it takes its model path as a constructor argument — there is no default path,
+no environment variable and no hash pin. Building it gives you something to link against, not
+something to run. The runnable receipt path is the runtime repo's.
+
+### Registering as a provider — and the bond that is not the one you think
+
+A **PALW provider bond** and a **DNS-finality stake bond** are different objects with different
+floors, and conflating them is the easiest mistake on this page:
+
+| | PALW provider bond | DNS-finality stake bond |
+|---|---|---|
+| Minimum | **10 MSK** (`min_provider_bond_sompi`, [`consensus/core/src/palw.rs`](../consensus/core/src/palw.rs)) | 10 MSK on `testnet-10`; **20,000,000 MSK** on `testnet-200` |
+| Exit delay | 6 epochs (`provider_unbond_floor_epochs`) | 14 days + reorg horizon |
+| Registered by | `kaspa-pq-validator palw-payload provider-bond` → `palw-submit` | `kaspa-pq-validator bond` (§6) |
+
+```bash
+kaspa-pq-validator palw-payload provider-bond \
+  --network testnet-200 --validator-key /abs/provider.seed \
+  --operator-group-id <hash64> --runtime-class <hash64> \
+  --capacity "<shape-id>=1" --reward-key-root <hash64> \
+  --amount 10MSK --unbond-delay-epochs 6 --out /abs/provider-bond.borsh
+
+kaspa-pq-validator palw-submit --network testnet-200 \
+  --node-wrpc-borsh 127.0.0.1:27220 --validator-key /abs/provider.seed \
+  --kind provider-bond --payload-file /abs/provider-bond.borsh
+```
+
+`--network` here accepts only `testnet-110`, `devnet-111` and `testnet-200` — the three presets
+where PALW is genesis-active. There is no provider role on `testnet-10`. Note also that
+`testnet-200` ships **no DNS seeders**, so you join it with `--addpeer` rather than discovery; its
+peer allowlist was opened on 2026-07-28, so reachability is no longer the obstacle.
+
+### What does not run — and the reason is not the one you would guess
+
+PALW has **three independent levers**
+([`consensus/core/src/config/params.rs`](../consensus/core/src/config/params.rs)):
+
+| Lever | Knob | State on every shipped preset |
+|---|---|---|
+| land | the code being shipped at all | released |
+| accept | `palw_algo4_accept` | **`false`** |
+| weight | `palw_compute_work_scale > 0` | `0` |
+
+While `palw_algo4_accept` is `false`, an algo-4 header is rejected in `check_pow_algo_id` — **before
+GHOSTDAG, before reachability, and before any header-stage store write.** That ordering is the
+point: algo-4 headers are exempt from the Layer-0 hash floor, so without this lever a PALW-active
+network would have no work-based bound on header-stage spam. It ships `false` on **all six presets**,
+`testnet-200` included, and its release condition is defined once as gate-class semantics in
+ADR-0040 §7.1.1 rather than flipped per network.
+
+So the honest statement is *not* "the lane is waiting for validators." **Bonding the third
+DNS-finality validator on `testnet-200` would not open it.** The validator floor is a real second
+gate — `PRODUCTION_DNS_PARAMS` requires `min_active_validators = 3` bonded at 20,000,000 MSK each,
+and `testnet-200` inherits it via `..MAINNET_PARAMS` — but the acceptance lever sits upstream of it
+and is closed deliberately.
+
+### Check it yourself
+
+The acceptance lever is a compile-time constant — read it in `params.rs`, or watch a node reject an
+algo-4 header with `PalwAlgo4NotAccepted`. The second gate and its effect are chain-derived, so
+neither the bond count nor the attestation rate has to be taken on faith:
+
+```bash
+# the bonded validator set
+misaka mtp validators   --network testnet-200 --rpc 127.0.0.1:27220
+# 1 bond(s) on testnet-200 at daa 202879, 0 slashed
+
+# and what that set actually does — attestations indexed out of blocks
+misaka mtp attestations --network testnet-200 --rpc 127.0.0.1:27220 --max-blocks 20000
+# 0 row(s) = 0 distinct (validator, epoch) from 0 validator(s) ... over 20080 block(s)
+```
+
+Run the same pair against `testnet-10` and the contrast is the point: 28 bonds (27 effectively
+active, 1 unbonding, 0 slashed) and 2,562 rows collapsing to 1,194 distinct `(validator, epoch)`
+pairs from **6** validators. Bonded is not the same as attesting, on either network.
+
+A receipt you issue today is therefore a reproducible local artifact. Nothing on-chain has accepted
+one, and no provider has been paid for one.
+
+---
+
+## 8. Testnet points (MTP)
 
 Points are a mirror of **ML-DSA-87-signed epoch ledgers**, so they are independently checkable
 rather than something you have to trust. The programme scores **`testnet-10` only**.
@@ -438,22 +550,23 @@ Corrections are the designed path, not an exception: a reissue is a new fully-si
 ordering. So awards made during the window land in a later issue of epoch 1. An epoch becomes
 immutable only once the finality horizon passes it (I-MTP-13).
 
-`testnet-200` earns nothing — it is out of scope by design (see §8).
+`testnet-200` earns nothing — it is out of scope by design (see §9).
 
 ---
 
-## 8. What you cannot do yet
+## 9. What you cannot do yet
 
 Stated explicitly so nobody builds on an assumption:
 
-- **Earn anything as a PALW compute provider.** `testnet-200` is reachable and PALW is genesis-active
-  there, so this is no longer a reachability problem — but **no algo-4 block has been accepted yet**.
-  The lane is halted: the beacon needs the DNS overlay healthy, `PRODUCTION_DNS_PARAMS` requires
-  `min_active_validators = 3` each bonded at 20,000,000 MSK, and only one validator is bonded today.
-  Until that clears, `testnet-200` produces algo-3 blocks only — measured at ~2.6 BPS against the
-  2 + 8 design (hash lane on target, PALW lane contributing nothing).
+- **Earn anything as a PALW compute provider.** `testnet-200` is reachable and PALW is
+  genesis-active there, so this is no longer a reachability problem — but **no algo-4 block has been
+  accepted, and none can be**: `palw_algo4_accept` ships `false` on all six presets, which rejects
+  an algo-4 header before GHOSTDAG. The DNS validator floor (`min_active_validators = 3` at
+  20,000,000 MSK each, one bonded today) is a genuine second gate, but clearing it would not open
+  the lane. `testnet-200` therefore produces algo-3 blocks only — measured at ~2.6 BPS against the
+  2 + 8 design, the hash lane on target and the PALW lane contributing nothing. See §7.
 - **Earn MTP points anonymously.** Every C1 point resolves to a registered ledger id, so uptime and
-  attestation from an unregistered node are dropped, not banked. Register first — see §7.
+  attestation from an unregistered node are dropped, not banked. Register first — see §8.
 - **Earn MTP points on `testnet-200`.** The points programme scopes `testnet-10` only.
 
   Issuing and verifying a Qwen3.6 `ComputeReceipt` locally *does* work today — that is a separate,
@@ -469,7 +582,7 @@ Stated explicitly so nobody builds on an assumption:
 
 ---
 
-## 9. Tokenomics, as implemented
+## 10. Tokenomics, as implemented
 
 From [`consensus/core/src/constants.rs`](../consensus/core/src/constants.rs) and
 [`consensus/src/processes/coinbase.rs`](../consensus/src/processes/coinbase.rs):
@@ -486,7 +599,7 @@ From [`consensus/core/src/constants.rs`](../consensus/core/src/constants.rs) and
 
 ---
 
-## 10. Where to go next
+## 11. Where to go next
 
 | Topic | Document |
 |---|---|
