@@ -359,9 +359,13 @@ Two consequences worth being explicit about:
 - **Awards carry an epoch number.** `--epoch N` on the award must match the `run-epoch` that merges
   it, so the operator decides which window a contribution lands in.
 
-**No epoch has been published yet.** The leaderboard is empty and `network` reads `""` — a fresh
-install, not a fault. The programme starts when the operator publishes epoch 1, and choosing that
-window is a governance decision, not a technical one.
+**Epoch 1 is open: `2026-07-28T00:00:00Z` → `2026-11-01T00:00:00Z`.** It is published (issue 0) and
+visible at `/mtp/v1/epoch/1`, with zero participants so far — the window is open, not finished.
+
+Corrections are the designed path, not an exception: a reissue is a new fully-signed
+`epoch-<n>.<issue>.jsonl`, old issues are never deleted, and `index.json` records the supersede
+ordering. So awards made during the window land in a later issue of epoch 1. An epoch becomes
+immutable only once the finality horizon passes it (I-MTP-13).
 
 `testnet-200` earns nothing — it is out of scope by design (see §8).
 
