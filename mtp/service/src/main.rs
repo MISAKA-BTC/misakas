@@ -366,7 +366,7 @@ fn cmd_register(args: &[String]) -> Result<(), String> {
 
 fn decode_hex(s: &str, what: &str) -> Result<Vec<u8>, String> {
     let h = s.strip_prefix("0x").unwrap_or(s);
-    if h.len() % 2 != 0 {
+    if !h.len().is_multiple_of(2) {
         return Err(format!("{what} is not valid hex (odd length)"));
     }
     let mut out = vec![0u8; h.len() / 2];

@@ -1219,7 +1219,7 @@ impl IbdFlow {
             if next_index >= count {
                 break;
             }
-            if next_index % PALW_CHAIN_DERIVED_BUNDLE_CHUNK_BATCH as u32 == 0 {
+            if next_index.is_multiple_of(PALW_CHAIN_DERIVED_BUNDLE_CHUNK_BATCH as u32) {
                 self.router
                     .enqueue(make_message!(
                         Payload::RequestNextPalwChainDerivedBundleChunks,

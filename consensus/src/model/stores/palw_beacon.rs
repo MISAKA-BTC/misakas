@@ -48,7 +48,7 @@ impl PalwBeaconAccumViewV1 {
         // coherence contract rejects an accumulator row whose version != 1, so a `Default`-created
         // row silently blocked every capture while a beacon target epoch was live (found by the
         // ADR-0044 long-chain harness).
-        let accum = self.epochs.entry(epoch).or_insert_with(PalwBeaconEpochAccumV1::new);
+        let accum = self.epochs.entry(epoch).or_default();
         if accum.commitment_of(&bond).is_some() {
             return false;
         }

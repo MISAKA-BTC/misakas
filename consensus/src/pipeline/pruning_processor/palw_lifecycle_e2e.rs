@@ -1152,7 +1152,7 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     while chain.tc.pruning_point() == genesis_hash {
         chain.extend_plain().await;
         grown += 1;
-        if grown % 20 == 0 {
+        if grown.is_multiple_of(20) {
             tokio::time::sleep(Duration::from_millis(20)).await; // let the async pruning worker keep pace
         }
         assert!(grown < 4000, "the pruning point must advance before the guard length");

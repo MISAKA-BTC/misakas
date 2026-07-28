@@ -440,3 +440,10 @@ doc_overindented_list_items = "allow"
 type_complexity = "allow"
 large_enum_variant = "allow"
 assertions_on_constants = "allow"
+# Same enums, other half of the same lint pair. `RuleError::PalwComponentWorkMismatch`
+# carries four `BlueWorkType` (= `Uint576`, 72 bytes each = 288), and
+# `PruningImportError` is comparable, so every `Result<_, RuleError>` in the block
+# pipeline trips this. Boxing a consensus error type is an API change across all of
+# its construction and match sites, not a formatting fix — allowed here with
+# `large_enum_variant` rather than done half-way.
+result_large_err = "allow"

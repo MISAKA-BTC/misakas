@@ -422,7 +422,7 @@ impl BlockBodyProcessor {
             // captured overlay view whose version != 1 — a `Default` seed here silently pinned the
             // pruning point forever on every activated pre-v4 chain (found by the ADR-0044
             // long-chain harness, `palw_lifecycle_e2e.rs`).
-            .unwrap_or_else(PalwBatchViewV1::new);
+            .unwrap_or_default();
 
         // Fold in the COMPLETE blue mergeset, INCLUDING the selected parent. `view(SP)` deliberately
         // excludes SP's own body (a block is not in its own mergeset), so SP's effects are NOT already
