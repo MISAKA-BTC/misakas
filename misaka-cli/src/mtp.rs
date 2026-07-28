@@ -750,7 +750,9 @@ pub async fn attestations(ctx: &Ctx, low_hash: Option<&str>, max_blocks: usize, 
     // Default to the pruning point: the oldest height this node can actually answer for. Starting
     // lower would silently return nothing and read as "no attestations".
     let start = match low_hash {
-        Some(h) => h.parse::<kaspa_rpc_core::RpcHash>().map_err(|e| CliError::generic(format!("--low-hash is not a block hash: {e}")))?,
+        Some(h) => {
+            h.parse::<kaspa_rpc_core::RpcHash>().map_err(|e| CliError::generic(format!("--low-hash is not a block hash: {e}")))?
+        }
         None => {
             let dag = client.get_block_dag_info().await.map_err(|e| CliError::connection(format!("getBlockDagInfo failed: {e}")))?;
             dag.pruning_point_hash
@@ -763,10 +765,8 @@ pub async fn attestations(ctx: &Ctx, low_hash: Option<&str>, max_blocks: usize, 
     let mut shards = 0usize;
     let mut undecodable = 0usize;
     loop {
-        let batch = client
-            .get_blocks(Some(cursor), true, true)
-            .await
-            .map_err(|e| CliError::connection(format!("getBlocks failed: {e}")))?;
+        let batch =
+            client.get_blocks(Some(cursor), true, true).await.map_err(|e| CliError::connection(format!("getBlocks failed: {e}")))?;
         // The low hash is echoed back as the first element, so a batch of one means the walk is
         // standing still — the termination condition, not an error.
         if batch.blocks.len() <= 1 {

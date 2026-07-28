@@ -627,11 +627,7 @@ fn cmd_ingest_attestations(args: &[String]) -> Result<(), String> {
                     att_epoch: a.att_epoch,
                     attested: true,
                     slashed,
-                    evidence: format!(
-                        "{}:{}",
-                        a.evidence_block.as_deref().unwrap_or("?"),
-                        a.evidence_tx.as_deref().unwrap_or("?")
-                    ),
+                    evidence: format!("{}:{}", a.evidence_block.as_deref().unwrap_or("?"), a.evidence_tx.as_deref().unwrap_or("?")),
                 },
             )
             .map_err(|e| e.to_string())?;
