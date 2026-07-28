@@ -574,3 +574,127 @@ pub async fn collect(ctx: &Ctx, vantage: &str, out: Option<&str>) -> CliResult {
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// validators — the bonded validator roster and its slash state, from the chain
+// ---------------------------------------------------------------------------
+
+/// `misaka mtp validators` — emit one JSONL line per stake bond: who is bonded, for how much, and
+/// whether the bond is active, unbonding or **slashed**.
+///
+/// This is the honest subset of the attestation picture. `GetStakeBonds` is registry state on the
+/// selected chain, so the roster and the slash flag are chain-derived facts. What it does NOT carry
+/// is per-epoch participation: no RPC on this node reports which validator signed which epoch.
+/// `getValidatorStatus` is the local node's own self-report, and
+/// `getAttestationQualityDeficits` aggregates stake per epoch without attributing it. Filling
+/// `attested` per validator per epoch means indexing attestation transactions out of blocks — a
+/// separate job. Nothing here guesses it, and nothing here writes an `attested` field.
+///
+/// An empty result is ambiguous by construction and is reported as such rather than as "no
+/// validators": a network with PALW inert (testnet-10) legitimately has no bonds, and the `RpcApi`
+/// trait's default `get_stake_bonds_call` also returns an empty page for any impl that does not
+/// override it.
+pub async fn validators(ctx: &Ctx, out: Option<&str>) -> CliResult {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+
+    let hostport = match &ctx.rpc {
+        Some(hp) => hp.clone(),
+        None => "127.0.0.1:27210".to_string(),
+    };
+    let timeout = Duration::from_secs(ctx.timeout_secs);
+    let client = crate::node::try_connect(&format!("ws://{hostport}"), timeout)
+        .await
+        .map_err(|e| CliError::connection(format!("cannot reach the node at {hostport}: {e}")))?;
+
+    let info = client.get_server_info().await.map_err(|e| CliError::connection(format!("getServerInfo failed: {e}")))?;
+    let observed_network = info.network_id.to_string();
+    if observed_network != ctx.network {
+        let _ = client.disconnect().await;
+        return Err(CliError::generic(format!(
+            "this node is on '{observed_network}' but --network says '{}'. Bond state is per network, \
+             so reading here would file the roster under the wrong one.",
+            ctx.network
+        )));
+    }
+
+    // Page to exhaustion. Stopping at the first page would silently truncate the roster, and a
+    // truncated roster reads as "these are all the validators" — the one wrong answer to avoid.
+    let mut lines = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0usize;
+    // Pinned to page 1's value, per the request doc: without it a bond whose status changes
+    // mid-walk can be skipped, and a roster that silently drops a validator is worse than none.
+    let mut pinned_pov: Option<u64> = None;
+    loop {
+        let page = client
+            .get_stake_bonds_call(
+                None,
+                kaspa_rpc_core::GetStakeBondsRequest {
+                    owner_pubkey_hash: None,
+                    status_in: None,
+                    cursor,
+                    limit: 0, // server default
+                    pov_daa_score: pinned_pov,
+                },
+            )
+            .await
+            .map_err(|e| CliError::connection(format!("getStakeBonds failed: {e}")))?;
+        pages += 1;
+        pinned_pov.get_or_insert(page.pov_daa_score);
+        for b in &page.bonds {
+            lines.push(
+                json!({
+                    "network": observed_network,
+                    "validator_id": b.validator_id,
+                    "bond_outpoint": b.bond_outpoint,
+                    "owner_pubkey_hash": b.owner_pubkey_hash,
+                    "amount": b.amount,
+                    "activation_daa_score": b.activation_daa_score,
+                    // Both statuses, because they can disagree: `stored` is what was written,
+                    // `effective` is what holds at the sink. Collapsing them would hide a bond that
+                    // is stored active but no longer effective.
+                    "stored_status": b.stored_status,
+                    "effective_status": b.effective_status,
+                    "slashed": b.stored_status == "slashed" || b.effective_status == "slashed",
+                    "unbond_request_daa_score": b.unbond_request_daa_score,
+                    "unbonding_period_blocks": b.unbonding_period_blocks,
+                    // The height this snapshot is true at — a roster with no point of view cannot
+                    // be compared against a later one.
+                    "pov_daa_score": page.pov_daa_score,
+                })
+                .to_string(),
+            );
+        }
+        match page.next_cursor {
+            Some(c) if !c.is_empty() => cursor = Some(c),
+            _ => break,
+        }
+    }
+    let _ = client.disconnect().await;
+    let pov_daa_score = pinned_pov.unwrap_or(0);
+
+    if lines.is_empty() {
+        eprintln!(
+            "no stake bonds on {observed_network} at daa {pov_daa_score} ({pages} page(s)). This is the \
+             expected reading where PALW is inert; it is NOT evidence that a PALW-active network has no validators."
+        );
+    } else {
+        let slashed = lines.iter().filter(|l| l.contains("\"slashed\":true")).count();
+        eprintln!("{} bond(s) on {observed_network} at daa {pov_daa_score}, {slashed} slashed", lines.len());
+    }
+
+    let body = if lines.is_empty() { String::new() } else { format!("{}\n", lines.join("\n")) };
+    match out {
+        Some(path) => {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| CliError::generic(format!("cannot open '{path}': {e}")))?;
+            f.write_all(body.as_bytes()).map_err(|e| CliError::generic(format!("cannot append '{path}': {e}")))?;
+        }
+        None => print!("{body}"),
+    }
+    Ok(())
+}

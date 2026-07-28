@@ -219,6 +219,16 @@ enum MtpCmd {
         #[arg(long)]
         out: Option<String>,
     },
+    /// Emit the bonded validator roster and its slash state, one JSONL line per stake bond.
+    ///
+    /// Chain-derived registry state via `getStakeBonds`: validator id, owner, amount, and whether
+    /// the bond is active, unbonding or slashed. It does NOT carry per-epoch attestation — no RPC
+    /// reports which validator signed which epoch, so that needs a block indexer.
+    Validators {
+        /// Append the JSONL here instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Look up an identity's testnet points from the MTP service (self-serve view).
     /// The numbers are a mirror of signed ledgers — use `verify-epoch` for the proof.
     Points {
@@ -846,6 +856,7 @@ async fn main() -> std::process::ExitCode {
             mtp::verify_epoch(ctx.output, &file, pubkey.as_deref(), pubkey_file.as_deref(), facts.as_deref())
         }
         Command::Mtp(MtpCmd::Collect { vantage, out }) => mtp::collect(&ctx, &vantage, out.as_deref()).await,
+        Command::Mtp(MtpCmd::Validators { out }) => mtp::validators(&ctx, out.as_deref()).await,
         Command::Mtp(MtpCmd::Register { invitation, key_file, out }) => mtp::register(&ctx, &invitation, &key_file, out.as_deref()),
         Command::Mtp(MtpCmd::Award { file, epoch, network, id, category, points, severity, first_report, fix_accepted, note }) => {
             mtp::award(&ctx, &file, epoch, &network, &id, &category, points, severity.as_deref(), first_report, fix_accepted, &note)
