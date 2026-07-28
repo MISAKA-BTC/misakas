@@ -698,3 +698,166 @@ pub async fn validators(ctx: &Ctx, out: Option<&str>) -> CliResult {
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// attestations — per-validator, per-epoch participation, indexed out of blocks
+// ---------------------------------------------------------------------------
+
+/// `misaka mtp attestations` — walk blocks and emit one JSONL row per validator attestation.
+///
+/// This is the piece no RPC provides. `getValidatorStatus` is a node's self-report and
+/// `getAttestationQualityDeficits` aggregates stake per epoch without naming anyone, so
+/// "did validator V attest in epoch E" only exists inside blocks: a transaction on subnetwork
+/// `0x11` (`SUBNETWORK_ID_STAKE_ATTESTATION_SHARD`) whose payload borsh-decodes to a
+/// `StakeAttestationShardPayload` carrying `StakeAttestation`s, each naming a `validator_id`, an
+/// `epoch` and the selected-chain anchor it approves.
+///
+/// Two honesty bounds this walk cannot escape, both reported rather than hidden:
+///
+/// - **A pruned node has no blocks below its pruning point.** Absence of an attestation before that
+///   height means "not retained here", never "did not attest". The starting height is printed.
+/// - **This records what was committed, not whether it was counted.** A decoded attestation is
+///   evidence the shard reached a block; whether consensus admitted it toward finality is a
+///   separate question this command does not answer.
+///
+/// `slashed` is deliberately not a column here — bond status is registry state, read with
+/// `misaka mtp validators`, and duplicating it from a block walk would invite the two to disagree.
+pub async fn attestations(ctx: &Ctx, low_hash: Option<&str>, max_blocks: usize, out: Option<&str>) -> CliResult {
+    use kaspa_consensus_core::dns_finality::StakeAttestationShardPayload;
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD;
+    use kaspa_rpc_core::api::rpc::RpcApi;
+
+    let hostport = match &ctx.rpc {
+        Some(hp) => hp.clone(),
+        None => "127.0.0.1:27210".to_string(),
+    };
+    let timeout = Duration::from_secs(ctx.timeout_secs);
+    let client = crate::node::try_connect(&format!("ws://{hostport}"), timeout)
+        .await
+        .map_err(|e| CliError::connection(format!("cannot reach the node at {hostport}: {e}")))?;
+
+    let info = client.get_server_info().await.map_err(|e| CliError::connection(format!("getServerInfo failed: {e}")))?;
+    let observed_network = info.network_id.to_string();
+    if observed_network != ctx.network {
+        let _ = client.disconnect().await;
+        return Err(CliError::generic(format!(
+            "this node is on '{observed_network}' but --network says '{}'. Attestations are per network, \
+             so indexing here would file them under the wrong one.",
+            ctx.network
+        )));
+    }
+
+    // Default to the pruning point: the oldest height this node can actually answer for. Starting
+    // lower would silently return nothing and read as "no attestations".
+    let start = match low_hash {
+        Some(h) => h.parse::<kaspa_rpc_core::RpcHash>().map_err(|e| CliError::generic(format!("--low-hash is not a block hash: {e}")))?,
+        None => {
+            let dag = client.get_block_dag_info().await.map_err(|e| CliError::connection(format!("getBlockDagInfo failed: {e}")))?;
+            dag.pruning_point_hash
+        }
+    };
+
+    let mut lines = Vec::new();
+    let mut cursor = start;
+    let mut scanned = 0usize;
+    let mut shards = 0usize;
+    let mut undecodable = 0usize;
+    loop {
+        let batch = client
+            .get_blocks(Some(cursor), true, true)
+            .await
+            .map_err(|e| CliError::connection(format!("getBlocks failed: {e}")))?;
+        // The low hash is echoed back as the first element, so a batch of one means the walk is
+        // standing still — the termination condition, not an error.
+        if batch.blocks.len() <= 1 {
+            break;
+        }
+        for b in &batch.blocks {
+            scanned += 1;
+            for tx in &b.transactions {
+                if tx.subnetwork_id != SUBNETWORK_ID_STAKE_ATTESTATION_SHARD {
+                    continue;
+                }
+                shards += 1;
+                let payload: StakeAttestationShardPayload = match borsh::from_slice(&tx.payload) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        // A shard tx that will not decode is itself a finding — counted and
+                        // reported, never skipped in silence.
+                        undecodable += 1;
+                        continue;
+                    }
+                };
+                for att in &payload.attestations {
+                    lines.push(
+                        json!({
+                            "network": observed_network,
+                            "validator_id": att.validator_id.to_string(),
+                            "att_epoch": att.epoch,
+                            // Present in a block == committed. Every row this walk emits is an
+                            // observed attestation; a validator that did not attest produces no
+                            // row at all, which is why absence must be read against the scan range.
+                            "attested": true,
+                            "target_hash": att.target_hash.to_string(),
+                            "target_daa_score": att.target_daa_score,
+                            "bond_outpoint": format!("{}:{}", att.bond_outpoint.transaction_id, att.bond_outpoint.index),
+                            "validator_set_commitment": att.validator_set_commitment.to_string(),
+                            "evidence_block": b.verbose_data.as_ref().map(|v| v.hash.to_string()),
+                            "evidence_tx": tx.verbose_data.as_ref().map(|v| v.transaction_id.to_string()),
+                        })
+                        .to_string(),
+                    );
+                }
+            }
+        }
+        if scanned >= max_blocks {
+            eprintln!("stopped at the --max-blocks bound of {max_blocks}; the range scanned is NOT the whole chain");
+            break;
+        }
+        let next = match batch.blocks.last().and_then(|b| b.verbose_data.as_ref()).map(|v| v.hash) {
+            Some(h) => h,
+            None => break,
+        };
+        if next == cursor {
+            break;
+        }
+        cursor = next;
+    }
+    let _ = client.disconnect().await;
+
+    let validators: std::collections::BTreeSet<&str> =
+        lines.iter().filter_map(|l| l.split("\"validator_id\":\"").nth(1)).filter_map(|s| s.split('"').next()).collect();
+    eprintln!(
+        "{} attestation(s) from {} validator(s) in {} shard tx(s) over {} block(s) from {} on {}",
+        lines.len(),
+        validators.len(),
+        shards,
+        scanned,
+        start,
+        observed_network
+    );
+    if undecodable > 0 {
+        eprintln!("  WARNING: {undecodable} shard tx(s) did not borsh-decode");
+    }
+    if lines.is_empty() {
+        eprintln!(
+            "  no attestations in this range. That is 'none retained/committed here', NOT proof that \
+             no validator attested — a pruned node holds nothing below its pruning point."
+        );
+    }
+
+    let body = if lines.is_empty() { String::new() } else { format!("{}\n", lines.join("\n")) };
+    match out {
+        Some(path) => {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| CliError::generic(format!("cannot open '{path}': {e}")))?;
+            f.write_all(body.as_bytes()).map_err(|e| CliError::generic(format!("cannot append '{path}': {e}")))?;
+        }
+        None => print!("{body}"),
+    }
+    Ok(())
+}

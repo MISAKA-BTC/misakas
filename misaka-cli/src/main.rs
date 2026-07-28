@@ -229,6 +229,23 @@ enum MtpCmd {
         #[arg(long)]
         out: Option<String>,
     },
+    /// Index per-validator, per-epoch attestations out of blocks (one JSONL row each).
+    ///
+    /// No RPC reports which validator signed which epoch, so this walks blocks for transactions on
+    /// the stake-attestation-shard subnetwork and decodes their payloads. A pruned node holds
+    /// nothing below its pruning point: absence in the scanned range is not proof of non-attestation.
+    Attestations {
+        /// Start the walk here. Defaults to the node's pruning point — the oldest height it can
+        /// answer for.
+        #[arg(long)]
+        low_hash: Option<String>,
+        /// Stop after scanning this many blocks.
+        #[arg(long, default_value_t = 50_000)]
+        max_blocks: usize,
+        /// Append the JSONL here instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Look up an identity's testnet points from the MTP service (self-serve view).
     /// The numbers are a mirror of signed ledgers — use `verify-epoch` for the proof.
     Points {
@@ -857,6 +874,9 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Mtp(MtpCmd::Collect { vantage, out }) => mtp::collect(&ctx, &vantage, out.as_deref()).await,
         Command::Mtp(MtpCmd::Validators { out }) => mtp::validators(&ctx, out.as_deref()).await,
+        Command::Mtp(MtpCmd::Attestations { low_hash, max_blocks, out }) => {
+            mtp::attestations(&ctx, low_hash.as_deref(), max_blocks, out.as_deref()).await
+        }
         Command::Mtp(MtpCmd::Register { invitation, key_file, out }) => mtp::register(&ctx, &invitation, &key_file, out.as_deref()),
         Command::Mtp(MtpCmd::Award { file, epoch, network, id, category, points, severity, first_report, fix_accepted, note }) => {
             mtp::award(&ctx, &file, epoch, &network, &id, &category, points, severity.as_deref(), first_report, fix_accepted, &note)
