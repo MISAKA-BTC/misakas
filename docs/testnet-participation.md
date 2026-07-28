@@ -10,21 +10,30 @@ Everything below is derived from the shipped source in this repository. Where a 
 
 ## 1. Which network do I join?
 
-**`testnet-10`** — it is the only network in this repository with public DNS seeders, so it is the
-only one you can join by discovery. Explorer: **[misakascan.com](https://misakascan.com)**.
+**Two networks are open to you**, and they are for different things:
 
-| Network | Select with | P2P port | Public seeders | PALW audited-compute lane |
+- **`testnet-10`** — the general testnet. Public DNS seeders, so you join by discovery. PALW is
+  inert here (algo-3 hash floor only). This is the network the MTP points programme scores.
+- **`testnet-200`** — the ADR-0048 staging-mainnet PALW rehearsal, where the audited-compute lane is
+  genesis-active. Reachable since ADR-0042 改訂 A1, but it ships **no seeders**, so you join by
+  naming a peer. Not scored by MTP. Explorer: **[misakascan.com](https://misakascan.com)**.
+
+| Network | Select with | P2P port | How you find peers | PALW audited-compute lane |
 |---|---|---|---|---|
-| **`testnet-10`** | `--testnet` | `26211` | **yes** (7 records) | inert — algo-3 hash floor only |
-| `testnet-110` | `--testnet --netsuffix=110` | `26411` | no | inert until a weight-0 re-genesis |
-| `devnet-111` | `--devnet --netsuffix=111` | `26611` | no | **active**, single-node preset |
-| `testnet-200` | `--testnet --netsuffix=200` | `26511` | no | **active**, Header-v4 staging rehearsal |
+| **`testnet-10`** | `--testnet` | `26211` | **DNS seeders** (7 records) | inert — algo-3 hash floor only |
+| **`testnet-200`** | `--testnet --netsuffix=200` | `26511` | **`--addpeer` only** (no seeders) | **active** from genesis |
+| `testnet-110` | `--testnet --netsuffix=110` | `26411` | closed — allowlist gate | inert until a weight-0 re-genesis |
+| `devnet-111` | `--devnet --netsuffix=111` | `26611` | closed — allowlist gate | **active**, single-node preset |
 | `mainnet` | `--mainnet` | `26111` | — | **defined but NOT launched** |
 
-`dns_seeders` is empty for `testnet-110`, `devnet-111` and `testnet-200`
-([`consensus/core/src/config/params.rs`](../consensus/core/src/config/params.rs)) — those are local
-and closed-mesh presets. You can run them, but only by pointing nodes at each other explicitly with
-`--addpeer`; there is no public mesh to join.
+`dns_seeders` is empty for every preset except `testnet-10`
+([`consensus/core/src/config/params.rs`](../consensus/core/src/config/params.rs)). For
+`testnet-200` that means *undiscoverable*, not *unreachable* — A1 removed its allowlist gate, so an
+explicit `--addpeer` is enough. `testnet-110` and `devnet-111` keep both restrictions and remain
+closed-mesh presets you run yourself.
+
+**Explorer, currently:** misakascan.com serves `testnet-200`. `testnet-10` has no explorer at the
+moment.
 
 **Do not run `--mainnet` expecting a live network.** The mainnet parameter set exists so the
 consensus rules can be tested; it is not launched or endorsed for production.
@@ -65,9 +74,11 @@ pulled in only by `--features qwen-backend`.
 
 1. **It does not accelerate mining or block validation.** These features drive the PALW
    audited-compute provider path, not Layer-0 proof-of-work and not consensus verification.
-2. **There is no public network where it does anything today.** PALW is inert on `testnet-10`, and
-   the PALW-active presets (`devnet-111`, `testnet-200`) have no public seeders. Running a GPU
-   provider is currently a local exercise, not participation in a live market.
+2. **No network is paying for it yet.** PALW is inert on `testnet-10`. `testnet-200` has it
+   genesis-active and is now reachable, but its audited-compute lane is halted until three bonded
+   validators bring the DNS overlay up (see §8), so no algo-4 block has been accepted there. Running
+   a GPU provider is still an exercise rather than participation in a live market — the difference
+   now is that the blocker is the validator set, not reachability.
 
 ---
 
@@ -127,7 +138,18 @@ Or drive `kaspad` directly:
 
 - Peers are discovered through the public DNS seeders automatically. **Outbound TCP `26211` must
   not be blocked.** If discovery is slow, bootstrap explicitly:
-  `--addpeer=95.111.236.186:26211`.
+  `--addpeer=160.16.131.119:26211`. (`95.111.236.186` was the documented bootstrap peer until that
+  host was repurposed to `testnet-200`; it no longer serves testnet-10.)
+
+To run `testnet-200` instead — no seeders, so the peer is not optional:
+
+```bash
+./target/release/kaspad --testnet --netsuffix=200 \
+  --addpeer=95.111.236.186:26511 --utxoindex --rpclisten-borsh=default
+```
+
+Build from `a2437e1` or later. A1's allowlist flip changes `consensus_identity_hash`, so an older
+binary is not stale — it is running different consensus rules.
 - `--utxoindex` is required for wallet and validator funding lookups.
 - **gRPC is on by default** at loopback `127.0.0.1:26210`, so the miner needs no extra flag.
   **wRPC is off by default** and must be enabled — the CLI wallet and `kaspa-pq-validator` speak
@@ -162,7 +184,9 @@ Two more that answer specific questions:
 ./target/release/misaka bootstrap --help  # the DNS seeds and the peers they actually resolve to
 ```
 
-Then compare your tip against [misakascan.com](https://misakascan.com).
+On `testnet-200` you can compare your tip against [misakascan.com](https://misakascan.com), which
+serves that network. `testnet-10` has no explorer at present, so there `misaka node doctor` and your
+peer count are the check.
 
 `misaka setup` additionally provides a guided VPS path (preflight, node service, status).
 
@@ -253,8 +277,13 @@ The service URL is **not baked into this repository** — the CLI defaults to
 
 Stated explicitly so nobody builds on an assumption:
 
-- **Run a PALW compute provider on a public network.** PALW is inert on `testnet-10`, and every
-  PALW-active preset ships with no seeders.
+- **Earn anything as a PALW compute provider.** `testnet-200` is reachable and PALW is genesis-active
+  there, so this is no longer a reachability problem — but **no algo-4 block has been accepted yet**.
+  The lane is halted: the beacon needs the DNS overlay healthy, `PRODUCTION_DNS_PARAMS` requires
+  `min_active_validators = 3` each bonded at 20,000,000 MSK, and only one validator is bonded today.
+  Until that clears, `testnet-200` produces algo-3 blocks only — measured at ~2.6 BPS against the
+  2 + 8 design (hash lane on target, PALW lane contributing nothing).
+- **Earn MTP points on `testnet-200`.** The points programme scopes `testnet-10` only.
 - **Join mainnet.** Not launched. The genesis constants are a governance decision that has not been
   made.
 - **Use a GPU backend other than Metal or CUDA.** Those two are the only devices the optional

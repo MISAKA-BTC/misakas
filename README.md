@@ -4,7 +4,20 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> Status: a public **testnet** (`testnet-10`, experimental) is the network operated today — explorer at **[misakascan.com](https://misakascan.com)**. PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`). The `testnet`/`mainnet` parameter sets both use **two-dimensional** DNS-finality confirmation; testnet lowers the stake-bond floor to **10 MSK** so a tester can fund a validator in seconds, while **mainnet keeps 20,000,000 MSK**. The `mainnet` parameter set is **defined but NOT launched or endorsed for production** — do not run `--mainnet` expecting a live or supported network. (The earlier experimental `devnet` has been retired in favor of this testnet.)
+> Status: **two networks are operated today.** `testnet-10` is the general experimental testnet —
+> public DNS seeders, third-party peers, PALW inert. `testnet-200` is the ADR-0048 staging-mainnet
+> PALW rehearsal, where the audited-compute lane is genesis-active; it accepts unlisted peers since
+> ADR-0042 改訂 A1 but ships **no seeders**, so joining it needs an explicit `--addpeer`.
+> **[misakascan.com](https://misakascan.com) currently shows `testnet-200`** — testnet-10 has no
+> explorer at the moment.
+>
+> PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined
+> network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`). The `testnet`/`mainnet`
+> parameter sets both use **two-dimensional** DNS-finality confirmation; testnet-10 lowers the
+> stake-bond floor to **10 MSK** so a tester can fund a validator in seconds, while **mainnet — and
+> testnet-200, which inherits the mainnet economics — keep 20,000,000 MSK**. The `mainnet` parameter
+> set is **defined but NOT launched or endorsed for production** — do not run `--mainnet` expecting a
+> live or supported network. (The earlier experimental `devnet` has been retired.)
 
 ## Join the testnet
 
@@ -12,7 +25,7 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 network to join, the hardware that is actually supported, build, node, mining, validator, and an
 explicit list of what is *not* possible yet.
 
-The short version:
+**`testnet-10`** — the general testnet. Peers are found automatically via the public DNS seeders:
 
 ```bash
 git clone https://github.com/MISAKA-BTC/MisakaLLM
@@ -22,9 +35,21 @@ cargo build --release -p kaspad -p misaka-cli --bin misaka -p kaspa-pq-miner
 ./target/release/misaka node doctor                                     # ports, sync, versions, RPC surface
 ```
 
-`testnet-10` is the **only** network here with public DNS seeders — the PALW presets
-(`testnet-110`, `devnet-111`, `testnet-200`) ship with `dns_seeders: &[]` and are closed-mesh
-presets you run yourself, not networks you can discover and join.
+**`testnet-200`** — the PALW staging-mainnet rehearsal, where the audited-compute lane is
+genesis-active. It has **no seeders**, so you must name a peer:
+
+```bash
+./target/release/kaspad --testnet --netsuffix=200 \
+  --addpeer=95.111.236.186:26511 --utxoindex
+```
+
+Build it from `a2437e1` or later. ADR-0042 改訂 A1 opened this network to unlisted peers, and that
+flip changes `consensus_identity_hash` — an older binary is not merely out of date, it is running
+different consensus rules.
+
+`testnet-10` remains the only network with public DNS seeders; `testnet-110` and `devnet-111` still
+ship `dns_seeders: &[]` **and** keep their allowlist gate, so they stay closed-mesh presets you run
+yourself.
 
 ### Hardware — what is actually supported
 
@@ -34,9 +59,11 @@ macOS (Apple Silicon and Intel), Linux (x86_64 and arm64) and Windows are all su
 
 GPU acceleration exists **only** in the optional, off-by-default PALW inference backend of the
 `misaka-palw` crate — `qwen-metal` for Apple Silicon and `qwen-cuda` for NVIDIA. It does **not**
-accelerate mining or block validation, a default node build does not compile it, and PALW is inert
-on `testnet-10`, so it is currently a local exercise rather than participation in a live market.
-Metal and CUDA are the only GPU backends the crate exposes.
+accelerate mining or block validation, and a default node build does not compile it. Metal and CUDA
+are the only GPU backends the crate exposes. No network pays for it yet: PALW is inert on
+`testnet-10`, and on `testnet-200` the audited-compute lane is halted until three bonded validators
+bring the DNS overlay up, so no algo-4 block has been accepted there — see
+[docs/testnet-participation.md](docs/testnet-participation.md#8-what-you-cannot-do-yet).
 
 ## What's different from Kaspa
 
@@ -214,8 +241,11 @@ explorer backend) needs to connect locally.
   (`seeder1.misakascan.com` / `seeder2.misakascan.com`) automatically. **testnet-10's P2P port is
   `26211`** (mainnet `26111`, devnet `26611`) — make sure it isn't blocked outbound. If discovery is
   slow, bootstrap explicitly against a public node:
-  `--addpeer=95.111.236.186:26211` (or `--connect=95.111.236.186:26211` to use only that peer).
-  Block explorer: **[misakascan.com](https://misakascan.com)**.
+  `--addpeer=160.16.131.119:26211` (or `--connect=160.16.131.119:26211` to use only that peer).
+  (`95.111.236.186:26211` was documented here previously; that host was repurposed to `testnet-200`
+  and no longer serves testnet-10.)
+  Block explorer: **none at present** — [misakascan.com](https://misakascan.com) was switched to
+  `testnet-200`.
 - `--utxoindex` is required for wallet/validator funding lookups.
 - **gRPC is always on by default** (loopback, `127.0.0.1:26210` on testnet) even with no RPC flag,
   so the **miner needs no extra flag** — it connects over gRPC. **wRPC (Borsh / JSON) is off by
