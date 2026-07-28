@@ -267,7 +267,14 @@ pub fn verify_epoch(
         OutputFormat::Human => {
             println!("epoch {} [{}] — {} score rows", ledger.epoch, ledger.network, ledger.scores.len());
             println!("  signature (ML-DSA-87):  {}", if sig_ok { "VALID" } else { "INVALID" });
-            println!("  rules-hash matches v1:  {}", if rules_ok { "yes" } else { "NO (different rules version?)" });
+            // The version is read from the constant, not spelled into the string: this line said
+            // "matches v1" for every ledger, so after RULES_VERSION went to 2 it reported v1 while
+            // checking v2 rules — the one number an operator reads to tell rule sets apart.
+            println!(
+                "  rules-hash matches v{}: {}",
+                misaka_mtp::rules::RULES_VERSION,
+                if rules_ok { "yes" } else { "NO (different rules version?)" }
+            );
             match recompute {
                 Some(true) => println!("  recompute byte-compare: MATCH"),
                 Some(false) => println!("  recompute byte-compare: MISMATCH"),
