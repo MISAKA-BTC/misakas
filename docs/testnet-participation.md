@@ -393,6 +393,12 @@ misaka-mtp-service run-epoch --data-dir DIR --operator-key op.seed \
   --epoch 1 --start 2026-07-28T00:00:00Z --end 2026-11-01T00:00:00Z
 ```
 
+On a deployed host the fact store belongs to the service user, so every command that writes to
+`--data-dir` must run as that user — `sudo -u misaka-mtp misaka-mtp-service …`. Running one as
+`root` succeeds (root ignores the mode) but leaves a `root`-owned file behind, and the service can
+no longer append to its own store. The failure is silent and permanent until the file is chowned
+back.
+
 Four properties of that pipeline, each guarding a place points programmes normally go wrong:
 
 - **Attribution is explicit.** A peer cannot assert ownership on the wire, so `collect` records a
