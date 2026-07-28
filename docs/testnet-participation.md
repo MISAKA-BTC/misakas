@@ -284,6 +284,10 @@ Stated explicitly so nobody builds on an assumption:
   Until that clears, `testnet-200` produces algo-3 blocks only — measured at ~2.6 BPS against the
   2 + 8 design (hash lane on target, PALW lane contributing nothing).
 - **Earn MTP points on `testnet-200`.** The points programme scopes `testnet-10` only.
+
+  Issuing and verifying a Qwen3.6 `ComputeReceipt` locally *does* work today — that is a separate,
+  reproducible exercise. See [palw-llm-receipts.md](palw-llm-receipts.md), which also spells out what
+  a receipt does and does not prove.
 - **Join mainnet.** Not launched. The genesis constants are a governance decision that has not been
   made.
 - **Use a GPU backend other than Metal or CUDA.** Those two are the only devices the optional
@@ -321,4 +325,6 @@ From [`consensus/core/src/constants.rs`](../consensus/core/src/constants.rs) and
 | Verification runbook | [kaspa-pq-mldsa87-verification-runbook.md](kaspa-pq-mldsa87-verification-runbook.md) |
 | Governing migration record | [adr/0019-mldsa87-migration.md](adr/0019-mldsa87-migration.md) |
 | PALW audited-compute lane | [adr/0039 onward](adr/) |
+| **Qwen3.6 receipts — issue, verify, what they prove** | [palw-llm-receipts.md](palw-llm-receipts.md) |
+| **The LLM runtime itself** | [misaka-proof-of-llm](https://github.com/MISAKA-BTC/misaka-proof-of-llm) |
 | Reporting a vulnerability | [../SECURITY.md](../SECURITY.md) |

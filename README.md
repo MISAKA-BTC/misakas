@@ -25,6 +25,11 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 network to join, the hardware that is actually supported, build, node, mining, validator, and an
 explicit list of what is *not* possible yet.
 
+**→ [docs/palw-llm-receipts.md](docs/palw-llm-receipts.md)** covers the other half — the PALW
+audited-compute side: the pinned Qwen3.6-35B-A3B model, issuing a `ComputeReceipt`, verifying one in
+a separate process, and what a receipt does and does not prove. The runtime itself lives in
+**[misaka-proof-of-llm](https://github.com/MISAKA-BTC/misaka-proof-of-llm)**.
+
 **`testnet-10`** — the general testnet. Peers are found automatically via the public DNS seeders:
 
 ```bash
