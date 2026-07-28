@@ -188,6 +188,23 @@ enum PalwDaCmd {
 
 #[derive(Subcommand, Debug)]
 enum MtpCmd {
+    /// Sign an operator-issued invitation and emit the registration request to submit.
+    ///
+    /// Registration binds your GitHub identity to a MISAKA address so node/validator facts resolve
+    /// to one ledger id. It is OFFLINE by design: the MTP HTTP surface is read-only (ADR-0038 D3),
+    /// so nothing is sent — you submit the emitted JSON through the operator's channel and they
+    /// ingest it with `misaka-mtp-service register`.
+    Register {
+        /// The operator-issued invitation JSON (from `misaka-mtp-service issue-nonce`).
+        #[arg(long)]
+        invitation: String,
+        /// Your hex 32-byte ML-DSA-87 seed file — the key that owns the invited address.
+        #[arg(long)]
+        key_file: String,
+        /// Write the signed request here instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Look up an identity's testnet points from the MTP service (self-serve view).
     /// The numbers are a mirror of signed ledgers — use `verify-epoch` for the proof.
     Points {
@@ -473,7 +490,7 @@ fn parse_msk_to_sompi(s: &str) -> Result<u64, CliError> {
         .ok_or_else(|| CliError::new(exit::GENERIC, "amount overflow".to_string()))
 }
 
-fn prefix_of(network: &str) -> Result<kaspa_addresses::Prefix, CliError> {
+pub(crate) fn prefix_of(network: &str) -> Result<kaspa_addresses::Prefix, CliError> {
     use std::str::FromStr;
     let net = kaspa_consensus_core::network::NetworkId::from_str(network)
         .map_err(|e| CliError::new(exit::GENERIC, format!("bad --network '{network}': {e}")))?;
@@ -814,6 +831,7 @@ async fn main() -> std::process::ExitCode {
         Command::Mtp(MtpCmd::VerifyEpoch { file, pubkey, pubkey_file, facts }) => {
             mtp::verify_epoch(ctx.output, &file, pubkey.as_deref(), pubkey_file.as_deref(), facts.as_deref())
         }
+        Command::Mtp(MtpCmd::Register { invitation, key_file, out }) => mtp::register(&ctx, &invitation, &key_file, out.as_deref()),
         Command::Mtp(MtpCmd::Award { file, epoch, network, id, category, points, severity, first_report, fix_accepted, note }) => {
             mtp::award(&ctx, &file, epoch, &network, &id, &category, points, severity.as_deref(), first_report, fix_accepted, &note)
         }

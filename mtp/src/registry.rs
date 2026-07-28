@@ -59,6 +59,22 @@ fn bind_key_to_address(address_str: &str, pubkey: &[u8], expected_prefix: Prefix
     Ok(())
 }
 
+/// The canonical Appendix-B registration challenge — the exact bytes a participant's key signs.
+///
+/// Deterministic in every field, so the issuing side and the verifying side recompute the same
+/// message; changing network/github/address/nonce/issued_at flips the signature.
+///
+/// It lives HERE, beside [`verify_registration`], rather than in the service crate: the signer and
+/// the verifier are now different programs (a participant's CLI, the operator's ingest), and a
+/// challenge builder able to drift from its own verifier is a protocol split waiting to happen.
+/// One definition, both sides.
+pub fn registration_challenge(network: &str, github: &str, address: &str, nonce_hex: &str, issued_at_ms: u64) -> Vec<u8> {
+    format!(
+        "MISAKA-TESTNET-POINTS-REGISTRATION v1\nnetwork: {network}\ngithub: {github}\naddress: {address}\nnonce: {nonce_hex}\nissued_at: {issued_at_ms}"
+    )
+    .into_bytes()
+}
+
 /// Verify a registration: the address binds the pubkey, and the ML-DSA-87
 /// signature verifies over the exact `challenge` bytes (the §11-B registration
 /// message) under [`MTP_REGISTER_CONTEXT`]. A wrong length or bad signature is a

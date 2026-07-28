@@ -20,10 +20,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use kaspa_addresses::Prefix;
 use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed};
 use misaka_mtp::{Rules, Stage};
 use misaka_mtp_collectors::EpochWindow;
-use misaka_mtp_service::{Attributor, HttpState, LedgerArchive, PersistentStore, RegistrationRecord, config, epoch};
+use misaka_mtp_service::{Attributor, HttpState, LedgerArchive, NonceStore, PersistentStore, RegistrationRecord, config, epoch};
 
 const USAGE: &str = "\
 misaka-mtp-service — MISAKA Testnet Points Program service (ADR-0038, testnet-only)
@@ -31,6 +32,8 @@ misaka-mtp-service — MISAKA Testnet Points Program service (ADR-0038, testnet-
 USAGE:
   misaka-mtp-service serve     --data-dir DIR --operator-key FILE --listen ADDR [--network NET] [--pin STR]...
   misaka-mtp-service run-epoch --data-dir DIR --operator-key FILE --epoch N --start RFC3339 --end RFC3339 [--network NET]
+  misaka-mtp-service issue-nonce --data-dir DIR --github ID --address ADDR [--network NET]
+  misaka-mtp-service register    --data-dir DIR --request FILE
 
 COMMON:
   --data-dir DIR        root data dir: <DIR>/facts (fact store), <DIR>/points (signed ledger archive),
@@ -62,6 +65,8 @@ fn run() -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("serve") => cmd_serve(&args[1..]),
         Some("run-epoch") => cmd_run_epoch(&args[1..]),
+        Some("issue-nonce") => cmd_issue_nonce(&args[1..]),
+        Some("register") => cmd_register(&args[1..]),
         Some("-h") | Some("--help") | Some("help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -200,4 +205,172 @@ fn cmd_run_epoch(args: &[String]) -> Result<(), String> {
         entry.file
     );
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Operator-side registration (ADR-0038 D3 preserved: no write endpoint added)
+// ---------------------------------------------------------------------------
+
+/// One issued, not-yet-consumed invitation. Persisted because issuing and ingesting are separate
+/// operator runs — the in-memory `NonceStore` cannot span two processes, and the whole point of the
+/// D3-preserving flow is that the participant signs out-of-band in between.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct IssuedNonce {
+    network: String,
+    github: String,
+    address: String,
+    nonce: String,
+    issued_at_ms: u64,
+}
+
+fn nonces_path(data_dir: &std::path::Path) -> PathBuf {
+    data_dir.join("nonces.jsonl")
+}
+
+fn load_nonces(path: &PathBuf) -> Result<Vec<IssuedNonce>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        out.push(serde_json::from_str(line).map_err(|e| format!("{}:{}: malformed nonce: {e}", path.display(), i + 1))?);
+    }
+    Ok(out)
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// `issue-nonce` — mint a single-use invitation for one (github, address) pair.
+///
+/// The operator hands the emitted JSON to the participant, who signs it with `misaka mtp register`
+/// and submits the result back. Nothing is served over HTTP: D3 keeps that surface read-only.
+fn cmd_issue_nonce(args: &[String]) -> Result<(), String> {
+    let flags = Flags::parse(args, &[])?;
+    let data_dir = PathBuf::from(flags.get("data-dir")?);
+    let github = flags.get("github")?.to_string();
+    let address = flags.get("address")?.to_string();
+    let network = network_or_default(&flags)?;
+
+    let mut nonce = [0u8; 32];
+    getrandom_bytes(&mut nonce)?;
+    let nonce_hex = faster_hex::hex_string(&nonce);
+    let issued_at_ms = now_ms();
+
+    let record = IssuedNonce {
+        network: network.clone(),
+        github: github.clone(),
+        address: address.clone(),
+        nonce: nonce_hex.clone(),
+        issued_at_ms,
+    };
+    let path = nonces_path(&data_dir);
+    let line = serde_json::to_string(&record).map_err(|e| format!("nonce JSON: {e}"))?;
+    use std::io::Write as _;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    writeln!(f, "{line}").map_err(|e| format!("cannot append {}: {e}", path.display()))?;
+
+    // The participant needs exactly these fields to rebuild the challenge byte-for-byte.
+    println!("{}", serde_json::to_string_pretty(&record).map_err(|e| format!("invitation JSON: {e}"))?);
+    eprintln!("issued invitation for {github} / {address} [{network}] — recorded in {}", path.display());
+    eprintln!("hand the JSON above to the participant; they run: misaka mtp register --invitation <file> --key-file <seed>");
+    Ok(())
+}
+
+/// `register` — verify a participant's signed request and admit it to the attribution registry.
+///
+/// Fail-closed at every step: the nonce must exist and match the pair it was issued for, it must be
+/// within TTL, the address must bind the pubkey, and the ML-DSA-87 signature must verify over the
+/// exact challenge. The nonce is consumed either way, so a replay finds nothing.
+fn cmd_register(args: &[String]) -> Result<(), String> {
+    let flags = Flags::parse(args, &[])?;
+    let data_dir = PathBuf::from(flags.get("data-dir")?);
+    let request_path = flags.get("request")?.to_string();
+
+    let raw = std::fs::read_to_string(&request_path).map_err(|e| format!("cannot read {request_path}: {e}"))?;
+    let req: serde_json::Value = serde_json::from_str(&raw).map_err(|e| format!("request is not JSON: {e}"))?;
+    let field = |k: &str| -> Result<String, String> {
+        req.get(k).and_then(|v| v.as_str()).map(str::to_owned).ok_or_else(|| format!("request is missing string field '{k}'"))
+    };
+    let network = field("network")?;
+    let github = field("github")?;
+    let address = field("address")?;
+    let nonce = field("nonce")?;
+    let pubkey = decode_hex(&field("pubkey_hex")?, "pubkey_hex")?;
+    let signature = decode_hex(&field("signature_hex")?, "signature_hex")?;
+
+    if config::stage_for(&network).is_none() {
+        return Err(format!("network '{network}' is not in the testnet scope (D1) — the request cannot be admitted"));
+    }
+
+    // Rebuild the nonce store from disk, replay the issued invitations into it, then consume.
+    let npath = nonces_path(&data_dir);
+    let issued = load_nonces(&npath)?;
+    let mut nonces = NonceStore::new();
+    let mut nonce_bytes = [0u8; 32];
+    for rec in &issued {
+        faster_hex::hex_decode(rec.nonce.as_bytes(), &mut nonce_bytes)
+            .map_err(|e| format!("stored nonce {} is not 32-byte hex: {e}", rec.nonce))?;
+        nonces.issue(&rec.network, &rec.github, &rec.address, nonce_bytes, rec.issued_at_ms);
+    }
+
+    let reg_path = data_dir.join("registrations.jsonl");
+    let mut attr = Attributor::from_records(load_registrations(&reg_path)?);
+    // D1 pins the scope to testnet names only (`config::NETWORKS`), and `network_or_default` /the
+    // check above already refused anything outside it — so the address prefix is a constant here.
+    // Deriving it through `NetworkId` would mean pulling kaspa-consensus-core into a service that is
+    // deliberately dependency-light, to compute a value D1 has already fixed.
+    let prefix = Prefix::Testnet;
+    let record = attr
+        .register(&mut nonces, &network, &github, &address, &pubkey, &nonce, &signature, now_ms(), prefix)
+        .map_err(|e| format!("registration rejected: {e}"))?;
+
+    let line = serde_json::to_string(&record).map_err(|e| format!("record JSON: {e}"))?;
+    use std::io::Write as _;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&reg_path)
+        .map_err(|e| format!("cannot open {}: {e}", reg_path.display()))?;
+    writeln!(f, "{line}").map_err(|e| format!("cannot append {}: {e}", reg_path.display()))?;
+
+    // Burn the consumed invitation so a second run cannot replay it from the file we rebuilt from.
+    let remaining: Vec<String> = issued
+        .iter()
+        .filter(|r| r.nonce != nonce)
+        .map(|r| serde_json::to_string(r).unwrap_or_default())
+        .filter(|s| !s.is_empty())
+        .collect();
+    std::fs::write(&npath, if remaining.is_empty() { String::new() } else { format!("{}\n", remaining.join("\n")) })
+        .map_err(|e| format!("cannot rewrite {}: {e}", npath.display()))?;
+
+    println!("registered {} → ledger id {}", record.address, record.ledger_id());
+    eprintln!("appended to {} — the next `run-epoch` attributes this identity's facts", reg_path.display());
+    Ok(())
+}
+
+fn decode_hex(s: &str, what: &str) -> Result<Vec<u8>, String> {
+    let h = s.strip_prefix("0x").unwrap_or(s);
+    if h.len() % 2 != 0 {
+        return Err(format!("{what} is not valid hex (odd length)"));
+    }
+    let mut out = vec![0u8; h.len() / 2];
+    faster_hex::hex_decode(h.as_bytes(), &mut out).map_err(|e| format!("{what} is not valid hex: {e}"))?;
+    Ok(out)
+}
+
+fn getrandom_bytes(buf: &mut [u8]) -> Result<(), String> {
+    use std::io::Read as _;
+    let mut f = std::fs::File::open("/dev/urandom").map_err(|e| format!("cannot open /dev/urandom: {e}"))?;
+    f.read_exact(buf).map_err(|e| format!("cannot read /dev/urandom: {e}"))
 }

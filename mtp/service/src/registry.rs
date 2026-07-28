@@ -68,15 +68,10 @@ pub fn claim_token(github: &str, address: &str) -> ClaimToken {
     faster_hex::hex_string(&h.as_bytes()[..CLAIM_TOKEN_BYTES])
 }
 
-/// The canonical Appendix-B registration challenge (the exact bytes the key
-/// signs). Deterministic in all fields, so issuer and verifier recompute the
-/// same message; a change to network/github/address/nonce flips the signature.
-pub fn registration_challenge(network: &str, github: &str, address: &str, nonce_hex: &str, issued_at_ms: u64) -> Vec<u8> {
-    format!(
-        "MISAKA-TESTNET-POINTS-REGISTRATION v1\nnetwork: {network}\ngithub: {github}\naddress: {address}\nnonce: {nonce_hex}\nissued_at: {issued_at_ms}"
-    )
-    .into_bytes()
-}
+// The registration challenge moved to `misaka_mtp::registry` so the signer (a participant's CLI)
+// and the verifier (this crate) share one definition instead of two that can drift. Re-exported so
+// existing callers keep working.
+pub use misaka_mtp::registry::registration_challenge;
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum NonceError {

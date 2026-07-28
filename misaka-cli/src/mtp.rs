@@ -384,3 +384,85 @@ pub fn award(
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// register — produce a signed registration request (ADR-0038 D3 preserved)
+// ---------------------------------------------------------------------------
+
+/// `misaka mtp register` — sign the operator-issued invitation and emit the request to submit.
+///
+/// This is the participant half of registration, and it is deliberately **offline**. ADR-0038 D3
+/// fixes the service's HTTP surface as read-only, so there is no endpoint to POST a registration
+/// to and none is added here: the operator issues an invitation out-of-band
+/// (`misaka-mtp-service issue-nonce`), this command signs it, and the participant submits the
+/// resulting JSON through whatever channel the operator runs — a pull request, a form. The
+/// operator ingests it with `misaka-mtp-service register`.
+///
+/// What is signed is the canonical challenge from `misaka_mtp::registry`, the same function the
+/// operator's verifier calls, so the two cannot drift apart.
+pub fn register(ctx: &Ctx, invitation_file: &str, key_file: &str, out: Option<&str>) -> CliResult {
+    let raw = std::fs::read_to_string(invitation_file)
+        .map_err(|e| CliError::generic(format!("cannot read invitation '{invitation_file}': {e}")))?;
+    let inv: Value = serde_json::from_str(&raw).map_err(|e| CliError::generic(format!("invitation is not JSON: {e}")))?;
+
+    let field = |k: &str| -> Result<String, CliError> {
+        inv.get(k)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| CliError::generic(format!("invitation is missing the string field '{k}'")))
+    };
+    let network = field("network")?;
+    let github = field("github")?;
+    let address = field("address")?;
+    let nonce = field("nonce")?;
+    let issued_at_ms = inv
+        .get("issued_at_ms")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| CliError::generic("invitation is missing the numeric field 'issued_at_ms'"))?;
+
+    let key = crate::keys::KeySource { key_file: Some(key_file.to_owned()), key_stdin: false }.load_key()?;
+
+    // The invitation names an address; refuse if this key is not it. Signing anyway would produce a
+    // request the operator can only reject, after the single-use nonce is already burned.
+    let prefix = crate::prefix_of(&network)?;
+    let derived = key.funding_address(prefix).to_string();
+    if derived != address {
+        return Err(CliError::generic(format!(
+            "this key does not own the invited address.\n  invitation: {address}\n  this key:   {derived}\n\
+             Ask the operator to re-issue the invitation for the address you actually hold — the nonce is \
+             single-use, so signing with the wrong key would burn it."
+        )));
+    }
+
+    let challenge = misaka_mtp::registry::registration_challenge(&network, &github, &address, &nonce, issued_at_ms);
+    let signature = key.sign_with_context(&challenge, misaka_mtp::MTP_REGISTER_CONTEXT);
+
+    let request = json!({
+        "network": network,
+        "github": github,
+        "address": address,
+        "nonce": nonce,
+        "issued_at_ms": issued_at_ms,
+        "pubkey_hex": faster_hex::hex_string(key.public_key()),
+        "signature_hex": faster_hex::hex_string(&signature),
+    });
+    let body = serde_json::to_string_pretty(&request).map_err(|e| CliError::generic(format!("request JSON: {e}")))?;
+
+    match out {
+        Some(path) => {
+            std::fs::write(path, format!("{body}\n")).map_err(|e| CliError::generic(format!("cannot write '{path}': {e}")))?
+        }
+        None => println!("{body}"),
+    }
+
+    if matches!(ctx.output, OutputFormat::Human) && out.is_some() {
+        let path = out.unwrap_or_default();
+        println!("signed registration request → {path}");
+        println!("  github {github}  address {address}  [{network}]");
+        println!(
+            "\nSubmit this file to the operator (pull request / form). Nothing was sent anywhere: the MTP \
+             HTTP surface is read-only by design (ADR-0038 D3), so registration is ingested operator-side."
+        );
+    }
+    Ok(())
+}
