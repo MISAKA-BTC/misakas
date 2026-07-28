@@ -302,12 +302,66 @@ misaka mtp verify-epoch epoch-7.0.jsonl --pubkey-file operator.pub --facts epoch
 re-runs the scoring deterministically and byte-compares the result. A ledger that passes both did
 not come from trusting the server.
 
-### Current state
+### What earns points
 
-The service is live and boot-persistent (`misaka-mtp.service` on the explorer host), but **no epoch
-has been published yet**, so the leaderboard is empty and `network` reads as `""`. That is a fresh
-install, not a fault. Points start accruing when the operator runs `run-epoch` over a window;
-auto-collected node/validator facts merge with any hand-reviewed `bug` / `verify` / `infra` awards.
+Four categories, and it matters which of them actually work today:
+
+| | Category | Earned by | Works today? |
+|---|---|---|---|
+| C1 | node | node uptime over the window, with a geo-diversity bonus (×1.5), a version-currency bonus (×1.2), and rank halving so a second node of the same operator counts half and a fourth counts zero | ❌ |
+| C1 | validator | attestation participation over the window; a slashed week forfeits the whole week | ❌ |
+| C2 | bug | a reported bug, priced by severity; a duplicate report is 10% of a first report | ✅ |
+| C3 | verify | independent verification work | ✅ |
+| C4 | infra | infrastructure contribution | ✅ |
+
+**Why the automatic ones do not work yet.** Two pieces are missing, and both are missing by
+construction rather than by oversight:
+
+1. **There is no way to register.** Earning C1 requires binding a GitHub identity to a MISAKA
+   address with an ML-DSA-87 signature over a server-issued nonce, so facts resolve to one ledger
+   id per person. That logic is implemented (`registry.rs`), but nothing calls it — no HTTP route,
+   no CLI subcommand. The read-only API has no registration endpoint.
+2. **Nothing collects facts.** The collectors in this repository are *normalizers*: they take rows
+   that were already fetched and write them into the fact store. The service's own header says the
+   live collector I/O — p2p-crawler, chain-indexer, github-sync, campaign-forms — "is the injected
+   non-deterministic edge … wired per-deployment". No such wiring ships here.
+
+So `run-epoch` currently sees exactly one input: the operator's hand-reviewed awards file.
+
+### What you can do today
+
+Contribute something reviewable — a bug report, independent verification of a claim, infrastructure
+— and the operator awards it by hand after review:
+
+```bash
+misaka mtp award --epoch <N> --network testnet-10 --id gh:<you> --category bug    --severity S1
+misaka mtp award --epoch <N> --network testnet-10 --id gh:<you> --category verify --points 250
+misaka mtp award --epoch <N> --network testnet-10 --id gh:<you> --category infra  --points 500
+```
+
+That is an operator-side command — it appends to a local awards file that the next `run-epoch`
+merges. No registration is required for it, because the operator is asserting the attribution
+directly. Running a node or a validator earns nothing until the two gaps above are closed.
+
+### Epochs — when points start counting
+
+An epoch is a window the operator publishes over:
+
+```bash
+misaka-mtp-service run-epoch --data-dir DIR --operator-key FILE \
+  --epoch N --start 2026-07-28T00:00:00Z --end 2026-08-04T00:00:00Z --network testnet-10
+```
+
+Two consequences worth being explicit about:
+
+- **Nothing accrues before the first published epoch.** The service does not backfill. Contributions
+  made before epoch 1's window exist only if the operator awards them into an epoch.
+- **Awards carry an epoch number.** `--epoch N` on the award must match the `run-epoch` that merges
+  it, so the operator decides which window a contribution lands in.
+
+**No epoch has been published yet.** The leaderboard is empty and `network` reads `""` — a fresh
+install, not a fault. The programme starts when the operator publishes epoch 1, and choosing that
+window is a governance decision, not a technical one.
 
 `testnet-200` earns nothing — it is out of scope by design (see §8).
 
@@ -323,6 +377,9 @@ Stated explicitly so nobody builds on an assumption:
   `min_active_validators = 3` each bonded at 20,000,000 MSK, and only one validator is bonded today.
   Until that clears, `testnet-200` produces algo-3 blocks only — measured at ~2.6 BPS against the
   2 + 8 design (hash lane on target, PALW lane contributing nothing).
+- **Earn MTP points for running a node or validator.** Those categories need a registration surface
+  and live fact collection, and neither is deployed — see §7. Hand-reviewed `bug` / `verify` /
+  `infra` awards do work.
 - **Earn MTP points on `testnet-200`.** The points programme scopes `testnet-10` only.
 
   Issuing and verifying a Qwen3.6 `ComputeReceipt` locally *does* work today — that is a separate,
