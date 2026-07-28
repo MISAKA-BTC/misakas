@@ -99,9 +99,7 @@ pub struct BlockBodyProcessor {
     /// binding against, plus the lane's activation fence + epoch length.
     /// `palw_activation_daa_score` is `u64::MAX` on mainnet / testnet-10 / simnet / devnet, so
     /// `check_palw_ticket` returns before any store read and those nets are byte-identical — but it is
-    /// **0** on `testnet-palw-110` / `devnet-palw-111` (`config/params.rs:1403`, `:1454`), where the
-    /// read is live. What withholds the lane on those two is `palw_algo4_accept = false` (ADR-0040
-    /// P0-3), enforced in `pre_ghostdag_validation.rs`, not this fence.
+    /// 0 on the three PALW presets, where the read is live.
     pub(super) palw_store: Arc<crate::model::stores::palw::DbPalwStore>,
     pub(super) palw_overlay_view_store: Arc<crate::model::stores::palw_overlay_view::DbPalwOverlayViewStore>,
     pub(super) ghostdag_store: Arc<DbGhostdagStore>,
@@ -363,16 +361,12 @@ impl BlockBodyProcessor {
     /// `DbPalwStore` read. Each manifest is admitted at ITS CARRIER block's epoch (`registration_epoch ==
     /// carrier_epoch`), a deterministic, mergeset-consistent coordinate.
     ///
-    /// **Fence status (corrected — the previous "inert on every shipped preset" claim was FALSE).**
-    /// The fast-path guard tests `palw_activation_daa_score == u64::MAX` and so returns — making this a
-    /// byte-identical structural no-op — only on **mainnet / testnet-10 / simnet / devnet**. On
-    /// `testnet-palw-110` and `devnet-palw-111` the fence is **0** (`config/params.rs:1403`, `:1454`),
-    /// the guard never fires, and this builder RUNS AND WRITES A ROW FOR EVERY BLOCK.
+    /// The fast-path guard makes this a no-op on mainnet, testnet-10, simnet and devnet, where
+    /// `palw_activation_daa_score == u64::MAX`. The three PALW presets use `0`, so this builder writes
+    /// a row for every block.
     ///
-    /// `palw_algo4_accept = false` does not gate this path — it withholds algo-4 header acceptance in
-    /// `pre_ghostdag_validation.rs`, bounding what the view can contain, not whether it is written. The
-    /// persisted rows are therefore real on those two presets, which is what forced the
-    /// `LATEST_DB_VERSION` 7 → 8 bump (`consensus/src/consensus/factory.rs`).
+    /// `palw_algo4_accept` gates header admission, not persistence of the overlay view. Changes to the
+    /// persisted row encoding require a database-version transition.
     ///
     /// The mergeset bodies are guaranteed present by the body-DAG downward closure.
     fn commit_palw_overlay_view(self: &Arc<BlockBodyProcessor>, batch: &mut WriteBatch, hash: BlockHash) {
@@ -408,6 +402,8 @@ impl BlockBodyProcessor {
         let a: &PalwBatchAdmissionParams = &self.palw_batch_admission;
 
         // Seed from the selected parent's carried view (empty at genesis / a pre-activation parent).
+        #[allow(clippy::unwrap_or_default)]
+        #[allow(clippy::unwrap_or_default)]
         let mut view = self
             .palw_overlay_view_store
             .view(selected_parent)
@@ -422,7 +418,12 @@ impl BlockBodyProcessor {
             // captured overlay view whose version != 1 — a `Default` seed here silently pinned the
             // pruning point forever on every activated pre-v4 chain (found by the ADR-0044
             // long-chain harness, `palw_lifecycle_e2e.rs`).
-            .unwrap_or_default();
+            //
+            // `clippy::unwrap_or_default` asks for `unwrap_or_default()` here and is WRONG: it assumes
+            // `new()` and `Default::default()` agree, which is exactly the assumption this call site
+            // exists to violate. Taking that suggestion reintroduces the bug above; the `allow` sits on
+            // the `let` below, because an attribute cannot be placed mid-chain.
+            .unwrap_or_else(PalwBatchViewV1::new);
 
         // Fold in the COMPLETE blue mergeset, INCLUDING the selected parent. `view(SP)` deliberately
         // excludes SP's own body (a block is not in its own mergeset), so SP's effects are NOT already
@@ -475,23 +476,21 @@ impl BlockBodyProcessor {
         //     gate, and the ticket reads that store, never this view's `cert_hash`. View mutation alone
         //     certifies nothing and, crucially, DESTROYS nothing;
         //   * the number of view entries is capped (`max_view_batches`, DOS-03), so slots are finite —
-        //     and that cap is now itself enforced, not merely documented: a preset that activates PALW
+        //     and that cap is enforced: a preset that activates PALW
         //     with `max_view_batches == 0` fails `PalwBatchAdmissionParams::is_consistent_for_activation`;
         //   * leaves are write-once and manifest-bounded (P1-1), so entries cannot be grown or rewritten;
         //   * every fold source is a mergeset BLUE, i.e. a block someone had to mine, so consuming a view
         //     slot costs block production — the network's own rate limit — rather than being free.
         //
-        // THE RESIDUAL IS A CENSORSHIP LEVER, not merely bounded slot consumption — state it that way.
-        // Refuse-at-cap was chosen over eviction because eviction lets a flood DISPLACE incumbents. It
-        // does not stop a flood from PRE-EMPTING them: once the cap is full, every honest manifest is
+        // Residual risk: refusal at capacity prevents eviction but permits pre-emption. Once the cap is
+        // full, every subsequent manifest is
         // refused until entries expire. And the pre-emption is nearly free, because `min_leaf_bond_sompi
         // = 0` on every shipped preset, so `admission_valid`'s bond requirement (`leaf_count ·
         // min_leaf_bond_sompi`) is vacuous — the only cost is producing the blues that carry the
         // manifests. So the true residual is: an attacker who can mine can lock honest providers out of
         // the view for up to one expiry window, at block-production cost alone.
         //
-        // FILED, not fixed here, because pricing it is a calibration decision that belongs to the
-        // re-genesis that activates PALW, not to a remediation patch: `min_leaf_bond_sompi` must become
+        // Pricing is a re-genesis calibration decision: `min_leaf_bond_sompi` must become
         // non-zero, large enough that filling `max_view_batches` slots costs more than the value of the
         // censorship window. Two things have to be re-checked together whenever either moves —
         // raising `max_view_batches` raises the flood cost but also the per-block clone cost, and

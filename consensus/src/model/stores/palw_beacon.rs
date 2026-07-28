@@ -48,7 +48,12 @@ impl PalwBeaconAccumViewV1 {
         // coherence contract rejects an accumulator row whose version != 1, so a `Default`-created
         // row silently blocked every capture while a beacon target epoch was live (found by the
         // ADR-0044 long-chain harness).
-        let accum = self.epochs.entry(epoch).or_default();
+        //
+        // `clippy::unwrap_or_default` asks for `or_default()` here and is WRONG for the same reason:
+        // it assumes `new()` and `Default::default()` agree, which is the assumption this line exists
+        // to violate. Taking that suggestion reintroduces the bug above.
+        #[allow(clippy::unwrap_or_default)]
+        let accum = self.epochs.entry(epoch).or_insert_with(PalwBeaconEpochAccumV1::new);
         if accum.commitment_of(&bond).is_some() {
             return false;
         }
