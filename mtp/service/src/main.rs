@@ -24,7 +24,7 @@ use kaspa_addresses::Prefix;
 use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed};
 use misaka_mtp::{Rules, Stage};
 use misaka_mtp_collectors::EpochWindow;
-use misaka_mtp_collectors::{Identity, IdentityKind, NodeRecord, UptimeSample};
+use misaka_mtp_collectors::{AttestationRow, Identity, IdentityKind, NodeRecord, UptimeSample};
 use misaka_mtp_service::{Attributor, HttpState, LedgerArchive, NonceStore, PersistentStore, RegistrationRecord, config, epoch};
 
 const USAGE: &str = "\
@@ -36,6 +36,7 @@ USAGE:
   misaka-mtp-service issue-nonce --data-dir DIR --github ID --address ADDR [--network NET]
   misaka-mtp-service register    --data-dir DIR --request FILE
   misaka-mtp-service ingest-probes --data-dir DIR --file PROBES.jsonl --roster ROSTER.jsonl [--network NET]
+  misaka-mtp-service ingest-attestations --data-dir DIR --file ATT.jsonl --roster VROSTER.jsonl [--bonds BONDS.jsonl] [--network NET]
 
 COMMON:
   --data-dir DIR        root data dir: <DIR>/facts (fact store), <DIR>/points (signed ledger archive),
@@ -70,6 +71,7 @@ fn run() -> Result<(), String> {
         Some("issue-nonce") => cmd_issue_nonce(&args[1..]),
         Some("register") => cmd_register(&args[1..]),
         Some("ingest-probes") => cmd_ingest_probes(&args[1..]),
+        Some("ingest-attestations") => cmd_ingest_attestations(&args[1..]),
         Some("-h") | Some("--help") | Some("help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -521,4 +523,130 @@ mod ingest_tests {
         assert_eq!(ipv4_24("999.1.1.1"), None);
         assert_eq!(ipv4_24("not-an-address"), None);
     }
+}
+
+// ---------------------------------------------------------------------------
+// ingest-attestations — chain participation becomes C1 validator facts
+// ---------------------------------------------------------------------------
+
+/// One roster line mapping an on-chain validator to a ledger id.
+#[derive(serde::Deserialize)]
+struct ValidatorRosterEntry {
+    /// The 64-byte validator hash as hex, exactly as `misaka mtp attestations` prints it.
+    validator_id: String,
+    owner_id: String,
+}
+
+/// One line of `misaka mtp attestations` output.
+#[derive(serde::Deserialize)]
+struct AttestationLine {
+    network: String,
+    validator_id: String,
+    att_epoch: u64,
+    evidence_block: Option<String>,
+    evidence_tx: Option<String>,
+}
+
+/// One line of `misaka mtp validators` output — the slash half of the join.
+#[derive(serde::Deserialize)]
+struct BondLine {
+    validator_id: String,
+    slashed: bool,
+}
+
+fn cmd_ingest_attestations(args: &[String]) -> Result<(), String> {
+    let flags = Flags::parse(args, &[])?;
+    let data_dir = PathBuf::from(flags.get("data-dir")?);
+    let file = flags.get("file")?.to_string();
+    let roster_path = flags.get("roster")?.to_string();
+    let bonds_path = flags.opt("bonds").map(|s| s.to_string());
+    let network = network_or_default(&flags)?;
+
+    // The roster is not a convenience: `EpochInput` filters attestations by `validator_id` against
+    // the *registered ledger ids*, so a row carrying a raw chain hash is dropped silently. The
+    // mapping has to happen here or the facts never score.
+    let roster_text = std::fs::read_to_string(&roster_path).map_err(|e| format!("cannot read roster {roster_path}: {e}"))?;
+    let mut owner_of: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (i, line) in roster_text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let e: ValidatorRosterEntry = serde_json::from_str(line).map_err(|err| format!("{roster_path}:{}: {err}", i + 1))?;
+        owner_of.insert(e.validator_id, e.owner_id);
+    }
+
+    // Slash state is registry state, so it comes from the bond reader rather than the block walk —
+    // one source per fact, so the two can never contradict each other.
+    let mut slashed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Some(p) = &bonds_path {
+        let text = std::fs::read_to_string(p).map_err(|e| format!("cannot read bonds {p}: {e}"))?;
+        for (i, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let b: BondLine = serde_json::from_str(line).map_err(|err| format!("{p}:{}: {err}", i + 1))?;
+            if b.slashed {
+                slashed_ids.insert(b.validator_id);
+            }
+        }
+    }
+
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("cannot read {file}: {e}"))?;
+    let mut store = PersistentStore::load(data_dir.join("facts")).map_err(|e| e.to_string())?;
+
+    // A DAG puts one shard tx in several blocks, so the index legitimately repeats a
+    // (validator, epoch) pair. Collapsing here is what keeps `attested/total` from exceeding 1.
+    let mut seen: std::collections::HashSet<(String, u64)> = std::collections::HashSet::new();
+    let (mut ingested, mut duplicates, mut unattributed, mut wrong_net) = (0usize, 0usize, 0usize, 0usize);
+    for (i, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let a: AttestationLine = serde_json::from_str(line).map_err(|e| format!("{file}:{}: malformed attestation: {e}", i + 1))?;
+        if a.network != network {
+            wrong_net += 1;
+            continue;
+        }
+        let Some(owner) = owner_of.get(&a.validator_id) else {
+            unattributed += 1;
+            continue;
+        };
+        if !seen.insert((owner.clone(), a.att_epoch)) {
+            duplicates += 1;
+            continue;
+        }
+        let slashed = slashed_ids.contains(&a.validator_id);
+        store
+            .append_attestation(
+                a.att_epoch,
+                AttestationRow {
+                    validator_id: owner.clone(),
+                    att_epoch: a.att_epoch,
+                    attested: true,
+                    slashed,
+                    evidence: format!(
+                        "{}:{}",
+                        a.evidence_block.as_deref().unwrap_or("?"),
+                        a.evidence_tx.as_deref().unwrap_or("?")
+                    ),
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        ingested += 1;
+    }
+
+    println!("ingested {ingested} attestation fact(s) into {}", data_dir.join("facts").display());
+    if duplicates > 0 {
+        println!("  {duplicates} duplicate (validator, epoch) row(s) collapsed — the same shard tx in several blocks");
+    }
+    if unattributed > 0 {
+        println!("  {unattributed} row(s) skipped: validator_id not in the roster (unregistered validators)");
+    }
+    if wrong_net > 0 {
+        println!("  {wrong_net} row(s) skipped: recorded on a different network than {network}");
+    }
+    if bonds_path.is_none() {
+        println!("  NOTE: no --bonds given, so every row is slashed=false. Pass `misaka mtp validators` output to fill it.");
+    }
+    Ok(())
 }
