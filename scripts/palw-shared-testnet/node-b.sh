@@ -6,15 +6,13 @@
 #           ./node-b.sh start
 #           ./node-b.sh stop
 #
-# WHY THIS EXISTS (honest scope):
+# PURPOSE:
 #   Node B is ALWAYS a NON-BOOTSTRAP peer. It never carries
 #   --enable-unsynced-mining (that is node A's bootstrap-only lever, dropped
 #   after sync per STN-006) and runs NO validator / beacon / algo-4-miner flags.
 #   B simply joins the closed mesh as an archival, utxo-indexed kaspad that DIALS
 #   node A (--connect=NODE_A_HOST:A_P2P) and ACCEPTS algo-4 blocks
-#   (--palw-enable-algo4). That accept flag must be IDENTICAL on every node (never
-#   a subset); it is a runtime override of the shipped palw_algo4_accept=false and
-#   a closed-net wiring switch only — never a public / value-bearing network.
+#   (--palw-enable-algo4). That accept flag must be identical on every node.
 #
 #   This node performs NO inference, mints NO algo-4 / PALW block, and never
 #   touches the seeded test-only `palw_demo` path. Its whole job is to be the

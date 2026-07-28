@@ -65,11 +65,8 @@ pub struct MultiConsensusMetadata {
 // old-shape DB at open time (clean resync) rather than migrate it.
 //
 // kaspa-pq ADR-0039/ADR-0040 PALW: bumped 7 → 8. This is the ONE cutover bump for
-// the whole PALW on-disk format that `model/stores/ghostdag.rs` reserves ("do it
-// ONCE at re-genesis, not per slice"). It was owed and unpaid, so an in-place
-// binary upgrade decoded old-shape rows into new structs and died on a bincode
-// EOF `.unwrap()` deep in a pipeline worker, with no prompt and no diagnostic.
-// Everything bincode is positional, so each of these is a hard format break:
+// PALW on-disk state uses positional bincode encoding. The following layout changes require a
+// database-version transition:
 //
 //   1. `GhostdagData` / `CompactGhostdagData` (`model/stores/ghostdag.rs`) gained
 //      `blue_hash_work` + `blue_compute_work` MID-STRUCT (before `selected_parent`).
@@ -78,9 +75,7 @@ pub struct MultiConsensusMetadata {
 //   2. `PalwBatchCertificateV2.approving_stake`, `PalwBatchLifecycleV1.
 //      {cert_approving_stake,first_cert_daa}` (mid-struct) and
 //      `PalwBatchViewV1.job_nullifiers` (trailing) — `consensus/core/src/palw.rs`.
-//      Written on `testnet-palw-110` / `devnet-palw-111`, which ship
-//      `palw_activation_daa_score = 0`; `palw_algo4_accept = false` does NOT gate
-//      these store paths (it gates algo-4 HEADER acceptance only).
+//      Written on the PALW presets, which use `palw_activation_daa_score = 0`.
 //
 // Per ADR-0001 we reject an old-shape DB at open time (clean resync) rather than
 // migrate it: `should_upgrade()` below drives `kaspad::daemon`'s 'db_upgrade loop,
@@ -520,18 +515,8 @@ mod tests {
 
     /// kaspa-pq **ADR-0040 STORE-VERSION — the version pin.**
     ///
-    /// [`LATEST_DB_VERSION`] is the ONLY mechanism that tells an operator their datadir is written in a
-    /// format the new binary cannot read. `should_upgrade()` compares it for equality against the
-    /// version stored in the DB; a mismatch drives `kaspad::daemon`'s `'db_upgrade` loop, whose
-    /// `version <= 13` arm requests deletion approval. If the constant is silently reverted, that entire
-    /// path goes dark and an in-place upgrade instead dies on a bincode EOF `.unwrap()` inside a
-    /// pipeline worker — no prompt, no diagnostic, just a crash loop.
-    ///
-    /// This is not hypothetical. ADR-0040 changed four persisted PALW field layouts (and ADR-0039 had
-    /// already changed `GhostdagData`, which is written for EVERY block on EVERY preset) without paying
-    /// this bump. `palw_algo4_accept = false` does not protect the store paths — it gates algo-4 HEADER
-    /// acceptance only — and both PALW presets ship `palw_activation_daa_score = 0`, so old-shape rows
-    /// genuinely existed on disk.
+    /// [`LATEST_DB_VERSION`] identifies the on-disk format accepted by this binary. `should_upgrade()`
+    /// compares it with the stored version; mismatches enter the daemon's database-upgrade flow.
     ///
     /// Changing this value is legitimate and expected when a persisted layout changes. When you do,
     /// update this pin AND the `version <= N` arm in `kaspad/src/daemon.rs` in the same change — a bump

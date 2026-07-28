@@ -36,11 +36,8 @@ impl HeaderProcessor {
         // is v3 and each LANE retargets on its OWN blocks (the hash floor on algo-3 blocks, the replica
         // lane on algo-4 blocks), so a mixed-lane header's `bits` must match its lane's difficulty, not
         // the single-lane average over both lanes. The else-branch is BYTE-FOR-BYTE the pre-PALW path.
-        // CORRECTED: `palw_activation_daa_score == u64::MAX` holds on mainnet / testnet-10 / simnet /
-        // devnet — those nets always take the else-branch and `expected_bits` is unchanged (verified:
-        // golden difficulty_test + genesis + integration) — but NOT on testnet-palw-110 /
-        // devnet-palw-111, whose fence is 0 (config/params.rs:1403, :1454) and which therefore take the
-        // lane-aware branch for every header.
+        // Mainnet, testnet-10, simnet and devnet use `palw_activation_daa_score == u64::MAX` and take
+        // the legacy branch. The three PALW presets use 0 and take the lane-aware branch.
         let expected_bits = if header.daa_score >= self.palw_activation_daa_score {
             self.calculate_palw_lane_difficulty_bits(&daa_window.window, header.pow_algo_id)
         } else {

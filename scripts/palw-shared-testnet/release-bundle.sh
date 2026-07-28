@@ -38,7 +38,7 @@
 # network identity — and manages its own dedicated key; this script does not
 # reuse or touch that key.)
 #
-# HONEST SCOPE: this proves the payload came from a named git ref and records
+# SCOPE: this proves the payload came from a named git ref and records
 # the toolchain that was on THIS host. It does not prove the recorded binaries
 # were built from that ref (no reproducible-build attestation), and the secret
 # sweep is a heuristic, not a proof of absence. See the "does NOT prove" block

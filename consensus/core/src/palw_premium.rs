@@ -1,9 +1,9 @@
-//! kaspa-pq **ADR-0040 §16′ — the dynamic replica premium `π`**: a bounded, chain-derived controller
-//! for the A/B reward split.
+//! ADR-0040 §16′ dynamic replica premium `π`: a bounded, chain-derived controller for the A/B reward
+//! split.
 //!
-//! # Why this is safe to make dynamic
+//! # Security model
 //!
-//! **The split ratio is invariant under collusion economics.** In a self-collusion attack (A and every
+//! The split ratio is invariant under collusion economics. In a self-collusion attack (A and every
 //! sybil B are the same party) the attacker collects the leaf's total value, so moving A:B does not
 //! change forgery EV by one bit. The three security walls are all orthogonal to the split:
 //!
@@ -11,12 +11,12 @@
 //! * the escrow anchor on `c_A`,
 //! * the audit wall `q·S > V`.
 //!
-//! So the dial moves only the *honest supply incentive* — which is the thing we want to move.
+//! The controller therefore changes supply incentives without changing the collusion payoff.
 //!
-//! # The two dangers, and how each is closed
+//! # Manipulation resistance
 //!
-//! **(a) Signal forgery to milk the dial.** Closed by choosing signals whose forgery costs real money,
-//! and by bounded steps. In particular **latency-within-deadline is deliberately NOT a signal**: a
+//! Signal forgery is constrained by using signals that carry an economic cost and by bounding each
+//! adjustment. Latency within the deadline is not a signal because a
 //! verifier cartel can slow-walk to just inside the deadline for free, manufacturing fake scarcity at
 //! zero cost. The two signals used here both cost the forger:
 //!
@@ -24,27 +24,23 @@
 //!   forger's own B revenue and triggers the objective no-show penalty (scaled by `ζ` against the
 //!   premium itself, so pumping the dial is always EV-negative).
 //! * `I` (allocation intensity) can only be lowered by injecting bond — but beacon assignment is
-//!   `∝ bond`, so the injector gets drawn as B and must either earn honestly or no-show into `r`.
+//!   `∝ bond`, so the injector gets drawn as B and must either complete the work or no-show into `r`.
 //!
 //! Demand-side forgery (job flooding) is not forgery at all: challenge-in-context + escrow + replica
 //! cost mean jobs can only be manufactured by doing real work. That *is* demand, and the controller
 //! should respond to it.
 //!
-//! **(b) Role abandonment at extremes.** Closed by `π_min`/`π_max` floors chosen so neither role falls
-//! below its participation threshold `c / expected revenue`.
+//! The `π_min` and `π_max` bounds keep both roles above their participation thresholds.
 //!
-//! # Reinterpreting §16
+//! # Neutral point
 //!
-//! §16's "equal split" is preserved as the controller's **neutral point**, not as a frozen constant: at
-//! `π = 1` the split is exactly `1/(1+m)` each — and for `m = 1` the integer arithmetic reproduces the
-//! previous `a = base/2; b = base − a` **byte for byte** (see `neutral_pi_is_byte_identical_to_half`).
-//! The original reason to fear asymmetry (role-grinding inviting sybil replicas) does not apply: B is
-//! beacon-assigned `∝ bond` and cannot self-select, so the only available response to "B pays more" is
-//! "post more bond" — the supply response we are trying to induce, not an attack.
+//! At `π = 1`, each of the `1 + m` roles receives `1/(1+m)` of the split. For `m = 1`, the integer
+//! arithmetic matches `a = base/2; b = base − a`; see `neutral_pi_is_byte_identical_to_half`. Provider
+//! B is beacon-assigned in proportion to bond and cannot self-select.
 //!
 //! # Determinism discipline
 //!
-//! Windows are cut on **DAA score** (pruning-invariant, viewpoint-independent) — never on
+//! Windows are cut on DAA score (pruning-invariant and viewpoint-independent), not on
 //! selected-chain index, wall clock, or header-declared time. Every quantity here is integer
 //! basis-point arithmetic with round-to-nearest-**even** (`div_rne`), matching the integer discipline
 //! ADR-0040 §3.3 imposes on the model itself. Nothing is written to a header; every node re-derives the
@@ -101,7 +97,7 @@ pub struct PalwPremiumParams {
     /// single large batch).
     pub consecutive_windows: u32,
     /// Rate limiter: cumulative |Δπ| over the last `maturation_windows` must not exceed `delta_cap_bps`.
-    /// **This is the stability core** — supply cannot respond faster than bond maturation `k`, so the
+    /// Stability rule: supply cannot respond faster than bond maturation `k`, so the
     /// controller must not be able to travel further than that dead time allows, or it will overshoot.
     pub delta_cap_bps: u32,
     pub maturation_windows: u32,
@@ -218,16 +214,16 @@ impl PalwPremiumParams {
         self.p0_bps_of_leaf > lo && self.p0_bps_of_leaf <= hi
     }
 
-    /// **ADR-0040 §16′-3 — is a premium pump EV-negative under the FLAT cost model?**
+    /// Returns whether a premium pump is EV-negative under the flat cost model.
     ///
-    /// # Why the flat model is the one that must hold
+    /// # Flat-cost requirement
     ///
-    /// `esc(k)` escalates per **credential**, so a **rotating sybil cartel** — many min-bond credentials,
-    /// no-shows spread so every event is the first for its credential — pays `k = 0` on every event and
-    /// evades escalation almost completely. Minting credentials costs only the min-bond granularity,
-    /// which is negligible for a cartel that already holds β. So the equilibrium may not depend on
-    /// `esc`: the honest target is that **`ζ` and `P₀` alone** make the pump unprofitable, with `esc`
-    /// demoted to defence-in-depth against the *non*-rotating attacker.
+    /// `esc(k)` escalates per credential, so a rotating sybil cartel with many minimum-bond credentials
+    /// can spread no-shows so every event is the first for its credential and pays `k = 0`. Minting
+    /// credentials costs only the minimum-bond granularity,
+    /// which is negligible for a cartel that already holds β. The equilibrium therefore requires
+    /// `ζ` and `P₀` alone to make the pump unprofitable; `esc` is additional protection against a
+    /// non-rotating attacker.
     ///
     /// # The condition
     ///
@@ -240,7 +236,7 @@ impl PalwPremiumParams {
     /// require  P₀ > Δσ_B · (M − W) / W          [all in bps of V̄_leaf]
     /// ```
     ///
-    /// `ζ·(π−1)⁺` is deliberately **excluded** from `cost`: during the pump `π` is still near neutral,
+    /// `ζ·(π−1)⁺` is excluded from `cost`: during the pump `π` is still near neutral,
     /// so that term is ≈ 0 exactly when it is needed. It only starts paying after the dial has already
     /// moved — which is why `P₀`, not `ζ`, is what has to carry this.
     pub fn flat_model_pump_is_ev_negative(&self) -> bool {
@@ -986,21 +982,17 @@ mod tests {
         assert_ne!(PalwPremiumDecision::HoldRateLimited.reason_code(), PalwPremiumDecision::HoldDeadband.reason_code());
     }
 
-    /// **ADR-0040 §16′-3 — `pump_ev_negative`.** The named adversarial assertion.
+    /// Verifies `pump_ev_negative` against a rotating-sybil strategy.
     ///
-    /// # The adversary is a ROTATING SYBIL cartel
+    /// # Adversary model
     ///
-    /// An earlier version of this test modelled a single offender and concluded that `esc(k)` carried
-    /// the result. That conclusion was wrong, and the correction matters:
-    ///
-    /// `esc(k)` escalates per **credential**. A cartel holding many min-bond credentials can spread its
+    /// `esc(k)` escalates per credential. A cartel holding many minimum-bond credentials can spread its
     /// no-shows so that every event is that credential's first — `k = 0` throughout — evading escalation
     /// almost entirely. Minting credentials costs only the min-bond granularity, which is nothing to a
-    /// cartel that already holds β. So the equilibrium **must not depend on `esc`**: the flat model,
-    /// `ζ` and `P₀` alone, has to be EV-negative on its own, and `esc` is defence-in-depth against the
-    /// non-rotating attacker who did not bother.
+    /// cartel that already holds β. The flat model must therefore remain EV-negative using `ζ` and
+    /// `P₀` alone, with `esc` providing additional protection against non-rotating attackers.
     ///
-    /// # Why `P₀` and not `ζ` carries it
+    /// # Role of `P₀`
     ///
     /// During the pump `π` is still near neutral, so `(π − 1)⁺ ≈ 0` and the `ζ` term contributes almost
     /// nothing — it is smallest exactly when it is needed. `ζ` prices *sustaining* an already-raised

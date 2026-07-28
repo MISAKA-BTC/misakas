@@ -120,11 +120,8 @@ case "$NETWORK_BASE" in
 esac
 
 # -----------------------------------------------------------------------------
-# 3. algo-4 switch. --palw-enable-algo4 MUST be passed IDENTICALLY on node-a AND
-#    node-b (never a subset) — it is a runtime override of the shipped
-#    palw_algo4_accept=false and a closed-net wiring switch only. Both node
-#    scripts read this SAME env knob (PALW_ENABLE_ALGO4, default on), so they
-#    stay identical; do NOT enable it on only one node.
+# 3. algo-4 switch. --palw-enable-algo4 must be passed identically on node A and
+#    node B. Both scripts read PALW_ENABLE_ALGO4 (enabled by default).
 # -----------------------------------------------------------------------------
 case "$(printf '%s' "${PALW_ENABLE_ALGO4:-1}" | tr 'A-Z' 'a-z')" in
     1|true|yes|on)  WANT_ALGO4=1 ;;

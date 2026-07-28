@@ -1,41 +1,33 @@
-//! kaspa-pq **ADR-0040 §ROUND-REG — the operation rounding registry**.
+//! ADR-0040 operation rounding registry.
 //!
 //! # The rule
 //!
-//! **Every consensus site that rounds, truncates, saturates, or interpolates a LUT has exactly one row
-//! here.** Pure integer add/multiply whose non-overflow is already proven by the overflow-budget table
-//! needs no row — nothing is being decided, so there is nothing to declare.
+//! Every consensus site that rounds, truncates, saturates, or interpolates a lookup table has one row
+//! here. Exact integer operations do not require a row.
 //!
-//! This is the same shape as the signature domain table (`crate::signature_domains`): a rule that lives
-//! only in prose is a rule that a type will eventually violate. ADR-0040 §2.6 records two instances of
-//! exactly that failure — a `127²` budget frozen in prose while the oracle's `&[i8]` admitted `−128`,
-//! and a PQ-class rule frozen in the coinbase validator while the PALW leaf path never checked it.
+//! The registry provides a single review and conformance point, analogous to
+//! `crate::signature_domains`.
 //!
-//! # The default is RNE, and the reason is empirical
+//! # Default mode
 //!
-//! Round-half-up drifts **upward** under iterated update. The premium controller demonstrated it: `π`
-//! is a multiplicative recurrence, so a half-up tie rule biases it up on every tie, forever. Sites that
-//! deviate from RNE declare the deviation in their row, with the reason.
+//! Round-to-nearest, ties-to-even avoids directional drift under repeated updates. Rows that use a
+//! different mode record the reason.
 //!
-//! # Why `vector` is the same id as the row
+//! # Conformance vector
 //!
-//! Each row's `id` IS its conformance-vector id. One identifier for "the rule" and "the test that pins
-//! the rule" means the two cannot drift: you cannot silently change a rounding mode and leave a stale
-//! vector passing under a different name.
+//! Each row id is also its conformance-vector id, keeping the declared rule and its test aligned.
 
 /// How a site resolves a value that is not exactly representable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RoundingMode {
-    /// Round to nearest, ties to even. **The default** — the only mode that does not drift under
-    /// iteration.
+    /// Round to nearest, ties to even. This is the default mode.
     Rne,
     /// Exact integer division toward zero. Declared where the quotient is definitionally a floor
     /// (indices, quantum counts) rather than an approximation.
     Floor,
     /// Bit truncation / shift. Declared where the low bits are being discarded by definition.
     Truncate,
-    /// Frozen legacy behaviour that predates this registry. **Not a licence to add more** — the row
-    /// exists so the site is visible and so a future change is a deliberate migration.
+    /// Frozen legacy behaviour retained for compatibility.
     LegacyFrozen,
 }
 
@@ -71,7 +63,7 @@ pub struct RoundingSite {
     pub deviation_reason: &'static str,
 }
 
-/// **The registry.** A new rounding site is added here in the same commit that introduces it.
+/// Rounding registry. Add each new rounding site in the same change that introduces it.
 pub const REGISTERED_ROUNDING_SITES: &[RoundingSite] = &[
     RoundingSite {
         id: "R-01",

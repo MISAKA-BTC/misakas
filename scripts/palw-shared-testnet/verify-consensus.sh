@@ -23,7 +23,7 @@
 # stop condition, writes the full structured report either way, and then exits
 # non-zero so no caller can treat a divergent net as verified.
 #
-# HONEST SCOPE (read this before trusting the PASS):
+# SCOPE:
 #   * This compares the two configured RPC endpoints' views. On a SINGLE host it
 #     proves the two processes agree; it is NOT a proof of real network-partition
 #     survival (that needs two hosts — audit STN-003, stated plainly, not faked).

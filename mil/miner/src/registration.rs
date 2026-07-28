@@ -154,15 +154,9 @@ fn receipt_da_metadata_is_bound(leaf: &PalwPublicLeafV1) -> bool {
 /// content_id(manifest)` and `content_id` covers `leaf_root`, while every leaf carries `batch_id`.
 /// Committing `leaf_root` to the leaves *including* their `batch_id` would therefore be a hash
 /// fixed-point (`batch_id → leaf.batch_id → leaf_hash → leaf_root → content_id → batch_id`), which is
-/// not solvable. `batch_id` is redundant inside the leaf commitment anyway — it is DERIVED from that
-/// very commitment — so excluding it loses nothing. Consensus never recomputes `leaf_root` from the
-/// stored leaves (neither the stateless `validate_manifest` nor `apply_manifest` reads it back), so
-/// this is a producer-side content commitment for the audit layer, not a consensus-enforced binding.
-///
-/// **CORRECTED — kaspa-pq ADR-0040 §5.15 (ACCEPT-BIND/M2).** The last sentence above is now FALSE and is
-/// kept only to mark what changed. `leaf_root` is a uniform-depth MERKLE root
-/// ([`palw_leaf_merkle_root`]), and the acceptance coordinate verifies a per-leaf membership proof
-/// against `manifest.leaf_root` BEFORE storing any leaf. It is a consensus-enforced binding.
+/// not solvable. `batch_id` is redundant inside the leaf commitment because it is derived from that
+/// commitment. `leaf_root` is a uniform-depth Merkle root ([`palw_leaf_merkle_root`]); consensus
+/// verifies each leaf's membership proof against `manifest.leaf_root` before storing it.
 ///
 /// Returns [`RegistrationError::NonContiguousLeafIndices`] unless the batch's `leaf_index` set is
 /// exactly `0..leaf_count` — see that variant for why the producer cannot be lenient here.
@@ -538,14 +532,10 @@ pub(crate) mod tests {
         assert_eq!(validate_palw_overlay_payload(byte, &payload), Ok(()));
     }
 
-    /// kaspa-pq **ADR-0040 §5.14.3 item 7** — the single registration epoch every producer fixture in
-    /// this crate is built at.
+    /// Registration epoch shared by all producer fixtures in this crate.
     ///
-    /// A leaf's `registered_epoch` and its batch's `registration_epoch` must now be equal
-    /// (`build_batch_manifest`, mirroring `PalwOverlayError::LeafRegistrationEpochMismatch` at the
-    /// acceptance coordinate). The fixtures used to carry `3` on the leaf and `5` on the policy — they
-    /// modelled exactly the divergence the rule forbids, which is why they all had to move together.
-    /// One constant, read by both sides, is what keeps them from drifting apart again.
+    /// A leaf's `registered_epoch` and its batch's `registration_epoch` must match. Sharing one
+    /// constant prevents fixture drift.
     pub(crate) const FIXTURE_REGISTRATION_EPOCH: u64 = 3;
 
     pub(crate) fn policy() -> BatchPolicy {
@@ -559,16 +549,13 @@ pub(crate) mod tests {
         }
     }
 
-    /// kaspa-pq **ADR-0040 §5.14.3 item 7** — the producer refuses to fix a batch whose leaves disagree
-    /// with its registration epoch, and the refusal happens BEFORE `batch_id` exists.
+    /// The producer rejects leaves whose registration epoch differs from the batch policy before
+    /// deriving `batch_id`.
     ///
-    /// The ordering is the point. `registered_epoch` is inside `leaf_hash` → `leaf_root`, and
+    /// `registered_epoch` is inside `leaf_hash` → `leaf_root`, and
     /// `registration_epoch` is inside `content_id()`; once `build_batch_manifest` returns, both are
     /// sealed under one `batch_id` and no restamping can reconcile them (restamping a leaf changes the
-    /// root, which changes the id). So a batch built with this mismatch is not merely wrong — it is
-    /// permanently unusable, and every chunk it emits is refused on-chain with
-    /// `PalwOverlayError::LeafRegistrationEpochMismatch`. Catching it here is the difference between a
-    /// caught producer bug and a registration fee spent on a dead batch.
+    /// root, which changes the id). A mismatched batch cannot be repaired after construction.
     #[test]
     fn a_batch_cannot_be_fixed_over_leaves_registered_at_another_epoch() {
         let m = miner();
@@ -753,11 +740,8 @@ pub(crate) mod tests {
         // Two leaves sharing a raw nullifier ⇒ same commitment ⇒ rejected.
         let dup = vec![mine(&m, batch, 0, 0xC0), mine(&m, batch, 1, 0xC0)];
         assert_eq!(build_leaf_chunk(batch, 0, &dup).unwrap_err(), RegistrationError::DuplicateNullifier);
-        // An empty batch is rejected. INTENT CHANGE (kaspa-pq ADR-0040 §5.15.9 step (iii)): this used to
-        // assert `ChunkSize { got: 0 }` because the argument WAS the chunk. The argument is now the whole
-        // batch — a membership proof does not exist relative to a subset — so emptiness is now a
-        // malformed BATCH, and `BatchSize` is the honest error. `ChunkSize` remains reachable only as the
-        // slicing post-condition it now is.
+        // An empty input is a malformed batch because membership proofs are derived from the whole
+        // batch rather than an individual chunk.
         assert!(matches!(build_leaf_chunk(batch, 0, &[]).unwrap_err(), RegistrationError::BatchSize { got: 0, .. }));
         // A chunk_index past the batch's `ceil(n / 64)` chunks has no leaves to carry.
         let two = vec![mine(&m, batch, 0, 0xC0), mine(&m, batch, 1, 0xC1)];
@@ -786,7 +770,7 @@ pub(crate) mod tests {
         assert_eq!(manifest_leaf_root(&shifted).unwrap_err(), RegistrationError::NonContiguousLeafIndices { got: 1, leaf_count: 2 });
     }
 
-    /// **The producer-side half of the ADR-0040 §5.15.12 cross-crate golden.** Every proof
+    /// Producer-side ADR-0040 §5.15.12 cross-crate vector. Every proof
     /// `build_leaf_chunk` emits must open `manifest.leaf_root` under the CONSENSUS verifier
     /// (`palw_verify_leaf_membership`) — not under a re-implementation of the fold. If the miner and
     /// consensus ever disagree about the construction, the on-chain symptom is silence: the acceptance
@@ -884,30 +868,21 @@ pub(crate) mod tests {
         }
     }
 
-    /// **THE CROSS-CRATE GOLDEN — producer side (ADR-0040 §5.15.9 step (iv), §5.15.12).**
+    /// Producer-side cross-crate vector (ADR-0040 §5.15.9 step (iv), §5.15.12).
     ///
-    /// `kaspa-consensus-core` and `misaka-mil-miner` are separate crates that must agree, byte for byte,
-    /// on what `leaf_root` means. Nothing at runtime tells them apart when they don't: the acceptance
-    /// arm's result is dropped at `consensus/src/pipeline/virtual_processor/processor.rs:1800-1801`
-    /// (`let _ =`), so a miner emitting the old FLAT root produces chunks that are silently never stored
-    /// and certificates that are silently always refused. There is no log line, no invalid block, no
-    /// symptom short of "the lane does nothing".
+    /// `kaspa-consensus-core` and `misaka-mil-miner` must agree byte-for-byte on `leaf_root`.
     ///
-    /// The antidote is a shared CONSTANT rather than a shared function call. This test pins a literal
-    /// leaf-hash vector and the literal root it reduces to; `palw_leaf_merkle_root_cross_crate_golden_
-    /// vector` in `consensus/core/src/palw.rs` pins the SAME two literals. Neither side can move without
-    /// breaking a build, and asserting `f(x) == f(x)` — which proves nothing — is not available here.
+    /// This test and `palw_leaf_merkle_root_cross_crate_golden_vector` pin the same literal leaf hashes
+    /// and root independently.
     ///
-    /// Three independent things are pinned, in the order a change would break them:
-    /// 1. the PROJECTION (`batch_id` zeroed, then `leaf_hash()`) → the pinned hash vector;
-    /// 2. the miner's own `manifest_leaf_root` over the literal leaves → the pinned root;
-    /// 3. an INDEPENDENT straight-line re-derivation of that root, written from the ADR-0040 §5.15.4
+    /// Three values are pinned:
+    /// 1. the projection (`batch_id` zeroed, then `leaf_hash()`) to the hash vector;
+    /// 2. `manifest_leaf_root` over the literal leaves;
+    /// 3. an independent straight-line re-derivation from ADR-0040 §5.15.4
     ///    text in this crate, using raw `blake2b_512_keyed` and no helper from consensus-core.
     ///
-    /// (3) is what makes (2) a derivation instead of a paste: the literal is anchored by a computation
-    /// that does not go through `palw_leaf_merkle_root` at all. If this test ever fails, the fix is
-    /// almost never to update the literal — it is a re-genesis, because `leaf_root` sits inside
-    /// `content_id()` and therefore inside every `batch_id`.
+    /// The independent derivation does not call `palw_leaf_merkle_root`. Changing the pinned value
+    /// changes `content_id()` and every derived `batch_id`, so it requires a re-genesis.
     #[test]
     fn manifest_leaf_root_is_pinned_to_the_consensus_cross_crate_golden_vector() {
         use kaspa_consensus_core::palw::{

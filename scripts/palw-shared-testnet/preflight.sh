@@ -320,7 +320,7 @@ fi
 #     from, so a dirty/unknown worktree or a missing provenance record is FATAL
 #     here, never a warning.
 #
-#     HONEST SCOPE: these assert that the source facts are RECORDED and that this
+#     SCOPE: these assert that the source facts are recorded and that this
 #     checkout still matches them (HEAD, tag, Cargo.lock digest). They do NOT
 #     prove the binaries hashed in §3 were built from that source — nothing in
 #     this harness attests a build. That claim still needs an independent rebuild
@@ -467,11 +467,8 @@ else
 fi
 
 # =============================================================================
-# 5. Already-running nodes: node_network parity + the --palw-enable-algo4 caveat.
-#    node_status answers only if a node is up; node_network is the sole cross-
-#    check RPC exposes. The algo-4 accept flag is a START-TIME override of the
-#    shipped palw_algo4_accept=false and is NOT visible over RPC — preflight
-#    cannot verify it, so it warns LOUDLY when any node is already up.
+# 5. Already-running nodes: verify network identity and effective algo-4 acceptance.
+#    The consensus-identity RPC exposes both values for cross-node comparison.
 # =============================================================================
 _status_a="$(node_status a 2>/dev/null || true)"
 _status_b="$(node_status b 2>/dev/null || true)"
@@ -624,7 +621,7 @@ fi
 _peer_note=""
 if [ -n "${PEER_BINARY_HASHES:-}" ]; then _peer_note=" + peer-agreed"; fi
 # Release note states only what was actually gated — the binaries' BUILD is still
-# unattested (see §3b honest scope), so this must not read as "release verified".
+# unattested (see §3b scope), so this must not read as "release verified".
 _release_note=""
 if [ "$RELEASE_MODE" -eq 1 ]; then
     _release_note=" [RELEASE MODE: recorded hashes matched (nothing rewritten), worktree clean, SOURCE_COMMIT/tag/Cargo.lock matched, signed manifest verified]"

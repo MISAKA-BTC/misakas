@@ -5,7 +5,7 @@
 #   usage:  ./submit-lifecycle.sh          # run the whole lifecycle submission
 #           ./submit-lifecycle.sh --help
 #
-# WHAT THIS DOES (the "resume, submit" half of invariant 2):
+# SCOPE:
 #   create-lifecycle.sh built the batch bundle OFFLINE (manifest + restamped
 #   leaves + all leaf-chunks) with the supporting miner PAUSED, freezing DAA at
 #   the registration epoch E, and recorded PALW_BATCH_ID / PALW_CHUNK_COUNT /

@@ -48,7 +48,7 @@
 #   MANIFEST.txt.sig               NOT produced here — the operator detach-signs
 #                                  MANIFEST.txt after this script exits (see below).
 #
-# HONEST SCOPE (read before trusting the bundle):
+# SCOPE:
 #   * It bundles REAL evidence: the status/palw-status dumps are read LIVE from
 #     the two validators over independent wRPC; the ids come from the discovered
 #     artifacts/state.env; the log tails are the real daemons' logs; the hashes
@@ -77,7 +77,7 @@
 #   * evidence_complete in run-result.json is TRUE only when EVERY required item
 #     was actually found. A TICKET_MODE=skip run cannot mint, so it legitimately
 #     has no algo-4 block evidence and its evidence_complete is FALSE — that is
-#     the honest reading, not a bug. missing_required[] names what is absent.
+#     the expected interpretation. missing_required[] names what is absent.
 #
 # Design rules (shared with the whole harness):
 #   * IDEMPOTENT   — this stage creates NO pids / keys / outpoints; it only READS
@@ -89,7 +89,7 @@
 #   * FAIL-CLOSED  — any missing evidence (nodes down, unset outpoints/batch id,
 #                    absent binary-hashes.txt, no logs) is a die() with an
 #                    actionable message. BUNDLE_ALLOW_PARTIAL=1 downgrades those
-#                    to recorded gaps (an honestly-labeled post-mortem bundle).
+#                    to recorded gaps (an explicitly labeled post-mortem bundle).
 #   * TRAP-SAFE    — a register_cleanup trap removes the temp staging dir on any
 #                    early EXIT/INT/TERM, so a failed run leaves no half-bundle.
 #   * PORTABLE     — bash 3.2 (stock macOS) + Linux; BSD + GNU coreutils.
@@ -155,7 +155,7 @@ usage: ${0##*/} [LABEL|--check-signatures [LABEL]|--help]
   Idempotent: creates no pids/keys/outpoints (reads only). Refuses to overwrite
   an existing bundle-<LABEL>/ — choose a new label or set BUNDLE_FORCE=1.
   Fail-closed on missing evidence unless BUNDLE_ALLOW_PARTIAL=1 (then each gap
-  is recorded honestly in the bundle instead of aborting).
+  is recorded explicitly in the bundle instead of aborting).
 
   SIGNING IS YOURS: this stage never handles a private key. It prints the exact
   \`ssh-keygen -Y sign\` command for MANIFEST.txt; run it on the coordinator, then
@@ -355,7 +355,7 @@ gap() {
     fi
     die "missing evidence: $*
 Fix it and re-run, or set BUNDLE_ALLOW_PARTIAL=1 to bundle only what IS available
-(an honestly-labeled post-mortem bundle)."
+(an explicitly labeled post-mortem bundle)."
 }
 
 # ---------------------------------------------------------------------------
@@ -1120,7 +1120,7 @@ missing = [t for t in os.environ.get("RR_REQ_MISSING", "").split() if t]
 gaps = i("RR_GAPS") or 0
 # TRUE only when every required item was ACTUALLY found and nothing was recorded
 # as a gap. A TICKET_MODE=skip run has no algo-4 evidence, so it lands FALSE —
-# that is the honest reading of this bundle, not a defect.
+# that is the expected interpretation of this bundle.
 evidence_complete = (len(missing) == 0 and gaps == 0)
 
 h_a, h_b = s("RR_A4_HASH_A"), s("RR_A4_HASH_B")
@@ -1344,7 +1344,7 @@ MAN="$STAGE/MANIFEST.txt"
     printf 'release mode:        %s\n' "$( [ "$RELEASE_MODE" = 1 ] && printf 'PALW_RELEASE_MODE=1 (fail-closed)' || printf 'no' )"
     printf 'netman signature:    %s\n' "$NETMAN_SIG_STATE"
     printf '\n'
-    printf 'HONEST SCOPE: real evidence read LIVE from the two validators over independent\n'
+    printf 'SCOPE: real evidence read LIVE from the two validators over independent\n'
     printf 'wRPC + real logs + real binary hashes. NOT the seeded test-only palw_demo path;\n'
     printf 'nothing was minted here. On a single host the two status dumps prove two\n'
     printf 'processes agree, NOT network-partition survival (STN-003). NO seed or secret\n'

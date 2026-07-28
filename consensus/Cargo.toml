@@ -10,17 +10,14 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# kaspa-pq ADR-0040 P1-6: ML-DSA-87 SIGNING is now needed on a production path — the devnet demo mint
-# must produce a real per-block ticket authorization (construction == validation). Previously this was
-# dev-only, because only the DNS-overlay test harness signed; the verification side (kaspa-txscript) was
-# always a normal dependency.
+# ML-DSA-87 signing is required by the PALW ticket-authorization producer.
 libcrux-ml-dsa.workspace = true
 arc-swap.workspace = true
 async-channel.workspace = true
 bincode.workspace = true
 # kaspa-pq (ADR-0039 §9.3): borsh-decode PALW overlay-tx payloads in the body/utxo
 # processor. Promoted from dev-dependencies; the PALW payload types (kaspa-consensus-core)
-# derive BorshDeserialize. Inert on every shipped preset (PALW activation fence = u64::MAX).
+# derive BorshDeserialize.
 # prunedEVM: cold-segment files are also borsh-encoded, so the encoder stays a normal dependency.
 borsh.workspace = true
 crossbeam-channel.workspace = true

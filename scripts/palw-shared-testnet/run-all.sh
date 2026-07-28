@@ -2,7 +2,7 @@
 # =============================================================================
 # run-all.sh — ONE-COMMAND orchestrator for the PALW closed two-node testnet
 #              harness (Phase-0 wiring). It CHAINS the per-stage scripts in
-#              dependency order, gating each one, and prints an honest final
+#              dependency order, gating each one, and prints a final
 #              PASS / PARTIAL summary of what was actually reached.
 #
 #   usage:  ./run-all.sh            # full bring-up (default action "all")
@@ -10,7 +10,7 @@
 #           ./run-all.sh list       # print the ordered stage plan and exit
 #           ./run-all.sh --help
 #
-# WHAT IT IS (honest scope):
+# SCOPE:
 #   A thin sequencer. Every stage's real work — starting kaspad, mining, keygen,
 #   bonding, the batch lifecycle, verification — lives in its OWN sibling script
 #   (node-a.sh, bootstrap-funds.sh, register-providers.sh, ...). run-all.sh only
@@ -34,7 +34,7 @@
 #     bootstrap-funds -> dns-validator -> register-providers -> create-lifecycle
 #     -> submit-lifecycle -> (mock) start-palw-miner -> verify-consensus ->
 #     verify-coinbase -> collect-artifacts
-#   Three orderings are corrected here because the SHIPPED sub-scripts' own
+#   Three ordering constraints are handled here because the stage scripts'
 #   fail-closed preconditions demand it (documented, not silently reshuffled):
 #     1. build-and-hash BEFORE preflight. preflight.sh calls load_env, which
 #        fail-closes when the release binaries are absent; build-and-hash.sh is
@@ -299,7 +299,7 @@ emit_summary() {
     warn "data root:         ${PALW_DATA_ROOT:-<PALW_DATA_ROOT unset — stopped before load_env>}"
     warn "logs / state:      ${PALW_DATA_ROOT:-<data>}/logs  ,  ${PALW_DATA_ROOT:-<data>}/artifacts/state.env"
     warn "daemons:           left RUNNING for inspection/resume; stop everything with ./stop.sh"
-    warn "honesty:           drives only the REAL stage scripts; never the seeded test-only palw_demo path; run-all mints nothing itself."
+    warn "scope:             drives only the stage scripts; never the seeded test-only palw_demo path; run-all mints nothing itself."
     warn "==========================================================="
     return 0
 }

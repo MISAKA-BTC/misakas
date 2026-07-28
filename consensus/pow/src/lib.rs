@@ -232,33 +232,17 @@ impl StateLayer0 {
                 buf.copy_from_slice(&blake2b_sha3_l1_tag_v1(self.pre_pow_hash_64, nonce, &self.network_id));
                 POW_L1_BLAKE2B_SHA3_OUT_BYTES
             }
-            // kaspa-pq ADR-0039 PALW (§5.1) — **CORRECTED (ADR-0040 P0-2 / DOC-01).** This comment used to
-            // claim that algo-4 "sits on the SAME permanent hash floor as algo-3 — every replica block still
-            // performs the hash-floor PoW". That is **no longer true**: commit `d61fd97` made algo-4 headers
-            // EXEMPT from the Layer-0 hash floor (`pre_ghostdag_validation.rs`, `check_pow_and_calc_block_level`
-            // returns `Ok(0)` for `POW_ALGO_ID_PALW_REPLICA` once activated), because clause 9 pins the nonce
-            // to `low64(nullifier)` and a hash floor would be unsatisfiable at that pinned nonce. The replica
-            // lane's anti-spam is therefore the eligibility draw + k=2 exact match + bonds — all BODY-stage
-            // (see ADR-0040 DOS-01 for the header-stage consequence).
-            //
-            // What remains true, and is why this arm still exists: algo-4's L1 tag is byte-identical to
-            // algo-3's, so no separate tag construction is needed. Domain separation between a pure-floor
+            // Algo-4 is exempt from the Layer-0 hash floor because clause 9 pins its nonce to
+            // `low64(nullifier)`. Its L1 tag remains byte-identical to algo-3, so no separate tag
+            // construction is needed. Domain separation between a pure-floor
             // block and a replica block is preserved downstream by `pow_finalizer_blake2b_512`, which binds
             // `self.pow_algo_id` into the digest (a floor block id=3 and a replica block id=4 with the same
             // pre_pow_hash therefore finalize to DISTINCT 512-bit values — the shared L1 tag is not a
             // collision).
             //
-            // Reachability / byte-identity: on honest live-net traffic this arm is never hit — the main
-            // header pipeline runs `check_pow_algo_id` (pre_ghostdag_validation) BEFORE any PoW, and it
-            // rejects id 4 while PALW is inactive (`palw_activation_daa_score == u64::MAX` on every shipped
-            // preset), so no honest header reaches here with id 4 and every honest tag/digest is byte-
-            // identical to the pre-PALW id-3-only match. The ONE live path that can reach this arm with id 4
-            // is pruning-proof validation (`processes/pruning_proof/validate.rs:189`), which computes the
-            // Layer-0 PoW BEFORE its algo-id gate (:198): a crafted algo-4 proof header previously fell into
-            // the kHeavyHash default arm and PANICKED on the `None` hasher (a node-crash DoS); it now computes
-            // the floor tag and is cleanly rejected with `PruningProofUnknownPowAlgoId`. That is a strict
-            // safe-direction hardening — both before and after REJECT the invalid proof (panic vs. clean
-            // error), never accept it, so there is no consensus divergence.
+            // The main header pipeline validates the algorithm id before PoW. Pruning-proof validation
+            // may compute this tag before applying its algorithm-id rule, so retaining the algo-4 arm
+            // ensures malformed proof headers are reported as validation errors rather than panicking.
             POW_ALGO_ID_PALW_REPLICA => {
                 buf.copy_from_slice(&blake2b_sha3_l1_tag_v1(self.pre_pow_hash_64, nonce, &self.network_id));
                 POW_L1_BLAKE2B_SHA3_OUT_BYTES

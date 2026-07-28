@@ -3,36 +3,23 @@
 //! `verify_palw_ticket` binding (§14.2) is built from `leaf(batch_id, leaf_index)` +
 //! `certificate(cert_hash)` + `batch_status(batch_id)`.
 //!
-//! **Fence status (corrected — the previous "inert on every shipped preset" claim was FALSE).**
-//! These stores are **LIVE and written** on `testnet-palw-110` and `devnet-palw-111`, which ship
-//! `palw_activation_daa_score = 0` (`consensus/core/src/config/params.rs:1403`, `:1454`). The writer
+//! These stores are written on the three PALW presets, which use
+//! `palw_activation_daa_score = 0`. The writer
 //! is `commit_palw_overlay_effects` (virtual commit), which folds ACCEPTED PALW overlay txs
-//! (subnetworks `0x30`–`0x33`) — ordinary transactions, not algo-4 headers — so it runs on those two
+//! (subnetworks `0x30`–`0x33`) — ordinary transactions, not algo-4 headers — so it runs on those
 //! presets from genesis.
 //!
-//! `palw_algo4_accept = false` does **NOT** gate this path. That lever is enforced in exactly one
-//! place, `pipeline/header_processor/pre_ghostdag_validation.rs:127`, and it withholds algo-4 HEADER
-//! acceptance. It therefore bounds the store's CONTENT (no ticket can ever resolve against these rows,
-//! and no algo-4 work is credited) but it does not stop rows from being written.
-//!
-//! What actually fences the two PALW presets is the pair: `palw_algo4_accept = false` (ADR-0040 P0-3,
-//! `false` on all six presets) plus the fact that both presets exist only behind a re-genesis. The
-//! stores stay empty only on mainnet / testnet-10 / simnet / devnet, where
+//! `palw_algo4_accept` gates algo-4 header admission, not overlay transaction processing. The stores
+//! stay empty on mainnet, testnet-10, simnet and devnet, where
 //! `palw_activation_daa_score == u64::MAX` makes the fast-path guard return before any write.
 //!
-//! Consequence for on-disk format: rows written by an older binary DO exist on those two presets, so
-//! any change to these structs is a real format break. See `LATEST_DB_VERSION` in
-//! `consensus/src/consensus/factory.rs` (bumped 7 → 8 for exactly this reason).
+//! Rows exist on PALW networks, so changing their encoding requires a database-version transition.
+//! See `LATEST_DB_VERSION` in `consensus/src/consensus/factory.rs`.
 //!
-//! **CURRENT ACTIVATION BLOCKERS (do not activate before these close):**
-//! 1. **NOT pruned.** [`DbPalwStore::delete_batch_records`] has ZERO callers — these rows would grow
-//!    without bound once written. (An earlier version of this doc claimed "deleted on prune like the
-//!    other overlay stores"; that was false.) Deletion must be bound to the PRUNING POINT, with enough
-//!    provenance/ref-counting to avoid deleting content still referenced by another fork.
-//! 2. **Crash atomicity is still missing.** `commit_palw_overlay_effects` performs direct writes before
-//!    the UTXO-result `WriteBatch` is committed. The lifecycle itself is no longer affected (see the
-//!    next paragraph), but a storage failure can commit only one side of the result/blob pair.
-//! 3. **Certificate validity is fork-contextual, while its cache is global.** Manifest identity is now
+//! Activation requirements:
+//! 1. [`DbPalwStore::delete_batch_records`] must be tied to pruning-point retention.
+//! 2. Overlay effects and the UTXO result must commit atomically.
+//! 3. Certificate validity is fork-contextual, while its cache is global. Manifest identity is now
 //!    enforced (`batch_id == content_id()`), leaves are write-once members of the committed Merkle root,
 //!    and certificates are keyed by their own content hash. That makes the *bytes* collision-resistant;
 //!    it does not make certificate *attestation validity* context-free. Attestation is checked against

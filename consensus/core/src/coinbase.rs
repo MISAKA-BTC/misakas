@@ -28,61 +28,44 @@ pub enum WorkRewardClass {
         ///
         /// Bincode caveat (same as `finality_fees` / `ReplicaPalwHalted` above): `BlockRewardData` rides
         /// the persisted `VirtualState`, so adding this field is decode-breaking for any store that
-        /// already holds `ReplicaPalw` rows. That set is empty on every net where PALW is inert
-        /// (`u64::MAX`), and the PALW presets activate only via re-genesis (ADR-0039), so no live store
-        /// is affected — but this MUST NOT be back-ported to a running PALW net without a store bump.
+        /// already holds `ReplicaPalw` rows. PALW presets activate through re-genesis, but introducing
+        /// this field on an existing PALW database still requires a store-version migration.
         premium_pi_bps: u32,
     },
-    /// algo-4 PALW replica source whose MINTING epoch reconstructs as `Halted` from the merging block's
+    /// Algo-4 PALW replica source whose minting epoch reconstructs as `Halted` from the merging block's
     /// derived beacon state (ADR-0039 §11.3 / K5): compute minted under an untrusted (halted) beacon is
-    /// paid NOTHING anywhere — no provider outputs, no fee-worker output, no inclusion-pool add, zero
-    /// validator pool — the §17.4 red/duplicate burn-by-don't-mint treatment. Carries only the leaf
-    /// reference (no scripts: nothing is paid). NEVER a silent `HashMiner` downgrade, which would
-    /// reroute the 77 % worker base to the miner script.
+    /// receives no provider output, fee-worker output, inclusion-pool allocation, or validator-pool
+    /// allocation. It carries only the leaf reference and is never downgraded to `HashMiner`.
     ///
     /// Bincode caveat (same as `BlockRewardData::finality_fees`): `BlockRewardData` rides the persisted
-    /// `VirtualState`, so ONLY a TRAILING variant append is decode-safe for pre-existing rows; this
-    /// variant is additionally never constructed while PALW is inert (`u64::MAX` on every shipped
-    /// preset), so live stores never contain it.
+    /// `VirtualState`, so only a trailing variant append is decode-safe for pre-existing rows. The
+    /// variant is not constructed while PALW is inactive.
     ReplicaPalwHalted { batch_id: Hash64, leaf_index: u32 },
-    /// kaspa-pq **ADR-0040 §5.15.13 (G16 / P1-9-RELAND)** — an algo-4 PALW replica source whose leaf's
-    /// `job_nullifier` was ALREADY PAID on this block's selected chain (or earlier in this very
-    /// mergeset). Paid NOTHING, exactly like [`Self::ReplicaPalwHalted`]: the same computation is not
-    /// monetised twice.
+    /// ADR-0040 §5.15.13: an algo-4 PALW replica source whose leaf's `job_nullifier` was already paid
+    /// on this block's selected chain or earlier in the same mergeset. Like
+    /// [`Self::ReplicaPalwHalted`], it receives no payout.
     ///
-    /// **Reward-only, by design.** This withholds the payout. It does NOT invalidate the block, does
-    /// NOT remove its lane weight under `E = H + min(C, 4H)`, and does NOT change its difficulty
-    /// contribution. Whether ADR-0040 intends the lane-work contribution to be zeroed as well is an
-    /// OPEN spec question that nothing in the code decides — do not guess it here. The precedent for
-    /// the reward-only shape is `ReplicaPalwHalted`.
+    /// Reward-only classification. This withholds the payout without invalidating the block, removing
+    /// its lane weight under `E = H + min(C, 4H)`, or changing its difficulty contribution.
+    /// `ReplicaPalwHalted` uses the same reward-only treatment.
     ///
     /// Carries `job_nullifier` so the rejection is attributable in a diff of two nodes' reward sets.
     ///
     /// Bincode caveat (same as `ReplicaPalwHalted`): `BlockRewardData` rides the persisted
-    /// `VirtualState`, so this is a TRAILING variant append — pre-existing rows still decode. It is
-    /// additionally never constructed on any shipped preset (`palw_algo4_accept = false` everywhere ⇒
-    /// no algo-4 source is ever accepted ⇒ no `ReplicaPalw` class ever arises to be deduped).
+    /// `VirtualState`, so this is a trailing variant append and pre-existing rows still decode.
     ReplicaPalwDuplicateWork { batch_id: Hash64, leaf_index: u32, job_nullifier: Hash64 },
-    /// kaspa-pq **ADR-0040 ECON-03 (THE WIRE)** — an algo-4 PALW replica source whose leaf names a
-    /// provider bond pair that does NOT resolve to active collateral at the paying block's point of
-    /// view. Paid NOTHING, exactly like [`Self::ReplicaPalwHalted`] and
-    /// [`Self::ReplicaPalwDuplicateWork`].
+    /// ADR-0040 ECON-03: an algo-4 PALW replica source whose provider bond pair does not resolve to
+    /// active collateral at the paying block's point of view. It receives no payout.
     ///
-    /// **This variant is the sentence ECON-03 was opened over.** Before it, a leaf's
-    /// `provider_a_bond` / `provider_b_bond` were two `TransactionOutpoint`s that consensus checked
-    /// only for being DIFFERENT from each other (`validate_public_leaf`,
-    /// `leaf.provider_a_bond != leaf.provider_b_bond`). Neither had to name anything that existed, so
-    /// the 77 % `PALW_PROVIDER_BASE_BPS` worker base was paid against zero resolved collateral: a
-    /// provider with an empty wallet could name two arbitrary outpoints and be paid the provider base
-    /// in full, with nothing at stake to slash if the inference was forged.
+    /// ECON-03 collateral classification. Both `provider_a_bond` and `provider_b_bond` must resolve to
+    /// active collateral. Merely requiring two different outpoints would allow the provider reward to
+    /// be paid without slashable collateral.
     ///
-    /// "Resolves" means, at the merging block's `pov_daa_score`, BOTH outpoints are found in the
-    /// `ProviderBondView` walked along the selected chain AND
-    /// [`crate::palw::effective_provider_bond_status`] says `Active` for each — so a bond that is
-    /// unknown, sub-floor (never admitted to the registry), still `Pending`, already `Unbonding`, or
-    /// `Slashed` yields this class and no payout.
+    /// Resolution requires both outpoints in the selected-chain `ProviderBondView` and an `Active`
+    /// result from [`crate::palw::effective_provider_bond_status`] at the merging block's
+    /// `pov_daa_score`.
     ///
-    /// **Reward-only, like its two siblings.** The block stays valid, keeps its lane weight under
+    /// Reward-only classification. The block stays valid and keeps its lane weight under
     /// `E = H + min(C, 4H)` and its difficulty contribution; only the payout is withheld. Making it a
     /// validity rule instead would let anyone brick a competitor's already-mined block by timing an
     /// unbond, and would put a point-of-view-dependent read into body validation — which BIND-03
@@ -92,9 +75,7 @@ pub enum WorkRewardClass {
     /// resolve.
     ///
     /// Bincode caveat (same as the two variants above): `BlockRewardData` rides the persisted
-    /// `VirtualState`, so this is a TRAILING variant append — pre-existing rows still decode. It is
-    /// additionally never constructed on any shipped preset (`palw_algo4_accept = false` everywhere ⇒
-    /// no algo-4 source is ever accepted ⇒ no PALW class ever arises).
+    /// `VirtualState`, so this is a trailing variant append and pre-existing rows still decode.
     ReplicaPalwUnbackedCollateral {
         batch_id: Hash64,
         leaf_index: u32,

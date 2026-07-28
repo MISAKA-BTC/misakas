@@ -7,13 +7,10 @@
 //! projection to the singleton, making first-post-PP ticket/reward reads self-contained on a fresh
 //! pruned node; a v13 partial snapshot must never be reused.
 //!
-//! **Why its OWN singleton, not a field on `PruningPointOverlaySnapshot`** (D3 boundary review): the
-//! overlay-snapshot wrapper is bincode-persisted, and appending a field to it makes a pre-upgrade
-//! singleton unreadable on an in-place binary upgrade (bincode is positional), which on a pruned overlay
-//! node degrades serving liveness / risks a capture-time panic until the next pruning advance rewrites
-//! it. A FRESH prefix has no legacy bytes to misparse: before the first write `get` returns `KeyNotFound`
-//! (→ `None` via `.ok()`), which is exactly the empty / inert case on every shipped preset. Equally
-//! non-committed (it never enters `overlay_commitment_root`).
+//! The frontier uses its own singleton because `PruningPointOverlaySnapshot` is bincode-persisted and
+//! positional. Appending a field to that wrapper would make pre-upgrade values unreadable. A dedicated
+//! prefix has no legacy bytes to misinterpret; before the first write, `get` returns `KeyNotFound`.
+//! The frontier is not included in `overlay_commitment_root`.
 //!
 use kaspa_consensus_core::palw_pruned_frontier::PalwPruningPointSnapshotV1;
 use kaspa_database::prelude::DB;

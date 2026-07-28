@@ -5,7 +5,7 @@
 #
 #   usage:  LATE_JOIN_WIPE_B=1 ./late-join.sh
 #
-# WHAT THIS DOES (honest scope):
+# SCOPE:
 #   1. Requires node A running + synced and the supporting miner advancing the
 #      chain (a late join against a stalled chain proves nothing).
 #   2. Stops node B if it is running, and — ONLY because LATE_JOIN_WIPE_B=1 was
@@ -17,7 +17,7 @@
 #      AND A/B converge on the SAME sink (wait_same_sink), i.e. the late joiner
 #      followed the existing chain instead of forking its own.
 #
-# WHAT THIS DOES NOT PROVE: nothing here exercises PALW lifecycle state on the
+# LIMITATION: this does not exercise PALW lifecycle state on the
 # joiner beyond what sink parity implies (provider bonds / manifests are
 # re-checked by the main harness stages), and a same-host join says nothing
 # about WAN behaviour — the two-host variant of this run is the external row.

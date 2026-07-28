@@ -5,7 +5,7 @@
 #
 #   usage:  ./register-providers.sh            # (or: ./register-providers.sh register)
 #
-# WHAT THIS DOES (honest scope):
+# SCOPE:
 #   For each of three identities — provider-a, provider-b and an INDEPENDENT
 #   auditor-c — it
 #     1. builds a provider-bond payload with `VAL palw-payload provider-bond`

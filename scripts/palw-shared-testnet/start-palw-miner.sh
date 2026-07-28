@@ -5,7 +5,7 @@
 #
 #   usage:  ./start-palw-miner.sh
 #
-# WHAT THIS DOES (honest scope — read carefully):
+# SCOPE:
 #   Node A is, by this point in the harness, the SYNCED in-process DNS validator
 #   (bootstrap -> validator via restart-a-synced.sh; no --enable-unsynced-mining).
 #   This stage RESTARTS node A adding the algo-4 miner flags:
@@ -147,7 +147,7 @@ _wait_log_marker() {
 #       to its own block hash (a line with that hash AND StatusUTXOValid) and
 #       export the hash into _ALGO4_HASH; if the hash is not parseable from the
 #       log format, fall back to a MARKER-level confirmation (an algo-4 marker
-#       AND a StatusUTXOValid line both present) and say so honestly.
+#       and a StatusUTXOValid line both present) and report the observed state.
 #   Contract: 0 ok, non-zero + WARN on timeout. The caller MUST check the rc.
 #
 #   ACCEPTANCE EVIDENCE IS RPC-GROUNDED, NOT LOG-STRING-GROUNDED. The log-scrape
@@ -601,7 +601,7 @@ _wait_algo4 b "$BASE_B" "$_ALGO4_HASH" \
 
 # =============================================================================
 # 6. Success. Record the minted block hash for the downstream coinbase/consensus
-#    verifiers, disarm the cleanup, and report honestly.
+#    verifiers, disarm the cleanup, and report the result.
 # =============================================================================
 # Record the minted-block axes the downstream verifiers actually read:
 #   verify-consensus.sh    -> PALW_ALGO4_BLOCK_HASH_A/_B + PALW_ALGO4_ACCEPT_A/_B
@@ -635,7 +635,7 @@ if [ -n "$_ALGO4_HASH" ]; then
         warn "STN-012 coinbase: could not read coinbase_subsidy_sompi via 'kaspa-pq-validator get-block $_ALGO4_HASH' (node A wRPC) — verify-coinbase.sh will fail-closed on the missing subsidy. Re-run ./verify-coinbase.sh once node A RPC is reachable."
     fi
 fi
-# HONEST SCOPE (5.5): only the subsidy S is captured here. The OBSERVED provider A/B,
+# SCOPE (5.5): only the subsidy S is captured here. The observed provider A/B,
 # §D inclusion and §E validator payouts are NOT in this block's own coinbase — an algo-4
 # block's coinbase pays its mergeset (the algo-3 base blocks it merges), and the providers
 # are paid only in a LATER block that merges THIS block as a blue ReplicaPalw source (red ->

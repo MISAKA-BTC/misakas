@@ -24,7 +24,7 @@
 //! design-§10.1 binding, so a certificate produced here is indistinguishable from one produced by N
 //! physically distinct auditors.
 //!
-//! **What consensus enforces, and why this module must match it exactly.** The stateless
+//! Consensus requirements. The stateless
 //! `validate_certificate` (transaction isolation) only length-checks each vote signature and requires
 //! the canonical `bond_outpoint`-ascending vote order + a sane epoch range. Since ADR-0040 P1-3
 //! (CERT-01) the cryptographic half is no longer hypothetical: `verify_certificate_attestation`
@@ -146,7 +146,7 @@ pub struct AuditCertificate {
 /// are the §5.17.4 exclusions the verifier derives from the batch's leaves (its own providers + operator
 /// siblings); the caller passes the SAME sets.
 ///
-/// **This is now an ENFORCED binding (AUTHSET-01, ADR-0040 §5.17).** `verify_certificate_attestation`
+/// AUTHSET-01 binding (ADR-0040 §5.17). `verify_certificate_attestation`
 /// re-derives this committee and REJECTS a certificate whose declared `auditor_set_commitment` differs or
 /// whose votes fall outside the slate — so a certificate whose auditors are an arbitrary bonded set no
 /// longer verifies. Delegating (rather than re-implementing) the selection is what keeps the producer
@@ -544,8 +544,8 @@ mod tests {
         let passing = auditor(0x11, true);
         let stakes: HashMap<_, _> = [(op(0x11), 100u128), (op(0x22), 100), (op(0x33), 100)].into_iter().collect();
         let r = round(auditor_set_commitment(&[op(0x11), op(0x22), op(0x33)]));
-        // The high-level producer must use all `stakes` entries as the selected slate denominator:
-        // 100 PASS · 3 < 300 selected · 2. The old code summed only `auditors`, yielding 100/100.
+        // The producer uses all `stakes` entries as the selected-slate denominator:
+        // 100 PASS · 3 < 300 selected · 2.
         let err = run_audit_round(&r, std::slice::from_ref(&passing), &slate_from_stakes(&stakes), QuorumPolicy { num: 2, den: 3 })
             .unwrap_err();
         assert_eq!(err, AuditError::QuorumNotReached { num: 2, den: 3 });
@@ -688,7 +688,7 @@ mod tests {
             .collect()
     }
 
-    /// **The cross-crate golden (producer side).** The miner-built certificate's `auditor_set_commitment`
+    /// Producer-side cross-crate vector. The miner-built certificate's `auditor_set_commitment`
     /// and `audit_sample_root` equal the consensus-re-derived values pinned above — proving the producer
     /// and `verify_certificate_attestation` agree for the shared fixture, so any drift breaks the build.
     #[test]

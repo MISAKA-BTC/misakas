@@ -2775,9 +2775,8 @@ impl VirtualStateProcessor {
         // of every current network (the overlay is dormant), so no rows are
         // written there.
         rewarded_keys: RewardedEpochKeys,
-        // kaspa-pq ADR-0040 §5.15.13 (G16): the `job_nullifier`s this block's coinbase PAID. Persisted
-        // only when non-empty, and it is empty on every block of every shipped preset (no algo-4 source
-        // is acceptable anywhere), so no row is ever written there.
+        // ADR-0040 §5.15.13: `job_nullifier`s paid by this block's coinbase. Persisted only when
+        // non-empty.
         palw_paid_work_ids: PalwPaidWorkIds,
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): this block's validator quality
         // sub-pool, the per-epoch accumulator's recompute input. Non-zero (and
@@ -2910,10 +2909,8 @@ impl VirtualStateProcessor {
         // ADR-0039 §9.3/§9.5: advance the PALW batch state machine from this chain block's accepted
         // overlay txs, keyed to acceptance (a selected-chain property) exactly like the DNS overlays
         // above. The `palw_activation_daa_score == u64::MAX` guard returns before touching
-        // `acceptance_data` — byte-identical — on mainnet / testnet-10 / simnet / devnet ONLY. On
-        // testnet-palw-110 / devnet-palw-111 the fence is 0 (config/params.rs:1403, :1454) and this
-        // RUNS: PALW overlay txs are ordinary txs (subnets 0x30-0x33), so `palw_algo4_accept = false`
-        // does not suppress them.
+        // `acceptance_data` on mainnet, testnet-10, simnet and devnet. The three PALW presets use an
+        // activation score of 0 and process overlay transactions on subnetworks 0x30-0x33.
         if let Some(staged) = palw_da_staged.as_mut() {
             if current != self.genesis.hash {
                 self.commit_palw_overlay_effects(
@@ -3021,16 +3018,13 @@ impl VirtualStateProcessor {
     /// commit, keyed to acceptance (a selected-chain property) so construction and validation see the
     /// same transitions, mirroring the DNS attestation/slashing overlays.
     ///
-    /// **Fence status (corrected — the previous "inert on every shipped preset" claim was FALSE).** The
-    /// fast-path guard returns before reading `acceptance_data`, leaving the store unwritten, only on
-    /// **mainnet / testnet-10 / simnet / devnet**. `testnet-palw-110` and `devnet-palw-111` ship
-    /// `palw_activation_daa_score = 0` (`config/params.rs:1403`, `:1454`), so on those two presets this
-    /// RUNS from genesis and DOES write the store. `palw_algo4_accept = false` does not prevent it: the
-    /// transitions are carried by ordinary transactions on subnetworks `0x30`–`0x33`, and the accept
-    /// lever only withholds algo-4 HEADER acceptance (`pre_ghostdag_validation.rs`).
+    /// The fast-path guard leaves the store unwritten on mainnet, testnet-10, simnet and devnet. The
+    /// three PALW presets use `palw_activation_daa_score = 0`, so this runs from genesis. Overlay
+    /// transitions are carried by ordinary transactions on subnetworks `0x30`–`0x33` and are
+    /// independent of the algo-4 header-admission lever.
     ///
-    /// The old finding that mutable batch status had to be reverted here is obsolete: production apply
-    /// writes no status. Header-v3 retains the legacy body-built lifecycle. Header-v4 instead clones the
+    /// Production apply writes no mutable batch status. Header-v3 retains the body-built lifecycle.
+    /// Header-v4 instead clones the
     /// selected parent's accepted view and applies only this acceptance set's contextually valid effects.
     /// Blobs, that accepted view, DA state, UTXO diff and StatusUTXOValid are staged in one WriteBatch;
     /// staging or final-write failure is process-fatal because cache-backed writers may already be ahead
@@ -4170,11 +4164,9 @@ impl VirtualStateProcessor {
     /// reaching the same sink by different reorg paths therefore hold byte-identical rows, which is
     /// what makes it safe for the reward path to read a view seeded from here.
     ///
-    /// **Inert** while PALW is fenced (`palw_activation_daa_score == u64::MAX` — mainnet, testnet-10,
-    /// simnet, devnet): a single `u64` compare and a return, so no row is written there and the batch
-    /// is byte-identical to before this writer existed. On `testnet-palw-110` / `devnet-palw-111` the
-    /// fence is 0 and this RUNS: provider-bond (`0x30`) and provider-unbond (`0x37`) transactions are
-    /// ordinary txs, so `palw_algo4_accept = false` does not suppress them.
+    /// Inert while PALW is fenced (`palw_activation_daa_score == u64::MAX` on mainnet, testnet-10,
+    /// simnet and devnet). The three PALW presets use an activation score of 0 and process
+    /// provider-bond (`0x30`) and provider-unbond (`0x37`) transactions.
     fn stage_palw_provider_bond_mutations(&self, batch: &mut WriteBatch, chain_path: &ChainPath) {
         if self.palw_activation_daa_score == u64::MAX {
             return;
@@ -4327,7 +4319,7 @@ impl VirtualStateProcessor {
     ///   proportionate: withholding a payout, not bricking a block.
     ///
     /// So `validate_public_leaf` KEEPS its distinctness check — a pure shape rule, and still the only
-    /// thing it can honestly assert — and the resolution is layered on top at the reward coordinate.
+    /// property it can assert; resolution is layered on top at the reward coordinate.
     /// The distinctness check is no longer load-bearing for the economics; it merely stops a leaf from
     /// naming one bond twice, which would otherwise let a single bond back both halves of a pair.
     ///
@@ -5384,11 +5376,10 @@ impl VirtualStateProcessor {
     /// * **Bounded.** `walk_bound` is derived from the batch-admission windows, which
     ///   `PalwBatchManifestV1::admission_valid` enforces — see that method's doc for the derivation.
     ///
-    /// **Inert everywhere today.** The fast path returns an empty set while PALW is gated, and even on
-    /// `testnet-palw-110` / `devnet-palw-111` (fence 0) every row is absent because
-    /// `palw_algo4_accept = false` means no algo-4 source can be accepted and therefore paid.
+    /// The fast path returns an empty set while PALW is gated. PALW networks walk persisted paid-work
+    /// rows from the selected chain.
     ///
-    /// **Recorded residual (pruned-IBD boundary).** Like every selected-chain walk here, this one
+    /// Pruned-IBD boundary: like every selected-chain walk here, this one
     /// cannot traverse below the pruning point. Unlike the DNS overlay window it is deliberately NOT
     /// merged with `pruning_overlay_snapshot_store`: that snapshot's borsh encoding is the preimage of
     /// `Header::overlay_commitment_root` and adding a field to it would move that commitment on every
@@ -8236,7 +8227,7 @@ impl VirtualStateProcessor {
                 // staging is the caller's next statement. Nothing may be moved after that boundary,
                 // because from there on a failure is process-fatal rather than recoverable.
                 //
-                // What this does NOT establish, by construction, is that the descendant header is real:
+                // This function does not establish that the descendant header is real:
                 // proof of work, chain membership and burial under the adopted chain are the wiring
                 // layer's obligation (review points (a′)/(b)), discharged before the bundle is handed
                 // to this function. `extract_authenticated_bundle` authenticates nothing.
@@ -8974,7 +8965,7 @@ mod palw_pruning_import_auth_tests {
     //      through their caches, and is asserted unchanged. This catches a cache-ahead-of-RocksDB
     //      mutation that (2) alone would miss.
     //
-    // WHAT THESE TESTS DO **NOT** PROVE. Review points (a′) "the transported headers belong to a
+    // Scope limitation. Review points (a′) "the transported headers belong to a
     // work-authenticated set" and (b) "the descendant is a buried chain child of the pruning point"
     // are the transport layer's obligation and are not enforced by the importer at all — the
     // importer consumes an already-projected `PalwChainDerivedAuthBundleV1`. The fixture therefore
@@ -9318,10 +9309,9 @@ mod palw_pruning_import_auth_tests {
         );
     }
 
-    /// (2) The tamper matrix. One case per row; each asserts the SPECIFIC rejection, and
+    /// (2) Tamper matrix. Each row asserts a specific rejection, and
     /// `prepare_observing_no_durable_write` asserts around every call that the RocksDB write counter
-    /// and the full staging write set are unchanged — i.e. the rejection landed strictly before any
-    /// durable write.
+    /// and the full staging write set are unchanged before any durable write.
     ///
     /// The cases split into the two halves of the chain-derived check:
     ///   * the boundary fold (`palw_overlay_commitment_root_v2(legacy_root, state_root)` vs. the

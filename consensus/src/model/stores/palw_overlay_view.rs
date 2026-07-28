@@ -18,22 +18,19 @@ use rocksdb::WriteBatch;
 /// past-relative coordinate the C4/C5 panels require (the tip-global read is a consensus split). Same
 /// shape + lifecycle as `DbPalwNullifierStore` (block-keyed, seeded from the selected parent).
 ///
-/// **Fence status (corrected — the previous "inert on every shipped preset" claim was FALSE).** This
-/// store is **LIVE and written for EVERY block** on `testnet-palw-110` and `devnet-palw-111`, which
-/// ship `palw_activation_daa_score = 0` (`consensus/core/src/config/params.rs:1403`, `:1454`). The
+/// This store is written for every block on the three PALW presets, which use
+/// `palw_activation_daa_score = 0`. The
 /// builder `commit_palw_overlay_view` is called unconditionally from the body commit
 /// (`pipeline/body_processor/processor.rs`), and its only fast-path guard tests
 /// `palw_activation_daa_score == u64::MAX` — which never fires at 0.
 ///
-/// `palw_algo4_accept = false` does **NOT** gate this path (it withholds algo-4 HEADER acceptance, in
-/// `pre_ghostdag_validation.rs` only). It bounds what the view can CONTAIN, not whether it is written.
+/// `palw_algo4_accept` gates algo-4 header admission, not persistence of the overlay view.
 ///
 /// The store is genuinely empty only on mainnet / testnet-10 / simnet / devnet
 /// (`palw_activation_daa_score == u64::MAX`), where the ticket check stays byte-identical.
 ///
-/// Consequence for on-disk format: old-shape rows DO exist on the two PALW presets, so changing
-/// [`PalwBatchViewV1`] is a real format break — see `LATEST_DB_VERSION`
-/// (`consensus/src/consensus/factory.rs`, bumped 7 → 8 for exactly this reason).
+/// Rows exist on PALW networks, so changing [`PalwBatchViewV1`] requires a database-version
+/// transition. See `LATEST_DB_VERSION` in `consensus/src/consensus/factory.rs`.
 #[derive(Clone)]
 pub struct DbPalwOverlayViewStore {
     db: Arc<DB>,

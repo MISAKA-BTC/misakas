@@ -508,7 +508,7 @@ async fn status(args: StatusArgs) -> Result<(), String> {
     println!("node_version: {}", server.server_version);
     // Review §11.2: the node's OWN consensus identity, served from its live Config (SERVER-side
     // truth — includes runtime overrides like --palw-enable-algo4 and the params identity hash).
-    // Falls back to the legacy client-side derivation against an older node, honestly labeled.
+    // Falls back to an explicitly labeled client-side derivation for older nodes.
     match client.get_consensus_identity(GetConsensusIdentityRequest {}).await {
         Ok(identity) => {
             println!("node_genesis_hash: {} (server-reported)", identity.genesis_hash);
@@ -2698,8 +2698,8 @@ mod tests {
         let in_cell = UtxoCell::from(&funding);
         assert_eq!(in_cell.plurality, 2, "69-byte SPK => plurality 2 (node-identical)");
 
-        // At this change size the real (plurality-2) storage mass is over the threshold while the
-        // old buggy plurality-1 estimate is under it — so this point distinguishes the fix from the bug.
+        // At this change size the plurality-2 storage mass is over the threshold while a plurality-1
+        // estimate is below it.
         let out = 1_500_000 - fee;
         let mass_p2 =
             calc_storage_mass(false, std::iter::once(in_cell), std::iter::once(UtxoCell { plurality: 2, amount: out }), storm)

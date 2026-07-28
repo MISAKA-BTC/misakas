@@ -169,7 +169,7 @@ for name in $STOP_ORDER; do
         log "stopping $name (pid $(read_pid "$name" 2>/dev/null || printf '?'))"
     else
         # Not running: either genuinely down, or only a stale pidfile remains.
-        # stop_pid still cleans up a stale record; note it honestly.
+        # stop_pid still cleans up a stale record; report the condition.
         if [ -f "$(pid_file "$name")" ]; then
             log "$name not running; removing stale pid record"
         else

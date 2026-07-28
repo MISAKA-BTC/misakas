@@ -526,10 +526,8 @@ impl Args {
             config.evm_checkpoint_policy = kaspa_consensus_core::evm::EvmCheckpointPolicy::archive();
         }
 
-        // kaspa-pq ADR-0040 P0-3 — the algo-4 ACCEPTANCE lever. Shipped `false` on every preset; only an
-        // explicit `--palw-enable-algo4` opens it, and only on a preset where PALW is actually active.
-        // Gating on `is_palw_active(0)` keeps the flag a no-op on mainnet/testnet-10/simnet/devnet, where
-        // no algo-4 header can exist anyway, so a stray flag cannot change behaviour on a value network.
+        // ADR-0040 P0-3: explicitly enable algo-4 on a PALW-active preset. The PALW presets already
+        // enable acceptance by default; this flag remains useful for custom configurations.
         if self.palw_enable_algo4 {
             if config.params.is_palw_active(0) {
                 config.params.palw_algo4_accept = true;
@@ -854,7 +852,7 @@ pub fn cli() -> Command {
                 .help("Allow mainnet mining (currently enabled by default while the flag is kept for backwards compatibility)"),
         )
         .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
-        .arg(arg!(--"palw-enable-algo4" "kaspa-pq ADR-0040: ACCEPT algo-4 (proof-of-LLM) blocks on a PALW preset. Default OFF on every preset. Accepted provenance, local DA spool/recovery/serving/GC, lifecycle/unbond tooling, Header-v4 anti-spam, and explicit operator-pinned snapshot import are implemented, but shipped presets remain pre-v4/inert; trustless descendant/header-bundle snapshot authentication, automatic owner-key 0x3b response, PCPB, soak/calibration, and public operations gates remain. Use only for an IP-allowlisted closed no-value devnet/testnet wiring run — never a public or value-bearing network.").env("KASPAD_PALW_ENABLE_ALGO4"))
+        .arg(arg!(--"palw-enable-algo4" "Enable algo-4 (proof-of-LLM) block acceptance on a PALW-active custom configuration. PALW presets enable acceptance by default; inactive presets ignore this option.").env("KASPAD_PALW_ENABLE_ALGO4"))
         .arg(
             Arg::new("palw-pruning-snapshot-checkpoint")
                 .long("palw-pruning-snapshot-checkpoint")
@@ -1870,8 +1868,8 @@ mod profile_tests {
         args.apply_to_config(&mut staging);
         assert!(staging.palw_permissionless_snapshot_auth);
 
-        // Same v4 preset, archival withdrawn — dropped again, and a pre-set `true` on the Config does
-        // not survive the projection either.
+        // The same v4 preset without archival operation rejects the option, including a pre-set config
+        // value.
         args.archival = false;
         let mut pruned = Config::new(args.network().into());
         pruned.palw_permissionless_snapshot_auth = true;

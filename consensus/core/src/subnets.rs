@@ -218,7 +218,7 @@ pub const SUBNETWORK_ID_PALW_BATCH_CERT: SubnetworkId = SubnetworkId::from_byte(
 /// Batch revocation (`PalwRevocationV1`, design §9.5) — what the overlay tx byte `0x34` actually
 /// decodes to.
 ///
-/// **This byte is Revocation, NOT slashing.** ADR-0040 SLASH-01 (§5.16): the earlier
+/// Revocation subnetwork. ADR-0040 SLASH-01 (§5.16): the earlier
 /// `SUBNETWORK_ID_PALW_SLASHING` name here was a dangling MISLABEL — `parse_palw_overlay(0x34)` resolves
 /// to `PalwTxKind::Revocation` and always has, so a transaction submitted "as slashing" on `0x34` was
 /// decoded and validated as a revocation: a live consensus-fault landmine. Renamed to match what the

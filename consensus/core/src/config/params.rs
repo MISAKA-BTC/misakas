@@ -368,54 +368,20 @@ pub struct Params {
     /// version `PALW_HEADER_VERSION` (v3), the algo-4 replica lane is live, and the ten PALW header
     /// fields carry ticket data; before it they MUST be zero (hash-invisible on pre-v3, so a non-zero
     /// value would be header malleability — enforced in `check_header_version`). `u64::MAX` ⇒ PALW never
-    /// active on this net; a finite value ⇒ active. CORRECTED: `u64::MAX` is NOT the value on every
-    /// shipped preset — it holds on mainnet / testnet-10 / simnet / devnet, while `TESTNET_PALW_PARAMS`
-    /// and `DEVNET_PALW_PARAMS` ship **0** (PALW-active from genesis, via re-genesis-only networks).
-    /// What is withheld on ALL SIX presets is `palw_algo4_accept = false` (ADR-0040 P0-3) — that, not
-    /// this fence, is the invariant to reason from. Mirrors the `evm_activation_daa_score` precedent.
+    /// active on this net; a finite value ⇒ active. Mainnet, testnet-10, simnet and devnet use
+    /// `u64::MAX`; the three PALW presets use `0` and are active from genesis. Mirrors the
+    /// `evm_activation_daa_score` precedent.
     pub palw_activation_daa_score: u64,
-    /// kaspa-pq **ADR-0040 P0-3** — the algo-4 ACCEPTANCE lever, and the third of PALW's three
-    /// independent levers:
-    ///
-    /// | lever | knob | released by |
-    /// |---|---|---|
-    /// | land   | shipping the code at all              | every `StopShip` gate |
-    /// | accept | **this field**                        | every `StopShip` + every `Activation` gate |
-    /// | weight | [`Self::palw_compute_work_scale`] > 0 | the above + every `WeightRaise` gate |
-    ///
-    /// While `false`, an algo-4 header is REJECTED at `check_pow_algo_id` — i.e. before GHOSTDAG, before
-    /// reachability, and before any header-stage store write. That ordering is the point: algo-4 headers
-    /// are exempt from the Layer-0 hash floor (`check_pow_and_calc_block_level` returns `Ok(0)` for them),
-    /// so without this lever a PALW-active preset has NO work-based bound on header-stage spam
-    /// (ADR-0040 DOS-01 — and `palw_compute_work_scale = 0` makes the compute cap unable to fire, so it
-    /// cannot serve as the bound either).
-    ///
-    /// Ships `false` on **every** preset, including `testnet-palw` / `devnet-palw`. Do not flip it per
-    /// preset ad hoc: the release condition is defined once, as gate-class semantics, in ADR-0040 §7.1.1.
-    /// Independent of `palw_activation_daa_score` on purpose — activation says the lane EXISTS, this says
-    /// its blocks may ENTER.
+    /// ADR-0040 P0-3 algo-4 acceptance control. When false, `check_pow_algo_id` rejects algo-4 before
+    /// GHOSTDAG and header-stage store writes. The three PALW presets enable it; inactive presets do
+    /// not. Presets 110 and 111 are bounded by their peer allowlist, while preset 200 uses the
+    /// Header-v4 anti-spam accumulator.
     pub palw_algo4_accept: bool,
-    /// kaspa-pq **ADR-0040 P1-13 (BIND-04 / SS-01)** — does this network REQUIRE archival operation?
-    ///
-    /// PALW overlay state (batch views, leaves, certificates) has **no pruning-point / trusted-block
-    /// import path**: `PalwPrunedFrontier` has neither a writer nor a reader. A pruned node therefore
-    /// reaches a point where the leaf an accepted algo-4 block references is simply absent, and the
-    /// reward path's deliberate fail-closed `panic!` fires mid-sync.
-    ///
-    /// Until the import lands, the correct posture is to REFUSE pruned operation on a PALW network at
-    /// startup rather than to crash into it later. Same principle as the DNS seeder's explicit refusal:
-    /// a limitation that is only a comment is one an operator discovers as an outage.
+    /// ADR-0040 P1-13 archival-operation requirement. Presets without a supported pruning snapshot
+    /// path set this flag so startup rejects pruned operation.
     pub palw_requires_archival: bool,
-    /// kaspa-pq **ADR-0040 §T-shared — this network must run behind an explicit peer allowlist.**
-    ///
-    /// "Closed" must be the absence of REACHABILITY, not the absence of advertising. Keeping a PALW net
-    /// off the DNS seeder (which the seeder now refuses anyway) stops it being *announced*; it does not
-    /// stop anyone who knows the netsuffix from connecting. On a network whose activation gates are not
-    /// released, that difference is the whole safety argument — AUTH-02-class surfaces are only
-    /// acceptable while no third party can reach them.
-    ///
-    /// Enforced at startup by requiring `--connect-peers` (outbound-only to a fixed set), so the closure
-    /// is a property the node enforces rather than a firewall someone remembered to configure.
+    /// ADR-0040 closed-network requirement. Startup requires an explicit peer allowlist when this flag
+    /// is set.
     pub palw_requires_peer_allowlist: bool,
     /// kaspa-pq ADR-0039 PALW (§5.3/§28): fixed compute-credit scale applied to each unique blue
     /// algo-4 source (`ΔC = scale · calc_work(bits)`). This knob is deliberately independent of
@@ -457,14 +423,9 @@ pub struct Params {
     /// return. Lifted onto `Params` because the re-derivation runs at `verify_certificate_attestation`
     /// in the virtual processor, which only sees `Params`. Mirrors `PalwParams::auditor_count` (= 16).
     ///
-    /// **Config, not DB.** `Params` derives only `Clone, Debug` and is never serialised, so adding this
-    /// field does NOT move `LATEST_DB_VERSION` (§5.17.8). It is INERT on every preset: no production
-    /// reader exists yet — the AUTHSET-01 commitment re-derivation is an activation-blocking gate behind
-    /// `palw_algo4_accept = false`. It must NOT be vacuously zero on an ACTIVATED preset (the
-    /// `min_leaf_bond_sompi` trap): a zero committee means "no bond is ever selected", which the
-    /// re-derivation slice would read as "every vote is out-of-committee", bricking the lane. The
-    /// non-zero-ness on activated presets is ENFORCED — not merely documented — by
-    /// `palw_activated_presets_bound_the_view`.
+    /// `Params` is not serialized, so this field does not change `LATEST_DB_VERSION` (§5.17.8).
+    /// Activated presets require a non-zero value; otherwise the selected committee is empty and every
+    /// vote is out of committee. `palw_activated_presets_bound_the_view` enforces this requirement.
     pub palw_audit_committee_size: u16,
     /// kaspa-pq **ADR-0040 §5.17.6 requirement (c) (SAMPLE-01)** — the number of the batch's on-chain
     /// leaves the audit round samples: the `sample_size` fed to [`crate::palw::palw_deterministic_sample`]
@@ -475,13 +436,10 @@ pub struct Params {
     /// needs it. Lifted onto `Params` for the same reason as `palw_audit_committee_size` (the
     /// re-derivation runs in the virtual processor, which only sees `Params`).
     ///
-    /// **Config, not DB.** `Params` is never serialised, so this does NOT move `LATEST_DB_VERSION`
-    /// (§5.17.8). INERT on every preset — no production reader until the SAMPLE-01 re-derivation slice
-    /// (activation-blocking, behind `palw_algo4_accept = false`). It must NOT be vacuously zero on an
-    /// ACTIVATED preset (the `palw_audit_committee_size` trap): a zero sample makes the re-derived root a
-    /// fixed empty-vector constant, so any certificate declaring that constant passes SAMPLE-01
-    /// vacuously — enforcement without a property. Non-zero-ness on activated presets is ENFORCED by
-    /// `palw_activated_presets_bound_the_view`. The MAGNITUDE is a re-genesis calibration.
+    /// `Params` is not serialized, so this field does not change `LATEST_DB_VERSION` (§5.17.8).
+    /// Activated presets require a non-zero value; a zero sample would reduce the derived root to the
+    /// empty-vector constant. `palw_activated_presets_bound_the_view` enforces this requirement. The
+    /// magnitude is calibrated at re-genesis.
     pub palw_audit_sample_size: u16,
     /// kaspa-pq ADR-0039 PALW (§16.3): the per-lane difficulty params (window/target/min-samples/clamp
     /// + genesis lane bits). Drives the lane-aware retarget once PALW is active; the two lanes retarget
@@ -1291,8 +1249,8 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // PRODUCTION floor is 3, audit H-11). This is the live testnet's intended config; do NOT raise
     // it here without re-provisioning multiple testnet validators.
     min_active_validators: 1,
-    // kaspa-pq audit fix (M-2 comment correction): TESTNET lowers min_active_stake / min_bond from
-    // PRODUCTION's 20M KAS to 10 KAS. PRODUCTION's `required_stake_depth = StakeScore(10 *
+    // Testnet lowers min_active_stake and min_bond from production's 20M KAS to 10 KAS. Production's
+    // `required_stake_depth = StakeScore(10 *
     // STAKE_SCORE_SCALE)` (= 10 epochs at full participation, since StakeScore accrues exactly
     // STAKE_SCORE_SCALE = 1_000_000_000 units per fully-participated epoch) is calibrated for the
     // 20M-KAS-scale active set; left inherited it makes `StakeDepth >= required_stake_depth`
@@ -1395,7 +1353,7 @@ pub const MAINNET_PARAMS: Params = Params {
     // a finite activation score when the revm executor lands (P2+). u64::MAX = never.
     evm_activation_daa_score: u64::MAX,
     palw_activation_daa_score: u64::MAX,
-    palw_algo4_accept: false, // ADR-0040 P0-3 — released only per §7.1.1 gate classes
+    palw_algo4_accept: false,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1512,7 +1470,7 @@ pub const TESTNET_PARAMS: Params = Params {
     // evm-active blocks by design). Mainnet/simnet stay u64::MAX-inert.
     evm_activation_daa_score: 0,
     palw_activation_daa_score: u64::MAX,
-    palw_algo4_accept: false, // ADR-0040 P0-3 — released only per §7.1.1 gate classes
+    palw_algo4_accept: false,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1580,9 +1538,9 @@ pub const TESTNET_PALW_PARAMS: Params = Params {
     genesis: crate::config::genesis::TESTNET_PALW_GENESIS,
     dns_seeders: &[],
     palw_activation_daa_score: 0,
-    palw_algo4_accept: false,           // ADR-0040 P0-3 — released only per §7.1.1 gate classes
-    palw_requires_archival: true,       // ADR-0040 P1-13: Header-v3 import is closed-network-only
-    palw_requires_peer_allowlist: true, // ADR-0040 §T-shared: closed = unreachable, not unadvertised
+    palw_algo4_accept: true,
+    palw_requires_archival: true,
+    palw_requires_peer_allowlist: true,
     palw_lane_difficulty: TESTNET_PALW_LANE_DIFFICULTY,
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
     // Stage A: algo-4 acceptance/measurement is independent from fork-choice credit.
@@ -1632,20 +1590,10 @@ pub const DEVNET_PALW_PARAMS: Params = Params {
     genesis: crate::config::genesis::DEVNET_PALW_GENESIS,
     dns_seeders: &[],
     palw_activation_daa_score: 0,
-    palw_algo4_accept: false, // ADR-0040 P0-3 — released only per §7.1.1 gate classes
-    // ADR-0040 P1-13 originally forced --archival here because trustless PALW pruned-IBD import
-    // does not exist. But per-block PALW validation NEVER reads below the pruning point (the DA /
-    // search / beacon recurrences resolve through the selected parent, the paid-work walk is
-    // bounded above it, and the boundary state is carried by the pruning snapshots), and a fresh
-    // node trying to LATE-JOIN past the pruning point still fails closed at IBD
-    // (`palw_pruning_target_is_unsupported`) — the coordinate where that limitation belongs. On
-    // this iteration devnet the archival mandate only bought unbounded disk growth (observed
-    // ~360 MB -> 1.2 GB in 14 h at 1 BPS, dominated by never-pruned block/tx data including the
-    // validator's per-epoch ML-DSA attestation traffic). Devnet nodes may now prune; operators
-    // who need full history or pruned-IBD serving opt back in with --archival. The shared
-    // testnet-110 preset keeps the archival mandate unchanged.
+    palw_algo4_accept: true,
+    // Devnet permits normal pruning; archival nodes opt in when full history is required.
     palw_requires_archival: false,
-    palw_requires_peer_allowlist: true, // ADR-0040 §T-shared: closed = unreachable, not unadvertised
+    palw_requires_peer_allowlist: true,
     palw_lane_difficulty: DEVNET_PALW_LANE_DIFFICULTY,
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
     palw_compute_work_scale: 0,
@@ -1701,16 +1649,14 @@ pub const STAGING_PALW_LANE_DIFFICULTY: crate::palw::LaneDifficultyParams = crat
 ///     deliberate starting point; ADR-0046 L1 staging measurements recalibrate the magnitude.
 ///     Satisfies the HeaderProcessor v4 deployment fence (structurally valid + genesis-active +
 ///     `genesis.version == 4`).
-///   * **`palw_algo4_accept = false`** — the acceptance flip stays a separate change (ADR-0040
-///     §7.1.1 gate classes), and `palw_compute_work_scale = 0` (weight-0 start).
+///   * `palw_algo4_accept = true` and `palw_compute_work_scale = 0` (weight-0 start).
 ///   * **Real PoW** (`skip_proof_of_work = false`) in the testnet-palw shape: algo-3 blocks grind
 ///     the real Layer-0 hash floor from the max-easy fast-start target, algo-4 blocks are
 ///     hash-floor-exempt structurally (`check_pow_and_calc_block_level`) — no devnet skip-pow.
 ///   * **Full-scale depths** via `..MAINNET_PARAMS`: finality 432_000 / pruning 1_080_000 — the
 ///     mainnet 想定値, deliberately NOT shrunk (縮小しない実物大), so the pruning first-pass and
 ///     warm-up-window exercises measure the real thing.
-///   * `palw_requires_archival = false` (pruned operation is the default posture) and
-///     `palw_requires_peer_allowlist = true` (closed start; opened after snapshot auth — ADR-0042).
+///   * `palw_requires_archival = false` and `palw_requires_peer_allowlist = false`.
 ///   * ADR-0043 note: G6 sibling flooding is bounded by the amended allocation-policy fix, which is
 ///     network-independent — there is no per-preset knob here.
 ///
@@ -1722,17 +1668,12 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
     // Closed rehearsal start: no advertising; reachability is gated by the allowlist below.
     dns_seeders: &[],
     palw_activation_daa_score: 0,
-    palw_algo4_accept: false, // ADR-0040 P0-3 — released only per §7.1.1 gate classes
+    palw_algo4_accept: true,
     palw_compute_work_scale: 0,
     palw_spam: crate::palw_antispam::PalwSpamParams::PUBLIC_REGENESIS_CANDIDATE,
-    skip_proof_of_work: false, // real PoW — explicit, because the rehearsal must not inherit a demo crutch
+    skip_proof_of_work: false,
     palw_requires_archival: false,
-    // ADR-0042 改訂 A1 (2026-07-28): OPENED. The closed start existed because the ADR-0042 fence was
-    // unreleased and the safety argument rested on no unlisted third party reaching the net. A1
-    // releases that fence for testnet and moves verification onto the running network, so this
-    // rehearsal net accepts unlisted peers. Accepted residual: R1 (an unbound empty `job_nullifiers`
-    // row can non-canonicalise a node's persisted snapshot, costing it its IBD-source role) — an
-    // availability defect, NOT a consensus split. Mainnet keeps its own policy; A1 is testnet-only.
+    // The staging network accepts unlisted peers for public testnet validation.
     palw_requires_peer_allowlist: false,
     palw_lane_difficulty: STAGING_PALW_LANE_DIFFICULTY,
     ..MAINNET_PARAMS
@@ -1798,7 +1739,7 @@ pub const SIMNET_PARAMS: Params = Params {
     // a finite activation score when the revm executor lands (P2+). u64::MAX = never.
     evm_activation_daa_score: u64::MAX,
     palw_activation_daa_score: u64::MAX,
-    palw_algo4_accept: false, // ADR-0040 P0-3 — released only per §7.1.1 gate classes
+    palw_algo4_accept: false,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1835,7 +1776,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // u64::MAX-inert until the O13/O9 decision.
     evm_activation_daa_score: 0,
     palw_activation_daa_score: u64::MAX,
-    palw_algo4_accept: false, // ADR-0040 P0-3 — released only per §7.1.1 gate classes
+    palw_algo4_accept: false,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -2084,10 +2025,18 @@ mod palw_network_tests {
         assert_ne!(p.genesis.hash, TESTNET_PARAMS.genesis.hash);
         assert_ne!(p.genesis.hash, TESTNET_PALW_PARAMS.genesis.hash);
         assert_eq!(p.genesis.version, crate::constants::PALW_ANTISPAM_HEADER_VERSION, "Header-v4 re-genesis");
-        // ADR-0041 shape: PALW genesis-active, acceptance withheld, weight-0 start.
+        // ADR-0041 shape: PALW genesis-active, acceptance RELEASED, weight-0 start.
         assert!(p.is_palw_active(0), "staging-mainnet-palw is PALW-active from genesis");
         assert_eq!(p.palw_activation_daa_score, 0);
-        assert!(!p.palw_algo4_accept, "the acceptance flip is a separate change (ADR-0040 §7.1.1)");
+        assert!(p.palw_algo4_accept, "the acceptance flip is released on staging (ADR-0040 §7.1.1)");
+        // Acceptance without closure needs the accumulator to be the bound instead: A1 opened this
+        // net to unlisted peers, and algo-4 is exempt from the Layer-0 hash floor, so `palw_spam`
+        // below is the only thing left standing between a free header and the header stage.
+        assert!(!p.palw_requires_peer_allowlist, "A1 opened staging to unlisted peers");
+        assert!(!p.palw_spam.is_inert(), "an OPEN accepting preset must carry a non-inert anti-spam accumulator");
+        // Still Stage-A on fork-choice credit, and deliberately so. `ΔC = scale · calc_work(bits)`
+        // on a hash-floor-exempt lane would let anyone reachable here accumulate work for free —
+        // chain takeover, strictly worse than the header spam the accumulator bounds.
         assert_eq!(p.palw_compute_work_scale, 0, "Stage-A PALW compute credit stays weight zero");
         // The FIRST non-inert anti-spam preset (ADR-0046 recalibrates the magnitude on staging).
         assert!(!p.palw_spam.is_inert());
@@ -2117,13 +2066,8 @@ mod palw_network_tests {
         assert!(p.dns_params.unwrap().dns_v3_params_consistent(), "staging DNS params stay v3-consistent");
     }
 
-    /// kaspa-pq **ADR-0040 P1-5 — the view bound is ENFORCED over every activated preset.**
-    ///
-    /// After the P1-9 removal, `max_view_batches` is the ONLY thing bounding a persisted
-    /// `PalwBatchViewV1`, and it had no validity check at all: `0` (unbounded) would have passed every
-    /// test in the tree while the params doc claimed a consistency check rejected it. This is that
-    /// check. Both halves matter — the seven shipped presets must pass, and a zeroed cap on an
-    /// ACTIVATED preset must fail.
+    /// ADR-0040 P1-5: validates the persisted `PalwBatchViewV1` bound on every activated preset.
+    /// All shipped presets must pass, while an activated preset with `max_view_batches = 0` must fail.
     #[test]
     fn palw_activated_presets_bound_the_view() {
         let presets: [(&str, Params); 7] = [
@@ -2136,10 +2080,17 @@ mod palw_network_tests {
             ("staging-mainnet-palw", STAGING_MAINNET_PALW_PARAMS),
         ];
         for (name, p) in presets.iter() {
-            // Hard invariant, re-asserted here so this test also guards it: algo-4 acceptance is
-            // withheld on ALL SEVEN presets (ADR-0040 P0-3; ADR-0048's staging re-genesis included —
-            // its acceptance flip is a separate change).
-            assert!(!p.palw_algo4_accept, "{name} must not accept algo-4 headers");
+            // Acceptance is no longer withheld everywhere — ADR-0040 P0-3 is released on the PALW
+            // presets — but it tracks activation exactly, so neither half can drift.
+            assert_eq!(p.palw_algo4_accept, p.is_palw_active(0), "{name}: algo-4 acceptance differs from PALW activation");
+            // DOS-01: algo-4 is hash-floor exempt, so an accepting preset needs some other bound —
+            // reachability (closed) or a non-inert anti-spam accumulator (open).
+            if p.palw_algo4_accept {
+                assert!(
+                    p.palw_requires_peer_allowlist || !p.palw_spam.is_inert(),
+                    "{name} accepts algo-4 while open AND without an anti-spam accumulator (DOS-01)"
+                );
+            }
             assert!(
                 p.palw_batch_admission.is_consistent_for_activation(),
                 "{name}: batch-admission params must bound the per-block-persisted view"
@@ -2147,10 +2098,8 @@ mod palw_network_tests {
             if p.palw_activation_daa_score != u64::MAX {
                 assert_ne!(p.palw_batch_admission.max_view_batches, 0, "{name} activates PALW with an UNBOUNDED view");
                 // ADR-0040 §5.17.4 (AUTHSET-01) — the committee size must not be vacuously zero on an
-                // activated preset (the `min_leaf_bond_sompi` trap). A zero committee would make the (not
-                // yet landed) auditor-set re-derivation select nobody, so every certificate's votes would
-                // read as out-of-committee. Enforced here so the field's non-zero-ness is a checked
-                // invariant, not a comment.
+                // activated preset. A zero committee would select no auditors, making every vote
+                // out-of-committee.
                 assert_ne!(p.palw_audit_committee_size, 0, "{name} activates PALW with an EMPTY auditor committee");
                 // ADR-0040 §5.17.6 (SAMPLE-01) — the sample size must not be vacuously zero on an
                 // activated preset, for the same reason as the committee size: a zero sample makes the
@@ -2225,9 +2174,9 @@ mod palw_network_tests {
     /// on EVERY preset, not just the activated ones: an inert preset that later flips its fence must
     /// not discover the relation is already broken.
     ///
-    /// **What this does NOT cover, stated so it is not mistaken for coverage.** It bounds the reach of
-    /// the walk on a node that has a full chain below it. A pruned-IBD joiner has no rows at all below
-    /// its pruning point, so for the first `paid_work_walk_bound_daa` of DAA above it the walk returns
+    /// Limitation: this only bounds the walk on a node with a complete chain below it. A pruned-IBD
+    /// joiner has no rows below its pruning point, so for the first `paid_work_walk_bound_daa` of DAA
+    /// above it the walk returns
     /// a short prefix regardless of this relation. Closing that band needs the paid set to ride the
     /// pruning-point snapshot, and that snapshot's borsh encoding is the preimage of
     /// `Header::overlay_commitment_root` — so it is a header-commitment change, not a wiring change.
@@ -2367,8 +2316,7 @@ mod palw_network_tests {
             "the paid-work walk ({walk} DAA) must fit inside the trusted-data DAA window \
              ({DIFFICULTY_WINDOW_DURATION} DAA), or the R1 chain binding refuses honest imports"
         );
-        // Measured at the time the binding landed; kept as a tripwire on the margin shrinking
-        // silently rather than as a claim that these exact numbers are calibrated.
+        // Pin the current safety margin; these values are structural bounds rather than calibration.
         assert_eq!(walk, 1700, "paid-work walk bound moved — re-check the trusted-data margin");
         assert_eq!(DIFFICULTY_WINDOW_DURATION, 2641, "difficulty window moved — re-check the R1 margin");
     }

@@ -919,8 +919,7 @@ impl PruningProcessor {
                 // Sound because the reward-coordinate duplicate-work walk is bounded by
                 // `PalwBatchAdmissionParams::paid_work_walk_bound_daa`, which is orders of magnitude
                 // below the pruning depth — a pruned row can never be inside a live block's window.
-                // `palw_paid_work_walk_stays_above_the_pruning_point` enforces that relation. A no-op
-                // today: no row is ever written (no algo-4 source is acceptable on any preset).
+                // `palw_paid_work_walk_stays_above_the_pruning_point` enforces that relation.
                 self.palw_paid_work_store.delete_batch(&mut batch, current).unwrap();
                 // kaspa-pq ADR-0039 PALW (§15.2): prune the per-block active-nullifier window set. A
                 // no-op while PALW is inert (no row). NOTE: the batch-scoped, content-addressed overlay

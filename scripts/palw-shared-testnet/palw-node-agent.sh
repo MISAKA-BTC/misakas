@@ -4,7 +4,7 @@
 #
 #   usage:  ./palw-node-agent.sh <verb> [args...]
 #
-# WHAT IT IS (honest scope):
+# SCOPE:
 #   The agent that RUNS ON a node host. It OWNS that host's process lifecycle
 #   (PID records), its private key material (seeds under keys/), and its logs.
 #   The controller NEVER touches a remote node's PID files or secrets directly:

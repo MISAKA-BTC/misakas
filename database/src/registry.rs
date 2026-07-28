@@ -280,14 +280,12 @@ pub enum DatabaseStorePrefixes {
     // ---- kaspa-pq ADR-0039 PALW (audited-compute lane) ----
     /// Keyed by `BlockHash`: the `PalwActiveNullifierSet` — the retention-windowed set of ticket
     /// nullifiers active in that block's past (§15.2). Read by the GHOSTDAG duplicate-ticket dedup to
-    /// seed a child from its selected parent's past; deleted on prune. Gated by the PALW activation
-    /// fence: **inert (never written)** on every shipped preset (`activation_daa_score = u64::MAX`);
-    /// written only on a PALW-activated re-genesis network.
+    /// seed a child from its selected parent's past; deleted on prune. Written only while PALW is
+    /// active.
     PalwNullifiers = 236,
     /// ADR-0039 §18.1 PALW overlay stores — the on-chain audited-compute state a validator resolves an
     /// algo-4 ticket against (leaf descriptor / batch manifest / certificate / batch status /
-    /// provider bond). Keyed as noted below. All **inert (never written)** on every shipped preset
-    /// (`palw_activation_daa_score = u64::MAX`); populated only on a PALW-activated re-genesis network.
+    /// provider bond). Keyed as noted below and populated only while PALW is active.
     /// Keyed by `(batch_id, leaf_index)`: the `PalwPublicLeafV1` descriptor (§9.2).
     PalwLeaf = 237,
     /// Keyed by `batch_id`: the `PalwBatchManifestV1` (leaf/chunk counts, §9.3).
@@ -299,10 +297,10 @@ pub enum DatabaseStorePrefixes {
     /// Keyed by `TransactionOutpoint`: the `PalwProviderBondPayloadV1` (§9.6).
     PalwProviderBond = 241,
     /// Keyed by epoch (`U64Key`): the `PalwBeaconEpochAccumV1` — that epoch's committed + validly-revealed
-    /// `(bond, commitment)` sets (§11.2). Range-free (whole-set value). Inert on every shipped preset.
+    /// `(bond, commitment)` sets (§11.2). Range-free (whole-set value).
     PalwBeaconAccum = 242,
     /// Keyed by `BlockHash`: the block's carried `PalwBeaconStateV1` (the epoch's active `R_E` recurrence,
-    /// §11.2/§18.2). Block-keyed (past-relative, read via selected parent). Inert on every shipped preset.
+    /// §11.2/§18.2). Block-keyed and read relative to the selected parent.
     PalwBeaconState = 243,
     /// Keyed by `BlockHash`: the selected-parent-carried PALW beacon commit/reveal accumulator view.
     /// Unlike the legacy epoch-global accumulator at prefix 242, this value is fork-local: a child
@@ -314,19 +312,19 @@ pub enum DatabaseStorePrefixes {
     /// Keyed by `BlockHash`: the block's carried `PalwLaneBitsV1` (hash_bits, replica_bits) — the §16.3
     /// per-lane difficulty HOLD sources. Block-keyed/past-relative: a lane cannot read the selected
     /// parent's `header.bits` (that is the OTHER lane's difficulty at a mixed-lane boundary), so both
-    /// lanes' current bits are carried forward per block. Inert on every shipped preset.
+    /// lanes' current bits are carried forward per block.
     PalwLaneBits = 245,
     /// Keyed by `BlockHash`: the block's carried `PalwBatchViewV1` — the fork-local batch-lifecycle
     /// overlay (§18.2, C5 option B). `view(B) = view(SP(B)) ⊕ Δ(mergeset(B))`, PalwNullifierStore-shaped
     /// (block-keyed, seeded from the selected parent, past-relative). Replaces the tip-global batch
-    /// reads of `DbPalwStore` for the algo-4 ticket check. Inert on every shipped preset.
+    /// reads of `DbPalwStore` for the algo-4 ticket check.
     PalwOverlayView = 246,
 
     /// Singleton `(BlockHash, PalwPrunedFrontierV1)`: the PALW pruned-IBD frontier taken as-of the
     /// current pruning point (§18.2 / D3) — the pp's beacon state / overlay view / lane bits /
     /// active-nullifier window a pruned joiner seeds to validate the first post-pp v3 block. Its OWN
     /// singleton (not the `PruningPointOverlaySnapshot` wrapper) so appending it never disturbs that
-    /// wrapper's bincode read on an in-place upgrade. Empty / unwritten on every shipped preset.
+    /// wrapper's bincode read on an in-place upgrade.
     PalwPrunedFrontier = 247,
 
     /// Keyed by `BlockHash`: the `job_nullifier`s THIS chain block's coinbase actually paid a
@@ -339,8 +337,8 @@ pub enum DatabaseStorePrefixes {
     /// block, grew by attacker-declared leaf-chunk content, and was never read. This one is not cloned,
     /// is bounded by the mergeset size limit, and every entry costs an accepted algo-4 block.
     ///
-    /// Empty on every shipped preset: `palw_algo4_accept = false` everywhere, so no algo-4 source can
-    /// be accepted and no `ReplicaPalw` classification can ever arise.
+    /// Written on PALW networks when an accepted algo-4 source receives a `ReplicaPalw`
+    /// classification.
     PalwPaidWork = 248,
     /// Keyed by `BlockHash`: Header-v4 fork-local objective anti-spam accumulator. The fixed-size row
     /// contains two cumulative blue-lane counters plus one deterministic selected-parent skip link.

@@ -223,7 +223,7 @@ fn measurement_config() -> kaspa_consensus_core::config::Config {
     ConfigBuilder::new(params).build()
 }
 
-fn assert_shipped_presets_inert() {
+fn assert_shipped_preset_shape() {
     for (name, params) in [
         ("mainnet", MAINNET_PARAMS),
         ("testnet-10", TESTNET_PARAMS),
@@ -234,7 +234,7 @@ fn assert_shipped_presets_inert() {
     ] {
         assert!(params.palw_spam.is_inert(), "{name} unexpectedly activated Header-v4 anti-spam");
         assert!(params.genesis.version < PALW_ANTISPAM_HEADER_VERSION, "{name} unexpectedly moved to Header-v4");
-        assert!(!params.palw_algo4_accept, "{name} unexpectedly opened algo-4 acceptance");
+        assert_eq!(params.palw_algo4_accept, params.is_palw_active(0), "{name}: algo-4 acceptance differs from PALW activation");
     }
 }
 
@@ -551,7 +551,7 @@ async fn palw_header_spam_bounded() {
     let valid_headers = env_usize("PALW_G6_VALID_HEADERS", DEFAULT_VALID_HEADERS, false);
     let warmup_headers = env_usize("PALW_G6_WARMUP_HEADERS", DEFAULT_WARMUP_HEADERS, true);
     let stamp_max_nonce = env_u64("PALW_G6_STAMP_MAX_NONCE", DEFAULT_STAMP_MAX_NONCE);
-    assert_shipped_presets_inert();
+    assert_shipped_preset_shape();
 
     let config = measurement_config();
     let tc = TestConsensus::new(&config);
@@ -576,9 +576,9 @@ async fn palw_header_spam_bounded() {
         reachability_risk: ReachabilityRiskMetadata {
             public_value_activation: "Bounded by the ADR-0043 (A) allocation policy; threshold freeze awaits multi-machine flood/soak remeasurement and independent review",
             trigger: "after a parent's trailing u64 reachability interval is exhausted, the next direct child triggers reindex_intervals (now amortized: re-tiles keep a trailing reserve and flood-regime insertions take a harmonic share)",
-            root_cause: "HISTORICAL: propagate_interval consumed the full child-capacity leaving no trailing interval, so every post-exhaustion sibling reindexed; fixed by split_exponential_with_reserve + the SIBLING_FLOOD_ALLOC_THRESHOLD harmonic insertion policy (ADR-0043 Amendment)",
+            root_cause: "propagate_interval exhausted child capacity when no trailing interval was reserved; split_exponential_with_reserve and the SIBLING_FLOOD_ALLOC_THRESHOLD harmonic insertion policy prevent repeated sibling reindexing",
             asymptotic_write_bound: "amortized O(1) data-row writes per accepted header under a same-parent sibling flood (p99 constant; single geometric re-tile events bounded by the reindexed subtree)",
-            remediation_class: "landed: node-local allocation-policy change (no consensus semantics, no fork boundary); residual = multi-machine threshold freeze + independent review",
+            remediation_class: "node-local allocation policy; consensus semantics unchanged; multi-machine threshold calibration and independent review remain",
         },
         source: source_metadata(),
         machine: machine_metadata(),
@@ -593,7 +593,7 @@ async fn palw_header_spam_bounded() {
             base_stamp_bits: params.base_stamp_bits,
             max_stamp_bits: params.max_stamp_bits,
             shipped_presets_checked: ["mainnet", "testnet-10", "testnet-palw-110", "devnet-palw-111", "simnet", "devnet"],
-            shipped_presets_remain_pre_v4_inert_and_accept_closed: true,
+            shipped_presets_remain_pre_v4_inert_and_accept_closed: false,
             storage_fixture: "TestConsensus-created OS-temporary RocksDB database",
             production_equivalence: "production ConsensusApi ordinary header processor and RocksDB store code; not deployed ingress, service topology, or production-storage-equivalent",
             slowest_supported_storage_measured: false,

@@ -88,18 +88,12 @@ pub const PALW_RETIRED_AUDITOR_VOTE_V1_DOMAIN: &[u8] = b"misaka-palw-auditor-vot
 /// A one-way commitment (the 64-byte nullifier is not guessable), so a third party who reads the public
 /// leaf CANNOT compute `eligibility_hash` in advance and pre-list the epoch's interval winners.
 pub const PALW_TICKET_NULLIFIER_COMMIT_DOMAIN: &[u8] = b"misaka-palw-ticket-nf-commit-v1";
-/// `leaf_root = Hash64_k(leaf-root, count ‖ apex)` — the FINALIZE step of the leaf Merkle tree
-/// (ADR-0040 §5.15.4), i.e. the manifest's commitment to its ORDERED leaf set.
+/// `leaf_root = Hash64_k(leaf-root, count ‖ apex)`, the final commitment to the manifest's ordered
+/// leaf set (ADR-0040 §5.15.4).
 ///
-/// The construction changed but the domain did not: prefixing `count` preserves the two properties the
-/// flat form had (order-sensitive, count-sensitive) while keeping `leaf_root` values disjoint from every
-/// other PALW digest. The RETIRED flat form was
-/// `Hash64_k(leaf-root, count ‖ leaf_hash[0] ‖ … ‖ leaf_hash[n-1])`; it is gone, and so is the function
-/// that produced it — see `palw_leaf_merkle_root`.
-///
-/// C4 content-addressing: the leaf store is fork-safe (write-once by collision resistance) only because
-/// a batch's leaves must reduce to this root — a requirement that, before §5.15, NOTHING in consensus
-/// enforced. It is now enforced per leaf at the acceptance coordinate, before `insert_leaf`.
+/// Prefixing the count makes the commitment order- and count-sensitive while retaining domain
+/// separation from other PALW digests. Leaf membership is verified before insertion into the
+/// content-addressed store.
 pub const PALW_LEAF_ROOT_DOMAIN: &[u8] = b"misaka-palw-leaf-root-v1";
 /// kaspa-pq ADR-0040 §5.15 (ACCEPT-BIND/M2) — level-0 node of the leaf Merkle tree:
 /// `Hash64_k(leaf-merkle-leaf, leaf_index_le32 ‖ leaf_hash)`. Binding the index inside the node is what
@@ -285,30 +279,12 @@ pub fn palw_pcpb_derive_b(post_commit_beacon: &Hash64, a_commit: &Hash64) -> Has
     blake2b_512_keyed(PALW_PCPB_DOMAIN, &p)
 }
 
-/// D15 (ii) — the two valid **dispatch proofs** a mint-grade leaf may carry (external/parallel vs
-/// self/serial). See [`palw_dispatch_proof_valid`].
+/// Legacy D15 dispatch-proof representation. See [`palw_dispatch_proof_valid`].
 ///
-/// **ADR-0040 P1-10 — NOT CONNECTABLE IN THIS SHAPE. Do not wire this enum into a leaf or a header.**
-/// `BothSlotsBeacon`'s two `bool`s and `SelfAPlusPcpb::b_receipt_binds_a_commit` are *caller-asserted
-/// conclusions*, not evidence: they are the verdicts a verifier is supposed to REACH, passed in
-/// pre-decided. That is harmless while the only callers are unit tests that compute them honestly, but
-/// the moment any of these fields becomes attacker-supplied (a leaf field, a header field, an overlay-tx
-/// payload) [`palw_dispatch_proof_valid`] degenerates: the `BothSlotsBeacon` arm becomes the tautology
-/// `true && true`, and the `SelfAPlusPcpb` arm keeps only its one real check, the
-/// `b_claimed == palw_pcpb_derive_b(..)` comparison. A "just connect the helper" change would therefore
-/// ship a rule that reads as a dispatch gate and enforces nothing on the external arm.
-///
-/// Before wiring, the enum must be redesigned into *verifiable* evidence — the beacon-assignment arm
-/// carrying the per-slot assignment proof (provider-snapshot root + membership/weighted-draw witness) the
-/// verifier re-derives, and the self arm carrying B's signed receipt so the `A_commit` binding is checked
-/// rather than declared. That redesign is part of the atomic LeafV2 slice scoped in ADR-0040
-/// §5.14 (P1-10 follow-up); it cannot land as a prefix. Its three unit tests below change with it.
-///
-/// **Superseded (ADR-0040 §5.14.7.1, 2026-07-23).** The redesigned *verifiable-evidence* form is
-/// [`PalwDispatchEvidence`] + [`palw_dispatch_evidence_valid`], landed INERT below (zero production
-/// callers). It replaces every caller-asserted `bool` here with a value the verifier RE-DERIVES from the
-/// consensus-resolved beacon + provider snapshot, so neither arm can degenerate. This enum stays only
-/// until the atomic wiring slice (§5.14.4) removes it — do NOT wire this shape.
+/// The boolean fields are caller assertions rather than verifiable evidence, so this type is restricted
+/// to compatibility tests and must not be accepted from a leaf, header, or transaction payload.
+/// Production integrations use [`PalwDispatchEvidence`] with
+/// [`palw_dispatch_evidence_valid`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwDispatchProof {
     /// External / parallel: both provider slots were beacon-assigned.
@@ -1557,7 +1533,7 @@ impl PalwBatchManifestV1 {
 /// kaspa-pq ADR-0040 §5.15 (ACCEPT-BIND/M2) — a leaf's membership proof against
 /// `manifest.leaf_root`: the `d` sibling digests, bottom-up.
 ///
-/// **Siblings ONLY.** The direction bits are derived from the leaf's own `leaf_index`
+/// Sibling proof only. Direction bits are derived from the leaf's own `leaf_index`
 /// (see [`palw_verify_leaf_membership`]) and are deliberately NOT carried on the wire — a
 /// path-direction field would be attacker-chosen data that widens the set of accepted folds for a
 /// given leaf. Nothing here is free: index comes from the leaf, count comes from the manifest.
@@ -1625,7 +1601,7 @@ impl PalwAuditorVoteV2 {
     /// commitment) + the auditor's identity + which leaves it checked + the exact certificate-level
     /// pass/reject summary. The `signature` field itself is excluded (it covers this digest).
     ///
-    /// **Current boundary (ADR-0040 SAMPLE-01).** `verify_certificate_attestation` now independently
+    /// ADR-0040 SAMPLE-01 boundary. `verify_certificate_attestation` independently
     /// re-derives `audit_sample_root` from the beacon-selected leaves' on-chain DA commitments and
     /// verifies each selected auditor's ML-DSA-87 signature over that root. A producer therefore cannot
     /// substitute an arbitrary root while retaining valid votes.
@@ -1866,22 +1842,18 @@ pub struct PalwProviderBondPayloadV1 {
     pub unbond_delay_epochs: u64,
 }
 
-/// kaspa-pq **ADR-0040 (ECON-03, leg 5) — the authorized exit.** Subnetwork `0x37`
-/// (`SUBNETWORK_ID_PALW_PROVIDER_UNBOND`), previously fail-closed.
+/// Authorized provider-bond exit on subnetwork `0x37`
+/// (`SUBNETWORK_ID_PALW_PROVIDER_UNBOND`).
 ///
-/// # Why this is not optional
+/// # Lock release
 ///
 /// The value lock ([`validate_provider_bond_tx`]) plus the spend gate make a provider's output-0
-/// unspendable for the life of the bond. A lock with no release is **confiscation, not collateral** —
-/// so freezing this payload is part of the same slice that lands the lock, not a follow-up. Shipping
-/// the lock alone would strand every bonded provider's coins permanently.
+/// unspendable for the life of the bond. This request provides the corresponding release path.
 ///
-/// # Why it must be authorized
+/// # Authorization
 ///
-/// An unauthenticated unbond would let anyone grief an honest provider into `Unbonding` (and thus out
-/// of the active set). The signature under [`PALW_PROVIDER_UNBOND_MLDSA87_CONTEXT`] over a digest bound
-/// to both the network and the bond outpoint is what makes the lock a lock rather than a confiscation,
-/// and what stops the authorization being replayed onto another bond or another network.
+/// The signature under [`PALW_PROVIDER_UNBOND_MLDSA87_CONTEXT`] binds the network and bond outpoint,
+/// preventing third-party unbond requests and cross-bond or cross-network replay.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwProviderUnbondRequestV1 {
     pub version: u16,
@@ -2052,23 +2024,21 @@ pub fn is_provider_bond_releasable_at(record: &PalwProviderBondRecord, pov_daa_s
 /// `min_provider_bond_sompi` is the SEL-01 anti-split floor. Without a floor, splitting a bond is free,
 /// and a free split is a Sybil hole regardless of how selection later weights it.
 ///
-/// **THE FLOOR NOW BITES — and here is exactly how far.** This function has a production caller:
+/// Provider-bond floor enforcement. This function has a production caller:
 /// `stage_palw_provider_bond_mutations` (virtual_processor/processor.rs) drives it from each
 /// selected-chain block's accepted transactions to write the registry at prefix 241, and
 /// `palw_provider_bond_mutations_for_chain_block` re-derives it for the reorg revert. A sub-floor bond
 /// is DROPPED here, so it never enters the registry, never resolves `Active`, and therefore — via
 /// `palw_work_reward_class`'s ECON-03 collateral-resolution rule — can never back a paid leaf.
 ///
-/// **What it still does NOT do**, stated so the gap stays visible: a sub-floor `ProviderBond`
+/// Limitation: a sub-floor `ProviderBond`
 /// transaction remains VALID ON-CHAIN. The isolation validator (`validate_provider_bond_tx`) enforces
 /// the value lock and `amount_sompi != 0`, not the floor, because the floor is a network parameter and
 /// isolation validity must not depend on one. Such a transaction is simply economically inert: it locks
 /// the owner's own coins to the owner's own script and buys nothing.
 ///
-/// The floor is also only as real as its non-zero-ness, which is why
-/// `PalwBatchAdmissionParams::is_consistent_for_activation` rejects `0` and that predicate is asserted
-/// over every activated preset. ADR-0040 has repeatedly shipped bounds that only a comment kept —
-/// including a StopShip gate (G3) whose named verifier never existed.
+/// `PalwBatchAdmissionParams::is_consistent_for_activation` rejects a zero floor, and every activated
+/// preset asserts that invariant.
 ///
 /// `unbond_floor_epochs` clamps the operator-declared delay UP, for the same reason the DNS bond
 /// clamps `unbonding_period_blocks`.
@@ -2244,10 +2214,9 @@ impl ProviderBondView {
         }
     }
 
-    /// **The ECON-03 question, answered.** "What collateral does this provider have at this point of
-    /// view?" — resolved to a record whose `amount_sompi` consensus verified against locked coins,
-    /// not one a payload asserted. `None` if the outpoint is unknown or the bond is not `Active` at
-    /// that DAA score.
+    /// Resolves ECON-03 collateral at a point of view. The returned record's `amount_sompi` was
+    /// verified against locked coins rather than supplied by a payload. Returns `None` when the
+    /// outpoint is unknown or the bond is not `Active` at the requested DAA score.
     pub fn active_provider_bond_at(&self, outpoint: &TransactionOutpoint, pov_daa_score: u64) -> Option<&PalwProviderBondRecord> {
         let record = self.bonds.get(outpoint)?;
         is_provider_bond_active_at(record, pov_daa_score).then_some(record)
@@ -2340,36 +2309,21 @@ pub fn build_palw_authorization_transaction(auth: &PalwBlockAuthorizationV1) -> 
     )
 }
 
-/// kaspa-pq **ADR-0040 (AUTH-02) — the header a ticket authorization binds: TOTAL, not an allowlist.**
+/// Canonical AUTH-02 header commitment for a ticket authorization.
 ///
-/// # The attack this closes
+/// # Security property
 ///
-/// `eligibility_hash` binds no block content, and a winning header DISCLOSES its raw
-/// `ticket_nullifier` (I-13 secrecy ends at mint). So without this, any observer of a winning algo-4
-/// block could restamp the same winning draw onto unlimited competing blocks with different parents,
-/// transactions and payout — a consensus-level DoS surface aimed at *other people's* nodes on any
-/// shared network.
+/// `eligibility_hash` does not bind block content, and a winning header discloses its raw
+/// `ticket_nullifier`. The authorization therefore binds the complete canonical header preimage.
 ///
-/// # Why a signature and not "bind the miner script into the draw"
+/// # Signature requirement
 ///
-/// Binding the payout into `eligibility_hash` looks simpler but reintroduces grinding: a miner would
-/// try payout scripts until one draws a win, defeating the reason the nonce is pinned to
-/// `low64(nullifier)`. The bound value must be *fixed* for the legitimate holder and *unforgeable* by
-/// an observer at once — which is what an authority signature is, and nothing cheaper is.
+/// Binding payout data into `eligibility_hash` would permit grinding over payout scripts. An authority
+/// signature binds a fixed block preimage without adding a new draw coordinate.
 ///
-/// # What is committed, and why it is not a list
+/// # Committed data
 ///
-/// The previous shape of this function committed to NINE hand-picked scalars. That was the bug: algo-4
-/// headers are exempt from the Layer-0 hash floor (they cost no PoW), so every header field NOT on the
-/// list was a free variation axis, and any header field added later would have been silently free too.
-/// The audit enumerated the live axes — `utxo_commitment`, `accepted_id_merkle_root`, `pruning_point`,
-/// `overlay_commitment_root` and `palw_beacon_seed` (all of which are checked ONLY at the virtual/UTXO
-/// stage, so a block that never becomes a chain candidate is never checked on them at all),
-/// `palw_epoch_certificate_hash`, `bits`, the ordering of parents at levels >= 1, and the shape of the
-/// authorization transaction itself — each yielding a distinct, fully-valid twin block at zero cost.
-///
-/// So the binding is now TOTAL by construction: it is the block's own canonical header preimage, under
-/// a disjoint hasher domain, with exactly two necessary substitutions. See
+/// The binding covers the complete canonical header preimage rather than an allowlist of fields. See
 /// [`crate::hashing::header::palw_authorization_commitment`] for the substitutions and why they are the
 /// only two. A header field added in future is bound automatically, because it is already in the
 /// preimage the block hash is computed over.
@@ -2666,7 +2620,7 @@ impl PalwBeaconStateV1 {
     }
 
     /// Clause 6's `dns_finality_certificate_hash` derived on demand from the carried anchor facts.
-    /// **Fail-closed**: `None` while no DNS-confirmed anchor has entered the recurrence (the zero
+    /// Returns `None` while no DNS-confirmed anchor has entered the recurrence (the zero
     /// bootstrap anchor certifies nothing — `chain_commit` over a degenerate zero-cert would be
     /// reproducible by every private fork, voiding I-4 exactly when the chain is weakest). The C5
     /// atomic flip rejects algo-4 while this is `None`.
@@ -2797,7 +2751,7 @@ impl PalwEpochProofBundleV2 {
 /// no batch view to gate on, and the cross-ancestor nullifier dedup seeds empty (re-opening reuse of a
 /// still-active pre-pp ticket).
 ///
-/// **Commitment boundary (the load-bearing invariant):** this rides its own singleton store
+/// Commitment boundary: this rides its own singleton store
 /// (`DbPalwPrunedFrontierStore`, a fresh prefix), **not** the bincode-persisted
 /// `PruningPointOverlaySnapshot` wrapper. That preserves the legacy wrapper encoding and Header-v3's
 /// pinned commitment bytes. On a re-genesis Header-v4 network, this frontier is one component of
@@ -2914,12 +2868,10 @@ pub fn derive_beacon_epoch_state(
 /// epoch boundary this maps to
 /// [`BeaconEpochInputs`] and feeds [`derive_beacon_epoch_state`].
 ///
-/// **Fence status (corrected).** The PALW fence is `u64::MAX` — so this is never written — on mainnet /
-/// testnet-10 / simnet / devnet only. `testnet-palw-110` / `devnet-palw-111` ship
-/// `palw_activation_daa_score = 0` (`config/params.rs:1403`, `:1454`), where the beacon accumulator IS
-/// written per chain block. It holds the empty default there because `palw_algo4_accept = false`, but
-/// the row exists — so this type's encoding is part of the `LATEST_DB_VERSION` 7 → 8 format cutover.
-#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+/// Mainnet, testnet-10, simnet and devnet use the inactive `u64::MAX` fence. The three PALW presets use
+/// an activation score of 0 and write the beacon accumulator per chain block. This encoding is part of
+/// the database-versioned PALW state.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwBeaconEpochAccumV1 {
     pub version: u16,
     pub commits: Vec<(TransactionOutpoint, Hash64)>,
@@ -2957,6 +2909,12 @@ impl PalwBeaconEpochAccumV1 {
     /// Map to the pure derivation inputs (design §11.2).
     pub fn to_inputs(&self) -> BeaconEpochInputs {
         BeaconEpochInputs { commits: self.commits.clone(), valid_reveals: self.valid_reveals.clone() }
+    }
+}
+
+impl Default for PalwBeaconEpochAccumV1 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -3272,35 +3230,23 @@ fn validate_manifest(payload: &[u8]) -> Result<(), PalwTxError> {
     Ok(())
 }
 
-/// kaspa-pq **ADR-0040 P0-4 / gate G2** — is this script representable as a coinbase output?
+/// Returns whether a PALW reward script is representable as a coinbase output.
 ///
-/// ## Why a leaf-admission check exists at all (ECON-01, coinbase poison)
+/// ## Admission requirement
 ///
-/// A leaf's `provider_{a,b}_reward_script` is emitted VERBATIM as a coinbase output by
+/// A leaf's `provider_{a,b}_reward_script` is emitted as a coinbase output by
 /// `expected_coinbase_transaction` when a descendant merges the algo-4 source. But every coinbase output
 /// must independently satisfy two rules enforced on every block in isolation:
 ///
-///   * `check_transaction_pq_output_classes` — the class must be `is_pq_standard()`, i.e. **ML-DSA-87
-///     P2PKH and nothing else** (there are intentionally no coinbase exemptions);
+///   * `check_transaction_pq_output_classes` requires the ML-DSA-87 P2PKH class;
 ///   * `check_coinbase_in_isolation` — the script must be `<= coinbase_payload_script_public_key_max_len`
-///     (**150** on every preset).
+///     (150 bytes on every preset).
 ///
-/// Admission previously bounded the script only by `PALW_MAX_REWARD_SCRIPT_BYTES_V1` (1024) and said
-/// nothing about its class. So a leaf carrying a non-PQ script of any length, or any script in
-/// 151..=1024, was ACCEPTED on-chain while the coinbase derived from it was **unrepresentable**. The
-/// algo-4 source block itself stays body-valid and enters the DAG; thereafter no block that merges it can
-/// ever be valid, and the honest template builder keeps regenerating exactly that invalid coinbase. That
-/// is a permanent chain halt, not a rejected transaction — and it is reachable by anyone who can get a
-/// leaf chunk accepted.
-///
-/// ## Why exact-template rather than "PQ class AND <= 150"
+/// ## Exact template
 ///
 /// `is_pq_standard()` admits exactly one class, and that class has exactly one byte layout: the 69-byte
 /// template built by [`crate::dns_finality::p2pkh_mldsa87_spk`] (ADR-0019 §8). Matching the template
-/// exactly is therefore equivalent to the two rules above, but strictly harder to get wrong: it needs no
-/// script parser in this crate (consensus-core does not depend on `kaspa-txscript`), it cannot drift if
-/// the 150-byte limit is ever retuned, and 69 <= 150 holds with margin. Anything that is not this shape
-/// is not payable, so admitting it could only ever produce a stuck chain.
+/// exactly satisfies both rules without adding a script parser dependency to consensus-core.
 pub fn palw_reward_script_is_coinbase_representable(spk: &ScriptPublicKey) -> bool {
     // ADR-0019 §8 template opcodes, mirroring `p2pkh_mldsa87_spk`.
     const OP_DUP: u8 = 0x76;
@@ -3393,9 +3339,7 @@ fn validate_public_leaf(leaf: &PalwPublicLeafV1, batch_id: &Hash64) -> Result<()
         }
         _ => return Err(PalwTxError::InvalidField("leaf.receipt_da_object_version")),
     }
-    // kaspa-pq **ADR-0040 ECON-03 (THE WIRE)** — what this check is, and what it is deliberately NOT.
-    //
-    // It is a SHAPE rule: a leaf must not name the same bond for both halves of a replica pair, which
+    // ADR-0040 ECON-03 shape rule: a leaf must not name the same bond for both halves of a replica pair, which
     // would let one provider's collateral back both replicas and defeat the point of running k = 2.
     //
     // It is NOT the collateral check, and it never could be here. Whether an outpoint resolves to
@@ -3428,21 +3372,18 @@ fn validate_public_leaf(leaf: &PalwPublicLeafV1, batch_id: &Hash64) -> Result<()
     Ok(())
 }
 
-/// kaspa-pq ADR-0040 §5.15 — the CONTEXT-FREE leaf-chunk validator.
+/// Context-free ADR-0040 §5.15 leaf-chunk validator.
 ///
-/// # Why the proof-length check is split in two
+/// # Proof-length validation
 ///
-/// Here we can only assert the STATIC bound `proof.len() <= 8` (from `PALW_MAX_BATCH_LEAVES_V1 = 256`).
-/// The EXACT bound `proof.len() == palw_leaf_merkle_depth(manifest.leaf_count)` needs `leaf_count`,
-/// which is a MANIFEST field — and a context-free validator has no manifest. It therefore belongs at
+/// This stage enforces the static bound `proof.len() <= 8` from
+/// `PALW_MAX_BATCH_LEAVES_V1 = 256`. The exact bound
+/// `proof.len() == palw_leaf_merkle_depth(manifest.leaf_count)` needs the manifest and belongs at
 /// the acceptance gate, which has already loaded the manifest.
 ///
-/// The split is not an accident of layering, and the two halves buy different things:
-/// * the static bound here rejects a malformed chunk CHEAPLY, before it reaches state;
-/// * the exact bound at the gate makes the proof for a given `(leaf, index, root)` UNIQUE, closing the
+/// The static bound rejects malformed chunks before state access. The exact bound makes the proof for a
+/// given `(leaf, index, root)` unique, closing the
 ///   variable-length-path forgeries that a mere upper bound leaves open.
-///
-/// Neither substitutes for the other. Do not "consolidate" them.
 fn validate_leaf_chunk(payload: &[u8]) -> Result<(), PalwTxError> {
     let chunk: PalwLeafChunkV1 = decode_palw_payload(payload)?;
     // NOT `check_palw_version`: leaf chunks are v2 (they carry membership proofs), every other payload
@@ -3488,7 +3429,7 @@ fn validate_leaf_chunk(payload: &[u8]) -> Result<(), PalwTxError> {
 /// kaspa-pq **ADR-0040 §5.17.3 (§CERT-REDERIVE, bounded inclusion rule)** — the maximum distance, in
 /// PALW epochs, that a batch certificate may be included PAST its own `audit_beacon_epoch`.
 ///
-/// # Why this rule has to exist
+/// # Inclusion bound
 ///
 /// The audit-epoch beacon seed `R_{audit_beacon_epoch − 1}` is resolved by a buried selected-parent walk
 /// ([`resolve_palw_audit_epoch_seed`], `consensus/src/processes/palw.rs`). That walk is FAIL-OPEN by
@@ -3511,11 +3452,10 @@ fn validate_leaf_chunk(payload: &[u8]) -> Result<(), PalwTxError> {
 /// where the seed walk's fail-open may soundly become fail-closed. Saturating throughout so a params
 /// overflow cannot wrap `N` down to a tiny value that WOULD strand valid certificates.
 ///
-/// **WIRED (ADR-0040 §5.17 atomic slice).** `verify_certificate_attestation` requires a certificate to
+/// `verify_certificate_attestation` requires a certificate to
 /// be included within this window of its audit epoch; that is what turns the seed resolver's fail-open
 /// (a pruned / unreachable audit-epoch header) into a sound fail-CLOSED rejection — a timely certificate
-/// is never stranded, and anything past the window is already past expiry. Inert only via
-/// `palw_algo4_accept = false` on every shipped preset.
+/// is never stranded, and anything past the window is already past expiry.
 pub fn palw_audit_epoch_inclusion_window_epochs(admission: &PalwBatchAdmissionParams) -> u64 {
     admission
         .registration_lead_epochs
@@ -4432,10 +4372,8 @@ pub struct PalwBatchLifecycleV1 {
     /// the VIRTUAL coordinate (`verify_certificate_attestation` check 4), which is the only place the
     /// tally can be recomputed. Retained for borsh-encoding stability; treat as always `0`.
     pub cert_approving_stake: u128,
-    /// `d₀`: the DAA at which the FIRST certificate for this batch landed in this fork's view. No longer
-    /// opens a supersession window (removed — see [`Self::cert_approving_stake`]); kept as the
-    /// first-certification timestamp, still re-derived per view so a reorg recomputes rather than
-    /// inherits it. `None` until the first certificate.
+    /// `d₀`: the DAA of the first certificate in this fork's view. This is a timestamp rather than a
+    /// supersession window and is re-derived per view. `None` until the first certificate.
     pub first_cert_daa: Option<u64>,
     pub revoked_from_daa: Option<u64>,
 }
@@ -4487,36 +4425,17 @@ impl PalwBatchLifecycleV1 {
 /// ADR-0039 §18.2 — the fork-relative PALW batch-lifecycle view: a compact `batch_id → lifecycle` map
 /// carried per block (clone the selected parent's, apply this block's deltas, `retain` the still-
 /// referenceable set). This is the past-relative overlay `check_palw_ticket` must resolve against
-/// instead of the global virtual-tip store. **The BUILDER (which stage writes it, and whether deltas
-/// key on mergeset vs acceptance) is deliberately NOT here** — the C4 panel proved that choice is a C5
-/// prerequisite (a body-stage read of a virtual-commit row is a consensus split; moving the check to
-/// virtual loses the work-credit closure). This type + the pure retain/resolve are stage-independent.
+/// instead of the global virtual-tip store. The type and its retain/resolve operations are independent
+/// of the pipeline stage that constructs it.
 ///
-/// # kaspa-pq ADR-0040 P1-5 / P1-9 — why there is NO job-nullifier set here, and must never be
+/// # Job-nullifier state
 ///
-/// This struct carried a second map, `job_nullifiers: BTreeMap<Hash64, u64>`, a first-claim-wins
-/// registry meant to stop one LLM computation being monetised through several batches. It is REMOVED,
-/// and the removal is a spec change, not a cleanup — see ADR-0040 "P1-9 WITHDRAWN FROM THE BODY
-/// COORDINATE".
-///
-/// The rule cannot live at this coordinate, for the same reason the CERT-TRUST note gives for
-/// certificates: **a coordinate that cannot verify a value must not rank by it.** The body/mergeset
+/// This view intentionally has no first-claim-wins `job_nullifiers` registry. The body/mergeset
 /// fold has no `ActiveBondView`, cannot resolve a bond outpoint to a signing key, and performs no
-/// ML-DSA verification; `PalwLeafChunkV1` carries no Merkle path and `batch_id` is public. So the
-/// `job_nullifier` a leaf declares is an ATTACKER-DECLARABLE 64-byte value with no ownership binding
-/// whatsoever, and first-claim-wins over such a value is two defects at once: unbounded, unpriced
-/// state growth in a struct cloned and re-persisted every block (DOS-02), and — the moment the
-/// rejection is actually armed — a one-transaction permanent brick on an honest provider's batch (a
-/// refused chunk never sets its bitmap bit, the popcount never reaches `chunk_count`, and
-/// `advance_epoch_gated` takes the `Registering if epoch > deadline ⇒ Expired` arm).
-///
-/// Therefore: this view MUST NOT operate a first-claim-wins registry keyed on any value it cannot
-/// authenticate, **at any size** — a cap would bound the bytes and leave the censorship lever. The
-/// duplicate-work capability is not abandoned; it is re-registered as an Activation-class gate that
-/// must land at the REWARD/virtual coordinate, authorised by the provider's ML-DSA signature over
-/// [`ReplicaExecutionReceiptV1::signing_hash`] (which already commits to `job_nullifier`). Do not
-/// re-add it here believing the rule was merely mislaid.
-#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+/// ML-DSA verification. A first-claim-wins registry at this coordinate would accept unauthenticated
+/// identifiers and add cloned, payload-driven state. Duplicate-work accounting is instead performed at
+/// the reward/virtual coordinate.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwBatchViewV1 {
     pub version: u16,
     pub batches: BTreeMap<Hash64, PalwBatchLifecycleV1>,
@@ -4633,19 +4552,9 @@ impl PalwBatchViewV1 {
     /// re-sent chunk is a no-op, so duplicates cannot spoof completeness). When the bitmap's popcount
     /// reaches `chunk_count`, advances Registering → Committed.
     ///
-    /// **CORRECTED — kaspa-pq ADR-0040 §5.15.11.** This doc used to say "the caller verifies the chunk's
-    /// leaves against the batch's `leaf_root` at the §9.3 completeness gate (blob-store layer)". **No
-    /// such gate existed** — the flat `palw_leaf_root` had ZERO consensus callers (§5.15.2), so the
-    /// binding was documented and never enforced, which is what made CHUNK-INDEX SQUAT possible.
-    ///
-    /// The gate that now really exists is at the ACCEPTANCE coordinate, per LEAF, and is NOT this
-    /// coordinate's caller: `apply_palw_overlay_effect`'s LeafChunk arm verifies each leaf's Merkle
-    /// membership proof against `manifest.leaf_root` before `insert_leaf`. This fold is unchanged by
-    /// that work (§5.15.4 keeps the body coordinate byte-for-byte identical) and still looks at nothing
-    /// but `(batch_id, chunk_index)`.
-    ///
-    /// Consequently the bitmap is a completeness HINT, not a binding: it remains forgeable by a junk
-    /// chunk at the body coordinate (§5.15.8), but after M2 it drives no store, no reward and no ticket.
+    /// Merkle membership is enforced separately by `apply_palw_overlay_effect` before leaf insertion.
+    /// This method only tracks `(batch_id, chunk_index)`, so its bitmap is a completeness hint rather
+    /// than a content binding.
     pub fn apply_leaf_chunk(&mut self, batch_id: &Hash64, chunk_index: u16) -> bool {
         let Some(e) = self.batches.get_mut(batch_id) else { return false };
         if e.status != PalwBatchStatus::Registering || chunk_index >= e.chunk_count {
@@ -4699,12 +4608,12 @@ impl PalwBatchViewV1 {
     /// and that store is written only behind `verify_certificate_attestation` at the virtual
     /// coordinate.
     ///
-    /// # SPEC CHANGE: §12′ CERT-UNIQ supersession is REMOVED from this coordinate
+    /// # Certificate supersession
     ///
-    /// "A better-supported certificate replaces a weaker one" is no longer true here, and
-    /// `supersession_window_daa` / `cert_approving_stake` / `cert_activation_epoch` /
-    /// `cert_expiry_epoch` are inert. Its anti-censorship goal is not lost: certificates are
-    /// content-addressed and COEXIST in `palw_store`, so a miner references whichever attested
+    /// This coordinate does not replace an existing certificate.
+    /// `supersession_window_daa`, `cert_approving_stake`, `cert_activation_epoch` and
+    /// `cert_expiry_epoch` are inert. Certificates are content-addressed and coexist in `palw_store`,
+    /// so a miner references whichever attested
     /// certificate it prefers via `palw_epoch_certificate_hash`, and including a minority assembly does
     /// not suppress a fuller one. If a stake-ordered canonical winner is wanted, it belongs at the
     /// VIRTUAL coordinate, where the bond view exists and the tally is actually recomputed.
@@ -4815,6 +4724,12 @@ impl PalwBatchViewV1 {
                 _ => {}
             }
         }
+    }
+}
+
+impl Default for PalwBatchViewV1 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -5029,11 +4944,8 @@ pub fn auditor_set_commitment(bonds: &[TransactionOutpoint]) -> Hash64 {
 // candidate multiset and every draw are a deterministic function of the block's past alone; nothing
 // here reads a tip-relative store, a mutable status flag, or the epoch-keyed accum.
 //
-// SCOPE (this phase): the selection PRIMITIVES land here, pure and TESTED, with NO consensus caller —
-// exactly as the seed resolver and the `palw_audit_committee_size` param landed ahead of use. Wiring
-// them into `verify_certificate_attestation` (AUTHSET-01 commitment re-derivation) and rebuilding the
-// off-protocol producer against them is the ATOMIC activation slice (§5.17.7), still gated behind
-// `palw_algo4_accept = false`.
+// The selection primitives are pure and are used by `verify_certificate_attestation` to re-derive the
+// AUTHSET-01 commitment.
 // =============================================================================================
 
 /// One credential's aggregated, consensus-verified stake for SEL-01 selection.
@@ -5330,22 +5242,10 @@ pub const PALW_INCLUSION_BPS: u16 = 800;
 /// subsidy is the source of the extra 15 % routed to providers via [`PALW_PROVIDER_BASE_BPS`].
 pub const PALW_VALIDATOR_BPS: u16 = 1500;
 
-// kaspa-pq ADR-0040 **ECON-04 — `provider_pair_split` REMOVED (resolved by deletion).**
-//
-// It computed the provider pair's share as `pool = subsidy · base_bps / 10000` and then halved it.
-// Production never called it: `CoinbaseManager::expected_coinbase_transaction` derives the base as the
-// REMAINDER left by `split_block_subsidy` after the inclusion / validator / service carves
-// (`dns_finality.rs`, each of which floors independently), and then splits it with
-// `palw_premium::premium_split` rather than by halving. The two disagree by up to 2 sompi on the base,
-// because a remainder is ≥ a truncating multiply by the complementary bps.
-//
-// It is deleted rather than "unified with production" on purpose. A helper with zero production callers
-// that re-implements a consensus split cannot be kept correct by construction — it can only drift again
-// and mislead the next reader, which is exactly what it did here (its test was named
-// `coinbase_provider_split_is_...`, implying it pinned the coinbase rule, while pinning arithmetic
-// consensus does not use). The capability now has exactly one home: `split_block_subsidy(subsidy,
-// &fee_split.palw_lane()).worker_base_sompi` → `premium_split(base, replica_count, π)`, pinned by
-// `coinbase_provider_split_matches_production_composition` below.
+// Provider-pair rewards are derived through the production composition:
+// `split_block_subsidy(...).worker_base_sompi` followed by
+// `premium_split(base, replica_count, π)`. Keeping this as the only implementation avoids arithmetic
+// drift between helpers and coinbase construction.
 
 /// ADR-0039 §15.3 / I-5 — the deterministic PALW **duplicate-ticket** rule (the nullifier dedup that
 /// makes double-use detectable from the header DAG alone). Given the child's mergeset in **consensus
@@ -6040,7 +5940,7 @@ pub fn lane_retarget_decision(
 
 // §18.1 — unit-estimable `MemSizeEstimator` for the PALW overlay-store value types (the store uses a
 // `Count` cache policy, no byte estimation), so `DbPalwStore` can cache them like the other per-key
-// stores. Inert: never written on a shipped preset.
+// stores.
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwPublicLeafV1 {}
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwBatchManifestV1 {}
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwBatchCertificateV2 {}
@@ -6064,6 +5964,17 @@ mod tests {
 
     fn h(b: u8) -> Hash64 {
         Hash64::from_bytes([b; 64])
+    }
+
+    #[test]
+    fn versioned_palw_defaults_are_canonical_v1() {
+        let overlay = PalwBatchViewV1::default();
+        assert_eq!(overlay, PalwBatchViewV1::new());
+        assert_eq!(overlay.version, 1);
+
+        let beacon = PalwBeaconEpochAccumV1::default();
+        assert_eq!(beacon, PalwBeaconEpochAccumV1::new());
+        assert_eq!(beacon.version, 1);
     }
 
     #[test]
@@ -6270,7 +6181,7 @@ mod tests {
         assert_eq!(resolve_compute_set(&recs, &lapsed.set_id, 200), PalwSetResolution::NotGoverning);
         assert_eq!(resolve_compute_set(&recs, &lapsed.set_id, 150).compute_work_scale(), lapsed.effective_compute_work_scale());
 
-        // (4) **Unregistered ⇒ zero, NOT a default.** This is the fix.
+        // (4) An unregistered set resolves to zero without applying a default scale.
         assert_eq!(resolve_compute_set(&recs, &h(0xde), 150), PalwSetResolution::Unregistered);
         assert_eq!(resolve_compute_set(&recs, &h(0xde), 150).compute_work_scale(), 0);
         assert_eq!(resolve_compute_set(&[], &live.set_id, 150), PalwSetResolution::Unregistered);
@@ -6606,7 +6517,7 @@ mod tests {
     /// `palw_provider_unbond_authorized` (consensus/src/processes/palw.rs), which needs a point of
     /// view this crate does not have.
     ///
-    /// **The contract this test exists to state**: an accepted `0x37` DOES mutate the registry now
+    /// Contract: an accepted `0x37` mutates the registry
     /// (`stage_palw_provider_bond_mutations` stamps `unbond_request_daa_score`), so this stateless arm
     /// must never be mistaken for the thing that authorizes it. The authorizer runs at the virtual
     /// coordinate, in `verify_expected_utxo_state`; if this test's signature — 0x42 repeated, which no
@@ -8265,16 +8176,10 @@ mod tests {
         assert!(view.entry(&m.batch_id).is_none());
     }
 
-    /// kaspa-pq **ADR-0040 P1-5 — the CONSENSUS-NEUTRALITY test for the P1-9 removal.**
+    /// Verifies that leaf content does not affect the block-keyed batch view.
     ///
-    /// The load-bearing claim of the removal is that deleting `job_nullifiers` changes nothing that
-    /// decides validity. It rests on a fact about the OLD code: the claim's bool fed a `continue` that
-    /// ended the loop body, and `apply_leaf_chunk` ran unconditionally afterwards — so `batches` was
-    /// already a function of `(batch_id, chunk_index)` alone, never of leaf content. This test pins
-    /// exactly that: two mergesets identical except for their leaves' `job_nullifier` values (one with
-    /// all-distinct, one with a repeated value and a value foreign to the batch) must fold to
-    /// BYTE-IDENTICAL views, and to the explicitly stated Registering → Committed outcome the old code
-    /// produced. If a future slice re-reads leaf content in this fold, this test fails.
+    /// Two mergesets that differ only in leaf `job_nullifier` values must fold to identical views and
+    /// the same Registering → Committed transition.
     #[test]
     fn leaf_chunk_fold_is_independent_of_leaf_content() {
         let mut m = PalwBatchManifestV1 {
@@ -8327,12 +8232,11 @@ mod tests {
         };
 
         let distinct = fold(&[chunk(0, &[1, 2, 3]), chunk(1, &[4, 5, 6])]);
-        // The adversarial shape the old claim loop was supposed to react to: a repeated nullifier
-        // within and across chunks, plus one already "claimed" under a foreign batch.
+        // Repeated nullifiers within and across chunks, plus one present under a foreign batch.
         let duplicated = fold(&[chunk(0, &[7, 7, 7]), chunk(1, &[7, 1, 7])]);
         assert_eq!(borsh::to_vec(&distinct).unwrap(), borsh::to_vec(&duplicated).unwrap(), "leaf content must not move the view");
 
-        // ...and the outcome is the one the pre-removal code produced: both chunks applied, promoted.
+        // Leaf content does not affect chunk application or promotion.
         let e = distinct.entry(&m.batch_id).unwrap();
         assert_eq!(e.status, PalwBatchStatus::Committed, "popcount == chunk_count ⇒ Registering → Committed");
         assert_eq!(e.chunks_present, [0b11, 0, 0, 0]);
@@ -8499,20 +8403,10 @@ mod tests {
         assert_eq!(view.entry(&manifest.batch_id).unwrap().cert_hash, Some(h(0x10)));
     }
 
-    /// kaspa-pq **ADR-0040 CERT-TRUST — an INFLATED `approving_stake` cannot displace an honest
-    /// certificate, and cannot brick the batch it targets.**
+    /// An unverified `approving_stake` value cannot replace a certified batch's certificate.
     ///
-    /// SPEC CHANGE (deliberate, not a weakened test): this test previously asserted §12′ supersession —
-    /// "a certificate carrying strictly greater approving stake replaces a weaker one, before
-    /// activation". That rule ran at the BODY/mergeset coordinate, which has no `ActiveBondView` and
-    /// therefore cannot verify `approving_stake` at all; the fold does not even require the carrying
-    /// transaction to have been ACCEPTED. So the comparator was a free win for anyone willing to declare
-    /// `u128::MAX`, and winning it also installed an attacker-chosen `[cert_activation, cert_expiry)`
-    /// window that `is_block_eligible_at` enforced — one broadcast transaction, no stake and no
-    /// signature, permanently destroyed an honest provider's batch.
-    ///
-    /// Supersession is therefore REMOVED from this coordinate and the assertions are inverted: the fold
-    /// is write-once and non-destructive. The property under test is now the one that actually holds.
+    /// The body/mergeset coordinate has no `ActiveBondView` and cannot verify the declared stake.
+    /// Certificate application is therefore write-once and non-destructive at this stage.
     #[test]
     fn inflated_approving_stake_cannot_displace_or_brick_a_certified_batch() {
         let m = {
@@ -8577,12 +8471,8 @@ mod tests {
 
     /// kaspa-pq **ADR-0040 — `d₀` (first certification DAA) is RE-DERIVED per fork, never inherited.**
     ///
-    /// SPEC CHANGE: `d₀` no longer opens a supersession window (removed — see
-    /// `inflated_approving_stake_cannot_displace_or_brick_a_certified_batch`), so the `certificate_frozen_at`
-    /// assertions this test carried are gone with the function. The remaining property is still worth
-    /// stating and is unchanged in kind: the view is a pure function of this fork's accepted effects, so a
-    /// losing branch's `d₀` can never leak into the winner — rebuilding from a branch's effects reproduces
-    /// exactly that branch's value.
+    /// The view is a pure function of a fork's accepted effects. Rebuilding either branch reproduces
+    /// that branch's `first_cert_daa` without inheriting values from the other branch.
     #[test]
     fn first_cert_daa_is_rederived_per_fork_not_inherited() {
         let m = {
@@ -8614,7 +8504,7 @@ mod tests {
             v
         };
 
-        // Two branches accept the SAME certificate at different DAA scores.
+        // Two branches accept the same certificate at different DAA scores.
         let early = build(5_000);
         let late = build(5_900);
         assert_eq!(early.entry(&m.batch_id).unwrap().first_cert_daa, Some(5_000));
@@ -8641,8 +8531,7 @@ mod tests {
     /// The audit reported the interval as "self-reported by the header rather than derived by
     /// consensus". Clause 5 pins it to the block's own `daa_score`, which consensus derives from the
     /// block's past post-GHOSTDAG — so the only interval a miner can successfully declare is the one it
-    /// does not choose. This test states that directly, so the record is corrected in code rather than
-    /// only in prose, and so a future refactor of clause 5 has to confront the property it provides.
+    /// does not choose. This test pins that derivation against future changes to clause 5.
     #[test]
     fn target_interval_is_pinned_to_daa_score_not_miner_chosen() {
         let binding = PalwTicketBinding {
@@ -8747,16 +8636,7 @@ mod tests {
         assert_eq!(full - half, half - build(0), "view size must scale strictly with batches.len()");
     }
 
-    /// kaspa-pq **ADR-0040 S3 — vote censorship, restated honestly after CERT-TRUST.**
-    ///
-    /// SPEC CHANGE (deliberate). This test used to assert that a fuller certificate SUPERSEDES a
-    /// vote-censored one in the fork-relative view, with `Δ_super` guaranteeing an interval in which that
-    /// could happen. That mechanism is removed: it ranked certificates by `cert.approving_stake` at the
-    /// body/mergeset coordinate, which cannot verify that number, so the "remedy" was in practice a
-    /// stronger weapon for the censor than for the victim (`u128::MAX` wins, forever, for the price of one
-    /// transaction).
-    ///
-    /// The anti-censorship property is not lost — it moves to where it was always sound. Certificates are
+    /// ADR-0040 S3 vote-censorship behavior. Certificates are
     /// CONTENT-ADDRESSED and COEXIST in `palw_store`; publishing a minority assembly does not suppress a
     /// fuller one, and a miner names whichever attested certificate it wants via
     /// `palw_epoch_certificate_hash`. What the view must guarantee is the negative: a hostile certificate
@@ -9254,7 +9134,7 @@ mod tests {
     // kaspa-pq ADR-0040 §5.15 (ACCEPT-BIND/M2) — leaf Merkle construction.
     // =========================================================================================
 
-    /// **The construction golden.** `leaf_root` is a CONSENSUS value: it sits inside
+    /// Construction vector. `leaf_root` is a consensus value inside
     /// `content_id()`, hence inside every `batch_id`. ADR-0040 §5.15.10 warns that the persisted-layout
     /// pin uses a LITERAL `h(0x43)` for `leaf_root` and therefore cannot detect a change of shape at
     /// all — a green pin is not evidence. This test is the evidence.
@@ -9317,7 +9197,7 @@ mod tests {
         assert_eq!(palw_leaf_merkle_depth(PALW_MAX_BATCH_LEAVES_V1 as u32 - 1), PALW_MAX_LEAF_MEMBERSHIP_PROOF_LEN as u32);
     }
 
-    /// **THE CROSS-CRATE GOLDEN — consensus side (ADR-0040 §5.15.9 step (iv), §5.15.12).**
+    /// Consensus-side cross-crate vector (ADR-0040 §5.15.9 step (iv), §5.15.12).
     ///
     /// The mirror of `manifest_leaf_root_is_pinned_to_the_consensus_cross_crate_golden_vector` in
     /// `mil/miner/src/registration.rs`. Both tests pin the SAME two literals: a three-element leaf-hash
@@ -9785,7 +9665,7 @@ mod tests {
         ProviderBondView::from_records(recs.iter().map(|r| (r.bond_outpoint, r.clone())))
     }
 
-    /// **The SEL-01 attack, in arithmetic.** Splitting one credential's bond of `N` into `k` outpoints
+    /// SEL-01 split-bond case. Splitting one credential's bond of `N` into `k` outpoints
     /// of `N/k` must NOT increase its selections. Because [`aggregate_provider_credentials_at`] collapses
     /// a credential's outpoints into one weight BEFORE the draw, the split world produces the identical
     /// candidate set — hence a byte-identical committee for every seed, and an identical count of how
@@ -10043,7 +9923,7 @@ mod tests {
         (0..4u8).map(|i| Hash64::from_bytes([0xD0 + i; 64])).collect()
     }
 
-    /// **The cross-crate golden (verifier side).** Pins the consensus re-derivation of
+    /// Verifier-side cross-crate vector. Pins the consensus re-derivation of
     /// `auditor_set_commitment` and `audit_sample_root` for the shared fixture. The identical literals are
     /// asserted from the PRODUCER in `misaka-palw-miner`, so producer/verifier drift breaks the build.
     #[test]
@@ -10708,8 +10588,8 @@ mod tests {
     /// carried). The Measurement/Unimplemented names are the intended future verifier names; the
     /// meta-test asserts they do NOT yet exist, so landing one for such a gate forces a status bump to VerifierExists.
     const PALW_GATE_VERIFIERS: &[(&str, GateVerifierStatus, &[&str])] = &[
-        // G1 — StopShip: `palw_algo4_accept` is default-false on both PALW presets and algo-4 headers
-        // are rejected while it is false.
+        // G1: released PALW presets track activation; an explicitly closed copy still rejects
+        // algo-4 headers before GHOSTDAG.
         (
             "G1",
             GateVerifierStatus::VerifierExists,
@@ -10752,8 +10632,7 @@ mod tests {
         // named verifier resolves. This is verifier provenance only: thresholds, representative
         // hardware, concurrent flood/soak and signoff remain a Measurement gate.
         ("G6", GateVerifierStatus::VerifierExists, &["palw_header_spam_bounded"]),
-        // G7 — the per-finding regression coverage table. Mechanism landed: `palw_prod_findings_all_covered`
-        // maps every §2 PROD finding to its real regression test(s) and reconciles the set against §2.
+        // G7 — regression coverage table.
         ("G7", GateVerifierStatus::VerifierExists, &["palw_prod_findings_all_covered"]),
         // G8 — INT: two-party independent canonical-artifact reproduction. Cross-machine measurement.
         ("G8", GateVerifierStatus::Measurement, &["palw_artifact_reproducible"]),
@@ -10765,12 +10644,8 @@ mod tests {
         ("G11", GateVerifierStatus::Measurement, &["palw_soak_72h"]),
         // G12 — PCPB / escrow / reroll / timeout / global-nullifier multi-node E2E. Not built.
         ("G12", GateVerifierStatus::Unimplemented, &["palw_pcpb_e2e"]),
-        // G13 — real auditor-quorum E2E. VerifierExists (2026-07-20): the code-verifiable CORE landed — a
-        // certificate built by the REAL miner quorum producer (`misaka_palw_miner::audit`) is driven through
-        // the REAL `verify_certificate_attestation` (honest accept + forged-sig / outside-slate / wrong-set /
-        // wrong-sample / stake-short / bond-split rejects, each on its own error variant). The multi-node
-        // WITHHOLD / REORG paths stay integration-bound (not expressible in one process); like G16's
-        // bounded-window caveat, the verifier existing is the G3-recurrence guard, NOT operational closure.
+        // G13 — auditor-quorum producer/verifier integration. Multi-node withholding and reorg paths
+        // remain integration-test concerns.
         (
             "G13",
             GateVerifierStatus::VerifierExists,
@@ -10784,9 +10659,7 @@ mod tests {
         // G14 — WeightRaise: β auto-degradation runs live and observed concentration stays below β_max.
         // Live measurement + signoff.
         ("G14", GateVerifierStatus::Measurement, &["palw_beta_degradation_live"]),
-        // G15 — enforcement-point sweep (§2.6). Mechanism landed: `palw_enforcement_points_total` pins the
-        // enforced points and the current gap set (1: PMC-01, off-chain). The gate is not
-        // OPERATIONALLY closed while gaps > 0; the verifier existing is the G3-recurrence guard, not closure.
+        // G15 — enforcement-point sweep (§2.6), including the current off-chain PMC-01 gap.
         ("G15", GateVerifierStatus::VerifierExists, &["palw_enforcement_points_total"]),
         // G16 — job-nullifier duplicate-work rejection at the reward/virtual coordinate, and no
         // first-claim-wins registry at the body/mergeset coordinate.
@@ -10864,17 +10737,13 @@ mod tests {
         }
     }
 
-    /// ADR-0040 §7.2 / the G3 accident — the gate table's named verifiers must all resolve honestly.
+    /// Verifies the PALW gate registry against workspace functions.
     ///
-    /// (a) Every VerifierExists verifier resolves to a real `fn <name>` somewhere in the workspace, so a
-    ///     future phantom (a verifier named but never written) breaks the build loudly — exactly what
-    ///     G3 needed. (b) Every Measurement/Unimplemented verifier is NOT found as a `fn`, so the
-    ///     registry can never silently claim a code test for a gate that is really hardware/soak-bound;
-    ///     if someone lands a real test for one, this mismatch fails and forces a status bump. (c) The
-    ///     registry has exactly 16 gates (G1..G16) with no duplicate ids.
+    /// `VerifierExists` rows must resolve to a function, measurement-only rows must not claim one, and
+    /// the registry must contain the 16 unique gate ids G1 through G16.
     #[test]
     fn palw_gate_table_verifiers_all_resolve() {
-        // (c) structural: exactly 16 gates, no duplicate ids.
+        // Structural check: exactly 16 gates with no duplicate ids.
         assert_eq!(PALW_GATE_VERIFIERS.len(), 16, "the PALW gate table has exactly 16 gates (G1..G16)");
         let mut ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for (gate, ..) in PALW_GATE_VERIFIERS {

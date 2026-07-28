@@ -111,19 +111,17 @@ fn palw_demo_leaf(ticket_commit: Hash64) -> PalwPublicLeafV1 {
     }
 }
 
-/// kaspa-pq ADR-0040 §5.15.9 step (iii) — the `leaf_root` for a SEEDED SINGLE-LEAF batch.
+/// Computes the `leaf_root` for a seeded single-leaf batch.
 ///
 /// The shared derivation for the two seeding producers this tree has: the reference mint in this module
 /// (`--palw-mine`) and the algo-4 E2E harness in `consensus/src/pipeline/virtual_processor/tests.rs`.
-/// Both used to write `leaf_root: Hash64::default()` — a literal that models nothing and, crucially,
-/// cannot move when the construction moves. Both now call THIS, so there is exactly one place where the
-/// seeded root is decided and exactly one place to keep honest.
+/// Both producers use this function so their root construction remains identical.
 ///
 /// The projection zeroes `batch_id` before hashing, matching `manifest_leaf_root` in the miner: the
-/// manifest commits to a batch's leaves BEFORE the batch has an id, since `leaf_root` is itself an input
-/// to `content_id()`. Note this is deliberately NOT the same hash of the same leaf that
+/// manifest commits to a batch's leaves before the batch has an id, since `leaf_root` is itself an input
+/// to `content_id()`. This is deliberately not the same hash of the same leaf that
 /// `resolve_palw_binding` uses for the eligibility draw (that one keeps `batch_id` populated). Two
-/// hashes of one leaf, both intentional — see ADR-0040 §5.15.12 (FIXED-POINT); do not "de-duplicate".
+/// hashes of one leaf serve distinct commitments; see ADR-0040 §5.15.12.
 ///
 /// # Panics
 /// If `leaf.leaf_index != 0`. A single-leaf batch has exactly one valid index, and the Merkle leaf node
@@ -369,7 +367,7 @@ mod tests {
     use super::*;
     use kaspa_consensus_core::palw::{palw_leaf_merkle_depth, palw_leaf_merkle_proof, palw_verify_leaf_membership};
 
-    /// **THE REFERENCE MINT'S HALF OF THE ADR-0040 §5.15 GOLDEN LAYER (§5.15.9 step (iv)).**
+    /// Reference-mint ADR-0040 §5.15 vector (§5.15.9 step (iv)).
     ///
     /// The claim under test is the one the mint makes implicitly and nothing else checks: *the leaf this
     /// path seeds reduces to the `leaf_root` it registers.* Before this slice the answer was no — the

@@ -7,7 +7,7 @@
 #   usage:  ./partition-rejoin.sh            (default 60 s partition window)
 #           PARTITION_SECS=300 ./partition-rejoin.sh
 #
-# WHAT THIS DOES (honest scope):
+# SCOPE:
 #   1. Requires A + B running, mutually synced (same sink), miner advancing.
 #   2. "Partitions" B by stopping its process for PARTITION_SECS while A keeps
 #      producing (records the sink gap that opens).
@@ -16,7 +16,7 @@
 #      convergence, with the chain having genuinely advanced past the
 #      pre-partition sink.
 #
-# WHAT THIS DOES NOT PROVE (deliberately stated): a single-host, single-miner
+# LIMITATION: a single-host, single-miner
 # topology cannot produce a SPLIT-BRAIN — the isolated side has no block
 # production, so this exercises dark-window rejoin/convergence, NOT competing
 # forks. The dual-production partition (miners on both sides, heavier-chain

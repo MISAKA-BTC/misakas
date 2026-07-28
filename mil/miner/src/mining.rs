@@ -553,7 +553,7 @@ mod tests {
         assert!(select_eligible_ticket(&c, &stranger, [&owned]).is_none(), "AUTH-03: an unsignable ticket is never drawn");
     }
 
-    /// **The C-1 hazard itself, pinned so it cannot be reintroduced.** Grinding against a leaf that is
+    /// C-1 regression test. Grinding against a leaf that is
     /// already on chain produces a "winner" whose nullifier the registered leaf does NOT commit to.
     /// Clause 1 rejects every block built from it. The grind is a registration-time chooser, and this is
     /// the test that says so in executable form.

@@ -77,10 +77,7 @@ fn parse_anchors(s: &str) -> Vec<Ipv4Addr> {
 /// the mechanism that hands a network to third parties, so serving one of these would convert a closed
 /// experiment into a shared one — the exact boundary ADR-0040 draws.
 ///
-/// **This is a refusal, not an omission.** "Don't list it" is the absence of a configuration and
-/// therefore survives nothing: a later operator adds `--network-id testnet-110` and the seeder happily
-/// advertises it. A rule with an enforcement point is the ADR's own standard (§2.6); this is that
-/// enforcement point for the deployment layer.
+/// The seeder rejects these networks explicitly rather than relying on absent configuration.
 const SEEDER_REFUSED_NET_SUFFIXES: &[(&str, u32)] = &[("testnet-palw", 110), ("devnet-palw", 111)];
 
 /// Reject a PALW network id outright. Returns the human-readable reason when refused.

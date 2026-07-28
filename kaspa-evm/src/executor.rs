@@ -534,16 +534,13 @@ pub fn execute_block_evm(
     // here. (audit #5 is enforced where it matters — the F002 escrow `burn_balance`
     // and the per-account credit/reroute moves are checked and fail closed.)
     let total_native_balance = parent_total.saturating_add(deposited).saturating_sub(withdrawn).saturating_sub(burn_this_block);
-    // audit INFO-b (revised): the saturating form above is the committed source of truth and is
-    // intentional — it never hard-halts. A previous `debug_assert_eq!` here demanded the EXACT
-    // checked identity, but it false-positived on every executor/snapshot test: those harnesses fund
-    // senders by seeding balances DIRECTLY (no deposit), so with EVM_INITIAL_BASE_FEE > 0 any executed
+    // The saturating form above is the committed source of truth and does not halt execution. Test
+    // harnesses fund senders by seeding balances directly (no deposit), so with
+    // EVM_INITIAL_BASE_FEE > 0 any executed
     // tx burns basefee while `deposited == 0`, legitimately saturating the accumulator. The check could
     // not distinguish that legitimate seeding from a genuine accumulator bug (both clamp ⇒ `checked` is
-    // `None`), so it only produced false panics. Genuine supply divergence is caught where it MATTERS,
-    // with `checked` math that fails closed: the F002 escrow `burn_balance` and the per-account
-    // credit / tip-reroute moves (audit #5). The aggregate debug-only assert added no reliable signal
-    // and is removed; release behaviour is unchanged (it was compiled out there anyway).
+    // `None`). Supply divergence is checked with fail-closed arithmetic at the F002 escrow
+    // `burn_balance` and per-account credit and tip-reroute operations.
     // §12 Phase-7: the receipts root — v2 (Ethereum EIP-2718 typed) at/above the
     // fence, else v1 (borsh-MPT). `executed_raws` is parallel to `receipts` (the
     // accepted txs in order — every accepted tx pushes BOTH in lockstep, skips push

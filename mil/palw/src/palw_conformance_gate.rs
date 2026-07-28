@@ -34,7 +34,7 @@ pub struct StackFingerprint {
 pub enum RegistrationDecision {
     /// Reproduced `V_i` byte-exact ⇒ eligible; the fingerprint rides along as telemetry.
     Admit { fingerprint: StackFingerprint },
-    /// **Fail-closed**: did not reproduce `V_i` (drift / wrong stack / no committed set). Registration
+    /// Rejected: did not reproduce `V_i` (drift, wrong stack or no committed set). Registration
     /// refused; per §13 this stack is a candidate for a new set.
     Refuse { report: ConformanceReport },
 }

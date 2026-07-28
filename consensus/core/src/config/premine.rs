@@ -1,13 +1,8 @@
-//! kaspa-pq (misaka) genesis premine — 10B single-UTXO grant (re-genesis 2026-07-20).
+//! Misaka genesis premine: a 10B single-UTXO grant per network.
 //!
-//! One "main" UTXO of **10B MSK** per network, baked into genesis. This is the genesis
-//! portion of the **~26.013224875B** final supply (the other ~16.013224875B is mined
-//! over 30 years at 1.4%/yr decay; see the emission table in
-//! `consensus/src/processes/coinbase.rs`). The premine was reduced
-//! 13B → 10B in this re-genesis (the mined half is the 30-year 16.013224875B schedule),
-//! and the former 40-vault split was collapsed into a single grant per network — the
-//! operator now holds the whole genesis allocation at one custody address and performs
-//! any vault split as ordinary on-chain transactions after launch.
+//! One 10B MSK UTXO is included in each network genesis. The remaining supply follows the emission
+//! schedule in `consensus/src/processes/coinbase.rs`. Any custody split is performed through normal
+//! on-chain transactions.
 //!
 //! The UTXO locks to the standard single-key ML-DSA-87 P2PKH `scriptPubKey`
 //! `OP_DUP OP_BLAKE2B_512 OP_DATA_64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87`
@@ -15,15 +10,10 @@
 //! the keyed BLAKE2b-512 address payload decoded from the recipient address. The
 //! address is stored as text (not an opaque hash) so the premine is auditable.
 //!
-//! ## Custody — per-network main wallet (audit H-01)
+//! ## Custody
 //!
-//! * **Mainnet** grants the 10B to the operator custody address
-//!   ([`MAINNET_MAIN_ADDRESS`]) — an ML-DSA-87 key held offline by the operator.
-//! * **Testnet / devnet / simnet** grant the 10B to the operator's test-net address
-//!   ([`TESTNET_MAIN_ADDRESS`]), which holds value-less test coins and is used to fund /
-//!   stand up validators during E2E validation. The two payloads MUST differ
-//!   (`mainnet_premine_is_spendable_custody`), so a test key can never receive mainnet
-//!   value.
+//! Mainnet uses [`MAINNET_MAIN_ADDRESS`]. Testnet, devnet and simnet use
+//! [`TESTNET_MAIN_ADDRESS`] for valueless test funds. Tests require the address payloads to differ.
 //!
 //! Multisig / P2SH is out of launch scope (ADR-0019 §8/§6.5).
 
@@ -53,7 +43,7 @@ pub const MISAKA_PREMINE_SOMPI: u64 = MAIN_PREMINE_SOMPI;
 // Confirmed empirically for testnet: the mnemonic reproduces `TESTNET_MAIN_ADDRESS` at
 // ("testnet-10", 0, 0, 0) under the legacy scheme and under no coordinate of the current one.
 //
-// These constants CANNOT be corrected in place: `misaka_premine_utxos` feeds the genesis
+// These constants must not be changed in place: `misaka_premine_utxos` feeds the genesis
 // `utxo_commitment`, so each address is bound into its network's genesis hash. Changing one is a
 // re-genesis, and testnet-10 is live. Operator tooling must use the legacy derivation to spend
 // the premine; every NEW key must use the current one.

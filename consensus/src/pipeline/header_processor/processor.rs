@@ -144,8 +144,7 @@ pub struct HeaderProcessor {
     /// after activation, v1 (`BLOCK_VERSION`) before. `u64::MAX` (inert) on
     /// every current network.
     pub(super) evm_activation_daa_score: u64,
-    /// kaspa-pq ADR-0039 PALW: DAA score at/after which Header-v3 + the algo-4 lane are required.
-    /// `u64::MAX` (inert) on every current network; only a PALW re-genesis network sets a finite score.
+    /// ADR-0039 PALW DAA score at or after which Header-v3 and the algo-4 lane are active.
     pub(super) palw_activation_daa_score: u64,
     /// kaspa-pq ADR-0040 P0-3: the algo-4 ACCEPTANCE lever. While `false`, algo-4 headers are rejected in
     /// `check_pow_algo_id` — before GHOSTDAG, reachability, and every header-stage store write.
@@ -490,19 +489,14 @@ impl HeaderProcessor {
         // seed their duplicate-ticket dedup from it without re-walking history. The set = the selected
         // parent's window ∪ this block's UNIQUE algo-4 mergeset ticket nullifiers (duplicates were
         // already colored red by GHOSTDAG, so the blue set is unique), pruned to the retention window.
-        // Gated on the PALW activation fence keyed on the header's DAA score. CORRECTED: `u64::MAX` ⇒
-        // never written (byte-identical to pre-PALW, store stays empty) holds on mainnet / testnet-10 /
-        // simnet / devnet, NOT on "every shipped preset" — testnet-palw-110 / devnet-palw-111 ship the
-        // fence at 0 (config/params.rs:1403, :1454), so a row IS written for every non-genesis block
-        // there. Those rows hold an EMPTY set, since `palw_algo4_accept = false` keeps any algo-4 header
-        // out of the mergeset; empty-but-present is still a persisted encoding an older binary wrote.
+        // Mainnet, testnet-10, simnet and devnet keep this store empty with an activation score of
+        // `u64::MAX`; the three PALW presets write a row for every non-genesis block.
         //
         // GENESIS boundary (the re-genesis root, when `palw_activation_daa_score <= genesis.daa_score`):
         // genesis is the parentless trusted root — its GHOSTDAG selected parent is `blockhash::ORIGIN`, not
         // a stored block, so the `get_daa_score(sp)` below would panic. It has no ancestor window to inherit
         // (the first PALW child seeds empty via `sp == genesis.hash`), so skip the fold and write no window.
-        // Mirrors the genesis guard in `commit_palw_beacon_state`. Inert on every shipped preset (genesis is
-        // never PALW-active there), so byte-identical.
+        // Mirrors the genesis guard in `commit_palw_beacon_state`.
         if header.daa_score >= self.palw_activation_daa_score && ctx.hash != self.genesis.hash {
             let sp = ghostdag_data.selected_parent;
             // FAIL-CLOSED (matches the beacon accumulator + the GHOSTDAG seed): an active, non-genesis

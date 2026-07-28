@@ -16,17 +16,10 @@ use rocksdb::WriteBatch;
 /// red), so the window persists across the DAG without re-walking history. Deleted by the pruning
 /// processor alongside the other per-block stores.
 ///
-/// **Fence status (corrected — the previous "inert on every shipped preset" claim was FALSE).** A row
-/// is **written for every non-genesis block** on `testnet-palw-110` and `devnet-palw-111`, which ship
-/// `palw_activation_daa_score = 0` (`consensus/core/src/config/params.rs:1403`, `:1454`): the writer at
+/// A row is written for every non-genesis block on the three PALW presets, which use
+/// `palw_activation_daa_score = 0`: the writer at
 /// `pipeline/header_processor/processor.rs` is guarded only by
 /// `header.daa_score >= self.palw_activation_daa_score && ctx.hash != self.genesis.hash`.
-///
-/// What IS true on those presets is that every such row holds an EMPTY set — `palw_algo4_accept = false`
-/// (enforced in `pre_ghostdag_validation.rs`) means no algo-4 header is ever accepted, so no mergeset
-/// blue ever contributes a ticket nullifier. That is a statement about CONTENT, not about whether the
-/// row exists. Distinguishing the two matters: an empty-set row is still a persisted, versioned encoding
-/// that an older binary wrote and a newer decoder must be able to read.
 ///
 /// The store is truly untouched only on mainnet / testnet-10 / simnet / devnet, where
 /// `palw_activation_daa_score == u64::MAX` fails the guard. See `LATEST_DB_VERSION`

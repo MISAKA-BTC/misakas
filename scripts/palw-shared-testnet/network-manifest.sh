@@ -37,7 +37,7 @@
 # (PALW_MANIFEST_SIGNERS, default <manifest>.signers) that pins WHO may sign —
 # distribute that file out-of-band with the harness, like the SSH known_hosts.
 #
-# HONEST SCOPE: this signs and checks the CONFIGURED release identity; it cannot
+# SCOPE: this signs and checks the configured release identity; it cannot
 # prove a node runs the hashed binary (no remote attestation). Combined with
 # preflight's binary-hash comparison and the server-side identity RPC it closes
 # the review's §11 "release identity is optional" gap for a closed testnet.

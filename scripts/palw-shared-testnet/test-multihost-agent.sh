@@ -30,7 +30,7 @@
 # is a standalone BOOTSTRAP kaspad (no peer needed to reach wRPC readiness). A
 # trap tears the test node down on every exit path.
 #
-# HONEST SCOPE: this validates the CONTROL PLANE (who owns pids/secrets, who
+# SCOPE: this validates the control plane (who owns pids/secrets, who
 # restarts, remote collect/stop, host-key policy) — NOT a full funded two-host
 # lifecycle (cross-host funding/bonding is a Phase-B concern, §12). The two data
 # roots on one box faithfully model the controller/node-host separation for the

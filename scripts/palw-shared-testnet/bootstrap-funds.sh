@@ -244,7 +244,7 @@ Block subsidy too low, node A not producing, or node A missing --utxoindex. Chec
 # mature_funding  — advance the chain so every funding coinbase is at least
 #   coinbase_maturity (1000) DAA deep. Mines a finite buffer burst; additionally
 #   asserts the sink DAA advanced by >= coinbase_maturity when that figure is
-#   readable (pre-DNS it usually is not, so we honestly fall back to block count).
+#   readable (pre-DNS it usually is not, so the script falls back to block count).
 mature_funding() {
     local base_daa cur_daa depth
     base_daa="$(node_sink_daa a 2>/dev/null || true)"

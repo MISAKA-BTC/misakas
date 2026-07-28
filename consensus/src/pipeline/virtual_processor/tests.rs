@@ -480,7 +480,7 @@ async fn econ03_funded_provider_bond_tx_enters_the_registry() {
             p.dns_params = Some(dns);
         })
         .build();
-    assert!(!config.params.palw_algo4_accept, "this test must not open algo-4 acceptance");
+    assert!(!config.params.palw_algo4_accept, "registry fixture acceptance state");
 
     let mut ctx = TestContext::new(TestConsensus::new(&config));
     let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
@@ -1142,7 +1142,7 @@ async fn pos_v2_slashing_victim_compensates_honest_peer() {
     };
     let epoch_e = anchor.epoch;
 
-    // B HONESTLY attests the canonical anchor for epoch E → B is rewarded ⇒ joins epoch E's
+    // B validly attests the canonical anchor for epoch E → B is rewarded ⇒ joins epoch E's
     // accumulator `included` set (keyed by the attestation epoch).
     let att_b = dns_harness::build_signed_attestation(
         &vb,
@@ -1437,7 +1437,7 @@ async fn pos_v2_multi_slashing_in_one_block() {
 /// reserve loop end-to-end: a slashing accrues its reserve share to the pool, and when an epoch the
 /// pool can pay finalizes, the reserve DRIPS back out into that block's coinbase, stake-proportionally
 /// to the epoch's honest included validators. TWO validators: A is slashed for equivocation (its
-/// `security_reserve_bps` share accrues to the reserve pool); B honestly attests the canonical anchor
+/// `security_reserve_bps` share accrues to the reserve pool); B validly attests the canonical anchor
 /// for a ready epoch E and joins `included[E]`. Once epoch E finalizes (its `(E+1)·L + finalization_depth`
 /// DAA threshold is crossed), the finalizing block's coinbase pays B the whole reserve (cap set high,
 /// B the sole included validator). Proves accrued-in == dripped-out (value conservation).
@@ -1526,7 +1526,7 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     let storage = ctx.consensus.params().storage_mass_parameter;
     let genesis_hash = ctx.consensus.params().genesis.hash;
 
-    // ── B bonds and HONESTLY attests the ready canonical epoch E ────────────────────────────────
+    // ── B bonds and validly attests the ready canonical epoch E ────────────────────────────────
     // B bonds and attests FIRST: A is bonded only later (below), strictly after E's anchor, so A is
     // not part of E's expected-stake denominator — leaving B the sole included validator at E, which
     // makes the drip pay B the WHOLE reserve (a crisp value-conservation assertion). The stake-
@@ -4458,15 +4458,13 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
 }
 
 /// kaspa-pq EVM Lane v0.4 (§16 RPC / canonical-index fix, R-1): the
-/// `evm_number → L1 hash` map is driven by the SELECTED chain at virtual commit,
-/// NOT per-block result-commit. A reorg must detach the old canonical block's
+/// `evm_number → L1 hash` map is driven by the selected chain at virtual commit rather than
+/// per-block result commit. A reorg must detach the old canonical block's
 /// number and attach the new chain's block at that number; the detached block
 /// stays queryable by L1 hash (immutable rows are kept). This exercises
 /// `update_evm_canonical_number_map` end-to-end. The conditional-release branch
 /// is unit-tested in `model::stores::evm` (`evm_number_store_canonical_*`). The
-/// precise sink-search-loser shadow that motivated the fix needs the DNS
-/// reorg-gate (overlay-Active); the structural fix prevents it by construction —
-/// a non-selected block never writes the map.
+/// A non-selected block never writes the map.
 #[tokio::test]
 #[cfg(feature = "evm")]
 async fn evm_active_canonical_number_map_follows_reorg() {
@@ -4865,15 +4863,10 @@ pub(crate) fn mint_algo4(
     mint_algo4_tampered(tc, f, seed, ts_delta, pre_mutate, |_| {})
 }
 
-/// ADR-0040 (AUTH-02) — [`mint_algo4`] plus a SECOND mutation hook that runs AFTER the authorization is
-/// signed and attached.
+/// [`mint_algo4`] with a second mutation hook that runs after authorization is attached.
 ///
-/// The distinction is the whole point of the total binding. `pre_mutate` models an HONEST producer
-/// building a (possibly invalid) block and authorizing exactly the block it built, so the block is
-/// rejected — if at all — by the clause the mutated field belongs to. `post_mutate` models the AUTH-02
-/// ATTACKER: an observer who lifts a valid authorization onto a header that differs from the one it was
-/// signed over. Under the old 9-value allowlist most such mutations were invisible to clause 7; under
-/// the total binding every one of them must break it.
+/// `pre_mutate` changes the block before signing; `post_mutate` changes it after signing and therefore
+/// exercises AUTH-02 transfer resistance.
 fn mint_algo4_tampered(
     tc: &TestConsensus,
     f: &PalwAlgo4Facts,
@@ -4926,8 +4919,7 @@ fn mint_algo4_tampered_with_extra_txs(
         palw_spam_accumulator_commitment: Hash64::default(),
         palw_spam_nonce: 0,
     }); // with_palw_fields re-finalizes header.hash over the full v3 preimage
-    // The honest-producer mutation runs BEFORE signing: construction == validation means an honest
-    // miner authorizes exactly the header it publishes, whatever that header says.
+    // Apply producer-side changes before signing.
     pre_mutate(&mut mb.header);
     // ADR-0040 P1-6 (AUTH-01/02/03) — attach the per-block ticket authorization.
     //
@@ -4942,7 +4934,7 @@ fn mint_algo4_tampered_with_extra_txs(
         use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
         let net_id = tc.params().net.suffix().unwrap_or(0);
-        // ADR-0040 (AUTH-02): the commitment is TOTAL over this header's own preimage. The two
+        // AUTH-02 commits to the complete header preimage. The two
         // substitutions — zeroed `palw_authorization_hash`, and `hash_merkle_root := authed_root` (the
         // root EXCLUDING the authorization tx itself, non-circular) — are applied inside the commitment
         // function, which is why it is correct to call it while `mb.header` still holds the pre-auth
@@ -4965,11 +4957,9 @@ fn mint_algo4_tampered_with_extra_txs(
             .as_ref()
             .to_vec();
         mb.header.palw_authorization_hash = auth.hash();
-        // ADR-0040 (AUTH-TXSHAPE) — construction == validation: the CANONICAL authorization shape comes
+        // AUTH-TXSHAPE uses the canonical consensus-core encoder
         // from the single consensus-core encoder, the same one the production producer uses, so this
-        // helper cannot silently diverge from what the node builds. It MUST be the LAST transaction
-        // (clause 7). `post_mutate` below is the ATTACKER's hook, and the tests deliberately use it to
-        // violate exactly these pins.
+        // and places the authorization last, as required by clause 7.
         mb.transactions.push(kaspa_consensus_core::palw::build_palw_authorization_transaction(&auth));
         // The header's own merkle root DOES include the authorization tx (it is a real transaction).
         mb.header.hash_merkle_root = kaspa_consensus_core::merkle::calc_hash_merkle_root(mb.transactions.iter());
@@ -4980,17 +4970,12 @@ fn mint_algo4_tampered_with_extra_txs(
     mb
 }
 
-/// kaspa-pq **ADR-0040 — the same block, built by the REAL miner producer.**
+/// Builds the same block through the production miner API.
 ///
-/// [`mint_algo4`] and friends sign inline with `libcrux` because they need attacker hooks. This one
-/// goes through `misaka_palw_miner`'s production API instead — `TicketAuthority::authorize_for_leaf`
-/// (which enforces AUTH-03 and the fail-closed header preconditions before signing) and
-/// `BlockAuthorization::carrying_transaction` (the single consensus-core encoder). It is the acceptance
-/// harness for the claim this PR is allowed to make: the shipped producer builds a block that THIS
-/// repository's own validator accepts.
+/// [`mint_algo4`] signs inline to expose mutation hooks. This helper uses
+/// `TicketAuthority::authorize_for_leaf` and `BlockAuthorization::carrying_transaction`.
 ///
-/// It also reads the leaf's `ticket_authority_pk_hash` from `palw_store` rather than assuming it, so
-/// the AUTH-03 link is exercised against on-chain state rather than against a constant.
+/// It reads `ticket_authority_pk_hash` from `palw_store`, exercising AUTH-03 against on-chain state.
 ///
 /// The construction order is the production one (ADR-0040): the block is complete before signing, and
 /// only `hash_merkle_root` and `palw_authorization_hash` move afterwards.
@@ -5031,10 +5016,10 @@ fn mint_algo4_via_real_producer(
         palw_spam_nonce: 0,
     });
 
-    // ---- The production producer, from here down. ----
+    // Production authorization path.
     let net_id = tc.params().net.suffix().unwrap_or(0);
     let authority = TicketAuthority::from_seed(f.authority_seed);
-    // AUTH-03 against ON-CHAIN state: the authority must be the one the stored leaf named.
+    // AUTH-03 checks the authority named by the stored leaf.
     let leaf = tc.storage.palw_store.leaf(f.batch_id, f.leaf_index).expect("the leaf must already be on chain");
     let authed_root = kaspa_consensus_core::merkle::calc_hash_merkle_root(mb.transactions.iter());
     let binding = BlockAuthorizationBinding { network_id: net_id, header: mb.header.clone(), authed_hash_merkle_root: authed_root };
@@ -5050,22 +5035,18 @@ fn mint_algo4_via_real_producer(
     mb
 }
 
-/// kaspa-pq ADR-0039 PALW — the FIRST end-to-end reward-rail integration test: a hand-built algo-4
-/// (replica-lane, `pow_algo_id = 4`) block is pushed through the ENTIRE real pipeline
+/// End-to-end reward-rail fixture. A hand-built algo-4 block is processed through the pipeline
 /// (header → GHOSTDAG → body 9-clause ticket check → virtual/UTXO → coinbase) on a single-node
 /// PALW-ACTIVE `TestConsensus`, reaches `StatusUTXOValid`, and the CHILD that merges it pays the two
 /// providers' one-time reward scripts (§17.2 `WorkRewardClass::ReplicaPalw`, base 77 % split A/B).
 ///
-/// This is the in-process proof that the three activation seams that just landed compose end-to-end:
+/// The fixture covers three activation seams:
 ///   1. the algo-4 Layer-0 PoW arm (`consensus/pow` — no panic, floor tag reused),
 ///   2. the template's `palw_beacon_seed` stamping (so the algo-3 v3 supporting chain authenticates),
 ///   3. the `ReplicaPalw` reward-class derivation (`calculate_utxo_state` → provider-pair coinbase).
 ///
-/// It is NOT a claim that PALW can be mined for real value today — the config is a throwaway
-/// PALW-active net (`palw_activation_daa_score = 0`), the inference is not run (the leaf/cert/view are
-/// seeded directly), and PoW is skipped. Real activation still needs a re-genesis + real CUDA backend +
-/// a live DNS beacon network + external audit. What this proves is that the REWARD RAIL is wired
-/// correctly: an accepted algo-4 block mints a provider-pair UTXO through the exact production code.
+/// The fixture uses a temporary PALW-active network, seeded leaf/certificate state, and skipped PoW. It
+/// validates reward-rail integration rather than inference execution.
 ///
 /// Shared construction for the algo-4 reward-rail E2E tests (K5 §11.3): builds a PALW-active SIMNET
 /// TestConsensus with the given beacon `grace_epochs`, an algo-3 v3 supporting chain, resolves the
@@ -5111,7 +5092,7 @@ async fn resolve_palw_audit_epoch_seed_adapter_is_deterministic_and_fails_closed
         .edit_consensus_params(|p| {
             p.palw_activation_daa_score = 0;
             // Build v3 blocks; this test exercises the resolver ADAPTER over the resulting header chain.
-            // The shipped `palw_algo4_accept = false` default is pinned elsewhere.
+            // Acceptance is enabled explicitly because this fixture starts from the inert simnet preset.
             p.palw_algo4_accept = true;
             p.palw_epoch_length_daa = EPOCH_LEN; // small ⇒ a short chain spans several PALW epochs
             p.pow_blake2b_sha3_activation = ForkActivation::always();
@@ -5304,12 +5285,9 @@ async fn palw_algo4_env_full(
             .skip_proof_of_work()
             .edit_consensus_params(|p| {
                 p.palw_activation_daa_score = 0;
-                // ADR-0040 P0-3: every shipped preset withholds algo-4 ACCEPTANCE (`palw_algo4_accept =
-                // false`) until the §7.1.1 gates are released. These tests exercise algo-4 *behaviour*, so
-                // they presuppose acceptance and open the lever here — once, in the shared env, rather than
-                // in each test. The shipped default is pinned separately by
-                // `palw_algo4_rejected_while_accept_lever_closed`, which passes its own config and is
-                // therefore untouched by this override.
+                // These tests exercise algo-4 behaviour on an edited simnet fixture, so enable
+                // acceptance once in the shared environment. The reject-path test passes its own
+                // explicitly closed config and is unaffected by this override.
                 p.palw_algo4_accept = true;
                 p.palw_epoch_length_daa = 100; // epoch(B) == 0 on this short chain
                 // K5 (§11.3): the beacon grace window. DNS is inactive here, so at epoch 0 degraded_epochs == 1;
@@ -6134,18 +6112,15 @@ async fn palw_algo4_devnet_palw_preset_e2e() {
     use kaspa_consensus_core::tx::ScriptPublicKey;
     // No edits to the anchor windows: the shipped DEVNET_PALW_PARAMS bakes the small ones
     // (DEVNET_PALW_DNS_PARAMS), so a finality-buried anchor resolves on the short supporting chain.
-    let mut config = ConfigBuilder::new(DEVNET_PALW_PARAMS).build();
+    let config = ConfigBuilder::new(DEVNET_PALW_PARAMS).build();
     // This is the real shipped preset (PALW-active devnet-111), not a SIMNET stand-in.
     assert_eq!(config.params.net, NetworkId::with_suffix(NetworkType::Devnet, 111));
     assert!(config.params.is_palw_active(0));
     assert!(config.params.skip_proof_of_work);
 
-    // ADR-0040 P0-3 — the ONE deliberate override. The shipped preset now ships `palw_algo4_accept =
-    // false`, so algo-4 headers are rejected at `check_pow_algo_id` before any store write. This test
-    // asserts what the preset can do ONCE THE GATES ARE RELEASED, so it opens the lever explicitly.
-    // The companion test `palw_algo4_rejected_while_accept_lever_closed` pins the shipped default.
-    assert!(!config.params.palw_algo4_accept, "the shipped preset must ship with the accept lever CLOSED");
-    config.params.palw_algo4_accept = true;
+    // ADR-0040 P0-3 is released on this PALW-active preset. The companion test
+    // `palw_algo4_rejected_while_accept_lever_closed` closes a copy explicitly and pins the reject path.
+    assert!(config.params.palw_algo4_accept, "devnet-palw ships with algo-4 acceptance released");
 
     let (tc, handles, f) = palw_algo4_env_infer(1, None, Some(config)).await;
     let algo4 = mint_algo4(&tc, &f, 0xf0, 0, |_| {});
@@ -6175,25 +6150,20 @@ async fn palw_algo4_devnet_palw_preset_e2e() {
     tc.shutdown(handles);
 }
 
-/// kaspa-pq **ADR-0040 P1-6 / AUTH-02 — the re-mint attack, reproduced and then closed.**
+/// AUTH-02 rejects transfer of a disclosed winning ticket to another block.
 ///
-/// # The attack
+/// # Threat model
 ///
-/// A winning algo-4 header DISCLOSES its raw `ticket_nullifier` (I-13 secrecy ends at mint), and
-/// `eligibility_hash` binds no block content. So an OBSERVER of a winning block could previously
-/// restamp the same winning draw onto unlimited competing blocks of their own choosing — a
-/// consensus-level DoS surface aimed at other people's nodes. That is why this gates T-shared (a
-/// network with third parties) and not merely activation.
+/// A winning algo-4 header discloses its raw `ticket_nullifier`, while `eligibility_hash` does not bind
+/// block content. Authorization prevents reusing that draw with different block contents.
 ///
-/// # What closes it
+/// # Authorization
 ///
 /// Every algo-4 block must carry an ML-DSA-87 authorization by the leaf's declared ticket authority,
 /// binding this block's parents and transaction set. The observer has the nullifier but not the key.
 ///
-/// # Why the attack is reproduced rather than just the fix asserted
-///
-/// A fix that carries its own attack does not regress: if someone later relaxes clause 7, this test
-/// fails as an *attack succeeding*, which reads very differently from a coverage gap.
+/// The test applies each mutation after signing so relaxing clause 7 causes the adversarial case to be
+/// accepted.
 #[tokio::test]
 async fn palw_algo4_reminted_ticket_is_rejected_auth02() {
     use kaspa_consensus_core::errors::block::RuleError;
@@ -6265,7 +6235,7 @@ async fn palw_algo4_reminted_ticket_is_rejected_auth02() {
 ///
 /// The authorization now binds the block's OWN header preimage rather than a list — see
 /// `kaspa_consensus_core::hashing::header::palw_authorization_commitment`. Every case below takes an
-/// honestly authorized block and tampers with exactly one thing AFTER signing (`mint_algo4_tampered`'s
+/// validly authorized block and tampers with exactly one thing after signing (`mint_algo4_tampered`'s
 /// `post_mutate` hook, i.e. precisely what an observer can do), and every one must now fail clause 7.
 ///
 /// The per-field binding is also proved exhaustively and in isolation by
@@ -6280,21 +6250,19 @@ async fn palw_algo4_authorization_binds_every_header_field_auth02() {
 
     let (tc, handles, f) = palw_algo4_env(1).await;
 
-    // ACCEPT half: the honestly produced block still validates end to end. Without this the reject
+    // ACCEPT half: the validly produced block still validates end to end. Without this the reject
     // cases below would be satisfied by a fix that simply broke algo-4 mining.
     let honest = mint_algo4(&tc, &f, 0xf0, 0, |_| {});
     assert_eq!(
         tc.validate_and_insert_block(honest.to_immutable()).virtual_state_task.await.unwrap(),
         BlockStatus::StatusUTXOValid,
-        "an honestly produced and honestly authorized algo-4 block must still be accepted"
+        "a validly produced and authorized algo-4 block must still be accepted"
     );
 
-    // REJECT half. Each case: mutate ONE thing after signing, expect clause 7.
+    // Mutate one field after signing and require clause-7 rejection.
     type Tamper = (u8, &'static str, fn(&mut MutableBlock));
     let cases: Vec<Tamper> = vec![
-        // --- the five virtual-stage-only commitments. These are the dangerous ones: a variant that
-        // never becomes a chain block is never checked on ANY of them, so before this fix they were
-        // permanent DAG members carrying arbitrary garbage.
+        // Commitments validated at the virtual stage.
         (0xc1, "utxo_commitment", |b| b.header.utxo_commitment = Hash64::from_bytes([0xC1; 64])),
         (0xc2, "accepted_id_merkle_root", |b| b.header.accepted_id_merkle_root = Hash64::from_bytes([0xC2; 64])),
         (0xc3, "overlay_commitment_root", |b| b.header.overlay_commitment_root = Hash64::from_bytes([0xC3; 64])),
@@ -6302,14 +6270,8 @@ async fn palw_algo4_authorization_binds_every_header_field_auth02() {
         // retained `palw_beacon_seed` as their clause-9 lagged R_E.
         (0xc4, "palw_beacon_seed", |b| b.header.palw_beacon_seed = Hash64::from_bytes([0xC4; 64])),
         (0xc5, "pruning_point", |b| b.header.pruning_point = Hash64::from_bytes([0xC5; 64])),
-        // NOTE (ADR-0040 AUTH-TXSHAPE): the sixth axis — the authorization TRANSACTION's own free
-        // fields, of which `lock_time` was the 2^64 one — used to be tested here, expecting clause 7.
-        // It now has its own dedicated, wider test,
-        // `palw_algo4_authorization_tx_shape_and_position_are_pinned_authtxshape`, because the canonical
-        // shape is enforced CONTEXT-FREE in transaction validation-in-isolation (so it is also caught on
-        // the mempool/BBT surface, and it is caught before the expensive contextual path). It therefore
-        // no longer surfaces as a clause-7 error and no longer belongs in this list, whose common
-        // assertion is "clause 7". The coverage moved and widened; it was not dropped.
+        // Authorization transaction fields are covered separately by
+        // `palw_algo4_authorization_tx_shape_and_position_are_pinned_authtxshape`.
     ];
 
     for (seed, name, tamper) in cases {
@@ -6347,9 +6309,9 @@ async fn palw_algo4_authorization_binds_every_header_field_auth02() {
     tc.shutdown(handles);
 }
 
-/// kaspa-pq **ADR-0040 (AUTH-TXSHAPE) — one authorization binds exactly ONE block hash.**
+/// AUTH-TXSHAPE requires one authorization to map to one block hash.
 ///
-/// # The attack this closes
+/// # Threat model
 ///
 /// Clause 7 binds the block's header preimage with `hash_merkle_root` replaced by `authed_root`, the
 /// root over every transaction EXCEPT the 0x38 authorization — the exclusion is forced, an
@@ -6370,7 +6332,7 @@ async fn palw_algo4_authorization_binds_every_header_field_auth02() {
 /// created and the block still reaches `StatusUTXOValid`. The damage is block-flood, and the loss of the
 /// one-authorization-one-block invariant.
 ///
-/// # What closes it
+/// # Canonical shape
 ///
 /// `check_palw_block_authorization_shape` (context-free, in transaction validation-in-isolation, so it
 /// also covers the mempool/BBT surface) pins every free field of the transaction, and clause 7 restates
@@ -6378,11 +6340,7 @@ async fn palw_algo4_authorization_binds_every_header_field_auth02() {
 /// deterministic function of (authed transaction list, authorization payload) — both of which the
 /// signature already binds — so the authorization has exactly one legal block hash.
 ///
-/// # Why the attacks are reproduced rather than the fix asserted
-///
-/// Each REJECT arm is the observer's actual move, applied through `post_mutate` (which runs AFTER
-/// signing, i.e. exactly the attacker's position). If someone later relaxes either rule, these fail as
-/// *attacks succeeding*, which reads very differently from a coverage gap. The per-field REJECT/ACCEPT
+/// Each reject case is applied through `post_mutate` after signing. The per-field reject/accept
 /// matrix at the isolation level lives in
 /// `transaction_validator::tx_validation_in_isolation::tests::palw_block_authorization_tx_canonical_shape`;
 /// this is the end-to-end half, which additionally proves the mutations really do reach a rejection
@@ -6521,40 +6479,25 @@ async fn palw_algo4_authorization_tx_shape_and_position_are_pinned_authtxshape()
     tc.shutdown(handles);
 }
 
-/// kaspa-pq **ADR-0040 P0-3 / gate G1** — the algo-4 ACCEPTANCE lever, pinned two ways.
+/// kaspa-pq **ADR-0040 P0-3 / gate G1** — the algo-4 ACCEPTANCE lever's reject path.
 ///
-/// 1. Every shipped preset ships `palw_algo4_accept = false`, including the two PALW presets that run
-///    `palw_activation_daa_score = 0`. Activation says the lane EXISTS; this says its blocks may ENTER.
-/// 2. While the lever is closed, an otherwise-VALID algo-4 block is rejected — the same block that
-///    `palw_algo4_devnet_palw_preset_e2e` accepts with the lever open. So the rejection is attributable
-///    to the lever alone, not to some other defect in the block.
+/// A copy of the released devnet-PALW preset is closed explicitly. An otherwise-valid algo-4 block is
+/// then rejected — the same block that `palw_algo4_devnet_palw_preset_e2e` accepts with the lever open.
+/// The paired tests attribute the rejection to the lever alone, not to another defect in the block.
 ///
 /// Why this matters beyond bookkeeping: algo-4 headers are exempt from the Layer-0 hash floor, and
-/// `palw_compute_work_scale = 0` prevents the compute cap from ever firing, so on a PALW preset there is
-/// no work-based bound on algo-4 header volume (ADR-0040 DOS-01). This lever is that bound until the
-/// gates in ADR-0040 §7.1.1 are released.
+/// `palw_compute_work_scale = 0` prevents the compute cap from ever firing. The shipped v3 PALW presets
+/// rely on their peer allowlist for reachability bounding; this test independently retains coverage of
+/// the fail-closed acceptance path.
 #[tokio::test]
 async fn palw_algo4_rejected_while_accept_lever_closed() {
-    use kaspa_consensus_core::config::params::{
-        DEVNET_PALW_PARAMS, DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PALW_PARAMS, TESTNET_PARAMS,
-    };
+    use kaspa_consensus_core::config::params::DEVNET_PALW_PARAMS;
 
-    // (1) The shipped default is CLOSED on every preset — the PALW ones especially.
-    for (name, p) in [
-        ("mainnet", MAINNET_PARAMS),
-        ("testnet", TESTNET_PARAMS),
-        ("simnet", SIMNET_PARAMS),
-        ("devnet", DEVNET_PARAMS),
-        ("testnet-palw", TESTNET_PALW_PARAMS),
-        ("devnet-palw", DEVNET_PALW_PARAMS),
-    ] {
-        assert!(!p.palw_algo4_accept, "{name} must ship with the ADR-0040 algo-4 accept lever CLOSED");
-    }
-
-    // (2) With the lever closed, the very block the sibling e2e accepts is rejected instead.
-    let config = ConfigBuilder::new(DEVNET_PALW_PARAMS).build();
-    assert!(config.params.is_palw_active(0), "the lane is ACTIVE — only acceptance is withheld");
-    assert!(!config.params.palw_algo4_accept);
+    let mut closed = DEVNET_PALW_PARAMS;
+    closed.palw_algo4_accept = false;
+    let config = ConfigBuilder::new(closed).build();
+    assert!(config.params.is_palw_active(0), "the fixture keeps the lane active");
+    assert!(!config.params.palw_algo4_accept, "the fixture closes acceptance");
 
     let (tc, handles, f) = palw_algo4_env_infer(1, None, Some(config)).await;
     let algo4 = mint_algo4(&tc, &f, 0xf0, 0, |_| {});
@@ -6567,21 +6510,16 @@ async fn palw_algo4_rejected_while_accept_lever_closed() {
     tc.shutdown(handles);
 }
 
-/// kaspa-pq **ADR-0040 §5.11 correction / §5.13.7** — an algo-4 header's `bits` is **consensus-derived,
-/// not attacker-chosen**.
+/// An algo-4 header's `bits` field is consensus-derived under ADR-0040 §5.13.7.
 ///
-/// The ADR's AUTH-02 field enumeration used to assert that "`bits` is free because algo-4 is exempt from
-/// the Layer-0 hash floor". That conflated two different things and was wrong. Exemption from the hash
-/// FLOOR (`check_pow_and_calc_block_level` returns `Ok(0)` for algo-4) says nothing about whether the
-/// `bits` FIELD may hold an arbitrary value: on a PALW-active net `pre_pow_validation` derives
+/// Exemption from the Layer-0 hash floor does not make `bits` arbitrary. On a PALW-active network,
+/// `pre_pow_validation` derives
 /// `expected_bits` via the §16.3 lane retarget (`calculate_palw_lane_difficulty_bits`) and rejects any
 /// mismatch with `RuleError::UnexpectedDifficulty`, exactly as it does for algo-3.
 ///
-/// This matters beyond bookkeeping: `bits` is the clause-9 eligibility draw target. If it were free, the
-/// draw would be miner-chosen. It is not. Anything that assumed a free `bits` — notably the BIND-01
-/// compute-work grind argument — must be re-derived from the lane-retarget path.
+/// `bits` is also the clause-9 eligibility target, so the draw uses the lane-retarget result.
 ///
-/// The `pre_mutate` hook runs BEFORE the authorization is signed, so this models an HONEST producer
+/// The `pre_mutate` hook runs before the authorization is signed, so it models a producer
 /// authorizing exactly the header it published: the AUTH-02 total binding is satisfied and cannot be
 /// what rejects the block. `bits` is the only difference from the control.
 #[tokio::test]
@@ -6609,16 +6547,11 @@ async fn palw_algo4_bits_is_consensus_derived_not_free() {
     tc.shutdown(handles);
 }
 
-/// kaspa-pq **ADR-0040 DOS-01 / §5.13.2 / §5.13.7** — there is **no work-based bound** on algo-4 header
-/// volume, so `palw_algo4_accept = false` (P0-3) is the only thing holding the lane shut.
+/// kaspa-pq **ADR-0040 DOS-01 / §5.13.2 / §5.13.7** — the v3 PALW presets have **no work-based
+/// bound** on algo-4 header volume. Their released configuration is reachability-bounded by the peer
+/// allowlist instead.
 ///
-/// This pins the PREMISE of DOS-01 rather than a fix for it, because DOS-01 cannot be fixed by a patch
-/// (§5.13.4: Option A is an IBD redesign, Option B is a Header v4 / re-genesis schema change, Option C is
-/// a new consensus throughput rule that must be co-designed with the §16 lane DAA). What this test buys
-/// is that the premise cannot rot silently.
-///
-/// Specifically, it catches the plausible future mistake of setting `palw_compute_work_scale` non-zero in
-/// the belief that the compute cap then bounds the lane. It does not follow: the cap
+/// The test prevents `palw_compute_work_scale` from being treated as a header-admission bound. The cap
 /// (`validate_palw_compute_headroom`) errors only when `compute_headroom(H, C, 4) == 0`, and headroom is
 /// the saturating `4H - C`. At scale 0 every algo-4 block credits `ΔC = 0`, so `C == 0` and headroom is
 /// `4H` — non-zero for any non-genesis block. Raising the scale changes which term binds, but the
@@ -6632,9 +6565,12 @@ fn palw_dos01_has_no_work_based_bound() {
     use kaspa_consensus_core::palw::compute_headroom;
 
     for (name, p) in [("testnet-palw", TESTNET_PALW_PARAMS), ("devnet-palw", DEVNET_PALW_PARAMS)] {
-        // The lane EXISTS on these two presets (activation fence 0) — only acceptance is withheld.
+        // The lane and acceptance are released together. These v3 presets have an inert stamp
+        // accumulator and therefore rely on the peer allowlist as their non-work reachability bound.
         assert!(p.is_palw_active(0), "{name}: the PALW lane is active from genesis");
-        assert!(!p.palw_algo4_accept, "{name}: P0-3 — acceptance is the ONLY bound, and it is withheld");
+        assert!(p.palw_algo4_accept, "{name}: algo-4 acceptance is released");
+        assert!(p.palw_requires_peer_allowlist, "{name}: released v3 acceptance is reachability-bounded");
+        assert!(p.palw_spam.is_inert(), "{name}: Header-v4 stamp accumulation is unavailable on this v3 preset");
         assert_eq!(p.palw_compute_work_scale, 0, "{name}: the compute-work scale is zero");
 
         // scale == 0 ⇒ ΔC == 0 for every algo-4 block, whatever its (consensus-derived) bits.
@@ -6657,28 +6593,15 @@ fn palw_dos01_has_no_work_based_bound() {
     }
 }
 
-/// kaspa-pq ADR-0040 — the SEEDED mint's wiring test. **No longer a daemon path.**
-///
-/// This used to be described as "the RUNNING-DAEMON in-node mint mechanism … the exact code path a live
-/// daemon takes". That is no longer true and was the reason the seeded mint kept looking load-bearing:
-/// `palw_demo_mint_algo4` has been removed from `ConsensusApi` and its module is `#[cfg(test)]`, so no
-/// shipped binary can reach it. kaspad's `--palw-mine` service now drives `palw_algo4_mint_facts` +
-/// `palw_build_algo4_template`, which read the leaf from `palw_store` and cannot fabricate one.
-///
-/// What this test still earns its place proving: that a block built with the REAL
-/// `build_block_template` and restamped as algo-4 is accepted through the full pipeline on the shipped
-/// `DEVNET_PALW_PARAMS` preset — i.e. the block-shape half, independent of where the leaf came from.
-/// It proves nothing about provenance: the leaf, certificate and `Active` view are seeded by the mint
-/// itself.
+/// Test-only seeded mint wiring. Verifies that a block built by `build_block_template` and restamped as
+/// algo-4 is accepted through the full pipeline on `DEVNET_PALW_PARAMS`. The fixture seeds the leaf,
+/// certificate and active view, so it does not verify provenance.
 #[tokio::test]
 async fn palw_demo_mint_algo4_in_node_e2e() {
     use kaspa_consensus_core::config::params::DEVNET_PALW_PARAMS;
     use kaspa_hashes::Hash64;
-    let mut config = ConfigBuilder::new(DEVNET_PALW_PARAMS).build();
-    // ADR-0040 P0-3: the shipped preset withholds algo-4 acceptance. This test asserts the daemon's mint
-    // path works once the gates are released, so it opens the lever explicitly (see
-    // `palw_algo4_rejected_while_accept_lever_closed` for the shipped-default pin).
-    config.params.palw_algo4_accept = true;
+    let config = ConfigBuilder::new(DEVNET_PALW_PARAMS).build();
+    assert!(config.params.palw_algo4_accept, "devnet-palw ships with algo-4 acceptance released");
     let tc = TestConsensus::new(&config);
     let handles = tc.init();
     let miner = MinerData::new(p2pkh_mldsa87_spk(&[0x07; 64]), vec![]);
@@ -7019,20 +6942,14 @@ async fn palw_algo4_leaf_not_active_rejected_e2e() {
 /// `cert.activation_epoch <= epoch < cert.expiry_epoch`. Guards against paying for a batch whose
 /// certificate had not yet activated (or had expired).
 ///
-/// ADR-0040 CERT-TRUST/CERT-BATCH — CHANGED SETUP, SAME PROPERTY. This test used to read the seeded
-/// certificate back, mutate `activation_epoch`, and re-insert it under the SAME key, relying on a comment
-/// that "the view's own cert window stays open". Two things moved underneath it: `insert_certificate` is
-/// now write-once by content (a differing blob at an existing content key fails closed), and the view no
-/// longer carries a certificate window at all — the ONLY certificate window in consensus is the attested
-/// blob's, which is exactly what clause 4 reads. So the closed window is now seeded before the first
-/// write, and the assertion is unchanged: clause 4 still rejects with `CertNotActive`.
+/// The certificate store is write-once by content. This fixture seeds a closed activation window before
+/// the first write and requires clause 4 to return `CertNotActive`.
 #[tokio::test]
 async fn palw_algo4_cert_not_active_rejected_e2e() {
     palw_algo4_expect_ticket_reject_cert(&|c| c.activation_epoch = 999, "CertNotActive").await;
 }
 
-/// kaspa-pq **ADR-0040 CERT-BATCH — REJECT: a header may not name a certificate that certifies a
-/// DIFFERENT batch.**
+/// CERT-BATCH rejects a header whose certificate names a different batch.
 ///
 /// `resolve_palw_binding` resolves `palw_epoch_certificate_hash` out of the content-addressed store BY
 /// HASH ALONE. Without the cross-bind, any stored certificate's `[activation, expiry)` window could be
@@ -7329,18 +7246,15 @@ async fn palw_algo4_halted_source_merged_pays_nothing_e2e() {
     tc.shutdown(handles);
 }
 
-/// kaspa-pq **ADR-0040 — THE ACCEPTANCE TEST for this PR.**
+/// End-to-end acceptance test for the production PALW miner path.
 ///
-/// The real miner producer builds an AUTH-02-authorized algo-4 block over a REAL on-chain leaf, and this
-/// repository's own validator accepts it through the full pipeline. No `palw_demo_mint_algo4`, no
-/// inline test signing: the authorization half runs through `misaka_palw_miner`'s shipped API
+/// The miner producer builds an AUTH-02-authorized algo-4 block over an on-chain leaf, and the validator
+/// accepts it through the full pipeline. Authorization uses `misaka_palw_miner`
 /// (`TicketAuthority::authorize_for_leaf` + `BlockAuthorization::carrying_transaction`), and the
 /// AUTH-03 link is read from `palw_store` rather than assumed.
 ///
-/// Together with the reward assertions it says: the block a `--palw-mine` node would publish is one
-/// this node accepts and pays out on. It says NOTHING about whether the leaf's compute was real —
-/// consensus treats the inference as opaque, and that is a different gate (PCPB, auditor replay,
-/// Receipt DA), none of which this PR claims.
+/// Together with the reward assertions, the test covers the block shape published by `--palw-mine`.
+/// Inference execution remains outside this integration test.
 #[tokio::test]
 async fn palw_algo4_real_producer_block_is_accepted_by_the_real_validator_auth02() {
     use kaspa_consensus_core::tx::ScriptPublicKey;

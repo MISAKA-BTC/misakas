@@ -77,17 +77,12 @@ pub struct ConsensusStorage {
     pub dns_state_store: Arc<RwLock<DbDnsStateStore>>,
     // kaspa-pq ADR-0022: singleton overlay snapshot as-of the current pruning point.
     pub pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
-    /// kaspa-pq ADR-0039 §18.2 / D3: the PALW pruned-IBD frontier singleton (own prefix, not the overlay
-    /// snapshot wrapper). Unwritten on every shipped preset — but because it has NO producer anywhere
-    /// in the tree, not because of the PALW fence (`testnet-palw-110` / `devnet-palw-111` ship
-    /// `palw_activation_daa_score = 0`, so a fence argument does not hold). Capturing it at
-    /// pruning-advance is an open activation blocker.
+    /// ADR-0039 §18.2/D3 PALW pruned-IBD frontier singleton. It uses a dedicated prefix so its
+    /// persisted format can evolve independently of the overlay snapshot wrapper.
     pub palw_pruned_frontier_store: Arc<RwLock<DbPalwPrunedFrontierStore>>,
-    /// kaspa-pq **ADR-0040 ECON-03 (THE WIRE)** — the provider-bond registry (prefix 241): the
-    /// persisted anchor the per-block [`kaspa_consensus_core::palw::ProviderBondView`] walk is seeded
-    /// from. Written by `stage_palw_provider_bond_mutations` at virtual commit, exactly as
-    /// `stake_bonds_store` is written by `stage_dns_bond_mutations`. Empty on every shipped preset,
-    /// because `palw_activation_daa_score == u64::MAX` there gates the writer.
+    /// ADR-0040 ECON-03 provider-bond registry (prefix 241). The per-block
+    /// [`kaspa_consensus_core::palw::ProviderBondView`] walk is seeded from this persisted anchor and
+    /// updated by `stage_palw_provider_bond_mutations` at virtual commit.
     pub palw_provider_bonds_store: Arc<RwLock<DbPalwProviderBondsStore>>,
     pub stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
 
@@ -167,13 +162,9 @@ pub struct ConsensusStorage {
 
     // kaspa-pq ADR-0039 PALW (audited-compute lane, §15.2/§18.1).
     //
-    // CORRECTED (the previous "EMPTY on every shipped preset" claim was FALSE): these are empty only
-    // where `palw_activation_daa_score == u64::MAX`, i.e. mainnet / testnet-10 / simnet / devnet. On
-    // `testnet-palw-110` / `devnet-palw-111` the fence is 0 (`config/params.rs:1403`, `:1454`), so
-    // `palw_nullifier_store`, `palw_store` and `palw_beacon_store` are all WRITTEN from genesis.
-    // `palw_algo4_accept = false` bounds their CONTENT (no algo-4 header is ever accepted) but does not
-    // stop rows from being written — which is why their encodings drove the LATEST_DB_VERSION 7 → 8
-    // bump. `palw_lane_bits_store` is the exception: it has no producer at all yet.
+    // These stores remain empty where `palw_activation_daa_score == u64::MAX`: mainnet, testnet-10,
+    // simnet and devnet. The three PALW presets use an activation score of 0 and write PALW state from
+    // genesis. Encoding changes therefore require a database-version transition.
     pub palw_nullifier_store: Arc<DbPalwNullifierStore>,
     pub palw_store: Arc<DbPalwStore>,
     pub palw_beacon_store: Arc<DbPalwBeaconStore>,

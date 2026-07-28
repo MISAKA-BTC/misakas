@@ -600,21 +600,8 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         exit(1);
     }
 
-    // kaspa-pq **ADR-0040 P1-5** — PALW params-validity PREFLIGHT, enforced rather than asserted.
-    //
-    // `PalwBatchAdmissionParams::is_consistent_for_activation` and
-    // `LaneDifficultyParams::is_consistent_for_activation` both document themselves as the bound that
-    // keeps a one-word params edit from silently restoring unbounded pre-cap behaviour — and
-    // `PalwParams::is_structurally_valid` says outright that it is "called at config-build time". None
-    // of the three had a single production caller: every invocation in the tree was a `#[test]`
-    // assertion over a hand-maintained list of presets, so a preset added without being added to that
-    // list was checked by nothing. That is the exact defect class this ADR keeps closing — a bound that
-    // only a comment enforces is not a bound.
-    //
-    // This is that enforcement point. It runs only where PALW actually activates, so the inert
-    // placeholder values on the non-PALW presets are not required to satisfy it, and it refuses at
-    // startup with a reason instead of degrading — the same rule as the archival check above and the
-    // seeder's PALW refusal.
+    // Validate PALW admission, difficulty and structural parameters before starting an activated
+    // network. Inactive presets retain placeholder values and bypass this validation.
     if config.params.palw_activation_daa_score != u64::MAX {
         let failed = if !config.params.palw_batch_admission.is_consistent_for_activation() {
             Some(

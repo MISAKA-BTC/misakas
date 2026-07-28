@@ -22,7 +22,7 @@
 #      idempotently if node A is already running with --enable-validator;
 #   6. wait dns_confirmed:true with an ADVANCING dns_anchor on BOTH nodes.
 #
-# Honesty:
+# Limitations:
 #   * The bond is a REAL on-chain stake posted from the DNS funding key on a
 #     closed, no-value devnet. This stage never touches the seeded test-only
 #     palw_demo path.

@@ -495,10 +495,10 @@ pub struct PalwLocalPaidWorkFactV1 {
 /// 2. `job_nullifiers` must equal, as a sorted sequence, what the local paid-work store recorded for
 ///    that block (absent ⇔ empty) — a nullifier cannot be moved between rows.
 ///
-/// # Why (1) + (2) + the fold is complete
+/// # Completeness
 ///
 /// The importer independently pins `payload.paid_work_window_daa` to the local
-/// `paid_work_walk_bound_daa`, so EVERY transported row is inside the walk bound at the pruning point
+/// `paid_work_walk_bound_daa`, so every transported row is inside the walk bound at the pruning point
 /// and therefore contributes to the folded union. The fold then pins the total nullifier set exactly,
 /// and `validate_paid_work` forbids a nullifier appearing in two rows. Given that:
 ///
@@ -822,7 +822,7 @@ fn outpoints_are_strictly_sorted<T>(rows: &[(TransactionOutpoint, T)]) -> bool {
 }
 
 /// Core representation of the consensus-crate fork-local beacon accumulator at the pruning point.
-#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct PalwPrunedBeaconAccumulatorV1 {
     pub version: u16,
     pub epochs: BTreeMap<u64, PalwBeaconEpochAccumV1>,
@@ -842,6 +842,12 @@ impl PalwPrunedBeaconAccumulatorV1 {
         for rows in self.stake_by_epoch.values_mut() {
             rows.sort_by(|a, b| cmp_outpoint(&a.0, &b.0));
         }
+    }
+}
+
+impl Default for PalwPrunedBeaconAccumulatorV1 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1450,6 +1456,11 @@ mod tests {
         Hash64::from_bytes([byte; 64])
     }
 
+    #[test]
+    fn default_beacon_accumulator_is_canonical_v1() {
+        assert_eq!(PalwPrunedBeaconAccumulatorV1::default(), PalwPrunedBeaconAccumulatorV1::new());
+    }
+
     fn provider(byte: u8) -> PalwProviderBondRecord {
         let pk = vec![byte; STAKE_VALIDATOR_PUBKEY_LEN];
         let op = TransactionOutpoint::new(h(byte), 0);
@@ -2045,7 +2056,7 @@ mod tests {
             Err(PalwPruningSnapshotError::Incoherent("paid-work row re-dates its source block"))
         );
 
-        // (2) Moving a nullifier between two rows that are BOTH honestly dated. Row DAA scores are
+        // (2) Moving a nullifier between two rows that are both validly dated. Row DAA scores are
         // untouched here, so (1) alone would not catch this.
         let mut moved = payload.clone();
         moved.paid_work[0].job_nullifiers = vec![h(0x20)];

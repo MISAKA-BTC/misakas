@@ -5,7 +5,7 @@
 #   usage:  ./supporting-miner.sh start
 #           ./supporting-miner.sh stop
 #
-# WHY THIS EXISTS (honest scope):
+# PURPOSE:
 #   This is a REAL algo-3 misaminer producing REAL supporting-chain blocks. It
 #   is NOT the seeded test-only `palw_demo` path and it mints NO algo-4 / PALW
 #   block. Its only job is liveness: a miner must run continuously so that

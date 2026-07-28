@@ -4,7 +4,7 @@
 #
 #   usage:  ./restart-a-synced.sh
 #
-# WHAT THIS DOES (honest scope):
+# SCOPE:
 #   Node A is first brought up as the BOOTSTRAP node with --enable-unsynced-mining
 #   (so it can produce the very first blocks before any peer has a chain). That
 #   flag is a bootstrap-only crutch and MUST be dropped once the node has really

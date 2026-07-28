@@ -2,14 +2,10 @@
 //! (`0x30`–`0x37`) transaction's payload and apply the resulting batch-state transition to the
 //! [`PalwStore`]. Pure parse + a store-application step, so the transition logic is unit-testable.
 //!
-//! **Fence status (corrected — the previous "inert on every shipped preset" claim was FALSE).** The
-//! caller gates this on the PALW activation fence, which is `u64::MAX` — hence never invoked — on
-//! mainnet / testnet-10 / simnet / devnet only. `testnet-palw-110` and `devnet-palw-111` ship
-//! `palw_activation_daa_score = 0` (`consensus/core/src/config/params.rs:1403`, `:1454`), so on those
-//! two presets this IS invoked and DOES write [`PalwStore`] rows from genesis onward. The transitions
-//! ride on ordinary transactions (subnetworks `0x30`–`0x37`), so `palw_algo4_accept = false` — which
-//! withholds algo-4 HEADER acceptance in `pre_ghostdag_validation.rs` — does not suppress them; it
-//! only guarantees no ticket ever resolves against what is written.
+//! The caller gates this on the PALW activation fence. Mainnet, testnet-10, simnet and devnet use
+//! `u64::MAX`; the three PALW presets use `0` and write [`PalwStore`] rows from genesis. These
+//! transitions are carried by ordinary transactions (subnetworks `0x30`–`0x37`) and are independent
+//! of the algo-4 header-admission lever.
 
 use std::sync::Arc;
 
@@ -198,22 +194,15 @@ pub enum PalwOverlayError {
     StoreError,
 }
 
-/// kaspa-pq **ADR-0040 §5.17 (§CERT-REDERIVE) — AUTHSET-01 / SAMPLE-01 / SEL-01** — everything a node
-/// needs to decide whether a batch certificate is genuinely ATTESTED by the beacon-selected committee,
-/// as opposed to merely well-formed and correctly bound.
+/// Context required to verify a batch certificate against the beacon-selected committee.
 ///
-/// ## Registry note — provider bonds, not DNS stake bonds (spec refinement over §5.17.2)
+/// ## Provider-bond registry
 ///
-/// The P1-3 scaffold verified votes against the DNS `ActiveBondView` ("design §10.2"), a simplification
-/// made before the ECON-03 provider-bond registry existed. The SEL-01 weighted sampler that landed in
-/// phase 2 ([`select_auditor_committee`]) draws the auditor committee from the **provider-bond view**,
+/// [`select_auditor_committee`] draws the auditor committee from the provider-bond view,
 /// and the §5.17.4 exclusions (`operator_group_id`, the batch's own `provider_{a,b}_bond`) are
-/// provider-bond concepts with no DNS-stake-bond analogue. The coherent design — the one the phase-2
-/// primitives committed to — is therefore that auditors ARE providers (they replica-audit each other's
-/// batches), so votes resolve against the `ProviderBondView` and are weighted by the ECON-03-verified
-/// credential aggregate. The representative outpoint identifies the vote/key; it must not collapse the
-/// selected weight back to one split bond. §5.17.2's "bond_view = ActiveBondView" is stale scaffold
-/// wording; this ctx carries the provider view instead. (Declared, not silent — see ADR §5.17.)
+/// provider-bond concepts with no DNS-stake-bond analogue. Votes resolve against `ProviderBondView` and
+/// are weighted by the ECON-03 credential aggregate. The representative outpoint identifies the vote
+/// key without reducing selected weight to one split bond.
 pub struct PalwCertificateAttestationCtx<'a> {
     /// Domain-separates signatures across networks (same value the beacon path uses).
     pub network_id: u32,
@@ -269,19 +258,19 @@ pub struct PalwCertificateAttestationCtx<'a> {
 /// by the caller from the leaf store; they carry both the `provider_{a,b}_bond`s (AUTHSET-01 exclusions)
 /// and the `receipt_da_root`s (SAMPLE-01 sample).
 ///
-/// ## What is enforced now, in order
+/// ## Verification order
 ///
-/// 0. **The audit epoch belongs to the manifest and remains resolvable.** It must be in
+/// 0. The audit epoch belongs to the manifest and remains resolvable. It must be in
 ///    `[manifest.registration_epoch, manifest.activation_not_before_epoch)`, its seed must resolve, and
 ///    the certificate must be within the inclusion window. Both re-derivations key off
 ///    `prev_seed = R_{audit_beacon_epoch − 1}`. An unresolvable seed (pruned / pre-activation /
-///    `audit_beacon_epoch == 0`) FAILS CLOSED; the §5.17.3 bounded-window rule keeps an honest
+///    `audit_beacon_epoch == 0`) fails closed; the §5.17.3 bounded-window rule keeps a valid
 ///    certificate's audit epoch inside the unpruned window so it is never stranded.
-/// 1. **AUTHSET-01 — the auditor set is the beacon-selected committee.** Re-derive the committee with the
+/// 1. AUTHSET-01: re-derive the beacon-selected committee with the
 ///    SEL-01 weighted, credential-aggregated sampler over the provider-bond view at the frozen audit
 ///    snapshot, excluding the batch's own providers (their credentials + operator groups), and REJECT if
 ///    `cert.auditor_set_commitment` disagrees. Every vote's `bond_outpoint` must be IN that slate.
-/// 2. **SAMPLE-01 — the sample root is the beacon-selected leaves' DA roots.** Re-derive it as
+/// 2. SAMPLE-01: re-derive the sample root from the beacon-selected leaves' DA roots as
 ///    `palw_audit_sample_root` over the `receipt_da_root`s of `palw_deterministic_sample(prev_seed,
 ///    batch_id, leaf_count, sample_size)`, and REJECT if `cert.audit_sample_root` disagrees. Votes are
 ///    verified over the RE-DERIVED root, not the declared one — a vote signed over an arbitrary sample no
@@ -305,11 +294,9 @@ pub struct PalwCertificateAttestationCtx<'a> {
 /// chain `leaves` content-addressed under the batch; `committee_size` / `sample_size` / quorum from
 /// `Params`. No read touches the epoch-keyed accum store or any tip-relative / mutable state.
 ///
-/// **Fenced with the lane** — reached only from the `Certificate` arm of `apply_palw_overlay_effect`,
+/// Reached only from the `Certificate` arm of `apply_palw_overlay_effect`,
 /// which the virtual processor invokes only at/above `palw_activation_daa_score` (`u64::MAX` on the four
-/// non-PALW presets). `palw_algo4_accept = false` on all six presets keeps any accepted certificate from
-/// ever resolving a ticket, so this is inert on every live chain — but is built as if it were enforced,
-/// because a re-genesis flips it on wholesale.
+/// non-PALW presets).
 pub fn verify_certificate_attestation(
     cert: &PalwBatchCertificateV2,
     manifest: &PalwBatchManifestV1,
@@ -478,46 +465,42 @@ pub fn verify_certificate_attestation(
     Ok(())
 }
 
-/// kaspa-pq **ADR-0040 (ECON-03, leg 5) — the provider-unbond owner-authorization rule.**
+/// Validates provider-unbond owner authorization under ADR-0040 ECON-03.
 ///
-/// # Why a bond needs an exit at all
+/// # Release path
 ///
 /// The ECON-03 value lock plus the leg-4 spend gate make a provider's output-0 unspendable for the
-/// life of its bond. A lock with no release is CONFISCATION, not collateral — so this rule is frozen
-/// before the gate that creates the lock, never after.
+/// life of its bond. The unbond request supplies the corresponding release path.
 ///
-/// # Why the exit must be authorized
+/// # Authorization
 ///
 /// `Unbonding` removes a provider from the active set. If any party could publish a `0x37` naming
-/// someone else's bond, unbonding would be a free griefing primitive: knock every honest provider out
-/// of selection at the cost of a transaction fee. The requirements below are what make the request an
-/// act of the OWNER.
+/// another provider's bond, so the request must authenticate the owner.
 ///
-/// # What is enforced, in order (mirroring DNS `unbond_request_authorized`)
+/// # Verification order
 ///
-/// 1. **The bond resolves** in the point-of-view view. A request naming nothing is unauthorized, so a
+/// 1. The bond resolves in the point-of-view view. A request naming nothing is unauthorized, so a
 ///    block can carry no state transition against a phantom bond.
-/// 2. **The bond is `Pending` or `Active`** at `pov_daa_score` — not already `Unbonding`, and not
+/// 2. The bond is `Pending` or `Active` at `pov_daa_score` — not already `Unbonding`, and not
 ///    `Slashed` (a forfeit bond has no exit).
 ///
-///    Precise scope: every request in the block is judged against the SAME point of view, so this
+///    Every request in the block is judged against the same point of view, so this
 ///    rejects a request against a bond that was already unbonding BEFORE this block, not a second
 ///    request inside it. Two `0x37` transactions naming one bond in a single block therefore both
 ///    pass, and that is harmless rather than overlooked: both would stamp the same
 ///    `accepted_daa_score`, so the registry producer deterministically keeps the first effect for
 ///    that outpoint. Apply/revert remain a strict one-to-one inverse.
 ///    `econ03_duplicate_exits_in_one_block_are_canonicalized` pins it.
-/// 3. **The requesting key is THIS bond's owner**: `validator_id_from_pubkey(owner_public_key)` equals
+/// 3. The requesting key owns the bond: `validator_id_from_pubkey(owner_public_key)` equals
 ///    the record's `owner_pubkey_hash`, which acceptance derived from the bond payload.
-/// 4. **The ML-DSA-87 signature verifies** under that key, over
+/// 4. The ML-DSA-87 signature verifies under that key over
 ///    [`PalwProviderUnbondRequestV1::signing_hash`], under the dedicated
 ///    [`PALW_PROVIDER_UNBOND_MLDSA87_CONTEXT`]. The digest binds `network_id` and `bond_outpoint`, so an
 ///    authorization is replayable onto neither another network nor another bond; the context (registered
 ///    in `signature_domains::SIGNATURE_DOMAINS` and held distinct by its table tests) stops a signature
 ///    made for any other PALW or DNS object being presented here.
 ///
-/// Note (3) checks the key against the record, NOT against the request's own claim — a request carries
-/// its own public key, so checking it against itself would authorize everyone.
+/// Step 3 checks the key against the stored record rather than the request's own key field.
 ///
 /// # Effect of the verdict
 ///
@@ -672,14 +655,7 @@ pub fn apply_palw_overlay_effect(
             store.insert_manifest(m.batch_id, Arc::new(m)).map_err(|_| PalwOverlayError::StoreError)
         }
         PalwOverlayEffect::LeafChunk(c) => {
-            // kaspa-pq **ADR-0040 P1-1 (BIND-01)** — contextual admission for leaf blobs.
-            //
-            // This arm used to be an unconditional insert loop over an attacker-supplied `c.batch_id`,
-            // with no manifest lookup, no index bound, and no binding back to the batch. Combined with
-            // algo-4's exemption from the Layer-0 hash floor, that made the lane's ENTIRE proof-of-work
-            // grindable offline: clause 9 draws on `eligibility_hash(.., leaf_hash, nullifier)`, and both
-            // of those are fields of a leaf the attacker authored and injected.
-            //
+            // ADR-0040 P1-1 contextual admission for leaf blobs.
             // The manifest is the batch's only content-addressed anchor (`batch_id == content_id()`,
             // enforced in the Manifest arm), so requiring it here is what ties a leaf to a real batch.
             let manifest = store.batch_manifest(c.batch_id).map_err(|error| {
@@ -803,21 +779,9 @@ pub fn apply_palw_overlay_effect(
                 ) {
                     return Err(PalwOverlayError::LeafMembershipProofInvalid { leaf_index: leaf.leaf_index });
                 }
-                // ADR-0040 P1-9 — the GLOBAL job-nullifier check is DEFERRED ENTIRELY. It is not here,
-                // and (as of the P1-5 remediation) it is no longer on the block-keyed view either.
-                //
-                // It cannot be here: this arm writes the content-addressed blob store, which sits on the
-                // ACCEPTANCE coordinate, and enforcing a fork-relative rule here would make the same leaf
-                // admissible or not depending on which coordinate observed it first — the BIND-03
-                // mismatch, applied to a rule where it would be a consensus split rather than a nuisance.
-                //
-                // It cannot be on the body/mergeset view either, which is why it was withdrawn from
-                // there: that coordinate has no `ActiveBondView` and performs no signature verification,
-                // so a first-claim-wins registry there ranks by an attacker-declarable value — unbounded
-                // per-block state, and a batch-bricking censorship lever the moment the rejection is
-                // armed. It will land at the REWARD/virtual coordinate, authorised by the provider's
-                // ML-DSA signature over `ReplicaExecutionReceiptV1::signing_hash` (which commits to
-                // `job_nullifier`). See ADR-0040.
+                // Global job-nullifier accounting belongs at the reward/virtual coordinate. Applying a
+                // fork-relative rule while writing the content-addressed blob store would make admission
+                // depend on processing coordinate and order.
                 //
                 // Blob persistence is therefore permissive, and duplicate-work rejection is an
                 // Activation-class gate that blocks mainnet activation — not a body-validity rule.
@@ -1013,13 +977,10 @@ pub fn resolve_palw_binding(
 /// [`resolve_palw_binding`]). Returns `None` when the beacon has not yet produced a seed in this block's
 /// history.
 ///
-/// **This is the tested computation seam ONLY — it is deliberately NOT wired into the enforced
-/// `check_palw_ticket`.** Enforcing the eligibility DRAW (`palw_eligibility_win` over this digest) while
-/// the lane-DAA `expected_bits` (clause 7) and the checkpoint `chain_commit` (clause 6) are still not
-/// live would be a *grindable half-gate*: `palw_eligibility_win` compares against the header's own `bits`,
-/// so an unchecked-`bits` header trivially satisfies the draw. The activation slice that lands clauses
-/// 6+7+8 flips the whole algo-4 acceptance rule atomically (the full
-/// [`kaspa_consensus_core::palw::verify_palw_ticket`]); this seam proves R_E makes clause 9 *computable*.
+/// This computation helper is exercised by conformance tests but is not called by
+/// `check_palw_ticket`. Eligibility must be enforced together with the lane difficulty and chain
+/// commitment checks: `palw_eligibility_win` compares against the header's `bits`, so applying it
+/// without validating `bits` would not provide a meaningful gate.
 pub fn resolve_palw_eligibility(
     beacon: &DbPalwBeaconStore,
     selected_parent: kaspa_consensus_core::BlockHash,
@@ -1051,10 +1012,9 @@ pub fn resolve_palw_eligibility(
 /// crossing header simply binds the previous epoch's frozen facts). The certificate digest is derived
 /// on demand from the record's anchor-pure facts ([`PalwBeaconStateV1::dns_certificate_hash`]).
 ///
-/// **Fail-closed** (`None`): no carried record, or no DNS-confirmed anchor yet (the zero bootstrap
-/// anchor certifies nothing — I-4 would be void). The C5 atomic flip rejects algo-4 on `None`.
-/// Like [`resolve_palw_eligibility`], this is the tested computation seam ONLY — not spliced into the
-/// enforced `check_palw_ticket` until the C5 flip lands all of clauses 6–9 together.
+/// Returns `None` when no carried record or DNS-confirmed anchor exists; the zero bootstrap anchor
+/// certifies nothing. Like [`resolve_palw_eligibility`], this helper is covered by conformance tests
+/// but is not called by `check_palw_ticket`.
 pub fn resolve_palw_chain_commit(
     beacon: &DbPalwBeaconStore,
     selected_parent: kaspa_consensus_core::BlockHash,
@@ -1232,11 +1192,10 @@ pub fn resolve_palw_buried_epoch_seeds(
 /// relative state. Therefore two nodes that reach the same block by ANY path compute a byte-identical
 /// `R_{audit_beacon_epoch − 1}`. ∎
 ///
-/// **WIRED (ADR-0040 §5.17 atomic slice).** `verify_certificate_attestation` calls this to resolve the
+/// `verify_certificate_attestation` calls this to resolve the
 /// audit-epoch seed at the frozen snapshot; a `None` return (pruned / pre-activation / zero-seed) is a
 /// fail-CLOSED certificate rejection, made sound by the bounded-inclusion rule
-/// `palw_certificate_included_within_audit_window`. Inert only in the sense that
-/// `palw_algo4_accept = false` on every shipped preset, so no certificate is accepted to reach it.
+/// `palw_certificate_included_within_audit_window`.
 pub fn resolve_palw_audit_epoch_seed(
     headers: &DbHeadersStore,
     reachability: &MTReachabilityService<DbReachabilityStore>,
@@ -1342,18 +1301,11 @@ mod tests {
         }
     }
 
-    /// kaspa-pq **ADR-0040 P1-5/P1-9 — recurrence guard.**
+    /// Prevents reintroduction of a job-nullifier registry at the body/mergeset coordinate.
     ///
-    /// The withdrawn rule was a first-claim-wins registry keyed on `job_nullifier`, operated by the
-    /// body/mergeset fold on a struct cloned and re-persisted every block. It is removed, and removal is
-    /// the whole remediation — so the thing to guard is not a value but the RE-APPEARANCE of the
-    /// mechanism. `job_nullifier` remains a legitimate FIELD of `PalwPublicLeafV1` and
-    /// `ReplicaExecutionReceiptV1` (the reward-coordinate re-land needs it); what must not come back at
-    /// this coordinate is the plural registry and its two accessors.
-    ///
-    /// If you are here because this test failed: re-read ADR-0040 "P1-9 WITHDRAWN FROM THE BODY
-    /// COORDINATE" before deleting it. A capped registry is not a fix — the cap bounds the bytes and
-    /// leaves the batch-bricking censorship lever.
+    /// `job_nullifier` remains a valid field of `PalwPublicLeafV1` and
+    /// `ReplicaExecutionReceiptV1`, but body-state storage and accessors for a first-claim-wins registry
+    /// are prohibited here.
     #[test]
     fn no_job_nullifier_registry_at_the_body_coordinate() {
         for (name, src) in [
@@ -1730,17 +1682,10 @@ mod tests {
         assert!(!store.has_leaf(bid, 1).unwrap());
     }
 
-    /// kaspa-pq **ADR-0040 §5.15 (ACCEPT-BIND/M2) — the CHUNK-INDEX SQUAT itself, rejected.**
+    /// Rejects a chunk-index substitution before the leaf reaches storage.
     ///
-    /// This is the attack the gate exists for, stated in its own terms and WITHOUT the honest leaf
-    /// having been stored first — because the squatter's entire advantage was going first.
-    ///
-    /// `batch_id` is public. Before M2, an observer could copy one, author leaves paying ITS OWN
-    /// `provider_{a,b}_reward_script` and naming its own `ticket_authority_pk_hash`, and write them at
-    /// `(batch_id, leaf_index)` before the honest provider's transaction landed. The honest auditors'
-    /// certificate then covered the squatter's leaves — consensus never re-derived `leaf_root` from what
-    /// it had stored — and `palw_work_reward_class` reads the reward scripts straight off the stored
-    /// leaf, so the squatter collected the 77 % worker base.
+    /// The fixture submits a substituted leaf before the valid leaf. Membership verification must
+    /// reject the substituted payout scripts and ticket authority against the manifest's `leaf_root`.
     ///
     /// The assertion is made on the STORE, not merely on the return value: semantic rejections are inert
     /// in the production caller (only `StoreError` process-wide fail-stops), so "returned an error" is
@@ -1779,8 +1724,7 @@ mod tests {
             "the squatter's leaf must not be in the store — the slot stays free for the honest one"
         );
 
-        // And the honest provider, arriving SECOND, still succeeds. Under the old code it would have hit
-        // `LeafImmutabilityViolation` against the squatter's leaf and the batch would be dead.
+        // The valid provider leaf remains insertable after the rejected substitution.
         let honest = chunk_with_proofs(bid, vec![leaf_in(bid, 0), leaf_in(bid, 1)]);
         apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(honest.clone()), &store, &beacon, None).unwrap();
 
@@ -1869,7 +1813,7 @@ mod tests {
     /// (`validate_palw_overlay_payload`), the REAL parser (`parse_palw_overlay`) and the REAL acceptance
     /// arm (`apply_palw_overlay_effect`), and every leaf must end up in the store.
     ///
-    /// **This is a true cross-crate call, not a pair of pinned goldens.** `misaka-palw-miner` is a
+    /// Cross-crate integration call. `misaka-palw-miner` is a
     /// dev-dependency of this crate (acyclic — its closure does not contain `kaspa-consensus`), so both
     /// implementations execute here. The miner-side test
     /// `every_emitted_proof_opens_the_manifest_leaf_root_under_the_consensus_verifier` calls the verify
@@ -2001,41 +1945,28 @@ mod tests {
         );
     }
 
-    /// kaspa-pq **ADR-0040 §5.17 (AUTHSET-01 / SAMPLE-01 / SEL-01) / gate G13** — the CROSS-CRATE auditor
-    /// quorum E2E: a certificate assembled by the REAL miner-side quorum producer
-    /// (`misaka_palw_miner::audit`) is driven through the REAL consensus verifier
-    /// (`verify_certificate_attestation`) and the REAL acceptance arm, and every adversarial perturbation is
-    /// rejected for its OWN error variant.
+    /// Cross-crate auditor quorum test. A certificate assembled by `misaka_palw_miner::audit` is
+    /// processed by `verify_certificate_attestation` and the acceptance path.
     ///
-    /// **Why this is the missing piece.** The sub-properties are each already tested — the verifier's
-    /// forged-cert / committee+sample re-derivation
+    /// The component tests cover the verifier's forged-certificate and committee/sample re-derivation
     /// (`certificate_attestation_rederives_committee_sample_and_signatures`), the core quorum arithmetic
     /// (`certificate_stake_weighted_quorum`), the SEL-01 bond-split
     /// (`sel01_credential_aggregation_makes_bond_splitting_worthless`), and the miner-side producer
-    /// (`independent_auditors_form_a_certificate_that_validates_verifies_and_reaches_quorum`). What none of
-    /// them does is the CROSS-CRATE round trip: build a genuine multi-auditor certificate with the miner's
-    /// REAL producer over a producer-built batch, then feed it to the REAL verifier. That is the shape
+    /// (`independent_auditors_form_a_certificate_that_validates_verifies_and_reaches_quorum`). This test
+    /// adds the cross-crate round trip over a producer-built batch. That is the shape
     /// `producer_built_batch_round_trips_through_the_real_acceptance_arm` closes for LEAF CHUNKS; this one
-    /// closes it for the CERTIFICATE. `misaka-palw-miner` is a dev-dependency of this crate (acyclic — its
+    /// closes for the certificate. `misaka-palw-miner` is a dev-dependency of this crate (its
     /// closure does not contain `kaspa-consensus`), so both implementations execute here.
     ///
-    /// **Construction == validation (the honesty clause).** If the producer's honestly-assembled
-    /// certificate were REJECTED by the real verifier, that would be a construction/validation drift — a
-    /// real bug — because on-chain `apply_palw_overlay_effect`'s error is discarded (`let _ =`,
-    /// virtual_processor/processor.rs), so the lane would silently never certify. The first assertion below
-    /// is therefore that the producer's certificate is ACCEPTED on the FIRST try; a failure there is a bug
-    /// to REPORT, never a test to adjust.
+    /// Construction and validation use the same derivation. The first assertion requires the producer's
+    /// certificate to pass the verifier and detects construction/validation drift.
     ///
-    /// **Covered at the single-process E2E level:** honest quorum accept (both the pure verifier and the
-    /// acceptance arm), forged vote signature, a vote from OUTSIDE the re-derived slate, wrong
+    /// Single-process coverage includes quorum acceptance, forged vote signatures, votes outside the
+    /// re-derived slate, incorrect
     /// `auditor_set_commitment`, wrong `audit_sample_root`, a stake-short quorum, an omitted selected vote
     /// that cannot shrink the denominator, and the SEL-01 bond-split (splitting a credential's bond into
     /// many small outpoints does not change the re-derived slate or its commitment).
-    /// **INTEGRATION-BOUND (not expressible in one process — honestly out of scope here, like G16's
-    /// bounded-window caveat):** the *auditor-withhold* liveness/recovery path (needs a network partition so
-    /// a selected auditor never emits its vote) and the *multi-node / reorg* convergence (needs multiple
-    /// nodes and a competing chain). Those remain G13's TestSuite/integration surface; this is its
-    /// code-verifiable core.
+    /// Network partition recovery and multi-node reorg convergence remain integration-test concerns.
     #[test]
     fn producer_built_certificate_round_trips_through_verify_certificate_attestation() {
         use kaspa_consensus_core::palw::PalwProviderBondRecord;
@@ -2549,9 +2480,9 @@ mod tests {
     /// Why the leaf cannot dodge this by restamping itself: `registered_epoch` is inside `leaf_hash`,
     /// `leaf_hash` opens `manifest.leaf_root` (§5.15/M2), and `leaf_root` is inside `content_id()` ==
     /// `batch_id`. Changing the leaf's epoch changes the batch it is a member of. So the author's only
-    /// remaining move is to build the batch honestly at one epoch — which is the rule.
+    /// remaining valid construction is a batch whose leaves share one registration epoch.
     ///
-    /// What this does NOT claim: the acceptance arm does not know the real acceptance epoch. It binds the
+    /// The acceptance arm does not determine the real acceptance epoch. It binds the
     /// leaf to the manifest; `PalwBatchManifestV1::admission_valid` (reached via
     /// `PalwBatchViewV1::apply_manifest`, which `check_palw_ticket`'s `view.resolvable_batch` requires
     /// before any header may mine the batch) binds the manifest to the carrier epoch.
@@ -2698,9 +2629,8 @@ mod tests {
     /// certificate blob in the store could satisfy an algo-4 header for ANY batch — the certificate's
     /// `manifest_hash` / `leaf_root` were decoded and never compared to anything.
     ///
-    /// Scope note: this closes the *identity* half of CERT-01. The *attestation* half (ML-DSA vote
-    /// verification, auditor selection, stake-weighted quorum, `audit_sample_root` re-derivation) needs
-    /// the bond state from P2-5/P2-7 and is deliberately still open — hence `palw_algo4_accept = false`.
+    /// The attestation path separately verifies ML-DSA votes, auditor selection, stake-weighted quorum
+    /// and `audit_sample_root`.
     #[test]
     fn certificate_must_bind_to_its_batch_manifest_and_leaf_root() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
@@ -2764,17 +2694,11 @@ mod tests {
         assert_eq!(store.certificate(good_hash).unwrap().leaf_root, real_leaf_root);
     }
 
-    /// kaspa-pq **ADR-0040 §5.17 (AUTHSET-01 / SAMPLE-01 / SEL-01) / gate G4** — a certificate must be
-    /// genuinely ATTESTED by the BEACON-SELECTED committee, over the BEACON-SELECTED on-chain leaves.
+    /// A certificate must be attested by the beacon-selected committee over beacon-selected on-chain
+    /// leaves.
     ///
-    /// **SPEC CHANGE, declared (§5.17).** The P1-3 predecessor of this test verified votes against DNS
-    /// stake bonds (`ActiveBondView`) and TRUSTED the certificate's declared `auditor_set_commitment` /
-    /// `audit_sample_root`. The AUTHSET-01 / SAMPLE-01 slice re-derives both from the beacon-visible
-    /// state, and the SEL-01 weighted sampler that supplies the committee draws from the PROVIDER-bond
-    /// view — so votes now resolve against `ProviderBondView` and are weighted by ECON-03 `amount_sompi`.
-    /// This test is therefore REWRITTEN, not weakened: the old assertions (garbage sigs, replay, quorum,
-    /// approving-stake) are re-expressed over provider bonds, and the three new re-derivation properties
-    /// (§5.17.10) are added. Each assertion is a distinct forgery attempt.
+    /// AUTHSET-01 and SAMPLE-01 re-derive the declared roots from beacon-visible state. SEL-01 draws the
+    /// committee from `ProviderBondView` and weights votes by ECON-03 `amount_sompi`.
     #[test]
     fn certificate_attestation_rederives_committee_sample_and_signatures() {
         use kaspa_consensus_core::palw::{PALW_AUDITOR_V2_MLDSA87_CONTEXT, PalwProviderBondRecord};
@@ -2857,7 +2781,7 @@ mod tests {
             quorum_den: 3,
         };
 
-        // A certificate carrying the honestly re-derived commitment + sample root; only the votes vary.
+        // A certificate carrying the re-derived commitment and sample root; only the votes vary.
         let cert = |votes: Vec<PalwAuditorVoteV2>, approving_stake: u128| PalwBatchCertificateV2 {
             version: PALW_BATCH_CERTIFICATE_VERSION_V2,
             batch_id: bid,
@@ -3425,7 +3349,7 @@ mod tests {
         req
     }
 
-    /// **The griefing primitive this rule closes.** Unbonding ejects a provider from the active set.
+    /// Unbonding regression case. Unbonding ejects a provider from the active set.
     /// If anyone could publish a `0x37` naming someone else's bond, knocking every honest provider
     /// out of selection would cost a transaction fee. Each assertion is a distinct forgery attempt.
     #[test]

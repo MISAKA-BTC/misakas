@@ -232,11 +232,9 @@ impl ReplicaMatchKey {
     /// and agree on the token `output_commitment`, but carry **different** `runtime_class_id`
     /// (hardware/vendor diversity is *required*, e.g. one Apple-Metal class + one NVIDIA-CUDA class).
     ///
-    /// **Corrected (ADR-0040 P0-2 / DOC-02).** This doc previously listed `operation_schedule_commitment`
-    /// among the compared fields. It is **not** compared — see the inline note in the body. The only
+    /// `operation_schedule_commitment` is not compared. The only
     /// compute-binding field in diverse mode is `output_commitment` (a salted hash of the argmax token
-    /// ids); both `canonical_gemm_trace_root` AND `operation_schedule_commitment` are excluded. The old
-    /// wording overstated the strength of the cross-vendor rule to any reader who did not read the body.
+    /// ids); both `canonical_gemm_trace_root` and `operation_schedule_commitment` are excluded.
     ///
     /// Why not the raw compute path: under the canonical backend, cross-vendor raw fp32 logits (hence
     /// `canonical_gemm_trace_root`) diverge by ≤1 ULP at long generation, while the argmax token sequence

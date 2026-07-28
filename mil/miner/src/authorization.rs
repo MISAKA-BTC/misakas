@@ -1,23 +1,14 @@
-//! PALW **per-block ticket authorization** producer (ADR-0040 P1-6, AUTH-01/02/03) — the signing half
-//! of body clause 7.
+//! PALW per-block ticket-authorization producer (ADR-0040 P1-6, AUTH-01/02/03).
 //!
-//! # Why the miner needs this at all
+//! # Purpose
 //!
-//! A winning algo-4 header DISCLOSES its raw `ticket_nullifier` (I-13 secrecy ends at mint) and
-//! `eligibility_hash` binds no block content. Before ADR-0040 any OBSERVER of a winning block could
-//! restamp that same winning draw onto unlimited competing blocks of their own choosing. Clause 7
-//! closes it by REQUIRING every algo-4 block to carry an ML-DSA-87 authorization, signed by the
-//! authority the leaf named in `ticket_authority_pk_hash`, that binds this block's parents,
-//! transaction set, timestamp and ticket coordinates.
-//!
-//! That is a *requirement*, not an option: without a matching producer this crate's mining path
-//! ([`crate::mining::grind_eligibility`]) mints blocks that this repository's own consensus rejects.
-//! This module is that producer.
+//! Each algo-4 block carries an ML-DSA-87 authorization signed by the leaf's declared ticket authority.
+//! It binds the parents, transaction set, timestamp, and ticket coordinates to prevent a disclosed
+//! winning ticket from being transferred to another block.
 //!
 //! # Construction == validation
 //!
-//! Every value here is fed to a live check, and the module deliberately owns none of the binding
-//! logic — it calls the SAME consensus functions the verifier calls:
+//! The producer uses the same binding functions as consensus validation:
 //!
 //! | produced here | checked by clause 7 |
 //! |---|---|
@@ -93,24 +84,21 @@ pub fn ticket_authority_pk_hash(public_key: &[u8]) -> Hash64 {
 
 /// Everything the authorization binds, resolved by the node from the block it is about to mint.
 ///
-/// ADR-0040 (AUTH-02): this is deliberately NOT a list of bound scalars. The previous shape of this
-/// struct enumerated nine of them, mirroring the old consensus signature — and since algo-4 headers are
-/// exempt from the Layer-0 hash floor, every header field NOT on that list was free, so one signature
-/// authorized an unbounded equivalence class of blocks rather than one block. The binding is now the
-/// header ITSELF: a lossless carrier, not a view, so a header field added in future is bound the moment
-/// it enters the block hash, with no edit here.
+/// ADR-0040 AUTH-02: the binding carries the complete header rather than enumerating selected fields.
+/// Any field included
+/// in the block hash is therefore included in the authorization commitment.
 #[derive(Clone, Debug)]
 pub struct BlockAuthorizationBinding {
     /// The consensus PALW network number (`params.net.suffix()`), as used by every PALW preimage.
     pub network_id: u32,
-    /// The COMPLETE header of the block being authorized, with every field already final except the
+    /// Complete header of the block being authorized, with every field final except the
     /// two the commitment necessarily substitutes: `palw_authorization_hash` (circular — it is the hash
     /// of the object being built) and `hash_merkle_root` (circular — the real root covers the
     /// authorization tx, whose payload carries this commitment). Both may hold any value here; the
     /// commitment ignores them in favour of zero and `authed_hash_merkle_root` respectively.
     ///
     /// The ticket coordinates the authorization declares — `batch_id`, `leaf_index`,
-    /// `ticket_nullifier` — are READ FROM THIS HEADER rather than supplied separately, because
+    /// `ticket_nullifier` — are read from this header rather than supplied separately, because
     /// `binds_header` compares the authorization's copies against the header's. Taking them from one
     /// source makes that comparison unfailable by construction.
     pub header: Header,
@@ -382,12 +370,7 @@ mod tests {
             h(0xA2), // utxo_commitment
             1_700_000_000_000,
             EASY_BITS,
-            // The nonce of a PALW block is pinned to low64(nullifier) (I-3, non-grindable). This used to
-            // be an arbitrary literal on the grounds that "its exact value does not matter to the
-            // binding" — true of the AUTH-02 commitment, but false of the block: an unpinned nonce fails
-            // the clause-9 draw, so the fixture was a header no validator could ever accept. Pinning it
-            // makes the fixture a header this repository's own consensus would draw on, which is what a
-            // test named "satisfies every clause 7 check" has to be built from.
+            // PALW pins the nonce to low64(nullifier) so the fixture satisfies the clause-9 draw.
             crate::mining::pinned_nonce(&nullifier),
             POW_ALGO_ID_PALW_REPLICA,
             7_000, // daa_score
@@ -434,7 +417,7 @@ mod tests {
         (authority, ticket.leaf, binding, authorized)
     }
 
-    /// **Construction == validation, ACCEPT half.** Everything body clause 7 checks, checked here
+    /// Construction and validation: accepted input. Everything body clause 7 checks is checked here
     /// against the produced authorization — using the consensus functions themselves, not a
     /// re-implementation: the payload is isolation-valid on `0x38`, the header hash matches, the
     /// binding matches, the key is the leaf's declared authority, and the ML-DSA-87 signature verifies
@@ -517,18 +500,9 @@ mod tests {
         assert!(!authorized.auth.binds_header(binding.network_id, &changed_state, &binding.authed_hash_merkle_root));
     }
 
-    /// **Construction == validation, REJECT half.** Mutating ANY bound field breaks the binding — this
-    /// is the anti-re-mint property (AUTH-02): an observer who knows the disclosed nullifier still
-    /// cannot lift the authorization onto a block of their own, because a block of their own differs in
-    /// at least one of these. The `timestamp` case is called out on purpose: an early cut of the fix
-    /// left it unbound and the replay SUCCEEDED.
-    ///
-    /// ADR-0040 made this test STRICTLY STRONGER. The binding used to be nine hand-picked scalars, and
-    /// the seven cases below marked `AUTH-02 (previously FREE)` are the axes the audit enumerated as
-    /// costing an attacker nothing: five of them (`utxo_commitment`, `accepted_id_merkle_root`,
-    /// `pruning_point`, `overlay_commitment_root`, `palw_beacon_seed`) are checked ONLY at the
-    /// virtual/UTXO stage, so a twin block that never becomes a chain candidate was never checked on
-    /// them at all. Each one is now a distinct rejection.
+    /// Construction and validation: rejected input. Mutating any bound field breaks AUTH-02 and
+    /// prevents an authorization from being transferred to a different block. The cases cover every
+    /// bound field, including fields validated only at the virtual/UTXO stage.
     #[test]
     fn every_bound_field_is_load_bearing() {
         let (_authority, _leaf, binding, authorized) = produce();
@@ -555,7 +529,7 @@ mod tests {
             ("leaf index", NET, mutate(&|hd| hd.palw_leaf_index = 1), h(0x80)),
             ("nullifier", NET, mutate(&|hd| hd.palw_ticket_nullifier = h(0xEE)), h(0x80)),
             ("network id", NET + 1, binding.header.clone(), h(0x80)),
-            // --- AUTH-02 (previously FREE): every one of these yielded a valid twin block at zero cost ---
+            // AUTH-02 fields validated at the virtual/UTXO stage.
             ("utxo commitment", NET, mutate(&|hd| hd.utxo_commitment = h(0xB2)), h(0x80)),
             ("accepted id merkle root", NET, mutate(&|hd| hd.accepted_id_merkle_root = h(0xB1)), h(0x80)),
             ("pruning point", NET, mutate(&|hd| hd.pruning_point = h(0xB3)), h(0x80)),
@@ -573,7 +547,7 @@ mod tests {
                 }),
                 h(0x80),
             ),
-            // Also previously free: bits, and the remaining v3 work/proof fields.
+            // Remaining Header-v3 work and proof fields.
             ("bits", NET, mutate(&|hd| hd.bits = EASY_BITS - 1), h(0x80)),
             ("proof type", NET, mutate(&|hd| hd.palw_proof_type = 2), h(0x80)),
             ("blue compute work", NET, mutate(&|hd| hd.blue_compute_work = BlueWorkType::from(10u64)), h(0x80)),
@@ -666,7 +640,7 @@ mod tests {
         assert_eq!(tx.payload, authorized.payload);
     }
 
-    /// **Fail-closed before signing.** Each arm is a header this authority must refuse: signing it would
+    /// Pre-signing rejection cases. Each arm is a header this authority refuses because signing it would
     /// burn the ticket on a block this repository's own validator rejects. A PALW ticket is one draw on
     /// one registered leaf — there is no re-roll — so "refuse" and "sign anyway" are not equivalent.
     #[test]

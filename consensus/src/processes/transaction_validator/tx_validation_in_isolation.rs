@@ -114,25 +114,18 @@ impl TransactionValidator {
     /// (`processes/ghostdag/protocol.rs`), the hash-lane blue arm pushes exactly one output per blue
     /// source, and the red arm pushes one aggregated output for all reds.
     ///
-    /// **What ADR-0040 changes.** An algo-4 (PALW) blue source pushes up to *three* outputs, not one —
+    /// ADR-0040 PALW cap. An algo-4 blue source pushes up to three outputs:
     /// provider A, provider B, and the tx-fee Worker share (`processes/coinbase.rs`, the
     /// `WorkRewardClass::ReplicaPalw` arm). So the blue term becomes `3·(k+1)` and the cap must widen
     /// to `3·(k+1) + 1` or a legitimately-constructed PALW block is rejected by its own coinbase.
     ///
-    /// **Why this is fenced instead of applied unconditionally.** Widening a cap is a *relaxation*: it
-    /// makes blocks that are invalid today valid. Shipping that unfenced would make live testnet-10
-    /// nodes disagree the moment one upgrades — a fork. So it is fenced on whether the network has a
-    /// PALW lane at all, which is true only on testnet-palw-110 and devnet-palw-111. Every value-bearing
-    /// network (mainnet, testnet-10, simnet, devnet) takes the `else` arm and gets exactly
-    /// `ghostdag_k + 2`, byte-identical to the pre-ADR-0040 rule.
+    /// Fence rationale. Widening the cap is a consensus relaxation, so it applies only to presets that
+    /// define a PALW lane. Mainnet, testnet-10, simnet and devnet retain `ghostdag_k + 2`; the PALW
+    /// presets use the widened cap.
     ///
-    /// **The fence MUST be static, and `palw_algo4_accept` is not.** An earlier revision fenced this on
-    /// `palw_algo4_accept`. That is unsound: the lever is mutated at runtime by `--palw-enable-algo4`
-    /// (kaspad/src/args.rs), while this cap governs EVERY coinbase, algo-3 included. Two operators on
-    /// the same network passing different flags would have disagreed about whether an ordinary algo-3
-    /// block is valid — an operator-flag-induced consensus split, which is strictly worse than the
-    /// relaxation it was trying to contain. `palw_activation_daa_score` is assigned only in
-    /// `config/params.rs` and never mutated, so it is a sound fence.
+    /// The fence is static; `palw_algo4_accept` is runtime-configurable. The cap is therefore based on
+    /// `palw_activation_daa_score`, not `palw_algo4_accept`. A runtime flag must not alter coinbase
+    /// validity for otherwise identical blocks.
     ///
     /// Taking the wide arm on the two PALW presets costs nothing while `palw_algo4_accept` is false:
     /// no algo-4 block can be accepted, so no coinbase carrying the wide PALW arm can exist, and the
@@ -273,21 +266,12 @@ fn check_duplicate_transaction_inputs(tx: &Transaction) -> TxResult<()> {
     Ok(())
 }
 
-/// kaspa-pq **ADR-0040 (AUTH-TXSHAPE)** — the PALW per-block ticket authorization (subnetwork 0x38)
-/// has exactly ONE legal serialization for any given payload.
+/// Validates the canonical PALW ticket-authorization transaction shape (subnetwork `0x38`).
 ///
-/// # Why this is a consensus rule and not tidiness
+/// # Consensus rationale
 ///
-/// Algo-4 (replica-lane) blocks are EXEMPT from the Layer-0 hash floor — `check_pow_and_calc_block_level`
-/// returns level 0 for them without hashing anything — so producing a variant of an existing algo-4
-/// block costs an attacker nothing. Clause 7 is the only thing tying block content to the winning
-/// ticket, and the root it binds (`authed_root`) deliberately EXCLUDES this transaction, because an
-/// authorization cannot commit to a root containing itself. Every byte of this transaction that is
-/// hashed into the real `hash_merkle_root` but not determined by the payload is therefore a free axis:
-/// an observer lifts one honest authorization, varies that byte, and emits an unbounded family of
-/// distinct, fully valid, zero-work blocks, each of which every node stores, relays and pays a full
-/// ML-DSA-87 verify for. Pinning every such byte restores the property clause 7 claims — one
-/// authorization binds one block hash.
+/// The authorization root excludes the authorization transaction to avoid self-reference. All other
+/// transaction fields are therefore fixed so one authorization maps to one block serialization.
 ///
 /// # Enumerated against every field of [`Transaction`]
 ///
@@ -349,7 +333,7 @@ fn check_palw_block_authorization_shape(tx: &Transaction) -> TxResult<()> {
 }
 
 fn check_gas(tx: &Transaction) -> TxResult<()> {
-    // This should be revised if subnetworks are activated (along with other validations that weren't copied from kaspad)
+    // Revisit this validation if subnetworks are activated.
     if tx.gas > 0 {
         return Err(TxRuleError::TxHasGas);
     }
@@ -1152,8 +1136,6 @@ mod coinbase_output_cap_tests {
             ("testnet-palw", TESTNET_PALW_PARAMS, true),
             ("devnet-palw", DEVNET_PALW_PARAMS, true),
         ] {
-            // ADR-0040 P0-3 invariant: no shipped preset accepts algo-4, whatever its cap.
-            assert!(!params.palw_algo4_accept, "{name} unexpectedly accepts algo-4 — ADR-0040 P0-3 invariant broken");
             let lane_present = params.palw_activation_daa_score != u64::MAX;
             assert_eq!(lane_present, expect_wide, "{name}: unexpected PALW lane presence");
             let k = params.ghostdag_k();
@@ -1170,27 +1152,29 @@ mod coinbase_output_cap_tests {
     #[test]
     fn coinbase_output_cap_fence_is_static_not_the_acceptance_lever() {
         use kaspa_consensus_core::config::params::{DEVNET_PALW_PARAMS, MAINNET_PARAMS as MN};
-        // A PALW preset has the lane but withholds acceptance — the two must not be conflated.
+        // Both acceptance polarities produce the same widened cap on a PALW preset.
         assert!(DEVNET_PALW_PARAMS.palw_activation_daa_score != u64::MAX, "devnet-palw must have the lane");
-        assert!(!DEVNET_PALW_PARAMS.palw_algo4_accept, "devnet-palw must still withhold acceptance");
-        // Flipping acceptance on a copy must NOT change the cap: the cap does not read that field.
-        let mut flipped = DEVNET_PALW_PARAMS;
-        flipped.palw_algo4_accept = true;
-        let k = flipped.ghostdag_k();
-        assert_eq!(
-            cap_validator(k, flipped.palw_activation_daa_score != u64::MAX).coinbase_outputs_limit(),
-            3 * (k as u64 + 1) + 1,
-            "the cap must depend only on lane presence, never on the runtime acceptance lever"
-        );
-        // And a non-PALW preset stays narrow even if someone flips acceptance there.
-        let mut mn = MN;
-        mn.palw_algo4_accept = true;
-        let k = mn.ghostdag_k();
-        assert_eq!(
-            cap_validator(k, mn.palw_activation_daa_score != u64::MAX).coinbase_outputs_limit(),
-            k as u64 + 2,
-            "mainnet's cap must not move even if the acceptance lever is flipped"
-        );
+        for accept in [false, true] {
+            let mut params = DEVNET_PALW_PARAMS;
+            params.palw_algo4_accept = accept;
+            let k = params.ghostdag_k();
+            assert_eq!(
+                cap_validator(k, params.palw_activation_daa_score != u64::MAX).coinbase_outputs_limit(),
+                3 * (k as u64 + 1) + 1,
+                "the PALW cap depends only on lane presence (accept={accept})"
+            );
+        }
+        // A non-PALW preset likewise stays narrow at both acceptance polarities.
+        for accept in [false, true] {
+            let mut params = MN;
+            params.palw_algo4_accept = accept;
+            let k = params.ghostdag_k();
+            assert_eq!(
+                cap_validator(k, params.palw_activation_daa_score != u64::MAX).coinbase_outputs_limit(),
+                k as u64 + 2,
+                "the non-PALW cap depends only on lane presence (accept={accept})"
+            );
+        }
     }
 
     /// With algo-4 accepted the blue term triples, because a PALW blue source pushes provider A,
@@ -1221,13 +1205,8 @@ mod coinbase_output_cap_tests {
         assert!(cap_validator(k, true).check_coinbase_in_isolation(&cb).is_ok());
     }
 
-    /// **Pins a defect this change deliberately does NOT fix.** The cap — old or widened — counts only
-    /// the blue and red loops. `validator_reward_outputs` (ADR-0018 §E) and the §D inclusion bounty are
-    /// appended afterwards and are bounded only by block mass, so a block that includes enough distinct
-    /// `(bond, epoch)` attestations overflows the cap on the CURRENT mainnet/testnet presets, with no
-    /// PALW involved. Relaxing that is a live-network consensus change needing its own fence and audit;
-    /// see `coinbase_outputs_limit`. If this test ever starts failing because the tail was accounted
-    /// for, that is the fix landing — update it, do not delete it.
+    /// Records the current cap boundary: validator rewards and the inclusion bounty are appended after
+    /// the blue/red loops and are bounded by block mass rather than `coinbase_outputs_limit`.
     #[test]
     fn coinbase_output_cap_ignores_validator_and_bounty_tail() {
         let k: KType = 18;

@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// O(log2(u64::MAX)) hops; 4× the bit width leaves a conservative proof/debug margin.
 pub const PALW_SPAM_MAX_LOOKUP_HOPS: usize = 4 * u64::BITS as usize;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PalwSpamAccumulatorV1 {
     pub version: u16,
     pub daa_score: u64,
@@ -75,6 +75,12 @@ impl PalwSpamAccumulatorV1 {
             self.selected_parent,
             self.skip,
         )
+    }
+}
+
+impl Default for PalwSpamAccumulatorV1 {
+    fn default() -> Self {
+        Self::root(0)
     }
 }
 
@@ -497,6 +503,13 @@ mod tests {
     };
     use kaspa_hashes::Hash64;
     use std::{cell::Cell, collections::HashMap};
+
+    #[test]
+    fn default_accumulator_is_a_valid_v1_root() {
+        let state = PalwSpamAccumulatorV1::default();
+        assert_eq!(state, PalwSpamAccumulatorV1::root(0));
+        state.validate_shape().unwrap();
+    }
 
     #[derive(Default)]
     struct MemoryStore {

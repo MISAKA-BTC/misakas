@@ -10,21 +10,20 @@ use kaspa_database::registry::DatabaseStorePrefixes;
 use kaspa_hashes::Hash64;
 use rocksdb::WriteBatch;
 
-/// kaspa-pq **ADR-0040 §5.15.13 — gate G16 (P1-9-RELAND)**: the `job_nullifier`s that THIS chain
-/// block's coinbase actually paid a `ReplicaPalw` provider pair for.
+/// `job_nullifier`s paid to a `ReplicaPalw` provider pair by this chain block's coinbase.
 ///
-/// # Why this is not the state P1-5 deleted
+/// # Storage model
 ///
-/// P1-5 removed `PalwBatchViewV1::job_nullifiers` because it was unbounded per-block CLONED state
-/// bought by nothing. Every difference matters, so state them all:
+/// Unlike the removed `PalwBatchViewV1::job_nullifiers` field, this set is a bounded, block-keyed
+/// reward delta:
 ///
 /// | | deleted `job_nullifiers` | this store |
 /// |---|---|---|
-/// | carried forward | CLONED into every descendant's view, every block | block-keyed, never cloned |
-/// | who writes an entry | any leaf-chunk tx, up to 64 entries each, unpriced | only an ACCEPTED algo-4 block that was PAID |
+/// | carried forward | cloned into every descendant's view | block-keyed, never cloned |
+/// | who writes an entry | any leaf-chunk transaction | a paid, accepted algo-4 block |
 /// | bound | attacker-chosen expiry | `mergeset_size_limit` per block, an existing consensus bound |
 /// | readers | none (its bool fed a `continue`) | [`crate::pipeline::virtual_processor`]'s reward dedup |
-/// | lifetime | attacker-chosen | deleted by the pruning processor with the other per-block rows |
+/// | lifetime | payload-defined | deleted by the pruning processor with other per-block rows |
 ///
 /// The per-block row is the same shape as `rewarded_epochs.rs` (ADR-0009 Addendum B §B.3(c)) and is
 /// there for the same reason: the set is PATH-DEPENDENT (whether a block pays a nullifier depends on
@@ -38,10 +37,10 @@ use rocksdb::WriteBatch;
 /// consensus-bounded. Each entry additionally costs an accepted algo-4 block that passed every
 /// clause check — the network's own rate limit, not a free write.
 ///
-/// # Inert
+/// # Activation
 ///
-/// Empty on every shipped preset. `palw_algo4_accept = false` everywhere, so no algo-4 source can be
-/// accepted, so no `WorkRewardClass::ReplicaPalw` is ever produced, so nothing is ever written here.
+/// Rows are written on PALW networks when accepted algo-4 sources produce
+/// `WorkRewardClass::ReplicaPalw`.
 pub type PalwPaidWorkIds = Vec<Hash64>;
 
 pub trait PalwPaidWorkStoreReader {

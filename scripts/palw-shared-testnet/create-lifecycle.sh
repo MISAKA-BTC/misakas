@@ -5,7 +5,7 @@
 #
 #   usage:  ./create-lifecycle.sh            # (or: ./create-lifecycle.sh create)
 #
-# WHAT THIS DOES (honest scope):
+# SCOPE:
 #   Invariant (2) — the batch-manifest MUST be registered DURING its registration
 #   epoch E with headroom before the epoch boundary. To build it without the DAA
 #   score drifting mid-build, this stage:
@@ -40,7 +40,7 @@
 #     fixes the batch_id — the helper populates the TicketSecretStore. This mints
 #     a WIRING-ONLY, explicitly NON-INFERENCE block.
 #
-# HONESTY: the leaf is a MOCK — no real inference is performed here. This is
+# LIMITATION: the leaf is a mock; no real inference is performed here. This is
 #   deliberately NOT the seeded, test-only `palw_demo` path (audit §10.1); the
 #   leaf is registered through the real on-chain carriers so both nodes obtain it
 #   over P2P, and only the ticket secret (mock mode) is synthetic and labeled so.

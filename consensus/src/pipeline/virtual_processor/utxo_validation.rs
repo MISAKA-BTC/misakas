@@ -125,8 +125,7 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// coinbase actually PAID a `ReplicaPalw` provider pair for, in canonical mergeset order. Filled
     /// by `calculate_utxo_state` at the SAME seam that classifies the reward (so construction and
     /// validation record the identical list), and persisted by `commit_utxo_state` for descendants to
-    /// dedup against. Always empty on every shipped preset — `palw_algo4_accept = false` means no
-    /// algo-4 source is acceptable, so no `ReplicaPalw` class is ever produced to be recorded.
+    /// dedup against.
     pub palw_paid_work_ids: PalwPaidWorkIds,
     /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): this block's validator quality
     /// sub-pool (`split_validator_pool(.).1`), persisted by `commit_utxo_state` as
@@ -739,16 +738,13 @@ impl VirtualStateProcessor {
             })
             .flatten();
 
-        // kaspa-pq **ADR-0040 §5.15.13 — gate G16 (P1-9-RELAND), the paid-set.**
+        // ADR-0040 §5.15.13 paid-work set.
         //
-        // Resolved ONCE per block, from the SELECTED PARENT's chain — never from this block's own
+        // Resolved once per block from the selected parent's chain, never from this block's own
         // (not yet written) row, mirroring the DNS `already_rewarded` prefix set exactly. `paid` is
         // the cross-block half; the loop below adds the within-mergeset half, which is what makes the
-        // rule total: without it, two algo-4 sources sharing a nullifier could be merged by the SAME
+        // rule total: without it, two algo-4 sources sharing a nullifier could be merged by the same
         // block and both be paid, since neither is in the other's chain prefix.
-        //
-        // Empty on every shipped preset (see `palw_paid_work_window`), so every reward below is
-        // byte-identical to before this rule existed.
         let mut palw_paid_work = self.palw_paid_work_window(ctx.selected_parent(), pov_daa_score);
 
         for (i, (merged_block, txs)) in once((ctx.selected_parent(), selected_parent_transactions))
@@ -911,11 +907,8 @@ impl VirtualStateProcessor {
     /// stays fully paid (the classification is keyed on the source's OWN epoch, via `halted_since`).
     ///
     /// The fast path returns `HashMiner` while PALW is gated (`palw_activation_daa_score == u64::MAX`),
-    /// so no store read happens and the result is byte-identical to the previous unconditional
-    /// `HashMiner` — but that is mainnet / testnet-10 / simnet / devnet ONLY, not "every shipped
-    /// preset": `testnet-palw-110` / `devnet-palw-111` ship the fence at 0 (`config/params.rs:1389`,
-    /// `:1440`). There the store read happens; every merged block still classifies as `HashMiner`
-    /// because `palw_algo4_accept = false` means no algo-4 block can be accepted to classify otherwise.
+    /// avoiding store reads on mainnet, testnet-10, simnet and devnet. The three PALW presets use an
+    /// activation score of 0 and evaluate PALW reward classes.
     /// kaspa-pq **ADR-0040 §5.15.13 — gate G16 (P1-9-RELAND), the rule itself.**
     ///
     /// `paid_work` is the mutable paid-`job_nullifier` set for the block being built/validated: it
@@ -924,34 +917,28 @@ impl VirtualStateProcessor {
     /// leaf's `job_nullifier` is already in it is classified
     /// [`WorkRewardClass::ReplicaPalwDuplicateWork`] and paid nothing.
     ///
-    /// **Why `job_nullifier` is trustworthy as an identifier here, and was not before §5.15 (M2).**
-    /// It sits inside `leaf_hash`; `leaf_hash` opens to `manifest.leaf_root` through the membership
-    /// proof the acceptance arm verifies BEFORE `insert_leaf`; `leaf_root` is inside `content_id() ==
-    /// batch_id`. So a stored leaf's `job_nullifier` is immutable and batch-bound, and a registry keyed
-    /// on it can no longer be evaded by rewriting the field. Before M2 it was a free field consensus
-    /// never checked, which is exactly why P1-9 was withdrawn rather than moved.
+    /// Identifier binding. `job_nullifier` is included in `leaf_hash`; the membership proof binds
+    /// `leaf_hash` to `manifest.leaf_root`, and `leaf_root` is included in `content_id() == batch_id`.
+    /// A stored leaf's `job_nullifier` is therefore immutable and batch-bound.
     ///
-    /// **Why this is a REWARD rule and not a validity rule.** A duplicate is not rejected: the block
-    /// stays valid, keeps its lane weight under `E = H + min(C, 4H)`, and keeps its difficulty
-    /// contribution. Only the payout is withheld. A body-coordinate first-claim-wins registry is NOT
-    /// permitted to reappear (`no_job_nullifier_registry_at_the_body_coordinate` guards the three files
-    /// it could reappear in), because that coordinate has no way to authorise a claim and the rejection
-    /// would be a batch-bricking censorship lever.
+    /// Reward semantics. A duplicate does not invalidate the block or remove its lane weight and
+    /// difficulty contribution; only the payout is withheld. The registry remains outside body
+    /// validation because that coordinate cannot authorize a claim and rejection there could invalidate
+    /// every block that references the batch.
     ///
-    /// **NOT authorised by an ML-DSA signature**, despite what the G16 row's original text says.
+    /// Claims are not authorized by an ML-DSA signature.
     /// First-in-canonical-order wins instead, which is well-defined because the order is
     /// consensus-fixed.
     ///
-    /// One of the three reasons originally given for that has since changed and the doc is corrected
-    /// rather than left standing: provider bonds ARE persisted now (prefix 241, written by
-    /// `stage_palw_provider_bond_mutations`) and a `ProviderBondView` IS composed here, so a claim
+    /// Provider bonds are persisted at prefix 241 by `stage_palw_provider_bond_mutations`, and a
+    /// `ProviderBondView` is composed here, so a claim
     /// could in principle be bound to a bond's owner key. The remaining two reasons still hold:
     /// `ReplicaExecutionReceiptV1::signature` is a wire field with no consensus decoder, and a leaf
     /// names bond OUTPOINTS rather than the signing identity that would have to authorise the claim.
     /// Adding claim authorisation is therefore now a possible slice rather than an impossible one — but
     /// it is not this one, and nothing in the tree does it.
     ///
-    /// **Scope — do not read this as closing G16.** The walk is BOUNDED, so it closes duplicate claims
+    /// Scope: the bounded walk rejects duplicate claims
     /// while the batches involved are concurrently live. It does NOT close the same `job_nullifier`
     /// being re-registered into a fresh batch an arbitrary time later; see
     /// `PalwBatchAdmissionParams::max_batch_life_epochs` for why closing that needs either unbounded

@@ -1,31 +1,21 @@
-//! kaspa-pq **ADR-0040 §D — the signature domain table**.
+//! ADR-0040 signature-domain registry.
 //!
-//! # Why a table rather than per-pair fixes
+//! # Purpose
 //!
-//! Cross-protocol signature replay is a *class* of defect, not a sequence of incidents. It was closed
-//! once for the PALW auditor vote (a beacon-commit signature must not be replayable as an audit vote),
-//! but closing it pairwise means the next signing object re-opens it, and the review that would have
-//! caught it has nothing to check against.
+//! Every ML-DSA-87 signing object declares a distinct libcrux `ctx`. Centralizing the contexts makes
+//! cross-protocol replay checks and additions reviewable.
 //!
-//! This table is the enforcement point for the rule "**every ML-DSA-87 signing object declares a
-//! distinct libcrux `ctx`**". A new signed object is added here or the table test fails — the same
-//! shape as ADR-0040's other rule/enforcement pairings (§2.6): a rule that lives only in prose is a
-//! rule that will be violated by a type.
+//! # Scope
 //!
-//! # What belongs here
-//!
-//! Only **signature** contexts — the `ctx` argument to `verify_mldsa87_with_context` / `sign`. Keyed
-//! *hash* domains (`blake2b_512_keyed` keys such as `OverlayCommit64` or `EvmPayload64`) are a separate
+//! This table contains signature contexts: the `ctx` argument to `verify_mldsa87_with_context` and
+//! `sign`. Keyed hash domains such as `OverlayCommit64` and `EvmPayload64` use a separate
 //! namespace: they domain-separate digests, not signatures, and a collision between the two namespaces
-//! is harmless because neither is ever fed to the other's primitive. Mixing them into one table would
-//! make the distinctness assertion say less than it appears to.
+//! does not cross cryptographic primitives.
 //!
-//! # Known naming inconsistency (deliberately surfaced, not silently normalised)
+//! # Naming compatibility
 //!
-//! Most contexts follow `"<project>-v1/<purpose>/mldsa87"`. PALW's compact contexts do not (for
-//! example `"PALWBeaconV1"` and `"PALWAuditorVoteV2"`). The auditor context was deliberately revised
-//! with the V2 summary-binding wire; any further rename changes every signature it covers and is a
-//! re-genesis-only change.
+//! Most contexts follow `"<project>-v1/<purpose>/mldsa87"`. PALW compact contexts such as
+//! `"PALWBeaconV1"` and `"PALWAuditorVoteV2"` are retained for wire compatibility.
 
 /// One row of the signature domain table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,9 +28,7 @@ pub struct SignatureDomain {
     pub defined_in: &'static str,
 }
 
-/// **Every ML-DSA-87 signature context in consensus.** Adding a signed object without adding a row
-/// here is caught by [`tests::every_signature_domain_is_distinct`] only if the row is added — so the
-/// discipline is: *new signing object ⇒ new row, in the same commit.*
+/// ML-DSA-87 signature contexts used by consensus.
 pub const SIGNATURE_DOMAINS: &[SignatureDomain] = &[
     SignatureDomain {
         object: "DNS validator attestation",
@@ -237,7 +225,7 @@ mod tests {
         }
     }
 
-    /// **The table is LOCKED (2026-07-25).** This golden is an independent duplication of every
+    /// Signature-domain table. This vector independently duplicates every
     /// row: the registry can only change when this test is updated in the same commit, which is
     /// exactly the review surface the lock exists to force. Removing or editing a row is a
     /// re-genesis-scale decision; adding one requires an explicit naming decision above AND a new

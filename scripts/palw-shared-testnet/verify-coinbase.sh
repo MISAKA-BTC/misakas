@@ -73,7 +73,7 @@
 #   carve is burned, never rerouted to the includer.
 # --------------------------------------------------------------------------- #
 #
-# HONEST SCOPE (read before trusting a PASS):
+# SCOPE:
 #   * The binaries expose NO "give me the last algo-4 block's coinbase" query,
 #     and an algo-4 block has fork-choice weight 0 (PALW-014) so it never becomes
 #     the sink — it cannot be read back off the tip either. The mint stage
