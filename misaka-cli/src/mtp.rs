@@ -466,3 +466,111 @@ pub fn register(ctx: &Ctx, invitation_file: &str, key_file: &str, out: Option<&s
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// collect — a vantage's uptime observations, from the node this host already runs
+// ---------------------------------------------------------------------------
+
+/// `misaka mtp collect` — record what THIS host's node currently sees, as one JSONL line per peer.
+///
+/// This is the C1 fact source, and it deliberately writes a file rather than into the fact store:
+/// the store lives in `misaka-mtp-service`, which is kept dependency-light, while the wRPC client
+/// lives here. Emitting JSONL for the operator to ingest matches how `manual-awards.jsonl` and
+/// `registrations.jsonl` already cross that boundary, and it means a vantage host does not need the
+/// service — or its data dir — present at all.
+///
+/// No new protocol: a crawler asking its own node "who are you connected to, and are they in IBD"
+/// is `getConnectedPeerInfo`, which already carries everything a `NodeRecord`/`UptimeSample` needs —
+/// a stable peer id for `node_key`, `is_ibd_peer` for the at-sync-required bit (reachable but
+/// desynced does NOT count as up), the user agent for the version bonus, and the address for the
+/// co-location key.
+///
+/// Attribution is NOT decided here. Peers are recorded by `node_key`; mapping those to a ledger id
+/// is the operator's roster step, because a peer cannot yet assert ownership on the wire.
+pub async fn collect(ctx: &Ctx, vantage: &str, out: Option<&str>) -> CliResult {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+
+    if vantage.trim().is_empty() {
+        return Err(CliError::generic("--vantage must name this observation point (e.g. JP, DE) — it is the evidence link"));
+    }
+    let hostport = match &ctx.rpc {
+        Some(hp) => hp.clone(),
+        None => "127.0.0.1:27210".to_string(),
+    };
+    let timeout = Duration::from_secs(ctx.timeout_secs);
+    let client = crate::node::try_connect(&format!("ws://{hostport}"), timeout)
+        .await
+        .map_err(|e| CliError::connection(format!("cannot reach the node at {hostport}: {e}")))?;
+
+    let info = client.get_server_info().await.map_err(|e| CliError::connection(format!("getServerInfo failed: {e}")))?;
+    let observed_network = info.network_id.to_string();
+    if observed_network != ctx.network {
+        let _ = client.disconnect().await;
+        return Err(CliError::generic(format!(
+            "this node is on '{observed_network}' but --network says '{}'. Samples are scoped per network, \
+             so collecting here would file observations under the wrong one.",
+            ctx.network
+        )));
+    }
+
+    let peers = client
+        .get_connected_peer_info_call(None, kaspa_rpc_core::GetConnectedPeerInfoRequest {})
+        .await
+        .map_err(|e| CliError::connection(format!("getConnectedPeerInfo failed: {e}")))?;
+    let _ = client.disconnect().await;
+
+    let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+
+    let mut lines = Vec::new();
+    for p in &peers.peer_info {
+        let addr = p.address.to_string();
+        lines.push(
+            json!({
+                "network": observed_network,
+                "vantage": vantage,
+                "at_ms": at_ms,
+                "node_key": p.id.to_string(),
+                "address": addr,
+                // Reachable AND not still downloading the chain. A peer in IBD is up but not usable,
+                // which is exactly the distinction the uptime rule draws.
+                "in_sync": !p.is_ibd_peer,
+                "user_agent": p.user_agent,
+                "advertised_protocol_version": p.advertised_protocol_version,
+                "time_connected_ms": p.time_connected,
+                "last_ping_ms": p.last_ping_duration,
+                "is_outbound": p.is_outbound,
+            })
+            .to_string(),
+        );
+    }
+
+    let body = if lines.is_empty() { String::new() } else { format!("{}\n", lines.join("\n")) };
+    match out {
+        Some(path) => {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| CliError::generic(format!("cannot open '{path}': {e}")))?;
+            f.write_all(body.as_bytes()).map_err(|e| CliError::generic(format!("cannot append '{path}': {e}")))?;
+        }
+        None => print!("{body}"),
+    }
+
+    if matches!(ctx.output, OutputFormat::Human) && !ctx.quiet {
+        let in_sync = peers.peer_info.iter().filter(|p| !p.is_ibd_peer).count();
+        eprintln!(
+            "vantage {vantage} [{observed_network}]: {} peer(s) observed, {in_sync} in sync{}",
+            peers.peer_info.len(),
+            match out {
+                Some(p) => format!(" → appended to {p}"),
+                None => String::new(),
+            }
+        );
+        if peers.peer_info.is_empty() {
+            eprintln!("no peers: this vantage saw nothing, which is a real observation — not an error.");
+        }
+    }
+    Ok(())
+}
