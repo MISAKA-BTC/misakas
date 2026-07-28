@@ -825,17 +825,29 @@ pub async fn attestations(ctx: &Ctx, low_hash: Option<&str>, max_blocks: usize, 
     }
     let _ = client.disconnect().await;
 
-    let validators: std::collections::BTreeSet<&str> =
-        lines.iter().filter_map(|l| l.split("\"validator_id\":\"").nth(1)).filter_map(|s| s.split('"').next()).collect();
+    let field = |l: &str, k: &str| -> Option<String> {
+        l.split(&format!("\"{k}\":")).nth(1).map(|s| s.trim_start_matches('"').split(['"', ',']).next().unwrap_or("").to_string())
+    };
+    let validators: std::collections::BTreeSet<String> = lines.iter().filter_map(|l| field(l, "validator_id")).collect();
+    // A DAG includes the same transaction in more than one block, so one attestation can surface
+    // several times. Both numbers are printed because the raw row count is NOT a participation
+    // count — on the first live run it was 407 rows for 186 distinct (validator, epoch) pairs, and
+    // a consumer that summed rows would have over-credited every validator by ~2.2x.
+    let distinct: std::collections::BTreeSet<(String, String)> =
+        lines.iter().filter_map(|l| Some((field(l, "validator_id")?, field(l, "att_epoch")?))).collect();
     eprintln!(
-        "{} attestation(s) from {} validator(s) in {} shard tx(s) over {} block(s) from {} on {}",
+        "{} row(s) = {} distinct (validator, epoch) from {} validator(s) in {} shard tx(s) over {} block(s) from {} on {}",
         lines.len(),
+        distinct.len(),
         validators.len(),
         shards,
         scanned,
         start,
         observed_network
     );
+    if lines.len() != distinct.len() {
+        eprintln!("  NOTE: rows repeat where a shard tx landed in several blocks — dedup on (validator_id, att_epoch) before scoring");
+    }
     if undecodable > 0 {
         eprintln!("  WARNING: {undecodable} shard tx(s) did not borsh-decode");
     }
