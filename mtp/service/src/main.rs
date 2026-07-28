@@ -24,6 +24,7 @@ use kaspa_addresses::Prefix;
 use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed};
 use misaka_mtp::{Rules, Stage};
 use misaka_mtp_collectors::EpochWindow;
+use misaka_mtp_collectors::{Identity, IdentityKind, NodeRecord, UptimeSample};
 use misaka_mtp_service::{Attributor, HttpState, LedgerArchive, NonceStore, PersistentStore, RegistrationRecord, config, epoch};
 
 const USAGE: &str = "\
@@ -34,6 +35,7 @@ USAGE:
   misaka-mtp-service run-epoch --data-dir DIR --operator-key FILE --epoch N --start RFC3339 --end RFC3339 [--network NET]
   misaka-mtp-service issue-nonce --data-dir DIR --github ID --address ADDR [--network NET]
   misaka-mtp-service register    --data-dir DIR --request FILE
+  misaka-mtp-service ingest-probes --data-dir DIR --file PROBES.jsonl --roster ROSTER.jsonl [--network NET]
 
 COMMON:
   --data-dir DIR        root data dir: <DIR>/facts (fact store), <DIR>/points (signed ledger archive),
@@ -67,6 +69,7 @@ fn run() -> Result<(), String> {
         Some("run-epoch") => cmd_run_epoch(&args[1..]),
         Some("issue-nonce") => cmd_issue_nonce(&args[1..]),
         Some("register") => cmd_register(&args[1..]),
+        Some("ingest-probes") => cmd_ingest_probes(&args[1..]),
         Some("-h") | Some("--help") | Some("help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -373,4 +376,149 @@ fn getrandom_bytes(buf: &mut [u8]) -> Result<(), String> {
     use std::io::Read as _;
     let mut f = std::fs::File::open("/dev/urandom").map_err(|e| format!("cannot open /dev/urandom: {e}"))?;
     f.read_exact(buf).map_err(|e| format!("cannot read /dev/urandom: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// ingest-probes — join a vantage's observations to the roster, into the fact store
+// ---------------------------------------------------------------------------
+
+/// One roster line: which ledger id owns a node key. Maintained by the operator, because a peer
+/// cannot assert ownership on the wire — `misaka mtp collect` records `node_key` and stops there.
+#[derive(serde::Deserialize)]
+struct RosterEntry {
+    node_key: String,
+    owner_id: String,
+}
+
+/// One line of a vantage's `misaka mtp collect` output.
+#[derive(serde::Deserialize)]
+struct Probe {
+    network: String,
+    vantage: String,
+    at_ms: u64,
+    node_key: String,
+    address: String,
+    in_sync: bool,
+    user_agent: String,
+}
+
+/// Derive the §5 co-location key from an observed peer address: the first three octets of an IPv4.
+///
+/// This is why C1 does not need a GeoIP feed to start. `NodeRecord` takes the /24 as the cap key and
+/// ASN only as the alternate, and the /24 is already in the observation — no external data source,
+/// no licence, nothing to keep fresh. ASN stays `None` until someone chooses a provider; the cap
+/// still works on the /24.
+fn ipv4_24(address: &str) -> Option<[u8; 3]> {
+    let host = address.rsplit_once(':').map(|(h, _)| h).unwrap_or(address);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let mut parts = host.split('.');
+    let a = parts.next()?.parse::<u8>().ok()?;
+    let b = parts.next()?.parse::<u8>().ok()?;
+    let c = parts.next()?.parse::<u8>().ok()?;
+    parts.next()?.parse::<u8>().ok()?; // must be a full dotted quad, not a prefix
+    if parts.next().is_some() {
+        return None;
+    }
+    Some([a, b, c])
+}
+
+fn cmd_ingest_probes(args: &[String]) -> Result<(), String> {
+    let flags = Flags::parse(args, &[])?;
+    let data_dir = PathBuf::from(flags.get("data-dir")?);
+    let file = flags.get("file")?.to_string();
+    let roster_path = flags.get("roster")?.to_string();
+    let network = network_or_default(&flags)?;
+
+    let roster_text = std::fs::read_to_string(&roster_path).map_err(|e| format!("cannot read roster {roster_path}: {e}"))?;
+    let mut owner_of: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (i, line) in roster_text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let e: RosterEntry = serde_json::from_str(line).map_err(|err| format!("{roster_path}:{}: {err}", i + 1))?;
+        owner_of.insert(e.node_key, e.owner_id);
+    }
+
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("cannot read {file}: {e}"))?;
+    let mut store = PersistentStore::load(data_dir.join("facts")).map_err(|e| e.to_string())?;
+
+    let (mut ingested, mut unattributed, mut wrong_net) = (0usize, 0usize, 0usize);
+    for (i, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let p: Probe = serde_json::from_str(line).map_err(|e| format!("{file}:{}: malformed probe: {e}", i + 1))?;
+        if p.network != network {
+            wrong_net += 1;
+            continue;
+        }
+        // An unclaimed peer is not an error: most of the network is not registered. Count it and
+        // move on rather than inventing an owner, which would put someone else's uptime on a ledger.
+        let Some(owner) = owner_of.get(&p.node_key) else {
+            unattributed += 1;
+            continue;
+        };
+
+        store.upsert_identity(Identity { id: owner.clone(), kind: IdentityKind::Node }).map_err(|e| e.to_string())?;
+        store
+            .upsert_node(NodeRecord {
+                node_key: p.node_key.clone(),
+                owner_id: owner.clone(),
+                ip_v4_24: ipv4_24(&p.address),
+                asn: None,
+                // Both multipliers need cross-sample context this single-file pass does not have:
+                // geo diversity compares an owner's nodes across vantages, and fast-follow compares
+                // `user_agent` against the current release. Left false rather than guessed — an
+                // unearned 1.5x or 1.2x is worse than a missing one.
+                geo_diverse: false,
+                fast_follow: false,
+                first_seen_ms: p.at_ms,
+            })
+            .map_err(|e| e.to_string())?;
+        store
+            .append_sample(UptimeSample {
+                node_key: p.node_key.clone(),
+                at_ms: p.at_ms,
+                in_sync: p.in_sync,
+                vantage: p.vantage.clone(),
+                evidence: format!("{}:{}:{}", p.vantage, p.at_ms, p.user_agent),
+            })
+            .map_err(|e| e.to_string())?;
+        ingested += 1;
+    }
+
+    println!("ingested {ingested} sample(s) into {}", data_dir.join("facts").display());
+    if unattributed > 0 {
+        println!("  {unattributed} observation(s) skipped: node_key not in the roster (unregistered peers)");
+    }
+    if wrong_net > 0 {
+        println!("  {wrong_net} observation(s) skipped: recorded on a different network than {network}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod ingest_tests {
+    use super::ipv4_24;
+
+    #[test]
+    fn the_colocation_key_comes_from_the_observation_not_a_geoip_feed() {
+        // §5 caps co-location by /24, and the /24 is already inside the address the collector
+        // recorded — this is the whole reason C1 needs no external data source to start.
+        assert_eq!(ipv4_24("160.16.131.119:46611"), Some([160, 16, 131]));
+        assert_eq!(ipv4_24("95.111.236.186"), Some([95, 111, 236]));
+        // Two hosts in one /24 collapse to one key, which is what makes the cap bite.
+        assert_eq!(ipv4_24("203.0.113.7:16611"), ipv4_24("203.0.113.250:16611"));
+        // A different /24 must NOT collide with it.
+        assert_ne!(ipv4_24("203.0.113.7:16611"), ipv4_24("203.0.114.7:16611"));
+
+        // IPv6 has no /24 — `None` (no ASN either), so such a node is uncapped rather than
+        // wrongly grouped. Recorded as a known gap, not silently mapped onto some other key.
+        assert_eq!(ipv4_24("[2001:db8::1]:16611"), None);
+        // Malformed / truncated / oversized inputs are None, never a partial key.
+        assert_eq!(ipv4_24("160.16.131"), None);
+        assert_eq!(ipv4_24("160.16.131.119.7"), None);
+        assert_eq!(ipv4_24("999.1.1.1"), None);
+        assert_eq!(ipv4_24("not-an-address"), None);
+    }
 }
