@@ -2349,6 +2349,30 @@ mod palw_network_tests {
     /// Read on the staging-mainnet preset because that is the one carrying these values into a
     /// public rehearsal, and because it reaches them by INHERITANCE (`..MAINNET_PARAMS` ->
     /// `PalwBatchAdmissionParams::INERT`) — which is exactly how the vacuous leaf floor propagates.
+    /// ADR-0042 R1: `bind_chain_derived_paid_work_attribution` rebuilds the paid-work row set by
+    /// walking selected parents from the pruning point, and refuses the import if any header or
+    /// ghostdag entry along that walk is missing. That refusal is correct but useless if it fires on
+    /// honest imports, so the walk MUST fit inside what the IBD trusted-data package delivers.
+    ///
+    /// Trusted data carries the DAA window (`DIFFICULTY_WINDOW_DURATION` of raw span) around the
+    /// pruning point, header AND ghostdag per block. The walk needs `paid_work_walk_bound_daa`.
+    /// If someone lengthens the batch life or shortens the difficulty window past each other, the
+    /// binding starts rejecting honest peers and IBD breaks — loudly here instead.
+    #[test]
+    fn trusted_data_covers_the_paid_work_walk() {
+        let p = STAGING_MAINNET_PALW_PARAMS;
+        let walk = p.palw_batch_admission.paid_work_walk_bound_daa(p.palw_epoch_length_daa);
+        assert!(
+            walk <= DIFFICULTY_WINDOW_DURATION,
+            "the paid-work walk ({walk} DAA) must fit inside the trusted-data DAA window \
+             ({DIFFICULTY_WINDOW_DURATION} DAA), or the R1 chain binding refuses honest imports"
+        );
+        // Measured at the time the binding landed; kept as a tripwire on the margin shrinking
+        // silently rather than as a claim that these exact numbers are calibrated.
+        assert_eq!(walk, 1700, "paid-work walk bound moved — re-check the trusted-data margin");
+        assert_eq!(DIFFICULTY_WINDOW_DURATION, 2641, "difficulty window moved — re-check the R1 margin");
+    }
+
     #[test]
     fn shipped_economic_constants_match_the_frozen_ledger() {
         const LEDGER: &str = "changed — update docs/econ-parameters-frozen.md (ADR-0046 Decision §3: value + evidence + \

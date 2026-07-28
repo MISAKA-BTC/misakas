@@ -2,7 +2,7 @@
 
 - **Status:** Accepted / **改訂 A1(2026-07-28)で fence 解除** — 本 ADR は **testnet で配線を有効化する**。
   検証は外部レビュー/外部 soak を待たず testnet 実運用に一本化。mainnet preset は不変。詳細は末尾の
-  「改訂 A1」。**未了: R1**(可用性のみ、consensus 非破壊)
+  「改訂 A1」。**R1 は 2026-07-28 に解消 — 残余ゼロ**
 - **Date:** 2026-07-26(改訂 A1: 2026-07-28)
 - **Supersedes / amends:** `docs/adr-permissionless-snapshot-authentication.md`(StopShip)を amend し、
   完成の定義(DoD)と設計上の確定事項を固定する
@@ -159,16 +159,40 @@ fold は完全一致するが、`palw_paid_work_window`(`processor.rs:5423-5427`
 永久に fenced のまま、実装が正しいかを知る手段も得られない。testnet は本番価値を持たないネット
 ワークであり、そこで実際に動かすことが最も速い検証経路である。
 
-**受容するリスク(明示)**: 残余のうち **R2・R3 は 2026-07-27 に解消済**。残るのは **R1 のみ**で、その
-実害は上記のとおり **consensus 分岐ではない** — 空の `job_nullifiers` 行が chain に束縛されないため
-被害ノードの永続 snapshot が非正準化し、**そのノードが IBD 配布元として使えなくなる**(operator-pin
-を使う下流が同期を拒否する)。`palw_paid_work_window` には何も寄与しないので desync は起きない。
-**可用性の劣化であり consensus の安全性ではない**。testnet 上でこれを受容する。
+**受容したリスク(当時)**: 残余のうち **R2・R3 は 2026-07-27 に解消済**。残るのは **R1 のみ**で、その
+実害は **consensus 分岐ではない** — 空の `job_nullifiers` 行が chain に束縛されないため被害ノードの
+永続 snapshot が非正準化し、**そのノードが IBD 配布元として使えなくなる**(operator-pin を使う下流が
+同期を拒否する)。`palw_paid_work_window` には何も寄与しないので desync は起きない。
 
-**R1 が不活性でなくなる点への注意**: R1 が「到達不能」とされた根拠は全 preset の
-`palw_algo4_accept = false` であった。testnet-200 は `--palw-enable-algo4` を付けて運用しており、
-**この前提はすでに成立していない**。R1 は理論上の残余ではなく、algo-4 支払いが発生した時点で実際に
-到達可能な欠陥として扱うこと。R1 の解消(行集合を selected chain に束縛する)は本 ADR の未了作業。
+**→ R1 も 2026-07-28 に解消済。下記「R1 の解消」を参照。残余はゼロ。**
+
+---
+
+## R1 の解消(2026-07-28)
+
+`bind_chain_derived_paid_work_attribution` が、行集合を **この node 自身の selected chain** に束縛する
+ようになった。pruning point から ghostdag の selected parent を `paid_work_walk_bound_daa` まで辿って
+期待される行集合をローカルに再構築し、`validate_canonical` と同じ比較子(DAA 昇順→hash)で並べて
+transported 行と**完全一致**を要求する。境界値は payload 側ではなく**ローカル**から取る(peer 供給値を
+使えば、検査対象の walk を peer 自身に選ばせることになる)。
+
+**「空行を拒否する」は誤りであり採用しなかった**: 正準 builder は窓内の selected chain 上の**全**ブロック
+に行を出す(支払いゼロのブロックも含む、`processor.rs` の `unwrap_or_default()`)。空行拒否は正直な
+payload を落とし IBD を壊す。実装前に builder を読んで判明した。
+
+**実装可能性の根拠(実測)**: walk が必要とするのは **1,700 DAA**、IBD trusted-data が運ぶのは
+`DIFFICULTY_WINDOW_DURATION` = **2,641 DAA**(header と ghostdag の両方)。**941 DAA の余裕**があり、
+`sync_and_validate_pruning_proof` は `sync_pruning_point_palw_snapshot` より前に走るため、照合時点で
+データは揃っている。この関係は `trusted_data_covers_the_paid_work_walk` が固定する(どちらかが動いて
+余裕が消えると、正直な import を拒否し始める前にテストが落ちる)。
+
+**空虚でないことの確認**: 追加した `chain_derived_paid_work_row_set_is_bound_to_the_selected_chain` は、
+正直な payload から空行を1つ削るだけの攻撃(fold には見えない)を拒否する。束縛を無効化して実行すると
+`a tampered chain-derived import was ACCEPTED` で失敗することを確認済み — 攻撃は実在し、この束縛が
+それを止めている。
+
+**副産物**: `default_backward_chain_iterator` は `inclusive: false` で構築されているが、builder 側の
+コメントは「yields its start INCLUSIVELY」と書いており**実装と矛盾**していた。
 
 **mainnet への非適用**: 本改訂は **testnet に限る**。mainnet preset の
 `palw_requires_peer_allowlist` と lever 既定値は変更しない。mainnet で同じ解除を行う場合は R1 の

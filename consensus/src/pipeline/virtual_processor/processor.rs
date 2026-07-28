@@ -7945,6 +7945,94 @@ impl VirtualStateProcessor {
                 ),
             ));
         }
+        // R1 — bind the ROW SET to this node's selected chain.
+        //
+        // Every check below this point is per-row: it asks "is what you claim about block X true?".
+        // Nothing asked "should block X be here at all?", so a peer could pad the payload with rows
+        // for blocks that are merely in the DAA window and have a header — off-chain blocks, or
+        // on-chain blocks it chose to include or omit. Such a row passes: the header resolves, the
+        // DAA matches, and `palw_paid_work_store` legitimately holds nothing for a block that paid
+        // nothing, so the peer's empty claim matches our empty answer. The union the
+        // `overlay_commitment_root` fold covers is unchanged (empty rows contribute nothing), so the
+        // fold cannot see it either. The damage is not a fork: the installed window is unaffected,
+        // but the snapshot this node PERSISTS and re-serves is no longer canonical, so its
+        // `payload_digest` differs and operator-pinned peers refuse to sync from it — the node is
+        // poisoned as an IBD source.
+        //
+        // The canonical set is not a filter over the window, it is a WALK: the builder starts at the
+        // pruning point (inclusively) and follows selected parents while the row stays inside
+        // `paid_work_walk_bound_daa`, emitting one row per block — INCLUDING blocks that paid
+        // nothing, which is why "reject empty rows" is not the fix and would break honest imports.
+        //
+        // So reproduce that walk locally and require an exact sequence match. The walk uses the
+        // ghostdag selected parent rather than `default_backward_chain_iterator`: both yield the
+        // same chain, but ghostdag data is exactly what the IBD trusted-data package carries
+        // (`TrustedHeader { header, ghostdag }`), so this holds at import time without depending on
+        // reachability having been rebuilt. Coverage is sufficient by construction — trusted data
+        // spans `DIFFICULTY_WINDOW_DURATION` (2641 DAA) around the pruning point while the walk needs
+        // `paid_work_walk_bound_daa` (1700 DAA); `trusted_data_covers_the_paid_work_walk` pins that.
+        //
+        // Bounds are LOCAL on purpose. `pruning_point_daa_score` and `paid_work_window_daa` in the
+        // payload are peer-supplied; using them here would let the peer choose the very walk it is
+        // being checked against.
+        let local_pp_daa_score = self.headers_store.get_daa_score(pruning_point).map_err(|err| {
+            PruningImportError::ImportedPalwSnapshotInvalid(
+                pruning_point,
+                format!("pruning-point header {pruning_point} is unreadable: {err}"),
+            )
+        })?;
+        let local_walk_bound = self.palw_batch_admission.paid_work_walk_bound_daa(self.palw_epoch_length_daa);
+        // Collected as (daa, hash) because the comparison happens in CANONICAL order, not walk
+        // order: `validate_canonical` sorts `paid_work` by (block_daa_score, block_hash), so a
+        // walk-ordered (newest-first) expectation would mismatch an honest payload on row 0.
+        let mut expected_chain: Vec<(u64, BlockHash)> = Vec::new();
+        let mut cursor = pruning_point;
+        while cursor != kaspa_consensus_core::blockhash::ORIGIN {
+            let daa_score = match self.headers_store.get_daa_score(cursor) {
+                Ok(daa_score) => daa_score,
+                // The walk ran past what this node holds. Fail closed: a truncated expectation would
+                // silently accept whatever the peer sent beyond that point, which is the hole itself.
+                Err(err) => {
+                    return Err(PruningImportError::ImportedPalwSnapshotInvalid(
+                        pruning_point,
+                        format!(
+                            "cannot rebuild the paid-work chain: header {cursor} is unavailable ({err}); \
+                             refusing rather than accepting an unverifiable row set"
+                        ),
+                    ));
+                }
+            };
+            if local_pp_daa_score.saturating_sub(daa_score) > local_walk_bound {
+                break;
+            }
+            expected_chain.push((daa_score, cursor));
+            if expected_chain.len() > kaspa_consensus_core::palw_pruned_frontier::MAX_PALW_PRUNING_PAID_BLOCKS {
+                return Err(PruningImportError::ImportedPalwSnapshotInvalid(
+                    pruning_point,
+                    "the local paid-work chain walk exceeded the row ceiling".to_owned(),
+                ));
+            }
+            let selected_parent = match self.ghostdag_store.get_selected_parent(cursor) {
+                Ok(parent) => parent,
+                Err(err) => {
+                    return Err(PruningImportError::ImportedPalwSnapshotInvalid(
+                        pruning_point,
+                        format!(
+                            "cannot rebuild the paid-work chain: ghostdag data for {cursor} is unavailable ({err}); \
+                             refusing rather than accepting an unverifiable row set"
+                        ),
+                    ));
+                }
+            };
+            // Genesis's selected parent is ORIGIN, a sentinel with no header; the loop condition
+            // ends the walk there rather than looking the sentinel up and calling it "unavailable",
+            // which would refuse every honest short-chain import. The self-reference guard is
+            // belt-and-braces against a malformed store looping forever.
+            if selected_parent == cursor {
+                break;
+            }
+            cursor = selected_parent;
+        }
         let mut local_facts: Vec<Option<PalwLocalPaidWorkFactV1>> = Vec::with_capacity(payload.paid_work.len());
         for row in &payload.paid_work {
             let block_daa_score = match self.headers_store.get_daa_score(row.block_hash) {
@@ -7994,7 +8082,32 @@ impl VirtualStateProcessor {
             local_facts.push(Some(PalwLocalPaidWorkFactV1 { block_daa_score, job_nullifiers }));
         }
         kaspa_consensus_core::palw_pruned_frontier::verify_chain_derived_paid_work_attribution(payload, &local_facts)
-            .map_err(|err| PruningImportError::ImportedPalwSnapshotInvalid(pruning_point, err.to_string()))
+            .map_err(|err| PruningImportError::ImportedPalwSnapshotInvalid(pruning_point, err.to_string()))?;
+
+        // Same comparator `validate_canonical` applies to the payload.
+        expected_chain.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.as_bytes().cmp(&b.1.as_bytes())));
+        let expected_chain: Vec<BlockHash> = expected_chain.into_iter().map(|(_, hash)| hash).collect();
+        let transported: Vec<BlockHash> = payload.paid_work.iter().map(|row| row.block_hash).collect();
+        if transported != expected_chain {
+            // Name the first divergence: "7 vs 7" alone cannot distinguish a reordering from a
+            // substitution, and this is the message an operator gets during a failed IBD.
+            let at = transported.iter().zip(expected_chain.iter()).position(|(t, e)| t != e);
+            let detail = match at {
+                Some(i) => format!("first divergence at row {i}: got {}, expected {}", transported[i], expected_chain[i]),
+                None => "one is a prefix of the other".to_owned(),
+            };
+            return Err(PruningImportError::ImportedPalwSnapshotInvalid(
+                pruning_point,
+                format!(
+                    "paid-work rows are not this node's selected chain from the pruning point: expected {} row(s) \
+                     walking selected parents within {local_walk_bound} DAA, got {} — {detail}",
+                    expected_chain.len(),
+                    transported.len()
+                ),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Canonically validate and atomically install the PALW boundary state. The pruning-point header
@@ -9361,6 +9474,47 @@ mod palw_pruning_import_auth_tests {
     /// anchor, so the node would derive a different `selected_parent_palw_state_root` a few epochs
     /// later and start rejecting HONEST blocks with `BadOverlayCommitment`.
     ///
+    /// ADR-0042 **R1** — the row SET is bound to this node's selected chain, not just each row's
+    /// contents.
+    ///
+    /// Every other check here is per-row: "is what you claim about block X true?". None asked
+    /// "should block X be in this payload at all?". A row with `job_nullifiers == []` therefore went
+    /// unconstrained — the header resolves, the DAA matches, and `palw_paid_work_store` legitimately
+    /// holds nothing for a block that paid nothing, so an empty claim matches an empty answer. The
+    /// `overlay_commitment_root` fold is blind to it too: empty rows contribute nothing to the
+    /// nullifier union the fold covers. The node then PERSISTED and re-served a non-canonical
+    /// snapshot, so its `payload_digest` diverged and operator-pinned peers refused to sync from it —
+    /// poisoning it as an IBD source (availability, not a fork).
+    ///
+    /// Dropping an empty row is the cheapest form of that — no fabricated block — and is precisely
+    /// what the fold cannot see. If this import is ACCEPTED, R1 is open.
+    ///
+    /// The fix is NOT "reject empty rows": the canonical builder emits one row per selected-chain
+    /// block in the window, including blocks that paid nothing, so that rule would refuse honest
+    /// payloads. The binding rebuilds the walk instead.
+    #[tokio::test]
+    async fn chain_derived_paid_work_row_set_is_bound_to_the_selected_chain() {
+        let fixture = ChainDerivedFixture::build().await;
+        let mut payload = fixture.snapshot.payload.clone();
+        let dropped = payload
+            .paid_work
+            .iter()
+            .position(|row| row.job_nullifiers.is_empty())
+            .expect("the fixture chain must contain a block that paid nothing — otherwise R1 is untested");
+        let removed = payload.paid_work.remove(dropped);
+        let verdict = fixture.prepare_observing_no_durable_write(
+            PALW_ANTISPAM_HEADER_VERSION,
+            PalwPruningSnapshotImportAuth::chain_derived(fixture.pruning_point),
+            reseal(payload),
+            Some(&fixture.bundle),
+        );
+        expect_invalid(
+            verdict,
+            "not this node's selected chain",
+            &format!("dropped the empty paid-work row for {}", removed.block_hash),
+        );
+    }
+
     /// `prepare_observing_no_durable_write` asserts around every call that neither the RocksDB write
     /// counter nor the staging write set moved, so the refusal lands strictly before any durable write.
     #[tokio::test]
