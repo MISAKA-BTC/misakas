@@ -179,6 +179,24 @@ Honestly: **it does not yet.** On the networks operated today,
   bonded at 20,000,000 MSK, and one validator is bonded today. Measured output is ~2.6 BPS of
   algo-3 against the 2 + 8 design — the hash lane on target, the PALW lane contributing nothing.
 
+You do not have to take the validator count on faith — it is a chain-derived fact you can read off
+any node yourself:
+
+```sh
+misaka mtp validators --rpc 127.0.0.1:27220 --network testnet-200
+# 1 bond(s) on testnet-200 at daa 189512, 0 slashed
+```
+
+One bond of 20,000,000 MSK against a floor of three is the whole reason the lane is closed. The
+command pages the bond registry to exhaustion with the point of view pinned, and reports
+`stored_status` and `effective_status` separately because they routinely disagree — on `testnet-10`
+every one of 28 bonds is stored `pending` while being effectively `active` or `unbonding`, so a
+single collapsed status field would be actively misleading.
+
+What it does **not** report is per-epoch attestation: no RPC says which validator signed which
+epoch, so `attested` would have to come from indexing attestation transactions out of blocks. That
+indexer is not written, and no command here fabricates the field in its absence.
+
 So a receipt issued today is a reproducible local artifact. Nothing on-chain has accepted one, and
 no provider has been paid. When that changes it will be because the validator set cleared, and this
 section should be the first thing updated.
