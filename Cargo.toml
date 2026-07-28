@@ -246,7 +246,7 @@ keccak = "0.1.4"
 #     NIST ACVP ML-DSA-87 vectors and/or an independent FIPS-204 implementation
 #     (the one remaining gap vs. the libcrux-self regression pin).
 # RustSec history: <0.0.9 AVX2 verify could accept invalid signatures.
-libcrux-ml-dsa = "=0.0.9"
+libcrux-ml-dsa = "=0.0.10"
 local-ip-address = "0.6.1"
 log = "0.4.20"
 log4rs = "1.4.0"
