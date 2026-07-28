@@ -28,7 +28,7 @@ explicit list of what is *not* possible yet.
 **→ [docs/palw-llm-receipts.md](docs/palw-llm-receipts.md)** covers the other half — the PALW
 audited-compute side: the pinned Qwen3.6-35B-A3B model, issuing a `ComputeReceipt`, verifying one in
 a separate process, and what a receipt does and does not prove. The runtime itself lives in
-**[misaka-proof-of-llm](https://github.com/MISAKA-BTC/misaka-proof-of-llm)**.
+**[LLM-Validation](https://github.com/MISAKA-BTC/LLM-Validation)**.
 
 > **Everything here is a testnet. There is no mainnet.** MSK on these networks is valueless test
 > currency, and Testnet Points (MTP) are a participation record — not a token, not a balance, not

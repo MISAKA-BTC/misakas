@@ -34,7 +34,7 @@ production service.
 
 | Repository | Role |
 |---|---|
-| **[misaka-proof-of-llm](https://github.com/MISAKA-BTC/misaka-proof-of-llm)** | The proof-of-compute runtime. Runs the pinned Qwen3.6-35B-A3B via a patched llama.cpp with a read-only graph observer, issues `ComputeReceiptV1`, and verifies receipts in a separate process. **Start here** — it carries the authoritative Quickstart. |
+| **[LLM-Validation](https://github.com/MISAKA-BTC/LLM-Validation)** | The proof-of-compute runtime. Runs the pinned Qwen3.6-35B-A3B via a patched llama.cpp with a read-only graph observer, issues `ComputeReceiptV1`, and verifies receipts in a separate process. **Start here** — it carries the authoritative Quickstart. |
 | **this repository** | The chain. Consumes PALW work on the algo-4 lane; carries the consensus rules, the batch/DA/certificate machinery, and the node. |
 
 They are separate programs with separate model backends — see §7.
@@ -172,7 +172,7 @@ geometry, which is not the same as a CUDA-style accumulator proof.
 
 ## 7. Two different model backends — do not conflate them
 
-| | `misaka-proof-of-llm` | `misaka-palw` crate (this repo) |
+| | `LLM-Validation` | `misaka-palw` crate (this repo) |
 |---|---|---|
 | Inference | patched **llama.cpp** + read-only graph observer | **candle**, GGUF |
 | Purpose | issue and verify `ComputeReceiptV1` | the k=2 replica dispatch / conformance gates behind the frozen `VerifiableInferenceBackend` |
@@ -258,7 +258,7 @@ section should be the first thing updated.
 
 | Topic | Document |
 |---|---|
-| Runtime quickstart, hardware, full runbook | [misaka-proof-of-llm](https://github.com/MISAKA-BTC/misaka-proof-of-llm) |
+| Runtime quickstart, hardware, full runbook | [LLM-Validation](https://github.com/MISAKA-BTC/LLM-Validation) |
 | Joining a network, node/miner/validator | [testnet-participation.md](testnet-participation.md) |
 | The audited-compute lane's consensus rules | [adr/0039 onward](adr/) |
 | Why the lane is currently closed | [adr/0042-permissionless-snapshot-auth-completion.md](adr/0042-permissionless-snapshot-auth-completion.md), [adr/0048-header-v4-staging-mainnet.md](adr/0048-header-v4-staging-mainnet.md) |

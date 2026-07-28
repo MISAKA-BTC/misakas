@@ -266,7 +266,7 @@ model's output.
 ### What runs today
 
 The receipt loop runs locally, end to end. The runtime is a **separate repository**,
-[misaka-proof-of-llm](https://github.com/MISAKA-BTC/misaka-proof-of-llm), which carries the
+[LLM-Validation](https://github.com/MISAKA-BTC/LLM-Validation), which carries the
 authoritative quickstart; this repository is the chain that would consume its output. The two even
 use different inference backends — patched llama.cpp there, `candle` in the optional `misaka-palw`
 crate here — so do not conflate them.
@@ -610,5 +610,5 @@ From [`consensus/core/src/constants.rs`](../consensus/core/src/constants.rs) and
 | Governing migration record | [adr/0019-mldsa87-migration.md](adr/0019-mldsa87-migration.md) |
 | PALW audited-compute lane | [adr/0039 onward](adr/) |
 | **Qwen3.6 receipts — issue, verify, what they prove** | [palw-llm-receipts.md](palw-llm-receipts.md) |
-| **The LLM runtime itself** | [misaka-proof-of-llm](https://github.com/MISAKA-BTC/misaka-proof-of-llm) |
+| **The LLM runtime itself** | [LLM-Validation](https://github.com/MISAKA-BTC/LLM-Validation) |
 | Reporting a vulnerability | [../SECURITY.md](../SECURITY.md) |
