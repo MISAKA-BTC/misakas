@@ -33,7 +33,21 @@ const MLDSA87_PK_LEN: usize = 2592;
 // ---------------------------------------------------------------------------
 
 fn http_get(url: &str, timeout: Duration) -> Result<(u16, String), CliError> {
-    let rest = url.strip_prefix("http://").ok_or_else(|| CliError::generic(format!("MTP endpoint must be http:// (got {url})")))?;
+    // This client is the hand-rolled HTTP/1.1 GET below — it has no TLS, so an https:// endpoint is
+    // a missing capability here, not a misconfiguration by the caller. Say which it is: the previous
+    // wording ("must be http://") reads as "you typed the wrong scheme" and sends someone to edit a
+    // config that was already correct.
+    let rest = url.strip_prefix("http://").ok_or_else(|| {
+        CliError::generic(format!(
+            "this CLI cannot fetch {url}: its MTP client speaks plain HTTP/1.1 only, with no TLS.\n\
+             For an https:// endpoint, fetch the ledger with any HTTPS client and verify it locally — \
+             verification is offline and is the part that actually proves anything:\n  \
+             curl -sO <endpoint>/mtp/v1/points\n  \
+             misaka mtp verify-epoch <epoch-N.M.jsonl> --pubkey-file <operator.pub>\n\
+             Point --endpoint / MISAKA_MTP_ENDPOINT at an http:// instance (a local service, or a \
+             tunnel to one) to use the query subcommands directly."
+        ))
+    })?;
     let (hostport, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),

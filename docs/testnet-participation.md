@@ -255,21 +255,61 @@ the finality point, not the point-of-view dependent `blockHash`.
 
 ## 7. Testnet points (MTP)
 
-The CLI ships a testnet-only points surface. Points are a mirror of **ML-DSA-87-signed epoch
-ledgers**, so they are independently checkable rather than something you have to trust:
+Points are a mirror of **ML-DSA-87-signed epoch ledgers**, so they are independently checkable
+rather than something you have to trust. The programme scores **`testnet-10` only**.
 
-```bash
-misaka mtp points gh:<your-id>          # your points
-misaka mtp leaderboard --top 50         # full ranking
-misaka mtp verify-epoch points/epoch-12.0.jsonl --pubkey-file <operator.pub>
+### The public endpoint
+
+```
+MISAKA_MTP_ENDPOINT = https://misakascan.com
 ```
 
-`verify-epoch` checks the signature and the rules hash locally, and with `--facts` performs a full
-deterministic recompute and byte-compare.
+| Route | What it returns |
+|---|---|
+| `https://misakascan.com/mtp/v1/points` | the full leaderboard |
+| `https://misakascan.com/mtp/v1/points/<id>` | one identity, e.g. `gh:alice` |
+| `https://misakascan.com/mtp/v1/operator` | the operator's 2592-byte ML-DSA-87 public key + its pins |
 
-The service URL is **not baked into this repository** — the CLI defaults to
-`http://127.0.0.1:8790`. Point it at the operator's service with `--endpoint` or the
-`MISAKA_MTP_ENDPOINT` environment variable.
+The operator key is pinned out-of-band so you can check the endpoint is not lying about who signs:
+
+```
+misakatest:qtu8yq0psff2leaz35rqrh5kcz20kug5jce2ecca9hx7ed6cxpghrzhnjg650ugu7esa8snj2ltz4v0dkdzu0dn7s90xmakw0fneety0pvngw4r0
+```
+
+`/mtp/v1/operator` must surface that same string in its `pins`. If it does not, do not trust the
+ledgers it serves.
+
+### Querying it
+
+**The bundled CLI cannot reach the HTTPS endpoint.** Its MTP client is a hand-rolled HTTP/1.1 GET
+with no TLS, so `misaka mtp points` / `leaderboard` only work against an `http://` instance — a
+local service, or a tunnel to one. Against `https://` it refuses and says so.
+
+That is a client limitation, not a hole in the trust model: **verification is offline**, and it is
+the part that proves anything. Fetch with any HTTPS client, verify locally:
+
+```bash
+curl -s https://misakascan.com/mtp/v1/points                       # leaderboard
+curl -s https://misakascan.com/mtp/v1/points/gh:alice              # one identity
+curl -s https://misakascan.com/mtp/v1/operator \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["operator_pubkey_mldsa87_hex"])' > operator.pub
+
+misaka mtp verify-epoch epoch-7.0.jsonl --pubkey-file operator.pub
+misaka mtp verify-epoch epoch-7.0.jsonl --pubkey-file operator.pub --facts epoch-7.0.input.json
+```
+
+`verify-epoch` checks the ML-DSA-87 signature and the rules hash; with `--facts` it additionally
+re-runs the scoring deterministically and byte-compares the result. A ledger that passes both did
+not come from trusting the server.
+
+### Current state
+
+The service is live and boot-persistent (`misaka-mtp.service` on the explorer host), but **no epoch
+has been published yet**, so the leaderboard is empty and `network` reads as `""`. That is a fresh
+install, not a fault. Points start accruing when the operator runs `run-epoch` over a window;
+auto-collected node/validator facts merge with any hand-reviewed `bug` / `verify` / `infra` awards.
+
+`testnet-200` earns nothing — it is out of scope by design (see §8).
 
 ---
 
