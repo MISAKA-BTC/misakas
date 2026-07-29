@@ -1,0 +1,71 @@
+{
+  "external_pair_id": "f89190aec9d1a79b5e2c3cdebe9ea132d037452a064399095b644233605dc96daf36dbccf23a8144f5361dccd63f45a9cc49626602d4f63779ff2a1f619f2392",
+  "external_receipt_a_id": "55683469118c05f9152cc5fbaeaba405594c6adb83b27b4e90c91089162051bf6598c072a8a2b5bc68496f664b54cab0bdc3d09f8a3b338841ad0a0ec8e0cac8",
+  "external_receipt_b_id": "c115e55ad6cd89c92f279b7fbee0a90fb099dd6c01aef455fc1857bbda648ff4c6ea2cd7aba38c540248b3a70e060a3eada40bbb096b1f968133ef63549945de",
+  "external_receipt_network_id": "7926045e2e2694613a4a5b0d1aa45691428a0b680cb599306e2bef033ba2aeda0a577465f36f3944ca77d500ee3c3ba23b8dbbbe0fca62bc0d6a9d2b00fb6868",
+  "projection": {
+    "canonical_compute_units": 387444,
+    "compute_set_id": "32c5cf9ee7db0f7e0fea37aa6169a570ce87e31c0f55da2788e3046920403301829d9f392796b0899711f61307da016e0f8c11360616f764e9e599e4e4e686ea",
+    "execution_root": "5fc93a9926df10249fdcf71304e22594436d34214158e36470213a4da56b5caf4e83f81bb7c97a18825f920e3c6b8bf734e66e1d1d70eaaa510dd453888dcae3",
+    "job_challenge": "9212a60f2dec20915bf020b7c24066cdfae542d709121346207b4010f6df3152e175217571ce65f2bea78702ecd455be6c51d10d3b7cc059db9a4ae1ecce9b93",
+    "output_commitment": "e83cf2e6d10c8d56a297d7e75d8f670f2c363abeb9cca724b47bead43025a461bf6ef30e60eff6b2f0779900f46c8676b0ec1c5e23dc32f7c32d009f9434081e",
+    "output_token_count": 38,
+    "prompt_token_count": 27,
+    "route_root": "f3616f55927b30d92161ac7f1e14d73872c062fa1787bc10a37ad7e050f072b138cbdb4f90f46207a94fee132f53e132756d705786df9dd92d5ce1facfdb5446",
+    "schedule_root": "6f318f91362a0e8da4cc6b17c73a833626231d61d880226f10ccf05bcbafe71781e56c12dfd064aee73a561c33ecb7125fc8ac4dbfec0a28087e049b0f7c9b48",
+    "state_root": "5ced3ebe8138d96cb4f670d5d7e785efb6fcdb5aaf1480c81309009ee6ce875e2ff8c9a77581e4fa49a428565e57fc725ec1c2118793547dd8bf8da258b1ee4f",
+    "stop_reason": 1,
+    "token_count": 65
+  },
+  "proof_commitment": "a25fdf869e5e3a9c76ca93b61bb5034788842897cfeb3952cb6d24cfa06a1aca67a6c2d7d8c77b5a3f103d0f87016a4e799ee4fa543d7b55e310a2b218cde8f4",
+  "runtime": {
+    "class": "canonical_integer_v0",
+    "engine_blake2b256": "f3ec6ae8367a5521c5e8e689d882b7c80e3c69b9e3bf0b87fc77d70e0ecbebda",
+    "model_blake2b256": "fabdc6dcf039abef59f543369f078fbd0943bc4f7ad5e8a0be39c9b88c65326c",
+    "model_profile_id": "951be0881cfa64bdd8242630d8173c9aee08086fa01a342ad4620e94b167ec209b57dfcbe6284ceeea301c5ec405689200b63246e6bba2c7df7e106d86efce15",
+    "ruleset_id": "qi35-int-v1",
+    "runtime_class_id_blake2b256": "5bcb0de3c865d9b9972cd17f9e8eaeb4e9743824544ff08084b66b4bdf21c96f",
+    "runtime_manifest_hash_blake2b256": "f3ec6ae8367a5521c5e8e689d882b7c80e3c69b9e3bf0b87fc77d70e0ecbebda",
+    "tables_blake2b256": "8ae72774d199ee75b9efdc0a09ee8c36f1a42768701ae7906a70aec2c20ff9a4"
+  },
+  "schema": "misaka.palw.real-provider-proof/v1",
+  "source_file_commitments": {
+    "receipt_a": "b1cd4f0baadf6e039e0a7d907d88f748b293733bcc4670f4fbe4c54478eb5dec4fa5a02166976fdf421140f2dc8429d1b5f9411898abb7695e137ce32b43ba19",
+    "receipt_b": "ca7c533c9e47adb95df1c22332c0e14423d95a9b382dadb27852dec26eb2ab19bb2a3dba83bfd9f1a8e2bcd83bb28d20e6635607da1d55bae699d079453dbcab",
+    "worker_result": "9b2fdcd5d6086e3d15bb8eafe4a7ebc89471d6ae13f7140ad193aefa7f932747790aca60a6d200bcf9586a16b076fac0e20d8599f5b41dbd6a978a5b13fb90be"
+  },
+  "ticket_binding": {
+    "authority_pk_hash": "81f1cb5714d2d4cd40814d363b109d6550b272cc59d181446056173657563c341f90c3b396a9c1c303cb81577f8651bb8c9e4e1d2f05f009f92ae37d7a5bae40",
+    "derivation": "authority-secret + verified-proof-commitment + verified-k2-pair-id",
+    "nullifier_commitment": "c54f34863c4c2988de3aec9e34c3533493b09883abd368d913f531978fba5174ac8da519541beefb2f7aeebc846846c7be3d0df2e38c454251562ae42013ed71"
+  },
+  "verification": {
+    "distinct_replica_slots": true,
+    "distinct_workers": true,
+    "exact_k2_projection_match": true,
+    "mldsa87_a": true,
+    "mldsa87_b": true,
+    "output_token_commitment_recomputed": true,
+    "receipt_v3_a": true,
+    "receipt_v3_b": true,
+    "worker_results_byte_identical": true
+  },
+  "workers": [
+    {
+      "credential_id": "240a464515114198e88b97759f1b67930fb5b5e576e96e690ad6019284ce4ae569cb8e92d35c55739653f947b3d50413fe08b309765c4dc3f65de17fedd29fda",
+      "engine_seconds": 9.235115875,
+      "execution_nullifier": "20948edf0359f6733148c8a9a114a7eb9af89c290cfda1a68895ee4aa56985a4d83fd79f14a5e29c8c428adcbb9effda4b7d4bff24856f019bb56112c3e09998",
+      "label": "macstudio-provider-a",
+      "slot": 0,
+      "timestamp_millis": 1785328469938
+    },
+    {
+      "credential_id": "c0f3e4f17ac3855697b858f0361028d7c9a34aada4f5666f949813f714f2d479088ce8fad52677e3647096e1999a227660eb2d6131253b997fbd96a3a230c28f",
+      "engine_seconds": 7.587924292,
+      "execution_nullifier": "ab0bf637c982e0ab74e381ec9f77c3844a26e4cce51125197c8afe8a8f702e8c3ff9d6395358bd25bde9c70ac93600041737ae46d56c319e6866db101ac0ccc4",
+      "label": "macstudio-provider-b",
+      "slot": 1,
+      "timestamp_millis": 1785328487324
+    }
+  ]
+}

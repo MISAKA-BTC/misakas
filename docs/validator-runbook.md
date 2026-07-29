@@ -8,17 +8,16 @@ The DNS overlay is now **active from genesis on every defined network**
 (`dns_activation_daa_score = 0`). Activating is a one-time launch choice, not a per-validator
 action.
 
-> **Live network = `testnet-10`** (explorer: [misakascan.com](https://misakascan.com)). The
+> **Live network = `testnet-200`** (explorer: [misakascan.com](https://misakascan.com)). The
 > command examples below were written for the earlier `devnet`; for the live testnet substitute
-> **`--network testnet-10`** (or `--network-id testnet-10` for the miner), **`misakatest:`**
+> **`--network testnet-200`** (or `--network-id testnet-200` for the miner), **`misakatest:`**
 > addresses, the **testnet RPC ports** (gRPC `26210`, wRPC Borsh `27210`, wRPC JSON `28210` — the
 > `26610/27610/28610` below are devnet defaults; on either network you can just pass
-> `--rpclisten-borsh=default`), and the testnet stake-bond minimum **10 MSK = `--amount 1000000000`** (lowered from
-> mainnet's 20,000,000 MSK so a tester can mine a bondable amount in seconds — see Step 3;
-> **mainnet keeps 20M**). `bond` aggregates several mature coinbase UTXOs, so the
+> `--rpclisten-borsh=default`), and the stake-bond minimum **20,000,000 MSK =
+> `--amount 2000000000000000`**. `bond` aggregates several mature coinbase UTXOs, so the
 > ~3.7-MSK-per-block mining fragments no longer need manual consolidation. testnet also enforces
-> **two-dimensional** finality (WorkDepth + StakeDepth), so a single validator confirms after ~10
-> attested epochs rather than instantly. Use a **fresh `--signed-epoch-db`** per network (the
+> **two-dimensional** finality (WorkDepth + StakeDepth), with testnet-200 thresholds of 100 and
+> 5000 respectively. Use a **fresh `--signed-epoch-db`** per network (the
 > anti-equivocation guard keys on epoch numbers).
 
 **Proven live on the activated testnet:** keygen → bond (20M MSK from the premine) → run →
@@ -29,7 +28,7 @@ The same flow was first proven on devnet (2026-05-30).
 > That run predates the current tokenomics — it was performed under the earlier 15B-premine /
 > 15B-emission parameters. The shipped constants are now **~26.013224875B MSK theoretical max =
 > 10B premine + ~16.013224875B emission over 30 years** at 1.4 %/yr decay (commit `0006eb8`,
-> 2026-07-24), and the testnet bond floor is **10 MSK**, not 20M. The validator *lifecycle* the run
+> 2026-07-24), and testnet-200 intentionally keeps the **20M-MSK** bond floor. The validator *lifecycle* the run
 > exercises is unchanged; only the amounts are.
 
 ---
@@ -56,15 +55,15 @@ explorers/wallets (optional but handy).
   --rpclisten-json=0.0.0.0:28610 \
   --appdir ~/.kaspa-pq-devnet
 ```
-Add `--connect=<seed-ip>:<p2p-port>` to join an existing mesh (P2P port is **26211 for
-testnet-10**, 26611 for devnet, 26111 for mainnet — e.g. the public testnet bootstrap is
-`--addpeer=95.111.236.186:26211`), or `--nodnsseed --disable-upnp --enable-unsynced-mining` for a
+Add `--connect=<seed-ip>:<p2p-port>` to join an existing mesh (P2P port is **26511 for
+testnet-200**, 26611 for devnet, 26111 for mainnet — e.g. the public testnet bootstrap is
+`--addpeer=95.111.236.186:26511`), or `--nodnsseed --disable-upnp --enable-unsynced-mining` for a
 fresh local chain. Wait until it reports `IBD ... finished` / the chain stops advancing during sync
 before proceeding (`isSynced: true`).
 > If you sit at `has 0/8 outgoing P2P connections` even though the DNS seeders return addresses, the
 > usual cause is a **P2P-port mismatch**: DNS returns only IPs and the node dials them on the
 > network's *default* P2P port, so a peer listening on a non-default port is unreachable by
-> discovery — bootstrap with an explicit `--addpeer=<ip>:26211`.
+> discovery — bootstrap with an explicit `--addpeer=<ip>:26511`.
 
 **0b. Start the miner** — note the binary is **`kaspa-pq-miner`** (NOT `pq-miner`). For now
 mine to ANY address just to grow the chain; Step 2 switches it to your funding address. `--rpc`
@@ -103,24 +102,20 @@ newest = immature coinbase and was rejected with `spends an immature UTXO … ma
 passed yet`; consolidation is no longer required.)
 
 Just give the first batch of coinbases time to mature: mine for a short while, then wait until the
-virtual DAA is ≥ 1000 past those blocks (≈ a few minutes on the live testnet). At the testnet
-subsidy (~2.5–3.7 MSK/block, decaying over time) a 10-MSK bond needs only ~4–5 mature coinbases; a
-larger `--amount` needs proportionally more. The bond tx aggregates **up to 20 inputs** (to stay
-within the block mass limit), so a single bond tops out at ≈ 20 × the per-block subsidy (≈ **50
-MSK** at the current rate); for a larger stake, bond again (run a second `bond`) or lower
-`--amount`. If `bond` reports `not enough MATURE funding … have X sompi across N mature UTXO(s)
-(cap 20)`, either mine more / wait longer for maturity, or — if you've already hit the 20-input
-cap — lower `--amount`. (Verified live 2026-06-08: a 10-MSK bond aggregated 5 mature coinbase UTXOs
-and was accepted; the 5-input ML-DSA signing validates through consensus.)
+virtual DAA is ≥ 1000 past those blocks (≈ a few minutes on the live testnet). testnet-200's
+20,000,000-MSK validator floor is not realistically self-funded from block subsidies; public
+validator admission therefore requires an operator-funded UTXO. The bond transaction aggregates
+up to 20 mature inputs. If it reports `not enough MATURE funding`, wait for maturity or supply
+larger operator-funded inputs.
 
 ### 3. Stake the coins into a bond
 ```
 # devnet/simnet (no per-bond minimum): any positive amount, e.g. 0.5 MSK
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27610 --validator-key validator.seed \
                         --amount 50000000 --network devnet
-# testnet-10 (min 10 MSK): e.g. bond 10 MSK
+# testnet-200 (production-size floor): bond 20,000,000 MSK
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27610 --validator-key validator.seed \
-                        --amount 1000000000 --network testnet-10
+                        --amount 2000000000000000 --network testnet-200
 ```
 Prints `bond_outpoint: <txid>:0` (and `funding bond from N mature UTXO(s) …` showing how many
 coinbase fragments were aggregated). Output-0 is the locked stake (ADR-0016 §D.1).
@@ -136,10 +131,9 @@ a flat 30 000 that sat below the mempool minimum and wedged any path that fell b
 network-independent (same relay rate + bond shape), so it works unchanged on testnet/mainnet.
 
 > **Bond amount differs by network.** Devnet/simnet have no per-bond minimum (`min_bond_amount_sompi
-> = 0`), so any positive `--amount` works. **testnet-10 requires `--amount ≥ 10 MSK`
-> (`= 1000000000 sompi`)** — lowered from mainnet's floor (`TESTNET_DNS_PARAMS`, kaspa-pq Phase 2)
-> so testers can mine a bondable amount in seconds. **Mainnet requires `--amount ≥ 20 000 000 KAS`**
-> (`min_bond_amount_sompi` in `PRODUCTION_DNS_PARAMS`, user decision 2026-06-01). A smaller bond is
+> = 0`), so any positive `--amount` works. **testnet-200 and mainnet require
+> `--amount ≥ 20,000,000 MSK` (`= 2000000000000000 sompi`)**
+> (`min_bond_amount_sompi` in `PRODUCTION_DNS_PARAMS`). A smaller bond is
 > rejected at acceptance and can never attest.
 
 ### 4. Verify the bond is active

@@ -4,12 +4,17 @@ use borsh::BorshDeserialize;
 use clap::Parser;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw::da::{
-    PALW_DA_MAX_OBJECT_BYTES, PALW_RECEIPT_DA_OBJECT_VERSION_V1, PALW_RECEIPT_DA_OBJECT_VERSION_V2, palw_receipt_da_chunk_proof,
-    palw_receipt_da_commitment, palw_receipt_da_object_bytes, palw_receipt_da_object_version,
+    PALW_DA_MAX_OBJECT_BYTES, PALW_PROVIDER_SESSION_V1_MLDSA87_CONTEXT, PALW_RECEIPT_DA_OBJECT_VERSION_V1,
+    PALW_RECEIPT_DA_OBJECT_VERSION_V2, palw_receipt_da_chunk_proof, palw_receipt_da_commitment, palw_receipt_da_object_bytes,
+    palw_receipt_da_object_version,
 };
 use kaspa_consensus_core::palw::{da::PalwReceiptDaObjectV1, validate_palw_overlay_payload};
 use kaspa_hashes::blake2b_512_keyed;
 use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed, parse_stake_bond_ref};
+use kaspa_txscript::verify_mldsa87_with_context;
+use misaka_palw::receipt_v3::{
+    ReceiptV3Expectations, ReceiptV3SubmissionRef, credential_id_from_verifying_key, verify_and_match_receipts_v3,
+};
 use misaka_palw_miner::da::{
     PalwDaProviderSigner, PalwDaReceiptSemantics, PalwReceiptDaObjectV2Wire, build_da_timeout_evidence, build_signed_da_challenge,
     build_signed_da_response, build_signed_receipt_da_object, decode_canonical_palw_receipt_da_object_v2_wire, encode_da_challenge,
@@ -87,6 +92,9 @@ pub struct DaObjectBuildArgs {
     /// Consensus PALW network-domain u32.
     #[arg(long)]
     network_id: u32,
+    /// Header-v4 genesis/network identity embedded into Receipt-v3 bodies.
+    #[arg(long, value_parser = parse_hash64)]
+    genesis_network_id: Hash64,
     /// Batch id the object binds. Author-time leaves use the all-zero id (the manifest restamps the
     /// leaf's batch_id later; the DA object stays at the author-time id it was committed under).
     #[arg(long, value_parser = parse_hash64, default_value_t = Hash64::default())]
@@ -131,6 +139,23 @@ pub struct DaObjectBuildArgs {
     canonical_gemm_trace_root: Hash64,
     #[arg(long, value_parser = parse_hash64)]
     operation_schedule_commitment: Hash64,
+    /// Canonical MoE routing root (zero for dense/mock work).
+    #[arg(long, value_parser = parse_hash64, default_value_t = Hash64::default())]
+    route_root: Hash64,
+    /// Canonical recurrent/checkpoint state root (zero when not applicable).
+    #[arg(long, value_parser = parse_hash64, default_value_t = Hash64::default())]
+    state_root: Hash64,
+    /// Exact semantic compute units from the provider receipt. Defaults to the
+    /// legacy leaf quantum count for compatibility with wiring-only batches.
+    #[arg(long)]
+    canonical_compute_units: Option<u64>,
+    /// Total prompt + output tokens committed by Receipt v3. Defaults to the
+    /// legacy leaf quantum count for compatibility with wiring-only batches.
+    #[arg(long)]
+    token_count: Option<u64>,
+    /// Canonical Receipt-v3 stop-reason tag.
+    #[arg(long, default_value_t = 0)]
+    stop_reason: u8,
     /// New file receiving the canonical Borsh `PalwReceiptDaObjectV1` (the DA blob to serve).
     #[arg(long)]
     out: PathBuf,
@@ -165,6 +190,62 @@ fn read_bounded_object(path: &Path) -> Result<Vec<u8>, String> {
 enum CanonicalDaObject {
     V1(PalwReceiptDaObjectV1),
     V2(PalwReceiptDaObjectV2Wire),
+}
+
+fn verify_v2_object_crypto(object: &PalwReceiptDaObjectV2Wire) -> Result<(), String> {
+    for (label, bond, receipt, authorization) in [
+        ("A", object.provider_a_bond, &object.receipt_a, &object.session_authorization_a),
+        ("B", object.provider_b_bond, &object.receipt_b, &object.session_authorization_b),
+    ] {
+        if authorization.provider_bond != bond || authorization.session_public_key.is_empty() {
+            return Err(format!("provider {label} session authorization does not bind the DA object's bond/session"));
+        }
+        if !matches!(
+            verify_mldsa87_with_context(
+                &authorization.owner_public_key,
+                authorization.signing_hash().as_byte_slice(),
+                &authorization.signature,
+                PALW_PROVIDER_SESSION_V1_MLDSA87_CONTEXT,
+            ),
+            Ok(true)
+        ) {
+            return Err(format!("provider {label} owner→session ML-DSA-87 authorization is invalid"));
+        }
+        if receipt.worker_credential_id != credential_id_from_verifying_key(&authorization.session_public_key) {
+            return Err(format!("provider {label} receipt credential does not bind its authorized session key"));
+        }
+    }
+    let expected = |receipt: &misaka_palw::receipt_v3::ComputeReceiptV3, session_key: &[u8]| ReceiptV3Expectations {
+        network_id: object.network_id,
+        compute_set_id: receipt.projection.compute_set_id,
+        job_challenge: receipt.projection.job_challenge,
+        replica_slot: receipt.replica_slot,
+        issued_epoch: receipt.issued_epoch,
+        expires_epoch: receipt.expires_epoch,
+        current_epoch: receipt.issued_epoch,
+        registered_credential_id: credential_id_from_verifying_key(session_key),
+    };
+    let expected_a = expected(&object.receipt_a, &object.session_authorization_a.session_public_key);
+    let expected_b = expected(&object.receipt_b, &object.session_authorization_b.session_public_key);
+    let matched = verify_and_match_receipts_v3(
+        ReceiptV3SubmissionRef {
+            receipt: &object.receipt_a,
+            envelope: &object.envelope_a,
+            verifying_key: &object.session_authorization_a.session_public_key,
+            expected: &expected_a,
+        },
+        ReceiptV3SubmissionRef {
+            receipt: &object.receipt_b,
+            envelope: &object.envelope_b,
+            verifying_key: &object.session_authorization_b.session_public_key,
+            expected: &expected_b,
+        },
+    )
+    .map_err(|error| format!("Receipt-v3 ML-DSA-87/k=2 verification failed: {error:?}"))?;
+    if matched.pair_id() != object.matched_pair_id {
+        return Err("Receipt-v3 matched pair id does not equal the DA object commitment".to_string());
+    }
+    Ok(())
 }
 
 impl CanonicalDaObject {
@@ -235,6 +316,8 @@ pub fn da_inspect(args: DaInspectArgs) -> Result<(), String> {
             );
         }
         CanonicalDaObject::V2(object) => {
+            verify_v2_object_crypto(object)?;
+            let projection = &object.receipt_a.projection;
             println!("network_id: {}", object.network_id);
             println!("batch_id: {}", object.batch_id);
             println!("leaf_index: {}", object.leaf_index);
@@ -242,6 +325,23 @@ pub fn da_inspect(args: DaInspectArgs) -> Result<(), String> {
             println!("provider_b_bond: {}", object.provider_b_bond);
             println!("receipt_schema: receipt-v3");
             println!("matched_pair_id: {}", object.matched_pair_id);
+            println!("receipt_v3_crypto_verified: true");
+            println!("receipt_v3_compute_set_id: {}", projection.compute_set_id);
+            println!("receipt_v3_job_challenge: {}", projection.job_challenge);
+            println!("receipt_v3_output_commitment: {}", projection.output_commitment);
+            println!("receipt_v3_schedule_root: {}", projection.schedule_root);
+            println!("receipt_v3_execution_root: {}", projection.execution_root);
+            println!("receipt_v3_route_root: {}", projection.route_root);
+            println!("receipt_v3_state_root: {}", projection.state_root);
+            println!("receipt_v3_canonical_compute_units: {}", projection.canonical_compute_units);
+            println!("receipt_v3_token_count: {}", projection.token_count);
+            println!("receipt_v3_stop_reason: {}", projection.stop_reason);
+            println!("receipt_v3_replica_a_slot: {}", object.receipt_a.replica_slot);
+            println!("receipt_v3_replica_b_slot: {}", object.receipt_b.replica_slot);
+            println!("provider_a_session_valid_from_epoch: {}", object.session_authorization_a.valid_from_epoch);
+            println!("provider_a_session_valid_until_epoch: {}", object.session_authorization_a.valid_until_epoch);
+            println!("provider_b_session_valid_from_epoch: {}", object.session_authorization_b.valid_from_epoch);
+            println!("provider_b_session_valid_until_epoch: {}", object.session_authorization_b.valid_until_epoch);
         }
     }
 
@@ -345,10 +445,23 @@ pub fn da_object_build(args: DaObjectBuildArgs) -> Result<(), String> {
         output_commitment: args.output_commitment,
         canonical_gemm_trace_root: args.canonical_gemm_trace_root,
         operation_schedule_commitment: args.operation_schedule_commitment,
+        route_root: args.route_root,
+        state_root: args.state_root,
+        canonical_compute_units: args.canonical_compute_units.unwrap_or(u64::from(args.quantum_count)),
+        token_count: args.token_count.unwrap_or(u64::from(args.quantum_count)),
+        stop_reason: args.stop_reason,
         completed_at_epoch: args.completed_at_epoch,
     };
-    let artifact = build_signed_receipt_da_object(args.network_id, args.batch_id, args.leaf_index, fields, &signer_a, &signer_b)
-        .map_err(|error| format!("cannot build receipt DA object: {error}"))?;
+    let artifact = build_signed_receipt_da_object(
+        args.network_id,
+        args.genesis_network_id,
+        args.batch_id,
+        args.leaf_index,
+        fields,
+        &signer_a,
+        &signer_b,
+    )
+    .map_err(|error| format!("cannot build receipt DA object: {error}"))?;
 
     write_new_payload(&args.out, &artifact.object_bytes)?;
     // These are exactly the fields the leaf must carry (PalwDaProducerArtifact::bind_leaf). The
@@ -360,6 +473,10 @@ pub fn da_object_build(args: DaObjectBuildArgs) -> Result<(), String> {
     println!("receipt_da_object_len: {}", artifact.commitment.object_len);
     println!("receipt_da_chunk_count: {}", artifact.commitment.chunk_count);
     println!("private_match_commitment: {}", artifact.private_match_commitment);
+    println!("receipt_v3_compute_set_id: {}", artifact.object.receipt_a.projection.compute_set_id);
+    println!("receipt_v3_job_challenge: {}", artifact.object.receipt_a.projection.job_challenge);
+    println!("receipt_v3_issued_epoch: {}", artifact.object.receipt_a.issued_epoch);
+    println!("receipt_v3_expires_epoch: {}", artifact.object.receipt_a.expires_epoch);
     println!("object_file: {}", args.out.display());
     Ok(())
 }
@@ -380,77 +497,52 @@ pub fn da_timeout_payload(args: DaTimeoutPayloadArgs) -> Result<(), String> {
 mod tests {
     use super::*;
     use clap::Parser;
-    use kaspa_consensus_core::palw::da::{
-        PALW_PROVIDER_SESSION_AUTH_VERSION_V1, PALW_RECEIPT_DA_OBJECT_VERSION_V2, PalwProviderSessionAuthorizationV1,
-        PalwReceiptDaChunkProofV1, verify_palw_receipt_da_chunk,
-    };
+    use kaspa_consensus_core::palw::da::{PALW_RECEIPT_DA_OBJECT_VERSION_V2, PalwReceiptDaChunkProofV1, verify_palw_receipt_da_chunk};
     use kaspa_consensus_core::tx::TransactionOutpoint;
-    use misaka_palw::receipt_v3::{ComputeReceiptV3, ImplementationTelemetryV3, MatchProjectionV2, SignedEnvelopeV3};
-    use misaka_palw_miner::da::palw_receipt_da_object_v2_wire_bytes;
 
     fn h(byte: u8) -> Hash64 {
         Hash64::from_bytes([byte; 64])
     }
 
     fn canonical_v2_object_bytes() -> Vec<u8> {
-        let projection = MatchProjectionV2 {
-            compute_set_id: h(1),
-            job_challenge: h(2),
+        let owner_a = ValidatorKey::from_seed([1; 32]);
+        let session_a = ValidatorKey::from_seed([2; 32]);
+        let owner_b = ValidatorKey::from_seed([3; 32]);
+        let session_b = ValidatorKey::from_seed([4; 32]);
+        let provider_a = PalwDaProviderSigner {
+            provider_bond: TransactionOutpoint::new(h(30), 0),
+            owner_key: &owner_a,
+            session_key: &session_a,
+            valid_from_epoch: 5,
+            valid_until_epoch: 20,
+            authorization_nonce: h(50),
+        };
+        let provider_b = PalwDaProviderSigner {
+            provider_bond: TransactionOutpoint::new(h(31), 1),
+            owner_key: &owner_b,
+            session_key: &session_b,
+            valid_from_epoch: 5,
+            valid_until_epoch: 20,
+            authorization_nonce: h(60),
+        };
+        let fields = PalwDaReceiptSemantics {
+            job_nullifier: h(2),
+            job_set_commitment: h(1),
+            model_profile_id: h(11),
+            runtime_class_id: h(12),
+            shape_id: 7,
+            quantum_count: 2,
             output_commitment: h(3),
-            schedule_root: h(4),
-            execution_root: h(5),
+            canonical_gemm_trace_root: h(5),
+            operation_schedule_commitment: h(4),
             route_root: h(6),
             state_root: h(7),
             canonical_compute_units: 8,
             token_count: 9,
             stop_reason: 0,
+            completed_at_epoch: 5,
         };
-        let receipt = |slot| ComputeReceiptV3 {
-            receipt_version: 3,
-            network_id: h(10),
-            projection: projection.clone(),
-            telemetry: ImplementationTelemetryV3 { runtime_class_id: [11; 32], runtime_manifest_hash: [12; 32] },
-            worker_credential_id: h(13 + slot),
-            replica_slot: slot,
-            execution_nullifier: h(15 + slot),
-            issued_epoch: 5,
-            expires_epoch: 20,
-        };
-        let envelope = |slot| SignedEnvelopeV3 {
-            body_digest: h(20 + slot),
-            algorithm: 1,
-            signer_credential_id: h(13 + slot),
-            signature: vec![slot; 32],
-        };
-        let bond_a = TransactionOutpoint::new(h(30), 0);
-        let bond_b = TransactionOutpoint::new(h(31), 1);
-        let authorization = |bond, byte| PalwProviderSessionAuthorizationV1 {
-            version: PALW_PROVIDER_SESSION_AUTH_VERSION_V1,
-            network_id: 110,
-            provider_bond: bond,
-            owner_public_key: vec![byte; 32],
-            session_public_key: vec![byte.wrapping_add(1); 32],
-            valid_from_epoch: 5,
-            valid_until_epoch: 20,
-            authorization_nonce: h(byte),
-            signature: vec![byte; 32],
-        };
-        palw_receipt_da_object_v2_wire_bytes(&PalwReceiptDaObjectV2Wire {
-            version: PALW_RECEIPT_DA_OBJECT_VERSION_V2,
-            network_id: h(10),
-            batch_id: h(40),
-            leaf_index: 7,
-            provider_a_bond: bond_a,
-            provider_b_bond: bond_b,
-            receipt_a: receipt(0),
-            envelope_a: envelope(0),
-            receipt_b: receipt(1),
-            envelope_b: envelope(1),
-            session_authorization_a: authorization(bond_a, 50),
-            session_authorization_b: authorization(bond_b, 60),
-            matched_pair_id: h(70),
-        })
-        .unwrap()
+        build_signed_receipt_da_object(200, h(10), h(40), 7, fields, &provider_a, &provider_b).unwrap().object_bytes
     }
 
     #[test]

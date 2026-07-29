@@ -12,8 +12,8 @@
 #     1. PAUSES the continuous algo-3 supporting miner so DAA is FROZEN, then
 #        verifies the sink DAA is actually stationary (two identical samples);
 #     2. pins E = current_epoch (from the frozen sink) and computes the mandated
-#        admission windows activation=E+8, expiry=E+14 (registration_lead 2 +
-#        active_window 6 => +8; +audit_window 6 => +14);
+#        admission windows activation=E+PALW_ACTIVATION_DELAY_EPOCHS and
+#        expiry=activation+PALW_ACTIVE_WINDOW_EPOCHS (testnet-200 defaults E+8/E+24);
 #     3. authors the unbound leaf-set JSON (schema "misaka.palw.leaf-set.v1") for
 #        LEAF_COUNT leaves — each carrying the two DISTINCT provider bonds, the
 #        shared runtime_class_id / model_profile_id, shape_id=SHAPE_ID, the
@@ -39,12 +39,12 @@
 #     ticket_nullifier_commitment + authority pk_hash, and — after the manifest
 #     fixes the batch_id — the helper populates the TicketSecretStore. This mints
 #     a WIRING-ONLY, explicitly NON-INFERENCE block.
+#   real — requires palw-real-provider plus two independently signed Qwen
+#     Receipt-v3 JSON files and their byte-identical worker results. The helper
+#     verifies both ML-DSA-87 signatures, the exact k=2 projection, and the token
+#     commitment, then derives the private ticket from that verified proof.
 #
-# LIMITATION: the leaf is a mock; no real inference is performed here. This is
-#   deliberately NOT the seeded, test-only `palw_demo` path (audit §10.1); the
-#   leaf is registered through the real on-chain carriers so both nodes obtain it
-#   over P2P, and only the ticket secret (mock mode) is synthetic and labeled so.
-#   Real inference needs the provider GPU tool (Phase 1), out of scope here.
+# Neither mock nor real mode uses the seeded test-only `palw_demo` path.
 #
 # Design rules (shared with the whole harness): set -euo pipefail; IDEMPOTENT
 #   (a complete bundle already recorded is a no-op; a PARTIAL bundle is never
@@ -62,6 +62,8 @@
 #                        in env.example — closed no-value run).
 #   MOCK_TICKET_BIN    — path to the mock-ticket helper (default
 #                        $REPO_ROOT/target/release/mock-ticket). TICKET_MODE=mock.
+#   REAL_PROVIDER_BIN  — path to palw-real-provider.
+#   REAL_RECEIPT_A/B, REAL_RESULT_A/B — real Qwen evidence inputs.
 # =============================================================================
 
 set -euo pipefail
@@ -87,7 +89,7 @@ usage: ${0##*/} [create]
 
   Build the PALW batch lifecycle payloads OFFLINE (STN-011): pause the supporting
   miner to FREEZE DAA, pin E=current_epoch, author the unbound leaf-set JSON for
-  \$LEAF_COUNT leaves (activation=E+8, expiry=E+14; two DISTINCT provider bonds;
+  \$LEAF_COUNT leaves (configurable activation/expiry window; two DISTINCT provider bonds;
   shared runtime_class_id/model_profile_id; reward SPKs; distinct per-leaf
   job_nullifier/private_match_commitment/receipt_da_root), build the batch-
   manifest OFFLINE (records PALW_BATCH_ID), then build every leaf-chunk OFFLINE.
@@ -101,6 +103,9 @@ usage: ${0##*/} [create]
   TICKET_MODE=mock: requires the mock-ticket helper (built by build-and-hash.sh) to
     open each leaf's ticket_nullifier_commitment and populate the TicketSecretStore
     for a WIRING-ONLY, non-inference block.
+  TICKET_MODE=real: verifies an ML-DSA-87 signed k=2 Qwen Receipt-v3 pair and
+    byte-identical worker results, derives the ticket from that proof, and carries
+    every exact projection field into the on-chain provider receipts.
 
   Idempotent: a complete bundle already recorded is a no-op; a partial bundle is
   never silently overwritten (LIFECYCLE_FORCE=1 to wipe and rebuild). Fail-closed
@@ -189,6 +194,63 @@ _mock_store_add() {
     chmod 0600 "$TICKET_SECRET_FILE" 2>/dev/null || true
 }
 
+# Real-provider bridge wrappers. Unlike mock-ticket, verify-and-derive owns the
+# inference boundary: it refuses to create a ticket unless both external
+# Receipt-v3 signatures, worker identities/slots, k=2 projection, result bytes,
+# and output-token commitment verify.
+_real_verify_and_derive() {
+    local nf="$1" proof="$2" out
+    out="$("$REAL_PROVIDER_BIN" verify-and-derive \
+            --receipt-a "$REAL_RECEIPT_A" \
+            --receipt-b "$REAL_RECEIPT_B" \
+            --result-a "$REAL_RESULT_A" \
+            --result-b "$REAL_RESULT_B" \
+            --authority-key "$TICKET_AUTHORITY_KEY" \
+            --nullifier-out "$nf" \
+            --proof-out "$proof" 2>&1)" \
+        || die "palw-real-provider rejected the Qwen inference evidence (bin=$REAL_PROVIDER_BIN). No ticket was created."
+    _RP_VERIFY="$(printf '%s\n' "$out" | _kv verification)"
+    _RP_PAIR="$(printf '%s\n' "$out" | _kv external_pair_id)"
+    _RP_RECEIPT_A="$(printf '%s\n' "$out" | _kv external_receipt_a_id)"
+    _RP_RECEIPT_B="$(printf '%s\n' "$out" | _kv external_receipt_b_id)"
+    _RP_JOBSET="$(printf '%s\n' "$out" | _kv compute_set_id)"
+    _RP_CHALLENGE="$(printf '%s\n' "$out" | _kv job_challenge)"
+    _RP_OUT="$(printf '%s\n' "$out" | _kv output_commitment)"
+    _RP_SCHEDULE="$(printf '%s\n' "$out" | _kv schedule_root)"
+    _RP_EXECUTION="$(printf '%s\n' "$out" | _kv execution_root)"
+    _RP_ROUTE="$(printf '%s\n' "$out" | _kv route_root)"
+    _RP_STATE="$(printf '%s\n' "$out" | _kv state_root)"
+    _RP_CU="$(printf '%s\n' "$out" | _kv canonical_compute_units)"
+    _RP_TOKENS="$(printf '%s\n' "$out" | _kv token_count)"
+    _RP_STOP="$(printf '%s\n' "$out" | _kv stop_reason)"
+    _RP_MODEL="$(printf '%s\n' "$out" | _kv model_profile_id)"
+    _RP_PROOF="$(printf '%s\n' "$out" | _kv proof_commitment)"
+    _RP_COMMIT="$(printf '%s\n' "$out" | _kv ticket_nullifier_commitment)"
+    _RP_AUTH="$(printf '%s\n' "$out" | _kv ticket_authority_pk_hash)"
+    [ "$_RP_VERIFY" = "receipt-v3+mldsa87+k2+tokens" ] \
+        || die "palw-real-provider did not report the complete verification verdict."
+    for _rp_hex in _RP_PAIR _RP_RECEIPT_A _RP_RECEIPT_B _RP_JOBSET _RP_CHALLENGE \
+                   _RP_OUT _RP_SCHEDULE _RP_EXECUTION _RP_ROUTE _RP_STATE \
+                   _RP_MODEL _RP_PROOF _RP_COMMIT _RP_AUTH; do
+        _is_hex128 "${!_rp_hex}" || die "palw-real-provider returned an invalid ${_rp_hex#_RP_} field."
+    done
+    for _rp_int in _RP_CU _RP_TOKENS _RP_STOP; do
+        case "${!_rp_int}" in ''|*[!0-9]*) die "palw-real-provider returned a non-integer ${_rp_int#_RP_} field." ;; esac
+    done
+}
+
+_real_store_add() {
+    local bid="$1" idx="$2" nf="$3"
+    "$REAL_PROVIDER_BIN" store-add \
+        --authority-key "$TICKET_AUTHORITY_KEY" \
+        --secret-file "$TICKET_SECRET_FILE" \
+        --batch-id "$bid" \
+        --leaf-index "$idx" \
+        --nullifier-file "$nf" >/dev/null 2>&1 \
+        || die "palw-real-provider could not add the verified ticket to $TICKET_SECRET_FILE."
+    chmod 0600 "$TICKET_SECRET_FILE" 2>/dev/null || true
+}
+
 # ---------------------------------------------------------------------------
 # Lifecycle-bundle presence checks (idempotency).
 #   LIFECYCLE_DIR / PALW_BATCH_ID / PALW_CHUNK_COUNT are set in do_create.
@@ -248,14 +310,14 @@ emit_leaf() {
       "provider_b_reward_script": "$RSPK_B",
       "ticket_authority_pk_hash": "${TAPKH[$i]}",
       "private_match_commitment": "${PMC[$i]}",
-      "receipt_da_object_version": 1,
+      "receipt_da_object_version": ${DAVERSION[$i]},
       "receipt_da_root": "${DAROOT[$i]}",
       "receipt_da_object_len": ${DALEN[$i]},
       "receipt_da_chunk_count": ${DACHUNK[$i]},
-      "receipt_v3_compute_set_id": "$COMPUTE_SET_ID_ZERO",
-      "receipt_v3_job_challenge": "$COMPUTE_SET_ID_ZERO",
-      "receipt_v3_issued_epoch": 0,
-      "receipt_v3_expires_epoch": 0,
+      "receipt_v3_compute_set_id": "${JOBSET[$i]}",
+      "receipt_v3_job_challenge": "${JOB_NF[$i]}",
+      "receipt_v3_issued_epoch": $E,
+      "receipt_v3_expires_epoch": $EXP,
       "registered_epoch": $E,
       "activation_epoch": $ACT,
       "expiry_epoch": $EXP,
@@ -325,8 +387,6 @@ do_create() {
 
     # Sentinels.
     BATCH_UNBOUND="$(zero128)"            # unbound leaf batch_id
-    COMPUTE_SET_ID_ZERO="$(zero128)"      # receipt_v3_compute_set_id may be zero
-
     # Skip-mode ticket placeholders — FIXED, obviously-placeholder 128-hex values
     # that are NEVER opened (submit uses --unsafe-skip-ticket-secret-check).
     TICKET_NF_PLACEHOLDER="$(_lc "${TICKET_NF_PLACEHOLDER:-$(h64 ee)}")"
@@ -334,21 +394,31 @@ do_create() {
     _is_hex128 "$TICKET_NF_PLACEHOLDER"   || die "TICKET_NF_PLACEHOLDER must be 128 hex chars."
     _is_hex128 "$TICKET_AUTH_PLACEHOLDER" || die "TICKET_AUTH_PLACEHOLDER must be 128 hex chars."
 
-    # mock-mode preconditions — fail fast (before pausing the miner).
+    # Ticketed-mode preconditions — fail fast before pausing the miner.
     if [ "$TICKET_MODE" = mock ]; then
         MOCK_TICKET_BIN="${MOCK_TICKET_BIN:-$REPO_ROOT/target/release/mock-ticket}"
         [ -x "$MOCK_TICKET_BIN" ] || die "TICKET_MODE=mock requires the mock-ticket helper at $MOCK_TICKET_BIN, but it is missing/not executable. It is a workspace member built by build-and-hash.sh (cargo build --release -p mock-ticket) — run ./build-and-hash.sh (or set MOCK_TICKET_BIN to its path), or use TICKET_MODE=skip (reaches batch.status=active without minting). It opens each leaf's ticket_nullifier_commitment and populates the TicketSecretStore for a WIRING-ONLY, non-inference block."
+    elif [ "$TICKET_MODE" = real ]; then
+        [ "$LEAF_COUNT" -eq 1 ] || die "TICKET_MODE=real currently binds one verified Qwen k=2 job, so LEAF_COUNT must be 1."
+        REAL_PROVIDER_BIN="${REAL_PROVIDER_BIN:-$REPO_ROOT/target/release/palw-real-provider}"
+        [ -x "$REAL_PROVIDER_BIN" ] || die "TICKET_MODE=real requires $REAL_PROVIDER_BIN (cargo build --release -p palw-real-provider)."
+        for _rp_input in REAL_RECEIPT_A REAL_RECEIPT_B REAL_RESULT_A REAL_RESULT_B; do
+            [ -n "${!_rp_input:-}" ] || die "TICKET_MODE=real requires $_rp_input."
+            [ -s "${!_rp_input}" ] || die "$_rp_input does not name a nonempty evidence file: ${!_rp_input}"
+        done
+    fi
+    if [ "$TICKET_MODE" = mock ] || [ "$TICKET_MODE" = real ]; then
         # Auto-init the ticket-authority seed (32-byte hex, 0600) if absent, via the
         # SAME loader kaspad's --palw-ticket-authority-key-file expects. keygen refuses
         # to clobber an existing file, so a re-run reuses the established authority; the
         # miner is later started with this exact seed, so both agree on the pk_hash.
         if [ ! -s "$TICKET_AUTHORITY_KEY" ]; then
-            log "TICKET_MODE=mock: no ticket-authority seed at $TICKET_AUTHORITY_KEY — generating one (kaspa-pq-validator keygen, 0600)."
+            log "TICKET_MODE=$TICKET_MODE: no ticket-authority seed at $TICKET_AUTHORITY_KEY — generating one (kaspa-pq-validator keygen, 0600)."
             install -d -m 0700 "$(dirname "$TICKET_AUTHORITY_KEY")" || die "cannot create key dir for $TICKET_AUTHORITY_KEY"
             "$VAL" keygen --out "$TICKET_AUTHORITY_KEY" --network "$NETWORK_BASE" >/dev/null \
                 || die "failed to generate the ticket-authority seed at $TICKET_AUTHORITY_KEY via '$VAL keygen'. Generate it manually (kaspa-pq-validator keygen --out $TICKET_AUTHORITY_KEY) or point TICKET_AUTHORITY_KEY at an existing 32-byte-hex 0600 seed."
         fi
-        [ -s "$TICKET_AUTHORITY_KEY" ] || die "TICKET_MODE=mock requires the ticket-authority seed at $TICKET_AUTHORITY_KEY but it is still missing after keygen. Refusing to build mock tickets without an authority key."
+        [ -s "$TICKET_AUTHORITY_KEY" ] || die "TICKET_MODE=$TICKET_MODE requires the ticket-authority seed at $TICKET_AUTHORITY_KEY but it is still missing after keygen."
     fi
 
     # ---- 2. idempotency / partial-state gate (no node, no miner needed) --------
@@ -428,8 +498,15 @@ do_create() {
         || die "DAA drifted $drift ($d1 -> $d2) beyond FREEZE_DRIFT_TOLERANCE=${FREEZE_DRIFT_TOLERANCE:-40} after pausing the supporting miner — a rogue fast block producer is active (a stray miner or an external mining peer via PALW_CONNECT_PEERS). Stop it and re-run."
 
     E="$(current_epoch "$d2")" || die "could not derive current epoch from sink DAA $d2."
-    ACT=$(( E + 8 ))
-    EXP=$(( E + 14 ))
+    local activation_delay active_window
+    activation_delay="${PALW_ACTIVATION_DELAY_EPOCHS:-8}"
+    active_window="${PALW_ACTIVE_WINDOW_EPOCHS:-16}"
+    case "$activation_delay" in ''|*[!0-9]*) die "PALW_ACTIVATION_DELAY_EPOCHS must be a positive integer." ;; esac
+    case "$active_window" in ''|*[!0-9]*) die "PALW_ACTIVE_WINDOW_EPOCHS must be a positive integer." ;; esac
+    [ "$activation_delay" -gt 0 ] || die "PALW_ACTIVATION_DELAY_EPOCHS must be > 0."
+    [ "$active_window" -gt 0 ] || die "PALW_ACTIVE_WINDOW_EPOCHS must be > 0."
+    ACT=$(( E + activation_delay ))
+    EXP=$(( ACT + active_window ))
 
     # Headroom: the manifest (registration_epoch=E) MUST be submittable within
     # epoch E. palw_epoch_length_daa = 100. If too little of epoch E remains,
@@ -459,6 +536,11 @@ do_create() {
         OUTC[$i]="$(rand_hex 64)"
         GEMM[$i]="$(rand_hex 64)"
         OPSCHED[$i]="$(rand_hex 64)"
+        ROUTE[$i]="$(zero128)"
+        STATE_ROOT[$i]="$(zero128)"
+        CANON_CU[$i]="$QUANTUM_COUNT"
+        TOKEN_COUNT[$i]="$QUANTUM_COUNT"
+        STOP_REASON[$i]="0"
         i=$(( i + 1 ))
     done
 
@@ -481,6 +563,32 @@ do_create() {
             i=$(( i + 1 ))
         done
         log "TICKET_MODE=mock: opened ticket_nullifier_commitment for $LEAF_COUNT MOCK leaf/leaves (WIRING-ONLY, NON-inference); TicketSecretStore is populated after the manifest fixes the batch_id."
+    elif [ "$TICKET_MODE" = real ]; then
+        NF_TMPDIR="$(mktemp -d "$PALW_DATA_ROOT/keys/.real-nf.XXXXXX")" \
+            || die "mktemp -d for real ticket material failed."
+        chmod 0700 "$NF_TMPDIR" 2>/dev/null || true
+        register_cleanup "rm -rf '$NF_TMPDIR'"
+        REAL_PROOF_TMP="$NF_TMPDIR/real-provider-proof.json"
+        _real_verify_and_derive "$NF_TMPDIR/nf-0.hex" "$REAL_PROOF_TMP"
+        JOB_NF[0]="$(_lc "$_RP_CHALLENGE")"
+        JOBSET[0]="$(_lc "$_RP_JOBSET")"
+        OUTC[0]="$(_lc "$_RP_OUT")"
+        GEMM[0]="$(_lc "$_RP_EXECUTION")"
+        OPSCHED[0]="$(_lc "$_RP_SCHEDULE")"
+        ROUTE[0]="$(_lc "$_RP_ROUTE")"
+        STATE_ROOT[0]="$(_lc "$_RP_STATE")"
+        CANON_CU[0]="$_RP_CU"
+        TOKEN_COUNT[0]="$_RP_TOKENS"
+        STOP_REASON[0]="$_RP_STOP"
+        MODEL_PROFILE_ID="$(_lc "$_RP_MODEL")"
+        DESCRIPTOR_ROOT="$(_lc "$_RP_PROOF")"
+        TNC[0]="$(_lc "$_RP_COMMIT")"
+        TAPKH[0]="$(_lc "$_RP_AUTH")"
+        REAL_EXTERNAL_PAIR_ID="$(_lc "$_RP_PAIR")"
+        REAL_RECEIPT_A_ID="$(_lc "$_RP_RECEIPT_A")"
+        REAL_RECEIPT_B_ID="$(_lc "$_RP_RECEIPT_B")"
+        log "TICKET_MODE=real: Qwen Receipt-v3 A/B ML-DSA-87 signatures, distinct workers, exact k=2 projection, and output tokens verified; pair=$_RP_PAIR."
+        log "verified projection: model=$MODEL_PROFILE_ID CU=${CANON_CU[0]} tokens=${TOKEN_COUNT[0]} stop=${STOP_REASON[0]} proof=$DESCRIPTOR_ROOT."
     else
         # skip mode: fixed placeholders (never opened).
         i=0
@@ -518,19 +626,22 @@ do_create() {
     [ -s "$PROV_A_KEY_F" ] || die "provider-a owner seed not found: $PROV_A_KEY_F — run ./register-providers.sh (it keygen's + bonds provider-a), or set PROV_A_KEY to the seed FILE. The DA object's session authorization is signed by this owner key."
     [ -s "$PROV_B_KEY_F" ] || die "provider-b owner seed not found: $PROV_B_KEY_F — run ./register-providers.sh, or set PROV_B_KEY to the seed FILE."
     case "$NETSUFFIX" in ''|*[!0-9]*) die "NETSUFFIX='$NETSUFFIX' is not a u32 network id (da-object-build --network-id must equal the node's params.net.suffix())." ;; esac
+    GENESIS_NETWORK_ID="${PALW_GENESIS_NETWORK_ID:-${EXPECTED_GENESIS_HASH:-}}"
+    _is_hex128 "$GENESIS_NETWORK_ID" || die "PALW_GENESIS_NETWORK_ID must be the node's 128-hex Header-v4 genesis identity."
     log "building $LEAF_COUNT real DA object(s) (da-object-build, batch_id=0, network_id=$NETSUFFIX, completed_at_epoch=$E) -> $objdir/<root>.palwobj"
     i=0
     while [ "$i" -lt "$LEAF_COUNT" ]; do
-        local obj_out da_root da_len da_chunks da_pmc
+        local obj_out da_version da_root da_len da_chunks da_pmc
         if ! obj_out="$("$VAL" palw-payload da-object-build \
                 --network-id "$NETSUFFIX" \
+                --genesis-network-id "$GENESIS_NETWORK_ID" \
                 --leaf-index "$i" \
                 --provider-a-bond "$PROV_A_BOND" \
                 --provider-a-owner-key "$PROV_A_KEY_F" \
                 --provider-b-bond "$PROV_B_BOND" \
                 --provider-b-owner-key "$PROV_B_KEY_F" \
                 --valid-from-epoch "$E" \
-                --valid-until-epoch "$E" \
+                --valid-until-epoch "$EXP" \
                 --completed-at-epoch "$E" \
                 --job-nullifier "${JOB_NF[$i]}" \
                 --job-set-commitment "${JOBSET[$i]}" \
@@ -541,18 +652,27 @@ do_create() {
                 --output-commitment "${OUTC[$i]}" \
                 --canonical-gemm-trace-root "${GEMM[$i]}" \
                 --operation-schedule-commitment "${OPSCHED[$i]}" \
+                --route-root "${ROUTE[$i]}" \
+                --state-root "${STATE_ROOT[$i]}" \
+                --canonical-compute-units "${CANON_CU[$i]}" \
+                --token-count "${TOKEN_COUNT[$i]}" \
+                --stop-reason "${STOP_REASON[$i]}" \
                 --out "$objdir/obj-$i.palwobj" 2>&1)"; then
             printf '%s\n' "$obj_out" >&2
             die "'palw-payload da-object-build' failed for leaf $i (see output above)."
         fi
+        da_version="$(printf '%s\n' "$obj_out" | _kv object_version)"
         da_root="$(printf '%s\n'   "$obj_out" | _kv receipt_da_root)"
         da_len="$(printf '%s\n'    "$obj_out" | _kv receipt_da_object_len)"
         da_chunks="$(printf '%s\n' "$obj_out" | _kv receipt_da_chunk_count)"
         da_pmc="$(printf '%s\n'    "$obj_out" | _kv private_match_commitment)"
+        case "$da_version" in ''|*[!0-9]*) printf '%s\n' "$obj_out" >&2; die "da-object-build leaf $i: non-integer object_version." ;; esac
+        [ "$da_version" -eq 2 ] || { printf '%s\n' "$obj_out" >&2; die "da-object-build leaf $i produced object_version=$da_version; header-v4 requires DA object version 2."; }
         _is_hex128 "$da_root" || { printf '%s\n' "$obj_out" >&2; die "da-object-build for leaf $i did not print a 128-hex receipt_da_root (see above)."; }
         _is_hex128 "$da_pmc"  || { printf '%s\n' "$obj_out" >&2; die "da-object-build for leaf $i did not print a 128-hex private_match_commitment (see above)."; }
         case "$da_len"    in ''|*[!0-9]*) printf '%s\n' "$obj_out" >&2; die "da-object-build leaf $i: non-integer receipt_da_object_len." ;; esac
         case "$da_chunks" in ''|*[!0-9]*) printf '%s\n' "$obj_out" >&2; die "da-object-build leaf $i: non-integer receipt_da_chunk_count." ;; esac
+        DAVERSION[$i]="$da_version"
         DAROOT[$i]="$(_lc "$da_root")"
         DALEN[$i]="$da_len"
         DACHUNK[$i]="$da_chunks"
@@ -561,7 +681,7 @@ do_create() {
         # obligation's object_root -> bytes without a leaf_index side channel.
         mv "$objdir/obj-$i.palwobj" "$objdir/${DAROOT[$i]}.palwobj" \
             || die "failed to name DA object for leaf $i by its root."
-        log "leaf $i DA object: root=${DAROOT[$i]} len=${DALEN[$i]} chunks=${DACHUNK[$i]}"
+        log "leaf $i DA object: version=${DAVERSION[$i]} root=${DAROOT[$i]} len=${DALEN[$i]} chunks=${DACHUNK[$i]}"
         i=$(( i + 1 ))
     done
 
@@ -615,8 +735,8 @@ do_create() {
     [ "$chunk_count" -ge 1 ] || die "batch-manifest reported chunk_count=$chunk_count (expected >= 1)."
     # Soft consistency checks (the manifest itself is the authority on the math).
     case "$mleaf"  in ''|*[!0-9]*) : ;; *) [ "$mleaf" = "$LEAF_COUNT" ] || warn "manifest leaf_count=$mleaf differs from LEAF_COUNT=$LEAF_COUNT." ;; esac
-    case "$act_nb" in ''|*[!0-9]*) : ;; *) [ "$act_nb" = "$ACT" ] || warn "manifest activation_not_before_epoch=$act_nb differs from expected E+8=$ACT." ;; esac
-    case "$exp_ep" in ''|*[!0-9]*) : ;; *) [ "$exp_ep" = "$EXP" ] || warn "manifest expiry_epoch=$exp_ep differs from expected E+14=$EXP." ;; esac
+    case "$act_nb" in ''|*[!0-9]*) : ;; *) [ "$act_nb" = "$ACT" ] || warn "manifest activation_not_before_epoch=$act_nb differs from configured value $ACT." ;; esac
+    case "$exp_ep" in ''|*[!0-9]*) : ;; *) [ "$exp_ep" = "$EXP" ] || warn "manifest expiry_epoch=$exp_ep differs from configured value $EXP." ;; esac
     log "batch-manifest OK: batch_id=$batch_id leaf_count=${mleaf:-$LEAF_COUNT} chunk_count=$chunk_count activation=${act_nb:-$ACT} expiry=${exp_ep:-$EXP}"
 
     # 6c. build every leaf-chunk OFFLINE from the RESTAMPED (batch-bound) leaves.
@@ -637,7 +757,7 @@ do_create() {
         k=$(( k + 1 ))
     done
 
-    # 6d. (mock only) populate the TicketSecretStore now that batch_id is fixed.
+    # 6d. Populate the TicketSecretStore now that batch_id is fixed.
     #     Done BEFORE finalize so a store-add failure leaves the bundle unrecorded
     #     (idempotent rebuild) rather than a recorded bundle with a partial store.
     if [ "$TICKET_MODE" = mock ]; then
@@ -647,6 +767,15 @@ do_create() {
             _mock_store_add "$batch_id" "$i" "$NF_TMPDIR/nf-$i.hex"
             i=$(( i + 1 ))
         done
+    elif [ "$TICKET_MODE" = real ]; then
+        log "populating TicketSecretStore with the ticket derived from verified Qwen inference."
+        _real_store_add "$batch_id" 0 "$NF_TMPDIR/nf-0.hex"
+        install -d -m 0755 "$staging/real-provider" || die "cannot create staged real-provider proof directory."
+        cp "$REAL_PROOF_TMP" "$staging/real-provider/proof.json" || die "cannot stage real provider proof."
+        cp "$REAL_RECEIPT_A" "$staging/real-provider/receipt-a.json" || die "cannot stage receipt A."
+        cp "$REAL_RECEIPT_B" "$staging/real-provider/receipt-b.json" || die "cannot stage receipt B."
+        cp "$REAL_RESULT_A" "$staging/real-provider/result-a.json" || die "cannot stage worker result A."
+        cp "$REAL_RESULT_B" "$staging/real-provider/result-b.json" || die "cannot stage worker result B."
     fi
 
     # ---- 7. finalize: move the staged bundle into place, then record state -----
@@ -662,6 +791,11 @@ do_create() {
     # da-response chunk proof that satisfies each obligation. Replace any stale dir.
     rm -rf "$LIFECYCLE_DIR/da"
     mv "$objdir" "$LIFECYCLE_DIR/da" || die "failed to finalize the DA object dir."
+    if [ "$TICKET_MODE" = real ]; then
+        rm -rf "$LIFECYCLE_DIR/real-provider"
+        mv "$staging/real-provider" "$LIFECYCLE_DIR/real-provider" \
+            || die "failed to finalize the real-provider proof bundle."
+    fi
 
     state_set PALW_BATCH_ID    "$batch_id"
     state_set PALW_CHUNK_COUNT "$chunk_count"
@@ -669,15 +803,27 @@ do_create() {
     state_set PALW_REG_EPOCH   "$E"
     state_set PALW_DA_OBJ_DIR  "$LIFECYCLE_DIR/da"
     state_set PALW_DA_REAL     "1"
+    if [ "$TICKET_MODE" = real ]; then
+        state_set PALW_REAL_EXTERNAL_PAIR_ID "$REAL_EXTERNAL_PAIR_ID"
+        state_set PALW_REAL_RECEIPT_A_ID "$REAL_RECEIPT_A_ID"
+        state_set PALW_REAL_RECEIPT_B_ID "$REAL_RECEIPT_B_ID"
+        state_set PALW_REAL_PROOF_COMMITMENT "$DESCRIPTOR_ROOT"
+        state_set PALW_REAL_MODEL_PROFILE_ID "$MODEL_PROFILE_ID"
+        state_set PALW_REAL_CANONICAL_COMPUTE_UNITS "${CANON_CU[0]}"
+        state_set PALW_REAL_TOKEN_COUNT "${TOKEN_COUNT[0]}"
+    fi
 
     # ---- 8. honest summary -----------------------------------------------------
     _LIFECYCLE_OK=1
     log "create-lifecycle complete (STN-011): batch_id=$batch_id leaves=$LEAF_COUNT chunks=$chunk_count registration_epoch=$E (activation=$ACT expiry=$EXP). Bundle under $LIFECYCLE_DIR."
-    log "the leaf(s) are a MOCK — no real inference was performed; the seeded, test-only palw_demo path is NOT used."
     if [ "$TICKET_MODE" = skip ]; then
+        log "the leaf(s) are placeholders — no real inference was performed; palw_demo is NOT used."
         log "TICKET_MODE=skip: submit-lifecycle registers the leaf-chunk with --unsafe-skip-ticket-secret-check -> reaches batch.status=active but the block can NEVER be mined (no ticket)."
-    else
+    elif [ "$TICKET_MODE" = mock ]; then
+        log "the leaf(s) are mock wiring leaves — no real inference was performed; palw_demo is NOT used."
         log "TICKET_MODE=mock: TicketSecretStore populated -> a WIRING-ONLY, non-inference block becomes mineable via start-palw-miner.sh after submit reaches batch.status=active."
+    else
+        log "TICKET_MODE=real: verified Qwen k=2 proof bundle finalized at $LIFECYCLE_DIR/real-provider; the inference-bound ticket makes the algo-4 leaf mineable after activation."
     fi
     log "SUPPORTING MINER LEFT PAUSED (DAA frozen at epoch $E) — intentional. submit-lifecycle.sh resumes the miner and submits the carriers within epoch $E; do NOT let DAA advance past epoch $E before submitting."
     return 0

@@ -111,7 +111,7 @@ struct Cli {
     /// kaspa-pq network the address belongs to. Affects the address
     /// prefix and the kaspa-pq keygen-seed domain separation
     /// (see docs/kaspa-pq-spec.md §8).
-    #[arg(long, value_enum, default_value_t = NetworkFlag::Mainnet, global = true)]
+    #[arg(long, value_enum, default_value_t = NetworkFlag::Testnet200, global = true)]
     network: NetworkFlag,
 
     /// When set, the mnemonic file is treated as the kaspa-pq encrypted
@@ -178,16 +178,15 @@ enum Command {
     /// Connect to a kaspa-pq node over wRPC (Borsh) and call get_info.
     /// Smoke-test for node reachability.
     Info {
-        /// wRPC URL. Defaults to the kaspa-pq simnet Borsh port
-        /// (27510 = upstream 17510 + 10000).
-        #[arg(long, default_value = "ws://127.0.0.1:27510")]
+        /// wRPC URL. Defaults to the public testnet-200 Borsh port.
+        #[arg(long, default_value = "ws://127.0.0.1:27210")]
         node: String,
     },
     /// Submit a hex-encoded, already-built transaction over wRPC.
     /// Use this with an externally-constructed transaction; the CLI
     /// does not select UTXOs or estimate fees.
     SubmitTx {
-        #[arg(long, default_value = "ws://127.0.0.1:27510")]
+        #[arg(long, default_value = "ws://127.0.0.1:27210")]
         node: String,
         #[arg(long)]
         tx_hex: String,
@@ -197,7 +196,8 @@ enum Command {
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum NetworkFlag {
     Mainnet,
-    Testnet10,
+    #[value(name = "testnet-200")]
+    Testnet200,
     Simnet,
     Devnet,
 }
@@ -206,7 +206,7 @@ impl NetworkFlag {
     fn id(self) -> &'static str {
         match self {
             NetworkFlag::Mainnet => "mainnet",
-            NetworkFlag::Testnet10 => "testnet-10",
+            NetworkFlag::Testnet200 => "testnet-200",
             NetworkFlag::Simnet => "simnet",
             NetworkFlag::Devnet => "devnet",
         }
@@ -214,7 +214,7 @@ impl NetworkFlag {
     fn prefix(self) -> Prefix {
         match self {
             NetworkFlag::Mainnet => Prefix::Mainnet,
-            NetworkFlag::Testnet10 => Prefix::Testnet,
+            NetworkFlag::Testnet200 => Prefix::Testnet,
             NetworkFlag::Simnet => Prefix::Simnet,
             NetworkFlag::Devnet => Prefix::Devnet,
         }

@@ -1,0 +1,56 @@
+PALW algo-4 coinbase split report (STN-013 / T15)
+generated:            2026-07-29T15:14:11+0200
+configured network:   testnet-200   (base=testnet suffix=200)
+ticket mode:          real
+batch id:             264ecc41631bd937fded02ae8116f9fae5583288a2023a281c2023ebd12d3a28ba83f82dbf00cefa16bf72d92e188efb96230576b0237a07d1097dac9c5160bb
+algo-4 block hash:    c7ffe7678dce891dd4a5679985033c8d74e0587336c5f1dbddb8e98afd621bc8b49553a2284f00c394b8a6fb081594f30c2fea9c535c2f7fdf329f35584c2e70
+
+Split derivation (ReplicaPalw; consensus/src/processes/coinbase.rs):
+  inclusion_pool = floor(S * 800 / 10000)      §D worker-inclusion (8%)
+  validator_pool = floor(S * 1500 / 10000)     §E validator pool   (15%)
+  worker_base    = S - inclusion_pool - validator_pool          provider pair base  (77%)
+  provider_a     = floor(worker_base * 10000 / (10000 + pi_bps))
+  provider_b     = worker_base - provider_a                     (m=1 v1 leaf)
+  A/B EXACT; inclusion/validator are pools (observed <= pool, remainder burned).
+
+premium pi_bps:       10000
+source class:         replica_palw
+block subsidy S:      205972571 sompi
+
+Derived (sompi):
+  inclusion_pool = 16477805
+  validator_pool = 30895885
+  service        = 0
+  worker_base    = 158598881
+  provider_a     = 79299440
+  provider_b     = 79299441
+
+    PASS  conservation: worker_base+pools+service == S (205972571 sompi)
+    PASS  conservation: provider_a+provider_b == worker_base (158598881 sompi)
+
+Observed coinbase: provider / §D inclusion / §E validator payouts DEFERRED.
+  An algo-4 block's own coinbase pays its mergeset (algo-3 base blocks), not its
+  providers. Provider A/B (derived 79299440 / 79299441 sompi), §D inclusion (<= 16477805)
+  and §E validator (<= 30895885) are paid in a LATER block that merges this block as a
+  blue ReplicaPalw source (red -> providers 0, or absent, on the weight-0 fork).
+
+  settlement.source_block: c7ffe7678dce891dd4a5679985033c8d74e0587336c5f1dbddb8e98afd621bc8b49553a2284f00c394b8a6fb081594f30c2fea9c535c2f7fdf329f35584c2e70
+  settlement.source_batch_id: 264ecc41631bd937fded02ae8116f9fae5583288a2023a281c2023ebd12d3a28ba83f82dbf00cefa16bf72d92e188efb96230576b0237a07d1097dac9c5160bb
+  settlement.source_leaf_index: 0
+  settlement.source_subsidy_sompi: 205972571
+  settlement.node_color_crosscheck: blue=true
+  settlement.block: e50000927cb322bf976ff1e2bae4ee5243ff3ea8aa24319a4b22b38a93febd71be9194aaf74a77fb90f6ea9eeeb94a28a1ce6e656832fd9900f6b7c03e36d70e
+  settlement.classification: blue
+  settlement.expected_inclusion_sompi: 16477805
+  settlement.expected_validator_sompi: 30895885
+  settlement.expected_base_sompi: 158598881
+  settlement.expected_provider_a_sompi: 79299440
+  settlement.expected_provider_b_sompi: 79299441
+  settlement.merging_coinbase_outputs: 3
+  settlement.output_0: value=79299440 spk=000076c440b9a41d825f37b3427161e95375184c69c93b848615ef555a006c83b6a24dbbf18c5236b97ed6343101f8c3b10aea906e86df5249f1fe0e8bb2eb76d14694576e88a6
+  settlement.output_1: value=79299441 spk=000076c4400001163ddc5ae9ad65b99ceb7187466d7b52ed23be8d76aaa24651e7bea5759153bc694207996fb1cb0ac3de73322c118e492ce6ff2046aca15211ea5d321d5988a6
+  settlement.output_2: value=127702995 spk=000076c4405512e4d9e6631968766f522678313547cdc1b6eb37993b922a3ba03a97c2d8d1fa4ac95d0977764172033bf4716fca6ac7ec52c4335687122d441c6163c4ccff88a6
+  settlement.verdict: PASS — blue merge pays provider A 79299440 and provider B 79299441 sompi to the exact expected SPKs
+
+VERDICT: PASS — descendant settlement located and verified (see settlement.* above).
+verdict.machine: PASS_SETTLED

@@ -264,18 +264,17 @@ load_env
 require_cmd awk grep tail tr wc
 
 # =============================================================================
-# 0. TICKET_MODE gate. mock ONLY. skip -> honest note + clean exit 0.
-#    (load_env already validated TICKET_MODE is one of skip|mock.)
+# 0. Ticketed modes only. skip -> honest note + clean exit 0.
 # =============================================================================
 case "$TICKET_MODE" in
-    mock) : ;;
+    mock|real) : ;;
     skip)
         log "TICKET_MODE=skip: the leaf-chunk is registered WITHOUT a ticket (--unsafe-skip-ticket-secret-check), so the batch can reach status=active but NO algo-4 block can EVER be minted from it."
-        log "STN-012 (the algo-4 miner) needs TICKET_MODE=mock — which mints a WIRING-ONLY, non-inference block and requires the mock-ticket helper (mock-ticket/README.md; a workspace member built by build-and-hash.sh). Skipping the miner; nothing to mint. Exiting cleanly."
+        log "STN-012 needs a ticketed lifecycle (TICKET_MODE=mock or real). Skipping the miner; nothing to mint."
         exit 0
         ;;
     *)
-        die "TICKET_MODE must be 'skip' or 'mock', got '$TICKET_MODE' (load_env should have caught this)."
+        die "TICKET_MODE must be 'skip', 'mock', or 'real', got '$TICKET_MODE' (load_env should have caught this)."
         ;;
 esac
 
@@ -290,16 +289,16 @@ esac
 #     name (they point at the same seed file), preferring the spec name.
 TICKET_AUTHORITY_SEED="${TICKET_AUTHORITY_SEED:-${TICKET_AUTHORITY_KEY:-}}"
 [ -n "$TICKET_AUTHORITY_SEED" ] \
-    || die "TICKET_AUTHORITY_SEED (a.k.a. TICKET_AUTHORITY_KEY) is empty — it is the ticket-authority seed FILE for the mock miner. create-lifecycle.sh generates it (kaspa-pq-validator keygen) when you run TICKET_MODE=mock. Set it in env.local (default keys/ticket-authority.seed) and run ./create-lifecycle.sh with TICKET_MODE=mock first."
+    || die "TICKET_AUTHORITY_SEED (a.k.a. TICKET_AUTHORITY_KEY) is empty — create-lifecycle.sh generates it for ticketed modes. Set it in env.local and rerun create-lifecycle."
 [ -f "$TICKET_AUTHORITY_SEED" ] \
-    || die "TICKET_AUTHORITY_SEED is not a readable file: $TICKET_AUTHORITY_SEED — generate it by running ./create-lifecycle.sh with TICKET_MODE=mock (kaspa-pq-validator keygen). Refusing to start the algo-4 miner without its ticket-authority key; these are WIRING-ONLY mock tickets (never real inference, never palw_demo)."
+    || die "TICKET_AUTHORITY_SEED is not readable: $TICKET_AUTHORITY_SEED. Refusing to start algo-4 without its ticket authority."
 
 # 1b. TicketSecretStore FILE (raw-nullifier store, authority-bound). Same name in
 #     the spec and env.example. Produced by the mock-ticket helper.
 [ -n "${TICKET_SECRET_FILE:-}" ] \
-    || die "TICKET_SECRET_FILE is empty — it is the populated TicketSecretStore (JSON) the algo-4 miner opens to reveal the leaf's ticket. create-lifecycle.sh populates it via the mock-ticket helper (a workspace member built by build-and-hash.sh) when you run TICKET_MODE=mock; no standalone CLI does. Set it in env.local (default keys/ticket-secret.json) and run ./create-lifecycle.sh with TICKET_MODE=mock first."
+    || die "TICKET_SECRET_FILE is empty — create-lifecycle.sh populates it for ticketed modes."
 [ -f "$TICKET_SECRET_FILE" ] \
-    || die "TICKET_SECRET_FILE is not a readable file: $TICKET_SECRET_FILE — populate it by running ./create-lifecycle.sh with TICKET_MODE=mock (mock-ticket store-add). Refusing to mine without a TicketSecretStore; these are WIRING-ONLY mock tickets (never the seeded test-only palw_demo path)."
+    || die "TICKET_SECRET_FILE is not readable: $TICKET_SECRET_FILE. Refusing to mine without the lifecycle's TicketSecretStore."
 [ -s "$TICKET_SECRET_FILE" ] \
     || die "TICKET_SECRET_FILE is empty: $TICKET_SECRET_FILE — the TicketSecretStore has no content. Re-run the mock-ticket helper to populate it."
 # Light shape sanity (WARN only — this stage does not own the store schema).
@@ -646,6 +645,10 @@ fi
 
 _MINER_OK=1
 log "STN-012 complete: node A mined algo-4 block $_ALGO4_HASH; BOTH nodes accepted it (StatusUTXOValid, hash-pinned)."
-log "This is a WIRING-ONLY, non-inference MOCK-TICKET block (algo-4 fork-choice weight 0; NOT the seeded test-only palw_demo path). Real inference needs the provider GPU tool (Phase 1)."
+if [ "$TICKET_MODE" = real ]; then
+    log "This block carries the verified real-provider Qwen Receipt-v3 projection and an inference-bound ticket (NOT palw_demo)."
+else
+    log "This is a WIRING-ONLY, non-inference MOCK-TICKET block (NOT palw_demo)."
+fi
 log "next: ./verify-coinbase.sh (A/B/Inclusion/Validator sompi split for the minted block) and ./verify-consensus.sh (both-node parity)."
 exit 0

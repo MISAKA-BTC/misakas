@@ -405,8 +405,8 @@ do_all() {
     #    missing/failing stage stops the run (fail-closed) and reaches the summary.
     local step
     for step in $REST_PLAN; do
-        if [ "$step" = "start-palw-miner" ] && [ "${TICKET_MODE:-skip}" != "mock" ]; then
-            log "skipping stage 'start-palw-miner': TICKET_MODE=$TICKET_MODE — skip mode reaches batch.status=active but can NEVER mint an algo-4 block (honest end state, not a failure). Set TICKET_MODE=mock (with the mock-ticket helper (built by build-and-hash.sh)) to attempt a wiring-only mint."
+        if [ "$step" = "start-palw-miner" ] && [ "${TICKET_MODE:-skip}" = "skip" ]; then
+            log "skipping stage 'start-palw-miner': TICKET_MODE=skip reaches batch.status=active but has no mintable ticket."
             SKIPPED_MINT=1
             continue
         fi

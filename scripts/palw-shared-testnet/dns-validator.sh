@@ -260,14 +260,14 @@ wait_rpc_up a || die "node-a wRPC did not return after the validator restart (ch
 wait_dns_confirmed a || die "node-a did not reach dns_confirmed:true with an advancing anchor within ${GATE_DNS_TIMEOUT_SECS}s; check node-a's log ($(node_log a)) for '[validator-service] ... beacon liveness ENABLED'"
 wait_dns_confirmed b || die "node-b did not reach dns_confirmed:true with an advancing anchor within ${GATE_DNS_TIMEOUT_SECS}s; confirm B is synced to A and sharing the sink"
 
-# 6b. TICKET_MODE=mock only: warm the PALW beacon to SUSTAINED Healthy BEFORE the
-#     lifecycle registers its batch, so the batch's short active window [r+8,r+14)
+# 6b. Warm the PALW beacon to SUSTAINED Healthy BEFORE the lifecycle registers its
+#     batch, so testnet-200's rolling active window [r+8,r+24)
 #     overlaps a Healthy stretch and Certified->Active actually opens (PHASE0 G3/G4 —
 #     the fix for the Certified->Expired stall). Skip mode never mints, so it does not
 #     need this. Fail-soft (warn, not die) so the operator can still inspect / retry
 #     with tuned pacing if Healthy is slow to form.
-if [ "${TICKET_MODE:-skip}" = "mock" ]; then
-    log "TICKET_MODE=mock: warming the PALW beacon to Healthy before the lifecycle (pace via KASPA_VALIDATOR_HEARTBEAT_SECS + MINER_INTERVAL_MS)."
+if [ "${TICKET_MODE:-skip}" != "skip" ]; then
+    log "TICKET_MODE=$TICKET_MODE: warming the PALW beacon to Healthy before the lifecycle (pace via KASPA_VALIDATOR_HEARTBEAT_SECS + MINER_INTERVAL_MS)."
     wait_palw_beacon_healthy a "${BEACON_HEALTHY_POLLS:-3}" "${BEACON_WARMUP_TIMEOUT:-${GATE_DNS_TIMEOUT_SECS:-600}}" \
         || warn "beacon did not reach sustained Healthy before the lifecycle — the batch may stall at Certified and Expire. Proceeding so you can inspect; if the mint never activates, slow MINER_INTERVAL_MS and/or shorten KASPA_VALIDATOR_HEARTBEAT_SECS and retry."
 fi

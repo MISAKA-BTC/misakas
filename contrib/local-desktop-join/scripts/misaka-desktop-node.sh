@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-NETWORK="${MISAKA_NETWORK:-testnet-10}"
+NETWORK="${MISAKA_NETWORK:-testnet-200}"
 REPO_URL="${MISAKA_REPO_URL:-https://github.com/MISAKA-BTC/misakas.git}"
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P)"
@@ -31,7 +31,7 @@ KASPAD_LOG="$LOG_DIR/kaspad.log"
 MINER_LOG="$LOG_DIR/miner.log"
 VALIDATOR_LOG="$LOG_DIR/validator.log"
 
-P2P_PORT="${MISAKA_P2P_PORT:-26211}"
+P2P_PORT="${MISAKA_P2P_PORT:-26511}"
 GRPC_PORT="${MISAKA_GRPC_PORT:-26210}"
 WRPC_BORSH_PORT="${MISAKA_WRPC_BORSH_PORT:-27210}"
 MINER_THREADS="${MISAKA_MINER_THREADS:-1}"
@@ -99,7 +99,7 @@ Commands:
   clean             Remove local desktop runtime directory
 
 Environment:
-  MISAKA_NETWORK=testnet-10
+  MISAKA_NETWORK=testnet-200
   MISAKA_DESKTOP_HOME=$HOME/.misaka-desktop-node
   MISAKA_REPO_URL=https://github.com/MISAKA-BTC/misakas.git
   MISAKA_MINER_THREADS=1

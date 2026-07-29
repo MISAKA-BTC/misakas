@@ -27,7 +27,7 @@ VPS版との構成の違いは[`docs/design-ja.md`](docs/design-ja.md)を参照�
 ローカルPCの場合:
 
 - PCをスリープするとnode/validator/minerが止まります
-- 自宅回線やNAT環境では外部から `26211/tcp` へ接続されにくいです
+- 自宅回線やNAT環境では外部から `26511/tcp` へ接続されにくいです
 - 公開peerとしてはVPSより弱いです
 - 長期validator運用には常時起動が必要です
 - Windows nativeではなく、まずはWSL2 Ubuntuを推奨します
@@ -315,6 +315,6 @@ flowchart TD
 
 外部peerとしても見せたい場合:
 
-- ルーターで `26211/tcp` をローカルPCへport forward
-- PCのfirewallで `26211/tcp` を許可
+- ルーターで `26511/tcp` をローカルPCへport forward
+- PCのfirewallで `26511/tcp` を許可
 - グローバルIPが変わる点に注意

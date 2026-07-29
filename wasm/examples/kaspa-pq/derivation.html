@@ -42,8 +42,8 @@
       <label for="network">Network</label>
       <select id="network">
         <option value="mainnet">mainnet</option>
-        <option value="testnet-10">testnet-10</option>
-        <option value="simnet" selected>simnet</option>
+        <option value="testnet-200" selected>testnet-200</option>
+        <option value="simnet">simnet</option>
         <option value="devnet">devnet</option>
       </select>
     </div>
@@ -69,7 +69,7 @@ import init, { KaspaPqKeyPair } from "../kaspa-pq-pkg/kaspa_pq.js";
 const networkPrefixOf = (id) => {
   switch (id) {
     case "mainnet":    return "kaspapq";
-    case "testnet-10": return "kaspapqtest";
+    case "testnet-200": return "kaspapqtest";
     case "simnet":     return "kaspapqsim";
     case "devnet":     return "kaspapqdev";
     default:           return "kaspapq";

@@ -7,7 +7,7 @@
 //!   2. grind a Layer-0 nonce with `kaspa_pow::StateLayer0` (multi-threaded),
 //!   3. submit the solved block (`submit_block`).
 //!
-//! `--network-id` MUST match the node's `NetworkId::to_string()` (e.g. `testnet-10`)
+//! `--network-id` MUST match the node's `NetworkId::to_string()` (e.g. `testnet-200`)
 //! so the Layer-0 finalizer domain separation agrees with consensus validation.
 
 use clap::Parser;
@@ -26,13 +26,13 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[command(name = "misaminer", version, about = "misaminer — MISAKA (kaspa-pq) Layer-0 BLAKE2b-512 CPU miner")]
 struct Args {
     /// Mining endpoint as host:port — a MISAKA gateway/pool or a node's gRPC.
-    #[arg(long, visible_alias = "rpc", default_value = "127.0.0.1:26610")]
+    #[arg(long, visible_alias = "rpc", default_value = "127.0.0.1:26210")]
     pool: String,
     /// Your payout wallet (bech32, e.g. `misakatest:...`); mined coinbase rewards go here.
     #[arg(long, visible_alias = "pay-address")]
     wallet: Option<String>,
-    /// Network id string — must equal the node's NetworkId::to_string() (e.g. `testnet-10`, `mainnet`).
-    #[arg(long, default_value = "testnet-10")]
+    /// Network id string — must equal the node's NetworkId::to_string() (e.g. `testnet-200`, `mainnet`).
+    #[arg(long, default_value = "testnet-200")]
     network_id: String,
     /// Worker / rig name shown in logs (handy when running several rigs).
     #[arg(long, default_value = "rig0")]

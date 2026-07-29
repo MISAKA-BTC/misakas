@@ -1,9 +1,8 @@
 # PALW Object-v2 local ingress and availability operations
 
-This runbook describes the code path for a future Header-v4 network. It does **not** release any
-network preset: every shipped preset still has `palw_algo4_accept = false`, and the service described
-below starts only after an operator explicitly supplies `--palw-enable-algo4`. Public/value launch
-also remains blocked by the other StopShip and measurement gates in ADR-0040.
+This runbook describes the Object-v2 path used by the live Header-v4 `testnet-200` network.
+`palw_algo4_accept` is enabled in its preset; the local importer remains an explicit operational
+surface and starts only when the operator supplies `--palw-enable-algo4`.
 
 ## Security boundary
 
@@ -30,8 +29,8 @@ regular, single-link, non-symlink files owned by the same uid with no group/othe
 ```sh
 umask 077
 install -d -m 0700 /srv/misaka/palw-da
-kaspad --testnet --netsuffix=110 --palw-enable-algo4 \
-  --palw-da-import-dir=/srv/misaka/palw-da [the remaining closed-network flags]
+kaspad --testnet --netsuffix=200 --palw-enable-algo4 \
+  --palw-da-import-dir=/srv/misaka/palw-da
 ```
 
 The flag is default-disabled, requires `--palw-enable-algo4`, and is refused by sync-only node

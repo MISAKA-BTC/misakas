@@ -187,70 +187,39 @@ node-side feature flags and what they do not accelerate.
 
 ## 8. How this reaches the chain — current state
 
-Honestly: **it does not yet** — though a code path does exist as far as the node's local spool
-(`palw-lifecycle export --node-context` → `misaka palw da enqueue`). What does not exist is
-*acceptance*, and the reason is not the one this page used to give.
+It now reaches the chain on `testnet-200`. PALW has three independent levers:
+**land** (the code ships), **accept** (`palw_algo4_accept`), and **weight**
+(`palw_compute_work_scale > 0`). On testnet-200 the first two are released; weight remains zero,
+so algo-4 blocks are accepted and measured without receiving fork-choice bonus work.
 
-PALW has three independent levers: **land** (the code ships), **accept** (`palw_algo4_accept`), and
-**weight** (`palw_compute_work_scale > 0`). Only the first is released. `palw_algo4_accept` ships
-`false` on **all six presets**, and while it is false an algo-4 header is rejected in
-`check_pow_algo_id` — before GHOSTDAG, before reachability, before any header-stage store write.
-Its release condition is defined once as gate-class semantics in ADR-0040 §7.1.1, not flipped per
-network.
-
-On the networks operated today,
-
-- `testnet-10` has PALW inert (`palw_activation_daa_score = u64::MAX`) — the lane does not exist
-  there at all, and there is no provider role on it;
-- `testnet-200` has PALW genesis-active and its peer allowlist is open, but the acceptance lever is
-  closed and `palw_compute_work_scale = 0`. Measured output is ~2.6 BPS of algo-3 against the 2 + 8
-  design — the hash lane on target, the PALW lane contributing nothing.
-
-The DNS-finality floor is a genuine *second* gate — `testnet-200` inherits `PRODUCTION_DNS_PARAMS`
-via `..MAINNET_PARAMS`, so it wants `min_active_validators = 3` bonded at 20,000,000 MSK each and
-one is bonded today. But it is not the binding one, and an earlier version of this page was wrong to
-call it "the whole reason": **clearing the validator floor would not open the lane.** Note also that
-the 20,000,000 MSK figure is the *validator* bond; the PALW **provider** bond floor is
-`min_provider_bond_sompi = 10 MSK` with a 6-epoch exit delay — a different object entirely.
-
-You do not have to take the validator count on faith — it is a chain-derived fact you can read off
-any node yourself:
+The `palw-real-provider` helper is the bridge from two external receipt-v3 results to the chain:
 
 ```sh
-misaka mtp validators --rpc 127.0.0.1:27220 --network testnet-200
-# 1 bond(s) on testnet-200 at daa 202879, 0 slashed
+cargo run --release -p palw-real-provider -- \
+  --receipt-a /abs/receipt-a.json --receipt-b /abs/receipt-b.json \
+  --ticket-authority-seed /abs/ticket-authority.seed --out-dir /abs/provider-out
 ```
 
-(`27220` is one deployment's port, not a code default — the default is `127.0.0.1:27210`, and some
-nodes bind borsh elsewhere again. Pass the port your node actually uses.) The command pages the bond
-registry to exhaustion with the point of view pinned, and reports
-`stored_status` and `effective_status` separately because they routinely disagree — on `testnet-10`
-every one of 28 bonds is stored `pending` while being effectively `active` (27) or `unbonding` (1),
-so a single collapsed status field would be actively misleading.
+It verifies both ML-DSA-87 signatures, their session/route/state/CU/token/stop semantics, and
+byte-identical inference output. It then writes the canonical Object-v2 receipt DA and an
+inference-bound ticket. The normal lifecycle scripts submit the batch, DA response, algo-4 block,
+and reward settlement.
 
-What `validators` does **not** report is per-epoch attestation: no RPC says which validator signed
-which epoch. That has to be indexed out of blocks, and `misaka mtp attestations` now does it —
-walking the stake-attestation-shard subnetwork and decoding each payload:
+The DNS-finality gate keeps the production three-validator and 20,000,000-MSK bond floors, but
+testnet-200 uses reachable `WorkDepth = 100` and `StakeDepth = 5000`. The PALW provider bond remains
+a separate 10-MSK object with a six-epoch exit delay.
 
-```sh
-misaka mtp attestations --rpc 127.0.0.1:27220 --network testnet-200 --max-blocks 20000
-# 0 row(s) = 0 distinct (validator, epoch) from 0 validator(s) in 0 shard tx(s) over 20080 block(s)
+The public proof bundle
+[`artifacts/testnet-200-real-qwen-20260729`](../artifacts/testnet-200-real-qwen-20260729/README.md)
+pins every input and output. Its accepted algo-4 block is:
+
+```text
+c7ffe7678dce891dd4a5679985033c8d74e0587336c5f1dbddb8e98afd621bc8b49553a2284f00c394b8a6fb081594f30c2fea9c535c2f7fdf329f35584c2e70
 ```
 
-Zero, across every block that node retains in the scanned range — the halt is visible from two
-independent directions, the bond floor and the absence of attestation traffic. Run the same command
-against `testnet-10` and it returns thousands of rows, which is what a lane that is actually turning
-looks like.
-
-Two cautions the command prints for itself, because both are easy to get wrong. **Absence is not
-proof**: a pruned node holds nothing below its pruning point, so an empty range means "none retained
-here", not "nobody attested". And **rows are not participations**: a DAG puts one shard transaction
-in several blocks, so dedup on `(validator_id, att_epoch)` before you compute a rate — on
-`testnet-10` today, 2,562 rows collapse to 1,194 distinct pairs.
-
-So a receipt issued today is a reproducible local artifact. Nothing on-chain has accepted one, and
-no provider has been paid. When that changes it will be because the validator set cleared, and this
-section should be the first thing updated.
+The later settlement block pays both receipt providers, and the bundle records verification from
+all three validator nodes. This proves that the pinned receipt/DA/consensus/reward path ran; it does
+not turn the self-attestation into a TEE or zero-knowledge proof.
 
 ---
 
@@ -261,4 +230,4 @@ section should be the first thing updated.
 | Runtime quickstart, hardware, full runbook | [LLM-Validation](https://github.com/MISAKA-BTC/LLM-Validation) |
 | Joining a network, node/miner/validator | [testnet-participation.md](testnet-participation.md) |
 | The audited-compute lane's consensus rules | [adr/0039 onward](adr/) |
-| Why the lane is currently closed | [adr/0042-permissionless-snapshot-auth-completion.md](adr/0042-permissionless-snapshot-auth-completion.md), [adr/0048-header-v4-staging-mainnet.md](adr/0048-header-v4-staging-mainnet.md) |
+| Network activation and staging design | [adr/0042-permissionless-snapshot-auth-completion.md](adr/0042-permissionless-snapshot-auth-completion.md), [adr/0048-header-v4-staging-mainnet.md](adr/0048-header-v4-staging-mainnet.md) |

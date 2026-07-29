@@ -12,7 +12,7 @@ scripts/misaka-probe.sh
 
 運用者が以下を1コマンドで確認できるようにします。
 
-- 対象IPの `26211/tcp` が外部から到達できるか。
+- 対象IPの `26511/tcp` が外部から到達できるか。
 - seed domainのA応答に対象IPが含まれているか。
 - 対象IPがDNS seederとして `53/udp` / `53/tcp` で複数Aレコードを返すか。
 - 自分のVPS上で `misaka-kaspad` / `misaka-dnsseeder` / `misaka-validator` が動いているか。
@@ -65,9 +65,9 @@ RPCやseed domainを明示する場合です。
 ```bash
 misaka-probe \
   --ip 217.76.57.217 \
-  --network testnet-10 \
+  --network testnet-200 \
   --rpc 127.0.0.1:27210 \
-  --seed seeder2.misakascan.com
+  --seed seeder1.misakascan.com
 ```
 
 ## 出力の見方

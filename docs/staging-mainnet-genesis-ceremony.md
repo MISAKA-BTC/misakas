@@ -1,7 +1,6 @@
 # staging-mainnet (testnet-200) genesis ceremony — runbook
 
-- **Status:** Runbook (procedure defined; execution is an operator action). Fulfils ADR-0048 DoD
-  item "ceremony 手順書(分配・faucet・鍵)".
+- **Status:** Executed; testnet-200 is the public testnet. This remains the reset/recovery runbook.
 - **Date:** 2026-07-27
 - **Scope:** the PALW staging-mainnet rehearsal network `testnet-200`
   (`STAGING_MAINNET_PALW_PARAMS` / `STAGING_PALW_GENESIS`, ADR-0048). This is a REHEARSAL for the
@@ -21,8 +20,9 @@ not choose new parameters.
   Header-v4 conversion binds the canonical EMPTY spam accumulator at finalize
   (`header_v4_regenesis_commits_the_canonical_empty_spam_accumulator`).
 - `STAGING_MAINNET_PALW_PARAMS` (`params.rs`): `palw_activation_daa_score = 0`,
-  `palw_algo4_accept = false`, `palw_compute_work_scale = 0`, `palw_spam = PUBLIC_REGENESIS_CANDIDATE`,
-  `skip_proof_of_work = false`, `palw_requires_archival = false`, `palw_requires_peer_allowlist = true`,
+  `palw_algo4_accept = true`, `palw_compute_work_scale = 0`, `palw_spam = PUBLIC_REGENESIS_CANDIDATE`,
+  `skip_proof_of_work = false`, `palw_requires_archival = false`, `palw_requires_peer_allowlist = false`,
+  public DNS seeders, WorkDepth 100 and StakeDepth 5000,
   full-scale `finality_depth = 432_000` / `pruning_depth = 1_080_000`. The ADR-0043 G6 bound is a
   node-local allocation policy (no preset knob).
 - Premine: `misaka_premine_utxos(NetworkType::Testnet)` — the single testnet 10B main UTXO
@@ -88,9 +88,9 @@ governance allocation:
 
 Run in order, each with a pass/fail ops-log entry:
 
-1. **Boot** both nodes on testnet-200 with `--testnet --netsuffix=200`
-   (datadir `misaka-testnet-200`, P2P 26511). `palw_requires_peer_allowlist = true` ⇒ closed net
-   first: peers pinned by the operator.
+1. **Boot** all nodes on testnet-200 with `--testnet --netsuffix=200`
+   (datadir `misaka-testnet-200`, P2P 26511). Public nodes discover the seed domains; operators
+   may additionally pin `--addpeer=95.111.236.186:26511`.
 2. **Genesis verify:** every node independently recomputes the genesis hash/merkle (the pinned
    constants) and refuses to peer on mismatch. Real PoW is on (`skip_proof_of_work = false`): confirm
    algo-3 blocks carry real work and algo-4 is hash-floor-exempt.
@@ -105,8 +105,7 @@ Run in order, each with a pass/fail ops-log entry:
    the pass must not refuse to advance.
 6. **ADR-0046 L1/L2 re-measurement** (spam ramp + bond/slash) on staging; freeze thresholds here.
 7. **Multi-node soak:** pruning / catch-up / reorg / DA-withholding over time (ADR-0042 §4 requirement).
-8. **Open allowlist → 30-day permissionless public soak** (mainnet-readiness ledger C). External,
-   wall-clock; needs the faucet anti-Sybil work in §4.
+8. **Permissionless public soak** (mainnet-readiness ledger C). External, wall-clock.
 
 ## 6. Reset procedure
 
@@ -118,7 +117,7 @@ only, no new design — ADR-0048 §4) and is NOT reset.
 
 ## 7. What this ceremony does NOT authorize
 
-- It does not flip `palw_algo4_accept` (stays false; acceptance is the activation ladder A/B gates).
+- It does not change `palw_algo4_accept`; testnet-200 already ships it enabled.
 - It does not set `palw_compute_work_scale > 0` (stays 0; gated on ADR-0045 D1 fraud+slash e2e).
 - It does not mint mainnet or imply mainnet allocation.
 - Its locally-generated keys/registry do not imply production authority

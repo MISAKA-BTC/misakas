@@ -6,10 +6,10 @@
 
 set -uo pipefail
 
-NETWORK="${MISAKA_NETWORK:-testnet-10}"
+NETWORK="${MISAKA_NETWORK:-testnet-200}"
 RPC="${MISAKA_RPC:-127.0.0.1:27210}"
-SEED="${MISAKA_PROBE_SEED:-seeder2.misakascan.com}"
-P2P_PORT="${MISAKA_PROBE_P2P_PORT:-26211}"
+SEED="${MISAKA_PROBE_SEED:-seeder1.misakascan.com}"
+P2P_PORT="${MISAKA_PROBE_P2P_PORT:-26511}"
 DNS_PORT="${MISAKA_PROBE_DNS_PORT:-53}"
 TIMEOUT="${MISAKA_PROBE_TIMEOUT:-3}"
 TARGET_IP=""
@@ -26,10 +26,10 @@ Usage:
 
 Options:
   --ip <ipv4>              Target public IPv4. If omitted, tries api.ipify.org.
-  --network <id>           Network id. Default: testnet-10.
+  --network <id>           Network id. Default: testnet-200.
   --rpc <host:port>        Local node wRPC Borsh endpoint. Default: 127.0.0.1:27210.
-  --seed <domain>          Seed domain to resolve. Default: seeder2.misakascan.com.
-  --p2p-port <port>        P2P port. Default: 26211.
+  --seed <domain>          Seed domain to resolve. Default: seeder1.misakascan.com.
+  --p2p-port <port>        P2P port. Default: 26511.
   --dns-port <port>        DNS seeder port. Default: 53.
   --stake-bond <txid:n>    Optional bond outpoint for validator registry check.
   --skip-local             Skip systemctl / local doctor / ss checks.

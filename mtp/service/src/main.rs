@@ -7,9 +7,9 @@
 //! and is wired per-deployment on top of the fact store this binary manages.
 //!
 //! ```text
-//! misaka-mtp-service serve      --data-dir DIR --operator-key FILE --listen ADDR [--network testnet-10]
+//! misaka-mtp-service serve      --data-dir DIR --operator-key FILE --listen ADDR [--network testnet-200]
 //! misaka-mtp-service run-epoch  --data-dir DIR --operator-key FILE \
-//!                               --epoch N --start RFC3339 --end RFC3339 [--network testnet-10]
+//!                               --epoch N --start RFC3339 --end RFC3339 [--network testnet-200]
 //! ```
 //!
 //! `serve` opens the signed-ledger archive read-only and serves the D3 query API.
@@ -42,7 +42,7 @@ COMMON:
   --data-dir DIR        root data dir: <DIR>/facts (fact store), <DIR>/points (signed ledger archive),
                         <DIR>/registrations.jsonl (attribution registry)
   --operator-key FILE   dedicated MTP operator ML-DSA-87 seed file (0600, D7)
-  --network NET         scored testnet network name (default: testnet-10)
+  --network NET         scored testnet network name (default: testnet-200)
 
 serve:
   --listen ADDR         query-http bind address, e.g. 127.0.0.1:8790
@@ -117,7 +117,7 @@ impl Flags {
 }
 
 fn network_or_default(flags: &Flags) -> Result<String, String> {
-    let net = flags.opt("network").unwrap_or("testnet-10").to_string();
+    let net = flags.opt("network").unwrap_or("testnet-200").to_string();
     if config::stage_for(&net).is_none() {
         return Err(format!(
             "network '{net}' is not in the testnet scope {:?} (D1)",

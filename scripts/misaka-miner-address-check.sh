@@ -3,7 +3,7 @@
 
 set -uo pipefail
 
-NETWORK="${MISAKA_NETWORK:-testnet-10}"
+NETWORK="${MISAKA_NETWORK:-testnet-200}"
 RPC="${MISAKA_RPC:-127.0.0.1:27210}"
 MISAKA_BIN="${MISAKA_BIN:-misaka}"
 ADDRESS=""
@@ -17,7 +17,7 @@ Usage:
 
 Options:
   --address <addr>     Mining reward / wallet address.
-  --network <id>       Network id. Default: testnet-10.
+  --network <id>       Network id. Default: testnet-200.
   --rpc <host:port>    Node wRPC Borsh endpoint. Default: 127.0.0.1:27210.
   --discord            Print one compact line for Discord bots.
   --self-test          Run parser test with embedded sample JSON.

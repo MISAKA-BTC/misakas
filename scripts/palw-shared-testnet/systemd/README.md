@@ -7,6 +7,13 @@ the process (the agent's pid/argv/start-time records under `$PALW_DATA_ROOT`).
 | Unit | What it runs |
 |---|---|
 | `palw-node@<a\|b>-<bootstrap\|validator\|miner>.service` | `palw-node-agent.sh start/stop <node> <mode>` |
+| `palw-roll-lifecycle.timer` | Keeps a successor batch in flight, switches node A after it becomes active, and verifies a new algo-4 block |
+
+On a host that also mines for another validator, set
+`PALW_AUX_MINER_UNITS` and `PALW_POST_DA_MINER_UNITS` in `env.local` to a
+space-separated list of its miner units. The roller stops them while it needs
+an exact DAA for DA challenge/response, then resumes them to carry each
+validator's attestation and beacon transactions during the activation wait.
 
 ## Install (on each node host)
 

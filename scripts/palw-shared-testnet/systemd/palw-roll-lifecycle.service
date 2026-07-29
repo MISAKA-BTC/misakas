@@ -1,0 +1,11 @@
+[Unit]
+Description=MISAKA testnet-200 rolling PALW lifecycle renewal
+After=network-online.target kaspad-t200.service kaspad-t200b.service
+Wants=network-online.target kaspad-t200.service kaspad-t200b.service
+
+[Service]
+Type=oneshot
+Environment=PALW_ENV_FILE=/root/palw-t200/env.local
+ExecStart=/root/kpq-t200-algo4-build-20260729/scripts/palw-shared-testnet/roll-lifecycle.sh
+TimeoutStartSec=2400
+Nice=5

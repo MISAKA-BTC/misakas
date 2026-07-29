@@ -9,18 +9,18 @@
 use kaspa_consensus_core::palw::da::{
     PALW_DA_CHALLENGE_V1_MLDSA87_CONTEXT, PALW_DA_CHALLENGE_VERSION_V1, PALW_DA_MAX_SESSION_EPOCHS,
     PALW_DA_RESPONSE_V1_MLDSA87_CONTEXT, PALW_DA_RESPONSE_VERSION_V1, PALW_DA_TIMEOUT_EVIDENCE_VERSION_V1,
-    PALW_PROVIDER_SESSION_AUTH_VERSION_V1, PALW_PROVIDER_SESSION_V1_MLDSA87_CONTEXT, PALW_RECEIPT_DA_OBJECT_VERSION_V1,
-    PALW_RECEIPT_DA_OBJECT_VERSION_V2, PALW_REPLICA_RECEIPT_V1_MLDSA87_CONTEXT, PalwDaChallengeV1, PalwDaError, PalwDaResponseV1,
-    PalwDaTimeoutEvidenceV1, PalwProviderSessionAuthorizationV1, PalwReceiptDaCommitmentV1, PalwReceiptDaObjectV1,
-    palw_receipt_da_chunk_proof, palw_receipt_da_commitment, palw_receipt_da_object_bytes, palw_receipt_da_object_version,
+    PALW_PROVIDER_SESSION_AUTH_VERSION_V1, PALW_PROVIDER_SESSION_V1_MLDSA87_CONTEXT, PALW_RECEIPT_DA_OBJECT_VERSION_V2,
+    PalwDaChallengeV1, PalwDaError, PalwDaResponseV1, PalwDaTimeoutEvidenceV1, PalwProviderSessionAuthorizationV1,
+    PalwReceiptDaCommitmentV1, palw_receipt_da_chunk_proof, palw_receipt_da_commitment, palw_receipt_da_object_version,
 };
-use kaspa_consensus_core::{
-    palw::{PalwPublicLeafV1, ReplicaExecutionReceiptV1, ReplicaMatchRecordV1, private_match_commitment},
-    tx::TransactionOutpoint,
-};
+use kaspa_consensus_core::{palw::PalwPublicLeafV1, tx::TransactionOutpoint};
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::ValidatorKey;
-use misaka_palw::receipt_v3::{ComputeReceiptV3, SignedEnvelopeV3};
+use misaka_palw::receipt_v3::{
+    ComputeReceiptV3, ImplementationTelemetryV3, MLDSA87_ALGORITHM_ID, MatchProjectionV2, PALW_RECEIPT_V3_MLDSA87_CONTEXT,
+    RECEIPT_V3_VERSION, ReceiptV3Expectations, ReceiptV3SubmissionRef, SignedEnvelopeV3, VerifyAndMatchReceiptV3Error,
+    credential_id_from_verifying_key, execution_nullifier_v3, verify_and_match_receipts_v3,
+};
 use thiserror::Error;
 
 pub const DA_CHALLENGE_SUBNETWORK_BYTE: u8 = 0x3a;
@@ -38,6 +38,11 @@ pub struct PalwDaReceiptSemantics {
     pub output_commitment: Hash64,
     pub canonical_gemm_trace_root: Hash64,
     pub operation_schedule_commitment: Hash64,
+    pub route_root: Hash64,
+    pub state_root: Hash64,
+    pub canonical_compute_units: u64,
+    pub token_count: u64,
+    pub stop_reason: u8,
     pub completed_at_epoch: u64,
 }
 
@@ -52,7 +57,7 @@ pub struct PalwDaProviderSigner<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwDaProducerArtifact {
-    pub object: PalwReceiptDaObjectV1,
+    pub object: PalwReceiptDaObjectV2Wire,
     pub object_bytes: Vec<u8>,
     pub commitment: PalwReceiptDaCommitmentV1,
     pub private_match_commitment: Hash64,
@@ -97,6 +102,8 @@ pub enum PalwDaProducerError {
     Core(#[from] PalwDaError),
     #[error("borsh serialization failed")]
     Encode,
+    #[error("receipt v3 verification/match failed: {0:?}")]
+    ReceiptV3(VerifyAndMatchReceiptV3Error),
 }
 
 pub fn palw_receipt_da_object_v2_wire_bytes(object: &PalwReceiptDaObjectV2Wire) -> Result<Vec<u8>, PalwDaProducerError> {
@@ -148,34 +155,68 @@ fn signed_session_authorization(
     Ok(authorization)
 }
 
-fn signed_receipt(provider: &PalwDaProviderSigner<'_>, fields: PalwDaReceiptSemantics) -> ReplicaExecutionReceiptV1 {
-    let mut receipt = ReplicaExecutionReceiptV1 {
-        version: 1,
-        provider_bond: provider.provider_bond,
-        session_public_key: provider.session_key.public_key().to_vec(),
-        job_nullifier: fields.job_nullifier,
-        job_set_commitment: fields.job_set_commitment,
-        model_profile_id: fields.model_profile_id,
-        runtime_class_id: fields.runtime_class_id,
-        shape_id: fields.shape_id,
-        quantum_count: fields.quantum_count,
+fn first_32(hash: &Hash64) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&hash.as_byte_slice()[..32]);
+    bytes
+}
+
+fn signed_receipt_v3(
+    genesis_network_id: Hash64,
+    provider: &PalwDaProviderSigner<'_>,
+    fields: PalwDaReceiptSemantics,
+    replica_slot: u8,
+) -> (ComputeReceiptV3, SignedEnvelopeV3) {
+    let credential = credential_id_from_verifying_key(provider.session_key.public_key());
+    let projection = MatchProjectionV2 {
+        compute_set_id: fields.job_set_commitment,
+        job_challenge: fields.job_nullifier,
         output_commitment: fields.output_commitment,
-        canonical_gemm_trace_root: fields.canonical_gemm_trace_root,
-        operation_schedule_commitment: fields.operation_schedule_commitment,
-        receipt_da_root: Hash64::default(),
-        completed_at_epoch: fields.completed_at_epoch,
-        signature: vec![],
+        schedule_root: fields.operation_schedule_commitment,
+        execution_root: fields.canonical_gemm_trace_root,
+        route_root: fields.route_root,
+        state_root: fields.state_root,
+        canonical_compute_units: fields.canonical_compute_units,
+        token_count: fields.token_count,
+        stop_reason: fields.stop_reason,
     };
-    receipt.signature = provider
-        .session_key
-        .sign_with_context(receipt.signing_hash().as_byte_slice(), PALW_REPLICA_RECEIPT_V1_MLDSA87_CONTEXT)
-        .to_vec();
-    receipt
+    let issued_epoch = fields.completed_at_epoch;
+    let expires_epoch = provider.valid_until_epoch;
+    let receipt = ComputeReceiptV3 {
+        receipt_version: RECEIPT_V3_VERSION,
+        network_id: genesis_network_id,
+        execution_nullifier: execution_nullifier_v3(
+            &genesis_network_id,
+            &projection.compute_set_id,
+            &projection.job_challenge,
+            &credential,
+            replica_slot,
+            issued_epoch,
+        ),
+        projection,
+        telemetry: ImplementationTelemetryV3 {
+            runtime_class_id: first_32(&fields.runtime_class_id),
+            runtime_manifest_hash: first_32(&fields.model_profile_id),
+        },
+        worker_credential_id: credential,
+        replica_slot,
+        issued_epoch,
+        expires_epoch,
+    };
+    let body_digest = receipt.signing_digest();
+    let envelope = SignedEnvelopeV3 {
+        body_digest,
+        algorithm: MLDSA87_ALGORITHM_ID,
+        signer_credential_id: credential,
+        signature: provider.session_key.sign_with_context(body_digest.as_byte_slice(), PALW_RECEIPT_V3_MLDSA87_CONTEXT).to_vec(),
+    };
+    (receipt, envelope)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn build_signed_receipt_da_object(
     network_id: u32,
+    genesis_network_id: Hash64,
     batch_id: Hash64,
     leaf_index: u32,
     fields: PalwDaReceiptSemantics,
@@ -187,39 +228,50 @@ pub fn build_signed_receipt_da_object(
     }
     let session_authorization_a = signed_session_authorization(network_id, provider_a, fields.completed_at_epoch)?;
     let session_authorization_b = signed_session_authorization(network_id, provider_b, fields.completed_at_epoch)?;
-    let receipt_a = signed_receipt(provider_a, fields);
-    let receipt_b = signed_receipt(provider_b, fields);
-    let receipt_a_hash = receipt_a.hash();
-    let receipt_b_hash = receipt_b.hash();
-    let match_record = ReplicaMatchRecordV1 {
-        receipt_a_hash,
-        receipt_b_hash,
-        job_nullifier: fields.job_nullifier,
-        output_commitment: fields.output_commitment,
-        canonical_gemm_trace_root: fields.canonical_gemm_trace_root,
-        operation_schedule_commitment: fields.operation_schedule_commitment,
-        matched_at_epoch: fields.completed_at_epoch,
+    let (receipt_a, envelope_a) = signed_receipt_v3(genesis_network_id, provider_a, fields, 0);
+    let (receipt_b, envelope_b) = signed_receipt_v3(genesis_network_id, provider_b, fields, 1);
+    let expected = |slot, provider: &PalwDaProviderSigner<'_>| ReceiptV3Expectations {
+        network_id: genesis_network_id,
+        compute_set_id: fields.job_set_commitment,
+        job_challenge: fields.job_nullifier,
+        replica_slot: slot,
+        issued_epoch: fields.completed_at_epoch,
+        expires_epoch: provider.valid_until_epoch,
+        current_epoch: fields.completed_at_epoch,
+        registered_credential_id: credential_id_from_verifying_key(provider.session_key.public_key()),
     };
-    let match_commitment = private_match_commitment(
-        &fields.output_commitment,
-        &fields.canonical_gemm_trace_root,
-        &fields.operation_schedule_commitment,
-        &fields.job_set_commitment,
-        &receipt_a_hash,
-        &receipt_b_hash,
-    );
-    let object = PalwReceiptDaObjectV1 {
-        version: PALW_RECEIPT_DA_OBJECT_VERSION_V1,
-        network_id,
+    let matched = verify_and_match_receipts_v3(
+        ReceiptV3SubmissionRef {
+            receipt: &receipt_a,
+            envelope: &envelope_a,
+            verifying_key: provider_a.session_key.public_key(),
+            expected: &expected(0, provider_a),
+        },
+        ReceiptV3SubmissionRef {
+            receipt: &receipt_b,
+            envelope: &envelope_b,
+            verifying_key: provider_b.session_key.public_key(),
+            expected: &expected(1, provider_b),
+        },
+    )
+    .map_err(PalwDaProducerError::ReceiptV3)?;
+    let match_commitment = matched.pair_id();
+    let object = PalwReceiptDaObjectV2Wire {
+        version: PALW_RECEIPT_DA_OBJECT_VERSION_V2,
+        network_id: genesis_network_id,
         batch_id,
         leaf_index,
+        provider_a_bond: provider_a.provider_bond,
+        provider_b_bond: provider_b.provider_bond,
         receipt_a,
+        envelope_a,
         receipt_b,
-        match_record,
+        envelope_b,
         session_authorization_a,
         session_authorization_b,
+        matched_pair_id: match_commitment,
     };
-    let object_bytes = palw_receipt_da_object_bytes(&object)?;
+    let object_bytes = palw_receipt_da_object_v2_wire_bytes(&object)?;
     let commitment = palw_receipt_da_commitment(object.version, &object_bytes)?;
     Ok(PalwDaProducerArtifact { object, object_bytes, commitment, private_match_commitment: match_commitment })
 }
@@ -231,13 +283,9 @@ impl PalwDaProducerArtifact {
         let receipt = &self.object.receipt_a;
         if leaf.batch_id != self.object.batch_id
             || leaf.leaf_index != self.object.leaf_index
-            || leaf.provider_a_bond != self.object.receipt_a.provider_bond
-            || leaf.provider_b_bond != self.object.receipt_b.provider_bond
-            || leaf.job_nullifier != receipt.job_nullifier
-            || leaf.model_profile_id != receipt.model_profile_id
-            || leaf.runtime_class_id != receipt.runtime_class_id
-            || leaf.shape_id != receipt.shape_id
-            || leaf.quantum_count != receipt.quantum_count
+            || leaf.provider_a_bond != self.object.provider_a_bond
+            || leaf.provider_b_bond != self.object.provider_b_bond
+            || leaf.job_nullifier != receipt.projection.job_challenge
         {
             return Err(PalwDaProducerError::LeafMismatch);
         }
@@ -246,10 +294,10 @@ impl PalwDaProducerArtifact {
         leaf.receipt_da_root = self.commitment.root;
         leaf.receipt_da_object_len = self.commitment.object_len;
         leaf.receipt_da_chunk_count = self.commitment.chunk_count;
-        leaf.receipt_v3_compute_set_id = Hash64::default();
-        leaf.receipt_v3_job_challenge = Hash64::default();
-        leaf.receipt_v3_issued_epoch = 0;
-        leaf.receipt_v3_expires_epoch = 0;
+        leaf.receipt_v3_compute_set_id = receipt.projection.compute_set_id;
+        leaf.receipt_v3_job_challenge = receipt.projection.job_challenge;
+        leaf.receipt_v3_issued_epoch = receipt.issued_epoch;
+        leaf.receipt_v3_expires_epoch = receipt.expires_epoch;
         Ok(leaf)
     }
 }
@@ -349,6 +397,11 @@ mod tests {
             output_commitment: h(5),
             canonical_gemm_trace_root: h(6),
             operation_schedule_commitment: h(7),
+            route_root: h(8),
+            state_root: h(9),
+            canonical_compute_units: 123_456,
+            token_count: 65,
+            stop_reason: 1,
             completed_at_epoch: 9,
         }
     }
@@ -375,15 +428,16 @@ mod tests {
             valid_until_epoch: 10,
             authorization_nonce: h(0xb2),
         };
-        let artifact = build_signed_receipt_da_object(111, h(0xc1), 3, fields(), &provider_a, &provider_b).unwrap();
-        assert_eq!(artifact.object.receipt_a.receipt_da_root, Hash64::default());
-        assert_eq!(artifact.object.receipt_b.receipt_da_root, Hash64::default());
+        let artifact = build_signed_receipt_da_object(111, h(0xc0), h(0xc1), 3, fields(), &provider_a, &provider_b).unwrap();
+        assert_eq!(artifact.object.version, PALW_RECEIPT_DA_OBJECT_VERSION_V2);
+        assert_eq!(artifact.object.receipt_a.network_id, h(0xc0));
+        assert_eq!(artifact.object.receipt_b.network_id, h(0xc0));
         assert!(matches!(
             verify_mldsa87_with_context(
-                &artifact.object.receipt_a.session_public_key,
-                artifact.object.receipt_a.signing_hash().as_byte_slice(),
-                &artifact.object.receipt_a.signature,
-                PALW_REPLICA_RECEIPT_V1_MLDSA87_CONTEXT,
+                &artifact.object.session_authorization_a.session_public_key,
+                artifact.object.receipt_a.signing_digest().as_byte_slice(),
+                &artifact.object.envelope_a.signature,
+                PALW_RECEIPT_V3_MLDSA87_CONTEXT,
             ),
             Ok(true)
         ));
@@ -410,7 +464,7 @@ mod tests {
         let response =
             build_signed_da_response(111, challenge.challenge_id(), provider_a.provider_bond, &owner_a, &artifact.object_bytes, 0)
                 .unwrap();
-        assert_eq!(response.chunk_proof.object_version, PALW_RECEIPT_DA_OBJECT_VERSION_V1);
+        assert_eq!(response.chunk_proof.object_version, PALW_RECEIPT_DA_OBJECT_VERSION_V2);
         assert!(matches!(
             verify_mldsa87_with_context(
                 &response.provider_owner_public_key,

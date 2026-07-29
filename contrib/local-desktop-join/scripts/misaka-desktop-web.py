@@ -223,7 +223,7 @@ def current_daa_value() -> int | None:
             [
                 str(binary),
                 "--network",
-                os.environ.get("MISAKA_NETWORK", "testnet-10"),
+                os.environ.get("MISAKA_NETWORK", "testnet-200"),
                 "--rpc",
                 f"127.0.0.1:{os.environ.get('MISAKA_WRPC_BORSH_PORT', '27210')}",
                 "node",
@@ -302,11 +302,11 @@ def status_value(share_dir: Path) -> dict:
     node_state = local_node_service_state(status)
     return {
         "ok": bool(status["synced"]),
-        "network": "testnet-10",
+        "network": "testnet-200",
         "publicIp": "127.0.0.1",
         "node": {
             "error": None if status["wrpcListening"] else "node is not reachable",
-            "network": "testnet-10",
+            "network": "testnet-200",
             "reachable": bool(status["wrpcListening"]),
             "service": "misaka-local-kaspad",
             "serviceState": node_state,
@@ -315,7 +315,7 @@ def status_value(share_dir: Path) -> dict:
             "version": "1.1.0",
             "virtualDaaScore": status["daa"],
         },
-        "p2p": {"listening": bool(status["p2pListening"]), "port": 26211},
+        "p2p": {"listening": bool(status["p2pListening"]), "port": 26511},
         "seeder": {"service": "not used locally", "serviceState": "not configured"},
         "validator": {"service": "misaka-local-validator", "serviceState": "active" if status["validatorRunning"] else "not configured"},
         "miner": miner_status_value(status["daa"]),
@@ -661,7 +661,7 @@ class Handler(BaseHTTPRequestHandler):
                 "message": "Local node started." if code == 0 else "Local node failed to start.",
                 "logs": output,
                 "service": "misaka-local-kaspad",
-                "p2pPort": 26211,
+                "p2pPort": 26511,
             }, 200 if code == 0 else 500)
         elif parsed.path == "/api/node/restart":
             code, output = run_script(self.server.share_dir, ["restart-node"], timeout=60)  # type: ignore[attr-defined]

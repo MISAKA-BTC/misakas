@@ -254,6 +254,13 @@ if [ "${TICKET_MODE:-skip}" = mock ]; then
     _mock_bin="${MOCK_TICKET_BIN:-$REPO_ROOT/target/release/mock-ticket}"
     [ -x "$_mock_bin" ] || die "TICKET_MODE=mock requires the mock-ticket helper at $_mock_bin — build it with ./build-and-hash.sh (it now builds -p mock-ticket), or use TICKET_MODE=skip."
     log "mock-ticket helper present + executable: $_mock_bin (controller-only; not cross-host compared)"
+elif [ "${TICKET_MODE:-skip}" = real ]; then
+    _real_bin="${REAL_PROVIDER_BIN:-$REPO_ROOT/target/release/palw-real-provider}"
+    [ -x "$_real_bin" ] || die "TICKET_MODE=real requires $_real_bin — build it with cargo build --release -p palw-real-provider."
+    for _real_input in REAL_RECEIPT_A REAL_RECEIPT_B REAL_RESULT_A REAL_RESULT_B; do
+        [ -s "${!_real_input:-}" ] || die "TICKET_MODE=real requires a nonempty $_real_input file."
+    done
+    log "real-provider helper and Qwen k=2 evidence inputs present."
 fi
 
 # =============================================================================

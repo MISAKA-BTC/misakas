@@ -1,5 +1,9 @@
 # PALW Nullifier Lifecycle — Audit Record (2026-07-25)
 
+> Activation update (2026-07-29): testnet-200 now ships `palw_algo4_accept = true` and has accepted
+> a receipt-v3 algo-4 block. Statements below that all shipped presets were dormant describe the
+> audit-time fence, not the current network state.
+
 Answer to the release-audit item "global nullifier: fork/reorg-safe implementation, duplicate
 rejection across forks". Verdict up front: **there is deliberately no single global nullifier
 set**, and after this audit that is recorded as the design rather than an omission — with its

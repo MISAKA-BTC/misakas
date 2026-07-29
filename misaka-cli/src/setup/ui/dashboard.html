@@ -563,10 +563,10 @@
         maturityUnknown: 'miner開始DAAをまだ取得できません。', maturityReady: '目安到達。実際の成熟UTXOはBond作成時に確認します。', maturityProgress: '残り約 {remaining} blocks（{percent}%）', balanceUnknown: '未確認',
         noMinerLogs: 'minerログはまだありません。', minedSuccess: 'block #{block} の採掘成功を確認しました。', noValidatorLogs: 'validatorログはまだありません。',
         nextNode: 'nodeを開始する', nextNodeBody: 'setupへ戻り「5. nodeを開始」を押してください。', nextConnection: 'node接続を確認する', nextConnectionBody: 'nodeは起動しています。RPC接続が可能になるまで少し待ってから更新してください。', nextSync: '同期完了を待つ', nextSyncBody: 'DAAが増えていれば同期は進んでいます。',
-        nextP2p: 'P2Pを確認する', nextP2pBody: '26211/tcpが待受できているか確認してください。', nextKey: 'validator keyを作成する', nextKeyBody: 'setupへ戻り「8. キー作成」を押してください。',
+        nextP2p: 'P2Pを確認する', nextP2pBody: '26511/tcpが待受できているか確認してください。', nextKey: 'validator keyを作成する', nextKeyBody: 'setupへ戻り「8. キー作成」を押してください。',
         nextFunding: 'マイニングと成熟を進める', nextFundingBody: 'setupでminer、成熟見込み、Bond用残高を確認してください。', nextValidator: 'validatorを開始する', nextValidatorBody: 'setupへ戻り「14. validator開始」を押してください。',
         nextAttesting: 'attestation成功を確認する', nextAttestingBody: 'validatorはRUNNINGです。ログを自動確認し、送信成功を待ちます。', nextDone: 'validator参加を確認できました', nextDoneBody: 'attestation shardの送信成功を確認しました。継続運用してください。',
-        impactNodeOpen: 'P2P待受中', impactNodeWait: '確認中', impactNodeOpenBody: '他nodeから接続可能な状態です。', impactNodeWaitBody: '26211/tcpの待受を確認してください。',
+        impactNodeOpen: 'P2P待受中', impactNodeWait: '確認中', impactNodeOpenBody: '他nodeから接続可能な状態です。', impactNodeWaitBody: '26511/tcpの待受を確認してください。',
         impactSynced: '同期済み', impactSyncing: '同期中', syncNotStarted: '未開始', syncChecking: '接続確認中', syncStopped: 'node停止', syncError: 'node接続エラー', impactSyncedBody: 'testnetの最新状態へ追従しています。', impactSyncingBody: 'DAAが増えていれば進行中です。', syncNotStartedBody: 'nodeはまだ開始されていません。', syncCheckingBody: 'nodeは起動しています。RPC接続を確認しています。', syncStoppedBody: 'nodeが停止しています。setupからnodeを開始してください。', syncErrorBody: 'nodeの起動または接続に失敗しました。service状態とログを確認してください。',
         impactAttested: '送信成功', impactRunning: '稼働中', impactValidatorWait: '準備中', impactAttestedBody: 'attestation送信を確認しました。', impactRunningBody: 'attestation対象を待機または送信中です。', impactValidatorWaitBody: 'Bondとvalidator状態を確認してください。',
         impactMining: '採掘中', impactMinerOptional: '停止中', impactMiningBody: 'funding addressへ掘っています。', impactMinerOptionalBody: 'Bond後の継続採掘は任意です。',
@@ -586,10 +586,10 @@
         maturityUnknown: 'The miner starting DAA is not available yet.', maturityReady: 'Estimate reached. Actual mature UTXOs are verified during bond creation.', maturityProgress: 'About {remaining} blocks left ({percent}%)', balanceUnknown: 'Not checked',
         noMinerLogs: 'No miner logs yet.', minedSuccess: 'Successfully mined block #{block}.', noValidatorLogs: 'No validator logs yet.',
         nextNode: 'Start the node', nextNodeBody: 'Return to setup and press "5. Start node".', nextConnection: 'Check the node connection', nextConnectionBody: 'The node is running. Wait briefly for RPC to become available, then refresh.', nextSync: 'Wait for sync', nextSyncBody: 'Sync is progressing while DAA keeps increasing.',
-        nextP2p: 'Check P2P listening', nextP2pBody: 'Confirm that 26211/tcp is listening.', nextKey: 'Create a validator key', nextKeyBody: 'Return to setup and press "8. Generate key".',
+        nextP2p: 'Check P2P listening', nextP2pBody: 'Confirm that 26511/tcp is listening.', nextKey: 'Create a validator key', nextKeyBody: 'Return to setup and press "8. Generate key".',
         nextFunding: 'Continue mining and maturity', nextFundingBody: 'Use setup to check the miner, maturity estimate, and bond balance.', nextValidator: 'Start the validator', nextValidatorBody: 'Return to setup and press "14. Start validator".',
         nextAttesting: 'Confirm attestation success', nextAttestingBody: 'The validator is RUNNING. Logs are checked automatically for a successful submission.', nextDone: 'Validator participation confirmed', nextDoneBody: 'A successful attestation-shard submission was found. Keep the services running.',
-        impactNodeOpen: 'P2P listening', impactNodeWait: 'Checking', impactNodeOpenBody: 'Other nodes can connect to this listener.', impactNodeWaitBody: 'Check the 26211/tcp listener.',
+        impactNodeOpen: 'P2P listening', impactNodeWait: 'Checking', impactNodeOpenBody: 'Other nodes can connect to this listener.', impactNodeWaitBody: 'Check the 26511/tcp listener.',
         impactSynced: 'Synced', impactSyncing: 'Syncing', syncNotStarted: 'Not started', syncChecking: 'Checking connection', syncStopped: 'Node stopped', syncError: 'Node connection error', impactSyncedBody: 'Following the latest testnet state.', impactSyncingBody: 'Progress continues while DAA increases.', syncNotStartedBody: 'The node has not been started yet.', syncCheckingBody: 'The node is running. Waiting for its RPC connection.', syncStoppedBody: 'The node is stopped. Start it from setup.', syncErrorBody: 'The node failed to start or cannot be reached. Check the service state and logs.',
         impactAttested: 'Submitted', impactRunning: 'Running', impactValidatorWait: 'Preparing', impactAttestedBody: 'Attestation submission was observed.', impactRunningBody: 'Waiting for or submitting an attestation target.', impactValidatorWaitBody: 'Check the bond and validator state.',
         impactMining: 'Mining', impactMinerOptional: 'Stopped', impactMiningBody: 'Mining to the funding address.', impactMinerOptionalBody: 'Continuing to mine after bonding is optional.',
@@ -884,7 +884,7 @@
       text('network', status.network || node.network);
       text('version', node.version);
       text('publicIp', status.publicIp);
-      text('p2p', `${p2p.listening ? 'listening' : 'not listening'} on ${p2p.port || 26211}/tcp`);
+      text('p2p', `${p2p.listening ? 'listening' : 'not listening'} on ${p2p.port || 26511}/tcp`);
       text('utxo', node.utxoIndex === true ? 'enabled' : (node.utxoIndex === false ? 'disabled' : '-'));
       text('synced', node.synced === true ? 'true' : 'false');
       text('daa', number(node.virtualDaaScore));

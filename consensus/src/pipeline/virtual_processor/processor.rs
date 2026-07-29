@@ -7960,8 +7960,8 @@ impl VirtualStateProcessor {
         // same chain, but ghostdag data is exactly what the IBD trusted-data package carries
         // (`TrustedHeader { header, ghostdag }`), so this holds at import time without depending on
         // reachability having been rebuilt. Coverage is sufficient by construction — trusted data
-        // spans `DIFFICULTY_WINDOW_DURATION` (2641 DAA) around the pruning point while the walk needs
-        // `paid_work_walk_bound_daa` (1700 DAA); `trusted_data_covers_the_paid_work_walk` pins that.
+        // spans this preset's sampled difficulty window around the pruning point while the walk needs
+        // `paid_work_walk_bound_daa`; `trusted_data_covers_the_paid_work_walk` pins that relationship.
         //
         // Bounds are LOCAL on purpose. `pruning_point_daa_score` and `paid_work_window_daa` in the
         // payload are peer-supplied; using them here would let the peer choose the very walk it is

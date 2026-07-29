@@ -22,10 +22,10 @@ cargo build --release -p kaspa-pq-validator    # target/release/kaspa-pq-validat
 ### `keygen` — create a validator key
 
 ```bash
-kaspa-pq-validator keygen --out /etc/kaspa-pq/validator.mldsa --network mainnet
+kaspa-pq-validator keygen --out /etc/kaspa-pq/validator.mldsa --network testnet
 ```
 
-Generates a fresh ML-DSA-65 key, writes the 32-byte seed (hex, mode `0600`), and prints the
+Generates a fresh ML-DSA-87 key, writes the 32-byte seed (hex, mode `0600`), and prints the
 `validator_id` + funding address. **Only the validator key is produced** — per ADR-0011
 key separation, the owner / withdrawal key is created separately (`kaspa-pq` wallet) and
 **must not** live on the validator host.
@@ -34,10 +34,11 @@ key separation, the owner / withdrawal key is created separately (`kaspa-pq` wal
 
 ```bash
 kaspa-pq-validator run \
-    --node-rpc 127.0.0.1:27110 \
+    --node-rpc 127.0.0.1:27210 \
     --validator-key /etc/kaspa-pq/validator.mldsa \
     --stake-bond <txid_hex>:<index> \
-    --signed-epoch-db /var/lib/kaspa-pq/validator-state.json
+    --signed-epoch-db /var/lib/kaspa-pq/validator.testnet-200.state \
+    --network testnet-200
 ```
 
 Walks the ADR-0011 state machine (`NodeNotSynced → BondNotFound → BondPending → Active → …`)
@@ -46,20 +47,19 @@ and attests while the bond is active. Without all three of `--validator-key`,
 signs + self-verifies locally but never submits. `Slashed` is a fatal, non-zero exit.
 
 > **`--node-rpc` port is network-dependent** — it must match the node's **wRPC Borsh** port:
-> mainnet `27110` (used above, matching the `mainnet` keygen), **testnet `27210`** (the live
-> network — use this for testnet-10), devnet `27610`. If you start the node with
+> mainnet `27110`, **testnet `27210`** (the live network is testnet-200), devnet `27610`. If you start the node with
 > `--rpclisten-borsh=default`, the port is chosen automatically for that network — point
 > `--node-rpc` at the same value.
 
 ### `status` — one-shot health check
 
 ```bash
-kaspa-pq-validator status --node-rpc 127.0.0.1:27110 --stake-bond <txid_hex>:<index>
+kaspa-pq-validator status --node-rpc 127.0.0.1:27210 --stake-bond <txid_hex>:<index> --network testnet-200
 ```
 
 ### `palw-payload` — strict PALW lifecycle artifacts
 
-For the PALW presets (`testnet-110` and `devnet-111`), this command builds the exact raw Borsh
+For the PALW presets (`testnet-200`, `testnet-110`, and `devnet-111`), this command builds the exact raw Borsh
 payload consumed by `palw-submit`. Inputs that cross operator boundaries use versioned JSON; payload
 outputs are never JSON-wrapped.
 

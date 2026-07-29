@@ -8,7 +8,7 @@
 
 | 確認項目 | IPだけで確認できるか | 内容 |
 |---|---:|---|
-| node参加 | かなり可能 | `26211/tcp` に到達できるか、seedに載っているか |
+| node参加 | かなり可能 | `26511/tcp` に到達できるか、seedに載っているか |
 | DNS seeder動作 | 可能 | `53/udp` と `53/tcp` が複数Aレコードを返すか |
 | local service状態 | 可能 | VPS上の `systemctl` と `misaka node doctor` を見る |
 | validator登録状態 | bondが必要 | `--stake-bond <txid>:0` があれば確認可能 |
@@ -122,9 +122,9 @@ misaka-probe --ip 217.76.57.217
 ```bash
 misaka-probe \
   --ip 217.76.57.217 \
-  --network testnet-10 \
+  --network testnet-200 \
   --rpc 127.0.0.1:27210 \
-  --seed seeder2.misakascan.com
+  --seed seeder1.misakascan.com
 ```
 
 ### 3. local checkを飛ばして外部確認だけ行う
@@ -138,8 +138,8 @@ misaka-probe --ip 217.76.57.217 --skip-local
 ### 4. DNS seederだけを重点確認
 
 ```bash
-dig @217.76.57.217 seeder2.misakascan.com A +short
-dig +tcp @217.76.57.217 seeder2.misakascan.com A +short
+dig @95.111.236.186 seeder1.misakascan.com A +short
+dig +tcp @95.111.236.186 seeder1.misakascan.com A +short
 ```
 
 `misaka-probe` の中でも同じ系統の確認をしています。
@@ -147,13 +147,13 @@ dig +tcp @217.76.57.217 seeder2.misakascan.com A +short
 ### 5. P2P portだけを確認
 
 ```bash
-nc -vz -w 5 217.76.57.217 26211
+nc -vz -w 5 217.76.57.217 26511
 ```
 
 成功例です。
 
 ```text
-Connection to 217.76.57.217 port 26211 [tcp/*] succeeded!
+Connection to 217.76.57.217 port 26511 [tcp/*] succeeded!
 ```
 
 ## 判定の意味

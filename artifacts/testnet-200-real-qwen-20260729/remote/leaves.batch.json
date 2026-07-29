@@ -1,0 +1,41 @@
+{
+  "schema": "misaka.palw.leaf-set.v1",
+  "leaves": [
+    {
+      "version": 1,
+      "batch_id": "264ecc41631bd937fded02ae8116f9fae5583288a2023a281c2023ebd12d3a28ba83f82dbf00cefa16bf72d92e188efb96230576b0237a07d1097dac9c5160bb",
+      "leaf_index": 0,
+      "job_nullifier": "9212a60f2dec20915bf020b7c24066cdfae542d709121346207b4010f6df3152e175217571ce65f2bea78702ecd455be6c51d10d3b7cc059db9a4ae1ecce9b93",
+      "ticket_nullifier_commitment": "c54f34863c4c2988de3aec9e34c3533493b09883abd368d913f531978fba5174ac8da519541beefb2f7aeebc846846c7be3d0df2e38c454251562ae42013ed71",
+      "model_profile_id": "951be0881cfa64bdd8242630d8173c9aee08086fa01a342ad4620e94b167ec209b57dfcbe6284ceeea301c5ec405689200b63246e6bba2c7df7e106d86efce15",
+      "runtime_class_id": "44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444",
+      "shape_id": 7,
+      "quantum_count": 1,
+      "proof_type": 1,
+      "provider_a_bond": {
+        "transactionId": "fc7a4094906b7aa3b86b00b24e02a158a9c141f57353a5ddb0591c9092b12c5edcb35040395dd48141f230356acb1c7ce3bde200cec508698bc1191c54b25b11",
+        "index": 0
+      },
+      "provider_b_bond": {
+        "transactionId": "c963d2a001d405f9f8211724f322c9a3874a0047c13d8dd37802ccd18e89af177c0c200984ce589f43eca904af3fde4d1273e6b48e11b082d20d000851e52c7d",
+        "index": 0
+      },
+      "provider_a_reward_script": "000076c440b9a41d825f37b3427161e95375184c69c93b848615ef555a006c83b6a24dbbf18c5236b97ed6343101f8c3b10aea906e86df5249f1fe0e8bb2eb76d14694576e88a6",
+      "provider_b_reward_script": "000076c4400001163ddc5ae9ad65b99ceb7187466d7b52ed23be8d76aaa24651e7bea5759153bc694207996fb1cb0ac3de73322c118e492ce6ff2046aca15211ea5d321d5988a6",
+      "ticket_authority_pk_hash": "81f1cb5714d2d4cd40814d363b109d6550b272cc59d181446056173657563c341f90c3b396a9c1c303cb81577f8651bb8c9e4e1d2f05f009f92ae37d7a5bae40",
+      "private_match_commitment": "e3d4c4a926971f38823169554a461287f02743516763aaf016388a1f7ddce4c67550bdfcbb70b51ab6e4bc56557576cc9c7ff8f65d2b6efe4f271902a906bd1d",
+      "receipt_da_object_version": 2,
+      "receipt_da_root": "1db1c555eabfc82ed84e664082c8734f9335b832da6f72073b3abdc356f34643ca755dab5c3522f4732885513a6a93e1b593849e1ac9ee40461289c3a8f9272d",
+      "receipt_da_object_len": 31288,
+      "receipt_da_chunk_count": 2,
+      "receipt_v3_compute_set_id": "32c5cf9ee7db0f7e0fea37aa6169a570ce87e31c0f55da2788e3046920403301829d9f392796b0899711f61307da016e0f8c11360616f764e9e599e4e4e686ea",
+      "receipt_v3_job_challenge": "9212a60f2dec20915bf020b7c24066cdfae542d709121346207b4010f6df3152e175217571ce65f2bea78702ecd455be6c51d10d3b7cc059db9a4ae1ecce9b93",
+      "receipt_v3_issued_epoch": 4202,
+      "receipt_v3_expires_epoch": 4226,
+      "registered_epoch": 4202,
+      "activation_epoch": 4210,
+      "expiry_epoch": 4226,
+      "leaf_bond_sompi": 0
+    }
+  ]
+}

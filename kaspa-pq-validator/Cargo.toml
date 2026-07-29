@@ -25,6 +25,7 @@ kaspa-pq-validator-core.workspace = true
 kaspa-rpc-core.workspace = true
 kaspa-wrpc-client.workspace = true
 misaka-palw-miner.workspace = true
+misaka-palw.workspace = true
 
 attohttpc.workspace = true
 borsh.workspace = true
@@ -40,7 +41,6 @@ clap = { workspace = true, features = ["env"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal"] }
 
 [dev-dependencies]
-misaka-palw.workspace = true
 tempfile.workspace = true
 
 [lints]

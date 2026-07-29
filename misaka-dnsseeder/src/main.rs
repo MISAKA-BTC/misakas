@@ -1,7 +1,7 @@
 //! MISAKA (kaspa-pq) DNS seeder.
 //!
 //! A Kaspa-style DNS seeder: it serves the IPs of live kaspa-pq peers over DNS so a fresh node
-//! bootstraps by resolving `seeder{1,2}.misakascan.com` (its `dns_seeders` list) and randomly
+//! bootstraps testnet-200 by resolving `seeder{1,2}.misakascan.com` (its `dns_seeders` list) and randomly
 //! dialing the returned peers. The live peer set is taken from a co-located node's address
 //! manager over wRPC (`getPeerAddresses`), always augmented with the configured `--anchors` (the
 //! seed nodes) so the seeder is useful from genesis, before the network has grown. The operator
@@ -9,7 +9,7 @@
 //! and answers A queries with a random subset of the live set.
 //!
 //! Run (port 53 needs root or `setcap cap_net_bind_service=+ep`):
-//!   misaka-dnsseeder --network-id testnet-10 --anchors 160.16.131.119,95.111.236.186
+//!   misaka-dnsseeder --network-id testnet-200 --anchors 160.16.131.119,95.111.236.186
 //! (`--network-id` derives the co-located node's Borsh port; pass `--node-wrpc-borsh host:port`
 //! to override.)
 
@@ -33,11 +33,11 @@ use tokio::net::{TcpListener, UdpSocket};
 #[derive(Parser, Debug)]
 #[command(name = "misaka-dnsseeder", version, about = "MISAKA (kaspa-pq) DNS seeder — serves live peer IPs over DNS")]
 struct Args {
-    /// Network id (e.g. testnet-10) the co-located node serves. Used to derive the default
-    /// node wRPC Borsh port when `--node-wrpc-borsh` is not given (testnet-10 => 127.0.0.1:27210),
+    /// Network id (e.g. testnet-200) the co-located node serves. Used to derive the default
+    /// node wRPC Borsh port when `--node-wrpc-borsh` is not given (testnet-200 => 127.0.0.1:27210),
     /// after first consulting the local endpoint registry (~/.misaka/<net>/endpoints.json) the
-    /// node wrote. Omit if you pass `--node-wrpc-borsh` explicitly.
-    #[arg(long = "network-id", visible_alias = "network", env = "MISAKA_NETWORK")]
+    /// node wrote. The public-network default is testnet-200.
+    #[arg(long = "network-id", visible_alias = "network", env = "MISAKA_NETWORK", default_value = "testnet-200")]
     network_id: Option<String>,
     /// Co-located node wRPC Borsh endpoint host:port whose peer set is served. Best-effort:
     /// if unreachable, only the `--anchors` are served. When omitted it is resolved from
@@ -51,6 +51,10 @@ struct Args {
     /// Anchor peer IPv4s (comma-separated) ALWAYS served (the seed nodes), for bootstrap.
     #[arg(long, default_value = "", env = "MISAKA_SEEDER_ANCHORS")]
     anchors: String,
+    /// Serve only the operator anchors. Use this when the node address manager
+    /// contains historical or non-publicly-reachable peers.
+    #[arg(long, env = "MISAKA_SEEDER_ANCHORS_ONLY", default_value_t = false)]
+    anchors_only: bool,
     /// Max A records per response (a random subset of the live set).
     #[arg(long, default_value_t = 8)]
     max_answers: usize,
@@ -68,14 +72,15 @@ fn parse_anchors(s: &str) -> Vec<Ipv4Addr> {
 
 /// Resolve the co-located node's wRPC Borsh endpoint: explicit `--node-wrpc-borsh` wins; else
 /// derive from `--network-id` via the local endpoint registry the node wrote (registry > network
-/// default); else the historical devnet Borsh fallback. Mirrors the validator/miner resolver so the
+/// default); else the testnet-200 Borsh fallback. Mirrors the validator/miner resolver so the
 /// whole tool-set agrees on one port-derivation rule.
 /// kaspa-pq **ADR-0040 §T-shared — networks a public DNS seeder must REFUSE to serve.**
 ///
-/// The PALW presets (`testnet-palw` = suffix 110, `devnet-palw` = 111) run
-/// `palw_activation_daa_score = 0`, and their activation gates are not released. A seeder is precisely
-/// the mechanism that hands a network to third parties, so serving one of these would convert a closed
-/// experiment into a shared one — the exact boundary ADR-0040 draws.
+/// The PALW presets (`testnet-palw` = suffix 110, `devnet-palw` = 111) remain
+/// closed/allowlisted experiments. A seeder is precisely the mechanism that
+/// hands a network to third parties, so serving one would cross that boundary.
+/// testnet-200 is deliberately not on this list: its peer allowlist is open and
+/// it is now the public network.
 ///
 /// The seeder rejects these networks explicitly rather than relying on absent configuration.
 const SEEDER_REFUSED_NET_SUFFIXES: &[(&str, u32)] = &[("testnet-palw", 110), ("devnet-palw", 111)];
@@ -87,9 +92,9 @@ fn seeder_refuses_network(network: &Option<String>) -> Option<String> {
     let suffix = nid.suffix()?;
     SEEDER_REFUSED_NET_SUFFIXES.iter().find(|(_, s)| *s == suffix).map(|(name, s)| {
         format!(
-            "refusing to serve {net}: {name} (netsuffix {s}) is a PALW network whose ADR-0040 activation \
-             gates are not released. A DNS seeder is what makes a network SHARED, and algo-4 is only \
-             safe on a closed net today. Run it behind an allowlist without a seeder instead."
+            "refusing to serve {net}: {name} (netsuffix {s}) is an ADR-0040 closed/allowlisted PALW \
+             experiment. A DNS seeder would make it publicly discoverable. Use testnet-200 for the \
+             public algo-4 network, or keep this preset behind its explicit peer allowlist."
         )
     })
 }
@@ -108,7 +113,7 @@ fn resolve_node_rpc(network: &Option<String>, explicit: &Option<String>) -> Stri
             misaka_endpoints::EndpointRegistry::load(net).as_ref(),
         );
     }
-    "127.0.0.1:27610".to_string()
+    "127.0.0.1:27210".to_string()
 }
 
 /// Audit H-01: a public seeder must serve only publicly-ROUTABLE peer IPs. Drop
@@ -244,7 +249,9 @@ async fn main() {
     let peers: Arc<RwLock<Vec<Ipv4Addr>>> = Arc::new(RwLock::new(anchors.clone()));
 
     // Background poller: refresh the live peer set from the co-located node.
-    {
+    if args.anchors_only {
+        info!("[dnsseeder] anchors-only mode: node address-manager discovery disabled");
+    } else {
         let peers = peers.clone();
         let node_rpc = node_rpc.clone();
         let anchors = anchors.clone();
@@ -342,12 +349,22 @@ async fn main() {
 mod tests {
     use super::*;
 
-    /// ADR-0040 §T-shared — the seeder REFUSES PALW networks, and the refusal is a rule with an
+    #[test]
+    fn public_network_defaults_are_testnet_200() {
+        let args = Args::try_parse_from(["misaka-dnsseeder"]).unwrap();
+        assert_eq!(args.network_id.as_deref(), Some("testnet-200"));
+        assert!(!args.anchors_only);
+
+        let args = Args::try_parse_from(["misaka-dnsseeder", "--anchors-only"]).unwrap();
+        assert!(args.anchors_only);
+    }
+
+    /// ADR-0040 §T-shared — the seeder REFUSES closed PALW networks, and the refusal is a rule with an
     /// enforcement point rather than an operator convention.
     ///
     /// "Just don't list it" is the absence of a configuration: it survives exactly until someone passes
     /// `--network-id testnet-110`. A seeder is what turns a closed net into a shared one, so on the two
-    /// PALW presets — whose activation gates are not released — it must refuse to start at all.
+    /// allowlisted presets it must refuse to start at all. testnet-200 is the explicit public exception.
     #[test]
     fn seeder_refuses_palw_networks() {
         for net in ["testnet-110", "devnet-111"] {
@@ -355,8 +372,9 @@ mod tests {
             assert!(reason.is_some(), "{net} is a PALW network and must be refused");
             assert!(reason.unwrap().contains("ADR-0040"), "the refusal must say WHY, not just fail");
         }
-        // Non-PALW networks are unaffected — this is a targeted refusal, not a general lockout.
-        for net in ["testnet-10", "mainnet", "devnet"] {
+        // The released public PALW network is allowed; the refusal remains targeted
+        // to the two closed presets.
+        for net in ["testnet-200", "testnet-10", "mainnet", "devnet"] {
             assert!(seeder_refuses_network(&Some(net.to_string())).is_none(), "{net} must still be servable");
         }
         // No network id ⇒ nothing to refuse (the endpoint is explicit).
@@ -366,11 +384,11 @@ mod tests {
     #[test]
     fn resolve_node_rpc_explicit_and_fallback() {
         // explicit --node-wrpc-borsh / env wins over the network
-        assert_eq!(resolve_node_rpc(&Some("testnet-10".into()), &Some("1.2.3.4:9".into())), "1.2.3.4:9");
-        // no network + no explicit → the historical devnet Borsh fallback
-        assert_eq!(resolve_node_rpc(&None, &None), "127.0.0.1:27610");
+        assert_eq!(resolve_node_rpc(&Some("testnet-200".into()), &Some("1.2.3.4:9".into())), "1.2.3.4:9");
+        // no network + no explicit → the public testnet-200 Borsh fallback
+        assert_eq!(resolve_node_rpc(&None, &None), "127.0.0.1:27210");
         // an unparseable network-id with no explicit → fallback (never panics)
-        assert_eq!(resolve_node_rpc(&Some("bogus-net".into()), &None), "127.0.0.1:27610");
+        assert_eq!(resolve_node_rpc(&Some("bogus-net".into()), &None), "127.0.0.1:27210");
         // (the network-default + registry branches are covered by misaka_endpoints::resolve tests,
         //  which run with a controlled HOME; asserting them here would be machine-dependent)
     }

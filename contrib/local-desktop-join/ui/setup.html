@@ -930,7 +930,7 @@
         <div class="metric">
           <div class="label">P2P</div>
           <div id="p2p" class="value">-</div>
-          <div id="p2pNote" class="metric-note" data-i18n="p2pNote">Checks the 26211/tcp listener.</div>
+          <div id="p2pNote" class="metric-note" data-i18n="p2pNote">Checks the 26511/tcp listener.</div>
         </div>
         <div class="metric">
           <div class="label">Validator</div>
@@ -1167,7 +1167,7 @@
         maturityApproxLine: 'これは目安です。実際にはBond作成時にUTXO単位で成熟済みか確認されます。',
         nodeNote: 'まだ確認前です。',
         syncNote: 'node開始後に同期します。',
-        p2pNote: '26211/tcp の待受を確認します。',
+        p2pNote: '26511/tcp の待受を確認します。',
         validatorNote: 'node同期後に進めます。',
         syncActivityTitle: '同期の動き',
         syncActivityBody: 'DAAが増えていれば、同期は進んでいます。',
@@ -1432,7 +1432,7 @@
         maturityApproxLine: 'This is an estimate. Bond creation verifies maturity per UTXO.',
         nodeNote: 'Not checked yet.',
         syncNote: 'Sync starts after the node is running.',
-        p2pNote: 'Checks the 26211/tcp listener.',
+        p2pNote: 'Checks the 26511/tcp listener.',
         validatorNote: 'Available after node sync.',
         syncActivityTitle: 'Sync activity',
         syncActivityBody: 'If DAA keeps increasing, sync is moving.',
@@ -2477,7 +2477,7 @@
       }
       if (data.p2p) {
         setText('p2p', data.p2p.listening ? 'LISTENING' : 'WAIT', data.p2p.listening ? 'ok' : 'warn');
-        setNote('p2pNote', `port ${data.p2p.port || 26211}`);
+        setNote('p2pNote', `port ${data.p2p.port || 26511}`);
       }
       if (data.checks) {
         const bad = data.checks.some(c => c.status === 'FAIL');

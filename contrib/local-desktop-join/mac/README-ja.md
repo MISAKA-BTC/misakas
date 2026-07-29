@@ -91,5 +91,5 @@ MISAKA_KEEP_AWAKE=0 scripts/misaka-desktop-node.sh start-node
 ## 注意
 
 - Macを閉じる、再起動する、スリープするとnode/miner/validatorは止まります。
-- 自宅回線では外部から `26211/tcp` に接続されにくいです。
+- 自宅回線では外部から `26511/tcp` に接続されにくいです。
 - 同期はできますが、公開peerとしてはVPSより弱いです。

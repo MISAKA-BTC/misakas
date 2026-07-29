@@ -6959,6 +6959,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "palw-real-provider"
+version = "1.1.0"
+dependencies = [
+ "hex",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-pq-validator-core",
+ "misaka-palw",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "parity-scale-codec"
 version = "3.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

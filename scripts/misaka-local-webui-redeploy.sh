@@ -2,7 +2,7 @@
 set -eu
 
 VPS_IP="${1:-${VPS_IP:-}}"
-NETWORK="${MISAKA_NETWORK:-testnet-10}"
+NETWORK="${MISAKA_NETWORK:-testnet-200}"
 WEB_PORT="${MISAKA_SETUP_PORT:-8787}"
 REMOTE_REPO="${MISAKA_REPO_DIR:-/opt/misakas}"
 REPO_URL="${MISAKA_REPO_URL:-https://github.com/MISAKA-BTC/misakas.git}"

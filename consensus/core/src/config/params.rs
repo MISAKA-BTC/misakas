@@ -1266,22 +1266,45 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     ..PRODUCTION_DNS_PARAMS
 };
 
+/// testnet-200 keeps the production validator-count, bond, and long-range
+/// safety settings, but uses the reachable testnet WorkDepth/StakeDepth floors.
+/// At the live CPU-mining difficulty the production value (1_000_000) is
+/// unreachable: the anchor-relative window settles around 200-300 and PALW's
+/// beacon gate therefore remains halted forever. This is intentionally narrower
+/// than [`TESTNET_DNS_PARAMS`], which also lowers the staking economics.
+///
+/// `dns_params` is not a genesis-block input, so this coordinated testnet-200
+/// upgrade preserves the existing genesis identity.
+pub const STAGING_MAINNET_PALW_DNS_PARAMS: DnsParams = DnsParams {
+    required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
+    // The rehearsal mesh has the production three-validator/20M-MSK economics,
+    // but it must recover after planned validator restarts within a short-lived
+    // PALW batch window. Use the same one-attested-epoch testnet floor while
+    // retaining the production validator-count and stake-amount requirements.
+    required_stake_depth: StakeScore(5000),
+    ..PRODUCTION_DNS_PARAMS
+};
+
+/// testnet-200 rolling PALW batches need an active window at least as long as
+/// the mandatory registration + audit lead (2 + 6 epochs). With the inherited
+/// six-epoch window, a successor registered only after its predecessor becomes
+/// active cannot activate before the predecessor expires. Sixteen epochs leaves
+/// an eight-epoch overlap for automatic renewal while retaining all other
+/// admission, bond, and bounded-view limits.
+pub const STAGING_MAINNET_PALW_BATCH_ADMISSION: crate::palw::PalwBatchAdmissionParams =
+    crate::palw::PalwBatchAdmissionParams { active_window_epochs: 16, ..crate::palw::PalwBatchAdmissionParams::INERT };
+
+/// Public peer-discovery domains for the currently operated network.
+///
+/// These names intentionally belong to exactly one preset at a time. Reusing a
+/// seed hostname across network identities makes a fresh node dial the right IP
+/// on the wrong default port and obscures which chain the operator joined.
+pub const TESTNET_200_DNS_SEEDERS: &[&str] = &["seeder1.misakascan.com", "seeder3.misakascan.com"];
+
 pub const MAINNET_PARAMS: Params = Params {
-    // kaspa-pq mainnet DNS seeders (isolated from upstream Kaspa per
-    // docs/adr/0001-network-isolation.md — these are MISAKA-operated only). A node
-    // resolves each hostname's A/AAAA records to a list of peer IPs and randomly
-    // selects among them (Kaspa-style auto-discovery), connecting on the mainnet
-    // default P2P port (26111). The hosts behind these records must run a reachable
-    // mainnet node on 26111. `addnode` flags still augment this list.
-    dns_seeders: &[
-        "seeder1.misakascan.com",
-        "seeder2.misakascan.com",
-        "seeder3.misakascan.com",
-        "seeder4.misakascan.com",
-        "seeder1.misakachain.com",
-        "seeder2.misakachain.com",
-        "seeder3.misakachain.com",
-    ],
+    // Mainnet is defined but not launched. Never resolve the public testnet-200
+    // seed names on mainnet's port.
+    dns_seeders: &[],
     net: NetworkId::new(NetworkType::Mainnet),
     genesis: GENESIS,
     timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
@@ -1377,19 +1400,10 @@ pub const MAINNET_PARAMS: Params = Params {
 };
 
 pub const TESTNET_PARAMS: Params = Params {
-    // kaspa-pq testnet DNS seeders (MISAKA-operated, isolated per
-    // docs/adr/0001-network-isolation.md). Same Kaspa-style auto-discovery as mainnet,
-    // but nodes connect on the testnet-10 default P2P port (26211) — so the hosts
-    // behind these records must also run a reachable testnet-10 node on 26211.
-    dns_seeders: &[
-        "seeder1.misakascan.com",
-        "seeder2.misakascan.com",
-        "seeder3.misakascan.com",
-        "seeder4.misakascan.com",
-        "seeder1.misakachain.com",
-        "seeder2.misakachain.com",
-        "seeder3.misakachain.com",
-    ],
+    // testnet-10 is retained as a compatibility preset, but its public mesh is
+    // retired. Discovery moved to testnet-200; an explicitly configured legacy
+    // peer can still be used for offline recovery.
+    dns_seeders: &[],
     net: NetworkId::with_suffix(NetworkType::Testnet, 10),
     genesis: TESTNET_GENESIS,
     timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
@@ -1665,8 +1679,9 @@ pub const STAGING_PALW_LANE_DIFFICULTY: crate::palw::LaneDifficultyParams = crat
 pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
     net: NetworkId::with_suffix(NetworkType::Testnet, 200),
     genesis: crate::config::genesis::STAGING_PALW_GENESIS,
-    // Closed rehearsal start: no advertising; reachability is gated by the allowlist below.
-    dns_seeders: &[],
+    // testnet-200 is the public testnet. Seed A records are dialed on its
+    // dedicated default P2P port (26511).
+    dns_seeders: TESTNET_200_DNS_SEEDERS,
     palw_activation_daa_score: 0,
     palw_algo4_accept: true,
     palw_compute_work_scale: 0,
@@ -1676,6 +1691,8 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
     // The staging network accepts unlisted peers for public testnet validation.
     palw_requires_peer_allowlist: false,
     palw_lane_difficulty: STAGING_PALW_LANE_DIFFICULTY,
+    palw_batch_admission: STAGING_MAINNET_PALW_BATCH_ADMISSION,
+    dns_params: Some(STAGING_MAINNET_PALW_DNS_PARAMS),
     ..MAINNET_PARAMS
 };
 
@@ -1798,20 +1815,9 @@ pub const DEVNET_PARAMS: Params = Params {
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
     evm_typed_receipt_root_activation_daa_score: u64::MAX,
-    // kaspa-pq: devnet now uses the same MISAKA DNS seeders as mainnet/testnet for automatic
-    // peer discovery (devnet default P2P port is 26611, matching the live mesh — see
-    // NetworkId::default_p2p_port). Nodes launched WITHOUT `--nodnsseed` resolve these to find
-    // peers; the seeders' A records (160.16.131.119 / 95.111.236.186) run devnet nodes on 26611.
-    // dns_seeders is NOT a genesis-block input, so the genesis hash is unchanged (no re-genesis).
-    dns_seeders: &[
-        "seeder1.misakascan.com",
-        "seeder2.misakascan.com",
-        "seeder3.misakascan.com",
-        "seeder4.misakascan.com",
-        "seeder1.misakachain.com",
-        "seeder2.misakachain.com",
-        "seeder3.misakachain.com",
-    ],
+    // The former shared devnet is retired. Public discovery belongs exclusively
+    // to testnet-200.
+    dns_seeders: &[],
     net: NetworkId::new(NetworkType::Devnet),
     genesis: DEVNET_GENESIS,
     timestamp_deviation_tolerance: TIMESTAMP_DEVIATION_TOLERANCE,
@@ -2011,7 +2017,7 @@ mod palw_network_tests {
     /// ADR-0048: `--testnet --netsuffix=200` selects the Header-v4 staging-mainnet PALW rehearsal
     /// preset — the ADR-0041 mainnet shape on an independent identity: v4 genesis (the anti-spam
     /// accumulator commitment bound into the genesis hash), genesis-active PALW, NON-inert spam
-    /// params, algo-4 acceptance withheld, real PoW, and full-scale (un-shrunk) finality/pruning
+    /// params, algo-4 acceptance released, real PoW, and full-scale (un-shrunk) finality/pruning
     /// depths so the staging exercises measure the real thing.
     #[test]
     fn staging_mainnet_palw_network_selection() {
@@ -2059,11 +2065,27 @@ mod palw_network_tests {
         // operation remains the default posture.
         assert!(!p.palw_requires_peer_allowlist, "A1 opened the staging rehearsal net to unlisted peers");
         assert!(!p.palw_requires_archival);
-        // Reachability and discoverability are separate: A1 removed the connect-gate, it did not add
-        // seeders. Joining still needs an explicit peer address until seeders are provisioned.
-        assert!(p.dns_seeders.is_empty(), "A1 opened reachability, not advertisement");
-        // Inherits the mainnet-shape production DNS overlay; stays v3-consistent.
-        assert!(p.dns_params.unwrap().dns_v3_params_consistent(), "staging DNS params stay v3-consistent");
+        assert_eq!(p.dns_seeders, TESTNET_200_DNS_SEEDERS, "staging is the only publicly discovered testnet");
+        assert!(TESTNET_PARAMS.dns_seeders.is_empty(), "retired testnet-10 must not resolve testnet-200 seeds on port 26211");
+        assert!(MAINNET_PARAMS.dns_seeders.is_empty(), "unlaunched mainnet must not reuse testnet seed names");
+        assert!(DEVNET_PARAMS.dns_seeders.is_empty(), "retired devnet must not reuse testnet seed names");
+        // Keeps production validator economics, but uses reachable testnet WorkDepth/StakeDepth
+        // floors so the PALW beacon gate can recover within a rehearsal batch window.
+        let dns = p.dns_params.unwrap();
+        assert_eq!(dns.required_work_depth, Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]));
+        assert_eq!(dns.min_active_validators, PRODUCTION_DNS_PARAMS.min_active_validators);
+        assert_eq!(dns.min_active_stake_sompi, PRODUCTION_DNS_PARAMS.min_active_stake_sompi);
+        assert_eq!(dns.min_bond_amount_sompi, PRODUCTION_DNS_PARAMS.min_bond_amount_sompi);
+        assert_eq!(dns.required_stake_depth, StakeScore(5000));
+        assert!(dns.dns_v3_params_consistent(), "staging DNS params stay v3-consistent");
+        assert_eq!(p.palw_batch_admission.registration_lead_epochs, 2);
+        assert_eq!(p.palw_batch_admission.audit_window_epochs, 6);
+        assert_eq!(p.palw_batch_admission.active_window_epochs, 16);
+        assert!(
+            p.palw_batch_admission.active_window_epochs
+                >= p.palw_batch_admission.registration_lead_epochs.saturating_add(p.palw_batch_admission.audit_window_epochs),
+            "staging active window must permit a successor registered at activation to overlap"
+        );
     }
 
     /// ADR-0040 P1-5: validates the persisted `PalwBatchViewV1` bound on every activated preset.
@@ -2303,22 +2325,25 @@ mod palw_network_tests {
     /// ghostdag entry along that walk is missing. That refusal is correct but useless if it fires on
     /// honest imports, so the walk MUST fit inside what the IBD trusted-data package delivers.
     ///
-    /// Trusted data carries the DAA window (`DIFFICULTY_WINDOW_DURATION` of raw span) around the
-    /// pruning point, header AND ghostdag per block. The walk needs `paid_work_walk_bound_daa`.
-    /// If someone lengthens the batch life or shortens the difficulty window past each other, the
-    /// binding starts rejecting honest peers and IBD breaks — loudly here instead.
+    /// Trusted data carries the preset's sampled difficulty window around the pruning point, header
+    /// AND ghostdag per block. The walk needs `paid_work_walk_bound_daa`. If someone lengthens the
+    /// batch life or shortens that network's difficulty window past each other, the binding starts
+    /// rejecting honest peers and IBD breaks — loudly here instead.
     #[test]
     fn trusted_data_covers_the_paid_work_walk() {
         let p = STAGING_MAINNET_PALW_PARAMS;
         let walk = p.palw_batch_admission.paid_work_walk_bound_daa(p.palw_epoch_length_daa);
+        // Do not compare against `DIFFICULTY_WINDOW_DURATION` directly: that constant is seconds,
+        // while this walk is DAA score. At 10 BPS each four-second sample spans 40 DAA.
+        let trusted_window = p.difficulty_window_duration_in_block_units();
         assert!(
-            walk <= DIFFICULTY_WINDOW_DURATION,
+            walk <= trusted_window,
             "the paid-work walk ({walk} DAA) must fit inside the trusted-data DAA window \
-             ({DIFFICULTY_WINDOW_DURATION} DAA), or the R1 chain binding refuses honest imports"
+             ({trusted_window} DAA), or the R1 chain binding refuses honest imports"
         );
         // Pin the current safety margin; these values are structural bounds rather than calibration.
-        assert_eq!(walk, 1700, "paid-work walk bound moved — re-check the trusted-data margin");
-        assert_eq!(DIFFICULTY_WINDOW_DURATION, 2641, "difficulty window moved — re-check the R1 margin");
+        assert_eq!(walk, 2700, "paid-work walk bound moved — re-check the trusted-data margin");
+        assert_eq!(trusted_window, 26_440, "testnet-200 trusted-data window moved — re-check the R1 margin");
     }
 
     #[test]

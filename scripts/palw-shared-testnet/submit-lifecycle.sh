@@ -694,8 +694,8 @@ if [ "$TICKET_MODE" = skip ]; then
     log "TICKET_MODE=skip: leaf-chunks are registered with --unsafe-skip-ticket-secret-check (NO ticket). The batch reaches status=active but its leaf can NEVER be mined — no mint. Honest no-GPU end state (NOT palw_demo)."
     TICKET_ARGS[${#TICKET_ARGS[@]}]="--unsafe-skip-ticket-secret-check"
 else
-    # TICKET_MODE=mock. create-lifecycle generated the ticket-authority seed and
-    # populated the TicketSecretStore for this batch, so the leaf carries a real
+    # Ticketed mode. create-lifecycle generated the ticket-authority seed and
+    # populated the TicketSecretStore for this batch, so the leaf carries an openable
     # (opened) ticket commitment and is submitted WITHOUT --unsafe.
     #
     # There are TWO DISTINCT ticket-flag pairs — do not conflate them:
@@ -708,20 +708,20 @@ else
     #     a SEPARATE pair consumed at MINING time by start-palw-miner.sh — NOT passed here.
     _TA_KEY="${TICKET_AUTHORITY_KEY:-${TICKET_AUTHORITY_SEED:-$PALW_DATA_ROOT/keys/ticket-authority.seed}}"
     _TS_FILE="${TICKET_SECRET_FILE:-$PALW_DATA_ROOT/keys/ticket-secret.json}"
-    [ -f "$_TA_KEY" ] || die "TICKET_MODE=mock but the ticket-authority seed is missing: $_TA_KEY. create-lifecycle.sh generates it (kaspa-pq-validator keygen) and start-palw-miner.sh passes it to KASPAD (--palw-ticket-authority-key-file) at mining time. Run ./create-lifecycle.sh with TICKET_MODE=mock first."
-    [ -s "$_TS_FILE" ] || die "TICKET_MODE=mock but the TicketSecretStore is missing/empty: $_TS_FILE. create-lifecycle populates it via the mock-ticket helper (a workspace member built by build-and-hash.sh); no standalone CLI does. Re-run ./create-lifecycle.sh with TICKET_MODE=mock first."
+    [ -f "$_TA_KEY" ] || die "TICKET_MODE=$TICKET_MODE but the ticket-authority seed is missing: $_TA_KEY. Re-run create-lifecycle."
+    [ -s "$_TS_FILE" ] || die "TICKET_MODE=$TICKET_MODE but the TicketSecretStore is missing/empty: $_TS_FILE. Re-run create-lifecycle."
     grep -q 'secrets' "$_TS_FILE" 2>/dev/null || warn "TICKET_SECRET_FILE ($_TS_FILE) has no 'secrets' field — it may not be a valid TicketSecretStore; the non-skip leaf-chunk submit will be rejected if the ticket cannot be opened."
-    _MODE="$(stat -f '%Lp' "$_TS_FILE" 2>/dev/null || stat -c '%a' "$_TS_FILE" 2>/dev/null || printf '')"
+    _MODE="$(stat -c '%a' "$_TS_FILE" 2>/dev/null || stat -f '%Lp' "$_TS_FILE" 2>/dev/null || printf '')"
     case "$_MODE" in 600|0600|'') : ;; *) warn "TicketSecretStore $_TS_FILE mode is $_MODE; it MUST be 0600 (chmod 0600 it) — palw-submit refuses a group/world-readable store." ;; esac
     # palw-submit's OWN client-side ticket flags (NOT kaspad's node flags). Required
     # for a non-unsafe leaf-chunk submit; palw-submit fail-closes without them.
     TICKET_ARGS=(--ticket-authority-key "$_TA_KEY" --ticket-secret-file "$_TS_FILE")
-    log "TICKET_MODE=mock: leaf-chunks submitted WITHOUT --unsafe; ticket possession is verified BY palw-submit at submit time (its --ticket-authority-key/--ticket-secret-file client flags open each nullifier against the on-chain commitment). WIRING-ONLY, NON-inference mock leaves (never real inference, never palw_demo)."
+    log "TICKET_MODE=$TICKET_MODE: leaf-chunks submitted WITHOUT --unsafe; palw-submit verifies ticket possession against each on-chain commitment."
 fi
 
 # Extra hint appended to a leaf-chunk submit failure only in mock mode.
 _MOCK_SUBMIT_HINT=""
-[ "$TICKET_MODE" = mock ] && _MOCK_SUBMIT_HINT="; in mock mode node A must have been started with --palw-ticket-authority-key-file/--palw-ticket-secret-file so the ticket can be verified"
+[ "$TICKET_MODE" != skip ] && _MOCK_SUBMIT_HINT="; node A must have been started with --palw-ticket-authority-key-file/--palw-ticket-secret-file so the ticket can be verified"
 
 k=0
 while [ "$k" -lt "$CHUNK_COUNT" ]; do
@@ -758,6 +758,20 @@ wait_num_ge_both leaf_blobs "$LEAFN" "all $LEAFN leaf blobs present"
 # for the legacy random-root mock (PALW_DA_REAL != 1).
 run_da_challenge_response
 
+# Optional supervised miners on other validators stay stopped while the exact-DAA
+# challenge/response phase runs. Once that phase is complete they can safely
+# resume, include their local attestation shards, and keep StakeDepth healthy
+# during the multi-epoch wait for activation.
+if [ -n "${PALW_POST_DA_MINER_UNITS:-}" ]; then
+    require_cmd systemctl
+    read -r -a _POST_DA_UNITS <<<"$PALW_POST_DA_MINER_UNITS"
+    for _POST_DA_UNIT in "${_POST_DA_UNITS[@]}"; do
+        systemctl start "$_POST_DA_UNIT" \
+            || die "could not start post-DA validator miner unit $_POST_DA_UNIT."
+    done
+    log "post-DA validator miner unit(s) started: $PALW_POST_DA_MINER_UNITS"
+fi
+
 # ---- 4. audit-facts -> vote -> certificate -> certificate carrier -----------
 if [ "$(_batch_field a certificate_blob_present)" = "true" ]; then
     log "certificate already present on node A (certificate_blob_present=true); skipping audit-facts/vote/certificate generation + submit (idempotent)"
@@ -781,5 +795,9 @@ log "STN-011 SUCCESS: batch $BATCH_ID reached status=active on BOTH node A and n
 if [ "$TICKET_MODE" = skip ]; then
     log "END STATE (TICKET_MODE=skip): batch is ACTIVE but NO algo-4 block can be minted (the leaf-chunk carries no ticket). No coinbase, no minted block — the honest no-GPU end state. To MINT a wiring-only block, rebuild with TICKET_MODE=mock (needs the mock-ticket helper, built by build-and-hash.sh) then run ./start-palw-miner.sh."
 else
-    log "END STATE (TICKET_MODE=mock): batch is ACTIVE and a WIRING-ONLY, NON-inference mock block is mineable via ./start-palw-miner.sh (node A must run with --palw-ticket-authority-key-file/--palw-ticket-secret-file). Real inference needs the provider GPU tool (Phase 1, out of scope)."
+    if [ "$TICKET_MODE" = real ]; then
+        log "END STATE (TICKET_MODE=real): batch is ACTIVE with a verified Qwen inference-bound ticket and is mineable via ./start-palw-miner.sh."
+    else
+        log "END STATE (TICKET_MODE=mock): batch is ACTIVE and a wiring-only mock block is mineable via ./start-palw-miner.sh."
+    fi
 fi

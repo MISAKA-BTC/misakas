@@ -39,7 +39,7 @@ misaka wallet utxo consolidate --key-file validator.seed --yes --max-txs-per-run
 
 ```
 --output human|json     # default human; JSON is stable for scripts/monitors
---network <id>          # default testnet-10; sets default RPC ports + match check
+--network <id>          # default testnet-200; sets default RPC ports + match check
 --rpc <host:port>       # node wRPC borsh; default derives from --network (testnet=27210)
 --evm-rpc <http://…>    # default http://127.0.0.1:8545
 --timeout <secs>        # default 30
@@ -56,8 +56,8 @@ misaka wallet utxo consolidate --key-file validator.seed --yes --max-txs-per-run
 ### Examples
 
 ```bash
-misaka node doctor --network testnet-10 --rpc 127.0.0.1:27610
-misaka --network testnet-10 --rpc 127.0.0.1:27610 validator status --stake-bond <txid:index>
+misaka node doctor --network testnet-200 --rpc 127.0.0.1:27210
+misaka --network testnet-200 --rpc 127.0.0.1:27210 validator status --stake-bond <txid:index>
 misaka --output json evm tx status --hash 0x9b87e742…ed31
 misaka evm tx wait --hash 0x9b87e742…ed31 --timeout 600 --poll 2
 ```

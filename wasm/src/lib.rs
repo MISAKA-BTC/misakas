@@ -119,11 +119,11 @@ let {RpcClient,Encoding,initConsolePanicHook} = require('./kaspa-rpc');
 // initBrowserPanicHook();
 
 // if port is not specified, it will use the default port for the specified network
-const rpc = new RpcClient("127.0.0.1", Encoding.Borsh, "testnet-10");
+const rpc = new RpcClient("127.0.0.1", Encoding.Borsh, "testnet-200");
 const rpc = new RpcClient({
     url : "127.0.0.1",
     encoding : Encoding.Borsh,
-    networkId : "testnet-10"
+    networkId : "testnet-200"
 });
 
 

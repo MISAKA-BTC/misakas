@@ -126,8 +126,8 @@ load_env() {
     done
     [ -z "$missing" ] || die "missing required env:$missing"
     case "$TICKET_MODE" in
-        skip|mock) : ;;
-        *) die "TICKET_MODE must be 'skip' or 'mock', got '$TICKET_MODE'" ;;
+        skip|mock|real) : ;;
+        *) die "TICKET_MODE must be 'skip', 'mock', or 'real', got '$TICKET_MODE'" ;;
     esac
 
     # ---- 6. binaries -------------------------------------------------------
@@ -354,11 +354,19 @@ wait_rpc_up() {
 # wait_peer_connected <a|b> [timeout] [interval]  — node log shows a P2P peer.
 wait_peer_connected() {
     local n="${1:?node}" timeout="${2:-$GATE_TIMEOUT_SECS}" interval="${3:-$GATE_POLL_SECS}"
-    local lf; lf="$(node_log "$n")"
+    local lf p2p; lf="$(node_log "$n")"; p2p="$(_port "$n" P2P)"
     local deadline=$(( $(date +%s) + timeout ))
     while :; do
         if [ -f "$lf" ] && grep -Eiq 'connected to .*peer|peer .* connected|accepted connection from' "$lf"; then
             log "gate ok: node-$n has a connected peer"; return 0
+        fi
+        # A live node reattached to this harness can have its original log
+        # elsewhere. Confirm an established socket when Linux `ss` is available
+        # instead of waiting forever on a stale/empty local log.
+        if command -v ss >/dev/null 2>&1 \
+            && ss -Htn state established 2>/dev/null \
+                | awk -v p=":$p2p" '$4 ~ (p "$") || $5 ~ (p "$") { found=1; exit } END { exit !found }'; then
+            log "gate ok: node-$n has an established P2P socket on port $p2p"; return 0
         fi
         [ "$(date +%s)" -ge "$deadline" ] && { warn "wait_peer_connected node-$n timeout after ${timeout}s (log $lf)"; return 1; }
         sleep "$interval"
@@ -412,7 +420,7 @@ wait_dns_confirmed() {
 #   Certified->Active activation (palw_lagged_activation_open needs Healthy sustained across
 #   >= 2 beacon epochs; no RPC returns activation_open/beacon_mode directly, so we watch
 #   dns_health/derive_dns_health plus a confirmed anchor). Register a batch only AFTER this
-#   passes so its short active window overlaps a sustained-Healthy stretch, not the cold
+#   passes so its rolling active window overlaps a sustained-Healthy stretch, not the cold
 #   start (PHASE0 G3/G4 — the fix for the Certified->Expired stall).
 wait_palw_beacon_healthy() {
     local n="${1:-a}" need="${2:-3}" timeout="${3:-${GATE_DNS_TIMEOUT_SECS:-600}}" interval="${4:-${GATE_POLL_SECS:-5}}"

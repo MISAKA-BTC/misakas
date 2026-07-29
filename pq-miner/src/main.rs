@@ -31,12 +31,12 @@ struct Args {
     /// Node gRPC endpoint the miner uses for getBlockTemplate / submitBlock (host:port).
     /// Optional: when omitted it is auto-resolved (env MISAKA_NODE_GRPC > the local
     /// endpoint registry ~/.misaka/<network-id>/endpoints.json > the network default,
-    /// e.g. testnet-10 127.0.0.1:26210 / devnet 26610). This is NOT validator wRPC Borsh
+    /// e.g. testnet-200 127.0.0.1:26210 / devnet 26610). This is NOT validator wRPC Borsh
     /// (27210) and NOT EVM JSON-RPC (8545). `--rpc` is a deprecated alias.
     #[arg(long = "node-grpc", visible_alias = "rpc", env = "MISAKA_NODE_GRPC")]
     rpc: Option<String>,
     /// Network id string fed to the Layer 0 finalizer (must equal the node's NetworkId::to_string()).
-    #[arg(long, default_value = "devnet")]
+    #[arg(long, default_value = "testnet-200")]
     network_id: String,
     /// Stop after mining this many blocks (0 = run forever).
     #[arg(long, default_value_t = 0)]
@@ -57,7 +57,7 @@ struct Args {
     #[arg(long, default_value_t = false)]
     pay_mnemonic_stdin: bool,
     /// Mine the coinbase directly to this bech32 address (e.g. a validator funding address
-    /// `misakadev:...`). Takes priority over `--pay-mnemonic`; its prefix must match the
+    /// `misakatest:...`). Takes priority over `--pay-mnemonic`; its prefix must match the
     /// network. Lets mined coins be staked as a validator bond.
     #[arg(long)]
     pay_address: Option<String>,

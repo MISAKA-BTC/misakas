@@ -343,7 +343,7 @@ struct BalanceArgs {
     /// Address to query, e.g. `misakatest:q...`. Repeat --address for several (one RPC call).
     #[arg(long, required = true)]
     address: Vec<String>,
-    /// Expected node network id (e.g. `testnet-10`); refuse on mismatch.
+    /// Expected node network id (e.g. `testnet-200`); refuse on mismatch.
     #[arg(long, visible_alias = "network-id", env = "KASPA_PQ_NETWORK")]
     network: Option<String>,
 }
@@ -1453,10 +1453,10 @@ fn port_kind_hint(node_rpc: &str) -> Option<&'static str> {
     let port: u16 = node_rpc.rsplit_once(':').and_then(|(_, p)| p.parse().ok())?;
     match port {
         26110 | 26210 | 26510 | 26610 => Some(
-            "that port is node gRPC; the validator needs wRPC Borsh (testnet-10: 27210, devnet: 27610). Pass --node-wrpc-borsh <host:borsh-port>.",
+            "that port is node gRPC; the validator needs wRPC Borsh (testnet-200: 27210, devnet: 27610). Pass --node-wrpc-borsh <host:borsh-port>.",
         ),
         28110 | 28210 | 28510 | 28610 => Some(
-            "that port is node wRPC JSON; the validator needs wRPC Borsh (testnet-10: 27210). Pass --node-wrpc-borsh <host:borsh-port>.",
+            "that port is node wRPC JSON; the validator needs wRPC Borsh (testnet-200: 27210). Pass --node-wrpc-borsh <host:borsh-port>.",
         ),
         8545 => Some("that port is the EVM JSON-RPC; the validator does not use it. Pass --node-wrpc-borsh <host:borsh-port>."),
         _ => None,
@@ -1466,7 +1466,7 @@ fn port_kind_hint(node_rpc: &str) -> Option<&'static str> {
 /// Resolve the node wRPC Borsh endpoint (design §7.3): an explicit `--node-wrpc-borsh`
 /// / `KASPA_PQ_NODE_RPC` wins; else the local endpoint registry the node wrote
 /// (`~/.misaka/<network-id>/endpoints.json`, which carries the actual bound port even if
-/// non-standard); else the network-id default loopback. So a bare `--network-id testnet-10`
+/// non-standard); else the network-id default loopback. So a bare `--network-id testnet-200`
 /// finds a co-located node with no port typed. The result is still re-verified against the
 /// node's own network-id after connecting (the existing post-connect guard).
 fn resolve_node_rpc(network: &Option<String>, explicit: &Option<String>) -> String {

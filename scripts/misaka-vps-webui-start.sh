@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-NETWORK="${MISAKA_NETWORK:-testnet-10}"
+NETWORK="${MISAKA_NETWORK:-testnet-200}"
 WEB_PORT="${MISAKA_SETUP_PORT:-8787}"
 PUBLIC_IP="${MISAKA_PUBLIC_IP:-}"
 CLIENT_IP="${MISAKA_ALLOW_CLIENT_IP:-}"
@@ -27,7 +27,7 @@ Usage:
   sudo ./scripts/misaka-vps-webui-start.sh [options]
 
 Options:
-  --network <id>            Network id (default: testnet-10)
+  --network <id>            Network id (default: testnet-200)
   --port <port>             Web UI port (default: 8787)
   --public-ip <IPv4>        VPS public IPv4; auto-detected when omitted
   --allow-client-ip <IPv4>  Browser/source IPv4; SSH client is auto-detected

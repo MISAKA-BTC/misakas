@@ -367,7 +367,14 @@ if [ "$SRC_CLASS" = "replica_palw" ] && [ -z "$CB_A" ] && [ -z "$CB_B" ] && [ -z
     # observed verification; not-yet-merged (exit 2) or partial (exit 3, no SPKs)
     # stays PARTIAL_DEFERRED — never PASS for unobserved payouts.
     SETTLE_RC=0
+    _SETTLE_ARGS=()
+    _SETTLE_SPK_A="$(state_get PROV_A_REWARD_SPK)"
+    _SETTLE_SPK_B="$(state_get PROV_B_REWARD_SPK)"
+    if [ -n "$_SETTLE_SPK_A" ] && [ -n "$_SETTLE_SPK_B" ]; then
+        _SETTLE_ARGS=(--provider-a-spk "$_SETTLE_SPK_A" --provider-b-spk "$_SETTLE_SPK_B")
+    fi
     SETTLE_OUT="$("$VAL" find-reward-settlement --source-block "$BLOCK_HASH" \
+        ${_SETTLE_ARGS[@]+"${_SETTLE_ARGS[@]}"} \
         --node-wrpc-borsh "$(node_wrpc a)" --network "$NETWORK" 2>&1)" || SETTLE_RC=$?
     printf '%s\n' "$SETTLE_OUT" | while IFS= read -r line; do rpt "  $line"; done
     rpt ""

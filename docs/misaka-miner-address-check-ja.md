@@ -57,7 +57,7 @@ misaka-miner-address-check --self-test --discord
 | オプション | 内容 | 既定 |
 |---|---|---|
 | `--address <addr>` | 報酬 / ウォレットアドレス（必須） | — |
-| `--network <id>` | ネットワークID | `testnet-10` |
+| `--network <id>` | ネットワークID | `testnet-200` |
 | `--rpc <host:port>` | node wRPC Borsh エンドポイント | `127.0.0.1:27210` |
 | `--discord` | Discord bot 向けのコンパクト1行表示 | off |
 | `--self-test` | 埋め込みサンプルJSONで表示確認 | off |

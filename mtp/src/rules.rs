@@ -16,7 +16,8 @@ pub const POINT: MilliPoints = 1000;
 /// Rules schema version — bump on any change to the values below.
 ///
 /// v2: the BPS-escalation ladder was retired. See [`Stage`].
-pub const RULES_VERSION: u16 = 2;
+/// v3: the scored public network moved from retired testnet-10 to testnet-200.
+pub const RULES_VERSION: u16 = 3;
 
 /// BPS stage coefficient (ADR-0027 §3).
 ///
@@ -37,7 +38,7 @@ pub const RULES_VERSION: u16 = 2;
 /// re-enters here with a new variant and another `RULES_VERSION` bump.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Stage {
-    /// testnet-10 — the only scored network, at the fixed 10 BPS (2 + 8).
+    /// testnet-200 — the only scored network, at the fixed 10 BPS (2 + 8).
     A,
 }
 
