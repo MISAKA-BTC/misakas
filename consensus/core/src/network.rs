@@ -283,6 +283,12 @@ impl NetworkId {
                 // default below; simnet is an in-process simulation net that never listens on a
                 // shared host boundary, so the two never contend for a real socket.)
                 Some(200) => 26511,
+                // ADR-MA (2026-07-30 migration): the public PALW testnet moved to `testnet-20`
+                // (compute-registry-palw). It gets its OWN default P2P port so a node on another
+                // testnet suffix fails fast instead of handshaking against it — the same isolation
+                // rationale as testnet-200's 26511. This is also the port the node self-advertises,
+                // so public seeder/gossip discovery resolves a reachable address.
+                Some(20) => 26521,
                 None | Some(_) => 26411,
             },
             NetworkType::Simnet => 26511,
@@ -542,6 +548,8 @@ mod tests {
             ("testnet-10", [26211, 26210, 27210, 28210, 8545]),
             ("testnet-11", [26311, 26210, 27210, 28210, 8545]),
             ("testnet-200", [26511, 26210, 27210, 28210, 8545]),
+            // ADR-MA: the public PALW testnet (compute-registry-palw) has its own P2P port 26521.
+            ("testnet-20", [26521, 26210, 27210, 28210, 8545]),
             ("devnet", [26611, 26610, 27610, 28610, 8545]),
             ("simnet", [26511, 26510, 27510, 28510, 8545]),
         ];
