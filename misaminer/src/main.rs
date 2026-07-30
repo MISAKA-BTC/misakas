@@ -229,11 +229,14 @@ async fn main() {
 
         template.block.header.nonce = nonce;
         match client.submit_block(template.block, false).await {
-            Ok(_) => {
+            Ok(response) if response.report.is_success() => {
                 mined += 1;
                 last_block = std::time::Instant::now();
                 log::info!("[{}] mined block #{mined} (nonce={nonce}, daa_score={})", args.worker, header.daa_score);
             }
+            // The RPC succeeding is NOT the block being accepted — surface the node's verdict
+            // instead of counting a rejected block as mined.
+            Ok(response) => log::warn!("submit_block REJECTED: {:?}", response.report),
             Err(e) => log::warn!("submit_block failed: {e}"),
         }
 
