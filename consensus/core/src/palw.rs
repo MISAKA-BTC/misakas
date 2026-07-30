@@ -9507,6 +9507,13 @@ mod tests {
             ("PALW_ASSIGNMENT_NODE_DOMAIN", PALW_ASSIGNMENT_NODE_DOMAIN),
             ("PALW_ASSIGNMENT_DRAW_DOMAIN", PALW_ASSIGNMENT_DRAW_DOMAIN),
             ("PALW_PROVIDER_PK_HASH_DOMAIN", PALW_PROVIDER_PK_HASH_DOMAIN),
+            // Model-agnostic Compute Set registry (palw_compute_set.rs) — same keyed-domain
+            // namespace, so they join this single distinctness registry.
+            ("PALW_COMPUTE_SET_ID_DOMAIN", crate::palw_compute_set::PALW_COMPUTE_SET_ID_DOMAIN),
+            ("PALW_COMPUTE_VM_ID_DOMAIN", crate::palw_compute_set::PALW_COMPUTE_VM_ID_DOMAIN),
+            ("PALW_COMPUTE_POLICY_ID_DOMAIN", crate::palw_compute_set::PALW_COMPUTE_POLICY_ID_DOMAIN),
+            ("PALW_ALLOCATION_PLAN_ID_DOMAIN", crate::palw_compute_set::PALW_ALLOCATION_PLAN_ID_DOMAIN),
+            ("PALW_COMPUTE_IR_PROGRAM_DOMAIN", crate::palw_compute_ir::PALW_COMPUTE_IR_PROGRAM_DOMAIN),
         ];
         for (i, (na, a)) in domains.iter().enumerate() {
             for (nb, b) in domains.iter().skip(i + 1) {

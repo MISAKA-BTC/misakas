@@ -141,6 +141,17 @@ pub mod network;
 pub mod palw;
 pub mod palw_antispam;
 pub mod palw_audit;
+/// Model-Agnostic Compute Set registry core (ADR-MA-001..007): immutable
+/// Descriptor V2 / mutable Policy V1 / atomic Allocation Plan V1, their
+/// derived ids, lifecycle state machine and DAA-point resolvers. An LLM is
+/// registered DATA — never node code (see
+/// PALW_Model_Agnostic_Compute_Set_Architecture_v0.1).
+/// PalwComputeIR V1 (§15): the bounded, versioned integer instruction set a
+/// model's semantic program lowers onto. Acyclic by construction, statically
+/// bounded, pinned opcode wire form; `compute_vm_id_v1()` freezes the VM
+/// surface (ADR-MA-006).
+pub mod palw_compute_ir;
+pub mod palw_compute_set;
 pub mod palw_mint;
 /// kaspa-pq ADR-0040 §16' (T-shared remediation): the dynamic replica
 /// premium controller (pi) — pure integer control law over the observed
