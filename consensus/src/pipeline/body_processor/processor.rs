@@ -263,7 +263,17 @@ impl BlockBodyProcessor {
                 // transactions that fits the merkle root.
                 // PrunedBlock - PrunedBlock is an error that rejects a block body and
                 // not the block as a whole, so we shouldn't mark it as invalid.
-                if !matches!(e, RuleError::BadMerkleRoot(_, _) | RuleError::MissingParents(_) | RuleError::PrunedBlock) {
+                // InvalidParentBodies - like MissingParents, but the parent carries a local
+                // StatusInvalid mark. The mark may be stale (persisted by an older binary under
+                // different consensus rules); marking the child too would cascade the stale
+                // poison forward and defeat recovery via --reset-invalid-marks.
+                if !matches!(
+                    e,
+                    RuleError::BadMerkleRoot(_, _)
+                        | RuleError::MissingParents(_)
+                        | RuleError::InvalidParentBodies(_)
+                        | RuleError::PrunedBlock
+                ) {
                     self.statuses_store.write().set(block.hash(), BlockStatus::StatusInvalid).unwrap();
                 }
                 return Err(e);

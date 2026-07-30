@@ -537,6 +537,9 @@ impl Consensus {
 
     /// A procedure for calling database upgrades which are self-contained (i.e., do not require knowing the DB version)
     fn run_database_upgrades(&self) {
+        // Operator-requested maintenance (flag-gated, off by default): must run before any
+        // processor consults block statuses, so it lives with the startup upgrades.
+        self.reset_invalid_marks_if_requested();
         // Upgrade to initialize the new retention root field correctly
         self.retention_root_database_upgrade();
         self.consensus_transitional_flags_upgrade();
@@ -984,6 +987,68 @@ impl Consensus {
                 ),
             }
         }
+    }
+
+    /// `--reset-invalid-marks`: clear locally persisted `StatusInvalid` marks so the affected
+    /// blocks are re-requested and re-validated under the CURRENT rules.
+    ///
+    /// Why this exists: a node that followed the live network with an OLDER binary can have
+    /// rejected — and permanently marked invalid — blocks the current rules accept (e.g. a
+    /// consensus-parameter upgrade shipped while the network kept mining). Statuses persist
+    /// across binary upgrades, and the IBD body-sync list only re-requests header-only blocks,
+    /// so such a node loops forever on `missing parents` / `invalid parents` for the very same
+    /// hashes. Clearing the marks is safe: statuses are node-local bookkeeping, not consensus
+    /// state, and a block whose mark was genuine is simply re-rejected (and re-marked) by the
+    /// current rules on its next arrival.
+    ///
+    /// A mark whose header is stored resets to `StatusHeaderOnly` (that header was accepted;
+    /// only the body stage condemned it). A mark without a stored header (a header-stage
+    /// rejection persists no header data) is removed entirely, returning the block to unknown.
+    fn reset_invalid_marks_if_requested(&self) {
+        if !self.config.reset_invalid_marks {
+            return;
+        }
+        self.reset_invalid_marks();
+    }
+
+    /// The unconditional core of [`Self::reset_invalid_marks_if_requested`]; returns
+    /// `(reset_to_header_only, removed)`.
+    pub(crate) fn reset_invalid_marks(&self) -> (usize, usize) {
+        use crate::model::stores::statuses::StatusesStore;
+        let invalid: Vec<BlockHash> = self
+            .storage
+            .statuses_store
+            .read()
+            .iterator()
+            .filter_map(|row| {
+                let (hash, status) = row.unwrap();
+                (status == BlockStatus::StatusInvalid).then_some(hash)
+            })
+            .collect();
+        if invalid.is_empty() {
+            info!("--reset-invalid-marks: no StatusInvalid marks found; nothing to reset");
+            return (0, 0);
+        }
+        let mut reset_to_header_only = 0usize;
+        let mut removed = 0usize;
+        let mut statuses_write = self.storage.statuses_store.write();
+        for hash in invalid {
+            if self.storage.headers_store.has(hash).unwrap() {
+                statuses_write.set(hash, BlockStatus::StatusHeaderOnly).unwrap();
+                reset_to_header_only += 1;
+            } else {
+                statuses_write.delete(hash).unwrap();
+                removed += 1;
+            }
+        }
+        info!(
+            "--reset-invalid-marks: cleared {} StatusInvalid marks ({} reset to header-only, {} removed); \
+             the affected blocks will be re-requested and re-validated under the current rules",
+            reset_to_header_only + removed,
+            reset_to_header_only,
+            removed
+        );
+        (reset_to_header_only, removed)
     }
 
     fn retention_root_database_upgrade(&self) {

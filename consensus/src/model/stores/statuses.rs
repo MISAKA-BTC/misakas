@@ -46,6 +46,17 @@ impl DbStatusesStore {
     pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.access.delete(BatchDbWriter::new(batch), hash)
     }
+
+    /// Iterates every persisted `(block hash, status)` row. Maintenance use (e.g. the
+    /// `--reset-invalid-marks` startup pass); not on any hot path.
+    pub fn iterator(&self) -> impl Iterator<Item = Result<(BlockHash, BlockStatus), StoreError>> + '_ {
+        self.access.iterator().map(|row| match row {
+            Ok((key, status)) => <[u8; 64]>::try_from(key.as_ref())
+                .map(|bytes| (BlockHash::from_bytes(bytes), status))
+                .map_err(|_| StoreError::DataInconsistency("statuses row key is not 64 bytes".into())),
+            Err(err) => Err(StoreError::DataInconsistency(format!("statuses iterator: {err}"))),
+        })
+    }
 }
 
 pub trait StatusesStoreBatchExtensions {

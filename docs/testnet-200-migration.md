@@ -57,3 +57,45 @@ At least one returned P2P endpoint must accept TCP on `26511`; the operator anch
 `95.111.236.186:26511`.
 The complete receipt-v3/algo-4 proof is in
 [`artifacts/testnet-200-real-qwen-20260729`](../artifacts/testnet-200-real-qwen-20260729/README.md).
+
+## Verify the deployed binary is actually the cutover build
+
+`kaspad --version` prints `1.1.0` for every recent build, so it cannot distinguish a stale
+artifact — a `target/release/kaspad` compiled minutes before pulling the cutover commit reports
+the same version and silently runs pre-cutover consensus rules (observed in the wild: such a
+node follows the chain until the first batch that needs the widened 16-epoch active window,
+body-rejects it, and is then permanently stuck — see Recovery below). Check a cutover-sensitive
+fingerprint instead:
+
+```sh
+strings /usr/local/bin/kaspad-200 | grep -c "seeder2.misakascan.com"
+```
+
+`0` → cutover build (9d8417b or later; the cutover removed `seeder2` from every preset).
+`1` → PRE-cutover binary: rebuild from current `main` and redeploy before doing anything else.
+
+## Recovery: IBD loops forever on `block has missing parents`
+
+Two distinct failures produce this loop; since the cutover follow-up fix the log line tells
+them apart.
+
+**A. This node's own database carries stale invalid-marks** (post-fix binaries report it as
+`block body has parents that are locally marked invalid`). A node that followed the network
+with an older binary rejected — and permanently marked invalid — blocks the current rules
+accept. The marks persist across binary upgrades, the body-sync list never re-requests an
+invalid-marked block (it only re-requests header-only ones), and IBD then fails forever on
+that block's children, with the SAME hashes on every retry. Fix, in order:
+
+1. Verify the binary (previous section).
+2. Restart once with `--reset-invalid-marks`. The node logs how many marks it cleared, then
+   re-requests and re-validates those blocks under the current rules. Drop the flag afterwards.
+3. If it still cannot sync — or a known-clean state is preferred — stop the node, move the
+   testnet-200 app directory aside, and resync from scratch. Never reuse the validator
+   anti-equivocation state file across such a reset.
+
+**B. The SYNCER's database is inconsistent** (reported as `the syncer's header stream
+referenced a parent header it never delivered`). A serving node whose database was written
+across incompatible binary upgrades while the network kept mining can emit a header stream
+with holes. Each retry still advances the local header frontier, so a joiner eventually crawls
+across the damaged span, but the durable fix is server-side: resync the serving node onto a
+clean database, and keep the DNS seed records pointing at least one cleanly-synced node.

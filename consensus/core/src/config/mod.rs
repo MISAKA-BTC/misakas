@@ -40,6 +40,14 @@ pub struct Config {
     /// Enable various sanity checks which might be compute-intensive (mostly performed during pruning)
     pub enable_sanity_checks: bool,
 
+    /// One-shot maintenance pass (`kaspad --reset-invalid-marks`): on startup, clear every locally
+    /// persisted `StatusInvalid` mark so the affected blocks are re-requested and re-validated under
+    /// the CURRENT rules. Recovers a node whose database was poisoned by an older binary that
+    /// rejected — and permanently marked — blocks the current rules accept, which otherwise leaves
+    /// IBD looping forever on `missing parents` / `invalid parents` for the same hashes.
+    /// Node-local: statuses are not consensus state, so this cannot fork the node.
+    pub reset_invalid_marks: bool,
+
     // TODO: move non-consensus parameters like utxoindex to a higher scoped Config
     /// Enable the UTXO index
     pub utxoindex: bool,
@@ -183,6 +191,7 @@ impl Config {
             process_genesis: true,
             is_archival: false,
             enable_sanity_checks: false,
+            reset_invalid_marks: false,
             utxoindex: false,
             unsafe_rpc: false,
             enable_unsynced_mining: false,
