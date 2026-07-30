@@ -17,6 +17,10 @@ use crate::{
         palw_leaf_merkle_root,
         search_snapshot::{PalwSearchAvailabilityStateV1, PalwSearchPruningSnapshotV1},
     },
+    palw_compute_set::{
+        PalwComputeRegistryViewV1, PalwComputeSetActivationCertificateV1, PalwComputeSetDescriptorV2, PalwComputeSetPolicyV1,
+        PalwModelAllocationPlanV1,
+    },
     tx::TransactionOutpoint,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -1219,6 +1223,107 @@ impl PalwPrunedSpamAccumulatorV1 {
     }
 }
 
+// =============================================================================================
+// ADR-MA §21.3 — Compute Set registry history at the pruning boundary
+// =============================================================================================
+
+pub const PALW_COMPUTE_REGISTRY_PRUNING_SNAPSHOT_VERSION: u16 = 1;
+/// §23.2 anti-explosion: registry records are proposal-bonded and governance-rate-limited, so
+/// these are generous ceilings, not expected sizes. Worst-case encoded bytes stay far inside
+/// [`MAX_PALW_PRUNING_SNAPSHOT_BYTES`].
+pub const MAX_PALW_PRUNING_REGISTRY_DESCRIPTORS: usize = 4_096;
+pub const MAX_PALW_PRUNING_REGISTRY_POLICIES: usize = 65_536;
+pub const MAX_PALW_PRUNING_REGISTRY_PLANS: usize = 65_536;
+
+/// ADR-MA §21.3 — the Compute Set registry history transported with the pruning boundary:
+/// FULL record histories (every descriptor / policy revision / allocation plan / activation
+/// certificate ever admitted, by exact content bytes) plus the fork-local registry view at the
+/// pruning point, from which admission resumes.
+///
+/// Full history is not archival generosity — §21.4 resolves every retained header's committed
+/// (set, policy, plan) ids against these EXACT records (work re-verification, the GHOSTDAG
+/// credit seam and the per-set difficulty check both read them at header time), so «過去blockの
+/// work再計算に必要なrecordをpruneしてはならない» (§21.3). Records are content-addressed and
+/// idempotent to re-import (§21.2 write-once), which makes the transport trivially mergeable
+/// with whatever records the node already holds.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+pub struct PalwComputeRegistryPruningSnapshotV1 {
+    pub version: u16,
+    pub pruning_point: BlockHash,
+    /// Every registered descriptor, ascending derived `compute_set_id` (§21.3 全Descriptor history).
+    pub descriptors: Vec<PalwComputeSetDescriptorV2>,
+    /// Every admitted policy revision, ascending derived `policy_id` (有効Policy history — the
+    /// §9 resolver needs the whole revision ladder, not just the latest).
+    pub policies: Vec<PalwComputeSetPolicyV1>,
+    /// Every admitted allocation plan, ascending `plan_id` (Allocation Plan history).
+    pub plans: Vec<PalwModelAllocationPlanV1>,
+    /// Every folded activation certificate, ascending certified `compute_set_id`
+    /// (activation records; deprecation/halt live in the policy ladder).
+    pub activation_certificates: Vec<PalwComputeSetActivationCertificateV1>,
+    /// The fork-local registry view at the pruning point.
+    pub view: PalwComputeRegistryViewV1,
+}
+
+impl PalwComputeRegistryPruningSnapshotV1 {
+    /// Deterministic transport order: each tier ascending by its content id. Derived ids are
+    /// recomputed (cached) rather than trusted from field values.
+    pub fn canonicalize(&mut self) {
+        self.descriptors.sort_by_cached_key(|d| d.compute_set_id().as_bytes());
+        self.policies.sort_by_cached_key(|p| p.policy_id().as_bytes());
+        self.plans.sort_by_cached_key(|p| p.plan_id.as_bytes());
+        self.activation_certificates.sort_by_cached_key(|c| c.compute_set_id.as_bytes());
+    }
+
+    /// Structural + canonical validation (the [`PalwDaPruningSnapshotV1::validate`] posture:
+    /// pure, bool, chain-context checks stay with the importer). Checks version pins, size
+    /// ceilings, per-tier sorted-unique canonical order under RECOMPUTED content ids, plan-id
+    /// self-consistency, and referential closure: every policy / plan entry / certificate / view
+    /// row names a set whose descriptor is IN this snapshot (§21.3 exact content hashes — a
+    /// reference the transport cannot resolve is an unusable boundary).
+    pub fn validate(&self) -> bool {
+        if self.version != PALW_COMPUTE_REGISTRY_PRUNING_SNAPSHOT_VERSION
+            || self.descriptors.len() > MAX_PALW_PRUNING_REGISTRY_DESCRIPTORS
+            || self.policies.len() > MAX_PALW_PRUNING_REGISTRY_POLICIES
+            || self.plans.len() > MAX_PALW_PRUNING_REGISTRY_PLANS
+            || self.activation_certificates.len() > MAX_PALW_PRUNING_REGISTRY_DESCRIPTORS
+            || self.view.version != 1
+        {
+            return false;
+        }
+        let descriptor_ids: Vec<Hash64> = self.descriptors.iter().map(|d| d.compute_set_id()).collect();
+        if !descriptor_ids.windows(2).all(|w| w[0].as_bytes() < w[1].as_bytes()) {
+            return false;
+        }
+        if self.descriptors.iter().any(|d| d.validate_in_isolation().is_err()) {
+            return false;
+        }
+        let has_descriptor = |set: &Hash64| descriptor_ids.binary_search_by(|d| d.as_bytes().cmp(&set.as_bytes())).is_ok();
+        let policy_ids: Vec<Hash64> = self.policies.iter().map(|p| p.policy_id()).collect();
+        if !policy_ids.windows(2).all(|w| w[0].as_bytes() < w[1].as_bytes()) {
+            return false;
+        }
+        if self.policies.iter().any(|p| !has_descriptor(&p.compute_set_id)) {
+            return false;
+        }
+        if !self.plans.windows(2).all(|w| w[0].plan_id.as_bytes() < w[1].plan_id.as_bytes()) {
+            return false;
+        }
+        if self.plans.iter().any(|p| !p.plan_id_is_canonical() || p.entries.iter().any(|e| !has_descriptor(&e.compute_set_id))) {
+            return false;
+        }
+        if !self.activation_certificates.windows(2).all(|w| w[0].compute_set_id.as_bytes() < w[1].compute_set_id.as_bytes()) {
+            return false;
+        }
+        if self.activation_certificates.iter().any(|c| !has_descriptor(&c.compute_set_id)) {
+            return false;
+        }
+        if self.view.sets.keys().any(|set| !has_descriptor(set)) {
+            return false;
+        }
+        true
+    }
+}
+
 /// The digest preimage. Keeping the digest outside this struct avoids a self-referential encoding.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct PalwPruningPointSnapshotPayloadV1 {
@@ -1238,6 +1343,11 @@ pub struct PalwPruningPointSnapshotPayloadV1 {
     /// 0x3d-0x3f). Same rationale as `da_snapshot`: omission would silently forget open
     /// obligations and challenge deadlines after pruned IBD.
     pub search_availability_snapshot: Option<PalwSearchPruningSnapshotV1>,
+    /// ADR-MA §21.3 — the Compute Set registry history at the boundary. Same omission rationale
+    /// as `da_snapshot`, plus §21.4: every retained header's committed (set, policy, plan) ids
+    /// must keep resolving to their exact records after pruned IBD, or work re-verification and
+    /// per-set difficulty fail-stop. `None` while the registry fence is closed.
+    pub compute_registry_snapshot: Option<PalwComputeRegistryPruningSnapshotV1>,
     /// Complete content-addressed PALW store projection for every batch retained by `frontier.overlay_view`.
     pub active_batches: Vec<PalwPrunedActiveBatchV1>,
     pub provider_bonds: Vec<PalwProviderBondRecord>,
@@ -1251,6 +1361,9 @@ impl PalwPruningPointSnapshotPayloadV1 {
         }
         if let Some(spam) = self.spam_accumulator.as_mut() {
             spam.support_rows.sort_by(|a, b| a.block_hash.as_bytes().cmp(&b.block_hash.as_bytes()));
+        }
+        if let Some(registry) = self.compute_registry_snapshot.as_mut() {
+            registry.canonicalize();
         }
         self.active_batches.sort_by(|a, b| a.batch_id.as_bytes().cmp(&b.batch_id.as_bytes()));
         for batch in &mut self.active_batches {
@@ -1356,6 +1469,11 @@ impl PalwPruningPointSnapshotV1 {
             && (search.pruning_point != p.pruning_point || !search.validate())
         {
             return Err(PalwPruningSnapshotError::Incoherent("search-availability pruning snapshot"));
+        }
+        if let Some(registry) = &p.compute_registry_snapshot
+            && (registry.pruning_point != p.pruning_point || !registry.validate())
+        {
+            return Err(PalwPruningSnapshotError::Incoherent("compute registry pruning snapshot"));
         }
         validate_palw_active_batch_bundles(p.frontier.overlay_view.as_ref(), &p.active_batches)?;
         self.validate_provider_bonds()?;
@@ -1587,6 +1705,7 @@ mod tests {
             spam_accumulator: None,
             da_snapshot: None,
             search_availability_snapshot: None,
+            compute_registry_snapshot: None,
             active_batches: vec![],
             provider_bonds: vec![provider(2), provider(1)],
             paid_work: vec![
@@ -2558,5 +2677,127 @@ mod tests {
             ),
             Err(PalwPruningSnapshotError::TooMany("paid-work nullifiers", MAX_PALW_PRUNING_PAID_IDS + 1))
         );
+    }
+
+    // =========================================================================================
+    // ADR-MA §21.3 — compute registry pruning snapshot
+    // =========================================================================================
+
+    fn registry_descriptor(tag: u8) -> crate::palw_compute_set::PalwComputeSetDescriptorV2 {
+        use crate::palw_compute_set::{PALW_COMPUTE_SET_DESCRIPTOR_VERSION, PalwComputeSetDescriptorV2};
+        PalwComputeSetDescriptorV2 {
+            version: PALW_COMPUTE_SET_DESCRIPTOR_VERSION,
+            compute_vm_id: h(tag),
+            model_family_id: h(0x10),
+            model_artifact_root: h(0x11),
+            model_manifest_root: h(0x12),
+            tokenizer_root: h(0x13),
+            chat_template_root: h(0x14),
+            preprocessing_root: h(0x15),
+            decode_policy_root: h(0x16),
+            semantic_program_root: h(0x17),
+            shape_table_root: h(0x18),
+            shape_cost_table_root: h(0x19),
+            arithmetic_rules_root: h(0x1a),
+            overflow_budget_root: h(0x1b),
+            lut_root: h(0x1c),
+            trace_policy_root: h(0x1d),
+            checkpoint_policy_root: h(0x1e),
+            conformance_vector_root: h(0x1f),
+            modality_mask: 1,
+            resource_limits_root: h(0x20),
+        }
+    }
+
+    fn registry_snapshot(pruning_point: Hash64) -> PalwComputeRegistryPruningSnapshotV1 {
+        use crate::palw_compute_set::{ComputeSetState, PALW_COMPUTE_SET_POLICY_VERSION, PalwComputeSetPolicyV1};
+        let d1 = registry_descriptor(1);
+        let d2 = registry_descriptor(2);
+        let policy = PalwComputeSetPolicyV1 {
+            version: PALW_COMPUTE_SET_POLICY_VERSION,
+            compute_set_id: d1.compute_set_id(),
+            policy_sequence: 1,
+            effective_from_daa: 10,
+            state: ComputeSetState::Proposed,
+            no_new_jobs_from_daa: None,
+            retired_from_daa: None,
+            compute_work_scale: 41_692,
+            weight_factor_bps: 10_000,
+            min_leaf_bond_sompi: 1,
+            job_timeout_daa: 100,
+            receipt_retention_daa: 100,
+            auditor_capacity_threshold: 1,
+            premium_pi_bps: 0,
+            max_prompt_tokens: 1,
+            max_output_tokens: 1,
+            allowed_shape_set_root: h(0x30),
+        };
+        let mut view = PalwComputeRegistryViewV1::new();
+        let mut snapshot = PalwComputeRegistryPruningSnapshotV1 {
+            version: PALW_COMPUTE_REGISTRY_PRUNING_SNAPSHOT_VERSION,
+            pruning_point,
+            descriptors: vec![d2, d1],
+            policies: vec![policy],
+            plans: vec![],
+            activation_certificates: vec![],
+            view: std::mem::take(&mut view),
+        };
+        snapshot.canonicalize();
+        snapshot
+    }
+
+    #[test]
+    fn compute_registry_snapshot_validates_canonical_form() {
+        let registry = registry_snapshot(h(9));
+        assert!(registry.validate());
+        // Canonical order is ascending RECOMPUTED content id — a swapped pair fails.
+        let mut unsorted = registry.clone();
+        unsorted.descriptors.swap(0, 1);
+        assert!(!unsorted.validate());
+        // A duplicated record is non-canonical.
+        let mut duplicated = registry.clone();
+        duplicated.descriptors.push(duplicated.descriptors[0].clone());
+        duplicated.canonicalize();
+        assert!(!duplicated.validate());
+        // Version pins fail closed.
+        let mut vnext = registry.clone();
+        vnext.version = 2;
+        assert!(!vnext.validate());
+        let mut view_vnext = registry.clone();
+        view_vnext.view.version = 2;
+        assert!(!view_vnext.validate());
+    }
+
+    #[test]
+    fn compute_registry_snapshot_requires_referential_closure() {
+        let registry = registry_snapshot(h(9));
+        // A policy naming a set with no descriptor in the transport is unusable (§21.3 exact
+        // content hashes) — the §21.4 resolver could never resolve it after pruned IBD.
+        let mut dangling = registry.clone();
+        dangling.policies[0].compute_set_id = h(0x77);
+        assert!(!dangling.validate());
+        // Same for a view row.
+        let mut view_dangling = registry.clone();
+        view_dangling.view.sets.insert(
+            h(0x78),
+            crate::palw_compute_set::PalwComputeSetViewEntryV1 { activation_certified: false, halted: false, policy_index: vec![] },
+        );
+        assert!(!view_dangling.validate());
+    }
+
+    #[test]
+    fn payload_binds_compute_registry_snapshot_to_the_boundary() {
+        let mut base = snapshot();
+        base.payload.compute_registry_snapshot = Some(registry_snapshot(base.payload.pruning_point));
+        let rebound = PalwPruningPointSnapshotV1::new(base.payload.clone());
+        rebound.validate_canonical().expect("registry component with the boundary pruning point is canonical");
+
+        // A component pinned to a DIFFERENT pruning point is incoherent.
+        let mut mismatched = rebound.payload.clone();
+        mismatched.compute_registry_snapshot.as_mut().unwrap().pruning_point = h(0x55);
+        assert!(matches!(
+            PalwPruningPointSnapshotV1::new(mismatched).validate_canonical(),
+            Err(PalwPruningSnapshotError::Incoherent("compute registry pruning snapshot"))
+        ));
     }
 }

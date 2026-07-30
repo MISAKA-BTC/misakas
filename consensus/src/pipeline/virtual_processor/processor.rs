@@ -360,6 +360,7 @@ pub(crate) struct PreparedPalwPruningPointSnapshotImport {
     spam_writes: Vec<(BlockHash, Arc<PalwSpamAccumulatorV1>)>,
     da_state_write: Option<Arc<PalwDaStateV1>>,
     search_availability_state_write: Option<Arc<PalwSearchAvailabilityStateV1>>,
+    compute_registry_view_write: Option<Arc<kaspa_consensus_core::palw_compute_set::PalwComputeRegistryViewV1>>,
 }
 
 /// The header version this network is configured to import a PALW boundary for. Shared by the
@@ -7782,6 +7783,49 @@ impl VirtualStateProcessor {
     /// Deterministically materialize every PALW component needed at a pruning boundary. The caller
     /// writes the returned value in the SAME RocksDB batch as the new pruning-point pointer, before
     /// any below-boundary row can be reclaimed.
+    /// ADR-MA §21.3 — the Compute Set registry component of the pruning snapshot: the FULL
+    /// content-addressed record tiers plus the fork-local view at the pruning point. `None`
+    /// while the registry fence is closed at the boundary (every shipped preset). Full history
+    /// is the sound minimum, not archival generosity: §21.4 resolves every retained header's
+    /// committed record ids against these exact bytes, and admission is proposal-bonded
+    /// (§23.2), so the tiers stay small.
+    fn build_palw_compute_registry_pruning_snapshot(
+        &self,
+        pruning_point: BlockHash,
+        pruning_point_daa_score: u64,
+    ) -> Result<Option<kaspa_consensus_core::palw_pruned_frontier::PalwComputeRegistryPruningSnapshotV1>, String> {
+        use kaspa_consensus_core::palw_pruned_frontier::{
+            PALW_COMPUTE_REGISTRY_PRUNING_SNAPSHOT_VERSION, PalwComputeRegistryPruningSnapshotV1,
+        };
+        if self.palw_compute_registry_activation_daa_score == u64::MAX
+            || pruning_point_daa_score < self.palw_compute_registry_activation_daa_score
+        {
+            return Ok(None);
+        }
+        let store = self.palw_compute_registry_store.as_ref();
+        let view = {
+            use crate::model::stores::palw_compute_registry::PalwComputeRegistryStoreReader;
+            store
+                .view(pruning_point)
+                .map_err(|err| format!("compute registry view read failed at {pruning_point}: {err}"))?
+                .map(|view| (*view).clone())
+                .unwrap_or_default()
+        };
+        let mut snapshot = PalwComputeRegistryPruningSnapshotV1 {
+            version: PALW_COMPUTE_REGISTRY_PRUNING_SNAPSHOT_VERSION,
+            pruning_point,
+            descriptors: store.all_descriptors().map_err(|err| format!("descriptor tier scan at {pruning_point}: {err}"))?,
+            policies: store.all_policies().map_err(|err| format!("policy tier scan at {pruning_point}: {err}"))?,
+            plans: store.all_plans().map_err(|err| format!("plan tier scan at {pruning_point}: {err}"))?,
+            activation_certificates: store
+                .all_certificates()
+                .map_err(|err| format!("certificate tier scan at {pruning_point}: {err}"))?,
+            view,
+        };
+        snapshot.canonicalize();
+        Ok(Some(snapshot))
+    }
+
     pub fn build_palw_pruning_point_snapshot(&self, pruning_point: BlockHash) -> Result<PalwPruningPointSnapshotV1, String> {
         let pruning_point_header = self
             .headers_store
@@ -7941,6 +7985,7 @@ impl VirtualStateProcessor {
             }
         }
 
+        let compute_registry_snapshot = self.build_palw_compute_registry_pruning_snapshot(pruning_point, pruning_point_daa_score)?;
         let snapshot = PalwPruningPointSnapshotV1::try_new(PalwPruningPointSnapshotPayloadV1 {
             version: PALW_PRUNING_SNAPSHOT_VERSION,
             pruning_point,
@@ -7951,6 +7996,7 @@ impl VirtualStateProcessor {
             spam_accumulator,
             da_snapshot,
             search_availability_snapshot,
+            compute_registry_snapshot,
             active_batches,
             provider_bonds: if active { self.provider_bonds_as_of(pruning_point_daa_score)? } else { Vec::new() },
             paid_work,
@@ -8666,6 +8712,44 @@ impl VirtualStateProcessor {
             None
         };
 
+        // ADR-MA §21.3/§21.4 — the Compute Set registry component is MANDATORY exactly when the
+        // registry fence is open at the boundary: without it, retained headers' committed record
+        // ids stop resolving (work re-verification and per-set difficulty fail-stop), so a
+        // registry-active boundary without the component is unusable — and a closed-fence
+        // boundary carrying one is a peer smuggling unaccountable state. The view row follows
+        // the DA-state posture: divergence from an existing row is a recoverable rejection.
+        let registry_active_at_boundary = self.palw_compute_registry_activation_daa_score != u64::MAX
+            && payload.pruning_point_daa_score >= self.palw_compute_registry_activation_daa_score;
+        let compute_registry_view_write = if let Some(registry) = &payload.compute_registry_snapshot {
+            if !registry_active_at_boundary {
+                return Err(PruningImportError::ImportedPalwSnapshotInvalid(
+                    pruning_point,
+                    "compute registry snapshot present but the registry fence is closed at the boundary".to_string(),
+                ));
+            }
+            use crate::model::stores::palw_compute_registry::PalwComputeRegistryStoreReader;
+            match self.palw_compute_registry_store.view(pruning_point).map_err(|err| {
+                PruningImportError::ImportedPalwSnapshotInvalid(pruning_point, format!("existing registry-view read: {err}"))
+            })? {
+                Some(existing) if *existing != registry.view => {
+                    return Err(PruningImportError::ImportedPalwSnapshotInvalid(
+                        pruning_point,
+                        "existing pruning-point compute registry view disagrees with snapshot".to_string(),
+                    ));
+                }
+                Some(_) => None,
+                None => Some(Arc::new(registry.view.clone())),
+            }
+        } else {
+            if registry_active_at_boundary {
+                return Err(PruningImportError::ImportedPalwSnapshotInvalid(
+                    pruning_point,
+                    "registry-active boundary requires the compute registry snapshot (ADR-MA §21.3/§21.4)".to_string(),
+                ));
+            }
+            None
+        };
+
         Ok(PreparedPalwPruningPointSnapshotImport {
             pruning_point,
             snapshot,
@@ -8678,6 +8762,7 @@ impl VirtualStateProcessor {
             spam_writes,
             da_state_write,
             search_availability_state_write,
+            compute_registry_view_write,
         })
     }
 
@@ -8701,6 +8786,7 @@ impl VirtualStateProcessor {
             spam_writes,
             da_state_write,
             search_availability_state_write,
+            compute_registry_view_write,
         } = prepared;
         let payload = &snapshot.payload;
 
@@ -8764,6 +8850,32 @@ impl VirtualStateProcessor {
                 store.set_state_batch(batch, pruning_point, state).map_err(|err| format!("search state write staging: {err}"))?;
             }
             store.set_pruning_snapshot_batch(batch, search).map_err(|err| format!("search snapshot write staging: {err}"))?;
+        }
+        if let Some(registry) = &payload.compute_registry_snapshot {
+            // §21.2 — record tiers are content-addressed write-once: pre-existing identical
+            // records are idempotent no-ops, so the import merges cleanly over local state.
+            let store = self.palw_compute_registry_store.as_ref();
+            for descriptor in &registry.descriptors {
+                store
+                    .insert_descriptor_batch(batch, descriptor.compute_set_id(), descriptor)
+                    .map_err(|err| format!("compute registry descriptor staging: {err}"))?;
+            }
+            for policy in &registry.policies {
+                store
+                    .insert_policy_batch(batch, policy.policy_id(), policy)
+                    .map_err(|err| format!("compute registry policy staging: {err}"))?;
+            }
+            for plan in &registry.plans {
+                store.insert_plan_batch(batch, plan.plan_id, plan).map_err(|err| format!("compute registry plan staging: {err}"))?;
+            }
+            for certificate in &registry.activation_certificates {
+                store
+                    .insert_certificate_batch(batch, certificate)
+                    .map_err(|err| format!("compute registry certificate staging: {err}"))?;
+            }
+            if let Some(view) = compute_registry_view_write {
+                store.set_view_batch(batch, pruning_point, view).map_err(|err| format!("compute registry view staging: {err}"))?;
+            }
         }
 
         self.palw_pruned_frontier_store.write().set_batch(batch, snapshot).map_err(|err| format!("snapshot write staging: {err}"))?;
@@ -10213,6 +10325,7 @@ mod palw_pruning_spam_closure_tests {
             beacon_accumulator: None,
             spam_accumulator: Some(builder_frontier),
             da_snapshot: None,
+            compute_registry_snapshot: None,
             search_availability_snapshot: None,
             active_batches: vec![],
             provider_bonds: vec![],

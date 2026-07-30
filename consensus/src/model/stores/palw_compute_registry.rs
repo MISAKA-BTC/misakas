@@ -159,6 +159,36 @@ impl DbPalwComputeRegistryStore {
     pub fn delete_view_batch(&self, batch: &mut WriteBatch, block: BlockHash) -> Result<(), StoreError> {
         self.views.delete(BatchDbWriter::new(batch), block)
     }
+
+    /// Full-tier scans for the ADR-MA §21.3 pruning-snapshot builder. The record tiers are
+    /// content-addressed and write-once (§21.2), so a scan is a consistent record set at any
+    /// moment; canonical ordering is the snapshot's `canonicalize`, not the scan's.
+    pub fn all_descriptors(&self) -> Result<Vec<PalwComputeSetDescriptorV2>, StoreError> {
+        Self::collect_tier(self.descriptors.iterator(), "descriptor")
+    }
+
+    pub fn all_policies(&self) -> Result<Vec<PalwComputeSetPolicyV1>, StoreError> {
+        Self::collect_tier(self.policies.iterator(), "policy")
+    }
+
+    pub fn all_plans(&self) -> Result<Vec<PalwModelAllocationPlanV1>, StoreError> {
+        Self::collect_tier(self.plans.iterator(), "plan")
+    }
+
+    pub fn all_certificates(&self) -> Result<Vec<PalwComputeSetActivationCertificateV1>, StoreError> {
+        Self::collect_tier(self.certificates.iterator(), "certificate")
+    }
+
+    fn collect_tier<T: Clone>(
+        iter: impl Iterator<Item = kaspa_database::prelude::KeyDataResult<Arc<T>>>,
+        tier: &'static str,
+    ) -> Result<Vec<T>, StoreError> {
+        iter.map(|entry| match entry {
+            Ok((_, record)) => Ok((*record).clone()),
+            Err(err) => Err(StoreError::DataInconsistency(format!("compute registry {tier} tier scan: {err}"))),
+        })
+        .collect()
+    }
 }
 
 #[inline]

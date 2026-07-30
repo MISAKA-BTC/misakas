@@ -84,6 +84,7 @@ mod tests {
             spam_accumulator: None,
             da_snapshot: None,
             search_availability_snapshot: None,
+            compute_registry_snapshot: None,
             active_batches: vec![],
             provider_bonds: vec![],
             paid_work: vec![],

@@ -1389,6 +1389,7 @@ mod palw_snapshot_recovery_tests {
             spam_accumulator: None,
             da_snapshot: Some(da.clone()),
             search_availability_snapshot: Some(search.clone()),
+            compute_registry_snapshot: None,
             active_batches: vec![],
             provider_bonds: vec![],
             paid_work: vec![],
