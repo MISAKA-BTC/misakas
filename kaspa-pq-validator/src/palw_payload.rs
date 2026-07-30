@@ -4,6 +4,7 @@
 //! lifecycle staging stay separate from producer policy. This module supplies the missing operator
 //! path for lifecycle objects while keeping private keys and audit evidence off the submission host.
 
+mod registry;
 mod compute;
 mod da;
 mod lifecycle;
@@ -24,6 +25,10 @@ use self::compute::ComputeJobspecPayloadArgs;
 use self::da::{DaChallengePayloadArgs, DaInspectArgs, DaObjectBuildArgs, DaResponsePayloadArgs, DaTimeoutPayloadArgs};
 use self::lifecycle::{
     AuditCertificatePayloadArgs, AuditFactsPayloadArgs, AuditVotePayloadArgs, BatchManifestPayloadArgs, LeafChunkPayloadArgs,
+};
+use self::registry::{
+    RegistryCertAssembleArgs, RegistryCertVoteArgs, RegistryDescriptorTemplateArgs, RegistryHaltArgs, RegistryPlanArgs,
+    RegistryPolicyArgs, RegistryProposalArgs, RegistryValidatorSetArgs,
 };
 use self::search::{SearchChallengePayloadArgs, SearchResponsePayloadArgs, SearchTimeoutPayloadArgs};
 
@@ -71,6 +76,22 @@ enum PalwPayloadCommand {
     /// Dispatch a scheduler-signed COMPUTE job spec (worker wire
     /// `misaka.palw.testnet-jobspec.v2+scheduler-mldsa87`; off-chain artifact, not a subnetwork tx).
     ComputeJobspec(ComputeJobspecPayloadArgs),
+    /// ADR-MA: dump a zeroed PalwComputeSetDescriptorV2 JSON template (fill in real roots).
+    RegistryDescriptorTemplate(RegistryDescriptorTemplateArgs),
+    /// ADR-MA §17.2: build a Compute Set proposal payload (subnetwork 0x40).
+    RegistryProposal(RegistryProposalArgs),
+    /// ADR-MA §8: build a policy-update payload (subnetwork 0x42).
+    RegistryPolicy(RegistryPolicyArgs),
+    /// ADR-MA §10: build an allocation-plan payload with its derived plan_id (subnetwork 0x43).
+    RegistryPlan(RegistryPlanArgs),
+    /// ADR-MA §18.6: build an emergency-halt payload (subnetwork 0x44).
+    RegistryHalt(RegistryHaltArgs),
+    /// ADR-MA §17.3: compute the validator-set commitment + total stake from a bonds JSON.
+    RegistryValidatorSet(RegistryValidatorSetArgs),
+    /// ADR-MA §17.3: sign ONE activation vote over a certificate summary (validator key).
+    RegistryCertVote(RegistryCertVoteArgs),
+    /// ADR-MA §17.3: assemble signed votes into the canonical activation certificate (0x41).
+    RegistryCertAssemble(RegistryCertAssembleArgs),
 }
 
 /// The three shipped PALW-active, closed-network presets.
@@ -160,6 +181,14 @@ pub async fn palw_payload(args: PalwPayloadArgs) -> Result<(), String> {
         PalwPayloadCommand::AuditVote(args) => lifecycle::audit_vote_payload(args).await,
         PalwPayloadCommand::AuditFacts(args) => lifecycle::audit_facts_payload(args).await,
         PalwPayloadCommand::Certificate(args) => lifecycle::audit_certificate_payload(args).await,
+        PalwPayloadCommand::RegistryDescriptorTemplate(args) => registry::registry_descriptor_template(args),
+        PalwPayloadCommand::RegistryProposal(args) => registry::registry_proposal(args),
+        PalwPayloadCommand::RegistryPolicy(args) => registry::registry_policy(args),
+        PalwPayloadCommand::RegistryPlan(args) => registry::registry_plan(args),
+        PalwPayloadCommand::RegistryHalt(args) => registry::registry_halt(args),
+        PalwPayloadCommand::RegistryValidatorSet(args) => registry::registry_validator_set(args),
+        PalwPayloadCommand::RegistryCertVote(args) => registry::registry_cert_vote(args),
+        PalwPayloadCommand::RegistryCertAssemble(args) => registry::registry_cert_assemble(args),
         PalwPayloadCommand::DaInspect(args) => da::da_inspect(args),
         PalwPayloadCommand::DaChallenge(args) => da::da_challenge_payload(args),
         PalwPayloadCommand::DaResponse(args) => da::da_response_payload(args),

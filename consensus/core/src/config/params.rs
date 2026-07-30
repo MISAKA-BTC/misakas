@@ -1,7 +1,7 @@
 pub use super::{
     bps::{Bps, TenBps},
     constants::consensus::*,
-    genesis::{DEVNET_GENESIS, GENESIS, GenesisBlock, SIMNET_GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS},
+    genesis::{COMPUTE_REGISTRY_PALW_GENESIS, DEVNET_GENESIS, GENESIS, GenesisBlock, SIMNET_GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS},
 };
 use crate::{
     BlockLevel, BlueWorkType, KType,
@@ -913,6 +913,8 @@ impl From<NetworkId> for Params {
                 Some(110) => TESTNET_PALW_PARAMS,
                 // kaspa-pq ADR-0048: the Header-v4 staging-mainnet PALW rehearsal net (`staging-mainnet-palw`).
                 Some(200) => STAGING_MAINNET_PALW_PARAMS,
+                // ADR-MA P14: the Header-v5 Compute Set registry rehearsal net (`compute-registry-palw`).
+                Some(20) => COMPUTE_REGISTRY_PALW_PARAMS,
                 Some(x) => panic!("Testnet suffix {} is not supported", x),
                 None => panic!("Testnet suffix not provided"),
             },
@@ -1717,6 +1719,28 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
     ..MAINNET_PARAMS
 };
 
+/// ADR-MA P14 — the **Compute Set registry rehearsal** network (`compute-registry-palw`,
+/// NetworkId `testnet-20`, `--testnet --netsuffix=20`). The FIRST registry-active preset: the
+/// staging-mainnet (testnet-200) shape with the ADR-MA fence OPEN from genesis —
+///   * **v5 genesis** ([`crate::config::genesis::COMPUTE_REGISTRY_PALW_GENESIS`]): the three
+///     Compute Set references enter the hash preimage at block 0 (all-zero — genesis names no
+///     set), so model registration NEVER changes the header schema again (§13).
+///   * `palw_compute_registry_activation_daa_score = 0` — band 0x40-0x44 admits from genesis,
+///     Header v5 is the only admitted schema, per-set difficulty and the GHOSTDAG credit seam
+///     are live paths.
+///   * No DNS seeders — the two-host rehearsal dials peers explicitly (`--addpeer`), the
+///     two-host-live-testnet precedent.
+///   * Everything else inherits the staging shape verbatim (real PoW, non-inert anti-spam,
+///     full-scale depths): the rehearsal exercises the registry, not a new economics surface.
+pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
+    net: NetworkId::with_suffix(NetworkType::Testnet, 20),
+    genesis: COMPUTE_REGISTRY_PALW_GENESIS,
+    dns_seeders: &[],
+    // ADR-MA: the registry fence — OPEN from genesis on this rehearsal network only.
+    palw_compute_registry_activation_daa_score: 0,
+    ..STAGING_MAINNET_PALW_PARAMS
+};
+
 pub const SIMNET_PARAMS: Params = Params {
     dns_seeders: &[],
     net: NetworkId::new(NetworkType::Simnet),
@@ -2037,6 +2061,36 @@ mod palw_network_tests {
         let t10: Params = NetworkId::with_suffix(NetworkType::Testnet, 10).into();
         assert_eq!(t10.palw_activation_daa_score, u64::MAX);
         assert!(!t10.is_palw_active(0));
+    }
+
+    /// ADR-MA P14: `--testnet --netsuffix=20` selects the Header-v5 Compute Set registry
+    /// rehearsal preset — the staging shape with the registry fence OPEN from genesis: v5 genesis
+    /// (the three Compute Set references in the hash preimage, all-zero at block 0), band
+    /// 0x40-0x44 admitted from genesis, per-set difficulty and the GHOSTDAG credit seam live.
+    #[test]
+    fn compute_registry_palw_network_selection() {
+        let net = NetworkId::with_suffix(NetworkType::Testnet, 20);
+        let p: Params = net.into();
+        assert_eq!(p.net, net);
+        assert_eq!(p.net.suffix, Some(20));
+        // Its OWN v5 genesis — a ledger distinct from staging and every legacy identity.
+        assert_eq!(p.genesis.hash, crate::config::genesis::COMPUTE_REGISTRY_PALW_GENESIS.hash);
+        assert_ne!(p.genesis.hash, STAGING_MAINNET_PALW_PARAMS.genesis.hash);
+        assert_ne!(p.genesis.hash, TESTNET_PARAMS.genesis.hash);
+        assert_eq!(p.genesis.version, crate::constants::PALW_COMPUTE_SET_HEADER_VERSION, "Header-v5 re-genesis");
+        // The registry fence is OPEN from genesis — the ONLY preset where it is.
+        assert_eq!(p.palw_compute_registry_activation_daa_score, 0);
+        assert!(p.is_palw_active(0));
+        assert_eq!(p.palw_activation_daa_score, 0);
+        assert!(p.palw_algo4_accept);
+        assert!(!p.skip_proof_of_work);
+        // Rehearsal dials peers explicitly — no seeders.
+        assert!(p.dns_seeders.is_empty());
+        // Every OTHER preset keeps the fence closed.
+        for other in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, DEVNET_PARAMS, DEVNET_PALW_PARAMS, SIMNET_PARAMS]
+        {
+            assert_eq!(other.palw_compute_registry_activation_daa_score, u64::MAX);
+        }
     }
 
     /// ADR-0048: `--testnet --netsuffix=200` selects the Header-v4 staging-mainnet PALW rehearsal

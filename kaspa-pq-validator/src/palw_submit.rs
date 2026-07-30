@@ -60,9 +60,18 @@ pub enum PalwSubmitKind {
     SearchChallenge,
     SearchResponse,
     SearchTimeout,
+    RegistryProposal,
+    RegistryCert,
+    RegistryPolicy,
+    RegistryPlan,
+    RegistryHalt,
 }
 
 impl PalwSubmitKind {
+    fn is_compute_registry(self) -> bool {
+        matches!(self, Self::RegistryProposal | Self::RegistryCert | Self::RegistryPolicy | Self::RegistryPlan | Self::RegistryHalt)
+    }
+
     fn subnetwork_id(self) -> SubnetworkId {
         match self {
             Self::ProviderBond => SUBNETWORK_ID_PALW_PROVIDER_BOND,
@@ -76,6 +85,11 @@ impl PalwSubmitKind {
             Self::SearchChallenge => SUBNETWORK_ID_PALW_SEARCH_CHALLENGE,
             Self::SearchResponse => SUBNETWORK_ID_PALW_SEARCH_RESPONSE,
             Self::SearchTimeout => SUBNETWORK_ID_PALW_SEARCH_TIMEOUT,
+            Self::RegistryProposal => kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL,
+            Self::RegistryCert => kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_COMPUTE_SET_ACTIVATION_CERT,
+            Self::RegistryPolicy => kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_COMPUTE_SET_POLICY_UPDATE,
+            Self::RegistryPlan => kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_MODEL_ALLOCATION_PLAN,
+            Self::RegistryHalt => kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_COMPUTE_SET_EMERGENCY_HALT,
         }
     }
 
@@ -92,6 +106,11 @@ impl PalwSubmitKind {
             Self::SearchChallenge => 0x3d,
             Self::SearchResponse => 0x3e,
             Self::SearchTimeout => 0x3f,
+            Self::RegistryProposal => 0x40,
+            Self::RegistryCert => 0x41,
+            Self::RegistryPolicy => 0x42,
+            Self::RegistryPlan => 0x43,
+            Self::RegistryHalt => 0x44,
         }
     }
 
@@ -108,6 +127,11 @@ impl PalwSubmitKind {
             Self::SearchChallenge => "search-challenge",
             Self::SearchResponse => "search-response",
             Self::SearchTimeout => "search-timeout",
+            Self::RegistryProposal => "registry-proposal",
+            Self::RegistryCert => "registry-cert",
+            Self::RegistryPolicy => "registry-policy",
+            Self::RegistryPlan => "registry-plan",
+            Self::RegistryHalt => "registry-halt",
         }
     }
 }
@@ -245,8 +269,14 @@ async fn palw_submit_payload(args: PalwSubmitArgs, payload: Vec<u8>) -> Result<(
         ));
     }
 
-    validate_palw_overlay_payload(args.kind.subnetwork_byte(), &payload)
-        .map_err(|err| format!("{} payload failed consensus validation: {err}", args.kind.label()))?;
+    if args.kind.is_compute_registry() {
+        // ADR-MA band 0x40-0x44: strict canonical decode through the node's OWN admission parser.
+        kaspa_consensus_core::palw_compute_set::parse_palw_compute_registry(args.kind.subnetwork_byte(), &payload)
+            .map_err(|err| format!("{} payload failed consensus validation: {err}", args.kind.label()))?;
+    } else {
+        validate_palw_overlay_payload(args.kind.subnetwork_byte(), &payload)
+            .map_err(|err| format!("{} payload failed consensus validation: {err}", args.kind.label()))?;
+    }
 
     let mut payer_seed = load_validator_seed(&args.validator_key)?;
     let key = ValidatorKey::from_seed(payer_seed);
@@ -386,8 +416,13 @@ async fn palw_submit_payload(args: PalwSubmitArgs, payload: Vec<u8>) -> Result<(
     };
 
     let required_output_count = required_outputs.len();
-    validate_palw_overlay_tx(args.kind.subnetwork_byte(), &payload, &tx.outputs)
-        .map_err(|err| format!("built {} carrier failed consensus validation: {err}", args.kind.label()))?;
+    if args.kind.is_compute_registry() {
+        kaspa_consensus_core::palw_compute_set::parse_palw_compute_registry(args.kind.subnetwork_byte(), &payload)
+            .map_err(|err| format!("built {} carrier failed consensus validation: {err}", args.kind.label()))?;
+    } else {
+        validate_palw_overlay_tx(args.kind.subnetwork_byte(), &payload, &tx.outputs)
+            .map_err(|err| format!("built {} carrier failed consensus validation: {err}", args.kind.label()))?;
+    }
     let local_txid = tx.id();
     let change_outpoint = TransactionOutpoint::new(local_txid, required_output_count as u32);
     let change_amount = tx.outputs[required_output_count].value;

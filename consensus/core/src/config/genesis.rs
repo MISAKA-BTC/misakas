@@ -358,6 +358,50 @@ pub const STAGING_PALW_GENESIS: GenesisBlock = GenesisBlock {
     ..TESTNET_GENESIS
 };
 
+/// ADR-MA P14 — genesis for the Header-v5 **Compute Set registry** rehearsal network
+/// (`compute-registry-palw`, NetworkId `testnet-20`). The FIRST shipped v5 genesis:
+/// `version = PALW_COMPUTE_SET_HEADER_VERSION`, so the header carries the three Compute Set
+/// reference fields in its hash preimage from block 0 — all-zero at genesis (genesis references
+/// no set; a real `compute_set_id` is content-derived and never zero), exactly the
+/// `check_header_version` zero-guard shape for a non-PALW-lane v5 header. Inherits the staging
+/// v4 spam-accumulator binding (version 5 ≥ 4 takes the same `From<&GenesisBlock>` branch).
+/// Distinct coinbase payload tag ("misaka-compute-registry") + fresh timestamp give it its own
+/// ledger. hash / hash_merkle_root minted by `gen_kaspa_pq_genesis_hashes`.
+pub const COMPUTE_REGISTRY_PALW_GENESIS: GenesisBlock = GenesisBlock {
+    hash: Hash64::from_bytes([
+        0xec, 0x8b, 0x43, 0x28, 0x79, 0x56, 0xfc, 0x0d, 0x2e, 0x9a, 0xdb, 0x77, 0xcc, 0x83, 0x16, 0x51, 0xee, 0xac, 0x26, 0x58, 0x3c,
+        0x08, 0xe3, 0x37, 0x2c, 0xb0, 0xc7, 0x0b, 0x3f, 0x13, 0x89, 0xbc, 0x02, 0x1a, 0x21, 0x72, 0x3a, 0xd0, 0x32, 0xba, 0xd0, 0xf3,
+        0x11, 0x51, 0xd8, 0x10, 0x67, 0xde, 0x9f, 0x38, 0xed, 0x49, 0x8c, 0x7c, 0x1b, 0x3f, 0xaa, 0x44, 0x5c, 0x23, 0x12, 0x79, 0xd1,
+        0xcc,
+    ]),
+    hash_merkle_root: Hash64::from_bytes([
+        0x22, 0xde, 0x0f, 0x5e, 0x63, 0x62, 0x59, 0xea, 0xba, 0x6c, 0x39, 0x2b, 0x45, 0x63, 0x65, 0x82, 0x84, 0x47, 0x37, 0x66, 0xb2,
+        0x5b, 0x3b, 0xf6, 0xf4, 0x76, 0xfe, 0x97, 0x30, 0x6b, 0xcc, 0x1e, 0xa5, 0xce, 0x33, 0xad, 0x4f, 0x6c, 0xc3, 0x2c, 0x01, 0x86,
+        0xc0, 0x4a, 0x62, 0xc0, 0x6b, 0x76, 0xd5, 0x65, 0x8e, 0x66, 0xc6, 0xfb, 0x4f, 0xbb, 0x12, 0x77, 0x9b, 0x9b, 0xf5, 0xb4, 0xb6,
+        0x79,
+    ]),
+    // ADR-MA: the Header-v5 re-genesis — Compute Set references live in the hash preimage from
+    // block 0, so adding a model NEVER changes the header schema again (§13 «将来のモデル追加時に
+    // header変更を発生させない»).
+    version: crate::constants::PALW_COMPUTE_SET_HEADER_VERSION,
+    // 2026-07-30 00:00:00 UTC (= 1785369600000 ms) — must be in the PAST at launch (the staging
+    // future-timestamp lesson: a future genesis makes the network unminable until it passes).
+    timestamp: 1785369600000,
+    #[rustfmt::skip]
+    coinbase_payload: &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Blue score
+        0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00, // Subsidy
+        0x00, 0x00, // Script version
+        0x01,       // Varint
+        0x00,       // OP-FALSE
+        // "misaka-compute-registry"
+        0x6d, 0x69, 0x73, 0x61, 0x6b, 0x61, 0x2d, 0x63, 0x6f, 0x6d, 0x70, 0x75, 0x74, 0x65, 0x2d, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79,
+    ],
+    // Max-easy real-PoW fast-start target (the staging rationale — the DAA ramps to live rate).
+    bits: 0x207fffff,
+    ..TESTNET_GENESIS
+};
+
 /// ADR-0039 P0 — genesis for the single-node PALW-active devnet (`devnet-palw`, `--devnet --netsuffix=111`).
 /// Carries `bits == DEVNET_PALW_GENESIS_BITS` (0x207fffff, max-easy) so §16.3's
 /// `is_consistent_for_activation` holds and Layer-0 PoW grinds instantly. Distinct coinbase payload
@@ -481,7 +525,16 @@ mod tests {
     // recomputed merkle root and block hash match the committed constants.
     #[test]
     fn test_genesis_hashes() {
-        [GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS, TESTNET_PALW_GENESIS, STAGING_PALW_GENESIS, SIMNET_GENESIS, DEVNET_GENESIS]
+        [
+            GENESIS,
+            TESTNET_GENESIS,
+            TESTNET11_GENESIS,
+            TESTNET_PALW_GENESIS,
+            STAGING_PALW_GENESIS,
+            COMPUTE_REGISTRY_PALW_GENESIS,
+            SIMNET_GENESIS,
+            DEVNET_GENESIS,
+        ]
             .into_iter()
             .for_each(|genesis| {
                 let block: Block = (&genesis).into();
@@ -524,6 +577,7 @@ mod tests {
             ("TESTNET11_GENESIS", &TESTNET11_GENESIS),
             ("TESTNET_PALW_GENESIS", &TESTNET_PALW_GENESIS),
             ("STAGING_PALW_GENESIS", &STAGING_PALW_GENESIS),
+            ("COMPUTE_REGISTRY_PALW_GENESIS", &COMPUTE_REGISTRY_PALW_GENESIS),
             ("SIMNET_GENESIS", &SIMNET_GENESIS),
             ("DEVNET_GENESIS", &DEVNET_GENESIS),
             ("DEVNET_PALW_GENESIS", &DEVNET_PALW_GENESIS),

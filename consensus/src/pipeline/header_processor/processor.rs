@@ -224,8 +224,19 @@ impl HeaderProcessor {
             params.palw_spam.is_inert()
                 || (params.palw_spam.is_structurally_valid()
                     && params.palw_activation_daa_score <= params.genesis.daa_score
-                    && params.genesis.version == kaspa_consensus_core::constants::PALW_ANTISPAM_HEADER_VERSION),
+                    && params.genesis.version >= kaspa_consensus_core::constants::PALW_ANTISPAM_HEADER_VERSION),
             "non-inert PALW anti-spam parameters require a structurally valid Header-v4 re-genesis"
+        );
+        // ADR-MA: an OPEN Compute Set registry fence is a Header-v5 re-genesis event — the fence
+        // must open at genesis (never mid-chain: v5 is a one-way schema boundary) and the genesis
+        // block itself must declare v5, or every template/header on the network self-rejects with
+        // WrongBlockVersion. Closed fence (u64::MAX, every shipped preset) asserts nothing.
+        assert!(
+            params.palw_compute_registry_activation_daa_score == u64::MAX
+                || (params.palw_compute_registry_activation_daa_score <= params.genesis.daa_score
+                    && params.palw_activation_daa_score <= params.genesis.daa_score
+                    && params.genesis.version == kaspa_consensus_core::constants::PALW_COMPUTE_SET_HEADER_VERSION),
+            "an open Compute Set registry fence requires a genesis-active Header-v5 re-genesis (ADR-MA §13/§25)"
         );
         Self {
             receiver,
