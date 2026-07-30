@@ -13,6 +13,7 @@ use crate::{
 };
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::block::Block;
+use kaspa_consensus_core::blockstatus::BlockStatus;
 use kaspa_database::prelude::StoreResultExt;
 use kaspa_txscript::script_class::ScriptClass;
 use once_cell::unsync::Lazy;
@@ -429,16 +430,23 @@ impl BlockBodyProcessor {
 
     fn check_parent_bodies_exist(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
         let statuses_read_guard = self.statuses_store.read();
-        let missing: Vec<BlockHash> = block
-            .header
-            .direct_parents()
-            .iter()
-            .copied()
-            .filter(|parent| {
-                let status_option = statuses_read_guard.get(*parent).optional().unwrap();
-                status_option.is_none_or(|s| !s.has_block_body())
-            })
-            .collect();
+        let mut invalid: Vec<BlockHash> = Vec::new();
+        let mut missing: Vec<BlockHash> = Vec::new();
+        for parent in block.header.direct_parents().iter().copied() {
+            match statuses_read_guard.get(parent).optional().unwrap() {
+                None => missing.push(parent),
+                Some(BlockStatus::StatusInvalid) => invalid.push(parent),
+                Some(s) if !s.has_block_body() => missing.push(parent),
+                Some(_) => {}
+            }
+        }
+        // An invalid-marked parent is a permanent local condition, not a delivery-ordering gap: during
+        // IBD the body-sync list retains only header-only blocks, so an invalid parent is never
+        // re-requested and every retry fails here again for the same hashes. Reporting it as
+        // MissingParents makes that loop undiagnosable from the logs; name the real obstruction.
+        if !invalid.is_empty() {
+            return Err(RuleError::InvalidParentBodies(invalid));
+        }
         if !missing.is_empty() {
             return Err(RuleError::MissingParents(missing));
         }
@@ -630,6 +638,103 @@ mod tests {
             check_for_lock_time_and_sequence(&consensus, valid_block_child.header.hash, 15.into(), tip_daa_score + 1, u64::MAX, true)
                 .await;
         }
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// A parent carrying a local `StatusInvalid` mark must surface as `InvalidParentBodies` — the
+    /// operator-diagnosable variant — and must NOT mark the child invalid in turn.
+    ///
+    /// This is the IBD ordering: every header lands before any body is validated, so when a body
+    /// later invalidates the parent, the child's header is already stored and only the BODY stage
+    /// ever sees the invalid parent. Before this variant existed the child failed as generic
+    /// `MissingParents`, which the body-sync list can never satisfy (invalid blocks are not
+    /// header-only, so they are never re-requested) — an infinite, undiagnosable IBD retry loop
+    /// whenever a database carries stale invalid-marks from an older binary. The no-cascade half
+    /// is what keeps `--reset-invalid-marks` recovery complete: only the originally-marked blocks
+    /// need re-evaluation, not an ever-growing cone of descendants.
+    #[tokio::test]
+    async fn invalid_parent_bodies_is_reported_and_does_not_cascade() {
+        let config = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(|p| p.deflationary_phase_daa_score = p.genesis.daa_score + 2)
+            .build();
+        let consensus = TestConsensus::new(&config);
+        let wait_handles = consensus.init();
+
+        // Headers first (the IBD header phase): parent 1 on genesis, child 2 on 1. Both accepted.
+        consensus.add_header_only_block_with_parents(1.into(), vec![config.genesis.hash]).await.unwrap();
+        consensus.add_header_only_block_with_parents(2.into(), vec![1.into()]).await.unwrap();
+
+        // Body phase: the parent's body violates a rule (wrong subsidy) and is marked StatusInvalid.
+        {
+            let mut parent = consensus.build_block_with_parents_and_transactions(1.into(), vec![config.genesis.hash], vec![]);
+            parent.transactions[0].payload[8..16].copy_from_slice(&(5_u64).to_le_bytes());
+            parent.header.hash_merkle_root = calc_hash_merkle_root(parent.transactions.iter());
+            assert_match!(
+                consensus.validate_and_insert_block(parent.to_immutable()).virtual_state_task.await,
+                Err(RuleError::WrongSubsidy(_, _))
+            );
+        }
+
+        // The child's body is itself valid, but its parent is now invalid-marked: the distinct
+        // variant fires and names the poisoned parent.
+        let child = consensus.build_block_with_parents_and_transactions(2.into(), vec![1.into()], vec![]);
+        assert_match!(
+            consensus.validate_and_insert_block(child.clone().to_immutable()).virtual_state_task.await,
+            Err(RuleError::InvalidParentBodies(parents)) if parents == vec![1.into()]
+        );
+
+        // No cascade: resubmission fails the same way — NOT with KnownInvalid — proving the child
+        // was not marked invalid by the failure above.
+        assert_match!(
+            consensus.validate_and_insert_block(child.to_immutable()).virtual_state_task.await,
+            Err(RuleError::InvalidParentBodies(_))
+        );
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// The full `--reset-invalid-marks` recovery arc over a poisoned status: a parent marked
+    /// `StatusInvalid` (here by a genuine body rejection standing in for an older binary's stale
+    /// verdict) blocks its child's body forever; after the reset pass the parent is header-only
+    /// again, a re-offered VALID body for it is accepted, and the child follows — the exact
+    /// unstick path for a node whose database was poisoned by rules that have since changed.
+    #[tokio::test]
+    async fn reset_invalid_marks_unsticks_a_poisoned_body_sync() {
+        let config = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(|p| p.deflationary_phase_daa_score = p.genesis.daa_score + 2)
+            .build();
+        let consensus = TestConsensus::new(&config);
+        let wait_handles = consensus.init();
+
+        consensus.add_header_only_block_with_parents(1.into(), vec![config.genesis.hash]).await.unwrap();
+        consensus.add_header_only_block_with_parents(2.into(), vec![1.into()]).await.unwrap();
+
+        // Poison: the parent's body is rejected and the mark persists.
+        {
+            let mut parent = consensus.build_block_with_parents_and_transactions(1.into(), vec![config.genesis.hash], vec![]);
+            parent.transactions[0].payload[8..16].copy_from_slice(&(5_u64).to_le_bytes());
+            parent.header.hash_merkle_root = calc_hash_merkle_root(parent.transactions.iter());
+            assert_match!(
+                consensus.validate_and_insert_block(parent.to_immutable()).virtual_state_task.await,
+                Err(RuleError::WrongSubsidy(_, _))
+            );
+        }
+        let child = consensus.build_block_with_parents_and_transactions(2.into(), vec![1.into()], vec![]);
+        assert_match!(
+            consensus.validate_and_insert_block(child.clone().to_immutable()).virtual_state_task.await,
+            Err(RuleError::InvalidParentBodies(_))
+        );
+
+        // Recovery: the pass clears exactly the one mark, back to header-only (its header is stored).
+        assert_eq!(consensus.consensus_clone().reset_invalid_marks(), (1, 0));
+
+        // A valid body for the parent is now accepted again, and the child unsticks.
+        let parent = consensus.build_block_with_parents_and_transactions(1.into(), vec![config.genesis.hash], vec![]);
+        consensus.validate_and_insert_block(parent.to_immutable()).virtual_state_task.await.unwrap();
+        consensus.validate_and_insert_block(child.to_immutable()).virtual_state_task.await.unwrap();
 
         consensus.shutdown(wait_handles);
     }

@@ -11,6 +11,7 @@ use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
     api::BlockValidationFuture,
     block::Block,
+    errors::block::RuleError,
     constants::{PALW_ANTISPAM_HEADER_VERSION, PALW_HEADER_VERSION},
     header::Header,
     palw_pruned_frontier::{
@@ -857,7 +858,7 @@ impl IbdFlow {
                     .collect();
                 let prev_chunk_len = prev_jobs.len();
                 // Join the previous chunk so that we always concurrently process a chunk and receive another
-                try_join_all(prev_jobs).await?;
+                Self::join_header_chunk(prev_jobs).await?;
                 // Log the progress
                 progress_reporter.report(prev_chunk_len, prev_daa_score, prev_timestamp);
                 prev_daa_score = current_daa_score;
@@ -866,7 +867,7 @@ impl IbdFlow {
             }
 
             let prev_chunk_len = prev_jobs.len();
-            try_join_all(prev_jobs).await?;
+            Self::join_header_chunk(prev_jobs).await?;
             progress_reporter.report_completion(prev_chunk_len);
         }
 
@@ -881,6 +882,25 @@ impl IbdFlow {
         self.sync_missing_relay_past_headers(consensus, syncer_virtual_selected_parent, relay_block.hash()).await?;
 
         Ok(())
+    }
+
+    /// Joins a chunk of header-insertion jobs, adding syncer-side context to a `MissingParents`
+    /// failure. A correctly served header stream is parent-closed by construction (every batch is a
+    /// union of consecutive chain-block mergesets), so a parent that was never delivered indicates an
+    /// inconsistent topology store on the SYNCER — observed in practice with a database written
+    /// across incompatible binary upgrades while the network kept mining. Without this context the
+    /// syncee logs a bare "missing parents" that reads like a local defect and is undiagnosable.
+    async fn join_header_chunk(jobs: Vec<BlockValidationFuture>) -> Result<(), ProtocolError> {
+        match try_join_all(jobs).await {
+            Ok(_) => Ok(()),
+            Err(rule_error @ RuleError::MissingParents(_)) => Err(ProtocolError::OtherOwned(format!(
+                "{rule_error} — the syncer's header stream referenced a parent header it never delivered. This \
+                 indicates an inconsistent topology database on the SYNCER side (for example a node whose database \
+                 was written across incompatible binary upgrades). Each retry may still advance the local header \
+                 frontier; the durable fix is syncing from a cleanly-synced peer, or resyncing the syncer node itself"
+            ))),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Fetch, bound, decode and context-validate the complete PALW pruning boundary without mutating

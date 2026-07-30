@@ -159,6 +159,14 @@ pub enum RuleError {
     #[error("block has missing parents: {0:?}")]
     MissingParents(Vec<BlockHash>),
 
+    #[error(
+        "block body has parents that are locally marked invalid: {0:?} — if IBD repeats this error for the \
+         same hashes, the local database most likely carries invalid-marks persisted by an older binary under \
+         different consensus rules (the peers keep re-offering blocks this node refuses to re-request). \
+         Restart kaspad once with --reset-invalid-marks to re-evaluate those blocks under the current rules"
+    )]
+    InvalidParentBodies(Vec<BlockHash>),
+
     #[error("pruning point {0} is not in the past of this block")]
     PruningViolation(BlockHash),
 
