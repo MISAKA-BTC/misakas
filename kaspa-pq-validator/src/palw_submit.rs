@@ -207,6 +207,12 @@ pub struct PalwSubmitArgs {
     /// Build, sign and validate locally, but do not submit.
     #[arg(long)]
     dry_run: bool,
+
+    /// Accept a node that reports not-synced. A single-node bring-up (fresh re-genesis, no
+    /// peers) never reports synced; this is the palw-submit analogue of the node's
+    /// --enable-unsynced-mining. Never use it against a network with peers you have not synced.
+    #[arg(long)]
+    assume_synced: bool,
 }
 
 /// Arguments shared by high-level commands which construct a PALW payload in memory and then use
@@ -252,6 +258,7 @@ pub(crate) async fn palw_submit_generated(
             min_epoch_headroom_daa: 20,
             no_wait: args.no_wait,
             inclusion_timeout_secs: args.inclusion_timeout_secs,
+            assume_synced: false,
             dry_run: args.dry_run,
         },
         payload,
@@ -293,8 +300,11 @@ async fn palw_submit_payload(args: PalwSubmitArgs, payload: Vec<u8>) -> Result<(
     if !server.has_utxo_index {
         return Err(format!("node '{node_network}' has no UTXO index; restart kaspad with --utxoindex before PALW submission"));
     }
-    if !server.is_synced {
-        return Err("node is not synced; refusing to register fork-relative PALW state".to_string());
+    if !server.is_synced && !args.assume_synced {
+        return Err(
+            "node is not synced; refusing to register fork-relative PALW state (pass --assume-synced on a single-node bring-up)"
+                .to_string(),
+        );
     }
     let params = Params::from(server.network_id);
     if !params.is_palw_active(server.virtual_daa_score) {

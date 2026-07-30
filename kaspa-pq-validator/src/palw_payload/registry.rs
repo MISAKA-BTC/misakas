@@ -348,7 +348,9 @@ pub(super) fn registry_descriptor_template(args: RegistryDescriptorTemplateArgs)
     let zero = Hash64::default();
     let descriptor = PalwComputeSetDescriptorV2 {
         version: kaspa_consensus_core::palw_compute_set::PALW_COMPUTE_SET_DESCRIPTOR_VERSION,
-        compute_vm_id: zero,
+        // The REAL frozen Compute VM surface (ADR-MA-006) — the one field no operator should
+        // ever fill by hand.
+        compute_vm_id: kaspa_consensus_core::palw_compute_ir::compute_vm_id_v1(),
         model_family_id: zero,
         model_artifact_root: zero,
         model_manifest_root: zero,

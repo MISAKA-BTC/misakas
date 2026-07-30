@@ -1738,7 +1738,22 @@ pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
     dns_seeders: &[],
     // ADR-MA: the registry fence — OPEN from genesis on this rehearsal network only.
     palw_compute_registry_activation_daa_score: 0,
+    dns_params: Some(COMPUTE_REGISTRY_DNS_PARAMS),
     ..STAGING_MAINNET_PALW_PARAMS
+};
+
+/// ADR-MA P14 rehearsal DNS economics: the staging (production-scale) shape with the
+/// validator-ENTRY floors at the testnet scale. The rehearsal validates the REGISTRY —
+/// §17.3's validator quorum needs real, mining-fundable stake bonds within minutes of a fresh
+/// re-genesis, and 20M-MSK floors on a ~2-MSK-coinbase chain would take ~10M blocks to fund
+/// (the TESTNET_DNS_PARAMS rationale verbatim). testnet-200 keeps rehearsing the production
+/// economics; this net rehearses the Compute Set machinery.
+pub const COMPUTE_REGISTRY_DNS_PARAMS: DnsParams = DnsParams {
+    min_bond_amount_sompi: 10 * SOMPI_PER_KASPA,
+    min_active_stake_sompi: 10 * SOMPI_PER_KASPA,
+    // The two-host rehearsal runs one validator per host; the quorum meaning stays 2/3 by stake.
+    min_active_validators: 1,
+    ..STAGING_MAINNET_PALW_DNS_PARAMS
 };
 
 pub const SIMNET_PARAMS: Params = Params {
