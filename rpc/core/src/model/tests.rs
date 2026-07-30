@@ -192,6 +192,9 @@ mod mockery {
                 palw_beacon_seed: mock(),
                 palw_spam_accumulator_commitment: mock(),
                 palw_spam_nonce: mock(),
+                palw_compute_set_id: mock(),
+                palw_compute_policy_id: mock(),
+                palw_allocation_plan_id: mock(),
             }
         }
     }
@@ -230,6 +233,9 @@ mod mockery {
                 palw_beacon_seed: mock(),
                 palw_spam_accumulator_commitment: mock(),
                 palw_spam_nonce: mock(),
+                palw_compute_set_id: mock(),
+                palw_compute_policy_id: mock(),
+                palw_allocation_plan_id: mock(),
             }
         }
     }

@@ -395,6 +395,9 @@ mod tests {
             palw_beacon_seed: c.beacon_seed,
             palw_spam_accumulator_commitment: Hash64::default(),
             palw_spam_nonce: 0,
+            palw_compute_set_id: Default::default(),
+            palw_compute_policy_id: Default::default(),
+            palw_allocation_plan_id: Default::default(),
         })
     }
 
