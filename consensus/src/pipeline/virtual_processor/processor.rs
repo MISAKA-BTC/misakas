@@ -933,6 +933,9 @@ pub struct VirtualStateProcessor {
     // activate at DAA 0. Read only at virtual commit to advance the §9.5 batch state machine from
     // accepted PALW overlay txs.
     pub(super) palw_activation_daa_score: u64,
+    /// ADR-MA: the Compute Set registry activation fence (`u64::MAX` on every shipped preset —
+    /// the registry fold below returns before touching acceptance data).
+    pub(super) palw_compute_registry_activation_daa_score: u64,
     pub(super) palw_store: Arc<DbPalwStore>,
     pub(super) palw_beacon_store: Arc<DbPalwBeaconStore>,
     pub(super) palw_lane_bits_store: Arc<DbPalwLaneBitsStore>,
@@ -1002,6 +1005,8 @@ pub struct VirtualStateProcessor {
     // kaspa-pq ADR-0040 §5.15.13 (gate G16 / P1-9-RELAND): per-chain-block paid `job_nullifier`s,
     // the delta the bounded reward-coordinate duplicate-work walk reads. Empty on every preset.
     pub(super) palw_paid_work_store: Arc<DbPalwPaidWorkStore>,
+    /// ADR-MA §21: content-addressed registry record tiers + the block-keyed fork-local view.
+    pub(super) palw_compute_registry_store: Arc<crate::model::stores::palw_compute_registry::DbPalwComputeRegistryStore>,
     // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): the per-epoch accumulator and
     // its per-block validator quality sub-pool input. Inert until
     // `pos_v2_activation_daa_score` (`u64::MAX` today).
@@ -1153,6 +1158,7 @@ impl VirtualStateProcessor {
             evm_retention_policy,
             evm_activation_daa_score: params.evm_activation_daa_score,
             palw_activation_daa_score: params.palw_activation_daa_score,
+            palw_compute_registry_activation_daa_score: params.palw_compute_registry_activation_daa_score,
             palw_store: storage.palw_store.clone(),
             palw_beacon_store: storage.palw_beacon_store.clone(),
             palw_lane_bits_store: storage.palw_lane_bits_store.clone(),
@@ -1185,6 +1191,7 @@ impl VirtualStateProcessor {
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             palw_paid_work_store: storage.palw_paid_work_store.clone(),
+            palw_compute_registry_store: storage.palw_compute_registry_store.clone(),
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
             block_quality_pool_store: storage.block_quality_pool_store.clone(),
             reserve_balance_store: storage.reserve_balance_store.clone(),
@@ -2949,6 +2956,13 @@ impl VirtualStateProcessor {
                 palw_overlay_commit_fail_stop(format!("active PALW block {current} reached commit without staged DA state"));
             }
         }
+        // ADR-MA §21.2: advance the Compute Set registry view from this chain block's accepted
+        // 0x40-0x44 registry transactions — the same acceptance coordinate as the PALW overlays
+        // above, behind its own activation fence (`u64::MAX` on every shipped preset, so this
+        // returns immediately everywhere today).
+        if current != self.genesis.hash {
+            self.commit_palw_compute_registry_view(&mut batch, current, &acceptance_data);
+        }
         // Search-availability rows commit in the SAME batch, with the identical link-vs-full write
         // reduction: an idle search state machine costs 64 bytes per chain block, never a duplicated
         // full row.
@@ -3031,6 +3045,172 @@ impl VirtualStateProcessor {
     /// of durable RocksDB. Certificate validity stays fork-scoped through the block-keyed exact hash:
     /// a globally cached blob cannot be named unless the selected-parent accepted view chose it after
     /// this fork's attestation and DA gates.
+    /// ADR-MA §21.2 — fold this chain block's ACCEPTED Compute Set registry transactions
+    /// (subnetworks 0x40-0x44) into the fork-local registry view:
+    /// `view(B) = view(SP(B)) ⊕ Δ(accepted registry txs)`, persisted per block in the same commit
+    /// batch — the `PalwBatchViewV1` lifecycle (block-keyed ⇒ reorg-reversible; the content
+    /// record tiers are content-addressed write-once, so a losing branch leaves nothing to
+    /// revert, §21.2).
+    ///
+    /// Failure posture: payload SHAPE is already a transaction-validity rule
+    /// (`check_transaction_subnetwork` decodes the band strictly), so a semantic fold rejection
+    /// here — sequence rollback, illegal lifecycle transition, ramp violation — means the tx was
+    /// accepted but has NO registry effect: warn + skip, never block-invalidating (§9/§10.3 are
+    /// registry admission rules, not block validity rules — the same posture as the batch
+    /// overlay fold above). Store faults fail-stop.
+    ///
+    /// Activation certificates are currently SKIPPED with a warning: §17.3 quorum verification
+    /// (the `verify_certificate_attestation` analogue over the validator set) lands in its own
+    /// slice, and folding an UNVERIFIED certificate would let a single operator key activate a
+    /// set — exactly what §17.3 forbids. Until then no set can leave `Proposed`/get share, which
+    /// fails closed in the safe direction.
+    fn commit_palw_compute_registry_view(&self, batch: &mut WriteBatch, current: BlockHash, acceptance_data: &AcceptanceData) {
+        use crate::model::stores::palw_compute_registry::PalwComputeRegistryStoreReader;
+        use kaspa_consensus_core::palw_compute_set::{
+            AllocationGovernanceLimitsV1, PalwComputeRegistryEffect, PolicyGovernanceCapsV1, parse_palw_compute_registry,
+        };
+        if self.palw_compute_registry_activation_daa_score == u64::MAX {
+            return;
+        }
+        let current_daa = self.headers_store.get_daa_score(current).unwrap_or_else(|store_error| {
+            palw_overlay_commit_fail_stop(format!("compute registry commit could not read DAA of {current}: {store_error}"))
+        });
+        if current_daa < self.palw_compute_registry_activation_daa_score {
+            return;
+        }
+        let selected_parent = self.ghostdag_store.get_selected_parent(current).unwrap_or_else(|store_error| {
+            palw_overlay_commit_fail_stop(format!("compute registry commit could not read SP of {current}: {store_error}"))
+        });
+        // Seed from the selected parent's carried view. An absent row is legal exactly when the
+        // parent sits below the activation fence (or is genesis); a missing row ABOVE the fence
+        // is a local inconsistency, not a semantic state.
+        let mut view = match self.palw_compute_registry_store.view(selected_parent) {
+            Ok(Some(parent_view)) => (*parent_view).clone(),
+            Ok(None) => {
+                let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap_or_else(|store_error| {
+                    palw_overlay_commit_fail_stop(format!(
+                        "compute registry commit could not read SP DAA of {selected_parent}: {store_error}"
+                    ))
+                });
+                if selected_parent != self.genesis.hash && parent_daa >= self.palw_compute_registry_activation_daa_score {
+                    palw_overlay_commit_fail_stop(format!(
+                        "compute registry view missing for post-activation selected parent {selected_parent} of {current}"
+                    ));
+                }
+                kaspa_consensus_core::palw_compute_set::PalwComputeRegistryViewV1::new()
+            }
+            Err(store_error) => palw_overlay_commit_fail_stop(format!(
+                "compute registry view read failed for {selected_parent} while committing {current}: {store_error}"
+            )),
+        };
+        // Governed numbers: v0.1 initial values (§22.1/§22.2). Promoting them to Params fields is
+        // part of the governance slice; they are consensus-inert until the fence opens anywhere.
+        let caps = PolicyGovernanceCapsV1::default();
+        let limits = AllocationGovernanceLimitsV1::default();
+        for merged in acceptance_data.iter() {
+            let txs = match self.block_transactions_store.get(merged.block_hash) {
+                Ok(txs) => txs,
+                Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
+                    // Same tolerance as the overlay fold: a bodyless carrier is legal only if it
+                    // is prunable history; anything else is an acceptance/body inconsistency.
+                    let pruning_point = self.pruning_point_store.read().pruning_point().unwrap_or_else(|store_error| {
+                        palw_overlay_commit_fail_stop(format!(
+                            "compute registry commit could not read pruning point while committing {current}: {store_error}"
+                        ))
+                    });
+                    if palw_body_may_be_pruned(merged.block_hash, pruning_point) {
+                        continue;
+                    }
+                    palw_overlay_commit_fail_stop(format!(
+                        "compute registry commit acceptance/body inconsistency while committing {current}: merged block {} is missing its body",
+                        merged.block_hash
+                    ));
+                }
+                Err(store_error) => palw_overlay_commit_fail_stop(format!(
+                    "compute registry commit body read failed for merged block {} while committing {current}: {store_error}",
+                    merged.block_hash
+                )),
+            };
+            for entry in merged.accepted_transactions.iter() {
+                let Some(tx) = txs.get(entry.index_within_block as usize) else {
+                    palw_overlay_commit_fail_stop(format!(
+                        "compute registry commit acceptance/body index inconsistency while committing {current}: merged block {} names index {}",
+                        merged.block_hash, entry.index_within_block
+                    ));
+                };
+                let Some(kind) = tx.subnetwork_id.palw_compute_registry_tx_kind() else { continue };
+                let effect = match parse_palw_compute_registry(kind, &tx.payload) {
+                    Ok(effect) => effect,
+                    Err(decode_error) => {
+                        // Shape was screened at tx validity; reaching here means rules drifted
+                        // between admission and fold. Skip loudly rather than split.
+                        warn!("compute registry: accepted tx {} no longer parses at fold ({decode_error}); skipped", entry.transaction_id);
+                        continue;
+                    }
+                };
+                let outcome = match effect {
+                    PalwComputeRegistryEffect::Proposal(proposal) => view.apply_proposal(&proposal).map(|outcome| {
+                        if outcome == kaspa_consensus_core::palw_compute_set::DescriptorRegistrationOutcome::Inserted {
+                            let set_id = proposal.descriptor.compute_set_id();
+                            self.palw_compute_registry_store
+                                .insert_descriptor_batch(batch, set_id, &proposal.descriptor)
+                                .unwrap_or_else(|store_error| {
+                                    palw_overlay_commit_fail_stop(format!(
+                                        "compute registry descriptor staging failed for {set_id}: {store_error}"
+                                    ))
+                                });
+                        }
+                    }),
+                    PalwComputeRegistryEffect::ActivationCertificate(certificate) => {
+                        // §17.3 quorum verification is a dedicated slice; folding unverified
+                        // certificates is forbidden. Fail closed (set stays Proposed).
+                        warn!(
+                            "compute registry: activation certificate for set {} skipped — quorum verification not yet wired (§17.3)",
+                            certificate.compute_set_id
+                        );
+                        continue;
+                    }
+                    PalwComputeRegistryEffect::PolicyUpdate(update) => {
+                        view.apply_policy(&update.policy, &caps, current_daa).map(|outcome| {
+                            if outcome == kaspa_consensus_core::palw_compute_set::PolicyRegistrationOutcome::Inserted {
+                                let policy_id = update.policy.policy_id();
+                                self.palw_compute_registry_store
+                                    .insert_policy_batch(batch, policy_id, &update.policy)
+                                    .unwrap_or_else(|store_error| {
+                                        palw_overlay_commit_fail_stop(format!(
+                                            "compute registry policy staging failed for {policy_id}: {store_error}"
+                                        ))
+                                    });
+                            }
+                        })
+                    }
+                    PalwComputeRegistryEffect::AllocationPlan(plan) => view.apply_plan(&plan, &limits, current_daa).map(|outcome| {
+                        if outcome == kaspa_consensus_core::palw_compute_set::PlanRegistrationOutcome::Inserted {
+                            self.palw_compute_registry_store.insert_plan_batch(batch, plan.plan_id, &plan).unwrap_or_else(
+                                |store_error| {
+                                    palw_overlay_commit_fail_stop(format!(
+                                        "compute registry plan staging failed for {}: {store_error}",
+                                        plan.plan_id
+                                    ))
+                                },
+                            );
+                        }
+                    }),
+                    PalwComputeRegistryEffect::EmergencyHalt(halt) => view.apply_halt(&halt),
+                };
+                if let Err(rejection) = outcome {
+                    warn!(
+                        "compute registry: accepted tx {} rejected at fold while committing {current}: {rejection}",
+                        entry.transaction_id
+                    );
+                }
+            }
+        }
+        self.palw_compute_registry_store.set_view_batch(batch, current, std::sync::Arc::new(view)).unwrap_or_else(|store_error| {
+            palw_overlay_commit_fail_stop(format!("compute registry view staging failed for {current}: {store_error}"))
+        });
+    }
+
     fn commit_palw_overlay_effects(
         &self,
         batch: &mut WriteBatch,

@@ -406,6 +406,14 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
         // same coordinate as the DNS `StakeBond` arm above, where a rejection actually rejects the
         // transaction. It cannot live in the overlay-effect arm, whose `Result` the caller discards.
         validate_palw_overlay_tx(kind, &tx.payload, &tx.outputs).map_err(TxRuleError::InvalidPalwOverlayPayload)
+    } else if let Some(kind) = tx.subnetwork_id.palw_compute_registry_tx_kind() {
+        // ADR-MA §17.1: Compute Set registry payloads (0x40-0x44) decode strictly + canonically
+        // here — context-free SHAPE only. The activation fence is a block-DAA rule enforced in
+        // `check_palw_overlay_activation`'s registry clause, and the §9/§10.3 admission rules run
+        // at the acceptance fold — both exactly mirroring the PALW band's layering.
+        kaspa_consensus_core::palw_compute_set::parse_palw_compute_registry(kind, &tx.payload)
+            .map(|_| ())
+            .map_err(TxRuleError::InvalidComputeRegistryPayload)
     } else {
         Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()))
     }
@@ -570,6 +578,113 @@ mod tests {
         let mut tx = valid_tx;
         tx.version = TX_VERSION + 1;
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::UnknownTxVersion(_)));
+    }
+
+    /// ADR-MA §17.1: a transaction routed by a Compute Set registry subnetwork (0x40-0x44) is
+    /// accepted when its payload is the strict canonical encoding, and rejected with
+    /// `InvalidComputeRegistryPayload` (never the blanket `SubnetworksDisabled`) when it is not.
+    /// Per-rule payload coverage lives in `kaspa_consensus_core::palw_compute_set`; this test
+    /// confirms only the consensus-layer wiring.
+    #[test]
+    fn validate_compute_registry_subnetwork_tx() {
+        use kaspa_consensus_core::palw_compute_set::{
+            ComputeSetRegistryError, PALW_COMPUTE_SET_DESCRIPTOR_VERSION, PALW_COMPUTE_SET_PROPOSAL_PAYLOAD_VERSION,
+            PalwComputeSetDescriptorV2, PalwComputeSetProposalV1,
+        };
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL;
+        use kaspa_hashes::Hash64;
+
+        let params = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.ghostdag_k(),
+            Default::default(),
+        );
+
+        let base = Transaction::new(
+            0,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
+                signature_script: vec![0u8; 64],
+                sequence: u64::MAX,
+                sig_op_count: 0,
+            }],
+            vec![TransactionOutput { value: 0x2123e300, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x76, 0xa9, 0x14)) }],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+
+        let h = |b: u8| Hash64::from_bytes([b; 64]);
+        let proposal = PalwComputeSetProposalV1 {
+            version: PALW_COMPUTE_SET_PROPOSAL_PAYLOAD_VERSION,
+            descriptor: PalwComputeSetDescriptorV2 {
+                version: PALW_COMPUTE_SET_DESCRIPTOR_VERSION,
+                compute_vm_id: h(1),
+                model_family_id: h(2),
+                model_artifact_root: h(3),
+                model_manifest_root: h(4),
+                tokenizer_root: h(5),
+                chat_template_root: h(6),
+                preprocessing_root: h(7),
+                decode_policy_root: h(8),
+                semantic_program_root: h(9),
+                shape_table_root: h(10),
+                shape_cost_table_root: h(11),
+                arithmetic_rules_root: h(12),
+                overflow_budget_root: h(13),
+                lut_root: h(14),
+                trace_policy_root: h(15),
+                checkpoint_policy_root: h(16),
+                conformance_vector_root: h(17),
+                modality_mask: 1,
+                resource_limits_root: h(18),
+            },
+            proposer_credential: h(0x50),
+            proposal_bond_ref: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x51u8; 64]), index: 0 },
+            artifact_distribution_root: h(0x52),
+            independent_build_attestation_root: h(0x53),
+            requested_shadow_activation_daa: 1_000,
+        };
+
+        // Well-formed canonical proposal → accepted.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL;
+        tx.payload = borsh::to_vec(&proposal).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Trailing byte breaks strict canonicality → InvalidComputeRegistryPayload.
+        let mut padded = tx.clone();
+        padded.payload.push(0);
+        assert_match!(
+            tv.validate_tx_in_isolation(&padded),
+            Err(TxRuleError::InvalidComputeRegistryPayload(ComputeSetRegistryError::MalformedRegistryPayload(_)))
+        );
+
+        // Unsupported payload version is pinned at this coordinate too.
+        let mut wrong_version = proposal.clone();
+        wrong_version.version = 9;
+        let mut tx_wrong = base.clone();
+        tx_wrong.subnetwork_id = SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL;
+        tx_wrong.payload = borsh::to_vec(&wrong_version).unwrap();
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx_wrong),
+            Err(TxRuleError::InvalidComputeRegistryPayload(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion(
+                "compute_set_proposal",
+                9
+            )))
+        );
+
+        // 0x45 sits above the band: still the blanket SubnetworksDisabled, fail-closed.
+        let mut alien = base.clone();
+        alien.subnetwork_id = SubnetworkId::from_byte(0x45);
+        assert_match!(tv.validate_tx_in_isolation(&alien), Err(TxRuleError::SubnetworksDisabled(_)));
     }
 
     /// kaspa-pq Phase 10 (ADR-0009): a transaction routed by a DNS finality

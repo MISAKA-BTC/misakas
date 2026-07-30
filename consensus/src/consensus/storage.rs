@@ -22,6 +22,7 @@ use crate::{
         headers_selected_tip::DbHeadersSelectedTipStore,
         palw::DbPalwStore,
         palw_beacon::DbPalwBeaconStore,
+        palw_compute_registry::DbPalwComputeRegistryStore,
         palw_da::DbPalwDaStore,
         palw_lane_bits::DbPalwLaneBitsStore,
         palw_nullifier::DbPalwNullifierStore,
@@ -177,6 +178,11 @@ pub struct ConsensusStorage {
     pub palw_search_availability_store: Arc<RwLock<DbPalwSearchAvailabilityStore>>,
     /// Header-v4 fixed-row fork-local objective anti-spam accumulator (prefix 249).
     pub palw_spam_store: Arc<DbPalwSpamAccumulatorStore>,
+    /// ADR-MA Compute Set registry (prefixes 62-66): content-addressed write-once
+    /// descriptor/policy/plan/certificate tiers + the block-keyed fork-local view. Empty on every
+    /// shipped preset (`palw_compute_registry_activation_daa_score == u64::MAX`), so introducing
+    /// the store needs no database-version transition; first activation is a re-genesis event.
+    pub palw_compute_registry_store: Arc<DbPalwComputeRegistryStore>,
 
     // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): the per-epoch accumulator
     // ([`EpochTally`]) and its per-block validator quality sub-pool input. Both
@@ -390,6 +396,11 @@ impl ConsensusStorage {
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
+        let palw_compute_registry_store = Arc::new(DbPalwComputeRegistryStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(1024).untracked().build(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
         // kaspa-pq ADR-0040 §5.15.13 (G16): the per-chain-block paid `job_nullifier` row. `Vec<Hash64>`
         // is unit-estimable only, so — like `rewarded_epochs_store`, whose shape this mirrors exactly —
         // an UNTRACKED (Count) policy is mandatory. Always empty on every shipped preset.
@@ -569,6 +580,7 @@ impl ConsensusStorage {
             palw_da_store,
             palw_search_availability_store,
             palw_spam_store,
+            palw_compute_registry_store,
             epoch_accumulator_store,
             block_quality_pool_store,
             reserve_balance_store,

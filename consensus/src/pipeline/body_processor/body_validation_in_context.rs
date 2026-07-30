@@ -73,6 +73,14 @@ impl BlockBodyProcessor {
     /// result before activation. Without this contextual fence, an upgraded node could accept a
     /// pre-fork block that every legacy node rejects.
     fn check_palw_overlay_activation(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
+        // ADR-MA §17.1: the Compute Set registry band (0x40-0x44) has its OWN activation fence,
+        // independent of the PALW overlay fence below. Every shipped preset keeps it at
+        // `u64::MAX`, so registry transactions stay block-invalid everywhere today.
+        if block.header.daa_score < self.palw_compute_registry_activation_daa_score {
+            if let Some(tx) = block.transactions.iter().find(|tx| tx.subnetwork_id.is_palw_compute_registry()) {
+                return Err(RuleError::TxInContextFailed(tx.id(), TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone())));
+            }
+        }
         if block.header.daa_score >= self.palw_activation_daa_score {
             return Ok(());
         }
@@ -675,6 +683,29 @@ mod tests {
             body_processor.check_palw_overlay_activation(&block.to_immutable()),
             Err(RuleError::TxInContextFailed(_, TxRuleError::SubnetworksDisabled(id)))
                 if id == SUBNETWORK_ID_PALW_BEACON_COMMIT
+        );
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// ADR-MA §17.1: the Compute Set registry band (0x40-0x44) has its OWN fence, independent of
+    /// the PALW overlay fence — a registry tx is block-invalid below
+    /// `palw_compute_registry_activation_daa_score` even on a PALW-ACTIVE preset, and every
+    /// shipped preset keeps that fence at `u64::MAX`.
+    #[tokio::test]
+    async fn compute_registry_subnetworks_are_fenced_before_activation() {
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL;
+        let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+        let consensus = TestConsensus::new(&config);
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+        let registry_tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL, 0, vec![]);
+        let block = consensus.build_block_with_parents_and_transactions(1.into(), vec![config.genesis.hash], vec![registry_tx]);
+
+        assert_match!(
+            body_processor.check_palw_overlay_activation(&block.to_immutable()),
+            Err(RuleError::TxInContextFailed(_, TxRuleError::SubnetworksDisabled(id)))
+                if id == SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL
         );
 
         consensus.shutdown(wait_handles);

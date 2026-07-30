@@ -104,6 +104,9 @@ pub struct BlockBodyProcessor {
     pub(super) palw_overlay_view_store: Arc<crate::model::stores::palw_overlay_view::DbPalwOverlayViewStore>,
     pub(super) ghostdag_store: Arc<DbGhostdagStore>,
     pub(super) palw_activation_daa_score: u64,
+    /// ADR-MA §17.1: the Compute Set registry band's own activation fence (`u64::MAX` on every
+    /// shipped preset — registry txs are block-invalid everywhere today).
+    pub(super) palw_compute_registry_activation_daa_score: u64,
     pub(super) palw_epoch_length_daa: u64,
     /// ADR-0039 §11.3 (K5): the beacon grace window, consumed by the clause-10 lagged halt indicator and
     /// the `advance_epoch_gated` activation freeze (both keyed off buried seed-carry runs).
@@ -177,6 +180,7 @@ impl BlockBodyProcessor {
             palw_overlay_view_store: storage.palw_overlay_view_store.clone(),
             ghostdag_store: storage.ghostdag_store.clone(),
             palw_activation_daa_score: params.palw_activation_daa_score,
+            palw_compute_registry_activation_daa_score: params.palw_compute_registry_activation_daa_score,
             palw_epoch_length_daa: params.palw_epoch_length_daa,
             palw_beacon_grace_epochs: params.palw_beacon_grace_epochs,
             palw_batch_admission: params.palw_batch_admission,

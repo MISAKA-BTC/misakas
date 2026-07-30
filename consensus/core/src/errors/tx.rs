@@ -109,6 +109,12 @@ pub enum TxRuleError {
     #[error("transaction has an invalid PALW overlay payload: {0}")]
     InvalidPalwOverlayPayload(PalwTxError),
 
+    /// ADR-MA §17.1: a transaction routed by a Compute Set registry subnetwork (0x40-0x44) failed
+    /// the strict context-free canonical decoder. The activation fence and the fold-time
+    /// admission rules (§9/§10.3) remain contextual.
+    #[error("transaction has an invalid Compute Set registry payload: {0}")]
+    InvalidComputeRegistryPayload(crate::palw_compute_set::ComputeSetRegistryError),
+
     /// kaspa-pq **ADR-0040 (AUTH-TXSHAPE)**: the PALW per-block ticket authorization (subnetwork
     /// 0x38) is block METADATA, not a transfer, and every one of its consensus-hashed bytes must be a
     /// function of its payload alone. Otherwise the same authorization payload can be carried by many
