@@ -62,6 +62,14 @@ pub enum DatabaseStorePrefixes {
     PruningUtxosetSyncFlag = 60,
     BodyMissingAnticone = 61,
 
+    // ---- PALW model-agnostic Compute Set registry (ADR-MA §21.1) ----
+    // Content-addressed, write-once record stores + the block-keyed fork-local view.
+    PalwComputeSetDescriptor = 62,
+    PalwComputeSetPolicy = 63,
+    PalwAllocationPlan = 64,
+    PalwComputeSetCertificate = 65,
+    PalwComputeRegistryView = 66,
+
     // ---- Metadata ----
     MultiConsensusMetadata = 124,
     ConsensusEntries = 125,

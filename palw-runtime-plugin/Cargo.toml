@@ -1,0 +1,19 @@
+[package]
+name = "palw-runtime-plugin"
+description = "PALW model-agnostic runtime plugin contract (ADR-MA §16): the provider/auditor-side trait for executing, conforming, replaying and dispute-expanding one registered Compute Set. Full nodes NEVER depend on this crate — model execution lives outside consensus by construction."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-hashes.workspace = true
+kaspa-consensus-core.workspace = true
+misaka-palw.workspace = true
+borsh.workspace = true
+serde.workspace = true
+thiserror.workspace = true

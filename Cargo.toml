@@ -30,6 +30,7 @@ members = [
     "misaka-endpoints",
     "mil/palw",
     "mil/miner",
+    "palw-runtime-plugin",
     "mtp",
     "mtp/collectors",
     "mtp/service",

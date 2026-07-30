@@ -14,6 +14,7 @@ pub mod headers;
 pub mod headers_selected_tip;
 pub mod palw;
 pub mod palw_beacon;
+pub mod palw_compute_registry;
 pub mod palw_da;
 pub mod palw_lane_bits;
 pub mod palw_nullifier;

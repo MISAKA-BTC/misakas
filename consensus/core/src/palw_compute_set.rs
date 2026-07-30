@@ -25,8 +25,10 @@
 //! pinned plain `u8` (manual borsh, explicit discriminants), so the enum's declaration order can
 //! never silently re-number persisted or hashed bytes.
 
+use crate::tx::TransactionOutpoint;
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash64, blake2b_512_keyed};
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 // =============================================================================================
@@ -318,16 +320,29 @@ pub enum PolicyRegistrationOutcome {
     Idempotent,
 }
 
-/// §9 + §22.2 — validate one policy revision against the set's recorded history.
+/// The minimal precedent facts a policy revision is validated against — what the fork-local
+/// registry view retains per set (full records live in the content-addressed store, addressed
+/// by `policy_id`, so byte-equality of a re-submission reduces to id equality).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PolicyPrecedent {
+    pub highest_sequence: u64,
+    pub state: ComputeSetState,
+}
+
+/// §9 + §22.2 + §18.1 — validate one policy revision against the set's recorded history.
 ///
 /// * `descriptor_registered` — the §9 rule 「未登録DescriptorへのPolicy」→ reject.
-/// * `highest_existing` — the record with the highest `policy_sequence` for this set (if any);
-///   `same_sequence_existing` — a record already stored under `next.policy_sequence` (if any).
+/// * `activation_certified` — §17.3/§18.1: entering `Shadow` requires the validator-quorum
+///   activation certificate; a set that never certified can never leave `Proposed`.
+/// * `precedent` — highest-sequence facts so far (if any); `same_sequence_policy_id` — the
+///   content id already stored under `next.policy_sequence` (if any): equal id → idempotent,
+///   different id → the §9 「同一set/sequenceで異なるpayload」consensus error.
 /// * `current_daa` — the DAA score of the block applying the revision (future-dating base).
 pub fn validate_policy_progression(
     descriptor_registered: bool,
-    highest_existing: Option<&PalwComputeSetPolicyV1>,
-    same_sequence_existing: Option<&PalwComputeSetPolicyV1>,
+    activation_certified: bool,
+    precedent: Option<PolicyPrecedent>,
+    same_sequence_policy_id: Option<Hash64>,
     next: &PalwComputeSetPolicyV1,
     caps: &PolicyGovernanceCapsV1,
     current_daa: u64,
@@ -369,17 +384,24 @@ pub fn validate_policy_progression(
             }
         }
     }
+    // §17.3/§18.1 — the Shadow stage is gated on the validator-quorum activation certificate.
+    // Enforcing at the Shadow edge covers the whole lifecycle: the transition matrix forces
+    // every path to Active THROUGH Shadow, so no uncertified set can ever mint.
+    if next.state == ComputeSetState::Shadow && !activation_certified {
+        return Err(ComputeSetRegistryError::ShadowRequiresActivationCertificate(next.compute_set_id));
+    }
 
-    // Same-sequence handling: byte-identical replay is idempotent, divergence is an error (§9).
-    if let Some(existing) = same_sequence_existing {
-        return if existing == next {
+    // Same-sequence handling: byte-identical replay (same content id) is idempotent, divergence
+    // is an error (§9).
+    if let Some(existing_id) = same_sequence_policy_id {
+        return if existing_id == next.policy_id() {
             Ok(PolicyRegistrationOutcome::Idempotent)
         } else {
             Err(ComputeSetRegistryError::PolicySequenceDiverged { set: next.compute_set_id, sequence: next.policy_sequence })
         };
     }
 
-    match highest_existing {
+    match precedent {
         None => {
             // §18.1 — a set's life starts as a Proposal; the first policy record must say so.
             if next.state != ComputeSetState::Proposed {
@@ -391,10 +413,10 @@ pub fn validate_policy_progression(
                 // §9 「Retired後の不正な再有効化」/ §28.1 retired set reactivation.
                 return Err(ComputeSetRegistryError::RetiredSetIsTerminal(next.compute_set_id));
             }
-            if next.policy_sequence <= prev.policy_sequence {
+            if next.policy_sequence <= prev.highest_sequence {
                 return Err(ComputeSetRegistryError::PolicySequenceRollback {
                     set: next.compute_set_id,
-                    prev: prev.policy_sequence,
+                    prev: prev.highest_sequence,
                     next: next.policy_sequence,
                 });
             }
@@ -592,6 +614,469 @@ pub fn resolve_allocation_plan<'a>(
 }
 
 // =============================================================================================
+// §17 — generic on-chain registry transaction payloads (one fixed band forever, §17.1)
+// =============================================================================================
+
+pub const PALW_COMPUTE_SET_PROPOSAL_PAYLOAD_VERSION: u16 = 1;
+pub const PALW_COMPUTE_SET_ACTIVATION_CERT_VERSION: u16 = 1;
+pub const PALW_COMPUTE_SET_POLICY_UPDATE_VERSION: u16 = 1;
+pub const PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION: u16 = 1;
+
+/// §17.2 — registers a NEW Compute Set (state `Proposed`). Carries the full immutable
+/// descriptor; `compute_set_id` is derived from it, never named.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwComputeSetProposalV1 {
+    pub version: u16,
+
+    pub descriptor: PalwComputeSetDescriptorV2,
+
+    pub proposer_credential: Hash64,
+    /// The §23.2 anti-explosion bond (value floor enforced at the tx-rule layer, like provider
+    /// bonds).
+    pub proposal_bond_ref: TransactionOutpoint,
+
+    pub artifact_distribution_root: Hash64,
+    pub independent_build_attestation_root: Hash64,
+
+    pub requested_shadow_activation_daa: u64,
+}
+
+/// §17.3 — the validator-quorum certificate gating the Shadow stage. Reuses the existing
+/// ML-DSA-87 validator quorum machinery; a single operator key can never activate a set. The
+/// cryptographic vote verification runs at the process layer (the batch-certificate
+/// `verify_certificate_attestation` pattern); this record carries what was certified.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwComputeSetActivationCertificateV1 {
+    pub version: u16,
+
+    pub compute_set_id: Hash64,
+
+    pub descriptor_hash: Hash64,
+    pub conformance_result_root: Hash64,
+    pub auditor_capacity_evidence_root: Hash64,
+    pub artifact_reproducibility_root: Hash64,
+
+    pub validator_set_commitment: Hash64,
+    pub approving_stake: u128,
+    pub total_selected_stake: u128,
+
+    pub effective_from_daa: u64,
+    pub votes_root: Hash64,
+}
+
+/// §17.1 — one mutable-policy revision, wrapped so the payload kind is versioned independently
+/// of the policy record it carries.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwComputeSetPolicyUpdateV1 {
+    pub version: u16,
+    pub policy: PalwComputeSetPolicyV1,
+}
+
+/// §18.6 — immediate stop of new tickets / PALW blocks / jobs for one set. History stays valid;
+/// the set's shares are zeroed by the NEXT allocation plan, and recovery (or retirement) happens
+/// through later policy revisions under the §8.1 transition matrix.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwComputeSetEmergencyHaltV1 {
+    pub version: u16,
+    pub compute_set_id: Hash64,
+    /// Commitment to the halt rationale/evidence (content-addressed, may be zero for a pure
+    /// governance stop).
+    pub evidence_root: Hash64,
+}
+
+/// The decoded, canonical form of one registry transaction (the registry-band analogue of
+/// `PalwOverlayEffect`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwComputeRegistryEffect {
+    Proposal(PalwComputeSetProposalV1),
+    ActivationCertificate(PalwComputeSetActivationCertificateV1),
+    PolicyUpdate(PalwComputeSetPolicyUpdateV1),
+    AllocationPlan(PalwModelAllocationPlanV1),
+    EmergencyHalt(PalwComputeSetEmergencyHaltV1),
+}
+
+/// Strict, canonical decode of a registry-band payload (`0x40..=0x44`). Mirrors
+/// `parse_palw_overlay`: strict borsh (`from_slice` rejects trailing bytes), a re-encode
+/// equality check (one canonical byte form per payload), and per-kind version pins. Unknown
+/// bytes in the band fail closed.
+pub fn parse_palw_compute_registry(
+    subnet_first_byte: u8,
+    payload: &[u8],
+) -> Result<PalwComputeRegistryEffect, ComputeSetRegistryError> {
+    use crate::subnets::*;
+
+    fn strict<T: BorshDeserialize + BorshSerialize>(payload: &[u8], kind: &'static str) -> Result<T, ComputeSetRegistryError> {
+        let decoded: T =
+            borsh::from_slice(payload).map_err(|_| ComputeSetRegistryError::MalformedRegistryPayload(kind))?;
+        // Round-trip canonicality (the repo idiom): the wire bytes must BE the canonical bytes,
+        // or two nodes could store different preimages for one content id.
+        if borsh::to_vec(&decoded).map(|canonical| canonical != payload).unwrap_or(true) {
+            return Err(ComputeSetRegistryError::NonCanonicalRegistryPayload(kind));
+        }
+        Ok(decoded)
+    }
+
+    let kind = Some(subnet_first_byte);
+    if kind == SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL.palw_compute_registry_tx_kind() {
+        let proposal: PalwComputeSetProposalV1 = strict(payload, "compute_set_proposal")?;
+        if proposal.version != PALW_COMPUTE_SET_PROPOSAL_PAYLOAD_VERSION {
+            return Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("compute_set_proposal", proposal.version));
+        }
+        proposal.descriptor.validate_in_isolation()?;
+        Ok(PalwComputeRegistryEffect::Proposal(proposal))
+    } else if kind == SUBNETWORK_ID_PALW_COMPUTE_SET_ACTIVATION_CERT.palw_compute_registry_tx_kind() {
+        let certificate: PalwComputeSetActivationCertificateV1 = strict(payload, "compute_set_activation_cert")?;
+        if certificate.version != PALW_COMPUTE_SET_ACTIVATION_CERT_VERSION {
+            return Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion(
+                "compute_set_activation_cert",
+                certificate.version,
+            ));
+        }
+        Ok(PalwComputeRegistryEffect::ActivationCertificate(certificate))
+    } else if kind == SUBNETWORK_ID_PALW_COMPUTE_SET_POLICY_UPDATE.palw_compute_registry_tx_kind() {
+        let update: PalwComputeSetPolicyUpdateV1 = strict(payload, "compute_set_policy_update")?;
+        if update.version != PALW_COMPUTE_SET_POLICY_UPDATE_VERSION {
+            return Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("compute_set_policy_update", update.version));
+        }
+        Ok(PalwComputeRegistryEffect::PolicyUpdate(update))
+    } else if kind == SUBNETWORK_ID_PALW_MODEL_ALLOCATION_PLAN.palw_compute_registry_tx_kind() {
+        let plan: PalwModelAllocationPlanV1 = strict(payload, "model_allocation_plan")?;
+        if plan.version != PALW_MODEL_ALLOCATION_PLAN_VERSION {
+            return Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("model_allocation_plan", plan.version));
+        }
+        Ok(PalwComputeRegistryEffect::AllocationPlan(plan))
+    } else if kind == SUBNETWORK_ID_PALW_COMPUTE_SET_EMERGENCY_HALT.palw_compute_registry_tx_kind() {
+        let halt: PalwComputeSetEmergencyHaltV1 = strict(payload, "compute_set_emergency_halt")?;
+        if halt.version != PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION {
+            return Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("compute_set_emergency_halt", halt.version));
+        }
+        Ok(PalwComputeRegistryEffect::EmergencyHalt(halt))
+    } else {
+        Err(ComputeSetRegistryError::UnhandledRegistrySubnet(subnet_first_byte))
+    }
+}
+
+// =============================================================================================
+// §21.2 — the fork-local registry view (the `PalwBatchViewV1` analogue for Compute Sets)
+// =============================================================================================
+
+/// Anti-explosion bound on the number of sets a single view tracks (§23.2). Proposal bonds are
+/// the economic limit; this is the hard structural one.
+pub const MAX_REGISTRY_VIEW_SETS: usize = 256;
+
+/// One row of a set's policy history index: enough to (a) validate the next revision and
+/// (b) resolve the policy in force at any source DAA (§9) — the record CONTENT lives in the
+/// content-addressed store under `policy_id`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwComputePolicyIndexEntryV1 {
+    pub sequence: u64,
+    pub effective_from_daa: u64,
+    pub policy_id: Hash64,
+    pub state: ComputeSetState,
+}
+
+/// Per-set view row.
+#[derive(Clone, Debug, PartialEq, Eq, Default, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwComputeSetViewEntryV1 {
+    /// §17.3 — a quorum-verified activation certificate has been recorded.
+    pub activation_certified: bool,
+    /// §18.6 — an emergency halt is in force (cleared only by a later policy revision whose
+    /// transition the §8.1 matrix admits from `EmergencyHalted`).
+    pub halted: bool,
+    /// Ascending by `sequence`; grows only by governance actions, so its size is bounded by
+    /// governance cadence, not by chain length.
+    pub policy_index: Vec<PalwComputePolicyIndexEntryV1>,
+}
+
+impl PalwComputeSetViewEntryV1 {
+    /// The lifecycle state currently in force. An emergency halt overrides the policy state
+    /// (§18.6 — the halt is immediate; the policy record catching up is a later revision).
+    /// A set with no policy yet is `Proposed` (§17.2 — the proposal itself registers it).
+    pub fn current_state(&self) -> ComputeSetState {
+        if self.halted {
+            return ComputeSetState::EmergencyHalted;
+        }
+        self.policy_index.last().map(|entry| entry.state).unwrap_or(ComputeSetState::Proposed)
+    }
+
+    fn precedent(&self) -> Option<PolicyPrecedent> {
+        self.policy_index.last().map(|entry| PolicyPrecedent {
+            highest_sequence: entry.sequence,
+            state: if self.halted { ComputeSetState::EmergencyHalted } else { entry.state },
+        })
+    }
+
+    /// §9 resolution over the index: the highest sequence already effective at `daa_score`.
+    pub fn resolve_policy_id_at(&self, daa_score: u64) -> Option<Hash64> {
+        self.policy_index
+            .iter()
+            .filter(|entry| entry.effective_from_daa <= daa_score)
+            .max_by_key(|entry| entry.sequence)
+            .map(|entry| entry.policy_id)
+    }
+}
+
+/// One row of the plan history index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwComputePlanIndexEntryV1 {
+    pub sequence: u64,
+    pub effective_from_daa: u64,
+    pub plan_id: Hash64,
+}
+
+/// The fork-local, block-keyed Compute Set registry view (§21.2): content-addressed records
+/// land in write-once stores; THIS is the mutable index a block's past determines — applied
+/// fork-locally, persisted per block, reverted by reorg exactly like `PalwBatchViewV1`.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwComputeRegistryViewV1 {
+    pub version: u16,
+    pub sets: BTreeMap<Hash64, PalwComputeSetViewEntryV1>,
+    /// Ascending by `sequence`.
+    pub plan_index: Vec<PalwComputePlanIndexEntryV1>,
+    /// The latest plan's full entry list — the §22.1 ramp baseline for validating its successor.
+    pub latest_plan: Option<PalwModelAllocationPlanV1>,
+}
+
+impl Default for PalwComputeRegistryViewV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PalwComputeRegistryViewV1 {
+    pub fn new() -> Self {
+        Self { version: 1, sets: BTreeMap::new(), plan_index: Vec::new(), latest_plan: None }
+    }
+
+    /// §17.2/§7.2 — apply a proposal: absent → insert (`Proposed`), present → idempotent
+    /// (`compute_set_id` is the content hash, so byte divergence under one id cannot occur
+    /// through this path).
+    pub fn apply_proposal(
+        &mut self,
+        proposal: &PalwComputeSetProposalV1,
+    ) -> Result<DescriptorRegistrationOutcome, ComputeSetRegistryError> {
+        proposal.descriptor.validate_in_isolation()?;
+        let set_id = proposal.descriptor.compute_set_id();
+        if self.sets.contains_key(&set_id) {
+            return Ok(DescriptorRegistrationOutcome::Idempotent);
+        }
+        if self.sets.len() >= MAX_REGISTRY_VIEW_SETS {
+            return Err(ComputeSetRegistryError::RegistryViewFull(MAX_REGISTRY_VIEW_SETS));
+        }
+        self.sets.insert(set_id, PalwComputeSetViewEntryV1::default());
+        Ok(DescriptorRegistrationOutcome::Inserted)
+    }
+
+    /// §17.3 — record a quorum-verified activation certificate. `quorum_verified` MUST be the
+    /// result of the process-layer ML-DSA-87 vote verification (the batch-certificate
+    /// `verify_certificate_attestation` pattern); this method refuses unverified certificates
+    /// rather than trusting the payload's own stake claims.
+    pub fn apply_certificate(
+        &mut self,
+        certificate: &PalwComputeSetActivationCertificateV1,
+        quorum_verified: bool,
+    ) -> Result<(), ComputeSetRegistryError> {
+        if !quorum_verified {
+            return Err(ComputeSetRegistryError::CertificateQuorumNotVerified(certificate.compute_set_id));
+        }
+        if certificate.descriptor_hash != certificate.compute_set_id {
+            // The descriptor hash IS the set id (§7.1); a certificate naming two different
+            // identities certified nothing.
+            return Err(ComputeSetRegistryError::CertificateDescriptorMismatch {
+                set: certificate.compute_set_id,
+                descriptor_hash: certificate.descriptor_hash,
+            });
+        }
+        if certificate.approving_stake == 0 || certificate.approving_stake > certificate.total_selected_stake {
+            return Err(ComputeSetRegistryError::CertificateStakeInvalid {
+                approving: certificate.approving_stake,
+                total: certificate.total_selected_stake,
+            });
+        }
+        let entry = self
+            .sets
+            .get_mut(&certificate.compute_set_id)
+            .ok_or(ComputeSetRegistryError::CertificateForUnregisteredSet(certificate.compute_set_id))?;
+        entry.activation_certified = true;
+        Ok(())
+    }
+
+    /// §9/§22.2 — apply one policy revision through [`validate_policy_progression`], then index
+    /// it. On success the revision also clears an emergency halt (the matrix only admits
+    /// transitions FROM `EmergencyHalted` that governance is allowed to take).
+    pub fn apply_policy(
+        &mut self,
+        policy: &PalwComputeSetPolicyV1,
+        caps: &PolicyGovernanceCapsV1,
+        current_daa: u64,
+    ) -> Result<PolicyRegistrationOutcome, ComputeSetRegistryError> {
+        let entry = self
+            .sets
+            .get(&policy.compute_set_id)
+            .ok_or(ComputeSetRegistryError::PolicyForUnregisteredSet(policy.compute_set_id))?;
+        let same_sequence_policy_id =
+            entry.policy_index.iter().find(|row| row.sequence == policy.policy_sequence).map(|row| row.policy_id);
+        let outcome = validate_policy_progression(
+            true,
+            entry.activation_certified,
+            entry.precedent(),
+            same_sequence_policy_id,
+            policy,
+            caps,
+            current_daa,
+        )?;
+        if outcome == PolicyRegistrationOutcome::Inserted {
+            let entry = self.sets.get_mut(&policy.compute_set_id).expect("presence checked above");
+            entry.policy_index.push(PalwComputePolicyIndexEntryV1 {
+                sequence: policy.policy_sequence,
+                effective_from_daa: policy.effective_from_daa,
+                policy_id: policy.policy_id(),
+                state: policy.state,
+            });
+            entry.halted = false;
+        }
+        Ok(outcome)
+    }
+
+    /// §18.6 — apply an emergency halt: immediate (never future-dated — it is an emergency),
+    /// idempotent, and it never rewrites history (the policy index is untouched).
+    pub fn apply_halt(&mut self, halt: &PalwComputeSetEmergencyHaltV1) -> Result<(), ComputeSetRegistryError> {
+        let entry =
+            self.sets.get_mut(&halt.compute_set_id).ok_or(ComputeSetRegistryError::HaltForUnregisteredSet(halt.compute_set_id))?;
+        entry.halted = true;
+        Ok(())
+    }
+
+    /// §10.3/§22.1 — apply an allocation plan, resolving every entry's lifecycle state from
+    /// THIS view (halt override included) and ramp-validating against the latest recorded plan.
+    pub fn apply_plan(
+        &mut self,
+        plan: &PalwModelAllocationPlanV1,
+        limits: &AllocationGovernanceLimitsV1,
+        current_daa: u64,
+    ) -> Result<PlanRegistrationOutcome, ComputeSetRegistryError> {
+        // Content identity by plan_id: same sequence + equal id → idempotent, different → diverged.
+        if let Some(existing) = self.plan_index.iter().find(|row| row.sequence == plan.sequence) {
+            return if existing.plan_id == plan.derive_plan_id() {
+                Ok(PlanRegistrationOutcome::Idempotent)
+            } else {
+                Err(ComputeSetRegistryError::PlanSequenceDiverged(plan.sequence))
+            };
+        }
+        let sets = &self.sets;
+        let state_of = |set_id: &Hash64| -> Option<ComputeSetState> { sets.get(set_id).map(|entry| entry.current_state()) };
+        let outcome = validate_allocation_plan(plan, &state_of, self.latest_plan.as_ref(), None, limits, current_daa)?;
+        if outcome == PlanRegistrationOutcome::Inserted {
+            self.plan_index.push(PalwComputePlanIndexEntryV1 {
+                sequence: plan.sequence,
+                effective_from_daa: plan.effective_from_daa,
+                plan_id: plan.plan_id,
+            });
+            self.latest_plan = Some(plan.clone());
+        }
+        Ok(outcome)
+    }
+
+    /// §21.4 resolution for plans: the plan in force at `daa_score`.
+    pub fn resolve_plan_id_at(&self, daa_score: u64) -> Option<Hash64> {
+        self.plan_index
+            .iter()
+            .filter(|row| row.effective_from_daa <= daa_score)
+            .max_by_key(|row| row.sequence)
+            .map(|row| row.plan_id)
+    }
+}
+
+// =============================================================================================
+// §14/§21.4 — historical work resolution (source header → exact immutable records → credit)
+// =============================================================================================
+
+/// The two numbers GHOSTDAG needs from a source block's committed records: the quantum→hash
+/// normalization scale and the DAG-credit weight. Everything else about §14 is the VALIDATION
+/// that these came from the exact records the header names, active at the source DAA.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoricalComputeResolution {
+    pub compute_work_scale: u64,
+    pub weight_factor_bps: u16,
+}
+
+/// §14 — `source header → exact policy ID → exact allocation plan ID → historical immutable
+/// resolution`. Validates that:
+///
+/// * the supplied records ARE the committed ones (content-id equality — a peer cannot swap in
+///   a different revision, §23.4);
+/// * the policy governs the header's own `compute_set_id`;
+/// * both records were effective at the SOURCE block's DAA (never "currently", ADR-MA-007);
+/// * the policy state was `Active` and the plan allotted the set nonzero share (§13.1).
+///
+/// Absence of any record is the caller's fail-closed reject (§22.3 `missing historical data`);
+/// this function only ever strengthens — it never substitutes a default.
+pub fn resolve_source_policy_for_credit(
+    policy: &PalwComputeSetPolicyV1,
+    plan: &PalwModelAllocationPlanV1,
+    expected_policy_id: Hash64,
+    expected_plan_id: Hash64,
+    header_compute_set_id: Hash64,
+    source_daa_score: u64,
+) -> Result<HistoricalComputeResolution, ComputeSetRegistryError> {
+    if policy.policy_id() != expected_policy_id {
+        return Err(ComputeSetRegistryError::CommittedPolicyMismatch { expected: expected_policy_id, actual: policy.policy_id() });
+    }
+    if policy.compute_set_id != header_compute_set_id {
+        return Err(ComputeSetRegistryError::PolicyGovernsDifferentSet {
+            policy_set: policy.compute_set_id,
+            header_set: header_compute_set_id,
+        });
+    }
+    if plan.plan_id != expected_plan_id || !plan.plan_id_is_canonical() {
+        return Err(ComputeSetRegistryError::CommittedPlanMismatch { expected: expected_plan_id, actual: plan.plan_id });
+    }
+    if policy.effective_from_daa > source_daa_score {
+        return Err(ComputeSetRegistryError::PolicyNotEffectiveAtSource {
+            effective_from_daa: policy.effective_from_daa,
+            source_daa_score,
+        });
+    }
+    if plan.effective_from_daa > source_daa_score {
+        return Err(ComputeSetRegistryError::PlanNotEffectiveAtSource { effective_from_daa: plan.effective_from_daa, source_daa_score });
+    }
+    if policy.state != ComputeSetState::Active {
+        return Err(ComputeSetRegistryError::SourcePolicyNotActive(policy.state));
+    }
+    let entry = plan
+        .entries
+        .iter()
+        .find(|entry| entry.compute_set_id == header_compute_set_id)
+        .ok_or(ComputeSetRegistryError::PlanOmitsSourceSet(header_compute_set_id))?;
+    if entry.target_share_bps == 0 {
+        return Err(ComputeSetRegistryError::SourceSetHasZeroShare(header_compute_set_id));
+    }
+    Ok(HistoricalComputeResolution { compute_work_scale: policy.compute_work_scale, weight_factor_bps: policy.weight_factor_bps })
+}
+
+/// §14 — `credited = mul_div_floor(normalized, weight_factor_bps, 10000)` over `BlueWorkType`,
+/// overflow-saturating exactly like `normalize_palw_work` (an attacker gains nothing from
+/// overflow; the compute-to-hash cap still bounds the credit downstream).
+pub fn credited_compute_work(normalized: crate::BlueWorkType, weight_factor_bps: u16) -> crate::BlueWorkType {
+    let weight = weight_factor_bps.min(BPS_DENOMINATOR) as u64;
+    let (scaled, overflow) = normalized.overflowing_mul_u64(weight);
+    let scaled = if overflow { crate::BlueWorkType::MAX } else { scaled };
+    scaled / crate::BlueWorkType::from_u64(BPS_DENOMINATOR as u64)
+}
+
+// Cache accounting for the DB store layer (fixed-size records count as one unit; the view
+// scales with the number of tracked sets, the PalwBatchViewV1 precedent).
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwComputeSetDescriptorV2 {}
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwComputeSetPolicyV1 {}
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwModelAllocationPlanV1 {}
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwComputeSetActivationCertificateV1 {}
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwComputeRegistryViewV1 {
+    fn estimate_mem_units(&self) -> usize {
+        self.sets.len().max(1)
+    }
+}
+
+// =============================================================================================
 // Errors
 // =============================================================================================
 
@@ -680,6 +1165,69 @@ pub enum ComputeSetRegistryError {
 
     #[error("plan effective_from_daa {effective_from_daa} is not in the future of {current_daa} (§10.3)")]
     PlanEffectiveNotFuture { effective_from_daa: u64, current_daa: u64 },
+
+    #[error("malformed {0} registry payload (strict borsh decode failed)")]
+    MalformedRegistryPayload(&'static str),
+
+    #[error("{0} registry payload is not in canonical byte form (re-encode mismatch)")]
+    NonCanonicalRegistryPayload(&'static str),
+
+    #[error("{0} registry payload version {1} is not supported")]
+    UnsupportedRegistryPayloadVersion(&'static str, u16),
+
+    #[error("subnetwork byte {0:#04x} is not a Compute Set registry kind (§22.3 fail-closed)")]
+    UnhandledRegistrySubnet(u8),
+
+    #[error("registry view already tracks {0} sets — proposal rejected (§23.2)")]
+    RegistryViewFull(usize),
+
+    #[error("set {0} cannot enter Shadow without a quorum-verified activation certificate (§17.3/§18.1)")]
+    ShadowRequiresActivationCertificate(Hash64),
+
+    #[error("activation certificate for set {0} was not quorum-verified — single-key activation is forbidden (§17.3)")]
+    CertificateQuorumNotVerified(Hash64),
+
+    #[error("activation certificate binds set {set} but descriptor hash {descriptor_hash} (§7.1: they must be equal)")]
+    CertificateDescriptorMismatch { set: Hash64, descriptor_hash: Hash64 },
+
+    #[error("activation certificate stake is inconsistent: approving {approving} of total {total}")]
+    CertificateStakeInvalid { approving: u128, total: u128 },
+
+    #[error("activation certificate targets unregistered set {0}")]
+    CertificateForUnregisteredSet(Hash64),
+
+    #[error("emergency halt targets unregistered set {0}")]
+    HaltForUnregisteredSet(Hash64),
+
+    #[error("a DIFFERENT activation certificate already exists for set {0} — supersession goes through the view fold, never a silent overwrite")]
+    CertificateDiverged(Hash64),
+
+    #[error("compute set registry store fault: {0} — consensus-load-bearing state is unreadable/unwritable")]
+    RegistryStoreFault(String),
+
+    #[error("supplied policy record {actual} is not the header-committed policy {expected} (§14/§23.4)")]
+    CommittedPolicyMismatch { expected: Hash64, actual: Hash64 },
+
+    #[error("committed policy governs set {policy_set}, but the header claims set {header_set} (§13.1)")]
+    PolicyGovernsDifferentSet { policy_set: Hash64, header_set: Hash64 },
+
+    #[error("supplied plan record {actual} is not the header-committed plan {expected} (§14/§23.4)")]
+    CommittedPlanMismatch { expected: Hash64, actual: Hash64 },
+
+    #[error("committed policy effective at {effective_from_daa} was not yet in force at source DAA {source_daa_score} (§13.1)")]
+    PolicyNotEffectiveAtSource { effective_from_daa: u64, source_daa_score: u64 },
+
+    #[error("committed plan effective at {effective_from_daa} was not yet in force at source DAA {source_daa_score} (§13.1)")]
+    PlanNotEffectiveAtSource { effective_from_daa: u64, source_daa_score: u64 },
+
+    #[error("source block's committed policy state is {0:?}, not Active (§13.1)")]
+    SourcePolicyNotActive(ComputeSetState),
+
+    #[error("committed allocation plan has no entry for source set {0} (§13.1)")]
+    PlanOmitsSourceSet(Hash64),
+
+    #[error("committed allocation plan gives source set {0} zero share — no PALW block may cite it (§13.1)")]
+    SourceSetHasZeroShare(Hash64),
 }
 
 // =============================================================================================
@@ -853,94 +1401,112 @@ mod tests {
         assert!(!Deprecated.can_transition_to(Shadow));
     }
 
+    fn precedent(sequence: u64, state: ComputeSetState) -> Option<PolicyPrecedent> {
+        Some(PolicyPrecedent { highest_sequence: sequence, state })
+    }
+
     #[test]
     fn policy_progression_rules() {
         let caps = PolicyGovernanceCapsV1::default();
         let set = descriptor(1).compute_set_id();
+        use ComputeSetState::*;
 
         // Unregistered descriptor → reject.
-        let first = policy(set, 1, 100, ComputeSetState::Proposed);
+        let first = policy(set, 1, 100, Proposed);
         assert!(matches!(
-            validate_policy_progression(false, None, None, &first, &caps, 50),
+            validate_policy_progression(false, false, None, None, &first, &caps, 50),
             Err(ComputeSetRegistryError::PolicyForUnregisteredSet(_))
         ));
         // First policy must be Proposed.
-        let premature = policy(set, 1, 100, ComputeSetState::Active);
+        let premature = policy(set, 1, 100, Active);
         assert!(matches!(
-            validate_policy_progression(true, None, None, &premature, &caps, 50),
-            Err(ComputeSetRegistryError::FirstPolicyMustBeProposed(ComputeSetState::Active))
+            validate_policy_progression(true, true, None, None, &premature, &caps, 50),
+            Err(ComputeSetRegistryError::FirstPolicyMustBeProposed(Active))
         ));
-        // Happy path: Proposed inserted.
-        assert_eq!(validate_policy_progression(true, None, None, &first, &caps, 50), Ok(PolicyRegistrationOutcome::Inserted));
+        // Happy path: Proposed inserted (no certificate needed to exist as a proposal).
+        assert_eq!(
+            validate_policy_progression(true, false, None, None, &first, &caps, 50),
+            Ok(PolicyRegistrationOutcome::Inserted)
+        );
 
-        // Progression Proposed → Shadow → Active.
-        let shadow = policy(set, 2, 200, ComputeSetState::Shadow);
-        assert_eq!(validate_policy_progression(true, Some(&first), None, &shadow, &caps, 150), Ok(PolicyRegistrationOutcome::Inserted));
-        let active = policy(set, 3, 300, ComputeSetState::Active);
-        assert_eq!(validate_policy_progression(true, Some(&shadow), None, &active, &caps, 250), Ok(PolicyRegistrationOutcome::Inserted));
+        // Shadow requires the quorum-verified activation certificate (§17.3/§18.1)…
+        let shadow = policy(set, 2, 200, Shadow);
+        assert!(matches!(
+            validate_policy_progression(true, false, precedent(1, Proposed), None, &shadow, &caps, 150),
+            Err(ComputeSetRegistryError::ShadowRequiresActivationCertificate(_))
+        ));
+        // …and proceeds once certified; then Shadow → Active.
+        assert_eq!(
+            validate_policy_progression(true, true, precedent(1, Proposed), None, &shadow, &caps, 150),
+            Ok(PolicyRegistrationOutcome::Inserted)
+        );
+        let active = policy(set, 3, 300, Active);
+        assert_eq!(
+            validate_policy_progression(true, true, precedent(2, Shadow), None, &active, &caps, 250),
+            Ok(PolicyRegistrationOutcome::Inserted)
+        );
 
         // Sequence rollback.
-        let rollback = policy(set, 3, 400, ComputeSetState::Active);
+        let rollback = policy(set, 3, 400, Active);
         assert!(matches!(
-            validate_policy_progression(true, Some(&active), None, &rollback, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), None, &rollback, &caps, 350),
             Err(ComputeSetRegistryError::PolicySequenceRollback { .. })
         ));
-        // Same sequence: identical payload idempotent, divergent payload rejected.
+        // Same sequence: identical content id idempotent, divergent content rejected.
         assert_eq!(
-            validate_policy_progression(true, Some(&active), Some(&active), &active, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), Some(active.policy_id()), &active, &caps, 350),
             Ok(PolicyRegistrationOutcome::Idempotent)
         );
         let mut divergent = active.clone();
         divergent.job_timeout_daa += 1;
         assert!(matches!(
-            validate_policy_progression(true, Some(&active), Some(&active), &divergent, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), Some(active.policy_id()), &divergent, &caps, 350),
             Err(ComputeSetRegistryError::PolicySequenceDiverged { .. })
         ));
         // Past-dated effective.
-        let past = policy(set, 4, 300, ComputeSetState::Active);
+        let past = policy(set, 4, 300, Active);
         assert!(matches!(
-            validate_policy_progression(true, Some(&active), None, &past, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), None, &past, &caps, 350),
             Err(ComputeSetRegistryError::PolicyEffectiveNotFuture { .. })
         ));
-        // Illegal transition Proposed → Active (skipping Shadow).
-        let skip = policy(set, 2, 200, ComputeSetState::Active);
+        // Illegal transition Proposed → Active (skipping the mandatory Shadow soak).
+        let skip = policy(set, 2, 200, Active);
         assert!(matches!(
-            validate_policy_progression(true, Some(&first), None, &skip, &caps, 150),
+            validate_policy_progression(true, true, precedent(1, Proposed), None, &skip, &caps, 150),
             Err(ComputeSetRegistryError::InvalidStateTransition { .. })
         ));
         // Retired terminal.
-        let retired = policy(set, 4, 400, ComputeSetState::Retired);
-        let after_retired = policy(set, 5, 500, ComputeSetState::Active);
+        let after_retired = policy(set, 5, 500, Active);
         assert!(matches!(
-            validate_policy_progression(true, Some(&retired), None, &after_retired, &caps, 450),
+            validate_policy_progression(true, true, precedent(4, Retired), None, &after_retired, &caps, 450),
             Err(ComputeSetRegistryError::RetiredSetIsTerminal(_))
         ));
 
         // §22.2 caps.
-        let mut heavy = policy(set, 4, 400, ComputeSetState::Active);
+        let mut heavy = policy(set, 4, 400, Active);
         heavy.weight_factor_bps = 10_001;
         assert!(matches!(
-            validate_policy_progression(true, Some(&active), None, &heavy, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), None, &heavy, &caps, 350),
             Err(ComputeSetRegistryError::WeightFactorOutOfRange(10_001))
         ));
-        let mut pricey = policy(set, 4, 400, ComputeSetState::Active);
+        let mut pricey = policy(set, 4, 400, Active);
         pricey.premium_pi_bps = caps.max_premium_pi_bps + 1;
         assert!(matches!(
-            validate_policy_progression(true, Some(&active), None, &pricey, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), None, &pricey, &caps, 350),
             Err(ComputeSetRegistryError::PremiumAboveCap { .. })
         ));
-        let mut zero_scale = policy(set, 4, 400, ComputeSetState::Active);
+        let mut zero_scale = policy(set, 4, 400, Active);
         zero_scale.compute_work_scale = 0;
         assert!(matches!(
-            validate_policy_progression(true, Some(&active), None, &zero_scale, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), None, &zero_scale, &caps, 350),
             Err(ComputeSetRegistryError::ActiveRequiresNonzero("compute_work_scale"))
         ));
         // Shadow (or any non-Active) must carry zero weight — Shadow soaks earn nothing (§8.1).
-        let mut weighted_shadow = policy(set, 2, 200, ComputeSetState::Shadow);
+        let mut weighted_shadow = policy(set, 2, 200, Shadow);
         weighted_shadow.weight_factor_bps = 1;
         assert!(matches!(
-            validate_policy_progression(true, Some(&first), None, &weighted_shadow, &caps, 150),
-            Err(ComputeSetRegistryError::NonActiveRequiresZeroWeight(ComputeSetState::Shadow))
+            validate_policy_progression(true, true, precedent(1, Proposed), None, &weighted_shadow, &caps, 150),
+            Err(ComputeSetRegistryError::NonActiveRequiresZeroWeight(Shadow))
         ));
     }
 
@@ -1111,5 +1677,257 @@ mod tests {
         assert_eq!(resolve_allocation_plan(&history, 600).unwrap().sequence, 2);
         assert_eq!(resolve_allocation_plan(&history, 900).unwrap().sequence, 3);
         assert!(resolve_allocation_plan(&history, 50).is_none());
+    }
+
+    fn proposal(tag: u8) -> PalwComputeSetProposalV1 {
+        PalwComputeSetProposalV1 {
+            version: PALW_COMPUTE_SET_PROPOSAL_PAYLOAD_VERSION,
+            descriptor: descriptor(tag),
+            proposer_credential: h(0x50),
+            proposal_bond_ref: TransactionOutpoint::new(h(0x51), 0),
+            artifact_distribution_root: h(0x52),
+            independent_build_attestation_root: h(0x53),
+            requested_shadow_activation_daa: 1_000,
+        }
+    }
+
+    fn certificate_for(set: Hash64) -> PalwComputeSetActivationCertificateV1 {
+        PalwComputeSetActivationCertificateV1 {
+            version: PALW_COMPUTE_SET_ACTIVATION_CERT_VERSION,
+            compute_set_id: set,
+            descriptor_hash: set,
+            conformance_result_root: h(0x60),
+            auditor_capacity_evidence_root: h(0x61),
+            artifact_reproducibility_root: h(0x62),
+            validator_set_commitment: h(0x63),
+            approving_stake: 21_000_000,
+            total_selected_stake: 30_000_000,
+            effective_from_daa: 500,
+            votes_root: h(0x64),
+        }
+    }
+
+    #[test]
+    fn registry_payload_parse_is_strict_and_versioned() {
+        use crate::subnets::*;
+        let proposal_kind = SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL.palw_compute_registry_tx_kind().unwrap();
+        let plan_kind = SUBNETWORK_ID_PALW_MODEL_ALLOCATION_PLAN.palw_compute_registry_tx_kind().unwrap();
+        let halt_kind = SUBNETWORK_ID_PALW_COMPUTE_SET_EMERGENCY_HALT.palw_compute_registry_tx_kind().unwrap();
+
+        // Round-trips.
+        let p = proposal(1);
+        let bytes = borsh::to_vec(&p).unwrap();
+        assert_eq!(parse_palw_compute_registry(proposal_kind, &bytes), Ok(PalwComputeRegistryEffect::Proposal(p.clone())));
+        let a_plan = plan(1, 100, vec![(h(0xa1), 10_000)]);
+        assert_eq!(
+            parse_palw_compute_registry(plan_kind, &borsh::to_vec(&a_plan).unwrap()),
+            Ok(PalwComputeRegistryEffect::AllocationPlan(a_plan))
+        );
+        let halt = PalwComputeSetEmergencyHaltV1 {
+            version: PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION,
+            compute_set_id: h(0xa1),
+            evidence_root: Hash64::default(),
+        };
+        assert_eq!(
+            parse_palw_compute_registry(halt_kind, &borsh::to_vec(&halt).unwrap()),
+            Ok(PalwComputeRegistryEffect::EmergencyHalt(halt))
+        );
+
+        // Strictness: trailing bytes are not canonical.
+        let mut padded = bytes.clone();
+        padded.push(0);
+        assert!(matches!(
+            parse_palw_compute_registry(proposal_kind, &padded),
+            Err(ComputeSetRegistryError::MalformedRegistryPayload("compute_set_proposal"))
+        ));
+        // Version pin.
+        let mut wrong_version = p.clone();
+        wrong_version.version = 2;
+        assert!(matches!(
+            parse_palw_compute_registry(proposal_kind, &borsh::to_vec(&wrong_version).unwrap()),
+            Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("compute_set_proposal", 2))
+        ));
+        // Unknown band byte fails closed.
+        assert!(matches!(
+            parse_palw_compute_registry(0x45, &bytes),
+            Err(ComputeSetRegistryError::UnhandledRegistrySubnet(0x45))
+        ));
+    }
+
+    #[test]
+    fn registry_view_full_lifecycle() {
+        let caps = PolicyGovernanceCapsV1::default();
+        let mut view = PalwComputeRegistryViewV1::new();
+        let p = proposal(1);
+        let set = p.descriptor.compute_set_id();
+        use ComputeSetState::*;
+
+        // Proposal: insert, then idempotent; state is Proposed.
+        assert_eq!(view.apply_proposal(&p), Ok(DescriptorRegistrationOutcome::Inserted));
+        assert_eq!(view.apply_proposal(&p), Ok(DescriptorRegistrationOutcome::Idempotent));
+        assert_eq!(view.sets[&set].current_state(), Proposed);
+
+        // First policy (Proposed) lands without a certificate.
+        assert_eq!(view.apply_policy(&policy(set, 1, 100, Proposed), &caps, 50), Ok(PolicyRegistrationOutcome::Inserted));
+        // Shadow blocked until the certificate is recorded.
+        assert!(matches!(
+            view.apply_policy(&policy(set, 2, 200, Shadow), &caps, 150),
+            Err(ComputeSetRegistryError::ShadowRequiresActivationCertificate(_))
+        ));
+
+        // Certificate gating (§17.3).
+        let cert = certificate_for(set);
+        assert!(matches!(
+            view.apply_certificate(&cert, false),
+            Err(ComputeSetRegistryError::CertificateQuorumNotVerified(_))
+        ));
+        let mut mismatched = cert.clone();
+        mismatched.descriptor_hash = h(0x99);
+        assert!(matches!(
+            view.apply_certificate(&mismatched, true),
+            Err(ComputeSetRegistryError::CertificateDescriptorMismatch { .. })
+        ));
+        let mut overstaked = cert.clone();
+        overstaked.approving_stake = overstaked.total_selected_stake + 1;
+        assert!(matches!(view.apply_certificate(&overstaked, true), Err(ComputeSetRegistryError::CertificateStakeInvalid { .. })));
+        let mut unknown_set = cert.clone();
+        unknown_set.compute_set_id = h(0x77);
+        unknown_set.descriptor_hash = h(0x77);
+        assert!(matches!(
+            view.apply_certificate(&unknown_set, true),
+            Err(ComputeSetRegistryError::CertificateForUnregisteredSet(_))
+        ));
+        assert_eq!(view.apply_certificate(&cert, true), Ok(()));
+
+        // Shadow → Active now proceed; the index resolves by DAA.
+        assert_eq!(view.apply_policy(&policy(set, 2, 200, Shadow), &caps, 150), Ok(PolicyRegistrationOutcome::Inserted));
+        let active_policy = policy(set, 3, 300, Active);
+        assert_eq!(view.apply_policy(&active_policy, &caps, 250), Ok(PolicyRegistrationOutcome::Inserted));
+        assert_eq!(view.sets[&set].resolve_policy_id_at(50), None);
+        assert_eq!(view.sets[&set].resolve_policy_id_at(250), Some(policy(set, 2, 200, Shadow).policy_id()));
+        assert_eq!(view.sets[&set].resolve_policy_id_at(900), Some(active_policy.policy_id()));
+        // Idempotent replay via content id.
+        assert_eq!(view.apply_policy(&active_policy, &caps, 350), Ok(PolicyRegistrationOutcome::Idempotent));
+
+        // Allocation plan lifecycle on the live view.
+        let limits = AllocationGovernanceLimitsV1 { max_change_per_plan_bps: 10_000, ..Default::default() };
+        let p1 = plan(1, 400, vec![(set, 10_000)]);
+        assert_eq!(view.apply_plan(&p1, &limits, 350), Ok(PlanRegistrationOutcome::Inserted));
+        assert_eq!(view.apply_plan(&p1, &limits, 350), Ok(PlanRegistrationOutcome::Idempotent));
+        let mut diverged = plan(1, 401, vec![(set, 10_000)]);
+        diverged.plan_id = diverged.derive_plan_id();
+        assert!(matches!(view.apply_plan(&diverged, &limits, 350), Err(ComputeSetRegistryError::PlanSequenceDiverged(1))));
+        assert_eq!(view.resolve_plan_id_at(400), Some(p1.plan_id));
+        assert_eq!(view.resolve_plan_id_at(50), None);
+
+        // Emergency halt: immediate state override; nonzero share now rejected; recovery via a
+        // policy the §8.1 matrix admits from EmergencyHalted clears the halt.
+        assert!(matches!(
+            view.apply_halt(&PalwComputeSetEmergencyHaltV1 {
+                version: PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION,
+                compute_set_id: h(0x88),
+                evidence_root: Hash64::default(),
+            }),
+            Err(ComputeSetRegistryError::HaltForUnregisteredSet(_))
+        ));
+        let halt = PalwComputeSetEmergencyHaltV1 {
+            version: PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION,
+            compute_set_id: set,
+            evidence_root: h(0x89),
+        };
+        view.apply_halt(&halt).unwrap();
+        assert_eq!(view.sets[&set].current_state(), EmergencyHalted);
+        let banned = plan(2, 500, vec![(set, 10_000)]);
+        assert!(matches!(
+            view.apply_plan(&banned, &limits, 450),
+            Err(ComputeSetRegistryError::NonActiveSetWithShare { .. })
+        ));
+        let recovery = policy(set, 4, 600, Active);
+        assert_eq!(view.apply_policy(&recovery, &caps, 550), Ok(PolicyRegistrationOutcome::Inserted));
+        assert!(!view.sets[&set].halted);
+        assert_eq!(view.sets[&set].current_state(), Active);
+
+        // View snapshot round-trips (the block-keyed persistence form).
+        let bytes = borsh::to_vec(&view).unwrap();
+        assert_eq!(borsh::from_slice::<PalwComputeRegistryViewV1>(&bytes).unwrap(), view);
+    }
+
+    /// §14 — the historical resolver returns the committed records' numbers and rejects every
+    /// substitution/expiry/inactive path (§28.3's core half: past work is a pure function of the
+    /// exact committed records, so later governance can never move it).
+    #[test]
+    fn historical_credit_resolution() {
+        let set = h(0xa1);
+        let mut active = policy(set, 3, 300, ComputeSetState::Active);
+        active.compute_work_scale = 41_692;
+        active.weight_factor_bps = 2_500;
+        let plan_v1 = plan(1, 300, vec![(set, 10_000)]);
+        let policy_id = active.policy_id();
+        let plan_id = plan_v1.plan_id;
+
+        let resolved = resolve_source_policy_for_credit(&active, &plan_v1, policy_id, plan_id, set, 500).unwrap();
+        assert_eq!(resolved, HistoricalComputeResolution { compute_work_scale: 41_692, weight_factor_bps: 2_500 });
+
+        // A different revision cannot stand in for the committed one (§23.4 historical rewrite).
+        let mut newer = active.clone();
+        newer.policy_sequence = 4;
+        newer.compute_work_scale = 999_999;
+        assert!(matches!(
+            resolve_source_policy_for_credit(&newer, &plan_v1, policy_id, plan_id, set, 500),
+            Err(ComputeSetRegistryError::CommittedPolicyMismatch { .. })
+        ));
+        // Wrong set binding.
+        assert!(matches!(
+            resolve_source_policy_for_credit(&active, &plan_v1, policy_id, plan_id, h(0xb2), 500),
+            Err(ComputeSetRegistryError::PolicyGovernsDifferentSet { .. })
+        ));
+        // Not yet effective at the source DAA.
+        assert!(matches!(
+            resolve_source_policy_for_credit(&active, &plan_v1, policy_id, plan_id, set, 200),
+            Err(ComputeSetRegistryError::PolicyNotEffectiveAtSource { .. })
+        ));
+        // Inactive policy state.
+        let mut halted = active.clone();
+        halted.state = ComputeSetState::EmergencyHalted;
+        halted.weight_factor_bps = 0;
+        let halted_id = halted.policy_id();
+        assert!(matches!(
+            resolve_source_policy_for_credit(&halted, &plan_v1, halted_id, plan_id, set, 500),
+            Err(ComputeSetRegistryError::SourcePolicyNotActive(ComputeSetState::EmergencyHalted))
+        ));
+        // Plan omits / zeroes the set.
+        let other_only = plan(2, 300, vec![(h(0xb2), 10_000)]);
+        assert!(matches!(
+            resolve_source_policy_for_credit(&active, &other_only, policy_id, other_only.plan_id, set, 500),
+            Err(ComputeSetRegistryError::PlanOmitsSourceSet(_))
+        ));
+
+        // Credit arithmetic: floor(normalized × weight / 10000), saturating on overflow.
+        let normalized = crate::BlueWorkType::from_u64(1_000_000);
+        assert_eq!(credited_compute_work(normalized, 2_500), crate::BlueWorkType::from_u64(250_000));
+        assert_eq!(credited_compute_work(normalized, 0), crate::BlueWorkType::from_u64(0));
+        assert_eq!(credited_compute_work(normalized, 10_000), normalized);
+        // Overflow saturates to MAX before the divide (the normalize_palw_work convention).
+        assert_eq!(
+            credited_compute_work(crate::BlueWorkType::MAX, 10_000),
+            crate::BlueWorkType::MAX / crate::BlueWorkType::from_u64(10_000)
+        );
+    }
+
+    #[test]
+    fn registry_view_is_bounded() {
+        let mut view = PalwComputeRegistryViewV1::new();
+        for i in 0..MAX_REGISTRY_VIEW_SETS {
+            let mut d = descriptor(1);
+            let mut family = [0u8; 64];
+            family[..8].copy_from_slice(&(i as u64).to_le_bytes());
+            d.model_family_id = Hash64::from_bytes(family);
+            let p = PalwComputeSetProposalV1 { descriptor: d, ..proposal(1) };
+            assert_eq!(view.apply_proposal(&p), Ok(DescriptorRegistrationOutcome::Inserted));
+        }
+        let mut d = descriptor(1);
+        d.model_family_id = h(0xfe);
+        let overflow = PalwComputeSetProposalV1 { descriptor: d, ..proposal(1) };
+        assert!(matches!(view.apply_proposal(&overflow), Err(ComputeSetRegistryError::RegistryViewFull(_))));
     }
 }

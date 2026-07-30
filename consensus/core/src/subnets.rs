@@ -113,6 +113,25 @@ impl SubnetworkId {
     pub fn palw_tx_kind(&self) -> Option<u8> {
         if self.is_palw_overlay() { Some(self.0[0]) } else { None }
     }
+
+    /// True for the model-agnostic **Compute Set registry** band (`0x40-0x44`):
+    /// proposal / activation certificate / policy update / allocation plan / emergency halt
+    /// (PALW_Model_Agnostic_Compute_Set_Architecture §17.1 — one generic band forever, never a
+    /// subnetwork per model). Deliberately a SEPARATE recognizer from [`Self::is_palw_overlay`]:
+    /// the 0x30-0x3f nibble is fully allocated and its sixteen bytes keep their existing
+    /// dispatch semantics untouched. Like every overlay band, recognition is a pure wire
+    /// property — registry bytes stay inert until their own activation fence.
+    #[inline]
+    pub fn is_palw_compute_registry(&self) -> bool {
+        matches!(self.0[0], 0x40..=0x44) && self.0[1..].iter().all(|&b| b == 0)
+    }
+
+    /// Returns the Compute Set registry transaction byte (0x40-0x44) if this is a registry
+    /// subnetwork, else `None` — the registry-band analogue of [`Self::palw_tx_kind`].
+    #[inline]
+    pub fn palw_compute_registry_tx_kind(&self) -> Option<u8> {
+        if self.is_palw_compute_registry() { Some(self.0[0]) } else { None }
+    }
 }
 
 #[derive(Error, Debug, Clone)]
@@ -270,6 +289,30 @@ pub const SUBNETWORK_ID_PALW_SEARCH_RESPONSE: SubnetworkId = SubnetworkId::from_
 /// Search-availability post-deadline timeout evidence (`PalwSearchTimeoutTxV1`), bond-owner signed.
 pub const SUBNETWORK_ID_PALW_SEARCH_TIMEOUT: SubnetworkId = SubnetworkId::from_byte(0x3f);
 
+// ============================================================================================
+// Model-agnostic Compute Set registry band (0x40-0x44) — ADR-MA / §17.1.
+//
+// One FIXED generic band for every present and future model: adding an LLM registers data
+// through these five payload kinds; it never allocates a new subnetwork (that is the point of
+// the architecture). The band sits directly above the full PALW overlay nibble (0x30-0x3f) and
+// is recognized by `is_palw_compute_registry`, NOT by `is_palw_overlay` — the sixteen overlay
+// bytes keep their existing dispatch table byte-identically. Inert until the Compute Set
+// registry activation fence; pre-activation blocks reject any recognized registry tx.
+// ============================================================================================
+
+/// `PalwComputeSetProposalV1` — immutable Descriptor V2 + proposer credential + bond reference
+/// (§17.2). Registers the set in `Proposed`.
+pub const SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL: SubnetworkId = SubnetworkId::from_byte(0x40);
+/// `PalwComputeSetActivationCertificateV1` — validator-quorum certificate over conformance /
+/// capacity / reproducibility evidence (§17.3). Prerequisite for the Shadow stage.
+pub const SUBNETWORK_ID_PALW_COMPUTE_SET_ACTIVATION_CERT: SubnetworkId = SubnetworkId::from_byte(0x41);
+/// `PalwComputeSetPolicyUpdateV1` — one mutable-policy revision (§8/§9).
+pub const SUBNETWORK_ID_PALW_COMPUTE_SET_POLICY_UPDATE: SubnetworkId = SubnetworkId::from_byte(0x42);
+/// `PalwModelAllocationPlanV1` — the atomic whole-lane share plan (§10).
+pub const SUBNETWORK_ID_PALW_MODEL_ALLOCATION_PLAN: SubnetworkId = SubnetworkId::from_byte(0x43);
+/// `PalwComputeSetEmergencyHaltV1` — immediate stop of new tickets/blocks for one set (§18.6).
+pub const SUBNETWORK_ID_PALW_COMPUTE_SET_EMERGENCY_HALT: SubnetworkId = SubnetworkId::from_byte(0x44);
+
 #[cfg(test)]
 mod palw_subnet_tests {
     use super::*;
@@ -327,5 +370,39 @@ mod palw_subnet_tests {
         noncanonical[0] = 0x31;
         noncanonical[1] = 0x01;
         assert!(!SubnetworkId::from_bytes(noncanonical).is_palw_overlay());
+    }
+
+    const COMPUTE_REGISTRY_BAND: [SubnetworkId; 5] = [
+        SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL,
+        SUBNETWORK_ID_PALW_COMPUTE_SET_ACTIVATION_CERT,
+        SUBNETWORK_ID_PALW_COMPUTE_SET_POLICY_UPDATE,
+        SUBNETWORK_ID_PALW_MODEL_ALLOCATION_PLAN,
+        SUBNETWORK_ID_PALW_COMPUTE_SET_EMERGENCY_HALT,
+    ];
+
+    #[test]
+    fn compute_registry_band_is_0x40_to_0x44_and_disjoint() {
+        for (i, id) in COMPUTE_REGISTRY_BAND.iter().enumerate() {
+            assert!(id.is_palw_compute_registry(), "{id:?} must be a Compute Set registry subnetwork");
+            assert_eq!(id.palw_compute_registry_tx_kind(), Some(0x40 + i as u8));
+            // The registry band never aliases the PALW overlay nibble or any other overlay.
+            assert!(!id.is_palw_overlay());
+            assert_eq!(id.palw_tx_kind(), None);
+            assert!(!id.is_builtin_or_native());
+            assert!(!id.is_dns_overlay());
+            assert!(!id.is_evm_overlay());
+        }
+        // Edges and non-canonical forms stay out of band.
+        for id in [SubnetworkId::from_byte(0x3f), SubnetworkId::from_byte(0x45)] {
+            assert_eq!(id.palw_compute_registry_tx_kind(), None);
+        }
+        let mut noncanonical = [0u8; SUBNETWORK_ID_SIZE];
+        noncanonical[0] = 0x40;
+        noncanonical[1] = 0x01;
+        assert!(!SubnetworkId::from_bytes(noncanonical).is_palw_compute_registry());
+        // And the PALW overlay band never answers to the registry recognizer.
+        for id in PALW_BAND {
+            assert!(!id.is_palw_compute_registry());
+        }
     }
 }
