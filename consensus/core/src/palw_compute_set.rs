@@ -47,6 +47,17 @@ pub const PALW_COMPUTE_POLICY_ID_DOMAIN: &[u8] = b"misaka-palw-compute-policy-id
 /// §10.2 — `plan_id = Hash64_k(alloc-plan-id, borsh(plan with plan_id zeroed))`.
 pub const PALW_ALLOCATION_PLAN_ID_DOMAIN: &[u8] = b"misaka-palw-alloc-plan-id-v1";
 
+/// §19 — commitment to a provider/auditor's sorted-unique supported `compute_set_id` list.
+pub const PALW_SUPPORTED_SETS_ROOT_DOMAIN: &[u8] = b"misaka-palw-supported-sets-root-v1";
+
+/// §20.2 — `leaf_hash = Hash64_k(public-leaf-v2, borsh(PalwPublicLeafV2))`.
+pub const PALW_PUBLIC_LEAF_V2_DOMAIN: &[u8] = b"misaka-palw-public-leaf-v2";
+
+/// §20.3 — `certificate_hash = Hash64_k(audit-cert-v1, borsh(PalwComputeSetAuditCertificateV1))`.
+/// Disjoint from the batch-certificate domain (`PALW_LEAF_DOMAIN`) so a set-centric and a
+/// batch-centric certificate can never alias.
+pub const PALW_COMPUTE_SET_AUDIT_CERT_DOMAIN: &[u8] = b"misaka-palw-compute-set-audit-cert-v1";
+
 /// Basis-points denominator (§10.1 — `bps` here is ALWAYS basis points, never blocks/sec).
 pub const BPS_DENOMINATOR: u16 = 10_000;
 
@@ -1065,6 +1076,228 @@ pub fn credited_compute_work(normalized: crate::BlueWorkType, weight_factor_bps:
 }
 
 // =============================================================================================
+// §19 — provider / auditor capability, Compute Set-centric
+// =============================================================================================
+
+/// A bonded credential's lifecycle at a point in time (§19 selection gate). Minimal, on-chain-
+/// derivable states — availability (DA-01) is a SEPARATE gate resolved from the DA state, not
+/// encoded here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[repr(u8)]
+pub enum BondState {
+    /// Bonded but still inside the maturity delay — not yet selectable.
+    Maturing = 0,
+    /// Matured and active — selectable if every other §19 gate passes.
+    Active = 1,
+    /// An unbond has been requested — no longer selectable (§19 `not unbonding`).
+    Unbonding = 2,
+    /// Slashed — permanently unselectable (§19 `not slashed`).
+    Slashed = 3,
+}
+
+impl BondState {
+    #[inline]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    #[inline]
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Maturing),
+            1 => Some(Self::Active),
+            2 => Some(Self::Unbonding),
+            3 => Some(Self::Slashed),
+            _ => None,
+        }
+    }
+}
+
+impl BorshSerialize for BondState {
+    fn serialize<W: borsh::io::Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
+        self.as_u8().serialize(writer)
+    }
+}
+
+impl BorshDeserialize for BondState {
+    fn deserialize_reader<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<Self> {
+        let raw = u8::deserialize_reader(reader)?;
+        BondState::from_u8(raw)
+            .ok_or_else(|| borsh::io::Error::new(borsh::io::ErrorKind::InvalidData, format!("unknown BondState {raw}")))
+    }
+}
+
+/// §19 — the Compute Set-centric capability record, replacing the `runtime_classes` view. A
+/// provider/auditor commits the SORTED-UNIQUE list of `compute_set_id`s it can execute as
+/// `supported_compute_sets_root` (§16 `supported_compute_sets = [A, B, C]`); a set is added or
+/// removed by publishing a new capability at a higher `capability_sequence` — never node code
+/// (§19 「Nodeコード変更は不要」).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwProviderCapabilityV2 {
+    pub version: u16,
+    pub credential_id: Hash64,
+    pub supported_compute_sets_root: Hash64,
+    pub conformance_valid_until: u64,
+    pub capability_sequence: u64,
+    pub bonded_value: u128,
+    pub bond_state: BondState,
+}
+
+pub const PALW_PROVIDER_CAPABILITY_VERSION: u16 = 2;
+
+/// §19 — the commitment a capability publishes over its supported set list: order- and
+/// count-sensitive keyed hash of the SORTED-UNIQUE `compute_set_id`s (the `palw_audit_sample_root`
+/// idiom). Returns `None` if the list is unsorted or has duplicates — the canonical form is
+/// mandatory so the root is a function of the SET, not of an ordering.
+pub fn palw_supported_compute_sets_root(sets: &[Hash64]) -> Option<Hash64> {
+    if sets.windows(2).any(|w| w[0].as_bytes() >= w[1].as_bytes()) {
+        return None; // unsorted or duplicate
+    }
+    let mut preimage = Vec::with_capacity(8 + sets.len() * 64);
+    preimage.extend_from_slice(&(sets.len() as u64).to_le_bytes());
+    for set in sets {
+        preimage.extend_from_slice(set.as_bytes().as_slice());
+    }
+    Some(blake2b_512_keyed(PALW_SUPPORTED_SETS_ROOT_DOMAIN, &preimage))
+}
+
+impl PalwProviderCapabilityV2 {
+    /// True iff `supported_sets_preimage` is the canonical sorted-unique list this capability
+    /// committed AND it contains `set_id`. The preimage is supplied out-of-band (the root is the
+    /// only on-chain field, §19); this checks it against the commitment before trusting it.
+    pub fn supports_set(&self, supported_sets_preimage: &[Hash64], set_id: &Hash64) -> bool {
+        match palw_supported_compute_sets_root(supported_sets_preimage) {
+            Some(root) if root == self.supported_compute_sets_root => supported_sets_preimage.binary_search_by(|s| s.as_bytes().cmp(&set_id.as_bytes())).is_ok(),
+            _ => false,
+        }
+    }
+
+    /// §19 selection gate (the on-chain-resolvable half): supported set + valid conformance +
+    /// matured, active, non-unbonding, non-slashed bond. Availability (DA-01) is the caller's
+    /// separate gate — a provider passing this is a *candidate*, still subject to the DA check.
+    pub fn eligible_for_selection(&self, set_id: &Hash64, supported_sets_preimage: &[Hash64], current_epoch: u64) -> bool {
+        self.version == PALW_PROVIDER_CAPABILITY_VERSION
+            && self.bond_state == BondState::Active
+            && current_epoch <= self.conformance_valid_until
+            && self.supports_set(supported_sets_preimage, set_id)
+    }
+}
+
+// =============================================================================================
+// §20 — Receipt / Leaf / Certificate binding, Compute Set-centric
+// =============================================================================================
+//
+// §20.1 (Receipt) is ALREADY satisfied by the frozen Receipt v3 (`mil/palw/src/receipt_v3.rs`):
+// `MatchProjectionV2` carries compute_set_id / job_challenge / output_commitment /
+// schedule_root / execution_root / route_root / state_root / canonical_compute_units /
+// token_count / stop_reason as exact-match consensus input, and `implementation_id` lives in
+// the signed-but-non-matched `ImplementationTelemetryV3` (§20.1 «telemetryへ分離»). The two
+// §20.1 items not literal fields there are committed transitively: `compute_vm_id` through
+// `compute_set_id` (the descriptor pins it, §7), and the shape through `schedule_root` (the
+// canonical schedule is a function of the drawn shape). Receipt v3 is one frozen breaking
+// bundle — extending it is a v4 event, not an edit.
+
+/// §20.2 — the leaf with `compute_set_id` and `compute_policy_id` as first-class fields (the v1
+/// leaf carried the set id as a trailing receipt-v3 field). `implementation_id` / runtime-class
+/// telemetry is deliberately ABSENT — validity is the set id + the execution roots, never the
+/// implementation (§16.1). A parallel type to `PalwPublicLeafV1`: the migration is a new leaf
+/// version adopted at re-genesis, not an in-place edit (ADR-MA-004 / §24 «Leaf に新 field → fork»).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwPublicLeafV2 {
+    pub version: u16,
+
+    pub compute_set_id: Hash64,
+    pub compute_policy_id: Hash64,
+
+    pub job_nullifier: Hash64,
+    pub challenge_commitment: Hash64,
+
+    pub replica_set_root: Hash64,
+
+    pub output_commitment: Hash64,
+    pub schedule_root: Hash64,
+    pub execution_root: Hash64,
+    pub route_root: Hash64,
+    pub state_root: Hash64,
+
+    pub canonical_compute_units: u128,
+
+    pub receipt_da_root: Hash64,
+    pub reward_set_root: Hash64,
+}
+
+pub const PALW_PUBLIC_LEAF_V2_VERSION: u16 = 2;
+
+impl PalwPublicLeafV2 {
+    /// §20.2 — the leaf-descriptor hash, under a domain disjoint from the v1 leaf so a v1 and a
+    /// v2 leaf can never collide.
+    pub fn leaf_hash(&self) -> Hash64 {
+        blake2b_512_keyed(PALW_PUBLIC_LEAF_V2_DOMAIN, &borsh::to_vec(self).expect("borsh"))
+    }
+}
+
+// =============================================================================================
+// §20.3 — the Compute Set-centric audit certificate
+// =============================================================================================
+
+pub const PALW_COMPUTE_SET_AUDIT_CERT_VERSION: u16 = 1;
+
+/// §20.3 — the set-centric audit certificate: commits that auditors CAPABLE OF REPRODUCING the
+/// target set (§19 selection gate) were selected, replayed the sampled leaves, and voted. The
+/// parallel type to `PalwBatchCertificateV2` for the re-genesis leaf-V2 world — batch identity
+/// is replaced by the (set, policy, leaf root) triple the certificate certifies.
+///
+/// Verification split follows the §17.3 activation-certificate precedent: this record carries
+/// WHAT was certified (content commitments only); the cryptographic vote verification and the
+/// stake tally recomputation run at the process layer (`verify_certificate_attestation`
+/// pattern), so `approving_stake` is a declared commitment that verifiers recompute and reject
+/// on mismatch — never a trusted input (the `PalwBatchCertificateV2::approving_stake` idiom).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwComputeSetAuditCertificateV1 {
+    pub version: u16,
+
+    /// The set whose execution this certificate attests (§20.3 `compute_set_id`).
+    pub compute_set_id: Hash64,
+    /// Hash of the exact immutable descriptor bytes (§21.4 exact-record resolution — committed
+    /// separately from `compute_set_id` so a verifier holds a direct content handle, the §17.3
+    /// activation-certificate idiom).
+    pub descriptor_hash: Hash64,
+    /// The EXACT policy revision that governed the audited execution (§20.3 `policy ID`,
+    /// ADR-MA-007 — never "the current policy").
+    pub compute_policy_id: Hash64,
+
+    /// Root over the audited `PalwPublicLeafV2::leaf_hash`es (§20.3 `leaf root`).
+    pub leaf_root: Hash64,
+
+    /// Snapshot commitment of the auditor capabilities at selection time (§20.3 `auditor
+    /// capability snapshot`): every selected auditor's `PalwProviderCapabilityV2` passed
+    /// `eligible_for_selection` for THIS set — the snapshot makes that claim replayable.
+    pub auditor_capability_root: Hash64,
+    /// Commitment to the beacon-derived sample plan (§20.3 `sample plan` — which leaves were
+    /// drawn, the `palw_audit_sample_root` idiom).
+    pub sample_plan_root: Hash64,
+    /// Commitment to the auditors' replay verdicts (§20.3 `replay result`): per-sampled-leaf
+    /// `MatchProjectionV2` digests recomputed under the set's pinned Compute IR.
+    pub replay_result_root: Hash64,
+
+    /// Audit epoch this certificate settles.
+    pub certificate_epoch: u64,
+    /// Declared stake-weighted PASS tally (recomputed + rejected on mismatch at verify time).
+    pub approving_stake: u128,
+    /// Total selected auditor stake the tally is measured against (quorum denominator).
+    pub total_selected_stake: u128,
+    /// Root over the embedded auditor votes (§20.3 `votes` — §17.3 `votes_root` idiom).
+    pub votes_root: Hash64,
+}
+
+impl PalwComputeSetAuditCertificateV1 {
+    /// The certificate's content identity, under its own pinned domain.
+    pub fn certificate_hash(&self) -> Hash64 {
+        blake2b_512_keyed(PALW_COMPUTE_SET_AUDIT_CERT_DOMAIN, &borsh::to_vec(self).expect("borsh"))
+    }
+}
+
+// =============================================================================================
 // §12 — per-set virtual sublane difficulty target
 // =============================================================================================
 
@@ -1353,11 +1586,17 @@ mod tests {
         assert_eq!(PALW_COMPUTE_VM_ID_DOMAIN, b"misaka-palw-compute-vm-id-v1");
         assert_eq!(PALW_COMPUTE_POLICY_ID_DOMAIN, b"misaka-palw-compute-policy-id-v1");
         assert_eq!(PALW_ALLOCATION_PLAN_ID_DOMAIN, b"misaka-palw-alloc-plan-id-v1");
+        assert_eq!(PALW_SUPPORTED_SETS_ROOT_DOMAIN, b"misaka-palw-supported-sets-root-v1");
+        assert_eq!(PALW_PUBLIC_LEAF_V2_DOMAIN, b"misaka-palw-public-leaf-v2");
+        assert_eq!(PALW_COMPUTE_SET_AUDIT_CERT_DOMAIN, b"misaka-palw-compute-set-audit-cert-v1");
         let domains = [
             PALW_COMPUTE_SET_ID_DOMAIN,
             PALW_COMPUTE_VM_ID_DOMAIN,
             PALW_COMPUTE_POLICY_ID_DOMAIN,
             PALW_ALLOCATION_PLAN_ID_DOMAIN,
+            PALW_SUPPORTED_SETS_ROOT_DOMAIN,
+            PALW_PUBLIC_LEAF_V2_DOMAIN,
+            PALW_COMPUTE_SET_AUDIT_CERT_DOMAIN,
         ];
         for (i, a) in domains.iter().enumerate() {
             assert!(a.len() <= 64, "domain exceeds BLAKE2b key limit");
@@ -1994,5 +2233,151 @@ mod tests {
         d.model_family_id = h(0xfe);
         let overflow = PalwComputeSetProposalV1 { descriptor: d, ..proposal(1) };
         assert!(matches!(view.apply_proposal(&overflow), Err(ComputeSetRegistryError::RegistryViewFull(_))));
+    }
+
+    // =========================================================================================
+    // §19 — capability V2
+    // =========================================================================================
+
+    fn capability(sets_root: Hash64) -> PalwProviderCapabilityV2 {
+        PalwProviderCapabilityV2 {
+            version: PALW_PROVIDER_CAPABILITY_VERSION,
+            credential_id: h(0xc0),
+            supported_compute_sets_root: sets_root,
+            conformance_valid_until: 100,
+            capability_sequence: 1,
+            bonded_value: 1_000_000,
+            bond_state: BondState::Active,
+        }
+    }
+
+    #[test]
+    fn bond_state_wire_form_is_pinned_u8_and_fail_closed() {
+        for (state, raw) in
+            [(BondState::Maturing, 0u8), (BondState::Active, 1), (BondState::Unbonding, 2), (BondState::Slashed, 3)]
+        {
+            assert_eq!(borsh::to_vec(&state).unwrap(), vec![raw]);
+            assert_eq!(borsh::from_slice::<BondState>(&[raw]).unwrap(), state);
+        }
+        // Unknown wire value fails closed — an old node must never coerce a future state.
+        assert!(borsh::from_slice::<BondState>(&[4]).is_err());
+    }
+
+    #[test]
+    fn supported_sets_root_requires_canonical_sorted_unique() {
+        let (a, b, c) = (h(1), h(2), h(3));
+        // Canonical: sorted-unique (h(n) bytes sort by tag).
+        let root = palw_supported_compute_sets_root(&[a, b, c]).unwrap();
+        // Unsorted and duplicate forms are refused outright — no silent normalization.
+        assert_eq!(palw_supported_compute_sets_root(&[b, a, c]), None);
+        assert_eq!(palw_supported_compute_sets_root(&[a, a, b]), None);
+        // The root is count- and content-sensitive: subset / superset / disjoint all differ.
+        let of = |sets: &[Hash64]| palw_supported_compute_sets_root(sets).unwrap();
+        assert_ne!(root, of(&[a, b]));
+        assert_ne!(of(&[a]), of(&[b]));
+        // The empty capability (no supported set) is canonical and distinct.
+        assert_ne!(of(&[]), of(&[a]));
+    }
+
+    #[test]
+    fn capability_supports_set_checks_commitment_before_membership() {
+        let sets = [h(1), h(2), h(3)];
+        let cap = capability(palw_supported_compute_sets_root(&sets).unwrap());
+        assert!(cap.supports_set(&sets, &h(2)));
+        assert!(!cap.supports_set(&sets, &h(4))); // committed list, but not a member
+        // A preimage that does not match the commitment proves nothing — even if it contains
+        // the set (§19: the root is the only on-chain field, the list is untrusted input).
+        let forged = [h(1), h(2), h(3), h(4)];
+        assert!(!cap.supports_set(&forged, &h(4)));
+        // A non-canonical (unsorted) preimage can never match any commitment.
+        assert!(!cap.supports_set(&[h(2), h(1), h(3)], &h(2)));
+    }
+
+    #[test]
+    fn capability_selection_gate() {
+        let sets = [h(1), h(2)];
+        let root = palw_supported_compute_sets_root(&sets).unwrap();
+        let cap = capability(root);
+        // Every §19 on-chain gate passes (availability is the caller's separate DA gate).
+        assert!(cap.eligible_for_selection(&h(1), &sets, 50));
+        // Conformance boundary is inclusive: valid THROUGH `conformance_valid_until`.
+        assert!(cap.eligible_for_selection(&h(1), &sets, 100));
+        assert!(!cap.eligible_for_selection(&h(1), &sets, 101)); // conformance expired
+        assert!(!cap.eligible_for_selection(&h(3), &sets, 50)); // set not supported
+        // Every non-Active bond state is unselectable (§19 matured/not-unbonding/not-slashed).
+        for state in [BondState::Maturing, BondState::Unbonding, BondState::Slashed] {
+            let gated = PalwProviderCapabilityV2 { bond_state: state, ..capability(root) };
+            assert!(!gated.eligible_for_selection(&h(1), &sets, 50));
+        }
+        // Unknown capability version fails closed.
+        let vnext = PalwProviderCapabilityV2 { version: 3, ..capability(root) };
+        assert!(!vnext.eligible_for_selection(&h(1), &sets, 50));
+    }
+
+    // =========================================================================================
+    // §20.2 / §20.3 — leaf V2 and the set-centric audit certificate
+    // =========================================================================================
+
+    fn leaf_v2() -> PalwPublicLeafV2 {
+        PalwPublicLeafV2 {
+            version: PALW_PUBLIC_LEAF_V2_VERSION,
+            compute_set_id: h(1),
+            compute_policy_id: h(2),
+            job_nullifier: h(3),
+            challenge_commitment: h(4),
+            replica_set_root: h(5),
+            output_commitment: h(6),
+            schedule_root: h(7),
+            execution_root: h(8),
+            route_root: h(9),
+            state_root: h(10),
+            canonical_compute_units: 41_692,
+            receipt_da_root: h(11),
+            reward_set_root: h(12),
+        }
+    }
+
+    #[test]
+    fn leaf_v2_roundtrip_and_content_sensitive_hash() {
+        let leaf = leaf_v2();
+        let bytes = borsh::to_vec(&leaf).unwrap();
+        assert_eq!(borsh::from_slice::<PalwPublicLeafV2>(&bytes).unwrap(), leaf);
+        // Every commitment field moves the leaf hash — spot-check the set binding (§20.2's
+        // whole point: the set id is first-class, not a trailing receipt field).
+        let mut other = leaf_v2();
+        other.compute_set_id = h(0x55);
+        assert_ne!(leaf.leaf_hash(), other.leaf_hash());
+        let mut policy_swap = leaf_v2();
+        policy_swap.compute_policy_id = h(0x56);
+        assert_ne!(leaf.leaf_hash(), policy_swap.leaf_hash());
+    }
+
+    #[test]
+    fn audit_certificate_roundtrip_and_content_identity() {
+        let cert = PalwComputeSetAuditCertificateV1 {
+            version: PALW_COMPUTE_SET_AUDIT_CERT_VERSION,
+            compute_set_id: h(1),
+            descriptor_hash: h(2),
+            compute_policy_id: h(3),
+            leaf_root: h(4),
+            auditor_capability_root: h(5),
+            sample_plan_root: h(6),
+            replay_result_root: h(7),
+            certificate_epoch: 9,
+            approving_stake: 700,
+            total_selected_stake: 1000,
+            votes_root: h(8),
+        };
+        let bytes = borsh::to_vec(&cert).unwrap();
+        assert_eq!(borsh::from_slice::<PalwComputeSetAuditCertificateV1>(&bytes).unwrap(), cert);
+        // The declared tally is a commitment: two certificates differing only in
+        // `approving_stake` are different objects (the batch-cert V2 idiom).
+        let mut inflated = cert.clone();
+        inflated.approving_stake = 1000;
+        assert_ne!(cert.certificate_hash(), inflated.certificate_hash());
+        // And the policy binding is content-relevant (ADR-MA-007: the EXACT revision).
+        let mut repoliced = cert.clone();
+        repoliced.compute_policy_id = h(0x33);
+        assert_ne!(cert.certificate_hash(), repoliced.certificate_hash());
     }
 }
