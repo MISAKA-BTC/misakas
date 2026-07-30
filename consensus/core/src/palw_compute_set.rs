@@ -1064,6 +1064,48 @@ pub fn credited_compute_work(normalized: crate::BlueWorkType, weight_factor_bps:
     scaled / crate::BlueWorkType::from_u64(BPS_DENOMINATOR as u64)
 }
 
+// =============================================================================================
+// §12 — per-set virtual sublane difficulty target
+// =============================================================================================
+
+/// §12 — the target block interval (ms) for a Compute Set holding `target_share_bps` of the PALW
+/// lane, given the lane's own target interval.
+///
+/// Every set mines the SAME `pow_algo_id = PALW`; difficulty separates them logically by
+/// `compute_set_id`. A set that should win `share/10000` of the lane's blocks must therefore
+/// space its own blocks `10000/share` times as far apart as the whole lane:
+///
+/// ```text
+/// per_set_interval_ms = ceil(lane_target_interval_ms × 10000 / target_share_bps)
+/// ```
+///
+/// So `share = 10000` reproduces the lane interval exactly, and a `3000`-bps set targets one
+/// block per `10000/3000 ≈ 3.33` lane intervals. Integer, overflow-saturating, and rejects a
+/// zero share (a zero-share set mines no PALW blocks at all — §12.2, no auto-borrow).
+pub fn per_set_target_interval_ms(lane_target_interval_ms: u64, target_share_bps: u16) -> Option<u64> {
+    if target_share_bps == 0 {
+        return None;
+    }
+    // ceil(a × D / s) = (a × D + s − 1) / s, with u128 to avoid overflow before the divide.
+    let numerator = (lane_target_interval_ms as u128).saturating_mul(BPS_DENOMINATOR as u128);
+    let share = target_share_bps as u128;
+    let ceil = numerator.div_ceil(share);
+    Some(u64::try_from(ceil).unwrap_or(u64::MAX))
+}
+
+/// §12.1 — the target interval derived the other way, straight from a lane block-rate. Kept as the
+/// spec's stated form (`ceil(1000 × 10000 / (BPS × share))`, BPS = blocks-per-SECOND) for the
+/// difficulty path that has a rate rather than an interval on hand. `palw_lane_blocks_per_second`
+/// is the WHOLE PALW lane's rate; a zero rate or share yields `None`.
+pub fn per_set_target_interval_ms_from_rate(palw_lane_blocks_per_second: u64, target_share_bps: u16) -> Option<u64> {
+    if target_share_bps == 0 || palw_lane_blocks_per_second == 0 {
+        return None;
+    }
+    let numerator = 1_000u128 * BPS_DENOMINATOR as u128;
+    let denominator = (palw_lane_blocks_per_second as u128).saturating_mul(target_share_bps as u128);
+    Some(u64::try_from(numerator.div_ceil(denominator)).unwrap_or(u64::MAX))
+}
+
 // Cache accounting for the DB store layer (fixed-size records count as one unit; the view
 // scales with the number of tracked sets, the PalwBatchViewV1 precedent).
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwComputeSetDescriptorV2 {}
@@ -1912,6 +1954,29 @@ mod tests {
             credited_compute_work(crate::BlueWorkType::MAX, 10_000),
             crate::BlueWorkType::MAX / crate::BlueWorkType::from_u64(10_000)
         );
+    }
+
+    #[test]
+    fn per_set_target_interval() {
+        // Full share reproduces the lane interval exactly.
+        assert_eq!(per_set_target_interval_ms(1_000, 10_000), Some(1_000));
+        // Half share ⇒ twice the interval; a 3000-bps set ⇒ ceil(10000/3000)×interval.
+        assert_eq!(per_set_target_interval_ms(1_000, 5_000), Some(2_000));
+        assert_eq!(per_set_target_interval_ms(1_000, 3_000), Some(3_334)); // ceil(10_000_000/3000)
+        // §12.2: a zero-share set targets nothing (no auto-borrow).
+        assert_eq!(per_set_target_interval_ms(1_000, 0), None);
+        // Monotonic: smaller share ⇒ strictly longer interval.
+        let full = per_set_target_interval_ms(400, 10_000).unwrap();
+        let tenth = per_set_target_interval_ms(400, 1_000).unwrap();
+        assert!(tenth > full);
+        // Overflow saturates rather than wrapping.
+        assert_eq!(per_set_target_interval_ms(u64::MAX, 1), Some(u64::MAX));
+
+        // Rate form: 10 BPS whole lane, 100% share ⇒ 100 ms; 25% share ⇒ 400 ms.
+        assert_eq!(per_set_target_interval_ms_from_rate(10, 10_000), Some(100));
+        assert_eq!(per_set_target_interval_ms_from_rate(10, 2_500), Some(400));
+        assert_eq!(per_set_target_interval_ms_from_rate(0, 10_000), None);
+        assert_eq!(per_set_target_interval_ms_from_rate(10, 0), None);
     }
 
     #[test]

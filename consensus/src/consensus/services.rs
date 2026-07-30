@@ -123,6 +123,10 @@ impl ConsensusServices {
             params.palw_compute_work_scale,
             // ADR-0039 §15.2 cross-ancestor dedup seed (live level-0 manager only; read gated on palw_active).
             Some(storage.palw_nullifier_store.clone()),
+            // ADR-MA §14 per-set compute credit (live level-0 manager only; read gated on the
+            // registry fence, which is u64::MAX on every shipped preset).
+            params.palw_compute_registry_activation_daa_score,
+            Some(storage.palw_compute_registry_store.clone()),
         );
 
         let coinbase_manager = CoinbaseManager::new(

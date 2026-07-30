@@ -16,6 +16,7 @@ use crate::{
         stores::{
             ghostdag::{GhostdagData, GhostdagStoreReader, HashKTypeMap, KType},
             headers::HeaderStoreReader,
+            palw_compute_registry::{DbPalwComputeRegistryStore, PalwComputeRegistryStoreReader},
             palw_nullifier::{DbPalwNullifierStore, PalwNullifierStoreReader},
             relations::RelationsStoreReader,
         },
@@ -60,9 +61,17 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
     /// `palw_active`, so it stays untouched — and coloring byte-identical — on mainnet / testnet-10 /
     /// simnet / devnet. The three PALW presets use the persistent window from genesis.
     palw_nullifier_store: Option<Arc<DbPalwNullifierStore>>,
+    /// ADR-MA §14: the Compute Set registry activation fence. `u64::MAX` on every shipped preset,
+    /// so the per-set credit branch below is unreachable and coloring stays byte-identical.
+    palw_compute_registry_activation_daa_score: u64,
+    /// ADR-MA §14/§21.4: the content-addressed record store the per-set credit resolves a v5
+    /// algo-4 source's committed policy/plan from. `None` on the pruning-proof managers and while
+    /// the registry is inert (read is gated on the fence above).
+    palw_compute_registry_store: Option<Arc<DbPalwComputeRegistryStore>>,
 }
 
 impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V: HeaderStoreReader> GhostdagManager<T, S, U, V> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         genesis_hash: BlockHash,
         k: KType,
@@ -73,6 +82,8 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         palw_activation_daa_score: u64,
         palw_compute_work_scale: u64,
         palw_nullifier_store: Option<Arc<DbPalwNullifierStore>>,
+        palw_compute_registry_activation_daa_score: u64,
+        palw_compute_registry_store: Option<Arc<DbPalwComputeRegistryStore>>,
     ) -> Self {
         // For ordinary GD, always keep level_work=0 so the lower bound is ineffective
         Self {
@@ -86,6 +97,8 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             palw_activation_daa_score,
             palw_compute_work_scale,
             palw_nullifier_store,
+            palw_compute_registry_activation_daa_score,
+            palw_compute_registry_store,
         }
     }
 
@@ -112,6 +125,8 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             palw_activation_daa_score: u64::MAX,
             palw_compute_work_scale: 0,
             palw_nullifier_store: None,
+            palw_compute_registry_activation_daa_score: u64::MAX,
+            palw_compute_registry_store: None,
         }
     }
 
@@ -270,15 +285,15 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             for &blue in new_block_data.mergeset_blues.iter() {
                 let header = self.headers_store.get_header(blue).unwrap();
                 if header.pow_algo_id == POW_ALGO_ID_PALW_REPLICA {
-                    // Canonical Compute v1 §17.5 fix 2 — model-as-data ACTIVATION SEAM. Today the scale is
-                    // the flat const `palw_compute_work_scale` (the FORMULA `normalize_palw_work` + the cap
-                    // stay in protocol). At activation this becomes the per-set VALUE:
-                    // `normalize_palw_work(header.bits, kaspa_consensus_core::palw::resolve_compute_work_scale(
-                    //      active_set_records, source_set_id, header.daa_score, self.palw_compute_work_scale))`
-                    // — the ramped `effective_compute_work_scale()` of the source's set, falling back to this
-                    // const when no record governs it. Left as the flat scalar here (this whole else-branch is
-                    // dead while inert; wiring the record source in is a re-genesis / Header-v4 step).
-                    added_compute = added_compute + normalize_palw_work(header.bits, self.palw_compute_work_scale);
+                    // ADR-MA §14 model-as-data credit. Below the registry fence (every shipped
+                    // preset) the scale is the flat const `palw_compute_work_scale` and this is
+                    // byte-identical to the pre-registry path. A Header-v5 source on a
+                    // registry-active net instead resolves the EXACT policy/plan it committed
+                    // and credits `mul_div_floor(normalize·scale, weight_factor_bps)` — the
+                    // ramped, per-set value (ADR-MA-007: from the source's OWN committed records,
+                    // never current values). The FORMULA and the COMPUTE_TO_HASH_CAP stay in
+                    // protocol.
+                    added_compute = added_compute + self.palw_source_compute_credit(&header);
                 } else {
                     added_hash = added_hash + calc_work(header.bits).max(self.level_work);
                 }
@@ -291,6 +306,71 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         new_block_data.finalize_score_and_component_work(blue_score, blue_hash_work, blue_compute_work_raw, COMPUTE_TO_HASH_CAP);
 
         new_block_data
+    }
+
+    /// ADR-MA §14: the compute-work an algo-4 blue source contributes to the DAG.
+    ///
+    /// Pre-registry (every shipped preset: fence `u64::MAX`, or a pre-v5 header): the flat const
+    /// `palw_compute_work_scale`, byte-identical to the original single-const path.
+    ///
+    /// Registry-active + Header-v5: resolve the EXACT policy and plan the source committed
+    /// (`palw_compute_policy_id` / `palw_allocation_plan_id`) from the content-addressed record
+    /// store, validate they governed the source's own `compute_set_id` at its own DAA
+    /// (ADR-MA-007), and credit `mul_div_floor(normalize·compute_work_scale, weight_factor_bps)`.
+    ///
+    /// **Availability boundary (P11 dependency).** This reads the record store at GHOSTDAG time,
+    /// i.e. the HEADER stage. On a registry-active network the source's records must therefore be
+    /// present before its work can be colored — which the IBD trusted-data package must guarantee
+    /// (ADR-MA §21.3/§21.4), exactly as the paid-work walk requires its window. A genuine absence
+    /// is a fail-closed halt (§22.3 `missing historical data`), never a silent fall back to a
+    /// default scale (that would let an un-governed source mint fork-choice work). It is
+    /// unreachable today: no shipped preset opens the fence, so no v5 header exists.
+    fn palw_source_compute_credit(&self, header: &kaspa_consensus_core::header::Header) -> BlueWorkType {
+        use kaspa_consensus_core::palw_compute_set::{credited_compute_work, resolve_source_policy_for_credit};
+        let registry_active = self.palw_compute_registry_activation_daa_score != u64::MAX
+            && header.daa_score >= self.palw_compute_registry_activation_daa_score
+            && header.version >= kaspa_consensus_core::constants::PALW_COMPUTE_SET_HEADER_VERSION;
+        if !registry_active {
+            return normalize_palw_work(header.bits, self.palw_compute_work_scale);
+        }
+        let store = self
+            .palw_compute_registry_store
+            .as_ref()
+            .expect("registry-active level-0 GHOSTDAG manager carries the Compute Set registry store");
+        let missing = |what: &str| -> ! {
+            // §22.3 fail-closed. The IBD trusted-data package (P11) must deliver these records
+            // alongside the headers on a registry-active net; reaching here means it did not.
+            panic!(
+                "compute registry: source {} committed {what} is unavailable at GHOSTDAG time — \
+                 the IBD trusted-data package must carry registry records on a registry-active net (ADR-MA §21.4)",
+                header.hash
+            )
+        };
+        let policy = match store.policy(header.palw_compute_policy_id) {
+            Ok(Some(policy)) => policy,
+            Ok(None) => missing("policy"),
+            Err(store_error) => panic!("compute registry policy read failed for source {}: {store_error}", header.hash),
+        };
+        let plan = match store.plan(header.palw_allocation_plan_id) {
+            Ok(Some(plan)) => plan,
+            Ok(None) => missing("allocation plan"),
+            Err(store_error) => panic!("compute registry plan read failed for source {}: {store_error}", header.hash),
+        };
+        let resolution = resolve_source_policy_for_credit(
+            &policy,
+            &plan,
+            header.palw_compute_policy_id,
+            header.palw_allocation_plan_id,
+            header.palw_compute_set_id,
+            header.daa_score,
+        )
+        .unwrap_or_else(|rejection| {
+            // A body-valid v5 algo-4 source cannot carry non-governing record ids (its own body
+            // ticket check binds them), so a rejection here is a consensus inconsistency, not a
+            // recoverable state.
+            panic!("compute registry: source {} failed §14 credit resolution: {rejection}", header.hash)
+        });
+        credited_compute_work(normalize_palw_work(header.bits, resolution.compute_work_scale), resolution.weight_factor_bps)
     }
 
     fn check_blue_candidate_with_chain_block(
