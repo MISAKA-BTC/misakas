@@ -617,10 +617,10 @@ pub fn validate_allocation_plan(
 }
 
 /// §9-style DAA-point resolution for plans: highest sequence among plans already effective.
-pub fn resolve_allocation_plan<'a>(
-    plans: &'a [PalwModelAllocationPlanV1],
+pub fn resolve_allocation_plan(
+    plans: &[PalwModelAllocationPlanV1],
     daa_score: u64,
-) -> Option<&'a PalwModelAllocationPlanV1> {
+) -> Option<&PalwModelAllocationPlanV1> {
     plans.iter().filter(|plan| plan.effective_from_daa <= daa_score).max_by_key(|plan| plan.sequence)
 }
 

@@ -76,10 +76,10 @@ impl BlockBodyProcessor {
         // ADR-MA §17.1: the Compute Set registry band (0x40-0x44) has its OWN activation fence,
         // independent of the PALW overlay fence below. Every shipped preset keeps it at
         // `u64::MAX`, so registry transactions stay block-invalid everywhere today.
-        if block.header.daa_score < self.palw_compute_registry_activation_daa_score {
-            if let Some(tx) = block.transactions.iter().find(|tx| tx.subnetwork_id.is_palw_compute_registry()) {
-                return Err(RuleError::TxInContextFailed(tx.id(), TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone())));
-            }
+        if block.header.daa_score < self.palw_compute_registry_activation_daa_score
+            && let Some(tx) = block.transactions.iter().find(|tx| tx.subnetwork_id.is_palw_compute_registry())
+        {
+            return Err(RuleError::TxInContextFailed(tx.id(), TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone())));
         }
         if block.header.daa_score >= self.palw_activation_daa_score {
             return Ok(());
