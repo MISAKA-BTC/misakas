@@ -59,7 +59,14 @@ pub struct PalwAlgo4MintFacts {
     /// The GHOSTDAG-fixed interval this draw targets; clause 5 pins it equal to the block's `daa_score`.
     pub target_daa_interval: u64,
     /// The PALW lane's retargeted `bits` (§16.3), derived through the same code the header stage runs.
+    /// On a registry-active net this is the §12 PER-SET value for `compute_set_id`'s sublane.
     pub replica_bits: u32,
+    /// ADR-MA §13.1 — the Header-v5 Compute Set references the template stamps: the leaf's
+    /// committed set and its governing policy/plan at `target_daa_interval`, resolved from the
+    /// sink's registry view. All-zero below the registry fence (every shipped preset).
+    pub compute_set_id: Hash64,
+    pub compute_policy_id: Hash64,
+    pub allocation_plan_id: Hash64,
     /// The PALW epoch of the target interval — the coordinate the batch's block-eligibility is judged at.
     pub epoch: u64,
     /// The certificate hash the batch's view carries, to be stamped into the header.

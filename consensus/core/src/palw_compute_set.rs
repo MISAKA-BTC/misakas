@@ -1065,6 +1065,22 @@ impl PalwComputeRegistryViewV1 {
         Ok(())
     }
 
+    /// ADR-MA §13.1 — the (policy, plan) references a template mining `set` at `daa` must commit:
+    /// the §9 resolution rule (highest sequence already effective) applied to the view's indexes.
+    /// Returns the governing `(policy_id, policy_state, plan_id)`; `None` when the set is
+    /// unregistered, halted (§18.6 — an emergency-halted set mints nothing NOW, whatever its
+    /// ladder says), or either ladder has no effective revision yet. The caller still resolves
+    /// the plan RECORD to read the share — this is the reference-selection half only.
+    pub fn governing_references_at(&self, set: &Hash64, daa_score: u64) -> Option<(Hash64, ComputeSetState, Hash64)> {
+        let entry = self.sets.get(set)?;
+        if entry.halted {
+            return None;
+        }
+        let policy = entry.policy_index.iter().filter(|row| row.effective_from_daa <= daa_score).max_by_key(|row| row.sequence)?;
+        let plan = self.plan_index.iter().filter(|row| row.effective_from_daa <= daa_score).max_by_key(|row| row.sequence)?;
+        Some((policy.policy_id, policy.state, plan.plan_id))
+    }
+
     /// §10.3/§22.1 — apply an allocation plan, resolving every entry's lifecycle state from
     /// THIS view (halt override included) and ramp-validating against the latest recorded plan.
     pub fn apply_plan(
@@ -2474,6 +2490,54 @@ mod tests {
         let mut policy_swap = leaf_v2();
         policy_swap.compute_policy_id = h(0x56);
         assert_ne!(leaf.leaf_hash(), policy_swap.leaf_hash());
+    }
+
+    /// ADR-MA §13.1 — `governing_references_at` picks the highest already-effective revision on
+    /// BOTH ladders, refuses unregistered and halted sets, and reports the policy state verbatim
+    /// (the template layer's Active gate consumes it).
+    #[test]
+    fn governing_references_resolution() {
+        use ComputeSetState::*;
+        let caps = PolicyGovernanceCapsV1::default();
+        let limits = AllocationGovernanceLimitsV1 { max_change_per_plan_bps: 10_000, ..Default::default() };
+        let mut view = PalwComputeRegistryViewV1::new();
+        let p = proposal(1);
+        let set = p.descriptor.compute_set_id();
+        view.apply_proposal(&p).unwrap();
+
+        // No policy or plan ladder yet → nothing governs.
+        assert_eq!(view.governing_references_at(&set, 1_000), None);
+        assert_eq!(view.governing_references_at(&h(0x7e), 1_000), None); // unregistered
+
+        view.apply_policy(&policy(set, 1, 100, Proposed), &caps, 50).unwrap();
+        view.apply_certificate(&certificate_for(set), true).unwrap();
+        view.apply_policy(&policy(set, 2, 200, Shadow), &caps, 150).unwrap();
+        let active = policy(set, 3, 300, Active);
+        view.apply_policy(&active, &caps, 250).unwrap();
+        // Policy ladder alone is not enough — §13.1 commits a plan reference too.
+        assert_eq!(view.governing_references_at(&set, 1_000), None);
+
+        let plan_v1 = plan(1, 400, vec![(set, 10_000)]);
+        view.apply_plan(&plan_v1, &limits, 350).unwrap();
+
+        // Below every effective point → None; between → the effective pair; the state is reported.
+        assert_eq!(view.governing_references_at(&set, 50), None);
+        assert_eq!(
+            view.governing_references_at(&set, 250),
+            None, // policy effective (Shadow@200) but no plan effective until 400
+        );
+        assert_eq!(view.governing_references_at(&set, 1_000), Some((active.policy_id(), Active, plan_v1.plan_id)));
+        // A later revision supersedes exactly at its own effective point.
+        let shadow_id = policy(set, 2, 200, Shadow).policy_id();
+        let plan_v2 = plan(2, 2_000, vec![(set, 10_000)]);
+        view.apply_plan(&plan_v2, &limits, 1_500).unwrap();
+        assert_eq!(view.governing_references_at(&set, 1_999), Some((active.policy_id(), Active, plan_v1.plan_id)));
+        assert_eq!(view.governing_references_at(&set, 2_000), Some((active.policy_id(), Active, plan_v2.plan_id)));
+        let _ = shadow_id;
+
+        // §18.6 — a halted set governs nothing NOW, whatever its ladder says.
+        view.apply_halt(&PalwComputeSetEmergencyHaltV1 { version: 1, compute_set_id: set, evidence_root: h(0x11) }).unwrap();
+        assert_eq!(view.governing_references_at(&set, 1_000), None);
     }
 
     #[test]

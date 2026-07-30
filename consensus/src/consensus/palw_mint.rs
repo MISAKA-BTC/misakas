@@ -102,18 +102,70 @@ impl Consensus {
         let chain_commit_expected =
             chain_commit(&anchor_facts.hash, &dns_finality_certificate_hash_v1(&anchor_facts), target_daa_interval, network_id);
 
-        // §16.3 lane bits, through the same helper `pre_pow_validation` runs.
-        let replica_bits = self
-            .virtual_processor
-            .palw_lane_bits_for_template(POW_ALGO_ID_PALW_REPLICA)
-            .map_err(|e| PalwMintError::not_ready(format!("lane bits: {e:?}")))?;
-
         // THE PROVENANCE GATE. The leaf is READ, never fabricated.
         let leaf = self
             .storage
             .palw_store
             .leaf(batch_id, leaf_index)
             .map_err(|_| PalwMintError::fault(format!("leaf ({batch_id:?}, {leaf_index}) is not on chain — nothing to mint")))?;
+
+        // ADR-MA §13.1/§12 — on a registry-active net the template must commit the leaf's set and
+        // its governing (policy, plan) at THIS interval, and run per-set difficulty for that
+        // sublane. The set is the LEAF's committed identity — a miner does not choose it; below
+        // the fence everything here is zero/None (byte-identical inert path).
+        let registry_active = params.palw_compute_registry_activation_daa_score != u64::MAX
+            && target_daa_interval >= params.palw_compute_registry_activation_daa_score;
+        let (compute_set_id, compute_policy_id, allocation_plan_id, per_set) = if registry_active {
+            use crate::model::stores::palw_compute_registry::PalwComputeRegistryStoreReader;
+            use kaspa_consensus_core::palw_compute_set::ComputeSetState;
+            let set_id = leaf.receipt_v3_compute_set_id;
+            if set_id == Hash64::default() {
+                return Err(PalwMintError::fault("registry-active mint requires a leaf committed to a compute set"));
+            }
+            let registry_view = self
+                .storage
+                .palw_compute_registry_store
+                .view(sink)
+                .map_err(|e| PalwMintError::fault(format!("compute registry view read failed: {e:?}")))?
+                .ok_or_else(|| PalwMintError::not_ready("no compute registry view at the sink"))?;
+            let (policy_id, state, plan_id) = registry_view
+                .governing_references_at(&set_id, target_daa_interval)
+                .ok_or_else(|| PalwMintError::not_ready(format!("set {set_id} has no governing policy/plan at this interval")))?;
+            // §13.2: only a known ACTIVE set mints (Shadow/Deprecated/Halted/Retired all refuse) —
+            // the same predicate the header stage enforces, checked here so we never build a
+            // self-rejecting block.
+            if state != ComputeSetState::Active {
+                return Err(PalwMintError::not_ready(format!("set {set_id} is {state:?}, not Active, at this interval")));
+            }
+            let plan = self
+                .storage
+                .palw_compute_registry_store
+                .plan(plan_id)
+                .map_err(|e| PalwMintError::fault(format!("compute registry plan read failed: {e:?}")))?
+                .ok_or_else(|| PalwMintError::fault("governing plan record is missing from the content store"))?;
+            let share = plan
+                .entries
+                .iter()
+                .find(|entry| entry.compute_set_id == set_id)
+                .map(|entry| entry.target_share_bps)
+                .filter(|share| *share > 0)
+                .ok_or_else(|| PalwMintError::not_ready(format!("set {set_id} holds no share under the governing plan (§12.2)")))?;
+            (
+                set_id,
+                policy_id,
+                plan_id,
+                Some(crate::processes::difficulty::PalwSetSublane { compute_set_id: set_id, target_share_bps: share }),
+            )
+        } else {
+            (Hash64::default(), Hash64::default(), Hash64::default(), None)
+        };
+
+        // §16.3 lane bits, through the same helper `pre_pow_validation` runs (§12 per-set on a
+        // registry-active net).
+        let replica_bits = self
+            .virtual_processor
+            .palw_lane_bits_for_template(POW_ALGO_ID_PALW_REPLICA, per_set)
+            .map_err(|e| PalwMintError::not_ready(format!("lane bits: {e:?}")))?;
 
         // The batch must be block-eligible at this epoch in the sink's past, judged from the SAME view
         // the body check reads. The view is written in the sink's own body-commit batch.
@@ -137,6 +189,9 @@ impl Consensus {
             chain_commit: chain_commit_expected,
             target_daa_interval,
             replica_bits,
+            compute_set_id,
+            compute_policy_id,
+            allocation_plan_id,
             epoch,
             epoch_certificate_hash,
             leaf: (*leaf).clone(),
@@ -233,11 +288,12 @@ impl Consensus {
             palw_proof_type: stamp.proof_type,
             palw_spam_accumulator_commitment,
             palw_spam_nonce: 0,
-            // ADR-MA Header-v5: zero below the registry activation fence (no shipped preset
-            // activates v5). The registry-aware template path lands with the per-set DAA slice.
-            palw_compute_set_id: Hash64::default(),
-            palw_compute_policy_id: Hash64::default(),
-            palw_allocation_plan_id: Hash64::default(),
+            // ADR-MA §13.1 — the re-derived Header-v5 Compute Set references (all-zero below the
+            // registry fence, where `facts` resolves them to defaults). Facts-derived, never
+            // producer-supplied: the set is the LEAF's committed identity.
+            palw_compute_set_id: facts.compute_set_id,
+            palw_compute_policy_id: facts.compute_policy_id,
+            palw_allocation_plan_id: facts.allocation_plan_id,
         });
         Ok(PalwAlgo4Template { block: mb, spam_target_bits })
     }

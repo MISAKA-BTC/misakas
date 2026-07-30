@@ -6900,23 +6900,29 @@ impl VirtualStateProcessor {
     /// Below the lane's `min_samples` this HOLDs at `genesis_bits`, which is why stamping
     /// `genesis_replica_bits` directly appears to work on a lane with no blocks yet — and stops working
     /// at the `min_samples`-th algo-4 block.
-    pub(crate) fn palw_lane_bits_for_template(&self, lane_algo_id: u8) -> Result<u32, RuleError> {
+    pub(crate) fn palw_lane_bits_for_template(
+        &self,
+        lane_algo_id: u8,
+        per_set: Option<crate::processes::difficulty::PalwSetSublane>,
+    ) -> Result<u32, RuleError> {
         let virtual_state = self.lkg_virtual_state.load();
-        // ADR-MA §12 — a registry-active algo-4 template must run PER-SET difficulty for the set
-        // it mines, which needs the set-selection half of the registry world (P14+: pick an
-        // Active set, stamp the v5 (set, policy, plan) references, filter to its sublane). That
-        // half is not built yet; a flat-lane `bits` template on a registry-active net would be
-        // rejected by this node's OWN per-set header check (`palw_per_set_sublane`) — so fail
-        // loud instead of emitting self-rejecting templates. Unreachable on every shipped preset
-        // (fence = u64::MAX).
-        if self.palw_compute_registry_activation_daa_score != u64::MAX
+        // ADR-MA §12 — the sublane restriction must MATCH the fence, both ways: a registry-active
+        // algo-4 template without a resolved (set, share) would stamp flat-lane bits its own
+        // node's per-set header check rejects, and a closed-fence template passing a sublane
+        // would stamp per-set bits nothing validates. Either mismatch is a caller bug — fail
+        // loud rather than emit self-rejecting templates. Unreachable on every shipped preset
+        // (fence = u64::MAX, callers pass None).
+        let registry_active = self.palw_compute_registry_activation_daa_score != u64::MAX
             && virtual_state.daa_score >= self.palw_compute_registry_activation_daa_score
-            && lane_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_REPLICA
-        {
+            && lane_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_REPLICA;
+        if registry_active != per_set.is_some() {
             return Err(RuleError::PalwComputeSetResolution(
                 virtual_state.ghostdag_data.selected_parent,
-                "registry-active algo-4 templates need Compute Set selection (per-set difficulty, ADR-MA §12) — not implemented"
-                    .into(),
+                if registry_active {
+                    "registry-active algo-4 template built without a resolved Compute Set sublane (ADR-MA §12)".into()
+                } else {
+                    "per-set sublane supplied while the registry fence is closed for this template".into()
+                },
             ));
         }
         let daa_window = self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?;
@@ -6925,7 +6931,7 @@ impl VirtualStateProcessor {
             &daa_window.window,
             lane_algo_id,
             &self.palw_lane_difficulty,
-            None,
+            per_set,
         ))
     }
 
@@ -7116,8 +7122,15 @@ impl VirtualStateProcessor {
             .unwrap();
         txs.insert(0, coinbase.tx);
         // Declare the highest active header schema, exactly mirroring
-        // `HeaderProcessor::check_header_version`: PALW v3 > EVM v2 > base v1.
-        let version = if virtual_state.daa_score >= self.palw_activation_daa_score && !self.palw_spam.is_inert() {
+        // `HeaderProcessor::check_header_version`: Compute Set v5 > PALW anti-spam v4 > PALW v3 >
+        // EVM v2 > base v1. (The v5 rung was landed with the registry fence — a template on a
+        // registry-active net must declare v5 or its own header check rejects it with
+        // WrongBlockVersion.)
+        let version = if virtual_state.daa_score >= self.palw_activation_daa_score
+            && virtual_state.daa_score >= self.palw_compute_registry_activation_daa_score
+        {
+            kaspa_consensus_core::constants::PALW_COMPUTE_SET_HEADER_VERSION
+        } else if virtual_state.daa_score >= self.palw_activation_daa_score && !self.palw_spam.is_inert() {
             kaspa_consensus_core::constants::PALW_ANTISPAM_HEADER_VERSION
         } else if virtual_state.daa_score >= self.palw_activation_daa_score {
             kaspa_consensus_core::constants::PALW_HEADER_VERSION
