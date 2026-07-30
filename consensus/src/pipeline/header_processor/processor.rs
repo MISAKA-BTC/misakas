@@ -158,6 +158,9 @@ pub struct HeaderProcessor {
     pub(super) palw_nullifier_retention_daa: u64,
     /// Header-v4 re-genesis-only objective stamp and exact event-horizon accumulator parameters.
     pub(super) palw_spam: kaspa_consensus_core::palw_antispam::PalwSpamParams,
+    /// ADR-MA: the Header-v5 / Compute Set registry activation fence (`u64::MAX` on every shipped
+    /// preset — v5 unreachable, all new paths byte-identically inert).
+    pub(super) palw_compute_registry_activation_daa_score: u64,
 
     // DB
     db: Arc<DB>,
@@ -269,6 +272,7 @@ impl HeaderProcessor {
             palw_lane_difficulty: params.palw_lane_difficulty.clone(),
             palw_nullifier_retention_daa: params.palw_nullifier_retention_daa,
             palw_spam: params.palw_spam,
+            palw_compute_registry_activation_daa_score: params.palw_compute_registry_activation_daa_score,
         }
     }
 

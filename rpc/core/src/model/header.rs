@@ -71,6 +71,15 @@ pub struct RpcRawHeader {
     /// PALW Header-v4 objective stamp nonce. Canonical only for v4+ headers.
     #[serde(default)]
     pub palw_spam_nonce: u64,
+    /// ADR-MA Header-v5 Compute Set registry references. Part of the v5+ hash preimage, so they
+    /// MUST round-trip through the mining (get_block_template → submit_block) and block RPCs —
+    /// the pow_algo_id / EVM / PALW precedent. Zero on pre-v5 headers (hash-invisible there).
+    #[serde(default)]
+    pub palw_compute_set_id: Hash64,
+    #[serde(default)]
+    pub palw_compute_policy_id: Hash64,
+    #[serde(default)]
+    pub palw_allocation_plan_id: Hash64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -123,6 +132,15 @@ pub struct RpcHeader {
     /// PALW Header-v4 objective stamp nonce. Canonical only for v4+ headers.
     #[serde(default)]
     pub palw_spam_nonce: u64,
+    /// ADR-MA Header-v5 Compute Set registry references. Part of the v5+ hash preimage, so they
+    /// MUST round-trip through the mining (get_block_template → submit_block) and block RPCs —
+    /// the pow_algo_id / EVM / PALW precedent. Zero on pre-v5 headers (hash-invisible there).
+    #[serde(default)]
+    pub palw_compute_set_id: Hash64,
+    #[serde(default)]
+    pub palw_compute_policy_id: Hash64,
+    #[serde(default)]
+    pub palw_allocation_plan_id: Hash64,
 }
 
 impl RpcHeader {
@@ -170,6 +188,9 @@ impl From<Header> for RpcHeader {
             palw_beacon_seed: header.palw_beacon_seed,
             palw_spam_accumulator_commitment: header.palw_spam_accumulator_commitment,
             palw_spam_nonce: header.palw_spam_nonce,
+            palw_compute_set_id: header.palw_compute_set_id,
+            palw_compute_policy_id: header.palw_compute_policy_id,
+            palw_allocation_plan_id: header.palw_allocation_plan_id,
         }
     }
 }
@@ -207,6 +228,9 @@ impl From<&Header> for RpcHeader {
             palw_beacon_seed: header.palw_beacon_seed,
             palw_spam_accumulator_commitment: header.palw_spam_accumulator_commitment,
             palw_spam_nonce: header.palw_spam_nonce,
+            palw_compute_set_id: header.palw_compute_set_id,
+            palw_compute_policy_id: header.palw_compute_policy_id,
+            palw_allocation_plan_id: header.palw_allocation_plan_id,
         }
     }
 }
@@ -250,6 +274,9 @@ impl TryFrom<RpcHeader> for Header {
             palw_beacon_seed: header.palw_beacon_seed,
             palw_spam_accumulator_commitment: header.palw_spam_accumulator_commitment,
             palw_spam_nonce: header.palw_spam_nonce,
+            palw_compute_set_id: header.palw_compute_set_id,
+            palw_compute_policy_id: header.palw_compute_policy_id,
+            palw_allocation_plan_id: header.palw_allocation_plan_id,
         })
     }
 }
@@ -294,13 +321,16 @@ impl TryFrom<&RpcHeader> for Header {
             palw_beacon_seed: header.palw_beacon_seed,
             palw_spam_accumulator_commitment: header.palw_spam_accumulator_commitment,
             palw_spam_nonce: header.palw_spam_nonce,
+            palw_compute_set_id: header.palw_compute_set_id,
+            palw_compute_policy_id: header.palw_compute_policy_id,
+            palw_allocation_plan_id: header.palw_allocation_plan_id,
         })
     }
 }
 
 impl Serializer for RpcHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &7, writer)?;
+        store!(u16, &8, writer)?;
 
         store!(BlockHash, &self.hash, writer)?;
         store!(u16, &self.version, writer)?;
@@ -339,6 +369,10 @@ impl Serializer for RpcHeader {
         // the canonical v4 header suffix: accumulator commitment, then nonce.
         store!(Hash64, &self.palw_spam_accumulator_commitment, writer)?;
         store!(u64, &self.palw_spam_nonce, writer)?;
+        // ADR-MA Header-v5 registry references were added in serializer v8.
+        store!(Hash64, &self.palw_compute_set_id, writer)?;
+        store!(Hash64, &self.palw_compute_policy_id, writer)?;
+        store!(Hash64, &self.palw_allocation_plan_id, writer)?;
 
         Ok(())
     }
@@ -396,6 +430,13 @@ impl Deserializer for RpcHeader {
         // from older peers decode them to their pre-v4 inert zero values.
         let (palw_spam_accumulator_commitment, palw_spam_nonce) =
             if serializer_version >= 7 { (load!(Hash64, reader)?, load!(u64, reader)?) } else { Default::default() };
+        // ADR-MA Header-v5 registry references were added in serializer v8. Older streams
+        // decode them to their pre-v5 inert zero values.
+        let (palw_compute_set_id, palw_compute_policy_id, palw_allocation_plan_id) = if serializer_version >= 8 {
+            (load!(Hash64, reader)?, load!(Hash64, reader)?, load!(Hash64, reader)?)
+        } else {
+            Default::default()
+        };
 
         Ok(Self {
             hash,
@@ -428,6 +469,9 @@ impl Deserializer for RpcHeader {
             palw_beacon_seed,
             palw_spam_accumulator_commitment,
             palw_spam_nonce,
+            palw_compute_set_id,
+            palw_compute_policy_id,
+            palw_allocation_plan_id,
         })
     }
 }
@@ -473,6 +517,9 @@ impl TryFrom<RpcRawHeader> for Header {
             palw_beacon_seed: header.palw_beacon_seed,
             palw_spam_accumulator_commitment: header.palw_spam_accumulator_commitment,
             palw_spam_nonce: header.palw_spam_nonce,
+            palw_compute_set_id: header.palw_compute_set_id,
+            palw_compute_policy_id: header.palw_compute_policy_id,
+            palw_allocation_plan_id: header.palw_allocation_plan_id,
         }))
     }
 }
@@ -518,6 +565,9 @@ impl TryFrom<&RpcRawHeader> for Header {
             palw_beacon_seed: header.palw_beacon_seed,
             palw_spam_accumulator_commitment: header.palw_spam_accumulator_commitment,
             palw_spam_nonce: header.palw_spam_nonce,
+            palw_compute_set_id: header.palw_compute_set_id,
+            palw_compute_policy_id: header.palw_compute_policy_id,
+            palw_allocation_plan_id: header.palw_allocation_plan_id,
         }))
     }
 }
@@ -554,6 +604,9 @@ impl From<&Header> for RpcRawHeader {
             palw_beacon_seed: header.palw_beacon_seed,
             palw_spam_accumulator_commitment: header.palw_spam_accumulator_commitment,
             palw_spam_nonce: header.palw_spam_nonce,
+            palw_compute_set_id: header.palw_compute_set_id,
+            palw_compute_policy_id: header.palw_compute_policy_id,
+            palw_allocation_plan_id: header.palw_allocation_plan_id,
         }
     }
 }
@@ -590,13 +643,16 @@ impl From<Header> for RpcRawHeader {
             palw_beacon_seed: header.palw_beacon_seed,
             palw_spam_accumulator_commitment: header.palw_spam_accumulator_commitment,
             palw_spam_nonce: header.palw_spam_nonce,
+            palw_compute_set_id: header.palw_compute_set_id,
+            palw_compute_policy_id: header.palw_compute_policy_id,
+            palw_allocation_plan_id: header.palw_allocation_plan_id,
         }
     }
 }
 
 impl Serializer for RpcRawHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &7, writer)?;
+        store!(u16, &8, writer)?;
 
         store!(u16, &self.version, writer)?;
         store!(Vec<Vec<BlockHash>>, &self.parents_by_level, writer)?;
@@ -633,6 +689,10 @@ impl Serializer for RpcRawHeader {
         // PALW Header-v4 anti-spam fields (serializer v7).
         store!(Hash64, &self.palw_spam_accumulator_commitment, writer)?;
         store!(u64, &self.palw_spam_nonce, writer)?;
+        // ADR-MA Header-v5 registry references were added in serializer v8.
+        store!(Hash64, &self.palw_compute_set_id, writer)?;
+        store!(Hash64, &self.palw_compute_policy_id, writer)?;
+        store!(Hash64, &self.palw_allocation_plan_id, writer)?;
 
         Ok(())
     }
@@ -689,6 +749,13 @@ impl Deserializer for RpcRawHeader {
         // streams retain the pre-v4 inert zero values.
         let (palw_spam_accumulator_commitment, palw_spam_nonce) =
             if serializer_version >= 7 { (load!(Hash64, reader)?, load!(u64, reader)?) } else { Default::default() };
+        // ADR-MA Header-v5 registry references were added in serializer v8. Older streams
+        // decode them to their pre-v5 inert zero values.
+        let (palw_compute_set_id, palw_compute_policy_id, palw_allocation_plan_id) = if serializer_version >= 8 {
+            (load!(Hash64, reader)?, load!(Hash64, reader)?, load!(Hash64, reader)?)
+        } else {
+            Default::default()
+        };
 
         Ok(Self {
             version,
@@ -720,6 +787,9 @@ impl Deserializer for RpcRawHeader {
             palw_beacon_seed,
             palw_spam_accumulator_commitment,
             palw_spam_nonce,
+            palw_compute_set_id,
+            palw_compute_policy_id,
+            palw_allocation_plan_id,
         })
     }
 }

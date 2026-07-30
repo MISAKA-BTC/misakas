@@ -312,6 +312,9 @@ impl Consensus {
             palw_proof_type: proof_type,
             palw_spam_accumulator_commitment: Hash64::default(),
             palw_spam_nonce: 0,
+            palw_compute_set_id: Default::default(),
+            palw_compute_policy_id: Default::default(),
+            palw_allocation_plan_id: Default::default(),
         }); // with_palw_fields re-finalizes header.hash over the full v3 preimage
 
         // ADR-0040 P1-6 — attach the per-block ticket authorization (construction == validation).

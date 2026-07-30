@@ -127,6 +127,13 @@ message BlockHeader{
   // pre-v4 headers, where they remain hash-invisible.
   Hash palwSpamAccumulatorCommitment = 30;
   uint64 palwSpamNonce = 31;
+  // ADR-MA Header-v5 Compute Set registry references. Part of the v5+ canonical
+  // header preimage and MUST survive relay/IBD (the powAlgoId / EVM / overlay /
+  // PALW split-brain precedent). Absent/zero on pre-v5 headers, where they are
+  // hash-invisible. Frozen order = §13.
+  Hash palwComputeSetId = 32;
+  Hash palwComputePolicyId = 33;
+  Hash palwAllocationPlanId = 34;
 }
 
 message BlockLevelParents {

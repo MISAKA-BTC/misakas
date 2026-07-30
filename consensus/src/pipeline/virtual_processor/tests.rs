@@ -4918,6 +4918,9 @@ fn mint_algo4_tampered_with_extra_txs(
         palw_proof_type: f.proof_type,
         palw_spam_accumulator_commitment: Hash64::default(),
         palw_spam_nonce: 0,
+        palw_compute_set_id: Default::default(),
+        palw_compute_policy_id: Default::default(),
+        palw_allocation_plan_id: Default::default(),
     }); // with_palw_fields re-finalizes header.hash over the full v3 preimage
     // Apply producer-side changes before signing.
     pre_mutate(&mut mb.header);
@@ -5014,6 +5017,9 @@ fn mint_algo4_via_real_producer(
         palw_proof_type: f.proof_type,
         palw_spam_accumulator_commitment: Hash64::default(),
         palw_spam_nonce: 0,
+        palw_compute_set_id: Default::default(),
+        palw_compute_policy_id: Default::default(),
+        palw_allocation_plan_id: Default::default(),
     });
 
     // Production authorization path.

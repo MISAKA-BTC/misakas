@@ -377,6 +377,14 @@ pub struct Params {
     /// not. Presets 110 and 111 are bounded by their peer allowlist, while preset 200 uses the
     /// Header-v4 anti-spam accumulator.
     pub palw_algo4_accept: bool,
+    /// ADR-MA (model-agnostic Compute Set registry): the activation fence for the Header-v5
+    /// set/policy/plan commitments and the 0x40-0x44 registry transaction band. `u64::MAX` ⇒ the
+    /// registry never activates on this net and every new code path is byte-identically inert
+    /// (Header v5 rejected, registry txs rejected, no store writes). A finite value ⇒ v5 headers
+    /// REQUIRED and registry txs live from that DAA score. Follows the
+    /// `palw_activation_daa_score` precedent exactly; activation is a coordinated wire cutover
+    /// (§25 — introduce the references BEFORE PALW main-net operation, or pay a hard fork later).
+    pub palw_compute_registry_activation_daa_score: u64,
     /// ADR-0040 P1-13 archival-operation requirement. Presets without a supported pruning snapshot
     /// path set this flag so startup rejects pruned operation.
     pub palw_requires_archival: bool,
@@ -548,6 +556,7 @@ impl Params {
             evm_activation_daa_score,
             palw_activation_daa_score,
             palw_algo4_accept,
+            palw_compute_registry_activation_daa_score,
             palw_requires_archival,
             palw_requires_peer_allowlist,
             palw_compute_work_scale,
@@ -607,6 +616,7 @@ impl Params {
         field!(evm_activation_daa_score);
         field!(palw_activation_daa_score);
         field!(palw_algo4_accept);
+        field!(palw_compute_registry_activation_daa_score);
         field!(palw_requires_archival);
         field!(palw_requires_peer_allowlist);
         field!(palw_compute_work_scale);
@@ -843,6 +853,7 @@ impl Params {
             evm_activation_daa_score: self.evm_activation_daa_score,
             palw_activation_daa_score: self.palw_activation_daa_score,
             palw_algo4_accept: self.palw_algo4_accept,
+            palw_compute_registry_activation_daa_score: self.palw_compute_registry_activation_daa_score,
             palw_requires_archival: self.palw_requires_archival,
             palw_requires_peer_allowlist: self.palw_requires_peer_allowlist,
             palw_compute_work_scale: self.palw_compute_work_scale,
@@ -1377,6 +1388,8 @@ pub const MAINNET_PARAMS: Params = Params {
     evm_activation_daa_score: u64::MAX,
     palw_activation_daa_score: u64::MAX,
     palw_algo4_accept: false,
+    // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
+    palw_compute_registry_activation_daa_score: u64::MAX,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1485,6 +1498,8 @@ pub const TESTNET_PARAMS: Params = Params {
     evm_activation_daa_score: 0,
     palw_activation_daa_score: u64::MAX,
     palw_algo4_accept: false,
+    // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
+    palw_compute_registry_activation_daa_score: u64::MAX,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1553,6 +1568,8 @@ pub const TESTNET_PALW_PARAMS: Params = Params {
     dns_seeders: &[],
     palw_activation_daa_score: 0,
     palw_algo4_accept: true,
+    // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
+    palw_compute_registry_activation_daa_score: u64::MAX,
     palw_requires_archival: true,
     palw_requires_peer_allowlist: true,
     palw_lane_difficulty: TESTNET_PALW_LANE_DIFFICULTY,
@@ -1605,6 +1622,8 @@ pub const DEVNET_PALW_PARAMS: Params = Params {
     dns_seeders: &[],
     palw_activation_daa_score: 0,
     palw_algo4_accept: true,
+    // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
+    palw_compute_registry_activation_daa_score: u64::MAX,
     // Devnet permits normal pruning; archival nodes opt in when full history is required.
     palw_requires_archival: false,
     palw_requires_peer_allowlist: true,
@@ -1684,6 +1703,8 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
     dns_seeders: TESTNET_200_DNS_SEEDERS,
     palw_activation_daa_score: 0,
     palw_algo4_accept: true,
+    // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
+    palw_compute_registry_activation_daa_score: u64::MAX,
     palw_compute_work_scale: 0,
     palw_spam: crate::palw_antispam::PalwSpamParams::PUBLIC_REGENESIS_CANDIDATE,
     skip_proof_of_work: false,
@@ -1757,6 +1778,8 @@ pub const SIMNET_PARAMS: Params = Params {
     evm_activation_daa_score: u64::MAX,
     palw_activation_daa_score: u64::MAX,
     palw_algo4_accept: false,
+    // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
+    palw_compute_registry_activation_daa_score: u64::MAX,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1794,6 +1817,8 @@ pub const DEVNET_PARAMS: Params = Params {
     evm_activation_daa_score: 0,
     palw_activation_daa_score: u64::MAX,
     palw_algo4_accept: false,
+    // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
+    palw_compute_registry_activation_daa_score: u64::MAX,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,

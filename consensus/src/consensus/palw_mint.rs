@@ -233,6 +233,11 @@ impl Consensus {
             palw_proof_type: stamp.proof_type,
             palw_spam_accumulator_commitment,
             palw_spam_nonce: 0,
+            // ADR-MA Header-v5: zero below the registry activation fence (no shipped preset
+            // activates v5). The registry-aware template path lands with the per-set DAA slice.
+            palw_compute_set_id: Hash64::default(),
+            palw_compute_policy_id: Hash64::default(),
+            palw_allocation_plan_id: Hash64::default(),
         });
         Ok(PalwAlgo4Template { block: mb, spam_target_bits })
     }

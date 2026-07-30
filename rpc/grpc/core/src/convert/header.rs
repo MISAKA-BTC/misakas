@@ -43,6 +43,9 @@ from!(item: &kaspa_rpc_core::RpcHeader, protowire::RpcBlockHeader, {
         palw_beacon_seed: item.palw_beacon_seed.to_string(),
         palw_spam_accumulator_commitment: item.palw_spam_accumulator_commitment.to_string(),
         palw_spam_nonce: item.palw_spam_nonce,
+        palw_compute_set_id: item.palw_compute_set_id.to_string(),
+        palw_compute_policy_id: item.palw_compute_policy_id.to_string(),
+        palw_allocation_plan_id: item.palw_allocation_plan_id.to_string(),
     }
 });
 
@@ -81,6 +84,9 @@ from!(item: &kaspa_rpc_core::RpcRawHeader, protowire::RpcBlockHeader, {
         palw_beacon_seed: item.palw_beacon_seed.to_string(),
         palw_spam_accumulator_commitment: item.palw_spam_accumulator_commitment.to_string(),
         palw_spam_nonce: item.palw_spam_nonce,
+        palw_compute_set_id: item.palw_compute_set_id.to_string(),
+        palw_compute_policy_id: item.palw_compute_policy_id.to_string(),
+        palw_allocation_plan_id: item.palw_allocation_plan_id.to_string(),
     }
 });
 
@@ -144,6 +150,9 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcHeader, {
         palw_beacon_seed: hash64_or_zero(&item.palw_beacon_seed)?,
         palw_spam_accumulator_commitment: hash64_or_zero(&item.palw_spam_accumulator_commitment)?,
         palw_spam_nonce: item.palw_spam_nonce,
+        palw_compute_set_id: hash64_or_zero(&item.palw_compute_set_id)?,
+        palw_compute_policy_id: hash64_or_zero(&item.palw_compute_policy_id)?,
+        palw_allocation_plan_id: hash64_or_zero(&item.palw_allocation_plan_id)?,
     });
 
     header.into()
@@ -186,6 +195,9 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcRawHeader, {
         palw_beacon_seed: hash64_or_zero(&item.palw_beacon_seed)?,
         palw_spam_accumulator_commitment: hash64_or_zero(&item.palw_spam_accumulator_commitment)?,
         palw_spam_nonce: item.palw_spam_nonce,
+        palw_compute_set_id: hash64_or_zero(&item.palw_compute_set_id)?,
+        palw_compute_policy_id: hash64_or_zero(&item.palw_compute_policy_id)?,
+        palw_allocation_plan_id: hash64_or_zero(&item.palw_allocation_plan_id)?,
     }
 });
 
@@ -229,6 +241,9 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcOptionalHeader, {
         palw_beacon_seed: hash64_or_zero(&item.palw_beacon_seed)?,
         palw_spam_accumulator_commitment: hash64_or_zero(&item.palw_spam_accumulator_commitment)?,
         palw_spam_nonce: item.palw_spam_nonce,
+        palw_compute_set_id: hash64_or_zero(&item.palw_compute_set_id)?,
+        palw_compute_policy_id: hash64_or_zero(&item.palw_compute_policy_id)?,
+        palw_allocation_plan_id: hash64_or_zero(&item.palw_allocation_plan_id)?,
     });
 
     kaspa_rpc_core::RpcOptionalHeader::from(header)

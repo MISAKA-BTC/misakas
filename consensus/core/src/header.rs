@@ -248,6 +248,17 @@ pub struct Header {
     pub palw_spam_accumulator_commitment: Hash64,
     /// Objective anti-spam stamp nonce. AUTH-02 intentionally substitutes only this field with zero.
     pub palw_spam_nonce: u64,
+
+    // ADR-MA Header-v5 extension (§13): the generic Compute Set references. Hash-invisible before
+    // Header v5 and forced to zero below the registry activation fence. With these three ids in
+    // the header, ADDING/UPDATING/STOPPING a model never changes the header again — a block
+    // names the exact immutable records that governed it, forever (§21.4).
+    /// The Compute Set this PALW block was mined for (zero on hash-lane blocks).
+    pub palw_compute_set_id: Hash64,
+    /// The EXACT policy record in force at this block's source DAA (content id, §14).
+    pub palw_compute_policy_id: Hash64,
+    /// The EXACT allocation plan in force at this block's source DAA (content id, §14).
+    pub palw_allocation_plan_id: Hash64,
 }
 
 /// The PALW ticket/work, beacon, and re-genesis v4 anti-spam commitments carried by a PALW header. Bundled so the
@@ -268,6 +279,9 @@ pub struct PalwHeaderFields {
     pub palw_beacon_seed: Hash64,
     pub palw_spam_accumulator_commitment: Hash64,
     pub palw_spam_nonce: u64,
+    pub palw_compute_set_id: Hash64,
+    pub palw_compute_policy_id: Hash64,
+    pub palw_allocation_plan_id: Hash64,
 }
 
 impl Header {
@@ -360,6 +374,9 @@ impl Header {
             palw_beacon_seed: Default::default(),
             palw_spam_accumulator_commitment: Default::default(),
             palw_spam_nonce: 0,
+            palw_compute_set_id: Default::default(),
+            palw_compute_policy_id: Default::default(),
+            palw_allocation_plan_id: Default::default(),
         }
     }
 
@@ -381,6 +398,9 @@ impl Header {
         self.palw_beacon_seed = f.palw_beacon_seed;
         self.palw_spam_accumulator_commitment = f.palw_spam_accumulator_commitment;
         self.palw_spam_nonce = f.palw_spam_nonce;
+        self.palw_compute_set_id = f.palw_compute_set_id;
+        self.palw_compute_policy_id = f.palw_compute_policy_id;
+        self.palw_allocation_plan_id = f.palw_allocation_plan_id;
         self.finalize();
         self
     }
@@ -404,6 +424,9 @@ impl Header {
             || self.palw_beacon_seed != zero64
             || self.palw_spam_accumulator_commitment != zero64
             || self.palw_spam_nonce != 0
+            || self.palw_compute_set_id != zero64
+            || self.palw_compute_policy_id != zero64
+            || self.palw_allocation_plan_id != zero64
     }
 
     /// kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §4.1): set the

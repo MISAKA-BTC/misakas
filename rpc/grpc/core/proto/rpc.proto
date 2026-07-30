@@ -90,6 +90,10 @@ message RpcBlockHeader {
   // string; both fields are empty/zero and hash-invisible before v4.
   string palwSpamAccumulatorCommitment = 31;
   uint64 palwSpamNonce = 32;
+  // ADR-MA Header-v5 Compute Set registry references (v5+ hash preimage; empty/zero below).
+  string palwComputeSetId = 33;
+  string palwComputePolicyId = 34;
+  string palwAllocationPlanId = 35;
 }
 
 message RpcBlockLevelParents {

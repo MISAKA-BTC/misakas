@@ -99,6 +99,17 @@ fn write_header_preimage<H: HasherBase>(hasher: &mut H, header: &Header, nonce: 
     if header.version >= crate::constants::PALW_ANTISPAM_HEADER_VERSION {
         hasher.update(header.palw_spam_accumulator_commitment).update(header.palw_spam_nonce.to_le_bytes());
     }
+
+    // ADR-MA Header-v5 Compute Set registry extension (§13). Activation-gated layout like v4:
+    // no existing preset activates v5, so no existing block sees new preimage bytes. Frozen
+    // order: set id, then the exact policy record id, then the exact allocation plan id — the
+    // three references §14/§21.4 resolve historical work from, immutably, forever.
+    if header.version >= crate::constants::PALW_COMPUTE_SET_HEADER_VERSION {
+        hasher
+            .update(header.palw_compute_set_id)
+            .update(header.palw_compute_policy_id)
+            .update(header.palw_allocation_plan_id);
+    }
 }
 
 /// kaspa-pq **ADR-0040 (AUTH-02) — the PALW ticket-authorization header commitment.**
@@ -527,6 +538,9 @@ mod tests {
             palw_beacon_seed: Hash64::from_bytes([6u8; 64]),
             palw_spam_accumulator_commitment: Hash64::default(),
             palw_spam_nonce: 0,
+            palw_compute_set_id: Hash64::default(),
+            palw_compute_policy_id: Hash64::default(),
+            palw_allocation_plan_id: Hash64::default(),
         };
 
         // v2 (EVM_HEADER_VERSION, < PALW): PALW fields are hash-invisible.
@@ -574,5 +588,28 @@ mod tests {
 
         // version participates: v2 != v3 even at zero PALW fields.
         assert_ne!(v2.hash, v3.hash);
+
+        // ADR-MA Header-v5: the three Compute Set registry references are v5-only and
+        // position-distinct. Existing v4 hashes stay inert under them.
+        let mut refs = some_fields;
+        refs.palw_compute_set_id = Hash64::from_bytes([0x88; 64]);
+        refs.palw_compute_policy_id = Hash64::from_bytes([0x99; 64]);
+        refs.palw_allocation_plan_id = Hash64::from_bytes([0xaa; 64]);
+        assert_eq!(v4.clone().with_palw_fields(refs).hash, v4_base.hash, "v4 hash must NOT change with v5 fields");
+        let v5 = mk(crate::constants::PALW_COMPUTE_SET_HEADER_VERSION);
+        let v5_base = v5.clone().with_palw_fields(some_fields);
+        let v5_set =
+            v5.clone().with_palw_fields(PalwHeaderFields { palw_compute_set_id: Hash64::from_bytes([0x88; 64]), ..some_fields });
+        let v5_policy =
+            v5.clone().with_palw_fields(PalwHeaderFields { palw_compute_policy_id: Hash64::from_bytes([0x99; 64]), ..some_fields });
+        let v5_plan =
+            v5.clone().with_palw_fields(PalwHeaderFields { palw_allocation_plan_id: Hash64::from_bytes([0xaa; 64]), ..some_fields });
+        assert_ne!(v5_set.hash, v5_base.hash);
+        assert_ne!(v5_policy.hash, v5_base.hash);
+        assert_ne!(v5_plan.hash, v5_base.hash);
+        assert_ne!(v5_set.hash, v5_policy.hash);
+        assert_ne!(v5_policy.hash, v5_plan.hash);
+        // version participates: v4 != v5 even at identical fields.
+        assert_ne!(v4_base.hash, v5_base.hash);
     }
 }

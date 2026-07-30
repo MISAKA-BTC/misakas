@@ -84,6 +84,11 @@ impl From<(HeaderFormat, &Header)> for protowire::BlockHeader {
             // independent objective anti-spam stamp nonce.
             palw_spam_accumulator_commitment: Some(item.palw_spam_accumulator_commitment.into()),
             palw_spam_nonce: item.palw_spam_nonce,
+            // ADR-MA Header-v5: the three Compute Set registry references (part of the v5+
+            // preimage; zero and hash-invisible below).
+            palw_compute_set_id: Some(item.palw_compute_set_id.into()),
+            palw_compute_policy_id: Some(item.palw_compute_policy_id.into()),
+            palw_allocation_plan_id: Some(item.palw_allocation_plan_id.into()),
         }
     }
 }
@@ -178,6 +183,12 @@ impl TryFrom<Versioned<protowire::BlockHeader>> for Header {
                 .transpose()?
                 .unwrap_or_default(),
             palw_spam_nonce: item.palw_spam_nonce,
+            // ADR-MA Header-v5: restore the registry references (absent from an old peer / on a
+            // pre-v5 header ⇒ zero, hash-invisible there; on a v5 header a wrong value simply
+            // fails the header-hash check, never a silent fork).
+            palw_compute_set_id: item.palw_compute_set_id.map(BlockHash::try_from).transpose()?.unwrap_or_default(),
+            palw_compute_policy_id: item.palw_compute_policy_id.map(BlockHash::try_from).transpose()?.unwrap_or_default(),
+            palw_allocation_plan_id: item.palw_allocation_plan_id.map(BlockHash::try_from).transpose()?.unwrap_or_default(),
         }))
     }
 }
@@ -237,6 +248,9 @@ mod palw_header_roundtrip_tests {
             palw_beacon_seed: h(15),
             palw_spam_accumulator_commitment: Default::default(),
             palw_spam_nonce: 0,
+            palw_compute_set_id: Default::default(),
+            palw_compute_policy_id: Default::default(),
+            palw_allocation_plan_id: Default::default(),
         };
         let header = build(3, 4, palw);
         for (name, fmt) in [("legacy", HeaderFormat::Legacy), ("compressed", HeaderFormat::Compressed)] {
@@ -275,6 +289,43 @@ mod palw_header_roundtrip_tests {
             assert_eq!(back.palw_spam_accumulator_commitment, h(16), "{name}: accumulator");
             assert_eq!(back.palw_spam_nonce, 0x0123_4567_89ab_cdef, "{name}: spam nonce");
         }
+    }
+
+    /// ADR-MA Header-v5 makes the three Compute Set registry references canonical. Relay/IBD must
+    /// preserve them in both parent encodings, including the resulting block identity — and an old
+    /// peer that omits the optional fields must decode to the inert zeros.
+    #[test]
+    fn v5_header_p2p_roundtrip_preserves_compute_set_refs_and_hash() {
+        let palw = PalwHeaderFields {
+            palw_compute_set_id: h(20),
+            palw_compute_policy_id: h(21),
+            palw_allocation_plan_id: h(22),
+            ..Default::default()
+        };
+        let header = build(5, 4, palw);
+
+        for (name, fmt) in [("legacy", HeaderFormat::Legacy), ("compressed", HeaderFormat::Compressed)] {
+            let proto: protowire::BlockHeader = (fmt, &header).into();
+            assert_eq!(proto.palw_compute_set_id, Some((&h(20)).into()), "{name}: proto set id");
+            assert_eq!(proto.palw_compute_policy_id, Some((&h(21)).into()), "{name}: proto policy id");
+            assert_eq!(proto.palw_allocation_plan_id, Some((&h(22)).into()), "{name}: proto plan id");
+
+            let back: Header = Versioned(fmt, proto).try_into().unwrap();
+            assert_eq!(header.hash, back.hash, "{name}: v5 block hash preserved");
+            assert_eq!(back.palw_compute_set_id, h(20), "{name}: set id");
+            assert_eq!(back.palw_compute_policy_id, h(21), "{name}: policy id");
+            assert_eq!(back.palw_allocation_plan_id, h(22), "{name}: plan id");
+        }
+
+        // An old peer omitting the optional v5 fields decodes them to zero (and on a REAL v5
+        // header that zero simply fails the hash check — never a silent fork).
+        let mut proto: protowire::BlockHeader = (HeaderFormat::Legacy, &header).into();
+        proto.palw_compute_set_id = None;
+        proto.palw_compute_policy_id = None;
+        proto.palw_allocation_plan_id = None;
+        let back: Header = Versioned(HeaderFormat::Legacy, proto).try_into().unwrap();
+        assert_eq!(back.palw_compute_set_id, Hash64::default());
+        assert_ne!(header.hash, back.hash, "a v5 header stripped of its registry refs re-hashes differently");
     }
 
     /// A pre-v3 header carries zero PALW fields (hash-invisible), so the round-trip preserves the hash

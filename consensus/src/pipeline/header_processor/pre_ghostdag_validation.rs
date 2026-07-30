@@ -59,7 +59,12 @@ impl HeaderProcessor {
         // from genesis even though algo-4 acceptance remains default-off; no shipped preset enables v4.
         let evm_active = header.daa_score >= self.evm_activation_daa_score;
         let palw_active = header.daa_score >= self.palw_activation_daa_score;
-        let expected = if palw_active && !self.palw_spam.is_inert() {
+        // ADR-MA: the Compute Set registry schema (v5) sits atop the anti-spam schema (v4); its
+        // fence is its own activation score (u64::MAX on every shipped preset ⇒ unreachable).
+        let compute_registry_active = header.daa_score >= self.palw_compute_registry_activation_daa_score;
+        let expected = if palw_active && compute_registry_active {
+            kaspa_consensus_core::constants::PALW_COMPUTE_SET_HEADER_VERSION
+        } else if palw_active && !self.palw_spam.is_inert() {
             kaspa_consensus_core::constants::PALW_ANTISPAM_HEADER_VERSION
         } else if palw_active {
             kaspa_consensus_core::constants::PALW_HEADER_VERSION
@@ -94,6 +99,13 @@ impl HeaderProcessor {
         // force these bytes to zero there and prevent serialized-header/block-id malleability.
         if header.version < kaspa_consensus_core::constants::PALW_ANTISPAM_HEADER_VERSION
             && (header.palw_spam_accumulator_commitment != zero || header.palw_spam_nonce != 0)
+        {
+            return Err(RuleError::NonZeroPalwHeaderFieldsBeforeActivation);
+        }
+        // ADR-MA: the three Header-v5 Compute Set references are hash-invisible below v5 — same
+        // anti-malleability rule, next version boundary.
+        if header.version < kaspa_consensus_core::constants::PALW_COMPUTE_SET_HEADER_VERSION
+            && (header.palw_compute_set_id != zero || header.palw_compute_policy_id != zero || header.palw_allocation_plan_id != zero)
         {
             return Err(RuleError::NonZeroPalwHeaderFieldsBeforeActivation);
         }

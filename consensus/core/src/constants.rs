@@ -33,6 +33,16 @@ pub const PALW_HEADER_VERSION: u16 = 3;
 /// the closed shared-testnet v3 format remains byte-identical, and no existing preset activates v4.
 pub const PALW_ANTISPAM_HEADER_VERSION: u16 = 4;
 
+/// ADR-MA (model-agnostic Compute Set registry) header version. Version 5 appends the three
+/// generic registry commitments after the v4 anti-spam fields — `palw_compute_set_id`,
+/// `palw_compute_policy_id`, `palw_allocation_plan_id` — so FUTURE model additions, revisions,
+/// share changes and stops never need another header change (§13/§25: introduce the generic
+/// references BEFORE PALW main-net operation, or pay a hard fork at the first model update).
+/// Gated by `Params::palw_compute_registry_activation_daa_score`; no shipped preset activates
+/// v5, and below the gate the three fields are hash-invisible and forced to zero
+/// (`check_header_version`) exactly like every prior version boundary.
+pub const PALW_COMPUTE_SET_HEADER_VERSION: u16 = 5;
+
 /// TX_VERSION is the current latest supported transaction version.
 pub const TX_VERSION: u16 = 0;
 
