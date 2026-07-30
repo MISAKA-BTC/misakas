@@ -743,9 +743,23 @@ pub struct DnsParams {
     /// stake-less branch cannot pass it. The confirmation predicate's WorkDepth
     /// term is retained as an optional extra buffer; a deployment that wants the
     /// confirmation itself to also require buried PoW can raise this above 0.
+    ///
+    /// ⚠️ CONSENSUS-RELEVANT FOR IBD REPLAY (2026-07-30 testnet-200 halt). This threshold and
+    /// [`Self::required_stake_depth`] drive [`is_dns_confirmed`], which selects
+    /// `last_dns_confirmed_anchor`, against which the PALW v4 `palw_beacon_seed` is authenticated.
+    /// They are NOT genesis inputs and have NO DAA activation gate, so **changing either on a LIVE
+    /// network re-derives the beacon seed for already-mined pre-change blocks and makes IBD replay
+    /// reject them**: the block committed its seed under the OLD thresholds, but a replaying node
+    /// with the NEW thresholds confirms an anchor at a different height and derives a different seed
+    /// → v4 provenance rejection → StatusInvalid poison → the missing-parents dead loop. The clean
+    /// recovery is a RE-GENESIS (a new network identity carrying the new thresholds from block 0),
+    /// never an in-place edit. testnet-200 → testnet-20 (2026-07-30) is exactly this migration. A
+    /// tripwire test pins the public net's values so an edit here trips CI.
     pub required_work_depth: BlueWorkType,
-    /// `cS` — minimum stake-depth (in [`STAKE_SCORE_SCALE`] units)
-    /// for history confirmation.
+    /// `cS` — minimum stake-depth (in [`STAKE_SCORE_SCALE`] units) for history confirmation.
+    ///
+    /// ⚠️ Same IBD-replay hazard as [`Self::required_work_depth`]: changing it on a live network
+    /// requires a re-genesis, never an in-place edit.
     pub required_stake_depth: StakeScore,
 
     /// Mainnet-only: extra margin a candidate must clear on

@@ -1312,7 +1312,12 @@ pub const STAGING_MAINNET_PALW_BATCH_ADMISSION: crate::palw::PalwBatchAdmissionP
 /// These names intentionally belong to exactly one preset at a time. Reusing a
 /// seed hostname across network identities makes a fresh node dial the right IP
 /// on the wrong default port and obscures which chain the operator joined.
-pub const TESTNET_200_DNS_SEEDERS: &[&str] = &["seeder1.misakascan.com", "seeder3.misakascan.com"];
+/// ADR-MA P14 migration (2026-07-30): the public PALW testnet moved from testnet-200 to
+/// **testnet-20** (`compute-registry-palw`). testnet-200's replay halted because its DNS
+/// finality thresholds were changed mid-chain without a DAA activation gate — a genesis-active
+/// v5 re-genesis (testnet-20) is the clean recovery (the operator's "最も確実" option). The public
+/// seed names now resolve testnet-20; testnet-200 keeps NO seeders (deprecated, no discovery).
+pub const TESTNET_20_DNS_SEEDERS: &[&str] = &["seeder1.misakascan.com", "seeder3.misakascan.com"];
 
 pub const MAINNET_PARAMS: Params = Params {
     // Mainnet is defined but not launched. Never resolve the public testnet-200
@@ -1700,9 +1705,10 @@ pub const STAGING_PALW_LANE_DIFFICULTY: crate::palw::LaneDifficultyParams = crat
 pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
     net: NetworkId::with_suffix(NetworkType::Testnet, 200),
     genesis: crate::config::genesis::STAGING_PALW_GENESIS,
-    // testnet-200 is the public testnet. Seed A records are dialed on its
-    // dedicated default P2P port (26511).
-    dns_seeders: TESTNET_200_DNS_SEEDERS,
+    // DEPRECATED (2026-07-30): superseded by testnet-20 (compute-registry-palw). Kept compilable
+    // for any node still holding its ledger, but no longer publicly seeded — its replay is unsafe
+    // (mid-chain DNS-threshold change, no DAA gate). Migrate to `--testnet --netsuffix=20`.
+    dns_seeders: &[],
     palw_activation_daa_score: 0,
     palw_algo4_accept: true,
     // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
@@ -1735,8 +1741,11 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
 pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
     net: NetworkId::with_suffix(NetworkType::Testnet, 20),
     genesis: COMPUTE_REGISTRY_PALW_GENESIS,
-    dns_seeders: &[],
-    // ADR-MA: the registry fence — OPEN from genesis on this rehearsal network only.
+    // 2026-07-30 migration: this is now the PUBLIC PALW testnet (superseding testnet-200). The
+    // public seed hostnames resolve here.
+    dns_seeders: TESTNET_20_DNS_SEEDERS,
+    // ADR-MA: the registry fence — OPEN from genesis (this net rehearses the Compute Set registry
+    // as well as the mainnet shape it inherits from STAGING).
     palw_compute_registry_activation_daa_score: 0,
     dns_params: Some(COMPUTE_REGISTRY_DNS_PARAMS),
     ..STAGING_MAINNET_PALW_PARAMS
@@ -2099,8 +2108,16 @@ mod palw_network_tests {
         assert_eq!(p.palw_activation_daa_score, 0);
         assert!(p.palw_algo4_accept);
         assert!(!p.skip_proof_of_work);
-        // Rehearsal dials peers explicitly — no seeders.
-        assert!(p.dns_seeders.is_empty());
+        // 2026-07-30 migration: testnet-20 is now the PUBLIC PALW testnet (superseding testnet-200),
+        // so it carries the public seeders.
+        assert_eq!(p.dns_seeders, TESTNET_20_DNS_SEEDERS);
+        // TRIPWIRE (2026-07-30 testnet-200 halt): the DNS finality thresholds drive the beacon-seed
+        // provenance, so changing them on THIS live public net breaks IBD replay of pre-change
+        // history (see DnsParams::required_work_depth). If you must change them, RE-GENESIS onto a
+        // new suffix (as 200→20 did) and update these pins — do not edit them on a running net.
+        let dns = p.dns_params.unwrap();
+        assert_eq!(dns.required_work_depth, Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]), "changing this on the live public net breaks IBD replay — re-genesis instead");
+        assert_eq!(dns.required_stake_depth, StakeScore(5000), "changing this on the live public net breaks IBD replay — re-genesis instead");
         // Every OTHER preset keeps the fence closed.
         for other in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, DEVNET_PARAMS, DEVNET_PALW_PARAMS, SIMNET_PARAMS]
         {
@@ -2159,8 +2176,14 @@ mod palw_network_tests {
         // operation remains the default posture.
         assert!(!p.palw_requires_peer_allowlist, "A1 opened the staging rehearsal net to unlisted peers");
         assert!(!p.palw_requires_archival);
-        assert_eq!(p.dns_seeders, TESTNET_200_DNS_SEEDERS, "staging is the only publicly discovered testnet");
-        assert!(TESTNET_PARAMS.dns_seeders.is_empty(), "retired testnet-10 must not resolve testnet-200 seeds on port 26211");
+        // 2026-07-30 migration: testnet-200 is deprecated and no longer publicly seeded; the public
+        // seeds resolve testnet-20 (compute-registry-palw).
+        assert!(p.dns_seeders.is_empty(), "deprecated testnet-200 must not be publicly discovered after the testnet-20 migration");
+        assert_eq!(
+            COMPUTE_REGISTRY_PALW_PARAMS.dns_seeders, TESTNET_20_DNS_SEEDERS,
+            "testnet-20 is the public PALW testnet after the migration"
+        );
+        assert!(TESTNET_PARAMS.dns_seeders.is_empty(), "retired testnet-10 must not resolve public seeds on port 26211");
         assert!(MAINNET_PARAMS.dns_seeders.is_empty(), "unlaunched mainnet must not reuse testnet seed names");
         assert!(DEVNET_PARAMS.dns_seeders.is_empty(), "retired devnet must not reuse testnet seed names");
         // Keeps production validator economics, but uses reachable testnet WorkDepth/StakeDepth
