@@ -465,6 +465,108 @@ pub fn verify_certificate_attestation(
     Ok(())
 }
 
+/// ADR-MA §17.3 — verify a Compute Set activation certificate's embedded validator attestation.
+///
+/// The validator-quorum analogue of [`verify_certificate_attestation`], but over the DNS stake
+/// bond set instead of a beacon-selected auditor committee: the §17.3 quorum is «既存の
+/// ML-DSA-87 validator quorum machinery», so eligibility, keys and stake all come from the SAME
+/// frozen selected-parent [`ActiveBondView`] the beacon/attestation paths read (never this
+/// block's own bond mutations, never tip-relative state — reorg-path-independent by the same
+/// argument).
+///
+/// Declared-commitment posture throughout: `validator_set_commitment`, `total_selected_stake`,
+/// `approving_stake` and `votes_root` are all recomputed here and REJECTED on mismatch — a
+/// certificate author must predict the active bond set exactly; if governance moved a bond
+/// between authoring and folding, the certificate is re-issued (fail-closed, never silently
+/// re-aimed). Every error is [`ComputeSetRegistryError::CertificateAttestationInvalid`], an
+/// ADMISSION rejection: the fold warns and skips, the set stays un-certified, block validity is
+/// untouched (the §21.2 overlay-fold posture).
+pub fn verify_compute_set_activation_certificate(
+    cert: &kaspa_consensus_core::palw_compute_set::PalwComputeSetActivationCertificateV1,
+    bond_view: &kaspa_consensus_core::dns_finality::ActiveBondView,
+    network_id: u32,
+    pov_daa_score: u64,
+    quorum_num: u16,
+    quorum_den: u16,
+) -> Result<(), kaspa_consensus_core::palw_compute_set::ComputeSetRegistryError> {
+    use kaspa_consensus_core::dns_finality::is_bond_active_at;
+    use kaspa_consensus_core::palw_compute_set::{
+        ComputeSetRegistryError, MAX_ACTIVATION_CERT_VOTES, PALW_COMPUTE_SET_ACTIVATION_MLDSA87_CONTEXT,
+        palw_activation_validator_set_commitment, palw_activation_votes_root,
+    };
+    use kaspa_txscript::verify_mldsa87_with_context;
+    let reject = |reason: &'static str| ComputeSetRegistryError::CertificateAttestationInvalid(cert.compute_set_id, reason);
+
+    if cert.votes.is_empty() {
+        return Err(reject("no embedded votes"));
+    }
+    if cert.votes.len() > MAX_ACTIVATION_CERT_VOTES {
+        return Err(reject("vote list exceeds the anti-explosion ceiling"));
+    }
+    // Canonical vote list + the declared votes_root commitment (§17.3 «this record carries what
+    // was certified» — the root pins WHO voted WHAT).
+    let votes_root = palw_activation_votes_root(&cert.votes).ok_or(reject("vote list is unsorted or has duplicates"))?;
+    if votes_root != cert.votes_root {
+        return Err(reject("declared votes_root does not match the embedded votes"));
+    }
+
+    // The frozen active bond set at the verification point-of-view: bond-granular, ascending by
+    // outpoint — the exact fingerprint the author committed.
+    let mut active_bonds: Vec<_> =
+        bond_view.records().into_iter().filter(|bond| is_bond_active_at(bond, pov_daa_score)).collect();
+    active_bonds
+        .sort_by(|a, b| (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index)));
+    let commitment =
+        palw_activation_validator_set_commitment(&active_bonds).ok_or(reject("active bond set is not canonical"))?;
+    if commitment != cert.validator_set_commitment {
+        return Err(reject("declared validator_set_commitment does not match the active bond set"));
+    }
+    // The quorum denominator is the ENTIRE active set, not the subset that voted — otherwise one
+    // withheld vote turns a lone PASS into 1/1 (the batch-cert denominator rule).
+    let total_stake = active_bonds.iter().fold(0u128, |total, bond| total.saturating_add(bond.amount as u128));
+    if total_stake != cert.total_selected_stake {
+        return Err(reject("declared total_selected_stake does not match the active bond set"));
+    }
+
+    let mut pass_stake = 0u128;
+    for vote in &cert.votes {
+        if vote.vote > 1 {
+            return Err(reject("vote value is not pass/reject"));
+        }
+        let bond = bond_view
+            .active_bond_at(&vote.bond_outpoint, pov_daa_score)
+            .ok_or(reject("vote from an unknown or inactive bond"))?;
+        let digest = vote.signing_hash(network_id, cert);
+        if !matches!(
+            verify_mldsa87_with_context(
+                &bond.validator_pubkey,
+                digest.as_byte_slice(),
+                &vote.signature,
+                PALW_COMPUTE_SET_ACTIVATION_MLDSA87_CONTEXT
+            ),
+            Ok(true)
+        ) {
+            return Err(reject("vote signature invalid"));
+        }
+        if vote.vote == 1 {
+            pass_stake = pass_stake.saturating_add(bond.amount as u128);
+        }
+    }
+    if pass_stake != cert.approving_stake {
+        return Err(reject("declared approving_stake does not match the recomputed tally"));
+    }
+
+    // Stake-weighted quorum with the ADR-0040 P0-5 vacuity guards: a zero total, zero threshold
+    // numerator or zero denominator fails closed rather than vacuously passing.
+    if quorum_den == 0 || quorum_num == 0 || total_stake == 0 {
+        return Err(reject("degenerate quorum parameters or empty validator set"));
+    }
+    if pass_stake.saturating_mul(quorum_den as u128) < total_stake.saturating_mul(quorum_num as u128) {
+        return Err(reject("stake-weighted quorum not reached"));
+    }
+    Ok(())
+}
+
 /// Validates provider-unbond owner authorization under ADR-0040 ECON-03.
 ///
 /// # Release path
@@ -3500,5 +3602,209 @@ mod tests {
             );
         }
         assert!(others >= 10, "every other registered domain must be exercised, saw {others}");
+    }
+
+    // =========================================================================================
+    // ADR-MA §17.3 — activation-certificate validator attestation
+    // =========================================================================================
+
+    mod activation_certificate {
+        use super::h;
+        use crate::processes::palw::verify_compute_set_activation_certificate;
+        use kaspa_consensus_core::dns_finality::{ActiveBondView, StakeBondRecord};
+        use kaspa_consensus_core::palw_compute_set::{
+            ComputeSetRegistryError, PALW_COMPUTE_SET_ACTIVATION_CERT_VERSION, PALW_COMPUTE_SET_ACTIVATION_MLDSA87_CONTEXT,
+            PalwComputeSetActivationCertificateV1, PalwComputeSetActivationVoteV1, palw_activation_validator_set_commitment,
+            palw_activation_votes_root,
+        };
+        use kaspa_consensus_core::tx::TransactionOutpoint;
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+
+        const NET: u32 = 111;
+        const POV: u64 = 700;
+
+        struct Validator {
+            bond: StakeBondRecord,
+            signing_key: mldsa::MLDSA87SigningKey,
+        }
+
+        fn validator(tag: u8, amount: u64) -> Validator {
+            let kp = mldsa::generate_key_pair([tag; 32]);
+            let pubkey = kp.verification_key.as_ref().to_vec();
+            let bond = StakeBondRecord {
+                version: 1,
+                bond_outpoint: TransactionOutpoint::new(h(tag), 0),
+                owner_pubkey_hash: h(tag.wrapping_add(0x40)),
+                validator_pubkey_hash: kaspa_consensus_core::dns_finality::validator_id_from_pubkey(&pubkey),
+                validator_pubkey: pubkey,
+                amount,
+                activation_daa_score: 0,
+                created_daa_score: 0,
+                unbonding_period_blocks: 100,
+                owner_reward_spk_payload: [tag; 64],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: kaspa_consensus_core::dns_finality::BondStatus::Active,
+                last_attested_epoch: None,
+                dormant_at_daa_score: None,
+                dormant_at_epoch: None,
+            };
+            Validator { bond, signing_key: kp.signing_key }
+        }
+
+        /// A quorum-meeting certificate over `validators`, with `passing` of them voting PASS
+        /// (the rest voting reject), every declared commitment computed honestly.
+        fn certified(validators: &[Validator], passing: usize) -> (PalwComputeSetActivationCertificateV1, ActiveBondView) {
+            let mut active: Vec<StakeBondRecord> = validators.iter().map(|v| v.bond.clone()).collect();
+            active.sort_by(|a, b| {
+                (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+            });
+            let commitment = palw_activation_validator_set_commitment(&active).unwrap();
+            let total: u128 = active.iter().map(|b| b.amount as u128).sum();
+            let mut cert = PalwComputeSetActivationCertificateV1 {
+                version: PALW_COMPUTE_SET_ACTIVATION_CERT_VERSION,
+                compute_set_id: h(0xd1),
+                descriptor_hash: h(0xd1),
+                conformance_result_root: h(0xd2),
+                auditor_capacity_evidence_root: h(0xd3),
+                artifact_reproducibility_root: h(0xd4),
+                validator_set_commitment: commitment,
+                approving_stake: 0,
+                total_selected_stake: total,
+                effective_from_daa: 1_000,
+                votes_root: Hash64::default(),
+                votes: vec![],
+            };
+            let mut votes: Vec<PalwComputeSetActivationVoteV1> = validators
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let mut vote = PalwComputeSetActivationVoteV1 {
+                        bond_outpoint: v.bond.bond_outpoint,
+                        vote: if i < passing { 1 } else { 0 },
+                        signature: vec![],
+                    };
+                    let digest = vote.signing_hash(NET, &cert);
+                    let sig = mldsa::sign(
+                        &v.signing_key,
+                        digest.as_byte_slice(),
+                        PALW_COMPUTE_SET_ACTIVATION_MLDSA87_CONTEXT,
+                        [0x11; 32],
+                    )
+                    .expect("mldsa sign");
+                    vote.signature = sig.as_ref().to_vec();
+                    vote
+                })
+                .collect();
+            votes.sort_by(|a, b| {
+                (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+            });
+            cert.approving_stake =
+                votes.iter().filter(|v| v.vote == 1).map(|v| validators.iter().find(|x| x.bond.bond_outpoint == v.bond_outpoint).unwrap().bond.amount as u128).sum();
+            cert.votes_root = palw_activation_votes_root(&votes).unwrap();
+            cert.votes = votes;
+            let view = ActiveBondView::from_records(validators.iter().map(|v| (v.bond.bond_outpoint, v.bond.clone())));
+            (cert, view)
+        }
+
+        use kaspa_hashes::Hash64;
+
+        fn expect_reject(result: Result<(), ComputeSetRegistryError>, needle: &str) {
+            match result {
+                Err(ComputeSetRegistryError::CertificateAttestationInvalid(_, reason)) => {
+                    assert!(reason.contains(needle), "expected rejection about {needle:?}, got {reason:?}")
+                }
+                other => panic!("expected CertificateAttestationInvalid({needle:?}), got {other:?}"),
+            }
+        }
+
+        /// Green path: three validators, all passing, 2/3 quorum met, every commitment honest.
+        #[test]
+        fn honest_certificate_verifies() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            let (cert, view) = certified(&validators, 3);
+            verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3).expect("honest certificate");
+            // 2-of-3 stake passing also meets a 2/3 quorum (equality reaches).
+            let (cert, view) = certified(&validators, 2);
+            verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3).expect("exact-threshold certificate");
+        }
+
+        #[test]
+        fn quorum_shortfall_is_rejected() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            let (cert, view) = certified(&validators, 1);
+            expect_reject(verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3), "quorum");
+        }
+
+        #[test]
+        fn single_key_cannot_activate() {
+            // §17.3's whole point: one operator key — one bond, however staked — passing alone
+            // meets no 2/3 quorum unless it IS ≥2/3 of the entire active set.
+            let validators = [validator(1, 100), validator(2, 300), validator(3, 100)];
+            let (cert, view) = certified(&validators, 1); // only the 100-stake validator passes
+            expect_reject(verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3), "quorum");
+        }
+
+        #[test]
+        fn vote_flip_fails_signature() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            let (mut cert, view) = certified(&validators, 2);
+            // Flip the reject vote to pass WITHOUT re-signing; keep the declared commitments
+            // consistent with the flipped tally so the signature check is what trips.
+            let flipped = cert.votes.iter().position(|v| v.vote == 0).unwrap();
+            cert.votes[flipped].vote = 1;
+            cert.approving_stake = 300;
+            cert.votes_root = palw_activation_votes_root(&cert.votes).unwrap();
+            expect_reject(verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3), "signature");
+        }
+
+        #[test]
+        fn declared_commitments_are_recomputed() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            // Inflated approving_stake.
+            let (mut cert, view) = certified(&validators, 2);
+            cert.approving_stake = 300;
+            expect_reject(verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3), "approving_stake");
+            // Wrong votes_root.
+            let (mut cert, view) = certified(&validators, 3);
+            cert.votes_root = h(0x99);
+            expect_reject(verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3), "votes_root");
+            // Stale validator-set commitment (a bond joined after authoring).
+            let (cert, _) = certified(&validators[..2], 2);
+            let (_, grown_view) = certified(&validators, 3);
+            expect_reject(verify_compute_set_activation_certificate(&cert, &grown_view, NET, POV, 2, 3), "validator_set_commitment");
+            // Wrong declared total.
+            let (mut cert, view) = certified(&validators, 3);
+            cert.total_selected_stake = 1;
+            expect_reject(verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3), "total_selected_stake");
+        }
+
+        #[test]
+        fn votes_must_resolve_to_active_bonds() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            // A vote from an outpoint the bond view has never seen.
+            let (mut cert, view) = certified(&validators, 3);
+            cert.votes[0].bond_outpoint = TransactionOutpoint::new(h(0x7f), 0);
+            cert.votes.sort_by(|a, b| {
+                (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+            });
+            cert.votes_root = palw_activation_votes_root(&cert.votes).unwrap();
+            expect_reject(verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3), "unknown or inactive");
+            // A slashed bond stops voting (and moves the active-set commitment, which is the
+            // first mismatch on the verification path).
+            let (cert, _) = certified(&validators, 3);
+            let mut slashed = validators[0].bond.clone();
+            slashed.slashed_at_daa_score = Some(10);
+            let view = ActiveBondView::from_records(
+                [(slashed.bond_outpoint, slashed)]
+                    .into_iter()
+                    .chain(validators[1..].iter().map(|v| (v.bond.bond_outpoint, v.bond.clone()))),
+            );
+            expect_reject(verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3), "validator_set_commitment");
+            // An empty vote list certifies nothing.
+            let (mut cert, view) = certified(&validators, 3);
+            cert.votes.clear();
+            expect_reject(verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3), "no embedded votes");
+        }
     }
 }

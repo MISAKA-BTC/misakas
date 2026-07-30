@@ -58,6 +58,22 @@ pub const PALW_PUBLIC_LEAF_V2_DOMAIN: &[u8] = b"misaka-palw-public-leaf-v2";
 /// batch-centric certificate can never alias.
 pub const PALW_COMPUTE_SET_AUDIT_CERT_DOMAIN: &[u8] = b"misaka-palw-compute-set-audit-cert-v1";
 
+/// §17.3 — the keyed domain every activation vote's signing digest lives under.
+pub const PALW_COMPUTE_SET_ACTIVATION_VOTE_DOMAIN: &[u8] = b"misaka-palw-compute-set-activation-vote-v1";
+/// §17.3 — ML-DSA-87 context for an activation vote signature (the
+/// `PALW_AUDITOR_V2_MLDSA87_CONTEXT` idiom, distinct value).
+pub const PALW_COMPUTE_SET_ACTIVATION_MLDSA87_CONTEXT: &[u8] = b"PALWComputeSetActivationVoteV1";
+/// §17.3 — commitment domain over a certificate's sorted vote list (`votes_root`).
+pub const PALW_COMPUTE_SET_ACTIVATION_VOTES_ROOT_DOMAIN: &[u8] = b"misaka-palw-compute-set-activation-votes-v1";
+/// §17.3 — commitment domain over the DNS validator set an activation certificate was tallied
+/// against (`validator_set_commitment`). DELIBERATELY not `dns_finality::validator_set_commitment`
+/// (which binds an epoch coordinate): this one is a pure set fingerprint, so a certificate author
+/// only has to predict the ACTIVE SET, never the DAA at which some future chain block folds it.
+pub const PALW_COMPUTE_SET_ACTIVATION_VALIDATORS_DOMAIN: &[u8] = b"misaka-palw-compute-set-activation-validators-v1";
+/// §23.2 anti-explosion ceiling on embedded activation votes (far above any realistic DNS
+/// validator count; the real bound is the active validator set at verification).
+pub const MAX_ACTIVATION_CERT_VOTES: usize = 4_096;
+
 /// Basis-points denominator (§10.1 — `bps` here is ALWAYS basis points, never blocks/sec).
 pub const BPS_DENOMINATOR: u16 = 10_000;
 
@@ -668,11 +684,102 @@ pub struct PalwComputeSetActivationCertificateV1 {
     pub artifact_reproducibility_root: Hash64,
 
     pub validator_set_commitment: Hash64,
+    /// Declared stake-weighted PASS tally — recomputed and rejected on mismatch at verification
+    /// (the `PalwBatchCertificateV2::approving_stake` commitment idiom, never a trusted input).
     pub approving_stake: u128,
+    /// Declared total active-validator stake (the quorum denominator) — same recompute-and-reject.
     pub total_selected_stake: u128,
 
     pub effective_from_daa: u64,
+    /// Declared commitment over `votes` ([`palw_activation_votes_root`]) — recomputed at
+    /// verification, kept as a field so the summary a vote signs pins the vote SET's identity
+    /// without a circular self-reference.
     pub votes_root: Hash64,
+    /// §17.3 — the embedded ML-DSA-87 validator votes the process layer verifies (the
+    /// `PalwBatchCertificateV2::votes` embedding). Ascending unique `bond_outpoint`.
+    pub votes: Vec<PalwComputeSetActivationVoteV1>,
+}
+
+/// §17.3 — one DNS validator's ML-DSA-87 activation vote. The signature covers the certificate
+/// SUMMARY (everything except the tallies and the vote list — those are declared commitments the
+/// verifier recomputes) plus this vote's own `(bond_outpoint, vote)` position, so a vote can
+/// neither be replayed for another set/descriptor/validator-set nor flipped.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwComputeSetActivationVoteV1 {
+    /// The DNS stake bond casting this vote (resolved against the frozen selected-parent
+    /// [`crate::dns_finality::ActiveBondView`] at verification).
+    pub bond_outpoint: TransactionOutpoint,
+    /// 1 = pass, 0 = reject (the `PalwAuditorVoteV2::vote` convention).
+    pub vote: u8,
+    /// ML-DSA-87 signature over [`Self::signing_hash`] under
+    /// [`PALW_COMPUTE_SET_ACTIVATION_MLDSA87_CONTEXT`].
+    pub signature: Vec<u8>,
+}
+
+impl PalwComputeSetActivationVoteV1 {
+    /// The exact digest this vote's ML-DSA-87 signature covers.
+    pub fn signing_hash(&self, network_id: u32, cert: &PalwComputeSetActivationCertificateV1) -> Hash64 {
+        let mut p = Vec::with_capacity(4 + 2 + 6 * 64 + 8 + 64 + 4 + 1);
+        p.extend_from_slice(&network_id.to_le_bytes());
+        p.extend_from_slice(&cert.version.to_le_bytes());
+        for h in [
+            &cert.compute_set_id,
+            &cert.descriptor_hash,
+            &cert.conformance_result_root,
+            &cert.auditor_capacity_evidence_root,
+            &cert.artifact_reproducibility_root,
+            &cert.validator_set_commitment,
+        ] {
+            p.extend_from_slice(h.as_byte_slice());
+        }
+        p.extend_from_slice(&cert.effective_from_daa.to_le_bytes());
+        p.extend_from_slice(self.bond_outpoint.transaction_id.as_byte_slice());
+        p.extend_from_slice(&self.bond_outpoint.index.to_le_bytes());
+        p.push(self.vote);
+        blake2b_512_keyed(PALW_COMPUTE_SET_ACTIVATION_VOTE_DOMAIN, &p)
+    }
+}
+
+/// §17.3 — the commitment `votes_root` declares: keyed hash over the ascending-unique-by-
+/// `bond_outpoint` vote list's `(outpoint, vote)` positions. Signatures are deliberately NOT in
+/// the preimage — the root pins WHO voted WHAT; each signature separately authenticates its own
+/// position, so re-encoding a signature cannot mint a "different" certificate. Returns `None`
+/// for a non-canonical (unsorted / duplicate) list.
+pub fn palw_activation_votes_root(votes: &[PalwComputeSetActivationVoteV1]) -> Option<Hash64> {
+    let key = |v: &PalwComputeSetActivationVoteV1| (v.bond_outpoint.transaction_id, v.bond_outpoint.index);
+    if votes.windows(2).any(|w| key(&w[0]) >= key(&w[1])) {
+        return None;
+    }
+    let mut preimage = Vec::with_capacity(8 + votes.len() * (64 + 4 + 1));
+    preimage.extend_from_slice(&(votes.len() as u64).to_le_bytes());
+    for vote in votes {
+        preimage.extend_from_slice(vote.bond_outpoint.transaction_id.as_byte_slice());
+        preimage.extend_from_slice(&vote.bond_outpoint.index.to_le_bytes());
+        preimage.push(vote.vote);
+    }
+    Some(blake2b_512_keyed(PALW_COMPUTE_SET_ACTIVATION_VOTES_ROOT_DOMAIN, &preimage))
+}
+
+/// §17.3 — the pure set fingerprint `validator_set_commitment` declares: the ACTIVE DNS stake
+/// bonds (ascending unique `bond_outpoint`), each as `outpoint || validator_id || stake` — bond-
+/// granular because votes are bond-granular (a validator running several bonds contributes each
+/// one separately, exactly like the mandatory-attestation tally). No epoch/DAA coordinate (see
+/// the domain constant's rationale — the author predicts the SET, never a fold coordinate).
+/// Returns `None` for a non-canonical (unsorted / duplicate) list.
+pub fn palw_activation_validator_set_commitment(bonds: &[crate::dns_finality::StakeBondRecord]) -> Option<Hash64> {
+    let key = |b: &crate::dns_finality::StakeBondRecord| (b.bond_outpoint.transaction_id, b.bond_outpoint.index);
+    if bonds.windows(2).any(|w| key(&w[0]) >= key(&w[1])) {
+        return None;
+    }
+    let mut preimage = Vec::with_capacity(8 + bonds.len() * (64 + 4 + 64 + 8));
+    preimage.extend_from_slice(&(bonds.len() as u64).to_le_bytes());
+    for bond in bonds {
+        preimage.extend_from_slice(bond.bond_outpoint.transaction_id.as_byte_slice());
+        preimage.extend_from_slice(&bond.bond_outpoint.index.to_le_bytes());
+        preimage.extend_from_slice(bond.validator_pubkey_hash.as_byte_slice());
+        preimage.extend_from_slice(&bond.amount.to_le_bytes());
+    }
+    Some(blake2b_512_keyed(PALW_COMPUTE_SET_ACTIVATION_VALIDATORS_DOMAIN, &preimage))
 }
 
 /// §17.1 — one mutable-policy revision, wrapped so the payload kind is versioned independently
@@ -1468,6 +1575,12 @@ pub enum ComputeSetRegistryError {
 
     #[error("activation certificate for set {0} was not quorum-verified — single-key activation is forbidden (§17.3)")]
     CertificateQuorumNotVerified(Hash64),
+    /// §17.3 — the certificate's embedded attestation failed process-layer verification (bad
+    /// signature, unknown/inactive bond, duplicate vote, declared-tally or commitment mismatch,
+    /// or quorum not reached). Admission-rule rejection: the fold skips the certificate, the set
+    /// stays un-certified, block validity is untouched.
+    #[error("activation certificate attestation rejected for set {0}: {1}")]
+    CertificateAttestationInvalid(Hash64, &'static str),
 
     #[error("activation certificate binds set {set} but descriptor hash {descriptor_hash} (§7.1: they must be equal)")]
     CertificateDescriptorMismatch { set: Hash64, descriptor_hash: Hash64 },
@@ -1992,6 +2105,7 @@ mod tests {
             total_selected_stake: 30_000_000,
             effective_from_daa: 500,
             votes_root: h(0x64),
+            votes: vec![],
         }
     }
 

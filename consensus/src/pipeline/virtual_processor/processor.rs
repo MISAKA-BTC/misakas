@@ -2962,7 +2962,7 @@ impl VirtualStateProcessor {
         // above, behind its own activation fence (`u64::MAX` on every shipped preset, so this
         // returns immediately everywhere today).
         if current != self.genesis.hash {
-            self.commit_palw_compute_registry_view(&mut batch, current, &acceptance_data);
+            self.commit_palw_compute_registry_view(&mut batch, current, &acceptance_data, selected_parent_bond_view);
         }
         // Search-availability rows commit in the SAME batch, with the identical link-vs-full write
         // reduction: an idle search state machine costs 64 bytes per chain block, never a duplicated
@@ -3065,7 +3065,13 @@ impl VirtualStateProcessor {
     /// slice, and folding an UNVERIFIED certificate would let a single operator key activate a
     /// set — exactly what §17.3 forbids. Until then no set can leave `Proposed`/get share, which
     /// fails closed in the safe direction.
-    fn commit_palw_compute_registry_view(&self, batch: &mut WriteBatch, current: BlockHash, acceptance_data: &AcceptanceData) {
+    fn commit_palw_compute_registry_view(
+        &self,
+        batch: &mut WriteBatch,
+        current: BlockHash,
+        acceptance_data: &AcceptanceData,
+        selected_parent_bond_view: &ActiveBondView,
+    ) {
         use crate::model::stores::palw_compute_registry::PalwComputeRegistryStoreReader;
         use kaspa_consensus_core::palw_compute_set::{
             AllocationGovernanceLimitsV1, PalwComputeRegistryEffect, PolicyGovernanceCapsV1, parse_palw_compute_registry,
@@ -3163,13 +3169,30 @@ impl VirtualStateProcessor {
                         }
                     }),
                     PalwComputeRegistryEffect::ActivationCertificate(certificate) => {
-                        // §17.3 quorum verification is a dedicated slice; folding unverified
-                        // certificates is forbidden. Fail closed (set stays Proposed).
-                        warn!(
-                            "compute registry: activation certificate for set {} skipped — quorum verification not yet wired (§17.3)",
-                            certificate.compute_set_id
-                        );
-                        continue;
+                        // §17.3 — verify the embedded ML-DSA-87 validator attestation against the
+                        // frozen selected-parent DNS bond view (the beacon quorum fraction) BEFORE
+                        // the view learns of the certificate. A failed attestation is an admission
+                        // rejection (warn + skip, set stays un-certified); only a verified
+                        // certificate reaches `apply_certificate(_, true)`.
+                        crate::processes::palw::verify_compute_set_activation_certificate(
+                            &certificate,
+                            selected_parent_bond_view,
+                            self.palw_network_id,
+                            current_daa,
+                            self.palw_beacon_quorum_num,
+                            self.palw_beacon_quorum_den,
+                        )
+                        .and_then(|()| view.apply_certificate(&certificate, true))
+                        .map(|()| {
+                            self.palw_compute_registry_store.insert_certificate_batch(batch, &certificate).unwrap_or_else(
+                                |store_error| {
+                                    palw_overlay_commit_fail_stop(format!(
+                                        "compute registry certificate staging failed for {}: {store_error}",
+                                        certificate.compute_set_id
+                                    ))
+                                },
+                            );
+                        })
                     }
                     PalwComputeRegistryEffect::PolicyUpdate(update) => {
                         view.apply_policy(&update.policy, &caps, current_daa).map(|outcome| {
