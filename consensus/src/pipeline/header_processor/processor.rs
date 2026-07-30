@@ -182,6 +182,10 @@ pub struct HeaderProcessor {
     /// shipped preset (PALW inert); written in `commit_header` only when PALW is active.
     pub(super) palw_nullifier_store: Arc<DbPalwNullifierStore>,
     pub(super) palw_spam_store: Arc<DbPalwSpamAccumulatorStore>,
+    /// ADR-MA §13.1 — the content-addressed Compute Set registry records, read at header stage
+    /// to resolve a registry-active v5 header's committed (set, policy, plan) triple for the
+    /// per-set difficulty check. Empty on every shipped preset (fence closed).
+    pub(super) palw_compute_registry_store: Arc<crate::model::stores::palw_compute_registry::DbPalwComputeRegistryStore>,
     pub(super) headers_selected_tip_store: Arc<RwLock<DbHeadersSelectedTipStore>>,
     pub(super) depth_store: Arc<DbDepthStore>,
 
@@ -241,6 +245,7 @@ impl HeaderProcessor {
             palw_lane_bits_store: storage.palw_lane_bits_store.clone(),
             palw_nullifier_store: storage.palw_nullifier_store.clone(),
             palw_spam_store: storage.palw_spam_store.clone(),
+            palw_compute_registry_store: storage.palw_compute_registry_store.clone(),
             depth_store: storage.depth_store.clone(),
             headers_selected_tip_store: storage.headers_selected_tip_store.clone(),
             block_window_cache_for_difficulty: storage.block_window_cache_for_difficulty.clone(),

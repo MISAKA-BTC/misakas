@@ -6878,12 +6878,30 @@ impl VirtualStateProcessor {
     /// at the `min_samples`-th algo-4 block.
     pub(crate) fn palw_lane_bits_for_template(&self, lane_algo_id: u8) -> Result<u32, RuleError> {
         let virtual_state = self.lkg_virtual_state.load();
+        // ADR-MA §12 — a registry-active algo-4 template must run PER-SET difficulty for the set
+        // it mines, which needs the set-selection half of the registry world (P14+: pick an
+        // Active set, stamp the v5 (set, policy, plan) references, filter to its sublane). That
+        // half is not built yet; a flat-lane `bits` template on a registry-active net would be
+        // rejected by this node's OWN per-set header check (`palw_per_set_sublane`) — so fail
+        // loud instead of emitting self-rejecting templates. Unreachable on every shipped preset
+        // (fence = u64::MAX).
+        if self.palw_compute_registry_activation_daa_score != u64::MAX
+            && virtual_state.daa_score >= self.palw_compute_registry_activation_daa_score
+            && lane_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_REPLICA
+        {
+            return Err(RuleError::PalwComputeSetResolution(
+                virtual_state.ghostdag_data.selected_parent,
+                "registry-active algo-4 templates need Compute Set selection (per-set difficulty, ADR-MA §12) — not implemented"
+                    .into(),
+            ));
+        }
         let daa_window = self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?;
         Ok(crate::processes::difficulty::lane_bits_from_window(
             self.headers_store.as_ref(),
             &daa_window.window,
             lane_algo_id,
             &self.palw_lane_difficulty,
+            None,
         ))
     }
 

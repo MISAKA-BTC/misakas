@@ -70,6 +70,15 @@ pub enum RuleError {
     #[error("algo-4 PALW ticket invalid: {0}")]
     PalwTicketInvalid(String),
 
+    // ADR-MA §13.1/§13.2 — a registry-active v5 PALW-lane header whose committed Compute Set
+    // references fail header-stage resolution: unknown set (no registered descriptor), records
+    // that are not the committed revisions, records not effective at the header's DAA, a
+    // non-Active policy state, or an absent/zero allocation share (§12.2). §13.2 forbids any
+    // default-scale fallback — the block is rejected. Inert while the registry fence is closed
+    // (`palw_compute_registry_activation_daa_score == u64::MAX`, every shipped preset).
+    #[error("registry-active PALW header {0} compute-set resolution failed: {1}")]
+    PalwComputeSetResolution(BlockHash, String),
+
     /// ADR-0039 §5.3/§15.5: all three Header-v3 work commitments are consensus-derived. The legacy
     /// effective `blue_work` has its own error below; this variant reports a mismatch in either
     /// separated component so a miner cannot choose a different H/C decomposition of the same E.

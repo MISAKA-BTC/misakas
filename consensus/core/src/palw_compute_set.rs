@@ -1009,6 +1009,9 @@ impl PalwComputeRegistryViewV1 {
 pub struct HistoricalComputeResolution {
     pub compute_work_scale: u64,
     pub weight_factor_bps: u16,
+    /// The share the governing plan allots the set (validated > 0). Consumed by the §12
+    /// per-set difficulty (`per_set_target_interval_ms`); the credit path ignores it.
+    pub target_share_bps: u16,
 }
 
 /// §14 — `source header → exact policy ID → exact allocation plan ID → historical immutable
@@ -1062,7 +1065,11 @@ pub fn resolve_source_policy_for_credit(
     if entry.target_share_bps == 0 {
         return Err(ComputeSetRegistryError::SourceSetHasZeroShare(header_compute_set_id));
     }
-    Ok(HistoricalComputeResolution { compute_work_scale: policy.compute_work_scale, weight_factor_bps: policy.weight_factor_bps })
+    Ok(HistoricalComputeResolution {
+        compute_work_scale: policy.compute_work_scale,
+        weight_factor_bps: policy.weight_factor_bps,
+        target_share_bps: entry.target_share_bps,
+    })
 }
 
 /// §14 — `credited = mul_div_floor(normalized, weight_factor_bps, 10000)` over `BlueWorkType`,
@@ -2147,7 +2154,10 @@ mod tests {
         let plan_id = plan_v1.plan_id;
 
         let resolved = resolve_source_policy_for_credit(&active, &plan_v1, policy_id, plan_id, set, 500).unwrap();
-        assert_eq!(resolved, HistoricalComputeResolution { compute_work_scale: 41_692, weight_factor_bps: 2_500 });
+        assert_eq!(
+            resolved,
+            HistoricalComputeResolution { compute_work_scale: 41_692, weight_factor_bps: 2_500, target_share_bps: 10_000 }
+        );
 
         // A different revision cannot stand in for the committed one (§23.4 historical rewrite).
         let mut newer = active.clone();

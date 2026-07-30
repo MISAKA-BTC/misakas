@@ -358,26 +358,62 @@ pub fn lane_expected_bits(
 /// algo-4 block exists yet — that is the lane's HOLD value, not a constant — and silently stops working
 /// at the `min_samples`-th algo-4 block. Two implementations of that rule would therefore agree in
 /// every test written before the lane has real samples and diverge in production.
+/// ADR-MA §12 — the optional per-set sublane restriction of [`lane_bits_from_window`]. On a
+/// registry-active net a v5 PALW-lane header commits a `compute_set_id`, and its difficulty runs
+/// over ONLY same-set samples against the set's own stretched interval; `None` (every shipped
+/// preset, and every pre-v5 header) is the flat single-lane path, byte-identical.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwSetSublane {
+    /// The header's committed `palw_compute_set_id` — the sublane sample predicate.
+    pub compute_set_id: kaspa_hashes::Hash64,
+    /// The share the header's committed allocation plan allots the set, ALREADY validated
+    /// nonzero by §13.1 header-stage resolution (§12.2 — a zero-share set mines nothing, so it
+    /// never reaches difficulty).
+    pub target_share_bps: u16,
+}
+
 pub fn lane_bits_from_window<S: HeaderStoreReader + ?Sized>(
     headers_store: &S,
     window: &BlockWindowHeap,
     header_algo_id: u8,
     palw_lane_difficulty: &kaspa_consensus_core::palw::LaneDifficultyParams,
+    per_set: Option<PalwSetSublane>,
 ) -> u32 {
     use kaspa_consensus_core::pow_layer0::check_live_algo_id;
     let lane = check_live_algo_id(header_algo_id, true).expect("a PALW-active header carries a live lane algo id");
     // Filter the DAA window to the header's lane (same-lane blocks only). Bounded by the window size.
+    // ADR-MA §12: on a registry-active net the PALW lane splits into per-set virtual sublanes — the
+    // predicate then also requires the sample's committed `palw_compute_set_id` to equal the
+    // header's. Pre-v5 samples carry the all-zero id (hash-invisible zero-guard) and a real set id
+    // is content-derived (never zero), so old samples cannot leak into a sublane window.
     let mut lane_samples: Vec<(u32, u64)> = Vec::new();
     for item in window.iter() {
         let hdr = headers_store.get_header(item.0.hash).unwrap();
-        if check_live_algo_id(hdr.pow_algo_id, true).ok() == Some(lane) {
-            lane_samples.push((hdr.bits, hdr.timestamp));
+        if check_live_algo_id(hdr.pow_algo_id, true).ok() != Some(lane) {
+            continue;
         }
+        if let Some(sublane) = per_set
+            && hdr.palw_compute_set_id != sublane.compute_set_id
+        {
+            continue;
+        }
+        lane_samples.push((hdr.bits, hdr.timestamp));
     }
     let p = palw_lane_difficulty;
+    // §12 — the sublane's expected spacing: a set holding `share/10000` of the lane paces its own
+    // blocks `10000/share` lane intervals apart (`per_set_target_interval_ms`: integer ceil,
+    // overflow-saturating). The share was validated nonzero at §13.1 resolution, so `None` here is
+    // unreachable; failing loud beats minting a full-rate sublane for a set that owns none of it.
+    let lane_target_time_ms = match per_set {
+        Some(sublane) => {
+            kaspa_consensus_core::palw_compute_set::per_set_target_interval_ms(p.lane_target_time_ms(lane), sublane.target_share_bps)
+                .expect("per-set difficulty requires the §13.1-validated nonzero share (§12.2)")
+        }
+        None => p.lane_target_time_ms(lane),
+    };
     lane_expected_bits(
         &lane_samples,
-        p.lane_target_time_ms(lane),
+        lane_target_time_ms,
         p.lane_sample_rate(lane),
         p.min_samples,
         p.max_adjust_factor,
@@ -560,5 +596,137 @@ mod tests {
     fn test_base_level_work() {
         // Expect that at level 0, the level work is always 0
         assert_eq!(BlueWorkType::from(0), level_work(0, 255));
+    }
+
+    /// ADR-MA §12 — the per-set sublane split of [`lane_bits_from_window`]: with `per_set` the
+    /// sample predicate narrows to the header's committed `palw_compute_set_id` and the retarget
+    /// runs against the share-stretched interval; with `None` it is byte-identical to the flat
+    /// lane. Verified as EQUALITIES against [`lane_expected_bits`] over hand-filtered samples, so
+    /// a filter or interval-composition bug cannot cancel out.
+    #[test]
+    fn test_lane_bits_per_set_sublane() {
+        use crate::model::stores::block_window_cache::BlockWindowHeap;
+        use crate::model::stores::headers::{HeaderStoreReader, HeaderWithBlockLevel};
+        use crate::processes::difficulty::{PalwSetSublane, lane_bits_from_window};
+        use crate::processes::ghostdag::ordering::SortableBlock;
+        use kaspa_consensus_core::header::Header;
+        use kaspa_consensus_core::{BlockHash, BlockHashMap, HashMapCustomHasher};
+        use kaspa_database::prelude::StoreError;
+        use std::cmp::Reverse;
+        use std::sync::Arc;
+
+        struct LaneHeaders(BlockHashMap<Arc<Header>>);
+        #[allow(unused_variables)]
+        impl HeaderStoreReader for LaneHeaders {
+            fn get_daa_score(&self, hash: BlockHash) -> Result<u64, StoreError> {
+                unimplemented!()
+            }
+            fn get_blue_score(&self, hash: BlockHash) -> Result<u64, StoreError> {
+                unimplemented!()
+            }
+            fn get_timestamp(&self, hash: BlockHash) -> Result<u64, StoreError> {
+                unimplemented!()
+            }
+            fn get_bits(&self, hash: BlockHash) -> Result<u32, StoreError> {
+                unimplemented!()
+            }
+            fn get_header(&self, hash: BlockHash) -> Result<Arc<Header>, StoreError> {
+                Ok(self.0.get(&hash).unwrap().clone())
+            }
+            fn get_header_with_block_level(&self, hash: BlockHash) -> Result<HeaderWithBlockLevel, StoreError> {
+                unimplemented!()
+            }
+            fn get_compact_header_data(
+                &self,
+                hash: BlockHash,
+            ) -> Result<crate::model::stores::headers::CompactHeaderData, StoreError> {
+                unimplemented!()
+            }
+        }
+
+        let set_a = kaspa_hashes::Hash64::from_bytes([0xa1; 64]);
+        let set_b = kaspa_hashes::Hash64::from_bytes([0xb2; 64]);
+        let unknown_set = kaspa_hashes::Hash64::from_bytes([0xcc; 64]);
+
+        let bits = 0x1d00ffff_u32;
+        let mut map = BlockHashMap::new();
+        let mut window = BlockWindowHeap::new();
+        let mut tag = 0u8;
+        // (algo, bits, timestamp, set): set A paced at the lane interval, set B twice as fast,
+        // and two hash-lane blocks with WILD bits that must never sample into lane 4.
+        for (algo, b, ts, set) in [
+            (4u8, bits, 0u64, set_a),
+            (4, bits, 1_000, set_a),
+            (4, bits, 2_000, set_a),
+            (4, bits, 3_000, set_a),
+            (4, bits, 100, set_b),
+            (4, bits, 600, set_b),
+            (4, bits, 1_100, set_b),
+            (4, bits, 1_600, set_b),
+            (3, 0x1f00ffff, 50, kaspa_hashes::Hash64::default()),
+            (3, 0x1f00ffff, 150, kaspa_hashes::Hash64::default()),
+        ] {
+            tag += 1;
+            let hash = kaspa_hashes::Hash64::from_bytes([tag; 64]);
+            let mut hdr = Header::from_precomputed_hash(hash, vec![]);
+            hdr.pow_algo_id = algo;
+            hdr.bits = b;
+            hdr.timestamp = ts;
+            hdr.palw_compute_set_id = set;
+            map.insert(hash, Arc::new(hdr));
+            window.push(Reverse(SortableBlock::new(hash, BlueWorkType::from_u64(tag as u64))));
+        }
+        let store = LaneHeaders(map);
+
+        let p = kaspa_consensus_core::palw::LaneDifficultyParams {
+            hash_target_time_ms: 1_000,
+            replica_target_time_ms: 1_000,
+            hash_window_size: 60,
+            replica_window_size: 60,
+            min_samples: 2,
+            compute_work_scale: 1,
+            max_adjust_factor: 1_000_000, // effectively unclamped: isolate the interval math
+            hash_sample_rate: 1,
+            replica_sample_rate: 1,
+            genesis_hash_bits: 0x1e00aaaa,
+            genesis_replica_bits: 0x1e00bbbb,
+        };
+        let max_target: Uint320 = kaspa_consensus_core::config::params::MAX_DIFFICULTY_TARGET.into();
+        let a_samples: Vec<(u32, u64)> = vec![(bits, 0), (bits, 1_000), (bits, 2_000), (bits, 3_000)];
+        let ab_samples: Vec<(u32, u64)> = vec![
+            (bits, 0),
+            (bits, 1_000),
+            (bits, 2_000),
+            (bits, 3_000),
+            (bits, 100),
+            (bits, 600),
+            (bits, 1_100),
+            (bits, 1_600),
+        ];
+
+        // Flat lane (None): every algo-4 block samples regardless of set — and the algo-3 wild
+        // bits stay out (equality would break if they leaked in).
+        let flat = lane_bits_from_window(&store, &window, 4, &p, None);
+        assert_eq!(flat, lane_expected_bits(&ab_samples, 1_000, 1, 2, 1_000_000, p.genesis_replica_bits, max_target));
+
+        // Sublane A at full share: ONLY set-A samples, lane interval unchanged. Set B's faster
+        // blocks no longer drag the retarget (this differs from `flat` — proof the filter bit).
+        let full_a = lane_bits_from_window(&store, &window, 4, &p, Some(PalwSetSublane { compute_set_id: set_a, target_share_bps: 10_000 }));
+        assert_eq!(full_a, lane_expected_bits(&a_samples, 1_000, 1, 2, 1_000_000, p.genesis_replica_bits, max_target));
+        assert_ne!(full_a, flat);
+
+        // Sublane A at 2500 bps: same samples, interval stretched ×4 (§12
+        // `ceil(lane_interval × 10000 / share)`), so the set is EXPECTED 4× slower.
+        let quarter_a =
+            lane_bits_from_window(&store, &window, 4, &p, Some(PalwSetSublane { compute_set_id: set_a, target_share_bps: 2_500 }));
+        assert_eq!(quarter_a, lane_expected_bits(&a_samples, 4_000, 1, 2, 1_000_000, p.genesis_replica_bits, max_target));
+        assert_ne!(quarter_a, full_a);
+
+        // A set with no samples in the window: below min_samples ⇒ HOLD at the lane's genesis
+        // bits (a fresh set enters at lane genesis difficulty; §12.1 initial-window calibration
+        // is governance's lever, not a silent default).
+        let fresh =
+            lane_bits_from_window(&store, &window, 4, &p, Some(PalwSetSublane { compute_set_id: unknown_set, target_share_bps: 5_000 }));
+        assert_eq!(fresh, p.genesis_replica_bits);
     }
 }
