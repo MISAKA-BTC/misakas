@@ -18,6 +18,10 @@ path = "src/main.rs"
 name = "palw-bridge-verify"
 path = "src/bin/palw-bridge-verify.rs"
 
+[[bin]]
+name = "qi35-receipt-v3"
+path = "src/bin/qi35-receipt-v3.rs"
+
 [lib]
 name = "misaka_palw_bridge"
 path = "src/lib.rs"
