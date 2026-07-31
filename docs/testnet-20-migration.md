@@ -59,7 +59,7 @@ DNS discovery is automatic (the same seed names now resolve testnet-20). If it i
 
 ```sh
 kaspad --testnet --netsuffix=20 \
-  --addpeer=160.16.131.119:26521 --utxoindex --rpclisten-borsh=default
+  --addpeer=95.111.236.186:26521 --utxoindex --rpclisten-borsh=default
 ```
 
 Validators need a fresh `--signed-epoch-db` per network: reusing one across networks trips the

@@ -59,7 +59,7 @@ If DNS is unavailable, dial a public peer explicitly (testnet-20 listens on `265
 
 ```bash
 ./target/release/kaspad --testnet --netsuffix=20 \
-  --addpeer=160.16.131.119:26521 --utxoindex
+  --addpeer=95.111.236.186:26521 --utxoindex
 ```
 
 `testnet-110` and `devnet-111` still ship `dns_seeders: &[]` and remain closed-mesh presets.
@@ -257,7 +257,8 @@ explorer backend) needs to connect locally.
   resolving testnet-20. **testnet-20's P2P port is `26521`** (testnet-200 used `26511`; each public
   net gets its own port so a node on the wrong suffix fails fast instead of cross-handshaking) —
   make sure it isn't blocked outbound. If discovery is slow, bootstrap explicitly against a public
-  node: `--addpeer=160.16.131.119:26521` (or `--connect=…` to use only that peer).
+  node: `--addpeer=95.111.236.186:26521` — the address the seeders themselves advertise — (or
+  `--connect=…` to use only that peer).
   Block explorer: [misakascan.com](https://misakascan.com).
 - `--utxoindex` is required for wallet/validator funding lookups.
 - **gRPC is always on by default** (loopback, `127.0.0.1:26210` on testnet) even with no RPC flag,
