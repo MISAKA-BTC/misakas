@@ -122,11 +122,21 @@ impl Provider {
     }
 
     /// A signed request against the bridge: session key over route + body.
+    ///
+    /// The signed route must be the path the SERVER sees (`/palw/v1/challenges`), not the
+    /// caller-side suffix (`/challenges`) — the bridge hashes `request.path`. Deriving it from
+    /// the URL here keeps the two sides from drifting apart silently.
     fn signed(&self, bridge: &str, route: &str, body: &Value) -> Result<(u16, Value), String> {
+        let url = format!("{bridge}{route}");
+        let server_path = url
+            .strip_prefix("http://")
+            .and_then(|rest| rest.split_once('/'))
+            .map(|(_, path)| format!("/{path}"))
+            .ok_or_else(|| format!("cannot derive a server path from {url}"))?;
         let bytes = serde_json::to_vec(body).map_err(|e| e.to_string())?;
-        let hash = request_signing_hash(&self.bond, route, &body_digest(&bytes));
+        let hash = request_signing_hash(&self.bond, &server_path, &body_digest(&bytes));
         let sig = self.session.sign_with_context(hash.as_byte_slice(), BRIDGE_REQUEST_MLDSA87_CONTEXT);
-        http("POST", &format!("{bridge}{route}"), Some(body), Some((&self.bond, &bytes_hex(&sig))))
+        http("POST", &url, Some(body), Some((&self.bond, &bytes_hex(&sig))))
     }
 
     fn registration(&self, network_id: u32, valid_from: u64, valid_until: u64) -> Result<Value, String> {
