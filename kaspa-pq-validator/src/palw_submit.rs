@@ -735,6 +735,7 @@ mod tests {
             min_epoch_headroom_daa: 20,
             no_wait: false,
             inclusion_timeout_secs: 120,
+            assume_synced: false,
             dry_run: true,
         }
     }

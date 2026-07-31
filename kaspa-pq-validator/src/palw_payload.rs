@@ -94,7 +94,7 @@ enum PalwPayloadCommand {
     RegistryCertAssemble(RegistryCertAssembleArgs),
 }
 
-/// The three shipped PALW-active, closed-network presets.
+/// The shipped PALW-active presets an artifact can be built against.
 ///
 /// Every variant must resolve through `Params::from(NetworkId)` to its OWN preset: the floors read
 /// off it (provider-bond amount, unbond delay, batch admission) are what keep an artifact from being
@@ -108,9 +108,17 @@ enum PalwArtifactNetwork {
     Devnet111,
     /// ADR-0048 `staging-mainnet-palw` — the Header-v4 staging rehearsal net
     /// (`STAGING_MAINNET_PALW_PARAMS`, consensus/core/src/config/params.rs:1719, selected by
-    /// params.rs:946 as testnet suffix 200).
+    /// params.rs:946 as testnet suffix 200). DEPRECATED 2026-07-30: superseded as the public net
+    /// by `testnet-20`; kept so an operator holding its ledger can still build artifacts.
     #[value(name = "testnet-200")]
     Testnet200,
+    /// ADR-MA `compute-registry-palw` — the CURRENT public PALW testnet
+    /// (`COMPUTE_REGISTRY_PALW_PARAMS`, testnet suffix 20): the staging shape with the Compute
+    /// Set registry open from a v5 genesis and testnet-scale validator entry floors. Omitting it
+    /// is not cosmetic — without this variant an operator cannot build a provider bond for the
+    /// only network that is publicly running.
+    #[value(name = "testnet-20")]
+    Testnet20,
 }
 
 impl PalwArtifactNetwork {
@@ -119,6 +127,7 @@ impl PalwArtifactNetwork {
             Self::Testnet110 => NetworkId::with_suffix(NetworkType::Testnet, 110),
             Self::Devnet111 => NetworkId::with_suffix(NetworkType::Devnet, 111),
             Self::Testnet200 => NetworkId::with_suffix(NetworkType::Testnet, 200),
+            Self::Testnet20 => NetworkId::with_suffix(NetworkType::Testnet, 20),
         }
     }
 }
@@ -363,16 +372,20 @@ mod tests {
 
     #[test]
     fn artifact_networks_resolve_to_their_own_shipped_presets() {
-        use kaspa_consensus_core::config::params::{DEVNET_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, TESTNET_PALW_PARAMS};
+        use kaspa_consensus_core::config::params::{
+            COMPUTE_REGISTRY_PALW_PARAMS, DEVNET_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, TESTNET_PALW_PARAMS,
+        };
 
         assert_eq!(PalwArtifactNetwork::Testnet110.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 110));
         assert_eq!(PalwArtifactNetwork::Devnet111.network_id(), NetworkId::with_suffix(NetworkType::Devnet, 111));
         assert_eq!(PalwArtifactNetwork::Testnet200.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 200));
+        assert_eq!(PalwArtifactNetwork::Testnet20.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 20));
 
         for (network, preset, name) in [
             (PalwArtifactNetwork::Testnet110, TESTNET_PALW_PARAMS, "testnet-110"),
             (PalwArtifactNetwork::Devnet111, DEVNET_PALW_PARAMS, "devnet-111"),
             (PalwArtifactNetwork::Testnet200, STAGING_MAINNET_PALW_PARAMS, "testnet-200"),
+            (PalwArtifactNetwork::Testnet20, COMPUTE_REGISTRY_PALW_PARAMS, "testnet-20"),
         ] {
             assert_eq!(network.network_id().to_string(), name, "the clap value name must be the network id operators type");
             let resolved = Params::from(network.network_id());
@@ -450,6 +463,7 @@ mod tests {
             ("testnet-110", PalwArtifactNetwork::Testnet110),
             ("devnet-111", PalwArtifactNetwork::Devnet111),
             ("testnet-200", PalwArtifactNetwork::Testnet200),
+            ("testnet-20", PalwArtifactNetwork::Testnet20),
         ] {
             let selected =
                 PalwPayloadArgs::try_parse_from(base.iter().copied().chain(["--network", value])).expect("value name must parse");
