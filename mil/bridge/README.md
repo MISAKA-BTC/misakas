@@ -15,9 +15,11 @@ node's own k=2 predicate.
    domain-separated constructors (`job_set_commitment`, `gemm_trace_root`,
    `operation_schedule_commitment`, `MIL_PALW_*` domains). The qi35-serve class maps:
    - `job_set_commitment` ← class label ‖ job_id ‖ max_new ‖ prompt ids (LE)
-   - `output_commitment` ← `Hash64_k(output-domain, decoded output_root)` (equality-preserving
-     re-keying of the gateway's output-ids root; byte-parity with a consensus leaf's
-     `output_commitment(salt, ids)` needs the beacon salt — a consensus seam)
+   - `output_commitment` ← `Hash64_k(output-domain, decoded output_root)` — an
+     equality-preserving re-keying of the gateway's output-ids root, which is all the k=2
+     EQUALITY predicate needs. The salted, leaf-grade commitment is a separate check:
+     seam 1 verifies `output_commitment_v3(output_token_ids, job_challenge)` against the
+     leased challenge (see below), which IS byte-identical to the live receipt-v3 path.
    - `canonical_gemm_trace_root` ← the engine's ROUTE root (the class's canonical
      execution-trace commitment: MoE routing decisions)
    - `operation_schedule_commitment` ← KV root ‖ recurrent-STATE root

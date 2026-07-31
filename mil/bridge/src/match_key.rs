@@ -10,11 +10,12 @@
 //! * `job_set_commitment`  ← canonical job descriptor: class label ‖ job_id ‖ max_new ‖ prompt ids (LE).
 //! * `model_profile_id`    ← `Hash64_k(model-profile, MODEL_PROFILE_LABEL)`.
 //! * `runtime_class_id`    ← `Hash64_k(runtime-class, RUNTIME_CLASS_LABEL)`.
-//! * `output_commitment`   ← `Hash64_k(output, decoded output_root)`. The wire carries the
-//!   gateway's blake2b-256 over output token ids, not the ids themselves, so this is an
-//!   equality-preserving re-keying — NOT byte-identical to a consensus leaf's
-//!   `output_commitment(salt, ids)`, which needs the beacon-derived salt this off-chain bridge
-//!   does not have. That parity is a consensus-side seam, stated in the README.
+//! * `output_commitment`   ← `Hash64_k(output, decoded output_root)`. An equality-preserving
+//!   re-keying of the gateway's output-ids root — which is all the k=2 EQUALITY predicate
+//!   needs, since both sides go through the same mapping. It is deliberately not the
+//!   leaf-grade salted commitment: that one is `output_commitment_v3(output_token_ids,
+//!   job_challenge)` and is checked separately by `challenge.rs` against the lease, where it
+//!   is byte-identical to the live receipt-v3 path.
 //! * `canonical_gemm_trace_root` ← [`gemm_trace_root`] over the engine's ROUTE root bytes. The
 //!   design defines this field as a keyed hash over "the already-serialized canonical trace";
 //!   for the qi35-serve class the canonical execution trace commitment the engine exports IS
