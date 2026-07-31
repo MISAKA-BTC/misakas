@@ -244,6 +244,40 @@ impl BlockBodyProcessor {
         }
     }
 
+    /// Does this body-validation failure justify writing a PERMANENT `StatusInvalid` row?
+    ///
+    /// `StatusInvalid` is not a rejection — it is a promise never to reconsider the block. The body-sync
+    /// list retains only header-only blocks, so a marked block is never re-requested and every child
+    /// fails on a parent that can no longer be satisfied. A wrong mark therefore does not cost one
+    /// block; it costs the node its ability to ever finish IBD (2026-07-29 testnet-200 dead loop).
+    ///
+    /// The mark is correct only when the failure is a self-contained verdict on the block's own bytes,
+    /// evaluated the same way by every node. These four are not:
+    ///  * `MissingParents` — a delivery-ordering gap; the block becomes valid once its parents land.
+    ///  * `BadMerkleRoot` — rejects THIS transaction set; the same header may still arrive with a body
+    ///    that fits the root.
+    ///  * `PrunedBlock` — rejects the body, not the block as a whole.
+    ///  * `InvalidParentBodies` — the parent carries a local `StatusInvalid` mark, possibly STALE
+    ///    (persisted by an older binary under different consensus rules). Cascading it forward would
+    ///    grow the poisoned cone faster than `--reset-invalid-marks` can clear it.
+    ///  * `PalwParentProvenanceUnavailable` — a Header-v4 parent's UTXO/lifecycle classification is not
+    ///    resolvable from this node's CURRENT virtual state (disqualified-cache, still-pending, below
+    ///    the local finality point, worker shutting down). Every one of those is point-of-view and
+    ///    transient; see `ensure_palw_v4_parent_provenance` for the per-outcome argument.
+    ///
+    /// Not marking is always consensus-safe: the block is still rejected right now. The only cost is
+    /// re-validating it if a peer re-offers it — the same trade `MissingParents` has always made.
+    fn error_marks_block_invalid(error: &RuleError) -> bool {
+        !matches!(
+            error,
+            RuleError::BadMerkleRoot(_, _)
+                | RuleError::MissingParents(_)
+                | RuleError::InvalidParentBodies(_)
+                | RuleError::PalwParentProvenanceUnavailable(_)
+                | RuleError::PrunedBlock
+        )
+    }
+
     fn process_body(self: &Arc<BlockBodyProcessor>, block: &Block, is_trusted: bool) -> BlockProcessResult<BlockStatus> {
         let _prune_guard = self.pruning_lock.blocking_read();
         let status = self.statuses_store.read().get(block.hash()).unwrap();
@@ -257,27 +291,7 @@ impl BlockBodyProcessor {
         let mass = match self.validate_body(block, is_trusted) {
             Ok(mass) => mass,
             Err(e) => {
-                // We mark invalid blocks with status StatusInvalid except in the
-                // case of the following errors:
-                // MissingParents - If we got MissingParents the block shouldn't be
-                // considered as invalid because it could be added later on when its
-                // parents are present.
-                // BadMerkleRoot - if we get BadMerkleRoot we shouldn't mark the
-                // block as invalid because later on we can get the block with
-                // transactions that fits the merkle root.
-                // PrunedBlock - PrunedBlock is an error that rejects a block body and
-                // not the block as a whole, so we shouldn't mark it as invalid.
-                // InvalidParentBodies - like MissingParents, but the parent carries a local
-                // StatusInvalid mark. The mark may be stale (persisted by an older binary under
-                // different consensus rules); marking the child too would cascade the stale
-                // poison forward and defeat recovery via --reset-invalid-marks.
-                if !matches!(
-                    e,
-                    RuleError::BadMerkleRoot(_, _)
-                        | RuleError::MissingParents(_)
-                        | RuleError::InvalidParentBodies(_)
-                        | RuleError::PrunedBlock
-                ) {
+                if Self::error_marks_block_invalid(&e) {
                     self.statuses_store.write().set(block.hash(), BlockStatus::StatusInvalid).unwrap();
                 }
                 return Err(e);
@@ -630,6 +644,48 @@ impl BlockBodyProcessor {
 
         // Write the genesis body
         self.commit_body(self.genesis.hash, &[], Arc::new(self.genesis.build_genesis_transactions()), &Default::default())
+    }
+}
+
+#[cfg(test)]
+mod invalid_marking_tests {
+    use super::BlockBodyProcessor;
+    use crate::errors::RuleError;
+    use kaspa_consensus_core::MerkleRoot;
+
+    /// The persisted-`StatusInvalid` set is a consensus-liveness surface, not a stylistic choice:
+    /// every wrongly-marked block is permanently un-re-requestable and takes its whole future cone
+    /// with it. Pin both directions so a future error variant has to make the choice explicitly.
+    #[test]
+    fn point_of_view_failures_never_persist_an_invalid_mark() {
+        // Node-local / ordering / point-of-view — rejected now, reconsidered later.
+        for transient in [
+            RuleError::MissingParents(vec![1.into()]),
+            RuleError::InvalidParentBodies(vec![1.into()]),
+            RuleError::BadMerkleRoot(MerkleRoot::from_u64_word(2), MerkleRoot::from_u64_word(3)),
+            RuleError::PrunedBlock,
+            // 2026-07-29 testnet-200: the first poisoned block was a v4 child whose selected parent
+            // was disqualified by a beacon-seed mismatch — never a fault of its own body.
+            RuleError::PalwParentProvenanceUnavailable("selected parent is disqualified".to_string()),
+        ] {
+            assert!(
+                !BlockBodyProcessor::error_marks_block_invalid(&transient),
+                "{transient} is a point-of-view condition and must stay re-requestable"
+            );
+        }
+
+        // Self-contained verdicts on the block's own bytes — every node reaches the same one.
+        for permanent in [
+            RuleError::WrongSubsidy(1, 2),
+            RuleError::PalwTicketInvalid("leaf is not active".to_string()),
+            RuleError::NoTransactions,
+            RuleError::FirstTxNotCoinbase,
+        ] {
+            assert!(
+                BlockBodyProcessor::error_marks_block_invalid(&permanent),
+                "{permanent} is a verdict on the block itself and must be marked"
+            );
+        }
     }
 }
 

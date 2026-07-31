@@ -167,6 +167,14 @@ pub enum RuleError {
     )]
     InvalidParentBodies(Vec<BlockHash>),
 
+    #[error(
+        "Header-v4 parent provenance is not available for this block: {0} — this is a node-local, \
+         point-of-view condition (the parent's UTXO/lifecycle classification is not resolvable from \
+         THIS node's current virtual state), not a verdict on the block's own body. The block is \
+         rejected for now and re-requested later; it is never marked invalid"
+    )]
+    PalwParentProvenanceUnavailable(String),
+
     #[error("pruning point {0} is not in the past of this block")]
     PruningViolation(BlockHash),
 

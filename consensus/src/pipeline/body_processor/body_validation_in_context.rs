@@ -46,14 +46,35 @@ impl BlockBodyProcessor {
     /// body worker therefore asks the single virtual worker to finish every direct parent and sleeps
     /// on a bounded completion channel. Header-v3 and older return before allocating or sending
     /// anything, preserving their existing scheduling and persisted bytes.
+    ///
+    /// Every failure here is [`RuleError::PalwParentProvenanceUnavailable`], which
+    /// [`BlockBodyProcessor::error_marks_block_invalid`] keeps OUT of the persisted `StatusInvalid`
+    /// set — deliberately, and load-bearing for IBD liveness. Not one of these outcomes is a verdict
+    /// on this block's own body; each is a property of the local node's point of view at this instant:
+    ///  * the selected parent is `StatusDisqualifiedFromChain` — a *cache* of a past UTXO validation
+    ///    (`resolve_virtual` re-runs it on reorg, see "Revalidating previously disqualified
+    ///    selected-chain block"), so it can flip back to valid;
+    ///  * the parent is `StatusInvalid` — possibly a STALE mark from an older binary under different
+    ///    rules; cascading it is exactly what `--reset-invalid-marks` recovery has to undo;
+    ///  * the parent is still header-only / UTXO-pending, or sits below THIS node's virtual finality
+    ///    point — pure delivery-ordering and point-of-view conditions;
+    ///  * the virtual worker is shutting down, or a store read failed — node lifecycle, not consensus.
+    ///
+    /// Marking the block invalid for any of them persists a point-of-view answer as a permanent one:
+    /// the block is then never re-requested (the body-sync list retains only header-only blocks) and
+    /// its children fail forever on parents that can no longer be satisfied — the 2026-07-29
+    /// testnet-200 dead loop, whose first link was a v4 child of a beacon-disqualified block getting
+    /// `StatusInvalid` written for a condition that was never its own fault. Rejecting without marking
+    /// keeps the block re-requestable, so the node recovers on its own once the parent resolves.
     fn ensure_palw_v4_parent_provenance(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
         if !palw_v4_parent_completion_required(block.header.version, block.header.direct_parents().len()) {
             return Ok(());
         }
+        let unavailable = |m: String| RuleError::PalwParentProvenanceUnavailable(m);
         let selected_parent = self
             .ghostdag_store
             .get_selected_parent(block.hash())
-            .map_err(|error| RuleError::PalwTicketInvalid(format!("Header-v4 selected-parent lookup failed: {error}")))?;
+            .map_err(|error| unavailable(format!("Header-v4 selected-parent lookup failed: {error}")))?;
         let (result_tx, result_rx) = crossbeam_channel::bounded(1);
         self.sender
             .send(crate::pipeline::deps_manager::VirtualStateProcessingMessage::EnsurePalwParents {
@@ -61,11 +82,11 @@ impl BlockBodyProcessor {
                 selected_parent,
                 result: result_tx,
             })
-            .map_err(|_| RuleError::PalwTicketInvalid("virtual worker stopped before Header-v4 parent completion".to_string()))?;
+            .map_err(|_| unavailable("virtual worker stopped before Header-v4 parent completion".to_string()))?;
         result_rx
             .recv()
-            .map_err(|_| RuleError::PalwTicketInvalid("virtual worker dropped Header-v4 parent completion".to_string()))?
-            .map_err(|error| RuleError::PalwTicketInvalid(format!("Header-v4 parent provenance unavailable: {error}")))
+            .map_err(|_| unavailable("virtual worker dropped Header-v4 parent completion".to_string()))?
+            .map_err(unavailable)
     }
 
     /// Keep the reserved PALW subnetworks consensus-inert until the PALW hard fork. Isolation

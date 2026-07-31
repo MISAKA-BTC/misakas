@@ -2116,9 +2116,32 @@ mod palw_network_tests {
         // provenance, so changing them on THIS live public net breaks IBD replay of pre-change
         // history (see DnsParams::required_work_depth). If you must change them, RE-GENESIS onto a
         // new suffix (as 200→20 did) and update these pins — do not edit them on a running net.
-        let dns = p.dns_params.unwrap();
+        let dns = p.dns_params.clone().unwrap();
         assert_eq!(dns.required_work_depth, Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]), "changing this on the live public net breaks IBD replay — re-genesis instead");
         assert_eq!(dns.required_stake_depth, StakeScore(5000), "changing this on the live public net breaks IBD replay — re-genesis instead");
+        // TRIPWIRE, widened (2026-07-31): the two pins above name only the fields the testnet-200
+        // halt happened to travel through. The hazard class is larger than those two — the v4
+        // `palw_beacon_seed` recurrence also consumes `palw_epoch_length_daa`, the beacon grace and
+        // quorum params, `max_block_mass`, the genesis hash, and TEN more `DnsParams` fields
+        // (attestation epoch/lag, the activation and min-active gates, the stake-quality floors, the
+        // mandatory-inclusion score, the shard-mass cap). Changing ANY of them on a live network
+        // re-derives seeds for already-mined history, so the whole consensus surface is pinned at
+        // once via `consensus_identity_hash` (it covers every field except `dns_seeders` and the
+        // derived f64 — see `consensus_identity_hash_tests`).
+        //
+        // Tripped this assert? That is the tripwire working, not a stale test. testnet-20 is a LIVE
+        // public network, so pick one and say which in the commit message:
+        //   (a) the change is behind a FUTURE DAA activation score — replay of pre-fence history is
+        //       byte-identical, so it is safe: update the pin below;
+        //   (b) the change is unconditional — it silently invalidates mined history. RE-GENESIS onto
+        //       a new suffix (as 200→20 did) and pin the new preset instead. Never edit in place.
+        // Operators can compare this exact value across nodes: it is `consensusParamsHash` in
+        // getInfo, and kaspad logs it at startup.
+        assert_eq!(
+            p.consensus_identity_hash().to_string(),
+            "576a36eea830708875b822943483eb324bfde5efe185137ec6b8177ae8c36e0994b6d06a003b0ed708b4adb2581a602a79908f0bd9dba11fe19f8dc88d5ac55b",
+            "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
+        );
         // Every OTHER preset keeps the fence closed.
         for other in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, DEVNET_PARAMS, DEVNET_PALW_PARAMS, SIMNET_PARAMS]
         {

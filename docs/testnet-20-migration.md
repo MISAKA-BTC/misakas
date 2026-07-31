@@ -19,10 +19,52 @@ For a young network the clean recovery is a re-genesis, and testnet-20 (`compute
 already was one: a v5 genesis with the thresholds flat from block 0. Making it the public net is
 therefore the recovery, not a second migration.
 
-Recurrence is guarded: `DnsParams::required_work_depth` / `required_stake_depth` now carry an
-explicit invariant that they are consensus-relevant for IBD replay and must not be changed
-mid-chain without a DAA gate, and `kaspad` gained `--reset-invalid-marks` so a node already
-poisoned by a stale `StatusInvalid` can recover without a full resync.
+Recurrence is guarded on three levels:
+
+- **The parameters cannot drift silently.** `DnsParams::required_work_depth` /
+  `required_stake_depth` carry an explicit invariant that they are consensus-relevant for IBD
+  replay. Beyond those two, `compute_registry_palw_network_selection` pins testnet-20's whole
+  `consensus_identity_hash` — genesis, every activation score, all 34 `DnsParams` fields, the beacon
+  epoch/grace/quorum params — so *any* consensus edit to the live public net trips CI and forces the
+  author to choose explicitly between a future DAA activation gate and a re-genesis.
+- **A disagreement is diagnosable in one line.** Every build of this tree reports `v1.1.0`, which is
+  what made the halt slow to pin down. `kaspad` now logs
+  `Network: testnet-20 — consensus params identity <64-byte digest>` at startup (the same value as
+  `consensusParamsHash` in `getInfo`). Two operators comparing that line settle "same rules or not"
+  immediately.
+- **A disagreement no longer poisons the database.** A v4 block whose *parent's* provenance cannot be
+  resolved now fails with `PalwParentProvenanceUnavailable` and is **not** marked `StatusInvalid`
+  (see below). `kaspad --reset-invalid-marks` remains for databases already poisoned by an older
+  binary.
+
+### Provenance failures are point-of-view, so they are no longer persisted
+
+The dead loop needed two ingredients: the seed disagreement, and a *permanent* mark written for it.
+The second one was the fatal half. A v4 child of the disqualified block failed
+`ensure_palw_v4_parent_provenance` with "selected parent is disqualified" — a statement about the
+*parent* as classified by *this node* at *this instant* — and that verdict was persisted as
+`StatusInvalid`. Marked blocks are never re-requested (the body-sync list retains only header-only
+blocks), so the node could not recover even after the binary was fixed; it needed a datadir wipe.
+
+Every outcome of that check is now `RuleError::PalwParentProvenanceUnavailable`, which is exempt
+from invalid-marking alongside `MissingParents` / `InvalidParentBodies` / `BadMerkleRoot` /
+`PrunedBlock`. None of them is a verdict on the block's own body:
+
+| outcome | why it is not the block's fault |
+|---|---|
+| selected parent is `DisqualifiedFromChain` | a *cache* of a past UTXO validation — `resolve_virtual` re-runs it on reorg |
+| parent is `StatusInvalid` | possibly a stale mark from an older binary; cascading it defeats `--reset-invalid-marks` |
+| parent header-only / UTXO-pending | delivery ordering |
+| parent below the virtual finality point | this node's finality point, which moves |
+| virtual worker shutting down, store read failed | node lifecycle, not consensus |
+
+The block is still rejected — not marking is never an acceptance — but it stays header-only and
+therefore re-requestable, so the node self-heals once the parent resolves or the binary agrees.
+`BlockBodyProcessor::error_marks_block_invalid` states the rule in one place and
+`point_of_view_failures_never_persist_an_invalid_mark` pins both directions.
+
+This removes the *permanent* failure mode, not the disagreement itself: while nodes derive different
+beacon seeds they still cannot converge — that is what the parameter pins above prevent.
 
 ## What changed
 
@@ -50,6 +92,19 @@ self-advertises `default_p2p_port`, discovery would hand peers a port nobody was
 ## Operator cutover
 
 testnet-200 state cannot be carried across — the genesis differs. Use a **fresh datadir**.
+
+Three things send an operator back to the deprecated net without any error saying so:
+
+- **`--netsuffix=200`** (including a systemd unit or shell alias still carrying it).
+- **`--addpeer=<host>:26511`.** 26511 is testnet-200's port; testnet-20 listens on **26521**. A
+  pinned 26511 peer keeps a node syncing the halted chain no matter which suffix it was started
+  with. Remove the flag entirely — DNS discovery resolves testnet-20.
+- **A reused datadir.** A directory written by testnet-200 does not become testnet-20; the genesis
+  differs.
+
+Confirm the node is on the right rules with the startup line
+`Network: testnet-20 — consensus params identity <digest>`; every node on the net must print the
+same digest.
 
 ```sh
 kaspad --testnet --netsuffix=20 --utxoindex --rpclisten-borsh=default

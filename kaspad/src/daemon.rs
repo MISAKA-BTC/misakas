@@ -693,6 +693,14 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // Print package name and version
     info!("{} v{}", env!("CARGO_PKG_NAME"), git::with_short_hash(version()));
 
+    // The version string alone cannot tell two builds apart (every build of this tree reports 1.1.0),
+    // which is what made the 2026-07-29 testnet-200 halt slow to diagnose: nodes that disagreed about
+    // a block's beacon seed had no way to show they were running different consensus rules. This
+    // digest covers every consensus-sensitive param — genesis, activation scores, and the DNS
+    // finality thresholds that drive the v4 beacon seed — so two operators comparing this ONE line
+    // settle "same rules or not" immediately. Same value as `consensusParamsHash` in getInfo.
+    info!("Network: {} — consensus params identity {}", config.params.net, config.params.consensus_identity_hash());
+
     assert!(!db_dir.to_str().unwrap().is_empty());
     info!("Application directory: {}", app_dir.display());
     info!("Data directory: {}", db_dir.display());
