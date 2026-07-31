@@ -72,21 +72,59 @@ kaspa-pq-validator run  --node-rpc 127.0.0.1:27210 --validator-key val.seed \
   --stake-bond <txid:index> --signed-epoch-db val.testnet-20.state --network testnet-20
 ```
 
-## Known gap: the PALW beacon is not advancing
+## Bringing the PALW beacon up (done 2026-07-31)
 
-As of 2026-07-31 the public testnet-20 node reports `palw_enabled: true` and a synced sink, but:
+A fresh testnet-20 node reports `palw_enabled: true` and a synced sink, but the beacon starts
+**halted** — it needs at least one bonded, beacon-enabled validator, and after the 200→20 cutover
+the running validator was still attached to the deprecated testnet-200 node. Symptom:
 
 ```
-activation.open: false
-activation.newest_sample: epoch=none seed=none
-activation.buried_sample_count: 0
-activation.derived_mode: halted
+activation.derived_mode: halted        activation.buried_sample_count: 0
+activation.newest_sample: epoch=none   dns_health: DegradedCertificateCensored
+stake_depth: 0.000000000/0.000005000
 ```
 
-The beacon commit/reveal rounds need at least one **beacon-enabled validator** (`--enable-beacon
---enable-validator` with an active bond) on testnet-20; today the running validator is still
-attached to the deprecated testnet-200 node. Until one is bonded and attesting on testnet-20, the
-epoch beacon carries rather than advances, so **anything derived from it is unavailable**: no
-buried beacon sample means no PALW audit-round seed, no beacon-driven DA chunk sampling, and no
-beacon-salted job challenges. Tooling that consumes the beacon should fail closed rather than fall
-back to a carried seed — `misaka-palw-bridge` refuses to issue challenges in exactly this state.
+The sequence that fixes it:
+
+```sh
+# 1. bond a validator (testnet-20 entry floor is 10 MSK; bond more for margin)
+kaspa-pq-validator bond --node-rpc 127.0.0.1:<borsh> \
+  --validator-key <seed> --amount 100MSK --network testnet-20
+
+# 2. run kaspad with the in-node validator AND the beacon layered on it
+kaspad --testnet --netsuffix=20 ... \
+  --enable-validator --validator-mode=active \
+  --validator-key=<seed> --stake-bond=<txid:index> \
+  --enable-beacon
+```
+
+**Set the heartbeat below one epoch.** The validator's default heartbeat is 30 s, but an epoch is
+100 DAA — about 27 s on a live testnet-20. At that ratio the service reliably lands the
+beacon-COMMIT and misses the REVEAL (its window is one epoch), so the seed carries instead of
+advancing and `activation.open` flaps to false with `buried_carry_run` above `grace_epochs`. The
+log shows the signature clearly: a run of `submitted beacon-commit` lines with no matching
+`beacon-reveal`. Fix:
+
+```sh
+KASPA_VALIDATOR_HEARTBEAT_SECS=3 kaspad ...
+```
+
+With a 3 s heartbeat, commit and reveal both land every epoch, and the state settles to:
+
+```
+activation.open: true          activation.buried_carry_run: 0
+activation.derived_mode: healthy   dns_confirmed: true
+activation.newest_sample: epoch=<current-2> seed=<changes every epoch>
+```
+
+Two other footguns worth writing down. Bond transactions aggregate funding UTXOs, and each
+ML-DSA-87 input is ~4.6 kB — a 19-input bond exceeds the 480,000 transient-mass limit, so bond an
+amount that needs ten-ish inputs rather than the maximum the 20-UTXO cap allows. And `pkill -f`
+patterns that appear in your own remote command line will kill the SSH session running them.
+
+## What beacon-derived machinery this unblocks
+
+Until the beacon advances, everything seeded by it is unavailable: PALW audit-round seeds,
+beacon-driven DA chunk sampling, and beacon-salted job challenges. Tooling that consumes the
+beacon should fail closed rather than fall back to a carried seed — `misaka-palw-bridge` refuses
+to issue challenges in exactly that state, and resumes once `activation.open` is true.
