@@ -30,12 +30,39 @@ struct Args {
     network_id: u32,
     /// (label, owner seed path, bond outpoint)
     providers: Vec<(String, String, String)>,
+    /// Optional REAL inference job: prompt/output token ids and execution roots captured from
+    /// two independent engine runs, so the k=2 match runs over an actual model execution
+    /// instead of chosen vectors.
+    real_job: Option<RealJob>,
+}
+
+#[derive(serde::Deserialize)]
+struct RealJob {
+    prompt_ids: Vec<u32>,
+    a_output_ids: Vec<u32>,
+    b_output_ids: Vec<u32>,
+    a_roots: RuntimeRootsJson,
+    b_roots: RuntimeRootsJson,
+}
+
+#[derive(serde::Deserialize, Clone)]
+struct RuntimeRootsJson {
+    route: String,
+    kv: String,
+    state: String,
+}
+
+impl RuntimeRootsJson {
+    fn to_value(&self) -> Value {
+        json!({ "route": self.route, "kv": self.kv, "state": self.state })
+    }
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut bridge = "http://127.0.0.1:26621/palw/v1".to_string();
     let mut network_id = 20u32;
     let mut providers = Vec::new();
+    let mut real_job = None;
     let argv: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < argv.len() {
@@ -55,6 +82,11 @@ fn parse_args() -> Result<Args, String> {
                 }
                 providers.push((parts[0].into(), parts[1].into(), parts[2].into()));
             }
+            "--real-job" => {
+                let path = take(&mut i)?;
+                let bytes = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
+                real_job = Some(serde_json::from_slice(&bytes).map_err(|e| format!("parse {path}: {e}"))?);
+            }
             other => return Err(format!("unknown flag {other}")),
         }
         i += 1;
@@ -62,7 +94,7 @@ fn parse_args() -> Result<Args, String> {
     if providers.len() < 3 {
         return Err("need three --provider entries (submitter, replica, auditor)".into());
     }
-    Ok(Args { bridge: bridge.trim_end_matches('/').to_string(), network_id, providers })
+    Ok(Args { bridge: bridge.trim_end_matches('/').to_string(), network_id, providers, real_job })
 }
 
 // ---- minimal blocking HTTP ---------------------------------------------------------------
@@ -254,7 +286,20 @@ fn run(args: &Args) -> Result<Report, String> {
     report.check("seam 2: unsigned request refused", code != 200, format!("HTTP {code}"));
 
     // ---- seam 1: challenge leased from the LIVE beacon ---------------------------------
-    let prompt: Vec<u32> = (1u32..=64).collect();
+    let (prompt, real_a_out, real_a_roots, real_b_out, real_b_roots) = match &args.real_job {
+        Some(j) => {
+            report.check(
+                "REAL inference job supplied — two independent engine runs",
+                j.a_output_ids == j.b_output_ids,
+                format!("prompt {} tok, A {} tok, B {} tok, outputs {}",
+                    j.prompt_ids.len(), j.a_output_ids.len(), j.b_output_ids.len(),
+                    if j.a_output_ids == j.b_output_ids { "IDENTICAL" } else { "DIFFER" }),
+            );
+            (j.prompt_ids.clone(), Some(j.a_output_ids.clone()), Some(j.a_roots.clone()),
+             Some(j.b_output_ids.clone()), Some(j.b_roots.clone()))
+        }
+        None => ((1u32..=64).collect(), None, None, None, None),
+    };
     let max_new = 256u32;
     let lease_body = json!({ "provider_bond": providers[0].bond, "prompt_ids": prompt, "max_new": max_new, "shape_id": 1 });
     let (code, lease) = providers[0].signed(&args.bridge, "/challenges", &lease_body)?;
@@ -281,7 +326,7 @@ fn run(args: &Args) -> Result<Report, String> {
 
     // ---- seam 1+3: submit a job under the lease ----------------------------------------
     let challenge = misaka_palw_bridge::chain::parse_hash64(&challenge_hex)?;
-    let output: Vec<u32> = (1000u32..1300).collect();
+    let output: Vec<u32> = real_a_out.clone().unwrap_or_else(|| (1000u32..1300).collect());
     let commitment = hash64_hex(&misaka_palw_bridge::challenge::salted_output_commitment(&output, &challenge));
     let job_id = format!("live-{}", &challenge_hex[..16]);
     let submit = json!({
@@ -290,7 +335,7 @@ fn run(args: &Args) -> Result<Report, String> {
         "prompt_ids": prompt,
         "max_new": max_new,
         "output_root": output_root_hex(&output),
-        "runtime_roots": roots("aa11"),
+        "runtime_roots": real_a_roots.as_ref().map(|r| r.to_value()).unwrap_or_else(|| roots("aa11")),
         "job_challenge": challenge_hex,
         "output_token_ids": output,
         "output_commitment": commitment,
@@ -369,9 +414,13 @@ fn run(args: &Args) -> Result<Report, String> {
         "",
     );
 
+    // B answers with ITS OWN independently produced ids and execution roots — for a real job
+    // these come from a separate engine process that replayed the prompt cold.
+    let b_output = real_b_out.clone().unwrap_or_else(|| output.clone());
     let result = json!({
         "job_id": job_id, "provider_id": providers[1].bond,
-        "output_root": output_root_hex(&output), "runtime_roots": roots("aa11"),
+        "output_root": output_root_hex(&b_output),
+        "runtime_roots": real_b_roots.as_ref().map(|r| r.to_value()).unwrap_or_else(|| roots("aa11")),
     });
     let (code, matched) = providers[1].signed(&args.bridge, "/replica-results", &result)?;
     report.check(
