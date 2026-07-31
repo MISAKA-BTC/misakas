@@ -14,6 +14,10 @@ repository.workspace = true
 name = "misaka-palw-bridge"
 path = "src/main.rs"
 
+[[bin]]
+name = "palw-bridge-verify"
+path = "src/bin/palw-bridge-verify.rs"
+
 [lib]
 name = "misaka_palw_bridge"
 path = "src/lib.rs"
@@ -30,8 +34,6 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "time", "macros"] }
 borsh.workspace = true
-
-[dev-dependencies]
 kaspa-pq-validator-core.workspace = true
 blake2b_simd.workspace = true
 
