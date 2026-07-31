@@ -81,7 +81,7 @@ async fn main() {
     };
 
     let chain: Option<std::sync::Arc<dyn ChainFacts>> = match (&args.node_rpc, &args.pinned_facts) {
-        (Some(rpc), _) => match RpcChainFacts::connect(rpc).await {
+        (Some(rpc), _) => match RpcChainFacts::connect(rpc) {
             Ok(facts) => Some(std::sync::Arc::new(facts)),
             Err(e) => {
                 eprintln!("misaka-palw-bridge: chain facts: {e}");

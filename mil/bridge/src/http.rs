@@ -196,7 +196,15 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<BridgeState>>
         }
     }
 
-    let (code, body) = dispatch(&request, &state, &config);
+    // `dispatch` is synchronous and may block on a node round-trip; run it on the blocking pool
+    // so a slow node cannot starve the reactor (and so blocking there is legal at all).
+    let dispatch_state = Arc::clone(&state);
+    let dispatch_config = Arc::clone(&config);
+    let dispatched = tokio::task::spawn_blocking(move || dispatch(&request, &dispatch_state, &dispatch_config)).await;
+    let (code, body) = match dispatched {
+        Ok(pair) => pair,
+        Err(e) => (500, json!({ "error": { "message": format!("dispatch panicked: {e}") } })),
+    };
     write_response(&mut stream, code, &body).await;
 }
 

@@ -206,53 +206,109 @@ impl ChainFacts for PinnedChainFacts {
 
 // ---- live wRPC ---------------------------------------------------------------------------
 
-/// Live node facts over wRPC. Calls are made from a blocking context (the bridge's state mutex
-/// is sync), so each call enters the shared runtime via `block_on`; the beacon is cached for a
-/// short TTL because every job lease and every DA sample needs it and it only moves per epoch.
+/// Live node facts over wRPC.
+///
+/// The client runs on its OWN thread with its OWN tokio runtime, and requests cross by channel.
+/// The obvious alternative — `block_in_place` + `block_on` on the server's runtime — deadlocks
+/// here: the bridge's HTTP dispatch is synchronous and runs inside a runtime worker, so nesting
+/// a `block_on` of the same runtime wedges the connection (observed against a live node: the
+/// status route never answered). A dedicated runtime also keeps the WebSocket driven while the
+/// bridge is idle, because the request loop lives inside `block_on` and yields to the reactor
+/// between calls.
+///
+/// Every call is bounded by [`CALL_TIMEOUT`]: a wedged or unreachable node must surface as an
+/// error on the route that needed it, never as a hung bridge.
 pub struct RpcChainFacts {
     url: String,
-    runtime: tokio::runtime::Handle,
-    client: kaspa_wrpc_client::KaspaRpcClient,
+    requests: tokio::sync::mpsc::UnboundedSender<ChainRequest>,
     beacon_cache: Mutex<Option<(std::time::Instant, BeaconFacts)>>,
     cache_ttl: std::time::Duration,
 }
 
+/// Upper bound on one node round-trip.
+const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+struct ChainRequest {
+    bond: Option<String>,
+    reply: std::sync::mpsc::Sender<Result<kaspa_rpc_core::GetPalwStateResponse, String>>,
+}
+
 impl RpcChainFacts {
     /// `node_rpc` is `host:port` (Borsh wRPC), matching `kaspa-pq-validator --node-wrpc-borsh`.
-    pub async fn connect(node_rpc: &str) -> Result<Self, String> {
+    /// Blocks until the FIRST connection succeeds, so a missing node fails loudly at startup.
+    pub fn connect(node_rpc: &str) -> Result<Self, String> {
         use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
         use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
+        use kaspa_rpc_core::api::rpc::RpcApi;
 
         let url = format!("ws://{node_rpc}");
-        let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None)
-            .map_err(|e| format!("build wRPC client: {e}"))?;
-        // Retry strategy: a node bounce must not wedge the bridge (same reasoning as the
-        // validator sidecar); block on the FIRST connect so startup fails loudly if the node
-        // is not there.
-        let options = ConnectOptions {
-            block_async_connect: true,
-            connect_timeout: Some(std::time::Duration::from_millis(5_000)),
-            strategy: ConnectStrategy::Retry,
-            ..Default::default()
-        };
-        client.connect(Some(options)).await.map_err(|e| format!("connect {url}: {e}"))?;
+        let (requests, mut rx) = tokio::sync::mpsc::unbounded_channel::<ChainRequest>();
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        let thread_url = url.clone();
+
+        std::thread::Builder::new()
+            .name("palw-bridge-chain".into())
+            .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = started_tx.send(Err(format!("chain runtime: {e}")));
+                        return;
+                    }
+                };
+                runtime.block_on(async move {
+                    let client = match KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&thread_url), None, None, None) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            let _ = started_tx.send(Err(format!("build wRPC client: {e}")));
+                            return;
+                        }
+                    };
+                    // Retry keeps the reconnect loop alive across node bounces (the validator
+                    // sidecar's reasoning); block on the first connect so startup is honest.
+                    let options = ConnectOptions {
+                        block_async_connect: true,
+                        connect_timeout: Some(std::time::Duration::from_millis(5_000)),
+                        strategy: ConnectStrategy::Retry,
+                        ..Default::default()
+                    };
+                    if let Err(e) = client.connect(Some(options)).await {
+                        let _ = started_tx.send(Err(format!("connect {thread_url}: {e}")));
+                        return;
+                    }
+                    let _ = started_tx.send(Ok(()));
+
+                    while let Some(request) = rx.recv().await {
+                        let call = kaspa_rpc_core::GetPalwStateRequest {
+                            batch_id: None,
+                            provider_bond_outpoint: request.bond,
+                        };
+                        let result = client
+                            .get_palw_state_call(None, call)
+                            .await
+                            .map_err(|e| format!("getPalwState: {e}"));
+                        let _ = request.reply.send(result);
+                    }
+                });
+            })
+            .map_err(|e| format!("spawn chain thread: {e}"))?;
+
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .map_err(|_| format!("chain thread did not report readiness for {url}"))??;
+
         Ok(Self {
             url,
-            runtime: tokio::runtime::Handle::current(),
-            client,
+            requests,
             beacon_cache: Mutex::new(None),
             cache_ttl: std::time::Duration::from_secs(5),
         })
     }
 
     fn palw_state(&self, bond: Option<String>) -> Result<kaspa_rpc_core::GetPalwStateResponse, String> {
-        use kaspa_rpc_core::api::rpc::RpcApi;
-        let request = kaspa_rpc_core::GetPalwStateRequest { batch_id: None, provider_bond_outpoint: bond };
-        let client = self.client.clone();
-        tokio::task::block_in_place(|| {
-            self.runtime.block_on(async move { client.get_palw_state_call(None, request).await })
-        })
-        .map_err(|e| format!("getPalwState: {e}"))
+        let (reply, wait) = std::sync::mpsc::channel();
+        self.requests.send(ChainRequest { bond, reply }).map_err(|_| "chain thread has stopped".to_string())?;
+        wait.recv_timeout(CALL_TIMEOUT).map_err(|_| format!("node {} did not answer within {CALL_TIMEOUT:?}", self.url))?
     }
 }
 
