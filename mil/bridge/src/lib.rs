@@ -24,7 +24,12 @@
 //!   REQUIRES the engine execution roots. Submissions/results without them are rejected up
 //!   front, not weakly matched.
 
+pub mod arbitration;
+pub mod chain;
+pub mod challenge;
+pub mod da;
 pub mod http;
 pub mod match_key;
+pub mod provider;
 pub mod state;
 pub mod wire;

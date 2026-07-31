@@ -111,6 +111,12 @@ pub fn k2_match(
     })
 }
 
+pub fn bytes_hex(bytes: &[u8]) -> String {
+    let mut out = vec![0u8; bytes.len() * 2];
+    faster_hex::hex_encode(bytes, &mut out).expect("exact-size buffer");
+    String::from_utf8(out).expect("hex is ascii")
+}
+
 pub fn hash64_hex(h: &Hash64) -> String {
     let bytes = h.as_byte_slice();
     let mut out = vec![0u8; bytes.len() * 2];

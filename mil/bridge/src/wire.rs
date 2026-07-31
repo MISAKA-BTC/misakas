@@ -30,6 +30,17 @@ pub struct JobSubmissionV1 {
     /// REQUIRED by this bridge (qi35-serve class): the match key covers execution structure.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub runtime_roots: Option<RuntimeRootsV1>,
+    /// Seam 1 — the challenge this bridge leased BEFORE generation. Required when the bridge
+    /// runs with consensus seams enabled.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub job_challenge: Option<String>,
+    /// The answer's token ids — needed for the salted receipt-v3 commitment and for the DA
+    /// context object an auditor replays from.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_token_ids: Option<Vec<u32>>,
+    /// `output_commitment_v3(output_token_ids, job_challenge)`, hex.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_commitment: Option<String>,
 }
 
 /// B's answer for an assignment.
