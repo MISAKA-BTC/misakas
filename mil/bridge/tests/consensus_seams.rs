@@ -297,12 +297,19 @@ fn da_obligation_is_sampled_proved_and_can_time_out() {
     h.state.answer_da_challenge(&response, &h.chain, 3_003).unwrap();
     assert_eq!(h.state.da_obligations_for(&h.a.bond_outpoint)[0].status, DaObligationStatus::Satisfied);
 
-    // A tampered chunk would not have satisfied it.
+    // A tampered chunk is refused even now that the obligation is Satisfied — verification runs
+    // BEFORE the idempotent short-circuit, so "already satisfied" can never launder a bad proof.
     let mut tampered = DaResponseWire::prove(&obligation, &bytes).unwrap();
     let mut chunk = misaka_palw_bridge::match_key::decode_hex(&tampered.chunk_hex).unwrap();
     chunk[0] ^= 0xff;
     tampered.chunk_hex = bytes_hex(&chunk);
-    assert!(tampered.verify(&obligation).is_err());
+    assert!(tampered.verify(&obligation).is_err(), "the proof itself must not verify");
+    assert!(
+        h.state.answer_da_challenge(&tampered, &h.chain, 3_004).is_err(),
+        "a bad proof against a satisfied obligation must still be refused"
+    );
+    // …while an honest re-send stays idempotent.
+    h.state.answer_da_challenge(&response, &h.chain, 3_005).unwrap();
 
     // A provider that never answers: sweeping past the deadline produces timeout evidence.
     let mut silent = harness("da-timeout");

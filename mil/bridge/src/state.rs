@@ -657,6 +657,11 @@ impl BridgeState {
         if obligation.provider_bond != response.provider_bond {
             return Err("response comes from a different provider than the obligation".into());
         }
+        // Verify FIRST, before any status short-circuit. A response for an already-satisfied
+        // obligation is idempotent — but only if it actually proves the chunk. Short-circuiting
+        // on status would report success for a proof that was never checked, which is a lie the
+        // caller cannot distinguish from a real verification.
+        response.verify(&obligation)?;
         let deadline = match obligation.status {
             DaObligationStatus::Challenged { deadline_daa_score } => deadline_daa_score,
             DaObligationStatus::Pending => return Err("obligation has not been challenged".into()),
@@ -667,7 +672,6 @@ impl BridgeState {
         if beacon.observed_daa_score > deadline {
             return Err(format!("response is past the deadline ({deadline})"));
         }
-        response.verify(&obligation)?;
         self.append(BridgeEvent::DaSatisfied { obligation_id: obligation.obligation_id_hex }, now_unix_ms)
     }
 
