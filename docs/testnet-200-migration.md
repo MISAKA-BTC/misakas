@@ -1,4 +1,9 @@
-# testnet-10 → testnet-200 migration
+# testnet-10 → testnet-200 migration (HISTORICAL)
+
+> **Superseded on 2026-07-30.** The public network moved again, to `testnet-20` — see
+> [testnet-20-migration.md](testnet-20-migration.md). testnet-200 has no seeders and its replay is
+> unsafe; this note is kept for the historical record only. Everything below described the state as
+> of 2026-07-29.
 
 As of 2026-07-29, `testnet-200` is the only publicly operated MISAKA testnet.
 `testnet-10` remains parseable as a compatibility preset, but it has no public DNS seeds,

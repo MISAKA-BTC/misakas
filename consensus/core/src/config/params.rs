@@ -1734,8 +1734,9 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
 ///   * `palw_compute_registry_activation_daa_score = 0` — band 0x40-0x44 admits from genesis,
 ///     Header v5 is the only admitted schema, per-set difficulty and the GHOSTDAG credit seam
 ///     are live paths.
-///   * No DNS seeders — the two-host rehearsal dials peers explicitly (`--addpeer`), the
-///     two-host-live-testnet precedent.
+///   * DNS seeders: the PUBLIC seed names (2026-07-30 migration — this preset superseded
+///     testnet-200 as the public net; the field below is authoritative). It began as a
+///     closed two-host rehearsal dialling peers explicitly (`--addpeer`).
 ///   * Everything else inherits the staging shape verbatim (real PoW, non-inert anti-spam,
 ///     full-scale depths): the rehearsal exercises the registry, not a new economics surface.
 pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
