@@ -147,8 +147,11 @@ pub trait ChainFacts: Send + Sync {
     /// (when `a_commit` is named) that anchor's registration epoch. `Ok((None, _))` is a real
     /// answer: outside the retained window, or the draw beacon has not closed — the self-serial
     /// flow turns it into a wait, never into evidence built on substituted values.
-    fn pcpb_context(&self, anchor_epoch: u64, a_commit: Option<Hash64>)
-    -> Result<(Option<crate::pcpb::PcpbContext>, Option<u64>), String>;
+    fn pcpb_context(
+        &self,
+        anchor_epoch: u64,
+        a_commit: Option<Hash64>,
+    ) -> Result<(Option<crate::pcpb::PcpbContext>, Option<u64>), String>;
     /// Human label for `/palw/v1/status` — operators must be able to see whether verdicts are
     /// backed by a live node or by pinned numbers.
     fn source_label(&self) -> String;
@@ -270,8 +273,7 @@ impl ChainFacts for PinnedChainFacts {
         anchor_epoch: u64,
         a_commit: Option<Hash64>,
     ) -> Result<(Option<crate::pcpb::PcpbContext>, Option<u64>), String> {
-        let acommit_epoch =
-            a_commit.and_then(|c| self.facts.pcpb_acommits.get(&crate::match_key::hash64_hex(&c)).copied());
+        let acommit_epoch = a_commit.and_then(|c| self.facts.pcpb_acommits.get(&crate::match_key::hash64_hex(&c)).copied());
         let ctx = match self.facts.pcpb_anchors.get(&anchor_epoch) {
             Some(pinned) => pinned.to_context(anchor_epoch)?,
             // Outside the pinned window — same shape a live node answers with.
@@ -402,7 +404,6 @@ impl RpcChainFacts {
         self.requests.send(ChainRequest { bond, pcpb, reply }).map_err(|_| "chain thread has stopped".to_string())?;
         wait.recv_timeout(CALL_TIMEOUT).map_err(|_| format!("node {} did not answer within {CALL_TIMEOUT:?}", self.url))?
     }
-
 }
 
 impl ChainFacts for RpcChainFacts {
@@ -481,9 +482,9 @@ impl ChainFacts for RpcChainFacts {
         a_commit: Option<Hash64>,
     ) -> Result<(Option<crate::pcpb::PcpbContext>, Option<u64>), String> {
         let response = self.palw_state_with_pcpb(None, Some((anchor_epoch, a_commit.as_ref().map(hash64_to_hex))))?;
-        let served = response.pcpb.ok_or_else(|| {
-            format!("node {} did not return a PCPB context — it predates ADR-0045 D3-b (wire v6)", self.url)
-        })?;
+        let served = response
+            .pcpb
+            .ok_or_else(|| format!("node {} did not return a PCPB context — it predates ADR-0045 D3-b (wire v6)", self.url))?;
         crate::pcpb::PcpbContext::from_rpc(&served).map_err(|e| format!("PCPB context at anchor {anchor_epoch}: {e}"))
     }
 

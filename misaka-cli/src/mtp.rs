@@ -1050,7 +1050,8 @@ pub async fn palw_leaves(ctx: &Ctx, da_dir: &str, low_hash: Option<&str>, max_bl
     // Pass 2 — join acceptance → leaf body → verified receipt object, dropping loudly.
     let mut lines = Vec::new();
     let mut accepted_seen: HashSet<(Hash64, u32)> = HashSet::new();
-    let (mut accepted, mut not_buried, mut red_algo4, mut unresolved_blues, mut duplicate_accepts) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    let (mut accepted, mut not_buried, mut red_algo4, mut unresolved_blues, mut duplicate_accepts) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut missing_leaf_body = 0usize;
     let mut legacy_v1 = 0usize;
     let mut missing_objects: Vec<String> = Vec::new();
@@ -1214,8 +1215,8 @@ fn palw_leaf_row(
     use kaspa_consensus::processes::palw_da::decode_canonical_palw_receipt_da_object_v2;
     use kaspa_consensus_core::palw::da::{PALW_RECEIPT_DA_OBJECT_VERSION_V2, palw_receipt_da_commitment};
 
-    let object = decode_canonical_palw_receipt_da_object_v2(object_bytes)
-        .map_err(|e| format!("object does not decode canonically: {e:?}"))?;
+    let object =
+        decode_canonical_palw_receipt_da_object_v2(object_bytes).map_err(|e| format!("object does not decode canonically: {e:?}"))?;
     let commitment = palw_receipt_da_commitment(PALW_RECEIPT_DA_OBJECT_VERSION_V2, object_bytes)
         .map_err(|e| format!("object commitment: {e:?}"))?;
     if commitment.root != leaf.receipt_da_root

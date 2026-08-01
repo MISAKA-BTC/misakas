@@ -7203,7 +7203,7 @@ mod tests {
             cw,
             cs,
             /* require_anchor_attestation */ false, // legacy semantics under test
-            0, // last_evicted_round_epoch (test seed)
+            0,     // last_evicted_round_epoch (test seed)
         );
         assert_eq!(s1.selected_chain_anchor, sink1);
         assert_eq!(s1.last_dns_confirmed_anchor, Hash64::default());
@@ -7225,7 +7225,7 @@ mod tests {
             cw,
             cs,
             /* require_anchor_attestation */ false, // legacy semantics under test
-            0, // last_evicted_round_epoch (test seed)
+            0,     // last_evicted_round_epoch (test seed)
         );
         assert_eq!(s2.selected_chain_anchor, sink2, "selected_chain_anchor stays the sink (throttle only)");
         assert_eq!(s2.last_dns_confirmed_anchor, canon2, "confirmed anchor is the canonical anchor");
@@ -7249,7 +7249,7 @@ mod tests {
             cw,
             cs,
             /* require_anchor_attestation */ false, // legacy semantics under test
-            0, // last_evicted_round_epoch (test seed)
+            0,     // last_evicted_round_epoch (test seed)
         );
         assert_eq!(s3.selected_chain_anchor, sink3);
         assert_eq!(s3.last_dns_confirmed_anchor, canon2, "no ready anchor -> keep prev confirmed");
@@ -7269,7 +7269,7 @@ mod tests {
             cw,
             cs,
             /* require_anchor_attestation */ false, // legacy semantics under test
-            0, // last_evicted_round_epoch (test seed)
+            0,     // last_evicted_round_epoch (test seed)
         );
         assert_eq!(s4.last_dns_confirmed_anchor, canon2, "below-threshold -> keep prev confirmed");
         assert_eq!(s4.last_dns_confirmed_anchor_daa_score, 580);
@@ -7301,7 +7301,7 @@ mod tests {
                 cw,
                 cs,
                 /* require_anchor_attestation */ false, // legacy semantics under test
-            0, // last_evicted_round_epoch (test seed)
+                0,     // last_evicted_round_epoch (test seed)
             )
             .last_dns_confirmed_anchor
         };

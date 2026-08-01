@@ -160,7 +160,12 @@ async fn request(args: PalwProviderUnbondRequestArgs) -> Result<(), String> {
     }
 
     let state = client
-        .get_palw_state(GetPalwStateRequest { batch_id: None, provider_bond_outpoint: Some(outpoint_ref(bond_outpoint)), pcpb_anchor_epoch: None, pcpb_a_commit: None })
+        .get_palw_state(GetPalwStateRequest {
+            batch_id: None,
+            provider_bond_outpoint: Some(outpoint_ref(bond_outpoint)),
+            pcpb_anchor_epoch: None,
+            pcpb_a_commit: None,
+        })
         .await
         .map_err(|err| format!("getPalwState failed: {err}"))?;
     require_provider_view(state.enabled, state.overlay_view_available)?;
@@ -236,7 +241,12 @@ async fn sweep(args: PalwProviderSweepArgs) -> Result<(), String> {
     }
 
     let state = client
-        .get_palw_state(GetPalwStateRequest { batch_id: None, provider_bond_outpoint: Some(outpoint_ref(bond_outpoint)), pcpb_anchor_epoch: None, pcpb_a_commit: None })
+        .get_palw_state(GetPalwStateRequest {
+            batch_id: None,
+            provider_bond_outpoint: Some(outpoint_ref(bond_outpoint)),
+            pcpb_anchor_epoch: None,
+            pcpb_a_commit: None,
+        })
         .await
         .map_err(|err| format!("getPalwState failed: {err}"))?;
     require_provider_view(state.enabled, state.overlay_view_available)?;

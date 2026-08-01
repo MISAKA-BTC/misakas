@@ -105,10 +105,7 @@ fn write_header_preimage<H: HasherBase>(hasher: &mut H, header: &Header, nonce: 
     // order: set id, then the exact policy record id, then the exact allocation plan id — the
     // three references §14/§21.4 resolve historical work from, immutably, forever.
     if header.version >= crate::constants::PALW_COMPUTE_SET_HEADER_VERSION {
-        hasher
-            .update(header.palw_compute_set_id)
-            .update(header.palw_compute_policy_id)
-            .update(header.palw_allocation_plan_id);
+        hasher.update(header.palw_compute_set_id).update(header.palw_compute_policy_id).update(header.palw_allocation_plan_id);
     }
 }
 

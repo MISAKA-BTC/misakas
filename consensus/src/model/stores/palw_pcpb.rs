@@ -86,11 +86,7 @@ impl DbPalwPcpbStore {
         Self {
             db: Arc::clone(&db),
             snapshot_history: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwProviderSnapshotHistory.into()),
-            snapshot_entries: CachedDbAccess::new(
-                db.clone(),
-                cache_policy,
-                DatabaseStorePrefixes::PalwProviderSnapshotEntries.into(),
-            ),
+            snapshot_entries: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwProviderSnapshotEntries.into()),
             acommit: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::PalwACommitRegistry.into()),
         }
     }
@@ -109,7 +105,12 @@ impl DbPalwPcpbStore {
     /// derived it. Idempotent-by-value and reorg-overwritable for the same reason the beacon seed
     /// history is: the per-epoch value is a function of "the selected chain that closed this
     /// epoch", so the new chain's boundary derivation is the correct one.
-    pub fn set_snapshot_batch(&self, batch: &mut WriteBatch, epoch: u64, commitment: PalwSnapshotCommitment) -> Result<(), StoreError> {
+    pub fn set_snapshot_batch(
+        &self,
+        batch: &mut WriteBatch,
+        epoch: u64,
+        commitment: PalwSnapshotCommitment,
+    ) -> Result<(), StoreError> {
         self.snapshot_history.write(BatchDbWriter::new(batch), epoch.into(), Arc::new(commitment))
     }
 

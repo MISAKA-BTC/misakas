@@ -6,8 +6,8 @@ use kaspa_consensus_core::{
         provider_bond_release_daa_score,
     },
     palw_probe::{
-        PalwActivationProbe, PalwBatchProbe, PalwDaChallengeProbe, PalwDaObligationProbe, PalwProviderBondProbe,
-        PalwPcpbContextProbe, PalwSearchChallengeProbe, PalwStateProbe, PalwStateProbeError,
+        PalwActivationProbe, PalwBatchProbe, PalwDaChallengeProbe, PalwDaObligationProbe, PalwPcpbContextProbe, PalwProviderBondProbe,
+        PalwSearchChallengeProbe, PalwStateProbe, PalwStateProbeError,
     },
     tx::TransactionOutpoint,
 };
@@ -279,9 +279,8 @@ impl Consensus {
                 let snapshot_epoch = anchor_epoch.checked_sub(k);
                 let draw_epoch = anchor_epoch.saturating_add(delta);
                 let store = &self.storage.palw_pcpb_store;
-                let read = |what: &str, e: kaspa_database::prelude::StoreError| {
-                    PalwStateProbeError::Store(format!("PCPB {what}: {e:?}"))
-                };
+                let read =
+                    |what: &str, e: kaspa_database::prelude::StoreError| PalwStateProbeError::Store(format!("PCPB {what}: {e:?}"));
                 let snapshot = match snapshot_epoch {
                     Some(e) => store.snapshot_at(e).map_err(|err| read("snapshot", err))?,
                     None => None,

@@ -4882,7 +4882,10 @@ pub(crate) fn stage_palw_pcpb_context(tc: &TestConsensus) {
         )
         .unwrap();
     if tc.storage.palw_beacon_store.beacon_seed_at(draw_epoch).unwrap().is_none() {
-        tc.storage.palw_beacon_store.set_beacon_seed_batch(&mut batch, draw_epoch, kaspa_hashes::Hash64::from_bytes([0x7e; 64])).unwrap();
+        tc.storage
+            .palw_beacon_store
+            .set_beacon_seed_batch(&mut batch, draw_epoch, kaspa_hashes::Hash64::from_bytes([0x7e; 64]))
+            .unwrap();
     }
     tc.consensus_clone().db().write(batch).unwrap();
 }
@@ -8316,7 +8319,9 @@ async fn compute_registry_records_package_serve_import_roundtrip() {
     let closed = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
     let closed_consensus = TestConsensus::new(&closed);
     let closed_handles = closed_consensus.init();
-    assert!(closed_consensus.virtual_processor().import_palw_compute_registry_records_package(&package_of(vec![descriptor(2)])).is_err());
+    assert!(
+        closed_consensus.virtual_processor().import_palw_compute_registry_records_package(&package_of(vec![descriptor(2)])).is_err()
+    );
     let served = closed_consensus.virtual_processor().palw_compute_registry_records_package();
     assert!(served.descriptors.is_empty() && served.policies.is_empty() && served.plans.is_empty());
     closed_consensus.shutdown(closed_handles);

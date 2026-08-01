@@ -160,13 +160,7 @@ impl PcpbContext {
     /// guarantee expressing itself rather than an error to retry through.
     pub fn from_rpc(served: &kaspa_rpc_core::RpcPalwPcpbContext) -> Result<(Option<Self>, Option<u64>), PcpbError> {
         let acommit_epoch = served.acommit_epoch;
-        let parse = |hex: &str| -> Option<Hash64> {
-            if hex.is_empty() {
-                None
-            } else {
-                hex.parse::<Hash64>().ok()
-            }
-        };
+        let parse = |hex: &str| -> Option<Hash64> { if hex.is_empty() { None } else { hex.parse::<Hash64>().ok() } };
         let (Some(snapshot_root), Some(assignment_root)) = (parse(&served.snapshot_root), parse(&served.assignment_root)) else {
             // Outside the retained window: nothing to build on. Distinguished from "no entries" so
             // an operator can tell "ask an archival node" from "ask a different node".
@@ -193,15 +187,8 @@ impl PcpbContext {
             })
             .collect::<Result<_, PcpbError>>()?;
         let commitment = PalwSnapshotCommitment { snapshot_root, assignment_root, total_bond, provider_count: served.provider_count };
-        let ctx = Self::new(
-            served.anchor_epoch,
-            served.snapshot_epoch,
-            served.draw_epoch,
-            commitment,
-            &entries,
-            anchor_seed,
-            draw_seed,
-        )?;
+        let ctx =
+            Self::new(served.anchor_epoch, served.snapshot_epoch, served.draw_epoch, commitment, &entries, anchor_seed, draw_seed)?;
         Ok((Some(ctx), acommit_epoch))
     }
 
@@ -369,13 +356,7 @@ pub struct SelfSerialFlow {
 }
 
 impl SelfSerialFlow {
-    pub fn new(
-        a_commit: Hash64,
-        a_bond: TransactionOutpoint,
-        preimage: JobPreimage,
-        shape_id: u16,
-        receipt_tail: Vec<u8>,
-    ) -> Self {
+    pub fn new(a_commit: Hash64, a_bond: TransactionOutpoint, preimage: JobPreimage, shape_id: u16, receipt_tail: Vec<u8>) -> Self {
         Self { a_commit, a_bond, preimage, shape_id, receipt_tail, a_commit_epoch: None }
     }
 
@@ -623,22 +604,34 @@ impl PcpbProducedWitnessV1 {
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum PcpbSelfStepWire {
     /// Fund and submit a `0x45` transaction with this payload, then keep polling.
-    SubmitAnchor { subnetwork_byte: u8, payload_hex: String },
-    AwaitDrawBeacon { a_commit_epoch: u64, draw_epoch: u64 },
+    SubmitAnchor {
+        subnetwork_byte: u8,
+        payload_hex: String,
+    },
+    AwaitDrawBeacon {
+        a_commit_epoch: u64,
+        draw_epoch: u64,
+    },
     /// Send `receipt_preimage_hex` to the provider at `partner_bond` and collect its ML-DSA-87
     /// signature over it (context [`PALW_PCPB_RECEIPT_MLDSA87_CONTEXT`]).
-    AwaitPartnerReceipt { a_commit_epoch: u64, partner_bond: String, receipt_preimage_hex: String },
+    AwaitPartnerReceipt {
+        a_commit_epoch: u64,
+        partner_bond: String,
+        receipt_preimage_hex: String,
+    },
     /// The witness exists; fetch it by `leaf_challenge_hex`.
-    Ready { a_commit_epoch: u64, leaf_challenge_hex: String },
+    Ready {
+        a_commit_epoch: u64,
+        leaf_challenge_hex: String,
+    },
 }
 
 impl PcpbSelfStepWire {
     pub fn from_step(step: &SelfSerialStep, a_commit_epoch: Option<u64>) -> Self {
         match step {
-            SelfSerialStep::SubmitAnchor { subnetwork_byte, payload } => Self::SubmitAnchor {
-                subnetwork_byte: *subnetwork_byte,
-                payload_hex: crate::match_key::bytes_hex(payload),
-            },
+            SelfSerialStep::SubmitAnchor { subnetwork_byte, payload } => {
+                Self::SubmitAnchor { subnetwork_byte: *subnetwork_byte, payload_hex: crate::match_key::bytes_hex(payload) }
+            }
             SelfSerialStep::AwaitDrawBeacon { a_commit_epoch, draw_epoch } => {
                 Self::AwaitDrawBeacon { a_commit_epoch: *a_commit_epoch, draw_epoch: *draw_epoch }
             }
@@ -647,7 +640,9 @@ impl PcpbSelfStepWire {
                 partner_bond: crate::chain::format_outpoint(partner_bond),
                 receipt_preimage_hex: crate::match_key::bytes_hex(receipt_preimage),
             },
-            SelfSerialStep::Ready => Self::Ready { a_commit_epoch: a_commit_epoch.unwrap_or_default(), leaf_challenge_hex: String::new() },
+            SelfSerialStep::Ready => {
+                Self::Ready { a_commit_epoch: a_commit_epoch.unwrap_or_default(), leaf_challenge_hex: String::new() }
+            }
         }
     }
 }
@@ -851,8 +846,7 @@ mod tests {
         let mut flow = SelfSerialFlow::new(commitment, f.bonds[a_key], preimage(), 1, b"tail".to_vec());
         flow.observe_anchor(9);
         let good_preimage = flow.receipt_preimage();
-        let good_sig =
-            mldsa::sign(&f.keys[b_key].signing_key, &good_preimage, PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, [0x44; 32]).unwrap();
+        let good_sig = mldsa::sign(&f.keys[b_key].signing_key, &good_preimage, PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, [0x44; 32]).unwrap();
         let good_pk = f.keys[b_key].verification_key.as_ref().to_vec();
 
         // (a) a receipt that binds a DIFFERENT commitment.

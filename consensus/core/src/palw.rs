@@ -9910,7 +9910,14 @@ mod tests {
             let hashes: Vec<Hash64> = leaves.iter().map(|l| l.leaf_hash()).collect();
             let proofs: Vec<_> = (0..n).map(|i| palw_leaf_merkle_proof(&hashes, i).unwrap()).collect();
             let witnesses: Vec<_> = (0..n).map(|_| dummy_external_witness()).collect();
-            PalwLeafChunkV1 { version: PALW_LEAF_CHUNK_VERSION_V3, batch_id: leaves[0].batch_id, chunk_index: 0, leaves, proofs, witnesses }
+            PalwLeafChunkV1 {
+                version: PALW_LEAF_CHUNK_VERSION_V3,
+                batch_id: leaves[0].batch_id,
+                chunk_index: 0,
+                leaves,
+                proofs,
+                witnesses,
+            }
         };
 
         let good = mk(3);
@@ -12152,7 +12159,10 @@ mod pcpb_evidence_tests {
         // Clause 0: a leaf snapshot root disagreeing with the resolved root → reject.
         let mut facts = external_facts(&s, ia, ib);
         facts.snapshot_root = th(0xDE);
-        assert!(!palw_dispatch_evidence_valid(&good, &resolved(&s), &beacon, &facts, &v), "clause 0 did not bind the leaf snapshot root");
+        assert!(
+            !palw_dispatch_evidence_valid(&good, &resolved(&s), &beacon, &facts, &v),
+            "clause 0 did not bind the leaf snapshot root"
+        );
 
         // D3-b seat binding: valid draw, but the LEAF declares a different provider in seat A → reject.
         // Without this, evidence proves "some pair was drawn" while the leaf names whoever it likes.

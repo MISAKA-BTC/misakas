@@ -98,11 +98,10 @@ use kaspa_consensus_core::{
         PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
         anchor_cutoff_blue_score, apply_dormancy_round, attestations_from_accepted_txs, bond_mutations_from_accepted_txs,
         canonical_lagged_epoch_anchor, check_dns_reorg_rule, compute_stake_score, derive_dns_health, dns_confirm_view_is_fresh,
-        dns_finality_fresh_for_bridge,
-        dormancy_revival_ready, effective_bond_status, emergency_work_margin_for, epoch_meets_quality_floor, is_bond_active_at,
-        is_dns_confirmed,
-        mandatory_attestation_mass_capacity, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
-        reorg_inputs_since_common_ancestor, required_stake_for_quality_floor, stake_attestation_message, total_active_stake_by_epoch,
+        dns_finality_fresh_for_bridge, dormancy_revival_ready, effective_bond_status, emergency_work_margin_for,
+        epoch_meets_quality_floor, is_bond_active_at, is_dns_confirmed, mandatory_attestation_mass_capacity,
+        ready_epoch_from_tip_blue_score, recompute_epoch_tallies, reorg_inputs_since_common_ancestor,
+        required_stake_for_quality_floor, stake_attestation_message, total_active_stake_by_epoch,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -4694,8 +4693,8 @@ impl VirtualStateProcessor {
         // which is exactly why finals are computed in memory and written once at the end.
         let mut acommit_finals: HashMap<Hash64, Option<u64>> = HashMap::new();
         let acommit_current = |store: &crate::model::stores::palw_pcpb::DbPalwPcpbStore,
-                                   finals: &HashMap<Hash64, Option<u64>>,
-                                   anchor: &Hash64|
+                               finals: &HashMap<Hash64, Option<u64>>,
+                               anchor: &Hash64|
          -> Option<u64> {
             match finals.get(anchor) {
                 Some(v) => *v,
@@ -8561,8 +8560,11 @@ impl VirtualStateProcessor {
         let beacon_seed_history = if active {
             let epoch_len = self.palw_epoch_length_daa.max(1);
             let pp_epoch = pruning_point_daa_score / epoch_len;
-            let window =
-                kaspa_consensus_core::palw::palw_beacon_seed_history_window_epochs(&self.palw_batch_admission, epoch_len, self.palw_freshness_window_epochs);
+            let window = kaspa_consensus_core::palw::palw_beacon_seed_history_window_epochs(
+                &self.palw_batch_admission,
+                epoch_len,
+                self.palw_freshness_window_epochs,
+            );
             let floor = kaspa_consensus_core::palw::palw_beacon_seed_history_floor(pp_epoch, window);
             self.palw_beacon_store
                 .beacon_seed_history()
@@ -8670,8 +8672,11 @@ impl VirtualStateProcessor {
         // covers that epoch (the c==v clause: the row and the stamp are one derivation).
         {
             let epoch_len = self.palw_epoch_length_daa.max(1);
-            let window =
-                kaspa_consensus_core::palw::palw_beacon_seed_history_window_epochs(&self.palw_batch_admission, epoch_len, self.palw_freshness_window_epochs);
+            let window = kaspa_consensus_core::palw::palw_beacon_seed_history_window_epochs(
+                &self.palw_batch_admission,
+                epoch_len,
+                self.palw_freshness_window_epochs,
+            );
             let pp_seed = self.headers_store.get_header(expected_pruning_point).ok().and_then(|header| {
                 (header.version >= kaspa_consensus_core::constants::PALW_HEADER_VERSION).then_some(header.palw_beacon_seed)
             });

@@ -355,9 +355,7 @@ impl BlockBodyProcessor {
                 .palw_pcpb_store
                 .snapshot_at(snapshot_epoch)
                 .map_err(|e| reject(format!("clause 13: provider snapshot read failed: {e:?}")))?
-                .ok_or_else(|| {
-                    reject(format!("clause 13: no retained provider snapshot for epoch {snapshot_epoch} (fail-closed)"))
-                })?;
+                .ok_or_else(|| reject(format!("clause 13: no retained provider snapshot for epoch {snapshot_epoch} (fail-closed)")))?;
             if commitment.snapshot_root != leaf.provider_snapshot_root || commitment.assignment_root != leaf.assignment_proof_root {
                 return Err(reject("clause 13: leaf-committed PCPB roots disagree with the on-chain snapshot".to_string()));
             }

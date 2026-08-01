@@ -1,7 +1,9 @@
 pub use super::{
     bps::{Bps, TenBps},
     constants::consensus::*,
-    genesis::{COMPUTE_REGISTRY_PALW_GENESIS, DEVNET_GENESIS, GENESIS, GenesisBlock, SIMNET_GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS},
+    genesis::{
+        COMPUTE_REGISTRY_PALW_GENESIS, DEVNET_GENESIS, GENESIS, GenesisBlock, SIMNET_GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS,
+    },
 };
 use crate::{
     BlockLevel, BlueWorkType, KType,
@@ -1459,7 +1461,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_audit_committee_size: 16, // ADR-0040 §5.17.4 (AUTHSET-01) — mirrors PalwParams::auditor_count; inert
     palw_audit_sample_size: 16,    // ADR-0040 §5.17.6 (SAMPLE-01) — inert placeholder; magnitude is a re-genesis calibration
     palw_freshness_window_epochs: 6, // ADR-0045 D3-b — w (mirrors PalwParams::freshness_window_epochs)
-    palw_snapshot_lag_epochs: 2,     // ADR-0045 D3-b — k
+    palw_snapshot_lag_epochs: 2,   // ADR-0045 D3-b — k
     palw_post_commit_delta_epochs: 2, // ADR-0045 D3-b — Δ
     palw_lane_difficulty: crate::palw::LaneDifficultyParams::INERT, // §16.3 (inert placeholder)
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
@@ -1572,7 +1574,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_audit_committee_size: 16, // ADR-0040 §5.17.4 (AUTHSET-01) — mirrors PalwParams::auditor_count; inert
     palw_audit_sample_size: 16,    // ADR-0040 §5.17.6 (SAMPLE-01) — inert placeholder; magnitude is a re-genesis calibration
     palw_freshness_window_epochs: 6, // ADR-0045 D3-b — w (mirrors PalwParams::freshness_window_epochs)
-    palw_snapshot_lag_epochs: 2,     // ADR-0045 D3-b — k
+    palw_snapshot_lag_epochs: 2,   // ADR-0045 D3-b — k
     palw_post_commit_delta_epochs: 2, // ADR-0045 D3-b — Δ
     palw_lane_difficulty: crate::palw::LaneDifficultyParams::INERT, // §16.3 (inert placeholder)
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
@@ -1843,10 +1845,7 @@ pub const PCPB_PALW_PARAMS: Params = Params {
 /// attestations and zero confirmed anchors, so replay of the pre-flag blocks is byte-identical
 /// under both values (see `DnsParams::require_anchor_attestation` for the general rule — on any
 /// net that HAS confirmed anchors, this flips only at a re-genesis).
-pub const PCPB_PALW_DNS_PARAMS: DnsParams = DnsParams {
-    require_anchor_attestation: true,
-    ..COMPUTE_REGISTRY_DNS_PARAMS
-};
+pub const PCPB_PALW_DNS_PARAMS: DnsParams = DnsParams { require_anchor_attestation: true, ..COMPUTE_REGISTRY_DNS_PARAMS };
 
 /// ADR-MA P14 rehearsal DNS economics: the staging (production-scale) shape with the
 /// validator-ENTRY floors at the testnet scale. The rehearsal validates the REGISTRY —
@@ -1938,7 +1937,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_audit_committee_size: 16, // ADR-0040 §5.17.4 (AUTHSET-01) — mirrors PalwParams::auditor_count; inert
     palw_audit_sample_size: 16,    // ADR-0040 §5.17.6 (SAMPLE-01) — inert placeholder; magnitude is a re-genesis calibration
     palw_freshness_window_epochs: 6, // ADR-0045 D3-b — w (mirrors PalwParams::freshness_window_epochs)
-    palw_snapshot_lag_epochs: 2,     // ADR-0045 D3-b — k
+    palw_snapshot_lag_epochs: 2,   // ADR-0045 D3-b — k
     palw_post_commit_delta_epochs: 2, // ADR-0045 D3-b — Δ
     palw_lane_difficulty: crate::palw::LaneDifficultyParams::INERT, // §16.3 (inert placeholder)
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
@@ -1980,7 +1979,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_audit_committee_size: 16, // ADR-0040 §5.17.4 (AUTHSET-01) — mirrors PalwParams::auditor_count; inert
     palw_audit_sample_size: 16,    // ADR-0040 §5.17.6 (SAMPLE-01) — inert placeholder; magnitude is a re-genesis calibration
     palw_freshness_window_epochs: 6, // ADR-0045 D3-b — w (mirrors PalwParams::freshness_window_epochs)
-    palw_snapshot_lag_epochs: 2,     // ADR-0045 D3-b — k
+    palw_snapshot_lag_epochs: 2,   // ADR-0045 D3-b — k
     palw_post_commit_delta_epochs: 2, // ADR-0045 D3-b — Δ
     palw_lane_difficulty: crate::palw::LaneDifficultyParams::INERT, // §16.3 (inert placeholder)
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
@@ -2276,7 +2275,11 @@ mod palw_network_tests {
         assert_ne!(p.genesis.hash, STAGING_MAINNET_PALW_PARAMS.genesis.hash);
         assert_ne!(p.genesis.hash, TESTNET_PARAMS.genesis.hash);
         // D3-b changes the LEAF payload, never the header schema — still a Header-v5 genesis.
-        assert_eq!(p.genesis.version, crate::constants::PALW_COMPUTE_SET_HEADER_VERSION, "Header-v5 re-genesis (leaf moved, not the header)");
+        assert_eq!(
+            p.genesis.version,
+            crate::constants::PALW_COMPUTE_SET_HEADER_VERSION,
+            "Header-v5 re-genesis (leaf moved, not the header)"
+        );
         // Inherited compute-registry shape: fence open, PALW active, acceptance released, real PoW.
         assert_eq!(p.palw_compute_registry_activation_daa_score, 0);
         assert!(p.is_palw_active(0));
@@ -2300,13 +2303,25 @@ mod palw_network_tests {
         // new suffix (as 200→20 and 20→21 did) and update these pins — do not edit them on a
         // running net.
         let dns = p.dns_params.clone().unwrap();
-        assert_eq!(dns.required_work_depth, Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]), "changing this on the live public net breaks IBD replay — re-genesis instead");
-        assert_eq!(dns.required_stake_depth, StakeScore(5000), "changing this on the live public net breaks IBD replay — re-genesis instead");
+        assert_eq!(
+            dns.required_work_depth,
+            Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
+            "changing this on the live public net breaks IBD replay — re-genesis instead"
+        );
+        assert_eq!(
+            dns.required_stake_depth,
+            StakeScore(5000),
+            "changing this on the live public net breaks IBD replay — re-genesis instead"
+        );
         // 2026-08-01 bystander-wedge lesson, carried into the successor net from birth: the
         // emergency Work margin is difficulty-denominated (`emergency_work_margin_for`) and the
         // per-preset absolute addend must stay ZERO — a nonzero absolute re-arms the permanent
         // dead-branch wedge at whichever difficulty makes it unreachable.
-        assert_eq!(dns.emergency_work_margin, BlueWorkType::ZERO, "the Work-margin addend must stay zero (bystander-wedge regression)");
+        assert_eq!(
+            dns.emergency_work_margin,
+            BlueWorkType::ZERO,
+            "the Work-margin addend must stay zero (bystander-wedge regression)"
+        );
         // ...and proposal ③, the root fix: a dead-branch anchor whose own epoch nobody attested
         // can never confirm on this net. Genesis-effective (the flag went live before any
         // attestation existed on the ledger); legacy presets stay `false` for replay compat.
@@ -2365,8 +2380,15 @@ mod palw_network_tests {
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
         );
         // Every preset OUTSIDE the compute-registry lineage keeps the fence closed.
-        for other in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, DEVNET_PARAMS, DEVNET_PALW_PARAMS, SIMNET_PARAMS]
-        {
+        for other in [
+            MAINNET_PARAMS,
+            TESTNET_PARAMS,
+            TESTNET_PALW_PARAMS,
+            STAGING_MAINNET_PALW_PARAMS,
+            DEVNET_PARAMS,
+            DEVNET_PALW_PARAMS,
+            SIMNET_PARAMS,
+        ] {
             assert_eq!(other.palw_compute_registry_activation_daa_score, u64::MAX);
         }
     }

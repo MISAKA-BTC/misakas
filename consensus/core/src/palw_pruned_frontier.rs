@@ -1455,7 +1455,10 @@ impl PalwPruningPointSnapshotPayloadV1 {
         if !self.acommit_registry.windows(2).all(|w| w[0].0.as_bytes() < w[1].0.as_bytes()) {
             return Err(PalwPruningSnapshotError::NonCanonical("a-commit registry"));
         }
-        if self.acommit_registry.iter().any(|(anchor, epoch)| *anchor == Hash64::default() || *epoch < floor || *epoch > pruning_point_epoch)
+        if self
+            .acommit_registry
+            .iter()
+            .any(|(anchor, epoch)| *anchor == Hash64::default() || *epoch < floor || *epoch > pruning_point_epoch)
         {
             return Err(PalwPruningSnapshotError::NonCanonical("a-commit registry window"));
         }
@@ -1863,8 +1866,24 @@ mod tests {
             beacon_seed_history: vec![(9, h(0x91)), (8, h(0x90))],
             // D3-b carries, same deliberate disorder so canonicalization is exercised for both.
             provider_snapshot_history: vec![
-                (9, crate::palw::PalwSnapshotCommitment { snapshot_root: h(0x93), assignment_root: h(0x94), total_bond: 20, provider_count: 2 }),
-                (8, crate::palw::PalwSnapshotCommitment { snapshot_root: h(0x95), assignment_root: h(0x96), total_bond: 10, provider_count: 1 }),
+                (
+                    9,
+                    crate::palw::PalwSnapshotCommitment {
+                        snapshot_root: h(0x93),
+                        assignment_root: h(0x94),
+                        total_bond: 20,
+                        provider_count: 2,
+                    },
+                ),
+                (
+                    8,
+                    crate::palw::PalwSnapshotCommitment {
+                        snapshot_root: h(0x95),
+                        assignment_root: h(0x96),
+                        total_bond: 10,
+                        provider_count: 1,
+                    },
+                ),
             ],
             acommit_registry: vec![(h(0xA2), 9), (h(0xA1), 8)],
             paid_work: vec![

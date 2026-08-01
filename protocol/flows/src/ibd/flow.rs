@@ -11,8 +11,8 @@ use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
     api::BlockValidationFuture,
     block::Block,
-    errors::block::RuleError,
     constants::{PALW_ANTISPAM_HEADER_VERSION, PALW_HEADER_VERSION},
+    errors::block::RuleError,
     header::Header,
     palw_pruned_frontier::{
         MAX_PALW_CHAIN_DERIVED_BUNDLE_BYTES, MAX_PALW_PRUNING_SPAM_SUPPORT_ROWS, PalwChainDerivedAuthBundleV1,

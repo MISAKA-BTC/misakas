@@ -491,8 +491,7 @@ fn dispatch(request: &ParsedRequest, state: &Mutex<BridgeState>, config: &HttpCo
         // Self-serial flow: open (idempotent by a_commit) → poll → post B's signed receipt.
         ("POST", "/palw/v1/pcpb/self-flows") => parse_body().and_then(|v| {
             let chain = chain.as_ref().ok_or("PCPB production needs a chain-facts source")?;
-            let record: crate::pcpb::PcpbSelfFlowRecordV1 =
-                serde_json::from_value(v).map_err(|e| format!("bad PCPB flow: {e}"))?;
+            let record: crate::pcpb::PcpbSelfFlowRecordV1 = serde_json::from_value(v).map_err(|e| format!("bad PCPB flow: {e}"))?;
             // Opening a flow claims seat A for this bond and starts an on-chain anchor lifecycle —
             // it must be the bond's holder speaking (BRIDGE-AUTH-01).
             authenticate(request, state, config, &record.a_bond, now)?;
@@ -500,8 +499,7 @@ fn dispatch(request: &ParsedRequest, state: &Mutex<BridgeState>, config: &HttpCo
             serde_json::to_value(step).map_err(|e| e.to_string())
         }),
         ("GET", "/palw/v1/pcpb/self-flows") => {
-            let (Some(a_commit), Some(bond)) =
-                (query_param(&request.query, "a_commit"), query_param(&request.query, "provider_bond"))
+            let (Some(a_commit), Some(bond)) = (query_param(&request.query, "a_commit"), query_param(&request.query, "provider_bond"))
             else {
                 return (400, json!({ "error": { "message": "missing a_commit or provider_bond" } }));
             };

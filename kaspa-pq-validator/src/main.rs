@@ -857,7 +857,12 @@ async fn palw_status(args: PalwStatusArgs) -> Result<(), String> {
         return Err(format!("network mismatch: node is '{}' but --network is '{expected}'", server.network_id));
     }
     let response = client
-        .get_palw_state(GetPalwStateRequest { batch_id: args.batch_id.clone(), provider_bond_outpoint: args.provider_bond.clone(), pcpb_anchor_epoch: None, pcpb_a_commit: None })
+        .get_palw_state(GetPalwStateRequest {
+            batch_id: args.batch_id.clone(),
+            provider_bond_outpoint: args.provider_bond.clone(),
+            pcpb_anchor_epoch: None,
+            pcpb_a_commit: None,
+        })
         .await
         .map_err(|error| format!("getPalwState failed: {error}"))?;
 

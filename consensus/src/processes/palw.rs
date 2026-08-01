@@ -1041,10 +1041,10 @@ pub fn apply_palw_overlay_effect(
                         what: "acceptance ran without a PCPB context",
                     });
                 };
-                let witness = c.witnesses.get(position).ok_or(PalwOverlayError::LeafPcpbWitnessCountMismatch {
-                    leaves: c.leaves.len(),
-                    witnesses: c.witnesses.len(),
-                })?;
+                let witness = c
+                    .witnesses
+                    .get(position)
+                    .ok_or(PalwOverlayError::LeafPcpbWitnessCountMismatch { leaves: c.leaves.len(), witnesses: c.witnesses.len() })?;
                 let issued = leaf.receipt_v3_issued_epoch;
                 let anchor = if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {
                     leaf.a_commit_epoch
@@ -1069,14 +1069,13 @@ pub fn apply_palw_overlay_effect(
                 // Clause 11, heavy half: the challenge must re-derive under R_{issued} from the
                 // witness's preimage triple — otherwise `issued` is a free declaration and the
                 // freshness window above binds nothing (cached-activation replay, audit H-10).
-                let issued_seed = beacon
-                    .beacon_seed_at(issued)
-                    .map_err(|_| PalwOverlayError::StoreError)?
-                    .ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                let issued_seed = beacon.beacon_seed_at(issued).map_err(|_| PalwOverlayError::StoreError)?.ok_or(
+                    PalwOverlayError::LeafPcpbContextUnresolvable {
                         leaf_index: leaf.leaf_index,
                         epoch: issued,
                         what: "issued-epoch beacon seed",
-                    })?;
+                    },
+                )?;
                 let expected_challenge = kaspa_consensus_core::palw::palw_job_challenge(
                     ctx.network_id,
                     issued,
@@ -1098,32 +1097,28 @@ pub fn apply_palw_overlay_effect(
                         epoch: anchor,
                         what: "anchor predates the snapshot lag",
                     })?;
-                let resolved = ctx
-                    .pcpb_store
-                    .snapshot_at(snapshot_epoch)
-                    .map_err(|_| PalwOverlayError::StoreError)?
-                    .ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                let resolved = ctx.pcpb_store.snapshot_at(snapshot_epoch).map_err(|_| PalwOverlayError::StoreError)?.ok_or(
+                    PalwOverlayError::LeafPcpbContextUnresolvable {
                         leaf_index: leaf.leaf_index,
                         epoch: snapshot_epoch,
                         what: "provider snapshot",
-                    })?;
+                    },
+                )?;
                 let draw_epoch =
                     anchor.checked_add(ctx.post_commit_delta_epochs).ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
                         leaf_index: leaf.leaf_index,
                         epoch: anchor,
                         what: "anchor+Δ overflows",
                     })?;
-                let post_commit_beacon = beacon
-                    .beacon_seed_at(draw_epoch)
-                    .map_err(|_| PalwOverlayError::StoreError)?
-                    .ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                let post_commit_beacon = beacon.beacon_seed_at(draw_epoch).map_err(|_| PalwOverlayError::StoreError)?.ok_or(
+                    PalwOverlayError::LeafPcpbContextUnresolvable {
                         leaf_index: leaf.leaf_index,
                         epoch: draw_epoch,
                         what: "post-commit beacon seed",
-                    })?;
+                    },
+                )?;
                 if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {
-                    let registry_epoch =
-                        ctx.pcpb_store.acommit_epoch(&leaf.a_commit).map_err(|_| PalwOverlayError::StoreError)?;
+                    let registry_epoch = ctx.pcpb_store.acommit_epoch(&leaf.a_commit).map_err(|_| PalwOverlayError::StoreError)?;
                     // `row ≤ declared`: the anchor was on-chain at-or-before the epoch whose `+Δ`
                     // beacon draws B, so that beacon provably post-dates the commitment. (The leaf
                     // cannot claim EARLIER than the row — that direction would let a late anchor
@@ -3015,7 +3010,7 @@ mod tests {
                     &store,
                     &beacon,
                     None,
-            None
+                    None
                 ),
                 Err(PalwOverlayError::LeafMembershipProofInvalid { leaf_index }),
                 "leaf {leaf_index} must not open under leaf {proof_for}'s proof"
@@ -3077,7 +3072,13 @@ mod tests {
         // The proofs are DERIVED from the same ordered hash sequence the root was reduced from, so they
         // verify. The rejection below is therefore attributable to the epoch alone.
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk_with_proofs(skewed_bid, leaves)), &store, &beacon, None, Some(&pcpb_ctx)),
+            apply_palw_overlay_effect(
+                PalwOverlayEffect::LeafChunk(chunk_with_proofs(skewed_bid, leaves)),
+                &store,
+                &beacon,
+                None,
+                Some(&pcpb_ctx)
+            ),
             Err(PalwOverlayError::LeafRegistrationEpochMismatch {
                 leaf_index: 0,
                 leaf_registered_epoch: FIXTURE_REGISTRATION_EPOCH,
@@ -4896,8 +4897,13 @@ mod tests {
         fn self_env(
             fix: &SelfFix,
             acommit_row: Option<(Hash64, u64)>,
-        ) -> (kaspa_database::utils::DbLifetime, std::sync::Arc<kaspa_database::prelude::DB>, DbPalwStore, DbPalwBeaconStore, DbPalwPcpbStore)
-        {
+        ) -> (
+            kaspa_database::utils::DbLifetime,
+            std::sync::Arc<kaspa_database::prelude::DB>,
+            DbPalwStore,
+            DbPalwBeaconStore,
+            DbPalwPcpbStore,
+        ) {
             let (lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
             let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
             let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
@@ -5048,9 +5054,7 @@ pub(crate) mod pcpb_test_support {
     }
 
     /// The acceptance context a staged store implies, with this module's window constants.
-    pub(crate) fn ctx(
-        store: &crate::model::stores::palw_pcpb::DbPalwPcpbStore,
-    ) -> super::PalwPcpbAcceptanceCtx<'_> {
+    pub(crate) fn ctx(store: &crate::model::stores::palw_pcpb::DbPalwPcpbStore) -> super::PalwPcpbAcceptanceCtx<'_> {
         super::PalwPcpbAcceptanceCtx {
             pcpb_store: store,
             network_id: NETWORK_ID,
@@ -5146,8 +5150,7 @@ pub(crate) mod pcpb_test_support {
             leaf.receipt_v3_issued_epoch = self.issued_epoch;
             leaf.receipt_v3_expires_epoch = leaf.expiry_epoch;
             let (job, cred, req) = Self::preimage(leaf.leaf_index);
-            let challenge =
-                palw_job_challenge(NETWORK_ID, self.issued_epoch, &self.issued_seed, &job, &cred, &req, leaf.shape_id);
+            let challenge = palw_job_challenge(NETWORK_ID, self.issued_epoch, &self.issued_seed, &job, &cred, &req, leaf.shape_id);
             leaf.receipt_v3_job_challenge = challenge;
             // Object-V2 requires the leaf's job nullifier to BE its challenge.
             leaf.job_nullifier = challenge;
@@ -5174,10 +5177,8 @@ pub(crate) mod pcpb_test_support {
             db: &std::sync::Arc<kaspa_database::prelude::DB>,
             beacon: &crate::model::stores::palw_beacon::DbPalwBeaconStore,
         ) -> crate::model::stores::palw_pcpb::DbPalwPcpbStore {
-            let store = crate::model::stores::palw_pcpb::DbPalwPcpbStore::new(
-                db.clone(),
-                kaspa_database::prelude::CachePolicy::Count(64),
-            );
+            let store =
+                crate::model::stores::palw_pcpb::DbPalwPcpbStore::new(db.clone(), kaspa_database::prelude::CachePolicy::Count(64));
             self.stage(db, beacon, &store);
             store
         }

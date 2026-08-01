@@ -440,10 +440,7 @@ pub fn build_leaf_chunk(
     let witnesses = leaves
         .iter()
         .map(|l| {
-            witnesses_by_index
-                .get(&l.leaf_index)
-                .cloned()
-                .ok_or(RegistrationError::MissingPcpbWitness { leaf_index: l.leaf_index })
+            witnesses_by_index.get(&l.leaf_index).cloned().ok_or(RegistrationError::MissingPcpbWitness { leaf_index: l.leaf_index })
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -456,7 +453,9 @@ pub fn build_leaf_chunk(
 pub(crate) mod tests {
     /// D3-b: an arity-filler PCPB witness map for chunk-builder tests whose subject is NOT the PCPB
     /// semantics (those live at consensus acceptance). SHAPE-valid only.
-    pub(crate) fn dummy_witnesses(leaves: &[PalwPublicLeafV1]) -> std::collections::BTreeMap<u32, kaspa_consensus_core::palw::PalwLeafPcpbWitnessV1> {
+    pub(crate) fn dummy_witnesses(
+        leaves: &[PalwPublicLeafV1],
+    ) -> std::collections::BTreeMap<u32, kaspa_consensus_core::palw::PalwLeafPcpbWitnessV1> {
         use kaspa_consensus_core::palw::{
             BeaconAssignedProof, PalwAssignmentInterval, PalwDispatchEvidence, PalwLeafPcpbWitnessV1, PalwMerkleMembership,
             PalwProviderSnapshotEntry, SlotAssignmentWitness,
@@ -798,16 +797,25 @@ pub(crate) mod tests {
         let batch = h(0x10);
         // A leaf minted under a DIFFERENT batch id can't go into this chunk.
         let foreign = mine(&m, h(0x99), 0, 0xC0);
-        assert_eq!(build_leaf_chunk(batch, 0, std::slice::from_ref(&foreign), &dummy_witnesses(std::slice::from_ref(&foreign))).unwrap_err(), RegistrationError::BatchIdMismatch(0));
+        assert_eq!(
+            build_leaf_chunk(batch, 0, std::slice::from_ref(&foreign), &dummy_witnesses(std::slice::from_ref(&foreign))).unwrap_err(),
+            RegistrationError::BatchIdMismatch(0)
+        );
         // Two leaves sharing a raw nullifier ⇒ same commitment ⇒ rejected.
         let dup = vec![mine(&m, batch, 0, 0xC0), mine(&m, batch, 1, 0xC0)];
         assert_eq!(build_leaf_chunk(batch, 0, &dup, &dummy_witnesses(&dup)).unwrap_err(), RegistrationError::DuplicateNullifier);
         // An empty input is a malformed batch because membership proofs are derived from the whole
         // batch rather than an individual chunk.
-        assert!(matches!(build_leaf_chunk(batch, 0, &[], &Default::default()).unwrap_err(), RegistrationError::BatchSize { got: 0, .. }));
+        assert!(matches!(
+            build_leaf_chunk(batch, 0, &[], &Default::default()).unwrap_err(),
+            RegistrationError::BatchSize { got: 0, .. }
+        ));
         // A chunk_index past the batch's `ceil(n / 64)` chunks has no leaves to carry.
         let two = vec![mine(&m, batch, 0, 0xC0), mine(&m, batch, 1, 0xC1)];
-        assert_eq!(build_leaf_chunk(batch, 1, &two, &dummy_witnesses(&two)).unwrap_err(), RegistrationError::ChunkIndexOutOfRange { got: 1, chunk_count: 1 });
+        assert_eq!(
+            build_leaf_chunk(batch, 1, &two, &dummy_witnesses(&two)).unwrap_err(),
+            RegistrationError::ChunkIndexOutOfRange { got: 1, chunk_count: 1 }
+        );
     }
 
     /// kaspa-pq ADR-0040 §5.15.4 — the Merkle leaf node binds the leaf's POSITION, and the acceptance

@@ -419,7 +419,12 @@ struct RosterEntry {
 /// by construction; a roster id that is stale or mistyped is still dropped later by
 /// `resolve_attribution` (I-MTP-1), so no path can smuggle an unregistered id into
 /// the scored ledger.
-fn probe_owner(roster: &std::collections::HashMap<String, String>, attr: &Attributor, node_key: &str, user_agent: &str) -> Option<String> {
+fn probe_owner(
+    roster: &std::collections::HashMap<String, String>,
+    attr: &Attributor,
+    node_key: &str,
+    user_agent: &str,
+) -> Option<String> {
     if let Some(owner) = roster.get(node_key) {
         return Some(owner.clone());
     }
@@ -833,10 +838,7 @@ fn cmd_ingest_palw(args: &[String]) -> Result<(), String> {
         ingested += 1;
     }
 
-    println!(
-        "ingested {ingested} C5 replica slot(s) into {} (finality DAA {finality_daa_score})",
-        data_dir.join("facts").display()
-    );
+    println!("ingested {ingested} C5 replica slot(s) into {} (finality DAA {finality_daa_score})", data_dir.join("facts").display());
     if duplicates > 0 {
         println!("  {duplicates} slot(s) skipped: execution nullifier already on file (overlapping re-scan, not new work)");
     }
@@ -900,7 +902,12 @@ mod palw_ingest_tests {
         let text = format!(
             "{}\n{}\n",
             // slots deliberately reversed: B first.
-            leaf_line("testnet-20", 1_000, "p1", &format!("{},{}", slot_json(1, "misakatest:bob", "nb"), slot_json(0, "misakatest:alice", "na"))),
+            leaf_line(
+                "testnet-20",
+                1_000,
+                "p1",
+                &format!("{},{}", slot_json(1, "misakatest:bob", "nb"), slot_json(0, "misakatest:alice", "na"))
+            ),
             leaf_line("testnet-200", 2_000, "p2", &slot_json(0, "misakatest:carol", "nc")),
         );
         let (leaves, finality, wrong_net) = palw_leaves_from_jsonl(&text, "testnet-20", "test").unwrap();

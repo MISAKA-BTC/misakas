@@ -693,16 +693,8 @@ mod tests {
         };
         let max_target: Uint320 = kaspa_consensus_core::config::params::MAX_DIFFICULTY_TARGET.into();
         let a_samples: Vec<(u32, u64)> = vec![(bits, 0), (bits, 1_000), (bits, 2_000), (bits, 3_000)];
-        let ab_samples: Vec<(u32, u64)> = vec![
-            (bits, 0),
-            (bits, 1_000),
-            (bits, 2_000),
-            (bits, 3_000),
-            (bits, 100),
-            (bits, 600),
-            (bits, 1_100),
-            (bits, 1_600),
-        ];
+        let ab_samples: Vec<(u32, u64)> =
+            vec![(bits, 0), (bits, 1_000), (bits, 2_000), (bits, 3_000), (bits, 100), (bits, 600), (bits, 1_100), (bits, 1_600)];
 
         // Flat lane (None): every algo-4 block samples regardless of set — and the algo-3 wild
         // bits stay out (equality would break if they leaked in).
@@ -711,7 +703,8 @@ mod tests {
 
         // Sublane A at full share: ONLY set-A samples, lane interval unchanged. Set B's faster
         // blocks no longer drag the retarget (this differs from `flat` — proof the filter bit).
-        let full_a = lane_bits_from_window(&store, &window, 4, &p, Some(PalwSetSublane { compute_set_id: set_a, target_share_bps: 10_000 }));
+        let full_a =
+            lane_bits_from_window(&store, &window, 4, &p, Some(PalwSetSublane { compute_set_id: set_a, target_share_bps: 10_000 }));
         assert_eq!(full_a, lane_expected_bits(&a_samples, 1_000, 1, 2, 1_000_000, p.genesis_replica_bits, max_target));
         assert_ne!(full_a, flat);
 
@@ -725,8 +718,13 @@ mod tests {
         // A set with no samples in the window: below min_samples ⇒ HOLD at the lane's genesis
         // bits (a fresh set enters at lane genesis difficulty; §12.1 initial-window calibration
         // is governance's lever, not a silent default).
-        let fresh =
-            lane_bits_from_window(&store, &window, 4, &p, Some(PalwSetSublane { compute_set_id: unknown_set, target_share_bps: 5_000 }));
+        let fresh = lane_bits_from_window(
+            &store,
+            &window,
+            4,
+            &p,
+            Some(PalwSetSublane { compute_set_id: unknown_set, target_share_bps: 5_000 }),
+        );
         assert_eq!(fresh, p.genesis_replica_bits);
     }
 }

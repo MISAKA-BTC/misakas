@@ -158,9 +158,7 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             KaspadMessagePayload::RequestNextPalwChainDerivedBundleChunks(_) => {
                 KaspadMessagePayloadType::RequestNextPalwChainDerivedBundleChunks
             }
-            KaspadMessagePayload::RequestPalwComputeRegistryRecords(_) => {
-                KaspadMessagePayloadType::RequestPalwComputeRegistryRecords
-            }
+            KaspadMessagePayload::RequestPalwComputeRegistryRecords(_) => KaspadMessagePayloadType::RequestPalwComputeRegistryRecords,
             KaspadMessagePayload::PalwComputeRegistryRecords(_) => KaspadMessagePayloadType::PalwComputeRegistryRecords,
         }
     }

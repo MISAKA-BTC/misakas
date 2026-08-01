@@ -379,8 +379,7 @@ mod c5_tests {
     /// Two operators with the same facts must produce byte-identical input.
     #[test]
     fn collection_order_does_not_change_the_result() {
-        let rows =
-            vec![work("p2", 1, "gh:bob", "n-4"), work("p1", 0, "gh:alice", "n-1"), work("p1", 1, "gh:bob", "n-2")];
+        let rows = vec![work("p2", 1, "gh:bob", "n-4"), work("p1", 0, "gh:alice", "n-1"), work("p1", 1, "gh:bob", "n-2")];
         let forward = FactStore { llm_replica_work: rows.clone(), ..FactStore::default() };
         let mut reversed_rows = rows;
         reversed_rows.reverse();

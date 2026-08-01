@@ -193,7 +193,9 @@ mod tests {
     /// deliberate, reviewable act rather than the quiet appearance of a collector.
     #[test]
     fn c5_auto_award_stays_closed_until_its_preconditions_are_met() {
-        use crate::rules::{C5_AUTO_AWARD_PRECONDITIONS, c5_is_provisional, c5_points_collection_enabled, c5_token_settlement_enabled};
+        use crate::rules::{
+            C5_AUTO_AWARD_PRECONDITIONS, c5_is_provisional, c5_points_collection_enabled, c5_token_settlement_enabled,
+        };
 
         assert!(c5_points_collection_enabled(), "measuring verified work is on — the chain evidence is perishable");
         assert!(!c5_token_settlement_enabled(), "C5 must not settle tokens while the gates below are open");

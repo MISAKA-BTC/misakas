@@ -3226,12 +3226,7 @@ mod palw_state_wire_tests {
         });
         // A v1-shaped request (no PCPB selector) must still round trip — the added fields are a
         // request-wire bump, and an older peer's bytes stop before them.
-        roundtrip(GetPalwStateRequest {
-            batch_id: None,
-            provider_bond_outpoint: None,
-            pcpb_anchor_epoch: None,
-            pcpb_a_commit: None,
-        });
+        roundtrip(GetPalwStateRequest { batch_id: None, provider_bond_outpoint: None, pcpb_anchor_epoch: None, pcpb_a_commit: None });
         roundtrip(GetPalwStateResponse {
             enabled: true,
             sink: "33".repeat(64),

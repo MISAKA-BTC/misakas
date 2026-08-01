@@ -15,8 +15,7 @@
 //! service + cron around this crate.
 
 use crate::store::{
-    AttestationRow, ChainFixed, FactStore, GhEvent, Identity, IdentityKind, LlmReplicaWork, NodeRecord, Submission,
-    UptimeSample,
+    AttestationRow, ChainFixed, FactStore, GhEvent, Identity, IdentityKind, LlmReplicaWork, NodeRecord, Submission, UptimeSample,
 };
 use misaka_mtp::Stage;
 
@@ -449,7 +448,9 @@ mod palw_replica_tests {
         l.accepted_daa_score = FINAL_DAA + 1;
         let r = run(vec![l], &[("alice", "gh:alice"), ("bob", "gh:bob")]);
         assert!(r.rows.is_empty(), "not buried ⇒ not creditable");
-        assert!(matches!(r.rejected.as_slice(), [Rejected::NotFinal { accepted_daa_score, .. }] if *accepted_daa_score == FINAL_DAA + 1));
+        assert!(
+            matches!(r.rejected.as_slice(), [Rejected::NotFinal { accepted_daa_score, .. }] if *accepted_daa_score == FINAL_DAA + 1)
+        );
     }
 
     /// Receipt-v3 forbids A and B sharing a credential; if the evidence says otherwise it is
@@ -479,7 +480,10 @@ mod palw_replica_tests {
         let r = run(vec![leaf("p1", "alice", "stranger")], &[("alice", "gh:alice")]);
         assert_eq!(r.rows.len(), 1, "alice is paid");
         assert_eq!(r.rows[0].owner_id, "gh:alice");
-        assert!(matches!(r.rejected.as_slice(), [Rejected::UnregisteredOwner { .. }]), "the stranger is reported, not silently skipped");
+        assert!(
+            matches!(r.rejected.as_slice(), [Rejected::UnregisteredOwner { .. }]),
+            "the stranger is reported, not silently skipped"
+        );
     }
 
     /// The collector writes through the `Collector` seam into a real store, and registers the

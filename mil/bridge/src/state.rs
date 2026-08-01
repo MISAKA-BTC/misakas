@@ -1054,8 +1054,7 @@ impl BridgeState {
             // Terminal: the witness exists; a re-post cannot re-roll anything.
             return Ok(self.pcpb_witnesses[challenge].clone());
         }
-        let a_commit_epoch =
-            state.a_commit_epoch.ok_or("the A-commit anchor is not observed on-chain yet — keep polling the flow")?;
+        let a_commit_epoch = state.a_commit_epoch.ok_or("the A-commit anchor is not observed on-chain yet — keep polling the flow")?;
         let record = state.record.clone();
         let a_commit = crate::chain::parse_hash64(a_commit_hex)?;
         let (ctx, _) = chain.pcpb_context(a_commit_epoch, Some(a_commit))?;
@@ -1107,7 +1106,10 @@ impl BridgeState {
         }
         let (ctx, _) = chain.pcpb_context(lease.beacon_epoch, None)?;
         let ctx = ctx.ok_or_else(|| {
-            format!("the node cannot serve the PCPB context for anchor epoch {} yet (draw beacon open, or window aged out)", lease.beacon_epoch)
+            format!(
+                "the node cannot serve the PCPB context for anchor epoch {} yet (draw beacon open, or window aged out)",
+                lease.beacon_epoch
+            )
         })?;
         if hash64_hex(&ctx.anchor_seed) != lease.beacon_seed_hex {
             return Err("node's R_anchor differs from the lease's beacon seed — refusing to build divergent evidence".into());
@@ -1117,8 +1119,8 @@ impl BridgeState {
             requester_credential: crate::chain::parse_hash64(&lease.requester_credential_hex)?,
             request_commitment: crate::chain::parse_hash64(&lease.request_commitment_hex)?,
         };
-        let produced = external_witness(&ctx, lease.network_id, preimage, lease.shape_id, &self.registry_bonds())
-            .map_err(|e| e.to_string())?;
+        let produced =
+            external_witness(&ctx, lease.network_id, preimage, lease.shape_id, &self.registry_bonds()).map_err(|e| e.to_string())?;
         let wire = PcpbProducedWitnessV1::from_produced(&produced, Some(lease_challenge_hex.to_string()));
         self.append(BridgeEvent::PcpbWitnessProduced { produced: wire.clone() }, now_unix_ms)?;
         Ok(wire)
@@ -1311,8 +1313,8 @@ mod tests {
         use crate::pcpb::{PcpbSelfFlowRecordV1, PcpbSelfStepWire};
         use kaspa_consensus_core::palw::{
             PALW_DISPATCH_KIND_BEACON_ASSIGNED, PALW_DISPATCH_KIND_SELF_SERIAL, PALW_PCPB_RECEIPT_MLDSA87_CONTEXT,
-            PalwDispatchLeafFacts, PalwMlDsaVerifier, palw_build_snapshot_witnesses, palw_dispatch_evidence_valid,
-            palw_pcpb_derive_b, palw_provider_id, palw_provider_pk_hash,
+            PalwDispatchLeafFacts, PalwMlDsaVerifier, palw_build_snapshot_witnesses, palw_dispatch_evidence_valid, palw_pcpb_derive_b,
+            palw_provider_id, palw_provider_pk_hash,
         };
         use kaspa_consensus_core::tx::TransactionOutpoint;
         use kaspa_hashes::Hash64;
@@ -1580,9 +1582,7 @@ mod tests {
             );
             // The receipt post is idempotent (terminal state, no re-roll).
             let seq_after = s.seq();
-            let again = s
-                .pcpb_partner_receipt(&a_commit_hex, &record.a_bond, "00", "00", "00", &env.complete, 41)
-                .unwrap();
+            let again = s.pcpb_partner_receipt(&a_commit_hex, &record.a_bond, "00", "00", "00", &env.complete, 41).unwrap();
             assert_eq!(again, produced, "a second receipt post returns the SAME witness without re-verifying");
             assert_eq!(s.seq(), seq_after, "...and journals nothing new");
 
@@ -1652,7 +1652,10 @@ mod tests {
 
             // Idempotent: same lease → same record, no new journal line.
             let seq = s.seq();
-            assert_eq!(s.produce_pcpb_external_witness(&lease.job_challenge_hex, &requester_bond, &env.complete, 7).unwrap(), produced);
+            assert_eq!(
+                s.produce_pcpb_external_witness(&lease.job_challenge_hex, &requester_bond, &env.complete, 7).unwrap(),
+                produced
+            );
             assert_eq!(s.seq(), seq);
 
             // Another provider cannot claim the lease's witness route.
@@ -1707,12 +1710,8 @@ mod tests {
                 observed_daa_score: ANCHOR_EPOCH * 100 + 300,
                 current_epoch: ANCHOR_EPOCH + 1,
             };
-            let mut file = PinnedFactsFile {
-                beacon,
-                bonds: BTreeMap::new(),
-                pcpb_anchors: BTreeMap::new(),
-                pcpb_acommits: BTreeMap::new(),
-            };
+            let mut file =
+                PinnedFactsFile { beacon, bonds: BTreeMap::new(), pcpb_anchors: BTreeMap::new(), pcpb_acommits: BTreeMap::new() };
             file.pcpb_anchors.insert(
                 ANCHOR_EPOCH,
                 PinnedPcpbAnchor {

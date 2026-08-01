@@ -463,8 +463,8 @@ impl PalwStore for DbPalwStore {
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw::{
-        PALW_BATCH_CERTIFICATE_VERSION_V2, PalwBatchLifecycleV1, PalwBatchViewV1, PalwLeafChunkV1,
-        palw_leaf_merkle_proof, palw_leaf_merkle_root,
+        PALW_BATCH_CERTIFICATE_VERSION_V2, PalwBatchLifecycleV1, PalwBatchViewV1, PalwLeafChunkV1, palw_leaf_merkle_proof,
+        palw_leaf_merkle_root,
     };
     use kaspa_consensus_core::palw_pruned_frontier::PalwPrunedActiveBatchV1;
     use kaspa_consensus_core::tx::{ScriptPublicKey, ScriptVec};
