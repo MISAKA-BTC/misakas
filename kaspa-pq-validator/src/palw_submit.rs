@@ -540,12 +540,29 @@ fn verify_payload_owner(kind: PalwSubmitKind, payload: &[u8], payer_public_key: 
 }
 
 fn required_outputs(kind: PalwSubmitKind, payload: &[u8]) -> Result<Vec<TransactionOutput>, String> {
-    if kind != PalwSubmitKind::ProviderBond {
-        return Ok(Vec::new());
+    match kind {
+        PalwSubmitKind::ProviderBond => {
+            let bond: PalwProviderBondPayloadV1 =
+                borsh::from_slice(payload).map_err(|err| format!("cannot decode provider-bond payload after validation: {err}"))?;
+            Ok(vec![TransactionOutput::new(bond.amount_sompi, provider_bond_lock_spk(&bond.owner_public_key))])
+        }
+        // ADR-MA §23.2: a Compute Set proposal LOCKS its bond in output-0, exactly like a provider
+        // bond — `validate_compute_set_proposal_tx` requires output-0 to carry the declared
+        // `proposal_bond_sompi` under `provider_bond_lock_spk(proposer_public_key)`. Without this arm
+        // the carrier was built with no locked output at all, so output-0 was the CHANGE and every
+        // proposal was rejected with `ProposalBondValueMismatch` — i.e. no compute set could be
+        // registered through the shipped tooling on any network. Found by submitting one on
+        // testnet-21 (2026-08-02).
+        PalwSubmitKind::RegistryProposal => {
+            let effect = kaspa_consensus_core::palw_compute_set::parse_palw_compute_registry(0x40, payload)
+                .map_err(|err| format!("cannot decode registry-proposal payload after validation: {err}"))?;
+            let kaspa_consensus_core::palw_compute_set::PalwComputeRegistryEffect::Proposal(proposal) = effect else {
+                return Err("registry-proposal payload did not decode to a proposal effect".to_string());
+            };
+            Ok(vec![TransactionOutput::new(proposal.proposal_bond_sompi, provider_bond_lock_spk(&proposal.proposer_public_key))])
+        }
+        _ => Ok(Vec::new()),
     }
-    let bond: PalwProviderBondPayloadV1 =
-        borsh::from_slice(payload).map_err(|err| format!("cannot decode provider-bond payload after validation: {err}"))?;
-    Ok(vec![TransactionOutput::new(bond.amount_sompi, provider_bond_lock_spk(&bond.owner_public_key))])
 }
 
 fn require_secure_existing_ticket_secret_file(path: &Path) -> Result<(), String> {
@@ -718,6 +735,25 @@ mod tests {
     use kaspa_consensus_core::Hash64;
     use kaspa_consensus_core::network::{NetworkId, NetworkType};
     use kaspa_consensus_core::palw::{PALW_PAYLOAD_VERSION_V1, PALW_PROVIDER_UNBOND_MLDSA87_CONTEXT};
+
+    /// ADR-MA §23.2 regression: a registry proposal must build a LOCKED output-0 carrying the
+    /// declared bond under the proposer's own lock script. This arm was missing, so `palw-submit`
+    /// produced a carrier whose output-0 was the change — consensus rejected every proposal with
+    /// `ProposalBondValueMismatch`, and no compute set could be registered on any network.
+    #[test]
+    fn registry_proposal_locks_its_declared_bond_in_output_zero() {
+        use kaspa_consensus_core::palw_compute_set::validate_compute_set_proposal_tx;
+
+        let payload = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/registry-proposal.borsh"))
+            .expect("fixture: a real registry-proposal payload built by `palw-payload registry-proposal`");
+        let outputs = required_outputs(PalwSubmitKind::RegistryProposal, &payload).expect("proposal payload decodes");
+        assert_eq!(outputs.len(), 1, "exactly the §23.2 bond output is required");
+        // The authority is consensus itself: feed the built outputs to the very validator that
+        // rejected the carrier, so this test fails if either side of the contract moves.
+        validate_compute_set_proposal_tx(&payload, &outputs).expect("consensus accepts the outputs palw-submit builds");
+        // ...and prove the check has teeth: the old behaviour (no locked output) must still fail.
+        assert!(validate_compute_set_proposal_tx(&payload, &[]).is_err(), "an unlocked carrier must not validate");
+    }
 
     fn submit_args(kind: PalwSubmitKind) -> PalwSubmitArgs {
         PalwSubmitArgs {
