@@ -172,6 +172,13 @@ impl PersistentStore {
         Ok(())
     }
 
+    /// Execution nullifiers already on file — `ingest-palw`'s idempotence key. The aggregator
+    /// dedups on the nullifier anyway (P1-9), but a fact file that repeats itself on every
+    /// overlapping re-scan reads as double work to a human auditing it.
+    pub fn llm_replica_nullifiers(&self) -> impl Iterator<Item = &str> {
+        self.llm_replica_work.iter().map(|t| t.row.execution_nullifier.as_str())
+    }
+
     /// **The I-MTP-3 projection.** Build a *fresh* single-epoch
     /// [`FactStore`] containing only activity in `[start_ms, end_ms)`. A node is
     /// included iff it has ≥1 in-window uptime sample, so nodes idle this epoch

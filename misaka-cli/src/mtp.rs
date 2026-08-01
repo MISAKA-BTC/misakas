@@ -902,3 +902,645 @@ pub async fn attestations(ctx: &Ctx, low_hash: Option<&str>, max_blocks: usize, 
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// palw-leaves — accepted C5 replica work, indexed off the finality-buried chain
+// ---------------------------------------------------------------------------
+
+/// One JSONL row per accepted, receipt-resolved PALW leaf — the C5 chain reader.
+///
+/// This is the fetch half that `misaka-mtp-collectors::PalwReplicaCollector` deliberately leaves
+/// out of scope; its output is what `misaka-mtp-service ingest-palw` normalizes into
+/// `llm_replica_work` facts. Three sources are joined, and every byte that decides credit is
+/// either on the chain or verified against a chain commitment:
+///
+/// 1. **Leaf bodies** — leaf-chunk transactions (subnetwork `0x32`) carry every registered
+///    [`PalwPublicLeafV1`], so the walk itself recovers batch/leaf → bonds, reward scripts and
+///    the Receipt-v3 expectations.
+/// 2. **Acceptance** — a chain block's mergeset BLUES are the blocks consensus accepted; an
+///    algo-4 header in that set (palw_proof_type != 0) consumes exactly one leaf. Only chain
+///    blocks at or below the finality coordinate (`virtual DAA − params.finality_depth`) are
+///    joined: a leaf that can still be reorged out must not be scored, and the same coordinate
+///    is re-checked by the collector downstream. Mergeset REDS are counted but never credited —
+///    consensus pays them nothing, so neither does C5.
+/// 3. **Receipts** — the Receipt-DA Object-v2 is off-chain by design (the leaf commits only
+///    `receipt_da_root`). `--da-dir` points at the kaspad `--palw-da-import-dir` spool
+///    (`<root_hex>.palwda`, written by `misaka palw da enqueue`); every object is canonically
+///    decoded and its commitment recomputed against the leaf's chain-committed root, length and
+///    chunk count before a single field is trusted. The k=2 verdict is re-derived from the two
+///    receipt projections (`MatchProjectionV2::first_mismatch`), not read from a flag.
+///
+/// The owner address per slot comes from the leaf's own reward script — the ADR-0019 §8 ML-DSA
+/// P2PKH template whose 64-byte payload is the bond owner's public-key hash — via the same
+/// `extract_script_pub_key_address` the wallet uses, so it is byte-identical to the address a
+/// provider registered with `misaka mtp register`.
+///
+/// Honesty bounds, all reported rather than hidden: a pruned node holds nothing below its
+/// pruning point; a missing `.palwda` object drops that leaf loudly (never silently); re-running
+/// an overlapping range re-emits rows, which is safe because ingest dedups on the execution
+/// nullifier.
+pub async fn palw_leaves(ctx: &Ctx, da_dir: &str, low_hash: Option<&str>, max_blocks: usize, out: Option<&str>) -> CliResult {
+    use kaspa_consensus_core::palw::{PalwLeafChunkV1, PalwPublicLeafV1};
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LEAF_CHUNK;
+    use kaspa_hashes::Hash64;
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    use std::collections::{HashMap, HashSet};
+
+    let network_id: kaspa_consensus_core::network::NetworkId =
+        ctx.network.parse().map_err(|e| CliError::generic(format!("--network '{}' is not a network id: {e}", ctx.network)))?;
+    let params = kaspa_consensus_core::config::params::Params::from(network_id);
+    let prefix = kaspa_addresses::Prefix::from(network_id.network_type);
+    let da_root = std::path::PathBuf::from(da_dir);
+
+    let hostport = match &ctx.rpc {
+        Some(hp) => hp.clone(),
+        None => "127.0.0.1:27210".to_string(),
+    };
+    let timeout = Duration::from_secs(ctx.timeout_secs);
+    let client = crate::node::try_connect(&format!("ws://{hostport}"), timeout)
+        .await
+        .map_err(|e| CliError::connection(format!("cannot reach the node at {hostport}: {e}")))?;
+
+    let info = client.get_server_info().await.map_err(|e| CliError::connection(format!("getServerInfo failed: {e}")))?;
+    let observed_network = info.network_id.to_string();
+    if observed_network != ctx.network {
+        let _ = client.disconnect().await;
+        return Err(CliError::generic(format!(
+            "this node is on '{observed_network}' but --network says '{}'. Leaves are scoped per network, \
+             so indexing here would file C5 work under the wrong one.",
+            ctx.network
+        )));
+    }
+
+    let dag = client.get_block_dag_info().await.map_err(|e| CliError::connection(format!("getBlockDagInfo failed: {e}")))?;
+    // The credit boundary. The collector re-checks every row against this same number, so a
+    // reader bug cannot smuggle an unburied leaf into the ledger.
+    let finality_daa_score = dag.virtual_daa_score.saturating_sub(params.finality_depth);
+    let start = match low_hash {
+        Some(h) => {
+            h.parse::<kaspa_rpc_core::RpcHash>().map_err(|e| CliError::generic(format!("--low-hash is not a block hash: {e}")))?
+        }
+        None => dag.pruning_point_hash,
+    };
+
+    // Pass 1 — one walk collects all three joins' inputs.
+    let mut algo4: HashMap<kaspa_rpc_core::RpcHash, (Hash64, u32)> = HashMap::new();
+    let mut leaves: HashMap<(Hash64, u32), PalwPublicLeafV1> = HashMap::new();
+    let mut chain_blocks: Vec<(kaspa_rpc_core::RpcHash, u64, u64, Vec<kaspa_rpc_core::RpcHash>, Vec<kaspa_rpc_core::RpcHash>)> =
+        Vec::new();
+    let mut scanned_hashes: HashSet<kaspa_rpc_core::RpcHash> = HashSet::new();
+    let mut scanned = 0usize;
+    let mut undecodable_chunks = 0usize;
+    let mut cursor = start;
+    loop {
+        let batch =
+            client.get_blocks(Some(cursor), true, true).await.map_err(|e| CliError::connection(format!("getBlocks failed: {e}")))?;
+        if batch.blocks.len() <= 1 {
+            break;
+        }
+        for b in &batch.blocks {
+            let Some(v) = b.verbose_data.as_ref() else { continue };
+            if !scanned_hashes.insert(v.hash) {
+                continue; // the cursor echo — already recorded
+            }
+            scanned += 1;
+            if b.header.palw_proof_type != 0 {
+                algo4.insert(v.hash, (b.header.palw_batch_id, b.header.palw_leaf_index));
+            }
+            for tx in &b.transactions {
+                if tx.subnetwork_id != SUBNETWORK_ID_PALW_LEAF_CHUNK {
+                    continue;
+                }
+                let chunk: PalwLeafChunkV1 = match borsh::from_slice(&tx.payload) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        undecodable_chunks += 1;
+                        continue;
+                    }
+                };
+                for leaf in chunk.leaves {
+                    leaves.entry((leaf.batch_id, leaf.leaf_index)).or_insert(leaf);
+                }
+            }
+            if v.is_chain_block {
+                chain_blocks.push((
+                    v.hash,
+                    b.header.daa_score,
+                    b.header.timestamp,
+                    v.merge_set_blues_hashes.clone(),
+                    v.merge_set_reds_hashes.clone(),
+                ));
+            }
+        }
+        if scanned >= max_blocks {
+            eprintln!("stopped at the --max-blocks bound of {max_blocks}; the range scanned is NOT the whole chain");
+            break;
+        }
+        let next = match batch.blocks.last().and_then(|b| b.verbose_data.as_ref()).map(|v| v.hash) {
+            Some(h) => h,
+            None => break,
+        };
+        if next == cursor {
+            break;
+        }
+        cursor = next;
+    }
+    let _ = client.disconnect().await;
+
+    // Pass 2 — join acceptance → leaf body → verified receipt object, dropping loudly.
+    let mut lines = Vec::new();
+    let mut accepted_seen: HashSet<(Hash64, u32)> = HashSet::new();
+    let (mut accepted, mut not_buried, mut red_algo4, mut unresolved_blues, mut duplicate_accepts) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut missing_leaf_body = 0usize;
+    let mut legacy_v1 = 0usize;
+    let mut missing_objects: Vec<String> = Vec::new();
+    let mut invalid_objects: Vec<String> = Vec::new();
+    for (chash, cdaa, cts, blues, reds) in &chain_blocks {
+        red_algo4 += reds.iter().filter(|h| algo4.contains_key(h)).count();
+        for h in blues {
+            let Some((batch_id, leaf_index)) = algo4.get(h) else {
+                if !scanned_hashes.contains(h) {
+                    unresolved_blues += 1; // merged blue below the scan floor — its header was never seen
+                }
+                continue;
+            };
+            if *cdaa > finality_daa_score {
+                not_buried += 1;
+                continue;
+            }
+            if !accepted_seen.insert((*batch_id, *leaf_index)) {
+                duplicate_accepts += 1;
+                continue;
+            }
+            accepted += 1;
+            let Some(leaf) = leaves.get(&(*batch_id, *leaf_index)) else {
+                missing_leaf_body += 1;
+                continue;
+            };
+            if leaf.receipt_da_object_version != kaspa_consensus_core::palw::da::PALW_RECEIPT_DA_OBJECT_VERSION_V2 {
+                legacy_v1 += 1; // closed-net legacy receipts carry no Receipt-v3 slots to credit
+                continue;
+            }
+            let root_hex = faster_hex::hex_string(leaf.receipt_da_root.as_byte_slice());
+            let Some(object_bytes) = read_da_object(&da_root, &root_hex) else {
+                missing_objects.push(root_hex);
+                continue;
+            };
+            match palw_leaf_row(
+                &observed_network,
+                finality_daa_score,
+                leaf,
+                &h.to_string(),
+                &chash.to_string(),
+                *cdaa,
+                *cts,
+                &object_bytes,
+                prefix,
+            ) {
+                Ok(row) => lines.push(row.to_string()),
+                Err(reason) => invalid_objects.push(format!("{root_hex}: {reason}")),
+            }
+        }
+    }
+
+    eprintln!(
+        "{} row(s) from {} accepted leaf/leaves over {} chain block(s) in {} scanned block(s) from {} on {} \
+         (finality DAA {}, virtual {})",
+        lines.len(),
+        accepted,
+        chain_blocks.len(),
+        scanned,
+        start,
+        observed_network,
+        finality_daa_score,
+        dag.virtual_daa_score
+    );
+    if not_buried > 0 {
+        eprintln!("  {not_buried} acceptance(s) above the finality coordinate — not creditable YET; re-run once buried");
+    }
+    if missing_leaf_body > 0 {
+        eprintln!(
+            "  {missing_leaf_body} accepted leaf/leaves without a registration in range — the leaf chunk is below the \
+             scan floor (or pruned). Re-run with an earlier --low-hash if the node retains it."
+        );
+    }
+    if !missing_objects.is_empty() {
+        eprintln!(
+            "  {} accepted leaf/leaves dropped: no `<root>.palwda` in {} — copy the DA spool over or point --da-dir at it:",
+            missing_objects.len(),
+            da_root.display()
+        );
+        for r in missing_objects.iter().take(8) {
+            eprintln!("    missing {r}");
+        }
+    }
+    if !invalid_objects.is_empty() {
+        eprintln!("  {} object(s) REFUSED against their chain commitment (never credited):", invalid_objects.len());
+        for r in invalid_objects.iter().take(8) {
+            eprintln!("    {r}");
+        }
+    }
+    if legacy_v1 > 0 {
+        eprintln!("  {legacy_v1} legacy Object-v1 leaf/leaves skipped (closed-net receipts; no Receipt-v3 slots)");
+    }
+    if red_algo4 > 0 {
+        eprintln!("  {red_algo4} algo-4 block(s) merged RED — consensus pays them nothing, so no C5 credit either");
+    }
+    if duplicate_accepts > 0 {
+        eprintln!("  WARNING: {duplicate_accepts} duplicate (batch, leaf) acceptance(s) — a leaf must mint at most once");
+    }
+    if unresolved_blues > 0 {
+        eprintln!("  {unresolved_blues} merged blue(s) below the scan floor were not classifiable (start earlier to cover them)");
+    }
+    if undecodable_chunks > 0 {
+        eprintln!("  WARNING: {undecodable_chunks} leaf-chunk tx(s) did not borsh-decode");
+    }
+    if lines.is_empty() {
+        eprintln!(
+            "  no creditable C5 rows in this range. That is 'none observed here', NOT proof no replica work was \
+             accepted — check the drop counts above and the scan floor."
+        );
+    }
+
+    let body = if lines.is_empty() { String::new() } else { format!("{}\n", lines.join("\n")) };
+    match out {
+        Some(path) => {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| CliError::generic(format!("cannot open '{path}': {e}")))?;
+            f.write_all(body.as_bytes()).map_err(|e| CliError::generic(format!("cannot append '{path}': {e}")))?;
+        }
+        None => print!("{body}"),
+    }
+    Ok(())
+}
+
+/// Locate `<root_hex>.palwda` under the DA spool root or its `incoming/` subdirectory, refusing
+/// anything larger than the consensus object bound.
+fn read_da_object(da_root: &std::path::Path, root_hex: &str) -> Option<Vec<u8>> {
+    let name = format!("{root_hex}.palwda");
+    for candidate in [da_root.join(&name), da_root.join("incoming").join(&name)] {
+        if let Ok(bytes) = std::fs::read(&candidate) {
+            if bytes.len() <= kaspa_consensus_core::palw::da::PALW_DA_MAX_OBJECT_BYTES {
+                return Some(bytes);
+            }
+        }
+    }
+    None
+}
+
+/// Build one output row from an accepted leaf and its Receipt-DA Object-v2 bytes, or say exactly
+/// why the object cannot be trusted. Pure — this is the verification seam the tests pin.
+///
+/// Nothing from the object is used before it survives: canonical decode, commitment (root, length,
+/// chunk count) against the leaf's chain-committed values, leaf/batch/bond binding, slot shape
+/// (A=0 / B=1), envelope↔receipt credential agreement, and the job challenge the leaf pinned at
+/// registration. The k=2 verdict is then re-derived from the two projections.
+#[allow(clippy::too_many_arguments)]
+fn palw_leaf_row(
+    network: &str,
+    finality_daa_score: u64,
+    leaf: &kaspa_consensus_core::palw::PalwPublicLeafV1,
+    minted_block: &str,
+    accepting_block: &str,
+    accepted_daa_score: u64,
+    completed_at_ms: u64,
+    object_bytes: &[u8],
+    prefix: kaspa_addresses::Prefix,
+) -> Result<Value, String> {
+    use kaspa_consensus::processes::palw_da::decode_canonical_palw_receipt_da_object_v2;
+    use kaspa_consensus_core::palw::da::{PALW_RECEIPT_DA_OBJECT_VERSION_V2, palw_receipt_da_commitment};
+
+    let object = decode_canonical_palw_receipt_da_object_v2(object_bytes)
+        .map_err(|e| format!("object does not decode canonically: {e:?}"))?;
+    let commitment = palw_receipt_da_commitment(PALW_RECEIPT_DA_OBJECT_VERSION_V2, object_bytes)
+        .map_err(|e| format!("object commitment: {e:?}"))?;
+    if commitment.root != leaf.receipt_da_root
+        || commitment.object_len != leaf.receipt_da_object_len
+        || commitment.chunk_count != leaf.receipt_da_chunk_count
+    {
+        return Err("object commitment does not match the leaf's receipt_da_root/len/chunks".into());
+    }
+    if object.batch_id != leaf.batch_id
+        || object.leaf_index != leaf.leaf_index
+        || object.provider_a_bond != leaf.provider_a_bond
+        || object.provider_b_bond != leaf.provider_b_bond
+        || object.provider_a_bond == object.provider_b_bond
+    {
+        return Err("object binding (batch/leaf/bonds) does not match the leaf".into());
+    }
+    let (a, b) = (&object.receipt_a, &object.receipt_b);
+    if a.replica_slot != 0 || b.replica_slot != 1 {
+        return Err("receipt slots are not the canonical A=0 / B=1 pairing".into());
+    }
+    if object.envelope_a.signer_credential_id != a.worker_credential_id
+        || object.envelope_b.signer_credential_id != b.worker_credential_id
+        || object.envelope_a.body_digest != a.signing_digest()
+        || object.envelope_b.body_digest != b.signing_digest()
+    {
+        return Err("envelope does not bind its receipt (credential/digest)".into());
+    }
+    if a.projection.job_challenge != leaf.receipt_v3_job_challenge || b.projection.job_challenge != leaf.receipt_v3_job_challenge {
+        return Err("receipt job challenge does not match the challenge the leaf pinned".into());
+    }
+    let k2_matched = a.projection.first_mismatch(&b.projection).is_none();
+
+    let owner_a = kaspa_txscript::extract_script_pub_key_address(&leaf.provider_a_reward_script, prefix)
+        .map_err(|e| format!("provider A reward script is not addressable: {e}"))?;
+    let owner_b = kaspa_txscript::extract_script_pub_key_address(&leaf.provider_b_reward_script, prefix)
+        .map_err(|e| format!("provider B reward script is not addressable: {e}"))?;
+
+    let slot = |r: &misaka_palw::receipt_v3::ComputeReceiptV3,
+                bond: &kaspa_consensus_core::tx::TransactionOutpoint,
+                owner: &kaspa_addresses::Address| {
+        json!({
+            "replica_slot": r.replica_slot,
+            "execution_nullifier": r.execution_nullifier.to_string(),
+            "worker_credential_id": r.worker_credential_id.to_string(),
+            "provider_bond": format!("{}:{}", bond.transaction_id, bond.index),
+            "owner_address": owner.to_string(),
+        })
+    };
+    Ok(json!({
+        "network": network,
+        "finality_daa_score": finality_daa_score,
+        "batch_id": leaf.batch_id.to_string(),
+        "leaf_index": leaf.leaf_index,
+        "minted_block": minted_block,
+        "accepting_block": accepting_block,
+        "accepted_daa_score": accepted_daa_score,
+        "completed_at_ms": completed_at_ms,
+        "pair_id": object.matched_pair_id.to_string(),
+        "job_challenge": a.projection.job_challenge.to_string(),
+        "k2_matched": k2_matched,
+        "canonical_compute_units": a.projection.canonical_compute_units,
+        "slots": [slot(a, &leaf.provider_a_bond, &owner_a), slot(b, &leaf.provider_b_bond, &owner_b)],
+    }))
+}
+
+#[cfg(test)]
+mod palw_leaves_tests {
+    use super::palw_leaf_row;
+    use kaspa_addresses::{Address, Prefix, Version};
+    use kaspa_consensus::processes::palw_da::{PalwReceiptDaObjectV2, palw_receipt_da_object_v2_bytes};
+    use kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk;
+    use kaspa_consensus_core::palw::PalwPublicLeafV1;
+    use kaspa_consensus_core::palw::da::{
+        PALW_RECEIPT_DA_OBJECT_VERSION_V2, PalwProviderSessionAuthorizationV1, palw_receipt_da_commitment,
+    };
+    use kaspa_consensus_core::tx::TransactionOutpoint;
+    use kaspa_hashes::Hash64;
+    use misaka_palw::receipt_v3::{
+        ComputeReceiptV3, ImplementationTelemetryV3, MLDSA87_ALGORITHM_ID, MatchProjectionV2, RECEIPT_V3_VERSION, SignedEnvelopeV3,
+    };
+
+    fn h(byte: u8) -> Hash64 {
+        Hash64::from_bytes([byte; 64])
+    }
+
+    fn projection() -> MatchProjectionV2 {
+        MatchProjectionV2 {
+            compute_set_id: h(0x22),
+            job_challenge: h(0x33),
+            output_commitment: h(0x44),
+            schedule_root: h(0x55),
+            execution_root: h(0x66),
+            route_root: h(0x77),
+            state_root: h(0x88),
+            canonical_compute_units: 781_556,
+            token_count: 6,
+            stop_reason: 0,
+        }
+    }
+
+    fn receipt(slot: u8, credential: Hash64, nullifier: Hash64, projection: MatchProjectionV2) -> ComputeReceiptV3 {
+        ComputeReceiptV3 {
+            receipt_version: RECEIPT_V3_VERSION,
+            network_id: h(0x11),
+            projection,
+            telemetry: ImplementationTelemetryV3 { runtime_class_id: [slot; 32], runtime_manifest_hash: [slot + 1; 32] },
+            worker_credential_id: credential,
+            replica_slot: slot,
+            execution_nullifier: nullifier,
+            issued_epoch: 10,
+            expires_epoch: 20,
+        }
+    }
+
+    fn envelope(receipt: &ComputeReceiptV3) -> SignedEnvelopeV3 {
+        SignedEnvelopeV3 {
+            body_digest: receipt.signing_digest(),
+            algorithm: MLDSA87_ALGORITHM_ID,
+            signer_credential_id: receipt.worker_credential_id,
+            signature: vec![0u8; 8],
+        }
+    }
+
+    fn auth(bond: TransactionOutpoint) -> PalwProviderSessionAuthorizationV1 {
+        PalwProviderSessionAuthorizationV1 {
+            version: 1,
+            network_id: 0,
+            provider_bond: bond,
+            owner_public_key: Vec::new(),
+            session_public_key: Vec::new(),
+            valid_from_epoch: 0,
+            valid_until_epoch: 0,
+            authorization_nonce: h(0x00),
+            signature: Vec::new(),
+        }
+    }
+
+    /// A leaf and the canonical Object-v2 bytes that really commit to it (root/len/chunks derived,
+    /// not invented) — the same construction path `palw da enqueue` validates.
+    fn fixture(receipt_b: Option<ComputeReceiptV3>) -> (PalwPublicLeafV1, Vec<u8>) {
+        let bond_a = TransactionOutpoint::new(h(0x0A), 0);
+        let bond_b = TransactionOutpoint::new(h(0x0B), 0);
+        let a = receipt(0, h(0xA1), h(0xEA), projection());
+        let b = receipt_b.unwrap_or_else(|| receipt(1, h(0xB1), h(0xEB), projection()));
+        let object = PalwReceiptDaObjectV2 {
+            version: PALW_RECEIPT_DA_OBJECT_VERSION_V2,
+            network_id: h(0x11),
+            batch_id: h(0x02),
+            leaf_index: 7,
+            provider_a_bond: bond_a,
+            provider_b_bond: bond_b,
+            envelope_a: envelope(&a),
+            envelope_b: envelope(&b),
+            receipt_a: a,
+            receipt_b: b,
+            session_authorization_a: auth(bond_a),
+            session_authorization_b: auth(bond_b),
+            matched_pair_id: h(0xCC),
+        };
+        let bytes = palw_receipt_da_object_v2_bytes(&object).expect("canonical object");
+        let commitment = palw_receipt_da_commitment(PALW_RECEIPT_DA_OBJECT_VERSION_V2, &bytes).expect("commitment");
+        let leaf = PalwPublicLeafV1 {
+            version: 3,
+            batch_id: h(0x02),
+            leaf_index: 7,
+            job_nullifier: h(0x33),
+            ticket_nullifier_commitment: h(0x01),
+            model_profile_id: h(0x03),
+            runtime_class_id: h(0x04),
+            shape_id: 1,
+            quantum_count: 1,
+            proof_type: 1,
+            provider_a_bond: bond_a,
+            provider_b_bond: bond_b,
+            provider_a_reward_script: p2pkh_mldsa87_spk(&[0xAA; 64]),
+            provider_b_reward_script: p2pkh_mldsa87_spk(&[0xBB; 64]),
+            ticket_authority_pk_hash: h(0x05),
+            private_match_commitment: h(0x06),
+            receipt_da_object_version: PALW_RECEIPT_DA_OBJECT_VERSION_V2,
+            receipt_da_root: commitment.root,
+            receipt_da_object_len: commitment.object_len,
+            receipt_da_chunk_count: commitment.chunk_count,
+            receipt_v3_compute_set_id: h(0x22),
+            receipt_v3_job_challenge: h(0x33),
+            receipt_v3_issued_epoch: 10,
+            receipt_v3_expires_epoch: 20,
+            registered_epoch: 11,
+            activation_epoch: 12,
+            expiry_epoch: 20,
+            leaf_bond_sompi: 1,
+        };
+        (leaf, bytes)
+    }
+
+    fn row(leaf: &PalwPublicLeafV1, bytes: &[u8]) -> Result<serde_json::Value, String> {
+        palw_leaf_row("testnet-20", 1_000, leaf, "minted", "accepting", 900, 1_700_000_000_000, bytes, Prefix::Testnet)
+    }
+
+    /// The happy path: one row, both slots in A=0/B=1 order, every credit-deciding field carried
+    /// verbatim, and the owner address derived from the leaf's own reward-script payload.
+    #[test]
+    fn an_accepted_leaf_becomes_one_row_with_both_slots() {
+        let (leaf, bytes) = fixture(None);
+        let row = row(&leaf, &bytes).expect("row");
+        assert_eq!(row["network"], "testnet-20");
+        assert_eq!(row["leaf_index"], 7);
+        assert_eq!(row["k2_matched"], true);
+        assert_eq!(row["canonical_compute_units"], 781_556);
+        assert_eq!(row["pair_id"], h(0xCC).to_string());
+        assert_eq!(row["job_challenge"], h(0x33).to_string());
+        let slots = row["slots"].as_array().expect("slots");
+        assert_eq!(slots.len(), 2);
+        assert_eq!(slots[0]["replica_slot"], 0);
+        assert_eq!(slots[1]["replica_slot"], 1);
+        assert_eq!(slots[0]["execution_nullifier"], h(0xEA).to_string());
+        assert_eq!(slots[1]["execution_nullifier"], h(0xEB).to_string());
+        assert_eq!(slots[0]["provider_bond"], format!("{}:0", h(0x0A)));
+        // The owner address is the reward script's 64-byte ML-DSA P2PKH payload, encoded exactly
+        // as the wallet (and therefore `misaka mtp register`) encodes it.
+        assert_eq!(slots[0]["owner_address"], Address::new(Prefix::Testnet, Version::PubKeyHashMlDsa87, &[0xAA; 64]).to_string());
+        assert_eq!(slots[1]["owner_address"], Address::new(Prefix::Testnet, Version::PubKeyHashMlDsa87, &[0xBB; 64]).to_string());
+    }
+
+    /// A diverging projection is REPORTED as k2_matched=false, not hidden and not an error — the
+    /// collector downstream is the one that refuses to credit it.
+    #[test]
+    fn a_diverging_projection_reports_k2_false() {
+        let mut divergent = projection();
+        divergent.token_count = 7;
+        let (leaf, bytes) = fixture(Some(receipt(1, h(0xB1), h(0xEB), divergent)));
+        let row = row(&leaf, &bytes).expect("row still emitted");
+        assert_eq!(row["k2_matched"], false);
+    }
+
+    /// An object that does not hash to the leaf's chain-committed root is refused wholesale — a
+    /// spool file cannot substitute receipts for the ones the leaf committed to.
+    #[test]
+    fn an_object_failing_the_chain_commitment_is_refused() {
+        let (mut leaf, bytes) = fixture(None);
+        leaf.receipt_da_root = h(0xFF);
+        let err = row(&leaf, &bytes).unwrap_err();
+        assert!(err.contains("commitment"), "{err}");
+    }
+
+    /// An object for a DIFFERENT leaf (right root file name, wrong binding) is refused.
+    #[test]
+    fn an_object_bound_to_another_leaf_is_refused() {
+        let (mut leaf, bytes) = fixture(None);
+        leaf.leaf_index = 9;
+        let err = row(&leaf, &bytes).unwrap_err();
+        assert!(err.contains("binding"), "{err}");
+    }
+
+    /// Receipt slots must be the canonical A=0 / B=1 pairing; anything else is evidence we do not
+    /// understand.
+    #[test]
+    fn a_non_canonical_slot_pairing_is_refused() {
+        let (leaf, _) = fixture(None);
+        let a = receipt(1, h(0xA1), h(0xEA), projection());
+        let b = receipt(0, h(0xB1), h(0xEB), projection());
+        let object = PalwReceiptDaObjectV2 {
+            version: PALW_RECEIPT_DA_OBJECT_VERSION_V2,
+            network_id: h(0x11),
+            batch_id: h(0x02),
+            leaf_index: 7,
+            provider_a_bond: leaf.provider_a_bond,
+            provider_b_bond: leaf.provider_b_bond,
+            envelope_a: envelope(&a),
+            envelope_b: envelope(&b),
+            receipt_a: a,
+            receipt_b: b,
+            session_authorization_a: auth(leaf.provider_a_bond),
+            session_authorization_b: auth(leaf.provider_b_bond),
+            matched_pair_id: h(0xCC),
+        };
+        let bytes = palw_receipt_da_object_v2_bytes(&object).expect("canonical object");
+        let commitment = palw_receipt_da_commitment(PALW_RECEIPT_DA_OBJECT_VERSION_V2, &bytes).expect("commitment");
+        let mut leaf = leaf;
+        leaf.receipt_da_root = commitment.root;
+        leaf.receipt_da_object_len = commitment.object_len;
+        leaf.receipt_da_chunk_count = commitment.chunk_count;
+        let err = row(&leaf, &bytes).unwrap_err();
+        assert!(err.contains("A=0 / B=1"), "{err}");
+    }
+
+    /// An envelope naming a different credential than its receipt is internally inconsistent
+    /// evidence — refused before any field is trusted.
+    #[test]
+    fn an_envelope_credential_mismatch_is_refused() {
+        let (leaf, _) = fixture(None);
+        let a = receipt(0, h(0xA1), h(0xEA), projection());
+        let b = receipt(1, h(0xB1), h(0xEB), projection());
+        let mut envelope_a = envelope(&a);
+        envelope_a.signer_credential_id = h(0x99);
+        let object = PalwReceiptDaObjectV2 {
+            version: PALW_RECEIPT_DA_OBJECT_VERSION_V2,
+            network_id: h(0x11),
+            batch_id: h(0x02),
+            leaf_index: 7,
+            provider_a_bond: leaf.provider_a_bond,
+            provider_b_bond: leaf.provider_b_bond,
+            envelope_a,
+            envelope_b: envelope(&b),
+            receipt_a: a,
+            receipt_b: b,
+            session_authorization_a: auth(leaf.provider_a_bond),
+            session_authorization_b: auth(leaf.provider_b_bond),
+            matched_pair_id: h(0xCC),
+        };
+        let bytes = palw_receipt_da_object_v2_bytes(&object).expect("canonical object");
+        let commitment = palw_receipt_da_commitment(PALW_RECEIPT_DA_OBJECT_VERSION_V2, &bytes).expect("commitment");
+        let mut leaf = leaf;
+        leaf.receipt_da_root = commitment.root;
+        leaf.receipt_da_object_len = commitment.object_len;
+        leaf.receipt_da_chunk_count = commitment.chunk_count;
+        let err = row(&leaf, &bytes).unwrap_err();
+        assert!(err.contains("envelope"), "{err}");
+    }
+
+    /// The challenge the leaf pinned at registration is the one the receipts must answer.
+    #[test]
+    fn a_receipt_answering_a_different_challenge_is_refused() {
+        let (mut leaf, bytes) = fixture(None);
+        leaf.receipt_v3_job_challenge = h(0x55);
+        let err = row(&leaf, &bytes).unwrap_err();
+        assert!(err.contains("challenge"), "{err}");
+    }
+}

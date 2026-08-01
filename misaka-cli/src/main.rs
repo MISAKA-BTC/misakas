@@ -246,6 +246,30 @@ enum MtpCmd {
         #[arg(long)]
         out: Option<String>,
     },
+    /// Index accepted PALW replica work (C5) off the finality-buried selected chain (JSONL).
+    ///
+    /// Walks blocks for leaf-chunk registrations and algo-4 acceptances, then resolves each
+    /// accepted leaf's Receipt-DA Object-v2 from --da-dir and verifies it against the leaf's
+    /// chain-committed receipt_da_root before trusting a byte of it. One line per resolved leaf:
+    /// the accepting chain block, both replica slots (execution nullifier, worker credential,
+    /// bond, owner address) and the node-side k=2 verdict. Feed the output to
+    /// `misaka-mtp-service ingest-palw`.
+    PalwLeaves {
+        /// Directory holding `<receipt_da_root>.palwda` Object-v2 files — the kaspad
+        /// `--palw-da-import-dir` spool root (its `incoming/` subdirectory is also searched).
+        #[arg(long)]
+        da_dir: String,
+        /// Start the walk here. Defaults to the node's pruning point — the oldest height it can
+        /// answer for.
+        #[arg(long)]
+        low_hash: Option<String>,
+        /// Stop after scanning this many blocks.
+        #[arg(long, default_value_t = 50_000)]
+        max_blocks: usize,
+        /// Append the JSONL here instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Look up an identity's testnet points from the MTP service (self-serve view).
     /// The numbers are a mirror of signed ledgers — use `verify-epoch` for the proof.
     Points {
@@ -876,6 +900,9 @@ async fn main() -> std::process::ExitCode {
         Command::Mtp(MtpCmd::Validators { out }) => mtp::validators(&ctx, out.as_deref()).await,
         Command::Mtp(MtpCmd::Attestations { low_hash, max_blocks, out }) => {
             mtp::attestations(&ctx, low_hash.as_deref(), max_blocks, out.as_deref()).await
+        }
+        Command::Mtp(MtpCmd::PalwLeaves { da_dir, low_hash, max_blocks, out }) => {
+            mtp::palw_leaves(&ctx, &da_dir, low_hash.as_deref(), max_blocks, out.as_deref()).await
         }
         Command::Mtp(MtpCmd::Register { invitation, key_file, out }) => mtp::register(&ctx, &invitation, &key_file, out.as_deref()),
         Command::Mtp(MtpCmd::Award { file, epoch, network, id, category, points, severity, first_report, fix_accepted, note }) => {

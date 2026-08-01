@@ -7,9 +7,9 @@
 //! and is wired per-deployment on top of the fact store this binary manages.
 //!
 //! ```text
-//! misaka-mtp-service serve      --data-dir DIR --operator-key FILE --listen ADDR [--network testnet-200]
+//! misaka-mtp-service serve      --data-dir DIR --operator-key FILE --listen ADDR [--network testnet-20]
 //! misaka-mtp-service run-epoch  --data-dir DIR --operator-key FILE \
-//!                               --epoch N --start RFC3339 --end RFC3339 [--network testnet-200]
+//!                               --epoch N --start RFC3339 --end RFC3339 [--network testnet-20]
 //! ```
 //!
 //! `serve` opens the signed-ledger archive read-only and serves the D3 query API.
@@ -24,7 +24,9 @@ use kaspa_addresses::Prefix;
 use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed};
 use misaka_mtp::{Rules, Stage};
 use misaka_mtp_collectors::EpochWindow;
-use misaka_mtp_collectors::{AttestationRow, Identity, IdentityKind, NodeRecord, UptimeSample};
+use misaka_mtp_collectors::{
+    AcceptedPalwLeaf, AttestationRow, Identity, IdentityKind, NodeRecord, PalwReplicaCollector, Rejected, ReplicaSlot, UptimeSample,
+};
 use misaka_mtp_service::{Attributor, HttpState, LedgerArchive, NonceStore, PersistentStore, RegistrationRecord, config, epoch};
 
 const USAGE: &str = "\
@@ -37,12 +39,13 @@ USAGE:
   misaka-mtp-service register    --data-dir DIR --request FILE
   misaka-mtp-service ingest-probes --data-dir DIR --file PROBES.jsonl --roster ROSTER.jsonl [--network NET]
   misaka-mtp-service ingest-attestations --data-dir DIR --file ATT.jsonl --roster VROSTER.jsonl [--bonds BONDS.jsonl] [--network NET]
+  misaka-mtp-service ingest-palw --data-dir DIR --file LEAVES.jsonl [--network NET]
 
 COMMON:
   --data-dir DIR        root data dir: <DIR>/facts (fact store), <DIR>/points (signed ledger archive),
                         <DIR>/registrations.jsonl (attribution registry)
   --operator-key FILE   dedicated MTP operator ML-DSA-87 seed file (0600, D7)
-  --network NET         scored testnet network name (default: testnet-200)
+  --network NET         scored testnet network name (default: testnet-20)
 
 serve:
   --listen ADDR         query-http bind address, e.g. 127.0.0.1:8790
@@ -72,6 +75,7 @@ fn run() -> Result<(), String> {
         Some("register") => cmd_register(&args[1..]),
         Some("ingest-probes") => cmd_ingest_probes(&args[1..]),
         Some("ingest-attestations") => cmd_ingest_attestations(&args[1..]),
+        Some("ingest-palw") => cmd_ingest_palw(&args[1..]),
         Some("-h") | Some("--help") | Some("help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -117,7 +121,7 @@ impl Flags {
 }
 
 fn network_or_default(flags: &Flags) -> Result<String, String> {
-    let net = flags.opt("network").unwrap_or("testnet-200").to_string();
+    let net = flags.opt("network").unwrap_or("testnet-20").to_string();
     if config::stage_for(&net).is_none() {
         return Err(format!(
             "network '{net}' is not in the testnet scope {:?} (D1)",
@@ -648,4 +652,244 @@ fn cmd_ingest_attestations(args: &[String]) -> Result<(), String> {
         println!("  NOTE: no --bonds given, so every row is slashed=false. Pass `misaka mtp validators` output to fill it.");
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// ingest-palw — accepted C5 replica work becomes llm_replica_work facts
+// ---------------------------------------------------------------------------
+
+/// One slot of a `misaka mtp palw-leaves` line.
+#[derive(serde::Deserialize)]
+struct PalwSlotLine {
+    replica_slot: u8,
+    execution_nullifier: String,
+    worker_credential_id: String,
+    provider_bond: String,
+    owner_address: String,
+}
+
+/// One line of `misaka mtp palw-leaves` output.
+#[derive(serde::Deserialize)]
+struct PalwLeafLine {
+    network: String,
+    /// The finality coordinate the reader scanned under. The collector re-checks every row
+    /// against it, so a buggy or lying reader cannot smuggle an unburied leaf into the ledger.
+    finality_daa_score: u64,
+    batch_id: String,
+    leaf_index: u32,
+    accepting_block: String,
+    accepted_daa_score: u64,
+    completed_at_ms: u64,
+    pair_id: String,
+    job_challenge: String,
+    k2_matched: bool,
+    canonical_compute_units: u64,
+    slots: Vec<PalwSlotLine>,
+}
+
+/// Parse a leaves JSONL into collector inputs: `(leaves, finality, wrong_net)`.
+///
+/// The finality coordinate is the MAX the file asserts: finality only moves forward, so rows from
+/// an older scan (asserted under a lower coordinate) still satisfy `accepted <= finality`, while a
+/// row claiming acceptance above every scan's coordinate is exactly the NotFinal drop the
+/// collector exists to refuse. Slots are sorted A=0 / B=1 — the reader already emits them that
+/// way, but the shared-credential refusal reads `slots[0]`/`slots[1]`, so ordering is a contract,
+/// not a nicety.
+fn palw_leaves_from_jsonl(text: &str, network: &str, source: &str) -> Result<(Vec<AcceptedPalwLeaf>, u64, usize), String> {
+    let mut leaves = Vec::new();
+    let mut finality = 0u64;
+    let mut wrong_net = 0usize;
+    for (i, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let l: PalwLeafLine = serde_json::from_str(line).map_err(|e| format!("{source}:{}: malformed leaf row: {e}", i + 1))?;
+        if l.network != network {
+            wrong_net += 1;
+            continue;
+        }
+        finality = finality.max(l.finality_daa_score);
+        let mut slots: Vec<ReplicaSlot> = l
+            .slots
+            .into_iter()
+            .map(|s| ReplicaSlot {
+                replica_slot: s.replica_slot,
+                execution_nullifier: s.execution_nullifier,
+                worker_credential_id: s.worker_credential_id,
+                provider_bond: s.provider_bond,
+                owner_address: s.owner_address,
+            })
+            .collect();
+        slots.sort_by_key(|s| s.replica_slot);
+        leaves.push(AcceptedPalwLeaf {
+            batch_id: l.batch_id,
+            leaf_index: l.leaf_index,
+            accepting_block: l.accepting_block,
+            accepted_daa_score: l.accepted_daa_score,
+            completed_at_ms: l.completed_at_ms,
+            pair_id: l.pair_id,
+            job_challenge: l.job_challenge,
+            k2_matched: l.k2_matched,
+            canonical_compute_units: l.canonical_compute_units,
+            slots,
+        });
+    }
+    Ok((leaves, finality, wrong_net))
+}
+
+/// `ingest-palw` — normalize `misaka mtp palw-leaves` output into C5 `llm_replica_work` facts.
+///
+/// The credit rules run in exactly one place — [`PalwReplicaCollector::normalize`], the same code
+/// the pipeline tests pin — and the owner seam is the registration registry's own
+/// `OwnerResolver` impl, so a bond-owner address earns points iff it belongs to a registered
+/// participant. This command only parses, reports every drop with its reason, and appends the
+/// surviving rows idempotently (a row whose execution nullifier is already on file is an
+/// overlapping re-scan, not new work).
+fn cmd_ingest_palw(args: &[String]) -> Result<(), String> {
+    let flags = Flags::parse(args, &[])?;
+    let data_dir = PathBuf::from(flags.get("data-dir")?);
+    let file = flags.get("file")?.to_string();
+    let network = network_or_default(&flags)?;
+
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("cannot read {file}: {e}"))?;
+    let (leaves, finality_daa_score, wrong_net) = palw_leaves_from_jsonl(&text, &network, &file)?;
+
+    let attr = Attributor::from_records(load_registrations(&data_dir.join("registrations.jsonl"))?);
+    let report = PalwReplicaCollector { leaves, finality_daa_score, resolver: attr }.normalize();
+
+    let mut store = PersistentStore::load(data_dir.join("facts")).map_err(|e| e.to_string())?;
+    let mut seen: std::collections::HashSet<String> = store.llm_replica_nullifiers().map(str::to_string).collect();
+    let (mut ingested, mut duplicates) = (0usize, 0usize);
+    for row in report.rows {
+        if !seen.insert(row.execution_nullifier.clone()) {
+            duplicates += 1;
+            continue;
+        }
+        store.upsert_identity(Identity { id: row.owner_id.clone(), kind: IdentityKind::Address }).map_err(|e| e.to_string())?;
+        store.append_llm_replica_work(row.completed_at_ms, row).map_err(|e| e.to_string())?;
+        ingested += 1;
+    }
+
+    println!(
+        "ingested {ingested} C5 replica slot(s) into {} (finality DAA {finality_daa_score})",
+        data_dir.join("facts").display()
+    );
+    if duplicates > 0 {
+        println!("  {duplicates} slot(s) skipped: execution nullifier already on file (overlapping re-scan, not new work)");
+    }
+    if wrong_net > 0 {
+        println!("  {wrong_net} row(s) skipped: recorded on a different network than {network}");
+    }
+    if !report.rejected.is_empty() {
+        println!("  {} drop(s), each with its reason (a silent drop would read as \"no work\"):", report.rejected.len());
+        for r in &report.rejected {
+            match r {
+                Rejected::NotMatched { pair_id } => println!("    pair {pair_id}: the k=2 replicas did not reproduce each other"),
+                Rejected::NotFinal { pair_id, accepted_daa_score, finality_daa_score } => println!(
+                    "    pair {pair_id}: accepted at daa {accepted_daa_score}, above the finality coordinate \
+                     {finality_daa_score} — re-scan once buried"
+                ),
+                Rejected::MalformedPair { pair_id, slots } => {
+                    println!("    pair {pair_id}: {slots} slot(s) — a PALW job is exactly two")
+                }
+                Rejected::SharedCredential { pair_id, worker_credential_id } => println!(
+                    "    pair {pair_id}: both slots signed by credential {worker_credential_id} — internally \
+                     inconsistent evidence, refused whole"
+                ),
+                Rejected::UnregisteredOwner { pair_id, owner_address } => println!(
+                    "    pair {pair_id}: {owner_address} was not a registered participant — dropped, never parked \
+                     (registering later must not claim earlier work)"
+                ),
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod palw_ingest_tests {
+    use super::*;
+    use misaka_mtp_collectors::OwnerResolver;
+
+    fn leaf_line(network: &str, finality: u64, pair: &str, slots_json: &str) -> String {
+        format!(
+            r#"{{"network":"{network}","finality_daa_score":{finality},"batch_id":"batch-1","leaf_index":7,
+                "minted_block":"m1","accepting_block":"c1","accepted_daa_score":900,"completed_at_ms":1700000000000,
+                "pair_id":"{pair}","job_challenge":"ch-1","k2_matched":true,"canonical_compute_units":781556,
+                "slots":[{slots_json}]}}"#
+        )
+        .replace('\n', " ")
+    }
+
+    fn slot_json(slot: u8, owner: &str, nullifier: &str) -> String {
+        format!(
+            r#"{{"replica_slot":{slot},"execution_nullifier":"{nullifier}","worker_credential_id":"cred-{slot}",
+                "provider_bond":"bond-{slot}:0","owner_address":"{owner}"}}"#
+        )
+        .replace('\n', " ")
+    }
+
+    /// The DTO carries every credit-deciding field verbatim, sorts slots into the A=0/B=1
+    /// contract even if the file has them reversed, takes the max finality across lines, and
+    /// counts (never silently drops) rows from another network.
+    #[test]
+    fn lines_map_field_for_field_sort_slots_and_scope_by_network() {
+        let text = format!(
+            "{}\n{}\n",
+            // slots deliberately reversed: B first.
+            leaf_line("testnet-20", 1_000, "p1", &format!("{},{}", slot_json(1, "misakatest:bob", "nb"), slot_json(0, "misakatest:alice", "na"))),
+            leaf_line("testnet-200", 2_000, "p2", &slot_json(0, "misakatest:carol", "nc")),
+        );
+        let (leaves, finality, wrong_net) = palw_leaves_from_jsonl(&text, "testnet-20", "test").unwrap();
+        assert_eq!(leaves.len(), 1, "the testnet-200 row is scoped out");
+        assert_eq!(wrong_net, 1);
+        assert_eq!(finality, 1_000, "finality comes from in-scope lines' max");
+        let leaf = &leaves[0];
+        assert_eq!(leaf.pair_id, "p1");
+        assert_eq!(leaf.accepted_daa_score, 900);
+        assert_eq!(leaf.completed_at_ms, 1_700_000_000_000);
+        assert_eq!(leaf.canonical_compute_units, 781_556);
+        assert_eq!((leaf.slots[0].replica_slot, leaf.slots[1].replica_slot), (0, 1), "reversed slots are re-sorted");
+        assert_eq!(leaf.slots[0].owner_address, "misakatest:alice");
+        assert_eq!(leaf.slots[0].execution_nullifier, "na");
+        assert_eq!(leaf.slots[1].provider_bond, "bond-1:0");
+    }
+
+    /// A malformed line is a hard error naming the file and line — a fact file that half-parses
+    /// must not half-ingest.
+    #[test]
+    fn a_malformed_line_names_its_source() {
+        let err = palw_leaves_from_jsonl("{\"network\":42}\n", "testnet-20", "leaves.jsonl").unwrap_err();
+        assert!(err.contains("leaves.jsonl:1"), "{err}");
+    }
+
+    /// End to end through the REAL collector: a parsed line normalizes into one row per slot,
+    /// attributed through the registration registry's own resolver seam.
+    #[test]
+    fn parsed_lines_normalize_through_the_registry_resolver() {
+        let text = leaf_line(
+            "testnet-20",
+            1_000,
+            "p1",
+            &format!("{},{}", slot_json(0, "misakatest:alice", "na"), slot_json(1, "misakatest:stranger", "nb")),
+        );
+        let (leaves, finality, _) = palw_leaves_from_jsonl(&text, "testnet-20", "test").unwrap();
+        let attr = Attributor::from_records(vec![RegistrationRecord {
+            github: "alice".into(),
+            address: "misakatest:alice".into(),
+            pubkey: vec![],
+            claim_token: "t".into(),
+            registered_at_ms: 0,
+        }]);
+        assert_eq!(attr.ledger_id_for_address("misakatest:alice").as_deref(), Some("gh:alice"));
+        let report = PalwReplicaCollector { leaves, finality_daa_score: finality, resolver: attr }.normalize();
+        assert_eq!(report.rows.len(), 1, "alice's slot is credited");
+        assert_eq!(report.rows[0].owner_id, "gh:alice");
+        assert_eq!(report.rows[0].evidence, "c1#batch-1:7", "the row cites the accepting block the line named");
+        assert!(
+            matches!(report.rejected.as_slice(), [Rejected::UnregisteredOwner { owner_address, .. }] if owner_address == "misakatest:stranger"),
+            "the stranger is reported, not silently skipped: {:?}",
+            report.rejected
+        );
+    }
 }
