@@ -66,7 +66,6 @@ impl From<Hash64> for PalwACommitKey {
 /// The two PCPB context column families. Direct (non-block-keyed) rows, selected-chain reconciled.
 #[derive(Clone)]
 pub struct DbPalwPcpbStore {
-    db: Arc<DB>,
     snapshot_history: CachedDbAccess<U64Key, Arc<PalwSnapshotCommitment>>,
     /// The entry set each commitment was built from — a PRODUCER aid (see the prefix-70 doc). Not
     /// consensus data: nothing verifies against it, and its absence costs production help for that
@@ -84,7 +83,6 @@ impl kaspa_utils::mem_size::MemSizeEstimator for PalwProviderSnapshotEntries {}
 impl DbPalwPcpbStore {
     pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
         Self {
-            db: Arc::clone(&db),
             snapshot_history: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwProviderSnapshotHistory.into()),
             snapshot_entries: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwProviderSnapshotEntries.into()),
             acommit: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::PalwACommitRegistry.into()),

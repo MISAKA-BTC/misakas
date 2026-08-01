@@ -375,7 +375,7 @@ impl BlockBodyProcessor {
                     .palw_pcpb_store
                     .acommit_epoch(&leaf.a_commit)
                     .map_err(|e| reject(format!("clause 13: A-commit registry read failed: {e:?}")))?;
-                if !registered.is_some_and(|row| row <= leaf.a_commit_epoch) {
+                if registered.is_none_or(|row| row > leaf.a_commit_epoch) {
                     return Err(reject("clause 13: the leaf's A-commit anchor is not registered at-or-before its epoch".to_string()));
                 }
             }

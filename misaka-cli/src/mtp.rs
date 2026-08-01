@@ -1202,10 +1202,10 @@ pub async fn palw_leaves(ctx: &Ctx, da_dir: &str, low_hash: Option<&str>, max_bl
 fn read_da_object(da_root: &std::path::Path, root_hex: &str) -> Option<Vec<u8>> {
     let name = format!("{root_hex}.palwda");
     for candidate in [da_root.join(&name), da_root.join("incoming").join(&name)] {
-        if let Ok(bytes) = std::fs::read(&candidate) {
-            if bytes.len() <= kaspa_consensus_core::palw::da::PALW_DA_MAX_OBJECT_BYTES {
-                return Some(bytes);
-            }
+        if let Ok(bytes) = std::fs::read(&candidate)
+            && bytes.len() <= kaspa_consensus_core::palw::da::PALW_DA_MAX_OBJECT_BYTES
+        {
+            return Some(bytes);
         }
     }
     None

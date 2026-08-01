@@ -1123,7 +1123,7 @@ pub fn apply_palw_overlay_effect(
                     // beacon draws B, so that beacon provably post-dates the commitment. (The leaf
                     // cannot claim EARLIER than the row — that direction would let a late anchor
                     // borrow an already-known beacon.)
-                    if !registry_epoch.is_some_and(|row| row <= leaf.a_commit_epoch) {
+                    if registry_epoch.is_none_or(|row| row > leaf.a_commit_epoch) {
                         return Err(PalwOverlayError::LeafACommitUnanchored {
                             leaf_index: leaf.leaf_index,
                             declared_epoch: leaf.a_commit_epoch,

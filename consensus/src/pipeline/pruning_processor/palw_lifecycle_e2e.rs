@@ -765,7 +765,7 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
             // slot 1 = B); only a pair of DISTINCT providers is usable (clause 12 rejects A == B).
             let a = witnesses.select(&palw_assignment_draw_seed(&draw_seed, 0)).expect("non-empty snapshot");
             let b = witnesses.select(&palw_assignment_draw_seed(&draw_seed, 1)).expect("non-empty snapshot");
-            (a != b).then(|| (issued, witnesses, a, b))
+            (a != b).then_some((issued, witnesses, a, b))
         });
         if let Some(found) = found {
             break found;

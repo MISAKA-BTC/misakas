@@ -689,7 +689,7 @@ mod tests {
         // clauses 11/12 — so the bundle carries a real PCPB fixture and its context is staged.
         // Keeping this test on the real arm (rather than routing around it) is the point: it is
         // what proves the post-import path still works under the full gate.
-        let fixture = pcpb::fixture((*leaf(0)).registered_epoch);
+        let fixture = pcpb::fixture(leaf(0).registered_epoch);
         let complete = active_bundle_with_pcpb(Some(&fixture));
         let mut manifest_only = complete.clone();
         manifest_only.leaves.clear();
