@@ -18,8 +18,11 @@ path = "src/main.rs"
 kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
 # `mtp palw-leaves` decodes the canonical Receipt-DA Object-v2 (`processes::palw_da`), which lives in
-# the consensus crate rather than consensus-core because it embeds `misaka-palw` receipt types.
+# the consensus crate rather than consensus-core because it embeds `misaka-palw` receipt types —
+# and the reader names those receipt types, so misaka-palw is a REGULAR dependency (a dev-dep only
+# compiles under `cargo test`, and the plain-binary build broke exactly there).
 kaspa-consensus.workspace = true
+misaka-palw.workspace = true
 kaspa-pq-validator-core.workspace = true
 misaka-endpoints.workspace = true
 misaka-mtp.workspace = true
@@ -61,8 +64,6 @@ evm-send = ["dep:alloy-consensus", "dep:alloy-signer", "dep:alloy-signer-local",
 [dev-dependencies]
 # Round-trip the PREA signer's F003 v0x02 output through the REAL precompile logic.
 kaspa-evm.workspace = true
-# Construct Receipt-v3 bodies for the `mtp palw-leaves` object-verification tests.
-misaka-palw.workspace = true
 tempfile.workspace = true
 
 [lints]
