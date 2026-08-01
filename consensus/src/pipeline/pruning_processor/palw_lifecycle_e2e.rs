@@ -47,15 +47,16 @@
 //! ## Parameter shape (and why each number)
 //!
 //! `epoch_len = 50`; admission `lead=2 / audit=1 / active=10` ⇒ `max_batch_life = 2·2+1+10 = 15` ⇒
-//! G16 walk bound `(15+1)·50 = 800 < pruning_depth = 900` (the preset-pinned relation). EMPIRICAL:
-//! the pruning point tracks `sink − pruning_depth` and its first advance jumps straight to
-//! ~`0.9·pruning_depth` (≈ daa 810 here). Because `walk_bound < pruning_depth`, the ENTIRE batch
-//! window is necessarily BELOW that first pp — no mint can be above it. Batch lifecycle: registration
-//! epoch 0 → audit epoch 3 → activation epoch 4 (daa 200) → expiry epoch 14 (daa 700). W mints ≈ daa
-//! 250, M1 ≈ daa 450, and the reuse-merger P_R ≈ daa 452 — all below the pp (~810), all pruned by the
+//! G16 walk bound `(15+1)·50 = 800 < pruning_depth = 900` (the preset-pinned relation). The pruning
+//! point advances asynchronously in finality-sample steps (spacing 300); the harness grows until it
+//! passes the last mint, so the asserted pass runs at the 900 sample (or 1200 under one sample of
+//! worker lag — still inside every ceiling: 1200 < W + walk_bound). Batch lifecycle: registration
+//! epoch 6 (the PCPB floor k+Δ = 4 plus two epochs of draw-search slack — see `REGISTRATION_EPOCH`)
+//! → audit epoch 9 → activation epoch 10 (daa 500) → expiry epoch 20 (daa 1000). W mints ≈ daa 502,
+//! M1 ≈ daa 652, and the reuse-merger P_R ≈ daa 655 — all below the 900 sample, all pruned by the
 //! pass. The pre-pass recolor of P_R's reuse is the mechanism baseline (2a); the post-pass survivor is
-//! the FRONTIER (2b). `palw_nullifier_retention_daa = 1000` exceeds the pp-to-W gap (~560) so both
-//! mints are carried in the frontier AT the pp, yet is smaller than the tip-to-mint gap (~1250) so
+//! the FRONTIER (2b). `palw_nullifier_retention_daa = 1000` exceeds the pp-to-W gap (~400) so both
+//! mints are carried in the frontier AT the pp, yet is smaller than the tip-to-mint gap (~1150) so
 //! both leave every live window by the final tip (window-exit assert).
 
 use std::collections::HashSet;
@@ -76,12 +77,13 @@ use kaspa_consensus_core::{
     hashing::sighash_type::SIG_HASH_ALL,
     mass::MassCalculator,
     palw::{
-        BeaconDnsAnchor, LaneDifficultyParams, PALW_AUDITOR_V2_MLDSA87_CONTEXT, PALW_BATCH_CERTIFICATE_VERSION_V2,
-        PALW_LEAF_CHUNK_VERSION_V2, PALW_PAYLOAD_VERSION_V1, PalwAuditorVoteV2, PalwBatchCertificateV2, PalwBatchManifestV1,
-        PalwLeafChunkV1, PalwProviderBondPayloadV1, PalwPublicLeafV1, ProviderBondView, chain_commit,
-        dns_finality_certificate_hash_v1, eligibility_hash, palw_audit_sample_root, palw_deterministic_sample, palw_eligibility_win,
-        palw_leaf_merkle_proof, palw_leaf_merkle_root, provider_bond_lock_spk, select_weighted_auditor_committee,
-        ticket_nullifier_commitment,
+        BeaconAssignedProof, BeaconDnsAnchor, LaneDifficultyParams, PALW_AUDITOR_V2_MLDSA87_CONTEXT,
+        PALW_BATCH_CERTIFICATE_VERSION_V2, PALW_LEAF_CHUNK_VERSION_V3, PALW_PAYLOAD_VERSION_V1, PalwAuditorVoteV2,
+        PalwBatchCertificateV2, PalwBatchManifestV1, PalwDispatchEvidence, PalwLeafChunkV1, PalwLeafPcpbWitnessV1,
+        PalwProviderBondPayloadV1, PalwPublicLeafV1, ProviderBondView, chain_commit, dns_finality_certificate_hash_v1,
+        eligibility_hash, palw_assignment_draw_seed, palw_audit_sample_root, palw_build_snapshot_witnesses, palw_deterministic_sample,
+        palw_eligibility_win, palw_job_challenge, palw_leaf_merkle_proof, palw_leaf_merkle_root, palw_provider_id,
+        provider_bond_lock_spk, select_weighted_auditor_committee, ticket_nullifier_commitment,
     },
     subnets::{
         SUBNETWORK_ID_PALW_BATCH_CERT, SUBNETWORK_ID_PALW_BATCH_MANIFEST, SUBNETWORK_ID_PALW_LEAF_CHUNK,
@@ -105,27 +107,40 @@ use crate::pipeline::virtual_processor::tests::{
 use crate::processes::palw::{resolve_palw_audit_epoch_seed, resolve_palw_lagged_anchor};
 
 const EPOCH_LEN: u64 = 50;
-/// The audit snapshot epoch. Its seed R_{AUDIT_EPOCH-1} must resolve, and `palw_epoch_seed_at`
-/// fails closed on ANY zero-seed header on the descent — seeds turn non-zero only from the first
-/// PALW epoch boundary after the DNS anchor confirms (the DNS stage below lands before daa 100),
-/// so epoch 2 is the first fully non-zero epoch and the audit snapshot sits at epoch 3.
-const AUDIT_EPOCH: u64 = 3;
-const ACTIVATION_EPOCH: u64 = 4;
-/// The batch's active window is epoch 4 → 14 (daa 200-700). All mints land inside it and, because
-/// `walk_bound < pruning_depth`, all fall BELOW the first pruning point (which tracks
-/// `sink − pruning_depth` ≈ 0.9·pruning_depth). walk_bound = (max_batch_life+1)·50 = (15+1)·50 = 800
-/// < 900, and the active window is wide enough that pp − W (~560) stays inside both walk_bound and
-/// retention with margin.
-const EXPIRY_EPOCH: u64 = 14;
-/// Pruning samples at finality multiples (300/600/900…). With PRUNING below, the first pass lands
-/// at sample 300 (`sink − pruning_depth` rounded down), strictly between W (~250) and M1 (~400).
+/// ADR-0045 D3-b pins registration to the PCPB clock. The external arm's clause-11 freshness is
+/// `issued ≤ anchor ∧ anchor+Δ ≤ registered ∧ registered−issued ≤ w` with `anchor = issued`, and
+/// clause 12 resolves the provider snapshot at `issued − k` — so under the shipped windows
+/// (w=6 / k=2 / Δ=2) the theoretical registration floor is `k + Δ = 4` (`issued = k = 2`, snapshot
+/// at epoch 0 — the five bonds below, committed by the boundary writer when epoch 0 closed). This
+/// harness registers at 6, the floor plus two epochs of DRAW slack: the external arm's seats are
+/// beacon-drawn, the epoch-4 draw of this deterministic chain assigns both slots to one provider
+/// (unservable), and a batch registered at 6 has issued ∈ {2, 3, 4} admissible, i.e. draw epochs
+/// {4, 5, 6} to search — the honest scheduler's "wait for a beacon that hands you a servable
+/// assignment", which a floor registration (one admissible draw) cannot express. Every candidate
+/// draw epoch is ≤ the registration epoch, so all rows are readable the moment the chain enters
+/// epoch 6 — before the manifest must be built.
+const REGISTRATION_EPOCH: u64 = 6;
+/// The audit snapshot epoch: `REGISTRATION_EPOCH + lead(2) + audit_window(1)`. Its seed
+/// R_{AUDIT_EPOCH-1} = R_8 must resolve, and `palw_epoch_seed_at` fails closed on ANY zero-seed
+/// header on the descent — seeds turn non-zero only from the first PALW epoch boundary after the
+/// DNS anchor confirms (the DNS stage below lands before daa 100), so epoch 2 is the first fully
+/// non-zero epoch and R_8 is safely past it.
+const AUDIT_EPOCH: u64 = 9;
+const ACTIVATION_EPOCH: u64 = 10;
+/// The batch's active window is epoch 10 → 20 (daa 500-1000). All mints land in its first half
+/// (W ≈ 502 … P_R ≈ 655), below the 900 pruning sample the pass runs at, and pp − W (~400) stays
+/// inside both walk_bound (800) and retention (1000) with margin.
+const EXPIRY_EPOCH: u64 = 20;
+/// Pruning samples at finality multiples (300/600/900…). The PCPB registration lead puts every
+/// mint above the 300 sample, so the harness grows until the pp passes the last mint — the
+/// asserted pass runs at the 900 sample.
 const FINALITY: u64 = 300;
-/// pp = sink − PRUNING. Kept small so sample 300 is reachable while the batch (expiry daa 500) is
-/// still active at M1's height. walk_bound = (max_batch_life+1)·50 = (11+1)·50 = 600 < 900 (the
+/// pp = sink − PRUNING, snapped to finality samples. Kept small so the 900 sample is reachable on
+/// a test-sized chain. walk_bound = (max_batch_life+1)·50 = (15+1)·50 = 800 < 900 (the
 /// preset-pinned relation).
 const PRUNING: u64 = 900;
-/// > the pp-to-W gap (~560) so W stays inside retention AT the pp (carried by the frontier), yet
-/// < the tip-to-mint gap (~1250) so both mints have left every live window by the final tip.
+/// > the pp-to-W gap (~400) so W stays inside retention AT the pp (carried by the frontier), yet
+/// < the tip-to-mint gap (~1150) so both mints have left every live window by the final tip.
 const RETENTION: u64 = 1000;
 /// econ03's floor shape: over the KIP-9 storage-mass knee, under one SIMNET coinbase.
 const BOND_SOMPI: u64 = 20_000_000;
@@ -498,8 +513,9 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
             p.palw_beacon_grace_epochs = 1_000;
             p.palw_nullifier_retention_daa = RETENTION;
             // Admission windows: max_batch_life = 2*2+1+10 = 15 ⇒ walk bound 800 < pruning 900.
-            // lead=2 keeps activation=4 inside admission's [min, min+lead] scheduling slack while the
-            // audit epoch (3) still has a non-zero seed target (epoch 2, the beacon round below).
+            // lead=2 keeps activation=10 inside admission's [min, min+lead] = [9, 11] scheduling
+            // slack while the audit epoch (9) has a safely non-zero seed target (R_8; epoch 2, the
+            // beacon round below, is the first non-zero one).
             p.palw_batch_admission.registration_lead_epochs = 2;
             p.palw_batch_admission.audit_window_epochs = 1;
             p.palw_batch_admission.active_window_epochs = 10;
@@ -611,115 +627,6 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
         }
     }
 
-    // ================= The batch: 3 leaves, manifest first (content-addressed), then the chunk =================
-    // Fixed nullifier preimages: eligibility is a per-height ~50% lottery at these bits, so the mint
-    // stage below finds a winning HEIGHT for the frozen leaf instead of grinding the leaf itself.
-    let cand: [Hash64; 3] = [Hash64::from_bytes([0xC1; 64]), Hash64::from_bytes([0xC2; 64]), Hash64::from_bytes([0xC3; 64])];
-    // REAL per-leaf DA objects: the DA obligations registered at chunk acceptance go `Satisfied`
-    // only through a challenge→response round whose chunk proof must open the leaf's declared
-    // `receipt_da_root` — so the root/len/chunk_count must commit to bytes we can actually serve.
-    let da_bytes: Vec<Vec<u8>> = (0..3u8).map(|i| vec![0xB0 + i; 96]).collect();
-    let da_commitments: Vec<kaspa_consensus_core::palw::da::PalwReceiptDaCommitmentV1> =
-        da_bytes.iter().map(|b| kaspa_consensus_core::palw::da::palw_receipt_da_commitment(1, b).expect("da commitment")).collect();
-    let prov_a_pk = mldsa::generate_key_pair(seeds[0]).verification_key.as_ref().to_vec();
-    let prov_b_pk = mldsa::generate_key_pair(seeds[1]).verification_key.as_ref().to_vec();
-    let prov_a = provider_bond_lock_spk(&prov_a_pk);
-    let prov_b = provider_bond_lock_spk(&prov_b_pk);
-    let shared_job = Hash64::from_bytes([0x09; 64]); // L0 and L2 share it: the G16 dup-work pair
-    let make_leaf = |leaf_index: u32, commit: Hash64, job: Hash64, da: &kaspa_consensus_core::palw::da::PalwReceiptDaCommitmentV1| {
-        PalwPublicLeafV1 {
-            version: 1,
-            batch_id: Hash64::default(), // projected now; populated once the manifest fixes batch_id
-            leaf_index,
-            job_nullifier: job,
-            ticket_nullifier_commitment: commit,
-            model_profile_id: Hash64::from_bytes([0x01; 64]),
-            runtime_class_id: Hash64::from_bytes([0x02; 64]),
-            shape_id: 1,
-            quantum_count: 1,
-            proof_type: 1,
-            provider_a_bond: bond_outpoints[0],
-            provider_b_bond: bond_outpoints[1],
-            provider_a_reward_script: prov_a.clone(),
-            provider_b_reward_script: prov_b.clone(),
-            ticket_authority_pk_hash: palw_authority_pk_hash(PALW_TEST_AUTHORITY_SEED),
-            private_match_commitment: Hash64::default(),
-            receipt_da_object_version: da.object_version,
-            receipt_da_root: da.root,
-            receipt_da_object_len: da.object_len,
-            receipt_da_chunk_count: da.chunk_count,
-            receipt_v3_compute_set_id: Hash64::default(),
-            receipt_v3_job_challenge: Hash64::default(),
-            receipt_v3_issued_epoch: 0,
-            receipt_v3_expires_epoch: 0,
-            registered_epoch: 0,
-            activation_epoch: ACTIVATION_EPOCH,
-            expiry_epoch: EXPIRY_EPOCH,
-            leaf_bond_sompi: 0,
-            a_commit: Hash64::default(),
-            a_commit_epoch: 0,
-            provider_snapshot_root: Hash64::from_bytes([0x7c; 64]),
-            assignment_proof_root: Hash64::from_bytes([0x7d; 64]),
-            dispatch_kind: 0, // BeaconAssigned (external sentinels)
-        }
-    };
-    let projected: Vec<PalwPublicLeafV1> = vec![
-        make_leaf(0, ticket_nullifier_commitment(&cand[0]), shared_job, &da_commitments[0]),
-        make_leaf(1, ticket_nullifier_commitment(&cand[1]), Hash64::from_bytes([0x0A; 64]), &da_commitments[1]),
-        make_leaf(2, ticket_nullifier_commitment(&cand[2]), shared_job, &da_commitments[2]),
-    ];
-    let projected_hashes: Vec<Hash64> = projected.iter().map(|l| l.leaf_hash()).collect();
-    // The root is over the batch_id-ZEROED projections (`batch_id == content_id()` contains the root,
-    // so a populated-leaf root would be self-referential). Same derivation the acceptance gate uses.
-    let leaf_root = palw_leaf_merkle_root(&projected_hashes);
-    let mut manifest = PalwBatchManifestV1 {
-        version: 1,
-        batch_id: Hash64::default(),
-        registration_epoch: 0,
-        model_profile_id: Hash64::from_bytes([0x01; 64]),
-        runtime_class_id: Hash64::from_bytes([0x02; 64]),
-        leaf_count: 3,
-        chunk_count: 1,
-        leaf_root,
-        descriptor_root: Hash64::default(),
-        total_leaf_bond_sompi: 0,
-        audit_policy_id: Hash64::default(),
-        activation_not_before_epoch: ACTIVATION_EPOCH,
-        expiry_epoch: EXPIRY_EPOCH,
-    };
-    manifest.batch_id = manifest.content_id();
-    let batch_id = manifest.batch_id;
-    let leaves: Vec<PalwPublicLeafV1> = projected
-        .iter()
-        .map(|l| {
-            let mut leaf = l.clone();
-            leaf.batch_id = batch_id;
-            leaf
-        })
-        .collect();
-    let proofs = (0..3).map(|i| palw_leaf_merkle_proof(&projected_hashes, i).expect("membership proof")).collect::<Vec<_>>();
-    let chunk = PalwLeafChunkV1 {
-        version: PALW_LEAF_CHUNK_VERSION_V2,
-        batch_id,
-        chunk_index: 0,
-        leaves: leaves.clone(),
-        proofs,
-        witnesses: Vec::new(), // D3-b arity: filled properly when this harness drives the v3 acceptance arm
-    };
-
-    // Manifest (epoch 0: registration_epoch is pinned to the ACCEPT epoch) then the chunk.
-    assert!(chain.tip_daa + 2 < EPOCH_LEN, "manifest must be accepted inside epoch 0");
-    let manifest_tx = funded_overlay_tx(
-        seeds[5],
-        funding[5],
-        SUBNETWORK_ID_PALW_BATCH_MANIFEST,
-        borsh::to_vec(&manifest).unwrap(),
-        storage_mass_parameter,
-    );
-    chain.extend_with(vec![manifest_tx], None).await;
-    chain.extend_plain().await;
-    assert!(chain.tc.storage.palw_store.batch_manifest(batch_id).is_ok(), "accepted manifest must be in the blob store");
-
     // ================= DNS beacon vertical: stake bond + one canonical-anchor attestation =================
     // Without a CONFIRMED DNS anchor every derived beacon seed stays zero and
     // `resolve_palw_audit_epoch_seed` fails closed — the attested certificate would be impossible.
@@ -767,7 +674,7 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     // ================= Beacon driver: continuous commit/reveal cadence =================
     // Instantiated in epoch 0 so the first commit targets epoch 2; ticked at every advance through
     // the whole mint window (max target = the batch expiry epoch), keeping the lagged activation
-    // window Healthy so `Certified → Active` stays open for both the below-pp and above-pp mints.
+    // window Healthy so `Certified → Active` stays open for every mint.
     let mut beacon = BeaconDriver {
         bond: dns_bond_outpoint,
         seed: seeds[8],
@@ -779,14 +686,233 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     };
     beacon.tick(&mut chain, net_id, storage_mass_parameter).await;
 
-    // The DA obligation registration for an accepted leaf anchors at a beacon buried by the FIXED
-    // policy (PalwDaPolicyV1::STRICT_TESTNET, min_beacon_burial_daa = 100): a chunk accepted any
-    // earlier fail-stops the node. Registration stays pinned to epoch 0 via the manifest; only the
-    // chunk carrier waits.
-    while chain.tip_daa + 1 < 2 * EPOCH_LEN + 5 {
+    // ================= Wait out the PCPB lead: the chain must ENTER the registration epoch =================
+    // The leaf construction below needs three store-resolved PCPB facts BEFORE the manifest can be
+    // built: `R_issued` (the clause-11 challenge seed), the `issued − k` provider snapshot (clause
+    // 12's resolution target) and `R_draw` (the seed whose weighted draw fixes the provider seats).
+    // The seed history holds an epoch's row from the epoch's own first chain block, and every
+    // admissible draw epoch is ≤ the registration epoch, so entering epoch 6 makes them all
+    // readable — and the manifest carrier sent right after is still accepted within epoch 6, which
+    // is what admission pins `registration_epoch` to. The old DA-policy chunk delay
+    // (min_beacon_burial_daa = 100) is subsumed: the chunk carrier now lands at daa ≥ 300.
+    while chain.tip_daa < REGISTRATION_EPOCH * EPOCH_LEN {
         beacon.tick(&mut chain, net_id, storage_mass_parameter).await;
         chain.extend_plain().await;
     }
+    assert_eq!(
+        (chain.tip_daa + 2) / EPOCH_LEN,
+        REGISTRATION_EPOCH,
+        "the manifest carrier must be ACCEPTED inside the registration epoch"
+    );
+
+    // ================= The PCPB world the leaves must inhabit (read back, never hand-seeded) =================
+    // Clause 12 verifies dispatch evidence against the STORE-resolved snapshot commitment of epoch
+    // `issued − k` and the post-commit beacon `R_{issued+Δ}`, and clause 11 re-derives the job
+    // challenge under `R_issued` — all from rows the REAL boundary writer committed while this chain
+    // grew. The harness reads those rows back and reproduces the canonical producer derivation
+    // (`palw_build_snapshot_witnesses` over the persisted entry set), exactly what mil/bridge does;
+    // a divergence is a producer bug and the chunk below would be refused.
+    //
+    // The external arm's seats are DRAWN, not chosen: slot i is the provider whose assignment
+    // interval contains the reduced `H(R_draw ‖ i)` ticket, and a draw that lands both slots on one
+    // provider is unservable. So search the admissible issued epochs (freshness gives
+    // `issued ∈ [max(k, reg−w), reg−Δ]`), FRESHEST first, for a draw that separates — the honest
+    // scheduler's "serve the assignment your beacon hands you, wait when it hands you none". The
+    // harness then casts the drawn pair as the batch's providers.
+    let delta = config.params.palw_post_commit_delta_epochs;
+    let lag = config.params.palw_snapshot_lag_epochs;
+    let issued_floor = REGISTRATION_EPOCH.saturating_sub(config.params.palw_freshness_window_epochs).max(lag);
+    let mut drawn = None;
+    for issued_epoch in (issued_floor..=REGISTRATION_EPOCH - delta).rev() {
+        let snapshot_epoch = issued_epoch - lag;
+        let draw_seed = chain
+            .tc
+            .storage
+            .palw_beacon_store
+            .beacon_seed_at(issued_epoch + delta)
+            .unwrap()
+            .expect("every admissible draw epoch is ≤ the registration epoch the chain just entered, so its row exists");
+        let snapshot_entries = chain
+            .tc
+            .storage
+            .palw_pcpb_store
+            .snapshot_entries_at(snapshot_epoch)
+            .unwrap()
+            .expect("the boundary writer persisted the snapshot entry set (prefix 70, the producer aid)");
+        let snapshot = palw_build_snapshot_witnesses(&snapshot_entries);
+        assert_eq!(
+            Some(snapshot.commitment),
+            chain.tc.storage.palw_pcpb_store.snapshot_at(snapshot_epoch).unwrap(),
+            "the canonical builder over the persisted entry set must reproduce the committed roots (producer == verifier)"
+        );
+        let slot_a = snapshot.select(&palw_assignment_draw_seed(&draw_seed, 0)).expect("a non-empty snapshot always assigns slot 0");
+        let slot_b = snapshot.select(&palw_assignment_draw_seed(&draw_seed, 1)).expect("a non-empty snapshot always assigns slot 1");
+        if slot_a != slot_b {
+            drawn = Some((issued_epoch, snapshot, slot_a, slot_b));
+            break;
+        }
+    }
+    let (issued_epoch, pcpb_snapshot, slot_a, slot_b) =
+        drawn.expect("no admissible draw epoch separates the two slots — nudge REGISTRATION_EPOCH to widen the search");
+    let issued_seed = chain
+        .tc
+        .storage
+        .palw_beacon_store
+        .beacon_seed_at(issued_epoch)
+        .unwrap()
+        .expect("the issued epoch's seed row is retained (clause 11's input)");
+    assert_eq!(pcpb_snapshot.commitment.provider_count, 5, "all five bonds were Active when the snapshot epoch closed");
+    let bond_index_of = |slot: usize| {
+        let id = pcpb_snapshot.slots[slot].entry.provider_id;
+        (0..5).find(|i| palw_provider_id(&bond_outpoints[*i]) == id).expect("every snapshot entry is one of the harness bonds")
+    };
+    let (prov_a_i, prov_b_i) = (bond_index_of(slot_a), bond_index_of(slot_b));
+
+    // ================= The batch: 3 leaves, manifest first (content-addressed), then the chunk =================
+    // Fixed nullifier preimages: eligibility is a per-height ~50% lottery at these bits, so the mint
+    // stage below finds a winning HEIGHT for the frozen leaf instead of grinding the leaf itself.
+    let cand: [Hash64; 3] = [Hash64::from_bytes([0xC1; 64]), Hash64::from_bytes([0xC2; 64]), Hash64::from_bytes([0xC3; 64])];
+    // REAL per-leaf DA objects: the DA obligations registered at chunk acceptance go `Satisfied`
+    // only through a challenge→response round whose chunk proof must open the leaf's declared
+    // `receipt_da_root` — so the root/len/chunk_count must commit to bytes we can actually serve.
+    // Object V2, because D3-b made it mandatory for storable leaves: clause 11 re-derives a non-zero
+    // `receipt_v3_job_challenge`, while `validate_public_leaf`'s Object-V1 arm requires that very
+    // field to be a zero sentinel.
+    let da_object_version = kaspa_consensus_core::palw::da::PALW_RECEIPT_DA_OBJECT_VERSION_V2;
+    let da_bytes: Vec<Vec<u8>> = (0..3u8).map(|i| vec![0xB0 + i; 96]).collect();
+    let da_commitments: Vec<kaspa_consensus_core::palw::da::PalwReceiptDaCommitmentV1> = da_bytes
+        .iter()
+        .map(|b| kaspa_consensus_core::palw::da::palw_receipt_da_commitment(da_object_version, b).expect("da commitment"))
+        .collect();
+    let prov_a_pk = mldsa::generate_key_pair(seeds[prov_a_i]).verification_key.as_ref().to_vec();
+    let prov_b_pk = mldsa::generate_key_pair(seeds[prov_b_i]).verification_key.as_ref().to_vec();
+    let prov_a = provider_bond_lock_spk(&prov_a_pk);
+    let prov_b = provider_bond_lock_spk(&prov_b_pk);
+    // Per-leaf challenge preimage triples. Object V2 pins `job_nullifier == receipt_v3_job_challenge`,
+    // so the G16 dup-work pair is now literally the same job leased twice: L0 and L2 share one triple
+    // ⇒ one challenge ⇒ one job nullifier, exactly what an honest scheduler double-dispatching a job
+    // produces. The challenge re-derives under `R_issued` (clause 11's heavy half).
+    let job_challenge = |scheduler_job_id: &Hash64| {
+        palw_job_challenge(
+            net_id,
+            issued_epoch,
+            &issued_seed,
+            scheduler_job_id,
+            &Hash64::from_bytes([0xE2; 64]), // requester_credential
+            &Hash64::from_bytes([0xE3; 64]), // request_commitment
+            1,                               // shape_id — every harness leaf declares shape 1
+        )
+    };
+    let shared_job_id = Hash64::from_bytes([0x09; 64]);
+    let solo_job_id = Hash64::from_bytes([0x0A; 64]);
+    let shared_job = job_challenge(&shared_job_id); // L0 and L2 share it: the G16 dup-work pair
+    let solo_job = job_challenge(&solo_job_id);
+    let make_leaf = |leaf_index: u32, commit: Hash64, job: Hash64, da: &kaspa_consensus_core::palw::da::PalwReceiptDaCommitmentV1| {
+        PalwPublicLeafV1 {
+            version: 1,
+            batch_id: Hash64::default(), // projected now; populated once the manifest fixes batch_id
+            leaf_index,
+            job_nullifier: job,
+            ticket_nullifier_commitment: commit,
+            model_profile_id: Hash64::from_bytes([0x01; 64]),
+            runtime_class_id: Hash64::from_bytes([0x02; 64]),
+            shape_id: 1,
+            quantum_count: 1,
+            proof_type: 1,
+            provider_a_bond: bond_outpoints[prov_a_i],
+            provider_b_bond: bond_outpoints[prov_b_i],
+            provider_a_reward_script: prov_a.clone(),
+            provider_b_reward_script: prov_b.clone(),
+            ticket_authority_pk_hash: palw_authority_pk_hash(PALW_TEST_AUTHORITY_SEED),
+            private_match_commitment: Hash64::default(),
+            receipt_da_object_version: da.object_version,
+            receipt_da_root: da.root,
+            receipt_da_object_len: da.object_len,
+            receipt_da_chunk_count: da.chunk_count,
+            receipt_v3_compute_set_id: Hash64::from_bytes([0xC5; 64]),
+            receipt_v3_job_challenge: job,
+            receipt_v3_issued_epoch: issued_epoch,
+            receipt_v3_expires_epoch: EXPIRY_EPOCH,
+            registered_epoch: REGISTRATION_EPOCH,
+            activation_epoch: ACTIVATION_EPOCH,
+            expiry_epoch: EXPIRY_EPOCH,
+            leaf_bond_sompi: 0,
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: pcpb_snapshot.commitment.snapshot_root,
+            assignment_proof_root: pcpb_snapshot.commitment.assignment_root,
+            dispatch_kind: 0, // BeaconAssigned — the external arm; the seats are the draw above
+        }
+    };
+    let projected: Vec<PalwPublicLeafV1> = vec![
+        make_leaf(0, ticket_nullifier_commitment(&cand[0]), shared_job, &da_commitments[0]),
+        make_leaf(1, ticket_nullifier_commitment(&cand[1]), solo_job, &da_commitments[1]),
+        make_leaf(2, ticket_nullifier_commitment(&cand[2]), shared_job, &da_commitments[2]),
+    ];
+    let projected_hashes: Vec<Hash64> = projected.iter().map(|l| l.leaf_hash()).collect();
+    // The root is over the batch_id-ZEROED projections (`batch_id == content_id()` contains the root,
+    // so a populated-leaf root would be self-referential). Same derivation the acceptance gate uses.
+    let leaf_root = palw_leaf_merkle_root(&projected_hashes);
+    let mut manifest = PalwBatchManifestV1 {
+        version: 1,
+        batch_id: Hash64::default(),
+        registration_epoch: REGISTRATION_EPOCH,
+        model_profile_id: Hash64::from_bytes([0x01; 64]),
+        runtime_class_id: Hash64::from_bytes([0x02; 64]),
+        leaf_count: 3,
+        chunk_count: 1,
+        leaf_root,
+        descriptor_root: Hash64::default(),
+        total_leaf_bond_sompi: 0,
+        audit_policy_id: Hash64::default(),
+        activation_not_before_epoch: ACTIVATION_EPOCH,
+        expiry_epoch: EXPIRY_EPOCH,
+    };
+    manifest.batch_id = manifest.content_id();
+    let batch_id = manifest.batch_id;
+    let leaves: Vec<PalwPublicLeafV1> = projected
+        .iter()
+        .map(|l| {
+            let mut leaf = l.clone();
+            leaf.batch_id = batch_id;
+            leaf
+        })
+        .collect();
+    let proofs = (0..3).map(|i| palw_leaf_merkle_proof(&projected_hashes, i).expect("membership proof")).collect::<Vec<_>>();
+    // The v3 chunk carries one PCPB witness per leaf: the challenge preimage triple plus the drawn
+    // slots' snapshot/assignment memberships, which clause 12 re-runs against the store-resolved
+    // commitment. L0 and L2 carry the SAME witness — same job, same draw — which is the point.
+    let witness_of = |scheduler_job_id: Hash64| PalwLeafPcpbWitnessV1 {
+        scheduler_job_id,
+        requester_credential: Hash64::from_bytes([0xE2; 64]),
+        request_commitment: Hash64::from_bytes([0xE3; 64]),
+        dispatch: PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof {
+            slot_a: pcpb_snapshot.slots[slot_a].clone(),
+            slot_b: pcpb_snapshot.slots[slot_b].clone(),
+        }),
+    };
+    let chunk = PalwLeafChunkV1 {
+        version: PALW_LEAF_CHUNK_VERSION_V3,
+        batch_id,
+        chunk_index: 0,
+        leaves: leaves.clone(),
+        proofs,
+        witnesses: vec![witness_of(shared_job_id), witness_of(solo_job_id), witness_of(shared_job_id)],
+    };
+
+    // Manifest (registration_epoch is pinned to the ACCEPT epoch — the epoch entered above), then
+    // the chunk right behind it: clauses 11/12 resolve R_issued / the lagged snapshot / R_draw, all
+    // of which the store now retains, and the DA burial floor (daa ≥ 105) is long past.
+    let manifest_tx = funded_overlay_tx(
+        seeds[5],
+        funding[5],
+        SUBNETWORK_ID_PALW_BATCH_MANIFEST,
+        borsh::to_vec(&manifest).unwrap(),
+        storage_mass_parameter,
+    );
+    chain.extend_with(vec![manifest_tx], None).await;
+    chain.extend_plain().await;
+    assert!(chain.tc.storage.palw_store.batch_manifest(batch_id).is_ok(), "accepted manifest must be in the blob store");
     let chunk_tx =
         funded_overlay_tx(seeds[6], funding[6], SUBNETWORK_ID_PALW_LEAF_CHUNK, borsh::to_vec(&chunk).unwrap(), storage_mass_parameter);
     chain.extend_with(vec![chunk_tx], None).await;
@@ -814,9 +940,12 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
         assert_eq!(obligations.len(), 6, "3 leaves x 2 providers x 1 sample = 6 registered obligations");
         // One funding wallet chained through change outputs carries all 12 DA txs.
         let mut wallet = (funding[7].0, funding[7].1, funding[7].2);
+        // The three non-provider bonds — the drawn pair (prov_a_i / prov_b_i) may be ANY two of the
+        // five, so the challenger pool is computed, not hardcoded.
+        let challenger_pool: Vec<usize> = (0..5).filter(|i| *i != prov_a_i && *i != prov_b_i).collect();
         for (k, ob) in obligations.iter().enumerate() {
             beacon.tick(&mut chain, net_id, storage_mass_parameter).await;
-            let challenger_i = 2 + (k % 3); // auditors only — a provider may not challenge itself
+            let challenger_i = challenger_pool[k % 3]; // auditors only — a provider may not challenge itself
             let ch_kp = mldsa::generate_key_pair(seeds[challenger_i]);
             let opened = chain.tip_daa + 2; // the carrier lands at tip+1, its ACCEPTING chain block at tip+2
             let mut challenge = PalwDaChallengeV1 {
@@ -850,7 +979,7 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
             chain.extend_plain().await; // the accepting chain block (opened_daa == its daa)
 
             let leaf_i = ob.leaf_index as usize;
-            let provider_i = if ob.provider_bond == bond_outpoints[0] { 0 } else { 1 };
+            let provider_i = if ob.provider_bond == bond_outpoints[prov_a_i] { prov_a_i } else { prov_b_i };
             assert_eq!(ob.provider_bond, bond_outpoints[provider_i], "obligation names one of the leaf's two provider bonds");
             let pr_kp = mldsa::generate_key_pair(seeds[provider_i]);
             let mut response = PalwDaResponseV1 {
@@ -859,7 +988,7 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
                 challenge_id,
                 provider_bond: ob.provider_bond,
                 provider_owner_public_key: pr_kp.verification_key.as_ref().to_vec(),
-                chunk_proof: palw_receipt_da_chunk_proof(1, &da_bytes[leaf_i], ob.chunk_index).expect("chunk proof"),
+                chunk_proof: palw_receipt_da_chunk_proof(da_object_version, &da_bytes[leaf_i], ob.chunk_index).expect("chunk proof"),
                 signature: vec![],
             };
             let rd = response.signing_hash();
@@ -884,9 +1013,9 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
         funding[7] = wallet; // the cert carrier keeps spending the same chained wallet
     }
 
-    // ================= The attested certificate (audit epoch 3, carried in epoch 3) =================
+    // ================= The attested certificate (audit epoch 9, carried in epoch 9) =================
     // `validate_certificate` pins audit <= certificate_epoch < activation < expiry, so the carrier
-    // must sit inside epoch 3 exactly (activation is 4).
+    // must sit inside epoch 9 exactly (activation is 10).
     while (chain.tip_daa + 1) / EPOCH_LEN < AUDIT_EPOCH {
         beacon.tick(&mut chain, net_id, storage_mass_parameter).await;
         chain.extend_plain().await;
@@ -954,7 +1083,7 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
         let bonds = chain.tc.storage.palw_provider_bonds_store.read();
         let mut creds = HashSet::new();
         let mut groups = HashSet::new();
-        for op in [&bond_outpoints[0], &bond_outpoints[1]] {
+        for op in [&bond_outpoints[prov_a_i], &bond_outpoints[prov_b_i]] {
             let rec = bonds.get(op).expect("provider bond record");
             creds.insert(rec.owner_pubkey_hash);
             groups.insert(rec.operator_group_id);
@@ -1058,7 +1187,7 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     // point this harness adds.
 
     // ================= Mints (the clause-9 lottery over heights, leaves frozen) =================
-    // Batch active from epoch 2 (daa 100): early mint W = leaf 0, then the G16 dup M2 = leaf 2.
+    // Batch active from epoch 10 (daa 500): early mint W = leaf 0, then the G16 dup M2 = leaf 2.
     let w_floor = (chain.tip_daa + 2).max(ACTIVATION_EPOCH * EPOCH_LEN + 2);
     let (w_hash, w_facts) = mint_first_win(
         &mut chain,
@@ -1101,8 +1230,9 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     assert_eq!(credited(&a1_m2_coinbase, &prov_a), 0, "the dup-job mint pays provider A nothing (G16)");
     assert_eq!(credited(&a1_m2_coinbase, &prov_b), 0, "the dup-job mint pays provider B nothing (G16)");
 
-    // Late mint M1 = leaf 1, minted at ≈ daa 950 — ABOVE the first pruning point (a finality
-    // sample at 400 or 800) yet still inside the batch's active window (expiry ≈ daa 1500).
+    // Late mint M1 = leaf 1, minted at ≈ daa 652 — well past W, still inside the batch's active
+    // window (expiry daa 1000), and below the 900 pruning sample the pass below runs at, like
+    // every other mint on this chain.
     let (m1_hash, m1_facts) = mint_first_win(
         &mut chain,
         &mut beacon,
@@ -1115,7 +1245,7 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
         &prov_b,
         &miner,
         0xA8,
-        7 * EPOCH_LEN,
+        (ACTIVATION_EPOCH + 3) * EPOCH_LEN,
     )
     .await;
     let m1_daa = chain.tip_daa;
@@ -1151,12 +1281,11 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     // R1 reuses M1's exact winning ticket at M1's own height; P_R merges {M1's merger, R1}. The merge
     // recolors R1 red, driven by the persisted nullifier window window(a1_m1) carries (window(R1)
     // does NOT — R1's past excludes M1). This is the credit-denial mechanism the ADR requires; it is
-    // demonstrated here on real minted tickets. NOTE: with the preset-pinned `walk_bound <
-    // pruning_depth`, the whole batch window (and hence this reuse-merger) is BELOW the first pruning
-    // point (which tracks `sink − pruning_depth`), so P_R is itself pruned by the pass. The post-pass
-    // survivor of the reuse-catching capability is the FRONTIER's retention window (assertion 2b), the
-    // exact object a joining node re-imports; the recolor code path over that window is the same one
-    // the pre-pruning nullifier e2es (`palw_algo4_*_nullifier_*`) pin.
+    // demonstrated here on real minted tickets. NOTE: the whole minted region (and hence this
+    // reuse-merger) is BELOW the pruning sample the pass runs at, so P_R is itself pruned by the
+    // pass. The post-pass survivor of the reuse-catching capability is the FRONTIER's retention
+    // window (assertion 2b), the exact object a joining node re-imports; the recolor code path over
+    // that window is the same one the pre-pruning nullifier e2es (`palw_algo4_*_nullifier_*`) pin.
     let (win_again, r1_facts) =
         draw_at(&chain.tc, m1_facts.sp, m1_facts.target_interval, &leaves[1], cand[1], cert_hash, &prov_a, &prov_b, &miner);
     assert!(win_again, "the clause-9 draw is deterministic: the same (leaf, height) must still win");
@@ -1194,22 +1323,29 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
     );
 
     // ================= The long build + the REAL pruning pass =================
-    // EMPIRICAL (measured on this fixture): the pruning point tracks `sink − pruning_depth`, and its
-    // first advance from genesis jumps straight to ~0.9·pruning_depth. With the preset-pinned
-    // `walk_bound < pruning_depth`, the ENTIRE batch window (daa 200-500) — and therefore W, M1 and
-    // the reuse-merger P_R — is BELOW that first pruning point: no mint can ever be above it. So the
-    // pass prunes the whole minted region; the surviving reuse-catching object is the FRONTIER's
-    // retention window (assertion 2b). The pruning worker is async, so grow while yielding to it and
-    // stop at the first non-genesis pp; the yields keep it from lagging and overshooting.
+    // The pruning point advances ASYNCHRONOUSLY, in finality-sample steps (spacing 300): when the
+    // worker wakes it commits the newest sample that has cleared `sink − pruning_depth`, so the
+    // first observed non-genesis pp is a race outcome — sample 300 when the worker keeps pace, a
+    // multi-sample jump when it lags. The PCPB registration lead moved the whole minted region
+    // (W ≈ 502 … P_R ≈ 655) ABOVE the first sample, so this harness grows until the pp has passed
+    // the LAST mint: the first admissible sample is 900, and every ceiling asserted below tolerates
+    // one further sample of worker lag (1200 < w_daa + walk_bound ≈ 1302). The frequent yields keep
+    // the worker tracking sample-by-sample so it does not skip past that. The pass then prunes the
+    // whole minted region; the surviving reuse-catching object is the FRONTIER's retention window
+    // (assertion 2b).
     let genesis_hash = config.params.genesis.hash;
     let mut grown = 0u64;
-    while chain.tc.pruning_point() == genesis_hash {
+    loop {
+        let pp = chain.tc.pruning_point();
+        if pp != genesis_hash && chain.tc.storage.headers_store.get_header(pp).unwrap().daa_score > m1_daa {
+            break;
+        }
         chain.extend_plain().await;
         grown += 1;
-        if grown.is_multiple_of(20) {
-            tokio::time::sleep(Duration::from_millis(20)).await; // let the async pruning worker keep pace
+        if grown.is_multiple_of(4) {
+            tokio::time::sleep(Duration::from_millis(10)).await; // let the async pruning worker keep pace
         }
-        assert!(grown < 4000, "the pruning point must advance before the guard length");
+        assert!(grown < 4000, "the pruning point must pass the last mint before the guard length");
     }
     let pp = chain.tc.pruning_point();
     let pp_daa = chain.tc.storage.headers_store.get_header(pp).unwrap().daa_score;
