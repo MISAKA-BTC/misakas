@@ -16,9 +16,10 @@ use kaspa_consensus_core::{
     header::Header,
     palw_pruned_frontier::{
         MAX_PALW_CHAIN_DERIVED_BUNDLE_BYTES, MAX_PALW_PRUNING_SPAM_SUPPORT_ROWS, PalwChainDerivedAuthBundleV1,
-        PalwChainDerivedHeaderBundleWireV1, PalwPruningPointSnapshotV1, PalwPruningSnapshotCheckpoint, PalwPruningSnapshotImportAuth,
-        PalwPruningSnapshotImportProvenance, palw_bind_transported_header_identity, palw_chain_derived_descendant_shape_is_valid,
-        palw_pruned_ibd_snapshot_import_allowed, verify_chain_derived_pruning_boundary_from_payload,
+        PalwChainDerivedHeaderBundleWireV1, PalwComputeRegistryPruningSnapshotV1, PalwPruningPointSnapshotV1,
+        PalwPruningSnapshotCheckpoint, PalwPruningSnapshotImportAuth, PalwPruningSnapshotImportProvenance,
+        palw_bind_transported_header_identity, palw_chain_derived_descendant_shape_is_valid, palw_pruned_ibd_snapshot_import_allowed,
+        verify_chain_derived_pruning_boundary_from_payload,
     },
     pruning::{PruningPointProof, PruningPointsList, PruningProofMetadata},
     trusted::TrustedBlock,
@@ -38,9 +39,9 @@ use kaspa_p2p_lib::{
     pb::{
         RequestAntipastMessage, RequestBlockBodiesMessage, RequestHeadersMessage, RequestIbdBlocksMessage,
         RequestNextPalwChainDerivedBundleChunksMessage, RequestPalwChainDerivedBundleMessage,
-        RequestPruningPointAndItsAnticoneMessage, RequestPruningPointEvmStateMessage, RequestPruningPointOverlaySnapshotMessage,
-        RequestPruningPointPalwSnapshotMessage, RequestPruningPointProofMessage, RequestPruningPointUtxoSetMessage,
-        kaspad_message::Payload,
+        RequestPalwComputeRegistryRecordsMessage, RequestPruningPointAndItsAnticoneMessage, RequestPruningPointEvmStateMessage,
+        RequestPruningPointOverlaySnapshotMessage, RequestPruningPointPalwSnapshotMessage, RequestPruningPointProofMessage,
+        RequestPruningPointUtxoSetMessage, kaspad_message::Payload,
     },
 };
 use kaspa_utils::channel::JobReceiver;
@@ -60,6 +61,11 @@ pub struct IbdFlow {
     pub(super) incoming_route: IncomingRoute,
     pub(super) body_only_ibd_permitted: bool,
     header_format: HeaderFormat,
+    /// ADR-MA §21.4: whether the negotiated protocol version (≥ 104) lets this peer serve the
+    /// compute-registry record pre-delivery. Older peers are synced from without it (with a
+    /// warning) — their algo-4 history, if any, will fail header-stage resolution exactly as
+    /// before the pre-delivery existed.
+    peer_serves_palw_registry_records: bool,
 
     // Receives relay blocks from relay flow which are out of orphan resolution range and hence trigger IBD
     relay_receiver: JobReceiver<Block>,
@@ -288,6 +294,7 @@ impl IbdFlow {
         relay_receiver: JobReceiver<Block>,
         body_only_ibd_permitted: bool,
         header_format: HeaderFormat,
+        peer_serves_palw_registry_records: bool,
     ) -> Self {
         Self {
             ctx,
@@ -296,6 +303,7 @@ impl IbdFlow {
             relay_receiver,
             body_only_ibd_permitted,
             header_format,
+            peer_serves_palw_registry_records,
             expected_palw_snapshot_digest: None,
             expected_palw_chain_derived_bundle_digest: None,
             proof_validated_headers: None,
@@ -376,6 +384,8 @@ impl IbdFlow {
                     // atomically before marking the utxoset stable — see sync_new_utxo_set.
                     self.sync_new_utxo_set(&session, pruning_point, true).await?;
                 }
+                // ADR-MA §21.4: registry records must precede the headers that commit them.
+                self.sync_palw_compute_registry_records(&session).await?;
                 // Once utxo is valid, simply sync missing headers
                 self.sync_headers(
                     &session,
@@ -416,6 +426,8 @@ impl IbdFlow {
             }
             IbdType::PruningCatchUp { highest_known_syncer_chain_hash } => {
                 info!("catching up to new pruning point {} ", negotiation_output.syncer_pruning_point);
+                // ADR-MA §21.4: registry records must precede the headers that commit them.
+                self.sync_palw_compute_registry_records(&session).await?;
                 match self.pruning_point_catchup(&session, &negotiation_output, &relay_block, highest_known_syncer_chain_hash).await {
                     Ok(()) => {
                         info!("header stage of pruning catchup from peer {} completed", self.router);
@@ -628,6 +640,12 @@ impl IbdFlow {
         info!("Starting IBD with headers proof with peer {}", self.router);
 
         let staging_session = staging.session().await;
+
+        // ADR-MA §21.4: stage the peer's registry records into the STAGING consensus before the
+        // proof and the post-boundary header sync — proof-level GHOSTDAG credit and header-stage
+        // §13.2 resolution both read the record stores, and records registered after the pruning
+        // point are not in the boundary snapshot imported later.
+        self.sync_palw_compute_registry_records(&staging_session).await?;
 
         let pruning_point = self.sync_and_validate_pruning_proof(&staging_session, relay_block).await?;
         self.sync_headers(&staging_session, syncer_virtual_selected_parent, pruning_point, relay_block).await?;
@@ -901,6 +919,55 @@ impl IbdFlow {
             ))),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// ADR-MA §21.4 catch-up delivery, request side. On a registry-active net, fetch the peer's
+    /// complete content-addressed Compute Set registry record set and stage it BEFORE any header
+    /// download, so header-stage §13.2 resolution and GHOSTDAG §14 credit can resolve every record
+    /// a served header commits. Catch-up IBD replays bodies only after ALL headers, so the §21.2
+    /// fold cannot supply the records in time — the 2026-08-01 testnet-20 fresh-sync fail-stop
+    /// (`unknown compute_set_id … no registered descriptor` at the first algo-4 header, hit by
+    /// every fresh-syncing participant).
+    ///
+    /// `consensus` is the consensus the subsequent header download feeds: the ACTIVE consensus on
+    /// the catch-up paths, the STAGING consensus on the headers-proof path (whose post-boundary
+    /// header sync needs records registered AFTER the pruning point — the imported snapshot only
+    /// carries the boundary's own history).
+    ///
+    /// Records are self-authenticating (content-addressed, recomputed-key staging) and the
+    /// fork-local view is never transported, so the peer holds no governance authority here; an
+    /// un-upgraded peer (protocol < 104) is synced from with a warning and fails closed later
+    /// exactly as before this delivery existed.
+    async fn sync_palw_compute_registry_records(&mut self, consensus: &ConsensusProxy) -> Result<(), ProtocolError> {
+        if self.ctx.config.params.palw_compute_registry_activation_daa_score == u64::MAX {
+            return Ok(());
+        }
+        if !self.peer_serves_palw_registry_records {
+            warn!(
+                "IBD peer {} predates the compute-registry record pre-delivery (protocol < 104); syncing without it — \
+                 algo-4 headers whose records are not locally folded will be rejected (ADR-MA §21.4)",
+                self.router
+            );
+            return Ok(());
+        }
+        self.router
+            .enqueue(make_message!(Payload::RequestPalwComputeRegistryRecords, RequestPalwComputeRegistryRecordsMessage {}))
+            .await?;
+        let msg = dequeue_with_timeout!(self.incoming_route, Payload::PalwComputeRegistryRecords, Duration::from_secs(120))?;
+        // The P2P envelope permits larger frames; bound before Borsh sees attacker-controlled
+        // collection lengths (same posture as the PALW pruning snapshot below).
+        if msg.package.len() > kaspa_consensus_core::palw_pruned_frontier::MAX_PALW_PRUNING_SNAPSHOT_BYTES {
+            return Err(ProtocolError::Other("PalwComputeRegistryRecords exceeds the accepted size cap"));
+        }
+        let package: PalwComputeRegistryPruningSnapshotV1 =
+            borsh::from_slice(&msg.package).map_err(|_| ProtocolError::Other("invalid compute registry records package"))?;
+        let counts = (package.descriptors.len(), package.policies.len(), package.plans.len(), package.activation_certificates.len());
+        consensus.clone().spawn_blocking(move |c| c.import_palw_compute_registry_records_package(package)).await?;
+        info!(
+            "IBD: pre-delivered compute registry records from {}: {} descriptor(s), {} policy(ies), {} plan(s), {} certificate(s)",
+            self.router, counts.0, counts.1, counts.2, counts.3
+        );
+        Ok(())
     }
 
     /// Fetch, bound, decode and context-validate the complete PALW pruning boundary without mutating

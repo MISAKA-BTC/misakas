@@ -89,9 +89,16 @@ impl HeaderProcessor {
     /// exact policy/plan revisions effective at its own DAA with `state == Active`, and a nonzero
     /// allocation share (`resolve_source_policy_for_credit`, the same §14 rule the GHOSTDAG
     /// credit seam applies). Failure REJECTS the block — §13.2 forbids any default-scale
-    /// fallback. A missing record is the availability fail-stop (§22.3): body-stage admission
-    /// folds records before a v5 header can commit them, so absence here means the IBD
-    /// trusted-data package did not deliver what it must (ADR-MA §21.4).
+    /// fallback.
+    ///
+    /// A LOCALLY MISSING record (any tier) is also a header rejection, not a process abort. The
+    /// §21.4 delivery duty is real — body-stage admission folds records before a v5 header can
+    /// commit them, and since protocol v104 catch-up IBD pre-delivers the peer's record set
+    /// before header download — so absence here means the DATA PATH failed this header: an
+    /// un-upgraded or misbehaving IBD peer that withheld records, a forged commit, or a relay
+    /// that outran the local body fold. Rejecting fails that path closed (the IBD attempt aborts
+    /// and another peer is tried; a forged commit dies with its subtree), whereas the previous
+    /// `panic!` here handed any such peer a remote crash trigger.
     fn palw_per_set_sublane(&self, header: &Header) -> BlockProcessResult<Option<crate::processes::difficulty::PalwSetSublane>> {
         use crate::model::stores::palw_compute_registry::PalwComputeRegistryStoreReader;
         use kaspa_consensus_core::palw_compute_set::resolve_source_policy_for_credit;
@@ -101,15 +108,17 @@ impl HeaderProcessor {
         if !registry_active || header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_REPLICA {
             return Ok(None);
         }
-        let missing = |what: &str| -> ! {
-            panic!(
-                "compute registry: header {} committed {what} is unavailable at header stage — \
-                 the IBD trusted-data package must carry registry records on a registry-active net (ADR-MA §21.4)",
-                header.hash
+        let missing = |what: &str, id: kaspa_consensus_core::Hash64| -> RuleError {
+            RuleError::PalwComputeSetResolution(
+                header.hash,
+                format!(
+                    "committed {what} {id} has no local record — on a registry-active net the sync data path must \
+                     deliver registry records before the headers committing them (ADR-MA §21.4 / protocol v104)"
+                ),
             )
         };
-        // §13.2 — an UNREGISTERED set is a header rejection (a peer's forged id), not a data-
-        // availability stop: nothing was ever admitted under that id, so nothing can be missing.
+        // §13.2 — an UNREGISTERED set is a header rejection (a peer's forged id): nothing was
+        // ever admitted under that id, so nothing can be missing.
         match self.palw_compute_registry_store.descriptor(header.palw_compute_set_id) {
             Ok(Some(_)) => {}
             Ok(None) => {
@@ -122,12 +131,12 @@ impl HeaderProcessor {
         }
         let policy = match self.palw_compute_registry_store.policy(header.palw_compute_policy_id) {
             Ok(Some(policy)) => policy,
-            Ok(None) => missing("policy"),
+            Ok(None) => return Err(missing("policy", header.palw_compute_policy_id)),
             Err(store_error) => panic!("compute registry policy read failed for header {}: {store_error}", header.hash),
         };
         let plan = match self.palw_compute_registry_store.plan(header.palw_allocation_plan_id) {
             Ok(Some(plan)) => plan,
-            Ok(None) => missing("allocation plan"),
+            Ok(None) => return Err(missing("allocation plan", header.palw_allocation_plan_id)),
             Err(store_error) => panic!("compute registry plan read failed for header {}: {store_error}", header.hash),
         };
         let resolution = resolve_source_policy_for_credit(

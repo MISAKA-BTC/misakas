@@ -97,7 +97,8 @@ use kaspa_consensus_core::{
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, OverlaySnapshot,
         PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
         anchor_cutoff_blue_score, apply_dormancy_round, attestations_from_accepted_txs, bond_mutations_from_accepted_txs,
-        canonical_lagged_epoch_anchor, check_dns_reorg_rule, compute_stake_score, derive_dns_health, dns_finality_fresh_for_bridge,
+        canonical_lagged_epoch_anchor, check_dns_reorg_rule, compute_stake_score, derive_dns_health, dns_confirm_view_is_fresh,
+        dns_finality_fresh_for_bridge,
         dormancy_revival_ready, effective_bond_status, emergency_work_margin_for, epoch_meets_quality_floor, is_bond_active_at,
         is_dns_confirmed,
         mandatory_attestation_mass_capacity, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
@@ -797,6 +798,30 @@ impl EvmLaneKpi {
 /// The gate can reject hundreds of candidate ancestors during one sink search. Log the
 /// first rejection and at most one aggregate warning every 30 seconds so a wedge is
 /// visible without turning the diagnostic into another source of resolve pressure.
+/// Proposal ② notice throttle — its OWN counters, deliberately NOT `dns_reorg_rejection_warning_due`:
+/// sharing would let the (very frequent during IBD) latch-hold ticks inflate the reorg gate's
+/// "suppressed N rejections" diagnostic into noise.
+fn dns_confirm_hold_notice_due() -> Option<u64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static LAST_NOTICE_UNIX_SECS: AtomicU64 = AtomicU64::new(0);
+    static HOLDS_SINCE_NOTICE: AtomicU64 = AtomicU64::new(0);
+    const NOTICE_INTERVAL_SECS: u64 = 60;
+
+    HOLDS_SINCE_NOTICE.fetch_add(1, Ordering::Relaxed);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let mut previous = LAST_NOTICE_UNIX_SECS.load(Ordering::Relaxed);
+    loop {
+        if previous != 0 && now.saturating_sub(previous) < NOTICE_INTERVAL_SECS {
+            return None;
+        }
+        match LAST_NOTICE_UNIX_SECS.compare_exchange_weak(previous, now, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Some(HOLDS_SINCE_NOTICE.swap(0, Ordering::Relaxed).saturating_sub(1)),
+            Err(observed) => previous = observed,
+        }
+    }
+}
+
 fn dns_reorg_rejection_warning_due() -> Option<u64> {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -974,6 +999,11 @@ pub struct VirtualStateProcessor {
     /// Node-local lever admitting chain-derived (permissionless) Header-v4 snapshot import. Default
     /// false; fenced. See `docs/adr-permissionless-snapshot-authentication.md`.
     pub(super) palw_permissionless_snapshot_auth: bool,
+    /// Proposal ② (2026-08-01 bystander wedge): `Some(threshold_ms)` when the node-local
+    /// `Config::hold_dns_confirm_while_unsynced` lever is set — the DNS confirm latch only
+    /// advances while the sink timestamp is within this threshold of wall clock. `None` (test
+    /// harnesses, sim tools) preserves the previous always-latch behaviour exactly.
+    dns_confirm_hold_threshold_ms: Option<u64>,
     pub(super) palw_beacon_grace_epochs: u64,
     pub(super) palw_beacon_quorum_num: u16,
     pub(super) palw_beacon_quorum_den: u16,
@@ -1084,6 +1114,7 @@ impl VirtualStateProcessor {
         evm_retire_206: bool,
         palw_pruning_snapshot_checkpoints: Vec<PalwPruningSnapshotCheckpoint>,
         palw_permissionless_snapshot_auth: bool,
+        hold_dns_confirm_while_unsynced: bool,
     ) -> Self {
         // C-01 S9: flat-authoritative seeding needs the shadow backend (which maintains + validates
         // the flat store); without it the flag is a silent no-op (the executor keeps seeding from
@@ -1188,6 +1219,10 @@ impl VirtualStateProcessor {
             palw_spam_store: storage.palw_spam_store.clone(),
             palw_pruning_snapshot_checkpoints: palw_pruning_snapshot_checkpoints.into(),
             palw_permissionless_snapshot_auth,
+            // Proposal ②: same freshness shape as the mining rule engine's `is_nearly_synced`
+            // (a quarter of the expected DAA window duration — roughly 10 minutes on all nets).
+            dns_confirm_hold_threshold_ms: hold_dns_confirm_while_unsynced
+                .then(|| params.expected_difficulty_window_duration_in_milliseconds() / 4),
             palw_beacon_grace_epochs: params.palw_beacon_grace_epochs,
             palw_beacon_quorum_num: params.palw_beacon_quorum_num,
             palw_beacon_quorum_den: params.palw_beacon_quorum_den,
@@ -3294,6 +3329,118 @@ impl VirtualStateProcessor {
         self.palw_compute_registry_store.set_view_batch(batch, current, std::sync::Arc::new(view)).unwrap_or_else(|store_error| {
             palw_overlay_commit_fail_stop(format!("compute registry view staging failed for {current}: {store_error}"))
         });
+    }
+
+    /// ADR-MA §21.4 catch-up delivery, serve side. The four content-addressed record tiers are
+    /// fork-independent append-only pools (a superseded revision and a losing branch's revision
+    /// coexist by design — §23.4's fork-local view is what separates governing from lingering), so
+    /// the complete dump is the correct unit: it covers every record any header this node can
+    /// serve may commit. Zero pruning point + empty view mark the package as a records-only
+    /// transport. Serve-side read faults degrade to an empty package (the syncer fails closed at
+    /// its own header validation), never a panic.
+    pub fn palw_compute_registry_records_package(
+        &self,
+    ) -> kaspa_consensus_core::palw_pruned_frontier::PalwComputeRegistryPruningSnapshotV1 {
+        use kaspa_consensus_core::palw_pruned_frontier::{
+            PALW_COMPUTE_REGISTRY_PRUNING_SNAPSHOT_VERSION, PalwComputeRegistryPruningSnapshotV1,
+        };
+        let mut package = PalwComputeRegistryPruningSnapshotV1 {
+            version: PALW_COMPUTE_REGISTRY_PRUNING_SNAPSHOT_VERSION,
+            pruning_point: BlockHash::default(),
+            descriptors: vec![],
+            policies: vec![],
+            plans: vec![],
+            activation_certificates: vec![],
+            view: kaspa_consensus_core::palw_compute_set::PalwComputeRegistryViewV1::new(),
+        };
+        if self.palw_compute_registry_activation_daa_score == u64::MAX {
+            return package;
+        }
+        let store = self.palw_compute_registry_store.as_ref();
+        let read = |what: &str, err: kaspa_database::prelude::StoreError| {
+            warn!("compute registry records package: {what} read failed ({err}); serving an empty package");
+        };
+        match store.all_descriptors() {
+            Ok(descriptors) => package.descriptors = descriptors,
+            Err(err) => {
+                read("descriptor tier", err);
+                return package;
+            }
+        }
+        match store.all_policies() {
+            Ok(policies) => package.policies = policies,
+            Err(err) => {
+                read("policy tier", err);
+                return package;
+            }
+        }
+        match store.all_plans() {
+            Ok(plans) => package.plans = plans,
+            Err(err) => {
+                read("plan tier", err);
+                return package;
+            }
+        }
+        match store.all_certificates() {
+            Ok(certificates) => package.activation_certificates = certificates,
+            Err(err) => {
+                read("certificate tier", err);
+                return package;
+            }
+        }
+        package.canonicalize();
+        package
+    }
+
+    /// ADR-MA §21.4 catch-up delivery, import side. Stages a peer-served, canonically validated
+    /// record package into the fork-independent content-addressed record stores — and NEVER the
+    /// fork-local view store, which stays §21.2 fold-derived (an imported view would be an
+    /// unauthenticated governance claim; imported RECORDS are self-authenticating, each keyed by
+    /// its recomputed content id, so the worst a peer can do is pre-supply preimages it knows —
+    /// exactly what body replay would admit later, and §23.4 still separates governing records
+    /// from lingering ones).
+    ///
+    /// Write-once semantics per tier: an identical pre-existing record is an idempotent no-op; a
+    /// DIVERGENT record under one content id is local corruption or a hash break, surfaced as an
+    /// import error (the flow aborts that IBD attempt) rather than a fail-stop.
+    pub fn import_palw_compute_registry_records_package(
+        &self,
+        package: &kaspa_consensus_core::palw_pruned_frontier::PalwComputeRegistryPruningSnapshotV1,
+    ) -> PruningImportResult<()> {
+        let invalid = |reason: String| PruningImportError::ImportedPalwSnapshotInvalid(BlockHash::default(), reason);
+        if self.palw_compute_registry_activation_daa_score == u64::MAX {
+            return Err(invalid("compute registry records package offered while the registry fence is closed".into()));
+        }
+        if !package.validate() {
+            return Err(invalid("compute registry records package is non-canonical or over its size ceilings".into()));
+        }
+        let store = self.palw_compute_registry_store.as_ref();
+        let mut batch = WriteBatch::default();
+        for descriptor in &package.descriptors {
+            store
+                .insert_descriptor_batch(&mut batch, descriptor.compute_set_id(), descriptor)
+                .map_err(|err| invalid(format!("descriptor staging: {err}")))?;
+        }
+        for policy in &package.policies {
+            store
+                .insert_policy_batch(&mut batch, policy.policy_id(), policy)
+                .map_err(|err| invalid(format!("policy staging: {err}")))?;
+        }
+        for plan in &package.plans {
+            store.insert_plan_batch(&mut batch, plan.plan_id, plan).map_err(|err| invalid(format!("plan staging: {err}")))?;
+        }
+        for certificate in &package.activation_certificates {
+            store.insert_certificate_batch(&mut batch, certificate).map_err(|err| invalid(format!("certificate staging: {err}")))?;
+        }
+        self.db.write(batch).map_err(|err| invalid(format!("compute registry records batch commit: {err}")))?;
+        info!(
+            "compute registry records package imported: {} descriptors, {} policies, {} plans, {} certificates",
+            package.descriptors.len(),
+            package.policies.len(),
+            package.plans.len(),
+            package.activation_certificates.len()
+        );
+        Ok(())
     }
 
     fn commit_palw_overlay_effects(
@@ -5487,6 +5634,32 @@ impl VirtualStateProcessor {
         // until an epoch's anchor is buried and lag-ready (early chain / not yet ready).
         let confirmable = ready_epoch_from_tip_blue_score(sink_blue, epoch_len_blue, dns_params.attestation_lag_blue_score)
             .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, sink, dns_params).map(|a| (epoch, a)));
+        // Proposal ② (2026-08-01 bystander wedge, defense-in-depth): while this node's OWN view is
+        // stale (sink timestamp far behind wall clock — IBD, deep catch-up after downtime), treat
+        // nothing as confirmable, so `advance_dns_confirmation` HOLDS the previously latched anchor
+        // instead of latching one seen mid-sync — a mid-sync view can be showing a branch the live
+        // network already left, and a latched dead-branch anchor is exactly the ①/③ wedge. Depths,
+        // health and eviction bookkeeping below still advance; only the latch holds. Node-local
+        // (config lever, kaspad-on): never a block-validity input, no consensus derivation reads it
+        // (the R_E / frozen-facts path resolves per-block, not from `DnsState`).
+        let confirmable = match self.dns_confirm_hold_threshold_ms {
+            Some(threshold_ms) if confirmable.is_some() => {
+                let sink_timestamp = self.headers_store.get_timestamp(sink).unwrap_or_default();
+                if dns_confirm_view_is_fresh(unix_now(), sink_timestamp, threshold_ms) {
+                    confirmable
+                } else {
+                    if let Some(suppressed) = dns_confirm_hold_notice_due() {
+                        info!(
+                            "[dns-finality] confirm latch held (proposal ②): node view is stale (sink={sink}, \
+                             sink_timestamp={sink_timestamp}, lag>{threshold_ms}ms) — not latching a mid-sync anchor \
+                             ({suppressed} holds since previous notice)"
+                        );
+                    }
+                    None
+                }
+            }
+            _ => confirmable,
+        };
         let confirmable_anchor = confirmable.as_ref().map(|(_, a)| (a.anchor_hash, a.anchor_daa_score));
         // Proposal ③ (2026-08-01 bystander wedge): does the branch's own stake approve THIS
         // anchor? `contributions` was v2-credited above — only attestations naming this chain's

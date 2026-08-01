@@ -4483,6 +4483,19 @@ pub fn aggregate_epoch_tallies(
 /// blind spot (window score carried by the shared pre-fork segment) is closed at the source.
 /// See [`DnsParams::require_anchor_attestation`] for the liveness analysis and replay rules.
 #[allow(clippy::too_many_arguments)]
+/// 2026-08-01 bystander-wedge proposal ② (defense-in-depth): is this node's own view of the
+/// selected chain FRESH enough to latch a newly confirmable DNS anchor into the reorg gate?
+///
+/// Same shape as the mining rule engine's `is_nearly_synced` (sink timestamp within a fraction of
+/// the DAA window duration of wall clock): a node in IBD or deep catch-up has a sink far in the
+/// past and must not latch — a mid-sync view can be showing a branch the live network already
+/// left, and a latched dead-branch anchor is exactly the ①/③ wedge. Pure; the caller supplies
+/// wall-clock `now_ms` and the per-net `threshold_ms`. Node-local only: the outcome steers this
+/// node's own latch advance, never a block-validity decision or a consensus derivation.
+pub fn dns_confirm_view_is_fresh(now_ms: u64, sink_timestamp_ms: u64, threshold_ms: u64) -> bool {
+    now_ms < sink_timestamp_ms.saturating_add(threshold_ms)
+}
+
 pub fn advance_dns_confirmation(
     prev: Option<&DnsState>,
     anchor: Hash64,
@@ -5038,6 +5051,24 @@ pub fn dns_finality_fresh_for_bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Proposal ② (2026-08-01): confirm-latch freshness gate ----
+
+    #[test]
+    fn dns_confirm_view_freshness_boundaries() {
+        // Fresh: sink within the threshold of wall clock (strict `<`, matching the rule engine).
+        assert!(dns_confirm_view_is_fresh(1_000_000, 999_000, 10_000));
+        assert!(dns_confirm_view_is_fresh(1_000_000, 1_000_000, 1));
+        // Sink timestamps in the (clock-skewed) future stay fresh.
+        assert!(dns_confirm_view_is_fresh(1_000_000, 2_000_000, 10_000));
+        // Stale: exactly at and beyond the threshold.
+        assert!(!dns_confirm_view_is_fresh(1_000_000, 990_000, 10_000));
+        assert!(!dns_confirm_view_is_fresh(1_000_000, 100_000, 10_000));
+        // Saturation: a huge threshold never wraps into "stale".
+        assert!(dns_confirm_view_is_fresh(1_000_000, 1, u64::MAX));
+        // Degenerate zero-threshold holds everything except a future sink.
+        assert!(!dns_confirm_view_is_fresh(1_000_000, 1_000_000, 0));
+    }
 
     // ---- ADR-0022: OverlaySnapshot commitment ----
 

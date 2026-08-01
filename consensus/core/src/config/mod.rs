@@ -103,6 +103,17 @@ pub struct Config {
     /// complete and independently reviewed, and it does not activate PALW or change any commitment.
     pub palw_permissionless_snapshot_auth: bool,
 
+    /// 2026-08-01 bystander-wedge proposal ② (defense-in-depth): while this node's own view of
+    /// the selected chain is STALE (sink timestamp far behind wall clock — IBD, deep catch-up
+    /// after downtime), do not LATCH newly confirmable DNS anchors into the reorg gate. A
+    /// mid-sync view can be showing a branch the live network has already left, and a latched
+    /// dead-branch anchor is exactly the wedge proposals ①/③ addressed. Node-local, NOT
+    /// consensus-sensitive — the latch only steers this node's own reorg admission; it is never
+    /// a block-validity input and never feeds a consensus derivation. Default `false` (test
+    /// harnesses and sim tools drive chains with synthetic timestamps); `kaspad` sets it
+    /// unconditionally in `Args::apply_to_config`.
+    pub hold_dns_confirm_while_unsynced: bool,
+
     /// kaspa-pq EVM Lane (§12): this node's EVM state-history retention mode
     /// (`--evm-history-mode`). Node-local, NOT consensus-sensitive — it only
     /// controls whether the archive diff/checkpoint rows (prefixes 220/221) are
@@ -209,6 +220,7 @@ impl Config {
             palw_pruning_snapshot_checkpoints: vec![],
             palw_search_scheduler_allowlist: vec![],
             palw_permissionless_snapshot_auth: false,
+            hold_dns_confirm_while_unsynced: false,
             evm_history_mode: crate::evm::EvmHistoryMode::Recent,
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,

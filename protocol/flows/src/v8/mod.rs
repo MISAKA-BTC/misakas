@@ -16,10 +16,14 @@ pub(crate) mod claimrelay_evm;
 pub mod palw_da;
 pub(crate) mod request_block_bodies;
 pub(crate) mod request_palw_chain_derived_bundle;
+pub(crate) mod request_palw_registry_records;
 pub(crate) mod request_pruning_point_snapshots;
 pub(crate) mod txrelay_evm;
 use crate::{
-    flow_context::{FlowContext, PROTOCOL_VERSION_CLAIM_RELAY, PROTOCOL_VERSION_EVM_RELAY, PROTOCOL_VERSION_PALW_DA},
+    flow_context::{
+        FlowContext, PROTOCOL_VERSION_CLAIM_RELAY, PROTOCOL_VERSION_EVM_RELAY, PROTOCOL_VERSION_PALW_DA,
+        PROTOCOL_VERSION_PALW_REGISTRY_RECORDS,
+    },
     flow_trait::Flow,
 };
 use claimrelay_evm::{RelayEvmDepositClaimsFlow, RequestedEvmDepositClaimsFlow};
@@ -31,6 +35,7 @@ use kaspa_p2p_lib::{KaspadMessagePayloadType, Router, SharedIncomingRoute, conve
 use kaspa_utils::channel;
 use request_block_bodies::HandleBlockBodyRequests;
 use request_palw_chain_derived_bundle::RequestPalwChainDerivedBundleFlow;
+use request_palw_registry_records::RequestPalwComputeRegistryRecordsFlow;
 use request_pruning_point_snapshots::{
     RequestPruningPointEvmStateFlow, RequestPruningPointOverlaySnapshotFlow, RequestPruningPointPalwSnapshotFlow,
 };
@@ -69,10 +74,14 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
                 // ADR-0042 chain-derived (permissionless) Header-v4 boundary authentication bundle.
                 KaspadMessagePayloadType::PalwChainDerivedBundleChunk,
                 KaspadMessagePayloadType::DonePalwChainDerivedBundle,
+                // ADR-MA §21.4 compute-registry record pre-delivery response (protocol ≥ 104; the
+                // route is local, and only a peer we asked ever sends it).
+                KaspadMessagePayloadType::PalwComputeRegistryRecords,
             ]),
             relay_receiver,
             body_only_ibd_permitted,
             header_format,
+            protocol_version >= PROTOCOL_VERSION_PALW_REGISTRY_RECORDS,
         )),
         Box::new(HandleRelayBlockRequests::new(
             ctx.clone(),
@@ -244,6 +253,17 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             ctx.clone(),
             router.clone(),
             router.subscribe_with_capacity(vec![KaspadMessagePayloadType::GetPalwDaChunk], RequestedPalwDaChunksFlow::channel_size()),
+        )));
+    }
+
+    // ADR-MA §21.4 compute-registry record pre-delivery (oneof 79/80): serve the complete
+    // content-addressed record set to a syncing peer before its header download. ≥104 peers only —
+    // an unroutable payload type disconnects the peer.
+    if protocol_version >= PROTOCOL_VERSION_PALW_REGISTRY_RECORDS {
+        flows.push(Box::new(RequestPalwComputeRegistryRecordsFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe(vec![KaspadMessagePayloadType::RequestPalwComputeRegistryRecords]),
         )));
     }
 

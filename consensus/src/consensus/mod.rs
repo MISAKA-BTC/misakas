@@ -469,6 +469,7 @@ impl Consensus {
             config.evm_retire_206,           // C-01 S9b: stop persisting the per-block 206 snapshot
             config.palw_pruning_snapshot_checkpoints.clone(),
             config.palw_permissionless_snapshot_auth,
+            config.hold_dns_confirm_while_unsynced, // proposal ②: IBD/deep-catch-up confirm-latch hold
         ));
 
         let pruning_processor = Arc::new(PruningProcessor::new(
@@ -2451,6 +2452,19 @@ impl ConsensusApi for Consensus {
 
     fn pruning_point_palw_snapshot(&self) -> Option<kaspa_consensus_core::palw_pruned_frontier::PalwPruningPointSnapshotV1> {
         self.virtual_processor.pruning_point_palw_snapshot()
+    }
+
+    fn palw_compute_registry_records_package(
+        &self,
+    ) -> kaspa_consensus_core::palw_pruned_frontier::PalwComputeRegistryPruningSnapshotV1 {
+        self.virtual_processor.palw_compute_registry_records_package()
+    }
+
+    fn import_palw_compute_registry_records_package(
+        &self,
+        package: kaspa_consensus_core::palw_pruned_frontier::PalwComputeRegistryPruningSnapshotV1,
+    ) -> PruningImportResult<()> {
+        self.virtual_processor.import_palw_compute_registry_records_package(&package)
     }
 
     fn import_pruning_point_palw_snapshot_with_chain_derived_auth(

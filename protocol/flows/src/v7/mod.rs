@@ -61,6 +61,8 @@ pub fn register(ctx: FlowContext, router: Arc<Router>) -> Vec<Box<dyn Flow>> {
             relay_receiver,
             body_only_ibd_permitted,
             header_format,
+            // v7 peers predate the ADR-MA §21.4 compute-registry record pre-delivery.
+            false,
         )),
         Box::new(HandleRelayBlockRequests::new(
             ctx.clone(),

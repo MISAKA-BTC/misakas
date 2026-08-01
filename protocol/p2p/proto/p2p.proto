@@ -476,6 +476,19 @@ message DonePalwChainDerivedBundleMessage{}
 
 message RequestNextPalwChainDerivedBundleChunksMessage{}
 
+// ADR-MA §21.4 — request the peer's complete content-addressed Compute Set registry record set
+// (descriptors / policies / plans / activation certificates). Sent by a syncer before header
+// download on a registry-active net, so header-stage §13.2 resolution and GHOSTDAG §14 credit can
+// resolve records whose registering bodies have not been replayed yet.
+message RequestPalwComputeRegistryRecordsMessage{}
+
+// Borsh-encoded `PalwComputeRegistryPruningSnapshotV1` with a zero pruning point and an empty
+// fork-local view: only the four content-addressed record tiers are meaningful on this path (the
+// importer stages records and NEVER the view — views stay fold-derived).
+message PalwComputeRegistryRecordsMessage{
+  bytes package = 1;
+}
+
 // DA-01 bounded receipt-object chunk transfer. One request names exactly one chunk; a response is
 // self-describing but accepted only against an outstanding request and a valid DA Merkle proof.
 message GetPalwDaChunkMessage{

@@ -74,6 +74,10 @@ pub enum KaspadMessagePayloadType {
     PalwChainDerivedBundleChunk,
     DonePalwChainDerivedBundle,
     RequestNextPalwChainDerivedBundleChunks,
+    // ADR-MA §21.4 catch-up registry-record delivery (protobuf tags 79/80, protocol ≥ 104).
+    // Registered only for ≥104 peers: an unroutable payload type disconnects the peer.
+    RequestPalwComputeRegistryRecords,
+    PalwComputeRegistryRecords,
 }
 
 impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
@@ -154,6 +158,10 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             KaspadMessagePayload::RequestNextPalwChainDerivedBundleChunks(_) => {
                 KaspadMessagePayloadType::RequestNextPalwChainDerivedBundleChunks
             }
+            KaspadMessagePayload::RequestPalwComputeRegistryRecords(_) => {
+                KaspadMessagePayloadType::RequestPalwComputeRegistryRecords
+            }
+            KaspadMessagePayload::PalwComputeRegistryRecords(_) => KaspadMessagePayloadType::PalwComputeRegistryRecords,
         }
     }
 }

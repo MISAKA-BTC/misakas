@@ -8254,3 +8254,99 @@ async fn real_pruning_advance_writes_and_serves_the_pruning_point_anchor() {
 
     consensus.shutdown(wait_handles);
 }
+
+/// ADR-MA §21.4 catch-up delivery: the records-package serve/import pair used by IBD.
+///
+/// Covers the four contract points the flow relies on: (1) fence-closed nets refuse an import
+/// and serve an empty package; (2) a fence-open net imports a canonical package and the records
+/// become readable through the SAME store the header-stage §13.2 resolution reads; (3) the
+/// import is idempotent (re-import of the identical package is a no-op, the fold-vs-IBD overlap
+/// case); (4) serving reflects the imported records back in canonical form, so a freshly synced
+/// node can itself serve the next syncer.
+#[tokio::test]
+async fn compute_registry_records_package_serve_import_roundtrip() {
+    use crate::model::stores::palw_compute_registry::PalwComputeRegistryStoreReader;
+    use kaspa_consensus_core::palw_compute_set::{PALW_COMPUTE_SET_DESCRIPTOR_VERSION, PalwComputeSetDescriptorV2};
+    use kaspa_consensus_core::palw_pruned_frontier::{
+        PALW_COMPUTE_REGISTRY_PRUNING_SNAPSHOT_VERSION, PalwComputeRegistryPruningSnapshotV1,
+    };
+
+    fn h(b: u8) -> kaspa_consensus_core::Hash64 {
+        kaspa_consensus_core::Hash64::from_bytes([b; 64])
+    }
+    fn descriptor(tag: u8) -> PalwComputeSetDescriptorV2 {
+        PalwComputeSetDescriptorV2 {
+            version: PALW_COMPUTE_SET_DESCRIPTOR_VERSION,
+            compute_vm_id: kaspa_consensus_core::palw_compute_ir::compute_vm_id_v1(),
+            model_family_id: h(tag),
+            model_artifact_root: h(3),
+            model_manifest_root: h(4),
+            tokenizer_root: h(5),
+            chat_template_root: h(6),
+            preprocessing_root: h(7),
+            decode_policy_root: h(8),
+            semantic_program_root: h(9),
+            shape_table_root: h(10),
+            shape_cost_table_root: h(11),
+            arithmetic_rules_root: h(12),
+            overflow_budget_root: h(13),
+            lut_root: h(14),
+            trace_policy_root: h(15),
+            checkpoint_policy_root: h(16),
+            conformance_vector_root: h(17),
+            modality_mask: 1,
+            resource_limits_root: h(18),
+        }
+    }
+    fn package_of(descriptors: Vec<PalwComputeSetDescriptorV2>) -> PalwComputeRegistryPruningSnapshotV1 {
+        let mut package = PalwComputeRegistryPruningSnapshotV1 {
+            version: PALW_COMPUTE_REGISTRY_PRUNING_SNAPSHOT_VERSION,
+            pruning_point: BlockHash::default(),
+            descriptors,
+            policies: vec![],
+            plans: vec![],
+            activation_certificates: vec![],
+            view: kaspa_consensus_core::palw_compute_set::PalwComputeRegistryViewV1::new(),
+        };
+        package.canonicalize();
+        package
+    }
+
+    // (1) Fence closed (every shipped non-PALW preset): import refused, serve is empty.
+    let closed = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    let closed_consensus = TestConsensus::new(&closed);
+    let closed_handles = closed_consensus.init();
+    assert!(closed_consensus.virtual_processor().import_palw_compute_registry_records_package(&package_of(vec![descriptor(2)])).is_err());
+    let served = closed_consensus.virtual_processor().palw_compute_registry_records_package();
+    assert!(served.descriptors.is_empty() && served.policies.is_empty() && served.plans.is_empty());
+    closed_consensus.shutdown(closed_handles);
+
+    // (2)-(4) Fence open: import lands, records readable, idempotent, served back canonically.
+    // Use the REAL registry-active preset (testnet-21): an open fence is a Header-v5 re-genesis
+    // event with structural asserts (header processor ctor), so editing a legacy preset's fence
+    // in place is itself rejected.
+    let open = ConfigBuilder::new(kaspa_consensus_core::config::params::PCPB_PALW_PARAMS).skip_proof_of_work().build();
+    let consensus = TestConsensus::new(&open);
+    let wait_handles = consensus.init();
+    let vsp = consensus.virtual_processor();
+
+    let (d1, d2) = (descriptor(2), descriptor(0x22));
+    let package = package_of(vec![d1.clone(), d2.clone()]);
+    vsp.import_palw_compute_registry_records_package(&package).expect("canonical package imports on a fence-open net");
+    for d in [&d1, &d2] {
+        let read = vsp.palw_compute_registry_store.descriptor(d.compute_set_id()).unwrap().expect("imported record readable");
+        assert_eq!(read.as_ref(), d);
+    }
+    // (3) Idempotent overlap with an identical re-delivery.
+    vsp.import_palw_compute_registry_records_package(&package).expect("identical re-import is a no-op");
+    // A NON-canonical package (unsorted tiers) is refused before any staging.
+    let mut unsorted = package_of(vec![d1.clone(), d2.clone()]);
+    unsorted.descriptors.reverse();
+    assert!(vsp.import_palw_compute_registry_records_package(&unsorted).is_err());
+    // (4) Serve returns the imported set, canonical.
+    let served = vsp.palw_compute_registry_records_package();
+    assert!(served.validate());
+    assert_eq!(served.descriptors.len(), 2);
+
+    consensus.shutdown(wait_handles);
+}

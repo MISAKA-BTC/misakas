@@ -79,6 +79,11 @@ message KaspadMessage {
     PalwChainDerivedBundleChunkMessage palwChainDerivedBundleChunk = 76;
     DonePalwChainDerivedBundleMessage donePalwChainDerivedBundle = 77;
     RequestNextPalwChainDerivedBundleChunksMessage requestNextPalwChainDerivedBundleChunks = 78;
+    // ADR-MA §21.4 catch-up delivery (protocol ≥ 104): the complete content-addressed Compute Set
+    // registry record set, requested by a syncer BEFORE header download on a registry-active net.
+    // Tags appended, never reused.
+    RequestPalwComputeRegistryRecordsMessage requestPalwComputeRegistryRecords = 79;
+    PalwComputeRegistryRecordsMessage palwComputeRegistryRecords = 80;
   }
 }
 

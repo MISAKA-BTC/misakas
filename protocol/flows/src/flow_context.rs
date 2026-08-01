@@ -82,7 +82,7 @@ use uuid::Uuid;
 // never be sent a message they have no route for — routing an unknown payload type
 // disconnects the peer, so all EVM gossip is version-filtered to the exact peer set
 // that understands it (EVM-tx ≥101, deposit-claim ≥102).
-const PROTOCOL_VERSION: u32 = 103;
+const PROTOCOL_VERSION: u32 = 104;
 /// The last protocol version WITHOUT the EVM relay messages (still accepted).
 const PROTOCOL_VERSION_NO_EVM_RELAY: u32 = 100;
 /// The minimum protocol version that understands the EVM-tx relay messages.
@@ -94,6 +94,11 @@ pub(crate) const PROTOCOL_VERSION_CLAIM_RELAY: u32 = 102;
 /// The minimum protocol version that understands bounded DA-01 receipt-object chunks. Older peers
 /// must never be sent tags 73/74 because an unroutable payload disconnects the connection.
 pub(crate) const PROTOCOL_VERSION_PALW_DA: u32 = 103;
+/// The minimum protocol version that understands the ADR-MA §21.4 compute-registry record
+/// pre-delivery (oneof tags 79/80). A syncer only REQUESTS records from >= 104 peers (and warns
+/// on older ones); the serving route is only registered for >= 104 peers, since an unroutable
+/// payload type disconnects the connection.
+pub(crate) const PROTOCOL_VERSION_PALW_REGISTRY_RECORDS: u32 = 104;
 
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
@@ -1090,6 +1095,12 @@ impl ConnectionInitializer for FlowContext {
         // Register all flows according to version
         let (flows, applied_protocol_version) = match peer_version.protocol_version {
             v if v >= PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            // ADR-MA §21.4 back-compat: a 103 peer predates the compute-registry record
+            // pre-delivery (oneof 79/80). Register the 103 flow set — the records route stays
+            // unregistered and the IBD flow never requests records from it.
+            PROTOCOL_VERSION_PALW_DA => {
+                (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_DA), PROTOCOL_VERSION_PALW_DA)
+            }
             // §14.2 back-compat: an EVM-tx-relay (101) peer that predates the
             // deposit-claim relay. Register the 101 flow set (EVM-tx relay, NO
             // claim relay) — claim messages (oneof 67-70) are version-filtered to

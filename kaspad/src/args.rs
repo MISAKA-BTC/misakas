@@ -512,6 +512,11 @@ impl Args {
         config.ram_scale = self.ram_scale;
         config.retention_period_days = self.retention_period_days;
         config.palw_pruning_snapshot_checkpoints.clone_from(&self.palw_pruning_snapshot_checkpoints);
+        // 2026-08-01 bystander-wedge proposal ②: every kaspad node holds the DNS confirm latch
+        // while its own sink is stale (IBD / deep catch-up). Unconditional — a node-local
+        // defense with no consensus effect and no reason to opt out; the Config default stays
+        // `false` only so test harnesses driving synthetic-timestamp chains are unaffected.
+        config.hold_dns_confirm_while_unsynced = true;
         config.evm_history_mode = self.evm_history_mode; // §12: EVM state-history retention
         config.evm_shadow_state_backend = self.evm_shadow_state_backend; // C-01 S4: shadow dual-write
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed

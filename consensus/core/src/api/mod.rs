@@ -548,6 +548,30 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// ADR-MA §21.4 catch-up delivery, serve side: the node's complete content-addressed Compute
+    /// Set registry record set (descriptors / policies / plans / activation certificates), shipped
+    /// to a syncer BEFORE header download so header-stage §13.2 resolution and GHOSTDAG §14 credit
+    /// can resolve records whose registering bodies the syncer has not replayed yet.
+    ///
+    /// Transport reuses [`crate::palw_pruned_frontier::PalwComputeRegistryPruningSnapshotV1`] with
+    /// a ZERO pruning point and an EMPTY fork-local view: on this path only the four record tiers
+    /// are meaningful. Returns an empty canonical package while the registry fence is closed.
+    fn palw_compute_registry_records_package(&self) -> crate::palw_pruned_frontier::PalwComputeRegistryPruningSnapshotV1 {
+        unimplemented!()
+    }
+
+    /// ADR-MA §21.4 catch-up delivery, import side: stage a peer-served record package into the
+    /// fork-INDEPENDENT content-addressed record stores. Write-once/idempotent per record; a
+    /// divergent write under a content id is a protocol failure. The fork-local VIEW is never
+    /// touched on this path — views stay fold-derived from replayed bodies (§21.2).
+    fn import_palw_compute_registry_records_package(
+        &self,
+        package: crate::palw_pruned_frontier::PalwComputeRegistryPruningSnapshotV1,
+    ) -> PruningImportResult<()> {
+        let _ = package;
+        unimplemented!()
+    }
+
     /// Atomically install a PALW pruning frontier after binding it to the validated PP header and a
     /// typed, version-appropriate authentication provenance.
     ///
