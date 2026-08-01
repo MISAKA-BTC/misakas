@@ -60,18 +60,22 @@ fn decode_seed_hex(s: &str) -> Result<[u8; VALIDATOR_SEED_LEN], CliError> {
 }
 
 /// `misaka key gen --out <path>`: generate a fresh 32-byte ML-DSA-87 seed,
-/// write it hex-encoded to `path` (mode 0600, REFUSE to overwrite), and return
-/// the derived funding (P2PKH-ML-DSA) address for `prefix`.
+/// write it hex-encoded to `path` (mode 0600 on Unix, REFUSE to overwrite), and
+/// return the derived funding (P2PKH-ML-DSA) address for `prefix`.
 pub fn generate(path: &str, prefix: Prefix) -> Result<(Address, [u8; VALIDATOR_SEED_LEN]), CliError> {
-    use std::os::unix::fs::OpenOptionsExt;
     let mut seed = [0u8; VALIDATOR_SEED_LEN];
     fill_random(&mut seed)?;
     let mut hex = vec![0u8; VALIDATOR_SEED_LEN * 2];
     faster_hex::hex_encode(&seed, &mut hex).expect("hex encode");
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true) // O_EXCL: never clobber an existing key
-        .mode(0o600)
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true); // O_EXCL: never clobber an existing key
+    // 0600 is POSIX-only; on Windows the file inherits the profile's default ACLs.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts
         .open(path)
         .map_err(|e| CliError::new(exit::GENERIC, format!("create {path}: {e} (refusing to overwrite an existing key file)")))?;
     f.write_all(&hex).map_err(|e| CliError::new(exit::GENERIC, format!("write {path}: {e}")))?;
@@ -79,9 +83,9 @@ pub fn generate(path: &str, prefix: Prefix) -> Result<(Address, [u8; VALIDATOR_S
     Ok((addr, seed))
 }
 
-/// Dependency-free CSPRNG: 32 bytes from the OS.
+/// OS CSPRNG: getrandom uses getentropy//dev/urandom on Unix and
+/// BCryptGenRandom on Windows (the old direct /dev/urandom read compiled on
+/// Windows but could never succeed there).
 fn fill_random(buf: &mut [u8]) -> Result<(), CliError> {
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(buf))
-        .map_err(|e| CliError::new(exit::GENERIC, format!("/dev/urandom: {e}")))
+    getrandom::getrandom(buf).map_err(|e| CliError::new(exit::GENERIC, format!("OS CSPRNG: {e}")))
 }

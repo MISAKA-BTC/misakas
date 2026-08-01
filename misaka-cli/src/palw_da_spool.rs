@@ -5,12 +5,17 @@ use kaspa_consensus_core::palw::da::{PALW_DA_MAX_OBJECT_BYTES, PALW_RECEIPT_DA_O
 use serde::Serialize;
 use serde_json::Value;
 use std::{
-    ffi::CString,
-    fs::{self, OpenOptions},
-    io::{self, Read, Write},
+    fs, io,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
+};
+
+#[cfg(unix)]
+use std::{
+    ffi::CString,
+    fs::OpenOptions,
+    io::{Read, Write},
 };
 
 #[cfg(unix)]
