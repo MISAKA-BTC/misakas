@@ -23,20 +23,4 @@ unmaintained = "none"
 # Triaged-but-unfixable advisory IDs go here, each with a justification + tracking issue.
 ignore = [
   # "RUSTSEC-XXXX-NNNN", # why it is safe to ignore + link to the tracking issue
-
-  # RUSTSEC-2026-0220 — ruint 1.18.0 `Uint::overflowing_shl`/`overflowing_shr` return a
-  # false-negative OVERFLOW FLAG (the shifted values themselves are correct), which propagates into
-  # `checked_shl`/`checked_shr` returning `Some` where they should return `None`.
-  # https://rustsec.org/advisories/RUSTSEC-2026-0220
-  #
-  # Triage: ruint is not a direct dependency and this workspace never calls those APIs — it arrives
-  # only under `alloy-primitives`, i.e. the EVM lane's integer types. The fixed 1.20.0 cannot be
-  # taken in isolation: it pulls a `serde_with` major that conflicts with the version `kaspad` and
-  # `kaspa-stratum-bridge` are pinned to, so clearing this means a coordinated alloy + serde_with
-  # bump rather than a lockfile nudge.
-  #
-  # Accepted deliberately and temporarily, NOT because the advisory is harmless in general: a wrong
-  # overflow flag is exactly the kind of thing that turns into a silent truncation somewhere else.
-  # Revisit with the next planned alloy upgrade and delete this entry then.
-  "RUSTSEC-2026-0220",
 ]
