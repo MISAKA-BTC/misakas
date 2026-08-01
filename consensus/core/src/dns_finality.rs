@@ -4496,6 +4496,10 @@ pub fn dns_confirm_view_is_fresh(now_ms: u64, sink_timestamp_ms: u64, threshold_
     now_ms < sink_timestamp_ms.saturating_add(threshold_ms)
 }
 
+// Deliberately a flat argument list, not a params struct: every argument is a distinct consensus
+// input with its own provenance (proposal ③ added `anchor_epoch_attested` /
+// `require_anchor_attestation`), and the call site reads as the spec's confirmation predicate.
+#[allow(clippy::too_many_arguments)]
 pub fn advance_dns_confirmation(
     prev: Option<&DnsState>,
     anchor: Hash64,

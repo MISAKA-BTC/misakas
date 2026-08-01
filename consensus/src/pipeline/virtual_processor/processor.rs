@@ -5632,7 +5632,30 @@ impl VirtualStateProcessor {
         // the POV-dependent `sink`) is what gets DNS-confirmed and protected by the reorg gate, so
         // nodes that recompute at different boundary sinks still protect the same anchor. `None`
         // until an epoch's anchor is buried and lag-ready (early chain / not yet ready).
+        // Proposal ③ FOLLOW-UP (2026-08-01, its first live exercise — testnet-21). When anchor
+        // attestation is REQUIRED, confirm the newest ready-or-older epoch that actually carries a
+        // credited attestation on this branch, NOT the newest ready epoch — whose attestation
+        // cannot exist yet. An epoch only becomes attestable once it is ready, so the shard for
+        // epoch E is signed, relayed, mined and accepted strictly AFTER E became ready, and by then
+        // the tip has moved on and `latest_ready` is E+1. Demanding that `latest_ready` itself be
+        // already attested is therefore a race the chain always wins: measured live over epochs
+        // 277-307, EVERY recompute had `contributions` covering exactly `[ready-12, ready-1]` and
+        // never `ready`, so the latch never engaged and the reorg gate never armed at all.
+        //
+        // Walking down to the newest ATTESTED epoch preserves ③'s meaning exactly — a dead branch
+        // carries no attestation for ANY epoch of its own (its window score rides the shared
+        // pre-fork segment, the measured 96% case), so it still can never confirm — while making
+        // the condition satisfiable on a live branch whose stake really is attesting.
         let confirmable = ready_epoch_from_tip_blue_score(sink_blue, epoch_len_blue, dns_params.attestation_lag_blue_score)
+            .and_then(|latest_ready| {
+                if dns_params.require_anchor_attestation {
+                    // `contributions` is already gated to creditable epochs by the v3 canonical-anchor
+                    // rule, so every epoch here is anchor-resolvable on this chain.
+                    contributions.iter().map(|c| c.epoch).filter(|e| *e <= latest_ready).max()
+                } else {
+                    Some(latest_ready)
+                }
+            })
             .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, sink, dns_params).map(|a| (epoch, a)));
         // Proposal ② (2026-08-01 bystander wedge, defense-in-depth): while this node's OWN view is
         // stale (sink timestamp far behind wall clock — IBD, deep catch-up after downtime), treat

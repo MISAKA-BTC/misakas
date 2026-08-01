@@ -114,7 +114,10 @@ jobs:
         run: cargo check --locked -p misaka-cli --bin misaka --features evm-send
 
       - name: Run cargo test regular features
-        run: cargo nextest run --workspace
+        # --no-fail-fast: one failing test must not mask the other ~2000 (2026-08-01: the broken
+        # palw lifecycle e2e aborted the run at 207/2324 tests, so the suite's real state was
+        # invisible for a whole day of pushes while the workflow was ALSO chronically red on fmt).
+        run: cargo nextest run --workspace --no-fail-fast
 
       - name: Run cargo doc tests
         run: cargo test --doc --workspace
