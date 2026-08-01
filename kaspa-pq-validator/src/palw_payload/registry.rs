@@ -260,7 +260,10 @@ pub struct RegistryGovVoteArgs {
     /// pass / reject.
     #[arg(long, value_enum)]
     vote: ActivationVote,
-    /// Network number (e.g. 20 for compute-registry-palw).
+    /// Network number — the TESTNET SUFFIX of the net you are voting on (21 for the current public
+    /// PALW testnet `pcpb-palw`). It is folded into the signed digest and the chain recomputes it as
+    /// `params.net.suffix()`, so a wrong value fails as "vote signature invalid" with nothing to
+    /// point at the cause.
     #[arg(long)]
     network_id: u32,
     /// Output file for the signed vote (JSON).
@@ -286,10 +289,39 @@ pub(super) fn registry_gov_vote(args: RegistryGovVoteArgs) -> Result<(), String>
     vote.signature = key.sign_with_context(&digest.as_bytes(), PALW_GOVERNANCE_MLDSA87_CONTEXT).to_vec();
     println!("validator_id: {}", key.validator_id);
     println!("action_hash: {}  vote: {}", summary.action.action_hash(), vote.vote);
-    let json = serde_json::to_string_pretty(&vote).map_err(|e| format!("serialize vote: {e}"))?;
+
+    // Record WHAT THIS VOTE SIGNED alongside the vote. `PalwGovernanceVoteV1` carries only
+    // {bond_outpoint, vote, signature}, so a vote signed over a stale `validator_set_commitment` or
+    // a different action was previously indistinguishable from a good one until the chain rejected
+    // the whole envelope with a bare "vote signature invalid" — with no way to tell WHICH vote or
+    // WHY. These fields are advisory metadata for `registry-gov-assemble`'s cross-check; consensus
+    // never sees them, and deserialising this file as `PalwGovernanceVoteV1` ignores them, so an
+    // older vote file still loads.
+    let mut json = serde_json::to_value(&vote).map_err(|e| format!("serialize vote: {e}"))?;
+    if let Some(obj) = json.as_object_mut() {
+        obj.insert("signed_validator_set_commitment".into(), summary.validator_set_commitment.to_string().into());
+        obj.insert("signed_action_hash".into(), summary.action.action_hash().to_string().into());
+        obj.insert("signed_network_id".into(), args.network_id.into());
+        obj.insert("signer_validator_id".into(), key.validator_id.to_string().into());
+    }
+    let json = serde_json::to_string_pretty(&json).map_err(|e| format!("serialize vote: {e}"))?;
     std::fs::write(&args.out, json).map_err(|e| format!("write {}: {e}", args.out.display()))?;
     println!("wrote signed vote to {}", args.out.display());
     Ok(())
+}
+
+/// What a vote file says it signed. Every field is optional so a vote produced before this metadata
+/// existed still assembles — it just cannot be cross-checked, and says so.
+#[derive(serde::Deserialize, Default)]
+struct GovVoteAudit {
+    #[serde(default)]
+    signed_validator_set_commitment: Option<String>,
+    #[serde(default)]
+    signed_action_hash: Option<String>,
+    #[serde(default)]
+    signed_network_id: Option<u32>,
+    #[serde(default)]
+    signer_validator_id: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -318,9 +350,55 @@ pub(super) fn registry_gov_assemble(args: RegistryGovAssembleArgs) -> Result<(),
     let mut envelope = governance_summary(action, commitment);
     envelope.total_selected_stake = records.iter().map(|b| b.amount as u128).sum();
 
+    // Cross-check every vote against what THIS envelope commits to, before signing anything into a
+    // payload. `registry-cert-assemble` has always refused a summary/bonds mismatch; the governance
+    // path had no equivalent, so a vote signed over a stale commitment or a different action shipped
+    // silently and the chain rejected the whole envelope with a bare "vote signature invalid" that
+    // named neither the vote nor the reason. Catching it here turns a wasted on-chain round trip
+    // into a local error that says which file is wrong.
+    let expected_action_hash = envelope.action.action_hash().to_string();
+    let expected_commitment = commitment.to_string();
     let mut votes: Vec<PalwGovernanceVoteV1> = Vec::with_capacity(args.votes.len());
     for path in &args.votes {
         votes.push(read_json(path, "signed vote")?);
+        let audit: GovVoteAudit = read_json(path, "signed vote").unwrap_or_default();
+        let where_ = path.display();
+        match audit.signed_validator_set_commitment.as_deref() {
+            Some(c) if c != expected_commitment => {
+                return Err(format!(
+                    "{where_} signed validator_set_commitment {c}, but this envelope commits to {expected_commitment} — \
+                     the active bond set moved since that vote was signed; re-run `registry-validator-set` and re-collect \
+                     every vote against the new value"
+                ));
+            }
+            Some(_) => {}
+            None => eprintln!("warning: {where_} predates vote metadata; its commitment cannot be cross-checked"),
+        }
+        match audit.signed_action_hash.as_deref() {
+            Some(h) if h != expected_action_hash => {
+                return Err(format!(
+                    "{where_} signed action_hash {h}, but this envelope's action hashes to {expected_action_hash} — \
+                     that vote covers a DIFFERENT action (a rebuilt action with another effective_from_daa is the usual \
+                     cause); re-sign it against the exact action JSON passed to --action-json"
+                ));
+            }
+            Some(_) => {}
+            None => eprintln!("warning: {where_} predates vote metadata; its action hash cannot be cross-checked"),
+        }
+        if let (Some(id), Some(op)) = (audit.signer_validator_id.as_deref(), votes.last().map(|v| v.bond_outpoint)) {
+            // The signer key is never checked against the bond by `registry-gov-vote`, and consensus
+            // resolves the pubkey from the BOND — so a key/outpoint mispairing also surfaces only as
+            // "vote signature invalid". bonds.json already records which validator owns which bond.
+            if let Some(b) = bonds.iter().find(|b| parse_outpoint(&b.bond_outpoint, "bond_outpoint").ok() == Some(op))
+                && b.validator_id != id
+            {
+                return Err(format!(
+                    "{where_} was signed by validator {id}, but bond {} belongs to {} — the vote was signed with the \
+                     wrong key file",
+                    b.bond_outpoint, b.validator_id
+                ));
+            }
+        }
     }
     votes.sort_by(|a, b| {
         (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
@@ -424,7 +502,8 @@ pub struct RegistryCertVoteArgs {
     /// pass / reject.
     #[arg(long, value_enum)]
     vote: ActivationVote,
-    /// Network number (e.g. 20 for compute-registry-palw).
+    /// Network number — the TESTNET SUFFIX (21 for the current public PALW testnet). Folded into the
+    /// signed digest; a wrong value surfaces only as "vote signature invalid".
     #[arg(long)]
     network_id: u32,
     /// Output file for the signed vote (JSON).
