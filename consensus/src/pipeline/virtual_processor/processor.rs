@@ -67,6 +67,7 @@ use crate::{
     },
     processes::{
         coinbase::CoinbaseManager,
+        difficulty::calc_work,
         ghostdag::ordering::SortableBlock,
         transaction_validator::{
             TransactionValidator,
@@ -97,7 +98,8 @@ use kaspa_consensus_core::{
         PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
         anchor_cutoff_blue_score, apply_dormancy_round, attestations_from_accepted_txs, bond_mutations_from_accepted_txs,
         canonical_lagged_epoch_anchor, check_dns_reorg_rule, compute_stake_score, derive_dns_health, dns_finality_fresh_for_bridge,
-        dormancy_revival_ready, effective_bond_status, epoch_meets_quality_floor, is_bond_active_at, is_dns_confirmed,
+        dormancy_revival_ready, effective_bond_status, emergency_work_margin_for, epoch_meets_quality_floor, is_bond_active_at,
+        is_dns_confirmed,
         mandatory_attestation_mass_capacity, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
         reorg_inputs_since_common_ancestor, required_stake_for_quality_floor, stake_attestation_message, total_active_stake_by_epoch,
     },
@@ -5942,7 +5944,11 @@ impl VirtualStateProcessor {
     /// - `HardCheckpoint` (PoC/testnet/devnet): reject any such exit.
     /// - `TwoDimensionalDominance` (mainnet): accept only if the candidate **strictly
     ///   out-Works AND out-Stakes** canonical since their common ancestor `I`, each by its
-    ///   emergency margin (non-substitutability — neither dimension alone suffices).
+    ///   emergency margin (non-substitutability — neither dimension alone suffices). The Work
+    ///   margin is **difficulty-denominated** ([`emergency_work_margin_for`]:
+    ///   `max_reorg_horizon_blocks` × the canonical tip's current per-block work, plus the
+    ///   per-net absolute addend — `ZERO` on shipped presets); see the 2026-08-01 testnet-20
+    ///   bystander-wedge note at the computation site below.
     ///
     /// Safety: each branch's StakeScore-since-`I` is scored under **its own** bond set —
     /// `candidate_bond_view` (the sink-search view already advanced to `candidate`) for the
@@ -5975,6 +5981,20 @@ impl VirtualStateProcessor {
                 true
             }
         };
+
+        // 2026-08-01 testnet-20 bystander-wedge fix: the enforced emergency Work margin is
+        // difficulty-denominated — `max_reorg_horizon_blocks × calc_work(prev_sink.bits)`
+        // plus the per-net absolute addend (ZERO on shipped presets). An absolute constant
+        // cannot fit every difficulty scale: the old 1_000_000 raw was "~2 blocks" at devnet
+        // difficulty but ~175× the ENTIRE work reachable inside the bounded ancestor walk at
+        // testnet-20's CPU difficulty, so after an anchor-horizon-exceeding reorg every
+        // honest bystander (candidate 15× ahead on work, all attested stake, stake margin
+        // met) still drew DominanceViolation forever. prev_sink is this node's own sink, so
+        // its header is always locally present; on a (never-expected) store miss the margin
+        // degrades to the absolute addend rather than panicking or wedging.
+        let sink_block_work = self.headers_store.get_bits(prev_sink).map(calc_work).unwrap_or_default();
+        let emergency_work_margin =
+            emergency_work_margin_for(dns_params.emergency_work_margin, sink_block_work, dns_params.max_reorg_horizon_blocks);
 
         // The heavy two-dimensional inputs are needed only when the candidate abandons
         // the confirmed prefix under the dominance rule.
@@ -6018,7 +6038,7 @@ impl VirtualStateProcessor {
                 common_work,
                 candidate_stake,
                 canonical_stake,
-                dns_params.emergency_work_margin,
+                emergency_work_margin,
                 dns_params.emergency_stake_margin,
             )
         } else {
@@ -6032,7 +6052,7 @@ impl VirtualStateProcessor {
                 BlueWorkType::from_u64(0),
                 StakeScore(0),
                 StakeScore(0),
-                dns_params.emergency_work_margin,
+                emergency_work_margin,
                 dns_params.emergency_stake_margin,
             )
         };
@@ -6043,12 +6063,16 @@ impl VirtualStateProcessor {
             warn!(
                 "[dns-reorg-gate] candidate {candidate} rejected: reason={outcome:?}, confirmed_anchor={confirmed}, \
                  previous_sink={prev_sink}, common_ancestor={common_ancestor:?}, horizon_exceeded={horizon_exceeded}, \
-                 candidate_work={:?}, canonical_work={:?}, work_margin={:?}, candidate_stake={}, canonical_stake={}, \
+                 candidate_work={:?}, canonical_work={:?}, work_margin={:?} (= horizon {} × sink_block_work {:?} + addend {:?}), \
+                 candidate_stake={}, canonical_stake={}, \
                  stake_margin={}, suppressed_since_previous_warning={suppressed}. The node is intentionally holding its \
                  current virtual sink; persistent warnings indicate a possible self-wedge.",
                 inputs.candidate_work_after,
                 inputs.canonical_work_after,
                 inputs.emergency_work_margin,
+                dns_params.max_reorg_horizon_blocks,
+                sink_block_work,
+                dns_params.emergency_work_margin,
                 inputs.candidate_stake_after.0,
                 inputs.canonical_stake_after.0,
                 inputs.emergency_stake_margin.0,

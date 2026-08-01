@@ -120,7 +120,10 @@ check_dns_reorg_rule(candidate, canonical_tip):
 
     # **Two-dimensional dominance.** Neither inequality on its own is
     # enough; a PoW-only or stake-only attacker cannot pass.
-    if cand_W > canon_W + params.emergency_work_margin
+    # 2026-08-01: the Work margin is difficulty-denominated (see note below).
+    let work_margin = params.emergency_work_margin            # absolute addend; ZERO on shipped presets
+                    + params.max_reorg_horizon_blocks × calc_work(canonical_tip.bits)
+    if cand_W > canon_W + work_margin
        && cand_S > canon_S + params.emergency_stake_margin:
         return Ok(())                                 # rare reorg path
 
@@ -130,6 +133,26 @@ check_dns_reorg_rule(candidate, canonical_tip):
 `emergency_work_margin` and `emergency_stake_margin` are consensus
 parameters set such that overcoming both at once is exponentially less
 likely than overcoming either on its own.
+
+**2026-08-01 addendum (testnet-20 bystander wedge).** The Work margin is no
+longer a bare absolute constant. Work units scale with difficulty, so no one
+constant fits every network: the former `1_000_000` raw was "~2 devnet blocks
+of work", yet at testnet-20's CPU difficulty it was ~175× the entire work
+reachable inside the bounded common-ancestor walk — after an
+anchor-horizon-exceeding reorg, honest bystanders 15× ahead on work
+(`candidate_work=5726` vs `canonical_work=362`) holding all attested stake
+still drew `DominanceViolation` forever — while at GPU difficulty the same
+constant rounds to a fraction of one block, i.e. no margin at all. The
+enforced margin is now `emergency_work_margin_for` =
+`max_reorg_horizon_blocks × calc_work(canonical-tip bits)` plus the per-net
+absolute addend `emergency_work_margin` (kept `ZERO` on every shipped
+preset): "one full ordinary-reorg horizon's worth of work at current
+difficulty", which is structurally reachable inside the ancestor walk
+(`walk = max(horizon, stake window) ≥ horizon`) on any network. The stake
+margin stays absolute because StakeScore units are already
+difficulty-independent (a fixed `STAKE_SCORE_SCALE` per fully-participated
+epoch); it must merely fit inside the bounded score window (the 2026-07-19
+stake-margin lesson).
 
 ### Phase-specific behaviour
 

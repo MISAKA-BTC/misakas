@@ -762,11 +762,26 @@ pub struct DnsParams {
     /// requires a re-genesis, never an in-place edit.
     pub required_stake_depth: StakeScore,
 
-    /// Mainnet-only: extra margin a candidate must clear on
-    /// `WorkScore` to pass the two-dimensional dominance rule. PoC /
-    /// testnet hard-checkpoint mode ignores this; mainnet enforces.
+    /// Optional **absolute addend** to the emergency `WorkScore` margin of the
+    /// two-dimensional dominance rule. The margin the reorg gate actually enforces is
+    /// [`emergency_work_margin_for`]`(this, canonical-tip per-block work,
+    /// max_reorg_horizon_blocks)` — i.e. **difficulty-denominated** (one full ordinary-reorg
+    /// horizon's worth of work at the canonical tip's CURRENT bits) plus this addend.
+    /// `ZERO` on every shipped preset.
+    ///
+    /// ⚠️ 2026-08-01 testnet-20 permanent bystander wedge: this used to be the WHOLE margin,
+    /// as an absolute constant (1_000_000 raw ≈ "2 devnet blocks of work"). Work units scale
+    /// with difficulty, so the same constant was ~175× the entire work reachable inside the
+    /// bounded common-ancestor walk at the CPU-difficulty testnet (an honest candidate 15×
+    /// ahead on work and holding all attested stake still drew `DominanceViolation` forever)
+    /// while rounding to a fraction of ONE block — no margin at all — at real GPU/ASIC
+    /// difficulty. No absolute work constant fits every network; keep this at `ZERO` unless a
+    /// net deliberately wants a static buffer ON TOP of the difficulty-scaled margin.
     pub emergency_work_margin: BlueWorkType,
-    /// Mainnet-only: matching emergency margin on `StakeScore`.
+    /// Matching emergency margin on `StakeScore`. Stays absolute because StakeScore units are
+    /// already difficulty-independent (a fixed `STAKE_SCORE_SCALE` accrues per
+    /// fully-participated epoch, so "one epoch" means the same thing on every net). Must fit
+    /// inside the bounded score window — the 2026-07-19 wedge lesson.
     pub emergency_stake_margin: StakeScore,
 
     pub max_reorg_horizon_blocks: u64,
@@ -3412,6 +3427,47 @@ pub fn reorg_inputs_since_common_ancestor(
     }
 }
 
+/// 2026-08-01 testnet-20 wedge fix — the emergency **Work** margin the reorg gate enforces,
+/// denominated in *blocks of current canonical-tip difficulty* instead of an absolute work
+/// constant:
+///
+/// `margin = extra_absolute_margin + canonical_tip_block_work × max_reorg_horizon_blocks`
+///
+/// (saturating: an overflowing margin conservatively makes the bound un-beatable, matching
+/// [`check_dns_reorg_rule`]'s `saturating_add`.)
+///
+/// Why difficulty-denominated: work units scale with difficulty, so no absolute constant is
+/// simultaneously meaningful on a CPU testnet (per-block work ~1–4; the old 1_000_000 margin
+/// exceeded the ENTIRE work reachable inside the bounded common-ancestor walk by ~175×,
+/// permanently wedging every honest bystander after a horizon-exceeding reorg) and on a
+/// GPU/ASIC net (where the same constant is a fraction of one block — no margin at all).
+/// Denominating in horizon-blocks of the canonical tip's own difficulty gives every network
+/// one semantics — "to abandon a DNS-confirmed anchor, out-work canonical by more than a full
+/// ordinary-reorg horizon's worth of work" — and is structurally reachable: the ancestor walk
+/// spans `max(max_reorg_horizon_blocks, stake_score_window_blue_score) ≥
+/// max_reorg_horizon_blocks` blocks, so the margin fits inside the walk at ANY difficulty
+/// (the same lesson as the 2026-07-19 stake-margin wedge, where a 100-epoch margin could
+/// never fit the 15-epoch score window).
+///
+/// `canonical_tip_block_work` is `calc_work(bits)` of the node's OWN current sink header — a
+/// node-local quantity, which is sound here: the gate is each node's own sink-selection
+/// decision, and its other inputs (per-branch work/stake since the common ancestor) are
+/// equally node-local. Also absolute-margin algebra is preserved (unlike a
+/// canonical-work-ratio margin), so the deep no-ancestor path — which compares full
+/// cumulative tip works because the unknown common ancestor cancels from both sides — keeps
+/// exactly the same bound semantics as the ancestor-found path.
+pub fn emergency_work_margin_for(
+    extra_absolute_margin: BlueWorkType,
+    canonical_tip_block_work: BlueWorkType,
+    max_reorg_horizon_blocks: u64,
+) -> BlueWorkType {
+    let (horizon_work, overflowed) = canonical_tip_block_work.overflowing_mul_u64(max_reorg_horizon_blocks);
+    if overflowed {
+        return BlueWorkType::MAX;
+    }
+    extra_absolute_margin.saturating_add(horizon_work)
+}
+
 // =====================================================================
 // PR-10.4: DNS finality overlay transaction kinds + stateless payload
 // validation (ADR-0009 §"On-chain artefacts").
@@ -5390,6 +5446,61 @@ mod tests {
         assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceViolation);
         i.candidate_work_after = BlueWorkType::from_u64(161); // clears work margin; stake 150 > 110 ok
         assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceSatisfied);
+    }
+
+    /// 2026-08-01 testnet-20 permanent bystander wedge, pinned with the values measured in the
+    /// live incident logs: after an anchor-horizon-exceeding reorg, every bystander node
+    /// (external participants + the t20-ibd-verify node) held its stale fork forever with
+    /// `DominanceViolation`, although the honest network branch was ~15× ahead on work since
+    /// the common ancestor (candidate_work=5726 vs canonical_work=362) and infinitely ahead on
+    /// stake (candidate_stake=5×SCALE vs 0; the one-epoch emergency_stake_margin was met). The
+    /// old ABSOLUTE `emergency_work_margin` (1_000_000 raw — "~2 devnet blocks") demanded more
+    /// work than the CPU-difficulty net could accumulate inside the bounded ancestor walk at
+    /// all, so the emergency dominance path could never engage.
+    #[test]
+    fn dns_reorg_testnet20_bystander_wedge_regression() {
+        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
+        // The measured two-dimensional inputs (2026-08-01 testnet-20 logs).
+        let mut i = reorg_inputs(a, m, false, 5726, 362, 5 * STAKE_SCORE_SCALE, 0);
+        i.emergency_stake_margin = StakeScore(STAKE_SCORE_SCALE); // shipped presets: one full epoch
+
+        // Pre-fix absolute margin: permanently unreachable → the wedge this test pins.
+        i.emergency_work_margin = BlueWorkType::from_u64(1_000_000);
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceViolation);
+
+        // The fix: a difficulty-denominated margin (shipped horizon 300; absolute addend now
+        // ZERO). Even at the pessimistic end of the measured CPU per-block work (~1–4), the
+        // measured candidate clears the bound: 5726 > 362 + 4×300.
+        i.emergency_work_margin = emergency_work_margin_for(BlueWorkType::ZERO, BlueWorkType::from_u64(4), 300);
+        assert_eq!(i.emergency_work_margin, BlueWorkType::from_u64(1200));
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceSatisfied);
+
+        // Non-substitutability is NOT weakened. A candidate that out-works canonical by less
+        // than one horizon's worth of current-difficulty work stays rejected …
+        let mut j = reorg_inputs(a, m, false, 1500, 362, 5 * STAKE_SCORE_SCALE, 0);
+        j.emergency_stake_margin = StakeScore(STAKE_SCORE_SCALE);
+        j.emergency_work_margin = i.emergency_work_margin;
+        assert_eq!(check_dns_reorg_rule(&j), DnsReorgOutcome::DominanceViolation);
+        // … and a stake-less heavier branch stays rejected outright (the wedge fix must not
+        // reopen the PoW-substitutes-for-stake hole).
+        let mut k = reorg_inputs(a, m, false, 5726, 362, 0, 0);
+        k.emergency_stake_margin = StakeScore(STAKE_SCORE_SCALE);
+        k.emergency_work_margin = i.emergency_work_margin;
+        assert_eq!(check_dns_reorg_rule(&k), DnsReorgOutcome::DominanceViolation);
+    }
+
+    #[test]
+    fn emergency_work_margin_is_horizon_blocks_of_tip_difficulty() {
+        let w = BlueWorkType::from_u64;
+        // margin = absolute addend + per-block work × horizon blocks
+        assert_eq!(emergency_work_margin_for(w(0), w(4), 300), w(1200));
+        assert_eq!(emergency_work_margin_for(w(7), w(4), 300), w(1207));
+        // zero horizon / zero per-block work degrade to the absolute addend alone
+        assert_eq!(emergency_work_margin_for(w(9), w(4), 0), w(9));
+        assert_eq!(emergency_work_margin_for(w(9), w(0), 300), w(9));
+        // overflow saturates to an un-beatable bound — never wraps around to a tiny one
+        assert_eq!(emergency_work_margin_for(w(0), BlueWorkType::MAX, 2), BlueWorkType::MAX);
+        assert_eq!(emergency_work_margin_for(BlueWorkType::MAX, w(1), 1), BlueWorkType::MAX);
     }
 
     #[test]

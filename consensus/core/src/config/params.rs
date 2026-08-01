@@ -958,17 +958,24 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: BlueWorkType::ZERO,
     required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
     // ADR-0018 §H two-dimensional dominance margins. A deep reorg that abandons a
-    // DNS-confirmed anchor must out-Work the canonical chain by > emergency_work_margin
-    // AND out-Stake it by > emergency_stake_margin (non-substitutability). The work margin
-    // is a fixed ~2-blocks-of-devnet-work buffer (1_000_000; one BlueWorkType u64 limb);
-    // on higher-difficulty nets it is a proportionally tighter — but always strict —
-    // positive buffer. StakeScore is a bounded 15-epoch window on the production
-    // presets, so the emergency margin must itself fit inside that window. One full
-    // epoch preserves two-dimensional non-substitutability while leaving an honest,
-    // attesting branch a reachable escape path from a stale local fork.
-    // BlueWorkType is a type alias for Uint576 (9 little-endian u64 limbs); construct via the
-    // real struct name (the alias is not a tuple-struct ctor). Low limb = 1_000_000.
-    emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
+    // DNS-confirmed anchor must out-Work the canonical chain by > the EFFECTIVE emergency
+    // work margin AND out-Stake it by > emergency_stake_margin (non-substitutability).
+    //
+    // 2026-08-01 testnet-20 bystander-wedge fix: the effective Work margin is
+    // difficulty-denominated (`emergency_work_margin_for` = max_reorg_horizon_blocks × the
+    // canonical tip's current per-block work + this ABSOLUTE ADDEND, kept ZERO on every
+    // shipped preset). The old absolute-only margin (1_000_000 raw = "~2 devnet blocks")
+    // was ~175× the entire work reachable inside the bounded ancestor walk at CPU-testnet
+    // difficulty — honest bystanders 15× ahead on work with all attested stake stayed
+    // DominanceViolation-wedged forever — while rounding to a fraction of ONE block (no
+    // margin at all) at GPU difficulty. Work units are difficulty-scaled; only a
+    // difficulty-denominated margin means the same thing on every net.
+    //
+    // StakeScore units ARE difficulty-independent, so the stake margin stays absolute — but
+    // it is a bounded 15-epoch window on the production presets, so the margin must itself
+    // fit inside that window. One full epoch preserves two-dimensional non-substitutability
+    // while leaving an honest, attesting branch a reachable escape path from a stale fork.
+    emergency_work_margin: BlueWorkType::ZERO,
     // One full-quality epoch. The previous 100-epoch margin exceeded the entire
     // 15-epoch StakeScore window and made emergency dominance unreachable.
     emergency_stake_margin: StakeScore(STAKE_SCORE_SCALE),
@@ -1118,7 +1125,11 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // (stake-only) for fast tests + fast bring-up.
     required_work_depth: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
     required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
-    emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
+    // 2026-08-01: absolute addend ZERO — the enforced Work margin is difficulty-denominated
+    // (max_reorg_horizon_blocks × canonical-tip per-block work; see GENESIS_ACTIVE_DNS_PARAMS
+    // and `emergency_work_margin_for`). The old 1_000_000 absolute was simultaneously a
+    // permanent CPU-testnet bystander wedge and a no-op at real GPU difficulty.
+    emergency_work_margin: BlueWorkType::ZERO,
     // One full-quality epoch: reachable inside the bounded 15-epoch score window
     // while preserving the work AND stake non-substitutability requirement.
     emergency_stake_margin: StakeScore(STAKE_SCORE_SCALE),
@@ -2005,6 +2016,41 @@ mod palw_network_tests {
         }
     }
 
+    /// Regression for the 2026-08-01 testnet-20 permanent bystander wedge — the Work-side
+    /// sibling of the stake-margin tripwire above. The margin the reorg gate enforces is
+    /// difficulty-denominated (`emergency_work_margin_for`: `max_reorg_horizon_blocks` × the
+    /// canonical tip's per-block work), which fits inside the bounded common-ancestor walk
+    /// (`max(horizon, stake window) ≥ horizon`) at ANY difficulty. An absolute constant
+    /// cannot: the old 1_000_000 raw was ~175× the whole walk's work at testnet-20's CPU
+    /// difficulty, so honest bystanders (candidate_work=5726 vs canonical_work=362, all
+    /// attested stake) held their stale forks forever. The per-preset field is therefore only
+    /// an OPTIONAL ABSOLUTE ADDEND and must stay ZERO on every shipped preset — any nonzero
+    /// value re-arms the wedge on whichever net's difficulty makes it unreachable.
+    #[test]
+    fn dns_emergency_work_margin_absolute_addend_stays_zero() {
+        for (name, dns) in [
+            ("genesis-active", GENESIS_ACTIVE_DNS_PARAMS),
+            ("production", PRODUCTION_DNS_PARAMS),
+            ("testnet", TESTNET_DNS_PARAMS),
+            ("staging-mainnet-palw (testnet-200)", STAGING_MAINNET_PALW_DNS_PARAMS),
+            ("testnet-palw (testnet-110)", TESTNET_PALW_DNS_PARAMS),
+            ("devnet-palw (devnet-111)", DEVNET_PALW_DNS_PARAMS),
+            ("compute-registry (testnet-20)", COMPUTE_REGISTRY_DNS_PARAMS),
+        ] {
+            assert_eq!(
+                dns.emergency_work_margin,
+                BlueWorkType::ZERO,
+                "{name}: the absolute Work-margin addend must stay ZERO — work units are \
+                 difficulty-scaled, so any absolute constant re-arms the bystander wedge"
+            );
+            assert!(
+                dns.max_reorg_horizon_blocks > 0,
+                "{name}: max_reorg_horizon_blocks must be positive so the difficulty-denominated \
+                 emergency Work margin stays a real (non-trivial) dominance requirement"
+            );
+        }
+    }
+
     /// Header-v4 is deliberately re-genesis-only. No LEGACY identity may silently acquire its
     /// serialization, stamp cost, or accumulator database merely because the implementation lands.
     /// ADR-0048 ships the ONE deliberate exception: `staging-mainnet-palw` (`testnet-200`) IS a
@@ -2135,11 +2181,22 @@ mod palw_network_tests {
         //       byte-identical, so it is safe: update the pin below;
         //   (b) the change is unconditional — it silently invalidates mined history. RE-GENESIS onto
         //       a new suffix (as 200→20 did) and pin the new preset instead. Never edit in place.
+        //   (c) the change touches ONLY fork-choice policy — a field read exclusively by
+        //       `dns_reorg_allows` at live sink-selection time (today: the emergency reorg margins),
+        //       never by block validity, `is_dns_confirmed`/anchor progression, or the beacon-seed
+        //       recurrence. Mined history replays byte-identical and a mixed-version mesh cannot
+        //       split on validity (the gate only decides which sink a node HOLDS, a per-node choice
+        //       that already differs across live nodes), so an unconditional edit is safe: update
+        //       the pin and name the exemption in the commit. Verify the read-site claim (grep the
+        //       field) before invoking this clause — if the field also feeds any replayed decision,
+        //       it is class (a)/(b), not (c). Precedent: the 2026-08-01 bystander-wedge fix
+        //       (`emergency_work_margin` absolute → difficulty-denominated; wedged bystanders
+        //       un-wedge on upgrade, healthy nodes' gates never engage, so no flag day needed).
         // Operators can compare this exact value across nodes: it is `consensusParamsHash` in
         // getInfo, and kaspad logs it at startup.
         assert_eq!(
             p.consensus_identity_hash().to_string(),
-            "576a36eea830708875b822943483eb324bfde5efe185137ec6b8177ae8c36e0994b6d06a003b0ed708b4adb2581a602a79908f0bd9dba11fe19f8dc88d5ac55b",
+            "f62a610addd616086173456c11ce2164a045e2f03aca3cf1efdc16e9a54b22cd8808d6e101bc16c3da7efa9cd75d06dbb0059b53269cb9443b7ed469beea9b57",
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
         );
         // Every OTHER preset keeps the fence closed.

@@ -142,8 +142,10 @@ ADR-0009 §"Public-claim discipline (binding)":
   — **not claimed**. The DNS paper explicitly does not claim joint
   independence; the overlay's value is non-substitutability.
 - ❌ "DNS gives 2^k post-quantum finality" — **not claimed** without an
-  explicit `cW`, `cS`, `emergency_work_margin`, and
-  `emergency_stake_margin` quote for the network in question.
+  explicit `cW`, `cS`, and emergency-margin quote for the network in
+  question (`emergency_stake_margin`, plus the difficulty-denominated Work
+  margin `max_reorg_horizon_blocks × canonical-tip block work +
+  emergency_work_margin` — see ADR-0009's 2026-08-01 addendum).
 
 ## 1. Base version
 
