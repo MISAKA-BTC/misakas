@@ -425,7 +425,17 @@ pub fn award(
 ///
 /// What is signed is the canonical challenge from `misaka_mtp::registry`, the same function the
 /// operator's verifier calls, so the two cannot drift apart.
-pub fn register(ctx: &Ctx, invitation_file: &str, key_file: &str, out: Option<&str>) -> CliResult {
+///
+/// `attribution` is the participant's own choice of where their points accrue — `github` (the
+/// default, `gh:<handle>`) or `address` (`addr:<misakatest:…>`) — and it is part of the signed
+/// message, so the operator ingesting the file cannot redirect it.
+pub fn register(ctx: &Ctx, invitation_file: &str, key_file: &str, out: Option<&str>, attribution: &str) -> CliResult {
+    let attribution = misaka_mtp::LedgerAttribution::parse(attribution).ok_or_else(|| {
+        CliError::generic(format!(
+            "unknown --attribution '{attribution}': expected 'github' (points accrue to gh:<handle>) \
+             or 'address' (points accrue to addr:<your misakatest: address>)"
+        ))
+    })?;
     let raw = std::fs::read_to_string(invitation_file)
         .map_err(|e| CliError::generic(format!("cannot read invitation '{invitation_file}': {e}")))?;
     let inv: Value = serde_json::from_str(&raw).map_err(|e| CliError::generic(format!("invitation is not JSON: {e}")))?;
@@ -459,7 +469,7 @@ pub fn register(ctx: &Ctx, invitation_file: &str, key_file: &str, out: Option<&s
         )));
     }
 
-    let challenge = misaka_mtp::registry::registration_challenge(&network, &github, &address, &nonce, issued_at_ms);
+    let challenge = misaka_mtp::registry::registration_challenge_for(&network, &github, &address, &nonce, issued_at_ms, attribution);
     let signature = key.sign_with_context(&challenge, misaka_mtp::MTP_REGISTER_CONTEXT);
 
     let request = json!({
@@ -468,6 +478,7 @@ pub fn register(ctx: &Ctx, invitation_file: &str, key_file: &str, out: Option<&s
         "address": address,
         "nonce": nonce,
         "issued_at_ms": issued_at_ms,
+        "attribution": attribution.as_str(),
         "pubkey_hex": faster_hex::hex_string(key.public_key()),
         "signature_hex": faster_hex::hex_string(&signature),
     });
@@ -484,6 +495,13 @@ pub fn register(ctx: &Ctx, invitation_file: &str, key_file: &str, out: Option<&s
         let path = out.unwrap_or_default();
         println!("signed registration request → {path}");
         println!("  github {github}  address {address}  [{network}]");
+        println!(
+            "  points accrue to: {} — signed into the request, so it cannot be changed in transit",
+            match attribution {
+                misaka_mtp::LedgerAttribution::Github => format!("gh:{github}"),
+                misaka_mtp::LedgerAttribution::Address => format!("addr:{address}"),
+            }
+        );
         println!(
             "\nSubmit this file to the operator (pull request / form). Nothing was sent anywhere: the MTP \
              HTTP surface is read-only by design (ADR-0038 D3), so registration is ingested operator-side."

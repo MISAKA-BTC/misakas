@@ -19,7 +19,7 @@ pub mod settle;
 use std::collections::BTreeMap;
 
 pub use ledger::{EpochLedger, ScoreRow};
-pub use registry::{Registration, RegistrationError, verify_claim, verify_registration};
+pub use registry::{LedgerAttribution, Registration, RegistrationError, verify_claim, verify_registration};
 pub use rules::{AllocationRules, Category, MilliPoints, POINT, Rules, ScoringRules, Severity, Stage};
 pub use score::{Contribution, pts_bug, pts_fixed, pts_node, pts_validator, scale};
 pub use settle::{CategoryPoints, Settlement, settle, vesting_split};

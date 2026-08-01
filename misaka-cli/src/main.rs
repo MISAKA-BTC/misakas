@@ -204,6 +204,11 @@ enum MtpCmd {
         /// Write the signed request here instead of stdout.
         #[arg(long)]
         out: Option<String>,
+        /// Where your points accrue: `github` (default, `gh:<handle>`) or `address`
+        /// (`addr:<your misakatest: address>`). Your choice is part of what you sign, so the
+        /// operator cannot redirect it. Pick `address` to keep rewards off a platform account.
+        #[arg(long, default_value = "github")]
+        attribution: String,
     },
     /// Record what this host's node currently sees, as C1 uptime observations (JSONL).
     ///
@@ -908,7 +913,9 @@ async fn main() -> std::process::ExitCode {
         Command::Mtp(MtpCmd::PalwLeaves { da_dir, low_hash, max_blocks, out }) => {
             mtp::palw_leaves(&ctx, &da_dir, low_hash.as_deref(), max_blocks, out.as_deref()).await
         }
-        Command::Mtp(MtpCmd::Register { invitation, key_file, out }) => mtp::register(&ctx, &invitation, &key_file, out.as_deref()),
+        Command::Mtp(MtpCmd::Register { invitation, key_file, out, attribution }) => {
+            mtp::register(&ctx, &invitation, &key_file, out.as_deref(), &attribution)
+        }
         Command::Mtp(MtpCmd::Award { file, epoch, network, id, category, points, severity, first_report, fix_accepted, note }) => {
             mtp::award(&ctx, &file, epoch, &network, &id, &category, points, severity.as_deref(), first_report, fix_accepted, &note)
         }

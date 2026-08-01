@@ -37,6 +37,47 @@ pub struct Registration {
     pub pubkey: Vec<u8>,
 }
 
+/// Which identity a participant's points accrue to — THEIR choice, not the operator's.
+///
+/// Both spellings name the same human (one registration binds one GitHub handle to one address),
+/// so this changes only the ledger id the epoch builder buckets facts under, and therefore the name
+/// a payout is published against. `Github` keeps points portable across the addresses that human may
+/// rotate through; `Address` keeps them attached to the on-chain identity and away from a platform
+/// account, which is the right answer for anyone who would rather not tie rewards to GitHub.
+///
+/// The choice is BOUND INTO THE SIGNED CHALLENGE (see [`registration_challenge_for`]) precisely
+/// because it decides where value lands: the operator ingests a file the participant signed, and
+/// must not be able to edit that field in flight.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LedgerAttribution {
+    /// Points accrue to `gh:<handle>` — the historical (and still default) behaviour.
+    #[default]
+    Github,
+    /// Points accrue to `addr:<misakatest:…>`.
+    Address,
+}
+
+impl LedgerAttribution {
+    /// The wire/JSON spelling accepted from a participant's request and the CLI flag.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Github => "github",
+            Self::Address => "address",
+        }
+    }
+
+    /// Parse the participant-facing spelling. Absent ⇒ `Github`, so every pre-existing request,
+    /// stored record and in-flight invitation keeps its current meaning.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "github" => Some(Self::Github),
+            "address" => Some(Self::Address),
+            _ => None,
+        }
+    }
+}
+
 /// Bind `pubkey` to `address_str`: the address must be a testnet v2 ML-DSA-87
 /// P2PKH whose 64-byte payload equals `blake2b_512_address_payload(pubkey)`.
 /// (The address payload is a HASH, not the pubkey — the full 2592-byte pubkey
@@ -69,10 +110,35 @@ fn bind_key_to_address(address_str: &str, pubkey: &[u8], expected_prefix: Prefix
 /// challenge builder able to drift from its own verifier is a protocol split waiting to happen.
 /// One definition, both sides.
 pub fn registration_challenge(network: &str, github: &str, address: &str, nonce_hex: &str, issued_at_ms: u64) -> Vec<u8> {
-    format!(
-        "MISAKA-TESTNET-POINTS-REGISTRATION v1\nnetwork: {network}\ngithub: {github}\naddress: {address}\nnonce: {nonce_hex}\nissued_at: {issued_at_ms}"
-    )
-    .into_bytes()
+    registration_challenge_for(network, github, address, nonce_hex, issued_at_ms, LedgerAttribution::Github)
+}
+
+/// The registration challenge including the participant's [`LedgerAttribution`] choice.
+///
+/// `Github` reproduces the **v1** bytes EXACTLY — byte-identical to what [`registration_challenge`]
+/// has always produced — so every already-issued invitation, already-signed request and stored
+/// signature keeps verifying unchanged. Choosing `Address` selects a distinct **v2** message that
+/// names the choice, which is what makes the choice unforgeable: a v2 signature cannot be replayed
+/// as a v1 registration (different bytes ⇒ different signature), so an operator cannot silently
+/// redirect a participant's points, in either direction.
+pub fn registration_challenge_for(
+    network: &str,
+    github: &str,
+    address: &str,
+    nonce_hex: &str,
+    issued_at_ms: u64,
+    attribution: LedgerAttribution,
+) -> Vec<u8> {
+    match attribution {
+        LedgerAttribution::Github => format!(
+            "MISAKA-TESTNET-POINTS-REGISTRATION v1\nnetwork: {network}\ngithub: {github}\naddress: {address}\nnonce: {nonce_hex}\nissued_at: {issued_at_ms}"
+        )
+        .into_bytes(),
+        LedgerAttribution::Address => format!(
+            "MISAKA-TESTNET-POINTS-REGISTRATION v2\nnetwork: {network}\ngithub: {github}\naddress: {address}\nnonce: {nonce_hex}\nissued_at: {issued_at_ms}\nattribution: address"
+        )
+        .into_bytes(),
+    }
 }
 
 /// Verify a registration: the address binds the pubkey, and the ML-DSA-87

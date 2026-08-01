@@ -22,7 +22,7 @@
 
 use kaspa_addresses::Prefix;
 use kaspa_hashes::blake2b_512_keyed;
-use misaka_mtp::{Registration, RegistrationError, verify_registration};
+use misaka_mtp::{LedgerAttribution, Registration, RegistrationError, verify_registration};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -52,12 +52,24 @@ pub struct RegistrationRecord {
     pub pubkey: Vec<u8>,
     pub claim_token: String,
     pub registered_at_ms: u64,
+    /// Which identity this human's points accrue to — their signed choice. `#[serde(default)]`
+    /// means every record written before the choice existed reads back as `Github`, so replaying
+    /// `registrations.jsonl` reproduces exactly the ledger ids it produced before.
+    #[serde(default)]
+    pub attribution: LedgerAttribution,
 }
 
 impl RegistrationRecord {
     /// The single canonical ledger id every fact for this human resolves to.
+    ///
+    /// Still ONE id per registration — the choice picks its spelling, it does not create a second
+    /// bucket: address, claim-token and handle lookups all resolve to this same string, so a
+    /// participant cannot be paid twice by arriving through two different facts.
     pub fn ledger_id(&self) -> String {
-        format!("gh:{}", self.github)
+        match self.attribution {
+            LedgerAttribution::Github => format!("gh:{}", self.github),
+            LedgerAttribution::Address => format!("addr:{}", self.address),
+        }
     }
 }
 
@@ -102,7 +114,7 @@ pub fn extract_claim_token(user_agent: &str) -> Option<ClaimToken> {
 // The registration challenge moved to `misaka_mtp::registry` so the signer (a participant's CLI)
 // and the verifier (this crate) share one definition instead of two that can drift. Re-exported so
 // existing callers keep working.
-pub use misaka_mtp::registry::registration_challenge;
+pub use misaka_mtp::registry::{registration_challenge, registration_challenge_for};
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum NonceError {
@@ -242,6 +254,7 @@ impl Attributor {
         signature: &[u8],
         now_ms: u64,
         prefix: Prefix,
+        attribution: LedgerAttribution,
     ) -> Result<RegistrationRecord, AttributionError> {
         if self.by_github.contains_key(github) {
             return Err(AttributionError::DuplicateGithub);
@@ -250,7 +263,10 @@ impl Attributor {
             return Err(AttributionError::DuplicateAddress);
         }
         let issued_at = nonces.consume(github, address, nonce_hex, now_ms)?;
-        let challenge = registration_challenge(network, github, address, nonce_hex, issued_at);
+        // The challenge carries the attribution choice, so a signature produced for one choice
+        // cannot be admitted under the other — the operator ingests this file but cannot edit
+        // where the points land.
+        let challenge = registration_challenge_for(network, github, address, nonce_hex, issued_at, attribution);
         let Registration { .. } = verify_registration(github, address, pubkey, &challenge, signature, prefix)?;
         let record = RegistrationRecord {
             github: github.to_string(),
@@ -258,6 +274,7 @@ impl Attributor {
             pubkey: pubkey.to_vec(),
             claim_token: claim_token(github, address),
             registered_at_ms: now_ms,
+            attribution,
         };
         self.index(&record);
         self.records.push(record.clone());
@@ -284,7 +301,16 @@ impl Attributor {
     /// builder applies to every fact (I-MTP-1): a fact carrying any id that does
     /// not resolve to a live registration is dropped, never scored.
     pub fn is_registered_id(&self, ledger_id: &str) -> bool {
-        ledger_id.strip_prefix("gh:").map(|h| self.by_github.contains_key(h)).unwrap_or(false)
+        // Both spellings are canonical ids, but each is only live for a registration that CHOSE it:
+        // `gh:alice` is not a valid id for a human who registered under `addr:…`, or the fail-closed
+        // membership test would admit a fact bucketed under an id nothing ever pays out to.
+        if let Some(handle) = ledger_id.strip_prefix("gh:") {
+            return self.by_github.get(handle).is_some_and(|id| id == ledger_id);
+        }
+        if let Some(address) = ledger_id.strip_prefix("addr:") {
+            return self.by_address.get(address).is_some_and(|id| id == ledger_id);
+        }
+        false
     }
 
     /// All registrations (for persistence / the operator dashboard).
@@ -379,7 +405,9 @@ mod tests {
         let challenge = ns.issue("testnet-10", "alice", &addr, nonce, 1000);
         let sig = key.sign_with_context(&challenge, MTP_REGISTER_CONTEXT);
 
-        let rec = attr.register(&mut ns, "testnet-10", "alice", &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet).unwrap();
+        let rec = attr
+            .register(&mut ns, "testnet-10", "alice", &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet, LedgerAttribution::Github)
+            .unwrap();
         assert_eq!(rec.ledger_id(), "gh:alice");
         // every namespace resolves to the ONE canonical id (G1/I-MTP-1).
         assert_eq!(attr.resolve_address(&addr), Some("gh:alice"));
@@ -388,6 +416,55 @@ mod tests {
         // an unregistered key resolves to nothing → fact would be dropped.
         assert_eq!(attr.resolve_address("misakatest:stranger"), None);
         assert_eq!(attr.resolve_token("deadbeef"), None);
+    }
+
+    /// The participant CHOOSES where their points accrue, and that choice is signed: a request
+    /// signed for `Address` must not be admissible as a `Github` registration, or an operator could
+    /// silently redirect someone's rewards by editing one JSON field in transit.
+    #[test]
+    fn attribution_choice_is_signed_and_selects_the_ledger_id() {
+        let (key, pk, addr) = key_and_addr(0x53);
+        let mut ns = NonceStore::new();
+        let mut attr = Attributor::new();
+        let nonce = [0x77u8; 32];
+        let nonce_hex = faster_hex::hex_string(&nonce);
+        ns.issue("testnet-21", "dora", &addr, nonce, 1000);
+        // The participant signs the v2 (address-attribution) challenge.
+        let challenge = registration_challenge_for("testnet-21", "dora", &addr, &nonce_hex, 1000, LedgerAttribution::Address);
+        let sig = key.sign_with_context(&challenge, MTP_REGISTER_CONTEXT);
+
+        // Admitting it as a `Github` registration must fail — different bytes, so the signature
+        // cannot verify. The nonce is consumed by the attempt (fail-closed against replay), so the
+        // honest admission below re-issues it, exactly as a participant would have to.
+        let err = attr
+            .register(&mut ns, "testnet-21", "dora", &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet, LedgerAttribution::Github)
+            .unwrap_err();
+        assert!(matches!(err, AttributionError::Registration(_)), "tampered attribution must not verify, got {err:?}");
+
+        ns.issue("testnet-21", "dora", &addr, nonce, 1000);
+        let rec = attr
+            .register(&mut ns, "testnet-21", "dora", &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet, LedgerAttribution::Address)
+            .unwrap();
+        assert_eq!(rec.ledger_id(), format!("addr:{addr}"));
+        // Still ONE id: every namespace resolves to it, so the choice renames the bucket rather
+        // than creating a second one that could be paid twice.
+        assert_eq!(attr.resolve_address(&addr), Some(rec.ledger_id().as_str()));
+        assert_eq!(attr.resolve_token(&rec.claim_token), Some(rec.ledger_id().as_str()));
+        assert_eq!(attr.resolve_github("dora"), Some(rec.ledger_id().as_str()));
+        // Fail-closed membership follows the CHOICE: this human's facts are only scored under the
+        // id they actually registered, never under the spelling they declined.
+        assert!(attr.is_registered_id(&rec.ledger_id()));
+        assert!(!attr.is_registered_id("gh:dora"));
+    }
+
+    /// A record written before the choice existed reads back as `Github` — replaying an older
+    /// `registrations.jsonl` must reproduce exactly the ledger ids it produced before.
+    #[test]
+    fn stored_records_without_attribution_stay_github() {
+        let legacy = r#"{"github":"eve","address":"misakatest:eve","pubkey":[],"claim_token":"t","registered_at_ms":7}"#;
+        let rec: RegistrationRecord = serde_json::from_str(legacy).expect("legacy record parses");
+        assert_eq!(rec.attribution, LedgerAttribution::Github);
+        assert_eq!(rec.ledger_id(), "gh:eve");
     }
 
     /// C5's attribution must land on the SAME canonical id as every other category — a provider
@@ -404,7 +481,8 @@ mod tests {
         let nonce_hex = faster_hex::hex_string(&nonce);
         let ch = ns.issue("testnet-20", "alice", &addr, nonce, 1000);
         let sig = key.sign_with_context(&ch, MTP_REGISTER_CONTEXT);
-        attr.register(&mut ns, "testnet-20", "alice", &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet).unwrap();
+        attr.register(&mut ns, "testnet-20", "alice", &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet, LedgerAttribution::Github)
+            .unwrap();
 
         // The C5 seam and the crawler/campaign seam agree, by construction.
         assert_eq!(attr.ledger_id_for_address(&addr).as_deref(), Some("gh:alice"));
@@ -422,11 +500,14 @@ mod tests {
         let nonce_hex = faster_hex::hex_string(&nonce);
         let ch = ns.issue("testnet-10", "bob", &addr, nonce, 1);
         let sig = key.sign_with_context(&ch, MTP_REGISTER_CONTEXT);
-        attr.register(&mut ns, "testnet-10", "bob", &addr, &pk, &nonce_hex, &sig, 1, Prefix::Testnet).unwrap();
+        attr.register(&mut ns, "testnet-10", "bob", &addr, &pk, &nonce_hex, &sig, 1, Prefix::Testnet, LedgerAttribution::Github)
+            .unwrap();
 
         // same handle again → DuplicateGithub (one human, one ledger id).
         ns.issue("testnet-10", "bob", &addr, nonce, 2);
-        let err = attr.register(&mut ns, "testnet-10", "bob", &addr, &pk, &nonce_hex, &sig, 2, Prefix::Testnet).unwrap_err();
+        let err = attr
+            .register(&mut ns, "testnet-10", "bob", &addr, &pk, &nonce_hex, &sig, 2, Prefix::Testnet, LedgerAttribution::Github)
+            .unwrap_err();
         assert_eq!(err, AttributionError::DuplicateGithub);
     }
 
@@ -441,7 +522,9 @@ mod tests {
         let ch = ns.issue("testnet-10", "carol", &addr, nonce, 1);
         // sign under the CLAIM context, not REGISTER → must fail the binding check.
         let sig = key.sign_with_context(&ch, MTP_CLAIM_CONTEXT);
-        let err = attr.register(&mut ns, "testnet-10", "carol", &addr, &pk, &nonce_hex, &sig, 1, Prefix::Testnet).unwrap_err();
+        let err = attr
+            .register(&mut ns, "testnet-10", "carol", &addr, &pk, &nonce_hex, &sig, 1, Prefix::Testnet, LedgerAttribution::Github)
+            .unwrap_err();
         assert_eq!(err, AttributionError::Registration(RegistrationError::BadSignature));
     }
 }

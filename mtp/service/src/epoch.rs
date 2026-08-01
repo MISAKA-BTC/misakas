@@ -175,7 +175,20 @@ mod tests {
         let nonce_hex = faster_hex::hex_string(&nonce);
         let challenge = ns.issue("testnet-10", handle, &addr, nonce, 1000);
         let sig = key.sign_with_context(&challenge, misaka_mtp::MTP_REGISTER_CONTEXT);
-        let rec = attr.register(&mut ns, "testnet-10", handle, &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet).unwrap();
+        let rec = attr
+            .register(
+                &mut ns,
+                "testnet-10",
+                handle,
+                &addr,
+                &pk,
+                &nonce_hex,
+                &sig,
+                1000,
+                Prefix::Testnet,
+                misaka_mtp::LedgerAttribution::Github,
+            )
+            .unwrap();
         (rec, addr)
     }
 

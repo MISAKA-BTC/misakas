@@ -441,8 +441,24 @@ misaka mtp register --network testnet-21 \
 Nothing is transmitted. The MTP HTTP surface is **read-only by design** (ADR-0038 D3), so there is
 no registration endpoint to post to — and therefore none that could accept a forged registration.
 
+**Choose where your points accrue.** By default they accrue to your GitHub handle
+(`gh:<your-handle>`). Add `--attribution address` to have them accrue to your testnet address
+instead (`addr:misakatest:…`), which keeps your rewards attached to the on-chain identity rather
+than to a platform account:
+
+```bash
+misaka mtp register --network testnet-21 --attribution address \
+  --invitation invitation.json --key-file mtp.seed --out registration.json
+```
+
+Either way it is still **one** ledger id for you — the choice picks its spelling, it does not
+create a second bucket, so you cannot be paid twice by arriving through two different facts. The
+choice is part of what your key signs, so nobody (including the operator ingesting your file) can
+redirect it in transit. It is fixed at registration: changing it later means a new registration,
+which the one-handle-one-address rule below refuses — so decide now.
+
 **4 — submit `registration.json`** through the same issue or a pull request. From the next epoch
-run, facts about you resolve to `gh:<your-handle>`. Nothing before registration is retroactive.
+run, facts about you resolve to your chosen ledger id. Nothing before registration is retroactive.
 The confirmation you get back includes your **claim token** — keep it for step 5.
 
 **One handle, one address.** The registry binds each GitHub handle to exactly one address, and

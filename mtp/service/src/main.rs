@@ -320,6 +320,15 @@ fn cmd_register(args: &[String]) -> Result<(), String> {
     let nonce = field("nonce")?;
     let pubkey = decode_hex(&field("pubkey_hex")?, "pubkey_hex")?;
     let signature = decode_hex(&field("signature_hex")?, "signature_hex")?;
+    // The participant's choice of where their points accrue. Absent ⇒ `github`, so requests signed
+    // before the choice existed still verify against the byte-identical v1 challenge. It is not
+    // trusted from the file alone: it selects the challenge the signature must verify over, so a
+    // value the participant did not sign simply fails verification.
+    let attribution = match req.get("attribution").and_then(|v| v.as_str()) {
+        None => misaka_mtp::LedgerAttribution::Github,
+        Some(s) => misaka_mtp::LedgerAttribution::parse(s)
+            .ok_or_else(|| format!("request field 'attribution' is '{s}': expected 'github' or 'address'"))?,
+    };
 
     if config::stage_for(&network).is_none() {
         return Err(format!("network '{network}' is not in the testnet scope (D1) — the request cannot be admitted"));
@@ -344,7 +353,7 @@ fn cmd_register(args: &[String]) -> Result<(), String> {
     // deliberately dependency-light, to compute a value D1 has already fixed.
     let prefix = Prefix::Testnet;
     let record = attr
-        .register(&mut nonces, &network, &github, &address, &pubkey, &nonce, &signature, now_ms(), prefix)
+        .register(&mut nonces, &network, &github, &address, &pubkey, &nonce, &signature, now_ms(), prefix, attribution)
         .map_err(|e| format!("registration rejected: {e}"))?;
 
     let line = serde_json::to_string(&record).map_err(|e| format!("record JSON: {e}"))?;
@@ -560,6 +569,7 @@ mod ingest_tests {
             pubkey: vec![],
             claim_token: token.clone(),
             registered_at_ms: 0,
+            attribution: Default::default(),
         }]);
         let mut roster = std::collections::HashMap::new();
         roster.insert("node-r".to_string(), "gh:bob".to_string());
@@ -950,6 +960,7 @@ mod palw_ingest_tests {
             pubkey: vec![],
             claim_token: "t".into(),
             registered_at_ms: 0,
+            attribution: Default::default(),
         }]);
         assert_eq!(attr.ledger_id_for_address("misakatest:alice").as_deref(), Some("gh:alice"));
         let report = PalwReplicaCollector { leaves, finality_daa_score: finality, resolver: attr }.normalize();
