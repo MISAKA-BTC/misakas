@@ -4,14 +4,15 @@
 //! so they are unit-tested:
 //!
 //! * **[`NonceStore`] (I-MTP-4)** — server-issued 32-byte challenge nonces, bound
-//!   to a `(github, address)` pair, 15-minute TTL, single-use, deleted on success
+//!   to a `(github, address)` pair, 7-day TTL, single-use, deleted on success
 //!   or expiry. The challenge bytes are the canonical Appendix-B registration
 //!   message; the core [`misaka_mtp::verify_registration`] checks the ML-DSA-87
 //!   signature over exactly those bytes.
 //! * **[`claim_token`] (I-MTP-11)** — a short deterministic token derived from the
 //!   registration record. The participant configures their node to advertise
-//!   `mtp:<token>` in its P2P user-agent comment; the crawler attributes uptime to
-//!   a registration only when it observes the token (possession-of-config binding).
+//!   `mtp:<token>` in its P2P user-agent comment; ingestion extracts it from the
+//!   crawler-observed user-agent ([`extract_claim_token`]) and attributes uptime to
+//!   the registration it resolves to (possession-of-config binding).
 //! * **[`Attributor`] (I-MTP-1 / G1)** — the single attribution authority. Every
 //!   scoreable fact must resolve, through a registration, to the one canonical
 //!   ledger id `gh:<handle>`; unresolvable facts are **dropped, not bucketed**
@@ -27,8 +28,16 @@ use std::collections::HashMap;
 
 use crate::MTP_CLAIM_TOKEN_CONTEXT;
 
-/// Nonce time-to-live: 15 minutes (I-MTP-4).
-pub const NONCE_TTL_MS: u64 = 15 * 60 * 1000;
+/// Nonce time-to-live: 7 days (I-MTP-4).
+///
+/// The invitation travels through an asynchronous GitHub issue/PR round-trip
+/// (operator issues → participant signs offline → participant posts the result →
+/// operator ingests), so the TTL must cover days, not minutes — the original
+/// 15-minute TTL made every real-world registration expire before ingestion.
+/// Replay is not loosened by the longer window: the nonce is single-use, bound to
+/// its `(github, address)` pair, and useless without the key that derives the
+/// invited address (the signature binds pubkey ↔ address ↔ challenge).
+pub const NONCE_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// Claim-token length in bytes (24 hex chars) — short enough for a user-agent
 /// comment, wide enough that a collision across registrations is negligible.
 pub const CLAIM_TOKEN_BYTES: usize = 12;
@@ -66,6 +75,28 @@ pub fn claim_token(github: &str, address: &str) -> ClaimToken {
     preimage.extend_from_slice(address.as_bytes());
     let h = blake2b_512_keyed(MTP_CLAIM_TOKEN_CONTEXT, &preimage);
     faster_hex::hex_string(&h.as_bytes()[..CLAIM_TOKEN_BYTES])
+}
+
+/// Extract the I-MTP-11 claim-token from a crawler-observed P2P user-agent.
+///
+/// The participant advertises it via `--uacomment=mtp:<token>`, which the node
+/// renders inside its user-agent as `.../name:version(mtp:<token>; other)/`. This
+/// scanner accepts the token anywhere in the string, requires exactly
+/// [`CLAIM_TOKEN_BYTES`]·2 hex chars (a truncated user-agent yields no token, not
+/// a wrong one — fail-closed), and lowercases it to match [`claim_token`] output.
+/// A longer hex run is not a token (no prefix-taking); scanning continues, so one
+/// malformed comment cannot mask a well-formed one later in the string.
+pub fn extract_claim_token(user_agent: &str) -> Option<ClaimToken> {
+    let mut rest = user_agent;
+    while let Some(pos) = rest.find("mtp:") {
+        let after = &rest[pos + 4..];
+        let end = after.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(after.len());
+        if end == CLAIM_TOKEN_BYTES * 2 {
+            return Some(after[..end].to_ascii_lowercase());
+        }
+        rest = &after[end..];
+    }
+    None
 }
 
 // The registration challenge moved to `misaka_mtp::registry` so the signer (a participant's CLI)
@@ -298,6 +329,27 @@ mod tests {
         assert_ne!(t1, claim_token("alice", "misakatest:bbb"));
         assert_ne!(t1, claim_token("bob", "misakatest:aaa"));
         assert_eq!(t1.len(), CLAIM_TOKEN_BYTES * 2);
+    }
+
+    #[test]
+    fn claim_token_extraction_from_user_agents() {
+        let tok = claim_token("alice", "misakatest:aaa");
+        // The shapes a real node produces: sole comment, alongside other comments, either order.
+        let ua = format!("/kaspad:1.0.1/kaspad:1.0.1(mtp:{tok})/");
+        assert_eq!(extract_claim_token(&ua).as_deref(), Some(tok.as_str()));
+        let ua = format!("/kaspad:1.0.1/kaspad:1.0.1(oracle-arm; mtp:{tok}; jp)/");
+        assert_eq!(extract_claim_token(&ua).as_deref(), Some(tok.as_str()));
+        // Uppercase paste still resolves (normalized to the claim_token alphabet).
+        let ua = format!("/kaspad:1.0.1(mtp:{})/", tok.to_ascii_uppercase());
+        assert_eq!(extract_claim_token(&ua).as_deref(), Some(tok.as_str()));
+        // A malformed candidate earlier in the string cannot mask a valid one later.
+        let ua = format!("/kaspad:1.0.1(mtp:deadbeef; mtp:{tok})/");
+        assert_eq!(extract_claim_token(&ua).as_deref(), Some(tok.as_str()));
+        // Fail-closed: absent, truncated (user-agent length cap), or over-long runs are no token.
+        assert_eq!(extract_claim_token("/kaspad:1.0.1/"), None);
+        assert_eq!(extract_claim_token(&format!("/kaspad:1.0.1(mtp:{})", &tok[..10])), None);
+        assert_eq!(extract_claim_token(&format!("/kaspad:1.0.1(mtp:{tok}0)/")), None);
+        assert_eq!(extract_claim_token("mtp:"), None);
     }
 
     #[test]

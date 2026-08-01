@@ -428,6 +428,8 @@ misaka key gen --network testnet-21 --out mtp.seed        # prints your misakate
 
 **2 — ask for an invitation.** Open an issue on this repository with your GitHub handle and the
 address from step 1. You get back an invitation JSON: a one-shot nonce bound to that pair.
+**Invitations expire 7 days after issuance** (single-use either way) — if the round-trip takes
+longer, ask for a fresh one; nothing is lost.
 
 **3 — sign it offline.**
 
@@ -441,6 +443,7 @@ no registration endpoint to post to — and therefore none that could accept a f
 
 **4 — submit `registration.json`** through the same issue or a pull request. From the next epoch
 run, facts about you resolve to `gh:<your-handle>`. Nothing before registration is retroactive.
+The confirmation you get back includes your **claim token** — keep it for step 5.
 
 **One handle, one address.** The registry binds each GitHub handle to exactly one address, and
 rejects a second registration for either half. Choose the address you will actually earn with —
@@ -450,9 +453,19 @@ owner is dropped loudly, never banked for later.
 
 **5 — run something worth scoring.**
 
-- **A node** → C1 node. Keep it up and in sync on `testnet-21`. A peer still in IBD is reachable
-  but not usable and does not count. You run no collector: the operator's vantage hosts observe you
-  as an ordinary peer.
+- **A node** → C1 node. Keep it up and in sync on `testnet-21`, and start it with your claim
+  token in the user-agent comment so observed uptime attributes to you automatically:
+
+  ```bash
+  ./target/release/kaspad --testnet --netsuffix=21 --utxoindex --rpclisten-borsh=default \
+    --uacomment=mtp:<your-claim-token>
+  ```
+
+  A peer still in IBD is reachable but not usable and does not count. You run no collector: the
+  operator's vantage hosts observe you as an ordinary peer, read the `mtp:<token>` out of your
+  user-agent, and resolve it against the registry — possession of the node's config is the proof
+  of ownership. Without the comment your node still counts, but only after the operator adds your
+  `node_key` to the roster by hand.
 - **A validator** → C1 validator. Bond, attest, stay unslashed. Attestations are read out of
   blocks, so participation is chain-derived and needs nothing from you beyond attesting.
 - **A PALW provider** → C5. Run replica jobs (§7). When your pair's leaf is accepted on chain and
@@ -474,9 +487,10 @@ A points programme nobody can check is worth nothing, so the operator side is a 
 command list:
 
 ```bash
-# C1 node — observe peers from a vantage, then attribute them via an explicit roster
+# C1 node — observe peers from a vantage; attribution is automatic for peers advertising a
+# registered mtp:<claim-token> in their user-agent; --roster is the optional manual override
 misaka mtp collect --network testnet-21 --vantage jp --rpc 127.0.0.1:27210 --out probes.jsonl
-misaka-mtp-service ingest-probes --data-dir DIR --file probes.jsonl --roster roster.jsonl
+misaka-mtp-service ingest-probes --data-dir DIR --file probes.jsonl [--roster roster.jsonl]
 
 # C1 validator — attestations out of blocks, bond/slash state out of the registry
 misaka mtp attestations --network testnet-21 --rpc 127.0.0.1:27210 --out att.jsonl

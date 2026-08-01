@@ -27,7 +27,9 @@ use misaka_mtp_collectors::EpochWindow;
 use misaka_mtp_collectors::{
     AcceptedPalwLeaf, AttestationRow, Identity, IdentityKind, NodeRecord, PalwReplicaCollector, Rejected, ReplicaSlot, UptimeSample,
 };
-use misaka_mtp_service::{Attributor, HttpState, LedgerArchive, NonceStore, PersistentStore, RegistrationRecord, config, epoch};
+use misaka_mtp_service::{
+    Attributor, HttpState, LedgerArchive, NonceStore, PersistentStore, RegistrationRecord, config, epoch, extract_claim_token,
+};
 
 const USAGE: &str = "\
 misaka-mtp-service — MISAKA Testnet Points Program service (ADR-0038, testnet-only)
@@ -37,7 +39,7 @@ USAGE:
   misaka-mtp-service run-epoch --data-dir DIR --operator-key FILE --epoch N --start RFC3339 --end RFC3339 [--network NET]
   misaka-mtp-service issue-nonce --data-dir DIR --github ID --address ADDR [--network NET]
   misaka-mtp-service register    --data-dir DIR --request FILE
-  misaka-mtp-service ingest-probes --data-dir DIR --file PROBES.jsonl --roster ROSTER.jsonl [--network NET]
+  misaka-mtp-service ingest-probes --data-dir DIR --file PROBES.jsonl [--roster ROSTER.jsonl] [--network NET]
   misaka-mtp-service ingest-attestations --data-dir DIR --file ATT.jsonl --roster VROSTER.jsonl [--bonds BONDS.jsonl] [--network NET]
   misaka-mtp-service ingest-palw --data-dir DIR --file LEAVES.jsonl [--network NET]
 
@@ -293,6 +295,7 @@ fn cmd_issue_nonce(args: &[String]) -> Result<(), String> {
     println!("{}", serde_json::to_string_pretty(&record).map_err(|e| format!("invitation JSON: {e}"))?);
     eprintln!("issued invitation for {github} / {address} [{network}] — recorded in {}", path.display());
     eprintln!("hand the JSON above to the participant; they run: misaka mtp register --invitation <file> --key-file <seed>");
+    eprintln!("the invitation is valid for 7 days (single-use); reissue if the round-trip takes longer");
     Ok(())
 }
 
@@ -364,7 +367,13 @@ fn cmd_register(args: &[String]) -> Result<(), String> {
         .map_err(|e| format!("cannot rewrite {}: {e}", npath.display()))?;
 
     println!("registered {} → ledger id {}", record.address, record.ledger_id());
+    println!("claim token: {}", record.claim_token);
     eprintln!("appended to {} — the next `run-epoch` attributes this identity's facts", reg_path.display());
+    eprintln!(
+        "relay the claim token to the participant: restarting their node with --uacomment=mtp:{} \
+         makes C1 uptime attribute to them automatically (no roster entry needed)",
+        record.claim_token
+    );
     Ok(())
 }
 
@@ -385,15 +394,36 @@ fn getrandom_bytes(buf: &mut [u8]) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// ingest-probes — join a vantage's observations to the roster, into the fact store
+// ingest-probes — attribute a vantage's observations, into the fact store
 // ---------------------------------------------------------------------------
 
-/// One roster line: which ledger id owns a node key. Maintained by the operator, because a peer
-/// cannot assert ownership on the wire — `misaka mtp collect` records `node_key` and stops there.
+/// One roster line: which ledger id owns a node key. This is the operator's **manual override**;
+/// the self-serve path is the I-MTP-11 claim-token, which the participant's node advertises in its
+/// user-agent (`--uacomment=mtp:<token>`) and ingestion resolves through the registration index.
+/// A roster entry wins over a token for the same `node_key`, so a mis-pasted or hijacked comment
+/// can always be corrected by the operator.
 #[derive(serde::Deserialize)]
 struct RosterEntry {
     node_key: String,
     owner_id: String,
+}
+
+/// Resolve the owner of one observed peer (C1 attribution). Precedence:
+///
+/// 1. an explicit roster entry for the `node_key` (operator override);
+/// 2. an I-MTP-11 claim-token found in the observed user-agent that resolves to a
+///    registration ([`extract_claim_token`] → [`Attributor::resolve_token`]).
+///
+/// Anything else is `None` — the peer stays unattributed (fail-closed; most of the
+/// network is simply not registered). The token path yields a registered ledger id
+/// by construction; a roster id that is stale or mistyped is still dropped later by
+/// `resolve_attribution` (I-MTP-1), so no path can smuggle an unregistered id into
+/// the scored ledger.
+fn probe_owner(roster: &std::collections::HashMap<String, String>, attr: &Attributor, node_key: &str, user_agent: &str) -> Option<String> {
+    if let Some(owner) = roster.get(node_key) {
+        return Some(owner.clone());
+    }
+    extract_claim_token(user_agent).and_then(|t| attr.resolve_token(&t)).map(str::to_string)
 }
 
 /// One line of a vantage's `misaka mtp collect` output.
@@ -432,18 +462,25 @@ fn cmd_ingest_probes(args: &[String]) -> Result<(), String> {
     let flags = Flags::parse(args, &[])?;
     let data_dir = PathBuf::from(flags.get("data-dir")?);
     let file = flags.get("file")?.to_string();
-    let roster_path = flags.get("roster")?.to_string();
     let network = network_or_default(&flags)?;
 
-    let roster_text = std::fs::read_to_string(&roster_path).map_err(|e| format!("cannot read roster {roster_path}: {e}"))?;
+    // The roster is optional: since the claim-token path went live, a probe attributes itself when
+    // the observed user-agent carries a registered `mtp:<token>`. The roster remains the operator's
+    // explicit override (and the only path for peers that cannot restart with a uacomment).
     let mut owner_of: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for (i, line) in roster_text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
+    if let Some(roster_path) = flags.opt("roster") {
+        let roster_text = std::fs::read_to_string(roster_path).map_err(|e| format!("cannot read roster {roster_path}: {e}"))?;
+        for (i, line) in roster_text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let e: RosterEntry = serde_json::from_str(line).map_err(|err| format!("{roster_path}:{}: {err}", i + 1))?;
+            owner_of.insert(e.node_key, e.owner_id);
         }
-        let e: RosterEntry = serde_json::from_str(line).map_err(|err| format!("{roster_path}:{}: {err}", i + 1))?;
-        owner_of.insert(e.node_key, e.owner_id);
     }
+
+    // The registration index the claim-token path resolves through (same file `register` appends).
+    let attr = Attributor::from_records(load_registrations(&data_dir.join("registrations.jsonl"))?);
 
     let text = std::fs::read_to_string(&file).map_err(|e| format!("cannot read {file}: {e}"))?;
     let mut store = PersistentStore::load(data_dir.join("facts")).map_err(|e| e.to_string())?;
@@ -460,7 +497,7 @@ fn cmd_ingest_probes(args: &[String]) -> Result<(), String> {
         }
         // An unclaimed peer is not an error: most of the network is not registered. Count it and
         // move on rather than inventing an owner, which would put someone else's uptime on a ledger.
-        let Some(owner) = owner_of.get(&p.node_key) else {
+        let Some(owner) = probe_owner(&owner_of, &attr, &p.node_key, &p.user_agent) else {
             unattributed += 1;
             continue;
         };
@@ -495,7 +532,7 @@ fn cmd_ingest_probes(args: &[String]) -> Result<(), String> {
 
     println!("ingested {ingested} sample(s) into {}", data_dir.join("facts").display());
     if unattributed > 0 {
-        println!("  {unattributed} observation(s) skipped: node_key not in the roster (unregistered peers)");
+        println!("  {unattributed} observation(s) skipped: no roster entry and no registered mtp:<token> in the user-agent");
     }
     if wrong_net > 0 {
         println!("  {wrong_net} observation(s) skipped: recorded on a different network than {network}");
@@ -505,7 +542,33 @@ fn cmd_ingest_probes(args: &[String]) -> Result<(), String> {
 
 #[cfg(test)]
 mod ingest_tests {
-    use super::ipv4_24;
+    use super::{Attributor, RegistrationRecord, ipv4_24, probe_owner};
+
+    /// C1 attribution resolves through the claim-token self-serve path (I-MTP-11), with the
+    /// roster as the operator override — and through nothing else (fail-closed).
+    #[test]
+    fn probe_owner_resolves_roster_then_token_then_nothing() {
+        let token = misaka_mtp_service::claim_token("alice", "misakatest:aaa");
+        let attr = Attributor::from_records(vec![RegistrationRecord {
+            github: "alice".into(),
+            address: "misakatest:aaa".into(),
+            pubkey: vec![],
+            claim_token: token.clone(),
+            registered_at_ms: 0,
+        }]);
+        let mut roster = std::collections::HashMap::new();
+        roster.insert("node-r".to_string(), "gh:bob".to_string());
+
+        let ua = format!("/kaspad:1.0.1/kaspad:1.0.1(mtp:{token})/");
+        // Token in the observed user-agent → the registered ledger id, no roster line needed.
+        assert_eq!(probe_owner(&roster, &attr, "node-t", &ua), Some("gh:alice".to_string()));
+        // A roster entry wins over the token for the same node_key (operator override).
+        assert_eq!(probe_owner(&roster, &attr, "node-r", &ua), Some("gh:bob".to_string()));
+        // No roster entry, no token → unattributed; an UNREGISTERED token is likewise nothing —
+        // a stranger advertising a random mtp:<hex> cannot park uptime anywhere.
+        assert_eq!(probe_owner(&roster, &attr, "node-x", "/kaspad:1.0.1/"), None);
+        assert_eq!(probe_owner(&roster, &attr, "node-x", "/kaspad:1.0.1(mtp:00112233445566778899aabb)/"), None);
+    }
 
     #[test]
     fn the_colocation_key_comes_from_the_observation_not_a_geoip_feed() {

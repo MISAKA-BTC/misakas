@@ -43,7 +43,7 @@ pub use ingest::{
 };
 pub use publish::{ArchiveError, IndexEntry, LedgerArchive};
 pub use query::{EpochView, PointsView, QueryError};
-pub use registry::{AttributionError, Attributor, ClaimToken, NonceError, NonceStore, RegistrationRecord, claim_token};
+pub use registry::{AttributionError, Attributor, ClaimToken, NonceError, NonceStore, RegistrationRecord, claim_token, extract_claim_token};
 pub use store::{PersistentStore, StoreError, Timed};
 
 /// Service-layer domain-separation key for the node claim-token (I-MTP-11).
