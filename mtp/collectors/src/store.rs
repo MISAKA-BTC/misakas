@@ -123,6 +123,42 @@ pub enum ChainFixedKind {
     Drill,
 }
 
+/// One **accepted, k=2 exact-matched** PALW replica slot (C5, ADR-0040 §16″).
+///
+/// A row exists only for work that already survived consensus: the leaf is in an accepted batch on
+/// the selected chain, its DA object was produced, and A/B reproduced each other's
+/// `output_commitment` and execution roots. The collector re-checks that off the finalized chain
+/// rather than trusting a receipt handed to it — see [`crate::aggregate`].
+///
+/// The identity fields are the attribution chain ADR-0040 §16″ specifies:
+/// `worker_credential_id` → provider bond → bond owner → registered MTP id (`owner_id`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmReplicaWork {
+    /// When the job completed (ms). Evidence/audit only — never a scoring input.
+    pub completed_at_ms: u64,
+    /// The A/B pair this slot belongs to. Both slots of one job share it, and it is the key the
+    /// "one identity, one point per pair" rule collapses on.
+    pub pair_id: String,
+    pub job_challenge: String,
+    /// Global dedup key (ADR-0040 P1-9): one computation, one credit, forever.
+    pub execution_nullifier: String,
+    /// `txid:index` of the provider bond that backs this slot.
+    pub provider_bond: String,
+    pub worker_credential_id: String,
+    /// 0 = replica A, 1 = replica B.
+    pub replica_slot: u8,
+    /// The registered MTP id the points land on (e.g. `gh:alice`).
+    pub owner_id: String,
+    /// Phase 1: always 1 (one accepted slot = one unit). Kept as a field so CU-proportional
+    /// scoring is a later rules bump rather than a schema change.
+    pub work_units: u64,
+    /// Recorded as evidence only — not scored yet (A and B agreeing does not prove the value is
+    /// honest; see `ScoringRules::c5_points_per_accepted_replica`).
+    pub canonical_compute_units: u64,
+    /// Evidence link (accepted block hash / leaf coordinate / DA root).
+    pub evidence: String,
+}
+
 /// The whole §4.2 fact store, one Vec per table. Collectors append to it; the
 /// aggregator reads it. Deliberately dependency-free (see module docs).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -134,6 +170,9 @@ pub struct FactStore {
     pub gh_events: Vec<GhEvent>,
     pub submissions: Vec<Submission>,
     pub chain_fixed: Vec<ChainFixed>,
+    /// C5 accepted replica slots (ADR-0040 §16″).
+    #[serde(default)]
+    pub llm_replica_work: Vec<LlmReplicaWork>,
 }
 
 impl FactStore {
@@ -173,6 +212,7 @@ impl FactStore {
             + self.gh_events.len()
             + self.submissions.len()
             + self.chain_fixed.len()
+            + self.llm_replica_work.len()
     }
 
     pub fn is_empty(&self) -> bool {

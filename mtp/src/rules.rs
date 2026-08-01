@@ -17,7 +17,11 @@ pub const POINT: MilliPoints = 1000;
 ///
 /// v2: the BPS-escalation ladder was retired. See [`Stage`].
 /// v3: the scored public network moved from retired testnet-10 to testnet-200.
-pub const RULES_VERSION: u16 = 3;
+/// v4: [`Rules`] split into [`ScoringRules`] (hashed into every ledger) and
+///     [`AllocationRules`] (NOT hashed — see the split's rationale below), and C5
+///     gained an automatic per-accepted-replica rule. Not applied retroactively:
+///     ledgers published under v3 keep their own `rules_hash` and their own numbers.
+pub const RULES_VERSION: u16 = 4;
 
 /// BPS stage coefficient (ADR-0027 §3).
 ///
@@ -96,15 +100,18 @@ pub enum Category {
     /// runtime as an A/B replica or as an auditor — which requires the GPU capacity the compute lane
     /// actually needs. Folding it into C1 would price a 4090 the same as a $5 VPS and buy no supply.
     ///
-    /// # C5 is MANUAL-AWARD ONLY, deliberately, until [`C5_AUTO_AWARD_PRECONDITIONS`] are met
+    /// # C5 records points automatically, but settles NO tokens
     ///
-    /// The settle-loop bug caught during this change proved one direction — *a weight with no path is
-    /// not an allocation*. The converse is equally true and more dangerous: **a path with no defence is
-    /// not an allocation, it is a faucet.** Testnet points are a futures claim on TGE value, so farming
-    /// them on a stub network is a nearly free sybil harvest, and 30 % makes C5 the largest single
-    /// target in the program.
+    /// The original objection to an automatic C5 was that *a path with no defence is not an
+    /// allocation, it is a faucet* — testnet points are a futures claim on TGE value, so an open pipe
+    /// on a stub network is a nearly free sybil harvest.
     ///
-    /// Manual award is therefore the correct *initial* state, not a limitation to be routed around.
+    /// That objection is about **token entitlement**, not about **measurement**, and the two are now
+    /// separate gates ([`c5_points_collection_enabled`] / [`c5_token_settlement_enabled`]). Recording
+    /// which verified k=2 job each identity actually completed is a measurement, and it is only
+    /// possible while the evidence is still on the selected chain. How many MSK C5 is worth — and
+    /// whether the ratio survives at all — stays undecided in [`AllocationRules`], which is
+    /// deliberately NOT part of `rules_hash`, so publishing a point total promises no share.
     Llm,
 }
 
@@ -125,12 +132,27 @@ pub const C5_AUTO_AWARD_PRECONDITIONS: &[&str] = &[
     "SEL-01 (bond-weighted selection) and AUTH-02 (block authorization) closed",
 ];
 
-/// ADR-0040 §16″ — is C5 eligible for automatic scoring on this network yet?
+/// **Gate 1 of 2 — may C5 points be COLLECTED from chain facts?**
 ///
-/// Hard-wired `false`: every precondition above is open. Kept as a function rather than a comment so
-/// the awarding path has something to branch on, and so flipping it is a visible, reviewable diff
-/// rather than the quiet appearance of a new collector.
-pub const fn c5_auto_award_enabled() -> bool {
+/// `true`. Collecting is a measurement of work that already happened and is provable from the
+/// selected chain: an accepted PALW leaf whose k=2 replica pair exact-matched, deduplicated by
+/// execution nullifier, attributed through the provider bond's owner to a registered MTP id.
+///
+/// The [`C5_AUTO_AWARD_PRECONDITIONS`] that are still open all bound what a point is *worth*, not
+/// whether the work occurred — so they gate [`c5_token_settlement_enabled`], not this. Waiting for
+/// them before recording anything would lose the evidence instead of protecting it: leaves are
+/// pruned, and no later fix reconstructs who did which job.
+pub const fn c5_points_collection_enabled() -> bool {
+    true
+}
+
+/// **Gate 2 of 2 — may C5 points be converted into TOKENS?**
+///
+/// `false`, and it stays false until every [`C5_AUTO_AWARD_PRECONDITIONS`] line closes. This is the
+/// gate the faucet objection is actually about: a point is a ratio inside C5, and a ratio becomes a
+/// claim only when a pool is fixed against it. Until then C5 has a share of nothing, which is why
+/// [`settle`](crate::settle::settle) must not be called with a C5 pool.
+pub const fn c5_token_settlement_enabled() -> bool {
     false
 }
 
@@ -140,7 +162,7 @@ pub const fn c5_auto_award_enabled() -> bool {
 /// artefacts, not settled entitlements. Recording the status alongside the points is what allows them
 /// to be discounted later without arguing about what was promised.
 pub const fn c5_is_provisional() -> bool {
-    !c5_auto_award_enabled()
+    !c5_token_settlement_enabled()
 }
 
 impl Category {
@@ -158,9 +180,25 @@ impl Category {
     }
 }
 
-/// The frozen rule parameters that define a score. Hashed into every ledger.
+/// **What each identity earns.** Hashed into every ledger as `rules_hash`.
+///
+/// # Why this is separate from [`AllocationRules`]
+///
+/// These two answer different questions, and only one of them is decidable today:
+///
+/// | | question | decided |
+/// |---|---|---|
+/// | [`ScoringRules`] | who earns how many points | **now** — it is a rule about work |
+/// | [`AllocationRules`] | how many tokens the points are worth | later — it is a rule about supply |
+///
+/// While both lived in one struct, `weight_bps: [.., 3000]` was inside `rules_hash`, so every
+/// published ledger carried a signed "C5 gets 30 %". Nothing *used* it for scoring (`score_epoch`
+/// never reads a weight), but a signed number is read as a promise, and people preserve numbers they
+/// find as entitlements. Splitting the struct makes the honest state expressible: the point rules are
+/// frozen and signed; the distribution is not written down anywhere a participant can mistake for a
+/// commitment.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct Rules {
+pub struct ScoringRules {
     pub version: u16,
     // --- C1 base points ---
     pub node_uptime_base: u64, // 100 · u · m_geo · m_ver · d_n
@@ -177,19 +215,48 @@ pub struct Rules {
     // --- C2 duplicate factor (num, den) ---
     pub bug_dup_num: u64,
     pub bug_dup_den: u64,
-    // --- category weights, basis points (sum 10000) ---
+    // --- C5 ---
+    /// Points for ONE accepted, k=2-matched replica slot (ADR-0040 §16″).
+    ///
+    /// Flat on purpose. A 4090 and a Mac earn the same for the same verified job; faster hardware
+    /// earns more by completing more jobs, which is already the reward. Adding a hardware, power, or
+    /// bond multiplier on top would count capability twice — fairness here is *equal pay for equal
+    /// verified work*, not equal totals.
+    ///
+    /// Not yet proportional to `canonical_compute_units`: A and B agreeing on a CU value proves they
+    /// ran the same thing, not that the value is honest, and `ReceiptV3Expectations` does not yet
+    /// carry a node-side expected CU to check it against. The CU is recorded as evidence so the
+    /// switch to CU-proportional scoring is a later `RULES_VERSION` bump, never a re-scoring of
+    /// history.
+    pub c5_points_per_accepted_replica: u64,
+}
+
+/// **What the points are worth.** Deliberately NOT hashed into any ledger, and not read by any
+/// scoring path — see [`ScoringRules`] for why the split exists.
+///
+/// Every field here is provisional until a distribution is actually decided. `settle` is the only
+/// consumer, and it must not run for C5 while [`c5_token_settlement_enabled`] is `false`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AllocationRules {
+    /// Category weights in basis points (sum 10000), C1..C5.
     pub weight_bps: [u16; 5],
-    // --- settlement ---
     pub per_id_cap_bps: u16, // 500 = 5%
     /// Vesting threshold as bps of the pool (10 = 0.1%); above it, cliff+linear.
     pub vesting_threshold_bps: u16,
     pub vesting_cliff_bps: u16, // 2500 = 25% at TGE
 }
 
-impl Default for Rules {
-    /// The ADR-0027 v1 defaults (§3, §6.2, §6.3).
+/// The scoring rules, under the name the pre-v4 code used.
+///
+/// Kept so the ~60 `&Rules` scoring call sites did not all churn in the split commit. New code should
+/// say [`ScoringRules`] when it means scoring — which, since allocation moved out, is everywhere the
+/// name still appears.
+pub type Rules = ScoringRules;
+
+impl Default for ScoringRules {
+    /// The ADR-0027 v1 defaults (§3, §6.2), plus the ADR-0040 §16″ C5 rule.
     fn default() -> Self {
-        Rules {
+        ScoringRules {
             version: RULES_VERSION,
             node_uptime_base: 100,
             validator_base: 200,
@@ -202,14 +269,16 @@ impl Default for Rules {
             d_n: [(1, 1), (1, 2), (1, 4), (0, 1)],
             bug_dup_num: 1,
             bug_dup_den: 10, // duplicates score 10%
-            // ADR-0040 §16″ — C5 LLM mining at 30 %.
-            //
-            // The rebalance takes the 30 points from C1 (25 → and C2/C3/C4 5 collectively), because the
-            // program's purpose has shifted: the scarce contribution is no longer "run a node" (cheap,
-            // already saturated) but "run the canonical inference runtime" (GPU-bound, and the compute
-            // lane cannot start without it). C1 keeps the largest non-LLM share so validator/uptime work
-            // is still worth doing.
-            //
+            c5_points_per_accepted_replica: 1,
+        }
+    }
+}
+
+impl Default for AllocationRules {
+    /// Placeholder numbers ONLY. Nothing signs these and nothing is owed under them; they exist so
+    /// `settle` has something to exercise in tests before a distribution is decided.
+    fn default() -> Self {
+        AllocationRules {
             //                 C1 Node  C2 Bug  C3 Verify  C4 Infra  C5 LLM
             weight_bps: [2500, 2500, 1000, 1000, 3000],
             per_id_cap_bps: 500,       // 5%
@@ -219,14 +288,16 @@ impl Default for Rules {
     }
 }
 
-impl Rules {
+impl ScoringRules {
     /// `Hash64_k("misaka-mtp-v1/rules", borsh(self))` — the value pinned in each
-    /// epoch ledger. Anyone with the same `Rules` recomputes the same hash.
+    /// epoch ledger. Anyone with the same `ScoringRules` recomputes the same hash.
     pub fn rules_hash(&self) -> kaspa_hashes::Hash64 {
-        let bytes = borsh::to_vec(self).expect("borsh of in-memory Rules is infallible");
+        let bytes = borsh::to_vec(self).expect("borsh of in-memory ScoringRules is infallible");
         kaspa_hashes::blake2b_512_keyed(crate::MTP_RULES_CONTEXT, &bytes)
     }
+}
 
+impl AllocationRules {
     /// Canonical `weight_bps` must sum to 10000 (guards a malformed rule set).
     pub fn weights_sum_to_full(&self) -> bool {
         self.weight_bps.iter().map(|&w| w as u32).sum::<u32>() == 10_000
@@ -239,19 +310,52 @@ mod tests {
 
     #[test]
     fn default_rules_are_well_formed() {
-        let r = Rules::default();
-        assert!(r.weights_sum_to_full(), "category weights must sum to 100%");
-        assert_eq!(r.per_id_cap_bps, 500);
+        let r = ScoringRules::default();
+        let a = AllocationRules::default();
+        assert!(a.weights_sum_to_full(), "category weights must sum to 100%");
+        assert_eq!(a.per_id_cap_bps, 500);
         // rules_hash is deterministic + non-trivial.
-        assert_eq!(r.rules_hash(), Rules::default().rules_hash());
+        assert_eq!(r.rules_hash(), ScoringRules::default().rules_hash());
         assert_ne!(r.rules_hash().as_bytes(), [0u8; 64]);
     }
 
     #[test]
     fn a_rule_change_changes_the_hash() {
-        let mut r = Rules::default();
+        let mut r = ScoringRules::default();
         let h0 = r.rules_hash();
         r.node_uptime_base = 101;
         assert_ne!(h0, r.rules_hash(), "any rule edit must change rules_hash");
+    }
+
+    /// The whole point of the v4 split: a ledger must not carry a signed distribution. If an
+    /// allocation knob ever leaks back into `ScoringRules`, changing it would move `rules_hash`
+    /// and this fails.
+    #[test]
+    fn allocation_is_not_part_of_the_signed_rules_hash() {
+        let baseline = ScoringRules::default().rules_hash();
+        for weights in [[10_000u16, 0, 0, 0, 0], [0, 0, 0, 0, 10_000], [2000, 2000, 2000, 2000, 2000]] {
+            let alloc = AllocationRules { weight_bps: weights, ..AllocationRules::default() };
+            assert!(alloc.weights_sum_to_full());
+            assert_eq!(
+                ScoringRules::default().rules_hash(),
+                baseline,
+                "no allocation choice — including C5's share — may move the signed rules_hash"
+            );
+        }
+    }
+
+    /// Collection is open, settlement is shut: points accrue, tokens do not.
+    #[test]
+    fn the_two_c5_gates_are_independent_and_settlement_stays_shut() {
+        assert!(c5_points_collection_enabled(), "C5 measurement is on — the evidence is perishable");
+        assert!(!c5_token_settlement_enabled(), "C5 must not settle tokens while the preconditions are open");
+        assert!(c5_is_provisional(), "points recorded under an open settlement gate are provisional");
+        assert!(!C5_AUTO_AWARD_PRECONDITIONS.is_empty(), "the settlement gate must state what would close it");
+    }
+
+    /// C5 pays per verified slot, and pays every provider the same for it.
+    #[test]
+    fn c5_rule_is_flat_per_accepted_replica() {
+        assert_eq!(ScoringRules::default().c5_points_per_accepted_replica, 1);
     }
 }

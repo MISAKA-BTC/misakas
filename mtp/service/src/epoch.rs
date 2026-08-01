@@ -75,6 +75,11 @@ pub fn resolve_attribution(raw: &FactStore, attr: &Attributor) -> FactStore {
         gh_events: raw.gh_events.iter().filter(|e| keep(&e.reporter_id)).cloned().collect(),
         submissions: raw.submissions.iter().filter(|s| keep(&s.author_id)).cloned().collect(),
         chain_fixed: raw.chain_fixed.iter().filter(|c| keep(&c.author_id)).cloned().collect(),
+        // C5: a replica slot scores only if its provider-bond owner resolved to a REGISTERED id.
+        // Unregistered work is dropped rather than parked, so points can never be re-attributed to
+        // an account claimed after the fact (ADR-0040 §16″ — registration is a precondition of the
+        // job, not a later claim on it).
+        llm_replica_work: raw.llm_replica_work.iter().filter(|w| keep(&w.owner_id)).cloned().collect(),
     }
 }
 

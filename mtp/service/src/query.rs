@@ -32,6 +32,10 @@ pub struct Cumulative {
     pub c2: u64,
     pub c3: u64,
     pub c4: u64,
+    /// C5 LLM mining (ADR-0040 §16″). `serde` default so a client reading a pre-C5 response still
+    /// deserializes.
+    #[serde(default)]
+    pub c5: u64,
     pub total: u64,
 }
 
@@ -46,6 +50,10 @@ pub struct EpochView {
     pub c2: u64,
     pub c3: u64,
     pub c4: u64,
+    /// C5 LLM mining. Provisional while `c5_token_settlement_enabled()` is false — the points are
+    /// measured and signed, the token value they carry is not decided.
+    #[serde(default)]
+    pub c5: u64,
     pub evidence: Vec<String>,
     pub rules_hash: String,
     pub inputs_hash: String,
@@ -86,6 +94,7 @@ pub fn points_view(archive: &LedgerArchive, id: &str) -> Result<PointsView, Quer
         cum.c2 += row.c2;
         cum.c3 += row.c3;
         cum.c4 += row.c4;
+        cum.c5 += row.c5;
         latest_epoch = Some(latest_epoch.map_or(epoch, |cur: u64| cur.max(epoch)));
         epochs.push(EpochView {
             epoch,
@@ -95,6 +104,7 @@ pub fn points_view(archive: &LedgerArchive, id: &str) -> Result<PointsView, Quer
             c2: row.c2,
             c3: row.c3,
             c4: row.c4,
+            c5: row.c5,
             evidence: row.evidence.clone(),
             rules_hash: ledger.rules_hash.clone(),
             inputs_hash: ledger.inputs_hash.clone(),
@@ -106,7 +116,9 @@ pub fn points_view(archive: &LedgerArchive, id: &str) -> Result<PointsView, Quer
     if epochs.is_empty() {
         return Err(QueryError::UnknownId);
     }
-    cum.total = cum.c1 + cum.c2 + cum.c3 + cum.c4;
+    // C5 belongs in the grand total: it is a scored category like any other. Leaving it out
+    // made the ledger and the self-serve view disagree about what an id had earned.
+    cum.total = cum.c1 + cum.c2 + cum.c3 + cum.c4 + cum.c5;
     Ok(PointsView { id: id.to_string(), cumulative: cum, epochs, latest_epoch })
 }
 
@@ -259,7 +271,7 @@ mod tests {
         a.publish(&ledger(2, &[("gh:alice", [0, 0, 30, 0, 0])], &key), "", "").unwrap();
 
         let v = points_view(&a, "gh:alice").unwrap();
-        assert_eq!(v.cumulative, Cumulative { c1: 100, c2: 0, c3: 30, c4: 0, total: 130 });
+        assert_eq!(v.cumulative, Cumulative { c1: 100, c2: 0, c3: 30, c4: 0, c5: 0, total: 130 });
         assert_eq!(v.epochs.len(), 2);
         assert_eq!(v.latest_epoch, Some(2));
         // bob only appears in epoch 1.
@@ -288,7 +300,7 @@ mod tests {
         let got: Vec<(u64, &str, u64)> = lb.entries.iter().map(|e| (e.rank, e.id.as_str(), e.cumulative.total)).collect();
         assert_eq!(got, vec![(1, "gh:carol", 200), (2, "gh:alice", 130), (3, "gh:bob", 70)]);
         // Alice's per-category breakdown sums the latest issue of each epoch she appears in.
-        assert_eq!(lb.entries[1].cumulative, Cumulative { c1: 100, c2: 0, c3: 30, c4: 0, total: 130 });
+        assert_eq!(lb.entries[1].cumulative, Cumulative { c1: 100, c2: 0, c3: 30, c4: 0, c5: 0, total: 130 });
     }
 
     #[test]

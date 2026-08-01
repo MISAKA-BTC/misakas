@@ -19,7 +19,9 @@
 //! [monday, monday+7d)` projection D2/G3 specify; the on-disk format is an
 //! implementation detail behind [`PersistentStore`].
 
-use misaka_mtp_collectors::{AttestationRow, ChainFixed, FactStore, GhEvent, Identity, NodeRecord, Submission, UptimeSample};
+use misaka_mtp_collectors::{
+    AttestationRow, ChainFixed, FactStore, GhEvent, Identity, LlmReplicaWork, NodeRecord, Submission, UptimeSample,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -54,6 +56,8 @@ pub struct PersistentStore {
     gh_events: Vec<Timed<GhEvent>>,
     submissions: Vec<Timed<Submission>>,
     chain_fixed: Vec<Timed<ChainFixed>>,
+    /// C5 accepted replica slots (ADR-0040 §16″).
+    llm_replica_work: Vec<Timed<LlmReplicaWork>>,
 }
 
 impl PersistentStore {
@@ -83,6 +87,7 @@ impl PersistentStore {
         s.gh_events = read_jsonl(&s.path("gh_events"))?;
         s.submissions = read_jsonl(&s.path("submissions"))?;
         s.chain_fixed = read_jsonl(&s.path("chain_fixed"))?;
+        s.llm_replica_work = read_jsonl(&s.path("llm_replica_work"))?;
         Ok(s)
     }
 
@@ -155,6 +160,18 @@ impl PersistentStore {
         Ok(())
     }
 
+    /// Append one accepted, k=2-matched PALW replica slot (C5).
+    ///
+    /// `ts_ms` must be the job's completion time so the row lands in the epoch the work happened in,
+    /// not the epoch it was collected in. The caller is responsible for only appending slots read
+    /// off a finality-buried selected chain — a row here is already treated as settled fact.
+    pub fn append_llm_replica_work(&mut self, ts_ms: u64, row: LlmReplicaWork) -> Result<(), StoreError> {
+        let t = Timed { ts_ms, row };
+        append_line(&self.path("llm_replica_work"), &t)?;
+        self.llm_replica_work.push(t);
+        Ok(())
+    }
+
     /// **The I-MTP-3 projection.** Build a *fresh* single-epoch
     /// [`FactStore`] containing only activity in `[start_ms, end_ms)`. A node is
     /// included iff it has ≥1 in-window uptime sample, so nodes idle this epoch
@@ -177,12 +194,18 @@ impl PersistentStore {
             gh_events: self.gh_events.iter().filter(|t| in_window(t.ts_ms)).map(|t| t.row.clone()).collect(),
             submissions: self.submissions.iter().filter(|t| in_window(t.ts_ms)).map(|t| t.row.clone()).collect(),
             chain_fixed: self.chain_fixed.iter().filter(|t| in_window(t.ts_ms)).map(|t| t.row.clone()).collect(),
+            llm_replica_work: self.llm_replica_work.iter().filter(|t| in_window(t.ts_ms)).map(|t| t.row.clone()).collect(),
         }
     }
 
     /// Total persisted activity-row count (a cheap "how much collected" gauge).
     pub fn len(&self) -> usize {
-        self.uptime_samples.len() + self.attestations.len() + self.gh_events.len() + self.submissions.len() + self.chain_fixed.len()
+        self.uptime_samples.len()
+            + self.attestations.len()
+            + self.gh_events.len()
+            + self.submissions.len()
+            + self.llm_replica_work.len()
+            + self.chain_fixed.len()
     }
 
     pub fn is_empty(&self) -> bool {

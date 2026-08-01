@@ -106,16 +106,26 @@ pub fn points(ctx: &Ctx, id: &str, endpoint: &str) -> CliResult {
         OutputFormat::Human => {
             let cum = &v["cumulative"];
             println!("id:         {id}");
+            // C5 is shown with a marker: the points are measured and signed, but what they are
+            // worth is undecided (`c5_token_settlement_enabled() == false`). Printing it as a plain
+            // total alongside the others would imply an entitlement nobody has committed to.
+            let c5 = cum["c5"].as_u64().unwrap_or(0);
             println!(
-                "cumulative: C1 {}  C2 {}  C3 {}  C4 {}  (total {} mpts)",
-                cum["c1"], cum["c2"], cum["c3"], cum["c4"], cum["total"]
+                "cumulative: C1 {}  C2 {}  C3 {}  C4 {}  C5 {}{}  (total {} mpts)",
+                cum["c1"],
+                cum["c2"],
+                cum["c3"],
+                cum["c4"],
+                c5,
+                if c5 > 0 { "*" } else { "" },
+                cum["total"]
             );
             if let Some(epochs) = v["epochs"].as_array() {
                 println!("epochs:     {}", epochs.len());
                 for e in epochs {
                     let flag = if e["superseded"].as_bool().unwrap_or(false) { " (superseded issues exist)" } else { "" };
                     println!(
-                        "  epoch {} [{}] issue {} — C1 {} C2 {} C3 {} C4 {}  ← {}{}",
+                        "  epoch {} [{}] issue {} — C1 {} C2 {} C3 {} C4 {} C5 {}  ← {}{}",
                         e["epoch"],
                         e["network"].as_str().unwrap_or("?"),
                         e["issue"],
@@ -123,10 +133,17 @@ pub fn points(ctx: &Ctx, id: &str, endpoint: &str) -> CliResult {
                         e["c2"],
                         e["c3"],
                         e["c4"],
+                        e["c5"].as_u64().unwrap_or(0),
                         e["file"].as_str().unwrap_or("?"),
                         flag
                     );
                 }
+            }
+            if c5 > 0 && !ctx.quiet {
+                println!(
+                    "\n* C5 (LLM mining) points are recorded and signed, but PROVISIONAL: no token \
+                     distribution has been decided for them yet."
+                );
             }
             if !ctx.quiet {
                 println!("\nverify it yourself:  misaka mtp verify-epoch <the epoch-N.issue.jsonl> --pubkey <operator hex>");
@@ -167,8 +184,8 @@ pub fn leaderboard(ctx: &Ctx, endpoint: &str, top: usize) -> CliResult {
                 return Ok(());
             }
             println!(
-                "{:>4}  {:<28} {:>13} {:>11} {:>11} {:>11} {:>11}",
-                "rank", "id", "total", "C1 node", "C2 bug", "C3 verify", "C4 infra"
+                "{:>4}  {:<28} {:>13} {:>11} {:>11} {:>11} {:>11} {:>11}",
+                "rank", "id", "total", "C1 node", "C2 bug", "C3 verify", "C4 infra", "C5 llm*"
             );
             let shown = if top == 0 { entries.len() } else { top.min(entries.len()) };
             for e in entries.iter().take(shown) {
@@ -176,7 +193,15 @@ pub fn leaderboard(ctx: &Ctx, endpoint: &str, top: usize) -> CliResult {
                 let rank = e["rank"].as_u64().unwrap_or(0);
                 let id = e["id"].as_str().unwrap_or("?");
                 let g = |k: &str| c[k].as_u64().unwrap_or(0);
-                println!("{rank:>4}  {id:<28} {:>13} {:>11} {:>11} {:>11} {:>11}", g("total"), g("c1"), g("c2"), g("c3"), g("c4"));
+                println!(
+                    "{rank:>4}  {id:<28} {:>13} {:>11} {:>11} {:>11} {:>11} {:>11}",
+                    g("total"),
+                    g("c1"),
+                    g("c2"),
+                    g("c3"),
+                    g("c4"),
+                    g("c5")
+                );
             }
             if top != 0 && entries.len() > shown {
                 println!("… {} more (pass `--top 0` for the full board)", entries.len() - shown);

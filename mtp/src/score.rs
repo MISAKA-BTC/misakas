@@ -66,6 +66,19 @@ pub fn pts_fixed(base_points: u64, stage: Stage) -> MilliPoints {
     scale(base_points * POINT, &[stage.factor()])
 }
 
+/// C5 LLM mining: `work_units · c5_points_per_accepted_replica · m_stage` (ADR-0040 §16″).
+///
+/// One `work_unit` is one **accepted, k=2 exact-matched replica slot** on the selected chain. The
+/// collector — not this function — is what makes that true: it dedups by execution nullifier, drops
+/// unmatched/mismatched work, and collapses a pair that resolves to a single identity, so by the time
+/// a `work_units` reaches here it is a count of distinct verified computations.
+///
+/// Flat by design; see [`Rules::c5_points_per_accepted_replica`] for why there is no hardware,
+/// speed, or bond multiplier.
+pub fn pts_llm_replica(rules: &Rules, work_units: u64, stage: Stage) -> MilliPoints {
+    scale(work_units.saturating_mul(rules.c5_points_per_accepted_replica).saturating_mul(POINT), &[stage.factor()])
+}
+
 /// A fact-carrying entry that resolves to points in exactly one category.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Contribution {
@@ -93,6 +106,12 @@ pub enum Contribution {
         category: Category,
         base_points: u64,
     },
+    /// C5 PALW replica work: `work_units` accepted, k=2-matched replica slots credited to this id
+    /// in the epoch. The collector has already applied every §5-equivalent defence (nullifier dedup,
+    /// match-required, one point per identity per pair), so this is a plain count.
+    LlmReplica {
+        work_units: u64,
+    },
 }
 
 impl Contribution {
@@ -104,6 +123,7 @@ impl Contribution {
             }
             Contribution::Bug { .. } => Category::Bug,
             Contribution::Fixed { category, .. } => *category,
+            Contribution::LlmReplica { .. } => Category::Llm,
         }
     }
 
@@ -122,6 +142,7 @@ impl Contribution {
                 pts_bug(rules, severity, first_report, fix_pr_accepted, stage)
             }
             Contribution::Fixed { base_points, .. } => pts_fixed(base_points, stage),
+            Contribution::LlmReplica { work_units } => pts_llm_replica(rules, work_units, stage),
         }
     }
 }
@@ -164,6 +185,20 @@ mod tests {
         assert_eq!(pts_bug(&r, Severity::S1, false, false, Stage::A), 200_000);
         // first + accepted fix PR: 2000 + 2000 = 4000 pts.
         assert_eq!(pts_bug(&r, Severity::S1, true, true, Stage::A), 4_000_000);
+    }
+
+    #[test]
+    fn llm_replica_pays_flat_per_verified_slot() {
+        let r = Rules::default();
+        assert_eq!(pts_llm_replica(&r, 0, Stage::A), 0, "no verified work, no points");
+        assert_eq!(pts_llm_replica(&r, 1, Stage::A), POINT);
+        assert_eq!(pts_llm_replica(&r, 7, Stage::A), 7 * POINT, "linear in verified slots");
+        // Routed through Contribution, C5 is the category and the value is the same.
+        let c = Contribution::LlmReplica { work_units: 3 };
+        assert_eq!(c.category(), Category::Llm);
+        assert_eq!(c.points(&r, Stage::A), 3 * POINT);
+        // Saturating, not panicking, on an absurd count.
+        assert!(pts_llm_replica(&r, u64::MAX, Stage::A) > 0);
     }
 
     #[test]

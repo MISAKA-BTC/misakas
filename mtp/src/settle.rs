@@ -9,7 +9,7 @@
 //! rule); (4) floor; the un-allocated remainder (weight/floor rounding + excess
 //! with no uncapped recipient) goes to the ecosystem fund.
 
-use crate::rules::{MilliPoints, Rules};
+use crate::rules::{AllocationRules, MilliPoints};
 
 /// Per-identity category points, C1..C4 in canonical order.
 /// ADR-0040 §16″: five categories (C1..C5) — the array is the ledger's column order, append-only.
@@ -34,9 +34,14 @@ pub struct Settlement {
     pub ecosystem_remainder: u64,
 }
 
-/// Settle `pool` sompi over `ids_points` under `rules`. Input order is
+/// Settle `pool` sompi over `ids_points` under `alloc`. Input order is
 /// irrelevant — the result is sorted by identity and fully deterministic.
-pub fn settle(pool: u64, rules: &Rules, ids_points: &[(String, CategoryPoints)]) -> Settlement {
+///
+/// Takes [`AllocationRules`], never [`crate::ScoringRules`]: settlement is the only place a
+/// distribution is applied, and keeping the two types apart is what stops a pool choice from
+/// reaching `rules_hash` (see the v4 split). C5 must not be settled while
+/// [`crate::rules::c5_token_settlement_enabled`] is `false`.
+pub fn settle(pool: u64, alloc: &AllocationRules, ids_points: &[(String, CategoryPoints)]) -> Settlement {
     let mut items: Vec<(String, CategoryPoints)> = ids_points.to_vec();
     items.sort_by(|a, b| a.0.cmp(&b.0));
     let n = items.len();
@@ -45,7 +50,7 @@ pub fn settle(pool: u64, rules: &Rules, ids_points: &[(String, CategoryPoints)])
     // (0) category pools + total points per category.
     let mut cat_pool = [0u128; NCAT];
     for (c, cp) in cat_pool.iter_mut().enumerate() {
-        *cp = pool * rules.weight_bps[c] as u128 / 10_000;
+        *cp = pool * alloc.weight_bps[c] as u128 / 10_000;
     }
     let mut total_pts = [0u128; NCAT];
     for (_, p) in &items {
@@ -65,7 +70,7 @@ pub fn settle(pool: u64, rules: &Rules, ids_points: &[(String, CategoryPoints)])
     }
 
     // (2) clip each ID's total to the per-ID cap; collect the removed excess per category.
-    let cap = pool * rules.per_id_cap_bps as u128 / 10_000;
+    let cap = pool * alloc.per_id_cap_bps as u128 / 10_000;
     let mut kept = vec![[0u128; NCAT]; n];
     let mut capped = vec![false; n];
     let mut excess = [0u128; NCAT];
@@ -120,12 +125,12 @@ pub fn settle(pool: u64, rules: &Rules, ids_points: &[(String, CategoryPoints)])
 /// Vesting split (§6.4): rewards above `vesting_threshold_bps` of the pool vest
 /// `vesting_cliff_bps` at TGE and the rest linearly over 6 months; smaller ones
 /// are a TGE lump. Returns `(tge_amount, linear_amount)`.
-pub fn vesting_split(reward: u64, pool: u64, rules: &Rules) -> (u64, u64) {
-    let threshold = (pool as u128 * rules.vesting_threshold_bps as u128 / 10_000) as u64;
+pub fn vesting_split(reward: u64, pool: u64, alloc: &AllocationRules) -> (u64, u64) {
+    let threshold = (pool as u128 * alloc.vesting_threshold_bps as u128 / 10_000) as u64;
     if reward <= threshold {
         return (reward, 0);
     }
-    let tge = (reward as u128 * rules.vesting_cliff_bps as u128 / 10_000) as u64;
+    let tge = (reward as u128 * alloc.vesting_cliff_bps as u128 / 10_000) as u64;
     (tge, reward - tge)
 }
 
@@ -133,6 +138,7 @@ pub fn vesting_split(reward: u64, pool: u64, rules: &Rules) -> (u64, u64) {
 mod tests {
     use super::*;
     use crate::Category;
+    use crate::rules::AllocationRules;
 
     fn ids(v: &[(&str, CategoryPoints)]) -> Vec<(String, CategoryPoints)> {
         v.iter().map(|(a, p)| (a.to_string(), *p)).collect()
@@ -142,7 +148,7 @@ mod tests {
     fn equal_participants_split_their_category_pool() {
         // Disable the per-ID cap to isolate the proportional split (each would take
         // 20% of the pool here, far above the 5% cap — see the cap test below).
-        let r = Rules { per_id_cap_bps: 10_000, ..Rules::default() };
+        let r = AllocationRules { per_id_cap_bps: 10_000, ..AllocationRules::default() };
         // Two IDs, equal Node points only. ADR-0040 §16″ weights: Node = 25% of 1000 = 250 → 125 each.
         let s = settle(1000, &r, &ids(&[("a", [10, 0, 0, 0, 0]), ("b", [10, 0, 0, 0, 0])]));
         assert_eq!(s.rewards, vec![("a".into(), 125), ("b".into(), 125)]);
@@ -160,7 +166,7 @@ mod tests {
     /// path, since PALW is not live and cannot yet be auto-scored from chain facts) lands in it.
     #[test]
     fn llm_category_pool_is_thirty_percent_and_reachable() {
-        let r = Rules { per_id_cap_bps: 10_000, ..Rules::default() };
+        let r = AllocationRules { per_id_cap_bps: 10_000, ..AllocationRules::default() };
         assert_eq!(r.weight_bps[Category::Llm.index()], 3_000, "C5 must be 30 % of the epoch");
         assert!(r.weights_sum_to_full());
 
@@ -187,9 +193,10 @@ mod tests {
     /// deliberate, reviewable act rather than the quiet appearance of a collector.
     #[test]
     fn c5_auto_award_stays_closed_until_its_preconditions_are_met() {
-        use crate::rules::{C5_AUTO_AWARD_PRECONDITIONS, c5_auto_award_enabled, c5_is_provisional};
+        use crate::rules::{C5_AUTO_AWARD_PRECONDITIONS, c5_is_provisional, c5_points_collection_enabled, c5_token_settlement_enabled};
 
-        assert!(!c5_auto_award_enabled(), "C5 auto-award must stay closed while the gates below are open");
+        assert!(c5_points_collection_enabled(), "measuring verified work is on — the chain evidence is perishable");
+        assert!(!c5_token_settlement_enabled(), "C5 must not settle tokens while the gates below are open");
         assert!(c5_is_provisional(), "points earned under stub gates are calibration artefacts, not entitlements");
         assert!(
             C5_AUTO_AWARD_PRECONDITIONS.len() >= 4,
@@ -201,14 +208,14 @@ mod tests {
         }
 
         // C5 is the largest pool, which is exactly why it is the one held back the longest.
-        let r = Rules::default();
+        let r = AllocationRules::default();
         let c5 = r.weight_bps[Category::Llm.index()];
         assert!((0..4).all(|i| r.weight_bps[i] <= c5), "C5 is the largest category ⇒ the largest farming target");
     }
 
     #[test]
     fn per_id_cap_clips_and_redistributes_once() {
-        let r = Rules::default(); // cap 5% of 1000 = 50
+        let r = AllocationRules::default(); // cap 5% of 1000 = 50
         // A holds 90% of Node points, B 10%. Node pool 250 → base A=225, B=25.
         // A total 225 > cap 50 → clipped to 50, excess 175 → to uncapped B (only one).
         // B: 25 + 175 = 200 (exceeds cap — the "once" rule does not re-cap).
@@ -219,7 +226,7 @@ mod tests {
 
     #[test]
     fn deterministic_regardless_of_input_order() {
-        let r = Rules::default();
+        let r = AllocationRules::default();
         let s1 = settle(1_000_000, &r, &ids(&[("z", [5, 2, 0, 1, 0]), ("a", [3, 0, 4, 0, 0])]));
         let s2 = settle(1_000_000, &r, &ids(&[("a", [3, 0, 4, 0, 0]), ("z", [5, 2, 0, 1, 0])]));
         assert_eq!(s1, s2);
@@ -228,7 +235,7 @@ mod tests {
 
     #[test]
     fn vesting_only_above_threshold() {
-        let r = Rules::default(); // threshold 0.1% of pool
+        let r = AllocationRules::default(); // threshold 0.1% of pool
         let pool = 100_000_000u64; // threshold = 100_000
         assert_eq!(vesting_split(50_000, pool, &r), (50_000, 0), "below threshold = TGE lump");
         // above: 25% TGE, 75% linear.

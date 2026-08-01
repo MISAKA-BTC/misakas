@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 pub use ledger::{EpochLedger, ScoreRow};
 pub use registry::{Registration, RegistrationError, verify_claim, verify_registration};
-pub use rules::{Category, MilliPoints, POINT, Rules, Severity, Stage};
+pub use rules::{AllocationRules, Category, MilliPoints, POINT, Rules, ScoringRules, Severity, Stage};
 pub use score::{Contribution, pts_bug, pts_fixed, pts_node, pts_validator, scale};
 pub use settle::{CategoryPoints, Settlement, settle, vesting_split};
 
@@ -159,7 +159,7 @@ mod tests {
         // settle a 1000-sompi pool over the epoch's category points.
         let ids_points: Vec<(String, CategoryPoints)> =
             ledger.scores.iter().map(|s| (s.id.clone(), [s.c1, s.c2, s.c3, s.c4, s.c5])).collect();
-        let s = settle(1000, &rules, &ids_points);
+        let s = settle(1000, &crate::AllocationRules::default(), &ids_points);
         assert_eq!(s.rewards.iter().map(|(_, r)| r).sum::<u64>() + s.ecosystem_remainder, 1000, "lossless");
     }
 }

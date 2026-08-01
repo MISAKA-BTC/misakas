@@ -5,7 +5,8 @@
 //! two operators with the same facts build byte-identical input.
 
 use crate::collect::EpochWindow;
-use crate::store::{ChainFixedKind, FactStore, NodeRecord};
+use crate::store::{ChainFixedKind, FactStore, LlmReplicaWork, NodeRecord};
+use misaka_mtp::rules::c5_points_collection_enabled;
 use misaka_mtp::{Contribution, ContributionEntry, EpochInput};
 use std::collections::BTreeMap;
 
@@ -188,6 +189,74 @@ fn submission_contributions(store: &FactStore) -> Vec<ContributionEntry> {
         .collect()
 }
 
+/// C5 PALW replica contributions (ADR-0040 §16″), with every §5-equivalent defence applied here so
+/// the scorer stays a pure count.
+///
+/// Three filters, in this order, and each one exists because of a specific way points could
+/// otherwise be farmed:
+///
+/// 1. **Nullifier dedup (P1-9).** One `execution_nullifier` = one computation, credited once, no
+///    matter how many times it is presented. Re-submitting yesterday's job is the cheapest possible
+///    attack and the only defence is a global key.
+/// 2. **One point per identity per pair.** Receipt-v3 already forbids A and B sharing a
+///    `worker_credential_id`, but nothing stops one operator holding two credentials and two bonds
+///    and self-matching. If both slots of a pair resolve to the SAME `owner_id`, that identity earns
+///    **1** point for the pair, not 2 — so pointing a second GPU at your own job earns what one job
+///    is worth. Distinct owners each earn their slot, which is the honest case.
+/// 3. **Gate.** Nothing is emitted while [`c5_points_collection_enabled`] is `false`.
+///
+/// Deterministic throughout: rows are keyed and folded through `BTreeMap`s, so two operators with the
+/// same facts emit byte-identical entries regardless of collection order.
+///
+/// Note what is NOT here: no reorg check. The caller must collect from a **finality-buried** selected
+/// chain (see [`crate::collect`]), because a leaf that later falls out of the chain must never have
+/// been scored — a point outliving its block is the ledger's version of a ghost.
+fn llm_replica_contributions(store: &FactStore) -> Vec<ContributionEntry> {
+    if !c5_points_collection_enabled() {
+        return Vec::new();
+    }
+    // (1) Global dedup by execution nullifier. Ties break on the full row key so the survivor is
+    // deterministic rather than collection-order dependent.
+    let mut by_nullifier: BTreeMap<&str, &LlmReplicaWork> = BTreeMap::new();
+    for w in &store.llm_replica_work {
+        by_nullifier
+            .entry(w.execution_nullifier.as_str())
+            .and_modify(|kept| {
+                let key = |x: &LlmReplicaWork| (x.pair_id.clone(), x.replica_slot, x.owner_id.clone());
+                if key(w) < key(kept) {
+                    *kept = w;
+                }
+            })
+            .or_insert(w);
+    }
+
+    // (2) Collapse to one credit per (pair, identity), then total per identity.
+    let mut credited: BTreeMap<(&str, &str), u64> = BTreeMap::new(); // (pair_id, owner_id) -> units
+    let mut evidence: BTreeMap<&str, Vec<String>> = BTreeMap::new(); // owner_id -> evidence
+    for w in by_nullifier.values() {
+        let slot = credited.entry((w.pair_id.as_str(), w.owner_id.as_str())).or_insert(0);
+        // max, not sum: a pair yields at most one credit to any single identity.
+        *slot = (*slot).max(w.work_units);
+        evidence.entry(w.owner_id.as_str()).or_default().push(w.evidence.clone());
+    }
+
+    let mut units: BTreeMap<&str, u64> = BTreeMap::new();
+    for ((_, owner), u) in credited {
+        *units.entry(owner).or_insert(0) = units.get(owner).copied().unwrap_or(0).saturating_add(u);
+    }
+
+    units
+        .into_iter()
+        .filter(|&(_, work_units)| work_units > 0)
+        .map(|(owner, work_units)| {
+            let mut ev = evidence.remove(owner).unwrap_or_default();
+            ev.sort();
+            ev.dedup();
+            ContributionEntry { id: owner.to_string(), contribution: Contribution::LlmReplica { work_units }, evidence: ev }
+        })
+        .collect()
+}
+
 /// Fold the whole store into the deterministic core's [`EpochInput`] for
 /// `window`. The result is fed straight into [`misaka_mtp::score_epoch`]; its
 /// `inputs_hash` is order-independent, so the entry order here is not consensus-
@@ -213,6 +282,9 @@ pub fn build_epoch_input(window: &EpochWindow, store: &FactStore, manual: &[Cont
     contributions.extend(node_contributions(store));
     contributions.extend(validator_contributions(store));
     contributions.extend(chain_fixed_contributions(store));
+    // C5 PALW replica work — auto-collected, because it is fully provable from the finalized
+    // selected chain (accepted leaf + k=2 match + DA object) and needs no human call.
+    contributions.extend(llm_replica_contributions(store));
     // Verification-required categories (C2 bug, C3/C4 verify/infra) are hand-added only.
     contributions.extend(manual.iter().cloned());
 
@@ -222,5 +294,164 @@ pub fn build_epoch_input(window: &EpochWindow, store: &FactStore, manual: &[Cont
         network: window.network.clone(),
         stage: window.stage,
         contributions,
+    }
+}
+
+#[cfg(test)]
+mod c5_tests {
+    use super::*;
+
+    fn work(pair: &str, slot: u8, owner: &str, nullifier: &str) -> LlmReplicaWork {
+        LlmReplicaWork {
+            completed_at_ms: 1_700_000_000_000,
+            pair_id: pair.into(),
+            job_challenge: format!("challenge-{pair}"),
+            execution_nullifier: nullifier.into(),
+            provider_bond: format!("bond-{owner}:0"),
+            worker_credential_id: format!("cred-{owner}-{slot}"),
+            replica_slot: slot,
+            owner_id: owner.into(),
+            work_units: 1,
+            canonical_compute_units: 781_556,
+            evidence: format!("block-{pair}-{slot}"),
+        }
+    }
+
+    fn units(store: &FactStore) -> BTreeMap<String, u64> {
+        llm_replica_contributions(store)
+            .into_iter()
+            .map(|e| match e.contribution {
+                Contribution::LlmReplica { work_units } => (e.id, work_units),
+                other => panic!("C5 collector emitted a non-C5 contribution: {other:?}"),
+            })
+            .collect()
+    }
+
+    /// The honest case: two distinct providers each get their slot.
+    #[test]
+    fn distinct_owners_each_earn_their_slot() {
+        let store = FactStore {
+            llm_replica_work: vec![work("p1", 0, "gh:alice", "n-a"), work("p1", 1, "gh:bob", "n-b")],
+            ..FactStore::default()
+        };
+        assert_eq!(units(&store), BTreeMap::from([("gh:alice".to_string(), 1), ("gh:bob".to_string(), 1)]));
+    }
+
+    /// Self-matching: one operator runs BOTH slots under two credentials/bonds. Receipt-v3 permits
+    /// that (the credentials differ); MTP must still pay for one job, not two.
+    #[test]
+    fn one_identity_holding_both_slots_earns_one_point_for_the_pair() {
+        let store = FactStore {
+            llm_replica_work: vec![work("p1", 0, "gh:alice", "n-a"), work("p1", 1, "gh:alice", "n-b")],
+            ..FactStore::default()
+        };
+        assert_eq!(units(&store), BTreeMap::from([("gh:alice".to_string(), 1)]), "a pair is worth at most 1 to one id");
+    }
+
+    /// …but the same identity working several DIFFERENT pairs is real work and accumulates.
+    #[test]
+    fn the_same_identity_accumulates_across_distinct_pairs() {
+        let store = FactStore {
+            llm_replica_work: vec![
+                work("p1", 0, "gh:alice", "n-1"),
+                work("p2", 0, "gh:alice", "n-2"),
+                work("p3", 1, "gh:alice", "n-3"),
+            ],
+            ..FactStore::default()
+        };
+        assert_eq!(units(&store), BTreeMap::from([("gh:alice".to_string(), 3)]));
+    }
+
+    /// P1-9: replaying one computation under new pair/bond labels earns nothing extra.
+    #[test]
+    fn a_replayed_execution_nullifier_is_credited_once() {
+        let store = FactStore {
+            llm_replica_work: vec![
+                work("p1", 0, "gh:alice", "same-nullifier"),
+                work("p2", 0, "gh:alice", "same-nullifier"),
+                work("p3", 1, "gh:alice", "same-nullifier"),
+            ],
+            ..FactStore::default()
+        };
+        assert_eq!(units(&store), BTreeMap::from([("gh:alice".to_string(), 1)]), "one computation, one credit");
+    }
+
+    /// Two operators with the same facts must produce byte-identical input.
+    #[test]
+    fn collection_order_does_not_change_the_result() {
+        let rows =
+            vec![work("p2", 1, "gh:bob", "n-4"), work("p1", 0, "gh:alice", "n-1"), work("p1", 1, "gh:bob", "n-2")];
+        let forward = FactStore { llm_replica_work: rows.clone(), ..FactStore::default() };
+        let mut reversed_rows = rows;
+        reversed_rows.reverse();
+        let reversed = FactStore { llm_replica_work: reversed_rows, ..FactStore::default() };
+        assert_eq!(units(&forward), units(&reversed));
+        let a = serde_json::to_string(&llm_replica_contributions(&forward)).unwrap();
+        let b = serde_json::to_string(&llm_replica_contributions(&reversed)).unwrap();
+        assert_eq!(a, b, "entries (including evidence order) must be canonical");
+    }
+
+    /// C5 rows must reach the epoch input through the normal build path, tagged as C5.
+    #[test]
+    fn c5_reaches_the_epoch_input_as_the_llm_category() {
+        use misaka_mtp::Category;
+        let store = FactStore {
+            llm_replica_work: vec![work("p1", 0, "gh:alice", "n-a"), work("p1", 1, "gh:bob", "n-b")],
+            ..FactStore::default()
+        };
+        let window = EpochWindow {
+            epoch: 1,
+            range: ["2026-08-01T00:00:00Z".into(), "2026-08-08T00:00:00Z".into()],
+            network: "testnet-20".into(),
+            stage: misaka_mtp::Stage::A,
+        };
+        let input = build_epoch_input(&window, &store, &[]);
+        let c5: Vec<_> = input.contributions.iter().filter(|e| e.contribution.category() == Category::Llm).collect();
+        assert_eq!(c5.len(), 2, "both providers present");
+        assert!(c5.iter().all(|e| !e.evidence.is_empty()), "every point cites its evidence (§3)");
+    }
+}
+
+#[cfg(test)]
+mod c5_end_to_end {
+    use super::*;
+    use misaka_mtp::{Category, Rules, Stage, score_epoch};
+
+    /// The whole C5 path in one assertion: two providers complete one verified job, the collector
+    /// credits each slot once, and `score_epoch` puts the points in the C5 column of the ledger.
+    #[test]
+    fn a_verified_pair_reaches_the_ledgers_c5_column() {
+        let row = |pair: &str, slot: u8, owner: &str, nul: &str| crate::store::LlmReplicaWork {
+            completed_at_ms: 1_700_000_000_000,
+            pair_id: pair.into(),
+            job_challenge: "challenge".into(),
+            execution_nullifier: nul.into(),
+            provider_bond: format!("bond-{owner}:0"),
+            worker_credential_id: format!("cred-{owner}"),
+            replica_slot: slot,
+            owner_id: owner.into(),
+            work_units: 1,
+            canonical_compute_units: 781_556,
+            evidence: format!("block-{pair}-{slot}"),
+        };
+        let store = FactStore {
+            llm_replica_work: vec![row("p1", 0, "gh:alice", "n-a"), row("p1", 1, "gh:bob", "n-b")],
+            ..FactStore::default()
+        };
+        let window = EpochWindow {
+            epoch: 7,
+            range: ["2026-08-01T00:00:00Z".into(), "2026-08-08T00:00:00Z".into()],
+            network: "testnet-20".into(),
+            stage: Stage::A,
+        };
+        let ledger = score_epoch(&build_epoch_input(&window, &store, &[]), &Rules::default());
+
+        let alice = ledger.scores.iter().find(|s| s.id == "gh:alice").expect("alice scored");
+        assert_eq!(alice.c5, misaka_mtp::POINT, "1 verified slot = 1 point, in C5");
+        assert_eq!((alice.c1, alice.c2, alice.c3, alice.c4), (0, 0, 0, 0), "C5 work must not leak into another category");
+        assert!(!alice.evidence.is_empty(), "the point cites the block it came from");
+        let bob = ledger.scores.iter().find(|s| s.id == "gh:bob").expect("bob scored");
+        assert_eq!(bob.c5, misaka_mtp::POINT);
+        assert_eq!(Category::Llm.index(), 4, "C5 is the ledger's 5th column");
     }
 }

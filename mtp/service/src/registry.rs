@@ -262,6 +262,19 @@ impl Attributor {
     }
 }
 
+/// The C5 attribution seam: a provider's bond-owner address resolves to the same canonical ledger
+/// id every other fact for that human resolves to.
+///
+/// This is the last link of the ADR-0040 §16″ chain — worker credential → provider bond → bond
+/// owner address → **registered MTP id** — and it is deliberately the SAME index the crawler and
+/// campaign facts use, so one human cannot appear as two participants by earning through a
+/// different category.
+impl misaka_mtp_collectors::OwnerResolver for Attributor {
+    fn ledger_id_for_address(&self, address: &str) -> Option<String> {
+        self.resolve_address(address).map(str::to_string)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +336,29 @@ mod tests {
         // an unregistered key resolves to nothing → fact would be dropped.
         assert_eq!(attr.resolve_address("misakatest:stranger"), None);
         assert_eq!(attr.resolve_token("deadbeef"), None);
+    }
+
+    /// C5's attribution must land on the SAME canonical id as every other category — a provider
+    /// paid through `gh:alice` for inference is the same participant as the `gh:alice` who runs a
+    /// node, not a second one.
+    #[test]
+    fn c5_owner_resolution_reuses_the_one_canonical_ledger_id() {
+        use misaka_mtp_collectors::OwnerResolver;
+
+        let (key, pk, addr) = key_and_addr(0x43);
+        let mut ns = NonceStore::new();
+        let mut attr = Attributor::new();
+        let nonce = [0x33u8; 32];
+        let nonce_hex = faster_hex::hex_string(&nonce);
+        let ch = ns.issue("testnet-20", "alice", &addr, nonce, 1000);
+        let sig = key.sign_with_context(&ch, MTP_REGISTER_CONTEXT);
+        attr.register(&mut ns, "testnet-20", "alice", &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet).unwrap();
+
+        // The C5 seam and the crawler/campaign seam agree, by construction.
+        assert_eq!(attr.ledger_id_for_address(&addr).as_deref(), Some("gh:alice"));
+        assert_eq!(attr.ledger_id_for_address(&addr).as_deref(), attr.resolve_address(&addr));
+        // An unregistered provider earns nothing rather than being parked under a placeholder id.
+        assert_eq!(attr.ledger_id_for_address("misakatest:stranger"), None);
     }
 
     #[test]
