@@ -12,6 +12,46 @@ re-genesis cutover — the testnet genesis hash is unchanged (`cf4c48fe…`), an
 headers carry `EVM_HEADER_VERSION` (v2), so pre-EVM nodes and the old chain are version-isolated
 in both directions. Devnet is likewise genesis-active; **mainnet/simnet stay inert (`u64::MAX`)**.
 
+**ACTIVATED ON THE PUBLIC NET (testnet-21) 2026-08-02** —
+`PCPB_PALW_PARAMS.evm_activation_daa_score = TESTNET_21_EVM_ACTIVATION_DAA_SCORE` = **6,500,000**,
+the first *mid-chain* activation (every prior one was genesis-active on a fresh net). Legal on a
+live ledger because the fence is in the future: below it `is_evm_active` is false, the two EVM
+commitments are consensus-forced to zero, and the preimage is unchanged, so pre-fence replay is
+byte-identical and only `consensus_identity_hash` moves (clause (a) of the
+`pcpb_palw_network_selection` tripwire; re-pinned to `77e4b552896f22da…`). Two consequences that
+do **not** carry over from the testnet-10 precedent:
+
+- **No version isolation.** testnet-21 is already Header-v5 (PALW/ADR-MA), which outranks v2 in
+  `check_header_version`, so the version check cannot fence a non-EVM node off this chain the way
+  v1→v2 did on testnet-10. `kaspad` therefore refuses to *start* a build without `--features evm`
+  on any net with a finite fence (`kaspad/src/daemon.rs`), converting a mid-IBD panic days later
+  into an actionable startup error. `deploy.yaml` builds the released `kaspad` with the feature,
+  and CI now compiles and tests the lane (it never did before — `evm` is non-default, so
+  `--workspace` walked past it).
+- **The released binary is no longer secp-free.** It links k256 for EVM `ecrecover`. This is the
+  scoped supersession [ADR-0023](0023-base-three-lane-execution.md) names; the UTXO/L1 domain
+  stays ML-DSA-87-only, and the *default* build tree remains secp-free under
+  `scripts/pq-ci-guard.sh`.
+
+The lane's four execution fences (`evm_gas_pool_v2`, `evm_f002_withdraw_cap`,
+`evm_f003_mldsa_verify`, `evm_typed_receipt_root`) stay `u64::MAX` on testnet-21: activation turns
+the lane on, not the executor variants. Operator runbook: `docs/testnet-21-migration.md`.
+
+**Payload lane restriction (2026-08-02, ships with the activation).** On an EVM-active net the
+`evm_payload` rides the **algo-3 hash floor only**: a block on any other PoW lane (today: algo-4,
+the ADR-0039 PALW replica lane) must carry an empty payload
+(`RuleError::EvmPayloadOnNonHashFloorLane`; template path suppresses assembly on non-algo-3
+templates). Rationale, in force order — (1) *liveness independence*: algo-4 blocks go invalid for
+a whole epoch when PALW beacon grace exhausts, while the hash floor is permanent, so EVM inclusion
+must not inherit a PALW failure mode; (2) *producer set*: algo-4 production is a bonded-provider
+ticket draw, and coupling tx inclusion to it would hand the compute-provider set control over EVM
+entry; (3) *fee accounting*: the algo-4 coinbase split is asymmetric to algo-3 and must not meet
+the §8.2 payload-fee routing. The restriction is contribution-only — every selected-chain block,
+whatever its lane, still executes its mergeset and commits `evm_commitment_root` (the v0.4
+mergeset-delayed-acceptance rule is lane-blind), so EVM state continuity is unaffected. This is a
+consensus rule beyond the v0.4 design text; it activates together with the testnet-21 fence (no
+released binary has the fence open without it), so there is no mixed-rule window.
+
 > **Design superseded by v0.4** — the unified design doc
 > [`docs/misaka-evm-design-v0.4.md`](../misaka-evm-design-v0.4.md) replaces the v0.3 immediate-execution
 > model with **mergeset delayed acceptance** (B's own payload is executed by its selected child), adds

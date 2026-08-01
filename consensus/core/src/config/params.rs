@@ -1812,6 +1812,25 @@ pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
     ..STAGING_MAINNET_PALW_PARAMS
 };
 
+/// ADR-0020 — the **testnet-21 EVM flag day**: the DAA score at which the selected-parent EVM
+/// lane goes live on `pcpb-palw`. This is a FUTURE fence deliberately, which is what makes the
+/// change legal on a live public net under clause (a) of the `pcpb_palw_network_selection`
+/// tripwire: every block below it replays byte-identical (the two EVM header commitments stay
+/// hash-invisible-but-zero, enforced by `RuleError::NonZeroEvmHeaderFieldsBeforeActivation`), so
+/// only the identity digest moves, not the history.
+///
+/// Chosen 2026-08-02 at DAA ≈ 258,000 with the net running ~8.3 BPS against a 10 BPS target. The
+/// margin is sized against the TARGET rate, not the observed one: even if the net reaches full
+/// 10 BPS the moment this ships, the fence is `(6_500_000 - 258_000) / 10 ≈ 7.2 days` out, and at
+/// the observed rate ≈ 8.7 days. Operators need that window because activation is a **flag day
+/// with no version isolation**: testnet-21 headers are already Header-v5 (the PALW/ADR-MA schema
+/// outranks `EVM_HEADER_VERSION` in `check_header_version`), so — unlike the testnet-10 activation
+/// ADR-0020 describes, where v1→v2 fenced old nodes out at header validation — a node built
+/// WITHOUT `--features evm` cannot be kept off this chain by the version check. It must be
+/// upgraded. `kaspad` refuses to start such a build on an EVM-active net for exactly this reason
+/// (`kaspad/src/daemon.rs`); the release binaries ship with the feature on.
+pub const TESTNET_21_EVM_ACTIVATION_DAA_SCORE: u64 = 6_500_000;
+
 /// ADR-0045 D3-b — the **PCPB dispatch** rehearsal network (`pcpb-palw`, NetworkId `testnet-21`,
 /// `--testnet --netsuffix=21`). The compute-registry shape carried through the D3-b re-genesis
 /// train — the first preset whose ledger is minted entirely under the LeafV2 rules:
@@ -1830,11 +1849,16 @@ pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
 ///     epochs are structurally algo-4-empty, which is fail-closed, not a fault.
 ///   * DNS seeders: the PUBLIC seed names (2026-08-01 migration — this preset supersedes
 ///     testnet-20 as the public net; the field below is authoritative).
+///   * **EVM lane (ADR-0020): the first net to activate it MID-CHAIN**, at
+///     [`TESTNET_21_EVM_ACTIVATION_DAA_SCORE`]. Every other PALW preset keeps the `u64::MAX`
+///     fence so a default (secp-free) build can still run them; this one requires
+///     `--features evm` from the flag day on.
 pub const PCPB_PALW_PARAMS: Params = Params {
     net: NetworkId::with_suffix(NetworkType::Testnet, 21),
     genesis: crate::config::genesis::PCPB_PALW_GENESIS,
     dns_seeders: TESTNET_21_DNS_SEEDERS,
     dns_params: Some(PCPB_PALW_DNS_PARAMS),
+    evm_activation_daa_score: TESTNET_21_EVM_ACTIVATION_DAA_SCORE,
     ..COMPUTE_REGISTRY_PALW_PARAMS
 };
 
@@ -2289,6 +2313,24 @@ mod palw_network_tests {
         // 2026-08-01 migration: testnet-21 is the PUBLIC PALW testnet (superseding testnet-20),
         // so it carries the public seeders.
         assert_eq!(p.dns_seeders, TESTNET_21_DNS_SEEDERS);
+        // ADR-0020 (2026-08-02): the EVM lane activates MID-CHAIN here, at a FUTURE fence. The
+        // two properties that make that legal are asserted, not assumed:
+        //   1. the fence is finite (the lane really does turn on), and
+        //   2. it is still ahead of the mined tip, so every block already on the ledger replays
+        //      under `!is_evm_active` and is byte-identical. The moment the chain passes it, this
+        //      value is frozen history — editing it then is a clause (b) re-genesis, not a re-pin.
+        assert_ne!(p.evm_activation_daa_score, u64::MAX, "the EVM lane is activated on testnet-21");
+        assert_eq!(p.evm_activation_daa_score, TESTNET_21_EVM_ACTIVATION_DAA_SCORE);
+        assert!(!p.is_evm_active(0), "genesis and all pre-fence history stay pre-EVM");
+        assert!(!p.is_evm_active(TESTNET_21_EVM_ACTIVATION_DAA_SCORE - 1));
+        assert!(p.is_evm_active(TESTNET_21_EVM_ACTIVATION_DAA_SCORE));
+        // The lane's own execution fences stay inert: v1 strict declared-gas, no F002 withdraw
+        // cap, no F003, legacy receipt root. Opening them is a separate, independently-gated
+        // decision — activation must not smuggle in the executor variants too.
+        assert_eq!(p.evm_gas_pool_v2_activation_daa_score, u64::MAX);
+        assert_eq!(p.evm_f002_withdraw_cap_activation_daa_score, u64::MAX);
+        assert_eq!(p.evm_f003_mldsa_verify_activation_daa_score, u64::MAX);
+        assert_eq!(p.evm_typed_receipt_root_activation_daa_score, u64::MAX);
         // ADR-0045 D3-b — the PCPB windows are part of this net's consensus identity (they are
         // exactly why D3-b could not land on testnet-20 in place). w ≥ Δ keeps the freshness
         // window non-empty; the first mintable registered_epoch is k + Δ (= 4): the early epochs
@@ -2372,11 +2414,18 @@ mod palw_network_tests {
         // getInfo, and kaspad logs it at startup.
         assert_eq!(
             p.consensus_identity_hash().to_string(),
-            // Re-pinned 2026-08-01 (same day as genesis): proposal ③ (`require_anchor_attestation:
-            // true`) went live while the ledger provably held zero attestations and zero confirmed
-            // anchors, so replay of every pre-flag block is byte-identical — the identity moves, the
-            // history does not. On any net that HAS confirmed anchors this flip is re-genesis-only.
-            "1c48963fea2035c9827fab56c6889dba9e444762e8ac491b1a6a6fbc75cc233e7473ff2f11e694270872c2db67310490521cbd69cd47bd4e470b636c008303ff",
+            // Re-pinned 2026-08-02 under **clause (a)**: ADR-0020's EVM lane was given a FUTURE
+            // activation fence (`TESTNET_21_EVM_ACTIVATION_DAA_SCORE` = 6,500,000, ~7 days beyond
+            // the DAA ≈ 258,000 tip at the time). Every block already mined sits below the fence,
+            // where `is_evm_active` is false, the two EVM header commitments are consensus-forced
+            // to zero, and the preimage is the one they were mined under — so pre-fence replay is
+            // byte-identical and only the digest moves. NOT a clause (b) situation: nothing about
+            // already-mined history changes meaning.
+            //
+            // Previously (2026-08-01, same day as genesis) this pinned proposal ③
+            // (`require_anchor_attestation: true`), which was legal for the different reason that
+            // the ledger then held zero attestations and zero confirmed anchors.
+            "77e4b552896f22da2580efcb93c724e62e7984b8393bcaff31d801df0ddc33ac24e60ca719be9d71052183bdcb37300c0a021b95555f2c4015b04dc12b3b977b",
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
         );
         // Every preset OUTSIDE the compute-registry lineage keeps the fence closed.

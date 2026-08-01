@@ -155,15 +155,10 @@ DNS hard-inclusion is deliberately liveness-gated: the hard mandatory attestatio
       cd misakas
       ```
   7. Build the node + tools
-      ```bash
-      cargo build --release -p kaspad -p kaspa-pq-miner -p kaspa-pq-validator -p kaspa-pq-signer -p misaka-cli
-      ```
-     To check only the unified operator CLI:
-      ```bash
-      cargo build --release -p misaka-cli --bin misaka
-      ls -la target/release/misaka
-      ```
-     To build `kaspad` with its EVM lane and include `misaka`:
+
+     **`--features kaspad/evm` is required to join testnet-21.** That network activates the
+     ADR-0020 EVM lane at DAA score 6,500,000; a `kaspad` built without the feature cannot
+     execute the lane and refuses to start there (it tells you so, rather than failing later).
       ```bash
       cargo build --release \
         -p kaspad \
@@ -172,6 +167,19 @@ DNS hard-inclusion is deliberately liveness-gated: the hard mandatory attestatio
         -p kaspa-pq-signer \
         -p misaka-cli \
         --features kaspad/evm
+      ```
+     The published release archives are already built this way — building from source is only
+     necessary if you want to modify the node.
+
+     To check only the unified operator CLI:
+      ```bash
+      cargo build --release -p misaka-cli --bin misaka
+      ls -la target/release/misaka
+      ```
+     Omitting the feature gives the PQ-only (secp-free) node. It runs every network whose EVM
+     fence is closed, but not testnet-21:
+      ```bash
+      cargo build --release -p kaspad -p kaspa-pq-miner -p kaspa-pq-validator -p kaspa-pq-signer -p misaka-cli
       ```
      `misaka-cli`'s optional EVM send / PREA signing commands use the `evm-send` feature:
       ```bash

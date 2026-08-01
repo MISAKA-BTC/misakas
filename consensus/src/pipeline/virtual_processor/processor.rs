@@ -2325,12 +2325,36 @@ impl VirtualStateProcessor {
         // back to the mining manager.
         let crate::processes::evm::PreparedDepositClaims { accepted: accepted_claims, consumed_locks, stale: stale_claims } =
             prepared_claims;
+        // ADR-0020 x ADR-0039 §5.1 — the own payload rides the algo-3 hash floor only, so a
+        // template on any other lane contributes NOTHING and skips assembly entirely (the
+        // commitment below is still computed: an algo-4 chain block executes its mergeset like
+        // any other). Construction == validation — the body rule
+        // (`RuleError::EvmPayloadOnNonHashFloorLane`) would reject a payload built here, and a
+        // producer must never be handed a template its own consensus rules refuse.
+        //
+        // Today `required_algo_id` never returns 4, so every template is already algo-3 and this
+        // is a documented invariant rather than a live branch — the same posture as the K5
+        // `palw_template_lane_open` guard above it. It is written as a live check anyway, because
+        // the thing it guards against is precisely a FUTURE algo-4 template constructor picking up
+        // the mempool drain by inheritance.
+        let lane_carries_evm_payload = header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_BLAKE2B_SHA3;
+        // Skipping the payload MUST also drop the lock consumption that came with it. The
+        // `consumed_locks` set folds into `header.utxo_commitment` at the end of this function
+        // (the "first claim-bearing template self-disqualified" fix below), and a template that
+        // commits to consuming locks its payload never claims is a block no verifier can
+        // reproduce — the same self-disqualification, arrived at from the other side. The claims
+        // themselves are NOT reported stale: they stay in the mining manager's queue untouched
+        // (only the returned `stale` list evicts or ages entries) and ride the next algo-3
+        // template.
+        let consumed_locks = if lane_carries_evm_payload { consumed_locks } else { Vec::new() };
         // §15 step 6: assemble the own payload from the mempool candidates.
         // Defense-in-depth re-admission (the body class-1 rule): an inadmissible
         // tx here would make our OWN block payload-block-invalid, so hard-filter
         // rather than trust the pool; independently re-enforce the byte cap.
         // The candidates execute in a LATER accepting chain block, never here.
-        let own_payload = {
+        let own_payload = if !lane_carries_evm_payload {
+            kaspa_consensus_core::evm::EvmExecutionPayload::default()
+        } else {
             use kaspa_consensus_core::evm::{EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
             let mut payload = EvmExecutionPayload::default();
             let base = payload.payload_bytes().len();

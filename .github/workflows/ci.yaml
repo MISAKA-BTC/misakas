@@ -113,6 +113,24 @@ jobs:
       - name: Check misaka CLI evm-send feature
         run: cargo check --locked -p misaka-cli --bin misaka --features evm-send
 
+      # ADR-0020: until 2026-08-02 nothing in CI ever compiled the EVM lane — `evm` is a
+      # non-default feature, so `--workspace` walks straight past it and the whole
+      # consensus/executor/eth-RPC seam could rot unnoticed. It is now a SHIPPING
+      # configuration: the release kaspad is built with it (deploy.yaml) and testnet-21
+      # refuses non-EVM builds, so a break here is a break in what operators run.
+      - name: Check kaspad with the EVM lane (shipping release configuration)
+        run: cargo check --locked -p kaspad --bin kaspad --features evm
+
+      # Two invocations, not one filtered pass. `kaspa-evm` is the executor crate — ALL of it is
+      # EVM, and a name filter would silently skip the ~85% of its tests that do not spell "evm"
+      # in the test name. The consensus seam is the opposite case: the crate is mostly non-EVM, so
+      # there the filter is what keeps this step from re-running the whole suite that
+      # `cargo nextest run --workspace` above already covers.
+      - name: Run EVM lane tests
+        run: |
+          cargo nextest run --no-fail-fast -p kaspa-evm
+          cargo nextest run --no-fail-fast -p kaspa-consensus --features evm -E 'test(evm)'
+
       - name: Run cargo test regular features
         # --no-fail-fast: one failing test must not mask the other ~2000 (2026-08-01: the broken
         # palw lifecycle e2e aborted the run at 207/2324 tests, so the suite's real state was

@@ -51,6 +51,12 @@ pub enum RuleError {
     #[error("block carries a non-empty EVM payload but its header version is below EVM_HEADER_VERSION (EVM lane not active)")]
     NonEmptyEvmPayloadBeforeActivation,
 
+    // ADR-0020 x ADR-0039 §5.1: the EVM payload rides the algo-3 hash floor ONLY. An algo-4
+    // (PALW replica) block still executes its mergeset and commits the result like any other
+    // chain block — it just may not CONTRIBUTE transactions of its own.
+    #[error("block on PoW lane algo-{0} carries a non-empty EVM payload — the EVM payload rides the algo-3 hash floor only")]
+    EvmPayloadOnNonHashFloorLane(u8),
+
     // audit #6: a pre-v2 header's EVM commitment fields are hash-invisible (the
     // preimage only includes them from EVM_HEADER_VERSION up), so non-zero values
     // there would be block-id malleability + a migration hazard. Force them zero.

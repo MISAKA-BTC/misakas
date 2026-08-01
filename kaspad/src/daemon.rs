@@ -646,6 +646,36 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         exit(1);
     }
 
+    // kaspa-pq **ADR-0020** — a node that cannot execute the EVM lane must not join a network that
+    // activates it.
+    //
+    // Without this, such a node starts happily, syncs for however long the fence is away, and then
+    // dies inside the virtual processor the first time it walks a chain block at or past the fence
+    // ("refusing to follow a chain it cannot validate"). That panic is the correct SAFETY outcome —
+    // silently skipping EVM execution would make the node accept a chain whose commitments it never
+    // checked — but it is a terrible OPERATIONAL one: the failure lands days after the mistake, on
+    // a node that looked healthy the whole time, and it takes the operator's synced datadir with it.
+    //
+    // Checked against `evm_activation_daa_score` rather than the current DAA score on purpose. A
+    // finite fence means this build is guaranteed to fail eventually, and "eventually" is not a
+    // state worth booting into: the answer is the same before and after the flag day, so give it
+    // immediately, while the operator is still at the keyboard.
+    //
+    // testnet-21 is the first net this fires on (fence 6,500,000). Every other preset keeps
+    // `u64::MAX`, so the default secp-free build runs them exactly as before — which is precisely
+    // the invariant `pcpb_palw_network_selection` and its sibling preset tests pin.
+    if !cfg!(feature = "evm") && config.params.evm_activation_daa_score != u64::MAX {
+        println!(
+            "Refusing to start: {} activates the ADR-0020 EVM lane at DAA score {}, but this kaspad was built \
+             WITHOUT the `evm` cargo feature — it cannot execute the lane, and at the fence it would refuse to \
+             follow the chain (taking this node's synced datadir out of service). Fix: download the release \
+             binary (the published archives are EVM-capable), or rebuild from source with \
+             `cargo build --release --bin kaspad --features evm`.",
+            config.params.net, config.params.evm_activation_daa_score
+        );
+        exit(1);
+    }
+
     // kaspa-pq **ADR-0042** — the permissionless (chain-derived) pruning-snapshot auth lever,
     // re-checked on the FINAL configuration.
     //
@@ -700,6 +730,17 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // finality thresholds that drive the v4 beacon seed — so two operators comparing this ONE line
     // settle "same rules or not" immediately. Same value as `consensusParamsHash` in getInfo.
     info!("Network: {} — consensus params identity {}", config.params.net, config.params.consensus_identity_hash());
+    // ADR-0020: on a net with a finite fence the operator's one question is "is my node ready for
+    // the flag day, and has it happened yet". The refusal above already guarantees a non-EVM build
+    // never gets this far on such a net, so reaching this line means the build CAN execute the lane
+    // — state the fence so the answer is in `journalctl` rather than inferred from the binary.
+    if config.params.evm_activation_daa_score != u64::MAX {
+        info!(
+            "EVM lane (ADR-0020): ACTIVATES at DAA score {} on {} — this build can execute it. \
+             Blocks below the fence stay pre-EVM (both header commitments consensus-forced to zero).",
+            config.params.evm_activation_daa_score, config.params.net
+        );
+    }
 
     assert!(!db_dir.to_str().unwrap().is_empty());
     info!("Application directory: {}", app_dir.display());

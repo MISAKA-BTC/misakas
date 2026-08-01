@@ -69,7 +69,13 @@ jobs:
           # Build non-bridge binaries first. Build `misaka` by package+bin so the
           # release cannot silently miss the unified operator CLI if workspace
           # defaults change.
-          cargo --verbose build --bin kaspad --bin rothschild --bin kaspa-wallet --release --target x86_64-unknown-linux-musl
+          # ADR-0020: kaspad is built SEPARATELY and with `--features evm`, because testnet-21
+          # activates the EVM lane at DAA 6,500,000 and a node without the feature refuses to start
+          # there (kaspad/src/daemon.rs). Its own invocation because `--features` resolves against
+          # the selected package — folding it into the multi-bin line below would try to apply
+          # kaspad's feature to rothschild/kaspa-wallet.
+          cargo --verbose build -p kaspad --bin kaspad --features evm --release --target x86_64-unknown-linux-musl
+          cargo --verbose build --bin rothschild --bin kaspa-wallet --release --target x86_64-unknown-linux-musl
           cargo --verbose build -p kaspa-pq-miner -p kaspa-pq-validator -p kaspa-pq-signer --release --target x86_64-unknown-linux-musl
           cargo --verbose build -p misaka-cli --bin misaka --release --target x86_64-unknown-linux-musl
           test -x target/x86_64-unknown-linux-musl/release/misaka
@@ -98,7 +104,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cargo build --bin kaspad --release
+          # ADR-0020: EVM-capable kaspad — see the musl step for why.
+          cargo build -p kaspad --bin kaspad --features evm --release
           cargo build --bin rothschild --release
           cargo build --bin kaspa-wallet --release
           cargo build -p kaspa-pq-miner --release
@@ -127,7 +134,8 @@ jobs:
       - name: Build on MacOS
         if: runner.os == 'macOS'
         run: |
-          cargo build --bin kaspad --release
+          # ADR-0020: EVM-capable kaspad — see the musl step for why.
+          cargo build -p kaspad --bin kaspad --features evm --release
           cargo build --bin rothschild --release
           cargo build --bin kaspa-wallet --release
           cargo build -p kaspa-pq-miner --release

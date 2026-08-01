@@ -82,7 +82,19 @@ echo "== [2/6] secp256k1 must be absent from the consensus + node + wallet trees
 # extended this to the kaspad node binary (the RPC/SDK layer:
 # rpc-core -> consensus-wasm -> consensus-client). Audit QL-1 (P10) extended the
 # fence through the whole wallet stack (bip32 / wallet-keys / wallet-pskt /
-# wallet-core, all default pq-only), so every production binary is now secp-free.
+# wallet-core, all default pq-only).
+#
+# SCOPE, and read this before quoting a green run as "the shipped node is secp-free":
+# `cargo tree` here resolves DEFAULT features, so what this proves is that the
+# default build — the mainnet posture, and what `cargo build` gives you from source —
+# links no secp curve. Since 2026-08-02 that is NOT the same as the released kaspad:
+# testnet-21 activates the ADR-0020 EVM lane, so deploy.yaml builds the published
+# kaspad with `--features evm`, and that binary DOES link k256 for EVM ecrecover.
+# That is the deliberate scoped supersession ADR-0023 names ("Lane 2 keeps classical
+# ECC, so the binary is no longer fully secp-free — the PQ guarantee is scoped to
+# Base + Lane 1"). The UTXO/L1 signature domain stays ML-DSA-87-only either way; k256
+# authorizes EVM-lane transactions and nothing else.
+#
 # The gate is HARD by default. Export HARD_SECP_GATE=0 to soften it to a warning.
 HARD_SECP_GATE="${HARD_SECP_GATE:-1}"
 # EVM audit C2: also forbid k256 (revm/alloy's pure-Rust secp curve, the
@@ -102,6 +114,8 @@ for crate in kaspa-consensus kaspad kaspa-pq-cli kaspa-wallet kaspa-cli kaspa-da
     echo "OK: no secp256k1/k256 in the $crate dependency tree."
   fi
 done
+echo "NOTE: the above covers DEFAULT features only. The RELEASED kaspad is built with --features evm"
+echo "      (ADR-0020 testnet-21 activation) and does link k256 for EVM ecrecover — by design."
 
 echo "== [3/6] ML-DSA-87 FIPS-204 KAT + official NIST ACVP + verifier gate (audit H-10/H-04) =="
 # The deterministic keygen/sign regression pins (kat_mldsa87_deterministic_regression),

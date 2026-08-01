@@ -52,6 +52,8 @@ impl BlockBodyProcessor {
     /// guaranteed zero here (`check_header_version` → `NonZeroEvmHeaderFieldsBeforeActivation`).
     ///
     /// - EVM inactive ⇒ empty `evm_payload` and zero EVM header commitments;
+    /// - EVM active ⇒ the payload rides the **algo-3 hash floor only** (any other
+    ///   PoW lane must carry an empty one — see the rationale at the check);
     /// - EVM active ⇒ `evm_payload_hash` matches the body payload (the DATA
     ///   commitment, §4.1 — pure keyed BLAKE2b, verified on every build);
     /// - the D4 inclusion-side cap: serialized payload bytes ≤
@@ -76,6 +78,36 @@ impl BlockBodyProcessor {
                 return Err(RuleError::NonZeroEvmHeaderFieldsBeforeActivation);
             }
             return Ok(());
+        }
+        // ADR-0020 x ADR-0039 §5.1 — the EVM payload rides the **algo-3 hash floor only**.
+        //
+        // Checked as "only algo-3 may carry", not "algo-4 may not", so any lane added later is
+        // fail-closed by default: a new PoW id would have to opt IN here rather than inherit the
+        // right to carry EVM transactions by silence.
+        //
+        // Why the hash floor and not both lanes:
+        //
+        //  * **Liveness independence.** The two lanes do not fail together. When PALW beacon grace
+        //    is exhausted, algo-4 blocks are invalid for the whole epoch (`palw.rs`, "Grace
+        //    exhausted: algo-4 blocks are invalid this epoch; the algo-3 hash lane continues") —
+        //    while the hash floor is permanent and always live (`check_live_algo_id`). If EVM
+        //    transactions could only reach the chain through algo-4, a PALW-side halt would stall
+        //    EVM inclusion with it. Pinning the payload to the permanent lane makes EVM liveness
+        //    depend on the lane that cannot be switched off.
+        //  * **Producer set.** An algo-4 block is won by a ticket eligibility draw among bonded
+        //    compute providers, not by hash grinding. Coupling transaction inclusion to that draw
+        //    would let the compute-provider set decide what enters the EVM lane.
+        //  * **Fee accounting.** The algo-4 coinbase split is deliberately asymmetric to algo-3
+        //    (`palw.rs` PALW lane coinbase split), and design v0.4 routes EVM payload fees to the
+        //    payload miner. Keeping payloads on one lane keeps those two schemes from meeting.
+        //
+        // This restricts what a block may CONTRIBUTE, never what it must EXECUTE: an algo-4 block
+        // on the selected chain still runs its mergeset's acceptance and commits
+        // `evm_commitment_root` exactly like an algo-3 one (v0.4 mergeset delayed acceptance —
+        // a block's own payload is executed by its selected child, whatever lane either is on).
+        // So the lane split costs no EVM continuity; it only fixes who may inject.
+        if block.header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_BLAKE2B_SHA3 && !block.evm_payload.is_empty() {
+            return Err(RuleError::EvmPayloadOnNonHashFloorLane(block.header.pow_algo_id));
         }
         let bytes = block.evm_payload.payload_bytes();
         if bytes.len() > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
@@ -658,13 +690,16 @@ mod tests {
                 1,
                 0x207fffff,
                 1,
-                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_BLAKE2B_SHA3,
                 0,
                 0.into(),
                 0,
                 Default::default(),
             )
         };
+        // algo-3 headers: the one lane allowed to carry a non-empty payload (the lane rule fires
+        // before the hash/admission rules this test exercises, so any other id would shadow them).
+        //
         // A tx-free payload, so the check below is feature-independent (class-1
         // tx admission only decodes under the `evm` build).
         let payload = EvmExecutionPayload {
@@ -699,6 +734,85 @@ mod tests {
                 Err(RuleError::EvmPayloadTxInadmissible(0, _))
             );
         }
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// ADR-0020 x ADR-0039 §5.1: on an EVM-active net the payload rides the algo-3 hash floor
+    /// only. An algo-4 (PALW replica) block carrying a non-empty payload is body-invalid even
+    /// with a correct data commitment; empty-payload algo-4 blocks — the only kind the template
+    /// path produces — stay valid.
+    #[test]
+    fn evm_payload_restricted_to_algo3_hash_floor_lane() {
+        use kaspa_consensus_core::evm::{DepositClaim, EvmAddress, EvmExecutionPayload, EvmSystemOp};
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        params.evm_activation_daa_score = 0;
+        let consensus = TestConsensus::new(&Config::new(params));
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+
+        let coinbase = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_COINBASE, 0, vec![0u8; 19]);
+        let txs = vec![coinbase];
+        let hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        // v5 (compute-set) header: the schema algo-4 blocks actually mint under on the PALW nets —
+        // the lane rule keys on pow_algo_id, and this pins that a v5 header is no exemption.
+        let mk_header = |algo_id: u8| {
+            Header::new_finalized(
+                kaspa_consensus_core::constants::PALW_COMPUTE_SET_HEADER_VERSION,
+                vec![vec![1.into()]].try_into().unwrap(),
+                hash_merkle_root,
+                Default::default(),
+                Default::default(),
+                1,
+                0x207fffff,
+                1,
+                algo_id,
+                0,
+                0.into(),
+                0,
+                Default::default(),
+            )
+        };
+        // Tx-free payload so the outcome is feature-independent (class-1 decode is evm-build-only).
+        let payload = EvmExecutionPayload {
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: Default::default(),
+                evm_address: EvmAddress::from_bytes([0xCC; 20]),
+                amount_sompi: 1,
+                claim_tip_sompi: 0,
+            })],
+            ..Default::default()
+        };
+
+        // algo-4 + non-empty payload ⇒ rejected on the lane rule, before the hash-match rule
+        // (the commitment here is CORRECT — what fails is the lane).
+        let mut block = MutableBlock::new(
+            mk_header(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_REPLICA).with_evm_payload_hash(payload.payload_hash()),
+            txs.clone(),
+        );
+        block.evm_payload = payload.clone();
+        assert_match!(
+            body_processor.validate_body_in_isolation(&block.to_immutable()),
+            Err(RuleError::EvmPayloadOnNonHashFloorLane(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_REPLICA))
+        );
+
+        // algo-4 + EMPTY payload (the template-path form) ⇒ the lane rule passes; the header
+        // still must commit to the empty payload's hash like any EVM-active block.
+        let empty = EvmExecutionPayload::default();
+        let block = MutableBlock::new(
+            mk_header(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_REPLICA).with_evm_payload_hash(empty.payload_hash()),
+            txs.clone(),
+        );
+        body_processor.validate_body_in_isolation(&block.to_immutable()).unwrap();
+
+        // algo-3 + the SAME non-empty payload ⇒ valid (the carrying lane).
+        let mut block = MutableBlock::new(
+            mk_header(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_BLAKE2B_SHA3).with_evm_payload_hash(payload.payload_hash()),
+            txs.clone(),
+        );
+        block.evm_payload = payload;
+        body_processor.validate_body_in_isolation(&block.to_immutable()).unwrap();
 
         consensus.shutdown(wait_handles);
     }
@@ -752,7 +866,7 @@ mod tests {
                 1,
                 0x207fffff,
                 1,
-                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_BLAKE2B_SHA3,
                 0,
                 0.into(),
                 0,
