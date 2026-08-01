@@ -58,7 +58,7 @@
 //!    AUTH-02 closes. Routing every producer through one encoder is what makes that structural rather
 //!    than a rule each assembler has to remember.
 
-use kaspa_consensus_core::constants::{PALW_ANTISPAM_HEADER_VERSION, PALW_HEADER_VERSION};
+use kaspa_consensus_core::constants::{PALW_ANTISPAM_HEADER_VERSION, PALW_COMPUTE_SET_HEADER_VERSION, PALW_HEADER_VERSION};
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw::{
     PALW_AUTHORIZATION_DOMAIN, PALW_AUTHORIZATION_MLDSA87_CONTEXT, PalwBlockAuthorizationV1, palw_header_preimage_commitment,
@@ -127,13 +127,16 @@ pub struct BlockAuthorization {
 /// "this miner mints blocks it then rejects", which on a shared network is indistinguishable from an
 /// attack for anyone reading the logs.
 ///
-/// Each variant corresponds to a rejection the block would earn: a non-v3/v4 header or a non-algo-4 lane
-/// never reaches the authorization clause at all; a nonce not pinned to `low64(nullifier)` fails the
+/// Each variant corresponds to a rejection the block would earn: a non-v3/v4/v5 header or a non-algo-4
+/// lane never reaches the authorization clause at all; a nonce not pinned to `low64(nullifier)` fails the
 /// eligibility draw (I-3); and an authority that is not the leaf's declared one fails
 /// `binds_leaf_authority` (AUTH-03).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AuthorizeError {
-    #[error("header version {0} is not an authorizable PALW header version — only v3 or re-genesis v4 is supported")]
+    #[error(
+        "header version {0} is not an authorizable PALW header version — only v3, re-genesis v4, or \
+         Compute-Set-registry v5 is supported"
+    )]
     NotPalwHeader(u16),
     #[error("header pow_algo_id {0} is not the PALW replica lane — only algo-4 blocks carry a ticket authorization")]
     NotReplicaLane(u8),
@@ -189,7 +192,11 @@ impl TicketAuthority {
     pub fn authorize(&self, binding: &BlockAuthorizationBinding) -> Result<BlockAuthorization, AuthorizeError> {
         // Refuse before signing. Each check mirrors a rejection the minted block would earn, so a
         // signature is only ever produced over a header that can actually be accepted.
-        if !(PALW_HEADER_VERSION..=PALW_ANTISPAM_HEADER_VERSION).contains(&binding.header.version) {
+        // v5 (ADR-MA Compute Set registry) is authorizable for the same reason v4 was: the header
+        // preimage grew by activation-gated fields that `write_header_preimage` already covers, so
+        // the signed digest is still the block's own canonical header. testnet-20 is a v5 genesis —
+        // gating at v4 here refused every algo-4 block the registry network can ever build.
+        if !(PALW_HEADER_VERSION..=PALW_COMPUTE_SET_HEADER_VERSION).contains(&binding.header.version) {
             return Err(AuthorizeError::NotPalwHeader(binding.header.version));
         }
         if binding.header.pow_algo_id != POW_ALGO_ID_PALW_REPLICA {
@@ -467,6 +474,31 @@ mod tests {
             ),
             Ok(true)
         );
+    }
+
+    /// Header-v5 (ADR-MA Compute Set registry) must be authorizable: `testnet-20` is a v5 genesis,
+    /// so gating the producer at v4 refused every algo-4 block that network can build. The v5
+    /// preimage extension (set id / policy id / plan id) is covered by `write_header_preimage`, so
+    /// the commitment stays total.
+    #[test]
+    fn v5_compute_set_registry_header_is_authorizable() {
+        let (authority, _leaf, mut binding, _) = produce();
+        binding.header.version = PALW_COMPUTE_SET_HEADER_VERSION;
+        binding.header.finalize();
+        let authorized = authority.authorize(&binding).expect("v5 is an authorizable PALW version");
+
+        // The signature must verify against the v5 header it was produced over.
+        let mut minted = binding.header.clone();
+        minted.palw_authorization_hash = authorized.authorization_hash;
+        minted.finalize();
+        let auth =
+            <PalwBlockAuthorizationV1 as borsh::BorshDeserialize>::try_from_slice(&authorized.payload).expect("payload decodes");
+        assert!(auth.binds_header(binding.network_id, &minted, &binding.authed_hash_merkle_root));
+
+        // …and one version past v5 is still refused, so the gate stays a gate.
+        binding.header.version = PALW_COMPUTE_SET_HEADER_VERSION + 1;
+        binding.header.finalize();
+        assert_eq!(authority.authorize(&binding).unwrap_err(), AuthorizeError::NotPalwHeader(PALW_COMPUTE_SET_HEADER_VERSION + 1));
     }
 
     /// Header-v4 deliberately permits one authorization signature to survive spam-nonce grinding.
