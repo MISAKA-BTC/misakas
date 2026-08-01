@@ -1097,6 +1097,11 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     dormancy_evict_period_epochs: 10,
     dormancy_evict_limit_bps: 10_000,
     dormancy_revival_delay_epochs: 1,
+    // Proposal ③ (2026-08-01 bystander wedge): legacy presets keep the OLD confirm semantics for
+    // IBD-replay compatibility — their ledgers confirmed anchors under the window-score-only rule,
+    // and flipping this re-derives the v4/v5 beacon seeds of that history. New nets flip it at
+    // their genesis (see PCPB_PALW_DNS_PARAMS).
+    require_anchor_attestation: false,
 };
 
 /// Number of blocks in 14 days at the production 10 BPS block rate
@@ -1268,6 +1273,11 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     dormancy_evict_period_epochs: 8_640,
     dormancy_evict_limit_bps: 1_000,
     dormancy_revival_delay_epochs: 1,
+    // Proposal ③ (2026-08-01 bystander wedge): legacy presets keep the OLD confirm semantics for
+    // IBD-replay compatibility — their ledgers confirmed anchors under the window-score-only rule,
+    // and flipping this re-derives the v4/v5 beacon seeds of that history. New nets flip it at
+    // their genesis (see PCPB_PALW_DNS_PARAMS).
+    require_anchor_attestation: false,
 };
 
 /// kaspa-pq Phase 2 (ADR-0007): testnet DNS params = [`PRODUCTION_DNS_PARAMS`] with a lowered
@@ -1822,7 +1832,20 @@ pub const PCPB_PALW_PARAMS: Params = Params {
     net: NetworkId::with_suffix(NetworkType::Testnet, 21),
     genesis: crate::config::genesis::PCPB_PALW_GENESIS,
     dns_seeders: TESTNET_21_DNS_SEEDERS,
+    dns_params: Some(PCPB_PALW_DNS_PARAMS),
     ..COMPUTE_REGISTRY_PALW_PARAMS
+};
+
+/// testnet-21 DNS params: the compute-registry shape plus **proposal ③** — anchor confirmation
+/// additionally requires the anchor's own epoch to be attested (dead-branch confirm eradication;
+/// the 2026-08-01 bystander-wedge report's root fix). Genesis-effective on this net: the flag
+/// went live hours after the testnet-21 genesis, while the ledger provably contained zero
+/// attestations and zero confirmed anchors, so replay of the pre-flag blocks is byte-identical
+/// under both values (see `DnsParams::require_anchor_attestation` for the general rule — on any
+/// net that HAS confirmed anchors, this flips only at a re-genesis).
+pub const PCPB_PALW_DNS_PARAMS: DnsParams = DnsParams {
+    require_anchor_attestation: true,
+    ..COMPUTE_REGISTRY_DNS_PARAMS
 };
 
 /// ADR-MA P14 rehearsal DNS economics: the staging (production-scale) shape with the
@@ -2284,6 +2307,23 @@ mod palw_network_tests {
         // per-preset absolute addend must stay ZERO — a nonzero absolute re-arms the permanent
         // dead-branch wedge at whichever difficulty makes it unreachable.
         assert_eq!(dns.emergency_work_margin, BlueWorkType::ZERO, "the Work-margin addend must stay zero (bystander-wedge regression)");
+        // ...and proposal ③, the root fix: a dead-branch anchor whose own epoch nobody attested
+        // can never confirm on this net. Genesis-effective (the flag went live before any
+        // attestation existed on the ledger); legacy presets stay `false` for replay compat.
+        assert!(dns.require_anchor_attestation, "testnet-21 requires the anchor's own epoch to be attested (proposal ③)");
+        for (name, legacy) in [
+            ("compute-registry (testnet-20)", COMPUTE_REGISTRY_DNS_PARAMS),
+            ("staging-mainnet (testnet-200)", STAGING_MAINNET_PALW_DNS_PARAMS),
+            ("production", PRODUCTION_DNS_PARAMS),
+            ("testnet", TESTNET_DNS_PARAMS),
+            ("genesis-active", GENESIS_ACTIVE_DNS_PARAMS),
+        ] {
+            assert!(
+                !legacy.require_anchor_attestation,
+                "{name}: legacy preset must keep the old confirm semantics — its ledger confirmed anchors under the \
+                 window-score-only rule, and flipping this re-derives that history's beacon seeds (IBD replay break)"
+            );
+        }
         // TRIPWIRE, widened (2026-07-31): the two threshold pins above name only the fields the
         // testnet-200 halt happened to travel through. The hazard class is larger than those two —
         // the v4 `palw_beacon_seed` recurrence also consumes `palw_epoch_length_daa`, the beacon
@@ -2317,7 +2357,11 @@ mod palw_network_tests {
         // getInfo, and kaspad logs it at startup.
         assert_eq!(
             p.consensus_identity_hash().to_string(),
-            "1efdbdaba9953c4f815a8ff5e44d46f04761f5dad92629c8dc45ccd875a1b34e2ddb3cd6319e809df4c2309b48ae236bcd35626a3c428a02382f1f15d7f83c45",
+            // Re-pinned 2026-08-01 (same day as genesis): proposal ③ (`require_anchor_attestation:
+            // true`) went live while the ledger provably held zero attestations and zero confirmed
+            // anchors, so replay of every pre-flag block is byte-identical — the identity moves, the
+            // history does not. On any net that HAS confirmed anchors this flip is re-genesis-only.
+            "1c48963fea2035c9827fab56c6889dba9e444762e8ac491b1a6a6fbc75cc233e7473ff2f11e694270872c2db67310490521cbd69cd47bd4e470b636c008303ff",
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
         );
         // Every preset OUTSIDE the compute-registry lineage keeps the fence closed.

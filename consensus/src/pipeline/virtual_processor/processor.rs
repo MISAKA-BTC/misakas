@@ -4111,7 +4111,13 @@ impl VirtualStateProcessor {
             .get_blue_work(dns_anchor)
             .unwrap_or_else(|err| panic!("failed reading blue work for PALW DNS anchor {dns_anchor}: {err}"));
         let work_depth = selected_parent_work.saturating_sub(anchor_work);
-        let confirmed = is_dns_confirmed(work_depth, stake_depth, params.required_work_depth, params.required_stake_depth);
+        // Proposal ③ (2026-08-01 bystander wedge): the SAME anchor-epoch-attested condition the
+        // reorg-gate coordinate applies (`update_dns_state`), applied at the beacon/clause-6
+        // coordinate — the confirmed anchor classified here feeds the v4/v5 `palw_beacon_seed`
+        // provenance, so the two coordinates must never diverge on what "confirmed" means.
+        let anchor_epoch_attested = contributions.iter().any(|c| c.epoch == candidate.epoch);
+        let confirmed = is_dns_confirmed(work_depth, stake_depth, params.required_work_depth, params.required_stake_depth)
+            && (!params.require_anchor_attestation || anchor_epoch_attested);
         let healthy = derive_dns_health(
             &per_epoch,
             params.stake_event_quality_floor_bps,
@@ -5479,9 +5485,17 @@ impl VirtualStateProcessor {
         // the POV-dependent `sink`) is what gets DNS-confirmed and protected by the reorg gate, so
         // nodes that recompute at different boundary sinks still protect the same anchor. `None`
         // until an epoch's anchor is buried and lag-ready (early chain / not yet ready).
-        let confirmable_anchor = ready_epoch_from_tip_blue_score(sink_blue, epoch_len_blue, dns_params.attestation_lag_blue_score)
-            .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, sink, dns_params))
-            .map(|a| (a.anchor_hash, a.anchor_daa_score));
+        let confirmable = ready_epoch_from_tip_blue_score(sink_blue, epoch_len_blue, dns_params.attestation_lag_blue_score)
+            .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, sink, dns_params).map(|a| (epoch, a)));
+        let confirmable_anchor = confirmable.as_ref().map(|(_, a)| (a.anchor_hash, a.anchor_daa_score));
+        // Proposal ③ (2026-08-01 bystander wedge): does the branch's own stake approve THIS
+        // anchor? `contributions` was v2-credited above — only attestations naming this chain's
+        // canonical anchor per epoch count — so one hit for the confirmable epoch means the
+        // anchor being confirmed was itself attested on this branch. A dead fork branch (whose
+        // window score rides the shared pre-fork segment, the measured 96% case) has zero such
+        // hits and, where `require_anchor_attestation` is set, can never confirm.
+        let anchor_epoch_attested =
+            confirmable.as_ref().map(|(epoch, _)| contributions.iter().any(|c| c.epoch == *epoch)).unwrap_or(false);
 
         // true WorkDepth (audit H-02 Option A): WorkDepth(B) is the blue work accumulated SINCE the
         // confirmable anchor B — anchor-relative (`blue_work(sink) − blue_work(anchor)`), NOT the
@@ -5504,6 +5518,7 @@ impl VirtualStateProcessor {
             sink,
             sink_daa,
             confirmable_anchor,
+            anchor_epoch_attested,
             work_depth,
             stake_depth,
             rollout_stage,
@@ -5513,6 +5528,7 @@ impl VirtualStateProcessor {
             health,
             dns_params.required_work_depth,
             dns_params.required_stake_depth,
+            dns_params.require_anchor_attestation,
             new_last_evicted,
         );
         let previous_confirmed = prev_dns_state.as_ref().map(|s| s.last_dns_confirmed_anchor).unwrap_or_default();

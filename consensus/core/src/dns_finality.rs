@@ -971,6 +971,45 @@ pub struct DnsParams {
     /// return to `Active` (`>= 1` so numerator and denominator move on the same
     /// epoch boundary).
     pub dormancy_revival_delay_epochs: u16,
+
+    /// 2026-08-01 bystander-wedge report, proposal ③ — **anchor confirmation requires the
+    /// anchor's own epoch to be attested** (dead-branch confirm eradication).
+    ///
+    /// The blind spot this closes: `is_dns_confirmed` reads a WINDOW stake score, and on a
+    /// freshly-forked dead branch ~96% of that window is the shared pre-fork segment — so a
+    /// dead-branch anchor with ZERO post-fork attestations still cleared `required_stake_depth`
+    /// and got confirmed during the milliseconds an IBD-replaying node parked its sink there
+    /// (measured: first gate rejection 29ms after the anchor update; 3 operators, 4/5 sync
+    /// attempts trapped). Confirmation then demanded the emergency dominance margins to escape —
+    /// the anchor's confirmation had required no liveness proof from its own branch.
+    ///
+    /// With this `true`, the confirm predicate additionally requires ≥1 credited attestation for
+    /// the confirmable anchor's OWN epoch. `collect_stake_contributions_v2` credits only
+    /// attestations naming THIS chain's canonical anchor of that epoch, so the condition is
+    /// exactly "the branch's stake approved THIS anchor": a dead branch (fork-local anchor,
+    /// zero approvals) can never confirm, at either coordinate that classifies confirmation
+    /// (`advance_dns_confirmation` for the reorg-gate anchor, `palw_dns_confirmation` for the
+    /// PALW beacon/clause-6 facts).
+    ///
+    /// Liveness analysis (why fail-closed is correct here):
+    /// * **Bootstrap / zero validators:** stake_depth is already 0, nothing confirmed either
+    ///   way — byte-identical behavior.
+    /// * **Full validator outage:** confirmation already halts (the bounded stake window empties);
+    ///   this condition only reaches the same halt one epoch sooner for the newest anchor.
+    ///   Finality that advances without stake approval would not be stake-backed finality.
+    /// * **A skipped epoch (partial outage):** the unattested epoch's anchor is simply not
+    ///   confirmed; the next attested ready epoch confirms and advances past it. Confirmation
+    ///   lags by at most the outage length; it never wedges.
+    ///
+    /// ⚠️ Same IBD-replay hazard class as [`Self::required_work_depth`]: this changes which
+    /// anchors confirm, and the v4/v5 `palw_beacon_seed` is authenticated against the confirmed
+    /// anchor — flipping it on a live network whose ledger already CONFIRMED anchors re-derives
+    /// seeds for mined history. Flip it only at a net boundary (re-genesis), or on a net whose
+    /// history provably contains zero confirmed anchors and zero attestations (then replay is
+    /// byte-identical under both values — the testnet-21 2026-08-01 case: the flag went live
+    /// hours after genesis, before any validator bonded). `false` on every legacy preset for
+    /// exactly this replay compatibility. Appended last (borsh append-only).
+    pub require_anchor_attestation: bool,
 }
 
 /// kaspa-pq DNS v3 — the canonical, lagged, blue_score-coordinated epoch anchor that the
@@ -4435,12 +4474,21 @@ pub fn aggregate_epoch_tallies(
 /// `health` is the per-epoch [`DnsHealth`] signal the caller derived for this anchor
 /// (via [`derive_dns_health`]); it is stored verbatim — a pure liveness annotation that
 /// never influences whether the anchor confirms.
+///
+/// **Proposal ③ (2026-08-01 bystander wedge):** `anchor_epoch_attested` is the caller's
+/// statement that ≥1 credited attestation exists for the confirmable anchor's OWN epoch
+/// (`contributions.iter().any(|c| c.epoch == confirmable_epoch)` over the same v2-credited
+/// set that fed `stake_depth`). When `require_anchor_attestation` is set, an anchor whose
+/// epoch nobody attested does NOT confirm even with a full window score — the dead-branch
+/// blind spot (window score carried by the shared pre-fork segment) is closed at the source.
+/// See [`DnsParams::require_anchor_attestation`] for the liveness analysis and replay rules.
 #[allow(clippy::too_many_arguments)]
 pub fn advance_dns_confirmation(
     prev: Option<&DnsState>,
     anchor: Hash64,
     anchor_daa_score: u64,
     confirmable_anchor: Option<(Hash64, u64)>,
+    anchor_epoch_attested: bool,
     work_depth: BlueWorkType,
     stake_depth: StakeScore,
     rollout_stage: DnsRolloutStage,
@@ -4448,11 +4496,15 @@ pub fn advance_dns_confirmation(
     health: DnsHealth,
     required_work_depth: BlueWorkType,
     required_stake_depth: StakeScore,
+    require_anchor_attestation: bool,
     last_evicted_round_epoch: u64,
 ) -> DnsState {
     // Confirm the CANONICAL anchor (deterministic across nodes), never the POV-dependent sink.
-    let confirmed =
-        confirmable_anchor.is_some() && is_dns_confirmed(work_depth, stake_depth, required_work_depth, required_stake_depth);
+    // Proposal ③: with `require_anchor_attestation`, depth alone is not enough — the anchor's own
+    // epoch must carry at least one credited attestation (the branch's stake approved THIS anchor).
+    let confirmed = confirmable_anchor.is_some()
+        && is_dns_confirmed(work_depth, stake_depth, required_work_depth, required_stake_depth)
+        && (!require_anchor_attestation || anchor_epoch_attested);
     let (last_dns_confirmed_anchor, last_dns_confirmed_anchor_daa_score) = match (confirmed, confirmable_anchor, prev) {
         (true, Some(canonical), _) => canonical,
         (_, _, Some(p)) => (p.last_dns_confirmed_anchor, p.last_dns_confirmed_anchor_daa_score),
@@ -7107,6 +7159,7 @@ mod tests {
             sink1,
             500,
             Some((canon1, 480)),
+            /* anchor_epoch_attested */ true,
             BlueWorkType::from_u64(2000),
             StakeScore(STAKE_SCORE_SCALE / 2),
             stage,
@@ -7114,6 +7167,7 @@ mod tests {
             DnsHealth::Active,
             cw,
             cs,
+            /* require_anchor_attestation */ false, // legacy semantics under test
             0, // last_evicted_round_epoch (test seed)
         );
         assert_eq!(s1.selected_chain_anchor, sink1);
@@ -7127,6 +7181,7 @@ mod tests {
             sink2,
             600,
             Some((canon2, 580)),
+            /* anchor_epoch_attested */ true,
             BlueWorkType::from_u64(2000),
             StakeScore(STAKE_SCORE_SCALE),
             stage,
@@ -7134,6 +7189,7 @@ mod tests {
             DnsHealth::DegradedStakeQualityLow,
             cw,
             cs,
+            /* require_anchor_attestation */ false, // legacy semantics under test
             0, // last_evicted_round_epoch (test seed)
         );
         assert_eq!(s2.selected_chain_anchor, sink2, "selected_chain_anchor stays the sink (throttle only)");
@@ -7149,6 +7205,7 @@ mod tests {
             sink3,
             700,
             None,
+            /* anchor_epoch_attested */ true,
             BlueWorkType::from_u64(2000),
             StakeScore(STAKE_SCORE_SCALE),
             stage,
@@ -7156,6 +7213,7 @@ mod tests {
             DnsHealth::Active,
             cw,
             cs,
+            /* require_anchor_attestation */ false, // legacy semantics under test
             0, // last_evicted_round_epoch (test seed)
         );
         assert_eq!(s3.selected_chain_anchor, sink3);
@@ -7167,6 +7225,7 @@ mod tests {
             sink3,
             700,
             Some((Hash64::from_bytes([0x77; 64]), 690)),
+            /* anchor_epoch_attested */ true,
             BlueWorkType::from_u64(2000),
             StakeScore(0),
             stage,
@@ -7174,6 +7233,7 @@ mod tests {
             DnsHealth::Active,
             cw,
             cs,
+            /* require_anchor_attestation */ false, // legacy semantics under test
             0, // last_evicted_round_epoch (test seed)
         );
         assert_eq!(s4.last_dns_confirmed_anchor, canon2, "below-threshold -> keep prev confirmed");
@@ -7197,6 +7257,7 @@ mod tests {
                 Hash64::from_bytes([0x10; 64]),
                 900,
                 Some((canon, 880)),
+                /* anchor_epoch_attested */ true,
                 BlueWorkType::from_u64(work),
                 StakeScore(stake),
                 stage,
@@ -7204,7 +7265,8 @@ mod tests {
                 DnsHealth::Active,
                 cw,
                 cs,
-                0, // last_evicted_round_epoch (test seed)
+                /* require_anchor_attestation */ false, // legacy semantics under test
+            0, // last_evicted_round_epoch (test seed)
             )
             .last_dns_confirmed_anchor
         };
@@ -7216,6 +7278,49 @@ mod tests {
         assert_eq!(confirm(2000, STAKE_SCORE_SCALE / 2), Hash64::default(), "work≥cW but stake<cS ⇒ NOT confirmed");
         // Exactly at both thresholds ⇒ confirmed (inclusive ≥).
         assert_eq!(confirm(1000, STAKE_SCORE_SCALE), canon, "work==cW ∧ stake==cS ⇒ confirmed");
+    }
+
+    /// 2026-08-01 bystander-wedge regression, proposal ③ — the DEAD-BRANCH shape: full window
+    /// depths (the stake score carried by the shared pre-fork segment, the measured 96% case)
+    /// but ZERO attestations for the confirmable anchor's own epoch. With
+    /// `require_anchor_attestation` the anchor must NOT confirm; without it (legacy presets) the
+    /// old semantics are preserved byte-for-byte. Three operators hit the live form of this on
+    /// testnet-20 (4 of 5 fresh-sync attempts trapped) — the anchor confirmed during an IBD
+    /// replay window and the node then held the dead branch until the emergency margins engaged.
+    #[test]
+    fn dead_branch_anchor_without_own_epoch_attestation_cannot_confirm() {
+        let vsc = Hash64::from_bytes([0x22; 64]);
+        let (cw, cs) = (BlueWorkType::from_u64(100), StakeScore(STAKE_SCORE_SCALE));
+        let canon = Hash64::from_bytes([0xDE; 64]);
+        let confirm = |attested: bool, require: bool| {
+            advance_dns_confirmation(
+                None,
+                Hash64::from_bytes([0x10; 64]),
+                900,
+                Some((canon, 880)),
+                attested,
+                // Depths comfortably met — exactly the wedge shape: the WINDOW passes while the
+                // branch itself carries no approval of THIS anchor.
+                BlueWorkType::from_u64(1_000),
+                StakeScore(STAKE_SCORE_SCALE * 4),
+                DnsRolloutStage::Active,
+                vsc,
+                DnsHealth::Active,
+                cw,
+                cs,
+                require,
+                0,
+            )
+            .last_dns_confirmed_anchor
+        };
+        // The fix: a dead-branch anchor (own epoch unattested) can NEVER confirm.
+        assert_eq!(confirm(false, true), Hash64::default(), "unattested anchor epoch must not confirm (proposal ③)");
+        // An attested anchor confirms as before.
+        assert_eq!(confirm(true, true), canon, "attested anchor epoch confirms");
+        // Legacy presets (require=false): the old window-score-only semantics, byte-for-byte —
+        // their already-mined ledgers replay identically.
+        assert_eq!(confirm(false, false), canon, "legacy semantics preserved when the flag is off");
+        assert_eq!(confirm(true, false), canon);
     }
 
     #[test]
@@ -7339,6 +7444,7 @@ mod tests {
             dormancy_evict_period_epochs: 14_000_000,
             dormancy_evict_limit_bps: 5_000,
             dormancy_revival_delay_epochs: 7,
+            require_anchor_attestation: true,
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();

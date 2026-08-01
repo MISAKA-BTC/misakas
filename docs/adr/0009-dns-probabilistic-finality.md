@@ -154,6 +154,26 @@ difficulty-independent (a fixed `STAKE_SCORE_SCALE` per fully-participated
 epoch); it must merely fit inside the bounded score window (the 2026-07-19
 stake-margin lesson).
 
+**2026-08-01 addendum 2 (dead-branch anchor confirms — proposal ③).** The same
+incident exposed a second, independent blind spot: confirmation read a WINDOW
+stake score, and a freshly-forked dead branch shares ~96% of that window with
+the canonical chain — so a dead-branch anchor with zero post-fork attestations
+still cleared `required_stake_depth` and confirmed during the milliseconds an
+IBD-replaying node parked its sink there. The margin fix (addendum 1) makes
+that state escapable; `DnsParams::require_anchor_attestation` eradicates it:
+when set, an anchor confirms only if ≥1 credited attestation exists for the
+anchor's OWN epoch (the v2 credit rule counts only attestations naming this
+chain's canonical anchor of that epoch, so the condition is precisely "the
+branch's stake approved THIS anchor"), enforced identically at the reorg-gate
+advance and the PALW beacon classification. Liveness is unchanged where it
+matters (Bootstrap: nothing confirmed either way; total outage: the bounded
+window already halts confirmation; a skipped epoch delays the advance by one
+epoch, never wedges). Because the confirmed anchor feeds the v4/v5
+`palw_beacon_seed` provenance, the flag is **re-genesis-only on any net whose
+ledger has confirmed anchors** — legacy presets keep `false`; testnet-21
+carries `true` genesis-effectively (the flag went live before any attestation
+existed on that ledger, so pre-flag replay is byte-identical).
+
 ### Phase-specific behaviour
 
 | Tier | DNS rule shape |

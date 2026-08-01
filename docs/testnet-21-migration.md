@@ -64,6 +64,9 @@ branch forever because the emergency-dominance escape needed an ABSOLUTE
 `emergency_work_margin = 1e6` — ~500k blocks of work at testnet-20's CPU difficulty. Permanent
 wedge; only a DB copy recovered it.
 
+(Sample size, final: **three** operators — the reporter, Daifuku, tetsu31 — with byte-identical
+anchor/sink/fork coordinates; 4 of 5 fresh-sync attempts trapped.)
+
 Status of the three proposed fixes:
 
 1. **Work-margin calibration — LANDED** (`6ff40d4`, 2026-08-01): the enforced margin is now
@@ -71,15 +74,25 @@ Status of the three proposed fixes:
    canonical tip's per-block work), reachable at any difficulty, and the per-preset absolute
    addend is pinned to ZERO by `dns_emergency_work_margin_absolute_addend_stays_zero`.
    **Wedged testnet-20 nodes un-wedge by restarting on a ≥ `6ff40d4` binary — a DB copy is no
-   longer required.** testnet-21 inherits this from birth, so the trap class is self-healing
-   there: a dead-branch anchor is escaped as soon as the live branch out-works one reorg horizon
-   at current difficulty (~minutes at 10 BPS).
+   longer required, and there is no need to wait for the fork region to sink below the pruning
+   point.** testnet-21 inherits this from birth, so even a confirmed dead-branch anchor is
+   escaped as soon as the live branch out-works one reorg horizon at current difficulty
+   (~minutes at 10 BPS).
 2. **Anchor-confirm hold during IBD replay** (sink timestamp far behind wall clock) — open
-   follow-up; defense in depth on top of (1).
-3. **Anchor confirm requires post-anchor attestation existence** (eradicates dead-branch
-   confirms outright) — open follow-up; changes `is_dns_confirmed` semantics, so it lands most
-   cleanly at a net boundary. It did NOT block this migration: with (1) in place the wedge is no
-   longer permanent, and testnet-21 starts with no fork history to trap on.
+   follow-up; defense in depth on top of (1) and (3).
+3. **Anchor confirm requires the anchor's own epoch to be attested — LANDED** (2026-08-01,
+   same-day follow-up): `DnsParams::require_anchor_attestation`, **`true` on testnet-21,
+   genesis-effective**. The confirm predicate now additionally requires ≥1 credited attestation
+   for the confirmable anchor's OWN epoch, at BOTH coordinates that classify confirmation (the
+   reorg-gate `DnsState` advance and the PALW beacon/clause-6 `palw_dns_confirmation`) — a dead
+   branch, whose window score rides the shared pre-fork segment while nobody attested ITS
+   anchor, can never confirm at all. The trap from this report is thereby eradicated at the
+   source, not merely escaped. Deployment note: the flag went live hours after the testnet-21
+   genesis while the ledger provably held zero attestations and zero confirmed anchors, so
+   replay of the pre-flag blocks is byte-identical under both values; on any net that HAS
+   confirmed anchors this flip is re-genesis-only (legacy presets stay `false` — see the field
+   doc for the full liveness analysis: Bootstrap unchanged, full outage already halts
+   confirmation via the bounded window, a skipped epoch just delays the advance one epoch).
 
 ## Recurrence guards carried over from the 20-migration
 
