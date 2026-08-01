@@ -36,9 +36,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::chain::BeaconFacts;
 
-/// Keyed-BLAKE2b domain for bridge-issued job challenges. Disjoint from every consensus domain
-/// (checked by `signature_domains.rs`'s prefix-free discipline in spirit): a bridge challenge is
-/// an off-chain scheduling value, and must never collide with a consensus commitment.
+/// Keyed-BLAKE2b domain for bridge-issued job challenges.
+///
+/// HISTORY: this began as a bridge-local domain, deliberately disjoint from consensus. ADR-0045
+/// D3-b then promoted the derivation INTO consensus byte-for-byte — domain string included —
+/// as `kaspa_consensus_core::palw::PALW_JOB_CHALLENGE_DOMAIN`, because clause 11 re-derives the
+/// leaf's `receipt_v3_job_challenge` and every already-issued lease had committed under THIS
+/// domain. The two constants are now intentionally EQUAL and the parity is load-bearing:
+/// `job_challenge_parity_with_consensus_is_pinned` below fails if either side drifts.
 pub const BRIDGE_JOB_CHALLENGE_DOMAIN: &[u8] = b"misaka-palw-bridge-v1/job-challenge";
 /// Domain for the request commitment (the prompt's own binding).
 pub const BRIDGE_REQUEST_COMMITMENT_DOMAIN: &[u8] = b"misaka-palw-bridge-v1/request-commitment";
@@ -241,8 +246,7 @@ mod tests {
 
     #[test]
     fn lease_binds_the_prompt_and_the_requester() {
-        let lease = JobLeaseV1::issue(7, &beacon(10, 0xab), &h(1), &h(2), &request_commitment(&[1, 2, 3], 256, b"cls"), 1)
-            .unwrap();
+        let lease = JobLeaseV1::issue(7, &beacon(10, 0xab), &h(1), &h(2), &request_commitment(&[1, 2, 3], 256, b"cls"), 1).unwrap();
         lease.verify_self_consistent().unwrap();
 
         // The leased prompt is accepted.
@@ -278,6 +282,22 @@ mod tests {
         assert!(lease_b.accepts(&[1, 2, 3], 256, b"cls", &h(2), 13).is_err());
     }
 
+    /// ADR-0045 D3-b — the seam pin: the bridge derivation and the consensus clause-11 derivation
+    /// are the SAME function, byte for byte. If this breaks, every outstanding lease stops
+    /// resolving on-chain (the leaf's committed challenge no longer re-derives), and the failure
+    /// would otherwise surface only as silent acceptance-arm rejections.
+    #[test]
+    fn job_challenge_parity_with_consensus_is_pinned() {
+        assert_eq!(
+            BRIDGE_JOB_CHALLENGE_DOMAIN,
+            kaspa_consensus_core::palw::PALW_JOB_CHALLENGE_DOMAIN,
+            "domain strings must stay equal (D3-b promoted the bridge domain into consensus)"
+        );
+        let ours = derive_job_challenge(7, 10, &h(1), &h(2), &h(3), &h(4), 5);
+        let consensus = kaspa_consensus_core::palw::palw_job_challenge(7, 10, &h(1), &h(2), &h(3), &h(4), 5);
+        assert_eq!(ours, consensus, "preimage layouts must stay byte-identical");
+    }
+
     #[test]
     fn output_commitment_is_the_live_receipt_v3_function() {
         let challenge = h(3);
@@ -287,6 +307,9 @@ mod tests {
         // The challenge really salts it — same tokens under a different challenge differ.
         assert_ne!(salted_output_commitment(&tokens, &challenge), salted_output_commitment(&tokens, &h(4)));
         // …and the token vector is length-bound (no extension collision).
-        assert_ne!(hash64_hex(&salted_output_commitment(&[10, 20], &challenge)), hash64_hex(&salted_output_commitment(&tokens, &challenge)));
+        assert_ne!(
+            hash64_hex(&salted_output_commitment(&[10, 20], &challenge)),
+            hash64_hex(&salted_output_commitment(&tokens, &challenge))
+        );
     }
 }

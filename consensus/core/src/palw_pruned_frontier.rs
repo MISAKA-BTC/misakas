@@ -1257,8 +1257,11 @@ pub struct PalwComputeRegistryPruningSnapshotV1 {
     pub policies: Vec<PalwComputeSetPolicyV1>,
     /// Every admitted allocation plan, ascending `plan_id` (Allocation Plan history).
     pub plans: Vec<PalwModelAllocationPlanV1>,
-    /// Every folded activation certificate, ascending certified `compute_set_id`
-    /// (activation records; deprecation/halt live in the policy ladder).
+    /// Every folded activation certificate, ascending derived `certificate_id` (activation
+    /// records; deprecation/halt live in the policy ladder). Ordered by the certificate's OWN
+    /// content id, not by the set it certifies: §17.3 re-certification lets one set carry several
+    /// independently quorum-verified certificates, which a set-keyed order would reject as a
+    /// duplicate.
     pub activation_certificates: Vec<PalwComputeSetActivationCertificateV1>,
     /// The fork-local registry view at the pruning point.
     pub view: PalwComputeRegistryViewV1,
@@ -1271,7 +1274,7 @@ impl PalwComputeRegistryPruningSnapshotV1 {
         self.descriptors.sort_by_cached_key(|d| d.compute_set_id().as_bytes());
         self.policies.sort_by_cached_key(|p| p.policy_id().as_bytes());
         self.plans.sort_by_cached_key(|p| p.plan_id.as_bytes());
-        self.activation_certificates.sort_by_cached_key(|c| c.compute_set_id.as_bytes());
+        self.activation_certificates.sort_by_cached_key(|c| c.certificate_id().as_bytes());
     }
 
     /// Structural + canonical validation (the [`PalwDaPruningSnapshotV1::validate`] posture:
@@ -1311,7 +1314,8 @@ impl PalwComputeRegistryPruningSnapshotV1 {
         if self.plans.iter().any(|p| !p.plan_id_is_canonical() || p.entries.iter().any(|e| !has_descriptor(&e.compute_set_id))) {
             return false;
         }
-        if !self.activation_certificates.windows(2).all(|w| w[0].compute_set_id.as_bytes() < w[1].compute_set_id.as_bytes()) {
+        let certificate_ids: Vec<Hash64> = self.activation_certificates.iter().map(|c| c.certificate_id()).collect();
+        if !certificate_ids.windows(2).all(|w| w[0].as_bytes() < w[1].as_bytes()) {
             return false;
         }
         if self.activation_certificates.iter().any(|c| !has_descriptor(&c.compute_set_id)) {
@@ -1352,6 +1356,26 @@ pub struct PalwPruningPointSnapshotPayloadV1 {
     pub active_batches: Vec<PalwPrunedActiveBatchV1>,
     pub provider_bonds: Vec<PalwProviderBondRecord>,
     pub paid_work: Vec<PalwPrunedPaidWorkBlockV1>,
+    /// ADR-0045 D3-a — the retained per-epoch `R_E` history at the boundary, ascending by epoch
+    /// and duplicate-free.
+    ///
+    /// Carried for the same reason `active_nullifiers` is: a pruned joiner must be able to answer
+    /// questions about territory it never downloaded. The three pre-existing seed sources all fail
+    /// there — the header walk stops at the pruning point, per-block state rows are deleted, and
+    /// the accumulator keeps only future epochs — so without this a joiner could not re-derive
+    /// `derive_b(R_e, …)` for any epoch below its pruning point, and every ticket bound to one
+    /// would fail closed forever rather than transiently.
+    pub beacon_seed_history: Vec<(u64, Hash64)>,
+    /// ADR-0045 D3-b — the retained per-epoch provider-snapshot commitments at the boundary,
+    /// ascending by epoch and duplicate-free. Carried for the identical reason as
+    /// `beacon_seed_history`: clause 12/13 resolves snapshots for epochs a pruned joiner never
+    /// downloaded; without the carry every such node would reject mints its peers accept — a
+    /// fail-closed CONSENSUS SPLIT, not a transient.
+    pub provider_snapshot_history: Vec<(u64, crate::palw::PalwSnapshotCommitment)>,
+    /// ADR-0045 D3-b — the retained A-commit registry rows at the boundary (`a_commit → accepted
+    /// epoch`), ascending by anchor bytes and duplicate-free. Same carry rationale: the self arm's
+    /// clause-12/13 registry equality must be answerable below the joiner's pruning point.
+    pub acommit_registry: Vec<(Hash64, u64)>,
 }
 
 impl PalwPruningPointSnapshotPayloadV1 {
@@ -1376,6 +1400,66 @@ impl PalwPruningPointSnapshotPayloadV1 {
         for row in &mut self.paid_work {
             row.job_nullifiers.sort_by_key(|hash| hash.as_bytes());
         }
+        self.beacon_seed_history.sort_unstable_by_key(|(epoch, _)| *epoch);
+        self.provider_snapshot_history.sort_unstable_by_key(|(epoch, _)| *epoch);
+        self.acommit_registry.sort_unstable_by(|a, b| a.0.as_bytes().cmp(&b.0.as_bytes()));
+    }
+
+    /// ADR-0045 D3-a coherence: the carried history must be canonically ordered, duplicate-free,
+    /// inside the retention window anchored at the pruning point's epoch, and — where it covers
+    /// that epoch — agree with the pruning point header's own stamped seed.
+    ///
+    /// The last clause is the c==v check that makes the carry trustworthy: the boundary row and
+    /// the header stamp are two encodings of one derivation, so a snapshot that disagrees with the
+    /// header it claims to describe is rejected rather than imported.
+    pub fn validate_beacon_seed_history(
+        &self,
+        pruning_point_epoch: u64,
+        window_epochs: u64,
+        pruning_point_seed: Option<Hash64>,
+    ) -> Result<(), PalwPruningSnapshotError> {
+        if !self.beacon_seed_history.windows(2).all(|w| w[0].0 < w[1].0) {
+            return Err(PalwPruningSnapshotError::NonCanonical("beacon seed history"));
+        }
+        if self.beacon_seed_history.len() as u64 > window_epochs.saturating_add(1) {
+            return Err(PalwPruningSnapshotError::TooMany("beacon seed history", self.beacon_seed_history.len()));
+        }
+        let floor = pruning_point_epoch.saturating_sub(window_epochs);
+        if self.beacon_seed_history.iter().any(|(epoch, _)| *epoch < floor || *epoch > pruning_point_epoch) {
+            return Err(PalwPruningSnapshotError::NonCanonical("beacon seed history window"));
+        }
+        if let Some(expected) = pruning_point_seed
+            && let Some((_, carried)) = self.beacon_seed_history.iter().find(|(epoch, _)| *epoch == pruning_point_epoch)
+            && *carried != expected
+        {
+            return Err(PalwPruningSnapshotError::NonCanonical("beacon seed history disagrees with the pruning point header"));
+        }
+        Ok(())
+    }
+
+    /// ADR-0045 D3-b coherence for the two PCPB carries: canonical order, duplicate-free, inside
+    /// the (wider, `+k`) snapshot retention window, and — the c==v clause — every carried anchor
+    /// epoch inside the window's span (an anchor claiming an epoch above the boundary would let a
+    /// snapshot smuggle a future acceptance into a joiner's registry).
+    pub fn validate_pcpb_carry(&self, pruning_point_epoch: u64, snapshot_window_epochs: u64) -> Result<(), PalwPruningSnapshotError> {
+        if !self.provider_snapshot_history.windows(2).all(|w| w[0].0 < w[1].0) {
+            return Err(PalwPruningSnapshotError::NonCanonical("provider snapshot history"));
+        }
+        if self.provider_snapshot_history.len() as u64 > snapshot_window_epochs.saturating_add(1) {
+            return Err(PalwPruningSnapshotError::TooMany("provider snapshot history", self.provider_snapshot_history.len()));
+        }
+        let floor = pruning_point_epoch.saturating_sub(snapshot_window_epochs);
+        if self.provider_snapshot_history.iter().any(|(epoch, _)| *epoch < floor || *epoch > pruning_point_epoch) {
+            return Err(PalwPruningSnapshotError::NonCanonical("provider snapshot history window"));
+        }
+        if !self.acommit_registry.windows(2).all(|w| w[0].0.as_bytes() < w[1].0.as_bytes()) {
+            return Err(PalwPruningSnapshotError::NonCanonical("a-commit registry"));
+        }
+        if self.acommit_registry.iter().any(|(anchor, epoch)| *anchor == Hash64::default() || *epoch < floor || *epoch > pruning_point_epoch)
+        {
+            return Err(PalwPruningSnapshotError::NonCanonical("a-commit registry window"));
+        }
+        Ok(())
     }
 
     pub fn digest(&self) -> Hash64 {
@@ -1631,6 +1715,11 @@ mod tests {
             activation_epoch: 2,
             expiry_epoch: 20,
             leaf_bond_sompi: 1,
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: h(0x7c),
+            assignment_proof_root: h(0x7d),
+            dispatch_kind: 0, // BeaconAssigned (external sentinels)
         };
         let leaf_root = palw_leaf_merkle_root(&[leaf.leaf_hash()]);
         let mut manifest = PalwBatchManifestV1 {
@@ -1689,6 +1778,67 @@ mod tests {
         (view, PalwPrunedActiveBatchV1 { batch_id, manifest, leaves: vec![leaf], certificate: Some(certificate) })
     }
 
+    /// ADR-0045 D3-a — the carried epoch-seed history is canonical, windowed, and agrees with the
+    /// pruning point header it claims to describe.
+    ///
+    /// This is the transport half of the store's bounded-window rule. A joiner imports these rows
+    /// as its ONLY way to answer `R_e` below its own pruning point, so a payload that is unordered,
+    /// reaches outside the window, or contradicts the boundary header must be refused rather than
+    /// imported — the `active_nullifiers` posture applied to the seed history.
+    #[test]
+    fn beacon_seed_history_carry_is_canonical_windowed_and_header_bound() {
+        let window = 4u64;
+        let pp_epoch = 10u64;
+        let mut payload = snapshot().payload;
+
+        // In-window, ascending, agreeing with the header stamp at the boundary epoch.
+        payload.beacon_seed_history = vec![(7, h(0x71)), (9, h(0x91)), (10, h(0xA0))];
+        assert_eq!(payload.validate_beacon_seed_history(pp_epoch, window, Some(h(0xA0))), Ok(()));
+        // A history that simply stops short of the boundary is fine — nothing forces a row per epoch.
+        payload.beacon_seed_history = vec![(7, h(0x71))];
+        assert_eq!(payload.validate_beacon_seed_history(pp_epoch, window, Some(h(0xA0))), Ok(()));
+        // Empty is fine too (pre-activation / a fresh boundary).
+        payload.beacon_seed_history = vec![];
+        assert_eq!(payload.validate_beacon_seed_history(pp_epoch, window, None), Ok(()));
+
+        // Unordered or duplicated: the transport order is canonical, so this is a rejection.
+        payload.beacon_seed_history = vec![(9, h(0x91)), (7, h(0x71))];
+        assert!(matches!(
+            payload.validate_beacon_seed_history(pp_epoch, window, None),
+            Err(PalwPruningSnapshotError::NonCanonical("beacon seed history"))
+        ));
+        payload.beacon_seed_history = vec![(7, h(0x71)), (7, h(0x72))];
+        assert!(payload.validate_beacon_seed_history(pp_epoch, window, None).is_err());
+
+        // Below the window floor (10 - 4 = 6): outside what the boundary is allowed to carry.
+        payload.beacon_seed_history = vec![(5, h(0x51)), (7, h(0x71))];
+        assert!(matches!(
+            payload.validate_beacon_seed_history(pp_epoch, window, None),
+            Err(PalwPruningSnapshotError::NonCanonical("beacon seed history window"))
+        ));
+        // Above the boundary epoch: a snapshot cannot carry seeds from the future.
+        payload.beacon_seed_history = vec![(7, h(0x71)), (11, h(0xB1))];
+        assert!(payload.validate_beacon_seed_history(pp_epoch, window, None).is_err());
+
+        // c==v — the boundary row and the header stamp are one derivation, so disagreement is a
+        // refusal rather than a silently-imported contradiction.
+        payload.beacon_seed_history = vec![(10, h(0xA0))];
+        assert_eq!(payload.validate_beacon_seed_history(pp_epoch, window, Some(h(0xA0))), Ok(()));
+        assert!(matches!(
+            payload.validate_beacon_seed_history(pp_epoch, window, Some(h(0xBB))),
+            Err(PalwPruningSnapshotError::NonCanonical("beacon seed history disagrees with the pruning point header"))
+        ));
+
+        // The whole payload canonicalizes the history (the fixture supplies it out of order) and
+        // `validate_canonical` refuses a payload that was not canonicalized.
+        let canonical = snapshot();
+        assert_eq!(canonical.payload.beacon_seed_history, vec![(8, h(0x90)), (9, h(0x91))]);
+        assert_eq!(canonical.validate_canonical(), Ok(()));
+        let mut tampered = canonical.clone();
+        tampered.payload.beacon_seed_history.reverse();
+        assert!(tampered.validate_canonical().is_err());
+    }
+
     fn snapshot() -> PalwPruningPointSnapshotV1 {
         PalwPruningPointSnapshotV1::new(PalwPruningPointSnapshotPayloadV1 {
             version: PALW_PRUNING_SNAPSHOT_VERSION,
@@ -1708,6 +1858,15 @@ mod tests {
             compute_registry_snapshot: None,
             active_batches: vec![],
             provider_bonds: vec![provider(2), provider(1)],
+            // Deliberately out of order: `canonicalize` must sort it, and `validate_canonical`
+            // must reject a payload that was not canonicalized.
+            beacon_seed_history: vec![(9, h(0x91)), (8, h(0x90))],
+            // D3-b carries, same deliberate disorder so canonicalization is exercised for both.
+            provider_snapshot_history: vec![
+                (9, crate::palw::PalwSnapshotCommitment { snapshot_root: h(0x93), assignment_root: h(0x94), total_bond: 20, provider_count: 2 }),
+                (8, crate::palw::PalwSnapshotCommitment { snapshot_root: h(0x95), assignment_root: h(0x96), total_bond: 10, provider_count: 1 }),
+            ],
+            acommit_registry: vec![(h(0xA2), 9), (h(0xA1), 8)],
             paid_work: vec![
                 PalwPrunedPaidWorkBlockV1 { block_hash: h(8), block_daa_score: 90, job_nullifiers: vec![h(5), h(4)] },
                 PalwPrunedPaidWorkBlockV1 { block_hash: h(9), block_daa_score: 100, job_nullifiers: vec![] },
@@ -2687,8 +2846,10 @@ mod tests {
         use crate::palw_compute_set::{PALW_COMPUTE_SET_DESCRIPTOR_VERSION, PalwComputeSetDescriptorV2};
         PalwComputeSetDescriptorV2 {
             version: PALW_COMPUTE_SET_DESCRIPTOR_VERSION,
-            compute_vm_id: h(tag),
-            model_family_id: h(0x10),
+            // The REAL frozen VM surface (§10 admission refuses any other), so `tag` varies the
+            // model identity instead — that is what makes two fixtures different sets.
+            compute_vm_id: crate::palw_compute_ir::compute_vm_id_v1(),
+            model_family_id: h(tag),
             model_artifact_root: h(0x11),
             model_manifest_root: h(0x12),
             tokenizer_root: h(0x13),

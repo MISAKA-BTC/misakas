@@ -169,6 +169,9 @@ pub struct ConsensusStorage {
     pub palw_nullifier_store: Arc<DbPalwNullifierStore>,
     pub palw_store: Arc<DbPalwStore>,
     pub palw_beacon_store: Arc<DbPalwBeaconStore>,
+    /// ADR-0045 D3-b — the PCPB context stores (per-epoch provider snapshot history + A-commit
+    /// registry), selected-chain reconciled alongside the provider-bond registry.
+    pub palw_pcpb_store: Arc<crate::model::stores::palw_pcpb::DbPalwPcpbStore>,
     pub palw_lane_bits_store: Arc<DbPalwLaneBitsStore>,
     pub palw_overlay_view_store: Arc<DbPalwOverlayViewStore>,
     /// DA-01 fork-local state, canonical object cache and pruning snapshot (prefixes 250-252).
@@ -378,6 +381,10 @@ impl ConsensusStorage {
         ));
         let palw_store = Arc::new(DbPalwStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
         let palw_beacon_store = Arc::new(DbPalwBeaconStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
+        let palw_pcpb_store = Arc::new(crate::model::stores::palw_pcpb::DbPalwPcpbStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(8192).untracked().build(),
+        ));
         let palw_lane_bits_store =
             Arc::new(DbPalwLaneBitsStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
         let palw_overlay_view_store = Arc::new(DbPalwOverlayViewStore::new(
@@ -575,6 +582,7 @@ impl ConsensusStorage {
             palw_nullifier_store,
             palw_store,
             palw_beacon_store,
+            palw_pcpb_store,
             palw_lane_bits_store,
             palw_overlay_view_store,
             palw_da_store,

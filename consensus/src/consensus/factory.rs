@@ -121,7 +121,7 @@ pub struct MultiConsensusMetadata {
 //     `active_batches`, breaking the singleton's positional Borsh encoding;
 // (c) `PalwSelectedParentStateV2` inserts `search_availability_state_root`, moving every Header-v4
 //     overlay commitment (PALW activates via re-genesis, so this is part of that wire table).
-pub const LATEST_DB_VERSION: u32 = 15;
+pub const LATEST_DB_VERSION: u32 = 16;
 impl Default for MultiConsensusMetadata {
     fn default() -> Self {
         Self {
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn latest_db_version_is_pinned() {
         assert_eq!(
-            LATEST_DB_VERSION, 15,
+            LATEST_DB_VERSION, 16,
             "LATEST_DB_VERSION changed. If a persisted layout changed, this is correct - update this pin \
              AND extend the `version <= N` hard-reset arm in kaspad/src/daemon.rs to cover the version \
              you just left behind. Never bump one without the other."

@@ -1134,6 +1134,11 @@ mod tests {
             activation_epoch: 4,
             expiry_epoch: 12,
             leaf_bond_sompi: 0,
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: Hash64::from_bytes([0x7c; 64]),
+            assignment_proof_root: Hash64::from_bytes([0x7d; 64]),
+            dispatch_kind: 0, // BeaconAssigned (external sentinels)
         };
 
         // 3) ACCEPTANCE rail — the leaf's ticket passes the full nine-clause verify_palw_ticket.

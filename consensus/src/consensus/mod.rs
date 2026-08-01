@@ -1497,8 +1497,9 @@ impl ConsensusApi for Consensus {
         &self,
         batch_id: Option<kaspa_hashes::Hash64>,
         provider_bond: Option<TransactionOutpoint>,
+        pcpb: Option<(u64, Option<kaspa_hashes::Hash64>)>,
     ) -> Result<kaspa_consensus_core::palw_probe::PalwStateProbe, kaspa_consensus_core::palw_probe::PalwStateProbeError> {
-        self.palw_state_probe_impl(batch_id, provider_bond)
+        self.palw_state_probe_impl(batch_id, provider_bond, pcpb)
     }
 
     fn palw_admit_da_object(

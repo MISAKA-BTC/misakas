@@ -38,9 +38,8 @@
 use kaspa_hashes::blake2b_512_keyed;
 use kaspa_pq_validator_core::ValidatorKey;
 use misaka_palw::receipt_v3::{
-    ComputeReceiptV3, ImplementationTelemetryV3, MLDSA87_ALGORITHM_ID, MatchProjectionV2,
-    PALW_RECEIPT_V3_MLDSA87_CONTEXT, RECEIPT_V3_VERSION, SignedEnvelopeV3, credential_id_from_verifying_key,
-    execution_nullifier_v3, output_commitment_v3,
+    ComputeReceiptV3, ImplementationTelemetryV3, MLDSA87_ALGORITHM_ID, MatchProjectionV2, PALW_RECEIPT_V3_MLDSA87_CONTEXT,
+    RECEIPT_V3_VERSION, SignedEnvelopeV3, credential_id_from_verifying_key, execution_nullifier_v3, output_commitment_v3,
 };
 use misaka_palw_bridge::chain::parse_hash64;
 use misaka_palw_bridge::match_key::{bytes_hex, decode_hex, hash64_hex};
@@ -96,7 +95,10 @@ struct Args {
 }
 
 fn ids_from(text: &str) -> Result<Vec<u32>, String> {
-    text.split(',').filter(|s| !s.trim().is_empty()).map(|s| s.trim().parse::<u32>().map_err(|e| format!("token id {s:?}: {e}"))).collect()
+    text.split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().parse::<u32>().map_err(|e| format!("token id {s:?}: {e}")))
+        .collect()
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -193,10 +195,8 @@ fn run() -> Result<(), String> {
     // credential is an unkeyed digest of the verifying key, and the signature is verifiable by
     // anyone holding that key — unlike the engine's symmetric MAC.
     let seed_hex = std::fs::read_to_string(&a.worker_key).map_err(|e| format!("read {}: {e}", a.worker_key))?;
-    let seed: [u8; 32] = decode_hex(seed_hex.trim())?
-        .as_slice()
-        .try_into()
-        .map_err(|_| format!("{}: want a 32-byte hex seed", a.worker_key))?;
+    let seed: [u8; 32] =
+        decode_hex(seed_hex.trim())?.as_slice().try_into().map_err(|_| format!("{}: want a 32-byte hex seed", a.worker_key))?;
     let worker = ValidatorKey::from_seed(seed);
     let verifying_key = worker.public_key().to_vec();
     let worker_credential_id = credential_id_from_verifying_key(&verifying_key);

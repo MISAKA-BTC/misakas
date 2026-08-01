@@ -70,6 +70,38 @@ pub enum DatabaseStorePrefixes {
     PalwComputeSetCertificate = 65,
     PalwComputeRegistryView = 66,
 
+    // ---- PALW per-epoch beacon seed history (ADR-0045 D3-a) ----
+    /// Keyed by epoch (`U64Key`): that epoch's derived `R_E`. The seed's VALUE, retained for a
+    /// bounded window, as opposed to prefix 242 which holds the seed's MATERIAL and deliberately
+    /// discards past epochs. PCPB re-derives `derive_b(R_e, …)` for the epoch a ticket was bound
+    /// to, which can be older than the header walk (fails closed below the pruning point) or the
+    /// per-block state rows (deleted by the pruning pass) can answer for.
+    PalwBeaconSeedHistory = 67,
+
+    // ---- PCPB per-epoch provider snapshot + A-commit anchors (ADR-0045 D3-b) ----
+    /// Keyed by epoch (`U64Key`): that epoch's bond-weighted provider snapshot commitment
+    /// (`PalwSnapshotCommitment` — snapshot root, assignment root, total bond, provider count).
+    /// The clause-0 "independently resolved" side of `palw_dispatch_evidence_valid`, derived from
+    /// the provider-bond registry as the epoch closed along the selected chain, retained for the
+    /// beacon-history window + the snapshot lag `k`. Fail-closed outside the window.
+    PalwProviderSnapshotHistory = 68,
+    /// Keyed by `a_commit` (`Hash64`): the epoch the anchor was ACCEPTED on the selected chain.
+    /// Clause 12's self arm requires row == the leaf's declared `a_commit_epoch`, which is what
+    /// makes the post-commit draw beacon `R_{a_commit_epoch + Δ}` provably post-date the anchor.
+    /// Selected-chain reconciled (written/unwound with the provider-bond registry), swept by the
+    /// same window as the snapshot history.
+    PalwACommitRegistry = 69,
+    /// Keyed by epoch (`U64Key`): the canonical `Vec<PalwProviderSnapshotEntry>` the epoch's
+    /// snapshot commitment was built from.
+    ///
+    /// **Producer aid, not a consensus input.** A verifier needs only the committed roots (prefix
+    /// 68) because every witness carries its own membership proofs; a PRODUCER needs the entry set
+    /// to BUILD those proofs, and it cannot reconstruct "the registry as of epoch e" from the
+    /// current registry. So the node serves what it derived. Deliberately NOT carried in the
+    /// pruning snapshot: a pruned joiner must still VERIFY pruned-epoch leaves (it has prefix 68
+    /// for that) but is under no obligation to help PRODUCE for epochs it never saw.
+    PalwProviderSnapshotEntries = 70,
+
     // ---- Metadata ----
     MultiConsensusMetadata = 124,
     ConsensusEntries = 125,

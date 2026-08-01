@@ -12,9 +12,7 @@
 use std::collections::BTreeMap;
 
 use kaspa_consensus_core::dns_finality::validator_id_from_pubkey;
-use kaspa_consensus_core::palw::da::{
-    PALW_PROVIDER_SESSION_V1_MLDSA87_CONTEXT, PalwProviderSessionAuthorizationV1,
-};
+use kaspa_consensus_core::palw::da::{PALW_PROVIDER_SESSION_V1_MLDSA87_CONTEXT, PalwProviderSessionAuthorizationV1};
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::ValidatorKey;
 use misaka_palw_bridge::chain::{BeaconFacts, BondFacts, ChainFacts, PinnedChainFacts};
@@ -149,7 +147,11 @@ fn bonded_registration_requires_the_real_key_and_an_active_bond() {
     assert!(h.state.registered_provider(&h.a.bond_outpoint).is_some());
 
     // Someone else's key against A's bond: the credential hash will not match.
-    let impostor = Party { owner: ValidatorKey::from_seed([9u8; 32]), session: ValidatorKey::from_seed([10u8; 32]), bond_outpoint: h.a.bond_outpoint.clone() };
+    let impostor = Party {
+        owner: ValidatorKey::from_seed([9u8; 32]),
+        session: ValidatorKey::from_seed([10u8; 32]),
+        bond_outpoint: h.a.bond_outpoint.clone(),
+    };
     let err = h.state.register_provider(&impostor.registration(0, 100), &h.chain, 1_001).unwrap_err();
     assert!(err.contains("does not hash to the bond"), "{err}");
 
@@ -183,35 +185,23 @@ fn bonded_registration_requires_the_real_key_and_an_active_bond() {
 fn challenge_lease_binds_the_prompt_and_defeats_grinding() {
     let mut h = harness("lease");
     let prompt = vec![1u32, 2, 3];
-    let lease = h
-        .state
-        .lease_challenge(&h.a.bond_outpoint, &prompt, 256, RUNTIME_CLASS_LABEL, 1, &h.chain, 2_000)
-        .unwrap();
+    let lease = h.state.lease_challenge(&h.a.bond_outpoint, &prompt, 256, RUNTIME_CLASS_LABEL, 1, &h.chain, 2_000).unwrap();
     lease.verify_self_consistent().unwrap();
     assert_eq!(lease.beacon_epoch, 12, "bound to the buried beacon sample");
     assert_eq!(lease.beacon_seed_hex, "ab".repeat(64));
 
     // Same inputs ⇒ the SAME challenge (idempotent; there is no re-roll).
-    let again = h
-        .state
-        .lease_challenge(&h.a.bond_outpoint, &prompt, 256, RUNTIME_CLASS_LABEL, 1, &h.chain, 2_001)
-        .unwrap();
+    let again = h.state.lease_challenge(&h.a.bond_outpoint, &prompt, 256, RUNTIME_CLASS_LABEL, 1, &h.chain, 2_001).unwrap();
     assert_eq!(lease.job_challenge_hex, again.job_challenge_hex);
 
     // A different prompt ⇒ a different challenge, and neither lease accepts the other's prompt.
-    let other = h
-        .state
-        .lease_challenge(&h.a.bond_outpoint, &[9u32, 9, 9], 256, RUNTIME_CLASS_LABEL, 1, &h.chain, 2_002)
-        .unwrap();
+    let other = h.state.lease_challenge(&h.a.bond_outpoint, &[9u32, 9, 9], 256, RUNTIME_CLASS_LABEL, 1, &h.chain, 2_002).unwrap();
     assert_ne!(lease.job_challenge_hex, other.job_challenge_hex);
     assert!(other.accepts(&prompt, 256, RUNTIME_CLASS_LABEL, &h.a.credential(), 15).is_err());
 
     // A different provider gets a different challenge for the SAME prompt (leases are not
     // transferable).
-    let b_lease = h
-        .state
-        .lease_challenge(&h.b.bond_outpoint, &prompt, 256, RUNTIME_CLASS_LABEL, 1, &h.chain, 2_003)
-        .unwrap();
+    let b_lease = h.state.lease_challenge(&h.b.bond_outpoint, &prompt, 256, RUNTIME_CLASS_LABEL, 1, &h.chain, 2_003).unwrap();
     assert_ne!(lease.job_challenge_hex, b_lease.job_challenge_hex);
     assert!(b_lease.accepts(&prompt, 256, RUNTIME_CLASS_LABEL, &h.a.credential(), 15).is_err());
 }
@@ -223,10 +213,7 @@ fn submission_must_match_the_lease_and_the_salted_commitment() {
     let mut h = harness("submit");
     let prompt = vec![1u32, 2, 3];
     let output = vec![10u32, 20, 30];
-    let lease = h
-        .state
-        .lease_challenge(&h.a.bond_outpoint, &prompt, 256, RUNTIME_CLASS_LABEL, 1, &h.chain, 2_000)
-        .unwrap();
+    let lease = h.state.lease_challenge(&h.a.bond_outpoint, &prompt, 256, RUNTIME_CLASS_LABEL, 1, &h.chain, 2_000).unwrap();
     let challenge = lease.job_challenge().unwrap();
 
     let good = JobSubmissionV1 {
@@ -346,7 +333,9 @@ fn mismatch_is_arbitrated_by_a_drawn_auditor() {
         output_commitment: None,
     };
     h.state.submit_job(&submission, 4_000).unwrap();
-    let assignments = h.state.fetch_assignments(&h.b.bond_outpoint, 4_001).unwrap();
+    // BRIDGE-SEL-01: with the chain supplied, B is DRAWN from the beacon rather than claiming
+    // the job by polling first. Two providers, A excluded as submitter ⇒ B is the only candidate.
+    let assignments = h.state.fetch_assignments(&h.b.bond_outpoint, Some(&h.chain), 4_001).unwrap();
     assert_eq!(assignments.len(), 1, "the submitter is never offered its own job");
 
     // B disagrees (different output entirely).
@@ -384,10 +373,8 @@ fn mismatch_is_arbitrated_by_a_drawn_auditor() {
     );
 
     // The auditor's reference run agrees with A ⇒ B is the slash target.
-    let evidence = h
-        .state
-        .adjudicate_dispute(&dispute.dispute_id_hex, &auditor, &output_root_hex(&a_output), &roots("aa11"), 4_005)
-        .unwrap();
+    let evidence =
+        h.state.adjudicate_dispute(&dispute.dispute_id_hex, &auditor, &output_root_hex(&a_output), &roots("aa11"), 4_005).unwrap();
     assert_eq!(evidence.verdict, "slash_b");
     assert_eq!(evidence.slash_targets, vec![h.b.bond_outpoint.clone()]);
     assert_eq!(evidence.auditor, auditor);
@@ -419,7 +406,7 @@ fn reference_run_agreeing_with_neither_side_slashes_both() {
         output_commitment: None,
     };
     h.state.submit_job(&submission, 5_000).unwrap();
-    h.state.fetch_assignments(&h.b.bond_outpoint, 5_001).unwrap();
+    h.state.fetch_assignments(&h.b.bond_outpoint, Some(&h.chain), 5_001).unwrap();
     h.state
         .submit_replica_result(
             &ReplicaResultV1 {
@@ -433,10 +420,8 @@ fn reference_run_agreeing_with_neither_side_slashes_both() {
         .unwrap();
     let dispute = h.state.open_dispute("job-1", &h.chain, 5_003).unwrap().unwrap();
     let auditor = dispute.auditor.clone().unwrap();
-    let evidence = h
-        .state
-        .adjudicate_dispute(&dispute.dispute_id_hex, &auditor, &output_root_hex(&[77]), &roots("aa11"), 5_004)
-        .unwrap();
+    let evidence =
+        h.state.adjudicate_dispute(&dispute.dispute_id_hex, &auditor, &output_root_hex(&[77]), &roots("aa11"), 5_004).unwrap();
     assert_eq!(evidence.verdict, "slash_both");
     assert_eq!(evidence.slash_targets.len(), 2);
 }
@@ -475,7 +460,7 @@ fn no_unconflicted_auditor_leaves_the_dispute_open() {
             6_000,
         )
         .unwrap();
-    state.fetch_assignments(&b.bond_outpoint, 6_001).unwrap();
+    state.fetch_assignments(&b.bond_outpoint, Some(&chain), 6_001).unwrap();
     state
         .submit_replica_result(
             &ReplicaResultV1 {
@@ -500,4 +485,148 @@ fn pinned_facts_are_reported_as_not_live() {
     let h = harness("label");
     assert!(!h.chain.is_live());
     assert!(h.chain.source_label().contains("NOT live"));
+}
+
+/// **BRIDGE-SEL-01 — the replica is DRAWN, not claimed.**
+///
+/// Previously `fetch_assignments` handed every unassigned job to the first non-submitter that
+/// polled. Whoever polled fastest took the work; with the route also unauthenticated
+/// (BRIDGE-AUTH-01) they could take it under another provider's name. These assertions pin the
+/// properties that replaced that: exactly one provider is offered the job, it is the one the
+/// beacon selects, polling harder changes nothing, and a lapse re-rolls to someone else.
+#[test]
+fn replica_assignment_is_drawn_from_the_beacon_not_claimed_by_polling() {
+    let mut h = harness("sel01");
+    let submission = JobSubmissionV1 {
+        job_id: "job-1".into(),
+        provider_id: h.a.bond_outpoint.clone(),
+        prompt_ids: vec![7, 8, 9],
+        max_new: 16,
+        output_root: output_root_hex(&[1, 2]),
+        receipt_json: None,
+        runtime_roots: Some(roots("aa11")),
+        job_challenge: None,
+        output_token_ids: Some(vec![1, 2]),
+        output_commitment: None,
+    };
+    h.state.submit_job(&submission, 4_000).unwrap();
+
+    // Exactly one of the two eligible providers is offered the job, and the submitter is offered
+    // nothing — the independence rule survives the change.
+    let to_b = h.state.fetch_assignments(&h.b.bond_outpoint, Some(&h.chain), 4_001).unwrap();
+    let to_auditor = h.state.fetch_assignments(&h.auditor.bond_outpoint, Some(&h.chain), 4_002).unwrap();
+    let to_a = h.state.fetch_assignments(&h.a.bond_outpoint, Some(&h.chain), 4_003).unwrap();
+    assert!(to_a.is_empty(), "the submitter is never drawn for its own job");
+    assert_eq!(
+        to_b.len() + to_auditor.len(),
+        1,
+        "exactly ONE provider is drawn — the other learns nothing, so it cannot claim the job"
+    );
+    let (winner, loser) = if to_b.len() == 1 { (&h.b, &h.auditor) } else { (&h.auditor, &h.b) };
+
+    // Polling harder does not win work: the loser stays empty no matter how often it asks.
+    for tick in 0..5 {
+        assert!(
+            h.state.fetch_assignments(&loser.bond_outpoint, Some(&h.chain), 4_010 + tick).unwrap().is_empty(),
+            "a provider that was not drawn cannot poll its way into the assignment"
+        );
+    }
+
+    // The draw is stable while the assignment stands — re-asking is not a second claim.
+    assert!(
+        h.state.fetch_assignments(&winner.bond_outpoint, Some(&h.chain), 4_020).unwrap().is_empty(),
+        "already assigned; the draw does not re-issue"
+    );
+
+    // A lapse re-rolls: the job returns to the pool under a new round, so a silent selectee
+    // cannot strand it forever.
+    let after_deadline = 4_001 + 120_000 + 1;
+    let redrawn_loser = h.state.fetch_assignments(&loser.bond_outpoint, Some(&h.chain), after_deadline).unwrap();
+    let redrawn_winner = h.state.fetch_assignments(&winner.bond_outpoint, Some(&h.chain), after_deadline + 1).unwrap();
+    assert_eq!(redrawn_loser.len() + redrawn_winner.len(), 1, "the lapsed job is drawn again, exactly once");
+}
+
+/// **BRIDGE-AUTH-01 — a request signature covers the WHOLE request, and works once.**
+///
+/// The old preimage was `(bond, path, body)`. The query was not in it, which mattered because the
+/// read routes carry identity IN the query (`?provider_id=`, `?auditor_bond=`,
+/// `?provider_bond=`) — and those routes did not authenticate at all, so identity was a string
+/// anyone could type. Method, nonce and expiry were absent too, so one captured signature was
+/// good for any verb on that path, forever.
+#[test]
+fn request_signatures_bind_the_whole_request_and_are_single_use() {
+    use misaka_palw_bridge::provider::{
+        BRIDGE_REQUEST_MLDSA87_CONTEXT, SignedRequest, body_digest, canonical_query, request_signing_hash,
+    };
+    let mut h = harness("auth01");
+    let digest = body_digest(b"{}");
+    // A plain fn, not a closure: the returned borrow must outlive the call, which closure
+    // inference cannot express here.
+    fn build<'a>(
+        digest: &'a kaspa_hashes::Hash64,
+        bond: &'a str,
+        method: &'a str,
+        query: &'a str,
+        nonce: &'a str,
+        expires: i64,
+    ) -> SignedRequest<'a> {
+        SignedRequest {
+            network_id: NETWORK_ID,
+            bond_outpoint: bond,
+            method,
+            path: "/palw/v1/assignments",
+            canonical_query: query,
+            body_digest: digest,
+            nonce,
+            expires_at_unix_ms: expires,
+        }
+    }
+
+    let sign = |party: &Party, request: &SignedRequest<'_>| -> String {
+        let sig = party.session.sign_with_context(request_signing_hash(request).as_byte_slice(), BRIDGE_REQUEST_MLDSA87_CONTEXT);
+        sig.iter().map(|b| format!("{b:02x}")).collect()
+    };
+
+    let now = 10_000i64;
+    let b_bond = h.b.bond_outpoint.clone();
+    let auditor_bond = h.auditor.bond_outpoint.clone();
+    let b_query = canonical_query(&format!("provider_id={b_bond}"));
+    let auditor_query = canonical_query(&format!("provider_id={auditor_bond}"));
+
+    // B's own, well-formed request is accepted.
+    let good = build(&digest, &b_bond, "GET", &b_query, "n-1", now + 30_000);
+    let good_sig = sign(&h.b, &good);
+    h.state.authenticate(&good, &good_sig, &h.chain, now).expect("B's own signed request authenticates");
+
+    // ...and is refused on a second presentation. Capturing it buys nothing.
+    let err = h.state.authenticate(&good, &good_sig, &h.chain, now + 1).unwrap_err();
+    assert!(err.contains("replay"), "{err}");
+
+    // The QUERY is signed, so B cannot re-point its own signature at another provider's work.
+    let requeried = build(&digest, &b_bond, "GET", &auditor_query, "n-2", now + 30_000);
+    let err = h.state.authenticate(&requeried, &good_sig, &h.chain, now).unwrap_err();
+    assert!(err.contains("does not verify"), "the QUERY must be inside the signature: {err}");
+
+    // The METHOD is signed, so a GET signature is not a POST signature.
+    let as_post = build(&digest, &b_bond, "POST", &b_query, "n-3", now + 30_000);
+    let err = h.state.authenticate(&as_post, &good_sig, &h.chain, now).unwrap_err();
+    assert!(err.contains("does not verify"), "the METHOD must be inside the signature: {err}");
+
+    // Claiming another provider's bond fails: the bond is in the preimage, so the signature would
+    // have to verify under THAT provider's session key — which only that provider holds.
+    let as_auditor = build(&digest, &auditor_bond, "GET", &auditor_query, "n-4", now + 30_000);
+    let b_forgery = sign(&h.b, &as_auditor);
+    assert!(h.state.authenticate(&as_auditor, &b_forgery, &h.chain, now).is_err(), "B cannot speak as the auditor");
+    let real = sign(&h.auditor, &as_auditor);
+    h.state.authenticate(&as_auditor, &real, &h.chain, now).expect("the real auditor can");
+
+    // Expiry is enforced in both directions: stale signatures die, and a caller cannot mint an
+    // effectively immortal one.
+    let stale = build(&digest, &b_bond, "GET", "", "n-5", now - 1);
+    let stale_sig = sign(&h.b, &stale);
+    assert!(h.state.authenticate(&stale, &stale_sig, &h.chain, now).unwrap_err().contains("expired"));
+
+    let immortal = build(&digest, &b_bond, "GET", "", "n-6", now + 86_400_000);
+    let immortal_sig = sign(&h.b, &immortal);
+    assert!(h.state.authenticate(&immortal, &immortal_sig, &h.chain, now).unwrap_err().contains("in the future"));
 }

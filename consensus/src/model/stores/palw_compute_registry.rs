@@ -39,7 +39,9 @@ pub trait PalwComputeRegistryStoreReader {
     fn descriptor(&self, compute_set_id: Hash64) -> Result<Option<Arc<PalwComputeSetDescriptorV2>>, StoreError>;
     fn policy(&self, policy_id: Hash64) -> Result<Option<Arc<PalwComputeSetPolicyV1>>, StoreError>;
     fn plan(&self, plan_id: Hash64) -> Result<Option<Arc<PalwModelAllocationPlanV1>>, StoreError>;
-    fn certificate(&self, compute_set_id: Hash64) -> Result<Option<Arc<PalwComputeSetActivationCertificateV1>>, StoreError>;
+    /// Keyed by the certificate's own `certificate_id`, NOT by the set it certifies — one set may
+    /// carry several independently quorum-verified certificates (§17.3 re-certification).
+    fn certificate(&self, certificate_id: Hash64) -> Result<Option<Arc<PalwComputeSetActivationCertificateV1>>, StoreError>;
     fn view(&self, block: BlockHash) -> Result<Option<Arc<PalwComputeRegistryViewV1>>, StoreError>;
 }
 
@@ -59,11 +61,7 @@ impl DbPalwComputeRegistryStore {
             descriptors: CachedDbAccess::new(Arc::clone(&db), record_cache, DatabaseStorePrefixes::PalwComputeSetDescriptor.into()),
             policies: CachedDbAccess::new(Arc::clone(&db), record_cache, DatabaseStorePrefixes::PalwComputeSetPolicy.into()),
             plans: CachedDbAccess::new(Arc::clone(&db), record_cache, DatabaseStorePrefixes::PalwAllocationPlan.into()),
-            certificates: CachedDbAccess::new(
-                Arc::clone(&db),
-                record_cache,
-                DatabaseStorePrefixes::PalwComputeSetCertificate.into(),
-            ),
+            certificates: CachedDbAccess::new(Arc::clone(&db), record_cache, DatabaseStorePrefixes::PalwComputeSetCertificate.into()),
             views: CachedDbAccess::new(Arc::clone(&db), view_cache, DatabaseStorePrefixes::PalwComputeRegistryView.into()),
             db,
         }
@@ -102,7 +100,10 @@ impl DbPalwComputeRegistryStore {
             if existing.as_ref() == policy {
                 return Ok(());
             }
-            return Err(ComputeSetRegistryError::PolicySequenceDiverged { set: policy.compute_set_id, sequence: policy.policy_sequence });
+            return Err(ComputeSetRegistryError::PolicySequenceDiverged {
+                set: policy.compute_set_id,
+                sequence: policy.policy_sequence,
+            });
         }
         self.policies.write(BatchDbWriter::new(batch), policy_id, Arc::new(policy.clone())).map_err(store_fault)
     }
@@ -123,22 +124,28 @@ impl DbPalwComputeRegistryStore {
         self.plans.write(BatchDbWriter::new(batch), plan_id, Arc::new(plan.clone())).map_err(store_fault)
     }
 
-    /// Write-once insert of an activation certificate, keyed by the set it certifies.
+    /// Write-once insert of an activation certificate under its DERIVED `certificate_id` (same
+    /// contract as descriptors/policies/plans — the key is the content hash).
+    ///
+    /// Keying this tier by `compute_set_id` was a fail-stop: §17.3 re-certification and competing
+    /// forks both produce byte-distinct, individually quorum-verified certificates for ONE set,
+    /// and the second one collided under the shared key. The commit path turns that `Err` into
+    /// `palw_overlay_commit_fail_stop`, so a legal protocol state halted the node. Under a content
+    /// key the certificates simply coexist, and `CertificateDiverged` recovers its intended
+    /// meaning: a divergent write under a content hash is local corruption, never a legal state.
     pub fn insert_certificate_batch(
         &self,
         batch: &mut WriteBatch,
         certificate: &PalwComputeSetActivationCertificateV1,
     ) -> Result<(), ComputeSetRegistryError> {
-        if let Some(existing) = self.certificate(certificate.compute_set_id).map_err(store_fault)? {
+        let certificate_id = certificate.certificate_id();
+        if let Some(existing) = self.certificate(certificate_id).map_err(store_fault)? {
             if existing.as_ref() == certificate {
                 return Ok(());
             }
-            // Two DIFFERENT quorum certificates for one set: re-certification is representable
-            // by design (§17.3), later certificates supersede — but through the view fold, not a
-            // silent overwrite here. Surface it.
-            return Err(ComputeSetRegistryError::CertificateDiverged(certificate.compute_set_id));
+            return Err(ComputeSetRegistryError::CertificateDiverged(certificate_id));
         }
-        self.certificates.write(BatchDbWriter::new(batch), certificate.compute_set_id, Arc::new(certificate.clone())).map_err(store_fault)
+        self.certificates.write(BatchDbWriter::new(batch), certificate_id, Arc::new(certificate.clone())).map_err(store_fault)
     }
 
     /// Write `block`'s carried registry view (atomic with the block commit).
@@ -212,8 +219,8 @@ impl PalwComputeRegistryStoreReader for DbPalwComputeRegistryStore {
         self.plans.read(plan_id).optional()
     }
 
-    fn certificate(&self, compute_set_id: Hash64) -> Result<Option<Arc<PalwComputeSetActivationCertificateV1>>, StoreError> {
-        self.certificates.read(compute_set_id).optional()
+    fn certificate(&self, certificate_id: Hash64) -> Result<Option<Arc<PalwComputeSetActivationCertificateV1>>, StoreError> {
+        self.certificates.read(certificate_id).optional()
     }
 
     fn view(&self, block: BlockHash) -> Result<Option<Arc<PalwComputeRegistryViewV1>>, StoreError> {
@@ -237,7 +244,7 @@ mod tests {
     fn descriptor() -> PalwComputeSetDescriptorV2 {
         PalwComputeSetDescriptorV2 {
             version: PALW_COMPUTE_SET_DESCRIPTOR_VERSION,
-            compute_vm_id: h(1),
+            compute_vm_id: kaspa_consensus_core::palw_compute_ir::compute_vm_id_v1(),
             model_family_id: h(2),
             model_artifact_root: h(3),
             model_manifest_root: h(4),

@@ -323,6 +323,66 @@ impl BlockBodyProcessor {
             return Err(reject("clause 10: buried beacon-seed carry run exceeds grace (lane halted, lagged)".to_string()));
         }
 
+        // Clause 13 (ADR-0045 D3-b) — the MINT-TIME PCPB presence/equality re-check, fail-closed.
+        //
+        // Clauses 11/12 already ran, in full, at the leaf's ACCEPTANCE (the leaf-chunk arm re-derives
+        // the challenge and re-runs the dispatch evidence before `insert_leaf`). This clause does not
+        // repeat that work — the heavy witnesses live only on the wire and are never persisted — it
+        // re-asserts the two facts a mint depends on:
+        //
+        //   * the leaf's committed snapshot/assignment roots still EQUAL the on-chain commitment of
+        //     its anchor epoch, and
+        //   * the self arm's A-commit anchor is still registered at-or-before its declared epoch.
+        //
+        // Why that is sufficient rather than a weaker second gate: `anchor − k`, `anchor + Δ` and the
+        // anchor's own registration all sit DEEPER than the chunk's acceptance. A reorg that changes
+        // any of them necessarily unwinds the chunk acceptance too, and the new chain re-runs clauses
+        // 11/12 in the new context. A reorg that does not unwind acceptance cannot move these values.
+        // The equality here is the defence line for that argument, plus the bounded-window rule: a
+        // ticket whose anchor epoch has aged out of the retained window stops minting (fail-closed)
+        // rather than resolving against a substituted live value.
+        {
+            let leaf = &resolved.pcpb;
+            let anchor = if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {
+                leaf.a_commit_epoch
+            } else {
+                leaf.issued_epoch
+            };
+            let snapshot_epoch = anchor
+                .checked_sub(self.palw_snapshot_lag_epochs)
+                .ok_or_else(|| reject("clause 13: leaf anchor epoch predates the snapshot lag".to_string()))?;
+            let commitment = self
+                .palw_pcpb_store
+                .snapshot_at(snapshot_epoch)
+                .map_err(|e| reject(format!("clause 13: provider snapshot read failed: {e:?}")))?
+                .ok_or_else(|| {
+                    reject(format!("clause 13: no retained provider snapshot for epoch {snapshot_epoch} (fail-closed)"))
+                })?;
+            if commitment.snapshot_root != leaf.provider_snapshot_root || commitment.assignment_root != leaf.assignment_proof_root {
+                return Err(reject("clause 13: leaf-committed PCPB roots disagree with the on-chain snapshot".to_string()));
+            }
+            let draw_epoch = anchor
+                .checked_add(self.palw_post_commit_delta_epochs)
+                .ok_or_else(|| reject("clause 13: leaf anchor epoch + Δ overflows".to_string()))?;
+            if self
+                .palw_beacon_store_for_pcpb
+                .beacon_seed_at(draw_epoch)
+                .map_err(|e| reject(format!("clause 13: beacon seed read failed: {e:?}")))?
+                .is_none()
+            {
+                return Err(reject(format!("clause 13: no retained post-commit beacon seed for epoch {draw_epoch} (fail-closed)")));
+            }
+            if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {
+                let registered = self
+                    .palw_pcpb_store
+                    .acommit_epoch(&leaf.a_commit)
+                    .map_err(|e| reject(format!("clause 13: A-commit registry read failed: {e:?}")))?;
+                if !registered.is_some_and(|row| row <= leaf.a_commit_epoch) {
+                    return Err(reject("clause 13: the leaf's A-commit anchor is not registered at-or-before its epoch".to_string()));
+                }
+            }
+        }
+
         // ADR-0040 **P1-6 (AUTH-01/02/03)** — per-block ticket authorization.
         //
         // Without this, a winning algo-4 header discloses its raw `ticket_nullifier` and any OBSERVER

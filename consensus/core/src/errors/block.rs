@@ -79,6 +79,16 @@ pub enum RuleError {
     #[error("registry-active PALW header {0} compute-set resolution failed: {1}")]
     PalwComputeSetResolution(BlockHash, String),
 
+    // ADR-MA §23.4 — the FORK-LOCAL half of the rule above. Header-stage resolution reads the
+    // fork-INDEPENDENT record stores, so it can only ask "do these revisions exist and were they
+    // once effective". That admits a superseded policy/plan, a revision registered only on a
+    // losing branch, and an emergency halt (which lives solely in the fork-local view). This
+    // variant is the VIRTUAL-stage check against the selected parent's registry view, at the
+    // `PalwLaneHalted` coordinate and with the same teeth: chain-candidacy suppression via
+    // StatusDisqualifiedFromChain, the block staying in the DAG. Inert while the fence is closed.
+    #[error("registry-active PALW block {0} committed non-governing compute-set references: {1}")]
+    PalwComputeSetGoverningMismatch(BlockHash, String),
+
     /// ADR-0039 §5.3/§15.5: all three Header-v3 work commitments are consensus-derived. The legacy
     /// effective `blue_work` has its own error below; this variant reports a mismatch in either
     /// separated component so a miner cannot choose a different H/C decomposition of the same E.

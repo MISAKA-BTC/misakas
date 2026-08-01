@@ -83,13 +83,13 @@ struct Cli {
     #[arg(long, global = true, value_enum, default_value = "human")]
     output: OutputFormat,
 
-    /// Network id (e.g. testnet-20). Sets default RPC ports + the node-network match check.
-    /// Resolution: CLI > env MISAKA_NETWORK > ~/.misaka/config.toml > testnet-20.
+    /// Network id (e.g. testnet-21). Sets default RPC ports + the node-network match check.
+    /// Resolution: CLI > env MISAKA_NETWORK > ~/.misaka/config.toml > testnet-21.
     #[arg(long, global = true, visible_alias = "network-id", env = "MISAKA_NETWORK")]
     network: Option<String>,
 
     /// Node wRPC Borsh endpoint host:port (validator/wallet/operator transport).
-    /// Default derives from --network (testnet-20 => 127.0.0.1:27210). NOTE: this is
+    /// Default derives from --network (testnet-21 => 127.0.0.1:27210). NOTE: this is
     /// the CODE default; some deployments bind borsh on a non-standard port (e.g.
     /// 27610) — pass it here. This is NOT node gRPC (26210) nor EVM JSON-RPC (8545).
     #[arg(long, global = true, visible_alias = "node-wrpc-borsh", env = "MISAKA_RPC")]
@@ -839,10 +839,11 @@ async fn main() -> std::process::ExitCode {
     };
     let ctx = node::Ctx {
         output: cli.output,
-        // The public network. testnet-200 was superseded at the 2026-07-30 re-genesis; a stale
+        // The public network. testnet-20 was superseded at the 2026-08-01 D3-b re-genesis
+        // (leaf format moved — its history cannot replay), as testnet-200 was on 2026-07-30; a stale
         // default here strands every no-flag invocation on a deprecated net (the network-match
         // check then refuses the node, which is the fail-closed half of this default).
-        network: cli.network.clone().or(cfg.network_id.clone()).unwrap_or_else(|| "testnet-20".to_string()),
+        network: cli.network.clone().or(cfg.network_id.clone()).unwrap_or_else(|| "testnet-21".to_string()),
         rpc: cli.rpc.clone().or_else(|| cfg.node.wrpc_borsh.clone()),
         node_grpc: cli.node_grpc.clone().or_else(|| cfg.node.grpc.clone()),
         evm_rpc: cli.evm_rpc.clone().or_else(|| cfg.evm.rpc_url.clone()).unwrap_or_else(|| "http://127.0.0.1:8545".to_string()),

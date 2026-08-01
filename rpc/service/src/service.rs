@@ -1149,9 +1149,28 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             })
             .transpose()?;
         let provider_bond = request.provider_bond_outpoint.as_deref().map(parse_bond_outpoint).transpose()?;
+        // ADR-0045 D3-b: the PCPB production selector. The A-commit is only meaningful alongside an
+        // anchor epoch (it is resolved at the same point of view), so it is parsed with it.
+        let pcpb_a_commit = request
+            .pcpb_a_commit
+            .as_deref()
+            .map(|value| {
+                value
+                    .parse::<kaspa_hashes::Hash64>()
+                    .map_err(|_| RpcError::General(format!("a_commit '{value}' is not a valid 64-byte Hash64")))
+            })
+            .transpose()?;
+        if pcpb_a_commit.is_some() && request.pcpb_anchor_epoch.is_none() {
+            return Err(RpcError::General(
+                "pcpbACommit requires pcpbAnchorEpoch: an A-commit's registration epoch is only useful \
+                 against the anchor epoch the leaf will declare"
+                    .to_string(),
+            ));
+        }
+        let pcpb = request.pcpb_anchor_epoch.map(|epoch| (epoch, pcpb_a_commit));
         let session = self.consensus_manager.consensus().unguarded_session();
         let probe = session
-            .async_palw_state_probe(batch_id, provider_bond)
+            .async_palw_state_probe(batch_id, provider_bond, pcpb)
             .await
             .map_err(|error| RpcError::General(format!("PALW state probe failed: {error}")))?;
 
@@ -1269,6 +1288,35 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             },
             derived_degraded_epochs: activation.derived_degraded_epochs,
         });
+        // ADR-0045 D3-b — project the PCPB production context. Absent values stay ABSENT ("" / empty
+        // / None) rather than becoming zeros: a producer must be able to tell "this node cannot
+        // resolve that epoch" from "that epoch has an all-zero root", because only the first is a
+        // reason to wait or ask another node.
+        let hex64 = |h: &kaspa_hashes::Hash64| h.to_string();
+        let pcpb = probe.pcpb.map(|ctx| kaspa_rpc_core::RpcPalwPcpbContext {
+            anchor_epoch: ctx.anchor_epoch,
+            snapshot_epoch: ctx.snapshot_epoch,
+            draw_epoch: ctx.draw_epoch,
+            snapshot_root: ctx.snapshot.as_ref().map(|c| hex64(&c.snapshot_root)).unwrap_or_default(),
+            assignment_root: ctx.snapshot.as_ref().map(|c| hex64(&c.assignment_root)).unwrap_or_default(),
+            // `u128` has no RPC scalar; the total bond is carried as a decimal string, which round
+            // trips exactly and does not silently truncate on a 64-bit boundary.
+            total_bond: ctx.snapshot.as_ref().map(|c| c.total_bond.to_string()).unwrap_or_default(),
+            provider_count: ctx.snapshot.as_ref().map(|c| c.provider_count).unwrap_or_default(),
+            entries: ctx
+                .snapshot_entries
+                .iter()
+                .map(|e| kaspa_rpc_core::RpcPalwSnapshotEntry {
+                    provider_id: hex64(&e.provider_id),
+                    ml_dsa_pk_hash: hex64(&e.ml_dsa_pk_hash),
+                    bond_sompi: e.bond_sompi,
+                    reward_script_commitment: hex64(&e.reward_script_commitment),
+                })
+                .collect(),
+            anchor_seed: ctx.anchor_seed.as_ref().map(hex64).unwrap_or_default(),
+            draw_seed: ctx.draw_seed.as_ref().map(hex64).unwrap_or_default(),
+            acommit_epoch: ctx.acommit_epoch,
+        });
         Ok(GetPalwStateResponse {
             enabled: probe.enabled,
             sink: probe.sink.to_string(),
@@ -1280,6 +1328,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             activation,
             search_challenges,
             da_obligations,
+            pcpb,
         })
     }
 

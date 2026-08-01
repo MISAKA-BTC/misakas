@@ -30,6 +30,7 @@ pub mod challenge;
 pub mod da;
 pub mod http;
 pub mod match_key;
+pub mod pcpb;
 pub mod provider;
 pub mod state;
 pub mod wire;

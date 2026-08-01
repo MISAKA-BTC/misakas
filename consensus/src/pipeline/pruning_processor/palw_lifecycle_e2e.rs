@@ -656,6 +656,11 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
             activation_epoch: ACTIVATION_EPOCH,
             expiry_epoch: EXPIRY_EPOCH,
             leaf_bond_sompi: 0,
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: Hash64::from_bytes([0x7c; 64]),
+            assignment_proof_root: Hash64::from_bytes([0x7d; 64]),
+            dispatch_kind: 0, // BeaconAssigned (external sentinels)
         }
     };
     let projected: Vec<PalwPublicLeafV1> = vec![
@@ -693,7 +698,14 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
         })
         .collect();
     let proofs = (0..3).map(|i| palw_leaf_merkle_proof(&projected_hashes, i).expect("membership proof")).collect::<Vec<_>>();
-    let chunk = PalwLeafChunkV1 { version: PALW_LEAF_CHUNK_VERSION_V2, batch_id, chunk_index: 0, leaves: leaves.clone(), proofs };
+    let chunk = PalwLeafChunkV1 {
+        version: PALW_LEAF_CHUNK_VERSION_V2,
+        batch_id,
+        chunk_index: 0,
+        leaves: leaves.clone(),
+        proofs,
+        witnesses: Vec::new(), // D3-b arity: filled properly when this harness drives the v3 acceptance arm
+    };
 
     // Manifest (epoch 0: registration_epoch is pinned to the ACCEPT epoch) then the chunk.
     assert!(chain.tip_daa + 2 < EPOCH_LEN, "manifest must be accepted inside epoch 0");
@@ -892,6 +904,48 @@ async fn palw_full_lifecycle_prune_then_replay_e2e() {
         audit_epoch,
     )
     .expect("the audit-epoch seed R_0 must resolve on this chain");
+
+    // ADR-0045 D3-a invariants 1 + 2, on a REAL driven chain rather than a hand-built fixture.
+    //
+    // (1) c==v: the history row for an epoch equals what the header walk resolves for it. The row
+    //     is written from the same derivation that stamps `header.palw_beacon_seed`, so a
+    //     disagreement here would mean PCPB and the audit path see two different `R_e`.
+    // (2) carry: every closed epoch has a row, including epochs closed under DegradedGrace where
+    //     `R_E` is carried from `R_{E-1}` rather than freshly derived — and the carried value is
+    //     non-zero once a single Healthy round has happened, so a row is never a silent zero.
+    let seed_store = &chain.tc.storage.palw_beacon_store;
+    assert_eq!(
+        seed_store.beacon_seed_at(audit_epoch.saturating_sub(1)).unwrap(),
+        Some(prev_seed),
+        "the retained history row must equal the seed the header walk resolves (c==v)"
+    );
+    let history = seed_store.beacon_seed_history().unwrap();
+    let tip_epoch = chain.tip_daa / EPOCH_LEN;
+    for epoch in 1..=tip_epoch {
+        let row = history.iter().find(|(e, _)| *e == epoch);
+        assert!(row.is_some(), "epoch {epoch} was closed by this chain, so it must carry a history row");
+    }
+    // Epochs before the first Healthy round legitimately carry `R_E = 0` — nothing has revealed
+    // yet. The invariant is that a carry never LOSES a seed: once a non-zero `R_E` exists, no
+    // later epoch reverts to zero, so a DegradedGrace epoch keeps the previous value rather than
+    // blanking it.
+    let first_nonzero = history.iter().position(|(_, seed)| *seed != kaspa_hashes::Hash64::default());
+    if let Some(start) = first_nonzero {
+        assert!(
+            history[start..].iter().all(|(_, seed)| *seed != kaspa_hashes::Hash64::default()),
+            "a carried epoch keeps the previous non-zero seed; reverting to zero would be a lost derivation"
+        );
+    }
+    // Bounded: nothing outside the parameter-derived window survives. D3-b widened this window by
+    // the freshness lookback `w` (clause 11 re-derives challenges under `R_{issued}`, up to `w`
+    // epochs behind registration), so the bound asserted here is the PCPB-serving one.
+    let window = kaspa_consensus_core::palw::palw_beacon_seed_history_window_epochs(
+        &chain.tc.params().palw_batch_admission,
+        EPOCH_LEN,
+        chain.tc.params().palw_freshness_window_epochs,
+    );
+    let floor = kaspa_consensus_core::palw::palw_beacon_seed_history_floor(tip_epoch, window);
+    assert!(history.iter().all(|(epoch, _)| *epoch >= floor), "the seed history is bounded by parameters, not by chain length");
     let bond_view = {
         let bonds = chain.tc.storage.palw_provider_bonds_store.read();
         ProviderBondView::from_records(bond_outpoints.iter().map(|op| (*op, (*bonds.get(op).expect("bond record")).clone())))

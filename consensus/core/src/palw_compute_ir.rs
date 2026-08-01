@@ -137,9 +137,8 @@ impl BorshDeserialize for PalwComputeIrOpcode {
 /// This string IS the `compute_vm_id` preimage — pinned verbatim by tests, because changing one
 /// byte here forks which programs a node accepts.
 pub fn compute_vm_v1_surface() -> String {
-    let mut surface = format!(
-        "palw-compute-vm/v1\narithmetic={PALW_COMPUTE_VM_V1_ARITHMETIC_TAG}\nencoding={PALW_COMPUTE_VM_V1_ENCODING_TAG}\n"
-    );
+    let mut surface =
+        format!("palw-compute-vm/v1\narithmetic={PALW_COMPUTE_VM_V1_ARITHMETIC_TAG}\nencoding={PALW_COMPUTE_VM_V1_ENCODING_TAG}\n");
     for op in PalwComputeIrOpcode::ALL {
         let (min, max) = op.input_arity();
         surface.push_str(&format!("op {} {} {} {}\n", op.as_u16(), op.name(), min, max));
@@ -210,12 +209,25 @@ impl Default for PalwComputeIrLimitsV1 {
     }
 }
 
+/// §22.3/§10 — the Compute VM surfaces this consensus rule set can execute.
+///
+/// This is a CONSENSUS constant, not "what this binary happens to implement": every node must
+/// agree on which descriptors are admissible, or one node accepts a registration another rejects.
+/// It is append-only, and appending is exactly the hardfork boundary the model-extensibility rule
+/// draws — a model expressible in an existing VM needs no node change, a model needing new
+/// opcodes or new arithmetic semantics needs a new VM id here, i.e. a coordinated upgrade.
+pub fn supported_compute_vm_ids() -> [Hash64; 1] {
+    [compute_vm_id_v1()]
+}
+
+/// True when `compute_vm_id` names a VM surface this rule set can execute.
+pub fn is_supported_compute_vm(compute_vm_id: Hash64) -> bool {
+    supported_compute_vm_ids().contains(&compute_vm_id)
+}
+
 /// Static whole-program validation (§15.2). Everything here is O(program size); nothing
 /// interprets, allocates tensors, or touches model data.
-pub fn validate_compute_ir_program(
-    program: &PalwComputeIrProgramV1,
-    limits: &PalwComputeIrLimitsV1,
-) -> Result<(), ComputeIrError> {
+pub fn validate_compute_ir_program(program: &PalwComputeIrProgramV1, limits: &PalwComputeIrLimitsV1) -> Result<(), ComputeIrError> {
     if program.version != PALW_COMPUTE_IR_PROGRAM_VERSION {
         return Err(ComputeIrError::UnsupportedProgramVersion(program.version));
     }

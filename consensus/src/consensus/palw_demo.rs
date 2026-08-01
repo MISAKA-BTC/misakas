@@ -63,6 +63,16 @@ fn palw_demo_batch_id() -> Hash64 {
 /// The demo batch holds exactly one leaf, at index 0. Both facts are load-bearing for
 /// [`seeded_single_leaf_root`]: a one-leaf tree has depth 0, and the Merkle leaf node binds the index.
 const PALW_DEMO_LEAF_INDEX: u32 = 0;
+/// ADR-0045 D3-b — the reference mint's PCPB anchor epoch and committed roots. The anchor clears the
+/// snapshot lag `k` so `anchor − k` is a real epoch (design memo §10.2); the roots are what
+/// `seed_palw_demo_pcpb_context` commits there, so the mint-time clause 13 has a true equality to
+/// check. This mint seeds the blob store directly and never reaches the acceptance arm, so clauses
+/// 11/12 do not run on its leaf — but clause 13 does, and WITHOUT these rows the demo would simply
+/// stop minting with `NotReady`, i.e. the quietest possible producer breakage (the failure mode
+/// ADR-0040 §5.15.9's producer-inventory note calls out for exactly this file).
+const PALW_DEMO_LEAF_ANCHOR_EPOCH: u64 = 4;
+const PALW_DEMO_SNAPSHOT_ROOT: Hash64 = Hash64::from_bytes([0x7c; 64]);
+const PALW_DEMO_ASSIGNMENT_ROOT: Hash64 = Hash64::from_bytes([0x7d; 64]);
 const PALW_DEMO_PROOF_TYPE: u8 = 1;
 
 /// The demo's mock leaf, for a given ticket-nullifier commitment.
@@ -96,18 +106,26 @@ fn palw_demo_leaf(ticket_commit: Hash64) -> PalwPublicLeafV1 {
             libcrux_ml_dsa::ml_dsa_87::generate_key_pair(PALW_DEMO_AUTHORITY_SEED).verification_key.as_ref(),
         ),
         private_match_commitment: Hash64::default(),
-        receipt_da_object_version: 1,
+        // ADR-0045 D3-b: receipt DA Object V2. Object V1 requires the receipt-v3 fields to be zero
+        // sentinels, and clause 11 re-derives one of them — so a V1 leaf is no longer a leaf any
+        // honest path can produce (design memo §10.1).
+        receipt_da_object_version: kaspa_consensus_core::palw::da::PALW_RECEIPT_DA_OBJECT_VERSION_V2,
         receipt_da_root: Hash64::from_bytes([0xda; 64]),
         receipt_da_object_len: 1,
         receipt_da_chunk_count: 1,
-        receipt_v3_compute_set_id: Hash64::default(),
-        receipt_v3_job_challenge: Hash64::default(),
-        receipt_v3_issued_epoch: 0,
-        receipt_v3_expires_epoch: 0,
+        receipt_v3_compute_set_id: Hash64::from_bytes([0xc5; 64]),
+        receipt_v3_job_challenge: Hash64::from_bytes([9; 64]),
+        receipt_v3_issued_epoch: PALW_DEMO_LEAF_ANCHOR_EPOCH,
+        receipt_v3_expires_epoch: 1000,
         registered_epoch: 0,
         activation_epoch: 0,
         expiry_epoch: 1000,
         leaf_bond_sompi: 0,
+        a_commit: Hash64::default(),
+        a_commit_epoch: 0,
+        provider_snapshot_root: PALW_DEMO_SNAPSHOT_ROOT,
+        assignment_proof_root: PALW_DEMO_ASSIGNMENT_ROOT,
+        dispatch_kind: kaspa_consensus_core::palw::PALW_DISPATCH_KIND_BEACON_ASSIGNED,
     }
 }
 
@@ -234,6 +252,33 @@ impl Consensus {
         // and the seeded lifecycle view), and those two must agree.
         let demo_leaf_root = seeded_single_leaf_root(&leaf);
         self.storage.palw_store.insert_leaf(batch_id, leaf_index, Arc::new(leaf)).map_err(|e| format!("insert_leaf: {e:?}"))?;
+        // ADR-0045 D3-b: seed the clause-13 context in the same breath as the leaf. Nothing else
+        // writes these rows for a leaf that never rode a chunk transaction, and a missing row is a
+        // silent `NotReady`, not a loud error.
+        {
+            let mut batch = rocksdb::WriteBatch::default();
+            self.storage
+                .palw_pcpb_store
+                .set_snapshot_batch(
+                    &mut batch,
+                    PALW_DEMO_LEAF_ANCHOR_EPOCH - self.config.params.palw_snapshot_lag_epochs,
+                    kaspa_consensus_core::palw::PalwSnapshotCommitment {
+                        snapshot_root: PALW_DEMO_SNAPSHOT_ROOT,
+                        assignment_root: PALW_DEMO_ASSIGNMENT_ROOT,
+                        total_bond: 1_000,
+                        provider_count: 2,
+                    },
+                )
+                .map_err(|e| format!("demo snapshot seed: {e:?}"))?;
+            let draw_epoch = PALW_DEMO_LEAF_ANCHOR_EPOCH + self.config.params.palw_post_commit_delta_epochs;
+            if self.storage.palw_beacon_store.beacon_seed_at(draw_epoch).map_err(|e| format!("demo seed read: {e:?}"))?.is_none() {
+                self.storage
+                    .palw_beacon_store
+                    .set_beacon_seed_batch(&mut batch, draw_epoch, Hash64::from_bytes([0x7e; 64]))
+                    .map_err(|e| format!("demo beacon seed: {e:?}"))?;
+            }
+            self.db.write(batch).map_err(|e| format!("demo pcpb seed write: {e:?}"))?;
+        }
         let cert = PalwBatchCertificateV2 {
             version: PALW_BATCH_CERTIFICATE_VERSION_V2,
             batch_id,

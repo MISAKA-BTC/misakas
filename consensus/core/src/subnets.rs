@@ -132,6 +132,20 @@ impl SubnetworkId {
     pub fn palw_compute_registry_tx_kind(&self) -> Option<u8> {
         if self.is_palw_compute_registry() { Some(self.0[0]) } else { None }
     }
+
+    /// True for the PCPB band (`0x45`, ADR-0045 D3-b): today the single `PalwACommitV1` ordering
+    /// anchor. A SEPARATE recognizer for the same reason the Compute Set registry got one — the
+    /// 0x30-0x3f nibble is fully allocated and its dispatch semantics stay untouched.
+    #[inline]
+    pub fn is_palw_pcpb(&self) -> bool {
+        self.0[0] == 0x45 && self.0[1..].iter().all(|&b| b == 0)
+    }
+
+    /// Returns the PCPB transaction byte (`0x45`) if this is a PCPB-band subnetwork, else `None`.
+    #[inline]
+    pub fn palw_pcpb_tx_kind(&self) -> Option<u8> {
+        if self.is_palw_pcpb() { Some(self.0[0]) } else { None }
+    }
 }
 
 #[derive(Error, Debug, Clone)]
@@ -313,6 +327,20 @@ pub const SUBNETWORK_ID_PALW_MODEL_ALLOCATION_PLAN: SubnetworkId = SubnetworkId:
 /// `PalwComputeSetEmergencyHaltV1` — immediate stop of new tickets/blocks for one set (§18.6).
 pub const SUBNETWORK_ID_PALW_COMPUTE_SET_EMERGENCY_HALT: SubnetworkId = SubnetworkId::from_byte(0x44);
 
+// ============================================================================================
+// PCPB band (0x45) — ADR-0045 D3-b / ADR-0040 §5.14.7, docs/palw-pcpb-leaf-v2-wiring-design.md.
+//
+// The PALW overlay nibble (0x30-0x3f) is fully allocated (0x39 stays reserved for cross-fork
+// slashing evidence), so PCPB follows the Compute Set registry precedent: a new band above it
+// with its own recognizer. Like every overlay band, recognition is a pure wire property; the
+// kind shares the PALW overlay activation fence (`check_palw_overlay_activation`).
+// ============================================================================================
+
+/// `PalwACommitV1` — the self-serial PCPB ordering anchor: registers `a_commit` on-chain so the
+/// post-commit beacon `R_{a_commit_epoch + Δ}` provably post-dates it (the anti-grind ordering of
+/// design §4.1). Unsigned and content-keyed: WHO registered is meaningless, WHEN is everything.
+pub const SUBNETWORK_ID_PALW_ACOMMIT: SubnetworkId = SubnetworkId::from_byte(0x45);
+
 #[cfg(test)]
 mod palw_subnet_tests {
     use super::*;
@@ -403,6 +431,32 @@ mod palw_subnet_tests {
         // And the PALW overlay band never answers to the registry recognizer.
         for id in PALW_BAND {
             assert!(!id.is_palw_compute_registry());
+        }
+    }
+
+    #[test]
+    fn pcpb_band_is_0x45_and_disjoint() {
+        let id = SUBNETWORK_ID_PALW_ACOMMIT;
+        assert!(id.is_palw_pcpb());
+        assert_eq!(id.palw_pcpb_tx_kind(), Some(0x45));
+        // Never aliases the overlay nibble, the registry band, or any other overlay.
+        assert!(!id.is_palw_overlay());
+        assert_eq!(id.palw_tx_kind(), None);
+        assert!(!id.is_palw_compute_registry());
+        assert!(!id.is_builtin_or_native());
+        assert!(!id.is_dns_overlay());
+        assert!(!id.is_evm_overlay());
+        // Edges and non-canonical forms stay out of band.
+        for other in [SubnetworkId::from_byte(0x44), SubnetworkId::from_byte(0x46)] {
+            assert_eq!(other.palw_pcpb_tx_kind(), None);
+        }
+        let mut noncanonical = [0u8; SUBNETWORK_ID_SIZE];
+        noncanonical[0] = 0x45;
+        noncanonical[1] = 0x01;
+        assert!(!SubnetworkId::from_bytes(noncanonical).is_palw_pcpb());
+        // Neither established band answers to the PCPB recognizer.
+        for other in PALW_BAND.iter().chain(COMPUTE_REGISTRY_BAND.iter()) {
+            assert!(!other.is_palw_pcpb());
         }
     }
 }

@@ -31,8 +31,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-use kaspa_consensus_core::palw::{PalwProviderBondRecord, PalwProviderBondStatus, effective_provider_bond_status};
 use kaspa_consensus_core::palw::da::PalwBuriedBeaconV1;
+use kaspa_consensus_core::palw::{PalwProviderBondRecord, PalwProviderBondStatus, effective_provider_bond_status};
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
 use serde::{Deserialize, Serialize};
@@ -143,6 +143,12 @@ pub trait ChainFacts: Send + Sync {
     fn beacon(&self) -> Result<BeaconFacts, String>;
     /// The chain's view of one bond, by `txid:index`.
     fn bond_record(&self, bond_outpoint: &str) -> Result<BondFacts, String>;
+    /// ADR-0045 D3-b (Seam 5) — the VALIDATED PCPB production context for one anchor epoch, plus
+    /// (when `a_commit` is named) that anchor's registration epoch. `Ok((None, _))` is a real
+    /// answer: outside the retained window, or the draw beacon has not closed — the self-serial
+    /// flow turns it into a wait, never into evidence built on substituted values.
+    fn pcpb_context(&self, anchor_epoch: u64, a_commit: Option<Hash64>)
+    -> Result<(Option<crate::pcpb::PcpbContext>, Option<u64>), String>;
     /// Human label for `/palw/v1/status` — operators must be able to see whether verdicts are
     /// backed by a live node or by pinned numbers.
     fn source_label(&self) -> String;
@@ -168,6 +174,66 @@ pub struct PinnedFactsFile {
     pub beacon: BeaconFacts,
     #[serde(default)]
     pub bonds: BTreeMap<String, BondFacts>,
+    /// ADR-0045 D3-b — pinned PCPB production contexts, keyed by anchor epoch. Like the beacon,
+    /// these are frozen numbers: reproducible, not fresh.
+    #[serde(default)]
+    pub pcpb_anchors: BTreeMap<u64, PinnedPcpbAnchor>,
+    /// Pinned A-commit registry rows (`a_commit hex → accept epoch`).
+    #[serde(default)]
+    pub pcpb_acommits: BTreeMap<String, u64>,
+}
+
+/// A pinned PCPB context. The commitment is REBUILT from `entries` through the same consensus
+/// canonicalization the live path validates against, so a pinned file cannot describe an
+/// entry-set/commitment pair that could never exist on a chain.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PinnedPcpbAnchor {
+    pub snapshot_epoch: u64,
+    pub draw_epoch: u64,
+    pub entries: Vec<PinnedPcpbEntry>,
+    pub anchor_seed_hex: String,
+    /// `None` models "the draw beacon has not closed yet" — the state a self-serial flow waits in.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub draw_seed_hex: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PinnedPcpbEntry {
+    pub provider_id_hex: String,
+    pub ml_dsa_pk_hash_hex: String,
+    pub bond_sompi: u64,
+    pub reward_script_commitment_hex: String,
+}
+
+impl PinnedPcpbAnchor {
+    fn to_context(&self, anchor_epoch: u64) -> Result<Option<crate::pcpb::PcpbContext>, String> {
+        let Some(draw_seed_hex) = &self.draw_seed_hex else { return Ok(None) };
+        let entries = self
+            .entries
+            .iter()
+            .map(|e| {
+                Ok(kaspa_consensus_core::palw::PalwProviderSnapshotEntry {
+                    provider_id: parse_hash64(&e.provider_id_hex).map_err(|err| format!("provider_id: {err}"))?,
+                    ml_dsa_pk_hash: parse_hash64(&e.ml_dsa_pk_hash_hex).map_err(|err| format!("ml_dsa_pk_hash: {err}"))?,
+                    bond_sompi: e.bond_sompi,
+                    reward_script_commitment: parse_hash64(&e.reward_script_commitment_hex)
+                        .map_err(|err| format!("reward_script_commitment: {err}"))?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let commitment = kaspa_consensus_core::palw::palw_build_snapshot_witnesses(&entries).commitment;
+        crate::pcpb::PcpbContext::new(
+            anchor_epoch,
+            self.snapshot_epoch,
+            self.draw_epoch,
+            commitment,
+            &entries,
+            parse_hash64(&self.anchor_seed_hex).map_err(|e| format!("anchor_seed: {e}"))?,
+            parse_hash64(draw_seed_hex).map_err(|e| format!("draw_seed: {e}"))?,
+        )
+        .map(Some)
+        .map_err(|e| e.to_string())
+    }
 }
 
 /// Facts from a JSON file. Explicitly NOT live — see module docs.
@@ -179,13 +245,16 @@ pub struct PinnedChainFacts {
 impl PinnedChainFacts {
     pub fn load(path: &Path) -> Result<Self, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        let facts: PinnedFactsFile =
-            serde_json::from_slice(&bytes).map_err(|e| format!("parse {}: {e}", path.display()))?;
+        let facts: PinnedFactsFile = serde_json::from_slice(&bytes).map_err(|e| format!("parse {}: {e}", path.display()))?;
         Ok(Self { path: path.display().to_string(), facts })
     }
 
     pub fn from_parts(beacon: BeaconFacts, bonds: BTreeMap<String, BondFacts>) -> Self {
-        Self { path: "<in-memory>".into(), facts: PinnedFactsFile { beacon, bonds } }
+        Self::from_facts(PinnedFactsFile { beacon, bonds, pcpb_anchors: BTreeMap::new(), pcpb_acommits: BTreeMap::new() })
+    }
+
+    pub fn from_facts(facts: PinnedFactsFile) -> Self {
+        Self { path: "<in-memory>".into(), facts }
     }
 }
 
@@ -195,6 +264,20 @@ impl ChainFacts for PinnedChainFacts {
     }
     fn bond_record(&self, bond_outpoint: &str) -> Result<BondFacts, String> {
         self.facts.bonds.get(bond_outpoint).cloned().ok_or_else(|| format!("bond {bond_outpoint} not in pinned facts"))
+    }
+    fn pcpb_context(
+        &self,
+        anchor_epoch: u64,
+        a_commit: Option<Hash64>,
+    ) -> Result<(Option<crate::pcpb::PcpbContext>, Option<u64>), String> {
+        let acommit_epoch =
+            a_commit.and_then(|c| self.facts.pcpb_acommits.get(&crate::match_key::hash64_hex(&c)).copied());
+        let ctx = match self.facts.pcpb_anchors.get(&anchor_epoch) {
+            Some(pinned) => pinned.to_context(anchor_epoch)?,
+            // Outside the pinned window — same shape a live node answers with.
+            None => None,
+        };
+        Ok((ctx, acommit_epoch))
     }
     fn source_label(&self) -> String {
         format!("pinned:{} (NOT live)", self.path)
@@ -230,6 +313,9 @@ const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 struct ChainRequest {
     bond: Option<String>,
+    /// ADR-0045 D3-b: `(anchor_epoch, a_commit_hex?)` — ask the node for the PCPB production context
+    /// of one anchor epoch, and (optionally) that anchor's registration epoch, at ONE point of view.
+    pcpb: Option<(u64, Option<String>)>,
     reply: std::sync::mpsc::Sender<Result<kaspa_rpc_core::GetPalwStateResponse, String>>,
 }
 
@@ -237,9 +323,9 @@ impl RpcChainFacts {
     /// `node_rpc` is `host:port` (Borsh wRPC), matching `kaspa-pq-validator --node-wrpc-borsh`.
     /// Blocks until the FIRST connection succeeds, so a missing node fails loudly at startup.
     pub fn connect(node_rpc: &str) -> Result<Self, String> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
         use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
         use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
-        use kaspa_rpc_core::api::rpc::RpcApi;
 
         let url = format!("ws://{node_rpc}");
         let (requests, mut rx) = tokio::sync::mpsc::unbounded_channel::<ChainRequest>();
@@ -279,14 +365,17 @@ impl RpcChainFacts {
                     let _ = started_tx.send(Ok(()));
 
                     while let Some(request) = rx.recv().await {
+                        let (pcpb_anchor_epoch, pcpb_a_commit) = match request.pcpb {
+                            Some((epoch, a_commit)) => (Some(epoch), a_commit),
+                            None => (None, None),
+                        };
                         let call = kaspa_rpc_core::GetPalwStateRequest {
                             batch_id: None,
                             provider_bond_outpoint: request.bond,
+                            pcpb_anchor_epoch,
+                            pcpb_a_commit,
                         };
-                        let result = client
-                            .get_palw_state_call(None, call)
-                            .await
-                            .map_err(|e| format!("getPalwState: {e}"));
+                        let result = client.get_palw_state_call(None, call).await.map_err(|e| format!("getPalwState: {e}"));
                         let _ = request.reply.send(result);
                     }
                 });
@@ -297,19 +386,23 @@ impl RpcChainFacts {
             .recv_timeout(std::time::Duration::from_secs(30))
             .map_err(|_| format!("chain thread did not report readiness for {url}"))??;
 
-        Ok(Self {
-            url,
-            requests,
-            beacon_cache: Mutex::new(None),
-            cache_ttl: std::time::Duration::from_secs(5),
-        })
+        Ok(Self { url, requests, beacon_cache: Mutex::new(None), cache_ttl: std::time::Duration::from_secs(5) })
     }
 
     fn palw_state(&self, bond: Option<String>) -> Result<kaspa_rpc_core::GetPalwStateResponse, String> {
+        self.palw_state_with_pcpb(bond, None)
+    }
+
+    fn palw_state_with_pcpb(
+        &self,
+        bond: Option<String>,
+        pcpb: Option<(u64, Option<String>)>,
+    ) -> Result<kaspa_rpc_core::GetPalwStateResponse, String> {
         let (reply, wait) = std::sync::mpsc::channel();
-        self.requests.send(ChainRequest { bond, reply }).map_err(|_| "chain thread has stopped".to_string())?;
+        self.requests.send(ChainRequest { bond, pcpb, reply }).map_err(|_| "chain thread has stopped".to_string())?;
         wait.recv_timeout(CALL_TIMEOUT).map_err(|_| format!("node {} did not answer within {CALL_TIMEOUT:?}", self.url))?
     }
+
 }
 
 impl ChainFacts for RpcChainFacts {
@@ -323,12 +416,10 @@ impl ChainFacts for RpcChainFacts {
         if !response.enabled {
             return Err("node reports the PALW lane disabled (below palw_activation_daa_score)".into());
         }
-        let activation = response
-            .activation
-            .ok_or("node returned no activation block (wire version < 3?) — cannot read the beacon")?;
-        let epoch = activation
-            .newest_sample_epoch
-            .ok_or("no buried beacon sample yet — the lane has not produced a finality-buried epoch")?;
+        let activation =
+            response.activation.ok_or("node returned no activation block (wire version < 3?) — cannot read the beacon")?;
+        let epoch =
+            activation.newest_sample_epoch.ok_or("no buried beacon sample yet — the lane has not produced a finality-buried epoch")?;
         if activation.newest_sample_seed.is_empty() {
             return Err("buried beacon sample carries an empty seed".into());
         }
@@ -372,6 +463,28 @@ impl ChainFacts for RpcChainFacts {
             runtime_classes_hex: bond.runtime_classes,
             capacity_by_shape: bond.capacity_by_shape,
         })
+    }
+
+    /// ADR-0045 D3-b — fetch and VALIDATE the PCPB production context for `anchor_epoch`.
+    ///
+    /// The validation is [`crate::pcpb::PcpbContext::new`]'s: the served entry set is rebuilt with
+    /// the same canonicalization consensus used and its roots must match the served commitment. So a
+    /// node that serves a stale or doctored entry set is caught here, by the producer, rather than
+    /// at the acceptance arm where the rejection is silent.
+    ///
+    /// Returns `(context, acommit_epoch)`. A missing draw seed is NOT an error: on a fresh anchor it
+    /// is the normal state and means "the ordering guarantee has not matured yet" — the caller's
+    /// `SelfSerialFlow::step` turns it into `AwaitDrawBeacon`.
+    fn pcpb_context(
+        &self,
+        anchor_epoch: u64,
+        a_commit: Option<Hash64>,
+    ) -> Result<(Option<crate::pcpb::PcpbContext>, Option<u64>), String> {
+        let response = self.palw_state_with_pcpb(None, Some((anchor_epoch, a_commit.as_ref().map(hash64_to_hex))))?;
+        let served = response.pcpb.ok_or_else(|| {
+            format!("node {} did not return a PCPB context — it predates ADR-0045 D3-b (wire v6)", self.url)
+        })?;
+        crate::pcpb::PcpbContext::from_rpc(&served).map_err(|e| format!("PCPB context at anchor {anchor_epoch}: {e}"))
     }
 
     fn source_label(&self) -> String {

@@ -124,6 +124,14 @@ pub const PALW_ASSIGNMENT_LEAF_DOMAIN: &[u8] = b"misaka-palw-pcpb-assign-leaf-v1
 pub const PALW_ASSIGNMENT_NODE_DOMAIN: &[u8] = b"misaka-palw-pcpb-assign-node-v1";
 pub const PALW_ASSIGNMENT_DRAW_DOMAIN: &[u8] = b"misaka-palw-pcpb-assign-draw-v1";
 pub const PALW_PROVIDER_PK_HASH_DOMAIN: &[u8] = b"misaka-palw-pcpb-provider-pk-v1";
+/// ADR-0045 D3-b — the canonical PCPB provider identity `Hash64_k(provider-id, bond_outpoint)`; see
+/// [`palw_provider_id`].
+pub const PALW_PROVIDER_ID_DOMAIN: &[u8] = b"misaka-palw-pcpb-provider-id-v1";
+/// ADR-0045 D3-b clause 11 — the job-scoped challenge derivation domain. DELIBERATELY the byte
+/// string the bridge's Seam 1 has used since it landed (`mil/bridge/src/challenge.rs`), promoted
+/// here so the VERIFIER owns the derivation and the producer delegates — never two copies that can
+/// drift. See [`palw_job_challenge`].
+pub const PALW_JOB_CHALLENGE_DOMAIN: &[u8] = b"misaka-palw-bridge-v1/job-challenge";
 /// ML-DSA-87 FIPS-204 `ctx` for the PCPB partner-B receipt signature (disjoint from the other PALW ctxs).
 pub const PALW_PCPB_RECEIPT_MLDSA87_CONTEXT: &[u8] = b"PALWPcpbReceiptV1";
 /// Fixed prefix the signed partner-B receipt preimage must carry, immediately followed by A_commit (64 B).
@@ -257,15 +265,27 @@ impl PalwProofType {
 // functions of committed fields — no store reads, no wall-clock — so both are inert-landable.
 // =============================================================================================
 
-/// D15 (i) — **challenge-binding freshness** (PURE). A mint-grade leaf's committed `challenge_epoch` must
-/// be within the freshness window `w` of its `registration_epoch` (and not from the future), so a
-/// cached/replayed computation under a stale challenge cannot mint. The challenge is a canonical
-/// few-dozen-token context prefix the trace conditioned on (bound off-protocol in the runtime's `t_0`);
-/// consensus checks only this on-chain epoch relation. Universal to all mint-grade jobs (self vs external
-/// is indistinguishable on-chain). `w` is a re-genesis param (inert until D15 wires the caller).
+/// D15 (i) / ADR-0045 D3-b clause 11 (pure half) — **challenge-binding freshness**. A mint-grade leaf's
+/// committed challenge epoch (`receipt_v3_issued_epoch`), its dispatch anchor epoch (`a_commit_epoch`
+/// for the self branch, the challenge epoch itself for the external branch), and its acceptance-pinned
+/// `registered_epoch` must satisfy
+///
+/// ```text
+/// issued ≤ anchor  ∧  anchor + Δ ≤ registered  ∧  registered − issued ≤ w
+/// ```
+///
+/// so a cached/replayed computation under a stale challenge cannot mint (upper bound `w`), and the
+/// post-commit draw beacon `R_{anchor+Δ}` provably post-dates the anchor (lower bound `Δ` — without it
+/// the "future" beacon may already be known at anchor time and partner-B selection is grindable). The
+/// window is non-empty because `PalwParams::is_structurally_valid` enforces `w ≥ Δ`. All three epochs
+/// are consensus-derived or content-sealed (item 7 pinned `registered_epoch`; both others are inside
+/// `content_id()`), so no operand is free to the producer. Supersedes the Δ-less two-epoch form — the
+/// spec change ADR-0040 §5.14.7.6 predicted (the check GREW; the old form had no lower bound).
 #[inline]
-pub fn palw_challenge_fresh(challenge_epoch: u64, registration_epoch: u64, w: u64) -> bool {
-    challenge_epoch <= registration_epoch && registration_epoch - challenge_epoch <= w
+pub fn palw_challenge_fresh(issued_epoch: u64, anchor_epoch: u64, registered_epoch: u64, w: u64, delta: u64) -> bool {
+    issued_epoch <= anchor_epoch
+        && anchor_epoch.checked_add(delta).is_some_and(|draw| draw <= registered_epoch)
+        && registered_epoch - issued_epoch <= w
 }
 
 /// D15 — recompute the PCPB partner-B derivation `B = f(R_{E+Δ}, A_commit)` from the POST-commit beacon and
@@ -279,36 +299,10 @@ pub fn palw_pcpb_derive_b(post_commit_beacon: &Hash64, a_commit: &Hash64) -> Has
     blake2b_512_keyed(PALW_PCPB_DOMAIN, &p)
 }
 
-/// Legacy D15 dispatch-proof representation. See [`palw_dispatch_proof_valid`].
-///
-/// The boolean fields are caller assertions rather than verifiable evidence, so this type is restricted
-/// to compatibility tests and must not be accepted from a leaf, header, or transaction payload.
-/// Production integrations use [`PalwDispatchEvidence`] with
-/// [`palw_dispatch_evidence_valid`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PalwDispatchProof {
-    /// External / parallel: both provider slots were beacon-assigned.
-    BothSlotsBeacon { slot_a_beacon_ok: bool, slot_b_beacon_ok: bool },
-    /// Self / serial: A is the requester + post-commitment pair binding. `a_commit` is A's escrow-locked
-    /// receipt commitment; `b_claimed` is the leaf's partner-B identity; `b_receipt_binds_a_commit` is
-    /// whether B's signed receipt embeds `A_commit`'s hash (the ordering proof carried in the leaf itself).
-    SelfAPlusPcpb { a_commit: Hash64, b_claimed: Hash64, b_receipt_binds_a_commit: bool },
-}
-
-/// D15 (ii) — **dispatch-proof validity** (PURE). For `BothSlotsBeacon`, both slots' beacon assignments
-/// must check. For `SelfAPlusPcpb`, the claimed B must equal the post-commit derivation
-/// `f(post_commit_beacon, a_commit)` (A cannot pre-select B after seeing the answer) **and** B's receipt
-/// must bind `a_commit` (the leaf carries the ordering evidence — no per-job on-chain tx). `post_commit_beacon`
-/// is the beacon revealed after A's commit, recomputed by the verifier.
-#[inline]
-pub fn palw_dispatch_proof_valid(proof: &PalwDispatchProof, post_commit_beacon: &Hash64) -> bool {
-    match proof {
-        PalwDispatchProof::BothSlotsBeacon { slot_a_beacon_ok, slot_b_beacon_ok } => *slot_a_beacon_ok && *slot_b_beacon_ok,
-        PalwDispatchProof::SelfAPlusPcpb { a_commit, b_claimed, b_receipt_binds_a_commit } => {
-            *b_receipt_binds_a_commit && *b_claimed == palw_pcpb_derive_b(post_commit_beacon, a_commit)
-        }
-    }
-}
+// The legacy declared-`bool` `PalwDispatchProof` / `palw_dispatch_proof_valid` pair was REMOVED by the
+// D3-b wiring slice, exactly as §5.14.7.9 scheduled ("除去は wiring 原子スライスが行う"): its external
+// arm was a `true && true` tautology and its self arm a caller assertion (§5.14.2). The verifiable
+// replacement is [`PalwDispatchEvidence`] + [`palw_dispatch_evidence_valid`] below.
 
 // =============================================================================================
 // ADR-0040 §5.14.7.1 — REDESIGNED dispatch proof as VERIFIABLE EVIDENCE (PURE, INERT).
@@ -338,7 +332,7 @@ pub trait PalwMlDsaVerifier {
 /// A bottom-up keyed-BLAKE2b Merkle membership witness. `index` is the leaf's position (LSB-first path);
 /// `siblings` are the co-path hashes, bottom to top. Mirrors the existing PALW leaf-merkle node
 /// construction (the fold direction binds the index). Pure — no store reads.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwMerkleMembership {
     pub index: u32,
     pub leaf: Hash64,
@@ -373,7 +367,7 @@ impl PalwMerkleMembership {
 /// One bonded provider as committed in an epoch bond-weighted snapshot (E−k). `ml_dsa_pk_hash` binds the
 /// self-arm signing key; `reward_script_commitment` is the payout target (kept as a commitment so this
 /// pure module needs no `ScriptPublicKey` serialization).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwProviderSnapshotEntry {
     pub provider_id: Hash64,
     pub ml_dsa_pk_hash: Hash64,
@@ -385,7 +379,7 @@ pub struct PalwProviderSnapshotEntry {
 /// tree — the deterministic provider-id-sorted cumulative partition of `[0, total_bond)`. Committed under
 /// `assignment_root`, itself a deterministic derivation of the snapshot, so it is NOT independently
 /// attacker-chosen once clause 0 binds it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwAssignmentInterval {
     pub provider_id: Hash64,
     pub bond_sompi: u64,
@@ -394,7 +388,7 @@ pub struct PalwAssignmentInterval {
 
 /// External/parallel arm: one provider slot, re-derivable. Carries the snapshot entry + its membership,
 /// and the assignment interval + its membership. The verifier re-runs the weighted draw — no `bool`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct SlotAssignmentWitness {
     pub entry: PalwProviderSnapshotEntry,
     pub snapshot_membership: PalwMerkleMembership,
@@ -403,7 +397,7 @@ pub struct SlotAssignmentWitness {
 }
 
 /// External arm proof: two beacon-drawn slots (must be distinct providers).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct BeaconAssignedProof {
     pub slot_a: SlotAssignmentWitness,
     pub slot_b: SlotAssignmentWitness,
@@ -411,9 +405,15 @@ pub struct BeaconAssignedProof {
 
 /// Self/serial arm: B is drawn by the POST-commit beacon (via `palw_pcpb_derive_b`, so A cannot pre-pick a
 /// sybil B after seeing the answer) AND B's ML-DSA-87 receipt binds `a_commit` — CHECKED, not declared.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// D3-b addition (design memo §4 clause 12): the arm also carries **A's own snapshot membership**
+/// (`a_entry` + `a_snapshot_membership`). Self-ordering is a bonded-provider privilege — without this,
+/// an unbonded A could self-order into the mint path with only B's bond at stake.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct SelfSerialProof {
     pub a_commit: Hash64,
+    pub a_entry: PalwProviderSnapshotEntry,
+    pub a_snapshot_membership: PalwMerkleMembership,
     pub b_entry: PalwProviderSnapshotEntry,
     pub b_snapshot_membership: PalwMerkleMembership,
     pub b_interval: PalwAssignmentInterval,
@@ -424,7 +424,7 @@ pub struct SelfSerialProof {
 }
 
 /// ADR-0040 §5.14.7.1 — the redesigned dispatch evidence. Replaces [`PalwDispatchProof`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub enum PalwDispatchEvidence {
     BeaconAssigned(BeaconAssignedProof),
     SelfSerial(SelfSerialProof),
@@ -511,60 +511,151 @@ fn slot_witness_valid(
         && interval_contains(&w.interval, ticket)
 }
 
-/// ADR-0040 §5.14.7.1 — **dispatch-evidence validity** (PURE, INERT). Every branch is a value the verifier
-/// re-derives from consensus-resolved inputs; NO caller-asserted `bool` is trusted (contrast the
-/// superseded [`palw_dispatch_proof_valid`]). `resolved_*` come from the independently-resolved on-chain
-/// snapshot/assignment commit at `registered − k` and the post-commit beacon `R_{registered+Δ}`; `leaf_*`
-/// are what a LeafV2 commits. `verifier` is the injected ML-DSA-87 check. Zero production callers.
+/// [`PALW_DISPATCH_KIND_BEACON_ASSIGNED`] on a leaf commits it to the external arm ([`BeaconAssignedProof`]).
+pub const PALW_DISPATCH_KIND_BEACON_ASSIGNED: u8 = 0;
+/// [`PALW_DISPATCH_KIND_SELF_SERIAL`] commits the leaf to the self arm ([`SelfSerialProof`]).
+pub const PALW_DISPATCH_KIND_SELF_SERIAL: u8 = 1;
+
+/// The canonical provider identity in PCPB snapshots: `Hash64_k(provider-id, bond_txid ‖ bond_index)`.
+/// Keyed by the bond OUTPOINT — the same coordinate the reward gate (`active_provider_bond_at`) and the
+/// registry itself use — so a leaf's declared `provider_{a,b}_bond` maps to a snapshot entry with no
+/// extra indirection. Per-bond intervals are linear in bond value, so one owner splitting collateral
+/// across bonds gains nothing (and the SEL-01 floor prices the split).
+pub fn palw_provider_id(bond_outpoint: &TransactionOutpoint) -> Hash64 {
+    let mut p = Vec::with_capacity(HASH64_SIZE + 4);
+    push_hash(&mut p, &bond_outpoint.transaction_id);
+    p.extend_from_slice(&bond_outpoint.index.to_le_bytes());
+    blake2b_512_keyed(PALW_PROVIDER_ID_DOMAIN, &p)
+}
+
+/// ADR-0045 D3-b clause 11 — the job-scoped challenge, re-derived by the verifier. Binds the epoch
+/// beacon (freshness has a real anchor), the scheduler job, the requester credential, the request
+/// commitment, and the shape — the exact §537 recipe Seam 1 implemented; the preimage layout is
+/// byte-identical to the bridge's original so every already-issued lease/receipt keeps verifying.
+/// Without this re-derivation `receipt_v3_issued_epoch` is a free declaration and clause 11's
+/// freshness window is hollow (cached-activation replay, audit H-10).
 #[allow(clippy::too_many_arguments)]
+pub fn palw_job_challenge(
+    network_id: u32,
+    beacon_epoch: u64,
+    beacon_seed: &Hash64,
+    scheduler_job_id: &Hash64,
+    requester_credential: &Hash64,
+    request_commitment: &Hash64,
+    shape_id: u16,
+) -> Hash64 {
+    let mut preimage = Vec::with_capacity(4 + 8 + HASH64_SIZE * 4 + 2);
+    preimage.extend_from_slice(&network_id.to_le_bytes());
+    preimage.extend_from_slice(&beacon_epoch.to_le_bytes());
+    push_hash(&mut preimage, beacon_seed);
+    push_hash(&mut preimage, scheduler_job_id);
+    push_hash(&mut preimage, requester_credential);
+    push_hash(&mut preimage, request_commitment);
+    preimage.extend_from_slice(&shape_id.to_le_bytes());
+    blake2b_512_keyed(PALW_JOB_CHALLENGE_DOMAIN, &preimage)
+}
+
+/// The leaf-committed facts clause 12 verifies dispatch evidence AGAINST — every field is inside
+/// `leaf_hash` (→ `leaf_root` → `content_id() == batch_id`), so none is free to the evidence carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwDispatchLeafFacts {
+    pub snapshot_root: Hash64,
+    pub assignment_root: Hash64,
+    pub a_commit: Hash64,
+    pub dispatch_kind: u8,
+    /// `palw_provider_id(leaf.provider_a_bond)` / `..b_bond` — the DECLARED seats the drawn providers
+    /// must actually occupy. Without these the evidence proves "some pair was drawn" while the leaf
+    /// names whoever it likes (delegation laundering, the exact forgery PCPB exists to kill).
+    pub provider_a_id: Hash64,
+    pub provider_b_id: Hash64,
+}
+
+/// ADR-0045 D3-b clause 12 — **dispatch-evidence validity** (PURE). Every branch is a value the verifier
+/// re-derives from consensus-resolved inputs; NO caller-asserted `bool` is trusted (the declared-`bool`
+/// ancestor of this function was removed by this slice). `resolved` is the independently store-resolved
+/// snapshot commitment of epoch `anchor − k`; `post_commit_beacon` is `R_{anchor + Δ}` from the seed
+/// history (both fail-closed at the call site); `leaf` carries the LeafV2-committed facts; `verifier` is
+/// the injected ML-DSA-87 check.
 pub fn palw_dispatch_evidence_valid<V: PalwMlDsaVerifier>(
     ev: &PalwDispatchEvidence,
-    resolved_snapshot_root: &Hash64,
-    resolved_assignment_root: &Hash64,
-    resolved_total_bond: u128,
+    resolved: &PalwSnapshotCommitment,
     post_commit_beacon: &Hash64,
-    leaf_snapshot_root: &Hash64,
-    leaf_assignment_root: &Hash64,
-    leaf_a_commit: &Hash64,
+    leaf: &PalwDispatchLeafFacts,
     verifier: &V,
 ) -> bool {
     // Clause 0 (soundness hinge): the leaf-committed roots MUST equal the independently-resolved on-chain
     // roots. Without this the evidence degenerates to trusting an attacker-supplied root (§5.14.2).
-    if leaf_snapshot_root != resolved_snapshot_root || leaf_assignment_root != resolved_assignment_root {
+    if leaf.snapshot_root != resolved.snapshot_root || leaf.assignment_root != resolved.assignment_root {
         return false;
     }
-    if resolved_total_bond == 0 {
+    if resolved.total_bond == 0 {
         return false; // an empty snapshot cannot assign any slot
     }
     match ev {
         PalwDispatchEvidence::BeaconAssigned(p) => {
+            // The branch must be the one the leaf committed to — evidence is not swappable after the fact.
+            if leaf.dispatch_kind != PALW_DISPATCH_KIND_BEACON_ASSIGNED {
+                return false;
+            }
+            // External leaves carry the self-arm sentinels; a non-zero a_commit on this branch is a
+            // category error (and would open an unanchored self flow wearing external clothes).
+            if leaf.a_commit != Hash64::default() {
+                return false;
+            }
             slot_witness_valid(
                 &p.slot_a,
-                resolved_snapshot_root,
-                resolved_assignment_root,
-                resolved_total_bond,
+                &resolved.snapshot_root,
+                &resolved.assignment_root,
+                resolved.total_bond,
                 &palw_assignment_draw_seed(post_commit_beacon, 0),
             ) && slot_witness_valid(
                 &p.slot_b,
-                resolved_snapshot_root,
-                resolved_assignment_root,
-                resolved_total_bond,
+                &resolved.snapshot_root,
+                &resolved.assignment_root,
+                resolved.total_bond,
                 &palw_assignment_draw_seed(post_commit_beacon, 1),
             )
             // two DISTINCT providers: the external arm is a real 2-of-N draw, not a `true && true` tautology.
             && p.slot_a.entry.provider_id != p.slot_b.entry.provider_id
+            // …and the drawn providers are the leaf's DECLARED seats, in seat order (slot 0 = A, slot 1 = B).
+            && p.slot_a.entry.provider_id == leaf.provider_a_id
+            && p.slot_b.entry.provider_id == leaf.provider_b_id
         }
         PalwDispatchEvidence::SelfSerial(p) => {
-            if p.a_commit != *leaf_a_commit {
+            if leaf.dispatch_kind != PALW_DISPATCH_KIND_SELF_SERIAL {
+                return false;
+            }
+            if p.a_commit != leaf.a_commit || p.a_commit == Hash64::default() {
+                return false;
+            }
+            // A is a bonded provider in the SAME snapshot (self-ordering is a bonded privilege), sits in
+            // the leaf's A seat, and is not its own partner.
+            if p.a_entry.provider_id != leaf.provider_a_id
+                || p.a_entry.provider_id == p.b_entry.provider_id
+                || !p.a_snapshot_membership.verifies(
+                    &resolved.snapshot_root,
+                    &palw_snapshot_entry_hash(&p.a_entry),
+                    PALW_SNAPSHOT_NODE_DOMAIN,
+                )
+            {
                 return false;
             }
             // B is selected by the POST-commit beacon (A cannot pre-pick a sybil B after seeing the answer).
             let seed = palw_pcpb_derive_b(post_commit_beacon, &p.a_commit);
-            let ticket = reduce_hash_to_bond(&seed, resolved_total_bond);
-            p.b_entry.provider_id == p.b_interval.provider_id
+            let ticket = reduce_hash_to_bond(&seed, resolved.total_bond);
+            p.b_entry.provider_id == leaf.provider_b_id
+                && p.b_entry.provider_id == p.b_interval.provider_id
                 && p.b_entry.bond_sompi == p.b_interval.bond_sompi
-                && p.b_snapshot_membership.verifies(resolved_snapshot_root, &palw_snapshot_entry_hash(&p.b_entry), PALW_SNAPSHOT_NODE_DOMAIN)
-                && p.b_assignment_membership.verifies(resolved_assignment_root, &palw_assignment_interval_hash(&p.b_interval), PALW_ASSIGNMENT_NODE_DOMAIN)
+                && p.b_snapshot_membership.verifies(
+                    &resolved.snapshot_root,
+                    &palw_snapshot_entry_hash(&p.b_entry),
+                    PALW_SNAPSHOT_NODE_DOMAIN,
+                )
+                && p.b_assignment_membership.verifies(
+                    &resolved.assignment_root,
+                    &palw_assignment_interval_hash(&p.b_interval),
+                    PALW_ASSIGNMENT_NODE_DOMAIN,
+                )
                 && interval_contains(&p.b_interval, ticket)
                 // the signing key binds to the committed provider id, and B genuinely signed a receipt that
                 // embeds A_commit — the ordering evidence is CHECKED here, not declared by a `bool`.
@@ -588,7 +679,10 @@ pub fn palw_dispatch_evidence_valid<V: PalwMlDsaVerifier>(
 // =============================================================================================
 
 /// The committed roots of one epoch snapshot. `provider_count` binds the retained set size.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// D3-b: persisted per epoch by the provider-snapshot history store (the clause-0 "independently
+/// resolved" side) and carried in the pruning snapshot payload, hence the serde/borsh derives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwSnapshotCommitment {
     pub snapshot_root: Hash64,
     pub assignment_root: Hash64,
@@ -1405,6 +1499,29 @@ pub struct PalwPublicLeafV1 {
     pub activation_epoch: u64,
     pub expiry_epoch: u64,
     pub leaf_bond_sompi: u64,
+    /// ADR-0045 D3-b (docs/palw-pcpb-leaf-v2-wiring-design.md §1) — the PCPB leaf commitments.
+    /// The challenge commitment / challenge epoch are NOT new fields: `receipt_v3_job_challenge` /
+    /// `receipt_v3_issued_epoch` carry them (Seam 1's `derive_job_challenge` already binds the
+    /// job-scoped triple). All five below ride `leaf_hash → leaf_root → content_id() == batch_id`,
+    /// so they are sealed by the same M2/item-7 discipline as `registered_epoch`.
+    ///
+    /// Self branch (`dispatch_kind == PALW_DISPATCH_KIND_SELF_SERIAL`): A's escrow-locked receipt
+    /// commitment. External branch: the all-zero sentinel.
+    pub a_commit: Hash64,
+    /// Self branch: the epoch the `PalwACommitV1` anchor was ACCEPTED on-chain (clause 12 checks
+    /// equality against the registry — both directions of epoch-grinding die on that equality).
+    /// External branch: 0 sentinel.
+    pub a_commit_epoch: u64,
+    /// The bond-weighted provider snapshot root of epoch `anchor − k` (anchor = `a_commit_epoch`
+    /// for self, `receipt_v3_issued_epoch` for external). Clause 0 of the dispatch-evidence
+    /// verifier requires equality with the independently store-resolved root.
+    pub provider_snapshot_root: Hash64,
+    /// The assignment-tree root deterministically derived from that snapshot (provider-id sort →
+    /// cumulative bond intervals). Same clause-0 equality.
+    pub assignment_proof_root: Hash64,
+    /// [`PALW_DISPATCH_KIND_BEACON_ASSIGNED`] or [`PALW_DISPATCH_KIND_SELF_SERIAL`]. Committed on
+    /// the leaf so the chunk-side evidence branch cannot be swapped after the fact.
+    pub dispatch_kind: u8,
 }
 
 impl PalwPublicLeafV1 {
@@ -1560,6 +1677,11 @@ impl PalwLeafMembershipProofV1 {
 /// batch manifest's `leaf_root`. v1 (no proofs) is REJECTED outright rather than parsed leniently with
 /// an empty `proofs`: a lenient parse would reopen the whole CHUNK-INDEX SQUAT hole, since the
 /// acceptance gate would then have nothing to check.
+///
+/// ADR-0045 D3-b — **v3**: `witnesses[i]` additionally carries leaf `i`'s PCPB evidence (challenge
+/// preimage + dispatch evidence), verified by the acceptance arm's clauses 11/12 BEFORE `insert_leaf`.
+/// The same lenient-parse rule applies one version up: v2 (no witnesses) is rejected outright, or the
+/// PCPB gate would have nothing to check — the exact partial-gating state D3-b forbids.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwLeafChunkV1 {
     pub version: u16,
@@ -1568,10 +1690,59 @@ pub struct PalwLeafChunkV1 {
     pub leaves: Vec<PalwPublicLeafV1>,
     /// Index-aligned with `leaves` (both are ordered by strictly increasing `leaf_index`).
     pub proofs: Vec<PalwLeafMembershipProofV1>,
+    /// Index-aligned with `leaves` — the per-leaf PCPB evidence (v3).
+    pub witnesses: Vec<PalwLeafPcpbWitnessV1>,
 }
 
-/// Chunk-size cap (design §9.3): leaves are chunked in units of 64 rather than crammed into an anchor.
-pub const PALW_MAX_LEAVES_PER_CHUNK: usize = 64;
+/// ADR-0045 D3-b (design memo §5) — one leaf's PCPB evidence as carried by a v3 chunk. WIRE ONLY:
+/// chunks are transaction payloads, never bincode-persisted, so this rides no DB format pin. The
+/// challenge triple re-derives `receipt_v3_job_challenge` under `R_{issued_epoch}` (clause 11's heavy
+/// half — without it `issued_epoch` is a free declaration and freshness is hollow); `dispatch` is the
+/// clause-12 evidence re-run against the store-resolved snapshot + post-commit beacon.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwLeafPcpbWitnessV1 {
+    pub scheduler_job_id: Hash64,
+    pub requester_credential: Hash64,
+    pub request_commitment: Hash64,
+    pub dispatch: PalwDispatchEvidence,
+}
+
+/// Chunk-size cap. **v3 (D3-b) lowered this 64 → 24**: a worst-case per-leaf SelfSerial witness is
+/// ≈ 13 KiB (ML-DSA-87 pk 2592 B + sig 4627 B + receipt preimage + two memberships), and 24 leaves
+/// keep the fullest possible chunk comfortably inside [`PALW_MAX_OVERLAY_PAYLOAD_BYTES`] — asserted
+/// by an exact-encode test, not estimated. Manifest chunk arithmetic (`expected_chunks`) follows this
+/// constant, so the cut is a re-genesis format change riding the same cutover as the leaf fields.
+pub const PALW_MAX_LEAVES_PER_CHUNK: usize = 24;
+
+/// ADR-0045 D3-b (design memo §2.1) — the PCPB self-serial ordering anchor (subnetwork `0x45`,
+/// [`crate::subnets::SUBNETWORK_ID_PALW_ACOMMIT`]). Registers `a_commit` on-chain so the draw beacon
+/// `R_{a_commit_epoch + Δ}` provably post-dates it; clause 12 requires the registry's accepted epoch to
+/// EQUAL the leaf's declared `a_commit_epoch` (both directions of epoch-grinding die on that equality).
+///
+/// Deliberately unsigned and content-keyed: WHO registered is meaningless (front-running a mempool
+/// anchor merely pays the victim's fee — the M2 content argument), WHEN is everything, and the "when"
+/// is the ACCEPTING block's consensus-derived epoch, never a declared field. Spam is priced by
+/// ordinary tx fees and swept by the registry's retention window.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwACommitV1 {
+    pub version: u16,
+    pub a_commit: Hash64,
+}
+
+/// Context-free validation of a `0x45` A-commit anchor payload: strict decode, v1 version, non-zero
+/// commitment (the self arm rejects a zero `a_commit` at clause 12, so a zero anchor could never be
+/// used — refuse it at the door instead of storing a dead row).
+pub fn validate_palw_acommit_tx(payload: &[u8]) -> Result<(), PalwTxError> {
+    if payload.len() > PALW_MAX_OVERLAY_PAYLOAD_BYTES {
+        return Err(PalwTxError::PayloadTooLarge { len: payload.len(), max: PALW_MAX_OVERLAY_PAYLOAD_BYTES });
+    }
+    let anchor: PalwACommitV1 = decode_palw_payload(payload)?;
+    check_palw_version(anchor.version)?;
+    if anchor.a_commit == Hash64::default() {
+        return Err(PalwTxError::InvalidField("acommit.a_commit"));
+    }
+    Ok(())
+}
 
 /// ADR-0040 P1-11 (AO-02) — the width of `PalwBatchLifecycleV1::chunks_present` in bits. A batch's
 /// `chunk_count` must not exceed it, or `apply_leaf_chunk` would index outside the fixed `[u64; 4]`.
@@ -2045,6 +2216,29 @@ pub fn is_provider_bond_releasable_at(record: &PalwProviderBondRecord, pov_daa_s
 ///
 /// The caller decides which txs count as accepted, so this stays unit-testable. It is a function of
 /// the chain (that block's acceptance data and its own header DAA) and never of arrival order.
+/// ADR-0045 D3-b — the A-commit anchors accepted by one chain block's transactions (subnetwork
+/// `0x45`). Strict-decoded and shape-checked here as well as at isolation: an anchor that fails the
+/// shape rule is a fee-paying no-op, never a registry row (the beacon-op semantics). Deduplicated
+/// first-only so the registry writer has one mutation per anchor to reconcile.
+pub fn palw_acommit_anchors_from_accepted_txs(txs: &[crate::tx::Transaction]) -> Vec<Hash64> {
+    let mut anchors = Vec::new();
+    let mut seen = HashSet::new();
+    for tx in txs {
+        if tx.subnetwork_id.palw_pcpb_tx_kind().is_none() {
+            continue;
+        }
+        if validate_palw_acommit_tx(&tx.payload).is_err() {
+            continue;
+        }
+        if let Ok(anchor) = borsh::from_slice::<PalwACommitV1>(&tx.payload)
+            && seen.insert(anchor.a_commit)
+        {
+            anchors.push(anchor.a_commit);
+        }
+    }
+    anchors
+}
+
 pub fn palw_provider_bond_mutations_from_accepted_txs(
     txs: &[crate::tx::Transaction],
     accepted_daa_score: u64,
@@ -2941,15 +3135,30 @@ pub const PALW_PAYLOAD_VERSION_V1: u16 = 1;
 pub const PALW_BATCH_CERTIFICATE_VERSION_V2: u16 = 2;
 /// Breaking pruning-envelope revision carrying summary-bound V2 certificates.
 pub const PALW_EPOCH_PROOF_BUNDLE_VERSION_V2: u16 = 2;
-/// kaspa-pq ADR-0040 §5.15 — the leaf-chunk payload version that carries membership proofs.
+/// kaspa-pq ADR-0040 §5.15 — the leaf-chunk payload version that carried membership proofs. As of the
+/// D3-b cutover this is a REJECTED historical version (kept as a named constant so the rejection tests
+/// and the acceptance arm can say precisely WHICH version they refuse); the live version is
+/// [`PALW_LEAF_CHUNK_VERSION_V3`].
+pub const PALW_LEAF_CHUNK_VERSION_V2: u16 = 2;
+/// ADR-0045 D3-b — the leaf-chunk payload version that carries membership proofs AND per-leaf PCPB
+/// witnesses.
 ///
 /// This is a LEAF-CHUNK-ONLY bump. [`check_palw_version`] is shared by every payload kind and enforces
 /// v1; `validate_leaf_chunk` substitutes its own check for that shared one. The V2 certificate likewise
-/// has its own exact check; every remaining arm stays v1. Never widen the shared check to "1 or 2".
-pub const PALW_LEAF_CHUNK_VERSION_V2: u16 = 2;
+/// has its own exact check; every remaining arm stays v1. Never widen the shared check to "1 or 2 or 3".
+/// v2 (no witnesses) is rejected for the same reason v2 rejected v1: a lenient parse defaulting the new
+/// vector to empty would ship the exact partial-gating state D3-b forbids.
+pub const PALW_LEAF_CHUNK_VERSION_V3: u16 = 3;
 /// Static upper bound on a membership proof's length, from [`PALW_MAX_BATCH_LEAVES_V1`] = 256
 /// (`ceil(log2(256)) = 8`). See `validate_leaf_chunk` for why the EXACT bound lives elsewhere.
 pub const PALW_MAX_LEAF_MEMBERSHIP_PROOF_LEN: usize = 8;
+/// Static upper bound on a PCPB snapshot/assignment membership path (2^32 providers is absurd; the
+/// bound exists so nested-vector decoding of a hostile witness stays O(bounded) before any hashing).
+pub const PALW_MAX_PCPB_MEMBERSHIP_SIBLINGS: usize = 32;
+/// Static upper bound on the self-arm partner-B receipt preimage carried in a PCPB witness. The honest
+/// preimage is `TAG ‖ a_commit ‖ tail` where the tail is a receipt signing preimage (≈ 3.2 KiB with an
+/// ML-DSA-87 session key); 8 KiB leaves headroom without letting one witness eat the payload cap.
+pub const PALW_MAX_PCPB_RECEIPT_PREIMAGE_BYTES: usize = 8 * 1024;
 /// Hard per-transaction PALW payload cap, checked before Borsh decoding. The largest object is a V2
 /// certificate containing ML-DSA-87 votes; 512 KiB leaves room for the frozen hard vote cap while
 /// preventing an unbounded payload from reaching nested-vector decoding.
@@ -3339,6 +3548,26 @@ fn validate_public_leaf(leaf: &PalwPublicLeafV1, batch_id: &Hash64) -> Result<()
         }
         _ => return Err(PalwTxError::InvalidField("leaf.receipt_da_object_version")),
     }
+    // ADR-0045 D3-b (design memo §1) — PCPB field coherence, context-free half. The branch tag must be
+    // a known kind, and the self-arm anchor fields must be present exactly on the self branch: an
+    // external leaf carrying an a_commit (or vice versa) is a category error that would otherwise let
+    // one branch wear the other's clothes at the acceptance gate. Zero-ness of the snapshot roots is
+    // NOT checked here — a zero root simply can never equal a store-resolved commitment at clause 12,
+    // and legacy Object-V1 leaves (whose PCPB fields are all sentinels) die at clause 11's
+    // re-derivation, both fail-closed at the coordinate that owns the context.
+    match leaf.dispatch_kind {
+        PALW_DISPATCH_KIND_BEACON_ASSIGNED => {
+            if leaf.a_commit != Hash64::default() || leaf.a_commit_epoch != 0 {
+                return Err(PalwTxError::InvalidField("leaf.pcpb_external_sentinel"));
+            }
+        }
+        PALW_DISPATCH_KIND_SELF_SERIAL => {
+            if leaf.a_commit == Hash64::default() {
+                return Err(PalwTxError::InvalidField("leaf.pcpb_a_commit"));
+            }
+        }
+        _ => return Err(PalwTxError::InvalidField("leaf.dispatch_kind")),
+    }
     // ADR-0040 ECON-03 shape rule: a leaf must not name the same bond for both halves of a replica pair, which
     // would let one provider's collateral back both replicas and defeat the point of running k = 2.
     //
@@ -3386,10 +3615,11 @@ fn validate_public_leaf(leaf: &PalwPublicLeafV1, batch_id: &Hash64) -> Result<()
 ///   variable-length-path forgeries that a mere upper bound leaves open.
 fn validate_leaf_chunk(payload: &[u8]) -> Result<(), PalwTxError> {
     let chunk: PalwLeafChunkV1 = decode_palw_payload(payload)?;
-    // NOT `check_palw_version`: leaf chunks are v2 (they carry membership proofs), every other payload
-    // kind is still v1. v1 leaf chunks are rejected — a lenient parse defaulting `proofs` to empty
-    // would reopen the CHUNK-INDEX SQUAT hole in full.
-    if chunk.version != PALW_LEAF_CHUNK_VERSION_V2 {
+    // NOT `check_palw_version`: leaf chunks are v3 (membership proofs + PCPB witnesses), every other
+    // payload kind is still v1. v1/v2 leaf chunks are rejected — a lenient parse defaulting `proofs`
+    // or `witnesses` to empty would reopen the CHUNK-INDEX SQUAT hole (v1) or ship the partial PCPB
+    // gate D3-b forbids (v2).
+    if chunk.version != PALW_LEAF_CHUNK_VERSION_V3 {
         return Err(PalwTxError::UnsupportedVersion(chunk.version));
     }
     check_count("leaf_chunk.leaves", chunk.leaves.len(), 1, PALW_MAX_LEAVES_PER_CHUNK)?;
@@ -3397,6 +3627,14 @@ fn validate_leaf_chunk(payload: &[u8]) -> Result<(), PalwTxError> {
         return Err(PalwTxError::InvalidCount {
             field: "leaf_chunk.proofs",
             count: chunk.proofs.len(),
+            min: chunk.leaves.len(),
+            max: chunk.leaves.len(),
+        });
+    }
+    if chunk.witnesses.len() != chunk.leaves.len() {
+        return Err(PalwTxError::InvalidCount {
+            field: "leaf_chunk.witnesses",
+            count: chunk.witnesses.len(),
             min: chunk.leaves.len(),
             max: chunk.leaves.len(),
         });
@@ -3411,6 +3649,9 @@ fn validate_leaf_chunk(payload: &[u8]) -> Result<(), PalwTxError> {
             });
         }
     }
+    for witness in &chunk.witnesses {
+        validate_pcpb_witness_shape(witness)?;
+    }
     let mut ticket_nullifiers = HashSet::with_capacity(chunk.leaves.len());
     for leaf in &chunk.leaves {
         validate_public_leaf(leaf, &chunk.batch_id)?;
@@ -3422,6 +3663,57 @@ fn validate_leaf_chunk(payload: &[u8]) -> Result<(), PalwTxError> {
     }
     if !chunk.leaves.windows(2).all(|w| w[0].leaf_index < w[1].leaf_index) {
         return Err(PalwTxError::NonCanonical("leaf_chunk.leaf_indices"));
+    }
+    Ok(())
+}
+
+/// ADR-0045 D3-b — context-free SHAPE bounds of one PCPB witness: vector lengths and fixed ML-DSA-87
+/// widths only, all checked BEFORE any hashing or state access (the cheap-rejection half of the split
+/// `validate_leaf_chunk` documents for membership proofs). The semantic half — challenge re-derivation
+/// and dispatch-evidence validity against the resolved snapshot/beacon — is the acceptance arm's
+/// clauses 11/12.
+fn validate_pcpb_witness_shape(witness: &PalwLeafPcpbWitnessV1) -> Result<(), PalwTxError> {
+    let membership_len = |field: &'static str, m: &PalwMerkleMembership| {
+        if m.siblings.len() > PALW_MAX_PCPB_MEMBERSHIP_SIBLINGS {
+            Err(PalwTxError::InvalidCount { field, count: m.siblings.len(), min: 0, max: PALW_MAX_PCPB_MEMBERSHIP_SIBLINGS })
+        } else {
+            Ok(())
+        }
+    };
+    match &witness.dispatch {
+        PalwDispatchEvidence::BeaconAssigned(p) => {
+            for (field, m) in [
+                ("pcpb.slot_a.snapshot_membership", &p.slot_a.snapshot_membership),
+                ("pcpb.slot_a.assignment_membership", &p.slot_a.assignment_membership),
+                ("pcpb.slot_b.snapshot_membership", &p.slot_b.snapshot_membership),
+                ("pcpb.slot_b.assignment_membership", &p.slot_b.assignment_membership),
+            ] {
+                membership_len(field, m)?;
+            }
+        }
+        PalwDispatchEvidence::SelfSerial(p) => {
+            for (field, m) in [
+                ("pcpb.a_snapshot_membership", &p.a_snapshot_membership),
+                ("pcpb.b_snapshot_membership", &p.b_snapshot_membership),
+                ("pcpb.b_assignment_membership", &p.b_assignment_membership),
+            ] {
+                membership_len(field, m)?;
+            }
+            if p.b_ml_dsa_pk.len() != STAKE_VALIDATOR_PUBKEY_LEN {
+                return Err(PalwTxError::InvalidPublicKeyLen(p.b_ml_dsa_pk.len()));
+            }
+            if p.b_signature.len() != STAKE_ATTESTATION_SIG_LEN {
+                return Err(PalwTxError::InvalidSignatureLen(p.b_signature.len()));
+            }
+            if p.b_receipt_preimage.len() > PALW_MAX_PCPB_RECEIPT_PREIMAGE_BYTES {
+                return Err(PalwTxError::InvalidCount {
+                    field: "pcpb.b_receipt_preimage",
+                    count: p.b_receipt_preimage.len(),
+                    min: 0,
+                    max: PALW_MAX_PCPB_RECEIPT_PREIMAGE_BYTES,
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -3462,6 +3754,55 @@ pub fn palw_audit_epoch_inclusion_window_epochs(admission: &PalwBatchAdmissionPa
         .saturating_mul(2)
         .saturating_add(admission.audit_window_epochs)
         .saturating_add(admission.active_window_epochs)
+}
+
+/// **ADR-0045 D3-a — how many past epochs of `R_E` the seed history must retain.**
+///
+/// `ceil(paid_work_walk_bound_daa / epoch_len) + audit inclusion window + 2`: the batch lifecycle
+/// expressed in epochs, plus the certificate-inclusion window, plus boundary slack. This is the
+/// epoch-space form of the same discipline the paid-work walk already obeys — a verification
+/// lookback must land inside RETAINED territory — which is what keeps the store bounded by
+/// parameters rather than by chain length.
+///
+/// PCPB re-derives `derive_b(R_e, …)` for the epoch a ticket was bound to, and that epoch can be
+/// older than anything the three existing seed sources can answer for: the header walk fails
+/// closed below the pruning point, per-block state rows are deleted by the pruning pass, and the
+/// accumulator's `retain_future_of` drops past epochs BY DESIGN (it carries the seed's material,
+/// not the seed). Precondition (a) of the wiring decision is exactly this gap.
+/// D3-b amendment to the D3-a arithmetic: `+ freshness_window_epochs (w)`. Clause 11 re-derives the
+/// job challenge under `R_{issued_epoch}`, and `issued_epoch` may trail `registered_epoch` by up to
+/// `w`; the original window covered only the audit lookback and would have made the OLDEST honest
+/// challenge epoch unresolvable — a fail-closed rejection of an honest leaf, the P1-7 failure shape.
+pub fn palw_beacon_seed_history_window_epochs(
+    admission: &PalwBatchAdmissionParams,
+    epoch_length_daa: u64,
+    freshness_window_epochs: u64,
+) -> u64 {
+    let epoch_len = epoch_length_daa.max(1);
+    admission
+        .paid_work_walk_bound_daa(epoch_len)
+        .div_ceil(epoch_len)
+        .saturating_add(palw_audit_epoch_inclusion_window_epochs(admission))
+        .saturating_add(freshness_window_epochs)
+        .saturating_add(2)
+}
+
+/// ADR-0045 D3-b — how many past epochs of provider-snapshot commitments the history must retain:
+/// the beacon window plus the snapshot lag `k` (clause 12 resolves the snapshot at `anchor − k`,
+/// one lag deeper than the oldest beacon read).
+pub fn palw_provider_snapshot_history_window_epochs(
+    admission: &PalwBatchAdmissionParams,
+    epoch_length_daa: u64,
+    freshness_window_epochs: u64,
+    snapshot_lag_epochs: u64,
+) -> u64 {
+    palw_beacon_seed_history_window_epochs(admission, epoch_length_daa, freshness_window_epochs).saturating_add(snapshot_lag_epochs)
+}
+
+/// The oldest epoch a history window anchored at `current_epoch` must still answer for. Epochs
+/// strictly below this are sweepable; a read below it is `None`, i.e. PCPB fails closed.
+pub fn palw_beacon_seed_history_floor(current_epoch: u64, window_epochs: u64) -> u64 {
+    current_epoch.saturating_sub(window_epochs)
 }
 
 /// kaspa-pq **ADR-0040 §5.17.3 (§CERT-REDERIVE, bounded inclusion rule)** — the pure predicate half of
@@ -5013,6 +5354,160 @@ pub fn aggregate_provider_credentials_at(
     out
 }
 
+/// **REG-CAP-01 — the MEASURED audit capacity behind one Compute Set at one point of view.**
+///
+/// Every field is derived from the SAME population [`aggregate_provider_credentials_at`] hands the
+/// committee sampler, because a gate that measures a different population than the selector draws
+/// from is not a gate. Shares are basis points of total matured stake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwAuditorCapacityV1 {
+    pub eligible_credentials: u32,
+    pub operator_groups: u32,
+    pub total_matured_bond: u128,
+    pub largest_credential_share_bps: u16,
+    pub largest_group_share_bps: u16,
+}
+
+/// **REG-CAP-01 — the capacity a Compute Set must have before it may earn.**
+///
+/// # What was wrong
+///
+/// `PalwComputeSetPolicyV1::auditor_capacity_threshold` and
+/// `PalwConformanceVectorSetV1::auditor_capacity_threshold` were compared against a
+/// `measured_auditor_capacity` argument that NO production caller ever supplied. The number was
+/// governed, stored, and checked against nothing.
+///
+/// Worse, a bare count is the wrong shape: five credentials behind one operator, or five
+/// credentials where one holds 96 % of the stake, is one auditor wearing hats. The committee
+/// sampler already aggregates by credential and excludes operator-group siblings, so the gate has
+/// to speak the same language — counts AND concentration.
+///
+/// # The rule this encodes
+///
+/// When capacity is short, the network lowers ISSUANCE, never the safety requirement. There is
+/// deliberately no path here that shrinks `min_selected_committee_members` to fit the auditors
+/// available: a set that cannot be audited independently goes to Shadow with zero share and zero
+/// weight and keeps serving traffic without minting DAG credit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwAuditorCapacityGateV1 {
+    pub min_eligible_credentials: u16,
+    pub min_operator_groups: u16,
+    pub min_selected_committee_members: u16,
+    pub max_largest_credential_share_bps: u16,
+    pub max_largest_group_share_bps: u16,
+    pub min_total_matured_bond: u128,
+}
+
+impl PalwAuditorCapacityGateV1 {
+    /// Initial permissioned-testnet calibration. These are a starting point tied to a threat model
+    /// and a bond price, not derived constants — a value-bearing network wants materially more
+    /// (the audit's own guidance: ≥8 credentials, ≥5 groups, ≥5 committee, ≤25–33 % concentration).
+    pub const TESTNET: Self = Self {
+        min_eligible_credentials: 4,
+        min_operator_groups: 3,
+        min_selected_committee_members: 3,
+        max_largest_credential_share_bps: 4_000,
+        max_largest_group_share_bps: 5_000,
+        min_total_matured_bond: 0,
+    };
+
+    /// `Ok(())` when `capacity` supports independent auditing; otherwise WHY not, so an operator
+    /// can see which dimension is short rather than only that the set stopped earning.
+    pub fn admits(&self, capacity: &PalwAuditorCapacityV1) -> Result<(), PalwAuditorCapacityShortfall> {
+        use PalwAuditorCapacityShortfall::*;
+        if capacity.eligible_credentials < self.min_eligible_credentials as u32 {
+            return Err(TooFewCredentials { have: capacity.eligible_credentials, need: self.min_eligible_credentials });
+        }
+        if capacity.operator_groups < self.min_operator_groups as u32 {
+            return Err(TooFewOperatorGroups { have: capacity.operator_groups, need: self.min_operator_groups });
+        }
+        // A committee cannot exceed the credentials it is drawn from (sampling is WITHOUT
+        // replacement), so this is the "we cannot seat a real committee" case.
+        if capacity.eligible_credentials < self.min_selected_committee_members as u32 {
+            return Err(CommitteeUnseatable { have: capacity.eligible_credentials, need: self.min_selected_committee_members });
+        }
+        if capacity.total_matured_bond < self.min_total_matured_bond {
+            return Err(TooLittleBond { have: capacity.total_matured_bond, need: self.min_total_matured_bond });
+        }
+        if capacity.largest_credential_share_bps > self.max_largest_credential_share_bps {
+            return Err(CredentialTooConcentrated {
+                share_bps: capacity.largest_credential_share_bps,
+                cap_bps: self.max_largest_credential_share_bps,
+            });
+        }
+        if capacity.largest_group_share_bps > self.max_largest_group_share_bps {
+            return Err(OperatorGroupTooConcentrated {
+                share_bps: capacity.largest_group_share_bps,
+                cap_bps: self.max_largest_group_share_bps,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Which dimension of [`PalwAuditorCapacityGateV1`] a set fell short on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwAuditorCapacityShortfall {
+    #[error("{have} eligible auditor credentials, need {need}")]
+    TooFewCredentials { have: u32, need: u16 },
+    #[error("{have} independent operator groups, need {need}")]
+    TooFewOperatorGroups { have: u32, need: u16 },
+    #[error("{have} credentials cannot seat a committee of {need} (sampling is without replacement)")]
+    CommitteeUnseatable { have: u32, need: u16 },
+    #[error("{have} sompi of matured auditor bond, need {need}")]
+    TooLittleBond { have: u128, need: u128 },
+    #[error("one credential holds {share_bps} bps of auditor stake, cap is {cap_bps}")]
+    CredentialTooConcentrated { share_bps: u16, cap_bps: u16 },
+    #[error("one operator group holds {share_bps} bps of auditor stake, cap is {cap_bps}")]
+    OperatorGroupTooConcentrated { share_bps: u16, cap_bps: u16 },
+}
+
+/// **REG-CAP-01 — measure the audit capacity actually present at `pov_daa_score`.**
+///
+/// Credential aggregation is [`aggregate_provider_credentials_at`] verbatim (so the numbers
+/// describe the exact draw population); operator groups are then rolled up over that same set, so
+/// a credential split across ten bonds counts once and ten credentials behind one operator count
+/// as one group.
+pub fn measure_auditor_capacity(view: &ProviderBondView, pov_daa_score: u64) -> PalwAuditorCapacityV1 {
+    let empty: HashSet<Hash64> = HashSet::new();
+    let credentials = aggregate_provider_credentials_at(view, pov_daa_score, &empty, &empty);
+    // Map each eligible credential to its operator group. A credential's bonds all carry the same
+    // group in practice; take the smallest so the rollup is order-independent either way.
+    let mut group_of: std::collections::HashMap<Hash64, Hash64> = std::collections::HashMap::new();
+    for record in view.records() {
+        if !is_provider_bond_active_at(&record, pov_daa_score) {
+            continue;
+        }
+        let entry = group_of.entry(record.owner_pubkey_hash).or_insert(record.operator_group_id);
+        if record.operator_group_id.as_byte_slice() < entry.as_byte_slice() {
+            *entry = record.operator_group_id;
+        }
+    }
+    let total: u128 = credentials.iter().fold(0u128, |sum, c| sum.saturating_add(c.weight));
+    let mut by_group: std::collections::HashMap<Hash64, u128> = std::collections::HashMap::new();
+    for credential in &credentials {
+        let group = group_of.get(&credential.credential).copied().unwrap_or(credential.credential);
+        let slot = by_group.entry(group).or_insert(0);
+        *slot = slot.saturating_add(credential.weight);
+    }
+    let share_bps = |part: u128| -> u16 {
+        if total == 0 {
+            return 0;
+        }
+        // Round UP: a concentration cap must not be cleared by truncation.
+        (part.saturating_mul(BPS_DENOMINATOR_U128).div_ceil(total)).min(BPS_DENOMINATOR_U128) as u16
+    };
+    PalwAuditorCapacityV1 {
+        eligible_credentials: credentials.len() as u32,
+        operator_groups: by_group.len() as u32,
+        total_matured_bond: total,
+        largest_credential_share_bps: share_bps(credentials.iter().map(|c| c.weight).max().unwrap_or(0)),
+        largest_group_share_bps: share_bps(by_group.values().copied().max().unwrap_or(0)),
+    }
+}
+
+const BPS_DENOMINATOR_U128: u128 = 10_000;
+
 /// Deterministic weighted draw in `[0, total)` for round `round` (SEL-01) — a wide (128-bit) reduction
 /// of a keyed digest of `seed ‖ context ‖ round`. The modulo bias is cryptographically negligible for
 /// any realistic total (`total ≪ 2^128`) and, being deterministic, is consensus-safe regardless.
@@ -5942,6 +6437,7 @@ pub fn lane_retarget_decision(
 // `Count` cache policy, no byte estimation), so `DbPalwStore` can cache them like the other per-key
 // stores.
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwPublicLeafV1 {}
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwSnapshotCommitment {}
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwBatchManifestV1 {}
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwBatchCertificateV2 {}
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwProviderBondPayloadV1 {}
@@ -5991,50 +6487,23 @@ mod tests {
 
     #[test]
     fn palw_challenge_freshness_window() {
-        // D15 (i): challenge must be within W epochs of registration and not from the future.
-        assert!(palw_challenge_fresh(10, 10, 4), "same-epoch challenge is fresh");
-        assert!(palw_challenge_fresh(7, 10, 4), "3 epochs old, W=4 ⇒ fresh");
-        assert!(!palw_challenge_fresh(5, 10, 4), "5 epochs old, W=4 ⇒ stale (replay blocked)");
-        assert!(!palw_challenge_fresh(11, 10, 4), "challenge from the future ⇒ rejected");
-    }
-
-    #[test]
-    fn palw_dispatch_proof_two_valid_forms_and_pcpb_catches_preselection() {
-        // D15 (ii): the two dispatch proofs, and PCPB closing the self-order collusion gap.
-        let beacon = h(0x5e); // the post-commit beacon the verifier recomputes
-        let a_commit = h(0xa0);
-        // External / parallel: both slots beacon-assigned.
-        assert!(palw_dispatch_proof_valid(
-            &PalwDispatchProof::BothSlotsBeacon { slot_a_beacon_ok: true, slot_b_beacon_ok: true },
-            &beacon
-        ));
-        assert!(!palw_dispatch_proof_valid(
-            &PalwDispatchProof::BothSlotsBeacon { slot_a_beacon_ok: true, slot_b_beacon_ok: false },
-            &beacon
-        ));
-        // Self / serial: B must be the post-commit derivation AND B's receipt must bind A_commit.
-        let b = palw_pcpb_derive_b(&beacon, &a_commit);
-        assert!(palw_dispatch_proof_valid(
-            &PalwDispatchProof::SelfAPlusPcpb { a_commit, b_claimed: b, b_receipt_binds_a_commit: true },
-            &beacon
-        ));
-        // PCPB catches a PRE-selected sybil B (not the post-commit derivation) — the real self-order gap.
+        // D3-b clause 11 (pure half): issued ≤ anchor ∧ anchor+Δ ≤ registered ∧ registered−issued ≤ w.
+        // Each bound shown load-bearing at its exact boundary.
+        assert!(palw_challenge_fresh(10, 10, 12, 4, 2), "anchor+Δ == registered exactly ⇒ fresh");
+        assert!(palw_challenge_fresh(7, 8, 10, 4, 2), "anchor between issued and registered−Δ ⇒ fresh");
+        assert!(palw_challenge_fresh(6, 6, 10, 4, 2), "registered−issued == w exactly ⇒ fresh");
+        assert!(!palw_challenge_fresh(5, 6, 10, 4, 2), "registered−issued == w+1 ⇒ stale (replay blocked)");
+        assert!(!palw_challenge_fresh(11, 11, 10, 4, 2), "challenge from the future ⇒ rejected");
+        assert!(!palw_challenge_fresh(10, 9, 12, 4, 2), "anchor before issued ⇒ rejected (self anchor cannot pre-date its challenge)");
         assert!(
-            !palw_dispatch_proof_valid(
-                &PalwDispatchProof::SelfAPlusPcpb { a_commit, b_claimed: h(0xbb), b_receipt_binds_a_commit: true },
-                &beacon
-            ),
-            "a B that is not the post-commit derivation (pre-selected sybil) is rejected"
+            !palw_challenge_fresh(10, 10, 11, 4, 2),
+            "anchor+Δ > registered ⇒ rejected — the draw beacon would not post-date the anchor (grindable B selection)"
         );
-        // PCPB requires B's receipt to carry the ordering proof (bind A_commit).
-        assert!(
-            !palw_dispatch_proof_valid(
-                &PalwDispatchProof::SelfAPlusPcpb { a_commit, b_claimed: b, b_receipt_binds_a_commit: false },
-                &beacon
-            ),
-            "B receipt must embed A_commit (the leaf-carried ordering proof)"
-        );
+        assert!(!palw_challenge_fresh(10, u64::MAX, u64::MAX, 4, 2), "anchor+Δ overflow ⇒ rejected, never wrapped");
     }
+    // The declared-`bool` `palw_dispatch_proof_valid` test suite was removed with the type itself
+    // (D3-b): its acceptance surface is now `pcpb_evidence_tests`, which proves each branch by
+    // RE-DERIVATION against real ML-DSA-87 / Merkle / weighted-draw material instead.
     fn op(b: u8, i: u32) -> TransactionOutpoint {
         TransactionOutpoint::new(h(b), i)
     }
@@ -6267,6 +6736,39 @@ mod tests {
             activation_epoch: 102,
             expiry_epoch: 108,
             leaf_bond_sompi: 1_000,
+            // External-branch PCPB sentinels (D3-b): a legacy Object-V1 fixture carries the zero
+            // anchor; the snapshot roots are opaque non-zero filler (context-free validation does not
+            // resolve them — clause 12 does, and this fixture never reaches an acceptance arm).
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: h(0x71),
+            assignment_proof_root: h(0x72),
+            dispatch_kind: PALW_DISPATCH_KIND_BEACON_ASSIGNED,
+        }
+    }
+
+    /// D3-b: an arity-filler PCPB witness for chunk fixtures whose test subject is NOT the PCPB
+    /// semantics (those live at the acceptance gate and in `pcpb_evidence_tests`). SHAPE-valid only —
+    /// it passes `validate_pcpb_witness_shape`'s bounds and nothing more.
+    fn dummy_external_witness() -> PalwLeafPcpbWitnessV1 {
+        let entry = |b: u8| PalwProviderSnapshotEntry {
+            provider_id: h(b),
+            ml_dsa_pk_hash: h(b.wrapping_add(1)),
+            bond_sompi: 10,
+            reward_script_commitment: h(b.wrapping_add(2)),
+        };
+        let membership = |b: u8| PalwMerkleMembership { index: 0, leaf: h(b), siblings: Vec::new() };
+        let slot = |b: u8, lo: u128| SlotAssignmentWitness {
+            entry: entry(b),
+            snapshot_membership: membership(b),
+            interval: PalwAssignmentInterval { provider_id: h(b), bond_sompi: 10, cumulative_lo: lo },
+            assignment_membership: membership(b),
+        };
+        PalwLeafPcpbWitnessV1 {
+            scheduler_job_id: h(0xe1),
+            requester_credential: h(0xe2),
+            request_commitment: h(0xe3),
+            dispatch: PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof { slot_a: slot(0xe4, 0), slot_b: slot(0xe8, 10) }),
         }
     }
 
@@ -6471,7 +6973,8 @@ mod tests {
         let leaves = vec![sample_leaf(), sample_leaf()];
         let hashes: Vec<Hash64> = leaves.iter().map(|l| l.leaf_hash()).collect();
         let proofs: Vec<_> = (0..leaves.len() as u32).map(|i| palw_leaf_merkle_proof(&hashes, i).unwrap()).collect();
-        let chunk = PalwLeafChunkV1 { version: PALW_LEAF_CHUNK_VERSION_V2, batch_id: h(1), chunk_index: 0, leaves, proofs };
+        let witnesses = vec![dummy_external_witness(), dummy_external_witness()];
+        let chunk = PalwLeafChunkV1 { version: PALW_LEAF_CHUNK_VERSION_V3, batch_id: h(1), chunk_index: 0, leaves, proofs, witnesses };
         let back = PalwLeafChunkV1::try_from_slice(&borsh::to_vec(&chunk).unwrap()).unwrap();
         assert_eq!(chunk, back);
         assert!(chunk.leaves.len() <= PALW_MAX_LEAVES_PER_CHUNK);
@@ -7103,10 +7606,11 @@ mod tests {
         let mut leaf = sample_leaf();
         leaf.batch_id = h(5);
         let chunk = PalwLeafChunkV1 {
-            version: PALW_LEAF_CHUNK_VERSION_V2,
+            version: PALW_LEAF_CHUNK_VERSION_V3,
             batch_id: h(5),
             chunk_index: 0,
             proofs: vec![palw_leaf_merkle_proof(&[leaf.leaf_hash()], 0).unwrap()],
+            witnesses: vec![dummy_external_witness()],
             leaves: vec![leaf],
         };
         let certificate = PalwBatchCertificateV2 {
@@ -7361,9 +7865,10 @@ mod tests {
 
         let mut chunk: PalwLeafChunkV1 = borsh::from_slice(&payloads.iter().find(|(kind, _)| *kind == 0x32).unwrap().1).unwrap();
         chunk.leaves.push(chunk.leaves[0].clone());
-        // Keep the proof vector index-aligned so this still lands on the NULLIFIER-uniqueness check and
-        // not on the (earlier) ADR-0040 §5.15 `proofs.len() == leaves.len()` arity check.
+        // Keep the proof AND witness vectors index-aligned so this still lands on the NULLIFIER-
+        // uniqueness check and not on the (earlier) arity checks (§5.15 proofs, D3-b witnesses).
         chunk.proofs.push(chunk.proofs[0].clone());
+        chunk.witnesses.push(chunk.witnesses[0].clone());
         assert_eq!(
             validate_palw_overlay_payload(0x32, &borsh::to_vec(&chunk).unwrap()),
             Err(PalwTxError::NonCanonical("leaf_chunk.ticket_nullifiers"))
@@ -8016,7 +8521,7 @@ mod tests {
                 model_profile_id: h(3),
                 runtime_class_id: h(4),
                 leaf_count: 100,
-                chunk_count: 2,
+                chunk_count: 100u32.div_ceil(PALW_MAX_LEAVES_PER_CHUNK as u32) as u16,
                 leaf_root: palw_leaf_merkle_root(&[h(1), h(2)]),
                 descriptor_root: h(6),
                 total_leaf_bond_sompi: 0,
@@ -8216,6 +8721,7 @@ mod tests {
         let chunk = |chunk_index: u16, nullifiers: &[u8]| PalwLeafChunkV1 {
             version: PALW_LEAF_CHUNK_VERSION_V2,
             proofs: Vec::new(),
+            witnesses: Vec::new(),
             batch_id: m.batch_id,
             chunk_index,
             leaves: nullifiers
@@ -9220,19 +9726,21 @@ mod tests {
     #[test]
     fn palw_leaf_merkle_root_cross_crate_golden_vector() {
         // MIRRORED VERBATIM from mil/miner/src/registration.rs. Keep the two copies textually identical;
-        // do NOT factor them into a shared item, which would defeat the purpose. This one permitted move
-        // is the explicit Header-v4/Object-v2 re-genesis paired with DB v14; an in-place upgrade must not
-        // refresh these values because doing so redefines every content-addressed batch.
+        // do NOT factor them into a shared item, which would defeat the purpose. The permitted moves are
+        // explicit re-genesis cutovers: the Header-v4/Object-v2 one paired with DB v14, and the ADR-0045
+        // D3-b PCPB LeafV2 one paired with DB v16 (five new leaf fields ⇒ every `leaf_hash` moves ⇒ every
+        // `leaf_root`, `content_id()` and `batch_id` moves). An in-place upgrade must not refresh these
+        // values, because doing so redefines every content-addressed batch.
         const CROSS_CRATE_GOLDEN_LEAF_HASHES: [&str; 3] = [
-            "2ad648c04cd7d10b3808afd4303958627447b91d992b62d94a96b7584efefde0\
-             ce9140d9a67883e1d0ed08c107796fa41e4a611afc282b51fc8c5ff0fd3fb801",
-            "73727526c0b05a6dd04709778cf112b7e9bfbf372652742ec9e069002b5fdbe3\
-             43a337b87d3f0830b9cbeeaa42247a691cc6b2e57a1068b6f4dc154e45cf35f9",
-            "c3d33401296d2941c812e415dccfb5fee526f99d5792bcae6afaeec02c69933c\
-             a2167a61742f1da6eb1751fcc32257a79f0259ed37a3a1244f28bf2f5924b77e",
+            "98d226d4654d55e5c118ad2e4adaae03cbfcd86cc8990c7da9e407084f119021\
+             3e789dd59e646feec887fa876bb22015187350993b50756a02d74007c8138c40",
+            "10f1f3b308b3ab2fcbdd7189676c751f39fe2ed30144cc73e71298ad85e95199\
+             b19d6d3d472f8aab4f83b710d943cea6ed8a6d3ddcb8555220026d50f42c68c5",
+            "77e420786bfd24315022c4f305a405550d3136ef25e705c206b4a8c59b62eedf\
+             ad63c352130f7104550113fa290169d5ca280f25dad40037c40cceaef412e988",
         ];
-        const CROSS_CRATE_GOLDEN_LEAF_ROOT: &str = "131b505a6a3e87a095cf16d49237ad1fd325efd38b80bd8e0c64894ea065bc7b4\
-             46060d1e35e70acfa72cdfee54902d176377933c30c3ee1e96b8722eeeced57";
+        const CROSS_CRATE_GOLDEN_LEAF_ROOT: &str = "bc2b08b3ee25a4c761fec1e5313f06b2fde1ab205e1b1cd734578d92e645b1166\
+             ffe1f6eacf8140d0b8abcd78efa079cd38dd6292dad5446c70811ba480bbfb4";
 
         let hashes: Vec<Hash64> = CROSS_CRATE_GOLDEN_LEAF_HASHES.iter().map(|s| s.parse::<Hash64>().expect("hex")).collect();
         let root = palw_leaf_merkle_root(&hashes);
@@ -9383,11 +9891,12 @@ mod tests {
         assert!(!palw_verify_leaf_membership(&dup, 0, 4, &p2, &root));
     }
 
-    /// The context-free half of the ADR-0040 §5.15 leaf-chunk rules: v2 is MANDATORY, `proofs` is arity-
-    /// checked against `leaves`, and proof length has a static upper bound. The EXACT length check is
-    /// deliberately absent here — see `validate_leaf_chunk`'s doc for why the split exists.
+    /// The context-free half of the ADR-0040 §5.15 + D3-b leaf-chunk rules: v3 is MANDATORY, `proofs`
+    /// and `witnesses` are arity-checked against `leaves`, and proof length has a static upper bound.
+    /// The EXACT length check is deliberately absent here — see `validate_leaf_chunk`'s doc for why the
+    /// split exists.
     #[test]
-    fn palw_leaf_chunk_v2_is_mandatory_and_proofs_are_arity_bounded() {
+    fn palw_leaf_chunk_v3_is_mandatory_and_proofs_are_arity_bounded() {
         let mk = |n: u32| {
             let leaves: Vec<PalwPublicLeafV1> = (0..n)
                 .map(|i| {
@@ -9400,20 +9909,55 @@ mod tests {
                 .collect();
             let hashes: Vec<Hash64> = leaves.iter().map(|l| l.leaf_hash()).collect();
             let proofs: Vec<_> = (0..n).map(|i| palw_leaf_merkle_proof(&hashes, i).unwrap()).collect();
-            PalwLeafChunkV1 { version: PALW_LEAF_CHUNK_VERSION_V2, batch_id: leaves[0].batch_id, chunk_index: 0, leaves, proofs }
+            let witnesses: Vec<_> = (0..n).map(|_| dummy_external_witness()).collect();
+            PalwLeafChunkV1 { version: PALW_LEAF_CHUNK_VERSION_V3, batch_id: leaves[0].batch_id, chunk_index: 0, leaves, proofs, witnesses }
         };
 
         let good = mk(3);
         assert_eq!(validate_palw_overlay_payload(0x32, &borsh::to_vec(&good).unwrap()), Ok(()));
 
+        // D3-b §8: the v3 leaf cap is enforced context-free — a chunk one leaf over
+        // `PALW_MAX_LEAVES_PER_CHUNK` is refused before any contextual work, so the payload budget
+        // asserted below (a FULL chunk fits the byte cap) is a bound on the largest admissible
+        // chunk, not on a shape an oversized chunk could exceed.
+        let over = mk(PALW_MAX_LEAVES_PER_CHUNK as u32 + 1);
+        assert_eq!(
+            validate_palw_overlay_payload(0x32, &borsh::to_vec(&over).unwrap()),
+            Err(PalwTxError::InvalidCount {
+                field: "leaf_chunk.leaves",
+                count: PALW_MAX_LEAVES_PER_CHUNK + 1,
+                min: 1,
+                max: PALW_MAX_LEAVES_PER_CHUNK
+            })
+        );
+
         // v1 is REJECTED. Nothing "falls back" to an empty `proofs` — that lenient parse is the hole.
         let mut v1 = good.clone();
         v1.version = PALW_PAYLOAD_VERSION_V1;
         assert_eq!(validate_palw_overlay_payload(0x32, &borsh::to_vec(&v1).unwrap()), Err(PalwTxError::UnsupportedVersion(1)));
-        // And the shared v1 check still governs the OTHER payload kinds — a v2 certificate is refused.
-        let mut v3 = good.clone();
-        v3.version = 3;
-        assert_eq!(validate_palw_overlay_payload(0x32, &borsh::to_vec(&v3).unwrap()), Err(PalwTxError::UnsupportedVersion(3)));
+        // v2 is REJECTED one version up, for the D3-b reason: an empty-defaulted `witnesses` would ship
+        // a leaf the PCPB gate never examined — the exact partial-gating state clause 12 forbids.
+        let mut v2 = good.clone();
+        v2.version = PALW_LEAF_CHUNK_VERSION_V2;
+        assert_eq!(validate_palw_overlay_payload(0x32, &borsh::to_vec(&v2).unwrap()), Err(PalwTxError::UnsupportedVersion(2)));
+        // And an unknown future version is refused too.
+        let mut v4 = good.clone();
+        v4.version = 4;
+        assert_eq!(validate_palw_overlay_payload(0x32, &borsh::to_vec(&v4).unwrap()), Err(PalwTxError::UnsupportedVersion(4)));
+
+        // witnesses.len() must equal leaves.len(), in both directions (D3-b arity).
+        let mut wshort = good.clone();
+        wshort.witnesses.pop();
+        assert_eq!(
+            validate_palw_overlay_payload(0x32, &borsh::to_vec(&wshort).unwrap()),
+            Err(PalwTxError::InvalidCount { field: "leaf_chunk.witnesses", count: 2, min: 3, max: 3 })
+        );
+        let mut wlong = good.clone();
+        wlong.witnesses.push(wlong.witnesses[0].clone());
+        assert_eq!(
+            validate_palw_overlay_payload(0x32, &borsh::to_vec(&wlong).unwrap()),
+            Err(PalwTxError::InvalidCount { field: "leaf_chunk.witnesses", count: 4, min: 3, max: 3 })
+        );
 
         // proofs.len() must equal leaves.len(), in both directions.
         let mut short = good.clone();
@@ -9447,19 +9991,65 @@ mod tests {
         wrong_len.proofs[1].siblings.pop();
         assert_eq!(validate_palw_overlay_payload(0x32, &borsh::to_vec(&wrong_len).unwrap()), Ok(()));
 
-        // ADR-0040 §5.15.2 payload budget: a FULL chunk with maximum-depth proofs fits the 512 KiB cap.
+        // D3-b payload budget (design memo §5): a FULL 24-leaf chunk with maximum-depth membership
+        // proofs and REALISTIC worst-case SelfSerial witnesses (16-sibling snapshot/assignment paths =
+        // 65 536 providers, a 4 KiB receipt preimage, real ML-DSA-87 key/signature widths) must fit the
+        // 512 KiB cap — measured on the exact encoding, not estimated.
         let full = {
             let mut c = mk(PALW_MAX_LEAVES_PER_CHUNK as u32);
             for p in c.proofs.iter_mut() {
-                p.siblings = vec![h(0xab); PALW_MAX_LEAF_MEMBERSHIP_PROOF_LEN];
+                p.siblings = vec![h(0xcc); PALW_MAX_LEAF_MEMBERSHIP_PROOF_LEN];
+            }
+            let deep = |b: u8| PalwMerkleMembership { index: 0, leaf: h(b), siblings: vec![h(b); 16] };
+            let entry = |b: u8| PalwProviderSnapshotEntry {
+                provider_id: h(b),
+                ml_dsa_pk_hash: h(b.wrapping_add(1)),
+                bond_sompi: 10,
+                reward_script_commitment: h(b.wrapping_add(2)),
+            };
+            for w in c.witnesses.iter_mut() {
+                w.dispatch = PalwDispatchEvidence::SelfSerial(SelfSerialProof {
+                    a_commit: h(0xa1),
+                    a_entry: entry(0xa2),
+                    a_snapshot_membership: deep(0xa3),
+                    b_entry: entry(0xb2),
+                    b_snapshot_membership: deep(0xb3),
+                    b_interval: PalwAssignmentInterval { provider_id: h(0xb2), bond_sompi: 10, cumulative_lo: 0 },
+                    b_assignment_membership: deep(0xb4),
+                    b_ml_dsa_pk: vec![0x41; STAKE_VALIDATOR_PUBKEY_LEN],
+                    b_receipt_preimage: vec![0x42; 4096],
+                    b_signature: vec![0x43; STAKE_ATTESTATION_SIG_LEN],
+                });
             }
             c
         };
         let bytes = borsh::to_vec(&full).unwrap();
         assert!(
             bytes.len() < PALW_MAX_OVERLAY_PAYLOAD_BYTES,
-            "a full 64-leaf chunk with depth-8 proofs is {} bytes and must fit the {PALW_MAX_OVERLAY_PAYLOAD_BYTES}-byte cap",
+            "a full {PALW_MAX_LEAVES_PER_CHUNK}-leaf v3 chunk with worst-case honest witnesses is {} bytes and must fit the {PALW_MAX_OVERLAY_PAYLOAD_BYTES}-byte cap",
             bytes.len()
+        );
+        // The all-maximal ADVERSARIAL shape (32-sibling paths + 8 KiB preimages) deliberately exceeds
+        // the cap — the byte-size gate rejects it BEFORE decoding, which is the intended ordering (the
+        // shape bounds exist to bound decode work on payloads that pass the size gate, not to admit
+        // every combination of individual maxima).
+        let hostile = {
+            let mut c = full.clone();
+            for w in c.witnesses.iter_mut() {
+                if let PalwDispatchEvidence::SelfSerial(p) = &mut w.dispatch {
+                    p.a_snapshot_membership.siblings = vec![h(0xdd); PALW_MAX_PCPB_MEMBERSHIP_SIBLINGS];
+                    p.b_snapshot_membership.siblings = vec![h(0xdd); PALW_MAX_PCPB_MEMBERSHIP_SIBLINGS];
+                    p.b_assignment_membership.siblings = vec![h(0xdd); PALW_MAX_PCPB_MEMBERSHIP_SIBLINGS];
+                    p.b_receipt_preimage = vec![0x44; PALW_MAX_PCPB_RECEIPT_PREIMAGE_BYTES];
+                }
+            }
+            c
+        };
+        let hostile_bytes = borsh::to_vec(&hostile).unwrap();
+        assert!(hostile_bytes.len() > PALW_MAX_OVERLAY_PAYLOAD_BYTES, "expected the all-maximal shape to exceed the size gate");
+        assert_eq!(
+            validate_palw_overlay_payload(0x32, &hostile_bytes),
+            Err(PalwTxError::PayloadTooLarge { len: hostile_bytes.len(), max: PALW_MAX_OVERLAY_PAYLOAD_BYTES })
         );
     }
 
@@ -9507,6 +10097,8 @@ mod tests {
             ("PALW_ASSIGNMENT_NODE_DOMAIN", PALW_ASSIGNMENT_NODE_DOMAIN),
             ("PALW_ASSIGNMENT_DRAW_DOMAIN", PALW_ASSIGNMENT_DRAW_DOMAIN),
             ("PALW_PROVIDER_PK_HASH_DOMAIN", PALW_PROVIDER_PK_HASH_DOMAIN),
+            ("PALW_PROVIDER_ID_DOMAIN", PALW_PROVIDER_ID_DOMAIN),
+            ("PALW_JOB_CHALLENGE_DOMAIN", PALW_JOB_CHALLENGE_DOMAIN),
             // Model-agnostic Compute Set registry (palw_compute_set.rs) — same keyed-domain
             // namespace, so they join this single distinctness registry.
             ("PALW_COMPUTE_SET_ID_DOMAIN", crate::palw_compute_set::PALW_COMPUTE_SET_ID_DOMAIN),
@@ -9589,6 +10181,8 @@ mod tests {
         assert_eq!(PALW_ASSIGNMENT_NODE_DOMAIN, b"misaka-palw-pcpb-assign-node-v1");
         assert_eq!(PALW_ASSIGNMENT_DRAW_DOMAIN, b"misaka-palw-pcpb-assign-draw-v1");
         assert_eq!(PALW_PROVIDER_PK_HASH_DOMAIN, b"misaka-palw-pcpb-provider-pk-v1");
+        assert_eq!(PALW_PROVIDER_ID_DOMAIN, b"misaka-palw-pcpb-provider-id-v1");
+        assert_eq!(PALW_JOB_CHALLENGE_DOMAIN, b"misaka-palw-bridge-v1/job-challenge");
         assert_eq!(PALW_PCPB_RECEIPT_TAG, b"misaka-palw-pcpb-receipt-binds-a-commit-v1");
         // ML-DSA-87 FIPS-204 `ctx` strings (disjoint per operation).
         assert_eq!(PALW_BEACON_MLDSA87_CONTEXT, b"PALWBeaconV1");
@@ -9621,6 +10215,8 @@ mod tests {
             PALW_ASSIGNMENT_NODE_DOMAIN,
             PALW_ASSIGNMENT_DRAW_DOMAIN,
             PALW_PROVIDER_PK_HASH_DOMAIN,
+            PALW_PROVIDER_ID_DOMAIN,
+            PALW_JOB_CHALLENGE_DOMAIN,
         ] {
             assert!(d.len() <= 64, "domain {:?} exceeds BLAKE2b key limit", core::str::from_utf8(d));
         }
@@ -9760,6 +10356,135 @@ mod tests {
         assert_eq!(cands.len(), 1, "the sub-floor bond must not appear as a selection candidate");
         assert_eq!(cands[0].credential, validator_id_from_pubkey(&econ03_bond_payload(FLOOR, 0x41).0.owner_public_key));
         assert_eq!(cands[0].weight, FLOOR as u128);
+    }
+
+    /// ADR-0045 D3-a — the retention window is a function of PARAMETERS, never of chain length.
+    ///
+    /// That is the whole reason the store can exist: an unbounded seed history would grow forever,
+    /// and a window shorter than the verification lookback would make honest tickets fail closed.
+    /// The window is the epoch-space form of the rule the paid-work walk already obeys.
+    #[test]
+    fn beacon_seed_history_window_covers_the_verification_lookback() {
+        let admission = PalwBatchAdmissionParams::INERT;
+        let epoch_len = 100u64;
+        let (w, k) = (6u64, 2u64); // the PCPB windows (mirrors PalwParams::testnet_inert_default)
+        let window = palw_beacon_seed_history_window_epochs(&admission, epoch_len, w);
+
+        // It covers the whole batch lifecycle (the paid-work walk bound, in epochs)...
+        let walk_epochs = admission.paid_work_walk_bound_daa(epoch_len).div_ceil(epoch_len);
+        assert!(window > walk_epochs, "a ticket bound anywhere in the batch lifecycle must resolve");
+        // ...plus the certificate-inclusion window, plus the D3-b freshness lookback (clause 11
+        // re-derives the challenge under `R_{issued}`, up to `w` epochs behind registration), plus
+        // boundary slack.
+        assert_eq!(window, walk_epochs + palw_audit_epoch_inclusion_window_epochs(&admission) + w + 2);
+        // The D3-a window (no freshness lookback) was exactly `w` narrower — the amendment is real.
+        assert_eq!(palw_beacon_seed_history_window_epochs(&admission, epoch_len, 0) + w, window);
+
+        // The provider-snapshot history reaches one snapshot lag deeper still (clause 12 resolves the
+        // snapshot at `anchor − k`).
+        assert_eq!(palw_provider_snapshot_history_window_epochs(&admission, epoch_len, w, k), window + k);
+
+        // Independent of chain length: the same parameters give the same window at any epoch.
+        assert_eq!(palw_beacon_seed_history_window_epochs(&admission, epoch_len, w), window);
+        // A longer epoch does not shrink the covered SPAN below the lifecycle.
+        for len in [1u64, 7, 100, 10_000] {
+            let win = palw_beacon_seed_history_window_epochs(&admission, len, w);
+            assert!(win >= admission.paid_work_walk_bound_daa(len).div_ceil(len));
+        }
+        // Degenerate epoch length is clamped, not a division by zero.
+        assert!(palw_beacon_seed_history_window_epochs(&admission, 0, w) > 0);
+
+        // The floor is the oldest epoch still answerable; below it a read is `None` (fail-closed).
+        assert_eq!(palw_beacon_seed_history_floor(1_000, window), 1_000 - window);
+        assert_eq!(palw_beacon_seed_history_floor(3, 1_000), 0, "early chain saturates rather than wrapping");
+    }
+
+    /// REG-CAP-01 — the capacity MEASUREMENT counts independence, not appearances.
+    ///
+    /// The threshold field was compared against a `measured_auditor_capacity` no caller supplied.
+    /// Supplying one only helps if the measurement is hard to inflate, so these are the three
+    /// cheap ways to look like a crowd while being one party.
+    #[test]
+    fn measured_auditor_capacity_resists_splitting_and_concentration() {
+        const POV: u64 = 1_000;
+        // Splitting one credential across many bonds does not multiply it: aggregation collapses
+        // outpoints per credential BEFORE anything is counted (the SEL-01 property, reused).
+        let split = view_of(&[
+            prov_rec(h(0xA1), h(1), 250, 0, op(0xA1, 0)),
+            prov_rec(h(0xA1), h(1), 250, 0, op(0xA1, 1)),
+            prov_rec(h(0xA1), h(1), 250, 0, op(0xA1, 2)),
+            prov_rec(h(0xA1), h(1), 250, 0, op(0xA1, 3)),
+        ]);
+        let capacity = measure_auditor_capacity(&split, POV);
+        assert_eq!(capacity.eligible_credentials, 1, "four outpoints are still one credential");
+        assert_eq!(capacity.operator_groups, 1);
+        assert_eq!(capacity.largest_credential_share_bps, 10_000);
+        assert!(PalwAuditorCapacityGateV1::TESTNET.admits(&capacity).is_err());
+
+        // Distinct credentials behind ONE operator group clear a naive credential count but not
+        // the group count — which is the point of having both.
+        let one_operator = view_of(&[
+            prov_rec(h(0xB1), h(7), 250, 0, op(0xB1, 0)),
+            prov_rec(h(0xB2), h(7), 250, 0, op(0xB2, 0)),
+            prov_rec(h(0xB3), h(7), 250, 0, op(0xB3, 0)),
+            prov_rec(h(0xB4), h(7), 250, 0, op(0xB4, 0)),
+        ]);
+        let capacity = measure_auditor_capacity(&one_operator, POV);
+        assert_eq!(capacity.eligible_credentials, 4, "the credential count alone looks fine");
+        assert_eq!(capacity.operator_groups, 1);
+        assert_eq!(capacity.largest_group_share_bps, 10_000);
+        assert!(matches!(
+            PalwAuditorCapacityGateV1::TESTNET.admits(&capacity),
+            Err(PalwAuditorCapacityShortfall::TooFewOperatorGroups { .. })
+        ));
+
+        // Counts satisfied, but one credential holds 97 %: the committee is stake-weighted, so it
+        // is effectively that credential's committee.
+        let whale = view_of(&[
+            prov_rec(h(0xC1), h(1), 97_000, 0, op(0xC1, 0)),
+            prov_rec(h(0xC2), h(2), 1_000, 0, op(0xC2, 0)),
+            prov_rec(h(0xC3), h(3), 1_000, 0, op(0xC3, 0)),
+            prov_rec(h(0xC4), h(4), 1_000, 0, op(0xC4, 0)),
+        ]);
+        let capacity = measure_auditor_capacity(&whale, POV);
+        assert_eq!(capacity.eligible_credentials, 4);
+        assert_eq!(capacity.operator_groups, 4);
+        assert!(capacity.largest_credential_share_bps > 9_000);
+        assert!(matches!(
+            PalwAuditorCapacityGateV1::TESTNET.admits(&capacity),
+            Err(PalwAuditorCapacityShortfall::CredentialTooConcentrated { .. })
+        ));
+
+        // A genuinely distributed set clears every dimension.
+        let healthy = view_of(&[
+            prov_rec(h(0xD1), h(1), 1_000, 0, op(0xD1, 0)),
+            prov_rec(h(0xD2), h(2), 1_000, 0, op(0xD2, 0)),
+            prov_rec(h(0xD3), h(3), 1_000, 0, op(0xD3, 0)),
+            prov_rec(h(0xD4), h(4), 1_000, 0, op(0xD4, 0)),
+        ]);
+        let capacity = measure_auditor_capacity(&healthy, POV);
+        assert_eq!((capacity.eligible_credentials, capacity.operator_groups), (4, 4));
+        assert_eq!(capacity.total_matured_bond, 4_000);
+        assert_eq!(capacity.largest_credential_share_bps, 2_500);
+        assert_eq!(PalwAuditorCapacityGateV1::TESTNET.admits(&capacity), Ok(()));
+
+        // Bonds that are not yet matured back nothing, so they cannot pad the count — the
+        // measurement uses the same `Active`-at-POV rule the sampler does.
+        let immature = view_of(&[
+            prov_rec(h(0xD1), h(1), 1_000, 0, op(0xD1, 0)),
+            prov_rec(h(0xE2), h(2), 1_000, POV + 1, op(0xE2, 0)),
+            prov_rec(h(0xE3), h(3), 1_000, POV + 1, op(0xE3, 0)),
+            prov_rec(h(0xE4), h(4), 1_000, POV + 1, op(0xE4, 0)),
+        ]);
+        let capacity = measure_auditor_capacity(&immature, POV);
+        assert_eq!(capacity.eligible_credentials, 1, "immature bonds are not audit capacity");
+        assert!(PalwAuditorCapacityGateV1::TESTNET.admits(&capacity).is_err());
+
+        // An empty view is short, never vacuously adequate.
+        let empty_capacity = measure_auditor_capacity(&ProviderBondView::new(), POV);
+        assert_eq!(empty_capacity.eligible_credentials, 0);
+        assert_eq!(empty_capacity.largest_credential_share_bps, 0);
+        assert!(PalwAuditorCapacityGateV1::TESTNET.admits(&empty_capacity).is_err());
     }
 
     /// The draw is WEIGHTED by aggregated stake, not uniform: a credential with 100× the stake is drawn
@@ -10382,7 +11107,7 @@ mod tests {
     /// pin is structurally blind to. The trailing-variant discriminants are asserted separately, on the
     /// wire bytes, in `consensus/core/src/coinbase.rs`.
     #[test]
-    fn palw_persisted_layouts_are_pinned_to_latest_db_version_14() {
+    fn palw_persisted_layouts_are_pinned_to_latest_db_version_16() {
         // Pinned encodings as of LATEST_DB_VERSION = 14. DA Object-v2 extends the persisted public
         // leaf with an object version and Receipt-v3 selected-chain expectations; the same cutover
         // also advances the pruning snapshot schema. The certificate fixture deliberately carries
@@ -10398,9 +11123,9 @@ mod tests {
         // yet were absent from this pin, so the guard that exists precisely because ADR-0040 once shipped
         // an unbumped layout change had a hole in exactly the two structs any future LeafV2 slice touches
         // first. Re-pinned at LATEST_DB_VERSION = 14 for Object-v2.
-        const LEAF_LEN: usize = 964;
+        const LEAF_LEN: usize = 1189;
         const MANIFEST_LEN: usize = 472;
-        const LEAF_FNV: u64 = 0x068e_ab4a_ca83_4512;
+        const LEAF_FNV: u64 = 0x39fa_19e9_f393_efef;
         const MANIFEST_FNV: u64 = 0x7daa_fe6a_cc52_faa3;
 
         // A canonical, fully-populated lifecycle: every field non-default, so a reorder shows up as a
@@ -10481,6 +11206,13 @@ mod tests {
             activation_epoch: 9,
             expiry_epoch: 21,
             leaf_bond_sompi: 1_000_000,
+            // D3-b PCPB fields — every value distinct and non-default so the FNV digest is sensitive
+            // to each (same rule as the rest of this canonical pin fixture).
+            a_commit: h(0x3a),
+            a_commit_epoch: 6,
+            provider_snapshot_root: h(0x3b),
+            assignment_proof_root: h(0x3c),
+            dispatch_kind: PALW_DISPATCH_KIND_SELF_SERIAL,
         };
         let manifest = PalwBatchManifestV1 {
             version: 1,
@@ -10827,8 +11559,10 @@ mod tests {
         #[allow(dead_code)]
         Measurement,
         /// The consensus-visible mechanism the finding needs is not built; the named verifier MUST NOT
-        /// resolve. PCPB-01 remains in this class until its coverage row is promoted with a real
-        /// in-tree verifier.
+        /// resolve. No CURRENT PROD finding is here — PCPB-01 was promoted to `Covered` when ADR-0045
+        /// D3-b landed its verifier (`palw_pcpb_ticket_binding_enforced`); the arm is kept for parity
+        /// with the gate table and to receive a future such finding.
+        #[allow(dead_code)]
         Unimplemented,
     }
 
@@ -10936,8 +11670,25 @@ mod tests {
         ("SAMPLE-01", FindingCoverage::Covered, &["certificate_attestation_rederives_committee_sample_and_signatures"]),
         // AUTHSET-01 — §5.17 CERT-REDERIVE: `select_auditor_committee` re-derivation + slate-external vote reject.
         ("AUTHSET-01", FindingCoverage::Covered, &["certificate_attestation_rederives_committee_sample_and_signatures"]),
-        // PCPB-01 — PCPB primitives exist but are NOT connected to ticket verification; the binding is unbuilt.
-        ("PCPB-01", FindingCoverage::Unimplemented, &["palw_pcpb_ticket_binding_enforced"]),
+        // PCPB-01 — CLOSED by ADR-0045 D3-b: clauses 11/12 gate every leaf at acceptance (challenge
+        // re-derivation + dispatch-evidence re-run against store-resolved context) and clause 13
+        // re-checks the binding at mint through the real `check_palw_ticket`. Coverage spans all
+        // three coordinates: the pure-evidence tautology killers (fake root swap/clause 0, undrawn
+        // provider, identical pair, forged signature, a_commit not embedded, branch↔kind mismatch),
+        // the acceptance-arm §8 negatives (free epochs / sentinels / registry both-directions /
+        // seat binding), and the mint-time clause-13 enforcement on real blocks.
+        (
+            "PCPB-01",
+            FindingCoverage::Covered,
+            &[
+                "palw_pcpb_ticket_binding_enforced",
+                "pcpb_beacon_arm_validates_and_is_not_a_tautology",
+                "pcpb_beacon_arm_rejects_same_provider_for_both_slots",
+                "pcpb_self_arm_rejects_unbound_forged_or_swapped",
+                "pcpb_clause11_acceptance_rejects_free_epochs_and_sentinels",
+                "pcpb_clause12_acceptance_selfserial_registry_and_seats",
+            ],
+        ),
         // ECON-03 — the 77% provider base is paid only against resolved, locked, owner-bound collateral
         // (value-lock / spend-gate / ownership). NOTE: ECON-03 is not FULLY closed — slashing is still open
         // (§2.3′) — but the closed legs have real regression tests, which is what G7 requires per finding.
@@ -11198,9 +11949,10 @@ mod tests {
 #[cfg(test)]
 mod pcpb_evidence_tests {
     use super::{
-        BeaconAssignedProof, PALW_ASSIGNMENT_DRAW_DOMAIN, PALW_ASSIGNMENT_NODE_DOMAIN, PALW_PCPB_RECEIPT_MLDSA87_CONTEXT,
-        PALW_SNAPSHOT_NODE_DOMAIN, PalwAssignmentInterval, PalwDispatchEvidence, PalwMerkleMembership, PalwMlDsaVerifier,
-        PalwProviderSnapshotEntry, SelfSerialProof, SlotAssignmentWitness, palw_assignment_draw_seed, palw_assignment_interval_hash,
+        BeaconAssignedProof, PALW_ASSIGNMENT_DRAW_DOMAIN, PALW_ASSIGNMENT_NODE_DOMAIN, PALW_DISPATCH_KIND_BEACON_ASSIGNED,
+        PALW_DISPATCH_KIND_SELF_SERIAL, PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, PALW_SNAPSHOT_NODE_DOMAIN, PalwAssignmentInterval,
+        PalwDispatchEvidence, PalwDispatchLeafFacts, PalwMerkleMembership, PalwMlDsaVerifier, PalwProviderSnapshotEntry,
+        PalwSnapshotCommitment, SelfSerialProof, SlotAssignmentWitness, palw_assignment_draw_seed, palw_assignment_interval_hash,
         palw_audit_epoch_seed_select, palw_build_snapshot_witnesses, palw_dispatch_evidence_valid, palw_epoch_seed_at,
         palw_pcpb_derive_b, palw_pcpb_receipt_preimage, palw_provider_pk_hash, palw_snapshot_entry_hash,
     };
@@ -11335,6 +12087,40 @@ mod pcpb_evidence_tests {
         }
     }
 
+    /// The store-resolved snapshot commitment a wired verifier would read from the per-epoch history.
+    fn resolved(s: &Setup) -> PalwSnapshotCommitment {
+        PalwSnapshotCommitment {
+            snapshot_root: s.snap_root,
+            assignment_root: s.assign_root,
+            total_bond: s.total,
+            provider_count: s.entries.len() as u32,
+        }
+    }
+
+    /// LeafV2-committed facts for an EXTERNAL leaf whose declared seats are providers `ia`/`ib`.
+    fn external_facts(s: &Setup, ia: usize, ib: usize) -> PalwDispatchLeafFacts {
+        PalwDispatchLeafFacts {
+            snapshot_root: s.snap_root,
+            assignment_root: s.assign_root,
+            a_commit: Hash64::default(),
+            dispatch_kind: PALW_DISPATCH_KIND_BEACON_ASSIGNED,
+            provider_a_id: s.entries[ia].provider_id,
+            provider_b_id: s.entries[ib].provider_id,
+        }
+    }
+
+    /// LeafV2-committed facts for a SELF leaf: A declared at `ia`, drawn B at `ib`.
+    fn self_facts(s: &Setup, a_commit: &Hash64, ia: usize, ib: usize) -> PalwDispatchLeafFacts {
+        PalwDispatchLeafFacts {
+            snapshot_root: s.snap_root,
+            assignment_root: s.assign_root,
+            a_commit: *a_commit,
+            dispatch_kind: PALW_DISPATCH_KIND_SELF_SERIAL,
+            provider_a_id: s.entries[ia].provider_id,
+            provider_b_id: s.entries[ib].provider_id,
+        }
+    }
+
     #[test]
     fn pcpb_beacon_arm_validates_and_is_not_a_tautology() {
         let s = setup(&[250, 250, 250, 250]); // total 1000
@@ -11350,54 +12136,45 @@ mod pcpb_evidence_tests {
             }
         }
         assert_ne!(ia, ib, "setup: no beacon drew two distinct providers");
-        let a_commit = th(0xAC); // unused by the external arm
         let v = LibcruxVerifier;
 
         let good = PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof { slot_a: witness(&s, ia), slot_b: witness(&s, ib) });
-        assert!(palw_dispatch_evidence_valid(
-            &good,
-            &s.snap_root,
-            &s.assign_root,
-            s.total,
-            &beacon,
-            &s.snap_root,
-            &s.assign_root,
-            &a_commit,
-            &v
-        ));
+        assert!(palw_dispatch_evidence_valid(&good, &resolved(&s), &beacon, &external_facts(&s, ia, ib), &v));
 
         // Tautology-killer: swap slot_a to a provider the slot-0 draw did NOT select → reject.
         let wrong = (0..4).find(|&c| c != ia).unwrap();
         let bad = PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof { slot_a: witness(&s, wrong), slot_b: witness(&s, ib) });
         assert!(
-            !palw_dispatch_evidence_valid(
-                &bad,
-                &s.snap_root,
-                &s.assign_root,
-                s.total,
-                &beacon,
-                &s.snap_root,
-                &s.assign_root,
-                &a_commit,
-                &v
-            ),
+            !palw_dispatch_evidence_valid(&bad, &resolved(&s), &beacon, &external_facts(&s, wrong, ib), &v),
             "external arm accepted a provider the draw did not select (tautology!)"
         );
 
         // Clause 0: a leaf snapshot root disagreeing with the resolved root → reject.
+        let mut facts = external_facts(&s, ia, ib);
+        facts.snapshot_root = th(0xDE);
+        assert!(!palw_dispatch_evidence_valid(&good, &resolved(&s), &beacon, &facts, &v), "clause 0 did not bind the leaf snapshot root");
+
+        // D3-b seat binding: valid draw, but the LEAF declares a different provider in seat A → reject.
+        // Without this, evidence proves "some pair was drawn" while the leaf names whoever it likes.
         assert!(
-            !palw_dispatch_evidence_valid(
-                &good,
-                &s.snap_root,
-                &s.assign_root,
-                s.total,
-                &beacon,
-                &th(0xDE),
-                &s.assign_root,
-                &a_commit,
-                &v
-            ),
-            "clause 0 did not bind the leaf snapshot root"
+            !palw_dispatch_evidence_valid(&good, &resolved(&s), &beacon, &external_facts(&s, wrong, ib), &v),
+            "external arm accepted a leaf whose declared seat A is not the drawn provider"
+        );
+
+        // D3-b branch binding: same evidence, but the leaf committed to the SELF branch → reject.
+        let mut facts = external_facts(&s, ia, ib);
+        facts.dispatch_kind = PALW_DISPATCH_KIND_SELF_SERIAL;
+        assert!(
+            !palw_dispatch_evidence_valid(&good, &resolved(&s), &beacon, &facts, &v),
+            "external evidence satisfied a leaf committed to the self branch (kind not bound)"
+        );
+
+        // D3-b external sentinel: an external leaf carrying a non-zero a_commit is a category error.
+        let mut facts = external_facts(&s, ia, ib);
+        facts.a_commit = th(0xAC);
+        assert!(
+            !palw_dispatch_evidence_valid(&good, &resolved(&s), &beacon, &facts, &v),
+            "external arm accepted a leaf smuggling a self-arm a_commit"
         );
     }
 
@@ -11418,17 +12195,7 @@ mod pcpb_evidence_tests {
         let both0 = PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof { slot_a: witness(&s, 0), slot_b: witness(&s, 0) });
         let v = LibcruxVerifier;
         assert!(
-            !palw_dispatch_evidence_valid(
-                &both0,
-                &s.snap_root,
-                &s.assign_root,
-                s.total,
-                &beacon,
-                &s.snap_root,
-                &s.assign_root,
-                &th(0xAC),
-                &v
-            ),
+            !palw_dispatch_evidence_valid(&both0, &resolved(&s), &beacon, &external_facts(&s, 0, 0), &v),
             "external arm accepted the SAME provider for both slots (distinctness not enforced)"
         );
     }
@@ -11439,11 +12206,14 @@ mod pcpb_evidence_tests {
         let a_commit = th(0xA1);
         let beacon = th(0x5E);
         let j = drawn_index(&s, &palw_pcpb_derive_b(&beacon, &a_commit));
+        let a = (0..4).find(|&a| a != j).unwrap(); // A: any bonded provider that is not B
         let preimage = palw_pcpb_receipt_preimage(&a_commit, b"pcpb-self-tail");
         let sig =
             mldsa::sign(&s.kps[j].signing_key, preimage.as_slice(), PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, [0x33u8; 32]).expect("sign");
         let proof = PalwDispatchEvidence::SelfSerial(SelfSerialProof {
             a_commit,
+            a_entry: s.entries[a].clone(),
+            a_snapshot_membership: membership_of(&s.snap_levels, a),
             b_entry: s.entries[j].clone(),
             b_snapshot_membership: membership_of(&s.snap_levels, j),
             b_interval: s.intervals[j].clone(),
@@ -11453,31 +12223,21 @@ mod pcpb_evidence_tests {
             b_signature: sig.as_ref().to_vec(),
         });
         let v = LibcruxVerifier;
-        assert!(palw_dispatch_evidence_valid(
-            &proof,
-            &s.snap_root,
-            &s.assign_root,
-            s.total,
-            &beacon,
-            &s.snap_root,
-            &s.assign_root,
-            &a_commit,
-            &v
-        ));
+        assert!(palw_dispatch_evidence_valid(&proof, &resolved(&s), &beacon, &self_facts(&s, &a_commit, a, j), &v));
         // Clause 0 for the self arm too.
+        let mut facts = self_facts(&s, &a_commit, a, j);
+        facts.assignment_root = th(0xEE);
         assert!(
-            !palw_dispatch_evidence_valid(
-                &proof,
-                &s.snap_root,
-                &s.assign_root,
-                s.total,
-                &beacon,
-                &s.snap_root,
-                &th(0xEE),
-                &a_commit,
-                &v
-            ),
+            !palw_dispatch_evidence_valid(&proof, &resolved(&s), &beacon, &facts, &v),
             "clause 0 did not bind the leaf assignment root on the self arm"
+        );
+        // D3-b branch binding: self evidence against a leaf committed to the external branch → reject.
+        let mut facts = self_facts(&s, &a_commit, a, j);
+        facts.dispatch_kind = PALW_DISPATCH_KIND_BEACON_ASSIGNED;
+        facts.a_commit = Hash64::default();
+        assert!(
+            !palw_dispatch_evidence_valid(&proof, &resolved(&s), &beacon, &facts, &v),
+            "self evidence satisfied a leaf committed to the external branch (kind not bound)"
         );
     }
 
@@ -11487,6 +12247,7 @@ mod pcpb_evidence_tests {
         let a_commit = th(0xA1);
         let beacon = th(0x5E);
         let j = drawn_index(&s, &palw_pcpb_derive_b(&beacon, &a_commit));
+        let a = (0..4).find(|&a| a != j).unwrap();
         let v = LibcruxVerifier;
         let good_preimage = palw_pcpb_receipt_preimage(&a_commit, b"tail");
         let good_sig = mldsa::sign(&s.kps[j].signing_key, good_preimage.as_slice(), PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, [0x33u8; 32])
@@ -11495,6 +12256,8 @@ mod pcpb_evidence_tests {
             .to_vec();
         let base = SelfSerialProof {
             a_commit,
+            a_entry: s.entries[a].clone(),
+            a_snapshot_membership: membership_of(&s.snap_levels, a),
             b_entry: s.entries[j].clone(),
             b_snapshot_membership: membership_of(&s.snap_levels, j),
             b_interval: s.intervals[j].clone(),
@@ -11503,18 +12266,9 @@ mod pcpb_evidence_tests {
             b_receipt_preimage: good_preimage.clone(),
             b_signature: good_sig,
         };
+        let facts = self_facts(&s, &a_commit, a, j);
         let check = |p: SelfSerialProof| -> bool {
-            palw_dispatch_evidence_valid(
-                &PalwDispatchEvidence::SelfSerial(p),
-                &s.snap_root,
-                &s.assign_root,
-                s.total,
-                &beacon,
-                &s.snap_root,
-                &s.assign_root,
-                &a_commit,
-                &v,
-            )
+            palw_dispatch_evidence_valid(&PalwDispatchEvidence::SelfSerial(p), &resolved(&s), &beacon, &facts, &v)
         };
 
         // (a) receipt binds a DIFFERENT commit (does not embed a_commit) → reject.
@@ -11546,13 +12300,63 @@ mod pcpb_evidence_tests {
         p.b_assignment_membership = membership_of(&s.assign_levels, k);
         p.b_ml_dsa_pk = s.kps[k].verification_key.as_ref().to_vec();
         p.b_signature = ksig;
-        assert!(!check(p), "accepted a B the post-commit beacon draw did not select");
+        // The swapped B also has to be declared on the leaf for the seat check to be the thing under
+        // test (otherwise the seat equality rejects first and the draw check is not exercised).
+        let swapped_facts = self_facts(&s, &a_commit, a, k);
+        assert!(
+            !palw_dispatch_evidence_valid(&PalwDispatchEvidence::SelfSerial(p), &resolved(&s), &beacon, &swapped_facts, &v),
+            "accepted a B the post-commit beacon draw did not select"
+        );
 
         // (d) verification key does not hash to the committed pk_hash → reject.
         let other = (0..4).find(|&o| o != j).unwrap();
         let mut p = base.clone();
         p.b_ml_dsa_pk = s.kps[other].verification_key.as_ref().to_vec();
         assert!(!check(p), "accepted a verification key not matching the committed pk_hash");
+
+        // (e) D3-b: A outside the snapshot (fabricated entry, no valid membership) → reject. Self-order
+        // is a bonded privilege; without this an unbonded A mints with only B's bond at stake.
+        let mut p = base.clone();
+        p.a_entry = PalwProviderSnapshotEntry {
+            provider_id: th(0x77),
+            ml_dsa_pk_hash: th(0x78),
+            bond_sompi: 250,
+            reward_script_commitment: th(0x79),
+        };
+        let mut unbonded_facts = facts;
+        unbonded_facts.provider_a_id = th(0x77);
+        assert!(
+            !palw_dispatch_evidence_valid(&PalwDispatchEvidence::SelfSerial(p), &resolved(&s), &beacon, &unbonded_facts, &v),
+            "accepted an A with no snapshot membership (unbonded self-order)"
+        );
+
+        // (f) D3-b: A == B (self-pairing) → reject even with an otherwise-valid draw.
+        let mut p = base.clone();
+        p.a_entry = s.entries[j].clone();
+        p.a_snapshot_membership = membership_of(&s.snap_levels, j);
+        let self_pair_facts = self_facts(&s, &a_commit, j, j);
+        assert!(
+            !palw_dispatch_evidence_valid(&PalwDispatchEvidence::SelfSerial(p), &resolved(&s), &beacon, &self_pair_facts, &v),
+            "accepted A == B (self-pairing defeats k=2)"
+        );
+
+        // (g) D3-b: the leaf's declared seat A differs from the evidence's A → reject.
+        let third = (0..4).find(|&t| t != j && t != a).unwrap();
+        let seat_facts = self_facts(&s, &a_commit, third, j);
+        assert!(
+            !palw_dispatch_evidence_valid(&PalwDispatchEvidence::SelfSerial(base.clone()), &resolved(&s), &beacon, &seat_facts, &v),
+            "accepted evidence whose A is not the leaf's declared seat A"
+        );
+
+        // (h) D3-b: zero a_commit on the self branch → reject (the anchor must exist).
+        let mut p = base.clone();
+        p.a_commit = Hash64::default();
+        let mut zero_facts = facts;
+        zero_facts.a_commit = Hash64::default();
+        assert!(
+            !palw_dispatch_evidence_valid(&PalwDispatchEvidence::SelfSerial(p), &resolved(&s), &beacon, &zero_facts, &v),
+            "accepted a self leaf with a zero a_commit"
+        );
 
         // Sanity: the untampered proof validates.
         assert!(check(base), "base self-serial proof should validate");
@@ -11614,18 +12418,16 @@ mod pcpb_evidence_tests {
         assert_ne!(ia, ib, "setup: no beacon drew two distinct providers");
         let proof =
             PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof { slot_a: ws.slots[ia].clone(), slot_b: ws.slots[ib].clone() });
+        let facts = PalwDispatchLeafFacts {
+            snapshot_root: ws.commitment.snapshot_root, // a LeafV2 commits the same (resolved) roots
+            assignment_root: ws.commitment.assignment_root,
+            a_commit: Hash64::default(),
+            dispatch_kind: PALW_DISPATCH_KIND_BEACON_ASSIGNED,
+            provider_a_id: ws.slots[ia].entry.provider_id,
+            provider_b_id: ws.slots[ib].entry.provider_id,
+        };
         assert!(
-            palw_dispatch_evidence_valid(
-                &proof,
-                &ws.commitment.snapshot_root,
-                &ws.commitment.assignment_root,
-                ws.commitment.total_bond,
-                &beacon,
-                &ws.commitment.snapshot_root, // a LeafV2 would commit the same (resolved) roots
-                &ws.commitment.assignment_root,
-                &th(0xAC),
-                &v,
-            ),
+            palw_dispatch_evidence_valid(&proof, &ws.commitment, &beacon, &facts, &v),
             "builder output must validate under the verifier (external arm)"
         );
     }
@@ -11641,11 +12443,14 @@ mod pcpb_evidence_tests {
         // The builder sorts, so map the drawn provider_id back to its keypair.
         let pid = ws.slots[j].entry.provider_id;
         let ki = (0..s.entries.len()).find(|&i| s.entries[i].provider_id == pid).unwrap();
+        let aj = (0..ws.slots.len()).find(|&i| i != j).unwrap(); // A: any other builder slot
         let preimage = palw_pcpb_receipt_preimage(&a_commit, b"builder-self-tail");
         let sig = mldsa::sign(&s.kps[ki].signing_key, preimage.as_slice(), PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, [0x66u8; 32]).unwrap();
         let w = &ws.slots[j];
         let proof = PalwDispatchEvidence::SelfSerial(SelfSerialProof {
             a_commit,
+            a_entry: ws.slots[aj].entry.clone(),
+            a_snapshot_membership: ws.slots[aj].snapshot_membership.clone(),
             b_entry: w.entry.clone(),
             b_snapshot_membership: w.snapshot_membership.clone(),
             b_interval: w.interval.clone(),
@@ -11654,18 +12459,16 @@ mod pcpb_evidence_tests {
             b_receipt_preimage: preimage,
             b_signature: sig.as_ref().to_vec(),
         });
+        let facts = PalwDispatchLeafFacts {
+            snapshot_root: ws.commitment.snapshot_root,
+            assignment_root: ws.commitment.assignment_root,
+            a_commit,
+            dispatch_kind: PALW_DISPATCH_KIND_SELF_SERIAL,
+            provider_a_id: ws.slots[aj].entry.provider_id,
+            provider_b_id: pid,
+        };
         assert!(
-            palw_dispatch_evidence_valid(
-                &proof,
-                &ws.commitment.snapshot_root,
-                &ws.commitment.assignment_root,
-                ws.commitment.total_bond,
-                &beacon,
-                &ws.commitment.snapshot_root,
-                &ws.commitment.assignment_root,
-                &a_commit,
-                &v,
-            ),
+            palw_dispatch_evidence_valid(&proof, &ws.commitment, &beacon, &facts, &v),
             "builder output must validate under the verifier (self arm)"
         );
     }

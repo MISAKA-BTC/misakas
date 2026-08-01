@@ -22,7 +22,9 @@ use kaspa_pq_validator_core::ValidatorKey;
 use misaka_palw_bridge::chain::parse_outpoint;
 use misaka_palw_bridge::da::{ChatContextObjectV4, DaCommitmentWire, DaObligation, DaResponseWire};
 use misaka_palw_bridge::match_key::{RUNTIME_CLASS_LABEL, bytes_hex, decode_hex, hash64_hex};
-use misaka_palw_bridge::provider::{BRIDGE_REQUEST_MLDSA87_CONTEXT, body_digest, request_signing_hash};
+use misaka_palw_bridge::provider::{
+    BRIDGE_REQUEST_MLDSA87_CONTEXT, SignedRequest, body_digest, canonical_query, request_signing_hash,
+};
 use serde_json::{Value, json};
 
 struct Args {
@@ -99,7 +101,9 @@ fn parse_args() -> Result<Args, String> {
 
 // ---- minimal blocking HTTP ---------------------------------------------------------------
 
-fn http(method: &str, url: &str, body: Option<&Value>, signature: Option<(&str, &str)>) -> Result<(u16, Value), String> {
+/// `signature` is `(bond, signature_hex, nonce, expires_at_unix_ms)` — all four travel, because
+/// the server re-derives the signing hash over every one of them (BRIDGE-AUTH-01).
+fn http(method: &str, url: &str, body: Option<&Value>, signature: Option<(&str, &str, &str, i64)>) -> Result<(u16, Value), String> {
     let rest = url.strip_prefix("http://").ok_or("only http:// urls")?;
     let (host_port, path) = match rest.split_once('/') {
         Some((hp, p)) => (hp, format!("/{p}")),
@@ -114,8 +118,10 @@ fn http(method: &str, url: &str, body: Option<&Value>, signature: Option<(&str, 
         "{method} {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
         payload.len()
     );
-    if let Some((bond, sig)) = signature {
-        head.push_str(&format!("X-Palw-Bond: {bond}\r\nX-Palw-Signature: {sig}\r\n"));
+    if let Some((bond, sig, nonce, expires)) = signature {
+        head.push_str(&format!(
+            "X-Palw-Bond: {bond}\r\nX-Palw-Signature: {sig}\r\nX-Palw-Nonce: {nonce}\r\nX-Palw-Expires: {expires}\r\n"
+        ));
     }
     head.push_str("\r\n");
     stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
@@ -133,15 +139,22 @@ fn http(method: &str, url: &str, body: Option<&Value>, signature: Option<(&str, 
     Ok((status, value))
 }
 
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 struct Provider {
     label: String,
     owner: ValidatorKey,
     session: ValidatorKey,
     bond: String,
+    network_id: u32,
+    /// Source of per-request nonces: the bridge accepts each exactly once (BRIDGE-AUTH-01).
+    request_counter: std::cell::Cell<u64>,
 }
 
 impl Provider {
-    fn load(label: &str, seed_path: &str, bond: &str) -> Result<Self, String> {
+    fn load(label: &str, seed_path: &str, bond: &str, network_id: u32) -> Result<Self, String> {
         let hex = std::fs::read_to_string(seed_path).map_err(|e| format!("read {seed_path}: {e}"))?;
         let seed_bytes = decode_hex(hex.trim())?;
         let seed: [u8; 32] = seed_bytes.as_slice().try_into().map_err(|_| format!("{seed_path}: want a 32-byte seed"))?;
@@ -150,25 +163,55 @@ impl Provider {
         let mut session_seed = [0u8; 32];
         let derived = kaspa_hashes::blake2b_512_keyed(b"misaka-palw-bridge-v1/verify-session", &seed);
         session_seed.copy_from_slice(&derived.as_bytes()[..32]);
-        Ok(Self { label: label.into(), owner, session: ValidatorKey::from_seed(session_seed), bond: bond.into() })
+        Ok(Self {
+            label: label.into(),
+            owner,
+            session: ValidatorKey::from_seed(session_seed),
+            bond: bond.into(),
+            network_id,
+            request_counter: std::cell::Cell::new(0),
+        })
     }
 
-    /// A signed request against the bridge: session key over route + body.
+    /// A signed request against the bridge: session key over the WHOLE request.
     ///
-    /// The signed route must be the path the SERVER sees (`/palw/v1/challenges`), not the
-    /// caller-side suffix (`/challenges`) — the bridge hashes `request.path`. Deriving it from
-    /// the URL here keeps the two sides from drifting apart silently.
+    /// The signed path/query must be what the SERVER sees (`/palw/v1/challenges`), not the
+    /// caller-side suffix (`/challenges`) — the bridge re-derives from `request.path` and
+    /// `request.query`. Deriving both here keeps the two sides from drifting apart silently.
     fn signed(&self, bridge: &str, route: &str, body: &Value) -> Result<(u16, Value), String> {
+        self.signed_method("POST", bridge, route, Some(body))
+    }
+
+    /// The general form. GET routes now go through here too: their identity lives in the query,
+    /// which is only meaningful once it is signed (BRIDGE-AUTH-01).
+    fn signed_method(&self, method: &str, bridge: &str, route: &str, body: Option<&Value>) -> Result<(u16, Value), String> {
         let url = format!("{bridge}{route}");
-        let server_path = url
+        let target = url
             .strip_prefix("http://")
             .and_then(|rest| rest.split_once('/'))
             .map(|(_, path)| format!("/{path}"))
             .ok_or_else(|| format!("cannot derive a server path from {url}"))?;
-        let bytes = serde_json::to_vec(body).map_err(|e| e.to_string())?;
-        let hash = request_signing_hash(&self.bond, &server_path, &body_digest(&bytes));
+        let (server_path, raw_query) = match target.split_once('?') {
+            Some((p, q)) => (p.to_string(), q.to_string()),
+            None => (target, String::new()),
+        };
+        let bytes = body.map(serde_json::to_vec).transpose().map_err(|e| e.to_string())?.unwrap_or_default();
+        // A fresh nonce per request: the bridge accepts each exactly once inside its window.
+        self.request_counter.set(self.request_counter.get() + 1);
+        let nonce = format!("{}-{}", self.label, self.request_counter.get());
+        let expires = now_unix_ms() + 60_000;
+        let hash = request_signing_hash(&SignedRequest {
+            network_id: self.network_id,
+            bond_outpoint: &self.bond,
+            method,
+            path: &server_path,
+            canonical_query: &canonical_query(&raw_query),
+            body_digest: &body_digest(&bytes),
+            nonce: &nonce,
+            expires_at_unix_ms: expires,
+        });
         let sig = self.session.sign_with_context(hash.as_byte_slice(), BRIDGE_REQUEST_MLDSA87_CONTEXT);
-        http("POST", &url, Some(body), Some((&self.bond, &bytes_hex(&sig))))
+        http(method, &url, body, Some((&self.bond, &bytes_hex(&sig), &nonce, expires)))
     }
 
     fn registration(&self, network_id: u32, valid_from: u64, valid_until: u64) -> Result<Value, String> {
@@ -210,7 +253,11 @@ struct Report(Vec<(String, bool, String)>);
 impl Report {
     fn check(&mut self, name: &str, ok: bool, detail: impl Into<String>) {
         let detail = detail.into();
-        println!("[{}] {name}{}", if ok { " PASS " } else { " FAIL " }, if detail.is_empty() { String::new() } else { format!(" — {detail}") });
+        println!(
+            "[{}] {name}{}",
+            if ok { " PASS " } else { " FAIL " },
+            if detail.is_empty() { String::new() } else { format!(" — {detail}") }
+        );
         self.0.push((name.into(), ok, detail));
     }
 }
@@ -249,11 +296,7 @@ fn run(args: &Args) -> Result<Report, String> {
     let live = seams["chain_facts_live"].as_bool().unwrap_or(false);
     let beacon_epoch = seams["beacon"]["epoch"].as_u64();
     let current_epoch = seams["beacon"]["current_epoch"].as_u64().unwrap_or(0);
-    report.check(
-        "chain facts are LIVE (not pinned)",
-        live,
-        seams["chain_facts"].as_str().unwrap_or("?").to_string(),
-    );
+    report.check("chain facts are LIVE (not pinned)", live, seams["chain_facts"].as_str().unwrap_or("?").to_string());
     report.check(
         "live buried beacon sample available",
         beacon_epoch.is_some(),
@@ -267,22 +310,28 @@ fn run(args: &Args) -> Result<Report, String> {
     }
 
     // ---- seam 2: bonded registration ---------------------------------------------------
-    let providers: Vec<Provider> = args
-        .providers
-        .iter()
-        .map(|(l, s, b)| Provider::load(l, s, b))
-        .collect::<Result<_, _>>()?;
+    let providers: Vec<Provider> =
+        args.providers.iter().map(|(l, s, b)| Provider::load(l, s, b, args.network_id)).collect::<Result<_, _>>()?;
     for p in &providers {
         let registration = p.registration(args.network_id, 0, current_epoch + 1_000)?;
         let (code, body) = http("POST", &format!("{}/providers", args.bridge), Some(&registration), None)?;
         report.check(
             &format!("seam 2: {} registers against its on-chain bond", p.label),
             code == 200,
-            if code == 200 { body["credential"].as_str().unwrap_or("").chars().take(16).collect::<String>() } else { body.to_string() },
+            if code == 200 {
+                body["credential"].as_str().unwrap_or("").chars().take(16).collect::<String>()
+            } else {
+                body.to_string()
+            },
         );
     }
     // Negative: an unsigned consequential request must be refused.
-    let (code, _) = http("POST", &format!("{}/challenges", args.bridge), Some(&json!({"provider_bond": providers[0].bond, "prompt_ids":[1], "max_new": 8})), None)?;
+    let (code, _) = http(
+        "POST",
+        &format!("{}/challenges", args.bridge),
+        Some(&json!({"provider_bond": providers[0].bond, "prompt_ids":[1], "max_new": 8})),
+        None,
+    )?;
     report.check("seam 2: unsigned request refused", code != 200, format!("HTTP {code}"));
 
     // ---- seam 1: challenge leased from the LIVE beacon ---------------------------------
@@ -291,12 +340,21 @@ fn run(args: &Args) -> Result<Report, String> {
             report.check(
                 "REAL inference job supplied — two independent engine runs",
                 j.a_output_ids == j.b_output_ids,
-                format!("prompt {} tok, A {} tok, B {} tok, outputs {}",
-                    j.prompt_ids.len(), j.a_output_ids.len(), j.b_output_ids.len(),
-                    if j.a_output_ids == j.b_output_ids { "IDENTICAL" } else { "DIFFER" }),
+                format!(
+                    "prompt {} tok, A {} tok, B {} tok, outputs {}",
+                    j.prompt_ids.len(),
+                    j.a_output_ids.len(),
+                    j.b_output_ids.len(),
+                    if j.a_output_ids == j.b_output_ids { "IDENTICAL" } else { "DIFFER" }
+                ),
             );
-            (j.prompt_ids.clone(), Some(j.a_output_ids.clone()), Some(j.a_roots.clone()),
-             Some(j.b_output_ids.clone()), Some(j.b_roots.clone()))
+            (
+                j.prompt_ids.clone(),
+                Some(j.a_output_ids.clone()),
+                Some(j.a_roots.clone()),
+                Some(j.b_output_ids.clone()),
+                Some(j.b_roots.clone()),
+            )
         }
         None => ((1u32..=64).collect(), None, None, None, None),
     };
@@ -380,26 +438,35 @@ fn run(args: &Args) -> Result<Report, String> {
         };
         let bytes = object.encode()?;
         let rebuilt = DaCommitmentWire::from_commitment(&object.commitment()?);
-        report.check("seam 3: provider rebuilds the same DA root", rebuilt == obligation.commitment, rebuilt.root_hex[..16].to_string());
+        report.check(
+            "seam 3: provider rebuilds the same DA root",
+            rebuilt == obligation.commitment,
+            rebuilt.root_hex[..16].to_string(),
+        );
 
-        let (_, listed) = http(
-            "GET",
-            &format!("{}/da/obligations?provider_bond={}", args.bridge, providers[0].bond),
-            None,
-            None,
-        )?;
+        let (_, listed) = http("GET", &format!("{}/da/obligations?provider_bond={}", args.bridge, providers[0].bond), None, None)?;
         let challenged: Vec<DaObligation> = serde_json::from_value(listed["obligations"].clone()).unwrap_or_default();
-        let target = challenged.iter().find(|o| o.obligation_id_hex == obligation.obligation_id_hex).cloned().unwrap_or_else(|| obligation.clone());
+        let target = challenged
+            .iter()
+            .find(|o| o.obligation_id_hex == obligation.obligation_id_hex)
+            .cloned()
+            .unwrap_or_else(|| obligation.clone());
         let response = DaResponseWire::prove(&target, &bytes)?;
-        let (code, answered) = providers[0].signed(&args.bridge, "/da/responses", &serde_json::to_value(&response).map_err(|e| e.to_string())?)?;
-        report.check("seam 3: sampled chunk proof accepted", code == 200, if code == 200 { String::new() } else { answered.to_string() });
+        let (code, answered) =
+            providers[0].signed(&args.bridge, "/da/responses", &serde_json::to_value(&response).map_err(|e| e.to_string())?)?;
+        report.check(
+            "seam 3: sampled chunk proof accepted",
+            code == 200,
+            if code == 200 { String::new() } else { answered.to_string() },
+        );
 
         // A tampered chunk must be refused by the node's own verifier.
         let mut tampered = response.clone();
         let mut chunk = decode_hex(&tampered.chunk_hex)?;
         chunk[0] ^= 0xff;
         tampered.chunk_hex = bytes_hex(&chunk);
-        let (code, _) = providers[0].signed(&args.bridge, "/da/responses", &serde_json::to_value(&tampered).map_err(|e| e.to_string())?)?;
+        let (code, _) =
+            providers[0].signed(&args.bridge, "/da/responses", &serde_json::to_value(&tampered).map_err(|e| e.to_string())?)?;
         report.check("seam 3: tampered chunk proof refused", code != 200, format!("HTTP {code}"));
     }
 
@@ -501,7 +568,9 @@ fn run(args: &Args) -> Result<Report, String> {
     let targets = evidence["slash_targets"].as_array().cloned().unwrap_or_default();
     report.check(
         "seam 4: attribution names the deviating provider",
-        code == 200 && evidence["verdict"] == "slash_b" && targets.first().and_then(|t| t.as_str()) == Some(providers[1].bond.as_str()),
+        code == 200
+            && evidence["verdict"] == "slash_b"
+            && targets.first().and_then(|t| t.as_str()) == Some(providers[1].bond.as_str()),
         format!("verdict={} targets={}", evidence["verdict"], targets.len()),
     );
     report.check(

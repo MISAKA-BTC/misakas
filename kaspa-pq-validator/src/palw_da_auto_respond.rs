@@ -235,7 +235,7 @@ async fn run_cycle(args: &PalwDaAutoRespondArgs, node_rpc: &str, config: &AutoRe
     let mut current_daa: u64 = 0;
     for bond in &config.owned_bonds {
         let response = client
-            .get_palw_state(GetPalwStateRequest { batch_id: None, provider_bond_outpoint: Some(bond.clone()) })
+            .get_palw_state(GetPalwStateRequest { batch_id: None, provider_bond_outpoint: Some(bond.clone()), pcpb_anchor_epoch: None, pcpb_a_commit: None })
             .await
             .map_err(|error| format!("getPalwState({bond}) failed: {error}"))?;
         current_daa = current_daa.max(response.sink_daa_score);

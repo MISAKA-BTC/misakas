@@ -58,7 +58,7 @@
 //!    AUTH-02 closes. Routing every producer through one encoder is what makes that structural rather
 //!    than a rule each assembler has to remember.
 
-use kaspa_consensus_core::constants::{PALW_ANTISPAM_HEADER_VERSION, PALW_COMPUTE_SET_HEADER_VERSION, PALW_HEADER_VERSION};
+use kaspa_consensus_core::constants::{PALW_COMPUTE_SET_HEADER_VERSION, PALW_HEADER_VERSION};
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw::{
     PALW_AUTHORIZATION_DOMAIN, PALW_AUTHORIZATION_MLDSA87_CONTEXT, PalwBlockAuthorizationV1, palw_header_preimage_commitment,
@@ -274,7 +274,7 @@ mod tests {
     use crate::registration::restamp_leaves;
     use crate::{MiningJob, PalwMiner, ProviderRegistration};
     use kaspa_consensus_core::BlueWorkType;
-    use kaspa_consensus_core::constants::PALW_HEADER_VERSION;
+    use kaspa_consensus_core::constants::{PALW_ANTISPAM_HEADER_VERSION, PALW_HEADER_VERSION};
     use kaspa_consensus_core::header::PalwHeaderFields;
     use kaspa_consensus_core::palw::{PalwPublicLeafV1, validate_palw_overlay_payload};
     use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_REPLICA;
@@ -347,6 +347,7 @@ mod tests {
                 output_salt: [0x33; 32],
                 job_nullifier: h(0x20),
                 raw_ticket_nullifier: h(0),
+                pcpb: crate::PcpbLeafFields::external(Hash64::default(), Hash64::default()),
             })
             .unwrap()
             .leaf

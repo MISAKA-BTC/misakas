@@ -292,13 +292,15 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.palw_audit_round_facts(batch_id, audit_beacon_epoch)).await
     }
 
-    /// Bounded PALW operator probe for at most one batch and one provider-bond outpoint.
+    /// Bounded PALW operator probe for at most one batch, one provider-bond outpoint, and (ADR-0045
+    /// D3-b) one PCPB anchor epoch with an optional A-commit lookup.
     pub async fn async_palw_state_probe(
         &self,
         batch_id: Option<Hash64>,
         provider_bond: Option<TransactionOutpoint>,
+        pcpb: Option<(u64, Option<Hash64>)>,
     ) -> Result<PalwStateProbe, PalwStateProbeError> {
-        self.clone().spawn_blocking(move |c| c.palw_state_probe(batch_id, provider_bond)).await
+        self.clone().spawn_blocking(move |c| c.palw_state_probe(batch_id, provider_bond, pcpb)).await
     }
 
     /// Run complete selected-chain PALW DA object admission on a blocking consensus worker. Success

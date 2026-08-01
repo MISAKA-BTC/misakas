@@ -1,5 +1,9 @@
 # testnet-200 → testnet-20 migration
 
+> **HISTORICAL (2026-08-01):** testnet-20 was itself superseded by **testnet-21** at the
+> ADR-0045 D3-b leaf re-genesis — see [testnet-21-migration.md](testnet-21-migration.md). This
+> note is kept for the 200→20 cutover history and its recurrence-guard rationale.
+
 As of 2026-07-30, **`testnet-20` is the only publicly operated MISAKA testnet**. `testnet-200`
 remains compilable for operators still holding its ledger, but it has **no DNS seeders and no
 public discovery**, and replaying its history is unsafe (below). `testnet-10` remains only as a

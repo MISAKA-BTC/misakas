@@ -151,6 +151,10 @@ pub trait ConsensusApi: Send + Sync {
         &self,
         _batch_id: Option<kaspa_hashes::Hash64>,
         _provider_bond: Option<TransactionOutpoint>,
+        // ADR-0045 D3-b: `(anchor_epoch, a_commit?)` — ask for the PCPB production context of one
+        // anchor epoch, optionally resolving an A-commit anchor's registration epoch at the same
+        // point of view (a self-serial producer needs both, and needs them consistent).
+        _pcpb: Option<(u64, Option<kaspa_hashes::Hash64>)>,
     ) -> Result<crate::palw_probe::PalwStateProbe, crate::palw_probe::PalwStateProbeError> {
         Err(crate::palw_probe::PalwStateProbeError::Store("palw_state_probe is unsupported on this consensus".to_string()))
     }

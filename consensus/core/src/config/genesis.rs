@@ -402,6 +402,49 @@ pub const COMPUTE_REGISTRY_PALW_GENESIS: GenesisBlock = GenesisBlock {
     ..TESTNET_GENESIS
 };
 
+/// ADR-0045 D3-b — genesis for the **PCPB dispatch** rehearsal network (`pcpb-palw`, NetworkId
+/// `testnet-21`). The re-genesis the D3-b train requires: LeafV2 moved the leaf bincode layout
+/// (LEAF_LEN 964 → 1189), leaf-chunk wire v3 refuses v2, and `leaf_hash → leaf_root →
+/// content_id() == batch_id` all moved with it — testnet-20's mined history (v2 chunks, V1-era
+/// leaves) is structurally unreplayable under the new rules, so the tripwire's option (b) applies:
+/// a NEW suffix, never an in-place edit. Header schema is UNCHANGED by D3-b (the leaf is payload,
+/// not header), so this stays a v5 genesis in the compute-registry shape: distinct coinbase tag
+/// ("misaka-pcpb-palw") + fresh timestamp give it its own ledger. hash / hash_merkle_root minted
+/// by `gen_kaspa_pq_genesis_hashes`.
+pub const PCPB_PALW_GENESIS: GenesisBlock = GenesisBlock {
+    hash: Hash64::from_bytes([
+        0xbc, 0x06, 0x8f, 0xa4, 0x04, 0x36, 0xf4, 0x1d, 0x33, 0x53, 0xae, 0xb8, 0xaf, 0x6d, 0x97, 0x35, 0x08, 0x50, 0xc8, 0xfd, 0x11,
+        0x3e, 0x16, 0xe7, 0x6c, 0x0c, 0xda, 0x61, 0x04, 0xa9, 0x22, 0xd5, 0xa8, 0x60, 0x08, 0x9e, 0xe7, 0xe5, 0x4b, 0xd9, 0xd9, 0xdc,
+        0x86, 0xf7, 0xf3, 0x2c, 0xf0, 0x36, 0x9b, 0x72, 0xe9, 0xa4, 0x60, 0xe8, 0x3d, 0x71, 0xec, 0xe7, 0x13, 0x12, 0xe6, 0xfe, 0x63,
+        0xdc,
+    ]),
+    hash_merkle_root: Hash64::from_bytes([
+        0x50, 0x3a, 0x90, 0xcd, 0x93, 0x6c, 0x9b, 0xcf, 0xdb, 0x28, 0xa9, 0x87, 0x97, 0xeb, 0x86, 0xb3, 0xd6, 0x1c, 0x83, 0xde, 0xb7,
+        0xe7, 0xd8, 0x08, 0xa2, 0xea, 0x8e, 0x3d, 0xa4, 0xdc, 0x5d, 0x31, 0x5a, 0xf2, 0x44, 0xfc, 0x2f, 0x2a, 0x7c, 0xf4, 0x65, 0x9a,
+        0xd3, 0x55, 0x4f, 0xa2, 0xbd, 0x2f, 0x50, 0xe3, 0xc4, 0xe6, 0x18, 0x3a, 0xcb, 0xd8, 0x62, 0x64, 0x5f, 0xba, 0x7c, 0x58, 0x5b,
+        0xb4,
+    ]),
+    // Header v5 (Compute Set references in the preimage from block 0) — inherited from the
+    // compute-registry shape; D3-b touches the LEAF, never the header schema.
+    version: crate::constants::PALW_COMPUTE_SET_HEADER_VERSION,
+    // 2026-07-31 00:00:00 UTC (= 1785456000000 ms) — must be in the PAST at launch (the staging
+    // future-timestamp lesson: a future genesis makes the network unminable until it passes).
+    timestamp: 1785456000000,
+    #[rustfmt::skip]
+    coinbase_payload: &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Blue score
+        0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00, // Subsidy
+        0x00, 0x00, // Script version
+        0x01,       // Varint
+        0x00,       // OP-FALSE
+        // "misaka-pcpb-palw"
+        0x6d, 0x69, 0x73, 0x61, 0x6b, 0x61, 0x2d, 0x70, 0x63, 0x70, 0x62, 0x2d, 0x70, 0x61, 0x6c, 0x77,
+    ],
+    // Max-easy real-PoW fast-start target (the staging rationale — the DAA ramps to live rate).
+    bits: 0x207fffff,
+    ..TESTNET_GENESIS
+};
+
 /// ADR-0039 P0 — genesis for the single-node PALW-active devnet (`devnet-palw`, `--devnet --netsuffix=111`).
 /// Carries `bits == DEVNET_PALW_GENESIS_BITS` (0x207fffff, max-easy) so §16.3's
 /// `is_consistent_for_activation` holds and Layer-0 PoW grinds instantly. Distinct coinbase payload
@@ -532,6 +575,7 @@ mod tests {
             TESTNET_PALW_GENESIS,
             STAGING_PALW_GENESIS,
             COMPUTE_REGISTRY_PALW_GENESIS,
+            PCPB_PALW_GENESIS,
             SIMNET_GENESIS,
             DEVNET_GENESIS,
         ]
@@ -578,6 +622,7 @@ mod tests {
             ("TESTNET_PALW_GENESIS", &TESTNET_PALW_GENESIS),
             ("STAGING_PALW_GENESIS", &STAGING_PALW_GENESIS),
             ("COMPUTE_REGISTRY_PALW_GENESIS", &COMPUTE_REGISTRY_PALW_GENESIS),
+            ("PCPB_PALW_GENESIS", &PCPB_PALW_GENESIS),
             ("SIMNET_GENESIS", &SIMNET_GENESIS),
             ("DEVNET_GENESIS", &DEVNET_GENESIS),
             ("DEVNET_PALW_GENESIS", &DEVNET_PALW_GENESIS),

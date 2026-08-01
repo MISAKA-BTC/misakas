@@ -87,6 +87,9 @@ mod tests {
             compute_registry_snapshot: None,
             active_batches: vec![],
             provider_bonds: vec![],
+            beacon_seed_history: Vec::new(),
+            provider_snapshot_history: Vec::new(),
+            acommit_registry: Vec::new(),
             paid_work: vec![],
         })
     }

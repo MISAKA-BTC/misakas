@@ -41,5 +41,11 @@ borsh.workspace = true
 kaspa-pq-validator-core.workspace = true
 blake2b_simd.workspace = true
 
+[dev-dependencies]
+# ADR-0045 D3-b: the PCPB self-serial tests need to SIGN as partner B, so they hold real ML-DSA-87
+# keypairs. Production never signs here — the bridge only VERIFIES B's signature (kaspa-txscript),
+# which is why this is a dev-dependency and not a dependency.
+libcrux-ml-dsa.workspace = true
+
 [lints]
 workspace = true

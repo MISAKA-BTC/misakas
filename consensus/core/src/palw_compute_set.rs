@@ -25,6 +25,7 @@
 //! pinned plain `u8` (manual borsh, explicit discriminants), so the enum's declaration order can
 //! never silently re-number persisted or hashed bytes.
 
+use crate::palw::{PalwAuditorCapacityGateV1, PalwAuditorCapacityShortfall, PalwAuditorCapacityV1};
 use crate::tx::TransactionOutpoint;
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash64, blake2b_512_keyed};
@@ -70,9 +71,32 @@ pub const PALW_COMPUTE_SET_ACTIVATION_VOTES_ROOT_DOMAIN: &[u8] = b"misaka-palw-c
 /// (which binds an epoch coordinate): this one is a pure set fingerprint, so a certificate author
 /// only has to predict the ACTIVE SET, never the DAA at which some future chain block folds it.
 pub const PALW_COMPUTE_SET_ACTIVATION_VALIDATORS_DOMAIN: &[u8] = b"misaka-palw-compute-set-activation-validators-v1";
+/// §17.3/§21.2 — `certificate_id = Hash64_k(activation-cert-id-v1, borsh(certificate))`, the
+/// content id the record tier is keyed by. Activation is re-certifiable BY DESIGN (a later
+/// quorum, a competing fork's quorum, a different voting subset), so several byte-distinct yet
+/// individually quorum-verified certificates for ONE set legitimately coexist — exactly as
+/// several attested batch certificates coexist for one batch (`body_validation_in_context`'s
+/// "both hashes may identify independently quorum-verified certificates"). Keying the tier by
+/// `compute_set_id` made that legal coexistence collide under one key and fail-stop the commit;
+/// keying by content restores the module's own write-once-by-content contract.
+pub const PALW_COMPUTE_SET_ACTIVATION_CERT_ID_DOMAIN: &[u8] = b"misaka-palw-compute-set-activation-cert-id-v1";
 /// §23.2 anti-explosion ceiling on embedded activation votes (far above any realistic DNS
 /// validator count; the real bound is the active validator set at verification).
 pub const MAX_ACTIVATION_CERT_VOTES: usize = 4_096;
+
+/// §17.4 — content-id domain for a governed action (what a governance vote signs).
+pub const PALW_GOVERNANCE_ACTION_DOMAIN: &[u8] = b"misaka-palw-governance-action-v1";
+/// §17.4 — the keyed domain every governance vote's signing digest lives under. Disjoint from
+/// `PALW_COMPUTE_SET_ACTIVATION_VOTE_DOMAIN`, so an activation vote can never be replayed as a
+/// governance vote (or the reverse).
+pub const PALW_GOVERNANCE_VOTE_DOMAIN: &[u8] = b"misaka-palw-governance-vote-v1";
+/// §17.4 — ML-DSA-87 context for a governance vote signature.
+pub const PALW_GOVERNANCE_MLDSA87_CONTEXT: &[u8] = b"PALWGovernanceVoteV1";
+/// §17.4 — commitment domain over an envelope's sorted vote list (`votes_root`).
+pub const PALW_GOVERNANCE_VOTES_ROOT_DOMAIN: &[u8] = b"misaka-palw-governance-votes-v1";
+/// §23.2 anti-explosion ceiling on embedded governance votes (the activation ceiling, same
+/// rationale — the real bound is the active validator set at verification).
+pub const MAX_GOVERNANCE_ENVELOPE_VOTES: usize = MAX_ACTIVATION_CERT_VOTES;
 
 /// Basis-points denominator (§10.1 — `bps` here is ALWAYS basis points, never blocks/sec).
 pub const BPS_DENOMINATOR: u16 = 10_000;
@@ -149,7 +173,53 @@ impl PalwComputeSetDescriptorV2 {
         if self.modality_mask == 0 {
             return Err(ComputeSetRegistryError::EmptyModalityMask);
         }
+        // §22.3/§10 — the hardforkless-model boundary, enforced by CONSENSUS rather than by
+        // validator signatures. Before this, admission checked the version and a nonzero modality
+        // mask and nothing else, so a quorum could register (and later activate) a set naming a
+        // `compute_vm_id` no node knows how to execute — the boundary between "a new model is a
+        // registration" and "a new model is a hardfork" existed only in prose.
+        if !crate::palw_compute_ir::is_supported_compute_vm(self.compute_vm_id) {
+            return Err(ComputeSetRegistryError::UnsupportedComputeVm(self.compute_vm_id));
+        }
+        // A descriptor that names no semantic program can never be IR-validated, so it can never
+        // be shown to stay inside the VM surface above. Unconditionally load-bearing, unlike the
+        // modality-specific roots (a text-only set legitimately has no preprocessing artifact).
+        if self.semantic_program_root == Hash64::default() {
+            return Err(ComputeSetRegistryError::DescriptorRootUnset("semantic_program_root"));
+        }
         Ok(())
+    }
+
+    /// §10/§15.2 — the FULL admission check, run once the semantic program behind
+    /// `semantic_program_root` is in hand (the DA slice supplies it; the proposal builder runs it
+    /// before emitting a payload).
+    ///
+    /// [`Self::validate_in_isolation`] can only check the VM NAME. This checks that the program
+    /// actually delivered under that name is the one committed, targets the same VM, and passes
+    /// the static IR rules — which is what makes "expressible in an existing VM" a verified
+    /// property instead of a claim. `validate_compute_ir_program` has existed and been unit-tested
+    /// since the IR landed; it simply had no caller on any admission path.
+    pub fn validate_against_program(
+        &self,
+        program: &crate::palw_compute_ir::PalwComputeIrProgramV1,
+        limits: &crate::palw_compute_ir::PalwComputeIrLimitsV1,
+    ) -> Result<(), ComputeSetRegistryError> {
+        self.validate_in_isolation()?;
+        let program_root = program.program_root();
+        if program_root != self.semantic_program_root {
+            return Err(ComputeSetRegistryError::SemanticProgramRootMismatch {
+                expected: self.semantic_program_root,
+                actual: program_root,
+            });
+        }
+        if program.compute_vm_id != self.compute_vm_id {
+            return Err(ComputeSetRegistryError::ProgramVmMismatch {
+                descriptor_vm: self.compute_vm_id,
+                program_vm: program.compute_vm_id,
+            });
+        }
+        crate::palw_compute_ir::validate_compute_ir_program(program, limits)
+            .map_err(|error| ComputeSetRegistryError::SemanticProgramInvalid(error.to_string()))
     }
 }
 
@@ -318,11 +388,15 @@ impl PalwComputeSetPolicyV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyGovernanceCapsV1 {
     pub max_premium_pi_bps: u16,
+    /// §22.2/REG-CAP-01 — the audit capacity a set must have behind it before it may hold
+    /// `Active`. Governed like the premium cap; the MEASUREMENT is supplied separately at
+    /// admission, because it is a fact about the chain rather than a policy choice.
+    pub auditor_capacity_gate: PalwAuditorCapacityGateV1,
 }
 
 impl Default for PolicyGovernanceCapsV1 {
     fn default() -> Self {
-        Self { max_premium_pi_bps: 5_000 }
+        Self { max_premium_pi_bps: 5_000, auditor_capacity_gate: PalwAuditorCapacityGateV1::TESTNET }
     }
 }
 
@@ -372,6 +446,7 @@ pub fn validate_policy_progression(
     same_sequence_policy_id: Option<Hash64>,
     next: &PalwComputeSetPolicyV1,
     caps: &PolicyGovernanceCapsV1,
+    capacity: &PalwAuditorCapacityV1,
     current_daa: u64,
 ) -> Result<PolicyRegistrationOutcome, ComputeSetRegistryError> {
     if next.version != PALW_COMPUTE_SET_POLICY_VERSION {
@@ -401,6 +476,26 @@ pub fn validate_policy_progression(
             if next.auditor_capacity_threshold == 0 {
                 return Err(ComputeSetRegistryError::ActiveRequiresNonzero("auditor_capacity_threshold"));
             }
+            // REG-CAP-01 — the threshold above is a governed NUMBER; this is the MEASUREMENT it
+            // was always meant to be compared against. Until now nothing supplied one, so a set
+            // could go Active (and therefore hold share, and therefore mint §14 credit) with a
+            // single auditor credential behind it — the 1-of-1 committee the audit describes.
+            //
+            // Short capacity lowers ISSUANCE, never the safety bar: the set stays Shadow, keeps
+            // serving traffic, and mints nothing. There is no branch here that shrinks the
+            // committee to fit the auditors on hand.
+            if capacity.eligible_credentials < next.auditor_capacity_threshold {
+                return Err(ComputeSetRegistryError::AuditorCapacityShort {
+                    set: next.compute_set_id,
+                    reason: PalwAuditorCapacityShortfall::TooFewCredentials {
+                        have: capacity.eligible_credentials,
+                        need: next.auditor_capacity_threshold.min(u16::MAX as u32) as u16,
+                    },
+                });
+            }
+            caps.auditor_capacity_gate
+                .admits(capacity)
+                .map_err(|reason| ComputeSetRegistryError::AuditorCapacityShort { set: next.compute_set_id, reason })?;
         }
         // §8.1: every non-Active stage carries zero DAG credit (Shadow soaks, Deprecated winds
         // down, Halted stops, Proposed/Retired never mint). `Canary Active / weight 0` (§11)
@@ -456,10 +551,7 @@ pub fn validate_policy_progression(
     // §9 「effective_from_daaの不正な過去指定」+ §22.2 future-dated activation: a revision takes
     // effect strictly after the block that registers it, so no in-flight block re-resolves.
     if next.effective_from_daa <= current_daa {
-        return Err(ComputeSetRegistryError::PolicyEffectiveNotFuture {
-            effective_from_daa: next.effective_from_daa,
-            current_daa,
-        });
+        return Err(ComputeSetRegistryError::PolicyEffectiveNotFuture { effective_from_daa: next.effective_from_daa, current_daa });
     }
 
     Ok(PolicyRegistrationOutcome::Inserted)
@@ -562,8 +654,8 @@ pub fn validate_allocation_plan(
         if plan.entries[..index].iter().any(|prior| prior.compute_set_id == entry.compute_set_id) {
             return Err(ComputeSetRegistryError::DuplicatePlanEntry(entry.compute_set_id));
         }
-        let state = set_state_of(&entry.compute_set_id)
-            .ok_or(ComputeSetRegistryError::PlanReferencesUnregisteredSet(entry.compute_set_id))?;
+        let state =
+            set_state_of(&entry.compute_set_id).ok_or(ComputeSetRegistryError::PlanReferencesUnregisteredSet(entry.compute_set_id))?;
         if entry.target_share_bps > 0 {
             if state != ComputeSetState::Active {
                 return Err(ComputeSetRegistryError::NonActiveSetWithShare { set: entry.compute_set_id, state });
@@ -600,9 +692,8 @@ pub fn validate_allocation_plan(
         }
         // §22.1 ramp limit — every set's |new − old| is bounded; absent-from-prev ramps from 0,
         // and DROPPING an entry is also a change to 0, so removed sets are checked too.
-        let old_share = |set: &Hash64| -> u16 {
-            prev.entries.iter().find(|e| &e.compute_set_id == set).map(|e| e.target_share_bps).unwrap_or(0)
-        };
+        let old_share =
+            |set: &Hash64| -> u16 { prev.entries.iter().find(|e| &e.compute_set_id == set).map(|e| e.target_share_bps).unwrap_or(0) };
         for entry in &plan.entries {
             let old = old_share(&entry.compute_set_id);
             let delta = entry.target_share_bps.abs_diff(old);
@@ -633,10 +724,7 @@ pub fn validate_allocation_plan(
 }
 
 /// §9-style DAA-point resolution for plans: highest sequence among plans already effective.
-pub fn resolve_allocation_plan(
-    plans: &[PalwModelAllocationPlanV1],
-    daa_score: u64,
-) -> Option<&PalwModelAllocationPlanV1> {
+pub fn resolve_allocation_plan(plans: &[PalwModelAllocationPlanV1], daa_score: u64) -> Option<&PalwModelAllocationPlanV1> {
     plans.iter().filter(|plan| plan.effective_from_daa <= daa_score).max_by_key(|plan| plan.sequence)
 }
 
@@ -646,6 +734,8 @@ pub fn resolve_allocation_plan(
 
 pub const PALW_COMPUTE_SET_PROPOSAL_PAYLOAD_VERSION: u16 = 1;
 pub const PALW_COMPUTE_SET_ACTIVATION_CERT_VERSION: u16 = 1;
+/// §17.4 — version pin for the governance envelope wrapping the three mutable actions.
+pub const PALW_GOVERNANCE_ENVELOPE_VERSION: u16 = 1;
 pub const PALW_COMPUTE_SET_POLICY_UPDATE_VERSION: u16 = 1;
 pub const PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION: u16 = 1;
 
@@ -657,10 +747,22 @@ pub struct PalwComputeSetProposalV1 {
 
     pub descriptor: PalwComputeSetDescriptorV2,
 
+    /// Bound to [`Self::proposer_public_key`] at admission — a proposer cannot claim someone
+    /// else's credential (the `owner_pubkey_hash` binding rule, transposed).
     pub proposer_credential: Hash64,
-    /// The §23.2 anti-explosion bond (value floor enforced at the tx-rule layer, like provider
-    /// bonds).
-    pub proposal_bond_ref: TransactionOutpoint,
+    /// The proposer's ML-DSA-87 verification key. Present so the §23.2 bond can be LOCKED to a key
+    /// the proposer controls; without it "the bond" has no owner the chain can name.
+    pub proposer_public_key: Vec<u8>,
+    /// §23.2 — the anti-explosion bond this transaction's output-0 must actually lock.
+    ///
+    /// This REPLACES a `proposal_bond_ref: TransactionOutpoint` field that nothing verified: no
+    /// code checked the outpoint existed, held any value, or belonged to the proposer, so the
+    /// registry's 256-slot ceiling ([`MAX_REGISTRY_VIEW_SETS`]) could be exhausted for free and
+    /// future model additions locked out. A declared outpoint also cannot name this transaction's
+    /// own output (the txid is not known while the payload is built), which is why the bond is
+    /// now the ECON-03 shape instead: output-0 of the proposing transaction IS the bond, so its
+    /// outpoint is `(this txid, 0)` — derived, never declared, and never a lie.
+    pub proposal_bond_sompi: u64,
 
     pub artifact_distribution_root: Hash64,
     pub independent_build_attestation_root: Hash64,
@@ -698,6 +800,15 @@ pub struct PalwComputeSetActivationCertificateV1 {
     /// §17.3 — the embedded ML-DSA-87 validator votes the process layer verifies (the
     /// `PalwBatchCertificateV2::votes` embedding). Ascending unique `bond_outpoint`.
     pub votes: Vec<PalwComputeSetActivationVoteV1>,
+}
+
+impl PalwComputeSetActivationCertificateV1 {
+    /// §21.2 — the content id this record is stored under. Signatures ARE in the preimage (unlike
+    /// `votes_root`, which deliberately omits them): the id names one exact byte string, so a
+    /// re-encoded signature is a different record rather than a divergent write under one key.
+    pub fn certificate_id(&self) -> Hash64 {
+        blake2b_512_keyed(PALW_COMPUTE_SET_ACTIVATION_CERT_ID_DOMAIN, &borsh::to_vec(self).expect("borsh"))
+    }
 }
 
 /// §17.3 — one DNS validator's ML-DSA-87 activation vote. The signature covers the certificate
@@ -802,15 +913,212 @@ pub struct PalwComputeSetEmergencyHaltV1 {
     pub evidence_root: Hash64,
 }
 
+/// §17.4 — the three MUTABLE governance actions, carried inside [`PalwGovernanceEnvelopeV1`].
+///
+/// Policy revisions, allocation plans and emergency halts govern how much DAG credit each Compute
+/// Set earns, how much real reward it draws, and whether it runs at all. They previously travelled
+/// as bare payloads: any accepted transaction reached `apply_policy` / `apply_plan` / `apply_halt`,
+/// so any user could retune `compute_work_scale`, move every set's block share, or stop an
+/// arbitrary set. The activation certificate on the neighbouring subnet already showed the correct
+/// shape (§17.3 ML-DSA-87 stake quorum against the frozen selected-parent bond view); this enum is
+/// that shape generalised over the remaining three.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub enum PalwGovernanceActionV1 {
+    PolicyUpdate(PalwComputeSetPolicyUpdateV1),
+    AllocationPlan(PalwModelAllocationPlanV1),
+    EmergencyHalt(PalwComputeSetEmergencyHaltV1),
+}
+
+impl PalwGovernanceActionV1 {
+    /// The registry-band subnetwork byte this action is the ONLY legal cargo for. Checked at
+    /// decode, so a policy update cannot arrive dressed as a halt (the bands stay 1:1 with the
+    /// action they name, exactly as before the envelope was introduced).
+    pub fn subnet_kind_byte(&self) -> Option<u8> {
+        use crate::subnets::*;
+        match self {
+            Self::PolicyUpdate(_) => SUBNETWORK_ID_PALW_COMPUTE_SET_POLICY_UPDATE.palw_compute_registry_tx_kind(),
+            Self::AllocationPlan(_) => SUBNETWORK_ID_PALW_MODEL_ALLOCATION_PLAN.palw_compute_registry_tx_kind(),
+            Self::EmergencyHalt(_) => SUBNETWORK_ID_PALW_COMPUTE_SET_EMERGENCY_HALT.palw_compute_registry_tx_kind(),
+        }
+    }
+
+    /// Content id of the governed action — what every vote signs. Because it hashes the canonical
+    /// action bytes, it transitively pins the inner record's own `effective_from_daa`, sequence and
+    /// every governed field: a vote cannot be lifted onto a different revision of the same kind.
+    pub fn action_hash(&self) -> Hash64 {
+        blake2b_512_keyed(PALW_GOVERNANCE_ACTION_DOMAIN, &borsh::to_vec(self).expect("borsh"))
+    }
+
+    /// Per-kind version pin (the check `parse_palw_compute_registry` used to run on the bare
+    /// payloads, now run on the envelope's cargo).
+    pub fn validate_version(&self) -> Result<(), ComputeSetRegistryError> {
+        let (what, version, expected) = match self {
+            Self::PolicyUpdate(u) => ("compute_set_policy_update", u.version, PALW_COMPUTE_SET_POLICY_UPDATE_VERSION),
+            Self::AllocationPlan(p) => ("model_allocation_plan", p.version, PALW_MODEL_ALLOCATION_PLAN_VERSION),
+            Self::EmergencyHalt(h) => ("compute_set_emergency_halt", h.version, PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION),
+        };
+        if version != expected {
+            return Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion(what, version));
+        }
+        Ok(())
+    }
+}
+
+/// §17.4 — one DNS validator's ML-DSA-87 governance vote. Structurally the activation vote
+/// (`PalwComputeSetActivationVoteV1`) over a different domain and a different summary.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwGovernanceVoteV1 {
+    /// The DNS stake bond casting this vote (resolved against the frozen selected-parent
+    /// [`crate::dns_finality::ActiveBondView`] at verification).
+    pub bond_outpoint: TransactionOutpoint,
+    /// 1 = approve, 0 = reject.
+    pub vote: u8,
+    /// ML-DSA-87 signature over [`Self::signing_hash`] under [`PALW_GOVERNANCE_MLDSA87_CONTEXT`].
+    pub signature: Vec<u8>,
+}
+
+impl PalwGovernanceVoteV1 {
+    /// The digest this vote signs: the network, the envelope version, the action's band byte and
+    /// content id, the validator set it was tallied against, and this vote's own position. The
+    /// tallies and the vote list are excluded — they are declared commitments the verifier
+    /// recomputes, so including them would be circular (the activation-vote rule verbatim).
+    pub fn signing_hash(&self, network_id: u32, envelope: &PalwGovernanceEnvelopeV1) -> Hash64 {
+        let mut p = Vec::with_capacity(4 + 2 + 1 + 64 + 64 + 64 + 4 + 1);
+        p.extend_from_slice(&network_id.to_le_bytes());
+        p.extend_from_slice(&envelope.version.to_le_bytes());
+        // Band byte: a governance vote is scoped to ONE action kind even if two kinds ever hashed
+        // alike. `None` is unreachable for a constructed action; encode it as a reserved 0xff.
+        p.push(envelope.action.subnet_kind_byte().unwrap_or(0xff));
+        p.extend_from_slice(envelope.action.action_hash().as_byte_slice());
+        p.extend_from_slice(envelope.validator_set_commitment.as_byte_slice());
+        p.extend_from_slice(self.bond_outpoint.transaction_id.as_byte_slice());
+        p.extend_from_slice(&self.bond_outpoint.index.to_le_bytes());
+        p.push(self.vote);
+        blake2b_512_keyed(PALW_GOVERNANCE_VOTE_DOMAIN, &p)
+    }
+}
+
+/// §17.4 — a governed registry mutation: the action plus the ML-DSA-87 validator-stake quorum
+/// that authorised it. The process layer verifies the attestation against the frozen
+/// selected-parent DNS bond view BEFORE the view learns of the action, exactly as it already does
+/// for `PalwComputeSetActivationCertificateV1`.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwGovernanceEnvelopeV1 {
+    pub version: u16,
+    pub action: PalwGovernanceActionV1,
+    /// Declared fingerprint of the active DNS validator set the quorum was tallied against —
+    /// recomputed at verification ([`palw_activation_validator_set_commitment`], shared with the
+    /// activation path because it is a pure set fingerprint with no epoch coordinate).
+    pub validator_set_commitment: Hash64,
+    /// Declared stake-weighted APPROVE tally — recomputed and rejected on mismatch.
+    pub approving_stake: u128,
+    /// Declared total active-validator stake (the quorum denominator) — same recompute-and-reject.
+    /// It is the WHOLE active set, never the subset that voted, so withholding cannot shrink the
+    /// denominator until a lone approval clears the bar.
+    pub total_selected_stake: u128,
+    /// Declared commitment over `votes` ([`palw_governance_votes_root`]).
+    pub votes_root: Hash64,
+    /// Ascending unique `bond_outpoint`.
+    pub votes: Vec<PalwGovernanceVoteV1>,
+}
+
+/// §17.4 — the commitment `votes_root` declares: keyed hash over the ascending-unique-by-
+/// `bond_outpoint` vote list's `(outpoint, vote)` positions. Signatures are deliberately NOT in
+/// the preimage (the `palw_activation_votes_root` rationale verbatim). Returns `None` for a
+/// non-canonical (unsorted / duplicate) list.
+pub fn palw_governance_votes_root(votes: &[PalwGovernanceVoteV1]) -> Option<Hash64> {
+    let key = |v: &PalwGovernanceVoteV1| (v.bond_outpoint.transaction_id, v.bond_outpoint.index);
+    if votes.windows(2).any(|w| key(&w[0]) >= key(&w[1])) {
+        return None;
+    }
+    let mut preimage = Vec::with_capacity(8 + votes.len() * (64 + 4 + 1));
+    preimage.extend_from_slice(&(votes.len() as u64).to_le_bytes());
+    for vote in votes {
+        preimage.extend_from_slice(vote.bond_outpoint.transaction_id.as_byte_slice());
+        preimage.extend_from_slice(&vote.bond_outpoint.index.to_le_bytes());
+        preimage.push(vote.vote);
+    }
+    Some(blake2b_512_keyed(PALW_GOVERNANCE_VOTES_ROOT_DOMAIN, &preimage))
+}
+
 /// The decoded, canonical form of one registry transaction (the registry-band analogue of
 /// `PalwOverlayEffect`).
+///
+/// The three mutable actions share ONE `Governed` variant rather than a variant each: the fold
+/// then cannot reach `apply_policy` / `apply_plan` / `apply_halt` without first passing the
+/// envelope through quorum verification, because there is no un-enveloped way to name them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwComputeRegistryEffect {
     Proposal(PalwComputeSetProposalV1),
     ActivationCertificate(PalwComputeSetActivationCertificateV1),
-    PolicyUpdate(PalwComputeSetPolicyUpdateV1),
-    AllocationPlan(PalwModelAllocationPlanV1),
-    EmergencyHalt(PalwComputeSetEmergencyHaltV1),
+    Governed(PalwGovernanceEnvelopeV1),
+}
+
+/// §23.2 — the minimum value a Compute Set proposal must lock.
+///
+/// A governed number at v0.1 initial value, the same posture as [`PolicyGovernanceCapsV1`]'s
+/// defaults: promoting it to a `Params` field beside `min_provider_bond_sompi` belongs to the
+/// governance slice. Ten times the testnet provider-bond floor, so exhausting all
+/// [`MAX_REGISTRY_VIEW_SETS`] slots costs real, locked value rather than nothing.
+pub const MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI: u64 = 100 * crate::constants::SOMPI_PER_KASPA;
+
+/// §23.2 — **the proposal value lock**, `validate_provider_bond_tx` (ADR-0040 ECON-03) transposed
+/// to the registry band.
+///
+/// # What was wrong
+///
+/// `proposal_bond_ref` was a bare declared outpoint. No code resolved it, checked its value, or
+/// checked who owned it — the only registry-side defence against proposal spam was the 256-entry
+/// view ceiling, which an attacker could therefore fill for the price of the transactions alone,
+/// permanently denying every future model addition.
+///
+/// # What makes it real
+///
+/// Output-0 of the very transaction carrying the proposal must LOCK the declared amount: its
+/// `value` must equal `proposal_bond_sompi`, and its `script_public_key` must be the proposer's
+/// own P2PKH-ML-DSA script. The credential is bound to the same key, so the bond cannot be
+/// attributed to a third party. The amount is no longer trusted — it is cross-checked against
+/// real, proposer-controlled coins the same transaction creates.
+///
+/// # What this ALONE does not do
+///
+/// Bond MATURITY, one-active-proposal-per-bond, burn/slash on a rejected or abandoned proposal,
+/// and the delayed refund after retirement all need a point of view or lifecycle state and are
+/// therefore separate legs, exactly as the provider bond's slashing rule is separate from its
+/// lock. This leg is the one that turns a number into collateral.
+pub fn validate_compute_set_proposal_tx(
+    payload: &[u8],
+    outputs: &[crate::tx::TransactionOutput],
+) -> Result<(), ComputeSetRegistryError> {
+    let PalwComputeRegistryEffect::Proposal(proposal) = parse_palw_compute_registry(
+        crate::subnets::SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL
+            .palw_compute_registry_tx_kind()
+            .expect("the proposal subnetwork is in the registry band"),
+        payload,
+    )?
+    else {
+        return Err(ComputeSetRegistryError::MalformedRegistryPayload("compute_set_proposal"));
+    };
+    if proposal.proposer_public_key.len() != crate::dns_finality::STAKE_VALIDATOR_PUBKEY_LEN {
+        return Err(ComputeSetRegistryError::ProposalPublicKeyLen(proposal.proposer_public_key.len()));
+    }
+    if crate::dns_finality::validator_id_from_pubkey(&proposal.proposer_public_key) != proposal.proposer_credential {
+        return Err(ComputeSetRegistryError::ProposalCredentialNotOwned(proposal.proposer_credential));
+    }
+    if proposal.proposal_bond_sompi < MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI {
+        return Err(ComputeSetRegistryError::ProposalBondBelowFloor {
+            amount: proposal.proposal_bond_sompi,
+            floor: MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI,
+        });
+    }
+    let output0 = outputs.first().ok_or(ComputeSetRegistryError::ProposalBondOutputMissing)?;
+    if output0.value != proposal.proposal_bond_sompi {
+        return Err(ComputeSetRegistryError::ProposalBondValueMismatch { expected: proposal.proposal_bond_sompi, got: output0.value });
+    }
+    if output0.script_public_key != crate::palw::provider_bond_lock_spk(&proposal.proposer_public_key) {
+        return Err(ComputeSetRegistryError::ProposalBondScriptMismatch);
+    }
+    Ok(())
 }
 
 /// Strict, canonical decode of a registry-band payload (`0x40..=0x44`). Mirrors
@@ -824,8 +1132,7 @@ pub fn parse_palw_compute_registry(
     use crate::subnets::*;
 
     fn strict<T: BorshDeserialize + BorshSerialize>(payload: &[u8], kind: &'static str) -> Result<T, ComputeSetRegistryError> {
-        let decoded: T =
-            borsh::from_slice(payload).map_err(|_| ComputeSetRegistryError::MalformedRegistryPayload(kind))?;
+        let decoded: T = borsh::from_slice(payload).map_err(|_| ComputeSetRegistryError::MalformedRegistryPayload(kind))?;
         // Round-trip canonicality (the repo idiom): the wire bytes must BE the canonical bytes,
         // or two nodes could store different preimages for one content id.
         if borsh::to_vec(&decoded).map(|canonical| canonical != payload).unwrap_or(true) {
@@ -851,24 +1158,24 @@ pub fn parse_palw_compute_registry(
             ));
         }
         Ok(PalwComputeRegistryEffect::ActivationCertificate(certificate))
-    } else if kind == SUBNETWORK_ID_PALW_COMPUTE_SET_POLICY_UPDATE.palw_compute_registry_tx_kind() {
-        let update: PalwComputeSetPolicyUpdateV1 = strict(payload, "compute_set_policy_update")?;
-        if update.version != PALW_COMPUTE_SET_POLICY_UPDATE_VERSION {
-            return Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("compute_set_policy_update", update.version));
+    } else if kind == SUBNETWORK_ID_PALW_COMPUTE_SET_POLICY_UPDATE.palw_compute_registry_tx_kind()
+        || kind == SUBNETWORK_ID_PALW_MODEL_ALLOCATION_PLAN.palw_compute_registry_tx_kind()
+        || kind == SUBNETWORK_ID_PALW_COMPUTE_SET_EMERGENCY_HALT.palw_compute_registry_tx_kind()
+    {
+        // §17.4 — the three mutable actions travel ONLY inside a governance envelope. Shape and
+        // version screen here; the ML-DSA-87 stake quorum needs a block point-of-view (the frozen
+        // selected-parent bond view) and so runs at the acceptance fold, exactly like the §17.3
+        // activation certificate's attestation.
+        let envelope: PalwGovernanceEnvelopeV1 = strict(payload, "governance_envelope")?;
+        if envelope.version != PALW_GOVERNANCE_ENVELOPE_VERSION {
+            return Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("governance_envelope", envelope.version));
         }
-        Ok(PalwComputeRegistryEffect::PolicyUpdate(update))
-    } else if kind == SUBNETWORK_ID_PALW_MODEL_ALLOCATION_PLAN.palw_compute_registry_tx_kind() {
-        let plan: PalwModelAllocationPlanV1 = strict(payload, "model_allocation_plan")?;
-        if plan.version != PALW_MODEL_ALLOCATION_PLAN_VERSION {
-            return Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("model_allocation_plan", plan.version));
+        envelope.action.validate_version()?;
+        // The action must match the band it arrived on: no cross-band smuggling.
+        if envelope.action.subnet_kind_byte() != kind {
+            return Err(ComputeSetRegistryError::GovernanceActionBandMismatch(subnet_first_byte));
         }
-        Ok(PalwComputeRegistryEffect::AllocationPlan(plan))
-    } else if kind == SUBNETWORK_ID_PALW_COMPUTE_SET_EMERGENCY_HALT.palw_compute_registry_tx_kind() {
-        let halt: PalwComputeSetEmergencyHaltV1 = strict(payload, "compute_set_emergency_halt")?;
-        if halt.version != PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION {
-            return Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("compute_set_emergency_halt", halt.version));
-        }
-        Ok(PalwComputeRegistryEffect::EmergencyHalt(halt))
+        Ok(PalwComputeRegistryEffect::Governed(envelope))
     } else {
         Err(ComputeSetRegistryError::UnhandledRegistrySubnet(subnet_first_byte))
     }
@@ -1026,12 +1333,11 @@ impl PalwComputeRegistryViewV1 {
         &mut self,
         policy: &PalwComputeSetPolicyV1,
         caps: &PolicyGovernanceCapsV1,
+        capacity: &PalwAuditorCapacityV1,
         current_daa: u64,
     ) -> Result<PolicyRegistrationOutcome, ComputeSetRegistryError> {
-        let entry = self
-            .sets
-            .get(&policy.compute_set_id)
-            .ok_or(ComputeSetRegistryError::PolicyForUnregisteredSet(policy.compute_set_id))?;
+        let entry =
+            self.sets.get(&policy.compute_set_id).ok_or(ComputeSetRegistryError::PolicyForUnregisteredSet(policy.compute_set_id))?;
         let same_sequence_policy_id =
             entry.policy_index.iter().find(|row| row.sequence == policy.policy_sequence).map(|row| row.policy_id);
         let outcome = validate_policy_progression(
@@ -1041,6 +1347,7 @@ impl PalwComputeRegistryViewV1 {
             same_sequence_policy_id,
             policy,
             caps,
+            capacity,
             current_daa,
         )?;
         if outcome == PolicyRegistrationOutcome::Inserted {
@@ -1072,13 +1379,13 @@ impl PalwComputeRegistryViewV1 {
     /// ladder says), or either ladder has no effective revision yet. The caller still resolves
     /// the plan RECORD to read the share — this is the reference-selection half only.
     pub fn governing_references_at(&self, set: &Hash64, daa_score: u64) -> Option<(Hash64, ComputeSetState, Hash64)> {
-        let entry = self.sets.get(set)?;
-        if entry.halted {
+        let governing = self.resolve_governing_references_at(set, daa_score).ok()?;
+        // Preserved surface: a halted set mints nothing NOW, so the template path sees `None`
+        // exactly as before. The typed resolver keeps the reason for validators that must report it.
+        if governing.halted {
             return None;
         }
-        let policy = entry.policy_index.iter().filter(|row| row.effective_from_daa <= daa_score).max_by_key(|row| row.sequence)?;
-        let plan = self.plan_index.iter().filter(|row| row.effective_from_daa <= daa_score).max_by_key(|row| row.sequence)?;
-        Some((policy.policy_id, policy.state, plan.plan_id))
+        Some((governing.policy_id, governing.state, governing.plan_id))
     }
 
     /// §10.3/§22.1 — apply an allocation plan, resolving every entry's lifecycle state from
@@ -1113,12 +1420,87 @@ impl PalwComputeRegistryViewV1 {
 
     /// §21.4 resolution for plans: the plan in force at `daa_score`.
     pub fn resolve_plan_id_at(&self, daa_score: u64) -> Option<Hash64> {
-        self.plan_index
-            .iter()
-            .filter(|row| row.effective_from_daa <= daa_score)
-            .max_by_key(|row| row.sequence)
-            .map(|row| row.plan_id)
+        self.plan_index.iter().filter(|row| row.effective_from_daa <= daa_score).max_by_key(|row| row.sequence).map(|row| row.plan_id)
     }
+
+    /// §23.4 — the references that GOVERN `set` at `daa_score` **on this fork**, with the reason
+    /// when none do. The `Option`-returning [`Self::governing_references_at`] is the template
+    /// path's view of this; a VALIDATOR needs to tell "halted" apart from "unregistered" apart
+    /// from "nothing effective yet", because those are different rejections.
+    ///
+    /// The content-addressed record stores are fork-INDEPENDENT: they answer "do these bytes
+    /// exist and were they once effective", never "are these the revisions in force here". Only
+    /// a fork-local view can answer the second question, and only the second question is the one
+    /// §14 credit and §18.6 halts depend on. This is the resolver a header's committed
+    /// `(policy_id, plan_id)` must be checked against — see [`Self::verify_header_references`].
+    pub fn resolve_governing_references_at(
+        &self,
+        set: &Hash64,
+        daa_score: u64,
+    ) -> Result<GoverningReferencesV1, ComputeSetRegistryError> {
+        let entry = self.sets.get(set).ok_or(ComputeSetRegistryError::GoverningSetUnregistered(*set))?;
+        let policy_id =
+            entry.resolve_policy_id_at(daa_score).ok_or(ComputeSetRegistryError::GoverningPolicyAbsent { set: *set, daa_score })?;
+        let plan_id = self.resolve_plan_id_at(daa_score).ok_or(ComputeSetRegistryError::GoverningPlanAbsent { daa_score })?;
+        Ok(GoverningReferencesV1 { policy_id, plan_id, state: entry.current_state(), halted: entry.halted })
+    }
+
+    /// §23.4 — the header-binding rule: a v5 PALW-lane header may only commit the registry
+    /// revisions that actually govern its own set at its own DAA **on its own fork**.
+    ///
+    /// Without this, "exists and was once effective" is the whole test, which admits three
+    /// distinct evasions the fork-independent stores cannot distinguish:
+    ///
+    /// * **Superseded policy** — a Deprecated or weight-0 revision supersedes an Active one, but
+    ///   the older revision still exists and was still once effective, so a miner can keep naming
+    ///   the high-weight predecessor and keep minting §14 credit under it.
+    /// * **Superseded plan** — the same, for a set whose share a newer plan cut.
+    /// * **Emergency halt** — `apply_halt` only moves `entry.halted` in the fork-local view, so a
+    ///   resolver that never reads the view cannot see a halt at all (§18.6).
+    ///
+    /// A fourth, subtler one: records registered on a LOSING fork remain in the global store, so
+    /// without a view membership test a header can cite a revision that never existed on its own
+    /// branch. Resolving through `self` closes that too — the view only knows its own past.
+    pub fn verify_header_references(
+        &self,
+        set: &Hash64,
+        daa_score: u64,
+        committed_policy_id: Hash64,
+        committed_plan_id: Hash64,
+    ) -> Result<GoverningReferencesV1, ComputeSetRegistryError> {
+        let governing = self.resolve_governing_references_at(set, daa_score)?;
+        if governing.halted {
+            return Err(ComputeSetRegistryError::GoverningSetHalted(*set));
+        }
+        if governing.policy_id != committed_policy_id {
+            return Err(ComputeSetRegistryError::GoverningReferenceMismatch {
+                what: "policy",
+                expected: governing.policy_id,
+                actual: committed_policy_id,
+            });
+        }
+        if governing.plan_id != committed_plan_id {
+            return Err(ComputeSetRegistryError::GoverningReferenceMismatch {
+                what: "allocation plan",
+                expected: governing.plan_id,
+                actual: committed_plan_id,
+            });
+        }
+        if governing.state != ComputeSetState::Active {
+            return Err(ComputeSetRegistryError::SourcePolicyNotActive(governing.state));
+        }
+        Ok(governing)
+    }
+}
+
+/// §23.4 — the fork-local governing references for one Compute Set at one DAA score.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoverningReferencesV1 {
+    pub policy_id: Hash64,
+    pub plan_id: Hash64,
+    /// The state in force, with an emergency halt overriding the policy's own state (§18.6).
+    pub state: ComputeSetState,
+    pub halted: bool,
 }
 
 // =============================================================================================
@@ -1175,7 +1557,10 @@ pub fn resolve_source_policy_for_credit(
         });
     }
     if plan.effective_from_daa > source_daa_score {
-        return Err(ComputeSetRegistryError::PlanNotEffectiveAtSource { effective_from_daa: plan.effective_from_daa, source_daa_score });
+        return Err(ComputeSetRegistryError::PlanNotEffectiveAtSource {
+            effective_from_daa: plan.effective_from_daa,
+            source_daa_score,
+        });
     }
     if policy.state != ComputeSetState::Active {
         return Err(ComputeSetRegistryError::SourcePolicyNotActive(policy.state));
@@ -1297,7 +1682,9 @@ impl PalwProviderCapabilityV2 {
     /// only on-chain field, §19); this checks it against the commitment before trusting it.
     pub fn supports_set(&self, supported_sets_preimage: &[Hash64], set_id: &Hash64) -> bool {
         match palw_supported_compute_sets_root(supported_sets_preimage) {
-            Some(root) if root == self.supported_compute_sets_root => supported_sets_preimage.binary_search_by(|s| s.as_bytes().cmp(&set_id.as_bytes())).is_ok(),
+            Some(root) if root == self.supported_compute_sets_root => {
+                supported_sets_preimage.binary_search_by(|s| s.as_bytes().cmp(&set_id.as_bytes())).is_ok()
+            }
             _ => false,
         }
     }
@@ -1493,6 +1880,41 @@ pub enum ComputeSetRegistryError {
     #[error("descriptor modality mask is empty")]
     EmptyModalityMask,
 
+    /// §22.3/§10 — the descriptor names a Compute VM surface this rule set cannot execute.
+    /// Registering it would put a set on chain whose semantics no node can reproduce.
+    #[error("descriptor names unsupported compute_vm_id {0} — a new VM surface is a node upgrade, not a registration (§10)")]
+    UnsupportedComputeVm(Hash64),
+
+    #[error("descriptor field {0} must not be zero")]
+    DescriptorRootUnset(&'static str),
+
+    #[error("proposer public key length {0} is not an ML-DSA-87 verification key")]
+    ProposalPublicKeyLen(usize),
+
+    #[error("proposer_credential {0} is not derived from the supplied proposer public key (§23.2)")]
+    ProposalCredentialNotOwned(Hash64),
+
+    #[error("proposal bond {amount} sompi is below the §23.2 floor of {floor}")]
+    ProposalBondBelowFloor { amount: u64, floor: u64 },
+
+    #[error("proposal transaction has no output-0 to carry the §23.2 bond")]
+    ProposalBondOutputMissing,
+
+    #[error("proposal bond output-0 locks {got} sompi, but the payload declares {expected} (§23.2)")]
+    ProposalBondValueMismatch { expected: u64, got: u64 },
+
+    #[error("proposal bond output-0 is not locked to the proposer's own key (§23.2)")]
+    ProposalBondScriptMismatch,
+
+    #[error("semantic program root mismatch: descriptor commits {expected}, supplied program hashes to {actual}")]
+    SemanticProgramRootMismatch { expected: Hash64, actual: Hash64 },
+
+    #[error("semantic program targets VM {program_vm} but the descriptor names {descriptor_vm}")]
+    ProgramVmMismatch { descriptor_vm: Hash64, program_vm: Hash64 },
+
+    #[error("semantic program failed static IR validation: {0}")]
+    SemanticProgramInvalid(String),
+
     #[error("descriptor bytes diverge for existing compute_set_id {0} — descriptors are write-once (§7.2)")]
     DescriptorDiverged(Hash64),
 
@@ -1583,6 +2005,16 @@ pub enum ComputeSetRegistryError {
     #[error("subnetwork byte {0:#04x} is not a Compute Set registry kind (§22.3 fail-closed)")]
     UnhandledRegistrySubnet(u8),
 
+    #[error("governance action does not match the registry band {0:#04x} it arrived on (§17.4)")]
+    GovernanceActionBandMismatch(u8),
+
+    /// §17.4 — the envelope's embedded attestation failed process-layer verification (bad
+    /// signature, unknown/inactive bond, duplicate vote, declared-tally or commitment mismatch, or
+    /// quorum not reached). Admission-rule rejection: the fold skips the action, the view is
+    /// unchanged, block validity is untouched — the `CertificateAttestationInvalid` posture.
+    #[error("governance attestation rejected: {0}")]
+    GovernanceAttestationInvalid(&'static str),
+
     #[error("registry view already tracks {0} sets — proposal rejected (§23.2)")]
     RegistryViewFull(usize),
 
@@ -1610,7 +2042,9 @@ pub enum ComputeSetRegistryError {
     #[error("emergency halt targets unregistered set {0}")]
     HaltForUnregisteredSet(Hash64),
 
-    #[error("a DIFFERENT activation certificate already exists for set {0} — supersession goes through the view fold, never a silent overwrite")]
+    #[error(
+        "a DIFFERENT activation certificate already exists for set {0} — supersession goes through the view fold, never a silent overwrite"
+    )]
     CertificateDiverged(Hash64),
 
     #[error("compute set registry store fault: {0} — consensus-load-bearing state is unreadable/unwritable")]
@@ -1618,6 +2052,28 @@ pub enum ComputeSetRegistryError {
 
     #[error("supplied policy record {actual} is not the header-committed policy {expected} (§14/§23.4)")]
     CommittedPolicyMismatch { expected: Hash64, actual: Hash64 },
+
+    /// REG-CAP-01 — the set cannot be audited independently at this point of view, so it may not
+    /// hold `Active` (and therefore may not hold share or mint credit).
+    #[error("compute set {set} lacks the audit capacity to be Active: {reason}")]
+    AuditorCapacityShort { set: Hash64, reason: PalwAuditorCapacityShortfall },
+
+    #[error("compute set {0} is not registered in this fork's registry view (§23.4)")]
+    GoverningSetUnregistered(Hash64),
+
+    #[error("compute set {set} has no policy revision effective at DAA {daa_score} in this fork's view (§23.4)")]
+    GoverningPolicyAbsent { set: Hash64, daa_score: u64 },
+
+    #[error("no allocation plan is effective at DAA {daa_score} in this fork's view (§23.4)")]
+    GoverningPlanAbsent { daa_score: u64 },
+
+    #[error("compute set {0} is emergency-halted in this fork's view (§18.6) — it earns no credit")]
+    GoverningSetHalted(Hash64),
+
+    /// §23.4 — the header named a revision that EXISTS and was once effective, but is not the one
+    /// governing on this fork (a superseded revision, or one registered only on a losing branch).
+    #[error("header committed {what} {actual} but {expected} governs this set on this fork (§23.4)")]
+    GoverningReferenceMismatch { what: &'static str, expected: Hash64, actual: Hash64 },
 
     #[error("committed policy governs set {policy_set}, but the header claims set {header_set} (§13.1)")]
     PolicyGovernsDifferentSet { policy_set: Hash64, header_set: Hash64 },
@@ -1653,11 +2109,25 @@ mod tests {
         Hash64::from_bytes([tag; 64])
     }
 
+    /// `compute_vm_id` is the REAL frozen VM surface (§10 admission refuses any other), so `tag`
+    /// varies the model identity instead — that is what makes two fixtures different sets.
+    /// Capacity comfortably above `PalwAuditorCapacityGateV1::TESTNET`, so tests about policy
+    /// PROGRESSION are not accidentally testing the REG-CAP-01 gate. The gate has its own test.
+    fn ample_capacity() -> PalwAuditorCapacityV1 {
+        PalwAuditorCapacityV1 {
+            eligible_credentials: 8,
+            operator_groups: 5,
+            total_matured_bond: 8_000,
+            largest_credential_share_bps: 2_000,
+            largest_group_share_bps: 3_000,
+        }
+    }
+
     fn descriptor(tag: u8) -> PalwComputeSetDescriptorV2 {
         PalwComputeSetDescriptorV2 {
             version: PALW_COMPUTE_SET_DESCRIPTOR_VERSION,
-            compute_vm_id: h(tag),
-            model_family_id: h(0x10),
+            compute_vm_id: crate::palw_compute_ir::compute_vm_id_v1(),
+            model_family_id: h(tag),
             model_artifact_root: h(0x11),
             model_manifest_root: h(0x12),
             tokenizer_root: h(0x13),
@@ -1831,71 +2301,89 @@ mod tests {
         // Unregistered descriptor → reject.
         let first = policy(set, 1, 100, Proposed);
         assert!(matches!(
-            validate_policy_progression(false, false, None, None, &first, &caps, 50),
+            validate_policy_progression(false, false, None, None, &first, &caps, &ample_capacity(), 50),
             Err(ComputeSetRegistryError::PolicyForUnregisteredSet(_))
         ));
         // First policy must be Proposed.
         let premature = policy(set, 1, 100, Active);
         assert!(matches!(
-            validate_policy_progression(true, true, None, None, &premature, &caps, 50),
+            validate_policy_progression(true, true, None, None, &premature, &caps, &ample_capacity(), 50),
             Err(ComputeSetRegistryError::FirstPolicyMustBeProposed(Active))
         ));
         // Happy path: Proposed inserted (no certificate needed to exist as a proposal).
         assert_eq!(
-            validate_policy_progression(true, false, None, None, &first, &caps, 50),
+            validate_policy_progression(true, false, None, None, &first, &caps, &ample_capacity(), 50),
             Ok(PolicyRegistrationOutcome::Inserted)
         );
 
         // Shadow requires the quorum-verified activation certificate (§17.3/§18.1)…
         let shadow = policy(set, 2, 200, Shadow);
         assert!(matches!(
-            validate_policy_progression(true, false, precedent(1, Proposed), None, &shadow, &caps, 150),
+            validate_policy_progression(true, false, precedent(1, Proposed), None, &shadow, &caps, &ample_capacity(), 150),
             Err(ComputeSetRegistryError::ShadowRequiresActivationCertificate(_))
         ));
         // …and proceeds once certified; then Shadow → Active.
         assert_eq!(
-            validate_policy_progression(true, true, precedent(1, Proposed), None, &shadow, &caps, 150),
+            validate_policy_progression(true, true, precedent(1, Proposed), None, &shadow, &caps, &ample_capacity(), 150),
             Ok(PolicyRegistrationOutcome::Inserted)
         );
         let active = policy(set, 3, 300, Active);
         assert_eq!(
-            validate_policy_progression(true, true, precedent(2, Shadow), None, &active, &caps, 250),
+            validate_policy_progression(true, true, precedent(2, Shadow), None, &active, &caps, &ample_capacity(), 250),
             Ok(PolicyRegistrationOutcome::Inserted)
         );
 
         // Sequence rollback.
         let rollback = policy(set, 3, 400, Active);
         assert!(matches!(
-            validate_policy_progression(true, true, precedent(3, Active), None, &rollback, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), None, &rollback, &caps, &ample_capacity(), 350),
             Err(ComputeSetRegistryError::PolicySequenceRollback { .. })
         ));
         // Same sequence: identical content id idempotent, divergent content rejected.
         assert_eq!(
-            validate_policy_progression(true, true, precedent(3, Active), Some(active.policy_id()), &active, &caps, 350),
+            validate_policy_progression(
+                true,
+                true,
+                precedent(3, Active),
+                Some(active.policy_id()),
+                &active,
+                &caps,
+                &ample_capacity(),
+                350
+            ),
             Ok(PolicyRegistrationOutcome::Idempotent)
         );
         let mut divergent = active.clone();
         divergent.job_timeout_daa += 1;
         assert!(matches!(
-            validate_policy_progression(true, true, precedent(3, Active), Some(active.policy_id()), &divergent, &caps, 350),
+            validate_policy_progression(
+                true,
+                true,
+                precedent(3, Active),
+                Some(active.policy_id()),
+                &divergent,
+                &caps,
+                &ample_capacity(),
+                350
+            ),
             Err(ComputeSetRegistryError::PolicySequenceDiverged { .. })
         ));
         // Past-dated effective.
         let past = policy(set, 4, 300, Active);
         assert!(matches!(
-            validate_policy_progression(true, true, precedent(3, Active), None, &past, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), None, &past, &caps, &ample_capacity(), 350),
             Err(ComputeSetRegistryError::PolicyEffectiveNotFuture { .. })
         ));
         // Illegal transition Proposed → Active (skipping the mandatory Shadow soak).
         let skip = policy(set, 2, 200, Active);
         assert!(matches!(
-            validate_policy_progression(true, true, precedent(1, Proposed), None, &skip, &caps, 150),
+            validate_policy_progression(true, true, precedent(1, Proposed), None, &skip, &caps, &ample_capacity(), 150),
             Err(ComputeSetRegistryError::InvalidStateTransition { .. })
         ));
         // Retired terminal.
         let after_retired = policy(set, 5, 500, Active);
         assert!(matches!(
-            validate_policy_progression(true, true, precedent(4, Retired), None, &after_retired, &caps, 450),
+            validate_policy_progression(true, true, precedent(4, Retired), None, &after_retired, &caps, &ample_capacity(), 450),
             Err(ComputeSetRegistryError::RetiredSetIsTerminal(_))
         ));
 
@@ -1903,26 +2391,26 @@ mod tests {
         let mut heavy = policy(set, 4, 400, Active);
         heavy.weight_factor_bps = 10_001;
         assert!(matches!(
-            validate_policy_progression(true, true, precedent(3, Active), None, &heavy, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), None, &heavy, &caps, &ample_capacity(), 350),
             Err(ComputeSetRegistryError::WeightFactorOutOfRange(10_001))
         ));
         let mut pricey = policy(set, 4, 400, Active);
         pricey.premium_pi_bps = caps.max_premium_pi_bps + 1;
         assert!(matches!(
-            validate_policy_progression(true, true, precedent(3, Active), None, &pricey, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), None, &pricey, &caps, &ample_capacity(), 350),
             Err(ComputeSetRegistryError::PremiumAboveCap { .. })
         ));
         let mut zero_scale = policy(set, 4, 400, Active);
         zero_scale.compute_work_scale = 0;
         assert!(matches!(
-            validate_policy_progression(true, true, precedent(3, Active), None, &zero_scale, &caps, 350),
+            validate_policy_progression(true, true, precedent(3, Active), None, &zero_scale, &caps, &ample_capacity(), 350),
             Err(ComputeSetRegistryError::ActiveRequiresNonzero("compute_work_scale"))
         ));
         // Shadow (or any non-Active) must carry zero weight — Shadow soaks earn nothing (§8.1).
         let mut weighted_shadow = policy(set, 2, 200, Shadow);
         weighted_shadow.weight_factor_bps = 1;
         assert!(matches!(
-            validate_policy_progression(true, true, precedent(1, Proposed), None, &weighted_shadow, &caps, 150),
+            validate_policy_progression(true, true, precedent(1, Proposed), None, &weighted_shadow, &caps, &ample_capacity(), 150),
             Err(ComputeSetRegistryError::NonActiveRequiresZeroWeight(Shadow))
         ));
     }
@@ -1975,10 +2463,7 @@ mod tests {
 
         // Initial single-set plan.
         let genesis_plan = plan(1, 100, vec![(a, 10_000)]);
-        assert_eq!(
-            validate_allocation_plan(&genesis_plan, &states, None, None, &limits, 50),
-            Ok(PlanRegistrationOutcome::Inserted)
-        );
+        assert_eq!(validate_allocation_plan(&genesis_plan, &states, None, None, &limits, 50), Ok(PlanRegistrationOutcome::Inserted));
 
         // §28.2 sum != 10000.
         let short = plan(2, 200, vec![(a, 9_999)]);
@@ -2031,9 +2516,7 @@ mod tests {
             Err(ComputeSetRegistryError::TooManyActiveSets { count: 3, max: 2 })
         ));
         // §28.2 ramp limit exceed: a jumps 10000 → 9000 (Δ1000 > 500).
-        let states_ab = move |set: &Hash64| -> Option<ComputeSetState> {
-            (*set == a || *set == b).then_some(ComputeSetState::Active)
-        };
+        let states_ab = move |set: &Hash64| -> Option<ComputeSetState> { (*set == a || *set == b).then_some(ComputeSetState::Active) };
         let jump = plan(2, 200, vec![(a, 9_000), (b, 1_000)]);
         assert!(matches!(
             validate_allocation_plan(&jump, &states_ab, Some(&genesis_plan), None, &limits, 150),
@@ -2101,7 +2584,8 @@ mod tests {
             version: PALW_COMPUTE_SET_PROPOSAL_PAYLOAD_VERSION,
             descriptor: descriptor(tag),
             proposer_credential: h(0x50),
-            proposal_bond_ref: TransactionOutpoint::new(h(0x51), 0),
+            proposer_public_key: vec![0x51; crate::dns_finality::STAKE_VALIDATOR_PUBKEY_LEN],
+            proposal_bond_sompi: MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI,
             artifact_distribution_root: h(0x52),
             independent_build_attestation_root: h(0x53),
             requested_shadow_activation_daa: 1_000,
@@ -2125,6 +2609,335 @@ mod tests {
         }
     }
 
+    /// REG-CAP-01 — a set may only be `Active` while enough INDEPENDENT auditors stand behind it.
+    ///
+    /// The threshold field existed and was governed; the measurement it was compared against was
+    /// never supplied by any caller, so "capacity" was a number checked against nothing. Each case
+    /// below is a way to look adequately audited while being one party.
+    #[test]
+    fn active_requires_real_independent_audit_capacity() {
+        use ComputeSetState::*;
+        let set = proposal(1).descriptor.compute_set_id();
+        let caps = PolicyGovernanceCapsV1::default();
+        let mut view = PalwComputeRegistryViewV1::new();
+        view.apply_proposal(&proposal(1)).unwrap();
+        view.apply_policy(&policy(set, 1, 100, Proposed), &caps, &ample_capacity(), 50).unwrap();
+        view.apply_certificate(&certificate_for(set), true).unwrap();
+        view.apply_policy(&policy(set, 2, 200, Shadow), &caps, &ample_capacity(), 150).unwrap();
+
+        let active = policy(set, 3, 300, Active);
+        let go_active =
+            |view: &mut PalwComputeRegistryViewV1, capacity: &PalwAuditorCapacityV1| view.apply_policy(&active, &caps, capacity, 250);
+        let short = |mutate: fn(&mut PalwAuditorCapacityV1)| {
+            let mut c = ample_capacity();
+            mutate(&mut c);
+            c
+        };
+
+        // One credential — the 1-of-1 committee. A single PASS is 100 % of selected stake, so the
+        // 2/3 quorum is met by one party auditing itself into Active.
+        assert!(matches!(
+            go_active(&mut view.clone(), &short(|c| c.eligible_credentials = 1)),
+            Err(ComputeSetRegistryError::AuditorCapacityShort { .. })
+        ));
+
+        // Enough credentials, but all behind ONE operator: independence is a costume.
+        assert!(matches!(
+            go_active(&mut view.clone(), &short(|c| c.operator_groups = 1)),
+            Err(ComputeSetRegistryError::AuditorCapacityShort {
+                reason: PalwAuditorCapacityShortfall::TooFewOperatorGroups { .. },
+                ..
+            })
+        ));
+
+        // Enough credentials AND groups, but one credential holds 96 % of the stake — the
+        // committee is stake-weighted, so it is that credential's committee.
+        assert!(matches!(
+            go_active(&mut view.clone(), &short(|c| c.largest_credential_share_bps = 9_600)),
+            Err(ComputeSetRegistryError::AuditorCapacityShort {
+                reason: PalwAuditorCapacityShortfall::CredentialTooConcentrated { .. },
+                ..
+            })
+        ));
+        assert!(matches!(
+            go_active(&mut view.clone(), &short(|c| c.largest_group_share_bps = 9_000)),
+            Err(ComputeSetRegistryError::AuditorCapacityShort {
+                reason: PalwAuditorCapacityShortfall::OperatorGroupTooConcentrated { .. },
+                ..
+            })
+        ));
+
+        // The set's OWN governed threshold also binds, above the network floor.
+        let mut demanding = active.clone();
+        demanding.auditor_capacity_threshold = 100;
+        assert!(matches!(
+            view.clone().apply_policy(&demanding, &caps, &ample_capacity(), 250),
+            Err(ComputeSetRegistryError::AuditorCapacityShort { .. })
+        ));
+
+        // Short capacity does NOT block Shadow: the set keeps serving traffic, it just earns
+        // nothing. Lowering issuance is the response, never lowering the committee.
+        let mut shadowed = view.clone();
+        let shadow_again = policy(set, 3, 300, Shadow);
+        assert_eq!(
+            shadowed.apply_policy(&shadow_again, &caps, &short(|c| c.eligible_credentials = 1), 250),
+            Ok(PolicyRegistrationOutcome::Inserted)
+        );
+        assert_eq!(shadowed.sets[&set].current_state(), Shadow);
+        assert_eq!(shadow_again.weight_factor_bps, 0, "a non-Active stage carries zero DAG credit");
+
+        // With real capacity the same transition succeeds.
+        assert_eq!(go_active(&mut view, &ample_capacity()), Ok(PolicyRegistrationOutcome::Inserted));
+        assert_eq!(view.sets[&set].current_state(), Active);
+    }
+
+    /// §23.2 — the proposal bond is COLLATERAL, not a declared number. Before this, filling all
+    /// 256 registry slots (and so locking out every future model addition) cost only the fee.
+    #[test]
+    fn proposal_bond_must_be_a_real_value_lock() {
+        use crate::tx::TransactionOutput;
+        // A real ML-DSA-87 keypair: the credential must be DERIVED from the embedded key, so a
+        // synthetic public key cannot stand in.
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([7u8; 32]);
+        let public_key = kp.verification_key.as_ref().to_vec();
+        let credential = crate::dns_finality::validator_id_from_pubkey(&public_key);
+        let lock = crate::palw::provider_bond_lock_spk(&public_key);
+
+        let mut proposal = proposal(1);
+        proposal.proposer_credential = credential;
+        proposal.proposer_public_key = public_key.clone();
+        proposal.proposal_bond_sompi = MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI;
+        let encode = |p: &PalwComputeSetProposalV1| borsh::to_vec(p).unwrap();
+        let funded = vec![TransactionOutput::new(MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI, lock.clone())];
+
+        assert_eq!(validate_compute_set_proposal_tx(&encode(&proposal), &funded), Ok(()));
+
+        // No output at all — the pre-fix state, where the bond was a field and nothing more.
+        assert_eq!(validate_compute_set_proposal_tx(&encode(&proposal), &[]), Err(ComputeSetRegistryError::ProposalBondOutputMissing));
+
+        // An output that does not carry the declared amount.
+        let underfunded = vec![TransactionOutput::new(MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI - 1, lock.clone())];
+        assert!(matches!(
+            validate_compute_set_proposal_tx(&encode(&proposal), &underfunded),
+            Err(ComputeSetRegistryError::ProposalBondValueMismatch { .. })
+        ));
+
+        // Value locked to somebody else's script is not the proposer's collateral.
+        let other = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([8u8; 32]);
+        let elsewhere = vec![TransactionOutput::new(
+            MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI,
+            crate::palw::provider_bond_lock_spk(other.verification_key.as_ref()),
+        )];
+        assert_eq!(
+            validate_compute_set_proposal_tx(&encode(&proposal), &elsewhere),
+            Err(ComputeSetRegistryError::ProposalBondScriptMismatch)
+        );
+
+        // Declaring less than the floor: without it, 256 dust bonds still exhaust the registry.
+        let mut cheap = proposal.clone();
+        cheap.proposal_bond_sompi = MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI - 1;
+        let cheap_output = vec![TransactionOutput::new(cheap.proposal_bond_sompi, lock.clone())];
+        assert!(matches!(
+            validate_compute_set_proposal_tx(&encode(&cheap), &cheap_output),
+            Err(ComputeSetRegistryError::ProposalBondBelowFloor { .. })
+        ));
+
+        // Claiming a credential the embedded key does not derive: the bond would be locked to the
+        // proposer while the registry slot is attributed to a third party.
+        let mut impersonating = proposal.clone();
+        impersonating.proposer_credential = h(0x5a);
+        assert_eq!(
+            validate_compute_set_proposal_tx(&encode(&impersonating), &funded),
+            Err(ComputeSetRegistryError::ProposalCredentialNotOwned(h(0x5a)))
+        );
+
+        // A public key that is not an ML-DSA-87 verification key.
+        let mut stub = proposal.clone();
+        stub.proposer_public_key = vec![0u8; 32];
+        stub.proposer_credential = crate::dns_finality::validator_id_from_pubkey(&stub.proposer_public_key);
+        assert!(matches!(
+            validate_compute_set_proposal_tx(&encode(&stub), &funded),
+            Err(ComputeSetRegistryError::ProposalPublicKeyLen(32))
+        ));
+    }
+
+    /// §10/§22.3 — the hardforkless-model boundary. A model that fits an existing Compute VM is a
+    /// registration; one that needs a new VM surface is a node upgrade. Before this, admission
+    /// checked neither, so the boundary was prose.
+    #[test]
+    fn descriptor_admission_enforces_the_compute_vm_boundary() {
+        use crate::palw_compute_ir::{
+            PALW_COMPUTE_IR_PROGRAM_VERSION, PalwComputeIrInstructionV1, PalwComputeIrLimitsV1, PalwComputeIrOpcode,
+            PalwComputeIrProgramV1, compute_vm_id_v1,
+        };
+        let limits = PalwComputeIrLimitsV1::default();
+        let mut program = PalwComputeIrProgramV1 {
+            version: PALW_COMPUTE_IR_PROGRAM_VERSION,
+            compute_vm_id: compute_vm_id_v1(),
+            tensor_count: 2,
+            instructions: vec![PalwComputeIrInstructionV1 {
+                opcode: PalwComputeIrOpcode::Add,
+                inputs: vec![0, 1],
+                attributes: vec![],
+            }],
+        };
+        let mut descriptor = proposal(1).descriptor;
+        descriptor.semantic_program_root = program.program_root();
+
+        // A descriptor naming the frozen VM surface, committing the program it actually ships.
+        assert_eq!(descriptor.validate_in_isolation(), Ok(()));
+        assert_eq!(descriptor.validate_against_program(&program, &limits), Ok(()));
+
+        // An UNKNOWN VM is refused outright: nothing on chain should name semantics no node can
+        // reproduce, whatever a validator quorum is willing to sign for it.
+        let mut alien = descriptor.clone();
+        alien.compute_vm_id = h(0x9e);
+        assert!(matches!(alien.validate_in_isolation(), Err(ComputeSetRegistryError::UnsupportedComputeVm(_))));
+
+        // A descriptor naming no program can never be shown to stay inside that VM surface.
+        let mut programless = descriptor.clone();
+        programless.semantic_program_root = Hash64::default();
+        assert!(matches!(
+            programless.validate_in_isolation(),
+            Err(ComputeSetRegistryError::DescriptorRootUnset("semantic_program_root"))
+        ));
+
+        // The committed root must be the program actually delivered — otherwise the IR rules were
+        // checked against something other than what runs.
+        let mut swapped = program.clone();
+        swapped.tensor_count = 3;
+        assert!(matches!(
+            descriptor.validate_against_program(&swapped, &limits),
+            Err(ComputeSetRegistryError::SemanticProgramRootMismatch { .. })
+        ));
+
+        // A program targeting a different VM than the descriptor names.
+        let mut cross_vm = descriptor.clone();
+        program.compute_vm_id = h(0x9e);
+        cross_vm.semantic_program_root = program.program_root();
+        assert!(matches!(
+            cross_vm.validate_against_program(&program, &limits),
+            Err(ComputeSetRegistryError::ProgramVmMismatch { .. })
+        ));
+
+        // And the static IR rules actually run: a self-referential instruction is not acyclic.
+        let mut cyclic = PalwComputeIrProgramV1 {
+            version: PALW_COMPUTE_IR_PROGRAM_VERSION,
+            compute_vm_id: compute_vm_id_v1(),
+            tensor_count: 1,
+            instructions: vec![PalwComputeIrInstructionV1 {
+                opcode: PalwComputeIrOpcode::Add,
+                inputs: vec![0, 1], // input 1 == this instruction's own output
+                attributes: vec![],
+            }],
+        };
+        let mut cyclic_descriptor = descriptor.clone();
+        cyclic_descriptor.semantic_program_root = cyclic.program_root();
+        assert!(matches!(
+            cyclic_descriptor.validate_against_program(&cyclic, &limits),
+            Err(ComputeSetRegistryError::SemanticProgramInvalid(_))
+        ));
+        cyclic.instructions[0].inputs = vec![0, 0];
+        cyclic_descriptor.semantic_program_root = cyclic.program_root();
+        assert_eq!(cyclic_descriptor.validate_against_program(&cyclic, &limits), Ok(()));
+    }
+
+    /// §23.4 — the fork-local header binding. Each case here is an evasion the fork-INDEPENDENT
+    /// record stores structurally cannot catch, because every cited revision genuinely exists and
+    /// genuinely was effective once; only "does it govern HERE" separates them.
+    #[test]
+    fn header_references_must_be_the_governing_revisions_on_this_fork() {
+        use ComputeSetState::*;
+        let set = proposal(1).descriptor.compute_set_id();
+        let caps = PolicyGovernanceCapsV1::default();
+        let limits = AllocationGovernanceLimitsV1 { max_change_per_plan_bps: 10_000, ..Default::default() };
+        let mut view = PalwComputeRegistryViewV1::new();
+        view.apply_proposal(&proposal(1)).unwrap();
+        view.apply_policy(&policy(set, 1, 100, Proposed), &caps, &ample_capacity(), 50).unwrap();
+        view.apply_certificate(&certificate_for(set), true).unwrap();
+        view.apply_policy(&policy(set, 2, 200, Shadow), &caps, &ample_capacity(), 150).unwrap();
+
+        let active = policy(set, 3, 300, Active);
+        view.apply_policy(&active, &caps, &ample_capacity(), 250).unwrap();
+        let p1 = plan(1, 400, vec![(set, 10_000)]);
+        view.apply_plan(&p1, &limits, 350).unwrap();
+
+        // Green path: the revisions actually in force at this DAA verify.
+        let governing = view.verify_header_references(&set, 500, active.policy_id(), p1.plan_id).expect("governing refs");
+        assert_eq!(governing.policy_id, active.policy_id());
+        assert_eq!(governing.plan_id, p1.plan_id);
+        assert_eq!(governing.state, Active);
+
+        // Evasion 1 — a SUPERSEDED policy. `policy(set, 2, ..)` exists and was effective from 200,
+        // so every fork-independent check passes; only the view knows sequence 3 replaced it.
+        let superseded = policy(set, 2, 200, Shadow).policy_id();
+        assert!(matches!(
+            view.verify_header_references(&set, 500, superseded, p1.plan_id),
+            Err(ComputeSetRegistryError::GoverningReferenceMismatch { what: "policy", .. })
+        ));
+
+        // Evasion 2 — a SUPERSEDED plan, once a newer plan cuts the set's share.
+        let p2 = plan(2, 700, vec![(set, 10_000)]);
+        view.apply_plan(&p2, &limits, 650).unwrap();
+        assert_eq!(view.verify_header_references(&set, 800, active.policy_id(), p2.plan_id).unwrap().plan_id, p2.plan_id);
+        assert!(matches!(
+            view.verify_header_references(&set, 800, active.policy_id(), p1.plan_id),
+            Err(ComputeSetRegistryError::GoverningReferenceMismatch { what: "allocation plan", .. })
+        ));
+
+        // Evasion 3 — an EMERGENCY HALT. The halt lives only in the fork-local view, so a
+        // resolver that never reads a view cannot see it at all: the once-Active policy still
+        // resolves, and the halted set keeps earning credit.
+        view.apply_halt(&PalwComputeSetEmergencyHaltV1 {
+            version: PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION,
+            compute_set_id: set,
+            evidence_root: h(0x89),
+        })
+        .unwrap();
+        assert!(matches!(
+            view.verify_header_references(&set, 800, active.policy_id(), p2.plan_id),
+            Err(ComputeSetRegistryError::GoverningSetHalted(_))
+        ));
+        // Recovery through the §8.1 matrix restores credit under the NEW revision, not the old one.
+        let recovery = policy(set, 4, 900, Active);
+        view.apply_policy(&recovery, &caps, &ample_capacity(), 850).unwrap();
+        assert_eq!(view.verify_header_references(&set, 950, recovery.policy_id(), p2.plan_id).unwrap().state, Active);
+        assert!(matches!(
+            view.verify_header_references(&set, 950, active.policy_id(), p2.plan_id),
+            Err(ComputeSetRegistryError::GoverningReferenceMismatch { what: "policy", .. })
+        ));
+
+        // Evasion 4 — a record from a LOSING fork. The content stores are fork-independent, so
+        // such a record is readable forever; a view that never saw the set rejects it outright.
+        let foreign = PalwComputeRegistryViewV1::new();
+        assert!(matches!(
+            foreign.verify_header_references(&set, 950, recovery.policy_id(), p2.plan_id),
+            Err(ComputeSetRegistryError::GoverningSetUnregistered(_))
+        ));
+
+        // Below the first effective DAA nothing governs yet — fail closed, never a default.
+        assert!(matches!(
+            view.verify_header_references(&set, 50, active.policy_id(), p1.plan_id),
+            Err(ComputeSetRegistryError::GoverningPolicyAbsent { .. })
+        ));
+        assert!(matches!(view.resolve_governing_references_at(&set, 250), Err(ComputeSetRegistryError::GoverningPlanAbsent { .. })));
+    }
+
+    /// A shape-valid governance envelope. The vote list is empty on purpose: decode screens SHAPE
+    /// only, and the quorum runs at the fold where a block point-of-view exists — an envelope with
+    /// no votes must therefore DECODE and then be refused by `verify_palw_governance_envelope`.
+    fn governance_envelope(action: PalwGovernanceActionV1) -> PalwGovernanceEnvelopeV1 {
+        PalwGovernanceEnvelopeV1 {
+            version: PALW_GOVERNANCE_ENVELOPE_VERSION,
+            action,
+            validator_set_commitment: h(0x70),
+            approving_stake: 0,
+            total_selected_stake: 0,
+            votes_root: h(0x71),
+            votes: vec![],
+        }
+    }
+
     #[test]
     fn registry_payload_parse_is_strict_and_versioned() {
         use crate::subnets::*;
@@ -2136,19 +2949,34 @@ mod tests {
         let p = proposal(1);
         let bytes = borsh::to_vec(&p).unwrap();
         assert_eq!(parse_palw_compute_registry(proposal_kind, &bytes), Ok(PalwComputeRegistryEffect::Proposal(p.clone())));
+        // §17.4 — the three mutable actions round-trip ONLY inside a governance envelope. A bare
+        // action on its own band is no longer decodable: that is the whole point of the envelope.
         let a_plan = plan(1, 100, vec![(h(0xa1), 10_000)]);
-        assert_eq!(
+        assert!(matches!(
             parse_palw_compute_registry(plan_kind, &borsh::to_vec(&a_plan).unwrap()),
-            Ok(PalwComputeRegistryEffect::AllocationPlan(a_plan))
+            Err(ComputeSetRegistryError::MalformedRegistryPayload("governance_envelope"))
+                | Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("governance_envelope", _))
+        ));
+        let plan_envelope = governance_envelope(PalwGovernanceActionV1::AllocationPlan(a_plan));
+        assert_eq!(
+            parse_palw_compute_registry(plan_kind, &borsh::to_vec(&plan_envelope).unwrap()),
+            Ok(PalwComputeRegistryEffect::Governed(plan_envelope.clone()))
         );
         let halt = PalwComputeSetEmergencyHaltV1 {
             version: PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION,
             compute_set_id: h(0xa1),
             evidence_root: Hash64::default(),
         };
+        let halt_envelope = governance_envelope(PalwGovernanceActionV1::EmergencyHalt(halt));
         assert_eq!(
-            parse_palw_compute_registry(halt_kind, &borsh::to_vec(&halt).unwrap()),
-            Ok(PalwComputeRegistryEffect::EmergencyHalt(halt))
+            parse_palw_compute_registry(halt_kind, &borsh::to_vec(&halt_envelope).unwrap()),
+            Ok(PalwComputeRegistryEffect::Governed(halt_envelope.clone()))
+        );
+
+        // A governed action may not arrive on another action's band.
+        assert_eq!(
+            parse_palw_compute_registry(halt_kind, &borsh::to_vec(&plan_envelope).unwrap()),
+            Err(ComputeSetRegistryError::GovernanceActionBandMismatch(halt_kind))
         );
 
         // Strictness: trailing bytes are not canonical.
@@ -2166,10 +2994,7 @@ mod tests {
             Err(ComputeSetRegistryError::UnsupportedRegistryPayloadVersion("compute_set_proposal", 2))
         ));
         // Unknown band byte fails closed.
-        assert!(matches!(
-            parse_palw_compute_registry(0x45, &bytes),
-            Err(ComputeSetRegistryError::UnhandledRegistrySubnet(0x45))
-        ));
+        assert!(matches!(parse_palw_compute_registry(0x45, &bytes), Err(ComputeSetRegistryError::UnhandledRegistrySubnet(0x45))));
     }
 
     #[test]
@@ -2186,19 +3011,19 @@ mod tests {
         assert_eq!(view.sets[&set].current_state(), Proposed);
 
         // First policy (Proposed) lands without a certificate.
-        assert_eq!(view.apply_policy(&policy(set, 1, 100, Proposed), &caps, 50), Ok(PolicyRegistrationOutcome::Inserted));
+        assert_eq!(
+            view.apply_policy(&policy(set, 1, 100, Proposed), &caps, &ample_capacity(), 50),
+            Ok(PolicyRegistrationOutcome::Inserted)
+        );
         // Shadow blocked until the certificate is recorded.
         assert!(matches!(
-            view.apply_policy(&policy(set, 2, 200, Shadow), &caps, 150),
+            view.apply_policy(&policy(set, 2, 200, Shadow), &caps, &ample_capacity(), 150),
             Err(ComputeSetRegistryError::ShadowRequiresActivationCertificate(_))
         ));
 
         // Certificate gating (§17.3).
         let cert = certificate_for(set);
-        assert!(matches!(
-            view.apply_certificate(&cert, false),
-            Err(ComputeSetRegistryError::CertificateQuorumNotVerified(_))
-        ));
+        assert!(matches!(view.apply_certificate(&cert, false), Err(ComputeSetRegistryError::CertificateQuorumNotVerified(_))));
         let mut mismatched = cert.clone();
         mismatched.descriptor_hash = h(0x99);
         assert!(matches!(
@@ -2211,21 +3036,21 @@ mod tests {
         let mut unknown_set = cert.clone();
         unknown_set.compute_set_id = h(0x77);
         unknown_set.descriptor_hash = h(0x77);
-        assert!(matches!(
-            view.apply_certificate(&unknown_set, true),
-            Err(ComputeSetRegistryError::CertificateForUnregisteredSet(_))
-        ));
+        assert!(matches!(view.apply_certificate(&unknown_set, true), Err(ComputeSetRegistryError::CertificateForUnregisteredSet(_))));
         assert_eq!(view.apply_certificate(&cert, true), Ok(()));
 
         // Shadow → Active now proceed; the index resolves by DAA.
-        assert_eq!(view.apply_policy(&policy(set, 2, 200, Shadow), &caps, 150), Ok(PolicyRegistrationOutcome::Inserted));
+        assert_eq!(
+            view.apply_policy(&policy(set, 2, 200, Shadow), &caps, &ample_capacity(), 150),
+            Ok(PolicyRegistrationOutcome::Inserted)
+        );
         let active_policy = policy(set, 3, 300, Active);
-        assert_eq!(view.apply_policy(&active_policy, &caps, 250), Ok(PolicyRegistrationOutcome::Inserted));
+        assert_eq!(view.apply_policy(&active_policy, &caps, &ample_capacity(), 250), Ok(PolicyRegistrationOutcome::Inserted));
         assert_eq!(view.sets[&set].resolve_policy_id_at(50), None);
         assert_eq!(view.sets[&set].resolve_policy_id_at(250), Some(policy(set, 2, 200, Shadow).policy_id()));
         assert_eq!(view.sets[&set].resolve_policy_id_at(900), Some(active_policy.policy_id()));
         // Idempotent replay via content id.
-        assert_eq!(view.apply_policy(&active_policy, &caps, 350), Ok(PolicyRegistrationOutcome::Idempotent));
+        assert_eq!(view.apply_policy(&active_policy, &caps, &ample_capacity(), 350), Ok(PolicyRegistrationOutcome::Idempotent));
 
         // Allocation plan lifecycle on the live view.
         let limits = AllocationGovernanceLimitsV1 { max_change_per_plan_bps: 10_000, ..Default::default() };
@@ -2256,12 +3081,9 @@ mod tests {
         view.apply_halt(&halt).unwrap();
         assert_eq!(view.sets[&set].current_state(), EmergencyHalted);
         let banned = plan(2, 500, vec![(set, 10_000)]);
-        assert!(matches!(
-            view.apply_plan(&banned, &limits, 450),
-            Err(ComputeSetRegistryError::NonActiveSetWithShare { .. })
-        ));
+        assert!(matches!(view.apply_plan(&banned, &limits, 450), Err(ComputeSetRegistryError::NonActiveSetWithShare { .. })));
         let recovery = policy(set, 4, 600, Active);
-        assert_eq!(view.apply_policy(&recovery, &caps, 550), Ok(PolicyRegistrationOutcome::Inserted));
+        assert_eq!(view.apply_policy(&recovery, &caps, &ample_capacity(), 550), Ok(PolicyRegistrationOutcome::Inserted));
         assert!(!view.sets[&set].halted);
         assert_eq!(view.sets[&set].current_state(), Active);
 
@@ -2393,9 +3215,7 @@ mod tests {
 
     #[test]
     fn bond_state_wire_form_is_pinned_u8_and_fail_closed() {
-        for (state, raw) in
-            [(BondState::Maturing, 0u8), (BondState::Active, 1), (BondState::Unbonding, 2), (BondState::Slashed, 3)]
-        {
+        for (state, raw) in [(BondState::Maturing, 0u8), (BondState::Active, 1), (BondState::Unbonding, 2), (BondState::Slashed, 3)] {
             assert_eq!(borsh::to_vec(&state).unwrap(), vec![raw]);
             assert_eq!(borsh::from_slice::<BondState>(&[raw]).unwrap(), state);
         }
@@ -2509,11 +3329,11 @@ mod tests {
         assert_eq!(view.governing_references_at(&set, 1_000), None);
         assert_eq!(view.governing_references_at(&h(0x7e), 1_000), None); // unregistered
 
-        view.apply_policy(&policy(set, 1, 100, Proposed), &caps, 50).unwrap();
+        view.apply_policy(&policy(set, 1, 100, Proposed), &caps, &ample_capacity(), 50).unwrap();
         view.apply_certificate(&certificate_for(set), true).unwrap();
-        view.apply_policy(&policy(set, 2, 200, Shadow), &caps, 150).unwrap();
+        view.apply_policy(&policy(set, 2, 200, Shadow), &caps, &ample_capacity(), 150).unwrap();
         let active = policy(set, 3, 300, Active);
-        view.apply_policy(&active, &caps, 250).unwrap();
+        view.apply_policy(&active, &caps, &ample_capacity(), 250).unwrap();
         // Policy ladder alone is not enough — §13.1 commits a plan reference too.
         assert_eq!(view.governing_references_at(&set, 1_000), None);
 

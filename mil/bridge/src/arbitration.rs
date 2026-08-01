@@ -36,8 +36,7 @@
 use std::collections::HashSet;
 
 use kaspa_consensus_core::palw::{
-    PalwMismatchParams, PalwMismatchRecordV1, PalwMismatchVerdict, ProviderBondView,
-    select_weighted_auditor_committee,
+    PalwMismatchParams, PalwMismatchRecordV1, PalwMismatchVerdict, ProviderBondView, select_weighted_auditor_committee,
 };
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::{Hash64, blake2b_512_keyed};
@@ -142,6 +141,72 @@ pub fn select_auditor(
     );
     Ok(slate.first().map(|stake| format_outpoint(&stake.representative)))
 }
+
+/// **BRIDGE-SEL-01 — who replicates a job.** [`select_auditor`] applied to the k=2 replica draw.
+///
+/// # What was wrong
+///
+/// Assignment was CLAIM-ON-FETCH: `GET /palw/v1/assignments` handed every unassigned job to the
+/// first provider that polled and was not the submitter. Whoever polled fastest took the work, so
+/// a provider running a tight loop could hold an arbitrary share of all replication — and, paired
+/// with an unauthenticated route (BRIDGE-AUTH-01), could hold it under someone else's name. The
+/// submitter had only to out-poll the field with a second identity to replicate its own job.
+///
+/// # What replaces it
+///
+/// The replica is DERIVED, not granted: the same stake-weighted, non-replacement sampler the
+/// dispute path already uses, seeded by a beacon the submitter could not know when it committed,
+/// over a bond view frozen at that beacon, with the submitter's own credential and operator group
+/// excluded. `round` re-rolls a lapsed assignment, so a silent selectee cannot strand a job.
+/// The bridge distributes this result; it does not choose it.
+///
+/// # What this is NOT
+///
+/// Consensus does not verify it. A dishonest bridge can still hand a job to whoever it likes,
+/// because nothing on chain binds an assignment to a beacon — `PalwPublicLeafV1` carries no
+/// `A_commit`, no assignment proof, no reroll round (PCPB-01, still unimplemented). This makes
+/// the HONEST bridge's choice unpredictable and reproducible; it does not make a dishonest one
+/// detectable. That gap closes only when the leaf carries the assignment proof.
+pub fn select_replica(
+    job_id: &str,
+    submitter_bond: &str,
+    beacon_seed: &Hash64,
+    pov_daa_score: u64,
+    round: u32,
+    candidates: &[&RegisteredProvider],
+) -> Result<Option<String>, String> {
+    let mut records = Vec::with_capacity(candidates.len());
+    let mut excluded_credentials = HashSet::new();
+    let mut excluded_groups = HashSet::new();
+    for provider in candidates {
+        let record = provider.record()?;
+        // The independence rule, unchanged: a job is never replicated by its own submitter — now
+        // extended to the submitter's operator-group siblings, exactly as disputes exclude them.
+        if provider.bond_outpoint == submitter_bond {
+            excluded_credentials.insert(record.owner_pubkey_hash);
+            excluded_groups.insert(record.operator_group_id);
+        }
+        records.push((record.bond_outpoint, record));
+    }
+    let view = ProviderBondView::from_records(records);
+    // Bind the draw to the job AND the reroll round, so a lapse produces a different selectee
+    // rather than the same silent one forever.
+    let draw_id = blake2b_512_keyed(BRIDGE_REPLICA_DRAW_DOMAIN, &{
+        let mut preimage = Vec::with_capacity(job_id.len() + submitter_bond.len() + 4);
+        preimage.extend_from_slice(job_id.as_bytes());
+        preimage.push(0);
+        preimage.extend_from_slice(submitter_bond.as_bytes());
+        preimage.extend_from_slice(&round.to_le_bytes());
+        preimage
+    });
+    let (slate, _commitment) =
+        select_weighted_auditor_committee(beacon_seed, &draw_id, &view, pov_daa_score, &excluded_credentials, &excluded_groups, 1);
+    Ok(slate.first().map(|stake| format_outpoint(&stake.representative)))
+}
+
+/// Keyed domain separating the replica draw from the dispute-auditor draw, so one job's replica
+/// selection can never alias the auditor selection for a dispute over that same job.
+pub const BRIDGE_REPLICA_DRAW_DOMAIN: &[u8] = b"misaka-palw-bridge-v1/replica-draw";
 
 /// Step 4 — attribute against the auditor's reference output and name the slash targets.
 pub fn adjudicate(dispute: &DisputeRecord, reference_output: &Hash64) -> Result<(PalwMismatchVerdict, Vec<String>), String> {

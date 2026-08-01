@@ -964,6 +964,11 @@ mod tests {
             activation_epoch: 10,
             expiry_epoch: 20,
             leaf_bond_sompi: 1_000,
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: Hash64::from_bytes([0x7c; 64]),
+            assignment_proof_root: Hash64::from_bytes([0x7d; 64]),
+            dispatch_kind: 0, // BeaconAssigned (external sentinels)
         };
         let bytes = restamp(&mut leaf, &object);
         V2Fixture { leaf, provider_a, provider_b, object, bytes }

@@ -892,13 +892,13 @@ do you confirm? (answer y/n or pass --yes to the Kaspad command line to confirm 
         // the active manifest/leaf/certificate projection required for fresh first-post-PP validation;
         // reusing a v13 singleton would either fail positional decode or silently lack those blobs.
         //
-        // Search-availability dispatch raises 14 -> 15 and this reset bound 13 -> 14. Prefixes
-        // 189-191 add per-block search obligation rows every active chain block must carry (a v14
-        // history fail-stops the selected-parent loader and the reorg registry reconciler on the
-        // first missing row), the pruning payload gains a positional field, and
-        // `PalwSelectedParentStateV2` gains the search state root that moves every Header-v4
-        // overlay commitment. Hard reset per ADR-0001.
-        if version <= 14 {
+        // ADR-0045 D3-b (PCPB LeafV2 wiring) raises 15 -> 16 and this reset bound 14 -> 15.
+        // `PalwPublicLeafV1` gains five PCPB fields (its bincode layout moves, LEAF_LEN 964 ->
+        // 1189), leaf chunks become v3, prefixes 68-69 add the per-epoch provider-snapshot history
+        // and the A-commit registry that clauses 12/13 resolve against, and the pruning payload
+        // gains both carries. A v15 history has neither the wider leaf rows nor the PCPB context,
+        // so every algo-4 leaf would fail closed. Hard reset per ADR-0001.
+        if version <= 15 {
             is_db_reset_needed = request_database_deletion_approval(args.yes);
             continue 'db_upgrade;
         }

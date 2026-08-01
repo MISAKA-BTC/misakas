@@ -2474,23 +2474,145 @@ pub struct GetPalwStateRequest {
     pub batch_id: Option<String>,
     /// PALW provider-bond outpoint, `txid_hex:index`.
     pub provider_bond_outpoint: Option<String>,
+    /// ADR-0045 D3-b (request wire v2): the PCPB ANCHOR EPOCH to serve production context for —
+    /// `a_commit_epoch` on the self branch, the challenge epoch on the external one. Bounded like
+    /// every other selector: one epoch, never a range.
+    #[serde(default)]
+    pub pcpb_anchor_epoch: Option<u64>,
+    /// Optional A-commit (64-byte Hash64 hex) to resolve at the SAME point of view. A self-serial
+    /// producer polls this until it turns into an epoch, then names that epoch on its leaf.
+    #[serde(default)]
+    pub pcpb_a_commit: Option<String>,
 }
 
 impl Serializer for GetPalwStateRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(Option<String>, &self.batch_id, writer)?;
         store!(Option<String>, &self.provider_bond_outpoint, writer)?;
+        store!(Option<u64>, &self.pcpb_anchor_epoch, writer)?;
+        store!(Option<String>, &self.pcpb_a_commit, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwStateRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         let batch_id = load!(Option<String>, reader)?;
         let provider_bond_outpoint = load!(Option<String>, reader)?;
-        Ok(Self { batch_id, provider_bond_outpoint })
+        // v1 peers stop here; their requests simply carry no PCPB selector.
+        let (pcpb_anchor_epoch, pcpb_a_commit) =
+            if version >= 2 { (load!(Option<u64>, reader)?, load!(Option<String>, reader)?) } else { (None, None) };
+        Ok(Self { batch_id, provider_bond_outpoint, pcpb_anchor_epoch, pcpb_a_commit })
+    }
+}
+
+/// ADR-0045 D3-b — the PCPB production context for one anchor epoch (RPC projection of
+/// [`kaspa_consensus_core::palw_probe::PalwPcpbContextProbe`]).
+///
+/// Hex strings rather than typed hashes, matching every other PALW RPC projection in this file.
+/// `snapshot_root == ""` means "this node cannot resolve that epoch" — a producer that builds
+/// anyway emits a leaf every verifier rejects, so the emptiness is the answer, not an error.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwPcpbContext {
+    pub anchor_epoch: u64,
+    pub snapshot_epoch: u64,
+    pub draw_epoch: u64,
+    /// Committed roots at `snapshot_epoch` ("" ⇒ outside the retained window).
+    pub snapshot_root: String,
+    pub assignment_root: String,
+    pub total_bond: String,
+    pub provider_count: u32,
+    /// The canonical entry set behind those roots. EMPTY while `snapshot_root` is non-empty means
+    /// the node imported that epoch from a pruning snapshot: it can verify, not help produce.
+    pub entries: Vec<RpcPalwSnapshotEntry>,
+    /// `R_{anchor}` / `R_{anchor + Δ}` ("" ⇒ unresolvable ⇒ fail-closed for the producer too).
+    pub anchor_seed: String,
+    pub draw_seed: String,
+    /// Registration epoch of the queried A-commit; `None` ⇒ not on-chain yet (what a self-serial
+    /// producer polls for) or swept.
+    pub acommit_epoch: Option<u64>,
+}
+
+/// One bonded provider as committed in a PCPB epoch snapshot.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwSnapshotEntry {
+    pub provider_id: String,
+    pub ml_dsa_pk_hash: String,
+    pub bond_sompi: u64,
+    pub reward_script_commitment: String,
+}
+
+impl Serializer for RpcPalwSnapshotEntry {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.provider_id, writer)?;
+        store!(String, &self.ml_dsa_pk_hash, writer)?;
+        store!(u64, &self.bond_sompi, writer)?;
+        store!(String, &self.reward_script_commitment, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwSnapshotEntry {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let provider_id = load!(String, reader)?;
+        let ml_dsa_pk_hash = load!(String, reader)?;
+        let bond_sompi = load!(u64, reader)?;
+        let reward_script_commitment = load!(String, reader)?;
+        Ok(Self { provider_id, ml_dsa_pk_hash, bond_sompi, reward_script_commitment })
+    }
+}
+
+impl Serializer for RpcPalwPcpbContext {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.anchor_epoch, writer)?;
+        store!(u64, &self.snapshot_epoch, writer)?;
+        store!(u64, &self.draw_epoch, writer)?;
+        store!(String, &self.snapshot_root, writer)?;
+        store!(String, &self.assignment_root, writer)?;
+        store!(String, &self.total_bond, writer)?;
+        store!(u32, &self.provider_count, writer)?;
+        serialize!(Vec<RpcPalwSnapshotEntry>, &self.entries, writer)?;
+        store!(String, &self.anchor_seed, writer)?;
+        store!(String, &self.draw_seed, writer)?;
+        store!(Option<u64>, &self.acommit_epoch, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwPcpbContext {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let anchor_epoch = load!(u64, reader)?;
+        let snapshot_epoch = load!(u64, reader)?;
+        let draw_epoch = load!(u64, reader)?;
+        let snapshot_root = load!(String, reader)?;
+        let assignment_root = load!(String, reader)?;
+        let total_bond = load!(String, reader)?;
+        let provider_count = load!(u32, reader)?;
+        let entries = deserialize!(Vec<RpcPalwSnapshotEntry>, reader)?;
+        let anchor_seed = load!(String, reader)?;
+        let draw_seed = load!(String, reader)?;
+        let acommit_epoch = load!(Option<u64>, reader)?;
+        Ok(Self {
+            anchor_epoch,
+            snapshot_epoch,
+            draw_epoch,
+            snapshot_root,
+            assignment_root,
+            total_bond,
+            provider_count,
+            entries,
+            anchor_seed,
+            draw_seed,
+            acommit_epoch,
+        })
     }
 }
 
@@ -2885,11 +3007,15 @@ pub struct GetPalwStateResponse {
     /// peers). Carries the obligation ids + sampled chunk indices a challenger opens a 0x3a against.
     #[serde(default)]
     pub da_obligations: Vec<RpcPalwDaObligation>,
+    /// ADR-0045 D3-b PCPB production context (added in wire version 6; `None` from older peers or
+    /// when the request named no anchor epoch).
+    #[serde(default)]
+    pub pcpb: Option<RpcPalwPcpbContext>,
 }
 
 impl Serializer for GetPalwStateResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &5, writer)?;
+        store!(u16, &6, writer)?;
         store!(bool, &self.enabled, writer)?;
         store!(String, &self.sink, writer)?;
         store!(u64, &self.sink_daa_score, writer)?;
@@ -2900,6 +3026,7 @@ impl Serializer for GetPalwStateResponse {
         serialize!(Option<RpcPalwActivationState>, &self.activation, writer)?;
         serialize!(Vec<RpcPalwSearchChallenge>, &self.search_challenges, writer)?;
         serialize!(Vec<RpcPalwDaObligation>, &self.da_obligations, writer)?;
+        serialize!(Option<RpcPalwPcpbContext>, &self.pcpb, writer)?;
         Ok(())
     }
 }
@@ -2917,6 +3044,7 @@ impl Deserializer for GetPalwStateResponse {
         let activation = if version >= 3 { deserialize!(Option<RpcPalwActivationState>, reader)? } else { None };
         let search_challenges = if version >= 4 { deserialize!(Vec<RpcPalwSearchChallenge>, reader)? } else { Vec::new() };
         let da_obligations = if version >= 5 { deserialize!(Vec<RpcPalwDaObligation>, reader)? } else { Vec::new() };
+        let pcpb = if version >= 6 { deserialize!(Option<RpcPalwPcpbContext>, reader)? } else { None };
         Ok(Self {
             enabled,
             sink,
@@ -2928,6 +3056,7 @@ impl Deserializer for GetPalwStateResponse {
             activation,
             search_challenges,
             da_obligations,
+            pcpb,
         })
     }
 }
@@ -3092,6 +3221,16 @@ mod palw_state_wire_tests {
         roundtrip(GetPalwStateRequest {
             batch_id: Some("11".repeat(64)),
             provider_bond_outpoint: Some(format!("{}:0", "22".repeat(64))),
+            pcpb_anchor_epoch: Some(9),
+            pcpb_a_commit: Some("a1".repeat(64)),
+        });
+        // A v1-shaped request (no PCPB selector) must still round trip — the added fields are a
+        // request-wire bump, and an older peer's bytes stop before them.
+        roundtrip(GetPalwStateRequest {
+            batch_id: None,
+            provider_bond_outpoint: None,
+            pcpb_anchor_epoch: None,
+            pcpb_a_commit: None,
         });
         roundtrip(GetPalwStateResponse {
             enabled: true,
@@ -3170,6 +3309,26 @@ mod palw_state_wire_tests {
                 beacon_epoch: 9,
                 retention_until_daa_score: 20_000,
             }],
+            // ADR-0045 D3-b: every field populated and distinct, including the "resolvable but not
+            // servable" shape a pruned node returns (entries empty while the roots are present).
+            pcpb: Some(RpcPalwPcpbContext {
+                anchor_epoch: 9,
+                snapshot_epoch: 7,
+                draw_epoch: 11,
+                snapshot_root: "e1".repeat(64),
+                assignment_root: "e2".repeat(64),
+                total_bond: "340282366920938463463374607431768211455".to_string(),
+                provider_count: 3,
+                entries: vec![RpcPalwSnapshotEntry {
+                    provider_id: "e3".repeat(64),
+                    ml_dsa_pk_hash: "e4".repeat(64),
+                    bond_sompi: 12_345,
+                    reward_script_commitment: "e5".repeat(64),
+                }],
+                anchor_seed: "e6".repeat(64),
+                draw_seed: "e7".repeat(64),
+                acommit_epoch: Some(8),
+            }),
         });
         roundtrip(RpcPalwDaObligation {
             obligation_id: "b2".repeat(64),

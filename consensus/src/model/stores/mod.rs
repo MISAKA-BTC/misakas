@@ -20,6 +20,7 @@ pub mod palw_lane_bits;
 pub mod palw_nullifier;
 pub mod palw_overlay_view;
 pub mod palw_paid_work;
+pub mod palw_pcpb;
 pub mod palw_provider_bonds;
 pub mod palw_pruned_frontier;
 pub mod palw_search_availability;

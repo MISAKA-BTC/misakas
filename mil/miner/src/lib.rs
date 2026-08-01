@@ -67,6 +67,45 @@ pub struct MiningJob {
     /// The raw ticket nullifier; the leaf commits to `ticket_nullifier_commitment(raw)`, and the
     /// winning header later reveals the raw value (I-13 winner-secrecy).
     pub raw_ticket_nullifier: Hash64,
+    /// ADR-0045 D3-b — the PCPB leaf commitments for this job (dispatch anchor, snapshot roots,
+    /// branch tag). Produced by the bridge's PCPB flow (A-commit anchoring / scheduler assignment);
+    /// the miner copies them into the leaf verbatim — it can neither derive nor check them.
+    pub pcpb: PcpbLeafFields,
+}
+
+/// The five D3-b leaf fields, as one producer-side unit (design memo §1). `external()` builds the
+/// sentinel form for the beacon-assigned branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PcpbLeafFields {
+    pub a_commit: Hash64,
+    pub a_commit_epoch: u64,
+    pub provider_snapshot_root: Hash64,
+    pub assignment_proof_root: Hash64,
+    pub dispatch_kind: u8,
+}
+
+impl PcpbLeafFields {
+    /// External branch: zero anchor sentinels + the epoch snapshot roots the scheduler assigned under.
+    pub fn external(provider_snapshot_root: Hash64, assignment_proof_root: Hash64) -> Self {
+        Self {
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root,
+            assignment_proof_root,
+            dispatch_kind: kaspa_consensus_core::palw::PALW_DISPATCH_KIND_BEACON_ASSIGNED,
+        }
+    }
+
+    /// Self-serial branch: the anchored `a_commit` + its registry epoch + the `anchor − k` roots.
+    pub fn self_serial(a_commit: Hash64, a_commit_epoch: u64, provider_snapshot_root: Hash64, assignment_proof_root: Hash64) -> Self {
+        Self {
+            a_commit,
+            a_commit_epoch,
+            provider_snapshot_root,
+            assignment_proof_root,
+            dispatch_kind: kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL,
+        }
+    }
 }
 
 /// A minted candidate: the on-chain leaf, its hash, and the shared k=2 match key (kept for the
@@ -183,6 +222,11 @@ impl<A: VerifiableInferenceBackend, B: VerifiableInferenceBackend> PalwMiner<A, 
             activation_epoch: self.reg.activation_epoch,
             expiry_epoch: self.reg.expiry_epoch,
             leaf_bond_sompi: self.reg.leaf_bond_sompi,
+            a_commit: job.pcpb.a_commit,
+            a_commit_epoch: job.pcpb.a_commit_epoch,
+            provider_snapshot_root: job.pcpb.provider_snapshot_root,
+            assignment_proof_root: job.pcpb.assignment_proof_root,
+            dispatch_kind: job.pcpb.dispatch_kind,
         };
         let leaf_hash = leaf.leaf_hash();
         Ok(MintedLeaf { leaf, leaf_hash, match_key: key })
@@ -247,6 +291,7 @@ mod tests {
             output_salt: [0x33; 32],
             job_nullifier: h(0x20),
             raw_ticket_nullifier: h(0xC0),
+            pcpb: crate::PcpbLeafFields::external(Hash64::default(), Hash64::default()),
         }
     }
 

@@ -4844,6 +4844,49 @@ pub(crate) struct PalwAlgo4Facts {
 /// shares one authority; the leaf binds to its key hash and `mint_algo4` signs with it.
 pub(crate) const PALW_TEST_AUTHORITY_SEED: [u8; 32] = [0x9a; 32];
 
+/// ADR-0045 D3-b — the PCPB coordinates every algo-4 fixture in this file shares.
+///
+/// The anchor epoch clears the snapshot lag `k` so `anchor − k` is a real epoch (design memo §10.2);
+/// the roots are the values [`stage_palw_pcpb_context`] commits at that epoch, so the clause-13
+/// equality has something true to compare against. They are opaque here on purpose: this harness
+/// seeds leaves DIRECTLY into the blob store, so clause 12 (which re-derives the draw from the
+/// snapshot) never runs on them — `processes::palw::tests` owns that half, against a real snapshot.
+pub(crate) const PALW_TEST_LEAF_ANCHOR_EPOCH: u64 = 4;
+pub(crate) const PALW_TEST_SNAPSHOT_ROOT: kaspa_hashes::Hash64 = kaspa_hashes::Hash64::from_bytes([0x7c; 64]);
+pub(crate) const PALW_TEST_ASSIGNMENT_ROOT: kaspa_hashes::Hash64 = kaspa_hashes::Hash64::from_bytes([0x7d; 64]);
+
+/// Stage the clause-13 context a seeded leaf resolves against: the provider-snapshot commitment at
+/// `anchor − k` and the post-commit beacon seed at `anchor + Δ`.
+///
+/// Written directly, AFTER the chain is built, for the same reason the leaf itself is: this harness
+/// bypasses the acceptance arm, so nothing else would produce these rows for a leaf that was never
+/// carried by a chunk transaction. The virtual processor's own writer only ever writes the epochs a
+/// chain block CLOSES, so it cannot clobber a row staged below the tip.
+pub(crate) fn stage_palw_pcpb_context(tc: &TestConsensus) {
+    let params = tc.params();
+    let anchor = PALW_TEST_LEAF_ANCHOR_EPOCH;
+    let snapshot_epoch = anchor - params.palw_snapshot_lag_epochs;
+    let draw_epoch = anchor + params.palw_post_commit_delta_epochs;
+    let mut batch = rocksdb::WriteBatch::default();
+    tc.storage
+        .palw_pcpb_store
+        .set_snapshot_batch(
+            &mut batch,
+            snapshot_epoch,
+            kaspa_consensus_core::palw::PalwSnapshotCommitment {
+                snapshot_root: PALW_TEST_SNAPSHOT_ROOT,
+                assignment_root: PALW_TEST_ASSIGNMENT_ROOT,
+                total_bond: 1_000,
+                provider_count: 2,
+            },
+        )
+        .unwrap();
+    if tc.storage.palw_beacon_store.beacon_seed_at(draw_epoch).unwrap().is_none() {
+        tc.storage.palw_beacon_store.set_beacon_seed_batch(&mut batch, draw_epoch, kaspa_hashes::Hash64::from_bytes([0x7e; 64])).unwrap();
+    }
+    tc.consensus_clone().db().write(batch).unwrap();
+}
+
 pub(crate) fn palw_authority_keypair(seed: [u8; 32]) -> libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
     libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed)
 }
@@ -5250,18 +5293,30 @@ async fn palw_algo4_env_full(
             // ADR-0040 P1-6 (AUTH-03): the leaf names the authority that may authorize its blocks.
             ticket_authority_pk_hash: palw_authority_pk_hash(PALW_TEST_AUTHORITY_SEED),
             private_match_commitment: pmc,
-            receipt_da_object_version: 1,
+            // ADR-0045 D3-b — receipt DA **Object V2**. Under clause 11 an Object-V1 leaf can never be
+            // stored (its challenge fields are required to be zero sentinels, and clause 11 re-derives
+            // that very field), so a harness leaf that models a mintable ticket must be V2 (design
+            // memo §10.1). This harness seeds the store directly, so clauses 11/12 never run on it —
+            // the mint-time clause 13 does, which is what `stage_palw_pcpb_context` below feeds.
+            receipt_da_object_version: kaspa_consensus_core::palw::da::PALW_RECEIPT_DA_OBJECT_VERSION_V2,
             receipt_da_root: hh(0xda),
             receipt_da_object_len: 1,
             receipt_da_chunk_count: 1,
-            receipt_v3_compute_set_id: Hash64::default(),
-            receipt_v3_job_challenge: Hash64::default(),
-            receipt_v3_issued_epoch: 0,
-            receipt_v3_expires_epoch: 0,
+            receipt_v3_compute_set_id: hh(0xc5),
+            receipt_v3_job_challenge: hh(9),
+            // The PCPB anchor epoch. It must clear the snapshot lag `k` (design memo §10.2), which is
+            // why it is not 0: `anchor − k` has to be a real epoch for clause 13 to resolve.
+            receipt_v3_issued_epoch: PALW_TEST_LEAF_ANCHOR_EPOCH,
+            receipt_v3_expires_epoch: 1000,
             registered_epoch: 0,
             activation_epoch: 0,
             expiry_epoch: 1000,
             leaf_bond_sompi: 0,
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: PALW_TEST_SNAPSHOT_ROOT,
+            assignment_proof_root: PALW_TEST_ASSIGNMENT_ROOT,
+            dispatch_kind: kaspa_consensus_core::palw::PALW_DISPATCH_KIND_BEACON_ASSIGNED,
         }
     }
 
@@ -5447,6 +5502,11 @@ async fn palw_algo4_env_full(
         assert_ne!(projected.leaf_hash(), leaf.leaf_hash(), "the projection must still be doing something");
     }
     tc.storage.palw_store.insert_leaf(batch_id, leaf_index, Arc::new(leaf)).unwrap();
+    // ADR-0045 D3-b — a seeded leaf still has to satisfy the MINT-time clause 13, which resolves the
+    // provider snapshot at `anchor − k` and the post-commit beacon at `anchor + Δ`. Nothing else
+    // writes those rows for a leaf that never rode a chunk transaction, so the harness stages them
+    // alongside the leaf it is seeding (fail-closed by design: no rows ⇒ no mint).
+    stage_palw_pcpb_context(&tc);
     // ADR-0040 CERT-BATCH: certificates are now write-once by content too (`insert_certificate` mirrors
     // `insert_leaf`), so a test can no longer mutate a seeded certificate after the fact. `cert_edit`
     // shapes it BEFORE the first write, which is also the only self-consistent order — the header names
@@ -5656,18 +5716,25 @@ fn palw_seed_duplicate_work_leaf(tc: &TestConsensus, f: &PalwAlgo4Facts) -> Palw
         provider_b_reward_script: prov_b.clone(),
         ticket_authority_pk_hash: palw_authority_pk_hash(f.authority_seed),
         private_match_commitment: Hash64::default(),
-        receipt_da_object_version: 1,
+        // D3-b: Object V2 + the shared PCPB anchor, same as `make_leaf` — this duplicate-work leaf is
+        // seeded directly too, so clause 13 is what it has to satisfy at mint time.
+        receipt_da_object_version: kaspa_consensus_core::palw::da::PALW_RECEIPT_DA_OBJECT_VERSION_V2,
         receipt_da_root: hh(0xda),
         receipt_da_object_len: 1,
         receipt_da_chunk_count: 1,
-        receipt_v3_compute_set_id: Hash64::default(),
-        receipt_v3_job_challenge: Hash64::default(),
-        receipt_v3_issued_epoch: 0,
-        receipt_v3_expires_epoch: 0,
+        receipt_v3_compute_set_id: hh(0xc5),
+        receipt_v3_job_challenge: hh(9),
+        receipt_v3_issued_epoch: PALW_TEST_LEAF_ANCHOR_EPOCH,
+        receipt_v3_expires_epoch: 1000,
         registered_epoch: 0,
         activation_epoch: 0,
         expiry_epoch: 1000,
         leaf_bond_sompi: 0,
+        a_commit: Hash64::default(),
+        a_commit_epoch: 0,
+        provider_snapshot_root: PALW_TEST_SNAPSHOT_ROOT,
+        assignment_proof_root: PALW_TEST_ASSIGNMENT_ROOT,
+        dispatch_kind: kaspa_consensus_core::palw::PALW_DISPATCH_KIND_BEACON_ASSIGNED,
     };
     // Its OWN eligibility grind — the second ticket must win clause 9 on its own leaf_hash, not inherit
     // the first ticket's draw. Starts above the env's search space so the two nullifiers differ.
@@ -5700,6 +5767,8 @@ fn palw_seed_duplicate_work_leaf(tc: &TestConsensus, f: &PalwAlgo4Facts) -> Palw
     let leaf = build(ticket_nullifier_commitment(&nullifier));
     assert_eq!(leaf.job_nullifier, hh(9), "the whole fixture is void if the shared job_nullifier drifted");
     tc.storage.palw_store.insert_leaf(f.batch_id, leaf_index, Arc::new(leaf)).unwrap();
+    // D3-b: same clause-13 staging as the primary seeding path above.
+    stage_palw_pcpb_context(tc);
 
     PalwAlgo4Facts {
         sp: f.sp,
@@ -6845,6 +6914,99 @@ async fn palw_algo4_invalid_ticket_rejected_e2e() {
         "a target interval != daa_score must be rejected at clause 5 (IntervalMismatch), got {r5:?}"
     );
 
+    tc.shutdown(handles);
+}
+
+/// ADR-0045 D3-b / ADR-0040 §2 PCPB-01 — **clause 13 is enforced at the mint coordinate**, through
+/// the REAL `check_palw_ticket` on real blocks. This is the finding's closing verifier: PCPB
+/// evidence is no longer "primitives not connected to ticket verification" — a ticket whose leaf
+/// commits to roots the on-chain snapshot does not carry, whose anchor epoch has no retained
+/// snapshot, or whose self-serial A-commit is not registered at-or-before its declared epoch does
+/// not mint. Fail-closed in every arm; the untampered construction minting at the end is what makes
+/// each rejection attributable to the mutation, not to the harness.
+#[tokio::test]
+async fn palw_pcpb_ticket_binding_enforced() {
+    use kaspa_consensus_core::errors::block::RuleError;
+    use kaspa_consensus_core::palw::PalwSnapshotCommitment;
+
+    // ---- external branch: the clause-13 store context, one mutation at a time ----
+    let (tc, handles, f) = palw_algo4_env(1).await;
+    let snapshot_epoch = PALW_TEST_LEAF_ANCHOR_EPOCH - tc.params().palw_snapshot_lag_epochs;
+
+    // (a) The on-chain snapshot carries DIFFERENT roots than the leaf committed: equality fails.
+    let mut batch = rocksdb::WriteBatch::default();
+    tc.storage
+        .palw_pcpb_store
+        .set_snapshot_batch(
+            &mut batch,
+            snapshot_epoch,
+            PalwSnapshotCommitment {
+                snapshot_root: kaspa_hashes::Hash64::from_bytes([0x13; 64]),
+                assignment_root: PALW_TEST_ASSIGNMENT_ROOT,
+                total_bond: 1_000,
+                provider_count: 2,
+            },
+        )
+        .unwrap();
+    tc.consensus_clone().db().write(batch).unwrap();
+    let mb = mint_algo4(&tc, &f, 0xd1, 0, |_| {});
+    let res = tc.validate_and_insert_block(mb.to_immutable()).block_task.await;
+    assert!(
+        matches!(&res, Err(RuleError::PalwTicketInvalid(m)) if m.contains("clause 13") && m.contains("roots disagree")),
+        "leaf-committed roots that disagree with the on-chain snapshot must not mint, got {res:?}"
+    );
+
+    // (b) No retained snapshot at anchor − k at all: fail-closed, never resolved against a
+    // substituted live value.
+    let mut batch = rocksdb::WriteBatch::default();
+    tc.storage.palw_pcpb_store.delete_snapshot_batch(&mut batch, snapshot_epoch).unwrap();
+    tc.consensus_clone().db().write(batch).unwrap();
+    let mb = mint_algo4(&tc, &f, 0xd2, 0, |_| {});
+    let res = tc.validate_and_insert_block(mb.to_immutable()).block_task.await;
+    assert!(
+        matches!(&res, Err(RuleError::PalwTicketInvalid(m)) if m.contains("clause 13") && m.contains("no retained provider snapshot")),
+        "a ticket whose anchor epoch has aged out of the snapshot window must not mint, got {res:?}"
+    );
+
+    // (c) Positive control: restore the staged context and the SAME construction mints — the two
+    // rejections above were the mutations, not the harness.
+    stage_palw_pcpb_context(&tc);
+    let mb = mint_algo4(&tc, &f, 0xd3, 0, |_| {});
+    tc.validate_and_insert_block(mb.to_immutable()).block_task.await.expect("the untampered ticket must mint");
+    tc.shutdown(handles);
+
+    // ---- self branch: the A-commit registry equality (`row ≤ declared`), on real blocks ----
+    // The leaf is sealed as SELF-SERIAL with a declared anchor epoch; the registry row is the only
+    // thing varied. Row ABSENT → reject; row LATER than declared → reject; row AT the declared
+    // epoch → mint. (The `row < declared` accept leg and the full clause-11/12 acceptance-time
+    // battery live in `processes::palw::tests::pcpb_clause_negatives` — this test pins the MINT
+    // coordinate's enforcement.)
+    let self_commit = kaspa_hashes::Hash64::from_bytes([0xAC; 64]);
+    let self_leaf_edit = |l: &mut kaspa_consensus_core::palw::PalwPublicLeafV1| {
+        l.dispatch_kind = kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL;
+        l.a_commit = kaspa_hashes::Hash64::from_bytes([0xAC; 64]);
+        l.a_commit_epoch = PALW_TEST_LEAF_ANCHOR_EPOCH;
+    };
+    palw_algo4_expect_ticket_reject_full(|_, _| {}, Some(&self_leaf_edit), "A-commit anchor is not registered").await;
+
+    let (tc, handles, f) = palw_algo4_env_full(1, None, None, Some(&self_leaf_edit), None).await;
+    // Row registered LATER than the leaf declares: the commitment cannot have predated the draw
+    // beacon it names — the borrow-a-known-beacon direction, refused.
+    let mut batch = rocksdb::WriteBatch::default();
+    tc.storage.palw_pcpb_store.set_acommit_batch(&mut batch, &self_commit, PALW_TEST_LEAF_ANCHOR_EPOCH + 1).unwrap();
+    tc.consensus_clone().db().write(batch).unwrap();
+    let mb = mint_algo4(&tc, &f, 0xd4, 0, |_| {});
+    let res = tc.validate_and_insert_block(mb.to_immutable()).block_task.await;
+    assert!(
+        matches!(&res, Err(RuleError::PalwTicketInvalid(m)) if m.contains("A-commit anchor is not registered")),
+        "a registry row later than the declared epoch must not mint, got {res:?}"
+    );
+    // Row at the declared epoch: the ordering fact holds and the ticket mints.
+    let mut batch = rocksdb::WriteBatch::default();
+    tc.storage.palw_pcpb_store.set_acommit_batch(&mut batch, &self_commit, PALW_TEST_LEAF_ANCHOR_EPOCH).unwrap();
+    tc.consensus_clone().db().write(batch).unwrap();
+    let mb = mint_algo4(&tc, &f, 0xd5, 0, |_| {});
+    tc.validate_and_insert_block(mb.to_immutable()).block_task.await.expect("a registered self-serial anchor must mint");
     tc.shutdown(handles);
 }
 

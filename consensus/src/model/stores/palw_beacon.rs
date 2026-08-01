@@ -112,6 +112,8 @@ pub struct DbPalwBeaconStore {
     accum: CachedDbAccess<U64Key, Arc<PalwBeaconEpochAccumV1>>,
     accum_by_block: CachedDbAccess<BlockHash, Arc<PalwBeaconAccumViewV1>, BlockHasher>,
     state: CachedDbAccess<BlockHash, Arc<PalwBeaconStateV1>, BlockHasher>,
+    /// ADR-0045 D3-a — `epoch -> R_E`, the per-epoch seed HISTORY (prefix 67).
+    seed_history: CachedDbAccess<U64Key, Arc<Hash64>>,
 }
 
 impl DbPalwBeaconStore {
@@ -120,7 +122,8 @@ impl DbPalwBeaconStore {
             db: Arc::clone(&db),
             accum: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwBeaconAccum.into()),
             accum_by_block: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwBeaconAccumByBlock.into()),
-            state: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::PalwBeaconState.into()),
+            state: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwBeaconState.into()),
+            seed_history: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::PalwBeaconSeedHistory.into()),
         }
     }
 
@@ -206,6 +209,47 @@ impl DbPalwBeaconStore {
     pub fn delete_state_batch(&self, batch: &mut WriteBatch, block: BlockHash) -> Result<(), StoreError> {
         self.state.delete(BatchDbWriter::new(batch), block)
     }
+
+    // ---- per-epoch seed history (ADR-0045 D3-a) ----
+
+    /// `R_E` for `epoch`, or `None` when the epoch is outside the retained window (or predates
+    /// activation). **`None` is fail-closed by contract**: a PCPB check that cannot resolve the
+    /// epoch its ticket was bound to must refuse the ticket, never fall back to a current seed —
+    /// that fallback is precisely the grindable state ADR-0045 D3-b forbids.
+    pub fn beacon_seed_at(&self, epoch: u64) -> Result<Option<Hash64>, StoreError> {
+        Ok(self.seed_history.read(epoch.into()).optional()?.map(|seed| *seed))
+    }
+
+    /// Record `epoch`'s derived seed, atomically with the block that closed the epoch.
+    ///
+    /// Idempotent-by-value rather than write-once: a reorg past an epoch boundary legitimately
+    /// re-resolves the same epoch from the NEW selected chain, and the per-epoch value is a
+    /// function of "the chain that first closed this epoch", so the new boundary block's value is
+    /// the correct one. Overwriting is the reorg-reversibility the block-keyed stores get for free
+    /// by being keyed on a hash that simply stops being read.
+    pub fn set_beacon_seed_batch(&self, batch: &mut WriteBatch, epoch: u64, seed: Hash64) -> Result<(), StoreError> {
+        self.seed_history.write(BatchDbWriter::new(batch), epoch.into(), Arc::new(seed))
+    }
+
+    pub fn delete_beacon_seed_batch(&self, batch: &mut WriteBatch, epoch: u64) -> Result<(), StoreError> {
+        self.seed_history.delete(BatchDbWriter::new(batch), epoch.into())
+    }
+
+    /// Every retained `(epoch, R_E)` row in ascending epoch order — the pruning-snapshot carry and
+    /// the bounded-window audit read this.
+    pub fn beacon_seed_history(&self) -> Result<Vec<(u64, Hash64)>, StoreError> {
+        let mut rows = Vec::new();
+        for entry in self.seed_history.iterator() {
+            let (key, seed) = entry.map_err(|err| StoreError::DataInconsistency(format!("beacon seed history scan: {err}")))?;
+            let bytes: [u8; 8] =
+                key.as_ref().try_into().map_err(|_| StoreError::DataInconsistency("beacon seed history key width".into()))?;
+            // `U64Key` is little-endian, so the raw key order is NOT epoch order — hence the
+            // explicit sort below rather than relying on the iterator.
+            rows.push((u64::from_le_bytes(bytes), *seed));
+        }
+        rows.sort_unstable_by_key(|(epoch, _)| *epoch);
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]
@@ -219,6 +263,53 @@ mod tests {
     }
     fn h(b: u8) -> Hash64 {
         Hash64::from_bytes([b; 64])
+    }
+
+    /// ADR-0045 D3-a — the seed history answers past epochs, is overwritable by a reorg, and
+    /// falls closed outside the window.
+    ///
+    /// The three pre-existing sources of `R_E` cannot serve PCPB: the header walk fails closed
+    /// below the pruning point, per-block state rows are deleted by the pruning pass, and the
+    /// accumulator's `retain_future_of` (asserted below) drops past epochs by design because it
+    /// carries the seed's MATERIAL, not its value. This store is the value, retained.
+    #[test]
+    fn beacon_seed_history_round_trips_sweeps_and_falls_closed() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbPalwBeaconStore::new(db.clone(), CachePolicy::Empty);
+
+        // The gap this store exists to fill: the accumulator forgets past epochs on purpose.
+        let mut accum = PalwBeaconAccumViewV1::new();
+        accum.record_commit(5, op(1, 0), h(0x55), 10);
+        accum.record_commit(9, op(1, 0), h(0x99), 10);
+        accum.retain_future_of(7);
+        assert!(accum.epochs.contains_key(&9) && !accum.epochs.contains_key(&5), "past epochs are dropped by design");
+
+        // An unwritten epoch is `None` — PCPB fails closed rather than substituting a live seed.
+        assert_eq!(store.beacon_seed_at(5).unwrap(), None);
+
+        let mut batch = WriteBatch::default();
+        for (epoch, seed) in [(5u64, h(0x55)), (6, h(0x66)), (7, h(0x77))] {
+            store.set_beacon_seed_batch(&mut batch, epoch, seed).unwrap();
+        }
+        db.write(batch).unwrap();
+        assert_eq!(store.beacon_seed_at(5).unwrap(), Some(h(0x55)));
+        assert_eq!(store.beacon_seed_at(7).unwrap(), Some(h(0x77)));
+        assert_eq!(store.beacon_seed_history().unwrap(), vec![(5, h(0x55)), (6, h(0x66)), (7, h(0x77))]);
+
+        // Reorg: a new selected chain re-closes epoch 7, and its value is the correct one. The
+        // block-keyed stores get this for free by keying on a hash nobody reads again; an
+        // epoch-keyed row has to be overwritten explicitly.
+        let mut batch = WriteBatch::default();
+        store.set_beacon_seed_batch(&mut batch, 7, h(0x7E)).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.beacon_seed_at(7).unwrap(), Some(h(0x7E)));
+
+        // Sweeping the window floor removes older rows and leaves the rest intact.
+        let mut batch = WriteBatch::default();
+        store.delete_beacon_seed_batch(&mut batch, 5).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.beacon_seed_at(5).unwrap(), None, "swept epochs fall closed, not stale");
+        assert_eq!(store.beacon_seed_history().unwrap(), vec![(6, h(0x66)), (7, h(0x7E))]);
     }
 
     #[test]

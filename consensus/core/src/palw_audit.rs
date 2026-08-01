@@ -276,6 +276,11 @@ mod tests {
             activation_epoch: 5,
             expiry_epoch: 9,
             leaf_bond_sompi: 1,
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: h(0x7c),
+            assignment_proof_root: h(0x7d),
+            dispatch_kind: 0, // BeaconAssigned (external sentinels)
         }
     }
 

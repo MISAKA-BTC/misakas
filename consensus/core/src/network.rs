@@ -289,6 +289,9 @@ impl NetworkId {
                 // rationale as testnet-200's 26511. This is also the port the node self-advertises,
                 // so public seeder/gossip discovery resolves a reachable address.
                 Some(20) => 26521,
+                // ADR-0045 D3-b (2026-08-01 migration): the public PALW testnet moved to
+                // `testnet-21` (pcpb-palw) — same isolation rationale, its own port.
+                Some(21) => 26531,
                 None | Some(_) => 26411,
             },
             NetworkType::Simnet => 26511,
@@ -548,8 +551,9 @@ mod tests {
             ("testnet-10", [26211, 26210, 27210, 28210, 8545]),
             ("testnet-11", [26311, 26210, 27210, 28210, 8545]),
             ("testnet-200", [26511, 26210, 27210, 28210, 8545]),
-            // ADR-MA: the public PALW testnet (compute-registry-palw) has its own P2P port 26521.
             ("testnet-20", [26521, 26210, 27210, 28210, 8545]),
+            // ADR-0045 D3-b: the public PALW testnet (pcpb-palw) has its own P2P port 26531.
+            ("testnet-21", [26531, 26210, 27210, 28210, 8545]),
             ("devnet", [26611, 26610, 27610, 28610, 8545]),
             ("simnet", [26511, 26510, 27510, 28510, 8545]),
         ];

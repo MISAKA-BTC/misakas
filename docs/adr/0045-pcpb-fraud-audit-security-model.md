@@ -83,6 +83,10 @@ bond slash 経路の e2e が green であることを前提条件とする。** 
 - [x] beacon seed 履歴 store の設計メモ(D3-a)— node `docs/palw-beacon-seed-history-design.md`
   (bounded per-epoch `PalwBeaconSeedHistory`、writer=epoch 境界 commit、保持窓=lifecycle 全長、
   pruning snapshot carry、fail-closed 読み出し;ADR-0044 の version/dup 教訓を明記)
+- [x] PCPB 全 clause 同時有効(D3-b)の設計確定メモ — `docs/palw-pcpb-leaf-v2-wiring-design.md`
+  (2026-08-01。§5.14.7 を C5 flip 後の実コードと突合: clause 番号は 11/12/13 へ確定、
+  challenge 系 field は Receipt-v3 field を再利用、新規は leaf 5 field + `PalwACommitV1` 帯 +
+  per-epoch snapshot store。reveal/価値 escrow/reroll は範囲外と判定し根拠を記録)
 - [x] G13 withhold/reorg e2e を ADR-0044 harness に追加 — **withhold** 次元を実装
   (`palw_full_lifecycle_prune_then_replay_e2e`: quorum 不足 cert(1/3 票 < 2/3 stake、withholding は
   slate 全体を分母に算入)が acceptance の attestation gate で store に到達せず拒否される — live-devnet

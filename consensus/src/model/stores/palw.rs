@@ -463,7 +463,7 @@ impl PalwStore for DbPalwStore {
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw::{
-        PALW_BATCH_CERTIFICATE_VERSION_V2, PALW_LEAF_CHUNK_VERSION_V2, PalwBatchLifecycleV1, PalwBatchViewV1, PalwLeafChunkV1,
+        PALW_BATCH_CERTIFICATE_VERSION_V2, PalwBatchLifecycleV1, PalwBatchViewV1, PalwLeafChunkV1,
         palw_leaf_merkle_proof, palw_leaf_merkle_root,
     };
     use kaspa_consensus_core::palw_pruned_frontier::PalwPrunedActiveBatchV1;
@@ -507,6 +507,11 @@ mod tests {
             activation_epoch: 7,
             expiry_epoch: 13,
             leaf_bond_sompi: 0,
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: Hash64::from_bytes([0x7c; 64]),
+            assignment_proof_root: Hash64::from_bytes([0x7d; 64]),
+            dispatch_kind: 0, // BeaconAssigned (external sentinels)
         })
     }
 
@@ -543,8 +548,18 @@ mod tests {
     }
 
     fn active_bundle() -> PalwPrunedActiveBatchV1 {
+        active_bundle_with_pcpb(None)
+    }
+
+    /// D3-b: the same bundle, optionally stamped with a PCPB fixture BEFORE `leaf_root`/`batch_id`
+    /// are derived — the leaf's PCPB fields sit inside `leaf_hash`, so stamping afterwards would
+    /// silently break the membership proof rather than test anything.
+    fn active_bundle_with_pcpb(pcpb: Option<&crate::processes::palw::pcpb_test_support::PcpbFixture>) -> PalwPrunedActiveBatchV1 {
         let mut leaf = (*leaf(0)).clone();
         leaf.batch_id = Hash64::default();
+        if let Some(fixture) = pcpb {
+            fixture.stamp(&mut leaf);
+        }
         let leaf_root = palw_leaf_merkle_root(&[leaf.leaf_hash()]);
         let mut manifest = PalwBatchManifestV1 {
             version: 1,
@@ -668,8 +683,14 @@ mod tests {
 
     #[test]
     fn uncertified_pruning_import_accepts_leaf_reannouncement_with_manifest_membership_proof() {
+        use crate::processes::palw::pcpb_test_support as pcpb;
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
-        let complete = active_bundle();
+        // D3-b: re-announcement runs through the REAL acceptance arm, which now also enforces
+        // clauses 11/12 — so the bundle carries a real PCPB fixture and its context is staged.
+        // Keeping this test on the real arm (rather than routing around it) is the point: it is
+        // what proves the post-import path still works under the full gate.
+        let fixture = pcpb::fixture((*leaf(0)).registered_epoch);
+        let complete = active_bundle_with_pcpb(Some(&fixture));
         let mut manifest_only = complete.clone();
         manifest_only.leaves.clear();
         manifest_only.certificate = None;
@@ -685,18 +706,29 @@ mod tests {
         projected.batch_id = Hash64::default();
         let proof = palw_leaf_merkle_proof(&[projected.leaf_hash()], 0).unwrap();
         let chunk = PalwLeafChunkV1 {
-            version: PALW_LEAF_CHUNK_VERSION_V2,
+            version: kaspa_consensus_core::palw::PALW_LEAF_CHUNK_VERSION_V3,
             batch_id: complete.batch_id,
             chunk_index: 0,
             leaves: vec![leaf.clone()],
             proofs: vec![proof],
+            witnesses: vec![fixture.witness(leaf.leaf_index)],
         };
-        let beacon = crate::model::stores::palw_beacon::DbPalwBeaconStore::new(db, CachePolicy::Count(1));
+        let beacon = crate::model::stores::palw_beacon::DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(1));
+        let pcpb_store = crate::model::stores::palw_pcpb::DbPalwPcpbStore::new(db.clone(), CachePolicy::Count(4));
+        fixture.stage(&db, &beacon, &pcpb_store);
+        let ctx = crate::processes::palw::PalwPcpbAcceptanceCtx {
+            pcpb_store: &pcpb_store,
+            network_id: pcpb::NETWORK_ID,
+            freshness_window_epochs: pcpb::W,
+            snapshot_lag_epochs: pcpb::K,
+            post_commit_delta_epochs: pcpb::DELTA,
+        };
         crate::processes::palw::apply_palw_overlay_effect(
             crate::processes::palw::PalwOverlayEffect::LeafChunk(chunk),
             &restarted,
             &beacon,
             None,
+            Some(&ctx),
         )
         .expect("an authenticated pre-PP partial leaf can be re-announced after import");
         assert_eq!(*restarted.leaf(complete.batch_id, 0).unwrap(), leaf);

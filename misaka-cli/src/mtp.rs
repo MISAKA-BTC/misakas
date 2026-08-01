@@ -1406,6 +1406,13 @@ mod palw_leaves_tests {
             activation_epoch: 12,
             expiry_epoch: 20,
             leaf_bond_sompi: 1,
+            // ADR-0045 D3-b LeafV2 — external-branch shape (the indexer copies these verbatim;
+            // clause verification happened at acceptance, not here).
+            a_commit: kaspa_hashes::Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: h(0x44),
+            assignment_proof_root: h(0x45),
+            dispatch_kind: kaspa_consensus_core::palw::PALW_DISPATCH_KIND_BEACON_ASSIGNED,
         };
         (leaf, bytes)
     }

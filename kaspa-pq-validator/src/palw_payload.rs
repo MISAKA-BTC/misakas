@@ -4,10 +4,10 @@
 //! lifecycle staging stay separate from producer policy. This module supplies the missing operator
 //! path for lifecycle objects while keeping private keys and audit evidence off the submission host.
 
-mod registry;
 mod compute;
 mod da;
 mod lifecycle;
+mod registry;
 mod search;
 
 use std::io::Write;
@@ -27,8 +27,8 @@ use self::lifecycle::{
     AuditCertificatePayloadArgs, AuditFactsPayloadArgs, AuditVotePayloadArgs, BatchManifestPayloadArgs, LeafChunkPayloadArgs,
 };
 use self::registry::{
-    RegistryCertAssembleArgs, RegistryCertVoteArgs, RegistryDescriptorTemplateArgs, RegistryHaltArgs, RegistryPlanArgs,
-    RegistryPolicyArgs, RegistryProposalArgs, RegistryValidatorSetArgs,
+    RegistryCertAssembleArgs, RegistryCertVoteArgs, RegistryDescriptorTemplateArgs, RegistryGovAssembleArgs, RegistryGovVoteArgs,
+    RegistryHaltArgs, RegistryPlanArgs, RegistryPolicyArgs, RegistryProposalArgs, RegistryValidatorSetArgs,
 };
 use self::search::{SearchChallengePayloadArgs, SearchResponsePayloadArgs, SearchTimeoutPayloadArgs};
 
@@ -92,6 +92,10 @@ enum PalwPayloadCommand {
     RegistryCertVote(RegistryCertVoteArgs),
     /// ADR-MA §17.3: assemble signed votes into the canonical activation certificate (0x41).
     RegistryCertAssemble(RegistryCertAssembleArgs),
+    /// ADR-MA §17.4: sign ONE governance vote over a governed action (validator key).
+    RegistryGovVote(RegistryGovVoteArgs),
+    /// ADR-MA §17.4: assemble signed votes into the canonical governance envelope (0x42/0x43/0x44).
+    RegistryGovAssemble(RegistryGovAssembleArgs),
 }
 
 /// The shipped PALW-active presets an artifact can be built against.
@@ -112,13 +116,17 @@ enum PalwArtifactNetwork {
     /// by `testnet-20`; kept so an operator holding its ledger can still build artifacts.
     #[value(name = "testnet-200")]
     Testnet200,
-    /// ADR-MA `compute-registry-palw` — the CURRENT public PALW testnet
-    /// (`COMPUTE_REGISTRY_PALW_PARAMS`, testnet suffix 20): the staging shape with the Compute
-    /// Set registry open from a v5 genesis and testnet-scale validator entry floors. Omitting it
-    /// is not cosmetic — without this variant an operator cannot build a provider bond for the
-    /// only network that is publicly running.
+    /// ADR-MA `compute-registry-palw` (`COMPUTE_REGISTRY_PALW_PARAMS`, testnet suffix 20).
+    /// DEPRECATED 2026-08-01: superseded as the public net by `testnet-21` (ADR-0045 D3-b leaf
+    /// re-genesis); kept so an operator holding its ledger can still build artifacts.
     #[value(name = "testnet-20")]
     Testnet20,
+    /// ADR-0045 D3-b `pcpb-palw` — the CURRENT public PALW testnet (`PCPB_PALW_PARAMS`, testnet
+    /// suffix 21): the compute-registry shape with LeafV2 + PCPB clauses live from a v5 genesis.
+    /// Omitting it is not cosmetic — without this variant an operator cannot build a provider
+    /// bond for the only network that is publicly running.
+    #[value(name = "testnet-21")]
+    Testnet21,
 }
 
 impl PalwArtifactNetwork {
@@ -128,6 +136,7 @@ impl PalwArtifactNetwork {
             Self::Devnet111 => NetworkId::with_suffix(NetworkType::Devnet, 111),
             Self::Testnet200 => NetworkId::with_suffix(NetworkType::Testnet, 200),
             Self::Testnet20 => NetworkId::with_suffix(NetworkType::Testnet, 20),
+            Self::Testnet21 => NetworkId::with_suffix(NetworkType::Testnet, 21),
         }
     }
 }
@@ -198,6 +207,8 @@ pub async fn palw_payload(args: PalwPayloadArgs) -> Result<(), String> {
         PalwPayloadCommand::RegistryValidatorSet(args) => registry::registry_validator_set(args),
         PalwPayloadCommand::RegistryCertVote(args) => registry::registry_cert_vote(args),
         PalwPayloadCommand::RegistryCertAssemble(args) => registry::registry_cert_assemble(args),
+        PalwPayloadCommand::RegistryGovVote(args) => registry::registry_gov_vote(args),
+        PalwPayloadCommand::RegistryGovAssemble(args) => registry::registry_gov_assemble(args),
         PalwPayloadCommand::DaInspect(args) => da::da_inspect(args),
         PalwPayloadCommand::DaChallenge(args) => da::da_challenge_payload(args),
         PalwPayloadCommand::DaResponse(args) => da::da_response_payload(args),
@@ -373,19 +384,21 @@ mod tests {
     #[test]
     fn artifact_networks_resolve_to_their_own_shipped_presets() {
         use kaspa_consensus_core::config::params::{
-            COMPUTE_REGISTRY_PALW_PARAMS, DEVNET_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, TESTNET_PALW_PARAMS,
+            COMPUTE_REGISTRY_PALW_PARAMS, DEVNET_PALW_PARAMS, PCPB_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, TESTNET_PALW_PARAMS,
         };
 
         assert_eq!(PalwArtifactNetwork::Testnet110.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 110));
         assert_eq!(PalwArtifactNetwork::Devnet111.network_id(), NetworkId::with_suffix(NetworkType::Devnet, 111));
         assert_eq!(PalwArtifactNetwork::Testnet200.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 200));
         assert_eq!(PalwArtifactNetwork::Testnet20.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 20));
+        assert_eq!(PalwArtifactNetwork::Testnet21.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 21));
 
         for (network, preset, name) in [
             (PalwArtifactNetwork::Testnet110, TESTNET_PALW_PARAMS, "testnet-110"),
             (PalwArtifactNetwork::Devnet111, DEVNET_PALW_PARAMS, "devnet-111"),
             (PalwArtifactNetwork::Testnet200, STAGING_MAINNET_PALW_PARAMS, "testnet-200"),
             (PalwArtifactNetwork::Testnet20, COMPUTE_REGISTRY_PALW_PARAMS, "testnet-20"),
+            (PalwArtifactNetwork::Testnet21, PCPB_PALW_PARAMS, "testnet-21"),
         ] {
             assert_eq!(network.network_id().to_string(), name, "the clap value name must be the network id operators type");
             let resolved = Params::from(network.network_id());
@@ -512,10 +525,11 @@ mod tests {
             "validator.key",
             "--auditor-bond",
             &bond,
-            "--verdict",
-            "pass",
-            "--checked-leaf-bitmap-root",
-            &hash,
+            // AUDIT-EXEC-01: `--verdict pass` and a hand-typed `--checked-leaf-bitmap-root` are
+            // GONE. Both are now derived from executing the round over the beacon-selected sample,
+            // so the auditor supplies per-leaf results and can no longer assert a batch verdict.
+            "--leaf-verdicts",
+            "leaf-verdicts.json",
             "--passed-leaf-count",
             "1",
             "--rejected-leaf-bitmap-root",

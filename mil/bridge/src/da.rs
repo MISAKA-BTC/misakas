@@ -28,9 +28,9 @@
 //! it just is not submitted as a transaction by this process. That is the seam, stated plainly.
 
 use kaspa_consensus_core::palw::da::{
-    PALW_DA_CHUNK_BYTES, PALW_DA_CHUNK_EMPTY_DOMAIN, PALW_DA_CHUNK_LEAF_DOMAIN, PALW_DA_CHUNK_NODE_DOMAIN,
-    PALW_DA_MAX_OBJECT_BYTES, PALW_DA_OBJECT_ROOT_DOMAIN, PalwBuriedBeaconV1, PalwDaPolicyV1,
-    PalwDaTimeoutEvidenceV1, PalwReceiptDaCommitmentV1, palw_da_provider_sample_indices,
+    PALW_DA_CHUNK_BYTES, PALW_DA_CHUNK_EMPTY_DOMAIN, PALW_DA_CHUNK_LEAF_DOMAIN, PALW_DA_CHUNK_NODE_DOMAIN, PALW_DA_MAX_OBJECT_BYTES,
+    PALW_DA_OBJECT_ROOT_DOMAIN, PalwBuriedBeaconV1, PalwDaPolicyV1, PalwDaTimeoutEvidenceV1, PalwReceiptDaCommitmentV1,
+    palw_da_provider_sample_indices,
 };
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::{Hash64, blake2b_512_keyed};
@@ -70,7 +70,8 @@ const MAX_LABEL: usize = 128;
 impl ChatContextObjectV4 {
     pub fn encode(&self) -> Result<Vec<u8>, String> {
         self.validate()?;
-        let mut out = Vec::with_capacity(64 + self.class_label.len() + (self.prompt_token_ids.len() + self.output_token_ids.len()) * 4);
+        let mut out =
+            Vec::with_capacity(64 + self.class_label.len() + (self.prompt_token_ids.len() + self.output_token_ids.len()) * 4);
         out.extend_from_slice(&PALW_CHAT_CONTEXT_DA_OBJECT_VERSION_V4.to_le_bytes());
         out.extend_from_slice(&self.network_id.to_le_bytes());
         out.extend_from_slice(self.job_challenge.as_byte_slice());
@@ -292,12 +293,7 @@ pub struct DaCommitmentWire {
 
 impl DaCommitmentWire {
     pub fn from_commitment(c: &PalwReceiptDaCommitmentV1) -> Self {
-        Self {
-            object_version: c.object_version,
-            object_len: c.object_len,
-            chunk_count: c.chunk_count,
-            root_hex: hash64_hex(&c.root),
-        }
+        Self { object_version: c.object_version, object_len: c.object_len, chunk_count: c.chunk_count, root_hex: hash64_hex(&c.root) }
     }
     pub fn root(&self) -> Result<Hash64, String> {
         parse_hash64(&self.root_hex)
@@ -336,7 +332,13 @@ pub enum DaObligationStatus {
 
 /// Obligation id, same preimage shape the node uses (job id stands in for batch/leaf, which do
 /// not exist off-chain).
-pub fn obligation_id(job_id: &str, provider_bond: &TransactionOutpoint, root: &Hash64, chunk_index: u16, beacon: &PalwBuriedBeaconV1) -> Hash64 {
+pub fn obligation_id(
+    job_id: &str,
+    provider_bond: &TransactionOutpoint,
+    root: &Hash64,
+    chunk_index: u16,
+    beacon: &PalwBuriedBeaconV1,
+) -> Hash64 {
     let mut preimage = Vec::new();
     preimage.extend_from_slice(&(job_id.len() as u64).to_le_bytes());
     preimage.extend_from_slice(job_id.as_bytes());
@@ -414,8 +416,7 @@ pub struct DaResponseWire {
 impl DaResponseWire {
     /// Build a response from the object bytes the provider retained.
     pub fn prove(obligation: &DaObligation, object_bytes: &[u8]) -> Result<Self, String> {
-        let (chunk, siblings) =
-            chat_chunk_proof(obligation.commitment.object_version, object_bytes, obligation.chunk_index)?;
+        let (chunk, siblings) = chat_chunk_proof(obligation.commitment.object_version, object_bytes, obligation.chunk_index)?;
         Ok(Self {
             obligation_id_hex: obligation.obligation_id_hex.clone(),
             provider_bond: obligation.provider_bond.clone(),
@@ -518,9 +519,7 @@ mod tests {
     /// algorithm in a domain consensus has not claimed — not a lookalike.
     #[test]
     fn commitment_matches_consensus_for_shared_versions() {
-        use kaspa_consensus_core::palw::da::{
-            palw_receipt_da_chunk_proof, palw_receipt_da_commitment, verify_palw_receipt_da_chunk,
-        };
+        use kaspa_consensus_core::palw::da::{palw_receipt_da_chunk_proof, palw_receipt_da_commitment, verify_palw_receipt_da_chunk};
         // Sizes that exercise 1, 2, 3 (padded to 4) and 5 (padded to 8) chunks, plus a partial
         // final chunk — the padding domain and the odd-width fold are where a lookalike breaks.
         for len in [1usize, 16_384, 16_385, 40_000, 70_000] {
@@ -539,8 +538,13 @@ mod tests {
                     assert_eq!(our_siblings, their_proof.siblings, "sibling path differs");
                     // Cross-verify both ways: their proof through our verifier and ours through theirs.
                     verify_chat_chunk(
-                        &theirs.root, version, theirs.object_len, theirs.chunk_count, chunk_index,
-                        &their_proof.chunk, &their_proof.siblings,
+                        &theirs.root,
+                        version,
+                        theirs.object_len,
+                        theirs.chunk_count,
+                        chunk_index,
+                        &their_proof.chunk,
+                        &their_proof.siblings,
                     )
                     .unwrap();
                     verify_palw_receipt_da_chunk(&ours.root, &their_proof).unwrap();
@@ -568,11 +572,7 @@ mod tests {
         // Answering a different chunk is refused even with a valid proof for that chunk.
         if commitment.chunk_count > 1 {
             let other = (obligation.chunk_index + 1) % commitment.chunk_count;
-            let mut wrong = DaResponseWire::prove(
-                &DaObligation { chunk_index: other, ..obligation.clone() },
-                &bytes,
-            )
-            .unwrap();
+            let mut wrong = DaResponseWire::prove(&DaObligation { chunk_index: other, ..obligation.clone() }, &bytes).unwrap();
             wrong.obligation_id_hex = obligation.obligation_id_hex.clone();
             assert!(wrong.verify(obligation).is_err(), "wrong chunk index");
         }
@@ -611,8 +611,7 @@ mod tests {
         let commitment = DaCommitmentWire::from_commitment(&object.commitment().unwrap());
         let mut shallow = beacon();
         shallow.observed_daa_score = shallow.anchor_daa_score + 1; // < min_beacon_burial_daa (100)
-        let err = register_obligations("job-1", &format!("{}:0", "11".repeat(64)), &commitment, &shallow, 1_500)
-            .unwrap_err();
+        let err = register_obligations("job-1", &format!("{}:0", "11".repeat(64)), &commitment, &shallow, 1_500).unwrap_err();
         assert!(err.contains("BeaconNotBuried"), "{err}");
     }
 

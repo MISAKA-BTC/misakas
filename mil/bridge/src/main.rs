@@ -45,8 +45,7 @@ fn parse_args() -> Result<Args, String> {
             "--data-dir" => args.data_dir = PathBuf::from(take(&mut i)?),
             "--auth-token" => args.auth_token = Some(take(&mut i)?),
             "--assignment-deadline-ms" => {
-                args.assignment_deadline_ms =
-                    take(&mut i)?.parse().map_err(|e| format!("--assignment-deadline-ms: {e}"))?
+                args.assignment_deadline_ms = take(&mut i)?.parse().map_err(|e| format!("--assignment-deadline-ms: {e}"))?
             }
             "--network-id" => args.network_id = take(&mut i)?.parse().map_err(|e| format!("--network-id: {e}"))?,
             "--node-rpc" => args.node_rpc = Some(take(&mut i)?),

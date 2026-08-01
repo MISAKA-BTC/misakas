@@ -102,6 +102,13 @@ pub struct BlockBodyProcessor {
     /// 0 on the three PALW presets, where the read is live.
     pub(super) palw_store: Arc<crate::model::stores::palw::DbPalwStore>,
     pub(super) palw_overlay_view_store: Arc<crate::model::stores::palw_overlay_view::DbPalwOverlayViewStore>,
+    /// ADR-0045 D3-b clause 13 — the PCPB context stores and windows, read at mint time to re-check
+    /// (fail-closed) that the leaf's PCPB anchor is still resolvable and still agrees with the
+    /// on-chain snapshot/registry.
+    pub(super) palw_pcpb_store: Arc<crate::model::stores::palw_pcpb::DbPalwPcpbStore>,
+    pub(super) palw_beacon_store_for_pcpb: Arc<crate::model::stores::palw_beacon::DbPalwBeaconStore>,
+    pub(super) palw_snapshot_lag_epochs: u64,
+    pub(super) palw_post_commit_delta_epochs: u64,
     pub(super) ghostdag_store: Arc<DbGhostdagStore>,
     pub(super) palw_activation_daa_score: u64,
     /// ADR-MA §17.1: the Compute Set registry band's own activation fence (`u64::MAX` on every
@@ -178,6 +185,10 @@ impl BlockBodyProcessor {
             body_tips_store: storage.body_tips_store.clone(),
             palw_store: storage.palw_store.clone(),
             palw_overlay_view_store: storage.palw_overlay_view_store.clone(),
+            palw_pcpb_store: storage.palw_pcpb_store.clone(),
+            palw_beacon_store_for_pcpb: storage.palw_beacon_store.clone(),
+            palw_snapshot_lag_epochs: params.palw_snapshot_lag_epochs,
+            palw_post_commit_delta_epochs: params.palw_post_commit_delta_epochs,
             ghostdag_store: storage.ghostdag_store.clone(),
             palw_activation_daa_score: params.palw_activation_daa_score,
             palw_compute_registry_activation_daa_score: params.palw_compute_registry_activation_daa_score,

@@ -156,6 +156,42 @@ pub struct PalwStateProbe {
     /// The lagged activation signal at the sink. `None` when PALW is disabled or the preset has no
     /// `dns_params` (the walk is undefined there).
     pub activation: Option<PalwActivationProbe>,
+    /// ADR-0045 D3-b — the PCPB production context for a requested anchor epoch. `None` unless the
+    /// caller asked for one. Empty-handed answers are expressed INSIDE the struct (each field is an
+    /// `Option`), because "the node retains this epoch's commitment but not its entries" is a real,
+    /// distinct state a producer must be able to see.
+    pub pcpb: Option<PalwPcpbContextProbe>,
+}
+
+/// ADR-0045 D3-b — everything a PRODUCER needs to assemble PCPB evidence for one anchor epoch.
+///
+/// The verifier reads none of this: it resolves the same values from its own stores. This is the
+/// serving side of the asymmetry — a producer cannot reconstruct "the bonded provider set as of
+/// epoch e" from the current registry, so the node hands over what it derived at the time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwPcpbContextProbe {
+    /// The anchor epoch the caller asked about (`a_commit_epoch` for self, the challenge epoch for
+    /// external), echoed so a producer cannot mis-attribute a response.
+    pub anchor_epoch: u64,
+    /// `anchor − k` — where the snapshot lives.
+    pub snapshot_epoch: u64,
+    /// `anchor + Δ` — where the post-commit draw beacon lives.
+    pub draw_epoch: u64,
+    /// The committed roots at `snapshot_epoch`. `None` ⇒ outside the retained window ⇒ a producer
+    /// building against this epoch would produce a leaf every verifier rejects (fail-closed).
+    pub snapshot: Option<crate::palw::PalwSnapshotCommitment>,
+    /// The canonical entry set behind those roots. `None` while `snapshot` is `Some` means this node
+    /// imported the epoch from a pruning snapshot: it can VERIFY that epoch but cannot help PRODUCE
+    /// for it.
+    pub snapshot_entries: Vec<crate::palw::PalwProviderSnapshotEntry>,
+    /// `R_{anchor}` — the seed clause 11's challenge re-derivation runs under.
+    pub anchor_seed: Option<Hash64>,
+    /// `R_{anchor + Δ}` — the seed both dispatch branches draw from. `None` ⇒ the draw epoch has not
+    /// been closed yet (the honest self-serial producer WAITS here) or has aged out.
+    pub draw_seed: Option<Hash64>,
+    /// The epoch a queried `a_commit` was accepted at, if the caller named one. `None` ⇒ not yet
+    /// on-chain (or swept), which is exactly what a self-serial producer polls for.
+    pub acommit_epoch: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

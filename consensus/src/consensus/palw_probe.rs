@@ -7,7 +7,7 @@ use kaspa_consensus_core::{
     },
     palw_probe::{
         PalwActivationProbe, PalwBatchProbe, PalwDaChallengeProbe, PalwDaObligationProbe, PalwProviderBondProbe,
-        PalwSearchChallengeProbe, PalwStateProbe, PalwStateProbeError,
+        PalwPcpbContextProbe, PalwSearchChallengeProbe, PalwStateProbe, PalwStateProbeError,
     },
     tx::TransactionOutpoint,
 };
@@ -29,6 +29,7 @@ impl Consensus {
         &self,
         batch_id: Option<Hash64>,
         provider_bond: Option<TransactionOutpoint>,
+        pcpb_request: Option<(u64, Option<Hash64>)>,
     ) -> Result<PalwStateProbe, PalwStateProbeError> {
         // Keep the sink, fork-local carried view, and selected-chain provider registry under the same
         // snapshot guard. Virtual commit takes the matching write lock while changing those surfaces.
@@ -266,6 +267,48 @@ impl Consensus {
             _ => None,
         };
 
+        // ADR-0045 D3-b — the PCPB production context. Read under the same guard as everything else
+        // so a producer sees ONE point of view: a snapshot from epoch e and an A-commit epoch from a
+        // later virtual commit would let it build a leaf that never validated anywhere.
+        let pcpb = pcpb_request
+            .map(|(anchor_epoch, a_commit)| -> Result<PalwPcpbContextProbe, PalwStateProbeError> {
+                let k = self.config.params.palw_snapshot_lag_epochs;
+                let delta = self.config.params.palw_post_commit_delta_epochs;
+                // Below the lag there IS no snapshot epoch — the honest answer is "no context", not a
+                // clamped epoch 0 that would hand a producer a snapshot its leaf must not name.
+                let snapshot_epoch = anchor_epoch.checked_sub(k);
+                let draw_epoch = anchor_epoch.saturating_add(delta);
+                let store = &self.storage.palw_pcpb_store;
+                let read = |what: &str, e: kaspa_database::prelude::StoreError| {
+                    PalwStateProbeError::Store(format!("PCPB {what}: {e:?}"))
+                };
+                let snapshot = match snapshot_epoch {
+                    Some(e) => store.snapshot_at(e).map_err(|err| read("snapshot", err))?,
+                    None => None,
+                };
+                let snapshot_entries = match snapshot_epoch {
+                    Some(e) => store.snapshot_entries_at(e).map_err(|err| read("snapshot entries", err))?.unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                let beacon = &self.storage.palw_beacon_store;
+                let anchor_seed = beacon.beacon_seed_at(anchor_epoch).map_err(|err| read("anchor seed", err))?;
+                let draw_seed = beacon.beacon_seed_at(draw_epoch).map_err(|err| read("draw seed", err))?;
+                let acommit_epoch = match a_commit {
+                    Some(anchor) => store.acommit_epoch(&anchor).map_err(|err| read("a-commit registry", err))?,
+                    None => None,
+                };
+                Ok(PalwPcpbContextProbe {
+                    anchor_epoch,
+                    snapshot_epoch: snapshot_epoch.unwrap_or(0),
+                    draw_epoch,
+                    snapshot,
+                    snapshot_entries,
+                    anchor_seed,
+                    draw_seed,
+                    acommit_epoch,
+                })
+            })
+            .transpose()?;
         let probe = PalwStateProbe {
             enabled,
             sink,
@@ -277,6 +320,7 @@ impl Consensus {
             da_obligations,
             search_challenges,
             activation,
+            pcpb,
         };
         drop(virtual_read);
         Ok(probe)

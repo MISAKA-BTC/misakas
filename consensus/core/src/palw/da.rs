@@ -1638,6 +1638,11 @@ mod tests {
             activation_epoch: 9,
             expiry_epoch: 20,
             leaf_bond_sompi: 1_000_000,
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: h(0x7c),
+            assignment_proof_root: h(0x7d),
+            dispatch_kind: 0, // BeaconAssigned (external sentinels)
         };
         Fixture { leaf, object, bytes, commitment, provider_a, provider_b }
     }

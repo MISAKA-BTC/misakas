@@ -5,8 +5,8 @@ use crate::{
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadPalwBeaconSeed, BadUTXOCommitment,
             IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext, MissingMandatoryAttestationInBlock,
-            NonReleasableBondSpendInBlock, PalwLaneHalted, UnauthorizedUnbondRequestInBlock, UnverifiableSlashingEvidenceInBlock,
-            WrongHeaderPruningPoint,
+            NonReleasableBondSpendInBlock, PalwComputeSetGoverningMismatch, PalwLaneHalted, UnauthorizedUnbondRequestInBlock,
+            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -1458,6 +1458,34 @@ impl VirtualStateProcessor {
             }
         }
 
+        // ADR-MA §23.4: bind this v5 PALW-lane block's committed Compute Set references to the
+        // revisions that GOVERN on its own fork, resolved from the selected parent's registry
+        // view. Header-stage resolution (§13.2) already checked that the named records exist,
+        // were effective at this DAA, are Active, and hold a nonzero share — but it reads the
+        // fork-INDEPENDENT record stores, where a superseded revision, a losing branch's
+        // revision, and an emergency-halted set are all indistinguishable from a governing one.
+        // Only a fork-local view separates them, and the view exists at THIS coordinate.
+        //
+        // c==v: `palw_mint` stamps the header from `governing_references_at` on the same view, so
+        // an honest template always satisfies this. Teeth are chain-candidacy suppression (the
+        // `PalwLaneHalted` posture directly above): the block stays in the DAG, but it cannot
+        // become a chain block, so it never durably contributes §14 credit.
+        if self.palw_compute_registry_activation_daa_score != u64::MAX
+            && header.daa_score >= self.palw_compute_registry_activation_daa_score
+            && header.version >= kaspa_consensus_core::constants::PALW_COMPUTE_SET_HEADER_VERSION
+            && header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_REPLICA
+        {
+            let parent_view = self.palw_compute_registry_parent_view(ctx.selected_parent(), header.hash);
+            if let Err(rejection) = parent_view.verify_header_references(
+                &header.palw_compute_set_id,
+                header.daa_score,
+                header.palw_compute_policy_id,
+                header.palw_allocation_plan_id,
+            ) {
+                return Err(PalwComputeSetGoverningMismatch(header.hash, rejection.to_string()));
+            }
+        }
+
         let txs = self.block_transactions_store.get(header.hash).unwrap();
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): Model-B
@@ -2894,6 +2922,11 @@ mod tests {
                 activation_epoch: 2,
                 expiry_epoch: 3,
                 leaf_bond_sompi: 1,
+                a_commit: Hash64::default(),
+                a_commit_epoch: 0,
+                provider_snapshot_root: Hash64::from_bytes([0x7c; 64]),
+                assignment_proof_root: Hash64::from_bytes([0x7d; 64]),
+                dispatch_kind: 0, // BeaconAssigned (external sentinels)
             };
             let mut projected = leaf.clone();
             projected.batch_id = Hash64::default();
@@ -2906,6 +2939,7 @@ mod tests {
                 chunk_index: 0,
                 leaves: vec![leaf],
                 proofs: vec![proof],
+                witnesses: Vec::new(), // D3-b arity: filled per-test when the acceptance arm's clauses 11/12 are the subject
             };
             let lifecycle = PalwBatchLifecycleV1 {
                 status: PalwBatchStatus::Registering,
@@ -2984,6 +3018,11 @@ mod tests {
                     activation_epoch: 2,
                     expiry_epoch: 3,
                     leaf_bond_sompi: 1,
+                    a_commit: Hash64::default(),
+                    a_commit_epoch: 0,
+                    provider_snapshot_root: Hash64::from_bytes([0x7c; 64]),
+                    assignment_proof_root: Hash64::from_bytes([0x7d; 64]),
+                    dispatch_kind: 0, // BeaconAssigned (external sentinels)
                 })
                 .collect_vec();
             let projected_hashes = leaves
@@ -3003,6 +3042,7 @@ mod tests {
                 proofs: (start..end)
                     .map(|index| palw_leaf_merkle_proof(&projected_hashes, index as u32).expect("fixture index is in range"))
                     .collect(),
+                witnesses: Vec::new(), // D3-b arity: filled per-test when the acceptance arm's clauses 11/12 are the subject
             };
             let chunks =
                 [make_chunk(0, 0, PALW_MAX_LEAVES_PER_CHUNK), make_chunk(1, PALW_MAX_LEAVES_PER_CHUNK, PALW_MAX_LEAVES_PER_CHUNK + 1)];

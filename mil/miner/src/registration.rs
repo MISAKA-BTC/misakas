@@ -17,7 +17,7 @@ use kaspa_consensus_core::palw::da::{
     PALW_RECEIPT_DA_OBJECT_VERSION_V2,
 };
 use kaspa_consensus_core::palw::{
-    PALW_LEAF_CHUNK_VERSION_V2, PALW_MAX_BATCH_LEAVES_V1, PALW_MAX_LEAVES_PER_CHUNK, PALW_MAX_PROVIDER_CAPACITY_ENTRIES_V1,
+    PALW_LEAF_CHUNK_VERSION_V3, PALW_MAX_BATCH_LEAVES_V1, PALW_MAX_LEAVES_PER_CHUNK, PALW_MAX_PROVIDER_CAPACITY_ENTRIES_V1,
     PALW_MAX_PROVIDER_RUNTIME_CLASSES_V1, PalwBatchManifestV1, PalwLeafChunkV1, PalwProviderBondPayloadV1, PalwPublicLeafV1,
     palw_leaf_merkle_proof, palw_leaf_merkle_root, provider_bond_lock_spk,
 };
@@ -39,6 +39,10 @@ pub const LEAF_CHUNK_SUBNETWORK_BYTE: u8 = 0x32;
 /// Why a chunk or manifest could not be assembled.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RegistrationError {
+    /// D3-b: `build_leaf_chunk` was handed a leaf without its PCPB witness. Every stored leaf passed
+    /// clauses 11/12 at acceptance, so a witnessless chunk is unregistrable by construction.
+    #[error("leaf {leaf_index} has no PCPB witness — a witnessless chunk is unregistrable (D3-b clauses 11/12)")]
+    MissingPcpbWitness { leaf_index: u32 },
     #[error("a leaf chunk must carry 1..={max} leaves, got {got}")]
     ChunkSize { got: usize, max: usize },
     #[error("leaf {0} has a different batch_id than the chunk")]
@@ -378,6 +382,7 @@ pub fn build_leaf_chunk(
     batch_id: Hash64,
     chunk_index: u16,
     batch_leaves: &[PalwPublicLeafV1],
+    witnesses_by_index: &std::collections::BTreeMap<u32, kaspa_consensus_core::palw::PalwLeafPcpbWitnessV1>,
 ) -> Result<(u8, Vec<u8>), RegistrationError> {
     // The ordered, batch_id-zeroed hashes — the SAME sequence `manifest_leaf_root` reduced to
     // `manifest.leaf_root`, so the proofs below open exactly that root. Also validates size and the
@@ -427,13 +432,68 @@ pub fn build_leaf_chunk(
         .map(|l| palw_leaf_merkle_proof(&hashes, l.leaf_index).expect("leaf_index < leaf_count was just established"))
         .collect();
 
-    let chunk = PalwLeafChunkV1 { version: PALW_LEAF_CHUNK_VERSION_V2, batch_id, chunk_index, leaves, proofs };
+    // ADR-0045 D3-b: one PCPB witness per leaf, index-aligned with `leaves` — the acceptance arm's
+    // clauses 11/12 verify it BEFORE `insert_leaf`, so a chunk without its witnesses is not a chunk
+    // the network will store. The producer cannot fabricate these (they carry the challenge preimage
+    // and the dispatch evidence the bridge's PCPB flow assembled); it can only fail loudly when the
+    // caller forgot one.
+    let witnesses = leaves
+        .iter()
+        .map(|l| {
+            witnesses_by_index
+                .get(&l.leaf_index)
+                .cloned()
+                .ok_or(RegistrationError::MissingPcpbWitness { leaf_index: l.leaf_index })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let chunk = PalwLeafChunkV1 { version: PALW_LEAF_CHUNK_VERSION_V3, batch_id, chunk_index, leaves, proofs, witnesses };
     let payload = borsh::to_vec(&chunk).map_err(|_| RegistrationError::Encode)?;
     Ok((LEAF_CHUNK_SUBNETWORK_BYTE, payload))
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// D3-b: an arity-filler PCPB witness map for chunk-builder tests whose subject is NOT the PCPB
+    /// semantics (those live at consensus acceptance). SHAPE-valid only.
+    pub(crate) fn dummy_witnesses(leaves: &[PalwPublicLeafV1]) -> std::collections::BTreeMap<u32, kaspa_consensus_core::palw::PalwLeafPcpbWitnessV1> {
+        use kaspa_consensus_core::palw::{
+            BeaconAssignedProof, PalwAssignmentInterval, PalwDispatchEvidence, PalwLeafPcpbWitnessV1, PalwMerkleMembership,
+            PalwProviderSnapshotEntry, SlotAssignmentWitness,
+        };
+        let th = |b: u8| Hash64::from_bytes([b; 64]);
+        let entry = |b: u8| PalwProviderSnapshotEntry {
+            provider_id: th(b),
+            ml_dsa_pk_hash: th(b.wrapping_add(1)),
+            bond_sompi: 10,
+            reward_script_commitment: th(b.wrapping_add(2)),
+        };
+        let membership = |b: u8| PalwMerkleMembership { index: 0, leaf: th(b), siblings: Vec::new() };
+        let slot = |b: u8, lo: u128| SlotAssignmentWitness {
+            entry: entry(b),
+            snapshot_membership: membership(b),
+            interval: PalwAssignmentInterval { provider_id: th(b), bond_sompi: 10, cumulative_lo: lo },
+            assignment_membership: membership(b),
+        };
+        leaves
+            .iter()
+            .map(|l| {
+                (
+                    l.leaf_index,
+                    PalwLeafPcpbWitnessV1 {
+                        scheduler_job_id: th(0xe1),
+                        requester_credential: th(0xe2),
+                        request_commitment: th(0xe3),
+                        dispatch: PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof {
+                            slot_a: slot(0xe4, 0),
+                            slot_b: slot(0xe8, 10),
+                        }),
+                    },
+                )
+            })
+            .collect()
+    }
+
     use super::*;
     use crate::{MiningJob, PalwMiner, ProviderRegistration};
     use kaspa_consensus_core::palw::validate_palw_overlay_payload;
@@ -513,6 +573,7 @@ pub(crate) mod tests {
                 output_salt: [0x33; 32],
                 job_nullifier: h(0x20 + idx as u8),
                 raw_ticket_nullifier: h(nf),
+                pcpb: crate::PcpbLeafFields::external(Hash64::default(), Hash64::default()),
             })
             .unwrap()
             .leaf,
@@ -526,7 +587,7 @@ pub(crate) mod tests {
         // Two distinct leaves (distinct index + distinct raw nullifier ⇒ distinct commitment). Feed them
         // out of order to prove the producer sorts.
         let leaves = vec![mine(&m, batch, 1, 0xC1), mine(&m, batch, 0, 0xC0)];
-        let (byte, payload) = build_leaf_chunk(batch, 0, &leaves).expect("chunk assembles");
+        let (byte, payload) = build_leaf_chunk(batch, 0, &leaves, &dummy_witnesses(&leaves)).expect("chunk assembles");
         assert_eq!(byte, LEAF_CHUNK_SUBNETWORK_BYTE);
         // The exact stateless check the mempool / body validator runs accepts it.
         assert_eq!(validate_palw_overlay_payload(byte, &payload), Ok(()));
@@ -624,6 +685,7 @@ pub(crate) mod tests {
                 output_salt: [0x33; 32],
                 job_nullifier: h(0x20),
                 raw_ticket_nullifier: h(0xc0),
+                pcpb: crate::PcpbLeafFields::external(Hash64::default(), Hash64::default()),
             })
             .unwrap()
             .leaf;
@@ -632,7 +694,7 @@ pub(crate) mod tests {
             Err(RegistrationError::UnboundReceiptDa { leaf_index: 0 })
         );
         assert_eq!(
-            build_leaf_chunk(batch, 0, std::slice::from_ref(&unbound)),
+            build_leaf_chunk(batch, 0, std::slice::from_ref(&unbound), &dummy_witnesses(std::slice::from_ref(&unbound))),
             Err(RegistrationError::UnboundReceiptDa { leaf_index: 0 })
         );
     }
@@ -646,7 +708,7 @@ pub(crate) mod tests {
 
         // Re-stamp the leaves with the content-derived id and chunk them under it.
         let restamped = restamp_leaves(batch_id, &minted);
-        let (cbyte, cpayload) = build_leaf_chunk(batch_id, 0, &restamped).expect("chunk assembles");
+        let (cbyte, cpayload) = build_leaf_chunk(batch_id, 0, &restamped, &dummy_witnesses(&restamped)).expect("chunk assembles");
 
         // Both the manifest and the leaf chunk pass the stateless validator under ONE batch id — the
         // leaves resolve under the manifest's content-addressed key.
@@ -736,16 +798,16 @@ pub(crate) mod tests {
         let batch = h(0x10);
         // A leaf minted under a DIFFERENT batch id can't go into this chunk.
         let foreign = mine(&m, h(0x99), 0, 0xC0);
-        assert_eq!(build_leaf_chunk(batch, 0, &[foreign]).unwrap_err(), RegistrationError::BatchIdMismatch(0));
+        assert_eq!(build_leaf_chunk(batch, 0, std::slice::from_ref(&foreign), &dummy_witnesses(std::slice::from_ref(&foreign))).unwrap_err(), RegistrationError::BatchIdMismatch(0));
         // Two leaves sharing a raw nullifier ⇒ same commitment ⇒ rejected.
         let dup = vec![mine(&m, batch, 0, 0xC0), mine(&m, batch, 1, 0xC0)];
-        assert_eq!(build_leaf_chunk(batch, 0, &dup).unwrap_err(), RegistrationError::DuplicateNullifier);
+        assert_eq!(build_leaf_chunk(batch, 0, &dup, &dummy_witnesses(&dup)).unwrap_err(), RegistrationError::DuplicateNullifier);
         // An empty input is a malformed batch because membership proofs are derived from the whole
         // batch rather than an individual chunk.
-        assert!(matches!(build_leaf_chunk(batch, 0, &[]).unwrap_err(), RegistrationError::BatchSize { got: 0, .. }));
+        assert!(matches!(build_leaf_chunk(batch, 0, &[], &Default::default()).unwrap_err(), RegistrationError::BatchSize { got: 0, .. }));
         // A chunk_index past the batch's `ceil(n / 64)` chunks has no leaves to carry.
         let two = vec![mine(&m, batch, 0, 0xC0), mine(&m, batch, 1, 0xC1)];
-        assert_eq!(build_leaf_chunk(batch, 1, &two).unwrap_err(), RegistrationError::ChunkIndexOutOfRange { got: 1, chunk_count: 1 });
+        assert_eq!(build_leaf_chunk(batch, 1, &two, &dummy_witnesses(&two)).unwrap_err(), RegistrationError::ChunkIndexOutOfRange { got: 1, chunk_count: 1 });
     }
 
     /// kaspa-pq ADR-0040 §5.15.4 — the Merkle leaf node binds the leaf's POSITION, and the acceptance
@@ -761,7 +823,7 @@ pub(crate) mod tests {
         let gapped = vec![mine(&m, batch, 0, 0xC0), mine(&m, batch, 2, 0xC1)];
         assert_eq!(manifest_leaf_root(&gapped).unwrap_err(), RegistrationError::NonContiguousLeafIndices { got: 2, leaf_count: 2 });
         assert_eq!(
-            build_leaf_chunk(batch, 0, &gapped).unwrap_err(),
+            build_leaf_chunk(batch, 0, &gapped, &dummy_witnesses(&gapped)).unwrap_err(),
             RegistrationError::NonContiguousLeafIndices { got: 2, leaf_count: 2 }
         );
         // Indices {1, 2}: contiguous but not zero-based — the off-by-one a "sorted and distinct" check
@@ -787,15 +849,22 @@ pub(crate) mod tests {
         let minted: Vec<PalwPublicLeafV1> = (0..65u32).map(|i| mine(&m, Hash64::default(), i, i as u8)).collect();
         let (batch_id, (_, mpayload)) = build_batch_manifest(&minted, h(1), h(2), h(3), h(4), 0, &policy()).expect("manifest builds");
         let manifest = <PalwBatchManifestV1 as borsh::BorshDeserialize>::try_from_slice(&mpayload).expect("manifest decodes");
-        assert_eq!(manifest.chunk_count, 2, "65 leaves is two chunks — the multi-chunk path must be exercised");
+        let expected_chunks = 65u32.div_ceil(PALW_MAX_LEAVES_PER_CHUNK as u32) as u16;
+        assert!(expected_chunks >= 2, "the fixture must still exercise the MULTI-chunk path");
+        assert_eq!(
+            manifest.chunk_count, expected_chunks,
+            "chunk_count follows the per-chunk cap, which D3-b lowered to {PALW_MAX_LEAVES_PER_CHUNK} to keep a \
+             worst-case witness-bearing v3 chunk inside the payload budget"
+        );
 
         let restamped = restamp_leaves(batch_id, &minted);
         let mut seen = 0usize;
         for chunk_index in 0..manifest.chunk_count {
-            let (byte, payload) = build_leaf_chunk(batch_id, chunk_index, &restamped).expect("chunk assembles");
+            let (byte, payload) =
+                build_leaf_chunk(batch_id, chunk_index, &restamped, &dummy_witnesses(&restamped)).expect("chunk assembles");
             assert_eq!(validate_palw_overlay_payload(byte, &payload), Ok(()));
             let chunk = <PalwLeafChunkV1 as borsh::BorshDeserialize>::try_from_slice(&payload).expect("chunk decodes");
-            assert_eq!(chunk.version, PALW_LEAF_CHUNK_VERSION_V2, "v1 is refused by validate_leaf_chunk");
+            assert_eq!(chunk.version, PALW_LEAF_CHUNK_VERSION_V3, "v1 is refused by validate_leaf_chunk");
             assert_eq!(chunk.proofs.len(), chunk.leaves.len());
             for (leaf, proof) in chunk.leaves.iter().zip(&chunk.proofs) {
                 // The verifier consumes the batch_id-ZEROED projection — the same one the root was built
@@ -865,6 +934,15 @@ pub(crate) mod tests {
             activation_epoch: 4,
             expiry_epoch: 1000,
             leaf_bond_sompi: 0,
+            // D3-b PCPB fields (external-branch sentinels + literal roots — same "literal or function
+            // of index" golden rule as every other field here). Adding these MOVED the pinned golden
+            // hashes below; the new constants were re-derived from this fixture, as §5.15.9 (vi)
+            // prescribes for a format change (documented spec change, not a weakened pin).
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: h(0x50),
+            assignment_proof_root: h(0x51),
+            dispatch_kind: 0,
         }
     }
 
@@ -961,20 +1039,23 @@ pub(crate) mod tests {
     /// `palw_leaf_merkle_root_cross_crate_golden_vector`. Two crates, one constant — that is the point;
     /// do not "de-duplicate" this into a shared helper, because a shared helper is a shared function
     /// call and a shared function call cannot detect the drift this exists to detect. These values moved
-    /// only at the explicit Header-v4/Object-v2 re-genesis cutover paired with DB v14; changing them on an
-    /// in-place network upgrade would silently redefine every content-addressed batch.
+    /// only at explicit re-genesis cutovers: the Header-v4/Object-v2 one paired with DB v14, and the
+    /// ADR-0045 D3-b PCPB LeafV2 one paired with DB v16 (five new leaf fields ⇒ a new `leaf_hash` for
+    /// the same fixture). Changing them on an in-place network upgrade would silently redefine every
+    /// content-addressed batch. RE-DERIVED at each cutover from `golden_leaf`, never pasted from a
+    /// failing assertion's "left" side without first confirming the layout change was intended.
     const CROSS_CRATE_GOLDEN_LEAF_HASHES: [&str; 3] = [
-        "2ad648c04cd7d10b3808afd4303958627447b91d992b62d94a96b7584efefde0\
-         ce9140d9a67883e1d0ed08c107796fa41e4a611afc282b51fc8c5ff0fd3fb801",
-        "73727526c0b05a6dd04709778cf112b7e9bfbf372652742ec9e069002b5fdbe3\
-         43a337b87d3f0830b9cbeeaa42247a691cc6b2e57a1068b6f4dc154e45cf35f9",
-        "c3d33401296d2941c812e415dccfb5fee526f99d5792bcae6afaeec02c69933c\
-         a2167a61742f1da6eb1751fcc32257a79f0259ed37a3a1244f28bf2f5924b77e",
+        "98d226d4654d55e5c118ad2e4adaae03cbfcd86cc8990c7da9e407084f119021\
+         3e789dd59e646feec887fa876bb22015187350993b50756a02d74007c8138c40",
+        "10f1f3b308b3ab2fcbdd7189676c751f39fe2ed30144cc73e71298ad85e95199\
+         b19d6d3d472f8aab4f83b710d943cea6ed8a6d3ddcb8555220026d50f42c68c5",
+        "77e420786bfd24315022c4f305a405550d3136ef25e705c206b4a8c59b62eedf\
+         ad63c352130f7104550113fa290169d5ca280f25dad40037c40cceaef412e988",
     ];
 
     /// The ADR-0040 §5.15.4 Merkle root over [`CROSS_CRATE_GOLDEN_LEAF_HASHES`]. Mirrored in
     /// consensus-core; see that constant's note. `pub(crate)` so `audit.rs` can assert that the
     /// certificate an auditor quorum emits carries THIS value.
-    pub(crate) const CROSS_CRATE_GOLDEN_LEAF_ROOT: &str = "131b505a6a3e87a095cf16d49237ad1fd325efd38b80bd8e0c64894ea065bc7b4\
-         46060d1e35e70acfa72cdfee54902d176377933c30c3ee1e96b8722eeeced57";
+    pub(crate) const CROSS_CRATE_GOLDEN_LEAF_ROOT: &str = "bc2b08b3ee25a4c761fec1e5313f06b2fde1ab205e1b1cd734578d92e645b1166\
+         ffe1f6eacf8140d0b8abcd78efa079cd38dd6292dad5446c70811ba480bbfb4";
 }

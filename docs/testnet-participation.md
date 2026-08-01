@@ -10,21 +10,22 @@ Everything below is derived from the shipped source in this repository. Where a 
 
 ## 1. Which network do I join?
 
-**Join `testnet-20`.** It is the public testnet, the network shown by
+**Join `testnet-21`.** It is the public testnet, the network shown by
 [misakascan.com](https://misakascan.com), and the network scored by MTP.
-It replaced `testnet-200` at the 2026-07-30 re-genesis ([migration note](testnet-20-migration.md));
-no state carries across. `testnet-10` is retired and remains only as a compatibility preset.
+It replaced `testnet-20` at the 2026-08-01 ADR-0045 D3-b re-genesis ([migration note](testnet-21-migration.md));
+testnet-20 had replaced testnet-200 on 2026-07-30. No state carries across. `testnet-10` is retired and remains only as a compatibility preset.
 
 | Network | Select with | P2P port | How you find peers | PALW audited-compute lane |
 |---|---|---|---|---|
-| **`testnet-20`** | `--testnet --netsuffix=20` | `26521` | **DNS seeders** (2 authoritative names) | **active; algo-4 accepted** |
+| **`testnet-21`** | `--testnet --netsuffix=21` | `26531` | **DNS seeders** (2 authoritative names) | **active; algo-4 accepted** |
+| `testnet-20` | `--testnet --netsuffix=20` | `26521` | **deprecated** — no seeders; do not join | superseded by testnet-21 (ADR-0045 D3-b leaf re-genesis) |
 | `testnet-200` | `--testnet --netsuffix=200` | `26511` | **deprecated** — no seeders; do not join | superseded by testnet-20 |
 | `testnet-10` | `--testnet` | `26211` | retired — explicit legacy peer only | inert |
 | `testnet-110` | `--testnet --netsuffix=110` | `26411` | closed — allowlist gate | active, closed preset |
 | `devnet-111` | `--devnet --netsuffix=111` | `26611` | closed — allowlist gate | **active**, single-node preset |
 | `mainnet` | `--mainnet` | `26111` | — | **defined but NOT launched** |
 
-The MISAKA seed domains belong exclusively to testnet-20
+The MISAKA seed domains belong exclusively to testnet-21
 ([`consensus/core/src/config/params.rs`](../consensus/core/src/config/params.rs)).
 `testnet-110` and `devnet-111` remain closed-mesh presets you run yourself.
 
@@ -67,7 +68,7 @@ pulled in only by `--features qwen-backend`.
 
 1. **It does not accelerate mining or block validation.** These features drive the PALW
    audited-compute provider path, not Layer-0 proof-of-work and not consensus verification.
-2. **A GPU is not required to join.** PALW and algo-4 acceptance are active on testnet-20, and
+2. **A GPU is not required to join.** PALW and algo-4 acceptance are active on testnet-21, and
    receipt-v3 provider rewards have been exercised end-to-end. A continuous GPU/LLM provider is an
    optional operator role; ordinary nodes validate commitments and signatures without rerunning
    model inference. §7 covers the provider path and its gates.
@@ -115,7 +116,7 @@ cargo build --release -p misaka-palw --features qwen-cuda
 ## 4. Run a node
 
 The newcomer path is `misaka join`, a front end over `node start` that selects the network and
-names the DNS seeds for you (`--network` defaults to `testnet-20`; extra `kaspad` arguments go
+names the DNS seeds for you (`--network` defaults to `testnet-21`; extra `kaspad` arguments go
 after `--`):
 
 ```bash
@@ -125,12 +126,12 @@ after `--`):
 Or drive `kaspad` directly:
 
 ```bash
-./target/release/kaspad --testnet --netsuffix=20 --utxoindex --rpclisten-borsh=default
+./target/release/kaspad --testnet --netsuffix=21 --utxoindex --rpclisten-borsh=default
 ```
 
-- Peers are discovered through the public DNS seeders automatically. **Outbound TCP `26521` must
+- Peers are discovered through the public DNS seeders automatically. **Outbound TCP `26531` must
   not be blocked.** If discovery is slow, bootstrap explicitly:
-  `--addpeer=95.111.236.186:26521`.
+  `--addpeer=95.111.236.186:26531`.
 - `--utxoindex` is required for wallet and validator funding lookups.
 - **gRPC is on by default** at loopback `127.0.0.1:26210`, so the miner needs no extra flag.
   **wRPC is off by default** and must be enabled — the CLI wallet and `kaspa-pq-validator` speak
@@ -138,15 +139,15 @@ Or drive `kaspad` directly:
 - Do **not** pass `--enable-unsynced-mining` when joining the public testnet. It exists for
   bootstrapping a brand-new isolated network; using it here mines a fork from genesis.
 
-`testnet-20` default ports:
+`testnet-21` default ports:
 
 | Purpose | Port | Default state |
 |---|---|---|
-| P2P | `26521` | on |
+| P2P | `26531` | on |
 | gRPC | `26210` | on (loopback) |
 | wRPC Borsh | `27210` | off — `--rpclisten-borsh=default` |
 | wRPC JSON | `28210` | off — `--rpclisten-json=default` |
-| EVM HTTP RPC | `8545` | EVM lane is not active on testnet-20 |
+| EVM HTTP RPC | `8545` | EVM lane is not active on testnet-21 |
 
 ### Verify you actually joined
 
@@ -165,7 +166,7 @@ Two more that answer specific questions:
 ./target/release/misaka bootstrap --help  # the DNS seeds and the peers they actually resolve to
 ```
 
-Compare your tip against [misakascan.com](https://misakascan.com), which serves testnet-20.
+Compare your tip against [misakascan.com](https://misakascan.com), which serves testnet-21.
 
 `misaka setup` additionally provides a guided VPS path (preflight, node service, status).
 
@@ -178,7 +179,7 @@ rejected at consensus — there is no compatibility path.
 
 ```bash
 ./target/release/kaspa-pq-miner \
-  --node-grpc 127.0.0.1:26210 --network-id testnet-20 \
+  --node-grpc 127.0.0.1:26210 --network-id testnet-21 \
   --blocks 0 --min-block-interval-ms 250 --pay-address <misakatest:...>
 ```
 
@@ -198,28 +199,28 @@ kaspa-pq-validator keygen --out val.seed --network testnet
 
 # 2. fund that address (mine to it, or transfer in)
 
-# 3. bond. testnet-20 lowers the validator ENTRY floor to testnet scale: 10 MSK = 1e9 sompi.
+# 3. bond. testnet-21 lowers the validator ENTRY floor to testnet scale: 10 MSK = 1e9 sompi.
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27210 --validator-key val.seed \
-  --amount 1000000000 --network testnet-20
+  --amount 1000000000 --network testnet-21
 
 # 4. attest
 kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
-  --stake-bond <txid:index> --signed-epoch-db val.testnet-20.state \
-  --network testnet-20 --attest-poll-secs 3
+  --stake-bond <txid:index> --signed-epoch-db val.testnet-21.state \
+  --network testnet-21 --attest-poll-secs 3
 ```
 
 Three details that cost people time:
 
 - **`keygen` takes the short network name (`testnet`); `bond` and `run` take the full id
-  (`testnet-20`).** They are not interchangeable.
+  (`testnet-21`).** They are not interchangeable.
 - **Use a fresh `--signed-epoch-db` per network.** The anti-equivocation guard keys on epoch
   numbers, and epoch numbers overlap across networks.
-- **testnet-20 uses testnet-scale ENTRY floors**: a **10 MSK** bond and a one-active-validator
+- **testnet-21 uses testnet-scale ENTRY floors**: a **10 MSK** bond and a one-active-validator
   minimum (`COMPUTE_REGISTRY_DNS_PARAMS`), so a self-funded validator is mineable within hours —
   mine to your funding address, then bond. The quorum meaning stays 2/3 by stake.
 
 Confirmation is **two-dimensional** — it needs both accumulated blue work (`WorkDepth`) and
-attested stake (`StakeDepth`). testnet-20 uses reachable rehearsal thresholds:
+attested stake (`StakeDepth`). testnet-21 uses reachable rehearsal thresholds:
 `required_work_depth = 100` and `required_stake_depth = StakeScore(5000)`, while retaining the
 production validator-count and bond-amount floors.
 
@@ -264,32 +265,32 @@ floors, and conflating them is the easiest mistake on this page:
 
 | | PALW provider bond | DNS-finality stake bond |
 |---|---|---|
-| Minimum | **10 MSK** (`min_provider_bond_sompi`, [`consensus/core/src/palw.rs`](../consensus/core/src/palw.rs)) | **10 MSK** on `testnet-20` (testnet ENTRY floor; production floor is 20,000,000 MSK) |
+| Minimum | **10 MSK** (`min_provider_bond_sompi`, [`consensus/core/src/palw.rs`](../consensus/core/src/palw.rs)) | **10 MSK** on `testnet-21` (testnet ENTRY floor; production floor is 20,000,000 MSK) |
 | Exit delay | 6 epochs (`provider_unbond_floor_epochs`) | 14 days + reorg horizon |
 | Registered by | `kaspa-pq-validator palw-payload provider-bond` → `palw-submit` | `kaspa-pq-validator bond` (§6) |
 
 ```bash
 kaspa-pq-validator palw-payload provider-bond \
-  --network testnet-20 --validator-key /abs/provider.seed \
+  --network testnet-21 --validator-key /abs/provider.seed \
   --operator-group-id <hash64> --runtime-class <hash64> \
   --capacity "<shape-id>=1" --reward-key-root <hash64> \
   --amount 10MSK --unbond-delay-epochs 6 --out /abs/provider-bond.borsh
 
-kaspa-pq-validator palw-submit --network testnet-20 \
+kaspa-pq-validator palw-submit --network testnet-21 \
   --node-wrpc-borsh 127.0.0.1:27220 --validator-key /abs/provider.seed \
   --kind provider-bond --payload-file /abs/provider-bond.borsh
 ```
 
-`--network` here accepts the PALW-active presets — **`testnet-20`** (the public net), plus the
+`--network` here accepts the PALW-active presets — **`testnet-21`** (the public net), plus the
 closed `testnet-110` / `devnet-111` meshes and deprecated `testnet-200`. There is no provider role
-on retired testnet-10. testnet-20 is publicly discoverable through the DNS seeds.
+on retired testnet-10. testnet-21 is publicly discoverable through the DNS seeds.
 
 ### Activation state
 
 PALW has **three independent levers**
 ([`consensus/core/src/config/params.rs`](../consensus/core/src/config/params.rs)):
 
-| Lever | Knob | State on testnet-20 |
+| Lever | Knob | State on testnet-21 |
 |---|---|---|
 | land | the code being shipped at all | released |
 | accept | `palw_algo4_accept` | **`true`** |
@@ -312,7 +313,7 @@ kaspa-pq-validator get-block \
   --hash c7ffe7678dce891dd4a5679985033c8d74e0587336c5f1dbddb8e98afd621bc8b49553a2284f00c394b8a6fb081594f30c2fea9c535c2f7fdf329f35584c2e70
 ```
 
-That block has `pow_algo = 4`; its later settlement pays both receipt providers. On **testnet-20**
+That block has `pow_algo = 4`; its later settlement pays both receipt providers. On **testnet-21**
 the same lane is live in production: algo-4 blocks have been accepted since 2026-08-01 (52 blue
 acceptances on day one), and §8's C5 collector indexes them off the finality-buried chain, so a
 provider's accepted work becomes a checkable ledger entry rather than a claim.
@@ -322,7 +323,7 @@ provider's accepted work becomes a checkable ledger entry rather than a claim.
 ## 8. Testnet points (MTP)
 
 Points are a mirror of **ML-DSA-87-signed epoch ledgers**, so they are independently checkable
-rather than something you have to trust. New epochs score **`testnet-20` only** (rules version 4);
+rather than something you have to trust. New epochs score **`testnet-21` only** (rules version 4);
 the retired testnet-10 and deprecated testnet-200 ledger histories remain verifiable but do not
 accrue new points.
 
@@ -388,7 +389,7 @@ published and those exact commands verify it today.
 
 These are reproduced results, not claims about the code. C1 first ran end-to-end on the former
 testnet-10 (a JP-vantage peer scored **100 points**; an attesting validator scored **200 points**
-over 30 epochs), and on 2026-08-01 the same pipeline went live on testnet-20: epoch 1's first
+over 30 epochs), and on 2026-08-01 the same pipeline went live on testnet-21: epoch 1's first
 issue scores a real node + a real validator at **300 points**, and the C5 pipeline was verified
 end-to-end with a real Qwen3.6 receipt pair (two slots, 1 point each, ML-DSA signature VALID,
 deterministic recompute byte-compare MATCH). Every one of those ledgers passed
@@ -405,15 +406,15 @@ C2/C3/C4 are awarded by hand after review, and need no registration because the 
 the attribution directly:
 
 ```bash
-misaka mtp award --epoch <N> --network testnet-20 --id gh:<you> --category bug    --severity S1
-misaka mtp award --epoch <N> --network testnet-20 --id gh:<you> --category verify --points 250
-misaka mtp award --epoch <N> --network testnet-20 --id gh:<you> --category infra  --points 500
+misaka mtp award --epoch <N> --network testnet-21 --id gh:<you> --category bug    --severity S1
+misaka mtp award --epoch <N> --network testnet-21 --id gh:<you> --category verify --points 250
+misaka mtp award --epoch <N> --network testnet-21 --id gh:<you> --category infra  --points 500
 ```
 
 ### How to start earning
 
 > **This is testnet-only.** MTP points are a testnet participation record. They are **not** a token,
-> not a balance, not tradable, and carry **no monetary value**. `testnet-20` MSK is likewise
+> not a balance, not tradable, and carry **no monetary value**. `testnet-21` MSK is likewise
 > valueless test currency. There is no mainnet, no sale, and no promise that points convert into
 > anything — §11-B defines a *claim* mechanism for a possible future TGE, and a mechanism existing
 > is not a commitment that it pays. Anyone offering to buy or sell MISAKA points or testnet MSK is
@@ -422,7 +423,7 @@ misaka mtp award --epoch <N> --network testnet-20 --id gh:<you> --category infra
 **1 — make a key.** This key *is* your identity. Back it up; it cannot be recovered.
 
 ```bash
-misaka key gen --network testnet-20 --out mtp.seed        # prints your misakatest: address
+misaka key gen --network testnet-21 --out mtp.seed        # prints your misakatest: address
 ```
 
 **2 — ask for an invitation.** Open an issue on this repository with your GitHub handle and the
@@ -431,7 +432,7 @@ address from step 1. You get back an invitation JSON: a one-shot nonce bound to 
 **3 — sign it offline.**
 
 ```bash
-misaka mtp register --network testnet-20 \
+misaka mtp register --network testnet-21 \
   --invitation invitation.json --key-file mtp.seed --out registration.json
 ```
 
@@ -449,7 +450,7 @@ owner is dropped loudly, never banked for later.
 
 **5 — run something worth scoring.**
 
-- **A node** → C1 node. Keep it up and in sync on `testnet-20`. A peer still in IBD is reachable
+- **A node** → C1 node. Keep it up and in sync on `testnet-21`. A peer still in IBD is reachable
   but not usable and does not count. You run no collector: the operator's vantage hosts observe you
   as an ordinary peer.
 - **A validator** → C1 validator. Bond, attest, stay unslashed. Attestations are read out of
@@ -474,18 +475,18 @@ command list:
 
 ```bash
 # C1 node — observe peers from a vantage, then attribute them via an explicit roster
-misaka mtp collect --network testnet-20 --vantage jp --rpc 127.0.0.1:27210 --out probes.jsonl
+misaka mtp collect --network testnet-21 --vantage jp --rpc 127.0.0.1:27210 --out probes.jsonl
 misaka-mtp-service ingest-probes --data-dir DIR --file probes.jsonl --roster roster.jsonl
 
 # C1 validator — attestations out of blocks, bond/slash state out of the registry
-misaka mtp attestations --network testnet-20 --rpc 127.0.0.1:27210 --out att.jsonl
-misaka mtp validators   --network testnet-20 --rpc 127.0.0.1:27210 --out bonds.jsonl
+misaka mtp attestations --network testnet-21 --rpc 127.0.0.1:27210 --out att.jsonl
+misaka mtp validators   --network testnet-21 --rpc 127.0.0.1:27210 --out bonds.jsonl
 misaka-mtp-service ingest-attestations --data-dir DIR --file att.jsonl \
   --roster vroster.jsonl --bonds bonds.jsonl
 
 # C5 LLM replica — accepted leaves off the finality-buried selected chain, with each
 # Receipt-DA object verified against the leaf's chain-committed root before it is trusted
-misaka mtp palw-leaves --network testnet-20 --rpc 127.0.0.1:27210 \
+misaka mtp palw-leaves --network testnet-21 --rpc 127.0.0.1:27210 \
   --da-dir <kaspad-palw-da-spool> --out leaves.jsonl
 misaka-mtp-service ingest-palw --data-dir DIR --file leaves.jsonl
 
@@ -526,7 +527,7 @@ An epoch is a window the operator publishes over:
 
 ```bash
 misaka-mtp-service run-epoch --data-dir DIR --operator-key FILE \
-  --epoch N --start 2026-07-28T00:00:00Z --end 2026-08-04T00:00:00Z --network testnet-20
+  --epoch N --start 2026-07-28T00:00:00Z --end 2026-08-04T00:00:00Z --network testnet-21
 ```
 
 Two consequences worth being explicit about:
@@ -548,7 +549,7 @@ ordering. So awards made during the window land in a later issue of epoch 1. An 
 immutable only once the finality horizon passes it (I-MTP-13).
 
 The network scope is deployment configuration (ADR-0038 D1), enforced fail-closed: the current
-scope is testnet-20 only (rules version 4), and a service configured for a retired or deprecated
+scope is testnet-21 only (rules version 4), and a service configured for a retired or deprecated
 network refuses to start rather than silently publishing a mixed-network ledger.
 
 ---
@@ -563,7 +564,7 @@ Stated explicitly so nobody builds on an assumption:
 - **Earn MTP points anonymously.** Every C1 point resolves to a registered ledger id, so uptime and
   attestation from an unregistered node are dropped, not banked. Register first — see §8.
 - **Earn new MTP points on retired `testnet-10` or deprecated `testnet-200`.** Rules version 4 and
-  the D1 deployment scope admit testnet-20 only.
+  the D1 deployment scope admit testnet-21 only.
 
   Issuing and verifying a Qwen3.6 `ComputeReceipt` locally *does* work today — that is a separate,
   reproducible exercise. See [palw-llm-receipts.md](palw-llm-receipts.md), which also spells out what

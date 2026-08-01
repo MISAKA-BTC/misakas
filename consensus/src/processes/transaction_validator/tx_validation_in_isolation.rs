@@ -411,6 +411,16 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
         // here — context-free SHAPE only. The activation fence is a block-DAA rule enforced in
         // `check_palw_overlay_activation`'s registry clause, and the §9/§10.3 admission rules run
         // at the acceptance fold — both exactly mirroring the PALW band's layering.
+        //
+        // ADR-MA §23.2: a PROPOSAL (0x40) additionally enforces the bond VALUE LOCK — output-0
+        // must lock the declared `proposal_bond_sompi` to the proposer's own key — for the same
+        // reason ADR-0040 ECON-03 put the provider-bond lock at this exact coordinate: here a
+        // rejection actually rejects the transaction. It cannot live in the acceptance fold,
+        // whose per-effect `Result` the caller only logs.
+        if Some(kind) == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL.palw_compute_registry_tx_kind() {
+            return kaspa_consensus_core::palw_compute_set::validate_compute_set_proposal_tx(&tx.payload, &tx.outputs)
+                .map_err(TxRuleError::InvalidComputeRegistryPayload);
+        }
         kaspa_consensus_core::palw_compute_set::parse_palw_compute_registry(kind, &tx.payload)
             .map(|_| ())
             .map_err(TxRuleError::InvalidComputeRegistryPayload)
@@ -588,8 +598,8 @@ mod tests {
     #[test]
     fn validate_compute_registry_subnetwork_tx() {
         use kaspa_consensus_core::palw_compute_set::{
-            ComputeSetRegistryError, PALW_COMPUTE_SET_DESCRIPTOR_VERSION, PALW_COMPUTE_SET_PROPOSAL_PAYLOAD_VERSION,
-            PalwComputeSetDescriptorV2, PalwComputeSetProposalV1,
+            ComputeSetRegistryError, MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI, PALW_COMPUTE_SET_DESCRIPTOR_VERSION,
+            PALW_COMPUTE_SET_PROPOSAL_PAYLOAD_VERSION, PalwComputeSetDescriptorV2, PalwComputeSetProposalV1,
         };
         use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL;
         use kaspa_hashes::Hash64;
@@ -622,11 +632,20 @@ mod tests {
         );
 
         let h = |b: u8| Hash64::from_bytes([b; 64]);
+        // ADR-MA §23.2: the proposal bond is a real value lock, so the tx must fund output-0 with
+        // the declared amount under the proposer's own script.
+        let proposer_kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([7u8; 32]);
+        let proposer_public_key = proposer_kp.verification_key.as_ref().to_vec();
+        let proposer_credential = kaspa_consensus_core::dns_finality::validator_id_from_pubkey(&proposer_public_key);
+        let bond_output = TransactionOutput {
+            value: MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI,
+            script_public_key: kaspa_consensus_core::palw::provider_bond_lock_spk(&proposer_public_key),
+        };
         let proposal = PalwComputeSetProposalV1 {
             version: PALW_COMPUTE_SET_PROPOSAL_PAYLOAD_VERSION,
             descriptor: PalwComputeSetDescriptorV2 {
                 version: PALW_COMPUTE_SET_DESCRIPTOR_VERSION,
-                compute_vm_id: h(1),
+                compute_vm_id: kaspa_consensus_core::palw_compute_ir::compute_vm_id_v1(),
                 model_family_id: h(2),
                 model_artifact_root: h(3),
                 model_manifest_root: h(4),
@@ -646,18 +665,30 @@ mod tests {
                 modality_mask: 1,
                 resource_limits_root: h(18),
             },
-            proposer_credential: h(0x50),
-            proposal_bond_ref: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x51u8; 64]), index: 0 },
+            proposer_credential,
+            proposer_public_key: proposer_public_key.clone(),
+            proposal_bond_sompi: MIN_COMPUTE_SET_PROPOSAL_BOND_SOMPI,
             artifact_distribution_root: h(0x52),
             independent_build_attestation_root: h(0x53),
             requested_shadow_activation_daa: 1_000,
         };
 
-        // Well-formed canonical proposal → accepted.
+        // Well-formed canonical proposal, bond locked in output-0 → accepted.
         let mut tx = base.clone();
         tx.subnetwork_id = SUBNETWORK_ID_PALW_COMPUTE_SET_PROPOSAL;
         tx.payload = borsh::to_vec(&proposal).unwrap();
+        tx.outputs = vec![bond_output.clone()];
         assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // ADR-MA §23.2: the SAME payload without the locked bond is rejected AT THIS COORDINATE —
+        // the whole point of enforcing it here rather than at the acceptance fold, whose per-effect
+        // Result is only logged. Unbonded proposals can no longer exhaust the 256-slot registry.
+        let mut unbonded = tx.clone();
+        unbonded.outputs = base.outputs.clone();
+        assert_match!(
+            tv.validate_tx_in_isolation(&unbonded),
+            Err(TxRuleError::InvalidComputeRegistryPayload(ComputeSetRegistryError::ProposalBondValueMismatch { .. }))
+        );
 
         // Trailing byte breaks strict canonicality → InvalidComputeRegistryPayload.
         let mut padded = tx.clone();

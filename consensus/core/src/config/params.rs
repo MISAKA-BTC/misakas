@@ -449,6 +449,17 @@ pub struct Params {
     /// empty-vector constant. `palw_activated_presets_bound_the_view` enforces this requirement. The
     /// magnitude is calibrated at re-genesis.
     pub palw_audit_sample_size: u16,
+    /// ADR-0045 D3-b (clauses 11–13) — the PCPB windows, in PALW epochs: `w` (challenge freshness),
+    /// `k` (snapshot lag: the bond-weighted provider snapshot is fixed at `anchor − k`), `Δ` (post-
+    /// commit offset: partner B is drawn from `R_{anchor + Δ}`, provably after the anchor). Mirror
+    /// `PalwParams::{freshness_window_epochs, snapshot_lag_epochs, post_commit_delta_epochs}` — lifted
+    /// onto `Params` because the leaf-chunk acceptance arm and `check_palw_ticket` see only `Params`
+    /// (the `auditor_count → palw_audit_committee_size` pattern). `Params` is not serialized, so these
+    /// do not move `LATEST_DB_VERSION`; activated presets require the `PalwParams` invariants
+    /// (`k ≥ 1`, `Δ ≥ 1`, `w ≥ Δ`), enforced by `palw_activated_presets_bound_the_view`.
+    pub palw_freshness_window_epochs: u64,
+    pub palw_snapshot_lag_epochs: u64,
+    pub palw_post_commit_delta_epochs: u64,
     /// kaspa-pq ADR-0039 PALW (§16.3): the per-lane difficulty params (window/target/min-samples/clamp
     /// + genesis lane bits). Drives the lane-aware retarget once PALW is active; the two lanes retarget
     /// independently so ticket supply and hash rate cannot manipulate each other's difficulty (§16.1).
@@ -569,6 +580,9 @@ impl Params {
             palw_audit_quorum_den,
             palw_audit_committee_size,
             palw_audit_sample_size,
+            palw_freshness_window_epochs,
+            palw_snapshot_lag_epochs,
+            palw_post_commit_delta_epochs,
             palw_lane_difficulty,
             palw_spam,
             palw_batch_admission,
@@ -629,6 +643,9 @@ impl Params {
         field!(palw_audit_quorum_den);
         field!(palw_audit_committee_size);
         field!(palw_audit_sample_size);
+        field!(palw_freshness_window_epochs);
+        field!(palw_snapshot_lag_epochs);
+        field!(palw_post_commit_delta_epochs);
         field!(palw_lane_difficulty);
         field!(palw_spam);
         field!(palw_batch_admission);
@@ -866,6 +883,9 @@ impl Params {
             palw_audit_quorum_den: self.palw_audit_quorum_den,
             palw_audit_committee_size: self.palw_audit_committee_size,
             palw_audit_sample_size: self.palw_audit_sample_size,
+            palw_freshness_window_epochs: self.palw_freshness_window_epochs,
+            palw_snapshot_lag_epochs: self.palw_snapshot_lag_epochs,
+            palw_post_commit_delta_epochs: self.palw_post_commit_delta_epochs,
             palw_lane_difficulty: self.palw_lane_difficulty.clone(),
             palw_spam: self.palw_spam,
             palw_batch_admission: self.palw_batch_admission,
@@ -915,6 +935,8 @@ impl From<NetworkId> for Params {
                 Some(200) => STAGING_MAINNET_PALW_PARAMS,
                 // ADR-MA P14: the Header-v5 Compute Set registry rehearsal net (`compute-registry-palw`).
                 Some(20) => COMPUTE_REGISTRY_PALW_PARAMS,
+                // ADR-0045 D3-b: the PCPB dispatch rehearsal net (`pcpb-palw`) — the public PALW testnet.
+                Some(21) => PCPB_PALW_PARAMS,
                 Some(x) => panic!("Testnet suffix {} is not supported", x),
                 None => panic!("Testnet suffix not provided"),
             },
@@ -1326,9 +1348,15 @@ pub const STAGING_MAINNET_PALW_BATCH_ADMISSION: crate::palw::PalwBatchAdmissionP
 /// ADR-MA P14 migration (2026-07-30): the public PALW testnet moved from testnet-200 to
 /// **testnet-20** (`compute-registry-palw`). testnet-200's replay halted because its DNS
 /// finality thresholds were changed mid-chain without a DAA activation gate — a genesis-active
-/// v5 re-genesis (testnet-20) is the clean recovery (the operator's "最も確実" option). The public
-/// seed names now resolve testnet-20; testnet-200 keeps NO seeders (deprecated, no discovery).
-pub const TESTNET_20_DNS_SEEDERS: &[&str] = &["seeder1.misakascan.com", "seeder3.misakascan.com"];
+/// v5 re-genesis (testnet-20) is the clean recovery (the operator's "最も確実" option).
+///
+/// ADR-0045 D3-b migration (2026-08-01): the public PALW testnet moved again, testnet-20 →
+/// **testnet-21** (`pcpb-palw`). D3-b's LeafV2 moved the leaf layout (LEAF_LEN 964 → 1189), the
+/// chunk wire (v3-only) and therefore `leaf_hash → leaf_root → content_id() == batch_id` —
+/// testnet-20's mined history is structurally unreplayable under the new rules, so the identity
+/// tripwire's option (b) applies: re-genesis onto a new suffix. The public seed names now resolve
+/// testnet-21; testnet-20 and testnet-200 keep NO seeders (deprecated, no discovery).
+pub const TESTNET_21_DNS_SEEDERS: &[&str] = &["seeder1.misakascan.com", "seeder3.misakascan.com"];
 
 pub const MAINNET_PARAMS: Params = Params {
     // Mainnet is defined but not launched. Never resolve the public testnet-200
@@ -1420,6 +1448,9 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_audit_quorum_den: 3,
     palw_audit_committee_size: 16, // ADR-0040 §5.17.4 (AUTHSET-01) — mirrors PalwParams::auditor_count; inert
     palw_audit_sample_size: 16,    // ADR-0040 §5.17.6 (SAMPLE-01) — inert placeholder; magnitude is a re-genesis calibration
+    palw_freshness_window_epochs: 6, // ADR-0045 D3-b — w (mirrors PalwParams::freshness_window_epochs)
+    palw_snapshot_lag_epochs: 2,     // ADR-0045 D3-b — k
+    palw_post_commit_delta_epochs: 2, // ADR-0045 D3-b — Δ
     palw_lane_difficulty: crate::palw::LaneDifficultyParams::INERT, // §16.3 (inert placeholder)
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
     palw_batch_admission: crate::palw::PalwBatchAdmissionParams::INERT, // §9.2/§9.3 (inert placeholder)
@@ -1530,6 +1561,9 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_audit_quorum_den: 3,
     palw_audit_committee_size: 16, // ADR-0040 §5.17.4 (AUTHSET-01) — mirrors PalwParams::auditor_count; inert
     palw_audit_sample_size: 16,    // ADR-0040 §5.17.6 (SAMPLE-01) — inert placeholder; magnitude is a re-genesis calibration
+    palw_freshness_window_epochs: 6, // ADR-0045 D3-b — w (mirrors PalwParams::freshness_window_epochs)
+    palw_snapshot_lag_epochs: 2,     // ADR-0045 D3-b — k
+    palw_post_commit_delta_epochs: 2, // ADR-0045 D3-b — Δ
     palw_lane_difficulty: crate::palw::LaneDifficultyParams::INERT, // §16.3 (inert placeholder)
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
     palw_batch_admission: crate::palw::PalwBatchAdmissionParams::INERT, // §9.2/§9.3 (inert placeholder)
@@ -1753,14 +1787,42 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
 pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
     net: NetworkId::with_suffix(NetworkType::Testnet, 20),
     genesis: COMPUTE_REGISTRY_PALW_GENESIS,
-    // 2026-07-30 migration: this is now the PUBLIC PALW testnet (superseding testnet-200). The
-    // public seed hostnames resolve here.
-    dns_seeders: TESTNET_20_DNS_SEEDERS,
+    // DEPRECATED (2026-08-01): superseded by testnet-21 (pcpb-palw). ADR-0045 D3-b moved the leaf
+    // format (LeafV2 964→1189, chunk wire v3-only, batch ids re-derived), so this net's mined
+    // history cannot replay under the new rules. Kept compilable for any node still holding its
+    // ledger, but no longer publicly seeded. Migrate with `--testnet --netsuffix=21` on a fresh
+    // datadir.
+    dns_seeders: &[],
     // ADR-MA: the registry fence — OPEN from genesis (this net rehearses the Compute Set registry
     // as well as the mainnet shape it inherits from STAGING).
     palw_compute_registry_activation_daa_score: 0,
     dns_params: Some(COMPUTE_REGISTRY_DNS_PARAMS),
     ..STAGING_MAINNET_PALW_PARAMS
+};
+
+/// ADR-0045 D3-b — the **PCPB dispatch** rehearsal network (`pcpb-palw`, NetworkId `testnet-21`,
+/// `--testnet --netsuffix=21`). The compute-registry shape carried through the D3-b re-genesis
+/// train — the first preset whose ledger is minted entirely under the LeafV2 rules:
+///   * **LeafV2 + chunk v3 + clauses 11/12/13 live from block 0**: every stored leaf passed the
+///     acceptance-time challenge re-derivation and dispatch-evidence re-run, and every algo-4
+///     mint re-checks the clause-13 binding. There is no pre-PCPB history to carry.
+///   * **PCPB windows are consensus params** (`palw_freshness_window_epochs` w /
+///     `palw_snapshot_lag_epochs` k / `palw_post_commit_delta_epochs` Δ) — they are part of this
+///     net's identity hash, which is why D3-b could not land on testnet-20 in place (the identity
+///     tripwire fired, and its option (b) — re-genesis onto a new suffix — is this preset).
+///   * **v5 genesis** ([`crate::config::genesis::PCPB_PALW_GENESIS`]): D3-b changes the leaf
+///     payload, never the header schema, so the header stays Header-v5 with the registry fence
+///     open from genesis.
+///   * Mint floor (design memo §10.2): the first mintable `registered_epoch` is `k + Δ` (= 4 with
+///     the shipped windows) — producers must not register batches before epoch 4; the early
+///     epochs are structurally algo-4-empty, which is fail-closed, not a fault.
+///   * DNS seeders: the PUBLIC seed names (2026-08-01 migration — this preset supersedes
+///     testnet-20 as the public net; the field below is authoritative).
+pub const PCPB_PALW_PARAMS: Params = Params {
+    net: NetworkId::with_suffix(NetworkType::Testnet, 21),
+    genesis: crate::config::genesis::PCPB_PALW_GENESIS,
+    dns_seeders: TESTNET_21_DNS_SEEDERS,
+    ..COMPUTE_REGISTRY_PALW_PARAMS
 };
 
 /// ADR-MA P14 rehearsal DNS economics: the staging (production-scale) shape with the
@@ -1852,6 +1914,9 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_audit_quorum_den: 3,
     palw_audit_committee_size: 16, // ADR-0040 §5.17.4 (AUTHSET-01) — mirrors PalwParams::auditor_count; inert
     palw_audit_sample_size: 16,    // ADR-0040 §5.17.6 (SAMPLE-01) — inert placeholder; magnitude is a re-genesis calibration
+    palw_freshness_window_epochs: 6, // ADR-0045 D3-b — w (mirrors PalwParams::freshness_window_epochs)
+    palw_snapshot_lag_epochs: 2,     // ADR-0045 D3-b — k
+    palw_post_commit_delta_epochs: 2, // ADR-0045 D3-b — Δ
     palw_lane_difficulty: crate::palw::LaneDifficultyParams::INERT, // §16.3 (inert placeholder)
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
     palw_batch_admission: crate::palw::PalwBatchAdmissionParams::INERT, // §9.2/§9.3 (inert placeholder)
@@ -1891,6 +1956,9 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_audit_quorum_den: 3,
     palw_audit_committee_size: 16, // ADR-0040 §5.17.4 (AUTHSET-01) — mirrors PalwParams::auditor_count; inert
     palw_audit_sample_size: 16,    // ADR-0040 §5.17.6 (SAMPLE-01) — inert placeholder; magnitude is a re-genesis calibration
+    palw_freshness_window_epochs: 6, // ADR-0045 D3-b — w (mirrors PalwParams::freshness_window_epochs)
+    palw_snapshot_lag_epochs: 2,     // ADR-0045 D3-b — k
+    palw_post_commit_delta_epochs: 2, // ADR-0045 D3-b — Δ
     palw_lane_difficulty: crate::palw::LaneDifficultyParams::INERT, // §16.3 (inert placeholder)
     palw_spam: crate::palw_antispam::PalwSpamParams::INERT,
     palw_batch_admission: crate::palw::PalwBatchAdmissionParams::INERT, // §9.2/§9.3 (inert placeholder)
@@ -2035,7 +2103,7 @@ mod palw_network_tests {
             ("staging-mainnet-palw (testnet-200)", STAGING_MAINNET_PALW_DNS_PARAMS),
             ("testnet-palw (testnet-110)", TESTNET_PALW_DNS_PARAMS),
             ("devnet-palw (devnet-111)", DEVNET_PALW_DNS_PARAMS),
-            ("compute-registry (testnet-20)", COMPUTE_REGISTRY_DNS_PARAMS),
+            ("compute-registry (testnet-20, deprecated / testnet-21 pcpb-palw)", COMPUTE_REGISTRY_DNS_PARAMS),
         ] {
             assert_eq!(
                 dns.emergency_work_margin,
@@ -2134,10 +2202,14 @@ mod palw_network_tests {
         assert!(!t10.is_palw_active(0));
     }
 
-    /// ADR-MA P14: `--testnet --netsuffix=20` selects the Header-v5 Compute Set registry
-    /// rehearsal preset — the staging shape with the registry fence OPEN from genesis: v5 genesis
-    /// (the three Compute Set references in the hash preimage, all-zero at block 0), band
-    /// 0x40-0x44 admitted from genesis, per-set difficulty and the GHOSTDAG credit seam live.
+    /// ADR-MA P14 / ADR-0045 D3-b: `--testnet --netsuffix=20` selects the Header-v5 Compute Set
+    /// registry rehearsal preset. DEPRECATED (2026-08-01): superseded as the public net by
+    /// testnet-21 (`pcpb-palw`) — D3-b moved the leaf format (LeafV2 964→1189, chunk wire
+    /// v3-only, batch ids re-derived), so this net's mined history cannot replay under the new
+    /// rules, and its 2026-08-01 fork family additionally left probabilistic dead-branch anchor
+    /// traps for fresh syncs (the bystander-wedge incident). Kept compilable for any node still
+    /// holding its ledger; the live tripwire (identity pin + threshold pins) moved to
+    /// `pcpb_palw_network_selection`, which guards the successor.
     #[test]
     fn compute_registry_palw_network_selection() {
         let net = NetworkId::with_suffix(NetworkType::Testnet, 20);
@@ -2149,38 +2221,87 @@ mod palw_network_tests {
         assert_ne!(p.genesis.hash, STAGING_MAINNET_PALW_PARAMS.genesis.hash);
         assert_ne!(p.genesis.hash, TESTNET_PARAMS.genesis.hash);
         assert_eq!(p.genesis.version, crate::constants::PALW_COMPUTE_SET_HEADER_VERSION, "Header-v5 re-genesis");
-        // The registry fence is OPEN from genesis — the ONLY preset where it is.
+        // The registry fence stayed OPEN from genesis (the shape testnet-21 inherits).
         assert_eq!(p.palw_compute_registry_activation_daa_score, 0);
         assert!(p.is_palw_active(0));
         assert_eq!(p.palw_activation_daa_score, 0);
         assert!(p.palw_algo4_accept);
         assert!(!p.skip_proof_of_work);
-        // 2026-07-30 migration: testnet-20 is now the PUBLIC PALW testnet (superseding testnet-200),
+        // 2026-08-01 migration: deprecated nets must not be publicly discovered — the public seed
+        // names resolve testnet-21 now.
+        assert!(p.dns_seeders.is_empty(), "deprecated testnet-20 must not be publicly seeded after the testnet-21 migration");
+        // The historical thresholds stay what the (now-frozen) ledger was mined under.
+        let dns = p.dns_params.clone().unwrap();
+        assert_eq!(dns.required_work_depth, Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]));
+        assert_eq!(dns.required_stake_depth, StakeScore(5000));
+    }
+
+    /// ADR-0045 D3-b: `--testnet --netsuffix=21` selects the PCPB dispatch rehearsal preset
+    /// (`pcpb-palw`) — the compute-registry shape carried through the D3-b re-genesis train. The
+    /// first net whose entire ledger is minted under the LeafV2 rules: clauses 11/12 gate every
+    /// leaf at acceptance, clause 13 re-checks the binding at mint, and the PCPB windows (w/k/Δ)
+    /// are consensus params from block 0. THE live public net — the tripwire lives here now.
+    #[test]
+    fn pcpb_palw_network_selection() {
+        let net = NetworkId::with_suffix(NetworkType::Testnet, 21);
+        let p: Params = net.into();
+        assert_eq!(p.net, net);
+        assert_eq!(p.net.suffix, Some(21));
+        // Its OWN v5 genesis — a ledger distinct from testnet-20, staging, and every legacy identity.
+        assert_eq!(p.genesis.hash, crate::config::genesis::PCPB_PALW_GENESIS.hash);
+        assert_ne!(p.genesis.hash, COMPUTE_REGISTRY_PALW_PARAMS.genesis.hash);
+        assert_ne!(p.genesis.hash, STAGING_MAINNET_PALW_PARAMS.genesis.hash);
+        assert_ne!(p.genesis.hash, TESTNET_PARAMS.genesis.hash);
+        // D3-b changes the LEAF payload, never the header schema — still a Header-v5 genesis.
+        assert_eq!(p.genesis.version, crate::constants::PALW_COMPUTE_SET_HEADER_VERSION, "Header-v5 re-genesis (leaf moved, not the header)");
+        // Inherited compute-registry shape: fence open, PALW active, acceptance released, real PoW.
+        assert_eq!(p.palw_compute_registry_activation_daa_score, 0);
+        assert!(p.is_palw_active(0));
+        assert_eq!(p.palw_activation_daa_score, 0);
+        assert!(p.palw_algo4_accept);
+        assert!(!p.skip_proof_of_work);
+        // 2026-08-01 migration: testnet-21 is the PUBLIC PALW testnet (superseding testnet-20),
         // so it carries the public seeders.
-        assert_eq!(p.dns_seeders, TESTNET_20_DNS_SEEDERS);
+        assert_eq!(p.dns_seeders, TESTNET_21_DNS_SEEDERS);
+        // ADR-0045 D3-b — the PCPB windows are part of this net's consensus identity (they are
+        // exactly why D3-b could not land on testnet-20 in place). w ≥ Δ keeps the freshness
+        // window non-empty; the first mintable registered_epoch is k + Δ (= 4): the early epochs
+        // are structurally algo-4-empty, which is fail-closed, not a fault (design memo §10.2).
+        assert_eq!(p.palw_freshness_window_epochs, 6, "w — changing this is a re-genesis-class identity move");
+        assert_eq!(p.palw_snapshot_lag_epochs, 2, "k — changing this is a re-genesis-class identity move");
+        assert_eq!(p.palw_post_commit_delta_epochs, 2, "Δ — changing this is a re-genesis-class identity move");
+        assert!(p.palw_freshness_window_epochs >= p.palw_post_commit_delta_epochs, "w ≥ Δ (non-empty freshness window)");
         // TRIPWIRE (2026-07-30 testnet-200 halt): the DNS finality thresholds drive the beacon-seed
         // provenance, so changing them on THIS live public net breaks IBD replay of pre-change
         // history (see DnsParams::required_work_depth). If you must change them, RE-GENESIS onto a
-        // new suffix (as 200→20 did) and update these pins — do not edit them on a running net.
+        // new suffix (as 200→20 and 20→21 did) and update these pins — do not edit them on a
+        // running net.
         let dns = p.dns_params.clone().unwrap();
         assert_eq!(dns.required_work_depth, Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]), "changing this on the live public net breaks IBD replay — re-genesis instead");
         assert_eq!(dns.required_stake_depth, StakeScore(5000), "changing this on the live public net breaks IBD replay — re-genesis instead");
-        // TRIPWIRE, widened (2026-07-31): the two pins above name only the fields the testnet-200
-        // halt happened to travel through. The hazard class is larger than those two — the v4
-        // `palw_beacon_seed` recurrence also consumes `palw_epoch_length_daa`, the beacon grace and
-        // quorum params, `max_block_mass`, the genesis hash, and TEN more `DnsParams` fields
-        // (attestation epoch/lag, the activation and min-active gates, the stake-quality floors, the
-        // mandatory-inclusion score, the shard-mass cap). Changing ANY of them on a live network
-        // re-derives seeds for already-mined history, so the whole consensus surface is pinned at
-        // once via `consensus_identity_hash` (it covers every field except `dns_seeders` and the
-        // derived f64 — see `consensus_identity_hash_tests`).
+        // 2026-08-01 bystander-wedge lesson, carried into the successor net from birth: the
+        // emergency Work margin is difficulty-denominated (`emergency_work_margin_for`) and the
+        // per-preset absolute addend must stay ZERO — a nonzero absolute re-arms the permanent
+        // dead-branch wedge at whichever difficulty makes it unreachable.
+        assert_eq!(dns.emergency_work_margin, BlueWorkType::ZERO, "the Work-margin addend must stay zero (bystander-wedge regression)");
+        // TRIPWIRE, widened (2026-07-31): the two threshold pins above name only the fields the
+        // testnet-200 halt happened to travel through. The hazard class is larger than those two —
+        // the v4 `palw_beacon_seed` recurrence also consumes `palw_epoch_length_daa`, the beacon
+        // grace and quorum params, `max_block_mass`, the genesis hash, the D3-b PCPB windows, and
+        // TEN more `DnsParams` fields (attestation epoch/lag, the activation and min-active gates,
+        // the stake-quality floors, the mandatory-inclusion score, the shard-mass cap). Changing
+        // ANY of them on a live network re-derives seeds (or re-scopes clause windows) for
+        // already-mined history, so the whole consensus surface is pinned at once via
+        // `consensus_identity_hash` (it covers every field except `dns_seeders` and the derived
+        // f64 — see `consensus_identity_hash_tests`).
         //
-        // Tripped this assert? That is the tripwire working, not a stale test. testnet-20 is a LIVE
+        // Tripped this assert? That is the tripwire working, not a stale test. testnet-21 is a LIVE
         // public network, so pick one and say which in the commit message:
         //   (a) the change is behind a FUTURE DAA activation score — replay of pre-fence history is
         //       byte-identical, so it is safe: update the pin below;
         //   (b) the change is unconditional — it silently invalidates mined history. RE-GENESIS onto
-        //       a new suffix (as 200→20 did) and pin the new preset instead. Never edit in place.
+        //       a new suffix (as 200→20 and 20→21 did) and pin the new preset instead. Never edit
+        //       in place.
         //   (c) the change touches ONLY fork-choice policy — a field read exclusively by
         //       `dns_reorg_allows` at live sink-selection time (today: the emergency reorg margins),
         //       never by block validity, `is_dns_confirmed`/anchor progression, or the beacon-seed
@@ -2196,10 +2317,10 @@ mod palw_network_tests {
         // getInfo, and kaspad logs it at startup.
         assert_eq!(
             p.consensus_identity_hash().to_string(),
-            "f62a610addd616086173456c11ce2164a045e2f03aca3cf1efdc16e9a54b22cd8808d6e101bc16c3da7efa9cd75d06dbb0059b53269cb9443b7ed469beea9b57",
+            "1efdbdaba9953c4f815a8ff5e44d46f04761f5dad92629c8dc45ccd875a1b34e2ddb3cd6319e809df4c2309b48ae236bcd35626a3c428a02382f1f15d7f83c45",
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
         );
-        // Every OTHER preset keeps the fence closed.
+        // Every preset OUTSIDE the compute-registry lineage keeps the fence closed.
         for other in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, DEVNET_PARAMS, DEVNET_PALW_PARAMS, SIMNET_PARAMS]
         {
             assert_eq!(other.palw_compute_registry_activation_daa_score, u64::MAX);
@@ -2261,8 +2382,12 @@ mod palw_network_tests {
         // seeds resolve testnet-20 (compute-registry-palw).
         assert!(p.dns_seeders.is_empty(), "deprecated testnet-200 must not be publicly discovered after the testnet-20 migration");
         assert_eq!(
-            COMPUTE_REGISTRY_PALW_PARAMS.dns_seeders, TESTNET_20_DNS_SEEDERS,
-            "testnet-20 is the public PALW testnet after the migration"
+            PCPB_PALW_PARAMS.dns_seeders, TESTNET_21_DNS_SEEDERS,
+            "testnet-21 is the public PALW testnet after the 2026-08-01 migration"
+        );
+        assert!(
+            COMPUTE_REGISTRY_PALW_PARAMS.dns_seeders.is_empty(),
+            "deprecated testnet-20 must not be publicly discovered after the testnet-21 migration"
         );
         assert!(TESTNET_PARAMS.dns_seeders.is_empty(), "retired testnet-10 must not resolve public seeds on port 26211");
         assert!(MAINNET_PARAMS.dns_seeders.is_empty(), "unlaunched mainnet must not reuse testnet seed names");
@@ -2326,6 +2451,17 @@ mod palw_network_tests {
                 // re-derived `audit_sample_root` a fixed empty-vector constant, so any certificate
                 // declaring that constant would pass SAMPLE-01 vacuously — enforcement without a property.
                 assert_ne!(p.palw_audit_sample_size, 0, "{name} activates PALW with a ZERO audit sample size");
+                // ADR-0045 D3-b — the PCPB windows must satisfy the PalwParams invariants on an
+                // activated preset: `k ≥ 1` and `Δ ≥ 1` (a zero lag/offset would resolve the snapshot
+                // or draw beacon AT the anchor epoch — known material, grindable B selection), and
+                // `w ≥ Δ` (or the freshness window `anchor+Δ ≤ registered ≤ issued+w` is empty and
+                // every honest leaf is rejected — the P1-7 failure shape).
+                assert!(p.palw_snapshot_lag_epochs >= 1, "{name} activates PALW with a ZERO snapshot lag (k)");
+                assert!(p.palw_post_commit_delta_epochs >= 1, "{name} activates PALW with a ZERO post-commit offset (Δ)");
+                assert!(
+                    p.palw_freshness_window_epochs >= p.palw_post_commit_delta_epochs,
+                    "{name} activates PALW with w < Δ — the freshness window is empty and every honest leaf dies"
+                );
             }
         }
         // Exactly three presets activate PALW (ADR-0048 added the staging re-genesis); the other four

@@ -77,16 +77,138 @@ pub enum AuditError {
     QuorumNotReached { num: u16, den: u16 },
     #[error("borsh encoding failed")]
     Encode,
+    #[error("checked leaf indices must be strictly ascending and unique")]
+    NonCanonicalCheckedLeaves,
+    #[error("a checked leaf index is outside the batch's {leaf_count} leaves")]
+    CheckedLeafOutOfRange { leaf_count: u32 },
+    #[error("there are no leaves to audit")]
+    NoLeavesToAudit,
+    #[error("the beacon selected an empty sample")]
+    EmptySample,
+    /// The executor could not decide a sampled leaf. Fail-closed: an auditor that cannot check a
+    /// leaf must not sign a verdict covering it.
+    #[error("leaf {leaf_index} could not be audited: {reason}")]
+    Inconclusive { leaf_index: u32, reason: String },
 }
 
-/// One auditor's identity + verdict on a batch. `key` is the auditor's ML-DSA-87 validator key (its
-/// bond's key); `bond` the DNS bond outpoint whose stake weights the vote; `pass` the sampled verdict;
-/// `checked_leaf_bitmap_root` the commitment to WHICH leaves this auditor sampled (design §10.1).
+/// One auditor's IDENTITY. `key` is the auditor's ML-DSA-87 validator key (its bond's key); `bond`
+/// the DNS bond outpoint whose stake weights the vote.
+///
+/// **The verdict is deliberately NOT here.** It used to be: this struct carried `pass: bool` and
+/// `checked_leaf_bitmap_root: Hash64`, and [`sign_vote`] signed whatever the caller put in them.
+/// Every signature and every quorum tally downstream was therefore real while the AUDIT behind it
+/// was whatever the caller asserted — the operator CLI's `--verdict pass` flag being the honest
+/// admission of that. A verdict now has to come from [`execute_audit_round`], which is the only
+/// constructor of [`AuditVerdict`], so "sign a pass" and "run the audit" are no longer separable
+/// at this layer.
 pub struct Auditor {
     pub key: ValidatorKey,
     pub bond: TransactionOutpoint,
-    pub pass: bool,
-    pub checked_leaf_bitmap_root: Hash64,
+}
+
+/// Keyed domain for the `checked_leaf_bitmap_root` commitment. Producer-side: consensus signs this
+/// value into the vote but never re-derives it, so the canonical form is defined here, once, rather
+/// than left to each caller to invent (which is how a typed-in hex string became acceptable).
+pub const PALW_CHECKED_LEAF_BITMAP_DOMAIN: &[u8] = b"misaka-palw-checked-leaf-bitmap-v1";
+
+/// The seam an auditor's execution backend implements: given one beacon-selected leaf, decide
+/// whether it reproduces.
+///
+/// A real implementation fetches the leaf's receipt DA object, runs the Compute Set's runtime
+/// plugin over it, and compares the replayed MatchProjection against the leaf's commitments. That
+/// backend is the runtime-plugin slice; what this trait fixes NOW is the shape — a verdict is the
+/// return value of something that was handed the leaf, not a flag beside it.
+pub trait LeafAuditExecutor {
+    /// `Ok(true)` = this leaf reproduced, `Ok(false)` = it did not, `Err` = the auditor could not
+    /// reach a conclusion (unavailable DA, plugin failure). An inconclusive leaf aborts the round:
+    /// signing "pass" over leaves you could not check is precisely the failure being closed.
+    fn audit_leaf(&mut self, leaf_index: u32, leaf: &PalwPublicLeafV1) -> Result<bool, String>;
+}
+
+/// One auditor's verdict over a round — **constructible only by [`execute_audit_round`]**.
+///
+/// The private fields are the point: outside this module there is no way to name a verdict that no
+/// execution produced. `checked_leaf_bitmap_root` in particular is now DERIVED from the leaves the
+/// executor was actually run over, so it can no longer disagree with the verdict it accompanies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuditVerdict {
+    pass: bool,
+    checked_leaf_bitmap_root: Hash64,
+    checked_leaf_indices: Vec<u32>,
+    rejected_leaf_indices: Vec<u32>,
+}
+
+impl AuditVerdict {
+    pub fn passes(&self) -> bool {
+        self.pass
+    }
+    pub fn checked_leaf_bitmap_root(&self) -> Hash64 {
+        self.checked_leaf_bitmap_root
+    }
+    /// Ascending, unique — exactly the beacon-selected sample this auditor executed.
+    pub fn checked_leaf_indices(&self) -> &[u32] {
+        &self.checked_leaf_indices
+    }
+    pub fn rejected_leaf_indices(&self) -> &[u32] {
+        &self.rejected_leaf_indices
+    }
+}
+
+/// The canonical commitment over WHICH leaves an auditor checked: `leaf_count` followed by the
+/// little-endian bitmap (bit `i` = leaf `i` checked), keyed under
+/// [`PALW_CHECKED_LEAF_BITMAP_DOMAIN`]. `checked` must be ascending-unique and in range.
+pub fn checked_leaf_bitmap_root(leaf_count: u32, checked: &[u32]) -> Result<Hash64, AuditError> {
+    if checked.windows(2).any(|w| w[0] >= w[1]) {
+        return Err(AuditError::NonCanonicalCheckedLeaves);
+    }
+    if checked.last().is_some_and(|&last| last >= leaf_count) {
+        return Err(AuditError::CheckedLeafOutOfRange { leaf_count });
+    }
+    let mut bitmap = vec![0u8; leaf_count.div_ceil(8) as usize];
+    for &index in checked {
+        bitmap[(index / 8) as usize] |= 1u8 << (index % 8);
+    }
+    let mut preimage = Vec::with_capacity(4 + bitmap.len());
+    preimage.extend_from_slice(&leaf_count.to_le_bytes());
+    preimage.extend_from_slice(&bitmap);
+    Ok(kaspa_hashes::blake2b_512_keyed(PALW_CHECKED_LEAF_BITMAP_DOMAIN, &preimage))
+}
+
+/// Run this auditor's audit over the round's BEACON-SELECTED sample and return the verdict.
+///
+/// The sample is re-derived with [`palw_deterministic_sample`] — the same primitive
+/// [`derive_audit_sample_root`] and the consensus verifier use — so an auditor cannot choose which
+/// leaves to look at, and the derived `checked_leaf_bitmap_root` commits to exactly that sample.
+/// A leaf the executor cannot conclude on is an error, never a silent pass.
+pub fn execute_audit_round(
+    prev_seed: &Hash64,
+    batch_id: &Hash64,
+    leaves: &[PalwPublicLeafV1],
+    sample_size: u32,
+    executor: &mut impl LeafAuditExecutor,
+) -> Result<AuditVerdict, AuditError> {
+    if leaves.is_empty() {
+        return Err(AuditError::NoLeavesToAudit);
+    }
+    let mut sampled = palw_deterministic_sample(prev_seed, batch_id, leaves.len() as u32, sample_size);
+    sampled.sort_unstable();
+    sampled.dedup();
+    if sampled.is_empty() {
+        return Err(AuditError::EmptySample);
+    }
+    let mut rejected = Vec::new();
+    for &index in &sampled {
+        let leaf = leaves.get(index as usize).ok_or(AuditError::CheckedLeafOutOfRange { leaf_count: leaves.len() as u32 })?;
+        if !executor.audit_leaf(index, leaf).map_err(|reason| AuditError::Inconclusive { leaf_index: index, reason })? {
+            rejected.push(index);
+        }
+    }
+    Ok(AuditVerdict {
+        pass: rejected.is_empty(),
+        checked_leaf_bitmap_root: checked_leaf_bitmap_root(leaves.len() as u32, &sampled)?,
+        checked_leaf_indices: sampled,
+        rejected_leaf_indices: rejected,
+    })
 }
 
 /// The shared audit-round facts every vote in a certificate binds to (design §10.1) and the
@@ -192,11 +314,11 @@ pub fn derive_audit_sample_root(prev_seed: &Hash64, batch_id: &Hash64, leaves: &
 /// context the audit-slice verifier checks. Binds the vote to the batch, the audit-beacon epoch, the
 /// beacon-selected `audit_sample_root`, the auditor's bond, which leaves it checked, and the exact
 /// certificate-level passed/rejected summary (SUMMARY-BIND V2).
-pub fn sign_vote(round: &AuditRound, auditor: &Auditor) -> PalwAuditorVoteV2 {
+pub fn sign_vote(round: &AuditRound, auditor: &Auditor, verdict: &AuditVerdict) -> PalwAuditorVoteV2 {
     let mut vote = PalwAuditorVoteV2 {
         bond_outpoint: auditor.bond,
-        vote: u8::from(auditor.pass),
-        checked_leaf_bitmap_root: auditor.checked_leaf_bitmap_root,
+        vote: u8::from(verdict.passes()),
+        checked_leaf_bitmap_root: verdict.checked_leaf_bitmap_root(),
         passed_leaf_count: round.passed_leaf_count,
         rejected_leaf_bitmap_root: round.rejected_leaf_bitmap_root,
         signature: Vec::new(),
@@ -296,11 +418,11 @@ pub fn assemble_certificate(
 /// the per-auditor [`sign_vote`] runs on each auditor's own machine in the network.
 pub fn run_audit_round(
     round: &AuditRound,
-    auditors: &[Auditor],
+    auditors: &[(Auditor, AuditVerdict)],
     selected_slate: &[PalwCredentialStake],
     quorum: QuorumPolicy,
 ) -> Result<AuditCertificate, AuditError> {
-    let votes: Vec<PalwAuditorVoteV2> = auditors.iter().map(|a| sign_vote(round, a)).collect();
+    let votes: Vec<PalwAuditorVoteV2> = auditors.iter().map(|(a, verdict)| sign_vote(round, a, verdict)).collect();
     assemble_certificate(round, votes, selected_slate, quorum)
 }
 
@@ -352,9 +474,32 @@ mod tests {
         }))
     }
 
-    /// A distinctly-seeded auditor keyed by its seed byte, bonded at `op(seed)`, voting `pass`.
-    fn auditor(seed: u8, pass: bool) -> Auditor {
-        Auditor { key: ValidatorKey::from_seed([seed; 32]), bond: op(seed), pass, checked_leaf_bitmap_root: h(seed ^ 0x5A) }
+    /// A distinctly-seeded auditor keyed by its seed byte, bonded at `op(seed)`.
+    fn auditor(seed: u8) -> Auditor {
+        Auditor { key: ValidatorKey::from_seed([seed; 32]), bond: op(seed) }
+    }
+
+    /// An executor with a fixed answer, for tests about quorum arithmetic rather than execution.
+    struct FixedExecutor(bool);
+    impl LeafAuditExecutor for FixedExecutor {
+        fn audit_leaf(&mut self, _leaf_index: u32, _leaf: &PalwPublicLeafV1) -> Result<bool, String> {
+            Ok(self.0)
+        }
+    }
+
+    /// Leaves whose only role here is to give the beacon a sample to select from.
+    fn audit_leaves(count: u32) -> Vec<PalwPublicLeafV1> {
+        (0..count).map(crate::registration::tests::golden_leaf).collect()
+    }
+
+    /// A verdict produced the only way one can be: by running a round.
+    fn verdict(pass: bool) -> AuditVerdict {
+        execute_audit_round(&h(0x01), &h(0x02), &audit_leaves(8), 4, &mut FixedExecutor(pass)).expect("round executes")
+    }
+
+    /// `(auditor, verdict)` pairs, the shape `run_audit_round` now takes.
+    fn audited(seeds: &[u8], pass: bool) -> Vec<(Auditor, AuditVerdict)> {
+        seeds.iter().map(|&s| (auditor(s), verdict(pass))).collect()
     }
 
     fn slate_from_stakes(stakes: &HashMap<TransactionOutpoint, u128>) -> Vec<PalwCredentialStake> {
@@ -430,7 +575,7 @@ mod tests {
     /// quorum is reached.
     #[test]
     fn independent_auditors_form_a_certificate_that_validates_verifies_and_reaches_quorum() {
-        let auditors = [auditor(0x11, true), auditor(0x22, true), auditor(0x33, true)];
+        let auditors = audited(&[0x11, 0x22, 0x33], true);
         // Bind the certificate to this exact slate, re-derived by the SEL-01 weighted selector (the same
         // one the consensus verifier uses) over a provider-bond view of the SAME batch's auditors.
         let manifest = certified_manifest();
@@ -453,11 +598,11 @@ mod tests {
             assert_eq!(vote.passed_leaf_count, r.passed_leaf_count);
             assert_eq!(vote.rejected_leaf_bitmap_root, r.rejected_leaf_bitmap_root);
             // votes are re-sorted in the cert; match each back to its auditor by bond.
-            let signer = auditors.iter().find(|x| x.bond == vote.bond_outpoint).expect("vote maps to an auditor");
+            let signer = auditors.iter().find(|x| x.0.bond == vote.bond_outpoint).expect("vote maps to an auditor");
             let digest = vote.signing_hash(NET, &r.batch_id, r.audit_beacon_epoch, &r.audit_sample_root);
             assert_eq!(
                 verify_mldsa87_with_context(
-                    signer.key.public_key(),
+                    signer.0.key.public_key(),
                     &digest.as_bytes(),
                     &vote.signature,
                     PALW_AUDITOR_V2_MLDSA87_CONTEXT
@@ -468,7 +613,7 @@ mod tests {
             );
             assert_ne!(
                 verify_mldsa87_with_context(
-                    signer.key.public_key(),
+                    signer.0.key.public_key(),
                     &digest.as_bytes(),
                     &vote.signature,
                     PALW_RETIRED_AUDITOR_V1_MLDSA87_CONTEXT
@@ -516,9 +661,9 @@ mod tests {
     /// stateless validator requires.
     #[test]
     fn votes_are_canonically_ordered_regardless_of_input() {
-        let auditors = [auditor(0x33, true), auditor(0x11, true), auditor(0x22, true)];
-        let stakes: HashMap<_, _> = auditors.iter().map(|a| (a.bond, 100u128)).collect();
-        let set_commit = auditor_set_commitment(&auditors.iter().map(|a| a.bond).collect::<Vec<_>>());
+        let auditors = audited(&[0x33, 0x11, 0x22], true);
+        let stakes: HashMap<_, _> = auditors.iter().map(|(a, _)| (a.bond, 100u128)).collect();
+        let set_commit = auditor_set_commitment(&auditors.iter().map(|(a, _)| a.bond).collect::<Vec<_>>());
         let ac = run_audit_round(&round(set_commit), &auditors, &slate_from_stakes(&stakes), QuorumPolicy { num: 2, den: 3 }).unwrap();
         // Strictly ascending by (transaction_id bytes, index).
         assert!(ac.cert.votes.windows(2).all(|w| cmp_bond(&w[0].bond_outpoint, &w[1].bond_outpoint) == std::cmp::Ordering::Less));
@@ -527,13 +672,13 @@ mod tests {
 
     #[test]
     fn certificate_assembly_rejects_votes_bound_to_another_summary() {
-        let auditors = [auditor(0x11, true), auditor(0x22, true), auditor(0x33, true)];
-        let stakes: HashMap<_, _> = auditors.iter().map(|a| (a.bond, 100u128)).collect();
-        let r = round(auditor_set_commitment(&auditors.iter().map(|a| a.bond).collect::<Vec<_>>()));
-        let mut votes: Vec<_> = auditors.iter().map(|auditor| sign_vote(&r, auditor)).collect();
+        let auditors = audited(&[0x11, 0x22, 0x33], true);
+        let stakes: HashMap<_, _> = auditors.iter().map(|(a, _)| (a.bond, 100u128)).collect();
+        let r = round(auditor_set_commitment(&auditors.iter().map(|(a, _)| a.bond).collect::<Vec<_>>()));
+        let mut votes: Vec<_> = auditors.iter().map(|(a, v)| sign_vote(&r, a, v)).collect();
         votes[0].passed_leaf_count -= 1;
         let err = assemble_certificate(&r, votes, &slate_from_stakes(&stakes), QuorumPolicy { num: 2, den: 3 }).unwrap_err();
-        assert_eq!(err, AuditError::VoteSummaryMismatch { bond: auditors[0].bond });
+        assert_eq!(err, AuditError::VoteSummaryMismatch { bond: auditors[0].0.bond });
     }
 
     /// Below quorum: a lone submitted PASS vote among a three-auditor selected slate (only 100 of 300
@@ -541,7 +686,7 @@ mod tests {
     #[test]
     fn omitted_selected_votes_do_not_shrink_the_producer_quorum_denominator() {
         // One passing auditor submits; two other selected auditors withhold.
-        let passing = auditor(0x11, true);
+        let passing = (auditor(0x11), verdict(true));
         let stakes: HashMap<_, _> = [(op(0x11), 100u128), (op(0x22), 100), (op(0x33), 100)].into_iter().collect();
         let r = round(auditor_set_commitment(&[op(0x11), op(0x22), op(0x33)]));
         // The producer uses all `stakes` entries as the selected-slate denominator:
@@ -551,12 +696,84 @@ mod tests {
         assert_eq!(err, AuditError::QuorumNotReached { num: 2, den: 3 });
     }
 
+    /// AUDIT-EXEC-01 — a verdict is what an EXECUTION returned, over the leaves the BEACON chose.
+    ///
+    /// The signature and the quorum arithmetic were always real; what was not real was the audit
+    /// behind them, because `pass` and `checked_leaf_bitmap_root` were caller-supplied fields on
+    /// `Auditor`. These assertions pin the properties that replaced them.
+    #[test]
+    fn a_verdict_can_only_come_from_executing_the_beacon_selected_sample() {
+        let leaves = audit_leaves(8);
+        let (seed, batch) = (h(0x01), h(0x02));
+
+        // The executor is handed exactly the beacon's sample — not a set the auditor chose — and
+        // the bitmap commits to that same sample rather than to a value supplied beside it.
+        struct Recording(Vec<u32>);
+        impl LeafAuditExecutor for Recording {
+            fn audit_leaf(&mut self, leaf_index: u32, _leaf: &PalwPublicLeafV1) -> Result<bool, String> {
+                self.0.push(leaf_index);
+                Ok(true)
+            }
+        }
+        let mut recorder = Recording(Vec::new());
+        let v = execute_audit_round(&seed, &batch, &leaves, 4, &mut recorder).unwrap();
+        let expected: Vec<u32> = {
+            let mut s = palw_deterministic_sample(&seed, &batch, leaves.len() as u32, 4);
+            s.sort_unstable();
+            s.dedup();
+            s
+        };
+        assert_eq!(recorder.0, expected, "the executor sees exactly the beacon's sample");
+        assert_eq!(v.checked_leaf_indices(), expected.as_slice());
+        assert_eq!(v.checked_leaf_bitmap_root(), checked_leaf_bitmap_root(leaves.len() as u32, &expected).unwrap());
+        assert!(v.passes());
+        assert!(v.rejected_leaf_indices().is_empty());
+
+        // One leaf that does not reproduce sinks the whole verdict, and names itself.
+        struct FailsLeaf(u32);
+        impl LeafAuditExecutor for FailsLeaf {
+            fn audit_leaf(&mut self, leaf_index: u32, _leaf: &PalwPublicLeafV1) -> Result<bool, String> {
+                Ok(leaf_index != self.0)
+            }
+        }
+        let failing = execute_audit_round(&seed, &batch, &leaves, 4, &mut FailsLeaf(expected[0])).unwrap();
+        assert!(!failing.passes());
+        assert_eq!(failing.rejected_leaf_indices(), &[expected[0]]);
+        // ...but it still commits to having checked the SAME sample: a rejecting auditor cannot
+        // quietly narrow what it looked at.
+        assert_eq!(failing.checked_leaf_bitmap_root(), v.checked_leaf_bitmap_root());
+
+        // An auditor that cannot reach a conclusion signs NOTHING. Fail-closed is the whole point:
+        // the pre-fix API let an operator answer `pass` for leaves it never fetched.
+        struct CannotFetch;
+        impl LeafAuditExecutor for CannotFetch {
+            fn audit_leaf(&mut self, _leaf_index: u32, _leaf: &PalwPublicLeafV1) -> Result<bool, String> {
+                Err("receipt DA unavailable".into())
+            }
+        }
+        assert!(matches!(execute_audit_round(&seed, &batch, &leaves, 4, &mut CannotFetch), Err(AuditError::Inconclusive { .. })));
+
+        // The bitmap commitment is a real function of WHICH leaves were checked.
+        assert_ne!(
+            checked_leaf_bitmap_root(8, &[0, 1]).unwrap(),
+            checked_leaf_bitmap_root(8, &[0, 2]).unwrap(),
+            "different samples must not share a commitment"
+        );
+        assert_ne!(
+            checked_leaf_bitmap_root(8, &[0, 1]).unwrap(),
+            checked_leaf_bitmap_root(9, &[0, 1]).unwrap(),
+            "leaf_count is bound, so a bitmap cannot be reinterpreted under another batch size"
+        );
+        assert_eq!(checked_leaf_bitmap_root(8, &[1, 1]), Err(AuditError::NonCanonicalCheckedLeaves));
+        assert_eq!(checked_leaf_bitmap_root(8, &[8]), Err(AuditError::CheckedLeafOutOfRange { leaf_count: 8 }));
+    }
+
     /// A reject vote (`vote = 0`) contributes no PASS stake; a slate that only rejects cannot certify.
     #[test]
     fn reject_votes_do_not_count_toward_quorum() {
-        let rejecting = [auditor(0x11, false), auditor(0x22, false)];
-        let stakes: HashMap<_, _> = rejecting.iter().map(|a| (a.bond, 100u128)).collect();
-        let r = round(auditor_set_commitment(&rejecting.iter().map(|a| a.bond).collect::<Vec<_>>()));
+        let rejecting = audited(&[0x11, 0x22], false);
+        let stakes: HashMap<_, _> = rejecting.iter().map(|(a, _)| (a.bond, 100u128)).collect();
+        let r = round(auditor_set_commitment(&rejecting.iter().map(|(a, _)| a.bond).collect::<Vec<_>>()));
         let err = run_audit_round(&r, &rejecting, &slate_from_stakes(&stakes), QuorumPolicy { num: 2, den: 3 }).unwrap_err();
         assert_eq!(err, AuditError::QuorumNotReached { num: 2, den: 3 });
     }
@@ -564,8 +781,8 @@ mod tests {
     /// A degenerate epoch chain is rejected before any certificate is emitted.
     #[test]
     fn degenerate_epoch_range_is_rejected() {
-        let a = auditor(0x11, true);
-        let stakes: HashMap<_, _> = [(a.bond, 100u128)].into_iter().collect();
+        let a = (auditor(0x11), verdict(true));
+        let stakes: HashMap<_, _> = [(a.0.bond, 100u128)].into_iter().collect();
         let bad = AuditRound { activation_epoch: 6, certificate_epoch: 6, ..round(h(0)) }; // certificate_epoch !< activation_epoch
         let err =
             run_audit_round(&bad, std::slice::from_ref(&a), &slate_from_stakes(&stakes), QuorumPolicy { num: 1, den: 1 }).unwrap_err();
@@ -718,13 +935,13 @@ mod tests {
         // (3) ...and BOTH values flow onto the actual certificate fields the verifier reads. Build a real
         //     quorum certificate over the SELECTED slate carrying the producer values, and assert the
         //     certificate carries exactly the pinned hex — the certificate, not just the helper output.
-        let auditors: Vec<Auditor> = slate
+        let auditors: Vec<(Auditor, AuditVerdict)> = slate
             .iter()
             .map(|member| {
                 let bond = member.representative;
                 // The slate bond's txid is h(cred) = [cred; 64]; key the auditor deterministically off it.
                 let cred = bond.transaction_id.as_byte_slice()[0];
-                Auditor { key: ValidatorKey::from_seed([cred; 32]), bond, pass: true, checked_leaf_bitmap_root: h(cred ^ 0x5A) }
+                (Auditor { key: ValidatorKey::from_seed([cred; 32]), bond }, verdict(true))
             })
             .collect();
         let r = AuditRound { audit_sample_root: sample_root, ..round(commitment) };

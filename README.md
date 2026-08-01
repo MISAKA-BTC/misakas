@@ -4,17 +4,18 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> Status: **`testnet-20` is the public testnet.** It inherits the ADR-0048 staging-mainnet PALW
+> Status: **`testnet-21` is the public testnet.** It inherits the ADR-0048 staging-mainnet PALW
 > shape — the audited-compute lane and algo-4 acceptance are active, unlisted peers are accepted —
 > and adds the ADR-MA **Compute Set registry, open from genesis** on a v5 genesis block. The MISAKA
-> DNS seed domains advertise testnet-20 peers on P2P port `26521`.
-> `testnet-200` is **deprecated**: it is kept compilable for operators still holding its ledger, but
-> it has no seeders and its replay is unsafe (see the migration note below). `testnet-10` is retired
-> from public operation and remains only as a compatibility preset.
+> DNS seed domains advertise testnet-21 peers on P2P port `26531`.
+> `testnet-20` and `testnet-200` are **deprecated**: kept compilable for operators still holding
+> their ledgers, but they have no seeders and their replay is unsafe under current rules (see the
+> migration notes below). `testnet-10` is retired from public operation and remains only as a
+> compatibility preset.
 >
 > PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined
 > network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`). The `testnet`/`mainnet`
-> parameter sets both use **two-dimensional** DNS-finality confirmation. testnet-20 keeps the
+> parameter sets both use **two-dimensional** DNS-finality confirmation. testnet-21 keeps the
 > staging-mainnet consensus shape (real PoW, non-inert anti-spam, full-scale depths) but lowers the
 > validator ENTRY floors to testnet scale — a **10 MSK** bond and **one** active validator — because
 > §17.3's validator quorum has to be mining-fundable within minutes of a fresh re-genesis. The
@@ -28,10 +29,11 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 network to join, the hardware that is actually supported, build, node, mining, validator, and an
 explicit list of what is *not* possible yet.
 
-**→ [docs/testnet-20-migration.md](docs/testnet-20-migration.md)** is the operator cutover note for
-the current public net: why testnet-200 was replaced, the new defaults and ports, and the fact that
-no prior testnet state can be carried across. (The earlier 10→200 note is kept as
-[docs/testnet-200-migration.md](docs/testnet-200-migration.md) for history.)
+**→ [docs/testnet-21-migration.md](docs/testnet-21-migration.md)** is the operator cutover note for
+the current public net: why testnet-20 was replaced (the ADR-0045 D3-b leaf re-genesis), the new
+defaults and ports, and the fact that no prior testnet state can be carried across. (The earlier
+notes are kept for history: [docs/testnet-20-migration.md](docs/testnet-20-migration.md) for
+200→20, [docs/testnet-200-migration.md](docs/testnet-200-migration.md) for 10→200.)
 
 **→ [docs/palw-llm-receipts.md](docs/palw-llm-receipts.md)** covers the other half — the PALW
 audited-compute side: the pinned Qwen3.6-35B-A3B model, issuing a `ComputeReceipt`, verifying one in
@@ -45,21 +47,21 @@ a separate process, and what a receipt does and does not prove. The runtime itse
 > [§8 of the participation guide](docs/testnet-participation.md#8-testnet-points-mtp); it takes one
 > key, one invitation, and an offline signature.
 
-**`testnet-20`** — the public PALW testnet. Peers are found automatically via the public DNS seeders:
+**`testnet-21`** — the public PALW testnet. Peers are found automatically via the public DNS seeders:
 
 ```bash
 git clone https://github.com/MISAKA-BTC/misakas
 cd misakas
 cargo build --release -p kaspad -p misaka-cli --bin misaka -p kaspa-pq-miner
-./target/release/misaka join -- --utxoindex --rpclisten-borsh=default   # --network defaults to testnet-20
+./target/release/misaka join -- --utxoindex --rpclisten-borsh=default   # --network defaults to testnet-21
 ./target/release/misaka node doctor                                     # ports, sync, versions, RPC surface
 ```
 
-If DNS is unavailable, dial a public peer explicitly (testnet-20 listens on `26521`):
+If DNS is unavailable, dial a public peer explicitly (testnet-21 listens on `26531`):
 
 ```bash
-./target/release/kaspad --testnet --netsuffix=20 \
-  --addpeer=95.111.236.186:26521 --utxoindex
+./target/release/kaspad --testnet --netsuffix=21 \
+  --addpeer=95.111.236.186:26531 --utxoindex
 ```
 
 `testnet-110` and `devnet-111` still ship `dns_seeders: &[]` and remain closed-mesh presets.
@@ -73,7 +75,7 @@ macOS (Apple Silicon and Intel), Linux (x86_64 and arm64) and Windows are all su
 GPU acceleration exists **only** in the optional, off-by-default PALW inference backend of the
 `misaka-palw` crate — `qwen-metal` for Apple Silicon and `qwen-cuda` for NVIDIA. It does **not**
 accelerate mining or block validation, and a default node build does not compile it. Metal and CUDA
-are the only GPU backends the crate exposes. On testnet-20, PALW and algo-4 acceptance are active;
+are the only GPU backends the crate exposes. On testnet-21, PALW and algo-4 acceptance are active;
 the repository includes receipt-v3 verification and the real-provider lifecycle path. Running a
 continuous GPU/LLM provider is still an operator deployment choice, not a requirement for ordinary
 nodes. The LLM side, the provider bond, and how to check both gates from a node are in
@@ -242,10 +244,10 @@ DNS hard-inclusion is deliberately liveness-gated: the hard mandatory attestatio
 
 ## Running a testnet node
 
-Start a misakas testnet node (network id `testnet-20`; PQ, DNS finality, PALW, algo-4 and the Compute Set registry are all active from genesis):
+Start a misakas testnet node (network id `testnet-21`; PQ, DNS finality, PALW, algo-4 and the Compute Set registry are all active from genesis):
 
 ```bash
-cargo run --release --bin kaspad -- --testnet --netsuffix=20 --utxoindex --rpclisten-borsh=default
+cargo run --release --bin kaspad -- --testnet --netsuffix=21 --utxoindex --rpclisten-borsh=default
 ```
 
 `=default` resolves to the network's standard loopback port, so you never have to memorize the
@@ -254,10 +256,10 @@ explorer backend) needs to connect locally.
 
 - To **join the public testnet**, the node discovers peers via the misakas DNS seeders
   (`seeder1.misakascan.com` / `seeder3.misakascan.com`) automatically — the same seed names, now
-  resolving testnet-20. **testnet-20's P2P port is `26521`** (testnet-200 used `26511`; each public
+  resolving testnet-21. **testnet-21's P2P port is `26531`** (testnet-200 used `26511`; each public
   net gets its own port so a node on the wrong suffix fails fast instead of cross-handshaking) —
   make sure it isn't blocked outbound. If discovery is slow, bootstrap explicitly against a public
-  node: `--addpeer=95.111.236.186:26521` — the address the seeders themselves advertise — (or
+  node: `--addpeer=95.111.236.186:26531` — the address the seeders themselves advertise — (or
   `--connect=…` to use only that peer).
   Block explorer: [misakascan.com](https://misakascan.com).
 - `--utxoindex` is required for wallet/validator funding lookups.
@@ -265,19 +267,19 @@ explorer backend) needs to connect locally.
   so the **miner needs no extra flag** — it connects over gRPC. **wRPC (Borsh / JSON) is off by
   default** and must be enabled with `--rpclisten-borsh` / `--rpclisten-json`; it is required by the
   CLI wallet and the `kaspa-pq-validator` sidecar (which speak wRPC, **not** gRPC).
-- **Connecting a wallet / RPC client — pick the right port.** Default **testnet-20** ports:
+- **Connecting a wallet / RPC client — pick the right port.** Default **testnet-21** ports:
   **gRPC** `26210` (protobuf over TCP, default-on at loopback), **wRPC Borsh** `27210`
   (the CLI wallet & validator transport, WebSocket — enable with `--rpclisten-borsh=default`),
   **wRPC JSON** `28210` (WebSocket — enable with `--rpclisten-json=default`). Mainnet uses
-  `26110/27110/28110`; devnet `26610/27610/28610`. (Only the P2P port differs between testnet-20
+  `26110/27110/28110`; devnet `26610/27610/28610`. (Only the P2P port differs between testnet-21
   and the deprecated testnet-200; the RPC ports are shared by every testnet suffix.)
   The `kaspa-pq` CLI wallet connects over **wRPC Borsh** — point it at `27210`, **not** the gRPC
   port `26210` (a wallet pointed at gRPC fails with `WebSocket protocol error: httparse err`
   or `WebSocket is not connected`, because gRPC is not a WebSocket). In the wallet REPL:
-  `server 127.0.0.1:27210` → `connect`. (P2P is a separate, non-RPC port: `26521`.)
+  `server 127.0.0.1:27210` → `connect`. (P2P is a separate, non-RPC port: `26531`.)
 - **Headless balance (no interactive wallet).** For scripting / monitoring, query a balance in one
   shot over wRPC:
-  `kaspa-pq-validator balance --node-rpc 127.0.0.1:27210 --address misakatest:q… [--address …] [--network testnet-20]`.
+  `kaspa-pq-validator balance --node-rpc 127.0.0.1:27210 --address misakatest:q… [--address …] [--network testnet-21]`.
   It prints `address <sompi> <MSK> MSK` per line (plus `TOTAL` for several) to stdout — connection /
   sync notes go to stderr, so `… balance --address misakatest:q… | awk '{print $2}'` yields just the
   sompi. The node must run `--utxoindex`.
@@ -286,7 +288,7 @@ explorer backend) needs to connect locally.
 Mine to a **64-byte** ML-DSA-87 (`misakatest:`) address — legacy 32-byte addresses are rejected:
 
 ```bash
-cargo run --release --bin kaspa-pq-miner -- --node-grpc 127.0.0.1:26210 --network-id testnet-20 \
+cargo run --release --bin kaspa-pq-miner -- --node-grpc 127.0.0.1:26210 --network-id testnet-21 \
   --blocks 0 --min-block-interval-ms 250 --pay-address <misakatest:...>
 ```
 
@@ -298,21 +300,21 @@ The `kaspa-pq-validator` sidecar connects to a local node over wRPC and attests 
 # 1. generate a validator key + print its funding address
 kaspa-pq-validator keygen --out val.seed --network testnet
 # 2. send funds to the printed funding address (mine to it, or transfer from another wallet)
-# 3. stake a bond. testnet-20's entry floor is 10 MSK = 1e9 sompi (testnet-200 kept the
+# 3. stake a bond. testnet-21's entry floor is 10 MSK = 1e9 sompi (testnet-200 kept the
 #    production 20,000,000 MSK floor; this net lowers ENTRY so a quorum is mining-fundable).
 #    Omit --fee to auto-size it (mass-based; the flat floor is too low for the 2592-byte pubkey).
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27210 --validator-key val.seed \
-  --amount 1000000000 --network testnet-20
+  --amount 1000000000 --network testnet-21
 # 4. run the validator daemon (attests every epoch while the bond is active)
 kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
-  --stake-bond <txid:index> --signed-epoch-db val.testnet-20.state --network testnet-20 --attest-poll-secs 3
+  --stake-bond <txid:index> --signed-epoch-db val.testnet-21.state --network testnet-21 --attest-poll-secs 3
 ```
 
-> Note: the funding/`run`/`bond` subcommands want the **full** network id (`testnet-20`); `keygen`'s `--network` takes the short form (`testnet`). Use a **fresh** `--signed-epoch-db` per network — reusing one across networks trips the anti-equivocation guard on overlapping epoch numbers.
+> Note: the funding/`run`/`bond` subcommands want the **full** network id (`testnet-21`); `keygen`'s `--network` takes the short form (`testnet`). Use a **fresh** `--signed-epoch-db` per network — reusing one across networks trips the anti-equivocation guard on overlapping epoch numbers.
 
 The validator attests the one current canonical-ready epoch per round; the round cadence is `--attest-poll-secs` (default **3 s**). Every misakas network runs at **10 BPS**, so an attestation epoch (`attestation_epoch_length_blue_score = 100`) is only ~10 s of wall-clock — the 3 s default keeps a single validator caught up on every network.
 
-Once enough stake has attested across the recent epochs, `getDnsConfirmation` reports `dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat THIS as DNS-final, not the pov-dependent `blockHash` sink). testnet-20 confirmation is **two-dimensional**: `WorkDepth ≥ 100` and `StakeDepth ≥ 5000` (inherited from the staging shape), with the validator-entry floors lowered to one validator and a 10 MSK bond. Per-block finality is queryable: `getDnsConfirmation` accepts an optional `blockHash` and answers whether that block is DNS-final (`blockIsDnsFinal` / `blockIsConfirmedAnchor`); the explorer's **DNS Finality** page lists the confirmed chain in order.
+Once enough stake has attested across the recent epochs, `getDnsConfirmation` reports `dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat THIS as DNS-final, not the pov-dependent `blockHash` sink). testnet-21 confirmation is **two-dimensional**: `WorkDepth ≥ 100` and `StakeDepth ≥ 5000` (inherited from the staging shape), with the validator-entry floors lowered to one validator and a 10 MSK bond. Per-block finality is queryable: `getDnsConfirmation` accepts an optional `blockHash` and answers whether that block is DNS-final (`blockIsDnsFinal` / `blockIsConfirmedAnchor`); the explorer's **DNS Finality** page lists the confirmed chain in order.
 
 ### Remote signer / HSM (optional, ADR-0015)
 

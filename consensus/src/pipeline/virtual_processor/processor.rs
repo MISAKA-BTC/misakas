@@ -948,6 +948,13 @@ pub struct VirtualStateProcessor {
     /// Search-availability fork-local state rows (0x3d-0x3f), the DA store's sibling.
     pub(super) palw_search_availability_store: Arc<RwLock<DbPalwSearchAvailabilityStore>>,
     pub(super) palw_pruned_frontier_store: Arc<RwLock<DbPalwPrunedFrontierStore>>,
+    /// ADR-0045 D3-b — the PCPB context stores (per-epoch provider snapshot history + A-commit
+    /// registry), reconciled inside `stage_palw_provider_bond_mutations`.
+    pub(super) palw_pcpb_store: Arc<crate::model::stores::palw_pcpb::DbPalwPcpbStore>,
+    /// ADR-0045 D3-b — the PCPB windows (`w`/`k`/`Δ`), mirrored from `Params`.
+    pub(super) palw_freshness_window_epochs: u64,
+    pub(super) palw_snapshot_lag_epochs: u64,
+    pub(super) palw_post_commit_delta_epochs: u64,
     pub(super) palw_epoch_length_daa: u64,
     /// kaspa-pq ADR-0040 §5.15.13 (G16): the batch-admission windows that DERIVE the paid-work walk
     /// bound. Held here (not re-read from params) so `palw_paid_work_window` and the body-coordinate
@@ -1170,6 +1177,10 @@ impl VirtualStateProcessor {
             palw_da_store: storage.palw_da_store.clone(),
             palw_search_availability_store: storage.palw_search_availability_store.clone(),
             palw_pruned_frontier_store: storage.palw_pruned_frontier_store.clone(),
+            palw_pcpb_store: storage.palw_pcpb_store.clone(),
+            palw_freshness_window_epochs: params.palw_freshness_window_epochs,
+            palw_snapshot_lag_epochs: params.palw_snapshot_lag_epochs,
+            palw_post_commit_delta_epochs: params.palw_post_commit_delta_epochs,
             palw_epoch_length_daa: params.palw_epoch_length_daa,
             palw_batch_admission: params.palw_batch_admission,
             palw_lane_difficulty: params.palw_lane_difficulty.clone(),
@@ -2964,7 +2975,13 @@ impl VirtualStateProcessor {
         // above, behind its own activation fence (`u64::MAX` on every shipped preset, so this
         // returns immediately everywhere today).
         if current != self.genesis.hash {
-            self.commit_palw_compute_registry_view(&mut batch, current, &acceptance_data, selected_parent_bond_view);
+            self.commit_palw_compute_registry_view(
+                &mut batch,
+                current,
+                &acceptance_data,
+                selected_parent_bond_view,
+                selected_parent_provider_bond_view,
+            );
         }
         // Search-availability rows commit in the SAME batch, with the identical link-vs-full write
         // reduction: an idle search state machine costs 64 bytes per chain block, never a duplicated
@@ -3067,16 +3084,52 @@ impl VirtualStateProcessor {
     /// slice, and folding an UNVERIFIED certificate would let a single operator key activate a
     /// set — exactly what §17.3 forbids. Until then no set can leave `Proposed`/get share, which
     /// fails closed in the safe direction.
+    /// ADR-MA §21.2 — the registry view carried by `selected_parent`, the point of view every
+    /// registry decision about `current` is relative to.
+    ///
+    /// An absent row is legal exactly when the parent sits below the activation fence (or is
+    /// genesis); a missing row ABOVE the fence is a local inconsistency, not a semantic state, so
+    /// it fail-stops rather than being blamed on the block. Shared by the §23.4 validation seam
+    /// (`verify_expected_utxo_state`) and the §21.2 commit fold below — the two must never
+    /// disagree about what governs, so they read through ONE function.
+    pub(super) fn palw_compute_registry_parent_view(
+        &self,
+        selected_parent: BlockHash,
+        current: BlockHash,
+    ) -> kaspa_consensus_core::palw_compute_set::PalwComputeRegistryViewV1 {
+        use crate::model::stores::palw_compute_registry::PalwComputeRegistryStoreReader;
+        match self.palw_compute_registry_store.view(selected_parent) {
+            Ok(Some(parent_view)) => (*parent_view).clone(),
+            Ok(None) => {
+                let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap_or_else(|store_error| {
+                    palw_overlay_commit_fail_stop(format!(
+                        "compute registry could not read SP DAA of {selected_parent}: {store_error}"
+                    ))
+                });
+                if selected_parent != self.genesis.hash && parent_daa >= self.palw_compute_registry_activation_daa_score {
+                    palw_overlay_commit_fail_stop(format!(
+                        "compute registry view missing for post-activation selected parent {selected_parent} of {current}"
+                    ));
+                }
+                kaspa_consensus_core::palw_compute_set::PalwComputeRegistryViewV1::new()
+            }
+            Err(store_error) => palw_overlay_commit_fail_stop(format!(
+                "compute registry view read failed for {selected_parent} while processing {current}: {store_error}"
+            )),
+        }
+    }
+
     fn commit_palw_compute_registry_view(
         &self,
         batch: &mut WriteBatch,
         current: BlockHash,
         acceptance_data: &AcceptanceData,
         selected_parent_bond_view: &ActiveBondView,
+        selected_parent_provider_bond_view: &ProviderBondView,
     ) {
-        use crate::model::stores::palw_compute_registry::PalwComputeRegistryStoreReader;
         use kaspa_consensus_core::palw_compute_set::{
-            AllocationGovernanceLimitsV1, PalwComputeRegistryEffect, PolicyGovernanceCapsV1, parse_palw_compute_registry,
+            AllocationGovernanceLimitsV1, PalwComputeRegistryEffect, PalwGovernanceActionV1, PolicyGovernanceCapsV1,
+            parse_palw_compute_registry,
         };
         if self.palw_compute_registry_activation_daa_score == u64::MAX {
             return;
@@ -3090,32 +3143,16 @@ impl VirtualStateProcessor {
         let selected_parent = self.ghostdag_store.get_selected_parent(current).unwrap_or_else(|store_error| {
             palw_overlay_commit_fail_stop(format!("compute registry commit could not read SP of {current}: {store_error}"))
         });
-        // Seed from the selected parent's carried view. An absent row is legal exactly when the
-        // parent sits below the activation fence (or is genesis); a missing row ABOVE the fence
-        // is a local inconsistency, not a semantic state.
-        let mut view = match self.palw_compute_registry_store.view(selected_parent) {
-            Ok(Some(parent_view)) => (*parent_view).clone(),
-            Ok(None) => {
-                let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap_or_else(|store_error| {
-                    palw_overlay_commit_fail_stop(format!(
-                        "compute registry commit could not read SP DAA of {selected_parent}: {store_error}"
-                    ))
-                });
-                if selected_parent != self.genesis.hash && parent_daa >= self.palw_compute_registry_activation_daa_score {
-                    palw_overlay_commit_fail_stop(format!(
-                        "compute registry view missing for post-activation selected parent {selected_parent} of {current}"
-                    ));
-                }
-                kaspa_consensus_core::palw_compute_set::PalwComputeRegistryViewV1::new()
-            }
-            Err(store_error) => palw_overlay_commit_fail_stop(format!(
-                "compute registry view read failed for {selected_parent} while committing {current}: {store_error}"
-            )),
-        };
+        let mut view = self.palw_compute_registry_parent_view(selected_parent, current);
         // Governed numbers: v0.1 initial values (§22.1/§22.2). Promoting them to Params fields is
         // part of the governance slice; they are consensus-inert until the fence opens anywhere.
         let caps = PolicyGovernanceCapsV1::default();
         let limits = AllocationGovernanceLimitsV1::default();
+        // REG-CAP-01 — the audit capacity actually present as of this block's SELECTED PARENT,
+        // measured over the same provider-bond population the committee sampler draws from. A set
+        // may only hold `Active` while this clears the governed gate; short capacity leaves it in
+        // Shadow, earning nothing, rather than shrinking the committee to fit.
+        let capacity = kaspa_consensus_core::palw::measure_auditor_capacity(selected_parent_provider_bond_view, current_daa);
         for merged in acceptance_data.iter() {
             let txs = match self.block_transactions_store.get(merged.block_hash) {
                 Ok(txs) => txs,
@@ -3153,7 +3190,10 @@ impl VirtualStateProcessor {
                     Err(decode_error) => {
                         // Shape was screened at tx validity; reaching here means rules drifted
                         // between admission and fold. Skip loudly rather than split.
-                        warn!("compute registry: accepted tx {} no longer parses at fold ({decode_error}); skipped", entry.transaction_id);
+                        warn!(
+                            "compute registry: accepted tx {} no longer parses at fold ({decode_error}); skipped",
+                            entry.transaction_id
+                        );
                         continue;
                     }
                 };
@@ -3196,33 +3236,52 @@ impl VirtualStateProcessor {
                             );
                         })
                     }
-                    PalwComputeRegistryEffect::PolicyUpdate(update) => {
-                        view.apply_policy(&update.policy, &caps, current_daa).map(|outcome| {
-                            if outcome == kaspa_consensus_core::palw_compute_set::PolicyRegistrationOutcome::Inserted {
-                                let policy_id = update.policy.policy_id();
-                                self.palw_compute_registry_store
-                                    .insert_policy_batch(batch, policy_id, &update.policy)
-                                    .unwrap_or_else(|store_error| {
-                                        palw_overlay_commit_fail_stop(format!(
-                                            "compute registry policy staging failed for {policy_id}: {store_error}"
-                                        ))
-                                    });
+                    PalwComputeRegistryEffect::Governed(envelope) => {
+                        // §17.4 — verify the embedded ML-DSA-87 validator quorum against the frozen
+                        // selected-parent DNS bond view BEFORE the view learns of the action, the
+                        // §17.3 activation-certificate posture. A failed attestation is an
+                        // admission rejection (warn + skip, view unchanged); only an authorised
+                        // action reaches `apply_policy` / `apply_plan` / `apply_halt`.
+                        crate::processes::palw::verify_palw_governance_envelope(
+                            &envelope,
+                            selected_parent_bond_view,
+                            self.palw_network_id,
+                            current_daa,
+                            self.palw_beacon_quorum_num,
+                            self.palw_beacon_quorum_den,
+                        )
+                        .and_then(|()| match &envelope.action {
+                            PalwGovernanceActionV1::PolicyUpdate(update) => {
+                                view.apply_policy(&update.policy, &caps, &capacity, current_daa).map(|outcome| {
+                                    if outcome == kaspa_consensus_core::palw_compute_set::PolicyRegistrationOutcome::Inserted {
+                                        let policy_id = update.policy.policy_id();
+                                        self.palw_compute_registry_store
+                                            .insert_policy_batch(batch, policy_id, &update.policy)
+                                            .unwrap_or_else(|store_error| {
+                                                palw_overlay_commit_fail_stop(format!(
+                                                    "compute registry policy staging failed for {policy_id}: {store_error}"
+                                                ))
+                                            });
+                                    }
+                                })
                             }
+                            PalwGovernanceActionV1::AllocationPlan(plan) => {
+                                view.apply_plan(plan, &limits, current_daa).map(|outcome| {
+                                    if outcome == kaspa_consensus_core::palw_compute_set::PlanRegistrationOutcome::Inserted {
+                                        self.palw_compute_registry_store.insert_plan_batch(batch, plan.plan_id, plan).unwrap_or_else(
+                                            |store_error| {
+                                                palw_overlay_commit_fail_stop(format!(
+                                                    "compute registry plan staging failed for {}: {store_error}",
+                                                    plan.plan_id
+                                                ))
+                                            },
+                                        );
+                                    }
+                                })
+                            }
+                            PalwGovernanceActionV1::EmergencyHalt(halt) => view.apply_halt(halt),
                         })
                     }
-                    PalwComputeRegistryEffect::AllocationPlan(plan) => view.apply_plan(&plan, &limits, current_daa).map(|outcome| {
-                        if outcome == kaspa_consensus_core::palw_compute_set::PlanRegistrationOutcome::Inserted {
-                            self.palw_compute_registry_store.insert_plan_batch(batch, plan.plan_id, &plan).unwrap_or_else(
-                                |store_error| {
-                                    palw_overlay_commit_fail_stop(format!(
-                                        "compute registry plan staging failed for {}: {store_error}",
-                                        plan.plan_id
-                                    ))
-                                },
-                            );
-                        }
-                    }),
-                    PalwComputeRegistryEffect::EmergencyHalt(halt) => view.apply_halt(&halt),
                 };
                 if let Err(rejection) = outcome {
                     warn!(
@@ -3504,11 +3563,22 @@ impl VirtualStateProcessor {
                         quorum_num: self.palw_audit_quorum_num,
                         quorum_den: self.palw_audit_quorum_den,
                     };
+                    // ADR-0045 D3-b — the clause-11/12 resolution context. Always `Some` on the
+                    // production path: an arm that cannot resolve context REJECTS (fail-closed), so
+                    // omitting this would not "skip PCPB", it would brick honest leaf chunks.
+                    let pcpb_ctx = crate::processes::palw::PalwPcpbAcceptanceCtx {
+                        pcpb_store: &self.palw_pcpb_store,
+                        network_id: self.palw_network_id,
+                        freshness_window_epochs: self.palw_freshness_window_epochs,
+                        snapshot_lag_epochs: self.palw_snapshot_lag_epochs,
+                        post_commit_delta_epochs: self.palw_post_commit_delta_epochs,
+                    };
                     let apply_result = crate::processes::palw::apply_palw_overlay_effect(
                         effect.clone(),
                         &content_stage,
                         &self.palw_beacon_store,
                         Some(&attest),
+                        Some(&pcpb_ctx),
                     );
                     // Payload/state-transition rejection is an inert overlay effect by design, but an
                     // infrastructure write failure is not a validity opinion. Continuing would commit
@@ -3708,6 +3778,26 @@ impl VirtualStateProcessor {
         current_label: BlockHash,
         selected_parent_bond_view: &ActiveBondView,
     ) -> Option<kaspa_consensus_core::palw::PalwBeaconStateV1> {
+        self.derive_palw_beacon_epoch_trace(cur_daa, selected_parent, current_label, selected_parent_bond_view)
+            .map(|(state, _closed)| state)
+    }
+
+    /// [`Self::derive_palw_beacon_state_core`] plus the epochs THIS block closed, in ascending
+    /// order — ADR-0045 D3-a's writer input.
+    ///
+    /// A wide mergeset can close several epochs at once, and the replay loop below already computes
+    /// each intermediate `R_E` (the recurrence demands it). Only the LAST one reaches the header,
+    /// so the skipped epochs' seeds existed nowhere durable — and PCPB may legitimately need one of
+    /// them, because a ticket binds to whichever epoch it was minted under, not to the epoch that
+    /// happened to be a boundary. Returning the whole trace from the SAME function the header
+    /// derivation uses is what keeps the history row and the header stamp from drifting.
+    pub(super) fn derive_palw_beacon_epoch_trace(
+        &self,
+        cur_daa: u64,
+        selected_parent: BlockHash,
+        current_label: BlockHash,
+        selected_parent_bond_view: &ActiveBondView,
+    ) -> Option<(kaspa_consensus_core::palw::PalwBeaconStateV1, Vec<(u64, kaspa_hashes::Hash64)>)> {
         use crate::model::stores::palw_beacon::PalwBeaconAccumViewV1;
         use kaspa_consensus_core::palw::derive_beacon_epoch_state;
         let epoch_len = self.palw_epoch_length_daa.max(1);
@@ -3737,7 +3827,7 @@ impl VirtualStateProcessor {
         // after), and threads `seed`/`degraded_epochs` through each step so the grace recurrence is
         // likewise exact. The loop is bounded: a block's DAA increment is bounded by its mergeset, so
         // `epoch_cur - prev.epoch` is small.
-        let state = if prev.as_ref().is_none_or(|s| epoch_cur > s.epoch) {
+        let (state, closed_epochs) = if prev.as_ref().is_none_or(|s| epoch_cur > s.epoch) {
             let (newly_confirmed_anchor, dns_healthy) = self.palw_dns_confirmation(selected_parent, selected_parent_bond_view);
             // DNS confirmation is monotonic along this fork-local selected-parent chain. If the
             // newest lag-ready candidate has not accumulated both depths yet, retain the parent's
@@ -3764,6 +3854,7 @@ impl VirtualStateProcessor {
             // No carried state ⇒ this is the first PALW block: derive only its own epoch.
             let first_epoch = prev.as_ref().map(|s| s.epoch + 1).unwrap_or(epoch_cur);
             let mut replayed = None;
+            let mut closed: Vec<(u64, kaspa_hashes::Hash64)> = Vec::new();
             for epoch in first_epoch..=epoch_cur {
                 let step = derive_beacon_epoch_state(
                     epoch,
@@ -3779,13 +3870,16 @@ impl VirtualStateProcessor {
                 );
                 seed = step.seed;
                 degraded = step.degraded_epochs;
+                closed.push((epoch, step.seed));
                 replayed = Some(step);
             }
-            replayed.expect("epoch range is non-empty: first_epoch <= epoch_cur")
+            (replayed.expect("epoch range is non-empty: first_epoch <= epoch_cur"), closed)
         } else {
-            (*prev.unwrap()).clone()
+            // No epoch boundary crossed: the parent's active state is carried unchanged and this
+            // block closes nothing, so it writes no history row.
+            ((*prev.unwrap()).clone(), Vec::new())
         };
-        Some(state)
+        Some((state, closed_epochs))
     }
 
     fn commit_palw_beacon_state(
@@ -3817,11 +3911,37 @@ impl VirtualStateProcessor {
         let epoch_cur = cur_daa / epoch_len;
 
         // The block's OWN beacon state (the same derivation UTXO validation authenticates the header
-        // `palw_beacon_seed` against — construction == validation).
-        let state = self
-            .derive_palw_beacon_state_value(current, selected_parent_bond_view)
+        // `palw_beacon_seed` against — construction == validation), plus the epochs it closed.
+        let (state, closed_epochs) = self
+            .derive_palw_beacon_epoch_trace(cur_daa, selected_parent, current, selected_parent_bond_view)
             .expect("a non-genesis active block has a derivable beacon state");
         self.palw_beacon_store.set_state_batch(batch, current, Arc::new(state)).unwrap();
+
+        // ADR-0045 D3-a — persist each closed epoch's `R_E` in the same WriteBatch, then drop rows
+        // that fell out of the retention window. The window is a function of the admission
+        // parameters (batch lifecycle + certificate-inclusion window + slack), so the store stays
+        // bounded by parameters rather than by chain length — the epoch-space form of the same
+        // "verification lookback lands inside retained territory" rule the paid-work walk obeys.
+        //
+        // This is the seed's VALUE, retained; prefix 242 holds the seed's MATERIAL and discards
+        // past epochs by design, which is why neither it nor the header walk (fails closed below
+        // the pruning point) nor the per-block state rows (deleted by pruning) can answer PCPB.
+        for (epoch, seed) in &closed_epochs {
+            self.palw_beacon_store.set_beacon_seed_batch(batch, *epoch, *seed).unwrap();
+        }
+        if !closed_epochs.is_empty() {
+            let window = kaspa_consensus_core::palw::palw_beacon_seed_history_window_epochs(
+                &self.palw_batch_admission,
+                self.palw_epoch_length_daa,
+                self.palw_freshness_window_epochs,
+            );
+            let floor = kaspa_consensus_core::palw::palw_beacon_seed_history_floor(epoch_cur, window);
+            for (epoch, _) in self.palw_beacon_store.beacon_seed_history().unwrap() {
+                if epoch < floor {
+                    self.palw_beacon_store.delete_beacon_seed_batch(batch, epoch).unwrap();
+                }
+            }
+        }
 
         // Only after R_E is frozen do this block's accepted E-2/E-1 operations enter the child view.
         let mut next_view = match self.palw_beacon_store.accum_view(selected_parent).unwrap() {
@@ -4400,9 +4520,156 @@ impl VirtualStateProcessor {
             .collect();
         let added: Vec<_> =
             chain_path.added.iter().copied().map(|block| (block, self.palw_provider_bond_mutations_for_chain_block(block))).collect();
-        let touched = reconcile_palw_provider_registry(&mut working, &removed, &added).unwrap_or_else(|invariant_error| {
+
+        // ADR-0045 D3-b — the provider-snapshot history writer lives INSIDE this reconciliation, and
+        // the added side is applied ONE CHAIN BLOCK AT A TIME, because this is the only coordinate
+        // where "the registry as of chain block b" is a pure function of the selected chain: the
+        // beacon writer (`commit_palw_beacon_state`) runs before this pass reconciles the same chain
+        // path, so deriving snapshots there would read last commit's registry, and nodes batching
+        // different numbers of chain blocks per virtual commit would derive DIFFERENT roots for the
+        // same epoch — a clause-0 consensus split. Interleaving here makes the derivation identical
+        // on every node regardless of commit batching.
+        //
+        // Phase 1: unwind the detached side in full.
+        let mut touched = reconcile_palw_provider_registry(&mut working, &removed, &[]).unwrap_or_else(|invariant_error| {
             palw_overlay_commit_fail_stop(format!("PALW provider-registry selected-chain reconciliation failed: {invariant_error}"))
         });
+
+        let epoch_len = self.palw_epoch_length_daa.max(1);
+        // A-commit registry deltas are reconciled alongside: `None` = delete the row, `Some(e)` =
+        // final row value. Point reads below see COMMITTED state (never this batch's queued writes),
+        // which is exactly why finals are computed in memory and written once at the end.
+        let mut acommit_finals: HashMap<Hash64, Option<u64>> = HashMap::new();
+        let acommit_current = |store: &crate::model::stores::palw_pcpb::DbPalwPcpbStore,
+                                   finals: &HashMap<Hash64, Option<u64>>,
+                                   anchor: &Hash64|
+         -> Option<u64> {
+            match finals.get(anchor) {
+                Some(v) => *v,
+                None => store.acommit_epoch(anchor).unwrap_or_else(|store_error| {
+                    palw_overlay_commit_fail_stop(format!("PALW A-commit registry read failed for {anchor}: {store_error}"))
+                }),
+            }
+        };
+        // Detached acceptances: a row whose epoch matches the detached block's epoch is unwound.
+        // (If the same anchor was ALSO accepted by a surviving block of the same epoch, the row is
+        // conservatively dropped too — fail-closed, self-healing on the next re-send; never stale.)
+        for (block, _) in &removed {
+            let block_daa = self.headers_store.get_daa_score(*block).unwrap_or_else(|store_error| {
+                palw_overlay_commit_fail_stop(format!("PALW PCPB writer could not resolve detached {block}: {store_error}"))
+            });
+            if block_daa < self.palw_activation_daa_score {
+                continue;
+            }
+            let block_epoch = block_daa / epoch_len;
+            for anchor in kaspa_consensus_core::palw::palw_acommit_anchors_from_accepted_txs(
+                &self.accepted_txs_of_chain_block_for_registry(*block, "PALW A-commit"),
+            ) {
+                if acommit_current(&self.palw_pcpb_store, &acommit_finals, &anchor) == Some(block_epoch) {
+                    acommit_finals.insert(anchor, None);
+                }
+            }
+        }
+
+        // Phase 2: apply the attached side block by block. BEFORE applying a block's own registry
+        // mutations, stage the snapshot commitment of every epoch that block CLOSES, derived from
+        // `working` as it stands — i.e. the registry exactly as the closing epoch left it. A block
+        // that closes several epochs at once (empty epochs) stages the same commitment for each,
+        // which is correct: no chain block sat between them, so no registry mutation did either.
+        let mut snapshot_rows: Vec<(
+            u64,
+            kaspa_consensus_core::palw::PalwSnapshotCommitment,
+            Vec<kaspa_consensus_core::palw::PalwProviderSnapshotEntry>,
+        )> = Vec::new();
+        for (block, mutations) in &added {
+            let block_daa = self.headers_store.get_daa_score(*block).unwrap_or_else(|store_error| {
+                palw_overlay_commit_fail_stop(format!("PALW PCPB writer could not resolve attached {block}: {store_error}"))
+            });
+            if block_daa >= self.palw_activation_daa_score && *block != self.genesis.hash {
+                let block_epoch = block_daa / epoch_len;
+                let sp = self.ghostdag_store.get_selected_parent(*block).unwrap_or_else(|store_error| {
+                    palw_overlay_commit_fail_stop(format!("PALW PCPB writer: no selected parent for {block}: {store_error}"))
+                });
+                let sp_daa = self.headers_store.get_daa_score(sp).unwrap_or(0).max(self.palw_activation_daa_score);
+                let sp_epoch = sp_daa / epoch_len;
+                if sp_epoch < block_epoch {
+                    let (commitment, entries) = self.derive_palw_provider_snapshot(&working, block_daa);
+                    for epoch in sp_epoch..block_epoch {
+                        snapshot_rows.push((epoch, commitment, entries.clone()));
+                    }
+                }
+                for anchor in kaspa_consensus_core::palw::palw_acommit_anchors_from_accepted_txs(
+                    &self.accepted_txs_of_chain_block_for_registry(*block, "PALW A-commit"),
+                ) {
+                    // First-accept-wins, kept at the EARLIEST epoch: clause 12's `row ≤ leaf` bound
+                    // is tightest with the earliest genuine acceptance.
+                    match acommit_current(&self.palw_pcpb_store, &acommit_finals, &anchor) {
+                        Some(existing) if existing <= block_epoch => {}
+                        _ => {
+                            acommit_finals.insert(anchor, Some(block_epoch));
+                        }
+                    }
+                }
+            }
+            touched.extend(
+                reconcile_palw_provider_registry(&mut working, &[], std::slice::from_ref(&(*block, mutations.clone())))
+                    .unwrap_or_else(|invariant_error| {
+                        palw_overlay_commit_fail_stop(format!(
+                            "PALW provider-registry selected-chain reconciliation failed: {invariant_error}"
+                        ))
+                    }),
+            );
+        }
+
+        // Stage the PCPB rows + sweep both stores below the retention floor at the new tip.
+        for (epoch, commitment, entries) in &snapshot_rows {
+            self.palw_pcpb_store.set_snapshot_batch(batch, *epoch, *commitment).unwrap_or_else(|store_error| {
+                palw_overlay_commit_fail_stop(format!("PALW snapshot history could not stage epoch {epoch}: {store_error}"))
+            });
+            // Producer aid (prefix 70): the entry set the commitment was built from. Same batch, so
+            // a node never serves entries that disagree with the root it committed.
+            self.palw_pcpb_store.set_snapshot_entries_batch(batch, *epoch, entries.clone()).unwrap_or_else(|store_error| {
+                palw_overlay_commit_fail_stop(format!("PALW snapshot entries could not stage epoch {epoch}: {store_error}"))
+            });
+        }
+        if let Some((tip, _)) = added.last() {
+            let tip_daa = self.headers_store.get_daa_score(*tip).unwrap_or(0);
+            if tip_daa >= self.palw_activation_daa_score {
+                let tip_epoch = tip_daa / epoch_len;
+                let window = kaspa_consensus_core::palw::palw_provider_snapshot_history_window_epochs(
+                    &self.palw_batch_admission,
+                    epoch_len,
+                    self.palw_freshness_window_epochs,
+                    self.palw_snapshot_lag_epochs,
+                );
+                let floor = kaspa_consensus_core::palw::palw_beacon_seed_history_floor(tip_epoch, window);
+                for (epoch, _) in self.palw_pcpb_store.snapshot_history().unwrap_or_else(|store_error| {
+                    palw_overlay_commit_fail_stop(format!("PALW snapshot history sweep scan failed: {store_error}"))
+                }) {
+                    if epoch < floor {
+                        self.palw_pcpb_store.delete_snapshot_batch(batch, epoch).unwrap_or_else(|store_error| {
+                            palw_overlay_commit_fail_stop(format!("PALW snapshot history sweep failed at {epoch}: {store_error}"))
+                        });
+                    }
+                }
+                for (anchor, epoch) in self.palw_pcpb_store.acommit_rows().unwrap_or_else(|store_error| {
+                    palw_overlay_commit_fail_stop(format!("PALW A-commit sweep scan failed: {store_error}"))
+                }) {
+                    if epoch < floor && !acommit_finals.contains_key(&anchor) {
+                        acommit_finals.insert(anchor, None);
+                    }
+                }
+            }
+        }
+        for (anchor, final_value) in &acommit_finals {
+            match final_value {
+                Some(epoch) => self.palw_pcpb_store.set_acommit_batch(batch, anchor, *epoch),
+                None => self.palw_pcpb_store.delete_acommit_batch(batch, anchor),
+            }
+            .unwrap_or_else(|store_error| {
+                palw_overlay_commit_fail_stop(format!("PALW A-commit registry could not stage {anchor}: {store_error}"))
+            });
+        }
 
         // Write only each touched outpoint's FINAL row. This avoids depending on whether the store
         // cache exposes earlier operations queued in this same RocksDB WriteBatch.
@@ -4542,6 +4809,35 @@ impl VirtualStateProcessor {
                 "PALW provider-registry read failed while seeding the virtual view: {store_error}"
             )),
         }))
+    }
+
+    /// ADR-0045 D3-b — derive the epoch snapshot commitment from a reconciled registry state (the
+    /// clause-0 "independently resolved" value's PRODUCER). Entries are the bonds `Active` at the
+    /// closing block's DAA score, mapped exactly as clause 12 verifies them: `provider_id` from the
+    /// bond OUTPOINT, `ml_dsa_pk_hash` from the owner credential, the bond's live collateral, and
+    /// the bond-committed reward-key root. Canonicalization (id sort, zero-bond exclusion, the
+    /// cumulative partition) is the builder's — producer and verifier share one derivation.
+    fn derive_palw_provider_snapshot(
+        &self,
+        working: &HashMap<TransactionOutpoint, PalwProviderBondRecord>,
+        pov_daa_score: u64,
+    ) -> (kaspa_consensus_core::palw::PalwSnapshotCommitment, Vec<kaspa_consensus_core::palw::PalwProviderSnapshotEntry>) {
+        let entries: Vec<kaspa_consensus_core::palw::PalwProviderSnapshotEntry> = working
+            .iter()
+            .filter(|(_, record)| kaspa_consensus_core::palw::is_provider_bond_active_at(record, pov_daa_score))
+            .map(|(outpoint, record)| kaspa_consensus_core::palw::PalwProviderSnapshotEntry {
+                provider_id: kaspa_consensus_core::palw::palw_provider_id(outpoint),
+                ml_dsa_pk_hash: record.owner_pubkey_hash,
+                bond_sompi: record.amount_sompi,
+                reward_script_commitment: record.reward_key_root,
+            })
+            .collect();
+        // The builder's canonical form (id-sorted, zero-bond excluded) is what the commitment is
+        // over, so the entry set persisted for producers is the builder's, not the raw registry
+        // scan — otherwise a producer would rebuild a different tree than the one committed.
+        let witnesses = kaspa_consensus_core::palw::palw_build_snapshot_witnesses(&entries);
+        let canonical: Vec<_> = witnesses.slots.iter().map(|slot| slot.entry.clone()).collect();
+        (witnesses.commitment, canonical)
     }
 
     /// The per-provider-bond acceptance floors — `(min_provider_bond_sompi, provider_unbond_floor_epochs)`
@@ -8046,6 +8342,58 @@ impl VirtualStateProcessor {
         }
 
         let compute_registry_snapshot = self.build_palw_compute_registry_pruning_snapshot(pruning_point, pruning_point_daa_score)?;
+        // ADR-0045 D3-a — carry the retained epoch-seed history so a pruned joiner can still
+        // re-derive `R_e` for epochs below its own pruning point. Trimmed to the window anchored at
+        // the boundary: the writer's own sweep already holds that invariant, and re-applying it
+        // here keeps a stale row from a wider historical window out of the transported payload.
+        let beacon_seed_history = if active {
+            let epoch_len = self.palw_epoch_length_daa.max(1);
+            let pp_epoch = pruning_point_daa_score / epoch_len;
+            let window =
+                kaspa_consensus_core::palw::palw_beacon_seed_history_window_epochs(&self.palw_batch_admission, epoch_len, self.palw_freshness_window_epochs);
+            let floor = kaspa_consensus_core::palw::palw_beacon_seed_history_floor(pp_epoch, window);
+            self.palw_beacon_store
+                .beacon_seed_history()
+                .map_err(|err| format!("beacon seed history read failed at {pruning_point}: {err}"))?
+                .into_iter()
+                .filter(|(epoch, _)| *epoch >= floor && *epoch <= pp_epoch)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // ADR-0045 D3-b — carry the retained PCPB context (per-epoch snapshot commitments + live
+        // A-commit registry rows) exactly like the seed history above, trimmed to the wider `+k`
+        // window anchored at the boundary. Without this a pruned joiner fails clause 12/13 closed
+        // on epochs its peers can resolve — a consensus split, not a degradation.
+        let (provider_snapshot_history, acommit_registry) = if active {
+            let epoch_len = self.palw_epoch_length_daa.max(1);
+            let pp_epoch = pruning_point_daa_score / epoch_len;
+            let window = kaspa_consensus_core::palw::palw_provider_snapshot_history_window_epochs(
+                &self.palw_batch_admission,
+                epoch_len,
+                self.palw_freshness_window_epochs,
+                self.palw_snapshot_lag_epochs,
+            );
+            let floor = kaspa_consensus_core::palw::palw_beacon_seed_history_floor(pp_epoch, window);
+            let snapshots: Vec<_> = self
+                .palw_pcpb_store
+                .snapshot_history()
+                .map_err(|err| format!("provider snapshot history read failed at {pruning_point}: {err}"))?
+                .into_iter()
+                .filter(|(epoch, _)| *epoch >= floor && *epoch <= pp_epoch)
+                .collect();
+            let mut anchors: Vec<(Hash64, u64)> = self
+                .palw_pcpb_store
+                .acommit_rows()
+                .map_err(|err| format!("a-commit registry read failed at {pruning_point}: {err}"))?
+                .into_iter()
+                .filter(|(_, epoch)| *epoch >= floor && *epoch <= pp_epoch)
+                .collect();
+            anchors.sort_unstable_by(|a, b| a.0.as_bytes().cmp(&b.0.as_bytes()));
+            (snapshots, anchors)
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let snapshot = PalwPruningPointSnapshotV1::try_new(PalwPruningPointSnapshotPayloadV1 {
             version: PALW_PRUNING_SNAPSHOT_VERSION,
             pruning_point,
@@ -8060,6 +8408,9 @@ impl VirtualStateProcessor {
             active_batches,
             provider_bonds: if active { self.provider_bonds_as_of(pruning_point_daa_score)? } else { Vec::new() },
             paid_work,
+            beacon_seed_history,
+            provider_snapshot_history,
+            acommit_registry,
         })
         .map_err(|err| format!("PALW pruning snapshot writer rejected {pruning_point}: {err}"))?;
         self.validate_palw_pruning_snapshot(
@@ -8101,6 +8452,30 @@ impl VirtualStateProcessor {
                 expected_pruning_point,
                 format!("paid-work bound {} does not match local bound {expected_bound}", payload.paid_work_window_daa),
             ));
+        }
+        // ADR-0045 D3-a — the carried epoch-seed history must be canonical, inside the window
+        // anchored at THIS boundary, and agree with the pruning point header's own stamp where it
+        // covers that epoch (the c==v clause: the row and the stamp are one derivation).
+        {
+            let epoch_len = self.palw_epoch_length_daa.max(1);
+            let window =
+                kaspa_consensus_core::palw::palw_beacon_seed_history_window_epochs(&self.palw_batch_admission, epoch_len, self.palw_freshness_window_epochs);
+            let pp_seed = self.headers_store.get_header(expected_pruning_point).ok().and_then(|header| {
+                (header.version >= kaspa_consensus_core::constants::PALW_HEADER_VERSION).then_some(header.palw_beacon_seed)
+            });
+            payload
+                .validate_beacon_seed_history(expected_daa_score / epoch_len, window, pp_seed)
+                .map_err(|err| PruningImportError::ImportedPalwSnapshotInvalid(expected_pruning_point, err.to_string()))?;
+            // ADR-0045 D3-b — the PCPB carries obey the wider (`+k`) snapshot window and canonical form.
+            let snapshot_window = kaspa_consensus_core::palw::palw_provider_snapshot_history_window_epochs(
+                &self.palw_batch_admission,
+                epoch_len,
+                self.palw_freshness_window_epochs,
+                self.palw_snapshot_lag_epochs,
+            );
+            payload
+                .validate_pcpb_carry(expected_daa_score / epoch_len, snapshot_window)
+                .map_err(|err| PruningImportError::ImportedPalwSnapshotInvalid(expected_pruning_point, err.to_string()))?;
         }
         let active_non_genesis = self.palw_is_active_at(expected_daa_score) && expected_pruning_point != self.genesis.hash;
         if active_non_genesis
@@ -8896,6 +9271,27 @@ impl VirtualStateProcessor {
             self.palw_spam_store
                 .insert_batch(batch, hash, state)
                 .map_err(|err| format!("spam support-row write staging {hash}: {err}"))?;
+        }
+        // ADR-0045 D3-a — import the carried epoch-seed history. Without this the joiner has no
+        // way to answer `R_e` for any epoch below its own pruning point, since every other source
+        // of that value is either pruned or deliberately forward-only.
+        for (epoch, seed) in &payload.beacon_seed_history {
+            self.palw_beacon_store
+                .set_beacon_seed_batch(batch, *epoch, *seed)
+                .map_err(|err| format!("beacon seed history write staging (epoch {epoch}): {err}"))?;
+        }
+        // ADR-0045 D3-b — import the two PCPB carries for the same reason: clause 12/13 must be
+        // answerable for epochs/anchors below the joiner's pruning point, or the joiner rejects
+        // mints its peers accept (a fail-closed consensus split).
+        for (epoch, commitment) in &payload.provider_snapshot_history {
+            self.palw_pcpb_store
+                .set_snapshot_batch(batch, *epoch, *commitment)
+                .map_err(|err| format!("provider snapshot history write staging (epoch {epoch}): {err}"))?;
+        }
+        for (anchor, epoch) in &payload.acommit_registry {
+            self.palw_pcpb_store
+                .set_acommit_batch(batch, anchor, *epoch)
+                .map_err(|err| format!("a-commit registry write staging: {err}"))?;
         }
         if let Some(da) = &payload.da_snapshot {
             let mut store = self.palw_da_store.write();
@@ -10389,6 +10785,9 @@ mod palw_pruning_spam_closure_tests {
             search_availability_snapshot: None,
             active_batches: vec![],
             provider_bonds: vec![],
+            beacon_seed_history: Vec::new(),
+            provider_snapshot_history: Vec::new(),
+            acommit_registry: Vec::new(),
             paid_work: vec![],
         })
         .unwrap();

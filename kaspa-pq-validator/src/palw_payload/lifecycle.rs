@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use borsh::BorshDeserialize;
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::dns_finality::{STAKE_VALIDATOR_PUBKEY_LEN, validator_id_from_pubkey};
@@ -24,7 +24,8 @@ use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed, parse_stake_bon
 use kaspa_rpc_core::{GetPalwAuditFactsRequest, api::rpc::RpcApi};
 use kaspa_txscript::verify_mldsa87_with_context;
 use misaka_palw_miner::audit::{
-    AuditCertificate, AuditRound, Auditor, BATCH_CERTIFICATE_SUBNETWORK_BYTE, QuorumPolicy, assemble_certificate, sign_vote,
+    AuditCertificate, AuditRound, Auditor, BATCH_CERTIFICATE_SUBNETWORK_BYTE, LeafAuditExecutor, QuorumPolicy, assemble_certificate,
+    execute_audit_round, sign_vote,
 };
 use misaka_palw_miner::registration::{
     BATCH_MANIFEST_SUBNETWORK_BYTE, BatchPolicy, LEAF_CHUNK_SUBNETWORK_BYTE, build_batch_manifest, build_leaf_chunk,
@@ -82,6 +83,12 @@ pub(super) struct LeafChunkPayloadArgs {
     #[arg(long)]
     manifest_file: PathBuf,
 
+    /// D3-b: raw Borsh `Vec<(u32, PalwLeafPcpbWitnessV1)>` — one PCPB witness per leaf index,
+    /// exported by the bridge's PCPB flow. A v3 chunk cannot be built without them: the acceptance
+    /// arm verifies clauses 11/12 against these witnesses BEFORE storing any leaf.
+    #[arg(long)]
+    pcpb_witness_file: PathBuf,
+
     /// Re-stamped `misaka.palw.leaf-set.v1` JSON emitted alongside the manifest.
     #[arg(long)]
     leaves_file: PathBuf,
@@ -118,15 +125,43 @@ pub(super) struct AuditFactsPayloadArgs {
     out: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum AuditVerdict {
-    Pass,
-    Reject,
+/// One leaf's outcome, as recorded by whatever actually re-executed it.
+///
+/// This file REPLACES a `--verdict pass|reject` flag plus a hand-typed
+/// `--checked-leaf-bitmap-root`. Those two let an auditor sign a batch-wide verdict without
+/// naming a single leaf, and let the bitmap commitment say anything at all; the vote was a real
+/// ML-DSA-87 signature over an assertion nobody had to make good on.
+///
+/// The file must cover EXACTLY the beacon-selected sample: `execute_audit_round` re-derives that
+/// sample and fails on any leaf this file omits, so the auditor cannot narrow what it answers for,
+/// and the bitmap is derived from the sample rather than supplied beside it.
+#[derive(Debug, Serialize, Deserialize)]
+struct LeafVerdictEntry {
+    leaf_index: u32,
+    /// True when re-executing this leaf reproduced its on-chain commitments.
+    reproduced: bool,
 }
 
-impl AuditVerdict {
-    fn passes(self) -> bool {
-        matches!(self, Self::Pass)
+/// The per-leaf audit results file (`--leaf-verdicts`), bound to the batch it was produced for so
+/// results cannot be carried across rounds.
+#[derive(Debug, Serialize, Deserialize)]
+struct LeafVerdictFile {
+    batch_id: Hash64,
+    audit_beacon_epoch: u64,
+    leaves: Vec<LeafVerdictEntry>,
+}
+
+/// Answers from [`LeafVerdictFile`]. A beacon-selected leaf with no entry is INCONCLUSIVE, which
+/// aborts the round — an auditor may not sign a verdict covering leaves it never reports on.
+struct RecordedLeafAudit {
+    results: std::collections::HashMap<u32, bool>,
+}
+
+impl LeafAuditExecutor for RecordedLeafAudit {
+    fn audit_leaf(&mut self, leaf_index: u32, _leaf: &PalwPublicLeafV1) -> Result<bool, String> {
+        self.results.get(&leaf_index).copied().ok_or_else(|| {
+            format!("--leaf-verdicts has no entry for beacon-selected leaf {leaf_index}; the file must cover the whole sample")
+        })
     }
 }
 
@@ -153,13 +188,11 @@ pub(super) struct AuditVotePayloadArgs {
     #[arg(long, value_parser = parse_stake_bond_ref)]
     auditor_bond: TransactionOutpoint,
 
-    /// Auditor verdict over the beacon-selected sample.
-    #[arg(long, value_enum)]
-    verdict: AuditVerdict,
-
-    /// Commitment to the exact leaf bitmap checked by this auditor (128 hex characters).
-    #[arg(long, value_parser = parse_hash64)]
-    checked_leaf_bitmap_root: Hash64,
+    /// `misaka.palw.leaf-verdicts.v1` JSON: one entry per BEACON-SELECTED leaf, recording whether
+    /// re-executing it reproduced its on-chain commitments. The batch-wide verdict and the
+    /// `checked_leaf_bitmap_root` are DERIVED from this — neither can be asserted directly.
+    #[arg(long)]
+    leaf_verdicts: PathBuf,
 
     /// Certificate-wide passed-leaf count this auditor independently approves (1..=manifest leaf count).
     #[arg(long)]
@@ -237,8 +270,9 @@ pub(super) fn batch_manifest_payload(args: BatchManifestPayloadArgs) -> Result<(
 pub(super) fn leaf_chunk_payload(args: LeafChunkPayloadArgs) -> Result<(), String> {
     let manifest: PalwBatchManifestV1 = read_borsh_file(&args.manifest_file, "manifest")?;
     let leaves = read_leaf_set(&args.leaves_file)?;
-    validate_manifest_and_leaves(args.network, &manifest, &leaves)?;
-    let (subnetwork_byte, payload) = build_leaf_chunk(manifest.batch_id, args.chunk_index, &leaves)
+    let witnesses = read_pcpb_witness_set(&args.pcpb_witness_file)?;
+    validate_manifest_and_leaves(args.network, &manifest, &leaves, Some(&witnesses))?;
+    let (subnetwork_byte, payload) = build_leaf_chunk(manifest.batch_id, args.chunk_index, &leaves, &witnesses)
         .map_err(|err| format!("cannot build leaf chunk {}: {err}", args.chunk_index))?;
     if subnetwork_byte != LEAF_CHUNK_SUBNETWORK_BYTE {
         return Err(format!(
@@ -294,8 +328,7 @@ pub(super) async fn audit_vote_payload(args: AuditVotePayloadArgs) -> Result<(),
         &facts,
         key,
         args.auditor_bond,
-        args.verdict,
-        args.checked_leaf_bitmap_root,
+        &args.leaf_verdicts,
         args.passed_leaf_count,
         args.rejected_leaf_bitmap_root,
     )?;
@@ -311,7 +344,8 @@ pub(super) async fn audit_vote_payload(args: AuditVotePayloadArgs) -> Result<(),
     println!("batch_id: {}", facts.batch_id);
     println!("audit_beacon_epoch: {}", facts.audit_beacon_epoch);
     println!("auditor_bond: {}", args.auditor_bond);
-    println!("verdict: {:?}", args.verdict);
+    // The verdict is printed by `build_audit_vote` as it is DERIVED, alongside the leaves it
+    // covers — there is no argument left to echo here.
     println!("passed_leaf_count: {}", vote.passed_leaf_count);
     println!("rejected_leaf_bitmap_root: {}", vote.rejected_leaf_bitmap_root);
     println!("next: transfer this vote to the certificate assembler without modifying its facts snapshot");
@@ -404,7 +438,7 @@ fn build_manifest_artifacts(
         .map_err(|err| format!("built manifest payload failed consensus validation: {err}"))?;
     let manifest: PalwBatchManifestV1 = decode_borsh(&payload, "built manifest")?;
     let restamped = restamp_leaves(manifest.batch_id, &leaves);
-    validate_manifest_and_leaves(network, &manifest, &restamped)?;
+    validate_manifest_and_leaves(network, &manifest, &restamped, None)?;
     Ok((manifest, payload, restamped))
 }
 
@@ -412,6 +446,11 @@ fn validate_manifest_and_leaves(
     network: PalwArtifactNetwork,
     manifest: &PalwBatchManifestV1,
     leaves: &[PalwPublicLeafV1],
+    // D3-b: chunk reconstruction needs the per-leaf PCPB witnesses (a v3 chunk carries them).
+    // Manifest-time callers run before the bridge has assembled evidence and pass `None`, which
+    // skips ONLY the chunk-reconstruction preflight — the real chunk is still fully validated at
+    // build time (`leaf_chunk_payload`) and at consensus acceptance.
+    pcpb_witnesses: Option<&std::collections::BTreeMap<u32, kaspa_consensus_core::palw::PalwLeafPcpbWitnessV1>>,
 ) -> Result<(), String> {
     let manifest_payload = borsh::to_vec(manifest).map_err(|err| format!("cannot encode manifest for validation: {err}"))?;
     validate_palw_overlay_payload(BATCH_MANIFEST_SUBNETWORK_BYTE, &manifest_payload)
@@ -459,8 +498,11 @@ fn validate_manifest_and_leaves(
     if root != manifest.leaf_root {
         return Err("leaf set does not open to manifest leaf_root".into());
     }
+    let Some(witnesses) = pcpb_witnesses else {
+        return Ok(());
+    };
     for chunk_index in 0..manifest.chunk_count {
-        let (subnetwork_byte, payload) = build_leaf_chunk(manifest.batch_id, chunk_index, leaves)
+        let (subnetwork_byte, payload) = build_leaf_chunk(manifest.batch_id, chunk_index, leaves, witnesses)
             .map_err(|err| format!("cannot reconstruct leaf chunk {chunk_index}: {err}"))?;
         if subnetwork_byte != LEAF_CHUNK_SUBNETWORK_BYTE {
             return Err(format!("chunk {chunk_index} constructor returned unexpected subnetwork byte 0x{subnetwork_byte:02x}"));
@@ -492,8 +534,7 @@ fn build_audit_vote(
     facts: &PalwAuditRoundFacts,
     key: ValidatorKey,
     auditor_bond: TransactionOutpoint,
-    verdict: AuditVerdict,
-    checked_leaf_bitmap_root: Hash64,
+    leaf_verdicts: &Path,
     passed_leaf_count: u32,
     rejected_leaf_bitmap_root: Hash64,
 ) -> Result<PalwAuditorVoteV2, String> {
@@ -514,8 +555,33 @@ fn build_audit_vote(
     {
         return Err(format!("validator key does not own selected representative bond {auditor_bond}"));
     }
+    // AUDIT-EXEC-01: the verdict is the OUTPUT of running the round over the beacon-selected
+    // sample, never an input beside it. `execute_audit_round` re-derives that sample with the same
+    // primitive consensus uses, so this file cannot answer for a sample of the auditor's choosing.
+    let text = std::fs::read_to_string(leaf_verdicts).map_err(|e| format!("read {}: {e}", leaf_verdicts.display()))?;
+    let recorded: LeafVerdictFile =
+        serde_json::from_str(&text).map_err(|e| format!("parse leaf verdicts {}: {e}", leaf_verdicts.display()))?;
+    if recorded.batch_id != facts.batch_id {
+        return Err(format!("--leaf-verdicts is for batch {}, this round is {}", recorded.batch_id, facts.batch_id));
+    }
+    if recorded.audit_beacon_epoch != facts.audit_beacon_epoch {
+        return Err(format!(
+            "--leaf-verdicts is for audit beacon epoch {}, this round is {}",
+            recorded.audit_beacon_epoch, facts.audit_beacon_epoch
+        ));
+    }
+    let mut executor =
+        RecordedLeafAudit { results: recorded.leaves.iter().map(|entry| (entry.leaf_index, entry.reproduced)).collect() };
+    let verdict =
+        execute_audit_round(&facts.previous_epoch_seed, &facts.batch_id, &facts.leaves, facts.sample_size as u32, &mut executor)
+            .map_err(|e| format!("audit round could not be executed: {e}"))?;
+    println!("audited_leaves: {:?}", verdict.checked_leaf_indices());
+    println!("rejected_leaves: {:?}", verdict.rejected_leaf_indices());
+    println!("verdict: {}", if verdict.passes() { "pass" } else { "reject" });
+    println!("checked_leaf_bitmap_root: {}", verdict.checked_leaf_bitmap_root());
+
     let round = audit_round(facts, passed_leaf_count, rejected_leaf_bitmap_root);
-    let vote = sign_vote(&round, &Auditor { key, bond: auditor_bond, pass: verdict.passes(), checked_leaf_bitmap_root });
+    let vote = sign_vote(&round, &Auditor { key, bond: auditor_bond }, &verdict);
     verify_vote_signature(facts, &vote)?;
     Ok(vote)
 }
@@ -625,7 +691,7 @@ fn validate_audit_facts(network: PalwArtifactNetwork, facts: &PalwAuditRoundFact
     if facts.batch_id != facts.manifest.batch_id || facts.manifest_hash != facts.manifest.content_id() {
         return Err("facts batch_id/manifest_hash do not bind to the supplied manifest".into());
     }
-    validate_manifest_and_leaves(network, &facts.manifest, &facts.leaves)?;
+    validate_manifest_and_leaves(network, &facts.manifest, &facts.leaves, None)?;
     validate_lifecycle(&facts.manifest, &facts.lifecycle)?;
 
     let admission = params.palw_batch_admission;
@@ -771,6 +837,23 @@ fn checked_leaf_bond_sum(leaves: &[PalwPublicLeafV1]) -> Result<u64, String> {
 
 fn compare_outpoint(a: &TransactionOutpoint, b: &TransactionOutpoint) -> std::cmp::Ordering {
     a.transaction_id.as_byte_slice().cmp(b.transaction_id.as_byte_slice()).then(a.index.cmp(&b.index))
+}
+
+/// D3-b: read the bridge-exported PCPB witness set — raw Borsh `Vec<(u32, witness)>`, strict
+/// (trailing bytes rejected), duplicate leaf indices rejected.
+fn read_pcpb_witness_set(
+    path: &Path,
+) -> Result<std::collections::BTreeMap<u32, kaspa_consensus_core::palw::PalwLeafPcpbWitnessV1>, String> {
+    let bytes = read_limited(path, "PCPB witness set", MAX_JSON_ARTIFACT_BYTES)?;
+    let rows: Vec<(u32, kaspa_consensus_core::palw::PalwLeafPcpbWitnessV1)> =
+        borsh::from_slice(&bytes).map_err(|err| format!("cannot decode PCPB witness set '{}': {err}", path.display()))?;
+    let mut map = std::collections::BTreeMap::new();
+    for (leaf_index, witness) in rows {
+        if map.insert(leaf_index, witness).is_some() {
+            return Err(format!("PCPB witness set '{}' has duplicate leaf index {leaf_index}", path.display()));
+        }
+    }
+    Ok(map)
 }
 
 fn read_leaf_set(path: &Path) -> Result<Vec<PalwPublicLeafV1>, String> {
@@ -937,6 +1020,21 @@ mod tests {
     use kaspa_consensus_core::palw_audit::PalwAuditSelectionFacts;
     use tempfile::tempdir;
 
+    /// Per-leaf audit results covering the whole batch, so the beacon-selected sample is always
+    /// answered for. Returns the file `build_audit_vote` reads. Kept in a leaked temp dir because
+    /// the returned path outlives the helper.
+    fn write_leaf_verdicts(facts: &PalwAuditRoundFacts, reproduced: bool) -> PathBuf {
+        let dir = tempdir().expect("temp dir").into_path();
+        let path = dir.join("leaf-verdicts.json");
+        let file = LeafVerdictFile {
+            batch_id: facts.batch_id,
+            audit_beacon_epoch: facts.audit_beacon_epoch,
+            leaves: (0..facts.leaves.len() as u32).map(|leaf_index| LeafVerdictEntry { leaf_index, reproduced }).collect(),
+        };
+        std::fs::write(&path, serde_json::to_string(&file).expect("serialize")).expect("write");
+        path
+    }
+
     fn h(byte: u8) -> Hash64 {
         Hash64::from_bytes([byte; 64])
     }
@@ -976,6 +1074,11 @@ mod tests {
             activation_epoch: 11,
             expiry_epoch: 17,
             leaf_bond_sompi: 0,
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: Hash64::from_bytes([0x7c; 64]),
+            assignment_proof_root: Hash64::from_bytes([0x7d; 64]),
+            dispatch_kind: 0, // BeaconAssigned (external sentinels)
         }
     }
 
@@ -989,15 +1092,50 @@ mod tests {
             build_manifest_artifacts(PalwArtifactNetwork::Testnet110, base_leaves(), 3, h(0x50), h(0x51)).unwrap();
         assert_eq!(validate_palw_overlay_payload(BATCH_MANIFEST_SUBNETWORK_BYTE, &manifest_payload), Ok(()));
         assert!(leaves.iter().all(|leaf| leaf.batch_id == manifest.batch_id));
-        validate_manifest_and_leaves(PalwArtifactNetwork::Testnet110, &manifest, &leaves).unwrap();
+        validate_manifest_and_leaves(PalwArtifactNetwork::Testnet110, &manifest, &leaves, None).unwrap();
 
-        let (_, chunk_payload) = build_leaf_chunk(manifest.batch_id, 0, &leaves).unwrap();
+        let witnesses: std::collections::BTreeMap<_, _> = {
+            use kaspa_consensus_core::palw::{
+                BeaconAssignedProof, PalwAssignmentInterval, PalwDispatchEvidence, PalwLeafPcpbWitnessV1, PalwMerkleMembership,
+                PalwProviderSnapshotEntry, SlotAssignmentWitness,
+            };
+            let th = |b: u8| Hash64::from_bytes([b; 64]);
+            let slot = |b: u8, lo: u128| SlotAssignmentWitness {
+                entry: PalwProviderSnapshotEntry {
+                    provider_id: th(b),
+                    ml_dsa_pk_hash: th(b.wrapping_add(1)),
+                    bond_sompi: 10,
+                    reward_script_commitment: th(b.wrapping_add(2)),
+                },
+                snapshot_membership: PalwMerkleMembership { index: 0, leaf: th(b), siblings: Vec::new() },
+                interval: PalwAssignmentInterval { provider_id: th(b), bond_sompi: 10, cumulative_lo: lo },
+                assignment_membership: PalwMerkleMembership { index: 0, leaf: th(b), siblings: Vec::new() },
+            };
+            leaves
+                .iter()
+                .map(|l| {
+                    (
+                        l.leaf_index,
+                        PalwLeafPcpbWitnessV1 {
+                            scheduler_job_id: th(0xe1),
+                            requester_credential: th(0xe2),
+                            request_commitment: th(0xe3),
+                            dispatch: PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof {
+                                slot_a: slot(0xe4, 0),
+                                slot_b: slot(0xe8, 10),
+                            }),
+                        },
+                    )
+                })
+                .collect()
+        };
+        let (_, chunk_payload) = build_leaf_chunk(manifest.batch_id, 0, &leaves, &witnesses).unwrap();
         assert_eq!(validate_palw_overlay_payload(LEAF_CHUNK_SUBNETWORK_BYTE, &chunk_payload), Ok(()));
         verify_chunk_membership(&manifest, &chunk_payload).unwrap();
 
         let mut changed = leaves;
         changed[0].receipt_da_root = h(0xee);
-        assert!(validate_manifest_and_leaves(PalwArtifactNetwork::Testnet110, &manifest, &changed).is_err());
+        assert!(validate_manifest_and_leaves(PalwArtifactNetwork::Testnet110, &manifest, &changed, None).is_err());
     }
 
     #[test]
@@ -1149,18 +1287,19 @@ mod tests {
         assert_eq!(decoded_facts.schema, AUDIT_FACTS_SCHEMA);
         assert_eq!(decoded_facts.facts, facts);
         assert_eq!(auditors.len(), 3);
+        // AUDIT-EXEC-01: the vote builder now DERIVES the verdict by executing the round, so the
+        // test supplies per-leaf results instead of asserting a batch-wide `pass`.
+        let leaf_verdicts = write_leaf_verdicts(&facts, true);
         let votes: Vec<_> = auditors
             .iter()
             .take(2)
-            .enumerate()
-            .map(|(index, (seed, bond))| {
+            .map(|(seed, bond)| {
                 build_audit_vote(
                     PalwArtifactNetwork::Testnet110,
                     &facts,
                     ValidatorKey::from_seed([*seed; 32]),
                     *bond,
-                    AuditVerdict::Pass,
-                    h(0xc0 + index as u8),
+                    &leaf_verdicts,
                     2,
                     Hash64::default(),
                 )
@@ -1182,8 +1321,7 @@ mod tests {
             &facts,
             ValidatorKey::from_seed([0xf0; 32]),
             auditors[0].1,
-            AuditVerdict::Pass,
-            h(1),
+            &leaf_verdicts,
             2,
             Hash64::default(),
         );
@@ -1193,6 +1331,7 @@ mod tests {
     #[test]
     fn certificate_summary_repackaging_is_rejected_by_vote_binding() {
         let (facts, auditors) = audit_fixture();
+        let leaf_verdicts = write_leaf_verdicts(&facts, true);
         let votes: Vec<_> = auditors
             .iter()
             .take(2)
@@ -1202,8 +1341,7 @@ mod tests {
                     &facts,
                     ValidatorKey::from_seed([*seed; 32]),
                     *bond,
-                    AuditVerdict::Pass,
-                    h(0xc0),
+                    &leaf_verdicts,
                     2,
                     Hash64::default(),
                 )
@@ -1226,8 +1364,7 @@ mod tests {
             &facts,
             ValidatorKey::from_seed([auditors[1].0; 32]),
             auditors[1].1,
-            AuditVerdict::Pass,
-            h(0xc0),
+            &leaf_verdicts,
             1,
             h(0xee),
         )
@@ -1306,6 +1443,7 @@ mod tests {
         live.inclusion_epoch = 7;
         ensure_frozen_round_matches(&file, &live).unwrap();
 
+        let leaf_verdicts = write_leaf_verdicts(&file, true);
         let votes = auditors
             .iter()
             .take(2)
@@ -1315,8 +1453,7 @@ mod tests {
                     &file,
                     ValidatorKey::from_seed([*seed; 32]),
                     *bond,
-                    AuditVerdict::Pass,
-                    h(0xc0),
+                    &leaf_verdicts,
                     2,
                     Hash64::default(),
                 )

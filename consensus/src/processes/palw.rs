@@ -122,6 +122,30 @@ pub enum PalwOverlayError {
     /// `content_id()`, and `batch_id == content_id()` is enforced on both arms — so writing someone
     /// else's `(batch_id, leaf_index)` costs a BLAKE2b-512 second preimage.
     LeafMembershipProofInvalid { leaf_index: u32 },
+    /// ADR-0045 D3-b: the chunk carries fewer PCPB witnesses than leaves. Same never-index-a-
+    /// caller-supplied-`Vec` rationale as [`PalwOverlayError::LeafProofCountMismatch`].
+    LeafPcpbWitnessCountMismatch { leaves: usize, witnesses: usize },
+    /// ADR-0045 D3-b clause 11: the freshness window `issued ≤ anchor ∧ anchor+Δ ≤ registered ∧
+    /// registered−issued ≤ w` fails for this leaf. All three epochs are content-sealed, so this is a
+    /// permanent property of the leaf, not a timing accident.
+    LeafChallengeStale { leaf_index: u32, issued_epoch: u64, anchor_epoch: u64, registered_epoch: u64 },
+    /// ADR-0045 D3-b clauses 11/12: a PCPB context read failed CLOSED — the epoch's beacon seed,
+    /// provider snapshot, or the A-commit anchor row is not resolvable in the retained window.
+    /// Substituting a live value here is precisely the grindable state D3-b forbids, so the leaf is
+    /// refused instead.
+    LeafPcpbContextUnresolvable { leaf_index: u32, epoch: u64, what: &'static str },
+    /// ADR-0045 D3-b clause 11: re-deriving the job challenge under `R_{issued_epoch}` from the
+    /// witness's preimage triple does not reproduce `receipt_v3_job_challenge` — the declared issue
+    /// epoch (and with it the whole freshness argument) is not real.
+    LeafChallengeMismatch { leaf_index: u32 },
+    /// ADR-0045 D3-b clause 12: the self arm's anchor is not on-chain at-or-before the leaf's
+    /// declared `a_commit_epoch` (`registry row ≤ declared` is the grind-killing bound: the draw
+    /// beacon `R_{declared+Δ}` must provably post-date the anchor's registration).
+    LeafACommitUnanchored { leaf_index: u32, declared_epoch: u64, registry_epoch: Option<u64> },
+    /// ADR-0045 D3-b clause 12: the dispatch evidence does not re-derive — wrong snapshot roots
+    /// (clause 0), a provider the draw did not select, a seat not matching the leaf's declared
+    /// bonds, a receipt not embedding `a_commit`, or a signature that does not verify.
+    LeafDispatchEvidenceInvalid { leaf_index: u32 },
     /// ADR-0040 P1-4 (BIND-05): the certificate's `manifest_hash` is not the content id of the manifest
     /// for the batch it names — i.e. it certifies a different manifest than the one on chain.
     CertificateManifestMismatch,
@@ -512,12 +536,11 @@ pub fn verify_compute_set_activation_certificate(
 
     // The frozen active bond set at the verification point-of-view: bond-granular, ascending by
     // outpoint — the exact fingerprint the author committed.
-    let mut active_bonds: Vec<_> =
-        bond_view.records().into_iter().filter(|bond| is_bond_active_at(bond, pov_daa_score)).collect();
-    active_bonds
-        .sort_by(|a, b| (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index)));
-    let commitment =
-        palw_activation_validator_set_commitment(&active_bonds).ok_or(reject("active bond set is not canonical"))?;
+    let mut active_bonds: Vec<_> = bond_view.records().into_iter().filter(|bond| is_bond_active_at(bond, pov_daa_score)).collect();
+    active_bonds.sort_by(|a, b| {
+        (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+    });
+    let commitment = palw_activation_validator_set_commitment(&active_bonds).ok_or(reject("active bond set is not canonical"))?;
     if commitment != cert.validator_set_commitment {
         return Err(reject("declared validator_set_commitment does not match the active bond set"));
     }
@@ -533,9 +556,8 @@ pub fn verify_compute_set_activation_certificate(
         if vote.vote > 1 {
             return Err(reject("vote value is not pass/reject"));
         }
-        let bond = bond_view
-            .active_bond_at(&vote.bond_outpoint, pov_daa_score)
-            .ok_or(reject("vote from an unknown or inactive bond"))?;
+        let bond =
+            bond_view.active_bond_at(&vote.bond_outpoint, pov_daa_score).ok_or(reject("vote from an unknown or inactive bond"))?;
         let digest = vote.signing_hash(network_id, cert);
         if !matches!(
             verify_mldsa87_with_context(
@@ -562,6 +584,101 @@ pub fn verify_compute_set_activation_certificate(
         return Err(reject("degenerate quorum parameters or empty validator set"));
     }
     if pass_stake.saturating_mul(quorum_den as u128) < total_stake.saturating_mul(quorum_num as u128) {
+        return Err(reject("stake-weighted quorum not reached"));
+    }
+    Ok(())
+}
+
+/// §17.4 — verifies the ML-DSA-87 validator-stake quorum authorising a governed registry mutation
+/// (policy revision / allocation plan / emergency halt) against the FROZEN selected-parent DNS bond
+/// view.
+///
+/// This is [`verify_compute_set_activation_certificate`] over the governance domain, and it exists
+/// for the same reason: before it, the three mutable actions reached `apply_policy` / `apply_plan`
+/// / `apply_halt` on nothing but "the transaction was accepted", so any user could retune
+/// `compute_work_scale`, move every Compute Set's block share, or halt an arbitrary set. Every
+/// declared quantity here is recomputed, never trusted.
+///
+/// The emergency halt deliberately shares the ordinary quorum rather than a lower "fast" threshold:
+/// a faster stop is a legitimate future refinement, but a weaker one is not a prerequisite for
+/// closing the unauthenticated path, and the same threshold is strictly the safer default.
+pub fn verify_palw_governance_envelope(
+    envelope: &kaspa_consensus_core::palw_compute_set::PalwGovernanceEnvelopeV1,
+    bond_view: &kaspa_consensus_core::dns_finality::ActiveBondView,
+    network_id: u32,
+    pov_daa_score: u64,
+    quorum_num: u16,
+    quorum_den: u16,
+) -> Result<(), kaspa_consensus_core::palw_compute_set::ComputeSetRegistryError> {
+    use kaspa_consensus_core::dns_finality::is_bond_active_at;
+    use kaspa_consensus_core::palw_compute_set::{
+        ComputeSetRegistryError, MAX_GOVERNANCE_ENVELOPE_VOTES, PALW_GOVERNANCE_MLDSA87_CONTEXT,
+        palw_activation_validator_set_commitment, palw_governance_votes_root,
+    };
+    use kaspa_txscript::verify_mldsa87_with_context;
+    let reject = |reason: &'static str| ComputeSetRegistryError::GovernanceAttestationInvalid(reason);
+
+    if envelope.votes.is_empty() {
+        return Err(reject("no embedded votes"));
+    }
+    if envelope.votes.len() > MAX_GOVERNANCE_ENVELOPE_VOTES {
+        return Err(reject("vote list exceeds the anti-explosion ceiling"));
+    }
+    let votes_root = palw_governance_votes_root(&envelope.votes).ok_or(reject("vote list is unsorted or has duplicates"))?;
+    if votes_root != envelope.votes_root {
+        return Err(reject("declared votes_root does not match the embedded votes"));
+    }
+
+    // The frozen active bond set at the verification point-of-view: bond-granular, ascending by
+    // outpoint — the exact fingerprint the author committed.
+    let mut active_bonds: Vec<_> = bond_view.records().into_iter().filter(|bond| is_bond_active_at(bond, pov_daa_score)).collect();
+    active_bonds.sort_by(|a, b| {
+        (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+    });
+    let commitment = palw_activation_validator_set_commitment(&active_bonds).ok_or(reject("active bond set is not canonical"))?;
+    if commitment != envelope.validator_set_commitment {
+        return Err(reject("declared validator_set_commitment does not match the active bond set"));
+    }
+    // Denominator is the ENTIRE active set, not the subset that voted — otherwise one withheld
+    // vote turns a lone approval into 1/1.
+    let total_stake = active_bonds.iter().fold(0u128, |total, bond| total.saturating_add(bond.amount as u128));
+    if total_stake != envelope.total_selected_stake {
+        return Err(reject("declared total_selected_stake does not match the active bond set"));
+    }
+
+    let mut approve_stake = 0u128;
+    for vote in &envelope.votes {
+        if vote.vote > 1 {
+            return Err(reject("vote value is not approve/reject"));
+        }
+        let bond =
+            bond_view.active_bond_at(&vote.bond_outpoint, pov_daa_score).ok_or(reject("vote from an unknown or inactive bond"))?;
+        let digest = vote.signing_hash(network_id, envelope);
+        if !matches!(
+            verify_mldsa87_with_context(
+                &bond.validator_pubkey,
+                digest.as_byte_slice(),
+                &vote.signature,
+                PALW_GOVERNANCE_MLDSA87_CONTEXT
+            ),
+            Ok(true)
+        ) {
+            return Err(reject("vote signature invalid"));
+        }
+        if vote.vote == 1 {
+            approve_stake = approve_stake.saturating_add(bond.amount as u128);
+        }
+    }
+    if approve_stake != envelope.approving_stake {
+        return Err(reject("declared approving_stake does not match the recomputed tally"));
+    }
+
+    // Same ADR-0040 P0-5 vacuity guards as the activation path: a zero total, zero numerator or
+    // zero denominator fails closed rather than vacuously passing.
+    if quorum_den == 0 || quorum_num == 0 || total_stake == 0 {
+        return Err(reject("degenerate quorum parameters or empty validator set"));
+    }
+    if approve_stake.saturating_mul(quorum_den as u128) < total_stake.saturating_mul(quorum_num as u128) {
         return Err(reject("stake-weighted quorum not reached"));
     }
     Ok(())
@@ -701,6 +818,30 @@ pub fn parse_palw_overlay(subnet_first_byte: u8, payload: &[u8]) -> Result<PalwO
     }
 }
 
+/// ADR-0045 D3-b — the resolution context the LeafChunk arm's clauses 11/12 verify against: the
+/// PCPB store pair (per-epoch provider snapshots + A-commit registry), the network id the job
+/// challenge binds, and the three windows. Bundled so a caller cannot supply half a context — and
+/// callers that HAVE no context (`None`) do not skip the clauses: the arm rejects every leaf chunk
+/// outright, because verification that cannot run is a refusal, never a waiver (fail-closed).
+pub struct PalwPcpbAcceptanceCtx<'a> {
+    pub pcpb_store: &'a crate::model::stores::palw_pcpb::DbPalwPcpbStore,
+    pub network_id: u32,
+    pub freshness_window_epochs: u64,
+    pub snapshot_lag_epochs: u64,
+    pub post_commit_delta_epochs: u64,
+}
+
+/// The production [`kaspa_consensus_core::palw::PalwMlDsaVerifier`] binding — the same
+/// txscript-backed ML-DSA-87 verify every other PALW signature check in this crate uses, so the
+/// clause-12 self arm inherits the identical portable/cross-CPU determinism argument.
+pub struct TxscriptPalwMlDsaVerifier;
+
+impl kaspa_consensus_core::palw::PalwMlDsaVerifier for TxscriptPalwMlDsaVerifier {
+    fn verify(&self, verification_key: &[u8], message: &[u8], context: &[u8], signature: &[u8]) -> bool {
+        matches!(kaspa_txscript::verify_mldsa87_with_context(verification_key, message, signature, context), Ok(true))
+    }
+}
+
 /// ADR-0039 §9.5 / §11.2 — apply a parsed overlay effect. **Batch-lifecycle effects persist only the
 /// immutable, CONTENT-ADDRESSED blob** (manifest / leaves / certificate) into the [`PalwStore`]; they do
 /// **not** write a mutable `batch_status`. The fork-dependent lifecycle (Registering → … → Active /
@@ -717,6 +858,7 @@ pub fn apply_palw_overlay_effect(
     store: &dyn PalwStore,
     beacon: &DbPalwBeaconStore,
     attest: Option<&PalwCertificateAttestationCtx<'_>>,
+    pcpb: Option<&PalwPcpbAcceptanceCtx<'_>>,
 ) -> Result<(), PalwOverlayError> {
     match effect {
         PalwOverlayEffect::BeaconCommit(c) => {
@@ -774,7 +916,7 @@ pub fn apply_palw_overlay_effect(
             // adversarial review drove a `version: 1` chunk carrying an otherwise-valid membership proof
             // straight into this function and had the leaf STORED. A v1 chunk has no `proofs` field by
             // construction, so accepting one here is precisely the lenient parse §5.15.4 forbids.
-            if c.version != kaspa_consensus_core::palw::PALW_LEAF_CHUNK_VERSION_V2 {
+            if c.version != kaspa_consensus_core::palw::PALW_LEAF_CHUNK_VERSION_V3 {
                 return Err(PalwOverlayError::LeafChunkUnsupportedVersion(c.version));
             }
             for (position, leaf) in c.leaves.iter().enumerate() {
@@ -881,6 +1023,136 @@ pub fn apply_palw_overlay_effect(
                 ) {
                     return Err(PalwOverlayError::LeafMembershipProofInvalid { leaf_index: leaf.leaf_index });
                 }
+
+                // ---- ADR-0045 D3-b — clauses 11/12, ALL enforced here, BEFORE `insert_leaf` ----
+                //
+                // This is the "全 clause 同時有効" decision made real: no leaf reaches the store
+                // without (11) a freshness window over content-sealed epochs AND a challenge that
+                // actually re-derives under `R_{issued}`, and (12) dispatch evidence that re-runs
+                // against the independently store-resolved snapshot + post-commit beacon, with the
+                // drawn providers bound to the leaf's declared seats. Every unresolvable context
+                // read is a rejection (fail-closed) — substituting live values is the grindable
+                // middle state D3-b forbids. A caller with no PCPB context cannot skip any of it:
+                // the whole chunk is refused.
+                let Some(ctx) = pcpb else {
+                    return Err(PalwOverlayError::LeafPcpbContextUnresolvable {
+                        leaf_index: leaf.leaf_index,
+                        epoch: leaf.receipt_v3_issued_epoch,
+                        what: "acceptance ran without a PCPB context",
+                    });
+                };
+                let witness = c.witnesses.get(position).ok_or(PalwOverlayError::LeafPcpbWitnessCountMismatch {
+                    leaves: c.leaves.len(),
+                    witnesses: c.witnesses.len(),
+                })?;
+                let issued = leaf.receipt_v3_issued_epoch;
+                let anchor = if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {
+                    leaf.a_commit_epoch
+                } else {
+                    issued
+                };
+                // Clause 11, pure half: issued ≤ anchor ∧ anchor+Δ ≤ registered ∧ registered−issued ≤ w.
+                if !kaspa_consensus_core::palw::palw_challenge_fresh(
+                    issued,
+                    anchor,
+                    leaf.registered_epoch,
+                    ctx.freshness_window_epochs,
+                    ctx.post_commit_delta_epochs,
+                ) {
+                    return Err(PalwOverlayError::LeafChallengeStale {
+                        leaf_index: leaf.leaf_index,
+                        issued_epoch: issued,
+                        anchor_epoch: anchor,
+                        registered_epoch: leaf.registered_epoch,
+                    });
+                }
+                // Clause 11, heavy half: the challenge must re-derive under R_{issued} from the
+                // witness's preimage triple — otherwise `issued` is a free declaration and the
+                // freshness window above binds nothing (cached-activation replay, audit H-10).
+                let issued_seed = beacon
+                    .beacon_seed_at(issued)
+                    .map_err(|_| PalwOverlayError::StoreError)?
+                    .ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                        leaf_index: leaf.leaf_index,
+                        epoch: issued,
+                        what: "issued-epoch beacon seed",
+                    })?;
+                let expected_challenge = kaspa_consensus_core::palw::palw_job_challenge(
+                    ctx.network_id,
+                    issued,
+                    &issued_seed,
+                    &witness.scheduler_job_id,
+                    &witness.requester_credential,
+                    &witness.request_commitment,
+                    leaf.shape_id,
+                );
+                if expected_challenge != leaf.receipt_v3_job_challenge {
+                    return Err(PalwOverlayError::LeafChallengeMismatch { leaf_index: leaf.leaf_index });
+                }
+                // Clause 12: resolve the anchor's epoch context (snapshot at anchor−k, draw beacon
+                // at anchor+Δ), check the self arm's on-chain ordering anchor, and re-run the
+                // dispatch evidence with the leaf's declared seats bound in.
+                let snapshot_epoch =
+                    anchor.checked_sub(ctx.snapshot_lag_epochs).ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                        leaf_index: leaf.leaf_index,
+                        epoch: anchor,
+                        what: "anchor predates the snapshot lag",
+                    })?;
+                let resolved = ctx
+                    .pcpb_store
+                    .snapshot_at(snapshot_epoch)
+                    .map_err(|_| PalwOverlayError::StoreError)?
+                    .ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                        leaf_index: leaf.leaf_index,
+                        epoch: snapshot_epoch,
+                        what: "provider snapshot",
+                    })?;
+                let draw_epoch =
+                    anchor.checked_add(ctx.post_commit_delta_epochs).ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                        leaf_index: leaf.leaf_index,
+                        epoch: anchor,
+                        what: "anchor+Δ overflows",
+                    })?;
+                let post_commit_beacon = beacon
+                    .beacon_seed_at(draw_epoch)
+                    .map_err(|_| PalwOverlayError::StoreError)?
+                    .ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                        leaf_index: leaf.leaf_index,
+                        epoch: draw_epoch,
+                        what: "post-commit beacon seed",
+                    })?;
+                if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {
+                    let registry_epoch =
+                        ctx.pcpb_store.acommit_epoch(&leaf.a_commit).map_err(|_| PalwOverlayError::StoreError)?;
+                    // `row ≤ declared`: the anchor was on-chain at-or-before the epoch whose `+Δ`
+                    // beacon draws B, so that beacon provably post-dates the commitment. (The leaf
+                    // cannot claim EARLIER than the row — that direction would let a late anchor
+                    // borrow an already-known beacon.)
+                    if !registry_epoch.is_some_and(|row| row <= leaf.a_commit_epoch) {
+                        return Err(PalwOverlayError::LeafACommitUnanchored {
+                            leaf_index: leaf.leaf_index,
+                            declared_epoch: leaf.a_commit_epoch,
+                            registry_epoch,
+                        });
+                    }
+                }
+                let facts = kaspa_consensus_core::palw::PalwDispatchLeafFacts {
+                    snapshot_root: leaf.provider_snapshot_root,
+                    assignment_root: leaf.assignment_proof_root,
+                    a_commit: leaf.a_commit,
+                    dispatch_kind: leaf.dispatch_kind,
+                    provider_a_id: kaspa_consensus_core::palw::palw_provider_id(&leaf.provider_a_bond),
+                    provider_b_id: kaspa_consensus_core::palw::palw_provider_id(&leaf.provider_b_bond),
+                };
+                if !kaspa_consensus_core::palw::palw_dispatch_evidence_valid(
+                    &witness.dispatch,
+                    &resolved,
+                    &post_commit_beacon,
+                    &facts,
+                    &TxscriptPalwMlDsaVerifier,
+                ) {
+                    return Err(PalwOverlayError::LeafDispatchEvidenceInvalid { leaf_index: leaf.leaf_index });
+                }
                 // Global job-nullifier accounting belongs at the reward/virtual coordinate. Applying a
                 // fork-relative rule while writing the content-addressed blob store would make admission
                 // depend on processing coordinate and order.
@@ -985,6 +1257,21 @@ pub struct PalwResolvedBinding {
     /// ADR-0040 P1-6 (AUTH-03): the leaf's declared ticket authority. Projected here because it had
     /// ZERO production readers — the field named an authority nothing checked. Clause 7 checks it.
     pub ticket_authority_pk_hash: Hash64,
+    /// ADR-0045 D3-b clause 13 — the leaf's PCPB commitments, projected for the mint-time
+    /// presence/equality re-check. Read-only projection; the authoritative verification of these
+    /// values happened at acceptance (clauses 11/12).
+    pub pcpb: PalwResolvedPcpb,
+}
+
+/// The clause-13 projection of a resolved leaf's PCPB fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwResolvedPcpb {
+    pub dispatch_kind: u8,
+    pub a_commit: Hash64,
+    pub a_commit_epoch: u64,
+    pub issued_epoch: u64,
+    pub provider_snapshot_root: Hash64,
+    pub assignment_proof_root: Hash64,
 }
 
 /// Why an algo-4 header's overlay binding could not be resolved from the stores.
@@ -1069,6 +1356,14 @@ pub fn resolve_palw_binding(
         // BOTH directions, so a de-duplication fails loudly rather than shipping.
         leaf_hash: leaf.leaf_hash(),
         ticket_authority_pk_hash: leaf.ticket_authority_pk_hash,
+        pcpb: PalwResolvedPcpb {
+            dispatch_kind: leaf.dispatch_kind,
+            a_commit: leaf.a_commit,
+            a_commit_epoch: leaf.a_commit_epoch,
+            issued_epoch: leaf.receipt_v3_issued_epoch,
+            provider_snapshot_root: leaf.provider_snapshot_root,
+            assignment_proof_root: leaf.assignment_proof_root,
+        },
     })
 }
 
@@ -1327,8 +1622,7 @@ pub fn resolve_palw_audit_epoch_seed(
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw::{
-        PALW_LEAF_CHUNK_VERSION_V2, PalwAuditorVoteV2, PalwLeafMembershipProofV1, PalwPublicLeafV1, palw_leaf_merkle_proof,
-        palw_leaf_merkle_root,
+        PalwAuditorVoteV2, PalwLeafMembershipProofV1, PalwPublicLeafV1, palw_leaf_merkle_proof, palw_leaf_merkle_root,
     };
     use kaspa_consensus_core::tx::{ScriptPublicKey, ScriptVec, TransactionOutpoint};
     use kaspa_database::create_temp_db;
@@ -1339,6 +1633,56 @@ mod tests {
 
     fn h(b: u8) -> Hash64 {
         Hash64::from_bytes([b; 64])
+    }
+
+    /// D3-b: the REAL per-leaf witnesses for a producer-built batch — the same values the shared
+    /// fixture stamped into each leaf, so the producer's chunk opens under the real acceptance arm.
+    /// (A shape-only filler would make the round trip prove nothing about clauses 11/12.)
+    fn e2e_pcpb_witnesses(
+        leaves: &[PalwPublicLeafV1],
+    ) -> std::collections::BTreeMap<u32, kaspa_consensus_core::palw::PalwLeafPcpbWitnessV1> {
+        let fixture = pcpb_fixture();
+        leaves.iter().map(|l| (l.leaf_index, fixture.witness(l.leaf_index))).collect()
+    }
+
+    #[allow(dead_code)]
+    fn dummy_pcpb_witnesses(
+        leaves: &[PalwPublicLeafV1],
+    ) -> std::collections::BTreeMap<u32, kaspa_consensus_core::palw::PalwLeafPcpbWitnessV1> {
+        use kaspa_consensus_core::palw::{
+            BeaconAssignedProof, PalwAssignmentInterval, PalwDispatchEvidence, PalwLeafPcpbWitnessV1, PalwMerkleMembership,
+            PalwProviderSnapshotEntry, SlotAssignmentWitness,
+        };
+        let entry = |b: u8| PalwProviderSnapshotEntry {
+            provider_id: h(b),
+            ml_dsa_pk_hash: h(b.wrapping_add(1)),
+            bond_sompi: 10,
+            reward_script_commitment: h(b.wrapping_add(2)),
+        };
+        let membership = |b: u8| PalwMerkleMembership { index: 0, leaf: h(b), siblings: Vec::new() };
+        let slot = |b: u8, lo: u128| SlotAssignmentWitness {
+            entry: entry(b),
+            snapshot_membership: membership(b),
+            interval: PalwAssignmentInterval { provider_id: h(b), bond_sompi: 10, cumulative_lo: lo },
+            assignment_membership: membership(b),
+        };
+        leaves
+            .iter()
+            .map(|l| {
+                (
+                    l.leaf_index,
+                    PalwLeafPcpbWitnessV1 {
+                        scheduler_job_id: h(0xe1),
+                        requester_credential: h(0xe2),
+                        request_commitment: h(0xe3),
+                        dispatch: PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof {
+                            slot_a: slot(0xe4, 0),
+                            slot_b: slot(0xe8, 10),
+                        }),
+                    },
+                )
+            })
+            .collect()
     }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1445,7 +1789,11 @@ mod tests {
     /// `leaf_raw`'s `registered_epoch` and `manifest()`'s `registration_epoch` both read it, because the
     /// acceptance arm now requires them to be equal. Two constants here would let the fixture drift back
     /// into the state the rule forbids without any test noticing.
-    const FIXTURE_REGISTRATION_EPOCH: u64 = 1;
+    /// D3-b (design memo §10.2): this must be at least `k + Δ`, because clause 12 resolves the
+    /// provider snapshot at `anchor − k` and the draw beacon at `anchor + Δ`. `1` underflowed the
+    /// former — the same genesis-boundary condition an honest producer obeys (no batch registers
+    /// before epoch `k + Δ`).
+    const FIXTURE_REGISTRATION_EPOCH: u64 = 4;
 
     /// kaspa-pq ADR-0040 §5.15 — the fixture batch's ORDERED, `batch_id`-ZEROED leaf hashes: exactly the
     /// sequence [`palw_leaf_merkle_root`] reduces to `manifest.leaf_root` and [`palw_leaf_merkle_proof`]
@@ -1472,7 +1820,16 @@ mod tests {
         let hashes = fixture_leaf_hashes();
         let proofs =
             leaves.iter().map(|l| palw_leaf_merkle_proof(&hashes, l.leaf_index).expect("fixture index is in range")).collect();
-        PalwLeafChunkV1 { version: PALW_LEAF_CHUNK_VERSION_V2, batch_id, chunk_index: 0, leaves, proofs }
+        let fixture = pcpb_fixture();
+        let witnesses = leaves.iter().map(|l| fixture.witness(l.leaf_index)).collect();
+        PalwLeafChunkV1 {
+            version: kaspa_consensus_core::palw::PALW_LEAF_CHUNK_VERSION_V3,
+            batch_id,
+            chunk_index: 0,
+            leaves,
+            proofs,
+            witnesses,
+        }
     }
 
     fn manifest() -> PalwBatchManifestV1 {
@@ -1525,7 +1882,7 @@ mod tests {
 
     fn leaf_raw(idx: u32) -> PalwPublicLeafV1 {
         let spk = ScriptPublicKey::new(0, ScriptVec::from_slice(&[1]));
-        PalwPublicLeafV1 {
+        let mut leaf = PalwPublicLeafV1 {
             version: 1,
             batch_id: h(1),
             leaf_index: idx,
@@ -1558,7 +1915,26 @@ mod tests {
             activation_epoch: 7,
             expiry_epoch: 13,
             leaf_bond_sompi: 0,
-        }
+            // Overwritten by the PCPB stamp below; listed so the literal stays exhaustive.
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: Hash64::default(),
+            assignment_proof_root: Hash64::default(),
+            dispatch_kind: 0,
+        };
+        // D3-b: every stored leaf passed clauses 11/12, so the fixture leaf is stamped into the same
+        // PCPB world the shared fixture stages — drawn provider seats, committed roots, an anchor
+        // epoch schedule inside the windows, and a challenge that re-derives. Stamping HERE (rather
+        // than per test) keeps `fixture_leaf_hashes` / `manifest()` / every chunk consistent, since
+        // all of them reduce this one builder.
+        pcpb_fixture().stamp(&mut leaf);
+        leaf
+    }
+
+    /// The one PCPB fixture every leaf in this module is stamped into (deterministic, so the leaf
+    /// hashes — and therefore `leaf_root` and `batch_id` — stay stable across calls).
+    fn pcpb_fixture() -> pcpb_test_support::PcpbFixture {
+        pcpb_test_support::fixture(FIXTURE_REGISTRATION_EPOCH)
     }
 
     /// The payload of each kind round-trips borsh and parses to the right effect; a wrong subnet byte or
@@ -1583,27 +1959,32 @@ mod tests {
     fn apply_overlay_persists_content_only() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let bid = m.batch_id; // content-derived
 
         // content-addressed manifest ⇒ persisted; NO batch_status row is written.
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m.clone()), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m.clone()), &store, &beacon, None, None).unwrap();
         assert_eq!(store.batch_manifest(bid).unwrap().leaf_count, 2);
         assert!(store.batch_status(bid).is_err(), "no mutable batch_status is written on the global store");
         // re-applying the same content is idempotent (write-once content address).
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m.clone()), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m.clone()), &store, &beacon, None, None).unwrap();
 
         // a forged batch_id (not the content id) is rejected — the store cannot be polluted.
         let forged = PalwBatchManifestV1 { batch_id: h(0xff), ..m };
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::Manifest(forged), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::Manifest(forged), &store, &beacon, None, None),
             Err(PalwOverlayError::NonContentAddressedBatchId)
         );
 
         // leaf chunk ⇒ leaves persisted under (batch_id, leaf_index).
         let chunk = chunk_with_proofs(bid, vec![leaf_in(bid, 0), leaf_in(bid, 1)]);
-        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None, Some(&pcpb_ctx)).unwrap();
         assert!(store.has_leaf(bid, 0).unwrap() && store.has_leaf(bid, 1).unwrap());
 
         // certificate ⇒ persisted by its own hash (self-content-addressed); no batch_status effect.
@@ -1637,7 +2018,7 @@ mod tests {
             }],
         };
         let cert_hash = cert.hash();
-        apply_palw_overlay_effect(PalwOverlayEffect::Certificate(cert), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Certificate(cert), &store, &beacon, None, None).unwrap();
         assert_eq!(store.certificate(cert_hash).unwrap().passed_leaf_count, 2);
     }
 
@@ -1657,11 +2038,16 @@ mod tests {
     fn leaf_chunk_admission_binds_to_manifest_and_is_write_once() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let bid = m.batch_id; // content-derived
         let leaf_count = m.leaf_count;
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
 
         // NOTE (ADR-0040 §5.15.12): every adversarial fixture below now carries a REAL, derived
         // membership proof, so each still fails for its ORIGINAL reason rather than being caught by the
@@ -1672,7 +2058,7 @@ mod tests {
         let unknown = h(0xde);
         let orphan = chunk_with_proofs(unknown, vec![leaf_in(unknown, 0)]);
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(orphan), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(orphan), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::UnknownBatch),
             "a leaf must never be the effect that first materialises a batch key"
         );
@@ -1683,7 +2069,7 @@ mod tests {
         // genuine member), which is what makes this assertion still about the batch-id cross-check.
         let smuggled = chunk_with_proofs(bid, vec![leaf_in(h(0xaa), 0)]);
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(smuggled), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(smuggled), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::LeafBatchIdMismatch)
         );
 
@@ -1691,24 +2077,26 @@ mod tests {
         // No proof can exist for an out-of-range index, so this fixture carries a length-correct
         // placeholder; the index bound fires first, which is the ordering being asserted.
         let oob = PalwLeafChunkV1 {
-            version: PALW_LEAF_CHUNK_VERSION_V2,
+            version: kaspa_consensus_core::palw::PALW_LEAF_CHUNK_VERSION_V3,
             batch_id: bid,
             chunk_index: 0,
             leaves: vec![leaf_in(bid, leaf_count)],
             proofs: vec![PalwLeafMembershipProofV1 { siblings: vec![h(0)] }],
+            // Arity-correct placeholder: the index bound fires long before clause 11 reads this.
+            witnesses: vec![pcpb_fixture().witness(leaf_count)],
         };
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(oob), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(oob), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::LeafIndexOutOfRange { leaf_index: leaf_count, leaf_count })
         );
 
         // ---- (4) the honest chunk lands ----
         let good = chunk_with_proofs(bid, vec![leaf_in(bid, 0), leaf_in(bid, 1)]);
-        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(good.clone()), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(good.clone()), &store, &beacon, None, Some(&pcpb_ctx)).unwrap();
         let sealed = store.leaf(bid, 0).unwrap().leaf_hash();
 
         // ---- (5) re-applying IDENTICAL content is idempotent (reorg replay must stay legal) ----
-        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(good), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(good), &store, &beacon, None, Some(&pcpb_ctx)).unwrap();
         assert_eq!(store.leaf(bid, 0).unwrap().leaf_hash(), sealed);
 
         // ---- (6) a thief's leaf is now refused by the MEMBERSHIP GATE, before the store is touched ----
@@ -1724,7 +2112,7 @@ mod tests {
         assert_ne!(thief.leaf_hash(), sealed, "the fixture must actually differ, else the test proves nothing");
         let overwrite = chunk_with_proofs(bid, vec![thief]);
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(overwrite), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(overwrite), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::LeafMembershipProofInvalid { leaf_index: 0 })
         );
         assert_eq!(store.leaf(bid, 0).unwrap().leaf_hash(), sealed, "the originally admitted leaf must survive");
@@ -1737,17 +2125,22 @@ mod tests {
     fn leaf_chunk_semantic_preflight_prevents_partial_prefix_writes() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let bid = m.batch_id;
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
 
         let mut chunk = chunk_with_proofs(bid, vec![leaf_in(bid, 0), leaf_in(bid, 1)]);
         // Leaf 0 and its proof remain valid. Corrupt only leaf 1's one-level proof so the failure is
         // reached after the first leaf has completed every semantic and write-once preflight check.
         chunk.proofs[1].siblings[0] = h(0xee);
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::LeafMembershipProofInvalid { leaf_index: 1 })
         );
         assert!(!store.has_leaf(bid, 0).unwrap(), "a valid prefix must not be written before the whole chunk passes");
@@ -1761,22 +2154,27 @@ mod tests {
     fn non_missing_manifest_and_leaf_read_failures_remain_store_errors() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let bid = m.batch_id;
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
         let chunk = chunk_with_proofs(bid, vec![leaf_in(bid, 0), leaf_in(bid, 1)]);
 
         let manifest_fault = ReadFaultStore { inner: &store, fault: InjectedReadFault::Manifest };
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk.clone()), &manifest_fault, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk.clone()), &manifest_fault, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::StoreError),
             "a non-missing manifest read failure must not become UnknownBatch"
         );
 
         let leaf_fault = ReadFaultStore { inner: &store, fault: InjectedReadFault::Leaf };
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &leaf_fault, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &leaf_fault, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::StoreError),
             "a non-missing leaf read failure must not look like an empty write-once slot"
         );
@@ -1796,10 +2194,15 @@ mod tests {
     fn chunk_index_squat_is_rejected_before_the_leaf_is_stored() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let bid = m.batch_id;
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
 
         // The squatter copies the public batch_id and substitutes its own payout + ticket authority.
         let mut squat = leaf_in(bid, 0);
@@ -1818,7 +2221,7 @@ mod tests {
         );
 
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::LeafMembershipProofInvalid { leaf_index: 0 })
         );
         assert!(
@@ -1828,7 +2231,7 @@ mod tests {
 
         // The valid provider leaf remains insertable after the rejected substitution.
         let honest = chunk_with_proofs(bid, vec![leaf_in(bid, 0), leaf_in(bid, 1)]);
-        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(honest.clone()), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(honest.clone()), &store, &beacon, None, Some(&pcpb_ctx)).unwrap();
 
         // ---- paired with the REWARD PATH (§5.15.12) ----
         //
@@ -1854,7 +2257,7 @@ mod tests {
         // IDEMPOTENT REPLAY (§5.15.12): the honest chunk re-sent — reorg replay, or an attacker paying
         // to publish the victim's own bytes — still succeeds. This is what makes the DENIAL half of the
         // closure true rather than merely argued.
-        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(honest), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(honest), &store, &beacon, None, Some(&pcpb_ctx)).unwrap();
         assert!(store.has_leaf(bid, 0).unwrap() && store.has_leaf(bid, 1).unwrap());
     }
 
@@ -1874,7 +2277,7 @@ mod tests {
             Hash64::from_bytes(b)
         };
         let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0xa0; 64]);
-        PalwPublicLeafV1 {
+        let mut leaf = PalwPublicLeafV1 {
             version: 1,
             batch_id: Hash64::default(),
             leaf_index: index,
@@ -1900,11 +2303,23 @@ mod tests {
             receipt_v3_job_challenge: Hash64::default(),
             receipt_v3_issued_epoch: 0,
             receipt_v3_expires_epoch: 0,
-            registered_epoch: 1,
-            activation_epoch: 4,
+            registered_epoch: FIXTURE_REGISTRATION_EPOCH,
+            activation_epoch: 7,
             expiry_epoch: 1000,
             leaf_bond_sompi: 0,
-        }
+            a_commit: Hash64::default(),
+            a_commit_epoch: 0,
+            provider_snapshot_root: Hash64::default(),
+            assignment_proof_root: Hash64::default(),
+            dispatch_kind: 0,
+        };
+        // D3-b: the producer round trip runs the REAL acceptance arm, so the producer's leaves must
+        // live in the same PCPB world the test stages — including the switch to receipt DA Object V2
+        // that clause 11 makes mandatory. Note the per-index provider bonds above are REPLACED by the
+        // drawn pair: the external draw is per-epoch, so every leaf anchored at one epoch names the
+        // same two providers (design memo §1, "抽選 seed が job を含まない").
+        pcpb_fixture().stamp(&mut leaf);
+        leaf
     }
 
     /// kaspa-pq **ADR-0040 §5.15.12 — THE E2E ROUND TRIP.** The one named test the ACCEPT-BIND slice
@@ -1942,10 +2357,15 @@ mod tests {
 
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(256));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
 
         let policy = BatchPolicy {
-            registration_epoch: 1,
+            registration_epoch: FIXTURE_REGISTRATION_EPOCH,
             registration_lead_epochs: 2,
             audit_window_epochs: 1,
             active_window_epochs: 100,
@@ -1967,22 +2387,27 @@ mod tests {
         // because the tree is built over the `batch_id`-ZEROED projection.
         assert!(manifest.batch_id_is_content_derived(), "leaf_root sits inside content_id, so batch_id must move with it");
         assert_eq!(manifest.leaf_count, LEAF_COUNT);
-        assert_eq!(manifest.chunk_count, 2, "65 leaves is two chunks");
+        assert_eq!(
+            manifest.chunk_count,
+            65u32.div_ceil(kaspa_consensus_core::palw::PALW_MAX_LEAVES_PER_CHUNK as u32) as u16,
+            "chunk_count follows the (D3-b lowered) per-chunk cap"
+        );
         assert_eq!(palw_leaf_merkle_depth(manifest.leaf_count), 7, "65 leaves pads to 128 — depth 7");
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(manifest.clone()), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(manifest.clone()), &store, &beacon, None, None).unwrap();
 
         // ---- (2) every CHUNK, through validate → parse → apply ----
         let restamped = restamp_leaves(batch_id, &minted);
         let mut chunk_payloads = Vec::new();
         for chunk_index in 0..manifest.chunk_count {
-            let (cbyte, cpayload) = build_leaf_chunk(batch_id, chunk_index, &restamped).expect("chunk assembles");
+            let (cbyte, cpayload) =
+                build_leaf_chunk(batch_id, chunk_index, &restamped, &e2e_pcpb_witnesses(&restamped)).expect("chunk assembles");
             assert_eq!(validate_palw_overlay_payload(cbyte, &cpayload), Ok(()), "chunk {chunk_index} must pass isolation");
             let chunk = match parse_palw_overlay(cbyte, &cpayload).expect("chunk parses") {
                 PalwOverlayEffect::LeafChunk(c) => c,
                 other => panic!("expected a LeafChunk effect, got {other:?}"),
             };
             assert_eq!(
-                apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None),
+                apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None, Some(&pcpb_ctx)),
                 Ok(()),
                 "chunk {chunk_index} built by the real producer was REJECTED by the real acceptance arm — \
                  miner/consensus drift in the leaf-Merkle construction (on-chain this is silent: the arm's \
@@ -2009,7 +2434,7 @@ mod tests {
         for (cbyte, cpayload) in &chunk_payloads {
             let chunk = parse_palw_overlay(*cbyte, cpayload).expect("chunk re-parses");
             assert_eq!(
-                apply_palw_overlay_effect(chunk, &store, &beacon, None),
+                apply_palw_overlay_effect(chunk, &store, &beacon, None, Some(&pcpb_ctx)),
                 Ok(()),
                 "an identical honest chunk must remain admissible — this is what makes the DENIAL half of \
                  the CHUNK-INDEX SQUAT closure true rather than merely argued"
@@ -2074,7 +2499,8 @@ mod tests {
         use kaspa_consensus_core::palw::PalwProviderBondRecord;
         use kaspa_pq_validator_core::ValidatorKey;
         use misaka_palw_miner::audit::{
-            AuditRound, Auditor, QuorumPolicy, derive_audit_sample_root, run_audit_round, select_audit_slate, sign_vote,
+            AuditRound, Auditor, LeafAuditExecutor, QuorumPolicy, derive_audit_sample_root, execute_audit_round, run_audit_round,
+            select_audit_slate, sign_vote,
         };
         use misaka_palw_miner::registration::{BatchPolicy, build_batch_manifest, build_leaf_chunk, restamp_leaves};
         use std::collections::HashSet;
@@ -2093,7 +2519,12 @@ mod tests {
 
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(256));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
 
         let policy = BatchPolicy {
             // Keep registration above zero so the pre-registration adversary below can select a
@@ -2115,6 +2546,11 @@ mod tests {
                 leaf.registered_epoch = policy.registration_epoch;
                 leaf.activation_epoch = leaf_activation_epoch;
                 leaf.expiry_epoch = leaf_expiry_epoch;
+                // Object V2 binds `receipt_v3_expires_epoch == expiry_epoch`, so a fixture that moves
+                // the window has to move both — the stamp set them equal at the fixture's own values.
+                // (The freshness window still holds: issued 2, anchor 2, registered 5 ⇒ 2+Δ ≤ 5 and
+                // 5−2 ≤ w.)
+                leaf.receipt_v3_expires_epoch = leaf_expiry_epoch;
                 leaf.receipt_da_root = h(0xD0 + i as u8);
                 leaf
             })
@@ -2129,15 +2565,16 @@ mod tests {
         };
         assert_eq!(manifest.activation_not_before_epoch, 11);
         assert_eq!(manifest.expiry_epoch, 17);
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(manifest.clone()), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(manifest.clone()), &store, &beacon, None, None).unwrap();
         let restamped = restamp_leaves(batch_id, &minted);
         for chunk_index in 0..manifest.chunk_count {
-            let (cbyte, cpayload) = build_leaf_chunk(batch_id, chunk_index, &restamped).expect("chunk assembles");
+            let (cbyte, cpayload) =
+                build_leaf_chunk(batch_id, chunk_index, &restamped, &e2e_pcpb_witnesses(&restamped)).expect("chunk assembles");
             let chunk = match parse_palw_overlay(cbyte, &cpayload).expect("chunk parses") {
                 PalwOverlayEffect::LeafChunk(c) => c,
                 other => panic!("expected a LeafChunk effect, got {other:?}"),
             };
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None).unwrap();
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None, Some(&pcpb_ctx)).unwrap();
         }
         // The on-chain leaves the verifier reads, in index order [0, leaf_count).
         let leaves: Vec<Arc<PalwPublicLeafV1>> = restamped.iter().cloned().map(Arc::new).collect();
@@ -2208,11 +2645,19 @@ mod tests {
             expiry_epoch: manifest.expiry_epoch,
             auditor_set_commitment: commitment,
         };
-        let auditor = |i: usize, pass: bool| Auditor {
-            key: ValidatorKey::from_seed([seeds[i]; 32]),
-            bond: bond_op(i),
-            pass,
-            checked_leaf_bitmap_root: h(0x60 + i as u8),
+        // AUDIT-EXEC-01: a verdict is the OUTPUT of running the round over the beacon-selected
+        // sample — the same sample `derive_audit_sample_root` above commits to — so this fixture
+        // exercises the producer's real path rather than asserting `pass: true` beside it.
+        struct FixedExecutor(bool);
+        impl LeafAuditExecutor for FixedExecutor {
+            fn audit_leaf(&mut self, _leaf_index: u32, _leaf: &PalwPublicLeafV1) -> Result<bool, String> {
+                Ok(self.0)
+            }
+        }
+        let auditor = |i: usize, pass: bool| {
+            let verdict = execute_audit_round(&seed, &batch_id, &restamped, SAMPLE_SIZE, &mut FixedExecutor(pass))
+                .expect("the round executes over the batch's leaves");
+            (Auditor { key: ValidatorKey::from_seed([seeds[i]; 32]), bond: bond_op(i) }, verdict)
         };
         let ctx = PalwCertificateAttestationCtx {
             network_id: NET,
@@ -2271,10 +2716,8 @@ mod tests {
             let mut at_or_after_activation = honest.cert.clone();
             at_or_after_activation.audit_beacon_epoch = audit_beacon_epoch;
             at_or_after_activation.certificate_epoch = audit_beacon_epoch;
-            at_or_after_activation.votes = [auditor(0, true), auditor(1, true), auditor(2, true)]
-                .iter()
-                .map(|auditor| sign_vote(&outside_round, auditor))
-                .collect();
+            at_or_after_activation.votes =
+                [auditor(0, true), auditor(1, true), auditor(2, true)].iter().map(|(a, v)| sign_vote(&outside_round, a, v)).collect();
             at_or_after_activation.approving_stake = 100;
             let outside_ctx = PalwCertificateAttestationCtx { inclusion_epoch: audit_beacon_epoch, ..ctx };
             assert_eq!(
@@ -2308,7 +2751,7 @@ mod tests {
         // ...and through the acceptance ARM (which additionally cross-binds `manifest_hash` / `leaf_root`
         // and resolves the leaves from the store), the certificate persists.
         let honest_hash = honest.cert.hash();
-        apply_palw_overlay_effect(PalwOverlayEffect::Certificate(honest.cert.clone()), &store, &beacon, Some(&ctx)).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Certificate(honest.cert.clone()), &store, &beacon, Some(&ctx), None).unwrap();
         assert_eq!(store.certificate(honest_hash).unwrap().passed_leaf_count, LEAF_COUNT);
 
         // The V2 votes do not sign these envelope fields, so the verifier must bind them to the
@@ -2321,7 +2764,7 @@ mod tests {
         );
         let wrong_activation_hash = wrong_activation.hash();
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(wrong_activation), &store, &beacon, Some(&ctx)),
+            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(wrong_activation), &store, &beacon, Some(&ctx), None),
             Err(PalwOverlayError::CertificateActivationEpochMismatch)
         );
         assert!(store.certificate(wrong_activation_hash).is_err());
@@ -2334,7 +2777,7 @@ mod tests {
         );
         let wrong_expiry_hash = wrong_expiry.hash();
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(wrong_expiry), &store, &beacon, Some(&ctx)),
+            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(wrong_expiry), &store, &beacon, Some(&ctx), None),
             Err(PalwOverlayError::CertificateExpiryEpochMismatch)
         );
         assert!(store.certificate(wrong_expiry_hash).is_err());
@@ -2347,7 +2790,7 @@ mod tests {
         );
         let wrong_inclusion_hash = wrong_inclusion.hash();
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(wrong_inclusion), &store, &beacon, Some(&ctx)),
+            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(wrong_inclusion), &store, &beacon, Some(&ctx), None),
             Err(PalwOverlayError::CertificateInclusionEpochMismatch)
         );
         assert!(store.certificate(wrong_inclusion_hash).is_err());
@@ -2363,7 +2806,10 @@ mod tests {
 
         // ---- (3) a vote from OUTSIDE the re-derived slate ⇒ CertificateVoteOutsideCommittee ----
         // A genuine producer-signed vote whose bond is then re-pointed to a non-slate outpoint.
-        let mut outsider = sign_vote(&round, &auditor(0, true));
+        let mut outsider = {
+            let (a, v) = auditor(0, true);
+            sign_vote(&round, &a, &v)
+        };
         outsider.bond_outpoint = TransactionOutpoint::new(h(0xee), 0);
         let mut outside = honest.cert.clone();
         outside.votes = vec![outsider];
@@ -2394,7 +2840,7 @@ mod tests {
         // producer-SIGNED (`sign_vote`) and the certificate hand-shaped carrying the honest PASS tally — the
         // verifier still recomputes the tally from the bond view and rejects on quorum, not stake-mismatch.
         let short_votes: Vec<PalwAuditorVoteV2> =
-            [auditor(0, true), auditor(1, false), auditor(2, false)].iter().map(|a| sign_vote(&round, a)).collect();
+            [auditor(0, true), auditor(1, false), auditor(2, false)].iter().map(|(a, v)| sign_vote(&round, a, v)).collect();
         let mut short = honest.cert.clone();
         short.votes = short_votes;
         short.approving_stake = 40; // == the recomputed PASS tally, so the quorum check (not the mismatch) fires
@@ -2407,7 +2853,10 @@ mod tests {
         // A single 40-sompi PASS is still measured against the full 40+40+20 selected slate. The old
         // participating-vote denominator incorrectly treated this as 40/40 and accepted it as 100%.
         let mut withheld = honest.cert.clone();
-        withheld.votes = vec![sign_vote(&round, &auditor(0, true))];
+        withheld.votes = vec![{
+            let (a, v) = auditor(0, true);
+            sign_vote(&round, &a, &v)
+        }];
         withheld.approving_stake = 40;
         assert_eq!(
             verify_certificate_attestation(&withheld, &manifest, &ctx, &leaves),
@@ -2479,11 +2928,16 @@ mod tests {
     fn membership_proof_length_is_exact_in_both_directions() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let bid = m.batch_id;
         let expected = palw_leaf_merkle_depth(m.leaf_count);
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
 
         let honest = chunk_with_proofs(bid, vec![leaf_in(bid, 0)]);
         for siblings in [Vec::new(), vec![honest.proofs[0].siblings[0], h(7)]] {
@@ -2491,7 +2945,7 @@ mod tests {
             let mut bad = honest.clone();
             bad.proofs = vec![PalwLeafMembershipProofV1 { siblings }];
             assert_eq!(
-                apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(bad), &store, &beacon, None),
+                apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(bad), &store, &beacon, None, Some(&pcpb_ctx)),
                 Err(PalwOverlayError::LeafMembershipProofLengthInvalid { leaf_index: 0, got, expected }),
                 "a proof of length {got} (expected {expected}) must be refused on length alone"
             );
@@ -2503,7 +2957,7 @@ mod tests {
         let mut starved = chunk_with_proofs(bid, vec![leaf_in(bid, 0), leaf_in(bid, 1)]);
         starved.proofs.pop();
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(starved), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(starved), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::LeafProofCountMismatch { leaves: 2, proofs: 1 })
         );
         assert!(
@@ -2530,18 +2984,27 @@ mod tests {
     fn a_member_leaf_cannot_be_replayed_at_another_index() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let bid = m.batch_id;
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
 
         let hashes = fixture_leaf_hashes();
-        let chunk_with = |leaf: PalwPublicLeafV1, proof_for: u32| PalwLeafChunkV1 {
-            version: PALW_LEAF_CHUNK_VERSION_V2,
-            batch_id: bid,
-            chunk_index: 0,
-            leaves: vec![leaf],
-            proofs: vec![palw_leaf_merkle_proof(&hashes, proof_for).unwrap()],
+        let chunk_with = |leaf: PalwPublicLeafV1, proof_for: u32| {
+            let witnesses = vec![pcpb_fixture().witness(leaf.leaf_index)];
+            PalwLeafChunkV1 {
+                version: kaspa_consensus_core::palw::PALW_LEAF_CHUNK_VERSION_V3,
+                batch_id: bid,
+                chunk_index: 0,
+                leaves: vec![leaf],
+                proofs: vec![palw_leaf_merkle_proof(&hashes, proof_for).unwrap()],
+                witnesses,
+            }
         };
 
         // ---- cross-index proof reuse: genuine member, wrong index's proof ----
@@ -2551,7 +3014,8 @@ mod tests {
                     PalwOverlayEffect::LeafChunk(chunk_with(leaf_in(bid, leaf_index), proof_for)),
                     &store,
                     &beacon,
-                    None
+                    None,
+            None
                 ),
                 Err(PalwOverlayError::LeafMembershipProofInvalid { leaf_index }),
                 "leaf {leaf_index} must not open under leaf {proof_for}'s proof"
@@ -2563,7 +3027,7 @@ mod tests {
         relabelled.job_nullifier = h(0x77);
         assert_ne!(relabelled.leaf_hash(), leaf_in(bid, 1).leaf_hash(), "the fixture must actually differ");
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk_with(relabelled, 1)), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk_with(relabelled, 1)), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::LeafMembershipProofInvalid { leaf_index: 1 })
         );
 
@@ -2592,7 +3056,12 @@ mod tests {
     fn a_leaf_must_carry_its_manifests_registration_epoch() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
 
         // ---- the SAME leaf content, under a manifest whose registration epoch disagrees ----
         let skewed = manifest_at_epoch(FIXTURE_REGISTRATION_EPOCH + 1);
@@ -2602,13 +3071,13 @@ mod tests {
             manifest().leaf_root,
             "the two fixtures must share a leaf_root, or this test would be proving a membership failure"
         );
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(skewed), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(skewed), &store, &beacon, None, None).unwrap();
 
         let leaves = vec![leaf_in(skewed_bid, 0), leaf_in(skewed_bid, 1)];
         // The proofs are DERIVED from the same ordered hash sequence the root was reduced from, so they
         // verify. The rejection below is therefore attributable to the epoch alone.
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk_with_proofs(skewed_bid, leaves)), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk_with_proofs(skewed_bid, leaves)), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::LeafRegistrationEpochMismatch {
                 leaf_index: 0,
                 leaf_registered_epoch: FIXTURE_REGISTRATION_EPOCH,
@@ -2622,9 +3091,9 @@ mod tests {
         let m = manifest();
         let bid = m.batch_id;
         assert_ne!(bid, skewed_bid, "the two manifests must be distinct batches");
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
         let ok = vec![leaf_in(bid, 0), leaf_in(bid, 1)];
-        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk_with_proofs(bid, ok)), &store, &beacon, None)
+        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk_with_proofs(bid, ok)), &store, &beacon, None, Some(&pcpb_ctx))
             .expect("the epoch-matched batch must still be accepted — the rule must not reject honest chunks");
         assert!(store.has_leaf(bid, 0).unwrap() && store.has_leaf(bid, 1).unwrap());
     }
@@ -2642,10 +3111,15 @@ mod tests {
     fn leaf_write_once_still_fires_after_the_membership_gate() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let bid = m.batch_id;
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
 
         // Occupy (bid, 0) with foreign content directly, bypassing the arm.
         let mut foreign = leaf_in(bid, 0);
@@ -2655,7 +3129,7 @@ mod tests {
         // The HONEST chunk now passes the membership gate and is refused by the store, not by the gate.
         let honest = chunk_with_proofs(bid, vec![leaf_in(bid, 0)]);
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(honest), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(honest), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::LeafImmutabilityViolation),
             "the gate must precede insert_leaf, and insert_leaf must still be the thing that refuses here"
         );
@@ -2676,15 +3150,20 @@ mod tests {
     fn reward_scripts_are_immutable_after_acceptance() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let bid = m.batch_id;
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
 
         let honest = leaf_in(bid, 0);
         let honest_a = honest.provider_a_reward_script.clone();
         let chunk = chunk_with_proofs(bid, vec![honest]);
-        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None, Some(&pcpb_ctx)).unwrap();
 
         // The reward path reads the leaf by key at coinbase time. Attempt the theft: same key, different
         // payout. The re-read still yields the accepted scripts.
@@ -2698,7 +3177,7 @@ mod tests {
         thief.provider_a_reward_script = ScriptPublicKey::new(0, ScriptVec::from_slice(&[0xbe, 0xef]));
         let overwrite = chunk_with_proofs(bid, vec![thief.clone()]);
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(overwrite), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(overwrite), &store, &beacon, None, Some(&pcpb_ctx)),
             Err(PalwOverlayError::LeafMembershipProofInvalid { leaf_index: 0 })
         );
 
@@ -2737,11 +3216,16 @@ mod tests {
     fn certificate_must_bind_to_its_batch_manifest_and_leaf_root() {
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let _pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let bid = m.batch_id;
         let real_leaf_root = m.leaf_root;
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
 
         let base = PalwBatchCertificateV2 {
             version: PALW_BATCH_CERTIFICATE_VERSION_V2,
@@ -2770,7 +3254,7 @@ mod tests {
         // (1) a certificate for a batch with no admitted manifest cannot be persisted at all.
         let orphan = PalwBatchCertificateV2 { batch_id: h(0xde), ..base.clone() };
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(orphan), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(orphan), &store, &beacon, None, None),
             Err(PalwOverlayError::UnknownBatch)
         );
 
@@ -2778,7 +3262,7 @@ mod tests {
         let wrong_manifest = PalwBatchCertificateV2 { manifest_hash: h(0xbb), ..base.clone() };
         let wrong_manifest_hash = wrong_manifest.hash();
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(wrong_manifest), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(wrong_manifest), &store, &beacon, None, None),
             Err(PalwOverlayError::CertificateManifestMismatch)
         );
         assert!(store.certificate(wrong_manifest_hash).is_err(), "a mis-bound certificate must not be persisted");
@@ -2786,13 +3270,13 @@ mod tests {
         // (3) right batch and manifest, wrong leaf set — it attests to leaves that are not this batch's.
         let wrong_leaves = PalwBatchCertificateV2 { leaf_root: h(0xcc), ..base.clone() };
         assert_eq!(
-            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(wrong_leaves), &store, &beacon, None),
+            apply_palw_overlay_effect(PalwOverlayEffect::Certificate(wrong_leaves), &store, &beacon, None, None),
             Err(PalwOverlayError::CertificateLeafRootMismatch)
         );
 
         // (4) the correctly-bound certificate persists.
         let good_hash = base.hash();
-        apply_palw_overlay_effect(PalwOverlayEffect::Certificate(base), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Certificate(base), &store, &beacon, None, None).unwrap();
         assert_eq!(store.certificate(good_hash).unwrap().leaf_root, real_leaf_root);
     }
 
@@ -2809,10 +3293,15 @@ mod tests {
 
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let _pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
         let m = manifest();
         let (bid, leaf_root) = (m.batch_id, m.leaf_root);
-        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m.clone()), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m.clone()), &store, &beacon, None, None).unwrap();
 
         // Two on-chain leaves with DISTINCT `receipt_da_root`s, so the re-derived sample root is a real
         // function of the sampled set (not a constant). Inserted so the apply-path can enumerate them.
@@ -2996,7 +3485,7 @@ mod tests {
             Err(PalwOverlayError::CertificatePassedLeafCountOutOfRange)
         );
         let good_hash = good.hash();
-        apply_palw_overlay_effect(PalwOverlayEffect::Certificate(good), &store, &beacon, Some(&ctx)).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::Certificate(good), &store, &beacon, Some(&ctx), None).unwrap();
         assert_eq!(store.certificate(good_hash).unwrap().passed_leaf_count, 2);
 
         // ---- AUTHSET-01: a certificate declaring the WRONG auditor_set_commitment is rejected ----
@@ -3126,32 +3615,37 @@ mod tests {
         use kaspa_consensus_core::palw::{PalwBeaconCommitV1, PalwBeaconRevealV1, beacon_commitment};
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
-        let beacon = DbPalwBeaconStore::new(db, CachePolicy::Count(64));
+        let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+        // D3-b: the acceptance arm resolves clauses 11/12 against this staged context. An arm
+        // called WITHOUT it rejects every leaf chunk (fail-closed), so tests stage it rather
+        // than opting out of the gate.
+        let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+        let _pcpb_ctx = pcpb_test_support::ctx(&pcpb_store);
 
         let bond = TransactionOutpoint::new(h(0x50), 0);
         let random = [7u8; 64];
         let commitment = beacon_commitment(9, &random, &bond);
         // commit for epoch 9 ⇒ accumulated.
         let commit = PalwBeaconCommitV1 { version: 1, epoch: 9, bond_outpoint: bond, commitment, signature: vec![] };
-        apply_palw_overlay_effect(PalwOverlayEffect::BeaconCommit(commit), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::BeaconCommit(commit), &store, &beacon, None, None).unwrap();
         assert_eq!(beacon.commitment_of(9, &bond).unwrap(), Some(commitment));
         assert_eq!(beacon.epoch_inputs(9).unwrap().valid_reveals.len(), 0);
 
         // a reveal with the WRONG random does not open the commit ⇒ not recorded.
         let bad = PalwBeaconRevealV1 { version: 1, epoch: 9, bond_outpoint: bond, random_64: [0u8; 64], signature: vec![] };
-        apply_palw_overlay_effect(PalwOverlayEffect::BeaconReveal(bad), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::BeaconReveal(bad), &store, &beacon, None, None).unwrap();
         assert_eq!(beacon.epoch_inputs(9).unwrap().valid_reveals.len(), 0);
 
         // the matching reveal ⇒ recorded as a valid reveal.
         let good = PalwBeaconRevealV1 { version: 1, epoch: 9, bond_outpoint: bond, random_64: random, signature: vec![] };
         let entropy = good.entropy_digest();
-        apply_palw_overlay_effect(PalwOverlayEffect::BeaconReveal(good), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::BeaconReveal(good), &store, &beacon, None, None).unwrap();
         assert_eq!(beacon.epoch_inputs(9).unwrap().valid_reveals, vec![(bond, entropy)]);
         assert_ne!(entropy, commitment, "the public E-2 commitment must not be reused as R_E entropy");
 
         // a reveal for an epoch with no commit is inert.
         let orphan = PalwBeaconRevealV1 { version: 1, epoch: 20, bond_outpoint: bond, random_64: random, signature: vec![] };
-        apply_palw_overlay_effect(PalwOverlayEffect::BeaconReveal(orphan), &store, &beacon, None).unwrap();
+        apply_palw_overlay_effect(PalwOverlayEffect::BeaconReveal(orphan), &store, &beacon, None, None).unwrap();
         assert_eq!(beacon.epoch_inputs(20).unwrap().valid_reveals.len(), 0);
     }
 
@@ -3620,15 +4114,20 @@ mod tests {
         use kaspa_consensus_core::tx::TransactionOutpoint;
         use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
-        const NET: u32 = 111;
-        const POV: u64 = 700;
+        pub(super) const NET: u32 = 111;
+        pub(super) const POV: u64 = 700;
 
-        struct Validator {
-            bond: StakeBondRecord,
-            signing_key: mldsa::MLDSA87SigningKey,
+        pub(super) struct Validator {
+            pub(super) bond: StakeBondRecord,
+            pub(super) signing_key: mldsa::MLDSA87SigningKey,
         }
 
-        fn validator(tag: u8, amount: u64) -> Validator {
+        /// The `ActiveBondView` these validators form (shared with the §17.4 governance tests).
+        pub(super) fn bond_view(validators: &[Validator]) -> ActiveBondView {
+            ActiveBondView::from_records(validators.iter().map(|v| (v.bond.bond_outpoint, v.bond.clone())))
+        }
+
+        pub(super) fn validator(tag: u8, amount: u64) -> Validator {
             let kp = mldsa::generate_key_pair([tag; 32]);
             let pubkey = kp.verification_key.as_ref().to_vec();
             let bond = StakeBondRecord {
@@ -3685,13 +4184,9 @@ mod tests {
                         signature: vec![],
                     };
                     let digest = vote.signing_hash(NET, &cert);
-                    let sig = mldsa::sign(
-                        &v.signing_key,
-                        digest.as_byte_slice(),
-                        PALW_COMPUTE_SET_ACTIVATION_MLDSA87_CONTEXT,
-                        [0x11; 32],
-                    )
-                    .expect("mldsa sign");
+                    let sig =
+                        mldsa::sign(&v.signing_key, digest.as_byte_slice(), PALW_COMPUTE_SET_ACTIVATION_MLDSA87_CONTEXT, [0x11; 32])
+                            .expect("mldsa sign");
                     vote.signature = sig.as_ref().to_vec();
                     vote
                 })
@@ -3699,8 +4194,11 @@ mod tests {
             votes.sort_by(|a, b| {
                 (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
             });
-            cert.approving_stake =
-                votes.iter().filter(|v| v.vote == 1).map(|v| validators.iter().find(|x| x.bond.bond_outpoint == v.bond_outpoint).unwrap().bond.amount as u128).sum();
+            cert.approving_stake = votes
+                .iter()
+                .filter(|v| v.vote == 1)
+                .map(|v| validators.iter().find(|x| x.bond.bond_outpoint == v.bond_outpoint).unwrap().bond.amount as u128)
+                .sum();
             cert.votes_root = palw_activation_votes_root(&votes).unwrap();
             cert.votes = votes;
             let view = ActiveBondView::from_records(validators.iter().map(|v| (v.bond.bond_outpoint, v.bond.clone())));
@@ -3805,6 +4303,897 @@ mod tests {
             let (mut cert, view) = certified(&validators, 3);
             cert.votes.clear();
             expect_reject(verify_compute_set_activation_certificate(&cert, &view, NET, POV, 2, 3), "no embedded votes");
+        }
+    }
+
+    // =========================================================================================
+    // ADR-MA §17.4 — governance envelope attestation (policy / allocation / halt)
+    // =========================================================================================
+
+    mod governance_envelope {
+        use super::activation_certificate::{NET, POV, Validator, bond_view, validator};
+        use super::h;
+        use crate::processes::palw::verify_palw_governance_envelope;
+        use kaspa_consensus_core::palw_compute_set::{
+            ComputeSetRegistryError, PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION, PALW_GOVERNANCE_ENVELOPE_VERSION,
+            PALW_GOVERNANCE_MLDSA87_CONTEXT, PALW_MODEL_ALLOCATION_PLAN_VERSION, PalwComputeSetEmergencyHaltV1,
+            PalwGovernanceActionV1, PalwGovernanceEnvelopeV1, PalwGovernanceVoteV1, PalwModelAllocationEntryV1,
+            PalwModelAllocationPlanV1, palw_activation_validator_set_commitment, palw_governance_votes_root,
+        };
+        use kaspa_consensus_core::tx::TransactionOutpoint;
+        use kaspa_hashes::Hash64;
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+
+        fn halt_action(set: u8) -> PalwGovernanceActionV1 {
+            PalwGovernanceActionV1::EmergencyHalt(PalwComputeSetEmergencyHaltV1 {
+                version: PALW_COMPUTE_SET_EMERGENCY_HALT_VERSION,
+                compute_set_id: h(set),
+                evidence_root: Hash64::default(),
+            })
+        }
+
+        /// A quorum-meeting envelope over `validators`, `approving` of them voting approve.
+        fn governed(
+            action: PalwGovernanceActionV1,
+            validators: &[Validator],
+            approving: usize,
+        ) -> (PalwGovernanceEnvelopeV1, kaspa_consensus_core::dns_finality::ActiveBondView) {
+            let mut active: Vec<_> = validators.iter().map(|v| v.bond.clone()).collect();
+            active.sort_by(|a, b| {
+                (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+            });
+            let mut envelope = PalwGovernanceEnvelopeV1 {
+                version: PALW_GOVERNANCE_ENVELOPE_VERSION,
+                action,
+                validator_set_commitment: palw_activation_validator_set_commitment(&active).unwrap(),
+                approving_stake: 0,
+                total_selected_stake: active.iter().map(|b| b.amount as u128).sum(),
+                votes_root: Hash64::default(),
+                votes: vec![],
+            };
+            let mut votes: Vec<PalwGovernanceVoteV1> = validators
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let mut vote = PalwGovernanceVoteV1 {
+                        bond_outpoint: v.bond.bond_outpoint,
+                        vote: if i < approving { 1 } else { 0 },
+                        signature: vec![],
+                    };
+                    let digest = vote.signing_hash(NET, &envelope);
+                    let sig = mldsa::sign(&v.signing_key, digest.as_byte_slice(), PALW_GOVERNANCE_MLDSA87_CONTEXT, [0x11; 32])
+                        .expect("mldsa sign");
+                    vote.signature = sig.as_ref().to_vec();
+                    vote
+                })
+                .collect();
+            votes.sort_by(|a, b| {
+                (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+            });
+            envelope.approving_stake = votes
+                .iter()
+                .filter(|v| v.vote == 1)
+                .map(|v| validators.iter().find(|x| x.bond.bond_outpoint == v.bond_outpoint).unwrap().bond.amount as u128)
+                .sum();
+            envelope.votes_root = palw_governance_votes_root(&votes).unwrap();
+            envelope.votes = votes;
+            (envelope, bond_view(validators))
+        }
+
+        fn expect_reject(result: Result<(), ComputeSetRegistryError>, needle: &str) {
+            match result {
+                Err(ComputeSetRegistryError::GovernanceAttestationInvalid(reason)) => {
+                    assert!(reason.contains(needle), "expected rejection about {needle:?}, got {reason:?}")
+                }
+                other => panic!("expected GovernanceAttestationInvalid({needle:?}), got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn honest_governance_envelope_verifies() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            let (envelope, view) = governed(halt_action(0xd1), &validators, 3);
+            verify_palw_governance_envelope(&envelope, &view, NET, POV, 2, 3).expect("honest envelope");
+            let (envelope, view) = governed(halt_action(0xd1), &validators, 2);
+            verify_palw_governance_envelope(&envelope, &view, NET, POV, 2, 3).expect("exact-threshold envelope");
+        }
+
+        /// REG-AUTH-03: the halt path's whole point — one party cannot stop an arbitrary set.
+        #[test]
+        fn single_key_cannot_halt_a_set() {
+            let validators = [validator(1, 100), validator(2, 300), validator(3, 100)];
+            let (envelope, view) = governed(halt_action(0xd1), &validators, 1);
+            expect_reject(verify_palw_governance_envelope(&envelope, &view, NET, POV, 2, 3), "quorum");
+        }
+
+        /// REG-AUTH-01/02: an unsigned action is not merely under-quorate, it carries nothing to
+        /// verify — the pre-fix code path applied exactly this.
+        #[test]
+        fn unsigned_action_is_rejected() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            let (mut envelope, view) = governed(halt_action(0xd1), &validators, 3);
+            envelope.votes.clear();
+            expect_reject(verify_palw_governance_envelope(&envelope, &view, NET, POV, 2, 3), "no embedded votes");
+        }
+
+        /// A vote is bound to the exact action bytes: swapping the cargo under collected
+        /// signatures must not verify.
+        #[test]
+        fn votes_do_not_transfer_to_another_action() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            let (mut envelope, view) = governed(halt_action(0xd1), &validators, 3);
+            envelope.action = halt_action(0xd2);
+            expect_reject(verify_palw_governance_envelope(&envelope, &view, NET, POV, 2, 3), "signature");
+        }
+
+        /// Domain separation: an activation vote's signature cannot be reused as a governance
+        /// vote, and a governance vote is scoped to its own action kind.
+        #[test]
+        fn governance_votes_are_domain_separated() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            // Same validators, same tallies, but the action changes KIND: the band byte and the
+            // action hash both move, so no collected signature survives the swap.
+            let (halt_envelope, view) = governed(halt_action(0xd1), &validators, 3);
+            let mut plan = PalwModelAllocationPlanV1 {
+                version: PALW_MODEL_ALLOCATION_PLAN_VERSION,
+                plan_id: Hash64::default(),
+                sequence: 1,
+                effective_from_daa: 1_000,
+                entries: vec![PalwModelAllocationEntryV1 { compute_set_id: h(0xd1), target_share_bps: 10_000 }],
+            };
+            plan.plan_id = plan.derive_plan_id();
+            let mut swapped = halt_envelope.clone();
+            swapped.action = PalwGovernanceActionV1::AllocationPlan(plan);
+            expect_reject(verify_palw_governance_envelope(&swapped, &view, NET, POV, 2, 3), "signature");
+        }
+
+        #[test]
+        fn declared_commitments_are_recomputed() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            let (mut envelope, view) = governed(halt_action(0xd1), &validators, 2);
+            envelope.approving_stake = 300;
+            expect_reject(verify_palw_governance_envelope(&envelope, &view, NET, POV, 2, 3), "approving_stake");
+
+            let (mut envelope, view) = governed(halt_action(0xd1), &validators, 3);
+            envelope.votes_root = h(0x99);
+            expect_reject(verify_palw_governance_envelope(&envelope, &view, NET, POV, 2, 3), "votes_root");
+
+            // Stale validator-set commitment (a bond joined after authoring).
+            let (envelope, _) = governed(halt_action(0xd1), &validators[..2], 2);
+            let (_, grown_view) = governed(halt_action(0xd1), &validators, 3);
+            expect_reject(verify_palw_governance_envelope(&envelope, &grown_view, NET, POV, 2, 3), "validator_set_commitment");
+
+            let (mut envelope, view) = governed(halt_action(0xd1), &validators, 3);
+            envelope.total_selected_stake = 1;
+            expect_reject(verify_palw_governance_envelope(&envelope, &view, NET, POV, 2, 3), "total_selected_stake");
+        }
+
+        #[test]
+        fn votes_must_resolve_to_active_bonds() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            let (mut envelope, view) = governed(halt_action(0xd1), &validators, 3);
+            envelope.votes[0].bond_outpoint = TransactionOutpoint::new(h(0x7f), 0);
+            envelope.votes.sort_by(|a, b| {
+                (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+            });
+            envelope.votes_root = palw_governance_votes_root(&envelope.votes).unwrap();
+            expect_reject(verify_palw_governance_envelope(&envelope, &view, NET, POV, 2, 3), "unknown or inactive");
+        }
+
+        /// The ADR-0040 P0-5 vacuity guards, inherited verbatim.
+        #[test]
+        fn degenerate_quorum_parameters_fail_closed() {
+            let validators = [validator(1, 100), validator(2, 100), validator(3, 100)];
+            let (envelope, view) = governed(halt_action(0xd1), &validators, 3);
+            expect_reject(verify_palw_governance_envelope(&envelope, &view, NET, POV, 0, 3), "degenerate");
+            expect_reject(verify_palw_governance_envelope(&envelope, &view, NET, POV, 2, 0), "degenerate");
+        }
+    }
+
+    /// ADR-0045 D3-b, design memo §8 — the grind / seat-binding / fail-closed negatives at the
+    /// ACCEPTANCE coordinate (`apply_palw_overlay_effect`, LeafChunk arm), i.e. against the real
+    /// clause-11/12 wiring rather than the pure predicates alone.
+    ///
+    /// Every adversarial fixture is a SELF-CONSISTENT batch: the manifest is built over the
+    /// tampered leaves' own Merkle projection, so the membership gate passes and the first
+    /// rejection is the PCPB clause under test — a fixture the membership gate caught would prove
+    /// nothing about clauses 11/12 (the §5.15.12 rebuild discipline).
+    mod pcpb_clause_negatives {
+        use super::*;
+        use crate::model::stores::palw_pcpb::DbPalwPcpbStore;
+        use kaspa_consensus_core::palw::{
+            PALW_DISPATCH_KIND_SELF_SERIAL, PALW_LEAF_CHUNK_VERSION_V3, PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, PalwDispatchEvidence,
+            PalwLeafChunkV1, PalwLeafPcpbWitnessV1, PalwProviderSnapshotEntry, PalwSnapshotWitnessSet, SelfSerialProof,
+            palw_build_snapshot_witnesses, palw_job_challenge, palw_pcpb_derive_b, palw_pcpb_receipt_preimage, palw_provider_id,
+            palw_provider_pk_hash,
+        };
+        use kaspa_consensus_core::tx::TransactionOutpoint;
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+        use pcpb_test_support::{DELTA, K, NETWORK_ID, W};
+
+        /// A self-consistent batch for adversarial leaves: manifest derived FROM the leaves (root,
+        /// count, registration epoch), content-addressed, with per-leaf derived proofs.
+        fn adversarial_batch(
+            mut leaves: Vec<PalwPublicLeafV1>,
+            witnesses: Vec<PalwLeafPcpbWitnessV1>,
+        ) -> (PalwBatchManifestV1, PalwLeafChunkV1) {
+            let registration_epoch = leaves[0].registered_epoch;
+            let hashes: Vec<Hash64> = leaves
+                .iter()
+                .map(|l| {
+                    let mut projected = l.clone();
+                    projected.batch_id = Hash64::default();
+                    projected.leaf_hash()
+                })
+                .collect();
+            let mut m = PalwBatchManifestV1 {
+                version: 1,
+                batch_id: h(1),
+                registration_epoch,
+                model_profile_id: h(2),
+                runtime_class_id: h(3),
+                leaf_count: leaves.len() as u32,
+                chunk_count: 1,
+                leaf_root: palw_leaf_merkle_root(&hashes),
+                descriptor_root: h(5),
+                total_leaf_bond_sompi: 0,
+                audit_policy_id: h(6),
+                activation_not_before_epoch: registration_epoch + 3,
+                expiry_epoch: registration_epoch + 9,
+            };
+            m.batch_id = m.content_id();
+            for leaf in leaves.iter_mut() {
+                leaf.batch_id = m.batch_id;
+            }
+            let proofs = leaves.iter().map(|l| palw_leaf_merkle_proof(&hashes, l.leaf_index).expect("index in range")).collect();
+            let chunk = PalwLeafChunkV1 {
+                version: PALW_LEAF_CHUNK_VERSION_V3,
+                batch_id: m.batch_id,
+                chunk_index: 0,
+                leaves,
+                proofs,
+                witnesses,
+            };
+            (m, chunk)
+        }
+
+        /// Admit a manifest+chunk pair against a staged context and return the chunk's outcome.
+        fn admit(
+            store: &DbPalwStore,
+            beacon: &DbPalwBeaconStore,
+            pcpb: &PalwPcpbAcceptanceCtx<'_>,
+            m: PalwBatchManifestV1,
+            chunk: PalwLeafChunkV1,
+        ) -> Result<(), PalwOverlayError> {
+            apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), store, beacon, None, None).unwrap();
+            apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), store, beacon, None, Some(pcpb))
+        }
+
+        /// §8 "grind 系 / sentinel 拒否" — clause 11 at acceptance. `issued_epoch` cannot be
+        /// declared freely (the challenge must RE-DERIVE under `R_issued`), the freshness window is
+        /// enforced at its exact boundaries, and the Object-V1 zero sentinel is structurally
+        /// underivable.
+        #[test]
+        fn pcpb_clause11_acceptance_rejects_free_epochs_and_sentinels() {
+            let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+            let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
+            let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+            let pcpb_store = pcpb_fixture().staged_store(&db, &beacon);
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            // Seeds for the epochs the negatives re-derive under (0 and 1 are not staged by the
+            // fixture; without them the free-declaration cases would fail as unresolvable-context
+            // instead of as the challenge mismatch actually under test).
+            let mut batch = rocksdb::WriteBatch::default();
+            beacon.set_beacon_seed_batch(&mut batch, 0, h(0xA0)).unwrap();
+            beacon.set_beacon_seed_batch(&mut batch, 1, h(0xA1)).unwrap();
+            db.write(batch).unwrap();
+            let wits = |n: u32| (0..n).map(|i| pcpb_fixture().witness(i)).collect::<Vec<_>>();
+
+            // Baseline: the untampered leaves in their own self-consistent batch ACCEPT — and the
+            // fixture geometry (issued 2, Δ 2, registered 4) sits exactly on the `anchor+Δ ==
+            // registered` boundary, so the boundary's accept side is pinned here.
+            let (m, chunk) = adversarial_batch(vec![leaf_raw(0), leaf_raw(1)], wits(2));
+            admit(&store, &beacon, &pctx, m, chunk).expect("the self-consistent baseline batch must accept");
+
+            // (a) Free-declared issued epoch: the leaf claims issued=1 while its challenge was
+            // derived at 2. R_1 exists, the freshness window admits it — but the challenge does not
+            // re-derive, which is the H-10 replay hole clause 11 exists to close.
+            let mut l = leaf_raw(0);
+            l.receipt_v3_issued_epoch = 1;
+            let (m, chunk) = adversarial_batch(vec![l], wits(1));
+            assert_eq!(admit(&store, &beacon, &pctx, m, chunk), Err(PalwOverlayError::LeafChallengeMismatch { leaf_index: 0 }));
+
+            // (b) A tampered challenge value under honest epochs.
+            let mut l = leaf_raw(0);
+            l.receipt_v3_job_challenge = h(0xFF);
+            let (m, chunk) = adversarial_batch(vec![l], wits(1));
+            assert_eq!(admit(&store, &beacon, &pctx, m, chunk), Err(PalwOverlayError::LeafChallengeMismatch { leaf_index: 0 }));
+
+            // (c) §8 "sentinel 拒否": the Object-V1 shape (zero challenge, zero issued epoch) is
+            // structurally underivable — no beacon seed hashes the witness triple to zero.
+            let mut l = leaf_raw(0);
+            l.receipt_v3_job_challenge = Hash64::default();
+            l.receipt_v3_issued_epoch = 0;
+            let (m, chunk) = adversarial_batch(vec![l], wits(1));
+            assert_eq!(admit(&store, &beacon, &pctx, m, chunk), Err(PalwOverlayError::LeafChallengeMismatch { leaf_index: 0 }));
+
+            // (d) Freshness `anchor + Δ ≤ registered`, violated by one epoch: issued 3 ⇒ 3+2 > 4.
+            let mut l = leaf_raw(0);
+            l.receipt_v3_issued_epoch = 3;
+            let (m, chunk) = adversarial_batch(vec![l], wits(1));
+            assert_eq!(
+                admit(&store, &beacon, &pctx, m, chunk),
+                Err(PalwOverlayError::LeafChallengeStale { leaf_index: 0, issued_epoch: 3, anchor_epoch: 3, registered_epoch: 4 })
+            );
+
+            // (e) Freshness `registered − issued ≤ w` at w EXACTLY (6): registered 8, issued 2 —
+            // accepted, against the same staged snapshot/draw context.
+            let mut l0 = leaf_raw(0);
+            l0.registered_epoch = 8;
+            let mut l1 = leaf_raw(1);
+            l1.registered_epoch = 8;
+            let (m, chunk) = adversarial_batch(vec![l0, l1], wits(2));
+            admit(&store, &beacon, &pctx, m, chunk).expect("registered − issued == w exactly is inside the window");
+
+            // (f) ...and w+1 is not.
+            let mut l = leaf_raw(0);
+            l.registered_epoch = 9;
+            let (m, chunk) = adversarial_batch(vec![l], wits(1));
+            assert_eq!(
+                admit(&store, &beacon, &pctx, m, chunk),
+                Err(PalwOverlayError::LeafChallengeStale { leaf_index: 0, issued_epoch: 2, anchor_epoch: 2, registered_epoch: 9 })
+            );
+        }
+
+        /// §8 "窓外 fail-closed" — every unresolvable clause-11/12 context read is a REJECTION,
+        /// never a waiver: no context at all, an unretained issued-epoch seed, an unretained
+        /// snapshot, an unclosed/unretained draw beacon, and an anchor below the snapshot lag.
+        #[test]
+        fn pcpb_clause12_acceptance_fails_closed_on_unresolvable_context() {
+            let fixture = pcpb_fixture();
+
+            // (a) No PCPB context: the WHOLE chunk is refused (verification that cannot run is a
+            // refusal, not a waiver).
+            let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+            let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
+            let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+            fixture.staged_store(&db, &beacon);
+            let (m, chunk) = adversarial_batch(vec![leaf_raw(0)], vec![fixture.witness(0)]);
+            apply_palw_overlay_effect(PalwOverlayEffect::Manifest(m), &store, &beacon, None, None).unwrap();
+            assert_eq!(
+                apply_palw_overlay_effect(PalwOverlayEffect::LeafChunk(chunk), &store, &beacon, None, None),
+                Err(PalwOverlayError::LeafPcpbContextUnresolvable {
+                    leaf_index: 0,
+                    epoch: fixture.issued_epoch,
+                    what: "acceptance ran without a PCPB context"
+                })
+            );
+
+            // Selective staging for the remaining cases: each env stages everything EXCEPT the one
+            // read whose absence is under test.
+            let stage_env = |issued_seed: bool, snapshot: bool, draw_seed: bool| {
+                let (lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+                let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
+                let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+                let pcpb_store = DbPalwPcpbStore::new(db.clone(), kaspa_database::prelude::CachePolicy::Count(64));
+                let mut batch = rocksdb::WriteBatch::default();
+                if issued_seed {
+                    beacon.set_beacon_seed_batch(&mut batch, fixture.issued_epoch, fixture.issued_seed).unwrap();
+                }
+                if snapshot {
+                    pcpb_store.set_snapshot_batch(&mut batch, fixture.snapshot_epoch, fixture.witnesses.commitment).unwrap();
+                }
+                if draw_seed {
+                    beacon.set_beacon_seed_batch(&mut batch, fixture.draw_epoch, fixture.draw_seed).unwrap();
+                }
+                db.write(batch).unwrap();
+                (lt, db, store, beacon, pcpb_store)
+            };
+
+            // (b) Issued-epoch seed unretained ⇒ clause 11's re-derivation cannot run.
+            let (_lt1, _db1, store, beacon, pcpb_store) = stage_env(false, true, true);
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let (m, chunk) = adversarial_batch(vec![leaf_raw(0)], vec![fixture.witness(0)]);
+            assert_eq!(
+                admit(&store, &beacon, &pctx, m, chunk),
+                Err(PalwOverlayError::LeafPcpbContextUnresolvable {
+                    leaf_index: 0,
+                    epoch: fixture.issued_epoch,
+                    what: "issued-epoch beacon seed"
+                })
+            );
+
+            // (c) Provider snapshot unretained at anchor − k.
+            let (_lt2, _db2, store, beacon, pcpb_store) = stage_env(true, false, true);
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let (m, chunk) = adversarial_batch(vec![leaf_raw(0)], vec![fixture.witness(0)]);
+            assert_eq!(
+                admit(&store, &beacon, &pctx, m, chunk),
+                Err(PalwOverlayError::LeafPcpbContextUnresolvable {
+                    leaf_index: 0,
+                    epoch: fixture.snapshot_epoch,
+                    what: "provider snapshot"
+                })
+            );
+
+            // (d) Post-commit draw beacon unclosed / unretained at anchor + Δ.
+            let (_lt3, _db3, store, beacon, pcpb_store) = stage_env(true, true, false);
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let (m, chunk) = adversarial_batch(vec![leaf_raw(0)], vec![fixture.witness(0)]);
+            assert_eq!(
+                admit(&store, &beacon, &pctx, m, chunk),
+                Err(PalwOverlayError::LeafPcpbContextUnresolvable {
+                    leaf_index: 0,
+                    epoch: fixture.draw_epoch,
+                    what: "post-commit beacon seed"
+                })
+            );
+
+            // (e) An anchor below the snapshot lag (`anchor − k` underflows): issued 1 with k = 2.
+            // The challenge is re-derived at epoch 1 so clause 11 passes and the underflow is the
+            // first failing read — the genesis boundary condition of design memo §10.2.
+            let (_lt4, db4, store, beacon, pcpb_store) = stage_env(true, true, true);
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let seed1 = h(0xA1);
+            let mut batch = rocksdb::WriteBatch::default();
+            beacon.set_beacon_seed_batch(&mut batch, 1, seed1).unwrap();
+            db4.write(batch).unwrap();
+            let w0 = fixture.witness(0);
+            let mut l = leaf_raw(0);
+            l.receipt_v3_issued_epoch = 1;
+            l.registered_epoch = 3;
+            l.receipt_v3_job_challenge = palw_job_challenge(
+                NETWORK_ID,
+                1,
+                &seed1,
+                &w0.scheduler_job_id,
+                &w0.requester_credential,
+                &w0.request_commitment,
+                l.shape_id,
+            );
+            l.job_nullifier = l.receipt_v3_job_challenge;
+            let (m, chunk) = adversarial_batch(vec![l], vec![w0]);
+            assert_eq!(
+                admit(&store, &beacon, &pctx, m, chunk),
+                Err(PalwOverlayError::LeafPcpbContextUnresolvable {
+                    leaf_index: 0,
+                    epoch: 1,
+                    what: "anchor predates the snapshot lag"
+                })
+            );
+        }
+
+        /// §8 "provider 束縛" (external) — the leaf's DECLARED seats are bound to the drawn
+        /// providers at acceptance: naming any other bonded provider in either seat is refused even
+        /// though the witness itself is honest.
+        #[test]
+        fn pcpb_clause12_acceptance_binds_declared_seats_external() {
+            let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+            let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
+            let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+            let fixture = pcpb_fixture();
+            let pcpb_store = fixture.staged_store(&db, &beacon);
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let drawn_a = fixture.witnesses.slots[fixture.slot_a].entry.provider_id;
+            let drawn_b = fixture.witnesses.slots[fixture.slot_b].entry.provider_id;
+            let other =
+                |not: [Hash64; 2]| *fixture.bonds.iter().find(|o| !not.contains(&palw_provider_id(o))).expect("4 providers, 2 drawn");
+
+            // Seat A swapped to an undrawn (but bonded, real) provider.
+            let mut l = leaf_raw(0);
+            l.provider_a_bond = other([drawn_a, drawn_b]);
+            let (m, chunk) = adversarial_batch(vec![l], vec![fixture.witness(0)]);
+            assert_eq!(admit(&store, &beacon, &pctx, m, chunk), Err(PalwOverlayError::LeafDispatchEvidenceInvalid { leaf_index: 0 }));
+
+            // Seat B swapped likewise.
+            let mut l = leaf_raw(0);
+            l.provider_b_bond = other([drawn_a, drawn_b]);
+            let (m, chunk) = adversarial_batch(vec![l], vec![fixture.witness(0)]);
+            assert_eq!(admit(&store, &beacon, &pctx, m, chunk), Err(PalwOverlayError::LeafDispatchEvidenceInvalid { leaf_index: 0 }));
+        }
+
+        // ---- self-serial world -----------------------------------------------------------------
+
+        /// Self-branch geometry inside the shared windows (W 6, K 2, Δ 2): anchor (= a_commit
+        /// epoch) 5, issued 5, registered 8, snapshot at 3, draw at 7.
+        const SELF_ANCHOR: u64 = 5;
+        const SELF_REGISTERED: u64 = 8;
+
+        struct SelfFix {
+            bonds: Vec<TransactionOutpoint>,
+            keys: Vec<mldsa::MLDSA87KeyPair>,
+            ws: PalwSnapshotWitnessSet,
+            issued_seed: Hash64,
+            draw_seed: Hash64,
+        }
+
+        fn self_fix() -> SelfFix {
+            let mut keys = Vec::new();
+            let mut bonds = Vec::new();
+            let mut entries = Vec::new();
+            for i in 0..4u8 {
+                let kp = mldsa::generate_key_pair([0x40 + i; 32]);
+                let outpoint = TransactionOutpoint::new(h(0xB0 + i), i as u32);
+                entries.push(PalwProviderSnapshotEntry {
+                    provider_id: palw_provider_id(&outpoint),
+                    ml_dsa_pk_hash: palw_provider_pk_hash(kp.verification_key.as_ref()),
+                    bond_sompi: 250,
+                    reward_script_commitment: h(0xD0 + i),
+                });
+                bonds.push(outpoint);
+                keys.push(kp);
+            }
+            SelfFix { bonds, keys, ws: palw_build_snapshot_witnesses(&entries), issued_seed: h(0x21), draw_seed: h(0x22) }
+        }
+
+        impl SelfFix {
+            /// A leaf + witness pair for `a_commit`, honest under this fixture's staged world.
+            fn leaf_and_witness(&self, a_commit: Hash64) -> (PalwPublicLeafV1, PalwLeafPcpbWitnessV1) {
+                let b_slot = self.ws.select(&palw_pcpb_derive_b(&self.draw_seed, &a_commit)).expect("non-empty snapshot");
+                let b_id = self.ws.slots[b_slot].entry.provider_id;
+                let b_key = self.bonds.iter().position(|o| palw_provider_id(o) == b_id).unwrap();
+                let a_slot = (0..self.ws.slots.len()).find(|&i| i != b_slot).unwrap();
+                let a_id = self.ws.slots[a_slot].entry.provider_id;
+                let a_bond = *self.bonds.iter().find(|o| palw_provider_id(o) == a_id).unwrap();
+                let preimage = palw_pcpb_receipt_preimage(&a_commit, b"self-acceptance-tail");
+                let sig = mldsa::sign(&self.keys[b_key].signing_key, &preimage, PALW_PCPB_RECEIPT_MLDSA87_CONTEXT, [0x77; 32])
+                    .expect("sign");
+                let (job, cred, req) = (h(0xE5), h(0xE6), h(0xE7));
+                let mut leaf = leaf_raw(0);
+                leaf.registered_epoch = SELF_REGISTERED;
+                leaf.dispatch_kind = PALW_DISPATCH_KIND_SELF_SERIAL;
+                leaf.a_commit = a_commit;
+                leaf.a_commit_epoch = SELF_ANCHOR;
+                leaf.provider_a_bond = a_bond;
+                leaf.provider_b_bond = self.bonds[b_key];
+                leaf.provider_snapshot_root = self.ws.commitment.snapshot_root;
+                leaf.assignment_proof_root = self.ws.commitment.assignment_root;
+                leaf.receipt_v3_issued_epoch = SELF_ANCHOR;
+                leaf.receipt_v3_job_challenge =
+                    palw_job_challenge(NETWORK_ID, SELF_ANCHOR, &self.issued_seed, &job, &cred, &req, leaf.shape_id);
+                leaf.job_nullifier = leaf.receipt_v3_job_challenge;
+                let a = &self.ws.slots[a_slot];
+                let b = &self.ws.slots[b_slot];
+                let witness = PalwLeafPcpbWitnessV1 {
+                    scheduler_job_id: job,
+                    requester_credential: cred,
+                    request_commitment: req,
+                    dispatch: PalwDispatchEvidence::SelfSerial(SelfSerialProof {
+                        a_commit,
+                        a_entry: a.entry.clone(),
+                        a_snapshot_membership: a.snapshot_membership.clone(),
+                        b_entry: b.entry.clone(),
+                        b_snapshot_membership: b.snapshot_membership.clone(),
+                        b_interval: b.interval.clone(),
+                        b_assignment_membership: b.assignment_membership.clone(),
+                        b_ml_dsa_pk: self.keys[b_key].verification_key.as_ref().to_vec(),
+                        b_receipt_preimage: preimage,
+                        b_signature: sig.as_ref().to_vec(),
+                    }),
+                };
+                (leaf, witness)
+            }
+
+            /// Stage seeds + snapshot (+ optionally an A-commit registry row) into fresh stores.
+            fn stage(
+                &self,
+                db: &std::sync::Arc<kaspa_database::prelude::DB>,
+                beacon: &DbPalwBeaconStore,
+                pcpb: &DbPalwPcpbStore,
+                acommit_row: Option<(Hash64, u64)>,
+            ) {
+                let mut batch = rocksdb::WriteBatch::default();
+                beacon.set_beacon_seed_batch(&mut batch, SELF_ANCHOR, self.issued_seed).unwrap();
+                beacon.set_beacon_seed_batch(&mut batch, SELF_ANCHOR + DELTA, self.draw_seed).unwrap();
+                pcpb.set_snapshot_batch(&mut batch, SELF_ANCHOR - K, self.ws.commitment).unwrap();
+                if let Some((anchor, epoch)) = acommit_row {
+                    pcpb.set_acommit_batch(&mut batch, &anchor, epoch).unwrap();
+                }
+                db.write(batch).unwrap();
+            }
+        }
+
+        fn self_env(
+            fix: &SelfFix,
+            acommit_row: Option<(Hash64, u64)>,
+        ) -> (kaspa_database::utils::DbLifetime, std::sync::Arc<kaspa_database::prelude::DB>, DbPalwStore, DbPalwBeaconStore, DbPalwPcpbStore)
+        {
+            let (lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+            let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
+            let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+            let pcpb_store = DbPalwPcpbStore::new(db.clone(), kaspa_database::prelude::CachePolicy::Count(64));
+            fix.stage(&db, &beacon, &pcpb_store, acommit_row);
+            (lt, db, store, beacon, pcpb_store)
+        }
+
+        /// §8 "a_commit 事後登録" — the self arm's on-chain ordering anchor at acceptance, in both
+        /// directions of the `row ≤ declared` rule, plus the absent-row fail-closed case, plus the
+        /// self-branch seat bindings (drawn-B substitution and the unbonded A).
+        #[test]
+        fn pcpb_clause12_acceptance_selfserial_registry_and_seats() {
+            let fix = self_fix();
+            let a_commit = h(0xAC);
+
+            // Honest, row == declared: accepted end-to-end (the baseline every negative perturbs).
+            let (leaf, witness) = fix.leaf_and_witness(a_commit);
+            let (_lt, _db, store, beacon, pcpb_store) = self_env(&fix, Some((a_commit, SELF_ANCHOR)));
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let (m, chunk) = adversarial_batch(vec![leaf.clone()], vec![witness.clone()]);
+            admit(&store, &beacon, &pctx, m, chunk).expect("the honest self-serial batch must accept");
+
+            // (a) NO registry row: the anchor was never on-chain — refused, fail-closed.
+            let (_lt, _db, store, beacon, pcpb_store) = self_env(&fix, None);
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let (m, chunk) = adversarial_batch(vec![leaf.clone()], vec![witness.clone()]);
+            assert_eq!(
+                admit(&store, &beacon, &pctx, m, chunk),
+                Err(PalwOverlayError::LeafACommitUnanchored { leaf_index: 0, declared_epoch: SELF_ANCHOR, registry_epoch: None })
+            );
+
+            // (b) Registry row LATER than the declared epoch (row 6 > declared 5): the leaf claims
+            // its commitment predates a beacon it was actually registered after — the exact "late
+            // anchor borrows an already-known beacon" direction. Refused.
+            let (_lt, _db, store, beacon, pcpb_store) = self_env(&fix, Some((a_commit, SELF_ANCHOR + 1)));
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let (m, chunk) = adversarial_batch(vec![leaf.clone()], vec![witness.clone()]);
+            assert_eq!(
+                admit(&store, &beacon, &pctx, m, chunk),
+                Err(PalwOverlayError::LeafACommitUnanchored {
+                    leaf_index: 0,
+                    declared_epoch: SELF_ANCHOR,
+                    registry_epoch: Some(SELF_ANCHOR + 1)
+                })
+            );
+
+            // (c) Registry row EARLIER than the declared epoch (row 3 ≤ declared 5): ACCEPTED —
+            // `row ≤ declared` is the deliberate rule (both coordinates carry the argument): the
+            // commitment provably predates `R_{declared+Δ}`, so B still post-dates the commit; the
+            // residual freedom (which epoch's pair to condition on) is the same w-bounded choice
+            // the external branch's issued-epoch already has, and equality would only re-price it
+            // through multiple cheap anchors instead of removing it.
+            let (_lt, _db, store, beacon, pcpb_store) = self_env(&fix, Some((a_commit, SELF_ANCHOR - 2)));
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let (m, chunk) = adversarial_batch(vec![leaf.clone()], vec![witness.clone()]);
+            admit(&store, &beacon, &pctx, m, chunk).expect("row ≤ declared must accept (the documented ≤ rule)");
+
+            // (d) Declared seat B ≠ drawn B (another bonded provider): refused by the seat binding.
+            let (_lt, _db, store, beacon, pcpb_store) = self_env(&fix, Some((a_commit, SELF_ANCHOR)));
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let drawn_b = palw_provider_id(&leaf.provider_b_bond);
+            let a_id = palw_provider_id(&leaf.provider_a_bond);
+            let other = *fix.bonds.iter().find(|o| ![drawn_b, a_id].contains(&palw_provider_id(o))).unwrap();
+            let mut swapped = leaf.clone();
+            swapped.provider_b_bond = other;
+            let (m, chunk) = adversarial_batch(vec![swapped], vec![witness.clone()]);
+            assert_eq!(admit(&store, &beacon, &pctx, m, chunk), Err(PalwOverlayError::LeafDispatchEvidenceInvalid { leaf_index: 0 }));
+
+            // (e) Unbonded A self-order: seat A names a bond outside the snapshot and the witness
+            // fabricates a matching entry — membership cannot verify, so clause 12 refuses. Without
+            // this, an unbonded A mints with only B's bond at stake.
+            let (_lt, _db, store, beacon, pcpb_store) = self_env(&fix, Some((a_commit, SELF_ANCHOR)));
+            let pctx = pcpb_test_support::ctx(&pcpb_store);
+            let outsider = TransactionOutpoint::new(h(0xEE), 9);
+            let mut unbonded = leaf.clone();
+            unbonded.provider_a_bond = outsider;
+            let mut forged = witness.clone();
+            if let PalwDispatchEvidence::SelfSerial(p) = &mut forged.dispatch {
+                p.a_entry = PalwProviderSnapshotEntry {
+                    provider_id: palw_provider_id(&outsider),
+                    ml_dsa_pk_hash: h(0xEF),
+                    bond_sompi: 250,
+                    reward_script_commitment: h(0xF0),
+                };
+            }
+            let (m, chunk) = adversarial_batch(vec![unbonded], vec![forged]);
+            assert_eq!(admit(&store, &beacon, &pctx, m, chunk), Err(PalwOverlayError::LeafDispatchEvidenceInvalid { leaf_index: 0 }));
+        }
+
+        /// The staged-store constants this module leans on really are the shared ones (a drift in
+        /// `pcpb_test_support` would silently re-scope every window boundary above).
+        #[test]
+        fn pcpb_negative_battery_window_constants_are_the_shared_ones() {
+            assert_eq!((W, K, DELTA), (6, 2, 2), "window constants moved — re-derive every boundary case in this module");
+            let f = pcpb_fixture();
+            assert_eq!(f.registered_epoch, FIXTURE_REGISTRATION_EPOCH);
+            assert_eq!(f.issued_epoch, FIXTURE_REGISTRATION_EPOCH - DELTA);
+            assert_eq!(f.snapshot_epoch, f.issued_epoch - K);
+            assert_eq!(f.draw_epoch, f.issued_epoch + DELTA);
+        }
+    }
+}
+
+/// ADR-0045 D3-b — shared PCPB test scaffolding: build a leaf/witness/context triple that the real
+/// clause-11/12 arm ACCEPTS, so tests whose subject is something else (store re-announce, lifecycle
+/// e2e) can keep exercising their own property, and clause tests can perturb one field at a time
+/// from a known-good baseline.
+///
+/// Everything here is derived, never asserted: the challenge is re-derived with the same
+/// `palw_job_challenge` the verifier calls, and the leaf's declared provider bonds are set to the
+/// providers the beacon draw actually selects. A change that breaks producer/verifier agreement
+/// therefore breaks these fixtures loudly instead of silently pinning a stale expectation.
+#[cfg(test)]
+pub(crate) mod pcpb_test_support {
+    use kaspa_consensus_core::palw::{
+        BeaconAssignedProof, PALW_DISPATCH_KIND_BEACON_ASSIGNED, PalwDispatchEvidence, PalwLeafPcpbWitnessV1,
+        PalwProviderSnapshotEntry, PalwPublicLeafV1, PalwSnapshotWitnessSet, palw_assignment_draw_seed, palw_build_snapshot_witnesses,
+        palw_job_challenge, palw_provider_id,
+    };
+    use kaspa_consensus_core::tx::TransactionOutpoint;
+    use kaspa_hashes::Hash64;
+
+    pub(crate) const NETWORK_ID: u32 = 110;
+    pub(crate) const W: u64 = 6;
+    pub(crate) const K: u64 = 2;
+    pub(crate) const DELTA: u64 = 2;
+
+    fn th(b: u8) -> Hash64 {
+        Hash64::from_bytes([b; 64])
+    }
+
+    /// A bonded provider set whose ids come from real bond outpoints — the same derivation
+    /// (`palw_provider_id`) the acceptance arm applies to `leaf.provider_{a,b}_bond`.
+    pub(crate) struct PcpbFixture {
+        pub bonds: Vec<TransactionOutpoint>,
+        pub witnesses: PalwSnapshotWitnessSet,
+        /// `(issued_epoch, seed)` and `(draw_epoch, seed)` rows the beacon store must hold.
+        pub issued_epoch: u64,
+        pub issued_seed: Hash64,
+        pub draw_epoch: u64,
+        pub draw_seed: Hash64,
+        pub snapshot_epoch: u64,
+        pub registered_epoch: u64,
+        /// The providers the draw selected, in seat order.
+        pub slot_a: usize,
+        pub slot_b: usize,
+    }
+
+    /// The acceptance context a staged store implies, with this module's window constants.
+    pub(crate) fn ctx(
+        store: &crate::model::stores::palw_pcpb::DbPalwPcpbStore,
+    ) -> super::PalwPcpbAcceptanceCtx<'_> {
+        super::PalwPcpbAcceptanceCtx {
+            pcpb_store: store,
+            network_id: NETWORK_ID,
+            freshness_window_epochs: W,
+            snapshot_lag_epochs: K,
+            post_commit_delta_epochs: DELTA,
+        }
+    }
+
+    /// Build a fixture anchored at `registered_epoch` whose external-branch draw picks two distinct
+    /// providers (searching the draw beacon for one, exactly as an honest scheduler would wait for
+    /// the epoch whose beacon assigns it a usable pair).
+    pub(crate) fn fixture(registered_epoch: u64) -> PcpbFixture {
+        let issued_epoch = registered_epoch - DELTA;
+        let snapshot_epoch = issued_epoch - K;
+        let draw_epoch = issued_epoch + DELTA;
+        let bonds: Vec<TransactionOutpoint> = (0..4u8).map(|i| TransactionOutpoint::new(th(0xB0 + i), i as u32)).collect();
+        let entries: Vec<PalwProviderSnapshotEntry> = bonds
+            .iter()
+            .enumerate()
+            .map(|(i, outpoint)| PalwProviderSnapshotEntry {
+                provider_id: palw_provider_id(outpoint),
+                ml_dsa_pk_hash: th(0xC0 + i as u8),
+                bond_sompi: 250,
+                reward_script_commitment: th(0xD0 + i as u8),
+            })
+            .collect();
+        let witnesses = palw_build_snapshot_witnesses(&entries);
+        let (mut draw_seed, mut slot_a, mut slot_b) = (th(0x40), 0usize, 0usize);
+        for k in 0..64u8 {
+            draw_seed = th(0x40u8.wrapping_add(k));
+            let (a, b) = (
+                witnesses.select(&palw_assignment_draw_seed(&draw_seed, 0)),
+                witnesses.select(&palw_assignment_draw_seed(&draw_seed, 1)),
+            );
+            if let (Some(a), Some(b)) = (a, b)
+                && a != b
+            {
+                (slot_a, slot_b) = (a, b);
+                break;
+            }
+        }
+        assert_ne!(slot_a, slot_b, "fixture: no beacon drew two distinct providers");
+        PcpbFixture {
+            bonds,
+            witnesses,
+            issued_epoch,
+            issued_seed: th(0x11),
+            draw_epoch,
+            draw_seed,
+            snapshot_epoch,
+            registered_epoch,
+            slot_a,
+            slot_b,
+        }
+    }
+
+    impl PcpbFixture {
+        /// The bond outpoint of a drawn slot — what the leaf must declare in that seat.
+        fn bond_of(&self, slot: usize) -> TransactionOutpoint {
+            let id = self.witnesses.slots[slot].entry.provider_id;
+            *self.bonds.iter().find(|o| palw_provider_id(o) == id).expect("every snapshot id came from a bond")
+        }
+
+        /// The per-leaf challenge preimage triple. `scheduler_job_id` varies with the leaf index so a
+        /// batch's leaves carry DISTINCT challenges (and therefore distinct `job_nullifier`s), which is
+        /// what an honest scheduler produces — one lease per job, not one per epoch.
+        fn preimage(leaf_index: u32) -> (Hash64, Hash64, Hash64) {
+            let mut job = [0u8; 64];
+            job[0] = 0xE1;
+            job[1..5].copy_from_slice(&leaf_index.to_le_bytes());
+            (Hash64::from_bytes(job), th(0xE2), th(0xE3))
+        }
+
+        /// Stamp a leaf into the PCPB world this fixture describes: the drawn provider seats, the
+        /// committed roots, the anchor epochs, and a challenge that RE-DERIVES under `R_{issued}`.
+        ///
+        /// It also switches the leaf to receipt DA **Object V2**, because D3-b makes that mandatory:
+        /// clause 11 re-derives `receipt_v3_job_challenge`, and `validate_public_leaf`'s Object-V1 arm
+        /// requires that very field to be a zero sentinel — the two cannot both hold, so a V1 leaf can
+        /// no longer be stored (design memo §10.1).
+        pub(crate) fn stamp(&self, leaf: &mut PalwPublicLeafV1) {
+            leaf.provider_a_bond = self.bond_of(self.slot_a);
+            leaf.provider_b_bond = self.bond_of(self.slot_b);
+            leaf.dispatch_kind = PALW_DISPATCH_KIND_BEACON_ASSIGNED;
+            leaf.a_commit = Hash64::default();
+            leaf.a_commit_epoch = 0;
+            leaf.provider_snapshot_root = self.witnesses.commitment.snapshot_root;
+            leaf.assignment_proof_root = self.witnesses.commitment.assignment_root;
+            leaf.registered_epoch = self.registered_epoch;
+            leaf.receipt_da_object_version = kaspa_consensus_core::palw::da::PALW_RECEIPT_DA_OBJECT_VERSION_V2;
+            leaf.receipt_v3_compute_set_id = th(0xC5);
+            leaf.receipt_v3_issued_epoch = self.issued_epoch;
+            leaf.receipt_v3_expires_epoch = leaf.expiry_epoch;
+            let (job, cred, req) = Self::preimage(leaf.leaf_index);
+            let challenge =
+                palw_job_challenge(NETWORK_ID, self.issued_epoch, &self.issued_seed, &job, &cred, &req, leaf.shape_id);
+            leaf.receipt_v3_job_challenge = challenge;
+            // Object-V2 requires the leaf's job nullifier to BE its challenge.
+            leaf.job_nullifier = challenge;
+        }
+
+        /// The witness that opens the leaf stamped at `leaf_index`.
+        pub(crate) fn witness(&self, leaf_index: u32) -> PalwLeafPcpbWitnessV1 {
+            let (scheduler_job_id, requester_credential, request_commitment) = Self::preimage(leaf_index);
+            PalwLeafPcpbWitnessV1 {
+                scheduler_job_id,
+                requester_credential,
+                request_commitment,
+                dispatch: PalwDispatchEvidence::BeaconAssigned(BeaconAssignedProof {
+                    slot_a: self.witnesses.slots[self.slot_a].clone(),
+                    slot_b: self.witnesses.slots[self.slot_b].clone(),
+                }),
+            }
+        }
+
+        /// Build a PCPB store on `db` and stage this fixture's context into it — the one-call setup
+        /// every acceptance test needs before driving the real arm.
+        pub(crate) fn staged_store(
+            &self,
+            db: &std::sync::Arc<kaspa_database::prelude::DB>,
+            beacon: &crate::model::stores::palw_beacon::DbPalwBeaconStore,
+        ) -> crate::model::stores::palw_pcpb::DbPalwPcpbStore {
+            let store = crate::model::stores::palw_pcpb::DbPalwPcpbStore::new(
+                db.clone(),
+                kaspa_database::prelude::CachePolicy::Count(64),
+            );
+            self.stage(db, beacon, &store);
+            store
+        }
+
+        /// Stage the beacon seeds + provider snapshot this fixture's leaves resolve against.
+        pub(crate) fn stage(
+            &self,
+            db: &std::sync::Arc<kaspa_database::prelude::DB>,
+            beacon: &crate::model::stores::palw_beacon::DbPalwBeaconStore,
+            pcpb: &crate::model::stores::palw_pcpb::DbPalwPcpbStore,
+        ) {
+            let mut batch = rocksdb::WriteBatch::default();
+            beacon.set_beacon_seed_batch(&mut batch, self.issued_epoch, self.issued_seed).unwrap();
+            beacon.set_beacon_seed_batch(&mut batch, self.draw_epoch, self.draw_seed).unwrap();
+            pcpb.set_snapshot_batch(&mut batch, self.snapshot_epoch, self.witnesses.commitment).unwrap();
+            db.write(batch).unwrap();
         }
     }
 }

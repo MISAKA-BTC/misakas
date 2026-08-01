@@ -6521,6 +6521,7 @@ dependencies = [
  "kaspa-rpc-core",
  "kaspa-txscript",
  "kaspa-wrpc-client",
+ "libcrux-ml-dsa",
  "misaka-palw",
  "serde",
  "serde_json",

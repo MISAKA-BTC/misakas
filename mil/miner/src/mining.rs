@@ -291,6 +291,7 @@ mod tests {
                 job_nullifier: h(0x20),
                 // The base nullifier is irrelevant — grind_eligibility swaps in each candidate's commitment.
                 raw_ticket_nullifier: h(0),
+                pcpb: crate::PcpbLeafFields::external(Hash64::default(), Hash64::default()),
             })
             .unwrap()
             .leaf
@@ -382,6 +383,7 @@ mod tests {
                     output_salt: [0x33; 32],
                     job_nullifier: h(0x20 + idx as u8),
                     raw_ticket_nullifier: h(0xC0 + nf),
+                    pcpb: crate::PcpbLeafFields::external(Hash64::default(), Hash64::default()),
                 })
                 .unwrap()
                 .leaf,
@@ -411,39 +413,43 @@ mod tests {
 
         // (3) Re-stamp under the content id + chunk on-chain.
         let restamped = restamp_leaves(batch_id, &leaves);
-        let (chunk_byte, chunk_payload) = build_leaf_chunk(batch_id, 0, &restamped).unwrap();
+        let (chunk_byte, chunk_payload) =
+            build_leaf_chunk(batch_id, 0, &restamped, &crate::registration::tests::dummy_witnesses(&restamped)).unwrap();
         assert_eq!(validate_palw_overlay_payload(chunk_byte, &chunk_payload), Ok(()));
 
-        // (4) Auditor quorum certifies the batch.
-        let auditors = [
-            Auditor {
-                key: ValidatorKey::from_seed([0x11; 32]),
-                bond: TransactionOutpoint::new(h(0x11), 1),
-                pass: true,
-                checked_leaf_bitmap_root: h(0x51),
-            },
-            Auditor {
-                key: ValidatorKey::from_seed([0x22; 32]),
-                bond: TransactionOutpoint::new(h(0x22), 2),
-                pass: true,
-                checked_leaf_bitmap_root: h(0x52),
-            },
-            Auditor {
-                key: ValidatorKey::from_seed([0x33; 32]),
-                bond: TransactionOutpoint::new(h(0x33), 3),
-                pass: true,
-                checked_leaf_bitmap_root: h(0x53),
-            },
-        ];
+        // (4) Auditor quorum certifies the batch. Each verdict is the OUTPUT of running the round
+        // over the beacon-selected sample of THIS batch's leaves (AUDIT-EXEC-01) — there is no
+        // longer a `pass: true` field to assert one into existence.
+        struct ReproducesEverything;
+        impl crate::audit::LeafAuditExecutor for ReproducesEverything {
+            fn audit_leaf(&mut self, _leaf_index: u32, _leaf: &PalwPublicLeafV1) -> Result<bool, String> {
+                Ok(true)
+            }
+        }
+        let auditors: Vec<_> = [0x11u8, 0x22, 0x33]
+            .into_iter()
+            .zip(1u32..)
+            .map(|(seed, index)| {
+                let verdict = crate::audit::execute_audit_round(
+                    &h(0x99),
+                    &batch_id,
+                    &restamped,
+                    restamped.len() as u32,
+                    &mut ReproducesEverything,
+                )
+                .expect("the round executes over this batch's leaves");
+                (Auditor { key: ValidatorKey::from_seed([seed; 32]), bond: TransactionOutpoint::new(h(seed), index) }, verdict)
+            })
+            .collect();
         let slate: Vec<_> = auditors
             .iter()
-            .map(|auditor| kaspa_consensus_core::palw::PalwCredentialStake {
+            .map(|(auditor, _)| kaspa_consensus_core::palw::PalwCredentialStake {
                 credential: auditor.bond.transaction_id,
                 weight: 100,
                 representative: auditor.bond,
             })
             .collect();
-        let set_commit = kaspa_consensus_core::palw::auditor_set_commitment(&auditors.iter().map(|a| a.bond).collect::<Vec<_>>());
+        let set_commit = kaspa_consensus_core::palw::auditor_set_commitment(&auditors.iter().map(|a| a.0.bond).collect::<Vec<_>>());
         let round = AuditRound {
             network_id: NET,
             batch_id,
