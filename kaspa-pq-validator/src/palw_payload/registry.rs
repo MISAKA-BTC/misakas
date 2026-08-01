@@ -549,7 +549,12 @@ pub(super) fn registry_descriptor_template(args: RegistryDescriptorTemplateArgs)
     Ok(())
 }
 
-/// Print the current policy state names accepted in policy JSON.
+/// The policy state names accepted in policy JSON — the operator-facing spelling of
+/// [`ComputeSetState`], kept next to the JSON surface it documents. Currently referenced only from
+/// here (serde derives the parse itself), so it is retained deliberately rather than deleted: it is
+/// the one place that enumerates the accepted spellings, and a `--help`/validation path that lists
+/// them is the natural next caller.
+#[allow(dead_code)]
 pub(super) fn state_names() -> &'static [(&'static str, ComputeSetState)] {
     &[
         ("Proposed", ComputeSetState::Proposed),
