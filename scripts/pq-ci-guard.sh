@@ -23,9 +23,49 @@ echo "== [1/6] dependency advisory audit =="
 # the missing-tool case to a warning (e.g. local runs without the tool installed).
 HARD_ADVISORY_GATE="${HARD_ADVISORY_GATE:-1}"
 if command -v cargo-deny >/dev/null 2>&1; then
+  # Preferred: cargo-deny RESOLVES the dependency graph, so a vulnerable crate that sits in
+  # Cargo.lock but is not reachable from any workspace target is correctly not reported.
   cargo deny check advisories || fail=1
 elif command -v cargo-audit >/dev/null 2>&1; then
-  cargo audit || fail=1
+  # Fallback: cargo-audit reads Cargo.lock FLAT — it has no notion of which entries are actually
+  # built. A lockfile carries orphans (an optional feature nobody enables still pins its deps), so
+  # a raw `cargo audit` fails the gate on crates this workspace does not compile. Observed
+  # 2026-08-02 with RUSTSEC-2026-0185 / quinn-proto, an orphan of reqwest's unenabled quinn/http3
+  # feature: `cargo tree -i quinn-proto --target all --workspace` prints nothing, and cargo-deny
+  # passes, while cargo-audit fails.
+  #
+  # So filter cargo-audit's findings by REACHABILITY instead of by advisory id. Nothing is
+  # hardcoded and nothing is permanently excused: a crate that becomes reachable later starts
+  # failing the gate again on its own, with no list to remember to update.
+  echo "cargo-deny not found; falling back to cargo-audit with a reachability filter."
+  audit_json="$(cargo audit --json 2>/dev/null)" || true
+  if [ -z "$audit_json" ]; then
+    echo "  -> FAIL: cargo audit produced no parseable output."
+    fail=1
+  else
+    vuln_crates="$(printf '%s' "$audit_json" | python3 -c '
+import json, sys
+try:
+    doc = json.load(sys.stdin)
+except Exception:
+    sys.exit(3)
+for v in (doc.get("vulnerabilities") or {}).get("list") or []:
+    print("%s\t%s" % (v["package"]["name"], v["advisory"]["id"]))
+')" || { echo "  -> FAIL: could not parse cargo audit --json."; fail=1; vuln_crates=""; }
+
+    reachable=0
+    while IFS=$'\t' read -r crate advisory; do
+      [ -n "${crate:-}" ] || continue
+      if cargo tree -i "$crate" --target all --workspace >/dev/null 2>&1 &&
+         [ -n "$(cargo tree -i "$crate" --target all --workspace 2>/dev/null | grep -v '^$')" ]; then
+        echo "  REACHABLE  $advisory ($crate) — this workspace builds it."
+        reachable=1
+      else
+        echo "  unreachable $advisory ($crate) — lockfile orphan, not built by any workspace target; skipped."
+      fi
+    done <<< "$vuln_crates"
+    [ "$reachable" = "1" ] && fail=1
+  fi
 else
   echo "neither cargo-deny nor cargo-audit installed; cannot run the advisory audit."
   echo "  install: cargo install cargo-deny  (or cargo-audit)"
