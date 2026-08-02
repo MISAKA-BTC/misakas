@@ -165,6 +165,22 @@ pub(super) async fn pcpb_witness(args: PcpbWitnessArgs) -> Result<(), String> {
         )
     })?;
 
+    // Print the resolved context BEFORE the draw. When the draw cannot seat two distinct providers
+    // the cause is always in these numbers — a one-provider snapshot, or one bond so large it wins
+    // both tickets — and an operator who only sees the refusal cannot tell which.
+    println!("payload_kind: pcpb-witness");
+    println!("network_id: {suffix}");
+    println!("anchor_epoch: {}", ctx.anchor_epoch);
+    println!("snapshot_epoch: {}", ctx.snapshot_epoch);
+    println!("draw_epoch: {}", ctx.draw_epoch);
+    println!("provider_count: {}", ctx.commitment.provider_count);
+    println!("total_bond: {}", ctx.commitment.total_bond);
+    println!("provider_snapshot_root: {}", ctx.commitment.snapshot_root);
+    println!("assignment_proof_root: {}", ctx.commitment.assignment_root);
+    for slot in &ctx.witness_set().slots {
+        println!("snapshot_entry: provider_id={} bond_sompi={}", slot.entry.provider_id, slot.entry.bond_sompi);
+    }
+
     let mut witnesses: Vec<(u32, kaspa_consensus_core::palw::PalwLeafPcpbWitnessV1)> = Vec::with_capacity(args.leaf_count as usize);
     let mut leaf_fields = Vec::with_capacity(args.leaf_count as usize);
     for leaf_index in 0..args.leaf_count {
@@ -218,15 +234,6 @@ pub(super) async fn pcpb_witness(args: PcpbWitnessArgs) -> Result<(), String> {
         return Err(error);
     }
 
-    println!("payload_kind: pcpb-witness");
-    println!("network_id: {suffix}");
-    println!("anchor_epoch: {}", ctx.anchor_epoch);
-    println!("snapshot_epoch: {}", ctx.snapshot_epoch);
-    println!("draw_epoch: {}", ctx.draw_epoch);
-    println!("provider_count: {}", ctx.commitment.provider_count);
-    println!("total_bond: {}", ctx.commitment.total_bond);
-    println!("provider_snapshot_root: {}", ctx.commitment.snapshot_root);
-    println!("assignment_proof_root: {}", ctx.commitment.assignment_root);
     for leaf in &leaf_fields {
         let index = leaf["leaf_index"].as_u64().unwrap_or_default();
         println!("leaf{index}.dispatch_kind: {}", leaf["dispatch_kind"]);
