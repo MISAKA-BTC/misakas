@@ -50,7 +50,7 @@ const FIELDS_SCHEMA: &str = "misaka.palw.pcpb-fields.v1";
 pub struct PcpbWitnessArgs {
     /// PALW-active preset. Its suffix is the `network_id` the challenge derivation binds, so this
     /// must be the network the leaf will be registered on.
-    #[arg(long, value_enum, default_value = "testnet-21")]
+    #[arg(long, value_enum, default_value = "testnet-22")]
     network: PalwArtifactNetwork,
 
     /// Node wRPC (Borsh) endpoint. Defaults to the selected network's local port.
