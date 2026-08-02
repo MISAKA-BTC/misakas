@@ -394,6 +394,16 @@ impl BlockBodyProcessor {
         // The equality here is the defence line for that argument, plus the bounded-window rule: a
         // ticket whose anchor epoch has aged out of the retained window stops minting (fail-closed)
         // rather than resolving against a substituted live value.
+        //
+        // STILL EPOCH-KEYED, on purpose, and this is the honest statement of what static-audit C-01
+        // does NOT yet cover. Clauses 11/12 now walk the candidate's own chain, but they run at the
+        // ACCEPTANCE coordinate, where the candidate is a chain block and its selected parent always
+        // carries the rows the walk needs. This clause runs in body-in-context, for EVERY block: a
+        // side block's selected parent may never have been a chain block at all, so walking from it
+        // would fail closed on honest side blocks and make them unmergeable — strictly worse than
+        // the divergence being closed. Giving clause 13 a fork-relative reader needs a coordinate
+        // that exists for non-chain blocks (a header-walk-resolvable commitment is the candidate),
+        // which is its own change and is tracked as the remaining half of C-01.
         {
             let leaf = &resolved.pcpb;
             let anchor = if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {

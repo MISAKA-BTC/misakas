@@ -3817,10 +3817,15 @@ impl VirtualStateProcessor {
                         // the same coordinate the accepted-lifecycle view and the beacon derivation
                         // already anchor on — so all three now agree on "this block's history".
                         selected_parent,
-                        seed_walk_max_hops: kaspa_consensus_core::palw::palw_beacon_seed_history_window_epochs(
+                        // One bound for BOTH walks, taken from the deeper of the two windows: clause
+                        // 12 resolves the provider snapshot at `anchor − k`, a full snapshot lag
+                        // below the oldest seed clause 11 reads. Budgeting the seed window alone
+                        // would refuse the oldest honest snapshot — the P1-7 fail-closed shape.
+                        context_walk_max_hops: kaspa_consensus_core::palw::palw_provider_snapshot_history_window_epochs(
                             &self.palw_batch_admission,
                             self.palw_epoch_length_daa,
                             self.palw_freshness_window_epochs,
+                            self.palw_snapshot_lag_epochs,
                         ) as usize,
                     };
                     let apply_result = crate::processes::palw::apply_palw_overlay_effect(
@@ -4178,11 +4183,18 @@ impl VirtualStateProcessor {
         // The pointer is the same expression whether or not THIS block closed anything: point at the
         // parent if the parent closed something, else inherit whatever the parent pointed at. A run
         // of non-closing blocks therefore costs one hop, not one hop per block.
-        state.prev_closer = self
-            .palw_beacon_store
-            .beacon_state(selected_parent)
-            .unwrap_or_default()
-            .and_then(|parent| if parent.closed_seeds.is_empty() { parent.prev_closer } else { Some(selected_parent) });
+        //
+        // A parent with NO row is not the same as no parent. It is either the true origin of this
+        // history (genesis / below the activation fence) — the chain ends, and a walk that reaches
+        // it must refuse — or a boundary the pruning pass truncated, where the walk must instead
+        // fall through to the buried epoch-keyed history the pruning snapshot carries. Pointing AT
+        // the rowless parent is what tells those two apart at read time.
+        state.prev_closer = match self.palw_beacon_store.beacon_state(selected_parent).unwrap_or_default() {
+            Some(parent) if parent.closed_seeds.is_empty() => parent.prev_closer,
+            Some(_) => Some(selected_parent),
+            None if selected_parent == self.genesis.hash || sp_daa < self.palw_activation_daa_score => None,
+            None => Some(selected_parent),
+        };
         self.palw_beacon_store.set_state_batch(batch, current, Arc::new(state)).unwrap();
 
         // ADR-0045 D3-a — persist each closed epoch's `R_E` in the same WriteBatch, then drop rows
@@ -4855,6 +4867,11 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw::PalwSnapshotCommitment,
             Vec<kaspa_consensus_core::palw::PalwProviderSnapshotEntry>,
         )> = Vec::new();
+        // Static-audit finding C-01 — the same rows, stitched into the block-keyed FORK-RELATIVE
+        // chain clause 12 walks. Held in memory across the pass because point reads below see
+        // COMMITTED state only: this reconciliation applies a whole chain path in one batch, so a
+        // block's selected parent is frequently a row staged earlier in THIS loop.
+        let mut chain_rows: HashMap<BlockHash, kaspa_consensus_core::palw::PalwPcpbChainStateV1> = HashMap::new();
         for (block, mutations) in &added {
             let block_daa = self.headers_store.get_daa_score(*block).unwrap_or_else(|store_error| {
                 palw_overlay_commit_fail_stop(format!("PALW PCPB writer could not resolve attached {block}: {store_error}"))
@@ -4864,14 +4881,40 @@ impl VirtualStateProcessor {
                 let sp = self.ghostdag_store.get_selected_parent(*block).unwrap_or_else(|store_error| {
                     palw_overlay_commit_fail_stop(format!("PALW PCPB writer: no selected parent for {block}: {store_error}"))
                 });
-                let sp_daa = self.headers_store.get_daa_score(sp).unwrap_or(0).max(self.palw_activation_daa_score);
+                let raw_sp_daa = self.headers_store.get_daa_score(sp).unwrap_or(0);
+                let sp_daa = raw_sp_daa.max(self.palw_activation_daa_score);
                 let sp_epoch = sp_daa / epoch_len;
+                let mut closed_snapshots = Vec::new();
                 if sp_epoch < block_epoch {
                     let (commitment, entries) = self.derive_palw_provider_snapshot(&working, block_daa);
                     for epoch in sp_epoch..block_epoch {
                         snapshot_rows.push((epoch, commitment, entries.clone()));
+                        closed_snapshots.push((epoch, commitment));
                     }
                 }
+                // Static-audit C-01 — the pointer, derived exactly as the beacon writer derives its
+                // own: point at the selected parent when the parent closed something, else inherit
+                // whatever the parent pointed at, so a run of non-closing blocks costs ONE hop.
+                //
+                // The third arm is what makes a pruned node's walk correct. A parent with no row is
+                // either the true ORIGIN of this history (genesis / below the activation fence), in
+                // which case the chain really does end and the walk must refuse — or a boundary the
+                // pruning pass truncated, in which case the walk must be able to tell and fall
+                // through to the buried epoch-keyed history. Pointing AT the rowless parent in the
+                // second case is what carries that distinction; `None` would claim the epoch was
+                // never closed and reject leaves every peer accepts.
+                let prev_closer = match chain_rows.get(&sp).cloned().or_else(|| {
+                    self.palw_pcpb_store.chain_state(sp).unwrap_or_else(|store_error| {
+                        palw_overlay_commit_fail_stop(format!("PALW PCPB chain read failed for {sp}: {store_error}"))
+                    })
+                }) {
+                    Some(parent) if parent.closed_snapshots.is_empty() => parent.prev_closer,
+                    Some(_) => Some(sp),
+                    None if sp == self.genesis.hash || raw_sp_daa < self.palw_activation_daa_score => None,
+                    None => Some(sp),
+                };
+                chain_rows
+                    .insert(*block, kaspa_consensus_core::palw::PalwPcpbChainStateV1 { version: 1, closed_snapshots, prev_closer });
                 for anchor in kaspa_consensus_core::palw::palw_acommit_anchors_from_accepted_txs(
                     &self.accepted_txs_of_chain_block_for_registry(*block, "PALW A-commit"),
                 ) {
@@ -4904,6 +4947,14 @@ impl VirtualStateProcessor {
             // a node never serves entries that disagree with the root it committed.
             self.palw_pcpb_store.set_snapshot_entries_batch(batch, *epoch, entries.clone()).unwrap_or_else(|store_error| {
                 palw_overlay_commit_fail_stop(format!("PALW snapshot entries could not stage epoch {epoch}: {store_error}"))
+            });
+        }
+        // Static-audit C-01 — the fork-relative chain, same batch as the epoch-keyed rows it makes
+        // reorg-proof. Written for EVERY attached active block, not only closers: the pointer
+        // inheritance that keeps the walk O(closers) needs a row on the non-closing blocks too.
+        for (block, state) in &chain_rows {
+            self.palw_pcpb_store.set_chain_state_batch(batch, *block, state.clone()).unwrap_or_else(|store_error| {
+                palw_overlay_commit_fail_stop(format!("PALW PCPB chain row could not stage {block}: {store_error}"))
             });
         }
         if let Some((tip, _)) = added.last() {
