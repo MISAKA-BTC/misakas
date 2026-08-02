@@ -2047,17 +2047,24 @@ pub const EVM_GENESIS_PALW_PARAMS: Params = Params {
     // current form, so every block already mined replays byte-identically; from the fence on it
     // confirms the newest ATTESTED epoch, the same walk-down `1d11021d` gave the singleton.
     //
-    // Set 2026-08-02 at tip ≈ 12,000 and ~2.2 DAA/s, so the fence is ~2.5 days out — room for every
-    // operator to take the release before the rule moves. Until then the lane depends on the same
-    // ~1-in-108 boundary lottery that took 103 epochs to hit on this chain's first run; it HAS hit
-    // (the anchor latched at epoch 127 and the latch is persistent), so the lane is open and stable
-    // in the meantime rather than waiting on the fence.
     palw_dns_confirm_walkdown_daa_score: TESTNET_22_DNS_CONFIRM_WALKDOWN_DAA_SCORE,
     ..COMPUTE_REGISTRY_PALW_PARAMS
 };
 
 /// The testnet-22 flag day for the proposal-③ walk-down at the beacon coordinate.
-pub const TESTNET_22_DNS_CONFIRM_WALKDOWN_DAA_SCORE: u64 = 500_000;
+///
+/// Set 2026-08-02 at tip 28,549 with the chain running 434 DAA/min, so the fence is ~1.6 hours out.
+/// Deliberately short. The usual reason to buy days of margin is to let third-party operators take
+/// the release, and testnet-22 has no third-party validators at all — the seven external bonds died
+/// with testnet-21, and both anchors are operated together. Against that, every hour before the
+/// fence is an hour with the algo-4 lane closed: the beacon is halted RIGHT NOW (degraded counter
+/// climbing on both anchors at epoch 285) and only reopens on the ~1-in-108 boundary lottery, which
+/// is exactly the condition this fence exists to end. A long fence would have been caution paid for
+/// with the thing the network exists to exercise.
+///
+/// If a third-party node does appear before the fence it must take this release; after the fence an
+/// un-upgraded node derives a different `R_E` and splits.
+pub const TESTNET_22_DNS_CONFIRM_WALKDOWN_DAA_SCORE: u64 = 70_000;
 
 /// testnet-22 seeders. Reuses the testnet-21 hosts: they are the operator's own seeders and serve
 /// whichever net the node behind them runs.
@@ -2661,7 +2668,7 @@ mod palw_network_tests {
         // clause (a)/(b)/(c) discipline applies to THIS pin now.
         //
         // Re-pinned 2026-08-02 under **clause (a)** for the proposal-③ follow-up at the beacon
-        // coordinate (`palw_dns_confirm_walkdown_daa_score = 500_000`). The fence sits ~2.5 days
+        // coordinate (`palw_dns_confirm_walkdown_daa_score = 70_000`). The fence sits ~1.6 hours
         // above the tip at the time it was set, so every block already mined is evaluated by the
         // unchanged rule and replays byte-identically — only the digest moves. Operators must take
         // the release before the fence; after it, an un-upgraded node derives a different `R_E` and
@@ -2671,7 +2678,7 @@ mod palw_network_tests {
         // recomputed here, so the value an operator reads back is the value pinned.
         assert_eq!(
             EVM_GENESIS_PALW_PARAMS.consensus_identity_hash().to_string(),
-            "4ab1c1880595ea0dd3cba2b2a64e904439b47a2674d2f299d26dc09f2da7f5fbf9165b2f8ac20f647ca53692212bae3f7131d6aa457a682e366939673b7d7829",
+            "ec583c2ef59710441715332cddf156e91f7b5107a03e4865036c64188881aecd104a4819ac8ef2d4c624d4fbe6c7c263834101c4b9266561d25b67de69316a3f",
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis \
              onto a new suffix"
         );

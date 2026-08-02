@@ -56,7 +56,7 @@ which is the reason the preset was created before the audit findings arrived.
 | Select with | `--testnet --netsuffix=21` | `--testnet --netsuffix=22` |
 | P2P port | `26531` | **`26541`** |
 | Genesis | `pcpb-palw` | **`evm-genesis-palw`** |
-| Params identity | `cf97dfca…78ac44dd` | **`f88c33dc…f57dd84cb`** |
+| Params identity | `11d3afa3…e8af9cab` | **`ec583c2e…69316a3f`** |
 | Discovery | `seeder1.misakascan.com`, `seeder3.misakascan.com` | unchanged (both now serve testnet-22) |
 | PALW lane | active, algo-4 fenced at DAA 2,000,000 | active, **algo-4 open from block 0** |
 | Self-serial dispatch | structurally dead (`0x45` unrouted) | **live** |
@@ -71,7 +71,7 @@ which is the reason the preset was created before the audit findings arrived.
   cargo build --release -p kaspad --bin kaspad --features evm
   ```
   The startup log must read `EVM lane (ADR-0020): ACTIVATES at DAA score 0 on testnet-22`.
-- **Check the identity line.** `kaspad` prints `consensus params identity f88c33dc…` at startup
+- **Check the identity line.** `kaspad` prints `consensus params identity ec583c2e…` at startup
   and `getInfo` reports it as `consensusParamsHash`. Compare it across your nodes before trusting
   a mesh; a mismatch means someone is running different consensus parameters.
 - Bound EVM state growth with `--evm-storage-profile=compact`. Node-local and consensus-neutral.
@@ -96,6 +96,23 @@ error.
 The preset preflight asserts `burial ≤ w`, so a parameter change that would make this window empty
 — and silently kill the dispatch kind again — fails at startup rather than in production.
 
+## Flag day: DAA 70,000 — the proposal-③ walk-down at the beacon coordinate
+
+Set on launch day, ~1.6 hours after the cutover. **Every node must be on the
+`testnet-main-<sha>` release that carries it before DAA 70,000.** After the fence an un-upgraded
+node derives a different `R_E` and splits off.
+
+What it fixes: `1d11021d` corrected the DNS confirm-latch race — confirm the newest *attested* epoch,
+not the newest *ready* one — but only at the virtual-tip singleton. The beacon coordinate kept the
+original form, and an epoch only becomes attestable once it is ready, so demanding the ready epoch
+itself be attested is a race the chain wins essentially always. The anchor never latches, no epoch
+is ever Healthy, the beacon seed stays frozen at zero, and **the algo-4 lane is closed
+network-wide** — observed here as 103 consecutive degraded epochs from genesis, briefly broken by a
+1-in-108 boundary coincidence and then closed again.
+
+Below the fence the old rule still applies, so every block mined before it replays byte-identically;
+only the params digest moves (identity `f88c33dc…` → `ec583c2e…`, clause (a)).
+
 ## Operator checklist
 
 1. Stop your testnet-21 node.
@@ -103,7 +120,7 @@ The preset preflight asserts `burial ≤ w`, so a parameter change that would ma
 3. Rebuild or re-download `kaspad` **with `--features evm`**.
 4. Start with `--testnet --netsuffix=22`. Discovery is unchanged; the seeders already answer for
    testnet-22.
-5. Confirm the startup log shows the `f88c33dc…` identity and the genesis-active EVM line.
+5. Confirm the startup log shows the `ec583c2e…` identity and the genesis-active EVM line.
 6. `misaka` CLI, `kaspa-pq-validator` artifacts and MTP scoring all target testnet-22. MTP scope is
    name-keyed, so testnet-20/21 epoch ledgers stay verifiable under their own names.
 
