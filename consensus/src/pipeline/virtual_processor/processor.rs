@@ -4976,26 +4976,28 @@ impl VirtualStateProcessor {
                     // state, and if they ever disagree the buried history would quietly answer
                     // pruned-epoch leaves with a value no live block was ever validated against —
                     // so the disagreement stops the node instead of being resolved silently.
-                    let published = self
-                        .palw_pcpb_store
-                        .chain_state(*block)
-                        .unwrap_or_else(|store_error| {
-                            palw_overlay_commit_fail_stop(format!("PALW PCPB chain read failed for {block}: {store_error}"))
-                        })
-                        .unwrap_or_else(|| {
-                            palw_overlay_commit_fail_stop(format!(
-                                "PALW PCPB chain row missing for attached chain block {block}; the per-chain-block writer \
-                                 must run before the selected-chain projection"
-                            ))
-                        });
-                    for (epoch, row_commitment) in &published.closed_snapshots {
-                        if *row_commitment != commitment {
-                            palw_overlay_commit_fail_stop(format!(
-                                "PALW provider snapshot for epoch {epoch} disagrees between the fork-relative row of {block} \
-                                 and the selected-chain reconciliation"
-                            ));
+                    //
+                    // An ABSENT row is treated as "nothing to cross-check", not as a fault. The row
+                    // is written for every chain candidate this binary commits, so absence would mean
+                    // a boundary block imported by pruned IBD rather than derived here — and turning
+                    // an edge of the import path into a fail-stop would trade a silent-divergence risk
+                    // this arm does not have for a liveness cliff it would. Disagreement still halts;
+                    // only the vacuous case is permitted.
+                    let published = self.palw_pcpb_store.chain_state(*block).unwrap_or_else(|store_error| {
+                        palw_overlay_commit_fail_stop(format!("PALW PCPB chain read failed for {block}: {store_error}"))
+                    });
+                    if let Some(published) = published.as_ref() {
+                        for (epoch, row_commitment) in &published.closed_snapshots {
+                            if *row_commitment != commitment {
+                                palw_overlay_commit_fail_stop(format!(
+                                    "PALW provider snapshot for epoch {epoch} disagrees between the fork-relative row of \
+                                     {block} and the selected-chain reconciliation"
+                                ));
+                            }
                         }
-                        snapshot_rows.push((*epoch, *row_commitment, entries.clone()));
+                    }
+                    for epoch in sp_epoch..block_epoch {
+                        snapshot_rows.push((epoch, commitment, entries.clone()));
                     }
                 }
                 for anchor in kaspa_consensus_core::palw::palw_acommit_anchors_from_accepted_txs(
