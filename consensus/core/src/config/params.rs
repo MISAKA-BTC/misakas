@@ -1925,7 +1925,20 @@ pub const PCPB_PALW_PARAMS: Params = Params {
 };
 
 /// Bug report #6 — the testnet-21 leaf-chunk v3 flag day (see the field's doc for the incident).
-pub const TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE: u64 = 650_000;
+///
+/// **Moved 650,000 → 2,000,000 on 2026-08-02** after a third-party static audit. 650,000 was chosen
+/// to be ~13 h out, which was enough for the partition repair alone. It is not enough for what the
+/// audit then found: finding C-01 (the PCPB snapshot / A-commit / beacon-seed rows are read from
+/// node-global stores rather than from a view anchored at the candidate's selected parent, so leaf
+/// acceptance can depend on fork receive order) is a real defect that needs a fork-relative view,
+/// not a patch — and the flag day is exactly when it stops being theoretical, because below it no
+/// leaf chunk is admitted and therefore no leaf reaches the PCPB clauses at all.
+///
+/// 2,000,000 is ~3 days past the ≈ 420,000 tip when it was set. That covers the C-01 redesign, the
+/// re-sync of nodes rebuilt after the partition (~10 h at the observed 16 blocks/s), and a real
+/// upgrade window for everyone else. Moving it OUT is always safe — it can only keep the lane inert
+/// for longer, and inert is byte-identical to the history already mined. Moving it IN would not be.
+pub const TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE: u64 = 2_000_000;
 
 /// testnet-21 DNS params: the compute-registry shape plus **proposal ③** — anchor confirmation
 /// additionally requires the anchor's own epoch to be attested (dead-branch confirm eradication;
@@ -2483,9 +2496,12 @@ mod palw_network_tests {
         // getInfo, and kaspad logs it at startup.
         assert_eq!(
             p.consensus_identity_hash().to_string(),
-            // Re-pinned 2026-08-02 (second time that day) under **clause (a)**, for the two bug
+            // Re-pinned 2026-08-02 (third time that day) under **clause (a)**, for the two bug
             // report #6 fences, both set to `TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE` =
-            // 650,000 — ~13 h beyond the ≈ 387,000 tip when they landed:
+            // 2,000,000 — ~3 days beyond the ≈ 420,000 tip, moved out from 650,000 once a
+            // third-party audit found that the PCPB clauses the flag day switches on still have an
+            // open Critical (C-01, fork-relative view). Moving a fence OUT is always clause (a):
+            // it can only extend the inert window, and inert is what the mined history already is.
             //   * `palw_leaf_chunk_v3_admission_daa_score` — below it EVERY leaf chunk is skipped
             //     at acceptance, which is byte-identical to the binaries that mined this history
             //     (their span predicate was pinned at v2 while context-free validation required
@@ -2507,7 +2523,7 @@ mod palw_network_tests {
             // zero), and before that (2026-08-01, genesis day) proposal ③
             // (`require_anchor_attestation: true`), legal for the different reason that the ledger
             // then held zero attestations and zero confirmed anchors.
-            "2b36a181ed1f3a8b28ec714f876bb4f010cbc3414799b742f041da48d4d04773f11cad2f0495fab9418aa192225892257feb10a777b92acd753328e33cd03839",
+            "0e527d35770bd2530c89191e5b2f9e8762590b318fd1275ef5175eb6556d2362f062fda976eca3b90c7329c7e528c9383b51ad7a489793bb05538c101b264881",
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
         );
         // Every preset OUTSIDE the compute-registry lineage keeps the fence closed.
