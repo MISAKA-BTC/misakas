@@ -1984,11 +1984,20 @@ pub const TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE: u64 = 2_000_000;
 ///
 /// algo-4 is genesis-active, which is the entire reason this network exists — it is where the PALW
 /// replica lane is meant to be exercised. That was only safe once static-audit finding C-01 was
-/// closed: `R_E` is now resolved by walking the CANDIDATE's own closed-epoch chain
-/// (`palw_resolve_seed_fork_relative`) instead of the epoch-keyed history, whose stored value is a
-/// function of whichever fork closed the epoch last. This preset briefly carried a future fence for
-/// exactly that reason; the fence came off in the change that closed the finding, which is the
-/// order such a fence is supposed to be removed in.
+/// closed: every PCPB context read is now resolved by walking the CANDIDATE's own closed-epoch chain
+/// (`palw_resolve_closed_epoch_fork_relative`) instead of an epoch-keyed history whose stored value
+/// is a function of whichever fork closed the epoch last. All three reads moved — clause 11's issued
+/// seed, clause 12's provider snapshot and draw seed, and clause 13's mint-time re-check — and the
+/// epoch-keyed stores keep their job only as the BURIED half, consulted once a walk runs off the
+/// retained rows, i.e. below the pruning point where no fork can differ. This preset briefly carried
+/// a future fence for exactly that reason; the fence came off in the change that closed the finding,
+/// which is the order such a fence is supposed to be removed in.
+///
+/// Static-audit C-02 is closed here too, and it is why the self-serial dispatch kind is exercisable
+/// on this network at all: the `0x45` PCPB band is routed (it had no arm in
+/// `check_transaction_subnetwork`, so its anchor transaction was refused and the whole arm was dead),
+/// and a leaf may only name an A-commit anchor already buried beyond the deepest legal reorg — the
+/// property that lets the anchor-keyed registry be read from a shared key without a chain of its own.
 pub const EVM_GENESIS_PALW_PARAMS: Params = Params {
     net: NetworkId::with_suffix(NetworkType::Testnet, 22),
     genesis: crate::config::genesis::EVM_GENESIS_PALW_GENESIS,
