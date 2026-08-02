@@ -142,6 +142,10 @@ pub enum PalwOverlayError {
     /// declared `a_commit_epoch` (`registry row ≤ declared` is the grind-killing bound: the draw
     /// beacon `R_{declared+Δ}` must provably post-date the anchor's registration).
     LeafACommitUnanchored { leaf_index: u32, declared_epoch: u64, registry_epoch: Option<u64> },
+    /// Static-audit C-02: the self arm's anchor epoch is not yet buried beyond the deepest legal
+    /// reorg, so the anchor-keyed registry is still a per-fork fact and must not be consulted. This
+    /// is the rule that lets the self arm read a shared key at all without a chain of its own.
+    LeafACommitUnburied { leaf_index: u32, declared_epoch: u64, accepting_epoch: u64, required_burial_epochs: u64 },
     /// ADR-0045 D3-b clause 12: the dispatch evidence does not re-derive — wrong snapshot roots
     /// (clause 0), a provider the draw did not select, a seat not matching the leaf's declared
     /// bonds, a receipt not embedding `a_commit`, or a signature that does not verify.
@@ -838,6 +842,13 @@ pub struct PalwPcpbAcceptanceCtx<'a> {
     /// The bound on that walk: the retention window in epochs. Exhausting it REFUSES — never a
     /// shorter answer, and never a fall-through to a shared epoch row.
     pub context_walk_max_hops: usize,
+    /// Static-audit finding C-02 — the epoch of the block whose acceptance is being folded, and the
+    /// burial depth its self-serial leaves' A-commit anchors must already sit under. See
+    /// [`kaspa_consensus_core::palw::palw_acommit_burial_epochs`]: the anchor registry is keyed by
+    /// anchor, not by block, so the ONLY thing that makes reading it fork-safe is that a leaf may
+    /// only name anchors whose acceptance epoch is beyond every legal reorg.
+    pub block_epoch: u64,
+    pub acommit_burial_epochs: u64,
 }
 
 /// Static-audit C-01 — the one place a PCPB clause turns a fork-relative walk into a value.
@@ -1192,6 +1203,25 @@ pub fn apply_palw_overlay_effect(
                     what: "post-commit beacon seed (fork-relative walk)",
                 })?;
                 if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {
+                    // Static-audit C-02 — the anchor must ALREADY be buried beyond every legal reorg
+                    // before the registry is consulted at all. The registry is keyed by anchor, so
+                    // unlike the beacon seed and the provider snapshot it has no per-candidate chain
+                    // to walk; what makes reading a shared key sound here is that the answer for a
+                    // buried epoch is identical on every honest node and unmovable by any reorg.
+                    // Checked BEFORE the read so an unburied anchor is refused on its own terms
+                    // rather than on whatever the shared row happens to say right now.
+                    if !kaspa_consensus_core::palw::palw_acommit_anchor_is_buried(
+                        ctx.block_epoch,
+                        leaf.a_commit_epoch,
+                        ctx.acommit_burial_epochs,
+                    ) {
+                        return Err(PalwOverlayError::LeafACommitUnburied {
+                            leaf_index: leaf.leaf_index,
+                            declared_epoch: leaf.a_commit_epoch,
+                            accepting_epoch: ctx.block_epoch,
+                            required_burial_epochs: ctx.acommit_burial_epochs,
+                        });
+                    }
                     let registry_epoch = ctx.pcpb_store.acommit_epoch(&leaf.a_commit).map_err(|_| PalwOverlayError::StoreError)?;
                     // `row ≤ declared`: the anchor was on-chain at-or-before the epoch whose `+Δ`
                     // beacon draws B, so that beacon provably post-dates the commitment. (The leaf
@@ -5243,6 +5273,60 @@ mod tests {
             assert_eq!(admit(&store, &beacon, &pctx, m, chunk), Err(PalwOverlayError::LeafDispatchEvidenceInvalid { leaf_index: 0 }));
         }
 
+        /// Static-audit C-02 — the self arm may not consult the anchor registry until the anchor is
+        /// BURIED beyond the deepest legal reorg.
+        ///
+        /// This is the whole reason the self arm needs no fork-relative chain of its own. The registry
+        /// is keyed by anchor, not by block, so "which epoch did the chain first accept this in" is a
+        /// per-fork answer near the tip exactly as the beacon seed and the provider snapshot were —
+        /// two forks can disagree about an anchor either of them accepted, and clause 12 would hand
+        /// them different verdicts for one leaf. An anchor older than every legal reorg is not a
+        /// per-fork fact at all, so the leaf is confined to those instead.
+        ///
+        /// The rule is checked BEFORE the registry read, so an unburied anchor is refused on its own
+        /// terms rather than on whatever the shared row happens to hold at that instant.
+        #[test]
+        fn pcpb_clause12_selfserial_refuses_an_anchor_that_is_not_yet_buried() {
+            let fix = self_fix();
+            let a_commit = h(0xAC);
+            let (leaf, witness) = fix.leaf_and_witness(a_commit);
+            let burial = pcpb_test_support::ACOMMIT_BURIAL;
+
+            // Exactly at the burial depth: accepted. Same store, same leaf, same honest row.
+            let (_lt, _db, store, beacon, pcpb_store) = self_env(&fix, Some((a_commit, SELF_ANCHOR)));
+            let pctx = pcpb_test_support::ctx_at_epoch(&pcpb_store, SELF_ANCHOR + burial);
+            let (m, chunk) = adversarial_batch(vec![leaf.clone()], vec![witness.clone()]);
+            admit(&store, &beacon, &pctx, m, chunk).expect("an anchor buried exactly to the depth must accept");
+
+            // One epoch short: refused, and refused for BURIAL — not for the registry, whose row is
+            // honest and present. The order matters: a reader that consulted the row first would
+            // report an anchor problem for what is really a finality problem.
+            let (_lt, _db, store, beacon, pcpb_store) = self_env(&fix, Some((a_commit, SELF_ANCHOR)));
+            let pctx = pcpb_test_support::ctx_at_epoch(&pcpb_store, SELF_ANCHOR + burial - 1);
+            let (m, chunk) = adversarial_batch(vec![leaf.clone()], vec![witness.clone()]);
+            assert_eq!(
+                admit(&store, &beacon, &pctx, m, chunk),
+                Err(PalwOverlayError::LeafACommitUnburied {
+                    leaf_index: 0,
+                    declared_epoch: SELF_ANCHOR,
+                    accepting_epoch: SELF_ANCHOR + burial - 1,
+                    required_burial_epochs: burial,
+                })
+            );
+
+            // An anchor declared in the accepting block's OWN epoch, and one declared in its future:
+            // both refused by the same rule rather than underflowing into an accidental accept.
+            for epoch in [SELF_ANCHOR, SELF_ANCHOR.saturating_sub(1)] {
+                let (_lt, _db, store, beacon, pcpb_store) = self_env(&fix, Some((a_commit, SELF_ANCHOR)));
+                let pctx = pcpb_test_support::ctx_at_epoch(&pcpb_store, epoch);
+                let (m, chunk) = adversarial_batch(vec![leaf.clone()], vec![witness.clone()]);
+                assert!(
+                    matches!(admit(&store, &beacon, &pctx, m, chunk), Err(PalwOverlayError::LeafACommitUnburied { .. })),
+                    "an anchor at or above the accepting epoch is never buried (epoch {epoch})"
+                );
+            }
+        }
+
         /// The staged-store constants this module leans on really are the shared ones (a drift in
         /// `pcpb_test_support` would silently re-scope every window boundary above).
         #[test]
@@ -5371,6 +5455,19 @@ pub(crate) mod pcpb_test_support {
         ctx_from(store, PCPB_TEST_SELECTED_PARENT)
     }
 
+    /// Static-audit C-02 — the burial depth these fixtures validate under, and an accepting epoch far
+    /// enough above every fixture anchor that the rule is satisfied by default. A test that wants to
+    /// exercise the rule itself lowers the epoch with [`ctx_at_epoch`].
+    pub(crate) const ACOMMIT_BURIAL: u64 = 4;
+    pub(crate) const PCPB_TEST_BLOCK_EPOCH: u64 = 1_000;
+
+    pub(crate) fn ctx_at_epoch(
+        store: &crate::model::stores::palw_pcpb::DbPalwPcpbStore,
+        block_epoch: u64,
+    ) -> super::PalwPcpbAcceptanceCtx<'_> {
+        super::PalwPcpbAcceptanceCtx { block_epoch, ..ctx(store) }
+    }
+
     /// The same context anchored on a chosen selected parent — the knob that makes a fork-relativity
     /// test possible at all: same store, same leaf, two candidates, two answers.
     pub(crate) fn ctx_from(
@@ -5385,6 +5482,8 @@ pub(crate) mod pcpb_test_support {
             post_commit_delta_epochs: DELTA,
             selected_parent,
             context_walk_max_hops: 64,
+            block_epoch: PCPB_TEST_BLOCK_EPOCH,
+            acommit_burial_epochs: ACOMMIT_BURIAL,
         }
     }
 

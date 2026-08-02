@@ -725,6 +725,8 @@ mod tests {
             // Static-audit C-01: the fixture's fork-relative chain (staged by `fixture.stage`).
             selected_parent: crate::processes::palw::pcpb_test_support::PCPB_TEST_SELECTED_PARENT,
             context_walk_max_hops: 64,
+            block_epoch: crate::processes::palw::pcpb_test_support::PCPB_TEST_BLOCK_EPOCH,
+            acommit_burial_epochs: crate::processes::palw::pcpb_test_support::ACOMMIT_BURIAL,
         };
         crate::processes::palw::apply_palw_overlay_effect(
             crate::processes::palw::PalwOverlayEffect::LeafChunk(chunk),
