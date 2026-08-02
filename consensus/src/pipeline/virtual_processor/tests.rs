@@ -5901,6 +5901,7 @@ async fn palw_job_nullifier_reland_at_reward_coordinate() {
 /// above still green, which is precisely why this one is separate.
 #[tokio::test]
 async fn palw_job_nullifier_reland_dedups_across_chain_blocks() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
     use crate::model::stores::palw_paid_work::PalwPaidWorkStoreReader;
     use kaspa_consensus_core::tx::ScriptPublicKey;
     let (tc, handles, f) = palw_algo4_env(1).await;
@@ -5937,15 +5938,31 @@ async fn palw_job_nullifier_reland_dedups_across_chain_blocks() {
         "competing duplicate-work source: {y_status:?}"
     );
 
-    // Chain block 2 extends C1 and merges Y. Y's leaf shares the nullifier C1 already paid, so the
-    // bounded walk over C2's selected chain finds it and Y's providers get nothing.
+    // One plain block on C1's branch before the merger. Without it C1 and Y are siblings of nearly
+    // equal blue work, and which one GHOSTDAG selects as C2's parent depends on the real template
+    // builder's timestamps — i.e. on wall-clock. That made this test fail ~8 % of runs by taking Y as
+    // the selected parent, whose chain does not contain C1's row, so the walk found nothing and Y's
+    // work was paid as a first claim. The bug was the fixture's, not the rule's: the dedup walk is a
+    // function of the SELECTED CHAIN, and a test of it has to fix which chain that is.
+    let c1b_hash = kaspa_hashes::Hash64::from_bytes([0xeb; 64]);
+    let c1b = tc.build_utxo_valid_block_with_parents(c1b_hash, vec![c1_hash], f.miner.clone(), vec![]);
+    assert_eq!(tc.validate_and_insert_block(c1b.to_immutable()).virtual_state_task.await.unwrap(), BlockStatus::StatusUTXOValid);
+
+    // Chain block 2 extends C1's branch and merges Y. Y's leaf shares the nullifier C1 already paid,
+    // so the bounded walk over C2's selected chain finds it and Y's providers get nothing.
     let c2_hash = kaspa_hashes::Hash64::from_bytes([0xe2; 64]);
-    let c2 = tc.build_utxo_valid_block_with_parents(c2_hash, vec![c1_hash, y_hash], f.miner.clone(), vec![]);
+    let c2 = tc.build_utxo_valid_block_with_parents(c2_hash, vec![c1b_hash, y_hash], f.miner.clone(), vec![]);
     let c2_coinbase = c2.transactions[0].clone();
     assert_eq!(
         tc.validate_and_insert_block(c2.to_immutable()).virtual_state_task.await.unwrap(),
         BlockStatus::StatusUTXOValid,
         "the later merger is accepted — the rule withholds a payout, it does not invalidate a block"
+    );
+    assert_eq!(
+        tc.storage.ghostdag_store.get_selected_parent(c2_hash).unwrap(),
+        c1b_hash,
+        "the dedup walk is over C2's SELECTED chain — if Y won selected-parent this test would be \
+         measuring a different chain than it claims to"
     );
     assert_eq!(credited(&c2_coinbase, &g.prov_a), 0, "provider A of the ALREADY-PAID job_nullifier earns nothing");
     assert_eq!(credited(&c2_coinbase, &g.prov_b), 0, "provider B of the ALREADY-PAID job_nullifier earns nothing");
