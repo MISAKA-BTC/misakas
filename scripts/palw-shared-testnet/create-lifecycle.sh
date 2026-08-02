@@ -252,6 +252,181 @@ _real_store_add() {
 }
 
 # ---------------------------------------------------------------------------
+# ADR-0045 D3-b (PCPB) evidence.
+#
+# A LeafV2 no longer chooses its own providers or its own job challenge. Clause 11
+# re-derives receipt_v3_job_challenge under R_issued from the witness's preimage
+# triple, and clause 12 re-runs the dispatch draw against the snapshot the node
+# resolved itself. Both refuse a leaf whose declared fields disagree, so the leaf
+# has to be BUILT from the chain's answer instead of asserting one.
+#
+# `palw-payload pcpb-witness` is that answer: one call yields the witness file the
+# chunk carries and the leaf fields it must be paired with. Everything below is
+# plumbing around that single source.
+# ---------------------------------------------------------------------------
+
+# _pcpb_bond_table — print "outpoint<TAB>seedfile" for every provider bond whose
+#   owner key this host holds. The draw is bond-weighted over the WHOLE snapshot,
+#   so a seat can land on any registered bond; a bond we cannot name (no seed)
+#   cannot sign its DA session authorization and would strand the build.
+_pcpb_bond_table() {
+    local f base seed
+    [ -n "$PROV_A_BOND" ] && printf '%s\t%s\n' "$PROV_A_BOND" "${PROV_A_KEY:-$PALW_DATA_ROOT/keys/provider-a.seed}"
+    [ -n "$PROV_B_BOND" ] && printf '%s\t%s\n' "$PROV_B_BOND" "${PROV_B_KEY:-$PALW_DATA_ROOT/keys/provider-b.seed}"
+    local aud; aud="$(state_get AUD_C_BOND)"
+    [ -n "$aud" ] && printf '%s\t%s\n' "$aud" "$PALW_DATA_ROOT/keys/auditor-c.seed"
+    # Capacity-floor providers registered by a separate pass keep seed and outpoint
+    # side by side as "<name>" and "<name>.bond.outpoint".
+    if [ -n "${PALW_EXTRA_PROVIDER_KEYDIR:-}" ] && [ -d "$PALW_EXTRA_PROVIDER_KEYDIR" ]; then
+        for f in "$PALW_EXTRA_PROVIDER_KEYDIR"/*.bond.outpoint; do
+            [ -s "$f" ] || continue
+            base="${f%.bond.outpoint}"
+            seed="$base"
+            [ -s "$seed" ] || continue
+            printf '%s\t%s\n' "$(cat "$f")" "$seed"
+        done
+    fi
+}
+
+# _pcpb_seed_for <outpoint> — the seed file that owns a drawn bond, or die.
+_pcpb_seed_for() {
+    local want="$1" line
+    while IFS="$(printf '\t')" read -r op seed; do
+        [ "$op" = "$want" ] && { printf '%s' "$seed"; return 0; }
+    done <<EOF
+$(_pcpb_bond_table)
+EOF
+    die "the PCPB draw seated bond $want, but this host holds no owner seed for it. Every bond in the epoch snapshot can be drawn, so the harness needs each one's seed (PALW_EXTRA_PROVIDER_KEYDIR should point at the capacity-provider key dir)."
+}
+
+# _pcpb_reward_spk <seedfile> — the ONLY script consensus will pay this provider.
+#   utxo_validation checks leaf.provider_X_reward_script == provider_bond_lock_spk(
+#   bond owner pk), so it is a pure function of the seed; the payload built here is
+#   thrown away and only its printed SPK is kept.
+_pcpb_reward_spk() {
+    local seed="$1" tmp out spk
+    tmp="$PALW_DATA_ROOT/artifacts/.pcpb-spk.$$.borsh"
+    rm -f "$tmp"
+    out="$("$VAL" palw-payload provider-bond \
+            --network "$NETWORK" --validator-key "$seed" \
+            --operator-group-id "$(zero128)" --runtime-class "$RUNTIME_CLASS" \
+            --capacity "${SHAPE_ID}=${CAPACITY_COUNT:-1}" --reward-key-root "$(zero128)" \
+            --amount "${PROVIDER_A_AMOUNT:-10MSK}" --unbond-delay-epochs "${UNBOND_DELAY_EPOCHS:-6}" \
+            --out "$tmp" 2>&1)" || { rm -f "$tmp"; printf '%s\n' "$out" >&2; die "could not derive the reward SPK for $seed (see above)."; }
+    rm -f "$tmp"
+    spk="$(printf '%s\n' "$out" | _kv provider_bond_lock_spk)"
+    case "$spk" in
+        0000*[!0-9a-fA-F]*|"") printf '%s\n' "$out" >&2
+            die "provider-bond did not print a usable provider_bond_lock_spk for $seed." ;;
+    esac
+    printf '%s' "$spk"
+}
+
+# _real_reemit_receipts <challenge> <issued> <expires> <dir> — re-attest the Qwen
+#   execution under the chain's job challenge.
+#
+#   Receipt v3 signs `output_commitment_v3(output_ids, job_challenge)`, so a receipt
+#   is bound to the challenge it was made for. D3-b makes the challenge a CHAIN
+#   value — clause 11 re-derives it from R_issued — which the recorded receipts
+#   predate. Re-emitting them from the same execution (identical token ids, identical
+#   engine roots, same worker keys) is what keeps `verify-and-derive` checking the
+#   job this batch actually registers; feeding it the old receipts would verify a
+#   different job than the leaf commits to.
+#
+#   The INFERENCE is not re-run and this does not pretend otherwise: the roots and
+#   token ids are the recorded ones. What is re-signed is the attestation over them.
+_real_reemit_receipts() {
+    local challenge="$1" issued="$2" expires="$3" dir="$4" slot src seed
+    require_cmd python3
+    [ -s "$REAL_QWEN_PROMPT_IDS" ] || die "receipt re-attestation needs the prompt token ids at $REAL_QWEN_PROMPT_IDS."
+    [ -s "$REAL_QWEN_OUTPUT_IDS" ] || die "receipt re-attestation needs the output token ids at $REAL_QWEN_OUTPUT_IDS."
+    [ -x "$QI35_RECEIPT_BIN" ] || die "receipt re-attestation needs $QI35_RECEIPT_BIN (cargo build --release -p misaka-palw-bridge --bin qi35-receipt-v3)."
+    for slot in 0 1; do
+        if [ "$slot" = 0 ]; then src="$REAL_RECEIPT_A"; seed="$REAL_QWEN_WORKER_A_KEY"; else src="$REAL_RECEIPT_B"; seed="$REAL_QWEN_WORKER_B_KEY"; fi
+        [ -s "$seed" ] || die "receipt re-attestation needs the worker seed $seed (slot $slot)."
+        # Every value below is lifted from the recorded receipt, so the re-attestation
+        # can only differ in the fields D3-b forces to move.
+        eval "$(python3 -c '
+import json,sys,shlex
+r=json.load(open(sys.argv[1]))
+p,t,a=r["projection"],r["telemetry"],r["artifacts"]
+for k,v in [("RE_SET",p["compute_set_id"]),("RE_NET",r["network_id"]),
+            ("RE_ROUTE",p["route_root"]),("RE_KV",p["schedule_root"]),("RE_STATE",p["state_root"]),
+            ("RE_CU",p["canonical_compute_units"]),("RE_STOP",p["stop_reason"]),
+            ("RE_RCLASS",t["runtime_class_id"]),("RE_RMAN",t["runtime_manifest_hash"]),
+            ("RE_ENGINE",a["engine_blake2b256"]),("RE_MODEL",a["model_blake2b256"]),
+            ("RE_TABLES",a["tables_blake2b256"]),("RE_SECS",r["engine_seconds"]),
+            ("RE_TS",r["timestamp_millis"]),("RE_LABEL",r["worker_label"])]:
+    print("%s=%s" % (k, shlex.quote(str(v))))
+' "$src")" || die "cannot read the recorded receipt $src for re-attestation."
+        "$QI35_RECEIPT_BIN" \
+            --prompt-ids "@$REAL_QWEN_PROMPT_IDS" --output-ids "@$REAL_QWEN_OUTPUT_IDS" \
+            --route-root "$RE_ROUTE" --kv-root "$RE_KV" --state-root "$RE_STATE" \
+            --job-challenge "$challenge" --compute-set-id "$RE_SET" --network-id-hash "$RE_NET" \
+            --worker-key "$seed" --replica-slot "$slot" \
+            --issued-epoch "$issued" --expires-epoch "$expires" \
+            --canonical-compute-units "$RE_CU" --stop-reason "$RE_STOP" \
+            --runtime-class-id "$RE_RCLASS" --runtime-manifest-hash "$RE_RMAN" \
+            --engine-blake2b256 "$RE_ENGINE" --model-blake2b256 "$RE_MODEL" --tables-blake2b256 "$RE_TABLES" \
+            --engine-seconds "$RE_SECS" --timestamp-millis "$RE_TS" --worker-label "$RE_LABEL" \
+            --receipt-out "$dir/receipt-$slot.json" --result-out "$dir/result-$slot.json" >/dev/null 2>&1 \
+            || die "qi35-receipt-v3 could not re-attest replica slot $slot under job challenge $challenge."
+    done
+    REAL_RECEIPT_A="$dir/receipt-0.json"; REAL_RESULT_A="$dir/result-0.json"
+    REAL_RECEIPT_B="$dir/receipt-1.json"; REAL_RESULT_B="$dir/result-1.json"
+    log "re-attested the recorded Qwen execution under chain job challenge $challenge (issued=$issued expires=$expires); the inference itself is unchanged."
+}
+
+# _pcpb_field <index> <name> — read one leaf binding out of the fields JSON.
+_pcpb_field() {
+    python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+print(d["leaves"][int(sys.argv[2])][sys.argv[3]])
+' "$PCPB_FIELDS_FILE" "$1" "$2"
+}
+
+# _pcpb_derive <registration_epoch> <staging_dir> — resolve the PCPB evidence for
+#   this batch, trying every anchor clause 11's window allows.
+#
+#   The window is `anchor + Δ ≤ registered ∧ registered − anchor ≤ w`, so with the
+#   shipped w=6/Δ=2 the anchor may sit 2..6 epochs back. Preferring E−3 keeps both
+#   the snapshot (anchor−k) and the draw beacon (anchor+Δ) strictly in the past, so
+#   nothing waits. Later candidates matter because the draw is per-EPOCH: when an
+#   epoch's two tickets land on the same provider that epoch cannot host any
+#   external job, which with N equal bonds happens about 1/N of the time. That is
+#   the protocol working, not an error, so walk to the next anchor.
+_pcpb_derive() {
+    local e="$1" staging="$2" bonds="" line a out ok=0
+    while IFS="$(printf '\t')" read -r op seed; do
+        [ -n "$op" ] && bonds="$bonds --provider-bond $op"
+    done <<EOF
+$(_pcpb_bond_table)
+EOF
+    [ -n "$bonds" ] || die "no provider bonds with owner seeds are known — run register-providers.sh first."
+
+    PCPB_WITNESS_FILE="$staging/pcpb-witness.borsh"
+    PCPB_FIELDS_FILE="$staging/pcpb-fields.json"
+    for a in $(( e - 3 )) $(( e - 4 )) $(( e - 5 )) $(( e - 2 )) $(( e - 6 )); do
+        [ "$a" -gt 0 ] || continue
+        rm -f "$PCPB_WITNESS_FILE" "$PCPB_FIELDS_FILE"
+        if out="$("$VAL" palw-payload pcpb-witness \
+                --network "$NETWORK" --node-wrpc-borsh "$(node_wrpc a)" \
+                --anchor-epoch "$a" --shape-id "$SHAPE_ID" --leaf-count "$LEAF_COUNT" \
+                --job-seed "${PALW_PCPB_JOB_SEED:-$NETWORK-batch-$e}" $bonds \
+                --witness-out "$PCPB_WITNESS_FILE" --fields-out "$PCPB_FIELDS_FILE" 2>&1)"; then
+            PCPB_ANCHOR="$a"
+            ok=1
+            log "PCPB anchor=$a resolved (snapshot=$(printf '%s\n' "$out" | _kv snapshot_epoch) draw=$(printf '%s\n' "$out" | _kv draw_epoch) providers=$(printf '%s\n' "$out" | _kv provider_count))"
+            break
+        fi
+        log "PCPB anchor=$a unusable: $(printf '%s\n' "$out" | tail -1)"
+    done
+    [ "$ok" = 1 ] || die "no anchor in clause 11's window [$(( e - 6 )), $(( e - 2 ))] could seat a job for registration epoch $e. If every anchor reported a colliding draw, the snapshot has too few distinct bonded providers; register more before retrying."
+    [ -s "$PCPB_WITNESS_FILE" ] || die "pcpb-witness reported success but wrote no witness file."
+}
+
+# ---------------------------------------------------------------------------
 # Lifecycle-bundle presence checks (idempotency).
 #   LIFECYCLE_DIR / PALW_BATCH_ID / PALW_CHUNK_COUNT are set in do_create.
 # ---------------------------------------------------------------------------
@@ -316,8 +491,13 @@ emit_leaf() {
       "receipt_da_chunk_count": ${DACHUNK[$i]},
       "receipt_v3_compute_set_id": "${JOBSET[$i]}",
       "receipt_v3_job_challenge": "${JOB_NF[$i]}",
-      "receipt_v3_issued_epoch": $E,
+      "receipt_v3_issued_epoch": ${PCPB_ISSUED[$i]},
       "receipt_v3_expires_epoch": $EXP,
+      "a_commit": "${PCPB_A_COMMIT[$i]}",
+      "a_commit_epoch": ${PCPB_A_COMMIT_EPOCH[$i]},
+      "provider_snapshot_root": "${PCPB_SNAP_ROOT[$i]}",
+      "assignment_proof_root": "${PCPB_ASSIGN_ROOT[$i]}",
+      "dispatch_kind": ${PCPB_DISPATCH_KIND[$i]},
       "registered_epoch": $E,
       "activation_epoch": $ACT,
       "expiry_epoch": $EXP,
@@ -402,6 +582,18 @@ do_create() {
         [ "$LEAF_COUNT" -eq 1 ] || die "TICKET_MODE=real currently binds one verified Qwen k=2 job, so LEAF_COUNT must be 1."
         REAL_PROVIDER_BIN="${REAL_PROVIDER_BIN:-$REPO_ROOT/target/release/palw-real-provider}"
         [ -x "$REAL_PROVIDER_BIN" ] || die "TICKET_MODE=real requires $REAL_PROVIDER_BIN (cargo build --release -p palw-real-provider)."
+        # D3-b re-attestation inputs. The token ids and worker seeds live beside the
+        # recorded receipts; without them the recorded execution cannot be re-signed
+        # under the chain's job challenge and TICKET_MODE=real cannot proceed.
+        QI35_RECEIPT_BIN="${QI35_RECEIPT_BIN:-$REPO_ROOT/target/release/qi35-receipt-v3}"
+        _rq_dir="$(dirname "$REAL_RECEIPT_A")"
+        REAL_QWEN_PROMPT_IDS="${REAL_QWEN_PROMPT_IDS:-$_rq_dir/prompt-ids.txt}"
+        REAL_QWEN_OUTPUT_IDS="${REAL_QWEN_OUTPUT_IDS:-$_rq_dir/output-ids.txt}"
+        REAL_QWEN_WORKER_A_KEY="${REAL_QWEN_WORKER_A_KEY:-$_rq_dir/keys/worker-a.seed}"
+        REAL_QWEN_WORKER_B_KEY="${REAL_QWEN_WORKER_B_KEY:-$_rq_dir/keys/worker-b.seed}"
+        for _rp_input in QI35_RECEIPT_BIN REAL_QWEN_PROMPT_IDS REAL_QWEN_OUTPUT_IDS REAL_QWEN_WORKER_A_KEY REAL_QWEN_WORKER_B_KEY; do
+            [ -s "${!_rp_input}" ] || die "TICKET_MODE=real needs $_rp_input at ${!_rp_input}: ADR-0045 D3-b makes the job challenge a chain value, so the recorded receipts must be re-attested under it."
+        done
         for _rp_input in REAL_RECEIPT_A REAL_RECEIPT_B REAL_RESULT_A REAL_RESULT_B; do
             [ -n "${!_rp_input:-}" ] || die "TICKET_MODE=real requires $_rp_input."
             [ -s "${!_rp_input}" ] || die "$_rp_input does not name a nonempty evidence file: ${!_rp_input}"
@@ -445,6 +637,7 @@ do_create() {
             rm -rf "$LIFECYCLE_DIR"/leafset.json "$LIFECYCLE_DIR"/manifest.borsh \
                    "$LIFECYCLE_DIR"/leaves.batch.json "$LIFECYCLE_DIR"/chunk-*.borsh \
                    "$LIFECYCLE_DIR"/da \
+                   "$LIFECYCLE_DIR"/pcpb-witness.borsh "$LIFECYCLE_DIR"/pcpb-fields.json \
                    "$LIFECYCLE_DIR"/facts.json "$LIFECYCLE_DIR"/vote.borsh "$LIFECYCLE_DIR"/cert.borsh
             # Forget stale discovered state so a fresh batch_id is recorded.
             state_set PALW_BATCH_ID ""
@@ -518,6 +711,49 @@ do_create() {
     fi
     log "registration epoch E=$E pinned (frozen sink DAA=$d2; $rem DAA of headroom before the boundary). activation=$ACT expiry=$EXP."
 
+    # ---- 4b. STAGING dir + ADR-0045 D3-b PCPB evidence ------------------------
+    # The staging dir is created here rather than at step 6 because the PCPB
+    # artifacts are inputs to every later step, not outputs of them.
+    install -d -m 0700 "$LIFECYCLE_DIR" || die "cannot create lifecycle dir $LIFECYCLE_DIR."
+    local staging
+    staging="$(mktemp -d "$LIFECYCLE_DIR/.staging.XXXXXX")" || die "mktemp -d for staging failed under $LIFECYCLE_DIR."
+    register_cleanup "rm -rf '$staging'"
+
+    _pcpb_derive "$E" "$staging"
+
+    # The draw — not this harness — decides which providers hold the two seats, so
+    # adopt them. A leaf that named its own pair would die at clause 12 with the
+    # seats it declared missing from the evidence.
+    local drawn_a drawn_b
+    drawn_a="$(_pcpb_field 0 provider_a_bond)"
+    drawn_b="$(_pcpb_field 0 provider_b_bond)"
+    [ "$drawn_a" != "$drawn_b" ] || die "the PCPB draw returned one provider for both seats; pcpb-witness should have refused this anchor."
+    if [ "$drawn_a" != "$PROV_A_BOND" ] || [ "$drawn_b" != "$PROV_B_BOND" ]; then
+        log "PCPB seated providers by beacon draw, not by configuration: A=$drawn_a B=$drawn_b (configured A=$PROV_A_BOND B=$PROV_B_BOND)."
+    fi
+    PROV_A_BOND="$drawn_a"; PROV_B_BOND="$drawn_b"
+    _parse_bond PROV_A_BOND "$PROV_A_BOND"; A_TXID="$_TXID"; A_IDX="$_IDX"
+    _parse_bond PROV_B_BOND "$PROV_B_BOND"; B_TXID="$_TXID"; B_IDX="$_IDX"
+    PROV_A_KEY_F="$(_pcpb_seed_for "$PROV_A_BOND")"
+    PROV_B_KEY_F="$(_pcpb_seed_for "$PROV_B_BOND")"
+    RSPK_A="$(_pcpb_reward_spk "$PROV_A_KEY_F")"
+    RSPK_B="$(_pcpb_reward_spk "$PROV_B_KEY_F")"
+    log "seat A: bond=$PROV_A_BOND reward_spk=$RSPK_A"
+    log "seat B: bond=$PROV_B_BOND reward_spk=$RSPK_B"
+
+    i=0
+    while [ "$i" -lt "$LEAF_COUNT" ]; do
+        PCPB_A_COMMIT[$i]="$(_pcpb_field "$i" a_commit)"
+        PCPB_A_COMMIT_EPOCH[$i]="$(_pcpb_field "$i" a_commit_epoch)"
+        PCPB_SNAP_ROOT[$i]="$(_pcpb_field "$i" provider_snapshot_root)"
+        PCPB_ASSIGN_ROOT[$i]="$(_pcpb_field "$i" assignment_proof_root)"
+        PCPB_DISPATCH_KIND[$i]="$(_pcpb_field "$i" dispatch_kind)"
+        PCPB_ISSUED[$i]="$(_pcpb_field "$i" receipt_v3_issued_epoch)"
+        PCPB_CHALLENGE[$i]="$(_lc "$(_pcpb_field "$i" receipt_v3_job_challenge)")"
+        _is_hex128 "${PCPB_CHALLENGE[$i]}" || die "pcpb-witness did not yield a 128-hex job challenge for leaf $i."
+        i=$(( i + 1 ))
+    done
+
     # ---- 5. per-leaf uniqueness + ticket fields --------------------------------
     # Distinct per-leaf commitments. job_nullifier / receipt_v3_job_challenge are
     # public leaf fields (NOT the ticket secret). The DA object's semantic inputs
@@ -569,8 +805,13 @@ do_create() {
         chmod 0700 "$NF_TMPDIR" 2>/dev/null || true
         register_cleanup "rm -rf '$NF_TMPDIR'"
         REAL_PROOF_TMP="$NF_TMPDIR/real-provider-proof.json"
+        # Re-attest BEFORE verifying: the gate must check the job this batch will
+        # register, which D3-b pins to the chain's challenge.
+        _real_reemit_receipts "${PCPB_CHALLENGE[0]}" "${PCPB_ISSUED[0]}" "$EXP" "$NF_TMPDIR"
         _real_verify_and_derive "$NF_TMPDIR/nf-0.hex" "$REAL_PROOF_TMP"
         JOB_NF[0]="$(_lc "$_RP_CHALLENGE")"
+        [ "${JOB_NF[0]}" = "${PCPB_CHALLENGE[0]}" ] \
+            || die "the verified receipts carry job challenge ${JOB_NF[0]} but clause 11 will re-derive ${PCPB_CHALLENGE[0]} — the re-attestation did not take."
         JOBSET[0]="$(_lc "$_RP_JOBSET")"
         OUTC[0]="$(_lc "$_RP_OUT")"
         GEMM[0]="$(_lc "$_RP_EXECUTION")"
@@ -600,12 +841,6 @@ do_create() {
         log "TICKET_MODE=skip: placeholder ticket fields (never opened; submit-lifecycle uses --unsafe-skip-ticket-secret-check -> batch.status=active, no mint)."
     fi
 
-    # ---- 6. build everything into a STAGING dir (atomic-ish finalize) ----------
-    install -d -m 0700 "$LIFECYCLE_DIR" || die "cannot create lifecycle dir $LIFECYCLE_DIR."
-    local staging
-    staging="$(mktemp -d "$LIFECYCLE_DIR/.staging.XXXXXX")" || die "mktemp -d for staging failed under $LIFECYCLE_DIR."
-    register_cleanup "rm -rf '$staging'"
-
     # 6-pre. Build a REAL DA object per leaf (author-time, batch_id=0). The object's
     #   derived commitment root/len/chunk_count + private_match_commitment become the
     #   leaf's receipt_da_* / private_match_commitment, so register_leaf_obligations
@@ -620,11 +855,11 @@ do_create() {
     #   is set correctly for consistency.
     local objdir; objdir="$staging/da"
     install -d -m 0700 "$objdir" || die "cannot create DA object dir $objdir."
-    local PROV_A_KEY_F PROV_B_KEY_F
-    PROV_A_KEY_F="${PROV_A_KEY:-$PALW_DATA_ROOT/keys/provider-a.seed}"
-    PROV_B_KEY_F="${PROV_B_KEY:-$PALW_DATA_ROOT/keys/provider-b.seed}"
-    [ -s "$PROV_A_KEY_F" ] || die "provider-a owner seed not found: $PROV_A_KEY_F — run ./register-providers.sh (it keygen's + bonds provider-a), or set PROV_A_KEY to the seed FILE. The DA object's session authorization is signed by this owner key."
-    [ -s "$PROV_B_KEY_F" ] || die "provider-b owner seed not found: $PROV_B_KEY_F — run ./register-providers.sh, or set PROV_B_KEY to the seed FILE."
+    # The seat keys were resolved in step 4b from the bonds the beacon drew — the
+    # session authorization has to be signed by the owner of the bond the leaf
+    # names, and that bond is no longer a configuration choice.
+    [ -s "$PROV_A_KEY_F" ] || die "seat A owner seed not found: $PROV_A_KEY_F — the DA object's session authorization is signed by this owner key."
+    [ -s "$PROV_B_KEY_F" ] || die "seat B owner seed not found: $PROV_B_KEY_F."
     case "$NETSUFFIX" in ''|*[!0-9]*) die "NETSUFFIX='$NETSUFFIX' is not a u32 network id (da-object-build --network-id must equal the node's params.net.suffix())." ;; esac
     GENESIS_NETWORK_ID="${PALW_GENESIS_NETWORK_ID:-${EXPECTED_GENESIS_HASH:-}}"
     _is_hex128 "$GENESIS_NETWORK_ID" || die "PALW_GENESIS_NETWORK_ID must be the node's 128-hex Header-v4 genesis identity."
@@ -640,7 +875,7 @@ do_create() {
                 --provider-a-owner-key "$PROV_A_KEY_F" \
                 --provider-b-bond "$PROV_B_BOND" \
                 --provider-b-owner-key "$PROV_B_KEY_F" \
-                --valid-from-epoch "$E" \
+                --valid-from-epoch "${PCPB_ISSUED[$i]}" \
                 --valid-until-epoch "$EXP" \
                 --completed-at-epoch "$E" \
                 --job-nullifier "${JOB_NF[$i]}" \
@@ -749,6 +984,7 @@ do_create() {
                 --manifest-file "$staging/manifest.borsh" \
                 --leaves-file "$staging/leaves.batch.json" \
                 --chunk-index "$k" \
+                --pcpb-witness-file "$PCPB_WITNESS_FILE" \
                 --out "$staging/chunk-$k.borsh" 2>&1)"; then
             printf '%s\n' "$chunk_out" >&2
             die "'palw-payload leaf-chunk' failed for chunk-index $k (see output above)."
@@ -779,6 +1015,11 @@ do_create() {
     fi
 
     # ---- 7. finalize: move the staged bundle into place, then record state -----
+    # The PCPB evidence is part of the bundle's provenance: it is what a reviewer
+    # replays to see why these two providers and this challenge, and submit-lifecycle
+    # has no way to re-derive it once the anchor's beacon window has moved on.
+    mv "$PCPB_WITNESS_FILE" "$LIFECYCLE_DIR/pcpb-witness.borsh" || die "failed to finalize pcpb-witness.borsh."
+    mv "$PCPB_FIELDS_FILE"  "$LIFECYCLE_DIR/pcpb-fields.json"   || die "failed to finalize pcpb-fields.json."
     mv "$staging/leafset.json"      "$LIFECYCLE_DIR/leafset.json"      || die "failed to finalize leafset.json."
     mv "$staging/manifest.borsh"    "$LIFECYCLE_DIR/manifest.borsh"    || die "failed to finalize manifest.borsh."
     mv "$staging/leaves.batch.json" "$LIFECYCLE_DIR/leaves.batch.json" || die "failed to finalize leaves.batch.json."
