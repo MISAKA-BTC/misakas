@@ -5310,6 +5310,8 @@ mod tests {
 
         let state = PalwBeaconStateV1 {
             version: 1,
+            closed_seeds: Vec::new(),
+            prev_closer: None,
             epoch: 9,
             seed: Hash64::from_u64_word(1),
             dns_anchor: Hash64::from_u64_word(2),

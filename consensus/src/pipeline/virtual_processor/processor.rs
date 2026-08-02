@@ -3812,6 +3812,16 @@ impl VirtualStateProcessor {
                         freshness_window_epochs: self.palw_freshness_window_epochs,
                         snapshot_lag_epochs: self.palw_snapshot_lag_epochs,
                         post_commit_delta_epochs: self.palw_post_commit_delta_epochs,
+                        // Static-audit C-01: PCPB context is resolved from the CANDIDATE's own past.
+                        // `selected_parent` is the block being committed's selected parent, which is
+                        // the same coordinate the accepted-lifecycle view and the beacon derivation
+                        // already anchor on — so all three now agree on "this block's history".
+                        selected_parent,
+                        seed_walk_max_hops: kaspa_consensus_core::palw::palw_beacon_seed_history_window_epochs(
+                            &self.palw_batch_admission,
+                            self.palw_epoch_length_daa,
+                            self.palw_freshness_window_epochs,
+                        ) as usize,
                     };
                     let apply_result = crate::processes::palw::apply_palw_overlay_effect(
                         effect.clone(),
@@ -4152,9 +4162,27 @@ impl VirtualStateProcessor {
 
         // The block's OWN beacon state (the same derivation UTXO validation authenticates the header
         // `palw_beacon_seed` against — construction == validation), plus the epochs it closed.
-        let (state, closed_epochs) = self
+        let (mut state, closed_epochs) = self
             .derive_palw_beacon_epoch_trace(cur_daa, selected_parent, current, selected_parent_bond_view)
             .expect("a non-genesis active block has a derivable beacon state");
+        // Static-audit finding C-01 — stitch this block into the FORK-RELATIVE closed-epoch chain
+        // before persisting it. `closed_seeds` records the epochs this block itself closed (several
+        // when a mergeset crosses more than one boundary: those epochs get no block of their own, so
+        // a pointer chain alone could never answer for them), and `prev_closer` names the nearest
+        // ancestor that closed anything — carried forward unchanged by blocks that close nothing.
+        //
+        // Both are derived from the SELECTED PARENT's own row, so the chain a candidate walks is its
+        // own past and nothing else. That is the property the epoch-keyed history store cannot have:
+        // it is idempotent-by-value, so two forks closing the same epoch overwrite each other.
+        state.closed_seeds = closed_epochs.clone();
+        // The pointer is the same expression whether or not THIS block closed anything: point at the
+        // parent if the parent closed something, else inherit whatever the parent pointed at. A run
+        // of non-closing blocks therefore costs one hop, not one hop per block.
+        state.prev_closer = self
+            .palw_beacon_store
+            .beacon_state(selected_parent)
+            .unwrap_or_default()
+            .and_then(|parent| if parent.closed_seeds.is_empty() { parent.prev_closer } else { Some(selected_parent) });
         self.palw_beacon_store.set_state_batch(batch, current, Arc::new(state)).unwrap();
 
         // ADR-0045 D3-a — persist each closed epoch's `R_E` in the same WriteBatch, then drop rows

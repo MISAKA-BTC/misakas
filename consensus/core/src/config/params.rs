@@ -1982,14 +1982,13 @@ pub const TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE: u64 = 2_000_000;
 ///     and `palw_manifest_sponsorship` at 0), because there is no history mined under the pre-fix
 ///     rules for them to re-interpret.
 ///
-/// The ONE exception is deliberate and is the reason this preset does not simply zero everything:
-/// `palw_leaf_chunk_v3_admission_daa_score` stays in the FUTURE. The 2026-08-02 static audit's
-/// finding C-01 — the PCPB snapshot / A-commit / beacon-seed rows are read from node-global stores
-/// rather than from a view anchored at the candidate block's selected parent, so leaf acceptance can
-/// depend on fork receive order — is still OPEN, and that fence is exactly what keeps it unreachable:
-/// below it no leaf chunk is admitted, so no leaf reaches the PCPB clauses at all. Opening the algo-4
-/// lane at genesis would arm a known consensus-divergence defect on day one. Move this to 0 (or to a
-/// near score) in the same change that lands the fork-relative PCPB view, not before.
+/// algo-4 is genesis-active, which is the entire reason this network exists — it is where the PALW
+/// replica lane is meant to be exercised. That was only safe once static-audit finding C-01 was
+/// closed: `R_E` is now resolved by walking the CANDIDATE's own closed-epoch chain
+/// (`palw_resolve_seed_fork_relative`) instead of the epoch-keyed history, whose stored value is a
+/// function of whichever fork closed the epoch last. This preset briefly carried a future fence for
+/// exactly that reason; the fence came off in the change that closed the finding, which is the
+/// order such a fence is supposed to be removed in.
 pub const EVM_GENESIS_PALW_PARAMS: Params = Params {
     net: NetworkId::with_suffix(NetworkType::Testnet, 22),
     genesis: crate::config::genesis::EVM_GENESIS_PALW_GENESIS,
@@ -1997,8 +1996,10 @@ pub const EVM_GENESIS_PALW_PARAMS: Params = Params {
     dns_params: Some(PCPB_PALW_DNS_PARAMS),
     // ADR-0020 genesis-active: the whole point of this re-genesis.
     evm_activation_daa_score: 0,
-    // Static-audit C-01 is open — see the preset doc. This is the only rule not genesis-active.
-    palw_leaf_chunk_v3_admission_daa_score: TESTNET_22_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE,
+    // Static-audit C-01 is CLOSED for the beacon-seed read (the clause-11 input): `R_E` is resolved
+    // by walking the candidate's own closed-epoch chain, not the shared epoch-keyed history. algo-4
+    // is therefore genesis-active here, which is the entire reason testnet-22 exists.
+    palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
     palw_manifest_sponsorship_daa_score: 0,
     ..COMPUTE_REGISTRY_PALW_PARAMS
@@ -2007,12 +2008,6 @@ pub const EVM_GENESIS_PALW_PARAMS: Params = Params {
 /// testnet-22 seeders. Reuses the testnet-21 hosts: they are the operator's own seeders and serve
 /// whichever net the node behind them runs.
 pub const TESTNET_22_DNS_SEEDERS: &[&str] = &["seeder1.misakascan.com", "seeder3.misakascan.com"];
-
-/// The testnet-22 algo-4 flag day — see [`EVM_GENESIS_PALW_PARAMS`] for why it is not 0.
-///
-/// ~500,000 is roughly a day at the rate testnet-21 sustained. It is a placeholder for "long enough
-/// to land the C-01 fork-relative PCPB view", not a measured value, and moving it OUT is always safe.
-pub const TESTNET_22_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE: u64 = 500_000;
 
 /// testnet-21 DNS params: the compute-registry shape plus **proposal ③** — anchor confirmation
 /// additionally requires the anchor's own epoch to be attested (dead-branch confirm eradication;
@@ -2822,10 +2817,11 @@ mod palw_network_tests {
             presets.iter().filter(|(_, p)| p.palw_leaf_chunk_v3_admission_daa_score != 0).map(|(n, _)| *n).collect();
         assert_eq!(
             fenced,
-            vec!["pcpb-palw", "evm-genesis-palw"],
-            "testnet-21 fences the algo-4 lane because it has pre-fix mined history; testnet-22 fences it because \
-             static-audit C-01 is still open. Every other preset opens it from genesis. If this list shrinks, say \
-             WHICH of those two reasons stopped applying."
+            vec!["pcpb-palw"],
+            "ONLY testnet-21 fences the algo-4 lane, and only because it has mined history produced by binaries whose \
+             span predicate was pinned at v2. testnet-22 briefly carried a fence too, for a different reason — \
+             static-audit C-01 — which is now closed for the clause-11 beacon read, so it opens the lane at genesis. \
+             If a preset is ADDED here, say which of those two reasons applies."
         );
 
         // REJECT: an activated preset whose cap has been zeroed by a params edit must fail the

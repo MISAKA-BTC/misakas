@@ -2806,6 +2806,165 @@ pub struct PalwBeaconStateV1 {
     /// Diagnostics (not seed inputs): counts behind the two roots.
     pub valid_reveal_count: u32,
     pub missing_commit_count: u32,
+    /// Static-audit finding C-01 — the epochs THIS block closed, with their seeds.
+    ///
+    /// Usually empty (a non-boundary block) or one entry. More only when a mergeset advances DAA
+    /// across several epoch boundaries at once, which closes every epoch in between; those epochs
+    /// have no block of their own, so a back-pointer chain alone could never answer for them. That
+    /// is the case a naive "walk to the previous boundary" design silently gets wrong.
+    pub closed_seeds: Vec<(u64, Hash64)>,
+    /// The nearest ancestor chain block whose `closed_seeds` is non-empty, or `None` when this
+    /// block's history contains no earlier epoch close.
+    ///
+    /// This is what makes `R_E` a FORK-RELATIVE read. The epoch-keyed history store is
+    /// idempotent-by-VALUE, not write-once — its own doc says the value is "a function of the chain
+    /// that first closed this epoch" — so two forks legitimately write different seeds under one
+    /// epoch key, and a PCPB clause reading that key resolves whichever fork wrote last. Walking
+    /// this chain from the CANDIDATE's selected parent instead makes the answer a function of the
+    /// candidate's own past, which is what clause 11 always claimed to be.
+    pub prev_closer: Option<crate::BlockHash>,
+}
+
+/// Static-audit finding C-01 — resolve `R_E` FORK-RELATIVELY by walking the closed-epoch chain
+/// backwards from a starting block's beacon state.
+///
+/// `read` returns a block's [`PalwBeaconStateV1`]; the walk starts at `from` (always the CANDIDATE
+/// block's selected parent, never the node's virtual tip) and follows [`PalwBeaconStateV1::prev_closer`].
+///
+/// Why a walk and not an epoch-keyed lookup: the epoch-keyed seed history is idempotent-by-VALUE.
+/// Its own contract says the stored value is "a function of the chain that first closed this epoch",
+/// so two forks that both close epoch `E` legitimately write DIFFERENT seeds under the same key, and
+/// whichever committed last wins for EVERY reader — including a PCPB clause validating a block on
+/// the other fork. That made leaf acceptance depend on fork receive order, sink-search order and
+/// reorg path, which is a consensus split with no tx-level cause: the 2026-08-02 partition was
+/// triggered by exactly this class of divergence (there, from a rule skew rather than a store read).
+///
+/// `max_hops` bounds the walk at the retention window. Running out of hops returns `None`, and every
+/// PCPB caller treats `None` as REJECT — fail-closed, never a live-value substitution.
+pub fn palw_resolve_seed_fork_relative<E>(
+    from: Hash64,
+    epoch: u64,
+    max_hops: usize,
+    mut read: impl FnMut(Hash64) -> Result<Option<PalwBeaconStateV1>, E>,
+) -> Result<Option<Hash64>, E> {
+    let mut cursor = Some(from);
+    for _ in 0..max_hops {
+        let Some(block) = cursor else { return Ok(None) };
+        let Some(state) = read(block)? else { return Ok(None) };
+        // A block records the epochs IT closed. `epoch` is answered by whichever ancestor closed it —
+        // including the multi-epoch case, where one block closes several and no block sits between.
+        if let Some((_, seed)) = state.closed_seeds.iter().find(|(closed, _)| *closed == epoch) {
+            return Ok(Some(*seed));
+        }
+        // Walked strictly past the target: this block closed an OLDER epoch, so the target was never
+        // closed in this history. Refuse rather than keep walking into the retention floor.
+        if state.closed_seeds.iter().any(|(closed, _)| *closed < epoch) {
+            return Ok(None);
+        }
+        cursor = state.prev_closer;
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod fork_relative_seed_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn state(epoch: u64, closed: Vec<(u64, Hash64)>, prev: Option<Hash64>) -> PalwBeaconStateV1 {
+        PalwBeaconStateV1 {
+            version: 1,
+            epoch,
+            seed: Hash64::default(),
+            closed_seeds: closed,
+            prev_closer: prev,
+            dns_anchor: Hash64::default(),
+            anchor_blue_score: 0,
+            anchor_daa_score: 0,
+            anchor_overlay_root: Hash64::default(),
+            valid_reveals_root: Hash64::default(),
+            missing_commitments_root: Hash64::default(),
+            mode: 0,
+            degraded_epochs: 0,
+            valid_reveal_count: 0,
+            missing_commit_count: 0,
+        }
+    }
+    fn h(b: u8) -> Hash64 {
+        Hash64::from_bytes([b; 64])
+    }
+    fn walk(chain: &HashMap<Hash64, PalwBeaconStateV1>, from: Hash64, epoch: u64) -> Option<Hash64> {
+        palw_resolve_seed_fork_relative::<()>(from, epoch, 64, |b| Ok(chain.get(&b).cloned())).unwrap()
+    }
+
+    /// THE finding. Two forks both close epoch 7 with different seeds. An epoch-keyed store answers
+    /// whichever wrote last — the same answer for BOTH forks, so one of them validates a leaf
+    /// against the other's randomness and the two nodes disagree about block validity. Walking each
+    /// candidate's OWN chain gives each fork its own seed, which is what clause 11 always meant.
+    #[test]
+    fn two_forks_closing_one_epoch_resolve_to_their_own_seeds() {
+        let (seed_a, seed_b) = (h(0xAA), h(0xBB));
+        let mut chain = HashMap::new();
+        chain.insert(h(1), state(6, vec![(6, h(0x60))], None));
+        // Fork A: block 2 closes epoch 7 as 0xAA. Fork B: block 3 closes the SAME epoch as 0xBB.
+        chain.insert(h(2), state(7, vec![(7, seed_a)], Some(h(1))));
+        chain.insert(h(3), state(7, vec![(7, seed_b)], Some(h(1))));
+
+        assert_eq!(walk(&chain, h(2), 7), Some(seed_a));
+        assert_eq!(walk(&chain, h(3), 7), Some(seed_b));
+        // Their shared past still resolves identically on both — divergence is confined to the
+        // epochs the forks actually disagree about.
+        assert_eq!(walk(&chain, h(2), 6), walk(&chain, h(3), 6));
+    }
+
+    /// A mergeset can advance DAA across several epoch boundaries at once, closing every epoch in
+    /// between. Those epochs get NO block of their own, so a design that only followed a
+    /// "previous boundary block" pointer would answer `None` for them and reject honest leaves.
+    /// This is the case that makes `closed_seeds` a Vec rather than a single entry.
+    #[test]
+    fn a_multi_epoch_jump_answers_for_every_epoch_it_closed() {
+        let mut chain = HashMap::new();
+        chain.insert(h(1), state(3, vec![(3, h(0x30))], None));
+        chain.insert(h(2), state(6, vec![(4, h(0x40)), (5, h(0x50)), (6, h(0x60))], Some(h(1))));
+        for (epoch, seed) in [(4u64, h(0x40)), (5, h(0x50)), (6, h(0x60)), (3, h(0x30))] {
+            assert_eq!(walk(&chain, h(2), epoch), Some(seed), "epoch {epoch} must resolve");
+        }
+    }
+
+    /// Blocks that close nothing carry the pointer forward, so a long run of them costs ONE hop.
+    /// Without that the walk would be O(blocks) and the hop bound would reject honest leaves.
+    #[test]
+    fn non_closing_blocks_do_not_consume_hops() {
+        let mut chain = HashMap::new();
+        chain.insert(h(1), state(5, vec![(5, h(0x50))], None));
+        // Model what the WRITER produces: a non-closing block inherits its parent's pointer rather
+        // than pointing at its parent, so the whole run points at the last closer, h(1).
+        for i in 2..40u8 {
+            chain.insert(h(i), state(5, vec![], Some(h(1))));
+        }
+        let prev = h(39);
+        // 38 non-closing blocks, resolved with a hop budget of 2.
+        assert_eq!(palw_resolve_seed_fork_relative::<()>(prev, 5, 2, |b| Ok(chain.get(&b).cloned())).unwrap(), Some(h(0x50)));
+    }
+
+    /// Fail-closed in every direction: an epoch this history never closed, an epoch in the future,
+    /// an exhausted hop budget and a missing row all REFUSE. A live-value substitution here is the
+    /// grindable state D3-b forbids.
+    #[test]
+    fn unresolvable_epochs_fail_closed() {
+        let mut chain = HashMap::new();
+        chain.insert(h(1), state(4, vec![(4, h(0x40))], None));
+        chain.insert(h(2), state(9, vec![(9, h(0x90))], Some(h(1))));
+
+        assert_eq!(walk(&chain, h(2), 7), None, "an epoch this chain never closed must refuse");
+        assert_eq!(walk(&chain, h(2), 12), None, "a future epoch must refuse");
+        assert_eq!(walk(&chain, h(0xEE), 9), None, "an unknown starting block must refuse");
+        assert_eq!(
+            palw_resolve_seed_fork_relative::<()>(h(2), 4, 1, |b| Ok(chain.get(&b).cloned())).unwrap(),
+            None,
+            "an exhausted hop budget must refuse rather than answer from a shorter walk"
+        );
+    }
 }
 
 impl PalwBeaconMode {
@@ -3082,6 +3241,11 @@ pub fn derive_beacon_epoch_state(
         version: 1,
         epoch,
         seed,
+        // Static-audit C-01: the fork-relative chain is stitched by the CALLER, which is the only
+        // place that knows this block's selected parent and the full set of epochs it closed. This
+        // pure derivation returns the record for ONE epoch and leaves both fields empty.
+        closed_seeds: Vec::new(),
+        prev_closer: None,
         dns_anchor: anchor.hash,
         anchor_blue_score: anchor.blue_score,
         anchor_daa_score: anchor.daa_score,
@@ -8418,6 +8582,8 @@ mod tests {
         let grace = 3u64;
         let state = |epoch: u64, mode: PalwBeaconMode, degraded: u64| PalwBeaconStateV1 {
             version: 1,
+            closed_seeds: Vec::new(),
+            prev_closer: None,
             epoch,
             seed: h(0),
             dns_anchor: h(0),
@@ -11183,6 +11349,8 @@ mod tests {
         // from_state projection matches.
         let st = PalwBeaconStateV1 {
             version: 1,
+            closed_seeds: Vec::new(),
+            prev_closer: None,
             epoch: 12,
             seed: prev,
             dns_anchor: anchor,

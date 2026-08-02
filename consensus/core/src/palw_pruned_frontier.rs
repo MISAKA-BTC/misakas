@@ -1899,6 +1899,8 @@ mod tests {
         let frontier = PalwPrunedFrontierV1 {
             beacon_state: Some(PalwBeaconStateV1 {
                 version: 1,
+                closed_seeds: Vec::new(),
+                prev_closer: None,
                 epoch: 2,
                 seed: h(0x11),
                 dns_anchor: h(0x12),

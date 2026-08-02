@@ -722,6 +722,9 @@ mod tests {
             freshness_window_epochs: pcpb::W,
             snapshot_lag_epochs: pcpb::K,
             post_commit_delta_epochs: pcpb::DELTA,
+            // Static-audit C-01: the fixture's fork-relative chain (staged by `fixture.stage`).
+            selected_parent: crate::processes::palw::pcpb_test_support::PCPB_TEST_SELECTED_PARENT,
+            seed_walk_max_hops: 64,
         };
         crate::processes::palw::apply_palw_overlay_effect(
             crate::processes::palw::PalwOverlayEffect::LeafChunk(chunk),

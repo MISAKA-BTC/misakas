@@ -829,6 +829,15 @@ pub struct PalwPcpbAcceptanceCtx<'a> {
     pub freshness_window_epochs: u64,
     pub snapshot_lag_epochs: u64,
     pub post_commit_delta_epochs: u64,
+    /// Static-audit finding C-01 — the candidate block's SELECTED PARENT.
+    ///
+    /// Every PCPB context read is resolved by walking back from here, so the answer is a function of
+    /// the candidate's own past rather than of whichever fork last wrote a shared epoch row. Without
+    /// it, leaf acceptance depended on fork receive order, sink-search order and reorg path.
+    pub selected_parent: kaspa_consensus_core::BlockHash,
+    /// The bound on that walk: the beacon seed retention window in epochs. Exhausting it returns
+    /// `None`, which every clause treats as REJECT.
+    pub seed_walk_max_hops: usize,
 }
 
 /// The production [`kaspa_consensus_core::palw::PalwMlDsaVerifier`] binding — the same
@@ -1069,13 +1078,21 @@ pub fn apply_palw_overlay_effect(
                 // Clause 11, heavy half: the challenge must re-derive under R_{issued} from the
                 // witness's preimage triple — otherwise `issued` is a free declaration and the
                 // freshness window above binds nothing (cached-activation replay, audit H-10).
-                let issued_seed = beacon.beacon_seed_at(issued).map_err(|_| PalwOverlayError::StoreError)?.ok_or(
-                    PalwOverlayError::LeafPcpbContextUnresolvable {
-                        leaf_index: leaf.leaf_index,
-                        epoch: issued,
-                        what: "issued-epoch beacon seed",
-                    },
-                )?;
+                // Static-audit C-01: resolved by walking this CANDIDATE's own closed-epoch chain
+                // from its selected parent — never from the epoch-keyed history, whose value is a
+                // function of whichever fork closed the epoch last.
+                let issued_seed = kaspa_consensus_core::palw::palw_resolve_seed_fork_relative(
+                    ctx.selected_parent,
+                    issued,
+                    ctx.seed_walk_max_hops,
+                    |block| beacon.beacon_state(block).map(|state| state.map(|s| (*s).clone())),
+                )
+                .map_err(|_| PalwOverlayError::StoreError)?
+                .ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                    leaf_index: leaf.leaf_index,
+                    epoch: issued,
+                    what: "issued-epoch beacon seed (fork-relative walk)",
+                })?;
                 let expected_challenge = kaspa_consensus_core::palw::palw_job_challenge(
                     ctx.network_id,
                     issued,
@@ -3683,6 +3700,8 @@ mod tests {
                 sp,
                 Arc::new(PalwBeaconStateV1 {
                     version: 1,
+                    closed_seeds: Vec::new(),
+                    prev_closer: None,
                     epoch: 9,
                     seed,
                     dns_anchor: h(0),
@@ -3716,6 +3735,8 @@ mod tests {
         let (net, target) = (0x9107u32, 42u64);
         let state = |anchor: BeaconDnsAnchor| PalwBeaconStateV1 {
             version: 1,
+            closed_seeds: Vec::new(),
+            prev_closer: None,
             epoch: 9,
             seed: h(0x77),
             dns_anchor: anchor.hash,
@@ -4646,6 +4667,19 @@ mod tests {
             beacon.set_beacon_seed_batch(&mut batch, 0, h(0xA0)).unwrap();
             beacon.set_beacon_seed_batch(&mut batch, 1, h(0xA1)).unwrap();
             db.write(batch).unwrap();
+            // Static-audit C-01: clause 11 resolves R_E by walking THIS candidate's closed-epoch
+            // chain, so the negatives' extra epochs have to exist on that chain too — writing them
+            // only into the epoch-keyed history would now (correctly) resolve to nothing.
+            pcpb_test_support::stage_fork_relative_seeds(
+                &db,
+                &beacon,
+                vec![
+                    (0, h(0xA0)),
+                    (1, h(0xA1)),
+                    (pcpb_fixture().issued_epoch, pcpb_fixture().issued_seed),
+                    (pcpb_fixture().draw_epoch, pcpb_fixture().draw_seed),
+                ],
+            );
             let wits = |n: u32| (0..n).map(|i| pcpb_fixture().witness(i)).collect::<Vec<_>>();
 
             // Baseline: the untampered leaves in their own self-consistent batch ACCEPT — and the
@@ -4746,6 +4780,17 @@ mod tests {
                     beacon.set_beacon_seed_batch(&mut batch, fixture.draw_epoch, fixture.draw_seed).unwrap();
                 }
                 db.write(batch).unwrap();
+                // Static-audit C-01: retention is now expressed on the FORK-RELATIVE chain, since
+                // that is what clause 11 reads. Staging only the epoch-keyed rows would make every
+                // case here fail as unresolvable and hide which one is actually under test.
+                let mut chain = Vec::new();
+                if issued_seed {
+                    chain.push((fixture.issued_epoch, fixture.issued_seed));
+                }
+                if draw_seed {
+                    chain.push((fixture.draw_epoch, fixture.draw_seed));
+                }
+                pcpb_test_support::stage_fork_relative_seeds(&db, &beacon, chain);
                 (lt, db, store, beacon, pcpb_store)
             };
 
@@ -4758,7 +4803,7 @@ mod tests {
                 Err(PalwOverlayError::LeafPcpbContextUnresolvable {
                     leaf_index: 0,
                     epoch: fixture.issued_epoch,
-                    what: "issued-epoch beacon seed"
+                    what: "issued-epoch beacon seed (fork-relative walk)"
                 })
             );
 
@@ -4797,6 +4842,13 @@ mod tests {
             let mut batch = rocksdb::WriteBatch::default();
             beacon.set_beacon_seed_batch(&mut batch, 1, seed1).unwrap();
             db4.write(batch).unwrap();
+            // Clause 11 must PASS here so the underflow below is the first failing read, so epoch 1
+            // has to be on the fork-relative chain alongside the fixture's own epochs.
+            pcpb_test_support::stage_fork_relative_seeds(
+                &db4,
+                &beacon,
+                vec![(1, seed1), (fixture.issued_epoch, fixture.issued_seed), (fixture.draw_epoch, fixture.draw_seed)],
+            );
             let w0 = fixture.witness(0);
             let mut l = leaf_raw(0);
             l.receipt_v3_issued_epoch = 1;
@@ -4949,6 +5001,11 @@ mod tests {
                     pcpb.set_acommit_batch(&mut batch, &anchor, epoch).unwrap();
                 }
                 db.write(batch).unwrap();
+                pcpb_test_support::stage_fork_relative_seeds(
+                    db,
+                    beacon,
+                    vec![(SELF_ANCHOR, self.issued_seed), (SELF_ANCHOR + DELTA, self.draw_seed)],
+                );
             }
         }
 
@@ -5077,6 +5134,41 @@ mod tests {
 /// therefore breaks these fixtures loudly instead of silently pinning a stale expectation.
 #[cfg(test)]
 pub(crate) mod pcpb_test_support {
+    /// Static-audit C-01 — the fork-relative chain a fixture's clause-11 walk resolves against.
+    ///
+    /// Production stitches this per chain block; a fixture needs only ONE row, because a single
+    /// block legitimately closes several epochs (the multi-epoch-jump case) and that is exactly
+    /// the shape `closed_seeds` exists to carry.
+    pub(crate) const PCPB_TEST_SELECTED_PARENT: Hash64 = Hash64::from_bytes([0x5b; 64]);
+
+    pub(crate) fn stage_fork_relative_seeds(
+        db: &std::sync::Arc<kaspa_database::prelude::DB>,
+        beacon: &crate::model::stores::palw_beacon::DbPalwBeaconStore,
+        closed: Vec<(u64, Hash64)>,
+    ) {
+        let mut batch = rocksdb::WriteBatch::default();
+        let top = closed.iter().map(|(e, _)| *e).max().unwrap_or(0);
+        let mut state = kaspa_consensus_core::palw::PalwBeaconStateV1 {
+            version: 1,
+            epoch: top,
+            seed: closed.last().map(|(_, s)| *s).unwrap_or_default(),
+            closed_seeds: closed,
+            prev_closer: None,
+            dns_anchor: Hash64::default(),
+            anchor_blue_score: 0,
+            anchor_daa_score: 0,
+            anchor_overlay_root: Hash64::default(),
+            valid_reveals_root: Hash64::default(),
+            missing_commitments_root: Hash64::default(),
+            mode: 0,
+            degraded_epochs: 0,
+            valid_reveal_count: 0,
+            missing_commit_count: 0,
+        };
+        state.version = 1;
+        beacon.set_state_batch(&mut batch, PCPB_TEST_SELECTED_PARENT, std::sync::Arc::new(state)).unwrap();
+        db.write(batch).unwrap();
+    }
     use kaspa_consensus_core::palw::{
         BeaconAssignedProof, PALW_DISPATCH_KIND_BEACON_ASSIGNED, PalwDispatchEvidence, PalwLeafPcpbWitnessV1,
         PalwProviderSnapshotEntry, PalwPublicLeafV1, PalwSnapshotWitnessSet, palw_assignment_draw_seed, palw_build_snapshot_witnesses,
@@ -5119,6 +5211,8 @@ pub(crate) mod pcpb_test_support {
             freshness_window_epochs: W,
             snapshot_lag_epochs: K,
             post_commit_delta_epochs: DELTA,
+            selected_parent: PCPB_TEST_SELECTED_PARENT,
+            seed_walk_max_hops: 64,
         }
     }
 
@@ -5242,6 +5336,7 @@ pub(crate) mod pcpb_test_support {
         }
 
         /// Stage the beacon seeds + provider snapshot this fixture's leaves resolve against.
+
         pub(crate) fn stage(
             &self,
             db: &std::sync::Arc<kaspa_database::prelude::DB>,
@@ -5253,6 +5348,7 @@ pub(crate) mod pcpb_test_support {
             beacon.set_beacon_seed_batch(&mut batch, self.draw_epoch, self.draw_seed).unwrap();
             pcpb.set_snapshot_batch(&mut batch, self.snapshot_epoch, self.witnesses.commitment).unwrap();
             db.write(batch).unwrap();
+            stage_fork_relative_seeds(db, beacon, vec![(self.issued_epoch, self.issued_seed), (self.draw_epoch, self.draw_seed)]);
         }
     }
 }

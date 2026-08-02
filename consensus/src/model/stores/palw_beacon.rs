@@ -354,6 +354,8 @@ mod tests {
 
         let st = Arc::new(PalwBeaconStateV1 {
             version: 1,
+            closed_seeds: Vec::new(),
+            prev_closer: None,
             epoch: 9,
             seed: h(1),
             dns_anchor: h(2),

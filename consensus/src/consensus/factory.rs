@@ -121,7 +121,12 @@ pub struct MultiConsensusMetadata {
 //     `active_batches`, breaking the singleton's positional Borsh encoding;
 // (c) `PalwSelectedParentStateV2` inserts `search_availability_state_root`, moving every Header-v4
 //     overlay commitment (PALW activates via re-genesis, so this is part of that wire table).
-pub const LATEST_DB_VERSION: u32 = 16;
+// v17 (2026-08-02, static-audit finding C-01): `PalwBeaconStateV1` gains `closed_seeds` and
+// `prev_closer`, the fork-relative closed-epoch chain clause 11 now walks. That is a positional
+// Borsh break on a block-keyed row every active chain block carries, so a v16 datadir cannot be
+// read. It is a re-sync, and it is the cheapest moment to take one: testnet-22 has no datadirs yet,
+// and testnet-21's nodes are being replaced by it.
+pub const LATEST_DB_VERSION: u32 = 17;
 impl Default for MultiConsensusMetadata {
     fn default() -> Self {
         Self {
