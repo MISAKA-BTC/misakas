@@ -292,6 +292,13 @@ impl NetworkId {
                 // ADR-0045 D3-b (2026-08-01 migration): the public PALW testnet moved to
                 // `testnet-21` (pcpb-palw) — same isolation rationale, its own port.
                 Some(21) => 26531,
+                // Static-audit C-01/C-02 re-genesis (2026-08-02): the public PALW testnet moved to
+                // `testnet-22` (evm-genesis-palw). Same isolation rationale again — but note this
+                // arm is not merely hygiene. The port a node ADVERTISES comes from here, so without
+                // it testnet-22 would fall through to the generic 26411 while its operators listen
+                // on 26541, and every seeder answer and gossip address would name a port nothing is
+                // bound to. The net would be undiscoverable while every node looked healthy.
+                Some(22) => 26541,
                 None | Some(_) => 26411,
             },
             NetworkType::Simnet => 26511,
@@ -554,6 +561,8 @@ mod tests {
             ("testnet-20", [26521, 26210, 27210, 28210, 8545]),
             // ADR-0045 D3-b: the public PALW testnet (pcpb-palw) has its own P2P port 26531.
             ("testnet-21", [26531, 26210, 27210, 28210, 8545]),
+            // The public PALW testnet after the 2026-08-02 re-genesis.
+            ("testnet-22", [26541, 26210, 27210, 28210, 8545]),
             ("devnet", [26611, 26610, 27610, 28610, 8545]),
             ("simnet", [26511, 26510, 27510, 28510, 8545]),
         ];
