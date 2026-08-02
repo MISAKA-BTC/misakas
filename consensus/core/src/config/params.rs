@@ -387,6 +387,17 @@ pub struct Params {
     /// `palw_activation_daa_score` precedent exactly; activation is a coordinated wire cutover
     /// (§25 — introduce the references BEFORE PALW main-net operation, or pay a hard fork later).
     pub palw_compute_registry_activation_daa_score: u64,
+    /// ADR-0045 D3-b hotfix fence (bug report #6, 2026-08-02): the DAA score from which v3 leaf
+    /// chunks are ADMITTED into the accepted batch view and the DA capacity gate. Below it every
+    /// leaf chunk is skipped at acceptance — byte-identical to the pre-fix binaries, whose span
+    /// predicate was pinned at v2 while context-free validation required v3 (mutually exclusive,
+    /// so nothing was ever admitted). Deploying the un-fenced fix to only the two anchor nodes
+    /// partitioned testnet-21 at daa 325,914: the first admitted chunk carrier entered the UTXO
+    /// set on fixed nodes only, and the very next coinbase-only twins committed different UTXO
+    /// sets, each side disqualifying the other's chain. A rule change that moves tx acceptance
+    /// MUST ship as a flag day: everyone skips below the fence, everyone admits from it, and the
+    /// distance to the fence is the upgrade window.
+    pub palw_leaf_chunk_v3_admission_daa_score: u64,
     /// ADR-0040 P1-13 archival-operation requirement. Presets without a supported pruning snapshot
     /// path set this flag so startup rejects pruned operation.
     pub palw_requires_archival: bool,
@@ -570,6 +581,7 @@ impl Params {
             palw_activation_daa_score,
             palw_algo4_accept,
             palw_compute_registry_activation_daa_score,
+            palw_leaf_chunk_v3_admission_daa_score,
             palw_requires_archival,
             palw_requires_peer_allowlist,
             palw_compute_work_scale,
@@ -633,6 +645,7 @@ impl Params {
         field!(palw_activation_daa_score);
         field!(palw_algo4_accept);
         field!(palw_compute_registry_activation_daa_score);
+        field!(palw_leaf_chunk_v3_admission_daa_score);
         field!(palw_requires_archival);
         field!(palw_requires_peer_allowlist);
         field!(palw_compute_work_scale);
@@ -873,6 +886,7 @@ impl Params {
             palw_activation_daa_score: self.palw_activation_daa_score,
             palw_algo4_accept: self.palw_algo4_accept,
             palw_compute_registry_activation_daa_score: self.palw_compute_registry_activation_daa_score,
+            palw_leaf_chunk_v3_admission_daa_score: self.palw_leaf_chunk_v3_admission_daa_score,
             palw_requires_archival: self.palw_requires_archival,
             palw_requires_peer_allowlist: self.palw_requires_peer_allowlist,
             palw_compute_work_scale: self.palw_compute_work_scale,
@@ -1448,6 +1462,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_algo4_accept: false,
     // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
     palw_compute_registry_activation_daa_score: u64::MAX,
+    palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1561,6 +1576,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_algo4_accept: false,
     // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
     palw_compute_registry_activation_daa_score: u64::MAX,
+    palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1634,6 +1650,7 @@ pub const TESTNET_PALW_PARAMS: Params = Params {
     palw_algo4_accept: true,
     // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
     palw_compute_registry_activation_daa_score: u64::MAX,
+    palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_requires_archival: true,
     palw_requires_peer_allowlist: true,
     palw_lane_difficulty: TESTNET_PALW_LANE_DIFFICULTY,
@@ -1688,6 +1705,7 @@ pub const DEVNET_PALW_PARAMS: Params = Params {
     palw_algo4_accept: true,
     // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
     palw_compute_registry_activation_daa_score: u64::MAX,
+    palw_leaf_chunk_v3_admission_daa_score: 0,
     // Devnet permits normal pruning; archival nodes opt in when full history is required.
     palw_requires_archival: false,
     palw_requires_peer_allowlist: true,
@@ -1770,6 +1788,7 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
     palw_algo4_accept: true,
     // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
     palw_compute_registry_activation_daa_score: u64::MAX,
+    palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_compute_work_scale: 0,
     palw_spam: crate::palw_antispam::PalwSpamParams::PUBLIC_REGENESIS_CANDIDATE,
     skip_proof_of_work: false,
@@ -1808,6 +1827,7 @@ pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
     // ADR-MA: the registry fence — OPEN from genesis (this net rehearses the Compute Set registry
     // as well as the mainnet shape it inherits from STAGING).
     palw_compute_registry_activation_daa_score: 0,
+    palw_leaf_chunk_v3_admission_daa_score: 0,
     dns_params: Some(COMPUTE_REGISTRY_DNS_PARAMS),
     ..STAGING_MAINNET_PALW_PARAMS
 };
@@ -1860,8 +1880,18 @@ pub const PCPB_PALW_PARAMS: Params = Params {
     dns_seeders: TESTNET_21_DNS_SEEDERS,
     dns_params: Some(PCPB_PALW_DNS_PARAMS),
     evm_activation_daa_score: TESTNET_21_EVM_ACTIVATION_DAA_SCORE,
+    // Bug report #6 (2026-08-02): v3 leaf-chunk admission is a FLAG DAY, not a hotfix. The
+    // network partitioned at daa 325,914 when the un-fenced fix ran on two nodes only; below
+    // this score every node — fixed or not — skips every leaf chunk, so the surviving
+    // (community-side) chain replays identically under both binaries and the partition heals
+    // by blue work. From this score, v3 chunks are admitted everywhere at once. Chosen ~14h
+    // ahead of the surviving side's tip (~355k at ~5.8 daa/s) at fix time.
+    palw_leaf_chunk_v3_admission_daa_score: TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE,
     ..COMPUTE_REGISTRY_PALW_PARAMS
 };
+
+/// Bug report #6 — the testnet-21 leaf-chunk v3 flag day (see the field's doc for the incident).
+pub const TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE: u64 = 650_000;
 
 /// testnet-21 DNS params: the compute-registry shape plus **proposal ③** — anchor confirmation
 /// additionally requires the anchor's own epoch to be attested (dead-branch confirm eradication;
@@ -1949,6 +1979,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_algo4_accept: false,
     // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
     palw_compute_registry_activation_daa_score: u64::MAX,
+    palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1991,6 +2022,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_algo4_accept: false,
     // ADR-MA Compute Set registry: not yet activated on any shipped preset (Header v5 + 0x40 band inert).
     palw_compute_registry_activation_daa_score: u64::MAX,
+    palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,

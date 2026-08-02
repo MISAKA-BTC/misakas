@@ -304,7 +304,16 @@ pub(super) fn palw_v4_leaf_chunk_matches_canonical_span(
     chunk: &kaspa_consensus_core::palw::PalwLeafChunkV1,
     lifecycle: &kaspa_consensus_core::palw::PalwBatchLifecycleV1,
     max_leaf_chunk_leaves: u16,
+    v3_admitted: bool,
 ) -> bool {
+    // Bug report #6 flag day: below `palw_leaf_chunk_v3_admission_daa_score` NO chunk version is
+    // admissible — v2 died with D3-b's context-free rejection, and admitting v3 early is exactly
+    // the acceptance divergence that partitioned testnet-21 (a carrier accepted by fixed nodes and
+    // skipped by everyone else splits the UTXO set on the next block). `v3_admitted` is derived
+    // from the POV block's own consensus daa at both call sites, never from local wall-clock state.
+    if !v3_admitted {
+        return false;
+    }
     // Header-v4 treats each bitmap bit as the commitment that EVERY leaf in that canonical chunk
     // span was accepted. Merkle membership alone is insufficient: without this binding, the same
     // valid leaf/proof (or any proper subset) can be relabelled with another `chunk_index`, set all
@@ -364,6 +373,8 @@ struct PalwDaAcceptanceGate<'a> {
     daa_score: u64,
     epoch: u64,
     max_leaf_chunk_leaves: u16,
+    /// Bug report #6 flag day: the daa score from which v3 leaf chunks are admitted.
+    leaf_chunk_v3_admission_daa_score: u64,
     max_obligations: usize,
     max_snapshot_bytes: usize,
 }
@@ -379,6 +390,7 @@ impl<'a> PalwDaAcceptanceGate<'a> {
         daa_score: u64,
         epoch_length_daa: u64,
         max_leaf_chunk_leaves: u16,
+        leaf_chunk_v3_admission_daa_score: u64,
     ) -> Self {
         let parent_obligations = parent.obligations.keys().copied().collect();
         let parent_open_challenges = parent
@@ -404,6 +416,7 @@ impl<'a> PalwDaAcceptanceGate<'a> {
             daa_score,
             epoch: daa_score / epoch_length_daa.max(1),
             max_leaf_chunk_leaves,
+            leaf_chunk_v3_admission_daa_score,
             max_obligations: PALW_DA_MAX_OBLIGATIONS,
             max_snapshot_bytes: PALW_DA_MAX_PRUNING_SNAPSHOT_BYTES,
         }
@@ -432,7 +445,12 @@ impl<'a> PalwDaAcceptanceGate<'a> {
             return false;
         };
         if lifecycle.status != kaspa_consensus_core::palw::PalwBatchStatus::Registering
-            || !palw_v4_leaf_chunk_matches_canonical_span(chunk, lifecycle, self.max_leaf_chunk_leaves)
+            || !palw_v4_leaf_chunk_matches_canonical_span(
+                chunk,
+                lifecycle,
+                self.max_leaf_chunk_leaves,
+                self.daa_score >= self.leaf_chunk_v3_admission_daa_score,
+            )
         {
             return false;
         }
@@ -599,6 +617,7 @@ impl VirtualStateProcessor {
                 pov_daa_score,
                 self.palw_epoch_length_daa,
                 self.palw_batch_admission.max_leaf_chunk_leaves,
+                self.palw_leaf_chunk_v3_admission_daa_score,
             )
         });
 
@@ -2977,13 +2996,20 @@ mod tests {
         fn leaf_chunk_span_predicate_admits_exactly_the_context_free_version() {
             let (mut chunk, lifecycle) = chunk_and_lifecycle(0x11);
             assert!(
-                palw_v4_leaf_chunk_matches_canonical_span(&chunk, &lifecycle, PALW_MAX_LEAVES_PER_CHUNK as u16),
+                palw_v4_leaf_chunk_matches_canonical_span(&chunk, &lifecycle, PALW_MAX_LEAVES_PER_CHUNK as u16, true),
                 "the span predicate must admit the version context-free validation requires"
+            );
+            // Bug report #6: below the v3 flag day NOTHING is admissible — the pre-fix binaries
+            // skipped every chunk, and matching them below the fence is what re-unifies a
+            // partitioned network instead of forking it at each node's upgrade moment.
+            assert!(
+                !palw_v4_leaf_chunk_matches_canonical_span(&chunk, &lifecycle, PALW_MAX_LEAVES_PER_CHUNK as u16, false),
+                "below the flag day even the canonical v3 chunk must be skipped"
             );
             for stale in [kaspa_consensus_core::palw::PALW_LEAF_CHUNK_VERSION_V2, PALW_LEAF_CHUNK_VERSION_V3 + 1] {
                 chunk.version = stale;
                 assert!(
-                    !palw_v4_leaf_chunk_matches_canonical_span(&chunk, &lifecycle, PALW_MAX_LEAVES_PER_CHUNK as u16),
+                    !palw_v4_leaf_chunk_matches_canonical_span(&chunk, &lifecycle, PALW_MAX_LEAVES_PER_CHUNK as u16, true),
                     "version {stale} is not the context-free version and must be refused"
                 );
             }
@@ -3011,6 +3037,7 @@ mod tests {
                 DAA,
                 100,
                 PALW_MAX_LEAVES_PER_CHUNK as u16,
+                0, // v3 flag day passed: these tests exercise the gate's post-fence behavior
             )
         }
 

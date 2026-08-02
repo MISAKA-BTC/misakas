@@ -963,6 +963,8 @@ pub struct VirtualStateProcessor {
     /// ADR-MA: the Compute Set registry activation fence (`u64::MAX` on every shipped preset —
     /// the registry fold below returns before touching acceptance data).
     pub(super) palw_compute_registry_activation_daa_score: u64,
+    /// Bug report #6 flag day — v3 leaf-chunk admission score (params.rs doc has the incident).
+    pub(super) palw_leaf_chunk_v3_admission_daa_score: u64,
     pub(super) palw_store: Arc<DbPalwStore>,
     pub(super) palw_beacon_store: Arc<DbPalwBeaconStore>,
     pub(super) palw_lane_bits_store: Arc<DbPalwLaneBitsStore>,
@@ -1199,6 +1201,7 @@ impl VirtualStateProcessor {
             evm_activation_daa_score: params.evm_activation_daa_score,
             palw_activation_daa_score: params.palw_activation_daa_score,
             palw_compute_registry_activation_daa_score: params.palw_compute_registry_activation_daa_score,
+            palw_leaf_chunk_v3_admission_daa_score: params.palw_leaf_chunk_v3_admission_daa_score,
             palw_store: storage.palw_store.clone(),
             palw_beacon_store: storage.palw_beacon_store.clone(),
             palw_lane_bits_store: storage.palw_lane_bits_store.clone(),
@@ -3662,6 +3665,7 @@ impl VirtualStateProcessor {
                                                 chunk,
                                                 lifecycle,
                                                 self.palw_batch_admission.max_leaf_chunk_leaves,
+                                                cur_daa >= self.palw_leaf_chunk_v3_admission_daa_score,
                                             )
                                         })
                                 }) && view.apply_leaf_chunk(&chunk.batch_id, chunk.chunk_index)
