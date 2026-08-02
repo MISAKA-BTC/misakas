@@ -289,12 +289,18 @@ _pcpb_bond_table() {
 }
 
 # _pcpb_seed_for <outpoint> — the seed file that owns a drawn bond, or die.
+#
+#   Reads the table SNAPSHOT taken before the draw's seats were adopted, never
+#   `_pcpb_bond_table` afresh: adopting the seats overwrites PROV_A_BOND/PROV_B_BOND,
+#   so a late rebuild would hand every drawn bond the configured providers' seeds —
+#   a silent mispairing that signs the DA session authorization with the wrong owner
+#   key and names a reward script consensus will not pay.
 _pcpb_seed_for() {
-    local want="$1" line
+    local want="$1" op seed
     while IFS="$(printf '\t')" read -r op seed; do
         [ "$op" = "$want" ] && { printf '%s' "$seed"; return 0; }
     done <<EOF
-$(_pcpb_bond_table)
+$PCPB_BOND_TABLE
 EOF
     die "the PCPB draw seated bond $want, but this host holds no owner seed for it. Every bond in the epoch snapshot can be drawn, so the harness needs each one's seed (PALW_EXTRA_PROVIDER_KEYDIR should point at the capacity-provider key dir)."
 }
@@ -397,11 +403,14 @@ print(d["leaves"][int(sys.argv[2])][sys.argv[3]])
 #   external job, which with N equal bonds happens about 1/N of the time. That is
 #   the protocol working, not an error, so walk to the next anchor.
 _pcpb_derive() {
-    local e="$1" staging="$2" bonds="" line a out ok=0
+    local e="$1" staging="$2" bonds="" op seed a out ok=0
+    # Snapshot the bond -> seed map ONCE, while PROV_A_BOND/PROV_B_BOND still hold
+    # the configured bonds. Adopting the drawn seats overwrites them.
+    PCPB_BOND_TABLE="$(_pcpb_bond_table)"
     while IFS="$(printf '\t')" read -r op seed; do
         [ -n "$op" ] && bonds="$bonds --provider-bond $op"
     done <<EOF
-$(_pcpb_bond_table)
+$PCPB_BOND_TABLE
 EOF
     [ -n "$bonds" ] || die "no provider bonds with owner seeds are known — run register-providers.sh first."
 
@@ -734,10 +743,18 @@ do_create() {
     PROV_A_BOND="$drawn_a"; PROV_B_BOND="$drawn_b"
     _parse_bond PROV_A_BOND "$PROV_A_BOND"; A_TXID="$_TXID"; A_IDX="$_IDX"
     _parse_bond PROV_B_BOND "$PROV_B_BOND"; B_TXID="$_TXID"; B_IDX="$_IDX"
+    # `die` inside a command substitution kills only the subshell, so re-assert
+    # every resolved value here rather than trusting the helper to have stopped us.
     PROV_A_KEY_F="$(_pcpb_seed_for "$PROV_A_BOND")"
     PROV_B_KEY_F="$(_pcpb_seed_for "$PROV_B_BOND")"
+    [ -s "$PROV_A_KEY_F" ] || die "no owner seed resolved for the drawn seat-A bond $PROV_A_BOND."
+    [ -s "$PROV_B_KEY_F" ] || die "no owner seed resolved for the drawn seat-B bond $PROV_B_BOND."
+    [ "$PROV_A_KEY_F" != "$PROV_B_KEY_F" ] || die "both seats resolved to the same owner seed $PROV_A_KEY_F — the bond -> seed table is wrong."
     RSPK_A="$(_pcpb_reward_spk "$PROV_A_KEY_F")"
     RSPK_B="$(_pcpb_reward_spk "$PROV_B_KEY_F")"
+    case "$RSPK_A" in 0000*) : ;; *) die "could not derive a reward SPK for seat A from $PROV_A_KEY_F." ;; esac
+    case "$RSPK_B" in 0000*) : ;; *) die "could not derive a reward SPK for seat B from $PROV_B_KEY_F." ;; esac
+    [ "$RSPK_A" != "$RSPK_B" ] || die "both seats derived the same reward script — consensus pays provider_bond_lock_spk of each bond's own owner, so this would misroute the payout."
     log "seat A: bond=$PROV_A_BOND reward_spk=$RSPK_A"
     log "seat B: bond=$PROV_B_BOND reward_spk=$RSPK_B"
 
